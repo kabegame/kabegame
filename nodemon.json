@@ -1,0 +1,17 @@
+{
+  "watch": [
+    "test_plugin/sample-collector"
+  ],
+  "ext": "json,rhai,md,txt,jpeg,jpg,png,gif,webp",
+  "ignore": [
+    "node_modules",
+    "test_plugin_packed",
+    "*.kgpg",
+    "**/node_modules/**"
+  ],
+  "exec": "npm run package-plugin",
+  "verbose": true,
+  "delay": 500,
+  "legacyWatch": false
+}
+

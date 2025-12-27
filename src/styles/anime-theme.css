@@ -1,0 +1,219 @@
+/* 二次元风格主题配色 */
+
+:root {
+  /* 主色调 - 粉紫色系 */
+  --anime-primary: #ff6b9d;
+  --anime-primary-light: #ff8fb3;
+  --anime-primary-dark: #e8557f;
+  
+  /* 辅助色 - 柔和的蓝紫色 */
+  --anime-secondary: #a78bfa;
+  --anime-secondary-light: #c4b5fd;
+  --anime-secondary-dark: #8b5cf6;
+  
+  /* 背景色 - 柔和的渐变 */
+  --anime-bg-main: linear-gradient(135deg, #fef3f8 0%, #f0e9ff 100%);
+  --anime-bg-card: rgba(255, 255, 255, 0.9);
+  --anime-bg-sidebar: linear-gradient(180deg, #fff0f5 0%, #f5f0ff 100%);
+  
+  /* 文字颜色 */
+  --anime-text-primary: #4a154b;
+  --anime-text-secondary: #7c3aed;
+  --anime-text-muted: #a78bfa;
+  
+  /* 边框和阴影 */
+  --anime-border: rgba(255, 107, 157, 0.3);
+  --anime-shadow: 0 4px 20px rgba(255, 107, 157, 0.15);
+  --anime-shadow-hover: 0 8px 30px rgba(255, 107, 157, 0.25);
+  
+  /* 成功/警告/错误 - 二次元风格 */
+  --anime-success: #10b981;
+  --anime-warning: #f59e0b;
+  --anime-danger: #ef4444;
+  --anime-info: #3b82f6;
+}
+
+/* 全局样式 */
+body {
+  font-family: "Microsoft YaHei UI", "Hiragino Sans GB", "WenQuanYi Micro Hei", sans-serif;
+  background: var(--anime-bg-main);
+  background-attachment: fixed;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+/* 允许输入框和可编辑内容选择文本 */
+input,
+textarea,
+[contenteditable="true"],
+.el-input__inner,
+.el-textarea__inner {
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+}
+
+/* Element Plus 主题覆盖 */
+.el-button--primary {
+  background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
+  border: none;
+  box-shadow: var(--anime-shadow);
+  transition: all 0.3s ease;
+}
+
+.el-button--primary:hover {
+  background: linear-gradient(135deg, var(--anime-primary-dark) 0%, var(--anime-secondary-dark) 100%);
+  box-shadow: var(--anime-shadow-hover);
+  transform: translateY(-2px);
+}
+
+.el-button {
+  border-radius: 12px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.el-button:hover {
+  transform: translateY(-2px);
+}
+
+.el-card {
+  border-radius: 20px;
+  border: 1px solid var(--anime-border);
+  box-shadow: var(--anime-shadow);
+  background: var(--anime-bg-card);
+  backdrop-filter: blur(10px);
+  transition: all 0.3s ease;
+}
+
+.el-card:hover {
+  box-shadow: var(--anime-shadow-hover);
+  transform: translateY(-2px);
+}
+
+.el-input__wrapper {
+  border-radius: 12px;
+  border-color: var(--anime-border);
+  transition: all 0.3s ease;
+}
+
+.el-input__wrapper:hover {
+  border-color: var(--anime-primary-light);
+  box-shadow: 0 0 0 2px rgba(255, 107, 157, 0.1);
+}
+
+.el-input__wrapper.is-focus {
+  border-color: var(--anime-primary);
+  box-shadow: 0 0 0 2px rgba(255, 107, 157, 0.2);
+}
+
+.el-select .el-input__wrapper {
+  border-radius: 12px;
+}
+
+.el-menu {
+  border: none;
+  background: transparent;
+}
+
+.el-menu-item {
+  border-radius: 12px;
+  margin: 4px 8px;
+  transition: all 0.3s ease;
+}
+
+.el-menu-item:hover {
+  background: linear-gradient(90deg, rgba(255, 107, 157, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
+  color: var(--anime-primary);
+}
+
+.el-menu-item.is-active {
+  background: linear-gradient(90deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
+  color: white;
+  box-shadow: var(--anime-shadow);
+}
+
+.el-tag {
+  border-radius: 8px;
+  border: none;
+  font-weight: 500;
+}
+
+.el-tag--success {
+  background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+  color: white;
+}
+
+.el-tag--warning {
+  background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
+  color: white;
+}
+
+.el-tag--danger {
+  background: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
+  color: white;
+}
+
+.el-tag--info {
+  background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
+  color: white;
+}
+
+.el-progress-bar__outer {
+  border-radius: 10px;
+  background: rgba(255, 107, 157, 0.1);
+}
+
+.el-progress-bar__inner {
+  background: linear-gradient(90deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
+  border-radius: 10px;
+}
+
+.el-switch.is-checked .el-switch__core {
+  background-color: var(--anime-primary);
+}
+
+.el-table {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.el-table th {
+  background: linear-gradient(135deg, rgba(255, 107, 157, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
+  color: var(--anime-text-primary);
+  font-weight: 600;
+}
+
+.el-table tr:hover {
+  background: rgba(255, 107, 157, 0.05);
+}
+
+.el-dialog {
+  border-radius: 20px;
+  background: var(--anime-bg-card);
+  box-shadow: var(--anime-shadow-hover);
+}
+
+.el-dialog__header {
+  background: linear-gradient(135deg, rgba(255, 107, 157, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
+  border-radius: 20px 20px 0 0;
+  padding: 20px;
+}
+
+.el-form-item__label {
+  color: var(--anime-text-primary);
+  font-weight: 500;
+}
+
+.el-empty {
+  color: var(--anime-text-muted);
+}
+
+.el-skeleton {
+  --el-skeleton-color: rgba(255, 107, 157, 0.1);
+  --el-skeleton-to-color: rgba(167, 139, 250, 0.1);
+}
+

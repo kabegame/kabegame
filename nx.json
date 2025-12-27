@@ -1,0 +1,30 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "targetDefaults": {
+    "package-plugin": {
+      "cache": true,
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/test_plugin/**/*"
+      ],
+      "outputs": [
+        "{workspaceRoot}/test_plugin_packed/**/*"
+      ]
+    }
+  },
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "production": [
+      "default",
+      "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)",
+      "!{projectRoot}/tsconfig.spec.json",
+      "!{projectRoot}/.eslintrc.json",
+      "!{projectRoot}/jest.config.[jt]s",
+      "!{projectRoot}/src/test-setup.[jt]s",
+      "!{projectRoot}/test-setup.[jt]s"
+    ],
+    "sharedGlobals": []
+  }
+}
+

@@ -1,0 +1,19 @@
+{
+  "baseUrl": "file://",
+  "var": [
+    {
+      "key": "folder_path",
+      "type": "folder",
+      "name": "文件夹路径",
+      "descripts": "要导入的本地文件夹路径"
+    },
+    {
+      "key": "file_extensions",
+      "type": "list",
+      "name": "文件扩展名",
+      "descripts": "要导入的文件扩展名列表（不包含点号）",
+      "default": ["jpg", "jpeg", "png", "gif", "webp", "bmp"],
+      "options": ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico"]
+    }
+  ]
+}

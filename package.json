@@ -1,0 +1,44 @@
+{
+  "name": "kabegami-crawler",
+  "version": "0.1.0",
+  "description": "一个图片爬虫平台，支持插件配置的网址爬取",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "nx run-many --target=package-plugin --all && tauri dev",
+    "tauri:dev:watch": "npm run package-plugin && concurrently \"npm run watch-plugin\" \"tauri dev\"",
+    "tauri:build": "tauri build",
+    "package-plugin": "nx package-plugin",
+    "watch-plugin": "nodemon --config nodemon.json",
+    "migrate": "echo 请在应用运行时，打开开发者工具（F12），在控制台执行: node scripts/migrate.js 的内容"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "@tauri-apps/api": "^2.0",
+    "@tauri-apps/plugin-dialog": "^2.0",
+    "@tauri-apps/plugin-fs": "^2.0",
+    "@tauri-apps/plugin-shell": "^2.0",
+    "axios": "^1.6.7",
+    "element-plus": "^2.5.14",
+    "pinia": "^2.1.7",
+    "vue": "^3.4.21",
+    "vue-router": "^4.3.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0",
+    "@vitejs/plugin-vue": "^5.0.4",
+    "@vue/devtools": "^8.0.5",
+    "@vue/tsconfig": "^0.5.1",
+    "archiver": "^7.0.1",
+    "concurrently": "^8.2.2",
+    "nodemon": "^3.0.3",
+    "nx": "^20.0.0",
+    "sass": "^1.97.1",
+    "typescript": "^5.4.5",
+    "vite": "^5.1.4",
+    "vue-tsc": "^2.0.6"
+  }
+}

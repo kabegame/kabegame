@@ -1,0 +1,21 @@
+{
+  "name": "kabegami-crawler",
+  "targets": {
+    "package-plugin": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node scripts/package-plugin.js",
+        "cwd": "."
+      },
+      "cache": true,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/test_plugin/**/*"
+      ],
+      "outputs": [
+        "{workspaceRoot}/test_plugin_packed/**/*"
+      ]
+    }
+  }
+}
+

@@ -1,0 +1,27 @@
+{
+  "baseUrl": "https://anihonetwallpaper.com",
+  "var": [
+    {
+      "key": "start_page",
+      "type": "int",
+      "name": "起始页面",
+      "descripts": "要拉取的起始页面",
+      "default": 1
+    },
+    {
+      "key": "max_pages",
+      "type": "int",
+      "name": "最大页数",
+      "descripts": "最多爬取多少页",
+      "default": 10
+    },
+    {
+      "key": "image_quality",
+      "type": "options",
+      "name": "图片质量",
+      "descripts": "选择图片质量",
+      "options": ["high", "medium", "low"],
+      "default": "high"
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+[package]
+name = "kabegami-crawler"
+version = "0.1.0"
+description = "一个图片爬虫平台，支持插件配置的网址爬取"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0", features = ["tray-icon"] }
+tauri-plugin-dialog = "2.0"
+tauri-plugin-shell = "2.0"
+tauri-plugin-fs = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.11", features = ["blocking"] }
+scraper = "0.19"
+select = "0.6"
+url = "2.5"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+dirs = "5.0"
+image = "0.24"
+zip = "0.6"
+rhai = { version = "1.19", features = ["sync"] }
+auto-launch = "0.5"
+rusqlite = { version = "0.31", features = ["bundled"] }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+sha2 = "0.10"
+
+[features]
+# This feature is used for production builds or when `devPath` points to the filesystem
+# DO NOT REMOVE!!
+custom-protocol = ["tauri/custom-protocol"]
+
