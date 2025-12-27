@@ -81,11 +81,28 @@ try {
   isWallpaperWindow.value = false;
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (!isWallpaperWindow.value) {
     loadDownloadStatus();
     // 每 1 秒刷新一次
     refreshInterval = window.setInterval(loadDownloadStatus, 1000);
+
+    // 监听窗口关闭事件 - 隐藏而不是退出
+    try {
+      const currentWindow = getCurrentWebviewWindow();
+      await currentWindow.onCloseRequested(async (event) => {
+        // 阻止默认关闭行为
+        event.preventDefault();
+        // 调用后端命令隐藏窗口
+        try {
+          await invoke("hide_main_window");
+        } catch (error) {
+          console.error("隐藏窗口失败:", error);
+        }
+      });
+    } catch (error) {
+      console.error("注册窗口关闭事件监听失败:", error);
+    }
   }
 });
 

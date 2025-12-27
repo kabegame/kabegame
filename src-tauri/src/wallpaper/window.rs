@@ -1,43 +1,43 @@
 // 窗口壁纸模块 - 类似 Wallpaper Engine 的实现
 
 use crate::settings::Settings;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 // 标记壁纸窗口是否已完全初始化（前端 DOM + Vue 组件 + 事件监听器都已就绪）
-// 由 wallpaper_window_ready 命令设置为 true，create 方法中会等待此标记
-static WALLPAPER_WINDOW_READY: AtomicBool = AtomicBool::new(false);
+// 由 wallpaper_window_ready 命令设置为 true，并通过 notify_all 唤醒所有等待者
+struct ReadyNotify {
+    ready: Mutex<bool>,
+    cv: Condvar,
+}
+
+static WALLPAPER_WINDOW_READY: OnceLock<ReadyNotify> = OnceLock::new();
+
+fn ready_notify() -> &'static ReadyNotify {
+    WALLPAPER_WINDOW_READY.get_or_init(|| ReadyNotify {
+        ready: Mutex::new(false),
+        cv: Condvar::new(),
+    })
+}
 
 pub struct WallpaperWindow {
-    window: Option<WebviewWindow>,
+    window: WebviewWindow,
     app: AppHandle,
 }
 
 impl WallpaperWindow {
     pub fn new(app: AppHandle) -> Self {
-        Self { window: None, app }
+        Self {
+            window: app.get_webview_window("wallpaper").unwrap(),
+            app,
+        }
     }
 
-    /// 创建壁纸窗口
-    pub fn create(&mut self, image_path: &str) -> Result<(), String> {
-        // 注意：不要 close 壁纸窗口！close 会销毁窗口句柄，后续 SetParent 会报 1400（无效句柄）。
-        // 这里始终复用预创建的 wallpaper 窗口。
-        let window = match &self.window {
-            Some(w) => w.clone(),
-            None => self
-                .app
-                .get_webview_window("wallpaper")
-                .ok_or_else(|| "壁纸窗口不存在。请确保在应用启动时已创建壁纸窗口".to_string())?,
-        };
-
-        // 关键：这里不要阻塞等待前端 ready（否则窗口模式启动时可能“卡死”很久）。
-        // 如果未 ready，保持窗口隐藏，等 wallpaper_window_ready 命令触发后再 remount + 推送事件。
-        if !WALLPAPER_WINDOW_READY.load(Ordering::Acquire) {
-            eprintln!(
-                "[DEBUG] 壁纸窗口尚未 ready，跳过 create 推送/挂载（等待 wallpaper_window_ready）"
-            );
-            return Ok(());
-        }
+    #[allow(dead_code)]
+    pub fn sync_wallpaper(&self, image_path: &str) -> Result<(), String> {
+        // 等待窗口完全初始化（前端 DOM + Vue 组件 + 事件监听器都已就绪）
+        // 超时时间：最多等待 100 秒
+        Self::wait_ready(std::time::Duration::from_secs(100))?;
 
         // 如果窗口已就绪，则直接推送壁纸更新事件到窗口
         self.app
@@ -58,13 +58,11 @@ impl WallpaperWindow {
         }
 
         // 在 Windows 上设置窗口为壁纸层
-        #[cfg(target_os = "windows")]
-        {
-            Self::set_window_as_wallpaper(&window)?;
-        }
+        self.set_window_as_wallpaper()
+            .map_err(|e| format!("设置窗口为壁纸层失败: {}", e))?;
 
         // 显示窗口
-        window
+        self.window
             .show()
             .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
         Ok(())
@@ -72,19 +70,55 @@ impl WallpaperWindow {
 
     /// 标记壁纸窗口已完全初始化（由 wallpaper_window_ready 命令调用）
     pub fn mark_ready() {
-        WALLPAPER_WINDOW_READY.store(true, Ordering::Release);
+        let n = ready_notify();
+        if let Ok(mut ready) = n.ready.lock() {
+            *ready = true;
+            n.cv.notify_all();
+        } else {
+            // poisoned，不阻断主流程
+            n.cv.notify_all();
+        }
     }
 
     /// 重置 ready 标记（窗口重新创建或隐藏时调用）
     #[allow(dead_code)]
     pub fn reset_ready() {
-        WALLPAPER_WINDOW_READY.store(false, Ordering::Release);
+        let n = ready_notify();
+        if let Ok(mut ready) = n.ready.lock() {
+            *ready = false;
+        }
     }
 
     /// 检查窗口是否已 ready
     #[allow(dead_code)]
     pub fn is_ready() -> bool {
-        WALLPAPER_WINDOW_READY.load(Ordering::Acquire)
+        let n = ready_notify();
+        n.ready.lock().map(|g| *g).unwrap_or(false)
+    }
+
+    /// 等待窗口 ready（用于 window_manager 在 set_wallpaper 时阻塞等待）
+    pub fn wait_ready(timeout: std::time::Duration) -> Result<(), String> {
+        let n = ready_notify();
+        let guard = n
+            .ready
+            .lock()
+            .map_err(|_| "WALLPAPER_WINDOW_READY mutex poisoned".to_string())?;
+
+        if *guard {
+            return Ok(());
+        }
+
+        let (guard, wait_res) =
+            n.cv.wait_timeout_while(guard, timeout, |ready| !*ready)
+                .map_err(|_| "WALLPAPER_WINDOW_READY condvar wait failed".to_string())?;
+
+        if *guard {
+            Ok(())
+        } else if wait_res.timed_out() {
+            Err("壁纸窗口初始化超时，放弃推送".to_string())
+        } else {
+            Err("壁纸窗口等待就绪失败".to_string())
+        }
     }
 
     /// 更新壁纸图片
@@ -101,18 +135,11 @@ impl WallpaperWindow {
 
     /// 重新挂载窗口到桌面（用于从原生模式切换回窗口模式时）
     pub fn remount(&self) -> Result<(), String> {
-        let window = self
-            .app
-            .get_webview_window("wallpaper")
-            .ok_or_else(|| "壁纸窗口不存在".to_string())?;
-
-        #[cfg(target_os = "windows")]
-        {
-            Self::set_window_as_wallpaper(&window)?;
-        }
+        self.set_window_as_wallpaper()
+            .map_err(|e| format!("重新挂载窗口到桌面失败: {}", e))?;
 
         // 显示窗口
-        window
+        self.window
             .show()
             .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
 
@@ -139,31 +166,24 @@ impl WallpaperWindow {
         Ok(())
     }
 
-    /// 关闭壁纸窗口
-    #[allow(dead_code)]
-    pub fn close(&mut self) {
-        // 不要主动 close 壁纸窗口：close 会销毁窗口句柄，后续 SetParent 可能报 1400（无效句柄）。
-        // 这里只清空引用，窗口在应用生命周期内复用。
-        self.window = None;
-    }
-
-    #[cfg(target_os = "windows")]
-    fn set_window_as_wallpaper(window: &WebviewWindow) -> Result<(), String> {
+    fn set_window_as_wallpaper(&self) -> Result<(), String> {
         use std::thread;
         use std::time::Duration;
 
-        // 等待窗口完全创建
-        thread::sleep(Duration::from_millis(500));
+        // 等待 wallpaper 窗口前端 ready（由 mark_ready() -> notify_all() 唤醒），
+        // 避免靠固定 sleep 猜测窗口/DOM 初始化时机
+        Self::wait_ready(Duration::from_secs(100))?;
 
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Foundation::RECT;
         use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            EnumWindows, FindWindowExW, FindWindowW, GetClientRect, GetSystemMetrics,
-            GetWindowLongPtrW, IsWindow, SendMessageTimeoutW, SetParent, SetWindowLongPtrW,
-            SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, SMTO_ABORTIFHUNG, SWP_NOACTIVATE,
-            SWP_SHOWWINDOW, SW_SHOW, WS_CHILD, WS_EX_NOACTIVATE, WS_POPUP,
+            EnumWindows, FindWindowExW, FindWindowW, GetClientRect, GetParent, GetSystemMetrics,
+            GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible, SendMessageTimeoutW,
+            SendMessageW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE,
+            GWL_STYLE, SMTO_ABORTIFHUNG, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SWP_SHOWWINDOW, SW_SHOW, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT, WS_POPUP,
         };
 
         fn wide(s: &str) -> Vec<u16> {
@@ -182,197 +202,334 @@ impl WallpaperWindow {
         }
 
         unsafe fn find_shell_top(progman: HWND) -> Result<HWND, String> {
+            // 关键：有些系统/桌面工具会让 Progman 里存在“隐藏的 DefView”，真正可见的图标宿主在某个 WorkerW。
+            // 所以这里优先选择：包含 DefView 且“可见 + client rect/窗口矩形非零”的那个顶层窗口（通常是 WorkerW）。
             #[derive(Default)]
-            struct Search {
-                shell_top: HWND,
+            struct Best {
+                hwnd: HWND,
+                area: i64,
+                class_name: String,
+                has_folder_view: bool,
             }
 
-            unsafe extern "system" fn enum_find_shell_top(hwnd: HWND, lparam: LPARAM) -> BOOL {
-                let state = &mut *(lparam as *mut Search);
-                // 关键：File Explorer 窗口也包含 SHELLDLL_DefView（文件夹视图），会导致误判成“桌面”。
-                // 所以这里只接受顶层 class 为 WorkerW / Progman 的窗口作为候选。
+            unsafe extern "system" fn enum_find_best(hwnd: HWND, lparam: LPARAM) -> BOOL {
+                let best = &mut *(lparam as *mut Best);
+
                 let class_name = hwnd_class(hwnd);
-                if class_name == "WorkerW" || class_name == "Progman" {
-                    let def_view =
-                        FindWindowExW(hwnd, 0, wide("SHELLDLL_DefView").as_ptr(), std::ptr::null());
-                    if def_view != 0 {
-                        state.shell_top = hwnd;
-                        return 0; // stop
-                    }
+                if class_name != "WorkerW" && class_name != "Progman" {
+                    return 1;
                 }
-                1 // continue
-            }
 
-            let mut search = Search::default();
-            EnumWindows(
-                Some(enum_find_shell_top),
-                (&mut search as *mut Search) as isize,
-            );
+                let def_view =
+                    FindWindowExW(hwnd, 0, wide("SHELLDLL_DefView").as_ptr(), std::ptr::null());
+                if def_view == 0 {
+                    return 1;
+                }
 
-            // 如果没找到，尝试 Progman 本身是否承载 SHELLDLL_DefView
-            let mut shell_top = search.shell_top;
-            if shell_top == 0 {
-                let def_view = FindWindowExW(
-                    progman,
+                // 说明：IsWindowVisible 在某些壳层上不可靠（可能返回 0 但仍然是桌面层）。
+                // 所以这里只用于“打日志/辅助判断”，不作为过滤条件。
+                let _visible = IsWindowVisible(hwnd) != 0;
+
+                // 用窗口矩形评估面积（更能过滤“client=0 但仍存在句柄”的假窗口）
+                let mut rc = std::mem::zeroed();
+                if GetWindowRect(hwnd, &mut rc) == 0 {
+                    return 1;
+                }
+                let w = rc.right - rc.left;
+                let h = rc.bottom - rc.top;
+                if w <= 0 || h <= 0 {
+                    return 1;
+                }
+                let area = (w as i64) * (h as i64);
+
+                // FolderView (SysListView32) 存在通常意味着这里就是“真正的桌面图标视图”
+                let folder_view = FindWindowExW(
+                    def_view,
                     0,
-                    wide("SHELLDLL_DefView").as_ptr(),
+                    wide("SysListView32").as_ptr(),
                     std::ptr::null(),
                 );
-                if def_view != 0 {
-                    shell_top = progman;
+                let has_folder_view = folder_view != 0;
+
+                // 选择策略：
+                // 1) 优先 has_folder_view=true（更可能是真图标宿主）
+                // 2) 再按 area 最大
+                let better = if has_folder_view && !best.has_folder_view {
+                    true
+                } else if has_folder_view == best.has_folder_view && area > best.area {
+                    true
+                } else {
+                    false
+                };
+
+                if better {
+                    best.area = area;
+                    best.hwnd = hwnd;
+                    best.class_name = class_name;
+                    best.has_folder_view = has_folder_view;
                 }
+                1
             }
 
-            if shell_top == 0 {
-                // 额外诊断：打印一下“哪些顶层窗口包含 SHELLDLL_DefView”，帮助定位误命中/壳层差异
-                #[derive(Default)]
-                struct Dump {
-                    count: u32,
-                }
-                unsafe extern "system" fn enum_dump(hwnd: HWND, lparam: LPARAM) -> BOOL {
-                    let d = &mut *(lparam as *mut Dump);
-                    let def_view =
-                        FindWindowExW(hwnd, 0, wide("SHELLDLL_DefView").as_ptr(), std::ptr::null());
-                    if def_view != 0 {
-                        d.count += 1;
-                        eprintln!(
-                            "[DEBUG] top hwnd={} class={} has SHELLDLL_DefView",
-                            hwnd,
-                            hwnd_class(hwnd)
-                        );
-                    }
-                    1
-                }
-                let mut dump = Dump::default();
-                EnumWindows(Some(enum_dump), (&mut dump as *mut Dump) as isize);
+            let mut best = Best::default();
+            EnumWindows(Some(enum_find_best), (&mut best as *mut Best) as isize);
 
-                return Err(
-                    "找不到桌面图标宿主（未在 WorkerW/Progman 顶层窗口中发现 SHELLDLL_DefView）"
-                        .to_string(),
+            if best.hwnd != 0 {
+                eprintln!(
+                    "[DEBUG] shell_top selected hwnd={} class={} area={} has_folder_view={}",
+                    best.hwnd, best.class_name, best.area, best.has_folder_view
                 );
+                return Ok(best.hwnd);
             }
-            Ok(shell_top)
+
+            // 兜底：如果没找到“可见”的，再退回 Progman（兼容极端壳层）
+            let def_view = FindWindowExW(
+                progman,
+                0,
+                wide("SHELLDLL_DefView").as_ptr(),
+                std::ptr::null(),
+            );
+            if def_view != 0 {
+                eprintln!("[DEBUG] shell_top fallback to Progman");
+                return Ok(progman);
+            }
+
+            Err(
+                "找不到桌面图标宿主（未在可见的 WorkerW/Progman 顶层窗口中发现 SHELLDLL_DefView）"
+                    .to_string(),
+            )
         }
 
-        // 1) 获取 Tauri 壁纸窗口 HWND（无需查标题）
-        let tauri_hwnd = window
+        /// 只在 “shell_top(含 DefView) 之后的 Z 序链” 上找 WorkerW。
+        /// 这是经典 Wallpaper Engine 路径：把壁纸挂到 DefView 后面的 WorkerW，天然在图标下面。
+        unsafe fn find_workerw_behind_shell_top(shell_top: HWND) -> Option<HWND> {
+            let mut after = shell_top;
+            loop {
+                let w = FindWindowExW(0, after, wide("WorkerW").as_ptr(), std::ptr::null());
+                if w == 0 {
+                    return None;
+                }
+
+                // 跳过包含 DefView 的 WorkerW（那是图标宿主或其同层）
+                let def_view =
+                    FindWindowExW(w, 0, wide("SHELLDLL_DefView").as_ptr(), std::ptr::null());
+                if def_view == 0 {
+                    // 只接受 client rect 有效的 WorkerW，避免 0 高度导致“挂载成功但不可见/裁剪”
+                    let mut rc: RECT = std::mem::zeroed();
+                    if GetClientRect(w, &mut rc as *mut RECT) != 0 {
+                        let ww = rc.right - rc.left;
+                        let hh = rc.bottom - rc.top;
+                        if ww > 0 && hh > 0 {
+                            return Some(w);
+                        }
+                    }
+                }
+
+                after = w;
+            }
+        }
+
+        /// 如果图标宿主是 Progman，则优先使用“Progman 后面的第一个 WorkerW”作为壁纸宿主。
+        /// 这条路径在 Win11 上更稳：壁纸挂在 WorkerW，图标仍在 Progman 上层，避免 WebView2 覆盖图标层。
+        unsafe fn find_workerw_after(hwnd: HWND) -> Option<HWND> {
+            let w = FindWindowExW(0, hwnd, wide("WorkerW").as_ptr(), std::ptr::null());
+            if w != 0 {
+                Some(w)
+            } else {
+                None
+            }
+        }
+
+        /// 枚举所有顶层 WorkerW，选择一个“不包含 DefView”的作为壁纸宿主。
+        /// 解决某些 Win11 壳层上 WorkerW 不在 Progman “后面”导致 FindWindowExW 找不到的问题。
+        unsafe fn find_any_workerw_without_defview() -> Option<HWND> {
+            #[derive(Default)]
+            struct Best {
+                hwnd: HWND,
+                area: i64,
+            }
+
+            unsafe extern "system" fn enum_pick(hwnd: HWND, lparam: LPARAM) -> BOOL {
+                let best = &mut *(lparam as *mut Best);
+                if hwnd_class(hwnd) != "WorkerW" {
+                    return 1;
+                }
+                let def_view =
+                    FindWindowExW(hwnd, 0, wide("SHELLDLL_DefView").as_ptr(), std::ptr::null());
+                if def_view != 0 {
+                    return 1;
+                }
+                let mut rc = std::mem::zeroed();
+                if GetWindowRect(hwnd, &mut rc) == 0 {
+                    return 1;
+                }
+                let w = rc.right - rc.left;
+                let h = rc.bottom - rc.top;
+                if w <= 0 || h <= 0 {
+                    return 1;
+                }
+                let area = (w as i64) * (h as i64);
+                if area > best.area {
+                    best.area = area;
+                    best.hwnd = hwnd;
+                }
+                1
+            }
+
+            let mut best = Best::default();
+            EnumWindows(Some(enum_pick), (&mut best as *mut Best) as isize);
+            if best.hwnd != 0 {
+                Some(best.hwnd)
+            } else {
+                None
+            }
+        }
+
+        unsafe fn dump_desktop_toplevel_windows() {
+            unsafe extern "system" fn enum_dump(hwnd: HWND, _lparam: LPARAM) -> BOOL {
+                let class_name = hwnd_class(hwnd);
+                if class_name != "WorkerW" && class_name != "Progman" {
+                    return 1;
+                }
+                let def_view =
+                    FindWindowExW(hwnd, 0, wide("SHELLDLL_DefView").as_ptr(), std::ptr::null());
+                let folder_view = if def_view != 0 {
+                    FindWindowExW(
+                        def_view,
+                        0,
+                        wide("SysListView32").as_ptr(),
+                        std::ptr::null(),
+                    )
+                } else {
+                    0
+                };
+                let mut rc = std::mem::zeroed();
+                let ok = GetWindowRect(hwnd, &mut rc);
+                let w = rc.right - rc.left;
+                let h = rc.bottom - rc.top;
+                eprintln!(
+                    "[DEBUG] desktop top hwnd={} class={} vis={} rect_ok={} rect=({}, {}, {}, {}) size={}x{} has_defview={} has_folder_view={}",
+                    hwnd,
+                    class_name,
+                    IsWindowVisible(hwnd),
+                    ok,
+                    rc.left, rc.top, rc.right, rc.bottom,
+                    w, h,
+                    def_view != 0,
+                    folder_view != 0
+                );
+                1
+            }
+            EnumWindows(Some(enum_dump), 0);
+        }
+
+        let tauri_hwnd = self
+            .window
             .hwnd()
             .map_err(|e| format!("无法获取壁纸窗口句柄(hwnd): {}", e))?;
-        // tauri 的 hwnd() 在 windows 返回 *mut c_void；windows-sys 的 HWND 是 isize
         let tauri_hwnd: HWND = tauri_hwnd.0 as isize;
 
         unsafe {
-            // 2) 找 Progman
             let progman = FindWindowW(wide("Progman").as_ptr(), std::ptr::null());
             if progman == 0 {
                 return Err("FindWindowW(Progman) failed".to_string());
             }
 
-            // 3) 发送 0x052C 促使生成 WorkerW
+            // 促使生成 WorkerW（不同实现对 wParam 取值不一致：0 / 0xD 都有人用）
             let mut _result: usize = 0;
             let _ = SendMessageTimeoutW(
                 progman,
                 0x052C,
-                0xD, // 关键：主流实现使用 wParam=0xD 来触发 WorkerW 创建/刷新
+                0,
+                0,
+                SMTO_ABORTIFHUNG,
+                1000,
+                &mut _result as *mut usize,
+            );
+            let _ = SendMessageTimeoutW(
+                progman,
+                0x052C,
+                0xD,
                 0,
                 SMTO_ABORTIFHUNG,
                 1000,
                 &mut _result as *mut usize,
             );
 
-            // 4) 查找承载桌面图标的顶层窗口(shell_top)，并优先取其后一个 WorkerW
-            // 经典路径：shell_top 是 WorkerW/Progman，且其后有一个 WorkerW 可用作壁纸层。
-            // 兼容路径：有些 Win11/特殊壳层上，shell_top 可能不是 WorkerW，且没有“后一个 WorkerW”；
-            //          这时直接把壁纸窗口挂到 shell_top，并在父窗口内置底(HWND_BOTTOM)，让图标层(DefView)仍在上面。
+            // 查找 shell_top 并尽量找到其后的 WorkerW
             let mut parent: HWND = 0;
             let mut shell_top: HWND = 0;
             let mut last_err: Option<String> = None;
-            for _ in 0..12 {
+            // 如果我们强制把某个 WorkerW 拉满屏幕，这里记录目标尺寸，避免后续 GetClientRect 仍返回旧的 198x56
+            let mut forced_parent_wh: Option<(i32, i32)> = None;
+            for _ in 0..60 {
                 match find_shell_top(progman) {
                     Ok(top) => {
                         shell_top = top;
-                        // 经典路径：icon_host(=shell_top) 后面的 WorkerW
-                        let workerw_after =
-                            FindWindowExW(0, shell_top, wide("WorkerW").as_ptr(), std::ptr::null());
+                        // 优先：如果 shell_top 本身就是 Progman（你的环境），则尽量把壁纸挂到 Progman 后面的 WorkerW。
+                        // 这是经典“壁纸层”窗口，能让图标层天然在上面。
+                        let shell_top_class = hwnd_class(shell_top);
+                        if shell_top_class == "Progman" {
+                            // Win11 某些桌面结构：图标确实在 Progman(DefView/FolderView)，而 WorkerW 永远在 Progman 之上且无法被压下去。
+                            // 这时把“壁纸(不透明 WebView2)”挂到 WorkerW 会导致图标整层不可见（你当前遇到的现象）。
+                            // 在无法可靠解决顶层 Z 序的前提下，直接判定 window 模式不兼容，交给上层回退到 native。
+                            //
+                            // 如需强行继续尝试（可能导致图标不可见），设置环境变量：KABEGAMI_FORCE_WORKERW=1
+                            if std::env::var("KABEGAMI_FORCE_WORKERW")
+                                .ok()
+                                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                                != Some(true)
+                            {
+                                let def_view = FindWindowExW(
+                                    shell_top,
+                                    0,
+                                    wide("SHELLDLL_DefView").as_ptr(),
+                                    std::ptr::null(),
+                                );
+                                let folder_view = if def_view != 0 {
+                                    FindWindowExW(
+                                        def_view,
+                                        0,
+                                        wide("SysListView32").as_ptr(),
+                                        std::ptr::null(),
+                                    )
+                                } else {
+                                    0
+                                };
+                                if def_view != 0 && folder_view != 0 {
+                                    return Err("Win11 桌面结构检测：图标宿主在 Progman，使用 WorkerW 作为壁纸层会导致图标不可见；已阻止 window 模式并建议回退到 native。可设置环境变量 KABEGAMI_FORCE_WORKERW=1 强行尝试（不推荐）".to_string());
+                                }
+                            }
 
-                        // 兼容路径：有些系统上找不到“后一个 WorkerW”，但仍存在某个 WorkerW 作为“壁纸层”（不包含 DefView）。
-                        // 关键：不要随便拿第一个！要选“client rect 最大且高度>0”的那个，否则会命中你现在这种 176x0 的假 WorkerW。
-                        #[derive(Default)]
-                        struct FindWorkerWBest {
-                            best: HWND,
-                            best_area: i64,
-                            best_w: i32,
-                            best_h: i32,
+                            parent = find_workerw_after(shell_top).unwrap_or(0);
+                            if parent != 0 {
+                                eprintln!(
+                                    "[DEBUG] using workerw_after_progman as parent: {}",
+                                    parent
+                                );
+                            }
+                            // 某些系统里 WorkerW 不在 Progman 后面：改为全局枚举一个可用 WorkerW
+                            if parent == 0 {
+                                parent = find_any_workerw_without_defview().unwrap_or(0);
+                                if parent != 0 {
+                                    eprintln!(
+                                        "[DEBUG] using workerw_any_no_defview as parent: {}",
+                                        parent
+                                    );
+                                } else {
+                                    eprintln!("[DEBUG] no WorkerW(no DefView) found, fallback to shell_top");
+                                }
+                            }
                         }
-                        unsafe extern "system" fn enum_find_workerw_best(
-                            hwnd: HWND,
-                            lparam: LPARAM,
-                        ) -> BOOL {
-                            let s = &mut *(lparam as *mut FindWorkerWBest);
-
-                            if hwnd_class(hwnd) != "WorkerW" {
-                                return 1;
-                            }
-                            let def_view = FindWindowExW(
-                                hwnd,
-                                0,
-                                wide("SHELLDLL_DefView").as_ptr(),
-                                std::ptr::null(),
-                            );
-                            if def_view != 0 {
-                                return 1;
-                            }
-
-                            let mut rc: RECT = std::mem::zeroed();
-                            if GetClientRect(hwnd, &mut rc as *mut RECT) == 0 {
-                                return 1;
-                            }
-                            let w = rc.right - rc.left;
-                            let h = rc.bottom - rc.top;
-                            if w <= 0 || h <= 0 {
-                                return 1;
-                            }
-                            let area = (w as i64) * (h as i64);
-                            if area > s.best_area {
-                                s.best_area = area;
-                                s.best = hwnd;
-                                s.best_w = w;
-                                s.best_h = h;
-                            }
-                            1
+                        // 否则走常规：在 shell_top 之后找 WorkerW（不含 DefView）
+                        if parent == 0 {
+                            parent = find_workerw_behind_shell_top(shell_top).unwrap_or(shell_top);
                         }
-
-                        let mut best = FindWorkerWBest::default();
-                        EnumWindows(
-                            Some(enum_find_workerw_best),
-                            (&mut best as *mut FindWorkerWBest) as isize,
-                        );
-                        let best_workerw_without_defview = best.best;
-
-                        // 如果 workerw_after 存在但本身 client 为 0，也不要用它（同样会被裁剪成不可见）
-                        let workerw_after_ok = if workerw_after != 0 {
-                            let mut rc: RECT = std::mem::zeroed();
-                            let ok = GetClientRect(workerw_after, &mut rc as *mut RECT);
-                            let w = rc.right - rc.left;
-                            let h = rc.bottom - rc.top;
-                            ok != 0 && w > 0 && h > 0
-                        } else {
-                            false
-                        };
-
-                        parent = if workerw_after != 0 && workerw_after_ok {
-                            workerw_after
-                        } else if best_workerw_without_defview != 0 {
-                            best_workerw_without_defview
-                        } else {
-                            // 最后兜底：只能挂到 shell_top（可能会挡图标），但至少不“完全没反应”
-                            shell_top
-                        };
                         break;
                     }
                     Err(e) => {
                         last_err = Some(e);
-                        thread::sleep(Duration::from_millis(200));
+                        thread::sleep(Duration::from_millis(100));
                     }
                 }
             }
@@ -383,7 +540,6 @@ impl WallpaperWindow {
                 ));
             }
 
-            // 句柄有效性检查（GetLastError=1400 的根因通常是无效 hwnd）
             if IsWindow(tauri_hwnd) == 0 {
                 return Err("Tauri wallpaper hwnd is invalid (IsWindow=0)".to_string());
             }
@@ -391,31 +547,70 @@ impl WallpaperWindow {
                 return Err("Parent hwnd is invalid (IsWindow=0)".to_string());
             }
 
-            // 5) 变成子窗口（否则 SetParent 后可能仍保持 WS_POPUP，导致不可见/不铺满等怪问题）
+            // Win11 上：只要 parent 是 WorkerW（壁纸层），就无条件把它铺满虚拟屏幕并 show。
+            // 否则经常出现“WorkerW 尺寸/裁剪不一致 -> 壁纸区域外黑底”的情况。
+            {
+                let parent_class = hwnd_class(parent);
+                if parent_class == "WorkerW" && parent != shell_top {
+                    // 用虚拟屏幕尺寸（多显示器更稳）
+                    // SM_XVIRTUALSCREEN=76, SM_YVIRTUALSCREEN=77, SM_CXVIRTUALSCREEN=78, SM_CYVIRTUALSCREEN=79
+                    let vx = GetSystemMetrics(76);
+                    let vy = GetSystemMetrics(77);
+                    let sw = GetSystemMetrics(78);
+                    let sh = GetSystemMetrics(79);
+
+                    let mut rcw: RECT = std::mem::zeroed();
+                    let ok = GetClientRect(parent, &mut rcw as *mut RECT);
+                    let pw = if ok != 0 { rcw.right - rcw.left } else { -1 };
+                    let ph = if ok != 0 { rcw.bottom - rcw.top } else { -1 };
+                    eprintln!(
+                        "[DEBUG] parent WorkerW {} client before resize ok={} size={}x{}, target virtual={}x{} at ({}, {})",
+                        parent, ok, pw, ph, sw, sh, vx, vy
+                    );
+
+                    const HWND_BOTTOM: HWND = 1;
+                    SetWindowPos(
+                        parent,
+                        HWND_BOTTOM,
+                        vx,
+                        vy,
+                        sw,
+                        sh,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    );
+                    ShowWindow(parent, SW_SHOW);
+                    forced_parent_wh = Some((sw, sh));
+                    eprintln!(
+                        "[DEBUG] resized/showed parent WorkerW {} to {}x{} at ({}, {})",
+                        parent, sw, sh, vx, vy
+                    );
+                }
+            }
+
+            // 变成子窗口
             let style = GetWindowLongPtrW(tauri_hwnd, GWL_STYLE) as isize;
             let new_style = (style & !(WS_POPUP as isize)) | (WS_CHILD as isize);
             SetWindowLongPtrW(tauri_hwnd, GWL_STYLE, new_style);
 
-            // 5) SetParent 到 parent（优先 workerw_after_shell_top，否则其他 WorkerW，否则 shell_top）
-            // 注意：child window 会被 parent 的 client area 裁剪。
-            // 你现在日志里 WorkerW client height=0，导致“挂载成功但永远不可见”。
-            // 所以这里先挂一次，后面会检测 parent client rect，如果为 0 则回退挂到 shell_top 并置底。
-            {
-                let prev_parent = SetParent(tauri_hwnd, parent);
-                if prev_parent == 0 {
-                    let err = windows_sys::Win32::Foundation::GetLastError();
-                    return Err(format!("SetParent failed. GetLastError={}", err));
-                }
+            // 挂载
+            // 注意：SetParent 返回“旧父窗口”，旧父窗口可能为 NULL（顶层窗口），此时返回 0 仍可能是成功。
+            // 所以这里用 GetParent 校验结果，避免误报。
+            let _old_parent = SetParent(tauri_hwnd, parent);
+            if GetParent(tauri_hwnd) != parent {
+                let err = windows_sys::Win32::Foundation::GetLastError();
+                return Err(format!(
+                    "SetParent failed (GetParent mismatch). GetLastError={}",
+                    err
+                ));
             }
 
-            // 6) 先只设置为不抢焦点，排除 WS_EX_LAYERED / WS_EX_TRANSPARENT 导致完全不可见的问题
+            // 不抢焦点 + 鼠标穿透（避免壁纸窗口抢占桌面图标/桌面工具的点击）
+            // 注意：这会使壁纸窗口“不可交互”，但本项目窗口模式主要用于展示图片壁纸，这是期望行为。
             let ex = GetWindowLongPtrW(tauri_hwnd, GWL_EXSTYLE) as isize;
-            let new_ex = ex | (WS_EX_NOACTIVATE as isize);
+            let new_ex = ex | (WS_EX_NOACTIVATE as isize) | (WS_EX_TRANSPARENT as isize);
             SetWindowLongPtrW(tauri_hwnd, GWL_EXSTYLE, new_ex);
 
-            // 7) 关键：作为子窗口时，坐标是“父窗口客户区坐标系”，不能用屏幕/虚拟屏幕坐标。
-            // 否则很容易移动到父窗口范围之外，导致桌面上永远看不到任何变化。
-            // 输出一些 debug，便于你确认挂到哪一层
+            // 输出 debug
             {
                 let parent_class = hwnd_class(parent);
                 let shell_top_class = hwnd_class(shell_top);
@@ -423,14 +618,165 @@ impl WallpaperWindow {
                     "[DEBUG] wallpaper parent hwnd={} class={} shell_top={} shell_top_class={} progman={}",
                     parent, parent_class, shell_top, shell_top_class, progman
                 );
+                if parent == shell_top {
+                    dump_desktop_toplevel_windows();
+                }
             }
 
+            // 计算 parent client rect 并铺满（child 坐标系）
             let mut rc: RECT = std::mem::zeroed();
-            // Z序策略：
-            // - 如果 parent == shell_top（也就是图标宿主本身），必须插到 SHELLDLL_DefView 下面，确保图标永远在上层
-            // - 如果 parent 是 “shell_top 后面的 WorkerW”（经典壁纸层），置顶/默认即可
+            let ok = GetClientRect(parent, &mut rc as *mut RECT);
+            let mut w = 0;
+            let mut h = 0;
+            if ok != 0 {
+                w = rc.right - rc.left;
+                h = rc.bottom - rc.top;
+            }
+
+            // 子窗口尺寸策略：
+            // - parent 是 WorkerW：无条件用虚拟屏幕尺寸铺满（避免黑底/黑边）
+            // - 否则按 client rect / 虚拟屏幕兜底
+            let parent_class = hwnd_class(parent);
+            if parent_class == "WorkerW" && parent != shell_top {
+                let (sw, sh) =
+                    forced_parent_wh.unwrap_or((GetSystemMetrics(78), GetSystemMetrics(79)));
+                w = sw;
+                h = sh;
+                eprintln!(
+                    "[DEBUG] force wallpaper child size to {}x{} (parent client ok={} was {}x{})",
+                    w,
+                    h,
+                    ok,
+                    rc.right - rc.left,
+                    rc.bottom - rc.top
+                );
+            } else {
+                // 否则：如果 parent client rect 仍明显偏小，也用虚拟屏幕兜底（避免黑边）
+                let sw = GetSystemMetrics(78);
+                let sh = GetSystemMetrics(79);
+                if ok == 0 || w <= 0 || h <= 0 || (w < (sw * 3 / 4) || h < (sh * 3 / 4)) {
+                    w = sw;
+                    h = sh;
+                }
+            }
+
+            // Z序策略（更硬、更稳定）：
+            // 1) 壁纸窗口永远放到同父窗口的最底层
+            // 2) 如果 parent==shell_top（你这台机子是 Progman），则把 DefView 和 SysListView32 都显式抬到最上，
+            //    彻底避免“图标整层被 webview 合成层压没”的情况。
             const HWND_BOTTOM: HWND = 1;
-            let insert_after: HWND = if parent == shell_top {
+            const HWND_TOP: HWND = 0;
+
+            SetWindowPos(
+                tauri_hwnd,
+                HWND_BOTTOM,
+                0,
+                0,
+                w,
+                h,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED,
+            );
+            ShowWindow(tauri_hwnd, SW_SHOW);
+
+            // Win11 + WebView2 场景：即便壁纸挂到 WorkerW，仍可能因为顶层 Z 序/壳层干预导致图标层被压在下面。
+            // 这里在 parent 为 WorkerW 时，显式把 Progman/DefView/FolderView 提到 WorkerW 之上（不激活），确保图标可见。
+            {
+                let parent_class = hwnd_class(parent);
+                if parent_class == "WorkerW" && parent != shell_top {
+                    const HWND_TOP: HWND = 0;
+                    const WM_PAINT: u32 = 0x000F;
+                    const WM_NCPAINT: u32 = 0x0085;
+
+                    // 关键：顶层窗口 Z 序钉死
+                    // - WorkerW 做壁纸层：永远放到最底（顶层）
+                    // - Progman(图标宿主)：永远放到最顶（顶层）
+                    // 否则即便 DefView/FolderView 在 Progman 内部置顶，整个 Progman 仍可能被 WorkerW 覆盖导致“图标不可见”。
+                    SetWindowPos(
+                        parent,
+                        HWND_BOTTOM,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                    SetWindowPos(
+                        shell_top,
+                        HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+
+                    ShowWindow(shell_top, SW_SHOW);
+                    SetWindowPos(
+                        shell_top,
+                        HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+
+                    let def_view = FindWindowExW(
+                        shell_top,
+                        0,
+                        wide("SHELLDLL_DefView").as_ptr(),
+                        std::ptr::null(),
+                    );
+                    if def_view != 0 && IsWindow(def_view) != 0 {
+                        ShowWindow(def_view, SW_SHOW);
+                        SetWindowPos(
+                            def_view,
+                            HWND_TOP,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+
+                        let folder_view = FindWindowExW(
+                            def_view,
+                            0,
+                            wide("SysListView32").as_ptr(),
+                            std::ptr::null(),
+                        );
+                        if folder_view != 0 && IsWindow(folder_view) != 0 {
+                            ShowWindow(folder_view, SW_SHOW);
+                            SetWindowPos(
+                                folder_view,
+                                HWND_TOP,
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                            );
+                        }
+
+                        // 触发一次重绘，避免“Z序对了但没刷新”
+                        let _ = SendMessageW(shell_top, WM_NCPAINT, 0, 0);
+                        let _ = SendMessageW(shell_top, WM_PAINT, 0, 0);
+                        let _ = SendMessageW(def_view, WM_NCPAINT, 0, 0);
+                        let _ = SendMessageW(def_view, WM_PAINT, 0, 0);
+                        if folder_view != 0 {
+                            let _ = SendMessageW(folder_view, WM_NCPAINT, 0, 0);
+                            let _ = SendMessageW(folder_view, WM_PAINT, 0, 0);
+                        }
+                    }
+
+                    eprintln!("[DEBUG] bumped shell_top/DefView above WorkerW wallpaper parent");
+                    eprintln!("[DEBUG] forced top-level z-order: WorkerW->BOTTOM, Progman->TOP");
+                }
+            }
+
+            // 关键补偿：仅当 parent==shell_top 时（我们不得不挂到图标宿主），才尝试抬升图标层。
+            // 如果 parent 是 WorkerW（推荐路径），图标不在此父窗口下，没必要也不应该动它。
+            if parent == shell_top {
                 let def_view = FindWindowExW(
                     shell_top,
                     0,
@@ -438,182 +784,56 @@ impl WallpaperWindow {
                     std::ptr::null(),
                 );
                 if def_view != 0 && IsWindow(def_view) != 0 {
-                    // 插到 DefView(桌面图标层) 的下面
-                    def_view
-                } else {
-                    HWND_BOTTOM
-                }
-            } else {
-                0
-            };
+                    // 一些壳层/桌面工具会让 DefView 处于隐藏/未重绘状态；这里强制显示并重绘一次
+                    ShowWindow(def_view, SW_SHOW);
 
-            let mut w = 0;
-            let mut h = 0;
-            let ok = GetClientRect(parent, &mut rc as *mut RECT);
-            if ok != 0 {
-                w = rc.right - rc.left;
-                h = rc.bottom - rc.top;
-            }
-
-            // 关键：child window 会被 parent 的 client area 裁剪。
-            // 如果 parent client 为 0（你当前遇到的情况），无论子窗口设置多大都会“被裁成不可见”。
-            // 此时回退：挂到 shell_top(Progman/WorkerW icon host) 并强制置底，让图标层在上面。
-            if ok == 0 || w <= 0 || h <= 0 {
-                eprintln!(
-                    "[DEBUG] parent client rect invalid/zero (ok={}, rc=({}, {}, {}, {})), try fallback parent=shell_top and HWND_BOTTOM",
-                    ok, rc.left, rc.top, rc.right, rc.bottom
-                );
-
-                if shell_top != 0 && IsWindow(shell_top) != 0 && parent != shell_top {
-                    // 切换 parent 到 shell_top
-                    let prev_parent = SetParent(tauri_hwnd, shell_top);
-                    if prev_parent == 0 {
-                        let err = windows_sys::Win32::Foundation::GetLastError();
-                        return Err(format!("SetParent(shell_top) failed. GetLastError={}", err));
-                    }
-                    parent = shell_top;
-                }
-
-                // 重新取 client rect（shell_top 应该有有效大小）
-                let mut rc2: RECT = std::mem::zeroed();
-                let ok2 = GetClientRect(parent, &mut rc2 as *mut RECT);
-                let mut w2 = 0;
-                let mut h2 = 0;
-                if ok2 != 0 {
-                    w2 = rc2.right - rc2.left;
-                    h2 = rc2.bottom - rc2.top;
-                }
-
-                if ok2 == 0 || w2 <= 0 || h2 <= 0 {
-                    // 仍然异常：最后用屏幕尺寸（至少 SetWindowPos 有数值；但注意仍会被裁剪）
-                    let sw = GetSystemMetrics(0); // SM_CXSCREEN
-                    let sh = GetSystemMetrics(1); // SM_CYSCREEN
-                    eprintln!(
-                        "[DEBUG] shell_top client rect still invalid/zero (ok2={}, rc2=({}, {}, {}, {})), fallback to screen {}x{}",
-                        ok2, rc2.left, rc2.top, rc2.right, rc2.bottom, sw, sh
-                    );
-                    w = sw;
-                    h = sh;
-                } else {
-                    eprintln!(
-                        "[DEBUG] fallback parent shell_top rc=({}, {}, {}, {}), size={}x{}",
-                        rc2.left, rc2.top, rc2.right, rc2.bottom, w2, h2
-                    );
-                    w = w2;
-                    h = h2;
-                }
-
-                // parent 已经是 shell_top：必须置底，避免挡住桌面图标层
-                let insert_after = {
-                    let def_view = FindWindowExW(
-                        parent,
+                    SetWindowPos(
+                        def_view,
+                        HWND_TOP,
                         0,
-                        wide("SHELLDLL_DefView").as_ptr(),
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+
+                    let folder_view = FindWindowExW(
+                        def_view,
+                        0,
+                        wide("SysListView32").as_ptr(),
                         std::ptr::null(),
                     );
-                    if def_view != 0 && IsWindow(def_view) != 0 {
-                        def_view
-                    } else {
-                        HWND_BOTTOM
+                    if folder_view != 0 && IsWindow(folder_view) != 0 {
+                        ShowWindow(folder_view, SW_SHOW);
+                        SetWindowPos(
+                            folder_view,
+                            HWND_TOP,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
                     }
-                };
-                SetWindowPos(
-                    tauri_hwnd,
-                    insert_after,
-                    0,
-                    0,
-                    w,
-                    h,
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                );
-                ShowWindow(tauri_hwnd, SW_SHOW);
-                println!("[DEBUG] 窗口已设置为壁纸层（fallback: parent=shell_top, bottom）");
-                return Ok(());
+
+                    // 强制刷新：用 WM_PAINT/WM_NCPAINT 触发重绘（不依赖额外 windows-sys feature）
+                    const WM_PAINT: u32 = 0x000F;
+                    const WM_NCPAINT: u32 = 0x0085;
+                    let _ = SendMessageW(shell_top, WM_NCPAINT, 0, 0);
+                    let _ = SendMessageW(shell_top, WM_PAINT, 0, 0);
+                    let _ = SendMessageW(def_view, WM_NCPAINT, 0, 0);
+                    let _ = SendMessageW(def_view, WM_PAINT, 0, 0);
+                    if folder_view != 0 {
+                        let _ = SendMessageW(folder_view, WM_NCPAINT, 0, 0);
+                        let _ = SendMessageW(folder_view, WM_PAINT, 0, 0);
+                    }
+                } else {
+                    eprintln!("[DEBUG] parent==shell_top but DefView not found under shell_top");
+                }
             }
-
-            eprintln!(
-                "[DEBUG] parent client rect ok rc=({}, {}, {}, {}), size={}x{}",
-                rc.left, rc.top, rc.right, rc.bottom, w, h
-            );
-
-            SetWindowPos(
-                tauri_hwnd,
-                insert_after,
-                0,
-                0,
-                w,
-                h,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
-            ShowWindow(tauri_hwnd, SW_SHOW);
         }
 
         println!("[DEBUG] 窗口已设置为壁纸层（纯 Win32，无 PowerShell）");
-        Ok(())
-    }
-
-    /// 调试：把 wallpaper 窗口从桌面层“临时脱离”，作为普通窗口弹出 3 秒，然后再挂回桌面层。
-    /// 用于确认：窗口本身是否在渲染（以及是否能看到 debug 面板），从而把问题收敛为“挂载层级/可见性”。
-    #[cfg(target_os = "windows")]
-    #[allow(dead_code)]
-    pub fn debug_detach_popup_3s(window: &WebviewWindow) -> Result<(), String> {
-        use windows_sys::Win32::Foundation::HWND;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongPtrW, IsWindow, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-            GWL_EXSTYLE, GWL_STYLE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_SHOW, WS_CHILD,
-            WS_EX_NOACTIVATE, WS_POPUP,
-        };
-
-        let hwnd = window
-            .hwnd()
-            .map_err(|e| format!("无法获取壁纸窗口句柄(hwnd): {}", e))?;
-        let hwnd: HWND = hwnd.0 as isize;
-
-        const HWND_TOPMOST: HWND = -1;
-        const HWND_NOTOPMOST: HWND = -2;
-
-        unsafe {
-            if IsWindow(hwnd) == 0 {
-                return Err("debug_detach_popup_3s: hwnd 无效(IsWindow=0)".to_string());
-            }
-
-            // 1) 脱离桌面层（父窗口设为 NULL）
-            let _prev = SetParent(hwnd, 0);
-
-            // 2) 变成普通 popup（屏幕坐标系）
-            let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as isize;
-            let new_style = (style & !(WS_CHILD as isize)) | (WS_POPUP as isize);
-            SetWindowLongPtrW(hwnd, GWL_STYLE, new_style);
-
-            // 允许激活/可见：去掉 NOACTIVATE（否则可能看不到/点不到）
-            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as isize;
-            let new_ex = ex & !(WS_EX_NOACTIVATE as isize);
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex);
-
-            // 3) 置顶弹出 3 秒
-            SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                50,
-                50,
-                900,
-                600,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
-            ShowWindow(hwnd, SW_SHOW);
-        }
-
-        std::thread::sleep(std::time::Duration::from_secs(3));
-
-        unsafe {
-            // 退出 topmost
-            let _ = SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE);
-        }
-
-        // 4) 尝试再挂回桌面层（失败也不影响“弹出可见”这个调试结论）
-        if let Err(e) = Self::set_window_as_wallpaper(window) {
-            eprintln!("[DEBUG] debug_detach_popup_3s: reattach failed: {}", e);
-        }
         Ok(())
     }
 }

@@ -23,6 +23,7 @@ mod crawler;
 mod plugin;
 mod settings;
 mod storage;
+mod tray;
 mod wallpaper;
 mod wallpaper_engine_export;
 
@@ -693,8 +694,18 @@ fn set_wallpaper_rotation_album_id(
 fn set_wallpaper_rotation_interval_minutes(
     minutes: u32,
     state: tauri::State<Settings>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    state.set_wallpaper_rotation_interval_minutes(minutes)
+    state.set_wallpaper_rotation_interval_minutes(minutes)?;
+
+    // 如果轮播器正在运行，重置定时器以应用新的间隔设置
+    if let Some(rotator) = app.try_state::<WallpaperRotator>() {
+        if rotator.is_running() {
+            rotator.reset();
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -854,6 +865,13 @@ fn set_wallpaper_mode(
         let rotator = app_clone.state::<WallpaperRotator>();
         let controller = app_clone.state::<WallpaperController>();
 
+        // 关键：切换模式期间先暂停轮播，避免轮播线程仍按旧 mode（native）调用 SPI_SETDESKWALLPAPER，
+        // 导致 Explorer 刷新把刚挂载的 window wallpaper “顶掉”，表现为“闪一下就没了”。
+        let was_running = rotator.is_running();
+        if was_running {
+            rotator.stop();
+        }
+
         // 读取最新设置（style/transition/是否启用轮播）
         let s = match settings_state.get_settings() {
             Ok(s) => s,
@@ -930,6 +948,9 @@ fn set_wallpaper_mode(
             }
         };
         let apply_res: Result<(), String> = (|| {
+            // 关键：确保目标后端已初始化（尤其是 window 模式需要提前把 WallpaperWindow 放进 manager 状态）
+            // 否则会报 “窗口未初始化，请先调用 init 方法”，前端就会一直显示“切换中”。
+            target.init(app_clone.clone())?;
             // 先切换壁纸路径
             target.set_wallpaper_path(&resolved_wallpaper, true)?;
             // 再应用样式
@@ -966,7 +987,9 @@ fn set_wallpaper_mode(
 
                 // 4) 轮播开启时重置定时器（切换模式也算一次“用户触发”）
                 if s.wallpaper_rotation_enabled {
-                    rotator.reset();
+                    // 切换完成后再恢复轮播（若之前在跑或用户开启了轮播）
+                    // 这里用 start 确保轮播线程按新 mode 工作
+                    let _ = rotator.start();
                 }
 
                 let _ = app_clone.emit(
@@ -979,6 +1002,10 @@ fn set_wallpaper_mode(
             }
             Err(e) => {
                 eprintln!("切换到 {} 模式失败: {}", mode_clone, e);
+                // 失败时恢复轮播（如果之前在运行）
+                if was_running {
+                    let _ = rotator.start();
+                }
                 let _ = app_clone.emit(
                     "wallpaper-mode-switch-complete",
                     serde_json::json!({
@@ -1042,39 +1069,58 @@ fn get_native_wallpaper_styles() -> Result<Vec<String>, String> {
     }
 }
 
-/// 壁纸窗口前端 ready 后调用，用于触发一次“推送当前壁纸到壁纸窗口”。
+/// 隐藏主窗口（用于窗口关闭事件处理）
+#[tauri::command]
+fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.webview_windows().values().next() {
+        window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
+    } else {
+        return Err("找不到主窗口".to_string());
+    }
+    Ok(())
+}
+
+/// 壁纸窗口前端 ready 后调用，用于触发一次"推送当前壁纸到壁纸窗口"。
 /// 解决壁纸窗口尚未注册事件监听时，后端先 emit 导致事件丢失的问题。
 #[tauri::command]
+#[cfg(target_os = "windows")]
 fn wallpaper_window_ready(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
-
     // 标记窗口已完全初始化
-    #[cfg(target_os = "windows")]
+    println!("壁纸窗口已就绪");
     WallpaperWindow::mark_ready();
 
-    let settings_state = app.state::<Settings>();
-    let s = settings_state
-        .get_settings()
-        .map_err(|e| format!("获取设置失败: {}", e))?;
+    // // 前端 ready 之后，补推一次当前状态（避免启动/切换时事件在监听器注册前丢失）
+    // let controller = app.state::<WallpaperController>();
+    // let settings = app.state::<Settings>();
+    // let s = settings.get_settings().unwrap_or_default();
 
-    // 只有在窗口模式下才需要推送到 wallpaper window
-    if s.wallpaper_mode != "window" {
-        return Ok(());
-    }
+    // // 只有在 window 模式下才需要补推到 wallpaper window
+    // if s.wallpaper_mode == "window" {
+    //     let target = controller.manager_for_mode("window");
+    //     let _ = target.init(app.clone());
 
-    let rotator = app.state::<WallpaperRotator>();
+    //     // 优先使用 window manager 里记录的当前路径；没有则用系统当前壁纸（native）
+    //     let mut path: Option<String> = target.get_wallpaper_path().ok();
+    //     if path.as_ref().map_or(true, |p| p.is_empty()) {
+    //         path = controller
+    //             .manager_for_mode("native")
+    //             .get_wallpaper_path()
+    //             .ok();
+    //     }
 
-    // 尝试重新应用当前壁纸；若当前还没设置过壁纸，则尝试立刻切换一张
-    if rotator
-        .reapply_current_wallpaper(
-            Some(&s.wallpaper_rotation_style),
-            Some(&s.wallpaper_rotation_transition),
-        )
-        .is_err()
-    {
-        let _ = rotator.rotate();
-    }
-
+    //     if let Some(p) = path {
+    //         if !p.is_empty() && std::path::Path::new(&p).exists() {
+    //             let _ = target.set_wallpaper_path(&p, true);
+    //             let _ = target.set_style(&s.wallpaper_rotation_style, true);
+    //             if s.wallpaper_rotation_enabled {
+    //                 let _ = target.set_transition(&s.wallpaper_rotation_transition, true);
+    //             }
+    //         } else {
+    //             eprintln!("[DEBUG] wallpaper_window_ready: no valid wallpaper path to push");
+    //         }
+    //     }
+    // }
     Ok(())
 }
 
@@ -1211,250 +1257,37 @@ fn main() {
             }
 
             // 创建系统托盘（使用 Tauri 2.0 内置 API）
-            // 延迟初始化，确保窗口已经创建
-            let handle = app.app_handle().clone();
+            tray::setup_tray(app.app_handle().clone());
+
+            // 初始化壁纸控制器，然后根据设置决定是否启动轮播
+            let app_handle = app.app_handle().clone();
             std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(500));
+                std::thread::sleep(std::time::Duration::from_millis(500)); // 延迟启动，确保应用完全初始化
 
-                use tauri::{
-                    menu::{Menu, MenuItem},
-                    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-                    Manager,
-                };
+                // 创建 Tokio runtime 用于异步初始化
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 
-                // 创建菜单项
-                let show_item =
-                    match MenuItem::with_id(&handle, "show", "显示窗口", true, None::<&str>) {
-                        Ok(item) => item,
-                        Err(e) => {
-                            eprintln!("创建菜单项失败: {}", e);
-                            return;
+                rt.block_on(async {
+                    // 初始化壁纸控制器（如创建窗口等）
+                    let controller = app_handle.state::<WallpaperController>();
+                    if let Err(e) = controller.init().await {
+                        eprintln!("初始化壁纸控制器失败: {}", e);
+                    }
+
+                    println!("初始化壁纸控制器完成");
+
+                    // 初始化完成后：如果当前就是 window 模式，则start rotator
+                    let settings = app_handle.state::<Settings>();
+                    if let Ok(app_settings) = settings.get_settings() {
+                        if app_settings.wallpaper_rotation_enabled {
+                            let rotator = app_handle.state::<WallpaperRotator>();
+                            if let Err(e) = rotator.start() {
+                                eprintln!("启动壁纸轮播失败: {}", e);
+                            }
                         }
-                    };
-                let hide_item =
-                    match MenuItem::with_id(&handle, "hide", "隐藏窗口", true, None::<&str>) {
-                        Ok(item) => item,
-                        Err(e) => {
-                            eprintln!("创建菜单项失败: {}", e);
-                            return;
-                        }
-                    };
-                let next_wallpaper_item = match MenuItem::with_id(
-                    &handle,
-                    "next_wallpaper",
-                    "下一张壁纸",
-                    true,
-                    None::<&str>,
-                ) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        eprintln!("创建菜单项失败: {}", e);
-                        return;
                     }
-                };
-                let debug_wallpaper_item = match MenuItem::with_id(
-                    &handle,
-                    "debug_wallpaper",
-                    "调试：打开壁纸窗口",
-                    true,
-                    None::<&str>,
-                ) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        eprintln!("创建菜单项失败: {}", e);
-                        return;
-                    }
-                };
-                let popup_wallpaper_item = match MenuItem::with_id(
-                    &handle,
-                    "popup_wallpaper",
-                    "调试：弹出壁纸窗口(3秒)",
-                    true,
-                    None::<&str>,
-                ) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        eprintln!("创建菜单项失败: {}", e);
-                        return;
-                    }
-                };
-                let popup_wallpaper_detach_item = match MenuItem::with_id(
-                    &handle,
-                    "popup_wallpaper_detach",
-                    "调试：脱离桌面层弹出(3秒)",
-                    true,
-                    None::<&str>,
-                ) {
-                    Ok(item) => item,
-                    Err(e) => {
-                        eprintln!("创建菜单项失败: {}", e);
-                        return;
-                    }
-                };
-                let quit_item = match MenuItem::with_id(&handle, "quit", "退出", true, None::<&str>)
-                {
-                    Ok(item) => item,
-                    Err(e) => {
-                        eprintln!("创建菜单项失败: {}", e);
-                        return;
-                    }
-                };
-
-                // 创建菜单
-                let menu = match Menu::with_items(
-                    &handle,
-                    &[
-                        &show_item,
-                        &hide_item,
-                        &next_wallpaper_item,
-                        &debug_wallpaper_item,
-                        &popup_wallpaper_item,
-                        &popup_wallpaper_detach_item,
-                        &quit_item,
-                    ],
-                ) {
-                    Ok(menu) => menu,
-                    Err(e) => {
-                        eprintln!("创建菜单失败: {}", e);
-                        return;
-                    }
-                };
-
-                // 创建托盘图标
-                let icon = match handle.default_window_icon() {
-                    Some(icon) => icon.clone(),
-                    None => {
-                        eprintln!("无法获取默认图标");
-                        return;
-                    }
-                };
-
-                let handle_clone1 = handle.clone();
-                let handle_clone2 = handle.clone();
-                let _tray = match TrayIconBuilder::new()
-                    .icon(icon)
-                    .menu(&menu)
-                    .tooltip("Kabegami")
-                    .on_menu_event(move |_tray, event| {
-                        match event.id.as_ref() {
-                            "show" => {
-                                if let Some(window) =
-                                    handle_clone1.webview_windows().values().next()
-                                {
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
-                                }
-                            }
-                            "hide" => {
-                                if let Some(window) =
-                                    handle_clone1.webview_windows().values().next()
-                                {
-                                    let _ = window.hide();
-                                }
-                            }
-                            "quit" => {
-                                // 优雅地退出应用
-                                handle_clone1.exit(0);
-                            }
-                            "next_wallpaper" => {
-                                // 后台切换下一张壁纸，避免阻塞托盘事件线程
-                                let app_handle = handle_clone1.clone();
-                                std::thread::spawn(move || {
-                                    use tauri::Manager;
-                                    let rotator = app_handle.state::<WallpaperRotator>();
-                                    if let Err(e) = rotator.rotate() {
-                                        eprintln!("托盘切换下一张壁纸失败: {}", e);
-                                    }
-                                });
-                            }
-                            "debug_wallpaper" => {
-                                // 打开一个普通可见窗口（不挂到桌面层），用于确认 WallpaperLayer 是否在渲染/收事件
-                                let app_handle = handle_clone1.clone();
-                                std::thread::spawn(move || {
-                                    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
-
-                                    if let Some(w) =
-                                        app_handle.get_webview_window("wallpaper_debug")
-                                    {
-                                        let _ = w.show();
-                                        let _ = w.set_focus();
-                                        return;
-                                    }
-
-                                    let _ = WebviewWindowBuilder::new(
-                                        &app_handle,
-                                        "wallpaper_debug",
-                                        WebviewUrl::App("index.html".into()),
-                                    )
-                                    .title("Kabegami Wallpaper Debug")
-                                    .resizable(true)
-                                    .decorations(true)
-                                    .transparent(false)
-                                    .visible(true)
-                                    .skip_taskbar(false)
-                                    .inner_size(900.0, 600.0)
-                                    .build();
-                                });
-                            }
-                            _ => {}
-                        }
-                    })
-                    .on_tray_icon_event(move |_tray, event| {
-                        // 在 Windows 上，右键点击会自动显示菜单，不需要额外处理
-                        // 左键点击可以切换窗口显示/隐藏
-                        if let TrayIconEvent::Click { button, .. } = event {
-                            // 只在左键点击时切换窗口，右键点击会由系统自动显示菜单
-                            if button == MouseButton::Left {
-                                if let Some(window) =
-                                    handle_clone2.webview_windows().values().next()
-                                {
-                                    if window.is_visible().unwrap_or(false) {
-                                        let _ = window.hide();
-                                    } else {
-                                        let _ = window.show();
-                                        let _ = window.set_focus();
-                                    }
-                                }
-                            }
-                            // 右键点击（MouseButton::Right）会由系统自动显示菜单，不需要处理
-                        }
-                    })
-                    .build(&handle)
-                {
-                    Ok(tray) => tray,
-                    Err(e) => {
-                        eprintln!("创建系统托盘失败: {}", e);
-                        return;
-                    }
-                };
+                });
             });
-
-            // 处理窗口关闭事件 - 隐藏而不是退出
-            // 延迟处理，确保窗口已经创建
-            let handle_clone = app.app_handle().clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(600));
-                if let Some(window) = handle_clone.webview_windows().values().next() {
-                    let window_clone = window.clone();
-                    window.on_window_event(move |event| {
-                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                            api.prevent_close();
-                            let _ = window_clone.hide();
-                        }
-                    });
-                }
-            });
-
-            // 如果设置中启用了轮播，启动轮播服务
-            let settings = app.state::<Settings>();
-            if let Ok(app_settings) = settings.get_settings() {
-                if app_settings.wallpaper_rotation_enabled {
-                    let rotator = app.state::<WallpaperRotator>();
-                    if let Err(e) = rotator.start() {
-                        eprintln!("启动壁纸轮播失败: {}", e);
-                    }
-                }
-            }
 
             Ok(())
         })
@@ -1527,7 +1360,9 @@ fn main() {
             set_wallpaper_mode,
             get_wallpaper_rotator_status,
             get_native_wallpaper_styles,
+            #[cfg(target_os = "windows")]
             wallpaper_window_ready,
+            hide_main_window,
             // Wallpaper Engine 导出
             export_album_to_we_project,
             export_images_to_we_project,

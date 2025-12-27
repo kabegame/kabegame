@@ -33,6 +33,7 @@ auto-launch = "0.5"
 rusqlite = { version = "0.31", features = ["bundled"] }
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_UI_Shell",

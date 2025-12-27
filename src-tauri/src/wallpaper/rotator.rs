@@ -9,6 +9,10 @@ use tauri::{AppHandle, Manager};
 use tokio::sync::Notify;
 use tokio::time::{interval, Duration};
 
+// 轮播线程控制标志位
+const FLAG_ROTATE: u8 = 1; // 立即切换壁纸
+const FLAG_RESET: u8 = 2; // 重置定时器
+
 pub struct WallpaperRotator {
     app: AppHandle,
     running: Arc<AtomicBool>,
@@ -34,8 +38,22 @@ impl WallpaperRotator {
     }
 
     pub fn start(&self) -> Result<(), String> {
+        println!("[DEBUG] 启动壁纸轮播");
         if self.running.load(Ordering::Relaxed) {
             return Ok(()); // 已经在运行
+        }
+
+        // 调试：启动时打印一次当前模式，确认轮播会走哪个后端
+        if let Some(settings_state) = self.app.try_state::<Settings>() {
+            if let Ok(s) = settings_state.get_settings() {
+                eprintln!(
+                    "[DEBUG] rotator.start: wallpaper_mode={}, rotation_enabled={}, transition={}, style={}",
+                    s.wallpaper_mode,
+                    s.wallpaper_rotation_enabled,
+                    s.wallpaper_rotation_transition,
+                    s.wallpaper_rotation_style
+                );
+            }
         }
 
         self.running.store(true, Ordering::Relaxed);
@@ -52,11 +70,24 @@ impl WallpaperRotator {
 
             rt.block_on(async move {
                 use tauri::Manager;
-                const FLAG_ROTATE: u8 = 1;
-                const FLAG_RESET: u8 = 2;
+
+                // 从用户设置中读取初始 interval
+                let initial_interval_secs = {
+                    if let Some(settings_state) = app.try_state::<Settings>() {
+                        if let Ok(settings) = settings_state.get_settings() {
+                            (settings.wallpaper_rotation_interval_minutes as u64)
+                                .saturating_mul(60)
+                                .max(60)
+                        } else {
+                            60 // 默认值：如果获取设置失败，使用 60 秒
+                        }
+                    } else {
+                        60 // 默认值：如果无法获取设置状态，使用 60 秒
+                    }
+                };
 
                 // 用单一 ticker 控制轮播间隔；手动切换/重置通过 Notify 立即唤醒本线程处理。
-                let mut current_interval_secs: u64 = 60;
+                let mut current_interval_secs: u64 = initial_interval_secs;
                 let mut ticker = interval(Duration::from_secs(current_interval_secs));
 
                 loop {
@@ -85,14 +116,15 @@ impl WallpaperRotator {
                         }
                     };
 
-                    // 如果 interval 被用户改了，更新 ticker，并让下一次从现在开始计时
+                    // 如果 interval 被用户改了，更新 ticker，并重置定时器让下一次从现在开始计时
                     let desired_secs = (settings.wallpaper_rotation_interval_minutes as u64)
                         .saturating_mul(60)
                         .max(60);
                     if desired_secs != current_interval_secs {
                         current_interval_secs = desired_secs;
                         ticker = interval(Duration::from_secs(current_interval_secs));
-                        ticker.reset();
+                        ticker.reset(); // 重置定时器，从当前时间重新开始计时
+                        continue;
                     }
 
                     // 处理控制指令
@@ -160,25 +192,88 @@ impl WallpaperRotator {
                             selected.unwrap()
                         }
                         _ => {
-                            // 随机模式：找到所有存在的图片，然后随机抽取一张
-                            let existing_images: Vec<&crate::storage::ImageInfo> = images
+                            // 随机模式：在查找时就排除当前壁纸，如果找到0张图片则直接返回当前壁纸
+
+                            // 获取当前壁纸路径
+                            let current_wallpaper_path = {
+                                let controller = match app.try_state::<WallpaperController>() {
+                                    Some(c) => c,
+                                    None => {
+                                        eprintln!("无法获取 WallpaperController 状态");
+                                        continue;
+                                    }
+                                };
+                                match controller.active_manager() {
+                                    Ok(manager) => manager.get_wallpaper_path().ok(),
+                                    Err(_) => None,
+                                }
+                            };
+
+                            // 规范化路径用于比较（Windows 下避免因为 \\?\ 前缀 / 斜杠方向 / 大小写导致“当前壁纸”比对失败）
+                            let normalize_path = |p: &str| -> String {
+                                p.trim_start_matches(r"\\?\")
+                                    .replace('/', "\\")
+                                    .to_ascii_lowercase()
+                            };
+
+                            let current_norm =
+                                current_wallpaper_path.as_deref().map(normalize_path);
+
+                            // 在查找时就排除当前壁纸（images 本身来自 storage.get_album_images，通常已保证存在）
+                            let candidate_indices: Vec<usize> = images
                                 .iter()
-                                .filter(|img| Path::new(&img.local_path).exists())
+                                .enumerate()
+                                .filter_map(|(idx, img)| {
+                                    if let Some(ref cur) = current_norm {
+                                        if normalize_path(&img.local_path) == *cur {
+                                            return None;
+                                        }
+                                    }
+                                    Some(idx)
+                                })
                                 .collect();
 
-                            if existing_images.is_empty() {
-                                // 没有找到存在的图片，continue
-                                eprintln!("随机模式下没有找到存在的图片");
-                                continue;
+                            // 如果排除后没有图片了，直接返回当前壁纸
+                            if candidate_indices.is_empty() {
+                                if let Some(ref cur) = current_norm {
+                                    if let Some(current_image) = images
+                                        .iter()
+                                        .find(|img| normalize_path(&img.local_path) == *cur)
+                                    {
+                                        current_image.clone()
+                                    } else {
+                                        eprintln!(
+                                            "随机模式下：排除当前壁纸后没有其他图片，且找不到当前壁纸对应的图片信息"
+                                        );
+                                        // 兜底：随机挑一张（不再排除 current）
+                                        let random_idx = (std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap()
+                                            .as_nanos()
+                                            as usize)
+                                            % images.len();
+                                        images[random_idx].clone()
+                                    }
+                                } else {
+                                    // 没有当前壁纸路径：直接从 images 随机
+                                    let random_idx = (std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_nanos()
+                                        as usize)
+                                        % images.len();
+                                    images[random_idx].clone()
+                                }
+                            } else {
+                                // 随机选择一张
+                                let random_idx = (std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_nanos()
+                                    as usize)
+                                    % candidate_indices.len();
+                                images[candidate_indices[random_idx]].clone()
                             }
-
-                            // 随机选择一张
-                            let random_idx = (std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_nanos() as usize)
-                                % existing_images.len();
-                            existing_images[random_idx].clone()
                         }
                     };
 
@@ -201,12 +296,24 @@ impl WallpaperRotator {
                         }
                     };
 
-                    if let Err(e) = manager.set_wallpaper(
-                        &wallpaper_path,
-                        &settings.wallpaper_rotation_style,
-                        &settings.wallpaper_rotation_transition,
-                    ) {
+                    let style = match manager.get_style() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("获取壁纸样式失败: {}", e);
+                            continue;
+                        }
+                    };
+                    let transition = match manager.get_transition() {
+                        Ok(t) => t,
+                        Err(e) => {
+                            eprintln!("获取壁纸过渡效果失败: {}", e);
+                            continue;
+                        }
+                    };
+                    println!("设置壁纸, 样式，过渡：{}，{}，{}", wallpaper_path, style, transition);
+                    if let Err(e) = manager.set_wallpaper(&wallpaper_path, &style, &transition) {
                         eprintln!("设置壁纸失败: {}", e);
+                        continue;
                     }
 
                     // 保存当前壁纸路径（通过 set_wallpaper_path 已经保存）
@@ -235,7 +342,6 @@ impl WallpaperRotator {
     /// - 依赖当前设置：画册、随机/顺序、原生/窗口模式、style/transition
     pub fn rotate(&self) -> Result<(), String> {
         use tauri::Manager;
-        const FLAG_ROTATE: u8 = 1;
 
         // 检查轮播器是否正在运行
         if self.running.load(Ordering::Relaxed) {
@@ -350,7 +456,6 @@ impl WallpaperRotator {
     }
 
     pub fn stop(&self) {
-        const FLAG_RESET: u8 = 2;
         self.running.store(false, Ordering::Relaxed);
         self.control_flags.fetch_or(FLAG_RESET, Ordering::Relaxed);
         self.notify.notify_one();
@@ -358,7 +463,6 @@ impl WallpaperRotator {
 
     /// 重置定时器，使其从当前时间重新开始计算间隔
     pub fn reset(&self) {
-        const FLAG_RESET: u8 = 2;
         self.control_flags.fetch_or(FLAG_RESET, Ordering::Relaxed);
         self.notify.notify_one();
     }
