@@ -1,7 +1,8 @@
 // 窗口壁纸模块 - 类似 Wallpaper Engine 的实现
 
 use crate::settings::Settings;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 // 标记壁纸窗口是否已完全初始化（前端 DOM + Vue 组件 + 事件监听器都已就绪）
@@ -30,44 +31,63 @@ impl WallpaperWindow {
                 .ok_or_else(|| "壁纸窗口不存在。请确保在应用启动时已创建壁纸窗口".to_string())?,
         };
 
-        // 关键：这里不要阻塞等待前端 ready（否则窗口模式启动时可能“卡死”很久）。
-        // 如果未 ready，保持窗口隐藏，等 wallpaper_window_ready 命令触发后再 remount + 推送事件。
+        // 等待窗口完全初始化（前端 DOM + Vue 组件 + 事件监听器都已就绪）
+        // 超时时间：最多等待 100 秒
+        let max_wait_ms = 100000;
+        let check_interval_ms = 100;
+        let max_attempts = max_wait_ms / check_interval_ms;
+
+        let mut attempts = 0;
+        for _ in 0..max_attempts {
+            if WALLPAPER_WINDOW_READY.load(Ordering::Acquire) {
+                // 窗口已 ready，可以继续
+                if attempts > 0 {
+                    let waited_ms = attempts * check_interval_ms;
+                    eprintln!("[DEBUG] 壁纸窗口已就绪（等待了 {}ms）", waited_ms);
+                }
+                break;
+            }
+            attempts += 1;
+            std::thread::sleep(Duration::from_millis(check_interval_ms));
+        }
+
         if !WALLPAPER_WINDOW_READY.load(Ordering::Acquire) {
             eprintln!(
-                "[DEBUG] 壁纸窗口尚未 ready，跳过 create 推送/挂载（等待 wallpaper_window_ready）"
+                "[WARN] 壁纸窗口初始化超时（等待了 {}ms）,放弃推送",
+                max_wait_ms
             );
-            return Ok(());
-        }
+            return Err("壁纸窗口初始化超时，放弃推送".to_string());
+        } else {
+            // 如果窗口已就绪，则直接推送壁纸更新事件到窗口
+            self.app
+                .emit("wallpaper-update-image", image_path)
+                .map_err(|e| format!("推送壁纸图片事件失败: {}", e))?;
 
-        // 如果窗口已就绪，则直接推送壁纸更新事件到窗口
-        self.app
-            .emit("wallpaper-update-image", image_path)
-            .map_err(|e| format!("推送壁纸图片事件失败: {}", e))?;
-
-        // 推送样式和过渡效果事件
-        if let Some(settings_state) = self.app.try_state::<Settings>() {
-            if let Ok(s) = settings_state.get_settings() {
-                let _ = self
-                    .app
-                    .emit("wallpaper-update-style", s.wallpaper_rotation_style);
-                let _ = self.app.emit(
-                    "wallpaper-update-transition",
-                    s.wallpaper_rotation_transition,
-                );
+            // 推送样式和过渡效果事件
+            if let Some(settings_state) = self.app.try_state::<Settings>() {
+                if let Ok(s) = settings_state.get_settings() {
+                    let _ = self
+                        .app
+                        .emit("wallpaper-update-style", s.wallpaper_rotation_style);
+                    let _ = self.app.emit(
+                        "wallpaper-update-transition",
+                        s.wallpaper_rotation_transition,
+                    );
+                }
             }
-        }
 
-        // 在 Windows 上设置窗口为壁纸层
-        #[cfg(target_os = "windows")]
-        {
-            Self::set_window_as_wallpaper(&window)?;
-        }
+            // 在 Windows 上设置窗口为壁纸层
+            #[cfg(target_os = "windows")]
+            {
+                Self::set_window_as_wallpaper(&window)?;
+            }
 
-        // 显示窗口
-        window
-            .show()
-            .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
-        Ok(())
+            // 显示窗口
+            window
+                .show()
+                .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
+            Ok(())
+        }
     }
 
     /// 标记壁纸窗口已完全初始化（由 wallpaper_window_ready 命令调用）
@@ -76,13 +96,11 @@ impl WallpaperWindow {
     }
 
     /// 重置 ready 标记（窗口重新创建或隐藏时调用）
-    #[allow(dead_code)]
     pub fn reset_ready() {
         WALLPAPER_WINDOW_READY.store(false, Ordering::Release);
     }
 
     /// 检查窗口是否已 ready
-    #[allow(dead_code)]
     pub fn is_ready() -> bool {
         WALLPAPER_WINDOW_READY.load(Ordering::Acquire)
     }
@@ -555,7 +573,6 @@ impl WallpaperWindow {
     /// 调试：把 wallpaper 窗口从桌面层“临时脱离”，作为普通窗口弹出 3 秒，然后再挂回桌面层。
     /// 用于确认：窗口本身是否在渲染（以及是否能看到 debug 面板），从而把问题收敛为“挂载层级/可见性”。
     #[cfg(target_os = "windows")]
-    #[allow(dead_code)]
     pub fn debug_detach_popup_3s(window: &WebviewWindow) -> Result<(), String> {
         use windows_sys::Win32::Foundation::HWND;
         use windows_sys::Win32::UI::WindowsAndMessaging::{

@@ -3,13 +3,201 @@
     <h2>设置</h2>
 
     <el-tabs v-model="activeTab" class="settings-tabs">
+
+      <el-tab-pane label="壁纸轮播" name="wallpaper">
+        <el-card class="settings-card">
+          <template #header>
+            <span>壁纸轮播设置</span>
+          </template>
+
+          <el-form v-loading="loading" element-loading-text="" :model="settings" :label-width="labelWidth">
+
+            <el-form-item label="启用壁纸轮播">
+              <div class="form-item-content">
+                <el-switch v-model="settings.wallpaperRotationEnabled" @change="handleWallpaperRotationEnabledChange" />
+                <div class="setting-description">自动从指定画册中轮播更换桌面壁纸</div>
+              </div>
+            </el-form-item>
+
+            <el-form-item :label="settings.wallpaperRotationEnabled ? '选择画册' : '选择壁纸'">
+              <div class="form-item-content">
+                <el-button type="primary" @click="handleNavigateToSelection">
+                  <template v-if="settings.wallpaperRotationEnabled">
+                    {{ selectedAlbumName || '前往画册页面' }}
+                  </template>
+                  <template v-else>
+                    前往画廊选择壁纸
+                  </template>
+                </el-button>
+                <div class="setting-description">
+                  <template v-if="settings.wallpaperRotationEnabled">
+                    {{ selectedAlbumName ? `当前选择：${selectedAlbumName}` : '点击按钮前往画册页面选择用于轮播的画册' }}
+                  </template>
+                  <template v-else>
+                    点击按钮前往画廊页面选择单张壁纸
+                  </template>
+                </div>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="轮播间隔" v-if="settings.wallpaperRotationEnabled">
+              <div class="form-item-content">
+                <el-input-number v-model="settings.wallpaperRotationIntervalMinutes" :min="1" :max="1440" :step="10"
+                  @change="handleWallpaperRotationIntervalChange" />
+                <div class="setting-description">壁纸更换间隔（分钟，1-1440）</div>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="轮播模式" v-if="settings.wallpaperRotationEnabled">
+              <div class="form-item-content">
+                <el-radio-group v-model="settings.wallpaperRotationMode" @change="handleWallpaperRotationModeChange">
+                  <el-radio label="random">随机</el-radio>
+                  <el-radio label="sequential">顺序</el-radio>
+                </el-radio-group>
+                <div class="setting-description">随机模式：每次随机选择；顺序模式：按顺序依次更换</div>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="壁纸显示方式">
+              <div class="form-item-content">
+                <el-select v-model="settings.wallpaperRotationStyle" placeholder="请选择显示方式" style="width: 100%"
+                  :disabled="isModeSwitching || isStyleApplying" @change="handleWallpaperRotationStyleChange">
+                  <!-- 窗口模式：显示所有样式 -->
+                  <template v-if="settings.wallpaperMode === 'window'">
+                    <el-option label="填充" value="fill">
+                      <span>填充 - 保持宽高比，填满屏幕（可能裁剪）</span>
+                    </el-option>
+                    <el-option label="适应" value="fit">
+                      <span>适应 - 保持宽高比，完整显示（可能有黑边）</span>
+                    </el-option>
+                    <el-option label="拉伸" value="stretch">
+                      <span>拉伸 - 拉伸填满屏幕（可能变形）</span>
+                    </el-option>
+                    <el-option label="居中" value="center">
+                      <span>居中 - 原始大小居中显示</span>
+                    </el-option>
+                    <el-option label="平铺" value="tile">
+                      <span>平铺 - 重复平铺显示</span>
+                    </el-option>
+                  </template>
+                  <!-- 原生模式：根据系统支持显示样式 -->
+                  <template v-else>
+                    <el-option v-if="nativeWallpaperStyles.includes('fill')" label="填充" value="fill">
+                      <span>填充 - 保持宽高比，填满屏幕（可能裁剪）</span>
+                    </el-option>
+                    <el-option v-if="nativeWallpaperStyles.includes('fit')" label="适应" value="fit">
+                      <span>适应 - 保持宽高比，完整显示（可能有黑边）</span>
+                    </el-option>
+                    <el-option v-if="nativeWallpaperStyles.includes('stretch')" label="拉伸" value="stretch">
+                      <span>拉伸 - 拉伸填满屏幕（可能变形）</span>
+                    </el-option>
+                    <el-option v-if="nativeWallpaperStyles.includes('center')" label="居中" value="center">
+                      <span>居中 - 原始大小居中显示</span>
+                    </el-option>
+                    <el-option v-if="nativeWallpaperStyles.includes('tile')" label="平铺" value="tile">
+                      <span>平铺 - 重复平铺显示</span>
+                    </el-option>
+                  </template>
+                </el-select>
+                <div class="setting-description">
+                  <template v-if="settings.wallpaperMode === 'native'">
+                    原生模式：根据系统支持显示可用样式（单张壁纸/轮播均生效）
+                  </template>
+                  <template v-else>
+                    窗口模式：支持所有显示方式（单张壁纸/轮播均生效）
+                  </template>
+                </div>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="过渡效果">
+              <div class="form-item-content">
+                <el-select v-model="settings.wallpaperRotationTransition" placeholder="请选择过渡效果" style="width: 100%"
+                  :disabled="isModeSwitching || isTransitionApplying || !settings.wallpaperRotationEnabled"
+                  @change="handleWallpaperRotationTransitionChange">
+                  <!-- 原生模式：只支持无过渡和淡入淡出 -->
+                  <template v-if="settings.wallpaperMode === 'native'">
+                    <el-option label="无过渡" value="none" />
+                    <el-option label="淡入淡出" value="fade" />
+                  </template>
+                  <!-- 窗口模式：支持所有过渡效果 -->
+                  <template v-else>
+                    <el-option label="无过渡" value="none" />
+                    <el-option label="淡入淡出（推荐）" value="fade" />
+                    <el-option label="滑动切换" value="slide" />
+                    <el-option label="缩放淡入" value="zoom" />
+                  </template>
+                </el-select>
+                <div class="setting-description">
+                  <template v-if="!settings.wallpaperRotationEnabled">
+                    未启用轮播时：过渡效果不会生效（仅轮播支持过渡预览）
+                  </template>
+                  <template v-if="settings.wallpaperMode === 'native'">
+                    原生模式：仅支持无过渡和淡入淡出（受系统限制）<br />
+                    无过渡：应用不会额外触发/预览过渡，但 Windows 本身在切换壁纸时可能仍会有系统级淡入动画
+                  </template>
+                  <template v-else>
+                    窗口模式：过渡效果完全由应用渲染（支持淡入淡出/滑动/缩放）
+                  </template>
+                </div>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="壁纸模式">
+              <div class="form-item-content" :class="{ 'wallpaper-mode-switching-container': isModeSwitching }">
+                <el-radio-group v-model="settings.wallpaperMode" @change="handleWallpaperModeChange"
+                  :disabled="isModeSwitching" :class="{ 'wallpaper-mode-switching': isModeSwitching }">
+                  <el-radio label="native">原生模式</el-radio>
+                  <el-radio label="window">窗口模式（类似 Wallpaper Engine）</el-radio>
+                </el-radio-group>
+                <div class="setting-description">
+                  原生模式：使用 Windows 原生壁纸设置，性能好但功能有限<br />
+                  窗口模式：使用窗口句柄显示，更灵活，可实现动画等效果（需要预先创建壁纸窗口）
+                </div>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="Wallpaper Engine 目录">
+              <div class="form-item-content">
+                <el-input v-model="settings.wallpaperEngineDir"
+                  placeholder="用于“导出并自动导入到 WE”（建议选择 WE 安装目录或 projects/myprojects）" clearable
+                  @clear="handleClearWallpaperEngineDir">
+                  <template #append>
+                    <el-button @click="handleChooseWallpaperEngineDir">
+                      <el-icon>
+                        <FolderOpened />
+                      </el-icon>
+                      选择
+                    </el-button>
+                  </template>
+                </el-input>
+
+                <div class="setting-description">
+                  自动导入会写入：<b>projects\\myprojects</b>（找不到该目录会提示你重新选择）
+                  <span v-if="wallpaperEngineMyprojectsDir">
+                    ，当前识别为：
+                    <el-button text size="small" class="path-button" @click="handleOpenWallpaperEngineMyprojectsDir">
+                      <el-icon>
+                        <FolderOpened />
+                      </el-icon>
+                      <span class="path-text">{{ wallpaperEngineMyprojectsDir }}</span>
+                    </el-button>
+                  </span>
+                </div>
+              </div>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
+
+
       <el-tab-pane label="应用设置" name="app">
         <el-card class="settings-card">
           <template #header>
             <span>应用设置</span>
           </template>
 
-          <el-form v-if="!loading" :model="settings" :label-width="labelWidth">
+          <el-form v-loading="loading" element-loading-text="" :model="settings" :label-width="labelWidth">
             <el-form-item label="开机启动">
               <div class="form-item-content">
                 <el-switch v-model="settings.autoLaunch" @change="handleAutoLaunchChange" />
@@ -92,190 +280,20 @@
               </div>
             </el-form-item>
           </el-form>
-          <div v-else class="loading-placeholder">加载中...</div>
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="壁纸轮播" name="wallpaper">
-        <el-card class="settings-card">
-          <template #header>
-            <span>壁纸轮播设置</span>
-          </template>
-
-          <el-form v-if="!loading" :model="settings" :label-width="labelWidth">
-
-            <el-form-item label="启用壁纸轮播">
-              <div class="form-item-content">
-                <el-switch v-model="settings.wallpaperRotationEnabled" @change="handleWallpaperRotationEnabledChange" />
-                <div class="setting-description">自动从指定画册中轮播更换桌面壁纸</div>
-              </div>
-            </el-form-item>
-
-            <el-form-item label="选择画册" v-if="settings.wallpaperRotationEnabled">
-              <div class="form-item-content">
-                <el-select v-model="settings.wallpaperRotationAlbumId" placeholder="请选择画册" style="width: 100%" clearable
-                  @change="handleWallpaperRotationAlbumIdChange">
-                  <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
-                </el-select>
-                <div class="setting-description">选择用于轮播的画册</div>
-              </div>
-            </el-form-item>
-
-            <el-form-item label="轮播间隔" v-if="settings.wallpaperRotationEnabled">
-              <div class="form-item-content">
-                <el-input-number v-model="settings.wallpaperRotationIntervalMinutes" :min="1" :max="1440" :step="10"
-                  @change="handleWallpaperRotationIntervalChange" />
-                <div class="setting-description">壁纸更换间隔（分钟，1-1440）</div>
-              </div>
-            </el-form-item>
-
-            <el-form-item label="轮播模式" v-if="settings.wallpaperRotationEnabled">
-              <div class="form-item-content">
-                <el-radio-group v-model="settings.wallpaperRotationMode" @change="handleWallpaperRotationModeChange">
-                  <el-radio label="random">随机</el-radio>
-                  <el-radio label="sequential">顺序</el-radio>
-                </el-radio-group>
-                <div class="setting-description">随机模式：每次随机选择；顺序模式：按顺序依次更换</div>
-              </div>
-            </el-form-item>
-
-            <el-form-item label="壁纸显示方式" v-if="settings.wallpaperRotationEnabled">
-              <div class="form-item-content">
-                <el-select v-model="settings.wallpaperRotationStyle" placeholder="请选择显示方式" style="width: 100%"
-                  @change="handleWallpaperRotationStyleChange">
-                  <!-- 窗口模式：显示所有样式 -->
-                  <template v-if="settings.wallpaperMode === 'window'">
-                    <el-option label="填充" value="fill">
-                      <span>填充 - 保持宽高比，填满屏幕（可能裁剪）</span>
-                    </el-option>
-                    <el-option label="适应" value="fit">
-                      <span>适应 - 保持宽高比，完整显示（可能有黑边）</span>
-                    </el-option>
-                    <el-option label="拉伸" value="stretch">
-                      <span>拉伸 - 拉伸填满屏幕（可能变形）</span>
-                    </el-option>
-                    <el-option label="居中" value="center">
-                      <span>居中 - 原始大小居中显示</span>
-                    </el-option>
-                    <el-option label="平铺" value="tile">
-                      <span>平铺 - 重复平铺显示</span>
-                    </el-option>
-                  </template>
-                  <!-- 原生模式：根据系统支持显示样式 -->
-                  <template v-else>
-                    <el-option v-if="nativeWallpaperStyles.includes('fill')" label="填充" value="fill">
-                      <span>填充 - 保持宽高比，填满屏幕（可能裁剪）</span>
-                    </el-option>
-                    <el-option v-if="nativeWallpaperStyles.includes('fit')" label="适应" value="fit">
-                      <span>适应 - 保持宽高比，完整显示（可能有黑边）</span>
-                    </el-option>
-                    <el-option v-if="nativeWallpaperStyles.includes('stretch')" label="拉伸" value="stretch">
-                      <span>拉伸 - 拉伸填满屏幕（可能变形）</span>
-                    </el-option>
-                    <el-option v-if="nativeWallpaperStyles.includes('center')" label="居中" value="center">
-                      <span>居中 - 原始大小居中显示</span>
-                    </el-option>
-                    <el-option v-if="nativeWallpaperStyles.includes('tile')" label="平铺" value="tile">
-                      <span>平铺 - 重复平铺显示</span>
-                    </el-option>
-                  </template>
-                </el-select>
-                <div class="setting-description">
-                  <template v-if="settings.wallpaperMode === 'native'">
-                    原生模式：根据系统支持显示可用样式
-                  </template>
-                  <template v-else>
-                    窗口模式：支持所有显示方式
-                  </template>
-                </div>
-              </div>
-            </el-form-item>
-
-            <el-form-item label="过渡效果" v-if="settings.wallpaperRotationEnabled">
-              <div class="form-item-content">
-                <el-select v-model="settings.wallpaperRotationTransition" placeholder="请选择过渡效果" style="width: 100%"
-                  @change="handleWallpaperRotationTransitionChange">
-                  <!-- 原生模式：只支持无过渡和淡入淡出 -->
-                  <template v-if="settings.wallpaperMode === 'native'">
-                    <el-option label="无过渡" value="none" />
-                    <el-option label="淡入淡出" value="fade" />
-                  </template>
-                  <!-- 窗口模式：支持所有过渡效果 -->
-                  <template v-else>
-                    <el-option label="无过渡" value="none" />
-                    <el-option label="淡入淡出（推荐）" value="fade" />
-                    <el-option label="滑动切换" value="slide" />
-                    <el-option label="缩放淡入" value="zoom" />
-                  </template>
-                </el-select>
-                <div class="setting-description">
-                  <template v-if="settings.wallpaperMode === 'native'">
-                    原生模式：仅支持无过渡和淡入淡出（受 Windows 系统限制）
-                  </template>
-                  <template v-else>
-                    窗口模式：过渡效果完全由应用渲染（支持淡入淡出/滑动/缩放）
-                  </template>
-                </div>
-              </div>
-            </el-form-item>
-
-            <el-form-item label="壁纸模式" v-if="settings.wallpaperRotationEnabled">
-              <div class="form-item-content" :class="{ 'wallpaper-mode-switching-container': isModeSwitching }">
-                <el-radio-group v-model="settings.wallpaperMode" @change="handleWallpaperModeChange"
-                  :disabled="isModeSwitching" :class="{ 'wallpaper-mode-switching': isModeSwitching }">
-                  <el-radio label="native">原生模式</el-radio>
-                  <el-radio label="window">窗口模式（类似 Wallpaper Engine）</el-radio>
-                </el-radio-group>
-                <div class="setting-description">
-                  原生模式：使用 Windows 原生壁纸设置，性能好但功能有限<br />
-                  窗口模式：使用窗口句柄显示，更灵活，可实现动画等效果（需要预先创建壁纸窗口）
-                </div>
-              </div>
-            </el-form-item>
-
-            <el-form-item label="Wallpaper Engine 目录">
-              <div class="form-item-content">
-                <el-input v-model="settings.wallpaperEngineDir"
-                  placeholder="用于“导出并自动导入到 WE”（建议选择 WE 安装目录或 projects/myprojects）" clearable
-                  @clear="handleClearWallpaperEngineDir">
-                  <template #append>
-                    <el-button @click="handleChooseWallpaperEngineDir">
-                      <el-icon>
-                        <FolderOpened />
-                      </el-icon>
-                      选择
-                    </el-button>
-                  </template>
-                </el-input>
-
-                <div class="setting-description">
-                  自动导入会写入：<b>projects\\myprojects</b>（找不到该目录会提示你重新选择）
-                  <span v-if="wallpaperEngineMyprojectsDir">
-                    ，当前识别为：
-                    <el-button text size="small" class="path-button" @click="handleOpenWallpaperEngineMyprojectsDir">
-                      <el-icon>
-                        <FolderOpened />
-                      </el-icon>
-                      <span class="path-text">{{ wallpaperEngineMyprojectsDir }}</span>
-                    </el-button>
-                  </span>
-                </div>
-              </div>
-            </el-form-item>
-          </el-form>
-          <div v-else class="loading-placeholder">加载中...</div>
-        </el-card>
-      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, computed } from "vue";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { useRouter } from "vue-router";
 import { FolderOpened } from "@element-plus/icons-vue";
 
 const labelWidth = "180px";
@@ -313,6 +331,16 @@ const wallpaperEngineMyprojectsDir = ref<string>("");
 
 const isModeSwitching = ref(false);
 const nativeWallpaperStyles = ref<string[]>([]); // 系统原生模式支持的样式列表
+const router = useRouter();
+const isStyleApplying = ref(false);
+const isTransitionApplying = ref(false);
+
+// 计算当前选中的画册名称
+const selectedAlbumName = computed(() => {
+  if (!settings.value.wallpaperRotationAlbumId) return null;
+  const album = albums.value.find(a => a.id === settings.value.wallpaperRotationAlbumId);
+  return album ? album.name : null;
+});
 
 const loadSettings = async () => {
   try {
@@ -538,12 +566,13 @@ const handleWallpaperRotationEnabledChange = async (value: boolean) => {
   }
 };
 
-const handleWallpaperRotationAlbumIdChange = async (albumId: string | null) => {
-  try {
-    await invoke("set_wallpaper_rotation_album_id", { albumId });
-  } catch (error) {
-    ElMessage.error("保存设置失败");
-    console.error(error);
+const handleNavigateToSelection = () => {
+  if (settings.value.wallpaperRotationEnabled) {
+    // 轮播模式：跳转到画册页面
+    router.push("/albums");
+  } else {
+    // 非轮播模式：跳转到画廊页面
+    router.push("/gallery");
   }
 };
 
@@ -566,20 +595,69 @@ const handleWallpaperRotationModeChange = async (mode: string) => {
 };
 
 const handleWallpaperRotationStyleChange = async (style: string) => {
+  if (isModeSwitching.value) return;
+  isStyleApplying.value = true;
   try {
-    await invoke("set_wallpaper_rotation_style", { style });
+    // 等待后端应用完成事件，避免原生模式下 invoke 阻塞导致页面卡顿
+    const waitForApply = new Promise<{ success: boolean; error?: string }>(async (resolve) => {
+      const unlistenFn = await listen<{ success: boolean; style: string; error?: string }>(
+        "wallpaper-style-apply-complete",
+        (event) => {
+          if (event.payload.style === style) {
+            unlistenFn();
+            resolve({ success: event.payload.success, error: event.payload.error });
+          }
+        }
+      );
+    });
+
+    // 触发保存 + 后台应用（命令会立即返回）
+    await invoke("set_wallpaper_style", { style });
+
+    const result = await waitForApply;
+    if (!result.success) {
+      ElMessage.error(result.error || "应用样式失败");
+    }
   } catch (error) {
     ElMessage.error("保存设置失败");
     console.error(error);
+  } finally {
+    isStyleApplying.value = false;
   }
 };
 
 const handleWallpaperRotationTransitionChange = async (transition: string) => {
+  if (!settings.value.wallpaperRotationEnabled) {
+    // 单张壁纸模式不支持过渡效果（后端会拒绝），前端直接提示并不调用
+    ElMessage.info("未启用轮播：过渡效果不会生效");
+    return;
+  }
+  if (isModeSwitching.value) return;
+  isTransitionApplying.value = true;
   try {
+    const waitForApply = new Promise<{ success: boolean; error?: string }>(async (resolve) => {
+      const unlistenFn = await listen<{ success: boolean; transition: string; error?: string }>(
+        "wallpaper-transition-apply-complete",
+        (event) => {
+          if (event.payload.transition === transition) {
+            unlistenFn();
+            resolve({ success: event.payload.success, error: event.payload.error });
+          }
+        }
+      );
+    });
+
     await invoke("set_wallpaper_rotation_transition", { transition });
+
+    const result = await waitForApply;
+    if (!result.success) {
+      ElMessage.error(result.error || "应用过渡效果失败");
+    }
   } catch (error) {
     ElMessage.error("保存设置失败");
     console.error(error);
+  } finally {
+    isTransitionApplying.value = false;
   }
 };
 
@@ -597,24 +675,33 @@ const handleWallpaperModeChange = async (mode: string) => {
         settings.value.wallpaperRotationStyle = newStyle as any;
         // 保存新的样式设置
         try {
-          await invoke("set_wallpaper_rotation_style", { style: newStyle });
+          await invoke("set_wallpaper_style", { style: newStyle });
         } catch (e) {
           console.warn("自动切换样式失败:", e);
         }
       }
 
       // 检查过渡效果是否支持
-      const unsupportedTransitions = ["slide", "zoom"];
-      if (unsupportedTransitions.includes(settings.value.wallpaperRotationTransition)) {
-        // 自动切换到原生模式支持的过渡效果
-        // 使用 none（原生模式的默认值），因为它是原生模式最基础的选项
-        const newTransition = "none";
-        settings.value.wallpaperRotationTransition = newTransition;
-        // 保存新的过渡效果设置
-        try {
-          await invoke("set_wallpaper_rotation_transition", { transition: newTransition });
-        } catch (e) {
-          console.warn("自动切换过渡效果失败:", e);
+      // 只有轮播启用时才需要同步/保存 transition（否则后端会拒绝）
+      if (settings.value.wallpaperRotationEnabled) {
+        const unsupportedTransitions = ["slide", "zoom"];
+        if (unsupportedTransitions.includes(settings.value.wallpaperRotationTransition)) {
+          // 自动切换到原生模式支持的过渡效果
+          // 使用 none（原生模式的默认值），因为它是原生模式最基础的选项
+          const newTransition = "none";
+          settings.value.wallpaperRotationTransition = newTransition;
+          // 保存新的过渡效果设置
+          try {
+            await invoke("set_wallpaper_rotation_transition", { transition: newTransition });
+          } catch (e) {
+            console.warn("自动切换过渡效果失败:", e);
+          }
+        }
+      } else {
+        // 非轮播场景：仅本地修正为原生可用值，避免 UI 残留不可用选项
+        const unsupportedTransitions = ["slide", "zoom"];
+        if (unsupportedTransitions.includes(settings.value.wallpaperRotationTransition)) {
+          settings.value.wallpaperRotationTransition = "none";
         }
       }
     }
@@ -643,7 +730,7 @@ const handleWallpaperModeChange = async (mode: string) => {
     const result = await waitForSwitchComplete;
 
     if (result.success) {
-      ElMessage.success("壁纸模式已切换");
+    ElMessage.success("壁纸模式已切换");
     } else {
       ElMessage.error(result.error || "切换模式失败");
     }

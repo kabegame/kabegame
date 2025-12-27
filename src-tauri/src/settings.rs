@@ -123,7 +123,8 @@ Write-Output "$style,$tile"
                         _ => "fill", // 默认填充
                     };
 
-                    // 过渡效果始终使用系统默认值 "none"（Windows 原生不支持过渡效果）
+                    // Windows 原生壁纸切换的淡入属于系统行为，应用不读取/不干预系统动画参数。
+                    // 因此系统默认 transition 统一返回 none。
                     let transition = "none";
 
                     (style.to_string(), transition.to_string())
@@ -589,7 +590,7 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
         Ok(())
     }
 
-    pub fn set_wallpaper_rotation_style(&self, style: String) -> Result<(), String> {
+    pub fn set_wallpaper_style(&self, style: String) -> Result<(), String> {
         let mut settings = self.get_settings()?;
         settings.wallpaper_rotation_style = style;
         self.save_settings(&settings)?;

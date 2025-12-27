@@ -6,5 +6,5 @@ pub mod window;
 pub use rotator::WallpaperRotator;
 pub use window::WallpaperWindow;
 
-// 导出管理器类型（供内部使用）
-pub use manager::{NativeWallpaperManager, WallpaperManager, WindowWallpaperManager};
+// 导出管理器类型
+pub use manager::WallpaperController;

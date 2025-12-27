@@ -30,7 +30,7 @@ use crawler::{crawl_images, ActiveDownloadInfo, CrawlResult};
 use plugin::{BrowserPlugin, Plugin, PluginManager};
 use settings::{AppSettings, Settings};
 use storage::{Album, ImageInfo, PaginatedImages, RunConfig, Storage, TaskInfo};
-use wallpaper::{WallpaperRotator, WallpaperWindow};
+use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
 use wallpaper_engine_export::{export_album_to_we_project, export_images_to_we_project};
 
 #[tauri::command]
@@ -327,94 +327,27 @@ fn open_file_folder(file_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_wallpaper(file_path: String) -> Result<(), String> {
+fn set_wallpaper(file_path: String, app: tauri::AppHandle) -> Result<(), String> {
     use std::path::Path;
-    use std::process::Command;
 
     let path = Path::new(&file_path);
     if !path.exists() {
         return Err("File does not exist".to_string());
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        // Windows 使用 PowerShell 设置壁纸
-        // 将路径转换为绝对路径并规范化
-        let absolute_path = path
-            .canonicalize()
-            .map_err(|e| format!("Failed to canonicalize path: {}", e))?
-            .to_string_lossy()
-            .to_string();
+    // 使用全局 WallpaperController：适配“单张壁纸”并支持 native/window 两种后端模式。
+    // 注意：这里不涉及 transition（过渡效果由“轮播 manager”负责，并受“是否启用轮播”约束）。
+    let controller = app.state::<WallpaperController>();
+    let settings_state = app.state::<Settings>();
+    let settings = settings_state.get_settings()?;
 
-        // 使用更可靠的 PowerShell 脚本，使用双引号包裹路径
-        let escaped_path = absolute_path.replace('"', "\"\"");
-        let script = format!(
-            r#"Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class Wallpaper {{
-    [DllImport("user32.dll", CharSet=CharSet.Auto, SetLastError=true)]
-    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-}}
-"@; $result = [Wallpaper]::SystemParametersInfo(20, 0, "{}", 3); if ($result -eq 0) {{ throw "SystemParametersInfo failed" }}"#,
-            escaped_path
-        );
+    let abs = path
+        .canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string();
 
-        let output = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &script,
-            ])
-            .output()
-            .map_err(|e| format!("Failed to execute PowerShell: {}", e))?;
-
-        if !output.status.success() {
-            let error = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            return Err(format!(
-                "Failed to set wallpaper. Error: {}, Output: {}",
-                error, stdout
-            ));
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        // macOS 使用 osascript 设置壁纸
-        let script = format!(
-            r#"tell application "System Events" to tell every desktop to set picture to "{}""#,
-            file_path
-        );
-        Command::new("osascript")
-            .args(["-e", &script])
-            .spawn()
-            .map_err(|e| format!("Failed to set wallpaper: {}", e))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // Linux 使用 gsettings (GNOME) 或 feh (其他桌面环境)
-        // 先尝试 gsettings
-        if Command::new("gsettings")
-            .args([
-                "set",
-                "org.gnome.desktop.background",
-                "picture-uri",
-                &format!("file://{}", file_path),
-            ])
-            .spawn()
-            .is_err()
-        {
-            // 如果 gsettings 失败，尝试 feh
-            Command::new("feh")
-                .args(["--bg-scale", &file_path])
-                .spawn()
-                .map_err(|e| format!("Failed to set wallpaper: {}", e))?;
-        }
-    }
+    controller.set_wallpaper(&abs, &settings.wallpaper_rotation_style)?;
 
     Ok(())
 }
@@ -770,51 +703,59 @@ fn set_wallpaper_rotation_mode(mode: String, state: tauri::State<Settings>) -> R
 }
 
 #[tauri::command]
-fn set_wallpaper_rotation_style(
+fn set_wallpaper_style(
     style: String,
     state: tauri::State<Settings>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     println!(
-        "[DEBUG] set_wallpaper_rotation_style 被调用，传入的 style: {}",
+        "[DEBUG] set_wallpaper_style 被调用，传入的 style: {}",
         style
     );
 
-    // 先获取当前设置，以便在重新应用时使用正确的 transition 值
-    let current_settings = state.get_settings()?;
-    let transition = current_settings.wallpaper_rotation_transition.clone();
-    println!("[DEBUG] 当前设置中的 transition: {}", transition);
-    println!(
-        "[DEBUG] 当前设置中的 style (旧值): {}",
-        current_settings.wallpaper_rotation_style
-    );
-
-    state.set_wallpaper_rotation_style(style.clone())?;
+    // 先保存设置
+    state.set_wallpaper_style(style.clone())?;
     println!("[DEBUG] 已保存新 style: {}", style);
 
-    // 如果轮播已启用，在后台线程中重新应用当前壁纸以使用新设置
-    if current_settings.wallpaper_rotation_enabled {
-        println!(
-            "[DEBUG] 轮播已启用，准备在后台重新应用壁纸，使用 style: {}, transition: {}",
-            style, transition
-        );
-        let app_handle = app.app_handle().clone();
-        let style_clone = style.clone();
-        let transition_clone = transition.clone();
-        // 在后台线程中执行，避免阻塞 UI
-        std::thread::spawn(move || {
-            if let Some(rotator) = app_handle.try_state::<WallpaperRotator>() {
-                if let Err(e) =
-                    rotator.reapply_current_wallpaper(Some(&style_clone), Some(&transition_clone))
-                {
-                    // 如果重新应用失败（可能没有当前壁纸），只记录错误但不阻止设置保存
-                    eprintln!("重新应用当前壁纸失败: {}", e);
+    // 原生模式下应用样式可能较慢（PowerShell/注册表/广播），放到后台线程避免前端卡顿
+    let app_clone = app.clone();
+    let style_clone = style.clone();
+    std::thread::spawn(move || {
+        let controller = app_clone.state::<WallpaperController>();
+        let res = controller.active_manager().and_then(|m| {
+            // 1) 先设置样式
+            m.set_style(&style_clone, true)?;
+            // 2) 再重载当前壁纸路径，强制桌面立即用新样式重新渲染
+            //    （否则部分系统/场景只改注册表不会立刻重绘）
+            if let Ok(path) = m.get_wallpaper_path() {
+                if std::path::Path::new(&path).exists() {
+                    let _ = m.set_wallpaper_path(&path, true);
                 }
             }
+            Ok(())
         });
-    } else {
-        println!("[DEBUG] 轮播未启用，跳过重新应用壁纸");
-    }
+        match res {
+            Ok(_) => {
+                let _ = app_clone.emit(
+                    "wallpaper-style-apply-complete",
+                    serde_json::json!({
+                        "success": true,
+                        "style": style_clone
+                    }),
+                );
+            }
+            Err(e) => {
+                let _ = app_clone.emit(
+                    "wallpaper-style-apply-complete",
+                    serde_json::json!({
+                        "success": false,
+                        "style": style_clone,
+                        "error": e
+                    }),
+                );
+            }
+        }
+    });
 
     Ok(())
 }
@@ -830,41 +771,59 @@ fn set_wallpaper_rotation_transition(
         transition
     );
 
-    // 先获取当前设置，以便在重新应用时使用正确的 style 值
+    // 未开启轮播时，不允许设置过渡效果（单张模式不支持 transition）
     let current_settings = state.get_settings()?;
-    let style = current_settings.wallpaper_rotation_style.clone();
-    println!("[DEBUG] 当前设置中的 style: {}", style);
-    println!(
-        "[DEBUG] 当前设置中的 transition (旧值): {}",
-        current_settings.wallpaper_rotation_transition
-    );
+    if !current_settings.wallpaper_rotation_enabled {
+        return Err("未开启壁纸轮播，无法设置过渡效果".to_string());
+    }
 
+    // 先保存设置
     state.set_wallpaper_rotation_transition(transition.clone())?;
     println!("[DEBUG] 已保存新 transition: {}", transition);
 
-    // 如果轮播已启用，在后台线程中重新应用当前壁纸以使用新设置
-    if current_settings.wallpaper_rotation_enabled {
-        println!(
-            "[DEBUG] 轮播已启用，准备在后台重新应用壁纸，使用 style: {}, transition: {}",
-            style, transition
-        );
-        let app_handle = app.app_handle().clone();
-        let style_clone = style.clone();
-        let transition_clone = transition.clone();
-        // 在后台线程中执行，避免阻塞 UI
-        std::thread::spawn(move || {
-            if let Some(rotator) = app_handle.try_state::<WallpaperRotator>() {
-                if let Err(e) =
-                    rotator.reapply_current_wallpaper(Some(&style_clone), Some(&transition_clone))
-                {
-                    // 如果重新应用失败（可能没有当前壁纸），只记录错误但不阻止设置保存
-                    eprintln!("重新应用当前壁纸失败: {}", e);
-                }
+    // 立即触发一次展示效果（先应用 transition，再切换一张壁纸）
+    // 注意：对于 "none"（无过渡），只保存设置，不切换壁纸（避免触发系统默认的淡入效果）
+    let app_clone = app.clone();
+    let transition_clone = transition.clone();
+    std::thread::spawn(move || {
+        let controller = app_clone.state::<WallpaperController>();
+        let rotator = app_clone.state::<WallpaperRotator>();
+
+        let res: Result<(), String> = (|| {
+            // 1) 先应用 transition（立即）
+            let m = controller.active_manager()?;
+            m.set_transition(&transition_clone, true)?;
+
+            // 2) 对于 "none"（无过渡），不切换壁纸，只保存设置
+            // 对于其他 transition（如 "fade"），触发一次"下一张"，让用户立刻看到过渡效果
+            if transition_clone != "none" {
+                rotator.rotate()?;
             }
-        });
-    } else {
-        println!("[DEBUG] 轮播未启用，跳过重新应用壁纸");
-    }
+            Ok(())
+        })();
+
+        match res {
+            Ok(_) => {
+                let _ = app_clone.emit(
+                    "wallpaper-transition-apply-complete",
+                    serde_json::json!({
+                        "success": true,
+                        "transition": transition_clone
+                    }),
+                );
+            }
+            Err(e) => {
+                let _ = app_clone.emit(
+                    "wallpaper-transition-apply-complete",
+                    serde_json::json!({
+                        "success": false,
+                        "transition": transition_clone,
+                        "error": e
+                    }),
+                );
+            }
+        }
+    });
 
     Ok(())
 }
@@ -885,33 +844,131 @@ fn set_wallpaper_mode(
         return Ok(());
     }
 
-    // 先临时保存新设置（以便 reapply_current_wallpaper 能读取到新模式）
-    // 如果后续失败，会恢复原设置
-    state.set_wallpaper_mode(mode.clone())?;
-
     // 在后台线程中执行可能耗时的操作，避免阻塞主线程
     let mode_clone = mode.clone();
     let old_mode_clone = old_mode.clone();
     let app_clone = app.clone();
 
     std::thread::spawn(move || {
+        let settings_state = app_clone.state::<Settings>();
         let rotator = app_clone.state::<WallpaperRotator>();
-        let state_inner = app_clone.state::<Settings>();
+        let controller = app_clone.state::<WallpaperController>();
 
-        // 尝试重新应用当前壁纸（使用新模式）
-        match rotator.reapply_current_wallpaper(None, None) {
-            Ok(_) => {
-                // 如果轮播器正在运行，先停止它（这会重置定时器）
-                let was_running = rotator.is_running();
-                if was_running {
-                    rotator.stop();
-                    // 等待一小段时间确保定时器线程退出
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    if let Err(e) = rotator.start() {
-                        eprintln!("重新启动轮播器失败: {}", e);
+        // 读取最新设置（style/transition/是否启用轮播）
+        let s = match settings_state.get_settings() {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = app_clone.emit(
+                    "wallpaper-mode-switch-complete",
+                    serde_json::json!({
+                        "success": false,
+                        "mode": mode_clone,
+                        "error": format!("获取设置失败: {}", e)
+                    }),
+                );
+                return;
+            }
+        };
+
+        // 1) 从旧后端读取“当前壁纸路径”（尽量保持当前壁纸不变）
+        let current_wallpaper = match controller
+            .manager_for_mode(&old_mode_clone)
+            .get_wallpaper_path()
+        {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("切换模式时无法获取当前壁纸: {}", e);
+                // 没有当前壁纸：仍允许切换模式（仅保存 mode），但不做 reapply
+                match settings_state.set_wallpaper_mode(mode_clone.clone()) {
+                    Ok(_) => {
+                        let _ = app_clone.emit(
+                            "wallpaper-mode-switch-complete",
+                            serde_json::json!({
+                                "success": true,
+                                "mode": mode_clone
+                            }),
+                        );
+                    }
+                    Err(e2) => {
+                        let _ = app_clone.emit(
+                            "wallpaper-mode-switch-complete",
+                            serde_json::json!({
+                                "success": false,
+                                "mode": mode_clone,
+                                "error": format!("保存模式失败: {}", e2)
+                            }),
+                        );
                     }
                 }
-                // 切换成功，发送成功事件
+                return;
+            }
+        };
+
+        // 2) 在目标后端上应用同一张壁纸（style 立即生效；transition 仅在轮播启用时预览）
+        let target = controller.manager_for_mode(&mode_clone);
+        // Windows 下，有时系统返回的“当前壁纸路径”可能不存在（例如主题缓存/临时文件）。
+        // 切换到 window 模式时必须保证文件真实存在，否则 WindowWallpaperManager 会报 File does not exist。
+        let resolved_wallpaper = if std::path::Path::new(&current_wallpaper).exists() {
+            current_wallpaper.clone()
+        } else {
+            // 尝试从轮播画册里找一张确实存在的图片作为兜底
+            let album_id = s.wallpaper_rotation_album_id.clone().unwrap_or_default();
+            if album_id.is_empty() {
+                current_wallpaper.clone()
+            } else if let Some(storage) = app_clone.try_state::<Storage>() {
+                let imgs = storage.get_album_images(&album_id).unwrap_or_default();
+                let mut picked: Option<String> = None;
+                for img in imgs {
+                    if std::path::Path::new(&img.local_path).exists() {
+                        picked = Some(img.local_path);
+                        break;
+                    }
+                }
+                picked.unwrap_or_else(|| current_wallpaper.clone())
+            } else {
+                current_wallpaper.clone()
+            }
+        };
+        let apply_res: Result<(), String> = (|| {
+            // 先切换壁纸路径
+            target.set_wallpaper_path(&resolved_wallpaper, true)?;
+            // 再应用样式
+            target.set_style(&s.wallpaper_rotation_style, true)?;
+            // 过渡效果属于轮播能力：只在轮播启用时做立即预览
+            if s.wallpaper_rotation_enabled {
+                // 最后应用transition
+                target.set_transition(&s.wallpaper_rotation_transition, true)?;
+            }
+            Ok(())
+        })();
+
+        match apply_res {
+            Ok(_) => {
+                // 切换 away from window 模式时，清理 window 后端（隐藏壁纸窗口）
+                if old_mode_clone == "window" && mode_clone != "window" {
+                    controller
+                        .manager_for_mode("window")
+                        .cleanup()
+                        .unwrap_or_else(|e| eprintln!("清理 window 资源失败: {}", e));
+                }
+                // 3) 应用成功后再持久化 mode
+                if let Err(e) = settings_state.set_wallpaper_mode(mode_clone.clone()) {
+                    let _ = app_clone.emit(
+                        "wallpaper-mode-switch-complete",
+                        serde_json::json!({
+                            "success": false,
+                            "mode": mode_clone,
+                            "error": format!("保存模式失败: {}", e)
+                        }),
+                    );
+                    return;
+                }
+
+                // 4) 轮播开启时重置定时器（切换模式也算一次“用户触发”）
+                if s.wallpaper_rotation_enabled {
+                    rotator.reset();
+                }
+
                 let _ = app_clone.emit(
                     "wallpaper-mode-switch-complete",
                     serde_json::json!({
@@ -922,60 +979,16 @@ fn set_wallpaper_mode(
             }
             Err(e) => {
                 eprintln!("切换到 {} 模式失败: {}", mode_clone, e);
-
-                // 检查失败原因：只有在"没有当前壁纸"的情况下，才切换到下一张
-                // 其他失败原因（如窗口创建失败、文件不存在等）应该返回错误，而不是切换到下一张
-                let is_no_current_wallpaper = e.contains("没有当前壁纸");
-
-                if mode_clone == "window" && is_no_current_wallpaper {
-                    // 只有在没有当前壁纸的情况下，才尝试切换下一张用于初始化窗口
-                    eprintln!("[DEBUG] 切换到 window 模式但没有当前壁纸，尝试切换下一张用于初始化");
-                    // 再次设置新模式（因为 rotate_once_now 也会读取设置）
-                    let _ = state_inner.set_wallpaper_mode(mode_clone.clone());
-
-                    match rotator.rotate_once_now() {
-                        Ok(_) => {
-                            // 切换成功，发送成功事件
-                            let _ = app_clone.emit(
-                                "wallpaper-mode-switch-complete",
-                                serde_json::json!({
-                                    "success": true,
-                                    "mode": mode_clone
-                                }),
-                            );
-                        }
-                        Err(rotate_err) => {
-                            eprintln!("切换下一张壁纸也失败: {}", rotate_err);
-                            // 恢复原设置
-                            let _ = state_inner.set_wallpaper_mode(old_mode_clone.clone());
-                            // 发送失败事件
-                            let _ = app_clone.emit(
-                                "wallpaper-mode-switch-complete",
-                                serde_json::json!({
-                                    "success": false,
-                                    "mode": mode_clone,
-                                    "error": format!("切换模式失败: {}", rotate_err)
-                                }),
-                            );
-                        }
-                    }
-                } else {
-                    // 其他失败情况（有当前壁纸但应用失败，或非 window 模式），恢复原设置并返回错误
-                    // 非 window 模式，恢复原设置
-                    let _ = state_inner.set_wallpaper_mode(old_mode_clone.clone());
-
-                    // 发送失败事件
-                    let _ = app_clone.emit(
-                        "wallpaper-mode-switch-complete",
-                        serde_json::json!({
-                            "success": false,
-                            "mode": mode_clone,
-                            "error": format!("切换模式失败: {}", e)
-                        }),
-                    );
-                }
+                let _ = app_clone.emit(
+                    "wallpaper-mode-switch-complete",
+                    serde_json::json!({
+                        "success": false,
+                        "mode": mode_clone,
+                        "error": format!("切换模式失败: {}", e)
+                    }),
+                );
             }
-        }
+        };
     });
     // 立即返回，不等待后台线程完成
     // 前端会通过事件来获知切换结果
@@ -1059,7 +1072,7 @@ fn wallpaper_window_ready(app: tauri::AppHandle) -> Result<(), String> {
         )
         .is_err()
     {
-        let _ = rotator.rotate_once_now();
+        let _ = rotator.rotate();
     }
 
     Ok(())
@@ -1167,6 +1180,10 @@ fn main() {
             // 初始化下载队列管理器
             let download_queue = crawler::DownloadQueue::new(app.app_handle().clone());
             app.manage(download_queue);
+
+            // 初始化全局壁纸控制器（基础 manager）
+            let wallpaper_controller = WallpaperController::new(app.app_handle().clone());
+            app.manage(wallpaper_controller);
 
             // 初始化壁纸轮播器
             let rotator = WallpaperRotator::new(app.app_handle().clone());
@@ -1345,7 +1362,7 @@ fn main() {
                                 std::thread::spawn(move || {
                                     use tauri::Manager;
                                     let rotator = app_handle.state::<WallpaperRotator>();
-                                    if let Err(e) = rotator.rotate_once_now() {
+                                    if let Err(e) = rotator.rotate() {
                                         eprintln!("托盘切换下一张壁纸失败: {}", e);
                                     }
                                 });
@@ -1377,56 +1394,6 @@ fn main() {
                                     .skip_taskbar(false)
                                     .inner_size(900.0, 600.0)
                                     .build();
-                                });
-                            }
-                            "popup_wallpaper" => {
-                                // 临时把 wallpaper 窗口弹出到前台 3 秒，用于确认 wallpaper 窗口实际是否在渲染 WallpaperLayer
-                                let app_handle = handle_clone1.clone();
-                                std::thread::spawn(move || {
-                                    use tauri::Manager;
-                                    if let Some(w) = app_handle.get_webview_window("wallpaper") {
-                                        // 兜底推送一次当前壁纸到 wallpaper webview，避免因为窗口模式挂载失败导致窗口内容空白
-                                        let rotator = app_handle.state::<WallpaperRotator>();
-                                        let _ = rotator.debug_push_current_to_wallpaper_windows();
-
-                                        let _ = w.show();
-                                        let _ = w.set_always_on_top(true);
-                                        let _ = w.set_focus();
-                                        std::thread::sleep(std::time::Duration::from_secs(3));
-                                        let _ = w.set_always_on_top(false);
-                                        // 调试弹出结束后自动隐藏，避免“看起来一直在最上层”造成误解
-                                        let _ = w.hide();
-                                    } else {
-                                        eprintln!("wallpaper 窗口不存在，无法弹出");
-                                    }
-                                });
-                            }
-                            "popup_wallpaper_detach" => {
-                                // 关键调试：把 wallpaper 窗口从桌面层临时脱离，作为普通窗口弹出 3 秒，再挂回桌面层
-                                // 用于确认“窗口渲染没问题，问题只在挂载层级/可见性”。
-                                let app_handle = handle_clone1.clone();
-                                std::thread::spawn(move || {
-                                    use tauri::Manager;
-                                    if let Some(w) = app_handle.get_webview_window("wallpaper") {
-                                        // 兜底推送一次当前壁纸到 wallpaper webview，避免因为窗口模式挂载失败导致窗口内容空白
-                                        let rotator = app_handle.state::<WallpaperRotator>();
-                                        let _ = rotator.debug_push_current_to_wallpaper_windows();
-
-                                        #[cfg(target_os = "windows")]
-                                        {
-                                            if let Err(e) =
-                                                WallpaperWindow::debug_detach_popup_3s(&w)
-                                            {
-                                                eprintln!("调试脱离桌面层弹出失败: {}", e);
-                                            }
-                                        }
-                                        #[cfg(not(target_os = "windows"))]
-                                        {
-                                            eprintln!("popup_wallpaper_detach 仅支持 Windows");
-                                        }
-                                    } else {
-                                        eprintln!("wallpaper 窗口不存在，无法调试脱离弹出");
-                                    }
                                 });
                             }
                             _ => {}
@@ -1555,10 +1522,11 @@ fn main() {
             set_wallpaper_rotation_album_id,
             set_wallpaper_rotation_interval_minutes,
             set_wallpaper_rotation_mode,
-            set_wallpaper_rotation_style,
+            set_wallpaper_style,
             set_wallpaper_rotation_transition,
             set_wallpaper_mode,
             get_wallpaper_rotator_status,
+            get_native_wallpaper_styles,
             wallpaper_window_ready,
             // Wallpaper Engine 导出
             export_album_to_we_project,

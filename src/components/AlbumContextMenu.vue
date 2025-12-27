@@ -47,12 +47,14 @@ interface Props {
   position: { x: number; y: number };
   albumId?: string;
   currentRotationAlbumId?: string | null;
+  wallpaperRotationEnabled?: boolean;
 }
 
 const props = defineProps<Props>();
 
 const isCurrentRotationAlbum = computed(() => {
-  return props.albumId && props.currentRotationAlbumId === props.albumId;
+  // 只有在轮播已开启且画册ID匹配时才显示"已设置"
+  return props.wallpaperRotationEnabled && props.albumId && props.currentRotationAlbumId === props.albumId;
 });
 
 defineEmits<{

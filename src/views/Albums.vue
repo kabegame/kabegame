@@ -20,6 +20,7 @@
       :position="albumMenuPosition"
       :album-id="menuAlbum?.id"
       :current-rotation-album-id="currentRotationAlbumId"
+      :wallpaper-rotation-enabled="wallpaperRotationEnabled"
       @close="closeAlbumContextMenu"
       @command="handleAlbumMenuCommand"
     />
@@ -100,6 +101,8 @@ const router = useRouter();
 
 // 当前轮播画册ID
 const currentRotationAlbumId = ref<string | null>(null);
+// 轮播是否开启
+const wallpaperRotationEnabled = ref<boolean>(false);
 
 const currentImages = ref<ImageInfo[]>([]);
 const imageSrcMap = ref<Record<string, { thumbnail?: string; original?: string }>>({});
@@ -123,6 +126,7 @@ const loadRotationSettings = async () => {
       wallpaperRotationEnabled?: boolean;
       wallpaperRotationAlbumId?: string | null;
     }>("get_settings");
+    wallpaperRotationEnabled.value = settings.wallpaperRotationEnabled ?? false;
     currentRotationAlbumId.value = settings.wallpaperRotationAlbumId || null;
   } catch (error) {
     console.error("加载轮播设置失败:", error);
@@ -578,6 +582,12 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
 
   if (command === "setWallpaperRotation") {
     try {
+      // 如果轮播未开启，先开启轮播
+      if (!wallpaperRotationEnabled.value) {
+        await invoke("set_wallpaper_rotation_enabled", { enabled: true });
+        wallpaperRotationEnabled.value = true;
+      }
+      // 设置轮播画册
       await invoke("set_wallpaper_rotation_album_id", { albumId: id });
       currentRotationAlbumId.value = id;
       ElMessage.success(`已将画册"${name}"设为桌面轮播`);
