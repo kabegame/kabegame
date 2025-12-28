@@ -580,7 +580,11 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   // 获取图片列表（分页）
-  async function loadImages(reset = false, pluginId?: string | null) {
+  async function loadImages(
+    reset = false,
+    pluginId?: string | null,
+    favoritesOnly?: boolean
+  ) {
     try {
       if (reset) {
         currentPage.value = 0;
@@ -598,6 +602,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
         page,
         pageSize: pageSize.value,
         pluginId: pluginId || null,
+        favoritesOnly: favoritesOnly || null,
       });
 
       if (reset) {
@@ -637,6 +642,17 @@ export const useCrawlerStore = defineStore("crawler", () => {
       images.value = images.value.filter((img) => img.id !== imageId);
     } catch (error) {
       console.error("删除图片失败:", error);
+      throw error;
+    }
+  }
+
+  // 移除图片（只删除缩略图和数据库记录，不删除原图）
+  async function removeImage(imageId: string) {
+    try {
+      await invoke("remove_image", { imageId });
+      images.value = images.value.filter((img) => img.id !== imageId);
+    } catch (error) {
+      console.error("移除图片失败:", error);
       throw error;
     }
   }
@@ -893,6 +909,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     loadImages,
     loadImagesCount,
     deleteImage,
+    removeImage,
     deleteTask,
     stopTask,
     retryTask,

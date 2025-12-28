@@ -2,7 +2,7 @@
   <div class="gallery-toolbar">
     <div class="toolbar-left">
       <el-select :model-value="filterPluginId" @update:model-value="$emit('update:filterPluginId', $event)"
-        placeholder="筛选收集源" clearable style="width: 150px">
+        placeholder="筛选收集源" clearable style="width: 150px" popper-class="crawl-plugin-select-dropdown">
         <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
           <div class="plugin-option">
             <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]" class="plugin-option-icon" />
@@ -13,6 +13,11 @@
           </div>
         </el-option>
       </el-select>
+      <el-button :type="showFavoritesOnly ? 'primary' : 'default'" @click="$emit('toggleFavoritesOnly')" circle>
+        <el-icon>
+          <Star />
+        </el-icon>
+      </el-button>
       <el-button @click="$emit('refresh')" circle>
         <el-icon>
           <Refresh />
@@ -43,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { Grid, Refresh, List, Plus } from "@element-plus/icons-vue";
+import { Grid, Refresh, List, Plus, Star } from "@element-plus/icons-vue";
 import type { Plugin } from "@/stores/plugins";
 
 interface Props {
@@ -51,15 +56,19 @@ interface Props {
   plugins: Plugin[];
   pluginIcons: Record<string, string>;
   activeRunningTasksCount: number;
+  showFavoritesOnly?: boolean;
 }
 
-defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  showFavoritesOnly: false,
+});
 
 defineEmits<{
   "update:filterPluginId": [value: string | null];
   refresh: [];
   showTasksDrawer: [];
   showCrawlerDialog: [];
+  toggleFavoritesOnly: [];
 }>();
 </script>
 
@@ -124,24 +133,6 @@ defineEmits<{
       align-items: center !important;
       justify-content: center !important;
     }
-  }
-
-  .plugin-option {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .plugin-option-icon {
-    width: 20px;
-    height: 20px;
-    object-fit: contain;
-  }
-
-  .plugin-option-icon-placeholder {
-    width: 20px;
-    height: 20px;
-    color: var(--anime-text-secondary);
   }
 }
 </style>

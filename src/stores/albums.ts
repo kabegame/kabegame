@@ -54,6 +54,14 @@ export const useAlbumStore = defineStore("albums", () => {
     delete albumCounts.value[albumId];
   };
 
+  const renameAlbum = async (albumId: string, newName: string) => {
+    await invoke("rename_album", { albumId, newName });
+    const album = albums.value.find((a) => a.id === albumId);
+    if (album) {
+      album.name = newName;
+    }
+  };
+
   const addImagesToAlbum = async (albumId: string, imageIds: string[]) => {
     await invoke<number>("add_images_to_album", { albumId, imageIds });
     // 清除缓存，下一次自动刷新
@@ -72,7 +80,10 @@ export const useAlbumStore = defineStore("albums", () => {
 
   const loadAlbumPreview = async (albumId: string, limit = 6) => {
     if (albumPreviews.value[albumId]) return albumPreviews.value[albumId];
-    const images = await invoke<ImageInfo[]>("get_album_preview", { albumId, limit });
+    const images = await invoke<ImageInfo[]>("get_album_preview", {
+      albumId,
+      limit,
+    });
     albumPreviews.value[albumId] = images;
     return images;
   };
@@ -86,9 +97,9 @@ export const useAlbumStore = defineStore("albums", () => {
     loadAlbums,
     createAlbum,
     deleteAlbum,
+    renameAlbum,
     addImagesToAlbum,
     loadAlbumImages,
     loadAlbumPreview,
   };
 });
-

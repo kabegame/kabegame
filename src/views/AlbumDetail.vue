@@ -172,6 +172,37 @@ const handleCopyImage = async (image: ImageInfo) => {
   ElMessage.success("图片已复制到剪贴板");
 };
 
+const handleBatchRemoveImages = async (imagesToRemove: ImageInfo[]) => {
+  if (imagesToRemove.length === 0) return;
+  const count = imagesToRemove.length;
+  await ElMessageBox.confirm(
+    `移除后将删除缩略图和数据库记录，但保留原图文件。是否继续移除${count > 1 ? `这 ${count} 张图片` : "这张图片"}？`,
+    "确认移除",
+    { type: "warning" }
+  );
+
+  try {
+    for (const img of imagesToRemove) {
+      await crawlerStore.removeImage(img.id);
+    }
+
+    const ids = new Set(imagesToRemove.map((i) => i.id));
+    images.value = images.value.filter((img) => !ids.has(img.id));
+    for (const id of ids) {
+      const data = imageSrcMap.value[id];
+      if (data?.thumbnail) URL.revokeObjectURL(data.thumbnail);
+      if (data?.original) URL.revokeObjectURL(data.original);
+      const { [id]: _, ...rest } = imageSrcMap.value;
+      imageSrcMap.value = rest;
+    }
+    selectedImages.value.clear();
+    ElMessage.success(`${count > 1 ? `已移除 ${count} 张图片` : "已移除图片"}`);
+  } catch (error) {
+    console.error("移除图片失败:", error);
+    ElMessage.error("移除失败");
+  }
+};
+
 const handleBatchDeleteImages = async (imagesToDelete: ImageInfo[]) => {
   if (imagesToDelete.length === 0) return;
   const count = imagesToDelete.length;
@@ -304,6 +335,9 @@ const handleImageMenuCommand = async (command: string) => {
           ElMessage.error("导出失败");
         }
       }
+      break;
+    case "remove":
+      await handleBatchRemoveImages(imagesToProcess);
       break;
     case "delete":
       await handleBatchDeleteImages(imagesToProcess);

@@ -7,7 +7,14 @@
       <el-tab-pane label="壁纸轮播" name="wallpaper">
         <el-card class="settings-card">
           <template #header>
-            <span>壁纸轮播设置</span>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span>壁纸轮播设置</span>
+              <el-button circle size="small" @click="handleRefreshWallpaper" :loading="isRefreshingWallpaper">
+                <el-icon>
+                  <Refresh />
+                </el-icon>
+              </el-button>
+            </div>
           </template>
 
           <el-form v-loading="loading" element-loading-text="" :model="settings" :label-width="labelWidth">
@@ -62,8 +69,8 @@
               <div class="form-item-content">
                 <el-select v-model="settings.wallpaperRotationStyle" placeholder="请选择显示方式" style="width: 100%"
                   :disabled="isModeSwitching || isStyleApplying" @change="handleWallpaperRotationStyleChange">
-                  <!-- 窗口模式和 GDI 模式：显示所有样式 -->
-                  <template v-if="settings.wallpaperMode === 'window' || settings.wallpaperMode === 'gdi'">
+                  <!-- 窗口模式：显示所有样式 -->
+                  <template v-if="settings.wallpaperMode === 'window'">
                     <el-option label="填充" value="fill">
                       <span>填充 - 保持宽高比，填满屏幕（可能裁剪）</span>
                     </el-option>
@@ -103,9 +110,6 @@
                   <template v-if="settings.wallpaperMode === 'native'">
                     原生模式：根据系统支持显示可用样式（单张壁纸/轮播均生效）
                   </template>
-                  <template v-else-if="settings.wallpaperMode === 'gdi'">
-                    GDI 模式：支持所有显示方式（单张壁纸/轮播均生效）
-                  </template>
                   <template v-else>
                     窗口模式：支持所有显示方式（单张壁纸/轮播均生效）
                   </template>
@@ -123,10 +127,6 @@
                     <el-option label="无过渡" value="none" />
                     <el-option label="淡入淡出" value="fade" />
                   </template>
-                  <!-- GDI 模式：不支持过渡效果 -->
-                  <template v-else-if="settings.wallpaperMode === 'gdi'">
-                    <el-option label="无过渡" value="none" />
-                  </template>
                   <!-- 窗口模式：支持所有过渡效果 -->
                   <template v-else>
                     <el-option label="无过渡" value="none" />
@@ -143,9 +143,6 @@
                     原生模式：仅支持无过渡和淡入淡出（受系统限制）<br />
                     无过渡：应用不会额外触发/预览过渡，但 Windows 本身在切换壁纸时可能仍会有系统级淡入动画
                   </template>
-                  <template v-else-if="settings.wallpaperMode === 'gdi'">
-                    GDI 模式：不支持过渡效果（GDI 渲染的限制）
-                  </template>
                   <template v-else>
                     窗口模式：过渡效果完全由应用渲染（支持淡入淡出/滑动/缩放）
                   </template>
@@ -159,12 +156,10 @@
                   :disabled="isModeSwitching" :class="{ 'wallpaper-mode-switching': isModeSwitching }">
                   <el-radio label="native">原生模式</el-radio>
                   <el-radio label="window">窗口模式（类似 Wallpaper Engine）</el-radio>
-                  <el-radio label="gdi">GDI 模式（原生渲染）</el-radio>
                 </el-radio-group>
                 <div class="setting-description">
                   原生模式：使用 Windows 原生壁纸设置，性能好但功能有限<br />
-                  窗口模式：使用窗口句柄显示，更灵活，可实现动画等效果（需要预先创建壁纸窗口）<br />
-                  GDI 模式：使用原生 GDI 渲染，性能好且不受 WebView2 限制，但不支持过渡效果
+                  窗口模式：使用窗口句柄显示，更灵活，可实现动画等效果（需要预先创建壁纸窗口）
                 </div>
               </div>
             </el-form-item>
@@ -206,7 +201,14 @@
       <el-tab-pane label="应用设置" name="app">
         <el-card class="settings-card">
           <template #header>
-            <span>应用设置</span>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span>应用设置</span>
+              <el-button circle size="small" @click="handleRefreshApp" :loading="isRefreshingApp">
+                <el-icon>
+                  <Refresh />
+                </el-icon>
+              </el-button>
+            </div>
           </template>
 
           <el-form v-loading="loading" element-loading-text="" :model="settings" :label-width="labelWidth">
@@ -291,6 +293,20 @@
                 </div>
               </div>
             </el-form-item>
+
+            <el-form-item label="清理应用数据">
+              <div class="form-item-content">
+                <el-button type="danger" @click="handleClearUserData" :loading="isClearingData">
+                  <el-icon>
+                    <Delete />
+                  </el-icon>
+                  清理所有用户数据
+                </el-button>
+                <div class="setting-description">
+                  将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启。此操作不可恢复，请谨慎使用。
+                </div>
+              </div>
+            </el-form-item>
           </el-form>
         </el-card>
       </el-tab-pane>
@@ -301,12 +317,12 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { useRouter } from "vue-router";
-import { FolderOpened } from "@element-plus/icons-vue";
+import { FolderOpened, Refresh, Delete } from "@element-plus/icons-vue";
 
 const labelWidth = "180px";
 
@@ -332,7 +348,7 @@ const settings = ref({
   wallpaperRotationMode: "random" as "random" | "sequential",
   wallpaperRotationStyle: "fill" as "fill" | "fit" | "stretch" | "center" | "tile",
   wallpaperRotationTransition: "none" as "none" | "fade" | "slide" | "zoom",
-  wallpaperMode: "native" as "native" | "window" | "gdi",
+  wallpaperMode: "native" as "native" | "window",
 });
 
 const defaultImagesDir = ref<string>("");
@@ -346,6 +362,9 @@ const nativeWallpaperStyles = ref<string[]>([]); // 系统原生模式支持的�
 const router = useRouter();
 const isStyleApplying = ref(false);
 const isTransitionApplying = ref(false);
+const isRefreshingWallpaper = ref(false);
+const isRefreshingApp = ref(false);
+const isClearingData = ref(false);
 
 // 计算当前选中的画册名称
 const selectedAlbumName = computed(() => {
@@ -387,7 +406,7 @@ const loadSettings = async () => {
       wallpaperRotationTransition: (["none", "fade", "slide", "zoom"].includes(loadedSettings.wallpaperRotationTransition || "")
         ? loadedSettings.wallpaperRotationTransition
         : "none") as "none" | "fade" | "slide" | "zoom",
-      wallpaperMode: (loadedSettings.wallpaperMode || "native") as "native" | "window" | "gdi",
+      wallpaperMode: (loadedSettings.wallpaperMode || "native") as "native" | "window",
     };
 
     defaultImagesDir.value = await invoke<string>("get_default_images_dir");
@@ -678,7 +697,7 @@ const handleWallpaperModeChange = async (mode: string) => {
   isModeSwitching.value = true;
 
   try {
-    // 如果切换到原生模式或 GDI 模式，检查当前样式和过渡效果是否支持
+    // 如果切换到原生模式，检查当前样式和过渡效果是否支持
     if (mode === "native") {
       // 检查样式是否支持
       if (nativeWallpaperStyles.value.length > 0 && !nativeWallpaperStyles.value.includes(settings.value.wallpaperRotationStyle)) {
@@ -718,28 +737,6 @@ const handleWallpaperModeChange = async (mode: string) => {
       }
     }
 
-    // 如果切换到 GDI 模式，检查当前过渡效果是否支持（GDI 不支持过渡效果）
-    if (mode === "gdi") {
-      // 只有轮播启用时才需要同步/保存 transition（否则后端会拒绝）
-      if (settings.value.wallpaperRotationEnabled) {
-        if (settings.value.wallpaperRotationTransition !== "none") {
-          // 自动切换到无过渡
-          const newTransition = "none";
-          settings.value.wallpaperRotationTransition = newTransition;
-          try {
-            await invoke("set_wallpaper_rotation_transition", { transition: newTransition });
-          } catch (e) {
-            console.warn("自动切换过渡效果失败:", e);
-          }
-        }
-      } else {
-        // 非轮播场景：仅本地修正，避免 UI 残留不可用选项
-        if (settings.value.wallpaperRotationTransition !== "none") {
-          settings.value.wallpaperRotationTransition = "none";
-        }
-      }
-    }
-
     // 创建一个 Promise 来等待切换完成事件
     const waitForSwitchComplete = new Promise<{ success: boolean; error?: string }>(async (resolve) => {
       const unlistenFn = await listen<{ success: boolean; mode: string; error?: string }>(
@@ -773,6 +770,86 @@ const handleWallpaperModeChange = async (mode: string) => {
     ElMessage.error("切换模式失败");
   } finally {
     isModeSwitching.value = false;
+  }
+};
+
+const handleRefreshWallpaper = async () => {
+  isRefreshingWallpaper.value = true;
+  try {
+    await loadSettings();
+    ElMessage.success("刷新成功");
+  } catch (error) {
+    console.error("刷新失败:", error);
+    ElMessage.error("刷新失败");
+  } finally {
+    isRefreshingWallpaper.value = false;
+  }
+};
+
+const handleRefreshApp = async () => {
+  isRefreshingApp.value = true;
+  try {
+    await loadSettings();
+    ElMessage.success("刷新成功");
+  } catch (error) {
+    console.error("刷新失败:", error);
+    ElMessage.error("刷新失败");
+  } finally {
+    isRefreshingApp.value = false;
+  }
+};
+
+// 清理用户数据（双重确认）
+const handleClearUserData = async () => {
+  try {
+    // 第一次确认
+    await ElMessageBox.confirm(
+      "此操作将删除所有用户数据，包括：\n" +
+      "• 所有图片和缩略图\n" +
+      "• 所有画册\n" +
+      "• 所有任务记录\n" +
+      "• 所有设置\n" +
+      "• 所有插件配置\n\n" +
+      "应用将在清理完成后自动重启。\n\n" +
+      "此操作不可恢复，请谨慎操作！",
+      "确认清理用户数据",
+      {
+        type: "warning",
+        confirmButtonText: "我已知晓，继续清理",
+        cancelButtonText: "取消",
+        dangerouslyUseHTMLString: false,
+      }
+    );
+
+    // 第二次确认
+    await ElMessageBox.confirm(
+      "请再次确认：\n\n" +
+      "您确定要清理所有用户数据吗？\n" +
+      "清理后应用将自动重启，所有数据将无法恢复！",
+      "最终确认",
+      {
+        type: "error",
+        confirmButtonText: "确定清理",
+        cancelButtonText: "取消",
+        confirmButtonClass: "el-button--danger",
+      }
+    );
+
+    // 执行清理
+    isClearingData.value = true;
+    try {
+      await invoke("clear_user_data");
+      ElMessage.success("数据清理完成，应用即将重启...");
+    } catch (error) {
+      console.error("清理数据失败:", error);
+      ElMessage.error("清理数据失败: " + (error as Error).message);
+      isClearingData.value = false;
+    }
+  } catch (error) {
+    // 用户取消操作
+    if (error !== "cancel") {
+      console.error("清理数据确认失败:", error);
+    }
   }
 };
 

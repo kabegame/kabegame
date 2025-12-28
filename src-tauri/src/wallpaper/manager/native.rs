@@ -11,6 +11,76 @@ impl NativeWallpaperManager {
     pub fn new(app: AppHandle) -> Self {
         Self { _app: app }
     }
+
+    /// 使用 IDesktopWallpaper COM 接口设置壁纸（支持淡入淡出效果）
+    #[cfg(target_os = "windows")]
+    fn set_wallpaper_via_com(&self, wide_path: &[u16]) -> Result<(), String> {
+        use windows_sys::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED};
+        use windows_sys::Win32::Foundation::S_OK;
+
+        // IDesktopWallpaper 接口的 GUID
+        const CLSID_DESKTOP_WALLPAPER: windows_sys::core::GUID = windows_sys::core::GUID {
+            data1: 0xC2CF3110,
+            data2: 0x460E,
+            data3: 0x4FC1,
+            data4: [0xB9, 0xD0, 0x8A, 0x1C, 0x0C, 0x9C, 0xC4, 0xBD],
+        };
+
+        // IDesktopWallpaper 接口的 IID
+        const IID_IDESKTOP_WALLPAPER: windows_sys::core::GUID = windows_sys::core::GUID {
+            data1: 0xB92B56A9,
+            data2: 0x8B55,
+            data3: 0x4E14,
+            data4: [0x9A, 0x89, 0x01, 0x99, 0xBB, 0xB6, 0xF9, 0x3B],
+        };
+
+        unsafe {
+            // 初始化 COM（如果尚未初始化）
+            let _ = CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED as u32);
+
+            let mut desktop_wallpaper: *mut std::ffi::c_void = std::ptr::null_mut();
+            let hr = CoCreateInstance(
+                &CLSID_DESKTOP_WALLPAPER,
+                std::ptr::null_mut(),
+                CLSCTX_ALL,
+                &IID_IDESKTOP_WALLPAPER,
+                &mut desktop_wallpaper,
+            );
+
+            if hr != S_OK || desktop_wallpaper.is_null() {
+                return Err(format!("CoCreateInstance failed. HRESULT=0x{:X}", hr));
+            }
+
+            // IDesktopWallpaper::SetWallpaper 的 vtable 索引是 3（第 4 个方法，从 0 开始）
+            // SetWallpaper(monitorID: *const u16, wallpaper: *const u16)
+            // monitorID = null 表示所有显示器
+            type SetWallpaperFn = unsafe extern "system" fn(
+                this: *mut std::ffi::c_void,
+                monitor_id: *const u16,
+                wallpaper: *const u16,
+            ) -> i32; // HRESULT 是 i32
+
+            let vtable = *(desktop_wallpaper as *const *const *const usize);
+            let set_wallpaper = std::mem::transmute::<*const usize, SetWallpaperFn>(
+                *vtable.add(3) as *const usize,
+            );
+
+            // 调用 SetWallpaper(nullptr, wide_path.as_ptr())
+            let hr = set_wallpaper(desktop_wallpaper, std::ptr::null(), wide_path.as_ptr());
+
+            // 释放 COM 对象
+            let release = std::mem::transmute::<*const usize, unsafe extern "system" fn(*mut std::ffi::c_void) -> u32>(
+                *vtable.add(2) as *const usize,
+            );
+            release(desktop_wallpaper);
+
+            if hr != S_OK {
+                return Err(format!("SetWallpaper failed. HRESULT=0x{:X}", hr));
+            }
+
+            Ok(())
+        }
+    }
 }
 
 impl WallpaperManager for NativeWallpaperManager {
@@ -121,6 +191,56 @@ impl WallpaperManager for NativeWallpaperManager {
                 .get_settings()
                 .map(|s| s.wallpaper_rotation_transition)
                 .unwrap_or_else(|_| "none".to_string());
+
+            // 参考 wallpaper_rotator.rs 的实现：使用模拟方式实现淡入淡出
+            // wallpaper_rotator.rs 中的实现能工作，它使用延迟 + SPIF_SENDWININICHANGE 来触发系统动画
+            // 当 transition == "fade" 时，先延迟 100ms，然后使用 fuWinIni=3 设置壁纸
+            if transition == "fade" && immediate {
+                use std::thread;
+                use std::time::Duration;
+                
+                // 参考 wallpaper_rotator.rs：先短暂延迟，让系统有时间准备淡入动画
+                // 使用 100ms 延迟（与 wallpaper_rotator.rs 保持一致）
+                thread::sleep(Duration::from_millis(100));
+                
+                // 使用 fuWinIni=3 (SPIF_UPDATEINIFILE | SPIF_SENDWININICHANGE) 来触发系统动画
+                // 这与 wallpaper_rotator.rs 中的实现完全一致
+                const SPIF_UPDATEINIFILE: u32 = 0x01;
+                const SPIF_SENDWININICHANGE: u32 = 0x02;
+                let fu_win_ini = SPIF_UPDATEINIFILE | SPIF_SENDWININICHANGE; // 3
+
+                unsafe {
+                    extern "system" {
+                        fn SystemParametersInfoW(
+                            uiAction: u32,
+                            uiParam: u32,
+                            pvParam: *mut std::ffi::c_void,
+                            fWinIni: u32,
+                        ) -> windows_sys::Win32::Foundation::BOOL;
+                    }
+
+                    const SPI_SETDESKWALLPAPER: u32 = 0x0014; // 20
+
+                    let result = SystemParametersInfoW(
+                        SPI_SETDESKWALLPAPER,
+                        0,
+                        wide_path.as_ptr() as *mut std::ffi::c_void,
+                        fu_win_ini,
+                    );
+
+                    if result == 0 {
+                        use windows_sys::Win32::Foundation::GetLastError;
+                        let err = GetLastError();
+                        return Err(format!(
+                            "SystemParametersInfoW failed. GetLastError={}",
+                            err
+                        ));
+                    }
+                }
+
+                println!("[DEBUG] 壁纸路径设置完成（使用模拟淡入淡出：延迟100ms + SPIF_SENDWININICHANGE）");
+                return Ok(());
+            }
 
             // 设置壁纸路径
             // 注意：SystemParametersInfo 的最后一个参数 fuWinIni：

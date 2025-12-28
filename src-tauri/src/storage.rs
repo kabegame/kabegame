@@ -10,6 +10,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 
+// 收藏画册的固定ID
+const FAVORITE_ALBUM_ID: &str = "00000000-0000-0000-0000-000000000001";
+
 // 获取应用数据目录的辅助函数
 fn get_app_data_dir() -> PathBuf {
     dirs::data_local_dir()
@@ -347,7 +350,60 @@ impl Storage {
         // 迁移失败不影响应用启动
         let _ = self.migrate_from_json();
 
+        // 确保存在"收藏"画册
+        self.ensure_favorite_album()?;
+
         Ok(())
+    }
+
+    /// 确保存在"收藏"画册，如果不存在则创建
+    fn ensure_favorite_album(&self) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        // 检查收藏画册是否存在（使用固定ID）
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)",
+                params![FAVORITE_ALBUM_ID],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to query favorite album existence: {}", e))?;
+
+        if !exists {
+            // 创建收藏画册，使用固定ID
+            let created_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| format!("Time error: {}", e))?
+                .as_secs();
+            conn.execute(
+                "INSERT INTO albums (id, name, created_at) VALUES (?1, ?2, ?3)",
+                params![FAVORITE_ALBUM_ID, "收藏", created_at as i64],
+            )
+            .map_err(|e| format!("Failed to create default '收藏' album: {}", e))?;
+            println!("已创建默认'收藏'画册");
+        }
+
+        Ok(())
+    }
+
+    /// 获取"收藏"画册的ID（固定ID）
+    fn get_favorite_album_id(&self) -> Result<Option<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        // 检查收藏画册是否存在
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)",
+                params![FAVORITE_ALBUM_ID],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to query favorite album existence: {}", e))?;
+
+        if exists {
+            Ok(Some(FAVORITE_ALBUM_ID.to_string()))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn migrate_from_json(&self) -> Result<usize, String> {
@@ -418,14 +474,26 @@ impl Storage {
         page: usize,
         page_size: usize,
         plugin_id: Option<&str>,
+        favorites_only: Option<bool>,
     ) -> Result<PaginatedImages, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         // 构建查询条件
-        let where_clause = if let Some(pid) = plugin_id {
-            format!("WHERE plugin_id = '{}'", pid.replace("'", "''"))
-        } else {
+        let mut conditions = Vec::new();
+        if let Some(pid) = plugin_id {
+            conditions.push(format!("plugin_id = '{}'", pid.replace("'", "''")));
+        }
+        if favorites_only == Some(true) {
+            // 只查询在收藏画册中的图片
+            conditions.push(format!(
+                "id IN (SELECT image_id FROM album_images WHERE album_id = '{}')",
+                FAVORITE_ALBUM_ID
+            ));
+        }
+        let where_clause = if conditions.is_empty() {
             String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
         };
 
         // 获取总数
@@ -439,12 +507,16 @@ impl Storage {
 
         // 分页查询
         let offset = page * page_size;
+        // 使用 LEFT JOIN 来判断图片是否在收藏画册中
         let query = format!(
-            "SELECT id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(thumbnail_path, ''), favorite, hash 
-             FROM images {} 
-             ORDER BY crawled_at DESC 
+            "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash,
+             CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite
+             FROM images
+             LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
+             {} 
+             ORDER BY images.crawled_at DESC 
              LIMIT ? OFFSET ?",
-            where_clause
+            FAVORITE_ALBUM_ID, where_clause
         );
 
         let mut stmt = conn
@@ -464,8 +536,8 @@ impl Storage {
                         .get::<_, Option<String>>(6)?
                         .and_then(|s| serde_json::from_str(&s).ok()),
                     thumbnail_path: row.get(7)?,
-                    favorite: row.get::<_, i64>(8)? != 0,
-                    hash: row.get(9)?,
+                    hash: row.get(8)?,
+                    favorite: row.get::<_, i64>(9)? != 0, // 从 JOIN 结果中获取
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
@@ -490,7 +562,7 @@ impl Storage {
     pub fn get_all_images(&self) -> Result<Vec<ImageInfo>, String> {
         // 为了兼容性，返回所有图片（但使用分页查询以避免内存问题）
         // 注意：如果图片很多，这可能仍然会有问题
-        let result = self.get_images_paginated(0, 10000, None)?;
+        let result = self.get_images_paginated(0, 10000, None, None)?;
         Ok(result.images)
     }
 
@@ -499,9 +571,12 @@ impl Storage {
 
         let result = conn
             .query_row(
-                "SELECT id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(thumbnail_path, ''), favorite, hash 
-                 FROM images WHERE local_path = ?1",
-                params![local_path],
+                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash,
+                 CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite
+                 FROM images
+                 LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = ?
+                 WHERE images.local_path = ?1",
+                params![FAVORITE_ALBUM_ID, local_path],
                 |row| {
                     Ok(ImageInfo {
                         id: row.get(0)?,
@@ -513,8 +588,8 @@ impl Storage {
                         metadata: row.get::<_, Option<String>>(6)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         thumbnail_path: row.get(7)?,
-                        favorite: row.get::<_, i64>(8)? != 0,
-                        hash: row.get(9)?,
+                        hash: row.get(8)?,
+                        favorite: row.get::<_, i64>(9)? != 0,
                     })
                 },
             )
@@ -528,9 +603,12 @@ impl Storage {
 
         let result = conn
             .query_row(
-                "SELECT id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(thumbnail_path, ''), favorite, hash 
-                 FROM images WHERE hash = ?1",
-                params![hash],
+                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash,
+                 CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite
+                 FROM images
+                 LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = ?
+                 WHERE images.hash = ?1",
+                params![FAVORITE_ALBUM_ID, hash],
                 |row| {
                     Ok(ImageInfo {
                         id: row.get(0)?,
@@ -542,8 +620,8 @@ impl Storage {
                         metadata: row.get::<_, Option<String>>(6)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         thumbnail_path: row.get(7)?,
-                        favorite: row.get::<_, i64>(8)? != 0,
-                        hash: row.get(9)?,
+                        hash: row.get(8)?,
+                        favorite: row.get::<_, i64>(9)? != 0,
                     })
                 },
             )
@@ -576,7 +654,7 @@ impl Storage {
     pub fn get_albums(&self) -> Result<Vec<Album>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at FROM albums ORDER BY created_at DESC")
+            .prepare("SELECT id, name, created_at FROM albums ORDER BY created_at ASC")
             .map_err(|e| format!("Failed to prepare albums query: {}", e))?;
 
         let rows = stmt
@@ -599,6 +677,11 @@ impl Storage {
     pub fn delete_album(&self, album_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
+        // 检查是否为"收藏"画册，不允许删除（使用固定ID）
+        if album_id == FAVORITE_ALBUM_ID {
+            return Err("不能删除'收藏'画册".to_string());
+        }
+
         // 先删除关联
         conn.execute(
             "DELETE FROM album_images WHERE album_id = ?1",
@@ -609,6 +692,24 @@ impl Storage {
         // 再删除画册
         conn.execute("DELETE FROM albums WHERE id = ?1", params![album_id])
             .map_err(|e| format!("Failed to delete album: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn rename_album(&self, album_id: &str, new_name: &str) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        // 检查新名称是否为空
+        if new_name.trim().is_empty() {
+            return Err("画册名称不能为空".to_string());
+        }
+
+        // 更新画册名称
+        conn.execute(
+            "UPDATE albums SET name = ?1 WHERE id = ?2",
+            params![new_name.trim(), album_id],
+        )
+        .map_err(|e| format!("Failed to rename album: {}", e))?;
 
         Ok(())
     }
@@ -635,18 +736,21 @@ impl Storage {
     pub fn get_album_images(&self, album_id: &str) -> Result<Vec<ImageInfo>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
+        // 使用 LEFT JOIN 来判断图片是否在收藏画册中
         let mut stmt = conn
             .prepare(
-                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.favorite, images.hash
+                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash,
+                 CASE WHEN favorite_check.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite
                  FROM images
                  INNER JOIN album_images ON images.id = album_images.image_id
-                 WHERE album_images.album_id = ?1
+                 LEFT JOIN album_images as favorite_check ON images.id = favorite_check.image_id AND favorite_check.album_id = ?1
+                 WHERE album_images.album_id = ?2
                  ORDER BY images.crawled_at DESC",
             )
             .map_err(|e| format!("Failed to prepare album images query: {}", e))?;
 
         let rows = stmt
-            .query_map(params![album_id], |row| {
+            .query_map(params![FAVORITE_ALBUM_ID, album_id], |row| {
                 Ok(ImageInfo {
                     id: row.get(0)?,
                     url: row.get(1)?,
@@ -658,8 +762,8 @@ impl Storage {
                         .get::<_, Option<String>>(6)?
                         .and_then(|s| serde_json::from_str(&s).ok()),
                     thumbnail_path: row.get(7)?,
-                    favorite: row.get::<_, i64>(8)? != 0,
-                    hash: row.get(9)?,
+                    hash: row.get(8)?,
+                    favorite: row.get::<_, i64>(9)? != 0,
                 })
             })
             .map_err(|e| format!("Failed to query album images: {}", e))?;
@@ -681,19 +785,22 @@ impl Storage {
     ) -> Result<Vec<ImageInfo>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
+        // 使用 LEFT JOIN 来判断图片是否在收藏画册中
         let mut stmt = conn
             .prepare(
-                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.favorite, images.hash
+                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash,
+                 CASE WHEN favorite_check.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite
                  FROM images
                  INNER JOIN album_images ON images.id = album_images.image_id
-                 WHERE album_images.album_id = ?1
+                 LEFT JOIN album_images as favorite_check ON images.id = favorite_check.image_id AND favorite_check.album_id = ?1
+                 WHERE album_images.album_id = ?2
                  ORDER BY images.crawled_at DESC
-                 LIMIT ?2",
+                 LIMIT ?3",
             )
             .map_err(|e| format!("Failed to prepare album preview query: {}", e))?;
 
         let rows = stmt
-            .query_map(params![album_id, limit as i64], |row| {
+            .query_map(params![FAVORITE_ALBUM_ID, album_id, limit as i64], |row| {
                 Ok(ImageInfo {
                     id: row.get(0)?,
                     url: row.get(1)?,
@@ -705,8 +812,8 @@ impl Storage {
                         .get::<_, Option<String>>(6)?
                         .and_then(|s| serde_json::from_str(&s).ok()),
                     thumbnail_path: row.get(7)?,
-                    favorite: row.get::<_, i64>(8)? != 0,
-                    hash: row.get(9)?,
+                    hash: row.get(8)?,
+                    favorite: row.get::<_, i64>(9)? != 0,
                 })
             })
             .map_err(|e| format!("Failed to query album preview: {}", e))?;
@@ -719,6 +826,23 @@ impl Storage {
             }
         }
         Ok(images)
+    }
+
+    pub fn get_album_image_ids(&self, album_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare("SELECT image_id FROM album_images WHERE album_id = ?1")
+            .map_err(|e| format!("Failed to prepare album image ids query: {}", e))?;
+
+        let rows = stmt
+            .query_map(params![album_id], |row| Ok(row.get::<_, String>(0)?))
+            .map_err(|e| format!("Failed to query album image ids: {}", e))?;
+
+        let mut ids = Vec::new();
+        for r in rows {
+            ids.push(r.map_err(|e| format!("Failed to read album image id row: {}", e))?);
+        }
+        Ok(ids)
     }
 
     pub fn get_album_counts(&self) -> Result<HashMap<String, usize>, String> {
@@ -818,6 +942,57 @@ impl Storage {
                     let _ = fs::remove_file(&thumb);
                 }
             }
+        }
+
+        // 从数据库删除
+        conn.execute(
+            "DELETE FROM album_images WHERE image_id = ?1",
+            params![image_id],
+        )
+        .map_err(|e| format!("Failed to delete album mapping: {}", e))?;
+        conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
+            .map_err(|e| format!("Failed to delete image from database: {}", e))?;
+
+        Ok(())
+    }
+
+    /// 移除图片（只删除缩略图和数据库记录，不删除原图）
+    pub fn remove_image(&self, image_id: &str) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        // 先查询图片信息，以便删除缩略图
+        let image: Option<ImageInfo> = conn
+            .query_row(
+                "SELECT id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(thumbnail_path, ''), favorite, hash 
+                 FROM images WHERE id = ?1",
+                params![image_id],
+                |row| {
+                    Ok(ImageInfo {
+                        id: row.get(0)?,
+                        url: row.get(1)?,
+                        local_path: row.get(2)?,
+                        plugin_id: row.get(3)?,
+                        task_id: row.get(4)?,
+                        crawled_at: row.get(5)?,
+                        metadata: row.get::<_, Option<String>>(6)?
+                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        thumbnail_path: row.get(7)?,
+                        favorite: row.get::<_, i64>(8)? != 0,
+                        hash: row.get(9)?,
+                    })
+                },
+            )
+            .ok();
+
+        if let Some(image) = image {
+            // 只删除缩略图（为空字符串则跳过）
+            if !image.thumbnail_path.is_empty() {
+                let thumb = PathBuf::from(&image.thumbnail_path);
+                if thumb.exists() {
+                    let _ = fs::remove_file(&thumb);
+                }
+            }
+            // 注意：不删除原图文件
         }
 
         // 从数据库删除
@@ -1184,11 +1359,46 @@ impl Storage {
     pub fn toggle_image_favorite(&self, image_id: &str, favorite: bool) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        conn.execute(
-            "UPDATE images SET favorite = ?1 WHERE id = ?2",
-            params![if favorite { 1 } else { 0 }, image_id],
-        )
-        .map_err(|e| format!("Failed to update image favorite: {}", e))?;
+        // 不再更新 favorite 字段，直接操作收藏画册
+        // 确保收藏画册存在（使用固定ID）
+        let favorite_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)",
+                params![FAVORITE_ALBUM_ID],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to query favorite album existence: {}", e))?;
+
+        if !favorite_exists {
+            // 如果"收藏"画册不存在，创建它（这不应该发生，因为 init 时会创建）
+            eprintln!("警告：'收藏'画册不存在，尝试创建");
+            let created_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| format!("Time error: {}", e))?
+                .as_secs();
+            conn.execute(
+                "INSERT INTO albums (id, name, created_at) VALUES (?1, ?2, ?3)",
+                params![FAVORITE_ALBUM_ID, "收藏", created_at as i64],
+            )
+            .map_err(|e| format!("Failed to create favorite album: {}", e))?;
+        }
+
+        // 使用固定ID操作收藏画册
+        if favorite {
+            // 收藏时：将图片添加到"收藏"画册
+            conn.execute(
+                "INSERT OR IGNORE INTO album_images (album_id, image_id) VALUES (?1, ?2)",
+                params![FAVORITE_ALBUM_ID, image_id],
+            )
+            .map_err(|e| format!("Failed to add image to favorite album: {}", e))?;
+        } else {
+            // 取消收藏时：从"收藏"画册中移除图片
+            conn.execute(
+                "DELETE FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                params![FAVORITE_ALBUM_ID, image_id],
+            )
+            .map_err(|e| format!("Failed to remove image from favorite album: {}", e))?;
+        }
 
         Ok(())
     }

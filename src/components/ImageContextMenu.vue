@@ -1,12 +1,15 @@
 <template>
   <ContextMenu :visible="visible" :position="position" @close="$emit('close')">
-    <div class="context-menu-item" @click.stop="$emit('command', 'detail')">
+    <!-- 详情：仅单选时显示 -->
+    <div v-if="selectedCount === 1" class="context-menu-item" @click.stop="$emit('command', 'detail')">
       <el-icon>
         <InfoFilled />
       </el-icon>
       <span style="margin-left: 8px;">详情</span>
     </div>
-    <div class="context-menu-item" @click.stop="$emit('command', 'favorite')">
+    <!-- 收藏：仅当多选时右键多选的其中一个时才能批量操作 -->
+    <div v-if="selectedCount === 1 || isImageSelected" class="context-menu-item"
+      @click.stop="$emit('command', 'favorite')">
       <el-icon>
         <StarFilled v-if="image?.favorite" />
         <Star v-else />
@@ -16,7 +19,9 @@
         ({{ selectedCount }})
       </span>
     </div>
-    <div class="context-menu-item" @click.stop="$emit('command', 'addToAlbum')">
+    <!-- 加入画册：仅当多选时右键多选的其中一个时才能批量操作 -->
+    <div v-if="selectedCount === 1 || isImageSelected" class="context-menu-item"
+      @click.stop="$emit('command', 'addToAlbum')">
       <el-icon>
         <Collection />
       </el-icon>
@@ -25,25 +30,30 @@
         ({{ selectedCount }})
       </span>
     </div>
-    <div class="context-menu-item" @click.stop="$emit('command', 'copy')">
+    <!-- 复制：仅当多选时右键多选的其中一个时才能批量操作 -->
+    <div v-if="selectedCount === 1 || isImageSelected" class="context-menu-item" @click.stop="$emit('command', 'copy')">
       <el-icon>
         <DocumentCopy />
       </el-icon>
-      <span style="margin-left: 8px;">复制图片</span>
+      <span style="margin-left: 8px;">{{ selectedCount > 1 ? '全部复制' : '复制图片' }}</span>
     </div>
-    <div class="context-menu-item" @click.stop="$emit('command', 'open')">
+    <!-- 仔细欣赏：仅单选时显示 -->
+    <div v-if="selectedCount === 1" class="context-menu-item" @click.stop="$emit('command', 'open')">
       <el-icon>
         <FolderOpened />
       </el-icon>
       <span style="margin-left: 8px;">仔细欣赏</span>
     </div>
-    <div class="context-menu-item" @click.stop="$emit('command', 'openFolder')">
+    <!-- 欣赏更多：仅单选时显示 -->
+    <div v-if="selectedCount === 1" class="context-menu-item" @click.stop="$emit('command', 'openFolder')">
       <el-icon>
         <Folder />
       </el-icon>
       <span style="margin-left: 8px;">欣赏更多</span>
     </div>
-    <div class="context-menu-item" @click.stop="$emit('command', 'wallpaper')">
+    <!-- 抱到桌面上：仅当多选时右键多选的其中一个时才能批量操作 -->
+    <div v-if="selectedCount === 1 || isImageSelected" class="context-menu-item"
+      @click.stop="$emit('command', 'wallpaper')">
       <el-icon>
         <Picture />
       </el-icon>
@@ -68,6 +78,15 @@
       </span>
     </div>
     <div class="context-menu-divider"></div>
+    <div class="context-menu-item" @click.stop="$emit('command', 'remove')">
+      <el-icon>
+        <Remove />
+      </el-icon>
+      <span style="margin-left: 8px;">移除</span>
+      <span v-if="selectedCount > 1" style="margin-left: 8px; color: var(--anime-text-muted); font-size: 12px;">
+        ({{ selectedCount }})
+      </span>
+    </div>
     <div class="context-menu-item" @click.stop="$emit('command', 'delete')">
       <el-icon>
         <Delete />
@@ -82,7 +101,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { InfoFilled, StarFilled, Star, DocumentCopy, Delete, FolderOpened, Folder, Picture, Collection, Download } from "@element-plus/icons-vue";
+import { InfoFilled, StarFilled, Star, DocumentCopy, Delete, FolderOpened, Folder, Picture, Collection, Download, Remove } from "@element-plus/icons-vue";
 import type { ImageInfo } from "@/stores/crawler";
 import ContextMenu from "@/components/ContextMenu.vue";
 
@@ -91,10 +110,16 @@ interface Props {
   position: { x: number; y: number };
   image: ImageInfo | null;
   selectedCount?: number;
+  isImageSelected?: boolean; // 右键的图片是否在选中列表中
 }
 
-const props = defineProps<Props>();
-const selectedCount = computed(() => props.selectedCount || 1);
+const props = withDefaults(defineProps<Props>(), {
+  selectedCount: 1,
+  isImageSelected: true, // 默认值为 true，单选时总是 true，多选时由父组件传递
+});
+
+const selectedCount = computed(() => props.selectedCount);
+const isImageSelected = computed(() => props.isImageSelected);
 
 defineEmits<{
   close: [];

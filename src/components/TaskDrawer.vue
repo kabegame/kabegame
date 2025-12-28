@@ -1,6 +1,37 @@
 <template>
   <el-drawer v-model="visible" title="任务列表" :size="400" direction="rtl" :with-header="true">
     <div class="tasks-drawer-content">
+      <!-- 下载信息区域 -->
+      <div class="downloads-section">
+        <div class="downloads-header">
+          <span class="downloads-title">正在下载</span>
+          <div class="downloads-stats">
+            <el-tag type="info" size="small">队列: {{ queueSize }}</el-tag>
+            <el-tag type="warning" size="small">下载中: {{ activeDownloads.length }}</el-tag>
+          </div>
+        </div>
+        <div v-if="activeDownloads.length === 0 && queueSize === 0" class="downloads-empty">
+          <el-empty description="暂无下载任务" :image-size="60" />
+        </div>
+        <div v-else class="downloads-content">
+          <!-- 正在下载的图片列表 -->
+          <div v-if="activeDownloads.length > 0" class="downloads-list">
+            <div v-for="download in activeDownloads" :key="download.url" class="download-item">
+              <div class="download-info">
+                <div class="download-url" :title="download.url">{{ download.url }}</div>
+                <div class="download-meta">
+                  <el-tag size="small" type="info">{{ download.plugin_id }}</el-tag>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- 队列信息 -->
+          <div v-if="queueSize > 0" class="queue-info">
+            <el-alert :title="`还有 ${queueSize} 个任务在队列中等待下载`" type="info" :closable="false" show-icon />
+          </div>
+        </div>
+      </div>
+
       <div class="tasks-summary">
         <span>共 {{ tasks.length }} 个任务</span>
         <el-button text size="small" class="clear-completed-btn" @click="handleDeleteCompletedTasks"
@@ -189,6 +220,12 @@ import TaskContextMenu from "./TaskContextMenu.vue";
 import type { ImageInfo } from "@/stores/crawler";
 import AddToAlbumDialog from "./AddToAlbumDialog.vue";
 
+interface ActiveDownloadInfo {
+  url: string;
+  plugin_id: string;
+  start_time: number;
+}
+
 interface Props {
   modelValue: boolean;
   tasks: any[];
@@ -247,6 +284,24 @@ const saveConfigDescription = ref("");
 
 const plugins = computed(() => pluginStore.plugins);
 const completedTaskCount = computed(() => props.tasks.filter((t) => t.status === "completed").length);
+
+// 下载信息
+const activeDownloads = ref<ActiveDownloadInfo[]>([]);
+const queueSize = ref(0);
+let downloadRefreshInterval: number | null = null;
+
+const loadDownloads = async () => {
+  try {
+    const [downloads, size] = await Promise.all([
+      invoke<ActiveDownloadInfo[]>("get_active_downloads"),
+      invoke<number>("get_download_queue_size"),
+    ]);
+    activeDownloads.value = downloads;
+    queueSize.value = size;
+  } catch (error) {
+    console.error("加载下载列表失败:", error);
+  }
+};
 
 const getPluginName = (pluginId: string) => {
   const plugin = plugins.value.find((p) => p.id === pluginId);
@@ -538,10 +593,16 @@ const handleGlobalClick = () => {
 
 onMounted(() => {
   window.addEventListener("click", handleGlobalClick);
+  loadDownloads();
+  // 每 1 秒刷新一次下载信息
+  downloadRefreshInterval = window.setInterval(loadDownloads, 1000);
 });
 
 onUnmounted(() => {
   window.removeEventListener("click", handleGlobalClick);
+  if (downloadRefreshInterval !== null) {
+    clearInterval(downloadRefreshInterval);
+  }
 });
 
 const toggleTaskExpand = async (taskId: string) => {
@@ -649,6 +710,81 @@ const handleCopyError = async (task: any) => {
   flex-direction: column;
   height: 100%;
 
+  .downloads-section {
+    padding: 16px;
+    border-bottom: 1px solid var(--anime-border);
+    background: var(--anime-bg-secondary);
+
+    .downloads-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+
+      .downloads-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--anime-text-primary);
+      }
+
+      .downloads-stats {
+        display: flex;
+        gap: 8px;
+      }
+    }
+
+    .downloads-empty {
+      padding: 20px 0;
+    }
+
+    .downloads-content {
+      .downloads-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: 200px;
+        overflow-y: auto;
+        margin-bottom: 12px;
+
+        .download-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 8px 12px;
+          background: var(--anime-bg-card);
+          border-radius: 6px;
+          border: 1px solid var(--anime-border);
+
+          .download-info {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+
+            .download-url {
+              font-size: 12px;
+              color: var(--anime-text-primary);
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+
+            .download-meta {
+              display: flex;
+              align-items: center;
+              gap: 8px;
+            }
+          }
+        }
+      }
+
+      .queue-info {
+        padding: 8px 0;
+      }
+    }
+  }
+
   .tasks-summary {
     padding: 16px;
     border-bottom: 1px solid var(--anime-border);
@@ -665,9 +801,10 @@ const handleCopyError = async (task: any) => {
     flex-direction: column;
     gap: 12px;
     padding: 16px;
-    max-height: calc(100vh - 120px);
+    flex: 1;
     overflow-y: auto;
     position: relative;
+    min-height: 0;
   }
 
   .task-item {

@@ -1,12 +1,6 @@
 <template>
-  <ImageContextMenu
-    :visible="visible"
-    :position="position"
-    :image="image"
-    :selected-count="selectedCount"
-    @close="$emit('close')"
-    @command="$emit('command', $event)"
-  />
+  <ImageContextMenu :visible="visible" :position="position" :image="image" :selected-count="selectedCount"
+    :is-image-selected="isImageSelected" @close="$emit('close')" @command="$emit('command', $event)" />
 </template>
 
 <script setup lang="ts">
@@ -19,11 +13,18 @@ interface Props {
   position: { x: number; y: number };
   image: ImageInfo | null;
   selectedCount?: number; // 选中的图片数量
+  selectedImageIds?: Set<string>; // 选中的图片ID集合
 }
 
 const props = defineProps<Props>();
 
 const selectedCount = computed(() => props.selectedCount || 1);
+const isImageSelected = computed(() => {
+  if (!props.image || !props.selectedImageIds || selectedCount.value === 1) {
+    return true; // 单选时总是返回 true
+  }
+  return props.selectedImageIds.has(props.image.id);
+});
 
 defineEmits<{
   close: [];

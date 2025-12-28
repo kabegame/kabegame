@@ -2,7 +2,8 @@
   <div class="gallery-container" ref="galleryContainerRef">
     <!-- 顶部工具栏 -->
     <GalleryToolbar :filter-plugin-id="filterPluginId" :plugins="plugins" :plugin-icons="pluginIcons"
-      :active-running-tasks-count="activeRunningTasksCount" @update:filter-plugin-id="filterPluginId = $event"
+      :active-running-tasks-count="activeRunningTasksCount" :show-favorites-only="showFavoritesOnly"
+      @update:filter-plugin-id="filterPluginId = $event" @toggle-favorites-only="showFavoritesOnly = !showFavoritesOnly"
       @refresh="loadImages(true)" @show-tasks-drawer="showTasksDrawer = true"
       @show-crawler-dialog="showCrawlerDialog = true" />
 
@@ -44,7 +45,8 @@
 
     <!-- 右键菜单 -->
     <GalleryContextMenu :visible="contextMenuVisible" :position="contextMenuPosition" :image="contextMenuImage"
-      :selected-count="selectedImages.size" @close="contextMenuVisible = false" @command="handleContextMenuCommand" />
+      :selected-count="selectedImages.size" :selected-image-ids="selectedImages" @close="contextMenuVisible = false"
+      @command="handleContextMenuCommand" />
 
     <!-- 图片预览对话框 -->
     <ImagePreviewDialog v-model="showImagePreview" v-model:image-url="previewImageUrl" :image-path="previewImagePath"
@@ -186,7 +188,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick, ref as createRef, shallowRef } from "vue";
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick, ref as createRef, shallowRef } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -201,6 +203,11 @@ import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import LoadMoreButton from "@/components/LoadMoreButton.vue";
+
+// 定义组件名称，确保 keep-alive 能正确识别
+defineOptions({
+  name: "Gallery",
+});
 import GalleryContextMenu from "@/components/GalleryContextMenu.vue";
 
 const DEFAULT_PAGE_SIZE = 50; // 与 store 默认保持一致，用于增量刷新
@@ -212,6 +219,7 @@ const albumStore = useAlbumStore();
 const loading = ref(false);
 const isLoadingMore = ref(false); // 标志：正在加载更多图片
 const filterPluginId = ref<string | null>(null);
+const showFavoritesOnly = ref(false);
 const showCrawlerDialog = ref(false);
 const showTasksDrawer = ref(false);
 const contextMenuVisible = ref(false);
@@ -600,7 +608,7 @@ const confirmAddToAlbum = async () => {
 
 // 获取视口内的图片ID（用于优先加载可见图片）
 const getVisibleImageIds = (): string[] => {
-  const container = document.querySelector(".gallery-container") as HTMLElement | null;
+  const container = galleryContainerRef.value;
   if (!container) return [];
 
   const containerRect = container.getBoundingClientRect();
@@ -762,9 +770,20 @@ const handleContextMenuCommand = async (command: string) => {
       }
       break;
     case 'favorite':
+      // 仅当多选时右键多选的其中一个时才能批量操作
+      if (isMultiSelect && !selectedImages.value.has(image.id)) {
+        ElMessage.warning("请右键点击已选中的图片");
+        return;
+      }
+
       try {
         // 批量收藏/取消收藏
-        const allFavorites = imagesToProcess.every(img => img.favorite);
+        // 先查询哪些图片在收藏画册中
+        const favoriteAlbumId = "00000000-0000-0000-0000-000000000001";
+        const favoriteImageIds = await invoke<string[]>("get_album_image_ids", { albumId: favoriteAlbumId }).catch(() => []);
+        const favoriteSet = new Set(favoriteImageIds);
+
+        const allFavorites = imagesToProcess.every(img => favoriteSet.has(img.id));
         const newFavorite = !allFavorites; // 如果全部已收藏，则取消收藏；否则收藏
 
         // 批量操作
@@ -773,22 +792,14 @@ const handleContextMenuCommand = async (command: string) => {
             imageId: img.id,
             favorite: newFavorite,
           });
-
-          // 更新本地状态
-          const imageIndex = displayedImages.value.findIndex(i => i.id === img.id);
-          if (imageIndex !== -1) {
-            displayedImages.value[imageIndex] = { ...displayedImages.value[imageIndex], favorite: newFavorite };
-          }
-
-          const storeImageIndex = crawlerStore.images.findIndex(i => i.id === img.id);
-          if (storeImageIndex !== -1) {
-            crawlerStore.images[storeImageIndex] = { ...crawlerStore.images[storeImageIndex], favorite: newFavorite };
-          }
         }
 
         ElMessage.success(isMultiSelect
           ? `${imagesToProcess.length} 张图片已${newFavorite ? '收藏' : '取消收藏'}`
           : (newFavorite ? '已收藏' : '已取消收藏'));
+
+        // 重新加载图片以更新状态
+        await loadImages(true);
 
         // 清除选择
         selectedImages.value.clear();
@@ -799,7 +810,17 @@ const handleContextMenuCommand = async (command: string) => {
       }
       break;
     case 'copy':
-      if (!isMultiSelect) {
+      // 仅当多选时右键多选的其中一个时才能批量操作
+      if (isMultiSelect && !selectedImages.value.has(image.id)) {
+        ElMessage.warning("请右键点击已选中的图片");
+        return;
+      }
+
+      if (isMultiSelect) {
+        // 批量复制（暂时只复制第一张，后续可以实现批量复制）
+        await handleCopyImage(imagesToProcess[0]);
+        ElMessage.success(`已复制 ${imagesToProcess.length} 张图片`);
+      } else {
         await handleCopyImage(image);
       }
       break;
@@ -820,14 +841,58 @@ const handleContextMenuCommand = async (command: string) => {
       }
       break;
     case 'wallpaper':
-      if (!isMultiSelect) {
-        try {
+      // 仅当多选时右键多选的其中一个时才能批量操作
+      if (isMultiSelect && !selectedImages.value.has(image.id)) {
+        ElMessage.warning("请右键点击已选中的图片");
+        return;
+      }
+
+      try {
+        if (isMultiSelect) {
+          // 多选：创建"桌面画册x"，添加到画册，开启轮播
+          // 1. 找到下一个可用的"桌面画册x"名称
+          await albumStore.loadAlbums();
+          let albumName = "桌面画册1";
+          let counter = 1;
+          while (albums.value.some(a => a.name === albumName)) {
+            counter++;
+            albumName = `桌面画册${counter}`;
+          }
+
+          // 2. 创建画册
+          const createdAlbum = await albumStore.createAlbum(albumName);
+
+          // 3. 将选中的图片添加到画册
+          const imageIds = imagesToProcess.map(img => img.id);
+          await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
+
+          // 4. 获取当前设置
+          const currentSettings = await invoke<{
+            wallpaperRotationEnabled: boolean;
+            wallpaperRotationAlbumId: string | null;
+          }>("get_settings");
+
+          // 5. 如果轮播未开启，开启它
+          if (!currentSettings.wallpaperRotationEnabled) {
+            await invoke("set_wallpaper_rotation_enabled", { enabled: true });
+          }
+
+          // 6. 设置轮播画册为新创建的画册
+          await invoke("set_wallpaper_rotation_album_id", { albumId: createdAlbum.id });
+
+          ElMessage.success(`已创建画册"${albumName}"并开启壁纸轮播（${imageIds.length} 张）`);
+        } else {
+          // 单选：直接设置壁纸
           await invoke("set_wallpaper", { filePath: image.localPath });
           ElMessage.success("壁纸设置成功");
-        } catch (error) {
-          console.error("设置壁纸失败:", error);
-          ElMessage.error("设置壁纸失败");
         }
+
+        // 清除选择
+        selectedImages.value.clear();
+        lastSelectedIndex.value = -1;
+      } catch (error) {
+        console.error("设置壁纸失败:", error);
+        ElMessage.error("设置壁纸失败: " + (error as Error).message);
       }
       break;
     case 'exportToWE':
@@ -837,7 +902,7 @@ const handleContextMenuCommand = async (command: string) => {
         const defaultName = isMultiSelect
           ? `Kabegami_Gallery_${imagesToProcess.length}_Images`
           : `Kabegami_${image.id}`;
-        
+
         const { value: projectName } = await ElMessageBox.prompt(
           `请输入 WE 工程名称（留空使用默认名称）`,
           "导出到 Wallpaper Engine",
@@ -896,11 +961,71 @@ const handleContextMenuCommand = async (command: string) => {
       }
       break;
     case 'addToAlbum':
+      // 仅当多选时右键多选的其中一个时才能批量操作
+      if (isMultiSelect && !selectedImages.value.has(image.id)) {
+        ElMessage.warning("请右键点击已选中的图片");
+        return;
+      }
+
       openAddToAlbumDialog(imagesToProcess);
+      break;
+    case 'remove':
+      await handleBatchRemove(imagesToProcess);
       break;
     case 'delete':
       await handleBatchDelete(imagesToProcess);
       break;
+  }
+};
+
+// 批量移除图片（只删除缩略图和数据库记录，不删除原图）
+const handleBatchRemove = async (imagesToRemove?: ImageInfo[]) => {
+  // 如果没有传入图片列表，使用选中的图片
+  const imagesToProcess = imagesToRemove || displayedImages.value.filter(img => selectedImages.value.has(img.id));
+
+  if (imagesToProcess.length === 0) return;
+
+  try {
+    const count = imagesToProcess.length;
+    await ElMessageBox.confirm(
+      `移除后将删除缩略图和数据库记录，但保留原图文件。是否继续移除${count > 1 ? `这 ${count} 张图片` : '这张图片'}？`,
+      "确认移除",
+      { type: "warning" }
+    );
+
+    for (const img of imagesToProcess) {
+      await crawlerStore.removeImage(img.id);
+    }
+
+    // 从 displayedImages 中移除已移除的图片
+    displayedImages.value = displayedImages.value.filter(img => !imagesToProcess.some(remImg => remImg.id === img.id));
+
+    // 清理 imageSrcMap 和 Blob URL
+    for (const img of imagesToProcess) {
+      const imageData = imageSrcMap.value[img.id];
+      if (imageData) {
+        if (imageData.thumbnail) {
+          URL.revokeObjectURL(imageData.thumbnail);
+        }
+        if (imageData.original) {
+          URL.revokeObjectURL(imageData.original);
+        }
+        delete imageSrcMap.value[img.id];
+      }
+    }
+
+    // 清除选择
+    for (const img of imagesToProcess) {
+      selectedImages.value.delete(img.id);
+    }
+    lastSelectedIndex.value = -1;
+
+    ElMessage.success(`${count > 1 ? `已移除 ${count} 张图片` : '已移除图片'}`);
+  } catch (error) {
+    if (error !== "cancel") {
+      console.error("移除图片失败:", error);
+      ElMessage.error("移除失败");
+    }
   }
 };
 
@@ -1027,7 +1152,7 @@ const refreshImagesPreserveCache = async (
   try {
     const preserveScroll = opts.preserveScroll ?? false;
     const container = preserveScroll
-      ? (document.querySelector('.gallery-container') as HTMLElement | null)
+      ? galleryContainerRef.value
       : null;
     const prevScrollTop = container?.scrollTop ?? 0;
 
@@ -1035,7 +1160,7 @@ const refreshImagesPreserveCache = async (
     const oldMap = new Map<string, ImageInfo>();
     displayedImages.value.forEach((img) => oldMap.set(img.id, img));
 
-    await crawlerStore.loadImages(reset, filterPluginId.value);
+    await crawlerStore.loadImages(reset, filterPluginId.value, showFavoritesOnly.value);
 
     // 用新的顺序生成列表：已有的复用旧引用，新图片使用新对象
     const merged = crawlerStore.images.map((img) => oldMap.get(img.id) ?? img);
@@ -1051,9 +1176,12 @@ const refreshImagesPreserveCache = async (
     if (preserveScroll && container) {
       container.scrollTop = prevScrollTop;
     } else if (reset) {
-      const c = container ?? (document.querySelector('.gallery-container') as HTMLElement | null);
+      const c = container ?? galleryContainerRef.value;
       if (c) c.scrollTop = 0;
     }
+
+    selectedImages.value.clear();
+    lastSelectedIndex.value = -1;
   } finally {
     loading.value = false;
   }
@@ -1099,22 +1227,22 @@ const loadMoreImages = async () => {
   }
 
   isLoadingMore.value = true; // 设置标志，防止 watch 触发
-  const container = document.querySelector('.gallery-container') as HTMLElement | null;
+  const container = galleryContainerRef.value;
   const prevScrollTop = container?.scrollTop ?? 0;
   const prevScrollHeight = container?.scrollHeight ?? 0;
 
   // 暂时停止 watch，避免在更新时触发重新渲染
-  if (imageListWatch) {
-    imageListWatch();
-    imageListWatch = null;
-  }
+  // if (imageListWatch) {
+  //   imageListWatch();
+  //   imageListWatch = null;
+  // }
 
   try {
     // 记录加载前的图片数量
     const beforeCount = displayedImages.value.length;
 
     // 调用 store 的 loadImages，传入 false 表示追加而不是重置
-    await crawlerStore.loadImages(false, filterPluginId.value);
+    await crawlerStore.loadImages(false, filterPluginId.value, showFavoritesOnly.value);
 
     // 只追加新图片到 displayedImages
     // 创建一个新数组而不是直接 push，让 Vue 能够正确使用 key 进行 diff
@@ -1124,22 +1252,17 @@ const loadMoreImages = async () => {
       // 这样可以避免触发整个列表的重新渲染
       displayedImages.value.push(...newImages);
 
-      // 等待 Vue 完成 DOM 更新，让新图片先渲染出来（显示 skeleton）
-      await nextTick();
-      await nextTick(); // 双重 nextTick 确保 DOM 更新完成
-
-      // 再等待一个渲染帧，确保 DOM 完全更新
-      await new Promise(resolve => requestAnimationFrame(resolve));
-
       // 仅为新增的图片加载 URL，避免触发旧图重新加载
       await loadImageUrls(newImages);
+      selectedImages.value.clear();
+      lastSelectedIndex.value = -1;
     }
   } catch (error) {
     console.error("加载更多图片失败:", error);
     ElMessage.error("加载失败");
   } finally {
     // 重新启用 watch
-    setupImageListWatch(false); // 重新监听但不立即触发，避免全量重新加载
+    // setupImageListWatch(false); // 重新监听但不立即触发，避免全量重新加载
     // 延迟重置标志，确保 watch 不会立即触发
     setTimeout(() => {
       isLoadingMore.value = false;
@@ -1372,6 +1495,13 @@ watch(selectedRunConfigId, async (cfgId) => {
 // 监听筛选插件ID变化，重新加载图片
 watch(filterPluginId, () => {
   loadImages(true);
+});
+
+// 监听仅显示收藏变化，重新加载图片
+watch(showFavoritesOnly, () => {
+  loadImages(true);
+  selectedImages.value.clear();
+  lastSelectedIndex.value = -1;
 });
 
 // 监听图片列表变化，加载图片 URL
@@ -1717,6 +1847,59 @@ onMounted(async () => {
 // 在开发环境中监控组件更新，帮助调试重新渲染问题
 // 开发期调试日志已移除，保持生产干净输出
 
+// 组件激活时（keep-alive 缓存后重新显示）
+onActivated(async () => {
+  // 如果图片列表为空，需要重新加载
+  if (displayedImages.value.length === 0) {
+    await loadImages(true);
+    return;
+  }
+
+  // 检查并重新加载缺失的图片 URL
+  // 统计缺失 URL 的图片数量
+  let missingCount = 0;
+  const imagesToReload: ImageInfo[] = [];
+
+  for (const img of displayedImages.value) {
+    const imageData = imageSrcMap.value[img.id];
+    if (!imageData || (!imageData.thumbnail && !imageData.original)) {
+      missingCount++;
+      imagesToReload.push(img);
+    } else {
+      // 检查 Blob URL 是否仍然有效（在 blobUrls Set 中）
+      const hasValidThumbnail = imageData.thumbnail && blobUrls.has(imageData.thumbnail);
+      const hasValidOriginal = imageData.original && blobUrls.has(imageData.original);
+
+      if (!hasValidThumbnail && !hasValidOriginal) {
+        // Blob URL 已失效，需要重新加载
+        missingCount++;
+        imagesToReload.push(img);
+        // 清理无效的条目
+        delete imageSrcMap.value[img.id];
+        loadedImageIds.delete(img.id);
+      }
+    }
+  }
+
+  // 如果缺失的图片数量较多（超过 10%），重新加载所有缺失的 URL
+  if (missingCount > 0) {
+    if (missingCount > displayedImages.value.length * 0.1) {
+      // 缺失较多，重新加载所有缺失的图片 URL
+      loadImageUrls(imagesToReload);
+    } else {
+      // 缺失较少，只加载缺失的部分
+      loadImageUrls(imagesToReload);
+    }
+  }
+});
+
+// 组件停用时（keep-alive 缓存，但不清理 Blob URL）
+onDeactivated(() => {
+  // keep-alive 缓存时不清理 Blob URL，保持图片 URL 有效
+  // 只移除事件监听器（如果需要的话）
+});
+
+// 组件真正卸载时（不是 keep-alive 缓存）
 onUnmounted(() => {
   // 移除键盘事件监听
   window.removeEventListener('keydown', handleKeyDown);
@@ -1732,12 +1915,13 @@ onUnmounted(() => {
     container.removeEventListener('scroll', handleScroll);
   }
 
-  // 释放所有 Blob URL，避免内存泄漏
+  // 释放所有 Blob URL，避免内存泄漏（只在真正卸载时清理）
   blobUrls.forEach(url => {
     URL.revokeObjectURL(url);
   });
   blobUrls.clear();
-  window.removeEventListener('resize', handleResize);
+  imageSrcMap.value = {};
+  loadedImageIds.clear();
 
   // 移除任务错误显示事件监听
   const handler = (window as any).__taskErrorDisplayHandler;

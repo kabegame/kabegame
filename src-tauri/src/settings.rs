@@ -26,6 +26,16 @@ fn default_wallpaper_mode() -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WindowState {
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub width: f64,
+    pub height: f64,
+    pub maximized: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub auto_launch: bool,
     pub max_concurrent_downloads: u32,
@@ -52,6 +62,8 @@ pub struct AppSettings {
     pub wallpaper_rotation_transition: String, // 过渡方式："none"（无）、"fade"（淡入淡出）
     #[serde(default = "default_wallpaper_mode")]
     pub wallpaper_mode: String, // 壁纸模式："native"（原生）、"window"（窗口句柄）
+    #[serde(default)]
+    pub window_state: Option<WindowState>, // 窗口位置和大小
 }
 
 impl Default for AppSettings {
@@ -73,6 +85,7 @@ impl Default for AppSettings {
             wallpaper_rotation_style: "fill".to_string(),
             wallpaper_rotation_transition: "none".to_string(),
             wallpaper_mode: "native".to_string(),
+            window_state: None,
         }
     }
 }
@@ -607,6 +620,28 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
     pub fn set_wallpaper_mode(&self, mode: String) -> Result<(), String> {
         let mut settings = self.get_settings()?;
         settings.wallpaper_mode = mode;
+        self.save_settings(&settings)?;
+        Ok(())
+    }
+
+    /// 保存窗口状态
+    pub fn save_window_state(&self, window_state: WindowState) -> Result<(), String> {
+        let mut settings = self.get_settings()?;
+        settings.window_state = Some(window_state);
+        self.save_settings(&settings)?;
+        Ok(())
+    }
+
+    /// 获取窗口状态
+    pub fn get_window_state(&self) -> Result<Option<WindowState>, String> {
+        let settings = self.get_settings()?;
+        Ok(settings.window_state)
+    }
+
+    /// 清除窗口状态（用于清理数据时）
+    pub fn clear_window_state(&self) -> Result<(), String> {
+        let mut settings = self.get_settings()?;
+        settings.window_state = None;
         self.save_settings(&settings)?;
         Ok(())
     }

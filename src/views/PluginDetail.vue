@@ -7,7 +7,7 @@
                         <ArrowLeft />
                     </el-icon>
                 </el-button>
-                <div class="plugin-icon-header" v-if="plugin?.icon">
+                <div class="plugin-icon-header" v-if="plugin?.icon && plugin.icon.startsWith('data:')">
                     <el-image :src="plugin.icon" fit="contain" class="plugin-icon-image" />
                 </div>
                 <div class="plugin-icon-placeholder-header" v-else>

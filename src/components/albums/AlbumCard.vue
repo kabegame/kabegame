@@ -1,25 +1,36 @@
 <template>
-  <div class="album-card" @click="$emit('click')" @mouseenter="$emit('mouseenter')">
+  <div class="album-card" :data-album-id="album.id" @click="handleCardClick" @mouseenter="$emit('mouseenter')">
     <div class="hero">
-      <div v-for="(url, idx) in heroAll" :key="idx" class="hero-img" :class="heroClass(idx)"
-        :style="heroStyle(url)">
+      <div v-for="(url, idx) in heroAll" :key="idx" class="hero-img" :class="heroClass(idx)" :style="heroStyle(url)">
         <div v-if="!url && loadingStates[idx]" class="hero-loading">
-          <el-icon class="loading-icon"><Loading /></el-icon>
+          <el-icon class="loading-icon">
+            <Loading />
+          </el-icon>
         </div>
       </div>
       <div v-if="heroAll.length === 0 && !isLoading" class="hero-empty">No Preview</div>
       <div v-if="isLoading && heroAll.length === 0" class="hero-loading-full">
-        <el-icon class="loading-icon"><Loading /></el-icon>
+        <el-icon class="loading-icon">
+          <Loading />
+        </el-icon>
       </div>
       <div class="hero-btn left" v-if="heroAll.length > 1" @click.stop="prevHero">
-        <el-icon><ArrowLeft /></el-icon>
+        <el-icon>
+          <ArrowLeft />
+        </el-icon>
       </div>
       <div class="hero-btn right" v-if="heroAll.length > 1" @click.stop="nextHero">
-        <el-icon><ArrowRight /></el-icon>
+        <el-icon>
+          <ArrowRight />
+        </el-icon>
       </div>
     </div>
     <div class="info">
-      <div class="title">{{ album.name }}</div>
+      <div class="title-wrapper">
+        <el-input v-if="isRenaming" v-model="renameValue" ref="renameInputRef" size="small" @blur="handleRenameBlur"
+          @keyup.enter="handleRenameConfirm" @keyup.esc="handleRenameCancel" class="rename-input" />
+        <div v-else class="title" @dblclick="handleStartRename">{{ album.name }}</div>
+      </div>
       <div class="meta">
         <span>{{ count }} 张</span>
         <span v-if="album.createdAt">· 创建 {{ formatDate(album.createdAt) }}</span>
@@ -29,10 +40,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, nextTick } from "vue";
+import { ElMessage } from "element-plus";
 import type { Album } from "@/stores/albums";
-import type { ImageInfo } from "@/stores/crawler";
 import { ArrowLeft, ArrowRight, Loading } from "@element-plus/icons-vue";
+import { useAlbumStore } from "@/stores/albums";
 
 interface Props {
   album: Album;
@@ -47,7 +59,97 @@ const props = withDefaults(defineProps<Props>(), {
   isLoading: false,
 });
 
-const previewThumbs = computed(() => props.previewUrls.slice(0, 6));
+const albumStore = useAlbumStore();
+const isRenaming = ref(false);
+const renameValue = ref("");
+const renameInputRef = ref<any>(null);
+const lastClickTime = ref(0);
+const clickTimer = ref<number | null>(null);
+
+const emit = defineEmits<{
+  click: [];
+  mouseenter: [];
+}>();
+
+// 暴露方法供外部调用
+defineExpose({
+  startRename: () => {
+    handleStartRename();
+  },
+});
+
+const handleCardClick = () => {
+  // 如果正在重命名，不触发打开抽屉
+  if (isRenaming.value) {
+    return;
+  }
+  // 检查是否是双击（在 300ms 内）
+  const now = Date.now();
+  if (now - lastClickTime.value < 300) {
+    // 双击，但已经在 handleStartRename 中处理了，这里不触发打开抽屉
+    if (clickTimer.value) {
+      clearTimeout(clickTimer.value);
+      clickTimer.value = null;
+    }
+    return;
+  }
+  lastClickTime.value = now;
+  // 延迟触发，如果是双击则会被取消
+  clickTimer.value = window.setTimeout(() => {
+    emit('click');
+    clickTimer.value = null;
+  }, 300);
+};
+
+const handleStartRename = (event?: MouseEvent) => {
+  if (event) {
+    event.stopPropagation(); // 阻止事件冒泡，避免触发打开抽屉
+  }
+  // 取消可能存在的单击定时器
+  if (clickTimer.value) {
+    clearTimeout(clickTimer.value);
+    clickTimer.value = null;
+  }
+  isRenaming.value = true;
+  renameValue.value = props.album.name;
+  nextTick(() => {
+    const inputEl = renameInputRef.value?.$el?.querySelector('input') as HTMLInputElement | null;
+    if (inputEl) {
+      inputEl.focus();
+      inputEl.select();
+    }
+  });
+};
+
+const handleRenameConfirm = async () => {
+  if (!renameValue.value.trim()) {
+    ElMessage.warning("画册名称不能为空");
+    return;
+  }
+  if (renameValue.value.trim() === props.album.name) {
+    isRenaming.value = false;
+    return;
+  }
+  try {
+    await albumStore.renameAlbum(props.album.id, renameValue.value.trim());
+    isRenaming.value = false;
+    ElMessage.success("重命名成功");
+  } catch (error) {
+    console.error("重命名失败:", error);
+    ElMessage.error("重命名失败: " + (error as Error).message);
+    renameValue.value = props.album.name;
+  }
+};
+
+const handleRenameBlur = () => {
+  handleRenameConfirm();
+};
+
+const handleRenameCancel = () => {
+  renameValue.value = props.album.name;
+  isRenaming.value = false;
+};
+
 const heroIndex = ref(0);
 const heroAll = computed(() => {
   // 确保至少有6个位置，即使URL为空也保留位置用于显示加载状态
@@ -84,11 +186,6 @@ const prevHero = () => {
   heroIndex.value = (heroIndex.value - 1 + heroAll.value.length) % heroAll.value.length;
 };
 
-const thumbStyle = (url: string, idx: number) => ({
-  backgroundImage: `url(${url})`,
-  zIndex: 6 - idx,
-});
-
 const formatDate = (ts?: number) => {
   if (!ts) return "";
   const d = new Date(ts * 1000);
@@ -113,163 +210,186 @@ const formatDate = (ts?: number) => {
   border: 1px solid rgba(120, 140, 180, 0.18);
 
   &:hover {
-  transform: translateY(-6px) scale(1.02);
-  box-shadow: 0 14px 30px rgba(80, 90, 120, 0.28), 0 0 18px rgba(255, 170, 200, 0.35);
-  border-color: rgba(255, 170, 200, 0.35);
+    transform: translateY(-6px) scale(1.02);
+    box-shadow: 0 14px 30px rgba(80, 90, 120, 0.28), 0 0 18px rgba(255, 170, 200, 0.35);
+    border-color: rgba(255, 170, 200, 0.35);
 
     .hero-btn {
       opacity: 1;
     }
-}
+  }
 
-.hero {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-}
+  .hero {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
 
-.hero-img {
-  position: absolute;
-  width: 70%;
-  height: 70%;
-  background-size: cover;
-  background-position: center;
-  border-radius: 14px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  transition: transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.45s ease;
-  opacity: 0;
+  .hero-img {
+    position: absolute;
+    width: 70%;
+    height: 70%;
+    background-size: cover;
+    background-position: center;
+    border-radius: 14px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    transition: transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.45s ease;
+    opacity: 0;
 
     &.is-center {
-  transform: translateX(0) scale(1);
-  opacity: 1;
-  z-index: 3;
-}
+      transform: translateX(0) scale(1);
+      opacity: 1;
+      z-index: 3;
+    }
 
     &.is-left {
-  transform: translateX(-45%) scale(0.9);
-  opacity: 0.7;
-  z-index: 2;
-  filter: brightness(0.75);
-}
+      transform: translateX(-45%) scale(0.9);
+      opacity: 0.7;
+      z-index: 2;
+      filter: brightness(0.75);
+    }
 
     &.is-right {
-  transform: translateX(45%) scale(0.9);
-  opacity: 0.7;
-  z-index: 2;
-  filter: brightness(0.75);
-}
+      transform: translateX(45%) scale(0.9);
+      opacity: 0.7;
+      z-index: 2;
+      filter: brightness(0.75);
+    }
 
     &.is-hidden {
-  opacity: 0;
-  transform: translateX(0) scale(0.8);
-  z-index: 1;
+      opacity: 0;
+      transform: translateX(0) scale(0.8);
+      z-index: 1;
     }
-}
-
-.hero-empty {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(31, 42, 68, 0.6);
-  font-size: 12px;
-  background: rgba(255, 255, 255, 0.35);
-  border-radius: 14px;
-}
-
-.hero-loading {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.5);
-  border-radius: 14px;
-  z-index: 10;
-}
-
-.hero-loading-full {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.5);
-  border-radius: 14px;
-  z-index: 10;
-}
-
-.loading-icon {
-  font-size: 24px;
-  color: var(--anime-primary);
-  animation: rotate 1s linear infinite;
-}
-
-@keyframes rotate {
-  from {
-    transform: rotate(0deg);
   }
-  to {
-    transform: rotate(360deg);
-  }
-}
 
-.hero-btn {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.14);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.2s ease, background 0.2s ease;
-  pointer-events: auto;
+  .hero-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(31, 42, 68, 0.6);
+    font-size: 12px;
+    background: rgba(255, 255, 255, 0.35);
+    border-radius: 14px;
+  }
+
+  .hero-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: 14px;
+    z-index: 10;
+  }
+
+  .hero-loading-full {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: 14px;
+    z-index: 10;
+  }
+
+  .loading-icon {
+    font-size: 24px;
+    color: var(--anime-primary);
+    animation: rotate 1s linear infinite;
+  }
+
+  @keyframes rotate {
+    from {
+      transform: rotate(0deg);
+    }
+
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .hero-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.14);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s ease, background 0.2s ease;
+    pointer-events: auto;
 
     &.left {
-  left: 8px;
-}
+      left: 8px;
+    }
 
     &.right {
-  right: 8px;
-}
+      right: 8px;
+    }
 
     &:hover {
-  background: rgba(0, 0, 0, 0.25);
+      background: rgba(0, 0, 0, 0.25);
     }
-}
+  }
 
-.info {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 12px 14px;
-  background: linear-gradient(to top, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.65));
-  color: #1f2a44;
-  z-index: 5;
-}
+  .info {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 12px 14px;
+    background: linear-gradient(to top, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.65));
+    color: #1f2a44;
+    z-index: 5;
+  }
 
-.title {
-  font-size: 15px;
-  font-weight: 700;
-  margin-bottom: 4px;
-  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.6);
-}
+  .title-wrapper {
+    margin-bottom: 4px;
+  }
 
-.meta {
-  font-size: 12px;
-  color: rgba(31, 42, 68, 0.8);
-}
+  .title {
+    font-size: 15px;
+    font-weight: 700;
+    text-shadow: 0 1px 3px rgba(255, 255, 255, 0.6);
+    cursor: text;
+    user-select: none;
+
+    &:hover {
+      opacity: 0.8;
+    }
+  }
+
+  .rename-input {
+    :deep(.el-input__wrapper) {
+      padding: 2px 8px;
+      box-shadow: 0 0 0 1px var(--el-color-primary) inset;
+    }
+
+    :deep(.el-input__inner) {
+      font-size: 15px;
+      font-weight: 700;
+      padding: 0;
+      height: auto;
+    }
+  }
+
+  .meta {
+    font-size: 12px;
+    color: rgba(31, 42, 68, 0.8);
+  }
 }
 </style>
-

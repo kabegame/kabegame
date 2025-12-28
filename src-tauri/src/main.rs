@@ -28,12 +28,15 @@ mod wallpaper;
 mod wallpaper_engine_export;
 
 use crawler::{crawl_images, ActiveDownloadInfo, CrawlResult};
+use dirs;
 use plugin::{BrowserPlugin, Plugin, PluginManager};
-use settings::{AppSettings, Settings};
+use settings::{AppSettings, Settings, WindowState};
+use std::fs;
+use std::path::PathBuf;
 use storage::{Album, ImageInfo, PaginatedImages, RunConfig, Storage, TaskInfo};
-use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
 #[cfg(target_os = "windows")]
 use wallpaper::manager::GdiWallpaperManager;
+use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
 use wallpaper_engine_export::{export_album_to_we_project, export_images_to_we_project};
 
 #[tauri::command]
@@ -159,9 +162,10 @@ fn get_images_paginated(
     page: usize,
     page_size: usize,
     plugin_id: Option<String>,
+    favorites_only: Option<bool>,
     state: tauri::State<Storage>,
 ) -> Result<PaginatedImages, String> {
-    state.get_images_paginated(page, page_size, plugin_id.as_deref())
+    state.get_images_paginated(page, page_size, plugin_id.as_deref(), favorites_only)
 }
 
 #[tauri::command]
@@ -172,6 +176,15 @@ fn get_albums(state: tauri::State<Storage>) -> Result<Vec<Album>, String> {
 #[tauri::command]
 fn add_album(name: String, state: tauri::State<Storage>) -> Result<Album, String> {
     state.add_album(&name)
+}
+
+#[tauri::command]
+fn rename_album(
+    album_id: String,
+    new_name: String,
+    state: tauri::State<Storage>,
+) -> Result<(), String> {
+    state.rename_album(&album_id, &new_name)
 }
 
 #[tauri::command]
@@ -194,6 +207,14 @@ fn get_album_images(
     state: tauri::State<Storage>,
 ) -> Result<Vec<ImageInfo>, String> {
     state.get_album_images(&album_id)
+}
+
+#[tauri::command]
+fn get_album_image_ids(
+    album_id: String,
+    state: tauri::State<Storage>,
+) -> Result<Vec<String>, String> {
+    state.get_album_image_ids(&album_id)
 }
 
 #[tauri::command]
@@ -239,6 +260,48 @@ fn get_images_count(
 #[tauri::command]
 fn delete_image(image_id: String, state: tauri::State<Storage>) -> Result<(), String> {
     state.delete_image(&image_id)
+}
+
+#[tauri::command]
+fn remove_image(image_id: String, state: tauri::State<Storage>) -> Result<(), String> {
+    state.remove_image(&image_id)
+}
+
+// 获取应用数据目录路径
+fn get_app_data_dir_for_clear() -> PathBuf {
+    dirs::data_local_dir()
+        .or_else(|| dirs::data_dir())
+        .expect("Failed to get app data directory")
+        .join("Kabegami Crawler")
+}
+
+// 清理应用数据（仅用户数据，不包括应用本身）
+#[tauri::command]
+async fn clear_user_data(app: tauri::AppHandle) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir_for_clear();
+
+    if !app_data_dir.exists() {
+        return Ok(()); // 目录不存在，无需清理
+    }
+
+    // 清除窗口状态（清理数据时不保存窗口位置）
+    if let Some(settings_state) = app.try_state::<Settings>() {
+        let _ = settings_state.clear_window_state();
+    }
+
+    // 方案：创建清理标记文件，在应用重启后清理
+    // 这样可以避免删除正在使用的文件
+    let cleanup_marker = app_data_dir.join(".cleanup_marker");
+    fs::write(&cleanup_marker, "1")
+        .map_err(|e| format!("Failed to create cleanup marker: {}", e))?;
+
+    // 延迟重启，确保响应已发送
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        app.restart();
+    });
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -957,17 +1020,26 @@ fn set_wallpaper_mode(
             target.init(app_clone.clone())?;
             eprintln!("[DEBUG] set_wallpaper_mode: target.init 完成");
             // 先切换壁纸路径
-            eprintln!("[DEBUG] set_wallpaper_mode: 调用 target.set_wallpaper_path: {}", resolved_wallpaper);
+            eprintln!(
+                "[DEBUG] set_wallpaper_mode: 调用 target.set_wallpaper_path: {}",
+                resolved_wallpaper
+            );
             target.set_wallpaper_path(&resolved_wallpaper, true)?;
             eprintln!("[DEBUG] set_wallpaper_mode: target.set_wallpaper_path 完成");
             // 再应用样式
-            eprintln!("[DEBUG] set_wallpaper_mode: 调用 target.set_style: {}", s.wallpaper_rotation_style);
+            eprintln!(
+                "[DEBUG] set_wallpaper_mode: 调用 target.set_style: {}",
+                s.wallpaper_rotation_style
+            );
             target.set_style(&s.wallpaper_rotation_style, true)?;
             eprintln!("[DEBUG] set_wallpaper_mode: target.set_style 完成");
             // 过渡效果属于轮播能力：只在轮播启用时做立即预览
             if s.wallpaper_rotation_enabled {
                 // 最后应用transition
-                eprintln!("[DEBUG] set_wallpaper_mode: 调用 target.set_transition: {}", s.wallpaper_rotation_transition);
+                eprintln!(
+                    "[DEBUG] set_wallpaper_mode: 调用 target.set_transition: {}",
+                    s.wallpaper_rotation_transition
+                );
                 target.set_transition(&s.wallpaper_rotation_transition, true)?;
                 eprintln!("[DEBUG] set_wallpaper_mode: target.set_transition 完成");
             }
@@ -1121,9 +1193,9 @@ fn test_gdi_wallpaper(
     style: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
+    use crate::wallpaper::manager::WallpaperManager;
     use std::sync::Arc;
     use std::sync::OnceLock;
-    use crate::wallpaper::manager::WallpaperManager;
 
     // 全局单例，用于测试（实际应用中应该由 WallpaperController 管理）
     static GDI_MANAGER: OnceLock<Arc<GdiWallpaperManager>> = OnceLock::new();
@@ -1155,7 +1227,7 @@ fn test_gdi_wallpaper(
 /// 解决壁纸窗口尚未注册事件监听时，后端先 emit 导致事件丢失的问题。
 #[tauri::command]
 #[cfg(target_os = "windows")]
-fn wallpaper_window_ready(app: tauri::AppHandle) -> Result<(), String> {
+fn wallpaper_window_ready(_app: tauri::AppHandle) -> Result<(), String> {
     // 标记窗口已完全初始化
     println!("壁纸窗口已就绪");
     WallpaperWindow::mark_ready();
@@ -1278,6 +1350,47 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            // 检查清理标记，如果存在则先清理旧数据目录
+            let app_data_dir = get_app_data_dir_for_clear();
+            let cleanup_marker = app_data_dir.join(".cleanup_marker");
+            let is_cleaning_data = cleanup_marker.exists();
+            if is_cleaning_data {
+                // 删除标记文件
+                let _ = fs::remove_file(&cleanup_marker);
+                // 尝试删除整个数据目录
+                if app_data_dir.exists() {
+                    // 使用多次重试，因为文件可能还在被其他进程使用
+                    let mut retries = 5;
+                    while retries > 0 {
+                        match fs::remove_dir_all(&app_data_dir) {
+                            Ok(_) => {
+                                println!("成功清理应用数据目录");
+                                break;
+                            }
+                            Err(e) => {
+                                retries -= 1;
+                                if retries == 0 {
+                                    eprintln!(
+                                        "警告：无法完全清理数据目录，部分文件可能仍在使用中: {}",
+                                        e
+                                    );
+                                    // 尝试删除单个文件而不是整个目录
+                                    // 至少删除数据库和设置文件
+                                    let _ = fs::remove_file(app_data_dir.join("images.db"));
+                                    let _ = fs::remove_file(app_data_dir.join("settings.json"));
+                                    let _ = fs::remove_file(app_data_dir.join("plugins.json"));
+                                    let _ =
+                                        fs::remove_file(app_data_dir.join("plugin_favorites.json"));
+                                } else {
+                                    // 等待一段时间后重试
+                                    std::thread::sleep(std::time::Duration::from_millis(200));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // 初始化插件管理器
             let plugin_manager = PluginManager::new(app.app_handle().clone());
             app.manage(plugin_manager);
@@ -1292,6 +1405,36 @@ fn main() {
             // 初始化设置管理器
             let settings = Settings::new(app.app_handle().clone());
             app.manage(settings);
+
+            // 恢复窗口状态（如果不在清理数据模式）
+            if !is_cleaning_data {
+                if let Some(main_window) = app.get_webview_window("main") {
+                    let settings = app.state::<Settings>();
+                    if let Ok(Some(window_state)) = settings.get_window_state() {
+                        // 恢复窗口大小
+                        if let Err(e) = main_window.set_size(tauri::LogicalSize::new(
+                            window_state.width,
+                            window_state.height,
+                        )) {
+                            eprintln!("恢复窗口大小失败: {}", e);
+                        }
+                        // 恢复窗口位置
+                        if let (Some(x), Some(y)) = (window_state.x, window_state.y) {
+                            if let Err(e) =
+                                main_window.set_position(tauri::LogicalPosition::new(x, y))
+                            {
+                                eprintln!("恢复窗口位置失败: {}", e);
+                            }
+                        }
+                        // 恢复最大化状态
+                        if window_state.maximized {
+                            if let Err(e) = main_window.maximize() {
+                                eprintln!("恢复窗口最大化状态失败: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
 
             // 初始化下载队列管理器
             let download_queue = crawler::DownloadQueue::new(app.app_handle().clone());
@@ -1381,12 +1524,15 @@ fn main() {
             get_albums,
             add_album,
             delete_album,
+            rename_album,
             add_images_to_album,
             get_album_images,
+            get_album_image_ids,
             get_album_preview,
             get_album_counts,
             get_images_count,
             delete_image,
+            remove_image,
             toggle_image_favorite,
             open_file_path,
             open_file_folder,
@@ -1437,7 +1583,38 @@ fn main() {
             // Wallpaper Engine 导出
             export_album_to_we_project,
             export_images_to_we_project,
+            clear_user_data,
         ])
+        .on_window_event(|window, event| {
+            use tauri::WindowEvent;
+            // 监听窗口关闭事件，保存窗口状态
+            if let WindowEvent::CloseRequested { .. } = event {
+                if window.label() == "main" {
+                    // 获取窗口状态
+                    let position = window.outer_position().ok();
+                    let size = window.outer_size().ok();
+                    let maximized = window.is_maximized().unwrap_or(false);
+
+                    if let (Some(pos), Some(sz)) = (position, size) {
+                        // 如果窗口是最大化的，保存最大化前的状态
+                        let window_state = WindowState {
+                            x: if maximized { None } else { Some(pos.x as f64) },
+                            y: if maximized { None } else { Some(pos.y as f64) },
+                            width: sz.width as f64,
+                            height: sz.height as f64,
+                            maximized,
+                        };
+
+                        // 保存窗口状态
+                        if let Some(settings_state) = window.app_handle().try_state::<Settings>() {
+                            if let Err(e) = settings_state.save_window_state(window_state) {
+                                eprintln!("保存窗口状态失败: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

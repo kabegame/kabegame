@@ -1,31 +1,31 @@
 <template>
   <div class="albums-page">
     <PageHeader title="画册">
+      <el-button circle size="small" @click="handleRefresh" :loading="isRefreshing">
+        <el-icon>
+          <Refresh />
+        </el-icon>
+      </el-button>
       <el-button type="primary" size="small" @click="showCreateDialog = true">新建画册</el-button>
     </PageHeader>
 
     <div class="albums-grid">
-      <AlbumCard v-for="album in albums" :key="album.id" :album="album" :count="albumCounts[album.id] || 0"
-        :preview-urls="albumPreviewUrls[album.id] || []" 
-        :loading-states="albumLoadingStates[album.id] || []"
-        :is-loading="albumIsLoading[album.id] || false"
+      <AlbumCard v-for="album in albums" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
+        :count="albumCounts[album.id] || 0" :preview-urls="albumPreviewUrls[album.id] || []"
+        :loading-states="albumLoadingStates[album.id] || []" :is-loading="albumIsLoading[album.id] || false"
         @click="openAlbum(album)" @mouseenter="prefetchPreview(album)"
         @contextmenu.prevent="openAlbumContextMenu($event, album)" />
     </div>
 
     <div v-if="albums.length === 0" class="empty-tip">暂无画册，点击右上角创建</div>
 
-    <AlbumContextMenu
-      :visible="albumMenuVisible"
-      :position="albumMenuPosition"
-      :album-id="menuAlbum?.id"
-      :current-rotation-album-id="currentRotationAlbumId"
-      :wallpaper-rotation-enabled="wallpaperRotationEnabled"
-      @close="closeAlbumContextMenu"
-      @command="handleAlbumMenuCommand"
-    />
+    <AlbumContextMenu :visible="albumMenuVisible" :position="albumMenuPosition" :album-id="menuAlbum?.id"
+      :album-name="menuAlbum?.name" :current-rotation-album-id="currentRotationAlbumId"
+      :wallpaper-rotation-enabled="wallpaperRotationEnabled" @close="closeAlbumContextMenu"
+      @command="handleAlbumMenuCommand" />
 
-    <el-drawer v-model="drawerVisible" :title="currentAlbum?.name || '画册'" size="70%" append-to-body>
+    <el-drawer v-model="drawerVisible" :title="currentAlbum?.name || '画册'" size="70%" append-to-body
+      :show-header="false">
       <template #header>
         <div class="drawer-header">
           <div class="drawer-title">{{ currentAlbum?.name || '画册' }}</div>
@@ -46,7 +46,8 @@
           <div class="album-grid">
             <ImageGrid :images="currentImages" :image-url-map="imageSrcMap" image-click-action="preview" :columns="0"
               :aspect-ratio-match-window="false" :window-aspect-ratio="16 / 9" :selected-images="selectedImages"
-              @image-click="handleImageClick" @image-dbl-click="handleImageDblClick" @contextmenu="handleImageContextMenu" />
+              @image-click="handleImageClick" @image-dbl-click="handleImageDblClick"
+              @contextmenu="handleImageContextMenu" />
           </div>
         </template>
       </div>
@@ -74,8 +75,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, computed, nextTick } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { Refresh } from "@element-plus/icons-vue";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -99,6 +101,9 @@ const crawlerStore = useCrawlerStore();
 const { albums, albumCounts } = storeToRefs(albumStore);
 const router = useRouter();
 
+// 收藏画册的固定ID（与后端保持一致）
+const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
+
 // 当前轮播画册ID
 const currentRotationAlbumId = ref<string | null>(null);
 // 轮播是否开启
@@ -119,6 +124,8 @@ const selectedDetailImage = ref<ImageInfo | null>(null);
 
 const showCreateDialog = ref(false);
 const newAlbumName = ref("");
+const isRefreshing = ref(false);
+const albumCardRefs = ref<Record<string, any>>({});
 
 const loadRotationSettings = async () => {
   try {
@@ -136,7 +143,7 @@ const loadRotationSettings = async () => {
 onMounted(async () => {
   await albumStore.loadAlbums();
   await loadRotationSettings();
-  
+
   // 初始化时加载前几个画册的预览图（前3张优先）
   const albumsToPreload = albums.value.slice(0, 3);
   for (const album of albumsToPreload) {
@@ -220,6 +227,25 @@ const handleImageContextMenu = (event: MouseEvent, image: ImageInfo) => {
 const handleAddedToAlbum = async () => {
   // 加入画册后，刷新计数（兜底）
   await albumStore.loadAlbums();
+};
+
+const handleRefresh = async () => {
+  isRefreshing.value = true;
+  try {
+    await albumStore.loadAlbums();
+    await loadRotationSettings();
+    // 重新加载预览图
+    const albumsToPreload = albums.value.slice(0, 3);
+    for (const album of albumsToPreload) {
+      prefetchPreview(album);
+    }
+    ElMessage.success("刷新成功");
+  } catch (error) {
+    console.error("刷新失败:", error);
+    ElMessage.error("刷新失败");
+  } finally {
+    isRefreshing.value = false;
+  }
 };
 
 const handleCopyImage = async (image: ImageInfo) => {
@@ -365,6 +391,32 @@ const handleImageMenuCommand = async (command: string) => {
         ElMessage.error("导出失败");
       }
       break;
+    case "remove":
+      // 批量移除图片（只删除缩略图和数据库记录，不删除原图）
+      if (imagesToProcess.length === 0) return;
+      const count = imagesToProcess.length;
+      await ElMessageBox.confirm(
+        `移除后将删除缩略图及数据库记录，但保留原图。是否继续移除${count > 1 ? `这 ${count} 张图片` : "这张图片"}？`,
+        "确认移除",
+        { type: "warning" }
+      );
+
+      for (const img of imagesToProcess) {
+        await crawlerStore.removeImage(img.id);
+      }
+
+      // 从当前画册视图移除
+      const ids = new Set(imagesToProcess.map((i) => i.id));
+      currentImages.value = currentImages.value.filter((img) => !ids.has(img.id));
+      for (const id of ids) {
+        const data = imageSrcMap.value[id];
+        if (data?.thumbnail) URL.revokeObjectURL(data.thumbnail);
+        if (data?.original) URL.revokeObjectURL(data.original);
+        const { [id]: _, ...rest } = imageSrcMap.value;
+        imageSrcMap.value = rest;
+      }
+      selectedImages.value.clear();
+      break;
     case "delete":
       await handleBatchDeleteImages(imagesToProcess);
       break;
@@ -448,7 +500,7 @@ const prefetchPreview = async (album: { id: string }) => {
       if (path) {
         loadingStates.push(true); // 标记为加载中
         albumLoadingStates.value[album.id][i] = true;
-        
+
         // 异步加载
         getImageUrl(path).then(url => {
           const currentUrls = albumPreviewUrls.value[album.id] || [];
@@ -491,9 +543,24 @@ const prefetchPreview = async (album: { id: string }) => {
 const openAlbum = async (album: { id: string; name: string }) => {
   currentAlbum.value = album;
   drawerVisible.value = true;
-  await loadAlbumImages(album.id);
+  // 先设置背景（如果已有预览图）
   drawerBg.value = albumPreviewUrls.value[album.id]?.[0] || "";
   heroIndex.value = 0;
+
+  // 使用 nextTick 确保抽屉先显示，然后再异步加载图片
+  await nextTick();
+  // 异步加载图片，不阻塞抽屉显示
+  loadAlbumImages(album.id).then(() => {
+    // 如果加载完成后还没有背景，尝试使用第一张图片
+    if (!drawerBg.value && currentImages.value.length > 0) {
+      const firstImage = currentImages.value[0];
+      if (firstImage.thumbnailPath || firstImage.localPath) {
+        getImageUrl(firstImage.thumbnailPath || firstImage.localPath).then(url => {
+          drawerBg.value = url;
+        }).catch(() => { });
+      }
+    }
+  });
 };
 
 const openAlbumContextMenu = (event: MouseEvent, album: { id: string; name: string }) => {
@@ -507,7 +574,7 @@ const closeAlbumContextMenu = () => {
   menuAlbum.value = null;
 };
 
-const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpaperRotation" | "exportToWE" | "exportToWEAuto") => {
+const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpaperRotation" | "exportToWE" | "exportToWEAuto" | "rename") => {
   if (!menuAlbum.value) return;
   const { id, name } = menuAlbum.value;
   closeAlbumContextMenu();
@@ -598,6 +665,21 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
     return;
   }
 
+  if (command === "rename") {
+    // 通过 ref 触发重命名
+    const cardRef = albumCardRefs.value[id];
+    if (cardRef && cardRef.startRename) {
+      cardRef.startRename();
+    }
+    return;
+  }
+
+  // 检查是否为"收藏"画册（使用固定ID）
+  if (id === FAVORITE_ALBUM_ID) {
+    ElMessage.warning("不能删除'收藏'画册");
+    return;
+  }
+
   try {
     await ElMessageBox.confirm(
       `确定要删除画册"${name}"吗？此操作仅删除画册及其关联，不会删除图片文件。`,
@@ -638,9 +720,16 @@ const handleDeleteCurrentAlbum = async () => {
   if (!currentAlbum.value) return;
   const albumId = currentAlbum.value.id;
   const name = currentAlbum.value.name;
+
+  // 检查是否为"收藏"画册（使用固定ID）
+  if (albumId === FAVORITE_ALBUM_ID) {
+    ElMessage.warning("不能删除'收藏'画册");
+    return;
+  }
+
   try {
     await ElMessageBox.confirm(
-      `确定要删除画册“${name}”吗？此操作仅删除画册及其关联，不会删除图片文件。`,
+      `确定要删除画册"${name}"吗？此操作仅删除画册及其关联，不会删除图片文件。`,
       "确认删除",
       { type: "warning" }
     );
@@ -677,7 +766,10 @@ const drawerBgStyle = computed(() => {
     backgroundImage: `linear-gradient(rgba(255,255,255,0.85), rgba(255,255,255,0.95)), url(${drawerBg.value})`,
     backgroundSize: "cover",
     backgroundPosition: "center",
+    backgroundRepeat: "no-repeat",
+    backgroundAttachment: "fixed",
     backdropFilter: "blur(12px)",
+    minHeight: "100%",
   };
 });
 </script>
@@ -710,6 +802,23 @@ const drawerBgStyle = computed(() => {
 
 .drawer-body {
   padding: 0 8px;
+  position: relative;
+  min-height: 100%;
+
+  &::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image: inherit;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    z-index: -1;
+    pointer-events: none;
+  }
 }
 
 .drawer-header {

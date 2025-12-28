@@ -43,12 +43,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "设置" },
   },
   {
-    path: "/downloads",
-    name: "Downloads",
-    component: () => import("@/views/Downloads.vue"),
-    meta: { title: "正在下载" },
-  },
-  {
     path: "/plugins",
     redirect: "/plugin-browser",
   },

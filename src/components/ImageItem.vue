@@ -1,6 +1,9 @@
 <template>
-  <div class="image-item" :class="{ 'image-item-selected': selected }" ref="itemRef" :data-id="image.id"
-    @contextmenu.prevent="$emit('contextmenu', $event)">
+  <div class="image-item"
+    :class="{ 'image-item-selected': selected, 'image-item-dragging': isDragging, 'image-item-drag-over': isDragOver }"
+    ref="itemRef" :data-id="image.id" :data-index="dragIndex" :draggable="draggable"
+    @contextmenu.prevent="$emit('contextmenu', $event)" @dragstart="handleDragStartForReorder"
+    @dragover.prevent="handleDragOver" @drop="handleDrop" @dragend="handleDragEnd" @dragleave="handleDragLeave">
     <transition name="fade-in" mode="out-in">
       <div v-if="!hasImageUrl" key="loading" class="thumbnail-loading" :style="loadingStyle">
         <el-skeleton :rows="0" animated>
@@ -12,27 +15,21 @@
       <div v-else-if="imageClickAction === 'preview' && originalUrl" key="preview" class="image-preview-wrapper"
         :style="imageHeightStyle" @click.stop="$emit('click', $event)" @dblclick.stop="$emit('dblclick', $event)"
         @contextmenu.prevent.stop="$emit('contextmenu', $event)">
-        <img :src="displayUrl" class="thumbnail" :alt="image.id" loading="lazy" draggable="true"
+        <img :src="displayUrl" class="thumbnail" :alt="image.id" loading="lazy" :draggable="!draggable"
           @dragstart="handleDragStart" @error="(e: any) => { if (originalUrl) e.target.src = originalUrl; }" />
       </div>
       <div v-else key="open" class="image-wrapper" :style="imageHeightStyle" @click.stop="$emit('click', $event)"
         @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)">
-        <img :src="displayUrl" class="thumbnail" :alt="image.id" loading="lazy" draggable="true"
+        <img :src="displayUrl" class="thumbnail" :alt="image.id" loading="lazy" :draggable="!draggable"
           @dragstart="handleDragStart" @error="(e: any) => { if (originalUrl) e.target.src = originalUrl; }" />
       </div>
     </transition>
-    <div v-if="image.favorite" class="favorite-badge">
-      <el-icon>
-        <StarFilled />
-      </el-icon>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { StarFilled } from "@element-plus/icons-vue";
 import type { ImageInfo } from "@/stores/crawler";
 
 interface Props {
@@ -43,14 +40,20 @@ interface Props {
   aspectRatioMatchWindow?: boolean; // 图片宽高比是否与窗口相同
   windowAspectRatio?: number; // 窗口宽高比
   selected?: boolean; // 是否被选中
+  draggable?: boolean; // 是否可以通过拖动来调整顺序
+  dragIndex?: number; // 当前项在列表中的索引（用于拖拽排序）
 }
 
 const props = defineProps<Props>();
 
-defineEmits<{
+const emit = defineEmits<{
   click: [event?: MouseEvent];
   dblclick: [event?: MouseEvent];
   contextmenu: [event: MouseEvent];
+  dragstart: [event: DragEvent, index: number];
+  dragover: [event: DragEvent, index: number];
+  drop: [event: DragEvent, index: number];
+  dragend: [event: DragEvent];
 }>();
 
 const thumbnailUrl = computed(() => props.imageUrl?.thumbnail);
@@ -69,6 +72,8 @@ const displayUrl = computed(() => {
 
 const itemRef = ref<HTMLElement | null>(null);
 const itemWidth = ref<number>(0);
+const isDragging = ref(false);
+const isDragOver = ref(false);
 
 // 使用 ResizeObserver 监听元素宽度变化
 let resizeObserver: ResizeObserver | null = null;
@@ -136,8 +141,54 @@ watch(() => props.windowAspectRatio, () => {
   }
 });
 
-// 处理拖拽，传递原图路径给目标应用
+// 处理拖拽排序
+function handleDragStartForReorder(event: DragEvent) {
+  if (!props.draggable || props.dragIndex === undefined) return;
+
+  isDragging.value = true;
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", props.image.id);
+    // 设置拖拽预览
+    if (itemRef.value) {
+      event.dataTransfer.setDragImage(itemRef.value, 0, 0);
+    }
+  }
+  emit("dragstart", event, props.dragIndex);
+}
+
+function handleDragOver(event: DragEvent) {
+  if (!props.draggable || props.dragIndex === undefined) return;
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "move";
+  }
+  isDragOver.value = true;
+  emit("dragover", event, props.dragIndex);
+}
+
+function handleDrop(event: DragEvent) {
+  if (!props.draggable || props.dragIndex === undefined) return;
+  isDragOver.value = false;
+  emit("drop", event, props.dragIndex);
+}
+
+function handleDragEnd(event: DragEvent) {
+  isDragging.value = false;
+  isDragOver.value = false;
+  emit("dragend", event);
+}
+
+function handleDragLeave() {
+  isDragOver.value = false;
+}
+
+// 处理拖拽，传递原图路径给目标应用（当 draggable 为 false 时使用）
 function handleDragStart(event: DragEvent) {
+  // 如果启用了拖拽排序，则不允许文件拖拽
+  if (props.draggable) {
+    event.preventDefault();
+    return;
+  }
   if (!event.dataTransfer) return;
 
   const originalPath = props.image.localPath || props.image.thumbnailPath;
@@ -216,45 +267,56 @@ function handleDragStart(event: DragEvent) {
   box-sizing: border-box;
 
   &:hover {
-  box-shadow: var(--anime-shadow-hover);
-  outline: 3px solid var(--anime-primary-light);
-  outline-offset: -2px;
-}
+    box-shadow: var(--anime-shadow-hover);
+    outline: 3px solid var(--anime-primary-light);
+    outline-offset: -2px;
+  }
 
   &.image-item-selected {
-  border-color: #ff6b9d;
-  border-width: 2px;
-  box-shadow:
-    0 0 0 3px rgba(255, 107, 157, 0.4),
-    0 0 20px rgba(255, 107, 157, 0.5),
-    0 4px 12px rgba(255, 107, 157, 0.3);
-  outline: 4px solid #ff6b9d;
-  outline-offset: -2px;
+    border-color: #ff6b9d;
+    border-width: 2px;
+    box-shadow:
+      0 0 0 3px rgba(255, 107, 157, 0.4),
+      0 0 20px rgba(255, 107, 157, 0.5),
+      0 4px 12px rgba(255, 107, 157, 0.3);
+    outline: 4px solid #ff6b9d;
+    outline-offset: -2px;
 
     &:hover {
-  border-color: #ff4d8a;
-  outline: 5px solid #ff4d8a;
-  outline-offset: -2px;
-  box-shadow:
-    0 0 0 3px rgba(255, 77, 138, 0.5),
-    0 0 30px rgba(255, 107, 157, 0.6),
-    0 6px 16px rgba(255, 107, 157, 0.4);
+      border-color: #ff4d8a;
+      outline: 5px solid #ff4d8a;
+      outline-offset: -2px;
+      box-shadow:
+        0 0 0 3px rgba(255, 77, 138, 0.5),
+        0 0 30px rgba(255, 107, 157, 0.6),
+        0 6px 16px rgba(255, 107, 157, 0.4);
     }
-}
+  }
 
-.image-wrapper {
-  width: 100%;
-  position: relative;
-  cursor: pointer;
-  overflow: hidden;
-  border-radius: 14px 14px 0 0;
+  &.image-item-dragging {
+    opacity: 0.5;
+    cursor: grabbing;
+  }
+
+  &.image-item-drag-over {
+    border-color: var(--anime-primary);
+    border-width: 3px;
+    box-shadow: 0 0 0 3px rgba(255, 107, 157, 0.3);
+  }
+
+  .image-wrapper {
+    width: 100%;
+    position: relative;
+    cursor: pointer;
+    overflow: hidden;
+    border-radius: 14px 14px 0 0;
 
     &::before {
       content: '';
       display: block;
       width: 100%;
     }
-}
+  }
 
   .image-preview-wrapper {
     width: 100%;
@@ -264,58 +326,39 @@ function handleDragStart(event: DragEvent) {
     border-radius: 14px 14px 0 0;
 
     &::before {
-  content: '';
-  display: block;
-  width: 100%;
-    }
-}
-
-.thumbnail {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  border-radius: 14px 14px 0 0;
-  object-fit: cover;
-    animation: fadeInImage 0.4s ease-in;
-}
-
-.thumbnail-loading {
-  width: 100%;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-    > * {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-    }
-}
-
-.favorite-badge {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  background: rgba(255, 255, 255, 0.9);
-  border-radius: 50%;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  z-index: 10;
-
-    .el-icon {
-  color: #f59e0b;
-  font-size: 18px;
+      content: '';
+      display: block;
+      width: 100%;
     }
   }
+
+  .thumbnail {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 14px 14px 0 0;
+    object-fit: cover;
+    animation: fadeInImage 0.4s ease-in;
+  }
+
+  .thumbnail-loading {
+    width: 100%;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    >* {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+  }
+
 }
 
 /* 淡入动画 */

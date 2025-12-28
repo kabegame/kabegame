@@ -15,8 +15,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, GetParent,
     GetWindowLongPtrW, IsWindow, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, UnregisterClassW, CS_HREDRAW,
-    CS_VREDRAW, GWLP_USERDATA, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_SHOW, WM_CREATE,
-    WM_DESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_POPUP, WS_VISIBLE,
+    CS_VREDRAW, GWLP_USERDATA, GWL_EXSTYLE, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+    SW_SHOW, WM_CREATE, WM_DESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_POPUP, WS_VISIBLE,
 };
 
 /// GDI 壁纸窗口（内部使用）
@@ -96,11 +96,13 @@ impl GdiWallpaperWindow {
                 SetLastError(0);
             }
 
+            // 创建窗口时不使用 WS_VISIBLE，先隐藏窗口，避免在挂载前显示（造成"窗口闪过"）
+            // 挂载到桌面后再显示窗口
             let hwnd = CreateWindowExW(
                 WS_EX_NOACTIVATE,
                 class_name_wide.as_ptr(),
                 std::ptr::null(),
-                WS_VISIBLE | WS_POPUP, // 使用 WS_POPUP 而不是 WS_CHILD，因为还没有父窗口
+                WS_POPUP, // 不使用 WS_VISIBLE，先隐藏窗口
                 0,
                 0,
                 100,
@@ -151,10 +153,26 @@ impl GdiWallpaperWindow {
             let renderer_box = Box::into_raw(Box::new(Arc::clone(&renderer)));
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, renderer_box as isize);
 
-            // 挂载到桌面层（使用简化版挂载函数）
-            window_mount::mount_to_desktop_simple(hwnd)?;
+            // 挂载到桌面层（使用 saikyo 版本，支持 Windows 11）
+            window_mount::mount_to_desktop_saikyo(hwnd)?;
 
             eprintln!("[DEBUG] 窗口挂载完成");
+
+            // 挂载完成后，显示窗口并确保窗口样式正确
+            unsafe {
+                // 确保窗口可见
+                ShowWindow(hwnd, SW_SHOW);
+
+                // 添加额外的窗口样式来防止系统关闭窗口
+                // WS_EX_TOOLWINDOW: 防止窗口出现在任务栏和 Alt+Tab 列表中
+                // 这对于壁纸窗口很重要，可以防止系统将其识别为普通应用窗口
+                use windows_sys::Win32::UI::WindowsAndMessaging::WS_EX_TOOLWINDOW;
+                let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+                let new_ex_style = ex_style | WS_EX_TOOLWINDOW;
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex_style as isize);
+
+                eprintln!("[DEBUG] 窗口已显示并设置保护样式");
+            }
 
             // 创建共享的退出标志
             let should_quit = Arc::new(AtomicBool::new(false));
@@ -291,9 +309,14 @@ impl GdiWallpaperWindow {
             self.hwnd
         );
         unsafe {
-            // 注意：IsWindow 可能在不同线程中返回错误的结果
-            // 对于跨线程的窗口操作，直接尝试使用窗口句柄可能更可靠
-            // 如果窗口无效，GetDC 或 PostMessageW 会失败，但不会导致崩溃
+            // 先检查窗口是否有效
+            if IsWindow(self.hwnd) == 0 {
+                eprintln!(
+                    "[WARN] GdiWallpaperWindow::invalidate: 窗口句柄无效 (hwnd={}), 跳过重绘",
+                    self.hwnd
+                );
+                return;
+            }
 
             // 确保窗口可见
             ShowWindow(self.hwnd, SW_SHOW);
@@ -475,19 +498,146 @@ unsafe extern "system" fn window_proc(
     }
 }
 
+/// GDI 版本的 WallpaperWindow 接口（类似窗口模式的 WallpaperWindow）
+/// 提供与窗口模式一致的接口，但底层使用 GDI 渲染
+struct GdiWallpaperWindowWrapper {
+    gdi_window: Arc<Mutex<Option<GdiWallpaperWindow>>>,
+}
+
+impl GdiWallpaperWindowWrapper {
+    fn new(gdi_window: Arc<Mutex<Option<GdiWallpaperWindow>>>) -> Self {
+        Self { gdi_window }
+    }
+
+    /// 创建或获取 GDI 窗口（类似 WallpaperWindow::new）
+    fn ensure_window(&self) -> Result<(), String> {
+        let mut window_guard = self
+            .gdi_window
+            .lock()
+            .map_err(|e| format!("无法获取窗口锁: {}", e))?;
+
+        if window_guard.is_none() {
+            *window_guard = Some(GdiWallpaperWindow::new()?);
+        }
+
+        Ok(())
+    }
+
+    /// 更新壁纸图片（类似 WallpaperWindow::update_image）
+    fn update_image(&self, image_path: &str) -> Result<(), String> {
+        self.ensure_window()?;
+
+        let window_guard = self
+            .gdi_window
+            .lock()
+            .map_err(|e| format!("无法获取窗口锁: {}", e))?;
+
+        if let Some(ref window) = *window_guard {
+            // 先检查窗口是否有效
+            unsafe {
+                let hwnd = window.hwnd();
+                if IsWindow(hwnd) == 0 {
+                    eprintln!(
+                        "[WARN] GdiWallpaperWindowWrapper::update_image: 窗口句柄无效 (hwnd={})",
+                        hwnd
+                    );
+                    drop(window_guard);
+                    return Err("窗口句柄无效，需要重新创建窗口".to_string());
+                }
+            }
+
+            window.set_image(image_path)?;
+        } else {
+            return Err("窗口初始化失败".to_string());
+        }
+
+        Ok(())
+    }
+
+    /// 更新壁纸样式（类似 WallpaperWindow::update_style）
+    fn update_style(&self, style: &str) -> Result<(), String> {
+        let window_guard = self
+            .gdi_window
+            .lock()
+            .map_err(|e| format!("无法获取窗口锁: {}", e))?;
+
+        if let Some(ref window) = *window_guard {
+            window.set_style(style)?;
+        }
+
+        Ok(())
+    }
+
+    /// 更新壁纸过渡效果（类似 WallpaperWindow::update_transition）
+    /// 注意：GDI 模式不支持过渡效果，此方法为空实现
+    fn update_transition(&self, _transition: &str) -> Result<(), String> {
+        // GDI 渲染器不支持过渡效果
+        Ok(())
+    }
+
+    /// 重新挂载窗口到桌面（类似 WallpaperWindow::remount）
+    fn remount(&self) -> Result<(), String> {
+        self.ensure_window()?;
+
+        let window_guard = self
+            .gdi_window
+            .lock()
+            .map_err(|e| format!("无法获取窗口锁: {}", e))?;
+
+        if let Some(ref window) = *window_guard {
+            let hwnd = window.hwnd();
+            unsafe {
+                // 先检查窗口是否有效
+                if IsWindow(hwnd) == 0 {
+                    eprintln!("[WARN] GdiWallpaperWindowWrapper::remount: 窗口句柄无效，跳过挂载");
+                    drop(window_guard);
+                    // 窗口无效，需要重新创建
+                    return Err("窗口句柄无效，需要重新创建窗口".to_string());
+                }
+
+                // 检查窗口是否已经挂载
+                let parent = GetParent(hwnd);
+                if parent != 0 && IsWindow(parent) != 0 {
+                    eprintln!("[DEBUG] GdiWallpaperWindowWrapper::remount: 窗口已挂载到 parent={}, 跳过重复挂载", parent);
+                    // 窗口已挂载，只触发重绘
+                    window.invalidate();
+                    return Ok(());
+                }
+
+                // 窗口未挂载或父窗口无效，重新挂载
+                eprintln!("[DEBUG] GdiWallpaperWindowWrapper::remount: 窗口未挂载，开始挂载");
+                window_mount::mount_to_desktop_saikyo(hwnd)?;
+                // 触发重绘
+                window.invalidate();
+            }
+        } else {
+            return Err("窗口未初始化".to_string());
+        }
+
+        Ok(())
+    }
+}
+
 /// GDI 壁纸管理器（实现 WallpaperManager trait）
+/// 使用与窗口模式类似的接口风格
 pub struct GdiWallpaperManager {
     app: AppHandle,
     gdi_window: Arc<Mutex<Option<GdiWallpaperWindow>>>,
     current_wallpaper_path: Arc<Mutex<Option<String>>>,
+    // 使用包装器提供统一接口
+    window_wrapper: GdiWallpaperWindowWrapper,
 }
 
 impl GdiWallpaperManager {
     pub fn new(app: AppHandle) -> Self {
+        let gdi_window = Arc::new(Mutex::new(None));
+        let window_wrapper = GdiWallpaperWindowWrapper::new(Arc::clone(&gdi_window));
+
         Self {
             app,
-            gdi_window: Arc::new(Mutex::new(None)),
+            gdi_window,
             current_wallpaper_path: Arc::new(Mutex::new(None)),
+            window_wrapper,
         }
     }
 }
@@ -537,95 +687,52 @@ impl WallpaperManager for GdiWallpaperManager {
         }
         eprintln!("[DEBUG] 壁纸路径状态已更新");
 
-        // 检查窗口是否存在且有效，如果无效则重新创建
-        let need_create_window = {
+        // 使用窗口模式的接口风格：通过 wrapper 更新图片
+        // 类似 WindowWallpaperManager 使用 WallpaperWindow::update_image
+        // 先检查窗口状态，如果窗口有效且已挂载，直接更新图片，避免不必要的 remount
+        let need_remount = {
             let window_guard = self
                 .gdi_window
                 .lock()
                 .map_err(|e| format!("无法获取窗口锁: {}", e))?;
 
             if let Some(ref window) = *window_guard {
-                // 检查窗口是否仍然有效
                 unsafe {
                     let hwnd = window.hwnd();
-                    eprintln!("[DEBUG] 检查窗口有效性，HWND: {}", hwnd);
+                    // 检查窗口是否有效
                     if IsWindow(hwnd) == 0 {
-                        eprintln!("[WARN] 现有窗口无效，需要重新创建，HWND: {}", hwnd);
+                        eprintln!("[DEBUG] 窗口无效，需要重新创建");
+                        drop(window_guard);
                         true
                     } else {
-                        // 检查父窗口是否仍然有效（如果父窗口失效，子窗口也会失效）
+                        // 检查窗口是否已挂载
                         let parent = GetParent(hwnd);
-                        eprintln!("[DEBUG] 窗口有效，检查父窗口，parent: {}", parent);
-                        if parent != 0 && IsWindow(parent) == 0 {
-                            eprintln!("[WARN] 窗口的父窗口无效，需要重新创建，parent: {}", parent);
+                        if parent == 0 || IsWindow(parent) == 0 {
+                            eprintln!("[DEBUG] 窗口未挂载 (parent={}), 需要挂载", parent);
+                            drop(window_guard);
                             true
                         } else {
-                            eprintln!("[DEBUG] 窗口和父窗口都有效，使用现有窗口");
+                            eprintln!("[DEBUG] 窗口有效且已挂载 (parent={}), 直接更新图片", parent);
                             false
                         }
                     }
                 }
             } else {
                 eprintln!("[DEBUG] 窗口不存在，需要创建");
+                drop(window_guard);
                 true
             }
         };
 
-        if need_create_window {
-            eprintln!("[DEBUG] 创建新的 GDI 窗口");
-            let mut window_guard = self
-                .gdi_window
-                .lock()
-                .map_err(|e| format!("无法获取窗口锁: {}", e))?;
-            *window_guard = Some(GdiWallpaperWindow::new()?);
-            eprintln!("[DEBUG] GDI 窗口创建完成");
-        } else {
-            eprintln!("[DEBUG] 使用现有 GDI 窗口");
-        }
+        // 更新图片
+        self.window_wrapper.update_image(file_path)?;
 
-        // 设置图片
-        eprintln!("[DEBUG] 准备设置图片: {}", file_path);
-        if let Ok(window_guard) = self.gdi_window.lock() {
-            if let Some(ref window) = *window_guard {
-                // 在设置图片前再次检查窗口有效性
-                unsafe {
-                    let hwnd = window.hwnd();
-                    if IsWindow(hwnd) == 0 {
-                        eprintln!("[ERROR] 设置图片时窗口已失效，HWND: {}", hwnd);
-                        drop(window_guard);
-                        // 重新创建窗口
-                        let mut window_guard = self
-                            .gdi_window
-                            .lock()
-                            .map_err(|e| format!("无法获取窗口锁: {}", e))?;
-                        eprintln!("[DEBUG] 重新创建 GDI 窗口");
-                        *window_guard = Some(GdiWallpaperWindow::new()?);
-                        eprintln!("[DEBUG] GDI 窗口重新创建完成");
-                        // 重新获取窗口并设置图片
-                        if let Some(ref window) = *window_guard {
-                            window.set_image(file_path).map_err(|e| {
-                                eprintln!("[ERROR] 设置图片失败: {}", e);
-                                e
-                            })?;
-                        } else {
-                            return Err("窗口重新创建后仍然无效".to_string());
-                        }
-                    } else {
-                        // 窗口有效，正常设置图片
-                        window.set_image(file_path).map_err(|e| {
-                            eprintln!("[ERROR] 设置图片失败: {}", e);
-                            e
-                        })?;
-                    }
-                }
-                eprintln!("[DEBUG] 图片设置成功");
-            } else {
-                eprintln!("[ERROR] 窗口初始化失败");
-                return Err("窗口初始化失败".to_string());
+        // 只有在需要时才重新挂载（避免重复挂载导致错误）
+        if need_remount && immediate {
+            eprintln!("[DEBUG] 执行 remount 以确保窗口正确挂载");
+            if let Err(e) = self.window_wrapper.remount() {
+                eprintln!("[WARN] remount 失败: {}, 但图片已更新", e);
             }
-        } else {
-            eprintln!("[ERROR] 无法获取窗口锁");
-            return Err("无法获取窗口锁".to_string());
         }
 
         eprintln!("[DEBUG] GdiWallpaperManager::set_wallpaper_path 完成");
@@ -639,18 +746,66 @@ impl WallpaperManager for GdiWallpaperManager {
             .set_wallpaper_style(style.to_string())
             .map_err(|e| format!("保存样式设置失败: {}", e))?;
 
-        // 更新窗口样式
-        if let Ok(mut window_guard) = self.gdi_window.lock() {
+        // 使用窗口模式的接口风格：通过 wrapper 更新样式
+        // 类似 WindowWallpaperManager 使用 WallpaperWindow::update_style
+        self.window_wrapper.update_style(style)?;
+
+        // 如果 immediate=true，重新挂载窗口以确保立即生效
+        if immediate {
+            // 避免每次都 remount 导致闪烁；仅在窗口不可见时 remount
+            let window_guard = self
+                .gdi_window
+                .lock()
+                .map_err(|e| format!("无法获取窗口锁: {}", e))?;
+
             if let Some(ref window) = *window_guard {
-                window.set_style(style)?;
+                unsafe {
+                    let hwnd = window.hwnd();
+                    let parent = GetParent(hwnd);
+                    if parent == 0 || IsWindow(parent) == 0 {
+                        drop(window_guard);
+                        // 窗口未挂载，重新挂载
+                        let _ = self.window_wrapper.remount();
+                    }
+                }
             }
         }
 
         Ok(())
     }
 
-    fn set_transition(&self, _transition: &str, _immediate: bool) -> Result<(), String> {
-        // GDI 渲染器不支持过渡效果，忽略
+    fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String> {
+        // 保存过渡效果到 Settings（即使 GDI 不支持，也保存设置以保持一致性）
+        let settings = self.app.state::<Settings>();
+        settings
+            .set_wallpaper_rotation_transition(transition.to_string())
+            .map_err(|e| format!("保存过渡效果设置失败: {}", e))?;
+
+        // 使用窗口模式的接口风格：通过 wrapper 更新过渡效果
+        // 类似 WindowWallpaperManager 使用 WallpaperWindow::update_transition
+        // 注意：GDI 渲染器不支持过渡效果，此方法为空实现
+        self.window_wrapper.update_transition(transition)?;
+
+        // 如果 immediate=true，重新挂载窗口以确保立即生效
+        if immediate {
+            let window_guard = self
+                .gdi_window
+                .lock()
+                .map_err(|e| format!("无法获取窗口锁: {}", e))?;
+
+            if let Some(ref window) = *window_guard {
+                unsafe {
+                    let hwnd = window.hwnd();
+                    let parent = GetParent(hwnd);
+                    if parent == 0 || IsWindow(parent) == 0 {
+                        drop(window_guard);
+                        // 窗口未挂载，重新挂载
+                        let _ = self.window_wrapper.remount();
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 

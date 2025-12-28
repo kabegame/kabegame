@@ -28,6 +28,13 @@
     <!-- Tab 切换 -->
     <el-tabs v-model="activeTab" class="plugin-tabs">
       <el-tab-pane label="插件浏览" name="browser">
+        <div style="display: flex; justify-content: flex-end; margin-bottom: 12px;">
+          <el-button circle size="small" @click="handleRefreshBrowser" :loading="isRefreshingBrowser">
+            <el-icon>
+              <Refresh />
+            </el-icon>
+          </el-button>
+        </div>
         <!-- 原有的插件浏览内容 -->
         <!-- 搜索和筛选 -->
         <div class="filter-bar">
@@ -80,7 +87,7 @@
           <el-card v-for="plugin in filteredPlugins" :key="plugin.id" class="plugin-card" shadow="hover"
             @click="viewPluginDetails(plugin)">
             <div class="plugin-header">
-              <div class="plugin-icon" v-if="plugin.icon">
+              <div class="plugin-icon" v-if="plugin.icon && plugin.icon.startsWith('data:')">
                 <el-image :src="plugin.icon" fit="cover" />
               </div>
               <div class="plugin-icon-placeholder" v-else>
@@ -118,6 +125,13 @@
       </el-tab-pane>
 
       <el-tab-pane label="已安装收集源" name="installed">
+        <div style="display: flex; justify-content: flex-end; margin-bottom: 12px;">
+          <el-button circle size="small" @click="handleRefreshInstalled" :loading="isRefreshingInstalled">
+            <el-icon>
+              <Refresh />
+            </el-icon>
+          </el-button>
+        </div>
         <!-- 已安装插件配置表格 -->
         <div v-if="loading && activeTab === 'installed'" class="loading-skeleton">
           <el-skeleton :rows="8" animated />
@@ -235,6 +249,8 @@ const showImportDialog = ref(false);
 const showAddDialog = ref(false);
 const selectedFilePath = ref<string | null>(null);
 const editingPlugin = ref<Plugin | null>(null);
+const isRefreshingBrowser = ref(false);
+const isRefreshingInstalled = ref(false);
 // const formRef = ref(); // 暂时未使用
 
 const pluginForm = reactive({
@@ -297,7 +313,12 @@ const loadPluginsFromDirectory = async (showMessage: boolean = true) => {
     const plugins = await invoke<BrowserPlugin[]>("get_browser_plugins");
     
     // 先显示插件列表，不阻塞图标加载
-    browserPlugins.value = plugins;
+    // 如果 plugin.icon 是文件路径（不是 data URL），先清空，避免直接使用 file:// URL
+    const processedPlugins = plugins.map(p => ({
+      ...p,
+      icon: p.icon && p.icon.startsWith('data:') ? p.icon : undefined
+    }));
+    browserPlugins.value = processedPlugins;
     loading.value = false;
     
     // 异步加载图标，不阻塞主流程
@@ -305,7 +326,7 @@ const loadPluginsFromDirectory = async (showMessage: boolean = true) => {
     // plugin.icon 如果存在，表示图标文件存在（值为插件文件路径）
     // 我们需要调用 get_plugin_icon 来获取图标数据
     for (const plugin of plugins) {
-      if (plugin.icon) {
+      if (plugin.icon && !plugin.icon.startsWith('data:')) {
         try {
           const iconData = await invoke<number[] | null>("get_plugin_icon", {
             pluginId: plugin.id,
@@ -515,6 +536,33 @@ const resetForm = () => {
     nextPageSelector: "",
     titleSelector: "",
   };
+};
+
+const handleRefreshBrowser = async () => {
+  isRefreshingBrowser.value = true;
+  try {
+    await loadPluginsFromDirectory(false);
+    await pluginStore.loadPlugins();
+    ElMessage.success("刷新成功");
+  } catch (error) {
+    console.error("刷新失败:", error);
+    ElMessage.error("刷新失败");
+  } finally {
+    isRefreshingBrowser.value = false;
+  }
+};
+
+const handleRefreshInstalled = async () => {
+  isRefreshingInstalled.value = true;
+  try {
+    await pluginStore.loadPlugins();
+    ElMessage.success("刷新成功");
+  } catch (error) {
+    console.error("刷新失败:", error);
+    ElMessage.error("刷新失败");
+  } finally {
+    isRefreshingInstalled.value = false;
+  }
 };
 
 onMounted(async () => {

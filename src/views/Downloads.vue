@@ -2,9 +2,16 @@
   <div class="downloads-container">
     <div class="downloads-header">
       <h2>正在下载</h2>
-      <div class="header-stats">
-        <el-tag type="info">队列中: {{ queueSize }}</el-tag>
-        <el-tag type="warning">下载中: {{ activeDownloads.length }}</el-tag>
+      <div class="header-actions">
+        <el-button circle size="small" @click="handleRefresh" :loading="isRefreshing">
+          <el-icon>
+            <Refresh />
+          </el-icon>
+        </el-button>
+        <div class="header-stats">
+          <el-tag type="info">队列中: {{ queueSize }}</el-tag>
+          <el-tag type="warning">下载中: {{ activeDownloads.length }}</el-tag>
+        </div>
       </div>
     </div>
 
@@ -66,7 +73,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { Loading } from "@element-plus/icons-vue";
+import { Loading, Refresh } from "@element-plus/icons-vue";
+import { ElMessage } from "element-plus";
 
 interface ActiveDownloadInfo {
   url: string;
@@ -76,6 +84,7 @@ interface ActiveDownloadInfo {
 
 const activeDownloads = ref<ActiveDownloadInfo[]>([]);
 const queueSize = ref(0);
+const isRefreshing = ref(false);
 let refreshInterval: number | null = null;
 
 const loadDownloads = async () => {
@@ -109,6 +118,19 @@ onMounted(() => {
   refreshInterval = window.setInterval(loadDownloads, 1000);
 });
 
+const handleRefresh = async () => {
+  isRefreshing.value = true;
+  try {
+    await loadDownloads();
+    ElMessage.success("刷新成功");
+  } catch (error) {
+    console.error("刷新失败:", error);
+    ElMessage.error("刷新失败");
+  } finally {
+    isRefreshing.value = false;
+  }
+};
+
 onUnmounted(() => {
   if (refreshInterval !== null) {
     clearInterval(refreshInterval);
@@ -133,6 +155,12 @@ onUnmounted(() => {
       font-weight: 600;
       font-size: 24px;
       margin: 0;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
     }
   }
 

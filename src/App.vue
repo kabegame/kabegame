@@ -30,22 +30,6 @@
           </el-icon>
           <span>画册</span>
         </el-menu-item>
-        <el-menu-item index="/downloads" class="download-menu-item">
-          <div class="download-icon-wrapper" :class="{ 'download-icon-animate': hasActiveDownloads }">
-            <el-icon class="download-icon-slot top">
-              <Download />
-            </el-icon>
-            <el-icon class="download-icon-slot middle">
-              <Download />
-            </el-icon>
-            <el-icon class="download-icon-slot bottom">
-              <Download />
-            </el-icon>
-          </div>
-          <span>正在下载</span>
-          <el-badge v-if="totalDownloadCount > 0" :value="totalDownloadCount" :max="99" class="download-badge">
-          </el-badge>
-        </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon>
             <Setting />
@@ -55,7 +39,11 @@
       </el-menu>
     </el-aside>
     <el-main class="app-main">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <keep-alive>
+          <component :is="Component" />
+        </keep-alive>
+      </router-view>
     </el-main>
   </el-container>
 </template>
@@ -63,7 +51,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
-import { Picture, Grid, Setting, Download, Expand, Fold, Collection } from "@element-plus/icons-vue";
+import { Picture, Grid, Setting, Expand, Fold, Collection } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import WallpaperLayer from "./components/WallpaperLayer.vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -83,10 +71,6 @@ try {
 
 onMounted(async () => {
   if (!isWallpaperWindow.value) {
-    loadDownloadStatus();
-    // 每 1 秒刷新一次
-    refreshInterval = window.setInterval(loadDownloadStatus, 1000);
-
     // 监听窗口关闭事件 - 隐藏而不是退出
     try {
       const currentWindow = getCurrentWebviewWindow();
@@ -113,37 +97,6 @@ const toggleCollapse = () => {
   isCollapsed.value = !isCollapsed.value;
 };
 
-interface ActiveDownloadInfo {
-  url: string;
-  plugin_id: string;
-  start_time: number;
-}
-
-const activeDownloadsCount = ref(0);
-const queueSize = ref(0);
-let refreshInterval: number | null = null;
-
-const totalDownloadCount = computed(() => activeDownloadsCount.value + queueSize.value);
-const hasActiveDownloads = computed(() => totalDownloadCount.value > 0);
-
-const loadDownloadStatus = async () => {
-  try {
-    const [downloads, size] = await Promise.all([
-      invoke<ActiveDownloadInfo[]>("get_active_downloads"),
-      invoke<number>("get_download_queue_size"),
-    ]);
-    activeDownloadsCount.value = downloads.length;
-    queueSize.value = size;
-  } catch (error) {
-    console.error("加载下载状态失败:", error);
-  }
-};
-
-onUnmounted(() => {
-  if (refreshInterval !== null) {
-    clearInterval(refreshInterval);
-  }
-});
 </script>
 
 <style lang="scss">
@@ -277,15 +230,6 @@ onUnmounted(() => {
         }
       }
 
-      .download-menu-item {
-
-        // 收起状态：徽章放右上角，避免挤占图标区域
-        .download-badge {
-          position: absolute;
-          right: 4px;
-          top: 4px;
-        }
-      }
     }
   }
 
@@ -330,120 +274,4 @@ onUnmounted(() => {
   background: transparent;
 }
 
-.download-menu-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-
-  .download-icon-wrapper {
-    position: relative;
-    width: 32px;
-    height: 1em;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .download-icon-slot {
-    position: absolute;
-    left: 0;
-    right: 0;
-    margin: 0 auto;
-    color: var(--anime-primary);
-    opacity: 0;
-    transform: translateY(-10px);
-    transition: opacity 0.2s ease;
-  }
-
-  .download-icon-slot.middle {
-    opacity: 1;
-    transform: translateY(0);
-  }
-
-  .download-icon-animate .download-icon-slot {
-    animation: downloadIconCycle 1.6s infinite;
-  }
-
-  .download-icon-animate .download-icon-slot.middle {
-    animation-delay: 0s;
-  }
-
-  .download-icon-animate .download-icon-slot.bottom {
-    animation-delay: 0.8s;
-  }
-
-  .download-icon-animate .download-icon-slot.top {
-    animation-delay: 1.2s;
-  }
-
-  // 静止状态：仅中间图标可见且居中
-  &:not(.download-icon-animate) {
-    .download-icon-slot {
-      opacity: 0;
-      transform: translateY(0);
-    }
-
-    .download-icon-slot.middle {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  .download-badge {
-    position: absolute;
-    display: flex;
-    right: 12px;
-    top: 50%;
-    transform: translateY(-50%);
-
-    .el-badge__content {
-      background-color: #f56c6c;
-      border-color: #f56c6c;
-      color: #fff;
-      border-radius: 999px;
-      min-width: 20px;
-      height: 20px;
-      padding: 0 6px;
-      font-size: 12px;
-      font-weight: 500;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      line-height: 1;
-    }
-  }
-}
-
-@keyframes downloadIconCycle {
-  0% {
-    transform: translateY(-18px);
-    opacity: 0;
-  }
-
-  10% {
-    transform: translateY(-6px);
-    opacity: 0.8;
-  }
-
-  25% {
-    transform: translateY(0);
-    opacity: 1;
-  }
-
-  40% {
-    transform: translateY(8px);
-    opacity: 0.4;
-  }
-
-  55% {
-    transform: translateY(18px);
-    opacity: 0;
-  }
-
-  100% {
-    transform: translateY(38px);
-    opacity: 0;
-  }
-}
 </style>
