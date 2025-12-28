@@ -32,6 +32,8 @@ use plugin::{BrowserPlugin, Plugin, PluginManager};
 use settings::{AppSettings, Settings};
 use storage::{Album, ImageInfo, PaginatedImages, RunConfig, Storage, TaskInfo};
 use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
+#[cfg(target_os = "windows")]
+use wallpaper::manager::GdiWallpaperManager;
 use wallpaper_engine_export::{export_album_to_we_project, export_images_to_we_project};
 
 #[tauri::command]
@@ -948,32 +950,56 @@ fn set_wallpaper_mode(
             }
         };
         let apply_res: Result<(), String> = (|| {
+            eprintln!("[DEBUG] set_wallpaper_mode: 开始应用模式 {}", mode_clone);
             // 关键：确保目标后端已初始化（尤其是 window 模式需要提前把 WallpaperWindow 放进 manager 状态）
             // 否则会报 “窗口未初始化，请先调用 init 方法”，前端就会一直显示“切换中”。
+            eprintln!("[DEBUG] set_wallpaper_mode: 调用 target.init");
             target.init(app_clone.clone())?;
+            eprintln!("[DEBUG] set_wallpaper_mode: target.init 完成");
             // 先切换壁纸路径
+            eprintln!("[DEBUG] set_wallpaper_mode: 调用 target.set_wallpaper_path: {}", resolved_wallpaper);
             target.set_wallpaper_path(&resolved_wallpaper, true)?;
+            eprintln!("[DEBUG] set_wallpaper_mode: target.set_wallpaper_path 完成");
             // 再应用样式
+            eprintln!("[DEBUG] set_wallpaper_mode: 调用 target.set_style: {}", s.wallpaper_rotation_style);
             target.set_style(&s.wallpaper_rotation_style, true)?;
+            eprintln!("[DEBUG] set_wallpaper_mode: target.set_style 完成");
             // 过渡效果属于轮播能力：只在轮播启用时做立即预览
             if s.wallpaper_rotation_enabled {
                 // 最后应用transition
+                eprintln!("[DEBUG] set_wallpaper_mode: 调用 target.set_transition: {}", s.wallpaper_rotation_transition);
                 target.set_transition(&s.wallpaper_rotation_transition, true)?;
+                eprintln!("[DEBUG] set_wallpaper_mode: target.set_transition 完成");
             }
+            eprintln!("[DEBUG] set_wallpaper_mode: 应用模式完成");
             Ok(())
         })();
 
         match apply_res {
             Ok(_) => {
+                eprintln!("[DEBUG] set_wallpaper_mode: apply_res 成功");
                 // 切换 away from window 模式时，清理 window 后端（隐藏壁纸窗口）
                 if old_mode_clone == "window" && mode_clone != "window" {
+                    eprintln!("[DEBUG] set_wallpaper_mode: 清理 window 资源");
                     controller
                         .manager_for_mode("window")
                         .cleanup()
                         .unwrap_or_else(|e| eprintln!("清理 window 资源失败: {}", e));
                 }
+                // 切换 away from gdi 模式时，清理 gdi 后端（销毁 GDI 窗口）
+                // 注意：cleanup 可能阻塞（等待线程退出），但我们需要确保清理完成
+                // 所以仍然同步执行，但会在日志中显示进度
+                if old_mode_clone == "gdi" && mode_clone != "gdi" {
+                    eprintln!("[DEBUG] set_wallpaper_mode: 开始清理 gdi 资源（从 gdi 模式切换到其他模式）");
+                    match controller.manager_for_mode("gdi").cleanup() {
+                        Ok(_) => eprintln!("[DEBUG] set_wallpaper_mode: gdi 资源清理成功"),
+                        Err(e) => eprintln!("[ERROR] 清理 gdi 资源失败: {}", e),
+                    }
+                }
                 // 3) 应用成功后再持久化 mode
+                eprintln!("[DEBUG] set_wallpaper_mode: 保存模式设置");
                 if let Err(e) = settings_state.set_wallpaper_mode(mode_clone.clone()) {
+                    eprintln!("[ERROR] set_wallpaper_mode: 保存模式失败: {}", e);
                     let _ = app_clone.emit(
                         "wallpaper-mode-switch-complete",
                         serde_json::json!({
@@ -984,14 +1010,17 @@ fn set_wallpaper_mode(
                     );
                     return;
                 }
+                eprintln!("[DEBUG] set_wallpaper_mode: 模式设置已保存");
 
                 // 4) 轮播开启时重置定时器（切换模式也算一次“用户触发”）
                 if s.wallpaper_rotation_enabled {
+                    eprintln!("[DEBUG] set_wallpaper_mode: 恢复轮播");
                     // 切换完成后再恢复轮播（若之前在跑或用户开启了轮播）
                     // 这里用 start 确保轮播线程按新 mode 工作
                     let _ = rotator.start();
                 }
 
+                eprintln!("[DEBUG] set_wallpaper_mode: 发送成功事件");
                 let _ = app_clone.emit(
                     "wallpaper-mode-switch-complete",
                     serde_json::json!({
@@ -999,13 +1028,15 @@ fn set_wallpaper_mode(
                         "mode": mode_clone
                     }),
                 );
+                eprintln!("[DEBUG] set_wallpaper_mode: 成功事件已发送");
             }
             Err(e) => {
-                eprintln!("切换到 {} 模式失败: {}", mode_clone, e);
+                eprintln!("[ERROR] 切换到 {} 模式失败: {}", mode_clone, e);
                 // 失败时恢复轮播（如果之前在运行）
                 if was_running {
                     let _ = rotator.start();
                 }
+                eprintln!("[DEBUG] set_wallpaper_mode: 发送失败事件");
                 let _ = app_clone.emit(
                     "wallpaper-mode-switch-complete",
                     serde_json::json!({
@@ -1014,6 +1045,7 @@ fn set_wallpaper_mode(
                         "error": format!("切换模式失败: {}", e)
                     }),
                 );
+                eprintln!("[DEBUG] set_wallpaper_mode: 失败事件已发送");
             }
         };
     });
@@ -1079,6 +1111,44 @@ fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
         return Err("找不到主窗口".to_string());
     }
     Ok(())
+}
+
+/// 测试 GDI 壁纸窗口（仅用于测试）
+#[tauri::command]
+#[cfg(target_os = "windows")]
+fn test_gdi_wallpaper(
+    image_path: String,
+    style: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    use std::sync::Arc;
+    use std::sync::OnceLock;
+    use crate::wallpaper::manager::WallpaperManager;
+
+    // 全局单例，用于测试（实际应用中应该由 WallpaperController 管理）
+    static GDI_MANAGER: OnceLock<Arc<GdiWallpaperManager>> = OnceLock::new();
+    let gdi_manager = GDI_MANAGER.get_or_init(|| Arc::new(GdiWallpaperManager::new(app.clone())));
+
+    // 初始化管理器
+    gdi_manager
+        .init(app.clone())
+        .map_err(|e| format!("初始化 GDI 管理器失败: {}", e))?;
+
+    // 设置图片
+    let style_str = style.unwrap_or_else(|| "fill".to_string());
+    gdi_manager
+        .set_wallpaper(&image_path, &style_str, "none")
+        .map_err(|e| format!("设置壁纸失败: {}", e))?;
+
+    println!(
+        "[TEST] GDI 壁纸管理器已设置图片: {}, 样式: {}",
+        image_path, style_str
+    );
+
+    Ok(format!(
+        "GDI 壁纸管理器测试成功！图片: {}, 样式: {}",
+        image_path, style_str
+    ))
 }
 
 /// 壁纸窗口前端 ready 后调用，用于触发一次"推送当前壁纸到壁纸窗口"。
@@ -1321,6 +1391,7 @@ fn main() {
             open_file_path,
             open_file_folder,
             set_wallpaper,
+            test_gdi_wallpaper,
             migrate_images_from_json,
             get_browser_plugins,
             import_plugin_from_zip,

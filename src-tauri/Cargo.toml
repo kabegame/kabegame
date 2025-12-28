@@ -12,6 +12,18 @@ edition = "2021"
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
 
+[target.'cfg(windows)'.dependencies]
+winver = "1"
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+winreg = "0.52"
+
 [dependencies]
 tauri = { version = "2.0", features = ["tray-icon"] }
 tauri-plugin-dialog = "2.0"
@@ -31,15 +43,9 @@ zip = "0.6"
 rhai = { version = "1.19", features = ["sync"] }
 auto-launch = "0.5"
 rusqlite = { version = "0.31", features = ["bundled"] }
-windows-sys = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_System_DataExchange",
-    "Win32_System_Memory",
-    "Win32_UI_Shell",
-    "Win32_UI_WindowsAndMessaging",
-] }
+
 sha2 = "0.10"
+
 
 [features]
 # This feature is used for production builds or when `devPath` points to the filesystem

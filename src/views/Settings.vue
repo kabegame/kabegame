@@ -62,8 +62,8 @@
               <div class="form-item-content">
                 <el-select v-model="settings.wallpaperRotationStyle" placeholder="请选择显示方式" style="width: 100%"
                   :disabled="isModeSwitching || isStyleApplying" @change="handleWallpaperRotationStyleChange">
-                  <!-- 窗口模式：显示所有样式 -->
-                  <template v-if="settings.wallpaperMode === 'window'">
+                  <!-- 窗口模式和 GDI 模式：显示所有样式 -->
+                  <template v-if="settings.wallpaperMode === 'window' || settings.wallpaperMode === 'gdi'">
                     <el-option label="填充" value="fill">
                       <span>填充 - 保持宽高比，填满屏幕（可能裁剪）</span>
                     </el-option>
@@ -103,6 +103,9 @@
                   <template v-if="settings.wallpaperMode === 'native'">
                     原生模式：根据系统支持显示可用样式（单张壁纸/轮播均生效）
                   </template>
+                  <template v-else-if="settings.wallpaperMode === 'gdi'">
+                    GDI 模式：支持所有显示方式（单张壁纸/轮播均生效）
+                  </template>
                   <template v-else>
                     窗口模式：支持所有显示方式（单张壁纸/轮播均生效）
                   </template>
@@ -120,6 +123,10 @@
                     <el-option label="无过渡" value="none" />
                     <el-option label="淡入淡出" value="fade" />
                   </template>
+                  <!-- GDI 模式：不支持过渡效果 -->
+                  <template v-else-if="settings.wallpaperMode === 'gdi'">
+                    <el-option label="无过渡" value="none" />
+                  </template>
                   <!-- 窗口模式：支持所有过渡效果 -->
                   <template v-else>
                     <el-option label="无过渡" value="none" />
@@ -136,6 +143,9 @@
                     原生模式：仅支持无过渡和淡入淡出（受系统限制）<br />
                     无过渡：应用不会额外触发/预览过渡，但 Windows 本身在切换壁纸时可能仍会有系统级淡入动画
                   </template>
+                  <template v-else-if="settings.wallpaperMode === 'gdi'">
+                    GDI 模式：不支持过渡效果（GDI 渲染的限制）
+                  </template>
                   <template v-else>
                     窗口模式：过渡效果完全由应用渲染（支持淡入淡出/滑动/缩放）
                   </template>
@@ -149,10 +159,12 @@
                   :disabled="isModeSwitching" :class="{ 'wallpaper-mode-switching': isModeSwitching }">
                   <el-radio label="native">原生模式</el-radio>
                   <el-radio label="window">窗口模式（类似 Wallpaper Engine）</el-radio>
+                  <el-radio label="gdi">GDI 模式（原生渲染）</el-radio>
                 </el-radio-group>
                 <div class="setting-description">
                   原生模式：使用 Windows 原生壁纸设置，性能好但功能有限<br />
-                  窗口模式：使用窗口句柄显示，更灵活，可实现动画等效果（需要预先创建壁纸窗口）
+                  窗口模式：使用窗口句柄显示，更灵活，可实现动画等效果（需要预先创建壁纸窗口）<br />
+                  GDI 模式：使用原生 GDI 渲染，性能好且不受 WebView2 限制，但不支持过渡效果
                 </div>
               </div>
             </el-form-item>
@@ -320,13 +332,13 @@ const settings = ref({
   wallpaperRotationMode: "random" as "random" | "sequential",
   wallpaperRotationStyle: "fill" as "fill" | "fit" | "stretch" | "center" | "tile",
   wallpaperRotationTransition: "none" as "none" | "fade" | "slide" | "zoom",
-  wallpaperMode: "native" as "native" | "window",
+  wallpaperMode: "native" as "native" | "window" | "gdi",
 });
 
 const defaultImagesDir = ref<string>("");
 const effectiveDownloadDir = ref<string>("");
 const albums = ref<Album[]>([]);
-const activeTab = ref<string>("app");
+const activeTab = ref<string>("wallpaper");
 const wallpaperEngineMyprojectsDir = ref<string>("");
 
 const isModeSwitching = ref(false);
@@ -375,7 +387,7 @@ const loadSettings = async () => {
       wallpaperRotationTransition: (["none", "fade", "slide", "zoom"].includes(loadedSettings.wallpaperRotationTransition || "")
         ? loadedSettings.wallpaperRotationTransition
         : "none") as "none" | "fade" | "slide" | "zoom",
-      wallpaperMode: (loadedSettings.wallpaperMode || "native") as "native" | "window",
+      wallpaperMode: (loadedSettings.wallpaperMode || "native") as "native" | "window" | "gdi",
     };
 
     defaultImagesDir.value = await invoke<string>("get_default_images_dir");
@@ -666,7 +678,7 @@ const handleWallpaperModeChange = async (mode: string) => {
   isModeSwitching.value = true;
 
   try {
-    // 如果切换到原生模式，检查当前样式和过渡效果是否支持
+    // 如果切换到原生模式或 GDI 模式，检查当前样式和过渡效果是否支持
     if (mode === "native") {
       // 检查样式是否支持
       if (nativeWallpaperStyles.value.length > 0 && !nativeWallpaperStyles.value.includes(settings.value.wallpaperRotationStyle)) {
@@ -706,6 +718,28 @@ const handleWallpaperModeChange = async (mode: string) => {
       }
     }
 
+    // 如果切换到 GDI 模式，检查当前过渡效果是否支持（GDI 不支持过渡效果）
+    if (mode === "gdi") {
+      // 只有轮播启用时才需要同步/保存 transition（否则后端会拒绝）
+      if (settings.value.wallpaperRotationEnabled) {
+        if (settings.value.wallpaperRotationTransition !== "none") {
+          // 自动切换到无过渡
+          const newTransition = "none";
+          settings.value.wallpaperRotationTransition = newTransition;
+          try {
+            await invoke("set_wallpaper_rotation_transition", { transition: newTransition });
+          } catch (e) {
+            console.warn("自动切换过渡效果失败:", e);
+          }
+        }
+      } else {
+        // 非轮播场景：仅本地修正，避免 UI 残留不可用选项
+        if (settings.value.wallpaperRotationTransition !== "none") {
+          settings.value.wallpaperRotationTransition = "none";
+        }
+      }
+    }
+
     // 创建一个 Promise 来等待切换完成事件
     const waitForSwitchComplete = new Promise<{ success: boolean; error?: string }>(async (resolve) => {
       const unlistenFn = await listen<{ success: boolean; mode: string; error?: string }>(
@@ -730,7 +764,7 @@ const handleWallpaperModeChange = async (mode: string) => {
     const result = await waitForSwitchComplete;
 
     if (result.success) {
-    ElMessage.success("壁纸模式已切换");
+      ElMessage.success("壁纸模式已切换");
     } else {
       ElMessage.error(result.error || "切换模式失败");
     }

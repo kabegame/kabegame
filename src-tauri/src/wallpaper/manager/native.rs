@@ -50,26 +50,34 @@ impl WallpaperManager for NativeWallpaperManager {
     // 从注册表读取当前壁纸样式
     #[cfg(target_os = "windows")]
     fn get_style(&self) -> Result<String, String> {
-        use std::process::Command;
+        // 优化：直接使用 winreg crate 读取注册表，而不是通过 PowerShell
+        use winreg::enums::*;
+        use winreg::RegKey;
 
-        let script = r#"
-$regPath = "HKCU:\Control Panel\Desktop";
-$style = (Get-ItemProperty -Path $regPath -Name "WallpaperStyle" -ErrorAction SilentlyContinue).WallpaperStyle;
-$tile = (Get-ItemProperty -Path $regPath -Name "TileWallpaper" -ErrorAction SilentlyContinue).TileWallpaper;
-if ($null -eq $style) { $style = 10; }
-if ($null -eq $tile) { $tile = 0; }
-"#;
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let desktop_key = hkcu
+            .open_subkey("Control Panel\\Desktop")
+            .map_err(|e| format!("无法打开注册表键: {}", e))?;
 
-        let output = Command::new("powershell")
-            .args(["-Command", script])
-            .output()
-            .map_err(|e| format!("执行 PowerShell 命令失败: {}", e))?;
+        // 读取 WallpaperStyle 和 TileWallpaper
+        let style_value: String = desktop_key
+            .get_value("WallpaperStyle")
+            .unwrap_or_else(|_| "10".to_string()); // 默认 fill
+        let tile_value: String = desktop_key
+            .get_value("TileWallpaper")
+            .unwrap_or_else(|_| "0".to_string()); // 默认不平铺
 
-        if !output.status.success() {
-            return Err("无法从注册表读取当前壁纸样式".to_string());
-        }
-        let style = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok(style)
+        // 将注册表值映射回样式字符串
+        let style = match (style_value.as_str(), tile_value.as_str()) {
+            ("0", "0") => "center",
+            ("0", "1") => "tile",
+            ("2", "0") => "stretch",
+            ("6", "0") => "fit",
+            ("10", "0") => "fill",
+            _ => "fill", // 默认填充
+        };
+
+        Ok(style.to_string())
     }
 
     fn get_transition(&self) -> Result<String, String> {
@@ -79,8 +87,8 @@ if ($null -eq $tile) { $tile = 0; }
     }
 
     fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String> {
+        use std::os::windows::ffi::OsStrExt;
         use std::path::Path;
-        use std::process::Command;
 
         println!("[DEBUG] NativeWallpaperManager::set_wallpaper_path 被调用");
         println!("[DEBUG] file_path: {}", file_path);
@@ -93,15 +101,19 @@ if ($null -eq $tile) { $tile = 0; }
 
         #[cfg(target_os = "windows")]
         {
-            // Windows：优先尝试 IDesktopWallpaper（Shell COM）设置壁纸。
-            // 经验上它更可能绕开 Explorer 对 SPI_SETDESKWALLPAPER 的淡入动画处理。
-            //
-            // 注意：我们只在 transition=none 时使用它；其他 transition 仍走 SPI 以保持兼容。
+            // 优化：直接使用 FFI 调用 Windows API，而不是通过 PowerShell
+            // 这样可以大幅提升性能（避免启动 PowerShell 进程的开销）
+            
             let absolute_path = path
                 .canonicalize()
-                .map_err(|e| format!("Failed to canonicalize path: {}", e))?
-                .to_string_lossy()
-                .to_string();
+                .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
+
+            // 转换为 UTF-16 宽字符串
+            let wide_path: Vec<u16> = absolute_path
+                .as_os_str()
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
 
             let transition = self
                 ._app
@@ -109,11 +121,6 @@ if ($null -eq $tile) { $tile = 0; }
                 .get_settings()
                 .map(|s| s.wallpaper_rotation_transition)
                 .unwrap_or_else(|_| "none".to_string());
-
-            // 注意：尝试使用 IDesktopWallpaper（COM）来绕开 SPI 的系统淡入动画在部分环境中不可用；
-            // 目前先禁用该路径（保持编译稳定）。后续若要继续尝试，可改为 windows crate 的 COM 调用并做兼容回退。
-
-            let escaped_path = absolute_path.replace('"', "\"\"");
 
             // 设置壁纸路径
             // 注意：SystemParametersInfo 的最后一个参数 fuWinIni：
@@ -125,47 +132,52 @@ if ($null -eq $tile) { $tile = 0; }
             // 实测/经验：在一些系统上，使用 3（带广播）会触发 Explorer 的桌面淡入动画；
             // 而使用 1（仅更新用户配置文件）仍然会立即切换壁纸，但更少触发系统动画。
             // 因此：当用户选择 transition=none 时，即使 immediate=true 也优先用 1。
-            let immediate_value = if immediate {
+            let fu_win_ini = if immediate {
                 if transition == "none" {
-                    1
+                    1u32 // SPIF_UPDATEINIFILE
                 } else {
-                    3
+                    3u32 // SPIF_UPDATEINIFILE | SPIF_SENDWININICHANGE
                 }
             } else {
-                1
+                1u32 // SPIF_UPDATEINIFILE
             };
+
             println!(
                 "[DEBUG] set_wallpaper_path: transition={}, fuWinIni={}",
-                transition, immediate_value
-            );
-            let script = format!(
-                r#"
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class Wallpaper {{
-    [DllImport("user32.dll", CharSet=CharSet.Auto, SetLastError=true)]
-    public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
-}}
-"@;
-$path = "{}";
-$result = [Wallpaper]::SystemParametersInfo(20, 0, $path, {immediate_value});
-if ($result -eq 0) {{ throw "SystemParametersInfo failed" }}
-"#,
-                escaped_path
+                transition, fu_win_ini
             );
 
-            let output = Command::new("powershell")
-                .args(["-Command", &script])
-                .output()
-                .map_err(|e| format!("Failed to execute PowerShell command: {}", e))?;
+            // 直接使用 FFI 调用 SystemParametersInfoW
+            unsafe {
+                extern "system" {
+                    fn SystemParametersInfoW(
+                        uiAction: u32,
+                        uiParam: u32,
+                        pvParam: *mut std::ffi::c_void,
+                        fWinIni: u32,
+                    ) -> windows_sys::Win32::Foundation::BOOL;
+                }
 
-            if !output.status.success() {
-                let error_msg = String::from_utf8_lossy(&output.stderr);
-                return Err(format!("PowerShell command failed: {}", error_msg));
+                const SPI_SETDESKWALLPAPER: u32 = 0x0014; // 20
+
+                let result = SystemParametersInfoW(
+                    SPI_SETDESKWALLPAPER,
+                    0,
+                    wide_path.as_ptr() as *mut std::ffi::c_void,
+                    fu_win_ini,
+                );
+
+                if result == 0 {
+                    use windows_sys::Win32::Foundation::GetLastError;
+                    let err = GetLastError();
+                    return Err(format!(
+                        "SystemParametersInfoW failed. GetLastError={}",
+                        err
+                    ));
+                }
             }
 
-            println!("[DEBUG] 壁纸路径设置完成（未刷新桌面）");
+            println!("[DEBUG] 壁纸路径设置完成（使用 FFI，快速）");
             Ok(())
         }
 
@@ -180,7 +192,8 @@ if ($result -eq 0) {{ throw "SystemParametersInfo failed" }}
 
     #[cfg(target_os = "windows")]
     fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
-        use std::process::Command;
+        use winreg::enums::*;
+        use winreg::RegKey;
 
         // 将样式字符串映射到注册表值
         // Windows 注册表值：
@@ -198,59 +211,41 @@ if ($result -eq 0) {{ throw "SystemParametersInfo failed" }}
             _ => (10, 0), // 默认填充
         };
 
-        // 根据 immediate 参数决定是否刷新桌面
-        let script = if immediate {
-            format!(
-                r#"
-$regPath = "HKCU:\Control Panel\Desktop";
-$style = {};
-$tile = {};
-# 设置壁纸显示方式（注册表）
-Set-ItemProperty -Path $regPath -Name "WallpaperStyle" -Value $style -Type String;
-Set-ItemProperty -Path $regPath -Name "TileWallpaper" -Value $tile -Type String;
-# 刷新桌面以应用注册表更改
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class DesktopRefresh {{
-    [DllImport("user32.dll", SetLastError=true)]
-    public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
-    public static readonly IntPtr HWND_BROADCAST = new IntPtr(0xffff);
-    public static readonly uint WM_SETTINGCHANGE = 0x001A;
-    public static readonly uint SMTO_ABORTIFHUNG = 0x0002;
-}}
-"@;
-[DesktopRefresh]::SendMessageTimeout([DesktopRefresh]::HWND_BROADCAST, [DesktopRefresh]::WM_SETTINGCHANGE, [IntPtr]::Zero, [IntPtr]::Zero, [DesktopRefresh]::SMTO_ABORTIFHUNG, 5000, [ref][IntPtr]::Zero);
-"#,
-                style_value, tile_value
-            )
-        } else {
-            format!(
-                r#"
-$regPath = "HKCU:\Control Panel\Desktop";
-$style = {};
-$tile = {};
-# 设置壁纸显示方式（注册表）
-Set-ItemProperty -Path $regPath -Name "WallpaperStyle" -Value $style -Type String;
-Set-ItemProperty -Path $regPath -Name "TileWallpaper" -Value $tile -Type String;
-"#,
-                style_value, tile_value
-            )
-        };
+        // 优化：直接使用 winreg crate 操作注册表，而不是通过 PowerShell
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let desktop_key = hkcu
+            .open_subkey_with_flags("Control Panel\\Desktop", KEY_WRITE)
+            .map_err(|e| format!("无法打开注册表键: {}", e))?;
 
-        let output = Command::new("powershell")
-            .args(["-Command", &script])
-            .output()
-            .map_err(|e| format!("Failed to execute PowerShell command: {}", e))?;
+        // 将数值转换为字符串（Windows 注册表中这些值存储为字符串）
+        desktop_key
+            .set_value("WallpaperStyle", &style_value.to_string())
+            .map_err(|e| format!("设置 WallpaperStyle 失败: {}", e))?;
+        desktop_key
+            .set_value("TileWallpaper", &tile_value.to_string())
+            .map_err(|e| format!("设置 TileWallpaper 失败: {}", e))?;
 
-        if !output.status.success() {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("PowerShell command failed: {}", error_msg));
-        }
-
-        // immediate=true 时：仅刷新 WM_SETTINGCHANGE 在某些系统上仍可能不触发壁纸重新布局，
-        // 这里强制"重载一次当前壁纸路径"，确保新 style 立刻反映到桌面。
+        // 如果 immediate=true，发送 WM_SETTINGCHANGE 消息刷新桌面
         if immediate {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+            };
+
+            unsafe {
+                let mut result: usize = 0;
+                let _ = SendMessageTimeoutW(
+                    HWND_BROADCAST,
+                    WM_SETTINGCHANGE,
+                    0,
+                    0,
+                    SMTO_ABORTIFHUNG,
+                    5000,
+                    &mut result,
+                );
+            }
+
+            // 仅刷新 WM_SETTINGCHANGE 在某些系统上仍可能不触发壁纸重新布局，
+            // 这里强制"重载一次当前壁纸路径"，确保新 style 立刻反映到桌面。
             if let Ok(path) = self.get_wallpaper_path() {
                 if std::path::Path::new(&path).exists() {
                     // 忽略错误：如果重载失败，至少 style 已写入注册表
@@ -260,7 +255,7 @@ Set-ItemProperty -Path $regPath -Name "TileWallpaper" -Value $tile -Type String;
         }
 
         println!(
-            "[DEBUG] 壁纸样式设置完成，style={}, immediate={}",
+            "[DEBUG] 壁纸样式设置完成（使用 winreg，快速），style={}, immediate={}",
             style, immediate
         );
         Ok(())
@@ -328,47 +323,35 @@ Set-ItemProperty -Path $regPath -Name "TileWallpaper" -Value $tile -Type String;
 
     #[cfg(target_os = "windows")]
     fn refresh_desktop(&self) -> Result<(), String> {
-        #[cfg(target_os = "windows")]
-        {
-            use std::process::Command;
+        // 优化：直接使用 Windows API 刷新桌面，而不是通过 PowerShell
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+        };
 
-            // 刷新桌面以同步壁纸设置
-            // 使用 SendMessageTimeout 广播 WM_SETTINGCHANGE 消息
-            let script = r#"
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class DesktopRefresh {
-    [DllImport("user32.dll", SetLastError=true)]
-    public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
-    public static readonly IntPtr HWND_BROADCAST = new IntPtr(0xffff);
-    public static readonly uint WM_SETTINGCHANGE = 0x001A;
-    public static readonly uint SMTO_ABORTIFHUNG = 0x0002;
-}
-"@;
-$result = [DesktopRefresh]::SendMessageTimeout([DesktopRefresh]::HWND_BROADCAST, [DesktopRefresh]::WM_SETTINGCHANGE, [IntPtr]::Zero, [IntPtr]::Zero, [DesktopRefresh]::SMTO_ABORTIFHUNG, 5000, [ref][IntPtr]::Zero);
-if ($result -eq [IntPtr]::Zero) { throw "SendMessageTimeout failed" }
-"#;
+        unsafe {
+            let mut result: usize = 0;
+            let ret = SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                0,
+                0,
+                SMTO_ABORTIFHUNG,
+                5000,
+                &mut result,
+            );
 
-            let output = Command::new("powershell")
-                .args(["-Command", script])
-                .output()
-                .map_err(|e| format!("Failed to execute PowerShell command: {}", e))?;
-
-            if !output.status.success() {
-                let error_msg = String::from_utf8_lossy(&output.stderr);
-                return Err(format!("PowerShell command failed: {}", error_msg));
+            if ret == 0 {
+                use windows_sys::Win32::Foundation::GetLastError;
+                let err = GetLastError();
+                return Err(format!(
+                    "SendMessageTimeoutW failed. GetLastError={}",
+                    err
+                ));
             }
-
-            println!("[DEBUG] 桌面刷新完成");
-            Ok(())
         }
 
-        #[cfg(not(target_os = "windows"))]
-        {
-            // 非 Windows 平台不需要刷新桌面
-            Ok(())
-        }
+        println!("[DEBUG] 桌面刷新完成（使用 FFI，快速）");
+        Ok(())
     }
 
     fn init(&self, _app: AppHandle) -> Result<(), String> {
