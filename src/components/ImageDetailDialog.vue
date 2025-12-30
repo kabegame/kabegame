@@ -2,7 +2,7 @@
   <el-dialog v-model="visible" title="图片详情" width="600px">
     <div v-if="image" class="image-detail-content">
       <div class="detail-item">
-        <span class="detail-label">收集源：</span>
+        <span class="detail-label">源：</span>
         <span class="detail-value">{{ getPluginName(image.pluginId) }}</span>
       </div>
       <div v-if="!isFileUrl(image.url)" class="detail-item">
@@ -163,5 +163,3 @@ const handleOpenPath = async (path: string) => {
   }
 }
 </style>
-
-

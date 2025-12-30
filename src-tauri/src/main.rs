@@ -21,6 +21,7 @@ const CF_HDROP_FORMAT: u32 = 15; // Clipboard format for file drop
 
 mod crawler;
 mod plugin;
+mod runtime_flags;
 mod settings;
 mod storage;
 mod tray;
@@ -29,7 +30,11 @@ mod wallpaper_engine_export;
 
 use crawler::{crawl_images, ActiveDownloadInfo, CrawlResult};
 use dirs;
-use plugin::{BrowserPlugin, Plugin, PluginManager};
+use plugin::{
+    BrowserPlugin, ImportPreview, Plugin, PluginDetail, PluginManager, PluginSource,
+    StorePluginResolved, StoreSourceValidationResult,
+};
+use runtime_flags::{ForceDedupeStartResult, RuntimeFlags};
 use settings::{AppSettings, Settings, WindowState};
 use std::fs;
 use std::path::PathBuf;
@@ -42,11 +47,6 @@ use wallpaper_engine_export::{export_album_to_we_project, export_images_to_we_pr
 #[tauri::command]
 fn get_plugins(state: tauri::State<PluginManager>) -> Result<Vec<Plugin>, String> {
     state.get_all()
-}
-
-#[tauri::command]
-fn add_plugin(plugin: Plugin, state: tauri::State<PluginManager>) -> Result<Plugin, String> {
-    state.add(plugin)
 }
 
 #[tauri::command]
@@ -123,20 +123,56 @@ async fn crawl_images_command(
         e
     })?;
 
+    // 获取设置，检查是否启用自动去重
+    let settings_state = app.state::<Settings>();
+    let auto_deduplicate = settings_state
+        .get_settings()
+        .ok()
+        .map(|s| s.auto_deduplicate)
+        .unwrap_or(false);
+
+    // 运行时强制去重（手动去重期间无视设置）
+    let force_deduplicate = app
+        .try_state::<RuntimeFlags>()
+        .map(|f| f.force_deduplicate())
+        .unwrap_or(false);
+
     // 保存图片元数据到全局 store，关联 task_id
     for img_data in &result.images {
-        let hash = compute_file_hash(std::path::Path::new(&img_data.local_path))
-            .unwrap_or_else(|_| String::new());
+        let hash =
+            compute_file_hash(std::path::Path::new(&img_data.local_path)).unwrap_or_else(|e| {
+                eprintln!("[WARN] 计算文件哈希失败: {} - {}", img_data.local_path, e);
+                String::new()
+            });
+
+        // 自动/强制去重：检查哈希是否已存在
+        if auto_deduplicate || force_deduplicate {
+            if !hash.is_empty() {
+                if let Ok(Some(_existing)) = storage.find_image_by_hash(&hash) {
+                    // 哈希已存在，跳过添加
+                    eprintln!("[INFO] 跳过重复图片（哈希已存在）: {}", img_data.local_path);
+                    continue;
+                }
+            } else {
+                // 哈希计算失败，尝试通过文件路径检查是否已存在
+                if let Ok(Some(_existing)) = storage.find_image_by_path(&img_data.local_path) {
+                    eprintln!("[INFO] 跳过重复图片（路径已存在）: {}", img_data.local_path);
+                    continue;
+                }
+            }
+        }
+
+        let crawled_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let image_info = ImageInfo {
             id: uuid::Uuid::new_v4().to_string(),
             url: img_data.url.clone(),
             local_path: img_data.local_path.clone(),
             plugin_id: plugin_id.clone(),
             task_id: Some(task_id.clone()),
-            crawled_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            crawled_at,
             metadata: img_data.metadata.clone(),
             thumbnail_path: if img_data.thumbnail_path.trim().is_empty() {
                 img_data.local_path.clone()
@@ -145,6 +181,7 @@ async fn crawl_images_command(
             },
             favorite: false,
             hash,
+            order: Some(crawled_at as i64), // 默认 order = crawled_at（越晚越大）
         };
         let _ = storage.add_image(image_info);
     }
@@ -202,6 +239,15 @@ fn add_images_to_album(
 }
 
 #[tauri::command]
+fn remove_images_from_album(
+    album_id: String,
+    image_ids: Vec<String>,
+    state: tauri::State<Storage>,
+) -> Result<usize, String> {
+    state.remove_images_from_album(&album_id, &image_ids)
+}
+
+#[tauri::command]
 fn get_album_images(
     album_id: String,
     state: tauri::State<Storage>,
@@ -231,6 +277,31 @@ fn get_album_counts(
     state: tauri::State<Storage>,
 ) -> Result<std::collections::HashMap<String, usize>, String> {
     state.get_album_counts()
+}
+
+#[tauri::command]
+fn update_images_order(
+    image_orders: Vec<(String, i64)>,
+    state: tauri::State<Storage>,
+) -> Result<(), String> {
+    state.update_images_order(&image_orders)
+}
+
+#[tauri::command]
+fn update_album_images_order(
+    album_id: String,
+    image_orders: Vec<(String, i64)>,
+    state: tauri::State<Storage>,
+) -> Result<(), String> {
+    state.update_album_images_order(&album_id, &image_orders)
+}
+
+#[tauri::command]
+fn update_albums_order(
+    album_orders: Vec<(String, i64)>,
+    state: tauri::State<Storage>,
+) -> Result<(), String> {
+    state.update_albums_order(&album_orders)
 }
 
 fn compute_file_hash(path: &std::path::Path) -> Result<String, String> {
@@ -267,12 +338,66 @@ fn remove_image(image_id: String, state: tauri::State<Storage>) -> Result<(), St
     state.remove_image(&image_id)
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DedupeGalleryResult {
+    removed: usize,
+    removed_ids: Vec<String>,
+}
+
+/// 对画廊按 hash 去重：保留一条记录，其余仅从画廊移除（不删除原图文件）
+#[tauri::command]
+fn dedupe_gallery_by_hash(state: tauri::State<Storage>) -> Result<DedupeGalleryResult, String> {
+    let res = state.dedupe_gallery_by_hash_remove_only()?;
+    Ok(DedupeGalleryResult {
+        removed: res.removed,
+        removed_ids: res.removed_ids,
+    })
+}
+
+/// 开启“强制去重模式”。若当前有下载任务在跑，则会保持到下载队列空闲时自动关闭并通知前端。
+#[tauri::command]
+fn start_force_deduplicate(
+    flags: tauri::State<RuntimeFlags>,
+    download_queue: tauri::State<crawler::DownloadQueue>,
+) -> Result<ForceDedupeStartResult, String> {
+    // 先开启
+    flags.set_force_deduplicate(true);
+    flags.set_force_deduplicate_wait_until_idle(true);
+
+    // 判断是否需要等待下载结束
+    let queue_size = download_queue.get_queue_size().unwrap_or(0);
+    let active = download_queue
+        .get_active_downloads()
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let will_wait = queue_size > 0 || active > 0;
+
+    // 如果当前没有任何下载，直接关闭等待（也避免前端卡 loading）
+    if !will_wait {
+        flags.set_force_deduplicate(false);
+        flags.set_force_deduplicate_wait_until_idle(false);
+    }
+
+    Ok(ForceDedupeStartResult {
+        will_wait_until_downloads_end: will_wait,
+    })
+}
+
+/// 主动关闭“强制去重模式”（兜底/调试用）
+#[tauri::command]
+fn stop_force_deduplicate(flags: tauri::State<RuntimeFlags>) -> Result<(), String> {
+    flags.set_force_deduplicate(false);
+    flags.set_force_deduplicate_wait_until_idle(false);
+    Ok(())
+}
+
 // 获取应用数据目录路径
 fn get_app_data_dir_for_clear() -> PathBuf {
     dirs::data_local_dir()
         .or_else(|| dirs::data_dir())
         .expect("Failed to get app data directory")
-        .join("Kabegami Crawler")
+        .join("Kabegame")
 }
 
 // 清理应用数据（仅用户数据，不包括应用本身）
@@ -418,6 +543,23 @@ fn set_wallpaper(file_path: String, app: tauri::AppHandle) -> Result<(), String>
     Ok(())
 }
 
+/// 获取当前正在使用的壁纸路径（与当前 wallpaper_mode 对应）
+///
+/// - 返回 `None` 表示当前后端没有记录壁纸（例如从未设置过 window/gdi 壁纸）
+/// - 返回 `Some(path)` 表示当前后端记录的壁纸路径（不保证文件一定存在）
+#[tauri::command]
+fn get_current_wallpaper_path(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let controller = app.state::<WallpaperController>();
+    let manager = match controller.active_manager() {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
+    match manager.get_wallpaper_path() {
+        Ok(p) => Ok(Some(p)),
+        Err(_) => Ok(None),
+    }
+}
+
 #[tauri::command]
 fn migrate_images_from_json(state: tauri::State<Storage>) -> Result<usize, String> {
     state.migrate_from_json()
@@ -454,6 +596,90 @@ fn get_browser_plugins(state: tauri::State<PluginManager>) -> Result<Vec<Browser
 }
 
 #[tauri::command]
+fn get_plugin_sources(state: tauri::State<PluginManager>) -> Result<Vec<PluginSource>, String> {
+    state.load_plugin_sources()
+}
+
+#[tauri::command]
+fn save_plugin_sources(
+    sources: Vec<PluginSource>,
+    state: tauri::State<PluginManager>,
+) -> Result<(), String> {
+    state.save_plugin_sources(&sources)
+}
+
+#[tauri::command]
+async fn get_store_plugins(
+    source_id: Option<String>,
+    state: tauri::State<'_, PluginManager>,
+) -> Result<Vec<StorePluginResolved>, String> {
+    state.fetch_store_plugins(source_id.as_deref()).await
+}
+
+/// 统一的“源详情”加载：
+/// - 本地已安装：从 plugins_directory 下的 .kgpg 读取
+/// - 商店/官方源：根据 downloadUrl 远程下载到内存并解析（带缓存）
+#[tauri::command]
+async fn get_plugin_detail(
+    plugin_id: String,
+    download_url: Option<String>,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+    state: tauri::State<'_, PluginManager>,
+) -> Result<PluginDetail, String> {
+    match download_url {
+        Some(url) => {
+            state
+                .load_remote_plugin_detail(&plugin_id, &url, sha256.as_deref(), size_bytes)
+                .await
+        }
+        None => state.load_installed_plugin_detail(&plugin_id),
+    }
+}
+
+#[tauri::command]
+async fn validate_plugin_source(
+    index_url: String,
+    state: tauri::State<'_, PluginManager>,
+) -> Result<StoreSourceValidationResult, String> {
+    state.validate_store_source_index(&index_url).await
+}
+
+#[tauri::command]
+fn preview_import_plugin(
+    zip_path: String,
+    state: tauri::State<PluginManager>,
+) -> Result<ImportPreview, String> {
+    let path = std::path::PathBuf::from(zip_path);
+    state.preview_import_from_zip(&path)
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreInstallPreview {
+    tmp_path: String,
+    preview: ImportPreview,
+}
+
+/// 商店安装/更新：先下载到临时文件并做预览（版本变更/变更日志），由前端确认后再调用 import_plugin_from_zip 安装
+#[tauri::command]
+async fn preview_store_install(
+    download_url: String,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+    state: tauri::State<'_, PluginManager>,
+) -> Result<StoreInstallPreview, String> {
+    let tmp = state
+        .download_plugin_to_temp(&download_url, sha256.as_deref(), size_bytes)
+        .await?;
+    let preview = state.preview_import_from_zip(&tmp)?;
+    Ok(StoreInstallPreview {
+        tmp_path: tmp.to_string_lossy().to_string(),
+        preview,
+    })
+}
+
+#[tauri::command]
 fn import_plugin_from_zip(
     zip_path: String,
     state: tauri::State<PluginManager>,
@@ -471,12 +697,11 @@ fn install_browser_plugin(
 }
 
 #[tauri::command]
-fn toggle_plugin_favorite(
-    plugin_id: String,
-    favorite: bool,
+fn update_plugins_order(
+    plugin_orders: Vec<(String, i64)>,
     state: tauri::State<PluginManager>,
 ) -> Result<(), String> {
-    state.toggle_favorite(plugin_id, favorite)
+    state.update_plugins_order(&plugin_orders)
 }
 
 #[tauri::command]
@@ -508,17 +733,13 @@ async fn get_plugin_image(
         let path = entry.path();
 
         if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-            if let Ok(manifest) = state.read_plugin_manifest(&path) {
-                let file_name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                let generated_id = format!("{}-{}", file_name, manifest.name);
-
-                if generated_id == plugin_id {
-                    return state.read_plugin_image(&path, &image_path);
-                }
+            let file_name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            if file_name == plugin_id {
+                return state.read_plugin_image(&path, &image_path);
             }
         }
     }
@@ -526,12 +747,33 @@ async fn get_plugin_image(
     Err(format!("Plugin {} not found", plugin_id))
 }
 
+/// 详情页渲染文档图片用：本地已安装/远程商店源统一入口
+#[tauri::command]
+async fn get_plugin_image_for_detail(
+    plugin_id: String,
+    image_path: String,
+    download_url: Option<String>,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+    state: tauri::State<'_, PluginManager>,
+) -> Result<Vec<u8>, String> {
+    state
+        .load_plugin_image_for_detail(
+            &plugin_id,
+            download_url.as_deref(),
+            sha256.as_deref(),
+            size_bytes,
+            &image_path,
+        )
+        .await
+}
+
 #[tauri::command]
 async fn get_plugin_icon(
     plugin_id: String,
     state: tauri::State<'_, PluginManager>,
 ) -> Result<Option<Vec<u8>>, String> {
-    // 找到插件文件
+    // 找到插件文件（仅使用 file_name 作为 ID）
     let plugins_dir = state.get_plugins_directory();
     let entries = std::fs::read_dir(&plugins_dir)
         .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
@@ -541,17 +783,14 @@ async fn get_plugin_icon(
         let path = entry.path();
 
         if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-            if let Ok(manifest) = state.read_plugin_manifest(&path) {
-                let file_name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                let generated_id = format!("{}-{}", file_name, manifest.name);
+            let file_name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
 
-                if generated_id == plugin_id {
-                    return state.read_plugin_icon(&path);
-                }
+            if file_name == plugin_id {
+                return state.read_plugin_icon(&path);
             }
         }
     }
@@ -562,6 +801,16 @@ async fn get_plugin_icon(
 #[tauri::command]
 fn get_settings(state: tauri::State<Settings>) -> Result<AppSettings, String> {
     state.get_settings()
+}
+
+#[tauri::command]
+fn set_restore_last_tab(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
+    state.set_restore_last_tab(enabled)
+}
+
+#[tauri::command]
+fn set_last_tab_path(path: Option<String>, state: tauri::State<Settings>) -> Result<(), String> {
+    state.set_last_tab_path(path)
 }
 
 #[tauri::command]
@@ -600,6 +849,11 @@ fn set_gallery_image_aspect_ratio_match_window(
 #[tauri::command]
 fn set_gallery_page_size(size: u32, state: tauri::State<Settings>) -> Result<(), String> {
     state.set_gallery_page_size(size)
+}
+
+#[tauri::command]
+fn set_auto_deduplicate(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
+    state.set_auto_deduplicate(enabled)
 }
 
 #[tauri::command]
@@ -670,6 +924,13 @@ fn get_download_queue_size(app: tauri::AppHandle) -> Result<usize, String> {
     download_queue.get_queue_size()
 }
 
+/// 清空所有“等待队列”（不影响正在下载）
+#[tauri::command]
+fn clear_download_queue(app: tauri::AppHandle) -> Result<usize, String> {
+    let download_queue = app.state::<crawler::DownloadQueue>();
+    download_queue.clear_queue()
+}
+
 // 任务相关命令
 #[tauri::command]
 fn add_task(task: TaskInfo, state: tauri::State<Storage>) -> Result<(), String> {
@@ -724,37 +985,128 @@ fn set_wallpaper_rotation_enabled(
 ) -> Result<(), String> {
     state.set_wallpaper_rotation_enabled(enabled)?;
 
-    // 获取轮播器状态
-    let rotator = app.state::<WallpaperRotator>();
-    if enabled {
-        rotator.start()?;
-    } else {
+    // 注意：此命令只负责“开关落盘/停播清理”，不负责启动轮播线程。
+    // 轮播线程仅在“设置轮播画册ID”（或回落到画廊轮播）时启动，避免在未选择来源时启动后立刻退出/假死。
+    if !enabled {
+        let rotator = app.state::<WallpaperRotator>();
         rotator.stop();
-
-        // 如果关闭壁纸轮播且当前是窗口模式，关闭壁纸窗口
-        let current_settings = state.get_settings()?;
-        if current_settings.wallpaper_mode == "window" {
-            if let Some(window) = app.get_webview_window("wallpaper") {
-                if let Err(e) = window.hide() {
-                    eprintln!("[WARN] 关闭壁纸窗口失败: {}", e);
-                } else {
-                    println!("[DEBUG] 已关闭壁纸窗口（壁纸轮播已禁用）");
-                }
-            }
-        }
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RotationStartResult {
+    started: bool,
+    source: String,           // "album" | "gallery"
+    album_id: Option<String>, // source=album 时为 Some(id)，source=gallery 时为 Some("")（保留设置值）
 }
 
 #[tauri::command]
 fn set_wallpaper_rotation_album_id(
     album_id: Option<String>,
     state: tauri::State<Settings>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    state.set_wallpaper_rotation_album_id(album_id)
+    // 约定：
+    // - Some(non-empty) => 轮播指定画册
+    // - Some("")        => 轮播整个画廊（从当前壁纸开始）
+    // - None            => 清空来源并停止轮播线程
+    let normalized = album_id.map(|s| {
+        let t = s.trim().to_string();
+        if t.is_empty() {
+            "".to_string()
+        } else {
+            t
+        }
+    });
+
+    state.set_wallpaper_rotation_album_id(normalized.clone())?;
+
+    // 清空来源：停止线程（但不更改 enabled 开关）
+    if normalized.is_none() {
+        let rotator = app.state::<WallpaperRotator>();
+        rotator.stop();
+        return Ok(());
+    }
+
+    // 仅当“轮播已启用”时才尝试启动线程
+    let settings = state.get_settings()?;
+    if settings.wallpaper_rotation_enabled {
+        let rotator = app.state::<WallpaperRotator>();
+        let was_running = rotator.is_running();
+        // 当选择为画廊轮播（空字符串）时：从当前壁纸开始
+        let start_from_current = settings
+            .wallpaper_rotation_album_id
+            .as_deref()
+            .map(|s| s.is_empty())
+            .unwrap_or(false);
+        rotator
+            .ensure_running(start_from_current)
+            .map_err(|e| format!("启动轮播失败: {}", e))?;
+
+        // 关键：如果轮播线程本来就在运行，用户“切换轮播来源/画册”应当立即切换一次，
+        // 而不是等到下一次 interval 才切换。
+        // - 仅在 was_running=true 时触发，避免“未运行 -> ensure_running 已经设置起始壁纸”时又额外切一次。
+        if was_running {
+            rotator
+                .rotate()
+                .map_err(|e| format!("立即切换失败: {}", e))?;
+        }
+    }
+
+    Ok(())
 }
 
+/// 启动轮播（仅当 wallpaper_rotation_enabled=true）
+///
+/// - 若设置里保存了上次画册ID：优先尝试用画册轮播
+/// - 若失败或未保存：回落到“画廊轮播”（album_id = ""），并从当前壁纸开始
+#[tauri::command]
+fn start_wallpaper_rotation(
+    state: tauri::State<Settings>,
+    app: tauri::AppHandle,
+) -> Result<RotationStartResult, String> {
+    let settings = state.get_settings()?;
+    if !settings.wallpaper_rotation_enabled {
+        return Err("壁纸轮播未启用".to_string());
+    }
+
+    let rotator = app.state::<WallpaperRotator>();
+
+    // 1) 优先尝试：如果保存了“上次画册ID”且非空，则先用画册轮播
+    if let Some(saved) = settings.wallpaper_rotation_album_id.clone() {
+        if !saved.trim().is_empty() {
+            // 先不改设置，直接按当前设置尝试启动
+            match rotator.ensure_running(false) {
+                Ok(_) => {
+                    return Ok(RotationStartResult {
+                        started: true,
+                        source: "album".to_string(),
+                        album_id: Some(saved),
+                    });
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[WARN] start_wallpaper_rotation: saved album_id failed, fallback to gallery. err={}",
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    // 2) 回落到画廊轮播：写入 album_id="" 并启动（从当前壁纸开始）
+    state.set_wallpaper_rotation_album_id(Some("".to_string()))?;
+    rotator.ensure_running(true)?;
+
+    Ok(RotationStartResult {
+        started: true,
+        source: "gallery".to_string(),
+        album_id: Some("".to_string()),
+    })
+}
 #[tauri::command]
 fn set_wallpaper_rotation_interval_minutes(
     minutes: u32,
@@ -1127,9 +1479,9 @@ fn set_wallpaper_mode(
 }
 
 #[tauri::command]
-fn get_wallpaper_rotator_status(app: tauri::AppHandle) -> Result<bool, String> {
+fn get_wallpaper_rotator_status(app: tauri::AppHandle) -> Result<String, String> {
     let rotator = app.state::<WallpaperRotator>();
-    Ok(rotator.is_running())
+    Ok(rotator.get_status())
 }
 
 /// 获取系统原生模式支持的壁纸样式列表
@@ -1178,6 +1530,30 @@ fn get_native_wallpaper_styles() -> Result<Vec<String>, String> {
 fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
     if let Some(window) = app.webview_windows().values().next() {
+        // 在隐藏窗口前保存窗口状态
+        if window.label() == "main" {
+            let position = window.outer_position().ok();
+            let size = window.outer_size().ok();
+            let maximized = window.is_maximized().unwrap_or(false);
+
+            if let (Some(pos), Some(sz)) = (position, size) {
+                let window_state = WindowState {
+                    x: if maximized { None } else { Some(pos.x as f64) },
+                    y: if maximized { None } else { Some(pos.y as f64) },
+                    width: sz.width as f64,
+                    height: sz.height as f64,
+                    maximized,
+                };
+
+                // 保存窗口状态
+                if let Some(settings_state) = app.try_state::<Settings>() {
+                    if let Err(e) = settings_state.save_window_state(window_state) {
+                        eprintln!("保存窗口状态失败: {}", e);
+                    }
+                }
+            }
+        }
+
         window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
     } else {
         return Err("找不到主窗口".to_string());
@@ -1231,38 +1607,6 @@ fn wallpaper_window_ready(_app: tauri::AppHandle) -> Result<(), String> {
     // 标记窗口已完全初始化
     println!("壁纸窗口已就绪");
     WallpaperWindow::mark_ready();
-
-    // // 前端 ready 之后，补推一次当前状态（避免启动/切换时事件在监听器注册前丢失）
-    // let controller = app.state::<WallpaperController>();
-    // let settings = app.state::<Settings>();
-    // let s = settings.get_settings().unwrap_or_default();
-
-    // // 只有在 window 模式下才需要补推到 wallpaper window
-    // if s.wallpaper_mode == "window" {
-    //     let target = controller.manager_for_mode("window");
-    //     let _ = target.init(app.clone());
-
-    //     // 优先使用 window manager 里记录的当前路径；没有则用系统当前壁纸（native）
-    //     let mut path: Option<String> = target.get_wallpaper_path().ok();
-    //     if path.as_ref().map_or(true, |p| p.is_empty()) {
-    //         path = controller
-    //             .manager_for_mode("native")
-    //             .get_wallpaper_path()
-    //             .ok();
-    //     }
-
-    //     if let Some(p) = path {
-    //         if !p.is_empty() && std::path::Path::new(&p).exists() {
-    //             let _ = target.set_wallpaper_path(&p, true);
-    //             let _ = target.set_style(&s.wallpaper_rotation_style, true);
-    //             if s.wallpaper_rotation_enabled {
-    //                 let _ = target.set_transition(&s.wallpaper_rotation_transition, true);
-    //             }
-    //         } else {
-    //             eprintln!("[DEBUG] wallpaper_window_ready: no valid wallpaper path to push");
-    //         }
-    //     }
-    // }
     Ok(())
 }
 
@@ -1379,8 +1723,6 @@ fn main() {
                                     let _ = fs::remove_file(app_data_dir.join("images.db"));
                                     let _ = fs::remove_file(app_data_dir.join("settings.json"));
                                     let _ = fs::remove_file(app_data_dir.join("plugins.json"));
-                                    let _ =
-                                        fs::remove_file(app_data_dir.join("plugin_favorites.json"));
                                 } else {
                                     // 等待一段时间后重试
                                     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -1405,6 +1747,9 @@ fn main() {
             // 初始化设置管理器
             let settings = Settings::new(app.app_handle().clone());
             app.manage(settings);
+
+            // 运行时开关（不落盘）
+            app.manage(RuntimeFlags::default());
 
             // 恢复窗口状态（如果不在清理数据模式）
             if !is_cleaning_data {
@@ -1459,7 +1804,7 @@ fn main() {
                     WebviewUrl::App("wallpaper.html".into()),
                 )
                 // 给壁纸窗口一个固定标题，便于脚本/调试定位到正确窗口
-                .title("Kabegami Wallpaper")
+                .title("Kabegame Wallpaper")
                 .fullscreen(true)
                 .decorations(false)
                 // 设置窗口为透明，背景为透明
@@ -1515,7 +1860,6 @@ fn main() {
             get_task_images_paginated,
             // 原有命令
             get_plugins,
-            add_plugin,
             update_plugin,
             delete_plugin,
             crawl_images_command,
@@ -1526,6 +1870,7 @@ fn main() {
             delete_album,
             rename_album,
             add_images_to_album,
+            remove_images_from_album,
             get_album_images,
             get_album_image_ids,
             get_album_preview,
@@ -1533,17 +1878,32 @@ fn main() {
             get_images_count,
             delete_image,
             remove_image,
+            dedupe_gallery_by_hash,
+            start_force_deduplicate,
+            stop_force_deduplicate,
             toggle_image_favorite,
+            update_images_order,
+            update_album_images_order,
+            update_albums_order,
             open_file_path,
             open_file_folder,
             set_wallpaper,
+            get_current_wallpaper_path,
             test_gdi_wallpaper,
             migrate_images_from_json,
             get_browser_plugins,
+            get_plugin_sources,
+            save_plugin_sources,
+            get_store_plugins,
+            get_plugin_detail,
+            validate_plugin_source,
+            preview_import_plugin,
+            preview_store_install,
             import_plugin_from_zip,
             install_browser_plugin,
-            toggle_plugin_favorite,
+            update_plugins_order,
             get_plugin_image,
+            get_plugin_image_for_detail,
             get_plugin_icon,
             get_gallery_image,
             get_plugin_vars,
@@ -1557,6 +1917,7 @@ fn main() {
             set_gallery_columns,
             set_gallery_image_aspect_ratio_match_window,
             set_gallery_page_size,
+            set_auto_deduplicate,
             set_default_download_dir,
             set_wallpaper_engine_dir,
             get_wallpaper_engine_myprojects_dir,
@@ -1567,14 +1928,20 @@ fn main() {
             delete_run_config,
             cancel_task,
             get_download_queue_size,
+            clear_download_queue,
             copy_files_to_clipboard,
             set_wallpaper_rotation_enabled,
             set_wallpaper_rotation_album_id,
+            start_wallpaper_rotation,
             set_wallpaper_rotation_interval_minutes,
             set_wallpaper_rotation_mode,
             set_wallpaper_style,
             set_wallpaper_rotation_transition,
             set_wallpaper_mode,
+            set_restore_last_tab,
+            set_last_tab_path,
+            set_restore_last_tab,
+            set_last_tab_path,
             get_wallpaper_rotator_status,
             get_native_wallpaper_styles,
             #[cfg(target_os = "windows")]

@@ -1,16 +1,10 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
   "targetDefaults": {
-    "package-plugin": {
+    "package": {
       "cache": true,
-      "inputs": [
-        "default",
-        "^default",
-        "{workspaceRoot}/test_plugin/**/*"
-      ],
-      "outputs": [
-        "{workspaceRoot}/test_plugin_packed/**/*"
-      ]
+      "inputs": ["default", "^default"],
+      "outputs": ["{projectRoot}/packed/**/*"]
     }
   },
   "namedInputs": {
@@ -27,4 +21,3 @@
     "sharedGlobals": []
   }
 }
-

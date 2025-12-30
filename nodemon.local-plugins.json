@@ -1,0 +1,18 @@
+{
+  "watch": ["crawler-plugins"],
+  "ext": "json,rhai,md,txt,jpeg,jpg,png,gif,webp,ico",
+  "ignore": [
+    "node_modules",
+    "crawler-plugins/packed",
+    "crawler-plugins/node_modules",
+    "*.kgpg",
+    "**/node_modules/**"
+  ],
+  "exec": "node scripts/package-and-signal.js --local",
+  "verbose": true,
+  "delay": 500,
+  "legacyWatch": false
+}
+
+
+

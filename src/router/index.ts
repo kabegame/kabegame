@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import type { RouteRecordRaw } from "vue-router";
+import { invoke } from "@tauri-apps/api/core";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -53,9 +54,46 @@ const router = createRouter({
   routes,
 });
 
-router.beforeEach((to, _from, next) => {
-  document.title = `${to.meta.title || "Kabegami"} - 老婆收集器`;
+// 保存当前路径的函数
+const saveCurrentPath = async (path: string) => {
+  try {
+    const settings = await invoke<{ restoreLastTab: boolean }>("get_settings");
+    if (settings.restoreLastTab) {
+      // 保存所有路由路径（包括带参数的）
+      await invoke("set_last_tab_path", { path });
+    }
+  } catch (error) {
+    console.error("保存路径失败:", error);
+  }
+};
+
+router.beforeEach(async (to, from, next) => {
+  document.title = `${to.meta.title || "Kabegame"} - 老婆收集器`;
+  
+  // 保存当前路径（如果启用了恢复功能）
+  if (from.path !== to.path) {
+    await saveCurrentPath(to.path);
+  }
+  
   next();
+});
+
+// 应用启动时恢复上次的路径
+router.isReady().then(async () => {
+  try {
+    const settings = await invoke<{ restoreLastTab: boolean; lastTabPath: string | null }>("get_settings");
+    if (settings.restoreLastTab && settings.lastTabPath) {
+      // 尝试导航到保存的路径
+      await router.push(settings.lastTabPath).catch(() => {
+        // 如果路由不存在或导航失败，回退到画廊
+        return router.push("/gallery");
+      });
+    }
+  } catch (error) {
+    console.error("恢复路径失败:", error);
+    // 出错时回退到画廊
+    router.push("/gallery").catch(() => {});
+  }
 });
 
 export default router;

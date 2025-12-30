@@ -62,6 +62,7 @@ impl WallpaperManager for WindowWallpaperManager {
         // 等待 wallpaper 窗口前端 ready，避免事件在监听器注册前发出导致丢失
         WallpaperWindow::wait_ready(std::time::Duration::from_secs(100))?;
 
+        // TODO: 重构等待APP发送更新窗口结束的事件再设置路径，避免不同步。
         // 更新 manager 中的壁纸路径状态
         {
             let mut current_path = self

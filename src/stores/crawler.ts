@@ -27,6 +27,7 @@ export interface ImageInfo {
   thumbnailPath: string;
   favorite?: boolean;
   hash: string;
+  order?: number;
 }
 
 export interface PaginatedImages {
@@ -97,20 +98,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
         }
       );
 
-      // 图片添加事件监听器：当有新图片下载完成时，刷新画廊
-      let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
-      await listen<{ taskId: string; imageId: string }>(
-        "image-added",
-        async (_event) => {
-          if (refreshTimeout) {
-            clearTimeout(refreshTimeout);
-          }
-          refreshTimeout = setTimeout(async () => {
-            await loadImages(true);
-            refreshTimeout = null;
-          }, 500);
-        }
-      );
+      // 注意：image-added 事件由 Gallery.vue 处理增量刷新，
+      // store 不再全局监听，避免与 Gallery 的增量刷新逻辑冲突导致闪烁和批量出现问题
     } catch (error) {
       console.error("设置全局事件监听器失败:", error);
     }
@@ -559,7 +548,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       pluginId: config.pluginId,
       url: config.url,
       outputDir: config.outputDir,
-      userConfig: config.userConfig,
+      userConfig: config.userConfig ?? {},
     };
     await invoke("add_run_config", { config: cfg });
     await loadRunConfigs();
@@ -576,7 +565,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     if (!cfg) {
       throw new Error("运行配置不存在");
     }
-    await addTask(cfg.pluginId, cfg.url, cfg.outputDir, cfg.userConfig);
+    await addTask(cfg.pluginId, cfg.url, cfg.outputDir, cfg.userConfig ?? {});
   }
 
   // 获取图片列表（分页）
@@ -654,6 +643,19 @@ export const useCrawlerStore = defineStore("crawler", () => {
     } catch (error) {
       console.error("移除图片失败:", error);
       throw error;
+    }
+  }
+
+  // 批量从本地 store 中移除图片（用于后端批量操作后的 UI 同步）
+  function applyRemovedImageIds(imageIds: string[]) {
+    if (!imageIds || imageIds.length === 0) return;
+    const idSet = new Set(imageIds);
+    const before = images.value.length;
+    images.value = images.value.filter((img) => !idSet.has(img.id));
+    const removed = before - images.value.length;
+    if (removed > 0) {
+      totalImages.value = Math.max(0, totalImages.value - removed);
+      hasMore.value = currentPage.value * pageSize.value < totalImages.value;
     }
   }
 
@@ -910,6 +912,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     loadImagesCount,
     deleteImage,
     removeImage,
+    applyRemovedImageIds,
     deleteTask,
     stopTask,
     retryTask,

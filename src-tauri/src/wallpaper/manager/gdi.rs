@@ -35,7 +35,7 @@ impl GdiWallpaperWindow {
                 OsStr::new(s).encode_wide().chain(Some(0)).collect()
             }
 
-            const CLASS_NAME: &str = "KabegamiGdiWallpaper";
+            const CLASS_NAME: &str = "KabegameGdiWallpaper";
 
             // 先尝试注销窗口类（如果存在），然后重新注册
             // 这样可以确保窗口类状态是干净的

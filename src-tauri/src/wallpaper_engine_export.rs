@@ -47,7 +47,7 @@ fn sanitize_project_name(name: &str) -> String {
     }
     let out = out.trim_matches('_').trim().to_string();
     let out = if out.is_empty() {
-        "kabegami_wallpaper".to_string()
+        "kabegame_wallpaper".to_string()
     } else {
         out
     };
@@ -183,7 +183,7 @@ html, body {
 /* transitions (对齐 WallpaperLayer.vue) */
 .top.fade.enter {
   opacity: 1;
-  transition: opacity var(--kabegami-fade-ms, 800ms) ease-in-out;
+  transition: opacity var(--kabegame-fade-ms, 800ms) ease-in-out;
 }
 
 .top.slide.prep {
@@ -193,7 +193,7 @@ html, body {
 .top.slide.enter {
   opacity: 1;
   transform: translateX(0);
-  transition: opacity var(--kabegami-slide-ms, 800ms) ease, transform var(--kabegami-slide-ms, 800ms) ease;
+  transition: opacity var(--kabegame-slide-ms, 800ms) ease, transform var(--kabegame-slide-ms, 800ms) ease;
 }
 
 .top.zoom.prep {
@@ -203,7 +203,7 @@ html, body {
 .top.zoom.enter {
   opacity: 1;
   transform: scale(1);
-  transition: opacity var(--kabegami-zoom-ms, 900ms) ease, transform var(--kabegami-zoom-ms, 900ms) ease;
+  transition: opacity var(--kabegame-zoom-ms, 900ms) ease, transform var(--kabegame-zoom-ms, 900ms) ease;
 }
 "#
     .to_string()
@@ -212,7 +212,7 @@ html, body {
 fn build_main_js(config_json: &str, images_json: &str) -> String {
     format!(
         r#"
-// 由 Kabegami Crawler 导出生成
+// 由 Kabegame 导出生成
 (function() {{
   'use strict';
   
@@ -227,9 +227,9 @@ fn build_main_js(config_json: &str, images_json: &str) -> String {
 
   // 把过渡时长也导出成 CSS 变量，方便用户在 WE 里二次调（在 DOM 加载前就可以设置）
   if (document.documentElement) {{
-    document.documentElement.style.setProperty("--kabegami-fade-ms", `${{clampPositiveInt(CONFIG.fadeMs || 800, 800)}}ms`);
-    document.documentElement.style.setProperty("--kabegami-slide-ms", `${{clampPositiveInt(CONFIG.slideMs || 800, 800)}}ms`);
-    document.documentElement.style.setProperty("--kabegami-zoom-ms", `${{clampPositiveInt(CONFIG.zoomMs || 900, 900)}}ms`);
+    document.documentElement.style.setProperty("--kabegame-fade-ms", `${{clampPositiveInt(CONFIG.fadeMs || 800, 800)}}ms`);
+    document.documentElement.style.setProperty("--kabegame-slide-ms", `${{clampPositiveInt(CONFIG.slideMs || 800, 800)}}ms`);
+    document.documentElement.style.setProperty("--kabegame-zoom-ms", `${{clampPositiveInt(CONFIG.zoomMs || 900, 900)}}ms`);
   }}
 
   function init() {{
@@ -509,7 +509,7 @@ fn write_we_web_project(
         "type": "web",
         "file": "index.html",
         "preview": preview_name,
-        "description": "Exported from Kabegami Crawler",
+        "description": "Exported from Kabegame",
         "tags": []
     });
 
@@ -574,9 +574,9 @@ pub fn export_album_to_we_project(
     let images: Vec<ImageInfo> = storage.get_album_images(&album_id)?;
     let image_paths: Vec<String> = images.into_iter().map(|i| i.local_path).collect();
     let title = if album_name.trim().is_empty() {
-        format!("Kabegami_Album_{}", album_id)
+        format!("Kabegame_Album_{}", album_id)
     } else {
-        format!("Kabegami_{}", album_name.trim())
+        format!("Kabegame_{}", album_name.trim())
     };
     write_we_web_project(&output_parent_dir, &title, &image_paths, &options)
 }
@@ -596,6 +596,6 @@ pub fn export_images_to_we_project(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let t = title.unwrap_or_else(|| format!("Kabegami_Selection_{}", ts));
+    let t = title.unwrap_or_else(|| format!("Kabegame_Selection_{}", ts));
     write_we_web_project(&output_parent_dir, &t, &image_paths, &options)
 }

@@ -33,9 +33,9 @@ plugin-name.kgpg
 
 ## 推荐实现
 
-使用 **ZIP 格式**，文件扩展名 `.kabegami` 或 `.kbg`，内部结构：
+使用 **ZIP 格式**，文件扩展名 `.kgpg`，内部结构：
 - `manifest.json` - 必需，包含所有配置
-- `icon.*` - 可选，插件图标
+- `icon.png` - 可选，插件图标（仅支持 PNG）
 - `scripts/` - 可选，自定义脚本目录
 
 ### 快速展开策略

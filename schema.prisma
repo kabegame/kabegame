@@ -1,0 +1,95 @@
+// ============================================
+// Database Schema Documentation
+// ============================================
+// This file is used ONLY to document the database schema structure.
+// It does NOT provide any functionality and should NOT be used to generate Prisma client.
+// The actual database operations are handled by SQLite in storage.rs
+//
+// Database: SQLite
+// Location: {app_data_dir}/images.db
+//
+// ============================================
+
+generator client {
+    provider = "prisma-client-js"
+    output   = "./prisma-client"
+}
+
+datasource db {
+    provider = "sqlite"
+}
+
+// 任务表
+model Task {
+    id               String  @id
+    pluginId         String  @map("plugin_id")
+    url              String
+    outputDir        String? @map("output_dir")
+    userConfig       String? @map("user_config") // JSON string
+    status           String
+    progress         Float   @default(0)
+    totalImages      Int     @default(0) @map("total_images")
+    downloadedImages Int     @default(0) @map("downloaded_images")
+    startTime        Int?    @map("start_time")
+    endTime          Int?    @map("end_time")
+    error            String?
+
+    @@index([startTime(sort: Desc)], name: "idx_tasks_start_time")
+    @@map("tasks")
+}
+
+// 运行配置表
+model RunConfig {
+    id          String  @id
+    name        String
+    description String?
+    pluginId    String  @map("plugin_id")
+    url         String
+    outputDir   String? @map("output_dir")
+    userConfig  String? @map("user_config") // JSON string
+    createdAt   Int     @map("created_at")
+
+    @@map("run_configs")
+}
+
+// 图片表
+model Image {
+    id            String  @id
+    url           String
+    localPath     String  @map("local_path")
+    pluginId      String  @map("plugin_id")
+    taskId        String? @map("task_id")
+    crawledAt     Int     @map("crawled_at")
+    metadata      String? // JSON string
+    thumbnailPath String  @default("") @map("thumbnail_path")
+    favorite      Int     @default(0) // 0 or 1, represents boolean
+    hash          String  @default("")
+    order         Int?    @map("order")
+
+    @@index([crawledAt(sort: Desc)], name: "idx_crawled_at")
+    @@index([pluginId], name: "idx_plugin_id")
+    @@index([taskId], name: "idx_task_id")
+    @@index([hash], name: "idx_images_hash")
+    @@map("images")
+}
+
+// 画册表
+model Album {
+    id        String @id
+    name      String
+    createdAt Int    @map("created_at")
+    order     Int?   @map("order")
+
+    @@map("albums")
+}
+
+// 画册-图片关联表
+model AlbumImage {
+    albumId String @map("album_id")
+    imageId String @map("image_id")
+    order   Int?   @map("order")
+
+    @@id([albumId, imageId])
+    @@index([albumId], name: "idx_album_images_album")
+    @@map("album_images")
+}

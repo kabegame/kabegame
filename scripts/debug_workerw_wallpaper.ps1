@@ -1,5 +1,5 @@
 param(
-  [string]$TitleContains = "Kabegami Wallpaper",
+  [string]$TitleContains = "Kabegame Wallpaper",
   [switch]$DoSetParent
 )
 

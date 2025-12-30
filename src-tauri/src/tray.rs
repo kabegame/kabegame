@@ -1,17 +1,36 @@
 // 系统托盘模块
 
-use crate::wallpaper::{WallpaperRotator, WallpaperWindow};
+use crate::wallpaper::WallpaperRotator;
+use governor::{Quota, RateLimiter};
+use std::num::NonZeroU32;
+use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuEvent, MenuItem},
-    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
 };
+
+type DefaultDirectRateLimiter = RateLimiter<
+    governor::state::NotKeyed,
+    governor::state::InMemoryState,
+    governor::clock::DefaultClock,
+    governor::middleware::NoOpMiddleware,
+>;
+
+const TRAY_CLICK_DEBOUNCE_MS: u64 = 500; // 500ms 防抖
 
 /// 初始化系统托盘
 /// 延迟初始化，确保窗口已经创建
 pub fn setup_tray(app: AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // 创建防抖限流器
+        let limiter = RateLimiter::direct(
+            Quota::with_period(Duration::from_millis(TRAY_CLICK_DEBOUNCE_MS))
+                .unwrap()
+                .allow_burst(NonZeroU32::new(1).unwrap()),
+        );
 
         // 创建菜单项
         let show_item = match MenuItem::with_id(&app, "show", "显示窗口", true, None::<&str>) {
@@ -39,38 +58,12 @@ pub fn setup_tray(app: AppHandle) {
                 }
             };
 
+        // 仅在开发模式下创建调试菜单项
+        #[cfg(debug_assertions)]
         let debug_wallpaper_item = match MenuItem::with_id(
             &app,
             "debug_wallpaper",
-            "调试：打开壁纸窗口",
-            true,
-            None::<&str>,
-        ) {
-            Ok(item) => item,
-            Err(e) => {
-                eprintln!("创建菜单项失败: {}", e);
-                return;
-            }
-        };
-
-        let popup_wallpaper_item = match MenuItem::with_id(
-            &app,
-            "popup_wallpaper",
-            "调试：弹出壁纸窗口(3秒)",
-            true,
-            None::<&str>,
-        ) {
-            Ok(item) => item,
-            Err(e) => {
-                eprintln!("创建菜单项失败: {}", e);
-                return;
-            }
-        };
-
-        let popup_wallpaper_detach_item = match MenuItem::with_id(
-            &app,
-            "popup_wallpaper_detach",
-            "调试：脱离桌面层弹出(3秒)",
+            "调试：打开调试窗口",
             true,
             None::<&str>,
         ) {
@@ -90,6 +83,7 @@ pub fn setup_tray(app: AppHandle) {
         };
 
         // 创建菜单
+        #[cfg(debug_assertions)]
         let menu = match Menu::with_items(
             &app,
             &[
@@ -97,8 +91,23 @@ pub fn setup_tray(app: AppHandle) {
                 &hide_item,
                 &next_wallpaper_item,
                 &debug_wallpaper_item,
-                &popup_wallpaper_item,
-                &popup_wallpaper_detach_item,
+                &quit_item,
+            ],
+        ) {
+            Ok(menu) => menu,
+            Err(e) => {
+                eprintln!("创建菜单失败: {}", e);
+                return;
+            }
+        };
+
+        #[cfg(not(debug_assertions))]
+        let menu = match Menu::with_items(
+            &app,
+            &[
+                &show_item,
+                &hide_item,
+                &next_wallpaper_item,
                 &quit_item,
             ],
         ) {
@@ -120,16 +129,12 @@ pub fn setup_tray(app: AppHandle) {
 
         let handle_clone1 = app.clone();
         let handle_clone2 = app.clone();
-        let _tray = match TrayIconBuilder::new()
+        
+        // 创建托盘，明确禁止左键点击显示菜单
+        let tray = match TrayIconBuilder::new()
             .icon(icon)
-            .menu(&menu)
-            .tooltip("Kabegami")
-            .on_menu_event(move |_tray, event| {
-                handle_menu_event(&handle_clone1, event);
-            })
-            .on_tray_icon_event(move |_tray, event| {
-                handle_tray_icon_event(&handle_clone2, &event);
-            })
+            .tooltip("Kabegame")
+            .show_menu_on_left_click(false) // 关键：禁止左键显示菜单
             .build(&app)
         {
             Ok(tray) => tray,
@@ -138,21 +143,68 @@ pub fn setup_tray(app: AppHandle) {
                 return;
             }
         };
+        
+        // 设置菜单（只在右键时显示）
+        if let Err(e) = tray.set_menu(Some(menu)) {
+            eprintln!("设置托盘菜单失败: {}", e);
+        }
+        
+        // 处理托盘图标事件（带防抖）
+        tray.on_tray_icon_event(move |tray, event| {
+            handle_tray_icon_event(&handle_clone2, tray, event, &limiter);
+        });
+        
+        // 处理菜单事件
+        tray.on_menu_event(move |_tray, event| {
+            handle_menu_event(&handle_clone1, event);
+        });
     });
+}
+
+/// 恢复窗口状态
+fn restore_window_state(app: &AppHandle, window: &tauri::WebviewWindow) {
+    use crate::settings::Settings;
+    if let Some(settings) = app.try_state::<Settings>() {
+        if let Ok(Some(window_state)) = settings.get_window_state() {
+            // 恢复窗口大小
+            if let Err(e) = window.set_size(tauri::LogicalSize::new(
+                window_state.width,
+                window_state.height,
+            )) {
+                eprintln!("恢复窗口大小失败: {}", e);
+            }
+            // 恢复窗口位置
+            if let (Some(x), Some(y)) = (window_state.x, window_state.y) {
+                if let Err(e) = window.set_position(tauri::LogicalPosition::new(x, y)) {
+                    eprintln!("恢复窗口位置失败: {}", e);
+                }
+            }
+            // 恢复最大化状态
+            if window_state.maximized {
+                if let Err(e) = window.maximize() {
+                    eprintln!("恢复窗口最大化状态失败: {}", e);
+                }
+            }
+        }
+    }
 }
 
 /// 处理菜单事件
 fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     match event.id.as_ref() {
         "show" => {
-            if let Some(window) = app.webview_windows().values().next() {
-                let _ = window.show();
-                let _ = window.set_focus();
+            // 只显示主窗口（label 为 "main"），排除壁纸窗口
+            if let Some(main_window) = app.get_webview_window("main") {
+                // 恢复窗口状态
+                restore_window_state(app, &main_window);
+                let _ = main_window.show();
+                let _ = main_window.set_focus();
             }
         }
         "hide" => {
-            if let Some(window) = app.webview_windows().values().next() {
-                let _ = window.hide();
+            // 只隐藏主窗口（label 为 "main"），排除壁纸窗口
+            if let Some(main_window) = app.get_webview_window("main") {
+                let _ = main_window.hide();
             }
         }
         "quit" => {
@@ -184,7 +236,7 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
                     "wallpaper_debug",
                     WebviewUrl::App("index.html".into()),
                 )
-                .title("Kabegami Wallpaper Debug")
+                .title("Kabegame Wallpaper Debug")
                 .resizable(true)
                 .decorations(true)
                 .transparent(false)
@@ -194,48 +246,42 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
                 .build();
             });
         }
-        "popup_wallpaper" => {
-            // 临时把 wallpaper 窗口弹出到前台 3 秒，用于确认 wallpaper 窗口实际是否在渲染 WallpaperLayer
-            let app_handle = app.clone();
-            std::thread::spawn(move || {
-                if let Some(w) = app_handle.get_webview_window("wallpaper") {
-                    // 兜底推送一次当前壁纸到 wallpaper webview，避免因为窗口模式挂载失败导致窗口内容空白
-                    // 注意：debug_push_current_to_wallpaper_windows 方法可能不存在于当前版本的 WallpaperRotator
-                    // let rotator = app_handle.state::<WallpaperRotator>();
-                    // let _ = rotator.debug_push_current_to_wallpaper_windows();
-
-                    let _ = w.show();
-                    let _ = w.set_always_on_top(true);
-                    let _ = w.set_focus();
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    let _ = w.set_always_on_top(false);
-                    // 调试弹出结束后自动隐藏，避免"看起来一直在最上层"造成误解
-                    let _ = w.hide();
-                } else {
-                    eprintln!("wallpaper 窗口不存在，无法弹出");
-                }
-            });
-        }
         _ => {}
     }
 }
 
 /// 处理托盘图标事件
-fn handle_tray_icon_event(app: &AppHandle, event: &TrayIconEvent) {
-    // 在 Windows 上，右键点击会自动显示菜单，不需要额外处理
-    // 左键点击可以切换窗口显示/隐藏
-    if let TrayIconEvent::Click { button, .. } = event {
-        // 只在左键点击时切换窗口，右键点击会由系统自动显示菜单
-        if *button == MouseButton::Left {
-            if let Some(window) = app.webview_windows().values().next() {
-                if window.is_visible().unwrap_or(false) {
-                    let _ = window.hide();
-                } else {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+fn handle_tray_icon_event(
+    app: &AppHandle,
+    _tray: &tauri::tray::TrayIcon,
+    event: TrayIconEvent,
+    limiter: &DefaultDirectRateLimiter,
+) {
+    // 只处理左键按下事件（不处理释放事件，避免重复）
+    if let TrayIconEvent::Click {
+        button: MouseButton::Left,
+        button_state: MouseButtonState::Down,
+        ..
+    } = event
+    {
+        // 防抖检查：防止快速连击导致窗口状态混乱
+        if limiter.check().is_err() {
+            eprintln!("[托盘] 点击过快，已忽略（防抖）");
+            return;
+        }
+
+        // 切换主窗口显示/隐藏
+        if let Some(main_window) = app.get_webview_window("main") {
+            let is_visible = main_window.is_visible().unwrap_or(false);
+
+            if is_visible {
+                let _ = main_window.hide();
+            } else {
+                restore_window_state(app, &main_window);
+                let _ = main_window.show();
+                let _ = main_window.set_focus();
             }
         }
-        // 右键点击（MouseButton::Right）会由系统自动显示菜单，不需要处理
     }
+    // 右键点击会自动显示菜单（通过 set_menu 设置）
 }

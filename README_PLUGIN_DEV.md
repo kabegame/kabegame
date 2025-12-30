@@ -10,6 +10,7 @@
 test_plugin/
 └── sample-collector/
     ├── manifest.json    # 必需：插件元数据
+    ├── icon.png         # 可选：插件图标（仅支持 PNG）
     ├── config.json      # 可选：插件配置
     ├── doc.md          # 可选：用户文档
     ├── crawl.rhai      # 可选：爬取脚本（Rhai 脚本格式）
@@ -60,26 +61,22 @@ npm run dev:package-plugin
   "baseUrl": "https://example.com",
   "var": [
     {
-      "key": "start_page",
+      "key": "start",
       "type": "int",
       "name": "起始页面",
       "descripts": "要拉取的起始页面",
-      "default": 1
+      "default": 1,
+      "min": 1,
+      "max": 5
     },
     {
-      "key": "max_pages",
+      "key": "ens",
       "type": "int",
       "name": "最大页数",
-      "descripts": "最多爬取多少页",
-      "default": 10
-    },
-    {
-      "key": "image_quality",
-      "type": "options",
-      "name": "图片质量",
-      "descripts": "选择图片质量",
-      "options": ["high", "medium", "low"],
-      "default": "high"
+      "descripts": "爬取的结束页面",
+      "default": 5,
+      "min": 1,
+      "max": 5
     }
   ]
 }
@@ -89,11 +86,34 @@ npm run dev:package-plugin
 - `var` 字段是数组格式，可以保持变量定义的顺序
 - 每个变量定义包含：
   - `key`: 变量名（在脚本中使用）
-  - `type`: 变量类型（`int`、`float`、`options`、`boolean`、`list`）
+  - `type`: 变量类型（`int`、`float`、`options`、`boolean`、`list`、`checkbox`）
   - `name`: 展示给用户的名称
   - `descripts`: 描述（可选）
   - `default`: 默认值（可选）
-  - `options`: 选项列表（`options` 和 `list` 类型必需）
+  - `options`: 选项列表（不同类型规则不同，见下）
+  - `min`: 最小值（可选，仅用于 `int` 和 `float` 类型）
+  - `max`: 最大值（可选，仅用于 `int` 和 `float` 类型）
+
+**options（单选）说明：**
+- `options` 推荐使用：`[{ "name": "...", "variable": "..." }]`
+- UI 显示 `name`，实际传入脚本 / 保存配置的是 `variable`
+- 兼容旧格式：`["high","low"]`（等价于 name=variable）
+
+**list（字符串列表）说明：**
+- `list` 的值是一个**可变长的字符串数组**，例如：`["jpg","png"]`
+- `options`（可选）用于提供“可选项/建议项”，应保持为 `string[]`，例如：`["jpg","png","webp"]`
+- 不要把 `list.options` 改成 `{name, variable}`，否则会误导成“固定枚举”
+
+**checkbox（多选）说明：**
+- 前端 UI 会渲染为复选框组（多选）
+- 保存到后端 / 脚本的值是一个“对象（bool map）”，例如：
+  - 定义（推荐）：`{ "key": "foo", "type": "checkbox", "options": [ { "name": "A", "variable": "a" }, { "name": "B", "variable": "b" } ] }`
+  - 兼容旧格式：`{ "key": "foo", "type": "checkbox", "options": ["a","b"] }`（等价于 name=variable）
+  - 传入脚本：`foo.a`、`foo.b` 都是布尔值
+  - 保存/传参示例：`{ "foo": { "a": true, "b": false } }`
+- `default` 支持两种写法：
+  - 数组：`["a","b"]`（表示默认勾选的项）
+  - 对象：`{ "a": true, "b": false }`
 
 **注意**：选择器（如 `imageSelector`、`nextPageSelector`）现在不再在 `config.json` 中配置，而是在 `crawl.rhai` 脚本中由用户自己定义。这样提供了更大的灵活性。
 

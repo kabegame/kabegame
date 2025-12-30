@@ -1,24 +1,24 @@
 <template>
   <ContextMenu :visible="visible" :position="position" @close="$emit('close')">
-    <div class="context-menu-item" @click.stop="$emit('command', 'browse')">
+    <div v-if="(albumImageCount ?? 0) > 0" class="context-menu-item" @click.stop="$emit('command', 'browse')">
       <el-icon>
         <FolderOpened />
       </el-icon>
       <span style="margin-left: 8px;">浏览</span>
     </div>
-    <div class="context-menu-item" @click.stop="$emit('command', 'exportToWEAuto')">
+    <div v-if="(albumImageCount ?? 0) > 0" class="context-menu-item" @click.stop="$emit('command', 'exportToWEAuto')">
       <el-icon>
         <Download />
       </el-icon>
       <span style="margin-left: 8px;">导出并导入到 WE</span>
     </div>
-    <div class="context-menu-item" @click.stop="$emit('command', 'exportToWE')">
+    <div v-if="(albumImageCount ?? 0) > 0" class="context-menu-item" @click.stop="$emit('command', 'exportToWE')">
       <el-icon>
         <Download />
       </el-icon>
       <span style="margin-left: 8px;">导出到 Wallpaper Engine</span>
     </div>
-    <div class="context-menu-item" @click.stop="$emit('command', 'setWallpaperRotation')">
+    <div v-if="(albumImageCount ?? 0) > 0" class="context-menu-item" @click.stop="$emit('command', 'setWallpaperRotation')">
       <el-icon>
         <Picture />
       </el-icon>
@@ -27,7 +27,7 @@
         (已设置)
       </span>
     </div>
-    <div class="context-menu-divider"></div>
+    <div v-if="(albumImageCount ?? 0) > 0" class="context-menu-divider"></div>
     <div class="context-menu-item" @click.stop="$emit('command', 'rename')">
       <el-icon>
         <Edit />
@@ -55,6 +55,7 @@ interface Props {
   albumName?: string; // 画册名称（保留用于显示）
   currentRotationAlbumId?: string | null;
   wallpaperRotationEnabled?: boolean;
+  albumImageCount?: number; // 画册图片数量
 }
 
 // 收藏画册的固定ID（与后端保持一致）

@@ -1,21 +1,47 @@
 {
-  "name": "kabegami-crawler",
+  "name": "kabegame",
   "targets": {
-    "package-plugin": {
+    "dev": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "node scripts/package-plugin.js",
-        "cwd": "."
+        "command": "vite"
       },
-      "cache": true,
-      "inputs": [
-        "default",
-        "{workspaceRoot}/test_plugin/**/*"
-      ],
-      "outputs": [
-        "{workspaceRoot}/test_plugin_packed/**/*"
-      ]
+      "dependsOn": ["crawler-plugins:package"]
+    },
+    "dev-local-plugins": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "vite"
+      },
+      "dependsOn": ["crawler-plugins:package-local"]
+    },
+    "tauri:dev": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tauri dev"
+      },
+      "dependsOn": ["crawler-plugins:package"]
+    },
+    "tauri:dev-local-plugins": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tauri dev"
+      },
+      "dependsOn": ["crawler-plugins:package-local"]
+    },
+    "tauri:dev:watch": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tauri dev --additional-watch-folders ..\\crawler-plugins"
+      },
+      "dependsOn": ["crawler-plugins:package"]
+    },
+    "tauri:dev:watch-local-plugins": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tauri dev --additional-watch-folders ..\\crawler-plugins"
+      },
+      "dependsOn": ["crawler-plugins:package-local"]
     }
   }
 }
-

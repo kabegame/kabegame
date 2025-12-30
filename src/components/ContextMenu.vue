@@ -11,7 +11,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from "vue";
+import { ref, computed, watch, nextTick, type CSSProperties } from "vue";
 
 interface Props {
   visible: boolean;
@@ -27,14 +27,12 @@ defineEmits<{
 const menuRef = ref<HTMLElement | null>(null);
 const adjustedPosition = ref({ x: props.position.x, y: props.position.y });
 
-const menuStyle = computed(() => {
-  return {
-    position: 'fixed',
-    left: adjustedPosition.value.x + 'px',
-    top: adjustedPosition.value.y + 'px',
-    zIndex: 9999,
-  };
-});
+const menuStyle = computed<CSSProperties>(() => ({
+  position: "fixed",
+  left: `${adjustedPosition.value.x}px`,
+  top: `${adjustedPosition.value.y}px`,
+  zIndex: 9999,
+}));
 
 const adjustPosition = () => {
   // 使用双重 nextTick 确保 DOM 完全渲染

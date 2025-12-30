@@ -1,19 +1,14 @@
 {
-  "name": "kabegami-crawler",
-  "version": "0.1.0",
-  "description": "一个图片爬虫平台，支持插件配置的网址爬取",
+  "name": "kabegame",
+  "version": "1.0.0",
+  "description": "让你的桌面充满二次元气息的壁纸管理器！收集、管理、轮播，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元壁纸资源~",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vue-tsc && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri",
-    "tauri:dev": "nx run-many --target=package-plugin --all && tauri dev",
-    "tauri:dev:watch": "npm run package-plugin && concurrently \"npm run watch-plugin\" \"tauri dev\"",
-    "tauri:build": "tauri build",
-    "package-plugin": "nx package-plugin",
-    "watch-plugin": "nodemon --config nodemon.json",
-    "migrate": "echo 请在应用运行时，打开开发者工具（F12），在控制台执行: node scripts/migrate.js 的内容"
+    "dev": "node scripts/run.js dev --watch",
+    "dev:no-watch": "node scripts/run.js dev",
+    "build": "node scripts/run.js build",
+    "package-plugin": "nx run crawler-plugins:package",
+    "package-plugin:local": "nx run crawler-plugins:package-local"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
@@ -28,15 +23,16 @@
     "vue-router": "^4.3.0"
   },
   "devDependencies": {
+    "@nx/devkit": "^20.0.0",
     "@tauri-apps/cli": "^2.0",
     "@vitejs/plugin-vue": "^5.0.4",
     "@vue/devtools": "^8.0.5",
     "@vue/tsconfig": "^0.5.1",
     "archiver": "^7.0.1",
-    "concurrently": "^8.2.2",
-    "nodemon": "^3.0.3",
+    "nodemon": "^3.1.10",
     "nx": "^20.0.0",
     "sass": "^1.97.1",
+    "sharp": "^0.34.5",
     "typescript": "^5.4.5",
     "vite": "^5.1.4",
     "vue-tsc": "^2.0.6"

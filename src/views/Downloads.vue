@@ -8,6 +8,15 @@
             <Refresh />
           </el-icon>
         </el-button>
+        <el-button
+          type="danger"
+          plain
+          size="small"
+          :disabled="queueSize === 0"
+          @click="handleClearQueue"
+        >
+          终止队列
+        </el-button>
         <div class="header-stats">
           <el-tag type="info">队列中: {{ queueSize }}</el-tag>
           <el-tag type="warning">下载中: {{ activeDownloads.length }}</el-tag>
@@ -74,7 +83,7 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { Loading, Refresh } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 
 interface ActiveDownloadInfo {
   url: string;
@@ -128,6 +137,25 @@ const handleRefresh = async () => {
     ElMessage.error("刷新失败");
   } finally {
     isRefreshing.value = false;
+  }
+};
+
+const handleClearQueue = async () => {
+  if (queueSize.value === 0) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定要清空等待队列吗？将移除队列中 ${queueSize.value} 个待下载任务（不影响正在下载）。`,
+      "终止队列",
+      { type: "warning" }
+    );
+    const removed = await invoke<number>("clear_download_queue");
+    ElMessage.success(`已清空队列（移除 ${removed} 个任务）`);
+    await loadDownloads();
+  } catch (error) {
+    if (error !== "cancel") {
+      console.error("清空队列失败:", error);
+      ElMessage.error("清空队列失败");
+    }
   }
 };
 

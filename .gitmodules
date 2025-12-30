@@ -1,0 +1,3 @@
+[submodule "crawler-plugins"]
+	path = crawler-plugins
+	url = git@github.com:kabegame/crawler-plugins.git

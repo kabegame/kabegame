@@ -1,189 +1,270 @@
 <template>
-  <div class="gallery-container" ref="galleryContainerRef">
+  <div class="gallery-page">
     <!-- 顶部工具栏 -->
-    <GalleryToolbar :filter-plugin-id="filterPluginId" :plugins="plugins" :plugin-icons="pluginIcons"
-      :active-running-tasks-count="activeRunningTasksCount" :show-favorites-only="showFavoritesOnly"
-      @update:filter-plugin-id="filterPluginId = $event" @toggle-favorites-only="showFavoritesOnly = !showFavoritesOnly"
-      @refresh="loadImages(true)" @show-tasks-drawer="showTasksDrawer = true"
-      @show-crawler-dialog="showCrawlerDialog = true" />
-
-    <!-- 任务列表抽屉 -->
-    <TaskDrawer v-model="showTasksDrawer" :tasks="runningTasks" />
-
-    <!-- 图片网格 -->
-    <div v-if="loading" class="loading-skeleton">
-      <div class="skeleton-grid">
-        <div v-for="i in 20" :key="i" class="skeleton-item">
-          <el-skeleton :rows="0" animated>
-            <template #template>
-              <el-skeleton-item variant="image" style="width: 100%; height: 200px;" />
-            </template>
-          </el-skeleton>
-        </div>
-      </div>
-    </div>
-
-    <div v-else-if="displayedImages.length === 0" class="empty">
-      <el-empty description="还没有收藏呢~">
-        <el-button type="primary" @click="showCrawlerDialog = true">
-          <el-icon>
-            <Plus />
-          </el-icon>
-          开始收集
-        </el-button>
-      </el-empty>
-    </div>
-
-    <div v-else>
-      <ImageGrid :images="displayedImages" :image-url-map="imageSrcMap" :image-click-action="imageClickAction"
-        :columns="galleryColumns" :aspect-ratio-match-window="galleryImageAspectRatioMatchWindow"
-        :window-aspect-ratio="windowAspectRatio" :selected-images="selectedImages" @image-click="handleImageClick"
-        @image-dbl-click="handleImageDblClick" @contextmenu="handleContextMenu" />
-      <!-- 加载更多按钮 -->
-      <LoadMoreButton :has-more="crawlerStore.hasMore" :loading="isLoadingMore" @load-more="loadMoreImages" />
-    </div>
-
-    <!-- 右键菜单 -->
-    <GalleryContextMenu :visible="contextMenuVisible" :position="contextMenuPosition" :image="contextMenuImage"
-      :selected-count="selectedImages.size" :selected-image-ids="selectedImages" @close="contextMenuVisible = false"
-      @command="handleContextMenuCommand" />
-
-    <!-- 图片预览对话框 -->
-    <ImagePreviewDialog v-model="showImagePreview" v-model:image-url="previewImageUrl" :image-path="previewImagePath"
-      :image="previewImage" @contextmenu="handlePreviewContextMenu" />
-
-    <!-- 图片详情对话框 -->
-    <ImageDetailDialog v-model="showImageDetail" :image="selectedImage" />
-
-    <!-- 加入画册对话框 -->
-    <el-dialog v-model="showAlbumDialog" title="加入画册" width="420px">
-      <el-form label-width="80px">
-        <el-form-item label="选择画册">
-          <el-select v-model="selectedAlbumId" placeholder="请选择已有画册" style="width: 100%">
-            <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="新建画册">
-          <el-input v-model="newAlbumName" placeholder="输入新画册名称（可选）" />
-        </el-form-item>
-        <div style="color: var(--anime-text-muted); font-size: 12px; padding-left: 80px;">
-          如果同时选择已有画册和新建名称，将优先创建新画册。
-        </div>
-      </el-form>
-      <template #footer>
-        <el-button @click="showAlbumDialog = false">取消</el-button>
-        <el-button type="primary" @click="confirmAddToAlbum">确定</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 收集对话框 -->
-    <el-dialog v-model="showCrawlerDialog" title="开始收集图片" width="600px" :close-on-click-modal="false"
-      class="crawl-dialog" :show-close="true">
-      <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
-        <el-form-item label="运行配置">
-          <el-select v-model="selectedRunConfigId" placeholder="选择配置（可选）" style="width: 100%" clearable
-            popper-class="run-config-select-dropdown">
-            <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="cfg.name" :value="cfg.id">
-              <div class="run-config-option">
-                <div class="run-config-info">
-                  <div class="name">{{ cfg.name }}</div>
-                  <div class="desc" v-if="cfg.description">{{ cfg.description }}</div>
-                </div>
-                <el-button type="danger" link size="small" @click.stop="confirmDeleteRunConfig(cfg.id)">
-                  删除
-                </el-button>
-              </div>
-            </el-option>
-          </el-select>
-          <div class="config-hint">选择配置将直接使用配置参数；不选则按下方表单运行</div>
-        </el-form-item>
-        <el-form-item label="选择收集源">
-          <el-select v-model="form.pluginId" :disabled="!!selectedRunConfigId" placeholder="请选择收集源" style="width: 100%"
-            popper-class="crawl-plugin-select-dropdown">
-            <el-option v-for="plugin in enabledPlugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
-              <div class="plugin-option">
-                <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]" class="plugin-option-icon" />
-                <el-icon v-else class="plugin-option-icon-placeholder">
-                  <Grid />
-                </el-icon>
-                <span>{{ plugin.name }}</span>
-              </div>
-            </el-option>
-          </el-select>
-        </el-form-item>
-        <el-form-item label="输出目录">
-          <el-input v-model="form.outputDir" :disabled="!!selectedRunConfigId" placeholder="留空使用默认目录，或输入自定义路径"
-            clearable>
-            <template #append>
-              <el-button @click="selectOutputDir" :disabled="!!selectedRunConfigId">
-                <el-icon>
-                  <FolderOpened />
-                </el-icon>
-                选择
-              </el-button>
-            </template>
-          </el-input>
-        </el-form-item>
-
-        <!-- 插件变量配置 -->
-        <template v-if="pluginVars.length > 0">
-          <el-divider content-position="left">插件配置</el-divider>
-          <el-form-item v-for="varDef in pluginVars" :key="varDef.key" :label="varDef.name" :prop="`vars.${varDef.key}`"
-            :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
-            <el-input v-if="varDef.type === 'int' || varDef.type === 'float'" v-model.number="form.vars[varDef.key]"
-              :type="varDef.type === 'int' ? 'number' : 'number'" :disabled="!!selectedRunConfigId"
-              :placeholder="varDef.descripts || `请输入${varDef.name}`" style="width: 100%" />
-            <el-select v-else-if="varDef.type === 'options'" v-model="form.vars[varDef.key]"
-              :placeholder="varDef.descripts || `请选择${varDef.name}`" style="width: 100%"
-              :disabled="!!selectedRunConfigId">
-              <el-option v-for="option in varDef.options" :key="option" :label="option" :value="option" />
-            </el-select>
-            <el-switch v-else-if="varDef.type === 'boolean'" v-model="form.vars[varDef.key]" />
-            <el-select v-else-if="varDef.type === 'list'" v-model="form.vars[varDef.key]" multiple
-              :placeholder="varDef.descripts || `请选择${varDef.name}`" style="width: 100%"
-              :disabled="!!selectedRunConfigId">
-              <el-option v-for="option in varDef.options" :key="option" :label="option" :value="option" />
-            </el-select>
-            <el-input v-else-if="varDef.type === 'path' || varDef.type === 'folder'" v-model="form.vars[varDef.key]"
-              :placeholder="varDef.descripts || `请选择${varDef.name}`" clearable :disabled="!!selectedRunConfigId">
-              <template #append>
-                <el-button @click="() => selectFolder(varDef.key)" :disabled="!!selectedRunConfigId">
-                  <el-icon>
-                    <FolderOpened />
-                  </el-icon>
-                  选择
-                </el-button>
-              </template>
-            </el-input>
-            <el-input v-else v-model="form.vars[varDef.key]" :placeholder="varDef.descripts || `请输入${varDef.name}`"
-              style="width: 100%" :disabled="!!selectedRunConfigId" />
-            <div v-if="varDef.descripts">
-              {{ varDef.descripts }}
+    <PageHeader title="画廊" sticky>
+      <template #left>
+        <el-select :model-value="filterPluginId" @update:model-value="filterPluginId = $event" placeholder="筛选源"
+          clearable style="width: 150px" popper-class="crawl-plugin-select-dropdown">
+          <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
+            <div class="plugin-option">
+              <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]" class="plugin-option-icon" />
+              <el-icon v-else class="plugin-option-icon-placeholder">
+                <Grid />
+              </el-icon>
+              <span>{{ plugin.name }}</span>
             </div>
-          </el-form-item>
-        </template>
-
-        <el-divider content-position="left">保存为配置（可选）</el-divider>
-        <el-form-item>
-          <el-checkbox v-model="saveAsConfig" :disabled="!!selectedRunConfigId">保存为配置（下次再使用啦）</el-checkbox>
-        </el-form-item>
-        <el-form-item label="配置名称" v-if="saveAsConfig">
-          <el-input v-model="configName" placeholder="请输入配置名称" />
-        </el-form-item>
-        <el-form-item label="配置描述" v-if="saveAsConfig">
-          <el-input v-model="configDescription" placeholder="可选：配置说明" />
-        </el-form-item>
-      </el-form>
-
-      <template #footer>
-        <el-button @click="showCrawlerDialog = false">关闭</el-button>
-        <el-button type="primary" @click="handleStartCrawl" :loading="isCrawling"
-          :disabled="!selectedRunConfigId && !form.pluginId">
-          开始收集
+          </el-option>
+        </el-select>
+        <el-button :type="showFavoritesOnly ? 'primary' : 'default'" @click="showFavoritesOnly = !showFavoritesOnly"
+          circle>
+          <el-icon>
+            <Star />
+          </el-icon>
         </el-button>
+        <el-button @click="loadImages(true, { forceReload: true })" circle>
+          <el-icon>
+            <Refresh />
+          </el-icon>
+        </el-button>
+        <el-tooltip content="去重：仅从画廊移除，不删除源文件" placement="bottom">
+          <el-button @click="handleDedupeByHash" :loading="dedupeLoading" :disabled="dedupeLoading">
+            <el-icon>
+              <Filter />
+            </el-icon>
+            去重
+          </el-button>
+        </el-tooltip>
       </template>
-    </el-dialog>
+      <el-badge v-if="activeRunningTasksCount > 0" :value="activeRunningTasksCount" :max="99" class="tasks-badge">
+        <el-button @click="showTasksDrawer = true" class="tasks-drawer-trigger" circle type="primary">
+          <el-icon>
+            <List />
+          </el-icon>
+        </el-button>
+      </el-badge>
+      <el-button v-else @click="showTasksDrawer = true" class="tasks-drawer-trigger" circle type="primary">
+        <el-icon>
+          <List />
+        </el-icon>
+      </el-button>
+      <el-button type="primary" @click="showCrawlerDialog = true" class="add-task-btn">
+        <el-icon>
+          <Plus />
+        </el-icon>
+        导入
+      </el-button>
+    </PageHeader>
 
+    <GalleryView ref="galleryViewRef" class="gallery-container" mode="gallery" :images="displayedImages"
+      :image-url-map="imageSrcMap" :image-click-action="imageClickAction" :columns="galleryColumns"
+      :aspect-ratio-match-window="galleryImageAspectRatioMatchWindow" :window-aspect-ratio="windowAspectRatio"
+      :allow-select="true" :enable-context-menu="true" :show-load-more-button="true" :has-more="crawlerStore.hasMore"
+      :loading-more="isLoadingMore" :can-move-item="true" :is-blocked="isBlockingOverlayOpen"
+      @container-mounted="(el: HTMLElement) => setGalleryContainerEl(el)"
+      @adjust-columns="(delta: number) => throttledAdjustColumns(delta)" @scroll-stable="loadImageUrls()"
+      @load-more="loadMoreImages" @image-dbl-click="(img: any) => handleImageDblClick(img)"
+      @context-command="(payload: any) => handleGridContextCommand(payload)"
+      @move="(img: any, dir: any) => handleImageMove(img, dir)">
+      <template #before-grid>
+        <div v-if="showSkeleton" class="loading-skeleton">
+          <div class="skeleton-grid">
+            <div v-for="i in 20" :key="i" class="skeleton-item">
+              <el-skeleton :rows="0" animated>
+                <template #template>
+                  <el-skeleton-item variant="image" style="width: 100%; height: 200px;" />
+                </template>
+              </el-skeleton>
+            </div>
+          </div>
+        </div>
+
+        <div v-else-if="displayedImages.length === 0 && !crawlerStore.hasMore" class="empty fade-in">
+          <el-empty description="还没有收藏呢~">
+            <el-button type="primary" @click="showCrawlerDialog = true">
+              <el-icon>
+                <Plus />
+              </el-icon>
+              开始导入
+            </el-button>
+          </el-empty>
+        </div>
+      </template>
+
+      <template #overlays>
+        <!-- 任务列表抽屉 -->
+        <TaskDrawer v-model="showTasksDrawer" :tasks="runningTasks" />
+
+        <!-- 图片详情对话框 -->
+        <ImageDetailDialog v-model="showImageDetail" :image="selectedImage" />
+
+        <!-- 加入画册对话框 -->
+        <el-dialog v-model="showAlbumDialog" title="加入画册" width="420px">
+          <el-form label-width="80px">
+            <el-form-item label="选择画册">
+              <el-select v-model="selectedAlbumId" placeholder="请选择已有画册" style="width: 100%">
+                <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="新建画册">
+              <el-input v-model="newAlbumName" placeholder="输入新画册名称（可选）" />
+            </el-form-item>
+            <div style="color: var(--anime-text-muted); font-size: 12px; padding-left: 80px;">
+              如果同时选择已有画册和新建名称，将优先创建新画册。
+            </div>
+          </el-form>
+          <template #footer>
+            <el-button @click="showAlbumDialog = false">取消</el-button>
+            <el-button type="primary" @click="confirmAddToAlbum">确定</el-button>
+          </template>
+        </el-dialog>
+
+        <!-- 收集对话框 -->
+        <el-dialog v-model="showCrawlerDialog" title="开始导入图片" width="600px" :close-on-click-modal="false"
+          class="crawl-dialog" :show-close="true">
+          <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
+            <el-form-item label="运行配置">
+              <el-select v-model="selectedRunConfigId" placeholder="选择配置（可选）" style="width: 100%" clearable
+                popper-class="run-config-select-dropdown">
+                <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="cfg.name" :value="cfg.id">
+                  <div class="run-config-option">
+                    <div class="run-config-info">
+                      <div class="name">
+                        <el-tag v-if="configCompatibilityStatus[cfg.id]?.versionCompatible === false" type="danger"
+                          size="small" style="margin-right: 6px;">
+                          不兼容
+                        </el-tag>
+                        <el-tag v-else-if="configCompatibilityStatus[cfg.id]?.contentCompatible === false"
+                          type="warning" size="small" style="margin-right: 6px;">
+                          不兼容
+                        </el-tag>
+                        {{ cfg.name }}
+                        <span v-if="cfg.description" class="desc"> - {{ cfg.description }}</span>
+                      </div>
+                    </div>
+                    <div class="run-config-actions">
+                      <el-button type="primary" link size="small" @click.stop="loadConfigToForm(cfg.id)">
+                        载入
+                      </el-button>
+                      <el-button type="danger" link size="small" @click.stop="confirmDeleteRunConfig(cfg.id)">
+                        删除
+                      </el-button>
+                    </div>
+                  </div>
+                </el-option>
+              </el-select>
+              <div class="config-hint">
+                兼容的配置：可直接选择并一键运行（表单会锁定）；不兼容的配置：会在此处提示，且只能“载入到表单”后手动编辑运行
+              </div>
+            </el-form-item>
+            <el-form-item label="选择源">
+              <el-select v-model="form.pluginId" :disabled="!!selectedRunConfigId" placeholder="请选择源"
+                style="width: 100%" popper-class="crawl-plugin-select-dropdown">
+                <el-option v-for="plugin in enabledPlugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
+                  <div class="plugin-option">
+                    <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]" class="plugin-option-icon" />
+                    <el-icon v-else class="plugin-option-icon-placeholder">
+                      <Grid />
+                    </el-icon>
+                    <span>{{ plugin.name }}</span>
+                  </div>
+                </el-option>
+              </el-select>
+            </el-form-item>
+            <el-form-item label="输出目录">
+              <el-input v-model="form.outputDir" :disabled="!!selectedRunConfigId" placeholder="留空使用默认目录，或输入自定义路径"
+                clearable>
+                <template #append>
+                  <el-button @click="selectOutputDir" :disabled="!!selectedRunConfigId">
+                    <el-icon>
+                      <FolderOpened />
+                    </el-icon>
+                    选择
+                  </el-button>
+                </template>
+              </el-input>
+            </el-form-item>
+
+            <!-- 插件变量配置 -->
+            <template v-if="pluginVars.length > 0">
+              <el-divider content-position="left">插件配置</el-divider>
+              <el-form-item v-for="varDef in pluginVars" :key="varDef.key" :label="varDef.name"
+                :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
+                <el-input-number v-if="varDef.type === 'int' || varDef.type === 'float'" v-model="form.vars[varDef.key]"
+                  :min="varDef.min !== undefined ? varDef.min : undefined"
+                  :max="varDef.max !== undefined ? varDef.max : undefined" :disabled="!!selectedRunConfigId"
+                  :placeholder="varDef.descripts || `请输入${varDef.name}`" style="width: 100%" />
+                <el-select v-else-if="varDef.type === 'options'" v-model="form.vars[varDef.key]"
+                  :placeholder="varDef.descripts || `请选择${varDef.name}`" style="width: 100%"
+                  :disabled="!!selectedRunConfigId">
+                  <el-option v-for="option in varDef.options" :key="optionValue(option)" :label="optionLabel(option)"
+                    :value="optionValue(option)" />
+                </el-select>
+                <el-switch v-else-if="varDef.type === 'boolean'" v-model="form.vars[varDef.key]" />
+                <el-select v-else-if="varDef.type === 'list'" v-model="form.vars[varDef.key]" multiple
+                  :placeholder="varDef.descripts || `请选择${varDef.name}`" style="width: 100%"
+                  :disabled="!!selectedRunConfigId">
+                  <el-option v-for="option in varDef.options" :key="optionValue(option)" :label="optionLabel(option)"
+                    :value="optionValue(option)" />
+                </el-select>
+                <el-checkbox-group v-else-if="varDef.type === 'checkbox'" v-model="form.vars[varDef.key]"
+                  :disabled="!!selectedRunConfigId">
+                  <el-checkbox v-for="option in (varDef.options || [])" :key="optionValue(option)"
+                    :label="optionValue(option)">
+                    {{ optionLabel(option) }}
+                  </el-checkbox>
+                </el-checkbox-group>
+                <el-input v-else-if="varDef.type === 'file'" v-model="form.vars[varDef.key]"
+                  :placeholder="varDef.descripts || `请选择${varDef.name}`" clearable :disabled="!!selectedRunConfigId">
+                  <template #append>
+                    <el-button @click="() => selectFile(varDef.key)" :disabled="!!selectedRunConfigId">
+                      <el-icon>
+                        <FolderOpened />
+                      </el-icon>
+                      选择文件
+                    </el-button>
+                  </template>
+                </el-input>
+                <el-input v-else-if="varDef.type === 'path' || varDef.type === 'folder'" v-model="form.vars[varDef.key]"
+                  :placeholder="varDef.descripts || `请选择${varDef.name}`" clearable :disabled="!!selectedRunConfigId">
+                  <template #append>
+                    <el-button @click="() => selectFolder(varDef.key)" :disabled="!!selectedRunConfigId">
+                      <el-icon>
+                        <FolderOpened />
+                      </el-icon>
+                      选择
+                    </el-button>
+                  </template>
+                </el-input>
+                <el-input v-else v-model="form.vars[varDef.key]" :placeholder="varDef.descripts || `请输入${varDef.name}`"
+                  style="width: 100%" :disabled="!!selectedRunConfigId" />
+                <div v-if="varDef.descripts">
+                  {{ varDef.descripts }}
+                </div>
+              </el-form-item>
+            </template>
+
+            <el-divider content-position="left">保存为配置（可选）</el-divider>
+            <el-form-item>
+              <el-checkbox v-model="saveAsConfig" :disabled="!!selectedRunConfigId">保存为配置（下次再使用啦）</el-checkbox>
+            </el-form-item>
+            <el-form-item label="配置名称" v-if="saveAsConfig">
+              <el-input v-model="configName" placeholder="请输入配置名称" />
+            </el-form-item>
+            <el-form-item label="配置描述" v-if="saveAsConfig">
+              <el-input v-model="configDescription" placeholder="可选：配置说明" />
+            </el-form-item>
+          </el-form>
+
+          <template #footer>
+            <el-button @click="showCrawlerDialog = false">关闭</el-button>
+            <el-button type="primary" @click="handleStartCrawl" :loading="isCrawling"
+              :disabled="!selectedRunConfigId && !form.pluginId">
+              开始收集
+            </el-button>
+          </template>
+        </el-dialog>
+      </template>
+    </GalleryView>
   </div>
 </template>
 
@@ -192,53 +273,51 @@ import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watc
 import { invoke } from "@tauri-apps/api/core";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Plus } from "@element-plus/icons-vue";
-import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
+import { Plus, FolderOpened } from "@element-plus/icons-vue";
+import { useCrawlerStore, type ImageInfo, type RunConfig } from "@/stores/crawler";
 import { useAlbumStore } from "@/stores/albums";
 import { usePluginStore } from "@/stores/plugins";
 import { open } from "@tauri-apps/plugin-dialog";
+import PageHeader from "@/components/common/PageHeader.vue";
 import TaskDrawer from "@/components/TaskDrawer.vue";
-import ImagePreviewDialog from "@/components/ImagePreviewDialog.vue";
 import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
-import GalleryToolbar from "@/components/GalleryToolbar.vue";
-import ImageGrid from "@/components/ImageGrid.vue";
-import LoadMoreButton from "@/components/LoadMoreButton.vue";
+import GalleryView from "@/components/GalleryView.vue";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
   name: "Gallery",
 });
-import GalleryContextMenu from "@/components/GalleryContextMenu.vue";
-
-const DEFAULT_PAGE_SIZE = 50; // 与 store 默认保持一致，用于增量刷新
 
 const crawlerStore = useCrawlerStore();
 const pluginStore = usePluginStore();
 const albumStore = useAlbumStore();
 
+// 收藏画册的固定ID（与后端保持一致）
+const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
+
 const loading = ref(false);
+const showSkeleton = ref(false); // 控制是否显示骨架屏（延迟300ms显示）
+const skeletonTimer = ref<ReturnType<typeof setTimeout> | null>(null); // 骨架屏延迟定时器
 const isLoadingMore = ref(false); // 标志：正在加载更多图片
+const dedupeProcessing = ref(false); // 正在执行“按哈希去重”本体
+const dedupeWaitingDownloads = ref(false); // 需要等待下载队列空闲后才结束 loading
+const dedupeLoading = computed(() => dedupeProcessing.value || dedupeWaitingDownloads.value);
 const filterPluginId = ref<string | null>(null);
 const showFavoritesOnly = ref(false);
 const showCrawlerDialog = ref(false);
 const showTasksDrawer = ref(false);
-const contextMenuVisible = ref(false);
-const contextMenuImage = ref<ImageInfo | null>(null);
-const contextMenuPosition = ref({ x: 0, y: 0 });
 const showImageDetail = ref(false);
 const galleryContainerRef = ref<HTMLElement | null>(null);
+const galleryViewRef = ref<any>(null);
 const showAlbumDialog = ref(false);
+
+const setGalleryContainerEl = (el: HTMLElement) => {
+  galleryContainerRef.value = el;
+};
 const selectedAlbumId = ref<string>("");
 const newAlbumName = ref<string>("");
 const pendingAlbumImages = ref<ImageInfo[]>([]);
 const selectedImage = ref<ImageInfo | null>(null);
-// 多选状态管理
-const selectedImages = ref<Set<string>>(new Set());
-const lastSelectedIndex = ref<number>(-1); // 用于 Shift 多选
-const showImagePreview = ref(false);
-const previewImageUrl = ref("");
-const previewImagePath = ref("");
-const previewImage = ref<ImageInfo | null>(null);
 const imageClickAction = ref<"preview" | "open">("preview");
 const galleryColumns = ref<number>(0); // 0 表示自动（auto-fill），其他值表示固定列数
 const galleryImageAspectRatioMatchWindow = ref<boolean>(false); // 图片宽高比是否与窗口相同
@@ -277,7 +356,8 @@ const configDescription = ref("");
 
 const formRef = ref();
 
-const pluginVars = ref<Array<{ key: string; type: string; name: string; descripts?: string; default?: any; options?: string[] }>>([]);
+type VarOption = string | { name: string; variable: string };
+const pluginVars = ref<PluginVarDef[]>([]);
 const albums = computed(() => albumStore.albums);
 
 // 判断配置项是否必填（没有 default 值则为必填）
@@ -285,14 +365,70 @@ const isRequired = (varDef: { default?: any }) => {
   return varDef.default === undefined || varDef.default === null;
 };
 
+type PluginVarDef = { key: string; type: string; name: string; descripts?: string; default?: any; options?: VarOption[]; min?: number; max?: number };
+
+const optionLabel = (opt: VarOption) => (typeof opt === "string" ? opt : opt.name);
+const optionValue = (opt: VarOption) => (typeof opt === "string" ? opt : opt.variable);
+
+// 将 UI 表单中的 vars（checkbox 在 UI 层使用 string[]）转换为后端/脚本需要的对象：
+// 例如 { foo: ["a","b"] } -> { foo: { a: true, b: true } }
+const expandVarsForBackend = (uiVars: Record<string, any>, defs: PluginVarDef[]) => {
+  const expanded: Record<string, any> = { ...uiVars };
+  for (const def of defs) {
+    if (def.type !== "checkbox") continue;
+    const options = def.options || [];
+    const optionVars = options.map(optionValue);
+    const selected = Array.isArray(uiVars[def.key]) ? (uiVars[def.key] as string[]) : [];
+    const obj: Record<string, boolean> = {};
+    for (const v of optionVars) obj[v] = selected.includes(v);
+    expanded[def.key] = obj;
+  }
+  return expanded;
+};
+
+// 将后端保存/运行配置中的 checkbox 值聚合回 UI 用的 foo: string[]
+// - 格式：foo: { a: true, b: false }（脚本中用 foo.a/foo.b）
+const normalizeVarsForUI = (rawVars: Record<string, any>, defs: PluginVarDef[]) => {
+  const normalized: Record<string, any> = {};
+  for (const def of defs) {
+    if (def.type === "checkbox") {
+      const options = def.options || [];
+      const optionVars = options.map(optionValue);
+      // foo 是对象（{a:true,b:false}）
+      const raw = rawVars[def.key];
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        normalized[def.key] = optionVars.filter((v) => raw?.[v] === true);
+        continue;
+      }
+      // default: 支持数组（["a","b"]）或对象（{a:true,b:false}）
+      const d = def.default;
+      if (Array.isArray(d)) {
+        normalized[def.key] = d;
+      } else if (d && typeof d === "object") {
+        normalized[def.key] = optionVars.filter((v) => (d as any)[v] === true);
+      } else {
+        normalized[def.key] = [];
+      }
+      continue;
+    }
+
+    if (rawVars[def.key] !== undefined) {
+      normalized[def.key] = rawVars[def.key];
+    } else if (def.default !== undefined) {
+      normalized[def.key] = def.default;
+    }
+  }
+  return normalized;
+};
+
 // 获取验证规则
-const getValidationRules = (varDef: { key: string; name: string; type: string; default?: any }) => {
+const getValidationRules = (varDef: PluginVarDef) => {
   if (!isRequired(varDef)) {
     return [];
   }
 
   // 根据类型返回不同的验证规则
-  if (varDef.type === 'list') {
+  if (varDef.type === 'list' || varDef.type === 'checkbox') {
     return [
       {
         required: true,
@@ -319,9 +455,21 @@ const getValidationRules = (varDef: { key: string; name: string; type: string; d
         validator: (_rule: any, value: any, callback: any) => {
           if (value === undefined || value === null || value === '') {
             callback(new Error(`请输入${varDef.name}`));
-          } else {
-            callback();
+            return;
           }
+          // 对于 int 和 float 类型，验证 min/max
+          if ((varDef.type === 'int' || varDef.type === 'float') && typeof value === 'number') {
+            const varDefWithMinMax = varDef as PluginVarDef;
+            if (varDefWithMinMax.min !== undefined && value < varDefWithMinMax.min) {
+              callback(new Error(`${varDef.name}不能小于 ${varDefWithMinMax.min}`));
+              return;
+            }
+            if (varDefWithMinMax.max !== undefined && value > varDefWithMinMax.max) {
+              callback(new Error(`${varDef.name}不能大于 ${varDefWithMinMax.max}`));
+              return;
+            }
+          }
+          callback();
         }
       }
     ];
@@ -352,7 +500,6 @@ const isBlockingOverlayOpen = () => {
     showCrawlerDialog.value ||
     showTasksDrawer.value ||
     showAlbumDialog.value ||
-    showImagePreview.value ||
     showImageDetail.value
   ) {
     return true;
@@ -558,6 +705,310 @@ const openAddToAlbumDialog = async (images: ImageInfo[]) => {
   showAlbumDialog.value = true;
 };
 
+// 配置兼容性检查结果类型
+interface ConfigCompatibility {
+  versionCompatible: boolean; // 第一步：插件是否存在
+  contentCompatible: boolean; // 第二步：配置内容是否符合
+  versionReason?: string;
+  contentErrors: string[]; // 内容不兼容的具体错误
+  warnings: string[]; // 警告信息（如字段已删除但不算严重错误）
+}
+
+// 验证单个变量值
+const validateVarValue = (value: any, varDef: PluginVarDef): { valid: boolean; error?: string } => {
+  switch (varDef.type) {
+    case "int":
+      if (typeof value !== "number" || !Number.isInteger(value)) {
+        return { valid: false, error: "值必须是整数" };
+      }
+      if (varDef.min !== undefined && value < varDef.min) {
+        return { valid: false, error: `值不能小于 ${varDef.min}` };
+      }
+      if (varDef.max !== undefined && value > varDef.max) {
+        return { valid: false, error: `值不能大于 ${varDef.max}` };
+      }
+      break;
+    case "float":
+      if (typeof value !== "number") {
+        return { valid: false, error: "值必须是数字" };
+      }
+      if (varDef.min !== undefined && value < varDef.min) {
+        return { valid: false, error: `值不能小于 ${varDef.min}` };
+      }
+      if (varDef.max !== undefined && value > varDef.max) {
+        return { valid: false, error: `值不能大于 ${varDef.max}` };
+      }
+      break;
+    case "boolean":
+      if (typeof value !== "boolean") {
+        return { valid: false, error: "值必须是布尔值" };
+      }
+      break;
+    case "options":
+      if (varDef.options && Array.isArray(varDef.options)) {
+        const validValues = varDef.options.map(opt =>
+          typeof opt === "string" ? opt : (opt as any).variable || (opt as any).value
+        );
+        if (!validValues.includes(value)) {
+          return { valid: false, error: `值不在有效选项中` };
+        }
+      }
+      break;
+    case "checkbox":
+      if (!Array.isArray(value)) {
+        return { valid: false, error: "值必须是数组" };
+      }
+      if (varDef.options && Array.isArray(varDef.options)) {
+        const validValues = varDef.options.map(opt =>
+          typeof opt === "string" ? opt : (opt as any).variable || (opt as any).value
+        );
+        const invalidValues = value.filter(v => !validValues.includes(v));
+        if (invalidValues.length > 0) {
+          return { valid: false, error: `包含无效选项` };
+        }
+      }
+      break;
+    case "list":
+      if (!Array.isArray(value)) {
+        return { valid: false, error: "值必须是数组" };
+      }
+      break;
+  }
+  return { valid: true };
+};
+
+// 检查配置兼容性（两步验证）
+const checkConfigCompatibility = async (config: RunConfig): Promise<ConfigCompatibility> => {
+  const result: ConfigCompatibility = {
+    versionCompatible: true,
+    contentCompatible: true,
+    contentErrors: [],
+    warnings: []
+  };
+
+  // 第一步：检查插件是否存在（版本检查）
+  const pluginExists = plugins.value.some(p => p.id === config.pluginId);
+  if (!pluginExists) {
+    result.versionCompatible = false;
+    result.versionReason = "插件不存在";
+    result.contentCompatible = false;
+    return result;
+  }
+
+  try {
+    // 加载插件变量定义
+    const vars = await invoke<Array<PluginVarDef> | null>("get_plugin_vars", {
+      pluginId: config.pluginId,
+    });
+
+    if (!vars || vars.length === 0) {
+      // 插件没有变量定义，配置总是兼容的
+      return result;
+    }
+
+    const varDefMap = new Map(vars.map(def => [def.key, def]));
+    const userConfig = config.userConfig || {};
+
+    // 第二步：验证配置内容
+    for (const [key, value] of Object.entries(userConfig)) {
+      const varDef = varDefMap.get(key);
+
+      if (!varDef) {
+        // 字段已删除，记录为警告
+        result.warnings.push(`字段 "${key}" 已在新版本中删除`);
+        continue;
+      }
+
+      // 验证字段值
+      const validation = validateVarValue(value, varDef);
+      if (!validation.valid) {
+        result.contentCompatible = false;
+        result.contentErrors.push(`${varDef.name} (${key}): ${validation.error}`);
+      }
+    }
+
+    // 检查是否有新增的必填字段且没有默认值
+    for (const varDef of vars) {
+      if (!(varDef.key in userConfig)) {
+        if (isRequired(varDef) && varDef.default === undefined) {
+          result.contentCompatible = false;
+          result.contentErrors.push(`缺少必填字段: ${varDef.name} (${varDef.key})`);
+        }
+      }
+    }
+
+  } catch (error) {
+    console.error("检查配置兼容性失败:", error);
+    result.contentCompatible = false;
+    result.contentErrors.push("验证过程出错");
+  }
+
+  return result;
+};
+
+// 智能匹配配置到表单（尽量匹配能匹配的字段）
+const smartMatchConfigToForm = async (config: RunConfig): Promise<{ success: boolean; message?: string }> => {
+  // 检查插件是否存在
+  const pluginExists = plugins.value.some(p => p.id === config.pluginId);
+  if (!pluginExists) {
+    return { success: false, message: "插件不存在，无法载入配置" };
+  }
+
+  // 加载插件变量定义
+  await loadPluginVars(config.pluginId);
+
+  const userConfig = config.userConfig || {};
+  const matchedVars: Record<string, any> = {};
+  const varDefMap = new Map(pluginVars.value.map(def => [def.key, def]));
+
+  // 尝试匹配每个配置字段
+  for (const [key, value] of Object.entries(userConfig)) {
+    const varDef = varDefMap.get(key);
+
+    if (!varDef) {
+      // 字段已删除，跳过
+      continue;
+    }
+
+    // 验证值是否有效
+    const validation = validateVarValue(value, varDef);
+    if (validation.valid) {
+      // 值有效，直接使用
+      matchedVars[key] = value;
+    } else {
+      // 值无效，使用默认值（如果有）
+      if (varDef.default !== undefined) {
+        matchedVars[key] = varDef.default;
+      }
+    }
+  }
+
+  // 填充缺失字段的默认值
+  for (const varDef of pluginVars.value) {
+    if (!(varDef.key in matchedVars)) {
+      if (varDef.default !== undefined) {
+        matchedVars[varDef.key] = varDef.default;
+      }
+    }
+  }
+
+  // 转换为 UI 格式
+  const cfgUiVars = normalizeVarsForUI(matchedVars, pluginVars.value as PluginVarDef[]);
+
+  // 更新表单
+  form.value.pluginId = config.pluginId;
+  form.value.outputDir = config.outputDir || "";
+  form.value.vars = cfgUiVars;
+
+  // 取消选择配置，允许用户编辑
+  selectedRunConfigId.value = null;
+
+  return { success: true };
+};
+
+// 配置兼容性状态（用于UI显示）
+const configCompatibilityStatus = ref<Record<string, ConfigCompatibility>>({});
+
+// 配置兼容性缓存（用于避免重复计算）
+const configCompatibilityCache = ref<Map<string, ConfigCompatibility>>(new Map());
+
+// 获取配置兼容性（带缓存）
+const getConfigCompatibility = async (configId: string): Promise<ConfigCompatibility> => {
+  if (configCompatibilityCache.value.has(configId)) {
+    return configCompatibilityCache.value.get(configId)!;
+  }
+
+  const config = runConfigs.value.find(c => c.id === configId);
+  if (!config) {
+    return {
+      versionCompatible: false,
+      contentCompatible: false,
+      versionReason: "配置不存在",
+      contentErrors: [],
+      warnings: []
+    };
+  }
+
+  const compatibility = await checkConfigCompatibility(config);
+  configCompatibilityCache.value.set(configId, compatibility);
+  // 更新UI状态
+  configCompatibilityStatus.value[configId] = compatibility;
+  return compatibility;
+};
+
+// 清除兼容性缓存
+const clearCompatibilityCache = () => {
+  configCompatibilityCache.value.clear();
+  configCompatibilityStatus.value = {};
+};
+
+// 批量检查所有配置的兼容性（用于UI显示）
+const checkAllConfigsCompatibility = async () => {
+  if (runConfigs.value.length === 0) {
+    configCompatibilityStatus.value = {};
+    return;
+  }
+
+  const status: Record<string, ConfigCompatibility> = {};
+  const promises = runConfigs.value.map(async (config) => {
+    const compatibility = await getConfigCompatibility(config.id);
+    status[config.id] = compatibility;
+  });
+  await Promise.all(promises);
+  // 一次性更新所有状态，确保响应式更新
+  configCompatibilityStatus.value = { ...status };
+};
+
+// 监听配置列表和插件列表变化，重新检查兼容性
+watch(
+  () => {
+    // 关键：不要只依赖数组引用（否则 push/unshift 不会触发），而是依赖“结构化签名”
+    const cfgSig = runConfigs.value.map((c) => ({
+      id: c.id,
+      pluginId: c.pluginId,
+      // userConfig 的变化也可能导致兼容性变化；这里用 JSON 字符串作为轻量签名
+      userConfigSig: JSON.stringify(c.userConfig || {}),
+    }));
+    const pluginSig = plugins.value.map((p) => `${p.id}:${p.version}:${p.enabled}`);
+    return { cfgSig, pluginSig };
+  },
+  async () => {
+    // 插件列表变化（尤其是版本更新）会影响 vars 定义/默认值，但如果当前 pluginId 不变，
+    // `watch(form.pluginId)` 不会触发，导致导入弹窗仍展示旧 vars。
+    // 因此：当导入弹窗打开时，插件列表变更也要强制 reload 一次当前 plugin 的 vars + 保存配置。
+    if (showCrawlerDialog.value && form.value.pluginId) {
+      await loadPluginVars(form.value.pluginId);
+    }
+    clearCompatibilityCache();
+    await checkAllConfigsCompatibility();
+  },
+  { immediate: true }
+);
+
+// 打开导入对话框时，兜底刷新一次（保证下拉打开时就能看到兼容性提示）
+watch(showCrawlerDialog, async (open) => {
+  if (!open) return;
+  // 关键：用户可能刚在“源/插件”页刷新或更新了已安装源（.kgpg 内的 config.json/var 定义变更）
+  // 但这里若 pluginId 没变，`watch(form.pluginId)` 不会触发，导致导入弹窗仍展示旧的变量/配置。
+  // 因此弹窗打开时做一次“兜底同步”：
+  // - 刷新已安装源列表（从文件系统重新读取 .kgpg）
+  // - 重新加载当前选中源的变量定义 + 已保存用户配置
+  // - 重新计算兼容性提示
+  try {
+    await pluginStore.loadPlugins();
+  } catch (e) {
+    // 刷新失败不应阻塞弹窗打开；兼容性/变量加载会按现有状态继续
+    console.debug("导入弹窗打开时刷新已安装源失败（忽略）：", e);
+  }
+
+  if (form.value.pluginId) {
+    await loadPluginVars(form.value.pluginId);
+  }
+
+  clearCompatibilityCache();
+  await checkAllConfigsCompatibility();
+});
+
 // 删除运行配置（从下拉项直接删除）
 const confirmDeleteRunConfig = async (configId: string) => {
   try {
@@ -572,12 +1023,65 @@ const confirmDeleteRunConfig = async (configId: string) => {
       selectedRunConfigId.value = null;
       // 保留表单内容，便于用户直接修改后保存/运行
     }
+    clearCompatibilityCache();
     ElMessage.success("配置已删除");
   } catch (error) {
     if (error !== "cancel") {
       console.error("删除运行配置失败:", error);
       ElMessage.error("删除配置失败");
     }
+  }
+};
+
+// 载入配置到表单（强制载入，即使不兼容）
+const loadConfigToForm = async (configId: string) => {
+  const config = runConfigs.value.find(c => c.id === configId);
+  if (!config) {
+    ElMessage.error("配置不存在");
+    return;
+  }
+
+  // 检查兼容性
+  const compatibility = await getConfigCompatibility(configId);
+
+  // 如果版本不兼容，直接提示
+  if (!compatibility.versionCompatible) {
+    await ElMessageBox.alert(
+      `该配置关联的插件不存在：${compatibility.versionReason || "未知错误"}\n无法载入配置。`,
+      "插件缺失",
+      { type: "error" }
+    );
+    return;
+  }
+
+  // 如果内容不兼容，提示用户但允许继续
+  if (!compatibility.contentCompatible) {
+    const errorMsg = compatibility.contentErrors.length > 0
+      ? `配置内容与当前插件版本不兼容：\n${compatibility.contentErrors.join('\n')}`
+      : "配置内容与当前插件版本不兼容";
+    const warningMsg = compatibility.warnings.length > 0
+      ? `\n\n警告：\n${compatibility.warnings.join('\n')}`
+      : "";
+
+    try {
+      await ElMessageBox.confirm(
+        `${errorMsg}${warningMsg}\n\n将尝试匹配可用的配置项，缺失的字段将使用默认值。是否继续？`,
+        "配置不兼容",
+        { type: "warning", confirmButtonText: "继续载入", cancelButtonText: "取消" }
+      );
+    } catch (error) {
+      if (error === "cancel") {
+        return;
+      }
+    }
+  }
+
+  // 智能匹配并载入配置
+  const result = await smartMatchConfigToForm(config);
+  if (result.success) {
+    ElMessage.success("配置已载入，快乐玩耍吧！");
+  } else {
+    ElMessage.error(result.message || "载入配置失败");
   }
 };
 
@@ -644,7 +1148,7 @@ const loadPluginIcons = async () => {
           .map((byte) => String.fromCharCode(byte))
           .join("");
         const base64 = btoa(binaryString);
-        pluginIcons.value[plugin.id] = `data:image/x-icon;base64,${base64}`;
+        pluginIcons.value[plugin.id] = `data:image/png;base64,${base64}`;
       }
     } catch (error) {
       // 图标加载失败，忽略（插件可能没有图标）
@@ -665,101 +1169,24 @@ const handleOpenImagePath = async (localPath: string) => {
   }
 };
 
-const handleImageClick = (image: ImageInfo, event?: MouseEvent) => {
-  // Ctrl/Shift 进行多选
-  if (event && (event.ctrlKey || event.shiftKey)) {
-    handleImageSelect(image, event);
-    return;
-  }
-  // 普通单击：单选该图片，不打开/预览
-  selectedImages.value.clear();
-  selectedImages.value.add(image.id);
-  lastSelectedIndex.value = displayedImages.value.findIndex(img => img.id === image.id);
-};
-
 const handleImageDblClick = async (image: ImageInfo) => {
-  // 双击视为打开/预览，并单选当前图片
-  selectedImages.value.clear();
-  selectedImages.value.add(image.id);
-  lastSelectedIndex.value = displayedImages.value.findIndex(img => img.id === image.id);
-
-  if (imageClickAction.value === 'preview') {
-    const imageUrl = imageSrcMap.value[image.id]?.original;
-    if (imageUrl) {
-      previewImageUrl.value = imageUrl;
-      previewImagePath.value = image.localPath;
-      previewImage.value = image;
-      showImagePreview.value = true;
-    }
-  } else {
+  // 预览功能已下沉到 ImageGrid，这里只处理 open 模式
+  if (imageClickAction.value === 'open') {
     await handleOpenImagePath(image.localPath);
   }
+  // preview 模式由 ImageGrid 内部处理
 };
 
-// 处理图片多选
-const handleImageSelect = (image: ImageInfo, event: MouseEvent) => {
-  const currentIndex = displayedImages.value.findIndex(img => img.id === image.id);
+const handleGridContextCommand = async (payload: { command: string; image: ImageInfo; selectedImageIds: Set<string> }) => {
+  const command = payload.command;
+  const image = payload.image;
+  const selectedSet = payload.selectedImageIds && payload.selectedImageIds.size > 0
+    ? payload.selectedImageIds
+    : new Set([image.id]);
 
-  if (event.shiftKey && lastSelectedIndex.value !== -1) {
-    // Shift 多选：选择从上次选择到当前之间的所有图片
-    const start = Math.min(lastSelectedIndex.value, currentIndex);
-    const end = Math.max(lastSelectedIndex.value, currentIndex);
-    for (let i = start; i <= end; i++) {
-      selectedImages.value.add(displayedImages.value[i].id);
-    }
-  } else if (event.ctrlKey || event.metaKey) {
-    // Ctrl/Cmd 多选：切换当前图片的选择状态
-    if (selectedImages.value.has(image.id)) {
-      selectedImages.value.delete(image.id);
-    } else {
-      selectedImages.value.add(image.id);
-    }
-    lastSelectedIndex.value = currentIndex;
-  } else {
-    // 普通点击：只选择当前图片
-    selectedImages.value.clear();
-    selectedImages.value.add(image.id);
-    lastSelectedIndex.value = currentIndex;
-  }
-};
-
-const handlePreviewContextMenu = (event: MouseEvent) => {
-  if (!previewImage.value) return;
-  handleContextMenu(event, previewImage.value);
-};
-
-const handleContextMenu = (event: MouseEvent, image: ImageInfo) => {
-  // 有弹窗/抽屉等覆盖层时，不弹出画廊右键菜单
-  if (isBlockingOverlayOpen()) return;
-
-  event.preventDefault();
-
-  // 如果右键点击的图片不在已选列表中，且当前有选择，则只选择右键点击的图片
-  if (selectedImages.value.size > 0 && !selectedImages.value.has(image.id)) {
-    selectedImages.value.clear();
-    selectedImages.value.add(image.id);
-    lastSelectedIndex.value = displayedImages.value.findIndex(img => img.id === image.id);
-  } else if (selectedImages.value.size === 0) {
-    // 如果没有选择，选择右键点击的图片
-    selectedImages.value.add(image.id);
-    lastSelectedIndex.value = displayedImages.value.findIndex(img => img.id === image.id);
-  }
-
-  contextMenuImage.value = image;
-  contextMenuPosition.value = { x: event.clientX, y: event.clientY };
-  contextMenuVisible.value = true;
-};
-
-const handleContextMenuCommand = async (command: string) => {
-  if (!contextMenuImage.value) return;
-
-  const image = contextMenuImage.value;
-  contextMenuVisible.value = false; // 先关闭菜单，避免操作时菜单残留
-  contextMenuImage.value = null;
-
-  const isMultiSelect = selectedImages.value.size > 1;
+  const isMultiSelect = selectedSet.size > 1;
   const imagesToProcess = isMultiSelect
-    ? displayedImages.value.filter(img => selectedImages.value.has(img.id))
+    ? displayedImages.value.filter(img => selectedSet.has(img.id))
     : [image];
 
   switch (command) {
@@ -770,40 +1197,38 @@ const handleContextMenuCommand = async (command: string) => {
       }
       break;
     case 'favorite':
-      // 仅当多选时右键多选的其中一个时才能批量操作
-      if (isMultiSelect && !selectedImages.value.has(image.id)) {
-        ElMessage.warning("请右键点击已选中的图片");
-        return;
-      }
-
       try {
-        // 批量收藏/取消收藏
-        // 先查询哪些图片在收藏画册中
-        const favoriteAlbumId = "00000000-0000-0000-0000-000000000001";
-        const favoriteImageIds = await invoke<string[]>("get_album_image_ids", { albumId: favoriteAlbumId }).catch(() => []);
-        const favoriteSet = new Set(favoriteImageIds);
-
-        const allFavorites = imagesToProcess.every(img => favoriteSet.has(img.id));
-        const newFavorite = !allFavorites; // 如果全部已收藏，则取消收藏；否则收藏
-
-        // 批量操作
-        for (const img of imagesToProcess) {
-          await invoke("toggle_image_favorite", {
-            imageId: img.id,
-            favorite: newFavorite,
-          });
+        // 仅支持普通（单张）收藏
+        if (isMultiSelect) {
+          ElMessage.warning("收藏仅支持单张图片");
+          return;
         }
 
-        ElMessage.success(isMultiSelect
-          ? `${imagesToProcess.length} 张图片已${newFavorite ? '收藏' : '取消收藏'}`
-          : (newFavorite ? '已收藏' : '已取消收藏'));
+        const newFavorite = !(image.favorite ?? false);
+        await invoke("toggle_image_favorite", {
+          imageId: image.id,
+          favorite: newFavorite,
+        });
 
-        // 重新加载图片以更新状态
-        await loadImages(true);
+        ElMessage.success(newFavorite ? "已收藏" : "已取消收藏");
 
-        // 清除选择
-        selectedImages.value.clear();
-        lastSelectedIndex.value = -1;
+        // 清除收藏画册的缓存，确保下次查看时重新加载
+        delete albumStore.albumImages[FAVORITE_ALBUM_ID];
+        delete albumStore.albumPreviews[FAVORITE_ALBUM_ID];
+        // 更新收藏画册计数
+        const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID] || 0;
+        albumStore.albumCounts[FAVORITE_ALBUM_ID] = Math.max(0, currentCount + (newFavorite ? 1 : -1));
+
+        // 发出收藏状态变化事件，通知其他页面（如收藏画册详情页）更新
+        window.dispatchEvent(
+          new CustomEvent("favorite-status-changed", {
+            detail: { imageIds: [image.id], favorite: newFavorite },
+          })
+        );
+
+        // 重新加载图片以更新状态（保持当前滚动位置）
+        await loadImages(true, { preserveScroll: true });
+        galleryViewRef.value?.clearSelection?.();
       } catch (error) {
         console.error("切换收藏状态失败:", error);
         ElMessage.error("操作失败");
@@ -811,7 +1236,7 @@ const handleContextMenuCommand = async (command: string) => {
       break;
     case 'copy':
       // 仅当多选时右键多选的其中一个时才能批量操作
-      if (isMultiSelect && !selectedImages.value.has(image.id)) {
+      if (isMultiSelect && !selectedSet.has(image.id)) {
         ElMessage.warning("请右键点击已选中的图片");
         return;
       }
@@ -842,7 +1267,7 @@ const handleContextMenuCommand = async (command: string) => {
       break;
     case 'wallpaper':
       // 仅当多选时右键多选的其中一个时才能批量操作
-      if (isMultiSelect && !selectedImages.value.has(image.id)) {
+      if (isMultiSelect && !selectedSet.has(image.id)) {
         ElMessage.warning("请右键点击已选中的图片");
         return;
       }
@@ -887,9 +1312,7 @@ const handleContextMenuCommand = async (command: string) => {
           ElMessage.success("壁纸设置成功");
         }
 
-        // 清除选择
-        selectedImages.value.clear();
-        lastSelectedIndex.value = -1;
+        galleryViewRef.value?.clearSelection?.();
       } catch (error) {
         console.error("设置壁纸失败:", error);
         ElMessage.error("设置壁纸失败: " + (error as Error).message);
@@ -900,8 +1323,8 @@ const handleContextMenuCommand = async (command: string) => {
       try {
         // 让用户输入工程名称
         const defaultName = isMultiSelect
-          ? `Kabegami_Gallery_${imagesToProcess.length}_Images`
-          : `Kabegami_${image.id}`;
+          ? `Kabegame_Gallery_${imagesToProcess.length}_Images`
+          : `Kabegame_${image.id}`;
 
         const { value: projectName } = await ElMessageBox.prompt(
           `请输入 WE 工程名称（留空使用默认名称）`,
@@ -962,7 +1385,7 @@ const handleContextMenuCommand = async (command: string) => {
       break;
     case 'addToAlbum':
       // 仅当多选时右键多选的其中一个时才能批量操作
-      if (isMultiSelect && !selectedImages.value.has(image.id)) {
+      if (isMultiSelect && !selectedSet.has(image.id)) {
         ElMessage.warning("请右键点击已选中的图片");
         return;
       }
@@ -978,17 +1401,42 @@ const handleContextMenuCommand = async (command: string) => {
   }
 };
 
-// 批量移除图片（只删除缩略图和数据库记录，不删除原图）
-const handleBatchRemove = async (imagesToRemove?: ImageInfo[]) => {
-  // 如果没有传入图片列表，使用选中的图片
-  const imagesToProcess = imagesToRemove || displayedImages.value.filter(img => selectedImages.value.has(img.id));
+type FavoriteStatusChangedDetail = { imageIds: string[]; favorite: boolean };
 
+const applyFavoriteChangeToGalleryCache = (imageIds: string[], favorite: boolean) => {
+  if (!imageIds || imageIds.length === 0) return;
+  const idSet = new Set(imageIds);
+
+  // “仅收藏”模式下，取消收藏应直接从列表移除
+  if (showFavoritesOnly.value && !favorite) {
+    displayedImages.value = displayedImages.value.filter((img) => !idSet.has(img.id));
+    crawlerStore.images = [...displayedImages.value];
+    galleryViewRef.value?.clearSelection?.();
+    return;
+  }
+
+  // 就地更新 favorite 字段（避免全量刷新）
+  let changed = false;
+  const next = displayedImages.value.map((img) => {
+    if (!idSet.has(img.id)) return img;
+    if ((img.favorite ?? false) === favorite) return img;
+    changed = true;
+    return { ...img, favorite };
+  });
+  if (changed) {
+    displayedImages.value = next;
+    crawlerStore.images = [...next];
+  }
+};
+
+// 批量移除图片（只删除缩略图和数据库记录，不删除原图）
+const handleBatchRemove = async (imagesToProcess: ImageInfo[]) => {
   if (imagesToProcess.length === 0) return;
 
   try {
     const count = imagesToProcess.length;
     await ElMessageBox.confirm(
-      `移除后将删除缩略图和数据库记录，但保留原图文件。是否继续移除${count > 1 ? `这 ${count} 张图片` : '这张图片'}？`,
+      `将从画廊移除，但保留原图文件。是否继续移除${count > 1 ? `这 ${count} 张图片` : '这张图片'}？`,
       "确认移除",
       { type: "warning" }
     );
@@ -1014,11 +1462,7 @@ const handleBatchRemove = async (imagesToRemove?: ImageInfo[]) => {
       }
     }
 
-    // 清除选择
-    for (const img of imagesToProcess) {
-      selectedImages.value.delete(img.id);
-    }
-    lastSelectedIndex.value = -1;
+    galleryViewRef.value?.clearSelection?.();
 
     ElMessage.success(`${count > 1 ? `已移除 ${count} 张图片` : '已移除图片'}`);
   } catch (error) {
@@ -1030,10 +1474,7 @@ const handleBatchRemove = async (imagesToRemove?: ImageInfo[]) => {
 };
 
 // 批量删除图片
-const handleBatchDelete = async (imagesToDelete?: ImageInfo[]) => {
-  // 如果没有传入图片列表，使用选中的图片
-  const imagesToProcess = imagesToDelete || displayedImages.value.filter(img => selectedImages.value.has(img.id));
-
+const handleBatchDelete = async (imagesToProcess: ImageInfo[]) => {
   if (imagesToProcess.length === 0) return;
 
   try {
@@ -1069,14 +1510,96 @@ const handleBatchDelete = async (imagesToDelete?: ImageInfo[]) => {
     }
 
     ElMessage.success(`已删除 ${count} 张图片`);
-
-    // 清除选择
-    selectedImages.value.clear();
-    lastSelectedIndex.value = -1;
+    galleryViewRef.value?.clearSelection?.();
   } catch (error) {
     if (error !== "cancel") {
       ElMessage.error("删除失败");
     }
+  }
+};
+
+// 批量从 UI 缓存里移除（用于后端批量去重后的同步）
+const removeFromUiCacheByIds = (imageIds: string[]) => {
+  if (!imageIds || imageIds.length === 0) return;
+  const idSet = new Set(imageIds);
+
+  // 从列表移除
+  displayedImages.value = displayedImages.value.filter((img) => !idSet.has(img.id));
+
+  // 清理 imageSrcMap / Blob URL / loaded set
+  const nextMap: Record<string, { thumbnail?: string; original?: string }> = {
+    ...imageSrcMap.value,
+  };
+  for (const id of imageIds) {
+    const data = nextMap[id];
+    if (data?.thumbnail) {
+      URL.revokeObjectURL(data.thumbnail);
+      blobUrls.delete(data.thumbnail);
+    }
+    if (data?.original) {
+      URL.revokeObjectURL(data.original);
+      blobUrls.delete(data.original);
+    }
+    delete nextMap[id];
+    loadedImageIds.delete(id);
+  }
+  imageSrcMap.value = nextMap;
+
+  galleryViewRef.value?.clearSelection?.();
+};
+
+// 画廊按 hash 去重（remove 而非 delete）
+const handleDedupeByHash = async () => {
+  if (dedupeLoading.value) return;
+
+  try {
+    await ElMessageBox.confirm(
+      "去掉所有重复图片：仅从画廊移除，不会删除源文件。是否继续？",
+      "确认去重",
+      { type: "warning" }
+    );
+
+    dedupeProcessing.value = true;
+
+    // 若当前有下载任务在跑，开启“强制去重模式”，直到下载队列空闲才自动结束
+    const startRes = await invoke<{ willWaitUntilDownloadsEnd: boolean }>(
+      "start_force_deduplicate"
+    );
+    dedupeWaitingDownloads.value = !!startRes?.willWaitUntilDownloadsEnd;
+
+    const res = await invoke<{ removed: number; removedIds: string[] }>(
+      "dedupe_gallery_by_hash"
+    );
+    const removedIds = res?.removedIds ?? [];
+
+    if (removedIds.length > 0) {
+      removeFromUiCacheByIds(removedIds);
+      crawlerStore.applyRemovedImageIds(removedIds);
+    }
+
+    ElMessage.success(`已清理 ${res?.removed ?? removedIds.length} 个重复项（仅从画廊移除，源文件已保留）`);
+
+    // 若当前已加载列表被清空，则自动刷新一次（避免停留在空状态）
+    if (displayedImages.value.length === 0) {
+      await loadImages(true);
+      if (displayedImages.value.length === 0 && crawlerStore.hasMore) {
+        await loadMoreImages();
+      }
+    }
+  } catch (error) {
+    if (error !== "cancel") {
+      console.error("去重失败:", error);
+      ElMessage.error("去重失败");
+      // 兜底：出错时关闭强制去重，避免一直影响后续下载
+      try {
+        await invoke("stop_force_deduplicate");
+      } catch {
+        // ignore
+      }
+      dedupeWaitingDownloads.value = false;
+    }
+  } finally {
+    dedupeProcessing.value = false;
   }
 };
 
@@ -1143,56 +1666,110 @@ const handleCopyImage = async (image: ImageInfo) => {
  * 刷新列表并尽量复用已有项，避免全量图片重新加载。
  * @param reset 是否从第一页重置加载
  * @param opts.preserveScroll 是否保留当前滚动位置（用于 image-added 事件，避免回到顶部）
+ * @param opts.forceReload 是否强制重新加载所有图片 URL（清除缓存）
+ * @param opts.skipScrollReset 是否跳过滚动重置（用于 onActivated，由调用者自行恢复滚动位置）
  */
 const refreshImagesPreserveCache = async (
   reset = true,
-  opts: { preserveScroll?: boolean } = {}
+  opts: { preserveScroll?: boolean; forceReload?: boolean; skipScrollReset?: boolean } = {}
 ) => {
   loading.value = true;
+  // 延迟300ms显示骨架屏，避免快速加载时的闪烁
+  if (skeletonTimer.value) {
+    clearTimeout(skeletonTimer.value);
+  }
+  skeletonTimer.value = setTimeout(() => {
+    if (loading.value) {
+      showSkeleton.value = true;
+    }
+  }, 300);
   try {
     const preserveScroll = opts.preserveScroll ?? false;
+    const forceReload = opts.forceReload ?? false;
+    const skipScrollReset = opts.skipScrollReset ?? false;
     const container = preserveScroll
       ? galleryContainerRef.value
       : null;
     const prevScrollTop = container?.scrollTop ?? 0;
 
-    // 记录旧的图片引用，按 id 建表以便复用
-    const oldMap = new Map<string, ImageInfo>();
-    displayedImages.value.forEach((img) => oldMap.set(img.id, img));
+    // 如果强制重新加载，清除 URL 缓存并清空列表以触发重新挂载动画
+    if (forceReload) {
+      // 释放所有 Blob URL
+      blobUrls.forEach((url) => URL.revokeObjectURL(url));
+      blobUrls.clear();
+      imageSrcMap.value = {};
+      loadedImageIds.clear();
+      // 先清空列表，让 Vue 移除所有元素
+      displayedImages.value = [];
+      await nextTick();
+    }
+
+    // 记录旧的图片 ID，用于判断哪些是新增的
+    const oldIds = forceReload ? new Set<string>() : new Set(displayedImages.value.map((img) => img.id));
 
     await crawlerStore.loadImages(reset, filterPluginId.value, showFavoritesOnly.value);
 
-    // 用新的顺序生成列表：已有的复用旧引用，新图片使用新对象
-    const merged = crawlerStore.images.map((img) => oldMap.get(img.id) ?? img);
-    displayedImages.value = merged;
+    // 使用新的图片数据（不复用旧引用，确保数据更新）
+    displayedImages.value = [...crawlerStore.images];
 
     await nextTick();
 
-    // 只为新增的图片加载 URL，已存在的保持缓存
-    const newOnes = merged.filter((img) => !oldMap.has(img.id));
-    loadImageUrls(newOnes);
+    // 为需要加载的图片加载 URL
+    const imagesToLoad = forceReload ? displayedImages.value : displayedImages.value.filter((img) => !oldIds.has(img.id));
+    loadImageUrls(imagesToLoad);
 
-    // 滚动处理：默认重置到顶部；若指定保留滚动则恢复
-    if (preserveScroll && container) {
-      container.scrollTop = prevScrollTop;
-    } else if (reset) {
-      const c = container ?? galleryContainerRef.value;
-      if (c) c.scrollTop = 0;
+    // 滚动处理：skipScrollReset 时跳过任何滚动操作（由调用者自行处理）
+    if (!skipScrollReset) {
+      if (preserveScroll && container) {
+        container.scrollTop = prevScrollTop;
+      } else if (reset) {
+        const c = container ?? galleryContainerRef.value;
+        if (c) c.scrollTop = 0;
+      }
     }
 
-    selectedImages.value.clear();
-    lastSelectedIndex.value = -1;
+    galleryViewRef.value?.clearSelection?.();
   } finally {
     loading.value = false;
+    // 立即隐藏骨架屏
+    showSkeleton.value = false;
+    if (skeletonTimer.value) {
+      clearTimeout(skeletonTimer.value);
+      skeletonTimer.value = null;
+    }
   }
 };
 
 /**
- * 仅增量获取最新一页图片并插入顶部，避免全量刷新和旧图重载。
+ * 仅增量获取最新一页图片并追加到末尾，避免全量刷新和旧图重载。
+ * 
+ * 重要规则：
+ * - 当 hasMore=true（有加载更多按钮）时，不自动增长画廊，新图片藏在"加载更多"里
+ * - 当 hasMore=false（没有更多了）时，画廊自动增长，且不会自动设置 hasMore=true
+ * - 当画廊为空时，使用正常的分页加载初始化，而不是增量刷新
+ * - hasMore 只在用户主动刷新时由分页逻辑设置，增量刷新不会让"加载更多"按钮出现
  */
 const refreshLatestIncremental = async () => {
   try {
+    // 如果画廊为空，使用正常的分页加载初始化（确保 store 状态正确同步）
+    if (displayedImages.value.length === 0) {
+      await loadImages(true);
+      return;
+    }
+
+    // 如果还有更多未加载（hasMore=true），不自动增长画廊
+    // 新下载的图片会藏在"加载更多"按钮里
+    if (crawlerStore.hasMore) {
+      return;
+    }
+
+    // hasMore=false 时，画廊自动增长
+    // 获取足够多的图片以包含所有新增的（不限于 pageSize）
     const existingIds = new Set(displayedImages.value.map((img) => img.id));
+
+    // 使用较大的 pageSize 来获取所有可能的新图片
+    // 但不要超过合理范围，避免一次加载太多
+    const fetchSize = Math.max(crawlerStore.pageSize, displayedImages.value.length + 100);
     const result = await invoke<{
       images: ImageInfo[];
       total: number;
@@ -1200,18 +1777,32 @@ const refreshLatestIncremental = async () => {
       pageSize: number;
     }>("get_images_paginated", {
       page: 0,
-      pageSize: DEFAULT_PAGE_SIZE,
+      pageSize: fetchSize,
       pluginId: filterPluginId.value || null,
     });
 
     const newOnes = result.images.filter((img) => !existingIds.has(img.id));
+
+    // 更新 hasMore：只在确定已拿到全部数据时将其关闭，避免遗留的 true 导致按钮出现
+    const totalAfterAdd = displayedImages.value.length + newOnes.length;
+    if (totalAfterAdd >= result.total) {
+      crawlerStore.hasMore = false;
+    }
+
     if (newOnes.length === 0) return;
 
-    // 仅将新增图片插到列表顶部，保持旧引用不变
-    displayedImages.value = [...newOnes, ...displayedImages.value];
+    // 将新增图片追加到列表末尾
+    displayedImages.value = [...displayedImages.value, ...newOnes];
 
-    // 只为新增图片加载 URL
+    // 同步 crawlerStore 状态，保持与 displayedImages 一致
+    crawlerStore.images = [...displayedImages.value];
+    crawlerStore.totalImages = result.total;
+    // 计算正确的 currentPage（基于当前显示数量）
+    crawlerStore.currentPage = Math.ceil(displayedImages.value.length / crawlerStore.pageSize);
+
+    // 加载新增图片的 URL
     await loadImageUrls(newOnes);
+
   } catch (error) {
     console.error("增量刷新最新图片失败:", error);
   }
@@ -1221,6 +1812,8 @@ const refreshLatestIncremental = async () => {
 const loadImages = refreshImagesPreserveCache;
 
 // 加载更多图片（手动加载）
+// 直接基于 displayedImages 的长度计算下一页，不依赖 crawlerStore.currentPage
+// 避免 displayedImages 和 crawlerStore.images 不同步导致的问题
 const loadMoreImages = async () => {
   if (!crawlerStore.hasMore || isLoadingMore.value) {
     return;
@@ -1228,52 +1821,71 @@ const loadMoreImages = async () => {
 
   isLoadingMore.value = true; // 设置标志，防止 watch 触发
   const container = galleryContainerRef.value;
-  const prevScrollTop = container?.scrollTop ?? 0;
-  const prevScrollHeight = container?.scrollHeight ?? 0;
+  if (!container) {
+    isLoadingMore.value = false;
+    return;
+  }
 
-  // 暂时停止 watch，避免在更新时触发重新渲染
-  // if (imageListWatch) {
-  //   imageListWatch();
-  //   imageListWatch = null;
-  // }
+  // 记录加载前的滚动位置
+  const prevScrollTop = container.scrollTop;
 
   try {
-    // 记录加载前的图片数量
-    const beforeCount = displayedImages.value.length;
+    // 计算下一页的页码（基于当前显示的图片数量）
+    const nextPage = Math.floor(displayedImages.value.length / crawlerStore.pageSize);
 
-    // 调用 store 的 loadImages，传入 false 表示追加而不是重置
-    await crawlerStore.loadImages(false, filterPluginId.value, showFavoritesOnly.value);
+    // 直接从后端获取下一页，不依赖 crawlerStore.loadImages
+    const result = await invoke<{
+      images: ImageInfo[];
+      total: number;
+      page: number;
+      pageSize: number;
+    }>("get_images_paginated", {
+      page: nextPage,
+      pageSize: crawlerStore.pageSize,
+      pluginId: filterPluginId.value || null,
+      favoritesOnly: showFavoritesOnly.value || null,
+    });
 
-    // 只追加新图片到 displayedImages
-    // 创建一个新数组而不是直接 push，让 Vue 能够正确使用 key 进行 diff
-    const newImages = crawlerStore.images.slice(beforeCount);
+    // 过滤出新图片（避免重复，因为增量刷新可能已经添加了部分图片）
+    const existingIds = new Set(displayedImages.value.map(img => img.id));
+    const newImages = result.images.filter(img => !existingIds.has(img.id));
+
     if (newImages.length > 0) {
-      // 直接使用 push 追加新图片，而不是创建新数组
-      // 这样可以避免触发整个列表的重新渲染
-      displayedImages.value.push(...newImages);
+      // 创建新数组引用，确保 Vue 能够检测到变化（特别是 transition-group）
+      displayedImages.value = [...displayedImages.value, ...newImages];
+
+      // 等待 DOM 更新完成
+      await nextTick();
+
+      // 恢复滚动位置：保持用户原来的滚动位置
+      // 使用延迟策略，确保动画和图片加载完成后恢复
+      setTimeout(() => {
+        if (container) {
+          container.scrollTop = prevScrollTop;
+        }
+      }, 100);
 
       // 仅为新增的图片加载 URL，避免触发旧图重新加载
       await loadImageUrls(newImages);
-      selectedImages.value.clear();
-      lastSelectedIndex.value = -1;
+      galleryViewRef.value?.clearSelection?.();
     }
+
+    // 更新 hasMore：基于当前显示数量与总数比较
+    const totalDisplayed = displayedImages.value.length;
+    crawlerStore.hasMore = totalDisplayed < result.total;
+
+    // 同步 crawlerStore 状态，保持一致性
+    crawlerStore.images = [...displayedImages.value];
+    crawlerStore.currentPage = nextPage + 1;
+    crawlerStore.totalImages = result.total;
   } catch (error) {
     console.error("加载更多图片失败:", error);
     ElMessage.error("加载失败");
   } finally {
-    // 重新启用 watch
-    // setupImageListWatch(false); // 重新监听但不立即触发，避免全量重新加载
     // 延迟重置标志，确保 watch 不会立即触发
     setTimeout(() => {
       isLoadingMore.value = false;
     }, 100);
-
-    // 恢复滚动位置，避免跳到顶部
-    if (container) {
-      const newScrollHeight = container.scrollHeight;
-      const delta = Math.max(0, newScrollHeight - prevScrollHeight);
-      container.scrollTop = prevScrollTop + delta;
-    }
   }
 };
 
@@ -1308,6 +1920,28 @@ const selectFolder = async (varKey: string) => {
   }
 };
 
+const selectFile = async (varKey: string) => {
+  try {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      filters: [
+        {
+          name: "图片",
+          extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"],
+        },
+      ],
+    });
+
+    if (selected && typeof selected === "string") {
+      form.value.vars[varKey] = selected;
+    }
+  } catch (error) {
+    console.error("选择文件失败:", error);
+    ElMessage.error("选择文件失败");
+  }
+};
+
 const handleStartCrawl = async () => {
   try {
     // 若选择了运行配置，直接运行配置
@@ -1318,7 +1952,7 @@ const handleStartCrawl = async () => {
     }
 
     if (!form.value.pluginId) {
-      ElMessage.warning("请选择收集源");
+      ElMessage.warning("请选择源");
       return;
     }
 
@@ -1337,18 +1971,24 @@ const handleStartCrawl = async () => {
       if (isRequired(varDef)) {
         const value = form.value.vars[varDef.key];
         if (value === undefined || value === null || value === '' ||
-          (varDef.type === 'list' && Array.isArray(value) && value.length === 0)) {
+          ((varDef.type === 'list' || varDef.type === 'checkbox') && Array.isArray(value) && value.length === 0)) {
           ElMessage.warning(`请填写必填项：${varDef.name}`);
           return;
         }
       }
     }
 
+    // 运行/保存配置时，userConfig 统一传对象（至少是 {}），避免“预设保存后 userConfig 为空导致后端未注入变量”
+    const backendVars =
+      pluginVars.value.length > 0
+        ? expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[])
+        : undefined;
+
     // 保存用户配置（如果有变量定义）
-    if (pluginVars.value.length > 0 && Object.keys(form.value.vars).length > 0) {
+    if (pluginVars.value.length > 0 && backendVars && Object.keys(backendVars).length > 0) {
       await invoke("save_plugin_config", {
         pluginId: form.value.pluginId,
-        config: form.value.vars,
+        config: backendVars,
       });
     }
 
@@ -1364,7 +2004,7 @@ const handleStartCrawl = async () => {
         pluginId: form.value.pluginId,
         url: "",
         outputDir: form.value.outputDir || undefined,
-        userConfig: Object.keys(form.value.vars).length > 0 ? form.value.vars : undefined,
+        userConfig: backendVars,
       });
     }
 
@@ -1373,7 +2013,7 @@ const handleStartCrawl = async () => {
       form.value.pluginId,
       "",
       form.value.outputDir || undefined,
-      Object.keys(form.value.vars).length > 0 ? form.value.vars : undefined
+      backendVars
     ).catch(error => {
       // 这里的错误是任务初始化失败，由 watch 监听来处理任务状态变化时的错误显示
       console.error("任务执行失败:", error);
@@ -1395,26 +2035,33 @@ const handleStartCrawl = async () => {
 
 const loadPluginVars = async (pluginId: string) => {
   try {
-    const vars = await invoke<Array<{ key: string; type: string; name: string; descripts?: string; default?: any; options?: string[] }> | null>("get_plugin_vars", {
+    const vars = await invoke<Array<{ key: string; type: string; name: string; descripts?: string; default?: any; options?: VarOption[] }> | null>("get_plugin_vars", {
       pluginId,
     });
     pluginVars.value = vars || [];
+
+    // DEV 调试：确认后端实际返回的 var 定义是否已更新（排查“插件已更新但导入仍旧配置”）
+    if (import.meta.env.DEV) {
+      console.info("[loadPluginVars] get_plugin_vars result:", {
+        pluginId,
+        vars: pluginVars.value,
+      });
+    }
 
     // 加载已保存的用户配置
     const savedConfig = await invoke<Record<string, any>>("load_plugin_config", {
       pluginId,
     });
 
-    // 合并默认值和已保存的配置
-    const mergedVars: Record<string, any> = {};
-    for (const varDef of pluginVars.value) {
-      if (savedConfig[varDef.key] !== undefined) {
-        mergedVars[varDef.key] = savedConfig[varDef.key];
-      } else if (varDef.default !== undefined) {
-        mergedVars[varDef.key] = varDef.default;
-      }
+    if (import.meta.env.DEV) {
+      console.info("[loadPluginVars] load_plugin_config result:", {
+        pluginId,
+        savedConfig,
+      });
     }
-    form.value.vars = mergedVars;
+
+    // 将保存的配置聚合为 UI 表单模型（checkbox: foo -> ["a","b"]），并补默认值
+    form.value.vars = normalizeVarsForUI(savedConfig || {}, pluginVars.value as PluginVarDef[]);
   } catch (error) {
     console.error("加载插件变量失败:", error);
     pluginVars.value = [];
@@ -1444,19 +2091,45 @@ watch(selectedRunConfigId, async (cfgId) => {
     return;
   }
 
-  // 检查插件是否存在
-  const pluginExists = plugins.value.some(p => p.id === cfg.pluginId);
-  if (!pluginExists) {
-    await ElMessageBox.alert("该配置关联的插件不存在，请重新安装或导入对应插件后再试。", "插件缺失", { type: "error" });
+  // 先检查已缓存的兼容性状态（快速检查）
+  const cachedCompatibility = configCompatibilityStatus.value[cfgId];
+  if (cachedCompatibility) {
+    // 如果已知不兼容：禁止“一键使用”，但允许“载入到表单”
+    if (!cachedCompatibility.versionCompatible || !cachedCompatibility.contentCompatible) {
+      const id = cfgId;
+      // 先清空选择，避免表单被锁定、也避免用户误触“一键使用配置”
+      selectedRunConfigId.value = null;
+      await loadConfigToForm(id);
+      return;
+    }
+  }
+
+  // 检查兼容性（确保获取最新状态）
+  const compatibility = await getConfigCompatibility(cfgId);
+
+  // 第一步：检查版本兼容性（插件是否存在）
+  if (!compatibility.versionCompatible) {
+    await ElMessageBox.alert(
+      `该配置关联的插件不存在：${compatibility.versionReason || "未知错误"}\n无法使用该配置。`,
+      "插件缺失",
+      { type: "error" }
+    );
     selectedRunConfigId.value = null;
-    // 清空与配置相关的表单，避免禁用状态阻塞操作
     form.value.pluginId = "";
     form.value.outputDir = "";
     form.value.vars = {};
     return;
   }
 
-  // 选择现有配置时，不允许继续勾选“保存为配置”
+  // 第二步：检查内容兼容性
+  if (!compatibility.contentCompatible) {
+    const id = cfgId;
+    selectedRunConfigId.value = null;
+    await loadConfigToForm(id);
+    return;
+  }
+
+  // 选择现有配置时，不允许继续勾选"保存为配置"
   saveAsConfig.value = false;
   configName.value = "";
   configDescription.value = "";
@@ -1464,17 +2137,56 @@ watch(selectedRunConfigId, async (cfgId) => {
   // 先写入配置字段
   form.value.pluginId = cfg.pluginId;
   form.value.outputDir = cfg.outputDir || "";
-  form.value.vars = cfg.userConfig ? { ...cfg.userConfig } : {};
+  form.value.vars = {};
 
   // 加载插件变量定义（异步），用于校验必填项是否满足
   await loadPluginVars(cfg.pluginId);
 
-  // 依据最新的插件变量定义校验必填项
+  // 智能匹配配置项
+  const userConfig = cfg.userConfig || {};
+  const matchedVars: Record<string, any> = {};
+  const varDefMap = new Map(pluginVars.value.map(def => [def.key, def]));
+
+  // 尝试匹配每个配置字段
+  for (const [key, value] of Object.entries(userConfig)) {
+    const varDef = varDefMap.get(key);
+
+    if (!varDef) {
+      // 字段已删除，跳过
+      continue;
+    }
+
+    // 验证值是否有效
+    const validation = validateVarValue(value, varDef);
+    if (validation.valid) {
+      // 值有效，直接使用
+      matchedVars[key] = value;
+    } else {
+      // 值无效，使用默认值（如果有）
+      if (varDef.default !== undefined) {
+        matchedVars[key] = varDef.default;
+      }
+    }
+  }
+
+  // 填充缺失字段的默认值
+  for (const varDef of pluginVars.value) {
+    if (!(varDef.key in matchedVars)) {
+      if (varDef.default !== undefined) {
+        matchedVars[varDef.key] = varDef.default;
+      }
+    }
+  }
+
+  // 转换为 UI 格式
+  const cfgUiVars = normalizeVarsForUI(matchedVars, pluginVars.value as PluginVarDef[]);
+
+  // 检查必填项
   const missingRequired = pluginVars.value.filter((varDef) => {
     if (!isRequired(varDef)) return false;
-    const value = cfg.userConfig ? cfg.userConfig[varDef.key] : undefined;
+    const value = cfgUiVars[varDef.key];
     if (value === undefined || value === null || value === "") return true;
-    if (varDef.type === "list" && Array.isArray(value) && value.length === 0) return true;
+    if ((varDef.type === "list" || varDef.type === "checkbox") && Array.isArray(value) && value.length === 0) return true;
     return false;
   });
 
@@ -1487,9 +2199,7 @@ watch(selectedRunConfigId, async (cfgId) => {
   }
 
   // 使用配置中的变量覆盖 loadPluginVars 填充的默认值
-  if (cfg.userConfig) {
-    form.value.vars = { ...form.value.vars, ...cfg.userConfig };
-  }
+  form.value.vars = { ...form.value.vars, ...cfgUiVars };
 });
 
 // 监听筛选插件ID变化，重新加载图片
@@ -1500,9 +2210,151 @@ watch(filterPluginId, () => {
 // 监听仅显示收藏变化，重新加载图片
 watch(showFavoritesOnly, () => {
   loadImages(true);
-  selectedImages.value.clear();
-  lastSelectedIndex.value = -1;
+  galleryViewRef.value?.clearSelection?.();
 });
+
+// 处理图片拖拽排序
+const handleImageReorder = async (newOrder: ImageInfo[]) => {
+  try {
+    // 计算新的 order 值（间隔 1000）
+    const imageOrders: [string, number][] = newOrder.map((img, index) => [
+      img.id,
+      (index + 1) * 1000,
+    ]);
+
+    await invoke("update_images_order", { imageOrders });
+
+    // 更新本地显示顺序
+    displayedImages.value = newOrder;
+
+    // 同时更新 store 中的顺序
+    const newStoreOrder = newOrder.map(img =>
+      crawlerStore.images.find(i => i.id === img.id) || img
+    );
+    crawlerStore.images = newStoreOrder;
+
+    ElMessage.success("顺序已更新");
+  } catch (error) {
+    console.error("更新图片顺序失败:", error);
+    ElMessage.error("更新顺序失败");
+  }
+};
+
+// 处理箭头移动
+const handleImageMove = async (image: ImageInfo, direction: "up" | "down" | "left" | "right") => {
+  const currentIndex = displayedImages.value.findIndex(img => img.id === image.id);
+  if (currentIndex === -1) return;
+
+  // 计算实际列数（用于计算上下移动的目标）
+  let columns = galleryColumns.value;
+  if (columns === 0) {
+    // 对于 auto-fill，从 DOM 计算实际列数
+    const gridElement = document.querySelector('.image-grid');
+    if (gridElement && gridElement.children.length > 0) {
+      // 收集所有元素的 top 位置，找出第一行的 top 值
+      const positions: Array<{ top: number; index: number }> = [];
+      for (let i = 0; i < gridElement.children.length; i++) {
+        const child = gridElement.children[i] as HTMLElement;
+        const rect = child.getBoundingClientRect();
+        positions.push({ top: rect.top, index: i });
+      }
+
+      // 找到第一行的 top 值（最小的 top 值）
+      if (positions.length > 0) {
+        const firstRowTop = Math.min(...positions.map(p => p.top));
+        // 计算第一行有多少个元素（top 值相近的元素）
+        const firstRowCount = positions.filter(p => Math.abs(p.top - firstRowTop) < 10).length;
+        if (firstRowCount > 0) {
+          columns = firstRowCount;
+        }
+      }
+
+      // 如果还是计算失败，使用第一个元素的方法作为回退
+      if ((columns === 0 || columns === 1) && gridElement.firstElementChild) {
+        const firstChild = gridElement.firstElementChild as HTMLElement;
+        const firstRect = firstChild.getBoundingClientRect();
+        let cols = 1;
+        // 遍历所有子元素，找到有多少个和第一个元素在同一行
+        for (let i = 1; i < gridElement.children.length; i++) {
+          const child = gridElement.children[i] as HTMLElement;
+          const childRect = child.getBoundingClientRect();
+          // 使用更宽松的阈值
+          if (Math.abs(childRect.top - firstRect.top) < 15) {
+            cols++;
+          } else {
+            break; // 遇到下一行就停止
+          }
+        }
+        if (cols > columns) {
+          columns = cols;
+        }
+      }
+    }
+
+    // 最后的回退：如果还是计算失败，使用估算值
+    if (columns === 0 || columns === 1) {
+      const estimatedCols = Math.ceil(Math.sqrt(displayedImages.value.length));
+      if (estimatedCols > 1 && displayedImages.value.length > estimatedCols) {
+        columns = estimatedCols;
+      } else if (displayedImages.value.length > 1) {
+        // 如果有多张图片，至少有2列
+        columns = Math.min(4, Math.max(2, Math.floor(displayedImages.value.length / 2)));
+      } else {
+        columns = 1;
+      }
+    }
+  }
+
+  let targetIndex = -1;
+
+  switch (direction) {
+    case "up":
+      // 向上移动：和上一行的同一列交换
+      // 当前列号 = currentIndex % columns
+      // 上一行同一列 = (Math.floor(currentIndex / columns) - 1) * columns + (currentIndex % columns)
+      // 简化：currentIndex - columns
+      targetIndex = currentIndex - columns;
+      break;
+    case "down":
+      // 向下移动：和下一行的同一列交换
+      // 当前列号 = currentIndex % columns
+      // 下一行同一列 = (Math.floor(currentIndex / columns) + 1) * columns + (currentIndex % columns)
+      // 简化：currentIndex + columns
+      targetIndex = currentIndex + columns;
+      break;
+    case "left":
+      targetIndex = currentIndex - 1;
+      break;
+    case "right":
+      targetIndex = currentIndex + 1;
+      break;
+  }
+
+  // 检查目标索引是否有效
+  if (targetIndex < 0 || targetIndex >= displayedImages.value.length) {
+    return;
+  }
+
+  // 验证上下移动时是否在同一列
+  if (direction === "up" || direction === "down") {
+    const currentCol = currentIndex % columns;
+    const targetCol = targetIndex % columns;
+    if (currentCol !== targetCol) {
+      // 如果列号不匹配，说明计算错误，不执行交换
+      console.warn(`列号不匹配: currentCol=${currentCol}, targetCol=${targetCol}, currentIndex=${currentIndex}, targetIndex=${targetIndex}, columns=${columns}`);
+      return;
+    }
+  }
+
+  // 创建新的顺序数组：交换两个位置
+  const newOrder = [...displayedImages.value];
+  const temp = newOrder[currentIndex];
+  newOrder[currentIndex] = newOrder[targetIndex];
+  newOrder[targetIndex] = temp;
+
+  // 调用 reorder 处理函数
+  await handleImageReorder(newOrder);
+};
 
 // 监听图片列表变化，加载图片 URL
 // 监听整个数组，但使用 shallow 模式减少深度追踪
@@ -1644,121 +2496,8 @@ const throttle = <T extends (...args: any[]) => any>(func: T, delay: number): T 
   }) as T;
 };
 
-// 防抖函数
-const debounce = <T extends (...args: any[]) => any>(func: T, delay: number): T => {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  return ((...args: any[]) => {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    timer = setTimeout(() => {
-      func(...args);
-      timer = null;
-    }, delay);
-  }) as T;
-};
-
 // 节流后的调整列数函数（100ms 节流）
 const throttledAdjustColumns = throttle(adjustColumns, 100);
-
-// 处理键盘事件：Ctrl + +/- 调整列数，ESC 清除选择，Del 删除选中图片
-const handleKeyDown = (event: KeyboardEvent) => {
-  // 有弹窗/抽屉等覆盖层时，不处理画廊快捷键（避免误触）
-  if (isBlockingOverlayOpen()) return;
-
-  const target = event.target as HTMLElement | null;
-  const tag = target?.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
-    return;
-  }
-
-  // ESC 键清除选择
-  if (event.key === 'Escape') {
-    selectedImages.value.clear();
-    lastSelectedIndex.value = -1;
-    return;
-  }
-
-  // Ctrl + A 全选当前已加载图片
-  if (event.ctrlKey && (event.key === 'a' || event.key === 'A')) {
-    event.preventDefault();
-    const allIds = displayedImages.value.map(img => img.id);
-    selectedImages.value = new Set(allIds);
-    lastSelectedIndex.value = allIds.length > 0 ? allIds.length - 1 : -1;
-    return;
-  }
-
-  // Del 键删除选中的图片
-  if (event.key === 'Delete' && selectedImages.value.size > 0) {
-    event.preventDefault();
-    handleBatchDelete(); // 不等待，让删除操作异步执行
-    return;
-  }
-
-  // 检查是否按下了 Ctrl 键
-  if (!event.ctrlKey) return;
-
-  // 检查是否按下了 + 或 - 键
-  if (event.key === '+' || event.key === '=') {
-    event.preventDefault();
-    adjustColumns(1);
-  } else if (event.key === '-' || event.key === '_') {
-    event.preventDefault();
-    adjustColumns(-1);
-  }
-};
-
-// 处理滚轮事件：Ctrl + 滚轮调整列数
-const handleWheel = (event: WheelEvent) => {
-  // 有弹窗/抽屉等覆盖层时，不处理画廊滚轮快捷键
-  if (isBlockingOverlayOpen()) return;
-
-  // 检查是否按下了 Ctrl 键
-  if (!event.ctrlKey) return;
-
-  event.preventDefault();
-  // deltaY > 0 表示向下滚动（增加列数），deltaY < 0 表示向上滚动（减少列数）
-  const delta = event.deltaY > 0 ? 1 : -1;
-  throttledAdjustColumns(delta);
-};
-
-// 滚动结束后优先加载当前视口图片（防抖）
-const debouncedPrioritizeVisible = debounce(() => {
-  loadImageUrls();
-}, 180);
-
-const handleScroll = () => {
-  debouncedPrioritizeVisible();
-};
-
-// 处理窗口点击事件：优先关闭右键菜单，其次在空白处清除多选
-const handleWindowClick = (event: MouseEvent) => {
-  // 有弹窗/抽屉等覆盖层时，不处理画廊点击清理逻辑
-  if (isBlockingOverlayOpen()) return;
-
-  const target = event.target as HTMLElement;
-  const clickedOutside =
-    !target.closest('.image-item') &&
-    !target.closest('.context-menu') &&
-    !target.closest('.el-dialog');
-
-  if (!clickedOutside) return;
-
-  // 如果当前有右键菜单，先关闭菜单，保留选择
-  if (contextMenuVisible.value) {
-    contextMenuVisible.value = false;
-    return;
-  }
-
-  // 有选中时，点击空白不清除多选
-  if (selectedImages.value.size > 0) {
-    return;
-  }
-
-  // 无菜单且无选中，正常清空
-  selectedImages.value.clear();
-  lastSelectedIndex.value = -1;
-};
 
 onMounted(async () => {
   await loadSettings();
@@ -1766,25 +2505,16 @@ onMounted(async () => {
   await crawlerStore.loadTasks();
   await pluginStore.loadPlugins();
   await crawlerStore.loadRunConfigs();
+  // 确保在配置和插件都加载完成后检查兼容性
+  await checkAllConfigsCompatibility();
   await loadPluginIcons(); // 加载插件图标
   await loadImages(true);
 
   // 初始化窗口宽高比
   updateWindowAspectRatio();
 
-  // 添加键盘事件监听
-  window.addEventListener('keydown', handleKeyDown);
-  // 添加滚轮事件监听（使用 passive: false 以便可以 preventDefault）
-  window.addEventListener('wheel', handleWheel, { passive: false });
   // 添加窗口大小变化监听
   window.addEventListener('resize', handleResize);
-  // 添加点击事件监听，用于清除多选
-  window.addEventListener('click', handleWindowClick);
-  // 添加滚动监听，用于滚动稳定后优先加载视口图片
-  const container = galleryContainerRef.value;
-  if (container) {
-    container.addEventListener('scroll', handleScroll, { passive: true });
-  }
 
   // 记录已经显示过弹窗的任务ID，避免重复弹窗
   const shownErrorTasks = new Set<string>();
@@ -1836,12 +2566,30 @@ onMounted(async () => {
       imageAddedRefreshTimeout = setTimeout(async () => {
         await refreshLatestIncremental();
         imageAddedRefreshTimeout = null;
-      }, 500);
+      }, 200);
     }
   );
 
   // 保存监听器引用以便在卸载时移除
   (window as any).__imageAddedUnlisten = unlistenImageAdded;
+
+  // 监听后端通知：强制去重等待下载结束 -> 下载队列空闲
+  const unlistenForceDedupeEnded = await listen("force-dedupe-ended", async () => {
+    if (dedupeWaitingDownloads.value) {
+      dedupeWaitingDownloads.value = false;
+    }
+  });
+  (window as any).__forceDedupeEndedUnlisten = unlistenForceDedupeEnded;
+
+  // 监听“收藏状态变化”（来自画册/其它页面对收藏画册的增删）
+  const favoriteChangedHandler = ((event: Event) => {
+    const ce = event as CustomEvent<FavoriteStatusChangedDetail>;
+    const detail = ce.detail;
+    if (!detail || !Array.isArray(detail.imageIds)) return;
+    applyFavoriteChangeToGalleryCache(detail.imageIds, !!detail.favorite);
+  }) as EventListener;
+  window.addEventListener("favorite-status-changed", favoriteChangedHandler);
+  (window as any).__favoriteStatusChangedHandler = favoriteChangedHandler;
 });
 
 // 在开发环境中监控组件更新，帮助调试重新渲染问题
@@ -1849,8 +2597,20 @@ onMounted(async () => {
 
 // 组件激活时（keep-alive 缓存后重新显示）
 onActivated(async () => {
+  // 重新加载设置，确保使用最新的 pageSize 等配置
+  const previousPageSize = crawlerStore.pageSize;
+  await loadSettings();
+  const newPageSize = crawlerStore.pageSize;
+
   // 如果图片列表为空，需要重新加载
   if (displayedImages.value.length === 0) {
+    await loadImages(true);
+    return;
+  }
+
+  // 检查 pageSize 是否发生变化，如果变化了需要重新加载图片
+  if (previousPageSize !== newPageSize) {
+    // pageSize 已变化，重新加载图片以使用新的 pageSize
     await loadImages(true);
     return;
   }
@@ -1891,6 +2651,7 @@ onActivated(async () => {
       loadImageUrls(imagesToReload);
     }
   }
+
 });
 
 // 组件停用时（keep-alive 缓存，但不清理 Blob URL）
@@ -1901,19 +2662,13 @@ onDeactivated(() => {
 
 // 组件真正卸载时（不是 keep-alive 缓存）
 onUnmounted(() => {
-  // 移除键盘事件监听
-  window.removeEventListener('keydown', handleKeyDown);
-  // 移除滚轮事件监听
-  window.removeEventListener('wheel', handleWheel);
+  // 清理骨架屏定时器
+  if (skeletonTimer.value) {
+    clearTimeout(skeletonTimer.value);
+    skeletonTimer.value = null;
+  }
   // 移除窗口大小变化监听
   window.removeEventListener('resize', handleResize);
-  // 移除点击事件监听
-  window.removeEventListener('click', handleWindowClick);
-  // 移除滚动事件监听
-  const container = galleryContainerRef.value;
-  if (container) {
-    container.removeEventListener('scroll', handleScroll);
-  }
 
   // 释放所有 Blob URL，避免内存泄漏（只在真正卸载时清理）
   blobUrls.forEach(url => {
@@ -1936,15 +2691,46 @@ onUnmounted(() => {
     imageAddedUnlisten();
     delete (window as any).__imageAddedUnlisten;
   }
+
+  // 移除强制去重结束事件监听
+  const forceDedupeEndedUnlisten = (window as any).__forceDedupeEndedUnlisten;
+  if (forceDedupeEndedUnlisten) {
+    forceDedupeEndedUnlisten();
+    delete (window as any).__forceDedupeEndedUnlisten;
+  }
+
+  // 移除收藏状态变化监听
+  const favoriteChangedHandler = (window as any).__favoriteStatusChangedHandler;
+  if (favoriteChangedHandler) {
+    window.removeEventListener("favorite-status-changed", favoriteChangedHandler);
+    delete (window as any).__favoriteStatusChangedHandler;
+  }
 });
 </script>
 
 <style lang="scss">
+.gallery-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
 .gallery-container {
   width: 100%;
-  height: 100%;
+  flex: 1;
   padding: 20px;
   overflow-y: auto;
+
+  /* 按住空格进入“拖拽滚动模式” */
+  &.drag-scroll-ready {
+    cursor: grab;
+  }
+
+  /* 正在拖拽滚动 */
+  &.drag-scroll-active {
+    cursor: grabbing;
+    user-select: none;
+  }
 
   .gallery-toolbar {
     display: flex;
@@ -2006,82 +2792,12 @@ onUnmounted(() => {
     }
   }
 
-  .image-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 16px;
-    width: 100%;
-  }
-
   .load-more-container {
     display: flex;
     justify-content: center;
     align-items: center;
     padding: 32px 0;
     margin-top: 24px;
-  }
-
-  .image-item {
-    border: 2px solid var(--anime-border);
-    border-radius: 16px;
-    overflow: hidden;
-    cursor: pointer;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    background: var(--anime-bg-card);
-    box-shadow: var(--anime-shadow);
-
-    &:hover {
-      transform: translateY(-8px) scale(1.02);
-      box-shadow: var(--anime-shadow-hover);
-      border-color: var(--anime-primary-light);
-    }
-
-    .image-wrapper {
-      width: 100%;
-      height: 200px;
-      position: relative;
-      cursor: pointer;
-      overflow: hidden;
-      border-radius: 14px 14px 0 0;
-    }
-
-    .thumbnail {
-      width: 100%;
-      height: 100%;
-      border-radius: 14px 14px 0 0;
-      object-fit: cover;
-      display: block;
-    }
-
-    .thumbnail-loading {
-      width: 100%;
-      height: 200px;
-      border-radius: 14px 14px 0 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: var(--anime-bg-secondary);
-    }
-
-    .favorite-badge {
-      position: absolute;
-      top: 8px;
-      right: 8px;
-      background: rgba(255, 107, 157, 0.9);
-      border-radius: 50%;
-      width: 32px;
-      height: 32px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-      z-index: 10;
-
-      .el-icon {
-        font-size: 18px;
-      }
-    }
   }
 
   .context-menu-overlay {
@@ -2167,6 +2883,22 @@ onUnmounted(() => {
   .empty {
     padding: 40px;
     text-align: center;
+  }
+
+  .fade-in {
+    animation: fadeIn 0.4s ease-in-out;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   .crawl-form {
@@ -2267,7 +2999,7 @@ onUnmounted(() => {
   }
 }
 
-/* "开始收集图片"->"选择收集源"下拉框：下拉面板是 teleport 到 body 的，所以必须用全局样式 */
+/* "开始导入图片"->"选择导入源"下拉框：下拉面板是 teleport 到 body 的，所以必须用全局样式 */
 .crawl-plugin-select-dropdown {
   .el-select-dropdown__item {
     padding: 8px 12px;
@@ -2315,44 +3047,66 @@ onUnmounted(() => {
   .run-config-option {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 10px;
     min-height: 32px;
+    width: 100%;
   }
 
   .run-config-info {
     display: flex;
-    flex-direction: row;
-    align-items: baseline;
-    gap: 8px;
+    flex-direction: column;
+    gap: 0;
+    flex: 1;
     min-width: 0;
+    overflow: hidden;
 
     .name {
       font-weight: 600;
       color: var(--el-text-color-primary);
-      line-height: 1.2;
-      word-break: break-all;
+      line-height: 1.4;
+      display: flex;
+      align-items: center;
       font-size: 14px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-    }
 
-    .desc {
-      font-size: 12px;
-      color: var(--el-text-color-secondary);
-      line-height: 1.2;
-      word-break: break-all;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      .incompatible-badge {
+        color: var(--el-color-warning);
+        font-weight: 600;
+        margin-right: 4px;
+      }
+
+      .incompatible-reason {
+        margin-top: 4px;
+        font-size: 12px;
+      }
+
+      .error-text {
+        color: var(--el-color-error);
+      }
+
+      .warning-text {
+        color: var(--el-color-warning);
+      }
+
+      .desc {
+        font-size: 12px;
+        color: var(--el-text-color-secondary);
+        font-weight: normal;
+        margin-left: 4px;
+      }
     }
   }
 
-  .el-button {
-    margin-left: auto;
+  .run-config-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     flex-shrink: 0;
-    padding: 0 4px;
-    font-size: 12px;
+    align-self: flex-start;
+    padding-top: 2px;
   }
 }
 

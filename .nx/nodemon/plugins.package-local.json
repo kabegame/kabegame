@@ -1,0 +1,18 @@
+{
+  "watch": [
+    "crawler-plugins"
+  ],
+  "ignore": [
+    "**/*.kgpg",
+    "**/node_modules/**",
+    "crawler-plugins/node_modules/**",
+    "crawler-plugins/packed/**",
+    "dist/**",
+    "src-tauri/target/**"
+  ],
+  "ext": "bmp,cjs,gif,ico,jpeg,jpg,js,json,md,mjs,png,rhai,svg,txt,webp",
+  "exec": "node scripts/package-and-signal.js --local",
+  "delay": 500,
+  "legacyWatch": false,
+  "verbose": true
+}

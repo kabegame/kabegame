@@ -8,18 +8,23 @@
           </el-icon>
         </div>
       </div>
-      <div v-if="heroAll.length === 0 && !isLoading" class="hero-empty">No Preview</div>
+      <div v-if="actualImageCount === 0 && !isLoading" class="hero-empty">
+        <div class="empty-preview">
+          <img src="/album-empty.png" alt="空画册" class="empty-image" />
+          <p class="empty-text">まだ空っぽだけど、これから色々お友達を作っていくのだ！</p>
+        </div>
+      </div>
       <div v-if="isLoading && heroAll.length === 0" class="hero-loading-full">
         <el-icon class="loading-icon">
           <Loading />
         </el-icon>
       </div>
-      <div class="hero-btn left" v-if="heroAll.length > 1" @click.stop="prevHero">
+      <div class="hero-btn left" v-if="actualImageCount >= 3" @click.stop="prevHero">
         <el-icon>
           <ArrowLeft />
         </el-icon>
       </div>
-      <div class="hero-btn right" v-if="heroAll.length > 1" @click.stop="nextHero">
+      <div class="hero-btn right" v-if="actualImageCount >= 3" @click.stop="nextHero">
         <el-icon>
           <ArrowRight />
         </el-icon>
@@ -63,8 +68,6 @@ const albumStore = useAlbumStore();
 const isRenaming = ref(false);
 const renameValue = ref("");
 const renameInputRef = ref<any>(null);
-const lastClickTime = ref(0);
-const clickTimer = ref<number | null>(null);
 
 const emit = defineEmits<{
   click: [];
@@ -79,36 +82,20 @@ defineExpose({
 });
 
 const handleCardClick = () => {
-  // 如果正在重命名，不触发打开抽屉
+  // 如果正在重命名，不触发点击
   if (isRenaming.value) {
     return;
   }
-  // 检查是否是双击（在 300ms 内）
-  const now = Date.now();
-  if (now - lastClickTime.value < 300) {
-    // 双击，但已经在 handleStartRename 中处理了，这里不触发打开抽屉
-    if (clickTimer.value) {
-      clearTimeout(clickTimer.value);
-      clickTimer.value = null;
-    }
+  // 空相册不能打开
+  if (props.count === 0) {
     return;
   }
-  lastClickTime.value = now;
-  // 延迟触发，如果是双击则会被取消
-  clickTimer.value = window.setTimeout(() => {
-    emit('click');
-    clickTimer.value = null;
-  }, 300);
+  emit('click');
 };
 
 const handleStartRename = (event?: MouseEvent) => {
   if (event) {
-    event.stopPropagation(); // 阻止事件冒泡，避免触发打开抽屉
-  }
-  // 取消可能存在的单击定时器
-  if (clickTimer.value) {
-    clearTimeout(clickTimer.value);
-    clickTimer.value = null;
+    event.stopPropagation(); // 阻止事件冒泡
   }
   isRenaming.value = true;
   renameValue.value = props.album.name;
@@ -160,12 +147,33 @@ const heroAll = computed(() => {
   return urls;
 });
 
+// 计算实际有效图片数量（非空 URL）
+const actualImageCount = computed(() => {
+  return props.previewUrls.slice(0, 6).filter(url => url).length;
+});
+
 const heroClass = (idx: number) => {
-  const total = heroAll.value.length;
-  if (total === 0) return "is-hidden";
+  const actualCount = actualImageCount.value;
+
+  // 如果只有1张图，只显示第一张居中
+  if (actualCount === 1) {
+    if (idx === 0) return "is-center";
+    return "is-hidden";
+  }
+
+  // 如果只有2张图，显示第一张居中，第二张在右边，不轮转
+  if (actualCount === 2) {
+    if (idx === 0) return "is-center";
+    if (idx === 1) return "is-right";
+    return "is-hidden";
+  }
+
+  // 3张及以上，正常轮转，但只在有效图片范围内轮转
+  const total = actualCount;
   const center = heroIndex.value % total;
   const left = (center - 1 + total) % total;
   const right = (center + 1) % total;
+
   if (idx === center) return "is-center";
   if (idx === left) return "is-left";
   if (idx === right) return "is-right";
@@ -177,13 +185,15 @@ const heroStyle = (url: string) => ({
 });
 
 const nextHero = () => {
-  if (heroAll.value.length === 0) return;
-  heroIndex.value = (heroIndex.value + 1) % heroAll.value.length;
+  const actualCount = actualImageCount.value;
+  if (actualCount < 3) return; // 少于3张不轮转
+  heroIndex.value = (heroIndex.value + 1) % actualCount;
 };
 
 const prevHero = () => {
-  if (heroAll.value.length === 0) return;
-  heroIndex.value = (heroIndex.value - 1 + heroAll.value.length) % heroAll.value.length;
+  const actualCount = actualImageCount.value;
+  if (actualCount < 3) return; // 少于3张不轮转
+  heroIndex.value = (heroIndex.value - 1 + actualCount) % actualCount;
 };
 
 const formatDate = (ts?: number) => {
@@ -272,10 +282,39 @@ const formatDate = (ts?: number) => {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(31, 42, 68, 0.6);
-    font-size: 12px;
     background: rgba(255, 255, 255, 0.35);
     border-radius: 14px;
+    padding: 16px;
+
+    .empty-preview {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      width: 100%;
+      height: 100%;
+
+      .empty-image {
+        width: 120px;
+        max-width: 45%;
+        height: auto;
+        opacity: 0.85;
+        user-select: none;
+        pointer-events: none;
+        flex-shrink: 0;
+      }
+
+      .empty-text {
+        writing-mode: vertical-rl;
+        color: rgba(31, 42, 68, 0.7);
+        font-size: 13px;
+        line-height: 1.8;
+        margin: 0;
+        padding: 8px 0;
+        flex-shrink: 0;
+        letter-spacing: 0.1em;
+      }
+    }
   }
 
   .hero-loading {

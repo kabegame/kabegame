@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -21,9 +24,19 @@ pub struct Plugin {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// manifest.json 里的版本号
+    pub version: String,
     #[serde(rename = "baseUrl")]
     pub base_url: String,
     pub enabled: bool,
+    /// 插件包体大小（.kgpg 文件大小）
+    #[serde(rename = "sizeBytes")]
+    pub size_bytes: u64,
+    /// UI 排序用（越小越靠前）
+    pub order: i64,
+    /// 是否内置插件（目前 .kgpg 均视为非内置）
+    #[serde(rename = "builtIn")]
+    pub built_in: bool,
     pub config: HashMap<String, serde_json::Value>,
     pub selector: Option<PluginSelector>,
 }
@@ -41,11 +54,15 @@ pub struct PluginSelector {
 
 pub struct PluginManager {
     app: AppHandle,
+    remote_zip_cache: Mutex<HashMap<String, RemoteZipCacheEntry>>,
 }
 
 impl PluginManager {
     pub fn new(app: AppHandle) -> Self {
-        Self { app }
+        Self {
+            app,
+            remote_zip_cache: Mutex::new(HashMap::new()),
+        }
     }
 
     fn get_plugins_file(&self) -> PathBuf {
@@ -60,6 +77,9 @@ impl PluginManager {
             return Ok(vec![]);
         }
 
+        // 读取排序信息（可选）
+        let orders = self.load_plugin_orders().unwrap_or_default();
+
         let mut plugins = Vec::new();
         let entries = fs::read_dir(&plugins_dir)
             .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
@@ -72,29 +92,49 @@ impl PluginManager {
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
                 if let Ok(manifest) = self.read_plugin_manifest(&path) {
                     let config = self.read_plugin_config(&path)?;
+                    let size_bytes = fs::metadata(&path)
+                        .map_err(|e| format!("Failed to get plugin file metadata: {}", e))?
+                        .len();
 
-                    // 使用文件名和插件名生成 ID，与 load_browser_plugins 保持一致
+                    // 仅使用文件名作为插件 ID（避免冲突）
                     let file_name = path
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("")
                         .to_string();
-                    let plugin_id = format!("{}-{}", file_name, manifest.name);
+                    let plugin_id = file_name.clone();
+                    let order = orders.get(&plugin_id).copied().unwrap_or(0);
 
                     let plugin = Plugin {
                         id: plugin_id,
                         name: manifest.name.clone(),
                         description: manifest.description,
+                        version: manifest.version,
                         base_url: config
                             .as_ref()
                             .map(|c| c.base_url.clone())
                             .unwrap_or_default(),
                         enabled: true,
+                        size_bytes,
+                        order,
+                        built_in: false,
                         config: HashMap::new(),
                         selector: config.and_then(|c| c.selector),
                     };
                     plugins.push(plugin);
                 }
+            }
+        }
+
+        // 若没有 order（全为 0），给一个稳定默认顺序；否则按 order 排序
+        let has_any_order = plugins.iter().any(|p| p.order != 0);
+        if has_any_order {
+            plugins.sort_by_key(|p| p.order);
+        } else {
+            // 默认：按文件名排序，并生成 1000 步长 order（与前端更新顺序保持一致）
+            plugins.sort_by(|a, b| a.id.cmp(&b.id));
+            for (idx, p) in plugins.iter_mut().enumerate() {
+                p.order = ((idx as i64) + 1) * 1000;
             }
         }
 
@@ -162,19 +202,17 @@ impl PluginManager {
             let path = entry.path();
 
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-                if let Ok(manifest) = self.read_plugin_manifest(&path) {
-                    let file_name = path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let plugin_id = format!("{}-{}", file_name, manifest.name);
+                let file_name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let plugin_id = file_name;
 
-                    if plugin_id == id {
-                        fs::remove_file(&path)
-                            .map_err(|e| format!("Failed to delete plugin file: {}", e))?;
-                        return Ok(());
-                    }
+                if plugin_id == id {
+                    fs::remove_file(&path)
+                        .map_err(|e| format!("Failed to delete plugin file: {}", e))?;
+                    return Ok(());
                 }
             }
         }
@@ -183,14 +221,14 @@ impl PluginManager {
     }
 
     pub fn get_plugins_directory(&self) -> PathBuf {
-        // 开发模式：使用 test_plugin_packed 目录
+        // 开发模式：使用 crawler-plugins/packed 目录
         // 生产模式：使用应用数据目录
         #[cfg(debug_assertions)]
         {
             // 开发模式：尝试多个可能的路径
             // 1. 当前工作目录（开发时通常在项目根目录）
             if let Ok(cwd) = std::env::current_dir() {
-                let dev_path = cwd.join("test_plugin_packed");
+                let dev_path = cwd.join("crawler-plugins").join("packed");
                 if dev_path.exists() {
                     return dev_path;
                 }
@@ -206,7 +244,7 @@ impl PluginManager {
                         .and_then(|p| p.parent())
                     // 项目根目录
                     {
-                        let dev_path = project_root.join("test_plugin_packed");
+                        let dev_path = project_root.join("crawler-plugins").join("packed");
                         if dev_path.exists() {
                             return dev_path;
                         }
@@ -215,7 +253,7 @@ impl PluginManager {
             }
         }
 
-        // 生产模式或开发模式但 test_plugin_packed 不存在时，使用应用数据目录
+        // 生产模式或开发模式但 crawler-plugins/packed 不存在时，使用应用数据目录
         let app_data_dir = get_app_data_dir();
         app_data_dir.join("plugins_directory")
     }
@@ -228,7 +266,7 @@ impl PluginManager {
     pub fn load_browser_plugins(&self) -> Result<Vec<BrowserPlugin>, String> {
         let plugins_dir = self.get_plugins_directory();
         if !plugins_dir.exists() {
-            // 开发模式下，如果 test_plugin_packed 不存在，返回空列表
+            // 开发模式下，如果 crawler-plugins/packed 不存在，返回空列表
             #[cfg(debug_assertions)]
             return Ok(vec![]);
 
@@ -262,7 +300,7 @@ impl PluginManager {
                             .and_then(|s| s.to_str())
                             .unwrap_or("")
                             .to_string();
-                        let plugin_id = format!("{}-{}", file_name, manifest.name);
+                        let plugin_id = file_name.clone();
                         let favorite = favorites.contains(&plugin_id);
 
                         // 读取 doc.md（可选）
@@ -460,32 +498,32 @@ impl PluginManager {
         Ok(Some(content))
     }
 
-    /// 检查插件 ZIP 文件中是否存在 icon.ico
+    /// 检查插件 ZIP 文件中是否存在 icon.png
     fn check_plugin_icon_exists(&self, zip_path: &Path) -> bool {
         if let Ok(file) = fs::File::open(zip_path) {
             if let Ok(mut archive) = ZipArchive::new(file) {
-                return archive.by_name("icon.ico").is_ok();
+                return archive.by_name("icon.png").is_ok();
             }
         }
         false
     }
 
-    /// 从 ZIP 格式的插件文件中读取 icon.ico
+    /// 从 ZIP 格式的插件文件中读取 icon.png
     pub fn read_plugin_icon(&self, zip_path: &Path) -> Result<Option<Vec<u8>>, String> {
         let file =
             fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
         let mut archive =
             ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
 
-        let mut icon_file = match archive.by_name("icon.ico") {
+        let mut icon_file = match archive.by_name("icon.png") {
             Ok(f) => f,
-            Err(_) => return Ok(None), // icon.ico 是可选的
+            Err(_) => return Ok(None), // icon.png 是可选的
         };
 
         let mut icon_data = Vec::new();
         icon_file
             .read_to_end(&mut icon_data)
-            .map_err(|e| format!("Failed to read icon.ico: {}", e))?;
+            .map_err(|e| format!("Failed to read icon.png: {}", e))?;
 
         Ok(Some(icon_data))
     }
@@ -550,17 +588,27 @@ impl PluginManager {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        let plugin_id = format!("{}-{}", file_stem, manifest.name);
+        let plugin_id = file_stem.clone();
+
+        let size_bytes = fs::metadata(&target_path)
+            .map_err(|e| format!("Failed to get plugin file metadata: {}", e))?
+            .len();
+        let orders = self.load_plugin_orders().unwrap_or_default();
+        let order = orders.get(&plugin_id).copied().unwrap_or(0);
 
         let plugin = Plugin {
-            id: plugin_id,
+            id: plugin_id.clone(),
             name: manifest.name.clone(),
             description: manifest.description,
+            version: manifest.version,
             base_url: config
                 .as_ref()
                 .map(|c| c.base_url.clone())
                 .unwrap_or_default(),
             enabled: true,
+            size_bytes,
+            order,
+            built_in: false,
             config: HashMap::new(),
             selector: config.and_then(|c| c.selector),
         };
@@ -589,8 +637,12 @@ impl PluginManager {
             id: Uuid::new_v4().to_string(),
             name: plugin_json.name.clone(),
             description: plugin_json.desp.clone(),
+            version: "0.0.0".to_string(),
             base_url: String::new(), // 需要从 JSON 中获取或使用默认值
             enabled: true,
+            size_bytes: 0,
+            order: 0,
+            built_in: false,
             config: HashMap::new(),
             selector: None,
         };
@@ -618,20 +670,28 @@ impl PluginManager {
                         .and_then(|s| s.to_str())
                         .unwrap_or("")
                         .to_string();
-                    let generated_id = format!("{}-{}", file_name, manifest.name);
 
-                    if generated_id == plugin_id || file_name == plugin_id {
+                    if file_name == plugin_id {
                         // 文件已经在插件目录中，直接读取并返回
                         let config = self.read_plugin_config(&path)?;
+                        let size_bytes = fs::metadata(&path)
+                            .map_err(|e| format!("Failed to get plugin file metadata: {}", e))?
+                            .len();
+                        let orders = self.load_plugin_orders().unwrap_or_default();
+                        let order = orders.get(&file_name).copied().unwrap_or(0);
                         let plugin = Plugin {
-                            id: generated_id,
+                            id: file_name.clone(),
                             name: manifest.name.clone(),
                             description: manifest.description,
+                            version: manifest.version,
                             base_url: config
                                 .as_ref()
                                 .map(|c| c.base_url.clone())
                                 .unwrap_or_default(),
                             enabled: true,
+                            size_bytes,
+                            order,
+                            built_in: false,
                             config: HashMap::new(),
                             selector: config.and_then(|c| c.selector),
                         };
@@ -684,10 +744,7 @@ impl PluginManager {
     }
 
     /// 获取插件的变量定义（从 config.json 中读取）
-    pub fn get_plugin_vars(
-        &self,
-        plugin_id: &str,
-    ) -> Result<Option<Vec<VarDefinition>>, String> {
+    pub fn get_plugin_vars(&self, plugin_id: &str) -> Result<Option<Vec<VarDefinition>>, String> {
         let plugins_dir = self.get_plugins_directory();
         let plugin_file = self.find_plugin_file(&plugins_dir, plugin_id)?;
         let config = self.read_plugin_config(&plugin_file)?;
@@ -746,21 +803,776 @@ impl PluginManager {
             let path = entry.path();
 
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-                if let Ok(manifest) = self.read_plugin_manifest(&path) {
-                    let file_name = path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let id = format!("{}-{}", file_name, manifest.name);
-                    if id == plugin_id {
-                        return Ok(path);
-                    }
+                let file_name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if file_name == plugin_id {
+                    return Ok(path);
                 }
             }
         }
 
         Err(format!("Plugin {} not found", plugin_id))
+    }
+
+    /// 加载插件源列表
+    pub fn load_plugin_sources(&self) -> Result<Vec<PluginSource>, String> {
+        let default_sources = self.get_default_sources();
+        let file = self.get_plugin_sources_file();
+
+        if !file.exists() {
+            // 文件不存在，返回默认官方源
+            return Ok(default_sources);
+        }
+
+        let content = fs::read_to_string(&file)
+            .map_err(|e| format!("Failed to read plugin sources file: {}", e))?;
+        let user_sources: Vec<PluginSource> = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse plugin sources: {}", e))?;
+
+        // 合并官方源和用户源：确保官方源始终存在，且不能被用户修改
+        let mut result = default_sources;
+        let official_ids: std::collections::HashSet<String> =
+            result.iter().map(|s| s.id.clone()).collect();
+
+        // 添加用户自定义的源（排除官方源，避免重复）
+        for source in user_sources {
+            if !official_ids.contains(&source.id) {
+                result.push(source);
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// 保存插件源列表（只保存用户自定义的源，官方源不会被保存）
+    pub fn save_plugin_sources(&self, sources: &[PluginSource]) -> Result<(), String> {
+        let file = self.get_plugin_sources_file();
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create plugin sources directory: {}", e))?;
+        }
+
+        // 过滤掉官方源，只保存用户自定义的源
+        let official_ids: std::collections::HashSet<String> = self
+            .get_default_sources()
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
+
+        let user_sources: Vec<PluginSource> = sources
+            .iter()
+            .filter(|s| !official_ids.contains(&s.id))
+            .cloned()
+            .collect();
+
+        let content = serde_json::to_string_pretty(&user_sources)
+            .map_err(|e| format!("Failed to serialize plugin sources: {}", e))?;
+        fs::write(&file, content)
+            .map_err(|e| format!("Failed to write plugin sources file: {}", e))?;
+        Ok(())
+    }
+
+    /// 获取插件源文件路径
+    fn get_plugin_sources_file(&self) -> PathBuf {
+        let data_dir = get_app_data_dir();
+        data_dir.join("plugin_sources.json")
+    }
+
+    /// 获取默认的官方源列表
+    fn get_default_sources(&self) -> Vec<PluginSource> {
+        let owner = option_env!("CRAWLER_PLUGINS_REPO_OWNER").unwrap_or("kabegame");
+        let repo = option_env!("CRAWLER_PLUGINS_REPO_NAME").unwrap_or("crawler-plugins");
+        // NOTE:
+        // 以前这里使用 `releases/download/{tag}/index.json`（tag 由 build.rs 注入），
+        // 但当 tag 对应的 Release 资产不存在/被清理时，前端会显示官方源 404。
+        // 这里改为固定使用 GitHub 的 latest download 直链，避免依赖具体 tag。
+        let index_url = format!(
+            "https://github.com/{}/{}/releases/latest/download/index.json",
+            owner, repo
+        );
+
+        vec![PluginSource {
+            id: "official_github_release".to_string(),
+            name: "官方 GitHub Releases 源".to_string(),
+            index_url,
+            built_in: true,
+        }]
+    }
+
+    /// 从启用的源获取商店插件列表
+    ///
+    /// - `source_id=None`：从所有启用的源获取
+    /// - `source_id=Some(id)`：只从指定源获取（若源不存在/未启用，则返回空列表）
+    pub async fn fetch_store_plugins(
+        &self,
+        source_id: Option<&str>,
+    ) -> Result<Vec<StorePluginResolved>, String> {
+        let sources = self.load_plugin_sources()?;
+        let enabled_sources: Vec<_> = sources
+            .into_iter()
+            .filter(|s| source_id.map(|id| id == s.id).unwrap_or(true))
+            .collect();
+
+        if enabled_sources.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut all_plugins = Vec::new();
+        let mut errors = Vec::new();
+
+        for source in enabled_sources {
+            match self.fetch_plugins_from_source(&source).await {
+                Ok(mut plugins) => all_plugins.append(&mut plugins),
+                Err(e) => {
+                    let error_msg = format!("源 '{}' 加载失败: {}", source.name, e);
+                    eprintln!("{}", error_msg);
+                    errors.push(error_msg);
+                    // 继续处理其他源，不中断整个流程
+                }
+            }
+        }
+
+        // 如果指定了单一源且失败，返回该源的错误（便于前端提示“当前源不可用”）
+        if source_id.is_some() && all_plugins.is_empty() && !errors.is_empty() {
+            return Err(errors.join("\n"));
+        }
+
+        // 如果所有源都失败，返回错误
+        if source_id.is_none() && all_plugins.is_empty() && !errors.is_empty() {
+            return Err(format!("所有商店源加载失败：\n{}", errors.join("\n")));
+        }
+
+        // 检查已安装的插件版本
+        let installed_plugins = self.get_all()?;
+        for plugin in &mut all_plugins {
+            if installed_plugins.iter().any(|p| p.id == plugin.id) {
+                // 从已安装的插件文件中读取版本
+                if let Ok(manifest) = self
+                    .find_plugin_file(&self.get_plugins_directory(), &plugin.id)
+                    .and_then(|path| self.read_plugin_manifest(&path))
+                {
+                    plugin.installed_version = Some(manifest.version);
+                }
+            }
+        }
+
+        // 如果有部分源失败，但仍然有成功的源，返回成功但记录错误（通过日志）
+        if !errors.is_empty() {
+            eprintln!(
+                "部分商店源加载失败，但仍有可用插件：\n{}",
+                errors.join("\n")
+            );
+        }
+
+        Ok(all_plugins)
+    }
+
+    /// 从单个源获取插件列表
+    async fn fetch_plugins_from_source(
+        &self,
+        source: &PluginSource,
+    ) -> Result<Vec<StorePluginResolved>, String> {
+        let client = reqwest::Client::new();
+        let response = client
+            .get(&source.index_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch plugin index: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Failed to fetch plugin index: HTTP {}",
+                response.status()
+            ));
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse plugin index JSON: {}", e))?;
+
+        // 解析 JSON 格式：期望是一个包含 "plugins" 数组的对象
+        let plugins_array = json
+            .get("plugins")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| "Invalid plugin index format: missing 'plugins' array".to_string())?;
+
+        let mut resolved_plugins = Vec::new();
+
+        for plugin_json in plugins_array {
+            if let Ok(plugin) = self.parse_store_plugin(plugin_json, &source.id, &source.name) {
+                resolved_plugins.push(plugin);
+            }
+        }
+
+        Ok(resolved_plugins)
+    }
+
+    /// 验证一个 index.json URL 是否可获取并可解析（严格校验每个插件条目字段）
+    pub async fn validate_store_source_index(
+        &self,
+        index_url: &str,
+    ) -> Result<StoreSourceValidationResult, String> {
+        let client = reqwest::Client::new();
+        let response = client
+            .get(index_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch plugin index: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Failed to fetch plugin index: HTTP {}",
+                response.status()
+            ));
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse plugin index JSON: {}", e))?;
+
+        let plugins_array = json
+            .get("plugins")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| "Invalid plugin index format: missing 'plugins' array".to_string())?;
+
+        // 严格验证：任何条目字段缺失都算错误（前端会弹窗让用户决定是否仍然添加）
+        let mut errors: Vec<String> = Vec::new();
+        for (idx, plugin_json) in plugins_array.iter().enumerate() {
+            if let Err(e) = self.parse_store_plugin(plugin_json, "_validate", "_validate") {
+                // 只收集前几个，避免错误过长
+                if errors.len() < 3 {
+                    errors.push(format!("#{}: {}", idx, e));
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(format!(
+                "index.json 已获取，但存在不合法的插件条目（示例）：\n{}",
+                errors.join("\n")
+            ));
+        }
+
+        Ok(StoreSourceValidationResult {
+            plugin_count: plugins_array.len(),
+        })
+    }
+
+    /// 解析单个商店插件 JSON
+    fn parse_store_plugin(
+        &self,
+        plugin_json: &serde_json::Value,
+        source_id: &str,
+        source_name: &str,
+    ) -> Result<StorePluginResolved, String> {
+        let id = plugin_json
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing 'id' field".to_string())?
+            .to_string();
+
+        let name = plugin_json
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing 'name' field".to_string())?
+            .to_string();
+
+        let version = plugin_json
+            .get("version")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing 'version' field".to_string())?
+            .to_string();
+
+        let description = plugin_json
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let download_url = plugin_json
+            .get("downloadUrl")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Missing 'downloadUrl' field".to_string())?
+            .to_string();
+
+        let icon_url = plugin_json
+            .get("iconUrl")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let sha256 = plugin_json
+            .get("sha256")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let size_bytes = plugin_json
+            .get("sizeBytes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        Ok(StorePluginResolved {
+            id,
+            name,
+            version,
+            description,
+            download_url,
+            icon_url,
+            sha256,
+            size_bytes,
+            source_id: source_id.to_string(),
+            source_name: source_name.to_string(),
+            installed_version: None,
+        })
+    }
+
+    /// 下载插件到临时文件
+    pub async fn download_plugin_to_temp(
+        &self,
+        download_url: &str,
+        expected_sha256: Option<&str>,
+        expected_size: Option<u64>,
+    ) -> Result<PathBuf, String> {
+        let client = reqwest::Client::new();
+        let response = client
+            .get(download_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download plugin: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Failed to download plugin: HTTP {}",
+                response.status()
+            ));
+        }
+
+        // 检查大小（如果提供）
+        if let Some(expected) = expected_size {
+            if let Some(content_length) = response.content_length() {
+                if content_length != expected {
+                    return Err(format!(
+                        "Size mismatch: expected {}, got {}",
+                        expected, content_length
+                    ));
+                }
+            }
+        }
+
+        // 创建临时文件
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join(format!("plugin_{}.kgpg", Uuid::new_v4()));
+
+        // 下载并写入文件
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read plugin data: {}", e))?;
+
+        // 验证 SHA256（如果提供）
+        if let Some(expected) = expected_sha256 {
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            let hash = format!("{:x}", hasher.finalize());
+            if hash != expected {
+                return Err(format!(
+                    "SHA256 mismatch: expected {}, got {}",
+                    expected, hash
+                ));
+            }
+        }
+
+        // 写入文件
+        let mut file = fs::File::create(&temp_file)
+            .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        file.write_all(&bytes)
+            .map_err(|e| format!("Failed to write temp file: {}", e))?;
+
+        Ok(temp_file)
+    }
+
+    async fn download_plugin_bytes(
+        &self,
+        download_url: &str,
+        expected_sha256: Option<&str>,
+        expected_size: Option<u64>,
+    ) -> Result<Vec<u8>, String> {
+        let client = reqwest::Client::new();
+        let response = client
+            .get(download_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download plugin: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Failed to download plugin: HTTP {}",
+                response.status()
+            ));
+        }
+
+        // 检查大小（如果提供）
+        if let Some(expected) = expected_size {
+            if let Some(content_length) = response.content_length() {
+                if content_length != expected {
+                    return Err(format!(
+                        "Size mismatch: expected {}, got {}",
+                        expected, content_length
+                    ));
+                }
+            }
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read plugin data: {}", e))?;
+
+        // 验证 SHA256（如果提供）
+        if let Some(expected) = expected_sha256 {
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            let hash = format!("{:x}", hasher.finalize());
+            if hash != expected {
+                return Err(format!(
+                    "SHA256 mismatch: expected {}, got {}",
+                    expected, hash
+                ));
+            }
+        }
+
+        Ok(bytes.to_vec())
+    }
+
+    fn remote_zip_cache_get_locked(
+        cache: &mut HashMap<String, RemoteZipCacheEntry>,
+        key: &str,
+    ) -> Option<Arc<Vec<u8>>> {
+        let now = Instant::now();
+        let ttl = Duration::from_secs(10 * 60);
+        if let Some(entry) = cache.get(key) {
+            if now.duration_since(entry.inserted_at) <= ttl {
+                return Some(entry.bytes.clone());
+            }
+        }
+        cache.remove(key);
+        None
+    }
+
+    fn remote_zip_cache_insert_locked(
+        cache: &mut HashMap<String, RemoteZipCacheEntry>,
+        key: String,
+        bytes: Arc<Vec<u8>>,
+    ) {
+        // 清理过期
+        let now = Instant::now();
+        let ttl = Duration::from_secs(10 * 60);
+        cache.retain(|_, v| now.duration_since(v.inserted_at) <= ttl);
+
+        cache.insert(
+            key,
+            RemoteZipCacheEntry {
+                inserted_at: Instant::now(),
+                bytes,
+            },
+        );
+
+        // 简单容量控制：最多保留 6 个，超出就按最老淘汰
+        const MAX: usize = 6;
+        if cache.len() > MAX {
+            let mut items: Vec<_> = cache
+                .iter()
+                .map(|(k, v)| (k.clone(), v.inserted_at))
+                .collect();
+            items.sort_by_key(|(_, t)| *t);
+            while cache.len() > MAX {
+                if let Some((oldest_key, _)) = items.first().cloned() {
+                    cache.remove(&oldest_key);
+                    items.remove(0);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    pub async fn get_remote_zip_bytes_cached(
+        &self,
+        download_url: &str,
+        expected_sha256: Option<&str>,
+        expected_size: Option<u64>,
+    ) -> Result<Arc<Vec<u8>>, String> {
+        let key = download_url.to_string();
+
+        if let Ok(mut cache) = self.remote_zip_cache.lock() {
+            if let Some(hit) = Self::remote_zip_cache_get_locked(&mut cache, &key) {
+                return Ok(hit);
+            }
+        }
+
+        let bytes = self
+            .download_plugin_bytes(download_url, expected_sha256, expected_size)
+            .await?;
+        let arc = Arc::new(bytes);
+
+        if let Ok(mut cache) = self.remote_zip_cache.lock() {
+            Self::remote_zip_cache_insert_locked(&mut cache, key, arc.clone());
+        }
+
+        Ok(arc)
+    }
+
+    pub fn load_installed_plugin_detail(&self, plugin_id: &str) -> Result<PluginDetail, String> {
+        let plugins_dir = self.get_plugins_directory();
+        let path = self.find_plugin_file(&plugins_dir, plugin_id)?;
+
+        let manifest = self.read_plugin_manifest(&path)?;
+        let doc = self.read_plugin_doc(&path).ok().flatten();
+        let icon_data = self.read_plugin_icon(&path).ok().flatten();
+
+        Ok(PluginDetail {
+            id: plugin_id.to_string(),
+            name: manifest.name,
+            desp: manifest.description,
+            doc,
+            icon_data,
+            origin: "installed".to_string(),
+        })
+    }
+
+    pub async fn load_remote_plugin_detail(
+        &self,
+        plugin_id: &str,
+        download_url: &str,
+        expected_sha256: Option<&str>,
+        expected_size: Option<u64>,
+    ) -> Result<PluginDetail, String> {
+        let bytes = self
+            .get_remote_zip_bytes_cached(download_url, expected_sha256, expected_size)
+            .await?;
+
+        let cursor = std::io::Cursor::new(bytes.as_slice());
+        let mut archive =
+            ZipArchive::new(cursor).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
+
+        // 读取 manifest.json（用单独作用域结束对 archive 的可变借用，避免后续再次 by_name 报错）
+        let manifest: PluginManifest = {
+            let mut manifest_file = archive
+                .by_name("manifest.json")
+                .map_err(|_| "manifest.json not found in plugin archive".to_string())?;
+            let mut manifest_content = String::new();
+            manifest_file
+                .read_to_string(&mut manifest_content)
+                .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
+            serde_json::from_str(&manifest_content)
+                .map_err(|e| format!("Failed to parse manifest.json: {}", e))?
+        };
+
+        // 读取 doc.md（可选）
+        let doc_paths = ["doc_root/doc.md", "doc.md"];
+        let mut doc_path_found = None;
+        for doc_path in &doc_paths {
+            if archive.by_name(doc_path).is_ok() {
+                doc_path_found = Some(*doc_path);
+                break;
+            }
+        }
+        let doc = match doc_path_found {
+            Some(p) => {
+                let mut doc_file = archive.by_name(p).map_err(|_| "doc.md not found".to_string())?;
+                let mut content = String::new();
+                doc_file
+                    .read_to_string(&mut content)
+                    .map_err(|e| format!("Failed to read doc.md: {}", e))?;
+                Some(content)
+            }
+            None => None,
+        };
+
+        // 读取 icon.png（可选）
+        let icon_data = match archive.by_name("icon.png") {
+            Ok(mut f) => {
+                let mut data = Vec::new();
+                f.read_to_end(&mut data)
+                    .map_err(|e| format!("Failed to read icon.png: {}", e))?;
+                Some(data)
+            }
+            Err(_) => None,
+        };
+
+        Ok(PluginDetail {
+            id: plugin_id.to_string(),
+            name: manifest.name,
+            desp: manifest.description,
+            doc,
+            icon_data,
+            origin: "remote".to_string(),
+        })
+    }
+
+    pub async fn load_plugin_image_for_detail(
+        &self,
+        plugin_id: &str,
+        download_url: Option<&str>,
+        expected_sha256: Option<&str>,
+        expected_size: Option<u64>,
+        image_path: &str,
+    ) -> Result<Vec<u8>, String> {
+        match download_url {
+            Some(url) => {
+                let bytes = self
+                    .get_remote_zip_bytes_cached(url, expected_sha256, expected_size)
+                    .await?;
+                let cursor = std::io::Cursor::new(bytes.as_slice());
+                let mut archive = ZipArchive::new(cursor)
+                    .map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
+
+                // 复用与本地一致的路径规范化与安全检查
+                let mut normalized_path = image_path.trim().to_string();
+                if normalized_path.starts_with('/') || normalized_path.starts_with("\\") {
+                    return Err("Absolute paths are not allowed".to_string());
+                }
+                normalized_path = normalized_path
+                    .replace("%20", " ")
+                    .replace("%28", "(")
+                    .replace("%29", ")")
+                    .replace("%2F", "/")
+                    .replace("%5C", "\\")
+                    .replace("%2E", ".");
+                if normalized_path.contains("../")
+                    || normalized_path.contains("..\\")
+                    || normalized_path.contains("..%2F")
+                    || normalized_path.contains("..%5C")
+                    || normalized_path.starts_with("..")
+                {
+                    return Err("Path traversal attacks are not allowed".to_string());
+                }
+                if normalized_path.starts_with("./") {
+                    normalized_path = normalized_path[2..].to_string();
+                }
+                if normalized_path.starts_with("doc_root/") {
+                    normalized_path = normalized_path[9..].to_string();
+                }
+                normalized_path = normalized_path.replace('\\', "/");
+                if normalized_path.contains("../") || normalized_path.starts_with("..") {
+                    return Err("Path traversal detected after normalization".to_string());
+                }
+                if normalized_path.is_empty() {
+                    return Err("Empty image path is not allowed".to_string());
+                }
+                if normalized_path.chars().any(|c| c.is_control()) {
+                    return Err("Control characters in path are not allowed".to_string());
+                }
+                let final_path = format!("doc_root/{}", normalized_path);
+                if final_path.contains("../") || final_path.starts_with("../") {
+                    return Err("Final path validation failed".to_string());
+                }
+
+                let mut image_file = archive.by_name(&final_path).map_err(|e| {
+                    format!(
+                        "Image {} not found in plugin archive. Error: {:?}",
+                        final_path, e
+                    )
+                })?;
+                let mut image_data = Vec::new();
+                image_file
+                    .read_to_end(&mut image_data)
+                    .map_err(|e| format!("Failed to read image: {}", e))?;
+                Ok(image_data)
+            }
+            None => {
+                let plugins_dir = self.get_plugins_directory();
+                let path = self.find_plugin_file(&plugins_dir, plugin_id)?;
+                self.read_plugin_image(&path, image_path)
+            }
+        }
+    }
+
+    /// 预览导入插件（从 ZIP 文件读取信息）
+    pub fn preview_import_from_zip(&self, zip_path: &Path) -> Result<ImportPreview, String> {
+        let manifest = self.read_plugin_manifest(zip_path)?;
+
+        // 获取文件大小
+        let size_bytes = fs::metadata(zip_path)
+            .map_err(|e| format!("Failed to get file metadata: {}", e))?
+            .len();
+
+        // 检查是否已存在
+        let file_name = zip_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        let plugin_id = file_name.clone();
+
+        let already_exists = self.get(&plugin_id).is_some();
+        let existing_version = if already_exists {
+            // 从已安装的插件文件中读取版本
+            if let Ok(existing_manifest) = self
+                .find_plugin_file(&self.get_plugins_directory(), &plugin_id)
+                .and_then(|path| self.read_plugin_manifest(&path))
+            {
+                Some(existing_manifest.version)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // TODO: 实现变更日志差异比较
+        let change_log_diff = None;
+
+        Ok(ImportPreview {
+            id: plugin_id,
+            name: manifest.name,
+            version: manifest.version,
+            size_bytes,
+            already_exists,
+            existing_version,
+            change_log_diff,
+        })
+    }
+
+    /// 更新插件顺序
+    pub fn update_plugins_order(&self, plugin_orders: &[(String, i64)]) -> Result<(), String> {
+        // 插件顺序信息可以保存到配置文件
+        // 目前暂时不实现，因为插件信息直接从文件系统读取
+        // 如果需要实现，可以保存到 plugin_orders.json 文件
+        let file = self.get_plugin_orders_file();
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create plugin orders directory: {}", e))?;
+        }
+
+        let content = serde_json::to_string_pretty(plugin_orders)
+            .map_err(|e| format!("Failed to serialize plugin orders: {}", e))?;
+        fs::write(&file, content)
+            .map_err(|e| format!("Failed to write plugin orders file: {}", e))?;
+        Ok(())
+    }
+
+    /// 获取插件顺序文件路径
+    fn get_plugin_orders_file(&self) -> PathBuf {
+        let data_dir = get_app_data_dir();
+        data_dir.join("plugin_orders.json")
+    }
+
+    fn load_plugin_orders(&self) -> Result<HashMap<String, i64>, String> {
+        let file = self.get_plugin_orders_file();
+        if !file.exists() {
+            return Ok(HashMap::new());
+        }
+        let content = fs::read_to_string(&file)
+            .map_err(|e| format!("Failed to read plugin orders file: {}", e))?;
+        // 保存格式是 Vec<(String, i64)>
+        let orders_vec: Vec<(String, i64)> = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse plugin orders file: {}", e))?;
+        Ok(orders_vec.into_iter().collect())
     }
 }
 
@@ -797,6 +1609,17 @@ pub struct PluginManifest {
 // 变量定义（config.json 中的 var 字段，现在是数组格式）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(untagged)]
+pub enum VarOption {
+    /// 兼容旧格式：["high","medium"]
+    String(String),
+    /// 推荐格式：[{ "name": "...", "variable": "..." }]
+    Item { name: String, variable: String },
+}
+
+// 变量定义（config.json 中的 var 字段，现在是数组格式）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VarDefinition {
     pub key: String, // 变量名（用于在脚本中引用）
     #[serde(rename = "type")]
@@ -807,7 +1630,11 @@ pub struct VarDefinition {
     #[serde(default)]
     pub default: Option<serde_json::Value>, // 默认值
     #[serde(default)]
-    pub options: Option<Vec<String>>, // options 类型的选项列表
+    pub options: Option<Vec<VarOption>>, // options/checkbox: 支持 string[] 或 {name,variable}[]
+    #[serde(default)]
+    pub min: Option<serde_json::Value>, // 最小值（int/float 类型使用）
+    #[serde(default)]
+    pub max: Option<serde_json::Value>, // 最大值（int/float 类型使用）
 }
 
 // 插件配置（config.json）
@@ -822,4 +1649,85 @@ pub struct PluginConfig {
     // 变量定义（可选，数组格式以保持顺序）
     #[serde(default)]
     pub var: Option<Vec<VarDefinition>>,
+}
+
+// 插件源（商店源）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSource {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "indexUrl")]
+    pub index_url: String,
+    /// 是否为内置官方源（不可删除）
+    #[serde(default)]
+    pub built_in: bool,
+}
+
+// 商店插件（从源解析后的插件信息）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorePluginResolved {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    #[serde(rename = "downloadUrl")]
+    pub download_url: String,
+    /// 可选：商店列表图标（通常指向 GitHub Release 的 <id>.icon.png）
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    pub sha256: Option<String>,
+    #[serde(rename = "sizeBytes")]
+    pub size_bytes: u64,
+    #[serde(rename = "sourceId")]
+    pub source_id: String,
+    #[serde(rename = "sourceName")]
+    pub source_name: String,
+    #[serde(rename = "installedVersion")]
+    pub installed_version: Option<String>,
+}
+
+/// 商店源可用性验证结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreSourceValidationResult {
+    pub plugin_count: usize,
+}
+
+// 导入预览
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreview {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    #[serde(rename = "sizeBytes")]
+    pub size_bytes: u64,
+    #[serde(rename = "alreadyExists")]
+    pub already_exists: bool,
+    #[serde(rename = "existingVersion")]
+    pub existing_version: Option<String>,
+    #[serde(rename = "changeLogDiff")]
+    pub change_log_diff: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginDetail {
+    pub id: String,
+    pub name: String,
+    pub desp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
+    #[serde(rename = "iconData", skip_serializing_if = "Option::is_none")]
+    pub icon_data: Option<Vec<u8>>,
+    /// installed | remote
+    pub origin: String,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteZipCacheEntry {
+    inserted_at: Instant,
+    bytes: Arc<Vec<u8>>,
 }

@@ -8,6 +8,15 @@
           <div class="downloads-stats">
             <el-tag type="info" size="small">队列: {{ queueSize }}</el-tag>
             <el-tag type="warning" size="small">下载中: {{ activeDownloads.length }}</el-tag>
+            <el-button
+              text
+              size="small"
+              type="danger"
+              :disabled="queueSize === 0"
+              @click="handleClearDownloadQueue"
+            >
+              终止队列
+            </el-button>
           </div>
         </div>
         <div v-if="activeDownloads.length === 0 && queueSize === 0" class="downloads-empty">
@@ -66,7 +75,7 @@
           <div class="task-params-wrap" :class="{ 'is-open': expandedTasks.has(task.id) }">
             <div class="task-params">
               <div class="param-item">
-                <span class="param-label">收集源：</span>
+                <span class="param-label">源：</span>
                 <span class="param-value">{{ getPluginName(task.pluginId) }}</span>
               </div>
               <div class="param-item" v-if="task.startTime">
@@ -108,7 +117,7 @@
                 <div class="param-config">
                   <div v-for="(value, key) in task.userConfig" :key="key" class="config-item">
                     <span class="config-key">{{ getVarDisplayName(task.pluginId, String(key)) }}：</span>
-                    <span class="config-value">{{ formatConfigValue(value) }}</span>
+                    <span class="config-value">{{ formatConfigValue(task.pluginId, String(key), value) }}</span>
                   </div>
                 </div>
               </div>
@@ -264,7 +273,13 @@ const viewerSelected = ref<Set<string>>(new Set());
 const viewerColumns = ref(0);
 const viewerAspectRatioMatchWindow = ref(false);
 const viewerWindowAspect = ref(16 / 9);
-const pluginVarNameMap = ref<Record<string, Record<string, string>>>({});
+type VarOption = string | { name: string; variable: string };
+type PluginVarMeta = {
+  name: string;
+  type?: string;
+  optionNameByVariable?: Record<string, string>;
+};
+const pluginVarMetaMap = ref<Record<string, Record<string, PluginVarMeta>>>({});
 
 // 任务文件 -> 保存为画册
 const addToAlbumVisible = ref(false);
@@ -300,6 +315,25 @@ const loadDownloads = async () => {
     queueSize.value = size;
   } catch (error) {
     console.error("加载下载列表失败:", error);
+  }
+};
+
+const handleClearDownloadQueue = async () => {
+  if (queueSize.value === 0) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定要清空等待队列吗？将移除队列中 ${queueSize.value} 个待下载任务（不影响正在下载）。`,
+      "终止队列",
+      { type: "warning" }
+    );
+    const removed = await invoke<number>("clear_download_queue");
+    ElMessage.success(`已清空队列（移除 ${removed} 个任务）`);
+    await loadDownloads();
+  } catch (error) {
+    if (error !== "cancel") {
+      console.error("清空队列失败:", error);
+      ElMessage.error("清空队列失败");
+    }
   }
 };
 
@@ -347,25 +381,40 @@ const getStatusText = (status: string) => {
 };
 
 const ensurePluginVars = async (pluginId: string) => {
-  if (pluginVarNameMap.value[pluginId]) return;
+  if (pluginVarMetaMap.value[pluginId]) return;
   try {
-    const vars = await invoke<Array<{ key: string; name: string }>>("get_plugin_vars", { pluginId });
-    const nameMap: Record<string, string> = {};
+    const vars = await invoke<Array<{ key: string; name: string; type?: string; options?: VarOption[] }> | null>("get_plugin_vars", { pluginId });
+    const metaMap: Record<string, PluginVarMeta> = {};
     (vars || []).forEach((v) => {
-      nameMap[v.key] = v.name || v.key;
+      const display = v.name || v.key;
+      const optionNameByVariable: Record<string, string> = {};
+      (v.options || []).forEach((opt) => {
+        if (typeof opt === "string") {
+          optionNameByVariable[opt] = opt;
+        } else {
+          optionNameByVariable[opt.variable] = opt.name;
+        }
+      });
+      metaMap[v.key] = {
+        name: display,
+        type: v.type,
+        optionNameByVariable: Object.keys(optionNameByVariable).length ? optionNameByVariable : undefined,
+      };
     });
-    pluginVarNameMap.value = { ...pluginVarNameMap.value, [pluginId]: nameMap };
+    pluginVarMetaMap.value = { ...pluginVarMetaMap.value, [pluginId]: metaMap };
   } catch (error) {
     console.error("加载插件变量定义失败:", pluginId, error);
-    pluginVarNameMap.value = { ...pluginVarNameMap.value, [pluginId]: {} };
+    pluginVarMetaMap.value = { ...pluginVarMetaMap.value, [pluginId]: {} };
   }
 };
 
 const getVarDisplayName = (pluginId: string, key: string) => {
-  return pluginVarNameMap.value[pluginId]?.[key] || key;
+  return pluginVarMetaMap.value[pluginId]?.[key]?.name || key;
 };
 
-const formatConfigValue = (value: any): string => {
+const formatConfigValue = (pluginId: string, key: string, value: any): string => {
+  const meta = pluginVarMetaMap.value[pluginId]?.[key];
+  const map = meta?.optionNameByVariable || {};
   if (value === null || value === undefined) {
     return '未设置';
   }
@@ -373,12 +422,22 @@ const formatConfigValue = (value: any): string => {
     return value ? '是' : '否';
   }
   if (Array.isArray(value)) {
-    return value.join(', ');
+    // list/checkbox: ['a','b'] -> 按 variable 映射 name
+    return value.map((v) => (typeof v === "string" ? (map[v] || v) : String(v))).join(', ');
   }
   if (typeof value === 'object') {
+    // checkbox 等场景：{ a: true, b: false } -> "a"
+    const entries = Object.entries(value as Record<string, any>);
+    if (entries.length > 0 && entries.every(([, v]) => typeof v === 'boolean')) {
+      const selected = entries.filter(([, v]) => v === true).map(([k]) => k);
+      const named = selected.map((v) => map[v] || v);
+      return named.length > 0 ? named.join(', ') : '未选择';
+    }
     return JSON.stringify(value, null, 2);
   }
-  return String(value);
+  // options: "high" -> 显示 name
+  const s = String(value);
+  return map[s] || s;
 };
 
 const handleOpenImagePath = async (localPath: string) => {
@@ -572,7 +631,7 @@ const confirmSaveTaskAsConfig = async () => {
       pluginId: task.pluginId,
       url: task.url,
       outputDir: task.outputDir,
-      userConfig: task.userConfig,
+      userConfig: task.userConfig ?? {},
     });
     ElMessage.success("已保存为配置");
     saveConfigVisible.value = false;
@@ -672,7 +731,7 @@ const handleCopyError = async (task: any) => {
   text += `错误：${task.error || '执行失败'}\n\n`;
 
   text += "=== 运行参数 ===\n";
-  text += `收集源：${getPluginName(task.pluginId)}\n`;
+  text += `源：${getPluginName(task.pluginId)}\n`;
   if (task.url) {
     text += `URL：${task.url}\n`;
   }
@@ -682,7 +741,7 @@ const handleCopyError = async (task: any) => {
   if (task.userConfig && Object.keys(task.userConfig).length > 0) {
     text += `配置参数：\n`;
     for (const [key, value] of Object.entries(task.userConfig)) {
-      text += `  ${key}：${formatConfigValue(value)}\n`;
+      text += `  ${key}：${formatConfigValue(task.pluginId, String(key), value)}\n`;
     }
   }
   if (task.startTime) {

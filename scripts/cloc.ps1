@@ -7,9 +7,9 @@
 
 param(
     [string]$Path = ".",
-    [string]$Exclude = "node_modules,dist,build,.git,.turbo,.next",
+    [string]$Exclude = "node_modules,dist,build,.git,.turbo,.next,target,.nx,public,",
     # 仅统计指定后缀，防止将 json 等非代码文件计入。逗号分隔。
-    [string]$IncludeExt = "ts,tsx,js,jsx,vue,rs,go,py,java,kt,swift,cs,cpp,c,h,cc,hpp,rb,php,html,css,scss"
+    [string]$IncludeExt = "ts,tsx,js,jsx,vue,rs,go,py,java,kt,swift,cs,cpp,c,h,cc,hpp,rb,php,html,css,scss,rhai"
 )
 
 function Invoke-Cloc {

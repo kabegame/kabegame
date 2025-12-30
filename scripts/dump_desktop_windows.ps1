@@ -1,7 +1,7 @@
 param(
     [UInt64]$ProgmanHwnd = 196862,
     [UInt64]$WorkerWHwnd = 460728,
-    [string]$ProcessName = 'kabegami-crawler',
+    [string]$ProcessName = 'kabegame',
     [int]$MaxFilterRows = 250,
     [int]$MaxTopRows = 80,
     [switch]$FixZOrder,

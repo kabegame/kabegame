@@ -34,5 +34,12 @@ export default defineConfig({
     target: ["es2021", "chrome100", "safari13"],
     minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_DEBUG,
+    chunkSizeWarningLimit: 10000000, // 抑制单文件过大警告（默认 500KB）
+    rollupOptions: {
+      output: {
+        // 关闭 chunk 分包，将所有代码打包到单个文件中
+        manualChunks: () => "index",
+      },
+    },
   },
 });

@@ -121,32 +121,8 @@ async function createObjectUrlFromFile(path: string): Promise<string> {
         }
 
         // 尝试读取文件
-        const bytes = await readFile(normalizedPath);
-
-        // 检查文件是否为空
-        if (!bytes) {
-            throw new Error("读取文件返回空数据");
-        }
-
-        // 检查数据是否为空
-        if (!bytes || (Array.isArray(bytes) && bytes.length === 0) ||
-            (bytes instanceof ArrayBuffer && bytes.byteLength === 0) ||
-            (bytes instanceof Uint8Array && bytes.length === 0)) {
-            throw new Error("文件数据为空");
-        }
-
-        // 验证文件头，确保是有效的图片文件（需要先转换为 Uint8Array）
-        let uint8Array: Uint8Array;
-        if (bytes instanceof Uint8Array) {
-            uint8Array = bytes;
-        } else if (bytes instanceof ArrayBuffer) {
-            uint8Array = new Uint8Array(bytes);
-        } else if (Array.isArray(bytes)) {
-            uint8Array = new Uint8Array(bytes);
-        } else {
-            // 尝试直接使用
-            uint8Array = new Uint8Array(bytes as any);
-        }
+        // @tauri-apps/plugin-fs 的 readFile 返回 Uint8Array
+        const uint8Array = await readFile(normalizedPath);
 
         if (uint8Array.length === 0) {
             throw new Error("文件数据为空");

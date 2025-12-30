@@ -202,7 +202,7 @@ const loadPluginIcons = async () => {
           .map((byte) => String.fromCharCode(byte))
           .join("");
         const base64 = btoa(binaryString);
-        pluginIcons.value[plugin.id] = `data:image/x-icon;base64,${base64}`;
+        pluginIcons.value[plugin.id] = `data:image/png;base64,${base64}`;
       }
     } catch (error) {
       // 图标加载失败，忽略（插件可能没有图标）

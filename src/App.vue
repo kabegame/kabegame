@@ -6,9 +6,10 @@
   <el-container v-else class="app-container">
     <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '200px'">
       <div class="sidebar-header">
-        <h1 v-if="!isCollapsed">🎨 Kabegami</h1>
-        <h1 v-else class="collapsed-title">🎨</h1>
-        <el-button class="collapse-button" :icon="isCollapsed ? Expand : Fold" circle size="small"
+        <img src="/icon.png" alt="Logo" class="app-logo" :class="{ 'logo-clickable': isCollapsed }"
+          @click="isCollapsed ? toggleCollapse() : null" />
+        <h1 v-if="!isCollapsed">Kabegame</h1>
+        <el-button v-if="!isCollapsed" class="collapse-button" :icon="Fold" circle size="small"
           @click="toggleCollapse" />
       </div>
       <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
@@ -22,7 +23,7 @@
           <el-icon>
             <Grid />
           </el-icon>
-          <span>收集源</span>
+          <span>源</span>
         </el-menu-item>
         <el-menu-item index="/albums">
           <el-icon>
@@ -49,9 +50,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from "vue";
+import { computed, ref, onMounted } from "vue";
 import { useRoute } from "vue-router";
-import { Picture, Grid, Setting, Expand, Fold, Collection } from "@element-plus/icons-vue";
+import { Picture, Grid, Setting, Fold, Collection } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import WallpaperLayer from "./components/WallpaperLayer.vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -126,32 +127,44 @@ const toggleCollapse = () => {
     border-bottom: 2px solid var(--anime-border);
     background: linear-gradient(135deg, rgba(255, 107, 157, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
     gap: 12px;
     position: relative;
     min-height: 80px;
-    justify-content: center;
+    justify-content: flex-start;
     transition: padding 0.3s ease;
 
+    .app-logo {
+      width: 56px;
+      height: 56px;
+      object-fit: contain;
+      transition: all 0.3s ease;
+      flex-shrink: 0;
+
+      &.logo-clickable {
+        cursor: pointer;
+        border-radius: 8px;
+        padding: 4px;
+        transition: all 0.3s ease;
+
+        &:hover {
+          filter: drop-shadow(0 0 8px rgba(255, 107, 157, 0.6)) drop-shadow(0 0 16px rgba(167, 139, 250, 0.4));
+          transform: scale(1.05);
+        }
+      }
+    }
+
     h1 {
-      font-size: 24px;
+      font-size: 18px;
       font-weight: 700;
       background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
       margin: 0;
-      text-align: center;
       letter-spacing: 1px;
       transition: all 0.3s ease;
-      width: 100%;
-
-      &.collapsed-title {
-        font-size: 32px;
-        margin: 0;
-        line-height: 1;
-      }
     }
 
     .collapse-button {
@@ -174,15 +187,22 @@ const toggleCollapse = () => {
 
   &.sidebar-collapsed {
     .sidebar-header {
-      padding: 16px 8px;
+      padding: 16px;
       min-height: 64px;
-      gap: 8px;
+      gap: 0;
+      justify-content: center;
+
+      .app-logo {
+        width: 40px;
+        height: 40px;
+      }
+
+      h1 {
+        display: none;
+      }
 
       .collapse-button {
-        position: static;
-        margin-top: 0;
-        width: 32px;
-        height: 32px;
+        display: none;
       }
     }
 
@@ -272,6 +292,15 @@ const toggleCollapse = () => {
   overflow-y: auto;
   flex: 1;
   background: transparent;
-}
+  /* 隐藏滚动条 */
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* IE and Edge */
 
+  &::-webkit-scrollbar {
+    display: none;
+    /* Chrome, Safari, Opera */
+  }
+}
 </style>

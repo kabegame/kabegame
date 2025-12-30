@@ -10,6 +10,8 @@ export interface Album {
 }
 
 export const useAlbumStore = defineStore("albums", () => {
+  const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
+
   const albums = ref<Album[]>([]);
   const albumImages = ref<Record<string, ImageInfo[]>>({});
   const albumPreviews = ref<Record<string, ImageInfo[]>>({});
@@ -39,10 +41,8 @@ export const useAlbumStore = defineStore("albums", () => {
 
   const createAlbum = async (name: string) => {
     const created = await invoke<Album>("add_album", { name });
-    albums.value.unshift({
-      ...created,
-      createdAt: (created as any).created_at ?? created.createdAt,
-    });
+    // 创建成功后重新从后端加载画册列表，保持前后端数据一致
+    await loadAlbums();
     return created;
   };
 
@@ -70,6 +70,36 @@ export const useAlbumStore = defineStore("albums", () => {
     // 更新计数（本地 + n）
     const prev = albumCounts.value[albumId] || 0;
     albumCounts.value[albumId] = prev + imageIds.length;
+
+    // 如果是收藏画册，通知画廊等页面更新收藏状态
+    if (albumId === FAVORITE_ALBUM_ID) {
+      window.dispatchEvent(
+        new CustomEvent("favorite-status-changed", {
+          detail: { imageIds, favorite: true },
+        })
+      );
+    }
+  };
+
+  const removeImagesFromAlbum = async (albumId: string, imageIds: string[]) => {
+    if (!imageIds || imageIds.length === 0) return 0;
+    const removed = await invoke<number>("remove_images_from_album", { albumId, imageIds });
+    // 清除缓存，下一次自动刷新
+    delete albumImages.value[albumId];
+    delete albumPreviews.value[albumId];
+    // 更新计数（本地 - removed，兜底不小于 0）
+    const prev = albumCounts.value[albumId] || 0;
+    albumCounts.value[albumId] = Math.max(0, prev - removed);
+
+    // 如果是收藏画册，通知画廊等页面更新收藏状态
+    if (albumId === FAVORITE_ALBUM_ID) {
+      window.dispatchEvent(
+        new CustomEvent("favorite-status-changed", {
+          detail: { imageIds, favorite: false },
+        })
+      );
+    }
+    return removed;
   };
 
   const loadAlbumImages = async (albumId: string) => {
@@ -99,6 +129,7 @@ export const useAlbumStore = defineStore("albums", () => {
     deleteAlbum,
     renameAlbum,
     addImagesToAlbum,
+    removeImagesFromAlbum,
     loadAlbumImages,
     loadAlbumPreview,
   };

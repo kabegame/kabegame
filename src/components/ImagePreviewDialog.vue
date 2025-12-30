@@ -43,43 +43,43 @@ const visible = computed({
   overflow: hidden !important;
 
   .el-dialog__header {
-  flex-shrink: 0 !important;
-  padding: 15px 20px !important;
-  min-height: 50px !important;
-}
+    flex-shrink: 0 !important;
+    padding: 15px 20px !important;
+    min-height: 50px !important;
+  }
 
   .el-dialog__body {
-  flex: 1 1 auto !important;
-  padding: 0 !important;
-  display: flex !important;
-  justify-content: center !important;
-  align-items: center !important;
-  overflow: hidden !important;
-  min-height: 0 !important;
-  max-height: calc(90vh - 50px) !important;
-}
+    flex: 1 1 auto !important;
+    padding: 0 !important;
+    display: flex !important;
+    justify-content: center !important;
+    align-items: center !important;
+    overflow: hidden !important;
+    min-height: 0 !important;
+    max-height: calc(90vh - 50px) !important;
+  }
 
-.preview-container {
-  width: 100%;
-  height: 100%;
-  max-width: 100%;
-  max-height: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 20px;
-  overflow: hidden;
-  box-sizing: border-box;
-}
+  .preview-container {
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
 
-.preview-image {
-  max-width: calc(90vw - 40px) !important;
-  max-height: calc(90vh - 90px) !important;
-  width: auto;
-  height: auto;
-  object-fit: contain;
-  display: block;
-  cursor: pointer;
+  .preview-image {
+    max-width: calc(90vw - 40px) !important;
+    max-height: calc(90vh - 90px) !important;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+    cursor: pointer;
   }
 }
 </style>

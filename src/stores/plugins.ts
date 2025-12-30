@@ -6,8 +6,12 @@ export interface Plugin {
   id: string;
   name: string;
   description: string;
+  version: string;
   baseUrl: string;
   enabled: boolean;
+  sizeBytes: number;
+  order: number;
+  builtIn: boolean;
   config: Record<string, any>;
   selector?: {
     imageSelector: string;
@@ -27,18 +31,7 @@ export const usePluginStore = defineStore("plugins", () => {
       plugins.value = result;
     } catch (error) {
       console.error("加载插件失败:", error);
-    }
-  }
-
-  // 添加插件
-  async function addPlugin(plugin: Omit<Plugin, "id">) {
-    try {
-      const newPlugin = await invoke<Plugin>("add_plugin", { plugin });
-      plugins.value.push(newPlugin);
-      return newPlugin;
-    } catch (error) {
-      console.error("添加插件失败:", error);
-      throw error;
+      throw error; // 抛出错误，让调用方处理
     }
   }
 
@@ -87,7 +80,6 @@ export const usePluginStore = defineStore("plugins", () => {
     activePlugin,
     enabledPlugins,
     loadPlugins,
-    addPlugin,
     updatePlugin,
     deletePlugin,
     setActivePlugin,

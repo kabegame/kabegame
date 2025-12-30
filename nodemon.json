@@ -1,17 +1,15 @@
 {
-  "watch": [
-    "test_plugin/sample-collector"
-  ],
-  "ext": "json,rhai,md,txt,jpeg,jpg,png,gif,webp",
+  "watch": ["crawler-plugins"],
+  "ext": "json,rhai,md,txt,jpeg,jpg,png,gif,webp,ico",
   "ignore": [
     "node_modules",
-    "test_plugin_packed",
+    "crawler-plugins/packed",
+    "crawler-plugins/node_modules",
     "*.kgpg",
     "**/node_modules/**"
   ],
-  "exec": "npm run package-plugin",
+  "exec": "node scripts/package-and-signal.js",
   "verbose": true,
   "delay": 500,
   "legacyWatch": false
 }
-

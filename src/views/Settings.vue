@@ -1,8 +1,8 @@
 <template>
   <div class="settings-container">
-    <h2>设置</h2>
+    <PageHeader title="设置" sticky />
 
-    <el-tabs v-model="activeTab" class="settings-tabs">
+    <StyledTabs v-model="activeTab" sticky>
 
       <el-tab-pane label="壁纸轮播" name="wallpaper">
         <el-card class="settings-card">
@@ -17,11 +17,13 @@
             </div>
           </template>
 
-          <el-form v-loading="loading" element-loading-text="" :model="settings" :label-width="labelWidth">
+          <el-form v-loading="loading" element-loading-text="" :model="settings" :label-width="labelWidth"
+            @submit.prevent>
 
             <el-form-item label="启用壁纸轮播">
               <div class="form-item-content">
-                <el-switch v-model="settings.wallpaperRotationEnabled" @change="handleWallpaperRotationEnabledChange" />
+                <el-switch v-model="settings.wallpaperRotationEnabled" :disabled="isRotationToggleLoading"
+                  :loading="isRotationToggleLoading" @change="handleWallpaperRotationEnabledChange" />
                 <div class="setting-description">自动从指定画册中轮播更换桌面壁纸</div>
               </div>
             </el-form-item>
@@ -41,7 +43,19 @@
                     {{ selectedAlbumName ? `当前选择：${selectedAlbumName}` : '点击按钮前往画册页面选择用于轮播的画册' }}
                   </template>
                   <template v-else>
-                    点击按钮前往画廊页面选择单张壁纸
+                    <div>
+                      点击按钮前往画廊页面选择单张壁纸
+                      <template v-if="currentWallpaperName">
+                        <br />
+                        当前壁纸：{{ currentWallpaperName }}
+                        <el-button text size="small" class="path-button" @click="handleRevealCurrentWallpaper">
+                          <el-icon>
+                            <FolderOpened />
+                          </el-icon>
+                          定位
+                        </el-button>
+                      </template>
+                    </div>
                   </template>
                 </div>
               </div>
@@ -159,7 +173,7 @@
                 </el-radio-group>
                 <div class="setting-description">
                   原生模式：使用 Windows 原生壁纸设置，性能好但功能有限<br />
-                  窗口模式：使用窗口句柄显示，更灵活，可实现动画等效果（需要预先创建壁纸窗口）
+                  窗口模式：使用窗口句柄显示，更灵活，可实现动画等效果
                 </div>
               </div>
             </el-form-item>
@@ -197,13 +211,12 @@
         </el-card>
       </el-tab-pane>
 
-
-      <el-tab-pane label="应用设置" name="app">
+      <el-tab-pane label="下载设置" name="download">
         <el-card class="settings-card">
           <template #header>
             <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span>应用设置</span>
-              <el-button circle size="small" @click="handleRefreshApp" :loading="isRefreshingApp">
+              <span>下载设置</span>
+              <el-button circle size="small" @click="handleRefreshDownload" :loading="isRefreshingDownload">
                 <el-icon>
                   <Refresh />
                 </el-icon>
@@ -211,14 +224,8 @@
             </div>
           </template>
 
-          <el-form v-loading="loading" element-loading-text="" :model="settings" :label-width="labelWidth">
-            <el-form-item label="开机启动">
-              <div class="form-item-content">
-                <el-switch v-model="settings.autoLaunch" @change="handleAutoLaunchChange" />
-                <div class="setting-description">应用启动时自动运行</div>
-              </div>
-            </el-form-item>
-
+          <el-form v-loading="loading" element-loading-text="" :model="settings" :label-width="labelWidth"
+            @submit.prevent>
             <el-form-item label="最大并发下载量">
               <div class="form-item-content">
                 <el-input-number v-model="settings.maxConcurrentDownloads" :min="1" :max="10"
@@ -235,29 +242,10 @@
               </div>
             </el-form-item>
 
-            <el-form-item label="图片点击行为">
+            <el-form-item label="自动去重">
               <div class="form-item-content">
-                <el-radio-group v-model="settings.imageClickAction" @change="handleImageClickActionChange">
-                  <el-radio label="preview">应用内预览</el-radio>
-                  <el-radio label="open">系统默认打开</el-radio>
-                </el-radio-group>
-                <div class="setting-description">左键点击图片时的行为</div>
-              </div>
-            </el-form-item>
-
-            <el-form-item label="图片宽高比匹配窗口">
-              <div class="form-item-content">
-                <el-switch v-model="settings.galleryImageAspectRatioMatchWindow"
-                  @change="handleGalleryImageAspectRatioMatchWindowChange" />
-                <div class="setting-description">画廊图片的宽高比是否与窗口宽高比相同</div>
-              </div>
-            </el-form-item>
-
-            <el-form-item label="每次加载数量">
-              <div class="form-item-content">
-                <el-input-number v-model="settings.galleryPageSize" :min="10" :max="200" :step="10"
-                  @change="handleGalleryPageSizeChange" />
-                <div class="setting-description">画廊“加载更多”时的加载张数（10-200）</div>
+                <el-switch v-model="settings.autoDeduplicate" @change="handleAutoDeduplicateChange" />
+                <div class="setting-description">根据文件哈希值自动跳过重复图片，避免在画廊中重复添加相同文件</div>
               </div>
             </el-form-item>
 
@@ -293,6 +281,64 @@
                 </div>
               </div>
             </el-form-item>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
+
+      <el-tab-pane label="应用设置" name="app">
+        <el-card class="settings-card">
+          <template #header>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span>应用设置</span>
+              <el-button circle size="small" @click="handleRefreshApp" :loading="isRefreshingApp">
+                <el-icon>
+                  <Refresh />
+                </el-icon>
+              </el-button>
+            </div>
+          </template>
+
+          <el-form v-loading="loading" element-loading-text="" :model="settings" :label-width="labelWidth"
+            @submit.prevent>
+            <el-form-item label="开机启动">
+              <div class="form-item-content">
+                <el-switch v-model="settings.autoLaunch" @change="handleAutoLaunchChange" />
+                <div class="setting-description">应用启动时自动运行</div>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="恢复上次标签页">
+              <div class="form-item-content">
+                <el-switch v-model="settings.restoreLastTab" @change="handleRestoreLastTabChange" />
+                <div class="setting-description">应用启动时自动恢复到上次访问的标签页</div>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="图片点击行为">
+              <div class="form-item-content">
+                <el-radio-group v-model="settings.imageClickAction" @change="handleImageClickActionChange">
+                  <el-radio label="preview">应用内预览</el-radio>
+                  <el-radio label="open">系统默认打开</el-radio>
+                </el-radio-group>
+                <div class="setting-description">左键点击图片时的行为</div>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="图片宽高比匹配窗口">
+              <div class="form-item-content">
+                <el-switch v-model="settings.galleryImageAspectRatioMatchWindow"
+                  @change="handleGalleryImageAspectRatioMatchWindowChange" />
+                <div class="setting-description">画廊图片的宽高比是否与窗口宽高比相同</div>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="每次加载数量">
+              <div class="form-item-content">
+                <el-input-number v-model="settings.galleryPageSize" :min="10" :max="200" :step="10"
+                  @change="handleGalleryPageSizeChange" />
+                <div class="setting-description">画廊"加载更多"时的加载张数（10-200）</div>
+              </div>
+            </el-form-item>
 
             <el-form-item label="清理应用数据">
               <div class="form-item-content">
@@ -311,18 +357,20 @@
         </el-card>
       </el-tab-pane>
 
-    </el-tabs>
+    </StyledTabs>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, onActivated, computed } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { useRouter } from "vue-router";
 import { FolderOpened, Refresh, Delete } from "@element-plus/icons-vue";
+import PageHeader from "@/components/common/PageHeader.vue";
+import StyledTabs from "@/components/common/StyledTabs.vue";
 
 const labelWidth = "180px";
 
@@ -340,6 +388,7 @@ const settings = ref({
   imageClickAction: "preview" as "preview" | "open",
   galleryImageAspectRatioMatchWindow: false,
   galleryPageSize: 50,
+  autoDeduplicate: false,
   defaultDownloadDir: null as string | null,
   wallpaperEngineDir: null as string | null,
   wallpaperRotationEnabled: false,
@@ -349,6 +398,8 @@ const settings = ref({
   wallpaperRotationStyle: "fill" as "fill" | "fit" | "stretch" | "center" | "tile",
   wallpaperRotationTransition: "none" as "none" | "fade" | "slide" | "zoom",
   wallpaperMode: "native" as "native" | "window",
+  restoreLastTab: false,
+  lastTabPath: null as string | null,
 });
 
 const defaultImagesDir = ref<string>("");
@@ -356,6 +407,13 @@ const effectiveDownloadDir = ref<string>("");
 const albums = ref<Album[]>([]);
 const activeTab = ref<string>("wallpaper");
 const wallpaperEngineMyprojectsDir = ref<string>("");
+const currentWallpaperPath = ref<string | null>(null);
+
+const currentWallpaperName = computed(() => {
+  if (!currentWallpaperPath.value) return null;
+  const p = currentWallpaperPath.value.replace(/\\/g, "/");
+  return p.split("/").pop() || currentWallpaperPath.value;
+});
 
 const isModeSwitching = ref(false);
 const nativeWallpaperStyles = ref<string[]>([]); // 系统原生模式支持的样式列表
@@ -363,13 +421,17 @@ const router = useRouter();
 const isStyleApplying = ref(false);
 const isTransitionApplying = ref(false);
 const isRefreshingWallpaper = ref(false);
+const isRotationToggleLoading = ref(false);
+const isRefreshingDownload = ref(false);
 const isRefreshingApp = ref(false);
 const isClearingData = ref(false);
 
 // 计算当前选中的画册名称
 const selectedAlbumName = computed(() => {
+  // 约定：空字符串表示“全画廊轮播”
+  if (settings.value.wallpaperRotationAlbumId === "") return "全画廊";
   if (!settings.value.wallpaperRotationAlbumId) return null;
-  const album = albums.value.find(a => a.id === settings.value.wallpaperRotationAlbumId);
+  const album = albums.value.find((a) => a.id === settings.value.wallpaperRotationAlbumId);
   return album ? album.name : null;
 });
 
@@ -382,6 +444,7 @@ const loadSettings = async () => {
       imageClickAction: string;
       galleryImageAspectRatioMatchWindow: boolean;
       galleryPageSize: number;
+      autoDeduplicate?: boolean;
       defaultDownloadDir?: string | null;
       wallpaperEngineDir?: string | null;
       wallpaperRotationEnabled?: boolean;
@@ -391,11 +454,14 @@ const loadSettings = async () => {
       wallpaperRotationStyle?: string;
       wallpaperRotationTransition?: string;
       wallpaperMode?: string;
+      restoreLastTab?: boolean;
+      lastTabPath?: string | null;
     }>("get_settings");
     settings.value = {
       ...loadedSettings,
       imageClickAction: loadedSettings.imageClickAction === "open" ? "open" : "preview",
       defaultDownloadDir: loadedSettings.defaultDownloadDir || null,
+      autoDeduplicate: loadedSettings.autoDeduplicate ?? false,
       wallpaperEngineDir: loadedSettings.wallpaperEngineDir || null,
       networkRetryCount: typeof loadedSettings.networkRetryCount === "number" ? loadedSettings.networkRetryCount : 2,
       wallpaperRotationEnabled: loadedSettings.wallpaperRotationEnabled ?? false,
@@ -407,6 +473,8 @@ const loadSettings = async () => {
         ? loadedSettings.wallpaperRotationTransition
         : "none") as "none" | "fade" | "slide" | "zoom",
       wallpaperMode: (loadedSettings.wallpaperMode || "native") as "native" | "window",
+      restoreLastTab: loadedSettings.restoreLastTab ?? false,
+      lastTabPath: loadedSettings.lastTabPath || null,
     };
 
     defaultImagesDir.value = await invoke<string>("get_default_images_dir");
@@ -423,6 +491,13 @@ const loadSettings = async () => {
     // 加载画册列表
     albums.value = await invoke<Album[]>("get_albums");
 
+    // 加载当前壁纸（用于非轮播模式显示）
+    try {
+      currentWallpaperPath.value = await invoke<string | null>("get_current_wallpaper_path");
+    } catch {
+      currentWallpaperPath.value = null;
+    }
+
     // 加载系统原生模式支持的样式列表
     try {
       nativeWallpaperStyles.value = await invoke<string[]>("get_native_wallpaper_styles");
@@ -435,6 +510,16 @@ const loadSettings = async () => {
     console.error("加载设置失败:", error);
   } finally {
     loading.value = false;
+  }
+};
+
+const handleRevealCurrentWallpaper = async () => {
+  try {
+    if (!currentWallpaperPath.value) return;
+    await invoke("open_file_path", { filePath: currentWallpaperPath.value });
+  } catch (e) {
+    console.error("定位当前壁纸失败:", e);
+    ElMessage.error("定位失败");
   }
 };
 
@@ -499,6 +584,15 @@ const handleAutoLaunchChange = async (value: boolean) => {
   }
 };
 
+const handleRestoreLastTabChange = async (value: boolean) => {
+  try {
+    await invoke("set_restore_last_tab", { enabled: value });
+  } catch (error) {
+    ElMessage.error("保存设置失败");
+    console.error(error);
+  }
+};
+
 const handleMaxConcurrentChange = async (value: number) => {
   try {
     await invoke("set_max_concurrent_downloads", { count: value });
@@ -538,6 +632,15 @@ const handleGalleryImageAspectRatioMatchWindowChange = async () => {
 const handleGalleryPageSizeChange = async (value: number) => {
   try {
     await invoke("set_gallery_page_size", { size: value });
+  } catch (error) {
+    console.error("保存设置失败:", error);
+    ElMessage.error("保存设置失败");
+  }
+};
+
+const handleAutoDeduplicateChange = async (value: boolean) => {
+  try {
+    await invoke("set_auto_deduplicate", { enabled: value });
   } catch (error) {
     console.error("保存设置失败:", error);
     ElMessage.error("保存设置失败");
@@ -584,23 +687,75 @@ const handleOpenEffectiveDownloadDir = async () => {
 };
 
 const handleWallpaperRotationEnabledChange = async (value: boolean) => {
+  if (isRotationToggleLoading.value) return;
+  isRotationToggleLoading.value = true;
   try {
-    await invoke("set_wallpaper_rotation_enabled", { enabled: value });
     if (value) {
-      ElMessage.success("壁纸轮播已启用");
+      // 1) 仅落盘开启（不启动线程）
+      await invoke("set_wallpaper_rotation_enabled", { enabled: true });
+
+      // 2) 由后端根据"上次画册ID -> 失败回落到画廊"逻辑启动轮播线程
+      const res = await invoke<{
+        started: boolean;
+        source: "album" | "gallery";
+        albumId?: string | null;
+      }>("start_wallpaper_rotation");
+
+      if (!res?.started) {
+        throw new Error("轮播线程未能启动");
+      }
+
+      // 3) 等待状态变为 "running"
+      let status = await invoke<string>("get_wallpaper_rotator_status");
+      let retries = 0;
+      while (status !== "running" && retries < 20) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        status = await invoke<string>("get_wallpaper_rotator_status");
+        retries++;
+      }
+
+      // 4) 重新拉一次设置，让 UI 同步后端回落结果（比如回落到画廊会把 albumId 写成空字符串）
+      await loadSettings();
+
+      ElMessage.success(res.source === "album" ? "已开启轮播：画册" : "已开启轮播：画廊");
     } else {
+      // 关闭：仅停止轮播线程（window 模式下壁纸窗口保持显示）
+      await invoke("set_wallpaper_rotation_enabled", { enabled: false });
+
+      // 等待状态变为 "idle"
+      let status = await invoke<string>("get_wallpaper_rotator_status");
+      let retries = 0;
+      while (status !== "idle" && retries < 50) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        status = await invoke<string>("get_wallpaper_rotator_status");
+        retries++;
+      }
+
       ElMessage.info("壁纸轮播已禁用");
     }
   } catch (error) {
-    ElMessage.error("保存设置失败");
     console.error(error);
+    // 回滚 UI，并确保后端状态关闭
+    settings.value.wallpaperRotationEnabled = false;
+    try {
+      await invoke("set_wallpaper_rotation_enabled", { enabled: false });
+    } catch (e) {
+      console.warn("回滚轮播开关失败:", e);
+    }
+    ElMessage.error(`操作失败：${(error as any)?.message || String(error)}`);
+  } finally {
+    isRotationToggleLoading.value = false;
   }
 };
 
 const handleNavigateToSelection = () => {
   if (settings.value.wallpaperRotationEnabled) {
-    // 轮播模式：跳转到画册页面
-    router.push("/albums");
+    // 轮播模式：若为“全画廊轮播”则跳转画廊，否则跳转画册
+    if (settings.value.wallpaperRotationAlbumId === "") {
+      router.push("/gallery");
+    } else {
+      router.push("/albums");
+    }
   } else {
     // 非轮播模式：跳转到画廊页面
     router.push("/gallery");
@@ -786,6 +941,19 @@ const handleRefreshWallpaper = async () => {
   }
 };
 
+const handleRefreshDownload = async () => {
+  isRefreshingDownload.value = true;
+  try {
+    await loadSettings();
+    ElMessage.success("刷新成功");
+  } catch (error) {
+    console.error("刷新失败:", error);
+    ElMessage.error("刷新失败");
+  } finally {
+    isRefreshingDownload.value = false;
+  }
+};
+
 const handleRefreshApp = async () => {
   isRefreshingApp.value = true;
   try {
@@ -857,6 +1025,11 @@ onMounted(() => {
   loadSettings();
 });
 
+// 组件激活时（keep-alive 缓存后重新显示）重新加载设置
+onActivated(() => {
+  loadSettings();
+});
+
 </script>
 
 <style scoped lang="scss">
@@ -874,14 +1047,19 @@ onMounted(() => {
 }
 
 .settings-container {
+  width: 100%;
+  height: 100%;
   padding: 20px;
-  margin: 0 auto;
+  overflow-y: auto;
+  /* 隐藏滚动条 */
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* IE and Edge */
 
-  h2 {
-    color: var(--anime-text-primary);
-    font-weight: 600;
-    margin-bottom: 20px;
-    font-size: 24px;
+  &::-webkit-scrollbar {
+    display: none;
+    /* Chrome, Safari, Opera */
   }
 }
 
@@ -889,137 +1067,117 @@ onMounted(() => {
   width: 100%;
 }
 
-.settings-tabs {
+.settings-card {
+  background: var(--anime-bg-card);
+  border-radius: 16px;
+  box-shadow: var(--anime-shadow);
+  transition: none !important;
 
-  :deep(.el-tabs__header) {
-    margin-bottom: 20px;
+  &:hover {
+    transform: none !important;
+    box-shadow: var(--anime-shadow) !important;
+  }
+}
+
+.form-item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.setting-description {
+  font-size: 12px;
+  color: var(--anime-text-muted);
+  margin-top: 0;
+}
+
+.path-button {
+  padding: 0;
+  margin-left: 6px;
+  max-width: 100%;
+  justify-content: flex-start;
+}
+
+.path-text {
+  margin-left: 6px;
+  max-width: 560px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+/* 确保 switch 有平滑的过渡动画 */
+:deep(.el-switch) {
+  transition: all 0.3s ease;
+}
+
+:deep(.el-switch__core) {
+  transition: all 0.3s ease;
+}
+
+:deep(.el-switch__action) {
+  transition: all 0.3s ease;
+}
+
+/* 移除 input-number 的边框 */
+:deep(.el-input-number) {
+  border: none !important;
+
+  .el-input__wrapper {
+    border: none !important;
+    box-shadow: none !important;
   }
 
-  :deep(.el-tabs__item) {
-    color: var(--anime-text-secondary);
-    font-size: 16px;
-
-    &.is-active {
-      color: var(--el-color-primary);
-    }
+  &:hover .el-input__wrapper {
+    border: none !important;
+    box-shadow: none !important;
   }
 
-  :deep(.el-tabs__active-bar) {
-    background-color: var(--el-color-primary);
-  }
-
-  .settings-card {
-    background: var(--anime-bg-card);
-    border-radius: 16px;
-    box-shadow: var(--anime-shadow);
-    transition: none !important;
-
-    &:hover {
-      transform: none !important;
-      box-shadow: var(--anime-shadow) !important;
-    }
-  }
-
-  .form-item-content {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .setting-description {
-    font-size: 12px;
-    color: var(--anime-text-muted);
-    margin-top: 0;
-  }
-
-  .path-button {
-    padding: 0;
-    margin-left: 6px;
-    max-width: 100%;
-    justify-content: flex-start;
-  }
-
-  .path-text {
-    margin-left: 6px;
-    max-width: 560px;
-    text-align: left;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    display: inline-block;
-    vertical-align: bottom;
-  }
-
-  /* 确保 switch 有平滑的过渡动画 */
-  :deep(.el-switch) {
-    transition: all 0.3s ease;
-  }
-
-  :deep(.el-switch__core) {
-    transition: all 0.3s ease;
-  }
-
-  :deep(.el-switch__action) {
-    transition: all 0.3s ease;
-  }
-
-  /* 移除 input-number 的边框 */
-  :deep(.el-input-number) {
+  &.is-controls-right {
     border: none !important;
 
-    .el-input__wrapper {
-      border: none !important;
-      box-shadow: none !important;
-    }
-
-    &:hover .el-input__wrapper {
-      border: none !important;
-      box-shadow: none !important;
-    }
-
-    &.is-controls-right {
-      border: none !important;
-
-      &:hover {
-        border: none !important;
-      }
-    }
-
-    .el-input-number__increase,
-    .el-input-number__decrease {
-      border: none !important;
-    }
-
-    &:hover .el-input-number__increase,
-    &:hover .el-input-number__decrease {
+    &:hover {
       border: none !important;
     }
   }
 
-  .loading-placeholder {
-    padding: 20px;
-    text-align: center;
-    color: var(--anime-text-secondary);
+  .el-input-number__increase,
+  .el-input-number__decrease {
+    border: none !important;
   }
 
-  // 切换模式时的鼠标加载态
-  .wallpaper-mode-switching-container {
-    cursor: wait !important;
+  &:hover .el-input-number__increase,
+  &:hover .el-input-number__decrease {
+    border: none !important;
   }
+}
 
-  .wallpaper-mode-switching {
+.loading-placeholder {
+  padding: 20px;
+  text-align: center;
+  color: var(--anime-text-secondary);
+}
+
+// 切换模式时的鼠标加载态
+.wallpaper-mode-switching-container {
+  cursor: wait !important;
+}
+
+.wallpaper-mode-switching {
+  cursor: wait !important;
+
+  :deep(.el-radio) {
     cursor: wait !important;
 
-    :deep(.el-radio) {
+    .el-radio__label {
       cursor: wait !important;
+    }
 
-      .el-radio__label {
-        cursor: wait !important;
-      }
-
-      .el-radio__input {
-        cursor: wait !important;
-      }
+    .el-radio__input {
+      cursor: wait !important;
     }
   }
 }

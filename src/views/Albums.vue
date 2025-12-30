@@ -1,68 +1,30 @@
 <template>
   <div class="albums-page">
     <PageHeader title="画册">
-      <el-button circle size="small" @click="handleRefresh" :loading="isRefreshing">
+      <el-button @click="handleRefresh" :loading="isRefreshing">
         <el-icon>
           <Refresh />
         </el-icon>
+        刷新
       </el-button>
-      <el-button type="primary" size="small" @click="showCreateDialog = true">新建画册</el-button>
+      <el-button type="primary" @click="showCreateDialog = true">新建画册</el-button>
     </PageHeader>
 
-    <div class="albums-grid">
+    <transition-group name="fade-in-list" tag="div" class="albums-grid">
       <AlbumCard v-for="album in albums" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
         :count="albumCounts[album.id] || 0" :preview-urls="albumPreviewUrls[album.id] || []"
         :loading-states="albumLoadingStates[album.id] || []" :is-loading="albumIsLoading[album.id] || false"
         @click="openAlbum(album)" @mouseenter="prefetchPreview(album)"
         @contextmenu.prevent="openAlbumContextMenu($event, album)" />
-    </div>
+    </transition-group>
 
     <div v-if="albums.length === 0" class="empty-tip">暂无画册，点击右上角创建</div>
 
     <AlbumContextMenu :visible="albumMenuVisible" :position="albumMenuPosition" :album-id="menuAlbum?.id"
       :album-name="menuAlbum?.name" :current-rotation-album-id="currentRotationAlbumId"
-      :wallpaper-rotation-enabled="wallpaperRotationEnabled" @close="closeAlbumContextMenu"
-      @command="handleAlbumMenuCommand" />
+      :wallpaper-rotation-enabled="wallpaperRotationEnabled" :album-image-count="menuAlbum ? (albumCounts[menuAlbum.id] || 0) : 0"
+      @close="closeAlbumContextMenu" @command="handleAlbumMenuCommand" />
 
-    <el-drawer v-model="drawerVisible" :title="currentAlbum?.name || '画册'" size="70%" append-to-body
-      :show-header="false">
-      <template #header>
-        <div class="drawer-header">
-          <div class="drawer-title">{{ currentAlbum?.name || '画册' }}</div>
-          <div style="display: flex; gap: 8px; align-items: center;">
-            <el-button v-if="currentAlbum" size="small" class="drawer-browse-btn" @click="openAlbumFullPage">
-              浏览
-            </el-button>
-            <el-button v-if="currentAlbum" size="small" type="danger" plain @click="handleDeleteCurrentAlbum">
-              删除
-            </el-button>
-          </div>
-        </div>
-      </template>
-      <div class="drawer-body" :style="drawerBgStyle" v-loading="loadingImages">
-        <div v-if="!currentAlbum" class="empty-tip">未选择画册</div>
-        <div v-else-if="currentImages.length === 0" class="empty-tip">该画册暂无图片</div>
-        <template v-else>
-          <div class="album-grid">
-            <ImageGrid :images="currentImages" :image-url-map="imageSrcMap" image-click-action="preview" :columns="0"
-              :aspect-ratio-match-window="false" :window-aspect-ratio="16 / 9" :selected-images="selectedImages"
-              @image-click="handleImageClick" @image-dbl-click="handleImageDblClick"
-              @contextmenu="handleImageContextMenu" />
-          </div>
-        </template>
-      </div>
-    </el-drawer>
-
-    <ImageContextMenu :visible="imageMenuVisible" :position="imageMenuPosition" :image="imageMenuImage"
-      :selected-count="selectedImages.size || 1" @close="imageMenuVisible = false" @command="handleImageMenuCommand" />
-
-    <ImagePreviewDialog v-model="showPreview" v-model:image-url="previewUrl" :image-path="previewPath"
-      :image="previewImage" />
-
-    <ImageDetailDialog v-model="showImageDetail" :image="selectedDetailImage" />
-
-    <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="pendingAddToAlbumImageIds"
-      @added="handleAddedToAlbum" />
 
     <el-dialog v-model="showCreateDialog" title="新建画册" width="360px">
       <el-input v-model="newAlbumName" placeholder="输入画册名称" />
@@ -75,29 +37,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, nextTick } from "vue";
+import { ref, onMounted, onActivated, onBeforeUnmount } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Refresh } from "@element-plus/icons-vue";
-import { readFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import ImageGrid from "@/components/ImageGrid.vue";
-import ImagePreviewDialog from "@/components/ImagePreviewDialog.vue";
-import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
-import ImageContextMenu from "@/components/ImageContextMenu.vue";
-import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import AlbumContextMenu from "@/components/AlbumContextMenu.vue";
 import { useAlbumStore } from "@/stores/albums";
-import { useCrawlerStore, type ImageInfo as CrawlerImageInfo } from "@/stores/crawler";
-import type { ImageInfo } from "@/stores/crawler";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
 import PageHeader from "@/components/common/PageHeader.vue";
-import { onBeforeUnmount } from "vue";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 
 const albumStore = useAlbumStore();
-const crawlerStore = useCrawlerStore();
 const { albums, albumCounts } = storeToRefs(albumStore);
 const router = useRouter();
 
@@ -108,19 +60,6 @@ const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
 const currentRotationAlbumId = ref<string | null>(null);
 // 轮播是否开启
 const wallpaperRotationEnabled = ref<boolean>(false);
-
-const currentImages = ref<ImageInfo[]>([]);
-const imageSrcMap = ref<Record<string, { thumbnail?: string; original?: string }>>({});
-const blobUrls = new Set<string>();
-const loadingImages = ref(false);
-
-const selectedImages = ref<Set<string>>(new Set());
-const showPreview = ref(false);
-const previewUrl = ref("");
-const previewPath = ref("");
-const previewImage = ref<ImageInfo | null>(null);
-const showImageDetail = ref(false);
-const selectedDetailImage = ref<ImageInfo | null>(null);
 
 const showCreateDialog = ref(false);
 const newAlbumName = ref("");
@@ -140,6 +79,74 @@ const loadRotationSettings = async () => {
   }
 };
 
+// 如果删除的画册正在被“壁纸轮播”引用：自动关闭轮播，切回单张壁纸，并尽量保持当前壁纸不变
+const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
+  if (currentRotationAlbumId.value !== deletedAlbumId) return;
+
+  const wasEnabled = wallpaperRotationEnabled.value;
+
+  // 先读一下当前壁纸（用于切回单张壁纸时保持不变）
+  let currentWallpaperPath: string | null = null;
+  if (wasEnabled) {
+    try {
+      currentWallpaperPath = await invoke<string | null>("get_current_wallpaper_path");
+    } catch {
+      currentWallpaperPath = null;
+    }
+  }
+
+  // 清除轮播画册
+  try {
+    await invoke("set_wallpaper_rotation_album_id", { albumId: null });
+  } finally {
+    currentRotationAlbumId.value = null;
+  }
+
+  // 若轮播开启中：关闭轮播并切回单张壁纸
+  if (wasEnabled) {
+    try {
+      await invoke("set_wallpaper_rotation_enabled", { enabled: false });
+    } finally {
+      wallpaperRotationEnabled.value = false;
+    }
+
+    // 切回单张壁纸：用当前壁纸路径再 set 一次，确保“单张模式”一致且设置页能显示
+    if (currentWallpaperPath) {
+      try {
+        await invoke("set_wallpaper", { filePath: currentWallpaperPath });
+      } catch (e) {
+        console.warn("切回单张壁纸失败:", e);
+      }
+    }
+
+    ElMessage.info("删除的画册正在用于轮播：已自动关闭轮播并切换为单张壁纸");
+  }
+};
+
+// 刷新收藏画册的预览（用于收藏状态变化时）
+const refreshFavoriteAlbumPreview = async () => {
+  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
+  if (!favoriteAlbum) return;
+
+  // 清除收藏画册的本地预览缓存
+  const oldUrls = albumPreviewUrls.value[FAVORITE_ALBUM_ID];
+  if (oldUrls) {
+    oldUrls.forEach((u) => URL.revokeObjectURL(u));
+  }
+  delete albumPreviewUrls.value[FAVORITE_ALBUM_ID];
+  delete albumLoadingStates.value[FAVORITE_ALBUM_ID];
+  delete albumIsLoading.value[FAVORITE_ALBUM_ID];
+  // 清除store中的预览缓存
+  delete albumStore.albumPreviews[FAVORITE_ALBUM_ID];
+  // 重新加载预览
+  await prefetchPreview(favoriteAlbum);
+};
+
+// 收藏状态变化事件处理器
+const handleFavoriteStatusChanged = () => {
+  refreshFavoriteAlbumPreview();
+};
+
 onMounted(async () => {
   await albumStore.loadAlbums();
   await loadRotationSettings();
@@ -149,85 +156,48 @@ onMounted(async () => {
   for (const album of albumsToPreload) {
     prefetchPreview(album);
   }
+
+  // 监听收藏状态变化事件
+  window.addEventListener("favorite-status-changed", handleFavoriteStatusChanged);
 });
 
-const getImageUrl = async (localPath: string): Promise<string> => {
-  if (!localPath) return "";
-  try {
-    const normalizedPath = localPath.trimStart().replace(/^\\\\\?\\/, "");
-    const fileData = await readFile(normalizedPath);
-    const ext = normalizedPath.split(".").pop()?.toLowerCase();
-    let mimeType = "image/jpeg";
-    if (ext === "png") mimeType = "image/png";
-    else if (ext === "gif") mimeType = "image/gif";
-    else if (ext === "webp") mimeType = "image/webp";
-    else if (ext === "bmp") mimeType = "image/bmp";
-    const blob = new Blob([fileData], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    blobUrls.add(url);
-    return url;
-  } catch (e) {
-    console.error("加载图片失败", e);
-    return "";
-  }
-};
-
-const loadAlbumImages = async (albumId: string) => {
-  loadingImages.value = true;
-  try {
-    const images = await albumStore.loadAlbumImages(albumId);
-    currentImages.value = images;
-    // 清空旧 URL
-    blobUrls.forEach((u) => URL.revokeObjectURL(u));
-    blobUrls.clear();
-    imageSrcMap.value = {};
-
-    // 顺序加载缩略图
-    for (const img of images) {
-      const thumbnailUrl = img.thumbnailPath ? await getImageUrl(img.thumbnailPath) : "";
-      const originalUrl = await getImageUrl(img.localPath);
-      imageSrcMap.value[img.id] = { thumbnail: thumbnailUrl, original: originalUrl };
-    }
-  } finally {
-    loadingImages.value = false;
-  }
-};
-
-const handleImageClick = (image: ImageInfo) => {
-  selectedImages.value.clear();
-  selectedImages.value.add(image.id);
-};
-
-const handleImageDblClick = (image: ImageInfo) => {
-  previewImage.value = image;
-  previewPath.value = image.localPath;
-  previewUrl.value = imageSrcMap.value[image.id]?.original || "";
-  showPreview.value = true;
-};
-
-// 画册内图片右键菜单
-const imageMenuVisible = ref(false);
-const imageMenuPosition = ref({ x: 0, y: 0 });
-const imageMenuImage = ref<ImageInfo | null>(null);
-const showAddToAlbumDialog = ref(false);
-const pendingAddToAlbumImageIds = ref<string[]>([]);
-
-const handleImageContextMenu = (event: MouseEvent, image: ImageInfo) => {
-  event.preventDefault();
-  // 右键时确保当前图片处于选中集合中（便于 selectedCount 显示）
-  if (!selectedImages.value.has(image.id)) {
-    selectedImages.value.clear();
-    selectedImages.value.add(image.id);
-  }
-  imageMenuImage.value = image;
-  imageMenuPosition.value = { x: event.clientX, y: event.clientY };
-  imageMenuVisible.value = true;
-};
-
-const handleAddedToAlbum = async () => {
-  // 加入画册后，刷新计数（兜底）
+// 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表和轮播设置
+onActivated(async () => {
   await albumStore.loadAlbums();
-};
+  await loadRotationSettings();
+  
+  // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
+  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
+  if (favoriteAlbum) {
+    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID] || 0;
+    const existingUrls = albumPreviewUrls.value[FAVORITE_ALBUM_ID];
+    const hasValidPreview = existingUrls && existingUrls.length > 0 && existingUrls.some(url => url);
+    
+    // 如果画册有内容但预览为空，清除缓存并重新加载
+    if (favoriteCount > 0 && !hasValidPreview) {
+      // 清除本地预览URL缓存
+      delete albumPreviewUrls.value[FAVORITE_ALBUM_ID];
+      delete albumLoadingStates.value[FAVORITE_ALBUM_ID];
+      delete albumIsLoading.value[FAVORITE_ALBUM_ID];
+      // 清除store中的预览缓存
+      delete albumStore.albumPreviews[FAVORITE_ALBUM_ID];
+      // 重新加载预览
+      await prefetchPreview(favoriteAlbum);
+    }
+  }
+  
+  // 检查是否有新画册需要加载预览（还没有预览数据的画册）
+  for (const album of albums.value.slice(0, 6)) {
+    // 跳过收藏画册，因为上面已经处理过了
+    if (album.id === FAVORITE_ALBUM_ID) continue;
+    
+    const existingUrls = albumPreviewUrls.value[album.id];
+    if (!existingUrls || existingUrls.length === 0 || !existingUrls.some(url => url)) {
+      prefetchPreview(album);
+    }
+  }
+});
+
 
 const handleRefresh = async () => {
   isRefreshing.value = true;
@@ -248,180 +218,6 @@ const handleRefresh = async () => {
   }
 };
 
-const handleCopyImage = async (image: ImageInfo) => {
-  const imageUrl = imageSrcMap.value[image.id]?.original || imageSrcMap.value[image.id]?.thumbnail;
-  if (!imageUrl) {
-    ElMessage.warning("图片尚未加载完成，请稍后再试");
-    return;
-  }
-  const response = await fetch(imageUrl);
-  let blob = await response.blob();
-
-  if (blob.type === "image/jpeg" || blob.type === "image/jpg") {
-    const img = new Image();
-    img.src = imageUrl;
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = reject;
-    });
-    const canvas = document.createElement("canvas");
-    canvas.width = img.width;
-    canvas.height = img.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("无法创建 canvas context");
-    ctx.drawImage(img, 0, 0);
-    blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("转换图片失败"))), "image/png");
-    });
-  }
-
-  await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-  ElMessage.success("图片已复制到剪贴板");
-};
-
-const handleBatchDeleteImages = async (imagesToDelete: ImageInfo[]) => {
-  if (imagesToDelete.length === 0) return;
-  const count = imagesToDelete.length;
-  await ElMessageBox.confirm(
-    `删除后将同时移除原图、缩略图及数据库记录，且无法恢复。是否继续删除${count > 1 ? `这 ${count} 张图片` : "这张图片"}？`,
-    "确认删除",
-    { type: "warning" }
-  );
-
-  for (const img of imagesToDelete) {
-    await crawlerStore.deleteImage(img.id);
-  }
-
-  // 从当前画册视图移除
-  const ids = new Set(imagesToDelete.map((i) => i.id));
-  currentImages.value = currentImages.value.filter((img) => !ids.has(img.id));
-  for (const id of ids) {
-    const data = imageSrcMap.value[id];
-    if (data?.thumbnail) URL.revokeObjectURL(data.thumbnail);
-    if (data?.original) URL.revokeObjectURL(data.original);
-    const { [id]: _, ...rest } = imageSrcMap.value;
-    imageSrcMap.value = rest;
-  }
-  selectedImages.value.clear();
-};
-
-const handleImageMenuCommand = async (command: string) => {
-  const image = imageMenuImage.value;
-  if (!image) return;
-  imageMenuVisible.value = false;
-
-  // 右键菜单支持单选/多选：若已选中多张，按 selectedImages 执行批量
-  const imagesToProcess =
-    selectedImages.value.size > 1
-      ? currentImages.value.filter((img) => selectedImages.value.has(img.id))
-      : [image];
-
-  switch (command) {
-    case "detail":
-      selectedDetailImage.value = image;
-      showImageDetail.value = true;
-      break;
-    case "favorite":
-      try {
-        const newFavorite = !image.favorite;
-        await invoke("toggle_image_favorite", { imageId: image.id, favorite: newFavorite });
-        // 同步到列表
-        currentImages.value = currentImages.value.map((img) =>
-          img.id === image.id ? ({ ...img, favorite: newFavorite } as CrawlerImageInfo) : img
-        );
-      } catch (e) {
-        ElMessage.error("操作失败");
-      }
-      break;
-    case "addToAlbum":
-      pendingAddToAlbumImageIds.value = imagesToProcess.map((i) => i.id);
-      showAddToAlbumDialog.value = true;
-      break;
-    case "copy":
-      await handleCopyImage(image);
-      break;
-    case "open":
-      await invoke("open_file_path", { filePath: image.localPath });
-      break;
-    case "openFolder":
-      await invoke("open_file_folder", { filePath: image.localPath });
-      break;
-    case "wallpaper":
-      await invoke("set_wallpaper", { filePath: image.localPath });
-      break;
-    case "exportToWE":
-    case "exportToWEAuto":
-      try {
-        let outputParentDir = "";
-        if (command === "exportToWEAuto") {
-          const mp = await invoke<string | null>("get_wallpaper_engine_myprojects_dir");
-          if (!mp) {
-            ElMessage.warning("未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择");
-            break;
-          }
-          outputParentDir = mp;
-        } else {
-          const selected = await open({
-            directory: true,
-            multiple: false,
-            title: "选择导出目录（将自动创建 Wallpaper Engine 工程文件夹）",
-          });
-          if (!selected || Array.isArray(selected)) break;
-          outputParentDir = selected;
-        }
-
-        const title =
-          imagesToProcess.length > 1
-            ? `Kabegami_AlbumSelection_${imagesToProcess.length}_Images`
-            : `Kabegami_${image.id}`;
-
-        const res = await invoke<{ projectDir: string; imageCount: number }>(
-          "export_images_to_we_project",
-          {
-            imagePaths: imagesToProcess.map((img) => img.localPath),
-            title,
-            outputParentDir,
-            options: null,
-          }
-        );
-        ElMessage.success(`已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`);
-        await invoke("open_file_path", { filePath: res.projectDir });
-      } catch (e) {
-        console.error("导出 Wallpaper Engine 工程失败:", e);
-        ElMessage.error("导出失败");
-      }
-      break;
-    case "remove":
-      // 批量移除图片（只删除缩略图和数据库记录，不删除原图）
-      if (imagesToProcess.length === 0) return;
-      const count = imagesToProcess.length;
-      await ElMessageBox.confirm(
-        `移除后将删除缩略图及数据库记录，但保留原图。是否继续移除${count > 1 ? `这 ${count} 张图片` : "这张图片"}？`,
-        "确认移除",
-        { type: "warning" }
-      );
-
-      for (const img of imagesToProcess) {
-        await crawlerStore.removeImage(img.id);
-      }
-
-      // 从当前画册视图移除
-      const ids = new Set(imagesToProcess.map((i) => i.id));
-      currentImages.value = currentImages.value.filter((img) => !ids.has(img.id));
-      for (const id of ids) {
-        const data = imageSrcMap.value[id];
-        if (data?.thumbnail) URL.revokeObjectURL(data.thumbnail);
-        if (data?.original) URL.revokeObjectURL(data.original);
-        const { [id]: _, ...rest } = imageSrcMap.value;
-        imageSrcMap.value = rest;
-      }
-      selectedImages.value.clear();
-      break;
-    case "delete":
-      await handleBatchDeleteImages(imagesToProcess);
-      break;
-  }
-};
 
 const handleCreateAlbum = async () => {
   if (!newAlbumName.value.trim()) return;
@@ -434,20 +230,54 @@ const handleCreateAlbum = async () => {
 };
 
 // 卡牌交互
-const currentAlbum = ref<{ id: string; name: string } | null>(null);
-const drawerVisible = ref(false);
 const albumPreviewUrls = ref<Record<string, string[]>>({});
 const albumLoadingStates = ref<Record<string, boolean[]>>({});
 const albumIsLoading = ref<Record<string, boolean>>({});
-const heroIndex = ref(0);
-const drawerBg = ref<string>("");
 
 // 画册右键菜单状态
 const albumMenuVisible = ref(false);
 const albumMenuPosition = ref({ x: 0, y: 0 });
 const menuAlbum = ref<{ id: string; name: string } | null>(null);
 
+const getImageUrl = async (localPath: string): Promise<string> => {
+  if (!localPath) return "";
+  try {
+    const { readFile } = await import("@tauri-apps/plugin-fs");
+    const normalizedPath = localPath.trimStart().replace(/^\\\\\?\\/, "");
+    const fileData = await readFile(normalizedPath);
+    const ext = normalizedPath.split(".").pop()?.toLowerCase();
+    let mimeType = "image/jpeg";
+    if (ext === "png") mimeType = "image/png";
+    else if (ext === "gif") mimeType = "image/gif";
+    else if (ext === "webp") mimeType = "image/webp";
+    else if (ext === "bmp") mimeType = "image/bmp";
+    const blob = new Blob([fileData], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    return url;
+  } catch (e) {
+    console.error("加载图片失败", e);
+    return "";
+  }
+};
+
 const prefetchPreview = async (album: { id: string }) => {
+  // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
+  if (album.id === FAVORITE_ALBUM_ID) {
+    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID] || 0;
+    const existingUrls = albumPreviewUrls.value[FAVORITE_ALBUM_ID];
+    const hasValidPreview = existingUrls && existingUrls.length > 0 && existingUrls.some(url => url);
+    
+    // 如果画册有内容但预览为空，清除缓存
+    if (favoriteCount > 0 && !hasValidPreview) {
+      // 清除本地预览URL缓存
+      delete albumPreviewUrls.value[FAVORITE_ALBUM_ID];
+      delete albumLoadingStates.value[FAVORITE_ALBUM_ID];
+      delete albumIsLoading.value[FAVORITE_ALBUM_ID];
+      // 清除store中的预览缓存
+      delete albumStore.albumPreviews[FAVORITE_ALBUM_ID];
+    }
+  }
+  
   // 如果已经加载完成，直接返回
   const existingUrls = albumPreviewUrls.value[album.id];
   if (existingUrls && existingUrls.length > 0 && existingUrls.some(url => url)) {
@@ -540,27 +370,13 @@ const prefetchPreview = async (album: { id: string }) => {
   }
 };
 
-const openAlbum = async (album: { id: string; name: string }) => {
-  currentAlbum.value = album;
-  drawerVisible.value = true;
-  // 先设置背景（如果已有预览图）
-  drawerBg.value = albumPreviewUrls.value[album.id]?.[0] || "";
-  heroIndex.value = 0;
-
-  // 使用 nextTick 确保抽屉先显示，然后再异步加载图片
-  await nextTick();
-  // 异步加载图片，不阻塞抽屉显示
-  loadAlbumImages(album.id).then(() => {
-    // 如果加载完成后还没有背景，尝试使用第一张图片
-    if (!drawerBg.value && currentImages.value.length > 0) {
-      const firstImage = currentImages.value[0];
-      if (firstImage.thumbnailPath || firstImage.localPath) {
-        getImageUrl(firstImage.thumbnailPath || firstImage.localPath).then(url => {
-          drawerBg.value = url;
-        }).catch(() => { });
-      }
-    }
-  });
+const openAlbum = (album: { id: string; name: string }) => {
+  // 空相册不能打开
+  const count = albumCounts.value[album.id] || 0;
+  if (count === 0) {
+    return;
+  }
+  router.push(`/albums/${album.id}`);
 };
 
 const openAlbumContextMenu = (event: MouseEvent, album: { id: string; name: string }) => {
@@ -580,6 +396,11 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
   closeAlbumContextMenu();
 
   if (command === "browse") {
+    // 空相册不能浏览
+    const count = albumCounts.value[id] || 0;
+    if (count === 0) {
+      return;
+    }
     router.push(`/albums/${id}`);
     return;
   }
@@ -687,19 +508,8 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
       { type: "warning" }
     );
     await albumStore.deleteAlbum(id);
-    // 如果正在预览同一个画册，顺便关闭抽屉并清理
-    if (currentAlbum.value?.id === id) {
-      drawerVisible.value = false;
-      currentAlbum.value = null;
-      currentImages.value = [];
-      imageSrcMap.value = {};
-      selectedImages.value.clear();
-    }
-    // 如果删除的是当前轮播画册，清除轮播设置
-    if (currentRotationAlbumId.value === id) {
-      await invoke("set_wallpaper_rotation_album_id", { albumId: null });
-      currentRotationAlbumId.value = null;
-    }
+    // 如果删除的是当前轮播画册：自动关闭轮播并切回单张壁纸
+    await handleDeletedRotationAlbum(id);
     delete albumPreviewUrls.value[id];
     await albumStore.loadAlbums();
     ElMessage.success("画册已删除");
@@ -711,72 +521,22 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
   }
 };
 
-const openAlbumFullPage = () => {
-  if (!currentAlbum.value) return;
-  router.push(`/albums/${currentAlbum.value.id}`);
-};
-
-const handleDeleteCurrentAlbum = async () => {
-  if (!currentAlbum.value) return;
-  const albumId = currentAlbum.value.id;
-  const name = currentAlbum.value.name;
-
-  // 检查是否为"收藏"画册（使用固定ID）
-  if (albumId === FAVORITE_ALBUM_ID) {
-    ElMessage.warning("不能删除'收藏'画册");
-    return;
-  }
-
-  try {
-    await ElMessageBox.confirm(
-      `确定要删除画册"${name}"吗？此操作仅删除画册及其关联，不会删除图片文件。`,
-      "确认删除",
-      { type: "warning" }
-    );
-    await albumStore.deleteAlbum(albumId);
-    // 清理当前抽屉状态
-    drawerVisible.value = false;
-    currentAlbum.value = null;
-    currentImages.value = [];
-    imageSrcMap.value = {};
-    selectedImages.value.clear();
-    // 清理预览缓存背景
-    delete albumPreviewUrls.value[albumId];
-    // 重新拉取计数/列表（兜底）
-    await albumStore.loadAlbums();
-    ElMessage.success("画册已删除");
-  } catch (error) {
-    if (error !== "cancel") {
-      console.error("删除画册失败:", error);
-      ElMessage.error("删除失败");
-    }
-  }
-};
 
 onBeforeUnmount(() => {
+  // 移除收藏状态变化事件监听
+  window.removeEventListener("favorite-status-changed", handleFavoriteStatusChanged);
+  
   Object.values(albumPreviewUrls.value).forEach((urls) => {
     urls.forEach((u) => URL.revokeObjectURL(u));
   });
   albumPreviewUrls.value = {};
 });
 
-const drawerBgStyle = computed(() => {
-  if (!drawerBg.value) return {};
-  return {
-    backgroundImage: `linear-gradient(rgba(255,255,255,0.85), rgba(255,255,255,0.95)), url(${drawerBg.value})`,
-    backgroundSize: "cover",
-    backgroundPosition: "center",
-    backgroundRepeat: "no-repeat",
-    backgroundAttachment: "fixed",
-    backdropFilter: "blur(12px)",
-    minHeight: "100%",
-  };
-});
 </script>
 
 <style scoped lang="scss">
 .albums-page {
-  padding: 16px;
+  padding: 20px;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -791,151 +551,34 @@ const drawerBgStyle = computed(() => {
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
 
+/* 列表淡入动画 */
+.fade-in-list-enter-active {
+  transition: transform 0.38s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.26s ease-out, filter 0.26s ease-out;
+}
+
+.fade-in-list-leave-active {
+  transition: transform 0.22s ease-in, opacity 0.22s ease-in, filter 0.22s ease-in;
+  pointer-events: none;
+}
+
+.fade-in-list-enter-from {
+  opacity: 0;
+  transform: translateY(14px) scale(0.96);
+  filter: blur(2px);
+}
+
+.fade-in-list-leave-to {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.92);
+  filter: blur(2px);
+}
+
+.fade-in-list-move {
+  transition: transform 0.4s ease;
+}
+
 .empty-tip {
   padding: 32px;
   color: var(--anime-text-muted);
-}
-
-.album-grid {
-  width: 100%;
-}
-
-.drawer-body {
-  padding: 0 8px;
-  position: relative;
-  min-height: 100%;
-
-  &::before {
-    content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-image: inherit;
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-    z-index: -1;
-    pointer-events: none;
-  }
-}
-
-.drawer-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  gap: 12px;
-}
-
-.drawer-title {
-  font-weight: 700;
-  font-size: 18px;
-  background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.drawer-browse-btn {
-  background: var(--anime-primary);
-  color: #fff;
-  border: none;
-  padding: 6px 12px;
-  border-radius: 8px;
-  box-shadow: 0 6px 14px rgba(255, 107, 157, 0.22);
-
-  &:hover {
-    opacity: 0.92;
-  }
-}
-
-.hero-banner {
-  position: relative;
-  height: 240px;
-  margin: 12px 0 20px 0;
-  overflow: hidden;
-
-  &:hover {
-    .hero-btn {
-      opacity: 1;
-    }
-  }
-
-  .hero-track {
-    position: relative;
-    width: 100%;
-    height: 100%;
-  }
-
-  .hero-item {
-    position: absolute;
-    top: 10%;
-    width: 60%;
-    height: 80%;
-    left: 20%;
-    border-radius: 16px;
-    background-size: cover;
-    background-position: center;
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25);
-    transition: transform 0.35s ease, opacity 0.35s ease, box-shadow 0.35s ease, z-index 0.35s ease;
-    opacity: 0;
-    z-index: 1;
-
-    &.is-center {
-      transform: translateX(0) scale(1);
-      opacity: 1;
-      z-index: 3;
-      box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28);
-    }
-
-    &.is-left {
-      transform: translateX(-40%) scale(0.88);
-      opacity: 0.85;
-      z-index: 2;
-    }
-
-    &.is-right {
-      transform: translateX(40%) scale(0.88);
-      opacity: 0.85;
-      z-index: 2;
-    }
-
-    &.is-hidden {
-      opacity: 0;
-      transform: translateX(0) scale(0.8);
-      z-index: 1;
-    }
-  }
-
-  .hero-btn {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.15);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    cursor: pointer;
-    transition: background 0.2s ease, opacity 0.2s ease;
-    opacity: 0;
-
-    &.left {
-      left: 8px;
-    }
-
-    &.right {
-      right: 8px;
-    }
-
-    &:hover {
-      background: rgba(0, 0, 0, 0.28);
-    }
-  }
 }
 </style>

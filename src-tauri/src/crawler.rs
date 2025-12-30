@@ -1,4 +1,5 @@
 use crate::plugin::Plugin;
+use crate::plugin::{VarDefinition, VarOption};
 use reqwest;
 use rhai::{Dynamic, Engine, Map, Scope};
 use scraper::{Html, Selector};
@@ -75,57 +76,81 @@ pub async fn crawl_images(
     // 创建作用域
     let mut scope = Scope::new();
 
-    // 注入用户配置的变量到脚本作用域
-    if let Some(config) = user_config {
-        for (key, value) in config {
-            // 根据值的类型转换为 Rhai 类型
-            match value {
-                serde_json::Value::Number(n) => {
-                    if n.is_i64() {
-                        scope.push(key.clone(), n.as_i64().unwrap_or(0));
-                    } else if n.is_u64() {
-                        scope.push(key.clone(), n.as_u64().unwrap_or(0) as i64);
-                    } else if n.is_f64() {
-                        scope.push(key.clone(), n.as_f64().unwrap_or(0.0));
-                    }
+    // 构造最终注入配置：
+    // - 先从插件 config.json 的 var 定义里拿默认值（确保 start_page 等变量始终存在）
+    // - 再用 user_config 覆盖默认值
+    // - checkbox 默认/输入统一规范化为对象：{ option: bool }
+    let merged_config = build_effective_user_config(&app, &plugin.id, user_config)?;
+
+    // Debug：打印最终注入的变量，定位“为什么脚本里变量不存在”
+    #[cfg(debug_assertions)]
+    {
+        let mut keys: Vec<_> = merged_config.keys().cloned().collect();
+        keys.sort();
+        let start_page_val = merged_config.get("start_page").cloned();
+        let max_pages_val = merged_config.get("max_pages").cloned();
+        eprintln!(
+            "[rhai-inject] plugin_id={} injected_keys={:?} start_page={:?} max_pages={:?}",
+            plugin.id, keys, start_page_val, max_pages_val
+        );
+    }
+
+    // 注入变量到脚本作用域：
+    // Rhai 的函数体默认不能捕获/读取 Scope 里的“普通变量”，但可以读取常量。
+    // 因此这里统一用 push_constant，避免脚本在 fn 内访问不到 start_page/max_pages 等变量。
+    for (key, value) in merged_config {
+        // 根据值的类型转换为 Rhai 类型
+        match value {
+            serde_json::Value::Number(n) => {
+                if n.is_i64() {
+                    scope.push_constant(key.clone(), n.as_i64().unwrap_or(0));
+                } else if n.is_u64() {
+                    scope.push_constant(key.clone(), n.as_u64().unwrap_or(0) as i64);
+                } else if n.is_f64() {
+                    scope.push_constant(key.clone(), n.as_f64().unwrap_or(0.0));
                 }
-                serde_json::Value::String(s) => {
-                    scope.push(key.clone(), s);
-                }
-                serde_json::Value::Bool(b) => {
-                    scope.push(key.clone(), b);
-                }
-                serde_json::Value::Array(arr) => {
-                    // 将数组转换为 Rhai 数组
-                    let mut rhai_array = rhai::Array::new();
-                    for item in arr {
-                        match item {
-                            serde_json::Value::String(s) => {
-                                rhai_array.push(Dynamic::from(s));
-                            }
-                            serde_json::Value::Number(n) => {
-                                if n.is_i64() {
-                                    rhai_array.push(Dynamic::from(n.as_i64().unwrap_or(0)));
-                                } else if n.is_u64() {
-                                    rhai_array.push(Dynamic::from(n.as_u64().unwrap_or(0) as i64));
-                                } else if n.is_f64() {
-                                    rhai_array.push(Dynamic::from(n.as_f64().unwrap_or(0.0)));
-                                }
-                            }
-                            serde_json::Value::Bool(b) => {
-                                rhai_array.push(Dynamic::from(b));
-                            }
-                            _ => {
-                                rhai_array.push(Dynamic::from(item.to_string()));
+            }
+            serde_json::Value::String(s) => {
+                scope.push_constant(key.clone(), s);
+            }
+            serde_json::Value::Bool(b) => {
+                scope.push_constant(key.clone(), b);
+            }
+            serde_json::Value::Object(_) => {
+                // 将 JSON 对象转换为 Rhai Map（支持脚本中使用 foo.a/foo.b）
+                let mut map = Map::new();
+                convert_json_to_rhai_map(&value, &mut map);
+                scope.push_constant(key.clone(), map);
+            }
+            serde_json::Value::Array(arr) => {
+                // 将数组转换为 Rhai 数组
+                let mut rhai_array = rhai::Array::new();
+                for item in arr {
+                    match item {
+                        serde_json::Value::String(s) => {
+                            rhai_array.push(Dynamic::from(s));
+                        }
+                        serde_json::Value::Number(n) => {
+                            if n.is_i64() {
+                                rhai_array.push(Dynamic::from(n.as_i64().unwrap_or(0)));
+                            } else if n.is_u64() {
+                                rhai_array.push(Dynamic::from(n.as_u64().unwrap_or(0) as i64));
+                            } else if n.is_f64() {
+                                rhai_array.push(Dynamic::from(n.as_f64().unwrap_or(0.0)));
                             }
                         }
+                        serde_json::Value::Bool(b) => {
+                            rhai_array.push(Dynamic::from(b));
+                        }
+                        _ => {
+                            rhai_array.push(Dynamic::from(item.to_string()));
+                        }
                     }
-                    scope.push(key.clone(), rhai_array);
                 }
-                _ => {
-                    // 其他类型转换为字符串
-                    scope.push(key.clone(), value.to_string());
-                }
+                scope.push_constant(key.clone(), rhai_array);
+            }
+            serde_json::Value::Null => {
+                scope.push_constant_dynamic(key.clone(), Dynamic::UNIT);
             }
         }
     }
@@ -158,6 +183,138 @@ pub async fn crawl_images(
     })
 }
 
+/// 读取插件变量定义，合并默认值与用户配置，并对部分类型进行规范化（尤其是 checkbox）。
+fn build_effective_user_config(
+    app: &AppHandle,
+    plugin_id: &str,
+    user_config: Option<HashMap<String, serde_json::Value>>,
+) -> Result<HashMap<String, serde_json::Value>, String> {
+    let plugin_manager = app.state::<crate::plugin::PluginManager>();
+    let user_cfg = user_config.unwrap_or_default();
+
+    // 读取插件变量定义（config.json 的 var）
+    let var_defs: Vec<VarDefinition> = plugin_manager
+        .get_plugin_vars(plugin_id)?
+        .unwrap_or_default();
+
+    // 先按 var_defs 填满所有变量（默认值 -> 用户值覆盖）
+    let mut merged: HashMap<String, serde_json::Value> = HashMap::new();
+    for def in &var_defs {
+        let user_value = user_cfg.get(&def.key).cloned();
+        let default_value = def.default.clone();
+        let normalized = normalize_var_value(def, user_value.or(default_value));
+        merged.insert(def.key.clone(), normalized);
+    }
+
+    // 再把 user_cfg 中那些不在 var_defs 里的键也注入（保持兼容扩展变量）
+    for (k, v) in user_cfg {
+        if !merged.contains_key(&k) {
+            merged.insert(k, v);
+        }
+    }
+
+    Ok(merged)
+}
+
+fn extract_option_variables(options: &Option<Vec<VarOption>>) -> Vec<String> {
+    match options {
+        None => Vec::new(),
+        Some(opts) => opts
+            .iter()
+            .filter_map(|o| match o {
+                VarOption::String(s) => Some(s.clone()),
+                VarOption::Item { variable, .. } => Some(variable.clone()),
+            })
+            .collect(),
+    }
+}
+
+/// 将变量值规范化，确保脚本侧不会出现“变量不存在”或类型完全不匹配。
+/// - checkbox：无论输入是 ["a","b"] 还是 {a:true,b:false}，都输出对象 { option: bool }
+fn normalize_var_value(def: &VarDefinition, value: Option<serde_json::Value>) -> serde_json::Value {
+    let t = def.var_type.as_str();
+    match t {
+        "checkbox" => {
+            let vars = extract_option_variables(&def.options);
+            let mut obj = serde_json::Map::new();
+            for k in &vars {
+                obj.insert(k.clone(), serde_json::Value::Bool(false));
+            }
+
+            match value {
+                Some(serde_json::Value::Object(m)) => {
+                    for (k, v) in m {
+                        let b = match v {
+                            serde_json::Value::Bool(b) => b,
+                            serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) != 0,
+                            serde_json::Value::String(s) => s == "true" || s == "1",
+                            _ => false,
+                        };
+                        obj.insert(k, serde_json::Value::Bool(b));
+                    }
+                }
+                Some(serde_json::Value::Array(arr)) => {
+                    for it in arr {
+                        if let serde_json::Value::String(s) = it {
+                            obj.insert(s, serde_json::Value::Bool(true));
+                        }
+                    }
+                }
+                Some(serde_json::Value::String(s)) => {
+                    obj.insert(s, serde_json::Value::Bool(true));
+                }
+                _ => {
+                    // 无值：保持全 false（或由 config.json default 已经传入）
+                }
+            }
+            serde_json::Value::Object(obj)
+        }
+        "int" => match value {
+            Some(serde_json::Value::Number(n)) => {
+                serde_json::Value::Number(serde_json::Number::from(n.as_i64().unwrap_or(0)))
+            }
+            Some(serde_json::Value::String(s)) => {
+                serde_json::Value::Number(serde_json::Number::from(s.parse::<i64>().unwrap_or(0)))
+            }
+            Some(serde_json::Value::Bool(b)) => {
+                serde_json::Value::Number(serde_json::Number::from(if b { 1 } else { 0 }))
+            }
+            _ => serde_json::Value::Number(serde_json::Number::from(0)),
+        },
+        "float" => match value {
+            Some(serde_json::Value::Number(n)) => serde_json::Value::Number(
+                serde_json::Number::from_f64(n.as_f64().unwrap_or(0.0)).unwrap(),
+            ),
+            Some(serde_json::Value::String(s)) => serde_json::Value::Number(
+                serde_json::Number::from_f64(s.parse::<f64>().unwrap_or(0.0)).unwrap(),
+            ),
+            Some(serde_json::Value::Bool(b)) => serde_json::Value::Number(
+                serde_json::Number::from_f64(if b { 1.0 } else { 0.0 }).unwrap(),
+            ),
+            _ => serde_json::Value::Number(serde_json::Number::from_f64(0.0).unwrap()),
+        },
+        "boolean" => match value {
+            Some(serde_json::Value::Bool(b)) => serde_json::Value::Bool(b),
+            Some(serde_json::Value::Number(n)) => {
+                serde_json::Value::Bool(n.as_i64().unwrap_or(0) != 0)
+            }
+            Some(serde_json::Value::String(s)) => serde_json::Value::Bool(s == "true" || s == "1"),
+            _ => serde_json::Value::Bool(false),
+        },
+        // options/list/其它：保持原样；若无值则给一个可用的空值，避免变量缺失
+        "options" => match value {
+            Some(v) => v,
+            None => serde_json::Value::String(String::new()),
+        },
+        "list" => match value {
+            Some(serde_json::Value::Array(arr)) => serde_json::Value::Array(arr),
+            Some(v) => v,
+            None => serde_json::Value::Array(vec![]),
+        },
+        _ => value.unwrap_or(serde_json::Value::Null),
+    }
+}
+
 /// 查找插件文件
 fn find_plugin_file(plugins_dir: &Path, plugin_id: &str) -> Result<PathBuf, String> {
     let entries = fs::read_dir(plugins_dir)
@@ -168,39 +325,15 @@ fn find_plugin_file(plugins_dir: &Path, plugin_id: &str) -> Result<PathBuf, Stri
         let path = entry.path();
 
         if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-            // 读取 manifest 来匹配插件 ID
-            let file =
-                fs::File::open(&path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
-            let mut archive = zip::ZipArchive::new(file)
-                .map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
+            // 插件 ID = 插件文件名（不含扩展名）
+            let file_name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
 
-            // 读取 manifest 内容到局部变量，确保 archive 在读取完成后可以释放
-            let manifest_content = {
-                let mut manifest_file = match archive.by_name("manifest.json") {
-                    Ok(f) => f,
-                    Err(_) => continue,
-                };
-                let mut content = String::new();
-                if manifest_file.read_to_string(&mut content).is_err() {
-                    continue;
-                }
-                content
-            };
-
-            // 现在 archive 已经可以释放了，解析 manifest
-            if let Ok(manifest) =
-                serde_json::from_str::<crate::plugin::PluginManifest>(&manifest_content)
-            {
-                let file_name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                let generated_id = format!("{}-{}", file_name, manifest.name);
-
-                if generated_id == plugin_id {
-                    return Ok(path);
-                }
+            if file_name == plugin_id {
+                return Ok(path);
             }
         }
     }
@@ -328,7 +461,13 @@ fn convert_json_to_rhai_array(json: &serde_json::Value, array: &mut rhai::Array)
 /// 注册爬虫相关的 Rhai 函数
 // 获取默认的图片目录（用于判断是否是用户指定的目录）
 fn get_default_images_dir() -> PathBuf {
-    get_app_data_dir().join("images")
+    // 先尝试获取用户的Pictures目录
+    if let Some(pictures_dir) = dirs::picture_dir() {
+        pictures_dir.join("Kabegame")
+    } else {
+        // 如果获取不到Pictures目录，回落到原来的设置
+        get_app_data_dir().join("images")
+    }
 }
 
 pub fn register_crawler_functions(
@@ -341,6 +480,14 @@ pub fn register_crawler_functions(
     current_progress: Arc<Mutex<f64>>,
 ) -> Result<(), String> {
     let stack = Arc::clone(page_stack);
+
+    // re_is_match(pattern, text) - 正则匹配判断（pattern 使用 Rust regex 语法）
+    // 注意：pattern 编译失败时返回 false
+    engine.register_fn("re_is_match", |pattern: &str, text: &str| -> bool {
+        regex::Regex::new(pattern)
+            .map(|re| re.is_match(text))
+            .unwrap_or(false)
+    });
 
     // to(url) - 访问一个网页，将当前页面入栈
     engine.register_fn("to", {
@@ -812,11 +959,45 @@ pub fn register_crawler_functions(
             || url_lower.contains("img")
     });
 
-    // list_local_files(folder_url, extensions) - 列出本地文件夹内的文件（非递归）
+    // 辅助函数：递归扫描目录
+    fn scan_directory_recursive(
+        dir: &std::path::Path,
+        extensions: &std::collections::HashSet<String>,
+        file_list: &mut rhai::Array,
+    ) -> Result<(), Box<rhai::EvalAltResult>> {
+        let entries = fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_file() {
+                // 检查文件扩展名
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    let ext_with_dot = format!(".{}", ext.to_lowercase());
+                    if extensions.contains(&ext_with_dot) {
+                        // 返回文件的完整路径（使用 file:// 协议）
+                        let file_path_str = path.to_string_lossy().replace("\\", "/");
+                        let file_url = format!("file:///{}", file_path_str);
+                        file_list.push(Dynamic::from(file_url));
+                    }
+                }
+            } else if path.is_dir() {
+                // 递归处理子目录
+                scan_directory_recursive(&path, extensions, file_list)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    // list_local_files(folder_url, extensions, recursive) - 列出本地文件夹内的文件
+    // recursive 为可选参数，默认为 false（非递归）
     engine.register_fn(
         "list_local_files",
         |folder_url: &str,
-         extensions: rhai::Array|
+         extensions: rhai::Array,
+         recursive: bool|
          -> Result<rhai::Array, Box<rhai::EvalAltResult>> {
             // 解析文件夹路径
             let folder_path_str = if folder_url.starts_with("file:///") {
@@ -857,10 +1038,6 @@ pub fn register_crawler_functions(
                 return Err(format!("Path is not a directory: {}", folder_path.display()).into());
             }
 
-            // 读取文件夹内容（非递归）
-            let entries = fs::read_dir(&folder_path)
-                .map_err(|e| format!("Failed to read directory: {}", e))?;
-
             let mut file_list = rhai::Array::new();
             let extensions_set: std::collections::HashSet<String> = extensions
                 .into_iter()
@@ -875,20 +1052,30 @@ pub fn register_crawler_functions(
                 })
                 .collect();
 
-            for entry in entries {
-                let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-                let path = entry.path();
+            // 递归或非递归扫描
+            if recursive {
+                scan_directory_recursive(&folder_path, &extensions_set, &mut file_list)?;
+            } else {
+                // 非递归扫描：只读取当前文件夹
+                let entries = fs::read_dir(&folder_path)
+                    .map_err(|e| format!("Failed to read directory: {}", e))?;
 
-                // 只处理文件，不处理目录
-                if path.is_file() {
-                    // 检查文件扩展名
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        let ext_with_dot = format!(".{}", ext.to_lowercase());
-                        if extensions_set.contains(&ext_with_dot) {
-                            // 返回文件的完整路径（使用 file:// 协议）
-                            let file_path_str = path.to_string_lossy().replace("\\", "/");
-                            let file_url = format!("file:///{}", file_path_str);
-                            file_list.push(Dynamic::from(file_url));
+                for entry in entries {
+                    let entry =
+                        entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+                    let path = entry.path();
+
+                    // 只处理文件，不处理目录
+                    if path.is_file() {
+                        // 检查文件扩展名
+                        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                            let ext_with_dot = format!(".{}", ext.to_lowercase());
+                            if extensions_set.contains(&ext_with_dot) {
+                                // 返回文件的完整路径（使用 file:// 协议）
+                                let file_path_str = path.to_string_lossy().replace("\\", "/");
+                                let file_url = format!("file:///{}", file_path_str);
+                                file_list.push(Dynamic::from(file_url));
+                            }
                         }
                     }
                 }
@@ -967,7 +1154,7 @@ pub fn register_crawler_functions(
             let plugin_id = plugin_id.clone();
             let task_id = task_id_for_download.clone();
 
-            // 预检查：如果是本地文件且数据库已有相同哈希（且文件/缩略图都存在），则无需入队
+            // 预检查：如果是本地文件且数据库已有相同路径，则检查缩略图并补全（如果需要），无需入队
             // 注意：HTTP/HTTPS 无法在不下载内容的情况下计算 hash，因此仍走队列流程
             let is_local_path = url.starts_with("file://")
                 || (!url.starts_with("http://")
@@ -993,24 +1180,45 @@ pub fn register_crawler_functions(
                     std::path::PathBuf::from(url)
                 };
 
-                if let Ok(source_path) = source_path.canonicalize() {
-                    if source_path.exists() {
-                        if let Ok(hash) = compute_file_hash(&source_path) {
-                            let storage = app_handle.state::<crate::storage::Storage>();
-                            if let Ok(Some(existing)) = storage.find_image_by_hash(&hash) {
-                                let existing_path = std::path::PathBuf::from(&existing.local_path);
-                                let thumb = if existing.thumbnail_path.is_empty() {
-                                    None
-                                } else {
-                                    Some(std::path::PathBuf::from(&existing.thumbnail_path))
-                                };
-                                if existing_path.exists()
-                                    && thumb.as_ref().map(|p| p.exists()).unwrap_or(true)
+                if let Ok(canonical_source_path) = source_path.canonicalize() {
+                    if canonical_source_path.exists() {
+                        let storage = app_handle.state::<crate::storage::Storage>();
+                        // 规范化路径并移除 Windows 长路径前缀，确保与数据库中的格式一致
+                        let source_path_str = canonical_source_path
+                            .to_string_lossy()
+                            .trim_start_matches("\\\\?\\")
+                            .to_string();
+
+                        // 检查数据库中是否有相同路径（规范化后的路径）
+                        if let Ok(Some(existing)) = storage.find_image_by_path(&source_path_str) {
+                            let existing_path = std::path::PathBuf::from(&existing.local_path);
+                            let thumb_path = if existing.thumbnail_path.trim().is_empty() {
+                                existing_path.clone()
+                            } else {
+                                std::path::PathBuf::from(&existing.thumbnail_path)
+                            };
+
+                            // 检查缩略图是否存在，不存在则补全
+                            if !thumb_path.exists() {
+                                // 尝试生成缩略图
+                                if let Ok(Some(gen_thumb)) =
+                                    generate_thumbnail(&existing_path, &app_handle)
                                 {
-                                    return Ok(true);
+                                    // 更新数据库中的缩略图路径
+                                    let _ = storage.update_image_thumbnail_path(
+                                        &existing.id,
+                                        &gen_thumb
+                                            .to_string_lossy()
+                                            .trim_start_matches("\\\\?\\")
+                                            .to_string(),
+                                    );
                                 }
                             }
+
+                            // 文件已存在，无需进入下载队列
+                            return Ok(true);
                         }
+                        // 数据库中没有相同路径，继续进入下载队列
                     }
                 }
             }
@@ -1377,7 +1585,7 @@ fn get_app_data_dir() -> PathBuf {
     dirs::data_local_dir()
         .or_else(|| dirs::data_dir())
         .expect("Failed to get app data directory")
-        .join("Kabegami Crawler")
+        .join("Kabegame")
 }
 
 fn generate_thumbnail(image_path: &Path, _app: &AppHandle) -> Result<Option<PathBuf>, String> {
@@ -1469,6 +1677,17 @@ impl DownloadQueue {
             .lock()
             .map_err(|e| format!("Lock error: {}", e))?;
         Ok(queue.len())
+    }
+
+    /// 清空“等待队列”（不影响正在下载的任务）
+    pub fn clear_queue(&self) -> Result<usize, String> {
+        let mut queue = self
+            .queue
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        let removed = queue.len();
+        queue.clear();
+        Ok(removed)
     }
 
     // 添加下载任务到队列
@@ -1578,6 +1797,7 @@ impl DownloadQueue {
                         // 启动下载任务
                         let active_clone = Arc::clone(&active_downloads);
                         let active_tasks_clone = Arc::clone(&active_tasks);
+                        let queue_clone = Arc::clone(&queue);
                         let app_clone = app.clone();
                         let task_clone = task.clone();
                         let _canceled_clone = Arc::clone(&canceled_tasks);
@@ -1603,9 +1823,27 @@ impl DownloadQueue {
                             }
 
                             // 减少活跃下载数
-                            {
+                            let active_after = {
                                 let mut active = active_clone.lock().unwrap();
                                 *active -= 1;
+                                *active
+                            };
+                            // 若开启“强制去重等待下载结束”，并且下载队列已经空闲，则自动关闭并通知前端
+                            if let Some(flags) =
+                                app_clone.try_state::<crate::runtime_flags::RuntimeFlags>()
+                            {
+                                if flags.force_deduplicate()
+                                    && flags.force_deduplicate_wait_until_idle()
+                                    && active_after == 0
+                                {
+                                    let q_empty = queue_clone.lock().unwrap().is_empty();
+                                    if q_empty {
+                                        flags.set_force_deduplicate(false);
+                                        flags.set_force_deduplicate_wait_until_idle(false);
+                                        let _ = app_clone
+                                            .emit("force-dedupe-ended", serde_json::json!({}));
+                                    }
+                                }
                             }
 
                             // 如果下载成功，保存到 gallery
@@ -1634,21 +1872,65 @@ impl DownloadQueue {
                                 let mut emitted_image_id: Option<String> = None;
 
                                 if !downloaded.reused {
-                                    let image_info = crate::storage::ImageInfo {
-                                        id: uuid::Uuid::new_v4().to_string(),
-                                        url: task_clone.url.clone(),
-                                        local_path: local_path_str,
-                                        plugin_id: task_clone.plugin_id.clone(),
-                                        task_id: Some(task_clone.task_id.clone()),
-                                        crawled_at: task_clone.download_start_time,
-                                        metadata: None,
-                                        thumbnail_path: thumbnail_path_str.clone(),
-                                        favorite: false,
-                                        hash: downloaded.hash.clone(),
+                                    // 检查是否启用自动/强制去重
+                                    let should_skip = {
+                                        let settings_state =
+                                            app_clone.try_state::<crate::settings::Settings>();
+                                        let force_dedup = app_clone
+                                            .try_state::<crate::runtime_flags::RuntimeFlags>()
+                                            .map(|f| f.force_deduplicate())
+                                            .unwrap_or(false);
+                                        if let Some(settings) = settings_state {
+                                            if let Ok(s) = settings.get_settings() {
+                                                if (force_dedup || s.auto_deduplicate)
+                                                    && !downloaded.hash.is_empty()
+                                                {
+                                                    // 检查哈希是否已存在
+                                                    if let Ok(Some(_existing)) =
+                                                        storage.find_image_by_hash(&downloaded.hash)
+                                                    {
+                                                        true // 哈希已存在，跳过添加
+                                                    } else {
+                                                        false
+                                                    }
+                                                } else {
+                                                    false
+                                                }
+                                            } else {
+                                                false
+                                            }
+                                        } else {
+                                            // 没有 settings state 时，仍允许强制去重生效
+                                            if force_dedup && !downloaded.hash.is_empty() {
+                                                storage
+                                                    .find_image_by_hash(&downloaded.hash)
+                                                    .ok()
+                                                    .flatten()
+                                                    .is_some()
+                                            } else {
+                                                false
+                                            }
+                                        }
                                     };
-                                    if storage.add_image(image_info.clone()).is_ok() {
-                                        should_emit = true;
-                                        emitted_image_id = Some(image_info.id);
+
+                                    if !should_skip {
+                                        let image_info = crate::storage::ImageInfo {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            url: task_clone.url.clone(),
+                                            local_path: local_path_str,
+                                            plugin_id: task_clone.plugin_id.clone(),
+                                            task_id: Some(task_clone.task_id.clone()),
+                                            crawled_at: task_clone.download_start_time,
+                                            metadata: None,
+                                            thumbnail_path: thumbnail_path_str.clone(),
+                                            favorite: false,
+                                            hash: downloaded.hash.clone(),
+                                            order: Some(task_clone.download_start_time as i64), // 默认 order = crawled_at（越晚越大）
+                                        };
+                                        if storage.add_image(image_info.clone()).is_ok() {
+                                            should_emit = true;
+                                            emitted_image_id = Some(image_info.id);
+                                        }
                                     }
                                 } else {
                                     // 已有记录重用，也通知前端刷新列表，因为有可能缩略图被重新生成

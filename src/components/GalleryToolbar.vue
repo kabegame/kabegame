@@ -1,8 +1,8 @@
 <template>
-  <div class="gallery-toolbar">
-    <div class="toolbar-left">
+  <PageHeader title="画廊" sticky>
+    <template #left>
       <el-select :model-value="filterPluginId" @update:model-value="$emit('update:filterPluginId', $event)"
-        placeholder="筛选收集源" clearable style="width: 150px" popper-class="crawl-plugin-select-dropdown">
+        placeholder="筛选源" clearable style="width: 150px" popper-class="crawl-plugin-select-dropdown">
         <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
           <div class="plugin-option">
             <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]" class="plugin-option-icon" />
@@ -23,8 +23,15 @@
           <Refresh />
         </el-icon>
       </el-button>
-    </div>
-    <div class="toolbar-right">
+      <el-tooltip content="去重：仅从画廊移除，不删除源文件" placement="bottom">
+        <el-button @click="$emit('dedupeByHash')" :loading="dedupeLoading" :disabled="dedupeLoading">
+          <el-icon>
+            <Filter />
+          </el-icon>
+          去重
+        </el-button>
+      </el-tooltip>
+    </template>
       <el-badge v-if="activeRunningTasksCount > 0" :value="activeRunningTasksCount" :max="99" class="tasks-badge">
         <el-button @click="$emit('showTasksDrawer')" class="tasks-drawer-trigger" circle type="primary">
           <el-icon>
@@ -41,15 +48,15 @@
         <el-icon>
           <Plus />
         </el-icon>
-        开始收集
+        导入
       </el-button>
-    </div>
-  </div>
+  </PageHeader>
 </template>
 
 <script setup lang="ts">
-import { Grid, Refresh, List, Plus, Star } from "@element-plus/icons-vue";
+import { Grid, Refresh, List, Plus, Star, Filter } from "@element-plus/icons-vue";
 import type { Plugin } from "@/stores/plugins";
+import PageHeader from "@/components/common/PageHeader.vue";
 
 interface Props {
   filterPluginId: string | null;
@@ -57,15 +64,18 @@ interface Props {
   pluginIcons: Record<string, string>;
   activeRunningTasksCount: number;
   showFavoritesOnly?: boolean;
+  dedupeLoading?: boolean;
 }
 
-const props = withDefaults(defineProps<Props>(), {
+withDefaults(defineProps<Props>(), {
   showFavoritesOnly: false,
+  dedupeLoading: false,
 });
 
 defineEmits<{
   "update:filterPluginId": [value: string | null];
   refresh: [];
+  dedupeByHash: [];
   showTasksDrawer: [];
   showCrawlerDialog: [];
   toggleFavoritesOnly: [];
@@ -73,28 +83,6 @@ defineEmits<{
 </script>
 
 <style scoped lang="scss">
-.gallery-toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-  padding: 12px 16px;
-  background: var(--anime-bg-card);
-  border-radius: 12px;
-  box-shadow: var(--anime-shadow);
-
-  .toolbar-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .toolbar-right {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
   .add-task-btn {
     box-shadow: var(--anime-shadow);
 
@@ -132,7 +120,6 @@ defineEmits<{
       display: inline-flex !important;
       align-items: center !important;
       justify-content: center !important;
-    }
   }
 }
 </style>

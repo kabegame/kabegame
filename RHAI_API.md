@@ -2,6 +2,87 @@
 
 本文档列出了所有可在 Rhai 脚本中使用的爬虫相关函数。
 
+## 插件变量（来自 `config.json` 的 `var`）
+
+Rhai 脚本里可以直接使用插件在 `config.json` 中声明的变量（由前端表单收集后传入）。
+
+### 变量类型与在脚本中的形态
+
+- `int` / `float`: 数字
+- `boolean`: 布尔
+- `options`（单选）: **字符串（variable）**
+- `list`（字符串列表）: **字符串数组**，例如 `["jpg","png"]`
+- `checkbox`（多选）: **对象（bool map）**，key 为 `variable`，value 为 `true/false`
+
+### `options` / `checkbox` 的 `options` 定义格式
+
+推荐在 `config.json` 中使用：
+
+```json
+{
+  "key": "quality",
+  "type": "options",
+  "name": "图片质量",
+  "options": [
+    { "name": "高清", "variable": "high" },
+    { "name": "中等", "variable": "medium" }
+  ],
+  "default": "high"
+}
+```
+
+- 前端 UI 显示 `name`
+- 实际传入脚本 / 保存到配置的是 `variable`
+- 兼容旧格式：`["high","medium"]`（等价于 `name=variable`）
+
+### `list` 的说明（不要引入 name/variable）
+
+`list` 的值是**可变长字符串数组**，例如本地导入的扩展名：
+
+```json
+{
+  "key": "file_extensions",
+  "type": "list",
+  "name": "文件扩展名",
+  "default": ["jpg", "png"],
+  "options": ["jpg", "png", "webp", "gif"]
+}
+```
+
+- `list.options`（如果提供）应保持为 `string[]`，用于“建议项/可选项”
+- 不要把 `list.options` 写成 `{ "name": "...", "variable": "..." }`，否则会误导成固定枚举
+
+### `checkbox` 在脚本中的用法示例
+
+如果 `config.json` 中定义：
+
+```json
+{
+  "key": "wallpaper_type",
+  "type": "checkbox",
+  "name": "壁纸类型",
+  "options": [
+    { "name": "桌面壁纸", "variable": "desktop" },
+    { "name": "手机壁纸", "variable": "mobile" }
+  ],
+  "default": ["desktop", "mobile"]
+}
+```
+
+在 Rhai 脚本中你会收到：
+- `wallpaper_type.desktop` / `wallpaper_type.mobile`（bool）
+
+例如：
+
+```rhai
+if wallpaper_type.desktop {
+  // 下载桌面壁纸
+}
+if wallpaper_type.mobile {
+  // 下载手机壁纸
+}
+```
+
 ## 目录
 
 - [页面导航](#页面导航)
@@ -322,6 +403,31 @@ let url3 = "https://example.com/page.html";
 print(is_image_url(url1));  // true
 print(is_image_url(url2));  // true
 print(is_image_url(url3));  // false
+```
+
+---
+
+### `re_is_match(pattern, text)`
+
+使用正则表达式判断 `text` 是否匹配 `pattern`。
+
+**参数：**
+- `pattern` (string): 正则表达式（使用 Rust `regex` 语法）
+- `text` (string): 要匹配的文本
+
+**返回值：**
+- `bool`: 匹配返回 `true`，否则返回 `false`
+
+**注意：**
+- 如果 `pattern` 不是合法正则表达式，会返回 `false`（不会抛异常）
+
+**示例：**
+```rhai
+let url = "https://example.com/ranking-daily-imgpc/1";
+print(re_is_match("imgpc", url));           // true
+print(re_is_match("^https://", url));      // true
+print(re_is_match("imgsp", url));          // false
+print(re_is_match("(", url));              // false（非法正则，返回 false）
 ```
 
 ---

@@ -1,9 +1,6 @@
 <template>
-  <div class="image-item"
-    :class="{ 'image-item-selected': selected, 'image-item-dragging': isDragging, 'image-item-drag-over': isDragOver }"
-    ref="itemRef" :data-id="image.id" :data-index="dragIndex" :draggable="draggable"
-    @contextmenu.prevent="$emit('contextmenu', $event)" @dragstart="handleDragStartForReorder"
-    @dragover.prevent="handleDragOver" @drop="handleDrop" @dragend="handleDragEnd" @dragleave="handleDragLeave">
+  <div class="image-item" :class="{ 'image-item-selected': selected }" ref="itemRef" :data-id="image.id"
+    @contextmenu.prevent="$emit('contextmenu', $event)">
     <transition name="fade-in" mode="out-in">
       <div v-if="!hasImageUrl" key="loading" class="thumbnail-loading" :style="loadingStyle">
         <el-skeleton :rows="0" animated>
@@ -15,21 +12,69 @@
       <div v-else-if="imageClickAction === 'preview' && originalUrl" key="preview" class="image-preview-wrapper"
         :style="imageHeightStyle" @click.stop="$emit('click', $event)" @dblclick.stop="$emit('dblclick', $event)"
         @contextmenu.prevent.stop="$emit('contextmenu', $event)">
-        <img :src="displayUrl" class="thumbnail" :alt="image.id" loading="lazy" :draggable="!draggable"
-          @dragstart="handleDragStart" @error="(e: any) => { if (originalUrl) e.target.src = originalUrl; }" />
+        <img :src="displayUrl" :class="['thumbnail', { 'thumbnail-loading': isImageLoading }]" :alt="image.id"
+          loading="lazy" draggable="false" @load="handleImageLoad"
+          @error="(e: any) => { if (originalUrl) e.target.src = originalUrl; }" />
+        <!-- 箭头按钮（仅在选中且允许移动时显示） -->
+        <div v-if="selected && (props.canMoveItem ?? true)" class="order-arrows">
+          <button v-if="showUpArrow" class="arrow-btn arrow-up" @click.stop="handleMove('up')" title="向上移动">
+            <el-icon>
+              <ArrowUp />
+            </el-icon>
+          </button>
+          <button v-if="showDownArrow" class="arrow-btn arrow-down" @click.stop="handleMove('down')" title="向下移动">
+            <el-icon>
+              <ArrowDown />
+            </el-icon>
+          </button>
+          <button v-if="showLeftArrow" class="arrow-btn arrow-left" @click.stop="handleMove('left')" title="向左移动">
+            <el-icon>
+              <ArrowLeft />
+            </el-icon>
+          </button>
+          <button v-if="showRightArrow" class="arrow-btn arrow-right" @click.stop="handleMove('right')" title="向右移动">
+            <el-icon>
+              <ArrowRight />
+            </el-icon>
+          </button>
+        </div>
       </div>
       <div v-else key="open" class="image-wrapper" :style="imageHeightStyle" @click.stop="$emit('click', $event)"
         @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)">
-        <img :src="displayUrl" class="thumbnail" :alt="image.id" loading="lazy" :draggable="!draggable"
-          @dragstart="handleDragStart" @error="(e: any) => { if (originalUrl) e.target.src = originalUrl; }" />
+        <img :src="displayUrl" :class="['thumbnail', { 'thumbnail-loading': isImageLoading }]" :alt="image.id"
+          loading="lazy" draggable="false" @load="handleImageLoad"
+          @error="(e: any) => { if (originalUrl) e.target.src = originalUrl; }" />
+        <!-- 箭头按钮（仅在选中且允许移动时显示） -->
+        <div v-if="selected && (props.canMoveItem ?? true)" class="order-arrows">
+          <button v-if="showUpArrow" class="arrow-btn arrow-up" @click.stop="handleMove('up')" title="向上移动">
+            <el-icon>
+              <ArrowUp />
+            </el-icon>
+          </button>
+          <button v-if="showDownArrow" class="arrow-btn arrow-down" @click.stop="handleMove('down')" title="向下移动">
+            <el-icon>
+              <ArrowDown />
+            </el-icon>
+          </button>
+          <button v-if="showLeftArrow" class="arrow-btn arrow-left" @click.stop="handleMove('left')" title="向左移动">
+            <el-icon>
+              <ArrowLeft />
+            </el-icon>
+          </button>
+          <button v-if="showRightArrow" class="arrow-btn arrow-right" @click.stop="handleMove('right')" title="向右移动">
+            <el-icon>
+              <ArrowRight />
+            </el-icon>
+          </button>
+        </div>
       </div>
     </transition>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { computed, ref, onMounted, onUnmounted, watch, nextTick } from "vue";
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
 import type { ImageInfo } from "@/stores/crawler";
 
 interface Props {
@@ -40,8 +85,10 @@ interface Props {
   aspectRatioMatchWindow?: boolean; // 图片宽高比是否与窗口相同
   windowAspectRatio?: number; // 窗口宽高比
   selected?: boolean; // 是否被选中
-  draggable?: boolean; // 是否可以通过拖动来调整顺序
-  dragIndex?: number; // 当前项在列表中的索引（用于拖拽排序）
+  canMoveItem?: boolean; // 是否允许显示/使用移动箭头
+  gridColumns?: number; // 网格列数（0 表示 auto-fill）
+  gridIndex?: number; // 在网格中的索引
+  totalImages?: number; // 总图片数
 }
 
 const props = defineProps<Props>();
@@ -50,10 +97,7 @@ const emit = defineEmits<{
   click: [event?: MouseEvent];
   dblclick: [event?: MouseEvent];
   contextmenu: [event: MouseEvent];
-  dragstart: [event: DragEvent, index: number];
-  dragover: [event: DragEvent, index: number];
-  drop: [event: DragEvent, index: number];
-  dragend: [event: DragEvent];
+  move: [image: ImageInfo, direction: "up" | "down" | "left" | "right"];
 }>();
 
 const thumbnailUrl = computed(() => props.imageUrl?.thumbnail);
@@ -72,8 +116,9 @@ const displayUrl = computed(() => {
 
 const itemRef = ref<HTMLElement | null>(null);
 const itemWidth = ref<number>(0);
-const isDragging = ref(false);
-const isDragOver = ref(false);
+const isImageLoading = ref(true); // 跟踪图片是否正在加载
+const isFirstMount = ref(true); // 跟踪是否是首次挂载
+const loadingTimer = ref<number | null>(null); // 存储定时器ID，防止重复设置
 
 // 使用 ResizeObserver 监听元素宽度变化
 let resizeObserver: ResizeObserver | null = null;
@@ -94,6 +139,30 @@ onMounted(() => {
 
     resizeObserver.observe(itemRef.value);
   }
+
+  // 挂载时始终播放动画（刷新时也应该有动画）
+  // 等待图片加载完成或动画完成后移除加载状态
+  if (displayUrl.value) {
+    nextTick(() => {
+      const imgElement = itemRef.value?.querySelector('.thumbnail') as HTMLImageElement | null;
+      if (imgElement) {
+        if (imgElement.complete && imgElement.naturalHeight !== 0) {
+          // 图片已在缓存中，但仍要播放动画，等待动画完成后再移除加载状态
+          if (loadingTimer.value) {
+            clearTimeout(loadingTimer.value);
+          }
+          loadingTimer.value = window.setTimeout(() => {
+            isImageLoading.value = false;
+            isFirstMount.value = false;
+            loadingTimer.value = null;
+          }, 400); // 400ms 等于动画时长
+        }
+        // 如果图片未加载完成，会在 handleImageLoad 中处理
+      }
+    });
+  } else {
+    isFirstMount.value = false;
+  }
 });
 
 onUnmounted(() => {
@@ -101,6 +170,11 @@ onUnmounted(() => {
     resizeObserver.unobserve(itemRef.value);
     resizeObserver.disconnect();
     resizeObserver = null;
+  }
+  // 清理定时器
+  if (loadingTimer.value) {
+    clearTimeout(loadingTimer.value);
+    loadingTimer.value = null;
   }
 });
 
@@ -141,117 +215,134 @@ watch(() => props.windowAspectRatio, () => {
   }
 });
 
-// 处理拖拽排序
-function handleDragStartForReorder(event: DragEvent) {
-  if (!props.draggable || props.dragIndex === undefined) return;
-
-  isDragging.value = true;
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", props.image.id);
-    // 设置拖拽预览
-    if (itemRef.value) {
-      event.dataTransfer.setDragImage(itemRef.value, 0, 0);
-    }
-  }
-  emit("dragstart", event, props.dragIndex);
-}
-
-function handleDragOver(event: DragEvent) {
-  if (!props.draggable || props.dragIndex === undefined) return;
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = "move";
-  }
-  isDragOver.value = true;
-  emit("dragover", event, props.dragIndex);
-}
-
-function handleDrop(event: DragEvent) {
-  if (!props.draggable || props.dragIndex === undefined) return;
-  isDragOver.value = false;
-  emit("drop", event, props.dragIndex);
-}
-
-function handleDragEnd(event: DragEvent) {
-  isDragging.value = false;
-  isDragOver.value = false;
-  emit("dragend", event);
-}
-
-function handleDragLeave() {
-  isDragOver.value = false;
-}
-
-// 处理拖拽，传递原图路径给目标应用（当 draggable 为 false 时使用）
-function handleDragStart(event: DragEvent) {
-  // 如果启用了拖拽排序，则不允许文件拖拽
-  if (props.draggable) {
-    event.preventDefault();
+// 监听displayUrl变化，重置加载状态（仅在URL真正变化时触发，不是首次挂载）
+let previousUrl = displayUrl.value;
+watch(() => displayUrl.value, (newUrl) => {
+  // 如果URL没有真正变化（首次挂载时），跳过，让onMounted处理
+  if (newUrl === previousUrl) {
     return;
   }
-  if (!event.dataTransfer) return;
-
-  const originalPath = props.image.localPath || props.image.thumbnailPath;
-  if (!originalPath) return;
-
-  // 移除 Windows 长路径前缀 \\?\（如果存在）
-  const normalizedPath = originalPath.trimStart().replace(/^\\\\\?\\/, "");
-
-  // 构造 file:// URL
-  const fileUrl = normalizedPath.match(/^[A-Za-z]:/)
-    ? `file:///${normalizedPath.replace(/\\/g, "/")}`
-    : `file://${normalizedPath}`;
-
-  // 文件名用于 DownloadURL
-  const fileName = normalizedPath.split(/[/\\]/).pop() || "image.jpg";
-  const mimeGuess = "image/jpeg";
-
-  // 覆盖默认拖拽数据
-  event.dataTransfer.effectAllowed = "copy";
-  event.dataTransfer.clearData();
-  if (event.dataTransfer.items) {
-    while (event.dataTransfer.items.length > 0) {
-      event.dataTransfer.items.remove(0);
+  previousUrl = newUrl;
+  // URL变化时，重置加载状态
+  isImageLoading.value = true;
+  // 使用nextTick检查图片是否已经在缓存中并已加载完成
+  nextTick(() => {
+    const imgElement = itemRef.value?.querySelector('.thumbnail') as HTMLImageElement | null;
+    if (imgElement && imgElement.complete && imgElement.naturalHeight !== 0) {
+      // 图片已经在缓存中并已加载完成，不播放动画
+      isImageLoading.value = false;
     }
-  }
-
-  event.dataTransfer.setData("text/plain", normalizedPath);
-  event.dataTransfer.setData("text/uri-list", fileUrl);
-  // Chrome/Edge 识别的 DownloadURL 语法: <mime>:<filename>:<url>
-  try {
-    event.dataTransfer.setData("DownloadURL", `${mimeGuess}:${fileName}:${fileUrl}`);
-  } catch {
-    // 忽略
-  }
-  try {
-    event.dataTransfer.setData("application/x-moz-file", normalizedPath);
-  } catch {
-    // 忽略兼容性错误
-  }
-
-  // 使用缩略图作为拖拽预览，不影响传出的原图路径
-  if (displayUrl.value) {
-    const img = new Image();
-    img.src = displayUrl.value;
-    const setDragImg = () => event.dataTransfer?.setDragImage(img, 0, 0);
-    if (img.complete) {
-      setDragImg();
-    } else {
-      img.onload = setDragImg;
-      img.onerror = () => {
-        const empty = new Image();
-        empty.src =
-          "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-        event.dataTransfer?.setDragImage(empty, 0, 0);
-      };
-    }
-  }
-
-  // 同步调用原生命令，将文件写入系统剪贴板（部分应用如微信可粘贴）
-  // 说明：拖拽数据仍然提供路径；若目标应用只接受原生文件拖放，可提示用户尝试 Ctrl+V 粘贴。
-  invoke("copy_files_to_clipboard", { paths: [normalizedPath] }).catch(() => {
-    /* 忽略失败 */
   });
+});
+
+// 处理图片加载完成
+function handleImageLoad(event: Event) {
+  const img = event.target as HTMLImageElement;
+  if (img.complete && img.naturalHeight !== 0) {
+    if (isFirstMount.value) {
+      // 首次挂载时，需要等待动画完成
+      // 如果已经有定时器在运行，不再重复设置
+      if (!loadingTimer.value) {
+        loadingTimer.value = window.setTimeout(() => {
+          isImageLoading.value = false;
+          isFirstMount.value = false;
+          loadingTimer.value = null;
+        }, 400); // 400ms 等于动画时长
+      }
+    } else {
+      // 非首次加载（URL变化），立即移除加载状态
+      isImageLoading.value = false;
+    }
+  }
+}
+
+// 已移除图片原生拖拽（draggable/dragstart），以支持画廊“直接鼠标拖拽滚动”手势
+
+// 计算行列位置和箭头显示
+const gridColumns = computed(() => props.gridColumns || 0);
+const gridIndex = computed(() => props.gridIndex ?? 0);
+const totalImages = computed(() => props.totalImages ?? 0);
+
+// 计算实际列数（如果是 auto-fill，需要从 DOM 获取）
+// 初始值：如果 gridColumns 有值就用它，否则设为 0（auto-fill 需要从 DOM 计算）
+const actualColumns = ref<number>(gridColumns.value > 0 ? gridColumns.value : 0);
+
+onMounted(() => {
+  if (gridColumns.value === 0 && itemRef.value) {
+    // 对于 auto-fill，从父元素计算实际列数
+    const updateColumns = () => {
+      if (itemRef.value?.parentElement) {
+        const grid = itemRef.value.parentElement;
+        // 使用更可靠的方法：检查第一个子元素的位置
+        const firstChild = grid.firstElementChild as HTMLElement;
+        if (firstChild) {
+          const firstRect = firstChild.getBoundingClientRect();
+          let cols = 1;
+          // 遍历所有子元素，找到有多少个在同一行
+          for (let i = 1; i < grid.children.length; i++) {
+            const child = grid.children[i] as HTMLElement;
+            const childRect = child.getBoundingClientRect();
+            // 如果这个元素和第一个元素在同一行（Y 坐标相近），则列数+1
+            if (Math.abs(childRect.top - firstRect.top) < 10) {
+              cols++;
+            } else {
+              break; // 遇到下一行就停止
+            }
+          }
+          if (cols > 0) {
+            actualColumns.value = cols;
+          }
+        }
+      }
+    };
+    // 使用 nextTick 确保 DOM 已渲染
+    setTimeout(updateColumns, 100);
+    // 监听窗口大小变化
+    const resizeHandler = () => {
+      setTimeout(updateColumns, 50);
+    };
+    window.addEventListener("resize", resizeHandler);
+    onUnmounted(() => {
+      window.removeEventListener("resize", resizeHandler);
+    });
+  } else if (gridColumns.value > 0) {
+    actualColumns.value = gridColumns.value;
+  }
+});
+
+// 计算行列
+const row = computed(() => {
+  // 如果 actualColumns 为 0，说明还没有计算出列数，此时不显示箭头（返回 0）
+  if (actualColumns.value === 0) return 0;
+  return Math.floor(gridIndex.value / actualColumns.value);
+});
+
+const col = computed(() => {
+  if (actualColumns.value === 0) return 0;
+  return gridIndex.value % actualColumns.value;
+});
+
+// 判断是否显示箭头
+const showUpArrow = computed(() => row.value > 0);
+const showDownArrow = computed(() => {
+  if (actualColumns.value === 0) return false;
+  // 计算下一行同一列的索引
+  const nextRowSameColIndex = gridIndex.value + actualColumns.value;
+  // 只有当下一行同一列存在图片时才显示下箭头
+  return nextRowSameColIndex < totalImages.value;
+});
+const showLeftArrow = computed(() => col.value > 0);
+const showRightArrow = computed(() => {
+  if (actualColumns.value === 0) return false;
+  // 检查是否在最后一列
+  const isLastCol = col.value === actualColumns.value - 1;
+  // 如果不在最后一行，或者最后一行但后面还有图片，则显示右箭头
+  return isLastCol ? false : (gridIndex.value + 1 < totalImages.value);
+});
+
+// 处理移动
+function handleMove(direction: "up" | "down" | "left" | "right") {
+  emit("move", props.image, direction);
 }
 </script>
 
@@ -261,12 +352,13 @@ function handleDragStart(event: DragEvent) {
   border-radius: 16px;
   overflow: hidden;
   cursor: pointer;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease, border-color 0.25s ease;
   background: var(--anime-bg-card);
   box-shadow: var(--anime-shadow);
   box-sizing: border-box;
 
   &:hover {
+    transform: translateY(-6px) scale(1.015);
     box-shadow: var(--anime-shadow-hover);
     outline: 3px solid var(--anime-primary-light);
     outline-offset: -2px;
@@ -291,17 +383,6 @@ function handleDragStart(event: DragEvent) {
         0 0 30px rgba(255, 107, 157, 0.6),
         0 6px 16px rgba(255, 107, 157, 0.4);
     }
-  }
-
-  &.image-item-dragging {
-    opacity: 0.5;
-    cursor: grabbing;
-  }
-
-  &.image-item-drag-over {
-    border-color: var(--anime-primary);
-    border-width: 3px;
-    box-shadow: 0 0 0 3px rgba(255, 107, 157, 0.3);
   }
 
   .image-wrapper {
@@ -340,7 +421,10 @@ function handleDragStart(event: DragEvent) {
     height: 100%;
     border-radius: 14px 14px 0 0;
     object-fit: cover;
-    animation: fadeInImage 0.4s ease-in;
+
+    &.thumbnail-loading {
+      animation: fadeInImage 0.4s ease-in;
+    }
   }
 
   .thumbnail-loading {
@@ -394,5 +478,70 @@ function handleDragStart(event: DragEvent) {
   to {
     opacity: 1;
   }
+}
+
+// 箭头按钮样式
+.order-arrows {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.arrow-btn {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border-radius: 0;
+  background: rgba(255, 107, 157, 0.85);
+  border: none;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: all;
+  opacity: 0;
+  transition: opacity 0.2s ease, background 0.2s ease;
+  box-shadow: none;
+
+  &:hover {
+    opacity: 0.7;
+    background: rgba(255, 77, 138, 0.95);
+  }
+
+  .el-icon {
+    font-size: 16px;
+  }
+}
+
+.arrow-up {
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.arrow-down {
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.arrow-left {
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.arrow-right {
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 </style>

@@ -79,8 +79,10 @@ import { ref, reactive, computed, onMounted } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus } from "@element-plus/icons-vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
+import { useRouter } from "vue-router";
 
 const pluginStore = usePluginStore();
+const router = useRouter();
 
 const plugins = computed(() => pluginStore.plugins);
 const showAddDialog = ref(false);
@@ -110,8 +112,10 @@ const handleSave = async () => {
       await pluginStore.updatePlugin(editingPlugin.value.id, pluginForm);
       ElMessage.success("插件已更新");
     } else {
-      await pluginStore.addPlugin(pluginForm);
-      ElMessage.success("插件已添加");
+      // 后端插件来源为 .kgpg 导入/商店安装/浏览器安装，不支持通过表单“创建新插件”
+      ElMessage.info("请前往「源」页面导入/安装插件");
+      router.push("/plugin-browser");
+      return;
     }
     showAddDialog.value = false;
     resetForm();

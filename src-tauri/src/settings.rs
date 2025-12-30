@@ -9,7 +9,7 @@ fn get_app_data_dir() -> PathBuf {
     dirs::data_local_dir()
         .or_else(|| dirs::data_dir())
         .expect("Failed to get app data directory")
-        .join("Kabegami Crawler")
+        .join("Kabegame")
 }
 
 fn default_wallpaper_rotation_style() -> String {
@@ -45,6 +45,8 @@ pub struct AppSettings {
     pub gallery_image_aspect_ratio_match_window: bool, // 画廊图片宽高比是否与窗口相同
     pub gallery_page_size: u32,     // 画廊每次加载数量
     #[serde(default)]
+    pub auto_deduplicate: bool,     // 是否自动去重（根据哈希值跳过重复图片）
+    #[serde(default)]
     pub default_download_dir: Option<String>, // 默认下载目录（为空则使用应用内置目录）
     #[serde(default)]
     pub wallpaper_engine_dir: Option<String>, // Wallpaper Engine 安装目录（用于自动导入工程到 myprojects）
@@ -64,6 +66,10 @@ pub struct AppSettings {
     pub wallpaper_mode: String, // 壁纸模式："native"（原生）、"window"（窗口句柄）
     #[serde(default)]
     pub window_state: Option<WindowState>, // 窗口位置和大小
+    #[serde(default)]
+    pub restore_last_tab: bool, // 是否恢复上次的 tab
+    #[serde(default)]
+    pub last_tab_path: Option<String>, // 上次的 tab 路径
 }
 
 impl Default for AppSettings {
@@ -76,6 +82,7 @@ impl Default for AppSettings {
             gallery_columns: 0, // 0 表示自动（auto-fill）
             gallery_image_aspect_ratio_match_window: false,
             gallery_page_size: 50,
+            auto_deduplicate: false, // 默认不去重
             default_download_dir: None,
             wallpaper_engine_dir: None,
             wallpaper_rotation_enabled: false,
@@ -86,6 +93,8 @@ impl Default for AppSettings {
             wallpaper_rotation_transition: "none".to_string(),
             wallpaper_mode: "native".to_string(),
             window_state: None,
+            restore_last_tab: false,
+            last_tab_path: None,
         }
     }
 }
@@ -317,6 +326,9 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
         if let Some(page_size) = json_value.get("galleryPageSize").and_then(|v| v.as_u64()) {
             settings.gallery_page_size = page_size as u32;
         }
+        if let Some(auto_deduplicate) = json_value.get("autoDeduplicate").and_then(|v| v.as_bool()) {
+            settings.auto_deduplicate = auto_deduplicate;
+        }
         if let Some(dir) = json_value.get("defaultDownloadDir") {
             settings.default_download_dir = match dir {
                 serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.to_string()),
@@ -400,7 +412,7 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
                 .map_err(|e| format!("Failed to get current exe path: {}", e))?;
 
             let auto_launch = AutoLaunchBuilder::new()
-                .set_app_name("Kabegami")
+                .set_app_name("Kabegame")
                 .set_app_path(app_path.to_str().unwrap())
                 .build()
                 .map_err(|e| format!("Failed to create auto launch: {}", e))?;
@@ -462,6 +474,13 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
     pub fn set_gallery_page_size(&self, page_size: u32) -> Result<(), String> {
         let mut settings = self.get_settings()?;
         settings.gallery_page_size = page_size;
+        self.save_settings(&settings)?;
+        Ok(())
+    }
+
+    pub fn set_auto_deduplicate(&self, enabled: bool) -> Result<(), String> {
+        let mut settings = self.get_settings()?;
+        settings.auto_deduplicate = enabled;
         self.save_settings(&settings)?;
         Ok(())
     }
@@ -642,6 +661,20 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
     pub fn clear_window_state(&self) -> Result<(), String> {
         let mut settings = self.get_settings()?;
         settings.window_state = None;
+        self.save_settings(&settings)?;
+        Ok(())
+    }
+
+    pub fn set_restore_last_tab(&self, enabled: bool) -> Result<(), String> {
+        let mut settings = self.get_settings()?;
+        settings.restore_last_tab = enabled;
+        self.save_settings(&settings)?;
+        Ok(())
+    }
+
+    pub fn set_last_tab_path(&self, path: Option<String>) -> Result<(), String> {
+        let mut settings = self.get_settings()?;
+        settings.last_tab_path = path;
         self.save_settings(&settings)?;
         Ok(())
     }

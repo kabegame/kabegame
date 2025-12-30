@@ -27,6 +27,11 @@ dist-ssr
 src-tauri/target
 src-tauri/Cargo.lock
 
+# Tauri generated icons (keep only icon.png and README.md)
+src-tauri/icons/*
+!src-tauri/icons/icon.png
+!src-tauri/icons/README.md
+
 # Test plugins (packaged)
 test_plugin/**/*.kgpg
 test_plugin_packed/
@@ -34,3 +39,5 @@ test_plugin_packed/
 # Nx
 .nx/cache
 .nx/workspace-data
+
+.taurignore
