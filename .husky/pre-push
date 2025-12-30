@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
 . "$(dirname -- "$0")/_/husky.sh"
 
-node scripts/git/ensure-tag.mjs
+node crawler-plugins/scripts/git/ensure-tag.mjs
 
