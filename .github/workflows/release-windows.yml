@@ -2,17 +2,30 @@ name: Build and Release Windows Installer
 
 on:
   push:
+    branches:
+      - main # 当推送到 main 分支时触发
     tags:
       - "v*" # 当推送以 v 开头的 tag 时触发
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Is this a prerelease?"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
-  build-windows:
+  build-and-release:
     name: Build Windows Installer
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -33,18 +46,77 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
+      - name: Get version from package.json or Cargo.toml
+        id: version
+        shell: bash
+        run: |
+          if [ -f "package.json" ]; then
+            VERSION=$(node -p "require('./package.json').version")
+          elif [ -f "src-tauri/Cargo.toml" ]; then
+            VERSION=$(grep -m1 '^version\s*=' src-tauri/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          else
+            echo "Error: Could not find package.json or Cargo.toml"
+            exit 1
+          fi
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Version: ${VERSION}"
+          echo "Tag: ${TAG}"
+
+      - name: Check if tag already exists
+        id: check_tag
+        shell: bash
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "⚠️  Tag $TAG already exists, skipping release"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "✅ Tag $TAG does not exist, proceeding with release"
+          fi
+
       - name: Build frontend
+        if: steps.check_tag.outputs.exists == 'false'
         run: pnpm run build
 
+      - name: Generate changelog
+        if: steps.check_tag.outputs.exists == 'false'
+        id: changelog
+        shell: bash
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            CHANGES=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            CHANGES=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
+
+          {
+            echo "changelog<<EOF"
+            echo "## 📝 更新内容"
+            echo ""
+            if [ -z "$CHANGES" ]; then
+              echo "- 无变更记录"
+            else
+              echo "$CHANGES"
+            fi
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
       - name: Build Tauri app and create release
+        if: steps.check_tag.outputs.exists == 'false'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: src-tauri
-          tagName: ${{ github.ref_name }}
-          releaseName: "Kabegame ${{ github.ref_name }}"
-          releaseBody: "See the assets to download this version and install."
+          tagName: ${{ steps.version.outputs.tag }}
+          releaseName: "Kabegame ${{ steps.version.outputs.tag }}"
+          releaseBody: ${{ steps.changelog.outputs.changelog }}
           releaseDraft: false
-          releasePrerelease: false
+          releasePrerelease: ${{ github.event.inputs.prerelease || contains(steps.version.outputs.version, '-') || contains(steps.version.outputs.version, 'alpha') || contains(steps.version.outputs.version, 'beta') || contains(steps.version.outputs.version, 'rc') }}
           args: "--bundles nsis"

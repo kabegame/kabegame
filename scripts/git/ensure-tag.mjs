@@ -80,6 +80,15 @@ function main() {
     const create = tryExecGit(["tag", "-a", tag, "-m", `Kabegame ${tag}`], { cwd: root });
     if (create.ok) {
       process.stdout.write(`[pre-push] created tag '${tag}'\n`);
+      // 尝试推送 tag 到远程（不阻断 push，失败也不影响）
+      const push = tryExecGit(["push", "origin", tag], { cwd: root });
+      if (push.ok) {
+        process.stdout.write(`[pre-push] pushed tag '${tag}' to remote\n`);
+      } else {
+        process.stderr.write(
+          `[pre-push] warn: failed to push tag '${tag}' to remote (non-blocking)\n${push.stderr || push.stdout}\n`
+        );
+      }
     } else {
       // 常见：并发/已有 tag/仓库状态问题；不阻断 push
       process.stderr.write(
