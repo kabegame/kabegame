@@ -6,7 +6,8 @@
       </el-icon>
       <span style="margin-left: 8px;">浏览</span>
     </div>
-    <div v-if="(albumImageCount ?? 0) > 0" class="context-menu-item" @click.stop="$emit('command', 'setWallpaperRotation')">
+    <div v-if="(albumImageCount ?? 0) > 0" class="context-menu-item"
+      @click.stop="$emit('command', 'setWallpaperRotation')">
       <el-icon>
         <Picture />
       </el-icon>
@@ -33,7 +34,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Delete, FolderOpened, Picture, Download, Edit } from "@element-plus/icons-vue";
+import { Delete, FolderOpened, Picture, Edit } from "@element-plus/icons-vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 
 interface Props {
