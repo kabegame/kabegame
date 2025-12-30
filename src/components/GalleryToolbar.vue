@@ -23,14 +23,12 @@
           <Refresh />
         </el-icon>
       </el-button>
-      <el-tooltip content="去重：仅从画廊移除，不删除源文件" placement="bottom">
-        <el-button @click="$emit('dedupeByHash')" :loading="dedupeLoading" :disabled="dedupeLoading">
-          <el-icon>
-            <Filter />
-          </el-icon>
-          去重
-        </el-button>
-      </el-tooltip>
+      <el-button @click="$emit('dedupeByHash')" :loading="dedupeLoading" :disabled="dedupeLoading">
+        <el-icon>
+          <Filter />
+        </el-icon>
+        去重
+      </el-button>
     </template>
       <el-badge v-if="activeRunningTasksCount > 0" :value="activeRunningTasksCount" :max="99" class="tasks-badge">
         <el-button @click="$emit('showTasksDrawer')" class="tasks-drawer-trigger" circle type="primary">

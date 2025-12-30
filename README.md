@@ -165,9 +165,9 @@ pnpm build --local-plugins# 打包本地插件后 tauri build
 ## 插件开发
 
 插件开发相关文档请参考：
-- [插件开发指南](README_PLUGIN_DEV.md)
-- [插件文件格式](PLUGIN_FORMAT.md)
-- [Rhai API 文档](RHAI_API.md)
+- [插件开发指南](docs/README_PLUGIN_DEV.md)
+- [插件文件格式](docs/PLUGIN_FORMAT.md)
+- [Rhai API 文档](docs/RHAI_API.md)
 
 ## 许可证
 

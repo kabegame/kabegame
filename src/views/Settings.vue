@@ -851,6 +851,8 @@ const handleWallpaperModeChange = async (mode: string) => {
   // 设置切换状态
   isModeSwitching.value = true;
 
+  let unlistenFn: (() => void) | null = null as (() => void) | null;
+
   try {
     // 如果切换到原生模式，检查当前样式和过渡效果是否支持
     if (mode === "native") {
@@ -892,25 +894,55 @@ const handleWallpaperModeChange = async (mode: string) => {
       }
     }
 
-    // 创建一个 Promise 来等待切换完成事件
-    const waitForSwitchComplete = new Promise<{ success: boolean; error?: string }>(async (resolve) => {
-      const unlistenFn = await listen<{ success: boolean; mode: string; error?: string }>(
-        "wallpaper-mode-switch-complete",
-        (event) => {
-          // 检查是否是当前切换的模式
-          if (event.payload.mode === mode) {
-            unlistenFn();
-            resolve({
-              success: event.payload.success,
-              error: event.payload.error,
-            });
-          }
+    // 创建一个 Promise 来等待切换完成事件，带超时处理
+    const waitForSwitchComplete = new Promise<{ success: boolean; error?: string }>(async (resolve, reject) => {
+      // 设置 30 秒超时
+      const timeoutId = setTimeout(() => {
+        if (unlistenFn) {
+          unlistenFn();
+          unlistenFn = null;
         }
-      );
+        reject(new Error("切换模式超时：后端未在 30 秒内响应"));
+      }, 30000);
+
+      try {
+        unlistenFn = await listen<{ success: boolean; mode: string; error?: string }>(
+          "wallpaper-mode-switch-complete",
+          (event) => {
+            // 检查是否是当前切换的模式
+            if (event.payload.mode === mode) {
+              clearTimeout(timeoutId);
+              if (unlistenFn) {
+                unlistenFn();
+                unlistenFn = null;
+              }
+              resolve({
+                success: event.payload.success,
+                error: event.payload.error,
+              });
+            }
+          }
+        );
+      } catch (listenError) {
+        clearTimeout(timeoutId);
+        reject(new Error(`监听切换完成事件失败: ${listenError}`));
+      }
     });
 
     // 启动切换（不等待完成）
-    await invoke("set_wallpaper_mode", { mode });
+    try {
+      await invoke("set_wallpaper_mode", { mode });
+    } catch (invokeError: any) {
+      // invoke 本身的错误（比如后端崩溃、网络问题等）
+      if (unlistenFn) {
+        unlistenFn();
+        unlistenFn = null;
+      }
+      const errorMsg = invokeError?.message || invokeError?.toString() || "未知错误";
+      ElMessage.error(`启动模式切换失败: ${errorMsg}`);
+      console.error("invoke set_wallpaper_mode 失败:", invokeError);
+      return;
+    }
 
     // 等待切换完成事件
     const result = await waitForSwitchComplete;
@@ -918,12 +950,26 @@ const handleWallpaperModeChange = async (mode: string) => {
     if (result.success) {
       ElMessage.success("壁纸模式已切换");
     } else {
-      ElMessage.error(result.error || "切换模式失败");
+      // 显示详细的错误信息
+      const errorMsg = result.error || "切换模式失败";
+      ElMessage.error(`切换模式失败: ${errorMsg}`);
+      console.error("模式切换失败:", result.error);
     }
-  } catch (error) {
-    console.error(error);
-    ElMessage.error("切换模式失败");
+  } catch (error: any) {
+    // 处理超时或其他错误
+    const errorMsg = error?.message || error?.toString() || "未知错误";
+    ElMessage.error(`切换模式失败: ${errorMsg}`);
+    console.error("切换模式异常:", error);
   } finally {
+    // 确保清理监听器
+    if (unlistenFn) {
+      try {
+        unlistenFn();
+      } catch (e) {
+        console.warn("清理事件监听器失败:", e);
+      }
+      unlistenFn = null;
+    }
     isModeSwitching.value = false;
   }
 };

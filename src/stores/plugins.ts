@@ -10,7 +10,6 @@ export interface Plugin {
   baseUrl: string;
   enabled: boolean;
   sizeBytes: number;
-  order: number;
   builtIn: boolean;
   config: Record<string, any>;
   selector?: {

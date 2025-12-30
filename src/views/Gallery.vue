@@ -1,60 +1,5 @@
 <template>
   <div class="gallery-page">
-    <!-- 顶部工具栏 -->
-    <PageHeader title="画廊" sticky>
-      <template #left>
-        <el-select :model-value="filterPluginId" @update:model-value="filterPluginId = $event" placeholder="筛选源"
-          clearable style="width: 150px" popper-class="crawl-plugin-select-dropdown">
-          <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
-            <div class="plugin-option">
-              <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]" class="plugin-option-icon" />
-              <el-icon v-else class="plugin-option-icon-placeholder">
-                <Grid />
-              </el-icon>
-              <span>{{ plugin.name }}</span>
-            </div>
-          </el-option>
-        </el-select>
-        <el-button :type="showFavoritesOnly ? 'primary' : 'default'" @click="showFavoritesOnly = !showFavoritesOnly"
-          circle>
-          <el-icon>
-            <Star />
-          </el-icon>
-        </el-button>
-        <el-button @click="loadImages(true, { forceReload: true })" circle>
-          <el-icon>
-            <Refresh />
-          </el-icon>
-        </el-button>
-        <el-tooltip content="去重：仅从画廊移除，不删除源文件" placement="bottom">
-          <el-button @click="handleDedupeByHash" :loading="dedupeLoading" :disabled="dedupeLoading">
-            <el-icon>
-              <Filter />
-            </el-icon>
-            去重
-          </el-button>
-        </el-tooltip>
-      </template>
-      <el-badge v-if="activeRunningTasksCount > 0" :value="activeRunningTasksCount" :max="99" class="tasks-badge">
-        <el-button @click="showTasksDrawer = true" class="tasks-drawer-trigger" circle type="primary">
-          <el-icon>
-            <List />
-          </el-icon>
-        </el-button>
-      </el-badge>
-      <el-button v-else @click="showTasksDrawer = true" class="tasks-drawer-trigger" circle type="primary">
-        <el-icon>
-          <List />
-        </el-icon>
-      </el-button>
-      <el-button type="primary" @click="showCrawlerDialog = true" class="add-task-btn">
-        <el-icon>
-          <Plus />
-        </el-icon>
-        导入
-      </el-button>
-    </PageHeader>
-
     <GalleryView ref="galleryViewRef" class="gallery-container" mode="gallery" :images="displayedImages"
       :image-url-map="imageSrcMap" :image-click-action="imageClickAction" :columns="galleryColumns"
       :aspect-ratio-match-window="galleryImageAspectRatioMatchWindow" :window-aspect-ratio="windowAspectRatio"
@@ -66,6 +11,13 @@
       @context-command="(payload: any) => handleGridContextCommand(payload)"
       @move="(img: any, dir: any) => handleImageMove(img, dir)">
       <template #before-grid>
+        <!-- 顶部工具栏 -->
+        <GalleryToolbar :filter-plugin-id="filterPluginId" :plugins="plugins" :plugin-icons="pluginIcons"
+          :active-running-tasks-count="activeRunningTasksCount" :show-favorites-only="showFavoritesOnly"
+          :dedupe-loading="dedupeLoading" @update:filter-plugin-id="filterPluginId = $event"
+          @toggle-favorites-only="showFavoritesOnly = !showFavoritesOnly"
+          @refresh="loadImages(true, { forceReload: true })" @dedupe-by-hash="handleDedupeByHash"
+          @show-tasks-drawer="showTasksDrawer = true" @show-crawler-dialog="showCrawlerDialog = true" />
         <div v-if="showSkeleton" class="loading-skeleton">
           <div class="skeleton-grid">
             <div v-for="i in 20" :key="i" class="skeleton-item">
@@ -278,7 +230,7 @@ import { useCrawlerStore, type ImageInfo, type RunConfig } from "@/stores/crawle
 import { useAlbumStore } from "@/stores/albums";
 import { usePluginStore } from "@/stores/plugins";
 import { open } from "@tauri-apps/plugin-dialog";
-import PageHeader from "@/components/common/PageHeader.vue";
+import GalleryToolbar from "@/components/GalleryToolbar.vue";
 import TaskDrawer from "@/components/TaskDrawer.vue";
 import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
 import GalleryView from "@/components/GalleryView.vue";
@@ -2730,66 +2682,6 @@ onUnmounted(() => {
   &.drag-scroll-active {
     cursor: grabbing;
     user-select: none;
-  }
-
-  .gallery-toolbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-    padding: 12px 16px;
-    background: var(--anime-bg-card);
-    border-radius: 12px;
-    box-shadow: var(--anime-shadow);
-
-    .toolbar-left {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .toolbar-right {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .add-task-btn {
-      box-shadow: var(--anime-shadow);
-
-      &:hover {
-        transform: translateY(-2px);
-        box-shadow: var(--anime-shadow-hover);
-      }
-    }
-
-    .tasks-drawer-trigger {
-      box-shadow: var(--anime-shadow);
-      transition: all 0.3s ease;
-
-      &:hover {
-        transform: translateY(-2px);
-        box-shadow: var(--anime-shadow-hover);
-      }
-    }
-
-    .tasks-badge {
-      display: block;
-
-      /* 自定义 badge 数字样式：红色背景圆形 */
-      :deep(.el-badge__content) {
-        background-color: #f56c6c !important;
-        border-color: #f56c6c !important;
-        color: #fff !important;
-        border-radius: 50% !important;
-        min-width: 20px !important;
-        height: 20px !important;
-        line-height: 20px !important;
-        padding: 0 6px !important;
-        font-size: 12px !important;
-        font-weight: 500 !important;
-      }
-    }
   }
 
   .load-more-container {

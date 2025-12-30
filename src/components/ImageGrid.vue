@@ -475,6 +475,9 @@ watch(
   display: grid;
   gap: 16px;
   width: 100%;
+  /* 为图片悬浮上移效果留出空间，避免被容器截断 */
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
 
 /* 列表淡入动画 */

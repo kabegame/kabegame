@@ -34,6 +34,7 @@ withDefaults(defineProps<{
   :deep(.el-tabs__content) {
     scrollbar-width: none !important;
     -ms-overflow-style: none !important;
+    overflow: visible;
 
     &::-webkit-scrollbar {
       display: none !important;
@@ -86,4 +87,3 @@ withDefaults(defineProps<{
   }
 }
 </style>
-

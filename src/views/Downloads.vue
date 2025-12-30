@@ -1,7 +1,6 @@
 <template>
-  <div class="downloads-container">
-    <div class="downloads-header">
-      <h2>正在下载</h2>
+  <TabLayout title="正在下载" max-width="1200px">
+    <template #actions>
       <div class="header-actions">
         <el-button circle size="small" @click="handleRefresh" :loading="isRefreshing">
           <el-icon>
@@ -22,7 +21,7 @@
           <el-tag type="warning">下载中: {{ activeDownloads.length }}</el-tag>
         </div>
       </div>
-    </div>
+    </template>
 
     <el-card v-if="activeDownloads.length === 0 && queueSize === 0" class="empty-card">
       <el-empty description="暂无下载任务" :image-size="100" />
@@ -76,7 +75,7 @@
         </div>
       </el-card>
     </div>
-  </div>
+  </TabLayout>
 </template>
 
 <script setup lang="ts">
@@ -84,6 +83,7 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { Loading, Refresh } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import TabLayout from "@/layouts/TabLayout.vue";
 
 interface ActiveDownloadInfo {
   url: string;
@@ -167,84 +167,64 @@ onUnmounted(() => {
 </script>
 
 <style scoped lang="scss">
-.downloads-container {
-  padding: 20px;
-  max-width: 1200px;
-  margin: 0 auto;
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 
-  .downloads-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
+.header-stats {
+  display: flex;
+  gap: 12px;
+}
 
-    h2 {
-      color: var(--anime-text-primary);
-      font-weight: 600;
-      font-size: 24px;
-      margin: 0;
-    }
+.downloads-card {
+  background: var(--anime-bg-card);
+  border-radius: 16px;
+  box-shadow: var(--anime-shadow);
+  transition: none !important;
 
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
+  &:hover {
+    transform: none !important;
+    box-shadow: var(--anime-shadow) !important;
   }
+}
 
-  .header-stats {
-    display: flex;
-    gap: 12px;
+.empty-card {
+  background: var(--anime-bg-card);
+  border-radius: 16px;
+  box-shadow: var(--anime-shadow);
+  margin-top: 40px;
+}
+
+.url-link {
+  color: var(--anime-primary);
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
   }
+}
 
-  .downloads-card {
+.queue-info {
+  padding: 10px 0;
+}
+
+:deep(.el-table) {
+  background: transparent;
+
+  th {
     background: var(--anime-bg-card);
-    border-radius: 16px;
-    box-shadow: var(--anime-shadow);
-    transition: none !important;
-
-    &:hover {
-      transform: none !important;
-      box-shadow: var(--anime-shadow) !important;
-    }
+    color: var(--anime-text-primary);
   }
 
-  .empty-card {
+  td {
     background: var(--anime-bg-card);
-    border-radius: 16px;
-    box-shadow: var(--anime-shadow);
-    margin-top: 40px;
+    color: var(--anime-text-primary);
   }
 
-  .url-link {
-    color: var(--anime-primary);
-    text-decoration: none;
-
-    &:hover {
-      text-decoration: underline;
-    }
-  }
-
-  .queue-info {
-    padding: 10px 0;
-  }
-
-  :deep(.el-table) {
-    background: transparent;
-
-    th {
-      background: var(--anime-bg-card);
-      color: var(--anime-text-primary);
-    }
-
-    td {
-      background: var(--anime-bg-card);
-      color: var(--anime-text-primary);
-    }
-
-    tr:hover > td {
-      background: rgba(255, 107, 157, 0.05);
-    }
+  tr:hover > td {
+    background: rgba(255, 107, 157, 0.05);
   }
 }
 </style>

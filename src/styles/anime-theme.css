@@ -275,3 +275,17 @@ textarea,
   height: 0 !important;
 }
 
+/* 确保画册详情页面的图片网格容器允许内容溢出，与画廊行为一致 */
+.album-detail .detail-body {
+  overflow-y: auto !important;
+  /* 为图片悬浮上移效果留出空间 */
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+/* 确保所有包含图片网格的容器都允许内容溢出 */
+.album-detail .image-grid-root,
+.gallery-container .image-grid-root {
+  overflow: visible;
+}
+

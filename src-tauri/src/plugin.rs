@@ -32,8 +32,6 @@ pub struct Plugin {
     /// 插件包体大小（.kgpg 文件大小）
     #[serde(rename = "sizeBytes")]
     pub size_bytes: u64,
-    /// UI 排序用（越小越靠前）
-    pub order: i64,
     /// 是否内置插件（目前 .kgpg 均视为非内置）
     #[serde(rename = "builtIn")]
     pub built_in: bool,
@@ -77,9 +75,6 @@ impl PluginManager {
             return Ok(vec![]);
         }
 
-        // 读取排序信息（可选）
-        let orders = self.load_plugin_orders().unwrap_or_default();
-
         let mut plugins = Vec::new();
         let entries = fs::read_dir(&plugins_dir)
             .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
@@ -96,6 +91,12 @@ impl PluginManager {
                         .map_err(|e| format!("Failed to get plugin file metadata: {}", e))?
                         .len();
 
+                    // 获取文件创建时间（安装时间）
+                    let created_time = fs::metadata(&path)
+                        .and_then(|m| m.created())
+                        .or_else(|_| fs::metadata(&path).and_then(|m| m.modified()))
+                        .map_err(|e| format!("Failed to get plugin file time: {}", e))?;
+
                     // 仅使用文件名作为插件 ID（避免冲突）
                     let file_name = path
                         .file_stem()
@@ -103,7 +104,6 @@ impl PluginManager {
                         .unwrap_or("")
                         .to_string();
                     let plugin_id = file_name.clone();
-                    let order = orders.get(&plugin_id).copied().unwrap_or(0);
 
                     let plugin = Plugin {
                         id: plugin_id,
@@ -116,27 +116,18 @@ impl PluginManager {
                             .unwrap_or_default(),
                         enabled: true,
                         size_bytes,
-                        order,
                         built_in: false,
                         config: HashMap::new(),
                         selector: config.and_then(|c| c.selector),
                     };
-                    plugins.push(plugin);
+                    plugins.push((plugin, created_time));
                 }
             }
         }
 
-        // 若没有 order（全为 0），给一个稳定默认顺序；否则按 order 排序
-        let has_any_order = plugins.iter().any(|p| p.order != 0);
-        if has_any_order {
-            plugins.sort_by_key(|p| p.order);
-        } else {
-            // 默认：按文件名排序，并生成 1000 步长 order（与前端更新顺序保持一致）
-            plugins.sort_by(|a, b| a.id.cmp(&b.id));
-            for (idx, p) in plugins.iter_mut().enumerate() {
-                p.order = ((idx as i64) + 1) * 1000;
-            }
-        }
+        // 按文件创建时间排序（越早安装的越靠前）
+        plugins.sort_by_key(|(_, time)| *time);
+        let plugins: Vec<Plugin> = plugins.into_iter().map(|(p, _)| p).collect();
 
         Ok(plugins)
     }
@@ -593,8 +584,6 @@ impl PluginManager {
         let size_bytes = fs::metadata(&target_path)
             .map_err(|e| format!("Failed to get plugin file metadata: {}", e))?
             .len();
-        let orders = self.load_plugin_orders().unwrap_or_default();
-        let order = orders.get(&plugin_id).copied().unwrap_or(0);
 
         let plugin = Plugin {
             id: plugin_id.clone(),
@@ -607,7 +596,6 @@ impl PluginManager {
                 .unwrap_or_default(),
             enabled: true,
             size_bytes,
-            order,
             built_in: false,
             config: HashMap::new(),
             selector: config.and_then(|c| c.selector),
@@ -641,7 +629,6 @@ impl PluginManager {
             base_url: String::new(), // 需要从 JSON 中获取或使用默认值
             enabled: true,
             size_bytes: 0,
-            order: 0,
             built_in: false,
             config: HashMap::new(),
             selector: None,
@@ -677,8 +664,6 @@ impl PluginManager {
                         let size_bytes = fs::metadata(&path)
                             .map_err(|e| format!("Failed to get plugin file metadata: {}", e))?
                             .len();
-                        let orders = self.load_plugin_orders().unwrap_or_default();
-                        let order = orders.get(&file_name).copied().unwrap_or(0);
                         let plugin = Plugin {
                             id: file_name.clone(),
                             name: manifest.name.clone(),
@@ -690,7 +675,6 @@ impl PluginManager {
                                 .unwrap_or_default(),
                             enabled: true,
                             size_bytes,
-                            order,
                             built_in: false,
                             config: HashMap::new(),
                             selector: config.and_then(|c| c.selector),
@@ -1538,42 +1522,6 @@ impl PluginManager {
         })
     }
 
-    /// 更新插件顺序
-    pub fn update_plugins_order(&self, plugin_orders: &[(String, i64)]) -> Result<(), String> {
-        // 插件顺序信息可以保存到配置文件
-        // 目前暂时不实现，因为插件信息直接从文件系统读取
-        // 如果需要实现，可以保存到 plugin_orders.json 文件
-        let file = self.get_plugin_orders_file();
-        if let Some(parent) = file.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create plugin orders directory: {}", e))?;
-        }
-
-        let content = serde_json::to_string_pretty(plugin_orders)
-            .map_err(|e| format!("Failed to serialize plugin orders: {}", e))?;
-        fs::write(&file, content)
-            .map_err(|e| format!("Failed to write plugin orders file: {}", e))?;
-        Ok(())
-    }
-
-    /// 获取插件顺序文件路径
-    fn get_plugin_orders_file(&self) -> PathBuf {
-        let data_dir = get_app_data_dir();
-        data_dir.join("plugin_orders.json")
-    }
-
-    fn load_plugin_orders(&self) -> Result<HashMap<String, i64>, String> {
-        let file = self.get_plugin_orders_file();
-        if !file.exists() {
-            return Ok(HashMap::new());
-        }
-        let content = fs::read_to_string(&file)
-            .map_err(|e| format!("Failed to read plugin orders file: {}", e))?;
-        // 保存格式是 Vec<(String, i64)>
-        let orders_vec: Vec<(String, i64)> = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse plugin orders file: {}", e))?;
-        Ok(orders_vec.into_iter().collect())
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

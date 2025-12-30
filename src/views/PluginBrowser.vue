@@ -27,40 +27,36 @@
           <el-empty description="暂无已安装源" />
         </div>
 
-        <!-- 已安装：布局尽量与商店一致，但支持箭头调整顺序 -->
-        <div v-else class="installed-grid-wrap">
-          <div class="installed-hint">鼠标靠近卡片边缘显示箭头调整顺序</div>
+        <!-- 已安装：布局与商店一致 -->
+        <div v-else>
           <transition-group name="fade-in-list" tag="div" class="plugin-grid">
-            <el-card v-for="(plugin, index) in installedPlugins" :key="plugin.id"
-              class="plugin-card plugin-card-installed" shadow="hover" @click="viewPluginDetails(plugin)">
-              <EdgeArrows :show-left="index > 0" :show-right="index < installedPlugins.length - 1"
-                :on-move="(dir) => handlePluginMove(plugin, dir)">
-                <div class="plugin-header">
-                  <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
-                    <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
-                  </div>
-                  <div v-else class="plugin-icon-placeholder">
-                    <el-icon>
-                      <Grid />
-                    </el-icon>
-                  </div>
-                  <div class="plugin-title">
-                    <h3>{{ plugin.name }}</h3>
-                    <p class="plugin-desp">{{ plugin.description || "无描述" }}</p>
-                  </div>
+            <el-card v-for="plugin in installedPlugins" :key="plugin.id" class="plugin-card" shadow="hover"
+              @click="viewPluginDetails(plugin)">
+              <div class="plugin-header">
+                <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
+                  <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
                 </div>
+                <div v-else class="plugin-icon-placeholder">
+                  <el-icon>
+                    <Grid />
+                  </el-icon>
+                </div>
+                <div class="plugin-title">
+                  <h3>{{ plugin.name }}</h3>
+                  <p class="plugin-desp">{{ plugin.description || "无描述" }}</p>
+                </div>
+              </div>
 
-                <div class="plugin-info">
-                  <el-tag type="success" size="small">已安装</el-tag>
-                </div>
+              <div class="plugin-info">
+                <el-tag type="success" size="small">已安装</el-tag>
+              </div>
 
-                <div class="plugin-footer">
-                  <el-switch v-model="plugin.enabled" @change="handleTogglePlugin(plugin)" />
-                  <el-button type="danger" size="small" :disabled="plugin.builtIn" @click.stop="handleDelete(plugin)">
-                    {{ plugin.builtIn ? "内置不可卸载" : "卸载" }}
-                  </el-button>
-                </div>
-              </EdgeArrows>
+              <div class="plugin-footer">
+                <el-switch v-model="plugin.enabled" @change="handleTogglePlugin(plugin)" />
+                <el-button type="danger" size="small" :disabled="plugin.builtIn" @click.stop="handleDelete(plugin)">
+                  {{ plugin.builtIn ? "内置不可卸载" : "卸载" }}
+                </el-button>
+              </div>
             </el-card>
           </transition-group>
         </div>
@@ -124,7 +120,7 @@
             <div class="plugin-info">
               <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
               <el-tag v-if="plugin.installedVersion" type="success" size="small">已安装：v{{ plugin.installedVersion
-                }}</el-tag>
+              }}</el-tag>
               <el-tag v-else type="warning" size="small">未安装</el-tag>
               <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
                 size="small">可更新</el-tag>
@@ -250,7 +246,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import PageHeader from "@/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
-import EdgeArrows from "@/components/common/EdgeArrows.vue";
 import { isUpdateAvailable } from "@/utils/version";
 
 interface PluginSource {
@@ -455,42 +450,6 @@ watch(
   { immediate: true }
 );
 
-// 已安装：箭头移动排序
-const handlePluginMove = async (plugin: Plugin, direction: "up" | "down" | "left" | "right") => {
-  // 只处理左右移动（左右移动对应列表中的前后移动）
-  if (direction !== "left" && direction !== "right") return;
-  const current = [...installedPlugins.value];
-  const currentIndex = current.findIndex((p) => p.id === plugin.id);
-  if (currentIndex === -1) return;
-
-  let targetIndex: number;
-  if (direction === "left") {
-    // 左箭头：向前移动（与前面的插件交换）
-    targetIndex = currentIndex - 1;
-    if (targetIndex < 0) return;
-  } else {
-    // 右箭头：向后移动（与后面的插件交换）
-    targetIndex = currentIndex + 1;
-    if (targetIndex >= current.length) return;
-  }
-
-  // 交换两个位置
-  const temp = current[currentIndex];
-  current[currentIndex] = current[targetIndex];
-  current[targetIndex] = temp;
-
-  try {
-    const pluginOrders: [string, number][] = current.map((p, idx) => [p.id, (idx + 1) * 1000]);
-    await invoke("update_plugins_order", { pluginOrders });
-    // 更新本地顺序（Pinia setup store 会把赋值写回 ref）
-    current.forEach((p, idx) => (p.order = (idx + 1) * 1000));
-    pluginStore.plugins = current;
-    ElMessage.success("插件顺序已更新");
-  } catch (e) {
-    console.error("更新插件顺序失败:", e);
-    ElMessage.error("更新顺序失败");
-  }
-};
 
 const escapeHtml = (s: string) =>
   s
@@ -1251,31 +1210,5 @@ watch(activeTab, async (tab) => {
   font-size: 12px;
   color: var(--el-text-color-regular);
   word-break: break-all;
-}
-
-
-/* 已安装：提示与箭头控制 */
-.installed-grid-wrap {
-  width: 100%;
-}
-
-.installed-hint {
-  margin: 0 0 12px 0;
-  font-size: 12px;
-  color: var(--anime-text-muted);
-}
-
-.plugin-card-installed {
-  position: relative;
-
-  :deep(.el-card__body) {
-    position: relative;
-    padding: 20px;
-    min-height: 100px;
-  }
-
-  :deep(.edge-arrows-container) {
-    min-height: 100px;
-  }
 }
 </style>

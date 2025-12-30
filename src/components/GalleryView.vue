@@ -267,5 +267,13 @@ watch(
     height: 100%;
     overflow-y: auto;
     overflow-x: hidden;
+    /* 为图片悬浮上移效果留出空间，避免被容器截断 */
+    padding-top: 6px;
+    padding-bottom: 6px;
+}
+
+/* 确保图片网格根容器允许内容溢出 */
+.gallery-view :deep(.image-grid-root) {
+    overflow: visible;
 }
 </style>

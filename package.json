@@ -8,7 +8,8 @@
     "dev:no-watch": "node scripts/run.js dev",
     "build": "node scripts/run.js build",
     "package-plugin": "nx run crawler-plugins:package",
-    "package-plugin:local": "nx run crawler-plugins:package-local"
+    "package-plugin:local": "nx run crawler-plugins:package-local",
+    "prepare": "husky"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
@@ -29,6 +30,7 @@
     "@vue/devtools": "^8.0.5",
     "@vue/tsconfig": "^0.5.1",
     "archiver": "^7.0.1",
+    "husky": "^9.1.7",
     "nodemon": "^3.1.10",
     "nx": "^20.0.0",
     "sass": "^1.97.1",

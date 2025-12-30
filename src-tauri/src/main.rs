@@ -697,14 +697,6 @@ fn install_browser_plugin(
 }
 
 #[tauri::command]
-fn update_plugins_order(
-    plugin_orders: Vec<(String, i64)>,
-    state: tauri::State<PluginManager>,
-) -> Result<(), String> {
-    state.update_plugins_order(&plugin_orders)
-}
-
-#[tauri::command]
 async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
     use std::fs;
     use std::path::Path;
@@ -1343,25 +1335,51 @@ fn set_wallpaper_mode(
         let target = controller.manager_for_mode(&mode_clone);
         // Windows 下，有时系统返回的“当前壁纸路径”可能不存在（例如主题缓存/临时文件）。
         // 切换到 window 模式时必须保证文件真实存在，否则 WindowWallpaperManager 会报 File does not exist。
-        let resolved_wallpaper = if std::path::Path::new(&current_wallpaper).exists() {
-            current_wallpaper.clone()
+        // 先做一次“温和清洗”：去掉 Windows 长路径前缀（\\?\）与前后空格，避免部分 API 返回的格式影响 exists 判断
+        let current_cleaned = current_wallpaper
+            .trim()
+            .trim_start_matches(r"\\?\")
+            .to_string();
+
+        let resolved_wallpaper = if std::path::Path::new(&current_cleaned).exists() {
+            current_cleaned.clone()
         } else {
-            // 尝试从轮播画册里找一张确实存在的图片作为兜底
-            let album_id = s.wallpaper_rotation_album_id.clone().unwrap_or_default();
-            if album_id.is_empty() {
-                current_wallpaper.clone()
-            } else if let Some(storage) = app_clone.try_state::<Storage>() {
-                let imgs = storage.get_album_images(&album_id).unwrap_or_default();
-                let mut picked: Option<String> = None;
-                for img in imgs {
-                    if std::path::Path::new(&img.local_path).exists() {
-                        picked = Some(img.local_path);
-                        break;
+            // 兜底策略（按你的需求）：当“当前壁纸文件不存在”时，直接从【画廊】按轮播策略挑一张存在的图片
+            // - sequential：取画廊排序中的第一张存在图片（与轮播的顺序语义一致）
+            // - random：从所有存在图片中随机挑一张
+            let picked_from_gallery: Option<String> = (|| {
+                let storage = app_clone.try_state::<Storage>()?;
+                let images = storage.get_all_images().ok()?;
+                let existing: Vec<_> = images
+                    .into_iter()
+                    .filter(|img| std::path::Path::new(&img.local_path).exists())
+                    .collect();
+                if existing.is_empty() {
+                    return None;
+                }
+                match s.wallpaper_rotation_mode.as_str() {
+                    "sequential" => Some(existing[0].local_path.clone()),
+                    _ => {
+                        let idx = (std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_nanos() as usize)
+                            % existing.len();
+                        Some(existing[idx].local_path.clone())
                     }
                 }
-                picked.unwrap_or_else(|| current_wallpaper.clone())
+            })();
+
+            if let Some(p) = picked_from_gallery {
+                eprintln!(
+                    "[WARN] set_wallpaper_mode: 当前壁纸文件不存在，将从画廊选择兜底图片: {} (原路径: {})",
+                    p, current_wallpaper
+                );
+                p
             } else {
-                current_wallpaper.clone()
+                // 找不到可用图片：这里直接保留“不可用路径”，让后续 set_wallpaper_path 抛错并走失败事件，
+                // 但错误信息会更聚焦（比单纯 File does not exist 更容易理解）
+                current_cleaned.clone()
             }
         };
         let apply_res: Result<(), String> = (|| {
@@ -1376,6 +1394,21 @@ fn set_wallpaper_mode(
                 "[DEBUG] set_wallpaper_mode: 调用 target.set_wallpaper_path: {}",
                 resolved_wallpaper
             );
+            // 如果 resolved_wallpaper 仍然不存在，给一个更可读的错误（尤其是"从未设置过壁纸/系统返回缓存路径"的场景）
+            if !std::path::Path::new(&resolved_wallpaper).exists() {
+                let error_msg = if old_mode_clone == "native" {
+                    format!(
+                        "无法切换到窗口模式：当前系统壁纸文件不存在（可能是主题缓存或临时文件），且画廊中没有可用图片。请先在画廊中添加图片，或手动设置一张壁纸后再切换。\n原路径: {}",
+                        resolved_wallpaper
+                    )
+                } else {
+                    format!(
+                        "无法切换到窗口模式：壁纸文件不存在，且画廊中没有可用图片作为兜底。请先在画廊中添加图片。\n路径: {}",
+                        resolved_wallpaper
+                    )
+                };
+                return Err(error_msg);
+            }
             target.set_wallpaper_path(&resolved_wallpaper, true)?;
             eprintln!("[DEBUG] set_wallpaper_mode: target.set_wallpaper_path 完成");
             // 再应用样式
@@ -1901,7 +1934,6 @@ fn main() {
             preview_store_install,
             import_plugin_from_zip,
             install_browser_plugin,
-            update_plugins_order,
             get_plugin_image,
             get_plugin_image_for_detail,
             get_plugin_icon,

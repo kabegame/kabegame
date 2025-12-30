@@ -10,7 +10,7 @@
       <el-button type="primary" @click="showCreateDialog = true">新建画册</el-button>
     </PageHeader>
 
-    <transition-group name="fade-in-list" tag="div" class="albums-grid">
+    <transition-group :key="albumsListKey" name="fade-in-list" tag="div" class="albums-grid">
       <AlbumCard v-for="album in albums" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
         :count="albumCounts[album.id] || 0" :preview-urls="albumPreviewUrls[album.id] || []"
         :loading-states="albumLoadingStates[album.id] || []" :is-loading="albumIsLoading[album.id] || false"
@@ -65,6 +65,8 @@ const showCreateDialog = ref(false);
 const newAlbumName = ref("");
 const isRefreshing = ref(false);
 const albumCardRefs = ref<Record<string, any>>({});
+// 用于强制重新挂载列表（让“刷新”能触发完整 enter 动画 + 重置卡片内部状态）
+const albumsListKey = ref(0);
 
 const loadRotationSettings = async () => {
   try {
@@ -204,8 +206,18 @@ const handleRefresh = async () => {
   try {
     await albumStore.loadAlbums();
     await loadRotationSettings();
-    // 重新加载预览图
-    const albumsToPreload = albums.value.slice(0, 3);
+    // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来“没刷新”）
+    const albumsToPreload = albums.value.slice(0, 6);
+    for (const album of albumsToPreload) {
+      clearAlbumPreviewCache(album.id);
+    }
+    // 收藏画册也强制重载一次（收藏状态变化会影响预览）
+    clearAlbumPreviewCache(FAVORITE_ALBUM_ID);
+
+    // 强制重新挂载列表，让每个卡片的 enter 动画和内部状态都重置
+    albumsListKey.value++;
+
+    // 重新加载预览图（前 6 张优先）
     for (const album of albumsToPreload) {
       prefetchPreview(album);
     }
@@ -233,6 +245,20 @@ const handleCreateAlbum = async () => {
 const albumPreviewUrls = ref<Record<string, string[]>>({});
 const albumLoadingStates = ref<Record<string, boolean[]>>({});
 const albumIsLoading = ref<Record<string, boolean>>({});
+
+const clearAlbumPreviewCache = (albumId: string) => {
+  const oldUrls = albumPreviewUrls.value[albumId];
+  if (oldUrls) {
+    oldUrls.forEach((u) => {
+      if (u) URL.revokeObjectURL(u);
+    });
+  }
+  delete albumPreviewUrls.value[albumId];
+  delete albumLoadingStates.value[albumId];
+  delete albumIsLoading.value[albumId];
+  // 清除 store 中的预览缓存（强制下一次重新拉取预览图片列表）
+  delete albumStore.albumPreviews[albumId];
+};
 
 // 画册右键菜单状态
 const albumMenuVisible = ref(false);

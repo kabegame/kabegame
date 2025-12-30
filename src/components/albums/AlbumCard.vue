@@ -1,7 +1,7 @@
 <template>
   <div class="album-card" :data-album-id="album.id" @click="handleCardClick" @mouseenter="$emit('mouseenter')">
     <div class="hero">
-      <div v-for="(url, idx) in heroAll" :key="idx" class="hero-img" :class="heroClass(idx)" :style="heroStyle(url)">
+      <div v-for="(url, idx) in heroAll" :key="idx" class="hero-img" :class="heroClass(idx, url)" :style="heroStyle(url)">
         <div v-if="!url && loadingStates[idx]" class="hero-loading">
           <el-icon class="loading-icon">
             <Loading />
@@ -14,7 +14,7 @@
           <p class="empty-text">まだ空っぽだけど、これから色々お友達を作っていくのだ！</p>
         </div>
       </div>
-      <div v-if="isLoading && heroAll.length === 0" class="hero-loading-full">
+      <div v-if="isLoading && actualImageCount === 0" class="hero-loading-full">
         <el-icon class="loading-icon">
           <Loading />
         </el-icon>
@@ -152,32 +152,50 @@ const actualImageCount = computed(() => {
   return props.previewUrls.slice(0, 6).filter(url => url).length;
 });
 
-const heroClass = (idx: number) => {
+// 轮播展示数量：
+// - 有有效预览时，用实际预览数
+// - 预览还在加载但还没 URL 时：用 3，让占位/转圈可见（体验对齐画廊的“加载中”）
+const heroDisplayCount = computed(() => {
   const actualCount = actualImageCount.value;
+  if (actualCount > 0) return actualCount;
+  if (props.isLoading) return 3;
+  return 0;
+});
+
+const heroClass = (idx: number, url: string) => {
+  const displayCount = heroDisplayCount.value;
 
   // 如果只有1张图，只显示第一张居中
-  if (actualCount === 1) {
-    if (idx === 0) return "is-center";
-    return "is-hidden";
+  if (displayCount === 1) {
+    const pos = idx === 0 ? "is-center" : "is-hidden";
+    const state = url ? "has-url" : (props.loadingStates?.[idx] ? "is-placeholder" : "is-empty-url");
+    return `${pos} ${state}`;
   }
 
   // 如果只有2张图，显示第一张居中，第二张在右边，不轮转
-  if (actualCount === 2) {
-    if (idx === 0) return "is-center";
-    if (idx === 1) return "is-right";
-    return "is-hidden";
+  if (displayCount === 2) {
+    const pos = idx === 0 ? "is-center" : idx === 1 ? "is-right" : "is-hidden";
+    const state = url ? "has-url" : (props.loadingStates?.[idx] ? "is-placeholder" : "is-empty-url");
+    return `${pos} ${state}`;
   }
 
   // 3张及以上，正常轮转，但只在有效图片范围内轮转
-  const total = actualCount;
+  if (displayCount <= 0) {
+    return "is-hidden is-empty-url";
+  }
+
+  const total = displayCount;
   const center = heroIndex.value % total;
   const left = (center - 1 + total) % total;
   const right = (center + 1) % total;
 
-  if (idx === center) return "is-center";
-  if (idx === left) return "is-left";
-  if (idx === right) return "is-right";
-  return "is-hidden";
+  let pos = "is-hidden";
+  if (idx === center) pos = "is-center";
+  else if (idx === left) pos = "is-left";
+  else if (idx === right) pos = "is-right";
+
+  const state = url ? "has-url" : (props.loadingStates?.[idx] ? "is-placeholder" : "is-empty-url");
+  return `${pos} ${state}`;
 };
 
 const heroStyle = (url: string) => ({
@@ -246,8 +264,38 @@ const formatDate = (ts?: number) => {
     background-position: center;
     border-radius: 14px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-    transition: transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.45s ease;
+    overflow: hidden;
+    isolation: isolate;
+    transition: transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.45s ease, filter 0.35s ease;
     opacity: 0;
+
+    /* 加载占位（体验对齐画廊图片骨架屏）：先盖一层 shimmer，URL 到了再淡出 */
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.08),
+        rgba(255, 255, 255, 0.45),
+        rgba(255, 255, 255, 0.08)
+      );
+      background-size: 200% 100%;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+      z-index: 1;
+    }
+
+    &.is-placeholder::before {
+      opacity: 1;
+      animation: heroShimmer 1.1s ease-in-out infinite;
+    }
+
+    /* 没有 URL 且也不是加载中的占位：直接隐藏，避免空白块闪一下 */
+    &.is-empty-url {
+      opacity: 0 !important;
+      filter: blur(2px);
+    }
 
     &.is-center {
       transform: translateX(0) scale(1);
@@ -325,7 +373,7 @@ const formatDate = (ts?: number) => {
     justify-content: center;
     background: rgba(255, 255, 255, 0.5);
     border-radius: 14px;
-    z-index: 10;
+    z-index: 2;
   }
 
   .hero-loading-full {
@@ -352,6 +400,15 @@ const formatDate = (ts?: number) => {
 
     to {
       transform: rotate(360deg);
+    }
+  }
+
+  @keyframes heroShimmer {
+    0% {
+      background-position: 0% 0%;
+    }
+    100% {
+      background-position: 200% 0%;
     }
   }
 

@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 /**
  * Watches crawler plugin sources and rebuilds packaged plugins via Nx.
- * After a successful rebuild, touches `src-tauri/.plugin-rebuild-trigger`
- * to make Tauri dev watcher restart the app.
  *
  * Usage:
  *   node scripts/plugin-rebuild-watch.js [--local-plugins] [--verbose]
@@ -12,7 +10,10 @@ import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const root = path.resolve(
+  path.dirname(new URL(import.meta.url).pathname),
+  ".."
+);
 
 function toPosix(p) {
   return p.split(path.sep).join("/");
@@ -54,8 +55,11 @@ async function main() {
   const flags = parseFlags(process.argv.slice(2));
 
   const pluginsRoot = path.join(root, "crawler-plugins", "plugins");
-  const packagingScript = path.join(root, "crawler-plugins", "package-plugin.js");
-  const triggerFile = path.join(root, "src-tauri", ".plugin-rebuild-trigger");
+  const packagingScript = path.join(
+    root,
+    "crawler-plugins",
+    "package-plugin.js"
+  );
 
   const allowPluginDirs = flags.localPlugins
     ? ["single-file-import", "local-folder-import"]
@@ -75,7 +79,9 @@ async function main() {
   const allowed = [...allowFiles].map((abs) => path.resolve(abs));
 
   console.log(
-    `[plugin-watch] mode=${flags.localPlugins ? "local-plugins" : "all-plugins"} files=${allowed.length}`
+    `[plugin-watch] mode=${
+      flags.localPlugins ? "local-plugins" : "all-plugins"
+    } files=${allowed.length}`
   );
 
   let timer = null;
@@ -84,7 +90,10 @@ async function main() {
 
   const schedule = (changed) => {
     if (flags.verbose) {
-      console.log("[plugin-watch] change:", toPosix(path.relative(root, changed)));
+      console.log(
+        "[plugin-watch] change:",
+        toPosix(path.relative(root, changed))
+      );
     }
     if (timer) clearTimeout(timer);
     timer = setTimeout(async () => {
@@ -94,7 +103,9 @@ async function main() {
       }
       running = true;
       pending = false;
-      const nxTarget = flags.localPlugins ? "crawler-plugins:package-local" : "crawler-plugins:package";
+      const nxTarget = flags.localPlugins
+        ? "crawler-plugins:package-local"
+        : "crawler-plugins:package";
       console.log(`[plugin-watch] nx run ${nxTarget}`);
 
       const child = spawnShell(`nx run ${nxTarget}`, root);
@@ -120,7 +131,8 @@ async function main() {
     try {
       fs.watch(abs, { persistent: true }, () => schedule(abs));
     } catch (e) {
-      if (flags.verbose) console.warn("[plugin-watch] cannot watch:", abs, e?.message || e);
+      if (flags.verbose)
+        console.warn("[plugin-watch] cannot watch:", abs, e?.message || e);
     }
   }
 
@@ -132,5 +144,3 @@ main().catch((err) => {
   console.error("[plugin-watch] error:", err?.message || err);
   process.exit(1);
 });
-
-

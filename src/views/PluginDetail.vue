@@ -1,28 +1,22 @@
 <template>
-    <div class="plugin-detail-container">
-        <div class="plugin-detail-header">
-            <div class="header-left">
-                <el-button @click="goBack" circle>
-                    <el-icon>
-                        <ArrowLeft />
-                    </el-icon>
-                </el-button>
-                <div class="plugin-icon-header" v-if="plugin?.icon">
-                    <el-image :src="plugin.icon" fit="contain" class="plugin-icon-image" />
-                </div>
-                <div class="plugin-icon-placeholder-header" v-else>
-                    <el-icon>
-                        <Grid />
-                    </el-icon>
-                </div>
-                <h1>{{ plugin?.name || "源详情" }}</h1>
+    <TabLayout :title="plugin?.name || '源详情'" show-back @back="goBack">
+        <template #icon>
+            <div v-if="plugin?.icon" class="plugin-icon-wrap">
+                <el-image :src="plugin.icon" fit="contain" class="plugin-icon-image" />
             </div>
+            <div v-else class="plugin-icon-placeholder">
+                <el-icon>
+                    <Grid />
+                </el-icon>
+            </div>
+        </template>
+        <template #actions>
             <div v-if="plugin" class="header-actions">
                 <el-tooltip content="卸载" placement="bottom" v-if="isInstalled">
                     <el-button :icon="Delete" circle type="danger" @click="handleUninstall" />
                 </el-tooltip>
             </div>
-        </div>
+        </template>
 
         <div v-if="showSkeleton" class="loading">
             <el-skeleton :rows="5" animated />
@@ -71,17 +65,18 @@
                 <el-empty v-else description="该源暂无文档" :image-size="100" />
             </div>
         </div>
-    </div>
+    </TabLayout>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { ArrowLeft, Delete, Grid, DocumentCopy } from "@element-plus/icons-vue";
+import { Delete, Grid, DocumentCopy } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { usePluginStore } from "@/stores/plugins";
 import { pluginCache } from "@/utils/pluginCache";
+import TabLayout from "@/layouts/TabLayout.vue";
 
 interface BrowserPlugin {
     id: string;
@@ -551,84 +546,30 @@ watch(
 </script>
 
 <style scoped lang="scss">
-.plugin-detail-container {
-    width: 100%;
-    height: 100%;
-    padding: 20px;
-    overflow-y: auto;
-}
-
-.plugin-detail-header {
+.header-actions {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 24px;
-    padding: 16px;
-    background: var(--anime-bg-card);
-    border-radius: 12px;
-    box-shadow: var(--anime-shadow);
+    gap: 8px;
+}
 
-    .header-left {
-        display: flex;
-        align-items: center;
-        gap: 16px;
-        flex: 1;
-    }
+.plugin-icon-wrap,
+.plugin-icon-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
 
-    .plugin-icon-header {
-        width: 64px;
-        height: 64px;
-        border-radius: 12px;
-        overflow: hidden;
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: var(--anime-bg-secondary);
-        border: 2px solid var(--anime-border);
+.plugin-icon-image {
+    width: 100%;
+    height: 100%;
+}
 
-        .plugin-icon-image {
-            width: 100%;
-            height: 100%;
-        }
-
-        :deep(.el-image__inner) {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-        }
-    }
-
-    .plugin-icon-placeholder-header {
-        width: 64px;
-        height: 64px;
-        border-radius: 12px;
-        background: linear-gradient(135deg, rgba(255, 107, 157, 0.2) 0%, rgba(167, 139, 250, 0.2) 100%);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-        color: var(--anime-primary);
-        font-size: 32px;
-        border: 2px solid var(--anime-border);
-    }
-
-    h1 {
-        margin: 0;
-        font-size: 24px;
-        font-weight: 600;
-        background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-    }
-
-    .header-actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
+.plugin-icon-placeholder {
+    background: linear-gradient(135deg, rgba(255, 107, 157, 0.2) 0%, rgba(167, 139, 250, 0.2) 100%);
+    color: var(--anime-primary);
+    font-size: 32px;
 }
 
 .plugin-detail-content {

@@ -4,52 +4,32 @@
       @back="goBack">
       <template #title>
         <div class="album-title-wrapper">
-          <input
-            v-if="isRenaming"
-            v-model="editingName"
-            ref="renameInputRef"
-            class="album-name-input"
-            @blur="handleRenameConfirm"
-            @keyup.enter="handleRenameConfirm"
-            @keyup.esc="handleRenameCancel"
-          />
-          <span
-            v-else
-            class="album-name"
-            @dblclick.stop="handleStartRename"
-            @click.stop
-            :title="'双击改名'"
-          >{{ albumName || '画册' }}</span>
+          <input v-if="isRenaming" v-model="editingName" ref="renameInputRef" class="album-name-input"
+            @blur="handleRenameConfirm" @keyup.enter="handleRenameConfirm" @keyup.esc="handleRenameCancel" />
+          <span v-else class="album-name" @dblclick.stop="handleStartRename" @click.stop :title="'双击改名'">{{ albumName ||
+            '画册' }}</span>
         </div>
       </template>
       <el-button type="primary" @click="handleSetAsWallpaperCarousel">
-        <el-icon><Picture /></el-icon>
+        <el-icon>
+          <Picture />
+        </el-icon>
         <span style="margin-left: 4px;">设为轮播壁纸</span>
       </el-button>
       <el-button type="danger" @click="handleDeleteAlbum">
-        <el-icon><Delete /></el-icon>
+        <el-icon>
+          <Delete />
+        </el-icon>
         <span style="margin-left: 4px;">删除画册</span>
       </el-button>
     </PageHeader>
 
-    <GalleryView
-      ref="albumViewRef"
-      class="detail-body"
-      mode="albumDetail"
-      :loading="loading"
-      :images="images"
-      :image-url-map="imageSrcMap"
-      :columns="albumColumns"
-      :aspect-ratio-match-window="false"
-      :window-aspect-ratio="16 / 9"
-      :allow-select="true"
-      :enable-ctrl-wheel-adjust-columns="true"
-      :is-blocked="isBlockingOverlayOpen"
-      @adjust-columns="throttledAdjustColumns"
-      @selection-change="handleSelectionChange"
-      @image-dbl-click="handleImageDblClick"
-      @contextmenu="handleImageContextMenu"
-    >
+    <GalleryView ref="albumViewRef" class="detail-body" mode="albumDetail" :loading="loading" :images="images"
+      :image-url-map="imageSrcMap" :columns="albumColumns" :aspect-ratio-match-window="false"
+      :window-aspect-ratio="16 / 9" :allow-select="true" :enable-ctrl-wheel-adjust-columns="true"
+      :is-blocked="isBlockingOverlayOpen" @adjust-columns="throttledAdjustColumns"
+      @selection-change="handleSelectionChange" @image-dbl-click="handleImageDblClick"
+      @contextmenu="handleImageContextMenu">
       <template #before-grid>
         <div v-if="!loading && !images.length" class="empty-state">
           <img src="/album-empty.png" alt="空画册" class="empty-image" />
@@ -58,24 +38,18 @@
       </template>
 
       <template #overlays>
-        <ImageContextMenu
-          :visible="imageMenuVisible"
-          :position="imageMenuPosition"
-          :image="imageMenuImage"
-          :selected-count="Math.max(1, selectedImages.size)"
-          :is-image-selected="isImageMenuImageSelected"
-          :simplified-multi-select-menu="true"
-          :hide-favorite-and-add-to-album="selectedImages.size === 1"
-          remove-text="从画册移除"
-          @close="imageMenuVisible = false"
-          @command="handleImageMenuCommand"
-        />
+        <ImageContextMenu :visible="imageMenuVisible" :position="imageMenuPosition" :image="imageMenuImage"
+          :selected-count="Math.max(1, selectedImages.size)" :is-image-selected="isImageMenuImageSelected"
+          :simplified-multi-select-menu="true" :hide-favorite-and-add-to-album="selectedImages.size === 1"
+          remove-text="从画册移除" @close="imageMenuVisible = false" @command="handleImageMenuCommand" />
 
-        <ImagePreviewDialog v-model="showPreview" v-model:image-url="previewUrl" :image-path="previewPath" :image="previewImage" />
+        <ImagePreviewDialog v-model="showPreview" v-model:image-url="previewUrl" :image-path="previewPath"
+          :image="previewImage" />
 
         <ImageDetailDialog v-model="showImageDetail" :image="selectedDetailImage" />
 
-        <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="pendingAddToAlbumImageIds" @added="handleAddedToAlbum" />
+        <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="pendingAddToAlbumImageIds"
+          @added="handleAddedToAlbum" />
       </template>
     </GalleryView>
   </div>
@@ -206,6 +180,9 @@ const renameInputRef = ref<HTMLInputElement | null>(null);
 // 轮播壁纸相关
 const wallpaperRotationEnabled = ref(false);
 const currentRotationAlbumId = ref<string | null>(null);
+
+// 收藏画册标记：当收藏状态变化时，如果页面在后台，标记为需要刷新
+const favoriteAlbumDirty = ref(false);
 
 const goBack = () => {
   router.back();
@@ -501,17 +478,17 @@ const initAlbum = async (newAlbumId: string) => {
   if (albumId.value === newAlbumId && images.value.length > 0) {
     return;
   }
-  
+
   // 先设置 loading，避免显示空状态
   loading.value = true;
-  
+
   // 清理旧数据
   blobUrls.forEach((u) => URL.revokeObjectURL(u));
   blobUrls.clear();
   images.value = [];
   imageSrcMap.value = {};
   clearSelection();
-  
+
   albumId.value = newAlbumId;
   await albumStore.loadAlbums();
   const found = albumStore.albums.find((a) => a.id === newAlbumId);
@@ -543,6 +520,57 @@ onMounted(async () => {
   if (id) {
     await initAlbum(id);
   }
+
+  // 监听收藏状态变化事件（来自画廊等页面的收藏操作）
+  const favoriteChangedHandler = ((event: Event) => {
+    const ce = event as CustomEvent<{ imageIds: string[]; favorite: boolean }>;
+    const detail = ce.detail;
+    if (!detail || !Array.isArray(detail.imageIds)) return;
+
+    // 只处理收藏画册详情页
+    if (albumId.value !== FAVORITE_ALBUM_ID) return;
+
+    // 检查当前页面是否激活（通过检查路由是否匹配）
+    const currentRouteId = route.params.id as string;
+    const isActive = currentRouteId === FAVORITE_ALBUM_ID;
+
+    if (detail.favorite === false) {
+      // 取消收藏：从列表中移除对应图片
+      const idsToRemove = new Set(detail.imageIds);
+      images.value = images.value.filter((img) => !idsToRemove.has(img.id));
+
+      // 清理对应的 Blob URL 和 imageSrcMap
+      for (const id of idsToRemove) {
+        const data = imageSrcMap.value[id];
+        if (data?.thumbnail) {
+          URL.revokeObjectURL(data.thumbnail);
+          blobUrls.delete(data.thumbnail);
+        }
+        if (data?.original) {
+          URL.revokeObjectURL(data.original);
+          blobUrls.delete(data.original);
+        }
+        delete imageSrcMap.value[id];
+      }
+
+      // 清除选中状态
+      for (const id of idsToRemove) {
+        selectedImages.value.delete(id);
+      }
+    } else {
+      // 新增收藏：需要重新加载以获取完整的 ImageInfo
+      if (isActive) {
+        // 页面激活时立即刷新
+        loadAlbum();
+      } else {
+        // 页面在后台时标记为需要刷新
+        favoriteAlbumDirty.value = true;
+      }
+    }
+  }) as EventListener;
+
+  window.addEventListener("favorite-status-changed", favoriteChangedHandler);
+  (window as any).__albumDetailFavoriteHandler = favoriteChangedHandler;
 });
 
 // 组件从缓存激活时检查是否需要刷新
@@ -550,6 +578,13 @@ onActivated(async () => {
   const id = route.params.id as string;
   if (id && id !== albumId.value) {
     await initAlbum(id);
+    return;
+  }
+
+  // 如果是收藏画册且标记为需要刷新，重新加载
+  if (albumId.value === FAVORITE_ALBUM_ID && favoriteAlbumDirty.value) {
+    favoriteAlbumDirty.value = false;
+    await loadAlbum();
   }
 });
 
@@ -627,7 +662,7 @@ const handleSetAsWallpaperCarousel = async () => {
 // 删除画册
 const handleDeleteAlbum = async () => {
   if (!albumId.value) return;
-  
+
   // 检查是否为"收藏"画册
   if (albumId.value === FAVORITE_ALBUM_ID) {
     ElMessage.warning("不能删除'收藏'画册");
@@ -640,7 +675,7 @@ const handleDeleteAlbum = async () => {
       "确认删除",
       { type: "warning" }
     );
-    
+
     const deletedAlbumId = albumId.value;
     const wasEnabled = wallpaperRotationEnabled.value;
     const wasCurrentRotation = currentRotationAlbumId.value === deletedAlbumId;
@@ -716,6 +751,13 @@ const loadRotationSettings = async () => {
 onBeforeUnmount(() => {
   blobUrls.forEach((u) => URL.revokeObjectURL(u));
   blobUrls.clear();
+
+  // 移除收藏状态变化监听
+  const handler = (window as any).__albumDetailFavoriteHandler;
+  if (handler) {
+    window.removeEventListener("favorite-status-changed", handler);
+    delete (window as any).__albumDetailFavoriteHandler;
+  }
 });
 </script>
 
@@ -736,6 +778,12 @@ onBeforeUnmount(() => {
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
+    padding-top: 6px;
+    padding-bottom: 6px;
+
+    .image-grid-root {
+      overflow: visible;
+    }
   }
 
   .album-grid {
@@ -821,7 +869,7 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 400px;
   font-family: inherit;
-  
+
   &:focus {
     border-color: var(--anime-primary);
     box-shadow: 0 0 0 2px rgba(var(--anime-primary-rgb, 64, 158, 255), 0.2);
