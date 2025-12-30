@@ -6,18 +6,6 @@
       </el-icon>
       <span style="margin-left: 8px;">浏览</span>
     </div>
-    <div v-if="(albumImageCount ?? 0) > 0" class="context-menu-item" @click.stop="$emit('command', 'exportToWEAuto')">
-      <el-icon>
-        <Download />
-      </el-icon>
-      <span style="margin-left: 8px;">导出并导入到 WE</span>
-    </div>
-    <div v-if="(albumImageCount ?? 0) > 0" class="context-menu-item" @click.stop="$emit('command', 'exportToWE')">
-      <el-icon>
-        <Download />
-      </el-icon>
-      <span style="margin-left: 8px;">导出到 Wallpaper Engine</span>
-    </div>
     <div v-if="(albumImageCount ?? 0) > 0" class="context-menu-item" @click.stop="$emit('command', 'setWallpaperRotation')">
       <el-icon>
         <Picture />
@@ -70,7 +58,7 @@ const isCurrentRotationAlbum = computed(() => {
 
 defineEmits<{
   close: [];
-  command: [command: "browse" | "delete" | "setWallpaperRotation" | "exportToWE" | "exportToWEAuto" | "rename"];
+  command: [command: "browse" | "delete" | "setWallpaperRotation" | "rename"];
 }>();
 </script>
 

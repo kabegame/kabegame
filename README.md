@@ -2,6 +2,11 @@
 
 一个基于 Tauri 的二次元壁纸管理器！收集、管理、轮播，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元壁纸资源~
 
+<div align="center">
+  <img src="docs/images/image1.png" alt="Kabegame 形象图 1" width="100"/>
+  <img src="docs/images/image2.png" alt="Kabegame 形象图 2" width="100"/>
+</div>
+
 ## 功能特性
 
 - 🖼️ **壁纸管理**: 收集、管理、轮播二次元壁纸，让桌面充满二次元气息
@@ -10,6 +15,14 @@
 - 🎨 **壁纸轮播**: 自动从指定画册中轮播更换桌面壁纸，支持随机和顺序模式
 - 📦 **本地存储**: 壁纸和元数据存储在本地应用数据目录
 - 🌐 **源管理**: 浏览、安装、收藏和管理壁纸源插件
+
+## 软件截图
+
+<div align="center">
+  <img src="docs/images/ScreenShot1.png" alt="Kabegame 截图 1" width="800"/>
+  <br/>
+  <img src="docs/images/ScreenShot2.png" alt="Kabegame 截图 2" width="800"/>
+</div>
 
 ## 使用说明
 

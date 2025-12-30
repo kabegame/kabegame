@@ -90,23 +90,12 @@
         </el-icon>
         <span style="margin-left: 8px;">抱到桌面上</span>
       </div>
-      <div class="context-menu-item" @click.stop="$emit('command', 'exportToWEAuto')">
+      <!-- 导出到wallpaper engine：仅单选时显示 -->
+      <div v-if="selectedCount === 1" class="context-menu-item" @click.stop="$emit('command', 'exportToWEAuto')">
         <el-icon>
           <Download />
         </el-icon>
-        <span style="margin-left: 8px;">导出并导入到 WE</span>
-        <span v-if="selectedCount > 1" style="margin-left: 8px; color: var(--anime-text-muted); font-size: 12px;">
-          ({{ selectedCount }})
-        </span>
-      </div>
-      <div class="context-menu-item" @click.stop="$emit('command', 'exportToWE')">
-        <el-icon>
-          <Download />
-        </el-icon>
-        <span style="margin-left: 8px;">导出到 Wallpaper Engine</span>
-        <span v-if="selectedCount > 1" style="margin-left: 8px; color: var(--anime-text-muted); font-size: 12px;">
-          ({{ selectedCount }})
-        </span>
+        <span style="margin-left: 8px;">导出到wallpaper engine</span>
       </div>
       <div class="context-menu-divider"></div>
       <div class="context-menu-item" @click.stop="$emit('command', 'remove')">

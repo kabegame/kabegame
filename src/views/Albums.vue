@@ -22,8 +22,9 @@
 
     <AlbumContextMenu :visible="albumMenuVisible" :position="albumMenuPosition" :album-id="menuAlbum?.id"
       :album-name="menuAlbum?.name" :current-rotation-album-id="currentRotationAlbumId"
-      :wallpaper-rotation-enabled="wallpaperRotationEnabled" :album-image-count="menuAlbum ? (albumCounts[menuAlbum.id] || 0) : 0"
-      @close="closeAlbumContextMenu" @command="handleAlbumMenuCommand" />
+      :wallpaper-rotation-enabled="wallpaperRotationEnabled"
+      :album-image-count="menuAlbum ? (albumCounts[menuAlbum.id] || 0) : 0" @close="closeAlbumContextMenu"
+      @command="handleAlbumMenuCommand" />
 
 
     <el-dialog v-model="showCreateDialog" title="新建画册" width="360px">
@@ -41,7 +42,6 @@ import { ref, onMounted, onActivated, onBeforeUnmount } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Refresh } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
 import AlbumContextMenu from "@/components/AlbumContextMenu.vue";
 import { useAlbumStore } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
@@ -167,14 +167,14 @@ onMounted(async () => {
 onActivated(async () => {
   await albumStore.loadAlbums();
   await loadRotationSettings();
-  
+
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
   const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
   if (favoriteAlbum) {
     const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID] || 0;
     const existingUrls = albumPreviewUrls.value[FAVORITE_ALBUM_ID];
     const hasValidPreview = existingUrls && existingUrls.length > 0 && existingUrls.some(url => url);
-    
+
     // 如果画册有内容但预览为空，清除缓存并重新加载
     if (favoriteCount > 0 && !hasValidPreview) {
       // 清除本地预览URL缓存
@@ -187,12 +187,12 @@ onActivated(async () => {
       await prefetchPreview(favoriteAlbum);
     }
   }
-  
+
   // 检查是否有新画册需要加载预览（还没有预览数据的画册）
   for (const album of albums.value.slice(0, 6)) {
     // 跳过收藏画册，因为上面已经处理过了
     if (album.id === FAVORITE_ALBUM_ID) continue;
-    
+
     const existingUrls = albumPreviewUrls.value[album.id];
     if (!existingUrls || existingUrls.length === 0 || !existingUrls.some(url => url)) {
       prefetchPreview(album);
@@ -292,7 +292,7 @@ const prefetchPreview = async (album: { id: string }) => {
     const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID] || 0;
     const existingUrls = albumPreviewUrls.value[FAVORITE_ALBUM_ID];
     const hasValidPreview = existingUrls && existingUrls.length > 0 && existingUrls.some(url => url);
-    
+
     // 如果画册有内容但预览为空，清除缓存
     if (favoriteCount > 0 && !hasValidPreview) {
       // 清除本地预览URL缓存
@@ -303,7 +303,7 @@ const prefetchPreview = async (album: { id: string }) => {
       delete albumStore.albumPreviews[FAVORITE_ALBUM_ID];
     }
   }
-  
+
   // 如果已经加载完成，直接返回
   const existingUrls = albumPreviewUrls.value[album.id];
   if (existingUrls && existingUrls.length > 0 && existingUrls.some(url => url)) {
@@ -416,7 +416,7 @@ const closeAlbumContextMenu = () => {
   menuAlbum.value = null;
 };
 
-const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpaperRotation" | "exportToWE" | "exportToWEAuto" | "rename") => {
+const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpaperRotation" | "rename") => {
   if (!menuAlbum.value) return;
   const { id, name } = menuAlbum.value;
   closeAlbumContextMenu();
@@ -431,68 +431,6 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
     return;
   }
 
-  if (command === "exportToWE" || command === "exportToWEAuto") {
-    try {
-      // 让用户输入工程名称
-      const { value: projectName } = await ElMessageBox.prompt(
-        `请输入 WE 工程名称（留空使用画册名称"${name}"）`,
-        "导出到 Wallpaper Engine",
-        {
-          confirmButtonText: "导出",
-          cancelButtonText: "取消",
-          inputPlaceholder: name,
-          inputValidator: (value) => {
-            if (value && value.trim().length > 64) {
-              return "名称不能超过 64 个字符";
-            }
-            return true;
-          },
-        }
-      ).catch(() => ({ value: null })); // 用户取消时返回 null
-
-      if (projectName === null) return; // 用户取消
-
-      let outputParentDir = "";
-      if (command === "exportToWEAuto") {
-        const mp = await invoke<string | null>("get_wallpaper_engine_myprojects_dir");
-        if (!mp) {
-          ElMessage.warning("未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择");
-          return;
-        }
-        outputParentDir = mp;
-      } else {
-        const selected = await open({
-          directory: true,
-          multiple: false,
-          title: "选择导出目录（将自动创建 Wallpaper Engine 工程文件夹）",
-        });
-        if (!selected || Array.isArray(selected)) return;
-        outputParentDir = selected;
-      }
-
-      // 使用用户输入的名称，如果为空则使用画册名称
-      const finalName = projectName?.trim() || name;
-
-      const res = await invoke<{ projectDir: string; imageCount: number }>(
-        "export_album_to_we_project",
-        {
-          albumId: id,
-          albumName: finalName,
-          outputParentDir,
-          options: null,
-        }
-      );
-      ElMessage.success(`已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`);
-      // 顺手打开导出目录（方便直接在 WE 里选择“打开项目”）
-      await invoke("open_file_path", { filePath: res.projectDir });
-    } catch (error) {
-      if (error !== "cancel") {
-        console.error("导出 Wallpaper Engine 工程失败:", error);
-        ElMessage.error("导出失败");
-      }
-    }
-    return;
-  }
 
   if (command === "setWallpaperRotation") {
     try {
@@ -551,7 +489,7 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
 onBeforeUnmount(() => {
   // 移除收藏状态变化事件监听
   window.removeEventListener("favorite-status-changed", handleFavoriteStatusChanged);
-  
+
   Object.values(albumPreviewUrls.value).forEach((urls) => {
     urls.forEach((u) => URL.revokeObjectURL(u));
   });

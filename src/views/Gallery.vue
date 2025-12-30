@@ -1270,13 +1270,14 @@ const handleGridContextCommand = async (payload: { command: string; image: Image
         ElMessage.error("设置壁纸失败: " + (error as Error).message);
       }
       break;
-    case 'exportToWE':
     case 'exportToWEAuto':
+      // 仅单选时支持
+      if (isMultiSelect) {
+        return;
+      }
       try {
         // 让用户输入工程名称
-        const defaultName = isMultiSelect
-          ? `Kabegame_Gallery_${imagesToProcess.length}_Images`
-          : `Kabegame_${image.id}`;
+        const defaultName = `Kabegame_${image.id}`;
 
         const { value: projectName } = await ElMessageBox.prompt(
           `请输入 WE 工程名称（留空使用默认名称）`,
@@ -1296,22 +1297,10 @@ const handleGridContextCommand = async (payload: { command: string; image: Image
 
         if (projectName === null) break; // 用户取消
 
-        let outputParentDir = "";
-        if (command === "exportToWEAuto") {
-          const mp = await invoke<string | null>("get_wallpaper_engine_myprojects_dir");
-          if (!mp) {
-            ElMessage.warning("未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择");
-            break;
-          }
-          outputParentDir = mp;
-        } else {
-          const selected = await open({
-            directory: true,
-            multiple: false,
-            title: "选择导出目录（将自动创建 Wallpaper Engine 工程文件夹）",
-          });
-          if (!selected || Array.isArray(selected)) break;
-          outputParentDir = selected;
+        const mp = await invoke<string | null>("get_wallpaper_engine_myprojects_dir");
+        if (!mp) {
+          ElMessage.warning("未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择");
+          break;
         }
 
         // 使用用户输入的名称，如果为空则使用默认名称
@@ -1320,9 +1309,9 @@ const handleGridContextCommand = async (payload: { command: string; image: Image
         const res = await invoke<{ projectDir: string; imageCount: number }>(
           "export_images_to_we_project",
           {
-            imagePaths: imagesToProcess.map((img) => img.localPath),
+            imagePaths: [image.localPath],
             title: finalName,
-            outputParentDir,
+            outputParentDir: mp,
             options: null,
           }
         );
