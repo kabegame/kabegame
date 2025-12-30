@@ -64,17 +64,24 @@ jobs:
           echo "Version: ${VERSION}"
           echo "Tag: ${TAG}"
 
-      - name: Check if tag already exists
+      - name: Check if tag already exists (only for branch push)
         id: check_tag
         shell: bash
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "⚠️  Tag $TAG already exists, skipping release"
-          else
+          # 如果是通过 tag push 触发的，总是继续构建
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "✅ Tag $TAG does not exist, proceeding with release"
+            echo "✅ Tag push detected, proceeding with release"
+          else
+            # 对于 branch push 或 workflow_dispatch，检查 tag 是否存在
+            TAG="${{ steps.version.outputs.tag }}"
+            if git rev-parse "$TAG" >/dev/null 2>&1; then
+              echo "exists=true" >> $GITHUB_OUTPUT
+              echo "⚠️  Tag $TAG already exists, skipping release"
+            else
+              echo "exists=false" >> $GITHUB_OUTPUT
+              echo "✅ Tag $TAG does not exist, proceeding with release"
+            fi
           fi
 
       - name: Build frontend
