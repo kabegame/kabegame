@@ -26,6 +26,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: true  # 检出 git 子模块（crawler-plugins）
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
