@@ -1452,63 +1452,16 @@ impl Storage {
     pub fn delete_task(&self, task_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        // 删除任务
+        // 1. 将关联该任务的图片的 task_id 设为 NULL（解除关联，但不删除图片）
+        conn.execute(
+            "UPDATE images SET task_id = NULL WHERE task_id = ?1",
+            params![task_id],
+        )
+        .map_err(|e| format!("Failed to unlink images from task: {}", e))?;
+
+        // 2. 删除任务记录
         conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
             .map_err(|e| format!("Failed to delete task from database: {}", e))?;
-
-        // 同时删除该任务关联的所有图片
-        // 先查询图片信息，以便删除文件
-        let query = "SELECT id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(thumbnail_path, ''), favorite, hash, \"order\" FROM images WHERE task_id = ?1";
-        let mut stmt = conn
-            .prepare(query)
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let images: Vec<ImageInfo> = stmt
-            .query_map(params![task_id], |row| {
-                Ok(ImageInfo {
-                    id: row.get(0)?,
-                    url: row.get(1)?,
-                    local_path: row.get(2)?,
-                    plugin_id: row.get(3)?,
-                    task_id: row.get(4)?,
-                    crawled_at: row.get(5)?,
-                    metadata: row
-                        .get::<_, Option<String>>(6)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
-                    thumbnail_path: row.get(7)?,
-                    favorite: row.get::<_, i64>(8)? != 0,
-                    hash: row.get(9)?,
-                    order: row.get::<_, Option<i64>>(10)?,
-                })
-            })
-            .map_err(|e| format!("Failed to query images: {}", e))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to read rows: {}", e))?;
-
-        // 删除图片文件
-        for image in &images {
-            let path = PathBuf::from(&image.local_path);
-            if path.exists() {
-                let _ = fs::remove_file(&path);
-            }
-            if !image.thumbnail_path.is_empty() {
-                let thumb = PathBuf::from(&image.thumbnail_path);
-                if thumb.exists() {
-                    let _ = fs::remove_file(&thumb);
-                }
-            }
-        }
-
-        // 从数据库删除图片记录
-        for image in images.iter() {
-            conn.execute(
-                "DELETE FROM album_images WHERE image_id = ?1",
-                params![&image.id],
-            )
-            .map_err(|e| format!("Failed to delete album mapping: {}", e))?;
-        }
-        conn.execute("DELETE FROM images WHERE task_id = ?1", params![task_id])
-            .map_err(|e| format!("Failed to delete images from database: {}", e))?;
 
         Ok(())
     }

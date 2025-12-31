@@ -1,14 +1,26 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 use zip::ZipArchive;
+
+const BUILD_MODE: &str = env!("KABEGAME_BUILD_MODE"); // injected by build.rs
+
+fn is_local_mode() -> bool {
+    BUILD_MODE == "local"
+}
+
+fn is_immutable_builtin_id(builtins: &HashSet<String>, plugin_id: &str) -> bool {
+    // 只有 local 模式才把内置插件视为“不可变/不可卸载”。
+    // normal 模式的“本地两个插件”只是首次安装的种子，不应阻止用户覆盖/卸载。
+    is_local_mode() && builtins.contains(plugin_id)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,18 +55,177 @@ pub struct PluginSelector {
 }
 
 pub struct PluginManager {
+    app: AppHandle,
     remote_zip_cache: Mutex<HashMap<String, RemoteZipCacheEntry>>,
+    builtins_cache: Mutex<Option<HashSet<String>>>,
+    enabled_cache: Mutex<Option<HashMap<String, bool>>>,
 }
 
 impl PluginManager {
-    pub fn new(_app: AppHandle) -> Self {
+    pub fn new(app: AppHandle) -> Self {
         Self {
+            app,
             remote_zip_cache: Mutex::new(HashMap::new()),
+            builtins_cache: Mutex::new(None),
+            enabled_cache: Mutex::new(None),
         }
+    }
+
+    pub fn build_mode(&self) -> &'static str {
+        BUILD_MODE
+    }
+
+    fn prepackaged_plugins_dir(&self) -> Result<PathBuf, String> {
+        // 开发模式：Tauri resource_dir 指向 target/debug 等，不包含我们的 resources 文件
+        // 需要回退到项目源码里的 src-tauri/resources/plugins
+        #[cfg(debug_assertions)]
+        {
+            // 尝试从 repo root 定位
+            if let Some(repo_root) = crate::app_paths::repo_root_dir() {
+                let dev_path = repo_root
+                    .join("src-tauri")
+                    .join("resources")
+                    .join("plugins");
+                if dev_path.exists() {
+                    return Ok(dev_path);
+                }
+            }
+        }
+
+        // 生产模式：使用 Tauri resource_dir
+        let dir = self
+            .app
+            .path()
+            .resource_dir()
+            .map_err(|e| format!("Failed to resolve resource_dir: {}", e))?
+            .join("plugins");
+        Ok(dir)
+    }
+
+    /// 从编译期常量解析内置插件列表（逗号分隔）
+    fn parse_builtin_plugins() -> HashSet<String> {
+        const BUILTINS_STR: &str = env!("KABEGAME_BUILTIN_PLUGINS");
+        BUILTINS_STR
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    fn builtins(&self) -> HashSet<String> {
+        if let Ok(mut guard) = self.builtins_cache.lock() {
+            if let Some(cached) = guard.as_ref() {
+                return cached.clone();
+            }
+            let loaded = Self::parse_builtin_plugins();
+            *guard = Some(loaded.clone());
+            return loaded;
+        }
+        Self::parse_builtin_plugins()
+    }
+
+    fn enabled_state_file(&self) -> PathBuf {
+        let data_dir = crate::app_paths::user_data_dir("Kabegame");
+        data_dir.join("plugin_enabled.json")
+    }
+
+    fn load_enabled_map(&self) -> HashMap<String, bool> {
+        let file = self.enabled_state_file();
+        if !file.is_file() {
+            return HashMap::new();
+        }
+        let content = match fs::read_to_string(&file) {
+            Ok(s) => s,
+            Err(_) => return HashMap::new(),
+        };
+        serde_json::from_str::<HashMap<String, bool>>(&content).unwrap_or_default()
+    }
+
+    fn enabled_map(&self) -> HashMap<String, bool> {
+        if let Ok(mut guard) = self.enabled_cache.lock() {
+            if let Some(cached) = guard.as_ref() {
+                return cached.clone();
+            }
+            let loaded = self.load_enabled_map();
+            *guard = Some(loaded.clone());
+            return loaded;
+        }
+        self.load_enabled_map()
+    }
+
+    fn save_enabled_map(&self, map: &HashMap<String, bool>) -> Result<(), String> {
+        let file = self.enabled_state_file();
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create enabled state dir: {}", e))?;
+        }
+        let content = serde_json::to_string_pretty(map)
+            .map_err(|e| format!("Failed to serialize enabled state: {}", e))?;
+        fs::write(&file, content).map_err(|e| format!("Failed to write enabled state: {}", e))?;
+        if let Ok(mut guard) = self.enabled_cache.lock() {
+            *guard = Some(map.clone());
+        }
+        Ok(())
+    }
+
+    fn set_plugin_enabled(&self, plugin_id: &str, enabled: bool) -> Result<(), String> {
+        let mut m = self.enabled_map();
+        m.insert(plugin_id.to_string(), enabled);
+        self.save_enabled_map(&m)
+    }
+
+    fn remove_plugin_enabled_state(&self, plugin_id: &str) -> Result<(), String> {
+        let mut m = self.enabled_map();
+        m.remove(plugin_id);
+        self.save_enabled_map(&m)
+    }
+
+    /// 每次启动：将 resources/plugins 下的内置插件覆盖复制到用户插件目录，确保可用性/不变性
+    pub fn ensure_prepackaged_plugins_installed(&self) -> Result<(), String> {
+        let builtins = self.builtins();
+        if builtins.is_empty() {
+            return Ok(());
+        }
+
+        let src_dir = self.prepackaged_plugins_dir()?;
+
+        // 强制使用用户插件目录（并创建），以确保 debug 模式也不会回退到 crawler-plugins/packed
+        let data_dir = crate::app_paths::user_data_dir("Kabegame");
+        let dst_dir = data_dir.join("plugins-directory");
+        fs::create_dir_all(&dst_dir)
+            .map_err(|e| format!("Failed to create plugins directory: {}", e))?;
+
+        for id in builtins {
+            let src = src_dir.join(format!("{}.kgpg", id));
+            if !src.is_file() {
+                // 资源缺失：跳过（不算致命）
+                continue;
+            }
+            let dst = dst_dir.join(format!("{}.kgpg", id));
+
+            // local 模式：无差别覆盖，确保可用性/不变性
+            // normal 模式：仅首次安装（目标不存在才复制），允许用户后续覆盖/卸载
+            if !is_local_mode() && dst.exists() {
+                continue;
+            }
+
+            // 先拷贝到临时文件再原子替换（避免进程中途退出留下半文件）
+            let tmp = dst_dir.join(format!("{}.kgpg.tmp", id));
+            fs::copy(&src, &tmp).map_err(|e| format!("Failed to copy {}: {}", id, e))?;
+            // Windows 上 rename 覆盖行为不一致：先删除旧文件再 rename
+            if dst.exists() {
+                let _ = fs::remove_file(&dst);
+            }
+            fs::rename(&tmp, &dst).map_err(|e| format!("Failed to finalize {}: {}", id, e))?;
+        }
+        Ok(())
     }
 
     /// 从插件目录中的 .kgpg 文件加载所有已安装的插件
     pub fn get_all(&self) -> Result<Vec<Plugin>, String> {
+        let builtins = self.builtins();
+        let enabled_map = self.enabled_map();
+
         let plugins_dir = self.get_plugins_directory();
         if !plugins_dir.exists() {
             return Ok(vec![]);
@@ -91,7 +262,7 @@ impl PluginManager {
                     let plugin_id = file_name.clone();
 
                     let plugin = Plugin {
-                        id: plugin_id,
+                        id: plugin_id.clone(),
                         name: manifest.name.clone(),
                         description: manifest.description,
                         version: manifest.version,
@@ -99,9 +270,9 @@ impl PluginManager {
                             .as_ref()
                             .map(|c| c.base_url.clone())
                             .unwrap_or_default(),
-                        enabled: true,
+                        enabled: enabled_map.get(&plugin_id).copied().unwrap_or(true),
                         size_bytes,
-                        built_in: false,
+                        built_in: is_immutable_builtin_id(&builtins, &plugin_id),
                         config: HashMap::new(),
                         selector: config.and_then(|c| c.selector),
                     };
@@ -140,8 +311,7 @@ impl PluginManager {
         // 只更新 enabled 状态
         if let Some(enabled) = updates.get("enabled").and_then(|v| v.as_bool()) {
             plugin.enabled = enabled;
-            // 可以将 enabled 状态保存到单独的配置文件
-            // 目前暂时不保存，因为插件信息每次都从文件读取
+            self.set_plugin_enabled(id, enabled)?;
         }
 
         Ok(plugin)
@@ -149,6 +319,11 @@ impl PluginManager {
 
     /// 删除插件（删除对应的 .kgpg 文件）
     pub fn delete(&self, id: &str) -> Result<(), String> {
+        // 内置插件不可卸载（仅 local 模式；normal 模式允许用户覆盖/卸载）
+        if is_immutable_builtin_id(&self.builtins(), id) {
+            return Err("该插件为内置插件，禁止卸载。请切换应用程序版本。".to_string());
+        }
+
         let plugins_dir = self.get_plugins_directory();
         if !plugins_dir.exists() {
             return Err(format!("Plugin {} not found", id));
@@ -172,6 +347,7 @@ impl PluginManager {
                 if plugin_id == id {
                     fs::remove_file(&path)
                         .map_err(|e| format!("Failed to delete plugin file: {}", e))?;
+                    let _ = self.remove_plugin_enabled_state(id);
                     return Ok(());
                 }
             }
@@ -537,6 +713,19 @@ impl PluginManager {
         // 目标文件路径
         let target_path = plugins_dir.join(file_name);
 
+        // local 模式：禁止导入同 ID（提醒用户切换应用程序版本）
+        let file_stem = zip_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        if is_local_mode() && self.get(&file_stem).is_some() {
+            return Err(
+                "检测到同 ID 插件已存在，本版本禁止覆盖导入。请切换应用程序版本获取该插件的对应更新。"
+                    .to_string(),
+            );
+        }
+
         // 如果目标文件已存在，先删除
         if target_path.exists() {
             fs::remove_file(&target_path)
@@ -548,11 +737,6 @@ impl PluginManager {
             .map_err(|e| format!("Failed to copy plugin file: {}", e))?;
 
         // 构建 Plugin 对象（从复制的文件中读取）
-        let file_stem = zip_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
         let plugin_id = file_stem.clone();
 
         let size_bytes = fs::metadata(&target_path)
@@ -570,7 +754,7 @@ impl PluginManager {
                 .unwrap_or_default(),
             enabled: true,
             size_bytes,
-            built_in: false,
+            built_in: is_immutable_builtin_id(&self.builtins(), &plugin_id),
             config: HashMap::new(),
             selector: config.and_then(|c| c.selector),
         };
@@ -1410,6 +1594,15 @@ impl PluginManager {
         let plugin_id = file_name.clone();
 
         let already_exists = self.get(&plugin_id).is_some();
+
+        // local 模式：禁止导入同 ID（包含内置/用户插件）
+        if already_exists && is_local_mode() {
+            return Err(
+                "检测到同 ID 插件已存在，本版本禁止覆盖导入。请切换应用程序版本获取该插件的对应更新。"
+                    .to_string(),
+            );
+        }
+
         let existing_version = if already_exists {
             // 从已安装的插件文件中读取版本
             if let Ok(existing_manifest) = self

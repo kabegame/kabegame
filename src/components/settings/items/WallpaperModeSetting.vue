@@ -83,27 +83,30 @@ const handleChange = async (mode: string) => {
 
         const waitForSwitchComplete = new Promise<{ success: boolean; error?: string }>(async (resolve, reject) => {
             const timeoutId = setTimeout(() => {
-                if (unlistenFn) {
-                    unlistenFn();
+                const fn = unlistenFn as (() => void) | null;
+                if (fn) {
+                    fn();
                     unlistenFn = null;
                 }
                 reject(new Error("切换模式超时：后端未在 30 秒内响应"));
             }, 30000);
 
             try {
-                unlistenFn = await listen<{ success: boolean; mode: string; error?: string }>(
+                const listenFn = await listen<{ success: boolean; mode: string; error?: string }>(
                     "wallpaper-mode-switch-complete",
                     (event) => {
                         if (event.payload.mode === mode) {
                             clearTimeout(timeoutId);
-                            if (unlistenFn) {
-                                unlistenFn();
+                            const fn = unlistenFn as (() => void) | null;
+                            if (fn) {
+                                fn();
                                 unlistenFn = null;
                             }
                             resolve({ success: event.payload.success, error: event.payload.error });
                         }
                     }
                 );
+                unlistenFn = listenFn;
             } catch (listenError) {
                 clearTimeout(timeoutId);
                 reject(new Error(`监听切换完成事件失败: ${listenError}`));
@@ -115,8 +118,9 @@ const handleChange = async (mode: string) => {
         try {
             await invoke("set_wallpaper_mode", { mode });
         } catch (invokeError: any) {
-            if (unlistenFn) {
-                unlistenFn();
+            const fn = unlistenFn as (() => void) | null;
+            if (fn) {
+                fn();
                 unlistenFn = null;
             }
             const errorMsg = invokeError?.message || invokeError?.toString() || "未知错误";
@@ -144,10 +148,12 @@ const handleChange = async (mode: string) => {
         // eslint-disable-next-line no-console
         console.error("切换模式异常:", e);
     } finally {
-        if (unlistenFn) {
+        const fn = unlistenFn as (() => void) | null;
+        if (fn) {
             try {
-                unlistenFn();
+                fn();
             } catch { }
+            unlistenFn = null;
         }
         uiStore.wallpaperModeSwitching = false as any;
     }
@@ -158,6 +164,7 @@ const handleChange = async (mode: string) => {
 .wallpaper-mode-radio-group {
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     gap: 12px;
 }
 </style>

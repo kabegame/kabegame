@@ -30,18 +30,13 @@
     </PageHeader>
 
     <GalleryView ref="albumViewRef" class="detail-body" mode="albumDetail" :loading="loading" :images="images"
-      :image-url-map="imageSrcMap" :columns="albumColumns" :aspect-ratio-match-window="!!albumAspectRatio"
-      :window-aspect-ratio="albumAspectRatio || 16 / 9" :allow-select="true" :enable-ctrl-wheel-adjust-columns="true"
+      :image-url-map="imageSrcMap" :image-click-action="imageClickAction" :columns="albumColumns"
+      :aspect-ratio-match-window="!!albumAspectRatio" :window-aspect-ratio="albumAspectRatio || 16 / 9"
+      :allow-select="true" :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="!loading"
       :is-blocked="isBlockingOverlayOpen" @adjust-columns="(...args) => throttledAdjustColumns(args[0])"
       @selection-change="(...args) => handleSelectionChange(args[0])"
       @image-dbl-click="(...args) => handleImageDblClick(args[0])"
       @contextmenu="(...args) => handleImageContextMenu(args[0], args[1])">
-      <template #before-grid>
-        <div v-if="!loading && !images.length" class="empty-state">
-          <img src="/album-empty.png" alt="空画册" class="empty-image" />
-          <p class="empty-tip">まだ空っぽだけど、これから色々お友達を作っていくのだ！</p>
-        </div>
-      </template>
 
       <template #overlays>
         <ImageContextMenu :visible="imageMenuVisible" :position="imageMenuPosition" :image="imageMenuImage"
@@ -78,17 +73,27 @@ import GalleryView from "@/components/GalleryView.vue";
 import { useAlbumStore } from "@/stores/albums";
 import { useCrawlerStore, type ImageInfo as CrawlerImageInfo } from "@/stores/crawler";
 import type { ImageInfo } from "@/stores/crawler";
+import { useSettingsStore } from "@/stores/settings";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
+import { useGallerySettings } from "@/composables/useGallerySettings";
 
 const route = useRoute();
 const router = useRouter();
 const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const crawlerStore = useCrawlerStore();
+const settingsStore = useSettingsStore();
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
+
+// 使用画廊设置 composable
+const {
+  imageClickAction,
+  loadSettings,
+  throttledAdjustColumns,
+} = useGallerySettings();
 
 const albumId = ref<string>("");
 const albumName = ref<string>("");
@@ -105,6 +110,40 @@ const albumViewRef = ref<any>(null);
 const albumColumns = ref(0);
 const albumAspectRatio = ref<number | null>(null);
 
+// 监听设置 store 中的变化，实时同步
+watch(
+  () => settingsStore.values.galleryColumns,
+  (newValue) => {
+    albumColumns.value = newValue || 0;
+  }
+);
+
+watch(
+  () => settingsStore.values.galleryImageAspectRatio,
+  (newValue) => {
+    if (!newValue) {
+      albumAspectRatio.value = null;
+      return;
+    }
+    const value = newValue as string;
+    // 解析 "16:9" 格式
+    if (value.includes(":") && !value.startsWith("custom:")) {
+      const [w, h] = value.split(":").map(Number);
+      if (w && h) {
+        albumAspectRatio.value = w / h;
+      }
+    }
+    // 解析 "custom:1920:1080" 格式
+    if (value.startsWith("custom:")) {
+      const parts = value.replace("custom:", "").split(":");
+      const [w, h] = parts.map(Number);
+      if (w && h) {
+        albumAspectRatio.value = w / h;
+      }
+    }
+  }
+);
+
 // 当有弹窗/抽屉等覆盖层时，不应处理画廊快捷键（避免误触）
 const isBlockingOverlayOpen = () => {
   // 本页面自身的弹窗
@@ -119,40 +158,6 @@ const isBlockingOverlayOpen = () => {
     return rect.width > 0 && rect.height > 0;
   });
 };
-
-// 调整列数（与 Gallery 行为对齐，但不写入全局设置）
-const adjustColumns = (delta: number) => {
-  if (delta > 0) {
-    if (albumColumns.value === 0) {
-      albumColumns.value = 5;
-    } else if (albumColumns.value < 10) {
-      albumColumns.value++;
-    }
-  } else {
-    if (albumColumns.value > 1) {
-      albumColumns.value--;
-    } else if (albumColumns.value === 1) {
-      albumColumns.value = 0;
-    }
-  }
-  // 与 Gallery 共用同一套列数设置
-  invoke("set_gallery_columns", { columns: albumColumns.value }).catch((error) => {
-    console.error("保存列数设置失败:", error);
-  });
-};
-
-const throttle = <T extends (...args: any[]) => any>(func: T, delay: number): T => {
-  let lastCall = 0;
-  return ((...args: any[]) => {
-    const now = Date.now();
-    if (now - lastCall >= delay) {
-      lastCall = now;
-      return func(...args);
-    }
-  }) as T;
-};
-
-const throttledAdjustColumns = throttle(adjustColumns, 100);
 
 const handleSelectionChange = (ids: Set<string>) => {
   // 始终用新 Set，避免外部误改导致状态不同步
@@ -241,11 +246,16 @@ const loadAlbum = async () => {
   }
 };
 
-const handleImageDblClick = (image: ImageInfo) => {
-  previewImage.value = image;
-  previewPath.value = image.localPath;
-  previewUrl.value = imageSrcMap.value[image.id]?.original || "";
-  showPreview.value = true;
+const handleImageDblClick = async (image: ImageInfo) => {
+  if (imageClickAction.value === 'open') {
+    try {
+      await invoke("open_file_path", { filePath: image.localPath });
+    } catch (error) {
+      console.error("打开文件失败:", error);
+      ElMessage.error("打开文件失败");
+    }
+  }
+  // preview 模式由 ImageGrid 内部处理
 };
 
 const handleImageContextMenu = (event: MouseEvent, image: ImageInfo) => {
@@ -537,18 +547,17 @@ watch(
 );
 
 onMounted(async () => {
-  // 与 Gallery 共用同一套列数和宽高比：进入画册页时读取一次设置
+  // 与 Gallery 共用同一套设置
   try {
-    const settings = await invoke<{ 
-      galleryColumns?: number;
-      galleryImageAspectRatio?: string | null;
-    }>("get_settings");
-    albumColumns.value = settings.galleryColumns || 0;
-    
+    await loadSettings();
+
+    // 初始化画册列数
+    albumColumns.value = settingsStore.values.galleryColumns || 0;
+
     // 解析宽高比
-    if (settings.galleryImageAspectRatio) {
-      const value = settings.galleryImageAspectRatio;
-      
+    if (settingsStore.values.galleryImageAspectRatio) {
+      const value = settingsStore.values.galleryImageAspectRatio;
+
       // 解析 "16:9" 格式
       if (value.includes(":") && !value.startsWith("custom:")) {
         const [w, h] = value.split(":").map(Number);
@@ -556,7 +565,7 @@ onMounted(async () => {
           albumAspectRatio.value = w / h;
         }
       }
-      
+
       // 解析 "custom:1920:1080" 格式
       if (value.startsWith("custom:")) {
         const parts = value.replace("custom:", "").split(":");
@@ -856,31 +865,6 @@ onBeforeUnmount(() => {
     height: 100%;
   }
 
-  .empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 48px 32px;
-    height: 100%;
-
-    .empty-image {
-      width: 200px;
-      max-width: 60%;
-      height: auto;
-      opacity: 0.85;
-      margin-bottom: 24px;
-      user-select: none;
-      pointer-events: none;
-    }
-
-    .empty-tip {
-      color: var(--anime-text-muted);
-      font-size: 14px;
-      text-align: center;
-      line-height: 1.6;
-    }
-  }
 }
 
 .album-title-wrapper {

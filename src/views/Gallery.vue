@@ -1,5 +1,14 @@
 <template>
   <div class="gallery-page">
+    <!-- 顶部工具栏 -->
+    <GalleryToolbar :filter-plugin-id="filterPluginId" :plugins="plugins" :plugin-icons="pluginIcons"
+      :active-running-tasks-count="activeRunningTasksCount" :show-favorites-only="showFavoritesOnly"
+      :dedupe-loading="dedupeLoading" :has-more="crawlerStore.hasMore" :is-loading-all="isLoadingAll"
+      @update:filter-plugin-id="filterPluginId = $event" @toggle-favorites-only="showFavoritesOnly = !showFavoritesOnly"
+      @refresh="loadImages(true, { forceReload: true })" @dedupe-by-hash="handleDedupeByHash"
+      @show-quick-settings="openQuickSettingsDrawer" @show-tasks-drawer="showTasksDrawer = true"
+      @show-crawler-dialog="showCrawlerDialog = true" @load-all="loadAllImages" />
+
     <GalleryView ref="galleryViewRef" class="gallery-container" mode="gallery" :images="displayedImages"
       :image-url-map="imageSrcMap" :image-click-action="imageClickAction" :columns="galleryColumns"
       :aspect-ratio-match-window="!!galleryImageAspectRatio" :window-aspect-ratio="effectiveAspectRatio"
@@ -11,15 +20,6 @@
       @context-command="(...args) => handleGridContextCommand(args[0])"
       @move="(...args) => handleImageMove(args[0], args[1])">
       <template #before-grid>
-        <!-- 顶部工具栏 -->
-        <GalleryToolbar :filter-plugin-id="filterPluginId" :plugins="plugins" :plugin-icons="pluginIcons"
-          :active-running-tasks-count="activeRunningTasksCount" :show-favorites-only="showFavoritesOnly"
-          :dedupe-loading="dedupeLoading" :has-more="crawlerStore.hasMore" :is-loading-all="isLoadingAll"
-          @update:filter-plugin-id="filterPluginId = $event"
-          @toggle-favorites-only="showFavoritesOnly = !showFavoritesOnly"
-          @refresh="loadImages(true, { forceReload: true })" @dedupe-by-hash="handleDedupeByHash"
-          @show-quick-settings="openQuickSettingsDrawer" @show-tasks-drawer="showTasksDrawer = true"
-          @show-crawler-dialog="showCrawlerDialog = true" @load-all="loadAllImages" />
         <div v-if="showSkeleton" class="loading-skeleton">
           <div class="skeleton-grid">
             <div v-for="i in 20" :key="i" class="skeleton-item">
@@ -32,15 +32,15 @@
           </div>
         </div>
 
-        <div v-else-if="displayedImages.length === 0 && !crawlerStore.hasMore" class="empty fade-in">
-          <el-empty description="还没有收藏呢~">
-            <el-button type="primary" @click="showCrawlerDialog = true">
-              <el-icon>
-                <Plus />
-              </el-icon>
-              开始导入
-            </el-button>
-          </el-empty>
+        <div v-else-if="displayedImages.length === 0 && !crawlerStore.hasMore && !isRefreshing"
+          :key="'empty-' + refreshKey" class="empty fade-in">
+          <EmptyState />
+          <el-button type="primary" class="empty-action-btn" @click="showCrawlerDialog = true">
+            <el-icon>
+              <Plus />
+            </el-icon>
+            开始导入
+          </el-button>
         </div>
       </template>
 
@@ -88,18 +88,19 @@ import { storeToRefs } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus } from "@element-plus/icons-vue";
-import { useCrawlerStore, type ImageInfo, type RunConfig } from "@/stores/crawler";
+import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useAlbumStore } from "@/stores/albums";
 import { usePluginStore } from "@/stores/plugins";
-import { open } from "@tauri-apps/plugin-dialog";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
 import TaskDrawer from "@/components/TaskDrawer.vue";
 import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
 import GalleryView from "@/components/GalleryView.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
+import EmptyState from "@/components/common/EmptyState.vue";
 import { useGalleryImages } from "@/composables/useGalleryImages";
 import { useGallerySettings } from "@/composables/useGallerySettings";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
+import { useSettingsStore } from "@/stores/settings";
 
 type FavoriteStatusChangedDetail = { imageIds: string[]; favorite: boolean };
 
@@ -113,6 +114,7 @@ const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettingsDrawer = () => quickSettingsDrawer.open("gallery");
 const pluginStore = usePluginStore();
 const albumStore = useAlbumStore();
+const settingsStore = useSettingsStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 
 const dedupeProcessing = ref(false); // 正在执行"按哈希去重"本体
@@ -133,6 +135,9 @@ const showSkeleton = ref(false);
 const skeletonTimer = ref<ReturnType<typeof setTimeout> | null>(null);
 const isLoadingMore = ref(false);
 const isLoadingAll = ref(false);
+const isRefreshing = ref(false); // 刷新中状态，用于阻止刷新时 EmptyState 闪烁
+// 刷新计数器，用于强制空占位符重新挂载以触发动画
+const refreshKey = ref(0);
 
 const setGalleryContainerEl = (el: HTMLElement) => {
   galleryContainerRef.value = el;
@@ -149,16 +154,23 @@ const selectedImage = ref<ImageInfo | null>(null);
 const {
   imageClickAction,
   galleryColumns,
-  galleryImageAspectRatioMatchWindow,
   windowAspectRatio,
   loadSettings,
   updateWindowAspectRatio,
   handleResize,
-  adjustColumns,
   throttledAdjustColumns,
 } = useGallerySettings();
 
 const galleryImageAspectRatio = ref<string | null>(null); // 设置的图片宽高比（保留用于兼容）
+
+// 监听设置 store 中宽高比的变化，实时同步到本地 ref
+watch(
+  () => settingsStore.values.galleryImageAspectRatio,
+  (newValue) => {
+    galleryImageAspectRatio.value = (newValue as string | null) || null;
+  },
+  { immediate: true }
+);
 
 // 计算实际使用的宽高比
 const effectiveAspectRatio = computed((): number => {
@@ -188,9 +200,6 @@ const effectiveAspectRatio = computed((): number => {
   return windowAspectRatio.value;
 });
 const plugins = computed(() => pluginStore.plugins);
-const isCrawling = computed(() => crawlerStore.isCrawling);
-const enabledPlugins = computed(() => pluginStore.plugins.filter((p) => p.enabled));
-const runConfigs = computed(() => crawlerStore.runConfigs);
 const tasks = computed(() => crawlerStore.tasks);
 
 // 正在运行的任务（包括 running 和 failed 状态，不包括 pending，因为 pending 任务都是无效的）
@@ -208,138 +217,8 @@ const activeRunningTasksCount = computed(() => {
   return tasks.value.filter(task => task.status === 'running').length;
 });
 
-const form = ref({
-  pluginId: "",
-  outputDir: "",
-  vars: {} as Record<string, any>,
-  url: "",
-});
-const selectedRunConfigId = ref<string | null>(null);
-const saveAsConfig = ref(false);
-const configName = ref("");
-const configDescription = ref("");
-
-const formRef = ref();
-
-type VarOption = string | { name: string; variable: string };
-const pluginVars = ref<PluginVarDef[]>([]);
+// 插件配置相关的变量和函数已移至 CrawlerDialog 组件
 const albums = computed(() => albumStore.albums);
-
-// 判断配置项是否必填（没有 default 值则为必填）
-const isRequired = (varDef: { default?: any }) => {
-  return varDef.default === undefined || varDef.default === null;
-};
-
-type PluginVarDef = { key: string; type: string; name: string; descripts?: string; default?: any; options?: VarOption[]; min?: number; max?: number };
-
-const optionLabel = (opt: VarOption) => (typeof opt === "string" ? opt : opt.name);
-const optionValue = (opt: VarOption) => (typeof opt === "string" ? opt : opt.variable);
-
-// 将 UI 表单中的 vars（checkbox 在 UI 层使用 string[]）转换为后端/脚本需要的对象：
-// 例如 { foo: ["a","b"] } -> { foo: { a: true, b: true } }
-const expandVarsForBackend = (uiVars: Record<string, any>, defs: PluginVarDef[]) => {
-  const expanded: Record<string, any> = { ...uiVars };
-  for (const def of defs) {
-    if (def.type !== "checkbox") continue;
-    const options = def.options || [];
-    const optionVars = options.map(optionValue);
-    const selected = Array.isArray(uiVars[def.key]) ? (uiVars[def.key] as string[]) : [];
-    const obj: Record<string, boolean> = {};
-    for (const v of optionVars) obj[v] = selected.includes(v);
-    expanded[def.key] = obj;
-  }
-  return expanded;
-};
-
-// 将后端保存/运行配置中的 checkbox 值聚合回 UI 用的 foo: string[]
-// - 格式：foo: { a: true, b: false }（脚本中用 foo.a/foo.b）
-const normalizeVarsForUI = (rawVars: Record<string, any>, defs: PluginVarDef[]) => {
-  const normalized: Record<string, any> = {};
-  for (const def of defs) {
-    if (def.type === "checkbox") {
-      const options = def.options || [];
-      const optionVars = options.map(optionValue);
-      // foo 是对象（{a:true,b:false}）
-      const raw = rawVars[def.key];
-      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-        normalized[def.key] = optionVars.filter((v) => raw?.[v] === true);
-        continue;
-      }
-      // default: 支持数组（["a","b"]）或对象（{a:true,b:false}）
-      const d = def.default;
-      if (Array.isArray(d)) {
-        normalized[def.key] = d;
-      } else if (d && typeof d === "object") {
-        normalized[def.key] = optionVars.filter((v) => (d as any)[v] === true);
-      } else {
-        normalized[def.key] = [];
-      }
-      continue;
-    }
-
-    if (rawVars[def.key] !== undefined) {
-      normalized[def.key] = rawVars[def.key];
-    } else if (def.default !== undefined) {
-      normalized[def.key] = def.default;
-    }
-  }
-  return normalized;
-};
-
-// 获取验证规则
-const getValidationRules = (varDef: PluginVarDef) => {
-  if (!isRequired(varDef)) {
-    return [];
-  }
-
-  // 根据类型返回不同的验证规则
-  if (varDef.type === 'list' || varDef.type === 'checkbox') {
-    return [
-      {
-        required: true,
-        message: `请选择${varDef.name}`,
-        trigger: 'change',
-        validator: (_rule: any, value: any, callback: any) => {
-          if (!value || (Array.isArray(value) && value.length === 0)) {
-            callback(new Error(`请选择${varDef.name}`));
-          } else {
-            callback();
-          }
-        }
-      }
-    ];
-  } else if (varDef.type === 'boolean') {
-    // boolean 类型总是有值（true/false），不需要验证
-    return [];
-  } else {
-    return [
-      {
-        required: true,
-        message: `请输入${varDef.name}`,
-        trigger: varDef.type === 'options' ? 'change' : 'blur',
-        validator: (_rule: any, value: any, callback: any) => {
-          if (value === undefined || value === null || value === '') {
-            callback(new Error(`请输入${varDef.name}`));
-            return;
-          }
-          // 对于 int 和 float 类型，验证 min/max
-          if ((varDef.type === 'int' || varDef.type === 'float') && typeof value === 'number') {
-            const varDefWithMinMax = varDef as PluginVarDef;
-            if (varDefWithMinMax.min !== undefined && value < varDefWithMinMax.min) {
-              callback(new Error(`${varDef.name}不能小于 ${varDefWithMinMax.min}`));
-              return;
-            }
-            if (varDefWithMinMax.max !== undefined && value > varDefWithMinMax.max) {
-              callback(new Error(`${varDef.name}不能大于 ${varDefWithMinMax.max}`));
-              return;
-            }
-          }
-          callback();
-        }
-      }
-    ];
-  }
-};
 
 // 使用画廊图片 composable
 const {
@@ -359,7 +238,18 @@ const {
 );
 
 // 兼容旧调用：保留原函数名
-const loadImages = refreshImagesPreserveCache;
+const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => {
+  // 如果强制刷新，递增刷新计数器以触发空占位符重新挂载
+  if (opts?.forceReload) {
+    refreshKey.value++;
+    isRefreshing.value = true; // 标记为刷新中，阻止 EmptyState 闪烁
+  }
+  try {
+    await refreshImagesPreserveCache(reset, opts);
+  } finally {
+    isRefreshing.value = false;
+  }
+};
 const loadMoreImages = loadMoreImagesFromComposable;
 const loadAllImages = loadAllImagesFromComposable;
 
@@ -406,385 +296,18 @@ const openAddToAlbumDialog = async (images: ImageInfo[]) => {
   showAlbumDialog.value = true;
 };
 
-// 配置兼容性检查结果类型
-interface ConfigCompatibility {
-  versionCompatible: boolean; // 第一步：插件是否存在
-  contentCompatible: boolean; // 第二步：配置内容是否符合
-  versionReason?: string;
-  contentErrors: string[]; // 内容不兼容的具体错误
-  warnings: string[]; // 警告信息（如字段已删除但不算严重错误）
-}
+// 配置兼容性检查相关的代码已移至 useConfigCompatibility composable 和 CrawlerDialog 组件
+// 插件配置相关的函数和 watch 监听器已移至 CrawlerDialog 组件
 
-// 验证单个变量值
-const validateVarValue = (value: any, varDef: PluginVarDef): { valid: boolean; error?: string } => {
-  switch (varDef.type) {
-    case "int":
-      if (typeof value !== "number" || !Number.isInteger(value)) {
-        return { valid: false, error: "值必须是整数" };
-      }
-      if (varDef.min !== undefined && value < varDef.min) {
-        return { valid: false, error: `值不能小于 ${varDef.min}` };
-      }
-      if (varDef.max !== undefined && value > varDef.max) {
-        return { valid: false, error: `值不能大于 ${varDef.max}` };
-      }
-      break;
-    case "float":
-      if (typeof value !== "number") {
-        return { valid: false, error: "值必须是数字" };
-      }
-      if (varDef.min !== undefined && value < varDef.min) {
-        return { valid: false, error: `值不能小于 ${varDef.min}` };
-      }
-      if (varDef.max !== undefined && value > varDef.max) {
-        return { valid: false, error: `值不能大于 ${varDef.max}` };
-      }
-      break;
-    case "boolean":
-      if (typeof value !== "boolean") {
-        return { valid: false, error: "值必须是布尔值" };
-      }
-      break;
-    case "options":
-      if (varDef.options && Array.isArray(varDef.options)) {
-        const validValues = varDef.options.map(opt =>
-          typeof opt === "string" ? opt : (opt as any).variable || (opt as any).value
-        );
-        if (!validValues.includes(value)) {
-          return { valid: false, error: `值不在有效选项中` };
-        }
-      }
-      break;
-    case "checkbox":
-      if (!Array.isArray(value)) {
-        return { valid: false, error: "值必须是数组" };
-      }
-      if (varDef.options && Array.isArray(varDef.options)) {
-        const validValues = varDef.options.map(opt =>
-          typeof opt === "string" ? opt : (opt as any).variable || (opt as any).value
-        );
-        const invalidValues = value.filter(v => !validValues.includes(v));
-        if (invalidValues.length > 0) {
-          return { valid: false, error: `包含无效选项` };
-        }
-      }
-      break;
-    case "list":
-      if (!Array.isArray(value)) {
-        return { valid: false, error: "值必须是数组" };
-      }
-      break;
-  }
-  return { valid: true };
-};
-
-// 检查配置兼容性（两步验证）
-const checkConfigCompatibility = async (config: RunConfig): Promise<ConfigCompatibility> => {
-  const result: ConfigCompatibility = {
-    versionCompatible: true,
-    contentCompatible: true,
-    contentErrors: [],
-    warnings: []
-  };
-
-  // 第一步：检查插件是否存在（版本检查）
-  const pluginExists = plugins.value.some(p => p.id === config.pluginId);
-  if (!pluginExists) {
-    result.versionCompatible = false;
-    result.versionReason = "插件不存在";
-    result.contentCompatible = false;
-    return result;
-  }
-
-  try {
-    // 加载插件变量定义
-    const vars = await invoke<Array<PluginVarDef> | null>("get_plugin_vars", {
-      pluginId: config.pluginId,
-    });
-
-    if (!vars || vars.length === 0) {
-      // 插件没有变量定义，配置总是兼容的
-      return result;
-    }
-
-    const varDefMap = new Map(vars.map(def => [def.key, def]));
-    const userConfig = config.userConfig || {};
-
-    // 第二步：验证配置内容
-    for (const [key, value] of Object.entries(userConfig)) {
-      const varDef = varDefMap.get(key);
-
-      if (!varDef) {
-        // 字段已删除，记录为警告
-        result.warnings.push(`字段 "${key}" 已在新版本中删除`);
-        continue;
-      }
-
-      // 验证字段值
-      const validation = validateVarValue(value, varDef);
-      if (!validation.valid) {
-        result.contentCompatible = false;
-        result.contentErrors.push(`${varDef.name} (${key}): ${validation.error}`);
-      }
-    }
-
-    // 检查是否有新增的必填字段且没有默认值
-    for (const varDef of vars) {
-      if (!(varDef.key in userConfig)) {
-        if (isRequired(varDef) && varDef.default === undefined) {
-          result.contentCompatible = false;
-          result.contentErrors.push(`缺少必填字段: ${varDef.name} (${varDef.key})`);
-        }
-      }
-    }
-
-  } catch (error) {
-    console.error("检查配置兼容性失败:", error);
-    result.contentCompatible = false;
-    result.contentErrors.push("验证过程出错");
-  }
-
-  return result;
-};
-
-// 智能匹配配置到表单（尽量匹配能匹配的字段）
-const smartMatchConfigToForm = async (config: RunConfig): Promise<{ success: boolean; message?: string }> => {
-  // 检查插件是否存在
-  const pluginExists = plugins.value.some(p => p.id === config.pluginId);
-  if (!pluginExists) {
-    return { success: false, message: "插件不存在，无法载入配置" };
-  }
-
-  // 加载插件变量定义
-  await loadPluginVars(config.pluginId);
-
-  const userConfig = config.userConfig || {};
-  const matchedVars: Record<string, any> = {};
-  const varDefMap = new Map(pluginVars.value.map(def => [def.key, def]));
-
-  // 尝试匹配每个配置字段
-  for (const [key, value] of Object.entries(userConfig)) {
-    const varDef = varDefMap.get(key);
-
-    if (!varDef) {
-      // 字段已删除，跳过
-      continue;
-    }
-
-    // 验证值是否有效
-    const validation = validateVarValue(value, varDef);
-    if (validation.valid) {
-      // 值有效，直接使用
-      matchedVars[key] = value;
-    } else {
-      // 值无效，使用默认值（如果有）
-      if (varDef.default !== undefined) {
-        matchedVars[key] = varDef.default;
-      }
-    }
-  }
-
-  // 填充缺失字段的默认值
-  for (const varDef of pluginVars.value) {
-    if (!(varDef.key in matchedVars)) {
-      if (varDef.default !== undefined) {
-        matchedVars[varDef.key] = varDef.default;
-      }
-    }
-  }
-
-  // 转换为 UI 格式
-  const cfgUiVars = normalizeVarsForUI(matchedVars, pluginVars.value as PluginVarDef[]);
-
-  // 更新表单
-  form.value.pluginId = config.pluginId;
-  form.value.outputDir = config.outputDir || "";
-  form.value.vars = cfgUiVars;
-
-  // 取消选择配置，允许用户编辑
-  selectedRunConfigId.value = null;
-
-  return { success: true };
-};
-
-// 配置兼容性状态（用于UI显示）
-const configCompatibilityStatus = ref<Record<string, ConfigCompatibility>>({});
-
-// 配置兼容性缓存（用于避免重复计算）
-const configCompatibilityCache = ref<Map<string, ConfigCompatibility>>(new Map());
-
-// 获取配置兼容性（带缓存）
-const getConfigCompatibility = async (configId: string): Promise<ConfigCompatibility> => {
-  if (configCompatibilityCache.value.has(configId)) {
-    return configCompatibilityCache.value.get(configId)!;
-  }
-
-  const config = runConfigs.value.find(c => c.id === configId);
-  if (!config) {
-    return {
-      versionCompatible: false,
-      contentCompatible: false,
-      versionReason: "配置不存在",
-      contentErrors: [],
-      warnings: []
-    };
-  }
-
-  const compatibility = await checkConfigCompatibility(config);
-  configCompatibilityCache.value.set(configId, compatibility);
-  // 更新UI状态
-  configCompatibilityStatus.value[configId] = compatibility;
-  return compatibility;
-};
-
-// 清除兼容性缓存
-const clearCompatibilityCache = () => {
-  configCompatibilityCache.value.clear();
-  configCompatibilityStatus.value = {};
-};
-
-// 批量检查所有配置的兼容性（用于UI显示）
-const checkAllConfigsCompatibility = async () => {
-  if (runConfigs.value.length === 0) {
-    configCompatibilityStatus.value = {};
-    return;
-  }
-
-  const status: Record<string, ConfigCompatibility> = {};
-  const promises = runConfigs.value.map(async (config) => {
-    const compatibility = await getConfigCompatibility(config.id);
-    status[config.id] = compatibility;
-  });
-  await Promise.all(promises);
-  // 一次性更新所有状态，确保响应式更新
-  configCompatibilityStatus.value = { ...status };
-};
-
-// 监听配置列表和插件列表变化，重新检查兼容性
-watch(
-  () => {
-    // 关键：不要只依赖数组引用（否则 push/unshift 不会触发），而是依赖“结构化签名”
-    const cfgSig = runConfigs.value.map((c) => ({
-      id: c.id,
-      pluginId: c.pluginId,
-      // userConfig 的变化也可能导致兼容性变化；这里用 JSON 字符串作为轻量签名
-      userConfigSig: JSON.stringify(c.userConfig || {}),
-    }));
-    const pluginSig = plugins.value.map((p) => `${p.id}:${p.version}:${p.enabled}`);
-    return { cfgSig, pluginSig };
-  },
-  async () => {
-    // 插件列表变化（尤其是版本更新）会影响 vars 定义/默认值，但如果当前 pluginId 不变，
-    // `watch(form.pluginId)` 不会触发，导致导入弹窗仍展示旧 vars。
-    // 因此：当导入弹窗打开时，插件列表变更也要强制 reload 一次当前 plugin 的 vars + 保存配置。
-    if (showCrawlerDialog.value && form.value.pluginId) {
-      await loadPluginVars(form.value.pluginId);
-    }
-    clearCompatibilityCache();
-    await checkAllConfigsCompatibility();
-  },
-  { immediate: true }
-);
-
-// 打开导入对话框时，兜底刷新一次（保证下拉打开时就能看到兼容性提示）
+// 打开导入对话框时，刷新插件列表（由 CrawlerDialog 组件处理兼容性检查）
 watch(showCrawlerDialog, async (open) => {
   if (!open) return;
-  // 关键：用户可能刚在“源/插件”页刷新或更新了已安装源（.kgpg 内的 config.json/var 定义变更）
-  // 但这里若 pluginId 没变，`watch(form.pluginId)` 不会触发，导致导入弹窗仍展示旧的变量/配置。
-  // 因此弹窗打开时做一次“兜底同步”：
-  // - 刷新已安装源列表（从文件系统重新读取 .kgpg）
-  // - 重新加载当前选中源的变量定义 + 已保存用户配置
-  // - 重新计算兼容性提示
   try {
     await pluginStore.loadPlugins();
   } catch (e) {
-    // 刷新失败不应阻塞弹窗打开；兼容性/变量加载会按现有状态继续
     console.debug("导入弹窗打开时刷新已安装源失败（忽略）：", e);
   }
-
-  if (form.value.pluginId) {
-    await loadPluginVars(form.value.pluginId);
-  }
-
-  clearCompatibilityCache();
-  await checkAllConfigsCompatibility();
 });
-
-// 删除运行配置（从下拉项直接删除）
-const confirmDeleteRunConfig = async (configId: string) => {
-  try {
-    const cfg = runConfigs.value.find(c => c.id === configId);
-    await ElMessageBox.confirm(
-      `删除后无法通过该配置再次运行。已创建的任务不会受影响。确定删除${cfg ? `「${cfg.name}」` : "该配置"}吗？`,
-      "删除配置",
-      { type: "warning" }
-    );
-    await crawlerStore.deleteRunConfig(configId);
-    if (selectedRunConfigId.value === configId) {
-      selectedRunConfigId.value = null;
-      // 保留表单内容，便于用户直接修改后保存/运行
-    }
-    clearCompatibilityCache();
-    ElMessage.success("配置已删除");
-  } catch (error) {
-    if (error !== "cancel") {
-      console.error("删除运行配置失败:", error);
-      ElMessage.error("删除配置失败");
-    }
-  }
-};
-
-// 载入配置到表单（强制载入，即使不兼容）
-const loadConfigToForm = async (configId: string) => {
-  const config = runConfigs.value.find(c => c.id === configId);
-  if (!config) {
-    ElMessage.error("配置不存在");
-    return;
-  }
-
-  // 检查兼容性
-  const compatibility = await getConfigCompatibility(configId);
-
-  // 如果版本不兼容，直接提示
-  if (!compatibility.versionCompatible) {
-    await ElMessageBox.alert(
-      `该配置关联的插件不存在：${compatibility.versionReason || "未知错误"}\n无法载入配置。`,
-      "插件缺失",
-      { type: "error" }
-    );
-    return;
-  }
-
-  // 如果内容不兼容，提示用户但允许继续
-  if (!compatibility.contentCompatible) {
-    const errorMsg = compatibility.contentErrors.length > 0
-      ? `配置内容与当前插件版本不兼容：\n${compatibility.contentErrors.join('\n')}`
-      : "配置内容与当前插件版本不兼容";
-    const warningMsg = compatibility.warnings.length > 0
-      ? `\n\n警告：\n${compatibility.warnings.join('\n')}`
-      : "";
-
-    try {
-      await ElMessageBox.confirm(
-        `${errorMsg}${warningMsg}\n\n将尝试匹配可用的配置项，缺失的字段将使用默认值。是否继续？`,
-        "配置不兼容",
-        { type: "warning", confirmButtonText: "继续载入", cancelButtonText: "取消" }
-      );
-    } catch (error) {
-      if (error === "cancel") {
-        return;
-      }
-    }
-  }
-
-  // 智能匹配并载入配置
-  const result = await smartMatchConfigToForm(config);
-  if (result.success) {
-    ElMessage.success("配置已载入，快乐玩耍吧！");
-  } else {
-    ElMessage.error(result.message || "载入配置失败");
-  }
-};
 
 // 处理新建画册并加入图片
 const handleCreateAndAddAlbum = async () => {
@@ -862,27 +385,6 @@ const confirmAddToAlbum = async () => {
   showAlbumDialog.value = false;
   pendingAlbumImages.value = [];
   selectedAlbumId.value = "";
-};
-
-// 获取视口内的图片ID（用于优先加载可见图片）
-const getVisibleImageIds = (): string[] => {
-  const container = galleryContainerRef.value;
-  if (!container) return [];
-
-  const containerRect = container.getBoundingClientRect();
-  const items = container.querySelectorAll<HTMLElement>(".image-item");
-  const visibleIds: string[] = [];
-
-  items.forEach((el) => {
-    const rect = el.getBoundingClientRect();
-    const isVisible = rect.bottom >= containerRect.top && rect.top <= containerRect.bottom;
-    if (isVisible) {
-      const id = el.getAttribute("data-id");
-      if (id) visibleIds.push(id);
-    }
-  });
-
-  return visibleIds;
 };
 
 // 加载插件图标
@@ -1393,319 +895,7 @@ const handleCopyImage = async (image: ImageInfo) => {
 
 
 // refreshImagesPreserveCache, refreshLatestIncremental, loadMoreImages, loadAllImages 已移至 useGalleryImages composable
-
-const selectOutputDir = async () => {
-  try {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-    });
-
-    if (selected && typeof selected === "string") {
-      form.value.outputDir = selected;
-    }
-  } catch (error) {
-    console.error("选择目录失败:", error);
-  }
-};
-
-const selectFolder = async (varKey: string) => {
-  try {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-    });
-
-    if (selected && typeof selected === "string") {
-      form.value.vars[varKey] = selected;
-    }
-  } catch (error) {
-    console.error("选择目录失败:", error);
-    ElMessage.error("选择目录失败");
-  }
-};
-
-const selectFile = async (varKey: string) => {
-  try {
-    const selected = await open({
-      directory: false,
-      multiple: false,
-      filters: [
-        {
-          name: "图片",
-          extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"],
-        },
-      ],
-    });
-
-    if (selected && typeof selected === "string") {
-      form.value.vars[varKey] = selected;
-    }
-  } catch (error) {
-    console.error("选择文件失败:", error);
-    ElMessage.error("选择文件失败");
-  }
-};
-
-const handleStartCrawl = async () => {
-  try {
-    // 若选择了运行配置，直接运行配置
-    if (selectedRunConfigId.value) {
-      await crawlerStore.runConfig(selectedRunConfigId.value);
-      showCrawlerDialog.value = false;
-      return;
-    }
-
-    if (!form.value.pluginId) {
-      ElMessage.warning("请选择源");
-      return;
-    }
-
-    // 验证表单
-    if (formRef.value) {
-      try {
-        await formRef.value.validate();
-      } catch (error) {
-        ElMessage.warning("请填写所有必填项");
-        return;
-      }
-    }
-
-    // 手动验证必填的插件配置项
-    for (const varDef of pluginVars.value) {
-      if (isRequired(varDef)) {
-        const value = form.value.vars[varDef.key];
-        if (value === undefined || value === null || value === '' ||
-          ((varDef.type === 'list' || varDef.type === 'checkbox') && Array.isArray(value) && value.length === 0)) {
-          ElMessage.warning(`请填写必填项：${varDef.name}`);
-          return;
-        }
-      }
-    }
-
-    // 运行/保存配置时，userConfig 统一传对象（至少是 {}），避免“预设保存后 userConfig 为空导致后端未注入变量”
-    const backendVars =
-      pluginVars.value.length > 0
-        ? expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[])
-        : undefined;
-
-    // 保存用户配置（如果有变量定义）
-    if (pluginVars.value.length > 0 && backendVars && Object.keys(backendVars).length > 0) {
-      await invoke("save_plugin_config", {
-        pluginId: form.value.pluginId,
-        config: backendVars,
-      });
-    }
-
-    // 可选：保存为运行配置（不影响本次直接运行）
-    if (saveAsConfig.value) {
-      if (!configName.value.trim()) {
-        ElMessage.warning("请输入配置名称");
-        return;
-      }
-      await crawlerStore.addRunConfig({
-        name: configName.value.trim(),
-        description: configDescription.value?.trim() || undefined,
-        pluginId: form.value.pluginId,
-        url: "",
-        outputDir: form.value.outputDir || undefined,
-        userConfig: backendVars,
-      });
-    }
-
-    // 添加任务（异步执行，不等待完成）
-    crawlerStore.addTask(
-      form.value.pluginId,
-      "",
-      form.value.outputDir || undefined,
-      backendVars
-    ).catch(error => {
-      // 这里的错误是任务初始化失败，由 watch 监听来处理任务状态变化时的错误显示
-      console.error("任务执行失败:", error);
-    });
-
-    // 重置表单
-    form.value.outputDir = "";
-    saveAsConfig.value = false;
-    configName.value = "";
-    configDescription.value = "";
-    // 关闭对话框
-    showCrawlerDialog.value = false;
-  } catch (error) {
-    console.error("添加任务失败:", error);
-    // 只处理添加任务时的错误（如保存配置失败），执行错误由 watch 处理
-    ElMessage.error(error instanceof Error ? error.message : "添加任务失败");
-  }
-};
-
-const loadPluginVars = async (pluginId: string) => {
-  try {
-    const vars = await invoke<Array<{ key: string; type: string; name: string; descripts?: string; default?: any; options?: VarOption[] }> | null>("get_plugin_vars", {
-      pluginId,
-    });
-    pluginVars.value = vars || [];
-
-    // DEV 调试：确认后端实际返回的 var 定义是否已更新（排查“插件已更新但导入仍旧配置”）
-    if (import.meta.env.DEV) {
-      console.info("[loadPluginVars] get_plugin_vars result:", {
-        pluginId,
-        vars: pluginVars.value,
-      });
-    }
-
-    // 加载已保存的用户配置
-    const savedConfig = await invoke<Record<string, any>>("load_plugin_config", {
-      pluginId,
-    });
-
-    if (import.meta.env.DEV) {
-      console.info("[loadPluginVars] load_plugin_config result:", {
-        pluginId,
-        savedConfig,
-      });
-    }
-
-    // 将保存的配置聚合为 UI 表单模型（checkbox: foo -> ["a","b"]），并补默认值
-    form.value.vars = normalizeVarsForUI(savedConfig || {}, pluginVars.value as PluginVarDef[]);
-  } catch (error) {
-    console.error("加载插件变量失败:", error);
-    pluginVars.value = [];
-  }
-};
-
-// 监听插件选择变化
-watch(() => form.value.pluginId, (newPluginId) => {
-  if (newPluginId) {
-    loadPluginVars(newPluginId);
-  } else {
-    pluginVars.value = [];
-    form.value.vars = {};
-  }
-});
-
-watch(selectedRunConfigId, async (cfgId) => {
-  if (!cfgId) {
-    // 取消选择配置，保持当前表单，不自动清空
-    return;
-  }
-
-  const cfg = runConfigs.value.find(c => c.id === cfgId);
-  if (!cfg) {
-    await ElMessageBox.alert("运行配置不存在，请重新选择", "配置无效", { type: "warning" });
-    selectedRunConfigId.value = null;
-    return;
-  }
-
-  // 先检查已缓存的兼容性状态（快速检查）
-  const cachedCompatibility = configCompatibilityStatus.value[cfgId];
-  if (cachedCompatibility) {
-    // 如果已知不兼容：禁止“一键使用”，但允许“载入到表单”
-    if (!cachedCompatibility.versionCompatible || !cachedCompatibility.contentCompatible) {
-      const id = cfgId;
-      // 先清空选择，避免表单被锁定、也避免用户误触“一键使用配置”
-      selectedRunConfigId.value = null;
-      await loadConfigToForm(id);
-      return;
-    }
-  }
-
-  // 检查兼容性（确保获取最新状态）
-  const compatibility = await getConfigCompatibility(cfgId);
-
-  // 第一步：检查版本兼容性（插件是否存在）
-  if (!compatibility.versionCompatible) {
-    await ElMessageBox.alert(
-      `该配置关联的插件不存在：${compatibility.versionReason || "未知错误"}\n无法使用该配置。`,
-      "插件缺失",
-      { type: "error" }
-    );
-    selectedRunConfigId.value = null;
-    form.value.pluginId = "";
-    form.value.outputDir = "";
-    form.value.vars = {};
-    return;
-  }
-
-  // 第二步：检查内容兼容性
-  if (!compatibility.contentCompatible) {
-    const id = cfgId;
-    selectedRunConfigId.value = null;
-    await loadConfigToForm(id);
-    return;
-  }
-
-  // 选择现有配置时，不允许继续勾选"保存为配置"
-  saveAsConfig.value = false;
-  configName.value = "";
-  configDescription.value = "";
-
-  // 先写入配置字段
-  form.value.pluginId = cfg.pluginId;
-  form.value.outputDir = cfg.outputDir || "";
-  form.value.vars = {};
-
-  // 加载插件变量定义（异步），用于校验必填项是否满足
-  await loadPluginVars(cfg.pluginId);
-
-  // 智能匹配配置项
-  const userConfig = cfg.userConfig || {};
-  const matchedVars: Record<string, any> = {};
-  const varDefMap = new Map(pluginVars.value.map(def => [def.key, def]));
-
-  // 尝试匹配每个配置字段
-  for (const [key, value] of Object.entries(userConfig)) {
-    const varDef = varDefMap.get(key);
-
-    if (!varDef) {
-      // 字段已删除，跳过
-      continue;
-    }
-
-    // 验证值是否有效
-    const validation = validateVarValue(value, varDef);
-    if (validation.valid) {
-      // 值有效，直接使用
-      matchedVars[key] = value;
-    } else {
-      // 值无效，使用默认值（如果有）
-      if (varDef.default !== undefined) {
-        matchedVars[key] = varDef.default;
-      }
-    }
-  }
-
-  // 填充缺失字段的默认值
-  for (const varDef of pluginVars.value) {
-    if (!(varDef.key in matchedVars)) {
-      if (varDef.default !== undefined) {
-        matchedVars[varDef.key] = varDef.default;
-      }
-    }
-  }
-
-  // 转换为 UI 格式
-  const cfgUiVars = normalizeVarsForUI(matchedVars, pluginVars.value as PluginVarDef[]);
-
-  // 检查必填项
-  const missingRequired = pluginVars.value.filter((varDef) => {
-    if (!isRequired(varDef)) return false;
-    const value = cfgUiVars[varDef.key];
-    if (value === undefined || value === null || value === "") return true;
-    if ((varDef.type === "list" || varDef.type === "checkbox") && Array.isArray(value) && value.length === 0) return true;
-    return false;
-  });
-
-  if (missingRequired.length > 0) {
-    const names = missingRequired.map(v => v.name).join("、");
-    await ElMessageBox.alert(`该配置缺少必填项：${names}。请检查配置变量。`, "配置不完整", { type: "warning" });
-    selectedRunConfigId.value = null;
-    // 保留表单内容方便用户直接修正
-    return;
-  }
-
-  // 使用配置中的变量覆盖 loadPluginVars 填充的默认值
-  form.value.vars = { ...form.value.vars, ...cfgUiVars };
-});
+// 插件配置相关的函数和 watch 监听器已移至 CrawlerDialog 组件
 
 // 监听筛选插件ID变化，重新加载图片
 watch(filterPluginId, () => {
@@ -1965,7 +1155,10 @@ const loadSettingsExtended = async () => {
     const settings = await invoke<{
       galleryImageAspectRatio?: string | null;
     }>("get_settings");
-    galleryImageAspectRatio.value = settings.galleryImageAspectRatio || null;
+    const aspectRatio = settings.galleryImageAspectRatio || null;
+    // 同时更新 store 和本地 ref（watch 会监听 store 的变化，但这里直接设置可以确保初始化时正确）
+    settingsStore.values.galleryImageAspectRatio = aspectRatio as any;
+    galleryImageAspectRatio.value = aspectRatio;
   } catch (error) {
     console.error("加载宽高比设置失败:", error);
   }
@@ -1982,8 +1175,6 @@ onMounted(async () => {
   await crawlerStore.loadTasks();
   await pluginStore.loadPlugins();
   await crawlerStore.loadRunConfigs();
-  // 确保在配置和插件都加载完成后检查兼容性
-  await checkAllConfigsCompatibility();
   await loadPluginIcons(); // 加载插件图标
   await loadImages(true);
 
@@ -2187,12 +1378,13 @@ onUnmounted(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
+  padding: 20px;
+  gap: 0;
 }
 
 .gallery-container {
   width: 100%;
   flex: 1;
-  padding: 20px;
   overflow-y: auto;
 
   /* 按住空格进入“拖拽滚动模式” */
@@ -2295,8 +1487,15 @@ onUnmounted(() => {
   }
 
   .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     padding: 40px;
     text-align: center;
+
+    .empty-action-btn {
+      margin-top: -16px; // EmptyState 自带 padding，调整按钮位置
+    }
   }
 
   .fade-in {

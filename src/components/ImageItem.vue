@@ -9,38 +9,9 @@
           </template>
         </el-skeleton>
       </div>
-      <div v-else-if="imageClickAction === 'preview' && originalUrl" key="preview" class="image-preview-wrapper"
+      <div v-else key="content" :class="[imageClickAction === 'preview' && originalUrl ? 'image-preview-wrapper' : 'image-wrapper']"
         :style="imageHeightStyle" @click.stop="$emit('click', $event)" @dblclick.stop="$emit('dblclick', $event)"
         @contextmenu.prevent.stop="$emit('contextmenu', $event)">
-        <img :src="displayUrl" :class="['thumbnail', { 'thumbnail-loading': isImageLoading }]" :alt="image.id"
-          loading="lazy" draggable="false" @load="handleImageLoad"
-          @error="(e: any) => { if (originalUrl) e.target.src = originalUrl; }" />
-        <!-- 箭头按钮（仅在选中且允许移动时显示） -->
-        <div v-if="selected && (props.canMoveItem ?? true)" class="order-arrows">
-          <button v-if="showUpArrow" class="arrow-btn arrow-up" @click.stop="handleMove('up')" title="向上移动">
-            <el-icon>
-              <ArrowUp />
-            </el-icon>
-          </button>
-          <button v-if="showDownArrow" class="arrow-btn arrow-down" @click.stop="handleMove('down')" title="向下移动">
-            <el-icon>
-              <ArrowDown />
-            </el-icon>
-          </button>
-          <button v-if="showLeftArrow" class="arrow-btn arrow-left" @click.stop="handleMove('left')" title="向左移动">
-            <el-icon>
-              <ArrowLeft />
-            </el-icon>
-          </button>
-          <button v-if="showRightArrow" class="arrow-btn arrow-right" @click.stop="handleMove('right')" title="向右移动">
-            <el-icon>
-              <ArrowRight />
-            </el-icon>
-          </button>
-        </div>
-      </div>
-      <div v-else key="open" class="image-wrapper" :style="imageHeightStyle" @click.stop="$emit('click', $event)"
-        @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)">
         <img :src="displayUrl" :class="['thumbnail', { 'thumbnail-loading': isImageLoading }]" :alt="image.id"
           loading="lazy" draggable="false" @load="handleImageLoad"
           @error="(e: any) => { if (originalUrl) e.target.src = originalUrl; }" />

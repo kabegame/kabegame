@@ -2,7 +2,7 @@
   <div class="plugin-browser-container">
     <!-- 顶部工具栏 -->
     <PageHeader title="源管理">
-      <el-button @click="handleRefresh" :loading="isRefreshing">
+      <el-button v-if="!isLocalMode" @click="handleRefresh" :loading="isRefreshing">
         <el-icon>
           <Refresh />
         </el-icon>
@@ -57,9 +57,10 @@
               </div>
 
               <div class="plugin-footer">
-                <el-switch v-model="plugin.enabled" @change="handleTogglePlugin(plugin)" />
-                <el-button type="danger" size="small" :disabled="plugin.builtIn" @click.stop="handleDelete(plugin)">
-                  {{ plugin.builtIn ? "内置不可卸载" : "卸载" }}
+                <el-switch v-model="plugin.enabled" @change="handleTogglePlugin(plugin)" @click.stop />
+                <el-button type="danger" size="small" v-if="!(isLocalMode && plugin.builtIn)"
+                  @click.stop="handleDelete(plugin)">
+                  卸载
                 </el-button>
               </div>
             </el-card>
@@ -67,7 +68,7 @@
         </div>
       </el-tab-pane>
       <!-- 商店源：按"源名称"动态生成 tab；每个 tab 只显示该源的数据 -->
-      <el-tab-pane v-for="s in sources" :key="s.id" :label="s.name" :name="storeTabName(s.id)">
+      <el-tab-pane v-for="s in storeSourcesToRender" :key="s.id" :label="s.name" :name="storeTabName(s.id)">
         <!-- 搜索（暂不实现：先保留 UI） -->
         <!-- <div class="filter-bar">
           <el-input v-model="searchQuery" placeholder="搜索（开发中）" clearable disabled style="width: 300px;">
@@ -151,7 +152,7 @@
       </el-tab-pane>
 
       <!-- 添加源 tab -->
-      <el-tab-pane name="add-source">
+      <el-tab-pane v-if="!isLocalMode" name="add-source">
         <template #label>
           <el-icon style="margin-right: 4px;">
             <Plus />
@@ -165,7 +166,7 @@
     </StyledTabs>
 
     <!-- 商店源管理 -->
-    <el-dialog v-model="showSourcesDialog" title="商店源" width="720px">
+    <el-dialog v-if="!isLocalMode" v-model="showSourcesDialog" title="商店源" width="720px">
       <div class="sources-hint">
         商店源是一个可访问的 <code>index.json</code> 地址（推荐指向 GitHub Releases 资产直链）。
       </div>
@@ -193,7 +194,8 @@
     </el-dialog>
 
     <!-- 新增/编辑源 -->
-    <el-dialog v-model="showEditSourceDialog" :title="editingSourceIndex === null ? '新增源' : '编辑源'" width="620px">
+    <el-dialog v-if="!isLocalMode" v-model="showEditSourceDialog" :title="editingSourceIndex === null ? '新增源' : '编辑源'"
+      width="620px">
       <el-form label-width="110px">
         <el-form-item label="名称">
           <el-input v-model="editSourceForm.name" placeholder="例如：官方源" />
@@ -255,6 +257,8 @@ import StyledTabs from "@/components/common/StyledTabs.vue";
 import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 
+type BuildMode = "normal" | "local";
+
 interface PluginSource {
   id: string;
   name: string;
@@ -297,6 +301,11 @@ const router = useRouter();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("pluginbrowser");
 
+const buildMode = ref<BuildMode>(
+  import.meta.env.VITE_KABEGAME_MODE === "local" ? "local" : "normal"
+);
+const isLocalMode = computed(() => buildMode.value === "local");
+
 const loadingBySource = ref<Record<string, boolean>>({}); // 按源区分的loading状态
 const showSkeletonBySource = ref<Record<string, boolean>>({}); // 按源区分的骨架屏状态
 const skeletonTimersBySource = ref<Record<string, ReturnType<typeof setTimeout>>>({}); // 按源区分的骨架屏定时器
@@ -323,6 +332,7 @@ const storePluginsBySource = ref<Record<string, StorePluginResolved[]>>({});
 const storeLoadedBySource = ref<Record<string, boolean>>({});
 
 const sources = ref<PluginSource[]>([]);
+const storeSourcesToRender = computed(() => (isLocalMode.value ? [] : sources.value));
 const sourcesLoadedOnce = ref(false); // 是否已加载过商店源（仅用于避免重复拉取）
 const showSourcesDialog = ref(false);
 const showEditSourceDialog = ref(false);
@@ -955,10 +965,22 @@ const handleRefresh = async () => {
 
 onMounted(async () => {
   try {
+    // 运行时从后端获取 build mode（后端为编译期注入，作为最终可信来源）
+    try {
+      const mode = await invoke<string>("get_build_mode");
+      buildMode.value = mode === "local" ? "local" : "normal";
+    } catch {
+      // ignore: fallback to import.meta.env
+    }
+
     // 首次进入：默认 tab=已安装源，不需要拉取商店列表；仅加载本地已安装源即可
     await pluginStore.loadPlugins();
-    // 加载商店源列表（本地配置），用于渲染动态 tab（不触发商店网络拉取）
-    await loadSources();
+    // normal 模式才加载商店源列表（本地配置），用于渲染动态 tab
+    if (!isLocalMode.value) {
+      await loadSources();
+    } else {
+      sources.value = [];
+    }
     await refreshPluginIcons();
   } finally {
     // 无论成功失败，都清理骨架屏定时器与显示状态
@@ -975,6 +997,7 @@ onMounted(async () => {
 
 // 首次切到“某个商店源 tab”时，才拉取该源的商店列表（懒加载）
 watch(activeTab, async (tab) => {
+  if (isLocalMode.value) return;
   if (!isStoreTab(tab)) return;
   const sourceId = tab.slice("store:".length);
   if (!sourceId) return;

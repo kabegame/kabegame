@@ -6,42 +6,42 @@
       "options": {
         "command": "vite"
       },
-      "dependsOn": ["crawler-plugins:package"]
+      "dependsOn": ["crawler-plugins:package-to-data"]
     },
     "dev-local-plugins": {
       "executor": "nx:run-commands",
       "options": {
         "command": "vite"
       },
-      "dependsOn": ["crawler-plugins:package-local"]
+      "dependsOn": ["crawler-plugins:package-local-to-data"]
     },
     "tauri:dev": {
       "executor": "nx:run-commands",
       "options": {
         "command": "tauri dev"
       },
-      "dependsOn": ["crawler-plugins:package"]
+      "dependsOn": ["crawler-plugins:package-to-data"]
     },
     "tauri:dev-local-plugins": {
       "executor": "nx:run-commands",
       "options": {
         "command": "tauri dev"
       },
-      "dependsOn": ["crawler-plugins:package-local"]
+      "dependsOn": ["crawler-plugins:package-local-to-data"]
     },
     "tauri:dev:watch": {
       "executor": "nx:run-commands",
       "options": {
         "command": "tauri dev --additional-watch-folders ..\\crawler-plugins"
       },
-      "dependsOn": ["crawler-plugins:package"]
+      "dependsOn": ["crawler-plugins:package-to-data"]
     },
     "tauri:dev:watch-local-plugins": {
       "executor": "nx:run-commands",
       "options": {
         "command": "tauri dev --additional-watch-folders ..\\crawler-plugins"
       },
-      "dependsOn": ["crawler-plugins:package-local"]
+      "dependsOn": ["crawler-plugins:package-local-to-data"]
     }
   }
 }

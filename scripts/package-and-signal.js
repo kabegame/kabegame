@@ -25,7 +25,7 @@ const toData = process.argv.includes("--to-data");
 const runner = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 let command;
 if (toData) {
-  // 输出到 data/plugins_directory，通过 pnpm 调用 nx
+  // 输出到 data/plugins-directory，通过 pnpm 调用 nx
   const target = isLocal
     ? "crawler-plugins:package-local-to-data"
     : "crawler-plugins:package-to-data";

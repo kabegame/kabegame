@@ -1,11 +1,6 @@
 <template>
-  <el-select
-    v-model="localValue"
-    placeholder="请选择过渡效果"
-    style="width: 100%"
-    :disabled="disabled"
-    @change="handleChange"
-  >
+  <el-select v-model="localValue" placeholder="请选择过渡效果" style="min-width: 180px" :disabled="disabled"
+    @change="handleChange">
     <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value" />
   </el-select>
 </template>
@@ -71,7 +66,7 @@ onMounted(async () => {
       if (rotationEnabled.value) {
         try {
           await invoke("set_wallpaper_rotation_transition", { transition: "none" });
-        } catch {}
+        } catch { }
       }
     }
   }
@@ -117,5 +112,3 @@ const handleChange = async (transition: string) => {
   }
 };
 </script>
-
-

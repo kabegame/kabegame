@@ -1,6 +1,6 @@
 <template>
     <div class="default-download-dir-setting">
-        <el-input v-model="localDir" placeholder="留空使用默认目录，或输入自定义路径" clearable :disabled="saving" @clear="handleClear">
+        <el-input v-model="localDir" placeholder="留空使用默认位置" clearable :disabled="saving" @clear="handleClear">
             <template #append>
                 <el-button :disabled="saving" @click="handleChoose">
                     <el-icon>

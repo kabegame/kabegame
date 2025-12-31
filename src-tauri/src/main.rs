@@ -189,6 +189,11 @@ fn get_plugins(state: tauri::State<PluginManager>) -> Result<Vec<Plugin>, String
 }
 
 #[tauri::command]
+fn get_build_mode(state: tauri::State<PluginManager>) -> Result<String, String> {
+    Ok(state.build_mode().to_string())
+}
+
+#[tauri::command]
 fn update_plugin(
     plugin_id: String,
     updates: HashMap<String, serde_json::Value>,
@@ -1197,10 +1202,15 @@ fn get_all_tasks(state: tauri::State<Storage>) -> Result<Vec<TaskInfo>, String> 
 
 #[tauri::command]
 fn delete_task(
+    app: tauri::AppHandle,
     task_id: String,
     state: tauri::State<Storage>,
     settings: tauri::State<Settings>,
 ) -> Result<(), String> {
+    // 如果任务正在运行，先标记为取消，阻止后续入库
+    let download_queue = app.state::<crawler::DownloadQueue>();
+    let _ = download_queue.cancel_task(&task_id);
+
     // 先取出该任务关联的图片 id 列表（避免删除后无法判断是否包含“当前壁纸”）
     let ids = state.get_task_image_ids(&task_id).unwrap_or_default();
     state.delete_task(&task_id)?;
@@ -1348,8 +1358,8 @@ fn start_wallpaper_rotation(
                     if e.contains("画册不存在") {
                         eprintln!(
                             "[WARN] start_wallpaper_rotation: saved album_id missing, fallback to gallery. err={}",
-                            e
-                        );
+                        e
+                    );
                         did_fallback = true;
                         warning = Some("上次选择的画册不存在，已回退到画廊轮播".to_string());
                     } else {
@@ -2040,6 +2050,15 @@ fn main() {
             let plugin_manager = PluginManager::new(app.app_handle().clone());
             app.manage(plugin_manager);
 
+            // 每次启动：异步覆盖复制内置插件到用户插件目录（确保可用性/不变性）
+            let app_handle_plugins = app.app_handle().clone();
+            std::thread::spawn(move || {
+                let pm = app_handle_plugins.state::<PluginManager>();
+                if let Err(e) = pm.ensure_prepackaged_plugins_installed() {
+                    eprintln!("[WARN] 启动时安装内置插件失败: {}", e);
+                }
+            });
+
             // 初始化存储管理器
             let storage = Storage::new(app.app_handle().clone());
             storage
@@ -2168,6 +2187,7 @@ fn main() {
             get_task_images_paginated,
             // 原有命令
             get_plugins,
+            get_build_mode,
             update_plugin,
             delete_plugin,
             crawl_images_command,

@@ -1,45 +1,67 @@
 # 插件开发指南
 
-## 测试插件目录结构
+## 插件目录结构
 
-测试插件位于 `test_plugin/` 目录下，每个插件应该是一个独立的文件夹。
+插件位于 `crawler-plugins/plugins/` 目录下，每个插件应该是一个独立的文件夹。
 
 ### 示例插件结构
 
 ```
-test_plugin/
+crawler-plugins/plugins/
 └── sample-collector/
     ├── manifest.json    # 必需：插件元数据
     ├── icon.png         # 可选：插件图标（仅支持 PNG）
     ├── config.json      # 可选：插件配置
-    ├── doc.md          # 可选：用户文档
-    ├── crawl.rhai      # 可选：爬取脚本（Rhai 脚本格式）
-    └── README.md       # 可选：开发文档
+    ├── crawl.rhai       # 必需：爬取脚本（Rhai 脚本格式）
+    ├── doc_root/        # 可选：文档目录
+    │   └── doc.md       # 可选：用户文档
+    └── README.md        # 可选：开发文档
 ```
 
 ## 打包插件
 
-### 基本用法
+### 在主项目中打包
 
-```bash
-# 打包指定插件目录
-npm run package-plugin test_plugin/sample-collector
+在主项目根目录执行：
 
-# 或指定输出文件
-npm run package-plugin test_plugin/sample-collector output.kgpg
+```powershell
+# 打包所有插件
+pnpm run package-plugin
+
+# 或使用 Nx 命令
+nx run crawler-plugins:package
+
+# 打包本地插件（仅打包 single-file-import 和 local-folder-import）
+pnpm run package-plugin:local
+# 或
+nx run crawler-plugins:package-local
 ```
 
-### 开发模式
+### 在插件仓库中打包
 
-在开发模式下，可以自动打包测试插件并启动应用：
+在 `crawler-plugins/` 目录下执行：
 
-```bash
-npm run dev:package-plugin
+```powershell
+# 打包所有插件
+node package-plugin.js
+# 或
+pnpm run package
+
+# 打包指定插件
+node package-plugin.js <插件名称>
+# 例如：
+node package-plugin.js anihonet-wallpaper
+
+# 只打包指定插件（会清理 packed 目录下的其它 .kgpg）
+node package-plugin.js --only <插件名1> <插件名2>
+# 或使用逗号分隔
+node package-plugin.js --only single-file-import,local-folder-import
+
+# 指定输出目录
+node package-plugin.js --outDir ../data/plugins-directory
 ```
 
-这会：
-1. 自动打包 `test_plugin/sample-collector` 为 `.kgpg` 文件
-2. 启动 Tauri 开发模式
+打包后的文件将生成在 `crawler-plugins/packed/<插件名称>.kgpg`。
 
 ## 插件文件格式
 
@@ -117,7 +139,7 @@ npm run dev:package-plugin
 
 **注意**：选择器（如 `imageSelector`、`nextPageSelector`）现在不再在 `config.json` 中配置，而是在 `crawl.rhai` 脚本中由用户自己定义。这样提供了更大的灵活性。
 
-### crawl.rhai（可选）
+### crawl.rhai（必需）
 
 爬取脚本，使用 Rhai 脚本语言编写。用户可以在脚本中自定义所有变量和爬取逻辑。
 

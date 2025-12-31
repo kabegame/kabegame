@@ -1,4 +1,4 @@
-import { ref, computed, type Ref } from "vue";
+import { computed, type Ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";

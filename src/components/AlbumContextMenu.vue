@@ -23,7 +23,7 @@
       </el-icon>
       <span style="margin-left: 8px;">重命名</span>
     </div>
-    <div v-if="albumId !== FAVORITE_ALBUM_ID.value" class="context-menu-item" @click.stop="$emit('command', 'delete')">
+    <div v-if="albumId !== FAVORITE_ALBUM_ID" class="context-menu-item" @click.stop="$emit('command', 'delete')">
       <el-icon>
         <Delete />
       </el-icon>

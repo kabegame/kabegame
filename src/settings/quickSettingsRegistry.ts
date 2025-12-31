@@ -11,7 +11,6 @@ import DefaultDownloadDirSetting from "@/components/settings/items/DefaultDownlo
 import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngineDirSetting.vue";
 import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
-import WallpaperRotationTargetSetting from "@/components/settings/items/WallpaperRotationTargetSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
@@ -53,8 +52,8 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup[] = [
       },
       {
         key: "imageClickAction",
-        label: "图片点击行为",
-        description: "左键点击图片时的行为",
+        label: "双击图片",
+        description: "双击图片时的行为",
         comp: SettingRadioControl,
         props: {
           settingKey: "imageClickAction",
@@ -149,13 +148,6 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup[] = [
         label: "启用壁纸轮播",
         description: "自动从指定画册中轮播更换桌面壁纸",
         comp: WallpaperRotationEnabledSetting,
-        pages: ["gallery", "albumdetail", "albums"],
-      },
-      {
-        key: "wallpaperRotationAlbumId",
-        label: "选择画册 / 选择壁纸",
-        description: "轮播启用时选择画册；关闭时前往画廊选择单张壁纸",
-        comp: WallpaperRotationTargetSetting,
         pages: ["gallery", "albumdetail", "albums"],
       },
       {

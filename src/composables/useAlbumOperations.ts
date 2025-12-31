@@ -1,4 +1,4 @@
-import { ref, computed, nextTick, type Ref } from "vue";
+import { ref, computed } from "vue";
 import { ElMessage } from "element-plus";
 import { useAlbumStore } from "@/stores/albums";
 import type { ImageInfo } from "@/stores/crawler";
@@ -107,17 +107,6 @@ export function useAlbumOperations() {
     showAlbumDialog.value = false;
     pendingAlbumImages.value = [];
     selectedAlbumId.value = "";
-  };
-
-  // 监听画册选择变化，当选择"新建"时自动聚焦输入框
-  const setupAlbumDialogWatchers = () => {
-    // 这个函数需要在组件中调用，因为需要 nextTick
-    return {
-      watchSelectedAlbumId: (callback: (newValue: string) => void) => {
-        // 返回一个 watch 函数，由调用者处理
-        return callback;
-      },
-    };
   };
 
   return {

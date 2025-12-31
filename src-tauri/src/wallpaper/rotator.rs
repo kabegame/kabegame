@@ -226,7 +226,7 @@ impl WallpaperRotator {
                                     Vec::new()
                                 }
                             } else {
-                                eprintln!("获取轮播图片失败: {}", e);
+                            eprintln!("获取轮播图片失败: {}", e);
                                 Vec::new()
                             }
                         }
@@ -436,66 +436,66 @@ impl WallpaperRotator {
         }
 
         let start_res: Result<(), String> = (|| {
-            // 未在运行：检查状态，避免并发启动/关闭导致重复 spawn
-            let current_state = self.state.load(Ordering::Acquire);
-            if current_state == STATE_STARTING || current_state == STATE_STOPPING {
-                return Err(format!(
-                    "轮播线程状态异常，无法启动：当前状态={}",
-                    match current_state {
-                        STATE_STARTING => "开启中",
-                        STATE_STOPPING => "关闭中",
-                        _ => "未知",
-                    }
-                ));
-            }
+        // 未在运行：检查状态，避免并发启动/关闭导致重复 spawn
+        let current_state = self.state.load(Ordering::Acquire);
+        if current_state == STATE_STARTING || current_state == STATE_STOPPING {
+            return Err(format!(
+                "轮播线程状态异常，无法启动：当前状态={}",
+                match current_state {
+                    STATE_STARTING => "开启中",
+                    STATE_STOPPING => "关闭中",
+                    _ => "未知",
+                }
+            ));
+        }
 
-            // 设置状态为“开启中”
-            self.state.store(STATE_STARTING, Ordering::Release);
+        // 设置状态为“开启中”
+        self.state.store(STATE_STARTING, Ordering::Release);
 
-            let settings_state = self
-                .app
-                .try_state::<Settings>()
-                .ok_or_else(|| "无法获取设置状态".to_string())?;
-            let settings = settings_state
-                .get_settings()
-                .map_err(|e| format!("获取设置失败: {}", e))?;
-            if !settings.wallpaper_rotation_enabled {
-                return Err("壁纸轮播未启用".to_string());
-            }
-            let source = Self::source_from_settings(&settings)
-                .ok_or_else(|| "未选择轮播来源（画册/画廊）".to_string())?;
+        let settings_state = self
+            .app
+            .try_state::<Settings>()
+            .ok_or_else(|| "无法获取设置状态".to_string())?;
+        let settings = settings_state
+            .get_settings()
+            .map_err(|e| format!("获取设置失败: {}", e))?;
+        if !settings.wallpaper_rotation_enabled {
+            return Err("壁纸轮播未启用".to_string());
+        }
+        let source = Self::source_from_settings(&settings)
+            .ok_or_else(|| "未选择轮播来源（画册/画廊）".to_string())?;
 
-            let images = Self::load_images_for_source(&self.app, &source)?;
-            if images.is_empty() {
-                return Err(match source {
-                    RotationSource::Album(_) => "画册内没有图片".to_string(),
-                    RotationSource::Gallery => "画廊内没有图片".to_string(),
-                });
-            }
+        let images = Self::load_images_for_source(&self.app, &source)?;
+        if images.is_empty() {
+            return Err(match source {
+                RotationSource::Album(_) => "画册内没有图片".to_string(),
+                RotationSource::Gallery => "画廊内没有图片".to_string(),
+            });
+        }
 
             // 尽量基于当前壁纸对齐顺序索引（不触发立即切换）
-            let current_path = Self::get_current_wallpaper_path(&self.app);
+        let current_path = Self::get_current_wallpaper_path(&self.app);
             if let Some(cur) = current_path.as_deref() {
                 if images
-                    .iter()
+                .iter()
                     .any(|img| Self::normalize_path(&img.local_path) == Self::normalize_path(cur))
                 {
                     if settings.wallpaper_rotation_mode == "sequential" {
                         // 顺序模式：让下一次轮播从 current 后一张开始
                         self.align_sequential_index_from_current(&images, cur);
                     }
-                }
             }
+        }
 
             // 兼容旧语义：start_from_current 目前只影响“画廊轮播”下的顺序对齐；
             // 但无论如何，我们都不在启动时 set_wallpaper（遵循“开启不换壁纸”原则）。
             if start_from_current {
                 // no-op：逻辑已由上面的对齐处理覆盖
-            }
+        }
 
-            self.running.store(true, Ordering::Relaxed);
-            self.spawn_thread();
-            Ok(())
+        self.running.store(true, Ordering::Relaxed);
+        self.spawn_thread();
+        Ok(())
         })();
 
         if start_res.is_err() {

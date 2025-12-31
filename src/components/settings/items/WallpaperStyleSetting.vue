@@ -1,11 +1,6 @@
 <template>
-  <el-select
-    v-model="localValue"
-    placeholder="请选择显示方式"
-    style="width: 100%"
-    :disabled="disabled"
-    @change="handleChange"
-  >
+  <el-select v-model="localValue" placeholder="请选择显示方式" style="min-width: 180px" :disabled="disabled"
+    @change="handleChange">
     <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value">
       <span>{{ opt.desc }}</span>
     </el-option>
@@ -30,7 +25,6 @@ const isApplying = ref(false);
 const nativeWallpaperStyles = ref<Style[]>([]);
 
 const mode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
-const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 
 const disabled = computed(() => uiStore.wallpaperModeSwitching || isApplying.value);
 
@@ -102,5 +96,3 @@ const handleChange = async (style: string) => {
   }
 };
 </script>
-
-

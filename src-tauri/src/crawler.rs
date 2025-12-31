@@ -1896,12 +1896,32 @@ impl DownloadQueue {
 
     // 取消任务：移除队列中该任务，并标记为取消，正在下载的任务在保存阶段会被跳过
     pub fn cancel_task(&self, task_id: &str) -> Result<(), String> {
-        // 仅标记为取消，不清空队列或活跃下载，让已在队列/运行中的任务继续或自行完成。
-        let mut canceled = self
-            .canceled_tasks
-            .lock()
-            .map_err(|e| format!("Lock error: {}", e))?;
-        canceled.insert(task_id.to_string());
+        // 1. 标记为取消
+        {
+            let mut canceled = self
+                .canceled_tasks
+                .lock()
+                .map_err(|e| format!("Lock error: {}", e))?;
+            canceled.insert(task_id.to_string());
+        }
+
+        // 2. 从等待队列中移除属于该任务的所有下载项（立即生效，避免继续处理已取消任务的下载）
+        {
+            let mut queue = self
+                .queue
+                .lock()
+                .map_err(|e| format!("Lock error: {}", e))?;
+            let before_len = queue.len();
+            queue.retain(|t| t.task_id != task_id);
+            let removed = before_len - queue.len();
+            if removed > 0 {
+                eprintln!(
+                    "[cancel_task] Removed {} queued downloads for task {}",
+                    removed, task_id
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -1946,12 +1966,19 @@ impl DownloadQueue {
 
                 if current_active < max_concurrent {
                     // 从队列中取出任务（FIFO）
-                    let task = {
+                    if let Some(task) = {
                         let mut queue_guard = queue.lock().unwrap();
                         queue_guard.pop_front()
-                    };
+                    } {
+                        // 在开始处理前检查任务是否已被取消（避免处理已取消任务的下载）
+                        {
+                            let canceled = canceled_tasks.lock().unwrap();
+                            if canceled.contains(&task.task_id) {
+                                // 任务已取消，跳过此下载项
+                                continue;
+                            }
+                        }
 
-                    if let Some(task) = task {
                         // 增加活跃下载数
                         {
                             let mut active = active_downloads.lock().unwrap();
@@ -2087,6 +2114,40 @@ impl DownloadQueue {
 
                             // 如果下载成功，保存到 gallery（后处理阶段）
                             if let Ok(downloaded) = result {
+                                // 在保存到数据库前，再次检查任务是否已被取消
+                                let dq = app_clone.state::<DownloadQueue>();
+                                if dq.is_task_canceled(&task_clone.task_id) {
+                                    // 任务已取消，跳过保存阶段，并清理已下载的文件（如果是新下载的）
+                                    if !downloaded.reused {
+                                        let _ = tokio::fs::remove_file(&downloaded.path).await;
+                                        if let Some(thumb) = downloaded.thumbnail {
+                                            if thumb.exists() {
+                                                let _ = tokio::fs::remove_file(&thumb).await;
+                                            }
+                                        }
+                                    }
+
+                                    emit_download_state(
+                                        &app_clone,
+                                        &task_clone.task_id,
+                                        &task_clone.url,
+                                        task_clone.download_start_time,
+                                        &task_clone.plugin_id,
+                                        "canceled",
+                                        None,
+                                    );
+
+                                    // 最终：从活跃任务列表中移除
+                                    {
+                                        let mut tasks = active_tasks_clone.lock().unwrap();
+                                        tasks.retain(|t| {
+                                            t.url != task_clone.url
+                                                || t.start_time != task_clone.download_start_time
+                                        });
+                                    }
+                                    return;
+                                }
+
                                 emit_download_state(
                                     &app_clone,
                                     &task_clone.task_id,

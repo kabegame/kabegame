@@ -1,5 +1,6 @@
 <template>
-  <el-drawer v-model="visible" title="任务列表" :size="400" direction="rtl" :with-header="true">
+  <el-drawer v-model="visible" title="任务列表" :size="400" direction="rtl" :with-header="true" :append-to-body="true"
+    :modal-class="'task-drawer-modal'" @open="handleDrawerOpen">
     <div class="tasks-drawer-content">
       <!-- 下载信息区域 -->
       <div class="downloads-section">
@@ -8,13 +9,7 @@
           <div class="downloads-stats">
             <el-tag type="info" size="small">队列: {{ queueSize }}</el-tag>
             <el-tag type="warning" size="small">进行中: {{ activeDownloads.length }}</el-tag>
-            <el-button
-              text
-              size="small"
-              type="danger"
-              :disabled="queueSize === 0"
-              @click="handleClearDownloadQueue"
-            >
+            <el-button text size="small" type="danger" :disabled="queueSize === 0" @click="handleClearDownloadQueue">
               终止队列
             </el-button>
           </div>
@@ -30,27 +25,18 @@
                 <div class="download-url" :title="download.url">{{ download.url }}</div>
                 <div class="download-meta">
                   <el-tag size="small" type="info">{{ download.plugin_id }}</el-tag>
-                  <span
-                    v-if="isShimmerState(download)"
-                    class="download-state-text shimmer-text"
-                    :title="downloadStateText(download)"
-                  >
+                  <span v-if="isShimmerState(download)" class="download-state-text shimmer-text"
+                    :title="downloadStateText(download)">
                     {{ downloadStateText(download) }}
                   </span>
-                  <el-tag
-                    v-else
-                    size="small"
-                    :type="downloadStateTagType(download)"
-                  >
+                  <el-tag v-else size="small" :type="downloadStateTagType(download)">
                     {{ downloadStateText(download) }}
                   </el-tag>
                 </div>
-                <div class="download-progress" v-if="shouldShowDownloadProgress(download) && downloadProgressText(download)">
-                  <el-progress
-                    :percentage="downloadProgressPercent(download)"
-                    :format="() => downloadProgressText(download)!"
-                    :stroke-width="10"
-                  />
+                <div class="download-progress"
+                  v-if="shouldShowDownloadProgress(download) && downloadProgressText(download)">
+                  <el-progress :percentage="downloadProgressPercent(download)"
+                    :format="() => downloadProgressText(download)!" :stroke-width="10" />
                 </div>
               </div>
             </div>
@@ -168,7 +154,11 @@
           <div v-if="task.status === 'running'" class="task-progress">
             <el-progress :percentage="Math.round(task.progress)"
               :status="task.status === 'running' ? undefined : 'success'" />
-            <span class="progress-text">{{ task.downloadedImages }} / {{ task.totalImages }}</span>
+            <div class="progress-footer">
+              <el-button text size="small" type="warning" @click.stop="handleStopTask(task)" class="stop-btn">
+                停止
+              </el-button>
+            </div>
           </div>
 
           <!-- 展开/收起箭头：底部整条都是触发区域 -->
@@ -233,12 +223,12 @@
     </template>
   </el-dialog>
 
-  <TaskContextMenu :visible="contextMenuVisible" :position="contextMenuPos" @close="closeContextMenu"
-    @command="handleContextAction" />
+  <TaskContextMenu :visible="contextMenuVisible" :position="contextMenuPos" :task="contextMenuTask"
+    @close="closeContextMenu" @command="handleContextAction" />
 </template>
 
 <script setup lang="ts">
-import { ref, computed, shallowRef, onUnmounted, onMounted } from "vue";
+import { ref, computed, shallowRef, onUnmounted, onMounted, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Clock, ArrowDown, Loading, WarningFilled, CopyDocument, Picture, Close } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
@@ -810,11 +800,12 @@ const handleGlobalClick = () => {
   }
 };
 
-onMounted(async () => {
-  window.addEventListener("click", handleGlobalClick);
-  loadDownloads();
-  // 每 1 秒刷新一次下载信息
-  downloadRefreshInterval = window.setInterval(loadDownloads, 1000);
+// 是否已初始化事件监听
+let eventListenersInitialized = false;
+
+const initEventListeners = async () => {
+  if (eventListenersInitialized) return;
+  eventListenersInitialized = true;
 
   try {
     const { listen } = await import("@tauri-apps/api/event");
@@ -850,6 +841,28 @@ onMounted(async () => {
   } catch (error) {
     console.error("监听下载状态失败:", error);
   }
+};
+
+const handleDrawerOpen = async () => {
+  // drawer 打开时才开始加载数据和初始化事件监听
+  await initEventListeners();
+  loadDownloads();
+  // 开启定时刷新
+  if (downloadRefreshInterval === null) {
+    downloadRefreshInterval = window.setInterval(loadDownloads, 1000);
+  }
+};
+
+onMounted(() => {
+  window.addEventListener("click", handleGlobalClick);
+});
+
+// 当 drawer 关闭时，停止定时刷新（节省资源）
+watch(visible, (val) => {
+  if (!val && downloadRefreshInterval !== null) {
+    clearInterval(downloadRefreshInterval);
+    downloadRefreshInterval = null;
+  }
 });
 
 onUnmounted(() => {
@@ -883,6 +896,23 @@ const toggleTaskExpand = async (taskId: string) => {
     await ensurePluginVars(task.pluginId);
   }
   expandedTasks.value.add(taskId);
+};
+
+const handleStopTask = async (task: any) => {
+  try {
+    await ElMessageBox.confirm(
+      "确定要停止这个任务吗？已下载的图片将保留，未开始的任务将取消。",
+      "停止任务",
+      { type: "warning" }
+    );
+    await crawlerStore.stopTask(task.id);
+    ElMessage.success("任务已请求停止");
+  } catch (error) {
+    if (error !== "cancel") {
+      console.error("停止任务失败:", error);
+      ElMessage.error("停止任务失败");
+    }
+  }
 };
 
 const handleDeleteTask = async (task: any) => {
@@ -1054,12 +1084,10 @@ const handleCopyError = async (task: any) => {
 
               .shimmer-text {
                 color: var(--anime-text-primary);
-                background: linear-gradient(
-                  90deg,
-                  rgba(255, 255, 255, 0.15) 0%,
-                  rgba(255, 255, 255, 0.85) 50%,
-                  rgba(255, 255, 255, 0.15) 100%
-                );
+                background: linear-gradient(90deg,
+                    rgba(255, 255, 255, 0.15) 0%,
+                    rgba(255, 255, 255, 0.85) 50%,
+                    rgba(255, 255, 255, 0.15) 100%);
                 background-size: 200% 100%;
                 -webkit-background-clip: text;
                 background-clip: text;
@@ -1164,10 +1192,27 @@ const handleCopyError = async (task: any) => {
 
     .progress-text {
       display: block;
-      margin-top: 4px;
       font-size: 12px;
       color: var(--anime-text-secondary);
       text-align: right;
+    }
+
+    .progress-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 4px;
+
+      .progress-text {
+        margin-top: 0;
+        text-align: right;
+      }
+
+      .stop-btn {
+        padding: 0;
+        height: auto;
+        font-size: 12px;
+      }
     }
 
     .task-error {
@@ -1424,6 +1469,7 @@ const handleCopyError = async (task: any) => {
   0% {
     background-position: 200% 0;
   }
+
   100% {
     background-position: -200% 0;
   }
@@ -1528,5 +1574,12 @@ const handleCopyError = async (task: any) => {
 .tooltip-line {
   word-break: break-all;
   font-size: 12px;
+}
+
+/* 防止 drawer 遮罩闪烁 */
+.task-drawer-modal {
+  /* 确保遮罩层有稳定的初始状态，避免闪烁 */
+  will-change: opacity;
+  backface-visibility: hidden;
 }
 </style>

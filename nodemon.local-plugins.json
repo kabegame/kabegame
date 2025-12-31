@@ -1,5 +1,5 @@
 {
-  "watch": ["crawler-plugins", "data/plugins_directory"],
+  "watch": ["crawler-plugins", "data/plugins-directory"],
   "ext": "json,rhai,md,txt,jpeg,jpg,png,gif,webp,ico",
   "ignore": [
     "node_modules",

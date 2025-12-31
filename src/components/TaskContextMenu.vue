@@ -1,5 +1,9 @@
 <template>
   <ContextMenu :visible="visible" :position="position" @close="$emit('close')">
+    <div v-if="task?.status === 'running'" class="context-menu-item warning" @click.stop="$emit('command', 'stop')">
+      <el-icon><VideoPause /></el-icon>
+      <span class="label">停止任务</span>
+    </div>
     <div class="context-menu-item" @click.stop="$emit('command', 'view')">
       <el-icon><FolderOpened /></el-icon>
       <span class="label">查看文件</span>
@@ -17,12 +21,13 @@
 </template>
 
 <script setup lang="ts">
-import { FolderOpened, Collection, Delete } from "@element-plus/icons-vue";
+import { FolderOpened, Collection, Delete, VideoPause } from "@element-plus/icons-vue";
 import ContextMenu from "@/components/ContextMenu.vue";
 
 interface Props {
   visible: boolean;
   position: { x: number; y: number };
+  task: any | null;
 }
 
 defineProps<Props>();

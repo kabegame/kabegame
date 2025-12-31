@@ -1,27 +1,46 @@
-import { ref, type Ref } from "vue";
+import { ref, computed, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useCrawlerStore } from "@/stores/crawler";
+import { useSettingsStore } from "@/stores/settings";
 
 /**
  * 画廊设置 composable
  */
 export function useGallerySettings() {
   const crawlerStore = useCrawlerStore();
-  const imageClickAction = ref<"preview" | "open">("preview");
+  const settingsStore = useSettingsStore();
+
+  const imageClickAction = computed(() => {
+    const action = settingsStore.values.imageClickAction;
+    return (action === "open" ? "open" : "preview") as "preview" | "open";
+  });
+
   const galleryColumns = ref<number>(0); // 0 表示自动（auto-fill），其他值表示固定列数
   const galleryImageAspectRatioMatchWindow = ref<boolean>(false); // 图片宽高比是否与窗口相同
   const windowAspectRatio = ref<number>(16 / 9); // 窗口宽高比
 
+  // 监听 store 变化，同步到本地 ref
+  watch(
+    () => settingsStore.values.galleryColumns,
+    (v) => {
+      if (v !== undefined) galleryColumns.value = v;
+    }
+  );
+
+  watch(
+    () => settingsStore.values.galleryImageAspectRatioMatchWindow,
+    (v) => {
+      if (v !== undefined) galleryImageAspectRatioMatchWindow.value = v;
+    }
+  );
+
   // 加载设置
   const loadSettings = async () => {
     try {
-      const settings = await invoke<{
-        imageClickAction: string;
-        galleryColumns: number;
-        galleryImageAspectRatioMatchWindow: boolean;
-        galleryPageSize: number;
-      }>("get_settings");
-      imageClickAction.value = (settings.imageClickAction === "open" ? "open" : "preview") as "preview" | "open";
+      // 优先从 store 加载全部设置，确保状态同步
+      await settingsStore.loadAll();
+
+      const settings = settingsStore.values;
       galleryColumns.value = settings.galleryColumns || 0;
       galleryImageAspectRatioMatchWindow.value = settings.galleryImageAspectRatioMatchWindow || false;
       if (settings.galleryPageSize && settings.galleryPageSize > 0) {
@@ -61,6 +80,8 @@ export function useGallerySettings() {
         galleryColumns.value = 0;
       }
     }
+    // 同步到 store
+    settingsStore.values.galleryColumns = galleryColumns.value;
     // 保存设置
     invoke("set_gallery_columns", { columns: galleryColumns.value }).catch((error) => {
       console.error("保存列数设置失败:", error);

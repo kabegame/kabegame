@@ -8,7 +8,8 @@
             :aspect-ratio-match-window="aspectRatioMatchWindow" :window-aspect-ratio="windowAspectRatio"
             :allow-select="allowSelect" :enable-context-menu="enableContextMenu"
             :show-load-more-button="showLoadMoreButton" :has-more="hasMore" :loading-more="loadingMore"
-            :can-move-item="canMoveItem" @image-dbl-click="(img, ev) => emit('image-dbl-click', img, ev)"
+            :can-move-item="canMoveItem" :show-empty-state="showEmptyState"
+            @image-dbl-click="(img, ev) => emit('image-dbl-click', img, ev)"
             @context-command="(payload) => emit('context-command', payload)"
             @move="(img, dir) => emit('move', img, dir)" @load-more="() => emit('load-more')"
             @selection-change="(ids) => emit('selection-change', ids)"
@@ -44,6 +45,7 @@ const props = withDefaults(
         hasMore?: boolean;
         loadingMore?: boolean;
         canMoveItem?: boolean;
+        showEmptyState?: boolean;
 
         /** 外部决定是否屏蔽快捷键（弹窗/抽屉等覆盖层） */
         isBlocked?: () => boolean;
@@ -65,6 +67,7 @@ const props = withDefaults(
         hasMore: false,
         loadingMore: false,
         canMoveItem: true,
+        showEmptyState: false,
         enableCtrlWheelAdjustColumns: undefined,
         enableCtrlKeyAdjustColumns: undefined,
         enableDragScroll: undefined,

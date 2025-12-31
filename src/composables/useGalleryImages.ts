@@ -1,4 +1,4 @@
-import { ref, shallowRef, nextTick, watch, type Ref } from "vue";
+import { ref, shallowRef, nextTick, type Ref } from "vue";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
@@ -447,7 +447,6 @@ export function useGalleryImages(
 
     // 更新总数
     crawlerStore.totalImages = firstPageResult.total;
-    const remainingCount = firstPageResult.total - currentCount;
 
     const container = galleryContainerRef.value;
     if (!container) {

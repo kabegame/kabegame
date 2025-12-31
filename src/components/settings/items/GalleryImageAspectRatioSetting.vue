@@ -1,17 +1,11 @@
 <template>
   <div class="aspect-ratio-setting">
-    <el-select
-      v-model="localValue"
-      placeholder="选择宽高比"
-      style="width: 100%"
-      clearable
-      :disabled="saving"
-      @change="onChange"
-    >
+    <el-select v-model="localValue" placeholder="选择宽高比" style="width: 180px" clearable :disabled="saving"
+      @change="onChange">
       <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value" />
     </el-select>
     <div class="hint">
-      选择画廊图片的宽高比。{{ desktopAspectRatioLabel ? `您的桌面：${desktopAspectRatioLabel}` : "" }}
+      选择画廊图片的宽高比。
     </div>
   </div>
 </template>
@@ -37,27 +31,30 @@ const commonAspectRatios = [
   { label: "32:9", value: "32:9", ratio: 32 / 9 },
 ];
 
-const desktopAspectRatioLabel = computed(() => {
-  if (!desktopResolution.value) return null;
-  const ratio = desktopResolution.value.width / desktopResolution.value.height;
-  const matched = commonAspectRatios.find((ar) => Math.abs(ar.ratio - ratio) < 0.01);
-  if (matched) return `${matched.label} (${desktopResolution.value.width}×${desktopResolution.value.height})`;
-  return `自定义 ${desktopResolution.value.width}:${desktopResolution.value.height}`;
-});
-
 const options = computed(() => {
-  const opts = commonAspectRatios.map((ar) => ({ label: ar.label, value: ar.value }));
-  if (desktopResolution.value) {
-    const ratio = desktopResolution.value.width / desktopResolution.value.height;
-    const matched = commonAspectRatios.find((ar) => Math.abs(ar.ratio - ratio) < 0.01);
-    if (!matched) {
-      const customValue = `custom:${desktopResolution.value.width}:${desktopResolution.value.height}`;
-      opts.push({
-        label: `自定义 ${desktopResolution.value.width}:${desktopResolution.value.height} (您的桌面)`,
-        value: customValue,
-      });
-    }
+  if (!desktopResolution.value) {
+    return commonAspectRatios.map((ar) => ({ label: ar.label, value: ar.value }));
   }
+
+  const desktopRatio = desktopResolution.value.width / desktopResolution.value.height;
+  const matched = commonAspectRatios.find((ar) => Math.abs(ar.ratio - desktopRatio) < 0.01);
+
+  const opts = commonAspectRatios.map((ar) => {
+    const isDesktopMatch = Math.abs(ar.ratio - desktopRatio) < 0.01;
+    return {
+      label: isDesktopMatch ? `${ar.label} (您的桌面)` : ar.label,
+      value: ar.value,
+    };
+  });
+
+  if (!matched) {
+    const customValue = `custom:${desktopResolution.value.width}:${desktopResolution.value.height}`;
+    opts.push({
+      label: `自定义 ${desktopResolution.value.width}:${desktopResolution.value.height} (您的桌面)`,
+      value: customValue,
+    });
+  }
+
   return opts;
 });
 
@@ -122,5 +119,3 @@ onMounted(async () => {
   color: var(--anime-text-muted);
 }
 </style>
-
-
