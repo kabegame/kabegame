@@ -11,15 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 
 // 收藏画册的固定ID
-const FAVORITE_ALBUM_ID: &str = "00000000-0000-0000-0000-000000000001";
-
-// 获取应用数据目录的辅助函数
-fn get_app_data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .or_else(|| dirs::data_dir())
-        .expect("Failed to get app data directory")
-        .join("Kabegame")
-}
+pub const FAVORITE_ALBUM_ID: &str = "00000000-0000-0000-0000-000000000001";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,13 +101,24 @@ pub struct RunConfig {
 }
 
 pub struct Storage {
-    app: AppHandle,
     db: Arc<Mutex<Connection>>,
 }
 
 impl Storage {
-    pub fn new(app: AppHandle) -> Self {
-        let db_path = Self::get_db_path(&app);
+    pub fn album_exists(&self, album_id: &str) -> Result<bool, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)",
+                params![album_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to query album existence: {}", e))?;
+        Ok(exists)
+    }
+
+    pub fn new(_app: AppHandle) -> Self {
+        let db_path = Self::get_db_path();
         // 确保应用数据目录存在
         if let Some(parent) = db_path.parent() {
             fs::create_dir_all(parent).expect("Failed to create app data directory");
@@ -362,13 +365,12 @@ impl Storage {
         .expect("Failed to create album_images index");
 
         Self {
-            app,
             db: Arc::new(Mutex::new(conn)),
         }
     }
 
-    fn get_db_path(_app: &AppHandle) -> PathBuf {
-        let app_data_dir = get_app_data_dir();
+    fn get_db_path() -> PathBuf {
+        let app_data_dir = crate::app_paths::kabegame_data_dir();
         app_data_dir.join("images.db")
     }
 
@@ -420,26 +422,6 @@ impl Storage {
         Ok(())
     }
 
-    /// 获取"收藏"画册的ID（固定ID）
-    fn get_favorite_album_id(&self) -> Result<Option<String>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-        // 检查收藏画册是否存在
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM albums WHERE id = ?1)",
-                params![FAVORITE_ALBUM_ID],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("Failed to query favorite album existence: {}", e))?;
-
-        if exists {
-            Ok(Some(FAVORITE_ALBUM_ID.to_string()))
-        } else {
-            Ok(None)
-        }
-    }
-
     pub fn migrate_from_json(&self) -> Result<usize, String> {
         let metadata_file = self.get_metadata_file();
         if !metadata_file.exists() {
@@ -489,7 +471,7 @@ impl Storage {
     }
 
     fn get_metadata_file(&self) -> PathBuf {
-        let app_data_dir = get_app_data_dir();
+        let app_data_dir = crate::app_paths::kabegame_data_dir();
         app_data_dir.join("images_metadata.json")
     }
 
@@ -499,13 +481,13 @@ impl Storage {
             pictures_dir.join("Kabegame")
         } else {
             // 如果获取不到Pictures目录，回落到原来的设置
-            let app_data_dir = get_app_data_dir();
+            let app_data_dir = crate::app_paths::kabegame_data_dir();
             app_data_dir.join("images")
         }
     }
 
     pub fn get_thumbnails_dir(&self) -> PathBuf {
-        let app_data_dir = get_app_data_dir();
+        let app_data_dir = crate::app_paths::kabegame_data_dir();
         app_data_dir.join("thumbnails")
     }
 
@@ -606,6 +588,52 @@ impl Storage {
         // 注意：如果图片很多，这可能仍然会有问题
         let result = self.get_images_paginated(0, 10000, None, None)?;
         Ok(result.images)
+    }
+
+    pub fn find_image_by_id(&self, image_id: &str) -> Result<Option<ImageInfo>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let mut result = conn
+            .query_row(
+                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash,
+                 images.\"order\"
+                 FROM images
+                 WHERE images.id = ?1",
+                params![image_id],
+                |row| {
+                    Ok(ImageInfo {
+                        id: row.get(0)?,
+                        url: row.get(1)?,
+                        local_path: row.get(2)?,
+                        plugin_id: row.get(3)?,
+                        task_id: row.get(4)?,
+                        crawled_at: row.get(5)?,
+                        metadata: row
+                            .get::<_, Option<String>>(6)?
+                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        thumbnail_path: row.get(7)?,
+                        hash: row.get(8)?,
+                        favorite: false,
+                        order: row.get::<_, Option<i64>>(9)?,
+                    })
+                },
+            )
+            .ok();
+
+        // 如果找到了，再查询是否在收藏画册中
+        if let Some(ref mut image_info) = result {
+            let is_favorite = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                    params![FAVORITE_ALBUM_ID, image_info.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                > 0;
+            image_info.favorite = is_favorite;
+        }
+
+        Ok(result)
     }
 
     pub fn find_image_by_path(&self, local_path: &str) -> Result<Option<ImageInfo>, String> {
@@ -1356,7 +1384,8 @@ impl Storage {
         // user_config 不能为空：至少存一个 {}，避免前端/旧数据导致运行配置“看似存在但没有变量”
         let user_config_json = match config.user_config.as_ref() {
             Some(c) => Some(
-                serde_json::to_string(c).map_err(|e| format!("Failed to serialize run_config.user_config: {}", e))?,
+                serde_json::to_string(c)
+                    .map_err(|e| format!("Failed to serialize run_config.user_config: {}", e))?,
             ),
             None => Some("{}".to_string()),
         };
@@ -1398,14 +1427,9 @@ impl Storage {
                     url: row.get(4)?,
                     output_dir: row.get(5)?,
                     // 解析失败时回退为空对象，避免“预设存在但变量丢失”
-                    user_config: Some(
-                        user_config
-                            .as_deref()
-                            .unwrap_or("{}")
-                            .to_string(),
-                    )
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .or_else(|| Some(std::collections::HashMap::new())),
+                    user_config: Some(user_config.as_deref().unwrap_or("{}").to_string())
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .or_else(|| Some(std::collections::HashMap::new())),
                     created_at: row.get::<_, i64>(7)? as u64,
                 })
             })
@@ -1423,37 +1447,6 @@ impl Storage {
         conn.execute("DELETE FROM run_configs WHERE id = ?1", params![config_id])
             .map_err(|e| format!("Failed to delete run_config: {}", e))?;
         Ok(())
-    }
-
-    pub fn get_run_config(&self, config_id: &str) -> Result<Option<RunConfig>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.query_row(
-            "SELECT id, name, description, plugin_id, url, output_dir, user_config, created_at
-             FROM run_configs WHERE id = ?1",
-            params![config_id],
-            |row| {
-                let user_config: Option<String> = row.get(6)?;
-                Ok(RunConfig {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    description: row.get(2)?,
-                    plugin_id: row.get(3)?,
-                    url: row.get(4)?,
-                    output_dir: row.get(5)?,
-                    user_config: Some(
-                        user_config
-                            .as_deref()
-                            .unwrap_or("{}")
-                            .to_string(),
-                    )
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .or_else(|| Some(std::collections::HashMap::new())),
-                    created_at: row.get::<_, i64>(7)? as u64,
-                })
-            },
-        )
-        .optional()
-        .map_err(|e| format!("Failed to get run_config: {}", e))
     }
 
     pub fn delete_task(&self, task_id: &str) -> Result<(), String> {
@@ -1518,6 +1511,22 @@ impl Storage {
             .map_err(|e| format!("Failed to delete images from database: {}", e))?;
 
         Ok(())
+    }
+
+    pub fn get_task_image_ids(&self, task_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare("SELECT id FROM images WHERE task_id = ?1")
+            .map_err(|e| format!("Failed to prepare task image ids query: {}", e))?;
+        let rows = stmt
+            .query_map(params![task_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("Failed to query task image ids: {}", e))?;
+
+        let mut ids = Vec::new();
+        for r in rows {
+            ids.push(r.map_err(|e| format!("Failed to read task image id row: {}", e))?);
+        }
+        Ok(ids)
     }
 
     pub fn get_task_images(&self, task_id: &str) -> Result<Vec<ImageInfo>, String> {
@@ -1663,17 +1672,6 @@ impl Storage {
         Ok(())
     }
 
-    /// 更新图片的 order（画廊中的顺序）
-    pub fn update_image_order(&self, image_id: &str, order: i64) -> Result<(), String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.execute(
-            "UPDATE images SET \"order\" = ?1 WHERE id = ?2",
-            params![order, image_id],
-        )
-        .map_err(|e| format!("Failed to update image order: {}", e))?;
-        Ok(())
-    }
-
     /// 批量更新图片的 order（画廊中的顺序）
     pub fn update_images_order(&self, image_orders: &[(String, i64)]) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -1684,22 +1682,6 @@ impl Storage {
             )
             .map_err(|e| format!("Failed to update image order: {}", e))?;
         }
-        Ok(())
-    }
-
-    /// 更新画册中图片的 order
-    pub fn update_album_image_order(
-        &self,
-        album_id: &str,
-        image_id: &str,
-        order: i64,
-    ) -> Result<(), String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.execute(
-            "UPDATE album_images SET \"order\" = ?1 WHERE album_id = ?2 AND image_id = ?3",
-            params![order, album_id, image_id],
-        )
-        .map_err(|e| format!("Failed to update album image order: {}", e))?;
         Ok(())
     }
 
@@ -1717,17 +1699,6 @@ impl Storage {
             )
             .map_err(|e| format!("Failed to update album image order: {}", e))?;
         }
-        Ok(())
-    }
-
-    /// 更新画册的 order
-    pub fn update_album_order(&self, album_id: &str, order: i64) -> Result<(), String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.execute(
-            "UPDATE albums SET \"order\" = ?1 WHERE id = ?2",
-            params![order, album_id],
-        )
-        .map_err(|e| format!("Failed to update album order: {}", e))?;
         Ok(())
     }
 

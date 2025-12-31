@@ -1,5 +1,6 @@
 use crate::plugin::Plugin;
 use crate::plugin::{VarDefinition, VarOption};
+use futures_util::StreamExt;
 use reqwest;
 use rhai::{Dynamic, Engine, Map, Scope};
 use scraper::{Html, Selector};
@@ -8,10 +9,11 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::io::AsyncWriteExt;
 use url::Url;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -466,7 +468,7 @@ fn get_default_images_dir() -> PathBuf {
         pictures_dir.join("Kabegame")
     } else {
         // 如果获取不到Pictures目录，回落到原来的设置
-        get_app_data_dir().join("images")
+        crate::app_paths::kabegame_data_dir().join("images")
     }
 }
 
@@ -1340,6 +1342,8 @@ async fn download_image(
     url: &str,
     base_dir: &Path,
     plugin_id: &str,
+    task_id: &str,
+    download_start_time: u64,
     app: &AppHandle,
 ) -> Result<DownloadedImage, String> {
     // 检查是否是本地文件路径
@@ -1449,10 +1453,33 @@ async fn download_image(
             .map(|s| s.network_retry_count)
             .unwrap_or(0);
 
+        // 从 URL 获取文件名（用于落盘；实际写入先写到 temp，再 rename）
+        let parsed_url = Url::parse(url).map_err(|e| format!("Invalid image URL: {}", e))?;
+        let url_path = parsed_url
+            .path_segments()
+            .and_then(|segments| segments.last())
+            .unwrap_or("image");
+
+        let extension = Path::new(url_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("jpg");
+
+        let filename = sanitize_filename(url_path, extension);
+        let file_path = unique_path(&target_dir, &filename);
+
+        // 失败重试：每次 attempt 都重新下载并写入新的临时文件（避免脏数据）
         let max_attempts = retry_count.saturating_add(1).max(1);
         let mut attempt: u32 = 0;
-        let content = loop {
+
+        let (content_hash, final_or_temp_path) = loop {
             attempt += 1;
+
+            // 若任务已被取消，尽早退出
+            let dq = app.state::<DownloadQueue>();
+            if dq.is_task_canceled(task_id) {
+                return Err("Task canceled".to_string());
+            }
 
             let response = match client.get(url).send().await {
                 Ok(r) => r,
@@ -1482,28 +1509,133 @@ async fn download_image(
                 return Err(format!("HTTP error: {}", status));
             }
 
-            match response.bytes().await {
-                Ok(b) => break b,
-                Err(e) => {
-                    if attempt < max_attempts {
-                        let backoff_ms = (500u64)
-                            .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
-                            .min(5000);
-                        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                        continue;
+            let total_bytes = response.content_length();
+            let mut received_bytes: u64 = 0;
+
+            // 临时文件：避免中途失败留下半成品；成功后再 rename 到最终路径
+            let temp_name = format!(
+                "{}.part-{}",
+                file_path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("image"),
+                uuid::Uuid::new_v4()
+            );
+            let temp_path = target_dir.join(temp_name);
+
+            let mut file = match tokio::fs::File::create(&temp_path).await {
+                Ok(f) => f,
+                Err(e) => return Err(format!("Failed to create file: {}", e)),
+            };
+
+            // 边下载边算 hash（用于去重）
+            let mut hasher = Sha256::new();
+
+            // 进度事件节流：至少 256KB 或 200ms 才发一次
+            let mut last_emit_bytes: u64 = 0;
+            let mut last_emit_at = std::time::Instant::now();
+            let emit_interval = std::time::Duration::from_millis(200);
+            let emit_bytes_step: u64 = 256 * 1024;
+
+            // 首次立即发一个（用于 UI 及时出现 “0B / ?”）
+            let _ = app.emit(
+                "download-progress",
+                serde_json::json!({
+                    "taskId": task_id,
+                    "url": url,
+                    "startTime": download_start_time,
+                    "pluginId": plugin_id,
+                    "receivedBytes": received_bytes,
+                    "totalBytes": total_bytes,
+                }),
+            );
+
+            let mut stream = response.bytes_stream();
+            let mut stream_error: Option<String> = None;
+
+            while let Some(item) = stream.next().await {
+                // 任务取消：中止并清理临时文件
+                let dq = app.state::<DownloadQueue>();
+                if dq.is_task_canceled(task_id) {
+                    let _ = tokio::fs::remove_file(&temp_path).await;
+                    return Err("Task canceled".to_string());
+                }
+
+                let chunk = match item {
+                    Ok(c) => c,
+                    Err(e) => {
+                        stream_error = Some(format!("Failed to read stream: {}", e));
+                        break;
                     }
-                    return Err(format!("Failed to read image: {}", e));
+                };
+
+                hasher.update(&chunk);
+                if let Err(e) = file.write_all(&chunk).await {
+                    stream_error = Some(format!("Failed to write file: {}", e));
+                    break;
+                }
+
+                received_bytes = received_bytes.saturating_add(chunk.len() as u64);
+
+                let should_emit = received_bytes.saturating_sub(last_emit_bytes) >= emit_bytes_step
+                    || last_emit_at.elapsed() >= emit_interval;
+                if should_emit {
+                    last_emit_bytes = received_bytes;
+                    last_emit_at = std::time::Instant::now();
+                    let _ = app.emit(
+                        "download-progress",
+                        serde_json::json!({
+                            "taskId": task_id,
+                            "url": url,
+                            "startTime": download_start_time,
+                            "pluginId": plugin_id,
+                            "receivedBytes": received_bytes,
+                            "totalBytes": total_bytes,
+                        }),
+                    );
                 }
             }
-        };
 
-        let content_hash = compute_bytes_hash(&content);
+            // 关闭文件句柄（确保 Windows 下 rename 不被占用）
+            let _ = file.flush().await;
+            drop(file);
+
+            if let Some(err) = stream_error {
+                let _ = tokio::fs::remove_file(&temp_path).await;
+                if attempt < max_attempts {
+                    let backoff_ms = (500u64)
+                        .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
+                        .min(5000);
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                    continue;
+                }
+                return Err(err);
+            }
+
+            // 最终再发一次（接近 100%）
+            let _ = app.emit(
+                "download-progress",
+                serde_json::json!({
+                    "taskId": task_id,
+                    "url": url,
+                    "startTime": download_start_time,
+                    "pluginId": plugin_id,
+                    "receivedBytes": received_bytes,
+                    "totalBytes": total_bytes,
+                }),
+            );
+
+            let content_hash = format!("{:x}", hasher.finalize());
+            break (content_hash, temp_path);
+        };
 
         // 若已有相同哈希且文件存在，复用
         let storage = app.state::<crate::storage::Storage>();
         if let Ok(Some(existing)) = storage.find_image_by_hash(&content_hash) {
             let existing_path = PathBuf::from(&existing.local_path);
             if existing_path.exists() {
+                // 删除刚下载的临时文件
+                let _ = tokio::fs::remove_file(&final_or_temp_path).await;
                 // thumbnail_path 在 DB/结构上已是必填；这里仍做兜底以兼容极端旧数据
                 let mut thumb_path = if existing.thumbnail_path.trim().is_empty() {
                     existing_path.clone()
@@ -1548,25 +1680,10 @@ async fn download_image(
             }
         }
 
-        // 从 URL 获取文件名
-        let parsed_url = Url::parse(url).map_err(|e| format!("Invalid image URL: {}", e))?;
-        let url_path = parsed_url
-            .path_segments()
-            .and_then(|segments| segments.last())
-            .unwrap_or("image");
-
-        let extension = Path::new(url_path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("jpg");
-
-        let filename = sanitize_filename(url_path, extension);
-        let file_path = unique_path(&target_dir, &filename);
-
-        let mut file =
-            fs::File::create(&file_path).map_err(|e| format!("Failed to create file: {}", e))?;
-        file.write_all(&content)
-            .map_err(|e| format!("Failed to write file: {}", e))?;
+        // 未命中复用：将临时文件移动到最终路径
+        tokio::fs::rename(&final_or_temp_path, &file_path)
+            .await
+            .map_err(|e| format!("Failed to finalize file: {}", e))?;
 
         // 生成缩略图
         let thumbnail_path = generate_thumbnail(&file_path, app)?;
@@ -1580,16 +1697,8 @@ async fn download_image(
     }
 }
 
-// 获取应用数据目录的辅助函数
-fn get_app_data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .or_else(|| dirs::data_dir())
-        .expect("Failed to get app data directory")
-        .join("Kabegame")
-}
-
 fn generate_thumbnail(image_path: &Path, _app: &AppHandle) -> Result<Option<PathBuf>, String> {
-    let app_data_dir = get_app_data_dir();
+    let app_data_dir = crate::app_paths::kabegame_data_dir();
     let thumbnails_dir = app_data_dir.join("thumbnails");
     fs::create_dir_all(&thumbnails_dir)
         .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
@@ -1634,6 +1743,41 @@ pub struct ActiveDownloadInfo {
     pub start_time: u64,
     #[serde(rename = "task_id")]
     pub task_id: String,
+    /// 下载状态机状态（用于前端展示）
+    /// - queued: 已入队等待
+    /// - downloading: 正在下载
+    /// - downloaded: 下载完成（字节已落盘/或复用判定完成）
+    /// - processing: 下载后处理（路径规范化/去重/入库/通知）
+    /// - dedupe_skipped: 去重命中，跳过入库
+    /// - reused: 命中已有图片复用
+    /// - db_added: 已写入数据库
+    /// - notified: 已通知前端刷新（image-added）
+    /// - failed: 失败
+    /// - canceled: 已取消
+    #[serde(default)]
+    pub state: String,
+}
+
+fn emit_download_state(
+    app: &AppHandle,
+    task_id: &str,
+    url: &str,
+    start_time: u64,
+    plugin_id: &str,
+    state: &str,
+    error: Option<&str>,
+) {
+    let mut payload = serde_json::json!({
+        "taskId": task_id,
+        "url": url,
+        "startTime": start_time,
+        "pluginId": plugin_id,
+        "state": state,
+    });
+    if let Some(e) = error {
+        payload["error"] = serde_json::Value::String(e.to_string());
+    }
+    let _ = app.emit("download-state", payload);
 }
 
 // 下载队列管理器
@@ -1679,6 +1823,24 @@ impl DownloadQueue {
         Ok(queue.len())
     }
 
+    /// 获取当前等待队列（仅排队中，不含 active_tasks）
+    pub fn get_queue_items(&self) -> Result<Vec<ActiveDownloadInfo>, String> {
+        let queue = self
+            .queue
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        Ok(queue
+            .iter()
+            .map(|t| ActiveDownloadInfo {
+                url: t.url.clone(),
+                plugin_id: t.plugin_id.clone(),
+                start_time: t.download_start_time,
+                task_id: t.task_id.clone(),
+                state: "queued".to_string(),
+            })
+            .collect())
+    }
+
     /// 清空“等待队列”（不影响正在下载的任务）
     pub fn clear_queue(&self) -> Result<usize, String> {
         let mut queue = self
@@ -1702,11 +1864,13 @@ impl DownloadQueue {
         if self.is_task_canceled(&task_id) {
             return Ok(());
         }
+
+        // 构造任务时保留原始字符串所有权，避免后续 emit/日志触发 move/borrow 冲突
         let task = DownloadTask {
-            url,
+            url: url.clone(),
             images_dir,
-            plugin_id,
-            task_id,
+            plugin_id: plugin_id.clone(),
+            task_id: task_id.clone(),
             download_start_time,
         };
 
@@ -1715,6 +1879,18 @@ impl DownloadQueue {
             .lock()
             .map_err(|e| format!("Lock error: {}", e))?;
         queue.push_back(task);
+
+        // 入队后再 emit 状态事件（前端不一定展示 queued，但事件仍可用于调试/统计）
+        emit_download_state(
+            &self.app,
+            &task_id,
+            &url,
+            download_start_time,
+            &plugin_id,
+            "queued",
+            None,
+        );
+
         Ok(())
     }
 
@@ -1782,17 +1958,28 @@ impl DownloadQueue {
                             *active += 1;
                         }
 
-                        // 添加到活跃任务列表
+                        // 添加到活跃任务列表（并初始化状态）
                         let download_info = ActiveDownloadInfo {
                             url: task.url.clone(),
                             plugin_id: task.plugin_id.clone(),
                             start_time: task.download_start_time,
                             task_id: task.task_id.clone(),
+                            state: "downloading".to_string(),
                         };
                         {
                             let mut tasks = active_tasks.lock().unwrap();
                             tasks.push(download_info.clone());
                         }
+
+                        emit_download_state(
+                            &app,
+                            &download_info.task_id,
+                            &download_info.url,
+                            download_info.start_time,
+                            &download_info.plugin_id,
+                            "downloading",
+                            None,
+                        );
 
                         // 启动下载任务
                         let active_clone = Arc::clone(&active_downloads);
@@ -1809,18 +1996,11 @@ impl DownloadQueue {
                                 &task_clone.url,
                                 &task_clone.images_dir,
                                 &task_clone.plugin_id,
+                                &task_clone.task_id,
+                                task_clone.download_start_time,
                                 &app_clone,
                             )
                             .await;
-
-                            // 从活跃任务列表中移除
-                            {
-                                let mut tasks = active_tasks_clone.lock().unwrap();
-                                tasks.retain(|t| {
-                                    t.url != task_clone.url
-                                        || t.start_time != task_clone.download_start_time
-                                });
-                            }
 
                             // 减少活跃下载数
                             let active_after = {
@@ -1846,8 +2026,87 @@ impl DownloadQueue {
                                 }
                             }
 
-                            // 如果下载成功，保存到 gallery
+                            // 更新状态（下载结束 -> 后处理 / 失败）
+                            {
+                                let mut tasks = active_tasks_clone.lock().unwrap();
+                                if let Some(t) = tasks.iter_mut().find(|t| {
+                                    t.url == task_clone.url
+                                        && t.start_time == task_clone.download_start_time
+                                }) {
+                                    match &result {
+                                        Ok(downloaded) => {
+                                            if downloaded.reused {
+                                                t.state = "reused".to_string();
+                                            } else {
+                                                t.state = "downloaded".to_string();
+                                            }
+                                        }
+                                        Err(e) => {
+                                            t.state = if e.contains("Task canceled") {
+                                                "canceled".to_string()
+                                            } else {
+                                                "failed".to_string()
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+
+                            match &result {
+                                Ok(downloaded) => {
+                                    emit_download_state(
+                                        &app_clone,
+                                        &task_clone.task_id,
+                                        &task_clone.url,
+                                        task_clone.download_start_time,
+                                        &task_clone.plugin_id,
+                                        if downloaded.reused {
+                                            "reused"
+                                        } else {
+                                            "downloaded"
+                                        },
+                                        None,
+                                    );
+                                }
+                                Err(e) => {
+                                    emit_download_state(
+                                        &app_clone,
+                                        &task_clone.task_id,
+                                        &task_clone.url,
+                                        task_clone.download_start_time,
+                                        &task_clone.plugin_id,
+                                        if e.contains("Task canceled") {
+                                            "canceled"
+                                        } else {
+                                            "failed"
+                                        },
+                                        Some(e),
+                                    );
+                                }
+                            }
+
+                            // 如果下载成功，保存到 gallery（后处理阶段）
                             if let Ok(downloaded) = result {
+                                emit_download_state(
+                                    &app_clone,
+                                    &task_clone.task_id,
+                                    &task_clone.url,
+                                    task_clone.download_start_time,
+                                    &task_clone.plugin_id,
+                                    "processing",
+                                    None,
+                                );
+
+                                {
+                                    let mut tasks = active_tasks_clone.lock().unwrap();
+                                    if let Some(t) = tasks.iter_mut().find(|t| {
+                                        t.url == task_clone.url
+                                            && t.start_time == task_clone.download_start_time
+                                    }) {
+                                        t.state = "processing".to_string();
+                                    }
+                                }
+
                                 let storage = app_clone.state::<crate::storage::Storage>();
                                 // 规范化路径为绝对路径，并移除 Windows 长路径前缀
                                 let local_path_str = downloaded
@@ -1872,6 +2131,15 @@ impl DownloadQueue {
                                 let mut emitted_image_id: Option<String> = None;
 
                                 if !downloaded.reused {
+                                    emit_download_state(
+                                        &app_clone,
+                                        &task_clone.task_id,
+                                        &task_clone.url,
+                                        task_clone.download_start_time,
+                                        &task_clone.plugin_id,
+                                        "dedupe_check",
+                                        None,
+                                    );
                                     // 检查是否启用自动/强制去重
                                     let should_skip = {
                                         let settings_state =
@@ -1914,6 +2182,15 @@ impl DownloadQueue {
                                     };
 
                                     if !should_skip {
+                                        emit_download_state(
+                                            &app_clone,
+                                            &task_clone.task_id,
+                                            &task_clone.url,
+                                            task_clone.download_start_time,
+                                            &task_clone.plugin_id,
+                                            "db_inserting",
+                                            None,
+                                        );
                                         let image_info = crate::storage::ImageInfo {
                                             id: uuid::Uuid::new_v4().to_string(),
                                             url: task_clone.url.clone(),
@@ -1928,8 +2205,48 @@ impl DownloadQueue {
                                             order: Some(task_clone.download_start_time as i64), // 默认 order = crawled_at（越晚越大）
                                         };
                                         if storage.add_image(image_info.clone()).is_ok() {
+                                            emit_download_state(
+                                                &app_clone,
+                                                &task_clone.task_id,
+                                                &task_clone.url,
+                                                task_clone.download_start_time,
+                                                &task_clone.plugin_id,
+                                                "db_added",
+                                                None,
+                                            );
                                             should_emit = true;
                                             emitted_image_id = Some(image_info.id);
+                                        } else {
+                                            emit_download_state(
+                                                &app_clone,
+                                                &task_clone.task_id,
+                                                &task_clone.url,
+                                                task_clone.download_start_time,
+                                                &task_clone.plugin_id,
+                                                "failed",
+                                                Some("Failed to add image to database"),
+                                            );
+                                        }
+                                    } else {
+                                        emit_download_state(
+                                            &app_clone,
+                                            &task_clone.task_id,
+                                            &task_clone.url,
+                                            task_clone.download_start_time,
+                                            &task_clone.plugin_id,
+                                            "dedupe_skipped",
+                                            None,
+                                        );
+
+                                        {
+                                            let mut tasks = active_tasks_clone.lock().unwrap();
+                                            if let Some(t) = tasks.iter_mut().find(|t| {
+                                                t.url == task_clone.url
+                                                    && t.start_time
+                                                        == task_clone.download_start_time
+                                            }) {
+                                                t.state = "dedupe_skipped".to_string();
+                                            }
                                         }
                                     }
                                 } else {
@@ -1945,7 +2262,25 @@ impl DownloadQueue {
                                             "imageId": emitted_image_id.unwrap_or_default(),
                                         }),
                                     );
+                                    emit_download_state(
+                                        &app_clone,
+                                        &task_clone.task_id,
+                                        &task_clone.url,
+                                        task_clone.download_start_time,
+                                        &task_clone.plugin_id,
+                                        "notified",
+                                        None,
+                                    );
                                 }
+                            }
+
+                            // 最终：从活跃任务列表中移除
+                            {
+                                let mut tasks = active_tasks_clone.lock().unwrap();
+                                tasks.retain(|t| {
+                                    t.url != task_clone.url
+                                        || t.start_time != task_clone.download_start_time
+                                });
                             }
                         });
                     }

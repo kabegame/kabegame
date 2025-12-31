@@ -8,6 +8,11 @@
         刷新
       </el-button>
       <el-button type="primary" @click="showCreateDialog = true">新建画册</el-button>
+      <el-button @click="openQuickSettings" circle>
+        <el-icon>
+          <Setting />
+        </el-icon>
+      </el-button>
     </PageHeader>
 
     <transition-group :key="albumsListKey" name="fade-in-list" tag="div" class="albums-grid">
@@ -40,21 +45,21 @@
 <script setup lang="ts">
 import { ref, onMounted, onActivated, onBeforeUnmount } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Refresh } from "@element-plus/icons-vue";
+import { Refresh, Setting } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import AlbumContextMenu from "@/components/AlbumContextMenu.vue";
 import { useAlbumStore } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
 import PageHeader from "@/components/common/PageHeader.vue";
+import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 
 const albumStore = useAlbumStore();
-const { albums, albumCounts } = storeToRefs(albumStore);
+const { albums, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const router = useRouter();
-
-// 收藏画册的固定ID（与后端保持一致）
-const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
+const quickSettingsDrawer = useQuickSettingsDrawerStore();
+const openQuickSettings = () => quickSettingsDrawer.open("albums");
 
 // 当前轮播画册ID
 const currentRotationAlbumId = ref<string | null>(null);
@@ -127,19 +132,19 @@ const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
 
 // 刷新收藏画册的预览（用于收藏状态变化时）
 const refreshFavoriteAlbumPreview = async () => {
-  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
+  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID.value);
   if (!favoriteAlbum) return;
 
   // 清除收藏画册的本地预览缓存
-  const oldUrls = albumPreviewUrls.value[FAVORITE_ALBUM_ID];
+  const oldUrls = albumPreviewUrls.value[FAVORITE_ALBUM_ID.value];
   if (oldUrls) {
     oldUrls.forEach((u) => URL.revokeObjectURL(u));
   }
-  delete albumPreviewUrls.value[FAVORITE_ALBUM_ID];
-  delete albumLoadingStates.value[FAVORITE_ALBUM_ID];
-  delete albumIsLoading.value[FAVORITE_ALBUM_ID];
+  delete albumPreviewUrls.value[FAVORITE_ALBUM_ID.value];
+  delete albumLoadingStates.value[FAVORITE_ALBUM_ID.value];
+  delete albumIsLoading.value[FAVORITE_ALBUM_ID.value];
   // 清除store中的预览缓存
-  delete albumStore.albumPreviews[FAVORITE_ALBUM_ID];
+  delete albumStore.albumPreviews[FAVORITE_ALBUM_ID.value];
   // 重新加载预览
   await prefetchPreview(favoriteAlbum);
 };
@@ -169,20 +174,20 @@ onActivated(async () => {
   await loadRotationSettings();
 
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
-  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID);
+  const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID.value);
   if (favoriteAlbum) {
-    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID] || 0;
-    const existingUrls = albumPreviewUrls.value[FAVORITE_ALBUM_ID];
+    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID.value] || 0;
+    const existingUrls = albumPreviewUrls.value[FAVORITE_ALBUM_ID.value];
     const hasValidPreview = existingUrls && existingUrls.length > 0 && existingUrls.some(url => url);
 
     // 如果画册有内容但预览为空，清除缓存并重新加载
     if (favoriteCount > 0 && !hasValidPreview) {
       // 清除本地预览URL缓存
-      delete albumPreviewUrls.value[FAVORITE_ALBUM_ID];
-      delete albumLoadingStates.value[FAVORITE_ALBUM_ID];
-      delete albumIsLoading.value[FAVORITE_ALBUM_ID];
+      delete albumPreviewUrls.value[FAVORITE_ALBUM_ID.value];
+      delete albumLoadingStates.value[FAVORITE_ALBUM_ID.value];
+      delete albumIsLoading.value[FAVORITE_ALBUM_ID.value];
       // 清除store中的预览缓存
-      delete albumStore.albumPreviews[FAVORITE_ALBUM_ID];
+      delete albumStore.albumPreviews[FAVORITE_ALBUM_ID.value];
       // 重新加载预览
       await prefetchPreview(favoriteAlbum);
     }
@@ -191,7 +196,7 @@ onActivated(async () => {
   // 检查是否有新画册需要加载预览（还没有预览数据的画册）
   for (const album of albums.value.slice(0, 6)) {
     // 跳过收藏画册，因为上面已经处理过了
-    if (album.id === FAVORITE_ALBUM_ID) continue;
+    if (album.id === FAVORITE_ALBUM_ID.value) continue;
 
     const existingUrls = albumPreviewUrls.value[album.id];
     if (!existingUrls || existingUrls.length === 0 || !existingUrls.some(url => url)) {
@@ -212,7 +217,7 @@ const handleRefresh = async () => {
       clearAlbumPreviewCache(album.id);
     }
     // 收藏画册也强制重载一次（收藏状态变化会影响预览）
-    clearAlbumPreviewCache(FAVORITE_ALBUM_ID);
+    clearAlbumPreviewCache(FAVORITE_ALBUM_ID.value);
 
     // 强制重新挂载列表，让每个卡片的 enter 动画和内部状态都重置
     albumsListKey.value++;
@@ -288,19 +293,19 @@ const getImageUrl = async (localPath: string): Promise<string> => {
 
 const prefetchPreview = async (album: { id: string }) => {
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
-  if (album.id === FAVORITE_ALBUM_ID) {
-    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID] || 0;
-    const existingUrls = albumPreviewUrls.value[FAVORITE_ALBUM_ID];
+  if (album.id === FAVORITE_ALBUM_ID.value) {
+    const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID.value] || 0;
+    const existingUrls = albumPreviewUrls.value[FAVORITE_ALBUM_ID.value];
     const hasValidPreview = existingUrls && existingUrls.length > 0 && existingUrls.some(url => url);
 
     // 如果画册有内容但预览为空，清除缓存
     if (favoriteCount > 0 && !hasValidPreview) {
       // 清除本地预览URL缓存
-      delete albumPreviewUrls.value[FAVORITE_ALBUM_ID];
-      delete albumLoadingStates.value[FAVORITE_ALBUM_ID];
-      delete albumIsLoading.value[FAVORITE_ALBUM_ID];
+      delete albumPreviewUrls.value[FAVORITE_ALBUM_ID.value];
+      delete albumLoadingStates.value[FAVORITE_ALBUM_ID.value];
+      delete albumIsLoading.value[FAVORITE_ALBUM_ID.value];
       // 清除store中的预览缓存
-      delete albumStore.albumPreviews[FAVORITE_ALBUM_ID];
+      delete albumStore.albumPreviews[FAVORITE_ALBUM_ID.value];
     }
   }
 
@@ -442,7 +447,7 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
       // 设置轮播画册
       await invoke("set_wallpaper_rotation_album_id", { albumId: id });
       currentRotationAlbumId.value = id;
-      ElMessage.success(`已将画册"${name}"设为桌面轮播`);
+      ElMessage.success(`已开启轮播：画册「${name}」`);
     } catch (error) {
       console.error("设置轮播画册失败:", error);
       ElMessage.error("设置失败");
@@ -460,7 +465,7 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
   }
 
   // 检查是否为"收藏"画册（使用固定ID）
-  if (id === FAVORITE_ALBUM_ID) {
+  if (id === FAVORITE_ALBUM_ID.value) {
     ElMessage.warning("不能删除'收藏'画册");
     return;
   }

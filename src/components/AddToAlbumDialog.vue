@@ -2,7 +2,7 @@
   <el-dialog v-model="visible" title="加入画册" width="420px">
     <el-form label-width="80px">
       <el-form-item label="选择画册">
-        <el-select v-model="selectedAlbumId" placeholder="请选择已有画册" style="width: 100%" clearable>
+        <el-select v-model="selectedAlbumId" placeholder="选择一个心仪的画册吧" style="width: 100%" clearable>
           <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
         </el-select>
       </el-form-item>
@@ -69,6 +69,7 @@ const handleConfirm = async () => {
   try {
     let targetAlbumId = selectedAlbumId.value;
     const name = newAlbumName.value.trim();
+    const isNewAlbum = !targetAlbumId && name;
     if (name) {
       const created = await albumStore.createAlbum(name);
       targetAlbumId = created.id;
@@ -77,7 +78,33 @@ const handleConfirm = async () => {
       ElMessage.warning("请选择画册或新建画册");
       return;
     }
-    await albumStore.addImagesToAlbum(targetAlbumId, props.imageIds);
+
+    // 如果是已有画册，过滤掉已经在画册中的图片
+    let idsToAdd = props.imageIds;
+    if (!isNewAlbum) {
+      try {
+        const existingIds = await albumStore.getAlbumImageIds(targetAlbumId);
+        const existingSet = new Set(existingIds);
+        idsToAdd = props.imageIds.filter(id => !existingSet.has(id));
+
+        if (idsToAdd.length === 0) {
+          ElMessage.info("所选图片已全部在画册中");
+          visible.value = false;
+          emit("added");
+          return;
+        }
+
+        if (idsToAdd.length < props.imageIds.length) {
+          const skippedCount = props.imageIds.length - idsToAdd.length;
+          ElMessage.warning(`已跳过 ${skippedCount} 张已在画册中的图片`);
+        }
+      } catch (e) {
+        console.error("获取画册图片列表失败:", e);
+        // 如果获取失败，仍然尝试添加（后端有 INSERT OR IGNORE 保护）
+      }
+    }
+
+    await albumStore.addImagesToAlbum(targetAlbumId, idsToAdd);
     visible.value = false;
     emit("added");
   } catch (e) {
@@ -86,5 +113,3 @@ const handleConfirm = async () => {
   }
 };
 </script>
-
-

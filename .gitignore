@@ -9,7 +9,6 @@ lerna-debug.log*
 
 node_modules
 dist
-dist-ssr
 *.local
 
 # Editor directories and files
@@ -17,11 +16,6 @@ dist-ssr
 !.vscode/extensions.json
 .idea
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
 
 # Tauri
 src-tauri/target
@@ -32,12 +26,9 @@ src-tauri/icons/*
 !src-tauri/icons/icon.png
 !src-tauri/icons/README.md
 
-# Test plugins (packaged)
-test_plugin/**/*.kgpg
-test_plugin_packed/
+# development data
+data
 
 # Nx
 .nx/cache
 .nx/workspace-data
-
-.taurignore

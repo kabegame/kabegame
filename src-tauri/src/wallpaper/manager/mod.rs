@@ -120,15 +120,6 @@ impl WallpaperController {
 
 /// 壁纸管理器 trait，定义壁纸设置的通用接口
 pub trait WallpaperManager: Send + Sync {
-    /// 获取当前壁纸路径
-    ///
-    /// # Returns
-    /// * `String` - 当前壁纸路径
-    ///
-    /// # Errors
-    /// * `String` - 错误信息
-    fn get_wallpaper_path(&self) -> Result<String, String>;
-
     ///
     /// # Returns
     /// * `String` - 当前样式

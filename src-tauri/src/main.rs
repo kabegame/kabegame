@@ -14,11 +14,13 @@ use windows_sys::Win32::{
         Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
     },
     UI::Shell::DROPFILES,
+    UI::WindowsAndMessaging::GetSystemMetrics,
 };
 
 #[cfg(target_os = "windows")]
 const CF_HDROP_FORMAT: u32 = 15; // Clipboard format for file drop
 
+mod app_paths;
 mod crawler;
 mod plugin;
 mod runtime_flags;
@@ -29,7 +31,6 @@ mod wallpaper;
 mod wallpaper_engine_export;
 
 use crawler::{crawl_images, ActiveDownloadInfo, CrawlResult};
-use dirs;
 use plugin::{
     BrowserPlugin, ImportPreview, Plugin, PluginDetail, PluginManager, PluginSource,
     StorePluginResolved, StoreSourceValidationResult,
@@ -37,12 +38,150 @@ use plugin::{
 use runtime_flags::{ForceDedupeStartResult, RuntimeFlags};
 use settings::{AppSettings, Settings, WindowState};
 use std::fs;
-use std::path::PathBuf;
 use storage::{Album, ImageInfo, PaginatedImages, RunConfig, Storage, TaskInfo};
 #[cfg(target_os = "windows")]
 use wallpaper::manager::GdiWallpaperManager;
 use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
 use wallpaper_engine_export::{export_album_to_we_project, export_images_to_we_project};
+
+fn get_current_wallpaper_path_from_settings(app: &tauri::AppHandle) -> Option<String> {
+    let settings = app.try_state::<Settings>()?.get_settings().ok()?;
+    let id = settings.current_wallpaper_image_id?;
+    let storage = app.try_state::<Storage>()?;
+    storage
+        .find_image_by_id(&id)
+        .ok()
+        .flatten()
+        .map(|img| img.local_path)
+}
+
+fn choose_fallback_image_id(images: &[ImageInfo], mode: &str) -> Option<String> {
+    if images.is_empty() {
+        return None;
+    }
+    match mode {
+        "random" => {
+            let idx = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as usize)
+                % images.len();
+            Some(images[idx].id.clone())
+        }
+        _ => {
+            // sequential: 取“第一张”（storage.get_album_images / get_all_images 已按 order 排序）
+            Some(images[0].id.clone())
+        }
+    }
+}
+
+/// 启动时初始化“当前壁纸”并按规则回退/降级
+///
+/// 规则（按用户需求）：
+/// - 非轮播：尝试设置 currentWallpaperImageId；失败则清空并停止
+/// - 轮播：优先在轮播源中找到 currentWallpaperImageId；找不到则回退到轮播源的一张；源无可用则画册->画廊->关闭轮播并清空
+fn init_wallpaper_on_startup(app: &tauri::AppHandle) -> Result<(), String> {
+    use std::path::Path;
+
+    let settings_state = app.state::<Settings>();
+    let storage = app.state::<Storage>();
+    let controller = app.state::<WallpaperController>();
+
+    let mut settings = settings_state.get_settings()?;
+
+    // 约定兼容：轮播启用但未配置来源（None） => 默认当作“画廊轮播”
+    if settings.wallpaper_rotation_enabled && settings.wallpaper_rotation_album_id.is_none() {
+        settings_state.set_wallpaper_rotation_album_id(Some("".to_string()))?;
+        settings = settings_state.get_settings()?;
+    }
+
+    let cur_id = settings.current_wallpaper_image_id.clone();
+
+    // 非轮播：只尝试还原当前壁纸
+    if !settings.wallpaper_rotation_enabled {
+        let Some(id) = cur_id else {
+            return Ok(());
+        };
+        let image = storage
+            .find_image_by_id(&id)?
+            .ok_or_else(|| "当前壁纸记录不存在".to_string())?;
+        if !Path::new(&image.local_path).exists() {
+            settings_state.set_current_wallpaper_image_id(None)?;
+            return Ok(());
+        }
+        if controller
+            .set_wallpaper(&image.local_path, &settings.wallpaper_rotation_style)
+            .is_err()
+        {
+            settings_state.set_current_wallpaper_image_id(None)?;
+        }
+        return Ok(());
+    }
+
+    // 轮播：从源里找 current；否则选源里一张；源无图则回退源/降级
+    let mut source_album_id = settings.wallpaper_rotation_album_id.clone();
+    let mut images: Vec<ImageInfo> = match source_album_id.as_deref() {
+        Some(id) if !id.trim().is_empty() => storage.get_album_images(id).unwrap_or_default(),
+        _ => storage.get_all_images().unwrap_or_default(),
+    };
+
+    // 若画册无图：回退到画廊
+    if images.is_empty()
+        && source_album_id
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+    {
+        source_album_id = Some("".to_string());
+        settings_state.set_wallpaper_rotation_album_id(source_album_id.clone())?;
+        settings = settings_state.get_settings()?;
+        images = storage.get_all_images().unwrap_or_default();
+    }
+
+    // 若画廊也无图：降级到非轮播并清空
+    if images.is_empty() {
+        settings_state.set_wallpaper_rotation_enabled(false)?;
+        settings_state.set_wallpaper_rotation_album_id(None)?;
+        settings_state.set_current_wallpaper_image_id(None)?;
+        return Ok(());
+    }
+
+    // 优先：源里能找到 currentWallpaperImageId
+    let mut target_id: Option<String> = None;
+    if let Some(id) = cur_id.clone() {
+        if images.iter().any(|img| img.id == id) {
+            target_id = Some(id);
+        }
+    }
+    if target_id.is_none() {
+        target_id = choose_fallback_image_id(&images, &settings.wallpaper_rotation_mode);
+    }
+
+    let Some(chosen_id) = target_id else {
+        settings_state.set_current_wallpaper_image_id(None)?;
+        return Ok(());
+    };
+
+    let image = storage
+        .find_image_by_id(&chosen_id)?
+        .ok_or_else(|| "选择的壁纸不存在".to_string())?;
+    if !Path::new(&image.local_path).exists() {
+        // 理论上不会发生（images 已过滤 exists），但兜底：清空并停止
+        settings_state.set_current_wallpaper_image_id(None)?;
+        return Ok(());
+    }
+
+    if controller
+        .set_wallpaper(&image.local_path, &settings.wallpaper_rotation_style)
+        .is_ok()
+    {
+        settings_state.set_current_wallpaper_image_id(Some(chosen_id))?;
+    } else {
+        settings_state.set_current_wallpaper_image_id(None)?;
+    }
+
+    Ok(())
+}
 
 #[tauri::command]
 fn get_plugins(state: tauri::State<PluginManager>) -> Result<Vec<Plugin>, String> {
@@ -329,13 +468,31 @@ fn get_images_count(
 }
 
 #[tauri::command]
-fn delete_image(image_id: String, state: tauri::State<Storage>) -> Result<(), String> {
-    state.delete_image(&image_id)
+fn delete_image(
+    image_id: String,
+    state: tauri::State<Storage>,
+    settings: tauri::State<Settings>,
+) -> Result<(), String> {
+    state.delete_image(&image_id)?;
+    let s = settings.get_settings().unwrap_or_default();
+    if s.current_wallpaper_image_id.as_deref() == Some(image_id.as_str()) {
+        let _ = settings.set_current_wallpaper_image_id(None);
+    }
+    Ok(())
 }
 
 #[tauri::command]
-fn remove_image(image_id: String, state: tauri::State<Storage>) -> Result<(), String> {
-    state.remove_image(&image_id)
+fn remove_image(
+    image_id: String,
+    state: tauri::State<Storage>,
+    settings: tauri::State<Settings>,
+) -> Result<(), String> {
+    state.remove_image(&image_id)?;
+    let s = settings.get_settings().unwrap_or_default();
+    if s.current_wallpaper_image_id.as_deref() == Some(image_id.as_str()) {
+        let _ = settings.set_current_wallpaper_image_id(None);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -347,8 +504,17 @@ struct DedupeGalleryResult {
 
 /// 对画廊按 hash 去重：保留一条记录，其余仅从画廊移除（不删除原图文件）
 #[tauri::command]
-fn dedupe_gallery_by_hash(state: tauri::State<Storage>) -> Result<DedupeGalleryResult, String> {
+fn dedupe_gallery_by_hash(
+    state: tauri::State<Storage>,
+    settings: tauri::State<Settings>,
+) -> Result<DedupeGalleryResult, String> {
     let res = state.dedupe_gallery_by_hash_remove_only()?;
+    let s = settings.get_settings().unwrap_or_default();
+    if let Some(cur) = s.current_wallpaper_image_id.as_deref() {
+        if res.removed_ids.iter().any(|id| id == cur) {
+            let _ = settings.set_current_wallpaper_image_id(None);
+        }
+    }
     Ok(DedupeGalleryResult {
         removed: res.removed,
         removed_ids: res.removed_ids,
@@ -392,18 +558,10 @@ fn stop_force_deduplicate(flags: tauri::State<RuntimeFlags>) -> Result<(), Strin
     Ok(())
 }
 
-// 获取应用数据目录路径
-fn get_app_data_dir_for_clear() -> PathBuf {
-    dirs::data_local_dir()
-        .or_else(|| dirs::data_dir())
-        .expect("Failed to get app data directory")
-        .join("Kabegame")
-}
-
 // 清理应用数据（仅用户数据，不包括应用本身）
 #[tauri::command]
 async fn clear_user_data(app: tauri::AppHandle) -> Result<(), String> {
-    let app_data_dir = get_app_data_dir_for_clear();
+    let app_data_dir = crate::app_paths::kabegame_data_dir();
 
     if !app_data_dir.exists() {
         return Ok(()); // 目录不存在，无需清理
@@ -540,7 +698,62 @@ fn set_wallpaper(file_path: String, app: tauri::AppHandle) -> Result<(), String>
 
     controller.set_wallpaper(&abs, &settings.wallpaper_rotation_style)?;
 
+    // 维护全局“当前壁纸”（imageId）
+    // - 若能从 DB 根据 local_path 找到 image：写入该 imageId
+    // - 否则清空（避免残留旧值）
+    if let Some(storage) = app.try_state::<Storage>() {
+        if let Ok(found) = storage.find_image_by_path(&abs) {
+            let _ = settings_state.set_current_wallpaper_image_id(found.map(|img| img.id));
+        }
+    }
+
     Ok(())
+}
+
+/// 按 imageId 设置壁纸，并同步更新 settings.currentWallpaperImageId
+#[tauri::command]
+fn set_wallpaper_by_image_id(image_id: String, app: tauri::AppHandle) -> Result<(), String> {
+    use std::path::Path;
+
+    let storage = app.state::<Storage>();
+    let settings_state = app.state::<Settings>();
+    let settings = settings_state.get_settings()?;
+
+    let image = storage
+        .find_image_by_id(&image_id)?
+        .ok_or_else(|| "图片不存在".to_string())?;
+
+    if !Path::new(&image.local_path).exists() {
+        // 图片已被删除/移除/文件丢失：清空 currentWallpaperImageId
+        let _ = settings_state.set_current_wallpaper_image_id(None);
+        return Err("图片文件不存在".to_string());
+    }
+
+    let controller = app.state::<WallpaperController>();
+    controller.set_wallpaper(&image.local_path, &settings.wallpaper_rotation_style)?;
+
+    settings_state.set_current_wallpaper_image_id(Some(image_id))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_current_wallpaper_image_id(state: tauri::State<Settings>) -> Result<Option<String>, String> {
+    let s = state.get_settings()?;
+    Ok(s.current_wallpaper_image_id)
+}
+
+#[tauri::command]
+fn clear_current_wallpaper_image_id(state: tauri::State<Settings>) -> Result<(), String> {
+    state.set_current_wallpaper_image_id(None)
+}
+
+/// 根据 imageId 取图片本地路径（用于 UI 展示/定位）
+#[tauri::command]
+fn get_image_local_path_by_id(
+    image_id: String,
+    state: tauri::State<Storage>,
+) -> Result<Option<String>, String> {
+    Ok(state.find_image_by_id(&image_id)?.map(|img| img.local_path))
 }
 
 /// 获取当前正在使用的壁纸路径（与当前 wallpaper_mode 对应）
@@ -549,15 +762,7 @@ fn set_wallpaper(file_path: String, app: tauri::AppHandle) -> Result<(), String>
 /// - 返回 `Some(path)` 表示当前后端记录的壁纸路径（不保证文件一定存在）
 #[tauri::command]
 fn get_current_wallpaper_path(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let controller = app.state::<WallpaperController>();
-    let manager = match controller.active_manager() {
-        Ok(m) => m,
-        Err(_) => return Ok(None),
-    };
-    match manager.get_wallpaper_path() {
-        Ok(p) => Ok(Some(p)),
-        Err(_) => Ok(None),
-    }
+    Ok(get_current_wallpaper_path_from_settings(&app))
 }
 
 #[tauri::command]
@@ -796,6 +1001,21 @@ fn get_settings(state: tauri::State<Settings>) -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
+fn get_setting(key: String, state: tauri::State<Settings>) -> Result<serde_json::Value, String> {
+    let settings = state.get_settings()?;
+    let v = serde_json::to_value(settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    v.get(&key)
+        .cloned()
+        .ok_or_else(|| format!("Unknown setting key: {}", key))
+}
+
+#[tauri::command]
+fn get_favorite_album_id() -> Result<String, String> {
+    Ok(crate::storage::FAVORITE_ALBUM_ID.to_string())
+}
+
+#[tauri::command]
 fn set_restore_last_tab(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
     state.set_restore_last_tab(enabled)
 }
@@ -836,6 +1056,31 @@ fn set_gallery_image_aspect_ratio_match_window(
     state: tauri::State<Settings>,
 ) -> Result<(), String> {
     state.set_gallery_image_aspect_ratio_match_window(enabled)
+}
+
+#[tauri::command]
+fn set_gallery_image_aspect_ratio(
+    aspect_ratio: Option<String>,
+    state: tauri::State<Settings>,
+) -> Result<(), String> {
+    state.set_gallery_image_aspect_ratio(aspect_ratio)
+}
+
+#[tauri::command]
+fn get_desktop_resolution() -> Result<(u32, u32), String> {
+    #[cfg(target_os = "windows")]
+    {
+        unsafe {
+            let width = GetSystemMetrics(0) as u32; // SM_CXSCREEN
+            let height = GetSystemMetrics(1) as u32; // SM_CYSCREEN
+            Ok((width, height))
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // 其他平台可以返回默认值或实现相应逻辑
+        Ok((1920, 1080))
+    }
 }
 
 #[tauri::command]
@@ -885,6 +1130,12 @@ fn get_default_images_dir(state: tauri::State<Storage>) -> Result<String, String
 fn get_active_downloads(app: tauri::AppHandle) -> Result<Vec<ActiveDownloadInfo>, String> {
     let download_queue = app.state::<crawler::DownloadQueue>();
     download_queue.get_active_downloads()
+}
+
+#[tauri::command]
+fn get_download_queue_items(app: tauri::AppHandle) -> Result<Vec<ActiveDownloadInfo>, String> {
+    let download_queue = app.state::<crawler::DownloadQueue>();
+    download_queue.get_queue_items()
 }
 
 #[tauri::command]
@@ -945,8 +1196,21 @@ fn get_all_tasks(state: tauri::State<Storage>) -> Result<Vec<TaskInfo>, String> 
 }
 
 #[tauri::command]
-fn delete_task(task_id: String, state: tauri::State<Storage>) -> Result<(), String> {
-    state.delete_task(&task_id)
+fn delete_task(
+    task_id: String,
+    state: tauri::State<Storage>,
+    settings: tauri::State<Settings>,
+) -> Result<(), String> {
+    // 先取出该任务关联的图片 id 列表（避免删除后无法判断是否包含“当前壁纸”）
+    let ids = state.get_task_image_ids(&task_id).unwrap_or_default();
+    state.delete_task(&task_id)?;
+    let s = settings.get_settings().unwrap_or_default();
+    if let Some(cur) = s.current_wallpaper_image_id.as_deref() {
+        if ids.iter().any(|id| id == cur) {
+            let _ = settings.set_current_wallpaper_image_id(None);
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -993,6 +1257,8 @@ struct RotationStartResult {
     started: bool,
     source: String,           // "album" | "gallery"
     album_id: Option<String>, // source=album 时为 Some(id)，source=gallery 时为 Some("")（保留设置值）
+    fallback: bool,           // 是否发生“画册 -> 画廊”的回退
+    warning: Option<String>,  // 需要提示给用户的警告（例如回退原因）
 }
 
 #[tauri::command]
@@ -1027,7 +1293,6 @@ fn set_wallpaper_rotation_album_id(
     let settings = state.get_settings()?;
     if settings.wallpaper_rotation_enabled {
         let rotator = app.state::<WallpaperRotator>();
-        let was_running = rotator.is_running();
         // 当选择为画廊轮播（空字符串）时：从当前壁纸开始
         let start_from_current = settings
             .wallpaper_rotation_album_id
@@ -1037,15 +1302,6 @@ fn set_wallpaper_rotation_album_id(
         rotator
             .ensure_running(start_from_current)
             .map_err(|e| format!("启动轮播失败: {}", e))?;
-
-        // 关键：如果轮播线程本来就在运行，用户“切换轮播来源/画册”应当立即切换一次，
-        // 而不是等到下一次 interval 才切换。
-        // - 仅在 was_running=true 时触发，避免“未运行 -> ensure_running 已经设置起始壁纸”时又额外切一次。
-        if was_running {
-            rotator
-                .rotate()
-                .map_err(|e| format!("立即切换失败: {}", e))?;
-        }
     }
 
     Ok(())
@@ -1066,6 +1322,8 @@ fn start_wallpaper_rotation(
     }
 
     let rotator = app.state::<WallpaperRotator>();
+    let mut did_fallback = false;
+    let mut warning: Option<String> = None;
 
     // 1) 优先尝试：如果保存了“上次画册ID”且非空，则先用画册轮播
     if let Some(saved) = settings.wallpaper_rotation_album_id.clone() {
@@ -1077,13 +1335,27 @@ fn start_wallpaper_rotation(
                         started: true,
                         source: "album".to_string(),
                         album_id: Some(saved),
+                        fallback: false,
+                        warning: None,
                     });
                 }
                 Err(e) => {
-                    eprintln!(
-                        "[WARN] start_wallpaper_rotation: saved album_id failed, fallback to gallery. err={}",
-                        e
-                    );
+                    // 画册为空：直接失败，不回退
+                    if e.contains("画册内没有图片") {
+                        return Err(e);
+                    }
+                    // 画册不存在：回退到画廊
+                    if e.contains("画册不存在") {
+                        eprintln!(
+                            "[WARN] start_wallpaper_rotation: saved album_id missing, fallback to gallery. err={}",
+                            e
+                        );
+                        did_fallback = true;
+                        warning = Some("上次选择的画册不存在，已回退到画廊轮播".to_string());
+                    } else {
+                        // 其他错误：不擅自回退，直接失败
+                        return Err(e);
+                    }
                 }
             }
         }
@@ -1097,6 +1369,8 @@ fn start_wallpaper_rotation(
         started: true,
         source: "gallery".to_string(),
         album_id: Some("".to_string()),
+        fallback: did_fallback,
+        warning,
     })
 }
 #[tauri::command]
@@ -1147,7 +1421,7 @@ fn set_wallpaper_style(
             m.set_style(&style_clone, true)?;
             // 2) 再重载当前壁纸路径，强制桌面立即用新样式重新渲染
             //    （否则部分系统/场景只改注册表不会立刻重绘）
-            if let Ok(path) = m.get_wallpaper_path() {
+            if let Some(path) = get_current_wallpaper_path_from_settings(&app_clone) {
                 if std::path::Path::new(&path).exists() {
                     let _ = m.set_wallpaper_path(&path, true);
                 }
@@ -1298,13 +1572,9 @@ fn set_wallpaper_mode(
         };
 
         // 1) 从旧后端读取“当前壁纸路径”（尽量保持当前壁纸不变）
-        let current_wallpaper = match controller
-            .manager_for_mode(&old_mode_clone)
-            .get_wallpaper_path()
-        {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("切换模式时无法获取当前壁纸: {}", e);
+        let current_wallpaper = match get_current_wallpaper_path_from_settings(&app_clone) {
+            Some(p) => p,
+            None => {
                 // 没有当前壁纸：仍允许切换模式（仅保存 mode），但不做 reapply
                 match settings_state.set_wallpaper_mode(mode_clone.clone()) {
                     Ok(_) => {
@@ -1728,7 +1998,7 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             // 检查清理标记，如果存在则先清理旧数据目录
-            let app_data_dir = get_app_data_dir_for_clear();
+            let app_data_dir = crate::app_paths::kabegame_data_dir();
             let cleanup_marker = app_data_dir.join(".cleanup_marker");
             let is_cleaning_data = cleanup_marker.exists();
             if is_cleaning_data {
@@ -1867,7 +2137,12 @@ fn main() {
 
                     println!("初始化壁纸控制器完成");
 
-                    // 初始化完成后：如果当前就是 window 模式，则start rotator
+                    // 启动时：按规则恢复/回退“当前壁纸”
+                    if let Err(e) = init_wallpaper_on_startup(&app_handle) {
+                        eprintln!("启动时初始化壁纸失败: {}", e);
+                    }
+
+                    // 初始化完成后：若轮播仍启用，则启动轮播线程
                     let settings = app_handle.state::<Settings>();
                     if let Ok(app_settings) = settings.get_settings() {
                         if app_settings.wallpaper_rotation_enabled {
@@ -1921,6 +2196,10 @@ fn main() {
             open_file_path,
             open_file_folder,
             set_wallpaper,
+            set_wallpaper_by_image_id,
+            get_current_wallpaper_image_id,
+            clear_current_wallpaper_image_id,
+            get_image_local_path_by_id,
             get_current_wallpaper_path,
             test_gdi_wallpaper,
             migrate_images_from_json,
@@ -1942,12 +2221,16 @@ fn main() {
             save_plugin_config,
             load_plugin_config,
             get_settings,
+            get_setting,
+            get_favorite_album_id,
             set_auto_launch,
             set_max_concurrent_downloads,
             set_network_retry_count,
             set_image_click_action,
             set_gallery_columns,
             set_gallery_image_aspect_ratio_match_window,
+            set_gallery_image_aspect_ratio,
+            get_desktop_resolution,
             set_gallery_page_size,
             set_auto_deduplicate,
             set_default_download_dir,
@@ -1955,6 +2238,7 @@ fn main() {
             get_wallpaper_engine_myprojects_dir,
             get_default_images_dir,
             get_active_downloads,
+            get_download_queue_items,
             add_run_config,
             get_run_configs,
             delete_run_config,

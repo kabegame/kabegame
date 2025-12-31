@@ -23,7 +23,7 @@
       </el-icon>
       <span style="margin-left: 8px;">重命名</span>
     </div>
-    <div v-if="albumId !== FAVORITE_ALBUM_ID" class="context-menu-item" @click.stop="$emit('command', 'delete')">
+    <div v-if="albumId !== FAVORITE_ALBUM_ID.value" class="context-menu-item" @click.stop="$emit('command', 'delete')">
       <el-icon>
         <Delete />
       </el-icon>
@@ -34,8 +34,10 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { storeToRefs } from "pinia";
 import { Delete, FolderOpened, Picture, Edit } from "@element-plus/icons-vue";
 import ContextMenu from "@/components/ContextMenu.vue";
+import { useAlbumStore } from "@/stores/albums";
 
 interface Props {
   visible: boolean;
@@ -47,8 +49,8 @@ interface Props {
   albumImageCount?: number; // 画册图片数量
 }
 
-// 收藏画册的固定ID（与后端保持一致）
-const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
+const albumStore = useAlbumStore();
+const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 
 const props = defineProps<Props>();
 

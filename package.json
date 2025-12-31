@@ -9,6 +9,7 @@
     "build": "node scripts/run.js build",
     "package-plugin": "nx run crawler-plugins:package",
     "package-plugin:local": "nx run crawler-plugins:package-local",
+    "clean-nx-cache": "node scripts/clean-nx-cache.js",
     "prepare": "husky"
   },
   "dependencies": {
@@ -27,7 +28,6 @@
     "@nx/devkit": "^20.0.0",
     "@tauri-apps/cli": "^2.0",
     "@vitejs/plugin-vue": "^5.0.4",
-    "@vue/devtools": "^8.0.5",
     "@vue/tsconfig": "^0.5.1",
     "archiver": "^7.0.1",
     "husky": "^9.1.7",

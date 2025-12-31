@@ -10,14 +10,6 @@ use tauri::AppHandle;
 use uuid::Uuid;
 use zip::ZipArchive;
 
-// 获取应用数据目录的辅助函数
-fn get_app_data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .or_else(|| dirs::data_dir())
-        .expect("Failed to get app data directory")
-        .join("Kabegami Crawler")
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plugin {
@@ -51,21 +43,14 @@ pub struct PluginSelector {
 }
 
 pub struct PluginManager {
-    app: AppHandle,
     remote_zip_cache: Mutex<HashMap<String, RemoteZipCacheEntry>>,
 }
 
 impl PluginManager {
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new(_app: AppHandle) -> Self {
         Self {
-            app,
             remote_zip_cache: Mutex::new(HashMap::new()),
         }
-    }
-
-    fn get_plugins_file(&self) -> PathBuf {
-        let app_data_dir = get_app_data_dir();
-        app_data_dir.join("plugins.json")
     }
 
     /// 从插件目录中的 .kgpg 文件加载所有已安装的插件
@@ -132,25 +117,9 @@ impl PluginManager {
         Ok(plugins)
     }
 
-    /// 不再需要保存到文件，插件信息直接从 .kgpg 文件读取
-    pub fn save_all(&self, _plugins: &[Plugin]) -> Result<(), String> {
-        // 插件信息现在直接从文件系统读取，不需要保存
-        Ok(())
-    }
-
     pub fn get(&self, id: &str) -> Option<Plugin> {
         let plugins = self.get_all().ok()?;
         plugins.into_iter().find(|p| p.id == id)
-    }
-
-    /// 添加插件（实际上是通过复制 .kgpg 文件实现的）
-    pub fn add(&self, _plugin: Plugin) -> Result<Plugin, String> {
-        // 插件添加通过复制 .kgpg 文件实现，不需要在这里处理
-        // 这个方法保留是为了兼容性，但实际不会使用
-        Err(
-            "Use install_plugin_from_zip or copy .kgpg file to plugins directory instead"
-                .to_string(),
-        )
     }
 
     /// 更新插件配置（只更新 enabled 状态，其他信息从 .kgpg 文件读取）
@@ -212,16 +181,23 @@ impl PluginManager {
     }
 
     pub fn get_plugins_directory(&self) -> PathBuf {
-        // 开发模式：使用 crawler-plugins/packed 目录
-        // 生产模式：使用应用数据目录
+        // 开发模式：优先使用 data/plugins_directory，其次使用 crawler-plugins/packed
         #[cfg(debug_assertions)]
         {
-            // 开发模式：尝试多个可能的路径
+            let app_data_dir = crate::app_paths::user_data_dir("Kabegame");
+            let data_plugins_dir = app_data_dir.join("plugins-directory");
+
+            // 优先尝试 data/plugins_directory（开发数据目录）
+            if data_plugins_dir.exists() {
+                return data_plugins_dir;
+            }
+
+            // 其次尝试 crawler-plugins/packed（向后兼容）
             // 1. 当前工作目录（开发时通常在项目根目录）
             if let Ok(cwd) = std::env::current_dir() {
-                let dev_path = cwd.join("crawler-plugins").join("packed");
-                if dev_path.exists() {
-                    return dev_path;
+                let packed_path = cwd.join("crawler-plugins").join("packed");
+                if packed_path.exists() {
+                    return packed_path;
                 }
             }
 
@@ -235,22 +211,28 @@ impl PluginManager {
                         .and_then(|p| p.parent())
                     // 项目根目录
                     {
-                        let dev_path = project_root.join("crawler-plugins").join("packed");
-                        if dev_path.exists() {
-                            return dev_path;
+                        let packed_path = project_root.join("crawler-plugins").join("packed");
+                        if packed_path.exists() {
+                            return packed_path;
                         }
                     }
                 }
             }
+
+            // 如果都不存在，返回 data/plugins_directory（即使不存在，也会在后续创建）
+            return data_plugins_dir;
         }
 
-        // 生产模式或开发模式但 crawler-plugins/packed 不存在时，使用应用数据目录
-        let app_data_dir = get_app_data_dir();
-        app_data_dir.join("plugins_directory")
+        // 生产模式：使用应用数据目录
+        #[cfg(not(debug_assertions))]
+        {
+            let app_data_dir = crate::app_paths::user_data_dir("Kabegame");
+            app_data_dir.join("plugins-directory")
+        }
     }
 
     pub fn get_favorites_file(&self) -> PathBuf {
-        let app_data_dir = get_app_data_dir();
+        let app_data_dir = crate::app_paths::user_data_dir("Kabegame");
         app_data_dir.join("plugin_favorites.json")
     }
 
@@ -319,14 +301,6 @@ impl PluginManager {
         }
 
         Ok(browser_plugins)
-    }
-
-    fn load_plugin_from_file(&self, path: &Path) -> Result<PluginJson, String> {
-        let content =
-            fs::read_to_string(path).map_err(|e| format!("Failed to read plugin file: {}", e))?;
-        let plugin_json: PluginJson = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse plugin JSON: {}", e))?;
-        Ok(plugin_json)
     }
 
     /// 从 ZIP 格式的插件文件中读取 manifest.json
@@ -604,40 +578,6 @@ impl PluginManager {
         Ok(plugin)
     }
 
-    pub fn import_plugin_from_json(
-        &self,
-        plugin_json: PluginJson,
-        file_name: String,
-    ) -> Result<Plugin, String> {
-        // 保存到插件目录
-        let plugins_dir = self.get_plugins_directory();
-        fs::create_dir_all(&plugins_dir)
-            .map_err(|e| format!("Failed to create plugins directory: {}", e))?;
-
-        let file_path = plugins_dir.join(&file_name);
-        let content = serde_json::to_string_pretty(&plugin_json)
-            .map_err(|e| format!("Failed to serialize plugin: {}", e))?;
-        fs::write(&file_path, content)
-            .map_err(|e| format!("Failed to write plugin file: {}", e))?;
-
-        // 转换为 Plugin 并添加到已安装列表
-        let plugin = Plugin {
-            id: Uuid::new_v4().to_string(),
-            name: plugin_json.name.clone(),
-            description: plugin_json.desp.clone(),
-            version: "0.0.0".to_string(),
-            base_url: String::new(), // 需要从 JSON 中获取或使用默认值
-            enabled: true,
-            size_bytes: 0,
-            built_in: false,
-            config: HashMap::new(),
-            selector: None,
-        };
-
-        self.add(plugin.clone())?;
-        Ok(plugin)
-    }
-
     /// 安装浏览器插件（从插件目录中的 .kgpg 文件安装）
     /// 实际上，如果文件已经在插件目录中，就已经是"已安装"状态了
     /// 这个方法主要用于标记插件为已安装（如果之前未安装的话）
@@ -701,32 +641,6 @@ impl PluginManager {
         Ok(favorites)
     }
 
-    fn save_favorites(&self, favorites: &[String]) -> Result<(), String> {
-        let file = self.get_favorites_file();
-        if let Some(parent) = file.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create favorites directory: {}", e))?;
-        }
-
-        let content = serde_json::to_string_pretty(favorites)
-            .map_err(|e| format!("Failed to serialize favorites: {}", e))?;
-        fs::write(&file, content).map_err(|e| format!("Failed to write favorites file: {}", e))?;
-        Ok(())
-    }
-
-    pub fn toggle_favorite(&self, plugin_id: String, favorite: bool) -> Result<(), String> {
-        let mut favorites = self.load_favorites()?;
-        if favorite {
-            if !favorites.contains(&plugin_id) {
-                favorites.push(plugin_id);
-            }
-        } else {
-            favorites.retain(|id| id != &plugin_id);
-        }
-        self.save_favorites(&favorites)?;
-        Ok(())
-    }
-
     /// 获取插件的变量定义（从 config.json 中读取）
     pub fn get_plugin_vars(&self, plugin_id: &str) -> Result<Option<Vec<VarDefinition>>, String> {
         let plugins_dir = self.get_plugins_directory();
@@ -772,7 +686,7 @@ impl PluginManager {
 
     /// 获取插件配置文件的路径
     fn get_plugin_config_file(&self, plugin_id: &str) -> PathBuf {
-        let data_dir = get_app_data_dir();
+        let data_dir = crate::app_paths::user_data_dir("Kabegame");
         let config_dir = data_dir.join("plugin_configs");
         config_dir.join(format!("{}.json", plugin_id))
     }
@@ -861,7 +775,7 @@ impl PluginManager {
 
     /// 获取插件源文件路径
     fn get_plugin_sources_file(&self) -> PathBuf {
-        let data_dir = get_app_data_dir();
+        let data_dir = crate::app_paths::user_data_dir("Kabegame");
         data_dir.join("plugin_sources.json")
     }
 
@@ -1367,7 +1281,9 @@ impl PluginManager {
         }
         let doc = match doc_path_found {
             Some(p) => {
-                let mut doc_file = archive.by_name(p).map_err(|_| "doc.md not found".to_string())?;
+                let mut doc_file = archive
+                    .by_name(p)
+                    .map_err(|_| "doc.md not found".to_string())?;
                 let mut content = String::new();
                 doc_file
                     .read_to_string(&mut content)
@@ -1521,7 +1437,6 @@ impl PluginManager {
             change_log_diff,
         })
     }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1534,15 +1449,6 @@ pub struct BrowserPlugin {
     pub file_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginJson {
-    pub name: String,
-    #[serde(default)]
-    pub desp: String,
-    #[serde(default)]
-    pub icon: Option<String>,
 }
 
 // 插件清单（manifest.json）

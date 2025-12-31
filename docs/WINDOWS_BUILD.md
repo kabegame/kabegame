@@ -160,11 +160,10 @@ src-tauri/target/release/bundle/
 ```json
 {
   "bundle": {
-    "targets": ["msi", "nsis"],  // 生成两种安装包格式
+    "targets": "all",  // 也可以改成 ["nsis"] / ["msi"]
     "windows": {
-      "wix": {
-        "language": "zh-CN",      // 中文安装界面
-        "skipWebviewInstall": false  // 自动安装 WebView2
+      "nsis": {
+        "installerHooks": "nsis/installer-hooks.nsh" // 安装后写入 desktop.ini，让安装目录显示应用图标
       }
     }
   }

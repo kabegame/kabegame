@@ -8,21 +8,7 @@ use windows_sys::Win32::Graphics::Gdi::{
     SelectObject, SetStretchBltMode, StretchBlt, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
     DIB_RGB_COLORS, HBITMAP, HDC, STRETCH_HALFTONE,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, SendMessageW};
-
-// Windows 消息常量
-const WM_PAINT: u32 = 0x000F;
-
-// PAINTSTRUCT 结构体（如果 windows-sys 没有导出，我们自己定义）
-#[repr(C)]
-struct PAINTSTRUCT {
-    hdc: HDC,
-    f_erase: i32,
-    rc_paint: RECT,
-    f_restore: i32,
-    f_inc_update: i32,
-    rgb_reserved: [u8; 32],
-}
+use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
 
 /// GDI 壁纸渲染器
 pub struct GdiWallpaperRenderer {
@@ -406,23 +392,5 @@ impl Drop for GdiWallpaperRenderer {
                 DeleteObject(bmp as _);
             }
         }
-    }
-}
-
-/// 为给定的 HWND 进行 GDI 绘制（直接在窗口 DC 上绘制）
-///
-/// 注意：这个函数需要窗口已经准备好绘制。通常在 WM_PAINT 消息处理中调用，
-/// 或者直接获取窗口 DC 后调用。
-pub fn paint_wallpaper_to_hwnd(hwnd: HWND, renderer: &GdiWallpaperRenderer) -> Result<(), String> {
-    unsafe {
-        // 获取窗口 DC（不需要 BeginPaint/EndPaint，因为我们直接绘制）
-        let hdc = GetDC(hwnd);
-        if hdc == 0 {
-            return Err("GetDC failed".to_string());
-        }
-
-        let result = renderer.paint(hdc);
-        ReleaseDC(hwnd, hdc);
-        result
     }
 }

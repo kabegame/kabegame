@@ -1,7 +1,8 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { ImageInfo } from "./crawler";
+import { useSettingsStore } from "./settings";
 
 export interface Album {
   id: string;
@@ -10,7 +11,8 @@ export interface Album {
 }
 
 export const useAlbumStore = defineStore("albums", () => {
-  const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
+  const settingsStore = useSettingsStore();
+  const FAVORITE_ALBUM_ID = computed(() => settingsStore.favoriteAlbumId);
 
   const albums = ref<Album[]>([]);
   const albumImages = ref<Record<string, ImageInfo[]>>({});
@@ -72,7 +74,7 @@ export const useAlbumStore = defineStore("albums", () => {
     albumCounts.value[albumId] = prev + imageIds.length;
 
     // 如果是收藏画册，通知画廊等页面更新收藏状态
-    if (albumId === FAVORITE_ALBUM_ID) {
+    if (albumId === FAVORITE_ALBUM_ID.value) {
       window.dispatchEvent(
         new CustomEvent("favorite-status-changed", {
           detail: { imageIds, favorite: true },
@@ -92,7 +94,7 @@ export const useAlbumStore = defineStore("albums", () => {
     albumCounts.value[albumId] = Math.max(0, prev - removed);
 
     // 如果是收藏画册，通知画廊等页面更新收藏状态
-    if (albumId === FAVORITE_ALBUM_ID) {
+    if (albumId === FAVORITE_ALBUM_ID.value) {
       window.dispatchEvent(
         new CustomEvent("favorite-status-changed", {
           detail: { imageIds, favorite: false },
@@ -118,12 +120,17 @@ export const useAlbumStore = defineStore("albums", () => {
     return images;
   };
 
+  const getAlbumImageIds = async (albumId: string): Promise<string[]> => {
+    return await invoke<string[]>("get_album_image_ids", { albumId });
+  };
+
   return {
     albums,
     albumImages,
     albumPreviews,
     albumCounts,
     loading,
+    FAVORITE_ALBUM_ID,
     loadAlbums,
     createAlbum,
     deleteAlbum,
@@ -132,5 +139,6 @@ export const useAlbumStore = defineStore("albums", () => {
     removeImagesFromAlbum,
     loadAlbumImages,
     loadAlbumPreview,
+    getAlbumImageIds,
   };
 });

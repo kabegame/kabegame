@@ -1,5 +1,5 @@
 {
-  "watch": ["crawler-plugins"],
+  "watch": ["crawler-plugins", "data/plugins_directory"],
   "ext": "json,rhai,md,txt,jpeg,jpg,png,gif,webp,ico",
   "ignore": [
     "node_modules",
@@ -8,7 +8,7 @@
     "*.kgpg",
     "**/node_modules/**"
   ],
-  "exec": "node scripts/package-and-signal.js",
+  "exec": "node scripts/package-and-signal.js --to-data",
   "verbose": true,
   "delay": 500,
   "legacyWatch": false

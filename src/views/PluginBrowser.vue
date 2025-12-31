@@ -14,6 +14,11 @@
         </el-icon>
         导入源
       </el-button>
+      <el-button @click="openQuickSettings" circle>
+        <el-icon>
+          <Setting />
+        </el-icon>
+      </el-button>
     </PageHeader>
 
     <!-- Tab 切换 -->
@@ -239,6 +244,7 @@ import {
   Upload,
   Grid,
   Plus,
+  Setting,
 } from "@element-plus/icons-vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import { useRouter } from "vue-router";
@@ -247,6 +253,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import PageHeader from "@/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { isUpdateAvailable } from "@/utils/version";
+import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 
 interface PluginSource {
   id: string;
@@ -287,6 +294,8 @@ interface StoreInstallPreview {
 
 const pluginStore = usePluginStore();
 const router = useRouter();
+const quickSettingsDrawer = useQuickSettingsDrawerStore();
+const openQuickSettings = () => quickSettingsDrawer.open("pluginbrowser");
 
 const loadingBySource = ref<Record<string, boolean>>({}); // 按源区分的loading状态
 const showSkeletonBySource = ref<Record<string, boolean>>({}); // 按源区分的骨架屏状态

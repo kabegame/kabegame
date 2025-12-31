@@ -5,19 +5,6 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kabegame</title>
-    <!-- Vue DevTools (仅开发模式) -->
-    <script>
-      // 仅在开发模式下加载 Vue DevTools
-      // 检查是否是开发模式：localhost 或 127.0.0.1，且端口是 1420（Vite 开发服务器端口）
-      if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
-        const script = document.createElement('script');
-        script.src = 'http://localhost:8098';
-        script.onerror = function() {
-          console.log('Vue DevTools: 独立应用未运行，请运行 "npx @vue/devtools" 或使用浏览器扩展');
-        };
-        document.head.appendChild(script);
-      }
-    </script>
   </head>
   <body>
     <div id="app"></div>

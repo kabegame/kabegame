@@ -1,5 +1,6 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "maxCacheSize": "10MB",
   "targetDefaults": {
     "package": {
       "cache": true,

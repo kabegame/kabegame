@@ -12,11 +12,25 @@ impl NativeWallpaperManager {
         Self { _app: app }
     }
 
+    #[cfg(target_os = "windows")]
+    fn current_wallpaper_path_from_settings(&self) -> Option<String> {
+        let settings = self._app.try_state::<Settings>()?.get_settings().ok()?;
+        let id = settings.current_wallpaper_image_id?;
+        let storage = self._app.try_state::<crate::storage::Storage>()?;
+        storage
+            .find_image_by_id(&id)
+            .ok()
+            .flatten()
+            .map(|img| img.local_path)
+    }
+
     /// 使用 IDesktopWallpaper COM 接口设置壁纸（支持淡入淡出效果）
     #[cfg(target_os = "windows")]
     fn set_wallpaper_via_com(&self, wide_path: &[u16]) -> Result<(), String> {
-        use windows_sys::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED};
         use windows_sys::Win32::Foundation::S_OK;
+        use windows_sys::Win32::System::Com::{
+            CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+        };
 
         // IDesktopWallpaper 接口的 GUID
         const CLSID_DESKTOP_WALLPAPER: windows_sys::core::GUID = windows_sys::core::GUID {
@@ -61,17 +75,17 @@ impl NativeWallpaperManager {
             ) -> i32; // HRESULT 是 i32
 
             let vtable = *(desktop_wallpaper as *const *const *const usize);
-            let set_wallpaper = std::mem::transmute::<*const usize, SetWallpaperFn>(
-                *vtable.add(3) as *const usize,
-            );
+            let set_wallpaper =
+                std::mem::transmute::<*const usize, SetWallpaperFn>(*vtable.add(3) as *const usize);
 
             // 调用 SetWallpaper(nullptr, wide_path.as_ptr())
             let hr = set_wallpaper(desktop_wallpaper, std::ptr::null(), wide_path.as_ptr());
 
             // 释放 COM 对象
-            let release = std::mem::transmute::<*const usize, unsafe extern "system" fn(*mut std::ffi::c_void) -> u32>(
-                *vtable.add(2) as *const usize,
-            );
+            let release = std::mem::transmute::<
+                *const usize,
+                unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
+            >(*vtable.add(2) as *const usize);
             release(desktop_wallpaper);
 
             if hr != S_OK {
@@ -84,39 +98,6 @@ impl NativeWallpaperManager {
 }
 
 impl WallpaperManager for NativeWallpaperManager {
-    #[cfg(target_os = "windows")]
-    fn get_wallpaper_path(&self) -> Result<String, String> {
-        use windows_sys::Win32::Foundation::GetLastError;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            SystemParametersInfoW, SPI_GETDESKWALLPAPER,
-        };
-
-        // SPI_GETDESKWALLPAPER 返回 UTF-16 路径，能正确处理中文等非 ASCII 字符
-        let mut buf: [u16; 4096] = [0; 4096];
-        let ok = unsafe {
-            SystemParametersInfoW(
-                SPI_GETDESKWALLPAPER,
-                buf.len() as u32,
-                buf.as_mut_ptr() as *mut _,
-                0,
-            )
-        };
-        if ok == 0 {
-            return Err(format!("获取当前壁纸失败(GetLastError={} )", unsafe {
-                GetLastError()
-            }));
-        }
-
-        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-        let path = String::from_utf16_lossy(&buf[..len]).trim().to_string();
-
-        if path.is_empty() {
-            return Err("当前壁纸路径为空".to_string());
-        }
-
-        Ok(path)
-    }
-
     // 从注册表读取当前壁纸样式
     #[cfg(target_os = "windows")]
     fn get_style(&self) -> Result<String, String> {
@@ -173,7 +154,7 @@ impl WallpaperManager for NativeWallpaperManager {
         {
             // 优化：直接使用 FFI 调用 Windows API，而不是通过 PowerShell
             // 这样可以大幅提升性能（避免启动 PowerShell 进程的开销）
-            
+
             let absolute_path = path
                 .canonicalize()
                 .map_err(|e| format!("Failed to canonicalize path: {}", e))?;
@@ -196,13 +177,20 @@ impl WallpaperManager for NativeWallpaperManager {
             // wallpaper_rotator.rs 中的实现能工作，它使用延迟 + SPIF_SENDWININICHANGE 来触发系统动画
             // 当 transition == "fade" 时，先延迟 100ms，然后使用 fuWinIni=3 设置壁纸
             if transition == "fade" && immediate {
+                // 优先尝试 IDesktopWallpaper（COM）接口，部分系统/环境下更稳定
+                // 如果失败，则回退到“延迟 + SystemParametersInfoW”的模拟方式
+                if let Ok(()) = self.set_wallpaper_via_com(&wide_path) {
+                    println!("[DEBUG] 壁纸路径设置完成（使用 IDesktopWallpaper COM）");
+                    return Ok(());
+                }
+
                 use std::thread;
                 use std::time::Duration;
-                
+
                 // 参考 wallpaper_rotator.rs：先短暂延迟，让系统有时间准备淡入动画
                 // 使用 100ms 延迟（与 wallpaper_rotator.rs 保持一致）
                 thread::sleep(Duration::from_millis(100));
-                
+
                 // 使用 fuWinIni=3 (SPIF_UPDATEINIFILE | SPIF_SENDWININICHANGE) 来触发系统动画
                 // 这与 wallpaper_rotator.rs 中的实现完全一致
                 const SPIF_UPDATEINIFILE: u32 = 0x01;
@@ -366,9 +354,8 @@ impl WallpaperManager for NativeWallpaperManager {
 
             // 仅刷新 WM_SETTINGCHANGE 在某些系统上仍可能不触发壁纸重新布局，
             // 这里强制"重载一次当前壁纸路径"，确保新 style 立刻反映到桌面。
-            if let Ok(path) = self.get_wallpaper_path() {
+            if let Some(path) = self.current_wallpaper_path_from_settings() {
                 if std::path::Path::new(&path).exists() {
-                    // 忽略错误：如果重载失败，至少 style 已写入注册表
                     let _ = self.set_wallpaper_path(&path, true);
                 }
             }
@@ -407,8 +394,10 @@ impl WallpaperManager for NativeWallpaperManager {
                 return Ok(());
             }
 
-            // 从注册表读取当前壁纸路径
-            let current_wallpaper = self.get_wallpaper_path()?;
+            // 从全局设置读取当前壁纸路径（由应用维护）
+            let Some(current_wallpaper) = self.current_wallpaper_path_from_settings() else {
+                return Ok(());
+            };
 
             // 对于 fade 效果，先短暂延迟，然后重新设置壁纸
             // 这样可以模拟淡入效果（Windows 原生 API 不支持真正的 fade，但可以通过延迟来实现平滑过渡）
@@ -463,10 +452,7 @@ impl WallpaperManager for NativeWallpaperManager {
             if ret == 0 {
                 use windows_sys::Win32::Foundation::GetLastError;
                 let err = GetLastError();
-                return Err(format!(
-                    "SendMessageTimeoutW failed. GetLastError={}",
-                    err
-                ));
+                return Err(format!("SendMessageTimeoutW failed. GetLastError={}", err));
             }
         }
 

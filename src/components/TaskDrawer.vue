@@ -7,7 +7,7 @@
           <span class="downloads-title">正在下载</span>
           <div class="downloads-stats">
             <el-tag type="info" size="small">队列: {{ queueSize }}</el-tag>
-            <el-tag type="warning" size="small">下载中: {{ activeDownloads.length }}</el-tag>
+            <el-tag type="warning" size="small">进行中: {{ activeDownloads.length }}</el-tag>
             <el-button
               text
               size="small"
@@ -25,11 +25,32 @@
         <div v-else class="downloads-content">
           <!-- 正在下载的图片列表 -->
           <div v-if="activeDownloads.length > 0" class="downloads-list">
-            <div v-for="download in activeDownloads" :key="download.url" class="download-item">
+            <div v-for="download in activeDownloads" :key="downloadKey(download)" class="download-item">
               <div class="download-info">
                 <div class="download-url" :title="download.url">{{ download.url }}</div>
                 <div class="download-meta">
                   <el-tag size="small" type="info">{{ download.plugin_id }}</el-tag>
+                  <span
+                    v-if="isShimmerState(download)"
+                    class="download-state-text shimmer-text"
+                    :title="downloadStateText(download)"
+                  >
+                    {{ downloadStateText(download) }}
+                  </span>
+                  <el-tag
+                    v-else
+                    size="small"
+                    :type="downloadStateTagType(download)"
+                  >
+                    {{ downloadStateText(download) }}
+                  </el-tag>
+                </div>
+                <div class="download-progress" v-if="shouldShowDownloadProgress(download) && downloadProgressText(download)">
+                  <el-progress
+                    :percentage="downloadProgressPercent(download)"
+                    :format="() => downloadProgressText(download)!"
+                    :stroke-width="10"
+                  />
                 </div>
               </div>
             </div>
@@ -233,6 +254,8 @@ interface ActiveDownloadInfo {
   url: string;
   plugin_id: string;
   start_time: number;
+  task_id: string;
+  state?: string;
 }
 
 interface Props {
@@ -305,6 +328,129 @@ const activeDownloads = ref<ActiveDownloadInfo[]>([]);
 const queueSize = ref(0);
 let downloadRefreshInterval: number | null = null;
 
+type DownloadProgressPayload = {
+  taskId: string;
+  url: string;
+  startTime: number;
+  pluginId: string;
+  receivedBytes: number;
+  totalBytes?: number | null;
+};
+
+type DownloadProgressState = {
+  receivedBytes: number;
+  totalBytes?: number | null;
+  updatedAt: number;
+};
+
+const downloadProgressByKey = ref<Record<string, DownloadProgressState>>({});
+let unlistenDownloadProgress: null | (() => void) = null;
+
+const downloadKey = (d: ActiveDownloadInfo) => `${d.task_id}::${d.start_time}::${d.url}`;
+const downloadKeyFromPayload = (p: DownloadProgressPayload) => `${p.taskId}::${p.startTime}::${p.url}`;
+
+type DownloadStatePayload = {
+  taskId: string;
+  url: string;
+  startTime: number;
+  pluginId: string;
+  state: string;
+  error?: string;
+};
+
+const downloadStateByKey = ref<Record<string, { state: string; error?: string; updatedAt: number }>>(
+  {}
+);
+let unlistenDownloadState: null | (() => void) = null;
+
+const downloadStateKeyFromPayload = (p: DownloadStatePayload) =>
+  `${p.taskId}::${p.startTime}::${p.url}`;
+
+const getEffectiveDownloadState = (d: ActiveDownloadInfo) => {
+  const key = downloadKey(d);
+  return downloadStateByKey.value[key]?.state || d.state || "downloading";
+};
+
+const shouldShowDownloadProgress = (d: ActiveDownloadInfo) => {
+  // 只在下载中显示进度条；下载完成后立刻隐藏进度条，改展示后续状态
+  const st = getEffectiveDownloadState(d);
+  return st === "downloading";
+};
+
+const isShimmerState = (d: ActiveDownloadInfo) => {
+  // “正在进行的操作”用反光文字表示
+  const st = getEffectiveDownloadState(d);
+  return (
+    st === "downloaded" ||
+    st === "processing" ||
+    st === "dedupe_check" ||
+    st === "db_inserting"
+  );
+};
+
+const downloadStateText = (d: ActiveDownloadInfo) => {
+  const st = getEffectiveDownloadState(d);
+  const map: Record<string, string> = {
+    queued: "队列等待",
+    downloading: "下载中",
+    downloaded: "下载完成",
+    reused: "已复用",
+    processing: "处理中",
+    dedupe_check: "去重检查",
+    db_inserting: "写入数据库",
+    db_added: "已入库",
+    dedupe_skipped: "去重跳过",
+    notified: "已通知画廊",
+    failed: "失败",
+    canceled: "已取消",
+  };
+  return map[st] || st;
+};
+
+const downloadStateTagType = (d: ActiveDownloadInfo) => {
+  const st = getEffectiveDownloadState(d);
+  if (st === "failed") return "danger";
+  if (st === "canceled") return "info";
+  if (st === "dedupe_skipped") return "warning";
+  if (st === "db_added" || st === "notified") return "success";
+  if (st === "processing" || st === "dedupe_check" || st === "db_inserting" || st === "downloaded")
+    return "warning";
+  if (st === "reused") return "success";
+  return "info";
+};
+
+const formatBytes = (n: number) => {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  const fixed = i === 0 ? 0 : v >= 100 ? 0 : v >= 10 ? 1 : 2;
+  return `${v.toFixed(fixed)} ${units[i]}`;
+};
+
+const downloadProgressPercent = (d: ActiveDownloadInfo) => {
+  const p = downloadProgressByKey.value[downloadKey(d)];
+  if (!p) return 0;
+  const total = p.totalBytes ?? null;
+  if (!total || total <= 0) return 0;
+  const pct = Math.floor((p.receivedBytes / total) * 100);
+  return Math.max(0, Math.min(100, pct));
+};
+
+const downloadProgressText = (d: ActiveDownloadInfo) => {
+  const p = downloadProgressByKey.value[downloadKey(d)];
+  if (!p) return null;
+  const total = p.totalBytes ?? null;
+  if (!total || total <= 0) {
+    return `${formatBytes(p.receivedBytes)} / ?`;
+  }
+  return `${formatBytes(p.receivedBytes)} / ${formatBytes(total)}`;
+};
+
 const loadDownloads = async () => {
   try {
     const [downloads, size] = await Promise.all([
@@ -313,6 +459,20 @@ const loadDownloads = async () => {
     ]);
     activeDownloads.value = downloads;
     queueSize.value = size;
+
+    // 清理已不在 active 列表里的进度，避免内存增长
+    const aliveKeys = new Set(downloads.map(downloadKey));
+    const next: Record<string, DownloadProgressState> = {};
+    for (const [k, v] of Object.entries(downloadProgressByKey.value)) {
+      if (aliveKeys.has(k)) next[k] = v;
+    }
+    downloadProgressByKey.value = next;
+
+    const nextState: Record<string, { state: string; error?: string; updatedAt: number }> = {};
+    for (const [k, v] of Object.entries(downloadStateByKey.value)) {
+      if (aliveKeys.has(k)) nextState[k] = v;
+    }
+    downloadStateByKey.value = nextState;
   } catch (error) {
     console.error("加载下载列表失败:", error);
   }
@@ -650,17 +810,66 @@ const handleGlobalClick = () => {
   }
 };
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener("click", handleGlobalClick);
   loadDownloads();
   // 每 1 秒刷新一次下载信息
   downloadRefreshInterval = window.setInterval(loadDownloads, 1000);
+
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    unlistenDownloadProgress = await listen<DownloadProgressPayload>(
+      "download-progress",
+      (event) => {
+        const p = event.payload;
+        const key = downloadKeyFromPayload(p);
+        downloadProgressByKey.value = {
+          ...downloadProgressByKey.value,
+          [key]: {
+            receivedBytes: Number(p.receivedBytes || 0),
+            totalBytes: p.totalBytes ?? null,
+            updatedAt: Date.now(),
+          },
+        };
+      }
+    );
+  } catch (error) {
+    console.error("监听下载进度失败:", error);
+  }
+
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    unlistenDownloadState = await listen<DownloadStatePayload>("download-state", (event) => {
+      const p = event.payload;
+      const key = downloadStateKeyFromPayload(p);
+      downloadStateByKey.value = {
+        ...downloadStateByKey.value,
+        [key]: { state: p.state, error: p.error, updatedAt: Date.now() },
+      };
+    });
+  } catch (error) {
+    console.error("监听下载状态失败:", error);
+  }
 });
 
 onUnmounted(() => {
   window.removeEventListener("click", handleGlobalClick);
   if (downloadRefreshInterval !== null) {
     clearInterval(downloadRefreshInterval);
+  }
+  try {
+    unlistenDownloadProgress?.();
+  } catch {
+    // ignore
+  } finally {
+    unlistenDownloadProgress = null;
+  }
+  try {
+    unlistenDownloadState?.();
+  } catch {
+    // ignore
+  } finally {
+    unlistenDownloadState = null;
   }
 });
 
@@ -833,6 +1042,34 @@ const handleCopyError = async (task: any) => {
               display: flex;
               align-items: center;
               gap: 8px;
+
+              .download-state-text {
+                font-size: 12px;
+                font-weight: 600;
+                max-width: 160px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              }
+
+              .shimmer-text {
+                color: var(--anime-text-primary);
+                background: linear-gradient(
+                  90deg,
+                  rgba(255, 255, 255, 0.15) 0%,
+                  rgba(255, 255, 255, 0.85) 50%,
+                  rgba(255, 255, 255, 0.15) 100%
+                );
+                background-size: 200% 100%;
+                -webkit-background-clip: text;
+                background-clip: text;
+                -webkit-text-fill-color: transparent;
+                animation: shimmer-move 1.25s linear infinite;
+              }
+            }
+
+            .download-progress {
+              margin-top: 6px;
             }
           }
         }
@@ -1180,6 +1417,15 @@ const handleCopyError = async (task: any) => {
       color: var(--anime-text-secondary);
       font-size: 13px;
     }
+  }
+}
+
+@keyframes shimmer-move {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
   }
 }
 

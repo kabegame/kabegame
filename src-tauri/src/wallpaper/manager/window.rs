@@ -24,15 +24,6 @@ impl WindowWallpaperManager {
 }
 
 impl WallpaperManager for WindowWallpaperManager {
-    fn get_wallpaper_path(&self) -> Result<String, String> {
-        // 从 manager 的状态中获取当前壁纸路径
-        let path = self
-            .current_wallpaper_path
-            .lock()
-            .map_err(|e| format!("无法获取壁纸路径锁: {}", e))?;
-        path.clone().ok_or_else(|| "当前没有设置壁纸".to_string())
-    }
-
     fn get_style(&self) -> Result<String, String> {
         // 从 Settings 中获取当前样式
         let settings = self.app.state::<Settings>();

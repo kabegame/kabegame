@@ -29,7 +29,18 @@
         </el-icon>
         去重
       </el-button>
+      <el-button @click="$emit('loadAll')" :loading="isLoadingAll" :disabled="!hasMore || isLoadingAll">
+        <el-icon>
+          <Download />
+        </el-icon>
+        加载全部
+      </el-button>
     </template>
+      <el-button @click="$emit('showQuickSettings')" circle>
+        <el-icon>
+          <Setting />
+        </el-icon>
+      </el-button>
       <el-badge v-if="activeRunningTasksCount > 0" :value="activeRunningTasksCount" :max="99" class="tasks-badge">
         <el-button @click="$emit('showTasksDrawer')" class="tasks-drawer-trigger" circle type="primary">
           <el-icon>
@@ -52,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import { Grid, Refresh, List, Plus, Star, Filter } from "@element-plus/icons-vue";
+import { Grid, Refresh, List, Plus, Star, Filter, Download, Setting } from "@element-plus/icons-vue";
 import type { Plugin } from "@/stores/plugins";
 import PageHeader from "@/components/common/PageHeader.vue";
 
@@ -63,20 +74,26 @@ interface Props {
   activeRunningTasksCount: number;
   showFavoritesOnly?: boolean;
   dedupeLoading?: boolean;
+  hasMore?: boolean;
+  isLoadingAll?: boolean;
 }
 
 withDefaults(defineProps<Props>(), {
   showFavoritesOnly: false,
   dedupeLoading: false,
+  hasMore: false,
+  isLoadingAll: false,
 });
 
 defineEmits<{
   "update:filterPluginId": [value: string | null];
   refresh: [];
   dedupeByHash: [];
+  showQuickSettings: [];
   showTasksDrawer: [];
   showCrawlerDialog: [];
   toggleFavoritesOnly: [];
+  loadAll: [];
 }>();
 </script>
 

@@ -153,7 +153,7 @@ pnpm build --local-plugins# 打包本地插件后 tauri build
 ```
 
 说明：
-- `--watch` 直接使用 **Tauri CLI 自带的 dev watcher**（`tauri dev --additional-watch-folders ..\\crawler-plugins`）监听插件源码变更并触发重启；并通过 `.taurignore` 忽略 `crawler-plugins/packed` 等输出，避免重启循环。
+- `--watch` 直接使用 **Tauri CLI 自带的 dev watcher**（`tauri dev --additional-watch-folders ..\\crawler-plugins`）监听插件源码变更并触发重启。
 - `--local-plugins` 会优先执行 `crawler-plugins:package-local`；未加时执行 `crawler-plugins:package`。
 
 ## 项目结构

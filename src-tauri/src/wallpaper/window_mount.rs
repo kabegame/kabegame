@@ -7,101 +7,15 @@ use std::thread;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, EnumWindows, FindWindowExW, FindWindowW, GetClassNameW, GetClientRect,
-    GetParent, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible,
-    SendMessageTimeoutW, SendMessageW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, SMTO_ABORTIFHUNG, SMTO_NORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    EnumChildWindows, EnumWindows, FindWindowExW, FindWindowW, GetClientRect, GetParent,
+    GetSystemMetrics, GetWindowLongPtrW, IsWindowVisible, SendMessageTimeoutW, SendMessageW,
+    SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, SMTO_NORMAL,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_SHOW, WS_CHILD,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_POPUP,
 };
 
 fn wide(s: &str) -> Vec<u16> {
     OsStr::new(s).encode_wide().chain(Some(0)).collect()
-}
-
-unsafe fn hwnd_class(hwnd: HWND) -> String {
-    let mut buf = [0u16; 256];
-    let len = GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-    if len > 0 {
-        String::from_utf16_lossy(&buf[..len as usize])
-    } else {
-        "<unknown>".to_string()
-    }
-}
-
-/// 获取 Windows 构建号
-/// 返回构建号，如果获取失败则返回 0
-#[cfg(target_os = "windows")]
-fn get_windows_build_number() -> u32 {
-    match winver::WindowsVersion::detect() {
-        Some(version) => {
-            // winver crate 的 WindowsVersion 结构体包含 major, minor, build, revision 字段
-            // 我们使用 build 字段作为构建号
-            version.build
-        }
-        None => 0,
-    }
-}
-
-/// 检查 Windows 构建号是否大于等于指定值
-/// 例如：is_windows_build_ge(26002) 检查是否为 Windows 11 24H2 或更高版本
-#[cfg(target_os = "windows")]
-pub fn is_windows_build_ge(build_number: u32) -> bool {
-    let current_build = get_windows_build_number();
-    current_build >= build_number && current_build != 0
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn is_windows_build_ge(_build_number: u32) -> bool {
-    false
-}
-
-/// 获取窗口的父窗口链（从当前窗口到根窗口）
-/// 返回一个向量，第一个元素是当前窗口，最后一个元素是顶层窗口
-pub unsafe fn get_window_parent_chain(hwnd: HWND) -> Vec<HWND> {
-    let mut chain = Vec::new();
-    let mut current = hwnd;
-
-    while current != 0 && IsWindow(current) != 0 {
-        chain.push(current);
-        current = GetParent(current);
-        // 防止循环
-        if chain.len() > 100 {
-            break;
-        }
-    }
-
-    chain
-}
-
-/// 检查窗口是否是另一个窗口的后代（在层级结构中的子窗口）
-pub unsafe fn is_window_descendant(child: HWND, ancestor: HWND) -> bool {
-    let mut current = child;
-
-    while current != 0 && IsWindow(current) != 0 {
-        if current == ancestor {
-            return true;
-        }
-        current = GetParent(current);
-        // 防止循环
-        if current == child {
-            break;
-        }
-    }
-
-    false
-}
-
-/// 打印窗口的完整层级关系（用于调试）
-pub unsafe fn print_window_hierarchy(hwnd: HWND) {
-    let chain = get_window_parent_chain(hwnd);
-
-    println!("[窗口层级] 窗口 HWND=0x{:X} 的层级关系:", hwnd);
-    for (i, h) in chain.iter().enumerate() {
-        let indent = "  ".repeat(i);
-        let class = hwnd_class(*h);
-        println!("{}  {} HWND=0x{:X} Class={}", indent, i, h, class);
-    }
 }
 
 /// 最强大的桌面挂载方法（基于 Lively 的实现）

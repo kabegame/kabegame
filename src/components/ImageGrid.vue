@@ -1,17 +1,31 @@
 <template>
-  <div class="image-grid-root" :class="{ 'is-zooming': isZoomingLayout }" @click="handleRootClick">
-    <transition-group name="fade-in-list" tag="div" class="image-grid" :style="gridStyle">
-      <ImageItem v-for="(image, index) in images" :key="image.id" :image="image" :image-url="imageUrlMap[image.id]"
-        :image-click-action="imageClickAction" :use-original="props.columns > 0 && props.columns <= 2"
-        :aspect-ratio-match-window="props.aspectRatioMatchWindow" :window-aspect-ratio="props.windowAspectRatio"
-        :selected="effectiveSelectedIds.has(image.id)" :can-move-item="canMoveItem" :grid-columns="actualColumns"
-        :grid-index="index" :total-images="images.length" @click="(e) => handleItemClick(image, index, e)"
-        @dblclick="(e) => handleItemDblClick(image, e)" @contextmenu="(e) => handleItemContextMenu(image, index, e)"
-        @move="(img, dir) => handleMove(img, dir)" />
-    </transition-group>
+  <div class="image-grid-root" :class="{ 'is-zooming': isZoomingLayout }" @click="handleRootClick" ref="rootEl">
+    <div ref="gridContainerEl" class="image-grid-container" :style="containerStyle">
+      <transition-group v-if="!useVirtualScroll || isMeasuring" name="fade-in-list" tag="div" class="image-grid" :style="gridStyle">
+        <ImageItem v-for="(image, index) in images" :key="image.id" :image="image" :image-url="imageUrlMap[image.id]"
+          :image-click-action="imageClickAction" :use-original="props.columns > 0 && props.columns <= 2"
+          :aspect-ratio-match-window="props.aspectRatioMatchWindow" :window-aspect-ratio="props.windowAspectRatio"
+          :selected="effectiveSelectedIds.has(image.id)" :can-move-item="canMoveItem" :grid-columns="actualColumns"
+          :grid-index="index" :total-images="images.length" @click="(e) => handleItemClick(image, index, e)"
+          @dblclick="(e) => handleItemDblClick(image, e)" @contextmenu="(e) => handleItemContextMenu(image, index, e)"
+          @move="(img, dir) => handleMove(img, dir)" />
+      </transition-group>
+      <div v-else class="image-grid" :style="gridStyle">
+        <ImageItem v-for="(image, index) in visibleImages" :key="image.id" :image="image" :image-url="imageUrlMap[image.id]"
+          :image-click-action="imageClickAction" :use-original="props.columns > 0 && props.columns <= 2"
+          :aspect-ratio-match-window="props.aspectRatioMatchWindow" :window-aspect-ratio="props.windowAspectRatio"
+          :selected="effectiveSelectedIds.has(image.id)" :can-move-item="canMoveItem" :grid-columns="actualColumns"
+          :grid-index="virtualStartIndex + index" :total-images="images.length"
+          @click="(e) => handleItemClick(image, virtualStartIndex + index, e)"
+          @dblclick="(e) => handleItemDblClick(image, e)"
+          @contextmenu="(e) => handleItemContextMenu(image, virtualStartIndex + index, e)"
+          @move="(img, dir) => handleMove(img, dir)" />
+      </div>
+    </div>
 
     <!-- 加载更多（下沉到 ImageGrid，可由父组件控制显示） -->
-    <LoadMoreButton v-if="showLoadMoreButton" :has-more="hasMore" :loading="loadingMore"
+    <!-- 当图片列表为空时，不显示加载更多按钮，避免与空白占位元素同时显示 -->
+    <LoadMoreButton v-if="showLoadMoreButton && images.length > 0" :has-more="hasMore" :loading="loadingMore"
       @load-more="emit('loadMore')" />
 
     <!-- 右键菜单（下沉到 ImageGrid，可由父组件控制是否启用） -->
@@ -38,7 +52,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch, nextTick } from "vue";
 import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "@/stores/crawler";
 import LoadMoreButton from "@/components/LoadMoreButton.vue";
@@ -128,6 +142,224 @@ const previewContextMenuPosition = ref({ x: 0, y: 0 });
 // 缩放（列数变化）时启用 move 动画：平时仍保持 none，避免新增/加载更多导致的抖动
 const isZoomingLayout = ref(false);
 let zoomAnimTimer: ReturnType<typeof setTimeout> | null = null;
+
+// 虚拟滚动相关
+const rootEl = ref<HTMLElement | null>(null);
+const gridContainerEl = ref<HTMLElement | null>(null);
+const useVirtualScroll = computed(() => props.images.length >= 200);
+const VIRTUAL_SCROLL_BUFFER = 2; // 额外渲染的行数（上下各2行）
+const GRID_GAP = 16; // 网格间距（与 CSS 中的 gap 保持一致）
+
+// 虚拟滚动状态
+const scrollTop = ref(0);
+const containerHeight = ref(0);
+const rowHeight = ref(0);
+const calculatedCols = ref(0); // 计算出的列数（用于 auto-fill）
+const isMeasuring = ref(true); // 是否处于测量模式（初始时需要渲染所有元素来测量）
+
+const cols = computed(() => {
+  if (actualColumns.value > 0) {
+    return actualColumns.value;
+  }
+  // 对于 auto-fill，使用计算出的列数
+  return calculatedCols.value;
+});
+
+// 计算可见范围
+const virtualStartIndex = computed(() => {
+  if (!useVirtualScroll.value || rowHeight.value === 0 || cols.value === 0) {
+    return 0;
+  }
+  const startRow = Math.max(0, Math.floor(scrollTop.value / rowHeight.value) - VIRTUAL_SCROLL_BUFFER);
+  return startRow * cols.value;
+});
+
+const virtualEndIndex = computed(() => {
+  if (!useVirtualScroll.value || rowHeight.value === 0 || cols.value === 0) {
+    return props.images.length;
+  }
+  const visibleRows = Math.ceil(containerHeight.value / rowHeight.value);
+  const endRow = Math.min(
+    Math.ceil(props.images.length / cols.value),
+    Math.ceil(scrollTop.value / rowHeight.value) + visibleRows + VIRTUAL_SCROLL_BUFFER
+  );
+  return Math.min(props.images.length, endRow * cols.value);
+});
+
+const visibleImages = computed(() => {
+  if (!useVirtualScroll.value || isMeasuring.value || cols.value === 0 || rowHeight.value === 0) {
+    // 如果虚拟滚动未启用，或处于测量模式，或列数/行高未计算完成，渲染所有图片
+    return props.images;
+  }
+  return props.images.slice(virtualStartIndex.value, virtualEndIndex.value);
+});
+
+// 计算占位符高度
+const paddingTop = computed(() => {
+  if (!useVirtualScroll.value || rowHeight.value === 0 || cols.value === 0) {
+    return 0;
+  }
+  const startRow = Math.max(0, Math.floor(scrollTop.value / rowHeight.value) - VIRTUAL_SCROLL_BUFFER);
+  return startRow * rowHeight.value;
+});
+
+const paddingBottom = computed(() => {
+  if (!useVirtualScroll.value || rowHeight.value === 0 || cols.value === 0) {
+    return 0;
+  }
+  const totalRows = Math.ceil(props.images.length / cols.value);
+  const endRow = Math.min(
+    totalRows,
+    Math.ceil(scrollTop.value / rowHeight.value) +
+      Math.ceil(containerHeight.value / rowHeight.value) +
+      VIRTUAL_SCROLL_BUFFER
+  );
+  const remainingRows = totalRows - endRow;
+  return Math.max(0, remainingRows * rowHeight.value);
+});
+
+const containerStyle = computed(() => {
+  if (!useVirtualScroll.value || isMeasuring.value || cols.value === 0 || rowHeight.value === 0) {
+    // 如果虚拟滚动未启用，或处于测量模式，或列数/行高未计算完成，不使用占位符
+    return {};
+  }
+  return {
+    paddingTop: `${paddingTop.value}px`,
+    paddingBottom: `${paddingBottom.value}px`,
+  };
+});
+
+// 计算行高和列数（从 DOM 获取）
+const calculateDimensions = () => {
+  if (!useVirtualScroll.value || !gridContainerEl.value) {
+    return;
+  }
+  const grid = gridContainerEl.value.querySelector<HTMLElement>(".image-grid");
+  if (!grid) {
+    return;
+  }
+  const items = grid.querySelectorAll<HTMLElement>(".image-item");
+  if (items.length === 0) {
+    return;
+  }
+  
+  const firstItem = items[0] as HTMLElement;
+  const firstRect = firstItem.getBoundingClientRect();
+  const computedStyle = window.getComputedStyle(grid);
+  const gap = parseFloat(computedStyle.gap) || GRID_GAP;
+  
+  // 计算行高
+  const newRowHeight = firstRect.height + gap;
+  if (newRowHeight > 0) {
+    rowHeight.value = newRowHeight;
+  }
+  
+  // 如果是 auto-fill，计算列数
+  if (actualColumns.value === 0) {
+    let colsCount = 1;
+    for (let i = 1; i < items.length; i++) {
+      const rect = items[i].getBoundingClientRect();
+      if (Math.abs(rect.top - firstRect.top) < 15) {
+        colsCount++;
+      } else {
+        break;
+      }
+    }
+    if (colsCount > 0) {
+      calculatedCols.value = colsCount;
+    }
+  }
+  
+  // 如果测量完成，退出测量模式
+  if (isMeasuring.value && rowHeight.value > 0 && cols.value > 0) {
+    isMeasuring.value = false;
+  }
+};
+
+// 计算列数（对于 auto-fill）
+const calculateColumns = () => {
+  if (!useVirtualScroll.value || actualColumns.value > 0 || !gridContainerEl.value) {
+    return;
+  }
+  const grid = gridContainerEl.value.querySelector<HTMLElement>(".image-grid");
+  if (!grid) {
+    return;
+  }
+  const items = grid.querySelectorAll<HTMLElement>(".image-item");
+  if (items.length === 0) {
+    return;
+  }
+  // 计算第一行有多少个元素
+  const firstRect = items[0].getBoundingClientRect();
+  let colsCount = 1;
+  for (let i = 1; i < items.length; i++) {
+    const rect = items[i].getBoundingClientRect();
+    if (Math.abs(rect.top - firstRect.top) < 15) {
+      colsCount++;
+    } else {
+      break;
+    }
+  }
+  calculatedCols.value = colsCount;
+};
+
+// 处理滚动事件
+const handleScroll = () => {
+  if (!useVirtualScroll.value || !rootEl.value) {
+    return;
+  }
+  const container = rootEl.value.closest(".gallery-view") as HTMLElement | null;
+  if (!container) {
+    return;
+  }
+  scrollTop.value = container.scrollTop;
+  containerHeight.value = container.clientHeight;
+};
+
+// 初始化虚拟滚动
+const initVirtualScroll = () => {
+  if (!useVirtualScroll.value) {
+    return;
+  }
+  nextTick(() => {
+    const container = rootEl.value?.closest(".gallery-view") as HTMLElement | null;
+    if (!container) {
+      return;
+    }
+    containerHeight.value = container.clientHeight;
+    scrollTop.value = container.scrollTop;
+    
+    // 延迟计算，等待 DOM 渲染完成
+    setTimeout(() => {
+      calculateDimensions();
+    }, 100);
+    
+    // 监听滚动
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    
+    // 使用 ResizeObserver 监听容器大小变化
+    const resizeObserver = new ResizeObserver(() => {
+      containerHeight.value = container.clientHeight;
+      calculateDimensions();
+    });
+    resizeObserver.observe(container);
+    
+    // 保存清理函数
+    (rootEl.value as any).__resizeObserver = resizeObserver;
+  });
+};
+
+// 清理虚拟滚动
+const cleanupVirtualScroll = () => {
+  const container = rootEl.value?.closest(".gallery-view") as HTMLElement | null;
+  if (container) {
+    container.removeEventListener("scroll", handleScroll);
+  }
+  if (rootEl.value && (rootEl.value as any).__resizeObserver) {
+    (rootEl.value as any).__resizeObserver.disconnect();
+    delete (rootEl.value as any).__resizeObserver;
+  }
+};
 
 const prefersReducedMotion = () => {
   try {
@@ -390,10 +622,14 @@ onMounted(() => {
   if (allowSelect.value && !props.selectedImages) {
     window.addEventListener("keydown", handleKeyDown);
   }
+  if (useVirtualScroll.value) {
+    initVirtualScroll();
+  }
 });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", handleKeyDown);
+  cleanupVirtualScroll();
 });
 
 watch(
@@ -409,9 +645,45 @@ watch(
       isZoomingLayout.value = false;
       zoomAnimTimer = null;
     }, 450);
+    
+    // 列数变化时重新计算行高
+    if (useVirtualScroll.value) {
+      nextTick(() => {
+        calculateDimensions();
+      });
+    }
   },
   // 尽量在本次渲染前打开 class，确保 move 过渡对本次重排生效
   { flush: "pre" }
+);
+
+// 监听图片数量变化，重新计算尺寸
+watch(
+  () => props.images.length,
+  () => {
+    if (useVirtualScroll.value) {
+      nextTick(() => {
+        calculateDimensions();
+      });
+    }
+  }
+);
+
+// 监听虚拟滚动启用状态
+watch(
+  useVirtualScroll,
+  (enabled) => {
+    if (enabled) {
+      isMeasuring.value = true; // 进入测量模式
+      nextTick(() => {
+        initVirtualScroll();
+      });
+    } else {
+      cleanupVirtualScroll();
+      isMeasuring.value = false;
+    }
+  },
+  { immediate: true }
 );
 
 // 关闭预览对话框
@@ -469,6 +741,11 @@ watch(
 <style scoped lang="scss">
 .image-grid-root {
   width: 100%;
+}
+
+.image-grid-container {
+  width: 100%;
+  position: relative;
 }
 
 .image-grid {

@@ -4,14 +4,6 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::AppHandle;
 
-// 获取应用数据目录的辅助函数
-fn get_app_data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .or_else(|| dirs::data_dir())
-        .expect("Failed to get app data directory")
-        .join("Kabegame")
-}
-
 fn default_wallpaper_rotation_style() -> String {
     "fill".to_string()
 }
@@ -43,9 +35,11 @@ pub struct AppSettings {
     pub image_click_action: String, // "preview" 或 "open"
     pub gallery_columns: u32,       // 画廊列数，默认自动
     pub gallery_image_aspect_ratio_match_window: bool, // 画廊图片宽高比是否与窗口相同
-    pub gallery_page_size: u32,     // 画廊每次加载数量
     #[serde(default)]
-    pub auto_deduplicate: bool,     // 是否自动去重（根据哈希值跳过重复图片）
+    pub gallery_image_aspect_ratio: Option<String>, // 画廊图片宽高比（如 "16:9" 或 "custom:1920:1080"）
+    pub gallery_page_size: u32, // 画廊每次加载数量
+    #[serde(default)]
+    pub auto_deduplicate: bool, // 是否自动去重（根据哈希值跳过重复图片）
     #[serde(default)]
     pub default_download_dir: Option<String>, // 默认下载目录（为空则使用应用内置目录）
     #[serde(default)]
@@ -70,6 +64,12 @@ pub struct AppSettings {
     pub restore_last_tab: bool, // 是否恢复上次的 tab
     #[serde(default)]
     pub last_tab_path: Option<String>, // 上次的 tab 路径
+    /// 全局“当前壁纸”设置（存 imageId）
+    ///
+    /// - None 表示未设置或已失效
+    /// - 仅用于应用自身的“恢复/回退”逻辑；不代表系统当前壁纸一定等于该值
+    #[serde(default)]
+    pub current_wallpaper_image_id: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -81,6 +81,7 @@ impl Default for AppSettings {
             image_click_action: "preview".to_string(),
             gallery_columns: 0, // 0 表示自动（auto-fill）
             gallery_image_aspect_ratio_match_window: false,
+            gallery_image_aspect_ratio: None,
             gallery_page_size: 50,
             auto_deduplicate: false, // 默认不去重
             default_download_dir: None,
@@ -95,6 +96,7 @@ impl Default for AppSettings {
             window_state: None,
             restore_last_tab: false,
             last_tab_path: None,
+            current_wallpaper_image_id: None,
         }
     }
 }
@@ -107,7 +109,7 @@ impl Settings {
     }
 
     fn get_settings_file(&self) -> PathBuf {
-        let app_data_dir = get_app_data_dir();
+        let app_data_dir = crate::app_paths::kabegame_data_dir();
         app_data_dir.join("settings.json")
     }
 
@@ -323,10 +325,17 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
         {
             settings.gallery_image_aspect_ratio_match_window = match_window;
         }
+        if let Some(aspect_ratio) = json_value
+            .get("galleryImageAspectRatio")
+            .and_then(|v| v.as_str())
+        {
+            settings.gallery_image_aspect_ratio = Some(aspect_ratio.to_string());
+        }
         if let Some(page_size) = json_value.get("galleryPageSize").and_then(|v| v.as_u64()) {
             settings.gallery_page_size = page_size as u32;
         }
-        if let Some(auto_deduplicate) = json_value.get("autoDeduplicate").and_then(|v| v.as_bool()) {
+        if let Some(auto_deduplicate) = json_value.get("autoDeduplicate").and_then(|v| v.as_bool())
+        {
             settings.auto_deduplicate = auto_deduplicate;
         }
         if let Some(dir) = json_value.get("defaultDownloadDir") {
@@ -349,7 +358,12 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
         }
         if let Some(album_id) = json_value.get("wallpaperRotationAlbumId") {
             settings.wallpaper_rotation_album_id = match album_id {
-                serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.to_string()),
+                // 约定：空字符串表示“全画廊轮播”，需要保留为 Some("")
+                serde_json::Value::String(s) => Some(if s.trim().is_empty() {
+                    "".to_string()
+                } else {
+                    s.to_string()
+                }),
                 _ => None,
             };
         }
@@ -379,6 +393,12 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
         }
         if let Some(mode) = json_value.get("wallpaperMode").and_then(|v| v.as_str()) {
             settings.wallpaper_mode = mode.to_string();
+        }
+        if let Some(id) = json_value.get("currentWallpaperImageId") {
+            settings.current_wallpaper_image_id = match id {
+                serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.to_string()),
+                _ => None,
+            };
         }
 
         // 保存合并后的设置，确保所有字段都存在
@@ -467,6 +487,16 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
     pub fn set_gallery_image_aspect_ratio_match_window(&self, enabled: bool) -> Result<(), String> {
         let mut settings = self.get_settings()?;
         settings.gallery_image_aspect_ratio_match_window = enabled;
+        self.save_settings(&settings)?;
+        Ok(())
+    }
+
+    pub fn set_gallery_image_aspect_ratio(
+        &self,
+        aspect_ratio: Option<String>,
+    ) -> Result<(), String> {
+        let mut settings = self.get_settings()?;
+        settings.gallery_image_aspect_ratio = aspect_ratio;
         self.save_settings(&settings)?;
         Ok(())
     }
@@ -675,6 +705,21 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
     pub fn set_last_tab_path(&self, path: Option<String>) -> Result<(), String> {
         let mut settings = self.get_settings()?;
         settings.last_tab_path = path;
+        self.save_settings(&settings)?;
+        Ok(())
+    }
+
+    pub fn set_current_wallpaper_image_id(&self, image_id: Option<String>) -> Result<(), String> {
+        let mut settings = self.get_settings()?;
+        let normalized = image_id.and_then(|s| {
+            let t = s.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
+        settings.current_wallpaper_image_id = normalized;
         self.save_settings(&settings)?;
         Ok(())
     }

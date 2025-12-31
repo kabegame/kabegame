@@ -28,6 +28,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.icns", "icons/icon.ico"]
+    "icon": ["icons/icon.icns", "icons/icon.ico"],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/installer-hooks.nsh",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
   }
 }

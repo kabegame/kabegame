@@ -22,14 +22,20 @@
         </el-icon>
         <span style="margin-left: 4px;">删除画册</span>
       </el-button>
+      <el-button @click="openQuickSettings" circle>
+        <el-icon>
+          <Setting />
+        </el-icon>
+      </el-button>
     </PageHeader>
 
     <GalleryView ref="albumViewRef" class="detail-body" mode="albumDetail" :loading="loading" :images="images"
-      :image-url-map="imageSrcMap" :columns="albumColumns" :aspect-ratio-match-window="false"
-      :window-aspect-ratio="16 / 9" :allow-select="true" :enable-ctrl-wheel-adjust-columns="true"
-      :is-blocked="isBlockingOverlayOpen" @adjust-columns="throttledAdjustColumns"
-      @selection-change="handleSelectionChange" @image-dbl-click="handleImageDblClick"
-      @contextmenu="handleImageContextMenu">
+      :image-url-map="imageSrcMap" :columns="albumColumns" :aspect-ratio-match-window="!!albumAspectRatio"
+      :window-aspect-ratio="albumAspectRatio || 16 / 9" :allow-select="true" :enable-ctrl-wheel-adjust-columns="true"
+      :is-blocked="isBlockingOverlayOpen" @adjust-columns="(...args) => throttledAdjustColumns(args[0])"
+      @selection-change="(...args) => handleSelectionChange(args[0])"
+      @image-dbl-click="(...args) => handleImageDblClick(args[0])"
+      @contextmenu="(...args) => handleImageContextMenu(args[0], args[1])">
       <template #before-grid>
         <div v-if="!loading && !images.length" class="empty-state">
           <img src="/album-empty.png" alt="空画册" class="empty-image" />
@@ -57,12 +63,13 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, watch, nextTick } from "vue";
+import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Picture, Delete } from "@element-plus/icons-vue";
+import { Picture, Delete, Setting } from "@element-plus/icons-vue";
 import ImagePreviewDialog from "@/components/ImagePreviewDialog.vue";
 import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
 import ImageContextMenu from "@/components/ImageContextMenu.vue";
@@ -72,18 +79,21 @@ import { useAlbumStore } from "@/stores/albums";
 import { useCrawlerStore, type ImageInfo as CrawlerImageInfo } from "@/stores/crawler";
 import type { ImageInfo } from "@/stores/crawler";
 import PageHeader from "@/components/common/PageHeader.vue";
+import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 
 const route = useRoute();
 const router = useRouter();
 const albumStore = useAlbumStore();
+const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const crawlerStore = useCrawlerStore();
 
-// 收藏画册的固定ID（与后端保持一致）
-const FAVORITE_ALBUM_ID = "00000000-0000-0000-0000-000000000001";
+const quickSettingsDrawer = useQuickSettingsDrawerStore();
+const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 
 const albumId = ref<string>("");
 const albumName = ref<string>("");
 const loading = ref(false);
+const currentWallpaperImageId = ref<string | null>(null);
 const images = ref<ImageInfo[]>([]);
 const imageSrcMap = ref<Record<string, { thumbnail?: string; original?: string }>>({});
 const blobUrls = new Set<string>();
@@ -93,6 +103,7 @@ const albumViewRef = ref<any>(null);
 
 // 画册详情页本地列数（0 表示 auto-fill）
 const albumColumns = ref(0);
+const albumAspectRatio = ref<number | null>(null);
 
 // 当有弹窗/抽屉等覆盖层时，不应处理画廊快捷键（避免误触）
 const isBlockingOverlayOpen = () => {
@@ -283,8 +294,14 @@ const handleBatchRemoveImagesFromAlbum = async (imagesToRemove: ImageInfo[]) => 
   if (imagesToRemove.length === 0) return;
   if (!albumId.value) return;
   const count = imagesToRemove.length;
+  const includesCurrent =
+    !!currentWallpaperImageId.value &&
+    imagesToRemove.some((img) => img.id === currentWallpaperImageId.value);
+  const currentHint = includesCurrent
+    ? `\n\n注意：其中包含当前壁纸。移除/删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。`
+    : "";
   await ElMessageBox.confirm(
-    `将从当前画册移除，但不会删除图片文件。是否继续移除${count > 1 ? `这 ${count} 张图片` : "这张图片"}？`,
+    `将从当前画册移除，但不会删除图片文件。是否继续移除${count > 1 ? `这 ${count} 张图片` : "这张图片"}？${currentHint}`,
     "确认从画册移除",
     { type: "warning" }
   );
@@ -292,6 +309,9 @@ const handleBatchRemoveImagesFromAlbum = async (imagesToRemove: ImageInfo[]) => 
   try {
     const idsArr = imagesToRemove.map((i) => i.id);
     await albumStore.removeImagesFromAlbum(albumId.value, idsArr);
+    if (includesCurrent) {
+      currentWallpaperImageId.value = null;
+    }
 
     const ids = new Set(idsArr);
     images.value = images.value.filter((img) => !ids.has(img.id));
@@ -313,14 +333,23 @@ const handleBatchRemoveImagesFromAlbum = async (imagesToRemove: ImageInfo[]) => 
 const handleBatchDeleteImages = async (imagesToDelete: ImageInfo[]) => {
   if (imagesToDelete.length === 0) return;
   const count = imagesToDelete.length;
+  const includesCurrent =
+    !!currentWallpaperImageId.value &&
+    imagesToDelete.some((img) => img.id === currentWallpaperImageId.value);
+  const currentHint = includesCurrent
+    ? `\n\n注意：其中包含当前壁纸。移除/删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。`
+    : "";
   await ElMessageBox.confirm(
-    `删除后将同时移除原图、缩略图及数据库记录，且无法恢复。是否继续删除${count > 1 ? `这 ${count} 张图片` : "这张图片"}？`,
+    `删除后将同时移除原图、缩略图及数据库记录，且无法恢复。是否继续删除${count > 1 ? `这 ${count} 张图片` : "这张图片"}？${currentHint}`,
     "确认删除",
     { type: "warning" }
   );
 
   for (const img of imagesToDelete) {
     await crawlerStore.deleteImage(img.id);
+  }
+  if (includesCurrent) {
+    currentWallpaperImageId.value = null;
   }
 
   const ids = new Set(imagesToDelete.map((i) => i.id));
@@ -359,11 +388,11 @@ const handleImageMenuCommand = async (command: string) => {
         );
 
         // 清除收藏画册的缓存，确保下次查看时重新加载
-        delete albumStore.albumImages[FAVORITE_ALBUM_ID];
-        delete albumStore.albumPreviews[FAVORITE_ALBUM_ID];
+        delete albumStore.albumImages[FAVORITE_ALBUM_ID.value];
+        delete albumStore.albumPreviews[FAVORITE_ALBUM_ID.value];
         // 更新收藏画册计数
-        const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID] || 0;
-        albumStore.albumCounts[FAVORITE_ALBUM_ID] = Math.max(0, currentCount + (newFavorite ? 1 : -1));
+        const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
+        albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(0, currentCount + (newFavorite ? 1 : -1));
 
         // 发出收藏状态变化事件，通知其他页面更新
         window.dispatchEvent(
@@ -395,7 +424,8 @@ const handleImageMenuCommand = async (command: string) => {
       await invoke("open_file_folder", { filePath: image.localPath });
       break;
     case "wallpaper":
-      await invoke("set_wallpaper", { filePath: image.localPath });
+      await invoke("set_wallpaper_by_image_id", { imageId: image.id });
+      currentWallpaperImageId.value = image.id;
       break;
     case "exportToWE":
     case "exportToWEAuto":
@@ -507,12 +537,43 @@ watch(
 );
 
 onMounted(async () => {
-  // 与 Gallery 共用同一套列数：进入画册页时读取一次设置
+  // 与 Gallery 共用同一套列数和宽高比：进入画册页时读取一次设置
   try {
-    const settings = await invoke<{ galleryColumns?: number }>("get_settings");
+    const settings = await invoke<{ 
+      galleryColumns?: number;
+      galleryImageAspectRatio?: string | null;
+    }>("get_settings");
     albumColumns.value = settings.galleryColumns || 0;
+    
+    // 解析宽高比
+    if (settings.galleryImageAspectRatio) {
+      const value = settings.galleryImageAspectRatio;
+      
+      // 解析 "16:9" 格式
+      if (value.includes(":") && !value.startsWith("custom:")) {
+        const [w, h] = value.split(":").map(Number);
+        if (w && h) {
+          albumAspectRatio.value = w / h;
+        }
+      }
+      
+      // 解析 "custom:1920:1080" 格式
+      if (value.startsWith("custom:")) {
+        const parts = value.replace("custom:", "").split(":");
+        const [w, h] = parts.map(Number);
+        if (w && h) {
+          albumAspectRatio.value = w / h;
+        }
+      }
+    }
   } catch (e) {
-    console.error("加载列数设置失败:", e);
+    console.error("加载设置失败:", e);
+  }
+
+  try {
+    currentWallpaperImageId.value = await invoke<string | null>("get_current_wallpaper_image_id");
+  } catch {
+    currentWallpaperImageId.value = null;
   }
 
   await loadRotationSettings();
@@ -528,11 +589,11 @@ onMounted(async () => {
     if (!detail || !Array.isArray(detail.imageIds)) return;
 
     // 只处理收藏画册详情页
-    if (albumId.value !== FAVORITE_ALBUM_ID) return;
+    if (albumId.value !== FAVORITE_ALBUM_ID.value) return;
 
     // 检查当前页面是否激活（通过检查路由是否匹配）
     const currentRouteId = route.params.id as string;
-    const isActive = currentRouteId === FAVORITE_ALBUM_ID;
+    const isActive = currentRouteId === FAVORITE_ALBUM_ID.value;
 
     if (detail.favorite === false) {
       // 取消收藏：从列表中移除对应图片
@@ -582,7 +643,7 @@ onActivated(async () => {
   }
 
   // 如果是收藏画册且标记为需要刷新，重新加载
-  if (albumId.value === FAVORITE_ALBUM_ID && favoriteAlbumDirty.value) {
+  if (albumId.value === FAVORITE_ALBUM_ID.value && favoriteAlbumDirty.value) {
     favoriteAlbumDirty.value = false;
     await loadAlbum();
   }
@@ -644,6 +705,10 @@ const handleRenameCancel = () => {
 const handleSetAsWallpaperCarousel = async () => {
   if (!albumId.value) return;
   try {
+    if (images.value.length === 0) {
+      ElMessage.warning("画册为空：请先添加图片，再开启轮播");
+      return;
+    }
     // 如果轮播未开启，先开启轮播
     if (!wallpaperRotationEnabled.value) {
       await invoke("set_wallpaper_rotation_enabled", { enabled: true });
@@ -652,7 +717,7 @@ const handleSetAsWallpaperCarousel = async () => {
     // 设置轮播画册
     await invoke("set_wallpaper_rotation_album_id", { albumId: albumId.value });
     currentRotationAlbumId.value = albumId.value;
-    ElMessage.success(`已将画册"${albumName.value}"设为桌面轮播`);
+    ElMessage.success(`已开启轮播：画册「${albumName.value}」`);
   } catch (error) {
     console.error("设置轮播画册失败:", error);
     ElMessage.error("设置失败");
@@ -664,7 +729,7 @@ const handleDeleteAlbum = async () => {
   if (!albumId.value) return;
 
   // 检查是否为"收藏"画册
-  if (albumId.value === FAVORITE_ALBUM_ID) {
+  if (albumId.value === FAVORITE_ALBUM_ID.value) {
     ElMessage.warning("不能删除'收藏'画册");
     return;
   }

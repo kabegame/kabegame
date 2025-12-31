@@ -12,11 +12,12 @@ use tauri::{AppHandle, Manager};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, GetParent,
-    GetWindowLongPtrW, IsWindow, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetParent, GetWindowLongPtrW,
+    IsWindow, PostQuitMessage, RegisterClassExW,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, UnregisterClassW, CS_HREDRAW,
-    CS_VREDRAW, GWLP_USERDATA, GWL_EXSTYLE, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-    SW_SHOW, WM_CREATE, WM_DESTROY, WM_PAINT, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_POPUP, WS_VISIBLE,
+    CS_VREDRAW, GWLP_USERDATA, GWL_EXSTYLE, MSG, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_SHOW,
+    WM_CREATE, WM_DESTROY, WM_NCHITTEST, WM_PAINT, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_POPUP,
+    WS_VISIBLE,
 };
 
 /// GDI 壁纸窗口（内部使用）
@@ -42,9 +43,7 @@ impl GdiWallpaperWindow {
             let class_name_wide = wide(CLASS_NAME);
 
             // 尝试注销窗口类（如果不存在，会返回错误，我们可以忽略）
-            unsafe {
-                let _ = UnregisterClassW(class_name_wide.as_ptr(), 0);
-            }
+            let _ = UnregisterClassW(class_name_wide.as_ptr(), 0);
 
             // 重新注册窗口类
             // 注意：hCursor 必须设置为有效的光标句柄，0 可能导致 CreateWindowExW 失败
@@ -92,9 +91,7 @@ impl GdiWallpaperWindow {
 
             // 在创建窗口之前清除错误码，以便准确获取 CreateWindowExW 的错误
             use windows_sys::Win32::Foundation::SetLastError;
-            unsafe {
-                SetLastError(0);
-            }
+            SetLastError(0);
 
             // 创建窗口时不使用 WS_VISIBLE，先隐藏窗口，避免在挂载前显示（造成"窗口闪过"）
             // 挂载到桌面后再显示窗口
@@ -159,20 +156,18 @@ impl GdiWallpaperWindow {
             eprintln!("[DEBUG] 窗口挂载完成");
 
             // 挂载完成后，显示窗口并确保窗口样式正确
-            unsafe {
-                // 确保窗口可见
-                ShowWindow(hwnd, SW_SHOW);
+            // 确保窗口可见
+            ShowWindow(hwnd, SW_SHOW);
 
-                // 添加额外的窗口样式来防止系统关闭窗口
-                // WS_EX_TOOLWINDOW: 防止窗口出现在任务栏和 Alt+Tab 列表中
-                // 这对于壁纸窗口很重要，可以防止系统将其识别为普通应用窗口
-                use windows_sys::Win32::UI::WindowsAndMessaging::WS_EX_TOOLWINDOW;
-                let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-                let new_ex_style = ex_style | WS_EX_TOOLWINDOW;
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex_style as isize);
+            // 添加额外的窗口样式来防止系统关闭窗口
+            // WS_EX_TOOLWINDOW: 防止窗口出现在任务栏和 Alt+Tab 列表中
+            // 这对于壁纸窗口很重要，可以防止系统将其识别为普通应用窗口
+            use windows_sys::Win32::UI::WindowsAndMessaging::WS_EX_TOOLWINDOW;
+            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            let new_ex_style = ex_style | WS_EX_TOOLWINDOW;
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_ex_style as isize);
 
-                eprintln!("[DEBUG] 窗口已显示并设置保护样式");
-            }
+            eprintln!("[DEBUG] 窗口已显示并设置保护样式");
 
             // 创建共享的退出标志
             let should_quit = Arc::new(AtomicBool::new(false));
@@ -182,46 +177,42 @@ impl GdiWallpaperWindow {
             // 注意：PostQuitMessage 必须从消息循环所在的线程调用，所以我们在 WM_DESTROY 中处理
             // 注意：GetMessageW 的第二个参数应该是 HWND(0) 来接收所有消息，而不是特定窗口
             let message_thread_handle = std::thread::spawn(move || {
-                unsafe {
-                    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-                    let thread_id = GetCurrentThreadId();
-                    eprintln!(
-                        "[DEBUG] GdiWallpaperWindow: 消息循环线程启动，线程 ID: {}",
-                        thread_id
-                    );
-                    let mut msg: MSG = std::mem::zeroed();
-                    loop {
-                        // 检查退出标志
-                        if should_quit_clone.load(Ordering::Relaxed) {
-                            eprintln!(
-                                "[DEBUG] GdiWallpaperWindow: 收到退出标志，调用 PostQuitMessage(0)"
-                            );
-                            PostQuitMessage(0);
-                            break;
-                        }
-
-                        // 使用 PeekMessageW 来非阻塞地检查消息，这样我们可以定期检查退出标志
-                        use windows_sys::Win32::UI::WindowsAndMessaging::{
-                            PeekMessageW, PM_REMOVE,
-                        };
-                        let has_msg = PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) != 0;
-
-                        if has_msg {
-                            if msg.message == 0x0012 {
-                                // WM_QUIT
-                                eprintln!("[DEBUG] GdiWallpaperWindow: 消息循环收到 WM_QUIT，退出");
-                                break;
-                            } else {
-                                TranslateMessage(&msg);
-                                DispatchMessageW(&msg);
-                            }
-                        } else {
-                            // 没有消息，短暂休眠以避免 CPU 占用过高，然后继续检查退出标志
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                        }
+                use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+                let thread_id = GetCurrentThreadId();
+                eprintln!(
+                    "[DEBUG] GdiWallpaperWindow: 消息循环线程启动，线程 ID: {}",
+                    thread_id
+                );
+                let mut msg: MSG = std::mem::zeroed();
+                loop {
+                    // 检查退出标志
+                    if should_quit_clone.load(Ordering::Relaxed) {
+                        eprintln!(
+                            "[DEBUG] GdiWallpaperWindow: 收到退出标志，调用 PostQuitMessage(0)"
+                        );
+                        PostQuitMessage(0);
+                        break;
                     }
-                    eprintln!("[DEBUG] GdiWallpaperWindow: 消息循环线程退出");
+
+                    // 使用 PeekMessageW 来非阻塞地检查消息，这样我们可以定期检查退出标志
+                    use windows_sys::Win32::UI::WindowsAndMessaging::{PeekMessageW, PM_REMOVE};
+                    let has_msg = PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) != 0;
+
+                    if has_msg {
+                        if msg.message == 0x0012 {
+                            // WM_QUIT
+                            eprintln!("[DEBUG] GdiWallpaperWindow: 消息循环收到 WM_QUIT，退出");
+                            break;
+                        } else {
+                            TranslateMessage(&msg);
+                            DispatchMessageW(&msg);
+                        }
+                    } else {
+                        // 没有消息，短暂休眠以避免 CPU 占用过高，然后继续检查退出标志
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
                 }
+                eprintln!("[DEBUG] GdiWallpaperWindow: 消息循环线程退出");
             });
 
             Ok(Self {
@@ -361,7 +352,7 @@ impl Drop for GdiWallpaperWindow {
         );
         unsafe {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                DestroyWindow, GetWindowLongPtrW, PostQuitMessage,
+                DestroyWindow, GetWindowLongPtrW,
             };
 
             // 先清理 USERDATA 中的 Box 指针（在窗口销毁前）
@@ -643,14 +634,6 @@ impl GdiWallpaperManager {
 }
 
 impl WallpaperManager for GdiWallpaperManager {
-    fn get_wallpaper_path(&self) -> Result<String, String> {
-        let path = self
-            .current_wallpaper_path
-            .lock()
-            .map_err(|e| format!("无法获取壁纸路径锁: {}", e))?;
-        path.clone().ok_or_else(|| "当前没有设置壁纸".to_string())
-    }
-
     fn get_style(&self) -> Result<String, String> {
         let settings = self.app.state::<Settings>();
         let current_settings = settings

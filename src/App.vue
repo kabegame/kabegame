@@ -4,6 +4,8 @@
 
   <!-- 主窗口 -->
   <el-container v-else class="app-container">
+    <!-- 全局唯一的快捷设置抽屉（避免多页面实例冲突） -->
+    <QuickSettingsDrawer />
     <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '200px'">
       <div class="sidebar-header">
         <img src="/icon.png" alt="Logo" class="app-logo" :class="{ 'logo-clickable': isCollapsed }"
@@ -56,6 +58,8 @@ import { Picture, Grid, Setting, Fold, Collection } from "@element-plus/icons-vu
 import { invoke } from "@tauri-apps/api/core";
 import WallpaperLayer from "./components/WallpaperLayer.vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { useSettingsStore } from "./stores/settings";
+import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 
 const route = useRoute();
 const activeRoute = computed(() => route.path);
@@ -71,6 +75,10 @@ try {
 }
 
 onMounted(async () => {
+  // 初始化 settings store
+  const settingsStore = useSettingsStore();
+  await settingsStore.init();
+
   if (!isWallpaperWindow.value) {
     // 监听窗口关闭事件 - 隐藏而不是退出
     try {

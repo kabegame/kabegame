@@ -55,7 +55,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
   const totalImages = ref(0);
   const currentPage = ref(0);
   const pageSize = ref(50); // 每页50张图片
-  const hasMore = ref(true);
+  const hasMore = ref(false);
   const runConfigs = ref<RunConfig[]>([]);
 
   // 初始化全局事件监听器
@@ -578,7 +578,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       if (reset) {
         currentPage.value = 0;
         images.value = [];
-        hasMore.value = true;
+        hasMore.value = false;
       }
 
       const page = currentPage.value;
