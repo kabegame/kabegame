@@ -34,7 +34,7 @@ defineEmits<{
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 32px 0;
+  padding: 32px 0 0;
   margin-top: 24px;
 }
 

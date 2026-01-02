@@ -402,11 +402,6 @@ const prefetchPreview = async (album: { id: string }) => {
 };
 
 const openAlbum = (album: { id: string; name: string }) => {
-  // 空相册不能打开
-  const count = albumCounts.value[album.id] || 0;
-  if (count === 0) {
-    return;
-  }
   router.push(`/albums/${album.id}`);
 };
 
@@ -427,11 +422,6 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
   closeAlbumContextMenu();
 
   if (command === "browse") {
-    // 空相册不能浏览
-    const count = albumCounts.value[id] || 0;
-    if (count === 0) {
-      return;
-    }
     router.push(`/albums/${id}`);
     return;
   }

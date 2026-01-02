@@ -36,29 +36,29 @@
         加载全部
       </el-button>
     </template>
-      <el-button @click="$emit('showQuickSettings')" circle>
-        <el-icon>
-          <Setting />
-        </el-icon>
-      </el-button>
-      <el-badge v-if="activeRunningTasksCount > 0" :value="activeRunningTasksCount" :max="99" class="tasks-badge">
-        <el-button @click="$emit('showTasksDrawer')" class="tasks-drawer-trigger" circle type="primary">
-          <el-icon>
-            <List />
-          </el-icon>
-        </el-button>
-      </el-badge>
-      <el-button v-else @click="$emit('showTasksDrawer')" class="tasks-drawer-trigger" circle type="primary">
+    <el-button @click="$emit('showQuickSettings')" circle>
+      <el-icon>
+        <Setting />
+      </el-icon>
+    </el-button>
+    <el-badge v-if="activeRunningTasksCount > 0" :value="activeRunningTasksCount" :max="99" class="tasks-badge">
+      <el-button @click="$emit('showTasksDrawer')" class="tasks-drawer-trigger" circle type="primary">
         <el-icon>
           <List />
         </el-icon>
       </el-button>
-      <el-button type="primary" @click="$emit('showCrawlerDialog')" class="add-task-btn">
-        <el-icon>
-          <Plus />
-        </el-icon>
-        导入
-      </el-button>
+    </el-badge>
+    <el-button v-else @click="$emit('showTasksDrawer')" class="tasks-drawer-trigger" circle type="primary">
+      <el-icon>
+        <List />
+      </el-icon>
+    </el-button>
+    <el-button type="primary" @click="$emit('showCrawlerDialog')" class="add-task-btn">
+      <el-icon>
+        <Plus />
+      </el-icon>
+      收集
+    </el-button>
   </PageHeader>
 </template>
 
@@ -98,43 +98,43 @@ defineEmits<{
 </script>
 
 <style scoped lang="scss">
-  .add-task-btn {
-    box-shadow: var(--anime-shadow);
+.add-task-btn {
+  box-shadow: var(--anime-shadow);
 
-    &:hover {
-      transform: translateY(-2px);
-      box-shadow: var(--anime-shadow-hover);
-    }
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--anime-shadow-hover);
   }
+}
 
-  .tasks-drawer-trigger {
-    box-shadow: var(--anime-shadow);
-    transition: all 0.3s ease;
+.tasks-drawer-trigger {
+  box-shadow: var(--anime-shadow);
+  transition: all 0.3s ease;
 
-    &:hover {
-      transform: translateY(-2px);
-      box-shadow: var(--anime-shadow-hover);
-    }
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--anime-shadow-hover);
   }
+}
 
-  .tasks-badge {
-    display: block;
+.tasks-badge {
+  display: block;
 
-    :deep(.el-badge__content) {
-      background-color: #f56c6c !important;
-      border-color: #f56c6c !important;
-      color: #fff !important;
-      border-radius: 50% !important;
-      width: 20px !important;
-      height: 20px !important;
-      min-width: 20px !important;
-      padding: 0 !important;
-      line-height: 20px !important;
-      font-size: 12px !important;
-      font-weight: 500 !important;
-      display: inline-flex !important;
-      align-items: center !important;
-      justify-content: center !important;
+  :deep(.el-badge__content) {
+    background-color: #f56c6c !important;
+    border-color: #f56c6c !important;
+    color: #fff !important;
+    border-radius: 50% !important;
+    width: 20px !important;
+    height: 20px !important;
+    min-width: 20px !important;
+    padding: 0 !important;
+    line-height: 20px !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
   }
 }
 </style>

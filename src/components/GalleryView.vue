@@ -8,12 +8,13 @@
             :aspect-ratio-match-window="aspectRatioMatchWindow" :window-aspect-ratio="windowAspectRatio"
             :allow-select="allowSelect" :enable-context-menu="enableContextMenu"
             :show-load-more-button="showLoadMoreButton" :has-more="hasMore" :loading-more="loadingMore"
-            :can-move-item="canMoveItem" :show-empty-state="showEmptyState"
+            :show-empty-state="showEmptyState"
             @image-dbl-click="(img, ev) => emit('image-dbl-click', img, ev)"
             @context-command="(payload) => emit('context-command', payload)"
-            @move="(img, dir) => emit('move', img, dir)" @load-more="() => emit('load-more')"
+            @load-more="() => emit('load-more')"
             @selection-change="(ids) => emit('selection-change', ids)"
-            @contextmenu="(ev, img) => emit('contextmenu', ev, img)" />
+            @contextmenu="(ev, img) => emit('contextmenu', ev, img)"
+            @reorder="(newOrder) => emit('reorder', newOrder)" />
 
         <slot name="overlays" />
     </div>
@@ -44,7 +45,6 @@ const props = withDefaults(
         showLoadMoreButton?: boolean;
         hasMore?: boolean;
         loadingMore?: boolean;
-        canMoveItem?: boolean;
         showEmptyState?: boolean;
 
         /** 外部决定是否屏蔽快捷键（弹窗/抽屉等覆盖层） */
@@ -66,7 +66,6 @@ const props = withDefaults(
         showLoadMoreButton: false,
         hasMore: false,
         loadingMore: false,
-        canMoveItem: true,
         showEmptyState: false,
         enableCtrlWheelAdjustColumns: undefined,
         enableCtrlKeyAdjustColumns: undefined,
@@ -85,9 +84,9 @@ const emit = defineEmits<{
     (e: "load-more"): void;
     (e: "image-dbl-click", image: ImageInfo, event?: MouseEvent): void;
     (e: "context-command", payload: any): void;
-    (e: "move", image: ImageInfo, direction: "up" | "down" | "left" | "right"): void;
     (e: "selection-change", ids: Set<string>): void;
     (e: "contextmenu", event: MouseEvent, image: ImageInfo): void;
+    (e: "reorder", newOrder: ImageInfo[]): void;
 }>();
 
 const containerEl = ref<HTMLElement | null>(null);
@@ -262,6 +261,12 @@ watch(
         pulseZoomAnimation();
     }
 );
+
+// 暴露方法给父组件
+defineExpose({
+    clearSelection: () => gridRef.value?.clearSelection?.(),
+    exitReorderMode: () => gridRef.value?.exitReorderMode?.(),
+});
 </script>
 
 <style scoped lang="scss">

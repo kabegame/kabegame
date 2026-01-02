@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use reqwest;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -1057,7 +1058,33 @@ impl PluginManager {
         &self,
         source: &PluginSource,
     ) -> Result<Vec<StorePluginResolved>, String> {
-        let client = reqwest::Client::new();
+        let mut client_builder = reqwest::Client::builder();
+
+        // 配置代理：自动从环境变量读取系统代理设置
+        if let Ok(proxy_url) = std::env::var("HTTP_PROXY")
+            .or_else(|_| std::env::var("http_proxy"))
+            .or_else(|_| std::env::var("HTTPS_PROXY"))
+            .or_else(|_| std::env::var("https_proxy"))
+        {
+            if !proxy_url.trim().is_empty() {
+                match reqwest::Proxy::all(&proxy_url) {
+                    Ok(proxy) => {
+                        client_builder = client_builder.proxy(proxy);
+                        println!("插件商店网络代理已配置: {}", proxy_url);
+                    }
+                    Err(e) => {
+                        println!("插件商店代理配置无效 ({}), 将使用直连: {}", proxy_url, e);
+                    }
+                }
+            }
+        }
+
+        let client = client_builder
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
+            .user_agent("Kabegame/1.0")
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
         let response = client
             .get(&source.index_url)
             .send()
@@ -1098,7 +1125,33 @@ impl PluginManager {
         &self,
         index_url: &str,
     ) -> Result<StoreSourceValidationResult, String> {
-        let client = reqwest::Client::new();
+        let mut client_builder = reqwest::Client::builder();
+
+        // 配置代理：自动从环境变量读取系统代理设置
+        if let Ok(proxy_url) = std::env::var("HTTP_PROXY")
+            .or_else(|_| std::env::var("http_proxy"))
+            .or_else(|_| std::env::var("HTTPS_PROXY"))
+            .or_else(|_| std::env::var("https_proxy"))
+        {
+            if !proxy_url.trim().is_empty() {
+                match reqwest::Proxy::all(&proxy_url) {
+                    Ok(proxy) => {
+                        client_builder = client_builder.proxy(proxy);
+                        println!("插件源验证网络代理已配置: {}", proxy_url);
+                    }
+                    Err(e) => {
+                        println!("插件源验证代理配置无效 ({}), 将使用直连: {}", proxy_url, e);
+                    }
+                }
+            }
+        }
+
+        let client = client_builder
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
+            .user_agent("Kabegame/1.0")
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
         let response = client
             .get(index_url)
             .send()
@@ -1219,7 +1272,33 @@ impl PluginManager {
         expected_sha256: Option<&str>,
         expected_size: Option<u64>,
     ) -> Result<PathBuf, String> {
-        let client = reqwest::Client::new();
+        let mut client_builder = reqwest::Client::builder();
+
+        // 配置代理：自动从环境变量读取系统代理设置
+        if let Ok(proxy_url) = std::env::var("HTTP_PROXY")
+            .or_else(|_| std::env::var("http_proxy"))
+            .or_else(|_| std::env::var("HTTPS_PROXY"))
+            .or_else(|_| std::env::var("https_proxy"))
+        {
+            if !proxy_url.trim().is_empty() {
+                match reqwest::Proxy::all(&proxy_url) {
+                    Ok(proxy) => {
+                        client_builder = client_builder.proxy(proxy);
+                        println!("插件下载网络代理已配置: {}", proxy_url);
+                    }
+                    Err(e) => {
+                        println!("插件下载代理配置无效 ({}), 将使用直连: {}", proxy_url, e);
+                    }
+                }
+            }
+        }
+
+        let client = client_builder
+            .timeout(Duration::from_secs(60)) // 下载可能需要更长时间
+            .connect_timeout(Duration::from_secs(10))
+            .user_agent("Kabegame/1.0")
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
         let response = client
             .get(download_url)
             .send()
@@ -1283,7 +1362,33 @@ impl PluginManager {
         expected_sha256: Option<&str>,
         expected_size: Option<u64>,
     ) -> Result<Vec<u8>, String> {
-        let client = reqwest::Client::new();
+        let mut client_builder = reqwest::Client::builder();
+
+        // 配置代理：自动从环境变量读取系统代理设置
+        if let Ok(proxy_url) = std::env::var("HTTP_PROXY")
+            .or_else(|_| std::env::var("http_proxy"))
+            .or_else(|_| std::env::var("HTTPS_PROXY"))
+            .or_else(|_| std::env::var("https_proxy"))
+        {
+            if !proxy_url.trim().is_empty() {
+                match reqwest::Proxy::all(&proxy_url) {
+                    Ok(proxy) => {
+                        client_builder = client_builder.proxy(proxy);
+                        println!("插件字节下载网络代理已配置: {}", proxy_url);
+                    }
+                    Err(e) => {
+                        println!("插件字节下载代理配置无效 ({}), 将使用直连: {}", proxy_url, e);
+                    }
+                }
+            }
+        }
+
+        let client = client_builder
+            .timeout(Duration::from_secs(60)) // 下载可能需要更长时间
+            .connect_timeout(Duration::from_secs(10))
+            .user_agent("Kabegame/1.0")
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
         let response = client
             .get(download_url)
             .send()

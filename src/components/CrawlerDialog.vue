@@ -1,5 +1,5 @@
 <template>
-    <el-dialog v-model="visible" title="开始导入图片" width="600px" :close-on-click-modal="false" class="crawl-dialog"
+    <el-dialog v-model="visible" title="开始收集图片" width="600px" :close-on-click-modal="false" class="crawl-dialog"
         :show-close="true">
         <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
             <el-form-item label="运行配置">
@@ -32,9 +32,6 @@
                         </div>
                     </el-option>
                 </el-select>
-                <div class="config-hint">
-                    兼容的配置：可直接选择并一键运行（表单会锁定）；不兼容的配置：会在此处提示，且只能"载入到表单"后手动编辑运行
-                </div>
             </el-form-item>
             <el-form-item label="选择源">
                 <el-select v-model="form.pluginId" :disabled="!!selectedRunConfigId" placeholder="请选择源"
@@ -63,6 +60,13 @@
                         </el-button>
                     </template>
                 </el-input>
+            </el-form-item>
+
+            <el-form-item label="输出画册">
+                <el-select v-model="selectedOutputAlbumId" :disabled="!!selectedRunConfigId" placeholder="默认仅添加到画廊"
+                    clearable style="width: 100%">
+                    <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
+                </el-select>
             </el-form-item>
 
             <!-- 插件变量配置 -->
@@ -150,12 +154,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from "vue";
+import { computed, watch, ref } from "vue";
 import { FolderOpened, Grid } from "@element-plus/icons-vue";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
 import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
+import { useAlbumStore } from "@/stores/albums";
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessage } from "element-plus";
 
@@ -172,6 +177,7 @@ const emit = defineEmits<{
 
 const crawlerStore = useCrawlerStore();
 const pluginStore = usePluginStore();
+const albumStore = useAlbumStore();
 
 const visible = computed({
     get: () => props.modelValue,
@@ -181,6 +187,10 @@ const visible = computed({
 const enabledPlugins = computed(() => pluginStore.plugins.filter((p) => p.enabled));
 const runConfigs = computed(() => crawlerStore.runConfigs);
 const isCrawling = computed(() => crawlerStore.isCrawling);
+const albums = computed(() => albumStore.albums);
+
+// 选择的输出画册ID
+const selectedOutputAlbumId = ref<string | null>(null);
 
 // 使用插件配置 composable
 const pluginConfig = usePluginConfig();
@@ -270,10 +280,16 @@ const handleStartCrawl = async () => {
         }
 
         // 运行/保存配置时，userConfig 统一传对象（至少是 {}），避免"预设保存后 userConfig 为空导致后端未注入变量"
-        const backendVars =
+        let backendVars =
             pluginVars.value.length > 0
                 ? expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[])
-                : undefined;
+                : {};
+
+        // 如果选择了输出画册，添加到后端变量中
+        if (selectedOutputAlbumId.value) {
+            backendVars = backendVars || {};
+            backendVars._output_album_id = selectedOutputAlbumId.value;
+        }
 
         // 保存用户配置（如果有变量定义）
         if (pluginVars.value.length > 0 && backendVars && Object.keys(backendVars).length > 0) {
@@ -312,6 +328,8 @@ const handleStartCrawl = async () => {
 
         // 重置表单
         resetForm();
+        // 重置选择的输出画册
+        selectedOutputAlbumId.value = null;
         // 关闭对话框
         visible.value = false;
         emit("started");
@@ -346,6 +364,13 @@ watch(() => form.value.pluginId, (newPluginId) => {
     } else {
         pluginVars.value = [];
         form.value.vars = {};
+    }
+});
+
+// 监听对话框关闭，重置输出画册选择
+watch(visible, (isOpen) => {
+    if (!isOpen) {
+        selectedOutputAlbumId.value = null;
     }
 });
 

@@ -13,12 +13,12 @@
       :image-url-map="imageSrcMap" :image-click-action="imageClickAction" :columns="galleryColumns"
       :aspect-ratio-match-window="!!galleryImageAspectRatio" :window-aspect-ratio="effectiveAspectRatio"
       :allow-select="true" :enable-context-menu="true" :show-load-more-button="true" :has-more="crawlerStore.hasMore"
-      :loading-more="isLoadingMore" :can-move-item="true" :is-blocked="isBlockingOverlayOpen"
-      @container-mounted="(...args) => setGalleryContainerEl(args[0])"
-      @adjust-columns="(...args) => throttledAdjustColumns(args[0])" @scroll-stable="loadImageUrls()"
-      @load-more="loadMoreImages" @image-dbl-click="(...args) => handleImageDblClick(args[0])"
-      @context-command="(...args) => handleGridContextCommand(args[0])"
-      @move="(...args) => handleImageMove(args[0], args[1])">
+      :loading-more="isLoadingMore" :is-blocked="isBlockingOverlayOpen" :loading="dedupeLoading"
+      @container-mounted="(...args: any[]) => setGalleryContainerEl(args[0])"
+      @adjust-columns="(...args: any[]) => throttledAdjustColumns(args[0])" @scroll-stable="loadImageUrls()"
+      @load-more="loadMoreImages" @image-dbl-click="(...args: any[]) => handleImageDblClick(args[0])"
+      @context-command="(...args: any[]) => handleGridContextCommand(args[0])"
+      @reorder="(...args: any[]) => handleImageReorder(args[0])">
       <template #before-grid>
         <div v-if="showSkeleton" class="loading-skeleton">
           <div class="skeleton-grid">
@@ -77,6 +77,21 @@
 
         <!-- 收集对话框 -->
         <CrawlerDialog v-model="showCrawlerDialog" :plugin-icons="pluginIcons" />
+
+        <!-- 去重确认对话框 -->
+        <el-dialog v-model="showDedupeDialog" title="确认去重" width="420px" destroy-on-close>
+          <div style="margin-bottom: 16px;">
+            <p style="margin-bottom: 8px;">去掉所有重复图片（按哈希值匹配）。</p>
+            <el-checkbox v-model="dedupeDeleteFiles" label="同时从磁盘删除源文件（慎用）" />
+            <p class="var-description" :style="{ color: dedupeDeleteFiles ? 'var(--el-color-danger)' : '' }">
+              {{ dedupeDeleteFiles ? '警告：该操作将永久删除重复的磁盘文件，不可恢复！' : '仅从画廊移除记录，保留磁盘文件。' }}
+            </p>
+          </div>
+          <template #footer>
+            <el-button @click="showDedupeDialog = false">取消</el-button>
+            <el-button type="primary" @click="confirmDedupeByHash" :loading="dedupeProcessing">确定</el-button>
+          </template>
+        </el-dialog>
       </template>
     </GalleryView>
   </div>
@@ -84,9 +99,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from "vue";
-import { storeToRefs } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox, ElCheckbox } from "element-plus";
 import { Plus } from "@element-plus/icons-vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useAlbumStore } from "@/stores/albums";
@@ -99,10 +113,10 @@ import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { useGalleryImages } from "@/composables/useGalleryImages";
 import { useGallerySettings } from "@/composables/useGallerySettings";
+import { useImageOperations, type FavoriteStatusChangedDetail } from "@/composables/useImageOperations";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useSettingsStore } from "@/stores/settings";
-
-type FavoriteStatusChangedDetail = { imageIds: string[]; favorite: boolean };
+import { useLoadingDelay } from "@/utils/useLoadingDelay";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -115,14 +129,16 @@ const openQuickSettingsDrawer = () => quickSettingsDrawer.open("gallery");
 const pluginStore = usePluginStore();
 const albumStore = useAlbumStore();
 const settingsStore = useSettingsStore();
-const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 
 const dedupeProcessing = ref(false); // 正在执行"按哈希去重"本体
 const dedupeWaitingDownloads = ref(false); // 需要等待下载队列空闲后才结束 loading
-const dedupeLoading = computed(() => dedupeProcessing.value || dedupeWaitingDownloads.value);
+const { showContent: dedupeDelayShowContent, startLoading: startDedupeDelay, finishLoading: finishDedupeDelay } = useLoadingDelay(300);
+const dedupeLoading = computed(() => dedupeProcessing.value || dedupeWaitingDownloads.value || !dedupeDelayShowContent.value);
 const filterPluginId = ref<string | null>(null);
 const showFavoritesOnly = ref(false);
 const showCrawlerDialog = ref(false);
+const showDedupeDialog = ref(false); // 去重确认对话框
+const dedupeDeleteFiles = ref(false); // 是否删除本地文件
 const showTasksDrawer = ref(false);
 const showImageDetail = ref(false);
 const galleryContainerRef = ref<HTMLElement | null>(null);
@@ -252,6 +268,28 @@ const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => 
 };
 const loadMoreImages = loadMoreImagesFromComposable;
 const loadAllImages = loadAllImagesFromComposable;
+
+// 使用图片操作 composable
+const {
+  handleOpenImagePath,
+  handleCopyImage,
+  applyFavoriteChangeToGalleryCache,
+  handleBatchRemove,
+  handleBatchDelete,
+  confirmDedupeByHash: confirmDedupeByHashFromComposable,
+  toggleFavorite,
+  setWallpaper,
+  exportToWallpaperEngine,
+} = useImageOperations(
+  displayedImages,
+  imageSrcMap,
+  showFavoritesOnly,
+  currentWallpaperImageId,
+  galleryViewRef,
+  removeFromUiCacheByIds,
+  loadImages,
+  loadMoreImages
+);
 
 // 插件图标映射，存储每个插件的图标 URL
 const pluginIcons = ref<Record<string, string>>({});
@@ -416,15 +454,6 @@ const loadPluginIcons = async () => {
 
 
 
-const handleOpenImagePath = async (localPath: string) => {
-  try {
-    await invoke("open_file_path", { filePath: localPath });
-  } catch (error) {
-    console.error("打开文件失败:", error);
-    ElMessage.error("打开文件失败");
-  }
-};
-
 const handleImageDblClick = async (image: ImageInfo) => {
   // 预览功能已下沉到 ImageGrid，这里只处理 open 模式
   if (imageClickAction.value === 'open') {
@@ -453,42 +482,12 @@ const handleGridContextCommand = async (payload: { command: string; image: Image
       }
       break;
     case 'favorite':
-      try {
-        // 仅支持普通（单张）收藏
-        if (isMultiSelect) {
-          ElMessage.warning("收藏仅支持单张图片");
-          return;
-        }
-
-        const newFavorite = !(image.favorite ?? false);
-        await invoke("toggle_image_favorite", {
-          imageId: image.id,
-          favorite: newFavorite,
-        });
-
-        ElMessage.success(newFavorite ? "已收藏" : "已取消收藏");
-
-        // 清除收藏画册的缓存，确保下次查看时重新加载
-        delete albumStore.albumImages[FAVORITE_ALBUM_ID.value];
-        delete albumStore.albumPreviews[FAVORITE_ALBUM_ID.value];
-        // 更新收藏画册计数
-        const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
-        albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(0, currentCount + (newFavorite ? 1 : -1));
-
-        // 发出收藏状态变化事件，通知其他页面（如收藏画册详情页）更新
-        window.dispatchEvent(
-          new CustomEvent("favorite-status-changed", {
-            detail: { imageIds: [image.id], favorite: newFavorite },
-          })
-        );
-
-        // 就地更新图片的收藏状态，避免重新加载导致"加载更多"的图片消失
-        applyFavoriteChangeToGalleryCache([image.id], newFavorite);
-        galleryViewRef.value?.clearSelection?.();
-      } catch (error) {
-        console.error("切换收藏状态失败:", error);
-        ElMessage.error("操作失败");
+      // 仅支持普通（单张）收藏
+      if (isMultiSelect) {
+        ElMessage.warning("收藏仅支持单张图片");
+        return;
       }
+      await toggleFavorite(image);
       break;
     case 'copy':
       // 仅当多选时右键多选的其中一个时才能批量操作
@@ -527,107 +526,14 @@ const handleGridContextCommand = async (payload: { command: string; image: Image
         ElMessage.warning("请右键点击已选中的图片");
         return;
       }
-
-      try {
-        if (isMultiSelect) {
-          // 多选：创建"桌面画册x"，添加到画册，开启轮播
-          // 1. 找到下一个可用的"桌面画册x"名称
-          await albumStore.loadAlbums();
-          let albumName = "桌面画册1";
-          let counter = 1;
-          while (albums.value.some(a => a.name === albumName)) {
-            counter++;
-            albumName = `桌面画册${counter}`;
-          }
-
-          // 2. 创建画册
-          const createdAlbum = await albumStore.createAlbum(albumName);
-
-          // 3. 将选中的图片添加到画册
-          const imageIds = imagesToProcess.map(img => img.id);
-          await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
-
-          // 4. 获取当前设置
-          const currentSettings = await invoke<{
-            wallpaperRotationEnabled: boolean;
-            wallpaperRotationAlbumId: string | null;
-          }>("get_settings");
-
-          // 5. 如果轮播未开启，开启它
-          if (!currentSettings.wallpaperRotationEnabled) {
-            await invoke("set_wallpaper_rotation_enabled", { enabled: true });
-          }
-
-          // 6. 设置轮播画册为新创建的画册
-          await invoke("set_wallpaper_rotation_album_id", { albumId: createdAlbum.id });
-
-          ElMessage.success(`已开启轮播：画册「${albumName}」（${imageIds.length} 张）`);
-        } else {
-          // 单选：直接设置壁纸
-          await invoke("set_wallpaper_by_image_id", { imageId: image.id });
-          currentWallpaperImageId.value = image.id;
-          ElMessage.success("壁纸设置成功");
-        }
-
-        galleryViewRef.value?.clearSelection?.();
-      } catch (error) {
-        console.error("设置壁纸失败:", error);
-        ElMessage.error("设置壁纸失败: " + (error as Error).message);
-      }
+      await setWallpaper(imagesToProcess);
       break;
     case 'exportToWEAuto':
       // 仅单选时支持
       if (isMultiSelect) {
         return;
       }
-      try {
-        // 让用户输入工程名称
-        const defaultName = `Kabegame_${image.id}`;
-
-        const { value: projectName } = await ElMessageBox.prompt(
-          `请输入 WE 工程名称（留空使用默认名称）`,
-          "导出到 Wallpaper Engine",
-          {
-            confirmButtonText: "导出",
-            cancelButtonText: "取消",
-            inputPlaceholder: defaultName,
-            inputValidator: (value) => {
-              if (value && value.trim().length > 64) {
-                return "名称不能超过 64 个字符";
-              }
-              return true;
-            },
-          }
-        ).catch(() => ({ value: null })); // 用户取消时返回 null
-
-        if (projectName === null) break; // 用户取消
-
-        const mp = await invoke<string | null>("get_wallpaper_engine_myprojects_dir");
-        if (!mp) {
-          ElMessage.warning("未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择");
-          break;
-        }
-
-        // 使用用户输入的名称，如果为空则使用默认名称
-        const finalName = projectName?.trim() || defaultName;
-
-        const res = await invoke<{ projectDir: string; imageCount: number }>(
-          "export_images_to_we_project",
-          {
-            imagePaths: [image.localPath],
-            title: finalName,
-            outputParentDir: mp,
-            options: null,
-          }
-        );
-        ElMessage.success(`已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`);
-        await invoke("open_file_path", { filePath: res.projectDir });
-      } catch (error) {
-        if (error !== "cancel") {
-          console.error("导出 Wallpaper Engine 工程失败:", error);
-          ElMessage.error("导出失败");
-        }
-      }
+      await exportToWallpaperEngine(image);
       break;
     case 'addToAlbum':
       // 仅当多选时右键多选的其中一个时才能批量操作
@@ -647,250 +553,25 @@ const handleGridContextCommand = async (payload: { command: string; image: Image
   }
 };
 
-const applyFavoriteChangeToGalleryCache = (imageIds: string[], favorite: boolean) => {
-  if (!imageIds || imageIds.length === 0) return;
-  const idSet = new Set(imageIds);
-
-  // “仅收藏”模式下，取消收藏应直接从列表移除
-  if (showFavoritesOnly.value && !favorite) {
-    displayedImages.value = displayedImages.value.filter((img) => !idSet.has(img.id));
-    crawlerStore.images = [...displayedImages.value];
-    galleryViewRef.value?.clearSelection?.();
-    return;
-  }
-
-  // 就地更新 favorite 字段（避免全量刷新）
-  let changed = false;
-  const next = displayedImages.value.map((img) => {
-    if (!idSet.has(img.id)) return img;
-    if ((img.favorite ?? false) === favorite) return img;
-    changed = true;
-    return { ...img, favorite };
-  });
-  if (changed) {
-    displayedImages.value = next;
-    crawlerStore.images = [...next];
-  }
-};
-
-// 批量移除图片（只删除缩略图和数据库记录，不删除原图）
-const handleBatchRemove = async (imagesToProcess: ImageInfo[]) => {
-  if (imagesToProcess.length === 0) return;
-
-  try {
-    const count = imagesToProcess.length;
-    const includesCurrent =
-      !!currentWallpaperImageId.value &&
-      imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
-    const currentHint = includesCurrent
-      ? `\n\n注意：其中包含当前壁纸。移除/删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。`
-      : "";
-    await ElMessageBox.confirm(
-      `将从画廊移除，但保留原图文件。是否继续移除${count > 1 ? `这 ${count} 张图片` : '这张图片'}？${currentHint}`,
-      "确认移除",
-      { type: "warning" }
-    );
-
-    for (const img of imagesToProcess) {
-      await crawlerStore.removeImage(img.id);
-    }
-    if (includesCurrent) {
-      currentWallpaperImageId.value = null;
-    }
-
-    // 从 displayedImages 中移除已移除的图片
-    displayedImages.value = displayedImages.value.filter(img => !imagesToProcess.some(remImg => remImg.id === img.id));
-
-    // 清理 imageSrcMap 和 Blob URL
-    for (const img of imagesToProcess) {
-      const imageData = imageSrcMap.value[img.id];
-      if (imageData) {
-        if (imageData.thumbnail) {
-          URL.revokeObjectURL(imageData.thumbnail);
-        }
-        if (imageData.original) {
-          URL.revokeObjectURL(imageData.original);
-        }
-        delete imageSrcMap.value[img.id];
-      }
-    }
-
-    galleryViewRef.value?.clearSelection?.();
-
-    ElMessage.success(`${count > 1 ? `已移除 ${count} 张图片` : '已移除图片'}`);
-  } catch (error) {
-    if (error !== "cancel") {
-      console.error("移除图片失败:", error);
-      ElMessage.error("移除失败");
-    }
-  }
-};
-
-// 批量删除图片
-const handleBatchDelete = async (imagesToProcess: ImageInfo[]) => {
-  if (imagesToProcess.length === 0) return;
-
-  try {
-    const count = imagesToProcess.length;
-    const includesCurrent =
-      !!currentWallpaperImageId.value &&
-      imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
-    const currentHint = includesCurrent
-      ? `\n\n注意：其中包含当前壁纸。移除/删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。`
-      : "";
-    await ElMessageBox.confirm(
-      `删除后将同时移除原图、缩略图及数据库记录，且无法恢复。是否继续删除${count > 1 ? `这 ${count} 张图片` : '这张图片'}？${currentHint}`,
-      "确认删除",
-      { type: "warning" }
-    );
-
-    for (const img of imagesToProcess) {
-      await crawlerStore.deleteImage(img.id);
-    }
-    if (includesCurrent) {
-      currentWallpaperImageId.value = null;
-    }
-
-    // 从 displayedImages 中移除已删除的图片
-    displayedImages.value = displayedImages.value.filter(img => !imagesToProcess.some(delImg => delImg.id === img.id));
-
-    // 清理 imageSrcMap 和 Blob URL
-    for (const img of imagesToProcess) {
-      const imageData = imageSrcMap.value[img.id];
-      if (imageData) {
-        if (imageData.thumbnail) {
-          URL.revokeObjectURL(imageData.thumbnail);
-        }
-        if (imageData.original) {
-          URL.revokeObjectURL(imageData.original);
-        }
-      }
-      const { [img.id]: _, ...rest } = imageSrcMap.value;
-      imageSrcMap.value = rest;
-    }
-
-    ElMessage.success(`已删除 ${count} 张图片`);
-    galleryViewRef.value?.clearSelection?.();
-  } catch (error) {
-    if (error !== "cancel") {
-      ElMessage.error("删除失败");
-    }
-  }
-};
-
 // removeFromUiCacheByIds 已移至 useGalleryImages composable
 
-// 画廊按 hash 去重（remove 而非 delete）
-const handleDedupeByHash = async () => {
+// 画廊按 hash 去重（打开对话框）
+const handleDedupeByHash = () => {
   if (dedupeLoading.value) return;
-
-  try {
-    await ElMessageBox.confirm(
-      "去掉所有重复图片：仅从画廊移除，不会删除源文件。是否继续？",
-      "确认去重",
-      { type: "warning" }
-    );
-
-    dedupeProcessing.value = true;
-
-    // 若当前有下载任务在跑，开启“强制去重模式”，直到下载队列空闲才自动结束
-    const startRes = await invoke<{ willWaitUntilDownloadsEnd: boolean }>(
-      "start_force_deduplicate"
-    );
-    dedupeWaitingDownloads.value = !!startRes?.willWaitUntilDownloadsEnd;
-
-    const res = await invoke<{ removed: number; removedIds: string[] }>(
-      "dedupe_gallery_by_hash"
-    );
-    const removedIds = res?.removedIds ?? [];
-
-    if (removedIds.length > 0) {
-      removeFromUiCacheByIds(removedIds);
-      crawlerStore.applyRemovedImageIds(removedIds);
-    }
-
-    ElMessage.success(`已清理 ${res?.removed ?? removedIds.length} 个重复项（仅从画廊移除，源文件已保留）`);
-
-    // 若当前已加载列表被清空，则自动刷新一次（避免停留在空状态）
-    if (displayedImages.value.length === 0) {
-      await loadImages(true);
-      if (displayedImages.value.length === 0 && crawlerStore.hasMore) {
-        await loadMoreImages();
-      }
-    }
-  } catch (error) {
-    if (error !== "cancel") {
-      console.error("去重失败:", error);
-      ElMessage.error("去重失败");
-      // 兜底：出错时关闭强制去重，避免一直影响后续下载
-      try {
-        await invoke("stop_force_deduplicate");
-      } catch {
-        // ignore
-      }
-      dedupeWaitingDownloads.value = false;
-    }
-  } finally {
-    dedupeProcessing.value = false;
-  }
+  dedupeDeleteFiles.value = false; // 默认不删除文件
+  showDedupeDialog.value = true;
 };
 
-const handleCopyImage = async (image: ImageInfo) => {
-  try {
-    // 获取图片的 Blob URL
-    const imageUrl = imageSrcMap.value[image.id]?.original || imageSrcMap.value[image.id]?.thumbnail;
-    if (!imageUrl) {
-      ElMessage.warning("图片尚未加载完成，请稍后再试");
-      return;
-    }
-
-    // 从 Blob URL 获取 Blob
-    const response = await fetch(imageUrl);
-    let blob = await response.blob();
-
-    // 如果 blob 类型是 image/jpeg，转换为 PNG（因为某些浏览器不支持 image/jpeg）
-    if (blob.type === 'image/jpeg' || blob.type === 'image/jpg') {
-      // 创建一个 canvas 来转换图片格式
-      const img = new Image();
-      img.src = imageUrl;
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = reject;
-      });
-
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        throw new Error('无法创建 canvas context');
-      }
-      ctx.drawImage(img, 0, 0);
-
-      // 将 canvas 转换为 PNG blob
-      blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob((blob) => {
-          if (blob) {
-            resolve(blob);
-          } else {
-            reject(new Error('转换图片失败'));
-          }
-        }, 'image/png');
-      });
-    }
-
-    // 使用 Clipboard API 复制图片
-    await navigator.clipboard.write([
-      new ClipboardItem({
-        [blob.type]: blob
-      })
-    ]);
-
-    ElMessage.success("图片已复制到剪贴板");
-  } catch (error) {
-    console.error("复制图片失败:", error);
-    ElMessage.error("复制图片失败");
-  }
+// 确认去重（调用 composable 中的函数）
+const confirmDedupeByHash = async () => {
+  showDedupeDialog.value = false;
+  await confirmDedupeByHashFromComposable(
+    dedupeProcessing,
+    dedupeWaitingDownloads,
+    dedupeDeleteFiles.value,
+    startDedupeDelay,
+    finishDedupeDelay
+  );
 };
 
 
@@ -958,121 +639,6 @@ const handleImageReorder = async (newOrder: ImageInfo[]) => {
   }
 };
 
-// 处理箭头移动
-const handleImageMove = async (image: ImageInfo, direction: "up" | "down" | "left" | "right") => {
-  const currentIndex = displayedImages.value.findIndex(img => img.id === image.id);
-  if (currentIndex === -1) return;
-
-  // 计算实际列数（用于计算上下移动的目标）
-  let columns = galleryColumns.value;
-  if (columns === 0) {
-    // 对于 auto-fill，从 DOM 计算实际列数
-    const gridElement = document.querySelector('.image-grid');
-    if (gridElement && gridElement.children.length > 0) {
-      // 收集所有元素的 top 位置，找出第一行的 top 值
-      const positions: Array<{ top: number; index: number }> = [];
-      for (let i = 0; i < gridElement.children.length; i++) {
-        const child = gridElement.children[i] as HTMLElement;
-        const rect = child.getBoundingClientRect();
-        positions.push({ top: rect.top, index: i });
-      }
-
-      // 找到第一行的 top 值（最小的 top 值）
-      if (positions.length > 0) {
-        const firstRowTop = Math.min(...positions.map(p => p.top));
-        // 计算第一行有多少个元素（top 值相近的元素）
-        const firstRowCount = positions.filter(p => Math.abs(p.top - firstRowTop) < 10).length;
-        if (firstRowCount > 0) {
-          columns = firstRowCount;
-        }
-      }
-
-      // 如果还是计算失败，使用第一个元素的方法作为回退
-      if ((columns === 0 || columns === 1) && gridElement.firstElementChild) {
-        const firstChild = gridElement.firstElementChild as HTMLElement;
-        const firstRect = firstChild.getBoundingClientRect();
-        let cols = 1;
-        // 遍历所有子元素，找到有多少个和第一个元素在同一行
-        for (let i = 1; i < gridElement.children.length; i++) {
-          const child = gridElement.children[i] as HTMLElement;
-          const childRect = child.getBoundingClientRect();
-          // 使用更宽松的阈值
-          if (Math.abs(childRect.top - firstRect.top) < 15) {
-            cols++;
-          } else {
-            break; // 遇到下一行就停止
-          }
-        }
-        if (cols > columns) {
-          columns = cols;
-        }
-      }
-    }
-
-    // 最后的回退：如果还是计算失败，使用估算值
-    if (columns === 0 || columns === 1) {
-      const estimatedCols = Math.ceil(Math.sqrt(displayedImages.value.length));
-      if (estimatedCols > 1 && displayedImages.value.length > estimatedCols) {
-        columns = estimatedCols;
-      } else if (displayedImages.value.length > 1) {
-        // 如果有多张图片，至少有2列
-        columns = Math.min(4, Math.max(2, Math.floor(displayedImages.value.length / 2)));
-      } else {
-        columns = 1;
-      }
-    }
-  }
-
-  let targetIndex = -1;
-
-  switch (direction) {
-    case "up":
-      // 向上移动：和上一行的同一列交换
-      // 当前列号 = currentIndex % columns
-      // 上一行同一列 = (Math.floor(currentIndex / columns) - 1) * columns + (currentIndex % columns)
-      // 简化：currentIndex - columns
-      targetIndex = currentIndex - columns;
-      break;
-    case "down":
-      // 向下移动：和下一行的同一列交换
-      // 当前列号 = currentIndex % columns
-      // 下一行同一列 = (Math.floor(currentIndex / columns) + 1) * columns + (currentIndex % columns)
-      // 简化：currentIndex + columns
-      targetIndex = currentIndex + columns;
-      break;
-    case "left":
-      targetIndex = currentIndex - 1;
-      break;
-    case "right":
-      targetIndex = currentIndex + 1;
-      break;
-  }
-
-  // 检查目标索引是否有效
-  if (targetIndex < 0 || targetIndex >= displayedImages.value.length) {
-    return;
-  }
-
-  // 验证上下移动时是否在同一列
-  if (direction === "up" || direction === "down") {
-    const currentCol = currentIndex % columns;
-    const targetCol = targetIndex % columns;
-    if (currentCol !== targetCol) {
-      // 如果列号不匹配，说明计算错误，不执行交换
-      console.warn(`列号不匹配: currentCol=${currentCol}, targetCol=${targetCol}, currentIndex=${currentIndex}, targetIndex=${targetIndex}, columns=${columns}`);
-      return;
-    }
-  }
-
-  // 创建新的顺序数组：交换两个位置
-  const newOrder = [...displayedImages.value];
-  const temp = newOrder[currentIndex];
-  newOrder[currentIndex] = newOrder[targetIndex];
-  newOrder[targetIndex] = temp;
-
-  // 调用 reorder 处理函数
-  await handleImageReorder(newOrder);
-};
 
 // 监听图片列表变化，加载图片 URL
 // 监听整个数组，但使用 shallow 模式减少深度追踪
@@ -1165,6 +731,7 @@ const loadSettingsExtended = async () => {
 };
 
 onMounted(async () => {
+  finishDedupeDelay(); // 初始化为不加载状态
   await loadSettingsExtended();
   try {
     currentWallpaperImageId.value = await invoke<string | null>("get_current_wallpaper_image_id");
@@ -1223,18 +790,10 @@ onMounted(async () => {
 
   // 监听图片添加事件，实时同步画廊（仅增量刷新，避免全量图片重新加载）
   const { listen } = await import("@tauri-apps/api/event");
-  let imageAddedRefreshTimeout: ReturnType<typeof setTimeout> | null = null;
   const unlistenImageAdded = await listen<{ taskId: string; imageId: string }>(
     "image-added",
     async () => {
-      // 防抖：500ms 内多次触发只执行一次刷新
-      if (imageAddedRefreshTimeout) {
-        clearTimeout(imageAddedRefreshTimeout);
-      }
-      imageAddedRefreshTimeout = setTimeout(async () => {
-        await refreshLatestIncremental();
-        imageAddedRefreshTimeout = null;
-      }, 200);
+      await refreshLatestIncremental();
     }
   );
 
@@ -1325,7 +884,8 @@ onActivated(async () => {
 // 组件停用时（keep-alive 缓存，但不清理 Blob URL）
 onDeactivated(() => {
   // keep-alive 缓存时不清理 Blob URL，保持图片 URL 有效
-  // 只移除事件监听器（如果需要的话）
+  // 退出调整模式（如果处于调整模式）
+  galleryViewRef.value?.exitReorderMode?.();
 });
 
 // 组件真正卸载时（不是 keep-alive 缓存）

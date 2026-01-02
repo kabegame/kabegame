@@ -86,10 +86,6 @@ const handleCardClick = () => {
   if (isRenaming.value) {
     return;
   }
-  // 空相册不能打开
-  if (props.count === 0) {
-    return;
-  }
   emit('click');
 };
 

@@ -15,7 +15,7 @@ export function useGallerySettings() {
     return (action === "open" ? "open" : "preview") as "preview" | "open";
   });
 
-  const galleryColumns = ref<number>(0); // 0 表示自动（auto-fill），其他值表示固定列数
+  const galleryColumns = ref<number>(5); // 列数，默认 5
   const galleryImageAspectRatioMatchWindow = ref<boolean>(false); // 图片宽高比是否与窗口相同
   const windowAspectRatio = ref<number>(16 / 9); // 窗口宽高比
 
@@ -41,7 +41,8 @@ export function useGallerySettings() {
       await settingsStore.loadAll();
 
       const settings = settingsStore.values;
-      galleryColumns.value = settings.galleryColumns || 0;
+      // 如果没有用户设置值，默认为 5
+      galleryColumns.value = settings.galleryColumns !== undefined ? settings.galleryColumns : 5;
       galleryImageAspectRatioMatchWindow.value = settings.galleryImageAspectRatioMatchWindow || false;
       if (settings.galleryPageSize && settings.galleryPageSize > 0) {
         crawlerStore.setPageSize(settings.galleryPageSize);
@@ -65,20 +66,15 @@ export function useGallerySettings() {
   const adjustColumns = (delta: number) => {
     if (delta > 0) {
       // 增加列数（最大 10 列）
-      if (galleryColumns.value === 0) {
-        // 如果当前是自动，设置为 5 列
-        galleryColumns.value = 5;
-      } else if (galleryColumns.value < 10) {
+      if (galleryColumns.value < 10) {
         galleryColumns.value++;
       }
     } else {
-      // 减少列数（最小 1 列，0 表示自动）
+      // 减少列数（最小 1 列，当列数为 1 时不再减少）
       if (galleryColumns.value > 1) {
         galleryColumns.value--;
-      } else if (galleryColumns.value === 1) {
-        // 从 1 列变为自动
-        galleryColumns.value = 0;
       }
+      // 列数为 1 时不再减少，保持为 1
     }
     // 同步到 store
     settingsStore.values.galleryColumns = galleryColumns.value;

@@ -393,7 +393,7 @@ impl Storage {
     }
 
     /// 确保存在"收藏"画册，如果不存在则创建
-    fn ensure_favorite_album(&self) -> Result<(), String> {
+    pub fn ensure_favorite_album(&self) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         // 检查收藏画册是否存在（使用固定ID）
@@ -1149,13 +1149,16 @@ impl Storage {
         Ok(())
     }
 
-    /// 按 hash 去重：每个 hash 保留 1 条记录，其余仅从画廊移除（不删除原图文件）。
+    /// 按 hash 去重：每个 hash 保留 1 条记录，其余从画廊移除。
+    ///
+    /// 参数：
+    /// - `delete_files`: 为 true 时同时从磁盘删除原图文件；为 false 时仅从画廊和数据库移除记录。
     ///
     /// 规则：
     /// - 优先保留 `favorite=1` 的那张
     /// - 否则保留 `order`（或 `crawled_at`）更大的那张（更“新”）
     /// - 仅处理 `hash != ''` 的记录
-    pub fn dedupe_gallery_by_hash_remove_only(&self) -> Result<DedupeRemoveResult, String> {
+    pub fn dedupe_gallery_by_hash(&self, delete_files: bool) -> Result<DedupeRemoveResult, String> {
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let tx = conn
             .transaction()
@@ -1207,10 +1210,10 @@ impl Storage {
                 continue;
             };
 
-            // 找出要移除的记录（并删除缩略图文件）
+            // 找出要移除的记录（并删除缩略图文件，若 delete_files 为 true 则同时删除原图）
             let mut stmt2 = tx
                 .prepare(
-                    "SELECT id, COALESCE(thumbnail_path, '')
+                    "SELECT id, COALESCE(thumbnail_path, ''), local_path
                      FROM images
                      WHERE hash = ?1 AND id != ?2",
                 )
@@ -1218,12 +1221,16 @@ impl Storage {
 
             let rows = stmt2
                 .query_map(params![hash, keep_id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
                 })
                 .map_err(|e| format!("Failed to query dedupe remove rows: {}", e))?;
 
             for r in rows {
-                let (id, thumb_path) =
+                let (id, thumb_path, local_path) =
                     r.map_err(|e| format!("Failed to read dedupe remove row: {}", e))?;
 
                 // 删除缩略图（忽略错误）
@@ -1234,7 +1241,15 @@ impl Storage {
                     }
                 }
 
-                // 删除映射与记录（不删原图）
+                // 如果需要，删除原图文件
+                if delete_files && !local_path.trim().is_empty() {
+                    let p = PathBuf::from(local_path);
+                    if p.exists() {
+                        let _ = fs::remove_file(p);
+                    }
+                }
+
+                // 删除映射与记录
                 tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id])
                     .map_err(|e| format!("Failed to delete album mapping in dedupe: {}", e))?;
                 tx.execute("DELETE FROM images WHERE id = ?1", params![id])

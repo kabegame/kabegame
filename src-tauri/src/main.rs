@@ -228,7 +228,7 @@ async fn crawl_images_command(
     let images_dir = if let Some(ref dir) = output_dir {
         std::path::PathBuf::from(dir)
     } else {
-        // 优先使用“默认下载目录”，否则回退到应用内置 images 目录
+        // 优先使用"默认下载目录"，否则回退到应用内置 images 目录
         match settings_state
             .get_settings()
             .ok()
@@ -240,8 +240,8 @@ async fn crawl_images_command(
     };
 
     // 如果没有提供用户配置，尝试加载已保存的配置
-    let final_user_config = if let Some(config) = user_config {
-        Some(config)
+    let final_user_config = if let Some(ref config) = user_config {
+        Some(config.clone())
     } else {
         plugin_manager.load_plugin_config(&plugin_id).ok()
     };
@@ -297,12 +297,6 @@ async fn crawl_images_command(
                     eprintln!("[INFO] 跳过重复图片（哈希已存在）: {}", img_data.local_path);
                     continue;
                 }
-            } else {
-                // 哈希计算失败，尝试通过文件路径检查是否已存在
-                if let Ok(Some(_existing)) = storage.find_image_by_path(&img_data.local_path) {
-                    eprintln!("[INFO] 跳过重复图片（路径已存在）: {}", img_data.local_path);
-                    continue;
-                }
             }
         }
 
@@ -323,11 +317,54 @@ async fn crawl_images_command(
             } else {
                 img_data.thumbnail_path.clone()
             },
-            favorite: false,
+            // 如果配置了输出画册，且为收藏画册，则设置 favorite 为 true
+            favorite: if let Some(user_config) = &user_config {
+                if let Some(serde_json::Value::String(album_id)) =
+                    user_config.get("_output_album_id")
+                {
+                    println!("输出画册: {}", album_id);
+                    if album_id == storage::FAVORITE_ALBUM_ID {
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            },
             hash,
             order: Some(crawled_at as i64), // 默认 order = crawled_at（越晚越大）
         };
+        let image_id = image_info.id.clone();
         let _ = storage.add_image(image_info);
+
+        // 如果配置了输出画册，自动添加到画册
+        if let Some(user_config) = &user_config {
+            if let Some(serde_json::Value::String(album_id)) = user_config.get("_output_album_id") {
+                if !album_id.is_empty() {
+                    // 添加图片到画册，记录错误但不中断流程
+                    let image_id_clone = image_id.clone();
+                    match storage.add_images_to_album(album_id, &vec![image_id_clone]) {
+                        Ok(count) => {
+                            if count == 0 {
+                                eprintln!(
+                                    "[WARN] 图片 {} 可能已存在于画册 {} 中",
+                                    image_id, album_id
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[ERROR] 添加图片 {} 到画册 {} 失败: {}",
+                                image_id, album_id, e
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Ok(result)
@@ -507,13 +544,14 @@ struct DedupeGalleryResult {
     removed_ids: Vec<String>,
 }
 
-/// 对画廊按 hash 去重：保留一条记录，其余仅从画廊移除（不删除原图文件）
+/// 对画廊按 hash 去重：保留一条记录，其余移除。可选是否删除磁盘原文件。
 #[tauri::command]
 fn dedupe_gallery_by_hash(
+    delete_files: bool,
     state: tauri::State<Storage>,
     settings: tauri::State<Settings>,
 ) -> Result<DedupeGalleryResult, String> {
-    let res = state.dedupe_gallery_by_hash_remove_only()?;
+    let res = state.dedupe_gallery_by_hash(delete_files)?;
     let s = settings.get_settings().unwrap_or_default();
     if let Some(cur) = s.current_wallpaper_image_id.as_deref() {
         if res.removed_ids.iter().any(|id| id == cur) {

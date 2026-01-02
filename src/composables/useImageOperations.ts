@@ -226,22 +226,17 @@ export function useImageOperations(
     }
   };
 
-  // 画廊按 hash 去重（remove 而非 delete）
-  const handleDedupeByHash = async (
+  // 画廊按 hash 去重确认（实际执行去重逻辑）
+  const confirmDedupeByHash = async (
     dedupeProcessing: Ref<boolean>,
-    dedupeWaitingDownloads: Ref<boolean>
+    dedupeWaitingDownloads: Ref<boolean>,
+    dedupeDeleteFiles: boolean,
+    startDedupeDelay: () => void,
+    finishDedupeDelay: () => void
   ) => {
-    const dedupeLoading = computed(() => dedupeProcessing.value || dedupeWaitingDownloads.value);
-    if (dedupeLoading.value) return;
-
     try {
-      await ElMessageBox.confirm(
-        "去掉所有重复图片：仅从画廊移除，不会删除源文件。是否继续？",
-        "确认去重",
-        { type: "warning" }
-      );
-
       dedupeProcessing.value = true;
+      startDedupeDelay();
 
       // 若当前有下载任务在跑，开启"强制去重模式"，直到下载队列空闲才自动结束
       const startRes = await invoke<{ willWaitUntilDownloadsEnd: boolean }>(
@@ -250,7 +245,8 @@ export function useImageOperations(
       dedupeWaitingDownloads.value = !!startRes?.willWaitUntilDownloadsEnd;
 
       const res = await invoke<{ removed: number; removedIds: string[] }>(
-        "dedupe_gallery_by_hash"
+        "dedupe_gallery_by_hash",
+        { deleteFiles: dedupeDeleteFiles }
       );
       const removedIds = res?.removedIds ?? [];
 
@@ -259,7 +255,7 @@ export function useImageOperations(
         crawlerStore.applyRemovedImageIds(removedIds);
       }
 
-      ElMessage.success(`已清理 ${res?.removed ?? removedIds.length} 个重复项（仅从画廊移除，源文件已保留）`);
+      ElMessage.success(`已清理 ${res?.removed ?? removedIds.length} 个重复项${dedupeDeleteFiles ? "（已从磁盘彻底删除）" : "（仅从画廊移除，源文件已保留）"}`);
 
       // 若当前已加载列表被清空，则自动刷新一次（避免停留在空状态）
       if (displayedImages.value.length === 0) {
@@ -282,6 +278,7 @@ export function useImageOperations(
       }
     } finally {
       dedupeProcessing.value = false;
+      finishDedupeDelay();
     }
   };
 
@@ -427,7 +424,7 @@ export function useImageOperations(
     applyFavoriteChangeToGalleryCache,
     handleBatchRemove,
     handleBatchDelete,
-    handleDedupeByHash,
+    confirmDedupeByHash,
     toggleFavorite,
     setWallpaper,
     exportToWallpaperEngine,

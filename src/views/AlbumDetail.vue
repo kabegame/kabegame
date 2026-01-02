@@ -106,15 +106,16 @@ const blobUrls = new Set<string>();
 const selectedImages = ref<Set<string>>(new Set());
 const albumViewRef = ref<any>(null);
 
-// 画册详情页本地列数（0 表示 auto-fill）
-const albumColumns = ref(0);
+// 画册详情页本地列数
+const albumColumns = ref(5);
 const albumAspectRatio = ref<number | null>(null);
 
 // 监听设置 store 中的变化，实时同步
 watch(
   () => settingsStore.values.galleryColumns,
   (newValue) => {
-    albumColumns.value = newValue || 0;
+    // 如果没有用户设置值，默认为 5
+    albumColumns.value = newValue !== undefined ? newValue : 5;
   }
 );
 
@@ -551,8 +552,8 @@ onMounted(async () => {
   try {
     await loadSettings();
 
-    // 初始化画册列数
-    albumColumns.value = settingsStore.values.galleryColumns || 0;
+    // 初始化画册列数（如果没有用户设置值，默认为 5）
+    albumColumns.value = settingsStore.values.galleryColumns !== undefined ? settingsStore.values.galleryColumns : 5;
 
     // 解析宽高比
     if (settingsStore.values.galleryImageAspectRatio) {

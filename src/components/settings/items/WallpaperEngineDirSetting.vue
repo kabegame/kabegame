@@ -1,15 +1,12 @@
 <template>
   <div class="we-dir-setting">
-    <el-input
-      v-model="localDir"
-      placeholder="用于“导出并自动导入到 WE”（建议选择 WE 安装目录或 projects/myprojects）"
-      clearable
-      :disabled="saving"
-      @clear="handleClear"
-    >
+    <el-input v-model="localDir" placeholder="导入到 WE”（建议选择 WE 安装目录或 projects/myprojects）" clearable :disabled="saving"
+      @clear="handleClear">
       <template #append>
         <el-button :disabled="saving" @click="handleChoose">
-          <el-icon><FolderOpened /></el-icon>
+          <el-icon>
+            <FolderOpened />
+          </el-icon>
           选择
         </el-button>
       </template>
@@ -20,7 +17,9 @@
       <span v-if="myprojectsDir">
         ，当前识别为：
         <el-button text size="small" class="path-button" @click="handleOpenMyprojects">
-          <el-icon><FolderOpened /></el-icon>
+          <el-icon>
+            <FolderOpened />
+          </el-icon>
           <span class="path-text">{{ myprojectsDir }}</span>
         </el-button>
       </span>
@@ -147,5 +146,3 @@ const handleOpenMyprojects = async () => {
   vertical-align: bottom;
 }
 </style>
-
-
