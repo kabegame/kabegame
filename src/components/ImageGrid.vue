@@ -1015,6 +1015,9 @@ onUnmounted(() => {
   /* 为图片悬浮上移效果留出空间，避免被容器截断 */
   padding-top: 6px;
   padding-bottom: 6px;
+  /* 为图片悬浮放大效果留出左右空间，避免在边缘时被裁剪 */
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 /* 列表淡入动画 */

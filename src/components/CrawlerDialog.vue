@@ -145,8 +145,7 @@
 
         <template #footer>
             <el-button @click="visible = false">关闭</el-button>
-            <el-button type="primary" @click="handleStartCrawl" :loading="isCrawling"
-                :disabled="!selectedRunConfigId && !form.pluginId">
+            <el-button type="primary" @click="handleStartCrawl" :disabled="!selectedRunConfigId && !form.pluginId">
                 开始收集
             </el-button>
         </template>
@@ -186,7 +185,6 @@ const visible = computed({
 
 const enabledPlugins = computed(() => pluginStore.plugins.filter((p) => p.enabled));
 const runConfigs = computed(() => crawlerStore.runConfigs);
-const isCrawling = computed(() => crawlerStore.isCrawling);
 const albums = computed(() => albumStore.albums);
 
 // 选择的输出画册ID
@@ -348,6 +346,13 @@ watch(visible, async (open) => {
         await pluginStore.loadPlugins();
     } catch (e) {
         console.debug("导入弹窗打开时刷新已安装源失败（忽略）：", e);
+    }
+
+    // 刷新画册列表（用于输出画册下拉列表）
+    try {
+        await albumStore.loadAlbums();
+    } catch (e) {
+        console.debug("导入弹窗打开时刷新画册列表失败（忽略）：", e);
     }
 
     if (form.value.pluginId) {

@@ -27,16 +27,18 @@ defineProps<{
 
 <style scoped lang="scss">
 .setting-row {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: 3fr 7fr;
+    align-items: center;
     gap: 16px;
     padding: 10px 0;
 }
 
 .setting-meta {
-    // flex-shrink: 1;
-    // min-width: 180px;
+    // grid column 1: min 40% (2/5), max 300px
+    justify-self: end;
+    display: flex;
+    justify-content: flex-end;
 }
 
 .label {
@@ -56,15 +58,14 @@ defineProps<{
 }
 
 .setting-control {
-    // flex-shrink: 0;
-    // min-width: 260px;
+    // grid column 2: takes remaining space
     display: flex;
-    justify-content: flex-end;
+    justify-content: flex-start;
 }
 
 @media (max-width: 720px) {
     .setting-row {
-        flex-direction: column;
+        grid-template-columns: 1fr;
     }
 
     .setting-meta {

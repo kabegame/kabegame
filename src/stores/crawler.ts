@@ -8,6 +8,7 @@ export interface CrawlTask {
   url: string;
   outputDir?: string;
   userConfig?: Record<string, any>;
+  outputAlbumId?: string; // 输出画册ID，如果指定则下载完成后自动添加到画册
   status: "pending" | "running" | "completed" | "failed";
   progress: number;
   totalImages: number;
@@ -374,6 +375,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
         taskId: task.id,
         outputDir: task.outputDir,
         userConfig: task.userConfig,
+        outputAlbumId: task.outputAlbumId,
       });
 
       console.log("爬取任务完成:", result);

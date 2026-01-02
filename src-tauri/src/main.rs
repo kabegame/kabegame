@@ -1,10 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Read;
 use tauri::{Emitter, Manager};
 
 #[cfg(target_os = "windows")]
@@ -23,7 +20,6 @@ const CF_HDROP_FORMAT: u32 = 15; // Clipboard format for file drop
 mod app_paths;
 mod crawler;
 mod plugin;
-mod runtime_flags;
 mod settings;
 mod storage;
 mod tray;
@@ -35,7 +31,6 @@ use plugin::{
     BrowserPlugin, ImportPreview, Plugin, PluginDetail, PluginManager, PluginSource,
     StorePluginResolved, StoreSourceValidationResult,
 };
-use runtime_flags::{ForceDedupeStartResult, RuntimeFlags};
 use settings::{AppSettings, Settings, WindowState};
 use std::fs;
 use storage::{Album, ImageInfo, PaginatedImages, RunConfig, Storage, TaskInfo};
@@ -214,6 +209,7 @@ async fn crawl_images_command(
     task_id: String,
     output_dir: Option<String>,
     user_config: Option<HashMap<String, serde_json::Value>>, // 用户配置的变量
+    output_album_id: Option<String>, // 输出画册ID，如果指定则下载完成后自动添加到画册
     app: tauri::AppHandle,
 ) -> Result<CrawlResult, String> {
     let plugin_manager = app.state::<PluginManager>();
@@ -253,6 +249,7 @@ async fn crawl_images_command(
         images_dir,
         app.clone(),
         final_user_config,
+        output_album_id.clone(),
     )
     .await
     .map_err(|e| {
@@ -267,105 +264,8 @@ async fn crawl_images_command(
         e
     })?;
 
-    // 获取设置，检查是否启用自动去重
-    let settings_state = app.state::<Settings>();
-    let auto_deduplicate = settings_state
-        .get_settings()
-        .ok()
-        .map(|s| s.auto_deduplicate)
-        .unwrap_or(false);
-
-    // 运行时强制去重（手动去重期间无视设置）
-    let force_deduplicate = app
-        .try_state::<RuntimeFlags>()
-        .map(|f| f.force_deduplicate())
-        .unwrap_or(false);
-
-    // 保存图片元数据到全局 store，关联 task_id
-    for img_data in &result.images {
-        let hash =
-            compute_file_hash(std::path::Path::new(&img_data.local_path)).unwrap_or_else(|e| {
-                eprintln!("[WARN] 计算文件哈希失败: {} - {}", img_data.local_path, e);
-                String::new()
-            });
-
-        // 自动/强制去重：检查哈希是否已存在
-        if auto_deduplicate || force_deduplicate {
-            if !hash.is_empty() {
-                if let Ok(Some(_existing)) = storage.find_image_by_hash(&hash) {
-                    // 哈希已存在，跳过添加
-                    eprintln!("[INFO] 跳过重复图片（哈希已存在）: {}", img_data.local_path);
-                    continue;
-                }
-            }
-        }
-
-        let crawled_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let image_info = ImageInfo {
-            id: uuid::Uuid::new_v4().to_string(),
-            url: img_data.url.clone(),
-            local_path: img_data.local_path.clone(),
-            plugin_id: plugin_id.clone(),
-            task_id: Some(task_id.clone()),
-            crawled_at,
-            metadata: img_data.metadata.clone(),
-            thumbnail_path: if img_data.thumbnail_path.trim().is_empty() {
-                img_data.local_path.clone()
-            } else {
-                img_data.thumbnail_path.clone()
-            },
-            // 如果配置了输出画册，且为收藏画册，则设置 favorite 为 true
-            favorite: if let Some(user_config) = &user_config {
-                if let Some(serde_json::Value::String(album_id)) =
-                    user_config.get("_output_album_id")
-                {
-                    println!("输出画册: {}", album_id);
-                    if album_id == storage::FAVORITE_ALBUM_ID {
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            } else {
-                false
-            },
-            hash,
-            order: Some(crawled_at as i64), // 默认 order = crawled_at（越晚越大）
-        };
-        let image_id = image_info.id.clone();
-        let _ = storage.add_image(image_info);
-
-        // 如果配置了输出画册，自动添加到画册
-        if let Some(user_config) = &user_config {
-            if let Some(serde_json::Value::String(album_id)) = user_config.get("_output_album_id") {
-                if !album_id.is_empty() {
-                    // 添加图片到画册，记录错误但不中断流程
-                    let image_id_clone = image_id.clone();
-                    match storage.add_images_to_album(album_id, &vec![image_id_clone]) {
-                        Ok(count) => {
-                            if count == 0 {
-                                eprintln!(
-                                    "[WARN] 图片 {} 可能已存在于画册 {} 中",
-                                    image_id, album_id
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "[ERROR] 添加图片 {} 到画册 {} 失败: {}",
-                                image_id, album_id, e
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // 注意：图片通过异步下载队列处理，下载完成时会在 crawler/mod.rs 中应用去重逻辑
+    // result.images 始终为空（这是特性，不是 bug），因此这里不需要处理图片列表
 
     Ok(result)
 }
@@ -485,22 +385,6 @@ fn update_albums_order(
     state.update_albums_order(&album_orders)
 }
 
-fn compute_file_hash(path: &std::path::Path) -> Result<String, String> {
-    let mut file = File::open(path).map_err(|e| format!("Failed to open file for hash: {}", e))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 8192];
-    loop {
-        let n = file
-            .read(&mut buffer)
-            .map_err(|e| format!("Failed to read file for hash: {}", e))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buffer[..n]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
 #[tauri::command]
 fn get_images_count(
     plugin_id: Option<String>,
@@ -562,43 +446,6 @@ fn dedupe_gallery_by_hash(
         removed: res.removed,
         removed_ids: res.removed_ids,
     })
-}
-
-/// 开启“强制去重模式”。若当前有下载任务在跑，则会保持到下载队列空闲时自动关闭并通知前端。
-#[tauri::command]
-fn start_force_deduplicate(
-    flags: tauri::State<RuntimeFlags>,
-    download_queue: tauri::State<crawler::DownloadQueue>,
-) -> Result<ForceDedupeStartResult, String> {
-    // 先开启
-    flags.set_force_deduplicate(true);
-    flags.set_force_deduplicate_wait_until_idle(true);
-
-    // 判断是否需要等待下载结束
-    let queue_size = download_queue.get_queue_size().unwrap_or(0);
-    let active = download_queue
-        .get_active_downloads()
-        .map(|v| v.len())
-        .unwrap_or(0);
-    let will_wait = queue_size > 0 || active > 0;
-
-    // 如果当前没有任何下载，直接关闭等待（也避免前端卡 loading）
-    if !will_wait {
-        flags.set_force_deduplicate(false);
-        flags.set_force_deduplicate_wait_until_idle(false);
-    }
-
-    Ok(ForceDedupeStartResult {
-        will_wait_until_downloads_end: will_wait,
-    })
-}
-
-/// 主动关闭“强制去重模式”（兜底/调试用）
-#[tauri::command]
-fn stop_force_deduplicate(flags: tauri::State<RuntimeFlags>) -> Result<(), String> {
-    flags.set_force_deduplicate(false);
-    flags.set_force_deduplicate_wait_until_idle(false);
-    Ok(())
 }
 
 // 清理应用数据（仅用户数据，不包括应用本身）
@@ -2109,7 +1956,6 @@ fn main() {
             app.manage(settings);
 
             // 运行时开关（不落盘）
-            app.manage(RuntimeFlags::default());
 
             // 恢复窗口状态（如果不在清理数据模式）
             if !is_cleaning_data {
@@ -2245,8 +2091,6 @@ fn main() {
             delete_image,
             remove_image,
             dedupe_gallery_by_hash,
-            start_force_deduplicate,
-            stop_force_deduplicate,
             toggle_image_favorite,
             update_images_order,
             update_album_images_order,

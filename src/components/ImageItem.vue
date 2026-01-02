@@ -263,7 +263,7 @@ const handleWrapperClick = (event?: MouseEvent) => {
   emit("click", event);
 };
 
-onUnmounted(() => {
+    onUnmounted(() => {
   if (longPressTimer.value) {
     clearTimeout(longPressTimer.value);
     longPressTimer.value = null;

@@ -1,6 +1,6 @@
 <template>
   <div class="we-dir-setting">
-    <el-input v-model="localDir" placeholder="导入到 WE”（建议选择 WE 安装目录或 projects/myprojects）" clearable :disabled="saving"
+    <el-input v-model="localDir" placeholder="导入到 WE（建议选择 WE 安装目录或 projects/myprojects）" clearable :disabled="saving"
       @clear="handleClear">
       <template #append>
         <el-button :disabled="saving" @click="handleChoose">

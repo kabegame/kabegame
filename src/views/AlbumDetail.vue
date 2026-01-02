@@ -515,8 +515,10 @@ const handleImageMenuCommand = async (command: string) => {
 
 // 初始化/刷新画册数据
 const initAlbum = async (newAlbumId: string) => {
-  // 如果是同一个画册，不重复加载
-  if (albumId.value === newAlbumId && images.value.length > 0) {
+  // 如果是同一个画册，检查是否需要重新加载
+  // 如果 store 中没有缓存（可能被刷新清除了），即使画册ID相同也要重新加载
+  const hasCache = !!albumStore.albumImages[newAlbumId];
+  if (albumId.value === newAlbumId && images.value.length > 0 && hasCache) {
     return;
   }
 
@@ -534,6 +536,9 @@ const initAlbum = async (newAlbumId: string) => {
   await albumStore.loadAlbums();
   const found = albumStore.albums.find((a) => a.id === newAlbumId);
   albumName.value = found?.name || "画册";
+
+  // 清除store中的缓存，强制重新加载
+  delete albumStore.albumImages[newAlbumId];
   await loadAlbum();
 };
 
@@ -642,6 +647,70 @@ onMounted(async () => {
 
   window.addEventListener("favorite-status-changed", favoriteChangedHandler);
   (window as any).__albumDetailFavoriteHandler = favoriteChangedHandler;
+
+  // 监听图片删除事件（来自画廊等页面的删除操作）
+  const imagesDeletedHandler = ((event: Event) => {
+    const ce = event as CustomEvent<{ imageIds: string[] }>;
+    const detail = ce.detail;
+    if (!detail || !Array.isArray(detail.imageIds)) return;
+
+    // 从列表中移除已删除的图片
+    const idsToRemove = new Set(detail.imageIds);
+    const beforeCount = images.value.length;
+    images.value = images.value.filter((img) => !idsToRemove.has(img.id));
+
+    // 如果有图片被移除，清理对应的 Blob URL 和 imageSrcMap
+    if (images.value.length < beforeCount) {
+      for (const id of idsToRemove) {
+        const data = imageSrcMap.value[id];
+        if (data?.thumbnail) {
+          URL.revokeObjectURL(data.thumbnail);
+          blobUrls.delete(data.thumbnail);
+        }
+        if (data?.original) {
+          URL.revokeObjectURL(data.original);
+          blobUrls.delete(data.original);
+        }
+        delete imageSrcMap.value[id];
+        selectedImages.value.delete(id);
+      }
+    }
+  }) as EventListener;
+
+  window.addEventListener("images-deleted", imagesDeletedHandler);
+  (window as any).__albumDetailImagesDeletedHandler = imagesDeletedHandler;
+
+  // 监听图片移除事件（来自画廊等页面的移除操作）
+  const imagesRemovedHandler = ((event: Event) => {
+    const ce = event as CustomEvent<{ imageIds: string[] }>;
+    const detail = ce.detail;
+    if (!detail || !Array.isArray(detail.imageIds)) return;
+
+    // 从列表中移除已移除的图片
+    const idsToRemove = new Set(detail.imageIds);
+    const beforeCount = images.value.length;
+    images.value = images.value.filter((img) => !idsToRemove.has(img.id));
+
+    // 如果有图片被移除，清理对应的 Blob URL 和 imageSrcMap
+    if (images.value.length < beforeCount) {
+      for (const id of idsToRemove) {
+        const data = imageSrcMap.value[id];
+        if (data?.thumbnail) {
+          URL.revokeObjectURL(data.thumbnail);
+          blobUrls.delete(data.thumbnail);
+        }
+        if (data?.original) {
+          URL.revokeObjectURL(data.original);
+          blobUrls.delete(data.original);
+        }
+        delete imageSrcMap.value[id];
+        selectedImages.value.delete(id);
+      }
+    }
+  }) as EventListener;
+
+  window.addEventListener("images-removed", imagesRemovedHandler);
+  (window as any).__albumDetailImagesRemovedHandler = imagesRemovedHandler;
 });
 
 // 组件从缓存激活时检查是否需要刷新
@@ -828,10 +897,24 @@ onBeforeUnmount(() => {
   blobUrls.clear();
 
   // 移除收藏状态变化监听
-  const handler = (window as any).__albumDetailFavoriteHandler;
-  if (handler) {
-    window.removeEventListener("favorite-status-changed", handler);
+  const favoriteHandler = (window as any).__albumDetailFavoriteHandler;
+  if (favoriteHandler) {
+    window.removeEventListener("favorite-status-changed", favoriteHandler);
     delete (window as any).__albumDetailFavoriteHandler;
+  }
+
+  // 移除图片删除事件监听
+  const deletedHandler = (window as any).__albumDetailImagesDeletedHandler;
+  if (deletedHandler) {
+    window.removeEventListener("images-deleted", deletedHandler);
+    delete (window as any).__albumDetailImagesDeletedHandler;
+  }
+
+  // 移除图片移除事件监听
+  const removedHandler = (window as any).__albumDetailImagesRemovedHandler;
+  if (removedHandler) {
+    window.removeEventListener("images-removed", removedHandler);
+    delete (window as any).__albumDetailImagesRemovedHandler;
   }
 });
 </script>

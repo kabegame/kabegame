@@ -16,6 +16,7 @@ pub fn register_crawler_functions(
     plugin_id: &str,
     task_id: &str,
     current_progress: Arc<Mutex<f64>>,
+    output_album_id: Option<String>,
 ) -> Result<(), String> {
     let stack = Arc::clone(page_stack);
 
@@ -691,6 +692,7 @@ pub fn register_crawler_functions(
     let app_handle = app.clone();
     let plugin_id = plugin_id.to_string();
     let task_id_for_download = task_id.to_string();
+    let output_album_id_for_download = output_album_id.clone();
     engine.register_fn(
         "download_image",
         move |url: &str| -> Result<bool, Box<rhai::EvalAltResult>> {
@@ -788,6 +790,7 @@ pub fn register_crawler_functions(
                 plugin_id,
                 task_id,
                 download_start_time,
+                output_album_id_for_download.clone(),
             ) {
                 Ok(_) => Ok(true), // 成功加入队列
                 Err(e) => Err(format!("Failed to enqueue download: {}", e).into()),
@@ -807,6 +810,7 @@ pub fn execute_crawler_script(
     task_id: &str,
     script_content: &str,
     merged_config: HashMap<String, serde_json::Value>,
+    output_album_id: Option<String>, // 输出画册ID，如果指定则下载完成后自动添加到画册
 ) -> Result<(), String> {
     // 创建页面栈（存储 (url, html) 对）
     let page_stack: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
@@ -826,6 +830,7 @@ pub fn execute_crawler_script(
         &plugin_id,
         task_id,
         Arc::clone(&current_progress),
+        output_album_id,
     )?;
 
     // 创建作用域

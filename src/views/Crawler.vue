@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-header">
           <span>🕷️ 爬虫管理</span>
-          <el-button type="primary" @click="showAddDialog = true" :disabled="isCrawling">
+          <el-button type="primary" @click="showAddDialog = true">
             <el-icon><Plus /></el-icon>
             添加任务
           </el-button>
@@ -49,7 +49,7 @@
           </el-input>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="handleStartCrawl" :loading="isCrawling" :disabled="!form.pluginId || !form.url">
+          <el-button type="primary" @click="handleStartCrawl" :disabled="!form.pluginId || !form.url">
             开始爬取
           </el-button>
         </el-form-item>
@@ -114,7 +114,6 @@ const form = ref({
 
 const showAddDialog = ref(false);
 const tasks = computed(() => crawlerStore.tasks);
-const isCrawling = computed(() => crawlerStore.isCrawling);
 const enabledPlugins = computed(() => pluginStore.plugins.filter((p) => p.enabled));
 const plugins = computed(() => pluginStore.plugins);
 

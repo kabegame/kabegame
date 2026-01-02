@@ -81,10 +81,10 @@
         <!-- 去重确认对话框 -->
         <el-dialog v-model="showDedupeDialog" title="确认去重" width="420px" destroy-on-close>
           <div style="margin-bottom: 16px;">
-            <p style="margin-bottom: 8px;">去掉所有重复图片（按哈希值匹配）。</p>
+            <p style="margin-bottom: 8px;">去掉所有重复图片</p>
             <el-checkbox v-model="dedupeDeleteFiles" label="同时从磁盘删除源文件（慎用）" />
             <p class="var-description" :style="{ color: dedupeDeleteFiles ? 'var(--el-color-danger)' : '' }">
-              {{ dedupeDeleteFiles ? '警告：该操作将永久删除重复的磁盘文件，不可恢复！' : '仅从画廊移除记录，保留磁盘文件。' }}
+              {{ dedupeDeleteFiles ? '警告：该操作将永久删除重复的磁盘文件，不可恢复！' : '不勾选仅从画廊移除记录，保留磁盘文件。' }}
             </p>
           </div>
           <template #footer>
@@ -131,9 +131,8 @@ const albumStore = useAlbumStore();
 const settingsStore = useSettingsStore();
 
 const dedupeProcessing = ref(false); // 正在执行"按哈希去重"本体
-const dedupeWaitingDownloads = ref(false); // 需要等待下载队列空闲后才结束 loading
 const { showContent: dedupeDelayShowContent, startLoading: startDedupeDelay, finishLoading: finishDedupeDelay } = useLoadingDelay(300);
-const dedupeLoading = computed(() => dedupeProcessing.value || dedupeWaitingDownloads.value || !dedupeDelayShowContent.value);
+const dedupeLoading = computed(() => dedupeProcessing.value || !dedupeDelayShowContent.value);
 const filterPluginId = ref<string | null>(null);
 const showFavoritesOnly = ref(false);
 const showCrawlerDialog = ref(false);
@@ -567,7 +566,6 @@ const confirmDedupeByHash = async () => {
   showDedupeDialog.value = false;
   await confirmDedupeByHashFromComposable(
     dedupeProcessing,
-    dedupeWaitingDownloads,
     dedupeDeleteFiles.value,
     startDedupeDelay,
     finishDedupeDelay
@@ -800,13 +798,6 @@ onMounted(async () => {
   // 保存监听器引用以便在卸载时移除
   (window as any).__imageAddedUnlisten = unlistenImageAdded;
 
-  // 监听后端通知：强制去重等待下载结束 -> 下载队列空闲
-  const unlistenForceDedupeEnded = await listen("force-dedupe-ended", async () => {
-    if (dedupeWaitingDownloads.value) {
-      dedupeWaitingDownloads.value = false;
-    }
-  });
-  (window as any).__forceDedupeEndedUnlisten = unlistenForceDedupeEnded;
 
   // 监听“收藏状态变化”（来自画册/其它页面对收藏画册的增删）
   const favoriteChangedHandler = ((event: Event) => {
@@ -917,12 +908,6 @@ onUnmounted(() => {
     delete (window as any).__imageAddedUnlisten;
   }
 
-  // 移除强制去重结束事件监听
-  const forceDedupeEndedUnlisten = (window as any).__forceDedupeEndedUnlisten;
-  if (forceDedupeEndedUnlisten) {
-    forceDedupeEndedUnlisten();
-    delete (window as any).__forceDedupeEndedUnlisten;
-  }
 
   // 移除收藏状态变化监听
   const favoriteChangedHandler = (window as any).__favoriteStatusChangedHandler;

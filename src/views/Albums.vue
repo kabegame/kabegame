@@ -211,13 +211,20 @@ const handleRefresh = async () => {
   try {
     await albumStore.loadAlbums();
     await loadRotationSettings();
-    // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来“没刷新”）
+    // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来"没刷新"）
     const albumsToPreload = albums.value.slice(0, 6);
     for (const album of albumsToPreload) {
       clearAlbumPreviewCache(album.id);
     }
     // 收藏画册也强制重载一次（收藏状态变化会影响预览）
     clearAlbumPreviewCache(FAVORITE_ALBUM_ID.value);
+
+    // 清除所有画册的详情缓存，确保进入画册详情页时能获取最新内容
+    for (const album of albums.value) {
+      delete albumStore.albumImages[album.id];
+    }
+    // 也清除收藏画册的详情缓存
+    delete albumStore.albumImages[FAVORITE_ALBUM_ID.value];
 
     // 强制重新挂载列表，让每个卡片的 enter 动画和内部状态都重置
     albumsListKey.value++;

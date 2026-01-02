@@ -5,7 +5,10 @@ import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useAlbumStore } from "@/stores/albums";
 import { storeToRefs } from "pinia";
 
-export type FavoriteStatusChangedDetail = { imageIds: string[]; favorite: boolean };
+export type FavoriteStatusChangedDetail = {
+  imageIds: string[];
+  favorite: boolean;
+};
 
 /**
  * 图片操作 composable
@@ -39,7 +42,9 @@ export function useImageOperations(
   const handleCopyImage = async (image: ImageInfo) => {
     try {
       // 获取图片的 Blob URL
-      const imageUrl = imageSrcMap.value[image.id]?.original || imageSrcMap.value[image.id]?.thumbnail;
+      const imageUrl =
+        imageSrcMap.value[image.id]?.original ||
+        imageSrcMap.value[image.id]?.thumbnail;
       if (!imageUrl) {
         ElMessage.warning("图片尚未加载完成，请稍后再试");
         return;
@@ -50,7 +55,7 @@ export function useImageOperations(
       let blob = await response.blob();
 
       // 如果 blob 类型是 image/jpeg，转换为 PNG（因为某些浏览器不支持 image/jpeg）
-      if (blob.type === 'image/jpeg' || blob.type === 'image/jpg') {
+      if (blob.type === "image/jpeg" || blob.type === "image/jpg") {
         // 创建一个 canvas 来转换图片格式
         const img = new Image();
         img.src = imageUrl;
@@ -59,12 +64,12 @@ export function useImageOperations(
           img.onerror = reject;
         });
 
-        const canvas = document.createElement('canvas');
+        const canvas = document.createElement("canvas");
         canvas.width = img.width;
         canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
+        const ctx = canvas.getContext("2d");
         if (!ctx) {
-          throw new Error('无法创建 canvas context');
+          throw new Error("无法创建 canvas context");
         }
         ctx.drawImage(img, 0, 0);
 
@@ -74,17 +79,17 @@ export function useImageOperations(
             if (blob) {
               resolve(blob);
             } else {
-              reject(new Error('转换图片失败'));
+              reject(new Error("转换图片失败"));
             }
-          }, 'image/png');
+          }, "image/png");
         });
       }
 
       // 使用 Clipboard API 复制图片
       await navigator.clipboard.write([
         new ClipboardItem({
-          [blob.type]: blob
-        })
+          [blob.type]: blob,
+        }),
       ]);
 
       ElMessage.success("图片已复制到剪贴板");
@@ -95,13 +100,18 @@ export function useImageOperations(
   };
 
   // 应用收藏状态变化到画廊缓存
-  const applyFavoriteChangeToGalleryCache = (imageIds: string[], favorite: boolean) => {
+  const applyFavoriteChangeToGalleryCache = (
+    imageIds: string[],
+    favorite: boolean
+  ) => {
     if (!imageIds || imageIds.length === 0) return;
     const idSet = new Set(imageIds);
 
     // "仅收藏"模式下，取消收藏应直接从列表移除
     if (showFavoritesOnly.value && !favorite) {
-      displayedImages.value = displayedImages.value.filter((img) => !idSet.has(img.id));
+      displayedImages.value = displayedImages.value.filter(
+        (img) => !idSet.has(img.id)
+      );
       crawlerStore.images = [...displayedImages.value];
       galleryViewRef.value?.clearSelection?.();
       return;
@@ -134,7 +144,9 @@ export function useImageOperations(
         ? `\n\n注意：其中包含当前壁纸。移除/删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。`
         : "";
       await ElMessageBox.confirm(
-        `将从画廊移除，但保留原图文件。是否继续移除${count > 1 ? `这 ${count} 张图片` : '这张图片'}？${currentHint}`,
+        `将从画廊移除，但保留原图文件。是否继续移除${
+          count > 1 ? `这 ${count} 张图片` : "这张图片"
+        }？${currentHint}`,
         "确认移除",
         { type: "warning" }
       );
@@ -147,7 +159,9 @@ export function useImageOperations(
       }
 
       // 从 displayedImages 中移除已移除的图片
-      displayedImages.value = displayedImages.value.filter(img => !imagesToProcess.some(remImg => remImg.id === img.id));
+      displayedImages.value = displayedImages.value.filter(
+        (img) => !imagesToProcess.some((remImg) => remImg.id === img.id)
+      );
 
       // 清理 imageSrcMap 和 Blob URL
       for (const img of imagesToProcess) {
@@ -165,7 +179,17 @@ export function useImageOperations(
 
       galleryViewRef.value?.clearSelection?.();
 
-      ElMessage.success(`${count > 1 ? `已移除 ${count} 张图片` : '已移除图片'}`);
+      ElMessage.success(
+        `${count > 1 ? `已移除 ${count} 张图片` : "已移除图片"}`
+      );
+
+      // 发出图片移除事件，通知画册视图更新
+      const removedIds = imagesToProcess.map((img) => img.id);
+      window.dispatchEvent(
+        new CustomEvent("images-removed", {
+          detail: { imageIds: removedIds },
+        })
+      );
     } catch (error) {
       if (error !== "cancel") {
         console.error("移除图片失败:", error);
@@ -187,7 +211,9 @@ export function useImageOperations(
         ? `\n\n注意：其中包含当前壁纸。移除/删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。`
         : "";
       await ElMessageBox.confirm(
-        `删除后将同时移除原图、缩略图及数据库记录，且无法恢复。是否继续删除${count > 1 ? `这 ${count} 张图片` : '这张图片'}？${currentHint}`,
+        `删除后将同时移除原图、缩略图及数据库记录，且无法恢复。是否继续删除${
+          count > 1 ? `这 ${count} 张图片` : "这张图片"
+        }？${currentHint}`,
         "确认删除",
         { type: "warning" }
       );
@@ -200,7 +226,9 @@ export function useImageOperations(
       }
 
       // 从 displayedImages 中移除已删除的图片
-      displayedImages.value = displayedImages.value.filter(img => !imagesToProcess.some(delImg => delImg.id === img.id));
+      displayedImages.value = displayedImages.value.filter(
+        (img) => !imagesToProcess.some((delImg) => delImg.id === img.id)
+      );
 
       // 清理 imageSrcMap 和 Blob URL
       for (const img of imagesToProcess) {
@@ -219,6 +247,14 @@ export function useImageOperations(
 
       ElMessage.success(`已删除 ${count} 张图片`);
       galleryViewRef.value?.clearSelection?.();
+
+      // 发出图片删除事件，通知画册视图更新
+      const deletedIds = imagesToProcess.map((img) => img.id);
+      window.dispatchEvent(
+        new CustomEvent("images-deleted", {
+          detail: { imageIds: deletedIds },
+        })
+      );
     } catch (error) {
       if (error !== "cancel") {
         ElMessage.error("删除失败");
@@ -229,7 +265,6 @@ export function useImageOperations(
   // 画廊按 hash 去重确认（实际执行去重逻辑）
   const confirmDedupeByHash = async (
     dedupeProcessing: Ref<boolean>,
-    dedupeWaitingDownloads: Ref<boolean>,
     dedupeDeleteFiles: boolean,
     startDedupeDelay: () => void,
     finishDedupeDelay: () => void
@@ -237,12 +272,6 @@ export function useImageOperations(
     try {
       dedupeProcessing.value = true;
       startDedupeDelay();
-
-      // 若当前有下载任务在跑，开启"强制去重模式"，直到下载队列空闲才自动结束
-      const startRes = await invoke<{ willWaitUntilDownloadsEnd: boolean }>(
-        "start_force_deduplicate"
-      );
-      dedupeWaitingDownloads.value = !!startRes?.willWaitUntilDownloadsEnd;
 
       const res = await invoke<{ removed: number; removedIds: string[] }>(
         "dedupe_gallery_by_hash",
@@ -255,7 +284,13 @@ export function useImageOperations(
         crawlerStore.applyRemovedImageIds(removedIds);
       }
 
-      ElMessage.success(`已清理 ${res?.removed ?? removedIds.length} 个重复项${dedupeDeleteFiles ? "（已从磁盘彻底删除）" : "（仅从画廊移除，源文件已保留）"}`);
+      ElMessage.success(
+        `已清理 ${res?.removed ?? removedIds.length} 个重复项${
+          dedupeDeleteFiles
+            ? "（已从磁盘彻底删除）"
+            : "（仅从画廊移除，源文件已保留）"
+        }`
+      );
 
       // 若当前已加载列表被清空，则自动刷新一次（避免停留在空状态）
       if (displayedImages.value.length === 0) {
@@ -268,13 +303,6 @@ export function useImageOperations(
       if (error !== "cancel") {
         console.error("去重失败:", error);
         ElMessage.error("去重失败");
-        // 兜底：出错时关闭强制去重，避免一直影响后续下载
-        try {
-          await invoke("stop_force_deduplicate");
-        } catch {
-          // ignore
-        }
-        dedupeWaitingDownloads.value = false;
       }
     } finally {
       dedupeProcessing.value = false;
@@ -298,7 +326,10 @@ export function useImageOperations(
       delete albumStore.albumPreviews[FAVORITE_ALBUM_ID.value];
       // 更新收藏画册计数
       const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
-      albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(0, currentCount + (newFavorite ? 1 : -1));
+      albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(
+        0,
+        currentCount + (newFavorite ? 1 : -1)
+      );
 
       // 发出收藏状态变化事件，通知其他页面（如收藏画册详情页）更新
       window.dispatchEvent(
@@ -325,7 +356,7 @@ export function useImageOperations(
         await albumStore.loadAlbums();
         let albumName = "桌面画册1";
         let counter = 1;
-        while (albums.value.some(a => a.name === albumName)) {
+        while (albums.value.some((a) => a.name === albumName)) {
           counter++;
           albumName = `桌面画册${counter}`;
         }
@@ -334,7 +365,7 @@ export function useImageOperations(
         const createdAlbum = await albumStore.createAlbum(albumName);
 
         // 3. 将选中的图片添加到画册
-        const imageIds = imagesToProcess.map(img => img.id);
+        const imageIds = imagesToProcess.map((img) => img.id);
         await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
 
         // 4. 获取当前设置
@@ -349,12 +380,18 @@ export function useImageOperations(
         }
 
         // 6. 设置轮播画册为新创建的画册
-        await invoke("set_wallpaper_rotation_album_id", { albumId: createdAlbum.id });
+        await invoke("set_wallpaper_rotation_album_id", {
+          albumId: createdAlbum.id,
+        });
 
-        ElMessage.success(`已开启轮播：画册「${albumName}」（${imageIds.length} 张）`);
+        ElMessage.success(
+          `已开启轮播：画册「${albumName}」（${imageIds.length} 张）`
+        );
       } else {
         // 单选：直接设置壁纸
-        await invoke("set_wallpaper_by_image_id", { imageId: imagesToProcess[0].id });
+        await invoke("set_wallpaper_by_image_id", {
+          imageId: imagesToProcess[0].id,
+        });
         currentWallpaperImageId.value = imagesToProcess[0].id;
         ElMessage.success("壁纸设置成功");
       }
@@ -390,9 +427,13 @@ export function useImageOperations(
 
       if (projectName === null) return; // 用户取消
 
-      const mp = await invoke<string | null>("get_wallpaper_engine_myprojects_dir");
+      const mp = await invoke<string | null>(
+        "get_wallpaper_engine_myprojects_dir"
+      );
       if (!mp) {
-        ElMessage.warning("未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择");
+        ElMessage.warning(
+          "未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择"
+        );
         return;
       }
 
@@ -408,7 +449,9 @@ export function useImageOperations(
           options: null,
         }
       );
-      ElMessage.success(`已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`);
+      ElMessage.success(
+        `已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`
+      );
       await invoke("open_file_path", { filePath: res.projectDir });
     } catch (error) {
       if (error !== "cancel") {
@@ -430,4 +473,3 @@ export function useImageOperations(
     exportToWallpaperEngine,
   };
 }
-

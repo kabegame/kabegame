@@ -151,6 +151,7 @@ pub async fn crawl_images(
     images_dir: PathBuf,
     app: AppHandle,
     user_config: Option<HashMap<String, serde_json::Value>>, // 用户配置的变量
+    output_album_id: Option<String>, // 输出画册ID，如果指定则下载完成后自动添加到画册
 ) -> Result<CrawlResult, String> {
     // 获取插件文件路径
     let plugin_manager = app.state::<crate::plugin::PluginManager>();
@@ -192,6 +193,7 @@ pub async fn crawl_images(
         task_id,
         &script_content,
         merged_config,
+        output_album_id,
     )?;
 
     // 获取下载队列中的任务数量（包括正在下载和等待中的）
@@ -567,6 +569,10 @@ async fn download_image(
         // 复制文件
         fs::copy(&source_path, &target_path).map_err(|e| format!("Failed to copy file: {}", e))?;
 
+        // 删除 Windows Zone.Identifier 流（避免打开文件时出现安全警告）
+        #[cfg(windows)]
+        remove_zone_identifier(&target_path);
+
         // 生成缩略图
         let thumbnail_path = generate_thumbnail(&target_path, app)?;
 
@@ -816,6 +822,10 @@ async fn download_image(
             .await
             .map_err(|e| format!("Failed to finalize file: {}", e))?;
 
+        // 删除 Windows Zone.Identifier 流（避免打开文件时出现安全警告）
+        #[cfg(windows)]
+        remove_zone_identifier(&file_path);
+
         // 生成缩略图
         let thumbnail_path = generate_thumbnail(&file_path, app)?;
 
@@ -826,6 +836,35 @@ async fn download_image(
             reused: false,
         })
     }
+}
+
+/// 删除 Windows Zone.Identifier 备用数据流
+/// 这可以避免从网络下载的文件在打开时出现安全警告
+#[cfg(windows)]
+fn remove_zone_identifier(file_path: &Path) {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::DeleteFileW;
+
+    // 构建 Zone.Identifier 流的路径：文件路径 + ":Zone.Identifier"
+    let mut stream_path = file_path.as_os_str().to_owned();
+    stream_path.push(":Zone.Identifier");
+
+    // 转换为 Windows 宽字符串
+    let wide_path: Vec<u16> = OsStr::new(&stream_path)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // 删除备用数据流（忽略错误，因为流可能不存在）
+    unsafe {
+        DeleteFileW(wide_path.as_ptr());
+    }
+}
+
+#[cfg(not(windows))]
+fn remove_zone_identifier(_file_path: &Path) {
+    // 非 Windows 系统不需要处理
 }
 
 pub fn generate_thumbnail(image_path: &Path, _app: &AppHandle) -> Result<Option<PathBuf>, String> {
@@ -862,6 +901,7 @@ struct DownloadTask {
     plugin_id: String,
     task_id: String,
     download_start_time: u64,
+    output_album_id: Option<String>, // 输出画册ID，如果指定则下载完成后自动添加到画册
 }
 
 // 正在下载的任务信息（用于前端显示）
@@ -1026,6 +1066,7 @@ impl DownloadQueue {
         plugin_id: String,
         task_id: String,
         download_start_time: u64,
+        output_album_id: Option<String>,
     ) -> Result<(), String> {
         if self.is_task_canceled(&task_id) {
             return Ok(());
@@ -1038,6 +1079,7 @@ impl DownloadQueue {
             plugin_id: plugin_id.clone(),
             task_id: task_id.clone(),
             download_start_time,
+            output_album_id,
         };
 
         // 背压：当队列达到上限时阻塞，直到队列变短（等待与入队在同一把锁内完成，保证上限严格生效）
@@ -1183,7 +1225,6 @@ impl DownloadQueue {
                         // 启动下载任务
                         let active_clone = Arc::clone(&active_downloads);
                         let active_tasks_clone = Arc::clone(&active_tasks);
-                        let queue_clone = Arc::clone(&queue);
                         let app_clone = app.clone();
                         let task_clone = task.clone();
                         let _canceled_clone = Arc::clone(&canceled_tasks);
@@ -1208,29 +1249,10 @@ impl DownloadQueue {
                             .await;
 
                             // 减少活跃下载数
-                            let active_after = {
+                            {
                                 let mut active = active_clone.lock().unwrap();
                                 *active -= 1;
-                                *active
-                            };
-                            // 若开启"强制去重等待下载结束"，并且下载队列已经空闲，则自动关闭并通知前端
-                            if let Some(flags) =
-                                app_clone.try_state::<crate::runtime_flags::RuntimeFlags>()
-                            {
-                                if flags.force_deduplicate()
-                                    && flags.force_deduplicate_wait_until_idle()
-                                    && active_after == 0
-                                {
-                                    let q_empty = queue_clone.lock().unwrap().is_empty();
-                                    if q_empty {
-                                        flags.set_force_deduplicate(false);
-                                        flags.set_force_deduplicate_wait_until_idle(false);
-                                        let _ = app_clone
-                                            .emit("force-dedupe-ended", serde_json::json!({}));
-                                    }
-                                }
                             }
-
                             // 更新状态（下载结束 -> 后处理 / 失败）
                             {
                                 let mut tasks = active_tasks_clone.lock().unwrap();
@@ -1379,18 +1401,13 @@ impl DownloadQueue {
                                         "dedupe_check",
                                         None,
                                     );
-                                    // 检查是否启用自动/强制去重
+                                    // 检查是否启用自动去重
                                     let should_skip = {
                                         let settings_state =
                                             app_clone.try_state::<crate::settings::Settings>();
-                                        let force_dedup = app_clone
-                                            .try_state::<crate::runtime_flags::RuntimeFlags>()
-                                            .map(|f| f.force_deduplicate())
-                                            .unwrap_or(false);
                                         if let Some(settings) = settings_state {
                                             if let Ok(s) = settings.get_settings() {
-                                                if (force_dedup || s.auto_deduplicate)
-                                                    && !downloaded.hash.is_empty()
+                                                if s.auto_deduplicate && !downloaded.hash.is_empty()
                                                 {
                                                     // 检查哈希是否已存在
                                                     if let Ok(Some(_existing)) =
@@ -1407,16 +1424,7 @@ impl DownloadQueue {
                                                 false
                                             }
                                         } else {
-                                            // 没有 settings state 时，仍允许强制去重生效
-                                            if force_dedup && !downloaded.hash.is_empty() {
-                                                storage
-                                                    .find_image_by_hash(&downloaded.hash)
-                                                    .ok()
-                                                    .flatten()
-                                                    .is_some()
-                                            } else {
-                                                false
-                                            }
+                                            false
                                         }
                                     };
 
@@ -1430,6 +1438,14 @@ impl DownloadQueue {
                                             "db_inserting",
                                             None,
                                         );
+                                        // 如果配置了输出画册，且为收藏画册，则设置 favorite 为 true
+                                        let favorite = if let Some(ref album_id) =
+                                            task_clone.output_album_id
+                                        {
+                                            album_id == crate::storage::FAVORITE_ALBUM_ID
+                                        } else {
+                                            false
+                                        };
                                         let image_info = crate::storage::ImageInfo {
                                             id: uuid::Uuid::new_v4().to_string(),
                                             url: task_clone.url.clone(),
@@ -1439,11 +1455,38 @@ impl DownloadQueue {
                                             crawled_at: task_clone.download_start_time,
                                             metadata: None,
                                             thumbnail_path: thumbnail_path_str.clone(),
-                                            favorite: false,
+                                            favorite,
                                             hash: downloaded.hash.clone(),
                                             order: Some(task_clone.download_start_time as i64), // 默认 order = crawled_at（越晚越大）
                                         };
                                         if storage.add_image(image_info.clone()).is_ok() {
+                                            let image_id = image_info.id.clone();
+
+                                            // 如果配置了输出画册，立即添加到画册
+                                            if let Some(ref album_id) = task_clone.output_album_id {
+                                                if !album_id.is_empty() {
+                                                    match storage.add_images_to_album(
+                                                        album_id,
+                                                        &vec![image_id.clone()],
+                                                    ) {
+                                                        Ok(count) => {
+                                                            if count == 0 {
+                                                                eprintln!(
+                                                                    "[WARN] 图片 {} 可能已存在于画册 {} 中",
+                                                                    image_id, album_id
+                                                                );
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            eprintln!(
+                                                                "[ERROR] 添加图片 {} 到画册 {} 失败: {}",
+                                                                image_id, album_id, e
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+
                                             emit_download_state(
                                                 &app_clone,
                                                 &task_clone.task_id,
@@ -1454,7 +1497,7 @@ impl DownloadQueue {
                                                 None,
                                             );
                                             should_emit = true;
-                                            emitted_image_id = Some(image_info.id);
+                                            emitted_image_id = Some(image_id);
                                         } else {
                                             emit_download_state(
                                                 &app_clone,

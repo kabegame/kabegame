@@ -71,6 +71,8 @@ pub struct TaskInfo {
     pub output_dir: Option<String>,
     #[serde(rename = "userConfig")]
     pub user_config: Option<HashMap<String, serde_json::Value>>,
+    #[serde(rename = "outputAlbumId")]
+    pub output_album_id: Option<String>, // 输出画册ID，如果指定则下载完成后自动添加到画册
     pub status: String,
     pub progress: f64,
     #[serde(rename = "totalImages")]
@@ -134,6 +136,7 @@ impl Storage {
                 url TEXT NOT NULL,
                 output_dir TEXT,
                 user_config TEXT,
+                output_album_id TEXT,
                 status TEXT NOT NULL,
                 progress REAL NOT NULL DEFAULT 0,
                 total_images INTEGER NOT NULL DEFAULT 0,
@@ -145,6 +148,9 @@ impl Storage {
             [],
         )
         .expect("Failed to create tasks table");
+
+        // 数据库迁移：如果 output_album_id 列不存在，则添加
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN output_album_id TEXT", []);
 
         // 创建运行配置表
         conn.execute(
@@ -1296,14 +1302,15 @@ impl Storage {
             .and_then(|c| serde_json::to_string(c).ok());
 
         conn.execute(
-            "INSERT OR REPLACE INTO tasks (id, plugin_id, url, output_dir, user_config, status, progress, total_images, downloaded_images, start_time, end_time, error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT OR REPLACE INTO tasks (id, plugin_id, url, output_dir, user_config, output_album_id, status, progress, total_images, downloaded_images, start_time, end_time, error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 task.id,
                 task.plugin_id,
                 task.url,
                 task.output_dir,
                 user_config_json,
+                task.output_album_id,
                 task.status,
                 task.progress,
                 task.total_images,
@@ -1327,7 +1334,7 @@ impl Storage {
 
         let task = conn
             .query_row(
-                "SELECT id, plugin_id, url, output_dir, user_config, status, progress, total_images, downloaded_images, start_time, end_time, error
+                "SELECT id, plugin_id, url, output_dir, user_config, output_album_id, status, progress, total_images, downloaded_images, start_time, end_time, error
                  FROM tasks WHERE id = ?1",
                 params![task_id],
                 |row| {
@@ -1338,13 +1345,14 @@ impl Storage {
                         output_dir: row.get(3)?,
                         user_config: row.get::<_, Option<String>>(4)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
-                        status: row.get(5)?,
-                        progress: row.get(6)?,
-                        total_images: row.get(7)?,
-                        downloaded_images: row.get(8)?,
-                        start_time: row.get::<_, Option<i64>>(9)?.map(|t| t as u64),
-                        end_time: row.get::<_, Option<i64>>(10)?.map(|t| t as u64),
-                        error: row.get(11)?,
+                        output_album_id: row.get(5)?,
+                        status: row.get(6)?,
+                        progress: row.get(7)?,
+                        total_images: row.get(8)?,
+                        downloaded_images: row.get(9)?,
+                        start_time: row.get::<_, Option<i64>>(10)?.map(|t| t as u64),
+                        end_time: row.get::<_, Option<i64>>(11)?.map(|t| t as u64),
+                        error: row.get(12)?,
                     })
                 },
             )
@@ -1358,7 +1366,7 @@ impl Storage {
 
         let mut stmt = conn
             .prepare(
-                "SELECT id, plugin_id, url, output_dir, user_config, status, progress, total_images, downloaded_images, start_time, end_time, error
+                "SELECT id, plugin_id, url, output_dir, user_config, output_album_id, status, progress, total_images, downloaded_images, start_time, end_time, error
                  FROM tasks ORDER BY start_time DESC"
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -1373,13 +1381,14 @@ impl Storage {
                     user_config: row
                         .get::<_, Option<String>>(4)?
                         .and_then(|s| serde_json::from_str(&s).ok()),
-                    status: row.get(5)?,
-                    progress: row.get(6)?,
-                    total_images: row.get(7)?,
-                    downloaded_images: row.get(8)?,
-                    start_time: row.get::<_, Option<i64>>(9)?.map(|t| t as u64),
-                    end_time: row.get::<_, Option<i64>>(10)?.map(|t| t as u64),
-                    error: row.get(11)?,
+                    output_album_id: row.get(5)?,
+                    status: row.get(6)?,
+                    progress: row.get(7)?,
+                    total_images: row.get(8)?,
+                    downloaded_images: row.get(9)?,
+                    start_time: row.get::<_, Option<i64>>(10)?.map(|t| t as u64),
+                    end_time: row.get::<_, Option<i64>>(11)?.map(|t| t as u64),
+                    error: row.get(12)?,
                 })
             })
             .map_err(|e| format!("Failed to query tasks: {}", e))?;
