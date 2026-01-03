@@ -192,7 +192,8 @@
         <ImageGrid :images="viewerImages" :image-url-map="viewerImageUrls" :image-click-action="'open'"
           :columns="viewerColumns" :aspect-ratio-match-window="viewerAspectRatioMatchWindow"
           :window-aspect-ratio="viewerWindowAspect" :selected-images="viewerSelected"
-          @image-click="handleViewerImageClick" @image-dbl-click="handleViewerImageDblClick" />
+          @image-click="handleViewerImageClick" @image-dbl-click="handleViewerImageDblClick"
+          @contextmenu="handleViewerImageContextMenu" />
         <div class="viewer-actions">
           <el-button :disabled="viewerImages.length === 0" @click="handleSaveViewerToAlbum">
             保存为画册
@@ -226,6 +227,12 @@
 
   <TaskContextMenu :visible="contextMenuVisible" :position="contextMenuPos" :task="contextMenuTask"
     @close="closeContextMenu" @command="handleContextAction" />
+
+  <!-- 任务文件查看器右键菜单 -->
+  <ImageContextMenu :visible="viewerImageMenuVisible" :position="viewerImageMenuPosition" :image="viewerImageMenuImage"
+    :selected-count="Math.max(1, viewerSelected.size)" :is-image-selected="isViewerImageMenuImageSelected"
+    :simplified-multi-select-menu="false" :hide-favorite-and-add-to-album="false" remove-text="删除"
+    @close="viewerImageMenuVisible = false" @command="handleViewerImageMenuCommand" />
 </template>
 
 <script setup lang="ts">
@@ -240,6 +247,7 @@ import { usePluginStore } from "@/stores/plugins";
 import { useSettingsStore } from "@/stores/settings";
 import ImageGrid from "./ImageGrid.vue";
 import TaskContextMenu from "./TaskContextMenu.vue";
+import ImageContextMenu from "./contextMenu/ImageContextMenu.vue";
 import type { ImageInfo } from "@/stores/crawler";
 import AddToAlbumDialog from "./AddToAlbumDialog.vue";
 
@@ -291,6 +299,11 @@ const viewerSelected = ref<Set<string>>(new Set());
 const viewerColumns = ref(0);
 const viewerAspectRatio = ref<number | null>(null);
 
+// 任务文件查看器右键菜单
+const viewerImageMenuVisible = ref(false);
+const viewerImageMenuPosition = ref({ x: 0, y: 0 });
+const viewerImageMenuImage = ref<ImageInfo | null>(null);
+
 // 计算属性：是否有设置宽高比
 const viewerAspectRatioMatchWindow = computed(() => !!viewerAspectRatio.value);
 // 计算属性：实际使用的宽高比
@@ -334,7 +347,7 @@ const pluginVarMetaMap = ref<Record<string, Record<string, PluginVarMeta>>>({});
 
 // 任务文件 -> 保存为画册
 const addToAlbumVisible = ref(false);
-const addToAlbumImageIds = computed(() => viewerImages.value.map((i) => i.id));
+const addToAlbumImageIds = ref<string[]>([]);
 
 // 任务右键菜单
 const contextMenuVisible = ref(false);
@@ -707,6 +720,7 @@ const handleSaveViewerToAlbum = async () => {
       return;
     }
   }
+  addToAlbumImageIds.value = viewerImages.value.map((i) => i.id);
   addToAlbumVisible.value = true;
 };
 
@@ -716,6 +730,79 @@ const handleViewerImageClick = (image: ImageInfo) => {
 
 const handleViewerImageDblClick = async (image: ImageInfo) => {
   await handleOpenImagePath(image.localPath);
+};
+
+const handleViewerImageContextMenu = (event: MouseEvent, image: ImageInfo) => {
+  event.preventDefault();
+  viewerImageMenuImage.value = image;
+  viewerImageMenuPosition.value = { x: event.clientX, y: event.clientY };
+  viewerImageMenuVisible.value = true;
+};
+
+const isViewerImageMenuImageSelected = computed(() => {
+  if (!viewerImageMenuImage.value) return true;
+  if (viewerSelected.value.size <= 1) return true;
+  return viewerSelected.value.has(viewerImageMenuImage.value.id);
+});
+
+const handleViewerImageMenuCommand = async (command: string) => {
+  const image = viewerImageMenuImage.value;
+  if (!image) return;
+  viewerImageMenuVisible.value = false;
+
+  const imagesToProcess =
+    viewerSelected.value.size > 1
+      ? viewerImages.value.filter((img) => viewerSelected.value.has(img.id))
+      : [image];
+
+  switch (command) {
+    case "copy":
+      // 任务文件查看器只支持复制第一张图片（浏览器限制）
+      if (imagesToProcess.length > 0) {
+        const imageUrl = viewerImageUrls.value[imagesToProcess[0].id]?.original || viewerImageUrls.value[imagesToProcess[0].id]?.thumbnail;
+        if (!imageUrl) {
+          ElMessage.warning("图片尚未加载完成，请稍后再试");
+          return;
+        }
+        const response = await fetch(imageUrl);
+        let blob = await response.blob();
+
+        if (blob.type === "image/jpeg" || blob.type === "image/jpg") {
+          const img = new Image();
+          img.src = imageUrl;
+          await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
+          });
+          const canvas = document.createElement("canvas");
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) throw new Error("无法创建 canvas context");
+          ctx.drawImage(img, 0, 0);
+          blob = await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("转换图片失败"))), "image/png");
+          });
+        }
+
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+        ElMessage.success(imagesToProcess.length > 1 ? `已复制 ${imagesToProcess.length} 张图片` : "图片已复制到剪贴板");
+      }
+      break;
+    case "open":
+      await handleOpenImagePath(image.localPath);
+      break;
+    case "addToAlbum":
+      // 保存为画册
+      if (imagesToProcess.length > 0) {
+        addToAlbumImageIds.value = imagesToProcess.map((i) => i.id);
+        addToAlbumVisible.value = true;
+      }
+      break;
+    // 任务文件查看器不支持其他操作（detail、favorite、wallpaper、remove等），忽略这些命令
+    default:
+      break;
+  }
 };
 
 onUnmounted(() => {

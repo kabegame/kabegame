@@ -14,7 +14,8 @@
         :reorder-selected="isReorderMode && reorderSourceIndex === index"
         @click="(e) => handleItemClick(image, index, e)" @dblclick="(e) => handleItemDblClick(image, index, e)"
         @contextmenu="(e) => handleItemContextMenu(image, index, e)" @long-press="() => handleLongPress(index)"
-        @reorder-click="() => handleReorderClick(index)" />
+        @reorder-click="() => handleReorderClick(index)"
+        @blob-url-invalid="(url, imageId, localPath) => handleBlobUrlInvalid(url, imageId, localPath)" />
     </transition-group>
 
     <!-- 加载更多（下沉到 ImageGrid，可由父组件控制显示） -->
@@ -23,9 +24,9 @@
       :loading="loadingMore" @load-more="emit('loadMore')" />
 
     <!-- 右键菜单（下沉到 ImageGrid，可由父组件控制是否启用） -->
-    <GalleryContextMenu v-if="enableContextMenu" :visible="contextMenuVisible" :position="contextMenuPosition"
-      :image="contextMenuImage" :selected-count="effectiveSelectedIds.size" :selected-image-ids="effectiveSelectedIds"
-      @close="closeContextMenu" @command="handleContextMenuCommand" />
+    <component :is="contextMenuComponent" v-if="enableContextMenu && contextMenuComponent" :visible="contextMenuVisible"
+      :position="contextMenuPosition" :image="contextMenuImage" :selected-count="effectiveSelectedIds.size"
+      :selected-image-ids="effectiveSelectedIds" @close="closeContextMenu" @command="handleContextMenuCommand" />
 
     <!-- 图片预览对话框（下沉到 ImageGrid，el-dialog 默认会 teleport 到 body） -->
     <el-dialog v-model="previewVisible" title="图片预览" width="90%" :close-on-click-modal="true"
@@ -56,7 +57,7 @@
 
     <!-- 预览对话框中的右键菜单 -->
     <div class="preview-context-menu-wrapper">
-      <GalleryContextMenu v-if="enableContextMenu && previewContextMenuVisible" :visible="previewContextMenuVisible"
+      <component :is="contextMenuComponent" v-if="contextMenuComponent" :visible="previewContextMenuVisible"
         :position="previewContextMenuPosition" :image="previewImage" :selected-count="1"
         :selected-image-ids="previewImage ? new Set([previewImage.id]) : new Set()" @close="closePreviewContextMenu"
         @command="handlePreviewContextMenuCommand" />
@@ -65,14 +66,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from "vue";
 import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "@/stores/crawler";
 import LoadMoreButton from "@/components/LoadMoreButton.vue";
-import GalleryContextMenu from "@/components/GalleryContextMenu.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { ElMessage } from "element-plus";
 import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
+import { readFile } from "@tauri-apps/plugin-fs";
 
 interface Props {
   images: ImageInfo[];
@@ -87,11 +88,14 @@ interface Props {
    */
   selectedImages?: Set<string>;
 
+  // 传入一个vue组件类
+  contextMenuComponent?: Component;
+
+
   /**
    * 新用法：将单选/多选逻辑下沉到 ImageGrid
    */
   allowSelect?: boolean; // 是否允许选择（单选/多选逻辑在 grid 内）
-  enableContextMenu?: boolean; // 是否启用 grid 内置右键菜单展示
 
   /**
    * 加载更多能力（下沉）
@@ -133,15 +137,16 @@ const emit = defineEmits<{
     }
   ];
   reorder: [newOrder: ImageInfo[]]; // 调整顺序
+  blobUrlInvalid: [url: string, imageId: string, localPath: string]; // Blob URL 无效事件
 }>();
 
 const allowSelect = computed(() => props.allowSelect ?? false);
-const enableContextMenu = computed(() => props.enableContextMenu ?? false);
 const showLoadMoreButton = computed(() => props.showLoadMoreButton ?? false);
 const hasMore = computed(() => props.hasMore ?? false);
 const loadingMore = computed(() => props.loadingMore ?? false);
 const showEmptyState = computed(() => props.showEmptyState ?? false);
 const enableReorder = computed(() => props.enableReorder ?? true);
+const enableContextMenu = computed(() => !!props.contextMenuComponent);
 
 // 内置选择状态（仅在 allowSelect=true 且未传入 selectedImages 时启用）
 const internalSelectedIds = ref<Set<string>>(new Set());
@@ -265,7 +270,10 @@ const isTextInputLike = (target: EventTarget | null) => {
 const setPreviewByIndex = (index: number) => {
   const img = props.images[index];
   if (!img) return;
-  const imageUrl = props.imageUrlMap[img.id]?.original || props.imageUrlMap[img.id]?.thumbnail;
+  const imageData = props.imageUrlMap[img.id];
+  const originalUrl = imageData?.original;
+  const thumbnailUrl = imageData?.thumbnail;
+  const imageUrl = originalUrl || thumbnailUrl;
   if (!imageUrl) return;
 
   previewIndex.value = index;
@@ -273,6 +281,11 @@ const setPreviewByIndex = (index: number) => {
   previewImagePath.value = img.localPath;
   previewImage.value = img;
   resetPreviewTransform();
+  
+  // 如果当前使用的是缩略图，但原图还没有加载，立即加载原图
+  if (!originalUrl && thumbnailUrl && img.localPath) {
+    loadOriginalForPreview(img);
+  }
 };
 
 const canGoPrev = computed(() => {
@@ -427,7 +440,7 @@ const rangeSelect = (index: number) => {
 };
 
 const isBlockingOverlayOpen = () => {
-  if (!enableContextMenu.value && !allowSelect.value) return false;
+  if (!allowSelect.value) return false;
   const overlays = Array.from(document.querySelectorAll<HTMLElement>(".el-overlay"));
   return overlays.some((el) => {
     const style = window.getComputedStyle(el);
@@ -478,7 +491,12 @@ const handleItemDblClick = (image: ImageInfo, index: number, event?: MouseEvent)
 
   // 如果 imageClickAction 是 preview，打开预览对话框
   if (props.imageClickAction === "preview") {
-    const imageUrl = props.imageUrlMap[image.id]?.original || props.imageUrlMap[image.id]?.thumbnail;
+    const imageData = props.imageUrlMap[image.id];
+    const originalUrl = imageData?.original;
+    const thumbnailUrl = imageData?.thumbnail;
+    
+    // 优先使用原图，如果没有原图则使用缩略图
+    const imageUrl = originalUrl || thumbnailUrl;
     if (imageUrl) {
       previewImageUrl.value = imageUrl;
       previewImagePath.value = image.localPath;
@@ -487,6 +505,11 @@ const handleItemDblClick = (image: ImageInfo, index: number, event?: MouseEvent)
       pendingNext.value = 0;
       loadMoreRequestedByPreview.value = false;
       previewVisible.value = true;
+      
+      // 如果当前使用的是缩略图，但原图还没有加载，立即加载原图
+      if (!originalUrl && thumbnailUrl && image.localPath) {
+        loadOriginalForPreview(image);
+      }
     }
   }
 };
@@ -530,7 +553,6 @@ const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEven
   // 兼容旧用法：仍向上抛出 contextmenu（父组件可自行展示菜单）
   emit("contextmenu", event, image);
 
-  if (!enableContextMenu.value) return;
   if (isBlockingOverlayOpen()) return;
 
   openContextMenu(image, index, event);
@@ -547,6 +569,47 @@ const handleContextMenuCommand = (command: string) => {
   emit("contextCommand", payload);
 };
 
+// 处理 Blob URL 无效事件
+const handleBlobUrlInvalid = (url: string, imageId: string, localPath: string) => {
+  // 直接传递给父组件处理
+  emit("blobUrlInvalid", url, imageId, localPath);
+};
+
+// 为预览加载原图
+async function loadOriginalForPreview(image: ImageInfo) {
+  if (!image.localPath) return;
+  
+  try {
+    // 读取文件并创建 Blob URL
+    let normalizedPath = image.localPath.trimStart().replace(/^\\\\\?\\/, "").trim();
+    if (!normalizedPath) return;
+
+    const fileData = await readFile(normalizedPath);
+    if (!fileData || fileData.length === 0) return;
+
+    const ext = normalizedPath.split(".").pop()?.toLowerCase();
+    let mimeType = "image/jpeg";
+    if (ext === "png") mimeType = "image/png";
+    else if (ext === "gif") mimeType = "image/gif";
+    else if (ext === "webp") mimeType = "image/webp";
+    else if (ext === "bmp") mimeType = "image/bmp";
+
+    const blob = new Blob([fileData], { type: mimeType });
+    if (blob.size === 0) return;
+
+    const blobUrl = URL.createObjectURL(blob);
+    
+    // 如果当前预览的正是这张图片，更新预览 URL
+    if (previewImage.value?.id === image.id && previewVisible.value) {
+      previewImageUrl.value = blobUrl;
+    }
+    
+    // 通知父组件更新 imageSrcMap（通过事件）
+    emit("blobUrlInvalid", "", image.id, image.localPath);
+  } catch (error) {
+    console.error("Failed to load original image for preview:", error, image);
+  }
+}
 
 // 处理长按进入调整模式
 const handleLongPress = (index: number) => {
@@ -827,7 +890,7 @@ const handlePreviewMouseLeaveAll = () => {
 
 // 处理预览对话框中的右键菜单
 const handlePreviewDialogContextMenu = (event: MouseEvent) => {
-  if (!enableContextMenu.value || !previewImage.value) return;
+  if (!previewImage.value) return;
   previewContextMenuPosition.value = { x: event.clientX, y: event.clientY };
   previewContextMenuVisible.value = true;
 };
@@ -911,6 +974,8 @@ const handlePreviewImageLoad = async () => {
     if (base.width <= container.width && base.height <= container.height) {
       setPreviewTransform(1, 0, 0);
     }
+    // 更新保存的容器尺寸
+    prevAvailableSize.value = { ...previewAvailableSize.value };
   }
 };
 
@@ -942,9 +1007,18 @@ watch(
     if (!stillExists) {
       // 当前预览图片已被删除，执行切换或关闭逻辑
       handlePreviewImageDeleted();
+      return;
+    }
+    // 如果预览图片还在列表中，同步更新 previewImage（例如收藏状态改变时）
+    if (previewIndex.value >= 0 && previewIndex.value < props.images.length) {
+      const currentImage = props.images[previewIndex.value];
+      if (currentImage && currentImage.id === previewImage.value.id) {
+        // 当前索引对应的图片 ID 匹配，更新 previewImage 以同步最新状态
+        previewImage.value = currentImage;
+      }
     }
   },
-  { deep: false }
+  { deep: true }
 );
 
 // 列表增长/加载完成时：尝试满足 pendingNext（用于"末尾自动加载更多后跳到下一张"）
@@ -1015,8 +1089,12 @@ watch(
       // 对话框打开时，等待 DOM 更新后测量尺寸
       await nextTick();
       await measureSizesAfterRender();
+      // 更新保存的容器尺寸
+      prevAvailableSize.value = { ...previewAvailableSize.value };
     } else {
       stopPreviewDrag();
+      // 重置保存的容器尺寸
+      prevAvailableSize.value = { width: 0, height: 0 };
     }
   }
 );
@@ -1033,6 +1111,8 @@ watch(
 );
 
 let resizeObserver: ResizeObserver | null = null;
+// 保存上一次的容器尺寸，用于计算相对位置
+const prevAvailableSize = ref({ width: 0, height: 0 });
 
 // 监听预览容器尺寸变化
 const setupResizeObserver = () => {
@@ -1044,11 +1124,20 @@ const setupResizeObserver = () => {
   if (!container) return;
 
   resizeObserver = new ResizeObserver(() => {
-    if (previewVisible.value && previewScale.value === 1) {
-      // 只有在预览可见且未缩放时才重新测量
-      measureContainerSize();
+    if (!previewVisible.value) return;
+
+    // 保存变化前的容器尺寸
+    const prevAvailable = { ...prevAvailableSize.value };
+
+    // 更新容器尺寸
+    measureContainerSize();
+
+    // 更新保存的容器尺寸
+    prevAvailableSize.value = { ...previewAvailableSize.value };
+
+    if (previewScale.value === 1) {
+      // 未缩放时，重新测量基准尺寸并确保居中
       measureBaseSize();
-      // 如果图片小于容器，确保居中
       if (previewBaseSize.value.width > 0 && previewBaseSize.value.height > 0) {
         const containerSize = previewAvailableSize.value;
         const base = previewBaseSize.value;
@@ -1056,9 +1145,66 @@ const setupResizeObserver = () => {
           setPreviewTransform(1, 0, 0);
         }
       }
-    } else if (previewVisible.value) {
-      // 如果正在缩放，只更新容器尺寸
-      measureContainerSize();
+    } else {
+      // 已缩放时，保持图片在容器中的相对位置
+      const currentScale = previewScale.value;
+      const currentX = previewTranslateX.value;
+      const currentY = previewTranslateY.value;
+
+      // 如果基准尺寸已测量，计算新的位置以保持相对位置
+      const available = previewAvailableSize.value;
+      const base = previewBaseSize.value;
+      if (available.width > 0 && available.height > 0 && base.width > 0 && base.height > 0) {
+        const scaledWidth = base.width * currentScale;
+        const scaledHeight = base.height * currentScale;
+
+        // 如果缩放后的图片现在小于等于容器，重置为未缩放状态
+        if (scaledWidth <= available.width && scaledHeight <= available.height) {
+          setPreviewTransform(1, 0, 0);
+          // 重置后需要重新测量基准尺寸
+          nextTick(() => {
+            measureBaseSize();
+          });
+        } else {
+          // 如果之前没有有效的容器尺寸，直接使用当前的 translate 值
+          if (prevAvailable.width <= 0 || prevAvailable.height <= 0) {
+            // 直接应用当前的缩放和位移，让 clampTranslate 使用新的容器尺寸重新计算边界
+            setPreviewTransform(currentScale, currentX, currentY);
+          } else {
+            // 计算旧的边界（基于变化前的容器尺寸）
+            const prevMaxOffsetX = Math.max(0, (scaledWidth - prevAvailable.width) / 2);
+            const prevMaxOffsetY = Math.max(0, (scaledHeight - prevAvailable.height) / 2);
+
+            // 计算新的边界（基于变化后的容器尺寸）
+            const newMaxOffsetX = Math.max(0, (scaledWidth - available.width) / 2);
+            const newMaxOffsetY = Math.max(0, (scaledHeight - available.height) / 2);
+
+            // 计算相对位置（-1 到 1 之间，-1 表示顶部/左侧，1 表示底部/右侧）
+            let relativeX = 0;
+            let relativeY = 0;
+            if (prevMaxOffsetX > 0) {
+              relativeX = currentX / prevMaxOffsetX;
+            }
+            if (prevMaxOffsetY > 0) {
+              relativeY = currentY / prevMaxOffsetY;
+            }
+
+            // 根据新的边界和相对位置计算新的绝对位置
+            const newX = newMaxOffsetX > 0 ? relativeX * newMaxOffsetX : 0;
+            const newY = newMaxOffsetY > 0 ? relativeY * newMaxOffsetY : 0;
+
+            // 应用新的位置（clampTranslate 会确保不超出边界）
+            setPreviewTransform(currentScale, newX, newY);
+          }
+        }
+      } else {
+        // 如果基准尺寸尚未测量，重置缩放来触发测量
+        // 这种情况应该很少发生，因为基准尺寸通常在图片加载时测量
+        setPreviewTransform(1, 0, 0);
+        nextTick(() => {
+          measureBaseSize();
+        });
+      }
     }
   });
 
@@ -1098,6 +1244,7 @@ watch(
 
 <style scoped lang="scss">
 .image-grid-root {
+  will-change: scroll-position; // 优化滚动性能
   width: 100%;
 }
 
@@ -1111,6 +1258,7 @@ watch(
   /* 为图片悬浮放大效果留出左右空间，避免在边缘时被裁剪 */
   padding-left: 8px;
   padding-right: 8px;
+  will-change: transform; // 优化列表元素移动性能
 }
 
 /* 列表淡入动画 */

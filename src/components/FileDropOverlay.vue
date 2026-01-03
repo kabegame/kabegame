@@ -50,11 +50,9 @@ defineExpose({
   left: 0;
   right: 0;
   bottom: 0;
-  background: linear-gradient(
-    135deg,
-    rgba(255, 107, 157, 0.15) 0%,
-    rgba(167, 139, 250, 0.15) 100%
-  );
+  background: linear-gradient(135deg,
+      rgba(255, 107, 157, 0.15) 0%,
+      rgba(167, 139, 250, 0.15) 100%);
   backdrop-filter: blur(12px);
   z-index: 9999;
   display: flex;
@@ -65,22 +63,20 @@ defineExpose({
 
 .drop-zone {
   position: relative;
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.95) 0%,
-    rgba(255, 240, 245, 0.95) 100%
-  );
+  background: linear-gradient(135deg,
+      rgba(255, 255, 255, 0.95) 0%,
+      rgba(255, 240, 245, 0.95) 100%);
   border: 3px dashed;
   border-color: var(--anime-primary);
   border-radius: 20px;
   padding: 48px 64px;
   text-align: center;
-  box-shadow: 
+  box-shadow:
     0 8px 32px rgba(255, 107, 157, 0.2),
     0 0 0 1px rgba(255, 107, 157, 0.1) inset;
   animation: pulse 2s ease-in-out infinite;
   backdrop-filter: blur(10px);
-  
+
   // 使用伪元素实现渐变边框效果
   &::before {
     content: '';
@@ -121,24 +117,30 @@ defineExpose({
 }
 
 @keyframes pulse {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: scale(1);
-    box-shadow: 
+    box-shadow:
       0 8px 32px rgba(255, 107, 157, 0.2),
       0 0 0 1px rgba(255, 107, 157, 0.1) inset;
   }
+
   50% {
     transform: scale(1.02);
-    box-shadow: 
+    box-shadow:
       0 12px 40px rgba(255, 107, 157, 0.35),
       0 0 0 1px rgba(255, 107, 157, 0.2) inset;
   }
 }
 
 @keyframes borderPulse {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 0.6;
   }
+
   50% {
     opacity: 0.8;
   }
@@ -154,4 +156,3 @@ defineExpose({
   opacity: 0;
 }
 </style>
-

@@ -33,8 +33,8 @@
         <span style="margin-left: 8px;">详情</span>
       </div>
       <!-- 收藏：单选或右键选中图片时可批量收藏 -->
-      <div v-if="!hideFavoriteAndAddToAlbum && (selectedCount === 1 || (selectedCount > 1 && isImageSelected))" class="context-menu-item"
-        @click.stop="$emit('command', 'favorite')">
+      <div v-if="!hideFavoriteAndAddToAlbum && (selectedCount === 1 || (selectedCount > 1 && isImageSelected))"
+        class="context-menu-item" @click.stop="$emit('command', 'favorite')">
         <el-icon>
           <StarFilled v-if="selectedCount === 1 && image?.favorite" />
           <Star v-else />
@@ -123,7 +123,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { InfoFilled, StarFilled, Star, DocumentCopy, FolderOpened, Folder, Picture, Collection, Download, Delete, Remove, More, ArrowRight } from "@element-plus/icons-vue";
+import { InfoFilled, StarFilled, Star, DocumentCopy, FolderOpened, Folder, Picture, Collection, Download, Delete, More, ArrowRight } from "@element-plus/icons-vue";
 import type { ImageInfo } from "@/stores/crawler";
 import ContextMenu from "@/components/ContextMenu.vue";
 

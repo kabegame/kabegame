@@ -814,8 +814,8 @@ impl Storage {
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                  images.\"order\"
                  FROM images
-                 LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = ?
-                 WHERE images.url = ?1",
+                 LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = ?1
+                 WHERE images.url = ?2",
                 params![FAVORITE_ALBUM_ID, url],
                 |row| {
                     Ok(ImageInfo {
@@ -848,8 +848,8 @@ impl Storage {
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                  images.\"order\"
                  FROM images
-                 LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = ?
-                 WHERE images.hash = ?1",
+                 LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = ?1
+                 WHERE images.hash = ?2",
                 params![FAVORITE_ALBUM_ID, hash],
                 |row| {
                     Ok(ImageInfo {

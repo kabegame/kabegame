@@ -1251,7 +1251,7 @@ fn start_wallpaper_rotation(
                     }
                     // 画册不存在：回退到画廊
                     if e.contains("画册不存在") {
-                        eprintln!(
+                    eprintln!(
                             "[WARN] start_wallpaper_rotation: saved album_id missing, fallback to gallery. err={}",
                         e
                     );
@@ -1856,32 +1856,32 @@ fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
         return Err("找不到主窗口".to_string());
     };
 
-    // 在隐藏窗口前保存窗口状态
-    let position = window.outer_position().ok();
-    let size = window.outer_size().ok();
-    let maximized = window.is_maximized().unwrap_or(false);
+        // 在隐藏窗口前保存窗口状态
+            let position = window.outer_position().ok();
+            let size = window.outer_size().ok();
+            let maximized = window.is_maximized().unwrap_or(false);
 
-    if let (Some(pos), Some(sz)) = (position, size) {
-        let window_state = WindowState {
-            x: if maximized { None } else { Some(pos.x as f64) },
-            y: if maximized { None } else { Some(pos.y as f64) },
-            width: sz.width as f64,
-            height: sz.height as f64,
-            maximized,
-        };
+            if let (Some(pos), Some(sz)) = (position, size) {
+                let window_state = WindowState {
+                    x: if maximized { None } else { Some(pos.x as f64) },
+                    y: if maximized { None } else { Some(pos.y as f64) },
+                    width: sz.width as f64,
+                    height: sz.height as f64,
+                    maximized,
+                };
 
-        // 保存窗口状态
-        if let Some(settings_state) = app.try_state::<Settings>() {
-            if let Err(e) = settings_state.save_window_state(window_state) {
-                eprintln!("保存窗口状态失败: {}", e);
+                // 保存窗口状态
+                if let Some(settings_state) = app.try_state::<Settings>() {
+                    if let Err(e) = settings_state.save_window_state(window_state) {
+                        eprintln!("保存窗口状态失败: {}", e);
+                }
             }
         }
-    }
 
-    window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
+        window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
 
     // 隐藏主窗口后，修复壁纸窗口的 Z-order（防止壁纸窗口覆盖桌面图标）
-    #[cfg(target_os = "windows")]
+#[cfg(target_os = "windows")]
     {
         fix_wallpaper_window_zorder(&app);
     }

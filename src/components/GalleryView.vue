@@ -15,21 +15,21 @@
         <ImageGrid v-if="images" ref="gridRef" :images="images" :image-url-map="imageUrlMap"
             :image-click-action="imageClickAction" :columns="columns"
             :aspect-ratio-match-window="aspectRatioMatchWindow" :window-aspect-ratio="windowAspectRatio"
-            :allow-select="allowSelect" :enable-context-menu="enableContextMenu"
-            :show-load-more-button="showLoadMoreButton" :has-more="hasMore" :loading-more="loadingMore"
-            :show-empty-state="showEmptyState" :enable-reorder="enableReorder"
+            :allow-select="allowSelect" :show-load-more-button="showLoadMoreButton" :has-more="hasMore"
+            :loading-more="loadingMore" :show-empty-state="showEmptyState" :enable-reorder="enableReorder"
+            :context-menu-component="contextMenuComponent"
             @image-dbl-click="(img, ev) => emit('image-dbl-click', img, ev)"
             @context-command="(payload) => emit('context-command', payload)" @load-more="() => emit('load-more')"
             @selection-change="(ids) => emit('selection-change', ids)"
-            @contextmenu="(ev, img) => emit('contextmenu', ev, img)"
-            @reorder="(newOrder) => emit('reorder', newOrder)" />
+            @contextmenu="(ev, img) => emit('contextmenu', ev, img)" @reorder="(newOrder) => emit('reorder', newOrder)">
+        </ImageGrid>
 
         <slot name="overlays" />
     </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from "vue";
 import { Warning, CircleClose } from "@element-plus/icons-vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import { enableDragScroll, type DragScrollOptions } from "@/utils/dragScroll";
@@ -49,8 +49,9 @@ const props = withDefaults(
         aspectRatioMatchWindow: boolean;
         windowAspectRatio: number;
 
+        contextMenuComponent?: Component;
+
         allowSelect?: boolean;
-        enableContextMenu?: boolean;
         showLoadMoreButton?: boolean;
         hasMore?: boolean;
         loadingMore?: boolean;
@@ -76,7 +77,6 @@ const props = withDefaults(
         loading: false,
         imageClickAction: "preview",
         allowSelect: false,
-        enableContextMenu: false,
         showLoadMoreButton: false,
         hasMore: false,
         loadingMore: false,

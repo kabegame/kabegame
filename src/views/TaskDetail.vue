@@ -24,25 +24,24 @@
         <GalleryView class="detail-body" mode="albumDetail" :loading="loading" :images="images"
             :image-url-map="imageSrcMap" :image-click-action="imageClickAction" :columns="taskColumns"
             :aspect-ratio-match-window="!!taskAspectRatio" :window-aspect-ratio="taskAspectRatio || 16 / 9"
-            :allow-select="true" :enable-context-menu="false" :enable-ctrl-wheel-adjust-columns="true"
-            :show-empty-state="!loading" :enable-reorder="false" :is-blocked="() => isBlockingOverlayOpen"
+            :allow-select="true" :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="!loading"
+            :enable-reorder="false" :is-blocked="() => isBlockingOverlayOpen"
+            :context-menu-component="TaskImageContextMenu"
             @adjust-columns="(...args) => throttledAdjustColumns(args[0])"
             @selection-change="(...args) => handleSelectionChange(args[0])"
             @image-dbl-click="(...args) => handleImageDblClick(args[0])"
-            @contextmenu="(...args) => handleImageContextMenu(args[0], args[1])">
+            @context-command="(...args: any[]) => handleImageMenuCommand(args[0])">
 
             <template #overlays>
-                <ImageContextMenu :visible="imageMenuVisible" :position="imageMenuPosition" :image="imageMenuImage"
-                    :selected-count="Math.max(1, selectedImages.size)" :is-image-selected="isImageMenuImageSelected"
-                    :simplified-multi-select-menu="false" :hide-favorite-and-add-to-album="false"
-                    remove-text="删除" @close="imageMenuVisible = false" @command="handleImageMenuCommand" />
+
 
                 <ImagePreviewDialog v-model="showPreview" v-model:image-url="previewUrl" :image-path="previewPath"
                     :image="previewImage" @contextmenu="handlePreviewContextMenu" />
 
                 <ImageDetailDialog v-model="showImageDetail" :image="selectedDetailImage" />
 
-                <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="pendingAddToAlbumImageIds"
+                <!-- 加入画册对话框 -->
+                <AddToAlbumDialog v-model="showAlbumDialog" :image-ids="pendingAlbumImageIds"
                     @added="handleAddedToAlbum" />
 
                 <!-- 移除/删除确认对话框 -->
@@ -75,9 +74,9 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { VideoPause, Delete, Setting } from "@element-plus/icons-vue";
 import ImagePreviewDialog from "@/components/ImagePreviewDialog.vue";
 import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
-import ImageContextMenu from "@/components/ImageContextMenu.vue";
-import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
+import TaskImageContextMenu from "@/components/contextMenu/TaskImageContextMenu.vue";
 import GalleryView from "@/components/GalleryView.vue";
+import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useSettingsStore } from "@/stores/settings";
 import { usePluginStore } from "@/stores/plugins";
@@ -134,10 +133,15 @@ let unlistenTaskProgress: (() => void) | null = null;
 
 const taskSubtitle = computed(() => {
     const parts: string[] = [];
+    // 优先显示当前图片数量
     if (images.value.length > 0) {
         parts.push(`共 ${images.value.length} 张`);
-    } else if (taskInfo.value?.totalImages !== undefined) {
-        parts.push(`共 ${taskInfo.value.totalImages} 张`);
+    } else {
+        parts.push(`共 0 张`);
+    }
+    // 如果已删除数量 > 0，显示已删除数量
+    if (taskInfo.value?.deletedCount && taskInfo.value.deletedCount > 0) {
+        parts.push(`已删除 ${taskInfo.value.deletedCount} 张`);
     }
     if (taskInfo.value?.startTime) {
         // 如果任务正在运行且没有结束时间，使用 currentTime 来实时更新
@@ -227,8 +231,23 @@ watch(
     { immediate: true }
 );
 
+// 监听路由参数变化，当切换到另一个任务时重新加载数据
+watch(
+    () => route.params.id,
+    async (newId) => {
+        if (newId && typeof newId === "string" && newId !== taskId.value) {
+            // 清理旧的定时器和监听器
+            stopTimersAndListeners();
+            // 初始化新任务
+            await initTask(newId);
+            // 重新启动定时器和监听器
+            await startTimersAndListeners();
+        }
+    }
+);
+
 const isBlockingOverlayOpen = computed(() => {
-    return showPreview.value || showImageDetail.value || showAddToAlbumDialog.value || imageMenuVisible.value;
+    return showPreview.value || showImageDetail.value || showAlbumDialog.value || imageMenuVisible.value;
 });
 
 const goBack = () => {
@@ -311,13 +330,6 @@ const handleImageDblClick = async (image: ImageInfo) => {
     }
 };
 
-const handleImageContextMenu = (event: MouseEvent, image: ImageInfo) => {
-    event.preventDefault();
-    imageMenuImage.value = image;
-    imageMenuPosition.value = { x: event.clientX, y: event.clientY };
-    imageMenuVisible.value = true;
-};
-
 const handlePreviewContextMenu = (event: MouseEvent) => {
     event.preventDefault();
     if (previewImage.value) {
@@ -327,8 +339,13 @@ const handlePreviewContextMenu = (event: MouseEvent) => {
     }
 };
 
-const handleAddedToAlbum = async () => {
-    // 可以在这里刷新画册列表
+const openAddToAlbumDialog = async (images: ImageInfo[]) => {
+    pendingAlbumImages.value = images;
+    showAlbumDialog.value = true;
+};
+
+const handleAddedToAlbum = () => {
+    pendingAlbumImages.value = [];
 };
 
 const handleStopTask = async () => {
@@ -392,13 +409,11 @@ const selectedDetailImage = ref<ImageInfo | null>(null);
 const imageMenuVisible = ref(false);
 const imageMenuPosition = ref({ x: 0, y: 0 });
 const imageMenuImage = ref<ImageInfo | null>(null);
-const isImageMenuImageSelected = computed(() => {
-    return imageMenuImage.value ? selectedImages.value.has(imageMenuImage.value.id) : false;
-});
 
 // 添加到画册对话框
-const showAddToAlbumDialog = ref(false);
-const pendingAddToAlbumImageIds = ref<string[]>([]);
+const showAlbumDialog = ref(false);
+const pendingAlbumImages = ref<ImageInfo[]>([]);
+const pendingAlbumImageIds = computed(() => pendingAlbumImages.value.map(img => img.id));
 
 // 移除/删除对话框相关
 const showRemoveDialog = ref(false);
@@ -414,34 +429,37 @@ const clearSelection = () => {
     selectedImages.value.clear();
 };
 
-const handleImageMenuCommand = async (command: string) => {
-    imageMenuVisible.value = false;
-    if (!imageMenuImage.value) return;
+const handleImageMenuCommand = async (payload: { command: string; image: ImageInfo; selectedImageIds: Set<string> }) => {
+    const command = payload.command;
+    const image = payload.image;
+    const selectedSet = payload.selectedImageIds && payload.selectedImageIds.size > 0
+        ? payload.selectedImageIds
+        : new Set([image.id]);
+
+    const isMultiSelect = selectedSet.size > 1;
+    const imagesToProcess = isMultiSelect
+        ? images.value.filter((img) => selectedSet.has(img.id))
+        : [image];
 
     switch (command) {
-        case "preview":
-            previewImage.value = imageMenuImage.value;
-            previewPath.value = imageMenuImage.value.localPath;
-            previewUrl.value = imageSrcMap.value[imageMenuImage.value.id]?.original || "";
-            showPreview.value = true;
-            break;
         case "detail":
-            selectedDetailImage.value = imageMenuImage.value;
-            showImageDetail.value = true;
+            if (!isMultiSelect) {
+                selectedDetailImage.value = image;
+                showImageDetail.value = true;
+            }
             break;
         case "open":
-            try {
-                await invoke("open_file_path", { filePath: imageMenuImage.value.localPath });
-            } catch (error) {
-                console.error("打开文件失败:", error);
-                ElMessage.error("打开文件失败");
+            if (!isMultiSelect) {
+                try {
+                    await invoke("open_file_path", { filePath: image.localPath });
+                } catch (error) {
+                    console.error("打开文件失败:", error);
+                    ElMessage.error("打开文件失败");
+                }
             }
             break;
         case "remove":
             // 显示移除对话框，让用户选择是否删除文件
-            const imagesToProcess = selectedImages.value.size > 1
-                ? images.value.filter((img) => selectedImages.value.has(img.id))
-                : [imageMenuImage.value];
             pendingRemoveImages.value = imagesToProcess;
             const count = imagesToProcess.length;
             removeDialogMessage.value = `将删除${count > 1 ? `这 ${count} 张图片` : "这张图片"}。`;
@@ -451,23 +469,20 @@ const handleImageMenuCommand = async (command: string) => {
         case "favorite":
             // 批量收藏：将选中的图片添加到收藏画册
             try {
-                const imagesToFavorite = selectedImages.value.size > 1
-                    ? images.value.filter((img) => selectedImages.value.has(img.id))
-                    : [imageMenuImage.value];
-                const imageIds = imagesToFavorite.map((img) => img.id);
-                
+                const imageIds = imagesToProcess.map((img) => img.id);
+
                 // 获取收藏画册ID
                 await albumStore.loadAlbums();
                 const favoriteAlbumId = FAVORITE_ALBUM_ID.value;
-                
+
                 if (!favoriteAlbumId) {
                     ElMessage.error("收藏画册不存在");
                     return;
                 }
-                
+
                 // 添加到收藏画册
                 await albumStore.addImagesToAlbum(favoriteAlbumId, imageIds);
-                
+
                 // 更新本地图片的 favorite 字段
                 images.value = images.value.map((img) => {
                     if (imageIds.includes(img.id)) {
@@ -475,7 +490,7 @@ const handleImageMenuCommand = async (command: string) => {
                     }
                     return img;
                 });
-                
+
                 const count = imageIds.length;
                 ElMessage.success(count > 1 ? `已收藏 ${count} 张图片` : "已收藏");
             } catch (error: any) {
@@ -486,17 +501,11 @@ const handleImageMenuCommand = async (command: string) => {
             break;
         case "addToAlbum":
             // 仅当多选时右键多选的其中一个时才能批量操作
-            const isMultiSelect = selectedImages.value.size > 1;
-            if (isMultiSelect && !selectedImages.value.has(imageMenuImage.value.id)) {
+            if (isMultiSelect && !selectedSet.has(image.id)) {
                 ElMessage.warning("请右键点击已选中的图片");
                 return;
             }
-            
-            const imagesToAdd = isMultiSelect
-                ? images.value.filter((img) => selectedImages.value.has(img.id))
-                : [imageMenuImage.value];
-            pendingAddToAlbumImageIds.value = imagesToAdd.map((img) => img.id);
-            showAddToAlbumDialog.value = true;
+            await openAddToAlbumDialog(imagesToProcess);
             break;
     }
 };
@@ -535,6 +544,9 @@ const confirmRemoveImages = async () => {
             imageSrcMap.value = rest;
         }
         clearSelection();
+
+        // 重新加载任务信息以获取最新的 deletedCount
+        await loadTaskInfo();
 
         const action = shouldDeleteFiles ? "删除" : "移除";
         ElMessage.success(
@@ -680,6 +692,7 @@ onDeactivated(() => {
     // 这样即使不在 TaskDetail 页面，图片也会继续同步添加到列表
     stopTimers();
 });
+
 </script>
 
 <style scoped lang="scss">

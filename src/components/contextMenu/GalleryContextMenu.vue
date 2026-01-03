@@ -6,7 +6,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ImageInfo } from "@/stores/crawler";
-import ImageContextMenu from "@/components/ImageContextMenu.vue";
+import ImageContextMenu from "./ImageContextMenu.vue";
 
 interface Props {
   visible: boolean;

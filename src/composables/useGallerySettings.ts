@@ -1,5 +1,4 @@
 import { ref, computed, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useSettingsStore } from "@/stores/settings";
 
@@ -25,6 +24,17 @@ export function useGallerySettings() {
     }
   );
 
+  // 监听 galleryPageSize 的变化，实时同步到 crawlerStore
+  watch(
+    () => settingsStore.values.galleryPageSize,
+    (v) => {
+      if (v !== undefined && v > 0) {
+        crawlerStore.setPageSize(v);
+      }
+    },
+    { immediate: true }
+  );
+
   // 加载设置
   const loadSettings = async () => {
     try {
@@ -32,7 +42,8 @@ export function useGallerySettings() {
       await settingsStore.loadAll();
 
       const settings = settingsStore.values;
-      galleryImageAspectRatioMatchWindow.value = settings.galleryImageAspectRatioMatchWindow || false;
+      galleryImageAspectRatioMatchWindow.value =
+        settings.galleryImageAspectRatioMatchWindow || false;
       if (settings.galleryPageSize && settings.galleryPageSize > 0) {
         crawlerStore.setPageSize(settings.galleryPageSize);
       }
@@ -60,4 +71,3 @@ export function useGallerySettings() {
     handleResize,
   };
 }
-

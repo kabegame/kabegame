@@ -1,7 +1,7 @@
 <template>
   <el-dialog v-model="visible" title="图片预览" width="90%" :close-on-click-modal="true" class="image-preview-dialog"
     @close="$emit('update:imageUrl', '')" :show-close="true" :lock-scroll="true">
-    <div v-if="imageUrl" class="preview-container">
+    <div v-if="imageUrl" class="preview-container" @contextmenu.prevent.stop="$emit('contextmenu', $event)">
       <img :src="imageUrl" class="preview-image" alt="预览图片" @contextmenu.prevent.stop="$emit('contextmenu', $event)" />
     </div>
   </el-dialog>

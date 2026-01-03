@@ -93,14 +93,47 @@ impl PluginManager {
             }
         }
 
-        // 生产模式：使用 Tauri resource_dir
-        let dir = self
+        // 生产模式：尝试多个位置查找 resources/plugins
+        // 1. 首先尝试使用 Tauri resource_dir
+        if let Ok(resource_dir) = self.app.path().resource_dir() {
+            let dir = resource_dir.join("plugins");
+            if dir.exists() {
+                return Ok(dir);
+            }
+        }
+
+        // 2. 如果 resource_dir 不存在或目录不存在，尝试从可执行文件目录查找
+        // 在 Windows 安装包中，resources 可能在可执行文件目录下
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                // 尝试 exe_dir/resources/plugins
+                let dir = exe_dir.join("resources").join("plugins");
+                if dir.exists() {
+                    return Ok(dir);
+                }
+                // 尝试 exe_dir/../resources/plugins（如果是子目录结构）
+                if let Some(parent_dir) = exe_dir.parent() {
+                    let dir = parent_dir.join("resources").join("plugins");
+                    if dir.exists() {
+                        return Ok(dir);
+                    }
+                }
+            }
+        }
+
+        // 如果都找不到，尝试使用 resource_dir 的默认路径（即使目录可能不存在）
+        // 这样可以让调用方得到更有意义的错误信息
+        let default_dir = self
             .app
             .path()
             .resource_dir()
             .map_err(|e| format!("Failed to resolve resource_dir: {}", e))?
             .join("plugins");
-        Ok(dir)
+        
+        Err(format!(
+            "无法找到预打包插件目录。已尝试以下位置：\n  - {}\n  - 可执行文件目录下的 resources/plugins\n请确认插件文件已正确打包到 resources/plugins 目录",
+            default_dir.display()
+        ))
     }
 
     /// 从编译期常量解析内置插件列表（逗号分隔）

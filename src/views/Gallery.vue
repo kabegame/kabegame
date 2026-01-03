@@ -11,13 +11,14 @@
     <GalleryView ref="galleryViewRef" class="gallery-container" mode="gallery" :images="displayedImages"
       :image-url-map="imageSrcMap" :image-click-action="imageClickAction" :columns="galleryColumns"
       :aspect-ratio-match-window="!!galleryImageAspectRatio" :window-aspect-ratio="effectiveAspectRatio"
-      :allow-select="true" :enable-context-menu="true" :show-load-more-button="true" :has-more="crawlerStore.hasMore"
-      :loading-more="isLoadingMore" :is-blocked="isBlockingOverlayOpen" :loading="dedupeLoading"
+      :allow-select="true" :show-load-more-button="true" :has-more="crawlerStore.hasMore" :loading-more="isLoadingMore"
+      :is-blocked="isBlockingOverlayOpen" :loading="dedupeLoading" :context-menu-component="GalleryContextMenu"
       @container-mounted="(...args: any[]) => setGalleryContainerEl(args[0])"
       @adjust-columns="(...args: any[]) => throttledAdjustColumns(args[0])" @scroll-stable="loadImageUrls()"
-      @load-more="loadMoreImages" @image-dbl-click="(...args: any[]) => handleImageDblClick(args[0])"
+      @load-more="() => loadMoreImages()" @image-dbl-click="(...args: any[]) => handleImageDblClick(args[0])"
       @context-command="(...args: any[]) => handleGridContextCommand(args[0])"
-      @reorder="(...args: any[]) => handleImageReorder(args[0])">
+      @reorder="(...args: any[]) => handleImageReorder(args[0])"
+      @blob-url-invalid="(...args: any[]) => handleBlobUrlInvalid(args[0], args[1], args[2])">
       <template #before-grid>
         <div v-if="showSkeleton" class="loading-skeleton">
           <div class="skeleton-grid">
@@ -48,31 +49,11 @@
         <ImageDetailDialog v-model="showImageDetail" :image="selectedImage" />
 
         <!-- 加入画册对话框 -->
-        <el-dialog v-model="showAlbumDialog" title="加入画册" width="420px">
-          <el-form label-width="80px">
-            <el-form-item label="选择画册">
-              <el-select v-model="selectedAlbumId" placeholder="选择一个心仪的画册吧" style="width: 100%">
-                <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
-                <el-option value="__create_new__" label="+ 新建画册">
-                  <span style="color: var(--el-color-primary); font-weight: 500;">+ 新建画册</span>
-                </el-option>
-              </el-select>
-            </el-form-item>
-            <el-form-item v-if="isCreatingNewAlbum" label="画册名称" required>
-              <el-input v-model="newAlbumName" placeholder="请输入画册名称" maxlength="50" show-word-limit
-                @keyup.enter="handleCreateAndAddAlbum" ref="newAlbumNameInputRef" />
-            </el-form-item>
-          </el-form>
-          <template #footer>
-            <el-button @click="showAlbumDialog = false">取消</el-button>
-            <el-button v-if="isCreatingNewAlbum" type="primary" :disabled="!newAlbumName.trim()"
-              @click="handleCreateAndAddAlbum">确定</el-button>
-            <el-button v-else type="primary" :disabled="!selectedAlbumId" @click="confirmAddToAlbum">确定</el-button>
-          </template>
-        </el-dialog>
+        <AddToAlbumDialog v-model="showAlbumDialog" :image-ids="pendingAlbumImageIds" @added="handleAddedToAlbum" />
 
         <!-- 收集对话框 -->
-        <CrawlerDialog v-model="showCrawlerDialog" :plugin-icons="pluginIcons" :initial-config="crawlerDialogInitialConfig" />
+        <CrawlerDialog v-model="showCrawlerDialog" :plugin-icons="pluginIcons"
+          :initial-config="crawlerDialogInitialConfig" />
 
         <!-- 去重确认对话框 -->
         <el-dialog v-model="showDedupeDialog" title="确认去重" width="420px" destroy-on-close>
@@ -115,12 +96,13 @@ import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox, ElCheckbox } from "element-plus";
 import { Plus } from "@element-plus/icons-vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
-import { useAlbumStore } from "@/stores/albums";
 import { usePluginStore } from "@/stores/plugins";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
 import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
 import GalleryView from "@/components/GalleryView.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
+import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
+import GalleryContextMenu from "@/components/contextMenu/GalleryContextMenu.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import { useGalleryImages } from "@/composables/useGalleryImages";
 import { useGallerySettings } from "@/composables/useGallerySettings";
@@ -139,7 +121,6 @@ const crawlerStore = useCrawlerStore();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettingsDrawer = () => quickSettingsDrawer.open("gallery");
 const pluginStore = usePluginStore();
-const albumStore = useAlbumStore();
 const settingsStore = useSettingsStore();
 
 const dedupeProcessing = ref(false); // 正在执行"按哈希去重"本体
@@ -181,13 +162,8 @@ const refreshKey = ref(0);
 const setGalleryContainerEl = (el: HTMLElement) => {
   galleryContainerRef.value = el;
 };
-const selectedAlbumId = ref<string>("");
-const newAlbumName = ref<string>("");
 const pendingAlbumImages = ref<ImageInfo[]>([]);
-const newAlbumNameInputRef = ref<any>(null);
-
-// 是否正在创建新画册
-const isCreatingNewAlbum = computed(() => selectedAlbumId.value === "__create_new__");
+const pendingAlbumImageIds = computed(() => pendingAlbumImages.value.map(img => img.id));
 const selectedImage = ref<ImageInfo | null>(null);
 // 使用画廊设置 composable
 const {
@@ -272,7 +248,6 @@ const plugins = computed(() => pluginStore.plugins);
 const tasks = computed(() => crawlerStore.tasks);
 
 // 插件配置相关的变量和函数已移至 CrawlerDialog 组件
-const albums = computed(() => albumStore.albums);
 
 // 使用画廊图片 composable
 const {
@@ -284,6 +259,7 @@ const {
   loadMoreImages: loadMoreImagesFromComposable,
   loadAllImages: loadAllImagesFromComposable,
   removeFromUiCacheByIds,
+  recreateImageUrl,
 } = useGalleryImages(
   galleryContainerRef,
   filterPluginId,
@@ -374,13 +350,11 @@ const loadTotalImagesCount = async () => {
 
 const openAddToAlbumDialog = async (images: ImageInfo[]) => {
   pendingAlbumImages.value = images;
-  if (albums.value.length === 0) {
-    await albumStore.loadAlbums();
-  }
-  // 重置状态
-  selectedAlbumId.value = "";
-  newAlbumName.value = "";
   showAlbumDialog.value = true;
+};
+
+const handleAddedToAlbum = () => {
+  pendingAlbumImages.value = [];
 };
 
 // 配置兼容性检查相关的代码已移至 useConfigCompatibility composable 和 CrawlerDialog 组件
@@ -396,90 +370,6 @@ watch(showCrawlerDialog, async (open) => {
   }
 });
 
-// 处理新建画册并加入图片
-const handleCreateAndAddAlbum = async () => {
-  if (pendingAlbumImages.value.length === 0) {
-    showAlbumDialog.value = false;
-    return;
-  }
-
-  if (!newAlbumName.value.trim()) {
-    ElMessage.warning("请输入画册名称");
-    return;
-  }
-
-  try {
-    // 创建新画册
-    const created = await albumStore.createAlbum(newAlbumName.value.trim());
-
-    // 添加图片到新画册（新画册为空，无需过滤）
-    const allIds = pendingAlbumImages.value.map(img => img.id);
-    await albumStore.addImagesToAlbum(created.id, allIds);
-
-    // 成功后弹窗提示
-    ElMessage.success(`已创建画册「${created.name}」并加入 ${allIds.length} 张图片`);
-
-    // 关闭对话框并重置状态
-    showAlbumDialog.value = false;
-    pendingAlbumImages.value = [];
-    selectedAlbumId.value = "";
-    newAlbumName.value = "";
-  } catch (error: any) {
-    console.error("创建画册并加入图片失败:", error);
-    const errorMessage = error?.message || String(error);
-    ElMessage.error(errorMessage || "操作失败");
-  }
-};
-
-const confirmAddToAlbum = async () => {
-  if (pendingAlbumImages.value.length === 0) {
-    showAlbumDialog.value = false;
-    return;
-  }
-
-  const albumId = selectedAlbumId.value;
-  if (!albumId) {
-    ElMessage.warning("请选择画册");
-    return;
-  }
-
-  const allIds = pendingAlbumImages.value.map(img => img.id);
-
-  // 过滤掉已经在画册中的图片
-  let idsToAdd = allIds;
-  try {
-    const existingIds = await albumStore.getAlbumImageIds(albumId);
-    const existingSet = new Set(existingIds);
-    idsToAdd = allIds.filter(id => !existingSet.has(id));
-
-    if (idsToAdd.length === 0) {
-      ElMessage.info("所选图片已全部在画册中");
-      showAlbumDialog.value = false;
-      pendingAlbumImages.value = [];
-      return;
-    }
-
-    if (idsToAdd.length < allIds.length) {
-      const skippedCount = allIds.length - idsToAdd.length;
-      ElMessage.warning(`已跳过 ${skippedCount} 张已在画册中的图片`);
-    }
-  } catch (error) {
-    console.error("获取画册图片列表失败:", error);
-    // 如果获取失败，仍然尝试添加（后端有 INSERT OR IGNORE 保护）
-  }
-
-  try {
-    await albumStore.addImagesToAlbum(albumId, idsToAdd);
-    ElMessage.success(`已加入画册（${idsToAdd.length} 张）`);
-    showAlbumDialog.value = false;
-    pendingAlbumImages.value = [];
-    selectedAlbumId.value = "";
-  } catch (error: any) {
-    console.error("加入画册失败:", error);
-    const errorMessage = error?.message || String(error);
-    ElMessage.error(errorMessage || "加入画册失败");
-  }
-};
 
 // 加载插件图标
 const loadPluginIcons = async () => {
@@ -506,9 +396,6 @@ const loadPluginIcons = async () => {
     }
   }
 };
-
-
-
 
 const handleImageDblClick = async (image: ImageInfo) => {
   // 预览功能已下沉到 ImageGrid，这里只处理 open 模式
@@ -641,7 +528,6 @@ const confirmRemoveImages = async () => {
     return;
   }
 
-  const count = imagesToRemove.length;
   const shouldDeleteFiles = removeDeleteFiles.value;
 
   showRemoveDialog.value = false;
@@ -649,6 +535,34 @@ const confirmRemoveImages = async () => {
   // 使用统一的删除函数
   await handleBatchDeleteImages(imagesToRemove, shouldDeleteFiles);
 };
+
+// 监听删除对话框的打开状态，添加键盘事件支持回车键删除
+let removeDialogKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+watch(showRemoveDialog, (isOpen) => {
+  if (isOpen) {
+    // 对话框打开时，添加键盘事件监听器
+    removeDialogKeyHandler = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        // 如果焦点在复选框上，不触发删除（允许用户用空格切换复选框）
+        const activeElement = document.activeElement;
+        if (activeElement?.tagName === "INPUT" && (activeElement as HTMLInputElement).type === "checkbox") {
+          return;
+        }
+        e.preventDefault();
+        confirmRemoveImages();
+      }
+    };
+    nextTick(() => {
+      document.addEventListener("keydown", removeDialogKeyHandler!);
+    });
+  } else {
+    // 对话框关闭时，移除键盘事件监听器
+    if (removeDialogKeyHandler) {
+      document.removeEventListener("keydown", removeDialogKeyHandler);
+      removeDialogKeyHandler = null;
+    }
+  }
+});
 
 
 // refreshImagesPreserveCache, refreshLatestIncremental, loadMoreImages, loadAllImages 已移至 useGalleryImages composable
@@ -665,29 +579,6 @@ watch(showFavoritesOnly, () => {
   galleryViewRef.value?.clearSelection?.();
 });
 
-// 监听画册选择变化，当选择"新建"时自动聚焦输入框
-watch(selectedAlbumId, (newValue) => {
-  if (newValue === "__create_new__") {
-    // 等待 DOM 更新后聚焦输入框
-    nextTick(() => {
-      if (newAlbumNameInputRef.value) {
-        newAlbumNameInputRef.value.focus();
-      }
-    });
-  } else {
-    // 选择已有画册时清空新建名称
-    newAlbumName.value = "";
-  }
-});
-
-// 监听对话框关闭，重置状态
-watch(showAlbumDialog, (isOpen) => {
-  if (!isOpen) {
-    selectedAlbumId.value = "";
-    newAlbumName.value = "";
-  }
-});
-
 // 监听 CrawlerDialog 关闭，清空初始配置
 watch(showCrawlerDialog, (isOpen) => {
   if (!isOpen) {
@@ -697,6 +588,16 @@ watch(showCrawlerDialog, (isOpen) => {
     });
   }
 });
+
+// 处理 Blob URL 无效事件
+const handleBlobUrlInvalid = async (_url: string, imageId: string, localPath: string) => {
+  // 判断是缩略图还是原图
+  const image = displayedImages.value.find((img) => img.id === imageId);
+  if (!image) return;
+
+  const isThumbnail = image.thumbnailPath === localPath;
+  await recreateImageUrl(imageId, localPath, isThumbnail);
+};
 
 // 处理图片拖拽排序
 const handleImageReorder = async (newOrder: ImageInfo[]) => {
@@ -927,10 +828,10 @@ onMounted(async () => {
       isDirectory: boolean;
       outputDir: string;
     }>;
-    
+
     const { path, isDirectory, outputDir } = customEvent.detail;
     console.log('[Gallery] 收到文件拖拽事件:', { path, isDirectory, outputDir });
-    
+
     try {
       // 确保在画廊页面（App.vue 已经处理了路由跳转，这里只是双重保险）
       const currentPath = router.currentRoute.value.path;
@@ -941,7 +842,7 @@ onMounted(async () => {
         // 再等待一下确保组件已激活
         await new Promise(resolve => setTimeout(resolve, 200));
       }
-      
+
       if (isDirectory) {
         // 文件夹：使用 local-folder-import 插件
         console.log('[Gallery] 设置文件夹导入配置，路径:', path);
@@ -965,7 +866,7 @@ onMounted(async () => {
         };
         ElMessage.success('文件已准备导入');
       }
-      
+
       // 打开对话框
       console.log('[Gallery] 打开对话框，showCrawlerDialog 当前值:', showCrawlerDialog.value);
       showCrawlerDialog.value = true;
@@ -979,17 +880,6 @@ onMounted(async () => {
 
   window.addEventListener('file-drop', handleFileDrop);
   (window as any).__galleryFileDropHandler = handleFileDrop;
-
-  // 辅助函数：从文件路径提取目录路径
-  const getDirectoryFromPath = (filePath: string): string => {
-    // 处理 Windows 路径 (D:\path\to\file.jpg) 和 Unix 路径 (/path/to/file.jpg)
-    const lastSlash = Math.max(filePath.lastIndexOf('\\'), filePath.lastIndexOf('/'));
-    if (lastSlash >= 0) {
-      return filePath.substring(0, lastSlash);
-    }
-    // 如果没有找到分隔符，返回空字符串（当前目录）
-    return '';
-  };
 
 });
 
@@ -1118,6 +1008,12 @@ onUnmounted(() => {
   if (imagesDeletedHandler) {
     window.removeEventListener("images-deleted", imagesDeletedHandler);
     delete (window as any).__imagesDeletedHandler;
+  }
+
+  // 清理删除对话框的键盘事件监听器
+  if (removeDialogKeyHandler) {
+    document.removeEventListener("keydown", removeDialogKeyHandler);
+    removeDialogKeyHandler = null;
   }
 
   // 移除文件拖入事件监听

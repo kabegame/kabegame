@@ -20,26 +20,43 @@ export function useGalleryImages(
 
   // 图片 URL 映射，存储每个图片的缩略图和原图 URL
   // 使用 shallowRef 减少深度响应式追踪，避免每次更新都触发重新渲染
-  const imageSrcMap = ref<Record<string, { thumbnail?: string; original?: string }>>({});
-  
+  const imageSrcMap = ref<
+    Record<string, { thumbnail?: string; original?: string }>
+  >({});
+
   // 已经加载过 URL 的图片 ID，用于快速跳过重复加载
   const loadedImageIds = new Set<string>();
 
-  // 存储所有创建的 Blob URL，用于在组件卸载时释放内存
-  const blobUrls = new Set<string>();
+  // 存储 Blob URL 到 Blob 对象的映射，用于在组件卸载时释放内存
+  // 同时保持 Blob 对象引用，防止被垃圾回收导致 URL 失效
+  const blobObjects = new Map<string, Blob>();
 
   // 将本地文件路径转换为 Blob URL（比 base64 更高效）
   async function getImageUrl(localPath: string): Promise<string> {
     if (!localPath) return "";
     try {
       // 移除 Windows 长路径前缀 \\?\（如果存在）
-      let normalizedPath = localPath.trimStart().replace(/^\\\\\?\\/, "");
+      let normalizedPath = localPath
+        .trimStart()
+        .replace(/^\\\\\?\\/, "")
+        .trim();
+
+      if (!normalizedPath) {
+        console.error("路径为空:", localPath);
+        return "";
+      }
 
       // 读取文件二进制数据
       const fileData = await readFile(normalizedPath);
 
+      // 验证文件数据
+      if (!fileData || fileData.length === 0) {
+        console.error("文件数据为空:", localPath);
+        return "";
+      }
+
       // 根据文件扩展名确定 MIME 类型
-      const ext = normalizedPath.split('.').pop()?.toLowerCase();
+      const ext = normalizedPath.split(".").pop()?.toLowerCase();
       let mimeType = "image/jpeg";
       if (ext === "png") mimeType = "image/png";
       else if (ext === "gif") mimeType = "image/gif";
@@ -49,12 +66,18 @@ export function useGalleryImages(
       // 创建 Blob 对象
       const blob = new Blob([fileData], { type: mimeType });
 
+      // 验证 Blob 大小
+      if (blob.size === 0) {
+        console.error("Blob 大小为 0:", localPath);
+        return "";
+      }
+
       // 创建 Blob URL
       const blobUrl = URL.createObjectURL(blob);
 
-      // 记录 Blob URL，以便后续释放
-      blobUrls.add(blobUrl);
-
+      // 存储 Blob URL 到 Blob 对象的映射，防止被垃圾回收
+      blobObjects.set(blobUrl, blob);
+      // console.log("set blob object", blobUrl, blob);
       return blobUrl;
     } catch (error) {
       console.error("Failed to load image file:", error, localPath);
@@ -73,7 +96,8 @@ export function useGalleryImages(
 
     items.forEach((el) => {
       const rect = el.getBoundingClientRect();
-      const isVisible = rect.bottom >= containerRect.top && rect.top <= containerRect.bottom;
+      const isVisible =
+        rect.bottom >= containerRect.top && rect.top <= containerRect.bottom;
       if (isVisible) {
         const id = el.getAttribute("data-id");
         if (id) visibleIds.push(id);
@@ -85,12 +109,15 @@ export function useGalleryImages(
 
   // 加载图片 URL（可选传入待加载的图片列表）；只加载缺失的图片
   const loadImageUrls = async (targetImages?: ImageInfo[]) => {
+    // console.log("call loadImageUrls", targetImages);
+    // console.trace();
     const source = targetImages ?? displayedImages.value;
+    // console.log("source", source);
     const visibleIds = getVisibleImageIds();
     const visibleSet = new Set(visibleIds);
 
     // 只获取还没有加载的图片
-    const imagesToLoad = source.filter(img => {
+    const imagesToLoad = source.filter((img) => {
       if (loadedImageIds.has(img.id)) return false;
       const existing = imageSrcMap.value[img.id];
       // 如果图片已经加载过（有 thumbnail 或 original），则跳过
@@ -109,24 +136,32 @@ export function useGalleryImages(
       return;
     }
 
-    // 优先加载前20张（可见区域），并行加载以加快速度
-    const priorityImages = imagesToLoad.slice(0, 20);
-    const remainingImages = imagesToLoad.slice(20);
+    // 优先加载前30张（可见区域及附近），并行加载以加快速度
+    const priorityImages = imagesToLoad.slice(0, 30);
+    const remainingImages = imagesToLoad.slice(30);
 
     // 并行加载优先图片，每加载完一张立即更新，不等待所有图片加载完成
     const priorityPromises = priorityImages.map(async (image) => {
       // 再次检查，避免重复处理
-      if (imageSrcMap.value[image.id]?.thumbnail || imageSrcMap.value[image.id]?.original) {
+      if (
+        imageSrcMap.value[image.id]?.thumbnail ||
+        imageSrcMap.value[image.id]?.original
+      ) {
         return;
       }
 
-      // 异步读取文件并转换为 Blob URL
+      // 异步读取文件并转换为 Blob URL（简化版本，不进行验证以提升性能）
+      // 验证在 ImageItem 组件中进行，这里只负责快速加载
       try {
-        const thumbnailUrl = image.thumbnailPath ? await getImageUrl(image.thumbnailPath) : "";
+        const thumbnailUrl = image.thumbnailPath
+          ? await getImageUrl(image.thumbnailPath)
+          : "";
         const originalUrl = await getImageUrl(image.localPath);
 
         // 检查图片是否仍然存在（可能在异步操作期间被删除）
-        const imageStillExists = displayedImages.value.some(img => img.id === image.id);
+        const imageStillExists = displayedImages.value.some(
+          (img) => img.id === image.id
+        );
         if (!imageStillExists) {
           return;
         }
@@ -137,7 +172,6 @@ export function useGalleryImages(
         };
 
         // 立即更新，不等待其他图片
-        // 使用 Object.assign 确保触发响应式更新
         imageSrcMap.value = { ...imageSrcMap.value, [image.id]: imageData };
         loadedImageIds.add(image.id);
       } catch (error) {
@@ -153,9 +187,26 @@ export function useGalleryImages(
 
     // 剩余的图片在后台处理，批量更新以减少重新渲染
     if (remainingImages.length > 0) {
-      const remainingUpdates: Record<string, { thumbnail?: string; original?: string }> = {};
+      const remainingUpdates: Record<
+        string,
+        { thumbnail?: string; original?: string }
+      > = {};
       let processedCount = 0;
-      const BATCH_SIZE = 10; // 每处理 10 张图片批量更新一次
+      const BATCH_SIZE = 20; // 每处理 20 张图片批量更新一次（增加批量大小，减少更新频率）
+      let pendingUpdate = false; // 标记是否有待处理的更新
+
+      // 使用 requestAnimationFrame 批量更新，确保在下一帧渲染
+      const flushUpdates = () => {
+        if (Object.keys(remainingUpdates).length > 0) {
+          imageSrcMap.value = { ...imageSrcMap.value, ...remainingUpdates };
+          Object.keys(remainingUpdates).forEach((id) => loadedImageIds.add(id));
+          // 清空已更新的项
+          Object.keys(remainingUpdates).forEach(
+            (key) => delete remainingUpdates[key]
+          );
+        }
+        pendingUpdate = false;
+      };
 
       // 使用 requestIdleCallback 或 setTimeout 在空闲时处理
       const processRemaining = async (index = 0) => {
@@ -163,42 +214,58 @@ export function useGalleryImages(
           // 处理完所有图片后，批量更新剩余的
           if (Object.keys(remainingUpdates).length > 0) {
             imageSrcMap.value = { ...imageSrcMap.value, ...remainingUpdates };
-            Object.keys(remainingUpdates).forEach((id) => loadedImageIds.add(id));
+            Object.keys(remainingUpdates).forEach((id) =>
+              loadedImageIds.add(id)
+            );
           }
           return;
         }
 
         const image = remainingImages[index];
         // 再次检查，避免重复处理
-        if (loadedImageIds.has(image.id) || imageSrcMap.value[image.id]?.thumbnail || imageSrcMap.value[image.id]?.original) {
+        if (
+          loadedImageIds.has(image.id) ||
+          imageSrcMap.value[image.id]?.thumbnail ||
+          imageSrcMap.value[image.id]?.original
+        ) {
           // 已处理，继续下一个
-          if (typeof requestIdleCallback !== 'undefined') {
-            requestIdleCallback(() => processRemaining(index + 1), { timeout: 2000 });
+          if (typeof requestIdleCallback !== "undefined") {
+            requestIdleCallback(() => processRemaining(index + 1), {
+              timeout: 2000,
+            });
           } else {
             setTimeout(() => processRemaining(index + 1), 50);
           }
           return;
         }
 
-        // 异步读取文件并转换为 Blob URL
+        // 异步读取文件并转换为 Blob URL（简化版本，不进行验证以提升性能）
         try {
-          const thumbnailUrl = image.thumbnailPath ? await getImageUrl(image.thumbnailPath) : "";
+          const thumbnailUrl = image.thumbnailPath
+            ? await getImageUrl(image.thumbnailPath)
+            : "";
           const originalUrl = await getImageUrl(image.localPath);
 
           // 检查图片是否仍然存在（可能在异步操作期间被删除）
-          const imageStillExists = displayedImages.value.some(img => img.id === image.id);
+          const imageStillExists = displayedImages.value.some(
+            (img) => img.id === image.id
+          );
           if (imageStillExists) {
             remainingUpdates[image.id] = {
               thumbnail: thumbnailUrl || originalUrl || undefined,
               original: originalUrl || undefined,
             };
             processedCount++;
+          }
 
-            // 每处理 BATCH_SIZE 张图片，批量更新一次
-            if (processedCount % BATCH_SIZE === 0) {
-              imageSrcMap.value = { ...imageSrcMap.value, ...remainingUpdates };
-              // 清空已更新的项
-              Object.keys(remainingUpdates).forEach(key => delete remainingUpdates[key]);
+          // 每处理 BATCH_SIZE 张图片，批量更新一次（使用 requestAnimationFrame 优化）
+          if (
+            processedCount % BATCH_SIZE === 0 &&
+            Object.keys(remainingUpdates).length > 0
+          ) {
+            if (!pendingUpdate) {
+              pendingUpdate = true;
+              requestAnimationFrame(flushUpdates);
             }
           }
         } catch (error) {
@@ -206,15 +273,17 @@ export function useGalleryImages(
         }
 
         // 继续处理下一个
-        if (typeof requestIdleCallback !== 'undefined') {
-          requestIdleCallback(() => processRemaining(index + 1), { timeout: 2000 });
+        if (typeof requestIdleCallback !== "undefined") {
+          requestIdleCallback(() => processRemaining(index + 1), {
+            timeout: 2000,
+          });
         } else {
           setTimeout(() => processRemaining(index + 1), 50);
         }
       };
 
       // 使用 requestIdleCallback 如果可用，否则使用 setTimeout
-      if (typeof requestIdleCallback !== 'undefined') {
+      if (typeof requestIdleCallback !== "undefined") {
         requestIdleCallback(() => processRemaining(0), { timeout: 2000 });
       } else {
         setTimeout(() => processRemaining(0), 100);
@@ -231,32 +300,44 @@ export function useGalleryImages(
    */
   const refreshImagesPreserveCache = async (
     reset = true,
-    opts: { preserveScroll?: boolean; forceReload?: boolean; skipScrollReset?: boolean } = {}
+    opts: {
+      preserveScroll?: boolean;
+      forceReload?: boolean;
+      skipScrollReset?: boolean;
+    } = {}
   ) => {
     const preserveScroll = opts.preserveScroll ?? false;
     const forceReload = opts.forceReload ?? false;
     const skipScrollReset = opts.skipScrollReset ?? false;
-    const container = preserveScroll
-      ? galleryContainerRef.value
-      : null;
+    const container = preserveScroll ? galleryContainerRef.value : null;
     const prevScrollTop = container?.scrollTop ?? 0;
 
     // 如果强制重新加载，清除 URL 缓存并清空列表以触发重新挂载动画
     if (forceReload) {
-      // 释放所有 Blob URL
-      blobUrls.forEach((url) => URL.revokeObjectURL(url));
-      blobUrls.clear();
-      imageSrcMap.value = {};
-      loadedImageIds.clear();
       // 先清空列表，让 Vue 移除所有元素
       displayedImages.value = [];
       await nextTick();
+      // 释放所有 Blob URL 和 Blob 对象引用
+      for (const url of blobObjects.keys()) {
+        URL.revokeObjectURL(url);
+      }
+      // console.log("clear blob urls");
+      // console.trace();
+      blobObjects.clear();
+      imageSrcMap.value = {};
+      loadedImageIds.clear();
     }
 
     // 记录旧的图片 ID，用于判断哪些是新增的
-    const oldIds = forceReload ? new Set<string>() : new Set(displayedImages.value.map((img) => img.id));
+    const oldIds = forceReload
+      ? new Set<string>()
+      : new Set(displayedImages.value.map((img) => img.id));
 
-    await crawlerStore.loadImages(reset, filterPluginId.value, showFavoritesOnly.value);
+    await crawlerStore.loadImages(
+      reset,
+      filterPluginId.value,
+      showFavoritesOnly.value
+    );
 
     // 使用新的图片数据（不复用旧引用，确保数据更新）
     displayedImages.value = [...crawlerStore.images];
@@ -264,7 +345,9 @@ export function useGalleryImages(
     await nextTick();
 
     // 为需要加载的图片加载 URL
-    const imagesToLoad = forceReload ? displayedImages.value : displayedImages.value.filter((img) => !oldIds.has(img.id));
+    const imagesToLoad = forceReload
+      ? displayedImages.value
+      : displayedImages.value.filter((img) => !oldIds.has(img.id));
     loadImageUrls(imagesToLoad);
 
     // 滚动处理：skipScrollReset 时跳过任何滚动操作（由调用者自行处理）
@@ -283,7 +366,7 @@ export function useGalleryImages(
 
   /**
    * 仅增量获取最新一页图片并追加到末尾，避免全量刷新和旧图重载。
-   * 
+   *
    * 重要规则：
    * - 当 hasMore=true（有加载更多按钮）时，不自动增长画廊，新图片藏在"加载更多"里
    * - 当 hasMore=false（没有更多了）时，画廊自动增长，且不会自动设置 hasMore=true
@@ -317,7 +400,10 @@ export function useGalleryImages(
 
       // 使用较大的 pageSize 来获取所有可能的新图片
       // 但不要超过合理范围，避免一次加载太多
-      const fetchSize = Math.max(crawlerStore.pageSize, displayedImages.value.length + 100);
+      const fetchSize = Math.max(
+        crawlerStore.pageSize,
+        displayedImages.value.length + 100
+      );
       const result = await invoke<{
         images: ImageInfo[];
         total: number;
@@ -330,11 +416,13 @@ export function useGalleryImages(
       });
 
       // 再次获取当前的 existingIds（可能在异步操作期间有新图片被添加）
-      const currentExistingIds = new Set(displayedImages.value.map((img) => img.id));
-      
+      const currentExistingIds = new Set(
+        displayedImages.value.map((img) => img.id)
+      );
+
       // 过滤出新图片（双重检查：既检查初始的 existingIds，也检查当前的 currentExistingIds）
-      const newOnes = result.images.filter((img) => 
-        !existingIds.has(img.id) && !currentExistingIds.has(img.id)
+      const newOnes = result.images.filter(
+        (img) => !existingIds.has(img.id) && !currentExistingIds.has(img.id)
       );
 
       // 更新 hasMore：只在确定已拿到全部数据时将其关闭，避免遗留的 true 导致按钮出现
@@ -346,8 +434,12 @@ export function useGalleryImages(
       if (newOnes.length === 0) return;
 
       // 最后一次检查：在追加前再次确认这些图片确实不存在（防止并发添加）
-      const finalExistingIds = new Set(displayedImages.value.map((img) => img.id));
-      const trulyNewOnes = newOnes.filter((img) => !finalExistingIds.has(img.id));
+      const finalExistingIds = new Set(
+        displayedImages.value.map((img) => img.id)
+      );
+      const trulyNewOnes = newOnes.filter(
+        (img) => !finalExistingIds.has(img.id)
+      );
 
       if (trulyNewOnes.length === 0) return;
 
@@ -358,11 +450,12 @@ export function useGalleryImages(
       crawlerStore.images = [...displayedImages.value];
       crawlerStore.totalImages = result.total;
       // 计算正确的 currentPage（基于当前显示数量）
-      crawlerStore.currentPage = Math.ceil(displayedImages.value.length / crawlerStore.pageSize);
+      crawlerStore.currentPage = Math.ceil(
+        displayedImages.value.length / crawlerStore.pageSize
+      );
 
       // 加载新增图片的 URL
-      await loadImageUrls(trulyNewOnes);
-
+      loadImageUrls(trulyNewOnes);
     } catch (error) {
       console.error("增量刷新最新图片失败:", error);
     } finally {
@@ -373,8 +466,15 @@ export function useGalleryImages(
   // 加载更多图片（手动加载）
   // 直接基于 displayedImages 的长度计算下一页，不依赖 crawlerStore.currentPage
   // 避免 displayedImages 和 crawlerStore.images 不同步导致的问题
-  const loadMoreImages = async () => {
-    if (!crawlerStore.hasMore || isLoadingMore.value) {
+  // 支持初始加载：当 displayedImages.value.length === 0 时，加载第一页
+  const loadMoreImages = async (isInitialLoad = false) => {
+    // 初始加载时，跳过 hasMore 检查（因为初始时 hasMore 可能还是 false）
+    if (!isInitialLoad && (!crawlerStore.hasMore || isLoadingMore.value)) {
+      return;
+    }
+
+    // 非初始加载时，如果正在加载更多，直接返回
+    if (!isInitialLoad && isLoadingMore.value) {
       return;
     }
 
@@ -385,12 +485,22 @@ export function useGalleryImages(
       return;
     }
 
-    // 记录加载前的滚动位置
+    // 记录加载前的滚动位置（初始加载时不需要保持）
     const prevScrollTop = container.scrollTop;
+    const isFirstPage = displayedImages.value.length === 0;
 
     try {
       // 计算下一页的页码（基于当前显示的图片数量）
-      const nextPage = Math.floor(displayedImages.value.length / crawlerStore.pageSize);
+      const nextPage = Math.floor(
+        displayedImages.value.length / crawlerStore.pageSize
+      );
+
+      // 初始加载时，重置 crawlerStore 状态（但不设置 hasMore，保持为 false）
+      if (isInitialLoad || isFirstPage) {
+        crawlerStore.currentPage = 0;
+        crawlerStore.images = [];
+        // hasMore 保持为 false，直到第一页加载完成后再根据总数设置
+      }
 
       // 直接从后端获取下一页，不依赖 crawlerStore.loadImages
       const result = await invoke<{
@@ -406,31 +516,46 @@ export function useGalleryImages(
       });
 
       // 过滤出新图片（避免重复，因为增量刷新可能已经添加了部分图片）
-      const existingIds = new Set(displayedImages.value.map(img => img.id));
-      const newImages = result.images.filter(img => !existingIds.has(img.id));
+      const existingIds = new Set(displayedImages.value.map((img) => img.id));
+      const newImages = result.images.filter((img) => !existingIds.has(img.id));
 
       if (newImages.length > 0) {
+        // 先计算更新后的总数和 hasMore，避免在设置 displayedImages 后短暂显示"加载更多"按钮
+        const totalDisplayed = displayedImages.value.length + newImages.length;
+        const hasMore = totalDisplayed < result.total;
+
+        // 在设置 displayedImages 之前先更新 hasMore，确保按钮状态正确
+        crawlerStore.hasMore = hasMore;
+
         // 创建新数组引用，确保 Vue 能够检测到变化（特别是 transition-group）
+        // 先设置 displayedImages，让元素先渲染出来，用户可以看到骨架屏或占位符
         displayedImages.value = [...displayedImages.value, ...newImages];
 
         // 等待 DOM 更新完成
         await nextTick();
 
-        // 恢复滚动位置：保持用户原来的滚动位置
-        // 使用延迟策略，确保动画和图片加载完成后恢复
-        setTimeout(() => {
+        // 初始加载时，重置滚动位置到顶部；否则保持用户原来的滚动位置
+        if (isFirstPage) {
           if (container) {
-            container.scrollTop = prevScrollTop;
+            container.scrollTop = 0;
           }
-        }, 100);
+        } else {
+          // 恢复滚动位置：保持用户原来的滚动位置
+          // 使用延迟策略，确保动画和图片加载完成后恢复
+          setTimeout(() => {
+            if (container) {
+              container.scrollTop = prevScrollTop;
+            }
+          }, 100);
+        }
 
         // 仅为新增的图片加载 URL，避免触发旧图重新加载
-        await loadImageUrls(newImages);
+        loadImageUrls(newImages);
+      } else {
+        // 即使没有新图片，也要更新 hasMore（可能总数变化了）
+        const totalDisplayed = displayedImages.value.length;
+        crawlerStore.hasMore = totalDisplayed < result.total;
       }
-
-      // 更新 hasMore：基于当前显示数量与总数比较
-      const totalDisplayed = displayedImages.value.length;
-      crawlerStore.hasMore = totalDisplayed < result.total;
 
       // 同步 crawlerStore 状态，保持一致性
       crawlerStore.images = [...displayedImages.value];
@@ -495,13 +620,15 @@ export function useGalleryImages(
       let loadedCount = 0;
       let currentPage = nextPage;
       const allNewImages: ImageInfo[] = [];
-      const existingIds = new Set(displayedImages.value.map(img => img.id));
+      const existingIds = new Set(displayedImages.value.map((img) => img.id));
 
       // 先处理第一页的结果（如果还没有加载过）
-      const firstPageNewImages = firstPageResult.images.filter(img => !existingIds.has(img.id));
+      const firstPageNewImages = firstPageResult.images.filter(
+        (img) => !existingIds.has(img.id)
+      );
       if (firstPageNewImages.length > 0) {
         allNewImages.push(...firstPageNewImages);
-        firstPageNewImages.forEach(img => existingIds.add(img.id));
+        firstPageNewImages.forEach((img) => existingIds.add(img.id));
         loadedCount += firstPageNewImages.length;
       }
       currentPage++;
@@ -521,7 +648,9 @@ export function useGalleryImages(
         });
 
         // 过滤出新图片
-        const newImages = result.images.filter(img => !existingIds.has(img.id));
+        const newImages = result.images.filter(
+          (img) => !existingIds.has(img.id)
+        );
 
         if (newImages.length === 0) {
           // 没有新图片了，退出循环
@@ -529,14 +658,17 @@ export function useGalleryImages(
         }
 
         allNewImages.push(...newImages);
-        newImages.forEach(img => existingIds.add(img.id));
+        newImages.forEach((img) => existingIds.add(img.id));
         loadedCount += newImages.length;
 
         // 更新总数（可能后端返回的总数更准确）
         crawlerStore.totalImages = result.total;
 
         // 如果已经加载了所有图片，退出循环
-        if (loadedCount >= remaining || displayedImages.value.length + allNewImages.length >= result.total) {
+        if (
+          loadedCount >= remaining ||
+          displayedImages.value.length + allNewImages.length >= result.total
+        ) {
           break;
         }
 
@@ -558,7 +690,7 @@ export function useGalleryImages(
         }, 100);
 
         // 为新增的图片加载 URL
-        await loadImageUrls(allNewImages);
+        loadImageUrls(allNewImages);
       }
 
       // 更新 hasMore：应该已经加载完所有图片
@@ -567,7 +699,9 @@ export function useGalleryImages(
 
       // 同步 crawlerStore 状态
       crawlerStore.images = [...displayedImages.value];
-      crawlerStore.currentPage = Math.ceil(totalDisplayed / crawlerStore.pageSize);
+      crawlerStore.currentPage = Math.ceil(
+        totalDisplayed / crawlerStore.pageSize
+      );
     } catch (error) {
       console.error("加载全部图片失败:", error);
     }
@@ -579,21 +713,25 @@ export function useGalleryImages(
     const idSet = new Set(imageIds);
 
     // 从列表移除
-    displayedImages.value = displayedImages.value.filter((img) => !idSet.has(img.id));
+    displayedImages.value = displayedImages.value.filter(
+      (img) => !idSet.has(img.id)
+    );
 
-    // 清理 imageSrcMap / Blob URL / loaded set
+    // 清理 imageSrcMap / Blob URL / Blob 对象引用 / loaded set
     const nextMap: Record<string, { thumbnail?: string; original?: string }> = {
       ...imageSrcMap.value,
     };
     for (const id of imageIds) {
       const data = nextMap[id];
       if (data?.thumbnail) {
+        console.log("revoke thumbnail", data.thumbnail);
         URL.revokeObjectURL(data.thumbnail);
-        blobUrls.delete(data.thumbnail);
+        blobObjects.delete(data.thumbnail);
       }
       if (data?.original) {
+        console.log("revoke original", data.original);
         URL.revokeObjectURL(data.original);
-        blobUrls.delete(data.original);
+        blobObjects.delete(data.original);
       }
       delete nextMap[id];
       loadedImageIds.delete(id);
@@ -601,12 +739,69 @@ export function useGalleryImages(
     imageSrcMap.value = nextMap;
   };
 
-  // 清理所有 Blob URL
+  // 重新创建特定图片的 URL（用于处理 Blob URL 失效的情况）
+  const recreateImageUrl = async (
+    imageId: string,
+    localPath: string,
+    isThumbnail: boolean = false
+  ) => {
+    const image = displayedImages.value.find((img) => img.id === imageId);
+    if (!image) {
+      console.warn("图片不存在，无法重新创建 URL:", imageId);
+      return;
+    }
+
+    // 确定要使用的路径
+    const pathToUse =
+      isThumbnail && image.thumbnailPath ? image.thumbnailPath : localPath;
+
+    // 重新创建 URL
+    const newUrl = await getImageUrl(pathToUse);
+    if (!newUrl) {
+      console.error("重新创建 URL 失败:", pathToUse);
+      return;
+    }
+
+    // 更新 imageSrcMap
+    const currentData = imageSrcMap.value[imageId] || {};
+    const newData = { ...currentData };
+
+    if (isThumbnail) {
+      // 释放旧的缩略图 URL
+      if (currentData.thumbnail) {
+        try {
+          URL.revokeObjectURL(currentData.thumbnail);
+          blobObjects.delete(currentData.thumbnail);
+        } catch (e) {
+          // 忽略错误
+        }
+      }
+      newData.thumbnail = newUrl;
+    } else {
+      // 释放旧的原图 URL
+      if (currentData.original) {
+        try {
+          URL.revokeObjectURL(currentData.original);
+          blobObjects.delete(currentData.original);
+        } catch (e) {
+          // 忽略错误
+        }
+      }
+      newData.original = newUrl;
+    }
+
+    // 更新 imageSrcMap
+    imageSrcMap.value = { ...imageSrcMap.value, [imageId]: newData };
+  };
+
+  // 清理所有 Blob URL 和 Blob 对象引用
   const cleanup = () => {
-    blobUrls.forEach(url => {
+    for (const url of blobObjects.keys()) {
       URL.revokeObjectURL(url);
-    });
-    blobUrls.clear();
+    }
+    blobObjects.clear();
+    console.log("clear blob urls2");
+    console.trace();
     imageSrcMap.value = {};
     loadedImageIds.clear();
   };
@@ -620,7 +815,7 @@ export function useGalleryImages(
     loadMoreImages,
     loadAllImages,
     removeFromUiCacheByIds,
+    recreateImageUrl,
     cleanup,
   };
 }
-

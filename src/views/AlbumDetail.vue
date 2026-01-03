@@ -33,20 +33,15 @@
     <GalleryView ref="albumViewRef" class="detail-body" mode="albumDetail" :loading="loading" :images="images"
       :image-url-map="imageSrcMap" :image-click-action="imageClickAction" :columns="albumColumns"
       :aspect-ratio-match-window="!!albumAspectRatio" :window-aspect-ratio="albumAspectRatio || 16 / 9"
-      :allow-select="true" :enable-context-menu="false" :enable-ctrl-wheel-adjust-columns="true"
-      :show-empty-state="!loading" :is-blocked="isBlockingOverlayOpen"
-      :album-image-count="currentAlbumImageCount"
-      @adjust-columns="(...args) => throttledAdjustColumns(args[0])"
+      :allow-select="true" :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="!loading"
+      :is-blocked="isBlockingOverlayOpen" :album-image-count="currentAlbumImageCount"
+      :context-menu-component="AlbumImageContextMenu" @adjust-columns="(...args) => throttledAdjustColumns(args[0])"
       @selection-change="(...args) => handleSelectionChange(args[0])"
       @image-dbl-click="(...args) => handleImageDblClick(args[0])"
-      @contextmenu="(...args) => handleImageContextMenu(args[0], args[1])"
+      @context-command="(...args: any[]) => handleImageMenuCommand(args[0])"
       @reorder="(...args) => handleImageReorder(args[0])">
 
       <template #overlays>
-        <ImageContextMenu :visible="imageMenuVisible" :position="imageMenuPosition" :image="imageMenuImage"
-          :selected-count="Math.max(1, selectedImages.size)" :is-image-selected="isImageMenuImageSelected"
-          :simplified-multi-select-menu="true" :hide-favorite-and-add-to-album="selectedImages.size === 1"
-          remove-text="从画册移除" @close="imageMenuVisible = false" @command="handleImageMenuCommand" />
 
         <ImagePreviewDialog v-model="showPreview" v-model:image-url="previewUrl" :image-path="previewPath"
           :image="previewImage" @contextmenu="handlePreviewContextMenu" />
@@ -83,10 +78,10 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Picture, Delete, Setting, Star } from "@element-plus/icons-vue";
+import { Picture, Delete, Setting } from "@element-plus/icons-vue";
 import ImagePreviewDialog from "@/components/ImagePreviewDialog.vue";
 import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
-import ImageContextMenu from "@/components/ImageContextMenu.vue";
+import AlbumImageContextMenu from "@/components/contextMenu/AlbumImageContextMenu.vue";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import GalleryView from "@/components/GalleryView.vue";
 import { useAlbumStore } from "@/stores/albums";
@@ -235,12 +230,6 @@ const imageMenuImage = ref<ImageInfo | null>(null);
 const showAddToAlbumDialog = ref(false);
 const pendingAddToAlbumImageIds = ref<string[]>([]);
 
-const isImageMenuImageSelected = computed(() => {
-  if (!imageMenuImage.value) return true;
-  if (selectedImages.value.size <= 1) return true;
-  return selectedImages.value.has(imageMenuImage.value.id);
-});
-
 // 重命名相关
 const isRenaming = ref(false);
 const editingName = ref("");
@@ -326,13 +315,6 @@ const handleImageDblClick = async (image: ImageInfo) => {
   // preview 模式由 ImageGrid 内部处理
 };
 
-const handleImageContextMenu = (event: MouseEvent, image: ImageInfo) => {
-  event.preventDefault();
-  imageMenuImage.value = image;
-  imageMenuPosition.value = { x: event.clientX, y: event.clientY };
-  imageMenuVisible.value = true;
-};
-
 const handlePreviewContextMenu = (event: MouseEvent) => {
   event.preventDefault();
   if (previewImage.value) {
@@ -400,56 +382,6 @@ const handleCopyImage = async (image: ImageInfo) => {
 
   await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
   ElMessage.success("图片已复制到剪贴板");
-};
-
-const handleBatchRemoveImagesFromAlbum = async (imagesToRemove: ImageInfo[]) => {
-  if (imagesToRemove.length === 0) return;
-  if (!albumId.value) return;
-  const count = imagesToRemove.length;
-  const includesCurrent =
-    !!currentWallpaperImageId.value &&
-    imagesToRemove.some((img) => img.id === currentWallpaperImageId.value);
-  const currentHint = includesCurrent
-    ? `\n\n注意：其中包含当前壁纸。移除/删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。`
-    : "";
-  await ElMessageBox.confirm(
-    `将从当前画册移除，但不会删除图片文件。是否继续移除${count > 1 ? `这 ${count} 张图片` : "这张图片"}？${currentHint}`,
-    "确认从画册移除",
-    { type: "warning" }
-  );
-
-  try {
-    const idsArr = imagesToRemove.map((i) => i.id);
-    const isFavoriteAlbum = albumId.value === FAVORITE_ALBUM_ID.value;
-    await albumStore.removeImagesFromAlbum(albumId.value, idsArr);
-    if (includesCurrent) {
-      currentWallpaperImageId.value = null;
-    }
-
-    const ids = new Set(idsArr);
-    // 如果是从收藏画册移除，更新本地图片的 favorite 字段为 false
-    if (isFavoriteAlbum) {
-      images.value = images.value.map((img) => {
-        if (ids.has(img.id)) {
-          return { ...img, favorite: false } as ImageInfo;
-        }
-        return img;
-      });
-    }
-    images.value = images.value.filter((img) => !ids.has(img.id));
-    for (const id of ids) {
-      const data = imageSrcMap.value[id];
-      if (data?.thumbnail) URL.revokeObjectURL(data.thumbnail);
-      if (data?.original) URL.revokeObjectURL(data.original);
-      const { [id]: _, ...rest } = imageSrcMap.value;
-      imageSrcMap.value = rest;
-    }
-    clearSelection();
-    ElMessage.success(`${count > 1 ? `已从画册移除 ${count} 张图片` : "已从画册移除图片"}`);
-  } catch (error) {
-    console.error("从画册移除图片失败:", error);
-    ElMessage.error("移除失败");
-  }
 };
 
 // 确认移除图片（合并了原来的 remove 和 delete 逻辑）
@@ -528,20 +460,24 @@ const confirmRemoveImages = async () => {
   }
 };
 
-const handleImageMenuCommand = async (command: string) => {
-  const image = imageMenuImage.value;
-  if (!image) return;
-  imageMenuVisible.value = false;
+const handleImageMenuCommand = async (payload: { command: string; image: ImageInfo; selectedImageIds: Set<string> }) => {
+  const command = payload.command;
+  const image = payload.image;
+  const selectedSet = payload.selectedImageIds && payload.selectedImageIds.size > 0
+    ? payload.selectedImageIds
+    : new Set([image.id]);
 
-  const imagesToProcess =
-    selectedImages.value.size > 1
-      ? images.value.filter((img) => selectedImages.value.has(img.id))
-      : [image];
+  const isMultiSelect = selectedSet.size > 1;
+  const imagesToProcess = isMultiSelect
+    ? images.value.filter((img) => selectedSet.has(img.id))
+    : [image];
 
   switch (command) {
     case "detail":
-      selectedDetailImage.value = image;
-      showImageDetail.value = true;
+      if (!isMultiSelect) {
+        selectedDetailImage.value = image;
+        showImageDetail.value = true;
+      }
       break;
     case "favorite":
       try {
@@ -582,14 +518,20 @@ const handleImageMenuCommand = async (command: string) => {
       }
       break;
     case "open":
-      await invoke("open_file_path", { filePath: image.localPath });
+      if (!isMultiSelect) {
+        await invoke("open_file_path", { filePath: image.localPath });
+      }
       break;
     case "openFolder":
-      await invoke("open_file_folder", { filePath: image.localPath });
+      if (!isMultiSelect) {
+        await invoke("open_file_folder", { filePath: image.localPath });
+      }
       break;
     case "wallpaper":
-      await invoke("set_wallpaper_by_image_id", { imageId: image.id });
-      currentWallpaperImageId.value = image.id;
+      if (!isMultiSelect) {
+        await invoke("set_wallpaper_by_image_id", { imageId: image.id });
+        currentWallpaperImageId.value = image.id;
+      }
       break;
     case "exportToWE":
     case "exportToWEAuto":
