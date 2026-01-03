@@ -72,7 +72,7 @@
         </el-dialog>
 
         <!-- 收集对话框 -->
-        <CrawlerDialog v-model="showCrawlerDialog" :plugin-icons="pluginIcons" />
+        <CrawlerDialog v-model="showCrawlerDialog" :plugin-icons="pluginIcons" :initial-config="crawlerDialogInitialConfig" />
 
         <!-- 去重确认对话框 -->
         <el-dialog v-model="showDedupeDialog" title="确认去重" width="420px" destroy-on-close>
@@ -111,6 +111,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox, ElCheckbox } from "element-plus";
 import { Plus } from "@element-plus/icons-vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
@@ -147,6 +148,12 @@ const dedupeLoading = computed(() => dedupeProcessing.value || !dedupeDelayShowC
 const filterPluginId = ref<string | null>(null);
 const showFavoritesOnly = ref(false);
 const showCrawlerDialog = ref(false);
+const crawlerDialogInitialConfig = ref<{
+  pluginId?: string;
+  outputDir?: string;
+  vars?: Record<string, any>;
+} | undefined>(undefined);
+const router = useRouter();
 const showDedupeDialog = ref(false); // 去重确认对话框
 const dedupeDeleteFiles = ref(false); // 是否删除本地文件
 // 移除/删除对话框相关
@@ -185,13 +192,44 @@ const selectedImage = ref<ImageInfo | null>(null);
 // 使用画廊设置 composable
 const {
   imageClickAction,
-  galleryColumns,
   windowAspectRatio,
   loadSettings,
   updateWindowAspectRatio,
   handleResize,
-  throttledAdjustColumns,
 } = useGallerySettings();
+
+// 画廊页本地列数（初始值为 5，不再从设置读取）
+const galleryColumns = ref<number>(5);
+
+// 调整列数的函数（不保存到设置）
+const adjustColumns = (delta: number) => {
+  if (delta > 0) {
+    // 增加列数（最大 10 列）
+    if (galleryColumns.value < 10) {
+      galleryColumns.value++;
+    }
+  } else {
+    // 减少列数（最小 1 列）
+    if (galleryColumns.value > 1) {
+      galleryColumns.value--;
+    }
+  }
+};
+
+// 节流函数
+const throttle = <T extends (...args: any[]) => any>(func: T, delay: number): T => {
+  let lastCall = 0;
+  return ((...args: any[]) => {
+    const now = Date.now();
+    if (now - lastCall >= delay) {
+      lastCall = now;
+      return func(...args);
+    }
+  }) as T;
+};
+
+// 节流后的调整列数函数（100ms 节流）
+const throttledAdjustColumns = throttle(adjustColumns, 100);
 
 const galleryImageAspectRatio = ref<string | null>(null); // 设置的图片宽高比（保留用于兼容）
 
@@ -386,9 +424,10 @@ const handleCreateAndAddAlbum = async () => {
     pendingAlbumImages.value = [];
     selectedAlbumId.value = "";
     newAlbumName.value = "";
-  } catch (error) {
+  } catch (error: any) {
     console.error("创建画册并加入图片失败:", error);
-    ElMessage.error("操作失败");
+    const errorMessage = error?.message || String(error);
+    ElMessage.error(errorMessage || "操作失败");
   }
 };
 
@@ -429,11 +468,17 @@ const confirmAddToAlbum = async () => {
     // 如果获取失败，仍然尝试添加（后端有 INSERT OR IGNORE 保护）
   }
 
-  await albumStore.addImagesToAlbum(albumId, idsToAdd);
-  ElMessage.success(`已加入画册（${idsToAdd.length} 张）`);
-  showAlbumDialog.value = false;
-  pendingAlbumImages.value = [];
-  selectedAlbumId.value = "";
+  try {
+    await albumStore.addImagesToAlbum(albumId, idsToAdd);
+    ElMessage.success(`已加入画册（${idsToAdd.length} 张）`);
+    showAlbumDialog.value = false;
+    pendingAlbumImages.value = [];
+    selectedAlbumId.value = "";
+  } catch (error: any) {
+    console.error("加入画册失败:", error);
+    const errorMessage = error?.message || String(error);
+    ElMessage.error(errorMessage || "加入画册失败");
+  }
 };
 
 // 加载插件图标
@@ -640,6 +685,16 @@ watch(showAlbumDialog, (isOpen) => {
   if (!isOpen) {
     selectedAlbumId.value = "";
     newAlbumName.value = "";
+  }
+});
+
+// 监听 CrawlerDialog 关闭，清空初始配置
+watch(showCrawlerDialog, (isOpen) => {
+  if (!isOpen) {
+    // 延迟清空，确保对话框已经处理完初始配置
+    nextTick(() => {
+      crawlerDialogInitialConfig.value = undefined;
+    });
   }
 });
 
@@ -864,6 +919,78 @@ onMounted(async () => {
   }) as EventListener;
   window.addEventListener("images-deleted", imagesDeletedHandler);
   (window as any).__imagesDeletedHandler = imagesDeletedHandler;
+
+  // 监听 App.vue 发送的文件拖拽事件
+  const handleFileDrop = async (event: Event) => {
+    const customEvent = event as CustomEvent<{
+      path: string;
+      isDirectory: boolean;
+      outputDir: string;
+    }>;
+    
+    const { path, isDirectory, outputDir } = customEvent.detail;
+    console.log('[Gallery] 收到文件拖拽事件:', { path, isDirectory, outputDir });
+    
+    try {
+      // 确保在画廊页面（App.vue 已经处理了路由跳转，这里只是双重保险）
+      const currentPath = router.currentRoute.value.path;
+      if (currentPath !== '/gallery') {
+        console.log('[Gallery] 当前不在画廊页面，等待路由切换...');
+        await router.push('/gallery');
+        await nextTick();
+        // 再等待一下确保组件已激活
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      
+      if (isDirectory) {
+        // 文件夹：使用 local-folder-import 插件
+        console.log('[Gallery] 设置文件夹导入配置，路径:', path);
+        crawlerDialogInitialConfig.value = {
+          pluginId: 'local-folder-import',
+          outputDir: path,
+          vars: {
+            folder_path: path,
+          },
+        };
+        ElMessage.success('文件夹已准备导入');
+      } else {
+        // 文件：使用 single-file-import 插件
+        console.log('[Gallery] 设置文件导入配置，路径:', path, '目录:', outputDir);
+        crawlerDialogInitialConfig.value = {
+          pluginId: 'single-file-import',
+          outputDir: outputDir,
+          vars: {
+            file_path: path,
+          },
+        };
+        ElMessage.success('文件已准备导入');
+      }
+      
+      // 打开对话框
+      console.log('[Gallery] 打开对话框，showCrawlerDialog 当前值:', showCrawlerDialog.value);
+      showCrawlerDialog.value = true;
+      await nextTick();
+      console.log('[Gallery] 对话框状态:', showCrawlerDialog.value);
+    } catch (error) {
+      console.error('[Gallery] 处理文件拖拽事件失败:', error);
+      ElMessage.error('处理文件拖拽失败: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  };
+
+  window.addEventListener('file-drop', handleFileDrop);
+  (window as any).__galleryFileDropHandler = handleFileDrop;
+
+  // 辅助函数：从文件路径提取目录路径
+  const getDirectoryFromPath = (filePath: string): string => {
+    // 处理 Windows 路径 (D:\path\to\file.jpg) 和 Unix 路径 (/path/to/file.jpg)
+    const lastSlash = Math.max(filePath.lastIndexOf('\\'), filePath.lastIndexOf('/'));
+    if (lastSlash >= 0) {
+      return filePath.substring(0, lastSlash);
+    }
+    // 如果没有找到分隔符，返回空字符串（当前目录）
+    return '';
+  };
+
 });
 
 // 在开发环境中监控组件更新，帮助调试重新渲染问题
@@ -991,6 +1118,13 @@ onUnmounted(() => {
   if (imagesDeletedHandler) {
     window.removeEventListener("images-deleted", imagesDeletedHandler);
     delete (window as any).__imagesDeletedHandler;
+  }
+
+  // 移除文件拖入事件监听
+  const fileDropHandler = (window as any).__galleryFileDropHandler;
+  if (fileDropHandler) {
+    window.removeEventListener('file-drop', fileDropHandler);
+    delete (window as any).__galleryFileDropHandler;
   }
 });
 </script>

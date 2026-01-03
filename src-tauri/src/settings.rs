@@ -33,7 +33,6 @@ pub struct AppSettings {
     pub max_concurrent_downloads: u32,
     pub network_retry_count: u32,   // 网络失效/请求失败时的重试次数
     pub image_click_action: String, // "preview" 或 "open"
-    pub gallery_columns: u32,       // 画廊列数，默认自动
     pub gallery_image_aspect_ratio_match_window: bool, // 画廊图片宽高比是否与窗口相同
     #[serde(default)]
     pub gallery_image_aspect_ratio: Option<String>, // 画廊图片宽高比（如 "16:9" 或 "custom:1920:1080"）
@@ -79,7 +78,6 @@ impl Default for AppSettings {
             max_concurrent_downloads: 3,
             network_retry_count: 2,
             image_click_action: "preview".to_string(),
-            gallery_columns: 0, // 0 表示自动（auto-fill）
             gallery_image_aspect_ratio_match_window: false,
             gallery_image_aspect_ratio: None,
             gallery_page_size: 50,
@@ -316,9 +314,6 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
         {
             settings.image_click_action = image_click_action.to_string();
         }
-        if let Some(gallery_columns) = json_value.get("galleryColumns").and_then(|v| v.as_u64()) {
-            settings.gallery_columns = gallery_columns as u32;
-        }
         if let Some(match_window) = json_value
             .get("galleryImageAspectRatioMatchWindow")
             .and_then(|v| v.as_bool())
@@ -473,13 +468,6 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
     pub fn set_image_click_action(&self, action: String) -> Result<(), String> {
         let mut settings = self.get_settings()?;
         settings.image_click_action = action;
-        self.save_settings(&settings)?;
-        Ok(())
-    }
-
-    pub fn set_gallery_columns(&self, columns: u32) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.gallery_columns = columns;
         self.save_settings(&settings)?;
         Ok(())
     }

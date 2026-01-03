@@ -33,7 +33,7 @@ use plugin::{
 };
 use settings::{AppSettings, Settings, WindowState};
 use std::fs;
-use storage::{Album, ImageInfo, PaginatedImages, RunConfig, Storage, TaskInfo};
+use storage::{AddToAlbumResult, Album, ImageInfo, PaginatedImages, RunConfig, Storage, TaskInfo};
 use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
 use wallpaper_engine_export::{export_album_to_we_project, export_images_to_we_project};
 
@@ -317,7 +317,7 @@ fn add_images_to_album(
     album_id: String,
     image_ids: Vec<String>,
     state: tauri::State<Storage>,
-) -> Result<usize, String> {
+) -> Result<storage::AddToAlbumResult, String> {
     state.add_images_to_album(&album_id, &image_ids)
 }
 
@@ -959,11 +959,6 @@ fn set_network_retry_count(count: u32, state: tauri::State<Settings>) -> Result<
 #[tauri::command]
 fn set_image_click_action(action: String, state: tauri::State<Settings>) -> Result<(), String> {
     state.set_image_click_action(action)
-}
-
-#[tauri::command]
-fn set_gallery_columns(columns: u32, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_gallery_columns(columns)
 }
 
 #[tauri::command]
@@ -2227,7 +2222,6 @@ fn main() {
             set_max_concurrent_downloads,
             set_network_retry_count,
             set_image_click_action,
-            set_gallery_columns,
             set_gallery_image_aspect_ratio_match_window,
             set_gallery_image_aspect_ratio,
             get_desktop_resolution,

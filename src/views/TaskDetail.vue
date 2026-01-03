@@ -1,7 +1,7 @@
 <template>
     <div class="task-detail">
         <PageHeader :title="taskName || '任务'" :subtitle="taskSubtitle" show-back @back="goBack">
-            <el-button v-if="taskStatus === 'running'" type="warning" @click="handleStopTask">
+            <el-button v-if="shouldShowStopButton" type="warning" @click="handleStopTask">
                 <el-icon>
                     <VideoPause />
                 </el-icon>
@@ -34,7 +34,7 @@
             <template #overlays>
                 <ImageContextMenu :visible="imageMenuVisible" :position="imageMenuPosition" :image="imageMenuImage"
                     :selected-count="Math.max(1, selectedImages.size)" :is-image-selected="isImageMenuImageSelected"
-                    :simplified-multi-select-menu="true" :hide-favorite-and-add-to-album="selectedImages.size === 1"
+                    :simplified-multi-select-menu="false" :hide-favorite-and-add-to-album="false"
                     remove-text="删除" @close="imageMenuVisible = false" @command="handleImageMenuCommand" />
 
                 <ImagePreviewDialog v-model="showPreview" v-model:image-url="previewUrl" :image-path="previewPath"
@@ -81,6 +81,8 @@ import GalleryView from "@/components/GalleryView.vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useSettingsStore } from "@/stores/settings";
 import { usePluginStore } from "@/stores/plugins";
+import { useAlbumStore } from "@/stores/albums";
+import { storeToRefs } from "pinia";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useGallerySettings } from "@/composables/useGallerySettings";
@@ -91,6 +93,8 @@ const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const settingsStore = useSettingsStore();
 const pluginStore = usePluginStore();
+const albumStore = useAlbumStore();
+const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
@@ -99,13 +103,24 @@ const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 const {
     imageClickAction,
     loadSettings,
-    throttledAdjustColumns,
 } = useGallerySettings();
 
 const taskId = ref<string>("");
 const taskName = ref<string>("");
 const taskStatus = ref<string>("");
 const taskInfo = ref<any>(null);
+
+// 从 store 获取任务状态（确保状态同步）
+const taskStatusFromStore = computed(() => {
+    if (!taskId.value) return "";
+    const task = crawlerStore.tasks.find((t) => t.id === taskId.value);
+    return task?.status || taskStatus.value || "";
+});
+
+// 是否应该显示停止按钮（只在 running 状态显示）
+const shouldShowStopButton = computed(() => {
+    return taskStatusFromStore.value === "running";
+});
 const loading = ref(false);
 const images = ref<ImageInfo[]>([]);
 const imageSrcMap = ref<Record<string, { thumbnail?: string; original?: string }>>({});
@@ -153,17 +168,39 @@ const formatDuration = (startTime: number, endTime?: number, currentTimeMs?: num
 
 const selectedImages = ref<Set<string>>(new Set());
 
-// 任务详情页本地列数
+// 任务详情页本地列数（初始值为 5，不再从设置读取）
 const taskColumns = ref(5);
 const taskAspectRatio = ref<number | null>(null);
 
-// 监听设置 store 中的变化，实时同步
-watch(
-    () => settingsStore.values.galleryColumns,
-    (newValue) => {
-        taskColumns.value = newValue !== undefined ? newValue : 5;
+// 调整列数的函数（不保存到设置）
+const adjustColumns = (delta: number) => {
+    if (delta > 0) {
+        // 增加列数（最大 10 列）
+        if (taskColumns.value < 10) {
+            taskColumns.value++;
+        }
+    } else {
+        // 减少列数（最小 1 列）
+        if (taskColumns.value > 1) {
+            taskColumns.value--;
+        }
     }
-);
+};
+
+// 节流函数
+const throttle = <T extends (...args: any[]) => any>(func: T, delay: number): T => {
+    let lastCall = 0;
+    return ((...args: any[]) => {
+        const now = Date.now();
+        if (now - lastCall >= delay) {
+            lastCall = now;
+            return func(...args);
+        }
+    }) as T;
+};
+
+// 节流后的调整列数函数（100ms 节流）
+const throttledAdjustColumns = throttle(adjustColumns, 100);
 
 watch(
     () => settingsStore.values.galleryImageAspectRatio,
@@ -315,7 +352,7 @@ const handleStopTask = async () => {
 const handleDeleteTask = async () => {
     if (!taskId.value) return;
     try {
-        const needStop = taskStatus.value === "running";
+        const needStop = taskStatusFromStore.value === "running";
         const msg = needStop
             ? "当前任务正在运行，删除前将先终止任务。确定继续吗？"
             : "确定要删除这个任务吗？";
@@ -361,15 +398,13 @@ const isImageMenuImageSelected = computed(() => {
 
 // 添加到画册对话框
 const showAddToAlbumDialog = ref(false);
+const pendingAddToAlbumImageIds = ref<string[]>([]);
 
 // 移除/删除对话框相关
 const showRemoveDialog = ref(false);
 const removeDeleteFiles = ref(false);
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
-const pendingAddToAlbumImageIds = computed(() => {
-    return Array.from(selectedImages.value);
-});
 
 const handleSelectionChange = (selected: Set<string>) => {
     selectedImages.value = selected;
@@ -413,12 +448,55 @@ const handleImageMenuCommand = async (command: string) => {
             removeDeleteFiles.value = false; // 默认不删除文件
             showRemoveDialog.value = true;
             break;
-        case "add-to-album":
-            if (selectedImages.value.size > 0) {
-                showAddToAlbumDialog.value = true;
-            } else {
-                showAddToAlbumDialog.value = true;
+        case "favorite":
+            // 批量收藏：将选中的图片添加到收藏画册
+            try {
+                const imagesToFavorite = selectedImages.value.size > 1
+                    ? images.value.filter((img) => selectedImages.value.has(img.id))
+                    : [imageMenuImage.value];
+                const imageIds = imagesToFavorite.map((img) => img.id);
+                
+                // 获取收藏画册ID
+                await albumStore.loadAlbums();
+                const favoriteAlbumId = FAVORITE_ALBUM_ID.value;
+                
+                if (!favoriteAlbumId) {
+                    ElMessage.error("收藏画册不存在");
+                    return;
+                }
+                
+                // 添加到收藏画册
+                await albumStore.addImagesToAlbum(favoriteAlbumId, imageIds);
+                
+                // 更新本地图片的 favorite 字段
+                images.value = images.value.map((img) => {
+                    if (imageIds.includes(img.id)) {
+                        return { ...img, favorite: true } as ImageInfo;
+                    }
+                    return img;
+                });
+                
+                const count = imageIds.length;
+                ElMessage.success(count > 1 ? `已收藏 ${count} 张图片` : "已收藏");
+            } catch (error: any) {
+                console.error("收藏失败:", error);
+                const errorMessage = error?.message || String(error);
+                ElMessage.error(errorMessage || "收藏失败");
             }
+            break;
+        case "addToAlbum":
+            // 仅当多选时右键多选的其中一个时才能批量操作
+            const isMultiSelect = selectedImages.value.size > 1;
+            if (isMultiSelect && !selectedImages.value.has(imageMenuImage.value.id)) {
+                ElMessage.warning("请右键点击已选中的图片");
+                return;
+            }
+            
+            const imagesToAdd = isMultiSelect
+                ? images.value.filter((img) => selectedImages.value.has(img.id))
+                : [imageMenuImage.value];
+            pendingAddToAlbumImageIds.value = imagesToAdd.map((img) => img.id);
+            showAddToAlbumDialog.value = true;
             break;
     }
 };

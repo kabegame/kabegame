@@ -58,9 +58,10 @@ export function useAlbumOperations() {
       pendingAlbumImages.value = [];
       selectedAlbumId.value = "";
       newAlbumName.value = "";
-    } catch (error) {
+    } catch (error: any) {
       console.error("创建画册并加入图片失败:", error);
-      ElMessage.error("操作失败");
+      const errorMessage = error?.message || String(error);
+      ElMessage.error(errorMessage || "操作失败");
     }
   };
 
@@ -102,11 +103,17 @@ export function useAlbumOperations() {
       // 如果获取失败，仍然尝试添加（后端有 INSERT OR IGNORE 保护）
     }
 
-    await albumStore.addImagesToAlbum(albumId, idsToAdd);
-    ElMessage.success(`已加入画册（${idsToAdd.length} 张）`);
-    showAlbumDialog.value = false;
-    pendingAlbumImages.value = [];
-    selectedAlbumId.value = "";
+    try {
+      await albumStore.addImagesToAlbum(albumId, idsToAdd);
+      ElMessage.success(`已加入画册（${idsToAdd.length} 张）`);
+      showAlbumDialog.value = false;
+      pendingAlbumImages.value = [];
+      selectedAlbumId.value = "";
+    } catch (error: any) {
+      console.error("加入画册失败:", error);
+      const errorMessage = error?.message || String(error);
+      ElMessage.error(errorMessage || "加入画册失败");
+    }
   };
 
   return {

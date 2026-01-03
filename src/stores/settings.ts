@@ -8,7 +8,6 @@ export interface AppSettings {
   maxConcurrentDownloads: number;
   networkRetryCount: number;
   imageClickAction: "preview" | "open" | string;
-  galleryColumns: number;
   galleryImageAspectRatioMatchWindow: boolean;
   galleryImageAspectRatio: string | null;
   galleryPageSize: number;

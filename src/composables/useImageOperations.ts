@@ -447,7 +447,13 @@ export function useImageOperations(
 
         // 3. 将选中的图片添加到画册
         const imageIds = imagesToProcess.map((img) => img.id);
-        await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
+        try {
+          await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
+        } catch (error: any) {
+          const errorMessage = error?.message || String(error);
+          ElMessage.error(errorMessage || "添加图片到画册失败");
+          throw error;
+        }
 
         // 4. 获取当前设置
         const currentSettings = await invoke<{

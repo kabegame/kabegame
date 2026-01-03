@@ -107,9 +107,10 @@ const handleConfirm = async () => {
     await albumStore.addImagesToAlbum(targetAlbumId, idsToAdd);
     visible.value = false;
     emit("added");
-  } catch (e) {
+  } catch (e: any) {
     console.error("加入画册失败:", e);
-    ElMessage.error("加入画册失败");
+    const errorMessage = e?.message || String(e);
+    ElMessage.error(errorMessage || "加入画册失败");
   }
 };
 </script>

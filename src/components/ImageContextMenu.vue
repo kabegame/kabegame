@@ -32,14 +32,17 @@
         </el-icon>
         <span style="margin-left: 8px;">详情</span>
       </div>
-      <!-- 收藏：仅支持普通（单张）收藏 -->
-      <div v-if="selectedCount === 1 && !hideFavoriteAndAddToAlbum" class="context-menu-item"
+      <!-- 收藏：单选或右键选中图片时可批量收藏 -->
+      <div v-if="!hideFavoriteAndAddToAlbum && (selectedCount === 1 || (selectedCount > 1 && isImageSelected))" class="context-menu-item"
         @click.stop="$emit('command', 'favorite')">
         <el-icon>
-          <StarFilled v-if="image?.favorite" />
+          <StarFilled v-if="selectedCount === 1 && image?.favorite" />
           <Star v-else />
         </el-icon>
-        <span style="margin-left: 8px;">{{ image?.favorite ? '还有更喜欢滴' : '好喜欢' }}</span>
+        <span style="margin-left: 8px;">{{ selectedCount === 1 && image?.favorite ? '还有更喜欢滴' : '好喜欢' }}</span>
+        <span v-if="selectedCount > 1" style="margin-left: 8px; color: var(--anime-text-muted); font-size: 12px;">
+          ({{ selectedCount }})
+        </span>
       </div>
       <!-- 加入画册：仅当多选时右键多选的其中一个时才能批量操作 -->
       <div v-if="(selectedCount === 1 && !hideFavoriteAndAddToAlbum) || (selectedCount > 1 && isImageSelected)"

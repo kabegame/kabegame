@@ -775,6 +775,23 @@ pub fn register_crawler_functions(
                 }
             }
 
+            // 检查任务图片数量限制（最多10000张）
+            const MAX_TASK_IMAGES: usize = 10000;
+            let storage = app_handle.state::<crate::storage::Storage>();
+            match storage.get_task_image_ids(&task_id) {
+                Ok(image_ids) => {
+                    if image_ids.len() >= MAX_TASK_IMAGES {
+                        return Err(format!(
+                            "任务图片数量已达到上限（{} 张），无法继续爬取",
+                            MAX_TASK_IMAGES
+                        ).into());
+                    }
+                }
+                Err(e) => {
+                    return Err(format!("检查任务图片数量失败: {}", e).into());
+                }
+            }
+
             // 记录下载开始时间（使用毫秒以支持更精确的时间控制）
             let download_start_time = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

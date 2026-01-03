@@ -615,8 +615,12 @@ const gridStyle = computed(() => {
   // 列数为多少就是多少，不再使用 0 表示自动
   // 如果列数为 0 或负数，使用 1 作为最小值（避免 CSS 错误）
   const columns = props.columns > 0 ? props.columns : 1;
+  // 列数每增加1，gap减少1px，基准列数1时gap=16px，至少4px
+  const gap = Math.max(4, 16 - (columns - 1));
+
   return {
-    gridTemplateColumns: `repeat(${columns}, 1fr)`
+    gridTemplateColumns: `repeat(${columns}, 1fr)`,
+    gap: `${gap}px`
   };
 });
 

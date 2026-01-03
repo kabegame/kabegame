@@ -4,6 +4,8 @@
 
   <!-- 主窗口 -->
   <el-container v-else class="app-container">
+    <!-- 全局文件拖拽提示层 -->
+    <FileDropOverlay ref="fileDropOverlayRef" />
     <!-- 全局唯一的快捷设置抽屉（避免多页面实例冲突） -->
     <QuickSettingsDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
@@ -51,9 +53,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from "vue";
+import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 import { Picture, Grid, Setting, Collection } from "@element-plus/icons-vue";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import WallpaperLayer from "./components/WallpaperLayer.vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -61,7 +64,10 @@ import { useSettingsStore } from "./stores/settings";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import TaskDrawer from "./components/TaskDrawer.vue";
 import { useTaskDrawerStore } from "./stores/taskDrawer";
+import { useCrawlerStore } from "./stores/crawler";
 import { storeToRefs } from "pinia";
+import FileDropOverlay from "./components/FileDropOverlay.vue";
+import { stat } from "@tauri-apps/plugin-fs";
 
 const route = useRoute();
 const activeRoute = computed(() => route.path);
@@ -69,6 +75,39 @@ const activeRoute = computed(() => route.path);
 // 任务抽屉 store
 const taskDrawerStore = useTaskDrawerStore();
 const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskDrawerStore);
+
+// 爬虫 store
+const crawlerStore = useCrawlerStore();
+
+// 文件拖拽提示层引用
+const fileDropOverlayRef = ref<InstanceType<typeof FileDropOverlay> | null>(null);
+
+// 支持的图片格式
+const SUPPORTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'];
+
+// 从文件路径提取扩展名（小写，不含点号）
+const getFileExtension = (filePath: string): string => {
+  const lastDot = filePath.lastIndexOf('.');
+  if (lastDot >= 0 && lastDot < filePath.length - 1) {
+    return filePath.substring(lastDot + 1).toLowerCase();
+  }
+  return '';
+};
+
+// 检查文件是否为支持的图片格式
+const isSupportedImageFile = (filePath: string): boolean => {
+  const ext = getFileExtension(filePath);
+  return SUPPORTED_IMAGE_EXTENSIONS.includes(ext);
+};
+
+// 辅助函数：从文件路径提取目录路径
+const getDirectoryFromPath = (filePath: string): string => {
+  const lastSlash = Math.max(filePath.lastIndexOf('\\'), filePath.lastIndexOf('/'));
+  if (lastSlash >= 0) {
+    return filePath.substring(0, lastSlash);
+  }
+  return '';
+};
 
 // 关键：同步判断当前窗口 label，确保壁纸窗口首次渲染就进入 WallpaperLayer
 const isWallpaperWindow = ref(false);
@@ -79,6 +118,8 @@ try {
   // 非 Tauri 环境（浏览器打开）会走这里
   isWallpaperWindow.value = false;
 }
+
+let fileDropUnlisten: (() => void) | null = null;
 
 onMounted(async () => {
   // 初始化 settings store
@@ -102,6 +143,188 @@ onMounted(async () => {
     } catch (error) {
       console.error("注册窗口关闭事件监听失败:", error);
     }
+
+    // 注册全局文件拖拽事件监听（使用 onDragDropEvent，根据 Tauri v2 文档）
+    try {
+      const currentWindow = getCurrentWebviewWindow();
+      fileDropUnlisten = await currentWindow.onDragDropEvent(async (event) => {
+        console.log('[App] 收到拖拽事件:', event.payload.type, event.payload);
+
+        if (event.payload.type === 'enter') {
+          // 文件/文件夹进入窗口时，显示视觉提示
+          const paths = event.payload.paths;
+          if (paths && paths.length > 0) {
+            try {
+              const firstPath = paths[0];
+              const metadata = await stat(firstPath);
+              const text = metadata.isDirectory ? '拖入文件夹以导入' : '拖入文件以导入';
+              fileDropOverlayRef.value?.show(text);
+            } catch (error) {
+              // 如果检查失败，显示通用提示
+              fileDropOverlayRef.value?.show('拖入文件或文件夹以导入');
+            }
+          }
+        } else if (event.payload.type === 'over') {
+          // 文件/文件夹在窗口上移动时，保持显示提示（over 事件只有 position，没有 paths）
+          // 这里不需要额外处理，提示已经在 enter 时显示
+        } else if (event.payload.type === 'drop') {
+          // 隐藏视觉提示
+          fileDropOverlayRef.value?.hide();
+
+          const droppedPaths = event.payload.paths;
+          if (droppedPaths && droppedPaths.length > 0) {
+            try {
+              console.log('[App] 处理拖入路径:', droppedPaths);
+
+              // 处理所有路径，区分文件和文件夹，并过滤文件
+              interface ImportItem {
+                path: string;
+                name: string;
+                isDirectory: boolean;
+              }
+
+              const items: ImportItem[] = [];
+
+              for (const path of droppedPaths) {
+                try {
+                  const metadata = await stat(path);
+                  const pathParts = path.split(/[/\\]/);
+                  const name = pathParts[pathParts.length - 1] || path;
+
+                  if (metadata.isDirectory) {
+                    // 文件夹：直接添加
+                    items.push({
+                      path,
+                      name,
+                      isDirectory: true,
+                    });
+                  } else {
+                    // 文件：检查是否为支持的图片格式
+                    if (isSupportedImageFile(path)) {
+                      items.push({
+                        path,
+                        name,
+                        isDirectory: false,
+                      });
+                    } else {
+                      console.log('[App] 跳过不支持的文件:', path);
+                    }
+                  }
+                } catch (error) {
+                  console.error('[App] 检查路径失败:', path, error);
+                }
+              }
+
+              if (items.length === 0) {
+                ElMessage.warning('没有找到可导入的文件或文件夹');
+                return;
+              }
+
+              // 显示确认对话框
+              const itemCount = items.length;
+              const folderCount = items.filter(i => i.isDirectory).length;
+              const fileCount = items.filter(i => !i.isDirectory).length;
+
+              // 构建列表 HTML
+              const itemListHtml = items.map(item =>
+                `<div class="import-item">
+                  <span class="item-icon">${item.isDirectory ? '📁' : '🖼️'}</span>
+                  <span class="item-name">${item.name}</span>
+                  <span class="item-type">${item.isDirectory ? '文件夹' : '文件'}</span>
+                </div>`
+              ).join('');
+
+              const message = `
+                <div class="import-confirm-content">
+                  <div class="import-summary">
+                    <p>是否导入以下 <strong>${itemCount}</strong> 个项目？</p>
+                    <div class="summary-stats">
+                      <span>📁 文件夹: <strong>${folderCount}</strong> 个</span>
+                      <span>🖼️ 文件: <strong>${fileCount}</strong> 个</span>
+                    </div>
+                  </div>
+                  <div class="import-list">
+                    ${itemListHtml}
+                  </div>
+                </div>
+              `;
+
+              try {
+                await ElMessageBox.confirm(
+                  message,
+                  '确认导入',
+                  {
+                    confirmButtonText: '确认导入',
+                    cancelButtonText: '取消',
+                    type: 'info',
+                    customClass: 'file-drop-confirm-dialog',
+                    dangerouslyUseHTMLString: true,
+                  }
+                );
+
+                // 用户确认，开始导入
+                console.log('[App] 用户确认导入，开始添加任务');
+
+                for (const item of items) {
+                  try {
+                    if (item.isDirectory) {
+                      // 文件夹：使用 local-folder-import，递归子文件夹
+                      await crawlerStore.addTask(
+                        'local-folder-import',
+                        '', // url 为空
+                        item.path, // outputDir 为文件夹自身
+                        {
+                          folder_path: item.path,
+                          recursive: true, // 递归子文件夹
+                        }
+                      );
+                      console.log('[App] 已添加文件夹导入任务:', item.path);
+                    } else {
+                      // 文件：使用 single-file-import，输出目录为文件所在目录
+                      const fileDir = getDirectoryFromPath(item.path);
+                      await crawlerStore.addTask(
+                        'single-file-import',
+                        '', // url 为空
+                        fileDir, // outputDir 为文件所在目录
+                        {
+                          file_path: item.path,
+                        }
+                      );
+                      console.log('[App] 已添加文件导入任务:', item.path);
+                    }
+                  } catch (error) {
+                    console.error('[App] 添加任务失败:', item.path, error);
+                    ElMessage.error(`添加任务失败: ${item.name}`);
+                  }
+                }
+
+                ElMessage.success(`已添加 ${items.length} 个导入任务`);
+              } catch (error) {
+                // 用户取消
+                console.log('[App] 用户取消导入');
+              }
+            } catch (error) {
+              console.error('[App] 处理文件拖入失败:', error);
+              ElMessage.error('处理文件拖入失败: ' + (error instanceof Error ? error.message : String(error)));
+            }
+          }
+        } else if (event.payload.type === 'leave') {
+          // 文件/文件夹离开窗口时，隐藏提示
+          fileDropOverlayRef.value?.hide();
+        }
+      });
+      console.log('[App] 文件拖拽事件监听器注册成功');
+    } catch (error) {
+      console.error('[App] 注册文件拖拽事件监听失败:', error);
+    }
+  }
+});
+
+onUnmounted(() => {
+  // 清理文件拖拽事件监听
+  if (fileDropUnlisten) {
+    fileDropUnlisten();
+    fileDropUnlisten = null;
   }
 });
 
@@ -294,6 +517,93 @@ const toggleCollapse = () => {
   &::-webkit-scrollbar {
     display: none;
     /* Chrome, Safari, Opera */
+  }
+}
+
+// 文件拖拽确认对话框样式
+:deep(.file-drop-confirm-dialog) {
+  .import-confirm-content {
+    max-width: 500px;
+
+    .import-summary {
+      margin-bottom: 20px;
+
+      p {
+        margin-bottom: 12px;
+        font-size: 16px;
+        color: var(--anime-text-primary);
+
+        strong {
+          color: var(--anime-primary);
+          font-weight: 600;
+        }
+      }
+
+      .summary-stats {
+        display: flex;
+        gap: 20px;
+        font-size: 14px;
+        color: var(--anime-text-secondary);
+
+        strong {
+          color: var(--anime-primary);
+          font-weight: 600;
+        }
+      }
+    }
+
+    .import-list {
+      max-height: 400px;
+      overflow-y: auto;
+      border: 1px solid var(--anime-border);
+      border-radius: 12px;
+      padding: 12px;
+      background: var(--anime-bg-card);
+
+      .import-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 12px;
+        margin-bottom: 8px;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.5);
+        transition: all 0.2s ease;
+
+        &:last-child {
+          margin-bottom: 0;
+        }
+
+        &:hover {
+          background: rgba(255, 107, 157, 0.1);
+          transform: translateX(4px);
+        }
+
+        .item-icon {
+          font-size: 20px;
+          flex-shrink: 0;
+        }
+
+        .item-name {
+          flex: 1;
+          font-size: 14px;
+          color: var(--anime-text-primary);
+          font-weight: 500;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .item-type {
+          font-size: 12px;
+          color: var(--anime-text-secondary);
+          padding: 4px 8px;
+          background: rgba(167, 139, 250, 0.1);
+          border-radius: 6px;
+          flex-shrink: 0;
+        }
+      }
+    }
   }
 }
 </style>

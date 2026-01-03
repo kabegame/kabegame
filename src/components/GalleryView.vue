@@ -1,6 +1,15 @@
 <template>
     <div ref="containerEl" class="gallery-view" v-loading="loading" @mouseenter="isHovering = true"
         @mouseleave="isHovering = false">
+        <!-- 画册图片数量上限警告 -->
+        <div v-if="showAlbumLimitWarning" :class="['album-limit-warning', { 'is-danger': isAtLimit }]">
+            <el-icon>
+                <Warning v-if="!isAtLimit" />
+                <CircleClose v-else />
+            </el-icon>
+            <span>{{ warningMessage }}</span>
+        </div>
+
         <slot name="before-grid" />
 
         <ImageGrid v-if="images" ref="gridRef" :images="images" :image-url-map="imageUrlMap"
@@ -10,8 +19,7 @@
             :show-load-more-button="showLoadMoreButton" :has-more="hasMore" :loading-more="loadingMore"
             :show-empty-state="showEmptyState" :enable-reorder="enableReorder"
             @image-dbl-click="(img, ev) => emit('image-dbl-click', img, ev)"
-            @context-command="(payload) => emit('context-command', payload)"
-            @load-more="() => emit('load-more')"
+            @context-command="(payload) => emit('context-command', payload)" @load-more="() => emit('load-more')"
             @selection-change="(ids) => emit('selection-change', ids)"
             @contextmenu="(ev, img) => emit('contextmenu', ev, img)"
             @reorder="(newOrder) => emit('reorder', newOrder)" />
@@ -22,6 +30,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { Warning, CircleClose } from "@element-plus/icons-vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import { enableDragScroll, type DragScrollOptions } from "@/utils/dragScroll";
 import type { ImageInfo } from "@/stores/crawler";
@@ -59,6 +68,9 @@ const props = withDefaults(
         scrollStableDelay?: number;
 
         enableReorder?: boolean;
+
+        /** 当前画册的图片数量（用于显示上限警告） */
+        albumImageCount?: number;
     }>(),
     {
         loading: false,
@@ -95,6 +107,31 @@ const emit = defineEmits<{
 const containerEl = ref<HTMLElement | null>(null);
 const gridRef = ref<any>(null);
 const isHovering = ref(false);
+
+const MAX_ALBUM_IMAGES = 10000;
+const WARNING_THRESHOLD = 9000; // 超过9000时显示警告
+
+// 计算是否显示警告
+const showAlbumLimitWarning = computed(() => {
+    if (props.mode !== "albumDetail" || props.albumImageCount === undefined) {
+        return false;
+    }
+    return props.albumImageCount >= WARNING_THRESHOLD;
+});
+
+// 计算是否达到上限
+const isAtLimit = computed(() => {
+    return props.albumImageCount !== undefined && props.albumImageCount >= MAX_ALBUM_IMAGES;
+});
+
+// 警告消息
+const warningMessage = computed(() => {
+    if (isAtLimit.value) {
+        return `画册图片数量已达到上限（${MAX_ALBUM_IMAGES} 张），将无法继续添加到画册`;
+    }
+    const remaining = MAX_ALBUM_IMAGES - (props.albumImageCount || 0);
+    return `画册图片数量即将到达上限（当前 ${props.albumImageCount} / ${MAX_ALBUM_IMAGES}，剩余 ${remaining} 张）`;
+});
 
 const enableCtrlWheelAdjustColumns = computed(() => {
     if (props.enableCtrlWheelAdjustColumns !== undefined) return props.enableCtrlWheelAdjustColumns;
@@ -286,5 +323,30 @@ defineExpose({
 /* 确保图片网格根容器允许内容溢出 */
 .gallery-view :deep(.image-grid-root) {
     overflow: visible;
+}
+
+.album-limit-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    margin: 0 6px 12px 6px;
+    background: var(--el-color-warning-light-9);
+    border: 1px solid var(--el-color-warning-light-7);
+    border-radius: 8px;
+    color: var(--el-color-warning-dark-2);
+    font-size: 14px;
+    line-height: 1.5;
+
+    .el-icon {
+        font-size: 18px;
+        flex-shrink: 0;
+    }
+
+    &.is-danger {
+        background: var(--el-color-danger-light-9);
+        border-color: var(--el-color-danger-light-7);
+        color: var(--el-color-danger-dark-2);
+    }
 }
 </style>

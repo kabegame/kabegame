@@ -35,6 +35,7 @@
       :aspect-ratio-match-window="!!albumAspectRatio" :window-aspect-ratio="albumAspectRatio || 16 / 9"
       :allow-select="true" :enable-context-menu="false" :enable-ctrl-wheel-adjust-columns="true"
       :show-empty-state="!loading" :is-blocked="isBlockingOverlayOpen"
+      :album-image-count="currentAlbumImageCount"
       @adjust-columns="(...args) => throttledAdjustColumns(args[0])"
       @selection-change="(...args) => handleSelectionChange(args[0])"
       @image-dbl-click="(...args) => handleImageDblClick(args[0])"
@@ -111,7 +112,6 @@ const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 const {
   imageClickAction,
   loadSettings,
-  throttledAdjustColumns,
 } = useGallerySettings();
 
 const albumId = ref<string>("");
@@ -125,18 +125,51 @@ const blobUrls = new Set<string>();
 const selectedImages = ref<Set<string>>(new Set());
 const albumViewRef = ref<any>(null);
 
-// 画册详情页本地列数
+// 计算当前画册的图片数量（优先使用 albumCounts，否则使用 images.length）
+const currentAlbumImageCount = computed(() => {
+  if (!albumId.value) return undefined;
+  // 优先使用 store 中的计数（更准确，包括可能未加载的图片）
+  const countFromStore = albumStore.albumCounts[albumId.value];
+  if (countFromStore !== undefined) {
+    return countFromStore;
+  }
+  // 如果没有计数，使用当前加载的图片数量
+  return images.value.length;
+});
+
+// 画册详情页本地列数（初始值为 5，不再从设置读取）
 const albumColumns = ref(5);
 const albumAspectRatio = ref<number | null>(null);
 
-// 监听设置 store 中的变化，实时同步
-watch(
-  () => settingsStore.values.galleryColumns,
-  (newValue) => {
-    // 如果没有用户设置值，默认为 5
-    albumColumns.value = newValue !== undefined ? newValue : 5;
+// 调整列数的函数（不保存到设置）
+const adjustColumns = (delta: number) => {
+  if (delta > 0) {
+    // 增加列数（最大 10 列）
+    if (albumColumns.value < 10) {
+      albumColumns.value++;
+    }
+  } else {
+    // 减少列数（最小 1 列）
+    if (albumColumns.value > 1) {
+      albumColumns.value--;
+    }
   }
-);
+};
+
+// 节流函数
+const throttle = <T extends (...args: any[]) => any>(func: T, delay: number): T => {
+  let lastCall = 0;
+  return ((...args: any[]) => {
+    const now = Date.now();
+    if (now - lastCall >= delay) {
+      lastCall = now;
+      return func(...args);
+    }
+  }) as T;
+};
+
+// 节流后的调整列数函数（100ms 节流）
+const throttledAdjustColumns = throttle(adjustColumns, 100);
 
 watch(
   () => settingsStore.values.galleryImageAspectRatio,
@@ -685,9 +718,6 @@ onMounted(async () => {
   // 与 Gallery 共用同一套设置
   try {
     await loadSettings();
-
-    // 初始化画册列数（如果没有用户设置值，默认为 5）
-    albumColumns.value = settingsStore.values.galleryColumns !== undefined ? settingsStore.values.galleryColumns : 5;
 
     // 解析宽高比
     if (settingsStore.values.galleryImageAspectRatio) {

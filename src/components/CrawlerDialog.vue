@@ -163,6 +163,11 @@ import { ElMessage } from "element-plus";
 interface Props {
     modelValue: boolean;
     pluginIcons: Record<string, string>;
+    initialConfig?: {
+        pluginId?: string;
+        outputDir?: string;
+        vars?: Record<string, any>;
+    };
 }
 
 const props = defineProps<Props>();
@@ -366,7 +371,21 @@ watch(visible, async (open) => {
         console.debug("导入弹窗打开时刷新画册列表失败（忽略）：", e);
     }
 
-    if (form.value.pluginId) {
+    // 如果传入了初始配置，应用它
+    if (props.initialConfig) {
+        if (props.initialConfig.pluginId) {
+            form.value.pluginId = props.initialConfig.pluginId;
+            await loadPluginVars(props.initialConfig.pluginId);
+        }
+        if (props.initialConfig.outputDir) {
+            form.value.outputDir = props.initialConfig.outputDir;
+        }
+        if (props.initialConfig.vars) {
+            // 等待插件变量加载完成后再设置变量值
+            await nextTick();
+            Object.assign(form.value.vars, props.initialConfig.vars);
+        }
+    } else if (form.value.pluginId) {
         await loadPluginVars(form.value.pluginId);
     }
 

@@ -65,27 +65,63 @@ export const useAlbumStore = defineStore("albums", () => {
   };
 
   const addImagesToAlbum = async (albumId: string, imageIds: string[]) => {
-    await invoke<number>("add_images_to_album", { albumId, imageIds });
-    // 清除缓存，下一次自动刷新
-    delete albumImages.value[albumId];
-    delete albumPreviews.value[albumId];
-    // 更新计数（本地 + n）
-    const prev = albumCounts.value[albumId] || 0;
-    albumCounts.value[albumId] = prev + imageIds.length;
+    try {
+      const result = await invoke<{
+        added: number;
+        attempted: number;
+        canAdd: number;
+        currentCount: number;
+      }>("add_images_to_album", { albumId, imageIds });
 
-    // 如果是收藏画册，通知画廊等页面更新收藏状态
-    if (albumId === FAVORITE_ALBUM_ID.value) {
-      window.dispatchEvent(
-        new CustomEvent("favorite-status-changed", {
-          detail: { imageIds, favorite: true },
-        })
-      );
+      // 清除缓存，下一次自动刷新
+      delete albumImages.value[albumId];
+      delete albumPreviews.value[albumId];
+      // 更新计数（使用后端返回的实际数量）
+      albumCounts.value[albumId] = result.currentCount;
+
+      // 如果是收藏画册，通知画廊等页面更新收藏状态
+      if (albumId === FAVORITE_ALBUM_ID.value) {
+        // 只通知实际添加的图片
+        const addedImageIds = imageIds.slice(0, result.added);
+        if (addedImageIds.length > 0) {
+          window.dispatchEvent(
+            new CustomEvent("favorite-status-changed", {
+              detail: { imageIds: addedImageIds, favorite: true },
+            })
+          );
+        }
+      }
+    } catch (error: any) {
+      // 如果后端返回错误，尝试解析错误信息
+      const errorMessage = error?.message || String(error);
+
+      // 如果错误信息包含上限提示，需要获取详细信息
+      if (errorMessage.includes("上限")) {
+        const currentCount = albumCounts.value[albumId] || 0;
+        const MAX_ALBUM_IMAGES = 10000;
+        const canAdd = Math.max(0, MAX_ALBUM_IMAGES - currentCount);
+        const attempted = imageIds.length;
+
+        if (canAdd === 0) {
+          throw new Error(`画册已满（${MAX_ALBUM_IMAGES} 张），无法继续添加`);
+        } else {
+          throw new Error(
+            `画册空间不足：最多可放入 ${canAdd} 张，尝试放入 ${attempted} 张`
+          );
+        }
+      }
+
+      // 其他错误直接抛出
+      throw error;
     }
   };
 
   const removeImagesFromAlbum = async (albumId: string, imageIds: string[]) => {
     if (!imageIds || imageIds.length === 0) return 0;
-    const removed = await invoke<number>("remove_images_from_album", { albumId, imageIds });
+    const removed = await invoke<number>("remove_images_from_album", {
+      albumId,
+      imageIds,
+    });
     // 清除缓存，下一次自动刷新
     delete albumImages.value[albumId];
     delete albumPreviews.value[albumId];

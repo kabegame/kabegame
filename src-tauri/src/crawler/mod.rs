@@ -387,6 +387,20 @@ struct DownloadedImage {
     reused: bool,
 }
 
+/// 确保下载过程至少持续指定时间（从开始时间算起）
+/// 如果已经超过最小时间，则立即返回；否则休眠剩余时间
+fn ensure_minimum_duration(download_start_time: u64, min_duration_ms: u64) {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        - download_start_time;
+    if elapsed < min_duration_ms {
+        let remaining = min_duration_ms - elapsed;
+        std::thread::sleep(std::time::Duration::from_millis(remaining));
+    }
+}
+
 fn compute_file_hash(path: &Path) -> Result<String, String> {
     let mut file =
         fs::File::open(path).map_err(|e| format!("Failed to open file for hash: {}", e))?;
@@ -543,17 +557,8 @@ fn download_image(
         if let Ok(target_dir_canonical) = target_dir.canonicalize() {
             if source_path.starts_with(&target_dir_canonical) {
                 let thumbnail_path = generate_thumbnail(&source_path, app)?;
-                // 确保下载过程至少持续 0.2 秒（即使文件已经存在）
-                let elapsed = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64
-                    - download_start_time;
-                let min_duration_ms = 500u64;
-                if elapsed < min_duration_ms {
-                    let remaining = min_duration_ms - elapsed;
-                    std::thread::sleep(std::time::Duration::from_millis(remaining));
-                }
+                // 确保下载过程至少持续指定时间（即使文件已经存在）
+                ensure_minimum_duration(download_start_time, 500);
                 return Ok(DownloadedImage {
                     path: source_path.clone(),
                     thumbnail: thumbnail_path,
@@ -584,17 +589,8 @@ fn download_image(
         // 生成缩略图
         let thumbnail_path = generate_thumbnail(&target_path, app)?;
 
-        // 确保下载过程至少持续 0.2 秒
-        let elapsed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
-            - download_start_time;
-        let min_duration_ms = 500u64;
-        if elapsed < min_duration_ms {
-            let remaining = min_duration_ms - elapsed;
-            std::thread::sleep(std::time::Duration::from_millis(remaining));
-        }
+        // 确保下载过程至少持续指定时间
+        ensure_minimum_duration(download_start_time, 500);
 
         Ok(DownloadedImage {
             path: target_path,
@@ -719,6 +715,17 @@ fn download_image(
                             "receivedBytes": received_bytes,
                             "totalBytes": total_bytes,
                         }),
+                    );
+
+                    // 首次下载时发送下载状态
+                    emit_download_state(
+                        &app_clone,
+                        &task_id_clone,
+                        &url_clone,
+                        download_start_time,
+                        &plugin_id_clone,
+                        "downloading",
+                        None,
                     );
 
                     let mut stream_error: Option<String> = None;
@@ -851,17 +858,8 @@ fn download_image(
                     .trim_start_matches("\\\\?\\")
                     .to_string();
 
-                // 确保下载过程至少持续 0.2 秒（即使复用了已有文件）
-                let elapsed = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64
-                    - download_start_time;
-                let min_duration_ms = 500u64;
-                if elapsed < min_duration_ms {
-                    let remaining = min_duration_ms - elapsed;
-                    std::thread::sleep(std::time::Duration::from_millis(remaining));
-                }
+                // 确保下载过程至少持续指定时间（即使复用了已有文件）
+                ensure_minimum_duration(download_start_time, 500);
 
                 return Ok(DownloadedImage {
                     path: PathBuf::from(canonical_existing),
@@ -887,17 +885,8 @@ fn download_image(
         // 生成缩略图
         let thumbnail_path = generate_thumbnail(&file_path, app)?;
 
-        // 确保下载过程至少持续 0.2 秒
-        let elapsed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
-            - download_start_time;
-        let min_duration_ms = 500u64;
-        if elapsed < min_duration_ms {
-            let remaining = min_duration_ms - elapsed;
-            std::thread::sleep(std::time::Duration::from_millis(remaining));
-        }
+        // 确保下载过程至少持续指定时间
+        ensure_minimum_duration(download_start_time, 500);
 
         Ok(DownloadedImage {
             path: file_path,
@@ -1143,25 +1132,21 @@ impl DownloadQueue {
                 if let Ok(Some(existing_image)) = storage.find_image_by_url(&url_clone) {
                     let image_id = existing_image.id.clone();
 
-                    // 如果配置了输出画册，将已存在的图片添加到画册
+                    // 如果配置了输出画册，将已存在的图片添加到画册（静默失败）
                     let mut existing_image_for_event = existing_image.clone();
                     if let Some(ref album_id) = output_album_id_clone {
                         if !album_id.is_empty() {
-                            match storage.add_images_to_album(album_id, &vec![image_id.clone()]) {
-                                Ok(_count) => {
-                                    if album_id == crate::storage::FAVORITE_ALBUM_ID {
-                                        existing_image_for_event.favorite = true;
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "[ERROR] 添加已存在的图片 {} 到画册 {} 失败: {}",
-                                        image_id, album_id, e
-                                    );
+                            let added = storage
+                                .add_images_to_album_silent(album_id, &vec![image_id.clone()]);
+                            if added > 0 {
+                                if album_id == crate::storage::FAVORITE_ALBUM_ID {
+                                    existing_image_for_event.favorite = true;
                                 }
                             }
                         }
                     }
+
+                    ensure_minimum_duration(download_start_time, 500);
 
                     // 发送事件
                     let _ = serde_json::to_value(&existing_image_for_event).map(|img_val| {
@@ -1257,15 +1242,6 @@ impl DownloadQueue {
                     t.state = "downloading".to_string();
                 }
             }
-            emit_download_state(
-                &app_clone,
-                &task_id_clone,
-                &url_clone,
-                download_start_time,
-                &plugin_id_clone,
-                "downloading",
-                None,
-            );
 
             // 执行下载
             let result = download_image(
@@ -1461,24 +1437,17 @@ impl DownloadQueue {
                             let image_id = image_info.id.clone();
                             let mut image_info_for_event = image_info.clone();
 
-                            // 如果配置了输出画册，立即添加到画册
+                            // 如果配置了输出画册，立即添加到画册（静默失败）
                             if let Some(ref album_id) = output_album_id_clone {
                                 if !album_id.is_empty() {
-                                    match storage
-                                        .add_images_to_album(album_id, &vec![image_id.clone()])
-                                    {
-                                        Ok(_count) => {
-                                            // 如果添加到的是收藏画册，更新 favorite 状态
-                                            // （无论 count 是多少，只要成功添加到收藏画册，就应该设置为 true）
-                                            if album_id == crate::storage::FAVORITE_ALBUM_ID {
-                                                image_info_for_event.favorite = true;
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!(
-                                                "[ERROR] 添加图片 {} 到画册 {} 失败: {}",
-                                                image_id, album_id, e
-                                            );
+                                    let added = storage.add_images_to_album_silent(
+                                        album_id,
+                                        &vec![image_id.clone()],
+                                    );
+                                    if added > 0 {
+                                        // 如果添加到的是收藏画册，更新 favorite 状态
+                                        if album_id == crate::storage::FAVORITE_ALBUM_ID {
+                                            image_info_for_event.favorite = true;
                                         }
                                     }
                                 }
@@ -1534,24 +1503,16 @@ impl DownloadQueue {
                     if let Ok(Some(existing_image)) = storage.find_image_by_hash(&downloaded.hash) {
                         let image_id = existing_image.id.clone();
 
-                        // 如果配置了输出画册，将重用的图片也添加到画册
+                        // 如果配置了输出画册，将重用的图片也添加到画册（静默失败）
                         let mut existing_image_for_event = existing_image.clone();
                         if let Some(ref album_id) = output_album_id_clone {
                             if !album_id.is_empty() {
-                                match storage.add_images_to_album(album_id, &vec![image_id.clone()])
-                                {
-                                    Ok(_count) => {
-                                        // 如果添加到的是收藏画册，更新 favorite 状态
-                                        // （无论 count 是多少，只要成功添加到收藏画册，就应该设置为 true）
-                                        if album_id == crate::storage::FAVORITE_ALBUM_ID {
-                                            existing_image_for_event.favorite = true;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!(
-                                            "[ERROR] 添加重用的图片 {} 到画册 {} 失败: {}",
-                                            image_id, album_id, e
-                                        );
+                                let added = storage
+                                    .add_images_to_album_silent(album_id, &vec![image_id.clone()]);
+                                if added > 0 {
+                                    // 如果添加到的是收藏画册，更新 favorite 状态
+                                    if album_id == crate::storage::FAVORITE_ALBUM_ID {
+                                        existing_image_for_event.favorite = true;
                                     }
                                 }
                             }

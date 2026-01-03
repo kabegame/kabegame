@@ -42,6 +42,15 @@ pub struct DedupeRemoveResult {
     pub removed_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddToAlbumResult {
+    pub added: usize,         // 实际添加的数量
+    pub attempted: usize,     // 尝试添加的数量
+    pub can_add: usize,       // 最多可添加的数量
+    pub current_count: usize, // 当前画册的图片数量
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PaginatedImages {
     pub images: Vec<ImageInfo>,
@@ -966,9 +975,53 @@ impl Storage {
         &self,
         album_id: &str,
         image_ids: &[String],
-    ) -> Result<usize, String> {
-        let mut inserted = 0;
+    ) -> Result<AddToAlbumResult, String> {
+        const MAX_ALBUM_IMAGES: i64 = 10000;
+
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        // 获取当前画册的图片数量
+        let current_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM album_images WHERE album_id = ?1",
+                params![album_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to query album image count: {}", e))?;
+
+        // 计算将要添加的图片数量（排除已存在的）
+        let mut new_count = 0;
+        for img_id in image_ids {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                    params![album_id, img_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            if exists == 0 {
+                new_count += 1;
+            }
+        }
+
+        let current_count_usize = current_count as usize;
+        let can_add = (MAX_ALBUM_IMAGES - current_count).max(0) as usize;
+        let attempted = image_ids.len();
+
+        // 检查是否超过上限
+        if current_count + new_count > MAX_ALBUM_IMAGES {
+            if can_add == 0 {
+                return Err(format!("画册已满（{} 张），无法继续添加", MAX_ALBUM_IMAGES));
+            } else {
+                return Err(format!(
+                    "画册空间不足：最多可放入 {} 张，尝试放入 {} 张",
+                    can_add, attempted
+                ));
+            }
+        }
+
+        // 执行添加操作
+        let mut inserted = 0;
         for img_id in image_ids {
             let rows = conn
                 .execute(
@@ -978,7 +1031,78 @@ impl Storage {
                 .map_err(|e| format!("Failed to insert album image: {}", e))?;
             inserted += rows;
         }
-        Ok(inserted as usize)
+
+        Ok(AddToAlbumResult {
+            added: inserted as usize,
+            attempted,
+            can_add,
+            current_count: current_count_usize,
+        })
+    }
+
+    /// 静默添加图片到画册（用于任务自动添加）
+    /// 超出上限时静默失败，只添加能添加的部分
+    pub fn add_images_to_album_silent(&self, album_id: &str, image_ids: &[String]) -> usize {
+        const MAX_ALBUM_IMAGES: i64 = 10000;
+
+        let conn = match self.db.lock() {
+            Ok(c) => c,
+            Err(_) => return 0,
+        };
+
+        // 获取当前画册的图片数量
+        let current_count: i64 = match conn.query_row(
+            "SELECT COUNT(*) FROM album_images WHERE album_id = ?1",
+            params![album_id],
+            |row| row.get(0),
+        ) {
+            Ok(count) => count,
+            Err(_) => return 0,
+        };
+
+        // 计算剩余可添加数量
+        let remaining = (MAX_ALBUM_IMAGES - current_count).max(0) as usize;
+        if remaining == 0 {
+            return 0;
+        }
+
+        // 执行添加操作，只添加能添加的部分
+        let mut inserted = 0;
+        for img_id in image_ids {
+            if inserted >= remaining {
+                break;
+            }
+
+            // 检查是否已存在
+            let exists: i64 = match conn.query_row(
+                "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                params![album_id, img_id],
+                |row| row.get(0),
+            ) {
+                Ok(count) => count,
+                Err(_) => continue,
+            };
+
+            if exists > 0 {
+                continue; // 已存在，跳过
+            }
+
+            // 尝试添加
+            match conn.execute(
+                "INSERT OR IGNORE INTO album_images (album_id, image_id) VALUES (?1, ?2)",
+                params![album_id, img_id],
+            ) {
+                Ok(rows) => {
+                    inserted += rows;
+                }
+                Err(_) => {
+                    // 静默失败，继续下一个
+                    continue;
+                }
+            }
+        }
+
+        inserted as usize
     }
 
     /// 从指定画册中移除图片（仅移除关联，不删除图片记录/文件）
