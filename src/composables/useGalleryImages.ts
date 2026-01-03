@@ -278,6 +278,9 @@ export function useGalleryImages(
     }
   };
 
+  // 执行锁，防止 refreshLatestIncremental 并发执行
+  let isRefreshingIncremental = false;
+
   /**
    * 仅增量获取最新一页图片并追加到末尾，避免全量刷新和旧图重载。
    * 
@@ -288,6 +291,12 @@ export function useGalleryImages(
    * - hasMore 只在用户主动刷新时由分页逻辑设置，增量刷新不会让"加载更多"按钮出现
    */
   const refreshLatestIncremental = async () => {
+    // 如果正在执行，直接返回，避免并发执行导致重复添加
+    if (isRefreshingIncremental) {
+      return;
+    }
+
+    isRefreshingIncremental = true;
     try {
       // 如果画廊为空，使用正常的分页加载初始化（确保 store 状态正确同步）
       if (displayedImages.value.length === 0) {
@@ -303,6 +312,7 @@ export function useGalleryImages(
 
       // hasMore=false 时，画廊自动增长
       // 获取足够多的图片以包含所有新增的（不限于 pageSize）
+      // 在获取数据前先记录当前的 existingIds，避免并发时重复添加
       const existingIds = new Set(displayedImages.value.map((img) => img.id));
 
       // 使用较大的 pageSize 来获取所有可能的新图片
@@ -319,7 +329,13 @@ export function useGalleryImages(
         pluginId: filterPluginId.value || null,
       });
 
-      const newOnes = result.images.filter((img) => !existingIds.has(img.id));
+      // 再次获取当前的 existingIds（可能在异步操作期间有新图片被添加）
+      const currentExistingIds = new Set(displayedImages.value.map((img) => img.id));
+      
+      // 过滤出新图片（双重检查：既检查初始的 existingIds，也检查当前的 currentExistingIds）
+      const newOnes = result.images.filter((img) => 
+        !existingIds.has(img.id) && !currentExistingIds.has(img.id)
+      );
 
       // 更新 hasMore：只在确定已拿到全部数据时将其关闭，避免遗留的 true 导致按钮出现
       const totalAfterAdd = displayedImages.value.length + newOnes.length;
@@ -329,8 +345,14 @@ export function useGalleryImages(
 
       if (newOnes.length === 0) return;
 
+      // 最后一次检查：在追加前再次确认这些图片确实不存在（防止并发添加）
+      const finalExistingIds = new Set(displayedImages.value.map((img) => img.id));
+      const trulyNewOnes = newOnes.filter((img) => !finalExistingIds.has(img.id));
+
+      if (trulyNewOnes.length === 0) return;
+
       // 将新增图片追加到列表末尾
-      displayedImages.value = [...displayedImages.value, ...newOnes];
+      displayedImages.value = [...displayedImages.value, ...trulyNewOnes];
 
       // 同步 crawlerStore 状态，保持与 displayedImages 一致
       crawlerStore.images = [...displayedImages.value];
@@ -339,10 +361,12 @@ export function useGalleryImages(
       crawlerStore.currentPage = Math.ceil(displayedImages.value.length / crawlerStore.pageSize);
 
       // 加载新增图片的 URL
-      await loadImageUrls(newOnes);
+      await loadImageUrls(trulyNewOnes);
 
     } catch (error) {
       console.error("增量刷新最新图片失败:", error);
+    } finally {
+      isRefreshingIncremental = false;
     }
   };
 

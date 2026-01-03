@@ -5,7 +5,6 @@
  *                          - normal: 一般版本（带商店源）
  *                          - local:  无商店版本（仅本地源 + 预打包全部插件）
  *   --watch                enable plugin source watching + auto-rebuild
- *   --local-plugins        use local plugins packaging targets (legacy, prefer --mode)
  *   --verbose              show verbose output
  *
  * Examples:
@@ -61,7 +60,6 @@ function spawnProc(command, args, opts = {}) {
 function parseFlags(argv) {
   const flags = {
     watch: false,
-    localPlugins: false,
     verbose: false,
     mode: "normal", // normal | local
   };
@@ -69,7 +67,6 @@ function parseFlags(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--watch") flags.watch = true;
-    else if (arg === "--local-plugins") flags.localPlugins = true;
     else if (arg === "--verbose") flags.verbose = true;
     else if (arg === "--mode") {
       const v = argv[i + 1];
@@ -146,20 +143,15 @@ function dev(flags) {
   const builtinPlugins = flags.mode === "local" ? scanBuiltinPlugins() : [];
   const env = buildEnv(flags, builtinPlugins);
 
-  const tauriTarget = flags.localPlugins
-    ? "tauri:dev-local-plugins"
-    : "tauri:dev";
+  const tauriTarget = "tauri:dev";
 
   const children = [];
 
   if (flags.watch) {
     const watchArgs = ["scripts/nx-nodemon-plugin-watch.mjs"];
-    if (flags.localPlugins) watchArgs.push("--local-plugins");
     if (flags.verbose) watchArgs.push("--verbose");
     console.log(
-      `[dev] Starting plugin watcher (nodemon, nx-config-derived) mode=${
-        flags.localPlugins ? "local-plugins" : "all-plugins"
-      }`
+      `[dev] Starting plugin watcher (nodemon, nx-config-derived) mode=all-plugins`
     );
     children.push(spawnProc("node", watchArgs, { env }));
   }
@@ -235,8 +227,25 @@ function build(flags) {
   // 打包阶段不需要 KABEGAME_BUILTIN_PLUGINS，用基础 env
   run("nx", ["run", packageTarget], { env: buildEnv(flags) });
 
+  // Step 1.5: Verify plugins were packaged correctly
+  if (!fs.existsSync(RESOURCES_PLUGINS_DIR)) {
+    console.error(`❌ 错误：插件资源目录不存在: ${RESOURCES_PLUGINS_DIR}`);
+    console.error(`   请确保 ${packageTarget} 任务已正确执行`);
+    process.exit(1);
+  }
+  const pluginFiles = fs.readdirSync(RESOURCES_PLUGINS_DIR).filter((f) => f.endsWith(".kgpg"));
+  if (pluginFiles.length === 0) {
+    console.error(`❌ 错误：插件资源目录中没有找到 .kgpg 文件: ${RESOURCES_PLUGINS_DIR}`);
+    console.error(`   请确保 ${packageTarget} 任务已正确执行`);
+    process.exit(1);
+  }
+  console.log(`[build] 已找到 ${pluginFiles.length} 个插件文件: ${pluginFiles.join(", ")}`);
+
   // Step 2: Scan generated plugins and build final env with builtin list
   const builtinPlugins = flags.mode === "local" ? scanBuiltinPlugins() : [];
+  if (flags.mode === "local" && builtinPlugins.length === 0) {
+    console.warn(`⚠️  警告：local 模式下未找到内置插件，这可能导致插件功能不可用`);
+  }
   const env = buildEnv(flags, builtinPlugins);
 
   // Step 3: Build Tauri app

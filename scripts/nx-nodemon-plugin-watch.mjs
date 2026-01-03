@@ -7,7 +7,7 @@
  * - Derive watch/ignore/ext from `nx.json` namedInputs + project target inputs
  *
  * Usage:
- *   node scripts/nx-nodemon-plugin-watch.mjs [--local-plugins] [--verbose]
+ *   node scripts/nx-nodemon-plugin-watch.mjs [--verbose]
  */
 
 import fs from "fs";
@@ -28,7 +28,6 @@ function toPosix(p) {
 
 function parseFlags(argv) {
   return {
-    localPlugins: argv.includes("--local-plugins"),
     verbose: argv.includes("--verbose"),
   };
 }
@@ -166,7 +165,7 @@ function startNodemon({ configPath, verbose }) {
 async function main() {
   const flags = parseFlags(process.argv.slice(2));
   const projectName = "crawler-plugins";
-  const targetName = flags.localPlugins ? "package-local" : "package";
+  const targetName = "package";
 
   const nxJsonPath = joinPathFragments(root, "nx.json");
   const nxJson = readJsonFile(nxJsonPath);
@@ -213,9 +212,7 @@ async function main() {
   );
 
   const ext = collectExtensionsFromInputs(resolvedInputs);
-  const exec = flags.localPlugins
-    ? "node scripts/package-and-signal.js --local"
-    : "node scripts/package-and-signal.js";
+  const exec = "node scripts/package-and-signal.js";
 
   const outDir = path.join(root, ".nx", "nodemon");
   ensureDir(outDir);

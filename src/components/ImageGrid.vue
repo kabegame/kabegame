@@ -31,7 +31,7 @@
     <el-dialog v-model="previewVisible" title="图片预览" width="90%" :close-on-click-modal="true"
       class="image-preview-dialog" :show-close="true" :lock-scroll="true" @close="closePreview">
       <div v-if="previewImageUrl" ref="previewContainerRef" class="preview-container"
-        @contextmenu.prevent.stop="handlePreviewContextMenu" @mousemove="handlePreviewMouseMoveWithDrag"
+        @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMoveWithDrag"
         @mouseleave="handlePreviewMouseLeaveAll" @wheel.prevent="handlePreviewWheel" @mouseup="stopPreviewDrag">
         <!-- 左侧 1/5 热区：仅鼠标靠近时显示按钮 -->
         <div class="preview-nav-zone left" :class="{ visible: previewHoverSide === 'left' }" @click.stop="goPrev">
@@ -54,13 +54,13 @@
       </div>
     </el-dialog>
 
-    <!-- 预览对话框中的右键菜单（使用 teleport 确保在应用顶层） -->
-    <Teleport to="body">
+    <!-- 预览对话框中的右键菜单 -->
+    <div class="preview-context-menu-wrapper">
       <GalleryContextMenu v-if="enableContextMenu && previewContextMenuVisible" :visible="previewContextMenuVisible"
         :position="previewContextMenuPosition" :image="previewImage" :selected-count="1"
         :selected-image-ids="previewImage ? new Set([previewImage.id]) : new Set()" @close="closePreviewContextMenu"
         @command="handlePreviewContextMenuCommand" />
-    </Teleport>
+    </div>
   </div>
 </template>
 
@@ -105,6 +105,11 @@ interface Props {
    * 空状态显示
    */
   showEmptyState?: boolean; // 是否在 images 为空时显示空状态组件
+
+  /**
+   * 是否启用长按调整顺序功能
+   */
+  enableReorder?: boolean; // 是否启用长按进入调整顺序模式
 }
 
 // 图片顺序调整状态
@@ -136,6 +141,7 @@ const showLoadMoreButton = computed(() => props.showLoadMoreButton ?? false);
 const hasMore = computed(() => props.hasMore ?? false);
 const loadingMore = computed(() => props.loadingMore ?? false);
 const showEmptyState = computed(() => props.showEmptyState ?? false);
+const enableReorder = computed(() => props.enableReorder ?? true);
 
 // 内置选择状态（仅在 allowSelect=true 且未传入 selectedImages 时启用）
 const internalSelectedIds = ref<Set<string>>(new Set());
@@ -177,8 +183,18 @@ const clampTranslate = (nextScale: number, nextX: number, nextY: number) => {
   const available = previewAvailableSize.value;
   const base = previewBaseSize.value;
   if (available.width > 0 && available.height > 0 && base.width > 0 && base.height > 0) {
-    const maxOffsetX = Math.max(0, (base.width * nextScale - available.width) / 2);
-    const maxOffsetY = Math.max(0, (base.height * nextScale - available.height) / 2);
+    // 计算缩放后的图片尺寸
+    const scaledWidth = base.width * nextScale;
+    const scaledHeight = base.height * nextScale;
+
+    // 如果缩放后的图片小于等于容器，则不允许拖拽（居中显示）
+    if (scaledWidth <= available.width && scaledHeight <= available.height) {
+      return { x: 0, y: 0 };
+    }
+
+    // 如果缩放后的图片大于容器，计算允许的最大偏移量
+    const maxOffsetX = Math.max(0, (scaledWidth - available.width) / 2);
+    const maxOffsetY = Math.max(0, (scaledHeight - available.height) / 2);
     return {
       x: clamp(nextX, -maxOffsetX, maxOffsetX),
       y: clamp(nextY, -maxOffsetY, maxOffsetY),
@@ -215,11 +231,18 @@ const measureBaseSize = () => {
   }
 };
 
-const resetPreviewTransform = async () => {
-  setPreviewTransform(1, 0, 0);
+// 确保在图片完全渲染后测量尺寸
+const measureSizesAfterRender = async () => {
   await nextTick();
+  // 等待一帧，确保浏览器完成布局
+  await new Promise(resolve => requestAnimationFrame(resolve));
   measureContainerSize();
   measureBaseSize();
+};
+
+const resetPreviewTransform = async () => {
+  setPreviewTransform(1, 0, 0);
+  await measureSizesAfterRender();
 };
 
 const previewImageStyle = computed(() => ({
@@ -527,6 +550,7 @@ const handleContextMenuCommand = (command: string) => {
 
 // 处理长按进入调整模式
 const handleLongPress = (index: number) => {
+  if (!enableReorder.value) return; // 如果禁用 reorder，直接返回
   if (isReorderMode.value) return; // 已经在调整模式，忽略
   isReorderMode.value = true;
   reorderSourceIndex.value = index;
@@ -675,7 +699,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
   if (event.key === "Delete" && internalSelectedIds.value.size > 0) {
     event.preventDefault();
     emit("contextCommand", {
-      command: "delete",
+      command: "remove",
       image: props.images.find((img) => internalSelectedIds.value.has(img.id)) || props.images[0],
       selectedImageIds: new Set(internalSelectedIds.value),
     });
@@ -798,7 +822,7 @@ const handlePreviewMouseLeaveAll = () => {
 };
 
 // 处理预览对话框中的右键菜单
-const handlePreviewContextMenu = (event: MouseEvent) => {
+const handlePreviewDialogContextMenu = (event: MouseEvent) => {
   if (!enableContextMenu.value || !previewImage.value) return;
   previewContextMenuPosition.value = { x: event.clientX, y: event.clientY };
   previewContextMenuVisible.value = true;
@@ -872,8 +896,18 @@ const stopPreviewDrag = () => {
   previewDragging.value = false;
 };
 
-const handlePreviewImageLoad = () => {
-  resetPreviewTransform();
+const handlePreviewImageLoad = async () => {
+  // 图片加载完成后，确保尺寸测量准确
+  await measureSizesAfterRender();
+  // 如果图片尺寸小于容器，确保居中显示（translate 应该为 0）
+  if (previewBaseSize.value.width > 0 && previewBaseSize.value.height > 0) {
+    const container = previewAvailableSize.value;
+    const base = previewBaseSize.value;
+    // 如果图片小于容器，确保居中（translate 为 0）
+    if (base.width <= container.width && base.height <= container.height) {
+      setPreviewTransform(1, 0, 0);
+    }
+  }
 };
 
 watch(
@@ -972,9 +1006,11 @@ watch(
 
 watch(
   () => previewVisible.value,
-  (visible) => {
+  async (visible) => {
     if (visible) {
-      resetPreviewTransform();
+      // 对话框打开时，等待 DOM 更新后测量尺寸
+      await nextTick();
+      await measureSizesAfterRender();
     } else {
       stopPreviewDrag();
     }
@@ -983,12 +1019,47 @@ watch(
 
 watch(
   () => previewImageUrl.value,
-  (url) => {
+  async (url) => {
     if (url) {
-      resetPreviewTransform();
+      // 图片 URL 变化时，重置 transform 并等待图片加载
+      setPreviewTransform(1, 0, 0);
+      // 注意：实际的尺寸测量会在 handlePreviewImageLoad 中进行
     }
   }
 );
+
+let resizeObserver: ResizeObserver | null = null;
+
+// 监听预览容器尺寸变化
+const setupResizeObserver = () => {
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+  }
+
+  const container = previewContainerRef.value;
+  if (!container) return;
+
+  resizeObserver = new ResizeObserver(() => {
+    if (previewVisible.value && previewScale.value === 1) {
+      // 只有在预览可见且未缩放时才重新测量
+      measureContainerSize();
+      measureBaseSize();
+      // 如果图片小于容器，确保居中
+      if (previewBaseSize.value.width > 0 && previewBaseSize.value.height > 0) {
+        const containerSize = previewAvailableSize.value;
+        const base = previewBaseSize.value;
+        if (base.width <= containerSize.width && base.height <= containerSize.height) {
+          setPreviewTransform(1, 0, 0);
+        }
+      }
+    } else if (previewVisible.value) {
+      // 如果正在缩放，只更新容器尺寸
+      measureContainerSize();
+    }
+  });
+
+  resizeObserver.observe(container);
+};
 
 onMounted(() => {
   window.addEventListener("mouseup", stopPreviewDrag);
@@ -1000,7 +1071,25 @@ onUnmounted(() => {
   window.removeEventListener("mousemove", handlePreviewDragMove);
   if (zoomAnimTimer) clearTimeout(zoomAnimTimer);
   if (reorderAnimTimer) clearTimeout(reorderAnimTimer);
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+    resizeObserver = null;
+  }
 });
+
+// 当预览容器可用时设置 ResizeObserver
+watch(
+  () => previewContainerRef.value,
+  (container) => {
+    if (container) {
+      setupResizeObserver();
+    } else if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
+  },
+  { immediate: true }
+);
 </script>
 
 <style scoped lang="scss">
@@ -1094,8 +1183,8 @@ onUnmounted(() => {
 
 <style lang="scss">
 .image-preview-dialog.el-dialog {
-  max-width: 90vw !important;
-  max-height: 90vh !important;
+  width: 90vw !important;
+  height: 90vh !important;
   margin: 5vh auto !important;
   display: flex !important;
   flex-direction: column !important;
@@ -1132,8 +1221,8 @@ onUnmounted(() => {
   }
 
   .preview-image {
-    max-width: 90vw !important;
-    max-height: calc(90vh - 50px) !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
     width: auto;
     height: auto;
     object-fit: contain;
@@ -1202,5 +1291,10 @@ onUnmounted(() => {
       font-size: 18px;
     }
   }
+}
+
+.preview-context-menu-wrapper {
+  position: relative;
+  z-index: 10000; // 确保高于对话框
 }
 </style>

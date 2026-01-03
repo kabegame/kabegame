@@ -7,23 +7,13 @@
             <Refresh />
           </el-icon>
         </el-button>
-        <el-button
-          type="danger"
-          plain
-          size="small"
-          :disabled="queueSize === 0"
-          @click="handleClearQueue"
-        >
-          终止队列
-        </el-button>
         <div class="header-stats">
-          <el-tag type="info">队列中: {{ queueSize }}</el-tag>
           <el-tag type="warning">下载中: {{ activeDownloads.length }}</el-tag>
         </div>
       </div>
     </template>
 
-    <el-card v-if="activeDownloads.length === 0 && queueSize === 0" class="empty-card">
+    <el-card v-if="activeDownloads.length === 0" class="empty-card">
       <el-empty description="暂无下载任务" :image-size="100" />
     </el-card>
 
@@ -52,7 +42,9 @@
           <el-table-column label="状态" width="100">
             <template #default>
               <el-tag type="warning" size="small">
-                <el-icon><Loading /></el-icon>
+                <el-icon>
+                  <Loading />
+                </el-icon>
                 下载中
               </el-tag>
             </template>
@@ -60,20 +52,6 @@
         </el-table>
       </el-card>
 
-      <!-- 队列中的任务 -->
-      <el-card v-if="queueSize > 0" class="downloads-card" style="margin-top: 20px">
-        <template #header>
-          <span>等待队列 ({{ queueSize }})</span>
-        </template>
-        <div class="queue-info">
-          <el-alert
-            :title="`还有 ${queueSize} 个任务在队列中等待下载`"
-            type="info"
-            :closable="false"
-            show-icon
-          />
-        </div>
-      </el-card>
     </div>
   </TabLayout>
 </template>
@@ -82,7 +60,7 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { Loading, Refresh } from "@element-plus/icons-vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage } from "element-plus";
 import TabLayout from "@/layouts/TabLayout.vue";
 
 interface ActiveDownloadInfo {
@@ -92,18 +70,13 @@ interface ActiveDownloadInfo {
 }
 
 const activeDownloads = ref<ActiveDownloadInfo[]>([]);
-const queueSize = ref(0);
 const isRefreshing = ref(false);
 let refreshInterval: number | null = null;
 
 const loadDownloads = async () => {
   try {
-    const [downloads, size] = await Promise.all([
-      invoke<ActiveDownloadInfo[]>("get_active_downloads"),
-      invoke<number>("get_download_queue_size"),
-    ]);
+    const downloads = await invoke<ActiveDownloadInfo[]>("get_active_downloads");
     activeDownloads.value = downloads;
-    queueSize.value = size;
   } catch (error) {
     console.error("加载下载列表失败:", error);
   }
@@ -140,24 +113,6 @@ const handleRefresh = async () => {
   }
 };
 
-const handleClearQueue = async () => {
-  if (queueSize.value === 0) return;
-  try {
-    await ElMessageBox.confirm(
-      `确定要清空等待队列吗？将移除队列中 ${queueSize.value} 个待下载任务（不影响正在下载）。`,
-      "终止队列",
-      { type: "warning" }
-    );
-    const removed = await invoke<number>("clear_download_queue");
-    ElMessage.success(`已清空队列（移除 ${removed} 个任务）`);
-    await loadDownloads();
-  } catch (error) {
-    if (error !== "cancel") {
-      console.error("清空队列失败:", error);
-      ElMessage.error("清空队列失败");
-    }
-  }
-};
 
 onUnmounted(() => {
   if (refreshInterval !== null) {
@@ -206,9 +161,6 @@ onUnmounted(() => {
   }
 }
 
-.queue-info {
-  padding: 10px 0;
-}
 
 :deep(.el-table) {
   background: transparent;
@@ -223,9 +175,8 @@ onUnmounted(() => {
     color: var(--anime-text-primary);
   }
 
-  tr:hover > td {
+  tr:hover>td {
     background: rgba(255, 107, 157, 0.05);
   }
 }
 </style>
-

@@ -9,10 +9,11 @@ export interface CrawlTask {
   outputDir?: string;
   userConfig?: Record<string, any>;
   outputAlbumId?: string; // 输出画册ID，如果指定则下载完成后自动添加到画册
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "canceled";
   progress: number;
   totalImages: number;
   downloadedImages: number;
+  deletedCount: number;
   startTime?: number;
   endTime?: number;
   error?: string;
@@ -23,6 +24,7 @@ export interface ImageInfo {
   url: string;
   localPath: string;
   pluginId: string;
+  taskId?: string;
   crawledAt: number;
   metadata?: Record<string, any>;
   thumbnailPath: string;
@@ -71,30 +73,40 @@ export const useCrawlerStore = defineStore("crawler", () => {
           const taskIndex = tasks.value.findIndex(
             (t) => t.id === _event.payload.taskId
           );
-          if (taskIndex !== -1 && tasks.value[taskIndex].status !== "failed") {
+          if (
+            taskIndex !== -1 &&
+            tasks.value[taskIndex].status !== "failed" &&
+            tasks.value[taskIndex].status !== "canceled"
+          ) {
+            const errorMessage = _event.payload.error;
+            const isCanceled = errorMessage.includes("Task canceled");
+
             console.log(
               `全局监听器：任务 ${_event.payload.taskId} 收到错误事件:`,
-              _event.payload.error
+              errorMessage,
+              isCanceled ? "(已取消)" : ""
             );
 
             tasks.value[taskIndex] = {
               ...tasks.value[taskIndex],
-              status: "failed" as const,
-              error: _event.payload.error,
+              status: isCanceled ? ("canceled" as const) : ("failed" as const),
+              error: errorMessage,
               progress: 0,
               endTime: Date.now(),
             };
 
-            // 触发错误显示事件，确保用户能看到错误消息
-            window.dispatchEvent(
-              new CustomEvent("task-error-display", {
-                detail: {
-                  taskId: _event.payload.taskId,
-                  pluginId: tasks.value[taskIndex].pluginId,
-                  error: _event.payload.error,
-                },
-              })
-            );
+            // 只有在非取消的情况下才触发错误显示事件
+            if (!isCanceled) {
+              window.dispatchEvent(
+                new CustomEvent("task-error-display", {
+                  detail: {
+                    taskId: _event.payload.taskId,
+                    pluginId: tasks.value[taskIndex].pluginId,
+                    error: errorMessage,
+                  },
+                })
+              );
+            }
           }
         }
       );
@@ -111,7 +123,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
     pluginId: string,
     url: string,
     outputDir?: string,
-    userConfig?: Record<string, any>
+    userConfig?: Record<string, any>,
+    outputAlbumId?: string
   ) {
     const task: CrawlTask = {
       id: Date.now().toString(),
@@ -119,10 +132,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
       url,
       outputDir,
       userConfig,
+      outputAlbumId,
       status: "pending",
       progress: 0,
       totalImages: 0,
       downloadedImages: 0,
+      deletedCount: 0,
       startTime: Date.now(),
     };
 
@@ -135,10 +150,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
           url: task.url,
           outputDir: task.outputDir,
           userConfig: task.userConfig,
+          outputAlbumId: task.outputAlbumId,
           status: task.status,
           progress: task.progress,
           totalImages: task.totalImages,
           downloadedImages: task.downloadedImages,
+          deletedCount: task.deletedCount || 0,
           startTime: task.startTime,
           endTime: task.endTime,
           error: task.error,
@@ -153,10 +170,14 @@ export const useCrawlerStore = defineStore("crawler", () => {
     // 异步执行任务，不等待完成
     // 任务状态会通过事件或内部状态更新
     startCrawl(task).catch(async (error) => {
-      // 如果任务还没有被标记为失败，则标记为失败
+      // 如果任务还没有被标记为失败或取消，则标记为失败
       // 这作为最后的保障，确保失败的任务状态被正确设置
       const taskIndex = tasks.value.findIndex((t) => t.id === task.id);
-      if (taskIndex !== -1 && tasks.value[taskIndex].status !== "failed") {
+      if (
+        taskIndex !== -1 &&
+        tasks.value[taskIndex].status !== "failed" &&
+        tasks.value[taskIndex].status !== "canceled"
+      ) {
         tasks.value[taskIndex] = {
           ...tasks.value[taskIndex],
           status: "failed" as const,
@@ -174,10 +195,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
               url: tasks.value[taskIndex].url,
               outputDir: tasks.value[taskIndex].outputDir,
               userConfig: tasks.value[taskIndex].userConfig,
+              outputAlbumId: tasks.value[taskIndex].outputAlbumId,
               status: tasks.value[taskIndex].status,
               progress: tasks.value[taskIndex].progress,
               totalImages: tasks.value[taskIndex].totalImages,
               downloadedImages: tasks.value[taskIndex].downloadedImages,
+              deletedCount: tasks.value[taskIndex].deletedCount || 0,
               startTime: tasks.value[taskIndex].startTime,
               endTime: tasks.value[taskIndex].endTime,
               error: tasks.value[taskIndex].error,
@@ -193,9 +216,13 @@ export const useCrawlerStore = defineStore("crawler", () => {
 
   // 开始爬取
   async function startCrawl(task: CrawlTask) {
-    // 如果任务已经是失败状态，不应该重新启动
-    if (task.status === "failed") {
-      console.log(`任务 ${task.id} 已经是失败状态，不重新启动`);
+    // 如果任务已经是失败或取消状态，不应该重新启动
+    if (task.status === "failed" || task.status === "canceled") {
+      console.log(
+        `任务 ${task.id} 已经是${
+          task.status === "canceled" ? "取消" : "失败"
+        }状态，不重新启动`
+      );
       return;
     }
 
@@ -217,10 +244,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
           url: task.url,
           outputDir: task.outputDir,
           userConfig: task.userConfig,
+          outputAlbumId: task.outputAlbumId,
           status: task.status,
           progress: task.progress,
           totalImages: task.totalImages,
           downloadedImages: task.downloadedImages,
+          deletedCount: task.deletedCount || 0,
           startTime: task.startTime,
           endTime: task.endTime,
           error: task.error,
@@ -246,27 +275,39 @@ export const useCrawlerStore = defineStore("crawler", () => {
         "task-error",
         async (event) => {
           if (event.payload.taskId === task.id) {
-            console.log(`任务 ${task.id} 收到错误事件:`, event.payload.error);
+            const errorMessage = event.payload.error;
+            const isCanceled = errorMessage.includes("Task canceled");
+
+            console.log(
+              `任务 ${task.id} 收到错误事件:`,
+              errorMessage,
+              isCanceled ? "(已取消)" : ""
+            );
             errorReceived = true;
 
             // 通过更新 tasks 数组来确保响应式更新
             const taskIndex = tasks.value.findIndex((t) => t.id === task.id);
             if (
               taskIndex !== -1 &&
-              tasks.value[taskIndex].status !== "failed"
+              tasks.value[taskIndex].status !== "failed" &&
+              tasks.value[taskIndex].status !== "canceled"
             ) {
               // 创建新对象以确保响应式更新
               const updatedTask = {
                 ...tasks.value[taskIndex],
-                status: "failed" as const,
-                error: event.payload.error,
+                status: isCanceled
+                  ? ("canceled" as const)
+                  : ("failed" as const),
+                error: errorMessage,
                 progress: 0,
                 endTime: Date.now(),
               };
               tasks.value[taskIndex] = updatedTask;
 
               console.log(
-                `任务 ${task.id} 状态已通过事件更新为失败:`,
+                `任务 ${task.id} 状态已通过事件更新为${
+                  isCanceled ? "取消" : "失败"
+                }:`,
                 tasks.value[taskIndex].status,
                 tasks.value[taskIndex].error
               );
@@ -280,32 +321,35 @@ export const useCrawlerStore = defineStore("crawler", () => {
                     url: updatedTask.url,
                     outputDir: updatedTask.outputDir,
                     userConfig: updatedTask.userConfig,
+                    outputAlbumId: updatedTask.outputAlbumId,
                     status: updatedTask.status,
                     progress: updatedTask.progress,
                     totalImages: updatedTask.totalImages,
                     downloadedImages: updatedTask.downloadedImages,
+                    deletedCount: updatedTask.deletedCount || 0,
                     startTime: updatedTask.startTime,
                     endTime: updatedTask.endTime,
                     error: updatedTask.error,
                   },
                 });
               } catch (error) {
-                console.error("更新任务失败状态到数据库失败:", error);
+                console.error("更新任务状态到数据库失败:", error);
               }
 
-              // 只触发一次错误显示（通过事件通知 UI 层）
-              // 使用自定义事件通知 UI 层显示错误弹窗
-              if (!errorDisplayTriggered) {
+              // 只有在非取消的情况下才触发错误显示事件
+              if (!isCanceled && !errorDisplayTriggered) {
                 errorDisplayTriggered = true;
                 window.dispatchEvent(
                   new CustomEvent("task-error-display", {
                     detail: {
                       taskId: task.id,
                       pluginId: task.pluginId,
-                      error: event.payload.error,
+                      error: errorMessage,
                     },
                   })
                 );
+              } else if (isCanceled) {
+                console.log(`任务 ${task.id} 已被取消，不触发错误显示事件`);
               } else {
                 console.log(
                   `任务 ${task.id} 的错误显示事件已触发过，跳过重复触发`
@@ -343,10 +387,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
                     url: tasks.value[taskIndex].url,
                     outputDir: tasks.value[taskIndex].outputDir,
                     userConfig: tasks.value[taskIndex].userConfig,
+                    outputAlbumId: tasks.value[taskIndex].outputAlbumId,
                     status: tasks.value[taskIndex].status,
                     progress: tasks.value[taskIndex].progress,
                     totalImages: tasks.value[taskIndex].totalImages,
                     downloadedImages: tasks.value[taskIndex].downloadedImages,
+                    deletedCount: tasks.value[taskIndex].deletedCount || 0,
                     startTime: tasks.value[taskIndex].startTime,
                     endTime: tasks.value[taskIndex].endTime,
                     error: tasks.value[taskIndex].error,
@@ -404,15 +450,45 @@ export const useCrawlerStore = defineStore("crawler", () => {
               url: tasks.value[taskIndex].url,
               outputDir: tasks.value[taskIndex].outputDir,
               userConfig: tasks.value[taskIndex].userConfig,
+              outputAlbumId: tasks.value[taskIndex].outputAlbumId,
               status: tasks.value[taskIndex].status,
               progress: tasks.value[taskIndex].progress,
               totalImages: tasks.value[taskIndex].totalImages,
               downloadedImages: tasks.value[taskIndex].downloadedImages,
+              deletedCount: tasks.value[taskIndex].deletedCount || 0,
               startTime: tasks.value[taskIndex].startTime,
               endTime: tasks.value[taskIndex].endTime,
               error: tasks.value[taskIndex].error,
             },
           });
+
+          // 任务状态更新后，从数据库重新获取任务信息以获取最新的 deletedCount
+          try {
+            const updatedTask = await invoke<{
+              id: string;
+              pluginId: string;
+              url: string;
+              outputDir?: string;
+              userConfig?: Record<string, any>;
+              outputAlbumId?: string;
+              status: string;
+              progress: number;
+              totalImages: number;
+              downloadedImages: number;
+              deletedCount: number;
+              startTime?: number;
+              endTime?: number;
+              error?: string;
+            }>("get_task", { taskId: task.id });
+
+            if (updatedTask) {
+              // 更新 deletedCount 到前端状态
+              tasks.value[taskIndex].deletedCount = updatedTask.deletedCount;
+            }
+          } catch (error) {
+            console.error("获取任务最新信息失败:", error);
+            // 忽略错误，不影响主流程
+          }
         } catch (error) {
           console.error("更新任务完成状态到数据库失败:", error);
         }
@@ -440,7 +516,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
       const taskIndex = tasks.value.findIndex((t) => t.id === task.id);
       const currentTask = taskIndex !== -1 ? tasks.value[taskIndex] : null;
 
-      if (currentTask && currentTask.status === "failed" && errorReceived) {
+      if (
+        currentTask &&
+        (currentTask.status === "failed" ||
+          currentTask.status === "canceled") &&
+        errorReceived
+      ) {
         // 已经通过错误事件更新，不需要再次更新或触发弹窗
         console.log(`任务 ${task.id} 状态已通过错误事件更新，无需再次更新`);
         return; // 直接返回，避免后续处理
@@ -476,10 +557,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
               url: updatedTask.url,
               outputDir: updatedTask.outputDir,
               userConfig: updatedTask.userConfig,
+              outputAlbumId: updatedTask.outputAlbumId,
               status: updatedTask.status,
               progress: updatedTask.progress,
               totalImages: updatedTask.totalImages,
               downloadedImages: updatedTask.downloadedImages,
+              deletedCount: updatedTask.deletedCount || 0,
               startTime: updatedTask.startTime,
               endTime: updatedTask.endTime,
               error: updatedTask.error,
@@ -629,8 +712,47 @@ export const useCrawlerStore = defineStore("crawler", () => {
   // 删除图片
   async function deleteImage(imageId: string) {
     try {
+      // 先获取图片信息，以便知道属于哪个任务
+      const image = images.value.find((img) => img.id === imageId);
+      const taskId = image?.taskId;
+
       await invoke("delete_image", { imageId });
       images.value = images.value.filter((img) => img.id !== imageId);
+
+      // 发送全局事件通知其他页面图片已被删除
+      window.dispatchEvent(new CustomEvent("images-deleted"));
+
+      // 如果图片属于某个任务，重新获取任务信息以更新 deletedCount
+      if (taskId) {
+        try {
+          const updatedTask = await invoke<{
+            id: string;
+            pluginId: string;
+            url: string;
+            outputDir?: string;
+            userConfig?: Record<string, any>;
+            outputAlbumId?: string;
+            status: string;
+            progress: number;
+            totalImages: number;
+            downloadedImages: number;
+            deletedCount: number;
+            startTime?: number;
+            endTime?: number;
+            error?: string;
+          }>("get_task", { taskId });
+
+          if (updatedTask) {
+            const taskIndex = tasks.value.findIndex((t) => t.id === taskId);
+            if (taskIndex !== -1) {
+              tasks.value[taskIndex].deletedCount = updatedTask.deletedCount;
+            }
+          }
+        } catch (error) {
+          console.error("更新任务 deletedCount 失败:", error);
+          // 忽略错误，不影响主流程
+        }
+      }
     } catch (error) {
       console.error("删除图片失败:", error);
       throw error;
@@ -640,24 +762,137 @@ export const useCrawlerStore = defineStore("crawler", () => {
   // 移除图片（只删除缩略图和数据库记录，不删除原图）
   async function removeImage(imageId: string) {
     try {
+      // 先获取图片信息，以便知道属于哪个任务
+      const image = images.value.find((img) => img.id === imageId);
+      const taskId = image?.taskId;
+
       await invoke("remove_image", { imageId });
       images.value = images.value.filter((img) => img.id !== imageId);
+
+      // 发送全局事件通知其他页面图片已被移除
+      window.dispatchEvent(new CustomEvent("images-removed"));
+
+      // 如果图片属于某个任务，重新获取任务信息以更新 deletedCount
+      if (taskId) {
+        try {
+          const updatedTask = await invoke<{
+            id: string;
+            pluginId: string;
+            url: string;
+            outputDir?: string;
+            userConfig?: Record<string, any>;
+            outputAlbumId?: string;
+            status: string;
+            progress: number;
+            totalImages: number;
+            downloadedImages: number;
+            deletedCount: number;
+            startTime?: number;
+            endTime?: number;
+            error?: string;
+          }>("get_task", { taskId });
+
+          if (updatedTask) {
+            const taskIndex = tasks.value.findIndex((t) => t.id === taskId);
+            if (taskIndex !== -1) {
+              tasks.value[taskIndex].deletedCount = updatedTask.deletedCount;
+            }
+          }
+        } catch (error) {
+          console.error("更新任务 deletedCount 失败:", error);
+          // 忽略错误，不影响主流程
+        }
+      }
     } catch (error) {
       console.error("移除图片失败:", error);
       throw error;
     }
   }
 
+  // 批量删除图片（删除文件和数据库记录）
+  async function batchDeleteImages(imageIds: string[]) {
+    try {
+      await invoke("batch_delete_images", { imageIds });
+      // 从本地 store 中移除图片
+      images.value = images.value.filter((img) => !imageIds.includes(img.id));
+
+      // 发送全局事件通知其他页面图片已被批量删除
+      window.dispatchEvent(new CustomEvent("images-deleted"));
+    } catch (error) {
+      console.error("批量删除图片失败:", error);
+      throw error;
+    }
+  }
+
+  // 批量移除图片（仅删除数据库记录，不删除文件）
+  async function batchRemoveImages(imageIds: string[]) {
+    try {
+      await invoke("batch_remove_images", { imageIds });
+      // 从本地 store 中移除图片
+      images.value = images.value.filter((img) => !imageIds.includes(img.id));
+
+      // 发送全局事件通知其他页面图片已被批量移除
+      window.dispatchEvent(new CustomEvent("images-removed"));
+    } catch (error) {
+      console.error("批量移除图片失败:", error);
+      throw error;
+    }
+  }
+
   // 批量从本地 store 中移除图片（用于后端批量操作后的 UI 同步）
-  function applyRemovedImageIds(imageIds: string[]) {
+  async function applyRemovedImageIds(imageIds: string[]) {
     if (!imageIds || imageIds.length === 0) return;
     const idSet = new Set(imageIds);
     const before = images.value.length;
+
+    // 在移除前，收集被移除图片的 taskId（用于后续更新任务的 deletedCount）
+    const taskIdsSet = new Set<string>();
+    images.value.forEach((img) => {
+      if (idSet.has(img.id) && img.taskId) {
+        taskIdsSet.add(img.taskId);
+      }
+    });
+
     images.value = images.value.filter((img) => !idSet.has(img.id));
     const removed = before - images.value.length;
     if (removed > 0) {
       totalImages.value = Math.max(0, totalImages.value - removed);
       hasMore.value = currentPage.value * pageSize.value < totalImages.value;
+    }
+
+    // 更新受影响的任务的 deletedCount
+    if (taskIdsSet.size > 0) {
+      const taskIds = Array.from(taskIdsSet);
+      for (const taskId of taskIds) {
+        try {
+          const updatedTask = await invoke<{
+            id: string;
+            pluginId: string;
+            url: string;
+            outputDir?: string;
+            userConfig?: Record<string, any>;
+            outputAlbumId?: string;
+            status: string;
+            progress: number;
+            totalImages: number;
+            downloadedImages: number;
+            deletedCount: number;
+            startTime?: number;
+            endTime?: number;
+            error?: string;
+          }>("get_task", { taskId });
+
+          if (updatedTask) {
+            const taskIndex = tasks.value.findIndex((t) => t.id === taskId);
+            if (taskIndex !== -1) {
+              tasks.value[taskIndex].deletedCount = updatedTask.deletedCount;
+            }
+          }
+        } catch (error) {
+          console.error(`更新任务 ${taskId} deletedCount 失败:`, error);
+          // 忽略错误，不影响主流程
+        }
+      }
     }
   }
 
@@ -699,10 +934,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
           url: string;
           outputDir?: string;
           userConfig?: Record<string, any>;
+          outputAlbumId?: string;
           status: string;
           progress: number;
           totalImages: number;
           downloadedImages: number;
+          deletedCount: number;
           startTime?: number;
           endTime?: number;
           error?: string;
@@ -727,10 +964,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
                 url: task.url,
                 outputDir: task.outputDir,
                 userConfig: task.userConfig,
+                outputAlbumId: task.outputAlbumId,
                 status: "failed",
                 progress: 0,
                 totalImages: task.totalImages,
                 downloadedImages: task.downloadedImages,
+                deletedCount: task.deletedCount || 0,
                 startTime: task.startTime || now,
                 endTime: task.endTime || now,
                 error: "任务已过期（迁移遗留的无效任务，原状态：pending）",
@@ -757,10 +996,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
           url: string;
           outputDir?: string;
           userConfig?: Record<string, any>;
+          outputAlbumId?: string;
           status: string;
           progress: number;
           totalImages: number;
           downloadedImages: number;
+          deletedCount: number;
           startTime?: number;
           endTime?: number;
           error?: string;
@@ -780,10 +1021,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
                 url: task.url,
                 outputDir: task.outputDir,
                 userConfig: task.userConfig,
+                outputAlbumId: task.outputAlbumId,
                 status: "failed",
                 progress: task.progress,
                 totalImages: task.totalImages,
                 downloadedImages: task.downloadedImages,
+                deletedCount: task.deletedCount || 0,
                 startTime: task.startTime,
                 endTime: task.endTime,
                 error: task.error || "任务在应用重启前未正确结束",
@@ -803,10 +1046,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
                 url: task.url,
                 outputDir: task.outputDir,
                 userConfig: task.userConfig,
+                outputAlbumId: task.outputAlbumId,
                 status: "failed",
                 progress: task.progress,
                 totalImages: task.totalImages,
                 downloadedImages: task.downloadedImages,
+                deletedCount: task.deletedCount || 0,
                 startTime: task.startTime,
                 endTime: now,
                 error:
@@ -828,30 +1073,44 @@ export const useCrawlerStore = defineStore("crawler", () => {
           url: string;
           outputDir?: string;
           userConfig?: Record<string, any>;
+          outputAlbumId?: string;
           status: string;
           progress: number;
           totalImages: number;
           downloadedImages: number;
+          deletedCount: number;
           startTime?: number;
           endTime?: number;
           error?: string;
         }>
       >("get_all_tasks");
 
-      // 加载所有任务到内存（包括失败和已完成的任务）
+      // 加载所有任务到内存（包括失败、取消和已完成的任务）
       // 应用重启后，所有 running 任务都应该被标记为失败
       tasks.value = finalTasks
-        .filter((t) => t.status === "failed" || t.status === "completed")
+        .filter(
+          (t) =>
+            t.status === "failed" ||
+            t.status === "canceled" ||
+            t.status === "completed"
+        )
         .map((t) => ({
           id: t.id,
           pluginId: t.pluginId,
           url: t.url,
           outputDir: t.outputDir,
           userConfig: t.userConfig,
-          status: t.status as "pending" | "running" | "completed" | "failed",
+          outputAlbumId: t.outputAlbumId,
+          status: t.status as
+            | "pending"
+            | "running"
+            | "completed"
+            | "failed"
+            | "canceled",
           progress: t.progress,
           totalImages: t.totalImages,
           downloadedImages: t.downloadedImages,
+          deletedCount: t.deletedCount || 0,
           startTime: t.startTime,
           endTime: t.endTime,
           error: t.error,
@@ -895,7 +1154,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
       task.pluginId,
       task.url,
       task.outputDir,
-      task.userConfig
+      task.userConfig,
+      task.outputAlbumId
     );
   }
 
@@ -914,6 +1174,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
     loadImagesCount,
     deleteImage,
     removeImage,
+    batchDeleteImages,
+    batchRemoveImages,
     applyRemovedImageIds,
     deleteTask,
     stopTask,

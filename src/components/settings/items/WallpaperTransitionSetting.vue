@@ -41,8 +41,8 @@ const options = computed<Opt[]>(() => {
 const disabled = computed(() => {
   if (uiStore.wallpaperModeSwitching) return true;
   if (isApplying.value) return true;
-  // 单张壁纸模式不支持过渡（后端会拒绝），前端直接禁用
-  if (!rotationEnabled.value) return true;
+  // 移除轮播未启用时的禁用限制，允许用户选择淡入淡出等过渡效果
+  // 即使轮播未启用，用户也可以预先设置过渡效果，待启用轮播后生效
   return false;
 });
 
@@ -73,11 +73,12 @@ onMounted(async () => {
 });
 
 const handleChange = async (transition: string) => {
-  if (!rotationEnabled.value) {
-    ElMessage.info("未启用轮播：过渡效果不会生效");
-    return;
-  }
   if (disabled.value) return;
+  
+  // 如果轮播未启用，给出提示但不阻止设置
+  if (!rotationEnabled.value) {
+    ElMessage.info("未启用轮播：过渡效果将在启用轮播后生效");
+  }
 
   isApplying.value = true;
   const prev = settingsStore.values.wallpaperRotationTransition as any;

@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sha2::{Digest, Sha256};
@@ -79,6 +79,8 @@ pub struct TaskInfo {
     pub total_images: i64,
     #[serde(rename = "downloadedImages")]
     pub downloaded_images: i64,
+    #[serde(rename = "deletedCount")]
+    pub deleted_count: i64,
     #[serde(rename = "startTime")]
     pub start_time: Option<u64>,
     #[serde(rename = "endTime")]
@@ -151,6 +153,11 @@ impl Storage {
 
         // 数据库迁移：如果 output_album_id 列不存在，则添加
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN output_album_id TEXT", []);
+        // 数据库迁移：如果 deleted_count 列不存在，则添加
+        let _ = conn.execute(
+            "ALTER TABLE tasks ADD COLUMN deleted_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
 
         // 创建运行配置表
         conn.execute(
@@ -168,7 +175,7 @@ impl Storage {
         )
         .expect("Failed to create run_configs table");
 
-        // 创建图片表（添加 task_id 和 favorite 字段）
+        // 创建图片表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS images (
                 id TEXT PRIMARY KEY,
@@ -179,18 +186,11 @@ impl Storage {
                 crawled_at INTEGER NOT NULL,
                 metadata TEXT,
                 thumbnail_path TEXT NOT NULL DEFAULT '',
-                favorite INTEGER NOT NULL DEFAULT 0,
                 hash TEXT NOT NULL DEFAULT ''
             )",
             [],
         )
         .expect("Failed to create images table");
-
-        // 如果表已存在但没有 favorite 字段，添加该字段
-        let _ = conn.execute(
-            "ALTER TABLE images ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
 
         // 迁移：如果 images 表没有 task_id 字段，添加它
         let _ = conn.execute("ALTER TABLE images ADD COLUMN task_id TEXT", []);
@@ -250,7 +250,6 @@ impl Storage {
                     crawled_at INTEGER NOT NULL,
                     metadata TEXT,
                     thumbnail_path TEXT NOT NULL DEFAULT '',
-                    favorite INTEGER NOT NULL DEFAULT 0,
                     hash TEXT NOT NULL DEFAULT ''
                 )",
                 [],
@@ -258,10 +257,10 @@ impl Storage {
             .expect("Failed to create images_new");
 
             // 搬迁数据：thumbnail_path 为空/NULL -> local_path
-            // favorite/hash/task_id 等字段使用 COALESCE 兜底，兼容历史版本缺失列的情况
+            // hash/task_id 等字段使用 COALESCE 兜底，兼容历史版本缺失列的情况
             let _ = tx.execute(
                 "INSERT OR REPLACE INTO images_new (
-                    id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, favorite, hash
+                    id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash
                  )
                  SELECT
                     id,
@@ -275,7 +274,6 @@ impl Storage {
                         WHEN thumbnail_path IS NULL OR thumbnail_path = '' THEN local_path
                         ELSE thumbnail_path
                     END,
-                    COALESCE(favorite, 0),
                     COALESCE(hash, '')
                  FROM images",
                 [],
@@ -295,6 +293,85 @@ impl Storage {
             "UPDATE images SET thumbnail_path = local_path WHERE thumbnail_path IS NULL OR thumbnail_path = ''",
             [],
         );
+
+        // 迁移：删除 favorite 列（SQLite 不支持直接删除列，需要重建表）
+        // 检查 favorite 列是否存在
+        let has_favorite_column = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(images)")
+                .expect("Failed to prepare table_info");
+            let rows = stmt
+                .query_map([], |row| {
+                    let name: String = row.get(1)?;
+                    Ok(name)
+                })
+                .expect("Failed to query table_info");
+
+            let mut has_favorite = false;
+            for r in rows {
+                if let Ok(name) = r {
+                    if name == "favorite" {
+                        has_favorite = true;
+                        break;
+                    }
+                }
+            }
+            has_favorite
+        };
+
+        if has_favorite_column {
+            let tx = conn
+                .transaction()
+                .expect("Failed to start transaction for favorite column removal");
+
+            // 创建新表（不包含 favorite 列）
+            tx.execute(
+                "CREATE TABLE images_new (
+                    id TEXT PRIMARY KEY,
+                    url TEXT NOT NULL,
+                    local_path TEXT NOT NULL,
+                    plugin_id TEXT NOT NULL,
+                    task_id TEXT,
+                    crawled_at INTEGER NOT NULL,
+                    metadata TEXT,
+                    thumbnail_path TEXT NOT NULL DEFAULT '',
+                    hash TEXT NOT NULL DEFAULT '',
+                    \"order\" INTEGER
+                )",
+                [],
+            )
+            .expect("Failed to create images_new");
+
+            // 搬迁数据（排除 favorite 列）
+            tx.execute(
+                "INSERT INTO images_new (
+                    id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\"
+                 )
+                 SELECT
+                    id,
+                    url,
+                    local_path,
+                    plugin_id,
+                    task_id,
+                    crawled_at,
+                    metadata,
+                    thumbnail_path,
+                    hash,
+                    \"order\"
+                 FROM images",
+                [],
+            )
+            .expect("Failed to migrate data to images_new");
+
+            // 删除旧表并重命名新表
+            tx.execute("DROP TABLE images", [])
+                .expect("Failed to drop old images table");
+            tx.execute("ALTER TABLE images_new RENAME TO images", [])
+                .expect("Failed to rename images_new");
+
+            tx.commit()
+                .expect("Failed to commit favorite column removal migration");
+        }
 
         // 创建索引以提高查询性能
         conn.execute(
@@ -369,6 +446,37 @@ impl Storage {
             [],
         )
         .expect("Failed to create album_images index");
+
+        // 创建任务-图片关联表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS task_images (
+                task_id TEXT NOT NULL,
+                image_id TEXT NOT NULL,
+                added_at INTEGER NOT NULL,
+                \"order\" INTEGER,
+                PRIMARY KEY (task_id, image_id)
+            )",
+            [],
+        )
+        .expect("Failed to create task_images table");
+        // 迁移：添加 order 字段（如果不存在）
+        let _ = conn.execute("ALTER TABLE task_images ADD COLUMN \"order\" INTEGER", []);
+        // 为现有数据设置 order（基于 added_at，越晚越大）
+        let _ = conn.execute(
+            "UPDATE task_images SET \"order\" = added_at WHERE \"order\" IS NULL",
+            [],
+        );
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_images_task ON task_images(task_id)",
+            [],
+        )
+        .expect("Failed to create task_images task index");
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_images_image ON task_images(image_id)",
+            [],
+        )
+        .expect("Failed to create task_images image index");
 
         Self {
             db: Arc::new(Mutex::new(conn)),
@@ -684,6 +792,40 @@ impl Storage {
                 .unwrap_or(false);
             image_info.favorite = is_favorite;
         }
+
+        Ok(result)
+    }
+
+    pub fn find_image_by_url(&self, url: &str) -> Result<Option<ImageInfo>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let result = conn
+            .query_row(
+                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash,
+                 CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+                 images.\"order\"
+                 FROM images
+                 LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = ?
+                 WHERE images.url = ?1",
+                params![FAVORITE_ALBUM_ID, url],
+                |row| {
+                    Ok(ImageInfo {
+                        id: row.get(0)?,
+                        url: row.get(1)?,
+                        local_path: row.get(2)?,
+                        plugin_id: row.get(3)?,
+                        task_id: row.get(4)?,
+                        crawled_at: row.get(5)?,
+                        metadata: row.get::<_, Option<String>>(6)?
+                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        thumbnail_path: row.get(7)?,
+                        hash: row.get(8)?,
+                        favorite: row.get::<_, i64>(9)? != 0,
+                        order: row.get::<_, Option<i64>>(10)?,
+                    })
+                },
+            )
+            .ok();
 
         Ok(result)
     }
@@ -1026,8 +1168,8 @@ impl Storage {
         let order = image.order.unwrap_or(image.crawled_at as i64);
 
         conn.execute(
-            "INSERT OR REPLACE INTO images (id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, favorite, hash, \"order\")
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT OR REPLACE INTO images (id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\")
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 image.id,
                 image.url,
@@ -1037,12 +1179,23 @@ impl Storage {
                 image.crawled_at as i64,
                 metadata_json,
                 thumbnail_path,
-                if image.favorite { 1 } else { 0 },
                 image.hash,
                 order,
             ],
         )
         .map_err(|e| format!("Failed to insert image: {}", e))?;
+
+        // 如果图片有关联的任务，添加到任务-图片关联表
+        if let Some(ref task_id) = image.task_id {
+            let added_at = image.crawled_at as i64;
+            let task_order = order; // 使用图片的 order 作为任务中的顺序
+            conn.execute(
+                "INSERT OR REPLACE INTO task_images (task_id, image_id, added_at, \"order\")
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![task_id, image.id, added_at, task_order],
+            )
+            .map_err(|e| format!("Failed to insert task-image relation: {}", e))?;
+        }
 
         Ok(())
     }
@@ -1051,10 +1204,10 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         // 先查询图片信息，以便删除文件
-        let image: Option<ImageInfo> = conn
+        let mut image: Option<ImageInfo> = conn
             .query_row(
-                "SELECT id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(thumbnail_path, ''), favorite, hash, \"order\"
-                 FROM images WHERE id = ?1",
+                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash, images.\"order\"
+                 FROM images WHERE images.id = ?1",
                 params![image_id],
                 |row| {
                     Ok(ImageInfo {
@@ -1067,13 +1220,28 @@ impl Storage {
                         metadata: row.get::<_, Option<String>>(6)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         thumbnail_path: row.get(7)?,
-                        favorite: row.get::<_, i64>(8)? != 0,
-                        hash: row.get(9)?,
-                        order: row.get::<_, Option<i64>>(10)?,
+                        hash: row.get(8)?,
+                        order: row.get::<_, Option<i64>>(9)?,
+                        favorite: false, // 不再从数据库读取，将通过 JOIN 计算
                     })
                 },
             )
             .ok();
+
+        // 如果找到了，再查询是否在收藏画册中
+        if let Some(ref mut image_info) = image {
+            let is_favorite = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                    params![FAVORITE_ALBUM_ID, image_info.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                > 0;
+            image_info.favorite = is_favorite;
+        }
+
+        let task_id = image.as_ref().and_then(|img| img.task_id.clone());
 
         if let Some(image) = image {
             // 删除原文件
@@ -1100,6 +1268,12 @@ impl Storage {
         conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
             .map_err(|e| format!("Failed to delete image from database: {}", e))?;
 
+        // 如果图片属于某个任务，增加任务的已删除数量
+        if let Some(ref task_id) = task_id {
+            drop(conn); // 释放锁，因为 increment_task_deleted_count 需要获取锁
+            let _ = self.increment_task_deleted_count(task_id, 1);
+        }
+
         Ok(())
     }
 
@@ -1108,10 +1282,10 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         // 先查询图片信息，以便删除缩略图
-        let image: Option<ImageInfo> = conn
+        let mut image: Option<ImageInfo> = conn
             .query_row(
-                "SELECT id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(thumbnail_path, ''), favorite, hash, \"order\"
-                 FROM images WHERE id = ?1",
+                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash, images.\"order\"
+                 FROM images WHERE images.id = ?1",
                 params![image_id],
                 |row| {
                     Ok(ImageInfo {
@@ -1124,13 +1298,28 @@ impl Storage {
                         metadata: row.get::<_, Option<String>>(6)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         thumbnail_path: row.get(7)?,
-                        favorite: row.get::<_, i64>(8)? != 0,
-                        hash: row.get(9)?,
-                        order: row.get::<_, Option<i64>>(10)?,
+                        hash: row.get(8)?,
+                        order: row.get::<_, Option<i64>>(9)?,
+                        favorite: false, // 不再从数据库读取，将通过 JOIN 计算
                     })
                 },
             )
             .ok();
+
+        // 如果找到了，再查询是否在收藏画册中
+        if let Some(ref mut image_info) = image {
+            let is_favorite = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                    params![FAVORITE_ALBUM_ID, image_info.id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                > 0;
+            image_info.favorite = is_favorite;
+        }
+
+        let task_id = image.as_ref().and_then(|img| img.task_id.clone());
 
         if let Some(image) = image {
             // 只删除缩略图（为空字符串则跳过）
@@ -1151,6 +1340,185 @@ impl Storage {
         .map_err(|e| format!("Failed to delete album mapping: {}", e))?;
         conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
             .map_err(|e| format!("Failed to delete image from database: {}", e))?;
+
+        // 如果图片属于某个任务，增加任务的已删除数量
+        if let Some(ref task_id) = task_id {
+            drop(conn); // 释放锁，因为 increment_task_deleted_count 需要获取锁
+            let _ = self.increment_task_deleted_count(task_id, 1);
+        }
+
+        Ok(())
+    }
+
+    /// 批量删除图片（删除文件和数据库记录）
+    pub fn batch_delete_images(&self, image_ids: &[String]) -> Result<(), String> {
+        if image_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {}", e))?;
+
+        // 收集所有需要删除的文件路径
+        let mut file_paths = Vec::new();
+        let mut thumbnail_paths = Vec::new();
+        let mut task_ids = Vec::new();
+
+        for image_id in image_ids {
+            // 查询图片信息
+            let image: Option<ImageInfo> = tx
+                .query_row(
+                    "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash, images.\"order\"
+                     FROM images WHERE images.id = ?1",
+                    params![image_id],
+                    |row| {
+                        Ok(ImageInfo {
+                            id: row.get(0)?,
+                            url: row.get(1)?,
+                            local_path: row.get(2)?,
+                            plugin_id: row.get(3)?,
+                            task_id: row.get(4)?,
+                            crawled_at: row.get(5)?,
+                            metadata: row.get::<_, Option<String>>(6)?
+                                .and_then(|s| serde_json::from_str(&s).ok()),
+                            thumbnail_path: row.get(7)?,
+                            hash: row.get(8)?,
+                            order: row.get::<_, Option<i64>>(9)?,
+                            favorite: false, // 批量操作时不需要这个字段
+                        })
+                    },
+                )
+                .ok();
+
+            if let Some(image) = image {
+                file_paths.push(image.local_path);
+                if !image.thumbnail_path.is_empty() {
+                    thumbnail_paths.push(image.thumbnail_path);
+                }
+                if let Some(task_id) = image.task_id {
+                    task_ids.push((image_id.clone(), task_id));
+                }
+            }
+        }
+
+        // 删除数据库记录
+        for image_id in image_ids {
+            tx.execute(
+                "DELETE FROM album_images WHERE image_id = ?1",
+                params![image_id],
+            )
+            .map_err(|e| format!("Failed to delete album mapping for {}: {}", image_id, e))?;
+
+            tx.execute("DELETE FROM images WHERE id = ?1", params![image_id])
+                .map_err(|e| format!("Failed to delete image {} from database: {}", image_id, e))?;
+        }
+
+        // 更新任务的 deletedCount
+        for (image_id, task_id) in task_ids {
+            let _ = self.increment_task_deleted_count_in_tx(&tx, &task_id, 1);
+        }
+
+        tx.commit()
+            .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+
+        // 删除文件（在事务提交后删除，以防失败）
+        for path in file_paths {
+            let file_path = PathBuf::from(&path);
+            if file_path.exists() {
+                let _ = fs::remove_file(&file_path);
+            }
+        }
+
+        for path in thumbnail_paths {
+            let thumb_path = PathBuf::from(&path);
+            if thumb_path.exists() {
+                let _ = fs::remove_file(&thumb_path);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 批量移除图片（仅删除数据库记录，不删除文件）
+    pub fn batch_remove_images(&self, image_ids: &[String]) -> Result<(), String> {
+        if image_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {}", e))?;
+
+        // 收集缩略图路径和任务ID
+        let mut thumbnail_paths = Vec::new();
+        let mut task_ids = Vec::new();
+
+        for image_id in image_ids {
+            // 查询图片信息
+            let image: Option<ImageInfo> = tx
+                .query_row(
+                    "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash, images.\"order\"
+                     FROM images WHERE images.id = ?1",
+                    params![image_id],
+                    |row| {
+                        Ok(ImageInfo {
+                            id: row.get(0)?,
+                            url: row.get(1)?,
+                            local_path: row.get(2)?,
+                            plugin_id: row.get(3)?,
+                            task_id: row.get(4)?,
+                            crawled_at: row.get(5)?,
+                            metadata: row.get::<_, Option<String>>(6)?
+                                .and_then(|s| serde_json::from_str(&s).ok()),
+                            thumbnail_path: row.get(7)?,
+                            hash: row.get(8)?,
+                            order: row.get::<_, Option<i64>>(9)?,
+                            favorite: false, // 批量操作时不需要这个字段
+                        })
+                    },
+                )
+                .ok();
+
+            if let Some(image) = image {
+                if !image.thumbnail_path.is_empty() {
+                    thumbnail_paths.push(image.thumbnail_path);
+                }
+                if let Some(task_id) = image.task_id {
+                    task_ids.push((image_id.clone(), task_id));
+                }
+            }
+        }
+
+        // 删除数据库记录
+        for image_id in image_ids {
+            tx.execute(
+                "DELETE FROM album_images WHERE image_id = ?1",
+                params![image_id],
+            )
+            .map_err(|e| format!("Failed to delete album mapping for {}: {}", image_id, e))?;
+
+            tx.execute("DELETE FROM images WHERE id = ?1", params![image_id])
+                .map_err(|e| format!("Failed to delete image {} from database: {}", image_id, e))?;
+        }
+
+        // 更新任务的 deletedCount
+        for (image_id, task_id) in task_ids {
+            let _ = self.increment_task_deleted_count_in_tx(&tx, &task_id, 1);
+        }
+
+        tx.commit()
+            .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+
+        // 删除缩略图文件
+        for path in thumbnail_paths {
+            let thumb_path = PathBuf::from(&path);
+            if thumb_path.exists() {
+                let _ = fs::remove_file(&thumb_path);
+            }
+        }
 
         Ok(())
     }
@@ -1196,17 +1564,18 @@ impl Storage {
         let mut removed_ids: Vec<String> = Vec::new();
 
         for hash in hashes {
-            // 选一个要保留的 id
+            // 选一个要保留的 id（优先保留在收藏画册中的图片）
             let keep_id: Option<String> = tx
                 .query_row(
-                    "SELECT id
+                    "SELECT images.id
                      FROM images
-                     WHERE hash = ?1
-                     ORDER BY favorite DESC,
-                              COALESCE(\"order\", crawled_at) DESC,
-                              crawled_at DESC
+                     LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = ?1
+                     WHERE images.hash = ?2
+                     ORDER BY CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END DESC,
+                              COALESCE(images.\"order\", images.crawled_at) DESC,
+                              images.crawled_at DESC
                      LIMIT 1",
-                    params![hash],
+                    params![FAVORITE_ALBUM_ID, hash],
                     |row| row.get(0),
                 )
                 .optional()
@@ -1219,7 +1588,7 @@ impl Storage {
             // 找出要移除的记录（并删除缩略图文件，若 delete_files 为 true 则同时删除原图）
             let mut stmt2 = tx
                 .prepare(
-                    "SELECT id, COALESCE(thumbnail_path, ''), local_path
+                    "SELECT id, COALESCE(thumbnail_path, ''), local_path, task_id
                      FROM images
                      WHERE hash = ?1 AND id != ?2",
                 )
@@ -1231,13 +1600,22 @@ impl Storage {
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 })
                 .map_err(|e| format!("Failed to query dedupe remove rows: {}", e))?;
 
+            // 统计每个任务的删除数量
+            let mut task_deleted_counts: HashMap<String, i64> = HashMap::new();
+
             for r in rows {
-                let (id, thumb_path, local_path) =
+                let (id, thumb_path, local_path, task_id) =
                     r.map_err(|e| format!("Failed to read dedupe remove row: {}", e))?;
+
+                // 记录任务删除数量
+                if let Some(ref task_id) = task_id {
+                    *task_deleted_counts.entry(task_id.clone()).or_insert(0) += 1;
+                }
 
                 // 删除缩略图（忽略错误）
                 if !thumb_path.trim().is_empty() {
@@ -1262,6 +1640,15 @@ impl Storage {
                     .map_err(|e| format!("Failed to delete image in dedupe: {}", e))?;
 
                 removed_ids.push(id);
+            }
+
+            // 在事务提交前，更新任务的 deleted_count
+            for (task_id, count) in task_deleted_counts {
+                tx.execute(
+                    "UPDATE tasks SET deleted_count = COALESCE(deleted_count, 0) + ?1 WHERE id = ?2",
+                    params![count, task_id],
+                )
+                .map_err(|e| format!("Failed to update task deleted_count in dedupe: {}", e))?;
             }
         }
 
@@ -1302,8 +1689,8 @@ impl Storage {
             .and_then(|c| serde_json::to_string(c).ok());
 
         conn.execute(
-            "INSERT OR REPLACE INTO tasks (id, plugin_id, url, output_dir, user_config, output_album_id, status, progress, total_images, downloaded_images, start_time, end_time, error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT OR REPLACE INTO tasks (id, plugin_id, url, output_dir, user_config, output_album_id, status, progress, total_images, downloaded_images, deleted_count, start_time, end_time, error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 task.id,
                 task.plugin_id,
@@ -1315,6 +1702,7 @@ impl Storage {
                 task.progress,
                 task.total_images,
                 task.downloaded_images,
+                task.deleted_count,
                 task.start_time.map(|t| t as i64),
                 task.end_time.map(|t| t as i64),
                 task.error,
@@ -1329,12 +1717,43 @@ impl Storage {
         self.add_task(task) // INSERT OR REPLACE 可以用于更新
     }
 
+    /// 增加任务的已删除数量
+    fn increment_task_deleted_count_in_tx(
+        &self,
+        tx: &Transaction,
+        task_id: &str,
+        count: i64,
+    ) -> Result<(), String> {
+        if count <= 0 {
+            return Ok(());
+        }
+        tx.execute(
+            "UPDATE tasks SET deleted_count = COALESCE(deleted_count, 0) + ?1 WHERE id = ?2",
+            params![count, task_id],
+        )
+        .map_err(|e| format!("Failed to increment task deleted_count: {}", e))?;
+        Ok(())
+    }
+
+    fn increment_task_deleted_count(&self, task_id: &str, count: i64) -> Result<(), String> {
+        if count <= 0 {
+            return Ok(());
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.execute(
+            "UPDATE tasks SET deleted_count = COALESCE(deleted_count, 0) + ?1 WHERE id = ?2",
+            params![count, task_id],
+        )
+        .map_err(|e| format!("Failed to increment task deleted_count: {}", e))?;
+        Ok(())
+    }
+
     pub fn get_task(&self, task_id: &str) -> Result<Option<TaskInfo>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let task = conn
             .query_row(
-                "SELECT id, plugin_id, url, output_dir, user_config, output_album_id, status, progress, total_images, downloaded_images, start_time, end_time, error
+                "SELECT id, plugin_id, url, output_dir, user_config, output_album_id, status, progress, total_images, downloaded_images, COALESCE(deleted_count, 0), start_time, end_time, error
                  FROM tasks WHERE id = ?1",
                 params![task_id],
                 |row| {
@@ -1350,9 +1769,10 @@ impl Storage {
                         progress: row.get(7)?,
                         total_images: row.get(8)?,
                         downloaded_images: row.get(9)?,
-                        start_time: row.get::<_, Option<i64>>(10)?.map(|t| t as u64),
-                        end_time: row.get::<_, Option<i64>>(11)?.map(|t| t as u64),
-                        error: row.get(12)?,
+                        deleted_count: row.get(10)?,
+                        start_time: row.get::<_, Option<i64>>(11)?.map(|t| t as u64),
+                        end_time: row.get::<_, Option<i64>>(12)?.map(|t| t as u64),
+                        error: row.get(13)?,
                     })
                 },
             )
@@ -1366,7 +1786,7 @@ impl Storage {
 
         let mut stmt = conn
             .prepare(
-                "SELECT id, plugin_id, url, output_dir, user_config, output_album_id, status, progress, total_images, downloaded_images, start_time, end_time, error
+                "SELECT id, plugin_id, url, output_dir, user_config, output_album_id, status, progress, total_images, downloaded_images, COALESCE(deleted_count, 0), start_time, end_time, error
                  FROM tasks ORDER BY start_time DESC"
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -1386,9 +1806,10 @@ impl Storage {
                     progress: row.get(7)?,
                     total_images: row.get(8)?,
                     downloaded_images: row.get(9)?,
-                    start_time: row.get::<_, Option<i64>>(10)?.map(|t| t as u64),
-                    end_time: row.get::<_, Option<i64>>(11)?.map(|t| t as u64),
-                    error: row.get(12)?,
+                    deleted_count: row.get(10)?,
+                    start_time: row.get::<_, Option<i64>>(11)?.map(|t| t as u64),
+                    end_time: row.get::<_, Option<i64>>(12)?.map(|t| t as u64),
+                    error: row.get(13)?,
                 })
             })
             .map_err(|e| format!("Failed to query tasks: {}", e))?;
@@ -1493,7 +1914,7 @@ impl Storage {
     pub fn get_task_image_ids(&self, task_id: &str) -> Result<Vec<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id FROM images WHERE task_id = ?1")
+            .prepare("SELECT image_id FROM task_images WHERE task_id = ?1")
             .map_err(|e| format!("Failed to prepare task image ids query: {}", e))?;
         let rows = stmt
             .query_map(params![task_id], |row| row.get::<_, String>(0))
@@ -1520,44 +1941,53 @@ impl Storage {
     ) -> Result<PaginatedImages, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        // 获取总数
+        // 获取总数（使用 task_images 表）
         let total: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM images WHERE task_id = ?1",
+                "SELECT COUNT(*) FROM task_images WHERE task_id = ?1",
                 params![task_id],
                 |row| row.get(0),
             )
             .map_err(|e| format!("Failed to query count: {}", e))?;
 
-        // 分页查询
+        // 分页查询（使用 task_images 表关联查询）
         let offset = page * page_size;
         let mut stmt = conn
             .prepare(
-                "SELECT id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(thumbnail_path, ''), favorite, hash, \"order\"
-                 FROM images WHERE task_id = ?1 ORDER BY COALESCE(\"order\", crawled_at) ASC
-                 LIMIT ?2 OFFSET ?3"
+                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), 
+                 CASE WHEN favorite_check.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite, images.hash, 
+                 COALESCE(task_images.\"order\", images.crawled_at) as task_order
+                 FROM images
+                 INNER JOIN task_images ON images.id = task_images.image_id
+                 LEFT JOIN album_images as favorite_check ON images.id = favorite_check.image_id AND favorite_check.album_id = ?2
+                 WHERE task_images.task_id = ?1
+                 ORDER BY COALESCE(task_images.\"order\", images.crawled_at) ASC
+                 LIMIT ?3 OFFSET ?4"
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let image_rows = stmt
-            .query_map(params![task_id, page_size as i64, offset as i64], |row| {
-                Ok(ImageInfo {
-                    id: row.get(0)?,
-                    url: row.get(1)?,
-                    local_path: row.get(2)?,
-                    plugin_id: row.get(3)?,
-                    task_id: row.get(4)?,
-                    crawled_at: row.get(5)?,
-                    metadata: row
-                        .get::<_, Option<String>>(6)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
-                    thumbnail_path: row.get(7)?,
-                    favorite: row.get::<_, i64>(8)? != 0,
-                    hash: row.get(9)?,
-                    order: row.get::<_, Option<i64>>(10)?,
-                })
-            })
-            .map_err(|e| format!("Failed to query images: {}", e))?;
+            .query_map(
+                params![task_id, FAVORITE_ALBUM_ID, page_size as i64, offset as i64],
+                |row| {
+                    Ok(ImageInfo {
+                        id: row.get(0)?,
+                        url: row.get(1)?,
+                        local_path: row.get(2)?,
+                        plugin_id: row.get(3)?,
+                        task_id: row.get(4)?,
+                        crawled_at: row.get(5)?,
+                        metadata: row
+                            .get::<_, Option<String>>(6)?
+                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        thumbnail_path: row.get(7)?,
+                        favorite: row.get::<_, i64>(8)? != 0,
+                        hash: row.get(9)?,
+                        order: row.get::<_, Option<i64>>(10)?,
+                    })
+                },
+            )
+            .map_err(|e| format!("Failed to query task images: {}", e))?;
 
         let mut images = Vec::new();
         for row_result in image_rows {

@@ -67,9 +67,9 @@ const visible = computed({
     display: flex;
     justify-content: center;
     align-items: center;
-    padding: 20px;
     overflow: hidden;
     box-sizing: border-box;
+    position: relative;
   }
 
   .preview-image {

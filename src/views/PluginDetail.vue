@@ -49,6 +49,11 @@
                         </el-tag>
                         <el-tag v-else type="info">未安装</el-tag>
                     </el-descriptions-item>
+                    <el-descriptions-item v-if="plugin?.baseUrl" label="爬取地址">
+                        <a :href="plugin.baseUrl" target="_blank" rel="noopener noreferrer" class="source-url-link">
+                            {{ plugin.baseUrl }}
+                        </a>
+                    </el-descriptions-item>
                 </el-descriptions>
 
                 <div class="plugin-actions">
@@ -85,6 +90,7 @@ interface BrowserPlugin {
     icon?: string;
     filePath?: string;
     doc?: string;
+    baseUrl?: string;
 }
 
 interface PluginDetailDto {
@@ -94,6 +100,7 @@ interface PluginDetailDto {
     doc?: string | null;
     iconData?: number[] | null;
     origin: "installed" | "remote" | string;
+    baseUrl?: string | null;
 }
 
 interface ImportPreview {
@@ -394,6 +401,7 @@ const loadPlugin = async () => {
             desp: detail.desp,
             icon,
             doc: detail.doc ?? undefined,
+            baseUrl: detail.baseUrl ?? undefined,
         };
 
         // 渲染文档（包括处理图片）

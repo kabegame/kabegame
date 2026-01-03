@@ -24,73 +24,57 @@ impl NativeWallpaperManager {
             .map(|img| img.local_path)
     }
 
+    /// 确保系统启用壁纸淡入淡出效果（通过注册表设置）
+    #[cfg(target_os = "windows")]
+    fn ensure_fade_enabled(&self) -> Result<(), String> {
+        use winreg::enums::*;
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let desktop_key = hkcu
+            .open_subkey_with_flags("Control Panel\\Desktop", KEY_WRITE)
+            .map_err(|e| format!("无法打开注册表键: {}", e))?;
+
+        // 确保 WallpaperTransition 存在且为 1（启用淡入淡出）
+        // 如果不存在或值不为 1，则设置为 1
+        let current_value: String = desktop_key
+            .get_value("WallpaperTransition")
+            .unwrap_or_else(|_| "0".to_string());
+
+        if current_value != "1" {
+            desktop_key
+                .set_value("WallpaperTransition", &"1")
+                .map_err(|e| format!("设置 WallpaperTransition 失败: {}", e))?;
+            println!("[DEBUG] 已启用系统壁纸淡入淡出效果（WallpaperTransition=1）");
+        }
+
+        Ok(())
+    }
+
     /// 使用 IDesktopWallpaper COM 接口设置壁纸（支持淡入淡出效果）
     #[cfg(target_os = "windows")]
     fn set_wallpaper_via_com(&self, wide_path: &[u16]) -> Result<(), String> {
-        use windows_sys::Win32::Foundation::S_OK;
-        use windows_sys::Win32::System::Com::{
-            CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
-        };
-
-        // IDesktopWallpaper 接口的 GUID
-        const CLSID_DESKTOP_WALLPAPER: windows_sys::core::GUID = windows_sys::core::GUID {
-            data1: 0xC2CF3110,
-            data2: 0x460E,
-            data3: 0x4FC1,
-            data4: [0xB9, 0xD0, 0x8A, 0x1C, 0x0C, 0x9C, 0xC4, 0xBD],
-        };
-
-        // IDesktopWallpaper 接口的 IID
-        const IID_IDESKTOP_WALLPAPER: windows_sys::core::GUID = windows_sys::core::GUID {
-            data1: 0xB92B56A9,
-            data2: 0x8B55,
-            data3: 0x4E14,
-            data4: [0x9A, 0x89, 0x01, 0x99, 0xBB, 0xB6, 0xF9, 0x3B],
-        };
+        use windows::core::*;
+        use windows::Win32::System::Com::*;
+        use windows::Win32::UI::Shell::*;
 
         unsafe {
-            // 初始化 COM（如果尚未初始化）
-            let _ = CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED as u32);
+            // 初始化 COM（如果尚未初始化，忽略已初始化的错误）
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-            let mut desktop_wallpaper: *mut std::ffi::c_void = std::ptr::null_mut();
-            let hr = CoCreateInstance(
-                &CLSID_DESKTOP_WALLPAPER,
-                std::ptr::null_mut(),
-                CLSCTX_ALL,
-                &IID_IDESKTOP_WALLPAPER,
-                &mut desktop_wallpaper,
-            );
+            // 创建 IDesktopWallpaper 接口实例
+            let desktop_wallpaper: IDesktopWallpaper =
+                CoCreateInstance(&DesktopWallpaper, None, CLSCTX_ALL)
+                    .map_err(|e| format!("CoCreateInstance failed: {:?}", e))?;
 
-            if hr != S_OK || desktop_wallpaper.is_null() {
-                return Err(format!("CoCreateInstance failed. HRESULT=0x{:X}", hr));
-            }
+            // 将 UTF-16 路径转换为 PCWSTR
+            // wide_path 已经包含 null 终止符
+            let wallpaper_path = PCWSTR::from_raw(wide_path.as_ptr());
 
-            // IDesktopWallpaper::SetWallpaper 的 vtable 索引是 3（第 4 个方法，从 0 开始）
-            // SetWallpaper(monitorID: *const u16, wallpaper: *const u16)
-            // monitorID = null 表示所有显示器
-            type SetWallpaperFn = unsafe extern "system" fn(
-                this: *mut std::ffi::c_void,
-                monitor_id: *const u16,
-                wallpaper: *const u16,
-            ) -> i32; // HRESULT 是 i32
-
-            let vtable = *(desktop_wallpaper as *const *const *const usize);
-            let set_wallpaper =
-                std::mem::transmute::<*const usize, SetWallpaperFn>(*vtable.add(3) as *const usize);
-
-            // 调用 SetWallpaper(nullptr, wide_path.as_ptr())
-            let hr = set_wallpaper(desktop_wallpaper, std::ptr::null(), wide_path.as_ptr());
-
-            // 释放 COM 对象
-            let release = std::mem::transmute::<
-                *const usize,
-                unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
-            >(*vtable.add(2) as *const usize);
-            release(desktop_wallpaper);
-
-            if hr != S_OK {
-                return Err(format!("SetWallpaper failed. HRESULT=0x{:X}", hr));
-            }
+            // 设置壁纸（monitorID = None 表示所有显示器）
+            desktop_wallpaper
+                .SetWallpaper(None, wallpaper_path)
+                .map_err(|e| format!("SetWallpaper failed: {:?}", e))?;
 
             Ok(())
         }
@@ -177,12 +161,20 @@ impl WallpaperManager for NativeWallpaperManager {
             // wallpaper_rotator.rs 中的实现能工作，它使用延迟 + SPIF_SENDWININICHANGE 来触发系统动画
             // 当 transition == "fade" 时，先延迟 100ms，然后使用 fuWinIni=3 设置壁纸
             if transition == "fade" && immediate {
-                // 优先尝试 IDesktopWallpaper（COM）接口，部分系统/环境下更稳定
-                // 如果失败，则回退到“延迟 + SystemParametersInfoW”的模拟方式
+                // 确保系统启用壁纸淡入淡出效果
+                let _ = self.ensure_fade_enabled();
+
+                // 优先尝试 IDesktopWallpaper（COM）接口，使用 windows-rs 的正式绑定
+                // 这个接口应该能正确触发 Windows 原生的淡入淡出效果
+                // 如果失败，则回退到"延迟 + SystemParametersInfoW"的模拟方式
                 if let Ok(()) = self.set_wallpaper_via_com(&wide_path) {
-                    println!("[DEBUG] 壁纸路径设置完成（使用 IDesktopWallpaper COM）");
+                    println!(
+                        "[DEBUG] 壁纸路径设置完成（使用 IDesktopWallpaper COM，支持原生淡入淡出）"
+                    );
                     return Ok(());
                 }
+
+                println!("[DEBUG] IDesktopWallpaper COM 接口调用失败，回退到模拟方式");
 
                 use std::thread;
                 use std::time::Duration;

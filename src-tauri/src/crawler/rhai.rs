@@ -687,7 +687,7 @@ pub fn register_crawler_functions(
         },
     );
 
-    // download_image(url) - 下载图片并添加到 gallery（通过下载队列）
+    // download_image(url) - 同步下载图片并添加到 gallery（等待窗口有空位后直接执行）
     let images_dir = images_dir.to_path_buf();
     let app_handle = app.clone();
     let plugin_id = plugin_id.to_string();
@@ -707,8 +707,7 @@ pub fn register_crawler_functions(
             let plugin_id = plugin_id.clone();
             let task_id = task_id_for_download.clone();
 
-            // 预检查：如果是本地文件且数据库已有相同路径，则检查缩略图并补全（如果需要），无需入队
-            // 注意：HTTP/HTTPS 无法在不下载内容的情况下计算 hash，因此仍走队列流程
+            // 预检查：如果是本地文件且数据库已有相同路径，则检查缩略图并补全（如果需要），无需下载
             let is_local_path = url.starts_with("file://")
                 || (!url.starts_with("http://")
                     && !url.starts_with("https://")
@@ -768,23 +767,23 @@ pub fn register_crawler_functions(
                                 }
                             }
 
-                            // 文件已存在，无需进入下载队列
+                            // 文件已存在，无需下载
                             return Ok(true);
                         }
-                        // 数据库中没有相同路径，继续进入下载队列
+                        // 数据库中没有相同路径，继续下载
                     }
                 }
             }
 
-            // 记录下载开始时间
+            // 记录下载开始时间（使用毫秒以支持更精确的时间控制）
             let download_start_time = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_secs();
+                .as_millis() as u64;
 
-            // 将任务添加到下载队列
+            // 同步下载图片（等待窗口有空位后直接执行）
             let download_queue = app_handle.state::<crate::crawler::DownloadQueue>();
-            match download_queue.enqueue(
+            match download_queue.download_image(
                 url.to_string(),
                 images_dir,
                 plugin_id,
@@ -792,8 +791,8 @@ pub fn register_crawler_functions(
                 download_start_time,
                 output_album_id_for_download.clone(),
             ) {
-                Ok(_) => Ok(true), // 成功加入队列
-                Err(e) => Err(format!("Failed to enqueue download: {}", e).into()),
+                Ok(_) => Ok(true), // 下载成功
+                Err(e) => Err(format!("Failed to download image: {}", e).into()),
             }
         },
     );

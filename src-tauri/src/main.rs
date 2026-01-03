@@ -34,8 +34,6 @@ use plugin::{
 use settings::{AppSettings, Settings, WindowState};
 use std::fs;
 use storage::{Album, ImageInfo, PaginatedImages, RunConfig, Storage, TaskInfo};
-#[cfg(target_os = "windows")]
-use wallpaper::manager::GdiWallpaperManager;
 use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
 use wallpaper_engine_export::{export_album_to_we_project, export_images_to_we_project};
 
@@ -235,12 +233,8 @@ async fn crawl_images_command(
         }
     };
 
-    // 如果没有提供用户配置，尝试加载已保存的配置
-    let final_user_config = if let Some(ref config) = user_config {
-        Some(config.clone())
-    } else {
-        plugin_manager.load_plugin_config(&plugin_id).ok()
-    };
+    // 使用提供的用户配置
+    let final_user_config = user_config.clone();
 
     let result = crawl_images(
         &plugin,
@@ -284,6 +278,14 @@ fn get_images_paginated(
     state: tauri::State<Storage>,
 ) -> Result<PaginatedImages, String> {
     state.get_images_paginated(page, page_size, plugin_id.as_deref(), favorites_only)
+}
+
+#[tauri::command]
+fn get_image_by_id(
+    image_id: String,
+    state: tauri::State<Storage>,
+) -> Result<Option<ImageInfo>, String> {
+    state.find_image_by_id(&image_id)
 }
 
 #[tauri::command]
@@ -417,6 +419,38 @@ fn remove_image(
     let s = settings.get_settings().unwrap_or_default();
     if s.current_wallpaper_image_id.as_deref() == Some(image_id.as_str()) {
         let _ = settings.set_current_wallpaper_image_id(None);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn batch_delete_images(
+    image_ids: Vec<String>,
+    state: tauri::State<Storage>,
+    settings: tauri::State<Settings>,
+) -> Result<(), String> {
+    state.batch_delete_images(&image_ids)?;
+    let s = settings.get_settings().unwrap_or_default();
+    if let Some(current_id) = &s.current_wallpaper_image_id {
+        if image_ids.contains(current_id) {
+            let _ = settings.set_current_wallpaper_image_id(None);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn batch_remove_images(
+    image_ids: Vec<String>,
+    state: tauri::State<Storage>,
+    settings: tauri::State<Settings>,
+) -> Result<(), String> {
+    state.batch_remove_images(&image_ids)?;
+    let s = settings.get_settings().unwrap_or_default();
+    if let Some(current_id) = &s.current_wallpaper_image_id {
+        if image_ids.contains(current_id) {
+            let _ = settings.set_current_wallpaper_image_id(None);
+        }
     }
     Ok(())
 }
@@ -669,23 +703,6 @@ fn get_plugin_vars(
 }
 
 #[tauri::command]
-fn save_plugin_config(
-    plugin_id: String,
-    config: HashMap<String, serde_json::Value>,
-    state: tauri::State<PluginManager>,
-) -> Result<(), String> {
-    state.save_plugin_config(&plugin_id, &config)
-}
-
-#[tauri::command]
-fn load_plugin_config(
-    plugin_id: String,
-    state: tauri::State<PluginManager>,
-) -> Result<HashMap<String, serde_json::Value>, String> {
-    state.load_plugin_config(&plugin_id)
-}
-
-#[tauri::command]
 fn get_browser_plugins(state: tauri::State<PluginManager>) -> Result<Vec<BrowserPlugin>, String> {
     state.load_browser_plugins()
 }
@@ -921,8 +938,17 @@ fn set_auto_launch(enabled: bool, state: tauri::State<Settings>) -> Result<(), S
 }
 
 #[tauri::command]
-fn set_max_concurrent_downloads(count: u32, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_max_concurrent_downloads(count)
+fn set_max_concurrent_downloads(
+    count: u32,
+    state: tauri::State<Settings>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    state.set_max_concurrent_downloads(count)?;
+    // 通知所有等待的任务重新检查并发数设置
+    if let Some(download_queue) = app.try_state::<crawler::DownloadQueue>() {
+        download_queue.notify_all_waiting();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1023,12 +1049,6 @@ fn get_active_downloads(app: tauri::AppHandle) -> Result<Vec<ActiveDownloadInfo>
 }
 
 #[tauri::command]
-fn get_download_queue_items(app: tauri::AppHandle) -> Result<Vec<ActiveDownloadInfo>, String> {
-    let download_queue = app.state::<crawler::DownloadQueue>();
-    download_queue.get_queue_items()
-}
-
-#[tauri::command]
 fn add_run_config(config: RunConfig, state: tauri::State<Storage>) -> Result<RunConfig, String> {
     state.add_run_config(config.clone())?;
     Ok(config)
@@ -1049,19 +1069,6 @@ fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
     let download_queue = app.state::<crawler::DownloadQueue>();
     download_queue.cancel_task(&task_id)?;
     Ok(())
-}
-
-#[tauri::command]
-fn get_download_queue_size(app: tauri::AppHandle) -> Result<usize, String> {
-    let download_queue = app.state::<crawler::DownloadQueue>();
-    download_queue.get_queue_size()
-}
-
-/// 清空所有“等待队列”（不影响正在下载）
-#[tauri::command]
-fn clear_download_queue(app: tauri::AppHandle) -> Result<usize, String> {
-    let download_queue = app.state::<crawler::DownloadQueue>();
-    download_queue.clear_queue()
 }
 
 // 任务相关命令
@@ -1124,6 +1131,14 @@ fn get_task_images_paginated(
     state: tauri::State<Storage>,
 ) -> Result<PaginatedImages, String> {
     state.get_task_images_paginated(&task_id, page, page_size)
+}
+
+#[tauri::command]
+fn get_task_image_ids(
+    task_id: String,
+    state: tauri::State<Storage>,
+) -> Result<Vec<String>, String> {
+    state.get_task_image_ids(&task_id)
 }
 
 // Windows：将文件列表写入剪贴板为 CF_HDROP，便于原生应用粘贴/拖拽识别
@@ -1723,78 +1738,160 @@ fn get_native_wallpaper_styles() -> Result<Vec<String>, String> {
     }
 }
 
+/// 修复壁纸窗口的 Z-order（确保在 DefView 之下，WorkerW 之上）
+#[cfg(target_os = "windows")]
+fn fix_wallpaper_window_zorder(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowExW, FindWindowW, GetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW,
+    };
+
+    // 检查是否是窗口模式
+    let is_window_mode = if let Some(settings_state) = app.try_state::<Settings>() {
+        if let Ok(settings) = settings_state.get_settings() {
+            settings.wallpaper_mode == "window"
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if !is_window_mode {
+        return;
+    }
+
+    // 获取壁纸窗口
+    let Some(wallpaper_window) = app.get_webview_window("wallpaper") else {
+        return;
+    };
+
+    let Ok(tauri_hwnd) = wallpaper_window.hwnd() else {
+        return;
+    };
+    let tauri_hwnd: HWND = tauri_hwnd.0 as isize;
+
+    unsafe {
+        fn wide(s: &str) -> Vec<u16> {
+            use std::ffi::OsStr;
+            use std::os::windows::ffi::OsStrExt;
+            OsStr::new(s).encode_wide().chain(Some(0)).collect()
+        }
+
+        const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x00200000;
+        const HWND_TOP: HWND = 0;
+
+        let progman = FindWindowW(wide("Progman").as_ptr(), std::ptr::null());
+        if progman == 0 {
+            return;
+        }
+
+        let ex_style = GetWindowLongPtrW(progman, GWL_EXSTYLE) as u32;
+        let is_raised_desktop = (ex_style & WS_EX_NOREDIRECTIONBITMAP) != 0;
+
+        if is_raised_desktop {
+            eprintln!("[DEBUG] hide_main_window: 修复壁纸窗口 Z-order (Windows 11 raised desktop)");
+
+            // 查找 DefView
+            let shell_dll_defview = FindWindowExW(
+                progman,
+                0,
+                wide("SHELLDLL_DefView").as_ptr(),
+                std::ptr::null(),
+            );
+
+            if shell_dll_defview != 0 {
+                // 确保 DefView 在顶部
+                ShowWindow(shell_dll_defview, SW_SHOW);
+                SetWindowPos(
+                    shell_dll_defview,
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+
+                // 查找并提升 SysListView32
+                let folder_view = FindWindowExW(
+                    shell_dll_defview,
+                    0,
+                    wide("SysListView32").as_ptr(),
+                    std::ptr::null(),
+                );
+                if folder_view != 0 {
+                    ShowWindow(folder_view, SW_SHOW);
+                    SetWindowPos(
+                        folder_view,
+                        HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                }
+
+                // 确保壁纸窗口在 DefView 之下
+                SetWindowPos(
+                    tauri_hwnd,
+                    shell_dll_defview as HWND,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+
+                eprintln!("[DEBUG] hide_main_window: ✓ 壁纸窗口 Z-order 已修复");
+            }
+        }
+    }
+}
+
 /// 隐藏主窗口（用于窗口关闭事件处理）
 #[tauri::command]
 fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
-    if let Some(window) = app.webview_windows().values().next() {
-        // 在隐藏窗口前保存窗口状态
-        if window.label() == "main" {
-            let position = window.outer_position().ok();
-            let size = window.outer_size().ok();
-            let maximized = window.is_maximized().unwrap_or(false);
+    // 明确获取主窗口，而不是使用 values().next()（可能获取到壁纸窗口）
+    let Some(window) = app.get_webview_window("main") else {
+        return Err("找不到主窗口".to_string());
+    };
 
-            if let (Some(pos), Some(sz)) = (position, size) {
-                let window_state = WindowState {
-                    x: if maximized { None } else { Some(pos.x as f64) },
-                    y: if maximized { None } else { Some(pos.y as f64) },
-                    width: sz.width as f64,
-                    height: sz.height as f64,
-                    maximized,
-                };
+    // 在隐藏窗口前保存窗口状态
+    let position = window.outer_position().ok();
+    let size = window.outer_size().ok();
+    let maximized = window.is_maximized().unwrap_or(false);
 
-                // 保存窗口状态
-                if let Some(settings_state) = app.try_state::<Settings>() {
-                    if let Err(e) = settings_state.save_window_state(window_state) {
-                        eprintln!("保存窗口状态失败: {}", e);
-                    }
-                }
+    if let (Some(pos), Some(sz)) = (position, size) {
+        let window_state = WindowState {
+            x: if maximized { None } else { Some(pos.x as f64) },
+            y: if maximized { None } else { Some(pos.y as f64) },
+            width: sz.width as f64,
+            height: sz.height as f64,
+            maximized,
+        };
+
+        // 保存窗口状态
+        if let Some(settings_state) = app.try_state::<Settings>() {
+            if let Err(e) = settings_state.save_window_state(window_state) {
+                eprintln!("保存窗口状态失败: {}", e);
             }
         }
-
-        window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
-    } else {
-        return Err("找不到主窗口".to_string());
     }
+
+    window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
+
+    // 隐藏主窗口后，修复壁纸窗口的 Z-order（防止壁纸窗口覆盖桌面图标）
+    #[cfg(target_os = "windows")]
+    {
+        fix_wallpaper_window_zorder(&app);
+    }
+
     Ok(())
-}
-
-/// 测试 GDI 壁纸窗口（仅用于测试）
-#[tauri::command]
-#[cfg(target_os = "windows")]
-fn test_gdi_wallpaper(
-    image_path: String,
-    style: Option<String>,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    use crate::wallpaper::manager::WallpaperManager;
-    use std::sync::Arc;
-    use std::sync::OnceLock;
-
-    // 全局单例，用于测试（实际应用中应该由 WallpaperController 管理）
-    static GDI_MANAGER: OnceLock<Arc<GdiWallpaperManager>> = OnceLock::new();
-    let gdi_manager = GDI_MANAGER.get_or_init(|| Arc::new(GdiWallpaperManager::new(app.clone())));
-
-    // 初始化管理器
-    gdi_manager
-        .init(app.clone())
-        .map_err(|e| format!("初始化 GDI 管理器失败: {}", e))?;
-
-    // 设置图片
-    let style_str = style.unwrap_or_else(|| "fill".to_string());
-    gdi_manager
-        .set_wallpaper(&image_path, &style_str, "none")
-        .map_err(|e| format!("设置壁纸失败: {}", e))?;
-
-    println!(
-        "[TEST] GDI 壁纸管理器已设置图片: {}, 样式: {}",
-        image_path, style_str
-    );
-
-    Ok(format!(
-        "GDI 壁纸管理器测试成功！图片: {}, 样式: {}",
-        image_path, style_str
-    ))
 }
 
 /// 壁纸窗口前端 ready 后调用，用于触发一次"推送当前壁纸到壁纸窗口"。
@@ -2069,6 +2166,7 @@ fn main() {
             delete_task,
             get_task_images,
             get_task_images_paginated,
+            get_task_image_ids,
             // 原有命令
             get_plugins,
             get_build_mode,
@@ -2077,6 +2175,7 @@ fn main() {
             crawl_images_command,
             get_images,
             get_images_paginated,
+            get_image_by_id,
             get_albums,
             add_album,
             delete_album,
@@ -2090,6 +2189,8 @@ fn main() {
             get_images_count,
             delete_image,
             remove_image,
+            batch_delete_images,
+            batch_remove_images,
             dedupe_gallery_by_hash,
             toggle_image_favorite,
             update_images_order,
@@ -2103,7 +2204,6 @@ fn main() {
             clear_current_wallpaper_image_id,
             get_image_local_path_by_id,
             get_current_wallpaper_path,
-            test_gdi_wallpaper,
             migrate_images_from_json,
             get_browser_plugins,
             get_plugin_sources,
@@ -2120,8 +2220,6 @@ fn main() {
             get_plugin_icon,
             get_gallery_image,
             get_plugin_vars,
-            save_plugin_config,
-            load_plugin_config,
             get_settings,
             get_setting,
             get_favorite_album_id,
@@ -2140,13 +2238,10 @@ fn main() {
             get_wallpaper_engine_myprojects_dir,
             get_default_images_dir,
             get_active_downloads,
-            get_download_queue_items,
             add_run_config,
             get_run_configs,
             delete_run_config,
             cancel_task,
-            get_download_queue_size,
-            clear_download_queue,
             copy_files_to_clipboard,
             set_wallpaper_rotation_enabled,
             set_wallpaper_rotation_album_id,
@@ -2172,9 +2267,11 @@ fn main() {
         ])
         .on_window_event(|window, event| {
             use tauri::WindowEvent;
-            // 监听窗口关闭事件，保存窗口状态
-            if let WindowEvent::CloseRequested { .. } = event {
+            // 监听窗口关闭事件
+            if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
+                    // 阻止默认关闭行为
+                    api.prevent_close();
                     // 获取窗口状态
                     let position = window.outer_position().ok();
                     let size = window.outer_size().ok();
@@ -2197,6 +2294,19 @@ fn main() {
                             }
                         }
                     }
+
+                    // 隐藏主窗口（直接隐藏，不关闭）
+                    if let Err(e) = window.hide() {
+                        eprintln!("隐藏主窗口失败: {}", e);
+                    } else {
+                        // 隐藏主窗口后，修复壁纸窗口的 Z-order（防止壁纸窗口覆盖桌面图标）
+                        #[cfg(target_os = "windows")]
+                        {
+                            fix_wallpaper_window_zorder(window.app_handle());
+                        }
+                    }
+                } else if window.label().starts_with("wallpaper") {
+                    api.prevent_close();
                 }
             }
         })

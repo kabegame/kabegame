@@ -1,5 +1,5 @@
 <template>
-  <PageHeader title="画廊" sticky>
+  <PageHeader title="画廊" :subtitle="totalCountText" sticky>
     <template #left>
       <el-select :model-value="filterPluginId" @update:model-value="$emit('update:filterPluginId', $event)"
         placeholder="筛选源" clearable style="width: 150px" popper-class="crawl-plugin-select-dropdown">
@@ -41,18 +41,7 @@
         <Setting />
       </el-icon>
     </el-button>
-    <el-badge v-if="activeRunningTasksCount > 0" :value="activeRunningTasksCount" :max="99" class="tasks-badge">
-      <el-button @click="$emit('showTasksDrawer')" class="tasks-drawer-trigger" circle type="primary">
-        <el-icon>
-          <List />
-        </el-icon>
-      </el-button>
-    </el-badge>
-    <el-button v-else @click="$emit('showTasksDrawer')" class="tasks-drawer-trigger" circle type="primary">
-      <el-icon>
-        <List />
-      </el-icon>
-    </el-button>
+    <TaskDrawerButton />
     <el-button type="primary" @click="$emit('showCrawlerDialog')" class="add-task-btn">
       <el-icon>
         <Plus />
@@ -63,26 +52,36 @@
 </template>
 
 <script setup lang="ts">
-import { Grid, Refresh, List, Plus, Star, Filter, Download, Setting } from "@element-plus/icons-vue";
+import { computed } from "vue";
+import { Grid, Refresh, Plus, Star, Filter, Download, Setting } from "@element-plus/icons-vue";
 import type { Plugin } from "@/stores/plugins";
 import PageHeader from "@/components/common/PageHeader.vue";
+import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 
 interface Props {
   filterPluginId: string | null;
   plugins: Plugin[];
   pluginIcons: Record<string, string>;
-  activeRunningTasksCount: number;
   showFavoritesOnly?: boolean;
   dedupeLoading?: boolean;
   hasMore?: boolean;
   isLoadingAll?: boolean;
+  totalCount?: number;
 }
 
-withDefaults(defineProps<Props>(), {
+const props = withDefaults(defineProps<Props>(), {
   showFavoritesOnly: false,
   dedupeLoading: false,
   hasMore: false,
   isLoadingAll: false,
+  totalCount: 0,
+});
+
+const totalCountText = computed(() => {
+  if (props.totalCount === 0) {
+    return "暂无图片";
+  }
+  return `共 ${props.totalCount} 张图片`;
 });
 
 defineEmits<{
@@ -90,7 +89,6 @@ defineEmits<{
   refresh: [];
   dedupeByHash: [];
   showQuickSettings: [];
-  showTasksDrawer: [];
   showCrawlerDialog: [];
   toggleFavoritesOnly: [];
   loadAll: [];
@@ -104,37 +102,6 @@ defineEmits<{
   &:hover {
     transform: translateY(-2px);
     box-shadow: var(--anime-shadow-hover);
-  }
-}
-
-.tasks-drawer-trigger {
-  box-shadow: var(--anime-shadow);
-  transition: all 0.3s ease;
-
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--anime-shadow-hover);
-  }
-}
-
-.tasks-badge {
-  display: block;
-
-  :deep(.el-badge__content) {
-    background-color: #f56c6c !important;
-    border-color: #f56c6c !important;
-    color: #fff !important;
-    border-radius: 50% !important;
-    width: 20px !important;
-    height: 20px !important;
-    min-width: 20px !important;
-    padding: 0 !important;
-    line-height: 20px !important;
-    font-size: 12px !important;
-    font-weight: 500 !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
   }
 }
 </style>

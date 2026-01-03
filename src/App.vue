@@ -6,13 +6,12 @@
   <el-container v-else class="app-container">
     <!-- 全局唯一的快捷设置抽屉（避免多页面实例冲突） -->
     <QuickSettingsDrawer />
+    <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
+    <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
     <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '200px'">
       <div class="sidebar-header">
-        <img src="/icon.png" alt="Logo" class="app-logo" :class="{ 'logo-clickable': isCollapsed }"
-          @click="isCollapsed ? toggleCollapse() : null" />
+        <img src="/icon.png" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
         <h1 v-if="!isCollapsed">Kabegame</h1>
-        <el-button v-if="!isCollapsed" class="collapse-button" :icon="Fold" circle size="small"
-          @click="toggleCollapse" />
       </div>
       <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
         <el-menu-item index="/gallery">
@@ -21,17 +20,17 @@
           </el-icon>
           <span>画廊</span>
         </el-menu-item>
-        <el-menu-item index="/plugin-browser">
-          <el-icon>
-            <Grid />
-          </el-icon>
-          <span>源</span>
-        </el-menu-item>
         <el-menu-item index="/albums">
           <el-icon>
             <Collection />
           </el-icon>
           <span>画册</span>
+        </el-menu-item>
+        <el-menu-item index="/plugin-browser">
+          <el-icon>
+            <Grid />
+          </el-icon>
+          <span>收集源</span>
         </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon>
@@ -54,15 +53,22 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from "vue";
 import { useRoute } from "vue-router";
-import { Picture, Grid, Setting, Fold, Collection } from "@element-plus/icons-vue";
+import { Picture, Grid, Setting, Collection } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import WallpaperLayer from "./components/WallpaperLayer.vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useSettingsStore } from "./stores/settings";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
+import TaskDrawer from "./components/TaskDrawer.vue";
+import { useTaskDrawerStore } from "./stores/taskDrawer";
+import { storeToRefs } from "pinia";
 
 const route = useRoute();
 const activeRoute = computed(() => route.path);
+
+// 任务抽屉 store
+const taskDrawerStore = useTaskDrawerStore();
+const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskDrawerStore);
 
 // 关键：同步判断当前窗口 label，确保壁纸窗口首次渲染就进入 WallpaperLayer
 const isWallpaperWindow = ref(false);
@@ -174,23 +180,6 @@ const toggleCollapse = () => {
       letter-spacing: 1px;
       transition: all 0.3s ease;
     }
-
-    .collapse-button {
-      position: absolute;
-      top: 12px;
-      right: 12px;
-      background: var(--anime-bg-card);
-      border: 1px solid var(--anime-border);
-      color: var(--anime-text-primary);
-      transition: all 0.3s ease;
-      z-index: 10;
-
-      &:hover {
-        background: var(--anime-primary-light);
-        border-color: var(--anime-primary);
-        color: var(--anime-primary);
-      }
-    }
   }
 
   &.sidebar-collapsed {
@@ -206,10 +195,6 @@ const toggleCollapse = () => {
       }
 
       h1 {
-        display: none;
-      }
-
-      .collapse-button {
         display: none;
       }
     }

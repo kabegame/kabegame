@@ -2,11 +2,10 @@
   <div class="gallery-page">
     <!-- 顶部工具栏 -->
     <GalleryToolbar :filter-plugin-id="filterPluginId" :plugins="plugins" :plugin-icons="pluginIcons"
-      :active-running-tasks-count="activeRunningTasksCount" :show-favorites-only="showFavoritesOnly"
-      :dedupe-loading="dedupeLoading" :has-more="crawlerStore.hasMore" :is-loading-all="isLoadingAll"
-      @update:filter-plugin-id="filterPluginId = $event" @toggle-favorites-only="showFavoritesOnly = !showFavoritesOnly"
-      @refresh="loadImages(true, { forceReload: true })" @dedupe-by-hash="handleDedupeByHash"
-      @show-quick-settings="openQuickSettingsDrawer" @show-tasks-drawer="showTasksDrawer = true"
+      :show-favorites-only="showFavoritesOnly" :dedupe-loading="dedupeLoading" :has-more="crawlerStore.hasMore"
+      :is-loading-all="isLoadingAll" :total-count="totalImagesCount" @update:filter-plugin-id="filterPluginId = $event"
+      @toggle-favorites-only="showFavoritesOnly = !showFavoritesOnly" @refresh="loadImages(true, { forceReload: true })"
+      @dedupe-by-hash="handleDedupeByHash" @show-quick-settings="openQuickSettingsDrawer"
       @show-crawler-dialog="showCrawlerDialog = true" @load-all="loadAllImages" />
 
     <GalleryView ref="galleryViewRef" class="gallery-container" mode="gallery" :images="displayedImages"
@@ -45,9 +44,6 @@
       </template>
 
       <template #overlays>
-        <!-- 任务列表抽屉 -->
-        <TaskDrawer v-model="showTasksDrawer" :tasks="runningTasks" />
-
         <!-- 图片详情对话框 -->
         <ImageDetailDialog v-model="showImageDetail" :image="selectedImage" />
 
@@ -82,14 +78,29 @@
         <el-dialog v-model="showDedupeDialog" title="确认去重" width="420px" destroy-on-close>
           <div style="margin-bottom: 16px;">
             <p style="margin-bottom: 8px;">去掉所有重复图片</p>
-            <el-checkbox v-model="dedupeDeleteFiles" label="同时从磁盘删除源文件（慎用）" />
+            <el-checkbox v-model="dedupeDeleteFiles" label="同时从电脑删除源文件（慎用）" />
             <p class="var-description" :style="{ color: dedupeDeleteFiles ? 'var(--el-color-danger)' : '' }">
-              {{ dedupeDeleteFiles ? '警告：该操作将永久删除重复的磁盘文件，不可恢复！' : '不勾选仅从画廊移除记录，保留磁盘文件。' }}
+              {{ dedupeDeleteFiles ? '警告：该操作将永久删除重复的电脑文件，不可恢复！' : '不勾选仅从画廊移除记录，保留电脑文件。' }}
             </p>
           </div>
           <template #footer>
             <el-button @click="showDedupeDialog = false">取消</el-button>
             <el-button type="primary" @click="confirmDedupeByHash" :loading="dedupeProcessing">确定</el-button>
+          </template>
+        </el-dialog>
+
+        <!-- 移除/删除确认对话框 -->
+        <el-dialog v-model="showRemoveDialog" title="确认删除" width="420px" destroy-on-close>
+          <div style="margin-bottom: 16px;">
+            <p style="margin-bottom: 8px;">{{ removeDialogMessage }}</p>
+            <el-checkbox v-model="removeDeleteFiles" label="同时从电脑删除源文件（慎用）" />
+            <p class="var-description" :style="{ color: removeDeleteFiles ? 'var(--el-color-danger)' : '' }">
+              {{ removeDeleteFiles ? '警告：该操作将永久删除电脑文件，不可恢复！' : '不勾选仅从画廊移除记录，保留电脑文件。' }}
+            </p>
+          </div>
+          <template #footer>
+            <el-button @click="showRemoveDialog = false">取消</el-button>
+            <el-button type="primary" @click="confirmRemoveImages">确定</el-button>
           </template>
         </el-dialog>
       </template>
@@ -106,7 +117,6 @@ import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useAlbumStore } from "@/stores/albums";
 import { usePluginStore } from "@/stores/plugins";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
-import TaskDrawer from "@/components/TaskDrawer.vue";
 import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
 import GalleryView from "@/components/GalleryView.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
@@ -117,6 +127,7 @@ import { useImageOperations, type FavoriteStatusChangedDetail } from "@/composab
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useSettingsStore } from "@/stores/settings";
 import { useLoadingDelay } from "@/utils/useLoadingDelay";
+import { useTaskDrawerStore } from "@/stores/taskDrawer";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -138,12 +149,18 @@ const showFavoritesOnly = ref(false);
 const showCrawlerDialog = ref(false);
 const showDedupeDialog = ref(false); // 去重确认对话框
 const dedupeDeleteFiles = ref(false); // 是否删除本地文件
-const showTasksDrawer = ref(false);
+// 移除/删除对话框相关
+const showRemoveDialog = ref(false);
+const removeDeleteFiles = ref(false);
+const removeDialogMessage = ref("");
+const pendingRemoveImages = ref<ImageInfo[]>([]);
+const taskDrawerStore = useTaskDrawerStore();
 const showImageDetail = ref(false);
 const galleryContainerRef = ref<HTMLElement | null>(null);
 const galleryViewRef = ref<any>(null);
 const showAlbumDialog = ref(false);
 const currentWallpaperImageId = ref<string | null>(null);
+const totalImagesCount = ref<number>(0); // 总图片数（不受过滤器影响）
 
 // 状态变量（用于 composables）
 const showSkeleton = ref(false);
@@ -183,8 +200,7 @@ watch(
   () => settingsStore.values.galleryImageAspectRatio,
   (newValue) => {
     galleryImageAspectRatio.value = (newValue as string | null) || null;
-  },
-  { immediate: true }
+  }
 );
 
 // 计算实际使用的宽高比
@@ -216,21 +232,6 @@ const effectiveAspectRatio = computed((): number => {
 });
 const plugins = computed(() => pluginStore.plugins);
 const tasks = computed(() => crawlerStore.tasks);
-
-// 正在运行的任务（包括 running 和 failed 状态，不包括 pending，因为 pending 任务都是无效的）
-const runningTasks = computed(() => {
-  // 显示所有任务（包括运行中、失败和已完成的任务）
-  return tasks.value.filter(task =>
-    task.status === 'running' ||
-    task.status === 'failed' ||
-    task.status === 'completed'
-  );
-});
-
-// 真正正在运行中的任务数量（仅用于右上角徽章显示）
-const activeRunningTasksCount = computed(() => {
-  return tasks.value.filter(task => task.status === 'running').length;
-});
 
 // 插件配置相关的变量和函数已移至 CrawlerDialog 组件
 const albums = computed(() => albumStore.albums);
@@ -273,8 +274,7 @@ const {
   handleOpenImagePath,
   handleCopyImage,
   applyFavoriteChangeToGalleryCache,
-  handleBatchRemove,
-  handleBatchDelete,
+  handleBatchDeleteImages,
   confirmDedupeByHash: confirmDedupeByHashFromComposable,
   toggleFavorite,
   setWallpaper,
@@ -298,7 +298,7 @@ const isBlockingOverlayOpen = () => {
   // 本页面自身的弹窗/抽屉
   if (
     showCrawlerDialog.value ||
-    showTasksDrawer.value ||
+    taskDrawerStore.visible ||
     showAlbumDialog.value ||
     showImageDetail.value
   ) {
@@ -320,6 +320,18 @@ const isBlockingOverlayOpen = () => {
 const getPluginName = (pluginId: string) => {
   const plugin = plugins.value.find((p) => p.id === pluginId);
   return plugin?.name || pluginId;
+};
+
+// 获取总图片数（不受过滤器影响）
+const loadTotalImagesCount = async () => {
+  try {
+    const count = await invoke<number>("get_images_count", {
+      pluginId: null, // 不传 pluginId 获取总数
+    });
+    totalImagesCount.value = count;
+  } catch (error) {
+    console.error("获取总图片数失败:", error);
+  }
 };
 
 const openAddToAlbumDialog = async (images: ImageInfo[]) => {
@@ -544,10 +556,12 @@ const handleGridContextCommand = async (payload: { command: string; image: Image
       openAddToAlbumDialog(imagesToProcess);
       break;
     case 'remove':
-      await handleBatchRemove(imagesToProcess);
-      break;
-    case 'delete':
-      await handleBatchDelete(imagesToProcess);
+      // 显示删除对话框，让用户选择是否删除文件
+      pendingRemoveImages.value = imagesToProcess;
+      const count = imagesToProcess.length;
+      removeDialogMessage.value = `将从画廊${count > 1 ? `移除这 ${count} 张图片` : "移除这张图片"}。`;
+      removeDeleteFiles.value = false; // 默认不删除文件
+      showRemoveDialog.value = true;
       break;
   }
 };
@@ -570,6 +584,25 @@ const confirmDedupeByHash = async () => {
     startDedupeDelay,
     finishDedupeDelay
   );
+  // 去重后更新总数
+  await loadTotalImagesCount();
+};
+
+// 确认移除图片（合并了原来的 remove 和 delete 逻辑）
+const confirmRemoveImages = async () => {
+  const imagesToRemove = pendingRemoveImages.value;
+  if (imagesToRemove.length === 0) {
+    showRemoveDialog.value = false;
+    return;
+  }
+
+  const count = imagesToRemove.length;
+  const shouldDeleteFiles = removeDeleteFiles.value;
+
+  showRemoveDialog.value = false;
+
+  // 使用统一的删除函数
+  await handleBatchDeleteImages(imagesToRemove, shouldDeleteFiles);
 };
 
 
@@ -715,17 +748,10 @@ watch(tasks, (newTasks, oldTasks) => {
 // 但需要扩展 loadSettings 以支持 galleryImageAspectRatio
 const loadSettingsExtended = async () => {
   await loadSettings();
-  try {
-    const settings = await invoke<{
-      galleryImageAspectRatio?: string | null;
-    }>("get_settings");
-    const aspectRatio = settings.galleryImageAspectRatio || null;
-    // 同时更新 store 和本地 ref（watch 会监听 store 的变化，但这里直接设置可以确保初始化时正确）
-    settingsStore.values.galleryImageAspectRatio = aspectRatio as any;
-    galleryImageAspectRatio.value = aspectRatio;
-  } catch (error) {
-    console.error("加载宽高比设置失败:", error);
-  }
+  // loadSettings 中已经调用了 settingsStore.loadAll()，所以 galleryImageAspectRatio 已经在 store 中
+  // watch 会监听 store 的变化并同步到本地 ref，这里只需要确保初始值被正确设置
+  const aspectRatio = settingsStore.values.galleryImageAspectRatio as string | null | undefined;
+  galleryImageAspectRatio.value = aspectRatio || null;
 };
 
 onMounted(async () => {
@@ -736,11 +762,11 @@ onMounted(async () => {
   } catch {
     currentWallpaperImageId.value = null;
   }
-  // 加载任务
-  await crawlerStore.loadTasks();
+  // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
   await pluginStore.loadPlugins();
   await crawlerStore.loadRunConfigs();
   await loadPluginIcons(); // 加载插件图标
+  await loadTotalImagesCount(); // 加载总图片数
   await loadImages(true);
 
   // 初始化窗口宽高比
@@ -787,19 +813,32 @@ onMounted(async () => {
   (window as any).__taskErrorDisplayHandler = errorDisplayHandler;
 
   // 监听图片添加事件，实时同步画廊（仅增量刷新，避免全量图片重新加载）
+  // 使用防抖机制，避免短时间内多次调用导致重复添加
+  const refreshDebounceTimerRef = ref<ReturnType<typeof setTimeout> | null>(null);
   const { listen } = await import("@tauri-apps/api/event");
   const unlistenImageAdded = await listen<{ taskId: string; imageId: string }>(
     "image-added",
     async () => {
-      await refreshLatestIncremental();
+      // 清除之前的定时器
+      if (refreshDebounceTimerRef.value) {
+        clearTimeout(refreshDebounceTimerRef.value);
+      }
+      // 设置新的防抖定时器（300ms 延迟，批量处理多个连续的 image-added 事件）
+      refreshDebounceTimerRef.value = setTimeout(async () => {
+        await refreshLatestIncremental();
+        // 图片添加后更新总数
+        await loadTotalImagesCount();
+        refreshDebounceTimerRef.value = null;
+      }, 300);
     }
   );
 
   // 保存监听器引用以便在卸载时移除
   (window as any).__imageAddedUnlisten = unlistenImageAdded;
+  (window as any).__refreshDebounceTimerRef = refreshDebounceTimerRef;
 
 
-  // 监听“收藏状态变化”（来自画册/其它页面对收藏画册的增删）
+  // 监听"收藏状态变化"（来自画册/其它页面对收藏画册的增删）
   const favoriteChangedHandler = ((event: Event) => {
     const ce = event as CustomEvent<FavoriteStatusChangedDetail>;
     const detail = ce.detail;
@@ -808,6 +847,23 @@ onMounted(async () => {
   }) as EventListener;
   window.addEventListener("favorite-status-changed", favoriteChangedHandler);
   (window as any).__favoriteStatusChangedHandler = favoriteChangedHandler;
+
+  // 监听图片移除/删除事件，更新总数并刷新显示列表
+  const imagesRemovedHandler = (() => {
+    loadTotalImagesCount();
+    // 刷新画廊显示的图片列表
+    refreshImagesPreserveCache();
+  }) as EventListener;
+  window.addEventListener("images-removed", imagesRemovedHandler);
+  (window as any).__imagesRemovedHandler = imagesRemovedHandler;
+
+  const imagesDeletedHandler = (() => {
+    loadTotalImagesCount();
+    // 刷新画廊显示的图片列表
+    refreshImagesPreserveCache();
+  }) as EventListener;
+  window.addEventListener("images-deleted", imagesDeletedHandler);
+  (window as any).__imagesDeletedHandler = imagesDeletedHandler;
 });
 
 // 在开发环境中监控组件更新，帮助调试重新渲染问题
@@ -908,12 +964,33 @@ onUnmounted(() => {
     delete (window as any).__imageAddedUnlisten;
   }
 
+  // 清理防抖定时器
+  const refreshDebounceTimerRef = (window as any).__refreshDebounceTimerRef;
+  if (refreshDebounceTimerRef?.value) {
+    clearTimeout(refreshDebounceTimerRef.value);
+    refreshDebounceTimerRef.value = null;
+    delete (window as any).__refreshDebounceTimerRef;
+  }
+
 
   // 移除收藏状态变化监听
   const favoriteChangedHandler = (window as any).__favoriteStatusChangedHandler;
   if (favoriteChangedHandler) {
     window.removeEventListener("favorite-status-changed", favoriteChangedHandler);
     delete (window as any).__favoriteStatusChangedHandler;
+  }
+
+  // 移除图片移除/删除事件监听
+  const imagesRemovedHandler = (window as any).__imagesRemovedHandler;
+  if (imagesRemovedHandler) {
+    window.removeEventListener("images-removed", imagesRemovedHandler);
+    delete (window as any).__imagesRemovedHandler;
+  }
+
+  const imagesDeletedHandler = (window as any).__imagesDeletedHandler;
+  if (imagesDeletedHandler) {
+    window.removeEventListener("images-deleted", imagesDeletedHandler);
+    delete (window as any).__imagesDeletedHandler;
   }
 });
 </script>

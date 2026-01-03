@@ -8,6 +8,7 @@
         刷新
       </el-button>
       <el-button type="primary" @click="showCreateDialog = true">新建画册</el-button>
+      <TaskDrawerButton />
       <el-button @click="openQuickSettings" circle>
         <el-icon>
           <Setting />
@@ -31,7 +32,6 @@
       :album-image-count="menuAlbum ? (albumCounts[menuAlbum.id] || 0) : 0" @close="closeAlbumContextMenu"
       @command="handleAlbumMenuCommand" />
 
-
     <el-dialog v-model="showCreateDialog" title="新建画册" width="360px">
       <el-input v-model="newAlbumName" placeholder="输入画册名称" />
       <template #footer>
@@ -54,6 +54,7 @@ import PageHeader from "@/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
+import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 
 const albumStore = useAlbumStore();
 const { albums, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
@@ -157,6 +158,7 @@ const handleFavoriteStatusChanged = () => {
 onMounted(async () => {
   await albumStore.loadAlbums();
   await loadRotationSettings();
+  // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
 
   // 初始化时加载前几个画册的预览图（前3张优先）
   const albumsToPreload = albums.value.slice(0, 3);
@@ -166,6 +168,40 @@ onMounted(async () => {
 
   // 监听收藏状态变化事件
   window.addEventListener("favorite-status-changed", handleFavoriteStatusChanged);
+
+  // 监听图片添加事件（来自爬虫下载完成）
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlistenImageAdded = await listen<{ taskId: string; imageId: string; albumId?: string }>(
+    "image-added",
+    async (event) => {
+      // 如果事件中包含 albumId，检查是否需要刷新该画册的预览图
+      if (event.payload.albumId) {
+        const targetAlbumId = event.payload.albumId;
+        const targetAlbum = albums.value.find(a => a.id === targetAlbumId);
+
+        if (!targetAlbum) {
+          return;
+        }
+
+        // 检查该画册的预览图列表是否已满
+        const currentUrls = albumPreviewUrls.value[targetAlbumId];
+        const isFull = currentUrls && currentUrls.length >= 6 && currentUrls.every(url => url && url !== "");
+
+        // 如果预览图列表未满，刷新该画册的预览图
+        if (!isFull) {
+          // 清除该画册的预览缓存
+          clearAlbumPreviewCache(targetAlbumId);
+          // 清除 store 中的预览缓存
+          delete albumStore.albumPreviews[targetAlbumId];
+          // 重新加载预览图
+          await prefetchPreview(targetAlbum);
+        }
+      }
+    }
+  );
+
+  // 保存监听器引用以便在卸载时移除
+  (window as any).__albumsImageAddedUnlisten = unlistenImageAdded;
 });
 
 // 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表和轮播设置
@@ -491,6 +527,13 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
 onBeforeUnmount(() => {
   // 移除收藏状态变化事件监听
   window.removeEventListener("favorite-status-changed", handleFavoriteStatusChanged);
+
+  // 移除图片添加事件监听
+  const imageAddedUnlisten = (window as any).__albumsImageAddedUnlisten;
+  if (imageAddedUnlisten) {
+    imageAddedUnlisten();
+    delete (window as any).__albumsImageAddedUnlisten;
+  }
 
   Object.values(albumPreviewUrls.value).forEach((urls) => {
     urls.forEach((u) => URL.revokeObjectURL(u));

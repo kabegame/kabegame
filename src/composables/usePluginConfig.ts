@@ -163,20 +163,8 @@ export function usePluginConfig() {
         });
       }
 
-      // 加载已保存的用户配置
-      const savedConfig = await invoke<Record<string, any>>("load_plugin_config", {
-        pluginId,
-      });
-
-      if (import.meta.env.DEV) {
-        console.info("[loadPluginVars] load_plugin_config result:", {
-          pluginId,
-          savedConfig,
-        });
-      }
-
-      // 将保存的配置聚合为 UI 表单模型（checkbox: foo -> ["a","b"]），并补默认值
-      form.value.vars = normalizeVarsForUI(savedConfig || {}, pluginVars.value as PluginVarDef[]);
+      // 使用默认值初始化表单
+      form.value.vars = normalizeVarsForUI({}, pluginVars.value as PluginVarDef[]);
     } catch (error) {
       console.error("加载插件变量失败:", error);
       pluginVars.value = [];

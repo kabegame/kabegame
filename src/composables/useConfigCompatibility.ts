@@ -222,9 +222,6 @@ export function useConfigCompatibility(
     form.value.outputDir = config.outputDir || "";
     form.value.vars = cfgUiVars;
 
-    // 取消选择配置，允许用户编辑
-    selectedRunConfigId.value = null;
-
     return { success: true };
   };
 

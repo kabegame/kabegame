@@ -1,3 +1,4 @@
+use reqwest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -6,7 +7,6 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use reqwest;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -269,7 +269,7 @@ impl PluginManager {
                         version: manifest.version,
                         base_url: config
                             .as_ref()
-                            .map(|c| c.base_url.clone())
+                            .and_then(|c| c.base_url.clone())
                             .unwrap_or_default(),
                         enabled: enabled_map.get(&plugin_id).copied().unwrap_or(true),
                         size_bytes,
@@ -282,9 +282,9 @@ impl PluginManager {
             }
         }
 
-        // 按文件创建时间排序（越早安装的越靠前）
-        plugins.sort_by_key(|(_, time)| *time);
-        let plugins: Vec<Plugin> = plugins.into_iter().map(|(p, _)| p).collect();
+        // 按插件 ID 字典序排序
+        let mut plugins: Vec<Plugin> = plugins.into_iter().map(|(p, _)| p).collect();
+        plugins.sort_by(|a, b| a.id.cmp(&b.id));
 
         Ok(plugins)
     }
@@ -751,7 +751,7 @@ impl PluginManager {
             version: manifest.version,
             base_url: config
                 .as_ref()
-                .map(|c| c.base_url.clone())
+                .and_then(|c| c.base_url.clone())
                 .unwrap_or_default(),
             enabled: true,
             size_bytes,
@@ -796,7 +796,7 @@ impl PluginManager {
                             version: manifest.version,
                             base_url: config
                                 .as_ref()
-                                .map(|c| c.base_url.clone())
+                                .and_then(|c| c.base_url.clone())
                                 .unwrap_or_default(),
                             enabled: true,
                             size_bytes,
@@ -832,48 +832,6 @@ impl PluginManager {
         let plugin_file = self.find_plugin_file(&plugins_dir, plugin_id)?;
         let config = self.read_plugin_config(&plugin_file)?;
         Ok(config.and_then(|c| c.var))
-    }
-
-    /// 加载用户对插件的配置
-    pub fn load_plugin_config(
-        &self,
-        plugin_id: &str,
-    ) -> Result<HashMap<String, serde_json::Value>, String> {
-        let file = self.get_plugin_config_file(plugin_id);
-        if !file.exists() {
-            return Ok(HashMap::new());
-        }
-
-        let content = fs::read_to_string(&file)
-            .map_err(|e| format!("Failed to read plugin config: {}", e))?;
-        let config: HashMap<String, serde_json::Value> = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse plugin config: {}", e))?;
-        Ok(config)
-    }
-
-    /// 保存用户对插件的配置
-    pub fn save_plugin_config(
-        &self,
-        plugin_id: &str,
-        config: &HashMap<String, serde_json::Value>,
-    ) -> Result<(), String> {
-        let file = self.get_plugin_config_file(plugin_id);
-        if let Some(parent) = file.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create config directory: {}", e))?;
-        }
-
-        let content = serde_json::to_string_pretty(config)
-            .map_err(|e| format!("Failed to serialize plugin config: {}", e))?;
-        fs::write(&file, content).map_err(|e| format!("Failed to write plugin config: {}", e))?;
-        Ok(())
-    }
-
-    /// 获取插件配置文件的路径
-    fn get_plugin_config_file(&self, plugin_id: &str) -> PathBuf {
-        let data_dir = crate::app_paths::user_data_dir("Kabegame");
-        let config_dir = data_dir.join("plugin_configs");
-        config_dir.join(format!("{}.json", plugin_id))
     }
 
     /// 查找插件文件
@@ -1377,7 +1335,10 @@ impl PluginManager {
                         println!("插件字节下载网络代理已配置: {}", proxy_url);
                     }
                     Err(e) => {
-                        println!("插件字节下载代理配置无效 ({}), 将使用直连: {}", proxy_url, e);
+                        println!(
+                            "插件字节下载代理配置无效 ({}), 将使用直连: {}",
+                            proxy_url, e
+                        );
                     }
                 }
             }
@@ -1520,6 +1481,8 @@ impl PluginManager {
         let manifest = self.read_plugin_manifest(&path)?;
         let doc = self.read_plugin_doc(&path).ok().flatten();
         let icon_data = self.read_plugin_icon(&path).ok().flatten();
+        let config = self.read_plugin_config(&path).ok().flatten();
+        let base_url = config.and_then(|c| c.base_url);
 
         Ok(PluginDetail {
             id: plugin_id.to_string(),
@@ -1528,6 +1491,7 @@ impl PluginManager {
             doc,
             icon_data,
             origin: "installed".to_string(),
+            base_url,
         })
     }
 
@@ -1593,6 +1557,23 @@ impl PluginManager {
             Err(_) => None,
         };
 
+        // 读取 config.json（可选）以获取 baseUrl
+        let base_url = match archive.by_name("config.json") {
+            Ok(mut f) => {
+                let mut content = String::new();
+                if f.read_to_string(&mut content).is_ok() {
+                    if let Ok(config) = serde_json::from_str::<PluginConfig>(&content) {
+                        config.base_url
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        };
+
         Ok(PluginDetail {
             id: plugin_id.to_string(),
             name: manifest.name,
@@ -1600,6 +1581,7 @@ impl PluginManager {
             doc,
             icon_data,
             origin: "remote".to_string(),
+            base_url,
         })
     }
 
@@ -1792,8 +1774,8 @@ pub struct VarDefinition {
 // 插件配置（config.json）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginConfig {
-    #[serde(rename = "baseUrl")]
-    pub base_url: String,
+    #[serde(rename = "baseUrl", default)]
+    pub base_url: Option<String>,
     // 注意：selector 字段已废弃，选择器现在在 crawl.rhai 脚本中定义
     // 保留此字段仅用于向后兼容，新插件不应使用
     #[serde(default)]
@@ -1876,6 +1858,9 @@ pub struct PluginDetail {
     pub icon_data: Option<Vec<u8>>,
     /// installed | remote
     pub origin: String,
+    /// 插件的基础URL（从 config.json 中读取）
+    #[serde(rename = "baseUrl", skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]

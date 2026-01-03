@@ -1,10 +1,6 @@
 <template>
   <div v-if="visible" class="context-menu-overlay" @click="$emit('close')" @contextmenu.prevent="$emit('close')">
-    <div 
-      ref="menuRef"
-      class="context-menu" 
-      :style="menuStyle"
-    >
+    <div ref="menuRef" class="context-menu" :style="menuStyle">
       <slot />
     </div>
   </div>
@@ -35,50 +31,58 @@ const menuStyle = computed<CSSProperties>(() => ({
 }));
 
 const adjustPosition = () => {
-  // 使用双重 nextTick 确保 DOM 完全渲染
+  // 使用多重 nextTick 确保 DOM 完全渲染，特别是针对 teleport 的情况
   nextTick(() => {
     nextTick(() => {
-      if (!menuRef.value) return;
+      nextTick(() => {
+        if (!menuRef.value) return;
 
-      const menuRect = menuRef.value.getBoundingClientRect();
-      const windowWidth = window.innerWidth;
-      const windowHeight = window.innerHeight;
-      
-      let x = props.position.x;
-      let y = props.position.y;
+        const menuRect = menuRef.value.getBoundingClientRect();
+        const windowWidth = window.innerWidth;
+        const windowHeight = window.innerHeight;
 
-      // 检查右边界
-      if (x + menuRect.width > windowWidth) {
-        x = windowWidth - menuRect.width - 10; // 留10px边距
-        if (x < 10) x = 10; // 确保不会超出左边界
-      }
-
-      // 检查下边界 - 如果菜单会超出底部，则向上调整
-      const spaceBelow = windowHeight - y;
-      const spaceAbove = y;
-      
-      if (menuRect.height > spaceBelow) {
-        // 如果下方空间不足，尝试向上显示
-        if (spaceAbove >= menuRect.height) {
-          // 如果上方空间足够，以鼠标位置为菜单底部
-          y = props.position.y - menuRect.height;
-        } else {
-          // 如果上方空间也不够，则贴底显示，但确保能看到
-          y = Math.max(10, windowHeight - menuRect.height - 10);
+        // 如果菜单尺寸为0，说明还未完全渲染，延迟执行
+        if (menuRect.width === 0 || menuRect.height === 0) {
+          setTimeout(adjustPosition, 10);
+          return;
         }
-      }
 
-      // 检查左边界
-      if (x < 10) {
-        x = 10;
-      }
+        let x = props.position.x;
+        let y = props.position.y;
 
-      // 检查上边界
-      if (y < 10) {
-        y = 10;
-      }
+        // 检查右边界
+        if (x + menuRect.width > windowWidth) {
+          x = windowWidth - menuRect.width - 10; // 留10px边距
+          if (x < 10) x = 10; // 确保不会超出左边界
+        }
 
-      adjustedPosition.value = { x, y };
+        // 检查下边界 - 如果菜单会超出底部，则向上调整
+        const spaceBelow = windowHeight - y;
+        const spaceAbove = y;
+
+        if (menuRect.height > spaceBelow) {
+          // 如果下方空间不足，尝试向上显示
+          if (spaceAbove >= menuRect.height) {
+            // 如果上方空间足够，以鼠标位置为菜单底部
+            y = props.position.y - menuRect.height;
+          } else {
+            // 如果上方空间也不够，则贴底显示，但确保能看到
+            y = Math.max(10, windowHeight - menuRect.height - 10);
+          }
+        }
+
+        // 检查左边界
+        if (x < 10) {
+          x = 10;
+        }
+
+        // 检查上边界
+        if (y < 10) {
+          y = 10;
+        }
+
+        adjustedPosition.value = { x, y };
+      });
     });
   });
 };
@@ -142,5 +146,3 @@ watch(() => props.position, () => {
   }
 }
 </style>
-
-

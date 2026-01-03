@@ -1,5 +1,3 @@
-#[cfg(target_os = "windows")]
-pub mod gdi_renderer;
 pub mod manager;
 pub mod rotator;
 #[cfg(target_os = "windows")]

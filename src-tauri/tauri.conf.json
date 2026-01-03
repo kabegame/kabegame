@@ -29,7 +29,7 @@
     "active": true,
     "targets": "all",
     "icon": ["icons/icon.icns", "icons/icon.ico"],
-    "resources": ["resources/plugins/*.kgpg"],
+    "resources": ["resources/plugins"],
     "windows": {
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh",

@@ -27,7 +27,8 @@ src-tauri/icons/*
 !src-tauri/icons/README.md
 
 # development data
-data
+/data
+/src-tauri/sources/plugins/*.kgpg
 
 # Nx
 .nx/cache

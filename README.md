@@ -144,17 +144,16 @@ pnpm install
 # 开发
 pnpm dev                  # 默认使用远程插件打包依赖，运行 tauri:dev
 pnpm dev --watch          # 启用 Nx 依赖图 watch，变更自动重构依赖并触发 Tauri 重启
-pnpm dev --local-plugins  # 使用本地插件打包依赖，运行 tauri:dev-local-plugins
-pnpm dev --local-plugins --watch
+pnpm dev --mode local     # 使用 local 模式（无商店版本，预打包全部插件）
 
 # 构建
 pnpm build                # 打包远程插件后 tauri build
-pnpm build --local-plugins# 打包本地插件后 tauri build
+pnpm build --mode local   # 打包 local 模式（无商店版本，预打包全部插件）
 ```
 
 说明：
 - `--watch` 直接使用 **Tauri CLI 自带的 dev watcher**（`tauri dev --additional-watch-folders ..\\crawler-plugins`）监听插件源码变更并触发重启。
-- `--local-plugins` 会优先执行 `crawler-plugins:package-local`；未加时执行 `crawler-plugins:package`。
+- `--mode local` 会执行 `crawler-plugins:package-to-resources` 打包所有插件到 resources 目录；默认 `normal` 模式执行 `crawler-plugins:package-local-to-resources` 只打包本地插件。
 
 ## 项目结构
 

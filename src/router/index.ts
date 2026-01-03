@@ -32,6 +32,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "画册" },
   },
   {
+    path: "/tasks/:id",
+    name: "TaskDetail",
+    component: () => import("@/views/TaskDetail.vue"),
+    meta: { title: "任务详情" },
+  },
+  {
     path: "/plugin-detail/:id",
     name: "PluginDetail",
     component: () => import("@/views/PluginDetail.vue"),
@@ -69,19 +75,22 @@ const saveCurrentPath = async (path: string) => {
 
 router.beforeEach(async (to, from, next) => {
   document.title = `${to.meta.title || "Kabegame"} - 老婆收集器`;
-  
+
   // 保存当前路径（如果启用了恢复功能）
   if (from.path !== to.path) {
     await saveCurrentPath(to.path);
   }
-  
+
   next();
 });
 
 // 应用启动时恢复上次的路径
 router.isReady().then(async () => {
   try {
-    const settings = await invoke<{ restoreLastTab: boolean; lastTabPath: string | null }>("get_settings");
+    const settings = await invoke<{
+      restoreLastTab: boolean;
+      lastTabPath: string | null;
+    }>("get_settings");
     if (settings.restoreLastTab && settings.lastTabPath) {
       // 尝试导航到保存的路径
       await router.push(settings.lastTabPath).catch(() => {

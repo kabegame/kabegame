@@ -7,14 +7,10 @@
         <div class="downloads-header">
           <span class="downloads-title">正在下载</span>
           <div class="downloads-stats">
-            <el-tag type="info" size="small">队列: {{ queueSize }}</el-tag>
             <el-tag type="warning" size="small">进行中: {{ activeDownloads.length }}</el-tag>
-            <el-button text size="small" type="danger" :disabled="queueSize === 0" @click="handleClearDownloadQueue">
-              终止队列
-            </el-button>
           </div>
         </div>
-        <div v-if="activeDownloads.length === 0 && queueSize === 0" class="downloads-empty">
+        <div v-if="activeDownloads.length === 0" class="downloads-empty">
           <el-empty description="暂无下载任务" :image-size="60" />
         </div>
         <div v-else class="downloads-content">
@@ -41,18 +37,14 @@
               </div>
             </div>
           </div>
-          <!-- 队列信息 -->
-          <div v-if="queueSize > 0" class="queue-info">
-            <el-alert :title="`还有 ${queueSize} 个任务在队列中等待下载`" type="info" :closable="false" show-icon />
-          </div>
         </div>
       </div>
 
       <div class="tasks-summary">
         <span>共 {{ tasks.length }} 个任务</span>
-        <el-button text size="small" class="clear-completed-btn" @click="handleDeleteCompletedTasks"
-          :disabled="completedTaskCount === 0">
-          清理已完成 ({{ completedTaskCount }})
+        <el-button text size="small" class="clear-completed-btn" @click="handleDeleteAllTasks"
+          :disabled="nonRunningTasksCount === 0">
+          清除所有任务 ({{ nonRunningTasksCount }})
         </el-button>
       </div>
       <transition-group name="task-move" tag="div" class="tasks-list">
@@ -70,6 +62,12 @@
               <div class="task-name">{{ getPluginName(task.pluginId) }}</div>
             </div>
             <div class="task-header-right">
+              <el-button text circle size="small" @click.stop="handleOpenTaskDetail(task)" class="task-detail-btn"
+                title="查看任务图片">
+                <el-icon>
+                  <Picture />
+                </el-icon>
+              </el-button>
               <div class="task-status">
                 <el-tag :type="getStatusType(task.status)" size="small">
                   {{ getStatusText(task.status) }}
@@ -111,6 +109,10 @@
                 <span class="param-label">耗时：</span>
                 <span class="param-value">{{ formatDuration(task.startTime, task.endTime) }}</span>
               </div>
+              <div class="param-item" v-if="task.deletedCount > 0">
+                <span class="param-label">已删除：</span>
+                <span class="param-value">{{ task.deletedCount }} 张</span>
+              </div>
               <div class="param-item" v-if="task.url">
                 <span class="param-label">URL：</span>
                 <span class="param-value">{{ task.url }}</span>
@@ -133,7 +135,6 @@
               <div v-if="task.status === 'failed'" class="task-error">
                 <div v-if="task.progress > 0" class="task-progress">
                   <el-progress :percentage="Math.round(task.progress)" status="exception" />
-                  <span class="progress-text">{{ task.downloadedImages }} / {{ task.totalImages }}</span>
                 </div>
                 <div class="error-message">
                   <el-icon class="error-icon">
@@ -233,8 +234,10 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { Clock, ArrowDown, Loading, WarningFilled, CopyDocument, Picture, Close } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { readFile } from "@tauri-apps/plugin-fs";
+import { useRouter } from "vue-router";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
+import { useSettingsStore } from "@/stores/settings";
 import ImageGrid from "./ImageGrid.vue";
 import TaskContextMenu from "./TaskContextMenu.vue";
 import type { ImageInfo } from "@/stores/crawler";
@@ -260,8 +263,10 @@ interface Emits {
 const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 
+const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const pluginStore = usePluginStore();
+const settingsStore = useSettingsStore();
 
 const visible = computed({
   get: () => props.modelValue,
@@ -284,8 +289,41 @@ const viewerLoadingMore = ref(false);
 const viewerBlobUrls = new Set<string>();
 const viewerSelected = ref<Set<string>>(new Set());
 const viewerColumns = ref(0);
-const viewerAspectRatioMatchWindow = ref(false);
-const viewerWindowAspect = ref(16 / 9);
+const viewerAspectRatio = ref<number | null>(null);
+
+// 计算属性：是否有设置宽高比
+const viewerAspectRatioMatchWindow = computed(() => !!viewerAspectRatio.value);
+// 计算属性：实际使用的宽高比
+const viewerWindowAspect = computed(() => viewerAspectRatio.value || 16 / 9);
+
+// 监听设置 store 中的宽高比变化，实时同步
+watch(
+  () => settingsStore.values.galleryImageAspectRatio,
+  (newValue) => {
+    if (!newValue) {
+      viewerAspectRatio.value = null;
+      return;
+    }
+    const value = newValue as string;
+    // 解析 "16:9" 格式
+    if (value.includes(":") && !value.startsWith("custom:")) {
+      const [w, h] = value.split(":").map(Number);
+      if (w && h) {
+        viewerAspectRatio.value = w / h;
+      }
+    }
+    // 解析 "custom:1920:1080" 格式
+    if (value.startsWith("custom:")) {
+      const parts = value.replace("custom:", "").split(":");
+      const [w, h] = parts.map(Number);
+      if (w && h) {
+        viewerAspectRatio.value = w / h;
+      }
+    }
+  },
+  { immediate: true }
+);
+
 type VarOption = string | { name: string; variable: string };
 type PluginVarMeta = {
   name: string;
@@ -311,11 +349,10 @@ const saveConfigName = ref("");
 const saveConfigDescription = ref("");
 
 const plugins = computed(() => pluginStore.plugins);
-const completedTaskCount = computed(() => props.tasks.filter((t) => t.status === "completed").length);
+const nonRunningTasksCount = computed(() => props.tasks.filter((t) => t.status !== "running").length);
 
 // 下载信息
 const activeDownloads = ref<ActiveDownloadInfo[]>([]);
-const queueSize = ref(0);
 let downloadRefreshInterval: number | null = null;
 
 type DownloadProgressPayload = {
@@ -370,27 +407,15 @@ const shouldShowDownloadProgress = (d: ActiveDownloadInfo) => {
 const isShimmerState = (d: ActiveDownloadInfo) => {
   // “正在进行的操作”用反光文字表示
   const st = getEffectiveDownloadState(d);
-  return (
-    st === "downloaded" ||
-    st === "processing" ||
-    st === "dedupe_check" ||
-    st === "db_inserting"
-  );
+  return st === "processing";
 };
 
 const downloadStateText = (d: ActiveDownloadInfo) => {
   const st = getEffectiveDownloadState(d);
   const map: Record<string, string> = {
-    queued: "队列等待",
+    preparing: "准备中",
     downloading: "下载中",
-    downloaded: "下载完成",
-    reused: "已复用",
     processing: "处理中",
-    dedupe_check: "去重检查",
-    db_inserting: "写入数据库",
-    db_added: "已入库",
-    dedupe_skipped: "去重跳过",
-    notified: "已通知画廊",
     failed: "失败",
     canceled: "已取消",
   };
@@ -401,11 +426,8 @@ const downloadStateTagType = (d: ActiveDownloadInfo) => {
   const st = getEffectiveDownloadState(d);
   if (st === "failed") return "danger";
   if (st === "canceled") return "info";
-  if (st === "dedupe_skipped") return "warning";
-  if (st === "db_added" || st === "notified") return "success";
-  if (st === "processing" || st === "dedupe_check" || st === "db_inserting" || st === "downloaded")
-    return "warning";
-  if (st === "reused") return "success";
+  if (st === "processing") return "success";
+  if (st === "downloading") return "warning";
   return "info";
 };
 
@@ -443,12 +465,8 @@ const downloadProgressText = (d: ActiveDownloadInfo) => {
 
 const loadDownloads = async () => {
   try {
-    const [downloads, size] = await Promise.all([
-      invoke<ActiveDownloadInfo[]>("get_active_downloads"),
-      invoke<number>("get_download_queue_size"),
-    ]);
+    const downloads = await invoke<ActiveDownloadInfo[]>("get_active_downloads");
     activeDownloads.value = downloads;
-    queueSize.value = size;
 
     // 清理已不在 active 列表里的进度，避免内存增长
     const aliveKeys = new Set(downloads.map(downloadKey));
@@ -468,24 +486,6 @@ const loadDownloads = async () => {
   }
 };
 
-const handleClearDownloadQueue = async () => {
-  if (queueSize.value === 0) return;
-  try {
-    await ElMessageBox.confirm(
-      `确定要清空等待队列吗？将移除队列中 ${queueSize.value} 个待下载任务（不影响正在下载）。`,
-      "终止队列",
-      { type: "warning" }
-    );
-    const removed = await invoke<number>("clear_download_queue");
-    ElMessage.success(`已清空队列（移除 ${removed} 个任务）`);
-    await loadDownloads();
-  } catch (error) {
-    if (error !== "cancel") {
-      console.error("清空队列失败:", error);
-      ElMessage.error("清空队列失败");
-    }
-  }
-};
 
 const getPluginName = (pluginId: string) => {
   const plugin = plugins.value.find((p) => p.id === pluginId);
@@ -516,6 +516,7 @@ const getStatusType = (status: string) => {
     running: "warning",
     completed: "success",
     failed: "danger",
+    canceled: "info",
   };
   return map[status] || "info";
 };
@@ -526,6 +527,7 @@ const getStatusText = (status: string) => {
     running: "运行中",
     completed: "完成",
     failed: "失败",
+    canceled: "已取消",
   };
   return map[status] || status;
 };
@@ -853,8 +855,11 @@ const handleDrawerOpen = async () => {
   }
 };
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener("click", handleGlobalClick);
+
+  // 仅在应用启动时加载任务列表（TaskDrawer 是单例，onMounted 只会执行一次）
+  await crawlerStore.loadTasks();
 });
 
 // 当 drawer 关闭时，停止定时刷新（节省资源）
@@ -909,8 +914,8 @@ const handleStopTask = async (task: any) => {
     ElMessage.success("任务已请求停止");
   } catch (error) {
     if (error !== "cancel") {
+      // 静默处理错误，不显示弹窗，任务状态会通过后端事件自动更新
       console.error("停止任务失败:", error);
-      ElMessage.error("停止任务失败");
     }
   }
 };
@@ -943,24 +948,35 @@ const handleDeleteTask = async (task: any) => {
   }
 };
 
-const handleDeleteCompletedTasks = async () => {
-  const completed = props.tasks.filter((t) => t.status === "completed");
-  if (completed.length === 0) return;
+const handleOpenTaskDetail = (task: any) => {
+  // 关闭 drawer
+  visible.value = false;
+  router.push(`/tasks/${task.id}`);
+};
+
+const handleDeleteAllTasks = async () => {
+  if (props.tasks.length === 0) return;
+  const nonRunningTasks = props.tasks.filter((t) => t.status !== "running");
+  const runningCount = props.tasks.length - nonRunningTasks.length;
+  if (nonRunningTasks.length === 0) {
+    ElMessage.warning("所有任务都在运行中，无法清除");
+    return;
+  }
   try {
-    await ElMessageBox.confirm(
-      `确定要删除所有已完成任务吗？共 ${completed.length} 个。`,
-      "清理已完成任务",
-      { type: "warning" }
-    );
-    for (const t of completed) {
-      // 只删除完成任务，不触碰 running/failed
+    const msg = runningCount > 0
+      ? `确定要删除所有非运行中的任务吗？共 ${nonRunningTasks.length} 个（${runningCount} 个运行中的任务将被保留）。`
+      : `确定要删除所有任务吗？共 ${nonRunningTasks.length} 个。`;
+    await ElMessageBox.confirm(msg, "清除所有任务", { type: "warning" });
+
+    // 只删除非运行中的任务
+    for (const t of nonRunningTasks) {
       await crawlerStore.deleteTask(t.id);
       expandedTasks.value.delete(t.id);
     }
-    ElMessage.success("已清理完成任务");
+    ElMessage.success(`已清除 ${nonRunningTasks.length} 个任务`);
   } catch (error) {
     if (error !== "cancel") {
-      ElMessage.error("清理失败");
+      ElMessage.error("清除失败");
     }
   }
 };
@@ -990,7 +1006,6 @@ const handleCopyError = async (task: any) => {
     text += `结束时间：${formatDate(task.endTime)}\n`;
   }
   text += `进度：${Math.round(task.progress)}%\n`;
-  text += `已下载：${task.downloadedImages} / ${task.totalImages}`;
 
   try {
     await navigator.clipboard.writeText(text);

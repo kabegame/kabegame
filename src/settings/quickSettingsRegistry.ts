@@ -209,7 +209,7 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup[] = [
         label: "Wallpaper Engine 目录",
         description: "用于“导出并自动导入到 WE”",
         comp: WallpaperEngineDirSetting,
-        pages: ["albums", "albumdetail"],
+        pages: [],
       },
     ],
   },

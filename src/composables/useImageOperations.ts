@@ -147,7 +147,7 @@ export function useImageOperations(
         `将从画廊移除，但保留原图文件。是否继续移除${
           count > 1 ? `这 ${count} 张图片` : "这张图片"
         }？${currentHint}`,
-        "确认移除",
+        "确认删除",
         { type: "warning" }
       );
 
@@ -262,6 +262,87 @@ export function useImageOperations(
     }
   };
 
+  // 统一的删除操作：根据是否删除文件决定调用 removeImage 还是 deleteImage
+  const handleBatchDeleteImages = async (
+    imagesToProcess: ImageInfo[],
+    deleteFiles: boolean
+  ) => {
+    if (imagesToProcess.length === 0) return;
+
+    try {
+      const count = imagesToProcess.length;
+      const includesCurrent =
+        !!currentWallpaperImageId.value &&
+        imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
+      const currentHint = includesCurrent
+        ? `\n\n注意：其中包含当前壁纸。删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。`
+        : "";
+
+      // 显示确认对话框
+      await ElMessageBox.confirm(
+        deleteFiles
+          ? `删除后将同时移除原图、缩略图及数据库记录，且无法恢复。是否继续删除${
+              count > 1 ? `这 ${count} 张图片` : "这张图片"
+            }？${currentHint}`
+          : `将从画廊移除${
+              count > 1 ? `这 ${count} 张图片` : "这张图片"
+            }，保留原图文件。${currentHint}`,
+        "确认删除",
+        { type: "warning" }
+      );
+
+      // 使用批量 API 一次性处理所有图片
+      const imageIds = imagesToProcess.map((img) => img.id);
+      if (deleteFiles) {
+        await crawlerStore.batchDeleteImages(imageIds);
+      } else {
+        await crawlerStore.batchRemoveImages(imageIds);
+      }
+
+      if (includesCurrent) {
+        currentWallpaperImageId.value = null;
+      }
+
+      // 从 displayedImages 中移除已处理的图片
+      displayedImages.value = displayedImages.value.filter(
+        (img) => !imagesToProcess.some((procImg) => procImg.id === img.id)
+      );
+
+      // 清理 imageSrcMap 和 Blob URL
+      for (const img of imagesToProcess) {
+        const imageData = imageSrcMap.value[img.id];
+        if (imageData) {
+          if (imageData.thumbnail) {
+            URL.revokeObjectURL(imageData.thumbnail);
+          }
+          if (imageData.original) {
+            URL.revokeObjectURL(imageData.original);
+          }
+        }
+        const { [img.id]: _, ...rest } = imageSrcMap.value;
+        imageSrcMap.value = rest;
+      }
+
+      const action = deleteFiles ? "删除" : "移除";
+      ElMessage.success(`已${action} ${count} 张图片`);
+      galleryViewRef.value?.clearSelection?.();
+
+      // 发出图片删除/移除事件，通知其他视图更新
+      const eventType = deleteFiles ? "images-deleted" : "images-removed";
+      const processedIds = imagesToProcess.map((img) => img.id);
+      window.dispatchEvent(
+        new CustomEvent(eventType, {
+          detail: { imageIds: processedIds },
+        })
+      );
+    } catch (error) {
+      if (error !== "cancel") {
+        const action = deleteFiles ? "删除" : "移除";
+        ElMessage.error(`${action}失败`);
+      }
+    }
+  };
+
   // 画廊按 hash 去重确认（实际执行去重逻辑）
   const confirmDedupeByHash = async (
     dedupeProcessing: Ref<boolean>,
@@ -281,13 +362,13 @@ export function useImageOperations(
 
       if (removedIds.length > 0) {
         removeFromUiCacheByIds(removedIds);
-        crawlerStore.applyRemovedImageIds(removedIds);
+        await crawlerStore.applyRemovedImageIds(removedIds);
       }
 
       ElMessage.success(
         `已清理 ${res?.removed ?? removedIds.length} 个重复项${
           dedupeDeleteFiles
-            ? "（已从磁盘彻底删除）"
+            ? "（已从电脑彻底删除）"
             : "（仅从画廊移除，源文件已保留）"
         }`
       );
@@ -465,8 +546,7 @@ export function useImageOperations(
     handleOpenImagePath,
     handleCopyImage,
     applyFavoriteChangeToGalleryCache,
-    handleBatchRemove,
-    handleBatchDelete,
+    handleBatchDeleteImages,
     confirmDedupeByHash,
     toggleFavorite,
     setWallpaper,

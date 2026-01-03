@@ -30,9 +30,13 @@ model Task {
     progress         Float   @default(0)
     totalImages      Int     @default(0) @map("total_images")
     downloadedImages Int     @default(0) @map("downloaded_images")
+    deletedCount     Int     @default(0) @map("deleted_count")
     startTime        Int?    @map("start_time")
     endTime          Int?    @map("end_time")
     error            String?
+
+    images           Image[]        @relation("TaskToImage")
+    taskImages       TaskImage[]
 
     @@index([startTime(sort: Desc)], name: "idx_tasks_start_time")
     @@map("tasks")
@@ -62,9 +66,12 @@ model Image {
     crawledAt     Int     @map("crawled_at")
     metadata      String? // JSON string
     thumbnailPath String  @default("") @map("thumbnail_path")
-    favorite      Int     @default(0) // 0 or 1, represents boolean
     hash          String  @default("")
     order         Int?    @map("order")
+
+    task          Task?        @relation("TaskToImage", fields: [taskId], references: [id], onDelete: SetNull)
+    albumImages   AlbumImage[]
+    taskImages    TaskImage[]
 
     @@index([crawledAt(sort: Desc)], name: "idx_crawled_at")
     @@index([pluginId], name: "idx_plugin_id")
@@ -80,6 +87,8 @@ model Album {
     createdAt Int    @map("created_at")
     order     Int?   @map("order")
 
+    albumImages AlbumImage[]
+
     @@map("albums")
 }
 
@@ -89,7 +98,26 @@ model AlbumImage {
     imageId String @map("image_id")
     order   Int?   @map("order")
 
+    album Album @relation(fields: [albumId], references: [id], onDelete: Cascade)
+    image Image @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
     @@id([albumId, imageId])
     @@index([albumId], name: "idx_album_images_album")
     @@map("album_images")
+}
+
+// 任务-图片关联表
+model TaskImage {
+    taskId  String @map("task_id")
+    imageId String @map("image_id")
+    addedAt Int    @map("added_at")
+    order   Int?   @map("order")
+
+    task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+    image Image @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+    @@id([taskId, imageId])
+    @@index([taskId], name: "idx_task_images_task")
+    @@index([imageId], name: "idx_task_images_image")
+    @@map("task_images")
 }

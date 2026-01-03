@@ -22,9 +22,6 @@
                                 </div>
                             </div>
                             <div class="run-config-actions">
-                                <el-button type="primary" link size="small" @click.stop="handleLoadConfig(cfg.id)">
-                                    载入
-                                </el-button>
                                 <el-button type="danger" link size="small" @click.stop="handleDeleteConfig(cfg.id)">
                                     删除
                                 </el-button>
@@ -34,8 +31,8 @@
                 </el-select>
             </el-form-item>
             <el-form-item label="选择源">
-                <el-select v-model="form.pluginId" :disabled="!!selectedRunConfigId" placeholder="请选择源"
-                    style="width: 100%" popper-class="crawl-plugin-select-dropdown">
+                <el-select v-model="form.pluginId" placeholder="请选择源" style="width: 100%"
+                    popper-class="crawl-plugin-select-dropdown">
                     <el-option v-for="plugin in enabledPlugins" :key="plugin.id" :label="plugin.name"
                         :value="plugin.id">
                         <div class="plugin-option">
@@ -50,9 +47,9 @@
                 </el-select>
             </el-form-item>
             <el-form-item label="输出目录">
-                <el-input v-model="form.outputDir" :disabled="!!selectedRunConfigId" placeholder="留空使用默认位置" clearable>
+                <el-input v-model="form.outputDir" placeholder="留空使用默认位置" clearable>
                     <template #append>
-                        <el-button @click="selectOutputDir" :disabled="!!selectedRunConfigId">
+                        <el-button @click="selectOutputDir">
                             <el-icon>
                                 <FolderOpened />
                             </el-icon>
@@ -63,10 +60,16 @@
             </el-form-item>
 
             <el-form-item label="输出画册">
-                <el-select v-model="selectedOutputAlbumId" :disabled="!!selectedRunConfigId" placeholder="默认仅添加到画廊"
-                    clearable style="width: 100%">
+                <el-select v-model="selectedOutputAlbumId" placeholder="默认仅添加到画廊" clearable style="width: 100%">
                     <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
+                    <el-option value="__create_new__" label="+ 新建画册">
+                        <span style="color: var(--el-color-primary); font-weight: 500;">+ 新建画册</span>
+                    </el-option>
                 </el-select>
+            </el-form-item>
+            <el-form-item v-if="isCreatingNewOutputAlbum" label="画册名称" required>
+                <el-input v-model="newOutputAlbumName" placeholder="请输入画册名称" maxlength="50" show-word-limit
+                    @keyup.enter="handleCreateOutputAlbum" ref="newOutputAlbumNameInputRef" />
             </el-form-item>
 
             <!-- 插件变量配置 -->
@@ -76,33 +79,29 @@
                     :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
                     <el-input-number v-if="varDef.type === 'int' || varDef.type === 'float'"
                         v-model="form.vars[varDef.key]" :min="varDef.min !== undefined ? varDef.min : undefined"
-                        :max="varDef.max !== undefined ? varDef.max : undefined" :disabled="!!selectedRunConfigId"
+                        :max="varDef.max !== undefined ? varDef.max : undefined"
                         :placeholder="varDef.descripts || `请输入${varDef.name}`" style="width: 100%" />
                     <el-select v-else-if="varDef.type === 'options'" v-model="form.vars[varDef.key]"
-                        :placeholder="varDef.descripts || `请选择${varDef.name}`" style="width: 100%"
-                        :disabled="!!selectedRunConfigId">
+                        :placeholder="varDef.descripts || `请选择${varDef.name}`" style="width: 100%">
                         <el-option v-for="option in varDef.options" :key="optionValue(option)"
                             :label="optionLabel(option)" :value="optionValue(option)" />
                     </el-select>
                     <el-switch v-else-if="varDef.type === 'boolean'" v-model="form.vars[varDef.key]" />
                     <el-select v-else-if="varDef.type === 'list'" v-model="form.vars[varDef.key]" multiple
-                        :placeholder="varDef.descripts || `请选择${varDef.name}`" style="width: 100%"
-                        :disabled="!!selectedRunConfigId">
+                        :placeholder="varDef.descripts || `请选择${varDef.name}`" style="width: 100%">
                         <el-option v-for="option in varDef.options" :key="optionValue(option)"
                             :label="optionLabel(option)" :value="optionValue(option)" />
                     </el-select>
-                    <el-checkbox-group v-else-if="varDef.type === 'checkbox'" v-model="form.vars[varDef.key]"
-                        :disabled="!!selectedRunConfigId">
+                    <el-checkbox-group v-else-if="varDef.type === 'checkbox'" v-model="form.vars[varDef.key]">
                         <el-checkbox v-for="option in (varDef.options || [])" :key="optionValue(option)"
                             :label="optionValue(option)">
                             {{ optionLabel(option) }}
                         </el-checkbox>
                     </el-checkbox-group>
                     <el-input v-else-if="varDef.type === 'file'" v-model="form.vars[varDef.key]"
-                        :placeholder="varDef.descripts || `请选择${varDef.name}`" clearable
-                        :disabled="!!selectedRunConfigId">
+                        :placeholder="varDef.descripts || `请选择${varDef.name}`" clearable>
                         <template #append>
-                            <el-button @click="() => selectFile(varDef.key)" :disabled="!!selectedRunConfigId">
+                            <el-button @click="() => selectFile(varDef.key)">
                                 <el-icon>
                                     <FolderOpened />
                                 </el-icon>
@@ -111,10 +110,10 @@
                         </template>
                     </el-input>
                     <el-input v-else-if="varDef.type === 'path' || varDef.type === 'folder'"
-                        v-model="form.vars[varDef.key]" :placeholder="varDef.descripts || `请选择${varDef.name}`" clearable
-                        :disabled="!!selectedRunConfigId">
+                        v-model="form.vars[varDef.key]" :placeholder="varDef.descripts || `请选择${varDef.name}`"
+                        clearable>
                         <template #append>
-                            <el-button @click="() => selectFolder(varDef.key)" :disabled="!!selectedRunConfigId">
+                            <el-button @click="() => selectFolder(varDef.key)">
                                 <el-icon>
                                     <FolderOpened />
                                 </el-icon>
@@ -123,8 +122,7 @@
                         </template>
                     </el-input>
                     <el-input v-else v-model="form.vars[varDef.key]"
-                        :placeholder="varDef.descripts || `请输入${varDef.name}`" style="width: 100%"
-                        :disabled="!!selectedRunConfigId" />
+                        :placeholder="varDef.descripts || `请输入${varDef.name}`" style="width: 100%" />
                     <div v-if="varDef.descripts">
                         {{ varDef.descripts }}
                     </div>
@@ -133,7 +131,7 @@
 
             <el-divider content-position="left">保存为配置（可选）</el-divider>
             <el-form-item>
-                <el-checkbox v-model="saveAsConfig" :disabled="!!selectedRunConfigId">保存为配置（下次再使用啦）</el-checkbox>
+                <el-checkbox v-model="saveAsConfig">保存为配置（下次再使用啦）</el-checkbox>
             </el-form-item>
             <el-form-item label="配置名称" v-if="saveAsConfig">
                 <el-input v-model="configName" placeholder="请输入配置名称" />
@@ -153,14 +151,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch, ref } from "vue";
+import { computed, watch, ref, nextTick } from "vue";
 import { FolderOpened, Grid } from "@element-plus/icons-vue";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
 import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore } from "@/stores/albums";
-import { invoke } from "@tauri-apps/api/core";
 import { ElMessage } from "element-plus";
 
 interface Props {
@@ -189,6 +186,11 @@ const albums = computed(() => albumStore.albums);
 
 // 选择的输出画册ID
 const selectedOutputAlbumId = ref<string | null>(null);
+// 新建输出画册相关
+const newOutputAlbumName = ref<string>("");
+const newOutputAlbumNameInputRef = ref<any>(null);
+// 是否正在创建新画册
+const isCreatingNewOutputAlbum = computed(() => selectedOutputAlbumId.value === "__create_new__");
 
 // 使用插件配置 composable
 const pluginConfig = usePluginConfig();
@@ -229,30 +231,49 @@ const {
     visible
 );
 
-// 处理载入配置
-const handleLoadConfig = async (configId: string) => {
-    await loadConfigToForm(configId);
-};
-
 // 处理删除配置
 const handleDeleteConfig = async (configId: string) => {
     await confirmDeleteRunConfig(configId);
 };
 
+// 处理创建新输出画册
+const handleCreateOutputAlbum = async () => {
+    if (!newOutputAlbumName.value.trim()) {
+        ElMessage.warning("请输入画册名称");
+        return;
+    }
+
+    try {
+        // 创建新画册
+        const created = await albumStore.createAlbum(newOutputAlbumName.value.trim());
+        // 自动选择新创建的画册
+        selectedOutputAlbumId.value = created.id;
+        // 清空输入框
+        newOutputAlbumName.value = "";
+        ElMessage.success(`已创建画册「${created.name}」`);
+    } catch (error) {
+        console.error("创建画册失败:", error);
+        ElMessage.error("创建画册失败");
+    }
+};
+
 // 开始收集
 const handleStartCrawl = async () => {
     try {
-        // 若选择了运行配置，直接运行配置
-        if (selectedRunConfigId.value) {
-            await crawlerStore.runConfig(selectedRunConfigId.value);
-            visible.value = false;
-            emit("started");
-            return;
-        }
-
         if (!form.value.pluginId) {
             ElMessage.warning("请选择源");
             return;
+        }
+
+        // 如果选择了"新建画册"，先创建画册
+        if (selectedOutputAlbumId.value === "__create_new__") {
+            if (!newOutputAlbumName.value.trim()) {
+                ElMessage.warning("请输入画册名称");
+                return;
+            }
+            const created = await albumStore.createAlbum(newOutputAlbumName.value.trim());
+            selectedOutputAlbumId.value = created.id;
+            newOutputAlbumName.value = "";
         }
 
         // 验证表单
@@ -283,20 +304,6 @@ const handleStartCrawl = async () => {
                 ? expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[])
                 : {};
 
-        // 如果选择了输出画册，添加到后端变量中
-        if (selectedOutputAlbumId.value) {
-            backendVars = backendVars || {};
-            backendVars._output_album_id = selectedOutputAlbumId.value;
-        }
-
-        // 保存用户配置（如果有变量定义）
-        if (pluginVars.value.length > 0 && backendVars && Object.keys(backendVars).length > 0) {
-            await invoke("save_plugin_config", {
-                pluginId: form.value.pluginId,
-                config: backendVars,
-            });
-        }
-
         // 可选：保存为运行配置（不影响本次直接运行）
         if (saveAsConfig.value) {
             if (!configName.value.trim()) {
@@ -314,11 +321,13 @@ const handleStartCrawl = async () => {
         }
 
         // 添加任务（异步执行，不等待完成）
+        // outputAlbumId 单独传递，不作为 userConfig 的一部分
         crawlerStore.addTask(
             form.value.pluginId,
             "",
             form.value.outputDir || undefined,
-            backendVars
+            backendVars,
+            selectedOutputAlbumId.value || undefined
         ).catch(error => {
             // 这里的错误是任务初始化失败，由 watch 监听来处理任务状态变化时的错误显示
             console.error("任务执行失败:", error);
@@ -328,6 +337,8 @@ const handleStartCrawl = async () => {
         resetForm();
         // 重置选择的输出画册
         selectedOutputAlbumId.value = null;
+        // 重置新建画册相关状态
+        newOutputAlbumName.value = "";
         // 关闭对话框
         visible.value = false;
         emit("started");
@@ -376,59 +387,32 @@ watch(() => form.value.pluginId, (newPluginId) => {
 watch(visible, (isOpen) => {
     if (!isOpen) {
         selectedOutputAlbumId.value = null;
+        newOutputAlbumName.value = "";
     }
 });
 
-// 监听运行配置选择变化
+// 监听输出画册选择变化，当选择"新建"时自动聚焦输入框
+watch(selectedOutputAlbumId, (newValue) => {
+    if (newValue === "__create_new__") {
+        // 等待 DOM 更新后聚焦输入框
+        nextTick(() => {
+            if (newOutputAlbumNameInputRef.value) {
+                newOutputAlbumNameInputRef.value.focus();
+            }
+        });
+    } else {
+        // 选择已有画册时清空新建名称
+        newOutputAlbumName.value = "";
+    }
+});
+
+// 监听运行配置选择变化，选择时直接载入配置
 watch(selectedRunConfigId, async (cfgId) => {
     if (!cfgId) {
         return;
     }
 
-    const cfg = runConfigs.value.find(c => c.id === cfgId);
-    if (!cfg) {
-        ElMessage.warning("运行配置不存在，请重新选择");
-        selectedRunConfigId.value = null;
-        return;
-    }
-
-    // 检查兼容性
-    const compatibility = configCompatibilityStatus.value[cfgId];
-    if (compatibility && (!compatibility.versionCompatible || !compatibility.contentCompatible)) {
-        selectedRunConfigId.value = null;
-        await loadConfigToForm(cfgId);
-        return;
-    }
-
-    // 兼容的配置，直接设置表单
-    saveAsConfig.value = false;
-    configName.value = "";
-    configDescription.value = "";
-
-    form.value.pluginId = cfg.pluginId;
-    form.value.outputDir = cfg.outputDir || "";
-    form.value.vars = {};
-
-    await loadPluginVars(cfg.pluginId);
-
-    const userConfig = cfg.userConfig || {};
-    const matchedVars: Record<string, any> = {};
-    const varDefMap = new Map(pluginVars.value.map(def => [def.key, def]));
-
-    for (const [key, value] of Object.entries(userConfig)) {
-        const varDef = varDefMap.get(key);
-        if (!varDef) continue;
-        matchedVars[key] = value;
-    }
-
-    for (const varDef of pluginVars.value) {
-        if (!(varDef.key in matchedVars) && varDef.default !== undefined) {
-            matchedVars[varDef.key] = varDef.default;
-        }
-    }
-
-    const cfgUiVars = normalizeVarsForUI(matchedVars, pluginVars.value as PluginVarDef[]);
-    form.value.vars = cfgUiVars;
+    await loadConfigToForm(cfgId);
 });
 </script>
 

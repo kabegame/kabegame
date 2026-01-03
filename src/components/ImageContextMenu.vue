@@ -12,22 +12,12 @@
           ({{ selectedCount }})
         </span>
       </div>
-      <!-- 移除 -->
-      <div class="context-menu-item" @click.stop="$emit('command', 'remove')">
-        <el-icon>
-          <Remove />
-        </el-icon>
-        <span style="margin-left: 8px;">{{ removeText }}</span>
-        <span style="margin-left: 8px; color: var(--anime-text-muted); font-size: 12px;">
-          ({{ selectedCount }})
-        </span>
-      </div>
       <!-- 删除 -->
-      <div class="context-menu-item" @click.stop="$emit('command', 'delete')">
+      <div class="context-menu-item" @click.stop="$emit('command', 'remove')">
         <el-icon>
           <Delete />
         </el-icon>
-        <span style="margin-left: 8px;">删除</span>
+        <span style="margin-left: 8px;">{{ removeText }}</span>
         <span style="margin-left: 8px; color: var(--anime-text-muted); font-size: 12px;">
           ({{ selectedCount }})
         </span>
@@ -43,7 +33,8 @@
         <span style="margin-left: 8px;">详情</span>
       </div>
       <!-- 收藏：仅支持普通（单张）收藏 -->
-      <div v-if="selectedCount === 1 && !hideFavoriteAndAddToAlbum" class="context-menu-item" @click.stop="$emit('command', 'favorite')">
+      <div v-if="selectedCount === 1 && !hideFavoriteAndAddToAlbum" class="context-menu-item"
+        @click.stop="$emit('command', 'favorite')">
         <el-icon>
           <StarFilled v-if="image?.favorite" />
           <Star v-else />
@@ -51,8 +42,8 @@
         <span style="margin-left: 8px;">{{ image?.favorite ? '还有更喜欢滴' : '好喜欢' }}</span>
       </div>
       <!-- 加入画册：仅当多选时右键多选的其中一个时才能批量操作 -->
-      <div v-if="(selectedCount === 1 && !hideFavoriteAndAddToAlbum) || (selectedCount > 1 && isImageSelected)" class="context-menu-item"
-        @click.stop="$emit('command', 'addToAlbum')">
+      <div v-if="(selectedCount === 1 && !hideFavoriteAndAddToAlbum) || (selectedCount > 1 && isImageSelected)"
+        class="context-menu-item" @click.stop="$emit('command', 'addToAlbum')">
         <el-icon>
           <Collection />
         </el-icon>
@@ -62,7 +53,8 @@
         </span>
       </div>
       <!-- 复制：仅当多选时右键多选的其中一个时才能批量操作 -->
-      <div v-if="selectedCount === 1 || isImageSelected" class="context-menu-item" @click.stop="$emit('command', 'copy')">
+      <div v-if="selectedCount === 1 || isImageSelected" class="context-menu-item"
+        @click.stop="$emit('command', 'copy')">
         <el-icon>
           <DocumentCopy />
         </el-icon>
@@ -90,28 +82,34 @@
         </el-icon>
         <span style="margin-left: 8px;">抱到桌面上</span>
       </div>
-      <!-- 导出到wallpaper engine：仅单选时显示 -->
-      <div v-if="selectedCount === 1" class="context-menu-item" @click.stop="$emit('command', 'exportToWEAuto')">
+      <!-- 更多子菜单 -->
+      <div class="context-menu-item submenu-trigger" @mouseenter="showMoreSubmenu = true"
+        @mouseleave="showMoreSubmenu = false">
         <el-icon>
-          <Download />
+          <More />
         </el-icon>
-        <span style="margin-left: 8px;">导出到wallpaper engine</span>
+        <span style="margin-left: 8px;">更多</span>
+        <el-icon class="submenu-arrow">
+          <ArrowRight />
+        </el-icon>
+        <!-- 子菜单 -->
+        <div v-if="showMoreSubmenu" class="submenu" @mouseenter="showMoreSubmenu = true"
+          @mouseleave="showMoreSubmenu = false">
+          <!-- 导出到wallpaper engine：仅单选时显示 -->
+          <div v-if="selectedCount === 1" class="context-menu-item" @click.stop="$emit('command', 'exportToWEAuto')">
+            <el-icon>
+              <Download />
+            </el-icon>
+            <span style="margin-left: 8px;">导出到wallpaper engine</span>
+          </div>
+        </div>
       </div>
       <div class="context-menu-divider"></div>
       <div class="context-menu-item" @click.stop="$emit('command', 'remove')">
         <el-icon>
-          <Remove />
-        </el-icon>
-        <span style="margin-left: 8px;">{{ removeText }}</span>
-        <span v-if="selectedCount > 1" style="margin-left: 8px; color: var(--anime-text-muted); font-size: 12px;">
-          ({{ selectedCount }})
-        </span>
-      </div>
-      <div class="context-menu-item" @click.stop="$emit('command', 'delete')">
-        <el-icon>
           <Delete />
         </el-icon>
-        <span style="margin-left: 8px;">删除</span>
+        <span style="margin-left: 8px;">{{ removeText }}</span>
         <span v-if="selectedCount > 1" style="margin-left: 8px; color: var(--anime-text-muted); font-size: 12px;">
           ({{ selectedCount }})
         </span>
@@ -121,8 +119,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
-import { InfoFilled, StarFilled, Star, DocumentCopy, Delete, FolderOpened, Folder, Picture, Collection, Download, Remove } from "@element-plus/icons-vue";
+import { ref, computed } from "vue";
+import { InfoFilled, StarFilled, Star, DocumentCopy, FolderOpened, Folder, Picture, Collection, Download, Delete, Remove, More, ArrowRight } from "@element-plus/icons-vue";
 import type { ImageInfo } from "@/stores/crawler";
 import ContextMenu from "@/components/ContextMenu.vue";
 
@@ -133,14 +131,14 @@ interface Props {
   selectedCount?: number;
   isImageSelected?: boolean; // 右键的图片是否在选中列表中
   removeText?: string; // "移除"菜单项文案（不同页面可定制）
-  simplifiedMultiSelectMenu?: boolean; // 多选时是否只显示简化菜单（复制、移除、删除）
+  simplifiedMultiSelectMenu?: boolean; // 多选时是否只显示简化菜单（复制、移除）
   hideFavoriteAndAddToAlbum?: boolean; // 是否隐藏收藏和加入画册菜单项（单选时）
 }
 
 const props = withDefaults(defineProps<Props>(), {
   selectedCount: 1,
   isImageSelected: true, // 默认值为 true，单选时总是 true，多选时由父组件传递
-  removeText: "移除",
+  removeText: "删除",
   simplifiedMultiSelectMenu: false,
   hideFavoriteAndAddToAlbum: false,
 });
@@ -150,10 +148,36 @@ const isImageSelected = computed(() => props.isImageSelected);
 const removeText = computed(() => props.removeText);
 const showSimplifiedMenu = computed(() => props.simplifiedMultiSelectMenu && selectedCount.value > 1);
 
+// 子菜单状态
+const showMoreSubmenu = ref(false);
+
 defineEmits<{
   close: [];
   command: [command: string];
 }>();
 </script>
 
-<style scoped lang="scss"></style>
+<style scoped lang="scss">
+.submenu-trigger {
+  position: relative;
+
+  .submenu-arrow {
+    margin-left: auto;
+    margin-right: 8px;
+  }
+
+  .submenu {
+    position: absolute;
+    left: 100%;
+    top: 0;
+    background: var(--anime-bg-card);
+    border: 1px solid var(--anime-border);
+    border-radius: 8px;
+    box-shadow: var(--anime-shadow-hover);
+    padding: 8px 0;
+    min-width: 180px;
+    z-index: 10000;
+    margin-left: 4px;
+  }
+}
+</style>

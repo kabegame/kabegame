@@ -8,7 +8,7 @@
             :aspect-ratio-match-window="aspectRatioMatchWindow" :window-aspect-ratio="windowAspectRatio"
             :allow-select="allowSelect" :enable-context-menu="enableContextMenu"
             :show-load-more-button="showLoadMoreButton" :has-more="hasMore" :loading-more="loadingMore"
-            :show-empty-state="showEmptyState"
+            :show-empty-state="showEmptyState" :enable-reorder="enableReorder"
             @image-dbl-click="(img, ev) => emit('image-dbl-click', img, ev)"
             @context-command="(payload) => emit('context-command', payload)"
             @load-more="() => emit('load-more')"
@@ -57,6 +57,8 @@ const props = withDefaults(
 
         enableScrollStableEmit?: boolean;
         scrollStableDelay?: number;
+
+        enableReorder?: boolean;
     }>(),
     {
         loading: false,
@@ -72,6 +74,7 @@ const props = withDefaults(
         enableDragScroll: undefined,
         enableScrollStableEmit: true,
         scrollStableDelay: 180,
+        enableReorder: true,
     }
 );
 

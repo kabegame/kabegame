@@ -3,7 +3,7 @@
  * Watches crawler plugin sources and rebuilds packaged plugins via Nx.
  *
  * Usage:
- *   node scripts/plugin-rebuild-watch.js [--local-plugins] [--verbose]
+ *   node scripts/plugin-rebuild-watch.js [--verbose]
  */
 
 import fs from "fs";
@@ -32,7 +32,6 @@ function listFilesRecursive(dir) {
 
 function parseFlags(argv) {
   return {
-    localPlugins: argv.includes("--local-plugins"),
     verbose: argv.includes("--verbose"),
   };
 }
@@ -61,12 +60,10 @@ async function main() {
     "package-plugin.js"
   );
 
-  const allowPluginDirs = flags.localPlugins
-    ? ["single-file-import", "local-folder-import"]
-    : fs
-        .readdirSync(pluginsRoot, { withFileTypes: true })
-        .filter((d) => d.isDirectory())
-        .map((d) => d.name);
+  const allowPluginDirs = fs
+    .readdirSync(pluginsRoot, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
 
   const allowFiles = new Set();
   allowFiles.add(packagingScript);
@@ -78,11 +75,7 @@ async function main() {
 
   const allowed = [...allowFiles].map((abs) => path.resolve(abs));
 
-  console.log(
-    `[plugin-watch] mode=${
-      flags.localPlugins ? "local-plugins" : "all-plugins"
-    } files=${allowed.length}`
-  );
+  console.log(`[plugin-watch] mode=all-plugins files=${allowed.length}`);
 
   let timer = null;
   let running = false;
@@ -103,9 +96,7 @@ async function main() {
       }
       running = true;
       pending = false;
-      const nxTarget = flags.localPlugins
-        ? "crawler-plugins:package-local"
-        : "crawler-plugins:package";
+      const nxTarget = "crawler-plugins:package";
       console.log(`[plugin-watch] nx run ${nxTarget}`);
 
       const child = spawnShell(`nx run ${nxTarget}`, root);
