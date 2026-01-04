@@ -16,7 +16,11 @@ on:
 
 jobs:
   build-and-release:
-    name: Build Windows Installer
+    name: Build Windows Installer (${{ matrix.mode }})
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [normal, local]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -26,7 +30,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: true  # 检出 git 子模块（crawler-plugins）
+          submodules: true # 检出 git 子模块（crawler-plugins）
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -44,10 +48,49 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          cache-on-failure: true
 
-      - name: Get version from package.json or Cargo.toml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Package plugins
+        id: package-plugins
+        shell: bash
+        run: |
+          if [ "${{ matrix.mode }}" == "local" ]; then
+            nx run crawler-plugins:package-to-resources
+          else
+            nx run crawler-plugins:package-local-to-resources
+          fi
+
+          # 扫描打包的插件列表（用于 local 模式）
+          if [ "${{ matrix.mode }}" == "local" ]; then
+            PLUGINS=$(node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const pluginsDir = 'src-tauri/resources/plugins';
+            if (fs.existsSync(pluginsDir)) {
+              const files = fs.readdirSync(pluginsDir);
+              const plugins = files
+                .filter(f => f.endsWith('.kgpg'))
+                .map(f => path.basename(f, '.kgpg'))
+                .filter(Boolean)
+                .sort()
+                .join(',');
+              console.log(plugins || '');
+            }
+            ")
+            if [ -n "$PLUGINS" ]; then
+              echo "builtin_plugins=$PLUGINS" >> $GITHUB_OUTPUT
+              echo "Builtin plugins: $PLUGINS"
+            fi
+          fi
+
+      - name: Get version from package.json
         id: version
         shell: bash
         run: |
@@ -64,9 +107,6 @@ jobs:
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "Version: ${VERSION}"
           echo "Tag: ${TAG}"
-
-      - name: Build frontend
-        run: pnpm run build
 
       - name: Generate changelog
         id: changelog
@@ -93,15 +133,111 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
-      - name: Build Tauri app and create release
-        uses: tauri-apps/tauri-action@v0
+      - name: Update productName for filename
+        shell: bash
+        run: |
+          # 临时修改 tauri.conf.json 的 productName，使文件名包含 mode
+          node -e "
+          const fs = require('fs');
+          const path = require('path');
+          const configPath = 'src-tauri/tauri.conf.json';
+          const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          const originalName = config.productName;
+          config.productName = originalName + '-${{ matrix.mode }}';
+          fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+          console.log('Updated productName to:', config.productName);
+          "
+
+      - name: Build Tauri app
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KABEGAME_MODE: ${{ matrix.mode }}
+          VITE_KABEGAME_MODE: ${{ matrix.mode }}
+          KABEGAME_BUILTIN_PLUGINS: ${{ steps.package-plugins.outputs.builtin_plugins }}
+        run: pnpm exec tauri build --bundles nsis
+        working-directory: src-tauri
+
+      - name: Restore productName
+        if: always()
+        shell: bash
+        run: |
+          # 恢复原始 productName
+          node -e "
+          const fs = require('fs');
+          const path = require('path');
+          const configPath = 'src-tauri/tauri.conf.json';
+          const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          config.productName = config.productName.replace(/-normal$|-local$/, '');
+          fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+          console.log('Restored productName to:', config.productName);
+          "
+
+      - name: Upload artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
         with:
-          projectPath: src-tauri
-          tagName: ${{ steps.version.outputs.tag }}
-          releaseName: "Kabegame ${{ steps.version.outputs.tag }}"
-          releaseBody: ${{ steps.changelog.outputs.changelog }}
-          releaseDraft: false
-          releasePrerelease: ${{ github.event.inputs.prerelease || contains(steps.version.outputs.version, '-') || contains(steps.version.outputs.version, 'alpha') || contains(steps.version.outputs.version, 'beta') || contains(steps.version.outputs.version, 'rc') }}
-          args: "--bundles nsis"
+          name: installer-${{ matrix.mode }}
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          retention-days: 7
+
+  create-release:
+    name: Create Release
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from package.json
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            CHANGES=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            CHANGES=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
+
+          {
+            echo "changelog<<EOF"
+            echo "## 📝 更新内容"
+            echo ""
+            if [ -z "$CHANGES" ]; then
+              echo "- 无变更记录"
+            else
+              echo "$CHANGES"
+            fi
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "Kabegame ${{ steps.version.outputs.tag }}"
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease || contains(steps.version.outputs.version, '-') || contains(steps.version.outputs.version, 'alpha') || contains(steps.version.outputs.version, 'beta') || contains(steps.version.outputs.version, 'rc') }}
+          files: |
+            artifacts/installer-normal/*.exe
+            artifacts/installer-local/*.exe

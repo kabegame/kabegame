@@ -33,3 +33,6 @@ src-tauri/icons/*
 # Nx
 .nx/cache
 .nx/workspace-data
+
+# GitHub Actions Runner (self-hosted)
+actions-runner/
