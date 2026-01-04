@@ -62,9 +62,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.mode }}" == "local" ]; then
-            nx run crawler-plugins:package-to-resources
+            pnpm exec nx run crawler-plugins:package-to-resources
           else
-            nx run crawler-plugins:package-local-to-resources
+            pnpm exec nx run crawler-plugins:package-local-to-resources
           fi
 
           # 扫描打包的插件列表（用于 local 模式）

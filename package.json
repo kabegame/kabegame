@@ -1,6 +1,6 @@
 {
   "name": "kabegame",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "让你的桌面充满二次元气息的壁纸管理器！收集、管理、轮播，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元壁纸资源~",
   "type": "module",
   "scripts": {
