@@ -184,53 +184,7 @@ export function useImageOperations(
     }
   };
 
-  // 画廊按 hash 去重确认（实际执行去重逻辑）
-  const confirmDedupeByHash = async (
-    dedupeProcessing: Ref<boolean>,
-    dedupeDeleteFiles: boolean,
-    startDedupeDelay: () => void,
-    finishDedupeDelay: () => void
-  ) => {
-    try {
-      dedupeProcessing.value = true;
-      startDedupeDelay();
-
-      const res = await invoke<{ removed: number; removedIds: string[] }>(
-        "dedupe_gallery_by_hash",
-        { deleteFiles: dedupeDeleteFiles }
-      );
-      const removedIds = res?.removedIds ?? [];
-
-      if (removedIds.length > 0) {
-        removeFromUiCacheByIds(removedIds);
-        await crawlerStore.applyRemovedImageIds(removedIds);
-      }
-
-      ElMessage.success(
-        `已清理 ${res?.removed ?? removedIds.length} 个重复项${
-          dedupeDeleteFiles
-            ? "（已从电脑彻底删除）"
-            : "（仅从画廊移除，源文件已保留）"
-        }`
-      );
-
-      // 若当前已加载列表被清空，则自动刷新一次（避免停留在空状态）
-      if (displayedImages.value.length === 0) {
-        await loadImages(true);
-        if (displayedImages.value.length === 0 && crawlerStore.hasMore) {
-          await loadMoreImages();
-        }
-      }
-    } catch (error) {
-      if (error !== "cancel") {
-        console.error("去重失败:", error);
-        ElMessage.error("去重失败");
-      }
-    } finally {
-      dedupeProcessing.value = false;
-      finishDedupeDelay();
-    }
-  };
+  // 注意：按 hash 去重已改为后端“分批后台任务 + 事件驱动 UI 同步”，逻辑迁移到 Gallery.vue
 
   // 切换收藏状态
   const toggleFavorite = async (image: ImageInfo) => {
@@ -395,7 +349,6 @@ export function useImageOperations(
     handleCopyImage,
     applyFavoriteChangeToGalleryCache,
     handleBatchDeleteImages,
-    confirmDedupeByHash,
     toggleFavorite,
     setWallpaper,
     exportToWallpaperEngine,

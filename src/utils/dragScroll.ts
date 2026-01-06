@@ -67,6 +67,15 @@ export function enableDragScroll(
   let hasPointerCapture = false;
   let suppressClickUntil = 0;
   let cleanupClickCapture: (() => void) | null = null;
+  const emitActiveChange = (active: boolean) => {
+    try {
+      container.dispatchEvent(
+        new CustomEvent("dragscroll-active-change", { detail: { active } })
+      );
+    } catch {
+      // ignore
+    }
+  };
 
   const stopInertia = () => {
     if (raf != null) {
@@ -185,6 +194,7 @@ export function enableDragScroll(
       // 超过阈值：从这一刻开始进入拖拽滚动模式
       moved = true;
       container.classList.add(classActive);
+      emitActiveChange(true);
       if (!hasPointerCapture) {
         try {
           container.setPointerCapture(e.pointerId);
@@ -223,6 +233,7 @@ export function enableDragScroll(
     if (!moved) return;
 
     container.classList.remove(classActive);
+    emitActiveChange(false);
     if (hasPointerCapture) {
       try {
         container.releasePointerCapture(e.pointerId);
@@ -293,6 +304,7 @@ export function enableDragScroll(
     cleanupClickCapture = null;
     container.classList.remove(classReady);
     container.classList.remove(classActive);
+    emitActiveChange(false);
     container.removeEventListener("pointerdown", onPointerDown as any, true);
     container.removeEventListener("pointermove", onPointerMove as any, true);
     container.removeEventListener("pointerup", endPointer as any, true);

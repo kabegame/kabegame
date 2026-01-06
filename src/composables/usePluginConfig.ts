@@ -38,18 +38,25 @@ export function usePluginConfig() {
     return varDef.default === undefined || varDef.default === null;
   };
 
-  const optionLabel = (opt: VarOption) => (typeof opt === "string" ? opt : opt.name);
-  const optionValue = (opt: VarOption) => (typeof opt === "string" ? opt : opt.variable);
+  const optionLabel = (opt: VarOption) =>
+    typeof opt === "string" ? opt : opt.name;
+  const optionValue = (opt: VarOption) =>
+    typeof opt === "string" ? opt : opt.variable;
 
   // 将 UI 表单中的 vars（checkbox 在 UI 层使用 string[]）转换为后端/脚本需要的对象：
   // 例如 { foo: ["a","b"] } -> { foo: { a: true, b: true } }
-  const expandVarsForBackend = (uiVars: Record<string, any>, defs: PluginVarDef[]) => {
+  const expandVarsForBackend = (
+    uiVars: Record<string, any>,
+    defs: PluginVarDef[]
+  ) => {
     const expanded: Record<string, any> = { ...uiVars };
     for (const def of defs) {
       if (def.type !== "checkbox") continue;
       const options = def.options || [];
       const optionVars = options.map(optionValue);
-      const selected = Array.isArray(uiVars[def.key]) ? (uiVars[def.key] as string[]) : [];
+      const selected = Array.isArray(uiVars[def.key])
+        ? (uiVars[def.key] as string[])
+        : [];
       const obj: Record<string, boolean> = {};
       for (const v of optionVars) obj[v] = selected.includes(v);
       expanded[def.key] = obj;
@@ -59,9 +66,26 @@ export function usePluginConfig() {
 
   // 将后端保存/运行配置中的 checkbox 值聚合回 UI 用的 foo: string[]
   // - 格式：foo: { a: true, b: false }（脚本中用 foo.a/foo.b）
-  const normalizeVarsForUI = (rawVars: Record<string, any>, defs: PluginVarDef[]) => {
+  const normalizeVarsForUI = (
+    rawVars: Record<string, any>,
+    defs: PluginVarDef[]
+  ) => {
     const normalized: Record<string, any> = {};
     for (const def of defs) {
+      // 兼容：local-import 旧配置字段 file_path/folder_path -> 新字段 path
+      if (def.key === "path" && rawVars?.[def.key] === undefined) {
+        const legacyFile = rawVars?.["file_path"];
+        const legacyFolder = rawVars?.["folder_path"];
+        if (typeof legacyFile === "string" && legacyFile.trim() !== "") {
+          normalized[def.key] = legacyFile;
+          continue;
+        }
+        if (typeof legacyFolder === "string" && legacyFolder.trim() !== "") {
+          normalized[def.key] = legacyFolder;
+          continue;
+        }
+      }
+
       if (def.type === "checkbox") {
         const options = def.options || [];
         const optionVars = options.map(optionValue);
@@ -76,7 +100,9 @@ export function usePluginConfig() {
         if (Array.isArray(d)) {
           normalized[def.key] = d;
         } else if (d && typeof d === "object") {
-          normalized[def.key] = optionVars.filter((v) => (d as any)[v] === true);
+          normalized[def.key] = optionVars.filter(
+            (v) => (d as any)[v] === true
+          );
         } else {
           normalized[def.key] = [];
         }
@@ -99,22 +125,22 @@ export function usePluginConfig() {
     }
 
     // 根据类型返回不同的验证规则
-    if (varDef.type === 'list' || varDef.type === 'checkbox') {
+    if (varDef.type === "list" || varDef.type === "checkbox") {
       return [
         {
           required: true,
           message: `请选择${varDef.name}`,
-          trigger: 'change',
+          trigger: "change",
           validator: (_rule: any, value: any, callback: any) => {
             if (!value || (Array.isArray(value) && value.length === 0)) {
               callback(new Error(`请选择${varDef.name}`));
             } else {
               callback();
             }
-          }
-        }
+          },
+        },
       ];
-    } else if (varDef.type === 'boolean') {
+    } else if (varDef.type === "boolean") {
       // boolean 类型总是有值（true/false），不需要验证
       return [];
     } else {
@@ -122,27 +148,40 @@ export function usePluginConfig() {
         {
           required: true,
           message: `请输入${varDef.name}`,
-          trigger: varDef.type === 'options' ? 'change' : 'blur',
+          trigger: varDef.type === "options" ? "change" : "blur",
           validator: (_rule: any, value: any, callback: any) => {
-            if (value === undefined || value === null || value === '') {
+            if (value === undefined || value === null || value === "") {
               callback(new Error(`请输入${varDef.name}`));
               return;
             }
             // 对于 int 和 float 类型，验证 min/max
-            if ((varDef.type === 'int' || varDef.type === 'float') && typeof value === 'number') {
+            if (
+              (varDef.type === "int" || varDef.type === "float") &&
+              typeof value === "number"
+            ) {
               const varDefWithMinMax = varDef as PluginVarDef;
-              if (varDefWithMinMax.min !== undefined && value < varDefWithMinMax.min) {
-                callback(new Error(`${varDef.name}不能小于 ${varDefWithMinMax.min}`));
+              if (
+                varDefWithMinMax.min !== undefined &&
+                value < varDefWithMinMax.min
+              ) {
+                callback(
+                  new Error(`${varDef.name}不能小于 ${varDefWithMinMax.min}`)
+                );
                 return;
               }
-              if (varDefWithMinMax.max !== undefined && value > varDefWithMinMax.max) {
-                callback(new Error(`${varDef.name}不能大于 ${varDefWithMinMax.max}`));
+              if (
+                varDefWithMinMax.max !== undefined &&
+                value > varDefWithMinMax.max
+              ) {
+                callback(
+                  new Error(`${varDef.name}不能大于 ${varDefWithMinMax.max}`)
+                );
                 return;
               }
             }
             callback();
-          }
-        }
+          },
+        },
       ];
     }
   };
@@ -150,7 +189,14 @@ export function usePluginConfig() {
   // 加载插件变量定义
   const loadPluginVars = async (pluginId: string) => {
     try {
-      const vars = await invoke<Array<{ key: string; type: string; name: string; descripts?: string; default?: any; options?: VarOption[] }> | null>("get_plugin_vars", {
+      const vars = await invoke<Array<{
+        key: string;
+        type: string;
+        name: string;
+        descripts?: string;
+        default?: any;
+        options?: VarOption[];
+      }> | null>("get_plugin_vars", {
         pluginId,
       });
       pluginVars.value = vars || [];
@@ -164,7 +210,10 @@ export function usePluginConfig() {
       }
 
       // 使用默认值初始化表单
-      form.value.vars = normalizeVarsForUI({}, pluginVars.value as PluginVarDef[]);
+      form.value.vars = normalizeVarsForUI(
+        {},
+        pluginVars.value as PluginVarDef[]
+      );
     } catch (error) {
       console.error("加载插件变量失败:", error);
       pluginVars.value = [];
@@ -205,14 +254,30 @@ export function usePluginConfig() {
 
   // 选择文件（用于插件变量）
   const selectFile = async (varKey: string) => {
+    return await selectFileByExtensions(varKey);
+  };
+
+  // 选择文件（用于插件变量，可按扩展名过滤）
+  // - extensions: 不带点号，例如 ["jpg","png","zip"]
+  const selectFileByExtensions = async (
+    varKey: string,
+    extensions?: string[]
+  ) => {
     try {
+      const exts =
+        extensions && extensions.length > 0
+          ? extensions
+              .map((e) => `${e}`.trim().replace(/^\./, "").toLowerCase())
+              .filter(Boolean)
+          : ["jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "zip"];
+
       const selected = await open({
         directory: false,
         multiple: false,
         filters: [
           {
-            name: "图片",
-            extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"],
+            name: "文件",
+            extensions: exts,
           },
         ],
       });
@@ -252,7 +317,7 @@ export function usePluginConfig() {
     selectOutputDir,
     selectFolder,
     selectFile,
+    selectFileByExtensions,
     resetForm,
   };
 }
-

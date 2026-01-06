@@ -98,6 +98,29 @@
                             {{ optionLabel(option) }}
                         </el-checkbox>
                     </el-checkbox-group>
+                    <el-input v-else-if="varDef.type === 'path' || varDef.type === 'file_or_folder'"
+                        v-model="form.vars[varDef.key]" :placeholder="varDef.descripts || `请选择${varDef.name}`"
+                        clearable>
+                        <template #append>
+                            <el-dropdown trigger="click" @command="(cmd: string) => {
+                                if (cmd === 'file') return selectFileByExtensions(varDef.key, getFileExtensions(varDef));
+                                if (cmd === 'folder') return selectFolder(varDef.key);
+                            }">
+                                <el-button>
+                                    <el-icon>
+                                        <FolderOpened />
+                                    </el-icon>
+                                    浏览
+                                </el-button>
+                                <template #dropdown>
+                                    <el-dropdown-menu>
+                                        <el-dropdown-item command="file">选择文件</el-dropdown-item>
+                                        <el-dropdown-item command="folder">选择文件夹</el-dropdown-item>
+                                    </el-dropdown-menu>
+                                </template>
+                            </el-dropdown>
+                        </template>
+                    </el-input>
                     <el-input v-else-if="varDef.type === 'file'" v-model="form.vars[varDef.key]"
                         :placeholder="varDef.descripts || `请选择${varDef.name}`" clearable>
                         <template #append>
@@ -109,7 +132,7 @@
                             </el-button>
                         </template>
                     </el-input>
-                    <el-input v-else-if="varDef.type === 'path' || varDef.type === 'folder'"
+                    <el-input v-else-if="varDef.type === 'folder'"
                         v-model="form.vars[varDef.key]" :placeholder="varDef.descripts || `请选择${varDef.name}`"
                         clearable>
                         <template #append>
@@ -217,8 +240,20 @@ const {
     selectOutputDir,
     selectFolder,
     selectFile,
+    selectFileByExtensions,
     resetForm,
 } = pluginConfig;
+
+// file_or_folder 类型：将 varDef.options 作为可选择文件扩展名列表（不带点号）
+const getFileExtensions = (varDef: any): string[] | undefined => {
+    const opts = varDef?.options;
+    if (!Array.isArray(opts) || opts.length === 0) return undefined;
+    const exts = opts
+        .map((o: any) => (typeof o === "string" ? o : o?.variable))
+        .filter((s: any) => typeof s === "string" && s.trim() !== "")
+        .map((s: string) => s.trim().replace(/^\./, "").toLowerCase());
+    return exts.length > 0 ? exts : undefined;
+};
 
 // 使用配置兼容性 composable
 const {

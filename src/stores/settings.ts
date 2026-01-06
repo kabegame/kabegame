@@ -9,7 +9,6 @@ export interface AppSettings {
   maxConcurrentDownloads: number;
   networkRetryCount: number;
   imageClickAction: "preview" | "open" | "none";
-  galleryImageAspectRatioMatchWindow: boolean;
   galleryImageAspectRatio: string | null;
   galleryPageSize: number;
   autoDeduplicate: boolean;
@@ -27,6 +26,9 @@ export interface AppSettings {
     | "tile"
     | string;
   wallpaperRotationTransition: "none" | "fade" | "slide" | "zoom" | string;
+  // 按 wallpaperMode 记忆各模式的最后 style/transition（切换模式时用于恢复）
+  wallpaperStyleByMode: Record<string, string>;
+  wallpaperTransitionByMode: Record<string, string>;
   wallpaperMode: "native" | "window" | string;
   windowState: {
     x: number | null;

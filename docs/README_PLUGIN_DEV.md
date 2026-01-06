@@ -31,7 +31,7 @@ pnpm run package-plugin
 # 或使用 Nx 命令
 nx run crawler-plugins:package
 
-# 打包本地插件（仅打包 single-file-import 和 local-folder-import）
+# 打包本地插件（仅打包 local-import）
 pnpm run package-plugin:local
 # 或
 nx run crawler-plugins:package-local
@@ -55,7 +55,7 @@ node package-plugin.js anihonet-wallpaper
 # 只打包指定插件（会清理 packed 目录下的其它 .kgpg）
 node package-plugin.js --only <插件名1> <插件名2>
 # 或使用逗号分隔
-node package-plugin.js --only single-file-import,local-folder-import
+node package-plugin.js --only local-import
 
 # 指定输出目录
 node package-plugin.js --outDir ../data/plugins-directory

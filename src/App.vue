@@ -84,6 +84,7 @@ const fileDropOverlayRef = ref<InstanceType<typeof FileDropOverlay> | null>(null
 
 // 支持的图片格式
 const SUPPORTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'];
+const SUPPORTED_ZIP_EXTENSIONS = ['zip'];
 
 // 从文件路径提取扩展名（小写，不含点号）
 const getFileExtension = (filePath: string): string => {
@@ -98,6 +99,12 @@ const getFileExtension = (filePath: string): string => {
 const isSupportedImageFile = (filePath: string): boolean => {
   const ext = getFileExtension(filePath);
   return SUPPORTED_IMAGE_EXTENSIONS.includes(ext);
+};
+
+// 检查文件是否为 zip（压缩包导入：后端会解压到临时目录再递归导入图片）
+const isZipFile = (filePath: string): boolean => {
+  const ext = getFileExtension(filePath);
+  return SUPPORTED_ZIP_EXTENSIONS.includes(ext);
 };
 
 // 辅助函数：从文件路径提取目录路径
@@ -181,6 +188,7 @@ onMounted(async () => {
                 path: string;
                 name: string;
                 isDirectory: boolean;
+                isZip?: boolean;
               }
 
               const items: ImportItem[] = [];
@@ -197,14 +205,16 @@ onMounted(async () => {
                       path,
                       name,
                       isDirectory: true,
+                      isZip: false,
                     });
                   } else {
-                    // 文件：检查是否为支持的图片格式
-                    if (isSupportedImageFile(path)) {
+                    // 文件：检查是否为支持的图片格式 / zip
+                    if (isSupportedImageFile(path) || isZipFile(path)) {
                       items.push({
                         path,
                         name,
                         isDirectory: false,
+                        isZip: isZipFile(path),
                       });
                     } else {
                       console.log('[App] 跳过不支持的文件:', path);
@@ -223,14 +233,15 @@ onMounted(async () => {
               // 显示确认对话框
               const itemCount = items.length;
               const folderCount = items.filter(i => i.isDirectory).length;
-              const fileCount = items.filter(i => !i.isDirectory).length;
+              const zipCount = items.filter(i => !i.isDirectory && i.isZip).length;
+              const imageCount = items.filter(i => !i.isDirectory && !i.isZip).length;
 
               // 构建列表 HTML
               const itemListHtml = items.map(item =>
                 `<div class="import-item">
-                  <span class="item-icon">${item.isDirectory ? '📁' : '🖼️'}</span>
+                  <span class="item-icon">${item.isDirectory ? '📁' : (item.isZip ? '📦' : '🖼️')}</span>
                   <span class="item-name">${item.name}</span>
-                  <span class="item-type">${item.isDirectory ? '文件夹' : '文件'}</span>
+                  <span class="item-type">${item.isDirectory ? '文件夹' : (item.isZip ? '压缩包' : '图片')}</span>
                 </div>`
               ).join('');
 
@@ -240,7 +251,8 @@ onMounted(async () => {
                     <p>是否导入以下 <strong>${itemCount}</strong> 个项目？</p>
                     <div class="summary-stats">
                       <span>📁 文件夹: <strong>${folderCount}</strong> 个</span>
-                      <span>🖼️ 文件: <strong>${fileCount}</strong> 个</span>
+                      <span>🖼️ 图片: <strong>${imageCount}</strong> 个</span>
+                      <span>📦 ZIP: <strong>${zipCount}</strong> 个</span>
                     </div>
                   </div>
                   <div class="import-list">
@@ -268,9 +280,9 @@ onMounted(async () => {
                 for (const item of items) {
                   try {
                     if (item.isDirectory) {
-                      // 文件夹：使用 local-folder-import，递归子文件夹
+                      // 文件夹：使用 local-import，递归子文件夹
                       await crawlerStore.addTask(
-                        'local-folder-import',
+                        'local-import',
                         '', // url 为空
                         item.path, // outputDir 为文件夹自身
                         {
@@ -280,10 +292,10 @@ onMounted(async () => {
                       );
                       console.log('[App] 已添加文件夹导入任务:', item.path);
                     } else {
-                      // 文件：使用 single-file-import，输出目录为文件所在目录
+                      // 文件/zip：使用 local-import，输出目录为文件所在目录
                       const fileDir = getDirectoryFromPath(item.path);
                       await crawlerStore.addTask(
-                        'single-file-import',
+                        'local-import',
                         '', // url 为空
                         fileDir, // outputDir 为文件所在目录
                         {
@@ -604,6 +616,33 @@ const toggleCollapse = () => {
         }
       }
     }
+  }
+}
+
+// 覆盖：拖入项目过多时，确认弹窗不应撑满屏幕；列表区域滚动即可
+::deep(.file-drop-confirm-dialog) {
+  .el-message-box__content,
+  .el-message-box__message {
+    max-height: 70vh;
+    overflow: hidden;
+  }
+
+  .import-confirm-content {
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .import-confirm-content .summary-stats {
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+
+  .import-confirm-content .import-list {
+    flex: 1;
+    min-height: 160px;
+    max-height: none;
+    overflow-y: auto;
   }
 }
 </style>

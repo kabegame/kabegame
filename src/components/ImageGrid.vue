@@ -10,18 +10,34 @@
       <!-- 空状态显示 -->
       <EmptyState v-if="images.length === 0 && showEmptyState" />
 
-      <transition-group v-else name="fade-in-list" tag="div" class="image-grid"
-        :class="{ 'reorder-mode': isReorderMode }" :style="gridStyle">
-        <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
-          :image-url="getEffectiveImageUrl(image.id)"
-          :image-click-action="settingsStore.values.imageClickAction || 'none'" :use-original="imageGridColumns <= 2"
-          :window-aspect-ratio="effectiveAspectRatio" :selected="effectiveSelectedIds.has(image.id)"
-          :grid-columns="imageGridColumns" :grid-index="index" :is-reorder-mode="isReorderMode"
-          :reorder-selected="isReorderMode && reorderSourceIndex === index"
-          @click="(e) => handleItemClick(image, index, e)" @dblclick="(e) => handleItemDblClick(image, index, e)"
-          @contextmenu="(e) => handleItemContextMenu(image, index, e)" @long-press="() => handleLongPress(index)"
-          @reorder-click="() => handleReorderClick(index)" @blob-url-invalid="handleBlobUrlInvalid" />
-      </transition-group>
+      <template v-else>
+        <div v-if="enableVirtualScroll" class="image-grid" :class="{ 'reorder-mode': isReorderMode }"
+          :style="gridStyle">
+          <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
+            :image-url="getEffectiveImageUrl(item.image.id)"
+            :image-click-action="settingsStore.values.imageClickAction || 'none'" :use-original="imageGridColumns <= 2"
+            :window-aspect-ratio="effectiveAspectRatio" :selected="effectiveSelectedIds.has(item.image.id)"
+            :grid-columns="imageGridColumns" :grid-index="item.index" :is-reorder-mode="isReorderMode"
+            :reorder-selected="isReorderMode && reorderSourceIndex === item.index"
+            @click="(e) => handleItemClick(item.image, item.index, e)"
+            @dblclick="(e) => handleItemDblClick(item.image, item.index, e)"
+            @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
+            @long-press="() => handleLongPress(item.index)" @reorder-click="() => handleReorderClick(item.index)"
+            @blob-url-invalid="handleBlobUrlInvalid" />
+        </div>
+        <transition-group v-else name="fade-in-list" tag="div" class="image-grid"
+          :class="{ 'reorder-mode': isReorderMode }" :style="gridStyle">
+          <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
+            :image-url="getEffectiveImageUrl(image.id)"
+            :image-click-action="settingsStore.values.imageClickAction || 'none'" :use-original="imageGridColumns <= 2"
+            :window-aspect-ratio="effectiveAspectRatio" :selected="effectiveSelectedIds.has(image.id)"
+            :grid-columns="imageGridColumns" :grid-index="index" :is-reorder-mode="isReorderMode"
+            :reorder-selected="isReorderMode && reorderSourceIndex === index"
+            @click="(e) => handleItemClick(image, index, e)" @dblclick="(e) => handleItemDblClick(image, index, e)"
+            @contextmenu="(e) => handleItemContextMenu(image, index, e)" @long-press="() => handleLongPress(index)"
+            @reorder-click="() => handleReorderClick(index)" @blob-url-invalid="handleBlobUrlInvalid" />
+        </transition-group>
+      </template>
 
       <!-- 右键菜单（下沉到 ImageGrid，可由父组件控制是否启用） -->
       <component :is="contextMenuComponent" v-if="enableContextMenu && contextMenuComponent"
@@ -139,6 +155,15 @@ interface Props {
   hideScrollbar?: boolean; // 隐藏滚动条（仍可滚动）
   scrollStableDelay?: number; // scrollStable 防抖时间
   enableScrollStableEmit?: boolean; // 是否发出 scrollStable
+
+  /**
+   * 是否启用虚拟滚动（仅渲染视口附近的行，减少节点数量）
+   */
+  enableVirtualScroll?: boolean;
+  /**
+   * 虚拟滚动额外预渲染的行数（上下各）
+   */
+  virtualOverscan?: number;
 }
 
 // 图片顺序调整状态
@@ -191,8 +216,90 @@ const enableCtrlKeyAdjustColumns = computed(() => props.enableCtrlKeyAdjustColum
 const hideScrollbar = computed(() => props.hideScrollbar ?? false);
 const scrollStableDelay = computed(() => props.scrollStableDelay ?? 180);
 const enableScrollStableEmit = computed(() => props.enableScrollStableEmit ?? true);
+const enableVirtualScroll = computed(() => props.enableVirtualScroll ?? true);
+const virtualOverscanRows = computed(() => Math.max(0, props.virtualOverscan ?? 8));
+
+// 网格相关
+const gridColumnsCount = computed(() => (imageGridColumns.value > 0 ? imageGridColumns.value : 1));
+const gridGapPx = computed(() => Math.max(4, 16 - (gridColumnsCount.value - 1)));
+const BASE_GRID_PADDING_Y = 6;
+const BASE_GRID_PADDING_X = 8;
+
+// 虚拟滚动测量
+const measuredItemHeight = ref<number | null>(null);
+const virtualStartRow = ref(0);
+const virtualEndRow = ref(0);
 
 const containerEl = ref<HTMLElement | null>(null);
+
+const estimatedItemHeight = () => {
+  const container = containerEl.value;
+  if (!container) return 240;
+  const availableWidth =
+    container.clientWidth - BASE_GRID_PADDING_X * 2 - gridGapPx.value * (gridColumnsCount.value - 1);
+  const columnWidth = Math.max(1, availableWidth / gridColumnsCount.value);
+  const ratio = windowAspectRatio.value || 16 / 9;
+  return columnWidth / ratio;
+};
+
+const rowHeightWithGap = computed(() => {
+  const h = measuredItemHeight.value ?? estimatedItemHeight();
+  return h + gridGapPx.value;
+});
+
+const totalRows = computed(() => {
+  if (gridColumnsCount.value <= 0) return 0;
+  return Math.ceil(props.images.length / gridColumnsCount.value);
+});
+
+const virtualPaddingTop = computed(() => {
+  if (!enableVirtualScroll.value) return 0;
+  return virtualStartRow.value * rowHeightWithGap.value;
+});
+
+const virtualPaddingBottom = computed(() => {
+  if (!enableVirtualScroll.value) return 0;
+  const rowsAfter = Math.max(0, totalRows.value - (virtualEndRow.value + 1));
+  return rowsAfter * rowHeightWithGap.value;
+});
+
+const updateVirtualRange = () => {
+  if (!enableVirtualScroll.value) return;
+  const container = containerEl.value;
+  if (!container) return;
+  const rh = rowHeightWithGap.value || 1;
+  const scrollTop = Math.max(0, container.scrollTop);
+  const height = container.clientHeight || 0;
+  const startRow = Math.floor(scrollTop / rh);
+  const endRow = Math.ceil((scrollTop + height) / rh);
+  const overscan = virtualOverscanRows.value;
+  const nextStart = Math.max(0, startRow - overscan);
+  const nextEnd = Math.max(
+    nextStart,
+    Math.min(totalRows.value - 1, endRow + overscan)
+  );
+  virtualStartRow.value = isFinite(nextStart) ? nextStart : 0;
+  virtualEndRow.value = isFinite(nextEnd) ? nextEnd : 0;
+};
+
+const measureItemHeight = () => {
+  if (!enableVirtualScroll.value) return;
+  const grid = containerEl.value?.querySelector<HTMLElement>(".image-grid");
+  const firstItem = grid?.querySelector<HTMLElement>(".image-item");
+  if (firstItem) {
+    measuredItemHeight.value = firstItem.getBoundingClientRect().height;
+  } else {
+    measuredItemHeight.value = estimatedItemHeight();
+  }
+};
+
+const scheduleVirtualUpdate = () => {
+  if (!enableVirtualScroll.value) return;
+  requestAnimationFrame(() => {
+    measureItemHeight();
+    updateVirtualRange();
+  });
+};
 
 let lastZoomAnim: Animation | null = null;
 const prefersReducedMotion = () => {
@@ -336,7 +443,12 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
     toggleSelection(image.id, index);
     return;
   }
-  // 普通单击：单选
+  // 普通单击：
+  // - 如果多选状态下点击已选中的图片，保持多选不变（避免双击时第一次点击破坏多选）
+  // - 否则切换为单选
+  if (internalSelectedIds.value.size > 1 && internalSelectedIds.value.has(image.id)) {
+    return;
+  }
   setSingleSelection(image.id, index);
 };
 
@@ -739,15 +851,18 @@ const shouldIgnoreKeyTarget = (event: KeyboardEvent) => {
 
 // 计算网格列样式
 const gridStyle = computed(() => {
-  // 列数为多少就是多少，不再使用 0 表示自动
-  // 如果列数为 0 或负数，使用 1 作为最小值（避免 CSS 错误）
-  const columns = imageGridColumns.value > 0 ? imageGridColumns.value : 1;
-  // 列数每增加1，gap减少1px，基准列数1时gap=16px，至少4px
-  const gap = Math.max(4, 16 - (columns - 1));
+  const columns = gridColumnsCount.value;
+  const gap = gridGapPx.value;
+  const paddingTop = BASE_GRID_PADDING_Y + (enableVirtualScroll.value ? virtualPaddingTop.value : 0);
+  const paddingBottom = BASE_GRID_PADDING_Y + (enableVirtualScroll.value ? virtualPaddingBottom.value : 0);
 
   return {
     gridTemplateColumns: `repeat(${columns}, 1fr)`,
-    gap: `${gap}px`
+    gap: `${gap}px`,
+    paddingTop: `${paddingTop}px`,
+    paddingBottom: `${paddingBottom}px`,
+    paddingLeft: `${BASE_GRID_PADDING_X}px`,
+    paddingRight: `${BASE_GRID_PADDING_X}px`,
   };
 });
 
@@ -861,6 +976,8 @@ onMounted(async () => {
 
   // 监听 tab 可见性变化
   document.addEventListener("visibilitychange", handleVisibilityChange);
+
+  scheduleVirtualUpdate();
 });
 
 onUnmounted(() => {
@@ -902,9 +1019,29 @@ watch(
 
 watch(
   () => props.images,
-  () => {
+  (nextImages, prevImages) => {
     // 列表变化时：内部选择集清理掉已不存在的 id
-    const ids = new Set(props.images.map((i) => i.id));
+    // 性能关键：十万级列表下，任何“每次变更都 props.images.map(...)”都会让滚动/窗口拖动明显卡顿。
+    if (internalSelectedIds.value.size === 0) return;
+
+    // “加载更多/加载全部”通常是纯追加：旧项不会消失，此时无需做 O(N) 扫描。
+    if (prevImages && prevImages.length > 0 && nextImages.length >= prevImages.length) {
+      const prevFirst = prevImages[0]?.id;
+      const prevLast = prevImages[prevImages.length - 1]?.id;
+      const nextFirst = nextImages[0]?.id;
+      const nextLastAtPrev = nextImages[prevImages.length - 1]?.id;
+      if (
+        prevFirst &&
+        prevLast &&
+        prevFirst === nextFirst &&
+        prevLast === nextLastAtPrev
+      ) {
+        return;
+      }
+    }
+
+    // 只有在“刷新/重排/删除”等可能导致旧项消失时，才做一次全量集合构建。
+    const ids = new Set(nextImages.map((i) => i.id));
     const next = new Set<string>();
     internalSelectedIds.value.forEach((id) => {
       if (ids.has(id)) next.add(id);
@@ -914,6 +1051,37 @@ watch(
     }
   },
   { deep: false }
+);
+
+const renderedItems = computed(() => {
+  if (!enableVirtualScroll.value) {
+    return props.images.map((image, index) => ({ image, index }));
+  }
+  const columns = gridColumnsCount.value;
+  if (columns <= 0 || props.images.length === 0) return [];
+  const clampedStart = Math.min(virtualStartRow.value, Math.max(0, totalRows.value - 1));
+  const clampedEnd = Math.min(
+    Math.max(clampedStart, virtualEndRow.value),
+    Math.max(0, totalRows.value - 1)
+  );
+  const startIndex = clampedStart * columns;
+  const endIndex = Math.min(props.images.length, (clampedEnd + 1) * columns);
+  const slice = props.images.slice(startIndex, endIndex);
+  return slice.map((image, offset) => ({ image, index: startIndex + offset }));
+});
+
+watch(
+  () => [props.images.length, gridColumnsCount.value, windowAspectRatio.value, enableVirtualScroll.value],
+  () => {
+    scheduleVirtualUpdate();
+  }
+);
+
+watch(
+  () => gridGapPx.value,
+  () => {
+    scheduleVirtualUpdate();
+  }
 );
 
 // 防抖滚动触发 scroll-stable（用于懒加载 blob url 等）
@@ -929,6 +1097,25 @@ useEventListener(
   ),
   { passive: true }
 );
+
+// 虚拟滚动：实时更新可视行
+let virtualScrollRaf: number | null = null;
+const scheduleVirtualRangeUpdate = () => {
+  if (!enableVirtualScroll.value) return;
+  if (virtualScrollRaf != null) return;
+  virtualScrollRaf = requestAnimationFrame(() => {
+    virtualScrollRaf = null;
+    updateVirtualRange();
+  });
+};
+useEventListener(containerEl, "scroll", scheduleVirtualRangeUpdate, { passive: true });
+
+onUnmounted(() => {
+  if (virtualScrollRaf != null) {
+    cancelAnimationFrame(virtualScrollRaf);
+    virtualScrollRaf = null;
+  }
+});
 
 // Ctrl+滚轮调整列数（阻止浏览器缩放）
 useEventListener(
@@ -991,6 +1178,17 @@ useDragScroll(containerEl);
 .image-grid-container.drag-scroll-active {
   cursor: grabbing;
   user-select: none;
+}
+
+/* 拖拽滚动时：禁用图片项交互与 hover（避免指针扫过 5000 个卡片导致大量 hover/重绘） */
+.image-grid-container.drag-scroll-active :deep(.image-item) {
+  pointer-events: none;
+  transition: none !important;
+}
+
+.image-grid-container.drag-scroll-active :deep(.image-item:hover) {
+  transform: none !important;
+  outline: none !important;
 }
 
 .image-grid-container :deep(.image-grid-root) {

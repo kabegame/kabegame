@@ -1,4 +1,9 @@
+#![allow(dead_code)]
+
 pub mod rhai;
+pub mod task_scheduler;
+
+pub use task_scheduler::{CrawlTaskRequest, TaskScheduler};
 
 use crate::plugin::Plugin;
 use crate::plugin::{VarDefinition, VarOption};
@@ -7,12 +12,15 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
+use zip::ZipArchive;
 
 /// 创建配置了系统代理的 reqwest 客户端
 /// 自动从环境变量读取 HTTP_PROXY, HTTPS_PROXY, NO_PROXY 等配置
@@ -418,6 +426,114 @@ fn compute_file_hash(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn resolve_local_path_from_url(url: &str) -> Option<PathBuf> {
+    // 支持：
+    // - file:///xxx
+    // - file://xxx
+    // - 直接的本地绝对/相对路径（但必须存在）
+    let path = if url.starts_with("file://") {
+        let path_str = if url.starts_with("file:///") {
+            &url[8..]
+        } else {
+            &url[7..]
+        };
+        #[cfg(windows)]
+        let path_str = path_str.replace("/", "\\");
+        #[cfg(not(windows))]
+        let path_str = path_str;
+        PathBuf::from(path_str)
+    } else {
+        let p = PathBuf::from(url);
+        if !p.exists() {
+            return None;
+        }
+        p
+    };
+
+    path.canonicalize().ok()
+}
+
+fn is_zip_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("zip"))
+        .unwrap_or(false)
+}
+
+fn is_supported_image_ext(ext: &str) -> bool {
+    // 与 local-import 默认扩展名保持一致（避免 svg 等非 raster 格式导致 thumbnail 失败）
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "ico"
+    )
+}
+
+fn collect_images_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let p = entry.path();
+        if p.is_dir() {
+            collect_images_recursive(&p, out)?;
+        } else if p.is_file() {
+            if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+                if is_supported_image_ext(ext) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+struct TempDirGuard {
+    path: PathBuf,
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        // 需求：任何时候都要清理（best-effort）
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn extract_zip_to_dir(zip_path: &Path, dst_dir: &Path) -> Result<(), String> {
+    let file = fs::File::open(zip_path).map_err(|e| format!("Failed to open zip: {}", e))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("Failed to open zip: {}", e))?;
+
+    for i in 0..archive.len() {
+        let mut f = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read zip entry #{}: {}", i, e))?;
+
+        // 安全：拒绝路径穿越
+        let Some(rel) = f.enclosed_name().map(|p| p.to_owned()) else {
+            continue;
+        };
+
+        let out_path = dst_dir.join(rel);
+        if f.name().ends_with('/') {
+            fs::create_dir_all(&out_path)
+                .map_err(|e| format!("Failed to create dir {}: {}", out_path.display(), e))?;
+            continue;
+        }
+
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
+        }
+
+        let mut out_file =
+            fs::File::create(&out_path).map_err(|e| format!("Failed to write file: {}", e))?;
+        std::io::copy(&mut f, &mut out_file)
+            .map_err(|e| format!("Failed to extract zip entry: {}", e))?;
+        let _ = out_file.flush();
+    }
+
+    Ok(())
+}
+
 #[allow(dead_code)]
 fn compute_bytes_hash(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -628,178 +744,27 @@ fn download_image(
         let file_path = unique_path(&target_dir, &filename);
         let file_path_clone = file_path.clone();
 
-        let (tx, rx) = std::sync::mpsc::channel();
+        // 注意：download_image 由 download worker 线程调用，因此这里不再额外 spawn 一层线程。
+        // 这样可以确保“并发下载数 x”真正对应 x 个 worker 的并发度。
+        let (content_hash, final_or_temp_path) = (|| -> Result<(String, PathBuf), String> {
+            let client = create_blocking_client()?;
 
-        std::thread::spawn(move || {
-            let result = (|| -> Result<(String, PathBuf), String> {
-                let client = create_blocking_client()?;
+            // 失败重试：每次 attempt 都重新下载并写入新的临时文件（避免脏数据）
+            let max_attempts = retry_count.saturating_add(1).max(1);
+            let mut attempt: u32 = 0;
 
-                // 失败重试：每次 attempt 都重新下载并写入新的临时文件（避免脏数据）
-                let max_attempts = retry_count.saturating_add(1).max(1);
-                let mut attempt: u32 = 0;
+            loop {
+                attempt += 1;
 
-                loop {
-                    attempt += 1;
+                // 若任务已被取消，尽早退出
+                let dq = app_clone.state::<DownloadQueue>();
+                if dq.is_task_canceled(&task_id_clone) {
+                    return Err("Task canceled".to_string());
+                }
 
-                    // 若任务已被取消，尽早退出
-                    let dq = app_clone.state::<DownloadQueue>();
-                    if dq.is_task_canceled(&task_id_clone) {
-                        return Err("Task canceled".to_string());
-                    }
-
-                    let response = match client.get(&url_clone).send() {
-                        Ok(r) => r,
-                        Err(e) => {
-                            if attempt < max_attempts {
-                                let backoff_ms = (500u64)
-                                    .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
-                                    .min(5000);
-                                std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
-                                continue;
-                            }
-                            return Err(format!("Failed to download image: {}", e));
-                        }
-                    };
-
-                    let status = response.status();
-                    if !status.is_success() {
-                        let retryable = status.as_u16() == 408
-                            || status.as_u16() == 429
-                            || status.is_server_error();
-                        if retryable && attempt < max_attempts {
-                            let backoff_ms = (500u64)
-                                .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
-                                .min(5000);
-                            std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
-                            continue;
-                        }
-                        return Err(format!("HTTP error: {}", status));
-                    }
-
-                    let total_bytes = response.content_length();
-                    let mut received_bytes: u64 = 0;
-
-                    // 临时文件：避免中途失败留下半成品；成功后再 rename 到最终路径
-                    let temp_name = format!(
-                        "{}.part-{}",
-                        file_path_clone
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("image"),
-                        uuid::Uuid::new_v4()
-                    );
-                    let temp_path = target_dir_clone.join(temp_name);
-
-                    let mut file = match std::fs::File::create(&temp_path) {
-                        Ok(f) => f,
-                        Err(e) => return Err(format!("Failed to create file: {}", e)),
-                    };
-
-                    // 记录临时文件到数据库
-                    if let Some(storage) = app_clone.try_state::<crate::storage::Storage>() {
-                        let temp_path_str = temp_path.to_string_lossy().to_string();
-                        let _ = storage.add_temp_file(&temp_path_str);
-                    }
-
-                    // 边下载边算 hash（用于去重）
-                    let mut hasher = Sha256::new();
-
-                    // 进度事件节流：至少 256KB 或 200ms 才发一次
-                    let mut last_emit_bytes: u64 = 0;
-                    let mut last_emit_at = std::time::Instant::now();
-                    let emit_interval = std::time::Duration::from_millis(200);
-                    let emit_bytes_step: u64 = 256 * 1024;
-
-                    // 首次立即发一个（用于 UI 及时出现 "0B / ?"）
-                    let _ = app_clone.emit(
-                        "download-progress",
-                        serde_json::json!({
-                            "taskId": task_id_clone,
-                            "url": url_clone,
-                            "startTime": download_start_time,
-                            "pluginId": plugin_id_clone,
-                            "receivedBytes": received_bytes,
-                            "totalBytes": total_bytes,
-                        }),
-                    );
-
-                    // 首次下载时发送下载状态
-                    emit_download_state(
-                        &app_clone,
-                        &task_id_clone,
-                        &url_clone,
-                        download_start_time,
-                        &plugin_id_clone,
-                        "downloading",
-                        None,
-                    );
-
-                    let mut stream_error: Option<String> = None;
-
-                    // 使用阻塞方式读取响应（分块读取以支持进度更新）
-                    let mut reader = response;
-                    loop {
-                        // 若任务已被取消，中止并清理临时文件
-                        let dq = app_clone.state::<DownloadQueue>();
-                        if dq.is_task_canceled(&task_id_clone) {
-                            // 从数据库中删除临时文件记录
-                            if let Some(storage) = app_clone.try_state::<crate::storage::Storage>() {
-                                let temp_path_str = temp_path.to_string_lossy().to_string();
-                                let _ = storage.remove_temp_file(&temp_path_str);
-                            }
-                            let _ = std::fs::remove_file(&temp_path);
-                            return Err("Task canceled".to_string());
-                        }
-
-                        let mut buffer = vec![0u8; 8192];
-                        match std::io::Read::read(&mut reader, &mut buffer) {
-                            Ok(0) => break, // EOF
-                            Ok(n) => {
-                                let chunk = &buffer[..n];
-                                hasher.update(chunk);
-                                if let Err(e) = std::io::Write::write_all(&mut file, chunk) {
-                                    stream_error = Some(format!("Failed to write file: {}", e));
-                                    break;
-                                }
-
-                                received_bytes = received_bytes.saturating_add(n as u64);
-
-                                let should_emit = received_bytes.saturating_sub(last_emit_bytes)
-                                    >= emit_bytes_step
-                                    || last_emit_at.elapsed() >= emit_interval;
-                                if should_emit {
-                                    last_emit_bytes = received_bytes;
-                                    last_emit_at = std::time::Instant::now();
-                                    let _ = app_clone.emit(
-                                        "download-progress",
-                                        serde_json::json!({
-                                            "taskId": task_id_clone,
-                                            "url": url_clone,
-                                            "startTime": download_start_time,
-                                            "pluginId": plugin_id_clone,
-                                            "receivedBytes": received_bytes,
-                                            "totalBytes": total_bytes,
-                                        }),
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                stream_error = Some(format!("Failed to read stream: {}", e));
-                                break;
-                            }
-                        }
-                    }
-
-                    // 关闭文件句柄（确保 Windows 下 rename 不被占用）
-                    drop(file);
-
-                    if let Some(err) = stream_error {
-                        // 从数据库中删除临时文件记录
-                        if let Some(storage) = app_clone.try_state::<crate::storage::Storage>() {
-                            let temp_path_str = temp_path.to_string_lossy().to_string();
-                            let _ = storage.remove_temp_file(&temp_path_str);
-                        }
-                        let _ = std::fs::remove_file(&temp_path);
+                let response = match client.get(&url_clone).send() {
+                    Ok(r) => r,
+                    Err(e) => {
                         if attempt < max_attempts {
                             let backoff_ms = (500u64)
                                 .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
@@ -807,34 +772,176 @@ fn download_image(
                             std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
                             continue;
                         }
-                        return Err(err);
+                        return Err(format!("Failed to download image: {}", e));
+                    }
+                };
+
+                let status = response.status();
+                if !status.is_success() {
+                    let retryable = status.as_u16() == 408
+                        || status.as_u16() == 429
+                        || status.is_server_error();
+                    if retryable && attempt < max_attempts {
+                        let backoff_ms = (500u64)
+                            .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
+                            .min(5000);
+                        std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                        continue;
+                    }
+                    return Err(format!("HTTP error: {}", status));
+                }
+
+                let total_bytes = response.content_length();
+                let mut received_bytes: u64 = 0;
+
+                // 临时文件：避免中途失败留下半成品；成功后再 rename 到最终路径
+                let temp_name = format!(
+                    "{}.part-{}",
+                    file_path_clone
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("image"),
+                    uuid::Uuid::new_v4()
+                );
+                let temp_path = target_dir_clone.join(temp_name);
+
+                let mut file = match std::fs::File::create(&temp_path) {
+                    Ok(f) => f,
+                    Err(e) => return Err(format!("Failed to create file: {}", e)),
+                };
+
+                // 记录临时文件到数据库
+                if let Some(storage) = app_clone.try_state::<crate::storage::Storage>() {
+                    let temp_path_str = temp_path.to_string_lossy().to_string();
+                    let _ = storage.add_temp_file(&temp_path_str);
+                }
+
+                // 边下载边算 hash（用于去重）
+                let mut hasher = Sha256::new();
+
+                // 进度事件节流：至少 256KB 或 200ms 才发一次
+                let mut last_emit_bytes: u64 = 0;
+                let mut last_emit_at = std::time::Instant::now();
+                let emit_interval = std::time::Duration::from_millis(200);
+                let emit_bytes_step: u64 = 256 * 1024;
+
+                // 首次立即发一个（用于 UI 及时出现 "0B / ?"）
+                let _ = app_clone.emit(
+                    "download-progress",
+                    serde_json::json!({
+                        "taskId": task_id_clone,
+                        "url": url_clone,
+                        "startTime": download_start_time,
+                        "pluginId": plugin_id_clone,
+                        "receivedBytes": received_bytes,
+                        "totalBytes": total_bytes,
+                    }),
+                );
+
+                // 首次下载时发送下载状态
+                emit_download_state(
+                    &app_clone,
+                    &task_id_clone,
+                    &url_clone,
+                    download_start_time,
+                    &plugin_id_clone,
+                    "downloading",
+                    None,
+                );
+
+                let mut stream_error: Option<String> = None;
+
+                // 使用阻塞方式读取响应（分块读取以支持进度更新）
+                let mut reader = response;
+                loop {
+                    // 若任务已被取消，中止并清理临时文件
+                    let dq = app_clone.state::<DownloadQueue>();
+                    if dq.is_task_canceled(&task_id_clone) {
+                        // 从数据库中删除临时文件记录
+                        if let Some(storage) = app_clone.try_state::<crate::storage::Storage>() {
+                            let temp_path_str = temp_path.to_string_lossy().to_string();
+                            let _ = storage.remove_temp_file(&temp_path_str);
+                        }
+                        let _ = std::fs::remove_file(&temp_path);
+                        return Err("Task canceled".to_string());
                     }
 
-                    // 最终再发一次（接近 100%）
-                    let _ = app_clone.emit(
-                        "download-progress",
-                        serde_json::json!({
-                            "taskId": task_id_clone,
-                            "url": url_clone,
-                            "startTime": download_start_time,
-                            "pluginId": plugin_id_clone,
-                            "receivedBytes": received_bytes,
-                            "totalBytes": total_bytes,
-                        }),
-                    );
+                    let mut buffer = vec![0u8; 8192];
+                    match std::io::Read::read(&mut reader, &mut buffer) {
+                        Ok(0) => break, // EOF
+                        Ok(n) => {
+                            let chunk = &buffer[..n];
+                            hasher.update(chunk);
+                            if let Err(e) = std::io::Write::write_all(&mut file, chunk) {
+                                stream_error = Some(format!("Failed to write file: {}", e));
+                                break;
+                            }
 
-                    let content_hash = format!("{:x}", hasher.finalize());
-                    return Ok((content_hash, temp_path));
+                            received_bytes = received_bytes.saturating_add(n as u64);
+
+                            let should_emit = received_bytes.saturating_sub(last_emit_bytes)
+                                >= emit_bytes_step
+                                || last_emit_at.elapsed() >= emit_interval;
+                            if should_emit {
+                                last_emit_bytes = received_bytes;
+                                last_emit_at = std::time::Instant::now();
+                                let _ = app_clone.emit(
+                                    "download-progress",
+                                    serde_json::json!({
+                                        "taskId": task_id_clone,
+                                        "url": url_clone,
+                                        "startTime": download_start_time,
+                                        "pluginId": plugin_id_clone,
+                                        "receivedBytes": received_bytes,
+                                        "totalBytes": total_bytes,
+                                    }),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            stream_error = Some(format!("Failed to read stream: {}", e));
+                            break;
+                        }
+                    }
                 }
-            })();
 
-            let _ = tx.send(result);
-        });
+                // 关闭文件句柄（确保 Windows 下 rename 不被占用）
+                drop(file);
 
-        let (content_hash, final_or_temp_path) = rx
-            .recv()
-            .map_err(|e| format!("Thread communication error: {}", e))?
-            .map_err(|e| e)?;
+                if let Some(err) = stream_error {
+                    // 从数据库中删除临时文件记录
+                    if let Some(storage) = app_clone.try_state::<crate::storage::Storage>() {
+                        let temp_path_str = temp_path.to_string_lossy().to_string();
+                        let _ = storage.remove_temp_file(&temp_path_str);
+                    }
+                    let _ = std::fs::remove_file(&temp_path);
+                    if attempt < max_attempts {
+                        let backoff_ms = (500u64)
+                            .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
+                            .min(5000);
+                        std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                        continue;
+                    }
+                    return Err(err);
+                }
+
+                // 最终再发一次（接近 100%）
+                let _ = app_clone.emit(
+                    "download-progress",
+                    serde_json::json!({
+                        "taskId": task_id_clone,
+                        "url": url_clone,
+                        "startTime": download_start_time,
+                        "pluginId": plugin_id_clone,
+                        "receivedBytes": received_bytes,
+                        "totalBytes": total_bytes,
+                    }),
+                );
+
+                let content_hash = format!("{:x}", hasher.finalize());
+                return Ok((content_hash, temp_path));
+            }
+        })()?;
 
         // 若已有相同哈希且文件存在，复用
         let storage = app.state::<crate::storage::Storage>();
@@ -1016,70 +1123,125 @@ fn emit_download_state(
     let _ = app.emit("download-state", payload);
 }
 
-// 下载并发窗口管理器（不再使用队列）
+#[derive(Debug, Clone)]
+struct DownloadRequest {
+    url: String,
+    images_dir: PathBuf,
+    plugin_id: String,
+    task_id: String,
+    download_start_time: u64,
+    output_album_id: Option<String>,
+    /// zip 解压临时目录生命周期守卫：
+    /// - 普通下载为 None
+    /// - zip 内文件下载为 Some(Arc<TempDirGuard>)，确保文件被 worker 处理完前临时目录不会被清理
+    temp_dir_guard: Option<Arc<TempDirGuard>>,
+}
+
+#[derive(Debug)]
+struct DownloadPoolState {
+    in_flight: u32,
+    queue: VecDeque<DownloadRequest>,
+}
+
+#[derive(Debug)]
+struct DownloadPool {
+    desired_workers: AtomicU32,
+    total_workers: AtomicU32,
+    state: Mutex<DownloadPoolState>,
+    cv: Condvar,
+}
+
+#[allow(dead_code)]
+impl DownloadPool {
+    fn new(initial_workers: u32) -> Self {
+        let n = initial_workers.max(1);
+        Self {
+            desired_workers: AtomicU32::new(n),
+            total_workers: AtomicU32::new(n),
+            state: Mutex::new(DownloadPoolState {
+                in_flight: 0,
+                queue: VecDeque::new(),
+            }),
+            cv: Condvar::new(),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn set_desired(&self, desired: u32) -> u32 {
+        let n = desired.max(1);
+        self.desired_workers.store(n, Ordering::Relaxed);
+        self.cv.notify_all();
+        n
+    }
+}
+
+// 下载调度器：固定/可伸缩 download worker（并发=设置 max_concurrent_downloads）
 #[derive(Clone)]
 pub struct DownloadQueue {
     app: AppHandle,
-    window_cv: Arc<Condvar>, // 用于等待窗口空位
-    active_downloads: Arc<Mutex<u32>>,
+    pool: Arc<DownloadPool>,
     active_tasks: Arc<Mutex<Vec<ActiveDownloadInfo>>>,
     canceled_tasks: Arc<Mutex<HashSet<String>>>,
 }
 
 impl DownloadQueue {
     pub fn new(app: AppHandle) -> Self {
+        let initial = match app.try_state::<crate::settings::Settings>() {
+            Some(settings) => settings
+                .get_settings()
+                .ok()
+                .map(|s| s.max_concurrent_downloads)
+                .unwrap_or(3),
+            None => 3,
+        };
+        let pool = Arc::new(DownloadPool::new(initial));
         Self {
-            app,
-            window_cv: Arc::new(Condvar::new()),
-            active_downloads: Arc::new(Mutex::new(0)),
+            app: app.clone(),
+            pool: Arc::clone(&pool),
             active_tasks: Arc::new(Mutex::new(Vec::new())),
             canceled_tasks: Arc::new(Mutex::new(HashSet::new())),
         }
+        .start_download_workers(pool.total_workers.load(Ordering::Relaxed))
     }
 
-    /// 获取最大并发数
-    fn get_max_concurrent(&self) -> u32 {
-        match self.app.try_state::<crate::settings::Settings>() {
-            Some(settings) => match settings.get_settings() {
-                Ok(s) => s.max_concurrent_downloads,
-                Err(_) => 3, // 默认值
-            },
-            None => 3, // 默认值
+    fn start_download_workers(self, count: u32) -> Self {
+        for _ in 0..count {
+            let app = self.app.clone();
+            let pool = Arc::clone(&self.pool);
+            let active_tasks = Arc::clone(&self.active_tasks);
+            std::thread::spawn(move || download_worker_loop(app, pool, active_tasks));
         }
+        self
     }
 
-    /// 等待窗口有空位（当窗口满时挂起，有空位时唤醒）
-    fn wait_for_window_slot(&self, task_id: &str) -> Result<(), String> {
-        let mut active_guard = self
-            .active_downloads
-            .lock()
-            .map_err(|e| format!("Lock error: {}", e))?;
-
-        // 在循环内部每次迭代时重新获取 max_concurrent，以便实时响应设置变更
-        while {
-            let max_concurrent = self.get_max_concurrent();
-            *active_guard >= max_concurrent
-        } {
-            if self.is_task_canceled(task_id) {
-                return Ok(());
+    /// 调整 download worker 数量（全局并发下载数）
+    ///
+    /// - 增大：创建新线程并立刻生效
+    /// - 减小：空闲 worker 会尽快退出；忙碌 worker 会在本次下载完成后自我终止（不回收 slot）
+    pub fn set_desired_concurrency(&self, desired: u32) {
+        let desired = self.pool.set_desired(desired);
+        // 若需要扩容：补齐线程数
+        loop {
+            let total = self.pool.total_workers.load(Ordering::Relaxed);
+            if total >= desired {
+                break;
             }
-            active_guard = self
-                .window_cv
-                .wait(active_guard)
-                .map_err(|e| format!("Lock error: {}", e))?;
+            let add = desired - total;
+            self.pool.total_workers.fetch_add(add, Ordering::Relaxed);
+            for _ in 0..add {
+                let app = self.app.clone();
+                let pool = Arc::clone(&self.pool);
+                let active_tasks = Arc::clone(&self.active_tasks);
+                std::thread::spawn(move || download_worker_loop(app, pool, active_tasks));
+            }
+            break;
         }
-
-        Ok(())
+        self.pool.cv.notify_all();
     }
 
-    /// 通知窗口有空位（当下载完成时调用）
-    fn notify_window_slot_available(&self) {
-        self.window_cv.notify_one();
-    }
-
-    /// 通知所有等待的任务重新检查窗口（当并发数设置改变时调用）
+    /// 唤醒所有等待中的 download_image（用于并发设置变更/取消任务）
     pub fn notify_all_waiting(&self) {
-        self.window_cv.notify_all();
+        self.pool.cv.notify_all();
     }
 
     // 获取正在下载的任务列表
@@ -1100,6 +1262,27 @@ impl DownloadQueue {
         task_id: String,
         download_start_time: u64,
         output_album_id: Option<String>,
+    ) -> Result<bool, String> {
+        self.download_image_with_temp_guard(
+            url,
+            images_dir,
+            plugin_id,
+            task_id,
+            download_start_time,
+            output_album_id,
+            None,
+        )
+    }
+
+    fn download_image_with_temp_guard(
+        &self,
+        url: String,
+        images_dir: PathBuf,
+        plugin_id: String,
+        task_id: String,
+        download_start_time: u64,
+        output_album_id: Option<String>,
+        temp_dir_guard: Option<Arc<TempDirGuard>>,
     ) -> Result<bool, String> {
         if self.is_task_canceled(&task_id) {
             return Err("Task canceled".to_string());
@@ -1201,19 +1384,36 @@ impl DownloadQueue {
             return Ok(true);
         }
 
-        // 等待窗口有空位（如果窗口满则阻塞）
-        self.wait_for_window_slot(&task_id)?;
-        if self.is_task_canceled(&task_id) {
-            return Err("Task canceled".to_string());
-        }
-
-        // 增加活跃下载数
+        // 关键语义：仅当没有可用 download worker 时才阻塞
         {
-            let mut active = self
-                .active_downloads
+            let mut st = self
+                .pool
+                .state
                 .lock()
                 .map_err(|e| format!("Lock error: {}", e))?;
-            *active += 1;
+            while {
+                let desired = self.pool.desired_workers.load(Ordering::Relaxed);
+                st.in_flight >= desired
+            } {
+                if self.is_task_canceled(&task_id) {
+                    return Err("Task canceled".to_string());
+                }
+                st = self
+                    .pool
+                    .cv
+                    .wait(st)
+                    .map_err(|e| format!("Lock error: {}", e))?;
+            }
+            st.in_flight = st.in_flight.saturating_add(1);
+        }
+
+        if self.is_task_canceled(&task_id) {
+            // 释放 slot（因为已经拿到了 worker）
+            if let Ok(mut st) = self.pool.state.lock() {
+                st.in_flight = st.in_flight.saturating_sub(1);
+                self.pool.cv.notify_one();
+            }
+            return Err("Task canceled".to_string());
         }
 
         // 添加到活跃任务列表
@@ -1242,81 +1442,216 @@ impl DownloadQueue {
             None,
         );
 
-        // 在后台异步执行下载
-        let app_clone = self.app.clone();
-        let url_clone = url.clone();
-        let images_dir_clone = images_dir.clone();
-        let plugin_id_clone = plugin_id.clone();
-        let task_id_clone = task_id.clone();
-        let output_album_id_clone = output_album_id.clone();
-        let active_downloads_clone = Arc::clone(&self.active_downloads);
-        let active_tasks_clone = Arc::clone(&self.active_tasks);
-        let window_cv_clone = Arc::clone(&self.window_cv);
+        // 入队：由 download worker 异步执行；此处立刻返回
+        {
+            let mut st = self
+                .pool
+                .state
+                .lock()
+                .map_err(|e| format!("Lock error: {}", e))?;
+            st.queue.push_back(DownloadRequest {
+                url,
+                images_dir,
+                plugin_id,
+                task_id,
+                download_start_time,
+                output_album_id,
+                temp_dir_guard,
+            });
+            self.pool.cv.notify_one();
+        }
 
-        std::thread::spawn(move || {
-            // 开始下载，更新状态为 downloading
+        Ok(true)
+    }
+
+    // 取消任务：标记为取消，正在下载的任务在保存阶段会被跳过
+    pub fn cancel_task(&self, task_id: &str) -> Result<(), String> {
+        // 标记为取消
+        {
+            let mut canceled = self
+                .canceled_tasks
+                .lock()
+                .map_err(|e| format!("Lock error: {}", e))?;
+            canceled.insert(task_id.to_string());
+        }
+
+        // 唤醒所有等待 download slot 的线程（让它们检查取消状态）
+        self.notify_all_waiting();
+
+        Ok(())
+    }
+
+    pub fn is_task_canceled(&self, task_id: &str) -> bool {
+        match self.canceled_tasks.lock() {
+            Ok(c) => c.contains(task_id),
+            Err(e) => e.into_inner().contains(task_id),
+        }
+    }
+}
+
+fn download_worker_loop(
+    app: AppHandle,
+    pool: Arc<DownloadPool>,
+    active_tasks: Arc<Mutex<Vec<ActiveDownloadInfo>>>,
+) {
+    loop {
+        let job = {
+            let mut st = match pool.state.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+
+            while st.queue.is_empty() {
+                // 缩容：空闲 worker 直接退出
+                let desired = pool.desired_workers.load(Ordering::Relaxed);
+                let total = pool.total_workers.load(Ordering::Relaxed);
+                if total > desired {
+                    pool.total_workers.fetch_sub(1, Ordering::Relaxed);
+                    pool.cv.notify_all();
+                    return;
+                }
+
+                st = match pool.cv.wait(st) {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+            }
+
+            st.queue.pop_front()
+        };
+
+        let Some(job) = job else { continue };
+
+        // zip 导入：zip 本身只负责解压；解压完成后立刻结束该 job 并释放 worker。
+        // zip 内文件将作为“独立下载请求”逐个入队，受 download worker 并发限制，并在 UI 中逐个可见。
+        if let Some(zip_path) = resolve_local_path_from_url(&job.url).filter(|p| is_zip_path(p)) {
+            // 更新 active download 状态为 extracting
             {
-                let mut tasks = active_tasks_clone.lock().unwrap();
+                let mut tasks = match active_tasks.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
                 if let Some(t) = tasks
                     .iter_mut()
-                    .find(|t| t.url == url_clone && t.start_time == download_start_time)
+                    .find(|t| t.url == job.url && t.start_time == job.download_start_time)
                 {
-                    t.state = "downloading".to_string();
+                    t.state = "extracting".to_string();
                 }
             }
 
-            // 执行下载
-            let result = download_image(
-                &url_clone,
-                &images_dir_clone,
-                &plugin_id_clone,
-                &task_id_clone,
-                download_start_time,
+            let app_clone = app.clone();
+            let url_clone = job.url.clone();
+            let plugin_id_clone = job.plugin_id.clone();
+            let task_id_clone = job.task_id.clone();
+            let output_album_id_clone = job.output_album_id.clone();
+            let download_start_time = job.download_start_time;
+
+            emit_download_state(
                 &app_clone,
+                &task_id_clone,
+                &url_clone,
+                download_start_time,
+                &plugin_id_clone,
+                "extracting",
+                None,
             );
 
-            // 减少活跃下载数
-            {
-                let mut active = active_downloads_clone.lock().unwrap();
-                *active -= 1;
-            }
+            let result: Result<(), String> = (|| {
+                // 取消检查
+                let dq = app_clone.state::<DownloadQueue>();
+                if dq.is_task_canceled(&task_id_clone) {
+                    return Err("Task canceled".to_string());
+                }
 
-            // 通知窗口有空位
-            window_cv_clone.notify_one();
+                // 解压到临时目录（生命周期由后续入队的每个文件下载请求托管）
+                let temp_dir = std::env::temp_dir()
+                    .join(format!("kabegame_zip_{}", uuid::Uuid::new_v4().to_string()));
+                fs::create_dir_all(&temp_dir)
+                    .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+                let temp_guard = Arc::new(TempDirGuard {
+                    path: temp_dir.clone(),
+                });
 
-            // 更新状态
-            {
-                let mut tasks = active_tasks_clone.lock().unwrap();
-                if let Some(t) = tasks
-                    .iter_mut()
-                    .find(|t| t.url == url_clone && t.start_time == download_start_time)
+                extract_zip_to_dir(&zip_path, &temp_dir)?;
+
+                // 递归收集图片
+                let mut images = Vec::<PathBuf>::new();
+                collect_images_recursive(&temp_dir, &mut images)?;
+                if images.is_empty() {
+                    // 空包：立刻清理临时目录（best-effort）
+                    let _ = fs::remove_dir_all(&temp_dir);
+                    return Ok(());
+                }
+
+                // 解压完成：zip 进入 processing（递归扫描 + 入队都算处理阶段）
                 {
-                    match &result {
-                        Ok(_downloaded) => {
-                            // 下载完成，进入处理阶段
-                            t.state = "processing".to_string();
-                        }
-                        Err(e) => {
-                            // 失败或取消时保持原状态（前端会处理错误显示）
-                            if e.contains("Task canceled") {
-                                t.state = "canceled".to_string();
-                            } else {
-                                t.state = "failed".to_string();
-                            }
-                        }
+                    let mut tasks = match active_tasks.lock() {
+                        Ok(g) => g,
+                        Err(e) => e.into_inner(),
+                    };
+                    if let Some(t) = tasks
+                        .iter_mut()
+                        .find(|t| t.url == url_clone && t.start_time == download_start_time)
+                    {
+                        t.state = "processing".to_string();
                     }
                 }
-            }
+                emit_download_state(
+                    &app_clone,
+                    &task_id_clone,
+                    &url_clone,
+                    download_start_time,
+                    &plugin_id_clone,
+                    "processing",
+                    None,
+                );
+
+                // 逐个入队（不新建线程，复用当前 worker；入队过程会按并发限制阻塞等待）
+                const MAX_TASK_IMAGES: usize = 10000;
+                let dq = app_clone.state::<DownloadQueue>();
+                let storage = app_clone.state::<crate::storage::Storage>();
+
+                let base_count = storage
+                    .get_task_image_ids(&task_id_clone)
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                let mut queued_count: usize = 0;
+
+                for img in images {
+                    if dq.is_task_canceled(&task_id_clone) {
+                        break;
+                    }
+                    if base_count.saturating_add(queued_count) >= MAX_TASK_IMAGES {
+                        break;
+                    }
+
+                    let url_for_image = img.to_string_lossy().to_string();
+                    let res = dq.download_image_with_temp_guard(
+                        url_for_image,
+                        job.images_dir.clone(),
+                        plugin_id_clone.clone(),
+                        task_id_clone.clone(),
+                        0,
+                        output_album_id_clone.clone(),
+                        Some(Arc::clone(&temp_guard)),
+                    );
+                    if res.is_ok() {
+                        queued_count = queued_count.saturating_add(1);
+                    }
+                }
+
+                Ok(())
+            })();
 
             match &result {
-                Ok(_downloaded) => {
+                Ok(_) => {
                     emit_download_state(
                         &app_clone,
                         &task_id_clone,
                         &url_clone,
                         download_start_time,
                         &plugin_id_clone,
-                        "processing",
+                        "completed",
                         None,
                     );
                 }
@@ -1337,97 +1672,192 @@ impl DownloadQueue {
                 }
             }
 
-            // 如果下载成功，保存到 gallery（后处理阶段）
-            if let Ok(downloaded) = &result {
-                // 在保存到数据库前，再次检查任务是否已被取消
-                let dq = app_clone.state::<DownloadQueue>();
-                if dq.is_task_canceled(&task_id_clone) {
-                    // 任务已取消，跳过保存阶段，并清理已下载的文件（如果是新下载的）
-                    if !downloaded.reused {
-                        let _ = std::fs::remove_file(&downloaded.path);
-                        if let Some(thumb) = &downloaded.thumbnail {
-                            if thumb.exists() {
-                                let _ = std::fs::remove_file(thumb);
-                            }
+            // 最终：从活跃任务列表中移除
+            {
+                let mut tasks = match active_tasks.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                tasks.retain(|t| t.url != url_clone || t.start_time != download_start_time);
+            }
+
+            // 释放/退出 worker
+            release_or_exit_worker(&pool);
+            continue;
+        }
+
+        // 开始下载，更新状态为 downloading
+        {
+            let mut tasks = match active_tasks.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+            if let Some(t) = tasks
+                .iter_mut()
+                .find(|t| t.url == job.url && t.start_time == job.download_start_time)
+            {
+                t.state = "downloading".to_string();
+            }
+        }
+
+        let app_clone = app.clone();
+        let url_clone = job.url.clone();
+        let plugin_id_clone = job.plugin_id.clone();
+        let task_id_clone = job.task_id.clone();
+        let output_album_id_clone = job.output_album_id.clone();
+        let download_start_time = job.download_start_time;
+
+        // 执行下载（worker 线程内同步执行，避免额外 spawn）
+        let result = download_image(
+            &job.url,
+            &job.images_dir,
+            &job.plugin_id,
+            &job.task_id,
+            job.download_start_time,
+            &app,
+        );
+
+        // 更新状态
+        {
+            let mut tasks = match active_tasks.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+            if let Some(t) = tasks
+                .iter_mut()
+                .find(|t| t.url == job.url && t.start_time == job.download_start_time)
+            {
+                match &result {
+                    Ok(_) => t.state = "processing".to_string(),
+                    Err(e) => {
+                        if e.contains("Task canceled") {
+                            t.state = "canceled".to_string();
+                        } else {
+                            t.state = "failed".to_string();
                         }
                     }
-
-                    emit_download_state(
-                        &app_clone,
-                        &task_id_clone,
-                        &url_clone,
-                        download_start_time,
-                        &plugin_id_clone,
-                        "canceled",
-                        None,
-                    );
-
-                    // 最终：从活跃任务列表中移除
-                    {
-                        let mut tasks = active_tasks_clone.lock().unwrap();
-                        tasks.retain(|t| t.url != url_clone || t.start_time != download_start_time);
-                    }
-                    return;
                 }
+            }
+        }
 
-                {
-                    let mut tasks = active_tasks_clone.lock().unwrap();
-                    if let Some(t) = tasks
-                        .iter_mut()
-                        .find(|t| t.url == url_clone && t.start_time == download_start_time)
-                    {
-                        t.state = "processing".to_string();
-                    }
-                }
+        match &result {
+            Ok(_) => {
+                emit_download_state(
+                    &app_clone,
+                    &task_id_clone,
+                    &url_clone,
+                    download_start_time,
+                    &plugin_id_clone,
+                    "processing",
+                    None,
+                );
+            }
+            Err(e) => {
+                emit_download_state(
+                    &app_clone,
+                    &task_id_clone,
+                    &url_clone,
+                    download_start_time,
+                    &plugin_id_clone,
+                    if e.contains("Task canceled") {
+                        "canceled"
+                    } else {
+                        "failed"
+                    },
+                    Some(e),
+                );
+            }
+        }
 
-                let storage = app_clone.state::<crate::storage::Storage>();
-                // 规范化路径为绝对路径，并移除 Windows 长路径前缀
-                let local_path_str = downloaded
-                    .path
-                    .canonicalize()
-                    .unwrap_or_else(|_| downloaded.path.clone())
-                    .to_string_lossy()
-                    .to_string()
-                    .trim_start_matches("\\\\?\\")
-                    .to_string();
-                let thumbnail_path_str = downloaded
-                    .thumbnail
-                    .as_ref()
-                    .and_then(|p| p.canonicalize().ok())
-                    .map(|p| {
-                        p.to_string_lossy()
-                            .to_string()
-                            .trim_start_matches("\\\\?\\")
-                            .to_string()
-                    })
-                    .unwrap_or_else(|| local_path_str.clone());
-                let mut should_emit = false;
-                let mut emitted_image_id: Option<String> = None;
-
+        // 如果下载成功，保存到 gallery（后处理阶段）
+        if let Ok(downloaded) = &result {
+            // 在保存到数据库前，再次检查任务是否已被取消
+            let dq = app_clone.state::<DownloadQueue>();
+            if dq.is_task_canceled(&task_id_clone) {
+                // 任务已取消，跳过保存阶段，并清理已下载的文件（如果是新下载的）
                 if !downloaded.reused {
-                    // 检查是否启用自动去重
-                    let should_skip = {
-                        let settings_state = app_clone.try_state::<crate::settings::Settings>();
-                        if let Some(settings) = settings_state {
-                            if let Ok(s) = settings.get_settings() {
-                                if s.auto_deduplicate {
-                                    // 先用 URL 判断，如果 URL 不存在，再用哈希判断
-                                    if let Ok(Some(_existing)) =
-                                        storage.find_image_by_url(&url_clone)
-                                    {
-                                        true // URL 已存在，跳过添加
-                                    } else if !downloaded.hash.is_empty() {
-                                        // URL 不存在，检查哈希是否已存在
-                                        if let Ok(Some(_existing)) =
-                                            storage.find_image_by_hash(&downloaded.hash)
-                                        {
-                                            true // 哈希已存在，跳过添加
-                                        } else {
-                                            false
-                                        }
-                                    } else {
-                                        false
-                                    }
+                    let _ = std::fs::remove_file(&downloaded.path);
+                    if let Some(thumb) = &downloaded.thumbnail {
+                        if thumb.exists() {
+                            let _ = std::fs::remove_file(thumb);
+                        }
+                    }
+                }
+
+                emit_download_state(
+                    &app_clone,
+                    &task_id_clone,
+                    &url_clone,
+                    download_start_time,
+                    &plugin_id_clone,
+                    "canceled",
+                    None,
+                );
+
+                // 最终：从活跃任务列表中移除
+                {
+                    let mut tasks = match active_tasks.lock() {
+                        Ok(g) => g,
+                        Err(e) => e.into_inner(),
+                    };
+                    tasks.retain(|t| t.url != url_clone || t.start_time != download_start_time);
+                }
+
+                // 释放/退出 worker
+                release_or_exit_worker(&pool);
+                continue;
+            }
+
+            {
+                let mut tasks = match active_tasks.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                if let Some(t) = tasks
+                    .iter_mut()
+                    .find(|t| t.url == url_clone && t.start_time == download_start_time)
+                {
+                    t.state = "processing".to_string();
+                }
+            }
+
+            let storage = app_clone.state::<crate::storage::Storage>();
+            // 规范化路径为绝对路径，并移除 Windows 长路径前缀
+            let local_path_str = downloaded
+                .path
+                .canonicalize()
+                .unwrap_or_else(|_| downloaded.path.clone())
+                .to_string_lossy()
+                .to_string()
+                .trim_start_matches("\\\\?\\")
+                .to_string();
+            let thumbnail_path_str = downloaded
+                .thumbnail
+                .as_ref()
+                .and_then(|p| p.canonicalize().ok())
+                .map(|p| {
+                    p.to_string_lossy()
+                        .to_string()
+                        .trim_start_matches("\\\\?\\")
+                        .to_string()
+                })
+                .unwrap_or_else(|| local_path_str.clone());
+
+            if !downloaded.reused {
+                // 检查是否启用自动去重（URL/哈希）
+                let should_skip = {
+                    let settings_state = app_clone.try_state::<crate::settings::Settings>();
+                    if let Some(settings) = settings_state {
+                        if let Ok(s) = settings.get_settings() {
+                            if s.auto_deduplicate {
+                                if let Ok(Some(_)) = storage.find_image_by_url(&url_clone) {
+                                    true
+                                } else if !downloaded.hash.is_empty() {
+                                    storage
+                                        .find_image_by_hash(&downloaded.hash)
+                                        .ok()
+                                        .flatten()
+                                        .is_some()
                                 } else {
                                     false
                                 }
@@ -1437,121 +1867,45 @@ impl DownloadQueue {
                         } else {
                             false
                         }
-                    };
-
-                    if !should_skip {
-                        // favorite 字段不再存储在数据库中，将通过查询时 JOIN 收藏画册自动计算
-                        // 状态已在下载完成时发送，这里不需要重复发送
-                        let image_info = crate::storage::ImageInfo {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            url: url_clone.clone(),
-                            local_path: local_path_str.clone(),
-                            plugin_id: plugin_id_clone.clone(),
-                            task_id: Some(task_id_clone.clone()),
-                            crawled_at: download_start_time,
-                            metadata: None,
-                            thumbnail_path: thumbnail_path_str.clone(),
-                            favorite: false, // 不再存储，查询时会自动计算
-                            hash: downloaded.hash.clone(),
-                            order: Some(download_start_time as i64), // 默认 order = crawled_at（越晚越大）
-                        };
-                        if storage.add_image(image_info.clone()).is_ok() {
-                            let image_id = image_info.id.clone();
-                            let mut image_info_for_event = image_info.clone();
-
-                            // 如果配置了输出画册，立即添加到画册（静默失败）
-                            if let Some(ref album_id) = output_album_id_clone {
-                                if !album_id.is_empty() {
-                                    let added = storage.add_images_to_album_silent(
-                                        album_id,
-                                        &vec![image_id.clone()],
-                                    );
-                                    if added > 0 {
-                                        // 如果添加到的是收藏画册，更新 favorite 状态
-                                        if album_id == crate::storage::FAVORITE_ALBUM_ID {
-                                            image_info_for_event.favorite = true;
-                                        }
-                                    }
-                                }
-                            }
-
-                            should_emit = true;
-                            emitted_image_id = Some(image_id.clone());
-
-                            // 保存图片信息用于事件发送（使用更新后的 image_info_for_event）
-                            let _ = serde_json::to_value(&image_info_for_event).map(|img_val| {
-                                // 在事件中包含完整的图片信息
-                                let mut payload = serde_json::json!({
-                                    "taskId": task_id_clone,
-                                    "imageId": image_id,
-                                    "image": img_val,
-                                });
-                                // 如果图片被添加到画册，在事件中包含画册ID
-                                if let Some(ref album_id) = output_album_id_clone {
-                                    if !album_id.is_empty() {
-                                        payload["albumId"] =
-                                            serde_json::Value::String(album_id.clone());
-                                    }
-                                }
-                                let _ = app_clone.emit("image-added", payload);
-                            });
-                        } else {
-                            emit_download_state(
-                                &app_clone,
-                                &task_id_clone,
-                                &url_clone,
-                                download_start_time,
-                                &plugin_id_clone,
-                                "failed",
-                                Some("Failed to add image to database"),
-                            );
-                        }
                     } else {
-                        // 去重跳过时，状态已在下载完成时发送，这里不需要重复发送
-
-                        {
-                            let mut tasks = active_tasks_clone.lock().unwrap();
-                            if let Some(t) = tasks
-                                .iter_mut()
-                                .find(|t| t.url == url_clone && t.start_time == download_start_time)
-                            {
-                                t.state = "processing".to_string();
-                            }
-                        }
+                        false
                     }
-                } else {
-                    // 已有记录重用，也通知前端刷新列表，因为有可能缩略图被重新生成
-                    // 需要从数据库查询完整的图片信息
-                    if let Ok(Some(existing_image)) = storage.find_image_by_hash(&downloaded.hash) {
-                        let image_id = existing_image.id.clone();
+                };
 
-                        // 如果配置了输出画册，将重用的图片也添加到画册（静默失败）
-                        let mut existing_image_for_event = existing_image.clone();
+                if !should_skip {
+                    let image_info = crate::storage::ImageInfo {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        url: url_clone.clone(),
+                        local_path: local_path_str.clone(),
+                        plugin_id: plugin_id_clone.clone(),
+                        task_id: Some(task_id_clone.clone()),
+                        crawled_at: download_start_time,
+                        metadata: None,
+                        thumbnail_path: thumbnail_path_str.clone(),
+                        favorite: false,
+                        hash: downloaded.hash.clone(),
+                        order: Some(download_start_time as i64),
+                    };
+                    if storage.add_image(image_info.clone()).is_ok() {
+                        let image_id = image_info.id.clone();
+                        let mut image_info_for_event = image_info.clone();
+
                         if let Some(ref album_id) = output_album_id_clone {
                             if !album_id.is_empty() {
                                 let added = storage
                                     .add_images_to_album_silent(album_id, &vec![image_id.clone()]);
-                                if added > 0 {
-                                    // 如果添加到的是收藏画册，更新 favorite 状态
-                                    if album_id == crate::storage::FAVORITE_ALBUM_ID {
-                                        existing_image_for_event.favorite = true;
-                                    }
+                                if added > 0 && album_id == crate::storage::FAVORITE_ALBUM_ID {
+                                    image_info_for_event.favorite = true;
                                 }
                             }
                         }
 
-                        should_emit = true;
-                        emitted_image_id = Some(image_id.clone());
-
-                        // 在事件中包含完整的图片信息（使用更新后的 existing_image_for_event）
-                        let _ = serde_json::to_value(&existing_image_for_event).map(|img_val| {
+                        let _ = serde_json::to_value(&image_info_for_event).map(|img_val| {
                             let mut payload = serde_json::json!({
                                 "taskId": task_id_clone,
                                 "imageId": image_id,
                                 "image": img_val,
-                                "reused": true,
                             });
-                            // 如果图片被添加到画册，在事件中包含画册ID
                             if let Some(ref album_id) = output_album_id_clone {
                                 if !album_id.is_empty() {
                                     payload["albumId"] =
@@ -1560,57 +1914,79 @@ impl DownloadQueue {
                             }
                             let _ = app_clone.emit("image-added", payload);
                         });
+                    } else {
+                        emit_download_state(
+                            &app_clone,
+                            &task_id_clone,
+                            &url_clone,
+                            download_start_time,
+                            &plugin_id_clone,
+                            "failed",
+                            Some("Failed to add image to database"),
+                        );
                     }
                 }
-
-                if should_emit && emitted_image_id.is_none() {
-                    // 兜底：如果 should_emit 为 true 但没有设置 emitted_image_id，发送最小事件
-                    let mut payload = serde_json::json!({
-                        "taskId": task_id_clone,
-                        "imageId": "",
-                    });
-                    // 如果图片被添加到画册，在事件中包含画册ID
+            } else {
+                // 重用：查 DB 取完整信息并发事件（含可选自动加入画册）
+                if let Ok(Some(existing_image)) = storage.find_image_by_hash(&downloaded.hash) {
+                    let image_id = existing_image.id.clone();
+                    let mut existing_image_for_event = existing_image.clone();
                     if let Some(ref album_id) = output_album_id_clone {
                         if !album_id.is_empty() {
-                            payload["albumId"] = serde_json::Value::String(album_id.clone());
+                            let added = storage
+                                .add_images_to_album_silent(album_id, &vec![image_id.clone()]);
+                            if added > 0 && album_id == crate::storage::FAVORITE_ALBUM_ID {
+                                existing_image_for_event.favorite = true;
+                            }
                         }
                     }
-                    let _ = app_clone.emit("image-added", payload);
+                    let _ = serde_json::to_value(&existing_image_for_event).map(|img_val| {
+                        let mut payload = serde_json::json!({
+                            "taskId": task_id_clone,
+                            "imageId": image_id,
+                            "image": img_val,
+                            "reused": true,
+                        });
+                        if let Some(ref album_id) = output_album_id_clone {
+                            if !album_id.is_empty() {
+                                payload["albumId"] = serde_json::Value::String(album_id.clone());
+                            }
+                        }
+                        let _ = app_clone.emit("image-added", payload);
+                    });
                 }
             }
+        }
 
-            // 最终：从活跃任务列表中移除
-            {
-                let mut tasks = active_tasks_clone.lock().unwrap();
-                tasks.retain(|t| t.url != url_clone || t.start_time != download_start_time);
-            }
-        });
-
-        // 立即返回成功（下载在后台进行）
-        Ok(true)
-    }
-
-    // 取消任务：标记为取消，正在下载的任务在保存阶段会被跳过
-    pub fn cancel_task(&self, task_id: &str) -> Result<(), String> {
-        // 标记为取消
+        // 最终：从活跃任务列表中移除
         {
-            let mut canceled = self
-                .canceled_tasks
-                .lock()
-                .map_err(|e| format!("Lock error: {}", e))?;
-            canceled.insert(task_id.to_string());
+            let mut tasks = match active_tasks.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+            tasks.retain(|t| t.url != url_clone || t.start_time != download_start_time);
         }
 
-        // 唤醒所有等待窗口的线程（让它们检查取消状态）
-        self.notify_window_slot_available();
-
-        Ok(())
+        // 释放/退出 worker
+        if release_or_exit_worker(&pool) {
+            return;
+        }
     }
+}
 
-    pub fn is_task_canceled(&self, task_id: &str) -> bool {
-        match self.canceled_tasks.lock() {
-            Ok(c) => c.contains(task_id),
-            Err(e) => e.into_inner().contains(task_id),
-        }
+fn release_or_exit_worker(pool: &DownloadPool) -> bool {
+    // 释放一个“并发占用”
+    if let Ok(mut st) = pool.state.lock() {
+        st.in_flight = st.in_flight.saturating_sub(1);
+    }
+    let desired = pool.desired_workers.load(Ordering::Relaxed);
+    let total = pool.total_workers.load(Ordering::Relaxed);
+    if total > desired {
+        pool.total_workers.fetch_sub(1, Ordering::Relaxed);
+        pool.cv.notify_all();
+        true
+    } else {
+        pool.cv.notify_one();
+        false
     }
 }

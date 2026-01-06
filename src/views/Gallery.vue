@@ -2,13 +2,16 @@
   <div class="gallery-page">
     <!-- 顶部工具栏 -->
     <GalleryToolbar :dedupe-loading="dedupeLoading" :has-more="crawlerStore.hasMore" :is-loading-all="isLoadingAll"
-      :total-count="totalImagesCount" @refresh="loadImages(true, { forceReload: true })"
-      @dedupe-by-hash="handleDedupeByHash" @show-quick-settings="openQuickSettingsDrawer"
-      @show-crawler-dialog="showCrawlerDialog = true" @load-all="loadAllImages" />
+      :load-all-progress="loadAllProgress" :load-all-loaded="loadAllLoaded" :load-all-total="loadAllTotal"
+      :dedupe-progress="dedupeProgress" :dedupe-processed="dedupeProcessed" :dedupe-total="dedupeTotal"
+      :dedupe-removed="dedupeRemoved" :total-count="totalImagesCount" :loaded-count="displayedImages.length"
+      @refresh="loadImages(true, { forceReload: true })" @dedupe-by-hash="handleDedupeByHash"
+      @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="showCrawlerDialog = true"
+      @load-all="loadAllImages" @cancel-load-all="handleCancelLoadAll" @cancel-dedupe="cancelDedupe" />
 
     <div class="gallery-container" v-loading="showLoading">
       <ImageGrid v-if="!loading" ref="galleryViewRef" :images="displayedImages" :image-url-map="imageSrcMap"
-        :enable-ctrl-wheel-adjust-columns="true" :enable-ctrl-key-adjust-columns="true" :hide-scrollbar="true"
+        enable-ctrl-wheel-adjust-columns enable-ctrl-key-adjust-columns hide-scrollbar enable-virtual-scroll
         :context-menu-component="GalleryContextMenu" :on-context-command="handleGridContextCommand"
         @scroll-stable="loadImageUrls()" @reorder="(...args: any[]) => handleImageReorder(args[0])">
         <template #before-grid>
@@ -26,8 +29,15 @@
 
         <!-- 加载更多：仅 Gallery 注入到 ImageGrid 容器尾部 -->
         <template #footer>
-          <LoadMoreButton v-if="displayedImages.length > 0 || crawlerStore.hasMore" :has-more="crawlerStore.hasMore"
-            :loading="isLoadingMore" @load-more="loadMoreImages" />
+          <!-- 加载全部时显示加载圆圈 -->
+          <div v-if="isLoadingAll" class="load-more-container">
+            <el-icon class="is-loading" :size="24">
+              <Loading />
+            </el-icon>
+          </div>
+          <!-- 非加载全部时显示加载更多按钮 -->
+          <LoadMoreButton v-else-if="displayedImages.length > 0 || crawlerStore.hasMore"
+            :has-more="crawlerStore.hasMore" :loading="isLoadingMore" @load-more="loadMoreImages" />
         </template>
       </ImageGrid>
     </div>
@@ -62,7 +72,7 @@ import { ref, computed, onMounted, onActivated, onDeactivated, onUnmounted, watc
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Plus } from "@element-plus/icons-vue";
+import { Plus, Loading } from "@element-plus/icons-vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useUiStore } from "@/stores/ui";
@@ -76,7 +86,7 @@ import { useGalleryImages } from "@/composables/useGalleryImages";
 import { useGallerySettings } from "@/composables/useGallerySettings";
 import { useImageOperations } from "@/composables/useImageOperations";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
-import { useLoadingDelay } from "@/utils/useLoadingDelay";
+import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import LoadMoreButton from "@/components/LoadMoreButton.vue";
 import { storeToRefs } from "pinia";
@@ -95,7 +105,16 @@ const { imageGridColumns } = storeToRefs(uiStore);
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
 const dedupeLoading = ref(false); // 正在执行"按哈希去重"本体
-const { startLoading: startDedupeDelay, finishLoading: finishDedupeDelay } = useLoadingDelay(300);
+const { startLoading: startDedupeDelay, finishLoading: finishDedupeDelay } = useLoadingDelay();
+const dedupeProcessed = ref(0);
+const dedupeTotal = ref(0);
+const dedupeRemoved = ref(0);
+const dedupeProgress = computed(() => {
+  if (!dedupeLoading.value) return 0;
+  if (!dedupeTotal.value) return 0;
+  const pct = Math.round((dedupeProcessed.value / dedupeTotal.value) * 100);
+  return Math.max(0, Math.min(100, pct));
+});
 const showCrawlerDialog = ref(false);
 const crawlerDialogInitialConfig = ref<{
   pluginId?: string;
@@ -121,14 +140,42 @@ const totalImagesCount = ref<number>(0); // 总图片数（不受过滤器影响
 // const showSkeleton = ref(false);
 
 // 整个页面的loading状态
-const { showLoading, loading, startLoading, finishLoading } = useLoadingDelay();
+const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay();
 
 const isLoadingMore = ref(false);
 const isLoadingAll = ref(false);
+
+// “加载全部”进度（小进度条）：已加载数量 / 总数量
+// - total 优先使用后端 range 返回的 crawlerStore.totalImages；兜底用 get_images_count 的 totalImagesCount
+const loadAllProgress = computed(() => {
+  if (!isLoadingAll.value) return 0;
+  const total = crawlerStore.totalImages || totalImagesCount.value;
+  if (!total) return 0;
+  const loaded = displayedImages.value.length;
+  const pct = Math.round((loaded / total) * 100);
+  return Math.max(0, Math.min(100, pct));
+});
+
+const loadAllLoaded = computed(() => {
+  if (!isLoadingAll.value) return 0;
+  return displayedImages.value.length;
+});
+
+const loadAllTotal = computed(() => {
+  if (!isLoadingAll.value) return 0;
+  return crawlerStore.totalImages || totalImagesCount.value;
+});
 // TODO:
 const isRefreshing = ref(false); // 刷新中状态，用于阻止刷新时 EmptyState 闪烁
 // 刷新计数器，用于强制空占位符重新挂载以触发动画
 const refreshKey = ref(0);
+// dragScroll 拖拽滚动期间：暂停实时 loadImageUrls，优先保证滚动帧率
+const isDragScrolling = ref(false);
+// 预览图交互期间：同样暂停后台加载（优先保证预览拖拽/缩放的丝滑）
+const isPreviewInteracting = ref(false);
+const isInteracting = computed(
+  () => isDragScrolling.value || isPreviewInteracting.value
+);
 watch(
   () => galleryViewRef.value,
   async () => {
@@ -147,11 +194,21 @@ watch(
 
 // 仅视口内加载：用 rAF 节流的 scroll 监听“实时触发”，不依赖 scroll-stable（停下来才触发）
 let cleanupContainerScrollListener: null | (() => void) = null;
+let cleanupDragScrollListener: null | (() => void) = null;
+let cleanupPreviewInteractingListener: null | (() => void) = null;
 let rafScrollScheduled = false;
 const bindContainerScrollListener = (el: HTMLElement | null) => {
   if (cleanupContainerScrollListener) {
     cleanupContainerScrollListener();
     cleanupContainerScrollListener = null;
+  }
+  if (cleanupDragScrollListener) {
+    cleanupDragScrollListener();
+    cleanupDragScrollListener = null;
+  }
+  if (cleanupPreviewInteractingListener) {
+    cleanupPreviewInteractingListener();
+    cleanupPreviewInteractingListener = null;
   }
   if (!el) return;
 
@@ -160,13 +217,40 @@ const bindContainerScrollListener = (el: HTMLElement | null) => {
     rafScrollScheduled = true;
     requestAnimationFrame(() => {
       rafScrollScheduled = false;
+      // 拖拽滚动期间不做“实时加载”，避免 readFile/Blob 创建抢主线程导致掉帧
+      // 交互结束后会由 scroll-stable 再补齐
+      if (isDragScrolling.value) return;
       loadImageUrls();
     });
   };
 
+  const onDragScrollActiveChange = (ev: Event) => {
+    const detail = (ev as CustomEvent).detail as { active?: boolean } | undefined;
+    isDragScrolling.value = !!detail?.active;
+  };
+
+  const onPreviewInteractingChange = (ev: Event) => {
+    const detail = (ev as CustomEvent).detail as { active?: boolean } | undefined;
+    isPreviewInteracting.value = !!detail?.active;
+  };
+
   el.addEventListener("scroll", onScroll, { passive: true });
+  el.addEventListener("dragscroll-active-change", onDragScrollActiveChange as any);
+  window.addEventListener("preview-interacting-change", onPreviewInteractingChange as any);
   cleanupContainerScrollListener = () => {
     el.removeEventListener("scroll", onScroll as any);
+  };
+  cleanupDragScrollListener = () => {
+    el.removeEventListener(
+      "dragscroll-active-change",
+      onDragScrollActiveChange as any
+    );
+  };
+  cleanupPreviewInteractingListener = () => {
+    window.removeEventListener(
+      "preview-interacting-change",
+      onPreviewInteractingChange as any
+    );
   };
 };
 
@@ -181,6 +265,10 @@ watch(
 onUnmounted(() => {
   if (cleanupContainerScrollListener) cleanupContainerScrollListener();
   cleanupContainerScrollListener = null;
+  if (cleanupDragScrollListener) cleanupDragScrollListener();
+  cleanupDragScrollListener = null;
+  if (cleanupPreviewInteractingListener) cleanupPreviewInteractingListener();
+  cleanupPreviewInteractingListener = null;
 });
 // const pendingAlbumImages = ref<ImageInfo[]>([]);
 // const pendingAlbumImageIds = computed(() => pendingAlbumImages.value.map(img => img.id));
@@ -205,16 +293,23 @@ const {
   refreshLatestIncremental,
   loadMoreImages: loadMoreImagesFromComposable,
   loadAllImages: loadAllImagesFromComposable,
+  cancelLoadAll,
   removeFromUiCacheByIds,
 } = useGalleryImages(
   galleryContainerRef,
   isLoadingMore,
   preferOriginalInGrid,
-  imageGridColumns
+  imageGridColumns,
+  isInteracting
 );
 
 // 兼容旧调用：保留原函数名
 const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => {
+  // 如果正在加载全部，先取消
+  if (isLoadingAll.value) {
+    cancelLoadAll();
+    isLoadingAll.value = false;
+  }
   // 如果强制刷新，递增刷新计数器以触发空占位符重新挂载
   if (opts?.forceReload) {
     refreshKey.value++;
@@ -238,10 +333,15 @@ const loadAllImages = async () => {
   }
 };
 
+const handleCancelLoadAll = () => {
+  if (!isLoadingAll.value) return;
+  cancelLoadAll();
+  isLoadingAll.value = false;
+};
+
 // 使用图片操作 composable
 const {
   handleBatchDeleteImages,
-  confirmDedupeByHash: confirmDedupeByHashFromComposable,
 } = useImageOperations(
   displayedImages,
   imageSrcMap,
@@ -349,14 +449,40 @@ const handleDedupeByHash = () => {
 // 确认去重（调用 composable 中的函数）
 const confirmDedupeByHash = async () => {
   showDedupeDialog.value = false;
-  await confirmDedupeByHashFromComposable(
-    dedupeLoading,
-    dedupeDeleteFiles.value,
-    startDedupeDelay,
-    finishDedupeDelay
-  );
-  // 去重后更新总数
-  await loadTotalImagesCount();
+  if (dedupeLoading.value) return;
+  try {
+    dedupeLoading.value = true;
+    dedupeProcessed.value = 0;
+    dedupeTotal.value = 0;
+    dedupeRemoved.value = 0;
+    startDedupeDelay();
+
+    // 启动后端分批去重任务：立即返回，进度/移除/完成通过事件回传
+    await invoke("start_dedupe_gallery_by_hash_batched", {
+      deleteFiles: dedupeDeleteFiles.value,
+    });
+
+    ElMessage.success("已开始去重（后台执行，可随时取消）");
+  } catch (error) {
+    console.error("启动去重失败:", error);
+    ElMessage.error("启动去重失败");
+    dedupeLoading.value = false;
+    finishDedupeDelay();
+  }
+};
+
+const cancelDedupe = async () => {
+  try {
+    const canceled = await invoke<boolean>("cancel_dedupe_gallery_by_hash_batched");
+    if (canceled) {
+      ElMessage.info("已发送取消请求，稍后停止");
+    } else {
+      ElMessage.info("当前没有进行中的去重任务");
+    }
+  } catch (error) {
+    console.error("取消去重失败:", error);
+    ElMessage.error("取消失败");
+  }
 };
 
 // 确认移除图片（合并了原来的 remove 和 delete 逻辑）
@@ -569,6 +695,93 @@ onMounted(async () => {
     }
   );
 
+  // 监听后端分批去重事件：批量移除/删除
+  await listen<{ imageIds: string[] }>("images-removed", async (event) => {
+    const imageIds = event.payload?.imageIds ?? [];
+    if (!imageIds || imageIds.length === 0) return;
+
+    // 删除触发“后续图片顶上来”的 move 过渡（仅短暂开启）
+    galleryViewRef.value?.startDeleteMoveAnimation?.();
+
+    // 避免极端情况下对超大数组频繁 filter 导致卡顿：太大时只在结束时刷新
+    if (displayedImages.value.length <= 200_000) {
+      removeFromUiCacheByIds(imageIds);
+    }
+    if (
+      currentWallpaperImageId.value &&
+      imageIds.includes(currentWallpaperImageId.value)
+    ) {
+      currentWallpaperImageId.value = null;
+    }
+
+    // 通知其他页面同步（AlbumDetail/Albums 等依赖 window 事件）
+    window.dispatchEvent(
+      new CustomEvent("images-removed", { detail: { imageIds } })
+    );
+  });
+
+  await listen<{ imageIds: string[] }>("images-deleted", async (event) => {
+    const imageIds = event.payload?.imageIds ?? [];
+    if (!imageIds || imageIds.length === 0) return;
+
+    galleryViewRef.value?.startDeleteMoveAnimation?.();
+    if (displayedImages.value.length <= 200_000) {
+      removeFromUiCacheByIds(imageIds);
+    }
+    if (
+      currentWallpaperImageId.value &&
+      imageIds.includes(currentWallpaperImageId.value)
+    ) {
+      currentWallpaperImageId.value = null;
+    }
+    window.dispatchEvent(
+      new CustomEvent("images-deleted", { detail: { imageIds } })
+    );
+  });
+
+  // 去重进度 / 完成
+  await listen<{
+    processed: number;
+    total: number;
+    removed: number;
+    batchIndex: number;
+  }>("dedupe-progress", (event) => {
+    const p = event.payload;
+    if (!p) return;
+    dedupeProcessed.value = p.processed ?? 0;
+    dedupeTotal.value = p.total ?? 0;
+    dedupeRemoved.value = p.removed ?? 0;
+  });
+
+  await listen<{
+    processed: number;
+    total: number;
+    removed: number;
+    canceled: boolean;
+  }>("dedupe-finished", async (event) => {
+    const p = event.payload;
+    dedupeProcessed.value = p?.processed ?? dedupeProcessed.value;
+    dedupeTotal.value = p?.total ?? dedupeTotal.value;
+    dedupeRemoved.value = p?.removed ?? dedupeRemoved.value;
+
+    dedupeLoading.value = false;
+    finishDedupeDelay();
+
+    await loadTotalImagesCount();
+
+    if (p?.canceled) {
+      ElMessage.info("去重已取消");
+      return;
+    }
+
+    ElMessage.success(`去重完成：已移除 ${p?.removed ?? 0} 个重复项`);
+
+    // 若为了避免卡顿没有实时移除（displayedImages 很大），则这里强制刷新一次
+    if (displayedImages.value.length > 200_000) {
+      await loadImages(true, { forceReload: true });
+    }
+  });
+
   // 监听图片移除/删除事件，更新总数并刷新显示列表
   // 注意：如果图片已经在 displayedImages 中不存在（已通过 handleBatchDeleteImages 手动更新），则不需要刷新
   const imagesRemovedHandler = ((event: Event) => {
@@ -643,10 +856,10 @@ onMounted(async () => {
       }
 
       if (isDirectory) {
-        // 文件夹：使用 local-folder-import 插件
+        // 文件夹：使用 local-import 插件
         console.log('[Gallery] 设置文件夹导入配置，路径:', path);
         crawlerDialogInitialConfig.value = {
-          pluginId: 'local-folder-import',
+          pluginId: 'local-import',
           outputDir: path,
           vars: {
             folder_path: path,
@@ -654,10 +867,10 @@ onMounted(async () => {
         };
         ElMessage.success('文件夹已准备导入');
       } else {
-        // 文件：使用 single-file-import 插件
+        // 文件：使用 local-import 插件
         console.log('[Gallery] 设置文件导入配置，路径:', path, '目录:', outputDir);
         crawlerDialogInitialConfig.value = {
-          pluginId: 'single-file-import',
+          pluginId: 'local-import',
           outputDir: outputDir,
           vars: {
             file_path: path,

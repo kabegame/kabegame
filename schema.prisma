@@ -121,3 +121,11 @@ model TaskImage {
     @@index([imageId], name: "idx_task_images_image")
     @@map("task_images")
 }
+
+// 临时文件表
+model TempFile {
+    path      String @id
+    createdAt Int    @map("created_at")
+
+    @@map("temp_files")
+}

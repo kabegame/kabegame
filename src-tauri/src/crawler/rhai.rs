@@ -907,7 +907,8 @@ pub fn execute_crawler_script(
                 scope.push_constant(key.clone(), rhai_array);
             }
             serde_json::Value::Null => {
-                scope.push_constant_dynamic(key.clone(), Dynamic::UNIT);
+                // 跳过 null 值，不注入到 scope（避免脚本读到 () 类型导致函数调用失败）
+                // 脚本可以通过 try-catch 检测变量是否存在
             }
         }
     }

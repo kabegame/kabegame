@@ -15,7 +15,11 @@
             <span class="title-text">{{ title }}</span>
           </slot>
         </div>
-        <div class="subtitle" v-if="subtitle">{{ subtitle }}</div>
+        <div class="subtitle" v-if="subtitle || $slots.subtitle">
+          <slot name="subtitle">
+            {{ subtitle }}
+          </slot>
+        </div>
       </div>
       <div v-if="$slots.left" class="left-slot">
         <slot name="left" />

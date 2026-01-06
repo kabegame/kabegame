@@ -72,10 +72,51 @@ export const useCrawlerStore = defineStore("crawler", () => {
     try {
       const { listen } = await import("@tauri-apps/api/event");
 
+      // 任务状态变化（后端 task worker 驱动）
+      await listen<{
+        taskId: string;
+        status: string;
+        startTime?: number;
+        endTime?: number;
+        error?: string;
+      }>("task-status", async (event) => {
+        const idx = tasks.value.findIndex((t) => t.id === event.payload.taskId);
+        if (idx === -1) return;
+
+        const cur = tasks.value[idx];
+        const next: CrawlTask = {
+          ...cur,
+          status: event.payload.status as any,
+          startTime: event.payload.startTime ?? cur.startTime,
+          endTime: event.payload.endTime ?? cur.endTime,
+          error: event.payload.error ?? cur.error,
+          // 后端标 completed 时，兜底把进度置 100
+          progress:
+            event.payload.status === "completed" ? 100 : cur.progress ?? 0,
+        };
+        tasks.value[idx] = next;
+      });
+
+      // 任务进度（Rhai add_progress 驱动）
+      await listen<{ taskId: string; progress: number }>(
+        "task-progress",
+        async (event) => {
+          const idx = tasks.value.findIndex(
+            (t) => t.id === event.payload.taskId
+          );
+          if (idx === -1) return;
+          const cur = tasks.value[idx];
+          const newProgress = event.payload.progress;
+          if (newProgress <= (cur.progress ?? 0)) return;
+          const next: CrawlTask = { ...cur, progress: newProgress };
+          tasks.value[idx] = next;
+        }
+      );
+
       // 全局错误监听器（作为备用，确保所有错误都能被捕获）
       await listen<{ taskId: string; error: string }>(
         "task-error",
-        (_event) => {
+        async (_event) => {
           const taskIndex = tasks.value.findIndex(
             (t) => t.id === _event.payload.taskId
           );
@@ -232,196 +273,10 @@ export const useCrawlerStore = defineStore("crawler", () => {
       return;
     }
 
-    const taskIndex = tasks.value.findIndex((t) => t.id === task.id);
-    if (taskIndex !== -1) {
-      tasks.value[taskIndex] = {
-        ...tasks.value[taskIndex],
-        status: "running" as const,
-      };
-    }
-    isCrawling.value = true;
-
-    // 更新任务状态到 SQLite
     try {
-      await invoke("update_task", {
-        task: {
-          id: task.id,
-          pluginId: task.pluginId,
-          url: task.url,
-          outputDir: task.outputDir,
-          userConfig: task.userConfig,
-          outputAlbumId: task.outputAlbumId,
-          status: task.status,
-          progress: task.progress,
-          totalImages: task.totalImages,
-          downloadedImages: task.downloadedImages,
-          deletedCount: task.deletedCount || 0,
-          startTime: task.startTime,
-          endTime: task.endTime,
-          error: task.error,
-        },
-      });
-    } catch (error) {
-      console.error("更新任务运行状态到数据库失败:", error);
-    }
-
-    let unlistenProgress: (() => void) | null = null;
-    let unlistenError: (() => void) | null = null;
-    let errorReceived = false; // 标记是否收到错误事件
-    let errorDisplayTriggered = false; // 标记是否已触发错误显示事件
-
-    try {
-      console.log("开始执行爬取任务:", task);
-
-      // 先设置监听器，确保能捕获所有事件（包括快速失败的情况）
-      const { listen } = await import("@tauri-apps/api/event");
-
-      // 监听任务错误事件（必须在 invoke 之前设置）
-      unlistenError = await listen<{ taskId: string; error: string }>(
-        "task-error",
-        async (event) => {
-          if (event.payload.taskId === task.id) {
-            const errorMessage = event.payload.error;
-            const isCanceled = errorMessage.includes("Task canceled");
-
-            console.log(
-              `任务 ${task.id} 收到错误事件:`,
-              errorMessage,
-              isCanceled ? "(已取消)" : ""
-            );
-            errorReceived = true;
-
-            // 通过更新 tasks 数组来确保响应式更新
-            const taskIndex = tasks.value.findIndex((t) => t.id === task.id);
-            if (
-              taskIndex !== -1 &&
-              tasks.value[taskIndex].status !== "failed" &&
-              tasks.value[taskIndex].status !== "canceled"
-            ) {
-              // 创建新对象以确保响应式更新
-              const updatedTask = {
-                ...tasks.value[taskIndex],
-                status: isCanceled
-                  ? ("canceled" as const)
-                  : ("failed" as const),
-                error: errorMessage,
-                progress: 0,
-                endTime: Date.now(),
-              };
-              tasks.value[taskIndex] = updatedTask;
-
-              console.log(
-                `任务 ${task.id} 状态已通过事件更新为${
-                  isCanceled ? "取消" : "失败"
-                }:`,
-                tasks.value[taskIndex].status,
-                tasks.value[taskIndex].error
-              );
-
-              // 更新任务状态到 SQLite
-              try {
-                await invoke("update_task", {
-                  task: {
-                    id: updatedTask.id,
-                    pluginId: updatedTask.pluginId,
-                    url: updatedTask.url,
-                    outputDir: updatedTask.outputDir,
-                    userConfig: updatedTask.userConfig,
-                    outputAlbumId: updatedTask.outputAlbumId,
-                    status: updatedTask.status,
-                    progress: updatedTask.progress,
-                    totalImages: updatedTask.totalImages,
-                    downloadedImages: updatedTask.downloadedImages,
-                    deletedCount: updatedTask.deletedCount || 0,
-                    startTime: updatedTask.startTime,
-                    endTime: updatedTask.endTime,
-                    error: updatedTask.error,
-                  },
-                });
-              } catch (error) {
-                console.error("更新任务状态到数据库失败:", error);
-              }
-
-              // 只有在非取消的情况下才触发错误显示事件
-              if (!isCanceled && !errorDisplayTriggered) {
-                errorDisplayTriggered = true;
-                window.dispatchEvent(
-                  new CustomEvent("task-error-display", {
-                    detail: {
-                      taskId: task.id,
-                      pluginId: task.pluginId,
-                      error: errorMessage,
-                    },
-                  })
-                );
-              } else if (isCanceled) {
-                console.log(`任务 ${task.id} 已被取消，不触发错误显示事件`);
-              } else {
-                console.log(
-                  `任务 ${task.id} 的错误显示事件已触发过，跳过重复触发`
-                );
-              }
-            }
-          }
-        }
-      );
-
-      // 监听任务进度更新事件
-      unlistenProgress = await listen<{ taskId: string; progress: number }>(
-        "task-progress",
-        async (event) => {
-          if (event.payload.taskId === task.id) {
-            // 确保进度不会降低，只能增加
-            const newProgress = event.payload.progress;
-            const taskIndex = tasks.value.findIndex((t) => t.id === task.id);
-            if (
-              taskIndex !== -1 &&
-              newProgress > tasks.value[taskIndex].progress
-            ) {
-              // 通过创建新对象来确保响应式更新
-              tasks.value[taskIndex] = {
-                ...tasks.value[taskIndex],
-                progress: newProgress,
-              };
-
-              // 更新任务进度到 SQLite
-              try {
-                await invoke("update_task", {
-                  task: {
-                    id: tasks.value[taskIndex].id,
-                    pluginId: tasks.value[taskIndex].pluginId,
-                    url: tasks.value[taskIndex].url,
-                    outputDir: tasks.value[taskIndex].outputDir,
-                    userConfig: tasks.value[taskIndex].userConfig,
-                    outputAlbumId: tasks.value[taskIndex].outputAlbumId,
-                    status: tasks.value[taskIndex].status,
-                    progress: tasks.value[taskIndex].progress,
-                    totalImages: tasks.value[taskIndex].totalImages,
-                    downloadedImages: tasks.value[taskIndex].downloadedImages,
-                    deletedCount: tasks.value[taskIndex].deletedCount || 0,
-                    startTime: tasks.value[taskIndex].startTime,
-                    endTime: tasks.value[taskIndex].endTime,
-                    error: tasks.value[taskIndex].error,
-                  },
-                });
-              } catch (error) {
-                console.error("更新任务进度到数据库失败:", error);
-              }
-            }
-          }
-        }
-      );
-
-      const result = await invoke<{
-        total: number;
-        downloaded: number;
-        images: Array<{
-          url: string;
-          localPath: string;
-          metadata?: Record<string, any>;
-          thumbnailPath: string;
-        }>;
-      }>("crawl_images_command", {
+      // 新逻辑：后端固定 10 个 task worker 调度
+      // 直接 enqueue 并立刻返回；running/pending/failed 等状态由后端通过事件驱动更新
+      await invoke("crawl_images_command", {
         pluginId: task.pluginId,
         url: task.url,
         taskId: task.id,
@@ -429,175 +284,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
         userConfig: task.userConfig,
         outputAlbumId: task.outputAlbumId,
       });
-
-      console.log("爬取任务完成:", result);
-
-      // 取消监听
-      if (unlistenProgress) unlistenProgress();
-      if (unlistenError) unlistenError();
-
-      const taskIndex = tasks.value.findIndex((t) => t.id === task.id);
-      if (taskIndex !== -1) {
-        tasks.value[taskIndex] = {
-          ...tasks.value[taskIndex],
-          totalImages: result.total,
-          downloadedImages: result.downloaded,
-          progress: 100,
-          status: "completed" as const,
-          endTime: Date.now(),
-        };
-
-        // 更新任务完成状态到 SQLite
-        try {
-          await invoke("update_task", {
-            task: {
-              id: tasks.value[taskIndex].id,
-              pluginId: tasks.value[taskIndex].pluginId,
-              url: tasks.value[taskIndex].url,
-              outputDir: tasks.value[taskIndex].outputDir,
-              userConfig: tasks.value[taskIndex].userConfig,
-              outputAlbumId: tasks.value[taskIndex].outputAlbumId,
-              status: tasks.value[taskIndex].status,
-              progress: tasks.value[taskIndex].progress,
-              totalImages: tasks.value[taskIndex].totalImages,
-              downloadedImages: tasks.value[taskIndex].downloadedImages,
-              deletedCount: tasks.value[taskIndex].deletedCount || 0,
-              startTime: tasks.value[taskIndex].startTime,
-              endTime: tasks.value[taskIndex].endTime,
-              error: tasks.value[taskIndex].error,
-            },
-          });
-
-          // 任务状态更新后，从数据库重新获取任务信息以获取最新的 deletedCount
-          try {
-            const updatedTask = await invoke<{
-              id: string;
-              pluginId: string;
-              url: string;
-              outputDir?: string;
-              userConfig?: Record<string, any>;
-              outputAlbumId?: string;
-              status: string;
-              progress: number;
-              totalImages: number;
-              downloadedImages: number;
-              deletedCount: number;
-              startTime?: number;
-              endTime?: number;
-              error?: string;
-            }>("get_task", { taskId: task.id });
-
-            if (updatedTask) {
-              // 更新 deletedCount 到前端状态
-              tasks.value[taskIndex].deletedCount = updatedTask.deletedCount;
-            }
-          } catch (error) {
-            console.error("获取任务最新信息失败:", error);
-            // 忽略错误，不影响主流程
-          }
-        } catch (error) {
-          console.error("更新任务完成状态到数据库失败:", error);
-        }
-      }
-
-      // 图片信息已由后端保存到全局 store，这里不需要再添加
-      // 刷新图片列表
-      await loadImages(true);
     } catch (error) {
-      // 取消监听
-      if (unlistenProgress) unlistenProgress();
-      if (unlistenError) unlistenError();
-
-      console.log(
-        `任务 ${task.id} 执行失败:`,
-        error,
-        "当前状态:",
-        task.status,
-        "是否收到错误事件:",
-        errorReceived
-      );
-
-      // 如果已经通过错误事件更新了状态，不需要再次更新或触发弹窗
-      // 检查任务在数组中的实际状态
-      const taskIndex = tasks.value.findIndex((t) => t.id === task.id);
-      const currentTask = taskIndex !== -1 ? tasks.value[taskIndex] : null;
-
-      if (
-        currentTask &&
-        (currentTask.status === "failed" ||
-          currentTask.status === "canceled") &&
-        errorReceived
-      ) {
-        // 已经通过错误事件更新，不需要再次更新或触发弹窗
-        console.log(`任务 ${task.id} 状态已通过错误事件更新，无需再次更新`);
-        return; // 直接返回，避免后续处理
-      }
-
-      // 需要更新状态（只有在没有收到错误事件的情况下）
-      if (!errorReceived && taskIndex !== -1) {
-        const errorMessage =
-          error instanceof Error ? error.message : "爬取失败";
-
-        // 通过更新 tasks 数组来确保响应式更新
-        const updatedTask = {
-          ...tasks.value[taskIndex],
-          status: "failed" as const,
-          error: errorMessage,
-          progress: 0,
-          endTime: Date.now(),
-        };
-        tasks.value[taskIndex] = updatedTask;
-
-        console.log(
-          `任务 ${task.id} 状态已更新为失败:`,
-          tasks.value[taskIndex].status,
-          tasks.value[taskIndex].error
-        );
-
-        // 更新任务失败状态到 SQLite
-        try {
-          await invoke("update_task", {
-            task: {
-              id: updatedTask.id,
-              pluginId: updatedTask.pluginId,
-              url: updatedTask.url,
-              outputDir: updatedTask.outputDir,
-              userConfig: updatedTask.userConfig,
-              outputAlbumId: updatedTask.outputAlbumId,
-              status: updatedTask.status,
-              progress: updatedTask.progress,
-              totalImages: updatedTask.totalImages,
-              downloadedImages: updatedTask.downloadedImages,
-              deletedCount: updatedTask.deletedCount || 0,
-              startTime: updatedTask.startTime,
-              endTime: updatedTask.endTime,
-              error: updatedTask.error,
-            },
-          });
-        } catch (error) {
-          console.error("更新任务失败状态到数据库失败:", error);
-        }
-
-        // 触发错误显示事件（只有在没有收到错误事件且未触发过的情况下）
-        if (!errorDisplayTriggered) {
-          errorDisplayTriggered = true;
-          window.dispatchEvent(
-            new CustomEvent("task-error-display", {
-              detail: {
-                taskId: task.id,
-                pluginId: task.pluginId,
-                error: errorMessage,
-              },
-            })
-          );
-        } else {
-          console.log(`任务 ${task.id} 的错误显示事件已触发过，跳过重复触发`);
-        }
-      }
-
-      // 任务失败时，不抛出错误，让 watch 监听处理显示
-      // 这样确保所有失败的任务都能正确显示错误状态
-      return;
+      console.error("任务入队失败:", error);
+      throw error;
     } finally {
       isCrawling.value = false;
     }
@@ -946,145 +635,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
   // 加载所有任务（从 SQLite）
   async function loadTasks() {
     try {
-      const dbTasks = await invoke<
-        Array<{
-          id: string;
-          pluginId: string;
-          url: string;
-          outputDir?: string;
-          userConfig?: Record<string, any>;
-          outputAlbumId?: string;
-          status: string;
-          progress: number;
-          totalImages: number;
-          downloadedImages: number;
-          deletedCount: number;
-          startTime?: number;
-          endTime?: number;
-          error?: string;
-        }>
-      >("get_all_tasks");
-
-      // 处理迁移遗留的无效任务：将所有 pending 状态的任务标记为失败
-      // 因为如果任务真的在运行，状态应该是 "running"，pending 状态表示任务从未真正开始
-      const now = Date.now();
-      const invalidTasks: string[] = [];
-
-      for (const task of dbTasks) {
-        // 如果任务处于 pending 状态，直接标记为失败（迁移遗留的无效任务）
-        if (task.status === "pending") {
-          invalidTasks.push(task.id);
-          // 更新任务状态为失败
-          try {
-            await invoke("update_task", {
-              task: {
-                id: task.id,
-                pluginId: task.pluginId,
-                url: task.url,
-                outputDir: task.outputDir,
-                userConfig: task.userConfig,
-                outputAlbumId: task.outputAlbumId,
-                status: "failed",
-                progress: 0,
-                totalImages: task.totalImages,
-                downloadedImages: task.downloadedImages,
-                deletedCount: task.deletedCount || 0,
-                startTime: task.startTime || now,
-                endTime: task.endTime || now,
-                error: "任务已过期（迁移遗留的无效任务，原状态：pending）",
-              },
-            });
-            console.log(`已将无效的 pending 任务 ${task.id} 标记为失败`);
-          } catch (error) {
-            console.error(`更新无效任务 ${task.id} 状态失败:`, error);
-          }
-        }
-      }
-
-      if (invalidTasks.length > 0) {
-        console.log(
-          `发现并修复了 ${invalidTasks.length} 个无效的 pending 任务`
-        );
-      }
-
-      // 重新加载任务列表（获取更新后的状态）
-      const updatedTasks = await invoke<
-        Array<{
-          id: string;
-          pluginId: string;
-          url: string;
-          outputDir?: string;
-          userConfig?: Record<string, any>;
-          outputAlbumId?: string;
-          status: string;
-          progress: number;
-          totalImages: number;
-          downloadedImages: number;
-          deletedCount: number;
-          startTime?: number;
-          endTime?: number;
-          error?: string;
-        }>
-      >("get_all_tasks");
-
-      // 处理 running 状态的任务：如果任务状态是 running 但已经结束（有 endTime），标记为失败
-      // 因为应用重启后，running 状态的任务实际上已经停止了
-      for (const task of updatedTasks) {
-        if (task.status === "running" && task.endTime) {
-          // running 状态但已有 endTime，说明任务已经结束但状态未更新，标记为失败
-          try {
-            await invoke("update_task", {
-              task: {
-                id: task.id,
-                pluginId: task.pluginId,
-                url: task.url,
-                outputDir: task.outputDir,
-                userConfig: task.userConfig,
-                outputAlbumId: task.outputAlbumId,
-                status: "failed",
-                progress: task.progress,
-                totalImages: task.totalImages,
-                downloadedImages: task.downloadedImages,
-                deletedCount: task.deletedCount || 0,
-                startTime: task.startTime,
-                endTime: task.endTime,
-                error: task.error || "任务在应用重启前未正确结束",
-              },
-            });
-            console.log(`已将异常的 running 任务 ${task.id} 标记为失败`);
-          } catch (error) {
-            console.error(`更新异常 running 任务 ${task.id} 状态失败:`, error);
-          }
-        } else if (task.status === "running" && !task.endTime) {
-          // running 状态但没有 endTime，可能是应用崩溃导致，也标记为失败
-          try {
-            await invoke("update_task", {
-              task: {
-                id: task.id,
-                pluginId: task.pluginId,
-                url: task.url,
-                outputDir: task.outputDir,
-                userConfig: task.userConfig,
-                outputAlbumId: task.outputAlbumId,
-                status: "failed",
-                progress: task.progress,
-                totalImages: task.totalImages,
-                downloadedImages: task.downloadedImages,
-                deletedCount: task.deletedCount || 0,
-                startTime: task.startTime,
-                endTime: now,
-                error:
-                  task.error || "任务在应用重启前未正确结束（原状态：running）",
-              },
-            });
-            console.log(`已将异常的 running 任务 ${task.id} 标记为失败`);
-          } catch (error) {
-            console.error(`更新异常 running 任务 ${task.id} 状态失败:`, error);
-          }
-        }
-      }
-
-      // 重新加载任务列表（获取更新后的状态）
       const finalTasks = await invoke<
         Array<{
           id: string;
@@ -1104,36 +654,28 @@ export const useCrawlerStore = defineStore("crawler", () => {
         }>
       >("get_all_tasks");
 
-      // 加载所有任务到内存（包括失败、取消和已完成的任务）
-      // 应用重启后，所有 running 任务都应该被标记为失败
-      tasks.value = finalTasks
-        .filter(
-          (t) =>
-            t.status === "failed" ||
-            t.status === "canceled" ||
-            t.status === "completed"
-        )
-        .map((t) => ({
-          id: t.id,
-          pluginId: t.pluginId,
-          url: t.url,
-          outputDir: t.outputDir,
-          userConfig: t.userConfig,
-          outputAlbumId: t.outputAlbumId,
-          status: t.status as
-            | "pending"
-            | "running"
-            | "completed"
-            | "failed"
-            | "canceled",
-          progress: t.progress,
-          totalImages: t.totalImages,
-          downloadedImages: t.downloadedImages,
-          deletedCount: t.deletedCount || 0,
-          startTime: t.startTime,
-          endTime: t.endTime,
-          error: t.error,
-        }));
+      // 新逻辑：pending 是“排队中”的合法状态；running 由后端 task worker 驱动。
+      tasks.value = finalTasks.map((t) => ({
+        id: t.id,
+        pluginId: t.pluginId,
+        url: t.url,
+        outputDir: t.outputDir,
+        userConfig: t.userConfig,
+        outputAlbumId: t.outputAlbumId,
+        status: t.status as
+          | "pending"
+          | "running"
+          | "completed"
+          | "failed"
+          | "canceled",
+        progress: t.progress ?? 0,
+        totalImages: t.totalImages ?? 0,
+        downloadedImages: t.downloadedImages ?? 0,
+        deletedCount: t.deletedCount || 0,
+        startTime: t.startTime,
+        endTime: t.endTime,
+        error: t.error,
+      }));
     } catch (error) {
       console.error("加载任务失败:", error);
     }

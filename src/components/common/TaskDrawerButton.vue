@@ -1,7 +1,7 @@
 <template>
   <el-badge
-    v-if="activeRunningTasksCount > 0"
-    :value="activeRunningTasksCount"
+    v-if="activeTasksCount > 0"
+    :value="activeTasksCount"
     :max="99"
     class="tasks-badge"
   >
@@ -35,7 +35,7 @@ import { useTaskDrawerStore } from "@/stores/taskDrawer";
 import { storeToRefs } from "pinia";
 
 const taskDrawerStore = useTaskDrawerStore();
-const { activeRunningTasksCount } = storeToRefs(taskDrawerStore);
+const { activeTasksCount } = storeToRefs(taskDrawerStore);
 
 const handleClick = () => {
   taskDrawerStore.toggle();

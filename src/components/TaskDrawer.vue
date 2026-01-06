@@ -255,7 +255,7 @@ const saveConfigName = ref("");
 const saveConfigDescription = ref("");
 
 const plugins = computed(() => pluginStore.plugins);
-const nonRunningTasksCount = computed(() => props.tasks.filter((t) => t.status !== "running").length);
+const nonRunningTasksCount = computed(() => props.tasks.filter((t) => t.status !== "running" && t.status !== "pending").length);
 
 // 下载信息
 const activeDownloads = ref<ActiveDownloadInfo[]>([]);
@@ -313,15 +313,17 @@ const shouldShowDownloadProgress = (d: ActiveDownloadInfo) => {
 const isShimmerState = (d: ActiveDownloadInfo) => {
   // “正在进行的操作”用反光文字表示
   const st = getEffectiveDownloadState(d);
-  return st === "processing";
+  return st === "processing" || st === "extracting";
 };
 
 const downloadStateText = (d: ActiveDownloadInfo) => {
   const st = getEffectiveDownloadState(d);
   const map: Record<string, string> = {
     preparing: "准备中",
+    extracting: "解压中",
     downloading: "下载中",
     processing: "处理中",
+    completed: "已完成",
     failed: "失败",
     canceled: "已取消",
   };
@@ -332,7 +334,9 @@ const downloadStateTagType = (d: ActiveDownloadInfo) => {
   const st = getEffectiveDownloadState(d);
   if (st === "failed") return "danger";
   if (st === "canceled") return "info";
+  if (st === "completed") return "success";
   if (st === "processing") return "success";
+  if (st === "extracting") return "warning";
   if (st === "downloading") return "warning";
   return "info";
 };
@@ -731,27 +735,30 @@ const handleOpenTaskDetail = (task: any) => {
 };
 
 const handleDeleteAllTasks = async () => {
-  if (props.tasks.length === 0) return;
-  const nonRunningTasks = props.tasks.filter((t) => t.status !== "running");
-  const runningCount = props.tasks.length - nonRunningTasks.length;
-  if (nonRunningTasks.length === 0) {
-    ElMessage.warning("所有任务都在运行中，无法清除");
+  if (nonRunningTasksCount.value === 0) {
+    ElMessage.warning("没有可清除的任务（所有任务都是等待中或运行中）");
     return;
   }
   try {
-    const msg = runningCount > 0
-      ? `确定要删除所有非运行中的任务吗？共 ${nonRunningTasks.length} 个（${runningCount} 个运行中的任务将被保留）。`
-      : `确定要删除所有任务吗？共 ${nonRunningTasks.length} 个。`;
+    const pendingCount = props.tasks.filter((t) => t.status === "pending").length;
+    const runningCount = props.tasks.filter((t) => t.status === "running").length;
+    const preservedCount = pendingCount + runningCount;
+    const deletableCount = nonRunningTasksCount.value;
+    const msg = preservedCount > 0
+      ? `确定要删除所有已完成/失败/已取消的任务吗？共 ${deletableCount} 个（${pendingCount} 个等待中的任务和 ${runningCount} 个运行中的任务将被保留）。`
+      : `确定要删除所有任务吗？共 ${deletableCount} 个。`;
     await ElMessageBox.confirm(msg, "清除所有任务", { type: "warning" });
 
-    // 只删除非运行中的任务
-    for (const t of nonRunningTasks) {
-      await crawlerStore.deleteTask(t.id);
-      expandedTasks.value.delete(t.id);
-    }
-    ElMessage.success(`已清除 ${nonRunningTasks.length} 个任务`);
+    // 调用后端命令批量清除
+    const clearedCount = await invoke<number>("clear_finished_tasks");
+    // 清除展开状态
+    expandedTasks.value.clear();
+    // 重新获取任务列表
+    await crawlerStore.loadTasks();
+    ElMessage.success(`已清除 ${clearedCount} 个任务`);
   } catch (error) {
     if (error !== "cancel") {
+      console.error("清除任务失败:", error);
       ElMessage.error("清除失败");
     }
   }

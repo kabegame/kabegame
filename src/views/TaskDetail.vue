@@ -258,7 +258,7 @@ const handleStopTask = async () => {
             { type: "warning" }
         );
         await crawlerStore.stopTask(taskId.value);
-        taskStatus.value = "stopped";
+        // 不写入本地“stopped”伪状态：任务最终状态由后端 task-status / task-error 事件与 DB 同步驱动
         ElMessage.success("任务已请求停止");
     } catch (error) {
         if (error !== "cancel") {

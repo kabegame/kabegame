@@ -23,13 +23,25 @@ export function useGalleryImages(
    * 网格列数（用于快速估算可见范围，避免每次滚动遍历 DOM 计算可见项）。
    * - 不传则退化为旧实现：querySelectorAll + getBoundingClientRect（大列表会卡）
    */
-  gridColumns?: Ref<number>
+  gridColumns?: Ref<number>,
+  /**
+   * 用户是否正在强交互（例如 dragScroll 拖拽滚动）
+   * - true：优先保证滚动帧率，后台任务尽量推迟到空闲/交互结束
+   */
+  isInteracting?: Ref<boolean>
 ) {
   const crawlerStore = useCrawlerStore();
 
   // 使用独立的本地图片列表，避免直接修改 store 的 images 导致的重新渲染
   // 使用 shallowRef 减少深度响应式追踪，提高性能
   const displayedImages = shallowRef<ImageInfo[]>([]);
+  // O(1) 存在性判断：避免在万级列表里频繁 displayedImages.some(...) 造成 O(N) 掉帧
+  let displayedImageIds = new Set<string>();
+
+  const setDisplayedImages = (next: ImageInfo[]) => {
+    displayedImages.value = next;
+    displayedImageIds = new Set(next.map((i) => i.id));
+  };
 
   // 图片 URL 映射，存储每个图片的缩略图和原图 URL
   // 使用 shallowRef 减少深度响应式追踪，避免每次更新都触发重新渲染
@@ -46,12 +58,28 @@ export function useGalleryImages(
   const inFlightThumbnailIds = new Set<string>();
   const inFlightOriginalIds = new Set<string>();
 
+  // 少量图片“迟迟不显示”的兜底：超时 + 重试（避免单次 readFile 卡住导致 inFlight 永久占用）
+  const THUMBNAIL_TIMEOUT_MS = 2500;
+  const ORIGINAL_TIMEOUT_MS = 6500;
+  const MAX_THUMBNAIL_RETRIES = 3;
+  const MAX_ORIGINAL_RETRIES = 2;
+  const RETRY_BASE_DELAY_MS = 450;
+  const thumbnailRetryCount = new Map<string, number>();
+  const originalRetryCount = new Map<string, number>();
+  const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // 加载全部的取消标志
+  let abortLoadAll = false;
+
   // 存储 Blob URL 到 Blob 对象的映射，用于在组件卸载时释放内存
   // 同时保持 Blob 对象引用，防止被垃圾回收导致 URL 失效
   const blobObjects = new Map<string, Blob>();
 
   // 将本地文件路径转换为 Blob URL（比 base64 更高效）
-  async function getImageUrl(localPath: string): Promise<string> {
+  async function getImageUrl(
+    localPath: string,
+    opts?: { timeoutMs?: number }
+  ): Promise<string> {
     if (!localPath) return "";
     try {
       // 移除 Windows 长路径前缀 \\?\（如果存在）
@@ -65,8 +93,19 @@ export function useGalleryImages(
         return "";
       }
 
-      // 读取文件二进制数据
-      const fileData = await readFile(normalizedPath);
+      const timeoutMs = Math.max(0, opts?.timeoutMs ?? 0);
+      const withTimeout = async <T>(p: Promise<T>, ms: number): Promise<T> => {
+        if (!ms) return await p;
+        return await Promise.race([
+          p,
+          new Promise<T>((_, reject) =>
+            setTimeout(() => reject(new Error(`readFile timeout (${ms}ms)`)), ms)
+          ),
+        ]);
+      };
+
+      // 读取文件二进制数据（带超时：避免某些路径/文件在极端情况下卡住）
+      const fileData = await withTimeout(readFile(normalizedPath), timeoutMs);
 
       // 验证文件数据
       if (!fileData || fileData.length === 0) {
@@ -104,7 +143,58 @@ export function useGalleryImages(
     }
   }
 
-  const calcGridGap = (columns: number) => Math.max(4, 16 - (Math.max(1, columns) - 1));
+  const clearRetryTimer = (imageId: string) => {
+    const t = retryTimers.get(imageId);
+    if (t) {
+      clearTimeout(t);
+      retryTimers.delete(imageId);
+    }
+  };
+
+  const scheduleRetry = (imageId: string, kind: "thumbnail" | "original") => {
+    if (!displayedImageIds.has(imageId)) return;
+    // 避免重复安排（同一张图只保留一个定时器）
+    if (retryTimers.has(imageId)) return;
+    const isThumb = kind === "thumbnail";
+    const retryMap = isThumb ? thumbnailRetryCount : originalRetryCount;
+    const max = isThumb ? MAX_THUMBNAIL_RETRIES : MAX_ORIGINAL_RETRIES;
+    const current = retryMap.get(imageId) ?? 0;
+    if (current >= max) return;
+    const nextCount = current + 1;
+    retryMap.set(imageId, nextCount);
+
+    // 指数退避（少量失败图片会快速补上；大量成功图片不受影响）
+    const delay = Math.min(
+      5000,
+      RETRY_BASE_DELAY_MS * Math.pow(2, nextCount - 1)
+    );
+
+    const timer = setTimeout(() => {
+      retryTimers.delete(imageId);
+      if (!displayedImageIds.has(imageId)) return;
+      const image = displayedImages.value.find((i) => i.id === imageId);
+      if (!image) return;
+      // 只重试缺失的部分；needOriginal 取当前值（列数变化时自动对齐）
+      void loadSingleImageUrl(image, preferOriginalInGrid.value);
+    }, delay);
+    retryTimers.set(imageId, timer);
+  };
+
+  const uniquePaths = (paths: Array<string | undefined | null>): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const p of paths) {
+      const v = (p || "").trim();
+      if (!v) continue;
+      if (seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
+    }
+    return out;
+  };
+
+  const calcGridGap = (columns: number) =>
+    Math.max(4, 16 - (Math.max(1, columns) - 1));
 
   /**
    * 快速估算可见范围（返回索引区间 [start, end)）。
@@ -113,7 +203,11 @@ export function useGalleryImages(
    * - 宽高比（沿用 ImageGrid 里的 window.innerWidth / window.innerHeight）
    * - gap 规则与 ImageGrid 的 gridStyle 保持一致
    */
-  const estimateVisibleIndexRange = (): { start: number; end: number; visibleIds: string[] } => {
+  const estimateVisibleIndexRange = (): {
+    start: number;
+    end: number;
+    visibleIds: string[];
+  } => {
     const container = galleryContainerRef.value;
     const images = displayedImages.value;
     if (!container || images.length === 0) {
@@ -128,7 +222,8 @@ export function useGalleryImages(
       const visibleIds: string[] = [];
       items.forEach((el) => {
         const rect = el.getBoundingClientRect();
-        const isVisible = rect.bottom >= containerRect.top && rect.top <= containerRect.bottom;
+        const isVisible =
+          rect.bottom >= containerRect.top && rect.top <= containerRect.bottom;
         if (isVisible) {
           const id = el.getAttribute("data-id");
           if (id) visibleIds.push(id);
@@ -142,20 +237,37 @@ export function useGalleryImages(
 
     // ImageGrid 的左右 padding 是 8px；容器本身不加左右 padding
     const gridHorizontalPadding = 16; // 8 + 8
-    const containerWidth = Math.max(0, container.clientWidth - gridHorizontalPadding);
+    const containerWidth = Math.max(
+      0,
+      container.clientWidth - gridHorizontalPadding
+    );
     const itemWidth =
-      columns <= 1 ? containerWidth : (containerWidth - gap * (columns - 1)) / columns;
-    const aspectRatio = Math.max(0.1, window.innerWidth / Math.max(1, window.innerHeight));
+      columns <= 1
+        ? containerWidth
+        : (containerWidth - gap * (columns - 1)) / columns;
+    const aspectRatio = Math.max(
+      0.1,
+      window.innerWidth / Math.max(1, window.innerHeight)
+    );
     const itemHeight = itemWidth > 0 ? itemWidth / aspectRatio : 200;
     const rowHeight = itemHeight + gap;
 
     // overscan：让视口上下多取几行，避免滚动边缘“来不及加载”
-    const overscanRows = 3;
-    const startRow = Math.max(0, Math.floor(container.scrollTop / rowHeight) - overscanRows);
-    const endRow = Math.ceil((container.scrollTop + container.clientHeight) / rowHeight) + overscanRows;
+    // 与 ImageGrid 默认 virtualOverscan(≈8) 尽量对齐：大列表/快速滚动时能明显减少“骨架停留很久”
+    const overscanRows = 8;
+    const startRow = Math.max(
+      0,
+      Math.floor(container.scrollTop / rowHeight) - overscanRows
+    );
+    const endRow =
+      Math.ceil((container.scrollTop + container.clientHeight) / rowHeight) +
+      overscanRows;
 
     const start = Math.max(0, Math.min(images.length, startRow * columns));
-    const end = Math.max(start, Math.min(images.length, (endRow + 1) * columns));
+    const end = Math.max(
+      start,
+      Math.min(images.length, (endRow + 1) * columns)
+    );
     const visibleIds = images.slice(start, end).map((i) => i.id);
     return { start, end, visibleIds };
   };
@@ -190,10 +302,16 @@ export function useGalleryImages(
   const loadImageUrls = async (targetImages?: ImageInfo[]) => {
     // console.log("call loadImageUrls", targetImages);
     // console.trace();
-    const range = targetImages ? null : estimateVisibleIndexRange();
-    const source = targetImages ?? displayedImages.value.slice(range!.start, range!.end);
-    const visibleIds = targetImages ? (range ? range.visibleIds : []) : range!.visibleIds;
-    const visibleSet = new Set(visibleIds);
+    // 拖拽滚动期间（强交互优先）：如果是“按可视范围加载”（没有显式指定 targetImages），直接跳过。
+    // 这样可以避免 readFile/Blob 创建抢主线程导致滚动掉帧；交互结束后会由 scroll-stable 或下一次滚动补齐。
+    if (isInteracting?.value && !targetImages) {
+      return;
+    }
+    // 始终尝试计算当前视口集合（即使传了 targetImages，也用来做优先级排序）
+    // - 典型场景：refresh/loadMore 会传大量 targetImages，但用户真正关心的是“当前视口先出图”
+    const range = estimateVisibleIndexRange();
+    const source = targetImages ?? displayedImages.value.slice(range.start, range.end);
+    const visibleSet = new Set(range.visibleIds);
 
     // 只获取还没有加载的图片（按需：thumbnail/original 分开判断）
     const needOriginal = preferOriginalInGrid.value;
@@ -224,16 +342,27 @@ export function useGalleryImages(
       return 0;
     });
 
-    // 优先加载前30张（可见区域及附近），并行加载
-    const priorityImages = imagesToLoad.slice(0, 30);
-    const remainingImages = imagesToLoad.slice(30);
+    // 关键修复：
+    // - 之前“只并发加载前 30 张，其余走 idle 串行”会导致在多列/大视口时，明明在屏幕里的缩略图也要等很久（甚至几分钟）
+    // - 现在：把“当前调用要处理的集合（尤其是按视口 slice 出来的 source）”都纳入并发池，保证视口内能快速补齐
+    //
+    // 仍然保留后台渐进：仅用于 targetImages 很大、且包含大量非视口项的情况（避免一次性把 IO/解码压满）
+    const visibleConcurrency = isInteracting?.value ? 1 : 8;
 
-    // 优先队列：限制并发；并且"先出缩略图"，原图按需补齐
-    void runPool(priorityImages, 6, async (image) => {
-      await loadSingleImageUrl(image, needOriginal);
-    });
+    // 1) 视口（或本次 slice）优先：有限并发快速补齐
+    const likelyVisible = targetImages
+      ? imagesToLoad.filter((img) => visibleSet.has(img.id))
+      : imagesToLoad;
+    if (likelyVisible.length > 0) {
+      void runPool(likelyVisible, visibleConcurrency, async (image) => {
+        await loadSingleImageUrl(image, needOriginal);
+      });
+    }
 
-    // 剩余的图片在后台使用 requestIdleCallback 逐步加载
+    // 2) 非视口项：后台 idle 渐进补齐（仅 targetImages 场景下可能有意义）
+    const remainingImages = targetImages
+      ? imagesToLoad.filter((img) => !visibleSet.has(img.id))
+      : [];
     if (remainingImages.length > 0) {
       const remainingUpdates: Record<
         string,
@@ -246,7 +375,9 @@ export function useGalleryImages(
       // 使用 requestAnimationFrame 批量更新，确保在下一帧渲染
       const flushUpdates = () => {
         if (Object.keys(remainingUpdates).length > 0) {
-          imageSrcMap.value = { ...imageSrcMap.value, ...remainingUpdates };
+          // 重要：不要用对象展开去“复制整个 imageSrcMap”
+          // 十万级 key 时每次更新都会触发 O(N) 拷贝 + 大量 GC，导致滚动/拖动卡顿
+          Object.assign(imageSrcMap.value, remainingUpdates);
           // 清空已更新的项
           Object.keys(remainingUpdates).forEach(
             (key) => delete remainingUpdates[key]
@@ -260,7 +391,7 @@ export function useGalleryImages(
         if (index >= remainingImages.length) {
           // 处理完所有图片后，批量更新剩余的
           if (Object.keys(remainingUpdates).length > 0) {
-            imageSrcMap.value = { ...imageSrcMap.value, ...remainingUpdates };
+            Object.assign(imageSrcMap.value, remainingUpdates);
           }
           return;
         }
@@ -292,9 +423,7 @@ export function useGalleryImages(
               const thumbUrl = thumbPath ? await getImageUrl(thumbPath) : "";
 
               // 检查图片是否仍然存在
-              const imageStillExists = displayedImages.value.some(
-                (img) => img.id === image.id
-              );
+              const imageStillExists = displayedImageIds.has(image.id);
               if (imageStillExists && thumbUrl) {
                 remainingUpdates[image.id] = {
                   ...(remainingUpdates[image.id] || {}),
@@ -316,9 +445,7 @@ export function useGalleryImages(
                 ? await getImageUrl(image.localPath)
                 : "";
 
-              const imageStillExists = displayedImages.value.some(
-                (img) => img.id === image.id
-              );
+              const imageStillExists = displayedImageIds.has(image.id);
               if (imageStillExists && origUrl) {
                 remainingUpdates[image.id] = {
                   ...(remainingUpdates[image.id] || {}),
@@ -357,6 +484,18 @@ export function useGalleryImages(
 
   // 调度下一个空闲任务
   const scheduleNext = (callback: () => void) => {
+    // 滚动交互最重要：拖拽滚动期间尽量不要安排 readFile/Blob 创建等重活
+    if (isInteracting?.value) {
+      setTimeout(() => {
+        // 如果仍在交互中，继续往后推（避免后台任务抢主线程）
+        if (isInteracting?.value) {
+          scheduleNext(callback);
+          return;
+        }
+        callback();
+      }, 160);
+      return;
+    }
     if (typeof requestIdleCallback !== "undefined") {
       requestIdleCallback(() => callback(), { timeout: 2000 });
     } else {
@@ -383,18 +522,28 @@ export function useGalleryImages(
     if (!hasThumb) {
       inFlightThumbnailIds.add(image.id);
       try {
-        const thumbPath = image.thumbnailPath || image.localPath;
-        const thumbUrl = thumbPath ? await getImageUrl(thumbPath) : "";
+        // 注意：thumbnailPath 可能“存在但偶发读不到/很慢/暂时被占用”
+        // 这里增加两件事：
+        // - 超时：避免少数图片把 inFlight 卡死
+        // - 候选路径：thumbnailPath -> localPath（thumbnail 失败时可退化为原图路径，至少先出图）
+        const candidates = uniquePaths([image.thumbnailPath, image.localPath]);
+        let thumbUrl = "";
+        for (const p of candidates) {
+          thumbUrl = await getImageUrl(p, { timeoutMs: THUMBNAIL_TIMEOUT_MS });
+          if (thumbUrl) break;
+        }
 
         // 图片可能在异步期间被移除
-        if (!displayedImages.value.some((img) => img.id === image.id)) return;
+        if (!displayedImageIds.has(image.id)) return;
 
         if (thumbUrl) {
-          imageSrcMap.value = {
-            ...imageSrcMap.value,
-            [image.id]: { ...existing, thumbnail: thumbUrl },
-          };
+          // 原地写入，避免复制整个大对象
+          imageSrcMap.value[image.id] = { ...existing, thumbnail: thumbUrl };
           loadedThumbnailIds.add(image.id);
+          thumbnailRetryCount.delete(image.id);
+          clearRetryTimer(image.id);
+        } else {
+          scheduleRetry(image.id, "thumbnail");
         }
       } finally {
         inFlightThumbnailIds.delete(image.id);
@@ -406,16 +555,18 @@ export function useGalleryImages(
       inFlightOriginalIds.add(image.id);
       try {
         const origUrl = image.localPath
-          ? await getImageUrl(image.localPath)
+          ? await getImageUrl(image.localPath, { timeoutMs: ORIGINAL_TIMEOUT_MS })
           : "";
-        if (!displayedImages.value.some((img) => img.id === image.id)) return;
+        if (!displayedImageIds.has(image.id)) return;
         if (origUrl) {
           const curr = imageSrcMap.value[image.id] || {};
-          imageSrcMap.value = {
-            ...imageSrcMap.value,
-            [image.id]: { ...curr, original: origUrl },
-          };
+          // 原地写入，避免复制整个大对象
+          imageSrcMap.value[image.id] = { ...curr, original: origUrl };
           loadedOriginalIds.add(image.id);
+          originalRetryCount.delete(image.id);
+          clearRetryTimer(image.id);
+        } else {
+          scheduleRetry(image.id, "original");
         }
       } finally {
         inFlightOriginalIds.delete(image.id);
@@ -447,7 +598,7 @@ export function useGalleryImages(
     // 如果强制重新加载，清除 URL 缓存并清空列表以触发重新挂载动画
     if (forceReload) {
       // 先清空列表，让 Vue 移除所有元素
-      displayedImages.value = [];
+      setDisplayedImages([]);
       await nextTick();
       // 释放所有 Blob URL 和 Blob 对象引用
       for (const url of blobObjects.keys()) {
@@ -471,7 +622,7 @@ export function useGalleryImages(
     await crawlerStore.loadImages(reset);
 
     // 使用新的图片数据（不复用旧引用，确保数据更新）
-    displayedImages.value = [...crawlerStore.images];
+    setDisplayedImages([...crawlerStore.images]);
 
     await nextTick();
 
@@ -569,7 +720,7 @@ export function useGalleryImages(
       if (trulyNewOnes.length === 0) return;
 
       // 将新增图片追加到列表末尾
-      displayedImages.value = [...displayedImages.value, ...trulyNewOnes];
+      setDisplayedImages([...displayedImages.value, ...trulyNewOnes]);
 
       // 同步 crawlerStore 状态，保持与 displayedImages 一致
       crawlerStore.images = [...displayedImages.value];
@@ -639,7 +790,7 @@ export function useGalleryImages(
 
         // 创建新数组引用，确保 Vue 能够检测到变化（特别是 transition-group）
         // 先设置 displayedImages，让元素先渲染出来，用户可以看到骨架屏或占位符
-        displayedImages.value = [...displayedImages.value, ...newImages];
+        setDisplayedImages([...displayedImages.value, ...newImages]);
 
         // 等待 DOM 更新完成
         await nextTick();
@@ -691,24 +842,68 @@ export function useGalleryImages(
       return;
     }
 
-    // 记录加载前的滚动位置：只在用户没有主动滚动的情况下恢复（避免“抢滚动”）
+    // 重置取消标志
+    abortLoadAll = false;
+
+    // 记录加载前的滚动位置：只在用户没有主动滚动的情况下恢复（避免"抢滚动"）
     const prevScrollTop = container.scrollTop;
 
     try {
       const existingIds = new Set(displayedImages.value.map((img) => img.id));
       let appended = 0;
       let pageCount = 0;
+      let pendingAppend: ImageInfo[] = [];
 
       const nextFrame = () =>
         new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-      // 分批加载并“渐进追加”到 displayedImages，避免一次性插入上千节点卡顿
+      const sleep = (ms: number) =>
+        new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
+
+      // “温和加载全部”：优先让滚动交互顺滑，加载全部只需要稳定推进即可
+      const waitLoadAllPace = async () => {
+        // 拖拽滚动期间：暂停推进（用户不会看那么快，帧率更重要）
+        if (isInteracting?.value) {
+          await sleep(220);
+          return;
+        }
+        // 非交互：尽量用 idle，不阻塞主线程
+        if (typeof requestIdleCallback !== "undefined") {
+          await new Promise<void>((resolve) =>
+            requestIdleCallback(() => resolve(), { timeout: 1500 })
+          );
+          return;
+        }
+        await sleep(90);
+      };
+
+      const flushPendingAppend = async () => {
+        if (pendingAppend.length === 0) return;
+        setDisplayedImages([...displayedImages.value, ...pendingAppend]);
+        pendingAppend = [];
+        await nextTick();
+        await nextFrame();
+      };
+
+      // 分批加载并"渐进追加"到 displayedImages，避免一次性插入上千节点卡顿
       while (true) {
+        // 检查是否被取消（刷新时会设置此标志）
+        if (abortLoadAll) {
+          console.log("加载全部被取消");
+          break;
+        }
+
         const offset = displayedImages.value.length;
         const result = await invoke<RangedImages>("get_images_range", {
           offset,
           limit: crawlerStore.pageSize,
         });
+
+        // 再次检查取消标志（异步操作后可能已被取消）
+        if (abortLoadAll) {
+          console.log("加载全部被取消（异步后）");
+          break;
+        }
 
         crawlerStore.totalImages = result.total;
 
@@ -720,8 +915,8 @@ export function useGalleryImages(
           (img) => !existingIds.has(img.id)
         );
         if (newImages.length > 0) {
-          // 先追加到 UI，动画更平滑；URL 加载由滚动/可见范围触发（不提前刷全量）
-          displayedImages.value = [...displayedImages.value, ...newImages];
+          // 批量追加：减少频繁的大数组拷贝/响应式更新（十万级列表下很关键）
+          pendingAppend.push(...newImages);
           appended += newImages.length;
           newImages.forEach((img) => existingIds.add(img.id));
         }
@@ -732,18 +927,24 @@ export function useGalleryImages(
         }
 
         pageCount++;
-        // 每追加 2 页就让出一帧，保证滚动/动画有机会运行
+        // 每 2 页 flush 一次 UI（让用户看到进度在走），并让出主线程
         if (pageCount % 2 === 0) {
-          await nextTick();
-          await nextFrame();
+          await flushPendingAppend();
         }
+        // 控制“加载全部”速度：空闲优先；交互期间自动放慢/暂停
+        await waitLoadAllPace();
+      }
+
+      // 最后 flush 一次剩余 pending
+      await flushPendingAppend();
+
+      // 如果被取消，不执行后续的状态同步
+      if (abortLoadAll) {
+        return;
       }
 
       // 等待最终 DOM 更新
       if (appended > 0) {
-        await nextTick();
-        await nextFrame();
-
         // 恢复滚动位置：仅当用户仍停留在原位置附近（没有主动滚动）
         const delta = Math.abs(container.scrollTop - prevScrollTop);
         if (delta < 4) {
@@ -765,14 +966,19 @@ export function useGalleryImages(
     }
   };
 
+  // 取消加载全部操作
+  const cancelLoadAll = () => {
+    abortLoadAll = true;
+  };
+
   // 批量从 UI 缓存里移除（用于后端批量去重后的同步）
   const removeFromUiCacheByIds = (imageIds: string[]) => {
     if (!imageIds || imageIds.length === 0) return;
     const idSet = new Set(imageIds);
 
     // 从列表移除
-    displayedImages.value = displayedImages.value.filter(
-      (img) => !idSet.has(img.id)
+    setDisplayedImages(
+      displayedImages.value.filter((img) => !idSet.has(img.id))
     );
 
     // 清理 imageSrcMap / Blob URL / Blob 对象引用 / loaded set
@@ -780,6 +986,9 @@ export function useGalleryImages(
       ...imageSrcMap.value,
     };
     for (const id of imageIds) {
+      clearRetryTimer(id);
+      thumbnailRetryCount.delete(id);
+      originalRetryCount.delete(id);
       const data = nextMap[id];
       if (data?.thumbnail) {
         console.log("revoke thumbnail", data.thumbnail);
@@ -852,7 +1061,8 @@ export function useGalleryImages(
     }
 
     // 更新 imageSrcMap
-    imageSrcMap.value = { ...imageSrcMap.value, [imageId]: newData };
+    // 原地写入，避免复制整个大对象
+    imageSrcMap.value[imageId] = newData;
   };
 
   // 清理所有 Blob URL 和 Blob 对象引用
@@ -868,6 +1078,10 @@ export function useGalleryImages(
     loadedOriginalIds.clear();
     inFlightThumbnailIds.clear();
     inFlightOriginalIds.clear();
+    for (const t of retryTimers.values()) clearTimeout(t);
+    retryTimers.clear();
+    thumbnailRetryCount.clear();
+    originalRetryCount.clear();
   };
 
   return {
@@ -878,6 +1092,7 @@ export function useGalleryImages(
     refreshLatestIncremental,
     loadMoreImages,
     loadAllImages,
+    cancelLoadAll,
     removeFromUiCacheByIds,
     recreateImageUrl,
     cleanup,

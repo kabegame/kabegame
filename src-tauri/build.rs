@@ -27,7 +27,7 @@ fn main() {
         // 可通过环境变量自定义，否则用默认全量列表
         env::var("KABEGAME_BUILTIN_PLUGINS").unwrap_or_else(|_| {
             // 这种情况不应该出现
-            "single-file-import,local-folder-import".to_string()
+            "local-import".to_string()
         })
     } else {
         // normal 模式没有内置概念

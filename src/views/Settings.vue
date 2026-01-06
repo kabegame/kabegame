@@ -14,11 +14,11 @@
       <el-tab-pane label="壁纸轮播" name="wallpaper">
         <el-card class="settings-card">
           <template #header>
-            <span>壁纸轮播设置</span>
+              <span>壁纸轮播设置</span>
           </template>
 
-          <div v-loading="loading" element-loading-text="" style="min-height: 200px;">
-            <div v-if="showContent" class="settings-list">
+          <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
+            <div v-if="!loading" class="settings-list">
               <SettingRow label="启用壁纸轮播" description="自动从指定画册中轮播更换桌面壁纸">
                 <WallpaperRotationEnabledSetting />
               </SettingRow>
@@ -56,19 +56,19 @@
               <SettingRow label="Wallpaper Engine 目录" description="用于“导出并自动导入到 WE”">
                 <WallpaperEngineDirSetting />
               </SettingRow>
-            </div>
-          </div>
+                </div>
+              </div>
         </el-card>
       </el-tab-pane>
 
       <el-tab-pane label="下载设置" name="download">
         <el-card class="settings-card">
           <template #header>
-            <span>下载设置</span>
+              <span>下载设置</span>
           </template>
 
-          <div v-loading="loading" element-loading-text="" style="min-height: 200px;">
-            <div v-if="showContent" class="settings-list">
+          <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
+            <div v-if="!loading" class="settings-list">
               <SettingRow label="最大并发下载量" description="同时下载的图片数量（1-10）">
                 <SettingNumberControl setting-key="maxConcurrentDownloads" command="set_max_concurrent_downloads"
                   :build-args="(v: number) => ({ count: v })" :min="1" :max="10" :step="1" />
@@ -87,19 +87,19 @@
               <SettingRow label="默认下载目录" description="未在任务里指定输出目录时，将下载到该目录（按插件分文件夹保存）">
                 <DefaultDownloadDirSetting />
               </SettingRow>
-            </div>
-          </div>
+                </div>
+              </div>
         </el-card>
       </el-tab-pane>
 
       <el-tab-pane label="应用设置" name="app">
         <el-card class="settings-card">
           <template #header>
-            <span>应用设置</span>
+              <span>应用设置</span>
           </template>
 
-          <div v-loading="loading" element-loading-text="" style="min-height: 200px;">
-            <div v-if="showContent" class="settings-list">
+          <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
+            <div v-if="!loading" class="settings-list">
               <SettingRow label="开机启动" description="应用启动时自动运行">
                 <SettingSwitchControl setting-key="autoLaunch" command="set_auto_launch"
                   :build-args="(v: boolean) => ({ enabled: v })" />
@@ -130,8 +130,16 @@
               <SettingRow label="清理应用数据" description="将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启">
                 <ClearUserDataSetting />
               </SettingRow>
-            </div>
-          </div>
+
+              <SettingRow
+                v-if="isDev"
+                label="生成测试图片（调试）"
+                description="基于现有图片数据批量克隆插入，用于性能/分页测试（仅开发模式可见）"
+              >
+                <DebugGenerateImagesSetting />
+              </SettingRow>
+                </div>
+              </div>
         </el-card>
       </el-tab-pane>
 
@@ -145,7 +153,7 @@ import { ElMessage } from "element-plus";
 import { Refresh } from "@element-plus/icons-vue";
 import PageHeader from "@/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
-import { useLoadingDelay } from "@/utils/useLoadingDelay";
+import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import { useSettingsStore } from "@/stores/settings";
 import SettingRow from "@/components/settings/SettingRow.vue";
 import SettingSwitchControl from "@/components/settings/controls/SettingSwitchControl.vue";
@@ -160,14 +168,16 @@ import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTra
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
 import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngineDirSetting.vue";
 import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetting.vue";
+import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 
 // 使用 300ms 防闪屏加载延迟
-const { loading, showContent, startLoading, finishLoading } = useLoadingDelay(300);
+const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 
 const settingsStore = useSettingsStore();
 const activeTab = ref<string>("wallpaper");
 const isRefreshing = ref(false);
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
+const isDev = import.meta.env.DEV;
 
 const loadSettings = async () => {
   startLoading();

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -89,6 +90,12 @@ pub struct AppSettings {
     pub wallpaper_rotation_style: String, // 壁纸显示方式："fill"（填充）、"fit"（适应）、"stretch"（拉伸）、"center"（居中）、"tile"（平铺）
     #[serde(default = "default_wallpaper_rotation_transition")]
     pub wallpaper_rotation_transition: String, // 过渡方式："none"（无）、"fade"（淡入淡出）
+    /// 按 wallpaper_mode 记忆每个模式下最近一次使用的 style（用于切换模式时恢复）
+    #[serde(default)]
+    pub wallpaper_style_by_mode: HashMap<String, String>,
+    /// 按 wallpaper_mode 记忆每个模式下最近一次使用的 transition（用于切换模式时恢复）
+    #[serde(default)]
+    pub wallpaper_transition_by_mode: HashMap<String, String>,
     #[serde(default = "default_wallpaper_mode")]
     pub wallpaper_mode: String, // 壁纸模式："native"（原生）、"window"（窗口句柄）
     #[serde(default)]
@@ -124,6 +131,8 @@ impl Default for AppSettings {
             wallpaper_rotation_mode: "random".to_string(),
             wallpaper_rotation_style: "fill".to_string(),
             wallpaper_rotation_transition: "none".to_string(),
+            wallpaper_style_by_mode: HashMap::new(),
+            wallpaper_transition_by_mode: HashMap::new(),
             wallpaper_mode: "native".to_string(),
             window_state: None,
             restore_last_tab: false,
@@ -136,6 +145,108 @@ impl Default for AppSettings {
 pub struct Settings;
 
 impl Settings {
+    fn normalize_transition_for_mode(mode: &str, transition: &str) -> String {
+        if mode == "native" {
+            match transition {
+                "none" | "fade" => transition.to_string(),
+                _ => "none".to_string(),
+            }
+        } else {
+            transition.to_string()
+        }
+    }
+
+    fn normalize_style_for_mode(mode: &str, style: &str) -> String {
+        // 目前 window 模式支持全部样式；native 模式在不同系统上可支持的集合不同
+        if mode != "native" {
+            return style.to_string();
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // Windows 原生支持所有样式
+            return style.to_string();
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let supported = ["fill", "center"];
+            if supported.contains(&style) {
+                return style.to_string();
+            }
+            return "fill".to_string();
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // Linux 取决于桌面环境：先不强行限制，保持旧逻辑
+            return style.to_string();
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        {
+            if style == "fill" {
+                return "fill".to_string();
+            }
+            return "fill".to_string();
+        }
+    }
+
+    /// 切换模式前调用：
+    /// - 把 old_mode 下当前的 style/transition 写入缓存
+    /// - 如果 new_mode 有缓存则恢复；否则保持当前值
+    /// - 同时对 new_mode 做一次轻量 normalize（避免 native 下出现 slide/zoom 等非法值）
+    ///
+    /// 返回：切换后应该应用到目标后端的 (style, transition)
+    pub fn swap_style_transition_for_mode_switch(
+        &self,
+        old_mode: &str,
+        new_mode: &str,
+    ) -> Result<(String, String), String> {
+        let mut settings = self.get_settings()?;
+
+        // 1) 缓存旧模式的“当前值”
+        settings.wallpaper_style_by_mode.insert(
+            old_mode.to_string(),
+            settings.wallpaper_rotation_style.clone(),
+        );
+        settings.wallpaper_transition_by_mode.insert(
+            old_mode.to_string(),
+            settings.wallpaper_rotation_transition.clone(),
+        );
+
+        // 2) 恢复新模式（若不存在则保留当前）
+        if let Some(v) = settings.wallpaper_style_by_mode.get(new_mode).cloned() {
+            settings.wallpaper_rotation_style = v;
+        }
+        if let Some(v) = settings.wallpaper_transition_by_mode.get(new_mode).cloned() {
+            settings.wallpaper_rotation_transition = v;
+        }
+
+        // 3) normalize：避免 native 下出现不支持的值
+        settings.wallpaper_rotation_style =
+            Self::normalize_style_for_mode(new_mode, &settings.wallpaper_rotation_style);
+        settings.wallpaper_rotation_transition = Self::normalize_transition_for_mode(
+            new_mode,
+            &settings.wallpaper_rotation_transition,
+        );
+
+        // 4) 同步写回新模式缓存（保证“首次切换到 native 且无缓存”的 normalize 结果可被记住）
+        settings.wallpaper_style_by_mode.insert(
+            new_mode.to_string(),
+            settings.wallpaper_rotation_style.clone(),
+        );
+        settings.wallpaper_transition_by_mode.insert(
+            new_mode.to_string(),
+            settings.wallpaper_rotation_transition.clone(),
+        );
+
+        let style = settings.wallpaper_rotation_style.clone();
+        let transition = settings.wallpaper_rotation_transition.clone();
+        self.save_settings(&settings)?;
+        Ok((style, transition))
+    }
+
     pub fn new(_app: AppHandle) -> Self {
         Self
     }
@@ -696,6 +807,11 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
     pub fn set_wallpaper_style(&self, style: String) -> Result<(), String> {
         let mut settings = self.get_settings()?;
         settings.wallpaper_rotation_style = style;
+        // 同步写入“当前模式”的缓存，确保退出应用也能记住每个模式的最后值
+        let mode = settings.wallpaper_mode.clone();
+        settings
+            .wallpaper_style_by_mode
+            .insert(mode, settings.wallpaper_rotation_style.clone());
         self.save_settings(&settings)?;
         Ok(())
     }
@@ -703,6 +819,12 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
     pub fn set_wallpaper_rotation_transition(&self, transition: String) -> Result<(), String> {
         let mut settings = self.get_settings()?;
         settings.wallpaper_rotation_transition = transition;
+        // 同步写入“当前模式”的缓存
+        let mode = settings.wallpaper_mode.clone();
+        settings.wallpaper_transition_by_mode.insert(
+            mode,
+            settings.wallpaper_rotation_transition.clone(),
+        );
         self.save_settings(&settings)?;
         Ok(())
     }

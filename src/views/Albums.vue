@@ -16,7 +16,8 @@
       </el-button>
     </PageHeader>
 
-    <transition-group :key="albumsListKey" name="fade-in-list" tag="div" class="albums-grid">
+    <div v-loading="showLoading" style="min-height: 200px;">
+    <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div" class="albums-grid">
       <AlbumCard v-for="album in albums" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
         :count="albumCounts[album.id] || 0" :preview-urls="albumPreviewUrls[album.id] || []"
         :loading-states="albumLoadingStates[album.id] || []" :is-loading="albumIsLoading[album.id] || false"
@@ -24,7 +25,8 @@
         @contextmenu.prevent="openAlbumContextMenu($event, album)" />
     </transition-group>
 
-    <div v-if="albums.length === 0" class="empty-tip">暂无画册，点击右上角创建</div>
+    <div v-if="!loading && albums.length === 0" class="empty-tip">暂无画册，点击右上角创建</div>
+    </div>
 
     <AlbumContextMenu :visible="albumMenuVisible" :position="albumMenuPosition" :album-id="menuAlbum?.id"
       :album-name="menuAlbum?.name" :current-rotation-album-id="currentRotationAlbumId"
@@ -52,6 +54,7 @@ import { useAlbumStore } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
+import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
@@ -71,6 +74,8 @@ const showCreateDialog = ref(false);
 const newAlbumName = ref("");
 const isRefreshing = ref(false);
 const albumCardRefs = ref<Record<string, any>>({});
+// 使用 300ms 防闪屏加载延迟
+const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 // 用于强制重新挂载列表（让“刷新”能触发完整 enter 动画 + 重置卡片内部状态）
 const albumsListKey = ref(0);
 
@@ -154,8 +159,13 @@ const refreshFavoriteAlbumPreview = async () => {
 const stopFavoriteCountWatch = ref<null | (() => void)>(null);
 
 onMounted(async () => {
+  startLoading();
+  try {
   await albumStore.loadAlbums();
   await loadRotationSettings();
+  } finally {
+    finishLoading();
+  }
   // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
 
   // 初始化时加载前几个画册的预览图（前3张优先）
