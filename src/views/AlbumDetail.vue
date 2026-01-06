@@ -30,43 +30,31 @@
       </el-button>
     </PageHeader>
 
-    <GalleryView ref="albumViewRef" class="detail-body" mode="albumDetail" :loading="loading" :images="images"
-      :image-url-map="imageSrcMap" :image-click-action="imageClickAction" :columns="albumColumns"
-      :aspect-ratio-match-window="!!albumAspectRatio" :window-aspect-ratio="albumAspectRatio || 16 / 9"
-      :allow-select="true" :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="!loading"
-      :is-blocked="isBlockingOverlayOpen" :album-image-count="currentAlbumImageCount"
-      :context-menu-component="AlbumImageContextMenu" @adjust-columns="(...args) => throttledAdjustColumns(args[0])"
-      @selection-change="(...args) => handleSelectionChange(args[0])"
-      @image-dbl-click="(...args) => handleImageDblClick(args[0])"
-      @context-command="(...args: any[]) => handleImageMenuCommand(args[0])"
+    <div v-if="loading" class="detail-body detail-body-loading">
+      <el-skeleton :rows="8" animated />
+        </div>
+
+    <ImageGrid v-else ref="albumViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
+      :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true" :context-menu-component="AlbumImageContextMenu"
+      :on-context-command="handleImageMenuCommand" @added-to-album="handleAddedToAlbum"
       @reorder="(...args) => handleImageReorder(args[0])">
 
-      <template #overlays>
-
-        <ImagePreviewDialog v-model="showPreview" v-model:image-url="previewUrl" :image-path="previewPath"
-          :image="previewImage" @contextmenu="handlePreviewContextMenu" />
-
-        <ImageDetailDialog v-model="showImageDetail" :image="selectedDetailImage" />
-
-        <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="pendingAddToAlbumImageIds"
-          @added="handleAddedToAlbum" />
-
-        <!-- 移除/删除确认对话框 -->
-        <el-dialog v-model="showRemoveDialog" title="确认删除" width="420px" destroy-on-close>
-          <div style="margin-bottom: 16px;">
-            <p style="margin-bottom: 8px;">{{ removeDialogMessage }}</p>
-            <el-checkbox v-model="removeDeleteFiles" label="同时从电脑删除源文件（慎用）" />
-            <p class="var-description" :style="{ color: removeDeleteFiles ? 'var(--el-color-danger)' : '' }">
-              {{ removeDeleteFiles ? '警告：该操作将永久删除电脑文件，不可恢复！' : '不勾选仅从画册移除记录，保留电脑文件。' }}
-            </p>
-          </div>
-          <template #footer>
-            <el-button @click="showRemoveDialog = false">取消</el-button>
-            <el-button type="primary" @click="confirmRemoveImages">确定</el-button>
-          </template>
-        </el-dialog>
+      <!-- 画册图片数量上限警告：作为 before-grid 插入（仅 AlbumDetail 使用） -->
+      <template #before-grid>
+        <div v-if="showAlbumLimitWarning" :class="['album-limit-warning', { 'is-danger': isAtLimit }]">
+          <el-icon>
+            <Warning v-if="!isAtLimit" />
+            <CircleClose v-else />
+          </el-icon>
+          <span>{{ warningMessage }}</span>
+        </div>
       </template>
-    </GalleryView>
+    </ImageGrid>
+
+    <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
+      :message="removeDialogMessage" title="从画册移除" checkbox-label="同时删除图片（慎用）"
+      danger-text="警告：将永久删除电脑文件，并从所有画册和画廊中移除，不可恢复！" safe-text="不勾选仅从当前画册移除，图片文件和其他画册中的记录将保留。"
+      @confirm="confirmRemoveImages" />
   </div>
 </template>
 
@@ -79,11 +67,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Picture, Delete, Setting } from "@element-plus/icons-vue";
-import ImagePreviewDialog from "@/components/ImagePreviewDialog.vue";
-import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
+import { Warning, CircleClose } from "@element-plus/icons-vue";
 import AlbumImageContextMenu from "@/components/contextMenu/AlbumImageContextMenu.vue";
-import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
-import GalleryView from "@/components/GalleryView.vue";
+import ImageGrid from "@/components/ImageGrid.vue";
+import RemoveImagesConfirmDialog from "@/components/common/RemoveImagesConfirmDialog.vue";
 import { useAlbumStore } from "@/stores/albums";
 import { useCrawlerStore, type ImageInfo as CrawlerImageInfo } from "@/stores/crawler";
 import type { ImageInfo } from "@/stores/crawler";
@@ -92,6 +79,7 @@ import PageHeader from "@/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useGallerySettings } from "@/composables/useGallerySettings";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
+import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -116,8 +104,6 @@ const currentWallpaperImageId = ref<string | null>(null);
 const images = ref<ImageInfo[]>([]);
 const imageSrcMap = ref<Record<string, { thumbnail?: string; original?: string }>>({});
 const blobUrls = new Set<string>();
-
-const selectedImages = ref<Set<string>>(new Set());
 const albumViewRef = ref<any>(null);
 
 // 计算当前画册的图片数量（优先使用 albumCounts，否则使用 images.length）
@@ -130,41 +116,29 @@ const currentAlbumImageCount = computed(() => {
   }
   // 如果没有计数，使用当前加载的图片数量
   return images.value.length;
+  });
+
+const MAX_ALBUM_IMAGES = 10000;
+const WARNING_THRESHOLD = 9000; // 超过 9000 时显示警告
+
+const showAlbumLimitWarning = computed(() => {
+  return (currentAlbumImageCount.value ?? 0) >= WARNING_THRESHOLD;
 });
 
-// 画册详情页本地列数（初始值为 5，不再从设置读取）
-const albumColumns = ref(5);
-const albumAspectRatio = ref<number | null>(null);
+const isAtLimit = computed(() => {
+  return (currentAlbumImageCount.value ?? 0) >= MAX_ALBUM_IMAGES;
+});
 
-// 调整列数的函数（不保存到设置）
-const adjustColumns = (delta: number) => {
-  if (delta > 0) {
-    // 增加列数（最大 10 列）
-    if (albumColumns.value < 10) {
-      albumColumns.value++;
-    }
-  } else {
-    // 减少列数（最小 1 列）
-    if (albumColumns.value > 1) {
-      albumColumns.value--;
-    }
+const warningMessage = computed(() => {
+  const count = currentAlbumImageCount.value ?? 0;
+  if (count >= MAX_ALBUM_IMAGES) {
+    return `画册图片数量已达到上限（${MAX_ALBUM_IMAGES} 张），将无法继续添加到画册`;
   }
-};
+  const remaining = MAX_ALBUM_IMAGES - count;
+  return `画册图片数量即将到达上限（当前 ${count} / ${MAX_ALBUM_IMAGES}，剩余 ${remaining} 张）`;
+});
 
-// 节流函数
-const throttle = <T extends (...args: any[]) => any>(func: T, delay: number): T => {
-  let lastCall = 0;
-  return ((...args: any[]) => {
-    const now = Date.now();
-    if (now - lastCall >= delay) {
-      lastCall = now;
-      return func(...args);
-    }
-  }) as T;
-};
-
-// 节流后的调整列数函数（100ms 节流）
-const throttledAdjustColumns = throttle(adjustColumns, 100);
+const albumAspectRatio = ref<number | null>(null);
 
 watch(
   () => settingsStore.values.galleryImageAspectRatio,
@@ -179,7 +153,7 @@ watch(
       const [w, h] = value.split(":").map(Number);
       if (w && h) {
         albumAspectRatio.value = w / h;
-      }
+    }
     }
     // 解析 "custom:1920:1080" 格式
     if (value.startsWith("custom:")) {
@@ -192,43 +166,9 @@ watch(
   }
 );
 
-// 当有弹窗/抽屉等覆盖层时，不应处理画廊快捷键（避免误触）
-const isBlockingOverlayOpen = () => {
-  // 本页面自身的弹窗
-  if (showPreview.value || showImageDetail.value || showAddToAlbumDialog.value) return true;
-
-  // Element Plus 的 Dialog/Drawer/MessageBox 等通常会创建 el-overlay（teleport 到 body）
-  const overlays = Array.from(document.querySelectorAll<HTMLElement>(".el-overlay"));
-  return overlays.some((el) => {
-    const style = window.getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden") return false;
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  });
-};
-
-const handleSelectionChange = (ids: Set<string>) => {
-  // 始终用新 Set，避免外部误改导致状态不同步
-  selectedImages.value = new Set(ids);
-};
-
 const clearSelection = () => {
   albumViewRef.value?.clearSelection?.();
-  selectedImages.value = new Set();
 };
-
-const showPreview = ref(false);
-const previewUrl = ref("");
-const previewPath = ref("");
-const previewImage = ref<ImageInfo | null>(null);
-const showImageDetail = ref(false);
-const selectedDetailImage = ref<ImageInfo | null>(null);
-
-const imageMenuVisible = ref(false);
-const imageMenuPosition = ref({ x: 0, y: 0 });
-const imageMenuImage = ref<ImageInfo | null>(null);
-const showAddToAlbumDialog = ref(false);
-const pendingAddToAlbumImageIds = ref<string[]>([]);
 
 // 重命名相关
 const isRenaming = ref(false);
@@ -292,7 +232,7 @@ const loadAlbum = async () => {
   }
 
   // 异步加载图片的 Blob URL，不阻塞加载状态
-  for (const img of imgs) {
+    for (const img of imgs) {
     try {
       const thumbnailUrl = img.thumbnailPath ? await getImageUrl(img.thumbnailPath) : "";
       const originalUrl = await getImageUrl(img.localPath);
@@ -303,44 +243,31 @@ const loadAlbum = async () => {
   }
 };
 
-const handleImageDblClick = async (image: ImageInfo) => {
-  if (imageClickAction.value === 'open') {
-    try {
-      await invoke("open_file_path", { filePath: image.localPath });
-    } catch (error) {
-      console.error("打开文件失败:", error);
-      ElMessage.error("打开文件失败");
-    }
-  }
-  // preview 模式由 ImageGrid 内部处理
-};
-
-const handlePreviewContextMenu = (event: MouseEvent) => {
-  event.preventDefault();
-  if (previewImage.value) {
-    imageMenuImage.value = previewImage.value;
-    imageMenuPosition.value = { x: event.clientX, y: event.clientY };
-    imageMenuVisible.value = true;
-  }
-};
-
-const handleImageReorder = async (newOrder: ImageInfo[]) => {
+const handleImageReorder = async (payload: { aId: string; aOrder: number; bId: string; bOrder: number }) => {
   if (!albumId.value) return;
 
   try {
-    // 计算新的 order 值（间隔 1000）
-    const imageOrders: [string, number][] = newOrder.map((img, index) => [
-      img.id,
-      (index + 1) * 1000,
-    ]);
+    const imageOrders: [string, number][] = [
+      [payload.aId, payload.aOrder],
+      [payload.bId, payload.bOrder],
+    ];
 
     await invoke("update_album_images_order", {
       albumId: albumId.value,
       imageOrders,
     });
 
-    // 更新本地显示顺序
-    images.value = newOrder;
+    const idxA = images.value.findIndex((i) => i.id === payload.aId);
+    const idxB = images.value.findIndex((i) => i.id === payload.bId);
+    if (idxA !== -1 && idxB !== -1) {
+      const next = images.value.slice();
+      [next[idxA], next[idxB]] = [next[idxB], next[idxA]];
+      images.value = next.map((img) => {
+        if (img.id === payload.aId) return { ...img, order: payload.aOrder } as ImageInfo;
+        if (img.id === payload.bId) return { ...img, order: payload.bOrder } as ImageInfo;
+        return img;
+      });
+    }
 
     ElMessage.success("顺序已更新");
   } catch (error) {
@@ -408,21 +335,16 @@ const confirmRemoveImages = async () => {
     const idsArr = imagesToRemove.map((i) => i.id);
     const isFavoriteAlbum = albumId.value === FAVORITE_ALBUM_ID.value;
 
-    // 如果勾选了删除文件，则调用 deleteImage，否则只从画册移除
+    // 如果勾选了删除文件，则调用 deleteImage（会自动从所有画册移除并删除文件）
+    // 否则只从当前画册移除，保留文件和其他画册中的记录
     if (shouldDeleteFiles) {
-      // 删除文件：先删除图片，然后从画册移除
+      // 删除图片：deleteImage 会从所有画册中移除并删除文件
       for (const img of imagesToRemove) {
         await crawlerStore.deleteImage(img.id);
       }
-      // 从画册移除（如果图片还在画册中）
-      try {
-        await albumStore.removeImagesFromAlbum(albumId.value, idsArr);
-      } catch (error) {
-        // 如果图片已经被删除，可能不在画册中了，忽略错误
-        console.log("从画册移除时出错（可能图片已不存在）:", error);
-      }
+      // 注意：deleteImage 已经会从所有画册中移除图片，不需要再调用 removeImagesFromAlbum
     } else {
-      // 只从画册移除，不删除文件
+      // 只从当前画册移除，不删除文件
       await albumStore.removeImagesFromAlbum(albumId.value, idsArr);
     }
 
@@ -439,46 +361,53 @@ const confirmRemoveImages = async () => {
         }
         return img;
       });
-    }
+  }
 
     // 如果删除了文件，需要从列表中移除；如果只是从画册移除，也需要从列表中移除
-    images.value = images.value.filter((img) => !ids.has(img.id));
-    for (const id of ids) {
-      const data = imageSrcMap.value[id];
-      if (data?.thumbnail) URL.revokeObjectURL(data.thumbnail);
-      if (data?.original) URL.revokeObjectURL(data.original);
-      const { [id]: _, ...rest } = imageSrcMap.value;
-      imageSrcMap.value = rest;
+  images.value = images.value.filter((img) => !ids.has(img.id));
+  for (const id of ids) {
+    const data = imageSrcMap.value[id];
+    if (data?.thumbnail) URL.revokeObjectURL(data.thumbnail);
+    if (data?.original) URL.revokeObjectURL(data.original);
+    const { [id]: _, ...rest } = imageSrcMap.value;
+    imageSrcMap.value = rest;
+  }
+  clearSelection();
+
+    // 根据操作类型显示不同的成功消息
+    if (shouldDeleteFiles) {
+      ElMessage.success(
+        `${count > 1 ? `已删除 ${count} 张图片` : "已删除图片"}（已从所有画册和画廊中移除）`
+      );
+    } else {
+      ElMessage.success(
+        `${count > 1 ? `已从画册移除 ${count} 张图片` : "已从画册移除图片"}`
+      );
     }
-    clearSelection();
-    ElMessage.success(
-      `${count > 1 ? `已删除 ${count} 张图片` : "已删除图片"}`
-    );
   } catch (error) {
-    console.error("删除图片失败:", error);
-    ElMessage.error("删除失败");
+    console.error("操作失败:", error);
+    ElMessage.error(shouldDeleteFiles ? "删除失败" : "移除失败");
   }
 };
 
-const handleImageMenuCommand = async (payload: { command: string; image: ImageInfo; selectedImageIds: Set<string> }) => {
+const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
   const command = payload.command;
   const image = payload.image;
-  const selectedSet = payload.selectedImageIds && payload.selectedImageIds.size > 0
-    ? payload.selectedImageIds
-    : new Set([image.id]);
+  // 让 ImageGrid 执行默认内置行为（详情/加入画册）
+  if (command === "detail" || command === "addToAlbum") {
+    return command;
+  }
+  const selectedSet =
+    "selectedImageIds" in payload && payload.selectedImageIds && payload.selectedImageIds.size > 0
+      ? payload.selectedImageIds
+      : new Set([image.id]);
 
   const isMultiSelect = selectedSet.size > 1;
   const imagesToProcess = isMultiSelect
     ? images.value.filter((img) => selectedSet.has(img.id))
-    : [image];
+      : [image];
 
   switch (command) {
-    case "detail":
-      if (!isMultiSelect) {
-        selectedDetailImage.value = image;
-        showImageDetail.value = true;
-      }
-      break;
     case "favorite":
       try {
         const newFavorite = !image.favorite;
@@ -494,19 +423,10 @@ const handleImageMenuCommand = async (payload: { command: string; image: ImageIn
         const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
         albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(0, currentCount + (newFavorite ? 1 : -1));
 
-        // 发出收藏状态变化事件，通知其他页面更新
-        window.dispatchEvent(
-          new CustomEvent("favorite-status-changed", {
-            detail: { imageIds: [image.id], favorite: newFavorite },
-          })
-        );
+        // 收藏状态以 store 为准：不再通过全局事件同步
       } catch {
         ElMessage.error("操作失败");
       }
-      break;
-    case "addToAlbum":
-      pendingAddToAlbumImageIds.value = imagesToProcess.map((i) => i.id);
-      showAddToAlbumDialog.value = true;
       break;
     case "copy":
       if (imagesToProcess.length > 1) {
@@ -519,12 +439,12 @@ const handleImageMenuCommand = async (payload: { command: string; image: ImageIn
       break;
     case "open":
       if (!isMultiSelect) {
-        await invoke("open_file_path", { filePath: image.localPath });
+      await invoke("open_file_path", { filePath: image.localPath });
       }
       break;
     case "openFolder":
       if (!isMultiSelect) {
-        await invoke("open_file_folder", { filePath: image.localPath });
+      await invoke("open_file_folder", { filePath: image.localPath });
       }
       break;
     case "wallpaper":
@@ -614,6 +534,7 @@ const handleImageMenuCommand = async (payload: { command: string; image: ImageIn
       showRemoveDialog.value = true;
       break;
   }
+  return null;
 };
 
 // 初始化/刷新画册数据
@@ -730,10 +651,6 @@ onMounted(async () => {
         delete imageSrcMap.value[id];
       }
 
-      // 清除选中状态
-      for (const id of idsToRemove) {
-        selectedImages.value.delete(id);
-      }
     } else {
       // 新增收藏：需要重新加载以获取完整的 ImageInfo
       if (isActive) {
@@ -746,8 +663,7 @@ onMounted(async () => {
     }
   }) as EventListener;
 
-  window.addEventListener("favorite-status-changed", favoriteChangedHandler);
-  (window as any).__albumDetailFavoriteHandler = favoriteChangedHandler;
+  // 收藏状态以 store 为准：不再通过全局事件同步
 
   // 监听图片删除事件（来自画廊等页面的删除操作）
   const imagesDeletedHandler = ((event: Event) => {
@@ -773,7 +689,6 @@ onMounted(async () => {
           blobUrls.delete(data.original);
         }
         delete imageSrcMap.value[id];
-        selectedImages.value.delete(id);
       }
     }
   }) as EventListener;
@@ -805,7 +720,6 @@ onMounted(async () => {
           blobUrls.delete(data.original);
         }
         delete imageSrcMap.value[id];
-        selectedImages.value.delete(id);
       }
     }
   }) as EventListener;
@@ -1044,12 +958,7 @@ onBeforeUnmount(() => {
   blobUrls.forEach((u) => URL.revokeObjectURL(u));
   blobUrls.clear();
 
-  // 移除收藏状态变化监听
-  const favoriteHandler = (window as any).__albumDetailFavoriteHandler;
-  if (favoriteHandler) {
-    window.removeEventListener("favorite-status-changed", favoriteHandler);
-    delete (window as any).__albumDetailFavoriteHandler;
-  }
+  // 收藏状态以 store 为准：无需移除监听
 
   // 移除图片删除事件监听
   const deletedHandler = (window as any).__albumDetailImagesDeletedHandler;

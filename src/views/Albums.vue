@@ -43,11 +43,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onActivated, onBeforeUnmount } from "vue";
+import { ref, onMounted, onActivated, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Refresh, Setting } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
-import AlbumContextMenu from "@/components/AlbumContextMenu.vue";
+import AlbumContextMenu from "@/components/contextMenu/AlbumContextMenu.vue";
 import { useAlbumStore } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
 import PageHeader from "@/components/common/PageHeader.vue";
@@ -150,10 +150,8 @@ const refreshFavoriteAlbumPreview = async () => {
   await prefetchPreview(favoriteAlbum);
 };
 
-// 收藏状态变化事件处理器
-const handleFavoriteStatusChanged = () => {
-  refreshFavoriteAlbumPreview();
-};
+// 收藏状态以 store 为准：通过收藏画册计数变化触发预览刷新
+const stopFavoriteCountWatch = ref<null | (() => void)>(null);
 
 onMounted(async () => {
   await albumStore.loadAlbums();
@@ -166,8 +164,14 @@ onMounted(async () => {
     prefetchPreview(album);
   }
 
-  // 监听收藏状态变化事件
-  window.addEventListener("favorite-status-changed", handleFavoriteStatusChanged);
+  // 监听收藏画册数量变化，刷新预览
+  stopFavoriteCountWatch.value?.();
+  stopFavoriteCountWatch.value = watch(
+    () => albumCounts.value[FAVORITE_ALBUM_ID.value],
+    () => {
+      refreshFavoriteAlbumPreview();
+    }
+  );
 
   // 监听图片添加事件（来自爬虫下载完成）
   const { listen } = await import("@tauri-apps/api/event");
@@ -522,24 +526,6 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
     }
   }
 };
-
-
-onBeforeUnmount(() => {
-  // 移除收藏状态变化事件监听
-  window.removeEventListener("favorite-status-changed", handleFavoriteStatusChanged);
-
-  // 移除图片添加事件监听
-  const imageAddedUnlisten = (window as any).__albumsImageAddedUnlisten;
-  if (imageAddedUnlisten) {
-    imageAddedUnlisten();
-    delete (window as any).__albumsImageAddedUnlisten;
-  }
-
-  Object.values(albumPreviewUrls.value).forEach((urls) => {
-    urls.forEach((u) => URL.revokeObjectURL(u));
-  });
-  albumPreviewUrls.value = {};
-});
 
 </script>
 

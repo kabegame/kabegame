@@ -59,6 +59,15 @@ pub struct PaginatedImages {
     pub page_size: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RangedImages {
+    pub images: Vec<ImageInfo>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Album {
@@ -444,9 +453,9 @@ impl Storage {
         .expect("Failed to create album_images table");
         // 迁移：添加 order 字段（如果不存在）
         let _ = conn.execute("ALTER TABLE album_images ADD COLUMN \"order\" INTEGER", []);
-        // 为现有数据设置 order（基于加入时间，使用 ROWID 作为近似值，越晚越大）
+        // 为现有数据设置 order：使用 ROWID 兜底填充，保证非空且相对稳定（避免全表同值导致无法 swap）
         let _ = conn.execute(
-            "UPDATE album_images SET \"order\" = (SELECT MAX(COALESCE(\"order\", 0)) FROM album_images WHERE album_id = album_images.album_id) + 1000 WHERE \"order\" IS NULL",
+            "UPDATE album_images SET \"order\" = rowid WHERE \"order\" IS NULL",
             [],
         );
 
@@ -486,6 +495,16 @@ impl Storage {
             [],
         )
         .expect("Failed to create task_images image index");
+
+        // 创建临时文件表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS temp_files (
+                path TEXT PRIMARY KEY,
+                created_at INTEGER NOT NULL
+            )",
+            [],
+        )
+        .expect("Failed to create temp_files table");
 
         Self {
             db: Arc::new(Mutex::new(conn)),
@@ -614,55 +633,24 @@ impl Storage {
         app_data_dir.join("thumbnails")
     }
 
-    pub fn get_images_paginated(
-        &self,
-        page: usize,
-        page_size: usize,
-        plugin_id: Option<&str>,
-        favorites_only: Option<bool>,
-    ) -> Result<PaginatedImages, String> {
+    pub fn get_images_range(&self, offset: usize, limit: usize) -> Result<RangedImages, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        // 构建查询条件
-        let mut conditions = Vec::new();
-        if let Some(pid) = plugin_id {
-            conditions.push(format!("plugin_id = '{}'", pid.replace("'", "''")));
-        }
-        if favorites_only == Some(true) {
-            // 只查询在收藏画册中的图片
-            conditions.push(format!(
-                "id IN (SELECT image_id FROM album_images WHERE album_id = '{}')",
-                FAVORITE_ALBUM_ID
-            ));
-        }
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
-
-        // 获取总数
+        // 获取总数（不再支持按来源/收藏过滤）
         let total: i64 = conn
-            .query_row(
-                &format!("SELECT COUNT(*) FROM images {}", where_clause),
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM images", [], |row| row.get(0))
             .map_err(|e| format!("Failed to query count: {}", e))?;
 
-        // 分页查询
-        let offset = page * page_size;
-        // 使用 LEFT JOIN 来判断图片是否在收藏画册中
+        // 范围查询：使用 LEFT JOIN 来判断图片是否在收藏画册中（用于前端展示星标）
         let query = format!(
             "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash,
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
              images.\"order\"
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
-             {} 
              ORDER BY COALESCE(images.\"order\", images.crawled_at) ASC 
              LIMIT ? OFFSET ?",
-            FAVORITE_ALBUM_ID, where_clause
+            FAVORITE_ALBUM_ID
         );
 
         let mut stmt = conn
@@ -670,7 +658,7 @@ impl Storage {
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let image_rows = stmt
-            .query_map(params![page_size as i64, offset as i64], |row| {
+            .query_map(params![limit as i64, offset as i64], |row| {
                 Ok(ImageInfo {
                     id: row.get(0)?,
                     url: row.get(1)?,
@@ -698,9 +686,20 @@ impl Storage {
             }
         }
 
-        Ok(PaginatedImages {
+        Ok(RangedImages {
             images,
             total: total as usize,
+            offset,
+            limit,
+        })
+    }
+
+    pub fn get_images_paginated(&self, page: usize, page_size: usize) -> Result<PaginatedImages, String> {
+        let offset = page.saturating_mul(page_size);
+        let res = self.get_images_range(offset, page_size)?;
+        Ok(PaginatedImages {
+            images: res.images,
+            total: res.total,
             page,
             page_size,
         })
@@ -709,7 +708,7 @@ impl Storage {
     pub fn get_all_images(&self) -> Result<Vec<ImageInfo>, String> {
         // 为了兼容性，返回所有图片（但使用分页查询以避免内存问题）
         // 注意：如果图片很多，这可能仍然会有问题
-        let result = self.get_images_paginated(0, 10000, None, None)?;
+        let result = self.get_images_paginated(0, 10000)?;
         Ok(result.images)
     }
 
@@ -1022,14 +1021,26 @@ impl Storage {
 
         // 执行添加操作
         let mut inserted = 0;
+        // 为新插入的图片分配递增 order，确保后续仅 swap 两条 order 也能稳定排序
+        let max_order: i64 = conn
+            .query_row(
+                "SELECT MAX(COALESCE(\"order\", 0)) FROM album_images WHERE album_id = ?1",
+                params![album_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        let mut next_order: i64 = max_order + 1000;
         for img_id in image_ids {
             let rows = conn
                 .execute(
-                    "INSERT OR IGNORE INTO album_images (album_id, image_id) VALUES (?1, ?2)",
-                    params![album_id, img_id],
+                    "INSERT OR IGNORE INTO album_images (album_id, image_id, \"order\") VALUES (?1, ?2, ?3)",
+                    params![album_id, img_id, next_order],
                 )
                 .map_err(|e| format!("Failed to insert album image: {}", e))?;
             inserted += rows;
+            next_order += 1000;
         }
 
         Ok(AddToAlbumResult {
@@ -1068,6 +1079,16 @@ impl Storage {
 
         // 执行添加操作，只添加能添加的部分
         let mut inserted = 0;
+        let max_order: i64 = conn
+            .query_row(
+                "SELECT MAX(COALESCE(\"order\", 0)) FROM album_images WHERE album_id = ?1",
+                params![album_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        let mut next_order: i64 = max_order + 1000;
         for img_id in image_ids {
             if inserted >= remaining {
                 break;
@@ -1089,8 +1110,8 @@ impl Storage {
 
             // 尝试添加
             match conn.execute(
-                "INSERT OR IGNORE INTO album_images (album_id, image_id) VALUES (?1, ?2)",
-                params![album_id, img_id],
+                "INSERT OR IGNORE INTO album_images (album_id, image_id, \"order\") VALUES (?1, ?2, ?3)",
+                params![album_id, img_id, next_order],
             ) {
                 Ok(rows) => {
                     inserted += rows;
@@ -1100,6 +1121,7 @@ impl Storage {
                     continue;
                 }
             }
+            next_order += 1000;
         }
 
         inserted as usize
@@ -1145,12 +1167,12 @@ impl Storage {
             .prepare(
                 "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash,
                  CASE WHEN favorite_check.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-                 COALESCE(album_images.\"order\", (SELECT MAX(COALESCE(\"order\", 0)) FROM album_images WHERE album_id = ?2) + 1000) as album_image_order
+                 COALESCE(album_images.\"order\", album_images.rowid) as album_image_order
                  FROM images
                  INNER JOIN album_images ON images.id = album_images.image_id
                  LEFT JOIN album_images as favorite_check ON images.id = favorite_check.image_id AND favorite_check.album_id = ?1
                  WHERE album_images.album_id = ?2
-                 ORDER BY COALESCE(album_images.\"order\", (SELECT MAX(COALESCE(\"order\", 0)) FROM album_images WHERE album_id = ?2) + 1000) ASC",
+                 ORDER BY COALESCE(album_images.\"order\", album_images.rowid) ASC",
             )
             .map_err(|e| format!("Failed to prepare album images query: {}", e))?;
 
@@ -1196,12 +1218,12 @@ impl Storage {
             .prepare(
                 "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata, COALESCE(images.thumbnail_path, ''), images.hash,
                  CASE WHEN favorite_check.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-                 COALESCE(album_images.\"order\", (SELECT MAX(COALESCE(\"order\", 0)) FROM album_images WHERE album_id = ?2) + 1000) as album_image_order
+                 COALESCE(album_images.\"order\", album_images.rowid) as album_image_order
                  FROM images
                  INNER JOIN album_images ON images.id = album_images.image_id
                  LEFT JOIN album_images as favorite_check ON images.id = favorite_check.image_id AND favorite_check.album_id = ?1
                  WHERE album_images.album_id = ?2
-                 ORDER BY COALESCE(album_images.\"order\", (SELECT MAX(COALESCE(\"order\", 0)) FROM album_images WHERE album_id = ?2) + 1000) ASC
+                 ORDER BY COALESCE(album_images.\"order\", album_images.rowid) ASC
                  LIMIT ?3",
             )
             .map_err(|e| format!("Failed to prepare album preview query: {}", e))?;
@@ -1540,7 +1562,7 @@ impl Storage {
         }
 
         // 更新任务的 deletedCount
-        for (image_id, task_id) in task_ids {
+        for (_, task_id) in task_ids {
             let _ = self.increment_task_deleted_count_in_tx(&tx, &task_id, 1);
         }
 
@@ -1629,7 +1651,7 @@ impl Storage {
         }
 
         // 更新任务的 deletedCount
-        for (image_id, task_id) in task_ids {
+        for (_, task_id) in task_ids {
             let _ = self.increment_task_deleted_count_in_tx(&tx, &task_id, 1);
         }
 
@@ -1785,20 +1807,12 @@ impl Storage {
         })
     }
 
-    pub fn get_total_count(&self, plugin_id: Option<&str>) -> Result<usize, String> {
+    pub fn get_total_count(&self) -> Result<usize, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let total: i64 = if let Some(pid) = plugin_id {
-            conn.query_row(
-                "SELECT COUNT(*) FROM images WHERE plugin_id = ?1",
-                params![pid],
-                |row| row.get(0),
-            )
-            .map_err(|e| format!("Failed to query count: {}", e))?
-        } else {
-            conn.query_row("SELECT COUNT(*) FROM images", [], |row| row.get(0))
-                .map_err(|e| format!("Failed to query count: {}", e))?
-        };
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM images", [], |row| row.get(0))
+            .map_err(|e| format!("Failed to query count: {}", e))?;
 
         Ok(total as usize)
     }
@@ -1997,8 +2011,8 @@ impl Storage {
                     output_dir: row.get(5)?,
                     // 解析失败时回退为空对象，避免“预设存在但变量丢失”
                     user_config: Some(user_config.as_deref().unwrap_or("{}").to_string())
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .or_else(|| Some(std::collections::HashMap::new())),
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .or_else(|| Some(std::collections::HashMap::new())),
                     created_at: row.get::<_, i64>(7)? as u64,
                 })
             })
@@ -2094,21 +2108,21 @@ impl Storage {
             .query_map(
                 params![task_id, FAVORITE_ALBUM_ID, page_size as i64, offset as i64],
                 |row| {
-                    Ok(ImageInfo {
-                        id: row.get(0)?,
-                        url: row.get(1)?,
-                        local_path: row.get(2)?,
-                        plugin_id: row.get(3)?,
-                        task_id: row.get(4)?,
-                        crawled_at: row.get(5)?,
-                        metadata: row
-                            .get::<_, Option<String>>(6)?
-                            .and_then(|s| serde_json::from_str(&s).ok()),
-                        thumbnail_path: row.get(7)?,
-                        favorite: row.get::<_, i64>(8)? != 0,
-                        hash: row.get(9)?,
-                        order: row.get::<_, Option<i64>>(10)?,
-                    })
+                Ok(ImageInfo {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    local_path: row.get(2)?,
+                    plugin_id: row.get(3)?,
+                    task_id: row.get(4)?,
+                    crawled_at: row.get(5)?,
+                    metadata: row
+                        .get::<_, Option<String>>(6)?
+                        .and_then(|s| serde_json::from_str(&s).ok()),
+                    thumbnail_path: row.get(7)?,
+                    favorite: row.get::<_, i64>(8)? != 0,
+                    hash: row.get(9)?,
+                    order: row.get::<_, Option<i64>>(10)?,
+                })
                 },
             )
             .map_err(|e| format!("Failed to query task images: {}", e))?;
@@ -2244,6 +2258,67 @@ impl Storage {
             .map_err(|e| format!("Failed to update album order: {}", e))?;
         }
         Ok(())
+    }
+
+    /// 添加临时文件记录
+    pub fn add_temp_file(&self, file_path: &str) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| format!("Time error: {}", e))?
+            .as_secs();
+        conn.execute(
+            "INSERT OR REPLACE INTO temp_files (path, created_at) VALUES (?1, ?2)",
+            params![file_path, created_at as i64],
+        )
+        .map_err(|e| format!("Failed to insert temp file: {}", e))?;
+        Ok(())
+    }
+
+    /// 删除临时文件记录
+    pub fn remove_temp_file(&self, file_path: &str) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.execute(
+            "DELETE FROM temp_files WHERE path = ?1",
+            params![file_path],
+        )
+        .map_err(|e| format!("Failed to delete temp file record: {}", e))?;
+        Ok(())
+    }
+
+    /// 获取所有临时文件路径
+    pub fn get_all_temp_files(&self) -> Result<Vec<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare("SELECT path FROM temp_files")
+            .map_err(|e| format!("Failed to prepare temp files query: {}", e))?;
+        let rows = stmt
+            .query_map([], |row| Ok(row.get::<_, String>(0)?))
+            .map_err(|e| format!("Failed to query temp files: {}", e))?;
+        let mut paths = Vec::new();
+        for r in rows {
+            paths.push(r.map_err(|e| format!("Failed to read temp file row: {}", e))?);
+        }
+        Ok(paths)
+    }
+
+    /// 清理所有临时文件（在应用启动时调用）
+    pub fn cleanup_temp_files(&self) -> Result<usize, String> {
+        let paths = self.get_all_temp_files()?;
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut cleaned = 0;
+        for path in &paths {
+            // 尝试删除文件（忽略错误，因为文件可能已经被删除）
+            let path_buf = PathBuf::from(path);
+            if path_buf.exists() {
+                if fs::remove_file(&path_buf).is_ok() {
+                    cleaned += 1;
+                }
+            }
+            // 无论文件是否存在，都从数据库中删除记录
+            let _ = conn.execute("DELETE FROM temp_files WHERE path = ?1", params![path]);
+        }
+        Ok(cleaned)
     }
 }
 

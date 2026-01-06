@@ -68,8 +68,8 @@ watch(
 );
 
 const save = async (value: string | null) => {
-  const prev = settingsStore.values.galleryImageAspectRatio as any;
-  settingsStore.values.galleryImageAspectRatio = value as any;
+  const prev = settingsStore.values.galleryImageAspectRatio;
+  settingsStore.values.galleryImageAspectRatio = value;
   settingsStore.savingByKey.galleryImageAspectRatio = true;
   try {
     await invoke("set_gallery_image_aspect_ratio", { aspectRatio: value });

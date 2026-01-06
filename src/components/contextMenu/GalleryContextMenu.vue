@@ -1,12 +1,15 @@
 <template>
-  <ImageContextMenu :visible="visible" :position="position" :image="image" :selected-count="selectedCount"
+  <SingleImageContextMenu v-if="selectedCount === 1" :visible="visible" :position="position" :image="image"
+    @close="$emit('close')" @command="$emit('command', $event)" />
+  <MultiImageContextMenu v-else :visible="visible" :position="position" :image="image" :selected-count="selectedCount"
     :is-image-selected="isImageSelected" @close="$emit('close')" @command="$emit('command', $event)" />
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ImageInfo } from "@/stores/crawler";
-import ImageContextMenu from "./ImageContextMenu.vue";
+import SingleImageContextMenu from "./SingleImageContextMenu.vue";
+import MultiImageContextMenu from "./MultiImageContextMenu.vue";
 
 interface Props {
   visible: boolean;

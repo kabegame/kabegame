@@ -1,8 +1,42 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::AppHandle;
+
+fn atomic_replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+
+        let tmp_w: Vec<u16> = tmp.as_os_str().encode_wide().chain(Some(0)).collect();
+        let dest_w: Vec<u16> = dest.as_os_str().encode_wide().chain(Some(0)).collect();
+
+        let ok = unsafe {
+            MoveFileExW(
+                tmp_w.as_ptr(),
+                dest_w.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if ok == 0 {
+            return Err(format!(
+                "Failed to replace settings file: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::rename(tmp, dest).map_err(|e| format!("Failed to replace settings file: {}", e))?;
+        Ok(())
+    }
+}
 
 fn default_wallpaper_rotation_style() -> String {
     "fill".to_string()
@@ -281,14 +315,28 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             return Ok(default);
         }
 
-        let content = fs::read_to_string(&file)
+        let mut content = fs::read_to_string(&file)
             .map_err(|e| format!("Failed to read settings file: {}", e))?;
 
-        // 处理空文件：直接写入默认配置并返回
+        // 处理空文件：
+        // - 这里很可能是“并发写入时被读到空内容”的瞬时状态
+        // - 为避免把用户已有配置覆盖成默认值（例如 max_concurrent_downloads 被刷回 3），先短暂重试读取
         if content.trim().is_empty() {
-            let default = AppSettings::default();
-            self.save_settings(&default)?;
-            return Ok(default);
+            use std::thread::sleep;
+            use std::time::Duration;
+            for _ in 0..3 {
+                sleep(Duration::from_millis(20));
+                content = fs::read_to_string(&file)
+                    .map_err(|e| format!("Failed to read settings file: {}", e))?;
+                if !content.trim().is_empty() {
+                    break;
+                }
+            }
+        }
+
+        // 仍为空：返回默认值作为兜底，但不要写回（避免覆盖旧文件）
+        if content.trim().is_empty() {
+            return Ok(self.get_system_default_settings());
         }
 
         // 尝试解析为 JSON 值，然后手动构建 AppSettings，使用默认值填充缺失字段
@@ -396,8 +444,9 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             };
         }
 
-        // 保存合并后的设置，确保所有字段都存在
-        self.save_settings(&settings)?;
+        // 注意：不要在“读取 settings”时写回文件。
+        // get_settings() 在运行期会被频繁调用（下载队列、壁纸管理器等），读时写会导致大量 I/O，
+        // 也更容易触发并发读到空文件/半文件，从而把值回退到默认（例如 3）。
         Ok(settings)
     }
 
@@ -410,7 +459,11 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
 
         let content = serde_json::to_string_pretty(settings)
             .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-        fs::write(&file, content).map_err(|e| format!("Failed to write settings file: {}", e))?;
+
+        // 为避免并发读写导致读取到空内容/半文件，采用“写入临时文件 + 原子替换”的方式落盘。
+        let tmp = file.with_extension("json.tmp");
+        fs::write(&tmp, content).map_err(|e| format!("Failed to write temp settings file: {}", e))?;
+        atomic_replace_file(&tmp, &file)?;
         Ok(())
     }
 

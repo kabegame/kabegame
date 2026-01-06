@@ -33,7 +33,7 @@ use plugin::{
 };
 use settings::{AppSettings, Settings, WindowState};
 use std::fs;
-use storage::{AddToAlbumResult, Album, ImageInfo, PaginatedImages, RunConfig, Storage, TaskInfo};
+use storage::{Album, ImageInfo, PaginatedImages, RangedImages, RunConfig, Storage, TaskInfo};
 use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
 use wallpaper_engine_export::{export_album_to_we_project, export_images_to_we_project};
 
@@ -273,11 +273,18 @@ fn get_images(state: tauri::State<Storage>) -> Result<Vec<ImageInfo>, String> {
 fn get_images_paginated(
     page: usize,
     page_size: usize,
-    plugin_id: Option<String>,
-    favorites_only: Option<bool>,
     state: tauri::State<Storage>,
 ) -> Result<PaginatedImages, String> {
-    state.get_images_paginated(page, page_size, plugin_id.as_deref(), favorites_only)
+    state.get_images_paginated(page, page_size)
+}
+
+#[tauri::command]
+fn get_images_range(
+    offset: usize,
+    limit: usize,
+    state: tauri::State<Storage>,
+) -> Result<RangedImages, String> {
+    state.get_images_range(offset, limit)
 }
 
 #[tauri::command]
@@ -389,10 +396,9 @@ fn update_albums_order(
 
 #[tauri::command]
 fn get_images_count(
-    plugin_id: Option<String>,
     state: tauri::State<Storage>,
 ) -> Result<usize, String> {
-    state.get_total_count(plugin_id.as_deref())
+    state.get_total_count()
 }
 
 #[tauri::command]
@@ -2041,6 +2047,17 @@ fn main() {
             storage
                 .init()
                 .map_err(|e| format!("Failed to initialize storage: {}", e))?;
+            // 应用启动时清理所有临时文件
+            match storage.cleanup_temp_files() {
+                Ok(count) => {
+                    if count > 0 {
+                        println!("启动时清理了 {} 个临时文件", count);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("清理临时文件失败: {}", e);
+                }
+            }
             app.manage(storage);
 
             // 初始化设置管理器
@@ -2170,6 +2187,7 @@ fn main() {
             crawl_images_command,
             get_images,
             get_images_paginated,
+            get_images_range,
             get_image_by_id,
             get_albums,
             add_album,

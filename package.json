@@ -20,6 +20,7 @@
     "@tauri-apps/plugin-dialog": "^2.0",
     "@tauri-apps/plugin-fs": "^2.0",
     "@tauri-apps/plugin-shell": "^2.0",
+    "@vueuse/core": "^14.1.0",
     "axios": "^1.6.7",
     "element-plus": "^2.5.14",
     "pinia": "^2.1.7",

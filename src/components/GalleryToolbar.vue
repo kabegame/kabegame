@@ -1,23 +1,6 @@
 <template>
   <PageHeader title="画廊" :subtitle="totalCountText" sticky>
     <template #left>
-      <el-select :model-value="filterPluginId" @update:model-value="$emit('update:filterPluginId', $event)"
-        placeholder="筛选源" clearable style="width: 150px" popper-class="crawl-plugin-select-dropdown">
-        <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
-          <div class="plugin-option">
-            <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]" class="plugin-option-icon" />
-            <el-icon v-else class="plugin-option-icon-placeholder">
-              <Grid />
-            </el-icon>
-            <span>{{ plugin.name }}</span>
-          </div>
-        </el-option>
-      </el-select>
-      <el-button :type="showFavoritesOnly ? 'primary' : 'default'" @click="$emit('toggleFavoritesOnly')" circle>
-        <el-icon>
-          <Star />
-        </el-icon>
-      </el-button>
       <el-button @click="$emit('refresh')" circle>
         <el-icon>
           <Refresh />
@@ -53,16 +36,11 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Grid, Refresh, Plus, Star, Filter, Download, Setting } from "@element-plus/icons-vue";
-import type { Plugin } from "@/stores/plugins";
+import { Refresh, Plus, Filter, Download, Setting } from "@element-plus/icons-vue";
 import PageHeader from "@/components/common/PageHeader.vue";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 
 interface Props {
-  filterPluginId: string | null;
-  plugins: Plugin[];
-  pluginIcons: Record<string, string>;
-  showFavoritesOnly?: boolean;
   dedupeLoading?: boolean;
   hasMore?: boolean;
   isLoadingAll?: boolean;
@@ -70,7 +48,6 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  showFavoritesOnly: false,
   dedupeLoading: false,
   hasMore: false,
   isLoadingAll: false,
@@ -85,12 +62,10 @@ const totalCountText = computed(() => {
 });
 
 defineEmits<{
-  "update:filterPluginId": [value: string | null];
   refresh: [];
   dedupeByHash: [];
   showQuickSettings: [];
   showCrawlerDialog: [];
-  toggleFavoritesOnly: [];
   loadAll: [];
 }>();
 </script>

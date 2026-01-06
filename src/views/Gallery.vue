@@ -1,116 +1,85 @@
 <template>
   <div class="gallery-page">
     <!-- 顶部工具栏 -->
-    <GalleryToolbar :filter-plugin-id="filterPluginId" :plugins="plugins" :plugin-icons="pluginIcons"
-      :show-favorites-only="showFavoritesOnly" :dedupe-loading="dedupeLoading" :has-more="crawlerStore.hasMore"
-      :is-loading-all="isLoadingAll" :total-count="totalImagesCount" @update:filter-plugin-id="filterPluginId = $event"
-      @toggle-favorites-only="showFavoritesOnly = !showFavoritesOnly" @refresh="loadImages(true, { forceReload: true })"
+    <GalleryToolbar :dedupe-loading="dedupeLoading" :has-more="crawlerStore.hasMore" :is-loading-all="isLoadingAll"
+      :total-count="totalImagesCount" @refresh="loadImages(true, { forceReload: true })"
       @dedupe-by-hash="handleDedupeByHash" @show-quick-settings="openQuickSettingsDrawer"
       @show-crawler-dialog="showCrawlerDialog = true" @load-all="loadAllImages" />
 
-    <GalleryView ref="galleryViewRef" class="gallery-container" mode="gallery" :images="displayedImages"
-      :image-url-map="imageSrcMap" :image-click-action="imageClickAction" :columns="galleryColumns"
-      :aspect-ratio-match-window="!!galleryImageAspectRatio" :window-aspect-ratio="effectiveAspectRatio"
-      :allow-select="true" :show-load-more-button="true" :has-more="crawlerStore.hasMore" :loading-more="isLoadingMore"
-      :is-blocked="isBlockingOverlayOpen" :loading="dedupeLoading" :context-menu-component="GalleryContextMenu"
-      @container-mounted="(...args: any[]) => setGalleryContainerEl(args[0])"
-      @adjust-columns="(...args: any[]) => throttledAdjustColumns(args[0])" @scroll-stable="loadImageUrls()"
-      @load-more="() => loadMoreImages()" @image-dbl-click="(...args: any[]) => handleImageDblClick(args[0])"
-      @context-command="(...args: any[]) => handleGridContextCommand(args[0])"
-      @reorder="(...args: any[]) => handleImageReorder(args[0])"
-      @blob-url-invalid="(...args: any[]) => handleBlobUrlInvalid(args[0], args[1], args[2])">
-      <template #before-grid>
-        <div v-if="showSkeleton" class="loading-skeleton">
-          <div class="skeleton-grid">
-            <div v-for="i in 20" :key="i" class="skeleton-item">
-              <el-skeleton :rows="0" animated>
-                <template #template>
-                  <el-skeleton-item variant="image" style="width: 100%; height: 200px;" />
-                </template>
-              </el-skeleton>
-            </div>
+    <div class="gallery-container" v-loading="showLoading">
+      <ImageGrid v-if="!loading" ref="galleryViewRef" :images="displayedImages" :image-url-map="imageSrcMap"
+        :enable-ctrl-wheel-adjust-columns="true" :enable-ctrl-key-adjust-columns="true" :hide-scrollbar="true"
+        :context-menu-component="GalleryContextMenu" :on-context-command="handleGridContextCommand"
+        @scroll-stable="loadImageUrls()" @reorder="(...args: any[]) => handleImageReorder(args[0])">
+        <template #before-grid>
+          <div v-if="displayedImages.length === 0 && !crawlerStore.hasMore && !isRefreshing"
+            :key="'empty-' + refreshKey" class="empty fade-in">
+            <EmptyState />
+            <el-button type="primary" class="empty-action-btn" @click="showCrawlerDialog = true">
+              <el-icon>
+                <Plus />
+              </el-icon>
+              开始导入
+            </el-button>
           </div>
-        </div>
+        </template>
 
-        <div v-else-if="displayedImages.length === 0 && !crawlerStore.hasMore && !isRefreshing"
-          :key="'empty-' + refreshKey" class="empty fade-in">
-          <EmptyState />
-          <el-button type="primary" class="empty-action-btn" @click="showCrawlerDialog = true">
-            <el-icon>
-              <Plus />
-            </el-icon>
-            开始导入
-          </el-button>
-        </div>
+        <!-- 加载更多：仅 Gallery 注入到 ImageGrid 容器尾部 -->
+        <template #footer>
+          <LoadMoreButton v-if="displayedImages.length > 0 || crawlerStore.hasMore" :has-more="crawlerStore.hasMore"
+            :loading="isLoadingMore" @load-more="loadMoreImages" />
+        </template>
+      </ImageGrid>
+    </div>
+
+    <!-- 收集对话框（无需放在 ImageGrid 插槽里） -->
+    <CrawlerDialog v-model="showCrawlerDialog" :plugin-icons="pluginIcons"
+      :initial-config="crawlerDialogInitialConfig" />
+
+    <!-- 去重确认对话框（无需放在 ImageGrid 插槽里） -->
+    <el-dialog v-model="showDedupeDialog" title="确认去重" width="420px" destroy-on-close>
+      <div style="margin-bottom: 16px;">
+        <p style="margin-bottom: 8px;">去掉所有重复图片</p>
+        <el-checkbox v-model="dedupeDeleteFiles" label="同时从电脑删除源文件（慎用）" />
+        <p class="var-description" :style="{ color: dedupeDeleteFiles ? 'var(--el-color-danger)' : '' }">
+          {{ dedupeDeleteFiles ? '警告：该操作将永久删除重复的电脑文件，不可恢复！' : '不勾选仅从画廊移除记录，保留电脑文件。' }}
+        </p>
+      </div>
+      <template #footer>
+        <el-button @click="showDedupeDialog = false">取消</el-button>
+        <el-button type="primary" @click="confirmDedupeByHash" :loading="dedupeLoading">确定</el-button>
       </template>
+    </el-dialog>
 
-      <template #overlays>
-        <!-- 图片详情对话框 -->
-        <ImageDetailDialog v-model="showImageDetail" :image="selectedImage" />
-
-        <!-- 加入画册对话框 -->
-        <AddToAlbumDialog v-model="showAlbumDialog" :image-ids="pendingAlbumImageIds" @added="handleAddedToAlbum" />
-
-        <!-- 收集对话框 -->
-        <CrawlerDialog v-model="showCrawlerDialog" :plugin-icons="pluginIcons"
-          :initial-config="crawlerDialogInitialConfig" />
-
-        <!-- 去重确认对话框 -->
-        <el-dialog v-model="showDedupeDialog" title="确认去重" width="420px" destroy-on-close>
-          <div style="margin-bottom: 16px;">
-            <p style="margin-bottom: 8px;">去掉所有重复图片</p>
-            <el-checkbox v-model="dedupeDeleteFiles" label="同时从电脑删除源文件（慎用）" />
-            <p class="var-description" :style="{ color: dedupeDeleteFiles ? 'var(--el-color-danger)' : '' }">
-              {{ dedupeDeleteFiles ? '警告：该操作将永久删除重复的电脑文件，不可恢复！' : '不勾选仅从画廊移除记录，保留电脑文件。' }}
-            </p>
-          </div>
-          <template #footer>
-            <el-button @click="showDedupeDialog = false">取消</el-button>
-            <el-button type="primary" @click="confirmDedupeByHash" :loading="dedupeProcessing">确定</el-button>
-          </template>
-        </el-dialog>
-
-        <!-- 移除/删除确认对话框 -->
-        <el-dialog v-model="showRemoveDialog" title="确认删除" width="420px" destroy-on-close>
-          <div style="margin-bottom: 16px;">
-            <p style="margin-bottom: 8px;">{{ removeDialogMessage }}</p>
-            <el-checkbox v-model="removeDeleteFiles" label="同时从电脑删除源文件（慎用）" />
-            <p class="var-description" :style="{ color: removeDeleteFiles ? 'var(--el-color-danger)' : '' }">
-              {{ removeDeleteFiles ? '警告：该操作将永久删除电脑文件，不可恢复！' : '不勾选仅从画廊移除记录，保留电脑文件。' }}
-            </p>
-          </div>
-          <template #footer>
-            <el-button @click="showRemoveDialog = false">取消</el-button>
-            <el-button type="primary" @click="confirmRemoveImages">确定</el-button>
-          </template>
-        </el-dialog>
-      </template>
-    </GalleryView>
+    <!-- 移除/删除确认对话框（抽成组件复用） -->
+    <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
+      :message="removeDialogMessage" title="确认删除" @confirm="confirmRemoveImages" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch, nextTick } from "vue";
+import { ref, computed, onMounted, onActivated, onDeactivated, onUnmounted, watch, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
-import { ElMessage, ElMessageBox, ElCheckbox } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus } from "@element-plus/icons-vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
+import { useUiStore } from "@/stores/ui";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
-import ImageDetailDialog from "@/components/ImageDetailDialog.vue";
-import GalleryView from "@/components/GalleryView.vue";
+import ImageGrid from "@/components/ImageGrid.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
-import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import GalleryContextMenu from "@/components/contextMenu/GalleryContextMenu.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
+import RemoveImagesConfirmDialog from "@/components/common/RemoveImagesConfirmDialog.vue";
 import { useGalleryImages } from "@/composables/useGalleryImages";
 import { useGallerySettings } from "@/composables/useGallerySettings";
-import { useImageOperations, type FavoriteStatusChangedDetail } from "@/composables/useImageOperations";
+import { useImageOperations } from "@/composables/useImageOperations";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
-import { useSettingsStore } from "@/stores/settings";
 import { useLoadingDelay } from "@/utils/useLoadingDelay";
-import { useTaskDrawerStore } from "@/stores/taskDrawer";
+import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
+import LoadMoreButton from "@/components/LoadMoreButton.vue";
+import { storeToRefs } from "pinia";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -121,13 +90,12 @@ const crawlerStore = useCrawlerStore();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettingsDrawer = () => quickSettingsDrawer.open("gallery");
 const pluginStore = usePluginStore();
-const settingsStore = useSettingsStore();
+const uiStore = useUiStore();
+const { imageGridColumns } = storeToRefs(uiStore);
+const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
-const dedupeProcessing = ref(false); // 正在执行"按哈希去重"本体
-const { showContent: dedupeDelayShowContent, startLoading: startDedupeDelay, finishLoading: finishDedupeDelay } = useLoadingDelay(300);
-const dedupeLoading = computed(() => dedupeProcessing.value || !dedupeDelayShowContent.value);
-const filterPluginId = ref<string | null>(null);
-const showFavoritesOnly = ref(false);
+const dedupeLoading = ref(false); // 正在执行"按哈希去重"本体
+const { startLoading: startDedupeDelay, finishLoading: finishDedupeDelay } = useLoadingDelay(300);
 const showCrawlerDialog = ref(false);
 const crawlerDialogInitialConfig = ref<{
   pluginId?: string;
@@ -142,108 +110,87 @@ const showRemoveDialog = ref(false);
 const removeDeleteFiles = ref(false);
 const removeDialogMessage = ref("");
 const pendingRemoveImages = ref<ImageInfo[]>([]);
-const taskDrawerStore = useTaskDrawerStore();
-const showImageDetail = ref(false);
+// 详情/加入画册对话框已下沉到 ImageGrid
 const galleryContainerRef = ref<HTMLElement | null>(null);
 const galleryViewRef = ref<any>(null);
-const showAlbumDialog = ref(false);
+// const showAlbumDialog = ref(false);
 const currentWallpaperImageId = ref<string | null>(null);
 const totalImagesCount = ref<number>(0); // 总图片数（不受过滤器影响）
 
 // 状态变量（用于 composables）
-const showSkeleton = ref(false);
-const skeletonTimer = ref<ReturnType<typeof setTimeout> | null>(null);
+// const showSkeleton = ref(false);
+
+// 整个页面的loading状态
+const { showLoading, loading, startLoading, finishLoading } = useLoadingDelay();
+
 const isLoadingMore = ref(false);
 const isLoadingAll = ref(false);
+// TODO:
 const isRefreshing = ref(false); // 刷新中状态，用于阻止刷新时 EmptyState 闪烁
 // 刷新计数器，用于强制空占位符重新挂载以触发动画
 const refreshKey = ref(0);
-
-const setGalleryContainerEl = (el: HTMLElement) => {
-  galleryContainerRef.value = el;
-};
-const pendingAlbumImages = ref<ImageInfo[]>([]);
-const pendingAlbumImageIds = computed(() => pendingAlbumImages.value.map(img => img.id));
-const selectedImage = ref<ImageInfo | null>(null);
-// 使用画廊设置 composable
-const {
-  imageClickAction,
-  windowAspectRatio,
-  loadSettings,
-  updateWindowAspectRatio,
-  handleResize,
-} = useGallerySettings();
-
-// 画廊页本地列数（初始值为 5，不再从设置读取）
-const galleryColumns = ref<number>(5);
-
-// 调整列数的函数（不保存到设置）
-const adjustColumns = (delta: number) => {
-  if (delta > 0) {
-    // 增加列数（最大 10 列）
-    if (galleryColumns.value < 10) {
-      galleryColumns.value++;
-    }
-  } else {
-    // 减少列数（最小 1 列）
-    if (galleryColumns.value > 1) {
-      galleryColumns.value--;
-    }
-  }
-};
-
-// 节流函数
-const throttle = <T extends (...args: any[]) => any>(func: T, delay: number): T => {
-  let lastCall = 0;
-  return ((...args: any[]) => {
-    const now = Date.now();
-    if (now - lastCall >= delay) {
-      lastCall = now;
-      return func(...args);
-    }
-  }) as T;
-};
-
-// 节流后的调整列数函数（100ms 节流）
-const throttledAdjustColumns = throttle(adjustColumns, 100);
-
-const galleryImageAspectRatio = ref<string | null>(null); // 设置的图片宽高比（保留用于兼容）
-
-// 监听设置 store 中宽高比的变化，实时同步到本地 ref
 watch(
-  () => settingsStore.values.galleryImageAspectRatio,
-  (newValue) => {
-    galleryImageAspectRatio.value = (newValue as string | null) || null;
-  }
+  () => galleryViewRef.value,
+  async () => {
+    await nextTick();
+    galleryContainerRef.value = galleryViewRef.value?.getContainerEl?.() ?? null;
+    // 初次挂载/切换回来时：确保“仅视口内加载”能触发一次
+    // （避免 refreshImagesPreserveCache 发生在 container 绑定之前导致 visibleIds 为空）
+    if (galleryContainerRef.value && displayedImages.value.length > 0) {
+      requestAnimationFrame(() => {
+        loadImageUrls();
+      });
+    }
+  },
+  { immediate: true }
 );
 
-// 计算实际使用的宽高比
-const effectiveAspectRatio = computed((): number => {
-  // 如果设置了宽高比，使用设置的宽高比
-  if (galleryImageAspectRatio.value) {
-    const value = galleryImageAspectRatio.value;
-
-    // 解析 "16:9" 格式
-    if (value.includes(":") && !value.startsWith("custom:")) {
-      const [w, h] = value.split(":").map(Number);
-      if (w && h && !isNaN(w) && !isNaN(h)) {
-        return w / h;
-      }
-    }
-
-    // 解析 "custom:1920:1080" 格式
-    if (value.startsWith("custom:")) {
-      const parts = value.replace("custom:", "").split(":");
-      const [w, h] = parts.map(Number);
-      if (w && h && !isNaN(w) && !isNaN(h)) {
-        return w / h;
-      }
-    }
+// 仅视口内加载：用 rAF 节流的 scroll 监听“实时触发”，不依赖 scroll-stable（停下来才触发）
+let cleanupContainerScrollListener: null | (() => void) = null;
+let rafScrollScheduled = false;
+const bindContainerScrollListener = (el: HTMLElement | null) => {
+  if (cleanupContainerScrollListener) {
+    cleanupContainerScrollListener();
+    cleanupContainerScrollListener = null;
   }
+  if (!el) return;
 
-  // 如果没有设置或解析失败，使用窗口宽高比
-  return windowAspectRatio.value;
+  const onScroll = () => {
+    if (rafScrollScheduled) return;
+    rafScrollScheduled = true;
+    requestAnimationFrame(() => {
+      rafScrollScheduled = false;
+      loadImageUrls();
+    });
+  };
+
+  el.addEventListener("scroll", onScroll, { passive: true });
+  cleanupContainerScrollListener = () => {
+    el.removeEventListener("scroll", onScroll as any);
+  };
+};
+
+watch(
+  () => galleryContainerRef.value,
+  (el) => {
+    bindContainerScrollListener(el);
+  },
+  { immediate: true }
+);
+
+onUnmounted(() => {
+  if (cleanupContainerScrollListener) cleanupContainerScrollListener();
+  cleanupContainerScrollListener = null;
 });
+// const pendingAlbumImages = ref<ImageInfo[]>([]);
+// const pendingAlbumImageIds = computed(() => pendingAlbumImages.value.map(img => img.id));
+// const selectedImage = ref<ImageInfo | null>(null);
+// 使用画廊设置 composable
+const {
+  loadSettings
+} = useGallerySettings();
+
+// effectiveAspectRatio 已移除，ImageGrid 现在始终使用窗口宽高比
 const plugins = computed(() => pluginStore.plugins);
 const tasks = computed(() => crawlerStore.tasks);
 
@@ -259,12 +206,11 @@ const {
   loadMoreImages: loadMoreImagesFromComposable,
   loadAllImages: loadAllImagesFromComposable,
   removeFromUiCacheByIds,
-  recreateImageUrl,
 } = useGalleryImages(
   galleryContainerRef,
-  filterPluginId,
-  showFavoritesOnly,
-  isLoadingMore
+  isLoadingMore,
+  preferOriginalInGrid,
+  imageGridColumns
 );
 
 // 兼容旧调用：保留原函数名
@@ -280,23 +226,25 @@ const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => 
     isRefreshing.value = false;
   }
 };
+
 const loadMoreImages = loadMoreImagesFromComposable;
-const loadAllImages = loadAllImagesFromComposable;
+const loadAllImages = async () => {
+  if (isLoadingAll.value) return;
+  isLoadingAll.value = true;
+  try {
+    await loadAllImagesFromComposable();
+  } finally {
+    isLoadingAll.value = false;
+  }
+};
 
 // 使用图片操作 composable
 const {
-  handleOpenImagePath,
-  handleCopyImage,
-  applyFavoriteChangeToGalleryCache,
   handleBatchDeleteImages,
   confirmDedupeByHash: confirmDedupeByHashFromComposable,
-  toggleFavorite,
-  setWallpaper,
-  exportToWallpaperEngine,
 } = useImageOperations(
   displayedImages,
   imageSrcMap,
-  showFavoritesOnly,
   currentWallpaperImageId,
   galleryViewRef,
   removeFromUiCacheByIds,
@@ -306,29 +254,6 @@ const {
 
 // 插件图标映射，存储每个插件的图标 URL
 const pluginIcons = ref<Record<string, string>>({});
-
-// 当有弹窗/抽屉等覆盖层时，画廊不应接收鼠标/键盘事件
-const isBlockingOverlayOpen = () => {
-  // 本页面自身的弹窗/抽屉
-  if (
-    showCrawlerDialog.value ||
-    taskDrawerStore.visible ||
-    showAlbumDialog.value ||
-    showImageDetail.value
-  ) {
-    return true;
-  }
-
-  // Element Plus 的 Dialog/Drawer/MessageBox 等通常会创建 el-overlay（teleport 到 body）
-  const overlays = Array.from(document.querySelectorAll<HTMLElement>(".el-overlay"));
-  return overlays.some((el) => {
-    const style = window.getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden") return false;
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  });
-};
-
 // getImageUrl 和 loadImageUrls 已移至 useGalleryImages composable
 
 const getPluginName = (pluginId: string) => {
@@ -339,37 +264,12 @@ const getPluginName = (pluginId: string) => {
 // 获取总图片数（不受过滤器影响）
 const loadTotalImagesCount = async () => {
   try {
-    const count = await invoke<number>("get_images_count", {
-      pluginId: null, // 不传 pluginId 获取总数
-    });
+    const count = await invoke<number>("get_images_count");
     totalImagesCount.value = count;
   } catch (error) {
     console.error("获取总图片数失败:", error);
   }
 };
-
-const openAddToAlbumDialog = async (images: ImageInfo[]) => {
-  pendingAlbumImages.value = images;
-  showAlbumDialog.value = true;
-};
-
-const handleAddedToAlbum = () => {
-  pendingAlbumImages.value = [];
-};
-
-// 配置兼容性检查相关的代码已移至 useConfigCompatibility composable 和 CrawlerDialog 组件
-// 插件配置相关的函数和 watch 监听器已移至 CrawlerDialog 组件
-
-// 打开导入对话框时，刷新插件列表（由 CrawlerDialog 组件处理兼容性检查）
-watch(showCrawlerDialog, async (open) => {
-  if (!open) return;
-  try {
-    await pluginStore.loadPlugins();
-  } catch (e) {
-    console.debug("导入弹窗打开时刷新已安装源失败（忽略）：", e);
-  }
-});
-
 
 // 加载插件图标
 const loadPluginIcons = async () => {
@@ -397,20 +297,15 @@ const loadPluginIcons = async () => {
   }
 };
 
-const handleImageDblClick = async (image: ImageInfo) => {
-  // 预览功能已下沉到 ImageGrid，这里只处理 open 模式
-  if (imageClickAction.value === 'open') {
-    await handleOpenImagePath(image.localPath);
-  }
-  // preview 模式由 ImageGrid 内部处理
-};
-
-const handleGridContextCommand = async (payload: { command: string; image: ImageInfo; selectedImageIds: Set<string> }) => {
+const handleGridContextCommand = async (
+  payload: ContextCommandPayload
+): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
   const command = payload.command;
   const image = payload.image;
-  const selectedSet = payload.selectedImageIds && payload.selectedImageIds.size > 0
-    ? payload.selectedImageIds
-    : new Set([image.id]);
+  const selectedSet =
+    "selectedImageIds" in payload && payload.selectedImageIds && payload.selectedImageIds.size > 0
+      ? payload.selectedImageIds
+      : new Set([image.id]);
 
   const isMultiSelect = selectedSet.size > 1;
   const imagesToProcess = isMultiSelect
@@ -418,83 +313,27 @@ const handleGridContextCommand = async (payload: { command: string; image: Image
     : [image];
 
   switch (command) {
-    case 'detail':
-      if (!isMultiSelect) {
-        selectedImage.value = image;
-        showImageDetail.value = true;
-      }
-      break;
-    case 'favorite':
-      // 仅支持普通（单张）收藏
-      if (isMultiSelect) {
-        ElMessage.warning("收藏仅支持单张图片");
-        return;
-      }
-      await toggleFavorite(image);
-      break;
-    case 'copy':
-      // 仅当多选时右键多选的其中一个时才能批量操作
-      if (isMultiSelect && !selectedSet.has(image.id)) {
-        ElMessage.warning("请右键点击已选中的图片");
-        return;
-      }
+    // 这些命令已下沉到 ImageGrid 的默认处理
+    case "copy":
+    case "open":
+    case "openFolder":
+    case "wallpaper":
+    case "exportToWE":
+    case "addToAlbum":
+    case "detail":
+      return command;
 
-      if (isMultiSelect) {
-        // 批量复制（暂时只复制第一张，后续可以实现批量复制）
-        await handleCopyImage(imagesToProcess[0]);
-        ElMessage.success(`已复制 ${imagesToProcess.length} 张图片`);
-      } else {
-        await handleCopyImage(image);
-      }
-      break;
-    case 'open':
-      if (!isMultiSelect) {
-        await handleOpenImagePath(image.localPath);
-      }
-      break;
-    case 'openFolder':
-      if (!isMultiSelect) {
-        try {
-          await invoke("open_file_folder", { filePath: image.localPath });
-          ElMessage.success("已打开文件所在文件夹");
-        } catch (error) {
-          console.error("打开文件夹失败:", error);
-          ElMessage.error("打开文件夹失败");
-        }
-      }
-      break;
-    case 'wallpaper':
-      // 仅当多选时右键多选的其中一个时才能批量操作
-      if (isMultiSelect && !selectedSet.has(image.id)) {
-        ElMessage.warning("请右键点击已选中的图片");
-        return;
-      }
-      await setWallpaper(imagesToProcess);
-      break;
-    case 'exportToWEAuto':
-      // 仅单选时支持
-      if (isMultiSelect) {
-        return;
-      }
-      await exportToWallpaperEngine(image);
-      break;
-    case 'addToAlbum':
-      // 仅当多选时右键多选的其中一个时才能批量操作
-      if (isMultiSelect && !selectedSet.has(image.id)) {
-        ElMessage.warning("请右键点击已选中的图片");
-        return;
-      }
-
-      openAddToAlbumDialog(imagesToProcess);
-      break;
-    case 'remove':
+    // 画廊特有：删除/移除确认对话框
+    case "remove":
       // 显示删除对话框，让用户选择是否删除文件
       pendingRemoveImages.value = imagesToProcess;
       const count = imagesToProcess.length;
       removeDialogMessage.value = `将从画廊${count > 1 ? `移除这 ${count} 张图片` : "移除这张图片"}。`;
       removeDeleteFiles.value = false; // 默认不删除文件
       showRemoveDialog.value = true;
-      break;
+      return null;
+    default:
+      return command;
   }
 };
 
@@ -511,7 +350,7 @@ const handleDedupeByHash = () => {
 const confirmDedupeByHash = async () => {
   showDedupeDialog.value = false;
   await confirmDedupeByHashFromComposable(
-    dedupeProcessing,
+    dedupeLoading,
     dedupeDeleteFiles.value,
     startDedupeDelay,
     finishDedupeDelay
@@ -536,48 +375,11 @@ const confirmRemoveImages = async () => {
   await handleBatchDeleteImages(imagesToRemove, shouldDeleteFiles);
 };
 
-// 监听删除对话框的打开状态，添加键盘事件支持回车键删除
-let removeDialogKeyHandler: ((e: KeyboardEvent) => void) | null = null;
-watch(showRemoveDialog, (isOpen) => {
-  if (isOpen) {
-    // 对话框打开时，添加键盘事件监听器
-    removeDialogKeyHandler = (e: KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        // 如果焦点在复选框上，不触发删除（允许用户用空格切换复选框）
-        const activeElement = document.activeElement;
-        if (activeElement?.tagName === "INPUT" && (activeElement as HTMLInputElement).type === "checkbox") {
-          return;
-        }
-        e.preventDefault();
-        confirmRemoveImages();
-      }
-    };
-    nextTick(() => {
-      document.addEventListener("keydown", removeDialogKeyHandler!);
-    });
-  } else {
-    // 对话框关闭时，移除键盘事件监听器
-    if (removeDialogKeyHandler) {
-      document.removeEventListener("keydown", removeDialogKeyHandler);
-      removeDialogKeyHandler = null;
-    }
-  }
-});
+// 删除确认对话框的回车键逻辑已抽到 RemoveImagesConfirmDialog 内部
 
 
 // refreshImagesPreserveCache, refreshLatestIncremental, loadMoreImages, loadAllImages 已移至 useGalleryImages composable
 // 插件配置相关的函数和 watch 监听器已移至 CrawlerDialog 组件
-
-// 监听筛选插件ID变化，重新加载图片
-watch(filterPluginId, () => {
-  loadImages(true);
-});
-
-// 监听仅显示收藏变化，重新加载图片
-watch(showFavoritesOnly, () => {
-  loadImages(true);
-  galleryViewRef.value?.clearSelection?.();
-});
 
 // 监听 CrawlerDialog 关闭，清空初始配置
 watch(showCrawlerDialog, (isOpen) => {
@@ -589,37 +391,28 @@ watch(showCrawlerDialog, (isOpen) => {
   }
 });
 
-// 处理 Blob URL 无效事件
-const handleBlobUrlInvalid = async (_url: string, imageId: string, localPath: string) => {
-  // 判断是缩略图还是原图
-  const image = displayedImages.value.find((img) => img.id === imageId);
-  if (!image) return;
-
-  const isThumbnail = image.thumbnailPath === localPath;
-  await recreateImageUrl(imageId, localPath, isThumbnail);
-};
-
-// 处理图片拖拽排序
-const handleImageReorder = async (newOrder: ImageInfo[]) => {
+// 处理图片拖拽排序：只交换两张图片的 order
+const handleImageReorder = async (payload: { aId: string; aOrder: number; bId: string; bOrder: number }) => {
   try {
-    // 计算新的 order 值（间隔 1000）
-    const imageOrders: [string, number][] = newOrder.map((img, index) => [
-      img.id,
-      (index + 1) * 1000,
-    ]);
+    const imageOrders: [string, number][] = [
+      [payload.aId, payload.aOrder],
+      [payload.bId, payload.bOrder],
+    ];
 
     await invoke("update_images_order", { imageOrders });
 
-    // 更新本地显示顺序
-    displayedImages.value = newOrder;
-
-    // 同时更新 store 中的顺序
-    const newStoreOrder = newOrder.map(img =>
-      crawlerStore.images.find(i => i.id === img.id) || img
-    );
-    crawlerStore.images = newStoreOrder;
-
-    ElMessage.success("顺序已更新");
+    const idxA = displayedImages.value.findIndex((i) => i.id === payload.aId);
+    const idxB = displayedImages.value.findIndex((i) => i.id === payload.bId);
+    if (idxA !== -1 && idxB !== -1) {
+      const next = displayedImages.value.slice();
+      [next[idxA], next[idxB]] = [next[idxB], next[idxA]];
+      displayedImages.value = next.map((img) => {
+        if (img.id === payload.aId) return { ...img, order: payload.aOrder } as ImageInfo;
+        if (img.id === payload.bId) return { ...img, order: payload.bOrder } as ImageInfo;
+        return img;
+      });
+      crawlerStore.images = displayedImages.value.slice();
+    }
   } catch (error) {
     console.error("更新图片顺序失败:", error);
     ElMessage.error("更新顺序失败");
@@ -639,7 +432,7 @@ const setupImageListWatch = (immediate = true) => {
   }
   imageListWatch = watch(() => displayedImages.value, () => {
     // 如果正在加载更多，不触发 loadImageUrls（由 loadMoreImages 自己处理）
-    if (isLoadingMore.value) {
+    if (isLoadingMore.value || isLoadingAll.value) {
       return;
     }
 
@@ -700,36 +493,25 @@ watch(tasks, (newTasks, oldTasks) => {
     }
   });
 }, { deep: true });
-// loadSettings, updateWindowAspectRatio, handleResize, adjustColumns, throttledAdjustColumns 已移至 useGallerySettings composable
-// 但需要扩展 loadSettings 以支持 galleryImageAspectRatio
-const loadSettingsExtended = async () => {
-  await loadSettings();
-  // loadSettings 中已经调用了 settingsStore.loadAll()，所以 galleryImageAspectRatio 已经在 store 中
-  // watch 会监听 store 的变化并同步到本地 ref，这里只需要确保初始值被正确设置
-  const aspectRatio = settingsStore.values.galleryImageAspectRatio as string | null | undefined;
-  galleryImageAspectRatio.value = aspectRatio || null;
-};
 
 onMounted(async () => {
-  finishDedupeDelay(); // 初始化为不加载状态
-  await loadSettingsExtended();
-  try {
-    currentWallpaperImageId.value = await invoke<string | null>("get_current_wallpaper_image_id");
-  } catch {
+  loadSettings();
+  invoke<string | null>("get_current_wallpaper_image_id").then(id => {
+    currentWallpaperImageId.value = id;
+  }).catch(() => {
     currentWallpaperImageId.value = null;
-  }
+  });
   // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
-  await pluginStore.loadPlugins();
-  await crawlerStore.loadRunConfigs();
-  await loadPluginIcons(); // 加载插件图标
-  await loadTotalImagesCount(); // 加载总图片数
-  await loadImages(true);
+  pluginStore.loadPlugins().then(() => {
+    loadPluginIcons();
+  });
+  crawlerStore.loadRunConfigs();
+  loadTotalImagesCount(); // 加载总图片数
 
-  // 初始化窗口宽高比
-  updateWindowAspectRatio();
-
-  // 添加窗口大小变化监听
-  window.addEventListener('resize', handleResize);
+  startLoading();
+  loadImages(true).then(() => {
+    finishLoading();
+  });
 
   // 记录已经显示过弹窗的任务ID，避免重复弹窗
   const shownErrorTasks = new Set<string>();
@@ -763,16 +545,14 @@ onMounted(async () => {
     });
   }) as EventListener;
 
+  // 不卸载取消监听。因为是keep-alive。并且不是web
   window.addEventListener('task-error-display', errorDisplayHandler);
-
-  // 保存处理器引用以便在卸载时移除
-  (window as any).__taskErrorDisplayHandler = errorDisplayHandler;
 
   // 监听图片添加事件，实时同步画廊（仅增量刷新，避免全量图片重新加载）
   // 使用防抖机制，避免短时间内多次调用导致重复添加
   const refreshDebounceTimerRef = ref<ReturnType<typeof setTimeout> | null>(null);
   const { listen } = await import("@tauri-apps/api/event");
-  const unlistenImageAdded = await listen<{ taskId: string; imageId: string }>(
+  await listen<{ taskId: string; imageId: string }>(
     "image-added",
     async () => {
       // 清除之前的定时器
@@ -789,37 +569,56 @@ onMounted(async () => {
     }
   );
 
-  // 保存监听器引用以便在卸载时移除
-  (window as any).__imageAddedUnlisten = unlistenImageAdded;
-  (window as any).__refreshDebounceTimerRef = refreshDebounceTimerRef;
-
-
-  // 监听"收藏状态变化"（来自画册/其它页面对收藏画册的增删）
-  const favoriteChangedHandler = ((event: Event) => {
-    const ce = event as CustomEvent<FavoriteStatusChangedDetail>;
-    const detail = ce.detail;
-    if (!detail || !Array.isArray(detail.imageIds)) return;
-    applyFavoriteChangeToGalleryCache(detail.imageIds, !!detail.favorite);
-  }) as EventListener;
-  window.addEventListener("favorite-status-changed", favoriteChangedHandler);
-  (window as any).__favoriteStatusChangedHandler = favoriteChangedHandler;
-
   // 监听图片移除/删除事件，更新总数并刷新显示列表
-  const imagesRemovedHandler = (() => {
+  // 注意：如果图片已经在 displayedImages 中不存在（已通过 handleBatchDeleteImages 手动更新），则不需要刷新
+  const imagesRemovedHandler = ((event: Event) => {
+    const customEvent = event as CustomEvent<{ imageIds?: string[] }>;
+    const imageIds = customEvent.detail?.imageIds;
+
     loadTotalImagesCount();
-    // 刷新画廊显示的图片列表
-    refreshImagesPreserveCache();
+
+    // 如果提供了 imageIds，检查这些图片是否还在 displayedImages 中
+    // 如果都不在，说明已经通过 handleBatchDeleteImages 手动更新了，不需要刷新
+    if (imageIds && imageIds.length > 0) {
+      const stillExists = imageIds.some(id =>
+        displayedImages.value.some(img => img.id === id)
+      );
+      if (!stillExists) {
+        // 图片已经被手动移除，不需要刷新
+        return;
+      }
+    }
+
+    // 刷新画廊显示的图片列表（用于从其他视图删除图片的情况）
+    // preserveScroll：避免把用户滚动位置拉回顶部
+    refreshImagesPreserveCache(true, { preserveScroll: true });
   }) as EventListener;
   window.addEventListener("images-removed", imagesRemovedHandler);
   (window as any).__imagesRemovedHandler = imagesRemovedHandler;
 
-  const imagesDeletedHandler = (() => {
+  const imagesDeletedHandler = ((event: Event) => {
+    const customEvent = event as CustomEvent<{ imageIds?: string[] }>;
+    const imageIds = customEvent.detail?.imageIds;
+
     loadTotalImagesCount();
-    // 刷新画廊显示的图片列表
-    refreshImagesPreserveCache();
+
+    // 如果提供了 imageIds，检查这些图片是否还在 displayedImages 中
+    // 如果都不在，说明已经通过 handleBatchDeleteImages 手动更新了，不需要刷新
+    if (imageIds && imageIds.length > 0) {
+      const stillExists = imageIds.some(id =>
+        displayedImages.value.some(img => img.id === id)
+      );
+      if (!stillExists) {
+        // 图片已经被手动移除，不需要刷新
+        return;
+      }
+    }
+
+    // 刷新画廊显示的图片列表（用于从其他视图删除图片的情况）
+    // preserveScroll：避免把用户滚动位置拉回顶部
+    refreshImagesPreserveCache(true, { preserveScroll: true });
   }) as EventListener;
   window.addEventListener("images-deleted", imagesDeletedHandler);
-  (window as any).__imagesDeletedHandler = imagesDeletedHandler;
 
   // 监听 App.vue 发送的文件拖拽事件
   const handleFileDrop = async (event: Event) => {
@@ -877,10 +676,7 @@ onMounted(async () => {
       ElMessage.error('处理文件拖拽失败: ' + (error instanceof Error ? error.message : String(error)));
     }
   };
-
   window.addEventListener('file-drop', handleFileDrop);
-  (window as any).__galleryFileDropHandler = handleFileDrop;
-
 });
 
 // 在开发环境中监控组件更新，帮助调试重新渲染问题
@@ -890,7 +686,7 @@ onMounted(async () => {
 onActivated(async () => {
   // 重新加载设置，确保使用最新的 pageSize 等配置
   const previousPageSize = crawlerStore.pageSize;
-  await loadSettingsExtended();
+  loadSettings();
   const newPageSize = crawlerStore.pageSize;
 
   // 如果图片列表为空，需要重新加载
@@ -951,78 +747,6 @@ onDeactivated(() => {
   // 退出调整模式（如果处于调整模式）
   galleryViewRef.value?.exitReorderMode?.();
 });
-
-// 组件真正卸载时（不是 keep-alive 缓存）
-onUnmounted(() => {
-  // 清理骨架屏定时器
-  if (skeletonTimer.value) {
-    clearTimeout(skeletonTimer.value);
-    skeletonTimer.value = null;
-  }
-  // 移除窗口大小变化监听
-  window.removeEventListener('resize', handleResize);
-
-  // 释放所有 Blob URL，避免内存泄漏（只在真正卸载时清理）
-  // blobUrls 清理由 useGalleryImages composable 的 cleanup 函数处理
-  // 这里只需要清理 imageSrcMap
-  imageSrcMap.value = {};
-
-  // 移除任务错误显示事件监听
-  const handler = (window as any).__taskErrorDisplayHandler;
-  if (handler) {
-    window.removeEventListener('task-error-display', handler);
-    delete (window as any).__taskErrorDisplayHandler;
-  }
-
-  // 移除图片添加事件监听
-  const imageAddedUnlisten = (window as any).__imageAddedUnlisten;
-  if (imageAddedUnlisten) {
-    imageAddedUnlisten();
-    delete (window as any).__imageAddedUnlisten;
-  }
-
-  // 清理防抖定时器
-  const refreshDebounceTimerRef = (window as any).__refreshDebounceTimerRef;
-  if (refreshDebounceTimerRef?.value) {
-    clearTimeout(refreshDebounceTimerRef.value);
-    refreshDebounceTimerRef.value = null;
-    delete (window as any).__refreshDebounceTimerRef;
-  }
-
-
-  // 移除收藏状态变化监听
-  const favoriteChangedHandler = (window as any).__favoriteStatusChangedHandler;
-  if (favoriteChangedHandler) {
-    window.removeEventListener("favorite-status-changed", favoriteChangedHandler);
-    delete (window as any).__favoriteStatusChangedHandler;
-  }
-
-  // 移除图片移除/删除事件监听
-  const imagesRemovedHandler = (window as any).__imagesRemovedHandler;
-  if (imagesRemovedHandler) {
-    window.removeEventListener("images-removed", imagesRemovedHandler);
-    delete (window as any).__imagesRemovedHandler;
-  }
-
-  const imagesDeletedHandler = (window as any).__imagesDeletedHandler;
-  if (imagesDeletedHandler) {
-    window.removeEventListener("images-deleted", imagesDeletedHandler);
-    delete (window as any).__imagesDeletedHandler;
-  }
-
-  // 清理删除对话框的键盘事件监听器
-  if (removeDialogKeyHandler) {
-    document.removeEventListener("keydown", removeDialogKeyHandler);
-    removeDialogKeyHandler = null;
-  }
-
-  // 移除文件拖入事件监听
-  const fileDropHandler = (window as any).__galleryFileDropHandler;
-  if (fileDropHandler) {
-    window.removeEventListener('file-drop', fileDropHandler);
-    delete (window as any).__galleryFileDropHandler;
-  }
-});
 </script>
 
 <style lang="scss">
@@ -1037,7 +761,8 @@ onUnmounted(() => {
 .gallery-container {
   width: 100%;
   flex: 1;
-  overflow-y: auto;
+  /* 避免外层与 ImageGrid 内层双重滚动导致出现“多一条滚动条” */
+  overflow: hidden;
 
   /* 按住空格进入“拖拽滚动模式” */
   &.drag-scroll-ready {
@@ -1228,6 +953,8 @@ onUnmounted(() => {
       display: block;
     }
   }
+
+  /* 滚动条隐藏下沉到 ImageGrid（通过 :hide-scrollbar 控制），这里不再重复写 :deep 规则 */
 }
 
 /* Dialog 样式需要全局作用域才能正确应用 */

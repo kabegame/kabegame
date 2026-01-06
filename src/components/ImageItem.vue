@@ -4,7 +4,7 @@
     ref="itemRef" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @mousedown="handleMouseDown"
     @mouseup="handleMouseUp" @mouseleave="handleMouseLeave">
     <transition name="fade-in" mode="out-in">
-      <div v-if="!hasImageUrl" key="loading" class="thumbnail-loading" :style="loadingStyle">
+      <div v-if="!attemptUrl" key="loading" class="thumbnail-loading" :style="aspectRatioStyle">
         <el-skeleton :rows="0" animated>
           <template #template>
             <el-skeleton-item variant="image" :style="{ width: '100%', height: '100%' }" />
@@ -13,9 +13,9 @@
       </div>
       <div v-else key="content"
         :class="[imageClickAction === 'preview' && originalUrl ? 'image-preview-wrapper' : 'image-wrapper']"
-        :style="imageHeightStyle" @dblclick.stop="$emit('dblclick', $event)"
+        :style="aspectRatioStyle" @dblclick.stop="$emit('dblclick', $event)"
         @contextmenu.prevent.stop="$emit('contextmenu', $event)" @click.stop="handleWrapperClick">
-        <img :src="displayUrl" :class="['thumbnail', { 'thumbnail-loading': isImageLoading }]" :alt="image.id"
+        <img :src="attemptUrl" :class="['thumbnail', { 'thumbnail-loading': isImageLoading }]" :alt="image.id"
           loading="lazy" draggable="false" @load="handleImageLoad" @error="handleImageError" />
       </div>
     </transition>
@@ -23,21 +23,20 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch, nextTick } from "vue";
+import { computed, ref, onMounted, onUnmounted, watch } from "vue";
 import { readFile } from "@tauri-apps/plugin-fs";
 import type { ImageInfo } from "@/stores/crawler";
+import { ImageClickAction } from "@/stores/settings";
 
 interface Props {
   image: ImageInfo;
   imageUrl?: { thumbnail?: string; original?: string };
-  imageClickAction: "preview" | "open";
+  imageClickAction: ImageClickAction;
   useOriginal?: boolean; // 是否使用原图（当列数 <= 2 时）
-  aspectRatioMatchWindow?: boolean; // 图片宽高比是否与窗口相同
   windowAspectRatio?: number; // 窗口宽高比
   selected?: boolean; // 是否被选中
   gridColumns?: number; // 网格列数
   gridIndex?: number; // 在网格中的索引
-  totalImages?: number; // 总图片数
   isReorderMode?: boolean; // 是否处于调整模式
   reorderSelected?: boolean; // 在调整模式下是否被选中（用于交换）
 }
@@ -50,73 +49,43 @@ const emit = defineEmits<{
   contextmenu: [event: MouseEvent];
   longPress: []; // 长按事件
   reorderClick: []; // 调整模式下的点击事件
-  blobUrlInvalid: [url: string, imageId: string, localPath: string]; // Blob URL 无效事件
+  blobUrlInvalid: [
+    payload: {
+      oldUrl: string;
+      newUrl: string;
+      newBlob?: Blob;
+      imageId: string;
+      localPath: string;
+    }
+  ]; // Blob URL 无效事件（已在本地重建 newUrl，用于上层同步/缓存）
 }>();
 
 const thumbnailUrl = computed(() => props.imageUrl?.thumbnail);
 const originalUrl = computed(() => props.imageUrl?.original);
-// 检查是否有可用的图片 URL（thumbnail 或 original）
-const hasImageUrl = computed(() => {
-  return !!(props.imageUrl?.thumbnail || props.imageUrl?.original);
-});
 // 根据 useOriginal 决定使用缩略图还是原图
 const computedDisplayUrl = computed(() => {
   if (props.useOriginal && originalUrl.value) {
     return originalUrl.value;
   }
-  return thumbnailUrl.value || originalUrl.value || '';
+  return thumbnailUrl.value || originalUrl.value || "";
 });
 
-// 验证后的 URL（用于实际显示）
-const displayUrl = ref<string>("");
+// 当前尝试加载的 URL（永远不为 "" 才会渲染 <img>，避免出现破裂图）
+const attemptUrl = ref<string>("");
+// 错误处理防抖：避免同一 URL 的 error 事件造成死循环
+const handledErrorForUrl = ref<string | null>(null);
 
-// 验证 Blob URL 是否有效
-async function validateBlobUrl(url: string): Promise<boolean> {
-  if (!url || !url.startsWith("blob:")) {
-    return true; // 非 Blob URL，认为有效
-  }
-
-  return new Promise((resolve) => {
-    const testImg = new Image();
-    let resolved = false;
-
-    // 设置超时，避免长时间等待
-    const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        resolve(false); // 超时认为无效
-      }
-    }, 30);
-
-    testImg.onload = () => {
-      if (!resolved) {
-        resolved = true;
-        clearTimeout(timeout);
-        resolve(true); // URL 有效
-      }
-    };
-
-    testImg.onerror = () => {
-      if (!resolved) {
-        resolved = true;
-        clearTimeout(timeout);
-        resolve(false); // URL 无效
-      }
-    };
-
-    testImg.src = url;
-  });
-}
-
-// 重新创建 Blob URL（通过读取文件）
-async function recreateBlobUrl(localPath: string): Promise<string> {
-  if (!localPath) return "";
+// 通过读取文件重新创建 Blob URL（返回 url + blob，用于上层持有引用，避免被 GC 后 URL 失效）
+async function recreateBlobUrl(
+  localPath: string
+): Promise<{ url: string; blob: Blob | null }> {
+  if (!localPath) return { url: "", blob: null };
   try {
     let normalizedPath = localPath.trimStart().replace(/^\\\\\?\\/, "").trim();
-    if (!normalizedPath) return "";
+    if (!normalizedPath) return { url: "", blob: null };
 
     const fileData = await readFile(normalizedPath);
-    if (!fileData || fileData.length === 0) return "";
+    if (!fileData || fileData.length === 0) return { url: "", blob: null };
 
     const ext = normalizedPath.split(".").pop()?.toLowerCase();
     let mimeType = "image/jpeg";
@@ -126,257 +95,102 @@ async function recreateBlobUrl(localPath: string): Promise<string> {
     else if (ext === "bmp") mimeType = "image/bmp";
 
     const blob = new Blob([fileData], { type: mimeType });
-    if (blob.size === 0) return "";
+    if (blob.size === 0) return { url: "", blob: null };
 
     const blobUrl = URL.createObjectURL(blob);
-    return blobUrl;
+    return { url: blobUrl, blob };
   } catch (error) {
     console.error("重新创建 Blob URL 失败:", error, localPath);
-    return "";
+    return { url: "", blob: null };
   }
 }
 
 const itemRef = ref<HTMLElement | null>(null);
-const itemWidth = ref<number>(0);
-const isImageLoading = ref(true); // 跟踪图片是否正在加载
-const isFirstMount = ref(true); // 跟踪是否是首次挂载
-const loadingTimer = ref<number | null>(null); // 存储定时器ID，防止重复设置
-const hasErrorHandlerRun = ref(false); // 跟踪错误处理是否已执行，防止重复处理
-
-// 使用 ResizeObserver 监听元素宽度变化
-let resizeObserver: ResizeObserver | null = null;
+const isImageLoading = ref(true); // 跟踪图片是否正在加载（用于隐藏 <img>，防止破裂图闪现）
 
 onMounted(() => {
-  if (itemRef.value) {
-    // 初始化宽度
-    itemWidth.value = itemRef.value.offsetWidth;
-
-    // 创建 ResizeObserver 监听宽度变化
-    resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.target === itemRef.value) {
-          itemWidth.value = entry.contentRect.width;
-        }
-      }
-    });
-
-    resizeObserver.observe(itemRef.value);
-  }
-
-  // 初始化 displayUrl
-  if (computedDisplayUrl.value) {
-    // 如果是 Blob URL，先验证
-    if (computedDisplayUrl.value.startsWith("blob:")) {
-      validateBlobUrl(computedDisplayUrl.value).then((isValid) => {
-        if (isValid) {
-          displayUrl.value = computedDisplayUrl.value;
-        } else {
-          // URL 无效，尝试重新创建
-          const pathToUse = props.useOriginal
-            ? props.image.localPath
-            : (props.image.thumbnailPath || props.image.localPath);
-          recreateBlobUrl(pathToUse).then((newUrl) => {
-            if (newUrl) {
-              displayUrl.value = newUrl;
-              emit("blobUrlInvalid", computedDisplayUrl.value, props.image.id, pathToUse);
-            } else {
-              displayUrl.value = "";
-            }
-          });
-        }
-      });
-    } else {
-      displayUrl.value = computedDisplayUrl.value;
-    }
-  }
-
-  // 挂载时始终播放动画（刷新时也应该有动画）
-  // 等待图片加载完成或动画完成后移除加载状态
-  if (displayUrl.value) {
-    nextTick(() => {
-      const imgElement = itemRef.value?.querySelector('.thumbnail') as HTMLImageElement | null;
-      if (imgElement) {
-        if (imgElement.complete && imgElement.naturalHeight !== 0) {
-          // 图片已在缓存中，但仍要播放动画，等待动画完成后再移除加载状态
-          if (loadingTimer.value) {
-            clearTimeout(loadingTimer.value);
-          }
-          loadingTimer.value = window.setTimeout(() => {
-            isImageLoading.value = false;
-            isFirstMount.value = false;
-            loadingTimer.value = null;
-          }, 400); // 400ms 等于动画时长
-        }
-        // 如果图片未加载完成，会在 handleImageLoad 中处理
-      }
-    });
-  } else {
-    isFirstMount.value = false;
-  }
+  // 初次挂载：直接用 computedDisplayUrl 作为尝试加载的 URL
+  // - 注意：这里不做“超短超时验证”，避免误判导致重建/闪烁
+  // - 图片真正可用与否交给 <img onload/onerror> 判定；加载期间保持骨架，不显示破裂图
+  attemptUrl.value = computedDisplayUrl.value || "";
+  isImageLoading.value = !!attemptUrl.value;
 });
 
 onUnmounted(() => {
-  if (resizeObserver && itemRef.value) {
-    resizeObserver.unobserve(itemRef.value);
-    resizeObserver.disconnect();
-    resizeObserver = null;
-  }
-  // 清理定时器
-  if (loadingTimer.value) {
-    clearTimeout(loadingTimer.value);
-    loadingTimer.value = null;
-  }
 });
 
-// 计算图片容器的高度样式
-const imageHeightStyle = computed(() => {
-  if (props.aspectRatioMatchWindow && props.windowAspectRatio && itemWidth.value > 0) {
-    // 如果启用宽高比匹配，根据实际宽度和窗口宽高比计算高度
-    // 高度 = 宽度 / 窗口宽高比
-    const height = itemWidth.value / props.windowAspectRatio;
-    return {
-      height: `${height}px`
-    };
-  }
-  // 默认高度 200px
-  return {
-    height: '200px'
-  };
+const aspectRatioStyle = computed(() => {
+  // aspect-ratio = 宽 / 高；windowAspectRatio 本身就是宽/高
+  const r = props.windowAspectRatio && props.windowAspectRatio > 0 ? props.windowAspectRatio : null;
+  return r
+    ? { aspectRatio: `${r}` }
+    : { aspectRatio: "16 / 9" };
 });
 
-// 加载骨架屏的样式
-const loadingStyle = computed(() => {
-  if (props.aspectRatioMatchWindow && props.windowAspectRatio && itemWidth.value > 0) {
-    const height = itemWidth.value / props.windowAspectRatio;
-    return {
-      height: `${height}px`
-    };
-  }
-  return {
-    height: '200px'
-  };
-});
-
-// 监听窗口宽高比变化，重新计算高度
-watch(() => props.windowAspectRatio, () => {
-  // 触发重新计算
-  if (itemRef.value) {
-    itemWidth.value = itemRef.value.offsetWidth;
-  }
-});
-
-// 监听 computedDisplayUrl 变化，验证 Blob URL 后再设置 displayUrl
+// 监听 computedDisplayUrl 变化：只有在 URL 字符串确实变化时才触发重载，避免无意义闪烁
 let previousUrl = computedDisplayUrl.value;
-watch(() => computedDisplayUrl.value, async (newUrl) => {
-  // 如果URL没有真正变化（首次挂载时），跳过，让onMounted处理
-  if (newUrl === previousUrl) {
-    return;
+watch(
+  () => computedDisplayUrl.value,
+  (newUrl) => {
+    if (newUrl === previousUrl) return;
+    previousUrl = newUrl;
+    handledErrorForUrl.value = null;
+    attemptUrl.value = newUrl || "";
+    isImageLoading.value = !!attemptUrl.value;
   }
-  previousUrl = newUrl;
-
-  // 如果是 Blob URL，先验证再设置
-  if (newUrl && newUrl.startsWith("blob:")) {
-    const isValid = await validateBlobUrl(newUrl);
-    if (isValid) {
-      // URL 有效，直接设置
-      displayUrl.value = newUrl;
-    } else {
-      // URL 无效，尝试重新创建
-      console.warn("Blob URL 无效，尝试重新创建:", newUrl, props.image.localPath);
-
-      // 确定要使用的路径（缩略图或原图）
-      const pathToUse = props.useOriginal
-        ? props.image.localPath
-        : (props.image.thumbnailPath || props.image.localPath);
-
-      // 尝试重新创建
-      const newBlobUrl = await recreateBlobUrl(pathToUse);
-      if (newBlobUrl) {
-        // 重新创建成功，使用新 URL
-        displayUrl.value = newBlobUrl;
-        // 通知父组件更新 imageSrcMap（通过事件）
-        emit("blobUrlInvalid", newUrl, props.image.id, pathToUse);
-      } else {
-        // 重新创建失败，尝试使用原图（如果当前使用的是缩略图）
-        if (!props.useOriginal && originalUrl.value && originalUrl.value !== newUrl) {
-          const origValid = await validateBlobUrl(originalUrl.value);
-          if (origValid) {
-            displayUrl.value = originalUrl.value;
-          } else {
-            // 原图也无效，触发事件通知父组件
-            emit("blobUrlInvalid", newUrl, props.image.id, props.image.localPath);
-            displayUrl.value = ""; // 清空，显示骨架屏
-          }
-        } else {
-          // 无法重新创建，触发事件通知父组件
-          emit("blobUrlInvalid", newUrl, props.image.id, pathToUse);
-          displayUrl.value = ""; // 清空，显示骨架屏
-        }
-      }
-    }
-  } else {
-    // 非 Blob URL，直接设置
-    displayUrl.value = newUrl;
-  }
-
-  // URL变化时，重置加载状态和错误处理标记
-  isImageLoading.value = true;
-  hasErrorHandlerRun.value = false;
-  // 使用nextTick检查图片是否已经在缓存中并已加载完成
-  nextTick(() => {
-    const imgElement = itemRef.value?.querySelector('.thumbnail') as HTMLImageElement | null;
-    if (imgElement && imgElement.complete && imgElement.naturalHeight !== 0) {
-      // 图片已经在缓存中并已加载完成，不播放动画
-      isImageLoading.value = false;
-    }
-  });
-});
+);
 
 // 处理图片加载完成
 function handleImageLoad(event: Event) {
   const img = event.target as HTMLImageElement;
   if (img.complete && img.naturalHeight !== 0) {
-    // 图片加载成功，重置错误处理标记
-    hasErrorHandlerRun.value = false;
-    if (isFirstMount.value) {
-      // 首次挂载时，需要等待动画完成
-      // 如果已经有定时器在运行，不再重复设置
-      if (!loadingTimer.value) {
-        loadingTimer.value = window.setTimeout(() => {
-          isImageLoading.value = false;
-          isFirstMount.value = false;
-          loadingTimer.value = null;
-        }, 400); // 400ms 等于动画时长
-      }
-    } else {
-      // 非首次加载（URL变化），立即移除加载状态
-      isImageLoading.value = false;
-    }
+    isImageLoading.value = false;
+    handledErrorForUrl.value = null;
   }
 }
 
 // 处理图片加载错误
-function handleImageError(event: Event) {
+async function handleImageError(event: Event) {
   const img = event.target as HTMLImageElement;
+  const currentUrl = attemptUrl.value || img.src || "";
+  if (!currentUrl) return;
 
-  // 如果错误处理已经执行过，不再处理，避免循环
-  if (hasErrorHandlerRun.value) {
-    return;
-  }
+  // 同一个 URL 的 error 只处理一次，避免死循环
+  if (handledErrorForUrl.value === currentUrl) return;
+  handledErrorForUrl.value = currentUrl;
 
-  // 只在缩略图失败且原图存在且与当前 URL 不同时才切换
-  const currentUrl = img.src;
+  // 错误发生时，保持骨架（不显示破裂图）
+  isImageLoading.value = true;
+
   const thumbUrl = thumbnailUrl.value;
   const origUrl = originalUrl.value;
 
-  // 如果当前使用的是缩略图，且原图存在且不同，则切换到原图
+  // 1) 当前是缩略图失败，且存在原图：尝试切换到原图 URL
   if (thumbUrl && origUrl && currentUrl === thumbUrl && origUrl !== thumbUrl) {
-    hasErrorHandlerRun.value = true; // 标记已处理，防止循环
-    img.src = origUrl;
-  } else {
-    // 否则不再处理，避免反复尝试加载失效的 URL
-    hasErrorHandlerRun.value = true;
+    attemptUrl.value = origUrl;
+    return;
   }
+
+  // 2) 尝试从本地文件重建 blob url（缩略图优先；没有则用原图）
+  const pathToUse = props.useOriginal
+    ? props.image.localPath
+    : (props.image.thumbnailPath || props.image.localPath);
+
+  const rebuilt = await recreateBlobUrl(pathToUse);
+  if (rebuilt?.url) {
+    attemptUrl.value = rebuilt.url;
+    emit("blobUrlInvalid", {
+      oldUrl: currentUrl,
+      newUrl: rebuilt.url,
+      newBlob: rebuilt.blob ?? undefined,
+      imageId: props.image.id,
+      localPath: pathToUse,
+    });
+    return;
+  }
+
+  // 3) 无法恢复：清空 URL，回到骨架
+  attemptUrl.value = "";
 }
 
 // 已移除图片原生拖拽（draggable/dragstart），以支持画廊"直接鼠标拖拽滚动"手势
@@ -398,7 +212,7 @@ const handleMouseDown = (event: MouseEvent) => {
     if (isLongPressing.value) {
       emit("longPress");
       isLongPressing.value = false;
-    }
+          }
   }, LONG_PRESS_DURATION);
 };
 

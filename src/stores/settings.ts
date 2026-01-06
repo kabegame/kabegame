@@ -3,11 +3,12 @@ import { reactive, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 
 // 与后端 settings.rs 的 AppSettings（serde rename_all = camelCase）保持一致
+
 export interface AppSettings {
   autoLaunch: boolean;
   maxConcurrentDownloads: number;
   networkRetryCount: number;
-  imageClickAction: "preview" | "open" | string;
+  imageClickAction: "preview" | "open" | "none";
   galleryImageAspectRatioMatchWindow: boolean;
   galleryImageAspectRatio: string | null;
   galleryPageSize: number;
@@ -40,6 +41,7 @@ export interface AppSettings {
 }
 
 export type AppSettingKey = keyof AppSettings;
+export type ImageClickAction = AppSettings["imageClickAction"];
 
 export const useSettingsStore = defineStore("settings", () => {
   // 旧逻辑：收藏画册 ID（不是 AppSettings 的字段）

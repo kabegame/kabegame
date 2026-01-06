@@ -16,7 +16,6 @@ export type FavoriteStatusChangedDetail = {
 export function useImageOperations(
   displayedImages: Ref<ImageInfo[]>,
   imageSrcMap: Ref<Record<string, { thumbnail?: string; original?: string }>>,
-  showFavoritesOnly: Ref<boolean>,
   currentWallpaperImageId: Ref<string | null>,
   galleryViewRef: Ref<any>,
   removeFromUiCacheByIds: (imageIds: string[]) => void,
@@ -107,16 +106,6 @@ export function useImageOperations(
     if (!imageIds || imageIds.length === 0) return;
     const idSet = new Set(imageIds);
 
-    // "仅收藏"模式下，取消收藏应直接从列表移除
-    if (showFavoritesOnly.value && !favorite) {
-      displayedImages.value = displayedImages.value.filter(
-        (img) => !idSet.has(img.id)
-      );
-      crawlerStore.images = [...displayedImages.value];
-      galleryViewRef.value?.clearSelection?.();
-      return;
-    }
-
     // 就地更新 favorite 字段（避免全量刷新）
     let changed = false;
     const next = displayedImages.value.map((img) => {
@@ -139,17 +128,22 @@ export function useImageOperations(
     if (imagesToProcess.length === 0) return;
 
     try {
+      // 删除触发“后续图片顶上来”的 move 过渡（仅短暂开启，避免加载更多抖动）
+      galleryViewRef.value?.startDeleteMoveAnimation?.();
+
       const count = imagesToProcess.length;
+      const imageIds = imagesToProcess.map((img) => img.id);
+      const idSet = new Set(imageIds);
       const includesCurrent =
         !!currentWallpaperImageId.value &&
         imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
 
       // 使用批量 API 一次性处理所有图片
-      const imageIds = imagesToProcess.map((img) => img.id);
       if (deleteFiles) {
-        await crawlerStore.batchDeleteImages(imageIds);
+        // Gallery 内部会手动更新列表；这里禁用 store 的全局事件，避免监听器抢先 refresh 导致滚动回顶
+        await crawlerStore.batchDeleteImages(imageIds, { emitEvent: false });
       } else {
-        await crawlerStore.batchRemoveImages(imageIds);
+        await crawlerStore.batchRemoveImages(imageIds, { emitEvent: false });
       }
 
       if (includesCurrent) {
@@ -158,34 +152,29 @@ export function useImageOperations(
 
       // 从 displayedImages 中移除已处理的图片
       displayedImages.value = displayedImages.value.filter(
-        (img) => !imagesToProcess.some((procImg) => procImg.id === img.id)
+        (img) => !idSet.has(img.id)
       );
 
-      // 清理 imageSrcMap 和 Blob URL
-      for (const img of imagesToProcess) {
-        const imageData = imageSrcMap.value[img.id];
-        if (imageData) {
-          if (imageData.thumbnail) {
-            URL.revokeObjectURL(imageData.thumbnail);
-          }
-          if (imageData.original) {
-            URL.revokeObjectURL(imageData.original);
-          }
-        }
-        const { [img.id]: _, ...rest } = imageSrcMap.value;
-        imageSrcMap.value = rest;
+      // 清理 imageSrcMap 和 Blob URL（批量更新，避免循环中反复重建对象导致额外渲染/加载）
+      const nextMap: Record<string, { thumbnail?: string; original?: string }> =
+        { ...imageSrcMap.value };
+      for (const id of idSet) {
+        const imageData = nextMap[id];
+        if (imageData?.thumbnail) URL.revokeObjectURL(imageData.thumbnail);
+        if (imageData?.original) URL.revokeObjectURL(imageData.original);
+        delete nextMap[id];
       }
+      imageSrcMap.value = nextMap;
 
       const action = deleteFiles ? "删除" : "移除";
       ElMessage.success(`已${action} ${count} 张图片`);
       galleryViewRef.value?.clearSelection?.();
 
-      // 发出图片删除/移除事件，通知其他视图更新
+      // 通知其他视图同步（必须在本地移除后再发出，否则 Gallery 自己的监听器会抢先 refresh）
       const eventType = deleteFiles ? "images-deleted" : "images-removed";
-      const processedIds = imagesToProcess.map((img) => img.id);
       window.dispatchEvent(
         new CustomEvent(eventType, {
-          detail: { imageIds: processedIds },
+          detail: { imageIds },
         })
       );
     } catch (error) {
@@ -254,25 +243,26 @@ export function useImageOperations(
 
       ElMessage.success(newFavorite ? "已收藏" : "已取消收藏");
 
-      // 清除收藏画册的缓存，确保下次查看时重新加载
-      delete albumStore.albumImages[FAVORITE_ALBUM_ID.value];
-      delete albumStore.albumPreviews[FAVORITE_ALBUM_ID.value];
-      // 更新收藏画册计数
+      // 新策略：收藏状态以 store 为准，不再通过全局事件/清缓存同步
+      // 1) 更新画廊缓存（就地更新，避免全量刷新导致“加载更多”图片丢失）
+      applyFavoriteChangeToGalleryCache([image.id], newFavorite);
+      // 2) 更新收藏画册计数（用于画册页预览/计数显示）
       const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
       albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(
         0,
         currentCount + (newFavorite ? 1 : -1)
       );
-
-      // 发出收藏状态变化事件，通知其他页面（如收藏画册详情页）更新
-      window.dispatchEvent(
-        new CustomEvent("favorite-status-changed", {
-          detail: { imageIds: [image.id], favorite: newFavorite },
-        })
-      );
-
-      // 就地更新图片的收藏状态，避免重新加载导致"加载更多"的图片消失
-      applyFavoriteChangeToGalleryCache([image.id], newFavorite);
+      // 3) 若收藏画册图片缓存已加载：取消收藏应从缓存数组中移除（而不是清缓存）
+      const favList = albumStore.albumImages[FAVORITE_ALBUM_ID.value];
+      if (Array.isArray(favList)) {
+        const idx = favList.findIndex((i) => i.id === image.id);
+        if (newFavorite) {
+          if (idx === -1) favList.push({ ...image, favorite: true });
+          else favList[idx] = { ...favList[idx], favorite: true } as ImageInfo;
+        } else {
+          if (idx !== -1) favList.splice(idx, 1);
+        }
+      }
       galleryViewRef.value?.clearSelection?.();
     } catch (error) {
       console.error("切换收藏状态失败:", error);

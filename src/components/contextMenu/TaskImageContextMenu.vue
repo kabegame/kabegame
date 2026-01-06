@@ -1,14 +1,16 @@
 <template>
-    <ImageContextMenu :visible="visible" :position="position" :image="image" :selected-count="selectedCount"
-        :is-image-selected="isImageSelected" :simplified-multi-select-menu="false"
-        :hide-favorite-and-add-to-album="selectedCount === 1" remove-text="删除" @close="$emit('close')"
+    <SingleImageContextMenu v-if="selectedCount === 1" :visible="visible" :position="position" :image="image"
+        remove-text="删除" @close="$emit('close')" @command="$emit('command', $event)" />
+    <MultiImageContextMenu v-else :visible="visible" :position="position" :image="image" :selected-count="selectedCount"
+        :is-image-selected="isImageSelected" :hide="['favorite', 'addToAlbum']" remove-text="删除" @close="$emit('close')"
         @command="$emit('command', $event)" />
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ImageInfo } from "@/stores/crawler";
-import ImageContextMenu from "./ImageContextMenu.vue";
+import SingleImageContextMenu from "./SingleImageContextMenu.vue";
+import MultiImageContextMenu from "./MultiImageContextMenu.vue";
 
 interface Props {
     visible: boolean;

@@ -173,42 +173,6 @@
     </div>
   </el-drawer>
 
-  <el-dialog v-model="taskViewerVisible" :title="`任务文件 - ${viewerTaskName || '未命名任务'}`" width="82%" top="5vh"
-    class="task-images-dialog" @close="handleViewerClose" :destroy-on-close="true">
-    <div class="task-images-viewer">
-      <div v-if="viewerLoading && viewerImages.length === 0" class="viewer-loading">
-        <el-icon class="is-loading">
-          <Loading />
-        </el-icon>
-        <span>加载中...</span>
-      </div>
-      <div v-else-if="viewerImages.length === 0" class="viewer-empty">
-        <el-icon>
-          <Picture />
-        </el-icon>
-        <span>暂无文件</span>
-      </div>
-      <div v-else>
-        <ImageGrid :images="viewerImages" :image-url-map="viewerImageUrls" :image-click-action="'open'"
-          :columns="viewerColumns" :aspect-ratio-match-window="viewerAspectRatioMatchWindow"
-          :window-aspect-ratio="viewerWindowAspect" :selected-images="viewerSelected"
-          @image-click="handleViewerImageClick" @image-dbl-click="handleViewerImageDblClick"
-          @contextmenu="handleViewerImageContextMenu" />
-        <div class="viewer-actions">
-          <el-button :disabled="viewerImages.length === 0" @click="handleSaveViewerToAlbum">
-            保存为画册
-          </el-button>
-          <el-button v-if="viewerHasMore" :loading="viewerLoadingMore" @click="loadViewerPage(false)">
-            加载更多
-          </el-button>
-          <span class="viewer-count">共 {{ viewerImages.length }} 张</span>
-        </div>
-      </div>
-    </div>
-  </el-dialog>
-
-  <AddToAlbumDialog v-model="addToAlbumVisible" :image-ids="addToAlbumImageIds" />
-
   <el-dialog v-model="saveConfigVisible" title="保存为运行配置" width="520px" :close-on-click-modal="false"
     class="save-config-dialog" @close="resetSaveConfigForm">
     <el-form label-width="80px">
@@ -227,29 +191,17 @@
 
   <TaskContextMenu :visible="contextMenuVisible" :position="contextMenuPos" :task="contextMenuTask"
     @close="closeContextMenu" @command="handleContextAction" />
-
-  <!-- 任务文件查看器右键菜单 -->
-  <ImageContextMenu :visible="viewerImageMenuVisible" :position="viewerImageMenuPosition" :image="viewerImageMenuImage"
-    :selected-count="Math.max(1, viewerSelected.size)" :is-image-selected="isViewerImageMenuImageSelected"
-    :simplified-multi-select-menu="false" :hide-favorite-and-add-to-album="false" remove-text="删除"
-    @close="viewerImageMenuVisible = false" @command="handleViewerImageMenuCommand" />
 </template>
 
 <script setup lang="ts">
-import { ref, computed, shallowRef, onUnmounted, onMounted, watch } from "vue";
+import { ref, computed, onUnmounted, onMounted, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Clock, ArrowDown, Loading, WarningFilled, CopyDocument, Picture, Close } from "@element-plus/icons-vue";
+import { Clock, ArrowDown, WarningFilled, CopyDocument, Picture, Close } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
-import { readFile } from "@tauri-apps/plugin-fs";
 import { useRouter } from "vue-router";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
-import { useSettingsStore } from "@/stores/settings";
-import ImageGrid from "./ImageGrid.vue";
-import TaskContextMenu from "./TaskContextMenu.vue";
-import ImageContextMenu from "./contextMenu/ImageContextMenu.vue";
-import type { ImageInfo } from "@/stores/crawler";
-import AddToAlbumDialog from "./AddToAlbumDialog.vue";
+import TaskContextMenu from "./contextMenu/TaskContextMenu.vue";
 
 interface ActiveDownloadInfo {
   url: string;
@@ -274,7 +226,6 @@ const emit = defineEmits<Emits>();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const pluginStore = usePluginStore();
-const settingsStore = useSettingsStore();
 
 const visible = computed({
   get: () => props.modelValue,
@@ -282,60 +233,6 @@ const visible = computed({
 });
 
 const expandedTasks = ref(new Set<string>());
-const VIEWER_PAGE_SIZE = 50;
-
-// 任务文件查看弹窗
-const taskViewerVisible = ref(false);
-const viewerTaskId = ref<string>("");
-const viewerTaskName = ref<string>("");
-const viewerImages = shallowRef<ImageInfo[]>([]);
-const viewerImageUrls = ref<Record<string, { thumbnail?: string; original?: string }>>({});
-const viewerPage = ref(0);
-const viewerHasMore = ref(false);
-const viewerLoading = ref(false);
-const viewerLoadingMore = ref(false);
-const viewerBlobUrls = new Set<string>();
-const viewerSelected = ref<Set<string>>(new Set());
-const viewerColumns = ref(0);
-const viewerAspectRatio = ref<number | null>(null);
-
-// 任务文件查看器右键菜单
-const viewerImageMenuVisible = ref(false);
-const viewerImageMenuPosition = ref({ x: 0, y: 0 });
-const viewerImageMenuImage = ref<ImageInfo | null>(null);
-
-// 计算属性：是否有设置宽高比
-const viewerAspectRatioMatchWindow = computed(() => !!viewerAspectRatio.value);
-// 计算属性：实际使用的宽高比
-const viewerWindowAspect = computed(() => viewerAspectRatio.value || 16 / 9);
-
-// 监听设置 store 中的宽高比变化，实时同步
-watch(
-  () => settingsStore.values.galleryImageAspectRatio,
-  (newValue) => {
-    if (!newValue) {
-      viewerAspectRatio.value = null;
-      return;
-    }
-    const value = newValue as string;
-    // 解析 "16:9" 格式
-    if (value.includes(":") && !value.startsWith("custom:")) {
-      const [w, h] = value.split(":").map(Number);
-      if (w && h) {
-        viewerAspectRatio.value = w / h;
-      }
-    }
-    // 解析 "custom:1920:1080" 格式
-    if (value.startsWith("custom:")) {
-      const parts = value.replace("custom:", "").split(":");
-      const [w, h] = parts.map(Number);
-      if (w && h) {
-        viewerAspectRatio.value = w / h;
-      }
-    }
-  },
-  { immediate: true }
-);
 
 type VarOption = string | { name: string; variable: string };
 type PluginVarMeta = {
@@ -344,10 +241,6 @@ type PluginVarMeta = {
   optionNameByVariable?: Record<string, string>;
 };
 const pluginVarMetaMap = ref<Record<string, Record<string, PluginVarMeta>>>({});
-
-// 任务文件 -> 保存为画册
-const addToAlbumVisible = ref(false);
-const addToAlbumImageIds = ref<string[]>([]);
 
 // 任务右键菜单
 const contextMenuVisible = ref(false);
@@ -605,210 +498,6 @@ const formatConfigValue = (pluginId: string, key: string, value: any): string =>
   return map[s] || s;
 };
 
-const handleOpenImagePath = async (localPath: string) => {
-  try {
-    await invoke("open_file_path", { filePath: localPath });
-  } catch (error) {
-    console.error("打开文件失败:", error);
-    ElMessage.error("打开文件失败");
-  }
-};
-
-// ========== 任务文件浏览 ==========
-const resetViewerState = () => {
-  viewerTaskId.value = "";
-  viewerTaskName.value = "";
-  viewerImages.value = [];
-  viewerImageUrls.value = {};
-  viewerPage.value = 0;
-  viewerHasMore.value = false;
-  viewerLoading.value = false;
-  viewerLoadingMore.value = false;
-  viewerBlobUrls.forEach((url) => URL.revokeObjectURL(url));
-  viewerBlobUrls.clear();
-};
-
-const getImageBlobUrl = async (path: string): Promise<string> => {
-  if (!path) return "";
-  try {
-    const normalizedPath = path.trimStart().replace(/^\\\\\?\\/, "");
-    const data = await readFile(normalizedPath);
-    const ext = normalizedPath.split(".").pop()?.toLowerCase();
-    let mime = "image/jpeg";
-    if (ext === "png") mime = "image/png";
-    else if (ext === "gif") mime = "image/gif";
-    else if (ext === "webp") mime = "image/webp";
-    else if (ext === "bmp") mime = "image/bmp";
-    const blob = new Blob([data], { type: mime });
-    const url = URL.createObjectURL(blob);
-    viewerBlobUrls.add(url);
-    return url;
-  } catch (error) {
-    console.error("读取图片失败", path, error);
-    return "";
-  }
-};
-
-const fillViewerUrls = async (images: ImageInfo[]) => {
-  const updates: Record<string, { thumbnail?: string; original?: string }> = {};
-  for (const img of images) {
-    const thumb = img.thumbnailPath ? await getImageBlobUrl(img.thumbnailPath) : "";
-    const orig = await getImageBlobUrl(img.localPath);
-    updates[img.id] = {
-      thumbnail: thumb || orig || undefined,
-      original: orig || undefined,
-    };
-  }
-  viewerImageUrls.value = { ...viewerImageUrls.value, ...updates };
-};
-
-const loadViewerPage = async (reset = false) => {
-  if (!viewerTaskId.value) return;
-  if (reset) {
-    viewerImages.value = [];
-    viewerImageUrls.value = {};
-    viewerPage.value = 0;
-    viewerHasMore.value = false;
-  }
-
-  const page = reset ? 0 : viewerPage.value;
-  const setter = reset ? viewerLoading : viewerLoadingMore;
-  setter.value = true;
-  try {
-    const result = await crawlerStore.getTaskImagesPaginated(
-      viewerTaskId.value,
-      page,
-      VIEWER_PAGE_SIZE
-    );
-    const newList = reset ? result.images : [...viewerImages.value, ...result.images];
-    viewerImages.value = newList;
-    viewerHasMore.value = (page + 1) * VIEWER_PAGE_SIZE < result.total;
-    viewerPage.value = page + 1;
-    await fillViewerUrls(result.images);
-  } catch (error) {
-    console.error("加载任务文件失败:", error);
-    ElMessage.error("加载失败");
-  } finally {
-    setter.value = false;
-  }
-};
-
-const openTaskImages = async (task: any) => {
-  resetViewerState();
-  viewerTaskId.value = task.id;
-  viewerTaskName.value = getPluginName(task.pluginId);
-  taskViewerVisible.value = true;
-  await loadViewerPage(true);
-};
-
-const handleViewerClose = () => {
-  taskViewerVisible.value = false;
-  resetViewerState();
-};
-
-const handleSaveViewerToAlbum = async () => {
-  if (viewerImages.value.length === 0) return;
-  // 若未加载完全，提示用户当前只会保存已加载部分
-  if (viewerHasMore.value) {
-    try {
-      await ElMessageBox.confirm(
-        `当前仅已加载 ${viewerImages.value.length} 张图片，仍有未加载内容。是否只将已加载部分保存到画册？`,
-        "保存为画册",
-        { type: "warning" }
-      );
-    } catch {
-      return;
-    }
-  }
-  addToAlbumImageIds.value = viewerImages.value.map((i) => i.id);
-  addToAlbumVisible.value = true;
-};
-
-const handleViewerImageClick = (image: ImageInfo) => {
-  viewerSelected.value = new Set([image.id]);
-};
-
-const handleViewerImageDblClick = async (image: ImageInfo) => {
-  await handleOpenImagePath(image.localPath);
-};
-
-const handleViewerImageContextMenu = (event: MouseEvent, image: ImageInfo) => {
-  event.preventDefault();
-  viewerImageMenuImage.value = image;
-  viewerImageMenuPosition.value = { x: event.clientX, y: event.clientY };
-  viewerImageMenuVisible.value = true;
-};
-
-const isViewerImageMenuImageSelected = computed(() => {
-  if (!viewerImageMenuImage.value) return true;
-  if (viewerSelected.value.size <= 1) return true;
-  return viewerSelected.value.has(viewerImageMenuImage.value.id);
-});
-
-const handleViewerImageMenuCommand = async (command: string) => {
-  const image = viewerImageMenuImage.value;
-  if (!image) return;
-  viewerImageMenuVisible.value = false;
-
-  const imagesToProcess =
-    viewerSelected.value.size > 1
-      ? viewerImages.value.filter((img) => viewerSelected.value.has(img.id))
-      : [image];
-
-  switch (command) {
-    case "copy":
-      // 任务文件查看器只支持复制第一张图片（浏览器限制）
-      if (imagesToProcess.length > 0) {
-        const imageUrl = viewerImageUrls.value[imagesToProcess[0].id]?.original || viewerImageUrls.value[imagesToProcess[0].id]?.thumbnail;
-        if (!imageUrl) {
-          ElMessage.warning("图片尚未加载完成，请稍后再试");
-          return;
-        }
-        const response = await fetch(imageUrl);
-        let blob = await response.blob();
-
-        if (blob.type === "image/jpeg" || blob.type === "image/jpg") {
-          const img = new Image();
-          img.src = imageUrl;
-          await new Promise((resolve, reject) => {
-            img.onload = resolve;
-            img.onerror = reject;
-          });
-          const canvas = document.createElement("canvas");
-          canvas.width = img.width;
-          canvas.height = img.height;
-          const ctx = canvas.getContext("2d");
-          if (!ctx) throw new Error("无法创建 canvas context");
-          ctx.drawImage(img, 0, 0);
-          blob = await new Promise<Blob>((resolve, reject) => {
-            canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("转换图片失败"))), "image/png");
-          });
-        }
-
-        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-        ElMessage.success(imagesToProcess.length > 1 ? `已复制 ${imagesToProcess.length} 张图片` : "图片已复制到剪贴板");
-      }
-      break;
-    case "open":
-      await handleOpenImagePath(image.localPath);
-      break;
-    case "addToAlbum":
-      // 保存为画册
-      if (imagesToProcess.length > 0) {
-        addToAlbumImageIds.value = imagesToProcess.map((i) => i.id);
-        addToAlbumVisible.value = true;
-      }
-      break;
-    // 任务文件查看器不支持其他操作（detail、favorite、wallpaper、remove等），忽略这些命令
-    default:
-      break;
-  }
-};
-
-onUnmounted(() => {
-  resetViewerState();
-});
-
 // 右键菜单
 const openTaskContextMenu = (event: MouseEvent, task: any) => {
   event.preventDefault();
@@ -828,7 +517,7 @@ const handleContextAction = async (action: string) => {
   if (!task) return;
   switch (action) {
     case "view":
-      await openTaskImages(task);
+      handleOpenTaskDetail(task);
       break;
     case "delete":
       await handleDeleteTask(task);
@@ -1577,43 +1266,6 @@ const handleCopyError = async (task: any) => {
   }
 }
 
-.task-images-dialog {
-  .el-dialog__body {
-    padding: 0 0 12px 0;
-  }
-}
-
-.task-images-viewer {
-  padding: 12px 16px 4px 16px;
-
-  .viewer-loading,
-  .viewer-empty {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    justify-content: center;
-    color: var(--anime-text-secondary);
-    min-height: 200px;
-  }
-
-  .viewer-empty .el-icon {
-    font-size: 20px;
-  }
-
-  .viewer-actions {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-top: 12px;
-  }
-
-  .viewer-count {
-    color: var(--anime-text-secondary);
-    font-size: 12px;
-  }
-}
-
-
 .task-move-enter-active,
 .task-move-leave-active {
   transition: all 0.25s ease;
@@ -1640,30 +1292,6 @@ const handleCopyError = async (task: any) => {
 .image-path-tooltip {
   max-width: 400px;
   padding: 8px 12px;
-}
-
-.task-images-dialog.el-dialog {
-  max-height: 90vh !important;
-  display: flex !important;
-  flex-direction: column !important;
-  margin-top: 5vh !important;
-  margin-bottom: 5vh !important;
-  overflow: hidden !important;
-
-  .el-dialog__header {
-    flex-shrink: 0 !important;
-  }
-
-  .el-dialog__body {
-    flex: 1 1 auto !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    min-height: 0 !important;
-  }
-
-  .el-dialog__footer {
-    flex-shrink: 0 !important;
-  }
 }
 
 .tooltip-content {

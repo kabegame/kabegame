@@ -3,6 +3,7 @@ import { ref, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { ImageInfo } from "./crawler";
 import { useSettingsStore } from "./settings";
+import { useCrawlerStore } from "./crawler";
 
 export interface Album {
   id: string;
@@ -12,6 +13,7 @@ export interface Album {
 
 export const useAlbumStore = defineStore("albums", () => {
   const settingsStore = useSettingsStore();
+  const crawlerStore = useCrawlerStore();
   const FAVORITE_ALBUM_ID = computed(() => settingsStore.favoriteAlbumId);
 
   const albums = ref<Album[]>([]);
@@ -81,13 +83,13 @@ export const useAlbumStore = defineStore("albums", () => {
 
       // 如果是收藏画册，通知画廊等页面更新收藏状态
       if (albumId === FAVORITE_ALBUM_ID.value) {
-        // 只通知实际添加的图片
+        // 只更新实际添加的图片到 crawlerStore（不再使用全局事件）
         const addedImageIds = imageIds.slice(0, result.added);
         if (addedImageIds.length > 0) {
-          window.dispatchEvent(
-            new CustomEvent("favorite-status-changed", {
-              detail: { imageIds: addedImageIds, favorite: true },
-            })
+          crawlerStore.images = crawlerStore.images.map((img) =>
+            addedImageIds.includes(img.id)
+              ? ({ ...img, favorite: true } as ImageInfo)
+              : img
           );
         }
       }
@@ -131,10 +133,8 @@ export const useAlbumStore = defineStore("albums", () => {
 
     // 如果是收藏画册，通知画廊等页面更新收藏状态
     if (albumId === FAVORITE_ALBUM_ID.value) {
-      window.dispatchEvent(
-        new CustomEvent("favorite-status-changed", {
-          detail: { imageIds, favorite: false },
-        })
+      crawlerStore.images = crawlerStore.images.map((img) =>
+        imageIds.includes(img.id) ? ({ ...img, favorite: false } as ImageInfo) : img
       );
     }
     return removed;

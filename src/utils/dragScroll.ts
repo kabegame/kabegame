@@ -41,7 +41,10 @@ const DEFAULT_IGNORE_SELECTOR =
  * - 鼠标/触控笔：自定义惯性（更像手机）。
  * - 触摸（安卓/iOS）：默认不接管，保持 WebView 原生惯性与回弹。
  */
-export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions = {}) {
+export function enableDragScroll(
+  container: HTMLElement,
+  opts: DragScrollOptions = {}
+) {
   const enableForPointerTypes = opts.enableForPointerTypes ?? ["mouse", "pen"];
   const requireSpaceKey = opts.requireSpaceKey ?? true;
   const friction = opts.friction ?? 0.92;
@@ -100,7 +103,8 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
     };
 
     container.addEventListener("click", onClickCapture, true);
-    cleanupClickCapture = () => container.removeEventListener("click", onClickCapture, true);
+    cleanupClickCapture = () =>
+      container.removeEventListener("click", onClickCapture, true);
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -109,7 +113,13 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
 
     const target = e.target as HTMLElement | null;
     const tag = target?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
+    if (
+      tag === "INPUT" ||
+      tag === "TEXTAREA" ||
+      tag === "SELECT" ||
+      target?.isContentEditable
+    )
+      return;
 
     // 避免空格触发页面滚动
     e.preventDefault();
@@ -129,10 +139,18 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
   };
 
   const onPointerDown = (e: PointerEvent) => {
-    if (e.button !== 0) return; // 只响应左键
-    if (!enableForPointerTypes.includes(e.pointerType as any)) return;
-    if (requireSpaceKey && !spaceDown) return;
-    if (shouldIgnoreTarget(e.target)) return;
+    if (e.button !== 0) {
+      return; // 只响应左键
+    }
+    if (!enableForPointerTypes.includes(e.pointerType as any)) {
+      return;
+    }
+    if (requireSpaceKey && !spaceDown) {
+      return;
+    }
+    if (shouldIgnoreTarget(e.target)) {
+      return;
+    }
 
     stopInertia();
     cleanupClickCapture?.();
@@ -149,13 +167,19 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
   };
 
   const onPointerMove = (e: PointerEvent) => {
-    if (!isDown) return;
-    if (pointerId !== e.pointerId) return;
+    if (!isDown) {
+      // console.log("[拖拽滚动调试] pointermove: isDown=false");
+      return;
+    }
+    if (pointerId !== e.pointerId) {
+      return;
+    }
 
     const dy = e.clientY - startY;
     if (!moved) {
-      // 还没超过阈值：不要滚动、不要 preventDefault，让“单击”正常触发
+      // 还没超过阈值：不要滚动、不要 preventDefault，让"单击"正常触发
       if (Math.abs(dy) < dragThresholdPx) {
+        // console.log("[拖拽滚动调试] pointermove: 未超过阈值", Math.abs(dy), dragThresholdPx);
         return;
       }
       // 超过阈值：从这一刻开始进入拖拽滚动模式
@@ -165,9 +189,7 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
         try {
           container.setPointerCapture(e.pointerId);
           hasPointerCapture = true;
-        } catch {
-          // ignore
-        }
+        } catch (err) {}
       }
       lastY = e.clientY;
       lastT = performance.now();
@@ -177,13 +199,15 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
     // 进入拖拽滚动后：阻止文本选择等默认行为
     e.preventDefault();
 
-    container.scrollTop = startScrollTop - dy;
+    const newScrollTop = startScrollTop - dy;
+    container.scrollTop = newScrollTop;
+    // console.log("[拖拽滚动调试] 滚动中", { startScrollTop, dy, newScrollTop });
 
     const now = performance.now();
     const dt = Math.max(1, now - lastT);
     const deltaY = e.clientY - lastY;
     // scrollTop 方向：鼠标向下拖 => 内容向上 => scrollTop 变小（负），因此取反
-    velocity = (-deltaY) / dt;
+    velocity = -deltaY / dt;
     lastY = e.clientY;
     lastT = now;
   };
@@ -241,10 +265,22 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
 
   // 绑定事件（pointermove 需要 non-passive 才能 preventDefault）
   // 使用 capture 阶段，避免子元素（图片/组件）吞掉事件导致“拖不动”
-  container.addEventListener("pointerdown", onPointerDown, { passive: true, capture: true });
-  container.addEventListener("pointermove", onPointerMove, { passive: false, capture: true });
-  container.addEventListener("pointerup", endPointer, { passive: true, capture: true });
-  container.addEventListener("pointercancel", endPointer, { passive: true, capture: true });
+  container.addEventListener("pointerdown", onPointerDown, {
+    passive: true,
+    capture: true,
+  });
+  container.addEventListener("pointermove", onPointerMove, {
+    passive: false,
+    capture: true,
+  });
+  container.addEventListener("pointerup", endPointer, {
+    passive: true,
+    capture: true,
+  });
+  container.addEventListener("pointercancel", endPointer, {
+    passive: true,
+    capture: true,
+  });
 
   if (requireSpaceKey) {
     window.addEventListener("keydown", onKeyDown, { passive: false });
@@ -267,5 +303,3 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
     }
   };
 }
-
-

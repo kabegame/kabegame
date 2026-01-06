@@ -11,13 +11,13 @@ import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSettingsStore } from "@/stores/settings";
-import { useSettingsUiStore } from "@/stores/settingsUi";
+import { useUiStore } from "@/stores/ui";
 
 type Transition = "none" | "fade" | "slide" | "zoom";
 type Opt = { label: string; value: Transition };
 
 const settingsStore = useSettingsStore();
-const uiStore = useSettingsUiStore();
+const uiStore = useUiStore();
 
 const isApplying = ref(false);
 const mode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
@@ -74,7 +74,7 @@ onMounted(async () => {
 
 const handleChange = async (transition: string) => {
   if (disabled.value) return;
-  
+
   // 如果轮播未启用，给出提示但不阻止设置
   if (!rotationEnabled.value) {
     ElMessage.info("未启用轮播：过渡效果将在启用轮播后生效");

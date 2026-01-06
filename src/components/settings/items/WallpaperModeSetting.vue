@@ -12,10 +12,10 @@ import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSettingsStore } from "@/stores/settings";
-import { useSettingsUiStore } from "@/stores/settingsUi";
+import { useUiStore } from "@/stores/ui";
 
 const settingsStore = useSettingsStore();
-const uiStore = useSettingsUiStore();
+const uiStore = useUiStore();
 
 const switching = computed(() => uiStore.wallpaperModeSwitching === true);
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);

@@ -695,6 +695,12 @@ fn download_image(
                         Err(e) => return Err(format!("Failed to create file: {}", e)),
                     };
 
+                    // 记录临时文件到数据库
+                    if let Some(storage) = app_clone.try_state::<crate::storage::Storage>() {
+                        let temp_path_str = temp_path.to_string_lossy().to_string();
+                        let _ = storage.add_temp_file(&temp_path_str);
+                    }
+
                     // 边下载边算 hash（用于去重）
                     let mut hasher = Sha256::new();
 
@@ -736,6 +742,11 @@ fn download_image(
                         // 若任务已被取消，中止并清理临时文件
                         let dq = app_clone.state::<DownloadQueue>();
                         if dq.is_task_canceled(&task_id_clone) {
+                            // 从数据库中删除临时文件记录
+                            if let Some(storage) = app_clone.try_state::<crate::storage::Storage>() {
+                                let temp_path_str = temp_path.to_string_lossy().to_string();
+                                let _ = storage.remove_temp_file(&temp_path_str);
+                            }
                             let _ = std::fs::remove_file(&temp_path);
                             return Err("Task canceled".to_string());
                         }
@@ -783,6 +794,11 @@ fn download_image(
                     drop(file);
 
                     if let Some(err) = stream_error {
+                        // 从数据库中删除临时文件记录
+                        if let Some(storage) = app_clone.try_state::<crate::storage::Storage>() {
+                            let temp_path_str = temp_path.to_string_lossy().to_string();
+                            let _ = storage.remove_temp_file(&temp_path_str);
+                        }
                         let _ = std::fs::remove_file(&temp_path);
                         if attempt < max_attempts {
                             let backoff_ms = (500u64)
@@ -825,6 +841,9 @@ fn download_image(
         if let Ok(Some(existing)) = storage.find_image_by_hash(&content_hash) {
             let existing_path = PathBuf::from(&existing.local_path);
             if existing_path.exists() {
+                // 从数据库中删除临时文件记录
+                let temp_path_str = final_or_temp_path.to_string_lossy().to_string();
+                let _ = storage.remove_temp_file(&temp_path_str);
                 // 删除刚下载的临时文件
                 let _ = std::fs::remove_file(&final_or_temp_path);
                 // thumbnail_path 在 DB/结构上已是必填；这里仍做兜底以兼容极端旧数据
@@ -877,6 +896,9 @@ fn download_image(
         // 未命中复用：将临时文件移动到最终路径
         std::fs::rename(&final_or_temp_path, &file_path)
             .map_err(|e| format!("Failed to finalize file: {}", e))?;
+        // 从数据库中删除临时文件记录（文件已成功移动到最终路径）
+        let temp_path_str = final_or_temp_path.to_string_lossy().to_string();
+        let _ = storage.remove_temp_file(&temp_path_str);
 
         // 删除 Windows Zone.Identifier 流（避免打开文件时出现安全警告）
         #[cfg(windows)]

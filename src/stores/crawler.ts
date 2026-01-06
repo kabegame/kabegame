@@ -33,6 +33,13 @@ export interface ImageInfo {
   order?: number;
 }
 
+export interface RangedImages {
+  images: ImageInfo[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
 export interface PaginatedImages {
   images: ImageInfo[];
   total: number;
@@ -56,7 +63,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
   const images = ref<ImageInfo[]>([]);
   const isCrawling = ref(false);
   const totalImages = ref(0);
-  const currentPage = ref(0);
   const pageSize = ref(50); // 每页50张图片
   const hasMore = ref(false);
   const runConfigs = ref<RunConfig[]>([]);
@@ -653,30 +659,18 @@ export const useCrawlerStore = defineStore("crawler", () => {
     await addTask(cfg.pluginId, cfg.url, cfg.outputDir, cfg.userConfig ?? {});
   }
 
-  // 获取图片列表（分页）
-  async function loadImages(
-    reset = false,
-    pluginId?: string | null,
-    favoritesOnly?: boolean
-  ) {
+  // 获取图片列表（已改为 offset+limit 模式，不再使用 page）
+  async function loadImages(reset = false) {
     try {
       if (reset) {
-        currentPage.value = 0;
         images.value = [];
         hasMore.value = false;
       }
 
-      const page = currentPage.value;
-      const result = await invoke<{
-        images: ImageInfo[];
-        total: number;
-        page: number;
-        pageSize: number;
-      }>("get_images_paginated", {
-        page,
-        pageSize: pageSize.value,
-        pluginId: pluginId || null,
-        favoritesOnly: favoritesOnly || null,
+      const offset = images.value.length;
+      const result = await invoke<RangedImages>("get_images_range", {
+        offset,
+        limit: pageSize.value,
       });
 
       if (reset) {
@@ -686,8 +680,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       }
 
       totalImages.value = result.total;
-      hasMore.value = (page + 1) * pageSize.value < result.total;
-      currentPage.value = page + 1;
+      hasMore.value = images.value.length < result.total;
     } catch (error) {
       console.error("加载图片失败:", error);
     }
@@ -698,11 +691,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   // 获取图片总数
-  async function loadImagesCount(pluginId?: string | null) {
+  async function loadImagesCount() {
     try {
-      const count = await invoke<number>("get_images_count", {
-        pluginId: pluginId || null,
-      });
+      const count = await invoke<number>("get_images_count");
       totalImages.value = count;
     } catch (error) {
       console.error("获取图片总数失败:", error);
@@ -719,8 +710,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
       await invoke("delete_image", { imageId });
       images.value = images.value.filter((img) => img.id !== imageId);
 
-      // 发送全局事件通知其他页面图片已被删除
-      window.dispatchEvent(new CustomEvent("images-deleted"));
+      // 发送全局事件通知其他页面图片已被删除（传递图片ID以便其他页面更新）
+      window.dispatchEvent(
+        new CustomEvent("images-deleted", {
+          detail: { imageIds: [imageId] },
+        })
+      );
 
       // 如果图片属于某个任务，重新获取任务信息以更新 deletedCount
       if (taskId) {
@@ -769,8 +764,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
       await invoke("remove_image", { imageId });
       images.value = images.value.filter((img) => img.id !== imageId);
 
-      // 发送全局事件通知其他页面图片已被移除
-      window.dispatchEvent(new CustomEvent("images-removed"));
+      // 发送全局事件通知其他页面图片已被移除（传递图片ID以便其他页面更新）
+      window.dispatchEvent(
+        new CustomEvent("images-removed", {
+          detail: { imageIds: [imageId] },
+        })
+      );
 
       // 如果图片属于某个任务，重新获取任务信息以更新 deletedCount
       if (taskId) {
@@ -810,14 +809,24 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   // 批量删除图片（删除文件和数据库记录）
-  async function batchDeleteImages(imageIds: string[]) {
+  async function batchDeleteImages(
+    imageIds: string[],
+    opts: { emitEvent?: boolean } = {}
+  ) {
     try {
       await invoke("batch_delete_images", { imageIds });
       // 从本地 store 中移除图片
       images.value = images.value.filter((img) => !imageIds.includes(img.id));
 
-      // 发送全局事件通知其他页面图片已被批量删除
-      window.dispatchEvent(new CustomEvent("images-deleted"));
+      // 发送全局事件通知其他页面图片已被批量删除（传递图片ID以便其他页面更新）
+      const emitEvent = opts.emitEvent ?? true;
+      if (emitEvent) {
+        window.dispatchEvent(
+          new CustomEvent("images-deleted", {
+            detail: { imageIds },
+          })
+        );
+      }
     } catch (error) {
       console.error("批量删除图片失败:", error);
       throw error;
@@ -825,14 +834,24 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   // 批量移除图片（仅删除数据库记录，不删除文件）
-  async function batchRemoveImages(imageIds: string[]) {
+  async function batchRemoveImages(
+    imageIds: string[],
+    opts: { emitEvent?: boolean } = {}
+  ) {
     try {
       await invoke("batch_remove_images", { imageIds });
       // 从本地 store 中移除图片
       images.value = images.value.filter((img) => !imageIds.includes(img.id));
 
-      // 发送全局事件通知其他页面图片已被批量移除
-      window.dispatchEvent(new CustomEvent("images-removed"));
+      // 发送全局事件通知其他页面图片已被批量移除（传递图片ID以便其他页面更新）
+      const emitEvent = opts.emitEvent ?? true;
+      if (emitEvent) {
+        window.dispatchEvent(
+          new CustomEvent("images-removed", {
+            detail: { imageIds },
+          })
+        );
+      }
     } catch (error) {
       console.error("批量移除图片失败:", error);
       throw error;
@@ -857,7 +876,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     const removed = before - images.value.length;
     if (removed > 0) {
       totalImages.value = Math.max(0, totalImages.value - removed);
-      hasMore.value = currentPage.value * pageSize.value < totalImages.value;
+      hasMore.value = images.value.length < totalImages.value;
     }
 
     // 更新受影响的任务的 deletedCount
@@ -1165,7 +1184,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
     isCrawling,
     imagesByPlugin,
     totalImages,
-    currentPage,
     pageSize,
     hasMore,
     setPageSize,
