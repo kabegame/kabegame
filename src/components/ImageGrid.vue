@@ -7,8 +7,8 @@
     <div class="image-grid-root"
       :class="{ 'is-zooming': isZoomingLayout, 'is-reordering': isReordering, 'is-deleting': isDeletingLayout }"
       @click="handleRootClick">
-      <!-- 空状态显示 -->
-      <EmptyState v-if="images.length === 0 && showEmptyState" />
+    <!-- 空状态显示 -->
+    <EmptyState v-if="images.length === 0 && showEmptyState" />
 
       <template v-else>
         <div v-if="enableVirtualScroll" class="image-grid" :class="{ 'reorder-mode': isReorderMode }"
@@ -36,10 +36,10 @@
             @click="(e) => handleItemClick(image, index, e)" @dblclick="(e) => handleItemDblClick(image, index, e)"
             @contextmenu="(e) => handleItemContextMenu(image, index, e)" @long-press="() => handleLongPress(index)"
             @reorder-click="() => handleReorderClick(index)" @blob-url-invalid="handleBlobUrlInvalid" />
-        </transition-group>
+    </transition-group>
       </template>
 
-      <!-- 右键菜单（下沉到 ImageGrid，可由父组件控制是否启用） -->
+    <!-- 右键菜单（下沉到 ImageGrid，可由父组件控制是否启用） -->
       <component :is="contextMenuComponent" v-if="enableContextMenu && contextMenuComponent"
         :visible="contextMenuVisible" :position="contextMenuPosition" :image="contextMenuImage"
         :selected-count="effectiveSelectedIds.size" :selected-image-ids="effectiveSelectedIds" @close="closeContextMenu"
@@ -52,7 +52,7 @@
 
       <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="pendingAddToAlbumImageIds"
         @added="emit('addedToAlbum')" />
-    </div>
+        </div>
 
     <!-- 容器尾部插槽：用于“加载更多”等，仅在需要的页面注入 -->
     <slot name="footer" />
@@ -60,7 +60,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch, type Component } from "vue";
+import { computed, onMounted, onUnmounted, onActivated, ref, watch, type Component } from "vue";
 import { storeToRefs } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 import ImageItem from "./ImageItem.vue";
@@ -85,6 +85,7 @@ export type ContextCommand =
   | "openFolder"
   | "wallpaper"
   | "exportToWE"
+  | "exportToWEAuto"
   | "addToAlbum"
   | "remove";
 
@@ -115,6 +116,7 @@ type ContextCommandPayloadMap = {
   copy: ImagePayload & MultiImagePayload;
   wallpaper: ImagePayload & MultiImagePayload;
   exportToWE: ImagePayload & MultiImagePayload;
+  exportToWEAuto: ImagePayload & MultiImagePayload;
   remove: ImagePayload & MultiImagePayload;
 };
 
@@ -231,6 +233,9 @@ const virtualStartRow = ref(0);
 const virtualEndRow = ref(0);
 
 const containerEl = ref<HTMLElement | null>(null);
+
+// keep-alive 滚动位置保存/恢复
+const savedScrollTop = ref<number>(0);
 
 const estimatedItemHeight = () => {
   const container = containerEl.value;
@@ -856,14 +861,14 @@ const gridStyle = computed(() => {
   const paddingTop = BASE_GRID_PADDING_Y + (enableVirtualScroll.value ? virtualPaddingTop.value : 0);
   const paddingBottom = BASE_GRID_PADDING_Y + (enableVirtualScroll.value ? virtualPaddingBottom.value : 0);
 
-  return {
+    return {
     gridTemplateColumns: `repeat(${columns}, 1fr)`,
     gap: `${gap}px`,
     paddingTop: `${paddingTop}px`,
     paddingBottom: `${paddingBottom}px`,
     paddingLeft: `${BASE_GRID_PADDING_X}px`,
     paddingRight: `${BASE_GRID_PADDING_X}px`,
-  };
+    };
 });
 
 // 空白处点击：优先关菜单，其次清理单选（多选保留），退出调整模式
@@ -969,7 +974,7 @@ onMounted(async () => {
   updateWindowAspectRatio();
   window.addEventListener("resize", updateWindowAspectRatio);
 
-  window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown);
 
   // 监听页面刷新/离开
   window.addEventListener("beforeunload", handleBeforeUnload);
@@ -995,6 +1000,20 @@ onUnmounted(() => {
     }
   }
   localBlobObjects.clear();
+});
+
+// keep-alive 激活时恢复滚动位置
+onActivated(() => {
+  if (containerEl.value && savedScrollTop.value > 0) {
+    // 使用 requestAnimationFrame 确保 DOM 已更新
+    requestAnimationFrame(() => {
+      if (containerEl.value) {
+        containerEl.value.scrollTop = savedScrollTop.value;
+        // 虚拟滚动需要更新可视行
+        scheduleVirtualUpdate();
+      }
+    });
+  }
 });
 
 watch(
@@ -1036,8 +1055,8 @@ watch(
         prevFirst === nextFirst &&
         prevLast === nextLastAtPrev
       ) {
-        return;
-      }
+    return;
+  }
     }
 
     // 只有在“刷新/重排/删除”等可能导致旧项消失时，才做一次全量集合构建。
@@ -1110,10 +1129,28 @@ const scheduleVirtualRangeUpdate = () => {
 };
 useEventListener(containerEl, "scroll", scheduleVirtualRangeUpdate, { passive: true });
 
+// 实时保存滚动位置（用于 keep-alive 恢复）
+// 使用节流避免频繁更新，但保证最后一次滚动位置被保存
+let saveScrollRaf: number | null = null;
+const saveScrollPosition = () => {
+  if (saveScrollRaf != null) cancelAnimationFrame(saveScrollRaf);
+  saveScrollRaf = requestAnimationFrame(() => {
+    saveScrollRaf = null;
+    if (containerEl.value) {
+      savedScrollTop.value = containerEl.value.scrollTop;
+    }
+  });
+};
+useEventListener(containerEl, "scroll", saveScrollPosition, { passive: true });
+
 onUnmounted(() => {
   if (virtualScrollRaf != null) {
     cancelAnimationFrame(virtualScrollRaf);
     virtualScrollRaf = null;
+  }
+  if (saveScrollRaf != null) {
+    cancelAnimationFrame(saveScrollRaf);
+    saveScrollRaf = null;
   }
 });
 
@@ -1247,7 +1284,7 @@ useDragScroll(containerEl);
   /* 交换图片时：允许元素平滑移动 */
   transition: transform 0.4s ease;
   will-change: transform;
-}
+  }
 
 .image-grid-root.is-deleting :deep(.fade-in-list-move) {
   /* 删除图片时：允许元素平滑移动，使后续图片“顶上来” */
@@ -1258,8 +1295,8 @@ useDragScroll(containerEl);
 /* 调整模式下的晃动动画 */
 .image-grid.reorder-mode :deep(.image-item) {
   animation: shake 2s ease-in-out infinite;
-  cursor: pointer;
-}
+    cursor: pointer;
+  }
 
 @keyframes shake {
 
@@ -1274,7 +1311,7 @@ useDragScroll(containerEl);
   70%,
   90% {
     transform: translateX(-2px) translateY(-1px) rotate(-0.5deg);
-  }
+    }
 
   20%,
   40%,

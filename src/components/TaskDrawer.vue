@@ -62,7 +62,13 @@
               <div class="task-name">{{ getPluginName(task.pluginId) }}</div>
             </div>
             <div class="task-header-right">
-              <el-button text circle size="small" @click.stop="handleOpenTaskDetail(task)" class="task-detail-btn"
+              <el-button
+                text
+                circle
+                size="small"
+                @mouseenter="prefetchTaskDetailView"
+                @click.stop="handleOpenTaskDetail(task)"
+                class="task-detail-btn"
                 title="查看任务图片">
                 <el-icon>
                   <Picture />
@@ -386,9 +392,18 @@ const loadDownloads = async () => {
     }
     downloadProgressByKey.value = next;
 
+    // 状态缓存：保留活跃项，同时用后端快照纠正“抽屉关闭时错过事件”导致的状态卡死
     const nextState: Record<string, { state: string; error?: string; updatedAt: number }> = {};
     for (const [k, v] of Object.entries(downloadStateByKey.value)) {
       if (aliveKeys.has(k)) nextState[k] = v;
+    }
+    for (const d of downloads) {
+      const k = downloadKey(d);
+      const snapshotState = d.state || "downloading";
+      const cached = nextState[k];
+      if (!cached || cached.state !== snapshotState) {
+        nextState[k] = { state: snapshotState, error: cached?.error, updatedAt: Date.now() };
+      }
     }
     downloadStateByKey.value = nextState;
   } catch (error) {
@@ -627,6 +642,8 @@ const initEventListeners = async () => {
 
 const handleDrawerOpen = async () => {
   // drawer 打开时才开始加载数据和初始化事件监听
+  // 预加载任务详情页代码块，避免首次跳转卡在懒加载上
+  prefetchTaskDetailView();
   await initEventListeners();
   loadDownloads();
   // 开启定时刷新
@@ -691,7 +708,7 @@ const handleStopTask = async (task: any) => {
       { type: "warning" }
     );
     await crawlerStore.stopTask(task.id);
-    ElMessage.success("任务已请求停止");
+    ElMessage.info("任务已请求停止");
   } catch (error) {
     if (error !== "cancel") {
       // 静默处理错误，不显示弹窗，任务状态会通过后端事件自动更新
@@ -729,9 +746,20 @@ const handleDeleteTask = async (task: any) => {
 };
 
 const handleOpenTaskDetail = (task: any) => {
-  // 关闭 drawer
-  visible.value = false;
-  router.push(`/tasks/${task.id}`);
+  // 预加载 + 先触发导航，再在下一帧关闭 drawer（避免关闭时的大量 DOM 更新抢占首跳转）
+  prefetchTaskDetailView();
+  void router.push(`/tasks/${task.id}`);
+  requestAnimationFrame(() => {
+    visible.value = false;
+  });
+};
+
+// 预加载 TaskDetail 路由的代码块（第一次进入会明显变快）
+let taskDetailPrefetchPromise: Promise<unknown> | null = null;
+const prefetchTaskDetailView = () => {
+  if (!taskDetailPrefetchPromise) {
+    taskDetailPrefetchPromise = import("@/views/TaskDetail.vue");
+  }
 };
 
 const handleDeleteAllTasks = async () => {

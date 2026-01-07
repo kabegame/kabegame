@@ -1,5 +1,5 @@
 <template>
-  <div class="album-card" :data-album-id="album.id" @click="handleCardClick" @mouseenter="$emit('mouseenter')">
+  <div ref="cardRef" class="album-card" :data-album-id="album.id" @click="handleCardClick">
     <div class="hero">
       <div v-for="(url, idx) in heroAll" :key="idx" class="hero-img" :class="heroClass(idx, url)" :style="heroStyle(url)">
         <div v-if="!url && loadingStates[idx]" class="hero-loading">
@@ -45,7 +45,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, nextTick } from "vue";
+import { computed, ref, nextTick, onMounted, onUnmounted } from "vue";
 import { ElMessage } from "element-plus";
 import type { Album } from "@/stores/albums";
 import { ArrowLeft, ArrowRight, Loading } from "@element-plus/icons-vue";
@@ -68,11 +68,43 @@ const albumStore = useAlbumStore();
 const isRenaming = ref(false);
 const renameValue = ref("");
 const renameInputRef = ref<any>(null);
+const cardRef = ref<HTMLElement | null>(null);
+const hasBeenVisible = ref(false);
 
 const emit = defineEmits<{
   click: [];
-  mouseenter: [];
+  visible: [];
 }>();
+
+// Intersection Observer：卡片进入视口时触发 visible 事件
+let observer: IntersectionObserver | null = null;
+
+onMounted(() => {
+  if (!cardRef.value) return;
+  
+  observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && !hasBeenVisible.value) {
+          hasBeenVisible.value = true;
+          emit("visible");
+          // 触发一次后就不再需要观察了
+          observer?.disconnect();
+        }
+      }
+    },
+    {
+      rootMargin: "100px", // 提前100px开始加载
+      threshold: 0,
+    }
+  );
+  
+  observer.observe(cardRef.value);
+});
+
+onUnmounted(() => {
+  observer?.disconnect();
+});
 
 // 暴露方法供外部调用
 defineExpose({

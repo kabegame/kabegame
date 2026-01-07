@@ -65,9 +65,15 @@ const getPluginName = (pluginId: string) => {
 };
 
 const formatDate = (timestamp: number) => {
-  // Rust 返回的是秒级时间戳，需要转换为毫秒
-  const milliseconds = timestamp * 1000;
-  return new Date(milliseconds).toLocaleString("zh-CN");
+  // 后端 crawledAt 实际为“下载/导入时间”，单位可能是秒或毫秒（历史数据混用）
+  // - 0/无效：按需求显示“银河系末日”
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "银河系末日";
+
+  // 经验阈值：毫秒级时间戳通常 >= 1e12；秒级通常 ~ 1e9
+  const ms = timestamp > 1e11 ? timestamp : timestamp * 1000;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "银河系末日";
+  return d.toLocaleString("zh-CN");
 };
 
 // 检查 URL 是否以 file:// 开头

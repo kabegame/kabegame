@@ -232,9 +232,26 @@ fn build_effective_user_config(
         .get_plugin_vars(plugin_id)?
         .unwrap_or_default();
 
+    Ok(build_effective_user_config_from_var_defs(
+        &var_defs, user_cfg,
+    ))
+}
+
+/// 将变量定义（var_defs）的默认值与用户配置合并，并对部分类型做规范化。
+///
+/// 说明：
+/// - 该函数不依赖 AppHandle，便于在 CLI/路径运行场景复用（由调用方自行读取 var_defs）。
+/// 将变量定义（var_defs）的默认值与用户配置合并，并对部分类型做规范化。
+///
+/// 说明：
+/// - 该函数不依赖 AppHandle，便于在 CLI/插件编辑器等场景复用（由调用方自行读取 var_defs）。
+pub fn build_effective_user_config_from_var_defs(
+    var_defs: &[VarDefinition],
+    user_cfg: HashMap<String, serde_json::Value>,
+) -> HashMap<String, serde_json::Value> {
     // 先按 var_defs 填满所有变量（默认值 -> 用户值覆盖）
     let mut merged: HashMap<String, serde_json::Value> = HashMap::new();
-    for def in &var_defs {
+    for def in var_defs {
         let user_value = user_cfg.get(&def.key).cloned();
         let default_value = def.default.clone();
         let normalized = normalize_var_value(def, user_value.or(default_value));
@@ -248,7 +265,59 @@ fn build_effective_user_config(
         }
     }
 
-    Ok(merged)
+    merged
+}
+
+/// 从指定的插件文件（.kgpg 路径）执行爬虫脚本。
+///
+/// 用途：
+/// - CLI/sidecar 支持通过插件文件路径运行（不要求插件已安装到 plugins_directory）
+pub async fn crawl_images_from_plugin_file(
+    plugin: &Plugin,
+    plugin_file: &Path,
+    task_id: &str,
+    images_dir: PathBuf,
+    app: AppHandle,
+    user_config: Option<HashMap<String, serde_json::Value>>, // 用户配置的变量
+    output_album_id: Option<String>,
+) -> Result<CrawlResult, String> {
+    let plugin_manager = app.state::<crate::plugin::PluginManager>();
+
+    // 读取爬取脚本（必须存在，否则报错）
+    let script_content = plugin_manager
+        .read_plugin_script(plugin_file)?
+        .ok_or_else(|| format!("插件 {} 没有提供 crawl.rhai 脚本文件，无法执行", plugin.id))?;
+
+    // 读取变量定义（从插件文件本身读取）
+    let var_defs = plugin_manager.get_plugin_vars_from_file(plugin_file)?;
+
+    // 先构造 merged_config（默认值 -> 用户覆盖 -> checkbox 规范化）
+    let merged_config =
+        build_effective_user_config_from_var_defs(&var_defs, user_config.unwrap_or_default());
+
+    // 执行 Rhai 爬虫脚本
+    rhai::execute_crawler_script(
+        plugin,
+        &images_dir,
+        &app,
+        &plugin.id,
+        task_id,
+        &script_content,
+        merged_config,
+        output_album_id,
+    )?;
+
+    // 获取正在下载的任务数量（已移除队列，只有正在下载的）
+    let download_queue = app.state::<DownloadQueue>();
+    let active_downloads = download_queue.get_active_downloads().unwrap_or_default();
+
+    let total = active_downloads.len();
+
+    Ok(CrawlResult {
+        total,
+        downloaded: 0,
+        images: Vec::new(),
+    })
 }
 
 fn extract_option_variables(options: &Option<Vec<VarOption>>) -> Vec<String> {
@@ -393,6 +462,10 @@ struct DownloadedImage {
     thumbnail: Option<PathBuf>,
     hash: String,
     reused: bool,
+    /// 是否“由本次任务创建/复制/下载”得到的图片文件（用于取消/去重跳过时的清理策略）
+    /// - false: 来源文件本就在输出目录内或复用已有记录时，不应删除源文件
+    /// - true : 本次任务落盘产生的新文件，可在取消/跳过入库时清理
+    owns_file: bool,
 }
 
 /// 确保下载过程至少持续指定时间（从开始时间算起）
@@ -669,7 +742,63 @@ fn download_image(
         // 计算源文件哈希
         let source_hash = compute_file_hash(&source_path)?;
 
-        // 如果源文件已位于目标目录内，则不再执行复制，直接使用原文件
+        // 去重开关
+        let auto_deduplicate = app
+            .try_state::<crate::settings::Settings>()
+            .and_then(|s| s.get_settings().ok())
+            .map(|s| s.auto_deduplicate)
+            .unwrap_or(false);
+
+        // 若启用自动去重：本地文件也仅按哈希判断是否复用（不看 URL/路径）
+        if auto_deduplicate {
+            let storage = app.state::<crate::storage::Storage>();
+            if let Ok(Some(existing)) = storage.find_image_by_hash(&source_hash) {
+                let existing_path = PathBuf::from(&existing.local_path);
+                if existing_path.exists() {
+                    // 复用允许“补齐缩略图”：如果 DB 缩略图缺失或文件不存在，则生成并写回 DB
+                    let mut need_backfill = existing.thumbnail_path.trim().is_empty();
+                    let thumb_path = if !need_backfill {
+                        let p = PathBuf::from(&existing.thumbnail_path);
+                        if p.exists() {
+                            Some(p)
+                        } else {
+                            need_backfill = true;
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    if need_backfill {
+                        if let Ok(Some(gen)) = generate_thumbnail(&existing_path, app) {
+                            let canonical_thumb = gen
+                                .canonicalize()
+                                .unwrap_or(gen)
+                                .to_string_lossy()
+                                .to_string()
+                                .trim_start_matches("\\\\?\\")
+                                .to_string();
+                            let _ =
+                                storage.update_image_thumbnail_path(&existing.id, &canonical_thumb);
+                        }
+                    } else if let Some(p) = thumb_path {
+                        // 兼容：DB 里存的可能是相对/非规范路径，这里不强制写回
+                        let _ = p;
+                    }
+
+                    // 复用：按需求“什么都不做”（不复制、不入库、不加画册、不关联任务）
+                    ensure_minimum_duration(download_start_time, 500);
+                    return Ok(DownloadedImage {
+                        path: source_path.clone(),
+                        thumbnail: None,
+                        hash: source_hash,
+                        reused: true,
+                        owns_file: false,
+                    });
+                }
+            }
+        }
+
+        // 如果源文件已位于目标目录内（含子目录），则不再执行复制，直接使用原文件
         if let Ok(target_dir_canonical) = target_dir.canonicalize() {
             if source_path.starts_with(&target_dir_canonical) {
                 let thumbnail_path = generate_thumbnail(&source_path, app)?;
@@ -679,7 +808,8 @@ fn download_image(
                     path: source_path.clone(),
                     thumbnail: thumbnail_path,
                     hash: source_hash,
-                    reused: false, // 需要在数据库记录（若未记录）
+                    reused: false, // 需要入库 -> 才会关联任务/加入画册
+                    owns_file: false,
                 });
             }
         }
@@ -713,6 +843,7 @@ fn download_image(
             thumbnail: thumbnail_path,
             hash: source_hash,
             reused: false,
+            owns_file: true,
         })
     } else {
         // 处理 HTTP/HTTPS URL
@@ -943,60 +1074,79 @@ fn download_image(
             }
         })()?;
 
-        // 若已有相同哈希且文件存在，复用
+        // 若已有相同哈希且文件存在，复用（仅在启用自动去重时检查）
         let storage = app.state::<crate::storage::Storage>();
-        if let Ok(Some(existing)) = storage.find_image_by_hash(&content_hash) {
-            let existing_path = PathBuf::from(&existing.local_path);
-            if existing_path.exists() {
-                // 从数据库中删除临时文件记录
-                let temp_path_str = final_or_temp_path.to_string_lossy().to_string();
-                let _ = storage.remove_temp_file(&temp_path_str);
-                // 删除刚下载的临时文件
-                let _ = std::fs::remove_file(&final_or_temp_path);
-                // thumbnail_path 在 DB/结构上已是必填；这里仍做兜底以兼容极端旧数据
-                let mut thumb_path = if existing.thumbnail_path.trim().is_empty() {
-                    existing_path.clone()
-                } else {
-                    PathBuf::from(&existing.thumbnail_path)
-                };
+        let should_check_hash_dedupe = app
+            .try_state::<crate::settings::Settings>()
+            .and_then(|s| s.get_settings().ok())
+            .map(|s| s.auto_deduplicate)
+            .unwrap_or(false);
 
-                if !thumb_path.exists() {
-                    // 缩略图文件缺失：尝试补生成；失败则兜底为原图
-                    if let Ok(Some(gen)) = generate_thumbnail(&existing_path, app) {
-                        thumb_path = gen;
+        if should_check_hash_dedupe {
+            if let Ok(Some(existing)) = storage.find_image_by_hash(&content_hash) {
+                let existing_path = PathBuf::from(&existing.local_path);
+                if existing_path.exists() {
+                    // 从数据库中删除临时文件记录
+                    let temp_path_str = final_or_temp_path.to_string_lossy().to_string();
+                    let _ = storage.remove_temp_file(&temp_path_str);
+                    // 删除刚下载的临时文件
+                    let _ = std::fs::remove_file(&final_or_temp_path);
+                    // thumbnail_path 在 DB/结构上已是必填；这里仍做兜底以兼容极端旧数据
+                    let mut thumb_path = if existing.thumbnail_path.trim().is_empty() {
+                        existing_path.clone()
                     } else {
-                        thumb_path = existing_path.clone();
+                        PathBuf::from(&existing.thumbnail_path)
+                    };
+
+                    if !thumb_path.exists() {
+                        // 缩略图文件缺失：尝试补生成；失败则兜底为原图
+                        if let Ok(Some(gen)) = generate_thumbnail(&existing_path, app) {
+                            thumb_path = gen;
+                            // 复用允许“补齐缩略图”：写回 DB
+                            let canonical_thumb = thumb_path
+                                .canonicalize()
+                                .unwrap_or(thumb_path.clone())
+                                .to_string_lossy()
+                                .to_string()
+                                .trim_start_matches("\\\\?\\")
+                                .to_string();
+                            let _ =
+                                storage.update_image_thumbnail_path(&existing.id, &canonical_thumb);
+                        } else {
+                            thumb_path = existing_path.clone();
+                        }
                     }
+
+                    let canonical_existing = existing_path
+                        .canonicalize()
+                        .unwrap_or(existing_path)
+                        .to_string_lossy()
+                        .to_string()
+                        .trim_start_matches("\\\\?\\")
+                        .to_string();
+                    let canonical_thumb = thumb_path
+                        .canonicalize()
+                        .unwrap_or(thumb_path)
+                        .to_string_lossy()
+                        .to_string()
+                        .trim_start_matches("\\\\?\\")
+                        .to_string();
+
+                    // 确保下载过程至少持续指定时间（即使复用了已有文件）
+                    ensure_minimum_duration(download_start_time, 500);
+
+                    return Ok(DownloadedImage {
+                        path: PathBuf::from(canonical_existing),
+                        thumbnail: Some(PathBuf::from(canonical_thumb)),
+                        hash: if existing.hash.is_empty() {
+                            content_hash.clone()
+                        } else {
+                            existing.hash
+                        },
+                        reused: true,
+                        owns_file: false,
+                    });
                 }
-
-                let canonical_existing = existing_path
-                    .canonicalize()
-                    .unwrap_or(existing_path)
-                    .to_string_lossy()
-                    .to_string()
-                    .trim_start_matches("\\\\?\\")
-                    .to_string();
-                let canonical_thumb = thumb_path
-                    .canonicalize()
-                    .unwrap_or(thumb_path)
-                    .to_string_lossy()
-                    .to_string()
-                    .trim_start_matches("\\\\?\\")
-                    .to_string();
-
-                // 确保下载过程至少持续指定时间（即使复用了已有文件）
-                ensure_minimum_duration(download_start_time, 500);
-
-                return Ok(DownloadedImage {
-                    path: PathBuf::from(canonical_existing),
-                    thumbnail: Some(PathBuf::from(canonical_thumb)),
-                    hash: if existing.hash.is_empty() {
-                        content_hash
-                    } else {
-                        existing.hash
-                    },
-                    reused: true,
-                });
             }
         }
 
@@ -1022,6 +1172,7 @@ fn download_image(
             thumbnail: thumbnail_path,
             hash: content_hash,
             reused: false,
+            owns_file: true,
         })
     }
 }
@@ -1294,7 +1445,9 @@ impl DownloadQueue {
             let settings_state = self.app.try_state::<crate::settings::Settings>();
             if let Some(settings) = settings_state {
                 if let Ok(s) = settings.get_settings() {
-                    if s.auto_deduplicate {
+                    // 需求：URL 去重仅对网络 URL 生效（http/https）；本地导入不做 URL 去重
+                    let is_http_url = url.starts_with("http://") || url.starts_with("https://");
+                    if s.auto_deduplicate && is_http_url {
                         let storage = self.app.state::<crate::storage::Storage>();
                         if let Ok(Some(_existing)) = storage.find_image_by_url(&url) {
                             true // URL 已存在，跳过下载
@@ -1312,14 +1465,13 @@ impl DownloadQueue {
             }
         };
 
-        // 如果 URL 已存在，跳过下载但处理后续逻辑（如添加到画册）
+        // 如果 URL 已存在（仅网络 URL 才会走到这里），按需求“复用=不入库/不加画册/不关联任务/不发 image-added”
+        // 但允许“补齐缩略图”：若 DB 中缩略图缺失或文件不存在，则生成并写回 DB。
         if should_skip_by_url {
-            // 在后台线程处理后续逻辑（添加到画册等）
             let app_clone = self.app.clone();
             let url_clone = url.clone();
             let task_id_clone = task_id.clone();
             let plugin_id_clone = plugin_id.clone();
-            let output_album_id_clone = output_album_id.clone();
 
             std::thread::spawn(move || {
                 emit_download_state(
@@ -1332,43 +1484,34 @@ impl DownloadQueue {
                     None,
                 );
 
-                // 获取已存在的图片信息
                 let storage = app_clone.state::<crate::storage::Storage>();
-                if let Ok(Some(existing_image)) = storage.find_image_by_url(&url_clone) {
-                    let image_id = existing_image.id.clone();
-
-                    // 如果配置了输出画册，将已存在的图片添加到画册（静默失败）
-                    let mut existing_image_for_event = existing_image.clone();
-                    if let Some(ref album_id) = output_album_id_clone {
-                        if !album_id.is_empty() {
-                            let added = storage
-                                .add_images_to_album_silent(album_id, &vec![image_id.clone()]);
-                            if added > 0 {
-                                if album_id == crate::storage::FAVORITE_ALBUM_ID {
-                                    existing_image_for_event.favorite = true;
-                                }
+                if let Ok(Some(existing)) = storage.find_image_by_url(&url_clone) {
+                    let existing_path = PathBuf::from(&existing.local_path);
+                    if existing_path.exists() {
+                        let mut need_backfill = existing.thumbnail_path.trim().is_empty();
+                        if !need_backfill {
+                            let p = PathBuf::from(&existing.thumbnail_path);
+                            if !p.exists() {
+                                need_backfill = true;
+                            }
+                        }
+                        if need_backfill {
+                            if let Ok(Some(gen)) = generate_thumbnail(&existing_path, &app_clone) {
+                                let canonical_thumb = gen
+                                    .canonicalize()
+                                    .unwrap_or(gen)
+                                    .to_string_lossy()
+                                    .to_string()
+                                    .trim_start_matches("\\\\?\\")
+                                    .to_string();
+                                let _ = storage
+                                    .update_image_thumbnail_path(&existing.id, &canonical_thumb);
                             }
                         }
                     }
-
-                    ensure_minimum_duration(download_start_time, 500);
-
-                    // 发送事件
-                    let _ = serde_json::to_value(&existing_image_for_event).map(|img_val| {
-                        let mut payload = serde_json::json!({
-                            "taskId": task_id_clone,
-                            "imageId": image_id,
-                            "image": img_val,
-                            "reused": true,
-                        });
-                        if let Some(ref album_id) = output_album_id_clone {
-                            if !album_id.is_empty() {
-                                payload["albumId"] = serde_json::Value::String(album_id.clone());
-                            }
-                        }
-                        let _ = app_clone.emit("image-added", payload);
-                    });
                 }
+
+                ensure_minimum_duration(download_start_time, 500);
 
                 emit_download_state(
                     &app_clone,
@@ -1574,15 +1717,6 @@ fn download_worker_loop(
 
                 extract_zip_to_dir(&zip_path, &temp_dir)?;
 
-                // 递归收集图片
-                let mut images = Vec::<PathBuf>::new();
-                collect_images_recursive(&temp_dir, &mut images)?;
-                if images.is_empty() {
-                    // 空包：立刻清理临时目录（best-effort）
-                    let _ = fs::remove_dir_all(&temp_dir);
-                    return Ok(());
-                }
-
                 // 解压完成：zip 进入 processing（递归扫描 + 入队都算处理阶段）
                 {
                     let mut tasks = match active_tasks.lock() {
@@ -1605,6 +1739,15 @@ fn download_worker_loop(
                     "processing",
                     None,
                 );
+
+                // 递归收集图片
+                let mut images = Vec::<PathBuf>::new();
+                collect_images_recursive(&temp_dir, &mut images)?;
+                if images.is_empty() {
+                    // 空包：立刻清理临时目录（best-effort）
+                    let _ = fs::remove_dir_all(&temp_dir);
+                    return Ok(());
+                }
 
                 // 逐个入队（不新建线程，复用当前 worker；入队过程会按并发限制阻塞等待）
                 const MAX_TASK_IMAGES: usize = 10000;
@@ -1774,15 +1917,9 @@ fn download_worker_loop(
             // 在保存到数据库前，再次检查任务是否已被取消
             let dq = app_clone.state::<DownloadQueue>();
             if dq.is_task_canceled(&task_id_clone) {
-                // 任务已取消，跳过保存阶段，并清理已下载的文件（如果是新下载的）
-                if !downloaded.reused {
-                    let _ = std::fs::remove_file(&downloaded.path);
-                    if let Some(thumb) = &downloaded.thumbnail {
-                        if thumb.exists() {
-                            let _ = std::fs::remove_file(thumb);
-                        }
-                    }
-                }
+                // 任务已取消：跳过保存阶段。
+                // 注意：取消任务时不应删除任何“最终文件”（无论是复制到输出目录的，还是已在输出目录内的源文件）。
+                // 临时文件（.part-*）已在下载阶段/失败分支里清理。
 
                 emit_download_state(
                     &app_clone,
@@ -1844,14 +1981,26 @@ fn download_worker_loop(
                 .unwrap_or_else(|| local_path_str.clone());
 
             if !downloaded.reused {
-                // 检查是否启用自动去重（URL/哈希）
+                // 检查是否启用自动去重（URL 仅网络；哈希 网络+本地）
                 let should_skip = {
                     let settings_state = app_clone.try_state::<crate::settings::Settings>();
                     if let Some(settings) = settings_state {
                         if let Ok(s) = settings.get_settings() {
                             if s.auto_deduplicate {
-                                if let Ok(Some(_)) = storage.find_image_by_url(&url_clone) {
-                                    true
+                                let is_http_url = url_clone.starts_with("http://")
+                                    || url_clone.starts_with("https://");
+                                if is_http_url {
+                                    if let Ok(Some(_)) = storage.find_image_by_url(&url_clone) {
+                                        true
+                                    } else if !downloaded.hash.is_empty() {
+                                        storage
+                                            .find_image_by_hash(&downloaded.hash)
+                                            .ok()
+                                            .flatten()
+                                            .is_some()
+                                    } else {
+                                        false
+                                    }
                                 } else if !downloaded.hash.is_empty() {
                                     storage
                                         .find_image_by_hash(&downloaded.hash)
@@ -1872,9 +2021,19 @@ fn download_worker_loop(
                     }
                 };
 
-                if !should_skip {
+                if should_skip {
+                    // 竞态兜底：若被判定为复用，则不入库/不加画册/不关联任务/不发 image-added。
+                    // 若本次产生了新落盘文件（owns_file=true），清理它，避免产生“明明复用但仍复制”的副作用。
+                    if downloaded.owns_file {
+                        let _ = std::fs::remove_file(&downloaded.path);
+                        if let Some(thumb) = &downloaded.thumbnail {
+                            let _ = std::fs::remove_file(thumb);
+                        }
+                    }
+                } else {
                     let image_info = crate::storage::ImageInfo {
-                        id: uuid::Uuid::new_v4().to_string(),
+                        // 说明：images.id 已迁移为自增整数主键；这里不再生成 UUID
+                        id: "".to_string(),
                         url: url_clone.clone(),
                         local_path: local_path_str.clone(),
                         plugin_id: plugin_id_clone.clone(),
@@ -1885,76 +2044,55 @@ fn download_worker_loop(
                         favorite: false,
                         hash: downloaded.hash.clone(),
                         order: Some(download_start_time as i64),
+                        local_exists: true, // 刚下载完成，文件肯定存在
                     };
-                    if storage.add_image(image_info.clone()).is_ok() {
-                        let image_id = image_info.id.clone();
-                        let mut image_info_for_event = image_info.clone();
+                    match storage.add_image(image_info) {
+                        Ok(inserted) => {
+                            let image_id = inserted.id.clone();
+                            let mut image_info_for_event = inserted.clone();
 
-                        if let Some(ref album_id) = output_album_id_clone {
-                            if !album_id.is_empty() {
-                                let added = storage
-                                    .add_images_to_album_silent(album_id, &vec![image_id.clone()]);
-                                if added > 0 && album_id == crate::storage::FAVORITE_ALBUM_ID {
-                                    image_info_for_event.favorite = true;
-                                }
-                            }
-                        }
-
-                        let _ = serde_json::to_value(&image_info_for_event).map(|img_val| {
-                            let mut payload = serde_json::json!({
-                                "taskId": task_id_clone,
-                                "imageId": image_id,
-                                "image": img_val,
-                            });
                             if let Some(ref album_id) = output_album_id_clone {
                                 if !album_id.is_empty() {
-                                    payload["albumId"] =
-                                        serde_json::Value::String(album_id.clone());
+                                    let added = storage.add_images_to_album_silent(
+                                        album_id,
+                                        &vec![image_id.clone()],
+                                    );
+                                    if added > 0 && album_id == crate::storage::FAVORITE_ALBUM_ID {
+                                        image_info_for_event.favorite = true;
+                                    }
                                 }
                             }
-                            let _ = app_clone.emit("image-added", payload);
-                        });
-                    } else {
-                        emit_download_state(
-                            &app_clone,
-                            &task_id_clone,
-                            &url_clone,
-                            download_start_time,
-                            &plugin_id_clone,
-                            "failed",
-                            Some("Failed to add image to database"),
-                        );
+
+                            let _ = serde_json::to_value(&image_info_for_event).map(|img_val| {
+                                let mut payload = serde_json::json!({
+                                    "taskId": task_id_clone,
+                                    "imageId": image_id,
+                                    "image": img_val,
+                                });
+                                if let Some(ref album_id) = output_album_id_clone {
+                                    if !album_id.is_empty() {
+                                        payload["albumId"] =
+                                            serde_json::Value::String(album_id.clone());
+                                    }
+                                }
+                                let _ = app_clone.emit("image-added", payload);
+                            });
+                        }
+                        Err(_) => {
+                            emit_download_state(
+                                &app_clone,
+                                &task_id_clone,
+                                &url_clone,
+                                download_start_time,
+                                &plugin_id_clone,
+                                "failed",
+                                Some("Failed to add image to database"),
+                            );
+                        }
                     }
                 }
             } else {
-                // 重用：查 DB 取完整信息并发事件（含可选自动加入画册）
-                if let Ok(Some(existing_image)) = storage.find_image_by_hash(&downloaded.hash) {
-                    let image_id = existing_image.id.clone();
-                    let mut existing_image_for_event = existing_image.clone();
-                    if let Some(ref album_id) = output_album_id_clone {
-                        if !album_id.is_empty() {
-                            let added = storage
-                                .add_images_to_album_silent(album_id, &vec![image_id.clone()]);
-                            if added > 0 && album_id == crate::storage::FAVORITE_ALBUM_ID {
-                                existing_image_for_event.favorite = true;
-                            }
-                        }
-                    }
-                    let _ = serde_json::to_value(&existing_image_for_event).map(|img_val| {
-                        let mut payload = serde_json::json!({
-                            "taskId": task_id_clone,
-                            "imageId": image_id,
-                            "image": img_val,
-                            "reused": true,
-                        });
-                        if let Some(ref album_id) = output_album_id_clone {
-                            if !album_id.is_empty() {
-                                payload["albumId"] = serde_json::Value::String(album_id.clone());
-                            }
-                        }
-                        let _ = app_clone.emit("image-added", payload);
-                    });
-                }
+                // 复用：按需求“什么都不做”（不入库、不加画册、不关联任务、不发 image-added）
             }
         }
 

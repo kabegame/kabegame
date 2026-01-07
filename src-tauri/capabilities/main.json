@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
   "description": "Main capability for the application",
-  "windows": ["main", "wallpaper", "wallpaper_debug"],
+  "windows": ["main", "wallpaper", "wallpaper-debug", "plugin-editor"],
   "permissions": [
     "core:default",
     "dialog:default",
@@ -35,4 +35,3 @@
     }
   ]
 }
-

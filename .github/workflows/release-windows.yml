@@ -59,36 +59,41 @@ jobs:
 
       - name: Package plugins
         id: package-plugins
-        shell: bash
+        shell: pwsh
         run: |
-          if [ "${{ matrix.mode }}" == "local" ]; then
-            pnpm exec nx run crawler-plugins:package-to-resources
-          else
-            pnpm exec nx run crawler-plugins:package-local-to-resources
-          fi
+          # 改为直接使用仓库中已提交的 crawler-plugins/packed 产物，不在 CI 内重新打包插件
+          $packedDir = "crawler-plugins/packed"
+          $dstDir = "src-tauri/resources/plugins"
 
-          # 扫描打包的插件列表（用于 local 模式）
-          if [ "${{ matrix.mode }}" == "local" ]; then
-            PLUGINS=$(node -e "
-            const fs = require('fs');
-            const path = require('path');
-            const pluginsDir = 'src-tauri/resources/plugins';
-            if (fs.existsSync(pluginsDir)) {
-              const files = fs.readdirSync(pluginsDir);
-              const plugins = files
-                .filter(f => f.endsWith('.kgpg'))
-                .map(f => path.basename(f, '.kgpg'))
-                .filter(Boolean)
-                .sort()
-                .join(',');
-              console.log(plugins || '');
+          if (-not (Test-Path $packedDir)) {
+            throw "packed 目录不存在：$packedDir（请先在仓库中提交 crawler-plugins/packed）"
+          }
+
+          New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
+          # 清空旧插件，避免残留
+          Get-ChildItem -Path $dstDir -Filter *.kgpg -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+
+          if ("${{ matrix.mode }}" -eq "local") {
+            # local 模式：打包所有插件（内置插件列表=resources/plugins 下的所有 .kgpg）
+            Copy-Item -Path (Join-Path $packedDir "*.kgpg") -Destination $dstDir -Force
+
+            $plugins = Get-ChildItem -Path $dstDir -Filter *.kgpg |
+              ForEach-Object { $_.BaseName } |
+              Sort-Object
+            $pluginsCsv = ($plugins -join ",")
+            if ($pluginsCsv) {
+              "builtin_plugins=$pluginsCsv" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              Write-Host "Builtin plugins: $pluginsCsv"
             }
-            ")
-            if [ -n "$PLUGINS" ]; then
-              echo "builtin_plugins=$PLUGINS" >> $GITHUB_OUTPUT
-              echo "Builtin plugins: $PLUGINS"
-            fi
-          fi
+          }
+          else {
+            # normal 模式：仅打包本地插件（local-import）
+            $src = Join-Path $packedDir "local-import.kgpg"
+            if (-not (Test-Path $src)) {
+              throw "normal 模式需要 local-import.kgpg，但未找到：$src"
+            }
+            Copy-Item -Path $src -Destination $dstDir -Force
+          }
 
       - name: Get version from package.json
         id: version

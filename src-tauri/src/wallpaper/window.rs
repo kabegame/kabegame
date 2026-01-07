@@ -123,7 +123,7 @@ impl WallpaperWindow {
 
     /// 更新壁纸图片
     pub fn update_image(&self, image_path: &str) -> Result<(), String> {
-        // 事件改为广播，不依赖任何窗口引用（方便用 wallpaper_debug 验证事件是否到达）
+        // 事件改为广播，不依赖任何窗口引用（方便用 wallpaper-debug 验证事件是否到达）
         let _ = self.window.as_ref();
         let _ = self.app.get_webview_window("wallpaper");
         self.app

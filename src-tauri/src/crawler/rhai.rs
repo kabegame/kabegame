@@ -707,73 +707,9 @@ pub fn register_crawler_functions(
             let plugin_id = plugin_id.clone();
             let task_id = task_id_for_download.clone();
 
-            // 预检查：如果是本地文件且数据库已有相同路径，则检查缩略图并补全（如果需要），无需下载
-            let is_local_path = url.starts_with("file://")
-                || (!url.starts_with("http://")
-                    && !url.starts_with("https://")
-                    && std::path::Path::new(url).exists());
-            if is_local_path {
-                let source_path = if url.starts_with("file://") {
-                    let path_str = if url.starts_with("file:///") {
-                        &url[8..]
-                    } else {
-                        &url[7..]
-                    };
-                    #[cfg(windows)]
-                    let path_str = if path_str.len() > 1 && &path_str[1..2] == ":" {
-                        path_str.replace("/", "\\")
-                    } else {
-                        path_str.replace("/", "\\")
-                    };
-                    #[cfg(not(windows))]
-                    let path_str = path_str;
-                    std::path::PathBuf::from(path_str)
-                } else {
-                    std::path::PathBuf::from(url)
-                };
-
-                if let Ok(canonical_source_path) = source_path.canonicalize() {
-                    if canonical_source_path.exists() {
-                        let storage = app_handle.state::<crate::storage::Storage>();
-                        // 规范化路径并移除 Windows 长路径前缀，确保与数据库中的格式一致
-                        let source_path_str = canonical_source_path
-                            .to_string_lossy()
-                            .trim_start_matches("\\\\?\\")
-                            .to_string();
-
-                        // 检查数据库中是否有相同路径（规范化后的路径）
-                        if let Ok(Some(existing)) = storage.find_image_by_path(&source_path_str) {
-                            let existing_path = std::path::PathBuf::from(&existing.local_path);
-                            let thumb_path = if existing.thumbnail_path.trim().is_empty() {
-                                existing_path.clone()
-                            } else {
-                                std::path::PathBuf::from(&existing.thumbnail_path)
-                            };
-
-                            // 检查缩略图是否存在，不存在则补全
-                            if !thumb_path.exists() {
-                                // 尝试生成缩略图
-                                if let Ok(Some(gen_thumb)) =
-                                    crate::crawler::generate_thumbnail(&existing_path, &app_handle)
-                                {
-                                    // 更新数据库中的缩略图路径
-                                    let _ = storage.update_image_thumbnail_path(
-                                        &existing.id,
-                                        &gen_thumb
-                                            .to_string_lossy()
-                                            .trim_start_matches("\\\\?\\")
-                                            .to_string(),
-                                    );
-                                }
-                            }
-
-                            // 文件已存在，无需下载
-                            return Ok(true);
-                        }
-                        // 数据库中没有相同路径，继续下载
-                    }
-                }
-            }
+            // 注意：不在 Rhai 层做“按本地路径已存在就跳过”的短路。
+            // 最终落盘/是否复制/是否复用（URL 仅网络、哈希适用本地+网络、以及“来源在输出目录内不复制”）
+            // 统一由 downloader（crawler/mod.rs）按规则处理，避免出现“任务结束但 0 张”的隐式去重问题。
 
             // 检查任务图片数量限制（最多10000张）
             const MAX_TASK_IMAGES: usize = 10000;
@@ -784,7 +720,8 @@ pub fn register_crawler_functions(
                         return Err(format!(
                             "任务图片数量已达到上限（{} 张），无法继续爬取",
                             MAX_TASK_IMAGES
-                        ).into());
+                        )
+                        .into());
                     }
                 }
                 Err(e) => {

@@ -8,6 +8,12 @@
         </el-icon>
         刷新
       </el-button>
+      <el-button @click="openPluginEditor">
+        <el-icon>
+          <EditPen />
+        </el-icon>
+        插件编辑器
+      </el-button>
       <el-button type="primary" @click="showImportDialog = true">
         <el-icon>
           <Upload />
@@ -247,6 +253,7 @@ import {
   Grid,
   Plus,
   Setting,
+  EditPen,
 } from "@element-plus/icons-vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import { useRouter } from "vue-router";
@@ -258,6 +265,14 @@ import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 
 type BuildMode = "normal" | "local";
+
+async function openPluginEditor() {
+  try {
+    await invoke("open_plugin_editor_window");
+  } catch (e) {
+    ElMessage.error(`打开插件编辑器失败：${String(e)}`);
+  }
+}
 
 interface PluginSource {
   id: string;
@@ -274,6 +289,7 @@ interface StorePluginResolved {
   description: string;
   downloadUrl: string;
   iconUrl?: string | null;
+  packageVersion?: number | null;
   sha256?: string | null;
   sizeBytes: number;
   sourceId: string;
@@ -407,6 +423,46 @@ const loadPluginIcon = async (pluginId: string) => {
     };
   } catch (e) {
     // 图标缺失不算错误：保持占位符即可
+  }
+};
+
+// 商店列表：当 index.json 不再提供 iconUrl 时，从 .kgpg 固定头部通过 Range 读取 icon（后端返回 PNG bytes）
+const loadRemotePluginIcon = async (plugin: { id: string; downloadUrl?: string | null }) => {
+  if (!plugin?.id) return;
+  if (!plugin.downloadUrl) return;
+  if (pluginIcons.value[plugin.id]) return;
+  try {
+    const iconData = await invoke<number[] | null>("get_remote_plugin_icon", {
+      downloadUrl: plugin.downloadUrl,
+    });
+    if (!iconData || iconData.length === 0) return;
+    const bytes = new Uint8Array(iconData);
+    const binaryString = Array.from(bytes)
+      .map((byte) => String.fromCharCode(byte))
+      .join("");
+    const base64 = btoa(binaryString);
+    pluginIcons.value = {
+      ...pluginIcons.value,
+      [plugin.id]: `data:image/png;base64,${base64}`,
+    };
+  } catch {
+    // 远程 icon 拉取失败：保持占位符即可
+  }
+};
+
+const prefetchRemoteIconsForSource = async (sourceId: string) => {
+  const arr = getStorePlugins(sourceId) || [];
+  // 控制规模：只预取前 24 个缺失 iconUrl 的条目，避免刷新时并发过多
+  const targets = arr
+    .filter((p) => {
+      const pv = typeof p.packageVersion === "number" ? p.packageVersion : 1;
+      return pv >= 2 && !p.iconUrl && !!p.downloadUrl;
+    })
+    .slice(0, 24);
+  for (const p of targets) {
+    // 顺序拉取：更稳，避免把网络/后端打爆
+    // eslint-disable-next-line no-await-in-loop
+    await loadRemotePluginIcon(p);
   }
 };
 
@@ -691,6 +747,9 @@ const loadStorePlugins = async (sourceId: string, showMessage: boolean = true) =
     if (showMessage) {
       ElMessage.success("商店列表已刷新");
     }
+
+    // 新格式：iconUrl 可能为空，尝试通过 KGPG v2 Range 预取 icon（不阻塞 UI）
+    void prefetchRemoteIconsForSource(sourceId);
   } catch (error) {
     console.error("加载商店失败:", error);
     // 提取错误消息 - Tauri invoke 可能返回字符串或 Error 对象

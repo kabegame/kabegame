@@ -104,12 +104,7 @@ pub fn setup_tray(app: AppHandle) {
         #[cfg(not(debug_assertions))]
         let menu = match Menu::with_items(
             &app,
-            &[
-                &show_item,
-                &hide_item,
-                &next_wallpaper_item,
-                &quit_item,
-            ],
+            &[&show_item, &hide_item, &next_wallpaper_item, &quit_item],
         ) {
             Ok(menu) => menu,
             Err(e) => {
@@ -129,7 +124,7 @@ pub fn setup_tray(app: AppHandle) {
 
         let handle_clone1 = app.clone();
         let handle_clone2 = app.clone();
-        
+
         // 创建托盘，明确禁止左键点击显示菜单
         let tray = match TrayIconBuilder::new()
             .icon(icon)
@@ -143,17 +138,17 @@ pub fn setup_tray(app: AppHandle) {
                 return;
             }
         };
-        
+
         // 设置菜单（只在右键时显示）
         if let Err(e) = tray.set_menu(Some(menu)) {
             eprintln!("设置托盘菜单失败: {}", e);
         }
-        
+
         // 处理托盘图标事件（带防抖）
         tray.on_tray_icon_event(move |tray, event| {
             handle_tray_icon_event(&handle_clone2, tray, event, &limiter);
         });
-        
+
         // 处理菜单事件
         tray.on_menu_event(move |_tray, event| {
             handle_menu_event(&handle_clone1, event);
@@ -225,7 +220,7 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             // 打开一个普通可见窗口（不挂到桌面层），用于确认 WallpaperLayer 是否在渲染/收事件
             let app_handle = app.clone();
             std::thread::spawn(move || {
-                if let Some(w) = app_handle.get_webview_window("wallpaper_debug") {
+                if let Some(w) = app_handle.get_webview_window("wallpaper-debug") {
                     let _ = w.show();
                     let _ = w.set_focus();
                     return;
@@ -233,7 +228,7 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
 
                 let _ = WebviewWindowBuilder::new(
                     &app_handle,
-                    "wallpaper_debug",
+                    "wallpaper-debug",
                     WebviewUrl::App("index.html".into()),
                 )
                 .title("Kabegame Wallpaper Debug")

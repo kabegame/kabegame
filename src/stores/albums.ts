@@ -43,10 +43,29 @@ export const useAlbumStore = defineStore("albums", () => {
     }
   };
 
-  const createAlbum = async (name: string) => {
+  const createAlbum = async (
+    name: string,
+    opts: { reload?: boolean } = {}
+  ) => {
     const created = await invoke<Album>("add_album", { name });
-    // 创建成功后重新从后端加载画册列表，保持前后端数据一致
-    await loadAlbums();
+
+    const reload = opts.reload ?? true;
+    if (reload) {
+      // 创建成功后重新从后端加载画册列表，保持前后端数据一致
+      await loadAlbums();
+    } else {
+      // 轻量模式：避免在批量导入时反复全量 reload 造成 UI 卡顿
+      const createdAt =
+        (created as any).created_at ?? (created as any).createdAt ?? created.createdAt;
+      // 避免重复插入
+      if (!albums.value.some((a) => a.id === created.id)) {
+        albums.value.unshift({ ...created, createdAt });
+      }
+      // counts 先按 0 兜底；后续可由 loadAlbums/get_album_counts 纠正
+      if (albumCounts.value[created.id] == null) {
+        albumCounts.value[created.id] = 0;
+      }
+    }
     return created;
   };
 

@@ -23,6 +23,8 @@ import { spawnSync, spawn } from "child_process";
 import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
+import chalk from "chalk";
+import { Command } from "commander";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,6 +38,9 @@ const RESOURCES_PLUGINS_DIR = path.join(
   "plugins"
 );
 
+const SRC_TAURI_DIR = path.join(root, "src-tauri");
+const TAURI_BIN_DIR = path.join(SRC_TAURI_DIR, "bin");
+
 function run(cmd, args, opts = {}) {
   const res = spawnSync(cmd, args, {
     stdio: "inherit",
@@ -48,6 +53,52 @@ function run(cmd, args, opts = {}) {
   }
 }
 
+// 检测是否存在 rustc 工具链
+function rustHostTriple() {
+  const res = spawnSync("rustc", ["-vV"], {
+    encoding: "utf8",
+    cwd: root,
+    shell: process.platform === "win32",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (res.status !== 0) {
+    console.error(
+      chalk.red("❌ 读取 rustc host triple 失败，请确认已安装 Rust 工具链")
+    );
+    process.exit(res.status ?? 1);
+  }
+  const out = (res.stdout || "").toString();
+  const m = out.match(/^host:\s*(.+)$/m);
+  if (!m) {
+    console.error(chalk.red("❌ 无法从 `rustc -vV` 输出解析 host triple"));
+    process.exit(1);
+  }
+  return m[1].trim();
+}
+
+// 构建一个sidebar工具
+function buildSidecar(env, binName) {
+  const triple = rustHostTriple();
+  const ext = process.platform === "win32" ? ".exe" : "";
+  const src = path.join(SRC_TAURI_DIR, "target", "release", `${binName}${ext}`);
+  const dst = path.join(TAURI_BIN_DIR, `${binName}-${triple}${ext}`);
+
+  console.log(chalk.blue(`[build] Building sidecar: ${binName} (${triple})`));
+  fs.mkdirSync(TAURI_BIN_DIR, { recursive: true });
+  run("cargo", ["build", "--release", "--bin", binName], {
+    cwd: SRC_TAURI_DIR,
+    env,
+  });
+  if (!fs.existsSync(src)) {
+    console.error(chalk.red(`❌ sidecar 编译后未找到产物: ${src}`));
+    process.exit(1);
+  }
+  fs.copyFileSync(src, dst);
+  console.log(
+    chalk.green(`[build] Sidecar copied: ${path.relative(root, dst)}`)
+  );
+}
+
 function spawnProc(command, args, opts = {}) {
   return spawn(command, args, {
     stdio: "inherit",
@@ -55,35 +106,6 @@ function spawnProc(command, args, opts = {}) {
     shell: process.platform === "win32",
     ...opts,
   });
-}
-
-function parseFlags(argv) {
-  const flags = {
-    watch: false,
-    verbose: false,
-    mode: "normal", // normal | local
-  };
-  const rest = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--watch") flags.watch = true;
-    else if (arg === "--verbose") flags.verbose = true;
-    else if (arg === "--mode") {
-      const v = argv[i + 1];
-      if (!v) {
-        console.error("❌ 参数错误：--mode 后必须提供值（normal|local）");
-        process.exit(1);
-      }
-      flags.mode = v === "local" ? "local" : "normal";
-      i++;
-    } else if (arg.startsWith("--mode=")) {
-      const v = arg.slice("--mode=".length);
-      flags.mode = v === "local" ? "local" : "normal";
-    } else {
-      rest.push(arg);
-    }
-  }
-  return { flags, rest };
 }
 
 /**
@@ -104,11 +126,11 @@ function scanBuiltinPlugins() {
 
 /**
  * 构建环境变量
- * @param {object} flags 命令行标志
+ * @param {object} options 命令行选项
  * @param {string[]} [builtinPlugins] 内置插件列表（local 模式使用）
  */
-function buildEnv(flags, builtinPlugins = []) {
-  const mode = flags.mode === "local" ? "local" : "normal";
+function buildEnv(options, builtinPlugins = []) {
+  const mode = options.mode === "local" ? "local" : "normal";
   const env = {
     ...process.env,
     // For Rust build.rs (compile-time injected)
@@ -121,42 +143,50 @@ function buildEnv(flags, builtinPlugins = []) {
   if (mode === "local" && builtinPlugins.length > 0) {
     env.KABEGAME_BUILTIN_PLUGINS = builtinPlugins.join(",");
     console.log(
-      `[env] KABEGAME_BUILTIN_PLUGINS=${env.KABEGAME_BUILTIN_PLUGINS}`
+      chalk.cyan(
+        `[env] KABEGAME_BUILTIN_PLUGINS=${env.KABEGAME_BUILTIN_PLUGINS}`
+      )
     );
   }
 
   return env;
 }
 
-function dev(flags) {
+function dev(options) {
   // Step 1: Package plugins first (to src-tauri/resources/plugins) to ensure resources exist
   // This prevents Tauri from failing on empty resources glob pattern
   const packageTarget =
-    flags.mode === "local"
+    options.mode === "local"
       ? "crawler-plugins:package-to-resources"
       : "crawler-plugins:package-local-to-resources";
-  console.log(`[dev] Packaging plugins to resources: ${packageTarget}`);
+  console.log(
+    chalk.blue(`[dev] Packaging plugins to resources: ${packageTarget}`)
+  );
   // 打包阶段不需要 KABEGAME_BUILTIN_PLUGINS，用基础 env
-  run("nx", ["run", packageTarget], { env: buildEnv(flags) });
+  run("nx", ["run", packageTarget], { env: buildEnv(options) });
 
   // Step 2: Scan generated plugins and build final env with builtin list
-  const builtinPlugins = flags.mode === "local" ? scanBuiltinPlugins() : [];
-  const env = buildEnv(flags, builtinPlugins);
+  const builtinPlugins = options.mode === "local" ? scanBuiltinPlugins() : [];
+  const env = buildEnv(options, builtinPlugins);
 
   const tauriTarget = "tauri:dev";
 
   const children = [];
 
-  if (flags.watch) {
+  if (options.watch) {
     const watchArgs = ["scripts/nx-nodemon-plugin-watch.mjs"];
-    if (flags.verbose) watchArgs.push("--verbose");
+    if (options.verbose) watchArgs.push("--verbose");
     console.log(
-      `[dev] Starting plugin watcher (nodemon, nx-config-derived) mode=all-plugins`
+      chalk.blue(
+        `[dev] Starting plugin watcher (nodemon, nx-config-derived) mode=all-plugins`
+      )
     );
     children.push(spawnProc("node", watchArgs, { env }));
   }
 
-  console.log(`[dev] Starting tauri dev: nx run kabegame:${tauriTarget}`);
+  console.log(
+    chalk.blue(`[dev] Starting tauri dev: nx run kabegame:${tauriTarget}`)
+  );
   children.push(spawnProc("nx", ["run", `kabegame:${tauriTarget}`], { env }));
 
   const shutdown = () => {
@@ -213,61 +243,120 @@ function dev(flags) {
   }
 }
 
-function build(flags) {
+function build(options) {
   // Package plugins first (to src-tauri/resources/plugins), then tauri build
   // - mode=normal: prepackage local-only plugins
   // - mode=local:  prepackage all plugins
 
   // Step 1: Package plugins
   const packageTarget =
-    flags.mode === "local"
+    options.mode === "local"
       ? "crawler-plugins:package-to-resources"
       : "crawler-plugins:package-local-to-resources";
-  console.log(`[build] Packaging plugins to resources: ${packageTarget}`);
+  console.log(
+    chalk.blue(`[build] Packaging plugins to resources: ${packageTarget}`)
+  );
   // 打包阶段不需要 KABEGAME_BUILTIN_PLUGINS，用基础 env
-  run("nx", ["run", packageTarget], { env: buildEnv(flags) });
+  run("nx", ["run", packageTarget], { env: buildEnv(options) });
 
   // Step 1.5: Verify plugins were packaged correctly
   if (!fs.existsSync(RESOURCES_PLUGINS_DIR)) {
-    console.error(`❌ 错误：插件资源目录不存在: ${RESOURCES_PLUGINS_DIR}`);
-    console.error(`   请确保 ${packageTarget} 任务已正确执行`);
+    console.error(
+      chalk.red(`❌ 错误：插件资源目录不存在: ${RESOURCES_PLUGINS_DIR}`)
+    );
+    console.error(chalk.red(`   请确保 ${packageTarget} 任务已正确执行`));
     process.exit(1);
   }
-  const pluginFiles = fs.readdirSync(RESOURCES_PLUGINS_DIR).filter((f) => f.endsWith(".kgpg"));
+  const pluginFiles = fs
+    .readdirSync(RESOURCES_PLUGINS_DIR)
+    .filter((f) => f.endsWith(".kgpg"));
   if (pluginFiles.length === 0) {
-    console.error(`❌ 错误：插件资源目录中没有找到 .kgpg 文件: ${RESOURCES_PLUGINS_DIR}`);
-    console.error(`   请确保 ${packageTarget} 任务已正确执行`);
+    console.error(
+      chalk.red(
+        `❌ 错误：插件资源目录中没有找到 .kgpg 文件: ${RESOURCES_PLUGINS_DIR}`
+      )
+    );
+    console.error(chalk.red(`   请确保 ${packageTarget} 任务已正确执行`));
     process.exit(1);
   }
-  console.log(`[build] 已找到 ${pluginFiles.length} 个插件文件: ${pluginFiles.join(", ")}`);
+  console.log(
+    chalk.green(
+      `[build] 已找到 ${pluginFiles.length} 个插件文件: ${pluginFiles.join(
+        ", "
+      )}`
+    )
+  );
 
   // Step 2: Scan generated plugins and build final env with builtin list
-  const builtinPlugins = flags.mode === "local" ? scanBuiltinPlugins() : [];
-  if (flags.mode === "local" && builtinPlugins.length === 0) {
-    console.warn(`⚠️  警告：local 模式下未找到内置插件，这可能导致插件功能不可用`);
+  const builtinPlugins = options.mode === "local" ? scanBuiltinPlugins() : [];
+  if (options.mode === "local" && builtinPlugins.length === 0) {
+    console.warn(
+      chalk.yellow(
+        `⚠️  警告：local 模式下未找到内置插件，这可能导致插件功能不可用`
+      )
+    );
   }
-  const env = buildEnv(flags, builtinPlugins);
+  const env = buildEnv(options, builtinPlugins);
+
+  // Step 2.5: Build sidecar binaries that must ship with the app
+  buildSidecar(env, "kabegame-cli");
+  buildSidecar(env, "kabegame-plugin-editor");
 
   // Step 3: Build Tauri app
-  console.log(`[build] Building Tauri app (mode=${flags.mode})`);
+  console.log(chalk.blue(`[build] Building Tauri app (mode=${options.mode})`));
   run("tauri", ["build"], { env });
 }
 
-function main() {
-  const [command, ...argv] = process.argv.slice(2);
-  if (!command || !["dev", "build"].includes(command)) {
-    console.error(
-      "Usage: node scripts/run.js <dev|build> [--mode normal|local] [--watch] [--verbose]"
-    );
-    process.exit(1);
-  }
-  const { flags } = parseFlags(argv);
+// 创建 Commander 程序
+const program = new Command();
 
-  if (command === "dev") {
-    dev(flags);
-  } else if (command === "build") {
-    build(flags);
-  }
-}
+program.name("run.js").description("统一开发/构建入口").version("1.0.0");
 
-main();
+// dev 命令
+program
+  .command("dev")
+  .description("启动开发模式")
+  .option(
+    "--mode <mode>",
+    "构建模式：normal（一般版本，带商店源）或 local（无商店版本，仅本地源 + 预打包全部插件）",
+    "normal"
+  )
+  .option("--watch", "启用插件源监听 + 自动重建", false)
+  .option("--verbose", "显示详细输出", false)
+  .action((options) => {
+    // 验证 mode 参数
+    if (options.mode !== "normal" && options.mode !== "local") {
+      console.error(
+        chalk.red(
+          `❌ 参数错误：--mode 必须是 "normal" 或 "local"，当前值: ${options.mode}`
+        )
+      );
+      process.exit(1);
+    }
+    dev(options);
+  });
+
+// build 命令
+program
+  .command("build")
+  .description("构建生产版本")
+  .option(
+    "--mode <mode>",
+    "构建模式：normal（一般版本，带商店源）或 local（无商店版本，无商店安装包）",
+    "normal"
+  )
+  .action((options) => {
+    // 验证 mode 参数
+    if (options.mode !== "normal" && options.mode !== "local") {
+      console.error(
+        chalk.red(
+          `❌ 参数错误：--mode 必须是 "normal" 或 "local"，当前值: ${options.mode}`
+        )
+      );
+      process.exit(1);
+    }
+    build(options);
+  });
+
+// 解析命令行参数
+program.parse();

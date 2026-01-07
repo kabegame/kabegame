@@ -10,6 +10,12 @@
             '画册' }}</span>
         </div>
       </template>
+      <el-button @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !albumId">
+        <el-icon>
+          <Refresh />
+        </el-icon>
+        刷新
+      </el-button>
       <el-button type="primary" @click="handleSetAsWallpaperCarousel">
         <el-icon>
           <Picture />
@@ -37,7 +43,7 @@
     <ImageGrid v-else ref="albumViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
       :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true" :context-menu-component="AlbumImageContextMenu"
       :on-context-command="handleImageMenuCommand" @added-to-album="handleAddedToAlbum"
-      @reorder="(...args) => handleImageReorder(args[0])">
+      @scroll-stable="loadImageUrls()" @reorder="(...args) => handleImageReorder(args[0])">
 
       <!-- 画册图片数量上限警告：作为 before-grid 插入（仅 AlbumDetail 使用） -->
       <template #before-grid>
@@ -62,11 +68,10 @@
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, watch, nextTick } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
-import { readFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Picture, Delete, Setting } from "@element-plus/icons-vue";
+import { Picture, Delete, Setting, Refresh } from "@element-plus/icons-vue";
 import { Warning, CircleClose } from "@element-plus/icons-vue";
 import AlbumImageContextMenu from "@/components/contextMenu/AlbumImageContextMenu.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
@@ -75,11 +80,14 @@ import { useAlbumStore } from "@/stores/albums";
 import { useCrawlerStore, type ImageInfo as CrawlerImageInfo } from "@/stores/crawler";
 import type { ImageInfo } from "@/stores/crawler";
 import { useSettingsStore } from "@/stores/settings";
+import { useUiStore } from "@/stores/ui";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useGallerySettings } from "@/composables/useGallerySettings";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
+import { useImageUrlLoader } from "@/composables/useImageUrlLoader";
+import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 
 const route = useRoute();
 const router = useRouter();
@@ -87,24 +95,57 @@ const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const crawlerStore = useCrawlerStore();
 const settingsStore = useSettingsStore();
+const uiStore = useUiStore();
+const { imageGridColumns } = storeToRefs(uiStore);
+const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 
 // 使用画廊设置 composable
 const {
-  imageClickAction,
   loadSettings,
 } = useGallerySettings();
 
 const albumId = ref<string>("");
 const albumName = ref<string>("");
 const loading = ref(false);
+const isRefreshing = ref(false);
 const currentWallpaperImageId = ref<string | null>(null);
 const images = ref<ImageInfo[]>([]);
-const imageSrcMap = ref<Record<string, { thumbnail?: string; original?: string }>>({});
-const blobUrls = new Set<string>();
 const albumViewRef = ref<any>(null);
+const albumContainerRef = ref<HTMLElement | null>(null);
+
+const { isInteracting } = useImageGridAutoLoad({
+  containerRef: albumContainerRef,
+  onLoad: () => void loadImageUrls(),
+});
+
+const {
+  imageSrcMap,
+  loadImageUrls,
+  removeFromCacheByIds,
+  reset: resetImageUrlLoader,
+  cleanup: cleanupImageUrlLoader,
+} = useImageUrlLoader({
+  containerRef: albumContainerRef,
+  imagesRef: images,
+  preferOriginalInGrid,
+  gridColumns: imageGridColumns,
+  isInteracting,
+});
+
+watch(
+  () => albumViewRef.value,
+  async () => {
+    await nextTick();
+    albumContainerRef.value = albumViewRef.value?.getContainerEl?.() ?? null;
+    if (albumContainerRef.value && images.value.length > 0) {
+      requestAnimationFrame(() => void loadImageUrls());
+    }
+  },
+  { immediate: true }
+);
 
 // 计算当前画册的图片数量（优先使用 albumCounts，否则使用 images.length）
 const currentAlbumImageCount = computed(() => {
@@ -192,24 +233,36 @@ const goBack = () => {
   router.back();
 };
 
-const getImageUrl = async (localPath: string): Promise<string> => {
-  if (!localPath) return "";
+const handleRefresh = async () => {
+  if (!albumId.value) return;
+  isRefreshing.value = true;
   try {
-    const normalizedPath = localPath.trimStart().replace(/^\\\\\?\\/, "");
-    const fileData = await readFile(normalizedPath);
-    const ext = normalizedPath.split(".").pop()?.toLowerCase();
-    let mimeType = "image/jpeg";
-    if (ext === "png") mimeType = "image/png";
-    else if (ext === "gif") mimeType = "image/gif";
-    else if (ext === "webp") mimeType = "image/webp";
-    else if (ext === "bmp") mimeType = "image/bmp";
-    const blob = new Blob([fileData], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    blobUrls.add(url);
-    return url;
-  } catch (e) {
-    console.error("加载图片失败", e);
-    return "";
+    // 1) 刷新画册列表（名称/计数等）
+    await albumStore.loadAlbums();
+    const found = albumStore.albums.find((a) => a.id === albumId.value);
+    if (found) albumName.value = found.name;
+
+    // 2) 刷新轮播/当前壁纸状态（避免 UI 与后端设置不同步）
+    await loadRotationSettings();
+    try {
+      currentWallpaperImageId.value = await invoke<string | null>("get_current_wallpaper_image_id");
+    } catch {
+      currentWallpaperImageId.value = null;
+    }
+
+    // 3) 手动刷新：清缓存强制重载详情（否则 store 缓存会让 UI 看起来“没刷新”）
+    delete albumStore.albumImages[albumId.value];
+    delete albumStore.albumPreviews[albumId.value];
+
+    // 4) 重新拉取图片列表 + 清理本地选择/URL 缓存
+    clearSelection();
+    await loadAlbum();
+    ElMessage.success("刷新成功");
+  } catch (error) {
+    console.error("刷新失败:", error);
+    ElMessage.error("刷新失败");
+  } finally {
+    isRefreshing.value = false;
   }
 };
 
@@ -223,24 +276,14 @@ const loadAlbum = async () => {
     images.value = imgs;
 
     // 清理旧资源
-    blobUrls.forEach((u) => URL.revokeObjectURL(u));
-    blobUrls.clear();
-    imageSrcMap.value = {};
+    resetImageUrlLoader();
   } finally {
     // 获取到列表后立即结束加载状态
     loading.value = false;
   }
 
-  // 异步加载图片的 Blob URL，不阻塞加载状态
-    for (const img of imgs) {
-    try {
-      const thumbnailUrl = img.thumbnailPath ? await getImageUrl(img.thumbnailPath) : "";
-      const originalUrl = await getImageUrl(img.localPath);
-      imageSrcMap.value[img.id] = { thumbnail: thumbnailUrl, original: originalUrl };
-    } catch (e) {
-      console.error(`加载图片 ${img.id} 失败:`, e);
-    }
-  }
+  // 只优先加载视口内（以及 overscan）需要的 URL；其余在空闲时渐进补齐
+  requestAnimationFrame(() => void loadImageUrls());
 };
 
 const handleImageReorder = async (payload: { aId: string; aOrder: number; bId: string; bOrder: number }) => {
@@ -365,13 +408,7 @@ const confirmRemoveImages = async () => {
 
     // 如果删除了文件，需要从列表中移除；如果只是从画册移除，也需要从列表中移除
   images.value = images.value.filter((img) => !ids.has(img.id));
-  for (const id of ids) {
-    const data = imageSrcMap.value[id];
-    if (data?.thumbnail) URL.revokeObjectURL(data.thumbnail);
-    if (data?.original) URL.revokeObjectURL(data.original);
-    const { [id]: _, ...rest } = imageSrcMap.value;
-    imageSrcMap.value = rest;
-  }
+  removeFromCacheByIds(idsArr);
   clearSelection();
 
     // 根据操作类型显示不同的成功消息
@@ -550,10 +587,8 @@ const initAlbum = async (newAlbumId: string) => {
   loading.value = true;
 
   // 清理旧数据
-  blobUrls.forEach((u) => URL.revokeObjectURL(u));
-  blobUrls.clear();
+  resetImageUrlLoader();
   images.value = [];
-  imageSrcMap.value = {};
   clearSelection();
 
   albumId.value = newAlbumId;
@@ -619,49 +654,7 @@ onMounted(async () => {
     await initAlbum(id);
   }
 
-  // 监听收藏状态变化事件（来自画廊等页面的收藏操作）
-  const favoriteChangedHandler = ((event: Event) => {
-    const ce = event as CustomEvent<{ imageIds: string[]; favorite: boolean }>;
-    const detail = ce.detail;
-    if (!detail || !Array.isArray(detail.imageIds)) return;
-
-    // 只处理收藏画册详情页
-    if (albumId.value !== FAVORITE_ALBUM_ID.value) return;
-
-    // 检查当前页面是否激活（通过检查路由是否匹配）
-    const currentRouteId = route.params.id as string;
-    const isActive = currentRouteId === FAVORITE_ALBUM_ID.value;
-
-    if (detail.favorite === false) {
-      // 取消收藏：从列表中移除对应图片
-      const idsToRemove = new Set(detail.imageIds);
-      images.value = images.value.filter((img) => !idsToRemove.has(img.id));
-
-      // 清理对应的 Blob URL 和 imageSrcMap
-      for (const id of idsToRemove) {
-        const data = imageSrcMap.value[id];
-        if (data?.thumbnail) {
-          URL.revokeObjectURL(data.thumbnail);
-          blobUrls.delete(data.thumbnail);
-        }
-        if (data?.original) {
-          URL.revokeObjectURL(data.original);
-          blobUrls.delete(data.original);
-        }
-        delete imageSrcMap.value[id];
-      }
-
-    } else {
-      // 新增收藏：需要重新加载以获取完整的 ImageInfo
-      if (isActive) {
-        // 页面激活时立即刷新
-        loadAlbum();
-      } else {
-        // 页面在后台时标记为需要刷新
-        favoriteAlbumDirty.value = true;
-      }
-    }
-  }) as EventListener;
+  // 收藏状态以 store 为准：不再通过全局事件同步（favoriteChangedHandler 已移除）
 
   // 收藏状态以 store 为准：不再通过全局事件同步
 
@@ -678,18 +671,7 @@ onMounted(async () => {
 
     // 如果有图片被移除，清理对应的 Blob URL 和 imageSrcMap
     if (images.value.length < beforeCount) {
-      for (const id of idsToRemove) {
-        const data = imageSrcMap.value[id];
-        if (data?.thumbnail) {
-          URL.revokeObjectURL(data.thumbnail);
-          blobUrls.delete(data.thumbnail);
-        }
-        if (data?.original) {
-          URL.revokeObjectURL(data.original);
-          blobUrls.delete(data.original);
-        }
-        delete imageSrcMap.value[id];
-      }
+      removeFromCacheByIds(Array.from(idsToRemove));
     }
   }) as EventListener;
 
@@ -709,18 +691,7 @@ onMounted(async () => {
 
     // 如果有图片被移除，清理对应的 Blob URL 和 imageSrcMap
     if (images.value.length < beforeCount) {
-      for (const id of idsToRemove) {
-        const data = imageSrcMap.value[id];
-        if (data?.thumbnail) {
-          URL.revokeObjectURL(data.thumbnail);
-          blobUrls.delete(data.thumbnail);
-        }
-        if (data?.original) {
-          URL.revokeObjectURL(data.original);
-          blobUrls.delete(data.original);
-        }
-        delete imageSrcMap.value[id];
-      }
+      removeFromCacheByIds(Array.from(idsToRemove));
     }
   }) as EventListener;
 
@@ -754,13 +725,11 @@ onMounted(async () => {
             return;
           }
 
-          // 生成图片的 blob URL
-          const thumbnailUrl = newImage.thumbnailPath ? await getImageUrl(newImage.thumbnailPath) : "";
-          const originalUrl = await getImageUrl(newImage.localPath);
-
-          // 添加到列表和映射中
-          images.value.push(newImage);
-          imageSrcMap.value[imageId] = { thumbnail: thumbnailUrl, original: originalUrl };
+          // 添加到列表：
+          // 注意：useImageUrlLoader 内部用 watch(() => imagesRef.value, { deep: false })
+          // 维护 imageIdSet；如果这里用 push 原地修改数组引用不变，会导致新图片永远不进入 loader 的集合。
+          images.value = [...images.value, newImage];
+          void loadImageUrls([newImage]);
         } catch (error) {
           console.error("添加新图片到画册失败:", error);
           // 如果获取失败，可以选择刷新整个画册作为后备方案
@@ -955,8 +924,7 @@ const loadRotationSettings = async () => {
 };
 
 onBeforeUnmount(() => {
-  blobUrls.forEach((u) => URL.revokeObjectURL(u));
-  blobUrls.clear();
+  cleanupImageUrlLoader();
 
   // 收藏状态以 store 为准：无需移除监听
 

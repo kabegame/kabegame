@@ -13,6 +13,10 @@ use tauri::{AppHandle, Emitter};
 // 收藏画册的固定ID
 pub const FAVORITE_ALBUM_ID: &str = "00000000-0000-0000-0000-000000000001";
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageInfo {
@@ -29,6 +33,9 @@ pub struct ImageInfo {
     #[serde(default)]
     pub thumbnail_path: String,
     pub favorite: bool,
+    /// 本地文件是否存在（用于前端标记缺失文件：仍展示条目，但提示用户源文件已丢失/移动）
+    #[serde(default = "default_true")]
+    pub local_exists: bool,
     #[serde(default)]
     pub hash: String,
     #[serde(default)]
@@ -255,7 +262,7 @@ impl Storage {
         let (sql, params_vec): (String, Vec<rusqlite::types::Value>) = match cursor {
             None => (
                 format!(
-                    "SELECT images.id,
+                    "SELECT CAST(images.id AS TEXT) as id,
                             images.hash,
                             {fav_expr} AS is_favorite,
                             {sort_expr} AS sort_key,
@@ -278,7 +285,7 @@ impl Storage {
             Some(c) => {
                 // 对 DESC 排序，使用“严格小于 last tuple”的分页条件
                 let sql = format!(
-                    "SELECT images.id,
+                    "SELECT CAST(images.id AS TEXT) as id,
                             images.hash,
                             {fav_expr} AS is_favorite,
                             {sort_expr} AS sort_key,
@@ -375,7 +382,7 @@ impl Storage {
             // 注意：MAX(rowid) 可能为 NULL（空表），用 COALESCE 兜底为 1
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, local_path
+                    "SELECT CAST(id AS TEXT) as id, local_path
                      FROM images
                      WHERE rowid >= (abs(random()) % COALESCE((SELECT MAX(rowid) FROM images), 1))
                      ORDER BY rowid
@@ -396,7 +403,7 @@ impl Storage {
         if candidates.is_empty() {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, local_path
+                    "SELECT CAST(id AS TEXT) as id, local_path
                      FROM images
                      ORDER BY COALESCE(\"order\", crawled_at) ASC
                      LIMIT ?1",
@@ -434,7 +441,7 @@ impl Storage {
         if mode == "random" {
             let mut stmt = conn
                 .prepare(
-                    "SELECT images.id, images.local_path
+                    "SELECT CAST(images.id AS TEXT) as id, images.local_path
                      FROM album_images
                      INNER JOIN images ON images.id = album_images.image_id
                      WHERE album_images.album_id = ?1
@@ -459,7 +466,7 @@ impl Storage {
         if candidates.is_empty() {
             let mut stmt = conn
                 .prepare(
-                    "SELECT images.id, images.local_path
+                    "SELECT CAST(images.id AS TEXT) as id, images.local_path
                      FROM images
                      INNER JOIN album_images ON images.id = album_images.image_id
                      WHERE album_images.album_id = ?1
@@ -559,7 +566,7 @@ PRAGMA mmap_size = 268435456;
         // 创建图片表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS images (
-                id TEXT PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT NOT NULL,
                 local_path TEXT NOT NULL,
                 plugin_id TEXT NOT NULL,
@@ -567,7 +574,8 @@ PRAGMA mmap_size = 268435456;
                 crawled_at INTEGER NOT NULL,
                 metadata TEXT,
                 thumbnail_path TEXT NOT NULL DEFAULT '',
-                hash TEXT NOT NULL DEFAULT ''
+                hash TEXT NOT NULL DEFAULT '',
+                \"order\" INTEGER
             )",
             [],
         )
@@ -585,168 +593,8 @@ PRAGMA mmap_size = 268435456;
         // 注意：不在启动阶段做全表 UPDATE（百万级会导致明显黑屏/无响应）。
         // 查询时已使用 COALESCE(order, crawled_at) 做兜底排序；新写入也会设置 order。
 
-        // 迁移：确保 images.thumbnail_path 为 NOT NULL（SQLite 需要重建表才能修改列约束）
-        // 若当前列允许 NULL，则创建新表并搬迁数据
-        let needs_thumb_not_null_migration = {
-            let mut stmt = conn
-                .prepare("PRAGMA table_info(images)")
-                .expect("Failed to prepare table_info");
-            let rows = stmt
-                .query_map([], |row| {
-                    let name: String = row.get(1)?;
-                    let notnull: i64 = row.get(3)?;
-                    Ok((name, notnull))
-                })
-                .expect("Failed to query table_info");
-
-            let mut notnull_flag: Option<i64> = None;
-            for r in rows {
-                if let Ok((name, notnull)) = r {
-                    if name == "thumbnail_path" {
-                        notnull_flag = Some(notnull);
-                        break;
-                    }
-                }
-            }
-            // notnull=1 表示 NOT NULL；None 表示列不存在（旧表结构异常），也走迁移
-            notnull_flag != Some(1)
-        };
-
-        if needs_thumb_not_null_migration {
-            let tx = conn
-                .transaction()
-                .expect("Failed to start transaction for thumbnail_path migration");
-
-            // 新表：thumbnail_path NOT NULL DEFAULT ''
-            tx.execute(
-                "CREATE TABLE IF NOT EXISTS images_new (
-                    id TEXT PRIMARY KEY,
-                    url TEXT NOT NULL,
-                    local_path TEXT NOT NULL,
-                    plugin_id TEXT NOT NULL,
-                    task_id TEXT,
-                    crawled_at INTEGER NOT NULL,
-                    metadata TEXT,
-                    thumbnail_path TEXT NOT NULL DEFAULT '',
-                    hash TEXT NOT NULL DEFAULT ''
-                )",
-                [],
-            )
-            .expect("Failed to create images_new");
-
-            // 搬迁数据：thumbnail_path 为空/NULL -> local_path
-            // hash/task_id 等字段使用 COALESCE 兜底，兼容历史版本缺失列的情况
-            let _ = tx.execute(
-                "INSERT OR REPLACE INTO images_new (
-                    id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash
-                 )
-                 SELECT
-                    id,
-                    url,
-                    local_path,
-                    plugin_id,
-                    task_id,
-                    crawled_at,
-                    metadata,
-                    CASE
-                        WHEN thumbnail_path IS NULL OR thumbnail_path = '' THEN local_path
-                        ELSE thumbnail_path
-                    END,
-                    COALESCE(hash, '')
-                 FROM images",
-                [],
-            );
-
-            tx.execute("DROP TABLE images", [])
-                .expect("Failed to drop old images table");
-            tx.execute("ALTER TABLE images_new RENAME TO images", [])
-                .expect("Failed to rename images_new");
-
-            tx.commit()
-                .expect("Failed to commit thumbnail_path migration");
-        }
-
-        // 注意：不在启动阶段做全表 UPDATE（百万级会导致明显黑屏/无响应）。
-        // 兼容旧数据的 thumbnail_path 空值/空字符串：查询时用 SQL fallback 到 local_path。
-
-        // 迁移：删除 favorite 列（SQLite 不支持直接删除列，需要重建表）
-        // 检查 favorite 列是否存在
-        let has_favorite_column = {
-            let mut stmt = conn
-                .prepare("PRAGMA table_info(images)")
-                .expect("Failed to prepare table_info");
-            let rows = stmt
-                .query_map([], |row| {
-                    let name: String = row.get(1)?;
-                    Ok(name)
-                })
-                .expect("Failed to query table_info");
-
-            let mut has_favorite = false;
-            for r in rows {
-                if let Ok(name) = r {
-                    if name == "favorite" {
-                        has_favorite = true;
-                        break;
-                    }
-                }
-            }
-            has_favorite
-        };
-
-        if has_favorite_column {
-            let tx = conn
-                .transaction()
-                .expect("Failed to start transaction for favorite column removal");
-
-            // 创建新表（不包含 favorite 列）
-            tx.execute(
-                "CREATE TABLE images_new (
-                    id TEXT PRIMARY KEY,
-                    url TEXT NOT NULL,
-                    local_path TEXT NOT NULL,
-                    plugin_id TEXT NOT NULL,
-                    task_id TEXT,
-                    crawled_at INTEGER NOT NULL,
-                    metadata TEXT,
-                    thumbnail_path TEXT NOT NULL DEFAULT '',
-                    hash TEXT NOT NULL DEFAULT '',
-                    \"order\" INTEGER
-                )",
-                [],
-            )
-            .expect("Failed to create images_new");
-
-            // 搬迁数据（排除 favorite 列）
-            tx.execute(
-                "INSERT INTO images_new (
-                    id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\"
-                 )
-                 SELECT
-                    id,
-                    url,
-                    local_path,
-                    plugin_id,
-                    task_id,
-                    crawled_at,
-                    metadata,
-                    thumbnail_path,
-                    hash,
-                    \"order\"
-                 FROM images",
-                [],
-            )
-            .expect("Failed to migrate data to images_new");
-
-            // 删除旧表并重命名新表
-            tx.execute("DROP TABLE images", [])
-                .expect("Failed to drop old images table");
-            tx.execute("ALTER TABLE images_new RENAME TO images", [])
-                .expect("Failed to rename images_new");
-
-            tx.commit()
-                .expect("Failed to commit favorite column removal migration");
-        }
+        // 说明：images 的结构性迁移（主键类型/删除列/强制 NOT NULL）统一在稍后进行：
+        // 因为需要同时迁移 album_images/task_images 的 image_id 类型，并尽量保留 settings.json 的 currentWallpaperImageId。
 
         // 创建索引以提高查询性能
         conn.execute(
@@ -798,7 +646,7 @@ PRAGMA mmap_size = 268435456;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS album_images (
                 album_id TEXT NOT NULL,
-                image_id TEXT NOT NULL,
+                image_id INTEGER NOT NULL,
                 \"order\" INTEGER,
                 PRIMARY KEY (album_id, image_id)
             )",
@@ -820,7 +668,7 @@ PRAGMA mmap_size = 268435456;
         conn.execute(
             "CREATE TABLE IF NOT EXISTS task_images (
                 task_id TEXT NOT NULL,
-                image_id TEXT NOT NULL,
+                image_id INTEGER NOT NULL,
                 added_at INTEGER NOT NULL,
                 \"order\" INTEGER,
                 PRIMARY KEY (task_id, image_id)
@@ -832,6 +680,297 @@ PRAGMA mmap_size = 268435456;
         let _ = conn.execute("ALTER TABLE task_images ADD COLUMN \"order\" INTEGER", []);
         // 注意：不在启动阶段做全表 UPDATE（百万级会导致明显黑屏/无响应）。
         // 查询时可用 COALESCE(order, added_at) 兜底；写入 task_images 时会设置 order。
+
+        // ============================
+        // 结构性迁移：images 主键改为自增 INTEGER，并同步迁移 album_images/task_images.image_id
+        // 同时顺带清理历史结构差异（favorite 列、thumbnail_path NOT NULL 等）。
+        // ============================
+        let (images_id_is_text, images_has_favorite_col, images_thumb_notnull) = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(images)")
+                .expect("Failed to prepare table_info(images)");
+            let rows = stmt
+                .query_map([], |row| {
+                    let name: String = row.get(1)?;
+                    let col_type: String = row.get(2)?;
+                    let notnull: i64 = row.get(3)?;
+                    Ok((name, col_type, notnull))
+                })
+                .expect("Failed to query table_info(images)");
+
+            let mut id_type: Option<String> = None;
+            let mut has_favorite = false;
+            let mut thumb_notnull: Option<i64> = None;
+            for r in rows {
+                if let Ok((name, col_type, notnull)) = r {
+                    if name == "id" {
+                        id_type = Some(col_type);
+                    }
+                    if name == "favorite" {
+                        has_favorite = true;
+                    }
+                    if name == "thumbnail_path" {
+                        thumb_notnull = Some(notnull);
+                    }
+                }
+            }
+            let id_is_text = id_type.unwrap_or_default().to_uppercase().contains("TEXT");
+            (id_is_text, has_favorite, thumb_notnull.unwrap_or(0) == 1)
+        };
+
+        let (album_image_id_is_text, task_image_id_is_text) = {
+            fn is_image_id_text(conn: &Connection, table: &str) -> bool {
+                let pragma = format!("PRAGMA table_info({})", table);
+                let mut stmt = match conn.prepare(&pragma) {
+                    Ok(s) => s,
+                    Err(_) => return false,
+                };
+                let rows = match stmt.query_map([], |row| {
+                    let name: String = row.get(1)?;
+                    let col_type: String = row.get(2)?;
+                    Ok((name, col_type))
+                }) {
+                    Ok(r) => r,
+                    Err(_) => return false,
+                };
+                for r in rows.flatten() {
+                    if r.0 == "image_id" {
+                        return r.1.to_uppercase().contains("TEXT");
+                    }
+                }
+                false
+            }
+            (
+                is_image_id_text(&conn, "album_images"),
+                is_image_id_text(&conn, "task_images"),
+            )
+        };
+
+        let needs_rebuild_images =
+            images_id_is_text || images_has_favorite_col || !images_thumb_notnull;
+        let needs_rebuild_relations =
+            images_id_is_text || album_image_id_is_text || task_image_id_is_text;
+
+        // 读取 settings.json（用于迁移 currentWallpaperImageId）
+        let settings_path = crate::app_paths::kabegame_data_dir().join("settings.json");
+        let mut settings_json: Option<serde_json::Value> = None;
+        let mut old_current_wallpaper_id: Option<String> = None;
+        if settings_path.exists() {
+            if let Ok(s) = fs::read_to_string(&settings_path) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                    old_current_wallpaper_id = v
+                        .get("currentWallpaperImageId")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
+                    settings_json = Some(v);
+                }
+            }
+        }
+
+        let mut mapped_current_wallpaper_id: Option<i64> = None;
+        if needs_rebuild_images || needs_rebuild_relations {
+            let tx = conn
+                .transaction()
+                .expect("Failed to start transaction for images pk migration");
+
+            // 临时映射表：old_id(TEXT) -> new_id(INTEGER)
+            tx.execute("DROP TABLE IF EXISTS images_ordered", []).ok();
+            if images_id_is_text {
+                tx.execute(
+                    "CREATE TEMP TABLE images_ordered AS
+                     SELECT
+                       id AS old_id,
+                       url,
+                       local_path,
+                       plugin_id,
+                       task_id,
+                       crawled_at,
+                       metadata,
+                       COALESCE(NULLIF(thumbnail_path, ''), local_path) AS thumbnail_path,
+                       COALESCE(hash, '') AS hash,
+                       \"order\" AS ord,
+                       ROW_NUMBER() OVER (
+                         ORDER BY COALESCE(\"order\", crawled_at) ASC, crawled_at ASC, id ASC
+                       ) AS new_id
+                     FROM images",
+                    [],
+                )
+                .expect("Failed to create images_ordered (TEXT id)");
+            } else {
+                tx.execute(
+                    "CREATE TEMP TABLE images_ordered AS
+                     SELECT
+                       CAST(id AS TEXT) AS old_id,
+                       url,
+                       local_path,
+                       plugin_id,
+                       task_id,
+                       crawled_at,
+                       metadata,
+                       COALESCE(NULLIF(thumbnail_path, ''), local_path) AS thumbnail_path,
+                       COALESCE(hash, '') AS hash,
+                       \"order\" AS ord,
+                       CAST(id AS INTEGER) AS new_id
+                     FROM images",
+                    [],
+                )
+                .expect("Failed to create images_ordered (INTEGER id)");
+            }
+
+            if images_id_is_text {
+                if let Some(ref old_id) = old_current_wallpaper_id {
+                    mapped_current_wallpaper_id = tx
+                        .query_row(
+                            "SELECT new_id FROM images_ordered WHERE old_id = ?1 LIMIT 1",
+                            params![old_id],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .ok();
+                }
+            }
+
+            // 1) 重建 images（需要时）
+            if needs_rebuild_images {
+                tx.execute("DROP TABLE IF EXISTS images_new", []).ok();
+                tx.execute(
+                    "CREATE TABLE images_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        url TEXT NOT NULL,
+                        local_path TEXT NOT NULL,
+                        plugin_id TEXT NOT NULL,
+                        task_id TEXT,
+                        crawled_at INTEGER NOT NULL,
+                        metadata TEXT,
+                        thumbnail_path TEXT NOT NULL DEFAULT '',
+                        hash TEXT NOT NULL DEFAULT '',
+                        \"order\" INTEGER
+                    )",
+                    [],
+                )
+                .expect("Failed to create images_new (INTEGER pk)");
+
+                tx.execute(
+                    "INSERT INTO images_new (
+                        id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\"
+                     )
+                     SELECT
+                        new_id,
+                        url,
+                        local_path,
+                        plugin_id,
+                        task_id,
+                        crawled_at,
+                        metadata,
+                        COALESCE(NULLIF(thumbnail_path, ''), local_path),
+                        COALESCE(hash, ''),
+                        COALESCE(ord, crawled_at)
+                     FROM images_ordered",
+                    [],
+                )
+                .expect("Failed to migrate data to images_new");
+
+                tx.execute("DROP TABLE images", [])
+                    .expect("Failed to drop old images");
+                tx.execute("ALTER TABLE images_new RENAME TO images", [])
+                    .expect("Failed to rename images_new");
+            }
+
+            // 2) 重建关联表（需要时）
+            if needs_rebuild_relations {
+                tx.execute("DROP TABLE IF EXISTS album_images_new", []).ok();
+                tx.execute(
+                    "CREATE TABLE album_images_new (
+                        album_id TEXT NOT NULL,
+                        image_id INTEGER NOT NULL,
+                        \"order\" INTEGER,
+                        PRIMARY KEY (album_id, image_id)
+                    )",
+                    [],
+                )
+                .expect("Failed to create album_images_new");
+                let _ = tx.execute(
+                    "INSERT OR IGNORE INTO album_images_new (album_id, image_id, \"order\")
+                     SELECT
+                       a.album_id,
+                       o.new_id,
+                       a.\"order\"
+                     FROM album_images a
+                     INNER JOIN images_ordered o
+                       ON CAST(a.image_id AS TEXT) = o.old_id",
+                    [],
+                );
+                let _ = tx.execute("DROP TABLE album_images", []);
+                let _ = tx.execute("ALTER TABLE album_images_new RENAME TO album_images", []);
+
+                tx.execute("DROP TABLE IF EXISTS task_images_new", []).ok();
+                tx.execute(
+                    "CREATE TABLE task_images_new (
+                        task_id TEXT NOT NULL,
+                        image_id INTEGER NOT NULL,
+                        added_at INTEGER NOT NULL,
+                        \"order\" INTEGER,
+                        PRIMARY KEY (task_id, image_id)
+                    )",
+                    [],
+                )
+                .expect("Failed to create task_images_new");
+                let _ = tx.execute(
+                    "INSERT OR REPLACE INTO task_images_new (task_id, image_id, added_at, \"order\")
+                     SELECT
+                       t.task_id,
+                       o.new_id,
+                       t.added_at,
+                       t.\"order\"
+                     FROM task_images t
+                     INNER JOIN images_ordered o
+                       ON CAST(t.image_id AS TEXT) = o.old_id",
+                    [],
+                );
+                let _ = tx.execute("DROP TABLE task_images", []);
+                let _ = tx.execute("ALTER TABLE task_images_new RENAME TO task_images", []);
+            }
+
+            tx.execute("DROP TABLE IF EXISTS images_ordered", []).ok();
+            tx.commit().expect("Failed to commit images pk migration");
+        }
+
+        // 写回 settings.json（仅 TEXT -> INTEGER 时才需要映射）
+        if images_id_is_text {
+            if let (Some(mut v), Some(new_id)) = (settings_json, mapped_current_wallpaper_id) {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert(
+                        "currentWallpaperImageId".to_string(),
+                        serde_json::Value::String(new_id.to_string()),
+                    );
+                    if let Ok(s) = serde_json::to_string_pretty(&v) {
+                        let _ = fs::write(&settings_path, s);
+                    }
+                }
+            }
+        }
+
+        // 注意：images/album_images 可能在迁移中被重建，从而丢失索引；这里确保索引存在
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_crawled_at ON images(crawled_at DESC)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_plugin_id ON images(plugin_id)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_id ON images(task_id)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_images_hash ON images(hash)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_album_images_album ON album_images(album_id)",
+            [],
+        );
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_task_images_task ON task_images(task_id)",
@@ -935,8 +1074,8 @@ PRAGMA mmap_size = 268435456;
             {
                 let mut insert_img = tx
                     .prepare(
-                        "INSERT INTO images (id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\")
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                        "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\")
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     )
                     .map_err(|e| format!("Failed to prepare insert image: {}", e))?;
 
@@ -950,7 +1089,6 @@ PRAGMA mmap_size = 268435456;
                 for _ in 0..cur {
                     let base = &pool[rng.gen_usize(pool.len())];
 
-                    let id = uuid::Uuid::new_v4().to_string();
                     let thumbnail_path = if base.thumbnail_path.trim().is_empty() {
                         base.local_path.clone()
                     } else {
@@ -968,7 +1106,6 @@ PRAGMA mmap_size = 268435456;
 
                     insert_img
                         .execute(params![
-                            &id,
                             &base.url,
                             &base.local_path,
                             &base.plugin_id,
@@ -980,12 +1117,13 @@ PRAGMA mmap_size = 268435456;
                             order,
                         ])
                         .map_err(|e| format!("Failed to insert image (debug clone): {}", e))?;
+                    let new_id = tx.last_insert_rowid();
 
                     // 复用任务关联（如果源记录有 task_id）
                     if let Some(task_id) = base.task_id.as_ref() {
                         let added_at = crawled_at;
                         insert_task_img
-                            .execute(params![task_id, &id, added_at, order])
+                            .execute(params![task_id, new_id, added_at, order])
                             .map_err(|e| {
                                 format!("Failed to insert task-image relation (debug clone): {}", e)
                             })?;
@@ -1095,7 +1233,7 @@ PRAGMA mmap_size = 268435456;
             image.hash = hash;
             // 检查文件是否存在
             if PathBuf::from(&image.local_path).exists() {
-                self.add_image(image)?;
+                let _ = self.add_image(image)?;
                 migrated_count += 1;
             }
             // 如果文件不存在，跳过该图片
@@ -1138,7 +1276,7 @@ PRAGMA mmap_size = 268435456;
 
         // 范围查询：使用 LEFT JOIN 来判断图片是否在收藏画册中（用于前端展示星标）
         let query = format!(
-            "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
@@ -1156,10 +1294,12 @@ PRAGMA mmap_size = 268435456;
 
         let image_rows = stmt
             .query_map(params![limit as i64, offset as i64], |row| {
+                let local_path: String = row.get(2)?;
+                let local_exists = PathBuf::from(&local_path).exists();
                 Ok(ImageInfo {
                     id: row.get(0)?,
                     url: row.get(1)?,
-                    local_path: row.get(2)?,
+                    local_path,
                     plugin_id: row.get(3)?,
                     task_id: row.get(4)?,
                     crawled_at: row.get(5)?,
@@ -1169,6 +1309,7 @@ PRAGMA mmap_size = 268435456;
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
                     favorite: row.get::<_, i64>(9)? != 0,
+                    local_exists,
                     order: row.get::<_, Option<i64>>(10)?,
                 })
             })
@@ -1176,11 +1317,7 @@ PRAGMA mmap_size = 268435456;
 
         let mut images = Vec::new();
         for row_result in image_rows {
-            let image = row_result.map_err(|e| format!("Failed to read row: {}", e))?;
-            // 检查文件是否存在
-            if PathBuf::from(&image.local_path).exists() {
-                images.push(image);
-            }
+            images.push(row_result.map_err(|e| format!("Failed to read row: {}", e))?);
         }
 
         Ok(RangedImages {
@@ -1218,7 +1355,7 @@ PRAGMA mmap_size = 268435456;
 
         let mut result = conn
             .query_row(
-                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
                  images.\"order\"
@@ -1226,10 +1363,12 @@ PRAGMA mmap_size = 268435456;
                  WHERE images.id = ?1",
                 params![image_id],
                 |row| {
+                    let local_path: String = row.get(2)?;
+                    let local_exists = PathBuf::from(&local_path).exists();
                     Ok(ImageInfo {
                         id: row.get(0)?,
                         url: row.get(1)?,
-                        local_path: row.get(2)?,
+                        local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
                         crawled_at: row.get(5)?,
@@ -1239,6 +1378,7 @@ PRAGMA mmap_size = 268435456;
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
                         favorite: false,
+                        local_exists,
                         order: row.get::<_, Option<i64>>(9)?,
                     })
                 },
@@ -1267,7 +1407,7 @@ PRAGMA mmap_size = 268435456;
         // 查询图片基本信息
         let mut result = conn
             .query_row(
-                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
                  images.\"order\"
@@ -1275,10 +1415,12 @@ PRAGMA mmap_size = 268435456;
                  WHERE images.local_path = ?1",
                 params![local_path],
                 |row| {
+                    let local_path: String = row.get(2)?;
+                    let local_exists = PathBuf::from(&local_path).exists();
                     Ok(ImageInfo {
                         id: row.get(0)?,
                         url: row.get(1)?,
-                        local_path: row.get(2)?,
+                        local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
                         crawled_at: row.get(5)?,
@@ -1287,6 +1429,7 @@ PRAGMA mmap_size = 268435456;
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
                         favorite: false, // 稍后通过单独查询设置
+                        local_exists,
                         order: row.get::<_, Option<i64>>(9)?,
                     })
                 },
@@ -1314,20 +1457,24 @@ PRAGMA mmap_size = 268435456;
 
         let result = conn
             .query_row(
-                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                  images.\"order\"
                  FROM images
                  LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = ?1
-                 WHERE images.url = ?2",
+                 WHERE images.url = ?2
+                 ORDER BY images.crawled_at DESC, images.id DESC
+                 LIMIT 1",
                 params![FAVORITE_ALBUM_ID, url],
                 |row| {
+                    let local_path: String = row.get(2)?;
+                    let local_exists = PathBuf::from(&local_path).exists();
                     Ok(ImageInfo {
                         id: row.get(0)?,
                         url: row.get(1)?,
-                        local_path: row.get(2)?,
+                        local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
                         crawled_at: row.get(5)?,
@@ -1336,6 +1483,7 @@ PRAGMA mmap_size = 268435456;
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
                         favorite: row.get::<_, i64>(9)? != 0,
+                        local_exists,
                         order: row.get::<_, Option<i64>>(10)?,
                     })
                 },
@@ -1350,20 +1498,24 @@ PRAGMA mmap_size = 268435456;
 
         let result = conn
             .query_row(
-                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                  images.\"order\"
                  FROM images
                  LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = ?1
-                 WHERE images.hash = ?2",
+                 WHERE images.hash = ?2
+                 ORDER BY images.crawled_at DESC, images.id DESC
+                 LIMIT 1",
                 params![FAVORITE_ALBUM_ID, hash],
                 |row| {
+                    let local_path: String = row.get(2)?;
+                    let local_exists = PathBuf::from(&local_path).exists();
                     Ok(ImageInfo {
                         id: row.get(0)?,
                         url: row.get(1)?,
-                        local_path: row.get(2)?,
+                        local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
                         crawled_at: row.get(5)?,
@@ -1372,6 +1524,7 @@ PRAGMA mmap_size = 268435456;
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
                         favorite: row.get::<_, i64>(9)? != 0,
+                        local_exists,
                         order: row.get::<_, Option<i64>>(10)?,
                     })
                 },
@@ -1674,7 +1827,7 @@ PRAGMA mmap_size = 268435456;
         // 使用 LEFT JOIN 来判断图片是否在收藏画册中
         let mut stmt = conn
             .prepare(
-                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
                  CASE WHEN favorite_check.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
@@ -1689,10 +1842,12 @@ PRAGMA mmap_size = 268435456;
 
         let rows = stmt
             .query_map(params![FAVORITE_ALBUM_ID, album_id], |row| {
+                let local_path: String = row.get(2)?;
+                let local_exists = PathBuf::from(&local_path).exists();
                 Ok(ImageInfo {
                     id: row.get(0)?,
                     url: row.get(1)?,
-                    local_path: row.get(2)?,
+                    local_path,
                     plugin_id: row.get(3)?,
                     task_id: row.get(4)?,
                     crawled_at: row.get(5)?,
@@ -1702,6 +1857,7 @@ PRAGMA mmap_size = 268435456;
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
                     favorite: row.get::<_, i64>(9)? != 0,
+                    local_exists,
                     order: row.get::<_, Option<i64>>(10)?,
                 })
             })
@@ -1709,10 +1865,7 @@ PRAGMA mmap_size = 268435456;
 
         let mut images = Vec::new();
         for r in rows {
-            let image = r.map_err(|e| format!("Failed to read album image row: {}", e))?;
-            if PathBuf::from(&image.local_path).exists() {
-                images.push(image);
-            }
+            images.push(r.map_err(|e| format!("Failed to read album image row: {}", e))?);
         }
         Ok(images)
     }
@@ -1727,7 +1880,7 @@ PRAGMA mmap_size = 268435456;
         // 使用 LEFT JOIN 来判断图片是否在收藏画册中
         let mut stmt = conn
             .prepare(
-                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
                  CASE WHEN favorite_check.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
@@ -1743,10 +1896,12 @@ PRAGMA mmap_size = 268435456;
 
         let rows = stmt
             .query_map(params![FAVORITE_ALBUM_ID, album_id, limit as i64], |row| {
+                let local_path: String = row.get(2)?;
+                let local_exists = PathBuf::from(&local_path).exists();
                 Ok(ImageInfo {
                     id: row.get(0)?,
                     url: row.get(1)?,
-                    local_path: row.get(2)?,
+                    local_path,
                     plugin_id: row.get(3)?,
                     task_id: row.get(4)?,
                     crawled_at: row.get(5)?,
@@ -1756,6 +1911,7 @@ PRAGMA mmap_size = 268435456;
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
                     favorite: row.get::<_, i64>(9)? != 0,
+                    local_exists,
                     order: row.get::<_, Option<i64>>(10)?,
                 })
             })
@@ -1763,10 +1919,7 @@ PRAGMA mmap_size = 268435456;
 
         let mut images = Vec::new();
         for r in rows {
-            let image = r.map_err(|e| format!("Failed to read album preview row: {}", e))?;
-            if PathBuf::from(&image.local_path).exists() {
-                images.push(image);
-            }
+            images.push(r.map_err(|e| format!("Failed to read album preview row: {}", e))?);
         }
         Ok(images)
     }
@@ -1774,7 +1927,7 @@ PRAGMA mmap_size = 268435456;
     pub fn get_album_image_ids(&self, album_id: &str) -> Result<Vec<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT image_id FROM album_images WHERE album_id = ?1")
+            .prepare("SELECT CAST(image_id AS TEXT) FROM album_images WHERE album_id = ?1")
             .map_err(|e| format!("Failed to prepare album image ids query: {}", e))?;
 
         let rows = stmt
@@ -1810,7 +1963,7 @@ PRAGMA mmap_size = 268435456;
         Ok(map)
     }
 
-    pub fn add_image(&self, image: ImageInfo) -> Result<(), String> {
+    pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let metadata_json = image
@@ -1827,10 +1980,9 @@ PRAGMA mmap_size = 268435456;
         let order = image.order.unwrap_or(image.crawled_at as i64);
 
         conn.execute(
-            "INSERT OR REPLACE INTO images (id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\")
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\")
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
-                image.id,
                 image.url,
                 image.local_path,
                 image.plugin_id,
@@ -1843,6 +1995,10 @@ PRAGMA mmap_size = 268435456;
             ],
         )
         .map_err(|e| format!("Failed to insert image: {}", e))?;
+        let new_id = conn.last_insert_rowid();
+        image.id = new_id.to_string();
+        image.order = Some(order);
+        image.thumbnail_path = thumbnail_path;
 
         // 如果图片有关联的任务，添加到任务-图片关联表
         if let Some(ref task_id) = image.task_id {
@@ -1851,12 +2007,12 @@ PRAGMA mmap_size = 268435456;
             conn.execute(
                 "INSERT OR REPLACE INTO task_images (task_id, image_id, added_at, \"order\")
                  VALUES (?1, ?2, ?3, ?4)",
-                params![task_id, image.id, added_at, task_order],
+                params![task_id, new_id, added_at, task_order],
             )
             .map_err(|e| format!("Failed to insert task-image relation: {}", e))?;
         }
 
-        Ok(())
+        Ok(image)
     }
 
     pub fn delete_image(&self, image_id: &str) -> Result<(), String> {
@@ -1865,16 +2021,18 @@ PRAGMA mmap_size = 268435456;
         // 先查询图片信息，以便删除文件
         let mut image: Option<ImageInfo> = conn
             .query_row(
-                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash, images.\"order\"
                  FROM images WHERE images.id = ?1",
                 params![image_id],
                 |row| {
+                    let local_path: String = row.get(2)?;
+                    let local_exists = PathBuf::from(&local_path).exists();
                     Ok(ImageInfo {
                         id: row.get(0)?,
                         url: row.get(1)?,
-                        local_path: row.get(2)?,
+                        local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
                         crawled_at: row.get(5)?,
@@ -1884,6 +2042,7 @@ PRAGMA mmap_size = 268435456;
                         hash: row.get(8)?,
                         order: row.get::<_, Option<i64>>(9)?,
                         favorite: false, // 不再从数据库读取，将通过 JOIN 计算
+                        local_exists,
                     })
                 },
             )
@@ -1945,16 +2104,18 @@ PRAGMA mmap_size = 268435456;
         // 先查询图片信息，以便删除缩略图
         let mut image: Option<ImageInfo> = conn
             .query_row(
-                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash, images.\"order\"
                  FROM images WHERE images.id = ?1",
                 params![image_id],
                 |row| {
+                    let local_path: String = row.get(2)?;
+                    let local_exists = PathBuf::from(&local_path).exists();
                     Ok(ImageInfo {
                         id: row.get(0)?,
                         url: row.get(1)?,
-                        local_path: row.get(2)?,
+                        local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
                         crawled_at: row.get(5)?,
@@ -1964,6 +2125,7 @@ PRAGMA mmap_size = 268435456;
                         hash: row.get(8)?,
                         order: row.get::<_, Option<i64>>(9)?,
                         favorite: false, // 不再从数据库读取，将通过 JOIN 计算
+                        local_exists,
                     })
                 },
             )
@@ -2033,16 +2195,18 @@ PRAGMA mmap_size = 268435456;
             // 查询图片信息
             let image: Option<ImageInfo> = tx
                 .query_row(
-                    "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                    "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                      COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                      images.hash, images.\"order\"
                      FROM images WHERE images.id = ?1",
                     params![image_id],
                     |row| {
+                        let local_path: String = row.get(2)?;
+                        let local_exists = PathBuf::from(&local_path).exists();
                         Ok(ImageInfo {
                             id: row.get(0)?,
                             url: row.get(1)?,
-                            local_path: row.get(2)?,
+                            local_path,
                             plugin_id: row.get(3)?,
                             task_id: row.get(4)?,
                             crawled_at: row.get(5)?,
@@ -2052,6 +2216,7 @@ PRAGMA mmap_size = 268435456;
                             hash: row.get(8)?,
                             order: row.get::<_, Option<i64>>(9)?,
                             favorite: false, // 批量操作时不需要这个字段
+                            local_exists,
                         })
                     },
                 )
@@ -2125,16 +2290,18 @@ PRAGMA mmap_size = 268435456;
             // 查询图片信息
             let image: Option<ImageInfo> = tx
                 .query_row(
-                    "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                    "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                      COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                      images.hash, images.\"order\"
                      FROM images WHERE images.id = ?1",
                     params![image_id],
                     |row| {
+                        let local_path: String = row.get(2)?;
+                        let local_exists = PathBuf::from(&local_path).exists();
                         Ok(ImageInfo {
                             id: row.get(0)?,
                             url: row.get(1)?,
-                            local_path: row.get(2)?,
+                            local_path,
                             plugin_id: row.get(3)?,
                             task_id: row.get(4)?,
                             crawled_at: row.get(5)?,
@@ -2144,6 +2311,7 @@ PRAGMA mmap_size = 268435456;
                             hash: row.get(8)?,
                             order: row.get::<_, Option<i64>>(9)?,
                             favorite: false, // 批量操作时不需要这个字段
+                            local_exists,
                         })
                     },
                 )
@@ -2495,6 +2663,29 @@ PRAGMA mmap_size = 268435456;
         Ok(tasks)
     }
 
+    /// 将所有 pending 和 running 状态的任务标记为 failed
+    /// 用于应用启动时清理未完成的任务
+    pub fn mark_pending_running_tasks_as_failed(&self) -> Result<usize, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        // 获取当前时间戳作为 end_time
+        let end_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("Failed to get current time: {}", e))?
+            .as_secs() as i64;
+
+        // 更新所有 pending 或 running 状态的任务为 failed
+        let rows_affected = conn
+            .execute(
+                "UPDATE tasks SET status = 'failed', end_time = ?1, error = ?2 
+             WHERE status IN ('pending', 'running')",
+                params![end_time, Some("应用重启，任务已中断".to_string())],
+            )
+            .map_err(|e| format!("Failed to mark tasks as failed: {}", e))?;
+
+        Ok(rows_affected)
+    }
+
     // 运行配置 CRUD
     pub fn add_run_config(&self, config: RunConfig) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -2626,7 +2817,7 @@ PRAGMA mmap_size = 268435456;
     pub fn get_task_image_ids(&self, task_id: &str) -> Result<Vec<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT image_id FROM task_images WHERE task_id = ?1")
+            .prepare("SELECT CAST(image_id AS TEXT) FROM task_images WHERE task_id = ?1")
             .map_err(|e| format!("Failed to prepare task image ids query: {}", e))?;
         let rows = stmt
             .query_map(params![task_id], |row| row.get::<_, String>(0))
@@ -2666,7 +2857,7 @@ PRAGMA mmap_size = 268435456;
         let offset = page * page_size;
         let mut stmt = conn
             .prepare(
-                "SELECT images.id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  CASE WHEN favorite_check.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite, images.hash, 
                  COALESCE(task_images.\"order\", images.crawled_at) as task_order
@@ -2683,10 +2874,12 @@ PRAGMA mmap_size = 268435456;
             .query_map(
                 params![task_id, FAVORITE_ALBUM_ID, page_size as i64, offset as i64],
                 |row| {
+                    let local_path: String = row.get(2)?;
+                    let local_exists = PathBuf::from(&local_path).exists();
                     Ok(ImageInfo {
                         id: row.get(0)?,
                         url: row.get(1)?,
-                        local_path: row.get(2)?,
+                        local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
                         crawled_at: row.get(5)?,
@@ -2695,6 +2888,7 @@ PRAGMA mmap_size = 268435456;
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         thumbnail_path: row.get(7)?,
                         favorite: row.get::<_, i64>(8)? != 0,
+                        local_exists,
                         hash: row.get(9)?,
                         order: row.get::<_, Option<i64>>(10)?,
                     })
@@ -2704,11 +2898,7 @@ PRAGMA mmap_size = 268435456;
 
         let mut images = Vec::new();
         for row_result in image_rows {
-            let image = row_result.map_err(|e| format!("Failed to read row: {}", e))?;
-            // 检查文件是否存在
-            if PathBuf::from(&image.local_path).exists() {
-                images.push(image);
-            }
+            images.push(row_result.map_err(|e| format!("Failed to read row: {}", e))?);
         }
 
         Ok(PaginatedImages {

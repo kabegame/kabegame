@@ -1,6 +1,12 @@
 <template>
     <div class="task-detail">
         <PageHeader :title="taskName || '任务'" :subtitle="taskSubtitle" show-back @back="goBack">
+            <el-button @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !taskId">
+                <el-icon>
+                    <Refresh />
+                </el-icon>
+                <span style="margin-left: 4px;">刷新</span>
+            </el-button>
             <el-button v-if="shouldShowStopButton" type="warning" @click="handleStopTask">
                 <el-icon>
                     <VideoPause />
@@ -26,7 +32,8 @@
         </div>
         <ImageGrid v-else ref="taskViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
             :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true" :can-reorder="false"
-            :context-menu-component="TaskImageContextMenu" :on-context-command="handleImageMenuCommand">
+            :context-menu-component="TaskImageContextMenu" :on-context-command="handleImageMenuCommand"
+            @scroll-stable="loadImageUrls()">
         </ImageGrid>
 
         <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
@@ -35,13 +42,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { readFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { VideoPause, Delete, Setting } from "@element-plus/icons-vue";
+import { VideoPause, Delete, Setting, Refresh } from "@element-plus/icons-vue";
 import TaskImageContextMenu from "@/components/contextMenu/TaskImageContextMenu.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import RemoveImagesConfirmDialog from "@/components/common/RemoveImagesConfirmDialog.vue";
@@ -49,12 +55,15 @@ import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useSettingsStore } from "@/stores/settings";
 import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore } from "@/stores/albums";
+import { useUiStore } from "@/stores/ui";
 import { storeToRefs } from "pinia";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useGallerySettings } from "@/composables/useGallerySettings";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
+import { useImageUrlLoader } from "@/composables/useImageUrlLoader";
+import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 
 const route = useRoute();
 const router = useRouter();
@@ -63,6 +72,9 @@ const settingsStore = useSettingsStore();
 const pluginStore = usePluginStore();
 const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
+const uiStore = useUiStore();
+const { imageGridColumns } = storeToRefs(uiStore);
+const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
@@ -89,10 +101,41 @@ const shouldShowStopButton = computed(() => {
     return taskStatusFromStore.value === "running";
 });
 const loading = ref(false);
+const isRefreshing = ref(false);
 const images = ref<ImageInfo[]>([]);
-const imageSrcMap = ref<Record<string, { thumbnail?: string; original?: string }>>({});
-const blobUrls = new Set<string>();
 const taskViewRef = ref<any>(null);
+const taskContainerRef = ref<HTMLElement | null>(null);
+
+const { isInteracting } = useImageGridAutoLoad({
+    containerRef: taskContainerRef,
+    onLoad: () => void loadImageUrls(),
+});
+
+const {
+    imageSrcMap,
+    loadImageUrls,
+    removeFromCacheByIds,
+    reset: resetImageUrlLoader,
+    cleanup: cleanupImageUrlLoader,
+} = useImageUrlLoader({
+    containerRef: taskContainerRef,
+    imagesRef: images,
+    preferOriginalInGrid,
+    gridColumns: imageGridColumns,
+    isInteracting,
+});
+
+watch(
+    () => taskViewRef.value,
+    async () => {
+        await nextTick();
+        taskContainerRef.value = taskViewRef.value?.getContainerEl?.() ?? null;
+        if (taskContainerRef.value && images.value.length > 0) {
+            requestAnimationFrame(() => void loadImageUrls());
+        }
+    },
+    { immediate: true }
+);
 
 // 用于实时更新运行时间的响应式时间戳
 const currentTime = ref<number>(Date.now());
@@ -184,24 +227,19 @@ const goBack = () => {
     router.back();
 };
 
-const getImageUrl = async (localPath: string): Promise<string> => {
-    if (!localPath) return "";
+const handleRefresh = async () => {
+    if (!taskId.value) return;
+    isRefreshing.value = true;
     try {
-        const normalizedPath = localPath.trimStart().replace(/^\\\\\?\\/, "");
-        const fileData = await readFile(normalizedPath);
-        const ext = normalizedPath.split(".").pop()?.toLowerCase();
-        let mimeType = "image/jpeg";
-        if (ext === "png") mimeType = "image/png";
-        else if (ext === "gif") mimeType = "image/gif";
-        else if (ext === "webp") mimeType = "image/webp";
-        else if (ext === "bmp") mimeType = "image/bmp";
-        const blob = new Blob([fileData], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        blobUrls.add(url);
-        return url;
-    } catch (e) {
-        console.error("加载图片失败", e);
-        return "";
+        // 手动刷新：重新拉取任务信息与图片列表，确保与后端/DB 同步
+        await loadTaskInfo();
+        await loadTaskImages();
+        ElMessage.success("刷新成功");
+    } catch (error) {
+        console.error("刷新失败:", error);
+        ElMessage.error("刷新失败");
+    } finally {
+        isRefreshing.value = false;
     }
 };
 
@@ -214,23 +252,11 @@ const loadTaskImages = async () => {
         images.value = imgs;
 
         // 清理旧资源
-        blobUrls.forEach((u) => URL.revokeObjectURL(u));
-        blobUrls.clear();
-        imageSrcMap.value = {};
+        resetImageUrlLoader();
     } finally {
         loading.value = false;
     }
-
-    // 异步加载图片的 Blob URL
-    for (const img of imgs) {
-        try {
-            const thumbnailUrl = img.thumbnailPath ? await getImageUrl(img.thumbnailPath) : "";
-            const originalUrl = await getImageUrl(img.localPath);
-            imageSrcMap.value[img.id] = { thumbnail: thumbnailUrl, original: originalUrl };
-        } catch (e) {
-            console.error(`加载图片 ${img.id} 失败:`, e);
-        }
-    }
+    requestAnimationFrame(() => void loadImageUrls());
 };
 
 const loadTaskInfo = async () => {
@@ -259,7 +285,7 @@ const handleStopTask = async () => {
         );
         await crawlerStore.stopTask(taskId.value);
         // 不写入本地“stopped”伪状态：任务最终状态由后端 task-status / task-error 事件与 DB 同步驱动
-        ElMessage.success("任务已请求停止");
+        ElMessage.info("任务已请求停止");
     } catch (error) {
         if (error !== "cancel") {
             console.error("停止任务失败:", error);
@@ -407,13 +433,7 @@ const confirmRemoveImages = async () => {
         // 更新本地状态（因为批量 API 已经在 store 中更新了全局状态，但这里需要更新局部状态）
         const ids = new Set(imageIds);
         images.value = images.value.filter((img) => !ids.has(img.id));
-        for (const id of ids) {
-            const data = imageSrcMap.value[id];
-            if (data?.thumbnail) URL.revokeObjectURL(data.thumbnail);
-            if (data?.original) URL.revokeObjectURL(data.original);
-            const { [id]: _, ...rest } = imageSrcMap.value;
-            imageSrcMap.value = rest;
-        }
+        removeFromCacheByIds(imageIds);
         clearSelection();
 
         // 重新加载任务信息以获取最新的 deletedCount
@@ -477,13 +497,11 @@ const startTimersAndListeners = async () => {
                             return;
                         }
 
-                        // 生成图片的 blob URL
-                        const thumbnailUrl = newImage.thumbnailPath ? await getImageUrl(newImage.thumbnailPath) : "";
-                        const originalUrl = await getImageUrl(newImage.localPath);
-
-                        // 添加到列表和映射中
-                        images.value.push(newImage);
-                        imageSrcMap.value[imageId] = { thumbnail: thumbnailUrl, original: originalUrl };
+                        // 添加到列表：
+                        // 注意：useImageUrlLoader 内部用 watch(() => imagesRef.value, { deep: false })
+                        // 维护 imageIdSet；如果这里用 push 原地修改数组引用不变，会导致新图片永远不进入 loader 的集合。
+                        images.value = [...images.value, newImage];
+                        void loadImageUrls([newImage]);
                     } catch (error) {
                         console.error("添加新图片到任务失败:", error);
                     }
@@ -543,10 +561,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
     // 清理定时器和监听器（真正销毁时）
     stopTimersAndListeners();
-
-    // 清理 blob URLs
-    blobUrls.forEach((u) => URL.revokeObjectURL(u));
-    blobUrls.clear();
+    cleanupImageUrlLoader();
 });
 
 onActivated(async () => {

@@ -1,12 +1,17 @@
 # 插件文件格式设计
 
-## 推荐格式：ZIP 归档
+## 推荐格式：KGPG（ZIP 兼容）
 
-### 文件结构
+目前支持两种形态：
+
+1. **KGPG v1（纯 ZIP）**：文件扩展名 `.kgpg`，内容就是标准 ZIP。
+2. **KGPG v2（固定头部 + ZIP）**：`.kgpg` 文件前面加一个**固定大小头部**（用于无需解压/可 Range 读取 icon + manifest），后面仍然是标准 ZIP（SFX 兼容）。
+
+### 文件结构（ZIP 内部）
 ```
 plugin-name.kgpg
     - manifest.json          # 插件元数据（必需）
-    - icon.png               # 插件图标（可选）
+    - icon.png               # 插件图标（可选，v1 兼容；v2 不再写入 ZIP，图标在固定头部）
     - config.json            # 插件配置（可选）
     - crawl.rhai             # 爬取脚本（Rhai 脚本格式，必需）
     - doc_root/              # 文档目录（可选）
@@ -23,11 +28,37 @@ plugin-name.kgpg
 }
 ```
 
-### 优势
-1. **快速读取**：使用 `zip::ZipArchive` 可以只读取目录，无需解压
-2. **按需加载**：可以只读取 `manifest.json` 获取基本信息
-3. **多文件支持**：可以包含图标、脚本等资源
-4. **压缩存储**：自动压缩，节省空间
+### v2 额外优势（固定头部）
+1. **无需解压即可取 icon/manifest**：客户端只需读取固定偏移的数据块
+2. **支持 HTTP Range**：商店列表可只拉取头部，不再依赖额外的 `<id>.icon.png` 资产
+3. **保持 ZIP 兼容**：旧逻辑仍可当作 ZIP 读取 `manifest.json/icon.png` 等条目
+
+## KGPG v2 固定头部规范（用于 Range 读取）
+
+固定头部总大小：**53312 bytes**
+
+- meta：64 bytes
+- icon：`128 * 128 * 3 = 49152 bytes`（RGB24，无 alpha，行优先，从上到下、从左到右）
+- manifest：4096 bytes（UTF-8 JSON，剩余用 `0x00` 填充）
+
+### meta（64 bytes，小端）
+- `magic`：4B，固定 `"KGPG"`
+- `version`：u16，固定 `2`
+- `meta_size`：u16，固定 `64`
+- `icon_w`：u16，固定 `128`
+- `icon_h`：u16，固定 `128`
+- `pixel_format`：u8，固定 `1`（表示 RGB24）
+- `flags`：u8
+  - bit0：icon_present
+  - bit1：manifest_present
+- `manifest_len`：u16（0~4096）
+- `zip_offset`：u64（预留字段，当前固定等于 53312）
+- 其余：保留填 0
+
+### HTTP Range 示例
+- 拉取 icon + manifest（一次请求拿完整头部）：`Range: bytes=0-53311`
+- 仅拉取 icon：`Range: bytes=64-49215`
+- 仅拉取 manifest 槽位：`Range: bytes=49216-53311`
 
 ## 替代方案对比
 

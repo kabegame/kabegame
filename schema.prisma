@@ -58,7 +58,7 @@ model RunConfig {
 
 // 图片表
 model Image {
-    id            String  @id
+    id            Int     @id @default(autoincrement())
     url           String
     localPath     String  @map("local_path")
     pluginId      String  @map("plugin_id")
@@ -95,7 +95,7 @@ model Album {
 // 画册-图片关联表
 model AlbumImage {
     albumId String @map("album_id")
-    imageId String @map("image_id")
+    imageId Int    @map("image_id")
     order   Int?   @map("order")
 
     album Album @relation(fields: [albumId], references: [id], onDelete: Cascade)
@@ -109,7 +109,7 @@ model AlbumImage {
 // 任务-图片关联表
 model TaskImage {
     taskId  String @map("task_id")
-    imageId String @map("image_id")
+    imageId Int    @map("image_id")
     addedAt Int    @map("added_at")
     order   Int?   @map("order")
 

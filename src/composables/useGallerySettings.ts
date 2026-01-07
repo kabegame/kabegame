@@ -1,4 +1,4 @@
-import { ref, computed, watch } from "vue";
+import { watch } from "vue";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useSettingsStore } from "@/stores/settings";
 

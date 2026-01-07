@@ -129,7 +129,7 @@ impl PluginManager {
             .resource_dir()
             .map_err(|e| format!("Failed to resolve resource_dir: {}", e))?
             .join("plugins");
-        
+
         Err(format!(
             "无法找到预打包插件目录。已尝试以下位置：\n  - {}\n  - 可执行文件目录下的 resources/plugins\n请确认插件文件已正确打包到 resources/plugins 目录",
             default_dir.display()
@@ -327,6 +327,95 @@ impl PluginManager {
         plugins.into_iter().find(|p| p.id == id)
     }
 
+    /// 从指定 `.kgpg` 文件解析出运行时需要的 `Plugin` 信息（用于 CLI/调度器/插件编辑器临时运行）。
+    ///
+    /// 注意：
+    /// - `enabled/built_in/config` 等运行时字段由调用方策略决定；这里按“可运行”默认值填充。
+    /// - `plugin_id` 允许由调用方指定（例如调度器的 task request 里传入的 id），
+    ///   CLI 场景一般会用文件名 stem 作为 id。
+    pub fn build_runtime_plugin_from_kgpg_path(
+        &self,
+        plugin_id: String,
+        kgpg_path: &Path,
+    ) -> Result<Plugin, String> {
+        if !kgpg_path.is_file() {
+            return Err(format!("插件文件不存在: {}", kgpg_path.display()));
+        }
+        if kgpg_path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
+            return Err(format!("不是 .kgpg 文件: {}", kgpg_path.display()));
+        }
+
+        let manifest = self.read_plugin_manifest(kgpg_path)?;
+        let config = self.read_plugin_config_public(kgpg_path).ok().flatten();
+        let size_bytes = fs::metadata(kgpg_path)
+            .map_err(|e| format!("读取插件文件大小失败: {}", e))?
+            .len();
+
+        Ok(Plugin {
+            id: plugin_id,
+            name: manifest.name,
+            description: manifest.description,
+            version: manifest.version,
+            base_url: config
+                .as_ref()
+                .and_then(|c| c.base_url.clone())
+                .unwrap_or_default(),
+            enabled: true,
+            size_bytes,
+            built_in: false,
+            config: HashMap::new(),
+            selector: config.and_then(|c| c.selector),
+        })
+    }
+
+    /// CLI 场景：支持传入插件 id（已安装）或 `.kgpg` 路径（临时运行）。
+    /// 返回：
+    /// - `Plugin`
+    /// - `plugin_file_path`：若为临时运行则为 Some(path)，已安装则为 None
+    /// - `var_defs`：用于 CLI 参数解析（来源于插件文件或已安装插件的 config.json var）
+    #[allow(dead_code)] // 仅被 sidecar/CLI bin 调用；主程序二进制未直接使用
+    pub fn resolve_plugin_for_cli_run(
+        &self,
+        id_or_path: &str,
+    ) -> Result<(Plugin, Option<PathBuf>, Vec<VarDefinition>), String> {
+        let p = PathBuf::from(id_or_path);
+        if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("kgpg") {
+            let id = p
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("plugin")
+                .to_string();
+            let plugin = self.build_runtime_plugin_from_kgpg_path(id, &p)?;
+            let var_defs = self.get_plugin_vars_from_file(&p)?;
+            return Ok((plugin, Some(p), var_defs));
+        }
+
+        // id 模式（已安装）
+        let plugin = self
+            .get(id_or_path)
+            .ok_or_else(|| format!("插件未找到：{}", id_or_path))?;
+        let var_defs = self.get_plugin_vars(id_or_path)?.unwrap_or_default();
+        Ok((plugin, None, var_defs))
+    }
+
+    /// 调度器/任务场景：支持“已安装插件（plugin_id）”或“指定 `.kgpg` 文件临时运行”。
+    /// 这里允许 `plugin_id` 由上层指定（DB/task 里存的 id），以保持历史行为一致。
+    pub fn resolve_plugin_for_task_request(
+        &self,
+        plugin_id: &str,
+        plugin_file_path: Option<&str>,
+    ) -> Result<(Plugin, Option<PathBuf>), String> {
+        if let Some(p) = plugin_file_path {
+            let path = PathBuf::from(p);
+            let plugin = self.build_runtime_plugin_from_kgpg_path(plugin_id.to_string(), &path)?;
+            return Ok((plugin, Some(path)));
+        }
+        let plugin = self
+            .get(plugin_id)
+            .ok_or_else(|| format!("Plugin {} not found", plugin_id))?;
+        Ok((plugin, None))
+    }
+
     /// 更新插件配置（只更新 enabled 状态，其他信息从 .kgpg 文件读取）
     pub fn update(
         &self,
@@ -515,6 +604,15 @@ impl PluginManager {
 
     /// 从 ZIP 格式的插件文件中读取 manifest.json
     pub fn read_plugin_manifest(&self, zip_path: &Path) -> Result<PluginManifest, String> {
+        // 优先尝试：KGPG v2 固定头部（无需解析 zip）
+        if let Ok(Some(s)) = crate::kgpg::read_kgpg2_manifest_json_from_file(zip_path) {
+            if !s.trim().is_empty() {
+                if let Ok(m) = serde_json::from_str::<PluginManifest>(&s) {
+                    return Ok(m);
+                }
+            }
+        }
+
         let file =
             fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
         let mut archive =
@@ -673,8 +771,30 @@ impl PluginManager {
         Ok(Some(content))
     }
 
+    /// 从 ZIP 格式的插件文件中读取 config.json（供 CLI/外部调用复用）
+    pub fn read_plugin_config_public(
+        &self,
+        zip_path: &Path,
+    ) -> Result<Option<PluginConfig>, String> {
+        self.read_plugin_config(zip_path)
+    }
+
+    /// 从任意 .kgpg 文件读取变量定义（config.json 的 var），不存在则返回空数组。
+    pub fn get_plugin_vars_from_file(&self, zip_path: &Path) -> Result<Vec<VarDefinition>, String> {
+        Ok(self
+            .read_plugin_config(zip_path)?
+            .and_then(|c| c.var)
+            .unwrap_or_default())
+    }
+
     /// 检查插件 ZIP 文件中是否存在 icon.png
     fn check_plugin_icon_exists(&self, zip_path: &Path) -> bool {
+        // v2：优先检查头部 flags
+        if let Ok(mut f) = fs::File::open(zip_path) {
+            if let Ok(Some(meta)) = crate::kgpg::read_kgpg2_meta(&mut f) {
+                return meta.icon_present();
+            }
+        }
         if let Ok(file) = fs::File::open(zip_path) {
             if let Ok(mut archive) = ZipArchive::new(file) {
                 return archive.by_name("icon.png").is_ok();
@@ -685,6 +805,21 @@ impl PluginManager {
 
     /// 从 ZIP 格式的插件文件中读取 icon.png
     pub fn read_plugin_icon(&self, zip_path: &Path) -> Result<Option<Vec<u8>>, String> {
+        // v2：优先读取头部固定 icon（RGB24 raw），并转换为 PNG bytes（前端保持不变）
+        if let Ok(Some(rgb)) = crate::kgpg::read_kgpg2_icon_rgb_from_file(zip_path) {
+            if rgb.len() == crate::kgpg::KGPG2_ICON_SIZE {
+                use image::{ImageOutputFormat, RgbImage};
+                let img =
+                    RgbImage::from_raw(crate::kgpg::KGPG2_ICON_W, crate::kgpg::KGPG2_ICON_H, rgb)
+                        .ok_or_else(|| "Invalid kgpg2 icon buffer".to_string())?;
+                let mut out: Vec<u8> = Vec::new();
+                let mut cursor = std::io::Cursor::new(&mut out);
+                img.write_to(&mut cursor, ImageOutputFormat::Png)
+                    .map_err(|e| format!("Failed to encode icon png: {}", e))?;
+                return Ok(Some(out));
+            }
+        }
+
         let file =
             fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
         let mut archive =
@@ -1226,6 +1361,22 @@ impl PluginManager {
             .ok_or_else(|| "Missing 'downloadUrl' field".to_string())?
             .to_string();
 
+        // 包格式版本（可选）：默认 1；过高按最高支持版本解析
+        let raw_pkg_ver = plugin_json
+            .get("packageVersion")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1);
+        let effective_pkg_ver: u16 = {
+            // 当前最高支持版本：2
+            const MAX: u64 = 2;
+            let v = if raw_pkg_ver > MAX { MAX } else { raw_pkg_ver };
+            if v < 1 {
+                1
+            } else {
+                v as u16
+            }
+        };
+
         let icon_url = plugin_json
             .get("iconUrl")
             .and_then(|v| v.as_str())
@@ -1246,6 +1397,7 @@ impl PluginManager {
             name,
             version,
             description,
+            package_version: effective_pkg_ver,
             download_url,
             icon_url,
             sha256,
@@ -1505,6 +1657,64 @@ impl PluginManager {
         }
 
         Ok(arc)
+    }
+
+    /// KGPG v2：仅通过 HTTP Range 获取固定头部，并返回 icon（PNG bytes）。
+    /// 用于商店列表展示，避免额外的 `<id>.icon.png` 资产。
+    pub async fn fetch_remote_plugin_icon_v2(
+        &self,
+        download_url: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        use reqwest::header::RANGE;
+
+        let client = crate::crawler::create_client()?;
+        let end = crate::kgpg::KGPG2_TOTAL_HEADER_SIZE.saturating_sub(1);
+        let range_value = format!("bytes=0-{}", end);
+        let resp = client
+            .get(download_url)
+            .header(RANGE, range_value)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch kgpg header: {}", e))?;
+
+        if !(resp.status().is_success() || resp.status().as_u16() == 206) {
+            return Err(format!(
+                "Failed to fetch kgpg header: HTTP {}",
+                resp.status()
+            ));
+        }
+
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read kgpg header bytes: {}", e))?;
+        if bytes.len() < crate::kgpg::KGPG2_TOTAL_HEADER_SIZE {
+            return Err(format!(
+                "Invalid kgpg header size: got {} expected {}",
+                bytes.len(),
+                crate::kgpg::KGPG2_TOTAL_HEADER_SIZE
+            ));
+        }
+
+        let mut cursor = std::io::Cursor::new(bytes);
+        let Some(rgb) = crate::kgpg::read_kgpg2_icon_rgb(&mut cursor)
+            .map_err(|e| format!("Failed to parse kgpg v2 header: {}", e))?
+        else {
+            // 非 v2：不在这里回退（商店列表不强依赖 icon）
+            return Ok(None);
+        };
+        if rgb.len() != crate::kgpg::KGPG2_ICON_SIZE {
+            return Ok(None);
+        }
+
+        use image::{ImageOutputFormat, RgbImage};
+        let img = RgbImage::from_raw(crate::kgpg::KGPG2_ICON_W, crate::kgpg::KGPG2_ICON_H, rgb)
+            .ok_or_else(|| "Invalid kgpg2 icon buffer".to_string())?;
+        let mut out: Vec<u8> = Vec::new();
+        let mut out_cursor = std::io::Cursor::new(&mut out);
+        img.write_to(&mut out_cursor, ImageOutputFormat::Png)
+            .map_err(|e| format!("Failed to encode icon png: {}", e))?;
+        Ok(Some(out))
     }
 
     pub fn load_installed_plugin_detail(&self, plugin_id: &str) -> Result<PluginDetail, String> {
@@ -1770,6 +1980,7 @@ pub struct PluginManifest {
     pub name: String,
     pub version: String,
     pub description: String,
+    #[serde(default)]
     pub author: String,
 }
 
@@ -1839,6 +2050,10 @@ pub struct StorePluginResolved {
     pub name: String,
     pub version: String,
     pub description: String,
+    /// KGPG 包格式版本（来自 index.json 的 packageVersion）
+    /// 版本协商：过高按最高支持版本解析，过低按低版本解析。
+    #[serde(rename = "packageVersion", default)]
+    pub package_version: u16,
     #[serde(rename = "downloadUrl")]
     pub download_url: String,
     /// 可选：商店列表图标（通常指向 GitHub Release 的 <id>.icon.png）

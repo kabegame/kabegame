@@ -72,6 +72,19 @@
                     @keyup.enter="handleCreateOutputAlbum" ref="newOutputAlbumNameInputRef" />
             </el-form-item>
 
+            <!-- local-import：导入文件夹/zip 时，可选“自动创建画册（名称=文件夹名/zip文件名）” -->
+            <el-form-item v-if="showAutoCreateAlbumOption" label="导入画册">
+                <div class="auto-album-row">
+                    <el-checkbox v-model="autoCreateAlbumForLocalImport" :disabled="autoCreateAlbumDisabled">
+                        为该{{ localImportTypeLabel }}创建画册
+                        <span v-if="suggestedAlbumName" class="auto-album-hint">（名称：{{ suggestedAlbumName }}）</span>
+                    </el-checkbox>
+                    <div v-if="autoCreateAlbumDisabled" class="auto-album-tip">
+                        已选择“输出画册”，该选项将被忽略
+                    </div>
+                </div>
+            </el-form-item>
+
             <!-- 插件变量配置 -->
             <template v-if="pluginVars.length > 0">
                 <el-divider content-position="left">插件配置</el-divider>
@@ -132,9 +145,8 @@
                             </el-button>
                         </template>
                     </el-input>
-                    <el-input v-else-if="varDef.type === 'folder'"
-                        v-model="form.vars[varDef.key]" :placeholder="varDef.descripts || `请选择${varDef.name}`"
-                        clearable>
+                    <el-input v-else-if="varDef.type === 'folder'" v-model="form.vars[varDef.key]"
+                        :placeholder="varDef.descripts || `请选择${varDef.name}`" clearable>
                         <template #append>
                             <el-button @click="() => selectFolder(varDef.key)">
                                 <el-icon>
@@ -182,6 +194,7 @@ import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore } from "@/stores/albums";
 import { ElMessage } from "element-plus";
+import { stat } from "@tauri-apps/plugin-fs";
 
 interface Props {
     modelValue: boolean;
@@ -220,6 +233,28 @@ const newOutputAlbumNameInputRef = ref<any>(null);
 // 是否正在创建新画册
 const isCreatingNewOutputAlbum = computed(() => selectedOutputAlbumId.value === "__create_new__");
 
+// local-import：自动为当前“文件夹/zip”创建画册（名称=文件夹名或 zip 文件名）
+const autoCreateAlbumForLocalImport = ref(false);
+const localImportType = ref<"folder" | "zip" | null>(null);
+const suggestedAlbumName = ref("");
+
+const normalizeBasenameFromPath = (p: string): string => {
+    const trimmed = `${p}`.trim().replace(/[\\/]+$/, "");
+    const parts = trimmed.split(/[/\\]/).filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : trimmed;
+};
+
+const autoCreateAlbumDisabled = computed(() => {
+    // 如果用户已手选输出画册（含"新建画册"流程），则自动创建无意义
+    return !!selectedOutputAlbumId.value;
+});
+
+const localImportTypeLabel = computed(() => {
+    if (localImportType.value === "zip") return "压缩包";
+    if (localImportType.value === "folder") return "文件夹";
+    return "来源";
+});
+
 // 使用插件配置 composable
 const pluginConfig = usePluginConfig();
 const {
@@ -243,6 +278,49 @@ const {
     selectFileByExtensions,
     resetForm,
 } = pluginConfig;
+
+// 以下 computed 和 watch 依赖 form，必须放在 form 定义之后
+const currentLocalImportPath = computed(() => {
+    const vars = form.value.vars || {};
+    // 新字段优先，其次兼容旧字段
+    return (vars as any).path || (vars as any).file_path || (vars as any).folder_path || "";
+});
+
+const showAutoCreateAlbumOption = computed(() => {
+    return form.value.pluginId === "local-import" && localImportType.value !== null;
+});
+
+watch(
+    () => [form.value.pluginId, currentLocalImportPath.value] as const,
+    async ([pluginId, p]) => {
+        // 重置
+        localImportType.value = null;
+        suggestedAlbumName.value = "";
+        // 自动勾选不做强制重置：用户可能想手动保持；但当不是 folder/zip 时隐藏即可
+
+        if (pluginId !== "local-import") return;
+        if (!p || typeof p !== "string") return;
+
+        const lower = p.toLowerCase().trim();
+        if (lower.endsWith(".zip")) {
+            localImportType.value = "zip";
+            suggestedAlbumName.value = normalizeBasenameFromPath(p); // zip：带后缀
+            return;
+        }
+
+        // 尝试判断是否为文件夹
+        try {
+            const meta = await stat(p);
+            if ((meta as any)?.isDirectory) {
+                localImportType.value = "folder";
+                suggestedAlbumName.value = normalizeBasenameFromPath(p); // folder：文件夹名
+            }
+        } catch {
+            // ignore：可能是不存在/无权限/非文件夹
+        }
+    },
+    { immediate: true }
+);
 
 // file_or_folder 类型：将 varDef.options 作为可选择文件扩展名列表（不带点号）
 const getFileExtensions = (varDef: any): string[] | undefined => {
@@ -314,6 +392,26 @@ const handleStartCrawl = async () => {
             const created = await albumStore.createAlbum(newOutputAlbumName.value.trim());
             selectedOutputAlbumId.value = created.id;
             newOutputAlbumName.value = "";
+        }
+
+        // local-import：导入文件夹/zip 时，可选自动创建画册（仅当未手选输出画册时生效）
+        if (
+            !selectedOutputAlbumId.value &&
+            autoCreateAlbumForLocalImport.value === true &&
+            form.value.pluginId === "local-import" &&
+            localImportType.value !== null
+        ) {
+            const name = suggestedAlbumName.value?.trim();
+            if (name) {
+                try {
+                    const created = await albumStore.createAlbum(name);
+                    selectedOutputAlbumId.value = created.id;
+                    ElMessage.success(`已创建画册「${created.name}」`);
+                } catch (e) {
+                    console.warn("自动创建画册失败，将仅添加到画廊:", e);
+                    ElMessage.warning("自动创建画册失败：将仅添加到画廊");
+                }
+            }
         }
 
         // 验证表单
@@ -478,6 +576,24 @@ watch(selectedRunConfigId, async (cfgId) => {
         color: var(--anime-text-primary);
         font-weight: 500;
     }
+}
+
+.auto-album-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+}
+
+.auto-album-hint {
+    color: var(--anime-text-secondary);
+    font-size: 12px;
+    margin-left: 6px;
+}
+
+.auto-album-tip {
+    color: var(--anime-text-secondary);
+    font-size: 12px;
 }
 
 .config-hint {

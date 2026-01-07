@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onActivated, onDeactivated, onUnmounted, watch, nextTick } from "vue";
+import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -90,6 +90,7 @@ import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import LoadMoreButton from "@/components/LoadMoreButton.vue";
 import { storeToRefs } from "pinia";
+import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -170,106 +171,7 @@ const isRefreshing = ref(false); // 刷新中状态，用于阻止刷新时 Empt
 // 刷新计数器，用于强制空占位符重新挂载以触发动画
 const refreshKey = ref(0);
 // dragScroll 拖拽滚动期间：暂停实时 loadImageUrls，优先保证滚动帧率
-const isDragScrolling = ref(false);
-// 预览图交互期间：同样暂停后台加载（优先保证预览拖拽/缩放的丝滑）
-const isPreviewInteracting = ref(false);
-const isInteracting = computed(
-  () => isDragScrolling.value || isPreviewInteracting.value
-);
-watch(
-  () => galleryViewRef.value,
-  async () => {
-    await nextTick();
-    galleryContainerRef.value = galleryViewRef.value?.getContainerEl?.() ?? null;
-    // 初次挂载/切换回来时：确保“仅视口内加载”能触发一次
-    // （避免 refreshImagesPreserveCache 发生在 container 绑定之前导致 visibleIds 为空）
-    if (galleryContainerRef.value && displayedImages.value.length > 0) {
-      requestAnimationFrame(() => {
-        loadImageUrls();
-      });
-    }
-  },
-  { immediate: true }
-);
-
-// 仅视口内加载：用 rAF 节流的 scroll 监听“实时触发”，不依赖 scroll-stable（停下来才触发）
-let cleanupContainerScrollListener: null | (() => void) = null;
-let cleanupDragScrollListener: null | (() => void) = null;
-let cleanupPreviewInteractingListener: null | (() => void) = null;
-let rafScrollScheduled = false;
-const bindContainerScrollListener = (el: HTMLElement | null) => {
-  if (cleanupContainerScrollListener) {
-    cleanupContainerScrollListener();
-    cleanupContainerScrollListener = null;
-  }
-  if (cleanupDragScrollListener) {
-    cleanupDragScrollListener();
-    cleanupDragScrollListener = null;
-  }
-  if (cleanupPreviewInteractingListener) {
-    cleanupPreviewInteractingListener();
-    cleanupPreviewInteractingListener = null;
-  }
-  if (!el) return;
-
-  const onScroll = () => {
-    if (rafScrollScheduled) return;
-    rafScrollScheduled = true;
-    requestAnimationFrame(() => {
-      rafScrollScheduled = false;
-      // 拖拽滚动期间不做“实时加载”，避免 readFile/Blob 创建抢主线程导致掉帧
-      // 交互结束后会由 scroll-stable 再补齐
-      if (isDragScrolling.value) return;
-      loadImageUrls();
-    });
-  };
-
-  const onDragScrollActiveChange = (ev: Event) => {
-    const detail = (ev as CustomEvent).detail as { active?: boolean } | undefined;
-    isDragScrolling.value = !!detail?.active;
-  };
-
-  const onPreviewInteractingChange = (ev: Event) => {
-    const detail = (ev as CustomEvent).detail as { active?: boolean } | undefined;
-    isPreviewInteracting.value = !!detail?.active;
-  };
-
-  el.addEventListener("scroll", onScroll, { passive: true });
-  el.addEventListener("dragscroll-active-change", onDragScrollActiveChange as any);
-  window.addEventListener("preview-interacting-change", onPreviewInteractingChange as any);
-  cleanupContainerScrollListener = () => {
-    el.removeEventListener("scroll", onScroll as any);
-  };
-  cleanupDragScrollListener = () => {
-    el.removeEventListener(
-      "dragscroll-active-change",
-      onDragScrollActiveChange as any
-    );
-  };
-  cleanupPreviewInteractingListener = () => {
-    window.removeEventListener(
-      "preview-interacting-change",
-      onPreviewInteractingChange as any
-    );
-  };
-};
-
-watch(
-  () => galleryContainerRef.value,
-  (el) => {
-    bindContainerScrollListener(el);
-  },
-  { immediate: true }
-);
-
-onUnmounted(() => {
-  if (cleanupContainerScrollListener) cleanupContainerScrollListener();
-  cleanupContainerScrollListener = null;
-  if (cleanupDragScrollListener) cleanupDragScrollListener();
-  cleanupDragScrollListener = null;
-  if (cleanupPreviewInteractingListener) cleanupPreviewInteractingListener();
-  cleanupPreviewInteractingListener = null;
-});
+const isInteracting = ref(false);
 // const pendingAlbumImages = ref<ImageInfo[]>([]);
 // const pendingAlbumImageIds = computed(() => pendingAlbumImages.value.map(img => img.id));
 // const selectedImage = ref<ImageInfo | null>(null);
@@ -301,6 +203,33 @@ const {
   preferOriginalInGrid,
   imageGridColumns,
   isInteracting
+);
+
+watch(
+  () => galleryViewRef.value,
+  async () => {
+    await nextTick();
+    galleryContainerRef.value = galleryViewRef.value?.getContainerEl?.() ?? null;
+    // 初次挂载/切换回来时：确保“仅视口内加载”能触发一次
+    // （避免 refreshImagesPreserveCache 发生在 container 绑定之前导致 visibleIds 为空）
+    if (galleryContainerRef.value && displayedImages.value.length > 0) {
+      requestAnimationFrame(() => void loadImageUrls());
+    }
+  },
+  { immediate: true }
+);
+
+const { isInteracting: autoIsInteracting } = useImageGridAutoLoad({
+  containerRef: galleryContainerRef,
+  onLoad: () => void loadImageUrls(),
+});
+
+watch(
+  () => autoIsInteracting.value,
+  (v) => {
+    isInteracting.value = v;
+  },
+  { immediate: true }
 );
 
 // 兼容旧调用：保留原函数名

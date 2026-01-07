@@ -19,6 +19,17 @@
         "height": 800,
         "minWidth": 800,
         "minHeight": 600
+      },
+      {
+        "label": "plugin-editor",
+        "title": "Kabegame Plugin Editor",
+        "url": "plugin-editor.html",
+        "width": 1100,
+        "height": 760,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "visible": false
       }
     ],
     "security": {
@@ -29,6 +40,7 @@
     "active": true,
     "targets": "all",
     "icon": ["icons/icon.icns", "icons/icon.ico"],
+    "externalBin": ["bin/kabegame-cli", "bin/kabegame-plugin-editor"],
     "resources": ["resources/plugins"],
     "windows": {
       "nsis": {

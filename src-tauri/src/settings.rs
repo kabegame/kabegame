@@ -194,7 +194,8 @@ impl Settings {
 
     /// 切换模式前调用：
     /// - 把 old_mode 下当前的 style/transition 写入缓存
-    /// - 如果 new_mode 有缓存则恢复；否则保持当前值
+    /// - 优先“尽量保留当前值”：如果当前值在 new_mode 下仍然可用，就沿用当前值
+    /// - 只有当当前值在 new_mode 下不可用时，才回退到 new_mode 的“上一次值”（若存在）
     /// - 同时对 new_mode 做一次轻量 normalize（避免 native 下出现 slide/zoom 等非法值）
     ///
     /// 返回：切换后应该应用到目标后端的 (style, transition)
@@ -205,33 +206,37 @@ impl Settings {
     ) -> Result<(String, String), String> {
         let mut settings = self.get_settings()?;
 
-        // 1) 缓存旧模式的“当前值”
-        settings.wallpaper_style_by_mode.insert(
-            old_mode.to_string(),
-            settings.wallpaper_rotation_style.clone(),
-        );
-        settings.wallpaper_transition_by_mode.insert(
-            old_mode.to_string(),
-            settings.wallpaper_rotation_transition.clone(),
-        );
+        // 1) 先缓存旧模式的“当前值”
+        let cur_style = settings.wallpaper_rotation_style.clone();
+        let cur_transition = settings.wallpaper_rotation_transition.clone();
+        settings
+            .wallpaper_style_by_mode
+            .insert(old_mode.to_string(), cur_style.clone());
+        settings
+            .wallpaper_transition_by_mode
+            .insert(old_mode.to_string(), cur_transition.clone());
 
-        // 2) 恢复新模式（若不存在则保留当前）
-        if let Some(v) = settings.wallpaper_style_by_mode.get(new_mode).cloned() {
-            settings.wallpaper_rotation_style = v;
+        // 2) 尽量保留当前值：如果当前值在新模式下仍然可用，就直接沿用
+        //    否则回退到新模式“上一次值”（若存在）
+        let mut next_style = Self::normalize_style_for_mode(new_mode, &cur_style);
+        let mut next_transition = Self::normalize_transition_for_mode(new_mode, &cur_transition);
+
+        // 如果 normalize 改变了值，说明“当前值在 new_mode 下不可用”，尝试用 new_mode 缓存兜底
+        if next_style != cur_style {
+            if let Some(v) = settings.wallpaper_style_by_mode.get(new_mode).cloned() {
+                next_style = Self::normalize_style_for_mode(new_mode, &v);
+            }
         }
-        if let Some(v) = settings.wallpaper_transition_by_mode.get(new_mode).cloned() {
-            settings.wallpaper_rotation_transition = v;
+        if next_transition != cur_transition {
+            if let Some(v) = settings.wallpaper_transition_by_mode.get(new_mode).cloned() {
+                next_transition = Self::normalize_transition_for_mode(new_mode, &v);
+            }
         }
 
-        // 3) normalize：避免 native 下出现不支持的值
-        settings.wallpaper_rotation_style =
-            Self::normalize_style_for_mode(new_mode, &settings.wallpaper_rotation_style);
-        settings.wallpaper_rotation_transition = Self::normalize_transition_for_mode(
-            new_mode,
-            &settings.wallpaper_rotation_transition,
-        );
+        settings.wallpaper_rotation_style = next_style;
+        settings.wallpaper_rotation_transition = next_transition;
 
-        // 4) 同步写回新模式缓存（保证“首次切换到 native 且无缓存”的 normalize 结果可被记住）
+        // 3) 同步写回新模式缓存（保证“首次切换到某模式且无缓存”的 normalize 结果可被记住）
         settings.wallpaper_style_by_mode.insert(
             new_mode.to_string(),
             settings.wallpaper_rotation_style.clone(),
@@ -544,6 +549,32 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             .and_then(|v| v.as_str())
         {
             settings.wallpaper_rotation_transition = transition.to_string();
+        }
+        // 按模式缓存（用于切换模式时恢复）
+        // - 兼容历史键名（camelCase / snake_case）
+        if let Some(map) = json_value
+            .get("wallpaperStyleByMode")
+            .or_else(|| json_value.get("wallpaper_style_by_mode"))
+            .and_then(|v| v.as_object())
+        {
+            for (k, v) in map.iter() {
+                if let Some(s) = v.as_str() {
+                    settings.wallpaper_style_by_mode.insert(k.clone(), s.to_string());
+                }
+            }
+        }
+        if let Some(map) = json_value
+            .get("wallpaperTransitionByMode")
+            .or_else(|| json_value.get("wallpaper_transition_by_mode"))
+            .and_then(|v| v.as_object())
+        {
+            for (k, v) in map.iter() {
+                if let Some(s) = v.as_str() {
+                    settings
+                        .wallpaper_transition_by_mode
+                        .insert(k.clone(), s.to_string());
+                }
+            }
         }
         if let Some(mode) = json_value.get("wallpaperMode").and_then(|v| v.as_str()) {
             settings.wallpaper_mode = mode.to_string();

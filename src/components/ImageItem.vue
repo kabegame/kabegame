@@ -3,6 +3,14 @@
     :class="{ 'image-item-selected': selected, 'reorder-mode': isReorderMode, 'reorder-selected': reorderSelected }"
     ref="itemRef" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @mousedown="handleMouseDown"
     @mouseup="handleMouseUp" @mouseleave="handleMouseLeave">
+    <!-- 本地文件缺失标识：不阻挡点击/选择/右键 -->
+    <el-tooltip v-if="image.localExists === false" content="原图找不到了捏" placement="top" :show-after="300">
+      <div class="missing-file-badge">
+        <el-icon :size="14">
+          <WarningFilled />
+        </el-icon>
+      </div>
+    </el-tooltip>
     <transition name="fade-in" mode="out-in">
       <div v-if="!attemptUrl" key="loading" class="thumbnail-loading" :style="aspectRatioStyle">
         <el-skeleton :rows="0" animated>
@@ -25,6 +33,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, watch } from "vue";
 import { readFile } from "@tauri-apps/plugin-fs";
+import { WarningFilled } from "@element-plus/icons-vue";
 import type { ImageInfo } from "@/stores/crawler";
 import { ImageClickAction } from "@/stores/settings";
 
@@ -212,7 +221,7 @@ const handleMouseDown = (event: MouseEvent) => {
     if (isLongPressing.value) {
       emit("longPress");
       isLongPressing.value = false;
-          }
+    }
   }, LONG_PRESS_DURATION);
 };
 
@@ -262,6 +271,7 @@ onUnmounted(() => {
   border-radius: 16px;
   overflow: hidden;
   cursor: pointer;
+  position: relative;
   transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease, border-color 0.25s ease;
   background: var(--anime-bg-card);
   box-shadow: var(--anime-shadow);
@@ -357,6 +367,34 @@ onUnmounted(() => {
     }
   }
 
+}
+
+/* 右上角缺失文件徽标（小感叹号） */
+.missing-file-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  /* 改为 auto，让 tooltip 可以触发 */
+  cursor: help;
+  /* 鼠标悬停时显示帮助光标 */
+  color: #fff;
+  background: rgba(245, 108, 108, 0.92);
+  /* el-color-danger */
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  transition: background 0.2s ease;
+
+  &:hover {
+    background: rgba(245, 108, 108, 1);
+  }
 }
 
 /* 淡入动画 */

@@ -22,7 +22,9 @@ mod crawler;
 #[cfg(debug_assertions)]
 mod debug_tools;
 mod dedupe;
+mod kgpg;
 mod plugin;
+mod plugin_editor;
 mod settings;
 mod storage;
 mod tray;
@@ -43,6 +45,10 @@ use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
 use wallpaper_engine_export::{export_album_to_we_project, export_images_to_we_project};
 
 use dedupe::DedupeManager;
+use plugin_editor::{
+    plugin_editor_check_rhai, plugin_editor_export_kgpg, plugin_editor_process_icon,
+    plugin_editor_test_rhai,
+};
 
 fn get_current_wallpaper_path_from_settings(app: &tauri::AppHandle) -> Option<String> {
     let settings = app.try_state::<Settings>()?.get_settings().ok()?;
@@ -214,6 +220,7 @@ fn crawl_images_command(
         output_dir,
         user_config,
         output_album_id,
+        plugin_file_path: None,
     })?;
     Ok(())
 }
@@ -854,6 +861,15 @@ async fn get_plugin_icon(
     Err(format!("Plugin {} not found", plugin_id))
 }
 
+/// 商店列表 icon：KGPG v2 固定头部 + HTTP Range 读取（返回 PNG bytes）。
+#[tauri::command]
+async fn get_remote_plugin_icon(
+    download_url: String,
+    state: tauri::State<'_, PluginManager>,
+) -> Result<Option<Vec<u8>>, String> {
+    state.fetch_remote_plugin_icon_v2(&download_url).await
+}
+
 #[tauri::command]
 fn get_settings(state: tauri::State<Settings>) -> Result<AppSettings, String> {
     state.get_settings()
@@ -1016,6 +1032,44 @@ fn delete_run_config(config_id: String, state: tauri::State<Storage>) -> Result<
 fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
     let download_queue = app.state::<crawler::DownloadQueue>();
     download_queue.cancel_task(&task_id)?;
+
+    // 同步更新任务状态：用户手动停止应为 canceled，而不是等 task worker 结束后被 completed 覆盖。
+    // 注意：只有在任务存在且尚未终结（completed/failed/canceled）时才更新与发事件。
+    let end = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let canceled_err = "Task canceled".to_string();
+
+    if let Some(storage) = app.try_state::<Storage>() {
+        if let Ok(Some(mut task)) = storage.get_task(&task_id) {
+            let is_terminal = matches!(task.status.as_str(), "completed" | "failed" | "canceled");
+            if !is_terminal {
+                task.status = "canceled".to_string();
+                task.end_time = Some(end);
+                task.error = Some(canceled_err.clone());
+                let _ = storage.update_task(task);
+
+                // 前端优先靠 task-status 驱动 UI；同时保留 task-error 兼容旧逻辑
+                let _ = app.emit(
+                    "task-status",
+                    serde_json::json!({
+                        "taskId": task_id.clone(),
+                        "status": "canceled",
+                        "endTime": end,
+                        "error": canceled_err.clone()
+                    }),
+                );
+                let _ = app.emit(
+                    "task-error",
+                    serde_json::json!({
+                        "taskId": task_id,
+                        "error": canceled_err
+                    }),
+                );
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1518,8 +1572,8 @@ fn set_wallpaper_mode(
             }
         };
         // 2.5) 切换模式时：尽量保留/恢复该模式的 style/transition（按模式缓存）
-        // - 若目标模式已有缓存：恢复该缓存
-        // - 若没有缓存：保持当前值
+        // - 优先“尽量保留当前值”：如果当前值在目标模式下仍可用，就沿用当前值
+        // - 若当前值在目标模式下不可用：回退到目标模式的“上一次值”（若存在）
         // - 同时对 native 做 normalize，避免 slide/zoom 等不支持值污染全局设置
         let (style_to_apply, transition_to_apply) = match settings_state
             .swap_style_transition_for_mode_switch(&old_mode_clone, &mode_clone)
@@ -1767,7 +1821,7 @@ fn fix_wallpaper_window_zorder(app: &tauri::AppHandle) {
         let is_raised_desktop = (ex_style & WS_EX_NOREDIRECTIONBITMAP) != 0;
 
         if is_raised_desktop {
-            eprintln!("[DEBUG] hide_main_window: 修复壁纸窗口 Z-order (Windows 11 raised desktop)");
+            eprintln!("[DEBUG] fix_wallpaper_window_zorder: 修复壁纸窗口 Z-order (Windows 11 raised desktop)");
 
             // 查找 DefView
             let shell_dll_defview = FindWindowExW(
@@ -1821,7 +1875,7 @@ fn fix_wallpaper_window_zorder(app: &tauri::AppHandle) {
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                 );
 
-                eprintln!("[DEBUG] hide_main_window: ✓ 壁纸窗口 Z-order 已修复");
+                eprintln!("[DEBUG] fix_wallpaper_window_zorder: ✓ 壁纸窗口 Z-order 已修复");
             }
         }
     }
@@ -1867,6 +1921,53 @@ fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// 打开插件编辑器窗口（独立 webview：plugin-editor.html）
+/// 窗口在 tauri.conf.json 中预定义，启动时创建但不可见
+#[tauri::command]
+fn open_plugin_editor_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+
+    // 窗口在 tauri.conf.json 中预定义，启动时已创建
+    if let Some(w) = app.get_webview_window("plugin-editor") {
+        w.show().map_err(|e| format!("显示窗口失败: {}", e))?;
+        w.set_focus().map_err(|e| format!("聚焦窗口失败: {}", e))?;
+        w.center().map_err(|e| format!("居中窗口失败: {}", e))?;
+        return Ok(());
+    }
+
+    // 如果预定义窗口不存在（理论上不应发生），动态创建
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    let url = WebviewUrl::App("plugin-editor.html".into());
+    let window = WebviewWindowBuilder::new(&app, "plugin-editor", url)
+        .title("Kabegame Plugin Editor")
+        .inner_size(1100.0, 760.0)
+        .min_inner_size(800.0, 600.0)
+        .resizable(true)
+        .visible(true)
+        .center()
+        .build()
+        .map_err(|e| format!("创建插件编辑器窗口失败: {}", e))?;
+
+    let _ = window.show();
+    let _ = window.set_focus();
+
+    Ok(())
+}
+
+/// 修复壁纸窗口 Z-order（供前端在最小化等事件时调用）
+#[tauri::command]
+fn fix_wallpaper_zorder(app: tauri::AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        fix_wallpaper_window_zorder(&app);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+    }
 }
 
 /// 壁纸窗口前端 ready 后调用，用于触发一次"推送当前壁纸到壁纸窗口"。
@@ -2078,21 +2179,22 @@ fn main() {
             let download_queue = crawler::DownloadQueue::new(app.app_handle().clone());
             app.manage(download_queue);
 
-            // 初始化 task 调度器（固定 10 个 task worker），并在启动时恢复 pending/running 任务
-            let task_scheduler = crawler::TaskScheduler::new(app.app_handle().clone());
-            match task_scheduler.restore_pending_tasks() {
-                Ok(n) => {
-                    if n > 0 {
-                        eprintln!(
-                            "[task-scheduler] 已恢复 {} 个 pending/running 任务并重新入队",
-                            n
-                        );
+            // 应用启动时，将所有 pending 和 running 状态的任务标记为失败
+            let storage_for_cleanup = app.state::<Storage>();
+            match storage_for_cleanup.mark_pending_running_tasks_as_failed() {
+                Ok(count) => {
+                    if count > 0 {
+                        println!("启动时已将 {} 个 pending/running 任务标记为失败", count);
                     }
                 }
                 Err(e) => {
-                    eprintln!("[task-scheduler] 恢复任务失败: {}", e);
+                    eprintln!("启动时标记任务为失败失败: {}", e);
                 }
             }
+
+            // 初始化 task 调度器（固定 10 个 task worker）
+            // 注意：不再恢复 pending/running 任务，它们已在启动时被标记为失败
+            let task_scheduler = crawler::TaskScheduler::new(app.app_handle().clone());
             app.manage(task_scheduler);
 
             // 初始化全局壁纸控制器（基础 manager）
@@ -2180,6 +2282,11 @@ fn main() {
             get_build_mode,
             update_plugin,
             delete_plugin,
+            // 插件编辑器
+            plugin_editor_check_rhai,
+            plugin_editor_test_rhai,
+            plugin_editor_export_kgpg,
+            plugin_editor_process_icon,
             crawl_images_command,
             get_images,
             get_images_paginated,
@@ -2228,6 +2335,7 @@ fn main() {
             get_plugin_image,
             get_plugin_image_for_detail,
             get_plugin_icon,
+            get_remote_plugin_icon,
             get_gallery_image,
             get_plugin_vars,
             get_settings,
@@ -2269,6 +2377,8 @@ fn main() {
             #[cfg(target_os = "windows")]
             wallpaper_window_ready,
             hide_main_window,
+            open_plugin_editor_window,
+            fix_wallpaper_zorder,
             // Wallpaper Engine 导出
             export_album_to_we_project,
             export_images_to_we_project,
@@ -2319,6 +2429,11 @@ fn main() {
                     }
                 } else if window.label().starts_with("wallpaper") {
                     api.prevent_close();
+                } else if window.label() == "plugin-editor" {
+                    // 插件编辑器窗口：阻止销毁，只隐藏
+                    // 避免重新打开时需要动态创建窗口导致 Monaco editor 初始化问题
+                    api.prevent_close();
+                    let _ = window.hide();
                 }
             }
         })

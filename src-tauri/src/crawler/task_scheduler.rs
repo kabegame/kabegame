@@ -1,4 +1,5 @@
-use crate::crawler::crawl_images;
+use crate::crawler::{crawl_images, crawl_images_from_plugin_file};
+use crate::crawler::DownloadQueue;
 use crate::plugin::PluginManager;
 use crate::settings::Settings;
 use crate::storage::Storage;
@@ -18,6 +19,9 @@ pub struct CrawlTaskRequest {
     pub output_dir: Option<String>,
     pub user_config: Option<HashMap<String, serde_json::Value>>,
     pub output_album_id: Option<String>,
+    /// 可选：直接从指定 .kgpg 文件运行（用于插件编辑器/临时插件）
+    #[serde(default)]
+    pub plugin_file_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -100,6 +104,7 @@ impl TaskScheduler {
                     output_dir: t.output_dir,
                     user_config: t.user_config,
                     output_album_id: t.output_album_id,
+                    plugin_file_path: None,
                 })?;
                 restored += 1;
             }
@@ -193,6 +198,28 @@ fn worker_loop(
 
         let Some(req) = req else { continue };
 
+        // 如果任务已被用户取消（可能在排队期间），直接标记 canceled，避免进入 running/最终被 completed 覆盖。
+        {
+            let dq = app.state::<DownloadQueue>();
+            if dq.is_task_canceled(&req.task_id) {
+                let end = now_ms();
+                let e = "Task canceled".to_string();
+
+                // 兼容旧逻辑：前端也监听 task-error 来识别取消
+                let _ = app.emit(
+                    "task-error",
+                    serde_json::json!({
+                        "taskId": req.task_id.clone(),
+                        "error": e.clone()
+                    }),
+                );
+
+                let _ = persist_task_status(&app, &req.task_id, "canceled", None, Some(end), Some(e.clone()));
+                emit_task_status(&app, &req.task_id, "canceled", None, Some(end), Some(e));
+                continue;
+            }
+        }
+
         running.fetch_add(1, Ordering::Relaxed);
 
         // 标记 running（写库 + 事件）
@@ -205,8 +232,32 @@ fn worker_loop(
         match res {
             Ok(_) => {
                 let end = now_ms();
-                let _ = persist_task_status(&app, &req.task_id, "completed", None, Some(end), None);
-                emit_task_status(&app, &req.task_id, "completed", None, Some(end), None);
+                // 取消优先：即使脚本执行返回 Ok，只要用户请求了取消，就不要把任务标成 completed。
+                // 这能修复“手动停止后仍被标记完成”（常见于脚本很快结束、或取消发生在下载阶段）。
+                let dq = app.state::<DownloadQueue>();
+                if dq.is_task_canceled(&req.task_id) {
+                    let e = "Task canceled".to_string();
+                    let _ = app.emit(
+                        "task-error",
+                        serde_json::json!({
+                            "taskId": req.task_id.clone(),
+                            "error": e.clone()
+                        }),
+                    );
+                    let _ = persist_task_status(
+                        &app,
+                        &req.task_id,
+                        "canceled",
+                        None,
+                        Some(end),
+                        Some(e.clone()),
+                    );
+                    emit_task_status(&app, &req.task_id, "canceled", None, Some(end), Some(e));
+                } else {
+                    let _ =
+                        persist_task_status(&app, &req.task_id, "completed", None, Some(end), None);
+                    emit_task_status(&app, &req.task_id, "completed", None, Some(end), None);
+                }
             }
             Err(e) => {
                 let is_canceled = e.contains("Task canceled");
@@ -240,9 +291,11 @@ fn worker_loop(
 
 fn run_task(app: &AppHandle, req: &CrawlTaskRequest) -> Result<(), String> {
     let plugin_manager = app.state::<PluginManager>();
-    let plugin = plugin_manager
-        .get(&req.plugin_id)
-        .ok_or_else(|| format!("Plugin {} not found", req.plugin_id))?;
+    // 两种运行模式：
+    // 1) 已安装插件：通过 plugin_id 查找并运行
+    // 2) 临时插件文件：通过 plugin_file_path 读取 manifest/config 并运行（不要求安装）
+    let (plugin, plugin_file_path) = plugin_manager
+        .resolve_plugin_for_task_request(&req.plugin_id, req.plugin_file_path.as_deref())?;
 
     let storage = app.state::<Storage>();
     let settings_state = app.state::<Settings>();
@@ -264,16 +317,29 @@ fn run_task(app: &AppHandle, req: &CrawlTaskRequest) -> Result<(), String> {
     // 注意：crawl_images 是 async，但内部主要是同步脚本执行；
     // 我们在 task worker 线程里 block_on，不阻塞 Tauri 的 command runtime。
     tauri::async_runtime::block_on(async {
-        let _ = crawl_images(
-            &plugin,
-            &req.url,
-            &req.task_id,
-            images_dir,
-            app.clone(),
-            req.user_config.clone(),
-            req.output_album_id.clone(),
-        )
-        .await?;
+        if let Some(path) = plugin_file_path {
+            let _ = crawl_images_from_plugin_file(
+                &plugin,
+                &path,
+                &req.task_id,
+                images_dir,
+                app.clone(),
+                req.user_config.clone(),
+                req.output_album_id.clone(),
+            )
+            .await?;
+        } else {
+            let _ = crawl_images(
+                &plugin,
+                &req.url,
+                &req.task_id,
+                images_dir,
+                app.clone(),
+                req.user_config.clone(),
+                req.output_album_id.clone(),
+            )
+            .await?;
+        }
         Ok::<(), String>(())
     })
 }

@@ -21,7 +21,7 @@
       <AlbumCard v-for="album in albums" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
         :count="albumCounts[album.id] || 0" :preview-urls="albumPreviewUrls[album.id] || []"
         :loading-states="albumLoadingStates[album.id] || []" :is-loading="albumIsLoading[album.id] || false"
-        @click="openAlbum(album)" @mouseenter="prefetchPreview(album)"
+        @click="openAlbum(album)" @visible="prefetchPreview(album)"
         @contextmenu.prevent="openAlbumContextMenu($event, album)" />
     </transition-group>
 

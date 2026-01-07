@@ -43,7 +43,7 @@ defineExpose({
 });
 </script>
 
-<style lang="scss" scoped>
+<style lang="scss">
 .file-drop-overlay {
   position: fixed;
   top: 0;

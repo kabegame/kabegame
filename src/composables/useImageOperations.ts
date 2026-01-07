@@ -18,9 +18,9 @@ export function useImageOperations(
   imageSrcMap: Ref<Record<string, { thumbnail?: string; original?: string }>>,
   currentWallpaperImageId: Ref<string | null>,
   galleryViewRef: Ref<any>,
-  removeFromUiCacheByIds: (imageIds: string[]) => void,
-  loadImages: (reset?: boolean, opts?: any) => Promise<void>,
-  loadMoreImages: () => Promise<void>
+  _removeFromUiCacheByIds: (imageIds: string[]) => void,
+  _loadImages: (reset?: boolean, opts?: any) => Promise<void>,
+  _loadMoreImages: () => Promise<void>
 ) {
   const crawlerStore = useCrawlerStore();
   const albumStore = useAlbumStore();

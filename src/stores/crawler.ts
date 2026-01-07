@@ -23,6 +23,12 @@ export interface ImageInfo {
   id: string;
   url: string;
   localPath: string;
+  /**
+   * 后端提供：本地文件是否存在。
+   * - false：源文件已丢失/移动（仍展示条目，但 UI 会提示）
+   * - true/undefined：认为存在或未知（兼容旧数据）
+   */
+  localExists?: boolean;
   pluginId: string;
   taskId?: string;
   crawledAt: number;
@@ -67,6 +73,10 @@ export const useCrawlerStore = defineStore("crawler", () => {
   const hasMore = ref(false);
   const runConfigs = ref<RunConfig[]>([]);
 
+  // 进度事件节流：后端可能高频发送 task-progress（尤其是本地导入/递归扫描时）
+  // 如果每条都触发响应式更新，会导致大量重渲染，出现“界面卡死/无法交互”。
+  const lastProgressUpdateAt = new Map<string, number>();
+
   // 初始化全局事件监听器
   (async () => {
     try {
@@ -108,6 +118,13 @@ export const useCrawlerStore = defineStore("crawler", () => {
           const cur = tasks.value[idx];
           const newProgress = event.payload.progress;
           if (newProgress <= (cur.progress ?? 0)) return;
+
+          // 节流：同一 task 的进度更新最多 ~10fps（或最终 100% 立即更新）
+          const now = Date.now();
+          const lastAt = lastProgressUpdateAt.get(event.payload.taskId) ?? 0;
+          if (newProgress < 100 && now - lastAt < 100) return;
+          lastProgressUpdateAt.set(event.payload.taskId, now);
+
           const next: CrawlTask = { ...cur, progress: newProgress };
           tasks.value[idx] = next;
         }
@@ -174,7 +191,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
     outputAlbumId?: string
   ) {
     const task: CrawlTask = {
-      id: Date.now().toString(),
+      // 批量添加时 Date.now().toString() 可能碰撞，导致任务覆盖/异常
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       pluginId,
       url,
       outputDir,

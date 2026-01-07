@@ -50,5 +50,3 @@ pub fn user_data_dir(app_folder_name: &str) -> PathBuf {
 pub fn kabegame_data_dir() -> PathBuf {
     user_data_dir("Kabegame")
 }
-
-

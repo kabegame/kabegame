@@ -6,6 +6,8 @@
   <el-container v-else class="app-container">
     <!-- 全局文件拖拽提示层 -->
     <FileDropOverlay ref="fileDropOverlayRef" />
+    <!-- 文件拖拽导入确认弹窗（封装 ElMessageBox.confirm） -->
+    <ImportConfirmDialog ref="importConfirmDialogRef" />
     <!-- 全局唯一的快捷设置抽屉（避免多页面实例冲突） -->
     <QuickSettingsDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
@@ -56,7 +58,7 @@
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 import { Picture, Grid, Setting, Collection } from "@element-plus/icons-vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import WallpaperLayer from "./components/WallpaperLayer.vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -65,9 +67,11 @@ import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import TaskDrawer from "./components/TaskDrawer.vue";
 import { useTaskDrawerStore } from "./stores/taskDrawer";
 import { useCrawlerStore } from "./stores/crawler";
+import { useAlbumStore } from "./stores/albums";
 import { storeToRefs } from "pinia";
 import FileDropOverlay from "./components/FileDropOverlay.vue";
 import { stat } from "@tauri-apps/plugin-fs";
+import ImportConfirmDialog from "./components/import/ImportConfirmDialog.vue";
 
 const route = useRoute();
 const activeRoute = computed(() => route.path);
@@ -78,13 +82,18 @@ const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskD
 
 // 爬虫 store
 const crawlerStore = useCrawlerStore();
+const albumStore = useAlbumStore();
 
 // 文件拖拽提示层引用
 const fileDropOverlayRef = ref<InstanceType<typeof FileDropOverlay> | null>(null);
+const importConfirmDialogRef = ref<InstanceType<typeof ImportConfirmDialog> | null>(null);
 
 // 支持的图片格式
 const SUPPORTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'];
 const SUPPORTED_ZIP_EXTENSIONS = ['zip'];
+
+// 让出 UI：避免在一次性批量导入/创建任务时长时间占用主线程导致“界面卡死”
+const yieldToUi = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 // 从文件路径提取扩展名（小写，不含点号）
 const getFileExtension = (filePath: string): string => {
@@ -119,7 +128,7 @@ const getDirectoryFromPath = (filePath: string): string => {
 // 关键：同步判断当前窗口 label，确保壁纸窗口首次渲染就进入 WallpaperLayer
 const isWallpaperWindow = ref(false);
 try {
-  // wallpaper / wallpaper_debug 都渲染壁纸层（便于调试）
+  // wallpaper / wallpaper-debug 都渲染壁纸层（便于调试）
   isWallpaperWindow.value = getCurrentWebviewWindow().label.startsWith("wallpaper");
 } catch {
   // 非 Tauri 环境（浏览器打开）会走这里
@@ -127,6 +136,7 @@ try {
 }
 
 let fileDropUnlisten: (() => void) | null = null;
+let minimizeUnlisten: (() => void) | null = null;
 
 onMounted(async () => {
   // 初始化 settings store
@@ -149,6 +159,21 @@ onMounted(async () => {
       });
     } catch (error) {
       console.error("注册窗口关闭事件监听失败:", error);
+    }
+
+    // 监听窗口最小化事件 - 修复壁纸窗口 Z-order（防止覆盖桌面图标）
+    try {
+      const currentWindow = getCurrentWebviewWindow();
+      minimizeUnlisten = await currentWindow.listen('tauri://window-minimized', async () => {
+        // 窗口最小化时，修复壁纸窗口 Z-order
+        try {
+          await invoke("fix_wallpaper_zorder");
+        } catch (error) {
+          // 忽略错误（非 Windows 或壁纸窗口不存在时）
+        }
+      });
+    } catch (error) {
+      console.error("注册窗口最小化事件监听失败:", error);
     }
 
     // 注册全局文件拖拽事件监听（使用 onDragDropEvent，根据 Tauri v2 文档）
@@ -230,55 +255,45 @@ onMounted(async () => {
                 return;
               }
 
-              // 显示确认对话框
-              const itemCount = items.length;
-              const folderCount = items.filter(i => i.isDirectory).length;
-              const zipCount = items.filter(i => !i.isDirectory && i.isZip).length;
-              const imageCount = items.filter(i => !i.isDirectory && !i.isZip).length;
+              const createAlbumPerSource =
+                (await importConfirmDialogRef.value?.open(items)) ?? null;
+              if (createAlbumPerSource === null) {
+                // 用户取消
+                console.log("[App] 用户取消导入");
+                return;
+              }
 
-              // 构建列表 HTML
-              const itemListHtml = items.map(item =>
-                `<div class="import-item">
-                  <span class="item-icon">${item.isDirectory ? '📁' : (item.isZip ? '📦' : '🖼️')}</span>
-                  <span class="item-name">${item.name}</span>
-                  <span class="item-type">${item.isDirectory ? '文件夹' : (item.isZip ? '压缩包' : '图片')}</span>
-                </div>`
-              ).join('');
+              // 用户确认，开始导入
+              console.log('[App] 用户确认导入，开始添加任务');
 
-              const message = `
-                <div class="import-confirm-content">
-                  <div class="import-summary">
-                    <p>是否导入以下 <strong>${itemCount}</strong> 个项目？</p>
-                    <div class="summary-stats">
-                      <span>📁 文件夹: <strong>${folderCount}</strong> 个</span>
-                      <span>🖼️ 图片: <strong>${imageCount}</strong> 个</span>
-                      <span>📦 ZIP: <strong>${zipCount}</strong> 个</span>
-                    </div>
-                  </div>
-                  <div class="import-list">
-                    ${itemListHtml}
-                  </div>
-                </div>
-              `;
-
+              // 任务抽屉打开，用户可以在导入过程中随时查看/操作
               try {
-                await ElMessageBox.confirm(
-                  message,
-                  '确认导入',
-                  {
-                    confirmButtonText: '确认导入',
-                    cancelButtonText: '取消',
-                    type: 'info',
-                    customClass: 'file-drop-confirm-dialog',
-                    dangerouslyUseHTMLString: true,
-                  }
-                );
+                taskDrawerStore.open();
+              } catch {
+                // ignore
+              }
 
-                // 用户确认，开始导入
-                console.log('[App] 用户确认导入，开始添加任务');
-
-                for (const item of items) {
+              // 关键：不要在拖拽回调里长时间串行 await；放到后台任务并分批让出 UI
+              void (async () => {
+                let createdAnyAlbum = false;
+                for (let i = 0; i < items.length; i++) {
+                  const item = items[i];
                   try {
+                    // 可选：为每个“文件夹/压缩包”单独创建画册，并把 outputAlbumId 传给任务
+                    let outputAlbumId: string | undefined = undefined;
+                    if (createAlbumPerSource && (item.isDirectory || item.isZip)) {
+                      try {
+                        // 批量导入时避免每个画册都 reload 一次，最后再统一 load
+                        const created = await albumStore.createAlbum(item.name, { reload: false });
+                        outputAlbumId = created.id;
+                        createdAnyAlbum = true;
+                      } catch (e) {
+                        console.warn("[App] 创建导入画册失败，将仅导入到画廊:", item.name, e);
+                        ElMessage.warning(`创建画册失败，将仅导入到画廊：${item.name}`);
+                        outputAlbumId = undefined;
+                      }
+                    }
+
                     if (item.isDirectory) {
                       // 文件夹：使用 local-import，递归子文件夹
                       await crawlerStore.addTask(
@@ -288,19 +303,23 @@ onMounted(async () => {
                         {
                           folder_path: item.path,
                           recursive: true, // 递归子文件夹
-                        }
+                        },
+                        outputAlbumId
                       );
                       console.log('[App] 已添加文件夹导入任务:', item.path);
                     } else {
-                      // 文件/zip：使用 local-import，输出目录为文件所在目录
+                      // 文件：使用 local-import
+                      // - 图片：默认输出到文件所在目录（保持原行为）
+                      // - ZIP：不指定 outputDir，让后端按“默认下载目录/内置目录”决定（修复 ZIP 默认落在 ZIP 所在目录的问题）
                       const fileDir = getDirectoryFromPath(item.path);
                       await crawlerStore.addTask(
                         'local-import',
                         '', // url 为空
-                        fileDir, // outputDir 为文件所在目录
+                        item.isZip ? undefined : fileDir,
                         {
                           file_path: item.path,
-                        }
+                        },
+                        outputAlbumId
                       );
                       console.log('[App] 已添加文件导入任务:', item.path);
                     }
@@ -308,13 +327,20 @@ onMounted(async () => {
                     console.error('[App] 添加任务失败:', item.path, error);
                     ElMessage.error(`添加任务失败: ${item.name}`);
                   }
+
+                  // 每处理 2 个让出一次主线程，让渲染/输入有机会执行
+                  if (i % 2 === 1) {
+                    await yieldToUi();
+                  }
+                }
+
+                // 批量创建画册后，统一刷新一次（放后台，不阻塞 UI）
+                if (createdAnyAlbum) {
+                  void albumStore.loadAlbums();
                 }
 
                 ElMessage.success(`已添加 ${items.length} 个导入任务`);
-              } catch (error) {
-                // 用户取消
-                console.log('[App] 用户取消导入');
-              }
+              })();
             } catch (error) {
               console.error('[App] 处理文件拖入失败:', error);
               ElMessage.error('处理文件拖入失败: ' + (error instanceof Error ? error.message : String(error)));
@@ -337,6 +363,11 @@ onUnmounted(() => {
   if (fileDropUnlisten) {
     fileDropUnlisten();
     fileDropUnlisten = null;
+  }
+  // 清理最小化事件监听
+  if (minimizeUnlisten) {
+    minimizeUnlisten();
+    minimizeUnlisten = null;
   }
 });
 
@@ -564,6 +595,19 @@ const toggleCollapse = () => {
       }
     }
 
+    .import-options {
+      margin: 8px 0 14px 0;
+      padding: 10px 12px;
+      border: 1px dashed var(--anime-border);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.35);
+
+      .import-option {
+        color: var(--anime-text-primary);
+        font-size: 14px;
+      }
+    }
+
     .import-list {
       max-height: 400px;
       overflow-y: auto;
@@ -621,14 +665,25 @@ const toggleCollapse = () => {
 
 // 覆盖：拖入项目过多时，确认弹窗不应撑满屏幕；列表区域滚动即可
 ::deep(.file-drop-confirm-dialog) {
-  .el-message-box__content,
+  // 限制整个 MessageBox 的最大高度
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+
+  .el-message-box__content {
+    max-height: none;
+    overflow: visible;
+    flex: 1;
+    min-height: 0;
+  }
+
   .el-message-box__message {
-    max-height: 70vh;
-    overflow: hidden;
+    max-height: none;
+    overflow: visible;
   }
 
   .import-confirm-content {
-    max-height: 70vh;
+    max-height: 60vh;
     display: flex;
     flex-direction: column;
   }
@@ -641,7 +696,7 @@ const toggleCollapse = () => {
   .import-confirm-content .import-list {
     flex: 1;
     min-height: 160px;
-    max-height: none;
+    max-height: 45vh;
     overflow-y: auto;
   }
 }

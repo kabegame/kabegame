@@ -73,15 +73,17 @@ const saveCurrentPath = async (path: string) => {
   }
 };
 
-router.beforeEach(async (to, from, next) => {
+router.beforeEach((to, _from, next) => {
   document.title = `${to.meta.title || "Kabegame"} - 老婆收集器`;
-
-  // 保存当前路径（如果启用了恢复功能）
-  if (from.path !== to.path) {
-    await saveCurrentPath(to.path);
-  }
-
   next();
+});
+
+// 保存当前路径（如果启用了恢复功能）
+// 注意：不要阻塞导航（任务多时后端 invoke 可能较慢），因此放到 afterEach 并 fire-and-forget
+router.afterEach((to, from) => {
+  if (from.path !== to.path) {
+    void saveCurrentPath(to.path);
+  }
 });
 
 // 应用启动时恢复上次的路径
