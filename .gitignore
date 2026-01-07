@@ -22,6 +22,8 @@ src-tauri/target
 src-tauri/Cargo.lock
 src-tauri/bin/*
 !src-tauri/bin/.gitkeep
+src-tauri/sidecar/*
+!src-tauri/sidecar/.gitkeep
 
 # Tauri generated icons (keep only icon.png and README.md)
 src-tauri/icons/*
@@ -30,7 +32,7 @@ src-tauri/icons/*
 
 # development data
 /data
-/src-tauri/sources/plugins/*.kgpg
+/src-tauri/resources/plugins/*.kgpg
 
 # Nx
 .nx/cache

@@ -1923,36 +1923,19 @@ fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 打开插件编辑器窗口（独立 webview：plugin-editor.html）
-/// 窗口在 tauri.conf.json 中预定义，启动时创建但不可见
+/// 打开插件编辑器（以独立进程运行 kabegame-plugin-editor sidecar）
 #[tauri::command]
 fn open_plugin_editor_window(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
+    use tauri_plugin_shell::ShellExt;
 
-    // 窗口在 tauri.conf.json 中预定义，启动时已创建
-    if let Some(w) = app.get_webview_window("plugin-editor") {
-        w.show().map_err(|e| format!("显示窗口失败: {}", e))?;
-        w.set_focus().map_err(|e| format!("聚焦窗口失败: {}", e))?;
-        w.center().map_err(|e| format!("居中窗口失败: {}", e))?;
-        return Ok(());
-    }
+    let sidecar = app
+        .shell()
+        .sidecar("kabegame-plugin-editor")
+        .map_err(|e| format!("获取 sidecar 失败: {}", e))?;
 
-    // 如果预定义窗口不存在（理论上不应发生），动态创建
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
-
-    let url = WebviewUrl::App("plugin-editor.html".into());
-    let window = WebviewWindowBuilder::new(&app, "plugin-editor", url)
-        .title("Kabegame Plugin Editor")
-        .inner_size(1100.0, 760.0)
-        .min_inner_size(800.0, 600.0)
-        .resizable(true)
-        .visible(true)
-        .center()
-        .build()
-        .map_err(|e| format!("创建插件编辑器窗口失败: {}", e))?;
-
-    let _ = window.show();
-    let _ = window.set_focus();
+    sidecar
+        .spawn()
+        .map_err(|e| format!("启动插件编辑器进程失败: {}", e))?;
 
     Ok(())
 }

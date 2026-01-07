@@ -39,7 +39,12 @@ const RESOURCES_PLUGINS_DIR = path.join(
 );
 
 const SRC_TAURI_DIR = path.join(root, "src-tauri");
-const TAURI_BIN_DIR = path.join(SRC_TAURI_DIR, "bin");
+const TAURI_SIDECAR_DIR = path.join(SRC_TAURI_DIR, "sidecar");
+const TAURI_SIDECAR_CONFIG = path.join(
+  SRC_TAURI_DIR,
+  "tauri.sidecar.conf.json"
+);
+const TAURI_SIDECAR_CONFIG_RAW = fs.readFileSync(TAURI_SIDECAR_CONFIG, "utf8");
 
 function run(cmd, args, opts = {}) {
   const res = spawnSync(cmd, args, {
@@ -76,27 +81,34 @@ function rustHostTriple() {
   return m[1].trim();
 }
 
-// 构建一个sidebar工具
-function buildSidecar(env, binName) {
+// 构建一个 sidecar 工具
+// - dev：建议 profile=debug（更快）
+// - build：使用 profile=release（随包发布）
+function buildSidecar(env, binName, profile = "release") {
   const triple = rustHostTriple();
   const ext = process.platform === "win32" ? ".exe" : "";
-  const src = path.join(SRC_TAURI_DIR, "target", "release", `${binName}${ext}`);
-  const dst = path.join(TAURI_BIN_DIR, `${binName}-${triple}${ext}`);
+  const src = path.join(SRC_TAURI_DIR, "target", profile, `${binName}${ext}`);
+  const dst = path.join(TAURI_SIDECAR_DIR, `${binName}-${triple}${ext}`);
 
-  console.log(chalk.blue(`[build] Building sidecar: ${binName} (${triple})`));
-  fs.mkdirSync(TAURI_BIN_DIR, { recursive: true });
-  run("cargo", ["build", "--release", "--bin", binName], {
+  console.log(
+    chalk.blue(`[sidecar] Building: ${binName} (${triple}, profile=${profile})`)
+  );
+  fs.mkdirSync(TAURI_SIDECAR_DIR, { recursive: true });
+  const cargoArgs =
+    profile === "release"
+      ? ["build", "--release", "--bin", binName]
+      : ["build", "--bin", binName];
+  run("cargo", cargoArgs, {
     cwd: SRC_TAURI_DIR,
-    env,
+    // sidecar 构建不应依赖主应用的 externalBin（会导致循环依赖/校验失败）
+    env: { ...env, TAURI_CONFIG: TAURI_SIDECAR_CONFIG_RAW },
   });
   if (!fs.existsSync(src)) {
     console.error(chalk.red(`❌ sidecar 编译后未找到产物: ${src}`));
     process.exit(1);
   }
   fs.copyFileSync(src, dst);
-  console.log(
-    chalk.green(`[build] Sidecar copied: ${path.relative(root, dst)}`)
-  );
+  console.log(chalk.green(`[sidecar] Copied: ${path.relative(root, dst)}`));
 }
 
 function spawnProc(command, args, opts = {}) {
@@ -157,8 +169,8 @@ function dev(options) {
   // This prevents Tauri from failing on empty resources glob pattern
   const packageTarget =
     options.mode === "local"
-      ? "crawler-plugins:package-to-resources"
-      : "crawler-plugins:package-local-to-resources";
+      ? "crawler-plugins:package-local-to-resources"
+      : "crawler-plugins:package-to-resources";
   console.log(
     chalk.blue(`[dev] Packaging plugins to resources: ${packageTarget}`)
   );
@@ -168,6 +180,10 @@ function dev(options) {
   // Step 2: Scan generated plugins and build final env with builtin list
   const builtinPlugins = options.mode === "local" ? scanBuiltinPlugins() : [];
   const env = buildEnv(options, builtinPlugins);
+
+  // Step 2.5: Ensure sidecar binaries exist for `bundle.externalBin` (dev uses debug for speed)
+  buildSidecar(env, "kabegame-cli", "debug");
+  buildSidecar(env, "kabegame-plugin-editor", "debug");
 
   const tauriTarget = "tauri:dev";
 
@@ -187,7 +203,7 @@ function dev(options) {
   console.log(
     chalk.blue(`[dev] Starting tauri dev: nx run kabegame:${tauriTarget}`)
   );
-  children.push(spawnProc("nx", ["run", `kabegame:${tauriTarget}`], { env }));
+  children.push(spawnProc("tauri", ["dev"], { env }));
 
   const shutdown = () => {
     for (const c of children) {
@@ -248,7 +264,7 @@ function build(options) {
   // - mode=normal: prepackage local-only plugins
   // - mode=local:  prepackage all plugins
 
-  // Step 1: Package plugins
+  // Step 1: Package plugins to resources
   const packageTarget =
     options.mode === "local"
       ? "crawler-plugins:package-to-resources"
