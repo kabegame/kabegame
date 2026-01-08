@@ -140,41 +140,88 @@ pnpm install
 
 ### 开发/构建命令（统一入口）
 
-```bash
-# 开发
-pnpm dev                  # 默认使用远程插件打包依赖，运行 tauri:dev
-pnpm dev --watch          # 启用 Nx 依赖图 watch，变更自动重构依赖并触发 Tauri 重启
-pnpm dev --mode local     # 使用 local 模式（无商店版本，预打包全部插件）
+项目采用 **Cargo Workspace** 架构，包含三个独立应用：
+- **main**：主应用（Tauri GUI，前端端口 1420）
+- **plugin-editor**：插件编辑器（Tauri GUI，前端端口 1421）
+- **cli**：命令行工具（无界面）
 
-# 构建
-pnpm build                # 打包远程插件后 tauri build
-pnpm build --mode local   # 打包 local 模式（无商店版本，预打包全部插件）
+所有应用共享 `kabegame-core` 核心库。
+
+```bash
+# 开发模式（带 watch，热重载）
+pnpm dev -c main              # 启动主应用（端口 1420）
+pnpm dev -c plugin-editor     # 启动插件编辑器（端口 1421）
+pnpm dev -c main --watch      # 启用插件源码监听，自动重建并触发 Tauri 重启
+pnpm dev -c main --mode local # 使用 local 模式（无商店版本，预打包全部插件）
+
+# 启动模式（无 watch，直接运行）
+pnpm start -c main            # 启动主应用（无 watch）
+pnpm start -c plugin-editor   # 启动插件编辑器（无 watch）
+pnpm start -c cli             # 运行 CLI 工具
+
+# 构建生产版本
+pnpm build                    # 构建全部组件（main + plugin-editor + cli）
+pnpm build -c main            # 仅构建主应用
+pnpm build -c plugin-editor   # 仅构建插件编辑器
+pnpm build -c cli             # 仅构建 CLI 工具
+pnpm build --mode local       # 构建 local 模式（无商店版本，预打包全部插件）
 ```
 
 说明：
-- `--watch` 直接使用 **Tauri CLI 自带的 dev watcher**（`tauri dev --additional-watch-folders ..\\crawler-plugins`）监听插件源码变更并触发重启。
-- `--mode local` 会执行 `crawler-plugins:package-to-resources` 打包所有插件到 resources 目录；默认 `normal` 模式执行 `crawler-plugins:package-local-to-resources` 只打包本地插件。
+- `-c, --component`：指定要开发/启动/构建的组件（`main` | `plugin-editor` | `cli` | `all`）
+- `--watch`：启用插件源码监听（仅 `dev` 命令），使用 nodemon 监听 `crawler-plugins/plugins/` 变更并自动重建
+- `--mode`：构建模式
+  - `normal`（默认）：一般版本，带商店源，仅打包本地插件到 resources
+  - `local`：无商店版本，预打包全部插件到 resources
+- `dev` 和 `start` 会自动先打包插件到 `src-tauri/resources/plugins`，确保资源存在
+- 前端资源由各自的 `tauri.conf.json` 中的 `beforeDevCommand` / `beforeBuildCommand` 自动触发构建
 
 ## 项目结构
 
 ```
 .
-├── src/                    # 前端代码
+├── src/                    # 主应用前端代码（Vue 3 + TypeScript）
 │   ├── components/        # Vue 组件
 │   ├── stores/           # Pinia 状态管理
 │   ├── views/            # 页面视图
 │   ├── router/           # 路由配置
 │   └── main.ts           # 入口文件
-├── src-tauri/            # Rust 后端代码
-│   ├── src/
-│   │   ├── main.rs       # 主入口
-│   │   ├── plugin.rs     # 插件管理
-│   │   ├── crawler.rs    # 爬虫逻辑
-│   │   └── storage.rs    # 存储管理
-│   └── Cargo.toml        # Rust 依赖
+├── src-plugin-editor/     # 插件编辑器前端代码（Vue 3 + TypeScript）
+│   └── ...               # 类似主应用结构
+├── src-tauri/            # Rust 后端代码（Cargo Workspace）
+│   ├── Cargo.toml        # Workspace 配置
+│   ├── core/             # 共享核心库（kabegame-core）
+│   │   ├── src/
+│   │   │   ├── lib.rs    # 核心库入口
+│   │   │   ├── plugin.rs # 插件管理
+│   │   │   ├── crawler.rs# 爬虫逻辑
+│   │   │   └── ...       # 其他共享模块
+│   │   └── Cargo.toml
+│   ├── app-main/         # 主应用（Tauri GUI）
+│   │   ├── src/
+│   │   │   └── main.rs   # 主应用入口，包装 core 的 Tauri commands
+│   │   ├── tauri.conf.json
+│   │   └── Cargo.toml
+│   ├── app-plugin-editor/# 插件编辑器（Tauri GUI）
+│   │   ├── src/
+│   │   │   └── main.rs   # 插件编辑器入口
+│   │   ├── tauri.conf.json
+│   │   └── Cargo.toml
+│   ├── app-cli/          # CLI 工具（命令行）
+│   │   ├── src/
+│   │   │   └── bin/
+│   │   │       └── kabegame-cli.rs
+│   │   ├── tauri.conf.json
+│   │   └── Cargo.toml
+│   └── resources/        # 资源文件
+│       └── plugins/      # 打包后的插件文件（.kgpg）
 ├── crawler-plugins/      # 插件相关
 │   ├── plugins/          # 本地插件源码
-│   └── packed/          # 打包后的插件文件
+│   └── packed/           # 打包后的插件文件
+├── scripts/              # 构建脚本
+│   └── run.js            # 统一开发/构建入口
+├── vite-main.config.ts   # 主应用 Vite 配置（端口 1420）
+├── vite-plugin-editor.config.ts # 插件编辑器 Vite 配置（端口 1421）
 └── package.json          # Node.js 依赖
 ```
 

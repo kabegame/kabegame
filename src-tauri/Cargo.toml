@@ -1,42 +1,23 @@
-[package]
-name = "kabegame"
+[workspace]
+resolver = "2"
+members = [
+  "core",
+  "app-main",
+  "app-plugin-editor",
+  "app-cli",
+]
+
+[workspace.package]
 version = "1.2.0"
-description = "一个图片爬虫平台，支持插件配置的网址爬取"
-authors = ["you"]
-license = ""
-repository = ""
 edition = "2021"
-default-run = "kabegame"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[build-dependencies]
-tauri-build = { version = "2.0", features = [] }
-
-[target.'cfg(windows)'.dependencies]
-winver = "1"
-windows-sys = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_Storage_FileSystem",
-    "Win32_System_Com",
-    "Win32_System_DataExchange",
-    "Win32_System_Memory",
-    "Win32_UI_Shell",
-    "Win32_UI_WindowsAndMessaging",
-] }
-windows = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_System_Com",
-    "Win32_UI_Shell",
-] }
-winreg = "0.52"
-
-[dependencies]
+[workspace.dependencies]
 tauri = { version = "2.0", features = ["tray-icon"] }
+tauri-build = { version = "2.0", features = [] }
 tauri-plugin-dialog = "2.0"
 tauri-plugin-shell = "2.0"
 tauri-plugin-fs = "2.0"
+
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -55,13 +36,23 @@ zip = "0.6"
 rhai = { version = "1.19", features = ["sync"] }
 auto-launch = "0.5"
 rusqlite = { version = "0.31", features = ["bundled"] }
-
 sha2 = "0.10"
 base64 = "0.22"
 
-
-[features]
-# This feature is used for production builds or when `devPath` points to the filesystem
-# DO NOT REMOVE!!
-custom-protocol = ["tauri/custom-protocol"]
-
+winver = "1"
+windows-sys = { version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+windows = { version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_UI_Shell",
+] }
+winreg = "0.52"

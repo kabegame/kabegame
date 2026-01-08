@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kabegame Plugin Editor",
+  "version": "1.2.0",
+  "identifier": "com.kabegame.plugin-editor",
+  "build": {
+    "beforeDevCommand": "pnpm -C .. dev:frontend-plugin-editor",
+    "beforeBuildCommand": "pnpm -C .. build:frontend-plugin-editor",
+    "devUrl": "http://localhost:1421",
+    "frontendDist": "../../dist-plugin-editor"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "plugin-editor",
+        "url": "index.html",
+        "fullscreen": false,
+        "resizable": true,
+        "title": "Kabegame Plugin Editor",
+        "width": 2100,
+        "height": 1200,
+        "minWidth": 800,
+        "minHeight": 800
+      }
+    ],
+    "security": {
+      "capabilities": ["main-capability"],
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost ws: wss:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["../icons/icon.icns", "../icons/icon.ico"],
+    "resources": ["../resources/plugins"]
+  }
+}

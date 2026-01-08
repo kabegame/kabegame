@@ -23,13 +23,10 @@ datasource db {
 model Task {
     id               String  @id
     pluginId         String  @map("plugin_id")
-    url              String
     outputDir        String? @map("output_dir")
     userConfig       String? @map("user_config") // JSON string
     status           String
     progress         Float   @default(0)
-    totalImages      Int     @default(0) @map("total_images")
-    downloadedImages Int     @default(0) @map("downloaded_images")
     deletedCount     Int     @default(0) @map("deleted_count")
     startTime        Int?    @map("start_time")
     endTime          Int?    @map("end_time")

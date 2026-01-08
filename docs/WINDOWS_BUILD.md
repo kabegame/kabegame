@@ -189,7 +189,7 @@ pnpm tauri:build
 更新版本号需要同时修改：
 1. `package.json` - `version`
 2. `src-tauri/Cargo.toml` - `version`
-3. `src-tauri/tauri.conf.json` - `version`
+3. `src-tauri/app-main/tauri.conf.json` - `version`
 
 ## 🔗 相关资源
 

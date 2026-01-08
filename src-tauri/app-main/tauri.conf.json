@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kabegame",
+  "version": "1.2.0",
+  "identifier": "com.kabegame",
+  "build": {
+    "beforeDevCommand": "pnpm -C .. dev:frontend-main",
+    "beforeBuildCommand": "pnpm -C .. build:frontend-main",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../../dist-main"
+  },
+  "app": {
+    "windows": [
+      {
+        "fullscreen": false,
+        "resizable": true,
+        "title": "Kabegame",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "capabilities": ["main-capability"],
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost ws: wss:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["../icons/icon.icns", "../icons/icon.ico"],
+    "resources": ["../resources/plugins"]
+  }
+}

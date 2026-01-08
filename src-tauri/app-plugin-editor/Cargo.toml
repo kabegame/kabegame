@@ -1,0 +1,27 @@
+[package]
+name = "kabegame-app-plugin-editor"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+kabegame-core = { path = "../core", default-features = false }
+tauri = { workspace = true, features = ["protocol-asset"] }
+tauri-plugin-dialog = { workspace = true }
+tauri-plugin-shell = { workspace = true }
+tauri-plugin-fs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[build-dependencies]
+tauri-build = { workspace = true }
+
+[features]
+custom-protocol = ["tauri/custom-protocol", "kabegame-core/custom-protocol"]
+
+[[bin]]
+name = "kabegame-plugin-editor"
+path = "src/main.rs"
+
+
+

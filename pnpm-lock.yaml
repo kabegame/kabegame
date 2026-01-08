@@ -91,6 +91,122 @@ importers:
         specifier: ^2.0.6
         version: 2.2.12(typescript@5.9.3)
 
+  apps/main:
+    dependencies:
+      '@element-plus/icons-vue':
+        specifier: ^2.3.1
+        version: 2.3.2(vue@3.5.26(typescript@5.9.3))
+      '@kabegame/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@tauri-apps/api':
+        specifier: ^2.0
+        version: 2.9.1
+      '@tauri-apps/plugin-dialog':
+        specifier: ^2.0
+        version: 2.4.2
+      '@tauri-apps/plugin-fs':
+        specifier: ^2.0
+        version: 2.4.4
+      '@tauri-apps/plugin-shell':
+        specifier: ^2.0
+        version: 2.3.3
+      '@vueuse/core':
+        specifier: ^14.1.0
+        version: 14.1.0(vue@3.5.26(typescript@5.9.3))
+      axios:
+        specifier: ^1.6.7
+        version: 1.13.2
+      element-plus:
+        specifier: ^2.5.14
+        version: 2.13.0(vue@3.5.26(typescript@5.9.3))
+      pinia:
+        specifier: ^2.1.7
+        version: 2.3.1(typescript@5.9.3)(vue@3.5.26(typescript@5.9.3))
+      vue:
+        specifier: ^3.4.21
+        version: 3.5.26(typescript@5.9.3)
+      vue-router:
+        specifier: ^4.3.0
+        version: 4.6.4(vue@3.5.26(typescript@5.9.3))
+    devDependencies:
+      '@vitejs/plugin-vue':
+        specifier: ^5.0.4
+        version: 5.2.4(vite@5.4.21(@types/node@25.0.3)(sass@1.97.1))(vue@3.5.26(typescript@5.9.3))
+      '@vue/tsconfig':
+        specifier: ^0.5.1
+        version: 0.5.1
+      sass:
+        specifier: ^1.97.1
+        version: 1.97.1
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vite:
+        specifier: ^5.1.4
+        version: 5.4.21(@types/node@25.0.3)(sass@1.97.1)
+      vue-tsc:
+        specifier: ^2.0.6
+        version: 2.2.12(typescript@5.9.3)
+
+  apps/plugin-editor:
+    dependencies:
+      '@element-plus/icons-vue':
+        specifier: ^2.3.1
+        version: 2.3.2(vue@3.5.26(typescript@5.9.3))
+      '@kabegame/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@tauri-apps/api':
+        specifier: ^2.0
+        version: 2.9.1
+      '@tauri-apps/plugin-dialog':
+        specifier: ^2.0
+        version: 2.4.2
+      '@tauri-apps/plugin-fs':
+        specifier: ^2.0
+        version: 2.4.4
+      '@tauri-apps/plugin-shell':
+        specifier: ^2.0
+        version: 2.3.3
+      '@vueuse/core':
+        specifier: ^14.1.0
+        version: 14.1.0(vue@3.5.26(typescript@5.9.3))
+      element-plus:
+        specifier: ^2.5.14
+        version: 2.13.0(vue@3.5.26(typescript@5.9.3))
+      monaco-editor:
+        specifier: ^0.52.0
+        version: 0.52.2
+      pinia:
+        specifier: ^2.1.7
+        version: 2.3.1(typescript@5.9.3)(vue@3.5.26(typescript@5.9.3))
+      vue:
+        specifier: ^3.4.21
+        version: 3.5.26(typescript@5.9.3)
+      vue-router:
+        specifier: ^4.3.0
+        version: 4.6.4(vue@3.5.26(typescript@5.9.3))
+    devDependencies:
+      '@vitejs/plugin-vue':
+        specifier: ^5.0.4
+        version: 5.2.4(vite@5.4.21(@types/node@25.0.3)(sass@1.97.1))(vue@3.5.26(typescript@5.9.3))
+      '@vue/tsconfig':
+        specifier: ^0.5.1
+        version: 0.5.1
+      sass:
+        specifier: ^1.97.1
+        version: 1.97.1
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vite:
+        specifier: ^5.1.4
+        version: 5.4.21(@types/node@25.0.3)(sass@1.97.1)
+      vue-tsc:
+        specifier: ^2.0.6
+        version: 2.2.12(typescript@5.9.3)
+
   crawler-plugins:
     devDependencies:
       archiver:
@@ -102,6 +218,8 @@ importers:
       husky:
         specifier: ^9.1.7
         version: 9.1.7
+
+  packages/core: {}
 
 packages:
 
