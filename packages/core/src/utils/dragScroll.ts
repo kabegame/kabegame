@@ -8,11 +8,11 @@ export interface DragScrollOptions {
    */
   requireSpaceKey?: boolean;
   /**
-   * 拖拽滚动时的惯性减速系数（越接近 1 越“滑”）。
+   * 拖拽滚动时的惯性减速系数（越接近 1 越"滑"）。
    */
   friction?: number; // per ~16ms
   /**
-   * 触发“认为是在拖拽滚动”的最小移动距离（px）
+   * 触发"认为是在拖拽滚动"的最小移动距离（px）
    */
   dragThresholdPx?: number;
   /**
@@ -25,9 +25,34 @@ export interface DragScrollOptions {
   classReady?: string;
   classActive?: string;
   /**
-   * 拖拽过后拦截紧随其后的 click（防止“拖动时误触发点击打开图片”等）
+   * 拖拽过后拦截紧随其后的 click（防止"拖动时误触发点击打开图片"等）
    */
   suppressClickAfterDrag?: boolean;
+
+  /**
+   * 当拖拽滚动"太快且仍在加速"时派发事件：
+   * `new CustomEvent(overspeedEventName, { detail: { velocity, absVelocity, absAccel } })`
+   *
+   * - velocity: px/ms（scrollTop 方向：正=向下滚）
+   * - absVelocity: |velocity|
+   * - absAccel: d(|v|)/dt，单位 px/ms^2（仅用于判断"是否在加速"）
+   */
+  overspeedEventName?: string;
+  /**
+   * 触发 overspeed 的最小瞬时速度阈值（px/ms）
+   */
+  overspeedVelocityThresholdPxPerMs?: number;
+  /**
+   * 触发 overspeed 的最小加速度阈值（px/ms^2）
+   */
+  overspeedAccelThresholdPxPerMs2?: number;
+
+  /**
+   * 限制拖拽滚动的最大速度（px/ms）。
+   * - 可以是固定数值，也可以是返回数值的函数（支持动态行高等场景）
+   * - 例如：每 0.2 秒滚动一行 => maxVelocityPxPerMs = rowHeight / 200
+   */
+  maxVelocityPxPerMs?: number | (() => number);
 }
 
 const DEFAULT_IGNORE_SELECTOR =
@@ -39,7 +64,10 @@ const DEFAULT_IGNORE_SELECTOR =
  * - 鼠标/触控笔：自定义惯性
  * - 触摸（安卓/iOS）：默认不接管
  */
-export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions = {}) {
+export function enableDragScroll(
+  container: HTMLElement,
+  opts: DragScrollOptions = {}
+) {
   const enableForPointerTypes = opts.enableForPointerTypes ?? ["mouse", "pen"];
   const requireSpaceKey = opts.requireSpaceKey ?? true;
   const friction = opts.friction ?? 0.92;
@@ -48,6 +76,27 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
   const classReady = opts.classReady ?? "drag-scroll-ready";
   const classActive = opts.classActive ?? "drag-scroll-active";
   const suppressClickAfterDrag = opts.suppressClickAfterDrag ?? true;
+  const overspeedEventName = opts.overspeedEventName ?? "dragscroll-overspeed";
+  const overspeedVelocityThresholdPxPerMs =
+    opts.overspeedVelocityThresholdPxPerMs ?? 10;
+  const overspeedAccelThresholdPxPerMs2 =
+    opts.overspeedAccelThresholdPxPerMs2 ?? 0.05;
+  const maxVelocityOpt = opts.maxVelocityPxPerMs;
+
+  // 获取当前最大速度（支持动态值）
+  const getMaxVelocity = (): number | null => {
+    if (maxVelocityOpt == null) return null;
+    return typeof maxVelocityOpt === "function"
+      ? maxVelocityOpt()
+      : maxVelocityOpt;
+  };
+
+  // 截断速度到最大值
+  const clampVelocity = (v: number): number => {
+    const maxV = getMaxVelocity();
+    if (maxV == null || maxV <= 0) return v;
+    return Math.max(-maxV, Math.min(maxV, v));
+  };
 
   let spaceDown = false;
   let isDown = false;
@@ -57,6 +106,9 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
   let lastY = 0;
   let lastT = 0;
   let velocity = 0; // px/ms (scrollTop 方向：正=向下滚)
+  let prevAbsVelocity = 0; // 用于计算“加速”（d|v|/dt）
+  // “一次拖拽（按下到松开）内只提示一次”
+  let overspeedShownThisDrag = false;
   let raf: number | null = null;
   let moved = false;
   let hasPointerCapture = false;
@@ -65,7 +117,9 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
 
   const emitActiveChange = (active: boolean) => {
     try {
-      container.dispatchEvent(new CustomEvent("dragscroll-active-change", { detail: { active } }));
+      container.dispatchEvent(
+        new CustomEvent("dragscroll-active-change", { detail: { active } })
+      );
     } catch {
       // ignore
     }
@@ -104,7 +158,8 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
     };
 
     container.addEventListener("click", onClickCapture, true);
-    cleanupClickCapture = () => container.removeEventListener("click", onClickCapture, true);
+    cleanupClickCapture = () =>
+      container.removeEventListener("click", onClickCapture, true);
   };
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -113,7 +168,13 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
 
     const target = e.target as HTMLElement | null;
     const tag = target?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
+    if (
+      tag === "INPUT" ||
+      tag === "TEXTAREA" ||
+      tag === "SELECT" ||
+      target?.isContentEditable
+    )
+      return;
 
     e.preventDefault();
     if (!spaceDown) {
@@ -149,6 +210,8 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
     lastY = e.clientY;
     lastT = performance.now();
     velocity = 0;
+    prevAbsVelocity = 0;
+    overspeedShownThisDrag = false;
   };
 
   const onPointerMove = (e: PointerEvent) => {
@@ -165,11 +228,13 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
         try {
           container.setPointerCapture(e.pointerId);
           hasPointerCapture = true;
-        } catch { }
+        } catch {}
       }
       lastY = e.clientY;
       lastT = performance.now();
       velocity = 0;
+      prevAbsVelocity = 0;
+      overspeedShownThisDrag = false;
     }
 
     e.preventDefault();
@@ -178,7 +243,29 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
     const now = performance.now();
     const dt = Math.max(1, now - lastT);
     const deltaY = e.clientY - lastY;
-    velocity = -deltaY / dt;
+    velocity = clampVelocity(-deltaY / dt);
+
+    // “太快且仍在加速”提示：按 |v| 和 d|v|/dt 判断
+    // - 用户需求：只在加速状态弹（absAccel > 0），且速度足够大
+    // - 且：一次拖拽（按下到松开）内只提示一次
+    try {
+      const absV = Math.abs(velocity);
+      const absAccel = (absV - prevAbsVelocity) / dt; // px/ms^2
+      const isAccelerating = absAccel >= overspeedAccelThresholdPxPerMs2;
+      const isTooFast = absV >= overspeedVelocityThresholdPxPerMs;
+      if (isTooFast && isAccelerating && !overspeedShownThisDrag) {
+        container.dispatchEvent(
+          new CustomEvent(overspeedEventName, {
+            detail: { velocity, absVelocity: absV, absAccel },
+          })
+        );
+        overspeedShownThisDrag = true;
+      }
+      prevAbsVelocity = absV;
+    } catch {
+      // ignore
+    }
+
     lastY = e.clientY;
     lastT = now;
   };
@@ -189,6 +276,7 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
 
     isDown = false;
     pointerId = null;
+    overspeedShownThisDrag = false;
 
     if (!moved) return;
 
@@ -209,7 +297,8 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
     const minV = 0.02;
     if (Math.abs(velocity) < minV) return;
 
-    let v = velocity;
+    // 惯性阶段开始时也截断速度
+    let v = clampVelocity(velocity);
     let last = performance.now();
 
     const tick = () => {
@@ -262,5 +351,3 @@ export function enableDragScroll(container: HTMLElement, opts: DragScrollOptions
     container.classList.remove(classActive);
   };
 }
-
-

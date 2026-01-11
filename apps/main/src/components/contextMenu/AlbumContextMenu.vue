@@ -7,7 +7,7 @@
 import { computed } from "vue";
 import { storeToRefs } from "pinia";
 import { Delete, FolderOpened, Picture, Edit } from "@element-plus/icons-vue";
-import ContextMenu, { type MenuItem } from "@/components/ContextMenu.vue";
+import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
 import { useAlbumStore } from "@/stores/albums";
 
 interface Props {

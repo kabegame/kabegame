@@ -3,7 +3,7 @@
     :modal-class="'task-drawer-modal'" @open="handleDrawerOpen">
     <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
-      @cancel-task="handleCancelTaskById" @task-contextmenu="openTaskContextMenu" />
+      @cancel-task="handleCancelTaskById" @confirm-task-dump="handleConfirmTaskDumpById" @task-contextmenu="openTaskContextMenu" />
   </el-drawer>
 
   <el-dialog v-model="saveConfigVisible" title="保存为运行配置" width="520px" :close-on-click-modal="false"
@@ -189,6 +189,16 @@ const handleCancelTaskById = async (taskId: string) => {
       // 静默处理错误，不显示弹窗，任务状态会通过后端事件自动更新
       console.error("停止任务失败:", error);
     }
+  }
+};
+
+const handleConfirmTaskDumpById = async (taskId: string) => {
+  try {
+    await crawlerStore.confirmTaskRhaiDump(taskId);
+    ElMessage.success("已确认");
+  } catch (e) {
+    console.error("确认 dump 失败:", e);
+    ElMessage.error("确认失败");
   }
 };
 

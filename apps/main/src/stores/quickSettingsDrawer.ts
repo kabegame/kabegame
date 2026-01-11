@@ -1,5 +1,4 @@
-import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { createQuickSettingsDrawerStore } from "@kabegame/core/stores/quick-settings-drawer";
 
 export type QuickSettingsPageId =
   | "gallery"
@@ -8,14 +7,12 @@ export type QuickSettingsPageId =
   | "pluginbrowser"
   | "settings";
 
-export const useQuickSettingsDrawerStore = defineStore(
-  "quickSettingsDrawer",
-  () => {
-    const isOpen = ref(false);
-    const pageId = ref<QuickSettingsPageId>("gallery");
-
-    const title = computed(() => {
-      switch (pageId.value) {
+export const useQuickSettingsDrawerStore =
+  createQuickSettingsDrawerStore<QuickSettingsPageId>({
+    storeId: "quickSettingsDrawer",
+    defaultPageId: "gallery",
+    getTitle: (pageId) => {
+      switch (pageId) {
         case "gallery":
           return "画廊设置";
         case "albumdetail":
@@ -29,17 +26,5 @@ export const useQuickSettingsDrawerStore = defineStore(
         default:
           return "设置";
       }
-    });
-
-    const open = (p: QuickSettingsPageId) => {
-      pageId.value = p;
-      isOpen.value = true;
-    };
-
-    const close = () => {
-      isOpen.value = false;
-    };
-
-    return { isOpen, pageId, title, open, close };
-  }
-);
+    },
+  });

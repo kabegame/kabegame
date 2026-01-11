@@ -27,47 +27,35 @@ use plugin::{
 use settings::{AppSettings, Settings, WindowState};
 use std::fs;
 #[cfg(debug_assertions)]
-use storage::DebugCloneImagesResult;
-use storage::{Album, ImageInfo, PaginatedImages, RangedImages, RunConfig, Storage, TaskInfo};
+use storage::dedupe::DebugCloneImagesResult;
+use storage::images::{PaginatedImages, RangedImages};
+use storage::{Album, ImageInfo, RunConfig, Storage, TaskInfo};
 use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
 
 use dedupe::DedupeManager;
-use kabegame_core::plugin::{PluginConfig, PluginManifest};
-use kabegame_core::plugin_editor::EditorMarker;
+#[cfg(target_os = "windows")]
+use kabegame_core::virtual_drive::VirtualDriveService;
+#[cfg(target_os = "windows")]
 use kabegame_core::wallpaper_engine_export::{WeExportOptions, WeExportResult};
+
+// 任务失败图片（用于 TaskDetail 展示 + 重试）
+use storage::albums::AddToAlbumResult;
+use storage::tasks::TaskFailedImage;
 
 // ---- wrappers: tauri::command 必须在当前 app crate 中定义，不能直接复用依赖 crate 的 command 宏产物 ----
 
-#[tauri::command]
-fn plugin_editor_check_rhai(script: String) -> Result<Vec<EditorMarker>, String> {
-    kabegame_core::plugin_editor::plugin_editor_check_rhai(script)
+/// TaskDetail 专用：分页结果（字段名使用 camelCase，与前端 `PaginatedImages` 对齐）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskPaginatedImages {
+    images: Vec<ImageInfo>,
+    total: usize,
+    page: usize,
+    page_size: usize,
 }
 
 #[tauri::command]
-fn plugin_editor_process_icon(image_path: String) -> Result<String, String> {
-    kabegame_core::plugin_editor::plugin_editor_process_icon(image_path)
-}
-
-#[tauri::command]
-fn plugin_editor_export_kgpg(
-    output_path: String,
-    plugin_id: String,
-    manifest: PluginManifest,
-    config: PluginConfig,
-    script: String,
-    icon_rgb_base64: Option<String>,
-) -> Result<(), String> {
-    kabegame_core::plugin_editor::plugin_editor_export_kgpg(
-        output_path,
-        plugin_id,
-        manifest,
-        config,
-        script,
-        icon_rgb_base64,
-    )
-}
-
-#[tauri::command]
+#[cfg(target_os = "windows")]
 fn export_album_to_we_project(
     album_id: String,
     album_name: String,
@@ -87,6 +75,7 @@ fn export_album_to_we_project(
 }
 
 #[tauri::command]
+#[cfg(target_os = "windows")]
 fn export_images_to_we_project(
     image_paths: Vec<String>,
     title: Option<String>,
@@ -260,15 +249,6 @@ fn get_build_mode(state: tauri::State<PluginManager>) -> Result<String, String> 
 }
 
 #[tauri::command]
-fn update_plugin(
-    plugin_id: String,
-    updates: HashMap<String, serde_json::Value>,
-    state: tauri::State<PluginManager>,
-) -> Result<Plugin, String> {
-    state.update(&plugin_id, updates)
-}
-
-#[tauri::command]
 fn delete_plugin(plugin_id: String, state: tauri::State<PluginManager>) -> Result<(), String> {
     state.delete(&plugin_id)
 }
@@ -366,6 +346,54 @@ fn rename_album(
     state.rename_album(&album_id, &new_name)
 }
 
+// --- Windows 虚拟盘（Dokan） ---
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn mount_virtual_drive(
+    mount_point: String,
+    storage: tauri::State<Storage>,
+    drive: tauri::State<VirtualDriveService>,
+) -> Result<(), String> {
+    drive.mount(&mount_point, storage.inner().clone())
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn unmount_virtual_drive(drive: tauri::State<VirtualDriveService>) -> Result<bool, String> {
+    drive.unmount()
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn mount_virtual_drive_and_open_explorer(
+    mount_point: String,
+    storage: tauri::State<Storage>,
+    drive: tauri::State<VirtualDriveService>,
+) -> Result<(), String> {
+    drive.mount(&mount_point, storage.inner().clone())?;
+    let open_path = drive.current_mount_point().unwrap_or(mount_point);
+    std::process::Command::new("explorer")
+        .arg(open_path)
+        .spawn()
+        .map_err(|e| format!("已挂载，但打开资源管理器失败: {}", e))?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn open_explorer(path: String) -> Result<(), String> {
+    let p = path.trim();
+    if p.is_empty() {
+        return Err("路径不能为空".to_string());
+    }
+    std::process::Command::new("explorer")
+        .arg(p)
+        .spawn()
+        .map_err(|e| format!("打开资源管理器失败: {}", e))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn delete_album(album_id: String, state: tauri::State<Storage>) -> Result<(), String> {
     state.delete_album(&album_id)
@@ -376,7 +404,7 @@ fn add_images_to_album(
     album_id: String,
     image_ids: Vec<String>,
     state: tauri::State<Storage>,
-) -> Result<storage::AddToAlbumResult, String> {
+) -> Result<AddToAlbumResult, String> {
     state.add_images_to_album(&album_id, &image_ids)
 }
 
@@ -572,142 +600,85 @@ fn toggle_image_favorite(
 
 #[tauri::command]
 fn open_file_path(file_path: String) -> Result<(), String> {
-    use std::process::Command;
-
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("cmd")
-            .args(["/C", "start", "", &file_path])
-            .spawn()
-            .map_err(|e| format!("Failed to open file: {}", e))?;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open")
-            .arg(&file_path)
-            .spawn()
-            .map_err(|e| format!("Failed to open file: {}", e))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        Command::new("xdg-open")
-            .arg(&file_path)
-            .spawn()
-            .map_err(|e| format!("Failed to open file: {}", e))?;
-    }
-
-    Ok(())
+    kabegame_core::shell_open::open_path(&file_path)
 }
 
 #[tauri::command]
 fn open_file_folder(file_path: String) -> Result<(), String> {
-    use std::path::Path;
-    use std::process::Command;
-
-    #[cfg(target_os = "windows")]
-    {
-        let path = Path::new(&file_path);
-        if path.parent().is_some() {
-            Command::new("explorer")
-                .args(["/select,", &file_path])
-                .spawn()
-                .map_err(|e| format!("Failed to open folder: {}", e))?;
-        } else {
-            return Err("Invalid file path".to_string());
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let path = Path::new(&file_path);
-        if let Some(parent) = path.parent() {
-            Command::new("open")
-                .arg("-R")
-                .arg(&file_path)
-                .spawn()
-                .map_err(|e| format!("Failed to open folder: {}", e))?;
-        } else {
-            return Err("Invalid file path".to_string());
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let path = Path::new(&file_path);
-        if let Some(parent) = path.parent() {
-            Command::new("xdg-open")
-                .arg(parent)
-                .spawn()
-                .map_err(|e| format!("Failed to open folder: {}", e))?;
-        } else {
-            return Err("Invalid file path".to_string());
-        }
-    }
-
-    Ok(())
+    kabegame_core::shell_open::reveal_in_folder(&file_path)
 }
 
 #[tauri::command]
-fn set_wallpaper(file_path: String, app: tauri::AppHandle) -> Result<(), String> {
-    use std::path::Path;
+async fn set_wallpaper(file_path: String, app: tauri::AppHandle) -> Result<(), String> {
+    // 壁纸设置可能包含阻塞的系统调用（Windows API / Explorer 刷新等）。
+    // 若在主线程执行，会导致前端 WebView “整页卡死”，因此必须放到 blocking 线程。
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        use std::path::Path;
 
-    let path = Path::new(&file_path);
-    if !path.exists() {
-        return Err("File does not exist".to_string());
-    }
-
-    // 使用全局 WallpaperController：适配“单张壁纸”并支持 native/window 两种后端模式。
-    // 注意：这里不涉及 transition（过渡效果由“轮播 manager”负责，并受“是否启用轮播”约束）。
-    let controller = app.state::<WallpaperController>();
-    let settings_state = app.state::<Settings>();
-    let settings = settings_state.get_settings()?;
-
-    let abs = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .to_string();
-
-    controller.set_wallpaper(&abs, &settings.wallpaper_rotation_style)?;
-
-    // 维护全局“当前壁纸”（imageId）
-    // - 若能从 DB 根据 local_path 找到 image：写入该 imageId
-    // - 否则清空（避免残留旧值）
-    if let Some(storage) = app.try_state::<Storage>() {
-        if let Ok(found) = storage.find_image_by_path(&abs) {
-            let _ = settings_state.set_current_wallpaper_image_id(found.map(|img| img.id));
+        let path = Path::new(&file_path);
+        if !path.exists() {
+            return Err("File does not exist".to_string());
         }
-    }
 
-    Ok(())
+        // 使用全局 WallpaperController：适配“单张壁纸”并支持 native/window 两种后端模式。
+        // 注意：这里不涉及 transition（过渡效果由“轮播 manager”负责，并受“是否启用轮播”约束）。
+        let controller = app_clone.state::<WallpaperController>();
+        let settings_state = app_clone.state::<Settings>();
+        let settings = settings_state.get_settings()?;
+
+        let abs = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string();
+
+        controller.set_wallpaper(&abs, &settings.wallpaper_rotation_style)?;
+
+        // 维护全局“当前壁纸”（imageId）
+        // - 若能从 DB 根据 local_path 找到 image：写入该 imageId
+        // - 否则清空（避免残留旧值）
+        if let Some(storage) = app_clone.try_state::<Storage>() {
+            if let Ok(found) = storage.find_image_by_path(&abs) {
+                let _ = settings_state.set_current_wallpaper_image_id(found.map(|img| img.id));
+            }
+        }
+
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Join error: {}", e))?
 }
 
 /// 按 imageId 设置壁纸，并同步更新 settings.currentWallpaperImageId
 #[tauri::command]
-fn set_wallpaper_by_image_id(image_id: String, app: tauri::AppHandle) -> Result<(), String> {
-    use std::path::Path;
+async fn set_wallpaper_by_image_id(image_id: String, app: tauri::AppHandle) -> Result<(), String> {
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        use std::path::Path;
 
-    let storage = app.state::<Storage>();
-    let settings_state = app.state::<Settings>();
-    let settings = settings_state.get_settings()?;
+        let storage = app_clone.state::<Storage>();
+        let settings_state = app_clone.state::<Settings>();
+        let settings = settings_state.get_settings()?;
 
-    let image = storage
-        .find_image_by_id(&image_id)?
-        .ok_or_else(|| "图片不存在".to_string())?;
+        let image = storage
+            .find_image_by_id(&image_id)?
+            .ok_or_else(|| "图片不存在".to_string())?;
 
-    if !Path::new(&image.local_path).exists() {
-        // 图片已被删除/移除/文件丢失：清空 currentWallpaperImageId
-        let _ = settings_state.set_current_wallpaper_image_id(None);
-        return Err("图片文件不存在".to_string());
-    }
+        if !Path::new(&image.local_path).exists() {
+            // 图片已被删除/移除/文件丢失：清空 currentWallpaperImageId
+            let _ = settings_state.set_current_wallpaper_image_id(None);
+            return Err("图片文件不存在".to_string());
+        }
 
-    let controller = app.state::<WallpaperController>();
-    controller.set_wallpaper(&image.local_path, &settings.wallpaper_rotation_style)?;
+        let controller = app_clone.state::<WallpaperController>();
+        controller.set_wallpaper(&image.local_path, &settings.wallpaper_rotation_style)?;
 
-    settings_state.set_current_wallpaper_image_id(Some(image_id))?;
-    Ok(())
+        settings_state.set_current_wallpaper_image_id(Some(image_id))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Join error: {}", e))?
 }
 
 #[tauri::command]
@@ -871,6 +842,77 @@ async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
     fs::read(&path).map_err(|e| format!("Failed to read image file: {}", e))
 }
 
+// ============================
+// task_failed_images
+// ============================
+
+#[tauri::command]
+fn get_task_failed_images(
+    task_id: String,
+    state: tauri::State<Storage>,
+) -> Result<Vec<TaskFailedImage>, String> {
+    state.get_task_failed_images(&task_id)
+}
+
+/// 失败图片重试：走后端 download_image 队列（会触发 image-added）
+#[tauri::command]
+async fn retry_task_failed_image(
+    app: tauri::AppHandle,
+    failed_id: i64,
+    state: tauri::State<'_, Storage>,
+) -> Result<(), String> {
+    // 在 spawn_blocking 之前先获取需要的数据
+    let item = {
+        let Some(item) = state.get_task_failed_image_by_id(failed_id)? else {
+            return Err("失败图片记录不存在".to_string());
+        };
+        item.clone()
+    };
+
+    // 标记一次尝试（清空 last_error）
+    let _ = state.update_task_failed_image_attempt(failed_id, "");
+
+    // 取任务配置（输出目录/画册）
+    let task = {
+        let task = state
+            .get_task(&item.task_id)?
+            .ok_or_else(|| "任务不存在".to_string())?;
+        task.clone()
+    };
+
+    let images_dir = task
+        .output_dir
+        .as_deref()
+        .map(|s| std::path::PathBuf::from(s))
+        .unwrap_or_else(|| crawler::get_default_images_dir());
+
+    let start_time = if item.order > 0 {
+        item.order as u64
+    } else {
+        // 兜底：使用当前时间戳，保证排序稳定
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    };
+
+    // 为了不阻塞 UI，放到 blocking 线程
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let dq = app_clone.state::<crawler::DownloadQueue>();
+        dq.download_image(
+            item.url.clone(),
+            images_dir,
+            item.plugin_id.clone(),
+            item.task_id.clone(),
+            start_time,
+            task.output_album_id.clone(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Join error: {}", e))?
+}
+
 #[tauri::command]
 async fn get_plugin_image(
     plugin_id: String,
@@ -927,29 +969,7 @@ async fn get_plugin_icon(
     plugin_id: String,
     state: tauri::State<'_, PluginManager>,
 ) -> Result<Option<Vec<u8>>, String> {
-    // 找到插件文件（仅使用 file_name 作为 ID）
-    let plugins_dir = state.get_plugins_directory();
-    let entries = std::fs::read_dir(&plugins_dir)
-        .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-        let path = entry.path();
-
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-            let file_name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-
-            if file_name == plugin_id {
-                return state.read_plugin_icon(&path);
-            }
-        }
-    }
-
-    Err(format!("Plugin {} not found", plugin_id))
+    state.get_plugin_icon_by_id(&plugin_id)
 }
 
 /// 商店列表 icon：KGPG v2 固定头部 + HTTP Range 读取（返回 PNG bytes）。
@@ -984,6 +1004,19 @@ fn get_favorite_album_id() -> Result<String, String> {
 #[tauri::command]
 fn set_restore_last_tab(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
     state.set_restore_last_tab(enabled)
+}
+
+#[tauri::command]
+fn set_album_drive_enabled(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
+    state.set_album_drive_enabled(enabled)
+}
+
+#[tauri::command]
+fn set_album_drive_mount_point(
+    mount_point: String,
+    state: tauri::State<Settings>,
+) -> Result<(), String> {
+    state.set_album_drive_mount_point(mount_point)
 }
 
 #[tauri::command]
@@ -1185,6 +1218,12 @@ fn get_all_tasks(state: tauri::State<Storage>) -> Result<Vec<TaskInfo>, String> 
     state.get_all_tasks()
 }
 
+/// 将任务的 Rhai 失败 dump 标记为“已确认/已读”（用于任务列表右上角小按钮）
+#[tauri::command]
+fn confirm_task_rhai_dump(task_id: String, state: tauri::State<Storage>) -> Result<(), String> {
+    state.confirm_task_rhai_dump(&task_id)
+}
+
 #[tauri::command]
 fn delete_task(
     app: tauri::AppHandle,
@@ -1229,8 +1268,16 @@ fn get_task_images_paginated(
     page: usize,
     page_size: usize,
     state: tauri::State<Storage>,
-) -> Result<PaginatedImages, String> {
-    state.get_task_images_paginated(&task_id, page, page_size)
+) -> Result<TaskPaginatedImages, String> {
+    let offset = page.saturating_mul(page_size);
+    let images = state.get_task_images_paginated(&task_id, offset, page_size)?;
+    let total = state.get_task_image_ids(&task_id)?.len();
+    Ok(TaskPaginatedImages {
+        images,
+        total,
+        page,
+        page_size,
+    })
 }
 
 #[tauri::command]
@@ -2014,19 +2061,219 @@ fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 打开插件编辑器（以独立进程运行 kabegame-plugin-editor sidecar）
+/// Windows：为主窗口左侧导航栏启用 DWM 模糊（BlurBehind + HRGN）。
+/// - sidebar_width: 侧栏宽度（px）
+#[tauri::command]
+fn set_main_sidebar_dwm_blur(app: tauri::AppHandle, sidebar_width: u32) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::c_void;
+        use std::mem::transmute;
+        use tauri::Manager;
+        use windows_sys::Win32::Foundation::BOOL;
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::Graphics::Dwm::{
+            DwmEnableBlurBehindWindow, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND,
+        };
+        use windows_sys::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject};
+        use windows_sys::Win32::System::LibraryLoader::{
+            GetModuleHandleW, GetProcAddress, LoadLibraryW,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
+
+        let Some(window) = app.get_webview_window("main") else {
+            return Err("找不到主窗口".to_string());
+        };
+
+        let tauri_hwnd = window
+            .hwnd()
+            .map_err(|e| format!("获取主窗口 HWND 失败: {}", e))?;
+        let hwnd: HWND = tauri_hwnd.0 as isize;
+
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[DWM] set_main_sidebar_dwm_blur: sidebar_width={}",
+            sidebar_width
+        );
+
+        if hwnd == 0 {
+            return Err("hwnd is null".into());
+        }
+
+        // ---- 优先：SetWindowCompositionAttribute + ACCENT_ENABLE_ACRYLICBLURBEHIND（Win11 更常见/更稳定）----
+        // 我们给“整个窗口”开启 acrylic，但由于主内容区域是不透明背景，视觉上只有侧栏（半透明）会显现毛玻璃。
+        #[repr(C)]
+        struct ACCENT_POLICY {
+            accent_state: i32,
+            accent_flags: i32,
+            gradient_color: u32,
+            animation_id: i32,
+        }
+
+        #[repr(C)]
+        struct WINDOWCOMPOSITIONATTRIBDATA {
+            attrib: i32,
+            pv_data: *mut c_void,
+            cb_data: u32,
+        }
+
+        // Undocumented: WCA_ACCENT_POLICY = 19
+        const WCA_ACCENT_POLICY: i32 = 19;
+        // Undocumented: ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
+        const ACCENT_ENABLE_ACRYLICBLURBEHIND: i32 = 4;
+
+        unsafe {
+            // 动态加载：避免 MSVC 链接阶段找不到 __imp_SetWindowCompositionAttribute 导致 LNK2019
+            unsafe fn wide(s: &str) -> Vec<u16> {
+                use std::ffi::OsStr;
+                use std::os::windows::ffi::OsStrExt;
+                OsStr::new(s).encode_wide().chain(Some(0)).collect()
+            }
+
+            type SetWcaFn =
+                unsafe extern "system" fn(HWND, *mut WINDOWCOMPOSITIONATTRIBDATA) -> BOOL;
+
+            let user32 = {
+                let m = GetModuleHandleW(wide("user32.dll").as_ptr());
+                if m != 0 {
+                    m
+                } else {
+                    LoadLibraryW(wide("user32.dll").as_ptr())
+                }
+            };
+
+            let set_wca: Option<SetWcaFn> = if user32 != 0 {
+                // windows-sys 的 GetProcAddress 返回 Option<FARPROC>
+                GetProcAddress(user32, b"SetWindowCompositionAttribute\0".as_ptr())
+                    .map(|f| transmute(f))
+            } else {
+                None
+            };
+
+            // GradientColor 常见实现为 0xAABBGGRR；白色不受通道顺序影响。
+            let accent = ACCENT_POLICY {
+                accent_state: ACCENT_ENABLE_ACRYLICBLURBEHIND,
+                accent_flags: 2,
+                gradient_color: 0x99FFFFFF, // 半透明白
+                animation_id: 0,
+            };
+
+            let mut data = WINDOWCOMPOSITIONATTRIBDATA {
+                attrib: WCA_ACCENT_POLICY,
+                pv_data: (&accent as *const ACCENT_POLICY) as *mut c_void,
+                cb_data: std::mem::size_of::<ACCENT_POLICY>() as u32,
+            };
+
+            if let Some(set_wca) = set_wca {
+                let ok = set_wca(hwnd, &mut data);
+                if ok != 0 {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[DWM] acrylic enabled via SetWindowCompositionAttribute");
+                    return Ok(());
+                }
+            } else {
+                #[cfg(debug_assertions)]
+                eprintln!("[DWM] SetWindowCompositionAttribute not found (GetProcAddress)");
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        eprintln!("[DWM] acrylic failed, fallback to DwmEnableBlurBehindWindow");
+
+        if sidebar_width == 0 {
+            unsafe {
+                let bb = DWM_BLURBEHIND {
+                    dwFlags: DWM_BB_ENABLE,
+                    fEnable: 0 as BOOL,
+                    hRgnBlur: 0,
+                    fTransitionOnMaximized: 0 as BOOL,
+                };
+                let hr = DwmEnableBlurBehindWindow(hwnd, &bb);
+                if hr != 0 {
+                    return Err(format!(
+                        "DwmEnableBlurBehindWindow(disable) failed: HRESULT=0x{hr:08X}"
+                    ));
+                }
+            }
+            return Ok(());
+        }
+
+        unsafe {
+            let mut rect = std::mem::MaybeUninit::uninit();
+            if GetClientRect(hwnd, rect.as_mut_ptr()) == 0 {
+                return Err("GetClientRect failed".into());
+            }
+            let rect = rect.assume_init();
+            let height = rect.bottom - rect.top;
+            if height <= 0 {
+                return Err("client rect height is invalid".into());
+            }
+
+            let width = (sidebar_width as i32).min(rect.right - rect.left).max(1);
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[DWM] client_rect={}x{}, blur_width={}",
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                width
+            );
+            let rgn = CreateRectRgn(0, 0, width, height);
+            if rgn == 0 {
+                return Err("CreateRectRgn failed".into());
+            }
+
+            let bb = DWM_BLURBEHIND {
+                dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
+                fEnable: 1 as BOOL,
+                hRgnBlur: rgn,
+                fTransitionOnMaximized: 0 as BOOL,
+            };
+
+            let hr = DwmEnableBlurBehindWindow(hwnd, &bb);
+            let _ = DeleteObject(rgn);
+            if hr != 0 {
+                return Err(format!(
+                    "DwmEnableBlurBehindWindow failed: HRESULT=0x{hr:08X}"
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        let _ = sidebar_width;
+        Ok(())
+    }
+}
+
+/// 打开插件编辑器（以独立进程运行 kabegame-plugin-editor.exe）
+///
+/// 注意：我们不使用 Tauri sidecar 机制（因为它更适合“同一 app 的附属工具”）。
+/// 这里直接从当前安装目录启动 `kabegame-plugin-editor.exe`，由安装脚本确保它与主程序在同一目录下。
 #[tauri::command]
 fn open_plugin_editor_window(app: tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_shell::ShellExt;
 
-    let sidecar = app
-        .shell()
-        .sidecar("kabegame-plugin-editor")
-        .map_err(|e| format!("获取 sidecar 失败: {}", e))?;
+    let exe_dir = std::env::current_exe()
+        .map_err(|e| format!("获取当前可执行文件路径失败: {e}"))?
+        .parent()
+        .ok_or_else(|| "无法获取当前可执行文件目录".to_string())?
+        .to_path_buf();
 
-    sidecar
+    let editor_exe = exe_dir.join("kabegame-plugin-editor.exe");
+    if !editor_exe.exists() {
+        return Err(format!(
+            "找不到插件编辑器可执行文件：{}\n请确认安装包已将其复制到安装目录。",
+            editor_exe.display()
+        ));
+    }
+
+    app.shell()
+        .command(editor_exe)
         .spawn()
-        .map_err(|e| format!("启动插件编辑器进程失败: {}", e))?;
+        .map_err(|e| format!("启动插件编辑器进程失败: {e}"))?;
 
     Ok(())
 }
@@ -2133,210 +2380,267 @@ fn copy_files_to_clipboard(_paths: Vec<String>) -> Result<(), String> {
     Err("copy_files_to_clipboard is only supported on Windows".into())
 }
 
+// =========================
+// Startup steps (split setup into small functions)
+// =========================
+
+fn startup_step_cleanup_user_data_if_marked() -> bool {
+    // 检查清理标记，如果存在则先清理旧数据目录
+    let app_data_dir = kabegame_core::app_paths::kabegame_data_dir();
+    let cleanup_marker = app_data_dir.join(".cleanup_marker");
+    let is_cleaning_data = cleanup_marker.exists();
+    if is_cleaning_data {
+        // 删除标记文件
+        let _ = fs::remove_file(&cleanup_marker);
+        // 尝试删除整个数据目录
+        if app_data_dir.exists() {
+            // 使用多次重试，因为文件可能还在被其他进程使用
+            let mut retries = 5;
+            while retries > 0 {
+                match fs::remove_dir_all(&app_data_dir) {
+                    Ok(_) => {
+                        println!("成功清理应用数据目录");
+                        break;
+                    }
+                    Err(e) => {
+                        retries -= 1;
+                        if retries == 0 {
+                            eprintln!("警告：无法完全清理数据目录，部分文件可能仍在使用中: {}", e);
+                            // 尝试删除单个文件而不是整个目录
+                            // 至少删除数据库和设置文件
+                            let _ = fs::remove_file(app_data_dir.join("images.db"));
+                            let _ = fs::remove_file(app_data_dir.join("settings.json"));
+                            let _ = fs::remove_file(app_data_dir.join("plugins.json"));
+                        } else {
+                            // 等待一段时间后重试
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    is_cleaning_data
+}
+
+fn startup_step_manage_plugin_manager(app: &mut tauri::App) {
+    // 初始化插件管理器
+    let plugin_manager = PluginManager::new(app.app_handle().clone());
+    app.manage(plugin_manager);
+
+    // 每次启动：异步覆盖复制内置插件到用户插件目录（确保可用性/不变性）
+    let app_handle_plugins = app.app_handle().clone();
+    std::thread::spawn(move || {
+        let pm = app_handle_plugins.state::<PluginManager>();
+        if let Err(e) = pm.ensure_prepackaged_plugins_installed() {
+            eprintln!("[WARN] 启动时安装内置插件失败: {}", e);
+        }
+    });
+}
+
+fn startup_step_manage_storage(app: &mut tauri::App) -> Result<(), String> {
+    // 初始化存储管理器
+    let storage = Storage::new(app.app_handle().clone());
+    storage
+        .init()
+        .map_err(|e| format!("Failed to initialize storage: {}", e))?;
+    // 应用启动时清理所有临时文件
+    match storage.cleanup_temp_files() {
+        Ok(count) => {
+            if count > 0 {
+                println!("启动时清理了 {} 个临时文件", count);
+            }
+        }
+        Err(e) => {
+            eprintln!("清理临时文件失败: {}", e);
+        }
+    }
+    app.manage(storage);
+    Ok(())
+}
+
+fn startup_step_manage_virtual_drive_service(app: &mut tauri::App) {
+    // Windows：虚拟盘服务（Dokan）
+    #[cfg(target_os = "windows")]
+    {
+        app.manage(VirtualDriveService::default());
+    }
+}
+
+fn startup_step_manage_settings(app: &mut tauri::App) {
+    // 初始化设置管理器
+    let settings = Settings::new(app.app_handle().clone());
+    app.manage(settings);
+}
+
+fn startup_step_auto_mount_album_drive(app: &tauri::AppHandle) {
+    // Windows：按设置自动挂载画册盘（不自动弹出 Explorer）
+    #[cfg(target_os = "windows")]
+    {
+        let settings = app.state::<Settings>().get_settings().ok();
+        if let Some(s) = settings {
+            if s.album_drive_enabled {
+                let mount_point = s.album_drive_mount_point.clone();
+                let storage = app.state::<Storage>().inner().clone();
+                let drive = app.state::<VirtualDriveService>();
+                let _ = drive.mount(&mount_point, storage);
+            }
+        }
+    }
+}
+
+fn startup_step_manage_dedupe_manager(app: &mut tauri::App) {
+    // 初始化去重任务管理器（单例，允许 cancel）
+    let dedupe_manager = DedupeManager::new();
+    app.manage(dedupe_manager);
+}
+
+fn startup_step_restore_main_window_state(app: &tauri::AppHandle, is_cleaning_data: bool) {
+    // 恢复窗口状态（如果不在清理数据模式）
+    if is_cleaning_data {
+        return;
+    }
+    if let Some(main_window) = app.get_webview_window("main") {
+        let settings = app.state::<Settings>();
+        if let Ok(Some(window_state)) = settings.get_window_state() {
+            // 恢复窗口大小
+            if let Err(e) = main_window.set_size(tauri::LogicalSize::new(
+                window_state.width,
+                window_state.height,
+            )) {
+                eprintln!("恢复窗口大小失败: {}", e);
+            }
+            // 恢复窗口位置
+            if let (Some(x), Some(y)) = (window_state.x, window_state.y) {
+                if let Err(e) = main_window.set_position(tauri::LogicalPosition::new(x, y)) {
+                    eprintln!("恢复窗口位置失败: {}", e);
+                }
+            }
+            // 恢复最大化状态
+            if window_state.maximized {
+                if let Err(e) = main_window.maximize() {
+                    eprintln!("恢复窗口最大化状态失败: {}", e);
+                }
+            }
+        }
+    }
+}
+
+fn startup_step_manage_download_queue(app: &mut tauri::App) {
+    // 初始化下载队列管理器
+    let download_queue = crawler::DownloadQueue::new(app.app_handle().clone());
+    app.manage(download_queue);
+}
+
+fn startup_step_mark_pending_tasks_as_failed(app: &tauri::AppHandle) {
+    // 应用启动时，将所有 pending 和 running 状态的任务标记为失败
+    let storage_for_cleanup = app.state::<Storage>();
+    match storage_for_cleanup.mark_pending_running_tasks_as_failed() {
+        Ok(count) => {
+            if count > 0 {
+                println!("启动时已将 {} 个 pending/running 任务标记为失败", count);
+            }
+        }
+        Err(e) => {
+            eprintln!("启动时标记任务为失败失败: {}", e);
+        }
+    }
+}
+
+fn startup_step_manage_task_scheduler(app: &mut tauri::App) {
+    // 初始化 task 调度器（固定 10 个 task worker）
+    // 注意：不再恢复 pending/running 任务，它们已在启动时被标记为失败
+    let task_scheduler = crawler::TaskScheduler::new(app.app_handle().clone());
+    app.manage(task_scheduler);
+}
+
+fn startup_step_manage_wallpaper_components(app: &mut tauri::App) {
+    // 初始化全局壁纸控制器（基础 manager）
+    let wallpaper_controller = WallpaperController::new(app.app_handle().clone());
+    app.manage(wallpaper_controller);
+
+    // 初始化壁纸轮播器
+    let rotator = WallpaperRotator::new(app.app_handle().clone());
+    app.manage(rotator);
+
+    // 创建壁纸窗口（用于窗口模式）
+    #[cfg(target_os = "windows")]
+    {
+        use tauri::{WebviewUrl, WebviewWindowBuilder};
+        let _ = WebviewWindowBuilder::new(
+            app,
+            "wallpaper",
+            // 使用独立的 wallpaper.html，只渲染 WallpaperLayer 组件
+            WebviewUrl::App("wallpaper.html".into()),
+        )
+        // 给壁纸窗口一个固定标题，便于脚本/调试定位到正确窗口
+        .title("Kabegame Wallpaper")
+        .fullscreen(true)
+        .decorations(false)
+        // 设置窗口为透明，背景为透明
+        .transparent(true)
+        .visible(false)
+        .skip_taskbar(true)
+        .build();
+    }
+
+    // 创建系统托盘（使用 Tauri 2.0 内置 API）
+    tray::setup_tray(app.app_handle().clone());
+
+    // 初始化壁纸控制器，然后根据设置决定是否启动轮播
+    let app_handle = app.app_handle().clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(500)); // 延迟启动，确保应用完全初始化
+
+        // 创建 Tokio runtime 用于异步初始化
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+
+        rt.block_on(async {
+            // 初始化壁纸控制器（如创建窗口等）
+            let controller = app_handle.state::<WallpaperController>();
+            if let Err(e) = controller.init().await {
+                eprintln!("初始化壁纸控制器失败: {}", e);
+            }
+
+            println!("初始化壁纸控制器完成");
+
+            // 启动时：按规则恢复/回退“当前壁纸”
+            if let Err(e) = init_wallpaper_on_startup(&app_handle) {
+                eprintln!("启动时初始化壁纸失败: {}", e);
+            }
+
+            // 初始化完成后：若轮播仍启用，则启动轮播线程
+            let settings = app_handle.state::<Settings>();
+            if let Ok(app_settings) = settings.get_settings() {
+                if app_settings.wallpaper_rotation_enabled {
+                    let rotator = app_handle.state::<WallpaperRotator>();
+                    if let Err(e) = rotator.start() {
+                        eprintln!("启动壁纸轮播失败: {}", e);
+                    }
+                }
+            }
+        });
+    });
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            // 检查清理标记，如果存在则先清理旧数据目录
-            let app_data_dir = kabegame_core::app_paths::kabegame_data_dir();
-            let cleanup_marker = app_data_dir.join(".cleanup_marker");
-            let is_cleaning_data = cleanup_marker.exists();
-            if is_cleaning_data {
-                // 删除标记文件
-                let _ = fs::remove_file(&cleanup_marker);
-                // 尝试删除整个数据目录
-                if app_data_dir.exists() {
-                    // 使用多次重试，因为文件可能还在被其他进程使用
-                    let mut retries = 5;
-                    while retries > 0 {
-                        match fs::remove_dir_all(&app_data_dir) {
-                            Ok(_) => {
-                                println!("成功清理应用数据目录");
-                                break;
-                            }
-                            Err(e) => {
-                                retries -= 1;
-                                if retries == 0 {
-                                    eprintln!(
-                                        "警告：无法完全清理数据目录，部分文件可能仍在使用中: {}",
-                                        e
-                                    );
-                                    // 尝试删除单个文件而不是整个目录
-                                    // 至少删除数据库和设置文件
-                                    let _ = fs::remove_file(app_data_dir.join("images.db"));
-                                    let _ = fs::remove_file(app_data_dir.join("settings.json"));
-                                    let _ = fs::remove_file(app_data_dir.join("plugins.json"));
-                                } else {
-                                    // 等待一段时间后重试
-                                    std::thread::sleep(std::time::Duration::from_millis(200));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 初始化插件管理器
-            let plugin_manager = PluginManager::new(app.app_handle().clone());
-            app.manage(plugin_manager);
-
-            // 每次启动：异步覆盖复制内置插件到用户插件目录（确保可用性/不变性）
-            let app_handle_plugins = app.app_handle().clone();
-            std::thread::spawn(move || {
-                let pm = app_handle_plugins.state::<PluginManager>();
-                if let Err(e) = pm.ensure_prepackaged_plugins_installed() {
-                    eprintln!("[WARN] 启动时安装内置插件失败: {}", e);
-                }
-            });
-
-            // 初始化存储管理器
-            let storage = Storage::new(app.app_handle().clone());
-            storage
-                .init()
-                .map_err(|e| format!("Failed to initialize storage: {}", e))?;
-            // 应用启动时清理所有临时文件
-            match storage.cleanup_temp_files() {
-                Ok(count) => {
-                    if count > 0 {
-                        println!("启动时清理了 {} 个临时文件", count);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("清理临时文件失败: {}", e);
-                }
-            }
-            app.manage(storage);
-
-            // 初始化设置管理器
-            let settings = Settings::new(app.app_handle().clone());
-            app.manage(settings);
-
-            // 初始化去重任务管理器（单例，允许 cancel）
-            let dedupe_manager = DedupeManager::new();
-            app.manage(dedupe_manager);
-
-            // 运行时开关（不落盘）
-
-            // 恢复窗口状态（如果不在清理数据模式）
-            if !is_cleaning_data {
-                if let Some(main_window) = app.get_webview_window("main") {
-                    let settings = app.state::<Settings>();
-                    if let Ok(Some(window_state)) = settings.get_window_state() {
-                        // 恢复窗口大小
-                        if let Err(e) = main_window.set_size(tauri::LogicalSize::new(
-                            window_state.width,
-                            window_state.height,
-                        )) {
-                            eprintln!("恢复窗口大小失败: {}", e);
-                        }
-                        // 恢复窗口位置
-                        if let (Some(x), Some(y)) = (window_state.x, window_state.y) {
-                            if let Err(e) =
-                                main_window.set_position(tauri::LogicalPosition::new(x, y))
-                            {
-                                eprintln!("恢复窗口位置失败: {}", e);
-                            }
-                        }
-                        // 恢复最大化状态
-                        if window_state.maximized {
-                            if let Err(e) = main_window.maximize() {
-                                eprintln!("恢复窗口最大化状态失败: {}", e);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 初始化下载队列管理器
-            let download_queue = crawler::DownloadQueue::new(app.app_handle().clone());
-            app.manage(download_queue);
-
-            // 应用启动时，将所有 pending 和 running 状态的任务标记为失败
-            let storage_for_cleanup = app.state::<Storage>();
-            match storage_for_cleanup.mark_pending_running_tasks_as_failed() {
-                Ok(count) => {
-                    if count > 0 {
-                        println!("启动时已将 {} 个 pending/running 任务标记为失败", count);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("启动时标记任务为失败失败: {}", e);
-                }
-            }
-
-            // 初始化 task 调度器（固定 10 个 task worker）
-            // 注意：不再恢复 pending/running 任务，它们已在启动时被标记为失败
-            let task_scheduler = crawler::TaskScheduler::new(app.app_handle().clone());
-            app.manage(task_scheduler);
-
-            // 初始化全局壁纸控制器（基础 manager）
-            let wallpaper_controller = WallpaperController::new(app.app_handle().clone());
-            app.manage(wallpaper_controller);
-
-            // 初始化壁纸轮播器
-            let rotator = WallpaperRotator::new(app.app_handle().clone());
-            app.manage(rotator);
-
-            // 创建壁纸窗口（用于窗口模式）
-            #[cfg(target_os = "windows")]
-            {
-                use tauri::{WebviewUrl, WebviewWindowBuilder};
-                let _ = WebviewWindowBuilder::new(
-                    app,
-                    "wallpaper",
-                    // 使用独立的 wallpaper.html，只渲染 WallpaperLayer 组件
-                    WebviewUrl::App("wallpaper.html".into()),
-                )
-                // 给壁纸窗口一个固定标题，便于脚本/调试定位到正确窗口
-                .title("Kabegame Wallpaper")
-                .fullscreen(true)
-                .decorations(false)
-                // 设置窗口为透明，背景为透明
-                .transparent(true)
-                .visible(false)
-                .skip_taskbar(true)
-                .build();
-            }
-
-            // 创建系统托盘（使用 Tauri 2.0 内置 API）
-            tray::setup_tray(app.app_handle().clone());
-
-            // 初始化壁纸控制器，然后根据设置决定是否启动轮播
-            let app_handle = app.app_handle().clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(500)); // 延迟启动，确保应用完全初始化
-
-                // 创建 Tokio runtime 用于异步初始化
-                let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
-
-                rt.block_on(async {
-                    // 初始化壁纸控制器（如创建窗口等）
-                    let controller = app_handle.state::<WallpaperController>();
-                    if let Err(e) = controller.init().await {
-                        eprintln!("初始化壁纸控制器失败: {}", e);
-                    }
-
-                    println!("初始化壁纸控制器完成");
-
-                    // 启动时：按规则恢复/回退“当前壁纸”
-                    if let Err(e) = init_wallpaper_on_startup(&app_handle) {
-                        eprintln!("启动时初始化壁纸失败: {}", e);
-                    }
-
-                    // 初始化完成后：若轮播仍启用，则启动轮播线程
-                    let settings = app_handle.state::<Settings>();
-                    if let Ok(app_settings) = settings.get_settings() {
-                        if app_settings.wallpaper_rotation_enabled {
-                            let rotator = app_handle.state::<WallpaperRotator>();
-                            if let Err(e) = rotator.start() {
-                                eprintln!("启动壁纸轮播失败: {}", e);
-                            }
-                        }
-                    }
-                });
-            });
+            let is_cleaning_data = startup_step_cleanup_user_data_if_marked();
+            startup_step_manage_plugin_manager(app);
+            startup_step_manage_storage(app)?;
+            startup_step_manage_virtual_drive_service(app);
+            startup_step_manage_settings(app);
+            startup_step_auto_mount_album_drive(app.app_handle());
+            startup_step_manage_dedupe_manager(app);
+            startup_step_restore_main_window_state(app.app_handle(), is_cleaning_data);
+            startup_step_manage_download_queue(app);
+            startup_step_mark_pending_tasks_as_failed(app.app_handle());
+            startup_step_manage_task_scheduler(app);
+            startup_step_manage_wallpaper_components(app);
 
             Ok(())
         })
@@ -2347,20 +2651,18 @@ fn main() {
             update_task,
             get_task,
             get_all_tasks,
+            confirm_task_rhai_dump,
             delete_task,
             clear_finished_tasks,
             get_task_images,
             get_task_images_paginated,
             get_task_image_ids,
+            get_task_failed_images,
+            retry_task_failed_image,
             // 原有命令
             get_plugins,
             get_build_mode,
-            update_plugin,
             delete_plugin,
-            // 插件编辑器
-            plugin_editor_check_rhai,
-            plugin_editor_export_kgpg,
-            plugin_editor_process_icon,
             crawl_images_command,
             get_images,
             get_images_paginated,
@@ -2376,6 +2678,15 @@ fn main() {
             get_album_image_ids,
             get_album_preview,
             get_album_counts,
+            // Windows 虚拟盘
+            #[cfg(target_os = "windows")]
+            mount_virtual_drive,
+            #[cfg(target_os = "windows")]
+            unmount_virtual_drive,
+            #[cfg(target_os = "windows")]
+            mount_virtual_drive_and_open_explorer,
+            #[cfg(target_os = "windows")]
+            open_explorer,
             get_images_count,
             delete_image,
             remove_image,
@@ -2416,6 +2727,8 @@ fn main() {
             get_setting,
             get_favorite_album_id,
             set_auto_launch,
+            set_album_drive_enabled,
+            set_album_drive_mount_point,
             set_max_concurrent_downloads,
             set_network_retry_count,
             set_image_click_action,
@@ -2450,6 +2763,7 @@ fn main() {
             get_native_wallpaper_styles,
             #[cfg(target_os = "windows")]
             wallpaper_window_ready,
+            set_main_sidebar_dwm_blur,
             hide_main_window,
             open_plugin_editor_window,
             fix_wallpaper_zorder,

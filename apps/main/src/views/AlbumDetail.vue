@@ -1,52 +1,53 @@
 <template>
   <div class="album-detail">
-    <PageHeader :title="albumName || '画册'" :subtitle="images.length ? `共 ${images.length} 张` : ''" show-back
-      @back="goBack">
-      <template #title>
-        <div class="album-title-wrapper">
-          <input v-if="isRenaming" v-model="editingName" ref="renameInputRef" class="album-name-input"
-            @blur="handleRenameConfirm" @keyup.enter="handleRenameConfirm" @keyup.esc="handleRenameCancel" />
-          <span v-else class="album-name" @dblclick.stop="handleStartRename" @click.stop :title="'双击改名'">{{ albumName ||
-            '画册' }}</span>
-        </div>
-      </template>
-      <el-button @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !albumId">
-        <el-icon>
-          <Refresh />
-        </el-icon>
-        刷新
-      </el-button>
-      <el-button type="primary" @click="handleSetAsWallpaperCarousel">
-        <el-icon>
-          <Picture />
-        </el-icon>
-        <span style="margin-left: 4px;">设为轮播壁纸</span>
-      </el-button>
-      <el-button type="danger" @click="handleDeleteAlbum">
-        <el-icon>
-          <Delete />
-        </el-icon>
-        <span style="margin-left: 4px;">删除画册</span>
-      </el-button>
-      <TaskDrawerButton />
-      <el-button @click="openQuickSettings" circle>
-        <el-icon>
-          <Setting />
-        </el-icon>
-      </el-button>
-    </PageHeader>
-
     <div v-if="loading" class="detail-body detail-body-loading">
       <el-skeleton :rows="8" animated />
-        </div>
+    </div>
 
     <ImageGrid v-else ref="albumViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
       :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true" :context-menu-component="AlbumImageContextMenu"
-      :on-context-command="handleImageMenuCommand" @added-to-album="handleAddedToAlbum"
-      @scroll-stable="loadImageUrls()" @reorder="(...args) => handleImageReorder(args[0])">
+      :on-context-command="handleImageMenuCommand" @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()"
+      @reorder="(...args) => handleImageReorder(args[0])">
 
-      <!-- 画册图片数量上限警告：作为 before-grid 插入（仅 AlbumDetail 使用） -->
       <template #before-grid>
+        <PageHeader :title="albumName || '画册'" :subtitle="images.length ? `共 ${images.length} 张` : ''" show-back
+          @back="goBack">
+          <template #title>
+            <div class="album-title-wrapper">
+              <input v-if="isRenaming" v-model="editingName" ref="renameInputRef" class="album-name-input"
+                @blur="handleRenameConfirm" @keyup.enter="handleRenameConfirm" @keyup.esc="handleRenameCancel" />
+              <span v-else class="album-name" @dblclick.stop="handleStartRename" @click.stop :title="'双击改名'">{{
+                albumName ||
+                '画册' }}</span>
+            </div>
+          </template>
+          <el-button @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !albumId">
+            <el-icon>
+              <Refresh />
+            </el-icon>
+            刷新
+          </el-button>
+          <el-button type="primary" @click="handleSetAsWallpaperCarousel">
+            <el-icon>
+              <Picture />
+            </el-icon>
+            <span style="margin-left: 4px;">设为轮播壁纸</span>
+          </el-button>
+          <el-button type="danger" @click="handleDeleteAlbum">
+            <el-icon>
+              <Delete />
+            </el-icon>
+            <span style="margin-left: 4px;">删除画册</span>
+          </el-button>
+          <TaskDrawerButton />
+          <el-button @click="openQuickSettings" circle>
+            <el-icon>
+              <Setting />
+            </el-icon>
+          </el-button>
+        </PageHeader>
+
+        <!-- 画册图片数量上限警告 -->
         <div v-if="showAlbumLimitWarning" :class="['album-limit-warning', { 'is-danger': isAtLimit }]">
           <el-icon>
             <Warning v-if="!isAtLimit" />
@@ -61,6 +62,9 @@
       :message="removeDialogMessage" title="从画册移除" checkbox-label="同时删除图片（慎用）"
       danger-text="警告：将永久删除电脑文件，并从所有画册和画廊中移除，不可恢复！" safe-text="不勾选仅从当前画册移除，图片文件和其他画册中的记录将保留。"
       @confirm="confirmRemoveImages" />
+
+    <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds"
+      :exclude-album-ids="albumId ? [albumId] : []" @added="handleAddedToAlbum" />
   </div>
 </template>
 
@@ -75,12 +79,13 @@ import { Picture, Delete, Setting, Refresh } from "@element-plus/icons-vue";
 import { Warning, CircleClose } from "@element-plus/icons-vue";
 import AlbumImageContextMenu from "@/components/contextMenu/AlbumImageContextMenu.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
-import RemoveImagesConfirmDialog from "@/components/common/RemoveImagesConfirmDialog.vue";
+import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 import { useAlbumStore } from "@/stores/albums";
 import { useCrawlerStore, type ImageInfo as CrawlerImageInfo } from "@/stores/crawler";
 import type { ImageInfo } from "@/stores/crawler";
-import { useSettingsStore } from "@kabegame/core/src/stores/settings";
-import { useUiStore } from "@kabegame/core/src/stores/ui";
+import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useUiStore } from "@kabegame/core/stores/ui";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useGallerySettings } from "@/composables/useGallerySettings";
@@ -88,6 +93,7 @@ import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageUrlLoader } from "@/composables/useImageUrlLoader";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
+import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -115,6 +121,47 @@ const currentWallpaperImageId = ref<string | null>(null);
 const images = ref<ImageInfo[]>([]);
 const albumViewRef = ref<any>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
+
+// dragScroll “太快且仍在加速”时的俏皮提示（画册开启）
+const dragScrollTooFastMessages = [
+  "慢慢滑嘛，人家要追不上啦 (；´д｀)ゞ",
+  "你这手速开挂了吧？龟龟跟不上啦 (╥﹏╥)",
+  "别飙车！龟龟晕滚动条了~ (＠_＠;)",
+  "给人家留点帧率呀，慢一点点嘛 (´-﹏-`；)",
+  "这速度像火箭！先等等我！ε=ε=ε=┏(゜ロ゜;)┛",
+];
+const pickOne = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)] || arr[0] || "";
+let cleanupDragScrollTooFastListener: (() => void) | null = null;
+watch(
+  () => albumContainerRef.value,
+  (el, prev) => {
+    if (cleanupDragScrollTooFastListener) {
+      cleanupDragScrollTooFastListener();
+      cleanupDragScrollTooFastListener = null;
+    }
+    if (prev && prev !== el) {
+      try {
+        prev.removeEventListener("dragscroll-overspeed", onDragScrollOverspeed as any);
+      } catch { }
+    }
+    if (!el) return;
+    el.addEventListener("dragscroll-overspeed", onDragScrollOverspeed as any);
+    cleanupDragScrollTooFastListener = () => {
+      try {
+        el.removeEventListener("dragscroll-overspeed", onDragScrollOverspeed as any);
+      } catch { }
+    };
+  },
+  { immediate: true }
+);
+function onDragScrollOverspeed(_ev: Event) {
+  ElMessage({
+    type: "info",
+    message: pickOne(dragScrollTooFastMessages),
+    duration: 900,
+    showClose: false,
+  });
+}
 
 const { isInteracting } = useImageGridAutoLoad({
   containerRef: albumContainerRef,
@@ -157,7 +204,7 @@ const currentAlbumImageCount = computed(() => {
   }
   // 如果没有计数，使用当前加载的图片数量
   return images.value.length;
-  });
+});
 
 const MAX_ALBUM_IMAGES = 10000;
 const WARNING_THRESHOLD = 9000; // 超过 9000 时显示警告
@@ -179,33 +226,6 @@ const warningMessage = computed(() => {
   return `画册图片数量即将到达上限（当前 ${count} / ${MAX_ALBUM_IMAGES}，剩余 ${remaining} 张）`;
 });
 
-const albumAspectRatio = ref<number | null>(null);
-
-watch(
-  () => settingsStore.values.galleryImageAspectRatio,
-  (newValue) => {
-    if (!newValue) {
-      albumAspectRatio.value = null;
-      return;
-    }
-    const value = newValue as string;
-    // 解析 "16:9" 格式
-    if (value.includes(":") && !value.startsWith("custom:")) {
-      const [w, h] = value.split(":").map(Number);
-      if (w && h) {
-        albumAspectRatio.value = w / h;
-    }
-    }
-    // 解析 "custom:1920:1080" 格式
-    if (value.startsWith("custom:")) {
-      const parts = value.replace("custom:", "").split(":");
-      const [w, h] = parts.map(Number);
-      if (w && h) {
-        albumAspectRatio.value = w / h;
-      }
-    }
-  }
-);
 
 const clearSelection = () => {
   albumViewRef.value?.clearSelection?.();
@@ -227,7 +247,9 @@ const favoriteAlbumDirty = ref(false);
 const showRemoveDialog = ref(false);
 const removeDeleteFiles = ref(false);
 const removeDialogMessage = ref("");
-const pendingRemoveImages = ref<ImageInfo[]>([]);
+const pendingRemoveImages = ref<CoreImageInfo[]>([]);
+const showAddToAlbumDialog = ref(false);
+const addToAlbumImageIds = ref<string[]>([]);
 
 const goBack = () => {
   router.back();
@@ -323,7 +345,7 @@ const handleAddedToAlbum = async () => {
   await albumStore.loadAlbums();
 };
 
-const handleCopyImage = async (image: ImageInfo) => {
+const handleCopyImage = async (image: CoreImageInfo) => {
   const imageUrl = imageSrcMap.value[image.id]?.original || imageSrcMap.value[image.id]?.thumbnail;
   if (!imageUrl) {
     ElMessage.warning("图片尚未加载完成，请稍后再试");
@@ -404,12 +426,12 @@ const confirmRemoveImages = async () => {
         }
         return img;
       });
-  }
+    }
 
     // 如果删除了文件，需要从列表中移除；如果只是从画册移除，也需要从列表中移除
-  images.value = images.value.filter((img) => !ids.has(img.id));
-  removeFromCacheByIds(idsArr);
-  clearSelection();
+    images.value = images.value.filter((img) => !ids.has(img.id));
+    removeFromCacheByIds(idsArr);
+    clearSelection();
 
     // 根据操作类型显示不同的成功消息
     if (shouldDeleteFiles) {
@@ -440,9 +462,76 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
   const isMultiSelect = selectedSet.size > 1;
   const imagesToProcess = isMultiSelect
     ? images.value.filter((img) => selectedSet.has(img.id))
-      : [image];
+    : [image];
 
   switch (command) {
+    case "favorite": {
+      const desiredFavorite = imagesToProcess.some((img) => !(img.favorite ?? false));
+      const toChange = imagesToProcess.filter(
+        (img) => (img.favorite ?? false) !== desiredFavorite
+      );
+      if (toChange.length === 0) {
+        ElMessage.info(desiredFavorite ? "已收藏" : "已取消收藏");
+        break;
+      }
+
+      const results = await Promise.allSettled(
+        toChange.map((img) =>
+          invoke("toggle_image_favorite", {
+            imageId: img.id,
+            favorite: desiredFavorite,
+          })
+        )
+      );
+      const succeededIds: string[] = [];
+      results.forEach((r, idx) => {
+        if (r.status === "fulfilled") succeededIds.push(toChange[idx]!.id);
+      });
+      if (succeededIds.length === 0) {
+        ElMessage.error("操作失败");
+        break;
+      }
+
+      const succeededSet = new Set(succeededIds);
+      const isFavoriteAlbum = albumId.value === FAVORITE_ALBUM_ID.value;
+
+      // 1) 更新当前页面列表
+      if (isFavoriteAlbum && !desiredFavorite) {
+        images.value = images.value.filter((img) => !succeededSet.has(img.id));
+      } else {
+        images.value = images.value.map((img) =>
+          succeededSet.has(img.id) ? ({ ...img, favorite: desiredFavorite } as ImageInfo) : img
+        );
+      }
+
+      // 2) 更新收藏画册计数（用于画册页预览/计数显示）
+      const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
+      albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(
+        0,
+        currentCount + (desiredFavorite ? succeededIds.length : -succeededIds.length)
+      );
+
+      // 3) 若收藏画册图片缓存已加载：同步更新缓存数组
+      const favList = albumStore.albumImages[FAVORITE_ALBUM_ID.value];
+      if (Array.isArray(favList)) {
+        if (desiredFavorite) {
+          for (const img of toChange) {
+            if (!succeededSet.has(img.id)) continue;
+            const idx = favList.findIndex((x) => x.id === img.id);
+            if (idx === -1) favList.push({ ...(img as any), favorite: true } as any);
+            else favList[idx] = { ...(favList[idx] as any), favorite: true } as any;
+          }
+        } else {
+          for (let i = favList.length - 1; i >= 0; i--) {
+            if (succeededSet.has(favList[i]!.id)) favList.splice(i, 1);
+          }
+        }
+      }
+
+      clearSelection();
+      ElMessage.success(desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`);
+      break;
+    }
     case "copy":
       if (imagesToProcess.length > 1) {
         // 多选时复制第一张图片（浏览器限制，一次只能复制一张）
@@ -454,12 +543,12 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       break;
     case "open":
       if (!isMultiSelect) {
-      await invoke("open_file_path", { filePath: image.localPath });
+        await invoke("open_file_path", { filePath: image.localPath });
       }
       break;
     case "openFolder":
       if (!isMultiSelect) {
-      await invoke("open_file_folder", { filePath: image.localPath });
+        await invoke("open_file_folder", { filePath: image.localPath });
       }
       break;
     case "wallpaper":
@@ -534,6 +623,12 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
         }
       }
       break;
+    case "addToAlbum": {
+      const ids = imagesToProcess.map((img) => img.id);
+      addToAlbumImageIds.value = ids;
+      showAddToAlbumDialog.value = true;
+      break;
+    }
     case "remove":
       // 显示移除对话框，让用户选择是否删除文件
       pendingRemoveImages.value = imagesToProcess;
@@ -594,28 +689,6 @@ onMounted(async () => {
   // 与 Gallery 共用同一套设置
   try {
     await loadSettings();
-
-    // 解析宽高比
-    if (settingsStore.values.galleryImageAspectRatio) {
-      const value = settingsStore.values.galleryImageAspectRatio;
-
-      // 解析 "16:9" 格式
-      if (value.includes(":") && !value.startsWith("custom:")) {
-        const [w, h] = value.split(":").map(Number);
-        if (w && h) {
-          albumAspectRatio.value = w / h;
-        }
-      }
-
-      // 解析 "custom:1920:1080" 格式
-      if (value.startsWith("custom:")) {
-        const parts = value.replace("custom:", "").split(":");
-        const [w, h] = parts.map(Number);
-        if (w && h) {
-          albumAspectRatio.value = w / h;
-        }
-      }
-    }
   } catch (e) {
     console.error("加载设置失败:", e);
   }
@@ -931,11 +1004,11 @@ onBeforeUnmount(() => {
 
 <style scoped lang="scss">
 .album-detail {
-  padding: 16px;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  height: 100%;
+  padding: 16px;
+  overflow: hidden;
 
   .count {
     color: var(--anime-text-muted);
@@ -946,12 +1019,14 @@ onBeforeUnmount(() => {
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    padding-top: 6px;
-    padding-bottom: 6px;
 
     .image-grid-root {
       overflow: visible;
     }
+  }
+
+  .detail-body-loading {
+    padding: 20px;
   }
 
   .album-grid {

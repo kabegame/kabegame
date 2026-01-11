@@ -1,35 +1,17 @@
-import type { Component } from "vue";
-import type { AppSettingKey } from "@kabegame/core/src/stores/settings";
 import type { QuickSettingsPageId } from "@/stores/quickSettingsDrawer";
+import type { QuickSettingGroup } from "@kabegame/core/components/settings/quick-settings-registry-types";
 
-import SettingRow from "@/components/settings/SettingRow.vue";
-import SettingSwitchControl from "@/components/settings/controls/SettingSwitchControl.vue";
-import SettingNumberControl from "@/components/settings/controls/SettingNumberControl.vue";
-import SettingRadioControl from "@/components/settings/controls/SettingRadioControl.vue";
+import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
+import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
+import SettingRadioControl from "@kabegame/core/components/settings/controls/SettingRadioControl.vue";
 
-import DefaultDownloadDirSetting from "@/components/settings/items/DefaultDownloadDirSetting.vue";
+import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
 import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngineDirSetting.vue";
 import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
-
-export type QuickSettingItem = {
-  key: AppSettingKey;
-  label: string;
-  description?: string;
-  comp: Component;
-  props?: Record<string, any>;
-  pages: QuickSettingsPageId[];
-};
-
-export type QuickSettingGroup = {
-  id: string;
-  title: string;
-  description?: string;
-  items: QuickSettingItem[];
-};
 
 /**
  * 快捷设置分组表（key 与后端 AppSettings 的 camelCase 字段完全一致）
@@ -38,7 +20,7 @@ export type QuickSettingGroup = {
  * - comp 既可以是 “纯控件”（Switch/Select/Number/Radio），也可以是复杂设置项（如目录选择）
  * - pages 决定哪些页面的设置抽屉会展示该项
  */
-export const QUICK_SETTINGS_GROUPS: QuickSettingGroup[] = [
+export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
   {
     id: "display",
     title: "显示",
@@ -244,6 +226,3 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup[] = [
     ],
   },
 ];
-
-// re-export：有些场景会在抽屉里直接复用 SettingRow
-export { SettingRow };

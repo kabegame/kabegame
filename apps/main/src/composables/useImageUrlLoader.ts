@@ -100,6 +100,9 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
   const inFlightThumbnailIds = new Set<string>();
   const inFlightOriginalIds = new Set<string>();
 
+  // 不再做“远程预下载”（会引入 CORS/跨域限制 & 网络波动导致 UI 抖动）：
+  // - 对失败占位/远程 url 的图片：直接显示“图片丢失/下载失败”的文字提示（由 ImageItem 负责渲染）
+
   // 超时 + 重试：避免少量图片卡住导致“永远 inFlight”
   const THUMBNAIL_TIMEOUT_MS = 2500;
   const ORIGINAL_TIMEOUT_MS = 6500;
@@ -326,7 +329,7 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
     if (needOriginal && !hasOrig) {
       inFlightOriginalIds.add(image.id);
       try {
-        const origUrl = image.localPath ? await getImageUrl(image.localPath) : "";
+        let origUrl = image.localPath ? await getImageUrl(image.localPath) : "";
         if (!imageIdSet.has(image.id)) return;
         if (origUrl) {
           const curr = imageSrcMap.value[image.id] || {};
@@ -487,6 +490,37 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
       scheduleNext(() => processRemaining(0));
     }
   };
+
+  // 列数/偏好变化时也要触发一次加载：
+  // - 当列数降到 <=2 时需要 original，否则会一直停留在 thumbnail（除非用户滚动触发 scroll-stable）
+  // - 列数变化也会改变“可视范围估算”，应补齐新可视区的缩略图/原图
+  let columnsChangeTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleLoadOnColumnsChange = () => {
+    const container = params.containerRef.value;
+    if (!container) return;
+    if (columnsChangeTimer) clearTimeout(columnsChangeTimer);
+    columnsChangeTimer = setTimeout(() => {
+      columnsChangeTimer = null;
+      scheduleNext(() => void loadImageUrls());
+    }, 80);
+  };
+
+  watch(
+    () => preferOriginalInGrid.value,
+    (next, prev) => {
+      if (next === prev) return;
+      // 只在“需要原图”时强制补齐一次
+      if (next) scheduleLoadOnColumnsChange();
+    }
+  );
+
+  watch(
+    () => params.gridColumns?.value,
+    (next, prev) => {
+      if (next === prev) return;
+      scheduleLoadOnColumnsChange();
+    }
+  );
 
   const removeFromCacheByIds = (imageIds: string[]) => {
     if (!imageIds || imageIds.length === 0) return;

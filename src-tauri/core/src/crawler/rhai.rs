@@ -1,5 +1,5 @@
 use crate::plugin::Plugin;
-use rhai::{Dynamic, Engine, Map, Scope};
+use rhai::{Dynamic, Engine, Map, Position, Scope};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -8,6 +8,235 @@ use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
 
 type Shared<T> = Arc<Mutex<T>>;
+
+fn safe_filename_component(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        let ok = ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.';
+        out.push(if ok { ch } else { '_' });
+    }
+    if out.is_empty() {
+        "_".to_string()
+    } else {
+        out
+    }
+}
+
+fn is_sensitive_var_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.contains("token")
+        || n.contains("cookie")
+        || n.contains("auth")
+        || n.contains("password")
+        || n.contains("secret")
+        || n.contains("apikey")
+        || n.contains("api_key")
+}
+
+fn build_rhai_scope_dump_json(
+    plugin_id: &str,
+    task_id: &str,
+    scope: &Scope,
+    err: &rhai::EvalAltResult,
+) -> serde_json::Value {
+    // 注意：Scope 仅包含脚本中的“全局变量”（以及我们注入的常量）。
+    // 函数内部的局部变量/临时值不会出现在这里。
+    const MAX_VALUE_CHARS: usize = 4096;
+    const MAX_VARS: usize = 256;
+
+    let pos = err.position();
+    let line = pos.line().unwrap_or(0);
+    let col = pos.position().unwrap_or(0);
+
+    let mut vars: Vec<serde_json::Value> = Vec::new();
+    let mut total = 0usize;
+    for (name, is_const, value) in scope.iter_raw() {
+        total += 1;
+        if vars.len() >= MAX_VARS {
+            break;
+        }
+
+        let sensitive = is_sensitive_var_name(name);
+        let raw_value = if sensitive {
+            "<redacted>".to_string()
+        } else {
+            value.to_string()
+        };
+        let raw_len = raw_value.chars().count();
+        let (value_out, truncated) = if raw_len > MAX_VALUE_CHARS {
+            let mut s = raw_value.chars().take(MAX_VALUE_CHARS).collect::<String>();
+            s.push_str(&format!(" ... (truncated, original_len={raw_len})"));
+            (s, true)
+        } else {
+            (raw_value, false)
+        };
+
+        vars.push(serde_json::json!({
+            "name": name,
+            "typeId": format!("{:?}", value.type_id()),
+            "isConstant": is_const,
+            "isSensitive": sensitive,
+            "value": value_out,
+            "valueTruncated": truncated,
+            "valueLen": raw_len,
+        }));
+    }
+
+    serde_json::json!({
+        "pluginId": plugin_id,
+        "taskId": task_id,
+        "error": err.to_string(),
+        "position": {
+            "line": line,
+            "col": col,
+        },
+        "notes": "仅包含 Scope（全局变量/注入常量）。函数内部局部变量无法从 Scope 提取。",
+        "vars": vars,
+        "varsTotal": total,
+        "varsCapped": total > vars.len(),
+    })
+}
+
+fn try_write_rhai_scope_dump_file(
+    images_dir: &Path,
+    plugin_id: &str,
+    task_id: &str,
+    dump_text: &str,
+) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(images_dir)
+        .map_err(|e| format!("Failed to create images_dir for dump: {e}"))?;
+
+    let safe_task = safe_filename_component(task_id);
+    let safe_plugin = safe_filename_component(plugin_id);
+    let filename = format!("{safe_task}_{safe_plugin}.rhai-scope-dump.json");
+    let path = images_dir.join(filename);
+
+    std::fs::write(&path, dump_text).map_err(|e| format!("Failed to write dump file: {e}"))?;
+    Ok(path)
+}
+
+fn lock_or_inner<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(e) => e.into_inner(),
+    }
+}
+
+fn get_task_id(task_id_holder: &Shared<String>) -> String {
+    lock_or_inner(task_id_holder).clone()
+}
+
+fn get_network_retry_count(app: &AppHandle) -> u32 {
+    app.try_state::<crate::settings::Settings>()
+        .and_then(|s| s.get_settings().ok())
+        .map(|s| s.network_retry_count)
+        .unwrap_or(0)
+}
+
+fn backoff_ms_for_attempt(attempt: u32) -> u64 {
+    // 与 download_image 保持一致：500ms * 2^(attempt-1)，上限 5000ms
+    (500u64)
+        .saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1)))
+        .min(5000)
+}
+
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error()
+}
+
+fn emit_http_warn(app: &AppHandle, task_id: &str, message: impl Into<String>) {
+    crate::crawler::emit_task_log(app, task_id, "warn", message.into());
+}
+
+fn emit_http_error(app: &AppHandle, task_id: &str, message: impl Into<String>) {
+    crate::crawler::emit_task_log(app, task_id, "error", message.into());
+}
+
+fn http_get_text_with_retry(
+    app: &AppHandle,
+    task_id: &str,
+    url: &str,
+    label: &str,
+) -> Result<String, String> {
+    let client = crate::crawler::create_blocking_client()?;
+    let retry_count = get_network_retry_count(app);
+    let max_attempts = retry_count.saturating_add(1).max(1);
+
+    for attempt in 1..=max_attempts {
+        // 若任务已被取消，尽早退出（与 download_image 一致）
+        let dq = app.state::<crate::crawler::DownloadQueue>();
+        if dq.is_task_canceled(task_id) {
+            return Err("Task canceled".to_string());
+        }
+
+        let response = match client.get(url).send() {
+            Ok(r) => r,
+            Err(e) => {
+                if attempt < max_attempts {
+                    let backoff_ms = backoff_ms_for_attempt(attempt);
+                    emit_http_warn(
+                        app,
+                        task_id,
+                        format!(
+                            "[{label}] 请求失败，将在 {backoff_ms}ms 后重试 ({attempt}/{max_attempts})：{e}"
+                        ),
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                    continue;
+                }
+                let msg = format!("[{label}] 请求失败：{e}");
+                eprintln!("{msg} URL: {url}");
+                emit_http_error(app, task_id, format!("{msg}，URL: {url}"));
+                return Err(format!("Failed to fetch: {e}"));
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let retryable = is_retryable_status(status);
+            if retryable && attempt < max_attempts {
+                let backoff_ms = backoff_ms_for_attempt(attempt);
+                emit_http_warn(
+                    app,
+                    task_id,
+                    format!(
+                        "[{label}] HTTP {status}，将于 {backoff_ms}ms 后重试 ({attempt}/{max_attempts})，URL: {url}"
+                    ),
+                );
+                std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                continue;
+            }
+            let msg = format!("[{label}] HTTP 错误：{status}");
+            eprintln!("{msg} URL: {url}");
+            emit_http_error(app, task_id, format!("{msg}，URL: {url}"));
+            return Err(format!("HTTP error: {status}"));
+        }
+
+        match response.text() {
+            Ok(text) => return Ok(text),
+            Err(e) => {
+                if attempt < max_attempts {
+                    let backoff_ms = backoff_ms_for_attempt(attempt);
+                    emit_http_warn(
+                        app,
+                        task_id,
+                        format!(
+                            "[{label}] 读取响应失败，将在 {backoff_ms}ms 后重试 ({attempt}/{max_attempts})：{e}"
+                        ),
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                    continue;
+                }
+                let msg = format!("[{label}] 读取响应失败：{e}");
+                eprintln!("{msg} URL: {url}");
+                emit_http_error(app, task_id, format!("{msg}，URL: {url}"));
+                return Err(format!("Failed to fetch: {e}"));
+            }
+        }
+    }
+
+    Err("Unreachable".to_string())
+}
 
 /// task worker 线程内可复用的 Rhai runtime（Engine + 可变任务上下文）
 ///
@@ -36,6 +265,36 @@ impl RhaiCrawlerRuntime {
         let current_progress: Shared<Arc<Mutex<f64>>> =
             Arc::new(Mutex::new(Arc::new(Mutex::new(0.0))));
         let output_album_id: Shared<Option<String>> = Arc::new(Mutex::new(None));
+
+        // 将 Rhai 的 print/debug 输出重定向为 task-log 事件，供前端实时展示
+        {
+            let app_for_print = app.clone();
+            let task_id_for_print = Arc::clone(&task_id);
+            engine.on_print(move |s: &str| {
+                let tid = match task_id_for_print.lock() {
+                    Ok(g) => g.clone(),
+                    Err(e) => e.into_inner().clone(),
+                };
+                crate::crawler::emit_task_log(&app_for_print, &tid, "print", s.to_string());
+            });
+        }
+        {
+            let app_for_debug = app.clone();
+            let task_id_for_debug = Arc::clone(&task_id);
+            engine.on_debug(move |s: &str, src: Option<&str>, pos: Position| {
+                let tid = match task_id_for_debug.lock() {
+                    Ok(g) => g.clone(),
+                    Err(e) => e.into_inner().clone(),
+                };
+                let src = src.unwrap_or("unknown");
+                crate::crawler::emit_task_log(
+                    &app_for_debug,
+                    &tid,
+                    "debug",
+                    format!("{src} @ {pos:?} > {s}"),
+                );
+            });
+        }
 
         register_crawler_functions(
             &mut engine,
@@ -137,14 +396,13 @@ pub fn register_crawler_functions(
     // to(url) - 访问一个网页，将当前页面入栈
     engine.register_fn("to", {
         let stack_holder = Arc::clone(&stack_holder);
+        let app_holder = app.clone();
+        let task_id_holder = Arc::clone(&task_id);
         // 注意：返回 Result<T, Box<EvalAltResult>> 时，脚本侧拿到的是 T（失败会直接抛出运行时错误）
         // 这样 print(to(...)) / print(current_html()) 不会出现 "Result<...>" 字样。
         move |url: &str| -> Result<(), Box<rhai::EvalAltResult>> {
             let stack = {
-                let guard = match stack_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
+                let guard = lock_or_inner(&stack_holder);
                 Arc::clone(&*guard)
             };
             // 获取当前栈顶的 URL（用于解析相对 URL）
@@ -168,25 +426,20 @@ pub fn register_crawler_functions(
 
             // 获取 HTML
             // 在单独的线程中执行阻塞的 HTTP 请求，避免在 Tokio runtime 中创建新的 runtime
+            // 并增加失败重试 + 日志输出（风格与 download_image 一致：可取消、指数退避、最终失败 eprintln）
             let url_clone = resolved_url.clone();
+            let app_for_http = app_holder.clone();
+            let task_id_for_http = get_task_id(&task_id_holder);
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let result = match crate::crawler::create_blocking_client() {
-                    Ok(client) => client.get(&url_clone).send().and_then(|r| r.text()),
-                    Err(e) => {
-                        eprintln!("Failed to create HTTP client with proxy: {}", e);
-                        // 创建一个模拟的网络错误
-                        let err = reqwest::blocking::get("http://invalid-url-that-will-fail")
-                            .unwrap_err();
-                        Err(err)
-                    }
-                };
+                let result =
+                    http_get_text_with_retry(&app_for_http, &task_id_for_http, &url_clone, "to");
                 let _ = tx.send(result);
             });
             let html = rx
                 .recv()
                 .map_err(|e| format!("Thread communication error: {}", e))?
-                .map_err(|e| format!("Failed to fetch: {}", e))?;
+                .map_err(|e| e)?;
 
             // 将当前页面推入栈（如果栈不为空，先保存当前页面）
             let mut stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -198,12 +451,11 @@ pub fn register_crawler_functions(
     // to_json(url) - 访问一个 JSON API，返回 JSON 对象
     engine.register_fn("to_json", {
         let stack_holder = Arc::clone(&stack_holder);
+        let app_holder = app.clone();
+        let task_id_holder = Arc::clone(&task_id);
         move |url: &str| -> Result<Map, Box<rhai::EvalAltResult>> {
             let stack = {
-                let guard = match stack_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
+                let guard = lock_or_inner(&stack_holder);
                 Arc::clone(&*guard)
             };
             // 获取当前栈顶的 URL（用于解析相对 URL）
@@ -227,27 +479,35 @@ pub fn register_crawler_functions(
 
             // 获取 JSON 响应
             // 在单独的线程中执行阻塞的 HTTP 请求，避免在 Tokio runtime 中创建新的 runtime
+            // 并增加失败重试 + 日志输出（风格与 download_image 一致）
             let url_clone = resolved_url.clone();
+            let app_for_http = app_holder.clone();
+            let task_id_for_http = get_task_id(&task_id_holder);
+            let task_id_for_http_thread = task_id_for_http.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let result = match crate::crawler::create_blocking_client() {
-                    Ok(client) => client.get(&url_clone).send().and_then(|r| r.text()),
-                    Err(e) => {
-                        eprintln!("Failed to create HTTP client with proxy: {}", e);
-                        // 创建一个模拟的网络错误
-                        let err = reqwest::blocking::get("http://invalid-url-that-will-fail")
-                            .unwrap_err();
-                        Err(err)
-                    }
-                };
+                let result = http_get_text_with_retry(
+                    &app_for_http,
+                    &task_id_for_http_thread,
+                    &url_clone,
+                    "to_json",
+                );
                 let _ = tx.send(result);
             });
             let text = rx
                 .recv()
                 .map_err(|e| format!("Thread communication error: {}", e))?
-                .map_err(|e| format!("Failed to fetch: {}", e))?;
-            let json_value = serde_json::from_str::<serde_json::Value>(&text)
-                .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+                .map_err(|e| e)?;
+            let json_value = serde_json::from_str::<serde_json::Value>(&text).map_err(|e| {
+                let msg = format!("[to_json] JSON 解析失败：{e}");
+                eprintln!("{msg} URL: {resolved_url}");
+                emit_http_error(
+                    &app_holder,
+                    &task_id_for_http,
+                    format!("{msg}，URL: {resolved_url}"),
+                );
+                format!("Failed to parse JSON: {}", e)
+            })?;
 
             // 将当前页面推入栈（保存 URL 和 JSON 字符串表示）
             let json_string = serde_json::to_string(&json_value)
@@ -971,7 +1231,7 @@ pub fn register_crawler_functions(
 /// 执行 Rhai 爬虫脚本
 pub fn execute_crawler_script_with_runtime(
     runtime: &mut RhaiCrawlerRuntime,
-    _plugin: &Plugin,
+    plugin: &Plugin,
     images_dir: &Path,
     _app: &AppHandle,
     plugin_id: &str,
@@ -987,9 +1247,24 @@ pub fn execute_crawler_script_with_runtime(
         task_id.to_string(),
         output_album_id,
     );
+    crate::crawler::emit_task_log(
+        &runtime.app,
+        task_id,
+        "info",
+        format!("开始执行脚本（pluginId={plugin_id}, taskId={task_id}）"),
+    );
 
     // 创建作用域
     let mut scope = Scope::new();
+
+    // 注入插件级变量：base_url（来自 config.json 的 baseUrl）
+    // 规则：
+    // - 仅当插件提供了 baseUrl（非空）时注入
+    // - 不覆盖用户/变量系统已提供的同名 base_url（merged_config 中存在则跳过）
+    let plugin_base_url = plugin.base_url.trim();
+    if !plugin_base_url.is_empty() && !merged_config.contains_key("base_url") {
+        scope.push_constant("base_url", plugin_base_url.to_string());
+    }
 
     // 注入变量到脚本作用域：
     // Rhai 的函数体默认不能捕获/读取 Scope 里的"普通变量"，但可以读取常量。
@@ -1059,19 +1334,68 @@ pub fn execute_crawler_script_with_runtime(
         .engine
         .eval_with_scope(&mut scope, &script_content)
         .map_err(|e| {
+            // 失败时输出一个 scope dump，便于定位脚本运行到哪一步/变量是否如预期。
+            // 注意：只包含全局变量/注入常量；函数局部变量无法获取。
+            let dump_text = build_rhai_scope_dump_json(plugin_id, task_id, &scope, e.as_ref());
+            let dump_text = serde_json::to_string_pretty(&dump_text).ok();
+
+            // 1) 保存到任务表（供 UI “确认”）
+            if let Some(ref text) = dump_text {
+                if let Some(storage) = runtime.app.try_state::<crate::storage::Storage>() {
+                    if let Err(err) = storage.set_task_rhai_dump(task_id, text) {
+                        crate::crawler::emit_task_log(
+                            &runtime.app,
+                            task_id,
+                            "warn",
+                            format!("Rhai dump 保存到任务表失败：{err}"),
+                        );
+                    }
+                }
+            }
+
+            // 2) 额外写一个文件（便于用户直接打开）
+            let dump_path = match dump_text.as_deref() {
+                Some(text) => {
+                    match try_write_rhai_scope_dump_file(images_dir, plugin_id, task_id, text) {
+                        Ok(p) => Some(p),
+                        Err(dump_err) => {
+                            let msg = format!("Rhai 脚本失败：生成变量 dump 文件失败：{dump_err}");
+                            crate::crawler::emit_task_log(&runtime.app, task_id, "warn", msg);
+                            None
+                        }
+                    }
+                }
+                None => None,
+            };
+
             // 尽可能把行列号带上，方便前端定位（某些错误的 Display 不包含 position）
             let pos = e.position();
             let (line, col) = (pos.line().unwrap_or(0), pos.position().unwrap_or(0));
             if line > 0 && col > 0 {
                 eprintln!("Script execution error at {}:{}: {}", line, col, e);
-                format!("Script execution error at {}:{}: {}", line, col, e)
+                let mut msg = format!("Script execution error at {}:{}: {}", line, col, e);
+                if let Some(p) = dump_path {
+                    msg.push_str(&format!("\nScope dump: {}", p.display()));
+                }
+                crate::crawler::emit_task_log(&runtime.app, task_id, "error", msg.clone());
+                msg
             } else {
                 eprintln!("Script execution error: {}", e);
-                format!("Script execution error: {}", e)
+                let mut msg = format!("Script execution error: {}", e);
+                if let Some(p) = dump_path {
+                    msg.push_str(&format!("\nScope dump: {}", p.display()));
+                }
+                crate::crawler::emit_task_log(&runtime.app, task_id, "error", msg.clone());
+                msg
             }
         })?;
 
-    eprintln!("Script executed successfully, images should be queued via download_image()");
+    crate::crawler::emit_task_log(
+        &runtime.app,
+        task_id,
+        "info",
+        "脚本执行完成：图片应已通过 download_image() 入队".to_string(),
+    );
     Ok(())
 }
 

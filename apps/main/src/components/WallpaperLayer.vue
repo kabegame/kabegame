@@ -1,5 +1,5 @@
 <template>
-    <div class="wallpaper-root">
+    <div class="wallpaper-root" @pointerdown="handleWallpaperPointerDown">
         <div v-if="mode !== 'tile'" class="wallpaper-stage">
             <img v-if="baseSrc" class="wallpaper-img base" :style="imgStyle" :src="baseSrc" alt="wallpaper-base"
                 @error="handleImageError('base')" />
@@ -13,7 +13,7 @@
         </div>
 
         <!-- 调试面板：确认壁纸窗口是否真正收到事件并渲染（仅开发模式） -->
-        <div v-if="isDev" class="debug-panel">
+        <div v-if="IS_DEV" class="debug-panel">
             <div class="debug-title">Wallpaper Debug</div>
             <div>label: {{ windowLabel || "unknown" }}</div>
             <div>ready invoked: {{ readyInvoked ? "yes" : "no" }}</div>
@@ -33,6 +33,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { readFile } from "@tauri-apps/plugin-fs";
+import { IS_DEV } from "@kabegame/core/env";
+
+if (IS_DEV) {
+    import("../styles/debug-panel.css")
+}
 
 type Mode = "fill" | "fit" | "stretch" | "center" | "tile";
 type Transition = "none" | "fade" | "slide" | "zoom";
@@ -57,8 +62,18 @@ const lastImageTs = ref<string>("");
 const lastStyleTs = ref<string>("");
 const lastTransitionTs = ref<string>("");
 const lastError = ref<string>("");
-const isDev = import.meta.env.DEV; // 开发模式标识
 let transitionGuardTimer: number | null = null;
+
+// 当壁纸窗口被点击时，说明被系统抬到图标层之上，此时需要主动触发一次后端的 Z-order 修复逻辑，把壁纸窗口压回 DefView 之下。
+let lastZOrderFixAt = 0;
+function handleWallpaperPointerDown() {
+    // 轻量节流：避免拖动/连点导致高频 SetWindowPos
+    const now = Date.now();
+    if (now - lastZOrderFixAt < 400) return;
+    lastZOrderFixAt = now;
+
+    invoke("fix_wallpaper_zorder");
+}
 
 // 防止并发读取同一文件的 Map
 const inflight = new Map<string, Promise<string>>(); // path -> promise(dataURL)
@@ -379,8 +394,6 @@ onMounted(async () => {
         lastError.value = `getCurrentWebviewWindow failed: ${String(e)}`;
     }
 
-    console.log('windowLabel', windowLabel.value);
-
     unlistenImage = await listen<string>("wallpaper-update-image", (e) => {
         lastImageTs.value = new Date().toLocaleTimeString();
         setImagePath(e.payload);
@@ -506,39 +519,5 @@ onBeforeUnmount(() => {
     opacity: 1;
     transform: scale(1);
     transition: opacity 900ms ease, transform 900ms ease;
-}
-
-.debug-panel {
-    position: fixed;
-    left: 12px;
-    top: 12px;
-    z-index: 999999;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-        monospace;
-    font-size: 12px;
-    line-height: 1.35;
-    padding: 10px 12px;
-    max-width: min(560px, calc(100vw - 24px));
-    color: rgba(255, 255, 255, 0.92);
-    background: rgba(0, 0, 0, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 8px;
-    pointer-events: none;
-}
-
-.debug-title {
-    font-weight: 700;
-    margin-bottom: 6px;
-}
-
-.debug-path {
-    margin-top: 6px;
-    word-break: break-all;
-}
-
-.debug-error {
-    margin-top: 6px;
-    color: #ffb4b4;
-    word-break: break-all;
 }
 </style>

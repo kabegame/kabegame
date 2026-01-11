@@ -1,18 +1,19 @@
 <template>
     <el-radio-group v-model="localValue" :disabled="switching" @change="handleChange"
         class="wallpaper-mode-radio-group">
-        <el-radio label="native">原生模式</el-radio>
-        <el-radio label="window">窗口模式</el-radio>
+        <el-radio value="native">原生模式</el-radio>
+        <el-radio v-if="IS_WINDOWS" value="window">窗口模式</el-radio>
     </el-radio-group>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useSettingsStore } from "@kabegame/core/src/stores/settings";
-import { useUiStore } from "@kabegame/core/src/stores/ui";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useUiStore } from "@kabegame/core/stores/ui";
+import { IS_WINDOWS } from "@kabegame/core/env";
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
@@ -30,6 +31,25 @@ watch(
 
 const handleChange = async (mode: string) => {
     if (switching.value) return;
+
+    // 如果切换到原生模式，提示用户会覆盖原来壁纸
+    if (mode === "native") {
+        try {
+            await ElMessageBox.confirm(
+                "切换到原生模式会覆盖系统当前壁纸设置，是否继续？",
+                "提示",
+                {
+                    confirmButtonText: "继续",
+                    cancelButtonText: "取消",
+                    type: "warning",
+                }
+            );
+        } catch {
+            // 用户取消，恢复原值
+            localValue.value = (settingsStore.values.wallpaperMode as any as string) || "native";
+            return;
+        }
+    }
 
     const prevMode = (settingsStore.values.wallpaperMode as any as string) || "native";
     uiStore.wallpaperModeSwitching = true as any;

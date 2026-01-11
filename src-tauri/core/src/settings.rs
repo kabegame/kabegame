@@ -44,11 +44,36 @@ fn default_wallpaper_rotation_style() -> String {
 }
 
 fn default_wallpaper_rotation_transition() -> String {
-    "none".to_string()
+    #[cfg(target_os = "windows")]
+    {
+        "fade".to_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "none".to_string()
+    }
 }
 
 fn default_wallpaper_mode() -> String {
-    "native".to_string()
+    #[cfg(target_os = "windows")]
+    {
+        "window".to_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "native".to_string()
+    }
+}
+
+fn default_album_drive_mount_point() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        "K:\\".to_string()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "".to_string()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +135,12 @@ pub struct AppSettings {
     /// - 仅用于应用自身的“恢复/回退”逻辑；不代表系统当前壁纸一定等于该值
     #[serde(default)]
     pub current_wallpaper_image_id: Option<String>,
+
+    /// Windows：画册虚拟盘（Dokan）
+    #[serde(default)]
+    pub album_drive_enabled: bool,
+    #[serde(default = "default_album_drive_mount_point")]
+    pub album_drive_mount_point: String,
 }
 
 impl Default for AppSettings {
@@ -130,14 +161,17 @@ impl Default for AppSettings {
             wallpaper_rotation_interval_minutes: 60,
             wallpaper_rotation_mode: "random".to_string(),
             wallpaper_rotation_style: "fill".to_string(),
-            wallpaper_rotation_transition: "none".to_string(),
+            wallpaper_rotation_transition: default_wallpaper_rotation_transition(),
             wallpaper_style_by_mode: HashMap::new(),
             wallpaper_transition_by_mode: HashMap::new(),
-            wallpaper_mode: "native".to_string(),
+            wallpaper_mode: default_wallpaper_mode(),
             window_state: None,
             restore_last_tab: false,
             last_tab_path: None,
             current_wallpaper_image_id: None,
+
+            album_drive_enabled: false,
+            album_drive_mount_point: default_album_drive_mount_point(),
         }
     }
 }
@@ -586,6 +620,17 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             };
         }
 
+        // Windows：画册盘
+        if let Some(enabled) = json_value.get("albumDriveEnabled").and_then(|v| v.as_bool()) {
+            settings.album_drive_enabled = enabled;
+        }
+        if let Some(mp) = json_value.get("albumDriveMountPoint").and_then(|v| v.as_str()) {
+            let t = mp.trim().to_string();
+            if !t.is_empty() {
+                settings.album_drive_mount_point = t;
+            }
+        }
+
         // 注意：不要在“读取 settings”时写回文件。
         // get_settings() 在运行期会被频繁调用（下载队列、壁纸管理器等），读时写会导致大量 I/O，
         // 也更容易触发并发读到空文件/半文件，从而把值回退到默认（例如 3）。
@@ -892,6 +937,24 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
     pub fn set_restore_last_tab(&self, enabled: bool) -> Result<(), String> {
         let mut settings = self.get_settings()?;
         settings.restore_last_tab = enabled;
+        self.save_settings(&settings)?;
+        Ok(())
+    }
+
+    pub fn set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
+        let mut settings = self.get_settings()?;
+        settings.album_drive_enabled = enabled;
+        self.save_settings(&settings)?;
+        Ok(())
+    }
+
+    pub fn set_album_drive_mount_point(&self, mount_point: String) -> Result<(), String> {
+        let t = mount_point.trim().to_string();
+        if t.is_empty() {
+            return Err("挂载点不能为空".to_string());
+        }
+        let mut settings = self.get_settings()?;
+        settings.album_drive_mount_point = t;
         self.save_settings(&settings)?;
         Ok(())
     }

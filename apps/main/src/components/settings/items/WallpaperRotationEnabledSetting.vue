@@ -6,7 +6,7 @@
 import { ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
-import { useSettingsStore } from "@kabegame/core/src/stores/settings";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 const settingsStore = useSettingsStore();
 

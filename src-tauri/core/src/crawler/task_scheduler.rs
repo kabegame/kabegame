@@ -214,7 +214,14 @@ fn worker_loop(
                     }),
                 );
 
-                let _ = persist_task_status(&app, &req.task_id, "canceled", None, Some(end), Some(e.clone()));
+                let _ = persist_task_status(
+                    &app,
+                    &req.task_id,
+                    "canceled",
+                    None,
+                    Some(end),
+                    Some(e.clone()),
+                );
                 emit_task_status(&app, &req.task_id, "canceled", None, Some(end), Some(e));
                 continue;
             }
@@ -294,6 +301,15 @@ fn run_task(
     req: &CrawlTaskRequest,
     rhai_runtime: &mut crate::crawler::rhai::RhaiCrawlerRuntime,
 ) -> Result<(), String> {
+    crate::crawler::emit_task_log(
+        app,
+        &req.task_id,
+        "info",
+        format!(
+            "TaskScheduler: 开始执行任务（pluginId={}, taskId={}）",
+            req.plugin_id, req.task_id
+        ),
+    );
     let plugin_manager = app.state::<PluginManager>();
     // 两种运行模式：
     // 1) 已安装插件：通过 plugin_id 查找并运行

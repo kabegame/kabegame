@@ -3,7 +3,7 @@
     <el-form label-width="80px">
       <el-form-item label="选择画册">
         <el-select v-model="selectedAlbumId" placeholder="选择一个心仪的画册吧" style="width: 100%">
-          <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
+          <el-option v-for="album in filteredAlbums" :key="album.id" :label="album.name" :value="album.id" />
           <el-option value="__create_new__" label="+ 新建画册">
             <span style="color: var(--el-color-primary); font-weight: 500;">+ 新建画册</span>
           </el-option>
@@ -32,6 +32,10 @@ import { useAlbumStore } from "@/stores/albums";
 interface Props {
   modelValue: boolean;
   imageIds: string[];
+  /**
+   * 可选：排除一些画册（例如在画册详情页里，不要让用户选“当前画册”，避免无意义操作）
+   */
+  excludeAlbumIds?: string[];
 }
 
 const props = defineProps<Props>();
@@ -42,6 +46,11 @@ const emit = defineEmits<{
 
 const albumStore = useAlbumStore();
 const { albums } = storeToRefs(albumStore);
+
+const filteredAlbums = computed(() => {
+  const exclude = new Set(props.excludeAlbumIds || []);
+  return (albums.value || []).filter((a) => !exclude.has(a.id));
+});
 
 const selectedAlbumId = ref<string>("");
 const newAlbumName = ref<string>("");
@@ -66,6 +75,19 @@ watch(
       newAlbumName.value = "";
     }
   }
+);
+
+// 如果排除列表变化，且当前选中的 album 被排除了，则重置选择
+watch(
+  () => props.excludeAlbumIds,
+  (next) => {
+    if (!selectedAlbumId.value) return;
+    const exclude = new Set(next || []);
+    if (exclude.has(selectedAlbumId.value)) {
+      selectedAlbumId.value = "";
+    }
+  },
+  { deep: true }
 );
 
 // 监听画册选择变化，当选择"新建"时自动聚焦输入框

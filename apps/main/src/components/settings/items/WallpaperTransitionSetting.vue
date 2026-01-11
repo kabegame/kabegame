@@ -10,8 +10,9 @@ import { computed, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useSettingsStore } from "@kabegame/core/src/stores/settings";
-import { useUiStore } from "@kabegame/core/src/stores/ui";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useUiStore } from "@kabegame/core/stores/ui";
+import { IS_WINDOWS } from "@kabegame/core/env";
 
 type Transition = "none" | "fade" | "slide" | "zoom";
 type Opt = { label: string; value: Transition };
@@ -27,15 +28,22 @@ const options = computed<Opt[]>(() => {
   if (mode.value === "native") {
     return [
       { label: "无过渡", value: "none" },
-      { label: "淡入淡出", value: "fade" },
+      // windows 暂时没有实现淡入淡出
+      // { label: "淡入淡出", value: "fade" },
     ];
+  } else if (mode.value === "window" && IS_WINDOWS) {
+    return [
+      { label: "无过渡", value: "none" },
+      { label: "淡入淡出", value: "fade" },
+      { label: "滑动切换", value: "slide" },
+      { label: "缩放淡入", value: "zoom" },
+    ];
+  } else {
+    // 其他系统的非原生，暂未实现
+    return [
+      { label: "无过渡", value: "none" }
+    ]
   }
-  return [
-    { label: "无过渡", value: "none" },
-    { label: "淡入淡出（推荐）", value: "fade" },
-    { label: "滑动切换", value: "slide" },
-    { label: "缩放淡入", value: "zoom" },
-  ];
 });
 
 const disabled = computed(() => {

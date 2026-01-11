@@ -11,12 +11,16 @@ import {
     FolderOpened,
     Folder,
     Picture,
+    Star,
+    StarFilled,
+    FolderAdd,
     Download,
     Delete,
     More,
 } from "@element-plus/icons-vue";
 import type { ImageInfo } from "@/stores/crawler";
-import ContextMenu, { type MenuItem } from "@/components/ContextMenu.vue";
+import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
+import { IS_WINDOWS } from "@kabegame/core/env";
 
 interface Props {
     visible: boolean;
@@ -39,6 +43,13 @@ const getMenuItemsTemplate = (image: ImageInfo | null, removeText: string): Menu
         label: "详情",
         icon: InfoFilled,
         command: "detail",
+    },
+    {
+        key: "favorite",
+        type: "item",
+        label: image?.favorite ? "取消收藏" : "收藏",
+        icon: image?.favorite ? StarFilled : Star,
+        command: "favorite",
     },
     {
         key: "copy",
@@ -69,19 +80,29 @@ const getMenuItemsTemplate = (image: ImageInfo | null, removeText: string): Menu
         command: "wallpaper",
     },
     {
+        key: "addToAlbum",
+        type: "item",
+        label: "加入画册",
+        icon: FolderAdd,
+        command: "addToAlbum",
+    },
+    {
         key: "more",
         type: "item",
         label: "更多",
         icon: More,
-        children: [
-            {
-                key: "exportToWEAuto",
-                type: "item",
-                label: "导出到wallpaper engine",
-                icon: Download,
-                command: "exportToWEAuto",
-            },
-        ],
+        children: IS_WINDOWS
+            ? [
+                {
+                    key: "exportToWEAuto",
+                    type: "item",
+                    label: "导出到wallpaper engine",
+                    // 注意：仅 Windows 构建才会保留这一分支（配合 __WINDOWS__ 的 define 做 DCE）
+                    icon: Download,
+                    command: "exportToWEAuto",
+                },
+            ]
+            : [],
     },
     { key: "divider", type: "divider" },
     {

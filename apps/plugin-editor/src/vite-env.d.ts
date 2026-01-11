@@ -19,3 +19,9 @@ declare module "monaco-editor/esm/vs/language/json/json.worker?worker" {
   };
   export default worker;
 }
+
+// monaco-themes: JSON themes (Monaco defineTheme-compatible)
+declare module "monaco-themes/themes/*.json" {
+  const theme: any;
+  export default theme;
+}

@@ -1,7 +1,8 @@
 <template>
   <div ref="cardRef" class="album-card" :data-album-id="album.id" @click="handleCardClick">
     <div class="hero">
-      <div v-for="(url, idx) in heroAll" :key="idx" class="hero-img" :class="heroClass(idx, url)" :style="heroStyle(url)">
+      <div v-for="(url, idx) in heroAll" :key="idx" class="hero-img" :class="heroClass(idx, url)"
+        :style="heroStyle(url)">
         <div v-if="!url && loadingStates[idx]" class="hero-loading">
           <el-icon class="loading-icon">
             <Loading />
@@ -34,7 +35,7 @@
       <div class="title-wrapper">
         <el-input v-if="isRenaming" v-model="renameValue" ref="renameInputRef" size="small" @blur="handleRenameBlur"
           @keyup.enter="handleRenameConfirm" @keyup.esc="handleRenameCancel" class="rename-input" />
-        <div v-else class="title" @dblclick="handleStartRename">{{ album.name }}</div>
+        <div v-else class="title" @click.stop @dblclick="handleStartRename">{{ album.name }}</div>
       </div>
       <div class="meta">
         <span>{{ count }} 张</span>
@@ -81,7 +82,7 @@ let observer: IntersectionObserver | null = null;
 
 onMounted(() => {
   if (!cardRef.value) return;
-  
+
   observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
@@ -98,7 +99,7 @@ onMounted(() => {
       threshold: 0,
     }
   );
-  
+
   observer.observe(cardRef.value);
 });
 
@@ -266,7 +267,6 @@ const formatDate = (ts?: number) => {
   border: 1px solid rgba(120, 140, 180, 0.18);
 
   &:hover {
-    transform: translateY(-6px) scale(1.02);
     box-shadow: 0 14px 30px rgba(80, 90, 120, 0.28), 0 0 18px rgba(255, 170, 200, 0.35);
     border-color: rgba(255, 170, 200, 0.35);
 
@@ -302,12 +302,10 @@ const formatDate = (ts?: number) => {
       content: "";
       position: absolute;
       inset: 0;
-      background: linear-gradient(
-        90deg,
-        rgba(255, 255, 255, 0.08),
-        rgba(255, 255, 255, 0.45),
-        rgba(255, 255, 255, 0.08)
-      );
+      background: linear-gradient(90deg,
+          rgba(255, 255, 255, 0.08),
+          rgba(255, 255, 255, 0.45),
+          rgba(255, 255, 255, 0.08));
       background-size: 200% 100%;
       opacity: 0;
       transition: opacity 0.25s ease;
@@ -435,6 +433,7 @@ const formatDate = (ts?: number) => {
     0% {
       background-position: 0% 0%;
     }
+
     100% {
       background-position: 200% 0%;
     }

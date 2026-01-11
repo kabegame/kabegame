@@ -1,8 +1,20 @@
 <template>
-  <div class="image-item"
-    :class="{ 'image-item-selected': selected, 'reorder-mode': isReorderMode, 'reorder-selected': reorderSelected }"
-    ref="itemRef" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @mousedown="handleMouseDown"
-    @mouseup="handleMouseUp" @mouseleave="handleMouseLeave">
+  <div ref="rootEl" class="image-item" :class="{
+    'image-item-selected': selected,
+    'reorder-mode': isReorderMode,
+    'reorder-selected': reorderSelected,
+    'item-entering': isEntering,
+    'item-leaving': isLeaving,
+  }" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @mousedown="handleMouseDown"
+    @mouseup="handleMouseUp" @mouseleave="handleMouseLeave" @animationend="handleAnimationEnd">
+    <!-- 任务失败图片：下载重试（不阻挡点击/选择/右键） -->
+    <el-tooltip v-if="image.isTaskFailed" content="重新下载" placement="top" :show-after="300">
+      <div class="retry-download-badge" @click.stop="$emit('retryDownload')">
+        <el-icon :size="14">
+          <Download />
+        </el-icon>
+      </div>
+    </el-tooltip>
     <!-- 本地文件缺失标识：不阻挡点击/选择/右键 -->
     <el-tooltip v-if="image.localExists === false" content="原图找不到了捏" placement="top" :show-after="300">
       <div class="missing-file-badge">
@@ -12,30 +24,50 @@
       </div>
     </el-tooltip>
     <transition name="fade-in" mode="out-in">
-      <div v-if="!attemptUrl" key="loading" class="thumbnail-loading" :style="aspectRatioStyle">
-        <el-skeleton :rows="0" animated>
-          <template #template>
-            <el-skeleton-item variant="image" :style="{ width: '100%', height: '100%' }" />
-          </template>
-        </el-skeleton>
+      <div v-if="!attemptUrl" key="loading" class="image-wrapper" :style="aspectRatioStyle"
+        @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)"
+        @click.stop="handleWrapperClick">
+        <div v-if="isLost" class="thumbnail-lost">
+          <ImageNotFound :show-image="false" />
+        </div>
+        <!-- 与 content 分支一致：loading 骨架使用 overlay 绝对铺满，避免父容器高度塌陷导致"纯空白" -->
+        <div v-else class="thumbnail-loading thumbnail-loading-overlay">
+          <el-skeleton :rows="0" animated>
+            <template #template>
+              <el-skeleton-item variant="image" :style="{ width: '100%', height: '100%' }" />
+            </template>
+          </el-skeleton>
+        </div>
       </div>
       <div v-else key="content"
         :class="[imageClickAction === 'preview' && originalUrl ? 'image-preview-wrapper' : 'image-wrapper']"
         :style="aspectRatioStyle" @dblclick.stop="$emit('dblclick', $event)"
         @contextmenu.prevent.stop="$emit('contextmenu', $event)" @click.stop="handleWrapperClick">
-        <img :src="attemptUrl" :class="['thumbnail', { 'thumbnail-loading': isImageLoading }]" :alt="image.id"
-          loading="lazy" draggable="false" @load="handleImageLoad" @error="handleImageError" />
+        <!-- 加载期间始终显示骨架覆盖层，避免出现“破裂图”闪现 -->
+        <div v-if="isImageLoading" class="thumbnail-loading thumbnail-loading-overlay">
+          <el-skeleton :rows="0" animated>
+            <template #template>
+              <el-skeleton-item variant="image" :style="{ width: '100%', height: '100%' }" />
+            </template>
+          </el-skeleton>
+        </div>
+        <img :src="attemptUrl"
+          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading }]"
+          :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" loading="lazy"
+          draggable="false" @load="handleImageLoad" @error="handleImageError" />
       </div>
     </transition>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watch } from "vue";
-import { readFile } from "@tauri-apps/plugin-fs";
-import { WarningFilled } from "@element-plus/icons-vue";
+import { computed, onUnmounted } from "vue";
+import { ref, toRef } from "vue";
+import { WarningFilled, Download } from "@element-plus/icons-vue";
 import type { ImageInfo } from "../../types/image";
 import type { ImageClickAction } from "../../stores/settings";
+import ImageNotFound from "../common/ImageNotFound.vue";
+import { useImageItemLoader } from "../../composables/useImageItemLoader";
 
 interface Props {
   image: ImageInfo;
@@ -48,6 +80,8 @@ interface Props {
   gridIndex?: number; // 在网格中的索引
   isReorderMode?: boolean; // 是否处于调整模式
   reorderSelected?: boolean; // 在调整模式下是否被选中（用于交换）
+  isEntering?: boolean; // 是否正在入场（用于虚拟滚动的动画）
+  isLeaving?: boolean; // 是否正在离开（用于虚拟滚动的动画）
 }
 
 const props = defineProps<Props>();
@@ -58,6 +92,15 @@ const emit = defineEmits<{
   contextmenu: [event: MouseEvent];
   longPress: []; // 长按事件
   reorderClick: []; // 调整模式下的点击事件
+  retryDownload: []; // 任务失败图片：重试下载
+  unmounted: [
+    payload: {
+      imageId: string;
+      thumbnailPath?: string;
+      localPath: string;
+      pendingThumbnailBlobUrl?: string;
+    }
+  ]; // 组件卸载（用于虚拟滚动：卸载 = 一定在视口外）
   blobUrlInvalid: [
     payload: {
       oldUrl: string;
@@ -67,62 +110,44 @@ const emit = defineEmits<{
       localPath: string;
     }
   ]; // Blob URL 无效事件（已在本地重建 newUrl，用于上层同步/缓存）
+  enterAnimationEnd: []; // 入场动画结束
+  leaveAnimationEnd: []; // 退场动画结束
 }>();
 
-const thumbnailUrl = computed(() => props.imageUrl?.thumbnail);
-const originalUrl = computed(() => props.imageUrl?.original);
-// 根据 useOriginal 决定使用缩略图还是原图
-const computedDisplayUrl = computed(() => {
-  if (props.useOriginal && originalUrl.value) {
-    return originalUrl.value;
-  }
-  return thumbnailUrl.value || originalUrl.value || "";
+const imageRef = toRef(props, "image");
+const imageUrlRef = toRef(props, "imageUrl");
+const useOriginalRef = toRef(props, "useOriginal");
+
+const rootEl = ref<HTMLElement | null>(null);
+
+const {
+  attemptUrl,
+  isImageLoading,
+  isLost,
+  lostText,
+  originalUrl,
+  handleImageLoad,
+  handleImageError,
+  takePendingWarmBlobUrl,
+} = useImageItemLoader({
+  image: imageRef,
+  imageUrl: imageUrlRef,
+  useOriginal: useOriginalRef,
+  // 15s 内 URL 仍缺失才判定失败，避免“加载更多”时误显示走丢了
+  missingUrlTimeoutMs: 15000,
+  onBlobUrlInvalid: (payload) => emit("blobUrlInvalid", payload),
 });
 
-// 当前尝试加载的 URL（永远不为 "" 才会渲染 <img>，避免出现破裂图）
-const attemptUrl = ref<string>("");
-// 错误处理防抖：避免同一 URL 的 error 事件造成死循环
-const handledErrorForUrl = ref<string | null>(null);
-
-// 通过读取文件重新创建 Blob URL（返回 url + blob，用于上层持有引用，避免被 GC 后 URL 失效）
-async function recreateBlobUrl(
-  localPath: string
-): Promise<{ url: string; blob: Blob | null }> {
-  if (!localPath) return { url: "", blob: null };
-  try {
-    let normalizedPath = localPath.trimStart().replace(/^\\\\\?\\/, "").trim();
-    if (!normalizedPath) return { url: "", blob: null };
-
-    const fileData = await readFile(normalizedPath);
-    if (!fileData || fileData.length === 0) return { url: "", blob: null };
-
-    const ext = normalizedPath.split(".").pop()?.toLowerCase();
-    let mimeType = "image/jpeg";
-    if (ext === "png") mimeType = "image/png";
-    else if (ext === "gif") mimeType = "image/gif";
-    else if (ext === "webp") mimeType = "image/webp";
-    else if (ext === "bmp") mimeType = "image/bmp";
-
-    const blob = new Blob([fileData], { type: mimeType });
-    if (blob.size === 0) return { url: "", blob: null };
-
-    const blobUrl = URL.createObjectURL(blob);
-    return { url: blobUrl, blob };
-  } catch (error) {
-    console.error("重新创建 Blob URL 失败:", error, localPath);
-    return { url: "", blob: null };
-  }
-}
-
-const itemRef = ref<HTMLElement | null>(null);
-const isImageLoading = ref(true); // 跟踪图片是否正在加载（用于隐藏 <img>，防止破裂图闪现）
-
-onMounted(() => {
-  attemptUrl.value = computedDisplayUrl.value || "";
-  isImageLoading.value = !!attemptUrl.value;
+onUnmounted(() => {
+  // 让上层（ImageGrid）在“虚拟滚动卸载”时做 blob 预热/替换；
+  // 删除导致的卸载由上层通过“当前 images 是否仍包含该 id”来过滤。
+  emit("unmounted", {
+    imageId: props.image.id,
+    thumbnailPath: props.image.thumbnailPath,
+    localPath: props.image.localPath,
+    pendingThumbnailBlobUrl: takePendingWarmBlobUrl(),
+  });
 });
-
-onUnmounted(() => { });
 
 const aspectRatioStyle = computed(() => {
   // aspect-ratio = 宽 / 高；windowAspectRatio 本身就是宽/高
@@ -131,67 +156,6 @@ const aspectRatioStyle = computed(() => {
     ? { aspectRatio: `${r}` }
     : { aspectRatio: "16 / 9" };
 });
-
-// 监听 computedDisplayUrl 变化：只有在 URL 字符串确实变化时才触发重载，避免无意义闪烁
-let previousUrl = computedDisplayUrl.value;
-watch(
-  () => computedDisplayUrl.value,
-  (newUrl) => {
-    if (newUrl === previousUrl) return;
-    previousUrl = newUrl;
-    handledErrorForUrl.value = null;
-    attemptUrl.value = newUrl || "";
-    isImageLoading.value = !!attemptUrl.value;
-  }
-);
-
-function handleImageLoad(event: Event) {
-  const img = event.target as HTMLImageElement;
-  if (img.complete && img.naturalHeight !== 0) {
-    isImageLoading.value = false;
-    handledErrorForUrl.value = null;
-  }
-}
-
-async function handleImageError(event: Event) {
-  const img = event.target as HTMLImageElement;
-  const currentUrl = attemptUrl.value || img.src || "";
-  if (!currentUrl) return;
-
-  if (handledErrorForUrl.value === currentUrl) return;
-  handledErrorForUrl.value = currentUrl;
-
-  isImageLoading.value = true;
-
-  const thumbUrl = thumbnailUrl.value;
-  const origUrl = originalUrl.value;
-
-  // 1) 当前是缩略图失败，且存在原图：尝试切换到原图 URL
-  if (thumbUrl && origUrl && currentUrl === thumbUrl && origUrl !== thumbUrl) {
-    attemptUrl.value = origUrl;
-    return;
-  }
-
-  // 2) 尝试从本地文件重建 blob url（缩略图优先；没有则用原图）
-  const pathToUse = props.useOriginal
-    ? props.image.localPath
-    : (props.image.thumbnailPath || props.image.localPath);
-
-  const rebuilt = await recreateBlobUrl(pathToUse);
-  if (rebuilt?.url) {
-    attemptUrl.value = rebuilt.url;
-    emit("blobUrlInvalid", {
-      oldUrl: currentUrl,
-      newUrl: rebuilt.url,
-      newBlob: rebuilt.blob ?? undefined,
-      imageId: props.image.id,
-      localPath: pathToUse,
-    });
-    return;
-  }
-
-  attemptUrl.value = "";
-}
 
 // 长按检测
 const longPressTimer = ref<number | null>(null);
@@ -238,6 +202,14 @@ const handleWrapperClick = (event?: MouseEvent) => {
   }
   emit("click", event);
 };
+
+const handleAnimationEnd = (event: AnimationEvent) => {
+  if (event.animationName === "itemEnter") {
+    emit("enterAnimationEnd");
+  } else if (event.animationName === "itemLeave") {
+    emit("leaveAnimationEnd");
+  }
+};
 </script>
 
 <style scoped lang="scss">
@@ -254,8 +226,8 @@ const handleWrapperClick = (event?: MouseEvent) => {
   will-change: transform, box-shadow;
 
   &:hover {
-    transform: translateY(-6px) scale(1.015);
-    box-shadow: var(--anime-shadow-hover);
+    // transform: translateY(-6px) scale(1.015);
+    // box-shadow: var(--anime-shadow-hover);
     outline: 3px solid var(--anime-primary-light);
     outline-offset: -2px;
   }
@@ -327,6 +299,51 @@ const handleWrapperClick = (event?: MouseEvent) => {
       height: 100%;
     }
   }
+
+  /* 加载骨架覆盖层：不阻挡点击/选择；避免破裂图闪现 */
+  .thumbnail-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .thumbnail-hidden {
+    opacity: 0;
+  }
+}
+
+.thumbnail-lost {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  box-sizing: border-box;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.78);
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  border-radius: 14px 14px 0 0;
+  user-select: none;
+  text-align: center;
+}
+
+.lost-text {
+  width: 100%;
+  max-width: 100%;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.88);
+  word-break: break-word;
+  line-clamp: 3;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .missing-file-badge {
@@ -353,17 +370,44 @@ const handleWrapperClick = (event?: MouseEvent) => {
   }
 }
 
+.retry-download-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  cursor: pointer;
+  color: #fff;
+  background: rgba(103, 194, 58, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  transition: background 0.2s ease;
+}
+
+.retry-download-badge:hover {
+  background: rgba(103, 194, 58, 1);
+}
+
 .fade-in-enter-active {
   transition: opacity 0.3s ease-in, transform 0.3s ease-out;
 }
+
 .fade-in-leave-active {
   transition: opacity 0.2s ease-out, transform 0.2s ease-in;
 }
+
 .fade-in-enter-from,
 .fade-in-leave-to {
   opacity: 0;
   transform: scale(0.95);
 }
+
 .fade-in-enter-to,
 .fade-in-leave-from {
   opacity: 1;
@@ -371,9 +415,47 @@ const handleWrapperClick = (event?: MouseEvent) => {
 }
 
 @keyframes fadeInImage {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* 入场动画（与 transition-group fade-in-list 一致） */
+@keyframes itemEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 退场动画（与 transition-group fade-in-list 一致） */
+@keyframes itemLeave {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.item-entering {
+  animation: itemEnter 0.25s ease forwards;
+}
+
+.item-leaving {
+  animation: itemLeave 0.25s ease forwards;
+  pointer-events: none;
 }
 </style>
-
-

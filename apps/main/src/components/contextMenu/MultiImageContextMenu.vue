@@ -8,10 +8,13 @@ import { computed } from "vue";
 import {
   DocumentCopy,
   Picture,
+  Star,
+  StarFilled,
+  FolderAdd,
   Delete,
 } from "@element-plus/icons-vue";
 import type { ImageInfo } from "@/stores/crawler";
-import ContextMenu, { type MenuItem } from "@/components/ContextMenu.vue";
+import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
 
 interface Props {
   visible: boolean;
@@ -51,13 +54,29 @@ const getSimplifiedMenuItemsTemplate = (countText: string, removeText: string): 
 ];
 
 // 完整模式菜单项模板
-const getFullMenuItemsTemplate = (countText: string, removeText: string): MenuItem[] => [
+const getFullMenuItemsTemplate = (countText: string, removeText: string, image: ImageInfo | null): MenuItem[] => [
   {
     key: "copy",
     type: "item",
     label: "全部复制",
     icon: DocumentCopy,
     command: "copy",
+  },
+  {
+    key: "favorite",
+    type: "item",
+    label: image?.favorite ? "取消收藏" : "收藏",
+    icon: image?.favorite ? StarFilled : Star,
+    command: "favorite",
+    suffix: countText,
+  },
+  {
+    key: "addToAlbum",
+    type: "item",
+    label: "加入画册",
+    icon: FolderAdd,
+    command: "addToAlbum",
+    suffix: countText,
   },
   {
     key: "wallpaper",
@@ -92,7 +111,7 @@ const menuItems = computed<MenuItem[]>(() => {
     return [];
   }
 
-  const items = getFullMenuItemsTemplate(countText, props.removeText);
+  const items = getFullMenuItemsTemplate(countText, props.removeText, props.image);
   // 根据 hide 列表过滤菜单项
   return items.filter((item) => !item.key || !hideSet.has(item.key));
 });

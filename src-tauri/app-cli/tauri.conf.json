@@ -4,9 +4,8 @@
   "version": "1.2.0",
   "identifier": "com.kabegame.cli",
   "build": {
-    "beforeDevCommand": "",
-    "beforeBuildCommand": "",
-    "frontendDist": ""
+    "beforeBuildCommand": "pnpm -C .. build:frontend-cli",
+    "frontendDist": "../../dist-cli"
   },
   "app": {
     "security": {
@@ -20,5 +19,3 @@
     "resources": []
   }
 }
-
-

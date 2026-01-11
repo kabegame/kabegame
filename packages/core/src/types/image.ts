@@ -24,4 +24,9 @@ export interface ImageInfo {
   // UI 状态字段
   favorite?: boolean;
   localExists?: boolean;
+
+  // 任务失败占位（TaskDetail）：用于在网格中渲染“下载重试”按钮
+  isTaskFailed?: boolean;
+  taskFailedId?: number;
+  taskFailedError?: string;
 }

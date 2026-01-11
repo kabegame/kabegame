@@ -14,6 +14,9 @@ export interface CrawlTask {
   startTime?: number;
   endTime?: number;
   error?: string;
+  rhaiDumpPresent?: boolean;
+  rhaiDumpConfirmed?: boolean;
+  rhaiDumpCreatedAt?: number;
 }
 
 export interface ImageInfo {
@@ -34,6 +37,11 @@ export interface ImageInfo {
   favorite?: boolean;
   hash: string;
   order?: number;
+
+  // TaskDetail：失败图片占位（不入库 images）
+  isTaskFailed?: boolean;
+  taskFailedId?: number;
+  taskFailedError?: string;
 }
 
 export interface RangedImages {
@@ -630,6 +638,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
           startTime?: number;
           endTime?: number;
           error?: string;
+          rhaiDumpPresent?: boolean;
+          rhaiDumpConfirmed?: boolean;
+          rhaiDumpCreatedAt?: number;
         }>
       >("get_all_tasks");
 
@@ -651,9 +662,23 @@ export const useCrawlerStore = defineStore("crawler", () => {
         startTime: t.startTime,
         endTime: t.endTime,
         error: t.error,
+        rhaiDumpPresent: t.rhaiDumpPresent,
+        rhaiDumpConfirmed: t.rhaiDumpConfirmed,
+        rhaiDumpCreatedAt: t.rhaiDumpCreatedAt,
       }));
     } catch (error) {
       console.error("加载任务失败:", error);
+    }
+  }
+
+  async function confirmTaskRhaiDump(taskId: string) {
+    await invoke("confirm_task_rhai_dump", { taskId });
+    const idx = tasks.value.findIndex((t) => t.id === taskId);
+    if (idx !== -1) {
+      tasks.value[idx] = {
+        ...tasks.value[idx],
+        rhaiDumpConfirmed: true,
+      };
     }
   }
 
@@ -721,6 +746,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     deleteRunConfig,
     runConfig,
     loadTasks,
+    confirmTaskRhaiDump,
     getTaskImages,
     getTaskImagesPaginated,
   };

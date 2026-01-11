@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useCrawlerStore, type RunConfig } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
+import { isNil } from "lodash-es";
 import type { PluginVarDef } from "./usePluginConfig";
 
 export interface ConfigCompatibility {
@@ -21,7 +22,10 @@ export function useConfigCompatibility(
   form: Ref<{ pluginId: string; outputDir: string; vars: Record<string, any> }>,
   selectedRunConfigId: Ref<string | null>,
   loadPluginVars: (pluginId: string) => Promise<void>,
-  normalizeVarsForUI: (rawVars: Record<string, any>, defs: PluginVarDef[]) => Record<string, any>,
+  normalizeVarsForUI: (
+    rawVars: Record<string, any>,
+    defs: PluginVarDef[]
+  ) => Record<string, any>,
   isRequired: (varDef: { default?: any }) => boolean,
   showCrawlerDialog?: Ref<boolean>
 ) {
@@ -31,33 +35,33 @@ export function useConfigCompatibility(
   const plugins = computed(() => pluginStore.plugins);
 
   // 配置兼容性状态（用于UI显示）
-  const configCompatibilityStatus = ref<Record<string, ConfigCompatibility>>({});
+  const configCompatibilityStatus = ref<Record<string, ConfigCompatibility>>(
+    {}
+  );
 
   // 配置兼容性缓存（用于避免重复计算）
-  const configCompatibilityCache = ref<Map<string, ConfigCompatibility>>(new Map());
+  const configCompatibilityCache = ref<Map<string, ConfigCompatibility>>(
+    new Map()
+  );
 
   // 验证单个变量值
-  const validateVarValue = (value: any, varDef: PluginVarDef): { valid: boolean; error?: string } => {
+  const validateVarValue = (
+    value: any,
+    varDef: PluginVarDef
+  ): { valid: boolean; error?: string } => {
     switch (varDef.type) {
       case "int":
         if (typeof value !== "number" || !Number.isInteger(value)) {
           return { valid: false, error: "值必须是整数" };
         }
-        if (varDef.min !== undefined && value < varDef.min) {
-          return { valid: false, error: `值不能小于 ${varDef.min}` };
-        }
-        if (varDef.max !== undefined && value > varDef.max) {
-          return { valid: false, error: `值不能大于 ${varDef.max}` };
-        }
-        break;
       case "float":
         if (typeof value !== "number") {
           return { valid: false, error: "值必须是数字" };
         }
-        if (varDef.min !== undefined && value < varDef.min) {
+        if (!isNil(varDef.min) && value < varDef.min) {
           return { valid: false, error: `值不能小于 ${varDef.min}` };
         }
-        if (varDef.max !== undefined && value > varDef.max) {
+        if (!isNil(varDef.max) && value > varDef.max) {
           return { valid: false, error: `值不能大于 ${varDef.max}` };
         }
         break;
@@ -68,8 +72,10 @@ export function useConfigCompatibility(
         break;
       case "options":
         if (varDef.options && Array.isArray(varDef.options)) {
-          const validValues = varDef.options.map(opt =>
-            typeof opt === "string" ? opt : (opt as any).variable || (opt as any).value
+          const validValues = varDef.options.map((opt) =>
+            typeof opt === "string"
+              ? opt
+              : (opt as any).variable || (opt as any).value
           );
           if (!validValues.includes(value)) {
             return { valid: false, error: `值不在有效选项中` };
@@ -81,10 +87,12 @@ export function useConfigCompatibility(
           return { valid: false, error: "值必须是数组" };
         }
         if (varDef.options && Array.isArray(varDef.options)) {
-          const validValues = varDef.options.map(opt =>
-            typeof opt === "string" ? opt : (opt as any).variable || (opt as any).value
+          const validValues = varDef.options.map((opt) =>
+            typeof opt === "string"
+              ? opt
+              : (opt as any).variable || (opt as any).value
           );
-          const invalidValues = value.filter(v => !validValues.includes(v));
+          const invalidValues = value.filter((v) => !validValues.includes(v));
           if (invalidValues.length > 0) {
             return { valid: false, error: `包含无效选项` };
           }
@@ -100,16 +108,18 @@ export function useConfigCompatibility(
   };
 
   // 检查配置兼容性（两步验证）
-  const checkConfigCompatibility = async (config: RunConfig): Promise<ConfigCompatibility> => {
+  const checkConfigCompatibility = async (
+    config: RunConfig
+  ): Promise<ConfigCompatibility> => {
     const result: ConfigCompatibility = {
       versionCompatible: true,
       contentCompatible: true,
       contentErrors: [],
-      warnings: []
+      warnings: [],
     };
 
     // 第一步：检查插件是否存在（版本检查）
-    const pluginExists = plugins.value.some(p => p.id === config.pluginId);
+    const pluginExists = plugins.value.some((p) => p.id === config.pluginId);
     if (!pluginExists) {
       result.versionCompatible = false;
       result.versionReason = "插件不存在";
@@ -128,7 +138,7 @@ export function useConfigCompatibility(
         return result;
       }
 
-      const varDefMap = new Map(vars.map(def => [def.key, def]));
+      const varDefMap = new Map(vars.map((def) => [def.key, def]));
       const userConfig = config.userConfig || {};
 
       // 第二步：验证配置内容
@@ -145,7 +155,9 @@ export function useConfigCompatibility(
         const validation = validateVarValue(value, varDef);
         if (!validation.valid) {
           result.contentCompatible = false;
-          result.contentErrors.push(`${varDef.name} (${key}): ${validation.error}`);
+          result.contentErrors.push(
+            `${varDef.name} (${key}): ${validation.error}`
+          );
         }
       }
 
@@ -154,11 +166,12 @@ export function useConfigCompatibility(
         if (!(varDef.key in userConfig)) {
           if (isRequired(varDef) && varDef.default === undefined) {
             result.contentCompatible = false;
-            result.contentErrors.push(`缺少必填字段: ${varDef.name} (${varDef.key})`);
+            result.contentErrors.push(
+              `缺少必填字段: ${varDef.name} (${varDef.key})`
+            );
           }
         }
       }
-
     } catch (error) {
       console.error("检查配置兼容性失败:", error);
       result.contentCompatible = false;
@@ -169,9 +182,11 @@ export function useConfigCompatibility(
   };
 
   // 智能匹配配置到表单（尽量匹配能匹配的字段）
-  const smartMatchConfigToForm = async (config: RunConfig): Promise<{ success: boolean; message?: string }> => {
+  const smartMatchConfigToForm = async (
+    config: RunConfig
+  ): Promise<{ success: boolean; message?: string }> => {
     // 检查插件是否存在
-    const pluginExists = plugins.value.some(p => p.id === config.pluginId);
+    const pluginExists = plugins.value.some((p) => p.id === config.pluginId);
     if (!pluginExists) {
       return { success: false, message: "插件不存在，无法载入配置" };
     }
@@ -181,7 +196,7 @@ export function useConfigCompatibility(
 
     const userConfig = config.userConfig || {};
     const matchedVars: Record<string, any> = {};
-    const varDefMap = new Map(pluginVars.value.map(def => [def.key, def]));
+    const varDefMap = new Map(pluginVars.value.map((def) => [def.key, def]));
 
     // 尝试匹配每个配置字段
     for (const [key, value] of Object.entries(userConfig)) {
@@ -215,7 +230,10 @@ export function useConfigCompatibility(
     }
 
     // 转换为 UI 格式
-    const cfgUiVars = normalizeVarsForUI(matchedVars, pluginVars.value as PluginVarDef[]);
+    const cfgUiVars = normalizeVarsForUI(
+      matchedVars,
+      pluginVars.value as PluginVarDef[]
+    );
 
     // 更新表单
     form.value.pluginId = config.pluginId;
@@ -226,19 +244,21 @@ export function useConfigCompatibility(
   };
 
   // 获取配置兼容性（带缓存）
-  const getConfigCompatibility = async (configId: string): Promise<ConfigCompatibility> => {
+  const getConfigCompatibility = async (
+    configId: string
+  ): Promise<ConfigCompatibility> => {
     if (configCompatibilityCache.value.has(configId)) {
       return configCompatibilityCache.value.get(configId)!;
     }
 
-    const config = runConfigs.value.find(c => c.id === configId);
+    const config = runConfigs.value.find((c) => c.id === configId);
     if (!config) {
       return {
         versionCompatible: false,
         contentCompatible: false,
         versionReason: "配置不存在",
         contentErrors: [],
-        warnings: []
+        warnings: [],
       };
     }
 
@@ -275,9 +295,11 @@ export function useConfigCompatibility(
   // 删除运行配置（从下拉项直接删除）
   const confirmDeleteRunConfig = async (configId: string) => {
     try {
-      const cfg = runConfigs.value.find(c => c.id === configId);
+      const cfg = runConfigs.value.find((c) => c.id === configId);
       await ElMessageBox.confirm(
-        `删除后无法通过该配置再次运行。已创建的任务不会受影响。确定删除${cfg ? `「${cfg.name}」` : "该配置"}吗？`,
+        `删除后无法通过该配置再次运行。已创建的任务不会受影响。确定删除${
+          cfg ? `「${cfg.name}」` : "该配置"
+        }吗？`,
         "删除配置",
         { type: "warning" }
       );
@@ -298,7 +320,7 @@ export function useConfigCompatibility(
 
   // 载入配置到表单（强制载入，即使不兼容）
   const loadConfigToForm = async (configId: string) => {
-    const config = runConfigs.value.find(c => c.id === configId);
+    const config = runConfigs.value.find((c) => c.id === configId);
     if (!config) {
       ElMessage.error("配置不存在");
       return;
@@ -310,7 +332,9 @@ export function useConfigCompatibility(
     // 如果版本不兼容，直接提示
     if (!compatibility.versionCompatible) {
       await ElMessageBox.alert(
-        `该配置关联的插件不存在：${compatibility.versionReason || "未知错误"}\n无法载入配置。`,
+        `该配置关联的插件不存在：${
+          compatibility.versionReason || "未知错误"
+        }\n无法载入配置。`,
         "插件缺失",
         { type: "error" }
       );
@@ -319,18 +343,26 @@ export function useConfigCompatibility(
 
     // 如果内容不兼容，提示用户但允许继续
     if (!compatibility.contentCompatible) {
-      const errorMsg = compatibility.contentErrors.length > 0
-        ? `配置内容与当前插件版本不兼容：\n${compatibility.contentErrors.join('\n')}`
-        : "配置内容与当前插件版本不兼容";
-      const warningMsg = compatibility.warnings.length > 0
-        ? `\n\n警告：\n${compatibility.warnings.join('\n')}`
-        : "";
+      const errorMsg =
+        compatibility.contentErrors.length > 0
+          ? `配置内容与当前插件版本不兼容：\n${compatibility.contentErrors.join(
+              "\n"
+            )}`
+          : "配置内容与当前插件版本不兼容";
+      const warningMsg =
+        compatibility.warnings.length > 0
+          ? `\n\n警告：\n${compatibility.warnings.join("\n")}`
+          : "";
 
       try {
         await ElMessageBox.confirm(
           `${errorMsg}${warningMsg}\n\n将尝试匹配可用的配置项，缺失的字段将使用默认值。是否继续？`,
           "配置不兼容",
-          { type: "warning", confirmButtonText: "继续载入", cancelButtonText: "取消" }
+          {
+            type: "warning",
+            confirmButtonText: "继续载入",
+            cancelButtonText: "取消",
+          }
         );
       } catch (error) {
         if (error === "cancel") {
@@ -359,7 +391,7 @@ export function useConfigCompatibility(
           // userConfig 的变化也可能导致兼容性变化；这里用 JSON 字符串作为轻量签名
           userConfigSig: JSON.stringify(c.userConfig || {}),
         }));
-        const pluginSig = plugins.value.map((p) => `${p.id}:${p.version}:${p.enabled}`);
+        const pluginSig = plugins.value.map((p) => `${p.id}:${p.version}`);
         return { cfgSig, pluginSig };
       },
       async () => {
@@ -411,4 +443,3 @@ export function useConfigCompatibility(
     smartMatchConfigToForm,
   };
 }
-

@@ -12,8 +12,9 @@ import { computed, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useSettingsStore } from "@kabegame/core/src/stores/settings";
-import { useUiStore } from "@kabegame/core/src/stores/ui";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useUiStore } from "@kabegame/core/stores/ui";
+import { IS_WINDOWS } from "@kabegame/core/env";
 
 type Style = "fill" | "fit" | "stretch" | "center" | "tile";
 type Opt = { label: string; value: Style; desc: string };
@@ -37,7 +38,7 @@ const allOptions: Opt[] = [
 ];
 
 const options = computed(() => {
-  if (mode.value === "window") return allOptions;
+  if (mode.value === "window" && IS_WINDOWS) return allOptions;
   if (!nativeWallpaperStyles.value.length) return allOptions;
   return allOptions.filter((o) => nativeWallpaperStyles.value.includes(o.value));
 });

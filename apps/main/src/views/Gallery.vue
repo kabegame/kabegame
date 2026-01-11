@@ -1,30 +1,26 @@
 <template>
   <div class="gallery-page">
-    <!-- 顶部工具栏 -->
-    <GalleryToolbar :dedupe-loading="dedupeLoading" :has-more="crawlerStore.hasMore" :is-loading-all="isLoadingAll"
-      :load-all-progress="loadAllProgress" :load-all-loaded="loadAllLoaded" :load-all-total="loadAllTotal"
-      :dedupe-progress="dedupeProgress" :dedupe-processed="dedupeProcessed" :dedupe-total="dedupeTotal"
-      :dedupe-removed="dedupeRemoved" :total-count="totalImagesCount" :loaded-count="displayedImages.length"
-      @refresh="loadImages(true, { forceReload: true })" @dedupe-by-hash="handleDedupeByHash"
-      @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="showCrawlerDialog = true"
-      @load-all="loadAllImages" @cancel-load-all="handleCancelLoadAll" @cancel-dedupe="cancelDedupe" />
-
     <div class="gallery-container" v-loading="showLoading">
-      <ImageGrid v-if="!loading" ref="galleryViewRef" :images="displayedImages" :image-url-map="imageSrcMap"
-        enable-ctrl-wheel-adjust-columns enable-ctrl-key-adjust-columns hide-scrollbar enable-virtual-scroll
-        :context-menu-component="GalleryContextMenu" :on-context-command="handleGridContextCommand"
-        @scroll-stable="loadImageUrls()" @reorder="(...args: any[]) => handleImageReorder(args[0])">
+      <!-- 关键：不要用 v-if 在 loading 时卸载 ImageGrid，否则 before-grid 里的 header 会闪烁 -->
+      <ImageGrid ref="galleryViewRef" :images="displayedImages" :image-url-map="imageSrcMap"
+        enable-ctrl-wheel-adjust-columns enable-ctrl-key-adjust-columns :enable-virtual-scroll="true"
+        :show-empty-state="true" :loading="loading || isRefreshing" :context-menu-component="GalleryContextMenu"
+        :on-context-command="handleGridContextCommand" @scroll-stable="loadImageUrls()"
+        @reorder="(...args: any[]) => handleImageReorder(args[0])">
         <template #before-grid>
-          <div v-if="displayedImages.length === 0 && !crawlerStore.hasMore && !isRefreshing"
-            :key="'empty-' + refreshKey" class="empty fade-in">
-            <EmptyState />
-            <el-button type="primary" class="empty-action-btn" @click="showCrawlerDialog = true">
-              <el-icon>
-                <Plus />
-              </el-icon>
-              开始导入
-            </el-button>
-          </div>
+          <!-- 顶部工具栏 -->
+          <GalleryToolbar :dedupe-loading="dedupeLoading" :has-more="crawlerStore.hasMore"
+            :is-loading-all="isLoadingAll" :dedupe-progress="dedupeProgress" :dedupe-processed="dedupeProcessed"
+            :dedupe-total="dedupeTotal" :dedupe-removed="dedupeRemoved" :total-count="totalImagesCount"
+            :loaded-count="displayedImages.length" :big-page-enabled="bigPageEnabled"
+            :current-position="currentPosition" @refresh="loadImages(true, { forceReload: true })"
+            @dedupe-by-hash="handleDedupeByHash" @show-quick-settings="openQuickSettingsDrawer"
+            @show-crawler-dialog="showCrawlerDialog = true" @load-all="loadAllImages"
+            @cancel-load-all="handleCancelLoadAll" @cancel-dedupe="cancelDedupe" />
+
+          <!-- 大页分页器 -->
+          <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentBigPageOffset"
+            :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToBigPage" />
         </template>
 
         <!-- 加载更多：仅 Gallery 注入到 ImageGrid 容器尾部 -->
@@ -37,7 +33,22 @@
           </div>
           <!-- 非加载全部时显示加载更多按钮 -->
           <LoadMoreButton v-else-if="displayedImages.length > 0 || crawlerStore.hasMore"
-            :has-more="crawlerStore.hasMore" :loading="isLoadingMore" @load-more="loadMoreImages" />
+            :has-more="crawlerStore.hasMore" :loading="isLoadingMore" :show-next-page="showNextPageButton"
+            @load-more="loadMoreImages" @next-page="handleNextBigPage" />
+        </template>
+
+        <!-- 无图片空状态：使用 ImageGrid 的 empty 插槽（只隐藏 ImageItem，不影响 header/插槽挂载） -->
+        <template #empty>
+          <div v-if="displayedImages.length === 0 && !loading && !isRefreshing" :key="'empty-' + refreshKey"
+            class="empty fade-in">
+            <EmptyState />
+            <el-button type="primary" class="empty-action-btn" @click="showCrawlerDialog = true">
+              <el-icon>
+                <Plus />
+              </el-icon>
+              开始导入
+            </el-button>
+          </div>
         </template>
       </ImageGrid>
     </div>
@@ -64,6 +75,8 @@
     <!-- 移除/删除确认对话框（抽成组件复用） -->
     <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
       :message="removeDialogMessage" title="确认删除" @confirm="confirmRemoveImages" />
+
+    <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
   </div>
 </template>
 
@@ -75,13 +88,15 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus, Loading } from "@element-plus/icons-vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
-import { useUiStore } from "@kabegame/core/src/stores/ui";
+import { useUiStore } from "@kabegame/core/stores/ui";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
+import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import GalleryContextMenu from "@/components/contextMenu/GalleryContextMenu.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
-import RemoveImagesConfirmDialog from "@/components/common/RemoveImagesConfirmDialog.vue";
+import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
+import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import { useGalleryImages } from "@/composables/useGalleryImages";
 import { useGallerySettings } from "@/composables/useGallerySettings";
 import { useImageOperations } from "@/composables/useImageOperations";
@@ -105,11 +120,45 @@ const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
+// 大页设置：每页 10000 张图片
+const BIG_PAGE_SIZE = 10000;
+
+// 是否启用大页模式（总数超过 10000）
+const bigPageEnabled = computed(() => {
+  return totalImagesCount.value > BIG_PAGE_SIZE;
+});
+
+// 当前大页的起始偏移量（用于分页器显示）
+const currentBigPageOffset = computed(() => {
+  // 通过当前加载的图片数量倒推起始偏移
+  // 假设用户从某个大页开始加载，那么第一张图片的偏移就是起始偏移
+  if (displayedImages.value.length === 0) return 0;
+
+  // 我们需要跟踪实际的偏移量
+  return currentOffset.value;
+});
+
+// 跟踪当前的实际偏移量
+const currentOffset = ref(0);
+
+// 计算当前位置（用于 header subtitle 显示）
+const currentPosition = computed(() => {
+  if (!bigPageEnabled.value || totalImagesCount.value === 0) {
+    return 1; // 分页未启用时返回默认值，不会显示
+  }
+  // 当前位置 = 当前页的第一张图片索引（从 1 开始）
+  const currentBigPage = Math.floor(currentOffset.value / BIG_PAGE_SIZE) + 1;
+  return (currentBigPage - 1) * BIG_PAGE_SIZE + 1;
+});
+
 const dedupeLoading = ref(false); // 正在执行"按哈希去重"本体
 const { startLoading: startDedupeDelay, finishLoading: finishDedupeDelay } = useLoadingDelay();
 const dedupeProcessed = ref(0);
 const dedupeTotal = ref(0);
 const dedupeRemoved = ref(0);
+
+// 标记监听器是否已经创建，避免 keep-alive 时重复创建
+const listenersCreated = ref(false);
 const dedupeProgress = computed(() => {
   if (!dedupeLoading.value) return 0;
   if (!dedupeTotal.value) return 0;
@@ -137,6 +186,25 @@ const galleryViewRef = ref<any>(null);
 const currentWallpaperImageId = ref<string | null>(null);
 const totalImagesCount = ref<number>(0); // 总图片数（不受过滤器影响）
 
+// 滚动"太快"时的俏皮提示（画廊开启）
+const scrollTooFastMessages = [
+  "慢慢滑嘛，人家要追不上啦 (；´д｀)ゞ",
+  "你这手速开挂了吧？龟龟跟不上啦 (╥﹏╥)",
+  "别飙车！龟龟晕滚动条了~ (＠_＠;)",
+  "给人家留点帧率呀，慢一点点嘛 (´-﹏-`；)",
+  "这速度像火箭！先等等我！ε=ε=ε=┏(゜ロ゜;)┛",
+];
+const pickOne = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)] || arr[0] || "";
+// 滚动超速回调（由 useImageGridAutoLoad 触发）
+const onScrollOverspeed = () => {
+  ElMessage({
+    type: "info",
+    message: pickOne(scrollTooFastMessages),
+    duration: 2000,
+    showClose: false,
+  });
+};
+
 // 状态变量（用于 composables）
 // const showSkeleton = ref(false);
 
@@ -145,27 +213,8 @@ const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay();
 
 const isLoadingMore = ref(false);
 const isLoadingAll = ref(false);
-
-// “加载全部”进度（小进度条）：已加载数量 / 总数量
-// - total 优先使用后端 range 返回的 crawlerStore.totalImages；兜底用 get_images_count 的 totalImagesCount
-const loadAllProgress = computed(() => {
-  if (!isLoadingAll.value) return 0;
-  const total = crawlerStore.totalImages || totalImagesCount.value;
-  if (!total) return 0;
-  const loaded = displayedImages.value.length;
-  const pct = Math.round((loaded / total) * 100);
-  return Math.max(0, Math.min(100, pct));
-});
-
-const loadAllLoaded = computed(() => {
-  if (!isLoadingAll.value) return 0;
-  return displayedImages.value.length;
-});
-
-const loadAllTotal = computed(() => {
-  if (!isLoadingAll.value) return 0;
-  return crawlerStore.totalImages || totalImagesCount.value;
-});
+const showAddToAlbumDialog = ref(false);
+const addToAlbumImageIds = ref<string[]>([]);
 // TODO:
 const isRefreshing = ref(false); // 刷新中状态，用于阻止刷新时 EmptyState 闪烁
 // 刷新计数器，用于强制空占位符重新挂载以触发动画
@@ -196,13 +245,15 @@ const {
   loadMoreImages: loadMoreImagesFromComposable,
   loadAllImages: loadAllImagesFromComposable,
   cancelLoadAll,
+  jumpToBigPage,
   removeFromUiCacheByIds,
 } = useGalleryImages(
   galleryContainerRef,
   isLoadingMore,
   preferOriginalInGrid,
   imageGridColumns,
-  isInteracting
+  isInteracting,
+  currentOffset
 );
 
 watch(
@@ -222,6 +273,7 @@ watch(
 const { isInteracting: autoIsInteracting } = useImageGridAutoLoad({
   containerRef: galleryContainerRef,
   onLoad: () => void loadImageUrls(),
+  onOverspeed: onScrollOverspeed,
 });
 
 watch(
@@ -242,21 +294,29 @@ const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => 
   // 如果强制刷新，递增刷新计数器以触发空占位符重新挂载
   if (opts?.forceReload) {
     refreshKey.value++;
+    startLoading();
     isRefreshing.value = true; // 标记为刷新中，阻止 EmptyState 闪烁
   }
   try {
     await refreshImagesPreserveCache(reset, opts);
+    // 刷新后重置偏移量
+    if (reset) {
+      currentOffset.value = 0;
+    }
   } finally {
+    finishLoading();
     isRefreshing.value = false;
   }
 };
 
-const loadMoreImages = loadMoreImagesFromComposable;
+const loadMoreImages = () => loadMoreImagesFromComposable(false, BIG_PAGE_SIZE);
+
 const loadAllImages = async () => {
   if (isLoadingAll.value) return;
   isLoadingAll.value = true;
   try {
-    await loadAllImagesFromComposable();
+    // 如果启用了大页，只加载当前大页；否则加载全部
+    await loadAllImagesFromComposable(bigPageEnabled.value ? BIG_PAGE_SIZE : 0);
   } finally {
     isLoadingAll.value = false;
   }
@@ -268,10 +328,43 @@ const handleCancelLoadAll = () => {
   isLoadingAll.value = false;
 };
 
+// 处理大页跳转
+const handleJumpToBigPage = async (bigPage: number) => {
+  startLoading();
+  try {
+    await jumpToBigPage(bigPage, BIG_PAGE_SIZE);
+    // 更新当前偏移量
+    currentOffset.value = (bigPage - 1) * BIG_PAGE_SIZE;
+  } finally {
+    finishLoading();
+  }
+};
+
+// 判断是否显示"进入下一页"按钮
+// 当前大页加载完毕，但总数还有更多时显示
+const showNextPageButton = computed(() => {
+  if (crawlerStore.hasMore) return false; // 当前大页内还有更多，不显示
+  if (totalImagesCount.value === 0) return false; // 没有图片
+
+  // 计算当前大页
+  const currentBigPage = Math.floor(currentOffset.value / BIG_PAGE_SIZE) + 1;
+  const totalBigPages = Math.ceil(totalImagesCount.value / BIG_PAGE_SIZE);
+
+  // 如果不是最后一页，显示"进入下一页"
+  return currentBigPage < totalBigPages;
+});
+
+// 处理进入下一页
+const handleNextBigPage = async () => {
+  const currentBigPage = Math.floor(currentOffset.value / BIG_PAGE_SIZE) + 1;
+  await handleJumpToBigPage(currentBigPage + 1);
+};
+
 // 使用图片操作 composable
 const {
   handleOpenImagePath,
   handleCopyImage,
+  toggleFavorite,
   setWallpaper,
   exportToWallpaperEngine,
   handleBatchDeleteImages,
@@ -284,6 +377,17 @@ const {
   loadImages,
   loadMoreImages
 );
+
+const handleAddedToAlbum = async () => {
+  // 画廊本身不依赖画册列表，但这里留个钩子以便其他页面/计数能及时刷新
+  try {
+    const { useAlbumStore } = await import("@/stores/albums");
+    const albumStore = useAlbumStore();
+    await albumStore.loadAlbums();
+  } catch {
+    // ignore
+  }
+};
 
 // 插件图标映射，存储每个插件的图标 URL
 const pluginIcons = ref<Record<string, string>>({});
@@ -335,6 +439,9 @@ const handleGridContextCommand = async (
 ): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
   const command = payload.command;
   const image = payload.image;
+  // payload.image 来自 core ImageGrid（类型更宽松）；这里的业务操作统一以 displayedImages 中的实体为准（字段更全）。
+  const imageInList =
+    displayedImages.value.find((x) => x.id === image.id) ?? null;
   const selectedSet =
     "selectedImageIds" in payload && payload.selectedImageIds && payload.selectedImageIds.size > 0
       ? payload.selectedImageIds
@@ -343,7 +450,7 @@ const handleGridContextCommand = async (
   const isMultiSelect = selectedSet.size > 1;
   const imagesToProcess = isMultiSelect
     ? displayedImages.value.filter(img => selectedSet.has(img.id))
-    : [image];
+    : (imageInList ? [imageInList] : []);
 
   switch (command) {
     case "detail":
@@ -354,18 +461,59 @@ const handleGridContextCommand = async (
         await handleCopyImage(imagesToProcess[0]);
         ElMessage.success(`已复制 ${imagesToProcess.length} 张图片`);
       } else {
-        await handleCopyImage(image);
+        if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
+      }
+      return null;
+    case "favorite":
+      if (imagesToProcess.length === 1) {
+        // 单选：复用 composable（会同步收藏画册计数/缓存）
+        await toggleFavorite(imagesToProcess[0]);
+      } else if (imagesToProcess.length > 1) {
+        // 多选：按“如果有任意未收藏 -> 全部收藏，否则全部取消收藏”的规则
+        const desiredFavorite = imagesToProcess.some((img) => !(img.favorite ?? false));
+        const toChange = imagesToProcess.filter(
+          (img) => (img.favorite ?? false) !== desiredFavorite
+        );
+        if (toChange.length === 0) return null;
+
+        // 为避免刷屏，这里自己批量调后端，然后对齐 gallery cache（收藏画册计数由后端+下次进入画册页兜底）
+        const results = await Promise.allSettled(
+          toChange.map((img) =>
+            invoke("toggle_image_favorite", {
+              imageId: img.id,
+              favorite: desiredFavorite,
+            })
+          )
+        );
+        const succeededIds: string[] = [];
+        results.forEach((r, idx) => {
+          if (r.status === "fulfilled") succeededIds.push(toChange[idx]!.id);
+        });
+        if (succeededIds.length > 0) {
+          const idSet = new Set(succeededIds);
+          const next = displayedImages.value.map((img) =>
+            idSet.has(img.id) ? ({ ...img, favorite: desiredFavorite } as ImageInfo) : img
+          );
+          displayedImages.value = next;
+          crawlerStore.images = next.slice();
+          ElMessage.success(
+            desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`
+          );
+          galleryViewRef.value?.clearSelection?.();
+        }
       }
       return null;
     case "open":
       if (!isMultiSelect) {
-        await handleOpenImagePath(image.localPath);
+        if (imagesToProcess[0]) await handleOpenImagePath(imagesToProcess[0].localPath);
       }
       return null;
     case "openFolder":
       if (!isMultiSelect) {
         try {
-          await invoke("open_file_folder", { filePath: image.localPath });
+          if (imagesToProcess[0]) {
+            await invoke("open_file_folder", { filePath: imagesToProcess[0].localPath });
+          }
         } catch (error) {
           console.error("打开文件夹失败:", error);
           ElMessage.error("打开文件夹失败");
@@ -373,15 +521,17 @@ const handleGridContextCommand = async (
       }
       return null;
     case "wallpaper":
-      if (!isMultiSelect) {
-        await setWallpaper(image);
-      }
+      if (imagesToProcess.length > 0) await setWallpaper(imagesToProcess);
       return null;
     case "exportToWE":
     case "exportToWEAuto":
       if (!isMultiSelect) {
-        await exportToWallpaperEngine(image);
+        if (imagesToProcess[0]) await exportToWallpaperEngine(imagesToProcess[0]);
       }
+      return null;
+    case "addToAlbum":
+      addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
+      showAddToAlbumDialog.value = true;
       return null;
 
     // 画廊特有：删除/移除确认对话框
@@ -461,12 +611,6 @@ const confirmRemoveImages = async () => {
   // 使用统一的删除函数
   await handleBatchDeleteImages(imagesToRemove, shouldDeleteFiles);
 };
-
-// 删除确认对话框的回车键逻辑已抽到 RemoveImagesConfirmDialog 内部
-
-
-// refreshImagesPreserveCache, refreshLatestIncremental, loadMoreImages, loadAllImages 已移至 useGalleryImages composable
-// 插件配置相关的函数和 watch 监听器已移至 CrawlerDialog 组件
 
 // 监听 CrawlerDialog 关闭，清空初始配置
 watch(showCrawlerDialog, (isOpen) => {
@@ -627,6 +771,12 @@ onMounted(async () => {
 
   // 不卸载取消监听。因为是keep-alive。并且不是web
   window.addEventListener('task-error-display', errorDisplayHandler);
+
+  // 如果监听器已经创建，跳过重复创建
+  if (listenersCreated.value) {
+    return;
+  }
+  listenersCreated.value = true;
 
   // 监听图片添加事件，实时同步画廊（仅增量刷新，避免全量图片重新加载）
   // 使用防抖机制，避免短时间内多次调用导致重复添加
@@ -880,18 +1030,10 @@ onActivated(async () => {
       missingCount++;
       imagesToReload.push(img);
     } else {
-      // 检查 Blob URL 是否仍然有效（通过尝试访问 URL）
-      // 注意：blobUrls 在 composable 内部，这里通过检查 URL 是否可访问来判断
-      const hasValidThumbnail = imageData.thumbnail && imageData.thumbnail.startsWith('blob:');
-      const hasValidOriginal = imageData.original && imageData.original.startsWith('blob:');
-
-      if (!hasValidThumbnail && !hasValidOriginal) {
-        // Blob URL 已失效，需要重新加载
-        missingCount++;
-        imagesToReload.push(img);
-        // 清理无效的条目
-        delete imageSrcMap.value[img.id];
-      }
+      // 重要：当前主程序已使用 convertFileSrc/asset.localhost（非 blob）来提供 URL。
+      // 这里不能再用 “不是 blob: 就判定无效并删除” 的旧逻辑，
+      // 否则每次切回都会把缓存清空，导致滚动回顶 + 大量骨架屏 + 反复请求（甚至触发 ImageItem 走 readFile 重建）。
+      // 对 URL 的可用性判断交给 <img onerror>，此处只处理“URL 缺失”的情况即可。
     }
   }
 
@@ -928,7 +1070,7 @@ onDeactivated(() => {
 .gallery-container {
   width: 100%;
   flex: 1;
-  /* 避免外层与 ImageGrid 内层双重滚动导致出现“多一条滚动条” */
+  /* 避免外层与 ImageGrid 内层双重滚动导致出现"多一条滚动条" */
   overflow: hidden;
 
   /* 按住空格进入“拖拽滚动模式” */

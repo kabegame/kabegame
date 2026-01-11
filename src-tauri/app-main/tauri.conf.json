@@ -15,6 +15,7 @@
         "fullscreen": false,
         "resizable": true,
         "title": "Kabegame",
+        "transparent": true,
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -34,6 +35,11 @@
     "active": true,
     "targets": "all",
     "icon": ["../icons/icon.icns", "../icons/icon.ico"],
-    "resources": ["../resources/plugins"]
+    "resources": ["resources/plugins", "resources/bin"],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/installer-hooks.nsh"
+      }
+    }
   }
 }

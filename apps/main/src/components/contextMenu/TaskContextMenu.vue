@@ -6,7 +6,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { FolderOpened, Collection, Delete, VideoPause } from "@element-plus/icons-vue";
-import ContextMenu, { type MenuItem } from "@/components/ContextMenu.vue";
+import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
 
 interface Props {
   visible: boolean;

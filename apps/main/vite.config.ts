@@ -1,10 +1,15 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import path from "path";
-import { readFile } from "node:fs/promises";
+import { copyFile, readFile, rename, rm } from "node:fs/promises";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const appRoot = __dirname;
+
+// 判断是否为 Windows 平台（窗口模式仅在 Windows 可用）
+const isWindows = process.env.TAURI_ENV_PLATFORM === "windows";
+
+// console.log(process.env);
 
 export default defineConfig({
   plugins: [
@@ -15,7 +20,7 @@ export default defineConfig({
         const routeToFile: Record<string, string> = {
           "/": "html/index.html",
           "/index.html": "html/index.html",
-          "/wallpaper.html": "html/wallpaper.html",
+          ...(isWindows ? { "/wallpaper.html": "html/wallpaper.html" } : {}),
         };
 
         server.middlewares.use(async (req, res, next) => {
@@ -45,7 +50,54 @@ export default defineConfig({
         });
       },
     },
+    {
+      // build 时把 dist-main/html/*.html 扁平化到 dist-main/*.html，满足 Tauri 期望的入口路径：
+      // - index.html
+      // - wallpaper.html
+      name: "kabegame-flatten-html-output-main",
+      apply: "build",
+      async writeBundle(outputOptions) {
+        const outDir = outputOptions.dir;
+        if (!outDir) return;
+
+        const moveFile = async (from: string, to: string) => {
+          try {
+            await rename(from, to);
+          } catch (e: any) {
+            // Windows/跨盘等场景：rename 可能失败，fallback 为 copy + delete
+            if (e?.code === "EXDEV" || e?.code === "EPERM") {
+              await copyFile(from, to);
+              await rm(from, { force: true });
+              return;
+            }
+            // 源不存在：忽略
+            if (e?.code === "ENOENT") return;
+            throw e;
+          }
+        };
+
+        await moveFile(
+          path.join(outDir, "html", "index.html"),
+          path.join(outDir, "index.html")
+        );
+        // 仅在 Windows 平台时移动 wallpaper.html
+        if (isWindows) {
+          await moveFile(
+            path.join(outDir, "html", "wallpaper.html"),
+            path.join(outDir, "wallpaper.html")
+          );
+        }
+
+        // 清理空目录（best-effort）
+        await rm(path.join(outDir, "html"), { recursive: true, force: true });
+      },
+    },
   ],
+
+  define: {
+    __DEV__: process.env.NODE_ENV === "development",
+    __WINDOWS__: isWindows,
+  },
 
   // 仍沿用仓库根的静态目录（避免大搬家）
   publicDir: path.resolve(repoRoot, "static"),
@@ -78,20 +130,23 @@ export default defineConfig({
   optimizeDeps: {
     entries: [
       path.resolve(appRoot, "html/index.html"),
-      path.resolve(appRoot, "html/wallpaper.html"),
+      ...(isWindows ? [path.resolve(appRoot, "html/wallpaper.html")] : []),
     ],
   },
   build: {
     outDir: path.resolve(repoRoot, "dist-main"),
     emptyOutDir: true,
+    reportCompressedSize: false,
     target: ["es2021", "chrome100", "safari13"],
     minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_DEBUG,
     chunkSizeWarningLimit: 10000000,
     rollupOptions: {
       input: {
-        main: path.resolve(appRoot, "html/index.html"),
-        wallpaper: path.resolve(appRoot, "html/wallpaper.html"),
+        index: path.resolve(appRoot, "html/index.html"),
+        ...(isWindows
+          ? { wallpaper: path.resolve(appRoot, "html/wallpaper.html") }
+          : {}),
       },
       onwarn(warning, warn) {
         if (
@@ -105,7 +160,12 @@ export default defineConfig({
         warn(warning);
       },
       output: {
-        manualChunks: () => "index",
+        // ⚠️ 这里不能把所有 chunk 都强制塞进同一个名字（比如 "index"），
+        // 否则多入口（index / wallpaper）在生产构建会被合并，导致主窗口也执行 wallpaper 入口逻辑。
+        // 只把 node_modules 抽到 vendor，保留多入口各自的 entry chunk。
+        manualChunks(id) {
+          if (id.includes("node_modules")) return "vendor";
+        },
       },
     },
   },

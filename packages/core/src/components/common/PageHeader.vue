@@ -56,8 +56,10 @@ defineEmits<{
   gap: 16px;
   margin-bottom: 20px;
   padding: 16px;
-  min-height: 64px;
-  background: var(--anime-bg-card);
+  height: 64px;
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
   border-radius: 12px;
   box-shadow: var(--anime-shadow);
 

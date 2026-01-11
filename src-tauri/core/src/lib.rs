@@ -5,11 +5,17 @@ pub mod crawler;
 pub mod dedupe;
 pub mod kgpg;
 pub mod plugin;
-pub mod plugin_editor;
 pub mod settings;
+pub mod shell_open;
 pub mod storage;
-#[cfg(feature = "wallpaper")]
+#[cfg(feature = "tray")]
 pub mod tray;
+#[cfg(all(target_os = "windows", feature = "virtual-drive"))]
+pub mod virtual_drive;
 #[cfg(feature = "wallpaper")]
 pub mod wallpaper;
+// 只有 Windows 平台需要导出 wallpaper_engine_export 模块
+#[cfg(target_os = "windows")]
 pub mod wallpaper_engine_export;
+#[cfg(target_os = "windows")]
+pub mod windows_effects;

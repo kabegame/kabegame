@@ -1,10 +1,11 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod plugin_editor;
+
 use kabegame_core::{
     crawler,
-    plugin::{PluginConfig, PluginManager, PluginManifest},
-    plugin_editor,
+    plugin::{BrowserPlugin, PluginConfig, PluginManager, PluginManifest},
     settings::{AppSettings, Settings},
     storage::{ImageInfo, Storage, TaskInfo},
 };
@@ -97,6 +98,11 @@ fn plugin_editor_process_icon(image_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn plugin_editor_process_icon_bytes(image_bytes_base64: String) -> Result<String, String> {
+    plugin_editor::plugin_editor_process_icon_bytes(image_bytes_base64)
+}
+
+#[tauri::command]
 fn plugin_editor_export_kgpg(
     output_path: String,
     plugin_id: String,
@@ -113,6 +119,106 @@ fn plugin_editor_export_kgpg(
         script,
         icon_rgb_base64,
     )
+}
+
+#[tauri::command]
+fn plugin_editor_list_installed_plugins(
+    state: tauri::State<PluginManager>,
+) -> Result<Vec<BrowserPlugin>, String> {
+    state.load_browser_plugins()
+}
+
+#[tauri::command]
+fn get_plugin_icon(
+    plugin_id: String,
+    state: tauri::State<PluginManager>,
+) -> Result<Option<Vec<u8>>, String> {
+    state.get_plugin_icon_by_id(&plugin_id)
+}
+
+#[tauri::command]
+fn plugin_editor_import_kgpg(
+    state: tauri::State<PluginManager>,
+    file_path: String,
+) -> Result<plugin_editor::PluginEditorImportResult, String> {
+    plugin_editor::plugin_editor_import_kgpg(&state, file_path)
+}
+
+#[tauri::command]
+fn plugin_editor_import_installed(
+    state: tauri::State<PluginManager>,
+    plugin_id: String,
+) -> Result<plugin_editor::PluginEditorImportResult, String> {
+    let p = state
+        .get_plugins_directory()
+        .join(format!("{}.kgpg", plugin_id));
+    plugin_editor::plugin_editor_import_kgpg(&state, p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn plugin_editor_export_install(
+    state: tauri::State<PluginManager>,
+    overwrite: bool,
+    plugin_id: String,
+    manifest: PluginManifest,
+    config: PluginConfig,
+    script: String,
+    icon_rgb_base64: Option<String>,
+) -> Result<(), String> {
+    let plugins_dir = state.get_plugins_directory();
+    std::fs::create_dir_all(&plugins_dir).map_err(|e| format!("创建插件目录失败: {}", e))?;
+    let target = plugins_dir.join(format!("{}.kgpg", plugin_id.trim()));
+    if target.exists() && !overwrite {
+        return Err("PLUGIN_EXISTS".to_string());
+    }
+    plugin_editor::plugin_editor_export_kgpg(
+        target.to_string_lossy().to_string(),
+        plugin_id,
+        manifest,
+        config,
+        script,
+        icon_rgb_base64,
+    )
+}
+
+#[tauri::command]
+fn plugin_editor_export_folder(
+    output_dir: String,
+    manifest: PluginManifest,
+    config: PluginConfig,
+    script: String,
+    icon_rgb_base64: Option<String>,
+) -> Result<(), String> {
+    plugin_editor::plugin_editor_export_folder(
+        output_dir,
+        manifest,
+        config,
+        script,
+        icon_rgb_base64,
+    )
+}
+
+#[tauri::command]
+fn plugin_editor_autosave_save(
+    plugin_id: String,
+    manifest: PluginManifest,
+    config: PluginConfig,
+    script: String,
+    icon_rgb_base64: Option<String>,
+) -> Result<String, String> {
+    plugin_editor::plugin_editor_autosave_save(plugin_id, manifest, config, script, icon_rgb_base64)
+}
+
+#[tauri::command]
+fn plugin_editor_autosave_load(
+    state: tauri::State<PluginManager>,
+) -> Result<Option<plugin_editor::PluginEditorImportResult>, String> {
+    plugin_editor::plugin_editor_autosave_load(&state)
+}
+
+#[tauri::command]
+fn plugin_editor_autosave_clear() -> Result<(), String> {
+    plugin_editor::plugin_editor_autosave_clear()
 }
 
 #[tauri::command]
@@ -151,6 +257,13 @@ fn get_all_tasks(app: tauri::AppHandle) -> Result<Vec<TaskInfo>, String> {
     storage.get_all_tasks()
 }
 
+/// 将任务的 Rhai 失败 dump 标记为“已确认/已读”（用于任务列表右上角小按钮）
+#[tauri::command]
+fn confirm_task_rhai_dump(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
+    let storage = app.state::<Storage>();
+    storage.confirm_task_rhai_dump(&task_id)
+}
+
 #[tauri::command]
 fn delete_task(
     app: tauri::AppHandle,
@@ -168,6 +281,66 @@ fn delete_task(
     let s = settings.get_settings().unwrap_or_default();
     if let Some(cur) = s.current_wallpaper_image_id.as_deref() {
         if ids.iter().any(|id| id == cur) {
+            let _ = settings.set_current_wallpaper_image_id(None);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_image(
+    image_id: String,
+    state: tauri::State<Storage>,
+    settings: tauri::State<Settings>,
+) -> Result<(), String> {
+    state.delete_image(&image_id)?;
+    let s = settings.get_settings().unwrap_or_default();
+    if s.current_wallpaper_image_id.as_deref() == Some(image_id.as_str()) {
+        let _ = settings.set_current_wallpaper_image_id(None);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn remove_image(
+    image_id: String,
+    state: tauri::State<Storage>,
+    settings: tauri::State<Settings>,
+) -> Result<(), String> {
+    state.remove_image(&image_id)?;
+    let s = settings.get_settings().unwrap_or_default();
+    if s.current_wallpaper_image_id.as_deref() == Some(image_id.as_str()) {
+        let _ = settings.set_current_wallpaper_image_id(None);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn batch_delete_images(
+    image_ids: Vec<String>,
+    state: tauri::State<Storage>,
+    settings: tauri::State<Settings>,
+) -> Result<(), String> {
+    state.batch_delete_images(&image_ids)?;
+    let s = settings.get_settings().unwrap_or_default();
+    if let Some(current_id) = &s.current_wallpaper_image_id {
+        if image_ids.contains(current_id) {
+            let _ = settings.set_current_wallpaper_image_id(None);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn batch_remove_images(
+    image_ids: Vec<String>,
+    state: tauri::State<Storage>,
+    settings: tauri::State<Settings>,
+) -> Result<(), String> {
+    state.batch_remove_images(&image_ids)?;
+    let s = settings.get_settings().unwrap_or_default();
+    if let Some(current_id) = &s.current_wallpaper_image_id {
+        if image_ids.contains(current_id) {
             let _ = settings.set_current_wallpaper_image_id(None);
         }
     }
@@ -199,6 +372,56 @@ fn get_setting(key: String, state: tauri::State<Settings>) -> Result<serde_json:
 #[tauri::command]
 fn get_favorite_album_id() -> Result<String, String> {
     Ok(kabegame_core::storage::FAVORITE_ALBUM_ID.to_string())
+}
+
+// ---- settings mutators (keep consistent with app-main; plugin-editor 需要可落盘配置) ----
+
+#[tauri::command]
+fn set_max_concurrent_downloads(
+    count: u32,
+    state: tauri::State<Settings>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    state.set_max_concurrent_downloads(count)?;
+    // 同步调整 download worker 数量（全局并发下载）
+    if let Some(download_queue) = app.try_state::<crawler::DownloadQueue>() {
+        download_queue.set_desired_concurrency(count);
+        download_queue.notify_all_waiting();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_network_retry_count(count: u32, state: tauri::State<Settings>) -> Result<(), String> {
+    state.set_network_retry_count(count)
+}
+
+#[tauri::command]
+fn set_auto_deduplicate(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
+    state.set_auto_deduplicate(enabled)
+}
+
+#[tauri::command]
+fn set_default_download_dir(
+    dir: Option<String>,
+    state: tauri::State<Settings>,
+) -> Result<(), String> {
+    state.set_default_download_dir(dir)
+}
+
+#[tauri::command]
+fn get_default_images_dir(state: tauri::State<Storage>) -> Result<String, String> {
+    Ok(state
+        .get_images_dir()
+        .to_string_lossy()
+        .to_string()
+        .trim_start_matches("\\\\?\\")
+        .to_string())
+}
+
+#[tauri::command]
+fn open_file_path(file_path: String) -> Result<(), String> {
+    kabegame_core::shell_open::open_path(&file_path)
 }
 
 #[tauri::command]
@@ -244,6 +467,18 @@ fn main() {
             plugin_editor_check_rhai,
             plugin_editor_export_kgpg,
             plugin_editor_process_icon,
+            plugin_editor_process_icon_bytes,
+            // import/export extras
+            plugin_editor_list_installed_plugins,
+            get_plugin_icon,
+            plugin_editor_import_kgpg,
+            plugin_editor_import_installed,
+            plugin_editor_export_install,
+            plugin_editor_export_folder,
+            // autosave
+            plugin_editor_autosave_save,
+            plugin_editor_autosave_load,
+            plugin_editor_autosave_clear,
             // runner commands
             plugin_editor_run_task,
             start_task,
@@ -255,12 +490,24 @@ fn main() {
             add_task,
             get_task,
             get_all_tasks,
+            confirm_task_rhai_dump,
             delete_task,
             clear_finished_tasks,
+            // image ops (keep consistent with app-main; used by task images context menu)
+            delete_image,
+            remove_image,
+            batch_delete_images,
+            batch_remove_images,
             // settings (for shared click behavior, etc.)
             get_settings,
             get_setting,
             get_favorite_album_id,
+            set_max_concurrent_downloads,
+            set_network_retry_count,
+            set_auto_deduplicate,
+            set_default_download_dir,
+            get_default_images_dir,
+            open_file_path,
             // lifecycle
             plugin_editor_exit_app,
         ])

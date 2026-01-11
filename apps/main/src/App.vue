@@ -62,16 +62,18 @@ import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import WallpaperLayer from "./components/WallpaperLayer.vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { useSettingsStore } from "./stores/settings";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import TaskDrawer from "./components/TaskDrawer.vue";
 import { useTaskDrawerStore } from "./stores/taskDrawer";
 import { useCrawlerStore } from "./stores/crawler";
 import { useAlbumStore } from "./stores/albums";
+import { usePluginStore } from "@/stores/plugins";
 import { storeToRefs } from "pinia";
 import FileDropOverlay from "./components/FileDropOverlay.vue";
 import { stat } from "@tauri-apps/plugin-fs";
 import ImportConfirmDialog from "./components/import/ImportConfirmDialog.vue";
+import { watch } from "vue";
 
 const route = useRoute();
 const activeRoute = computed(() => route.path);
@@ -83,6 +85,7 @@ const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskD
 // 爬虫 store
 const crawlerStore = useCrawlerStore();
 const albumStore = useAlbumStore();
+const pluginStore = usePluginStore();
 
 // 文件拖拽提示层引用
 const fileDropOverlayRef = ref<InstanceType<typeof FileDropOverlay> | null>(null);
@@ -91,6 +94,7 @@ const importConfirmDialogRef = ref<InstanceType<typeof ImportConfirmDialog> | nu
 // 支持的图片格式
 const SUPPORTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'];
 const SUPPORTED_ZIP_EXTENSIONS = ['zip'];
+const SUPPORTED_KGPG_EXTENSIONS = ['kgpg'];
 
 // 让出 UI：避免在一次性批量导入/创建任务时长时间占用主线程导致“界面卡死”
 const yieldToUi = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -114,6 +118,12 @@ const isSupportedImageFile = (filePath: string): boolean => {
 const isZipFile = (filePath: string): boolean => {
   const ext = getFileExtension(filePath);
   return SUPPORTED_ZIP_EXTENSIONS.includes(ext);
+};
+
+// 检查文件是否为 kgpg 插件包
+const isKgpgFile = (filePath: string): boolean => {
+  const ext = getFileExtension(filePath);
+  return SUPPORTED_KGPG_EXTENSIONS.includes(ext);
 };
 
 // 辅助函数：从文件路径提取目录路径
@@ -189,7 +199,9 @@ onMounted(async () => {
             try {
               const firstPath = paths[0];
               const metadata = await stat(firstPath);
-              const text = metadata.isDirectory ? '拖入文件夹以导入' : '拖入文件以导入';
+              const text = metadata.isDirectory
+                ? '拖入文件夹以导入'
+                : (isKgpgFile(firstPath) ? '拖入插件包（.kgpg）以导入' : '拖入文件以导入');
               fileDropOverlayRef.value?.show(text);
             } catch (error) {
               // 如果检查失败，显示通用提示
@@ -214,6 +226,7 @@ onMounted(async () => {
                 name: string;
                 isDirectory: boolean;
                 isZip?: boolean;
+                isKgpg?: boolean;
               }
 
               const items: ImportItem[] = [];
@@ -231,15 +244,19 @@ onMounted(async () => {
                       name,
                       isDirectory: true,
                       isZip: false,
+                      isKgpg: false,
                     });
                   } else {
-                    // 文件：检查是否为支持的图片格式 / zip
-                    if (isSupportedImageFile(path) || isZipFile(path)) {
+                    // 文件：检查是否为支持的图片格式 / zip / kgpg
+                    if (isSupportedImageFile(path) || isZipFile(path) || isKgpgFile(path)) {
+                      const kgpg = isKgpgFile(path);
                       items.push({
                         path,
-                        name,
+                        // 列表里明确标注插件包（不改 ImportConfirmDialog 也能看清用途）
+                        name: kgpg ? `${name}（插件包）` : name,
                         isDirectory: false,
                         isZip: isZipFile(path),
+                        isKgpg: kgpg,
                       });
                     } else {
                       console.log('[App] 跳过不支持的文件:', path);
@@ -266,19 +283,32 @@ onMounted(async () => {
               // 用户确认，开始导入
               console.log('[App] 用户确认导入，开始添加任务');
 
-              // 任务抽屉打开，用户可以在导入过程中随时查看/操作
-              try {
-                taskDrawerStore.open();
-              } catch {
-                // ignore
+              const hasCrawlerImport = items.some((it) => it.isDirectory || (!it.isDirectory && !it.isKgpg));
+              // 只有存在“图片/zip/文件夹导入任务”时才打开任务抽屉；仅导入 kgpg 时避免打扰
+              if (hasCrawlerImport) {
+                try {
+                  taskDrawerStore.open();
+                } catch {
+                  // ignore
+                }
               }
 
               // 关键：不要在拖拽回调里长时间串行 await；放到后台任务并分批让出 UI
               void (async () => {
                 let createdAnyAlbum = false;
+                let importedPluginCount = 0;
+                let addedCrawlerTaskCount = 0;
                 for (let i = 0; i < items.length; i++) {
                   const item = items[i];
                   try {
+                    // kgpg：自动尝试导入/安装到“已安装源”
+                    if (item.isKgpg) {
+                      await invoke("import_plugin_from_zip", { zipPath: item.path });
+                      importedPluginCount++;
+                      console.log('[App] 已导入插件包:', item.path);
+                      continue;
+                    }
+
                     // 可选：为每个“文件夹/压缩包”单独创建画册，并把 outputAlbumId 传给任务
                     let outputAlbumId: string | undefined = undefined;
                     if (createAlbumPerSource && (item.isDirectory || item.isZip)) {
@@ -305,6 +335,7 @@ onMounted(async () => {
                         },
                         outputAlbumId
                       );
+                      addedCrawlerTaskCount++;
                       console.log('[App] 已添加文件夹导入任务:', item.path);
                     } else {
                       // 文件：使用 local-import
@@ -319,11 +350,12 @@ onMounted(async () => {
                         },
                         outputAlbumId
                       );
+                      addedCrawlerTaskCount++;
                       console.log('[App] 已添加文件导入任务:', item.path);
                     }
                   } catch (error) {
                     console.error('[App] 添加任务失败:', item.path, error);
-                    ElMessage.error(`添加任务失败: ${item.name}`);
+                    ElMessage.error(item.isKgpg ? `导入插件失败: ${item.name}` : `添加任务失败: ${item.name}`);
                   }
 
                   // 每处理 2 个让出一次主线程，让渲染/输入有机会执行
@@ -337,7 +369,20 @@ onMounted(async () => {
                   void albumStore.loadAlbums();
                 }
 
-                ElMessage.success(`已添加 ${items.length} 个导入任务`);
+                // kgpg 导入后刷新“已安装源”
+                if (importedPluginCount > 0) {
+                  void pluginStore.loadPlugins();
+                }
+
+                if (addedCrawlerTaskCount > 0 && importedPluginCount > 0) {
+                  ElMessage.success(`已添加 ${addedCrawlerTaskCount} 个导入任务，已导入 ${importedPluginCount} 个源插件`);
+                } else if (addedCrawlerTaskCount > 0) {
+                  ElMessage.success(`已添加 ${addedCrawlerTaskCount} 个导入任务`);
+                } else if (importedPluginCount > 0) {
+                  ElMessage.success(`已导入 ${importedPluginCount} 个源插件`);
+                } else {
+                  ElMessage.info("没有可导入的内容");
+                }
               })();
             } catch (error) {
               console.error('[App] 处理文件拖入失败:', error);
@@ -376,9 +421,46 @@ const toggleCollapse = () => {
   isCollapsed.value = !isCollapsed.value;
 };
 
+// Windows DWM 毛玻璃：通知后端把 blur region 设为侧栏宽度
+const updateSidebarDwmBlur = async () => {
+  // 仅主窗口需要；壁纸窗口不渲染侧栏
+  if (isWallpaperWindow.value) return;
+
+  // 非 Tauri 环境直接跳过
+  try {
+    await invoke("set_main_sidebar_dwm_blur", { sidebarWidth: isCollapsed.value ? 64 : 200 });
+  } catch (e) {
+    // 之前这里吞掉错误会导致“没效果也没报错”，所以至少在控制台给个提示
+    console.warn("[DWM] set_main_sidebar_dwm_blur failed:", e);
+  }
+};
+
+watch(isCollapsed, () => {
+  void updateSidebarDwmBlur();
+});
+
+onMounted(() => {
+  // 首次进入时设置一次；后续折叠/窗口 resize 再更新
+  void updateSidebarDwmBlur();
+  // WebView/窗口初始化可能有时序问题，再延迟补一次，提升稳定性
+  window.setTimeout(() => void updateSidebarDwmBlur(), 500);
+  window.addEventListener("resize", updateSidebarDwmBlur, { passive: true });
+});
+
+onUnmounted(() => {
+  window.removeEventListener("resize", updateSidebarDwmBlur);
+});
+
 </script>
 
 <style lang="scss">
+html,
+body,
+#app {
+  height: 100%;
+  background: transparent;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -388,11 +470,16 @@ const toggleCollapse = () => {
 .app-container {
   height: 100vh;
   display: flex;
-  background: var(--anime-bg-main);
+  // 让窗口透明层透出（DWM blur behind 只在透明像素处可见）
+  background: transparent;
 }
 
 .app-sidebar {
-  background: var(--anime-bg-sidebar);
+  // 关键：侧栏背景必须半透明，DWM 才能透出模糊效果
+  background: transparent;
+  // 非 Windows / DWM 失效时的降级（浏览器预览也能看到“玻璃感”）
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
   border-right: 2px solid var(--anime-border);
   display: flex;
   flex-direction: column;
@@ -515,6 +602,18 @@ const toggleCollapse = () => {
     border-right: none;
     padding: 10px 0;
     transition: padding 0.3s ease;
+    // Element Plus 默认给 el-menu 一个不透明背景，会把“半透明侧栏”盖住，导致看起来没有毛玻璃
+    background: transparent;
+
+    // 覆盖 Element Plus 菜单的背景色（展开/折叠都需要）
+    &.el-menu {
+      background-color: transparent;
+    }
+
+    .el-menu-item,
+    .el-sub-menu__title {
+      background-color: transparent;
+    }
 
     // 展开状态下，菜单项保持左对齐
     .el-menu-item {
@@ -548,7 +647,8 @@ const toggleCollapse = () => {
   padding: 0;
   overflow-y: auto;
   flex: 1;
-  background: transparent;
+  // 主内容保持不透明，避免整窗“穿透桌面”
+  background: var(--anime-bg-main);
   /* 隐藏滚动条 */
   scrollbar-width: none;
   /* Firefox */

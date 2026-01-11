@@ -1,1 +1,0 @@
-{"main-capability":{"identifier":"main-capability","description":"Main capability for Kabegame Plugin Editor (workspace app-plugin-editor)","local":true,"windows":["plugin-editor"],"permissions":["core:default","dialog:default","shell:default","fs:default","fs:read-all","fs:write-all",{"identifier":"fs:allow-read-file","allow":[{"path":"**"}]}]}}

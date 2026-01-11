@@ -8,9 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
-dist-main
-dist-plugin-editor
+dist-*
 *.local
 
 # Editor directories and files
@@ -22,10 +20,10 @@ dist-plugin-editor
 # Tauri
 src-tauri/target
 src-tauri/Cargo.lock
-src-tauri/bin/*
-!src-tauri/bin/.gitkeep
-src-tauri/sidecar/*
-!src-tauri/sidecar/.gitkeep
+src-tauri/app-main/resources/plugins/*.kgpg
+src-tauri/*/gen/*
+src-tauri/app-main/resources/bin/*
+!src-tauri/app-main/resources/bin/.gitkeep
 
 # Tauri generated icons (keep only icon.png and README.md)
 src-tauri/icons/*

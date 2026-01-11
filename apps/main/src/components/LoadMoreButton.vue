@@ -8,6 +8,14 @@
         加载更多
       </el-button>
     </template>
+    <template v-else-if="showNextPage">
+      <el-button type="primary" @click.stop.prevent="$emit('nextPage')" size="large">
+        <el-icon>
+          <ArrowRight />
+        </el-icon>
+        进入下一页
+      </el-button>
+    </template>
     <template v-else>
       <div class="load-more-placeholder">没有更多了</div>
     </template>
@@ -15,17 +23,21 @@
 </template>
 
 <script setup lang="ts">
-import { Plus } from "@element-plus/icons-vue";
+import { Plus, ArrowRight } from "@element-plus/icons-vue";
 
 interface Props {
   hasMore: boolean;
   loading: boolean;
+  showNextPage?: boolean;
 }
 
-defineProps<Props>();
+withDefaults(defineProps<Props>(), {
+  showNextPage: false,
+});
 
 defineEmits<{
   loadMore: [];
+  nextPage: [];
 }>();
 </script>
 

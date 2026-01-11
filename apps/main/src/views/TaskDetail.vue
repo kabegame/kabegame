@@ -1,40 +1,43 @@
 <template>
     <div class="task-detail">
-        <PageHeader :title="taskName || '任务'" :subtitle="taskSubtitle" show-back @back="goBack">
-            <el-button @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !taskId">
-                <el-icon>
-                    <Refresh />
-                </el-icon>
-                <span style="margin-left: 4px;">刷新</span>
-            </el-button>
-            <el-button v-if="shouldShowStopButton" type="warning" @click="handleStopTask">
-                <el-icon>
-                    <VideoPause />
-                </el-icon>
-                <span style="margin-left: 4px;">停止任务</span>
-            </el-button>
-            <el-button type="danger" @click="handleDeleteTask">
-                <el-icon>
-                    <Delete />
-                </el-icon>
-                <span style="margin-left: 4px;">删除任务</span>
-            </el-button>
-            <TaskDrawerButton />
-            <el-button @click="openQuickSettings" circle>
-                <el-icon>
-                    <Setting />
-                </el-icon>
-            </el-button>
-        </PageHeader>
-
         <div v-if="loading" class="detail-body detail-body-loading">
             <el-skeleton :rows="8" animated />
         </div>
         <ImageGrid v-else ref="taskViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
             :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true" :can-reorder="false"
             :context-menu-component="TaskImageContextMenu" :on-context-command="handleImageMenuCommand"
-            @scroll-stable="loadImageUrls()">
+            @retry-download="handleRetryDownload" @scroll-stable="loadImageUrls()">
+            <template #before-grid>
+                <PageHeader :title="taskName || '任务'" :subtitle="taskSubtitle" show-back @back="goBack">
+                    <el-button @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !taskId">
+                        <el-icon>
+                            <Refresh />
+                        </el-icon>
+                        <span style="margin-left: 4px;">刷新</span>
+                    </el-button>
+                    <el-button v-if="shouldShowStopButton" type="warning" @click="handleStopTask">
+                        <el-icon>
+                            <VideoPause />
+                        </el-icon>
+                        <span style="margin-left: 4px;">停止任务</span>
+                    </el-button>
+                    <el-button type="danger" @click="handleDeleteTask">
+                        <el-icon>
+                            <Delete />
+                        </el-icon>
+                        <span style="margin-left: 4px;">删除任务</span>
+                    </el-button>
+                    <TaskDrawerButton />
+                    <el-button @click="openQuickSettings" circle>
+                        <el-icon>
+                            <Setting />
+                        </el-icon>
+                    </el-button>
+                </PageHeader>
+            </template>
         </ImageGrid>
+
+        <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
 
         <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
             :message="removeDialogMessage" title="确认删除" @confirm="confirmRemoveImages" />
@@ -50,12 +53,13 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { VideoPause, Delete, Setting, Refresh } from "@element-plus/icons-vue";
 import TaskImageContextMenu from "@/components/contextMenu/TaskImageContextMenu.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
-import RemoveImagesConfirmDialog from "@/components/common/RemoveImagesConfirmDialog.vue";
+import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
+import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
-import { useSettingsStore } from "@kabegame/core/src/stores/settings";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore } from "@/stores/albums";
-import { useUiStore } from "@kabegame/core/src/stores/ui";
+import { useUiStore } from "@kabegame/core/stores/ui";
 import { storeToRefs } from "pinia";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
@@ -64,6 +68,17 @@ import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageUrlLoader } from "@/composables/useImageUrlLoader";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
+
+type TaskFailedImage = {
+    id: number;
+    taskId: string;
+    pluginId: string;
+    url: string;
+    order: number;
+    createdAt: number;
+    lastError?: string | null;
+    lastAttemptedAt?: number | null;
+};
 
 const route = useRoute();
 const router = useRouter();
@@ -103,8 +118,12 @@ const shouldShowStopButton = computed(() => {
 const loading = ref(false);
 const isRefreshing = ref(false);
 const images = ref<ImageInfo[]>([]);
+const failedImages = ref<TaskFailedImage[]>([]);
 const taskViewRef = ref<any>(null);
 const taskContainerRef = ref<HTMLElement | null>(null);
+
+// 记录“用户主动点击重试”的失败记录（用于在 image-added 时精准移除占位）
+const retryingFailedIds = ref(new Map<number, string>()); // failedId -> url
 
 const { isInteracting } = useImageGridAutoLoad({
     containerRef: taskContainerRef,
@@ -142,6 +161,7 @@ const currentTime = ref<number>(Date.now());
 let timeUpdateInterval: number | null = null;
 let unlistenImageAdded: (() => void) | null = null;
 let unlistenTaskProgress: (() => void) | null = null;
+let unlistenDownloadState: (() => void) | null = null;
 
 const taskSubtitle = computed(() => {
     const parts: string[] = [];
@@ -182,32 +202,6 @@ const formatDuration = (startTime: number, endTime?: number, currentTimeMs?: num
     }
 };
 
-const taskAspectRatio = ref<number | null>(null);
-
-watch(
-    () => settingsStore.values.galleryImageAspectRatio,
-    (newValue) => {
-        if (!newValue) {
-            taskAspectRatio.value = null;
-            return;
-        }
-        const value = newValue as string;
-        if (value.includes(":") && !value.startsWith("custom:")) {
-            const [w, h] = value.split(":").map(Number);
-            if (w && h) {
-                taskAspectRatio.value = w / h;
-            }
-        }
-        if (value.startsWith("custom:")) {
-            const parts = value.replace("custom:", "").split(":");
-            const [w, h] = parts.map(Number);
-            if (w && h) {
-                taskAspectRatio.value = w / h;
-            }
-        }
-    },
-    { immediate: true }
-);
 
 // 监听路由参数变化，当切换到另一个任务时重新加载数据
 watch(
@@ -233,7 +227,7 @@ const handleRefresh = async () => {
     try {
         // 手动刷新：重新拉取任务信息与图片列表，确保与后端/DB 同步
         await loadTaskInfo();
-        await loadTaskImages();
+        await loadTaskImages({ showSkeleton: false });
         ElMessage.success("刷新成功");
     } catch (error) {
         console.error("刷新失败:", error);
@@ -243,20 +237,120 @@ const handleRefresh = async () => {
     }
 };
 
-const loadTaskImages = async () => {
+const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
     if (!taskId.value) return;
-    loading.value = true;
+    const showSkeleton = options?.showSkeleton ?? true;
+    if (showSkeleton) loading.value = true;
     let imgs: ImageInfo[] = [];
     try {
         imgs = await invoke<ImageInfo[]>("get_task_images", { taskId: taskId.value });
-        images.value = imgs;
+        // 同步拉取失败图片并合并到同一网格：
+        // - 初始显示顺序：按 order 升序（任务开始下载的顺序）
+        // - 之后成功下载：通过 image-added 追加（保持“image-add 之后的顺序”）
+        const failed = await invoke<TaskFailedImage[]>("get_task_failed_images", { taskId: taskId.value });
+        failedImages.value = failed || [];
+        const failedAsImages: ImageInfo[] = (failedImages.value || []).map((f) => ({
+            id: `failed:${f.id}`,
+            url: f.url,
+            localPath: "",
+            localExists: true,
+            pluginId: f.pluginId,
+            taskId: f.taskId,
+            crawledAt: f.order,
+            metadata: undefined,
+            thumbnailPath: "",
+            favorite: false,
+            hash: "",
+            order: f.order,
+            isTaskFailed: true,
+            taskFailedId: f.id,
+            taskFailedError: f.lastError || undefined,
+        }));
+
+        const merged = [...imgs, ...failedAsImages];
+        merged.sort((a, b) => (a.order ?? a.crawledAt ?? 0) - (b.order ?? b.crawledAt ?? 0));
+        images.value = merged;
 
         // 清理旧资源
         resetImageUrlLoader();
     } finally {
-        loading.value = false;
+        if (showSkeleton) loading.value = false;
     }
     requestAnimationFrame(() => void loadImageUrls());
+};
+
+const syncFailedPlaceholdersIncremental = async () => {
+    if (!taskId.value) return;
+    try {
+        const failed = await invoke<TaskFailedImage[]>("get_task_failed_images", { taskId: taskId.value });
+        failedImages.value = failed || [];
+
+        const existingFailedIds = new Set<number>();
+        for (const img of images.value) {
+            if (img.isTaskFailed && img.taskFailedId) existingFailedIds.add(img.taskFailedId);
+        }
+
+        const toAppend: ImageInfo[] = [];
+        for (const f of failedImages.value) {
+            if (existingFailedIds.has(f.id)) continue;
+            toAppend.push({
+                id: `failed:${f.id}`,
+                url: f.url,
+                localPath: "",
+                localExists: true,
+                pluginId: f.pluginId,
+                taskId: f.taskId,
+                crawledAt: f.order,
+                metadata: undefined,
+                thumbnailPath: "",
+                favorite: false,
+                hash: "",
+                order: f.order,
+                isTaskFailed: true,
+                taskFailedId: f.id,
+                taskFailedError: f.lastError || undefined,
+            });
+        }
+        if (toAppend.length === 0) return;
+
+        // 增量追加：不对全量 images 排序，避免影响“image-added 之后的顺序”。
+        images.value = [...images.value, ...toAppend];
+        void loadImageUrls(toAppend);
+    } catch (e) {
+        // ignore（不影响主流程）
+    }
+};
+
+const removeFailedPlaceholderById = (failedId: number) => {
+    const key = `failed:${failedId}`;
+    const before = images.value.length;
+    images.value = images.value.filter((img) => img.id !== key);
+    if (images.value.length !== before) {
+        removeFromCacheByIds([key]);
+    }
+};
+
+const handleRetryDownloadInner = async (payload: { image: any }) => {
+    const img = payload?.image as any;
+    if (!img?.isTaskFailed || !img.taskFailedId || !img.url) return;
+    const failedId = img.taskFailedId;
+    retryingFailedIds.value.set(failedId, img.url);
+
+    // 不再前端预下载（会遇到 CORS / WebView 限制）：
+    // 直接走后端 download_image 重试
+    try {
+        await invoke("retry_task_failed_image", { failedId });
+        ElMessage.info("已发起重试下载");
+    } catch (err) {
+        console.error("重试下载失败:", err);
+        ElMessage.error("重试下载失败");
+        retryingFailedIds.value.delete(failedId);
+    }
+};
+
+// 模板事件处理函数应返回 void（避免 TS 报错）
+const handleRetryDownload = (payload: { image: any }) => {
+    void handleRetryDownloadInner(payload);
 };
 
 const loadTaskInfo = async () => {
@@ -332,28 +426,225 @@ const clearSelection = () => {
     taskViewRef.value?.clearSelection?.();
 };
 
+// 加入画册对话框
+const showAddToAlbumDialog = ref(false);
+const addToAlbumImageIds = ref<string[]>([]);
+const handleAddedToAlbum = () => {
+    clearSelection();
+};
+
+// 将单个图片转换为 Blob（处理 JPEG 转 PNG）
+const convertImageToBlob = async (imageUrl: string): Promise<Blob> => {
+    const response = await fetch(imageUrl);
+    let blob = await response.blob();
+
+    // 某些环境对 jpeg 写入剪贴板支持较差：转换为 png
+    if (blob.type === "image/jpeg" || blob.type === "image/jpg") {
+        // 使用 blob URL 来避免 tainted canvas 问题（跨域/特殊协议会导致 canvas 被污染）
+        const blobUrl = URL.createObjectURL(blob);
+        try {
+            const img = new Image();
+            img.src = blobUrl;
+            await new Promise((resolve, reject) => {
+                img.onload = resolve;
+                img.onerror = reject;
+            });
+
+            const canvas = document.createElement("canvas");
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) throw new Error("无法创建 canvas context");
+            ctx.drawImage(img, 0, 0);
+
+            blob = await new Promise<Blob>((resolve, reject) => {
+                canvas.toBlob((b) => {
+                    if (b) resolve(b);
+                    else reject(new Error("转换图片格式失败"));
+                }, "image/png");
+            });
+        } finally {
+            URL.revokeObjectURL(blobUrl);
+        }
+    }
+
+    return blob;
+};
+
+// 复制单张图片到剪贴板（复用当前页面的 imageSrcMap）
+const handleCopyImage = async (image: ImageInfo) => {
+    try {
+        const imageUrl = imageSrcMap.value[image.id]?.original || imageSrcMap.value[image.id]?.thumbnail;
+        if (!imageUrl) {
+            ElMessage.warning("图片尚未加载完成，请稍后再试");
+            return;
+        }
+
+        const blob = await convertImageToBlob(imageUrl);
+        await navigator.clipboard.write([
+            new ClipboardItem({
+                [blob.type]: blob,
+            }),
+        ]);
+        ElMessage.success("图片已复制到剪贴板");
+    } catch (error) {
+        console.error("复制图片失败:", error);
+        ElMessage.error("复制图片失败");
+    }
+};
+
+// 复制多张图片到剪贴板（Clipboard API 支持多个 ClipboardItem，但部分应用可能只读取第一张）
+const handleCopyImages = async (images: ImageInfo[]) => {
+    if (images.length === 0) return;
+    if (images.length === 1) {
+        await handleCopyImage(images[0]);
+        return;
+    }
+
+    try {
+        // 收集所有图片的 URL
+        const imageUrls: string[] = [];
+        for (const image of images) {
+            const imageUrl = imageSrcMap.value[image.id]?.original || imageSrcMap.value[image.id]?.thumbnail;
+            if (imageUrl) {
+                imageUrls.push(imageUrl);
+            }
+        }
+
+        if (imageUrls.length === 0) {
+            ElMessage.warning("没有可复制的图片");
+            return;
+        }
+
+        // 并发转换所有图片为 Blob
+        const blobs = await Promise.all(imageUrls.map((url) => convertImageToBlob(url)));
+
+        // 创建 ClipboardItem 数组
+        const clipboardItems = blobs.map((blob) => new ClipboardItem({ [blob.type]: blob }));
+
+        // 写入剪贴板（支持多图片，但某些应用可能只读取第一张）
+        await navigator.clipboard.write(clipboardItems);
+
+        ElMessage.success(`已复制 ${blobs.length} 张图片到剪贴板`);
+    } catch (error) {
+        console.error("复制图片失败:", error);
+        ElMessage.error("复制图片失败");
+    }
+};
+
+// 切换收藏（仅更新本页 images + 收藏画册缓存/计数；不触碰 Gallery 的 crawlerStore.images）
+const toggleFavoriteForImages = async (imgs: ImageInfo[]) => {
+    if (imgs.length === 0) return;
+    const desiredFavorite = imgs.some((img) => !(img.favorite ?? false));
+    const toChange = imgs.filter((img) => (img.favorite ?? false) !== desiredFavorite);
+    if (toChange.length === 0) return;
+
+    const results = await Promise.allSettled(
+        toChange.map((img) =>
+            invoke("toggle_image_favorite", {
+                imageId: img.id,
+                favorite: desiredFavorite,
+            })
+        )
+    );
+    const succeededIds: string[] = [];
+    results.forEach((r, idx) => {
+        if (r.status === "fulfilled") succeededIds.push(toChange[idx]!.id);
+    });
+    if (succeededIds.length === 0) {
+        ElMessage.error("操作失败");
+        return;
+    }
+
+    // 1) 更新本页列表
+    const idSet = new Set(succeededIds);
+    images.value = images.value.map((img) =>
+        idSet.has(img.id) ? ({ ...img, favorite: desiredFavorite } as ImageInfo) : img
+    );
+
+    // 2) 更新收藏画册计数/缓存（用于 Albums/收藏画册详情页）
+    const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
+    albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(
+        0,
+        currentCount + (desiredFavorite ? succeededIds.length : -succeededIds.length)
+    );
+
+    const favList = albumStore.albumImages[FAVORITE_ALBUM_ID.value];
+    if (Array.isArray(favList)) {
+        if (desiredFavorite) {
+            // 追加或更新
+            for (const id of succeededIds) {
+                const src = images.value.find((x) => x.id === id) || toChange.find((x) => x.id === id);
+                if (!src) continue;
+                const idx = favList.findIndex((x) => x.id === id);
+                if (idx === -1) favList.push({ ...src, favorite: true } as ImageInfo);
+                else favList[idx] = { ...(favList[idx] as any), favorite: true } as any;
+            }
+        } else {
+            // 移除
+            const removeSet = new Set(succeededIds);
+            for (let i = favList.length - 1; i >= 0; i--) {
+                if (removeSet.has(favList[i]!.id)) favList.splice(i, 1);
+            }
+        }
+    }
+
+    ElMessage.success(desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`);
+    clearSelection();
+};
+
 const handleImageMenuCommand = async (
-    payload: ContextCommandPayload
+    payload: any
 ): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
-    const command = payload.command;
-    const image = payload.image;
+    const command = payload.command as string;
+    // 注意：core 的 ContextCommandPayload.image 使用的是 core ImageInfo（url 可选），
+    // 这里以当前页面的 images 列表为准，避免 TS 类型冲突并确保字段完整。
+    const image: ImageInfo | undefined =
+        images.value.find((i) => i.id === payload?.image?.id) ?? (payload?.image as ImageInfo | undefined);
     // 让 ImageGrid 执行默认内置行为（详情）
     if (command === "detail") return command;
+    if (!image) return null;
     const selectedSet =
-        "selectedImageIds" in payload && payload.selectedImageIds && payload.selectedImageIds.size > 0
+        payload?.selectedImageIds && payload.selectedImageIds.size > 0
             ? payload.selectedImageIds
             : new Set([image.id]);
 
     const isMultiSelect = selectedSet.size > 1;
-    const imagesToProcess = isMultiSelect
-        ? images.value.filter((img) => selectedSet.has(img.id))
-        : [image];
+    const imagesToProcess: ImageInfo[] = isMultiSelect
+        ? images.value.filter((img) => selectedSet.has(img.id) && !img.isTaskFailed)
+        : image.isTaskFailed
+            ? []
+            : [image];
 
     switch (command) {
-        case "open":
-            if (!isMultiSelect) {
+        case "copy":
+            if (imagesToProcess.length > 0) {
+                await handleCopyImages(imagesToProcess);
+            }
+            break;
+        case "favorite":
+            if (imagesToProcess.length === 0) return null;
+            await toggleFavoriteForImages(imagesToProcess);
+            break;
+        case "openFolder":
+            if (!isMultiSelect && imagesToProcess.length === 1) {
                 try {
-                    await invoke("open_file_path", { filePath: image.localPath });
+                    await invoke("open_file_folder", { filePath: imagesToProcess[0].localPath });
+                } catch (error) {
+                    console.error("打开文件夹失败:", error);
+                    ElMessage.error("打开文件夹失败");
+                }
+            }
+            break;
+        case "addToAlbum":
+            if (imagesToProcess.length === 0) return null;
+            addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
+            showAddToAlbumDialog.value = true;
+            break;
+        case "open":
+            if (!isMultiSelect && imagesToProcess.length === 1) {
+                try {
+                    await invoke("open_file_path", { filePath: imagesToProcess[0].localPath });
                 } catch (error) {
                     console.error("打开文件失败:", error);
                     ElMessage.error("打开文件失败");
@@ -361,6 +652,7 @@ const handleImageMenuCommand = async (
             }
             break;
         case "remove":
+            if (imagesToProcess.length === 0) return null;
             // 显示移除对话框，让用户选择是否删除文件
             pendingRemoveImages.value = imagesToProcess;
             const count = imagesToProcess.length;
@@ -437,7 +729,7 @@ const startTimersAndListeners = async () => {
 
     // 监听图片添加事件（来自爬虫下载完成）
     if (!unlistenImageAdded) {
-        unlistenImageAdded = await listen<{ taskId: string; imageId: string; image?: any }>(
+        unlistenImageAdded = await listen<{ taskId: string; imageId: string; image?: any; failedImageId?: number }>(
             "image-added",
             async (event) => {
                 // 如果事件中的 taskId 与当前任务ID匹配，则添加新图片到列表
@@ -454,6 +746,22 @@ const startTimersAndListeners = async () => {
                         const newImage = await invoke<ImageInfo | null>("get_image_by_id", { imageId });
                         if (!newImage) {
                             return;
+                        }
+
+                        // 若该 image-added 来自“失败占位重试”，移除对应占位（优先用 failedImageId，其次用 retrying map）
+                        const fid = event.payload.failedImageId;
+                        if (typeof fid === "number" && fid > 0) {
+                            removeFailedPlaceholderById(fid);
+                            retryingFailedIds.value.delete(fid);
+                        } else {
+                            // fallback：按 url 精准匹配用户点过重试的那条
+                            for (const [k, v] of retryingFailedIds.value.entries()) {
+                                if (v && newImage.url === v) {
+                                    removeFailedPlaceholderById(k);
+                                    retryingFailedIds.value.delete(k);
+                                    break;
+                                }
+                            }
                         }
 
                         // 检查图片是否属于当前任务（通过获取任务图片ID列表）
@@ -487,6 +795,23 @@ const startTimersAndListeners = async () => {
             }
         );
     }
+
+    // 监听下载状态：当出现失败时，实时把失败占位插入 TaskDetail（无需用户手动刷新）
+    if (!unlistenDownloadState) {
+        unlistenDownloadState = await listen<{
+            taskId: string;
+            url: string;
+            startTime: number;
+            pluginId: string;
+            state: string;
+            error?: string;
+        }>("download-state", async (event) => {
+            if (!event.payload?.taskId || event.payload.taskId !== taskId.value) return;
+            if (event.payload.state !== "failed") return;
+            // 后端在 emit failed 前已写入 task_failed_images，因此这里可直接拉取增量
+            await syncFailedPlaceholdersIncremental();
+        });
+    }
 };
 
 // 清理定时器的函数（页面失活时调用，节省资源）
@@ -511,6 +836,10 @@ const stopTimersAndListeners = () => {
     if (unlistenTaskProgress) {
         unlistenTaskProgress();
         unlistenTaskProgress = null;
+    }
+    if (unlistenDownloadState) {
+        unlistenDownloadState();
+        unlistenDownloadState = null;
     }
 };
 
@@ -548,23 +877,24 @@ onDeactivated(() => {
 
 <style scoped lang="scss">
 .task-detail {
-    padding: 16px;
+    height: 100%;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    height: 100vh;
+    padding: 16px;
     overflow: hidden;
 
     .detail-body {
         flex: 1;
         overflow-y: auto;
         overflow-x: hidden;
-        padding-top: 6px;
-        padding-bottom: 6px;
 
         .image-grid-root {
             overflow: visible;
         }
+    }
+
+    .detail-body-loading {
+        padding: 20px;
     }
 }
 </style>

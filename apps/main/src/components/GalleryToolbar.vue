@@ -35,30 +35,12 @@
           </el-button>
         </div>
       </div>
-      <div class="load-all-stack">
-        <el-tooltip :content="loadAllTooltipText" placement="bottom" :disabled="!isLoadingAll">
-          <!-- Tooltip 对 disabled button 不生效，需要包一层 -->
-          <span class="load-all-btn-wrapper">
-            <el-button @click="$emit('loadAll')" :loading="isLoadingAll" :disabled="!hasMore || isLoadingAll">
-              <el-icon>
-                <Download />
-              </el-icon>
-              加载全部
-            </el-button>
-          </span>
-        </el-tooltip>
-        <div v-if="isLoadingAll" class="load-all-progress-row">
-          <div class="load-all-progress-wrapper">
-            <el-progress class="load-all-progress" :percentage="loadAllProgress" :stroke-width="5" :show-text="false" />
-          </div>
-          <el-button class="load-all-cancel-btn" circle size="small" type="danger" text @click="handleCancelLoadAll"
-            title="取消加载">
-            <el-icon>
-              <Close />
-            </el-icon>
-          </el-button>
-        </div>
-      </div>
+      <el-button @click="$emit('loadAll')" :loading="isLoadingAll" :disabled="!hasMore || isLoadingAll">
+        <el-icon>
+          <Download />
+        </el-icon>
+        {{ loadAllButtonText }}
+      </el-button>
     </template>
     <el-button @click="$emit('showQuickSettings')" circle>
       <el-icon>
@@ -89,11 +71,10 @@ interface Props {
   dedupeRemoved?: number;
   hasMore?: boolean;
   isLoadingAll?: boolean;
-  loadAllProgress?: number;
-  loadAllLoaded?: number;
-  loadAllTotal?: number;
   totalCount?: number;
   loadedCount?: number;
+  bigPageEnabled?: boolean;
+  currentPosition?: number; // 当前位置（分页启用时使用）
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -104,18 +85,26 @@ const props = withDefaults(defineProps<Props>(), {
   dedupeRemoved: 0,
   hasMore: false,
   isLoadingAll: false,
-  loadAllProgress: 0,
-  loadAllLoaded: 0,
-  loadAllTotal: 0,
   totalCount: 0,
   loadedCount: 0,
+  bigPageEnabled: false,
+  currentPosition: 1,
 });
 
 const totalCountText = computed(() => {
   if (props.totalCount === 0) {
     return "暂无图片";
   }
+  // 如果启用了分页，显示当前位置
+  if (props.bigPageEnabled && props.currentPosition !== undefined) {
+    return `第 ${props.currentPosition} / ${props.totalCount}`;
+  }
+  // 否则显示原来的格式
   return `共 ${props.totalCount} 张图片`;
+});
+
+const loadAllButtonText = computed(() => {
+  return props.bigPageEnabled ? "加载整页" : "加载全部";
 });
 
 const hasTooltip = computed(() => {
@@ -141,14 +130,6 @@ const emit = defineEmits<{
   cancelLoadAll: [];
 }>();
 
-const loadAllTooltipText = computed(() => {
-  if (!props.isLoadingAll) return "";
-  const loaded = props.loadAllLoaded ?? 0;
-  const total = props.loadAllTotal ?? 0;
-  if (!total) return `已加载 ${loaded}/?`;
-  return `已加载 ${loaded}/${total}`;
-});
-
 const dedupeTooltipText = computed(() => {
   if (!props.dedupeLoading) return "";
   const processed = props.dedupeProcessed ?? 0;
@@ -157,10 +138,6 @@ const dedupeTooltipText = computed(() => {
   if (!total) return `已处理 ${processed}/? · 已移除 ${removed}`;
   return `已处理 ${processed}/${total} · 已移除 ${removed}`;
 });
-
-const handleCancelLoadAll = () => {
-  emit("cancelLoadAll");
-};
 </script>
 
 <style scoped lang="scss">
@@ -171,12 +148,6 @@ const handleCancelLoadAll = () => {
     transform: translateY(-2px);
     box-shadow: var(--anime-shadow-hover);
   }
-}
-
-.load-all-stack {
-  display: inline-flex;
-  position: relative;
-  align-items: center;
 }
 
 .dedupe-stack {
@@ -221,35 +192,6 @@ const handleCancelLoadAll = () => {
 
 .dedupe-cancel-btn :deep(.el-icon) {
   font-size: 12px;
-}
-
-.load-all-btn-wrapper {
-  display: inline-flex;
-}
-
-.load-all-progress-row {
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 0;
-  z-index: 10;
-}
-
-.load-all-progress-wrapper {
-  width: 72px;
-}
-
-.load-all-progress {
-  width: 100%;
-  opacity: 0.9;
-}
-
-.load-all-cancel-btn {
-  padding: 0;
 }
 
 .subtitle-text {

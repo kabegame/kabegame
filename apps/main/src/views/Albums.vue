@@ -1,31 +1,33 @@
 <template>
   <div class="albums-page">
-    <PageHeader title="画册">
-      <el-button @click="handleRefresh" :loading="isRefreshing">
-        <el-icon>
-          <Refresh />
-        </el-icon>
-        刷新
-      </el-button>
-      <el-button type="primary" @click="showCreateDialog = true">新建画册</el-button>
-      <TaskDrawerButton />
-      <el-button @click="openQuickSettings" circle>
-        <el-icon>
-          <Setting />
-        </el-icon>
-      </el-button>
-    </PageHeader>
+    <div class="albums-scroll-container">
+      <PageHeader title="画册">
+        <el-button @click="handleRefresh" :loading="isRefreshing">
+          <el-icon>
+            <Refresh />
+          </el-icon>
+          刷新
+        </el-button>
+        <el-button type="primary" @click="showCreateDialog = true">新建画册</el-button>
+        <TaskDrawerButton />
+        <el-button @click="openQuickSettings" circle>
+          <el-icon>
+            <Setting />
+          </el-icon>
+        </el-button>
+      </PageHeader>
 
-    <div v-loading="showLoading" style="min-height: 200px;">
-    <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div" class="albums-grid">
-      <AlbumCard v-for="album in albums" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
-        :count="albumCounts[album.id] || 0" :preview-urls="albumPreviewUrls[album.id] || []"
-        :loading-states="albumLoadingStates[album.id] || []" :is-loading="albumIsLoading[album.id] || false"
-        @click="openAlbum(album)" @visible="prefetchPreview(album)"
-        @contextmenu.prevent="openAlbumContextMenu($event, album)" />
-    </transition-group>
+      <div v-loading="showLoading" style="min-height: 200px;">
+        <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div" class="albums-grid">
+          <AlbumCard v-for="album in albums" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
+            :count="albumCounts[album.id] || 0" :preview-urls="albumPreviewUrls[album.id] || []"
+            :loading-states="albumLoadingStates[album.id] || []" :is-loading="albumIsLoading[album.id] || false"
+            @click="openAlbum(album)" @visible="prefetchPreview(album)"
+            @contextmenu.prevent="openAlbumContextMenu($event, album)" />
+        </transition-group>
 
-    <div v-if="!loading && albums.length === 0" class="empty-tip">暂无画册，点击右上角创建</div>
+        <div v-if="!loading && albums.length === 0" class="empty-tip">暂无画册，点击右上角创建</div>
+      </div>
     </div>
 
     <AlbumContextMenu :visible="albumMenuVisible" :position="albumMenuPosition" :album-id="menuAlbum?.id"
@@ -161,8 +163,8 @@ const stopFavoriteCountWatch = ref<null | (() => void)>(null);
 onMounted(async () => {
   startLoading();
   try {
-  await albumStore.loadAlbums();
-  await loadRotationSettings();
+    await albumStore.loadAlbums();
+    await loadRotationSettings();
   } finally {
     finishLoading();
   }
@@ -538,11 +540,17 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
 
 <style scoped lang="scss">
 .albums-page {
-  padding: 20px;
   height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  overflow: hidden;
+}
+
+.albums-scroll-container {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 20px;
 }
 
 

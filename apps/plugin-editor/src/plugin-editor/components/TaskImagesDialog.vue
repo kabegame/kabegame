@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" title="任务图片" width="92%" top="6vh" :append-to-body="true" :close-on-click-modal="true"
+  <el-dialog v-model="visible" title="任务图片" width="90vw" top="5vh" :append-to-body="true" :close-on-click-modal="true"
     class="task-images-dialog" @open="handleOpen" @closed="handleClosed">
     <div class="dialog-body">
       <div v-if="loading" class="loading">
@@ -13,6 +13,11 @@
         :context-menu-component="TaskImageContextMenu" :on-context-command="handleContextCommand" />
     </div>
   </el-dialog>
+
+  <!-- 删除/移除确认对话框（与 main Gallery 行为一致） -->
+  <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
+    :message="removeDialogMessage" title="确认删除" :confirm-loading="removeConfirmLoading"
+    @confirm="confirmRemoveImages" />
 </template>
 
 <script setup lang="ts">
@@ -20,18 +25,24 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { readFile } from "@tauri-apps/plugin-fs";
+import { ElMessage } from "element-plus";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import ImageGrid from "@kabegame/core/components/image/ImageGrid.vue";
+import ImageGrid, { type ContextCommandPayload } from "./ImageGrid.vue";
 import type { ImageUrlMap } from "@kabegame/core/types/image";
 import TaskImageContextMenu from "./TaskImageContextMenu.vue";
+import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 
 type ImageInfo = {
   id: string;
+  url?: string;
   localPath: string;
+  pluginId?: string;
   thumbnailPath?: string;
   taskId?: string | null;
+  crawledAt?: number;
+  metadata?: Record<string, string>;
 };
 
 type ImageAddedPayload = {
@@ -62,12 +73,18 @@ const brokenIds = new Set<string>();
 const ownedBlobUrls = new Set<string>();
 const gridRef = ref<any>(null);
 
+// 删除/移除确认对话框（main 同款）
+const showRemoveDialog = ref(false);
+const removeDeleteFiles = ref(false);
+const removeDialogMessage = ref("");
+const removeConfirmLoading = ref(false);
+const pendingRemoveImageIds = ref<string[]>([]);
+
 let unlistenImageAdded: null | (() => void) = null;
 
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
 const { imageGridColumns } = storeToRefs(uiStore);
-const { values } = storeToRefs(settingsStore);
 
 function markBroken(id: string) {
   brokenIds.add(id);
@@ -126,13 +143,99 @@ async function loadTaskImages() {
 
     const map: ImageUrlMap = {};
     for (const img of images.value) {
-      const p = (img.thumbnailPath || img.localPath || "").trim();
-      const u = await fileToSrc(p);
-      map[img.id] = { thumbnail: u, original: "" };
+      const thumbPath = (img.thumbnailPath || img.localPath || "").trim();
+      const origPath = (img.localPath || "").trim();
+      const thumbUrl = await fileToSrc(thumbPath);
+      // 列数<=2 时 ImageItem 会优先用 original；这里必须提供，行为才与 before-src 一致
+      // 若没有独立缩略图或原图路径异常，则尽量复用 thumbnail，避免重复读取文件
+      const origUrl =
+        origPath && origPath !== thumbPath ? await fileToSrc(origPath) : thumbUrl;
+      map[img.id] = { thumbnail: thumbUrl, original: origUrl };
     }
     imageUrlMap.value = map;
   } finally {
     loading.value = false;
+  }
+}
+
+function cleanupOwnedBlobUrls() {
+  for (const u of ownedBlobUrls) {
+    try {
+      URL.revokeObjectURL(u);
+    } catch {
+      // ignore
+    }
+  }
+  ownedBlobUrls.clear();
+}
+
+const revokeUrlsForIds = (ids: string[]) => {
+  const nextMap: ImageUrlMap = { ...(imageUrlMap.value || {}) };
+  for (const id of ids) {
+    const item = nextMap[id];
+    if (item?.thumbnail && item.thumbnail.startsWith("blob:")) {
+      try { URL.revokeObjectURL(item.thumbnail); } catch { }
+    }
+    if (item?.original && item.original.startsWith("blob:")) {
+      try { URL.revokeObjectURL(item.original); } catch { }
+    }
+    delete nextMap[id];
+  }
+  imageUrlMap.value = nextMap;
+};
+
+async function handleContextCommand(payload: ContextCommandPayload) {
+  const command = payload.command;
+  const image = payload.image as any;
+  const selectedSet =
+    "selectedImageIds" in payload && payload.selectedImageIds && payload.selectedImageIds.size > 0
+      ? payload.selectedImageIds
+      : new Set([image.id]);
+
+  switch (command) {
+    case "detail":
+      // 对齐 main：view 层 return 'detail'，由 ImageGrid wrapper 打开详情弹窗
+      return "detail";
+    case "remove": {
+      const ids = Array.from(selectedSet).map((x) => String(x));
+      pendingRemoveImageIds.value = ids.length > 0 ? ids : [String(image.id)];
+      const count = pendingRemoveImageIds.value.length;
+      removeDialogMessage.value = `将从列表${count > 1 ? `移除这 ${count} 张图片` : "移除这张图片"}。`;
+      removeDeleteFiles.value = false; // 默认不删除文件（对齐 main）
+      showRemoveDialog.value = true;
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
+async function confirmRemoveImages() {
+  const ids = pendingRemoveImageIds.value || [];
+  if (ids.length === 0) {
+    showRemoveDialog.value = false;
+    return;
+  }
+
+  removeConfirmLoading.value = true;
+  try {
+    if (removeDeleteFiles.value) {
+      await invoke("batch_delete_images", { imageIds: ids });
+    } else {
+      await invoke("batch_remove_images", { imageIds: ids });
+    }
+
+    // 本地同步列表（对齐 main：尽量不全量 reload，避免闪烁）
+    const idSet = new Set(ids);
+    images.value = images.value.filter((img) => !idSet.has(String(img.id)));
+    revokeUrlsForIds(ids);
+    gridRef.value?.clearSelection?.();
+
+    ElMessage.success(`已${removeDeleteFiles.value ? "删除" : "移除"} ${ids.length} 张图片`);
+  } finally {
+    removeConfirmLoading.value = false;
+    showRemoveDialog.value = false;
+    pendingRemoveImageIds.value = [];
   }
 }
 
@@ -153,10 +256,14 @@ async function startListeners() {
     };
 
     images.value = [...images.value, img];
-    const u = await fileToSrc((img.thumbnailPath || img.localPath || "").trim());
+    const thumbPath = (img.thumbnailPath || img.localPath || "").trim();
+    const origPath = (img.localPath || "").trim();
+    const thumbUrl = await fileToSrc(thumbPath);
+    const origUrl =
+      origPath && origPath !== thumbPath ? await fileToSrc(origPath) : thumbUrl;
     imageUrlMap.value = {
       ...imageUrlMap.value,
-      [img.id]: { thumbnail: u, original: "" },
+      [img.id]: { thumbnail: thumbUrl, original: origUrl },
     };
   });
 }
@@ -168,11 +275,6 @@ function stopListeners() {
     // ignore
   }
   unlistenImageAdded = null;
-}
-
-async function handleContextCommand(_payload: any) {
-  // plugin-editor：目前仅用于展示/预览，不在这里落地右键业务（避免依赖 main 的后端命令集）
-  return null;
 }
 
 async function handleOpen() {
@@ -191,15 +293,7 @@ function handleClosed() {
   stopListeners();
   images.value = [];
   imageUrlMap.value = {};
-  // 释放本对话框创建的 blob url，避免内存泄漏
-  for (const u of ownedBlobUrls) {
-    try {
-      URL.revokeObjectURL(u);
-    } catch {
-      // ignore
-    }
-  }
-  ownedBlobUrls.clear();
+  cleanupOwnedBlobUrls();
 }
 
 watch(
@@ -218,37 +312,9 @@ onBeforeUnmount(() => {
 });
 </script>
 
-<style scoped>
-.dialog-body {
-  height: 72vh;
-  overflow: auto;
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(v-bind(imageGridColumns), minmax(0, 1fr));
-  gap: 10px;
-  padding: 8px;
-}
-
-.cell {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.03);
-  cursor: pointer;
-}
-
-.thumb {
-  width: 100%;
-  height: 140px;
-  object-fit: cover;
-  display: block;
-}
-
-.preview-img {
-  width: 100%;
-  height: auto;
-  display: block;
+<style>
+.task-images-dialog {
+  height: 90vh;
+  overflow-y: auto;
 }
 </style>

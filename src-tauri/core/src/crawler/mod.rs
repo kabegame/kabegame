@@ -22,6 +22,35 @@ use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
 use zip::ZipArchive;
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskLogEvent {
+    pub task_id: String,
+    pub level: String,
+    pub message: String,
+    pub ts: u64,
+}
+
+pub fn emit_task_log(app: &AppHandle, task_id: &str, level: &str, message: impl Into<String>) {
+    let task_id = task_id.trim();
+    if task_id.is_empty() {
+        return;
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let _ = app.emit(
+        "task-log",
+        TaskLogEvent {
+            task_id: task_id.to_string(),
+            level: level.to_string(),
+            message: message.into(),
+            ts,
+        },
+    );
+}
+
 /// 创建配置了系统代理的 reqwest 客户端
 /// 自动从环境变量读取 HTTP_PROXY, HTTPS_PROXY, NO_PROXY 等配置
 #[allow(dead_code)]
@@ -613,20 +642,46 @@ fn compute_bytes_hash(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn sanitize_filename(name: &str, fallback_ext: &str) -> String {
-    let path = Path::new(name);
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("image");
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .filter(|e| !e.is_empty())
-        .unwrap_or(fallback_ext);
+/// Windows/跨平台安全的文件名长度上限（保守值，避免 Win32 ERROR_INVALID_NAME=123）
+/// - Windows 单个文件名通常上限为 255（UTF-16 code units）
+/// - 这里取更保守值，给 unique_path 的 “(n)” 与临时名后缀留空间
+const MAX_SAFE_FILENAME_LEN: usize = 180;
 
-    let clean_stem: String = stem
+fn short_hash8(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let full = format!("{:x}", hasher.finalize());
+    full.chars().take(8).collect()
+}
+
+fn clamp_ascii_len(s: &str, max_len: usize) -> &str {
+    if s.len() <= max_len {
+        return s;
+    }
+    // 这里的 stem 只包含 ASCII（sanitize 后），按字节切片安全
+    &s[..max_len]
+}
+
+fn is_windows_reserved_device_name(stem: &str) -> bool {
+    // https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+    let u = stem
+        .trim()
+        .trim_end_matches([' ', '.'])
+        .to_ascii_uppercase();
+    if matches!(u.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return true;
+    }
+    if (u.starts_with("COM") || u.starts_with("LPT")) && u.len() == 4 {
+        return matches!(
+            u.chars().nth(3),
+            Some('1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9')
+        );
+    }
+    false
+}
+
+fn sanitize_stem_for_filename(stem: &str) -> String {
+    let mut out: String = stem
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ' ' {
@@ -637,12 +692,62 @@ fn sanitize_filename(name: &str, fallback_ext: &str) -> String {
         })
         .collect();
 
-    let stem_final = if clean_stem.trim().is_empty() {
-        "image"
+    // 压缩空格，避免极长的连续空格
+    while out.contains("  ") {
+        out = out.replace("  ", " ");
+    }
+
+    // Windows 不允许末尾是空格/点
+    let out = out.trim().trim_end_matches([' ', '.']).to_string();
+
+    let mut out = if out.is_empty() {
+        "image".to_string()
     } else {
-        clean_stem.trim()
+        out
     };
-    format!("{}.{}", stem_final, ext)
+    if is_windows_reserved_device_name(&out) {
+        out = format!("_{}", out);
+    }
+    out
+}
+
+fn normalize_ext(ext: &str, fallback_ext: &str) -> String {
+    let e = ext.trim().trim_start_matches('.').trim();
+    let e = if e.is_empty() { fallback_ext.trim() } else { e };
+    let e = e.trim().trim_start_matches('.').trim();
+    if e.is_empty() {
+        "jpg".to_string()
+    } else {
+        e.to_ascii_lowercase()
+    }
+}
+
+/// 生成“安全且长度受控”的文件名：
+/// - 保留部分可读 stem
+/// - 追加稳定短 hash（基于 hash_source）避免碰撞
+/// - 总长度限制在 MAX_SAFE_FILENAME_LEN 内
+fn build_safe_filename(hint_filename: &str, fallback_ext: &str, hash_source: &str) -> String {
+    let path = Path::new(hint_filename);
+    let raw_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+    let raw_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+    let ext = normalize_ext(raw_ext, fallback_ext);
+    let stem = sanitize_stem_for_filename(raw_stem);
+    let h = short_hash8(hash_source);
+    let suffix = format!("-{}", h);
+
+    // stem + suffix + "." + ext <= MAX_SAFE_FILENAME_LEN
+    let reserve = suffix.len() + 1 + ext.len(); // 1 for '.'
+    let stem_max = MAX_SAFE_FILENAME_LEN.saturating_sub(reserve).max(1);
+    let stem_final = clamp_ascii_len(&stem, stem_max);
+
+    format!("{}{}.{}", stem_final, suffix, ext)
+}
+
+// 兼容旧调用点（目前不再使用）；保留以减少未来改动成本
+#[allow(dead_code)]
+fn sanitize_filename(name: &str, fallback_ext: &str) -> String {
+    build_safe_filename(name, fallback_ext, name)
 }
 
 fn unique_path(dir: &Path, filename: &str) -> PathBuf {
@@ -657,16 +762,73 @@ fn unique_path(dir: &Path, filename: &str) -> PathBuf {
 
     let mut idx = 1;
     loop {
-        let new_name = if ext.is_empty() {
-            format!("{}({})", stem, idx)
+        let suffix = format!("({})", idx);
+        let (stem_max, ext_part) = if ext.is_empty() {
+            (
+                MAX_SAFE_FILENAME_LEN.saturating_sub(suffix.len()).max(1),
+                String::new(),
+            )
         } else {
-            format!("{}({}).{}", stem, idx, ext)
+            (
+                MAX_SAFE_FILENAME_LEN
+                    .saturating_sub(suffix.len() + 1 + ext.len())
+                    .max(1),
+                format!(".{}", ext),
+            )
         };
+        let stem_final = clamp_ascii_len(stem, stem_max);
+        let new_name = format!("{}{}{}", stem_final, suffix, ext_part);
         candidate = dir.join(&new_name);
         if !candidate.exists() {
             return candidate;
         }
         idx += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_safe_filename_should_be_short_and_windows_safe() {
+        let url = "https://konachan.net/jpeg/22ddb4e9b6207ba3402e4642a95be066/Konachan.com%20-%20397362%200dd%202girls%20aqua_eyes%20arknights%20bell%20blush%20bow%20christmas%20dress%20hat%20headband%20horns%20long_hair%20moon%20pantyhose%20santa_hat%20scarf%20shorts%20snow%20tree%20white_hair.jpg";
+        let url_path = "Konachan.com%20-%20397362%200dd%202girls%20aqua_eyes%20arknights%20bell%20blush%20bow%20christmas%20dress%20hat%20headband%20horns%20long_hair%20moon%20pantyhose%20santa_hat%20scarf%20shorts%20snow%20tree%20white_hair.jpg";
+
+        let filename = build_safe_filename(url_path, "jpg", url);
+        assert!(
+            filename.len() <= MAX_SAFE_FILENAME_LEN,
+            "filename too long: {}",
+            filename.len()
+        );
+        assert!(filename.ends_with(".jpg"));
+        assert!(!filename.ends_with(' '));
+        assert!(!filename.ends_with('.'));
+        for c in ['<', '>', ':', '"', '/', '\\', '|', '?', '*'] {
+            assert!(
+                !filename.contains(c),
+                "filename contains invalid char {}: {}",
+                c,
+                filename
+            );
+        }
+    }
+
+    #[test]
+    fn unique_path_should_append_suffix_and_keep_length() {
+        let dir = std::env::temp_dir().join(format!("kabegame-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let filename = build_safe_filename("a-very-long-name.jpg", "jpg", "hash-source");
+        let p1 = dir.join(&filename);
+        fs::write(&p1, b"test").unwrap();
+
+        let p2 = unique_path(&dir, &filename);
+        assert_ne!(p1, p2);
+        let name2 = p2.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        assert!(name2.len() <= MAX_SAFE_FILENAME_LEN);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 
@@ -821,7 +983,11 @@ fn download_image(
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("image");
-        let filename = sanitize_filename(original_name, extension);
+        let filename = build_safe_filename(
+            original_name,
+            extension,
+            &source_path.to_string_lossy().to_string(),
+        );
         let target_path = unique_path(&target_dir, &filename);
 
         // 复制文件
@@ -870,9 +1036,8 @@ fn download_image(
             .and_then(|e| e.to_str())
             .unwrap_or("jpg");
 
-        let filename = sanitize_filename(url_path, extension);
+        let filename = build_safe_filename(url_path, extension, &url_clone);
         let file_path = unique_path(&target_dir, &filename);
-        let file_path_clone = file_path.clone();
 
         // 注意：download_image 由 download worker 线程调用，因此这里不再额外 spawn 一层线程。
         // 这样可以确保“并发下载数 x”真正对应 x 个 worker 的并发度。
@@ -925,14 +1090,8 @@ fn download_image(
                 let mut received_bytes: u64 = 0;
 
                 // 临时文件：避免中途失败留下半成品；成功后再 rename 到最终路径
-                let temp_name = format!(
-                    "{}.part-{}",
-                    file_path_clone
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("image"),
-                    uuid::Uuid::new_v4()
-                );
+                // 临时文件名必须“短且稳定格式”，避免 Windows 因路径/文件名过长报错 123
+                let temp_name = format!("__kg_tmp_{}.part", uuid::Uuid::new_v4());
                 let temp_path = target_dir_clone.join(temp_name);
 
                 let mut file = match std::fs::File::create(&temp_path) {
@@ -1798,6 +1957,19 @@ fn download_worker_loop(
                     );
                 }
                 Err(e) => {
+                    if !e.contains("Task canceled") {
+                        eprintln!("[下载失败] URL: {}, 错误: {}", url_clone, e);
+                        // 记录失败图片（用于 TaskDetail 展示 + 手动重试）
+                        // 说明：允许重复记录，因此这里不做去重。
+                        let storage = app_clone.state::<crate::storage::Storage>();
+                        let _ = storage.add_task_failed_image(
+                            &task_id_clone,
+                            &plugin_id_clone,
+                            &url_clone,
+                            download_start_time as i64,
+                            Some(e.as_str()),
+                        );
+                    }
                     emit_download_state(
                         &app_clone,
                         &task_id_clone,
@@ -1895,6 +2067,19 @@ fn download_worker_loop(
                 );
             }
             Err(e) => {
+                if !e.contains("Task canceled") {
+                    eprintln!("[下载失败] URL: {}, 错误: {}", url_clone, e);
+                    // 记录失败图片（用于 TaskDetail 展示 + 手动重试）
+                    // 说明：允许重复记录，因此这里不做去重。
+                    let storage = app_clone.state::<crate::storage::Storage>();
+                    let _ = storage.add_task_failed_image(
+                        &task_id_clone,
+                        &plugin_id_clone,
+                        &url_clone,
+                        download_start_time as i64,
+                        Some(e.as_str()),
+                    );
+                }
                 emit_download_state(
                     &app_clone,
                     &task_id_clone,

@@ -1,6 +1,6 @@
 import { watch } from "vue";
 import { useCrawlerStore } from "@/stores/crawler";
-import { useSettingsStore } from "@kabegame/core/src/stores/settings";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 /**
  * 画廊设置 composable

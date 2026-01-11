@@ -10,6 +10,7 @@
     "typecheck": "vue-tsc",
     "dev:frontend-main": "pnpm -C apps/main dev",
     "dev:frontend-plugin-editor": "pnpm -C apps/plugin-editor dev",
+    "build:frontend-cli": "pnpm -C apps/cli build",
     "build:frontend-main": "pnpm -C apps/main build",
     "build:frontend-plugin-editor": "pnpm -C apps/plugin-editor build",
     "package-plugin": "nx run crawler-plugins:package",
@@ -26,6 +27,7 @@
     "@vueuse/core": "^14.1.0",
     "axios": "^1.6.7",
     "element-plus": "^2.5.14",
+    "lodash-es": "^4.17.22",
     "monaco-editor": "^0.52.0",
     "pinia": "^2.1.7",
     "vue": "^3.4.21",
@@ -34,6 +36,7 @@
   "devDependencies": {
     "@nx/devkit": "^20.0.0",
     "@tauri-apps/cli": "^2.0",
+    "@types/lodash-es": "^4.17.12",
     "@vitejs/plugin-vue": "^5.0.4",
     "@vue/tsconfig": "^0.5.1",
     "archiver": "^7.0.1",

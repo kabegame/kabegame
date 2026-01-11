@@ -164,6 +164,8 @@ node package-plugin.js --outDir ../data/plugins-directory
 - `list_local_files(folder_url, extensions)` - 列出本地文件夹内的文件（非递归）。`folder_url` 应为 `file:///` 开头的 URL，`extensions` 为文件扩展名数组（不包含点号）。返回文件 URL 数组，错误时抛出异常
 
 **重要提示：**
+- 脚本作用域会自动注入 `config.json` 的变量（`var` 定义 + 用户输入）。
+- 如果 `config.json` 中存在 `baseUrl`，后端还会额外注入常量变量 `base_url`（字符串）。若用户配置/变量系统已提供同名 `base_url`，则不会被插件的 `baseUrl` 覆盖。
 - 脚本**不应该返回值**。如果需要提前退出，使用 `return;` 而不是 `return [];` 或 `return value;`
 - 图片应该通过 `download_image()` 函数添加到下载队列，而不是通过返回值
 

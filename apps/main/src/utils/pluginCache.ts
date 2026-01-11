@@ -5,11 +5,11 @@ interface BrowserPlugin {
   icon?: string;
   filePath?: string;
   doc?: string;
+  baseUrl?: string;
 }
 
 export interface CachedPluginData {
   plugin: BrowserPlugin;
-  renderedDoc: string;
 }
 
 // LRU 缓存实现

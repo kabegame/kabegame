@@ -1,14 +1,7 @@
 <template>
-  <CoreTaskImageContextMenu
-    :visible="visible"
-    :position="position"
-    :image="image"
-    :selected-count="selectedCount"
-    :selected-image-ids="selectedImageIds"
-    :hide="hideKeys"
-    @close="$emit('close')"
-    @command="$emit('command', $event)"
-  />
+  <CoreTaskImageContextMenu :visible="visible" :position="position" :image="image" :selected-count="selectedCount"
+    :selected-image-ids="selectedImageIds" :hide="hideKeys" @close="$emit('close')"
+    @command="$emit('command', $event)" />
 </template>
 
 <script setup lang="ts">
@@ -23,7 +16,7 @@ interface Props {
   selectedImageIds?: Set<string>;
 }
 
-const props = defineProps<Props>();
+defineProps<Props>();
 
 // plugin-editor 里只保留“详情/删除”类入口；其余命令需要 main 的后端命令集，暂时隐藏
 const hideKeys = computed(() => [
@@ -34,5 +27,3 @@ const hideKeys = computed(() => [
   "exportToWEAuto",
 ]);
 </script>
-
-

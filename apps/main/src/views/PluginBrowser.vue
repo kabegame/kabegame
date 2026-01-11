@@ -63,7 +63,6 @@
               </div>
 
               <div class="plugin-footer">
-                <el-switch v-model="plugin.enabled" @change="handleTogglePlugin(plugin)" @click.stop />
                 <el-button type="danger" size="small" v-if="!(isLocalMode && plugin.builtIn)"
                   @click.stop="handleDelete(plugin)">
                   卸载
@@ -926,15 +925,6 @@ const handleDelete = async (plugin: Plugin) => {
     ElMessage.success("插件已删除");
   } catch (error) {
     // 用户取消
-  }
-};
-
-const handleTogglePlugin = async (plugin: Plugin) => {
-  try {
-    await pluginStore.updatePlugin(plugin.id, { enabled: plugin.enabled });
-  } catch (error) {
-    ElMessage.error("更新失败");
-    plugin.enabled = !plugin.enabled; // 回滚
   }
 };
 

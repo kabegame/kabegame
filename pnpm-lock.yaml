@@ -32,6 +32,9 @@ importers:
       element-plus:
         specifier: ^2.5.14
         version: 2.13.0(vue@3.5.26(typescript@5.9.3))
+      lodash-es:
+        specifier: ^4.17.22
+        version: 4.17.22
       monaco-editor:
         specifier: ^0.52.0
         version: 0.52.2
@@ -51,6 +54,9 @@ importers:
       '@tauri-apps/cli':
         specifier: ^2.0
         version: 2.9.6
+      '@types/lodash-es':
+        specifier: ^4.17.12
+        version: 4.17.12
       '@vitejs/plugin-vue':
         specifier: ^5.0.4
         version: 5.2.4(vite@5.4.21(@types/node@25.0.3)(sass@1.97.1))(vue@3.5.26(typescript@5.9.3))
@@ -81,6 +87,37 @@ importers:
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vite:
+        specifier: ^5.1.4
+        version: 5.4.21(@types/node@25.0.3)(sass@1.97.1)
+      vue-tsc:
+        specifier: ^2.0.6
+        version: 2.2.12(typescript@5.9.3)
+
+  apps/cli:
+    dependencies:
+      '@tauri-apps/api':
+        specifier: ^2.0
+        version: 2.9.1
+      element-plus:
+        specifier: ^2.5.14
+        version: 2.13.0(vue@3.5.26(typescript@5.9.3))
+      vue:
+        specifier: ^3.4.21
+        version: 3.5.26(typescript@5.9.3)
+    devDependencies:
+      '@kabegame/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@vitejs/plugin-vue':
+        specifier: ^5.0.4
+        version: 5.2.4(vite@5.4.21(@types/node@25.0.3)(sass@1.97.1))(vue@3.5.26(typescript@5.9.3))
+      '@vue/tsconfig':
+        specifier: ^0.5.1
+        version: 0.5.1
       typescript:
         specifier: ^5.4.5
         version: 5.9.3
@@ -178,12 +215,33 @@ importers:
       monaco-editor:
         specifier: ^0.52.0
         version: 0.52.2
+      monaco-editor-textmate:
+        specifier: ^4.0.0
+        version: 4.0.0(monaco-editor@0.52.2)(monaco-textmate@3.0.1(onigasm@2.2.5))
+      monaco-textmate:
+        specifier: ^3.0.1
+        version: 3.0.1(onigasm@2.2.5)
+      monaco-themes:
+        specifier: ^0.4.4
+        version: 0.4.8
+      onigasm:
+        specifier: ^2.2.5
+        version: 2.2.5
       pinia:
         specifier: ^2.1.7
         version: 2.3.1(typescript@5.9.3)(vue@3.5.26(typescript@5.9.3))
+      vscode-oniguruma:
+        specifier: ^2.0.1
+        version: 2.0.1
+      vscode-rhai:
+        specifier: github:rhaiscript/vscode-rhai
+        version: https://codeload.github.com/rhaiscript/vscode-rhai/tar.gz/45b8671667b9999e09632c1490e885fd048b75c1
       vue:
         specifier: ^3.4.21
         version: 3.5.26(typescript@5.9.3)
+      vue-advanced-cropper:
+        specifier: ^2.0.0
+        version: 2.8.9(vue@3.5.26(typescript@5.9.3))
       vue-router:
         specifier: ^4.3.0
         version: 4.6.4(vue@3.5.26(typescript@5.9.3))
@@ -1152,6 +1210,9 @@ packages:
     resolution: {integrity: sha512-Qgzu8kfBvo+cA4962jnP1KkS6Dop5NS6g7R5LFYJr4b8Ub94PPQXUksCw9PvXoeXPRRddRNC5C1JQUR2SMGtnA==}
     engines: {node: '>= 14.16.0'}
 
+  classnames@2.5.1:
+    resolution: {integrity: sha512-saHYOzhIQs6wy2sVxTM6bUDsQO4F50V9RQ22qBpEdCW+I+/Wmke2HOl6lS6dTpdxVhb88/I6+Hs+438c3lfUow==}
+
   cli-cursor@3.1.0:
     resolution: {integrity: sha512-I/zHAwsKf9FqGoXM4WWRACob9+SNukZTd94DWF57E4toouRulbCxcUh6RKUEOQlYTHJnzkPMySvPNaaSLNfLZw==}
     engines: {node: '>=8'}
@@ -1215,6 +1276,9 @@ packages:
   de-indent@1.0.2:
     resolution: {integrity: sha512-e/1zu3xH5MQryN2zdVaF0OrdNLUbvWxzMbi+iNA6Bky7l1RoP8a2fIbRocyHclXt/arDrrR6lL3TqFD9pMQTsg==}
 
+  debounce@1.2.1:
+    resolution: {integrity: sha512-XRRe6Glud4rd/ZGQfiV1ruXSfbvfJedlV9Y6zOlP+2K04vBYiJEte6stfFkCP03aMnY5tsipamumUjL14fofug==}
+
   debug@4.4.3:
     resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
     engines: {node: '>=6.0'}
@@ -1262,6 +1326,9 @@ packages:
 
   eastasianwidth@0.2.0:
     resolution: {integrity: sha512-I88TYZWc9XiYHRQ4/3c5rjjfgkjhLyW2luGIheGERbNQ6OY7yTybanSpDXZa8y7VUP9YmDcYa+eyq4ca7iLqWA==}
+
+  easy-bem@1.1.1:
+    resolution: {integrity: sha512-GJRqdiy2h+EXy6a8E6R+ubmqUM08BK0FWNq41k24fup6045biQ8NXxoXimiwegMQvFFV3t1emADdGNL1TlS61A==}
 
   ejs@3.1.10:
     resolution: {integrity: sha512-UeJmFfOrAQS8OJWPZ4qtgHyWExa088/MtK5UEyoJGFH67cDEXkZSviOiKRCZ4Xij0zxI3JECgYs3oKx+AizQBA==}
@@ -1340,6 +1407,9 @@ packages:
 
   fast-fifo@1.3.2:
     resolution: {integrity: sha512-/d9sfos4yxzpwkDkuN7k2SqFKtYNmCTzgfEpz82x34IM9/zc8KGxQoXg1liNC/izpRM/MBdt44Nmx41ZWqk+FQ==}
+
+  fast-plist@0.1.3:
+    resolution: {integrity: sha512-d9cEfo/WcOezgPLAC/8t8wGb6YOD6JTCPMw2QcG2nAdFmyY+9rTUizCTaGjIZAloWENTEUMAPpkUAIJJJ0i96A==}
 
   figures@3.2.0:
     resolution: {integrity: sha512-yaduQFRKLXYOGgEn6AZau90j3ggSOyiqXU0F9JZfeXYhNa+Jk4X+s45A2zg5jns87GAFa34BBm2kXw4XpNcbdg==}
@@ -1562,6 +1632,9 @@ packages:
   lru-cache@10.4.3:
     resolution: {integrity: sha512-JNAzZcXrCt42VGLuYz0zfAzDfAvJWW6AfYlDBQyDV5DClI2m5sAmK+OIO7s59XfsRsWHp02jAJrRadPRGTt6SQ==}
 
+  lru-cache@5.1.1:
+    resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
+
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
@@ -1610,8 +1683,23 @@ packages:
     resolution: {integrity: sha512-qOOzS1cBTWYF4BH8fVePDBOO9iptMnGUEZwNc/cMWnTV2nVLZ7VoNWEPHkYczZA0pdoA7dl6e7FL659nX9S2aw==}
     engines: {node: '>=16 || 14 >=14.17'}
 
+  monaco-editor-textmate@4.0.0:
+    resolution: {integrity: sha512-Clwup5LJzVfwURQrS+odSEC5/hZBEG36pQnvBKt4OtBndF8r2xLeXUZcK/AqEBK2u0Npy7frFp9hG7m66Ol9hA==}
+    peerDependencies:
+      monaco-editor: 0.x.x
+      monaco-textmate: ^3.0.0
+
   monaco-editor@0.52.2:
     resolution: {integrity: sha512-GEQWEZmfkOGLdd3XK8ryrfWz3AIP8YymVXiPHEdewrUq7mh0qrKrfHLNCXcbB6sTnMLnOZ3ztSiKcciFUkIJwQ==}
+
+  monaco-textmate@3.0.1:
+    resolution: {integrity: sha512-ZxxY3OsqUczYP1sGqo97tu+CJmMBwuSW+dL0WEBdDhOZ5G1zntw72hvBc68ZQAirosWvbDKgN1dL5k173QtFww==}
+    peerDependencies:
+      onigasm: ^2.0.0
+
+  monaco-themes@0.4.8:
+    resolution: {integrity: sha512-QEDCwl5XUMPPpsg8TVNfi1VKIDtMsMTJAhUfxHSZ6hzkEfZgfTK2hicwyzkDKhAhrpMkHkwMtG13ynvdztJesw==}
+    engines: {node: '>=22.0.0'}
 
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
@@ -1664,6 +1752,9 @@ packages:
   onetime@5.1.2:
     resolution: {integrity: sha512-kbpaSSGJTWdAY5KPVeMOKXSrPtr8C8C7wodJbcsd51jRnmD+GZu8Y0VoU6Dm5Z4vWr0Ig/1NKuWRKf7j5aaYSg==}
     engines: {node: '>=6'}
+
+  onigasm@2.2.5:
+    resolution: {integrity: sha512-F+th54mPc0l1lp1ZcFMyL/jTs2Tlq4SqIHKIXGZOR/VkHkF9A7Fr5rRr5+ZG/lWeRsyrClLYRq7s/yFQ/XhWCA==}
 
   open@8.4.2:
     resolution: {integrity: sha512-7x81NCL719oNbsq/3mh+hVrAWmFuEYUqrq/Iw3kUzH8ReypT9QQ0BLoJS7/G9k6N81XjW4qHWtjWwe/9eLy1EQ==}
@@ -1775,6 +1866,10 @@ packages:
   sass@1.97.1:
     resolution: {integrity: sha512-uf6HoO8fy6ClsrShvMgaKUn14f2EHQLQRtpsZZLeU/Mv0Q1K5P0+x2uvH6Cub39TVVbWNSrraUhDAoFph6vh0A==}
     engines: {node: '>=14.0.0'}
+    hasBin: true
+
+  semver@6.3.1:
+    resolution: {integrity: sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA==}
     hasBin: true
 
   semver@7.7.3:
@@ -1923,8 +2018,36 @@ packages:
       terser:
         optional: true
 
+  vscode-jsonrpc@5.0.1:
+    resolution: {integrity: sha512-JvONPptw3GAQGXlVV2utDcHx0BiY34FupW/kI6mZ5x06ER5DdPG/tXWMVHjTNULF5uKPOUUD0SaXg5QaubJL0A==}
+    engines: {node: '>=8.0.0 || >=10.0.0'}
+
+  vscode-languageclient@6.1.4:
+    resolution: {integrity: sha512-EUOU+bJu6axmt0RFNo3nrglQLPXMfanbYViJee3Fbn2VuQoX0ZOI4uTYhSRvYLP2vfwTP/juV62P/mksCdTZMA==}
+    engines: {vscode: ^1.41.0}
+
+  vscode-languageserver-protocol@3.15.3:
+    resolution: {integrity: sha512-zrMuwHOAQRhjDSnflWdJG+O2ztMWss8GqUUB8dXLR/FPenwkiBNkMIJJYfSN6sgskvsF0rHAoBowNQfbyZnnvw==}
+
+  vscode-languageserver-types@3.15.1:
+    resolution: {integrity: sha512-+a9MPUQrNGRrGU630OGbYVQ+11iOIovjCkqxajPa9w57Sd5ruK8WQNsslzpa0x/QJqC8kRc2DUxWjIFwoNm4ZQ==}
+
+  vscode-oniguruma@2.0.1:
+    resolution: {integrity: sha512-poJU8iHIWnC3vgphJnrLZyI3YdqRlR27xzqDmpPXYzA93R4Gk8z7T6oqDzDoHjoikA2aS82crdXFkjELCdJsjQ==}
+
+  vscode-rhai@https://codeload.github.com/rhaiscript/vscode-rhai/tar.gz/45b8671667b9999e09632c1490e885fd048b75c1:
+    resolution: {tarball: https://codeload.github.com/rhaiscript/vscode-rhai/tar.gz/45b8671667b9999e09632c1490e885fd048b75c1}
+    version: 0.6.9
+    engines: {vscode: ^1.30.0}
+
   vscode-uri@3.1.0:
     resolution: {integrity: sha512-/BpdSx+yCQGnCvecbyXdxHDkuk55/G3xwnC0GqY4gmQ3j+A+g8kzzgB4Nk/SINjqn6+waqw3EgbVF2QKExkRxQ==}
+
+  vue-advanced-cropper@2.8.9:
+    resolution: {integrity: sha512-1jc5gO674kVGpJKekoaol6ZlwaF5VYDLSBwBOUpViW0IOrrRsyLw6XNszjEqgbavvqinlKNS6Kqlom3B5M72Tw==}
+    engines: {node: '>=8', npm: '>=5'}
+    peerDependencies:
+      vue: ^3.0.0
 
   vue-demi@0.14.10:
     resolution: {integrity: sha512-nMZBOwuzabUO0nLgIcc6rycZEebF6eeUfaiQx9+WSk8e29IbLvPU9feI6tqW4kTo3hvoYAJkMh8n8D0fuISphg==}
@@ -1978,6 +2101,9 @@ packages:
   y18n@5.0.8:
     resolution: {integrity: sha512-0pfFzegeDWJHJIAmTLRP2DwHjdF5s7jo9tuztdQxAhINCdvS+3nGINqPd00AphqJR/0LhANUS6/+7SCb98YOfA==}
     engines: {node: '>=10'}
+
+  yallist@3.1.1:
+    resolution: {integrity: sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==}
 
   yaml@2.8.2:
     resolution: {integrity: sha512-mplynKqc1C2hTVYxd0PU2xQAc22TI1vShAYGksCCfxbn/dFwnHTNi1bvYsBTkhdUNtGIf5xNOg938rrSSYvS9A==}
@@ -2758,6 +2884,8 @@ snapshots:
     dependencies:
       readdirp: 4.1.2
 
+  classnames@2.5.1: {}
+
   cli-cursor@3.1.0:
     dependencies:
       restore-cursor: 3.1.0
@@ -2815,6 +2943,8 @@ snapshots:
 
   de-indent@1.0.2: {}
 
+  debounce@1.2.1: {}
+
   debug@4.4.3(supports-color@5.5.0):
     dependencies:
       ms: 2.1.3
@@ -2849,6 +2979,8 @@ snapshots:
       gopd: 1.2.0
 
   eastasianwidth@0.2.0: {}
+
+  easy-bem@1.1.1: {}
 
   ejs@3.1.10:
     dependencies:
@@ -2948,6 +3080,8 @@ snapshots:
   events@3.3.0: {}
 
   fast-fifo@1.3.2: {}
+
+  fast-plist@0.1.3: {}
 
   figures@3.2.0:
     dependencies:
@@ -3137,6 +3271,10 @@ snapshots:
 
   lru-cache@10.4.3: {}
 
+  lru-cache@5.1.1:
+    dependencies:
+      yallist: 3.1.1
+
   magic-string@0.30.21:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
@@ -3179,7 +3317,21 @@ snapshots:
 
   minipass@7.1.2: {}
 
+  monaco-editor-textmate@4.0.0(monaco-editor@0.52.2)(monaco-textmate@3.0.1(onigasm@2.2.5)):
+    dependencies:
+      monaco-editor: 0.52.2
+      monaco-textmate: 3.0.1(onigasm@2.2.5)
+
   monaco-editor@0.52.2: {}
+
+  monaco-textmate@3.0.1(onigasm@2.2.5):
+    dependencies:
+      fast-plist: 0.1.3
+      onigasm: 2.2.5
+
+  monaco-themes@0.4.8:
+    dependencies:
+      fast-plist: 0.1.3
 
   ms@2.1.3: {}
 
@@ -3270,6 +3422,10 @@ snapshots:
   onetime@5.1.2:
     dependencies:
       mimic-fn: 2.1.0
+
+  onigasm@2.2.5:
+    dependencies:
+      lru-cache: 5.1.1
 
   open@8.4.2:
     dependencies:
@@ -3417,6 +3573,8 @@ snapshots:
       source-map-js: 1.2.1
     optionalDependencies:
       '@parcel/watcher': 2.5.1
+
+  semver@6.3.1: {}
 
   semver@7.7.3: {}
 
@@ -3574,7 +3732,34 @@ snapshots:
       fsevents: 2.3.3
       sass: 1.97.1
 
+  vscode-jsonrpc@5.0.1: {}
+
+  vscode-languageclient@6.1.4:
+    dependencies:
+      semver: 6.3.1
+      vscode-languageserver-protocol: 3.15.3
+
+  vscode-languageserver-protocol@3.15.3:
+    dependencies:
+      vscode-jsonrpc: 5.0.1
+      vscode-languageserver-types: 3.15.1
+
+  vscode-languageserver-types@3.15.1: {}
+
+  vscode-oniguruma@2.0.1: {}
+
+  vscode-rhai@https://codeload.github.com/rhaiscript/vscode-rhai/tar.gz/45b8671667b9999e09632c1490e885fd048b75c1:
+    dependencies:
+      vscode-languageclient: 6.1.4
+
   vscode-uri@3.1.0: {}
+
+  vue-advanced-cropper@2.8.9(vue@3.5.26(typescript@5.9.3)):
+    dependencies:
+      classnames: 2.5.1
+      debounce: 1.2.1
+      easy-bem: 1.1.1
+      vue: 3.5.26(typescript@5.9.3)
 
   vue-demi@0.14.10(vue@3.5.26(typescript@5.9.3)):
     dependencies:
@@ -3624,6 +3809,8 @@ snapshots:
   wrappy@1.0.2: {}
 
   y18n@5.0.8: {}
+
+  yallist@3.1.1: {}
 
   yaml@2.8.2: {}
 

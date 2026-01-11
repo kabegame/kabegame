@@ -1,5 +1,6 @@
 use crate::settings::Settings;
-use crate::storage::{DedupeCursor, Storage};
+use crate::storage::Storage;
+use crate::storage::dedupe::DedupeCursor;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{

@@ -33,7 +33,7 @@
             <el-form-item label="选择源">
                 <el-select v-model="form.pluginId" placeholder="请选择源" style="width: 100%"
                     popper-class="crawl-plugin-select-dropdown">
-                    <el-option v-for="plugin in enabledPlugins" :key="plugin.id" :label="plugin.name"
+                    <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name"
                         :value="plugin.id">
                         <div class="plugin-option">
                             <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]"
@@ -91,8 +91,9 @@
                 <el-form-item v-for="varDef in pluginVars" :key="varDef.key" :label="varDef.name"
                     :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
                     <el-input-number v-if="varDef.type === 'int' || varDef.type === 'float'"
-                        v-model="form.vars[varDef.key]" :min="varDef.min !== undefined ? varDef.min : undefined"
-                        :max="varDef.max !== undefined ? varDef.max : undefined"
+                        v-model="form.vars[varDef.key]"
+                        :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
+                        :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
                         :placeholder="varDef.descripts || `请输入${varDef.name}`" style="width: 100%" />
                     <el-select v-else-if="varDef.type === 'options'" v-model="form.vars[varDef.key]"
                         :placeholder="varDef.descripts || `请选择${varDef.name}`" style="width: 100%">
@@ -221,7 +222,7 @@ const visible = computed({
     set: (v) => emit("update:modelValue", v),
 });
 
-const enabledPlugins = computed(() => pluginStore.plugins.filter((p) => p.enabled));
+const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);
 const albums = computed(() => albumStore.albums);
 

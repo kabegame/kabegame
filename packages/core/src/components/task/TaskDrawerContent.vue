@@ -19,26 +19,18 @@
               <div class="download-url" :title="download.url">{{ download.url }}</div>
               <div class="download-meta">
                 <el-tag size="small" type="info">{{ download.plugin_id }}</el-tag>
-                <span
-                  v-if="isShimmerState(download)"
-                  class="download-state-text shimmer-text"
-                  :title="downloadStateText(download)"
-                >
+                <span v-if="isShimmerState(download)" class="download-state-text shimmer-text"
+                  :title="downloadStateText(download)">
                   {{ downloadStateText(download) }}
                 </span>
                 <el-tag v-else size="small" :type="downloadStateTagType(download)">
                   {{ downloadStateText(download) }}
                 </el-tag>
               </div>
-              <div
-                v-if="shouldShowDownloadProgress(download) && downloadProgressText(download)"
-                class="download-progress"
-              >
-                <el-progress
-                  :percentage="downloadProgressPercent(download)"
-                  :format="() => downloadProgressText(download)!"
-                  :stroke-width="10"
-                />
+              <div v-if="shouldShowDownloadProgress(download) && downloadProgressText(download)"
+                class="download-progress">
+                <el-progress :percentage="downloadProgressPercent(download)"
+                  :format="() => downloadProgressText(download)!" :stroke-width="10" />
               </div>
             </div>
           </div>
@@ -48,24 +40,14 @@
 
     <div class="tasks-summary">
       <span>共 {{ tasks.length }} 个任务</span>
-      <el-button
-        text
-        size="small"
-        class="clear-completed-btn"
-        :disabled="nonRunningTasksCount === 0"
-        @click="$emit('clear-finished-tasks')"
-      >
+      <el-button text size="small" class="clear-completed-btn" :disabled="nonRunningTasksCount === 0"
+        @click="$emit('clear-finished-tasks')">
         清除所有任务 ({{ nonRunningTasksCount }})
       </el-button>
     </div>
     <transition-group name="task-move" tag="div" class="tasks-list">
-      <div
-        v-for="task in tasks"
-        :key="task.id"
-        class="task-item"
-        :class="{ 'task-item-failed': task.status === 'failed' }"
-        @contextmenu="(e) => handleTaskContextMenu(e, task)"
-      >
+      <div v-for="task in tasks" :key="task.id" class="task-item"
+        :class="{ 'task-item-failed': task.status === 'failed' }" @contextmenu="(e) => handleTaskContextMenu(e, task)">
         <div class="task-close">
           <el-button text circle size="small" class="close-btn" title="删除任务" @click="$emit('delete-task', task.id)">
             <el-icon>
@@ -78,14 +60,16 @@
             <div class="task-name">{{ getPluginName(task.pluginId) }}</div>
           </div>
           <div class="task-header-right">
-            <el-button
-              text
-              circle
-              size="small"
-              class="task-detail-btn"
-              title="查看任务图片"
-              @click.stop="$emit('open-task-images', task.id)"
-            >
+            <el-badge v-if="task.rhaiDumpPresent && !task.rhaiDumpConfirmed" is-dot class="task-dump-badge">
+              <el-button text circle size="small" class="task-dump-confirm-btn" title="该任务已保存 Rhai 变量 dump，点击确认已查看"
+                @click.stop="emit('confirm-task-dump', task.id)">
+                <el-icon>
+                  <Document />
+                </el-icon>
+              </el-button>
+            </el-badge>
+            <el-button text circle size="small" class="task-detail-btn" title="查看任务图片"
+              @click.stop="$emit('open-task-images', task.id)">
               <el-icon>
                 <Picture />
               </el-icon>
@@ -129,9 +113,10 @@
             </div>
             <div v-if="task.startTime" class="param-item">
               <span class="param-label">耗时：</span>
-              <span class="param-value">{{ formatDuration(task.startTime, task.endTime) }}</span>
+              <span class="param-value">{{ formatDuration(task.startTime, task.endTime != null ? task.endTime :
+                undefined) }}</span>
             </div>
-            <div v-if="task.deletedCount > 0" class="param-item">
+            <div v-if="(task.deletedCount ?? 0) > 0" class="param-item">
               <span class="param-label">已删除：</span>
               <span class="param-value">{{ task.deletedCount }} 张</span>
             </div>
@@ -170,7 +155,8 @@
         </div>
 
         <div v-if="task.status === 'running'" class="task-progress">
-          <el-progress :percentage="Math.round(task.progress)" :status="task.status === 'running' ? undefined : 'success'" />
+          <el-progress :percentage="Math.round(task.progress)"
+            :status="task.status === 'running' ? undefined : 'success'" />
           <div class="progress-footer">
             <el-button text size="small" type="warning" class="stop-btn" @click.stop="$emit('cancel-task', task.id)">
               停止
@@ -179,7 +165,8 @@
         </div>
 
         <!-- 展开/收起箭头：底部整条都是触发区域 -->
-        <div class="task-expand-bottom" role="button" tabindex="0" @click.stop="toggleTaskExpand(task.id, task.pluginId)">
+        <div class="task-expand-bottom" role="button" tabindex="0"
+          @click.stop="toggleTaskExpand(task.id, task.pluginId)">
           <el-icon :class="{ 'rotate-180': expandedTasks.has(task.id) }">
             <ArrowDown />
           </el-icon>
@@ -190,9 +177,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import { ArrowDown, Clock, Close, CopyDocument, Picture, WarningFilled } from "@element-plus/icons-vue";
+import { ArrowDown, Clock, Close, CopyDocument, Document, Picture, WarningFilled } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 
 type VarOption = string | { name: string; variable: string };
@@ -214,6 +201,9 @@ type ScriptTask = {
   startTime?: number | null;
   endTime?: number | null;
   error?: string | null;
+  rhaiDumpPresent?: boolean;
+  rhaiDumpConfirmed?: boolean;
+  rhaiDumpCreatedAt?: number | null;
 };
 
 type ActiveDownloadInfo = {
@@ -264,6 +254,7 @@ const emit = defineEmits<{
   (e: "delete-task", taskId: string): void;
   (e: "cancel-task", taskId: string): void;
   (e: "open-task-images", taskId: string): void;
+  (e: "confirm-task-dump", taskId: string): void;
   (e: "clear-finished-tasks"): void;
   (e: "task-contextmenu", payload: { x: number; y: number; task: ScriptTask }): void;
 }>();
@@ -684,12 +675,10 @@ onUnmounted(() => {
 
               .shimmer-text {
                 color: var(--anime-text-primary);
-                background: linear-gradient(
-                  90deg,
-                  rgba(255, 255, 255, 0.15) 0%,
-                  rgba(255, 255, 255, 0.85) 50%,
-                  rgba(255, 255, 255, 0.15) 100%
-                );
+                background: linear-gradient(90deg,
+                    rgba(255, 255, 255, 0.15) 0%,
+                    rgba(255, 255, 255, 0.85) 50%,
+                    rgba(255, 255, 255, 0.15) 100%);
                 background-size: 200% 100%;
                 -webkit-background-clip: text;
                 background-clip: text;
@@ -1071,6 +1060,7 @@ onUnmounted(() => {
   0% {
     background-position: 200% 0;
   }
+
   100% {
     background-position: -200% 0;
   }
@@ -1096,4 +1086,3 @@ onUnmounted(() => {
   transform: translateY(-6px);
 }
 </style>
-

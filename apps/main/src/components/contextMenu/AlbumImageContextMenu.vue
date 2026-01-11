@@ -2,7 +2,7 @@
   <SingleImageContextMenu v-if="selectedCount === 1" :visible="visible" :position="position" :image="image"
     remove-text="从画册移除" @close="$emit('close')" @command="$emit('command', $event)" />
   <MultiImageContextMenu v-else :visible="visible" :position="position" :image="image" :selected-count="selectedCount"
-    :is-image-selected="isImageSelected" :simplified="true" remove-text="从画册移除" @close="$emit('close')"
+    :is-image-selected="isImageSelected" remove-text="从画册移除" @close="$emit('close')"
     @command="$emit('command', $event)" />
 </template>
 

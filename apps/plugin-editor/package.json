@@ -7,8 +7,8 @@
     "build": "vue-tsc && vite build --config vite.config.ts"
   },
   "dependencies": {
-    "@kabegame/core": "workspace:*",
     "@element-plus/icons-vue": "^2.3.1",
+    "@kabegame/core": "workspace:*",
     "@tauri-apps/api": "^2.0",
     "@tauri-apps/plugin-dialog": "^2.0",
     "@tauri-apps/plugin-fs": "^2.0",
@@ -16,7 +16,14 @@
     "@vueuse/core": "^14.1.0",
     "element-plus": "^2.5.14",
     "monaco-editor": "^0.52.0",
+    "monaco-editor-textmate": "^4.0.0",
+    "monaco-textmate": "^3.0.1",
+    "monaco-themes": "^0.4.4",
+    "onigasm": "^2.2.5",
     "pinia": "^2.1.7",
+    "vue-advanced-cropper": "^2.0.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-rhai": "github:rhaiscript/vscode-rhai",
     "vue": "^3.4.21",
     "vue-router": "^4.3.0"
   },

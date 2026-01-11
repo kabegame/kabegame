@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { ImageInfo } from "./crawler";
-import { useSettingsStore } from "./settings";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useCrawlerStore } from "./crawler";
 
 export interface Album {
@@ -43,10 +43,7 @@ export const useAlbumStore = defineStore("albums", () => {
     }
   };
 
-  const createAlbum = async (
-    name: string,
-    opts: { reload?: boolean } = {}
-  ) => {
+  const createAlbum = async (name: string, opts: { reload?: boolean } = {}) => {
     const created = await invoke<Album>("add_album", { name });
 
     const reload = opts.reload ?? true;
@@ -56,7 +53,9 @@ export const useAlbumStore = defineStore("albums", () => {
     } else {
       // 轻量模式：避免在批量导入时反复全量 reload 造成 UI 卡顿
       const createdAt =
-        (created as any).created_at ?? (created as any).createdAt ?? created.createdAt;
+        (created as any).created_at ??
+        (created as any).createdAt ??
+        created.createdAt;
       // 避免重复插入
       if (!albums.value.some((a) => a.id === created.id)) {
         albums.value.unshift({ ...created, createdAt });
@@ -153,7 +152,9 @@ export const useAlbumStore = defineStore("albums", () => {
     // 如果是收藏画册，通知画廊等页面更新收藏状态
     if (albumId === FAVORITE_ALBUM_ID.value) {
       crawlerStore.images = crawlerStore.images.map((img) =>
-        imageIds.includes(img.id) ? ({ ...img, favorite: false } as ImageInfo) : img
+        imageIds.includes(img.id)
+          ? ({ ...img, favorite: false } as ImageInfo)
+          : img
       );
     }
     return removed;

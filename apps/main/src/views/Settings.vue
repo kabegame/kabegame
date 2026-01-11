@@ -53,7 +53,7 @@
                 <WallpaperModeSetting />
               </SettingRow>
 
-              <SettingRow label="Wallpaper Engine 目录" description="用于“导出并自动导入到 WE”">
+              <SettingRow v-if="IS_WINDOWS" label="Wallpaper Engine 目录" description="用于“导出并自动导入到 WE”">
                 <WallpaperEngineDirSetting />
               </SettingRow>
             </div>
@@ -110,6 +110,10 @@
                   :build-args="(v: boolean) => ({ enabled: v })" />
               </SettingRow>
 
+              <SettingRow v-if="IS_WINDOWS" label="画册盘" description="在资源管理器中以虚拟盘方式浏览画册（只读，支持重命名画册目录）">
+                <AlbumDriveSetting />
+              </SettingRow>
+
               <SettingRow label="图片点击行为" description="左键点击图片时的行为">
                 <SettingRadioControl setting-key="imageClickAction" command="set_image_click_action"
                   :build-args="(v: string) => ({ action: v })" :options="[
@@ -150,12 +154,12 @@ import { Refresh } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
-import { useSettingsStore } from "@kabegame/core/src/stores/settings";
-import SettingRow from "@/components/settings/SettingRow.vue";
-import SettingSwitchControl from "@/components/settings/controls/SettingSwitchControl.vue";
-import SettingNumberControl from "@/components/settings/controls/SettingNumberControl.vue";
-import SettingRadioControl from "@/components/settings/controls/SettingRadioControl.vue";
-import DefaultDownloadDirSetting from "@/components/settings/items/DefaultDownloadDirSetting.vue";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
+import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
+import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
+import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
+import SettingRadioControl from "@kabegame/core/components/settings/controls/SettingRadioControl.vue";
+import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
 import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
 import WallpaperRotationTargetSetting from "@/components/settings/items/WallpaperRotationTargetSetting.vue";
@@ -165,6 +169,8 @@ import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetti
 import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngineDirSetting.vue";
 import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetting.vue";
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
+import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
+import { IS_WINDOWS } from "@kabegame/core/env";
 
 // 使用 300ms 防闪屏加载延迟
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);

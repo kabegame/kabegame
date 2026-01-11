@@ -31,8 +31,16 @@ const root = path.resolve(__dirname, "..");
 const RESOURCES_PLUGINS_DIR = path.join(
   root,
   "src-tauri",
+  "app-main",
   "resources",
   "plugins"
+);
+const RESOURCES_BIN_DIR = path.join(
+  root,
+  "src-tauri",
+  "app-main",
+  "resources",
+  "bin"
 );
 
 const SRC_TAURI_DIR = path.join(root, "src-tauri");
@@ -41,6 +49,8 @@ const TAURI_APP_PLUGIN_EDITOR_DIR = path.join(
   SRC_TAURI_DIR,
   "app-plugin-editor"
 );
+
+const TAURI_APP_CLI_DIR = path.join(SRC_TAURI_DIR, "app-cli");
 
 function run(cmd, args, opts = {}) {
   const res = spawnSync(cmd, args, {
@@ -54,27 +64,43 @@ function run(cmd, args, opts = {}) {
   }
 }
 
-// 检测是否存在 rustc 工具链
-function rustHostTriple() {
-  const res = spawnSync("rustc", ["-vV"], {
-    encoding: "utf8",
-    cwd: root,
-    shell: process.platform === "win32",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (res.status !== 0) {
+function platformExeExt() {
+  return process.platform === "win32" ? ".exe" : "";
+}
+
+function ensureDir(p) {
+  fs.mkdirSync(p, { recursive: true });
+}
+
+/**
+ * Copy a release-built binary from src-tauri/target/release into src-tauri/resources/bin
+ * using fixed file names (no triple suffix). These will be shipped as normal resources
+ * inside the main installer, then moved to $INSTDIR root by NSIS installer hooks.
+ */
+function stageResourceBinary(binName) {
+  const ext = platformExeExt();
+  const src = path.join(SRC_TAURI_DIR, "target", "release", `${binName}${ext}`);
+  const dst = path.join(RESOURCES_BIN_DIR, `${binName}${ext}`);
+  if (!fs.existsSync(src)) {
     console.error(
-      chalk.red("❌ 读取 rustc host triple 失败，请确认已安装 Rust 工具链")
+      chalk.red(
+        `❌ 找不到 sidecar 源二进制: ${src}\n` +
+          `请确认已成功构建: cargo build --release -p <crate>`
+      )
     );
-    process.exit(res.status ?? 1);
-  }
-  const out = (res.stdout || "").toString();
-  const m = out.match(/^host:\s*(.+)$/m);
-  if (!m) {
-    console.error(chalk.red("❌ 无法从 `rustc -vV` 输出解析 host triple"));
     process.exit(1);
   }
-  return m[1].trim();
+  ensureDir(RESOURCES_BIN_DIR);
+  fs.copyFileSync(src, dst);
+  console.log(
+    chalk.cyan(`[build] Staged exe resource: ${path.relative(root, dst)}`)
+  );
+}
+
+function resourceBinaryExists(binName) {
+  const ext = platformExeExt();
+  const p = path.join(RESOURCES_BIN_DIR, `${binName}${ext}`);
+  return fs.existsSync(p);
 }
 
 function spawnProc(command, args, opts = {}) {
@@ -141,6 +167,13 @@ function parseComponent(raw) {
   return "unknown";
 }
 
+function getAppDir(component) {
+  if (component === "main") return TAURI_APP_MAIN_DIR;
+  if (component === "plugin-editor") return TAURI_APP_PLUGIN_EDITOR_DIR;
+  if (component === "cli") return TAURI_APP_CLI_DIR;
+  return null;
+}
+
 function dev(options) {
   const component = parseComponent(options.component);
   if (component === "unknown" || !component) {
@@ -187,8 +220,7 @@ function dev(options) {
     children.push(spawnProc("node", watchArgs, { env }));
   }
 
-  const appDir =
-    component === "main" ? TAURI_APP_MAIN_DIR : TAURI_APP_PLUGIN_EDITOR_DIR;
+  const appDir = getAppDir(component);
   console.log(chalk.blue(`[dev] Starting tauri dev: ${component}`));
   children.push(
     spawnProc("tauri", ["dev"], {
@@ -285,8 +317,7 @@ function start(options) {
     return;
   }
 
-  const appDir =
-    component === "main" ? TAURI_APP_MAIN_DIR : TAURI_APP_PLUGIN_EDITOR_DIR;
+  const appDir = getAppDir(component);
   console.log(
     chalk.blue(`[start] Starting tauri dev (no watch): ${component}`)
   );
@@ -325,20 +356,64 @@ function build(options) {
   const builtinPlugins = options.mode === "local" ? scanBuiltinPlugins() : [];
   const env = buildEnv(options, builtinPlugins);
 
-  if (wantMain) {
-    console.log(chalk.blue(`[build] Building app-main`));
-    run("tauri", ["build"], { cwd: TAURI_APP_MAIN_DIR, env });
-  }
+  // 为了“一个安装包包含三个 app”：默认(all)只打包 app-main 的安装包；
+  // plugin-editor/cli 的 exe 作为 resources/bin 资源随主程序一起被打包，
+  // 安装时通过 NSIS hooks 移动到安装根目录。
+
   if (wantEditor) {
-    console.log(chalk.blue(`[build] Building app-plugin-editor`));
-    run("tauri", ["build"], { cwd: TAURI_APP_PLUGIN_EDITOR_DIR, env });
-  }
-  if (wantCli) {
-    console.log(chalk.blue(`[build] Building cli`));
-    run("cargo", ["build", "-p", "kabegame-cli", "--release"], {
+    console.log(chalk.blue(`[build] Building plugin-editor frontend + binary`));
+    run("pnpm", ["-C", "apps/plugin-editor", "build"], { env });
+    run("cargo", ["build", "--release", "-p", "kabegame-plugin-editor"], {
       cwd: SRC_TAURI_DIR,
       env,
     });
+    stageResourceBinary("kabegame-plugin-editor");
+  }
+
+  if (wantCli) {
+    console.log(chalk.blue(`[build] Building cli frontend + binary`));
+    run("pnpm", ["-C", "apps/cli", "build"], { env });
+    run("cargo", ["build", "--release", "-p", "kabegame-cli"], {
+      cwd: SRC_TAURI_DIR,
+      env,
+    });
+    stageResourceBinary("kabegame-cli");
+    stageResourceBinary("kabegame-cliw");
+  }
+
+  // main 打包时，确保 sidecar exe 已就位（避免只 build -c main 时缺少资源）
+  if (wantMain) {
+    const needCli =
+      !resourceBinaryExists("kabegame-cli") ||
+      !resourceBinaryExists("kabegame-cliw");
+    if (needCli) {
+      console.log(
+        chalk.blue(
+          `[build] Ensuring cli resources exist (kabegame-cli + kabegame-cliw)`
+        )
+      );
+      run("cargo", ["build", "--release", "-p", "kabegame-cli"], {
+        cwd: SRC_TAURI_DIR,
+        env,
+      });
+      stageResourceBinary("kabegame-cli");
+      stageResourceBinary("kabegame-cliw");
+    }
+
+    const needEditor = !resourceBinaryExists("kabegame-plugin-editor");
+    if (needEditor) {
+      console.log(chalk.blue(`[build] Ensuring plugin-editor resource exists`));
+      run("cargo", ["build", "--release", "-p", "kabegame-plugin-editor"], {
+        cwd: SRC_TAURI_DIR,
+        env,
+      });
+      stageResourceBinary("kabegame-plugin-editor");
+    }
+  }
+
+  if (wantMain) {
+    console.log(chalk.blue(`[build] Building app-main (bundle installer)`));
+    run("tauri", ["build"], { cwd: TAURI_APP_MAIN_DIR, env });
   }
 }
 

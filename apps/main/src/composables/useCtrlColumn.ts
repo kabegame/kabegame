@@ -1,4 +1,4 @@
-import { useUiStore } from "@kabegame/core/src/stores/ui";
+import { useUiStore } from "@kabegame/core/stores/ui";
 import { useEventListener } from "@vueuse/core";
 import { Ref } from "vue";
 

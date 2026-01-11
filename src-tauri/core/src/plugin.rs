@@ -33,7 +33,6 @@ pub struct Plugin {
     pub version: String,
     #[serde(rename = "baseUrl")]
     pub base_url: String,
-    pub enabled: bool,
     /// 插件包体大小（.kgpg 文件大小）
     #[serde(rename = "sizeBytes")]
     pub size_bytes: u64,
@@ -59,7 +58,6 @@ pub struct PluginManager {
     app: AppHandle,
     remote_zip_cache: Mutex<HashMap<String, RemoteZipCacheEntry>>,
     builtins_cache: Mutex<Option<HashSet<String>>>,
-    enabled_cache: Mutex<Option<HashMap<String, bool>>>,
 }
 
 impl PluginManager {
@@ -68,7 +66,6 @@ impl PluginManager {
             app,
             remote_zip_cache: Mutex::new(HashMap::new()),
             builtins_cache: Mutex::new(None),
-            enabled_cache: Mutex::new(None),
         }
     }
 
@@ -158,62 +155,6 @@ impl PluginManager {
         Self::parse_builtin_plugins()
     }
 
-    fn enabled_state_file(&self) -> PathBuf {
-        let data_dir = crate::app_paths::user_data_dir("Kabegame");
-        data_dir.join("plugin_enabled.json")
-    }
-
-    fn load_enabled_map(&self) -> HashMap<String, bool> {
-        let file = self.enabled_state_file();
-        if !file.is_file() {
-            return HashMap::new();
-        }
-        let content = match fs::read_to_string(&file) {
-            Ok(s) => s,
-            Err(_) => return HashMap::new(),
-        };
-        serde_json::from_str::<HashMap<String, bool>>(&content).unwrap_or_default()
-    }
-
-    fn enabled_map(&self) -> HashMap<String, bool> {
-        if let Ok(mut guard) = self.enabled_cache.lock() {
-            if let Some(cached) = guard.as_ref() {
-                return cached.clone();
-            }
-            let loaded = self.load_enabled_map();
-            *guard = Some(loaded.clone());
-            return loaded;
-        }
-        self.load_enabled_map()
-    }
-
-    fn save_enabled_map(&self, map: &HashMap<String, bool>) -> Result<(), String> {
-        let file = self.enabled_state_file();
-        if let Some(parent) = file.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create enabled state dir: {}", e))?;
-        }
-        let content = serde_json::to_string_pretty(map)
-            .map_err(|e| format!("Failed to serialize enabled state: {}", e))?;
-        fs::write(&file, content).map_err(|e| format!("Failed to write enabled state: {}", e))?;
-        if let Ok(mut guard) = self.enabled_cache.lock() {
-            *guard = Some(map.clone());
-        }
-        Ok(())
-    }
-
-    fn set_plugin_enabled(&self, plugin_id: &str, enabled: bool) -> Result<(), String> {
-        let mut m = self.enabled_map();
-        m.insert(plugin_id.to_string(), enabled);
-        self.save_enabled_map(&m)
-    }
-
-    fn remove_plugin_enabled_state(&self, plugin_id: &str) -> Result<(), String> {
-        let mut m = self.enabled_map();
-        m.remove(plugin_id);
-        self.save_enabled_map(&m)
-    }
-
     /// 每次启动：将 resources/plugins 下的内置插件覆盖复制到用户插件目录，确保可用性/不变性
     pub fn ensure_prepackaged_plugins_installed(&self) -> Result<(), String> {
         let builtins = self.builtins();
@@ -258,7 +199,6 @@ impl PluginManager {
     /// 从插件目录中的 .kgpg 文件加载所有已安装的插件
     pub fn get_all(&self) -> Result<Vec<Plugin>, String> {
         let builtins = self.builtins();
-        let enabled_map = self.enabled_map();
 
         let plugins_dir = self.get_plugins_directory();
         if !plugins_dir.exists() {
@@ -304,7 +244,6 @@ impl PluginManager {
                             .as_ref()
                             .and_then(|c| c.base_url.clone())
                             .unwrap_or_default(),
-                        enabled: enabled_map.get(&plugin_id).copied().unwrap_or(true),
                         size_bytes,
                         built_in: is_immutable_builtin_id(&builtins, &plugin_id),
                         config: HashMap::new(),
@@ -330,7 +269,7 @@ impl PluginManager {
     /// 从指定 `.kgpg` 文件解析出运行时需要的 `Plugin` 信息（用于 CLI/调度器/插件编辑器临时运行）。
     ///
     /// 注意：
-    /// - `enabled/built_in/config` 等运行时字段由调用方策略决定；这里按“可运行”默认值填充。
+    /// - `built_in/config` 等运行时字段由调用方策略决定；这里按“可运行”默认值填充。
     /// - `plugin_id` 允许由调用方指定（例如调度器的 task request 里传入的 id），
     ///   CLI 场景一般会用文件名 stem 作为 id。
     pub fn build_runtime_plugin_from_kgpg_path(
@@ -360,7 +299,6 @@ impl PluginManager {
                 .as_ref()
                 .and_then(|c| c.base_url.clone())
                 .unwrap_or_default(),
-            enabled: true,
             size_bytes,
             built_in: false,
             config: HashMap::new(),
@@ -416,30 +354,6 @@ impl PluginManager {
         Ok((plugin, None))
     }
 
-    /// 更新插件配置（只更新 enabled 状态，其他信息从 .kgpg 文件读取）
-    pub fn update(
-        &self,
-        id: &str,
-        updates: HashMap<String, serde_json::Value>,
-    ) -> Result<Plugin, String> {
-        // 插件信息现在直接从 .kgpg 文件读取
-        // 只允许更新 enabled 状态，其他信息不能修改
-        // 如果需要修改插件信息，需要重新安装插件
-
-        // 先获取插件
-        let mut plugin = self
-            .get(id)
-            .ok_or_else(|| format!("Plugin {} not found", id))?;
-
-        // 只更新 enabled 状态
-        if let Some(enabled) = updates.get("enabled").and_then(|v| v.as_bool()) {
-            plugin.enabled = enabled;
-            self.set_plugin_enabled(id, enabled)?;
-        }
-
-        Ok(plugin)
-    }
-
     /// 删除插件（删除对应的 .kgpg 文件）
     pub fn delete(&self, id: &str) -> Result<(), String> {
         // 内置插件不可卸载（仅 local 模式；normal 模式允许用户覆盖/卸载）
@@ -470,7 +384,6 @@ impl PluginManager {
                 if plugin_id == id {
                     fs::remove_file(&path)
                         .map_err(|e| format!("Failed to delete plugin file: {}", e))?;
-                    let _ = self.remove_plugin_enabled_state(id);
                     return Ok(());
                 }
             }
@@ -530,11 +443,6 @@ impl PluginManager {
         }
     }
 
-    pub fn get_favorites_file(&self) -> PathBuf {
-        let app_data_dir = crate::app_paths::user_data_dir("Kabegame");
-        app_data_dir.join("plugin_favorites.json")
-    }
-
     pub fn load_browser_plugins(&self) -> Result<Vec<BrowserPlugin>, String> {
         let plugins_dir = self.get_plugins_directory();
         if !plugins_dir.exists() {
@@ -551,7 +459,6 @@ impl PluginManager {
             }
         }
 
-        let favorites = self.load_favorites()?;
         let mut browser_plugins = Vec::new();
 
         let entries = fs::read_dir(&plugins_dir)
@@ -573,7 +480,6 @@ impl PluginManager {
                             .unwrap_or("")
                             .to_string();
                         let plugin_id = file_name.clone();
-                        let favorite = favorites.contains(&plugin_id);
 
                         // 读取 doc.md（可选）
                         let doc = self.read_plugin_doc(&path).ok().flatten();
@@ -590,7 +496,6 @@ impl PluginManager {
                             name: manifest.name,
                             desp: manifest.description,
                             icon: icon_path, // 如果图标存在，存储插件文件路径
-                            favorite,
                             file_path: Some(path.to_string_lossy().to_string()),
                             doc, // 添加 doc 字段
                         });
@@ -664,6 +569,11 @@ impl PluginManager {
             .map_err(|e| format!("Failed to read doc.md: {}", e))?;
 
         Ok(Some(content))
+    }
+
+    /// 从 ZIP 格式的插件文件中读取 doc_root/doc.md（供 app-cli/外部调用复用）
+    pub fn read_plugin_doc_public(&self, zip_path: &Path) -> Result<Option<String>, String> {
+        self.read_plugin_doc(zip_path)
     }
 
     /// 从 ZIP 格式的插件文件中读取图片资源（用于 doc_root 下的图片）
@@ -838,6 +748,33 @@ impl PluginManager {
         Ok(Some(icon_data))
     }
 
+    /// 根据插件 ID 查找并读取插件图标
+    /// 返回 PNG bytes，如果插件不存在或没有图标则返回错误或 None
+    pub fn get_plugin_icon_by_id(&self, plugin_id: &str) -> Result<Option<Vec<u8>>, String> {
+        let plugins_dir = self.get_plugins_directory();
+        let entries = fs::read_dir(&plugins_dir)
+            .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
+                let file_name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                if file_name == plugin_id {
+                    return self.read_plugin_icon(&path);
+                }
+            }
+        }
+
+        Err(format!("Plugin {} not found", plugin_id))
+    }
+
     /// 从 ZIP 格式的插件文件中读取 config.json
     fn read_plugin_config(&self, zip_path: &Path) -> Result<Option<PluginConfig>, String> {
         let file =
@@ -921,7 +858,6 @@ impl PluginManager {
                 .as_ref()
                 .and_then(|c| c.base_url.clone())
                 .unwrap_or_default(),
-            enabled: true,
             size_bytes,
             built_in: is_immutable_builtin_id(&self.builtins(), &plugin_id),
             config: HashMap::new(),
@@ -966,7 +902,6 @@ impl PluginManager {
                                 .as_ref()
                                 .and_then(|c| c.base_url.clone())
                                 .unwrap_or_default(),
-                            enabled: true,
                             size_bytes,
                             built_in: false,
                             config: HashMap::new(),
@@ -979,19 +914,6 @@ impl PluginManager {
         }
 
         Err(format!("Plugin {} not found", plugin_id))
-    }
-
-    fn load_favorites(&self) -> Result<Vec<String>, String> {
-        let file = self.get_favorites_file();
-        if !file.exists() {
-            return Ok(vec![]);
-        }
-
-        let content = fs::read_to_string(&file)
-            .map_err(|e| format!("Failed to read favorites file: {}", e))?;
-        let favorites: Vec<String> = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse favorites: {}", e))?;
-        Ok(favorites)
     }
 
     /// 获取插件的变量定义（从 config.json 中读取）
@@ -1968,7 +1890,6 @@ pub struct BrowserPlugin {
     pub name: String,
     pub desp: String,
     pub icon: Option<String>,
-    pub favorite: bool,
     pub file_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,

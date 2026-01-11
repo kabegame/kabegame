@@ -1,6 +1,6 @@
 <template>
-  <el-dialog v-model="previewVisible" title="图片预览" width="90%" :close-on-click-modal="true" class="image-preview-dialog"
-    :show-close="true" :lock-scroll="true" @close="closePreview">
+  <el-dialog v-model="previewVisible" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
+    class="image-preview-dialog" :show-close="true" :lock-scroll="true" @close="closePreview">
     <div v-if="previewVisible" ref="previewContainerRef" class="preview-container"
       @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMoveWithDrag"
       @mouseleave="handlePreviewMouseLeaveAll" @wheel.prevent="handlePreviewWheel" @mouseup="stopPreviewDrag">
@@ -19,8 +19,11 @@
         </button>
       </div>
       <img v-if="previewImageUrl" ref="previewImageRef" :src="previewImageUrl" class="preview-image" alt="预览图片"
-        :style="previewImageStyle" @load="handlePreviewImageLoad" @mousedown.prevent.stop="startPreviewDrag"
-        @dragstart.prevent />
+        :style="previewImageStyle" @load="handlePreviewImageLoad" @error="handlePreviewImageError"
+        @mousedown.prevent.stop="startPreviewDrag" @dragstart.prevent />
+      <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
+        <ImageNotFound />
+      </div>
       <div v-if="previewImageLoading" class="preview-loading">
         <div class="preview-loading-inner">正在加载原图…</div>
       </div>
@@ -41,6 +44,7 @@ import { ElMessage } from "element-plus";
 import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
 import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import type { ImageInfo, ImageUrlMap } from "../../types/image";
+import ImageNotFound from "./ImageNotFound.vue";
 
 const props = defineProps<{
   images: ImageInfo[];
@@ -58,6 +62,7 @@ const previewImagePath = ref("");
 const previewImage = ref<ImageInfo | null>(null);
 const previewIndex = ref<number>(-1);
 const previewHoverSide = ref<"left" | "right" | null>(null);
+const previewNotFound = ref(false);
 
 const previewContainerRef = ref<HTMLElement | null>(null);
 const previewImageRef = ref<HTMLImageElement | null>(null);
@@ -184,6 +189,16 @@ const previewImageStyle = computed(() => ({
   opacity: previewImageLoading.value ? 0 : 1,
 }));
 
+const previewDialogTitle = computed(() => {
+  if (!previewImage.value?.localPath) {
+    return "图片预览";
+  }
+  // 从路径中提取文件名（支持 Windows 和 Unix 路径分隔符）
+  const path = previewImage.value.localPath;
+  const fileName = path.split(/[/\\]/).pop() || path;
+  return fileName || "图片预览";
+});
+
 const isTextInputLike = (target: EventTarget | null) => {
   const el = target as HTMLElement | null;
   const tag = el?.tagName;
@@ -221,11 +236,13 @@ const setPreviewByIndex = (index: number) => {
   previewIndex.value = index;
   previewImagePath.value = img.localPath;
   previewImage.value = img;
+  previewNotFound.value = false;
 
   const originalUrl = getOriginalUrlFor(img.id);
   if (originalUrl) {
     // 无缝：目标原图已就绪，直接切换 src，不显示 loading
     previewImageLoading.value = false;
+    previewNotFound.value = false;
     previewImageUrl.value = originalUrl;
     resetPreviewTransform();
     return;
@@ -240,7 +257,12 @@ const setPreviewByIndex = (index: number) => {
     // 极端兜底：连当前都没有图时，只能用缩略图避免空白
     previewImageUrl.value = thumbnailUrl;
     previewImageLoading.value = false;
+    previewNotFound.value = false;
     resetPreviewTransform();
+  } else if (!previewImageUrl.value) {
+    // 原图/缩略图都没有：直接标记 not found
+    previewImageLoading.value = false;
+    previewNotFound.value = true;
   }
 };
 
@@ -432,6 +454,33 @@ const handlePreviewImageLoad = async () => {
   }
 };
 
+const handlePreviewImageError = () => {
+  // 预览图加载失败（常见：original 文件被删/路径失效/权限问题）：
+  // 回落到 thumbnail，避免预览一直空白/破图。
+  const img = previewImage.value;
+  if (!previewVisible.value || !img) {
+    previewImageLoading.value = false;
+    return;
+  }
+
+  const data = props.imageUrlMap?.[img.id];
+  const thumb = data?.thumbnail || "";
+  const current = previewImageUrl.value || "";
+
+  // 避免死循环：如果已经在用 thumbnail 仍失败，则只结束 loading
+  if (!thumb || current === thumb) {
+    previewImageLoading.value = false;
+    previewImageUrl.value = "";
+    previewNotFound.value = true;
+    return;
+  }
+
+  previewImageUrl.value = thumb;
+  previewImageLoading.value = false;
+  previewNotFound.value = false;
+  resetPreviewTransform();
+};
+
 const handlePreviewKeyDown = (event: KeyboardEvent) => {
   if (!previewVisible.value) return;
   if (isTextInputLike(event.target)) return;
@@ -443,6 +492,12 @@ const handlePreviewKeyDown = (event: KeyboardEvent) => {
   if (event.key === "ArrowRight") {
     event.preventDefault();
     goNext();
+    return;
+  }
+  // Delete / Backspace：快速删除当前预览图片
+  if ((event.key === "Delete" || event.key === "Backspace") && previewImage.value) {
+    event.preventDefault();
+    emit("contextCommand", { command: "remove", image: previewImage.value });
     return;
   }
 };
@@ -676,7 +731,13 @@ async function ensureOriginalReady(image: ImageInfo, opts: { seq: number; fallba
         previewImage.value?.id === expectedId &&
         opts.seq === loadSeq.value
       ) {
-        if (opts.fallbackUrl) previewImageUrl.value = opts.fallbackUrl;
+        if (opts.fallbackUrl) {
+          previewImageUrl.value = opts.fallbackUrl;
+          previewNotFound.value = false;
+        } else {
+          previewImageUrl.value = "";
+          previewNotFound.value = true;
+        }
         previewImageLoading.value = false;
         resetPreviewTransform();
       }
@@ -692,7 +753,13 @@ async function ensureOriginalReady(image: ImageInfo, opts: { seq: number; fallba
         previewImage.value?.id === expectedId &&
         opts.seq === loadSeq.value
       ) {
-        if (opts.fallbackUrl) previewImageUrl.value = opts.fallbackUrl;
+        if (opts.fallbackUrl) {
+          previewImageUrl.value = opts.fallbackUrl;
+          previewNotFound.value = false;
+        } else {
+          previewImageUrl.value = "";
+          previewNotFound.value = true;
+        }
         previewImageLoading.value = false;
         resetPreviewTransform();
       }
@@ -711,6 +778,7 @@ async function ensureOriginalReady(image: ImageInfo, opts: { seq: number; fallba
     ) {
       previewImageUrl.value = assetUrl;
       previewImageLoading.value = false;
+      previewNotFound.value = false;
       resetPreviewTransform();
     }
   } catch (error) {
@@ -724,9 +792,12 @@ async function ensureOriginalReady(image: ImageInfo, opts: { seq: number; fallba
       if (opts.fallbackUrl) {
         previewImageUrl.value = opts.fallbackUrl;
         previewImageLoading.value = false;
+        previewNotFound.value = false;
         resetPreviewTransform();
       } else {
         previewImageLoading.value = false;
+        previewImageUrl.value = "";
+        previewNotFound.value = true;
       }
     }
   }
@@ -773,6 +844,15 @@ defineExpose({
     padding: 15px 20px !important;
     height: 50px !important;
     box-sizing: border-box !important;
+    overflow: hidden !important;
+
+    .el-dialog__title {
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+      max-width: calc(90vw - 100px) !important;
+      display: block !important;
+    }
   }
 
   .el-dialog__body {
@@ -804,76 +884,109 @@ defineExpose({
     align-items: center;
     justify-content: center;
     background: rgba(255, 255, 255, 0.18);
-    backdrop-filter: blur(2px);
+    backdrop-filter: blur(3px);
+    z-index: 3;
     pointer-events: none;
+  }
 
-    .preview-loading-inner {
-      padding: 10px 14px;
-      border-radius: 10px;
-      background: rgba(0, 0, 0, 0.55);
-      color: #fff;
-      font-size: 13px;
-      user-select: none;
-    }
+  .preview-loading-inner {
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.45);
+    color: #ffffff;
+    font-size: 14px;
+    line-height: 1;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    user-select: none;
   }
 
   .preview-image {
-    max-width: 100%;
-    max-height: 100%;
+    max-width: calc(90vw - 40px) !important;
+    max-height: calc(90vh - 70px) !important;
     width: auto;
     height: auto;
     object-fit: contain;
     display: block;
+    cursor: pointer;
+  }
+
+  .preview-not-found {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px;
+    box-sizing: border-box;
+    color: rgba(255, 255, 255, 0.78);
+    text-align: center;
     user-select: none;
-    -webkit-user-drag: none;
+    z-index: 1;
   }
 
   .preview-nav-zone {
     position: absolute;
     top: 0;
     bottom: 0;
-    width: 22%;
+    width: 20%;
     display: flex;
     align-items: center;
-    justify-content: center;
-    opacity: 0;
-    transition: opacity 0.12s ease;
     z-index: 2;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease;
+
+    &.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
 
     &.left {
       left: 0;
+      justify-content: flex-start;
+      padding-left: 18px;
     }
 
     &.right {
       right: 0;
-    }
-
-    &.visible {
-      opacity: 1;
+      justify-content: flex-end;
+      padding-right: 18px;
     }
   }
 
   .preview-nav-btn {
-    width: 48px;
-    height: 48px;
+    width: 44px;
+    height: 44px;
     border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.22);
-    background: rgba(0, 0, 0, 0.35);
-    color: #fff;
+    border: none;
+    background: #ff5fb8;
+    color: #ffffff;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: transform 0.08s ease, background 0.12s ease;
+    box-shadow: 0 10px 24px rgba(255, 95, 184, 0.28);
+    transition: transform 0.12s ease, background-color 0.12s ease, box-shadow 0.12s ease;
+    user-select: none;
 
-    &:active {
-      transform: scale(0.98);
+    &:hover {
+      transform: scale(1.04);
+      box-shadow: 0 12px 28px rgba(255, 95, 184, 0.34);
     }
 
     &.disabled {
-      opacity: 0.35;
-      cursor: not-allowed;
+      background: #c9c9c9;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+    }
+
+    .el-icon {
+      font-size: 18px;
     }
   }
+}
+
+.preview-context-menu-wrapper {
+  position: relative;
+  z-index: 10000;
 }
 </style>

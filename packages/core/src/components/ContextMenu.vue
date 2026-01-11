@@ -204,6 +204,8 @@ watch(activeSubmenuIndex, (newIndex, oldIndex) => {
 });
 
 const getItemVisible = (item: MenuItem) => {
+    // 当 item 声明了 children，但 children 为空时，不渲染该 item（例如“更多”菜单没有任何子项）
+    if (item.children && item.children.length === 0) return false;
     if (item.visible === undefined) return true;
     if (typeof item.visible === "boolean") return item.visible;
     try {

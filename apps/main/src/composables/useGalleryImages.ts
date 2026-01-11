@@ -13,9 +13,9 @@ export function useGalleryImages(
   galleryContainerRef: Ref<HTMLElement | null>,
   isLoadingMore: Ref<boolean>,
   /**
-   * 网格是否需要“优先使用原图显示”（例如列数很少时，为了更清晰）。
+   * 网格是否需要"优先使用原图显示"（例如列数很少时，为了更清晰）。
    * - false：只生成缩略图 URL（更快、IO 更少）
-   * - true：对“优先队列”同时生成 original（其余仍在后台/空闲时补齐）
+   * - true：对"优先队列"同时生成 original（其余仍在后台/空闲时补齐）
    */
   preferOriginalInGrid: Ref<boolean> = ref(false),
   /**
@@ -27,9 +27,17 @@ export function useGalleryImages(
    * 用户是否正在强交互（例如 dragScroll 拖拽滚动）
    * - true：优先保证滚动帧率，后台任务尽量推迟到空闲/交互结束
    */
-  isInteracting?: Ref<boolean>
+  isInteracting?: Ref<boolean>,
+  /**
+   * 当前大页的起始偏移量（用于大页限制）
+   */
+  currentBigPageOffset?: Ref<number>
 ) {
   const crawlerStore = useCrawlerStore();
+
+  // 轻量性能日志开关：
+  // 在 DevTools 控制台执行 `globalThis.__KABE_PERF__ = true` 即可开启。
+  const perfEnabled = () => (globalThis as any).__KABE_PERF__ === true;
 
   // 使用独立的本地图片列表，避免直接修改 store 的 images 导致的重新渲染
   // 使用 shallowRef 减少深度响应式追踪，提高性能
@@ -682,10 +690,11 @@ export function useGalleryImages(
   };
 
   // 加载更多图片（手动加载）
-  // 直接基于 displayedImages 的长度计算 offset，不依赖“页数”状态
+  // 直接基于 displayedImages 的长度计算 offset，不依赖"页数"状态
   // 避免 displayedImages 和 crawlerStore.images 不同步导致的问题
   // 支持初始加载：当 displayedImages.value.length === 0 时，加载第一页
-  const loadMoreImages = async (isInitialLoad = false) => {
+  // 支持大页限制：bigPageSize > 0 时，只在当前大页内加载
+  const loadMoreImages = async (isInitialLoad = false, bigPageSize = 0) => {
     // 初始加载时，跳过 hasMore 检查（因为初始时 hasMore 可能还是 false）
     if (!isInitialLoad && (!crawlerStore.hasMore || isLoadingMore.value)) {
       return;
@@ -708,7 +717,12 @@ export function useGalleryImages(
     const isFirstPage = displayedImages.value.length === 0;
 
     try {
-      const offset = displayedImages.value.length;
+      const bigPageStart =
+        bigPageSize > 0 && currentBigPageOffset
+          ? currentBigPageOffset.value
+          : 0;
+      // 重要：大页模式下，后端 offset 是“全局偏移”，需要加上当前大页起始偏移
+      const offset = bigPageStart + displayedImages.value.length;
 
       // 初始加载时，重置 crawlerStore 状态（hasMore/total 由后端返回决定）
       if (isInitialLoad || isFirstPage) {
@@ -717,10 +731,12 @@ export function useGalleryImages(
       }
 
       // 直接从后端获取下一页，不依赖 crawlerStore.loadImages
+      const tInvokeStart = perfEnabled() ? performance.now() : 0;
       const result = await invoke<RangedImages>("get_images_range", {
         offset,
         limit: crawlerStore.pageSize,
       });
+      const tInvokeEnd = perfEnabled() ? performance.now() : 0;
 
       // 过滤出新图片（避免重复，因为增量刷新可能已经添加了部分图片）
       const existingIds = new Set(displayedImages.value.map((img) => img.id));
@@ -728,8 +744,25 @@ export function useGalleryImages(
 
       if (newImages.length > 0) {
         // 先计算更新后的总数和 hasMore，避免在设置 displayedImages 后短暂显示"加载更多"按钮
-        const totalDisplayed = displayedImages.value.length + newImages.length;
-        const hasMore = totalDisplayed < result.total;
+        let totalDisplayed = displayedImages.value.length + newImages.length;
+        let hasMore = totalDisplayed < result.total;
+
+        // 大页限制：如果启用了大页功能，判断是否在当前大页内
+        if (bigPageSize > 0 && currentBigPageOffset) {
+          // 当前大页的范围
+          const currentBigPageStart = currentBigPageOffset.value;
+          const currentBigPageEnd = currentBigPageStart + bigPageSize;
+
+          // 计算加载后的总偏移（当前大页起始 + 已显示数量）
+          const currentEndOffset = currentBigPageStart + totalDisplayed;
+
+          // 判断是否还在当前大页内
+          const remainingInBigPage = Math.max(
+            0,
+            Math.min(currentBigPageEnd, result.total) - currentEndOffset
+          );
+          hasMore = remainingInBigPage > 0;
+        }
 
         // 在设置 displayedImages 之前先更新 hasMore，确保按钮状态正确
         crawlerStore.hasMore = hasMore;
@@ -739,7 +772,20 @@ export function useGalleryImages(
         setDisplayedImages([...displayedImages.value, ...newImages]);
 
         // 等待 DOM 更新完成
+        const tTickStart = perfEnabled() ? performance.now() : 0;
         await nextTick();
+        const tTickEnd = perfEnabled() ? performance.now() : 0;
+
+        if (perfEnabled()) {
+          const invokeMs = Math.round(tInvokeEnd - tInvokeStart);
+          const tickMs = Math.round(tTickEnd - tTickStart);
+          // 只在明显偏慢时提示，避免刷屏
+          if (invokeMs >= 80 || tickMs >= 80) {
+            console.debug(
+              `[perf][gallery] loadMore offset=${offset} limit=${crawlerStore.pageSize} invoke=${invokeMs}ms nextTick=${tickMs}ms new=${newImages.length} total=${result.total}`
+            );
+          }
+        }
 
         // 初始加载时，重置滚动位置到顶部；否则保持用户原来的滚动位置
         if (isFirstPage) {
@@ -760,8 +806,22 @@ export function useGalleryImages(
         loadImageUrls(newImages);
       } else {
         // 即使没有新图片，也要更新 hasMore（可能总数变化了）
-        const totalDisplayed = displayedImages.value.length;
-        crawlerStore.hasMore = totalDisplayed < result.total;
+        let totalDisplayed = displayedImages.value.length;
+        let hasMore = totalDisplayed < result.total;
+
+        // 大页限制
+        if (bigPageSize > 0 && currentBigPageOffset) {
+          const currentBigPageStart = currentBigPageOffset.value;
+          const currentBigPageEnd = currentBigPageStart + bigPageSize;
+          const currentEndOffset = currentBigPageStart + totalDisplayed;
+          const remainingInBigPage = Math.max(
+            0,
+            Math.min(currentBigPageEnd, result.total) - currentEndOffset
+          );
+          hasMore = remainingInBigPage > 0;
+        }
+
+        crawlerStore.hasMore = hasMore;
       }
 
       // 同步 crawlerStore 状态，保持一致性
@@ -777,8 +837,9 @@ export function useGalleryImages(
     }
   };
 
-  // 加载全部图片（加载所有剩余的图片）
-  const loadAllImages = async () => {
+  // 加载全部图片（一次性加载所有剩余的图片）
+  // 支持大页限制：bigPageSize > 0 时，只加载当前大页内的所有图片
+  const loadAllImages = async (bigPageSize = 0) => {
     if (!crawlerStore.hasMore || isLoadingMore.value) {
       return;
     }
@@ -791,119 +852,90 @@ export function useGalleryImages(
     // 重置取消标志
     abortLoadAll = false;
 
-    // 记录加载前的滚动位置：只在用户没有主动滚动的情况下恢复（避免"抢滚动"）
+    // 记录加载前的滚动位置
     const prevScrollTop = container.scrollTop;
 
     try {
       const existingIds = new Set(displayedImages.value.map((img) => img.id));
-      let appended = 0;
-      let pageCount = 0;
-      let pendingAppend: ImageInfo[] = [];
 
-      const nextFrame = () =>
-        new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      // 计算需要加载的范围
+      const bigPageStart =
+        bigPageSize > 0 && currentBigPageOffset
+          ? currentBigPageOffset.value
+          : 0;
+      const currentOffset = bigPageStart + displayedImages.value.length;
 
-      const sleep = (ms: number) =>
-        new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
-
-      // “温和加载全部”：优先让滚动交互顺滑，加载全部只需要稳定推进即可
-      const waitLoadAllPace = async () => {
-        // 拖拽滚动期间：暂停推进（用户不会看那么快，帧率更重要）
-        if (isInteracting?.value) {
-          await sleep(220);
-          return;
-        }
-        // 非交互：尽量用 idle，不阻塞主线程
-        if (typeof requestIdleCallback !== "undefined") {
-          await new Promise<void>((resolve) =>
-            requestIdleCallback(() => resolve(), { timeout: 1500 })
-          );
-          return;
-        }
-        await sleep(90);
-      };
-
-      const flushPendingAppend = async () => {
-        if (pendingAppend.length === 0) return;
-        setDisplayedImages([...displayedImages.value, ...pendingAppend]);
-        pendingAppend = [];
-        await nextTick();
-        await nextFrame();
-      };
-
-      // 分批加载并"渐进追加"到 displayedImages，避免一次性插入上千节点卡顿
-      while (true) {
-        // 检查是否被取消（刷新时会设置此标志）
-        if (abortLoadAll) {
-          console.log("加载全部被取消");
-          break;
-        }
-
-        const offset = displayedImages.value.length;
-        const result = await invoke<RangedImages>("get_images_range", {
-          offset,
-          limit: crawlerStore.pageSize,
-        });
-
-        // 再次检查取消标志（异步操作后可能已被取消）
-        if (abortLoadAll) {
-          console.log("加载全部被取消（异步后）");
-          break;
-        }
-
-        crawlerStore.totalImages = result.total;
-
-        if (!result.images || result.images.length === 0) {
-          break;
-        }
-
-        const newImages = result.images.filter(
-          (img) => !existingIds.has(img.id)
-        );
-        if (newImages.length > 0) {
-          // 批量追加：减少频繁的大数组拷贝/响应式更新（十万级列表下很关键）
-          pendingAppend.push(...newImages);
-          appended += newImages.length;
-          newImages.forEach((img) => existingIds.add(img.id));
-        }
-
-        // 已到末尾：退出
-        if (offset + result.images.length >= result.total) {
-          break;
-        }
-
-        pageCount++;
-        // 每 2 页 flush 一次 UI（让用户看到进度在走），并让出主线程
-        if (pageCount % 2 === 0) {
-          await flushPendingAppend();
-        }
-        // 控制“加载全部”速度：空闲优先；交互期间自动放慢/暂停
-        await waitLoadAllPace();
+      // 计算需要加载的数量
+      let limitToLoad: number;
+      if (bigPageSize > 0) {
+        // 大页模式：只加载当前大页内剩余的图片
+        const bigPageEnd = bigPageStart + bigPageSize;
+        limitToLoad = Math.max(0, bigPageEnd - currentOffset);
+      } else {
+        // 全量模式：加载所有剩余图片（设置一个较大的值，后端会返回实际数量）
+        limitToLoad = 1000000; // 足够大的数值
       }
 
-      // 最后 flush 一次剩余 pending
-      await flushPendingAppend();
-
-      // 如果被取消，不执行后续的状态同步
-      if (abortLoadAll) {
+      if (limitToLoad <= 0) {
         return;
       }
 
-      // 等待最终 DOM 更新
-      if (appended > 0) {
-        // 恢复滚动位置：仅当用户仍停留在原位置附近（没有主动滚动）
-        const delta = Math.abs(container.scrollTop - prevScrollTop);
-        if (delta < 4) {
-          container.scrollTop = prevScrollTop;
-        }
+      // 一次性请求所有剩余图片
+      const result = await invoke<RangedImages>("get_images_range", {
+        offset: currentOffset,
+        limit: limitToLoad,
+      });
 
-        // 确保当前视口 URL 能尽快补齐（不会扫描全量）
-        void loadImageUrls();
+      // 检查取消标志
+      if (abortLoadAll) {
+        console.log("加载全部被取消");
+        return;
       }
 
-      // 更新 hasMore：应该已经加载完所有图片
+      crawlerStore.totalImages = result.total;
+
+      if (!result.images || result.images.length === 0) {
+        crawlerStore.hasMore = false;
+        return;
+      }
+
+      // 过滤出新图片
+      const newImages = result.images.filter(
+        (img) => !existingIds.has(img.id)
+      );
+
+      if (newImages.length > 0) {
+        // 一次性追加所有新图片
+        setDisplayedImages([...displayedImages.value, ...newImages]);
+
+        await nextTick();
+
+        // 触发 URL 加载（仅对新增图片）
+        void loadImageUrls(newImages);
+      }
+
+      // 恢复滚动位置
+      const delta = Math.abs(container.scrollTop - prevScrollTop);
+      if (delta < 4) {
+        container.scrollTop = prevScrollTop;
+      }
+
+      // 更新 hasMore
       const totalDisplayed = displayedImages.value.length;
-      crawlerStore.hasMore = totalDisplayed < crawlerStore.totalImages;
+      if (bigPageSize > 0 && currentBigPageOffset) {
+        // 大页模式：判断当前大页内是否还有更多
+        const currentBigPageStart = currentBigPageOffset.value;
+        const currentBigPageEnd = currentBigPageStart + bigPageSize;
+        const remainingInBigPage = Math.max(
+          0,
+          Math.min(currentBigPageEnd, crawlerStore.totalImages) -
+            (currentBigPageStart + totalDisplayed)
+        );
+        crawlerStore.hasMore = remainingInBigPage > 0;
+      } else {
+        // 普通模式：判断是否还有更多
+        crawlerStore.hasMore = totalDisplayed < crawlerStore.totalImages;
+      }
 
       // 同步 crawlerStore 状态
       crawlerStore.images = [...displayedImages.value];
@@ -915,6 +947,62 @@ export function useGalleryImages(
   // 取消加载全部操作
   const cancelLoadAll = () => {
     abortLoadAll = true;
+  };
+
+  /**
+   * 跳转到指定的大页（以 10000 为单位）
+   * @param bigPage 大页码（从1开始）
+   * @param bigPageSize 大页大小（默认 10000）
+   */
+  const jumpToBigPage = async (bigPage: number, bigPageSize = 10000) => {
+    const targetOffset = (bigPage - 1) * bigPageSize;
+    const container = galleryContainerRef.value;
+
+    try {
+      // 清空当前列表并重置缓存
+      setDisplayedImages([]);
+      await nextTick();
+
+      // 清除部分缓存但保留已加载的 URL（如果用户回到之前的页）
+      // imageSrcMap 保留，但清除 inFlight 状态
+      inFlightThumbnailIds.clear();
+      inFlightOriginalIds.clear();
+
+      // 滚动到顶部
+      if (container) {
+        container.scrollTop = 0;
+      }
+
+      // 从目标偏移量开始加载第一页
+      const result = await invoke<RangedImages>("get_images_range", {
+        offset: targetOffset,
+        limit: crawlerStore.pageSize,
+      });
+
+      // 计算当前大页内的总数和是否还有更多
+      const currentBigPageStart = targetOffset;
+      const currentBigPageEnd = currentBigPageStart + bigPageSize;
+      const remainingInBigPage = Math.max(
+        0,
+        Math.min(currentBigPageEnd, result.total) - currentBigPageStart
+      );
+
+      // 更新状态
+      setDisplayedImages([...result.images]);
+      crawlerStore.images = [...result.images];
+      crawlerStore.totalImages = result.total;
+
+      // hasMore 判断：当前大页内是否还有更多
+      const loadedInBigPage = result.images.length;
+      crawlerStore.hasMore = loadedInBigPage < remainingInBigPage;
+
+      await nextTick();
+
+      // 加载图片 URL
+      loadImageUrls(result.images);
+    } catch (error) {
+      console.error("跳转大页失败:", error);
+    }
   };
 
   // 批量从 UI 缓存里移除（用于后端批量去重后的同步）
@@ -1028,6 +1116,7 @@ export function useGalleryImages(
     loadMoreImages,
     loadAllImages,
     cancelLoadAll,
+    jumpToBigPage,
     removeFromUiCacheByIds,
     recreateImageUrl,
     cleanup,

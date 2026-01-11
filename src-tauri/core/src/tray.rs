@@ -1,5 +1,6 @@
-// 系统托盘模块
+// 系统托盘模块（feature: tray）
 
+#[cfg(feature = "wallpaper")]
 use crate::wallpaper::WallpaperRotator;
 use governor::{Quota, RateLimiter};
 use std::num::NonZeroU32;
@@ -7,7 +8,7 @@ use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuEvent, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Manager,
 };
 
 type DefaultDirectRateLimiter = RateLimiter<
@@ -49,6 +50,7 @@ pub fn setup_tray(app: AppHandle) {
             }
         };
 
+        #[cfg(feature = "wallpaper")]
         let next_wallpaper_item =
             match MenuItem::with_id(&app, "next_wallpaper", "下一张壁纸", true, None::<&str>) {
                 Ok(item) => item,
@@ -59,7 +61,7 @@ pub fn setup_tray(app: AppHandle) {
             };
 
         // 仅在开发模式下创建调试菜单项
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, feature = "wallpaper"))]
         let debug_wallpaper_item = match MenuItem::with_id(
             &app,
             "debug_wallpaper",
@@ -83,7 +85,7 @@ pub fn setup_tray(app: AppHandle) {
         };
 
         // 创建菜单
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, feature = "wallpaper"))]
         let menu = match Menu::with_items(
             &app,
             &[
@@ -101,11 +103,29 @@ pub fn setup_tray(app: AppHandle) {
             }
         };
 
-        #[cfg(not(debug_assertions))]
+        #[cfg(all(not(debug_assertions), feature = "wallpaper"))]
         let menu = match Menu::with_items(
             &app,
             &[&show_item, &hide_item, &next_wallpaper_item, &quit_item],
         ) {
+            Ok(menu) => menu,
+            Err(e) => {
+                eprintln!("创建菜单失败: {}", e);
+                return;
+            }
+        };
+
+        #[cfg(all(debug_assertions, not(feature = "wallpaper")))]
+        let menu = match Menu::with_items(&app, &[&show_item, &hide_item, &quit_item]) {
+            Ok(menu) => menu,
+            Err(e) => {
+                eprintln!("创建菜单失败: {}", e);
+                return;
+            }
+        };
+
+        #[cfg(all(not(debug_assertions), not(feature = "wallpaper")))]
+        let menu = match Menu::with_items(&app, &[&show_item, &hide_item, &quit_item]) {
             Ok(menu) => menu,
             Err(e) => {
                 eprintln!("创建菜单失败: {}", e);
@@ -206,6 +226,7 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             // 优雅地退出应用
             app.exit(0);
         }
+        #[cfg(feature = "wallpaper")]
         "next_wallpaper" => {
             // 后台切换下一张壁纸，避免阻塞托盘事件线程
             let app_handle = app.clone();
@@ -216,10 +237,12 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
                 }
             });
         }
+        #[cfg(feature = "wallpaper")]
         "debug_wallpaper" => {
             // 打开一个普通可见窗口（不挂到桌面层），用于确认 WallpaperLayer 是否在渲染/收事件
             let app_handle = app.clone();
             std::thread::spawn(move || {
+                use tauri::{WebviewUrl, WebviewWindowBuilder};
                 if let Some(w) = app_handle.get_webview_window("wallpaper-debug") {
                     let _ = w.show();
                     let _ = w.set_focus();

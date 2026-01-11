@@ -5,14 +5,16 @@
 //!   - `--` 之后的参数会被解析并映射到插件 `config.json` 的 `var` 变量
 //!   - required 规则：与前端一致，`default` 不存在即视为 required
 //! - `plugin pack`：打包单个插件目录为 `.kgpg`（KGPG v2：固定头部 + ZIP，ZIP 内不含 icon.png）
+//! - `plugin import`：导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
 
 use clap::{Args, Parser, Subcommand};
 use kabegame_core::{
     crawler, kgpg,
-    plugin::{PluginManager, VarDefinition},
+    plugin::{ImportPreview, Plugin, PluginDetail, PluginManager, PluginManifest, VarDefinition},
     settings::Settings,
     storage::Storage,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::Manager;
@@ -39,6 +41,8 @@ enum PluginCommands {
     Run(RunPluginArgs),
     /// 打包单个插件目录为 `.kgpg`（KGPG v2：固定头部 + ZIP，ZIP 内不含 icon.png）
     Pack(PackPluginArgs),
+    /// 导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
+    Import(ImportPluginArgs),
 }
 
 #[derive(Args, Debug)]
@@ -50,6 +54,16 @@ struct PackPluginArgs {
     /// 输出 `.kgpg` 文件路径
     #[arg(long = "output")]
     output: PathBuf,
+}
+
+#[derive(Args, Debug)]
+struct ImportPluginArgs {
+    /// 本地插件文件路径（.kgpg）
+    path: PathBuf,
+
+    /// 不启动 UI，直接执行导入（适合脚本/自动化）
+    #[arg(long = "no-ui", default_value_t = false)]
+    no_ui: bool,
 }
 
 #[derive(Args, Debug)]
@@ -92,6 +106,7 @@ fn main() {
                 rt.block_on(run_plugin(app.handle().clone(), args))
             }
             PluginCommands::Pack(args) => pack_plugin(args),
+            PluginCommands::Import(args) => import_plugin(args),
         },
     };
 
@@ -127,6 +142,221 @@ fn build_minimal_app() -> Result<tauri::App, String> {
         })
         .build(tauri::generate_context!())
         .map_err(|e| format!("Build tauri app failed: {}", e))
+}
+
+fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {
+    let p = args.path;
+    if !p.is_file() {
+        return Err(format!("插件文件不存在: {}", p.display()));
+    }
+    if p.extension().and_then(|s| s.to_str()) != Some("kgpg") {
+        return Err(format!("不是 .kgpg 文件: {}", p.display()));
+    }
+
+    if args.no_ui {
+        return import_plugin_no_ui(p);
+    }
+    import_plugin_with_ui(p)
+}
+
+fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
+    let app = build_minimal_app()?;
+    let pm = app.handle().state::<PluginManager>();
+
+    // 先确保内置插件安装（主要是为了保证 plugins_directory 初始化/存在；失败不阻断导入）
+    if let Err(e) = pm.ensure_prepackaged_plugins_installed() {
+        eprintln!("[WARN] 安装内置插件失败（将继续导入）：{e}");
+    }
+
+    // 结构检查（尽量给出更友好的错误）
+    validate_kgpg_structure(&pm, &p)?;
+
+    let plugin = pm.install_plugin_from_zip(&p)?;
+    let plugins_dir = pm.get_plugins_directory();
+
+    println!(
+        "导入成功：id={}; name={}; version={}; 目标目录={}",
+        plugin.id,
+        plugin.name,
+        plugin.version,
+        plugins_dir.display()
+    );
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CliImportPreview {
+    preview: ImportPreview,
+    manifest: PluginManifest,
+    icon_png_base64: Option<String>,
+    file_path: String,
+    plugins_dir: String,
+}
+
+#[tauri::command]
+fn cli_preview_import_plugin(
+    zip_path: String,
+    state: tauri::State<PluginManager>,
+) -> Result<CliImportPreview, String> {
+    let path = std::path::PathBuf::from(&zip_path);
+    if !path.is_file() {
+        return Err(format!("插件文件不存在: {}", zip_path));
+    }
+    if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
+        return Err(format!("不是 .kgpg 文件: {}", zip_path));
+    }
+
+    // 先确保内置插件安装（主要为了初始化 plugins_directory；失败不阻断预览）
+    if let Err(e) = state.ensure_prepackaged_plugins_installed() {
+        eprintln!("[WARN] 安装内置插件失败（将继续预览）：{e}");
+    }
+
+    // 结构检查
+    validate_kgpg_structure(&state, &path)?;
+
+    let preview = state.preview_import_from_zip(&path)?;
+    let manifest = state.read_plugin_manifest(&path)?;
+    let icon_png_base64 = {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        match state.read_plugin_icon(&path)? {
+            Some(bytes) if !bytes.is_empty() => Some(STANDARD.encode(bytes)),
+            _ => None,
+        }
+    };
+
+    Ok(CliImportPreview {
+        preview,
+        manifest,
+        icon_png_base64,
+        file_path: path.to_string_lossy().to_string(),
+        plugins_dir: state.get_plugins_directory().to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+fn cli_import_plugin_from_zip(
+    zip_path: String,
+    state: tauri::State<PluginManager>,
+) -> Result<Plugin, String> {
+    let path = std::path::PathBuf::from(&zip_path);
+    if !path.is_file() {
+        return Err(format!("插件文件不存在: {}", zip_path));
+    }
+    if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
+        return Err(format!("不是 .kgpg 文件: {}", zip_path));
+    }
+
+    // 再做一次结构检查，避免 UI 预览后文件被替换/损坏
+    validate_kgpg_structure(&state, &path)?;
+    state.install_plugin_from_zip(&path)
+}
+
+#[tauri::command]
+fn cli_get_plugin_detail_from_zip(
+    zip_path: String,
+    state: tauri::State<PluginManager>,
+) -> Result<PluginDetail, String> {
+    let path = std::path::PathBuf::from(&zip_path);
+    if !path.is_file() {
+        return Err(format!("插件文件不存在: {}", zip_path));
+    }
+    if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
+        return Err(format!("不是 .kgpg 文件: {}", zip_path));
+    }
+
+    // 复用结构检查，提前给出友好错误
+    validate_kgpg_structure(&state, &path)?;
+
+    let plugin_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("plugin")
+        .to_string();
+
+    let manifest = state.read_plugin_manifest(&path)?;
+    let doc = state.read_plugin_doc_public(&path).ok().flatten();
+    let icon_data = state.read_plugin_icon(&path).ok().flatten();
+    let config = state.read_plugin_config_public(&path).ok().flatten();
+    let base_url = config.and_then(|c| c.base_url);
+
+    Ok(PluginDetail {
+        id: plugin_id,
+        name: manifest.name,
+        desp: manifest.description,
+        doc,
+        icon_data,
+        origin: "local".to_string(),
+        base_url,
+    })
+}
+
+#[tauri::command]
+fn cli_get_plugin_image_from_zip(
+    zip_path: String,
+    image_path: String,
+    state: tauri::State<PluginManager>,
+) -> Result<Vec<u8>, String> {
+    let path = std::path::PathBuf::from(&zip_path);
+    if !path.is_file() {
+        return Err(format!("插件文件不存在: {}", zip_path));
+    }
+    if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
+        return Err(format!("不是 .kgpg 文件: {}", zip_path));
+    }
+    // image_path 的安全性由 read_plugin_image 内部校验
+    state.read_plugin_image(&path, &image_path)
+}
+
+fn validate_kgpg_structure(pm: &PluginManager, zip_path: &std::path::Path) -> Result<(), String> {
+    // 1) manifest 必须可读/可解析
+    let _ = pm.read_plugin_manifest(zip_path)?;
+
+    // 2) crawl.rhai 必须存在（插件包的核心）
+    let script = pm.read_plugin_script(zip_path)?;
+    if script.as_deref().unwrap_or("").trim().is_empty() {
+        return Err("插件包缺少 crawl.rhai（或内容为空）".to_string());
+    }
+
+    // 3) config.json 若存在必须可解析（避免“安装后才炸”）
+    let _ = pm.read_plugin_config_public(zip_path)?;
+
+    Ok(())
+}
+
+fn import_plugin_with_ui(p: PathBuf) -> Result<(), String> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    let zip_path = p.to_string_lossy().to_string();
+    let encoded = url::form_urlencoded::byte_serialize(zip_path.as_bytes()).collect::<String>();
+    let url = WebviewUrl::App(format!("index.html?zipPath={}", encoded).into());
+
+    let context = tauri::generate_context!();
+
+    tauri::Builder::default()
+        .setup(move |app| {
+            // 只初始化插件管理器（导入 UI 不需要 Storage/Settings/DownloadQueue）
+            let plugin_manager = PluginManager::new(app.app_handle().clone());
+            app.manage(plugin_manager);
+
+            let _ = WebviewWindowBuilder::new(app, "cli-import", url.clone())
+                .title("Kabegame 插件导入")
+                .inner_size(800.0, 1000.0)
+                .resizable(true)
+                .build();
+
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            cli_preview_import_plugin,
+            cli_import_plugin_from_zip,
+            cli_get_plugin_detail_from_zip,
+            cli_get_plugin_image_from_zip
+        ])
+        .run(context)
+        .map_err(|e| format!("运行导入窗口失败: {}", e))?;
+
+    Ok(())
 }
 
 fn pack_plugin(args: PackPluginArgs) -> Result<(), String> {

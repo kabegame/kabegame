@@ -39,6 +39,10 @@ export interface AppSettings {
   restoreLastTab: boolean;
   lastTabPath: string | null;
   currentWallpaperImageId: string | null;
+
+  // Windows：画册虚拟盘（Dokan）
+  albumDriveEnabled: boolean;
+  albumDriveMountPoint: string;
 }
 
 export type AppSettingKey = keyof AppSettings;
