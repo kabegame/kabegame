@@ -1,5 +1,6 @@
 use crate::plugin::Plugin;
 use rhai::{Dynamic, Engine, Map, Position, Scope};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -157,8 +158,10 @@ fn http_get_text_with_retry(
     task_id: &str,
     url: &str,
     label: &str,
+    headers: &HashMap<String, String>,
 ) -> Result<String, String> {
     let client = crate::crawler::create_blocking_client()?;
+    let header_map = build_reqwest_header_map(app, task_id, headers);
     let retry_count = get_network_retry_count(app);
     let max_attempts = retry_count.saturating_add(1).max(1);
 
@@ -169,7 +172,11 @@ fn http_get_text_with_retry(
             return Err("Task canceled".to_string());
         }
 
-        let response = match client.get(url).send() {
+        let mut req = client.get(url);
+        if !header_map.is_empty() {
+            req = req.headers(header_map.clone());
+        }
+        let response = match req.send() {
             Ok(r) => r,
             Err(e) => {
                 if attempt < max_attempts {
@@ -238,6 +245,43 @@ fn http_get_text_with_retry(
     Err("Unreachable".to_string())
 }
 
+fn build_reqwest_header_map(
+    app: &AppHandle,
+    task_id: &str,
+    headers: &HashMap<String, String>,
+) -> HeaderMap {
+    let mut map = HeaderMap::new();
+    for (k, v) in headers {
+        let key = k.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let name = match HeaderName::from_bytes(key.as_bytes()) {
+            Ok(n) => n,
+            Err(e) => {
+                emit_http_warn(
+                    app,
+                    task_id,
+                    format!("[headers] 跳过无效 header 名：{key} ({e})"),
+                );
+                continue;
+            }
+        };
+        let value = match HeaderValue::from_str(v) {
+            Ok(v) => v,
+            Err(e) => {
+                emit_http_warn(
+                    app,
+                    task_id,
+                    format!("[headers] 跳过无效 header 值：{key} ({e})"),
+                );
+                continue;
+            }
+        };
+        map.insert(name, value);
+    }
+    map
+}
 /// task worker 线程内可复用的 Rhai runtime（Engine + 可变任务上下文）
 ///
 /// 关键点：
@@ -252,6 +296,7 @@ pub struct RhaiCrawlerRuntime {
     task_id: Shared<String>,
     current_progress: Shared<Arc<Mutex<f64>>>,
     output_album_id: Shared<Option<String>>,
+    http_headers: Shared<HashMap<String, String>>,
 }
 
 impl RhaiCrawlerRuntime {
@@ -265,6 +310,7 @@ impl RhaiCrawlerRuntime {
         let current_progress: Shared<Arc<Mutex<f64>>> =
             Arc::new(Mutex::new(Arc::new(Mutex::new(0.0))));
         let output_album_id: Shared<Option<String>> = Arc::new(Mutex::new(None));
+        let http_headers: Shared<HashMap<String, String>> = Arc::new(Mutex::new(HashMap::new()));
 
         // 将 Rhai 的 print/debug 输出重定向为 task-log 事件，供前端实时展示
         {
@@ -305,6 +351,7 @@ impl RhaiCrawlerRuntime {
             Arc::clone(&task_id),
             Arc::clone(&current_progress),
             Arc::clone(&output_album_id),
+            Arc::clone(&http_headers),
         );
 
         Self {
@@ -316,6 +363,7 @@ impl RhaiCrawlerRuntime {
             task_id,
             current_progress,
             output_album_id,
+            http_headers,
         }
     }
 
@@ -325,6 +373,7 @@ impl RhaiCrawlerRuntime {
         plugin_id: String,
         task_id: String,
         output_album_id: Option<String>,
+        http_headers: HashMap<String, String>,
     ) {
         // 每个任务都重置 page_stack 和 progress，避免跨任务污染
         {
@@ -369,6 +418,13 @@ impl RhaiCrawlerRuntime {
             };
             *guard = output_album_id;
         }
+        {
+            let mut guard = match self.http_headers.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+            *guard = http_headers;
+        }
     }
 }
 
@@ -382,6 +438,7 @@ pub fn register_crawler_functions(
     task_id: Shared<String>,
     current_progress: Shared<Arc<Mutex<f64>>>,
     output_album_id: Shared<Option<String>>,
+    http_headers: Shared<HashMap<String, String>>,
 ) {
     let stack_holder = Arc::clone(&page_stack);
 
@@ -398,6 +455,7 @@ pub fn register_crawler_functions(
         let stack_holder = Arc::clone(&stack_holder);
         let app_holder = app.clone();
         let task_id_holder = Arc::clone(&task_id);
+        let headers_holder = Arc::clone(&http_headers);
         // 注意：返回 Result<T, Box<EvalAltResult>> 时，脚本侧拿到的是 T（失败会直接抛出运行时错误）
         // 这样 print(to(...)) / print(current_html()) 不会出现 "Result<...>" 字样。
         move |url: &str| -> Result<(), Box<rhai::EvalAltResult>> {
@@ -430,10 +488,14 @@ pub fn register_crawler_functions(
             let url_clone = resolved_url.clone();
             let app_for_http = app_holder.clone();
             let task_id_for_http = get_task_id(&task_id_holder);
+            let headers_for_http = {
+                let guard = lock_or_inner(&headers_holder);
+                guard.clone()
+            };
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let result =
-                    http_get_text_with_retry(&app_for_http, &task_id_for_http, &url_clone, "to");
+                    http_get_text_with_retry(&app_for_http, &task_id_for_http, &url_clone, "to", &headers_for_http);
                 let _ = tx.send(result);
             });
             let html = rx
@@ -453,6 +515,7 @@ pub fn register_crawler_functions(
         let stack_holder = Arc::clone(&stack_holder);
         let app_holder = app.clone();
         let task_id_holder = Arc::clone(&task_id);
+        let headers_holder = Arc::clone(&http_headers);
         move |url: &str| -> Result<Map, Box<rhai::EvalAltResult>> {
             let stack = {
                 let guard = lock_or_inner(&stack_holder);
@@ -484,6 +547,10 @@ pub fn register_crawler_functions(
             let app_for_http = app_holder.clone();
             let task_id_for_http = get_task_id(&task_id_holder);
             let task_id_for_http_thread = task_id_for_http.clone();
+            let headers_for_http = {
+                let guard = lock_or_inner(&headers_holder);
+                guard.clone()
+            };
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let result = http_get_text_with_retry(
@@ -491,6 +558,7 @@ pub fn register_crawler_functions(
                     &task_id_for_http_thread,
                     &url_clone,
                     "to_json",
+                    &headers_for_http,
                 );
                 let _ = tx.send(result);
             });
@@ -1141,6 +1209,7 @@ pub fn register_crawler_functions(
     let plugin_id_holder = Arc::clone(&plugin_id);
     let task_id_holder = Arc::clone(&task_id);
     let output_album_id_holder = Arc::clone(&output_album_id);
+    let http_headers_holder = Arc::clone(&http_headers);
     engine.register_fn(
         "download_image",
         move |url: &str| -> Result<(), Box<rhai::EvalAltResult>> {
@@ -1167,6 +1236,13 @@ pub fn register_crawler_functions(
             };
             let output_album_id_for_download = {
                 let guard = match output_album_id_holder.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                guard.clone()
+            };
+            let http_headers_for_download = {
+                let guard = match http_headers_holder.lock() {
                     Ok(g) => g,
                     Err(e) => e.into_inner(),
                 };
@@ -1222,8 +1298,83 @@ pub fn register_crawler_functions(
                     task_id,
                     download_start_time,
                     output_album_id_for_download.clone(),
+                    http_headers_for_download,
                 )
                 .map_err(|e| format!("Failed to download image: {}", e).into())
+        },
+    );
+
+    // download_archive(url, type) - 导入压缩包（目前仅支持 zip）
+    let app_handle = app.clone();
+    let images_dir_holder = Arc::clone(&images_dir);
+    let plugin_id_holder = Arc::clone(&plugin_id);
+    let task_id_holder = Arc::clone(&task_id);
+    let output_album_id_holder = Arc::clone(&output_album_id);
+    let http_headers_holder = Arc::clone(&http_headers);
+    engine.register_fn(
+        "download_archive",
+        move |url: &str, archive_type: &str| -> Result<(), Box<rhai::EvalAltResult>> {
+            let images_dir = {
+                let guard = match images_dir_holder.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                guard.clone()
+            };
+            let plugin_id = {
+                let guard = match plugin_id_holder.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                guard.clone()
+            };
+            let task_id_for_download = {
+                let guard = match task_id_holder.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                guard.clone()
+            };
+            let output_album_id_for_download = {
+                let guard = match output_album_id_holder.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                guard.clone()
+            };
+            let http_headers_for_download = {
+                let guard = match http_headers_holder.lock() {
+                    Ok(g) => g,
+                    Err(e) => e.into_inner(),
+                };
+                guard.clone()
+            };
+
+            // 如果任务已被取消，让脚本失败退出
+            let dq = app_handle.state::<crate::crawler::DownloadQueue>();
+            if dq.is_task_canceled(&task_id_for_download) {
+                return Err("Task canceled".into());
+            }
+
+            // 记录“导入开始时间”（用于 UI 排序）
+            let download_start_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+
+            let download_queue = app_handle.state::<crate::crawler::DownloadQueue>();
+            download_queue
+                .download_archive(
+                    url.to_string(),
+                    archive_type,
+                    images_dir,
+                    plugin_id,
+                    task_id_for_download,
+                    download_start_time,
+                    output_album_id_for_download.clone(),
+                    http_headers_for_download,
+                )
+                .map_err(|e| format!("Failed to download archive: {}", e).into())
         },
     );
 }
@@ -1239,6 +1390,7 @@ pub fn execute_crawler_script_with_runtime(
     script_content: &str,
     merged_config: HashMap<String, serde_json::Value>,
     output_album_id: Option<String>, // 输出画册ID，如果指定则下载完成后自动添加到画册
+    http_headers: Option<HashMap<String, String>>,
 ) -> Result<(), String> {
     // task worker 复用 runtime：这里仅重置 task 上下文（stack/progress/ids/dir）
     runtime.reset_for_task(
@@ -1246,6 +1398,7 @@ pub fn execute_crawler_script_with_runtime(
         plugin_id.to_string(),
         task_id.to_string(),
         output_album_id,
+        http_headers.unwrap_or_default(),
     );
     crate::crawler::emit_task_log(
         &runtime.app,
@@ -1421,6 +1574,7 @@ pub fn execute_crawler_script(
         script_content,
         merged_config,
         output_album_id,
+        None,
     )
 }
 

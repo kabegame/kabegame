@@ -60,8 +60,11 @@ export function useAlbumOperations() {
       newAlbumName.value = "";
     } catch (error: any) {
       console.error("创建画册并加入图片失败:", error);
-      const errorMessage = error?.message || String(error);
-      ElMessage.error(errorMessage || "操作失败");
+      // 提取友好的错误信息
+      const errorMessage = typeof error === "string" 
+        ? error 
+        : error?.message || String(error) || "操作失败";
+      ElMessage.error(errorMessage);
     }
   };
 
@@ -111,8 +114,11 @@ export function useAlbumOperations() {
       selectedAlbumId.value = "";
     } catch (error: any) {
       console.error("加入画册失败:", error);
-      const errorMessage = error?.message || String(error);
-      ElMessage.error(errorMessage || "加入画册失败");
+      // 提取友好的错误信息
+      const errorMessage = typeof error === "string" 
+        ? error 
+        : error?.message || String(error) || "加入画册失败";
+      ElMessage.error(errorMessage);
     }
   };
 

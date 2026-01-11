@@ -2,6 +2,9 @@
   <div class="albums-page">
     <div class="albums-scroll-container">
       <PageHeader title="画册">
+        <el-button v-if="albumDriveEnabled" type="primary" plain @click="openVirtualDrive">
+          去VD查看
+        </el-button>
         <el-button @click="handleRefresh" :loading="isRefreshing">
           <el-icon>
             <Refresh />
@@ -47,7 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onActivated, watch } from "vue";
+import { ref, computed, onMounted, onActivated, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Refresh, Setting } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
@@ -60,12 +63,28 @@ import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { IS_WINDOWS } from "@kabegame/core/env";
 
 const albumStore = useAlbumStore();
 const { albums, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const router = useRouter();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albums");
+
+// 虚拟磁盘
+const settingsStore = useSettingsStore();
+const albumDriveEnabled = computed(() => IS_WINDOWS && !!settingsStore.values.albumDriveEnabled);
+const albumDriveMountPoint = computed(() => settingsStore.values.albumDriveMountPoint || "K:\\");
+
+const openVirtualDrive = async () => {
+  try {
+    await invoke("open_explorer", { path: albumDriveMountPoint.value });
+  } catch (e) {
+    console.error("打开虚拟磁盘失败:", e);
+    ElMessage.error(String(e));
+  }
+};
 
 // 当前轮播画册ID
 const currentRotationAlbumId = ref<string | null>(null);
@@ -165,6 +184,8 @@ onMounted(async () => {
   try {
     await albumStore.loadAlbums();
     await loadRotationSettings();
+    // 加载虚拟磁盘设置
+    await settingsStore.loadMany(["albumDriveEnabled", "albumDriveMountPoint"]);
   } finally {
     finishLoading();
   }
@@ -224,6 +245,8 @@ onMounted(async () => {
 onActivated(async () => {
   await albumStore.loadAlbums();
   await loadRotationSettings();
+  // 重新加载虚拟磁盘设置（可能在设置页修改后返回）
+  await settingsStore.loadMany(["albumDriveEnabled", "albumDriveMountPoint"]);
 
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
   const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID.value);
@@ -297,12 +320,21 @@ const handleRefresh = async () => {
 
 const handleCreateAlbum = async () => {
   if (!newAlbumName.value.trim()) return;
-  const created = await albumStore.createAlbum(newAlbumName.value.trim());
-  await albumStore.loadAlbumPreview(created.id, 6);
-  await prefetchPreview(created);
-  newAlbumName.value = "";
-  showCreateDialog.value = false;
-  ElMessage.success("画册已创建");
+  try {
+    const created = await albumStore.createAlbum(newAlbumName.value.trim());
+    await albumStore.loadAlbumPreview(created.id, 6);
+    await prefetchPreview(created);
+    newAlbumName.value = "";
+    showCreateDialog.value = false;
+    ElMessage.success("画册已创建");
+  } catch (error: any) {
+    console.error("创建画册失败:", error);
+    // 提取友好的错误信息
+    const errorMessage = typeof error === "string" 
+      ? error 
+      : error?.message || String(error) || "创建画册失败";
+    ElMessage.error(errorMessage);
+  }
 };
 
 // 卡牌交互

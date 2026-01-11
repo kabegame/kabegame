@@ -12,13 +12,14 @@
 - 插件编辑器，以单独的进程运行
 - cli命令行，可用的命令为 kabegame-cli plugin run/pack
 - 添加虚拟盘，可以通过文件资源管理器直接看画册的图片啦
+- rhai脚本新增 download_archive
 
 ### Changed
 - 将 ImageGrid 与 GalleryView 合并为一个组件
 - 为 ImageGrid 添加虚拟滚动和按需加载等优化，轻松对应数万、甚至十万百万级别的滚动
 - 使用worker而非创建线程，多任务不再卡顿
 - 图片的主码从字符串变成数字
-- 
+- 重构 imageSrcMap 为全局store
  
 ### Deprecated
 - 壁纸的style字段和transition字段，该字段现在做成了按模式保存

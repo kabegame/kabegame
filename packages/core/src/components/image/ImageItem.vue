@@ -93,23 +93,6 @@ const emit = defineEmits<{
   longPress: []; // 长按事件
   reorderClick: []; // 调整模式下的点击事件
   retryDownload: []; // 任务失败图片：重试下载
-  unmounted: [
-    payload: {
-      imageId: string;
-      thumbnailPath?: string;
-      localPath: string;
-      pendingThumbnailBlobUrl?: string;
-    }
-  ]; // 组件卸载（用于虚拟滚动：卸载 = 一定在视口外）
-  blobUrlInvalid: [
-    payload: {
-      oldUrl: string;
-      newUrl: string;
-      newBlob?: Blob;
-      imageId: string;
-      localPath: string;
-    }
-  ]; // Blob URL 无效事件（已在本地重建 newUrl，用于上层同步/缓存）
   enterAnimationEnd: []; // 入场动画结束
   leaveAnimationEnd: []; // 退场动画结束
 }>();
@@ -128,25 +111,17 @@ const {
   originalUrl,
   handleImageLoad,
   handleImageError,
-  takePendingWarmBlobUrl,
 } = useImageItemLoader({
   image: imageRef,
   imageUrl: imageUrlRef,
   useOriginal: useOriginalRef,
-  // 15s 内 URL 仍缺失才判定失败，避免“加载更多”时误显示走丢了
-  missingUrlTimeoutMs: 15000,
-  onBlobUrlInvalid: (payload) => emit("blobUrlInvalid", payload),
+  // 大列表“跳滚动条到中间”场景下，Blob 缩略图可能排队较久；这里提高阈值，避免误报“丢失”。
+  // 真正缺失/失败会通过 localExists/isTaskFailed 更快体现。
+  missingUrlTimeoutMs: 60000,
 });
 
 onUnmounted(() => {
-  // 让上层（ImageGrid）在“虚拟滚动卸载”时做 blob 预热/替换；
-  // 删除导致的卸载由上层通过“当前 images 是否仍包含该 id”来过滤。
-  emit("unmounted", {
-    imageId: props.image.id,
-    thumbnailPath: props.image.thumbnailPath,
-    localPath: props.image.localPath,
-    pendingThumbnailBlobUrl: takePendingWarmBlobUrl(),
-  });
+  // 预留：若未来需要在卸载时做统计/打点，可在这里扩展
 });
 
 const aspectRatioStyle = computed(() => {

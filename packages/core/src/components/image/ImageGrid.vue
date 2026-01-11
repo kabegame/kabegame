@@ -19,8 +19,7 @@
             @dblclick="(e) => handleItemDblClick(item.image, item.index, e)"
             @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
             @long-press="() => handleLongPress(item.index)" @reorder-click="() => handleReorderClick(item.index)"
-            @retry-download="() => emit('retry-download', { image: item.image })" @unmounted="handleItemUnmounted"
-            @blob-url-invalid="handleBlobUrlInvalid"
+            @retry-download="() => emit('retry-download', { image: item.image })"
             @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
         </div>
 
@@ -34,8 +33,8 @@
             :reorder-selected="isReorderMode && reorderSourceIndex === index"
             @click="(e) => handleItemClick(image, index, e)" @dblclick="(e) => handleItemDblClick(image, index, e)"
             @contextmenu="(e) => handleItemContextMenu(image, index, e)" @long-press="() => handleLongPress(index)"
-            @reorder-click="() => handleReorderClick(index)" @retry-download="() => emit('retry-download', { image })"
-            @unmounted="handleItemUnmounted" @blob-url-invalid="handleBlobUrlInvalid" />
+            @reorder-click="() => handleReorderClick(index)"
+            @retry-download="() => emit('retry-download', { image })" />
         </transition-group>
       </div>
 
@@ -71,7 +70,6 @@ import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
 import { useUiStore } from "../../stores/ui";
 import { useDragScroll } from "../../composables/useDragScroll";
-import { useBlobUrlLruCache } from "../../composables/useBlobUrlLruCache";
 
 // core 版：明确去掉 favorite/addToAlbum
 export type ContextCommand =
@@ -136,8 +134,6 @@ const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 const showEmptyState = computed(() => props.showEmptyState ?? false);
 const isLoading = computed(() => props.loading ?? false);
-// 不是响应式
-const blobCache = useBlobUrlLruCache();
 
 // 从 store 解析宽高比设置
 const parseAspectRatioFromStore = (value: string | null | undefined): number | null => {
@@ -268,27 +264,8 @@ const contextMenuVisible = ref(false);
 const contextMenuImage = ref<ImageInfo | null>(null);
 const contextMenuPosition = ref({ x: 0, y: 0 });
 
-// 对 imageUrlMap 的本地覆盖：用于处理 Blob URL 失效重建后的缓存
-const localUrlOverrides = ref<Record<string, { thumbnail?: string; original?: string }>>({});
-const localBlobObjects = new Map<string, Blob>();
-
-const getEffectiveImageUrl = (id: string) => {
-  const base = props.imageUrlMap?.[id];
-  const ov = localUrlOverrides.value?.[id];
-  if (!ov) return base;
-  return { ...(base || {}), ...(ov || {}) };
-};
-const imageUrlMapForPreview = computed(() => {
-  const base = props.imageUrlMap || {};
-  const ov = localUrlOverrides.value || {};
-  const keys = Object.keys(ov);
-  if (keys.length === 0) return base;
-  const merged: Record<string, { thumbnail?: string; original?: string }> = { ...base };
-  for (const id of keys) {
-    merged[id] = { ...(base[id] || {}), ...(ov[id] || {}) };
-  }
-  return merged;
-});
+const getEffectiveImageUrl = (id: string) => props.imageUrlMap?.[id];
+const imageUrlMapForPreview = computed(() => props.imageUrlMap || {});
 
 // 窗口宽高比（用于 item aspect ratio）
 const windowAspectRatio = ref<number>(16 / 9);
@@ -397,65 +374,7 @@ const renderedItems = computed(() => {
   return out;
 });
 
-type ItemUnmountedPayload = {
-  imageId: string;
-  thumbnailPath?: string;
-  localPath: string;
-  pendingThumbnailBlobUrl?: string;
-};
-
-const currentImageIdSet = computed(() => new Set(images.value.map((i) => i.id)));
-const warmedOverrideIds = new Set<string>();
 let gridDestroyed = false;
-
-const applyThumbnailOverride = (imageId: string, blobUrl: string) => {
-  if (!blobUrl || !blobUrl.startsWith("blob:")) return;
-  const current = localUrlOverrides.value[imageId] || {};
-  localUrlOverrides.value = {
-    ...localUrlOverrides.value,
-    [imageId]: { ...current, thumbnail: blobUrl },
-  };
-};
-
-/**
- * 虚拟滚动策略：不再依赖“视口判断”来决定何时把 asset url 换成 blob url。
- * - 当 item 被卸载（= 一定在视口外）时，再把缩略图 URL 覆盖为 blob url。
- * - 若该卸载来自“删除”（id 已不在当前 images 列表中），则不做替换/不做预热（避免无意义 IO）。
- */
-const handleItemUnmounted = (payload: ItemUnmountedPayload) => {
-  if (!payload?.imageId) return;
-  if (gridDestroyed) return;
-  if (!enableVirtualScroll.value) return;
-
-  // 删除/换页/清空导致的卸载：跳过（用户要求：删除不替换/不加载）
-  if (!currentImageIdSet.value.has(payload.imageId)) return;
-
-  console.log("handleItemUnmounted", payload);
-
-  const effective = getEffectiveImageUrl(payload.imageId);
-  const currentThumb = (effective?.thumbnail || "").trim();
-  if (currentThumb.startsWith("blob:")) return;
-
-  // 优先使用 item 在挂载期间 warmup 得到的 pending blob（避免重复 IO）
-  if (payload.pendingThumbnailBlobUrl?.startsWith("blob:")) {
-    applyThumbnailOverride(payload.imageId, payload.pendingThumbnailBlobUrl);
-    return;
-  }
-
-  // 兜底：卸载时再预热一次（保证“在视口外”），并写回 override
-  // 仅对缩略图做（避免把原图读进内存造成巨大开销）
-  const localPath = (payload.thumbnailPath || "").trim();
-  if (!localPath) return;
-  if (warmedOverrideIds.has(payload.imageId)) return;
-  warmedOverrideIds.add(payload.imageId);
-
-  void blobCache.ensureThumbnailFromLocalPath(localPath).then((blobUrl) => {
-    if (!blobUrl) return;
-    if (gridDestroyed) return;
-    if (!currentImageIdSet.value.has(payload.imageId)) return;
-    applyThumbnailOverride(payload.imageId, blobUrl);
-  });
-};
 
 const gridStyle = computed(() => {
   const columns = gridColumnsCount.value;
@@ -666,39 +585,8 @@ const clearSelection = () => {
 };
 
 
-const handleBlobUrlInvalid = (payload: {
-  oldUrl: string;
-  newUrl: string;
-  newBlob?: Blob;
-  imageId: string;
-  localPath: string;
-}) => {
-  if (!payload?.newUrl) return;
-  const img = images.value.find((i) => i.id === payload.imageId);
-  if (!img) return;
-  if (payload.newUrl.startsWith("blob:") && payload.newBlob) {
-    localBlobObjects.set(payload.newUrl, payload.newBlob);
-  }
-  const old = payload.oldUrl;
-  if (old && old.startsWith("blob:") && localBlobObjects.has(old)) {
-    setTimeout(() => {
-      if (!localBlobObjects.has(old)) return;
-      try {
-        URL.revokeObjectURL(old);
-      } catch { }
-      localBlobObjects.delete(old);
-    }, 5000);
-  }
-  const isThumbnail = !!img.thumbnailPath && payload.localPath === (img.thumbnailPath || img.localPath);
-  const current = localUrlOverrides.value[payload.imageId] || {};
-  localUrlOverrides.value = {
-    ...localUrlOverrides.value,
-    [payload.imageId]: {
-      ...current,
-      ...(isThumbnail ? { thumbnail: payload.newUrl } : { original: payload.newUrl }),
-    },
-  };
-};
+// Blob URL 的生成/失效/重建统一交给上层 loader + 全局缓存；
+// core ImageGrid 不再维护局部 override。
 
 // scroll-stable：给上层用于触发“加载图片 URL”
 let scrollStableTimer: number | null = null;

@@ -528,6 +528,28 @@ image_list
    - `download_image()` 是异步的，图片会在后台下载
    - 不需要等待下载完成即可继续执行脚本
 
+### `download_archive(url, type)`
+
+导入压缩包（异步处理）。目前仅支持 `zip`。
+
+**参数：**
+- `url` (string): 压缩包 URL 或本地路径
+- `type` (string): 压缩包类型，目前仅支持 `"zip"`
+
+**说明：**
+- 本地 `.zip` 会解压到临时目录并递归导入其中的图片
+- `http(s)` 的 zip 会先下载 zip 到临时目录再解压导入
+- 解压产生的图片会作为“独立下载请求”逐个入队，受全局并发下载限制
+
+**示例：**
+```rhai
+// 导入本地 zip（Windows 路径 / file URL 均可）
+download_archive("D:\\Downloads\\pack.zip", "zip");
+
+// 导入远程 zip
+download_archive("https://example.com/pack.zip", "zip");
+```
+
 5. **JSON 处理**：
    - `to_json()` 返回的 Map 可以直接访问属性
    - 嵌套对象和数组都被正确转换

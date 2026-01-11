@@ -5,7 +5,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { DocumentCopy, Delete } from "@element-plus/icons-vue";
+import { Delete } from "@element-plus/icons-vue";
 import type { ImageInfo } from "../../types/image";
 import ContextMenu, { type MenuItem } from "../ContextMenu.vue";
 
@@ -24,8 +24,8 @@ const props = withDefaults(defineProps<Props>(), {
   removeText: "删除",
 });
 
+// 注意：多选时不显示复制选项，因为浏览器限制一次只能复制一张图片到剪贴板
 const getMenuItemsTemplate = (countText: string, removeText: string): MenuItem[] => [
-  { key: "copy", type: "item", label: "全部复制", icon: DocumentCopy, command: "copy", suffix: countText },
   { key: "remove", type: "item", label: removeText, icon: Delete, command: "remove", suffix: countText },
 ];
 

@@ -135,7 +135,7 @@
                 <ClearUserDataSetting />
               </SettingRow>
 
-              <SettingRow v-if="isDev" label="生成测试图片（调试）" description="基于现有图片数据批量克隆插入，用于性能/分页测试（仅开发模式可见）">
+              <SettingRow v-if="IS_DEV" label="生成测试图片（调试）" description="基于现有图片数据批量克隆插入，用于性能/分页测试（仅开发模式可见）">
                 <DebugGenerateImagesSetting />
               </SettingRow>
             </div>
@@ -174,12 +174,13 @@ import { IS_WINDOWS } from "@kabegame/core/env";
 
 // 使用 300ms 防闪屏加载延迟
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
+import { IS_DEV } from "@kabegame/core/env";
 
 const settingsStore = useSettingsStore();
 const activeTab = ref<string>("wallpaper");
 const isRefreshing = ref(false);
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
-const isDev = import.meta.env.DEV;
+
 
 const loadSettings = async () => {
   startLoading();

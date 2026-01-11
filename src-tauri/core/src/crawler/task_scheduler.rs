@@ -16,6 +16,8 @@ pub struct CrawlTaskRequest {
     pub task_id: String,
     pub output_dir: Option<String>,
     pub user_config: Option<HashMap<String, serde_json::Value>>,
+    #[serde(default)]
+    pub http_headers: Option<HashMap<String, String>>,
     pub output_album_id: Option<String>,
     /// 可选：直接从指定 .kgpg 文件运行（用于插件编辑器/临时插件）
     #[serde(default)]
@@ -100,6 +102,7 @@ impl TaskScheduler {
                     task_id: t.id,
                     output_dir: t.output_dir,
                     user_config: t.user_config,
+                    http_headers: t.http_headers,
                     output_album_id: t.output_album_id,
                     plugin_file_path: None,
                 })?;
@@ -178,7 +181,7 @@ fn worker_loop(
     running: Arc<AtomicUsize>,
 ) {
     // 每个 task worker 线程初始化一次 Rhai Engine，并在多任务之间复用（避免每次 Engine::new + 反复 register_fn）
-    let mut rhai_runtime = crate::crawler::rhai::RhaiCrawlerRuntime::new(app.clone());
+    let mut rhai_runtime = crate::plugin::rhai::RhaiCrawlerRuntime::new(app.clone());
 
     loop {
         let req = {
@@ -299,7 +302,7 @@ fn worker_loop(
 fn run_task(
     app: &AppHandle,
     req: &CrawlTaskRequest,
-    rhai_runtime: &mut crate::crawler::rhai::RhaiCrawlerRuntime,
+    rhai_runtime: &mut crate::plugin::rhai::RhaiCrawlerRuntime,
 ) -> Result<(), String> {
     crate::crawler::emit_task_log(
         app,
@@ -358,7 +361,7 @@ fn run_task(
     };
     let merged_config = super::build_effective_user_config_from_var_defs(&var_defs, user_cfg);
 
-    crate::crawler::rhai::execute_crawler_script_with_runtime(
+    crate::plugin::rhai::execute_crawler_script_with_runtime(
         rhai_runtime,
         &plugin,
         &images_dir,
@@ -368,5 +371,6 @@ fn run_task(
         &script_content,
         merged_config,
         req.output_album_id.clone(),
+        req.http_headers.clone(),
     )
 }

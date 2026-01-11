@@ -33,8 +33,7 @@
             <el-form-item label="选择源">
                 <el-select v-model="form.pluginId" placeholder="请选择源" style="width: 100%"
                     popper-class="crawl-plugin-select-dropdown">
-                    <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name"
-                        :value="plugin.id">
+                    <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
                         <div class="plugin-option">
                             <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]"
                                 class="plugin-option-icon" />
@@ -165,6 +164,27 @@
                 </el-form-item>
             </template>
 
+            <el-divider content-position="left">高级设置</el-divider>
+            <el-form-item label="HTTP 头">
+                <div class="headers-editor">
+                    <div v-for="(row, idx) in httpHeaderRows" :key="idx" class="header-row">
+                        <el-input v-model="row.key" placeholder="Header 名（如 Authorization）" />
+                        <el-input v-model="row.value" placeholder="Header 值（如 Bearer xxx）" />
+                        <el-button type="danger" link @click="removeHeaderRow(idx)">删除</el-button>
+                    </div>
+                    <div class="header-actions">
+                        <el-button size="small" @click="addHeaderRow">添加 Header</el-button>
+                        <el-button v-if="selectedRunConfigId" size="small" type="primary"
+                            @click="saveHeadersToSelectedConfig">
+                            保存到当前配置
+                        </el-button>
+                    </div>
+                    <div class="config-hint">
+                        提示：这里的 HTTP 头会用于爬虫请求（to/to_json）与图片下载（download_image），不会注入到脚本变量里。
+                    </div>
+                </div>
+            </el-form-item>
+
             <el-divider content-position="left">保存为配置（可选）</el-divider>
             <el-form-item>
                 <el-checkbox v-model="saveAsConfig">保存为配置（下次再使用啦）</el-checkbox>
@@ -216,6 +236,48 @@ const emit = defineEmits<{
 const crawlerStore = useCrawlerStore();
 const pluginStore = usePluginStore();
 const albumStore = useAlbumStore();
+
+type HttpHeaderRow = { key: string; value: string };
+const httpHeaderRows = ref<HttpHeaderRow[]>([]);
+const addHeaderRow = () => httpHeaderRows.value.push({ key: "", value: "" });
+const removeHeaderRow = (idx: number) => httpHeaderRows.value.splice(idx, 1);
+const toHttpHeadersMap = () => {
+    const out: Record<string, string> = {};
+    for (const r of httpHeaderRows.value) {
+        const k = `${r.key ?? ""}`.trim();
+        if (!k) continue;
+        out[k] = `${r.value ?? ""}`;
+    }
+    return out;
+};
+const loadHeadersFromConfig = (cfgId: string | null) => {
+    if (!cfgId) {
+        httpHeaderRows.value = [];
+        return;
+    }
+    const cfg = crawlerStore.runConfigs.find((c) => c.id === cfgId);
+    const headers = cfg?.httpHeaders || {};
+    httpHeaderRows.value = Object.entries(headers).map(([k, v]) => ({ key: k, value: v }));
+};
+const saveHeadersToSelectedConfig = async () => {
+    const cfgId = selectedRunConfigId.value;
+    if (!cfgId) return;
+    const cfg = crawlerStore.runConfigs.find((c) => c.id === cfgId);
+    if (!cfg) {
+        ElMessage.error("配置不存在");
+        return;
+    }
+    try {
+        await crawlerStore.updateRunConfig({
+            ...cfg,
+            httpHeaders: toHttpHeadersMap(),
+        });
+        ElMessage.success("已保存到当前配置");
+    } catch (e) {
+        console.error("更新配置失败:", e);
+        ElMessage.error("保存失败");
+    }
+};
 
 const visible = computed({
     get: () => props.modelValue,
@@ -370,9 +432,13 @@ const handleCreateOutputAlbum = async () => {
         // 清空输入框
         newOutputAlbumName.value = "";
         ElMessage.success(`已创建画册「${created.name}」`);
-    } catch (error) {
+    } catch (error: any) {
         console.error("创建画册失败:", error);
-        ElMessage.error("创建画册失败");
+        // 提取友好的错误信息
+        const errorMessage = typeof error === "string"
+            ? error
+            : error?.message || String(error) || "创建画册失败";
+        ElMessage.error(errorMessage);
     }
 };
 
@@ -390,9 +456,18 @@ const handleStartCrawl = async () => {
                 ElMessage.warning("请输入画册名称");
                 return;
             }
-            const created = await albumStore.createAlbum(newOutputAlbumName.value.trim());
-            selectedOutputAlbumId.value = created.id;
-            newOutputAlbumName.value = "";
+            try {
+                const created = await albumStore.createAlbum(newOutputAlbumName.value.trim());
+                selectedOutputAlbumId.value = created.id;
+                newOutputAlbumName.value = "";
+            } catch (error: any) {
+                // 提取友好的错误信息
+                const errorMessage = typeof error === "string"
+                    ? error
+                    : error?.message || String(error) || "创建画册失败";
+                ElMessage.error(errorMessage);
+                return; // 创建画册失败，停止后续流程
+            }
         }
 
         // local-import：导入文件夹/zip 时，可选自动创建画册（仅当未手选输出画册时生效）
@@ -408,9 +483,13 @@ const handleStartCrawl = async () => {
                     const created = await albumStore.createAlbum(name);
                     selectedOutputAlbumId.value = created.id;
                     ElMessage.success(`已创建画册「${created.name}」`);
-                } catch (e) {
+                } catch (e: any) {
                     console.warn("自动创建画册失败，将仅添加到画廊:", e);
-                    ElMessage.warning("自动创建画册失败：将仅添加到画廊");
+                    // 提取友好的错误信息
+                    const errorMessage = typeof e === "string"
+                        ? e
+                        : e?.message || String(e) || "自动创建画册失败";
+                    ElMessage.warning(`自动创建画册失败：${errorMessage}，将仅添加到画廊`);
                 }
             }
         }
@@ -442,6 +521,7 @@ const handleStartCrawl = async () => {
             pluginVars.value.length > 0
                 ? expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[])
                 : {};
+        const httpHeaders = toHttpHeadersMap();
 
         // 可选：保存为运行配置（不影响本次直接运行）
         if (saveAsConfig.value) {
@@ -456,6 +536,7 @@ const handleStartCrawl = async () => {
                 url: "",
                 outputDir: form.value.outputDir || undefined,
                 userConfig: backendVars,
+                httpHeaders,
             });
         }
 
@@ -465,7 +546,8 @@ const handleStartCrawl = async () => {
             form.value.pluginId,
             form.value.outputDir || undefined,
             backendVars,
-            selectedOutputAlbumId.value || undefined
+            selectedOutputAlbumId.value || undefined,
+            httpHeaders
         ).catch(error => {
             // 这里的错误是任务初始化失败，由 watch 监听来处理任务状态变化时的错误显示
             console.error("任务执行失败:", error);
@@ -480,10 +562,14 @@ const handleStartCrawl = async () => {
         // 关闭对话框
         visible.value = false;
         emit("started");
-    } catch (error) {
+    } catch (error: any) {
         console.error("添加任务失败:", error);
         // 只处理添加任务时的错误（如保存配置失败），执行错误由 watch 处理
-        ElMessage.error(error instanceof Error ? error.message : "添加任务失败");
+        // 提取友好的错误信息
+        const errorMessage = typeof error === "string"
+            ? error
+            : error?.message || String(error) || "添加任务失败";
+        ElMessage.error(errorMessage);
     }
 };
 
@@ -565,6 +651,7 @@ watch(selectedRunConfigId, async (cfgId) => {
     }
 
     await loadConfigToForm(cfgId);
+    loadHeadersFromConfig(cfgId);
 });
 </script>
 
@@ -600,6 +687,26 @@ watch(selectedRunConfigId, async (cfgId) => {
     font-size: 12px;
     color: var(--anime-text-secondary);
     margin-top: 4px;
+}
+
+.headers-editor {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.header-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
 }
 
 .plugin-option {

@@ -1,12 +1,12 @@
 import { ref, watch, type Ref } from "vue";
-import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
-import type { ImageInfo } from "@/stores/crawler";
-
-export type ImageUrlMap = Record<string, { thumbnail?: string; original?: string }>;
+import type { ImageInfo, ImageUrlMap } from "../types/image";
+import { useImageUrlMapCache } from "./useImageUrlMapCache";
 
 type LoadKind = "thumbnail" | "original";
 
-type UseImageUrlLoaderParams = {
+export type UseImageUrlLoaderParams<
+  TImage extends Pick<ImageInfo, "id" | "localPath" | "thumbnailPath">
+> = {
   /**
    * `ImageGrid` 的真实滚动容器（通过 `gridRef.getContainerEl()` 拿到）。
    * 用于估算可视范围，做到“只优先加载视口附近的图片”。
@@ -15,7 +15,7 @@ type UseImageUrlLoaderParams = {
   /**
    * 当前页面的图片列表（Gallery/AlbumDetail/TaskDetail 都可复用）。
    */
-  imagesRef: Ref<ImageInfo[]>;
+  imagesRef: Ref<TImage[]>;
   /**
    * 是否优先加载原图（例如列数<=2 时，为了更清晰）。
    * - false：只保证缩略图，原图按需再补
@@ -34,25 +34,28 @@ type UseImageUrlLoaderParams = {
 };
 
 /**
- * 从本地路径读取文件并生成 Blob URL（带超时/重试/并发控制/视口优先）。
- *
- * 这套实现最初来自 Gallery 的 `loadImageUrls` 优化；抽出后可复用于所有 `ImageGrid` 页面。
+ * 统一的图片 URL 加载器（供所有 ImageGrid 页面复用）：
+ * - thumbnail：一律 Blob URL（readFile -> Blob -> createObjectURL），由 core 的全局 LRU(10000) 管理
+ * - original：一律 asset URL（convertFileSrc，同步）
  */
-export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
+export function useImageUrlLoader<
+  TImage extends Pick<ImageInfo, "id" | "localPath" | "thumbnailPath">
+>(params: UseImageUrlLoaderParams<TImage>) {
   const preferOriginalInGrid = params.preferOriginalInGrid ?? ref(false);
+  const cache = useImageUrlMapCache();
 
-  // 图片 URL 映射（thumbnail/original）
-  const imageSrcMap = ref<ImageUrlMap>({});
+  // 全局共享的 imageUrlMap（Vue 响应式）
+  const imageSrcMap = cache.imageUrlMap;
 
   // O(1) 存在性判断：避免异步回写到已被移除的图片
   let imageIdSet = new Set<string>();
-  const rebuildIdSet = (imgs: ImageInfo[]) => {
-    imageIdSet = new Set(imgs.map((i) => i.id));
+  const rebuildIdSet = (imgs: TImage[]) => {
+    imageIdSet = new Set((imgs || []).map((i) => i.id));
   };
   rebuildIdSet(params.imagesRef.value || []);
 
   // 追加场景下尽量增量更新 set（避免频繁全量 new Set）
-  let lastImagesSnapshot: ImageInfo[] = params.imagesRef.value || [];
+  let lastImagesSnapshot: TImage[] = params.imagesRef.value || [];
   watch(
     () => params.imagesRef.value,
     (next, prev) => {
@@ -80,7 +83,6 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
           prevFirst === nextFirst &&
           prevLast === nextLastAtPrev
         ) {
-          // 增量补齐新增区间
           for (let i = prevArr.length; i < nextArr.length; i++) {
             const id = nextArr[i]?.id;
             if (id) imageIdSet.add(id);
@@ -88,24 +90,19 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
           return;
         }
       }
-      // 其它情况（删除/重排/全量刷新）：重建一次
+      // 删除/重排/全量刷新：重建
       rebuildIdSet(nextArr);
     },
     { deep: false }
   );
 
-  // 加载状态缓存：避免 scroll-stable / rAF 高频触发时重复 readFile 同一张图
+  // 加载状态缓存：避免 scroll-stable / rAF 高频触发时重复读同一张图
   const loadedThumbnailIds = new Set<string>();
   const loadedOriginalIds = new Set<string>();
   const inFlightThumbnailIds = new Set<string>();
   const inFlightOriginalIds = new Set<string>();
 
-  // 不再做“远程预下载”（会引入 CORS/跨域限制 & 网络波动导致 UI 抖动）：
-  // - 对失败占位/远程 url 的图片：直接显示“图片丢失/下载失败”的文字提示（由 ImageItem 负责渲染）
-
-  // 超时 + 重试：避免少量图片卡住导致“永远 inFlight”
-  const THUMBNAIL_TIMEOUT_MS = 2500;
-  const ORIGINAL_TIMEOUT_MS = 6500;
+  // 重试（极少数文件暂时不可读/空返回时兜底）
   const MAX_THUMBNAIL_RETRIES = 3;
   const MAX_ORIGINAL_RETRIES = 2;
   const RETRY_BASE_DELAY_MS = 450;
@@ -113,38 +110,8 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
   const originalRetryCount = new Map<string, number>();
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  async function getImageUrl(localPath: string): Promise<string> {
-    const raw = (localPath || "").trim();
-    if (!raw) return "";
-    try {
-      // 移除 Windows 长路径前缀 \\?\
-      const normalizedPath = raw.trimStart().replace(/^\\\\\?\\/, "").trim();
-      if (!normalizedPath) return "";
-
-      // 非 Tauri 环境：不要返回 D:\... 给 <img>
-      if (!isTauri()) return "";
-
-      const u = convertFileSrc(normalizedPath);
-      const looksLikeWindowsPath = /^[a-zA-Z]:\\/.test(u) || /^[a-zA-Z]:\//.test(u);
-      if (!u || looksLikeWindowsPath) return "";
-      return u;
-    } catch (error) {
-      console.error("convertFileSrc 失败:", error, raw);
-      return "";
-    }
-  }
-
-  const uniquePaths = (paths: Array<string | undefined | null>): string[] => {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const p of paths) {
-      const v = (p || "").trim();
-      if (!v) continue;
-      if (seen.has(v)) continue;
-      seen.add(v);
-      out.push(v);
-    }
-    return out;
+  const pickThumbnailPath = (image: TImage): string => {
+    return ((image.thumbnailPath as any) || image.localPath || "").trim();
   };
 
   const clearRetryTimer = (imageId: string) => {
@@ -198,7 +165,7 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
 
     const colsRaw = params.gridColumns?.value ?? 0;
     if (!colsRaw || colsRaw <= 0) {
-      // 退化：DOM 扫描（慢，但兼容）
+      // 退化：DOM 扫描
       const containerRect = container.getBoundingClientRect();
       const items = container.querySelectorAll<HTMLElement>(".image-item");
       const visibleIds: string[] = [];
@@ -227,11 +194,18 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
       columns <= 1
         ? containerWidth
         : (containerWidth - gap * (columns - 1)) / columns;
-    const aspectRatio = Math.max(
-      0.1,
-      window.innerWidth / Math.max(1, window.innerHeight)
-    );
-    const itemHeight = itemWidth > 0 ? itemWidth / aspectRatio : 200;
+
+    // 关键：尽量使用真实 DOM 高度（避免“估算行高”与 ImageGrid 实际使用的 aspectRatio 不一致，导致加载错区间）。
+    // 这里即使缩略图没出，骨架/占位也会渲染 `.image-item`，所以通常能测到。
+    const firstItemEl = container.querySelector<HTMLElement>(".image-item");
+    const measuredItemHeight = firstItemEl?.getBoundingClientRect().height ?? 0;
+    const itemHeight =
+      measuredItemHeight > 1
+        ? measuredItemHeight
+        : itemWidth > 0
+        ? itemWidth /
+          Math.max(0.1, window.innerWidth / Math.max(1, window.innerHeight))
+        : 200;
     const rowHeight = itemHeight + gap;
 
     const overscanRows = 8;
@@ -244,7 +218,10 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
       overscanRows;
 
     const start = Math.max(0, Math.min(images.length, startRow * columns));
-    const end = Math.max(start, Math.min(images.length, (endRow + 1) * columns));
+    const end = Math.max(
+      start,
+      Math.min(images.length, (endRow + 1) * columns)
+    );
     const visibleIds = images.slice(start, end).map((i) => i.id);
     return { start, end, visibleIds };
   };
@@ -274,7 +251,6 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
   };
 
   const scheduleNext = (callback: () => void) => {
-    // 强交互期间：尽量不安排 readFile/Blob 创建等重活
     if (params.isInteracting?.value) {
       setTimeout(() => {
         if (params.isInteracting?.value) {
@@ -292,7 +268,7 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
     }
   };
 
-  const loadSingleImageUrl = async (image: ImageInfo, needOriginal: boolean) => {
+  const loadSingleImageUrl = async (image: TImage, needOriginal: boolean) => {
     const existing = imageSrcMap.value[image.id] || {};
     const hasThumb =
       !!existing.thumbnail ||
@@ -306,15 +282,12 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
     if (!hasThumb) {
       inFlightThumbnailIds.add(image.id);
       try {
-        const candidates = uniquePaths([image.thumbnailPath, image.localPath]);
-        let thumbUrl = "";
-        for (const p of candidates) {
-          thumbUrl = await getImageUrl(p);
-          if (thumbUrl) break;
-        }
+        const thumbPath = pickThumbnailPath(image);
+        const thumbUrl = thumbPath
+          ? await cache.ensureThumbnailBlobUrl(image.id, thumbPath)
+          : "";
         if (!imageIdSet.has(image.id)) return;
         if (thumbUrl) {
-          imageSrcMap.value[image.id] = { ...existing, thumbnail: thumbUrl };
           loadedThumbnailIds.add(image.id);
           thumbnailRetryCount.delete(image.id);
           clearRetryTimer(image.id);
@@ -329,11 +302,11 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
     if (needOriginal && !hasOrig) {
       inFlightOriginalIds.add(image.id);
       try {
-        let origUrl = image.localPath ? await getImageUrl(image.localPath) : "";
+        const origUrl = image.localPath
+          ? cache.ensureOriginalAssetUrl(image.id, image.localPath)
+          : "";
         if (!imageIdSet.has(image.id)) return;
         if (origUrl) {
-          const curr = imageSrcMap.value[image.id] || {};
-          imageSrcMap.value[image.id] = { ...curr, original: origUrl };
           loadedOriginalIds.add(image.id);
           originalRetryCount.delete(image.id);
           clearRetryTimer(image.id);
@@ -346,14 +319,17 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
     }
   };
 
-  const loadImageUrls = async (targetImages?: ImageInfo[]) => {
-    // 强交互期间：仅在“显式指定目标集合”时执行（避免滚动掉帧）
+  const loadImageUrls = async (targetImages?: TImage[]) => {
     if (params.isInteracting?.value && !targetImages) return;
 
     const range = estimateVisibleIndexRange();
+    // 关键：避免在“一次性塞入 10k 图片”时把全量图片纳入本次扫描/队列。
+    // 这种场景的用户预期是“当前视口先出图”，而不是后台把 10k 全部排队导致视口饿死。
+    const MAX_TARGET_SCAN = 2000;
     const source =
-      targetImages ??
-      params.imagesRef.value.slice(range.start, range.end);
+      targetImages && targetImages.length > MAX_TARGET_SCAN
+        ? params.imagesRef.value.slice(range.start, range.end)
+        : targetImages ?? params.imagesRef.value.slice(range.start, range.end);
     const visibleSet = new Set(range.visibleIds);
 
     const needOriginal = preferOriginalInGrid.value;
@@ -374,6 +350,7 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
 
     if (imagesToLoad.length === 0) return;
 
+    // 可见图片优先
     imagesToLoad.sort((a, b) => {
       const av = visibleSet.has(a.id) ? 0 : 1;
       const bv = visibleSet.has(b.id) ? 0 : 1;
@@ -386,114 +363,13 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
       ? imagesToLoad.filter((img) => visibleSet.has(img.id))
       : imagesToLoad;
     if (likelyVisible.length > 0) {
-      void runPool(likelyVisible, visibleConcurrency, async (image) => {
-        await loadSingleImageUrl(image, needOriginal);
+      void runPool(likelyVisible, visibleConcurrency, async (img) => {
+        await loadSingleImageUrl(img, needOriginal);
       });
-    }
-
-    const remainingImages = targetImages
-      ? imagesToLoad.filter((img) => !visibleSet.has(img.id))
-      : [];
-    if (remainingImages.length > 0) {
-      const remainingUpdates: ImageUrlMap = {};
-      let processedCount = 0;
-      const BATCH_SIZE = 20;
-      let pendingUpdate = false;
-
-      const flushUpdates = () => {
-        if (Object.keys(remainingUpdates).length > 0) {
-          Object.assign(imageSrcMap.value, remainingUpdates);
-          Object.keys(remainingUpdates).forEach((key) => delete remainingUpdates[key]);
-        }
-        pendingUpdate = false;
-      };
-
-      const processRemaining = async (index = 0) => {
-        if (index >= remainingImages.length) {
-          if (Object.keys(remainingUpdates).length > 0) {
-            Object.assign(imageSrcMap.value, remainingUpdates);
-          }
-          return;
-        }
-
-        const image = remainingImages[index];
-        const existing = imageSrcMap.value[image.id];
-        const hasThumb =
-          !!existing?.thumbnail ||
-          loadedThumbnailIds.has(image.id) ||
-          inFlightThumbnailIds.has(image.id);
-        const hasOrig =
-          !!existing?.original ||
-          loadedOriginalIds.has(image.id) ||
-          inFlightOriginalIds.has(image.id);
-        if (hasThumb && (!needOriginal || hasOrig)) {
-          scheduleNext(() => processRemaining(index + 1));
-          return;
-        }
-
-        try {
-          if (!hasThumb) {
-            inFlightThumbnailIds.add(image.id);
-            try {
-              const thumbPath = image.thumbnailPath || image.localPath;
-              const thumbUrl = thumbPath ? await getImageUrl(thumbPath) : "";
-              if (imageIdSet.has(image.id) && thumbUrl) {
-                remainingUpdates[image.id] = {
-                  ...(remainingUpdates[image.id] || {}),
-                  thumbnail: thumbUrl,
-                };
-                loadedThumbnailIds.add(image.id);
-                processedCount++;
-              } else if (imageIdSet.has(image.id)) {
-                scheduleRetry(image.id, "thumbnail");
-              }
-            } finally {
-              inFlightThumbnailIds.delete(image.id);
-            }
-          }
-
-          if (needOriginal && !hasOrig) {
-            inFlightOriginalIds.add(image.id);
-            try {
-              const origUrl = image.localPath ? await getImageUrl(image.localPath) : "";
-              if (imageIdSet.has(image.id) && origUrl) {
-                remainingUpdates[image.id] = {
-                  ...(remainingUpdates[image.id] || {}),
-                  original: origUrl,
-                };
-                loadedOriginalIds.add(image.id);
-                processedCount++;
-              } else if (imageIdSet.has(image.id)) {
-                scheduleRetry(image.id, "original");
-              }
-            } finally {
-              inFlightOriginalIds.delete(image.id);
-            }
-          }
-
-          if (
-            processedCount % BATCH_SIZE === 0 &&
-            Object.keys(remainingUpdates).length > 0
-          ) {
-            if (!pendingUpdate) {
-              pendingUpdate = true;
-              requestAnimationFrame(flushUpdates);
-            }
-          }
-        } catch (error) {
-          console.error("Failed to load image:", error);
-        }
-
-        scheduleNext(() => processRemaining(index + 1));
-      };
-
-      scheduleNext(() => processRemaining(0));
     }
   };
 
-  // 列数/偏好变化时也要触发一次加载：
-  // - 当列数降到 <=2 时需要 original，否则会一直停留在 thumbnail（除非用户滚动触发 scroll-stable）
-  // - 列数变化也会改变“可视范围估算”，应补齐新可视区的缩略图/原图
+  // 列数/偏好变化时触发补齐
   let columnsChangeTimer: ReturnType<typeof setTimeout> | null = null;
   const scheduleLoadOnColumnsChange = () => {
     const container = params.containerRef.value;
@@ -509,7 +385,6 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
     () => preferOriginalInGrid.value,
     (next, prev) => {
       if (next === prev) return;
-      // 只在“需要原图”时强制补齐一次
       if (next) scheduleLoadOnColumnsChange();
     }
   );
@@ -524,14 +399,11 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
 
   const removeFromCacheByIds = (imageIds: string[]) => {
     if (!imageIds || imageIds.length === 0) return;
+    cache.removeByIds(imageIds);
     for (const id of imageIds) {
       clearRetryTimer(id);
       thumbnailRetryCount.delete(id);
       originalRetryCount.delete(id);
-
-      const data = imageSrcMap.value[id];
-      // convertFileSrc 不需要 revoke
-      delete imageSrcMap.value[id];
       loadedThumbnailIds.delete(id);
       loadedOriginalIds.delete(id);
       inFlightThumbnailIds.delete(id);
@@ -547,21 +419,24 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
   ) => {
     const image = params.imagesRef.value.find((img) => img.id === imageId);
     if (!image) return;
-
-    const pathToUse =
-      isThumbnail && image.thumbnailPath ? image.thumbnailPath : localPath;
-    const newUrl = await getImageUrl(pathToUse);
-    if (!newUrl) return;
-
-    const currentData = imageSrcMap.value[imageId] || {};
-    const nextData = { ...currentData };
-    if (isThumbnail) nextData.thumbnail = newUrl;
-    else nextData.original = newUrl;
-    imageSrcMap.value[imageId] = nextData;
+    if (isThumbnail) {
+      const p = (image.thumbnailPath || localPath || "").trim();
+      if (!p) return;
+      await cache.ensureThumbnailBlobUrl(imageId, p);
+      return;
+    }
+    if (!localPath) return;
+    cache.ensureOriginalAssetUrl(imageId, localPath);
   };
 
   const reset = () => {
-    imageSrcMap.value = {};
+    // 换大页/换列表：终止旧页的 URL 加载任务（尤其是缩略图 Blob 队列）
+    cache.cancelAllThumbnailLoads();
+
+    // 让旧页 in-flight 结果尽量不落地（依赖 imageIdSet 检查）
+    imageIdSet = new Set();
+    lastImagesSnapshot = [];
+
     loadedThumbnailIds.clear();
     loadedOriginalIds.clear();
     inFlightThumbnailIds.clear();
@@ -573,7 +448,7 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
   };
 
   return {
-    imageSrcMap,
+    imageSrcMap: imageSrcMap as Ref<ImageUrlMap>,
     loadImageUrls,
     removeFromCacheByIds,
     recreateImageUrl,
@@ -581,9 +456,3 @@ export function useImageUrlLoader(params: UseImageUrlLoaderParams) {
     cleanup: reset,
   };
 }
-
-
-
-
-
-

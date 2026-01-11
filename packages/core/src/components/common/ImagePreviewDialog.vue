@@ -45,6 +45,7 @@ import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
 import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import type { ImageInfo, ImageUrlMap } from "../../types/image";
 import ImageNotFound from "./ImageNotFound.vue";
+import { useImageUrlMapCache } from "../../composables/useImageUrlMapCache";
 
 const props = defineProps<{
   images: ImageInfo[];
@@ -81,9 +82,16 @@ const previewImageLoading = ref(false);
 // 仅释放本组件创建的 blob url，避免误删外部缓存的 url
 const ownedOriginalBlobUrls = ref<Map<string, string>>(new Map());
 const loadSeq = ref(0);
+// 导航请求序号：用于“阻止切换直到 original ready”时的竞态保护
+const navSeq = ref(0);
+const pendingNav = ref<{ seq: number; index: number } | null>(null);
+const inFlightOriginalLoads = new Map<string, Promise<string>>();
 
 const previewContextMenuVisible = ref(false);
 const previewContextMenuPosition = ref({ x: 0, y: 0 });
+
+// 全局 cache（用于同步生成 original asset URL）
+const urlCache = useImageUrlMapCache();
 
 const clamp = (val: number, min: number, max: number) => Math.min(max, Math.max(min, val));
 
@@ -186,7 +194,6 @@ const previewImageStyle = computed(() => ({
   transition: previewDragging.value || previewWheelZooming.value ? "none" : "transform 0.08s ease-out",
   cursor: previewScale.value > 1 ? (previewDragging.value ? "grabbing" : "grab") : "default",
   "transform-origin": "center center",
-  opacity: previewImageLoading.value ? 0 : 1,
 }));
 
 const previewDialogTitle = computed(() => {
@@ -209,6 +216,57 @@ const getOriginalUrlFor = (imageId: string) => {
   return props.imageUrlMap?.[imageId]?.original || ownedOriginalBlobUrls.value.get(imageId) || "";
 };
 
+async function preloadImageUrl(url: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const img = new Image();
+    img.decoding = "async";
+    img.loading = "eager";
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error("preload failed"));
+    img.src = url;
+  });
+}
+
+async function ensureOriginalLoaded(image: ImageInfo): Promise<string> {
+  // 先检查是否已有 URL（包括全局 cache）
+  const hit = getOriginalUrlFor(image.id);
+  if (hit) {
+    // 后台预加载（不阻塞）
+    void preloadImageUrl(hit).catch(() => {
+      // ignore preload errors
+    });
+    return hit;
+  }
+  if (!image.localPath) return "";
+
+  const inflight = inFlightOriginalLoads.get(image.id);
+  if (inflight) return inflight;
+
+  // 立即用全局 cache 同步生成 asset URL（不等待 preload）
+  const assetUrl = urlCache.ensureOriginalAssetUrl(image.id, image.localPath);
+  if (!assetUrl) return "";
+
+  // 后台预加载（不阻塞切换）
+  const p = (async () => {
+    try {
+      await preloadImageUrl(assetUrl);
+      // preload 成功后更新到本地缓存（用于 prefetch 场景）
+      if (!ownedOriginalBlobUrls.value.has(image.id)) {
+        ownedOriginalBlobUrls.value.set(image.id, assetUrl);
+      }
+      return assetUrl;
+    } catch {
+      return assetUrl; // 即使 preload 失败，也返回 URL（让浏览器自己处理）
+    } finally {
+      inFlightOriginalLoads.delete(image.id);
+    }
+  })();
+
+  inFlightOriginalLoads.set(image.id, p);
+  // 立即返回 asset URL（不等待 preload）
+  return assetUrl;
+}
+
 const releaseOwnedOriginalUrl = (imageId: string) => {
   const url = ownedOriginalBlobUrls.value.get(imageId);
   if (url && url.startsWith("blob:")) {
@@ -230,80 +288,135 @@ const releaseAllOwnedOriginalUrls = () => {
 const setPreviewByIndex = (index: number) => {
   const img = props.images[index];
   if (!img) return;
-  const imageData = props.imageUrlMap[img.id];
-  const thumbnailUrl = imageData?.thumbnail;
 
   previewIndex.value = index;
   previewImagePath.value = img.localPath;
   previewImage.value = img;
   previewNotFound.value = false;
 
-  const originalUrl = getOriginalUrlFor(img.id);
-  if (originalUrl) {
-    // 无缝：目标原图已就绪，直接切换 src，不显示 loading
-    previewImageLoading.value = false;
-    previewNotFound.value = false;
-    previewImageUrl.value = originalUrl;
-    resetPreviewTransform();
-    return;
+  // // 新策略：预览切换只展示 original（如果 original 未就绪，应由导航层阻止切换）
+  // const originalUrl = getOriginalUrlFor(img.id);
+  // if (!originalUrl) {
+  //   previewImageUrl.value = "";
+  //   previewImageLoading.value = false;
+  //   previewNotFound.value = true;
+  //   return;
+  // }
+
+  // previewImageLoading.value = false;
+  // previewNotFound.value = false;
+  // previewImageUrl.value = originalUrl;
+  // resetPreviewTransform();
+  // 立即同步生成 original asset URL（如果 imageUrlMap 里还没有）
+  const seq = ++loadSeq.value;
+  const data = props.imageUrlMap?.[img.id];
+  const thumb = data?.thumbnail || "";
+  let originalUrl = getOriginalUrlFor(img.id);
+
+  // 如果 imageUrlMap 里没有 original，立即用全局 cache 同步生成（不需要等待 preload）
+  if (!originalUrl && img.localPath) {
+    originalUrl = urlCache.ensureOriginalAssetUrl(img.id, img.localPath);
   }
 
-  // 无缝：目标原图未就绪时不清空当前图；后台加载完成后再替换 src
-  previewImageLoading.value = true;
-  if (img.localPath) {
-    const seq = ++loadSeq.value;
-    void ensureOriginalReady(img, { seq, fallbackUrl: thumbnailUrl });
-  } else if (thumbnailUrl && !previewImageUrl.value) {
-    // 极端兜底：连当前都没有图时，只能用缩略图避免空白
-    previewImageUrl.value = thumbnailUrl;
-    previewImageLoading.value = false;
-    previewNotFound.value = false;
-    resetPreviewTransform();
-  } else if (!previewImageUrl.value) {
-    // 原图/缩略图都没有：直接标记 not found
-    previewImageLoading.value = false;
-    previewNotFound.value = true;
+  previewNotFound.value = false;
+  previewImageLoading.value = false; // 不再显示 loading（因为 asset URL 是同步生成的，不需要等待）
+  previewImageUrl.value = originalUrl || thumb || "";
+
+  // 尺寸/缩放状态重置：立即触发一次
+  resetPreviewTransform();
+
+  // 如果已经有 original URL（无论是从 imageUrlMap 还是刚生成的），预取相邻
+  if (originalUrl) {
+    if (typeof requestIdleCallback !== "undefined") {
+      requestIdleCallback(() => prefetchAdjacent(), { timeout: 2000 });
+    } else {
+      setTimeout(() => prefetchAdjacent(), 80);
+    }
+  }
+
+  // 后台预加载原图（用于确保图片能正常加载，但不在前端显示 loading）
+  if (originalUrl) {
+    void ensureOriginalLoaded(img);
   }
 };
 
 const canGoPrev = computed(() => {
   if (props.images.length <= 1) return false;
-  return true;
+  if (!previewVisible.value) return false;
+  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
+  const targetIndex = idx > 0 ? idx - 1 : props.images.length - 1;
+  const img = props.images[targetIndex];
+  // 不再检查 URL ready，只要图片存在就允许切换（切换时会立即生成 URL）
+  return !!img;
 });
 
 const canGoNext = computed(() => {
   if (props.images.length <= 1) return false;
-  return true;
+  if (!previewVisible.value) return false;
+  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
+  const lastIndex = props.images.length - 1;
+  const targetIndex = idx < lastIndex ? idx + 1 : 0;
+  const img = props.images[targetIndex];
+  // 不再检查 URL ready，只要图片存在就允许切换（切换时会立即生成 URL）
+  return !!img;
 });
+
+// 切换节流：100ms 内最多只执行一次切换，避免快速连击导致状态混乱
+let navThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+let isNavThrottled = false;
+const NAV_THROTTLE_MS = 100;
 
 const goPrev = () => {
   if (!previewVisible.value) return;
+  if (isNavThrottled) return;
   if (props.images.length <= 1) {
     ElMessage.info("没有上一张");
     return;
   }
-  if (previewIndex.value > 0) {
-    setPreviewByIndex(previewIndex.value - 1);
-    return;
-  }
-  setPreviewByIndex(props.images.length - 1);
+  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
+  const targetIndex = idx > 0 ? idx - 1 : props.images.length - 1;
+  const target = props.images[targetIndex];
+  if (!target) return;
+
+  // 开启节流
+  isNavThrottled = true;
+  if (navThrottleTimer) clearTimeout(navThrottleTimer);
+  navThrottleTimer = setTimeout(() => {
+    navThrottleTimer = null;
+    isNavThrottled = false;
+  }, NAV_THROTTLE_MS);
+
+  // 直接切换，不等待 preload（切换时会立即生成 asset URL）
+  setPreviewByIndex(targetIndex);
+  // 后台预加载原图（用于预取，不影响当前显示）
+  void ensureOriginalLoaded(target);
 };
 
 const goNext = () => {
   if (!previewVisible.value) return;
+  if (isNavThrottled) return;
   if (props.images.length <= 1) {
     ElMessage.info("没有下一张");
     return;
   }
   const lastIndex = props.images.length - 1;
-  if (previewIndex.value >= 0 && previewIndex.value < lastIndex) {
-    setPreviewByIndex(previewIndex.value + 1);
-    return;
-  }
-  if (props.images.length > 0) {
-    setPreviewByIndex(0);
-    ElMessage.info("已回到第一张");
-  }
+  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
+  const targetIndex = idx < lastIndex ? idx + 1 : 0;
+  const target = props.images[targetIndex];
+  if (!target) return;
+
+  // 开启节流
+  isNavThrottled = true;
+  if (navThrottleTimer) clearTimeout(navThrottleTimer);
+  navThrottleTimer = setTimeout(() => {
+    navThrottleTimer = null;
+    isNavThrottled = false;
+  }, NAV_THROTTLE_MS);
+
+  // 直接切换，不等待 preload（切换时会立即生成 asset URL）
+  setPreviewByIndex(targetIndex);
+  // 后台预加载原图（用于预取，不影响当前显示）
+  void ensureOriginalLoaded(target);
 };
 
 const handlePreviewDialogContextMenu = (event: MouseEvent) => {
@@ -486,12 +599,12 @@ const handlePreviewKeyDown = (event: KeyboardEvent) => {
   if (isTextInputLike(event.target)) return;
   if (event.key === "ArrowLeft") {
     event.preventDefault();
-    goPrev();
+    void goPrev();
     return;
   }
   if (event.key === "ArrowRight") {
     event.preventDefault();
-    goNext();
+    void goNext();
     return;
   }
   // Delete / Backspace：快速删除当前预览图片
@@ -520,7 +633,11 @@ const closePreview = () => {
   if (previewInteractTimer) clearTimeout(previewInteractTimer);
   previewInteractTimer = null;
   notifyPreviewInteracting(false);
+  if (navThrottleTimer) clearTimeout(navThrottleTimer);
+  navThrottleTimer = null;
+  isNavThrottled = false;
   releaseAllOwnedOriginalUrls();
+  pendingNav.value = null;
 };
 
 const handlePreviewImageDeleted = () => {
@@ -695,6 +812,11 @@ onUnmounted(() => {
     previewInteractTimer = null;
   }
   notifyPreviewInteracting(false);
+  if (navThrottleTimer) {
+    clearTimeout(navThrottleTimer);
+    navThrottleTimer = null;
+  }
+  isNavThrottled = false;
   if (resizeObserver) {
     resizeObserver.disconnect();
     resizeObserver = null;
@@ -743,40 +865,17 @@ async function ensureOriginalReady(image: ImageInfo, opts: { seq: number; fallba
       }
       return;
     }
-    const assetUrl = convertFileSrc(normalizedPath);
-    const looksLikeWindowsPath = /^[a-zA-Z]:\\/.test(assetUrl) || /^[a-zA-Z]:\//.test(assetUrl);
-    if (!assetUrl || looksLikeWindowsPath) {
-      // convertFileSrc 返回了不可用的路径（例如直接回传 Windows 路径），同样兜底结束 loading
-      if (
-        !isPrefetch &&
-        previewVisible.value &&
-        previewImage.value?.id === expectedId &&
-        opts.seq === loadSeq.value
-      ) {
-        if (opts.fallbackUrl) {
-          previewImageUrl.value = opts.fallbackUrl;
-          previewNotFound.value = false;
-        } else {
-          previewImageUrl.value = "";
-          previewNotFound.value = true;
-        }
-        previewImageLoading.value = false;
-        resetPreviewTransform();
-      }
-      return;
-    }
-    // 写入本组件缓存（先释放同 id 旧值）
-    releaseOwnedOriginalUrl(expectedId);
-    ownedOriginalBlobUrls.value.set(expectedId, assetUrl);
-
-    // 只有在“仍然是当前目标图”且 seq 未过期时才切换，避免竞态导致闪烁/错图
+    // 兼容旧逻辑：这个函数保留给 prefetchAdjacent 调用（未来可完全删掉）。
+    // 这里改为：只负责把 original 预加载并写入本地缓存；不再驱动 UI 切换。
+    const url = await ensureOriginalLoaded(image);
+    if (!url) return;
+    if (isPrefetch) return;
     if (
-      !isPrefetch &&
       previewVisible.value &&
       previewImage.value?.id === expectedId &&
       opts.seq === loadSeq.value
     ) {
-      previewImageUrl.value = assetUrl;
+      previewImageUrl.value = url;
       previewImageLoading.value = false;
       previewNotFound.value = false;
       resetPreviewTransform();

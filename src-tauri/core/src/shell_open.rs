@@ -27,9 +27,21 @@ pub fn open_path(path: &str) -> Result<(), String> {
 
         // https://learn.microsoft.com/windows/win32/api/shellapi/nf-shellapi-shellexecutew
         // 返回值 <= 32 表示错误码。
-        let rc = unsafe { ShellExecuteW(0, op.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+        let rc = unsafe {
+            ShellExecuteW(
+                0,
+                op.as_ptr(),
+                file.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
         if rc as isize <= 32 {
-            return Err(format!("Failed to open path (ShellExecuteW rc={}): {}", rc, path));
+            return Err(format!(
+                "Failed to open path (ShellExecuteW rc={}): {}",
+                rc, path
+            ));
         }
 
         return Ok(());
@@ -56,14 +68,81 @@ pub fn open_path(path: &str) -> Result<(), String> {
     }
 }
 
+/// 在资源管理器中打开一个目录（Windows Explorer；macOS Finder；Linux 文件管理器）。
+/// 使用 "explore" 操作确保在新窗口中打开目录。
+pub fn open_explorer(path: &str) -> Result<(), String> {
+    let p = path.trim();
+    if p.is_empty() {
+        return Err("路径不能为空".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        let path = normalize_windows_path_for_shell(p);
+
+        // 使用 "explore" 操作在新窗口中打开目录
+        let operation: Vec<u16> = OsStr::new("explore")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let path_wide: Vec<u16> = OsStr::new(&path)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let result = unsafe {
+            ShellExecuteW(
+                0, // HWND = 0 表示无父窗口
+                operation.as_ptr(),
+                path_wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL as i32,
+            )
+        };
+
+        // ShellExecuteW 返回值 > 32 表示成功
+        if result as usize > 32 {
+            Ok(())
+        } else {
+            Err(format!("打开资源管理器失败，错误码: {}", result as usize))
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("打开 Finder 失败: {}", e))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("打开文件管理器失败: {}", e))?;
+        Ok(())
+    }
+}
+
 /// 在文件夹中定位一个文件（Windows Explorer 选中；macOS Finder reveal；Linux 打开父目录）。
 pub fn reveal_in_folder(file_path: &str) -> Result<(), String> {
     use std::path::Path;
 
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
         use std::os::windows::process::CommandExt;
+        use std::process::Command;
 
         // CREATE_NO_WINDOW: 0x08000000
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -112,4 +191,3 @@ pub fn reveal_in_folder(file_path: &str) -> Result<(), String> {
         return Ok(());
     }
 }
-

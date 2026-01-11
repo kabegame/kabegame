@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-pub mod rhai;
 pub mod task_scheduler;
 
 pub use task_scheduler::{CrawlTaskRequest, TaskScheduler};
@@ -8,6 +7,7 @@ pub use task_scheduler::{CrawlTaskRequest, TaskScheduler};
 use crate::plugin::Plugin;
 use crate::plugin::{VarDefinition, VarOption};
 use reqwest;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -21,6 +21,21 @@ use std::sync::{Arc, Condvar, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
 use zip::ZipArchive;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchiveType {
+    Zip,
+}
+
+impl ArchiveType {
+    fn parse(s: &str) -> Option<Self> {
+        let t = s.trim().to_ascii_lowercase();
+        match t.as_str() {
+            "zip" => Some(ArchiveType::Zip),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +64,109 @@ pub fn emit_task_log(app: &AppHandle, task_id: &str, level: &str, message: impl 
             ts,
         },
     );
+}
+
+fn build_reqwest_header_map(
+    app: &AppHandle,
+    task_id: &str,
+    headers: &HashMap<String, String>,
+) -> HeaderMap {
+    let mut map = HeaderMap::new();
+    for (k, v) in headers {
+        let key = k.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let name = match HeaderName::from_bytes(key.as_bytes()) {
+            Ok(n) => n,
+            Err(e) => {
+                emit_task_log(
+                    app,
+                    task_id,
+                    "warn",
+                    format!("[headers] 跳过无效 header 名：{key} ({e})"),
+                );
+                continue;
+            }
+        };
+        let value = match HeaderValue::from_str(v) {
+            Ok(v) => v,
+            Err(e) => {
+                emit_task_log(
+                    app,
+                    task_id,
+                    "warn",
+                    format!("[headers] 跳过无效 header 值：{key} ({e})"),
+                );
+                continue;
+            }
+        };
+        map.insert(name, value);
+    }
+    map
+}
+
+fn download_file_to_path_with_retry(
+    app: &AppHandle,
+    task_id: &str,
+    url: &str,
+    dest: &Path,
+    headers: &HashMap<String, String>,
+    retry_count: u32,
+) -> Result<(), String> {
+    let client = create_blocking_client()?;
+    let header_map = build_reqwest_header_map(app, task_id, headers);
+    let max_attempts = retry_count.saturating_add(1).max(1);
+
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+
+        let dq = app.state::<DownloadQueue>();
+        if dq.is_task_canceled(task_id) {
+            return Err("Task canceled".to_string());
+        }
+
+        let mut req = client.get(url);
+        if !header_map.is_empty() {
+            req = req.headers(header_map.clone());
+        }
+
+        let resp = match req.send() {
+            Ok(r) => r,
+            Err(e) => {
+                if attempt < max_attempts {
+                    let backoff_ms = (500u64)
+                        .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
+                        .min(5000);
+                    std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                    continue;
+                }
+                return Err(format!("Failed to download archive: {e}"));
+            }
+        };
+
+        let status = resp.status();
+        if !status.is_success() {
+            let retryable =
+                status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error();
+            if retryable && attempt < max_attempts {
+                let backoff_ms = (500u64)
+                    .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
+                    .min(5000);
+                std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                continue;
+            }
+            return Err(format!("HTTP error: {status}"));
+        }
+
+        let mut file = std::fs::File::create(dest)
+            .map_err(|e| format!("Failed to create archive file: {e}"))?;
+        let mut reader = resp;
+        std::io::copy(&mut reader, &mut file)
+            .map_err(|e| format!("Failed to write archive file: {e}"))?;
+        return Ok(());
+    }
 }
 
 /// 创建配置了系统代理的 reqwest 客户端
@@ -219,8 +337,8 @@ pub async fn crawl_images(
         );
     }
 
-    // 执行 Rhai 爬虫脚本
-    rhai::execute_crawler_script(
+    // 执行 Rhai 爬虫脚本（位于 plugin 模块中）
+    crate::plugin::rhai::execute_crawler_script(
         plugin,
         &images_dir,
         &app,
@@ -323,8 +441,8 @@ pub async fn crawl_images_from_plugin_file(
     let merged_config =
         build_effective_user_config_from_var_defs(&var_defs, user_config.unwrap_or_default());
 
-    // 执行 Rhai 爬虫脚本
-    rhai::execute_crawler_script(
+    // 执行 Rhai 爬虫脚本（位于 plugin 模块中）
+    crate::plugin::rhai::execute_crawler_script(
         plugin,
         &images_dir,
         &app,
@@ -839,6 +957,7 @@ fn download_image(
     task_id: &str,
     download_start_time: u64,
     app: &AppHandle,
+    http_headers: &HashMap<String, String>,
 ) -> Result<DownloadedImage, String> {
     // 检查是否是本地文件路径
     let is_local_path = url.starts_with("file://")
@@ -1018,6 +1137,7 @@ fn download_image(
         let plugin_id_clone = plugin_id.to_string();
         let task_id_clone = task_id.to_string();
         let app_clone = app.clone();
+        let http_headers_clone = http_headers.clone();
         let retry_count = app
             .try_state::<crate::settings::Settings>()
             .and_then(|s| s.get_settings().ok())
@@ -1043,6 +1163,8 @@ fn download_image(
         // 这样可以确保“并发下载数 x”真正对应 x 个 worker 的并发度。
         let (content_hash, final_or_temp_path) = (|| -> Result<(String, PathBuf), String> {
             let client = create_blocking_client()?;
+            let header_map =
+                build_reqwest_header_map(&app_clone, &task_id_clone, &http_headers_clone);
 
             // 失败重试：每次 attempt 都重新下载并写入新的临时文件（避免脏数据）
             let max_attempts = retry_count.saturating_add(1).max(1);
@@ -1057,7 +1179,11 @@ fn download_image(
                     return Err("Task canceled".to_string());
                 }
 
-                let response = match client.get(&url_clone).send() {
+                let mut req = client.get(&url_clone);
+                if !header_map.is_empty() {
+                    req = req.headers(header_map.clone());
+                }
+                let response = match req.send() {
                     Ok(r) => r,
                     Err(e) => {
                         if attempt < max_attempts {
@@ -1440,6 +1566,8 @@ struct DownloadRequest {
     task_id: String,
     download_start_time: u64,
     output_album_id: Option<String>,
+    http_headers: HashMap<String, String>,
+    archive_type: Option<ArchiveType>,
     /// zip 解压临时目录生命周期守卫：
     /// - 普通下载为 None
     /// - zip 内文件下载为 Some(Arc<TempDirGuard>)，确保文件被 worker 处理完前临时目录不会被清理
@@ -1571,6 +1699,7 @@ impl DownloadQueue {
         task_id: String,
         download_start_time: u64,
         output_album_id: Option<String>,
+        http_headers: HashMap<String, String>,
     ) -> Result<(), String> {
         self.download_image_with_temp_guard(
             url,
@@ -1579,6 +1708,35 @@ impl DownloadQueue {
             task_id,
             download_start_time,
             output_album_id,
+            http_headers,
+            None,
+            None,
+        )
+    }
+
+    pub fn download_archive(
+        &self,
+        url: String,
+        archive_type: &str,
+        images_dir: PathBuf,
+        plugin_id: String,
+        task_id: String,
+        download_start_time: u64,
+        output_album_id: Option<String>,
+        http_headers: HashMap<String, String>,
+    ) -> Result<(), String> {
+        let Some(t) = ArchiveType::parse(archive_type) else {
+            return Err(format!("Unsupported archive type: {archive_type}"));
+        };
+        self.download_image_with_temp_guard(
+            url,
+            images_dir,
+            plugin_id,
+            task_id,
+            download_start_time,
+            output_album_id,
+            http_headers,
+            Some(t),
             None,
         )
     }
@@ -1591,6 +1749,8 @@ impl DownloadQueue {
         task_id: String,
         download_start_time: u64,
         output_album_id: Option<String>,
+        http_headers: HashMap<String, String>,
+        archive_type: Option<ArchiveType>,
         temp_dir_guard: Option<Arc<TempDirGuard>>,
     ) -> Result<(), String> {
         if self.is_task_canceled(&task_id) {
@@ -1600,15 +1760,22 @@ impl DownloadQueue {
         // 在启动下载前，先检查 URL 是否已存在（如果启用了自动去重）
         // 这样可以避免占用下载窗口和活跃下载数
         let should_skip_by_url = {
-            let settings_state = self.app.try_state::<crate::settings::Settings>();
-            if let Some(settings) = settings_state {
-                if let Ok(s) = settings.get_settings() {
-                    // 需求：URL 去重仅对网络 URL 生效（http/https）；本地导入不做 URL 去重
-                    let is_http_url = url.starts_with("http://") || url.starts_with("https://");
-                    if s.auto_deduplicate && is_http_url {
-                        let storage = self.app.state::<crate::storage::Storage>();
-                        if let Ok(Some(_existing)) = storage.find_image_by_url(&url) {
-                            true // URL 已存在，跳过下载
+            // archive job 不参与 URL 去重（zip 不是图片，且 archive 的语义不同）
+            if archive_type.is_some() {
+                false
+            } else {
+                let settings_state = self.app.try_state::<crate::settings::Settings>();
+                if let Some(settings) = settings_state {
+                    if let Ok(s) = settings.get_settings() {
+                        // 需求：URL 去重仅对网络 URL 生效（http/https）；本地导入不做 URL 去重
+                        let is_http_url = url.starts_with("http://") || url.starts_with("https://");
+                        if s.auto_deduplicate && is_http_url {
+                            let storage = self.app.state::<crate::storage::Storage>();
+                            if let Ok(Some(_existing)) = storage.find_image_by_url(&url) {
+                                true // URL 已存在，跳过下载
+                            } else {
+                                false
+                            }
                         } else {
                             false
                         }
@@ -1618,8 +1785,6 @@ impl DownloadQueue {
                 } else {
                     false
                 }
-            } else {
-                false
             }
         };
 
@@ -1757,6 +1922,8 @@ impl DownloadQueue {
                 task_id,
                 download_start_time,
                 output_album_id,
+                http_headers,
+                archive_type,
                 temp_dir_guard,
             });
             self.pool.cv.notify_one();
@@ -1823,10 +1990,15 @@ fn download_worker_loop(
 
         let Some(job) = job else { continue };
 
-        // zip 导入：zip 本身只负责解压；解压完成后立刻结束该 job 并释放 worker。
-        // zip 内文件将作为“独立下载请求”逐个入队，受 download worker 并发限制，并在 UI 中逐个可见。
-        if let Some(zip_path) = resolve_local_path_from_url(&job.url).filter(|p| is_zip_path(p)) {
-            // 更新 active download 状态为 extracting
+        // archive(zip) 导入：zip 可以是本地路径/file URL，也可以是 http(s) URL。
+        // 同时兼容旧逻辑：未显式指定 archive_type，但 url 是本地 zip 时也走这里。
+        let is_zip_archive_job = job.archive_type == Some(ArchiveType::Zip)
+            || resolve_local_path_from_url(&job.url)
+                .as_deref()
+                .map(is_zip_path)
+                .unwrap_or(false);
+        if is_zip_archive_job {
+            // 更新 active download 状态为 extracting（zip 导入整体视为一次 download job）
             {
                 let mut tasks = match active_tasks.lock() {
                     Ok(g) => g,
@@ -1845,6 +2017,7 @@ fn download_worker_loop(
             let plugin_id_clone = job.plugin_id.clone();
             let task_id_clone = job.task_id.clone();
             let output_album_id_clone = job.output_album_id.clone();
+            let http_headers_clone = job.http_headers.clone();
             let download_start_time = job.download_start_time;
 
             emit_download_state(
@@ -1872,6 +2045,38 @@ fn download_worker_loop(
                 let temp_guard = Arc::new(TempDirGuard {
                     path: temp_dir.clone(),
                 });
+
+                // 取 zip 源：
+                // - 本地 zip：直接用路径
+                // - 远程 zip：http(s) 下载到 temp_dir 后再解压
+                let zip_path = if let Some(p) = resolve_local_path_from_url(&url_clone) {
+                    p
+                } else if url_clone.starts_with("http://") || url_clone.starts_with("https://") {
+                    let archive_path = temp_dir.join("__kg_archive.zip");
+                    let retry_count = app_clone
+                        .try_state::<crate::settings::Settings>()
+                        .and_then(|s| s.get_settings().ok())
+                        .map(|s| s.network_retry_count)
+                        .unwrap_or(0);
+                    download_file_to_path_with_retry(
+                        &app_clone,
+                        &task_id_clone,
+                        &url_clone,
+                        &archive_path,
+                        &http_headers_clone,
+                        retry_count,
+                    )?;
+                    archive_path
+                } else {
+                    return Err(format!("Unsupported archive url: {}", url_clone));
+                };
+
+                if !is_zip_path(&zip_path) {
+                    return Err(format!(
+                        "Archive type mismatch, expected zip: {}",
+                        zip_path.display()
+                    ));
+                }
 
                 extract_zip_to_dir(&zip_path, &temp_dir)?;
 
@@ -1934,6 +2139,8 @@ fn download_worker_loop(
                         task_id_clone.clone(),
                         0,
                         output_album_id_clone.clone(),
+                        HashMap::new(),
+                        None,
                         Some(Arc::clone(&temp_guard)),
                     );
                     if res.is_ok() {
@@ -1960,7 +2167,6 @@ fn download_worker_loop(
                     if !e.contains("Task canceled") {
                         eprintln!("[下载失败] URL: {}, 错误: {}", url_clone, e);
                         // 记录失败图片（用于 TaskDetail 展示 + 手动重试）
-                        // 说明：允许重复记录，因此这里不做去重。
                         let storage = app_clone.state::<crate::storage::Storage>();
                         let _ = storage.add_task_failed_image(
                             &task_id_clone,
@@ -2029,6 +2235,7 @@ fn download_worker_loop(
             &job.task_id,
             job.download_start_time,
             &app,
+            &job.http_headers,
         );
 
         // 更新状态
@@ -2243,6 +2450,27 @@ fn download_worker_loop(
                                     );
                                     if added > 0 && album_id == crate::storage::FAVORITE_ALBUM_ID {
                                         image_info_for_event.favorite = true;
+                                    }
+                                    if added > 0 {
+                                        let _ = app_clone.emit(
+                                            "album-images-changed",
+                                            serde_json::json!({
+                                                "albumId": album_id,
+                                                "reason": "add",
+                                                "imageIds": [image_id.clone()]
+                                            }),
+                                        );
+                                        #[cfg(all(
+                                            target_os = "windows",
+                                            feature = "virtual-drive"
+                                        ))]
+                                        {
+                                            if let Some(drive) = app_clone
+                                                .try_state::<crate::virtual_drive::VirtualDriveService>()
+                                            {
+                                                drive.notify_album_dir_changed(&storage, album_id);
+                                            }
+                                        }
                                     }
                                 }
                             }

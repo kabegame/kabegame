@@ -7,6 +7,7 @@ export interface CrawlTask {
   pluginId: string;
   outputDir?: string;
   userConfig?: Record<string, any>;
+  httpHeaders?: Record<string, string>;
   outputAlbumId?: string; // 输出画册ID，如果指定则下载完成后自动添加到画册
   status: "pending" | "running" | "completed" | "failed" | "canceled";
   progress: number;
@@ -66,6 +67,7 @@ export interface RunConfig {
   url: string;
   outputDir?: string;
   userConfig?: Record<string, any>;
+  httpHeaders?: Record<string, string>;
   createdAt: number;
 }
 
@@ -192,7 +194,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
     pluginId: string,
     outputDir?: string,
     userConfig?: Record<string, any>,
-    outputAlbumId?: string
+    outputAlbumId?: string,
+    httpHeaders?: Record<string, string>
   ) {
     const task: CrawlTask = {
       // 批量添加时 Date.now().toString() 可能碰撞，导致任务覆盖/异常
@@ -200,6 +203,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       pluginId,
       outputDir,
       userConfig,
+      httpHeaders,
       outputAlbumId,
       status: "pending",
       progress: 0,
@@ -274,6 +278,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           pluginId: task.pluginId,
           outputDir: task.outputDir,
           userConfig: task.userConfig,
+          httpHeaders: task.httpHeaders,
           outputAlbumId: task.outputAlbumId,
           status: task.status,
           progress: task.progress,
@@ -328,10 +333,16 @@ export const useCrawlerStore = defineStore("crawler", () => {
       url: config.url,
       outputDir: config.outputDir,
       userConfig: config.userConfig ?? {},
+      httpHeaders: config.httpHeaders ?? {},
     };
     await invoke("add_run_config", { config: cfg });
     await loadRunConfigs();
     return cfg;
+  }
+
+  async function updateRunConfig(config: RunConfig) {
+    await invoke("update_run_config", { config });
+    await loadRunConfigs();
   }
 
   async function deleteRunConfig(configId: string) {
@@ -344,7 +355,13 @@ export const useCrawlerStore = defineStore("crawler", () => {
     if (!cfg) {
       throw new Error("运行配置不存在");
     }
-    await addTask(cfg.pluginId, cfg.outputDir, cfg.userConfig ?? {});
+    await addTask(
+      cfg.pluginId,
+      cfg.outputDir,
+      cfg.userConfig ?? {},
+      undefined,
+      cfg.httpHeaders ?? {}
+    );
   }
 
   // 获取图片列表（已改为 offset+limit 模式，不再使用 page）
@@ -716,7 +733,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
       task.pluginId,
       task.outputDir,
       task.userConfig,
-      task.outputAlbumId
+      task.outputAlbumId,
+      task.httpHeaders
     );
   }
 
@@ -743,6 +761,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     runConfigs,
     loadRunConfigs,
     addRunConfig,
+    updateRunConfig,
     deleteRunConfig,
     runConfig,
     loadTasks,

@@ -243,6 +243,21 @@ fn get_plugins(state: tauri::State<PluginManager>) -> Result<Vec<Plugin>, String
     state.get_all()
 }
 
+/// 前端手动刷新“已安装源”：触发后端重扫 plugins-directory 并重建缓存
+#[tauri::command]
+fn refresh_installed_plugins_cache(state: tauri::State<PluginManager>) -> Result<(), String> {
+    state.refresh_installed_plugins_cache()
+}
+
+/// 前端安装/更新后可调用：按 pluginId 局部刷新缓存
+#[tauri::command]
+fn refresh_installed_plugin_cache(
+    plugin_id: String,
+    state: tauri::State<PluginManager>,
+) -> Result<(), String> {
+    state.refresh_installed_plugin_cache(&plugin_id)
+}
+
 #[tauri::command]
 fn get_build_mode(state: tauri::State<PluginManager>) -> Result<String, String> {
     Ok(state.build_mode().to_string())
@@ -268,6 +283,7 @@ fn crawl_images_command(
         task_id,
         output_dir,
         user_config,
+        http_headers: None,
         output_album_id,
         plugin_file_path: None,
     })?;
@@ -290,6 +306,7 @@ fn start_task(
         task_id: task.id,
         output_dir: task.output_dir,
         user_config: task.user_config,
+        http_headers: task.http_headers,
         output_album_id: task.output_album_id,
         plugin_file_path: None,
     })?;
@@ -333,17 +350,46 @@ fn get_albums(state: tauri::State<Storage>) -> Result<Vec<Album>, String> {
 }
 
 #[tauri::command]
-fn add_album(name: String, state: tauri::State<Storage>) -> Result<Album, String> {
-    state.add_album(&name)
+fn add_album(
+    app: tauri::AppHandle,
+    name: String,
+    state: tauri::State<Storage>,
+    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
+) -> Result<Album, String> {
+    let album = state.add_album(&name)?;
+    let _ = app.emit(
+        "albums-changed",
+        serde_json::json!({
+            "reason": "add"
+        }),
+    );
+    #[cfg(target_os = "windows")]
+    {
+        drive.notify_root_dir_changed();
+    }
+    Ok(album)
 }
 
 #[tauri::command]
 fn rename_album(
+    app: tauri::AppHandle,
     album_id: String,
     new_name: String,
     state: tauri::State<Storage>,
+    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
 ) -> Result<(), String> {
-    state.rename_album(&album_id, &new_name)
+    state.rename_album(&album_id, &new_name)?;
+    let _ = app.emit(
+        "albums-changed",
+        serde_json::json!({
+            "reason": "rename"
+        }),
+    );
+    #[cfg(target_os = "windows")]
+    {
+        drive.notify_root_dir_changed();
+    }
+    Ok(())
 }
 
 // --- Windows 虚拟盘（Dokan） ---
@@ -351,11 +397,12 @@ fn rename_album(
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn mount_virtual_drive(
+    app: tauri::AppHandle,
     mount_point: String,
     storage: tauri::State<Storage>,
     drive: tauri::State<VirtualDriveService>,
 ) -> Result<(), String> {
-    drive.mount(&mount_point, storage.inner().clone())
+    drive.mount(&mount_point, storage.inner().clone(), app)
 }
 
 #[cfg(target_os = "windows")]
@@ -367,11 +414,12 @@ fn unmount_virtual_drive(drive: tauri::State<VirtualDriveService>) -> Result<boo
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn mount_virtual_drive_and_open_explorer(
+    app: tauri::AppHandle,
     mount_point: String,
     storage: tauri::State<Storage>,
     drive: tauri::State<VirtualDriveService>,
 ) -> Result<(), String> {
-    drive.mount(&mount_point, storage.inner().clone())?;
+    drive.mount(&mount_point, storage.inner().clone(), app)?;
     let open_path = drive.current_mount_point().unwrap_or(mount_point);
     std::process::Command::new("explorer")
         .arg(open_path)
@@ -380,41 +428,78 @@ fn mount_virtual_drive_and_open_explorer(
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
 #[tauri::command]
 fn open_explorer(path: String) -> Result<(), String> {
-    let p = path.trim();
-    if p.is_empty() {
-        return Err("路径不能为空".to_string());
+    kabegame_core::shell_open::open_explorer(&path)
+}
+
+#[tauri::command]
+fn delete_album(
+    app: tauri::AppHandle,
+    album_id: String,
+    state: tauri::State<Storage>,
+    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
+) -> Result<(), String> {
+    state.delete_album(&album_id)?;
+    let _ = app.emit(
+        "albums-changed",
+        serde_json::json!({
+            "reason": "delete"
+        }),
+    );
+    #[cfg(target_os = "windows")]
+    {
+        drive.notify_root_dir_changed();
     }
-    std::process::Command::new("explorer")
-        .arg(p)
-        .spawn()
-        .map_err(|e| format!("打开资源管理器失败: {}", e))?;
     Ok(())
 }
 
 #[tauri::command]
-fn delete_album(album_id: String, state: tauri::State<Storage>) -> Result<(), String> {
-    state.delete_album(&album_id)
-}
-
-#[tauri::command]
 fn add_images_to_album(
+    app: tauri::AppHandle,
     album_id: String,
     image_ids: Vec<String>,
     state: tauri::State<Storage>,
+    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
 ) -> Result<AddToAlbumResult, String> {
-    state.add_images_to_album(&album_id, &image_ids)
+    let r = state.add_images_to_album(&album_id, &image_ids)?;
+    let _ = app.emit(
+        "album-images-changed",
+        serde_json::json!({
+            "albumId": album_id,
+            "reason": "add"
+            ,"imageIds": image_ids
+        }),
+    );
+    #[cfg(target_os = "windows")]
+    {
+        drive.notify_album_dir_changed(state.inner(), &album_id);
+    }
+    Ok(r)
 }
 
 #[tauri::command]
 fn remove_images_from_album(
+    app: tauri::AppHandle,
     album_id: String,
     image_ids: Vec<String>,
     state: tauri::State<Storage>,
+    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
 ) -> Result<usize, String> {
-    state.remove_images_from_album(&album_id, &image_ids)
+    let removed = state.remove_images_from_album(&album_id, &image_ids)?;
+    let _ = app.emit(
+        "album-images-changed",
+        serde_json::json!({
+            "albumId": album_id,
+            "reason": "remove"
+            ,"imageIds": image_ids
+        }),
+    );
+    #[cfg(target_os = "windows")]
+    {
+        drive.notify_album_dir_changed(state.inner(), &album_id);
+    }
+    Ok(removed)
 }
 
 #[tauri::command]
@@ -591,11 +676,29 @@ async fn clear_user_data(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn toggle_image_favorite(
+    app: tauri::AppHandle,
     image_id: String,
     favorite: bool,
     state: tauri::State<Storage>,
+    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
 ) -> Result<(), String> {
-    state.toggle_image_favorite(&image_id, favorite)
+    state.toggle_image_favorite(&image_id, favorite)?;
+
+    let _ = app.emit(
+        "album-images-changed",
+        serde_json::json!({
+            "albumId": kabegame_core::storage::FAVORITE_ALBUM_ID,
+            "reason": if favorite { "add" } else { "remove" },
+            "imageIds": [image_id]
+        }),
+    );
+
+    #[cfg(target_os = "windows")]
+    {
+        drive.notify_album_dir_changed(state.inner(), kabegame_core::storage::FAVORITE_ALBUM_ID);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -744,9 +847,12 @@ fn save_plugin_sources(
 #[tauri::command]
 async fn get_store_plugins(
     source_id: Option<String>,
+    force_refresh: Option<bool>,
     state: tauri::State<'_, PluginManager>,
 ) -> Result<Vec<StorePluginResolved>, String> {
-    state.fetch_store_plugins(source_id.as_deref()).await
+    state
+        .fetch_store_plugins(source_id.as_deref(), force_refresh.unwrap_or(false))
+        .await
 }
 
 /// 统一的“源详情”加载：
@@ -907,6 +1013,7 @@ async fn retry_task_failed_image(
             item.task_id.clone(),
             start_time,
             task.output_album_id.clone(),
+            task.http_headers.unwrap_or_default(),
         )
     })
     .await
@@ -1140,6 +1247,11 @@ fn get_active_downloads(app: tauri::AppHandle) -> Result<Vec<ActiveDownloadInfo>
 fn add_run_config(config: RunConfig, state: tauri::State<Storage>) -> Result<RunConfig, String> {
     state.add_run_config(config.clone())?;
     Ok(config)
+}
+
+#[tauri::command]
+fn update_run_config(config: RunConfig, state: tauri::State<Storage>) -> Result<(), String> {
+    state.update_run_config(config)
 }
 
 #[tauri::command]
@@ -2435,6 +2547,8 @@ fn startup_step_manage_plugin_manager(app: &mut tauri::App) {
         if let Err(e) = pm.ensure_prepackaged_plugins_installed() {
             eprintln!("[WARN] 启动时安装内置插件失败: {}", e);
         }
+        // 内置插件复制完成后，初始化/刷新一次已安装插件缓存（减少后续频繁读盘）
+        let _ = pm.refresh_installed_plugins_cache();
     });
 }
 
@@ -2475,6 +2589,7 @@ fn startup_step_manage_settings(app: &mut tauri::App) {
 
 fn startup_step_auto_mount_album_drive(app: &tauri::AppHandle) {
     // Windows：按设置自动挂载画册盘（不自动弹出 Explorer）
+    // 注意：挂载操作可能耗时（尤其是首次挂载或 Dokan 驱动初始化），放到后台线程避免阻塞启动
     #[cfg(target_os = "windows")]
     {
         let settings = app.state::<Settings>().get_settings().ok();
@@ -2482,8 +2597,23 @@ fn startup_step_auto_mount_album_drive(app: &tauri::AppHandle) {
             if s.album_drive_enabled {
                 let mount_point = s.album_drive_mount_point.clone();
                 let storage = app.state::<Storage>().inner().clone();
-                let drive = app.state::<VirtualDriveService>();
-                let _ = drive.mount(&mount_point, storage);
+                let app_handle = app.clone();
+
+                // 在后台线程中执行挂载，避免阻塞主线程
+                tauri::async_runtime::spawn(async move {
+                    // 稍等片刻确保所有服务已初始化完成
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                    let drive = app_handle.state::<VirtualDriveService>();
+                    match drive.mount(&mount_point, storage, app_handle.clone()) {
+                        Ok(_) => {
+                            println!("启动时自动挂载画册盘成功: {}", mount_point);
+                        }
+                        Err(e) => {
+                            eprintln!("启动时自动挂载画册盘失败: {} (挂载点: {})", e, mount_point);
+                        }
+                    }
+                });
             }
         }
     }
@@ -2661,6 +2791,8 @@ fn main() {
             retry_task_failed_image,
             // 原有命令
             get_plugins,
+            refresh_installed_plugins_cache,
+            refresh_installed_plugin_cache,
             get_build_mode,
             delete_plugin,
             crawl_images_command,
@@ -2743,6 +2875,7 @@ fn main() {
             get_default_images_dir,
             get_active_downloads,
             add_run_config,
+            update_run_config,
             get_run_configs,
             delete_run_config,
             cancel_task,

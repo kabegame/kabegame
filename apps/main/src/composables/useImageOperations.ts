@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useAlbumStore } from "@/stores/albums";
 import { storeToRefs } from "pinia";
+import { useImageUrlMapCache } from "@kabegame/core/composables/useImageUrlMapCache";
 
 export type FavoriteStatusChangedDetail = {
   imageIds: string[];
@@ -24,6 +25,7 @@ export function useImageOperations(
 ) {
   const crawlerStore = useCrawlerStore();
   const albumStore = useAlbumStore();
+  const urlCache = useImageUrlMapCache();
   const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
   const albums = computed(() => albumStore.albums);
 
@@ -155,16 +157,8 @@ export function useImageOperations(
         (img) => !idSet.has(img.id)
       );
 
-      // 清理 imageSrcMap 和 Blob URL（批量更新，避免循环中反复重建对象导致额外渲染/加载）
-      const nextMap: Record<string, { thumbnail?: string; original?: string }> =
-        { ...imageSrcMap.value };
-      for (const id of idSet) {
-        const imageData = nextMap[id];
-        if (imageData?.thumbnail && imageData.thumbnail.startsWith("blob:")) URL.revokeObjectURL(imageData.thumbnail);
-        if (imageData?.original && imageData.original.startsWith("blob:")) URL.revokeObjectURL(imageData.original);
-        delete nextMap[id];
-      }
-      imageSrcMap.value = nextMap;
+      // 清理全局 URL 缓存（thumbnail=blob 需要 revoke；由 cache 统一处理）
+      urlCache.removeByIds(Array.from(idSet));
 
       const action = deleteFiles ? "删除" : "移除";
       ElMessage.success(`已${action} ${count} 张图片`);
@@ -246,8 +240,11 @@ export function useImageOperations(
         try {
           await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
         } catch (error: any) {
-          const errorMessage = error?.message || String(error);
-          ElMessage.error(errorMessage || "添加图片到画册失败");
+          // 提取友好的错误信息
+          const errorMessage = typeof error === "string" 
+            ? error 
+            : error?.message || String(error) || "添加图片到画册失败";
+          ElMessage.error(errorMessage);
           throw error;
         }
 
@@ -280,9 +277,13 @@ export function useImageOperations(
       }
 
       galleryViewRef.value?.clearSelection?.();
-    } catch (error) {
+    } catch (error: any) {
       console.error("设置壁纸失败:", error);
-      ElMessage.error("设置壁纸失败: " + (error as Error).message);
+      // 提取友好的错误信息
+      const errorMessage = typeof error === "string" 
+        ? error 
+        : error?.message || String(error) || "未知错误";
+      ElMessage.error(`设置壁纸失败: ${errorMessage}`);
     }
   };
 

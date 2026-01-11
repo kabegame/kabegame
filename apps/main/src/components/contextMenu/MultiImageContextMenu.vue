@@ -6,7 +6,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import {
-  DocumentCopy,
   Picture,
   Star,
   StarFilled,
@@ -33,16 +32,8 @@ const props = withDefaults(defineProps<Props>(), {
   simplified: false,
 });
 
-// 简化模式菜单项模板
+// 简化模式菜单项模板（多选时不显示复制选项，因为浏览器限制一次只能复制一张图片）
 const getSimplifiedMenuItemsTemplate = (countText: string, removeText: string): MenuItem[] => [
-  {
-    key: "copy",
-    type: "item",
-    label: "全部复制",
-    icon: DocumentCopy,
-    command: "copy",
-    suffix: countText,
-  },
   {
     key: "remove",
     type: "item",
@@ -53,15 +44,8 @@ const getSimplifiedMenuItemsTemplate = (countText: string, removeText: string): 
   },
 ];
 
-// 完整模式菜单项模板
+// 完整模式菜单项模板（多选时不显示复制选项，因为浏览器限制一次只能复制一张图片）
 const getFullMenuItemsTemplate = (countText: string, removeText: string, image: ImageInfo | null): MenuItem[] => [
-  {
-    key: "copy",
-    type: "item",
-    label: "全部复制",
-    icon: DocumentCopy,
-    command: "copy",
-  },
   {
     key: "favorite",
     type: "item",

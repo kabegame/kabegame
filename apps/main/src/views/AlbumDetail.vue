@@ -21,6 +21,9 @@
                 '画册' }}</span>
             </div>
           </template>
+          <el-button v-if="albumDriveEnabled" type="primary" plain @click="openVirtualDriveAlbumFolder">
+            去VD查看
+          </el-button>
           <el-button @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !albumId">
             <el-icon>
               <Refresh />
@@ -74,6 +77,7 @@ import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Picture, Delete, Setting, Refresh } from "@element-plus/icons-vue";
 import { Warning, CircleClose } from "@element-plus/icons-vue";
@@ -86,12 +90,13 @@ import type { ImageInfo } from "@/stores/crawler";
 import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import { IS_WINDOWS } from "@kabegame/core/env";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useGallerySettings } from "@/composables/useGallerySettings";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
-import { useImageUrlLoader } from "@/composables/useImageUrlLoader";
+import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 
@@ -107,6 +112,27 @@ const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
+
+// 虚拟磁盘
+const albumDriveEnabled = computed(() => IS_WINDOWS && !!settingsStore.values.albumDriveEnabled);
+const albumDriveMountPoint = computed(() => settingsStore.values.albumDriveMountPoint || "K:\\");
+
+const openVirtualDriveAlbumFolder = async () => {
+  if (!albumName.value) {
+    ElMessage.warning("画册名称为空");
+    return;
+  }
+  try {
+    // 构建画册对应的虚拟磁盘文件夹路径
+    console.log('albumName.value', albumName.value);
+    const albumPath = `${albumDriveMountPoint.value}${albumName.value}`;
+    console.log('albumPath', albumPath);
+    await invoke("open_explorer", { path: albumPath });
+  } catch (e) {
+    console.error("打开虚拟磁盘文件夹失败:", e);
+    ElMessage.error(String(e));
+  }
+};
 
 // 使用画廊设置 composable
 const {
@@ -454,6 +480,9 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
   const image = payload.image;
   // 让 ImageGrid 执行默认内置行为（详情）
   if (command === "detail") return command;
+
+  // 从本地列表中查找图片对象（确保获取完整的图片信息）
+  const imageInList = images.value.find((img) => img.id === image.id);
   const selectedSet =
     "selectedImageIds" in payload && payload.selectedImageIds && payload.selectedImageIds.size > 0
       ? payload.selectedImageIds
@@ -462,7 +491,9 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
   const isMultiSelect = selectedSet.size > 1;
   const imagesToProcess = isMultiSelect
     ? images.value.filter((img) => selectedSet.has(img.id))
-    : [image];
+    : imageInList
+      ? [imageInList]
+      : [];
 
   switch (command) {
     case "favorite": {
@@ -533,12 +564,9 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       break;
     }
     case "copy":
-      if (imagesToProcess.length > 1) {
-        // 多选时复制第一张图片（浏览器限制，一次只能复制一张）
+      // 单选时复制图片（多选时已在 MultiImageContextMenu 中隐藏复制选项）
+      if (imagesToProcess[0]) {
         await handleCopyImage(imagesToProcess[0]);
-        ElMessage.success(`已复制 ${imagesToProcess.length} 张图片`);
-      } else {
-        await handleCopyImage(image);
       }
       break;
     case "open":
@@ -689,6 +717,8 @@ onMounted(async () => {
   // 与 Gallery 共用同一套设置
   try {
     await loadSettings();
+    // 加载虚拟磁盘设置
+    await settingsStore.loadMany(["albumDriveEnabled", "albumDriveMountPoint"]);
   } catch (e) {
     console.error("加载设置失败:", e);
   }
@@ -792,6 +822,51 @@ onMounted(async () => {
 
   // 保存监听器引用以便在卸载时移除
   (window as any).__albumDetailImageAddedUnlisten = unlistenImageAdded;
+
+  // 监听画册图片变更事件（来自 Explorer 删除/其它页面操作/后台任务写入等）
+  let albumImagesReloadTimer: number | null = null;
+  const scheduleReload = () => {
+    if (albumImagesReloadTimer !== null) return;
+    albumImagesReloadTimer = window.setTimeout(async () => {
+      albumImagesReloadTimer = null;
+      // 清除 store 缓存，确保一定从后端取最新列表
+      if (albumId.value) delete albumStore.albumImages[albumId.value];
+      await loadAlbum();
+    }, 120);
+  };
+
+  const unlistenAlbumImagesChanged: UnlistenFn = await listen<{
+    albumId: string;
+    reason?: string;
+    imageIds?: string[];
+  }>("album-images-changed", async (event) => {
+    const p = event.payload;
+    if (!p?.albumId || p.albumId !== albumId.value) return;
+
+    const reason = p.reason || "";
+    const idsArr = Array.isArray(p.imageIds) ? p.imageIds : [];
+    if (idsArr.length === 0) {
+      // 没有明确 id：直接整页 reload 兜底
+      scheduleReload();
+      return;
+    }
+
+    if (reason === "remove") {
+      const idsToRemove = new Set(idsArr);
+      const beforeCount = images.value.length;
+      images.value = images.value.filter((img) => !idsToRemove.has(img.id));
+      if (images.value.length < beforeCount) {
+        removeFromCacheByIds(idsArr);
+        clearSelection();
+      }
+      return;
+    }
+
+    // add / 其它：为了保证顺序正确，做一次轻量延迟 reload（合并频繁事件）
+    scheduleReload();
+  });
+
+  (window as any).__albumDetailAlbumImagesChangedUnlisten = unlistenAlbumImagesChanged;
 });
 
 // 组件从缓存激活时检查是否需要刷新
@@ -847,9 +922,13 @@ const handleRenameConfirm = async () => {
     await albumStore.renameAlbum(albumId.value, newName);
     albumName.value = newName;
     ElMessage.success("重命名成功");
-  } catch (error) {
+  } catch (error: any) {
     console.error("重命名失败:", error);
-    ElMessage.error("重命名失败");
+    // 提取友好的错误信息
+    const errorMessage = typeof error === "string"
+      ? error
+      : error?.message || String(error) || "未知错误";
+    ElMessage.error(errorMessage);
   } finally {
     isRenaming.value = false;
   }
@@ -998,6 +1077,12 @@ onBeforeUnmount(() => {
   if (imageAddedUnlisten) {
     imageAddedUnlisten();
     delete (window as any).__albumDetailImageAddedUnlisten;
+  }
+
+  const albumImagesChangedUnlisten = (window as any).__albumDetailAlbumImagesChangedUnlisten;
+  if (albumImagesChangedUnlisten) {
+    albumImagesChangedUnlisten();
+    delete (window as any).__albumDetailAlbumImagesChangedUnlisten;
   }
 });
 </script>

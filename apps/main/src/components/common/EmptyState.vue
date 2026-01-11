@@ -2,6 +2,7 @@
     <div class="empty-state">
         <img src="/album-empty.png" alt="空状態" class="empty-image" />
         <p class="empty-tip">まだ空っぽだけど、これから色々お友達を作っていくのだ！</p>
+        <p class="empty-tip">提示：把图片文件夹拖进来有惊喜</p>
     </div>
 </template>
 

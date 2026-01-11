@@ -47,6 +47,11 @@
                 <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
                   <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
                 </div>
+                <div v-else-if="pluginIconLoading[plugin.id]" class="plugin-icon-placeholder plugin-icon-loading">
+                  <el-icon class="spin">
+                    <Loading />
+                  </el-icon>
+                </div>
                 <div v-else class="plugin-icon-placeholder">
                   <el-icon>
                     <Grid />
@@ -117,6 +122,11 @@
               <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
                 <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
               </div>
+              <div v-else-if="pluginIconLoading[plugin.id]" class="plugin-icon-placeholder plugin-icon-loading">
+                <el-icon class="spin">
+                  <Loading />
+                </el-icon>
+              </div>
               <div v-else class="plugin-icon-placeholder">
                 <el-icon>
                   <Grid />
@@ -148,8 +158,9 @@
                 @click.stop="handleStoreInstall(plugin)">
                 {{ isInstalling(plugin.id) ? "更新中..." : "更新" }}
               </el-button>
-              <el-button v-else size="small" disabled>
-                已安装
+              <el-button v-else size="small" :loading="isInstalling(plugin.id)" :disabled="isInstalling(plugin.id)"
+                @click.stop="handleStoreInstall(plugin, true)">
+                {{ isInstalling(plugin.id) ? "安装中..." : "重新安装" }}
               </el-button>
             </div>
           </el-card>
@@ -253,6 +264,7 @@ import {
   Plus,
   Setting,
   EditPen,
+  Loading,
 } from "@element-plus/icons-vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import { useRouter } from "vue-router";
@@ -391,6 +403,18 @@ const applyInstalledVersions = (arr: StorePluginResolved[] | null | undefined): 
 
 // 插件图标（key: pluginId, value: data URL）
 const pluginIcons = ref<Record<string, string>>({});
+const pluginIconLoading = ref<Record<string, boolean>>({});
+
+const setPluginIconLoading = (pluginId: string, loading: boolean) => {
+  if (!pluginId) return;
+  if (loading) {
+    pluginIconLoading.value = { ...pluginIconLoading.value, [pluginId]: true };
+    return;
+  }
+  const next = { ...pluginIconLoading.value };
+  delete next[pluginId];
+  pluginIconLoading.value = next;
+};
 
 const getPluginIconSrc = (p: { id: string; iconUrl?: string | null }) => {
   // 已安装：优先本地 icon.png（data URL）
@@ -404,6 +428,8 @@ const getPluginIconSrc = (p: { id: string; iconUrl?: string | null }) => {
 const loadPluginIcon = async (pluginId: string) => {
   if (!pluginId) return;
   if (pluginIcons.value[pluginId]) return;
+  if (pluginIconLoading.value[pluginId]) return;
+  setPluginIconLoading(pluginId, true);
   try {
     const iconData = await invoke<number[] | null>("get_plugin_icon", {
       pluginId,
@@ -422,6 +448,8 @@ const loadPluginIcon = async (pluginId: string) => {
     };
   } catch (e) {
     // 图标缺失不算错误：保持占位符即可
+  } finally {
+    setPluginIconLoading(pluginId, false);
   }
 };
 
@@ -430,6 +458,8 @@ const loadRemotePluginIcon = async (plugin: { id: string; downloadUrl?: string |
   if (!plugin?.id) return;
   if (!plugin.downloadUrl) return;
   if (pluginIcons.value[plugin.id]) return;
+  if (pluginIconLoading.value[plugin.id]) return;
+  setPluginIconLoading(plugin.id, true);
   try {
     const iconData = await invoke<number[] | null>("get_remote_plugin_icon", {
       downloadUrl: plugin.downloadUrl,
@@ -446,6 +476,8 @@ const loadRemotePluginIcon = async (plugin: { id: string; downloadUrl?: string |
     };
   } catch {
     // 远程 icon 拉取失败：保持占位符即可
+  } finally {
+    setPluginIconLoading(plugin.id, false);
   }
 };
 
@@ -710,8 +742,9 @@ const saveSources = async () => {
     }
 
     // 若当前就是某个商店源 tab：保存后刷新当前源（不刷新其他源）
+    // 用户修改了源配置（可能改了 URL），强制从远程刷新
     if (activeStoreSourceId.value) {
-      await loadStorePlugins(activeStoreSourceId.value, false);
+      await loadStorePlugins(activeStoreSourceId.value, { showMessage: false, forceRefresh: true });
       await refreshPluginIcons();
     }
   } catch (e) {
@@ -720,7 +753,20 @@ const saveSources = async () => {
   }
 };
 
-const loadStorePlugins = async (sourceId: string, showMessage: boolean = true) => {
+/**
+ * 加载商店插件列表
+ * @param sourceId 商店源 ID
+ * @param options.showMessage 是否显示提示消息
+ * @param options.forceRefresh 是否强制从远程刷新（忽略本地缓存）
+ *   - true: 用户手动刷新时使用，强制从远程获取最新数据
+ *   - false: 首次加载或自动加载时使用，优先使用本地缓存
+ */
+const loadStorePlugins = async (
+  sourceId: string,
+  options: { showMessage?: boolean; forceRefresh?: boolean } = {}
+) => {
+  const { showMessage = true, forceRefresh = false } = options;
+
   loadingBySource.value = { ...loadingBySource.value, [sourceId]: true };
   // 延迟 300ms 显示骨架屏，避免快速加载时闪屏
   if (skeletonTimersBySource.value[sourceId]) {
@@ -732,7 +778,10 @@ const loadStorePlugins = async (sourceId: string, showMessage: boolean = true) =
     }
   }, 300);
   try {
-    const plugins = await invoke<StorePluginResolved[]>("get_store_plugins", { sourceId });
+    const plugins = await invoke<StorePluginResolved[]>("get_store_plugins", {
+      sourceId,
+      forceRefresh,
+    });
     storePluginsBySource.value = {
       ...storePluginsBySource.value,
       [sourceId]: applyInstalledVersions(plugins || []),
@@ -744,7 +793,7 @@ const loadStorePlugins = async (sourceId: string, showMessage: boolean = true) =
     loadingBySource.value = { ...loadingBySource.value, [sourceId]: false };
 
     if (showMessage) {
-      ElMessage.success("商店列表已刷新");
+      ElMessage.success(forceRefresh ? "商店列表已刷新" : "商店列表已加载");
     }
 
     // 新格式：iconUrl 可能为空，尝试通过 KGPG v2 Range 预取 icon（不阻塞 UI）
@@ -835,8 +884,9 @@ const handleImport = async () => {
     selectedFilePath.value = null;
     await pluginStore.loadPlugins();
     // 若当前在某个商店源 tab，导入后顺手刷新当前源列表（否则只刷新已安装即可）
+    // 只需更新 installedVersion，使用缓存即可
     if (activeStoreSourceId.value) {
-      await loadStorePlugins(activeStoreSourceId.value, false);
+      await loadStorePlugins(activeStoreSourceId.value, { showMessage: false, forceRefresh: false });
     }
   } catch (error) {
     console.error("导入源失败:", error);
@@ -846,19 +896,24 @@ const handleImport = async () => {
   }
 };
 
-const handleStoreInstall = async (plugin: StorePluginResolved) => {
+const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = false) => {
   try {
     // 先弹确认（不要先下载/预览，否则确认会延迟）
     const willUpdate = isUpdateAvailable(plugin.installedVersion, plugin.version);
-    const title = willUpdate ? "确认更新" : "确认安装";
-    const confirmButtonText = willUpdate ? "更新" : "安装";
-    const msg = willUpdate
-      ? `将从 <b>v${escapeHtml(plugin.installedVersion || "?")}</b> 更新为 <b>v${escapeHtml(
-        plugin.version
-      )}</b>（${formatBytes(plugin.sizeBytes)}），是否继续？`
-      : `将安装 <b>${escapeHtml(plugin.name)}</b>（v${escapeHtml(plugin.version)}，${formatBytes(
+    const isReinstall = forceReinstall && plugin.installedVersion === plugin.version;
+    const title = isReinstall ? "确认重新安装" : willUpdate ? "确认更新" : "确认安装";
+    const confirmButtonText = isReinstall ? "重新安装" : willUpdate ? "更新" : "安装";
+    const msg = isReinstall
+      ? `将重新安装 <b>${escapeHtml(plugin.name)}</b>（v${escapeHtml(plugin.version)}，${formatBytes(
         plugin.sizeBytes
-      )}），是否继续？`;
+      )}），是否继续？`
+      : willUpdate
+        ? `将从 <b>v${escapeHtml(plugin.installedVersion || "?")}</b> 更新为 <b>v${escapeHtml(
+          plugin.version
+        )}</b>（${formatBytes(plugin.sizeBytes)}），是否继续？`
+        : `将安装 <b>${escapeHtml(plugin.name)}</b>（v${escapeHtml(plugin.version)}，${formatBytes(
+          plugin.sizeBytes
+        )}），是否继续？`;
 
     await ElMessageBox.confirm(msg, title, {
       type: "warning",
@@ -877,7 +932,10 @@ const handleStoreInstall = async (plugin: StorePluginResolved) => {
 
     await invoke("import_plugin_from_zip", { zipPath: res.tmpPath });
 
-    ElMessage.success(willUpdate ? "更新成功" : "安装成功");
+    // 刷新后端该插件的缓存，确保后续 get_plugins 返回最新数据
+    await invoke("refresh_installed_plugin_cache", { pluginId: plugin.id });
+
+    ElMessage.success(isReinstall ? "重新安装成功" : willUpdate ? "更新成功" : "安装成功");
     await pluginStore.loadPlugins();
 
     // 只更新本地 UI 状态：不触发整页/整 tab 列表刷新
@@ -946,6 +1004,8 @@ const handleRefresh = async () => {
         }
       }, 300);
       try {
+        // 触发后端全量刷新缓存（避免 get_plugins 只返回内存缓存导致“刷新无效”）
+        await invoke("refresh_installed_plugins_cache");
         await pluginStore.loadPlugins();
         await refreshPluginIcons();
         ElMessage.success("已安装源已刷新");
@@ -987,9 +1047,13 @@ const handleRefresh = async () => {
         return;
       }
 
-      await loadStorePlugins(sourceId, false);
+      // 先刷新已安装插件列表，确保 installedVersion 状态正确
+      await invoke("refresh_installed_plugins_cache");
+      await pluginStore.loadPlugins();
+
+      // 用户点击刷新按钮：强制从远程刷新（忽略本地缓存）
+      await loadStorePlugins(sourceId, { showMessage: true, forceRefresh: true });
       await refreshPluginIcons();
-      ElMessage.success("商店源已刷新");
     }
   } catch (error) {
     console.error("刷新失败:", error);
@@ -1067,7 +1131,8 @@ watch(activeTab, async (tab) => {
   if (storeLoadedBySource.value[sourceId]) {
     return;
   }
-  await loadStorePlugins(sourceId, false);
+  // 首次加载：优先使用本地缓存（类似 apt，只有用户手动刷新时才 update）
+  await loadStorePlugins(sourceId, { showMessage: false, forceRefresh: false });
   await refreshPluginIcons();
 });
 </script>
@@ -1182,6 +1247,15 @@ watch(activeTab, async (tab) => {
     flex-shrink: 0;
     color: var(--anime-primary);
     font-size: 24px;
+
+    &.plugin-icon-loading {
+      background: var(--anime-bg-secondary);
+      color: var(--anime-text-regular);
+    }
+
+    .spin {
+      animation: icon-spin 1s linear infinite;
+    }
   }
 
   .plugin-title {
@@ -1273,6 +1347,16 @@ watch(activeTab, async (tab) => {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes icon-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
   }
 }
 

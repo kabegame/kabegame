@@ -317,9 +317,13 @@ onMounted(async () => {
                         const created = await albumStore.createAlbum(item.name, { reload: false });
                         outputAlbumId = created.id;
                         createdAnyAlbum = true;
-                      } catch (e) {
+                      } catch (e: any) {
                         console.warn("[App] 创建导入画册失败，将仅导入到画廊:", item.name, e);
-                        ElMessage.warning(`创建画册失败，将仅导入到画廊：${item.name}`);
+                        // 提取友好的错误信息
+                        const errorMessage = typeof e === "string" 
+                          ? e 
+                          : e?.message || String(e) || "创建画册失败";
+                        ElMessage.warning(`${errorMessage}，将仅导入到画廊：${item.name}`);
                         outputAlbumId = undefined;
                       }
                     }

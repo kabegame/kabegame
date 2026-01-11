@@ -132,8 +132,11 @@ const handleCreateAndAddAlbum = async () => {
     emit("added");
   } catch (error: any) {
     console.error("创建画册并加入图片失败:", error);
-    const errorMessage = error?.message || String(error);
-    ElMessage.error(errorMessage || "操作失败");
+    // 提取友好的错误信息
+    const errorMessage = typeof error === "string" 
+      ? error 
+      : error?.message || String(error) || "操作失败";
+    ElMessage.error(errorMessage);
   }
 };
 

@@ -270,6 +270,12 @@ importers:
       archiver:
         specifier: ^7.0.1
         version: 7.0.1
+      chalk:
+        specifier: ^5.3.0
+        version: 5.6.2
+      commander:
+        specifier: ^12.1.0
+        version: 12.1.0
       glob:
         specifier: ^10.5.0
         version: 10.5.0

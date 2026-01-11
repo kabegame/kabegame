@@ -150,9 +150,13 @@ const handleRenameConfirm = async () => {
     await albumStore.renameAlbum(props.album.id, renameValue.value.trim());
     isRenaming.value = false;
     ElMessage.success("重命名成功");
-  } catch (error) {
+  } catch (error: any) {
     console.error("重命名失败:", error);
-    ElMessage.error("重命名失败: " + (error as Error).message);
+    // 提取友好的错误信息
+    const errorMessage = typeof error === "string" 
+      ? error 
+      : error?.message || String(error) || "未知错误";
+    ElMessage.error(errorMessage);
     renameValue.value = props.album.name;
   }
 };

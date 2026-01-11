@@ -1,7 +1,7 @@
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, fs};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +30,19 @@ pub struct AlbumImageFsEntry {
 }
 
 impl Storage {
+    pub fn get_album_name_by_id(&self, album_id: &str) -> Result<Option<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let name: Option<String> = conn
+            .query_row(
+                "SELECT name FROM albums WHERE id = ?1 LIMIT 1",
+                params![album_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query album name: {}", e))?;
+        Ok(name)
+    }
+
     pub fn album_exists(&self, album_id: &str) -> Result<bool, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let exists: bool = conn
@@ -220,18 +233,32 @@ impl Storage {
         image_id: &str,
     ) -> Result<Option<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let path: Option<String> = conn
+        let row: Option<(String, String)> = conn
             .query_row(
-                "SELECT COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path)
+                "SELECT i.local_path, i.thumbnail_path
                  FROM images i
                  INNER JOIN album_images ai ON i.id = ai.image_id
                  WHERE ai.album_id = ?1 AND i.id = ?2",
                 params![album_id, image_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(|e| format!("Failed to resolve image path: {}", e))?;
-        Ok(path)
+        let Some((local_path, thumb_path)) = row else {
+            return Ok(None);
+        };
+
+        let local_exists = !local_path.trim().is_empty() && fs::metadata(&local_path).is_ok();
+        if local_exists {
+            return Ok(Some(local_path));
+        }
+
+        let thumb_exists = !thumb_path.trim().is_empty() && fs::metadata(&thumb_path).is_ok();
+        if thumb_exists {
+            return Ok(Some(thumb_path));
+        }
+
+        Ok(None)
     }
 
     pub fn get_album_images_fs_entries(
@@ -256,30 +283,45 @@ impl Storage {
                 let thumb_path: String = row.get(2)?;
                 let _url: String = row.get(3)?;
 
-                let resolved_path = if !thumb_path.is_empty() {
-                    thumb_path
-                } else {
-                    local_path.clone()
+                let resolved_path =
+                    if !local_path.trim().is_empty() && fs::metadata(&local_path).is_ok() {
+                        Some(local_path.clone())
+                    } else if !thumb_path.trim().is_empty() && fs::metadata(&thumb_path).is_ok() {
+                        Some(thumb_path.clone())
+                    } else {
+                        None
+                    };
+
+                let Some(resolved_path) = resolved_path else {
+                    return Ok(None);
                 };
 
-                let ext = std::path::Path::new(&local_path)
+                // 扩展名优先使用原图，若不存在则回退到实际文件路径
+                let ext_source = if !local_path.trim().is_empty() {
+                    &local_path
+                } else {
+                    &resolved_path
+                };
+                let ext = std::path::Path::new(ext_source)
                     .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("jpg");
 
                 let file_name = format!("{}.{}", id, ext);
 
-                Ok(AlbumImageFsEntry {
+                Ok(Some(AlbumImageFsEntry {
                     file_name,
                     image_id: id,
                     resolved_path,
-                })
+                }))
             })
             .map_err(|e| format!("Failed to query album images for FS: {}", e))?;
 
         let mut entries = Vec::new();
         for r in rows {
-            entries.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
+            if let Some(entry) = r.map_err(|e| format!("Failed to read row: {}", e))? {
+                entries.push(entry);
+            }
         }
         Ok(entries)
     }
@@ -356,10 +398,10 @@ impl Storage {
         for id in image_ids {
             let changed = tx
                 .execute(
-                "DELETE FROM album_images WHERE album_id = ?1 AND image_id = ?2",
-                params![album_id, id],
-            )
-            .map_err(|e| format!("Failed to remove image from album: {}", e))?;
+                    "DELETE FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                    params![album_id, id],
+                )
+                .map_err(|e| format!("Failed to remove image from album: {}", e))?;
             removed += changed as usize;
         }
 

@@ -66,7 +66,7 @@ import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useGallerySettings } from "@/composables/useGallerySettings";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
-import { useImageUrlLoader } from "@/composables/useImageUrlLoader";
+import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 
 type TaskFailedImage = {

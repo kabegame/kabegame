@@ -10,8 +10,8 @@
                     <template v-else-if="getItemVisible(item)">
                         <!-- 有子菜单的项 -->
                         <div v-if="item.children && item.children.length > 0" class="context-menu-item submenu-trigger"
-                            :class="item.className" @mouseenter="activeSubmenuIndex = index"
-                            @mouseleave="activeSubmenuIndex = null">
+                            :class="item.className" @mouseenter="handleSubmenuTriggerEnter(index)"
+                            @mouseleave="handleSubmenuTriggerLeave">
                             <el-icon v-if="item.icon">
                                 <component :is="item.icon" />
                             </el-icon>
@@ -26,8 +26,8 @@
                             <!-- 子菜单 -->
                             <div v-if="activeSubmenuIndex === index"
                                 :ref="(el) => { if (el) setSubmenuRef(el as HTMLElement, index); }" class="submenu"
-                                :style="getSubmenuStyle(index)" @mouseenter="activeSubmenuIndex = index"
-                                @mouseleave="activeSubmenuIndex = null">
+                                :style="getSubmenuStyle(index)" @mouseenter="handleSubmenuEnter(index)"
+                                @mouseleave="handleSubmenuLeave">
                                 <template v-for="(child, childIndex) in item.children" :key="childIndex">
                                     <div v-if="child.type !== 'divider' && getItemVisible(child)"
                                         class="context-menu-item" :class="child.className"
@@ -106,6 +106,9 @@ const submenuRefs = new Map<number, HTMLElement>(); // 非响应式，避免触�
 const submenuStyles = ref<Map<number, CSSProperties>>(new Map());
 // 记录已经调整过位置的子菜单索引，避免重复调整导致死循环
 const adjustedSubmenuIndexes = new Set<number>();
+// 子菜单关闭延迟定时器（解决从父菜单项移动到子菜单时的过渡区域问题）
+let submenuCloseTimer: ReturnType<typeof setTimeout> | null = null;
+const SUBMENU_CLOSE_DELAY = 150; // ms
 
 const menuStyle = computed<CSSProperties>(() => ({
     position: "fixed",
@@ -180,6 +183,11 @@ watch(
             submenuRefs.clear();
             submenuStyles.value.clear();
             adjustedSubmenuIndexes.clear();
+            // 清理子菜单关闭定时器
+            if (submenuCloseTimer) {
+                clearTimeout(submenuCloseTimer);
+                submenuCloseTimer = null;
+            }
         }
     }
 );
@@ -202,6 +210,47 @@ watch(activeSubmenuIndex, (newIndex, oldIndex) => {
         adjustedSubmenuIndexes.delete(oldIndex);
     }
 });
+
+// 子菜单 hover 处理（带延迟，解决从父菜单项移动到子菜单时的过渡问题）
+const handleSubmenuTriggerEnter = (index: number) => {
+    // 取消关闭定时器
+    if (submenuCloseTimer) {
+        clearTimeout(submenuCloseTimer);
+        submenuCloseTimer = null;
+    }
+    activeSubmenuIndex.value = index;
+};
+
+const handleSubmenuTriggerLeave = () => {
+    // 延迟关闭子菜单，给用户移动到子菜单的时间
+    if (submenuCloseTimer) {
+        clearTimeout(submenuCloseTimer);
+    }
+    submenuCloseTimer = setTimeout(() => {
+        activeSubmenuIndex.value = null;
+        submenuCloseTimer = null;
+    }, SUBMENU_CLOSE_DELAY);
+};
+
+const handleSubmenuEnter = (index: number) => {
+    // 进入子菜单区域，取消关闭定时器
+    if (submenuCloseTimer) {
+        clearTimeout(submenuCloseTimer);
+        submenuCloseTimer = null;
+    }
+    activeSubmenuIndex.value = index;
+};
+
+const handleSubmenuLeave = () => {
+    // 离开子菜单区域，延迟关闭
+    if (submenuCloseTimer) {
+        clearTimeout(submenuCloseTimer);
+    }
+    submenuCloseTimer = setTimeout(() => {
+        activeSubmenuIndex.value = null;
+        submenuCloseTimer = null;
+    }, SUBMENU_CLOSE_DELAY);
+};
 
 const getItemVisible = (item: MenuItem) => {
     // 当 item 声明了 children，但 children 为空时，不渲染该 item（例如“更多”菜单没有任何子项）

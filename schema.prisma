@@ -48,6 +48,7 @@ model RunConfig {
     url         String
     outputDir   String? @map("output_dir")
     userConfig  String? @map("user_config") // JSON string
+    httpHeaders String? @map("http_headers") // JSON string: Record<string,string>
     createdAt   Int     @map("created_at")
 
     @@map("run_configs")

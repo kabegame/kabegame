@@ -49,6 +49,7 @@ fn plugin_editor_run_task(
         task_id,
         output_dir,
         user_config,
+        http_headers: None,
         output_album_id,
         plugin_file_path: Some(tmp_kgpg.to_string_lossy().to_string()),
     })?;
@@ -128,6 +129,21 @@ fn plugin_editor_list_installed_plugins(
     state.load_browser_plugins()
 }
 
+/// 前端手动刷新“已安装源”：触发后端重扫 plugins-directory 并重建缓存
+#[tauri::command]
+fn refresh_installed_plugins_cache(state: tauri::State<PluginManager>) -> Result<(), String> {
+    state.refresh_installed_plugins_cache()
+}
+
+/// 插件编辑器导出安装/覆盖后：按 pluginId 局部刷新缓存
+#[tauri::command]
+fn refresh_installed_plugin_cache(
+    plugin_id: String,
+    state: tauri::State<PluginManager>,
+) -> Result<(), String> {
+    state.refresh_installed_plugin_cache(&plugin_id)
+}
+
 #[tauri::command]
 fn get_plugin_icon(
     plugin_id: String,
@@ -167,18 +183,22 @@ fn plugin_editor_export_install(
 ) -> Result<(), String> {
     let plugins_dir = state.get_plugins_directory();
     std::fs::create_dir_all(&plugins_dir).map_err(|e| format!("创建插件目录失败: {}", e))?;
-    let target = plugins_dir.join(format!("{}.kgpg", plugin_id.trim()));
+    let plugin_id_trimmed = plugin_id.trim().to_string();
+    let target = plugins_dir.join(format!("{}.kgpg", plugin_id_trimmed));
     if target.exists() && !overwrite {
         return Err("PLUGIN_EXISTS".to_string());
     }
     plugin_editor::plugin_editor_export_kgpg(
         target.to_string_lossy().to_string(),
-        plugin_id,
+        plugin_id_trimmed.clone(),
         manifest,
         config,
         script,
         icon_rgb_base64,
-    )
+    )?;
+    // 导出安装/覆盖后：局部刷新缓存，避免前端反复读盘
+    let _ = state.refresh_installed_plugin_cache(&plugin_id_trimmed);
+    Ok(())
 }
 
 #[tauri::command]
@@ -470,6 +490,8 @@ fn main() {
             plugin_editor_process_icon_bytes,
             // import/export extras
             plugin_editor_list_installed_plugins,
+            refresh_installed_plugins_cache,
+            refresh_installed_plugin_cache,
             get_plugin_icon,
             plugin_editor_import_kgpg,
             plugin_editor_import_installed,

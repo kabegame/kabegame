@@ -16,6 +16,8 @@ pub struct RunConfig {
     pub output_dir: Option<String>,
     #[serde(rename = "userConfig")]
     pub user_config: Option<HashMap<String, serde_json::Value>>,
+    #[serde(rename = "httpHeaders")]
+    pub http_headers: Option<HashMap<String, String>>,
     pub created_at: u64,
 }
 
@@ -24,10 +26,12 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let user_config_json = serde_json::to_string(&config.user_config)
             .map_err(|e| format!("Failed to serialize user config: {}", e))?;
+        let http_headers_json = serde_json::to_string(&config.http_headers)
+            .map_err(|e| format!("Failed to serialize http headers: {}", e))?;
 
         conn.execute(
-            "INSERT INTO run_configs (id, name, description, plugin_id, url, output_dir, user_config, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO run_configs (id, name, description, plugin_id, url, output_dir, user_config, http_headers, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 config.id,
                 config.name,
@@ -36,6 +40,7 @@ impl Storage {
                 config.url,
                 config.output_dir,
                 user_config_json,
+                http_headers_json,
                 config.created_at as i64,
             ],
         )
@@ -46,13 +51,16 @@ impl Storage {
     pub fn get_run_configs(&self) -> Result<Vec<RunConfig>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, description, plugin_id, url, output_dir, user_config, created_at FROM run_configs ORDER BY created_at DESC")
+            .prepare("SELECT id, name, description, plugin_id, url, output_dir, user_config, http_headers, created_at FROM run_configs ORDER BY created_at DESC")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let rows = stmt
             .query_map([], |row| {
                 let user_config_json: Option<String> = row.get(6)?;
                 let user_config = user_config_json
+                    .and_then(|s| serde_json::from_str(&s).ok());
+                let http_headers_json: Option<String> = row.get(7)?;
+                let http_headers = http_headers_json
                     .and_then(|s| serde_json::from_str(&s).ok());
                 Ok(RunConfig {
                     id: row.get(0)?,
@@ -62,7 +70,8 @@ impl Storage {
                     url: row.get(4)?,
                     output_dir: row.get(5)?,
                     user_config,
-                    created_at: row.get::<_, i64>(7)? as u64,
+                    http_headers,
+                    created_at: row.get::<_, i64>(8)? as u64,
                 })
             })
             .map_err(|e| format!("Failed to query run configs: {}", e))?;
@@ -72,6 +81,32 @@ impl Storage {
             configs.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
         }
         Ok(configs)
+    }
+
+    pub fn update_run_config(&self, config: RunConfig) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let user_config_json = serde_json::to_string(&config.user_config)
+            .map_err(|e| format!("Failed to serialize user config: {}", e))?;
+        let http_headers_json = serde_json::to_string(&config.http_headers)
+            .map_err(|e| format!("Failed to serialize http headers: {}", e))?;
+
+        conn.execute(
+            "UPDATE run_configs
+             SET name = ?1, description = ?2, plugin_id = ?3, url = ?4, output_dir = ?5, user_config = ?6, http_headers = ?7
+             WHERE id = ?8",
+            params![
+                config.name,
+                config.description,
+                config.plugin_id,
+                config.url,
+                config.output_dir,
+                user_config_json,
+                http_headers_json,
+                config.id,
+            ],
+        )
+        .map_err(|e| format!("Failed to update run config: {}", e))?;
+        Ok(())
     }
 
     pub fn delete_run_config(&self, config_id: &str) -> Result<(), String> {

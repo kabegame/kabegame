@@ -408,6 +408,38 @@ const loadTotalImagesCount = async () => {
   }
 };
 
+// 去重/批量移除后：若当前页被清空，但图库仍有图，则尽量留在当前大页；
+// 若当前页码越界（总页数变少），则跳转到仍可用的最大页。
+let ensuringGalleryPage = false;
+const ensureValidGalleryPageAfterMassRemoval = async () => {
+  if (ensuringGalleryPage) return;
+  ensuringGalleryPage = true;
+  try {
+    await loadTotalImagesCount();
+
+    // 当前页仍有图：不处理
+    if (displayedImages.value.length > 0) return;
+
+    // 全部没图：回到第一页并关闭 hasMore（避免出现“空页面 + 加载更多按钮”）
+    if (totalImagesCount.value <= 0) {
+      currentOffset.value = 0;
+      crawlerStore.hasMore = false;
+      return;
+    }
+
+    const currentBigPage = Math.floor(currentOffset.value / BIG_PAGE_SIZE) + 1;
+    const totalBigPages = Math.max(
+      1,
+      Math.ceil(totalImagesCount.value / BIG_PAGE_SIZE)
+    );
+    const targetBigPage = Math.min(currentBigPage, totalBigPages);
+
+    await handleJumpToBigPage(targetBigPage);
+  } finally {
+    ensuringGalleryPage = false;
+  }
+};
+
 // 加载插件图标
 const loadPluginIcons = async () => {
   for (const plugin of plugins.value) {
@@ -811,6 +843,10 @@ onMounted(async () => {
     if (displayedImages.value.length <= 200_000) {
       removeFromUiCacheByIds(imageIds);
     }
+    // 去重可能把“当前大页”整页清空：此时应尽量停留当前页码，必要时回退到最大可用页
+    if (displayedImages.value.length === 0) {
+      await ensureValidGalleryPageAfterMassRemoval();
+    }
     if (
       currentWallpaperImageId.value &&
       imageIds.includes(currentWallpaperImageId.value)
@@ -831,6 +867,9 @@ onMounted(async () => {
     galleryViewRef.value?.startDeleteMoveAnimation?.();
     if (displayedImages.value.length <= 200_000) {
       removeFromUiCacheByIds(imageIds);
+    }
+    if (displayedImages.value.length === 0) {
+      await ensureValidGalleryPageAfterMassRemoval();
     }
     if (
       currentWallpaperImageId.value &&
@@ -883,6 +922,10 @@ onMounted(async () => {
     // 若为了避免卡顿没有实时移除（displayedImages 很大），则这里强制刷新一次
     if (displayedImages.value.length > 200_000) {
       await loadImages(true, { forceReload: true });
+    }
+    // 去重结束：如果当前页刚好被清空（例如当前大页全部是重复项），自动回到可用页
+    if (displayedImages.value.length === 0 && totalImagesCount.value > 0) {
+      await ensureValidGalleryPageAfterMassRemoval();
     }
   });
 

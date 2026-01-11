@@ -13,6 +13,8 @@ pub struct TaskInfo {
     pub output_dir: Option<String>,
     #[serde(rename = "userConfig")]
     pub user_config: Option<HashMap<String, serde_json::Value>>,
+    #[serde(rename = "httpHeaders")]
+    pub http_headers: Option<HashMap<String, String>>,
     #[serde(rename = "outputAlbumId")]
     pub output_album_id: Option<String>,
     pub status: String,
@@ -50,15 +52,18 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let user_config_json = serde_json::to_string(&task.user_config)
             .map_err(|e| format!("Failed to serialize user config: {}", e))?;
+        let http_headers_json = serde_json::to_string(&task.http_headers)
+            .map_err(|e| format!("Failed to serialize http headers: {}", e))?;
 
         conn.execute(
-            "INSERT INTO tasks (id, plugin_id, output_dir, user_config, output_album_id, status, progress, start_time, end_time, error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO tasks (id, plugin_id, output_dir, user_config, http_headers, output_album_id, status, progress, start_time, end_time, error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 task.id,
                 task.plugin_id,
                 task.output_dir,
                 user_config_json,
+                http_headers_json,
                 task.output_album_id,
                 task.status,
                 task.progress,
@@ -94,7 +99,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let task: Option<TaskInfo> = conn
             .query_row(
-                "SELECT id, plugin_id, output_dir, user_config, status, progress, start_time, end_time, error, output_album_id, deleted_count,
+                "SELECT id, plugin_id, output_dir, user_config, http_headers, status, progress, start_time, end_time, error, output_album_id, deleted_count,
                  rhai_dump_json IS NOT NULL as dump_present, rhai_dump_confirmed, rhai_dump_created_at
                  FROM tasks WHERE id = ?1",
                 params![task_id],
@@ -102,21 +107,25 @@ impl Storage {
                     let user_config_json: Option<String> = row.get(3)?;
                     let user_config = user_config_json
                         .and_then(|s| serde_json::from_str(&s).ok());
+                    let http_headers_json: Option<String> = row.get(4)?;
+                    let http_headers = http_headers_json
+                        .and_then(|s| serde_json::from_str(&s).ok());
                     Ok(TaskInfo {
                         id: row.get(0)?,
                         plugin_id: row.get(1)?,
                         output_dir: row.get(2)?,
                         user_config,
-                        status: row.get(4)?,
-                        progress: row.get(5)?,
-                        start_time: row.get::<_, Option<i64>>(6)?.map(|t| t as u64),
-                        end_time: row.get::<_, Option<i64>>(7)?.map(|t| t as u64),
-                        error: row.get(8)?,
-                        output_album_id: row.get(9)?,
-                        deleted_count: row.get(10)?,
-                        rhai_dump_present: row.get(11)?,
-                        rhai_dump_confirmed: row.get::<_, i64>(12)? != 0,
-                        rhai_dump_created_at: row.get::<_, Option<i64>>(13)?.map(|t| t as u64),
+                        http_headers,
+                        status: row.get(5)?,
+                        progress: row.get(6)?,
+                        start_time: row.get::<_, Option<i64>>(7)?.map(|t| t as u64),
+                        end_time: row.get::<_, Option<i64>>(8)?.map(|t| t as u64),
+                        error: row.get(9)?,
+                        output_album_id: row.get(10)?,
+                        deleted_count: row.get(11)?,
+                        rhai_dump_present: row.get(12)?,
+                        rhai_dump_confirmed: row.get::<_, i64>(13)? != 0,
+                        rhai_dump_created_at: row.get::<_, Option<i64>>(14)?.map(|t| t as u64),
                     })
                 },
             )
@@ -128,7 +137,7 @@ impl Storage {
     pub fn get_all_tasks(&self) -> Result<Vec<TaskInfo>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id, plugin_id, output_dir, user_config, status, progress, start_time, end_time, error, output_album_id, deleted_count,
+            .prepare("SELECT id, plugin_id, output_dir, user_config, http_headers, status, progress, start_time, end_time, error, output_album_id, deleted_count,
                       rhai_dump_json IS NOT NULL as dump_present, rhai_dump_confirmed, rhai_dump_created_at
                       FROM tasks ORDER BY start_time DESC")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -138,21 +147,25 @@ impl Storage {
                 let user_config_json: Option<String> = row.get(3)?;
                 let user_config = user_config_json
                     .and_then(|s| serde_json::from_str(&s).ok());
+                let http_headers_json: Option<String> = row.get(4)?;
+                let http_headers = http_headers_json
+                    .and_then(|s| serde_json::from_str(&s).ok());
                 Ok(TaskInfo {
                     id: row.get(0)?,
                     plugin_id: row.get(1)?,
                     output_dir: row.get(2)?,
                     user_config,
-                    status: row.get(4)?,
-                    progress: row.get(5)?,
-                    start_time: row.get::<_, Option<i64>>(6)?.map(|t| t as u64),
-                    end_time: row.get::<_, Option<i64>>(7)?.map(|t| t as u64),
-                    error: row.get(8)?,
-                    output_album_id: row.get(9)?,
-                    deleted_count: row.get(10)?,
-                    rhai_dump_present: row.get(11)?,
-                    rhai_dump_confirmed: row.get::<_, i64>(12)? != 0,
-                    rhai_dump_created_at: row.get::<_, Option<i64>>(13)?.map(|t| t as u64),
+                    http_headers,
+                    status: row.get(5)?,
+                    progress: row.get(6)?,
+                    start_time: row.get::<_, Option<i64>>(7)?.map(|t| t as u64),
+                    end_time: row.get::<_, Option<i64>>(8)?.map(|t| t as u64),
+                    error: row.get(9)?,
+                    output_album_id: row.get(10)?,
+                    deleted_count: row.get(11)?,
+                    rhai_dump_present: row.get(12)?,
+                    rhai_dump_confirmed: row.get::<_, i64>(13)? != 0,
+                    rhai_dump_created_at: row.get::<_, Option<i64>>(14)?.map(|t| t as u64),
                 })
             })
             .map_err(|e| format!("Failed to query tasks: {}", e))?;

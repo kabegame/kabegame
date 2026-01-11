@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ImageInfo } from "./crawler";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useCrawlerStore } from "./crawler";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 
 export interface Album {
   id: string;
@@ -22,7 +23,53 @@ export const useAlbumStore = defineStore("albums", () => {
   const albumCounts = ref<Record<string, number>>({});
   const loading = ref(false);
 
+  let eventListenersInitialized = false;
+  let unlistenAlbumsChanged: UnlistenFn | null = null;
+  let unlistenAlbumImagesChanged: UnlistenFn | null = null;
+
+  const initEventListeners = async () => {
+    if (eventListenersInitialized) return;
+    eventListenersInitialized = true;
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlistenAlbumsChanged = await listen("albums-changed", async () => {
+        // 画册列表变化：直接 reload（包含 counts）
+        await loadAlbums();
+      });
+      unlistenAlbumImagesChanged = await listen<{ albumId: string }>(
+        "album-images-changed",
+        async (event) => {
+          const albumId = event.payload?.albumId;
+          const reason = (event.payload as any)?.reason as string | undefined;
+          const imageIds = (event.payload as any)?.imageIds as string[] | undefined;
+          if (!albumId) return;
+          delete albumImages.value[albumId];
+          delete albumPreviews.value[albumId];
+
+          // 收藏画册：需要把 favorite 状态同步回画廊缓存（Explorer/后台任务也会触发）
+          if (albumId === FAVORITE_ALBUM_ID.value && Array.isArray(imageIds) && imageIds.length) {
+            const desired = reason === "add";
+            crawlerStore.images = crawlerStore.images.map((img) =>
+              imageIds.includes(img.id)
+                ? ({ ...img, favorite: desired } as ImageInfo)
+                : img
+            );
+          }
+          try {
+            const counts = await invoke<Record<string, number>>("get_album_counts");
+            albumCounts.value = counts;
+          } catch (e) {
+            console.warn("reload album counts failed", e);
+          }
+        }
+      );
+    } catch (e) {
+      console.warn("init album event listeners failed", e);
+    }
+  };
+
   const loadAlbums = async () => {
+    await initEventListeners();
     loading.value = true;
     try {
       const res = await invoke<Album[]>("get_albums");
@@ -44,31 +91,41 @@ export const useAlbumStore = defineStore("albums", () => {
   };
 
   const createAlbum = async (name: string, opts: { reload?: boolean } = {}) => {
-    const created = await invoke<Album>("add_album", { name });
+    await initEventListeners();
+    try {
+      const created = await invoke<Album>("add_album", { name });
 
-    const reload = opts.reload ?? true;
-    if (reload) {
-      // 创建成功后重新从后端加载画册列表，保持前后端数据一致
-      await loadAlbums();
-    } else {
-      // 轻量模式：避免在批量导入时反复全量 reload 造成 UI 卡顿
-      const createdAt =
-        (created as any).created_at ??
-        (created as any).createdAt ??
-        created.createdAt;
-      // 避免重复插入
-      if (!albums.value.some((a) => a.id === created.id)) {
-        albums.value.unshift({ ...created, createdAt });
+      const reload = opts.reload ?? true;
+      if (reload) {
+        // 创建成功后重新从后端加载画册列表，保持前后端数据一致
+        await loadAlbums();
+      } else {
+        // 轻量模式：避免在批量导入时反复全量 reload 造成 UI 卡顿
+        const createdAt =
+          (created as any).created_at ??
+          (created as any).createdAt ??
+          created.createdAt;
+        // 避免重复插入
+        if (!albums.value.some((a) => a.id === created.id)) {
+          albums.value.unshift({ ...created, createdAt });
+        }
+        // counts 先按 0 兜底；后续可由 loadAlbums/get_album_counts 纠正
+        if (albumCounts.value[created.id] == null) {
+          albumCounts.value[created.id] = 0;
+        }
       }
-      // counts 先按 0 兜底；后续可由 loadAlbums/get_album_counts 纠正
-      if (albumCounts.value[created.id] == null) {
-        albumCounts.value[created.id] = 0;
-      }
+      return created;
+    } catch (error: any) {
+      // 确保错误信息被正确传递
+      const errorMessage = typeof error === "string" 
+        ? error 
+        : error?.message || String(error);
+      throw new Error(errorMessage);
     }
-    return created;
   };
 
   const deleteAlbum = async (albumId: string) => {
+    await initEventListeners();
     await invoke("delete_album", { albumId });
     albums.value = albums.value.filter((a) => a.id !== albumId);
     delete albumImages.value[albumId];
@@ -77,14 +134,24 @@ export const useAlbumStore = defineStore("albums", () => {
   };
 
   const renameAlbum = async (albumId: string, newName: string) => {
-    await invoke("rename_album", { albumId, newName });
-    const album = albums.value.find((a) => a.id === albumId);
-    if (album) {
-      album.name = newName;
+    await initEventListeners();
+    try {
+      await invoke("rename_album", { albumId, newName });
+      const album = albums.value.find((a) => a.id === albumId);
+      if (album) {
+        album.name = newName;
+      }
+    } catch (error: any) {
+      // 确保错误信息被正确传递
+      const errorMessage = typeof error === "string" 
+        ? error 
+        : error?.message || String(error);
+      throw new Error(errorMessage);
     }
   };
 
   const addImagesToAlbum = async (albumId: string, imageIds: string[]) => {
+    await initEventListeners();
     try {
       const result = await invoke<{
         added: number;
@@ -137,6 +204,7 @@ export const useAlbumStore = defineStore("albums", () => {
   };
 
   const removeImagesFromAlbum = async (albumId: string, imageIds: string[]) => {
+    await initEventListeners();
     if (!imageIds || imageIds.length === 0) return 0;
     const removed = await invoke<number>("remove_images_from_album", {
       albumId,
@@ -161,12 +229,14 @@ export const useAlbumStore = defineStore("albums", () => {
   };
 
   const loadAlbumImages = async (albumId: string) => {
+    await initEventListeners();
     const images = await invoke<ImageInfo[]>("get_album_images", { albumId });
     albumImages.value[albumId] = images;
     return images;
   };
 
   const loadAlbumPreview = async (albumId: string, limit = 6) => {
+    await initEventListeners();
     if (albumPreviews.value[albumId]) return albumPreviews.value[albumId];
     const images = await invoke<ImageInfo[]>("get_album_preview", {
       albumId,
@@ -177,6 +247,7 @@ export const useAlbumStore = defineStore("albums", () => {
   };
 
   const getAlbumImageIds = async (albumId: string): Promise<string[]> => {
+    await initEventListeners();
     return await invoke<string[]>("get_album_image_ids", { albumId });
   };
 

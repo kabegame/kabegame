@@ -8,6 +8,7 @@ use tauri::AppHandle;
 
 pub mod albums;
 pub mod dedupe;
+pub mod gallery;
 pub mod images;
 pub mod run_configs;
 pub mod tasks;
@@ -58,6 +59,7 @@ PRAGMA mmap_size = 268435456;
                 plugin_id TEXT NOT NULL,
                 output_dir TEXT,
                 user_config TEXT,
+                http_headers TEXT,
                 output_album_id TEXT,
                 status TEXT NOT NULL,
                 progress REAL NOT NULL DEFAULT 0,
@@ -88,6 +90,7 @@ PRAGMA mmap_size = 268435456;
             "ALTER TABLE tasks ADD COLUMN rhai_dump_confirmed INTEGER NOT NULL DEFAULT 0",
             [],
         );
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN http_headers TEXT", []);
 
         // 创建运行配置表
         conn.execute(
@@ -99,11 +102,13 @@ PRAGMA mmap_size = 268435456;
                 url TEXT NOT NULL,
                 output_dir TEXT,
                 user_config TEXT,
+                http_headers TEXT,
                 created_at INTEGER NOT NULL
             )",
             [],
         )
         .expect("Failed to create run_configs table");
+        let _ = conn.execute("ALTER TABLE run_configs ADD COLUMN http_headers TEXT", []);
 
         // 创建图片表
         conn.execute(
@@ -408,6 +413,7 @@ CREATE TABLE tasks_new (
   plugin_id TEXT NOT NULL,
   output_dir TEXT,
   user_config TEXT,
+  http_headers TEXT,
   output_album_id TEXT,
   status TEXT NOT NULL,
   progress REAL NOT NULL DEFAULT 0,
@@ -420,12 +426,12 @@ CREATE TABLE tasks_new (
   rhai_dump_confirmed INTEGER NOT NULL DEFAULT 0
 );
 INSERT INTO tasks_new (
-  id, plugin_id, output_dir, user_config, output_album_id,
+  id, plugin_id, output_dir, user_config, http_headers, output_album_id,
   status, progress, deleted_count, start_time, end_time, error,
   rhai_dump_json, rhai_dump_created_at, rhai_dump_confirmed
 )
 SELECT
-  id, plugin_id, output_dir, user_config, output_album_id,
+  id, plugin_id, output_dir, user_config, NULL, output_album_id,
   status, progress, COALESCE(deleted_count, 0), start_time, end_time, error,
   NULL, NULL, 0
 FROM tasks;
