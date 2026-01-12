@@ -39,6 +39,8 @@ auto-launch = "0.5"
 rusqlite = { version = "0.31", features = ["bundled"] }
 sha2 = "0.10"
 base64 = "0.22"
+lru = "0.12"
+sled = "0.34"
 
 winver = "1"
 windows-sys = { version = "0.52", features = [

@@ -4,7 +4,7 @@
             <el-skeleton :rows="8" animated />
         </div>
         <ImageGrid v-else ref="taskViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
-            :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true" :can-reorder="false"
+            :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true"
             :context-menu-component="TaskImageContextMenu" :on-context-command="handleImageMenuCommand"
             @retry-download="handleRetryDownload" @scroll-stable="loadImageUrls()">
             <template #before-grid>
@@ -67,6 +67,7 @@ import { useGallerySettings } from "@/composables/useGallerySettings";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
+import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 
 type TaskFailedImage = {
@@ -237,13 +238,48 @@ const handleRefresh = async () => {
     }
 };
 
+// leaf 分页：每页 1000 张（与后端 provider 对齐）
+const BIG_PAGE_SIZE = 1000;
+const currentPage = ref(1);
+watch(
+    () => route.params.page,
+    (v) => {
+        const n = typeof v === "string" ? parseInt(v, 10) : 1;
+        currentPage.value = Number.isFinite(n) && n > 0 ? n : 1;
+    },
+    { immediate: true }
+);
+
+const providerRootPath = computed(() => {
+    if (!taskId.value) return "";
+    return `按任务/${taskId.value}`;
+});
+
 const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
     if (!taskId.value) return;
     const showSkeleton = options?.showSkeleton ?? true;
     if (showSkeleton) loading.value = true;
     let imgs: ImageInfo[] = [];
     try {
-        imgs = await invoke<ImageInfo[]>("get_task_images", { taskId: taskId.value });
+        // 统一走 provider-path 浏览（与 VD 一致）：按任务/<taskId>[/range...]
+        const root = providerRootPath.value;
+        if (root) {
+            const probe = await invoke<any>("browse_gallery_provider", { path: root });
+            const total = (probe?.total ?? 0) as number;
+            if (total <= 0) {
+                imgs = [];
+            } else if (total <= BIG_PAGE_SIZE) {
+                imgs = (probe?.entries ?? [])
+                    .filter((e: any) => e?.kind === "image")
+                    .map((e: any) => e.image as ImageInfo);
+            } else {
+                const leaf = buildLeafProviderPathForPage(root, total, currentPage.value);
+                const leafRes = await invoke<any>("browse_gallery_provider", { path: leaf.path });
+                imgs = (leafRes?.entries ?? [])
+                    .filter((e: any) => e?.kind === "image")
+                    .map((e: any) => e.image as ImageInfo);
+            }
+        }
         // 同步拉取失败图片并合并到同一网格：
         // - 初始显示顺序：按 order 升序（任务开始下载的顺序）
         // - 之后成功下载：通过 image-added 追加（保持“image-add 之后的顺序”）

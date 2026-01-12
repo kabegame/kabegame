@@ -223,7 +223,7 @@ function dev(options) {
   const appDir = getAppDir(component);
   console.log(chalk.blue(`[dev] Starting tauri dev: ${component}`));
   children.push(
-    spawnProc("tauri", ["dev"], {
+    spawnProc("tauri", ["dev", options.watch ? "" : "--no-watch"], {
       env,
       cwd: appDir,
     })

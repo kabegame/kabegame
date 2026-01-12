@@ -162,8 +162,7 @@ PRAGMA mmap_size = 268435456;
             "CREATE TABLE IF NOT EXISTS albums (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                created_at INTEGER NOT NULL,
-                \"order\" INTEGER
+                created_at INTEGER NOT NULL
             )",
             [],
         )
@@ -172,7 +171,7 @@ PRAGMA mmap_size = 268435456;
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_name_ci ON albums(LOWER(name))",
             [],
         );
-        let _ = conn.execute("ALTER TABLE albums ADD COLUMN \"order\" INTEGER", []);
+        // 旧版本曾有 albums.\"order\"：由 perform_complex_migrations 负责重建迁移并移除该列。
 
         // 创建画册-图片映射表
         conn.execute(
@@ -530,6 +529,20 @@ fn perform_complex_migrations(conn: &mut Connection) {
     let needs_rebuild_relations =
         images_id_is_text || album_image_id_is_text || task_image_id_is_text;
 
+    let albums_has_order = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(albums)")
+            .expect("Failed to prepare table_info(albums)");
+        let rows = stmt
+            .query_map([], |row| {
+                let name: String = row.get(1)?;
+                Ok(name)
+            })
+            .expect("Failed to query table_info(albums)");
+        let has = rows.flatten().any(|name| name == "order");
+        has
+    };
+
     let settings_path = crate::app_paths::kabegame_data_dir().join("settings.json");
     let mut settings_json: Option<serde_json::Value> = None;
     let mut old_current_wallpaper_id: Option<String> = None;
@@ -708,6 +721,56 @@ fn perform_complex_migrations(conn: &mut Connection) {
 
         tx.execute("DROP TABLE IF EXISTS images_ordered", []).ok();
         tx.commit().expect("Failed to commit images pk migration");
+    }
+
+    // albums: 移除历史遗留的 "order" 列，并把 created_at 统一改成「迁移时间 + order」。
+    if albums_has_order {
+        let base_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        let tx = conn
+            .transaction()
+            .expect("Failed to start transaction for albums migration");
+
+        tx.execute("DROP TABLE IF EXISTS albums_new", []).ok();
+        tx.execute(
+            "CREATE TABLE albums_new (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )",
+            [],
+        )
+        .expect("Failed to create albums_new");
+
+        // created_at = base_time + order
+        // 注：如果 order 为 NULL，则按 0 处理（与旧行为保持兼容）。
+        tx.execute(
+            "INSERT INTO albums_new (id, name, created_at)
+             SELECT id, name, (?1 + COALESCE(\"order\", 0)) as created_at
+             FROM albums",
+            params![base_time],
+        )
+        .expect("Failed to migrate albums to albums_new");
+
+        // 重新创建大小写不敏感唯一索引
+        tx.execute("DROP INDEX IF EXISTS idx_albums_name_ci", [])
+            .ok();
+
+        tx.execute("DROP TABLE albums", [])
+            .expect("Failed to drop old albums");
+        tx.execute("ALTER TABLE albums_new RENAME TO albums", [])
+            .expect("Failed to rename albums_new");
+
+        tx.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_name_ci ON albums(LOWER(name))",
+            [],
+        )
+        .ok();
+
+        tx.commit().expect("Failed to commit albums migration");
     }
 
     if images_id_is_text {

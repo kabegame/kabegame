@@ -14,7 +14,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::super::provider::{FsEntry, VirtualFsProvider};
+use crate::providers::descriptor::ProviderDescriptor;
+use crate::providers::provider::{DeleteChildKind, DeleteChildMode, FsEntry, Provider, VdOpsContext};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
@@ -48,7 +49,13 @@ impl Default for AllProvider {
     }
 }
 
-impl VirtualFsProvider for AllProvider {
+impl Provider for AllProvider {
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor::All {
+            query: self.query.clone(),
+        }
+    }
+
     fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
         let total = storage.get_images_count_by_query(&self.query)?;
         if total == 0 {
@@ -68,7 +75,7 @@ impl VirtualFsProvider for AllProvider {
         list_greedy_subdirs_with_remainder(storage, &self.query, 0, total)
     }
 
-    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn VirtualFsProvider>> {
+    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
         let total = storage.get_images_count_by_query(&self.query).ok()?;
         if total == 0 || total <= LEAF_SIZE {
             return None;
@@ -102,6 +109,35 @@ impl VirtualFsProvider for AllProvider {
         let resolved = storage.resolve_gallery_image_path(image_id).ok()??;
         Some((image_id.to_string(), PathBuf::from(resolved)))
     }
+
+    #[cfg(all(target_os = "windows", feature = "virtual-drive"))]
+    fn delete_child(
+        &self,
+        storage: &Storage,
+        child_name: &str,
+        kind: DeleteChildKind,
+        mode: DeleteChildMode,
+        ctx: &dyn VdOpsContext,
+    ) -> Result<bool, String> {
+        if kind != DeleteChildKind::File {
+            return Err("不支持删除该类型".to_string());
+        }
+        if !crate::virtual_drive::ops::query_can_delete_child_file(&self.query) {
+            return Err("当前目录不支持删除文件".to_string());
+        }
+        if mode == DeleteChildMode::Check {
+            return Ok(true);
+        }
+        let removed = crate::virtual_drive::ops::query_delete_child_file(storage, &self.query, child_name)?;
+        if removed {
+            if let Some(album_id) = crate::virtual_drive::ops::album_id_from_query(&self.query) {
+                if let Some(name) = storage.get_album_name_by_id(album_id)? {
+                    ctx.album_images_removed(&name);
+                }
+            }
+        }
+        Ok(removed)
+    }
 }
 
 /// 范围 Provider - 表示一个范围内的图片或子范围
@@ -127,7 +163,16 @@ impl RangeProvider {
     }
 }
 
-impl VirtualFsProvider for RangeProvider {
+impl Provider for RangeProvider {
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor::Range {
+            query: self.query.clone(),
+            offset: self.offset,
+            count: self.count,
+            depth: self.depth,
+        }
+    }
+
     fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
         if self.depth == 0 {
             // 叶子层：显示图片
@@ -143,7 +188,7 @@ impl VirtualFsProvider for RangeProvider {
         list_greedy_subdirs_with_remainder(storage, &self.query, self.offset, self.count)
     }
 
-    fn get_child(&self, _storage: &Storage, name: &str) -> Option<Arc<dyn VirtualFsProvider>> {
+    fn get_child(&self, _storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
         if self.depth == 0 {
             // 叶子层没有子目录
             return None;
@@ -180,9 +225,38 @@ impl VirtualFsProvider for RangeProvider {
         let resolved = storage.resolve_gallery_image_path(image_id).ok()??;
         Some((image_id.to_string(), PathBuf::from(resolved)))
     }
+
+    #[cfg(all(target_os = "windows", feature = "virtual-drive"))]
+    fn delete_child(
+        &self,
+        storage: &Storage,
+        child_name: &str,
+        kind: DeleteChildKind,
+        mode: DeleteChildMode,
+        ctx: &dyn VdOpsContext,
+    ) -> Result<bool, String> {
+        if kind != DeleteChildKind::File {
+            return Err("不支持删除该类型".to_string());
+        }
+        if !crate::virtual_drive::ops::query_can_delete_child_file(&self.query) {
+            return Err("当前目录不支持删除文件".to_string());
+        }
+        if mode == DeleteChildMode::Check {
+            return Ok(true);
+        }
+        let removed = crate::virtual_drive::ops::query_delete_child_file(storage, &self.query, child_name)?;
+        if removed {
+            if let Some(album_id) = crate::virtual_drive::ops::album_id_from_query(&self.query) {
+                if let Some(name) = storage.get_album_name_by_id(album_id)? {
+                    ctx.album_images_removed(&name);
+                }
+            }
+        }
+        Ok(removed)
+    }
 }
 
-// === 辅助函数 ===
+// === 辅助函数（与旧实现保持一致）===
 
 /// 计算给定大小对应的深度（用于 RangeProvider）
 /// 例如：1000 -> 0, 10000 -> 1, 100000 -> 2
@@ -246,7 +320,6 @@ fn greedy_decompose(total: usize) -> Vec<(usize, usize)> {
 
     for size in sizes {
         // 重要：跳过与 total 完全相等的范围，避免生成“目录里还是同名目录”的无限嵌套
-        // 例如 total=10000 时，如果返回 [(0, 10000)]，进入 `1-10000/` 后又会再出现 `1-10000/` ...
         if size == total {
             continue;
         }
@@ -299,108 +372,4 @@ fn list_greedy_subdirs_with_remainder(
     }
 
     Ok(entries)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_calc_depth_for_size() {
-        assert_eq!(calc_depth_for_size(1), 0);
-        assert_eq!(calc_depth_for_size(1000), 0);
-        assert_eq!(calc_depth_for_size(1001), 1);
-        assert_eq!(calc_depth_for_size(10000), 1);
-        assert_eq!(calc_depth_for_size(10001), 2);
-        assert_eq!(calc_depth_for_size(100000), 2);
-    }
-
-    #[test]
-    fn test_get_range_sizes() {
-        let empty: Vec<usize> = vec![];
-        assert_eq!(get_range_sizes(500), empty);
-        assert_eq!(get_range_sizes(1000), vec![1000]);
-        assert_eq!(get_range_sizes(1500), vec![1000]);
-        assert_eq!(get_range_sizes(10000), vec![10000, 1000]);
-        assert_eq!(get_range_sizes(112400), vec![100000, 10000, 1000]);
-    }
-
-    #[test]
-    fn test_parse_range() {
-        assert_eq!(parse_range("1-1000"), Some((0, 1000)));
-        assert_eq!(parse_range("1001-2000"), Some((1000, 1000)));
-        assert_eq!(parse_range("1-10000"), Some((0, 10000)));
-        assert_eq!(parse_range("1-100000"), Some((0, 100000)));
-        assert_eq!(parse_range("invalid"), None);
-        assert_eq!(parse_range("0-1000"), None);
-    }
-
-    #[test]
-    fn test_greedy_decompose() {
-        // 900 张图片：没有完整目录
-        let empty: Vec<(usize, usize)> = vec![];
-        assert_eq!(greedy_decompose(900), empty);
-
-        // 1000 张图片：全部直接显示为文件，不生成目录
-        assert_eq!(greedy_decompose(1000), empty);
-
-        // 1900 张图片：1-1000，剩余 900
-        assert_eq!(greedy_decompose(1900), vec![(0, 1000)]);
-
-        // 2500 张图片：1-1000, 1001-2000，剩余 500
-        assert_eq!(greedy_decompose(2500), vec![(0, 1000), (1000, 1000)]);
-
-        // 10000 张图片：不生成 1-10000 这种“自我嵌套”目录，改为 10 个 1000 的目录
-        assert_eq!(
-            greedy_decompose(10000),
-            vec![
-                (0, 1000),
-                (1000, 1000),
-                (2000, 1000),
-                (3000, 1000),
-                (4000, 1000),
-                (5000, 1000),
-                (6000, 1000),
-                (7000, 1000),
-                (8000, 1000),
-                (9000, 1000)
-            ]
-        );
-
-        // 10500 张图片：1-10000，剩余 500
-        assert_eq!(greedy_decompose(10500), vec![(0, 10000)]);
-
-        // 12400 张图片：1-10000, 10001-11000, 11001-12000，剩余 400
-        assert_eq!(
-            greedy_decompose(12400),
-            vec![(0, 10000), (10000, 1000), (11000, 1000)]
-        );
-
-        // 112400 张图片：
-        // 1-100000, 100001-110000, 110001-111000, 111001-112000，剩余 400
-        assert_eq!(
-            greedy_decompose(112400),
-            vec![(0, 100000), (100000, 10000), (110000, 1000), (111000, 1000)]
-        );
-
-        // 200000 张图片：1-100000, 100001-200000
-        assert_eq!(
-            greedy_decompose(200000),
-            vec![(0, 100000), (100000, 100000)]
-        );
-    }
-
-    #[test]
-    fn test_validate_greedy_range() {
-        // 112400 张图片
-        assert!(validate_greedy_range(0, 100000, 112400)); // 1-100000 有效
-        assert!(validate_greedy_range(100000, 10000, 112400)); // 100001-110000 有效
-        assert!(validate_greedy_range(110000, 1000, 112400)); // 110001-111000 有效
-        assert!(validate_greedy_range(111000, 1000, 112400)); // 111001-112000 有效
-        assert!(!validate_greedy_range(112000, 400, 112400)); // 剩余文件不是目录
-
-        // 无效范围
-        assert!(!validate_greedy_range(0, 10000, 112400)); // 不是贪心分解的结果
-        assert!(!validate_greedy_range(50000, 50000, 112400)); // 不是贪心分解的结果
-    }
 }

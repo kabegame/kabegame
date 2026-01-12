@@ -1,41 +1,26 @@
 <template>
   <div class="gallery-page">
-    <div class="gallery-container" v-loading="showLoading">
+    <div class="gallery-container">
       <!-- 关键：不要用 v-if 在 loading 时卸载 ImageGrid，否则 before-grid 里的 header 会闪烁 -->
       <ImageGrid ref="galleryViewRef" :images="displayedImages" :image-url-map="imageSrcMap"
         enable-ctrl-wheel-adjust-columns enable-ctrl-key-adjust-columns :enable-virtual-scroll="true"
-        :show-empty-state="true" :loading="loading || isRefreshing" :context-menu-component="GalleryContextMenu"
-        :on-context-command="handleGridContextCommand" @scroll-stable="loadImageUrls()"
-        @reorder="(...args: any[]) => handleImageReorder(args[0])">
+        :show-empty-state="true" :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing"
+        :context-menu-component="GalleryContextMenu" :on-context-command="handleGridContextCommand"
+        @scroll-stable="loadImageUrls()">
         <template #before-grid>
           <!-- 顶部工具栏 -->
-          <GalleryToolbar :dedupe-loading="dedupeLoading" :has-more="crawlerStore.hasMore"
-            :is-loading-all="isLoadingAll" :dedupe-progress="dedupeProgress" :dedupe-processed="dedupeProcessed"
-            :dedupe-total="dedupeTotal" :dedupe-removed="dedupeRemoved" :total-count="totalImagesCount"
-            :loaded-count="displayedImages.length" :big-page-enabled="bigPageEnabled"
-            :current-position="currentPosition" @refresh="loadImages(true, { forceReload: true })"
-            @dedupe-by-hash="handleDedupeByHash" @show-quick-settings="openQuickSettingsDrawer"
-            @show-crawler-dialog="showCrawlerDialog = true" @load-all="loadAllImages"
-            @cancel-load-all="handleCancelLoadAll" @cancel-dedupe="cancelDedupe" />
+          <GalleryToolbar :dedupe-loading="dedupeLoading" :dedupe-progress="dedupeProgress"
+            :dedupe-processed="dedupeProcessed" :dedupe-total="dedupeTotal" :dedupe-removed="dedupeRemoved"
+            :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled" :current-position="currentPosition"
+            @refresh="loadImages(true, { forceReload: true })" @dedupe-by-hash="handleDedupeByHash"
+            @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="showCrawlerDialog = true"
+            @cancel-dedupe="cancelDedupe" />
 
           <!-- 大页分页器 -->
           <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentBigPageOffset"
             :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToBigPage" />
         </template>
 
-        <!-- 加载更多：仅 Gallery 注入到 ImageGrid 容器尾部 -->
-        <template #footer>
-          <!-- 加载全部时显示加载圆圈 -->
-          <div v-if="isLoadingAll" class="load-more-container">
-            <el-icon class="is-loading" :size="24">
-              <Loading />
-            </el-icon>
-          </div>
-          <!-- 非加载全部时显示加载更多按钮 -->
-          <LoadMoreButton v-else-if="displayedImages.length > 0 || crawlerStore.hasMore"
-            :has-more="crawlerStore.hasMore" :loading="isLoadingMore" :show-next-page="showNextPageButton"
-            @load-more="loadMoreImages" @next-page="handleNextBigPage" />
-        </template>
 
         <!-- 无图片空状态：使用 ImageGrid 的 empty 插槽（只隐藏 ImageItem，不影响 header/插槽挂载） -->
         <template #empty>
@@ -83,7 +68,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { useRouter } from "vue-router";
+import { useRouter, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus, Loading } from "@element-plus/icons-vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
@@ -103,7 +88,6 @@ import { useImageOperations } from "@/composables/useImageOperations";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
-import LoadMoreButton from "@/components/LoadMoreButton.vue";
 import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 
@@ -120,35 +104,78 @@ const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
-// 大页设置：每页 10000 张图片
-const BIG_PAGE_SIZE = 10000;
+// leaf 分页：每页 1000 张图片（与后端 provider 叶子目录对齐）
+const BIG_PAGE_SIZE = 1000;
 
-// 是否启用大页模式（总数超过 10000）
+// 是否启用分页（总数超过 1000）
 const bigPageEnabled = computed(() => {
   return totalImagesCount.value > BIG_PAGE_SIZE;
 });
 
-// 当前大页的起始偏移量（用于分页器显示）
-const currentBigPageOffset = computed(() => {
-  // 通过当前加载的图片数量倒推起始偏移
-  // 假设用户从某个大页开始加载，那么第一张图片的偏移就是起始偏移
-  if (displayedImages.value.length === 0) return 0;
+// 当前页的起始偏移量（用于分页器显示）
+const currentBigPageOffset = computed(() => currentOffset.value);
 
-  // 我们需要跟踪实际的偏移量
-  return currentOffset.value;
+const route = useRoute();
+
+// 纯 path 驱动：
+// - /gallery/<providerPath>[/page/<n>]
+// - providerPath 与 VD 一致，例如：全部 / 按插件/konachan / 按时间/2024-01
+const providerRootPath = computed(() => {
+  const p = route.params.providerPath;
+  const segs =
+    typeof p === "string"
+      ? [p]
+      : Array.isArray(p)
+        ? (p as string[])
+        : [];
+  const s = segs.map((x) => String(x || "").trim()).filter(Boolean).join("/");
+  return s || "全部";
 });
 
-// 跟踪当前的实际偏移量
-const currentOffset = ref(0);
+const currentPage = ref(1);
+watch(
+  () => route.params.page,
+  (v) => {
+    const n = typeof v === "string" ? parseInt(v, 10) : 1;
+    currentPage.value = Number.isFinite(n) && n > 0 ? n : 1;
+  },
+  { immediate: true }
+);
+
+const replaceRouteForPage = async (page: number) => {
+  const safe = Math.max(1, Math.floor(page || 1));
+  const segs = providerRootPath.value.split("/").filter(Boolean);
+  if (safe === 1) {
+    await router.replace({ name: "Gallery", params: { providerPath: segs } });
+  } else {
+    await router.replace({
+      name: "GalleryPaged",
+      params: { providerPath: segs, page: String(safe) },
+    });
+  }
+};
+
+// 将 currentPage 的变化（可能来自代码自动纠正）同步回 URL（无 query）
+watch(
+  () => currentPage.value,
+  (p) => {
+    const next = Math.max(1, Math.floor(p || 1));
+    const cur =
+      typeof route.params.page === "string" ? parseInt(route.params.page, 10) : 1;
+    if (Number.isFinite(cur) && cur === next) return;
+    void replaceRouteForPage(next);
+  }
+);
+
+// 跟踪当前的实际偏移量（用于 paginator：offset = (page-1)*1000）
+const currentOffset = computed(() => (currentPage.value - 1) * BIG_PAGE_SIZE);
 
 // 计算当前位置（用于 header subtitle 显示）
 const currentPosition = computed(() => {
   if (!bigPageEnabled.value || totalImagesCount.value === 0) {
     return 1; // 分页未启用时返回默认值，不会显示
   }
-  // 当前位置 = 当前页的第一张图片索引（从 1 开始）
-  const currentBigPage = Math.floor(currentOffset.value / BIG_PAGE_SIZE) + 1;
-  return (currentBigPage - 1) * BIG_PAGE_SIZE + 1;
+  return currentOffset.value + 1;
 });
 
 const dedupeLoading = ref(false); // 正在执行"按哈希去重"本体
@@ -212,7 +239,6 @@ const onScrollOverspeed = () => {
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay();
 
 const isLoadingMore = ref(false);
-const isLoadingAll = ref(false);
 const showAddToAlbumDialog = ref(false);
 const addToAlbumImageIds = ref<string[]>([]);
 // TODO:
@@ -243,17 +269,16 @@ const {
   refreshImagesPreserveCache,
   refreshLatestIncremental,
   loadMoreImages: loadMoreImagesFromComposable,
-  loadAllImages: loadAllImagesFromComposable,
-  cancelLoadAll,
   jumpToBigPage,
   removeFromUiCacheByIds,
 } = useGalleryImages(
   galleryContainerRef,
   isLoadingMore,
+  providerRootPath,
+  currentPage,
   preferOriginalInGrid,
   imageGridColumns,
-  isInteracting,
-  currentOffset
+  isInteracting
 );
 
 watch(
@@ -286,11 +311,6 @@ watch(
 
 // 兼容旧调用：保留原函数名
 const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => {
-  // 如果正在加载全部，先取消
-  if (isLoadingAll.value) {
-    cancelLoadAll();
-    isLoadingAll.value = false;
-  }
   // 如果强制刷新，递增刷新计数器以触发空占位符重新挂载
   if (opts?.forceReload) {
     refreshKey.value++;
@@ -299,9 +319,10 @@ const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => 
   }
   try {
     await refreshImagesPreserveCache(reset, opts);
-    // 刷新后重置偏移量
+    // reset 时回到第 1 页，并同步到路由
     if (reset) {
-      currentOffset.value = 0;
+      currentPage.value = 1;
+      void replaceRouteForPage(1);
     }
   } finally {
     finishLoading();
@@ -309,56 +330,19 @@ const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => 
   }
 };
 
-const loadMoreImages = () => loadMoreImagesFromComposable(false, BIG_PAGE_SIZE);
-
-const loadAllImages = async () => {
-  if (isLoadingAll.value) return;
-  isLoadingAll.value = true;
-  try {
-    // 如果启用了大页，只加载当前大页；否则加载全部
-    await loadAllImagesFromComposable(bigPageEnabled.value ? BIG_PAGE_SIZE : 0);
-  } finally {
-    isLoadingAll.value = false;
-  }
-};
-
-const handleCancelLoadAll = () => {
-  if (!isLoadingAll.value) return;
-  cancelLoadAll();
-  isLoadingAll.value = false;
-};
 
 // 处理大页跳转
 const handleJumpToBigPage = async (bigPage: number) => {
   startLoading();
   try {
     await jumpToBigPage(bigPage, BIG_PAGE_SIZE);
-    // 更新当前偏移量
-    currentOffset.value = (bigPage - 1) * BIG_PAGE_SIZE;
+    currentPage.value = bigPage;
+    void replaceRouteForPage(bigPage);
   } finally {
     finishLoading();
   }
 };
 
-// 判断是否显示"进入下一页"按钮
-// 当前大页加载完毕，但总数还有更多时显示
-const showNextPageButton = computed(() => {
-  if (crawlerStore.hasMore) return false; // 当前大页内还有更多，不显示
-  if (totalImagesCount.value === 0) return false; // 没有图片
-
-  // 计算当前大页
-  const currentBigPage = Math.floor(currentOffset.value / BIG_PAGE_SIZE) + 1;
-  const totalBigPages = Math.ceil(totalImagesCount.value / BIG_PAGE_SIZE);
-
-  // 如果不是最后一页，显示"进入下一页"
-  return currentBigPage < totalBigPages;
-});
-
-// 处理进入下一页
-const handleNextBigPage = async () => {
-  const currentBigPage = Math.floor(currentOffset.value / BIG_PAGE_SIZE) + 1;
-  await handleJumpToBigPage(currentBigPage + 1);
-};
 
 // 使用图片操作 composable
 const {
@@ -374,8 +358,7 @@ const {
   currentWallpaperImageId,
   galleryViewRef,
   removeFromUiCacheByIds,
-  loadImages,
-  loadMoreImages
+  loadImages
 );
 
 const handleAddedToAlbum = async () => {
@@ -398,15 +381,36 @@ const getPluginName = (pluginId: string) => {
   return plugin?.name || pluginId;
 };
 
-// 获取总图片数（不受过滤器影响）
+// 获取总图片数（随 providerRootPath 变化）
 const loadTotalImagesCount = async () => {
   try {
-    const count = await invoke<number>("get_images_count");
-    totalImagesCount.value = count;
+    // 通过 provider 浏览接口获取 total（避免另起一套 count API）
+    const res = await invoke<{ total: number }>("browse_gallery_provider", {
+      path: providerRootPath.value,
+    });
+    totalImagesCount.value = res?.total ?? 0;
   } catch (error) {
     console.error("获取总图片数失败:", error);
   }
 };
+
+// 兜底：当去重等操作导致 total 下降，当前页码可能越界 -> 自动跳到最后一页并重载
+watch(
+  () => totalImagesCount.value,
+  async (total) => {
+    if (!bigPageEnabled.value) {
+      // total <= 1000 时只允许 page=1
+      if (currentPage.value !== 1) {
+        await handleJumpToBigPage(1);
+      }
+      return;
+    }
+    const totalPages = Math.max(1, Math.ceil((total || 0) / BIG_PAGE_SIZE));
+    if (currentPage.value > totalPages) {
+      await handleJumpToBigPage(totalPages);
+    }
+  }
+);
 
 // 去重/批量移除后：若当前页被清空，但图库仍有图，则尽量留在当前大页；
 // 若当前页码越界（总页数变少），则跳转到仍可用的最大页。
@@ -420,14 +424,14 @@ const ensureValidGalleryPageAfterMassRemoval = async () => {
     // 当前页仍有图：不处理
     if (displayedImages.value.length > 0) return;
 
-    // 全部没图：回到第一页并关闭 hasMore（避免出现“空页面 + 加载更多按钮”）
+    // 全部没图：回到第一页
     if (totalImagesCount.value <= 0) {
-      currentOffset.value = 0;
-      crawlerStore.hasMore = false;
+      currentPage.value = 1;
+      void replaceRouteForPage(1);
       return;
     }
 
-    const currentBigPage = Math.floor(currentOffset.value / BIG_PAGE_SIZE) + 1;
+    const currentBigPage = currentPage.value;
     const totalBigPages = Math.max(
       1,
       Math.ceil(totalImagesCount.value / BIG_PAGE_SIZE)
@@ -654,33 +658,6 @@ watch(showCrawlerDialog, (isOpen) => {
   }
 });
 
-// 处理图片拖拽排序：只交换两张图片的 order
-const handleImageReorder = async (payload: { aId: string; aOrder: number; bId: string; bOrder: number }) => {
-  try {
-    const imageOrders: [string, number][] = [
-      [payload.aId, payload.aOrder],
-      [payload.bId, payload.bOrder],
-    ];
-
-    await invoke("update_images_order", { imageOrders });
-
-    const idxA = displayedImages.value.findIndex((i) => i.id === payload.aId);
-    const idxB = displayedImages.value.findIndex((i) => i.id === payload.bId);
-    if (idxA !== -1 && idxB !== -1) {
-      const next = displayedImages.value.slice();
-      [next[idxA], next[idxB]] = [next[idxB], next[idxA]];
-      displayedImages.value = next.map((img) => {
-        if (img.id === payload.aId) return { ...img, order: payload.aOrder } as ImageInfo;
-        if (img.id === payload.bId) return { ...img, order: payload.bOrder } as ImageInfo;
-        return img;
-      });
-      crawlerStore.images = displayedImages.value.slice();
-    }
-  } catch (error) {
-    console.error("更新图片顺序失败:", error);
-    ElMessage.error("更新顺序失败");
-  }
-};
 
 
 // 监听图片列表变化，加载图片 URL
@@ -695,7 +672,7 @@ const setupImageListWatch = (immediate = true) => {
   }
   imageListWatch = watch(() => displayedImages.value, () => {
     // 如果正在加载更多，不触发 loadImageUrls（由 loadMoreImages 自己处理）
-    if (isLoadingMore.value || isLoadingAll.value) {
+    if (isLoadingMore.value) {
       return;
     }
 
@@ -996,7 +973,7 @@ onMounted(async () => {
       const currentPath = router.currentRoute.value.path;
       if (currentPath !== '/gallery') {
         console.log('[Gallery] 当前不在画廊页面，等待路由切换...');
-        await router.push('/gallery');
+        await router.push("/gallery/全部");
         await nextTick();
         // 再等待一下确保组件已激活
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -1044,20 +1021,11 @@ onMounted(async () => {
 
 // 组件激活时（keep-alive 缓存后重新显示）
 onActivated(async () => {
-  // 重新加载设置，确保使用最新的 pageSize 等配置
-  const previousPageSize = crawlerStore.pageSize;
+  // 重新加载设置
   loadSettings();
-  const newPageSize = crawlerStore.pageSize;
 
   // 如果图片列表为空，需要重新加载
   if (displayedImages.value.length === 0) {
-    await loadImages(true);
-    return;
-  }
-
-  // 检查 pageSize 是否发生变化，如果变化了需要重新加载图片
-  if (previousPageSize !== newPageSize) {
-    // pageSize 已变化，重新加载图片以使用新的 pageSize
     await loadImages(true);
     return;
   }
@@ -1096,8 +1064,6 @@ onActivated(async () => {
 // 组件停用时（keep-alive 缓存，但不清理 Blob URL）
 onDeactivated(() => {
   // keep-alive 缓存时不清理 Blob URL，保持图片 URL 有效
-  // 退出调整模式（如果处于调整模式）
-  galleryViewRef.value?.exitReorderMode?.();
 });
 </script>
 

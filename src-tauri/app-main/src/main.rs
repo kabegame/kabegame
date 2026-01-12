@@ -337,6 +337,15 @@ fn get_images_range(
 }
 
 #[tauri::command]
+fn browse_gallery_provider(
+    path: String,
+    state: tauri::State<Storage>,
+    provider_rt: tauri::State<kabegame_core::providers::ProviderRuntime>,
+) -> Result<kabegame_core::gallery::GalleryBrowseResult, String> {
+    kabegame_core::gallery::browse_gallery_provider(&state, &provider_rt, &path)
+}
+
+#[tauri::command]
 fn get_image_by_id(
     image_id: String,
     state: tauri::State<Storage>,
@@ -365,7 +374,7 @@ fn add_album(
     );
     #[cfg(target_os = "windows")]
     {
-        drive.notify_root_dir_changed();
+        drive.bump_albums();
     }
     Ok(album)
 }
@@ -376,9 +385,19 @@ fn rename_album(
     album_id: String,
     new_name: String,
     state: tauri::State<Storage>,
+    provider_rt: tauri::State<kabegame_core::providers::ProviderRuntime>,
     #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
 ) -> Result<(), String> {
+    // B 策略：重命名只为“新路径”写入同一个 provider_id（旧路径允许成为幽灵）
+    let old_name = state.get_album_name_by_id(&album_id)?.unwrap_or_default();
     state.rename_album(&album_id, &new_name)?;
+    if !old_name.trim().is_empty() {
+        let old_segs = ["画册", old_name.as_str()];
+        let new_segs = ["画册", new_name.as_str()];
+        if let Ok(Some(desc)) = provider_rt.get_descriptor_for_path(&old_segs) {
+            let _ = provider_rt.set_descriptor_for_path(&new_segs, &desc);
+        }
+    }
     let _ = app.emit(
         "albums-changed",
         serde_json::json!({
@@ -387,7 +406,7 @@ fn rename_album(
     );
     #[cfg(target_os = "windows")]
     {
-        drive.notify_root_dir_changed();
+        drive.bump_albums();
     }
     Ok(())
 }
@@ -449,7 +468,7 @@ fn delete_album(
     );
     #[cfg(target_os = "windows")]
     {
-        drive.notify_root_dir_changed();
+        drive.bump_albums();
     }
     Ok(())
 }
@@ -535,28 +554,12 @@ fn get_album_counts(
 }
 
 #[tauri::command]
-fn update_images_order(
-    image_orders: Vec<(String, i64)>,
-    state: tauri::State<Storage>,
-) -> Result<(), String> {
-    state.update_images_order(&image_orders)
-}
-
-#[tauri::command]
 fn update_album_images_order(
     album_id: String,
     image_orders: Vec<(String, i64)>,
     state: tauri::State<Storage>,
 ) -> Result<(), String> {
     state.update_album_images_order(&album_id, &image_orders)
-}
-
-#[tauri::command]
-fn update_albums_order(
-    album_orders: Vec<(String, i64)>,
-    state: tauri::State<Storage>,
-) -> Result<(), String> {
-    state.update_albums_order(&album_orders)
 }
 
 #[tauri::command]
@@ -1195,11 +1198,6 @@ fn get_desktop_resolution() -> Result<(u32, u32), String> {
 }
 
 #[tauri::command]
-fn set_gallery_page_size(size: u32, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_gallery_page_size(size)
-}
-
-#[tauri::command]
 fn set_auto_deduplicate(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
     state.set_auto_deduplicate(enabled)
 }
@@ -1342,6 +1340,7 @@ fn delete_task(
     task_id: String,
     state: tauri::State<Storage>,
     settings: tauri::State<Settings>,
+    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
 ) -> Result<(), String> {
     // 如果任务正在运行，先标记为取消，阻止后续入库
     let download_queue = app.state::<crawler::DownloadQueue>();
@@ -1350,6 +1349,11 @@ fn delete_task(
     // 先取出该任务关联的图片 id 列表（避免删除后无法判断是否包含"当前壁纸"）
     let ids = state.get_task_image_ids(&task_id).unwrap_or_default();
     state.delete_task(&task_id)?;
+    #[cfg(target_os = "windows")]
+    {
+        // 任务删除会改变“按任务”路径映射：bump + 通知 Explorer 刷新
+        drive.bump_tasks();
+    }
     let s = settings.get_settings().unwrap_or_default();
     if let Some(cur) = s.current_wallpaper_image_id.as_deref() {
         if ids.iter().any(|id| id == cur) {
@@ -2573,6 +2577,47 @@ fn startup_step_manage_storage(app: &mut tauri::App) -> Result<(), String> {
     Ok(())
 }
 
+fn startup_step_manage_provider_runtime(app: &mut tauri::App) {
+    let mut cfg = kabegame_core::providers::ProviderCacheConfig::default();
+    // 可选覆盖 RocksDB 目录
+    if let Ok(dir) = std::env::var("KABEGAME_PROVIDER_DB_DIR") {
+        cfg.db_dir = std::path::PathBuf::from(dir);
+    }
+    let rt = match kabegame_core::providers::ProviderRuntime::new(cfg) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!(
+                "[providers] init ProviderRuntime failed, fallback to default cfg: {}",
+                e
+            );
+            kabegame_core::providers::ProviderRuntime::new(
+                kabegame_core::providers::ProviderCacheConfig::default(),
+            )
+            .expect("ProviderRuntime fallback init failed")
+        }
+    };
+    app.manage(rt);
+}
+
+fn startup_step_warm_provider_cache(app: &tauri::AppHandle) {
+    // Provider 树缓存 warm：后台执行，失败只记录 warning（不阻塞启动）
+    let app_handle = app.clone();
+    let storage = app_handle.state::<Storage>().inner().clone();
+    tauri::async_runtime::spawn(async move {
+        // 给启动留一点时间（避免与大量 IO 初始化竞争）
+        tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+
+        // NOTE: 这里直接从 AppHandle 取 state（AppHandle 是 Send+Sync，可跨线程使用）
+        let rt = app_handle.state::<kabegame_core::providers::ProviderRuntime>();
+        let root = std::sync::Arc::new(kabegame_core::providers::RootProvider::default())
+            as std::sync::Arc<dyn kabegame_core::providers::provider::Provider>;
+        match rt.warm_cache(&storage, root) {
+            Ok(_root_desc) => println!("[providers] warm cache ok"),
+            Err(e) => eprintln!("[providers] warm cache failed: {}", e),
+        }
+    });
+}
+
 fn startup_step_manage_virtual_drive_service(app: &mut tauri::App) {
     // Windows：虚拟盘服务（Dokan）
     #[cfg(target_os = "windows")]
@@ -2763,7 +2808,9 @@ fn main() {
             startup_step_manage_plugin_manager(app);
             startup_step_manage_storage(app)?;
             startup_step_manage_virtual_drive_service(app);
+            startup_step_manage_provider_runtime(app);
             startup_step_manage_settings(app);
+            startup_step_warm_provider_cache(app.app_handle());
             startup_step_auto_mount_album_drive(app.app_handle());
             startup_step_manage_dedupe_manager(app);
             startup_step_restore_main_window_state(app.app_handle(), is_cleaning_data);
@@ -2799,6 +2846,7 @@ fn main() {
             get_images,
             get_images_paginated,
             get_images_range,
+            browse_gallery_provider,
             get_image_by_id,
             get_albums,
             add_album,
@@ -2827,9 +2875,7 @@ fn main() {
             start_dedupe_gallery_by_hash_batched,
             cancel_dedupe_gallery_by_hash_batched,
             toggle_image_favorite,
-            update_images_order,
             update_album_images_order,
-            update_albums_order,
             open_file_path,
             open_file_folder,
             set_wallpaper,
@@ -2867,7 +2913,6 @@ fn main() {
             set_gallery_image_aspect_ratio_match_window,
             set_gallery_image_aspect_ratio,
             get_desktop_resolution,
-            set_gallery_page_size,
             set_auto_deduplicate,
             set_default_download_dir,
             set_wallpaper_engine_dir,

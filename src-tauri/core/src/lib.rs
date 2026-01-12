@@ -3,14 +3,17 @@
 pub mod app_paths;
 pub mod crawler;
 pub mod dedupe;
+pub mod gallery;
 pub mod kgpg;
 pub mod plugin;
+pub mod providers;
 pub mod settings;
 pub mod shell_open;
 pub mod storage;
 #[cfg(feature = "tray")]
 pub mod tray;
-#[cfg(all(target_os = "windows", feature = "virtual-drive"))]
+// 非windows也可以有虚拟盘
+#[cfg(feature = "virtual-drive")]
 pub mod virtual_drive;
 #[cfg(feature = "wallpaper")]
 pub mod wallpaper;

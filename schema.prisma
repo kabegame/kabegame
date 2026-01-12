@@ -83,7 +83,6 @@ model Album {
     id        String @id
     name      String
     createdAt Int    @map("created_at")
-    order     Int?   @map("order")
 
     albumImages AlbumImage[]
 

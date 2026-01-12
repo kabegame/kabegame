@@ -1,7 +1,7 @@
 <template>
   <CoreImageGrid ref="coreRef" v-bind="coreGridBind" :window-aspect-ratio="props.windowAspectRatio"
     :on-context-command="handleContextCommand" @scroll-stable="$emit('scroll-stable')"
-    @retry-download="(p) => $emit('retry-download', p)" @reorder="(p) => $emit('reorder', p)">
+    @retry-download="(p) => $emit('retry-download', p)">
     <template #before-grid>
       <slot name="before-grid" />
     </template>
@@ -59,7 +59,7 @@ interface Props {
     | Promise<ContextCommand | null | undefined>;
   showEmptyState?: boolean;
   loading?: boolean; // 加载状态：为 true 时不显示空状态
-  canReorder?: boolean;
+  loadingOverlay?: boolean; // 加载遮罩：仅覆盖 grid 区域；不传则默认等同于 loading
   enableCtrlWheelAdjustColumns?: boolean;
   enableCtrlKeyAdjustColumns?: boolean;
   hideScrollbar?: boolean;
@@ -77,7 +77,6 @@ defineEmits<{
   addedToAlbum: [];
   // 注意：事件来自 core ImageGrid，因此 image 类型应与 core 对齐（url 在 core 为可选）
   "retry-download": [payload: { image: CoreImageInfo }];
-  reorder: [payload: { aId: string; aOrder: number; bId: string; bOrder: number }];
 }>();
 
 const attrs = useAttrs();
@@ -116,6 +115,5 @@ defineExpose({
   getContainerEl: () => coreRef.value?.getContainerEl?.(),
   getSelectedIds: () => coreRef.value?.getSelectedIds?.(),
   clearSelection: () => coreRef.value?.clearSelection?.(),
-  exitReorderMode: () => coreRef.value?.exitReorderMode?.(),
 });
 </script>

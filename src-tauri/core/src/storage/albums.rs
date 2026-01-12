@@ -9,8 +9,6 @@ pub struct Album {
     pub id: String,
     pub name: String,
     pub created_at: u64,
-    #[serde(default)]
-    pub order: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,18 +127,9 @@ impl Storage {
             .map_err(|e| format!("Time error: {}", e))?
             .as_secs();
 
-        let max_order: i64 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(\"order\"), 0) FROM albums",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        let order = max_order + 1;
-
         conn.execute(
-            "INSERT INTO albums (id, name, created_at, \"order\") VALUES (?1, ?2, ?3, ?4)",
-            params![id, name_trimmed, created_at as i64, order],
+            "INSERT INTO albums (id, name, created_at) VALUES (?1, ?2, ?3)",
+            params![id, name_trimmed, created_at as i64],
         )
         .map_err(|e| format!("Failed to add album: {}", e))?;
 
@@ -148,14 +137,13 @@ impl Storage {
             id,
             name: name_trimmed.to_string(),
             created_at,
-            order: Some(order),
         })
     }
 
     pub fn get_albums(&self) -> Result<Vec<Album>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id, name, created_at, \"order\" FROM albums ORDER BY \"order\" ASC, created_at ASC")
+            .prepare("SELECT id, name, created_at FROM albums ORDER BY created_at ASC")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let album_rows = stmt
@@ -164,7 +152,6 @@ impl Storage {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     created_at: row.get::<_, i64>(2)? as u64,
-                    order: row.get(3)?,
                 })
             })
             .map_err(|e| format!("Failed to query albums: {}", e))?;
@@ -259,71 +246,6 @@ impl Storage {
         }
 
         Ok(None)
-    }
-
-    pub fn get_album_images_fs_entries(
-        &self,
-        album_id: &str,
-    ) -> Result<Vec<AlbumImageFsEntry>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT CAST(i.id AS TEXT), i.local_path, i.thumbnail_path, i.url
-                 FROM images i
-                 INNER JOIN album_images ai ON i.id = ai.image_id
-                 WHERE ai.album_id = ?1
-                 ORDER BY COALESCE(ai.\"order\", ai.rowid) ASC",
-            )
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let rows = stmt
-            .query_map(params![album_id], |row| {
-                let id: String = row.get(0)?;
-                let local_path: String = row.get(1)?;
-                let thumb_path: String = row.get(2)?;
-                let _url: String = row.get(3)?;
-
-                let resolved_path =
-                    if !local_path.trim().is_empty() && fs::metadata(&local_path).is_ok() {
-                        Some(local_path.clone())
-                    } else if !thumb_path.trim().is_empty() && fs::metadata(&thumb_path).is_ok() {
-                        Some(thumb_path.clone())
-                    } else {
-                        None
-                    };
-
-                let Some(resolved_path) = resolved_path else {
-                    return Ok(None);
-                };
-
-                // 扩展名优先使用原图，若不存在则回退到实际文件路径
-                let ext_source = if !local_path.trim().is_empty() {
-                    &local_path
-                } else {
-                    &resolved_path
-                };
-                let ext = std::path::Path::new(ext_source)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("jpg");
-
-                let file_name = format!("{}.{}", id, ext);
-
-                Ok(Some(AlbumImageFsEntry {
-                    file_name,
-                    image_id: id,
-                    resolved_path,
-                }))
-            })
-            .map_err(|e| format!("Failed to query album images for FS: {}", e))?;
-
-        let mut entries = Vec::new();
-        for r in rows {
-            if let Some(entry) = r.map_err(|e| format!("Failed to read row: {}", e))? {
-                entries.push(entry);
-            }
-        }
-        Ok(entries)
     }
 
     pub fn add_images_to_album(
@@ -568,25 +490,6 @@ impl Storage {
                 params![order, album_id, id],
             )
             .map_err(|e| format!("Failed to update album image order: {}", e))?;
-        }
-
-        tx.commit()
-            .map_err(|e| format!("Failed to commit transaction: {}", e))?;
-        Ok(())
-    }
-
-    pub fn update_albums_order(&self, album_orders: &[(String, i64)]) -> Result<(), String> {
-        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| format!("Failed to start transaction: {}", e))?;
-
-        for (id, order) in album_orders {
-            tx.execute(
-                "UPDATE albums SET \"order\" = ?1 WHERE id = ?2",
-                params![order, id],
-            )
-            .map_err(|e| format!("Failed to update album order: {}", e))?;
         }
 
         tx.commit()

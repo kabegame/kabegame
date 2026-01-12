@@ -110,7 +110,7 @@
                   :build-args="(v: boolean) => ({ enabled: v })" />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS" label="画册盘" description="在资源管理器中以虚拟盘方式浏览画册（只读，支持重命名画册目录）">
+              <SettingRow v-if="IS_WINDOWS" label="画册盘" description="在资源管理器中以虚拟盘方式浏览画册（只支持有限的操作）">
                 <AlbumDriveSetting />
               </SettingRow>
 
@@ -124,11 +124,6 @@
 
               <SettingRow label="图片宽高比" description="影响画廊/画册中图片卡片的展示宽高比">
                 <GalleryImageAspectRatioSetting />
-              </SettingRow>
-
-              <SettingRow label="每次加载数量" description="画廊“加载更多”时的加载张数（10-200）">
-                <SettingNumberControl setting-key="galleryPageSize" command="set_gallery_page_size"
-                  :build-args="(v: number) => ({ size: v })" :min="10" :max="200" :step="10" />
               </SettingRow>
 
               <SettingRow label="清理应用数据" description="将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启">

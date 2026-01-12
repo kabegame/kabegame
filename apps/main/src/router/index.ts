@@ -5,10 +5,21 @@ import { invoke } from "@tauri-apps/api/core";
 const routes: RouteRecordRaw[] = [
   {
     path: "/",
-    redirect: "/gallery",
+    redirect: "/gallery/全部",
   },
   {
     path: "/gallery",
+    redirect: "/gallery/全部",
+  },
+  {
+    // 纯 path 驱动：providerPath 为可重复参数（可包含多个路径段）
+    path: "/gallery/:providerPath(.*)*/page/:page(\\d+)",
+    name: "GalleryPaged",
+    component: () => import("@/views/Gallery.vue"),
+    meta: { title: "画廊" },
+  },
+  {
+    path: "/gallery/:providerPath(.*)*",
     name: "Gallery",
     component: () => import("@/views/Gallery.vue"),
     meta: { title: "画廊" },
@@ -32,8 +43,20 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "画册" },
   },
   {
+    path: "/albums/:id/page/:page(\\d+)",
+    name: "AlbumDetailPaged",
+    component: () => import("@/views/AlbumDetail.vue"),
+    meta: { title: "画册" },
+  },
+  {
     path: "/tasks/:id",
     name: "TaskDetail",
+    component: () => import("@/views/TaskDetail.vue"),
+    meta: { title: "任务详情" },
+  },
+  {
+    path: "/tasks/:id/page/:page(\\d+)",
+    name: "TaskDetailPaged",
     component: () => import("@/views/TaskDetail.vue"),
     meta: { title: "任务详情" },
   },
@@ -81,8 +104,9 @@ router.beforeEach((to, _from, next) => {
 // 保存当前路径（如果启用了恢复功能）
 // 注意：不要阻塞导航（任务多时后端 invoke 可能较慢），因此放到 afterEach 并 fire-and-forget
 router.afterEach((to, from) => {
-  if (from.path !== to.path) {
-    void saveCurrentPath(to.path);
+  // 注意：必须使用 fullPath，否则 query（例如 Gallery 的 provider 路径/页码）不会被保存/恢复
+  if (from.fullPath !== to.fullPath) {
+    void saveCurrentPath(to.fullPath);
   }
 });
 
@@ -97,13 +121,13 @@ router.isReady().then(async () => {
       // 尝试导航到保存的路径
       await router.push(settings.lastTabPath).catch(() => {
         // 如果路由不存在或导航失败，回退到画廊
-        return router.push("/gallery");
+        return router.push("/gallery/全部");
       });
     }
   } catch (error) {
     console.error("恢复路径失败:", error);
     // 出错时回退到画廊
-    router.push("/gallery").catch(() => {});
+    router.push("/gallery/全部").catch(() => {});
   }
 });
 

@@ -20,8 +20,7 @@ export function useImageOperations(
   currentWallpaperImageId: Ref<string | null>,
   galleryViewRef: Ref<any>,
   _removeFromUiCacheByIds: (imageIds: string[]) => void,
-  _loadImages: (reset?: boolean, opts?: any) => Promise<void>,
-  _loadMoreImages: () => Promise<void>
+  _loadImages: (reset?: boolean, opts?: any) => Promise<void>
 ) {
   const crawlerStore = useCrawlerStore();
   const albumStore = useAlbumStore();

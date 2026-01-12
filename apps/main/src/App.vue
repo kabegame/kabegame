@@ -76,7 +76,34 @@ import ImportConfirmDialog from "./components/import/ImportConfirmDialog.vue";
 import { watch } from "vue";
 
 const route = useRoute();
-const activeRoute = computed(() => route.path);
+// 根据当前路由路径计算应该高亮的菜单项
+// 需要匹配基础路径，忽略分页等参数
+const activeRoute = computed(() => {
+  const path = route.path;
+
+  // 画廊：匹配 /gallery 开头的所有路径（包括分页）
+  if (path.startsWith("/gallery")) {
+    return "/gallery";
+  }
+
+  // 画册：匹配 /albums 开头的所有路径（包括详情和分页）
+  if (path.startsWith("/albums")) {
+    return "/albums";
+  }
+
+  // 收集源：匹配 /plugin-browser 和 /plugin-detail 开头的路径
+  if (path.startsWith("/plugin-browser") || path.startsWith("/plugin-detail")) {
+    return "/plugin-browser";
+  }
+
+  // 设置：精确匹配
+  if (path === "/settings") {
+    return "/settings";
+  }
+
+  // 默认返回当前路径（用于其他未匹配的路由）
+  return path;
+});
 
 // 任务抽屉 store
 const taskDrawerStore = useTaskDrawerStore();
@@ -320,8 +347,8 @@ onMounted(async () => {
                       } catch (e: any) {
                         console.warn("[App] 创建导入画册失败，将仅导入到画廊:", item.name, e);
                         // 提取友好的错误信息
-                        const errorMessage = typeof e === "string" 
-                          ? e 
+                        const errorMessage = typeof e === "string"
+                          ? e
                           : e?.message || String(e) || "创建画册失败";
                         ElMessage.warning(`${errorMessage}，将仅导入到画廊：${item.name}`);
                         outputAlbumId = undefined;

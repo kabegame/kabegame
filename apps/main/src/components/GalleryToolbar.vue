@@ -1,9 +1,7 @@
 <template>
   <PageHeader title="画廊" sticky>
     <template #subtitle>
-      <el-tooltip :content="totalCountTooltipText" placement="bottom" :disabled="!hasTooltip">
-        <span class="subtitle-text">{{ totalCountText }}</span>
-      </el-tooltip>
+      <span>{{ totalCountText }}</span>
     </template>
     <template #left>
       <el-button @click="$emit('refresh')" circle>
@@ -35,12 +33,6 @@
           </el-button>
         </div>
       </div>
-      <el-button @click="$emit('loadAll')" :loading="isLoadingAll" :disabled="!hasMore || isLoadingAll">
-        <el-icon>
-          <Download />
-        </el-icon>
-        {{ loadAllButtonText }}
-      </el-button>
     </template>
     <el-button @click="$emit('showQuickSettings')" circle>
       <el-icon>
@@ -59,7 +51,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Refresh, Plus, Filter, Download, Setting, Close } from "@element-plus/icons-vue";
+import { Refresh, Plus, Filter, Setting, Close } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 
@@ -69,10 +61,8 @@ interface Props {
   dedupeProcessed?: number;
   dedupeTotal?: number;
   dedupeRemoved?: number;
-  hasMore?: boolean;
   isLoadingAll?: boolean;
   totalCount?: number;
-  loadedCount?: number;
   bigPageEnabled?: boolean;
   currentPosition?: number; // 当前位置（分页启用时使用）
 }
@@ -83,10 +73,8 @@ const props = withDefaults(defineProps<Props>(), {
   dedupeProcessed: 0,
   dedupeTotal: 0,
   dedupeRemoved: 0,
-  hasMore: false,
   isLoadingAll: false,
   totalCount: 0,
-  loadedCount: 0,
   bigPageEnabled: false,
   currentPosition: 1,
 });
@@ -103,31 +91,12 @@ const totalCountText = computed(() => {
   return `共 ${props.totalCount} 张图片`;
 });
 
-const loadAllButtonText = computed(() => {
-  return props.bigPageEnabled ? "加载整页" : "加载全部";
-});
-
-const hasTooltip = computed(() => {
-  return props.totalCount > 0;
-});
-
-const totalCountTooltipText = computed(() => {
-  if (props.totalCount === 0) {
-    return "";
-  }
-  const loaded = props.loadedCount ?? 0;
-  const total = props.totalCount;
-  return `已加载 ${loaded} 张，共 ${total} 张图片`;
-});
-
 const emit = defineEmits<{
   refresh: [];
   dedupeByHash: [];
   cancelDedupe: [];
   showQuickSettings: [];
   showCrawlerDialog: [];
-  loadAll: [];
-  cancelLoadAll: [];
 }>();
 
 const dedupeTooltipText = computed(() => {
@@ -192,9 +161,5 @@ const dedupeTooltipText = computed(() => {
 
 .dedupe-cancel-btn :deep(.el-icon) {
   font-size: 12px;
-}
-
-.subtitle-text {
-  cursor: help;
 }
 </style>

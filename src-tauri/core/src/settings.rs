@@ -96,7 +96,6 @@ pub struct AppSettings {
     pub gallery_image_aspect_ratio_match_window: bool, // 画廊图片宽高比是否与窗口相同
     #[serde(default)]
     pub gallery_image_aspect_ratio: Option<String>, // 画廊图片宽高比（如 "16:9" 或 "custom:1920:1080"）
-    pub gallery_page_size: u32, // 画廊每次加载数量
     #[serde(default)]
     pub auto_deduplicate: bool, // 是否自动去重（根据哈希值跳过重复图片）
     #[serde(default)]
@@ -152,7 +151,6 @@ impl Default for AppSettings {
             image_click_action: "preview".to_string(),
             gallery_image_aspect_ratio_match_window: false,
             gallery_image_aspect_ratio: None,
-            gallery_page_size: 50,
             auto_deduplicate: false, // 默认不去重
             default_download_dir: None,
             wallpaper_engine_dir: None,
@@ -524,9 +522,6 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
         {
             settings.gallery_image_aspect_ratio = Some(aspect_ratio.to_string());
         }
-        if let Some(page_size) = json_value.get("galleryPageSize").and_then(|v| v.as_u64()) {
-            settings.gallery_page_size = page_size as u32;
-        }
         if let Some(auto_deduplicate) = json_value.get("autoDeduplicate").and_then(|v| v.as_bool())
         {
             settings.auto_deduplicate = auto_deduplicate;
@@ -725,13 +720,6 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
     ) -> Result<(), String> {
         let mut settings = self.get_settings()?;
         settings.gallery_image_aspect_ratio = aspect_ratio;
-        self.save_settings(&settings)?;
-        Ok(())
-    }
-
-    pub fn set_gallery_page_size(&self, page_size: u32) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.gallery_page_size = page_size;
         self.save_settings(&settings)?;
         Ok(())
     }

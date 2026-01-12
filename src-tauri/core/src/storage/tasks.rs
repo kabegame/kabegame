@@ -197,6 +197,56 @@ impl Storage {
         Ok(())
     }
 
+    /// 获取“有图片”的任务 ID 列表（用于 TaskGroupProvider）
+    pub fn get_task_ids_with_images(&self) -> Result<Vec<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.id
+                 FROM tasks t
+                 WHERE EXISTS (SELECT 1 FROM task_images ti WHERE ti.task_id = t.id)
+                 ORDER BY COALESCE(t.start_time, 0) DESC",
+            )
+            .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("Failed to query task ids: {}", e))?;
+
+        let mut ids = Vec::new();
+        for r in rows {
+            ids.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
+        }
+        Ok(ids)
+    }
+
+    /// 获取“有图片”的任务 (id + plugin_id)（用于 VD 在目录名中显示插件名/ID）。
+    pub fn get_tasks_with_images(&self) -> Result<Vec<(String, String)>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.id, t.plugin_id
+                 FROM tasks t
+                 WHERE EXISTS (SELECT 1 FROM task_images ti WHERE ti.task_id = t.id)
+                 ORDER BY COALESCE(t.start_time, 0) DESC",
+            )
+            .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let plugin_id: String = row.get(1)?;
+                Ok((id, plugin_id))
+            })
+            .map_err(|e| format!("Failed to query tasks: {}", e))?;
+
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
+        }
+        Ok(out)
+    }
+
     pub fn clear_finished_tasks(&self) -> Result<usize, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let count = conn

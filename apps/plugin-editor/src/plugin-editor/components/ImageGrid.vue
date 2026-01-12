@@ -1,6 +1,6 @@
 <template>
     <CoreImageGrid ref="coreRef" v-bind="{ ...props, ...attrs }" :on-context-command="handleContextCommand"
-        @scroll-stable="$emit('scroll-stable')" @reorder="(p) => $emit('reorder', p)">
+        @scroll-stable="$emit('scroll-stable')">
         <template #before-grid>
             <slot name="before-grid" />
         </template>
@@ -44,7 +44,7 @@ interface Props {
         >;
     showEmptyState?: boolean;
     loading?: boolean; // 加载状态：为 true 时不显示空状态
-    canReorder?: boolean;
+    loadingOverlay?: boolean; // 加载遮罩：仅覆盖 grid 区域；不传则默认等同于 loading
     enableCtrlWheelAdjustColumns?: boolean;
     enableCtrlKeyAdjustColumns?: boolean;
     hideScrollbar?: boolean;
@@ -61,7 +61,6 @@ defineEmits<{
     "scroll-stable": [];
     // 兼容旧 API：保留事件名避免上层模板报错
     addedToAlbum: [];
-    reorder: [payload: { aId: string; aOrder: number; bId: string; bOrder: number }];
 }>();
 
 const coreRef = ref<any>(null);
@@ -84,6 +83,5 @@ defineExpose({
     getContainerEl: () => coreRef.value?.getContainerEl?.(),
     getSelectedIds: () => coreRef.value?.getSelectedIds?.(),
     clearSelection: () => coreRef.value?.clearSelection?.(),
-    exitReorderMode: () => coreRef.value?.exitReorderMode?.(),
 });
 </script>

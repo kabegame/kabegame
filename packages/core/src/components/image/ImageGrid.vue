@@ -3,37 +3,31 @@
     tabindex="0" @keydown="handleKeyDown">
     <slot name="before-grid" />
 
-    <div class="image-grid-root" :class="{ 'is-zooming': isZoomingLayout, 'is-reordering': isReordering }"
+    <div class="image-grid-root" v-loading="isLoadingOverlay" :class="{ 'is-zooming': isZoomingLayout }"
       @click="handleRootClick" @contextmenu.prevent>
-      <!-- 关键：空/刷新时只隐藏 ImageItem 列表，避免 v-if 卸载导致“整页闪烁” -->
+      <!-- 关键：空/刷新时只隐藏 ImageItem 列表，避免 v-if 卸载导致"整页闪烁" -->
       <div class="image-grid-items" v-show="hasImages">
-        <div v-if="enableVirtualScroll" class="image-grid" :class="{ 'reorder-mode': isReorderMode }"
-          :style="gridStyle">
+        <div v-if="enableVirtualScroll" class="image-grid" :style="gridStyle">
           <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
             :image-url="getEffectiveImageUrl(item.image.id)"
             :image-click-action="settingsStore.values.imageClickAction || 'none'" :use-original="gridColumnsCount <= 2"
             :window-aspect-ratio="effectiveAspectRatio" :selected="effectiveSelectedIds.has(item.image.id)"
-            :grid-columns="gridColumnsCount" :grid-index="item.index" :is-reorder-mode="isReorderMode"
-            :reorder-selected="isReorderMode && reorderSourceIndex === item.index" :is-entering="item.isEntering"
+            :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
             @click="(e) => handleItemClick(item.image, item.index, e)"
-            @dblclick="(e) => handleItemDblClick(item.image, item.index, e)"
+            @dblclick="() => handleItemDblClick(item.image, item.index)"
             @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
-            @long-press="() => handleLongPress(item.index)" @reorder-click="() => handleReorderClick(item.index)"
             @retry-download="() => emit('retry-download', { image: item.image })"
             @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
         </div>
 
-        <transition-group v-else name="fade-in-list" tag="div" class="image-grid"
-          :class="{ 'reorder-mode': isReorderMode }" :style="gridStyle">
+        <transition-group v-else name="fade-in-list" tag="div" class="image-grid" :style="gridStyle">
           <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
             :image-url="getEffectiveImageUrl(image.id)"
             :image-click-action="settingsStore.values.imageClickAction || 'none'" :use-original="gridColumnsCount <= 2"
             :window-aspect-ratio="effectiveAspectRatio" :selected="effectiveSelectedIds.has(image.id)"
-            :grid-columns="gridColumnsCount" :grid-index="index" :is-reorder-mode="isReorderMode"
-            :reorder-selected="isReorderMode && reorderSourceIndex === index"
-            @click="(e) => handleItemClick(image, index, e)" @dblclick="(e) => handleItemDblClick(image, index, e)"
-            @contextmenu="(e) => handleItemContextMenu(image, index, e)" @long-press="() => handleLongPress(index)"
-            @reorder-click="() => handleReorderClick(index)"
+            :grid-columns="gridColumnsCount" :grid-index="index" @click="(e) => handleItemClick(image, index, e)"
+            @dblclick="() => handleItemDblClick(image, index)"
+            @contextmenu="(e) => handleItemContextMenu(image, index, e)"
             @retry-download="() => emit('retry-download', { image })" />
         </transition-group>
       </div>
@@ -109,7 +103,12 @@ interface Props {
   ) => ContextCommand | null | undefined | Promise<ContextCommand | null | undefined>;
   showEmptyState?: boolean;
   loading?: boolean; // 加载状态：为 true 时不显示空状态，避免加载过程中闪现空占位符
-  canReorder?: boolean;
+  /**
+   * 加载遮罩（仅覆盖 grid 区域，不覆盖 before-grid/footer 等插槽）。
+   * - 不传时默认等同于 `loading`
+   * - 典型用法：`loading` 立即为 true 以抑制空态闪烁；`loadingOverlay` 做延迟（避免短 loading 闪烁）
+   */
+  loadingOverlay?: boolean;
   enableCtrlWheelAdjustColumns?: boolean;
   enableCtrlKeyAdjustColumns?: boolean;
   hideScrollbar?: boolean;
@@ -125,7 +124,6 @@ const props = defineProps<Props>();
 const emit = defineEmits<{
   "scroll-stable": [];
   "retry-download": [payload: { image: ImageInfo }];
-  reorder: [payload: { aId: string; aOrder: number; bId: string; bOrder: number }];
   // 兼容旧 API（不再由 core 触发，但保留事件名避免上层 TS/模板报错）
   addedToAlbum: [];
 }>();
@@ -134,6 +132,7 @@ const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 const showEmptyState = computed(() => props.showEmptyState ?? false);
 const isLoading = computed(() => props.loading ?? false);
+const isLoadingOverlay = computed(() => props.loadingOverlay ?? isLoading.value);
 
 // 从 store 解析宽高比设置
 const parseAspectRatioFromStore = (value: string | null | undefined): number | null => {
@@ -159,7 +158,6 @@ const parseAspectRatioFromStore = (value: string | null | undefined): number | n
 const storeAspectRatio = computed(() => {
   return parseAspectRatioFromStore(settingsStore.values.galleryImageAspectRatio);
 });
-const canReorder = computed(() => props.canReorder ?? true);
 const enableContextMenu = computed(() => !!props.contextMenuComponent);
 const enableCtrlWheelAdjustColumns = computed(() => props.enableCtrlWheelAdjustColumns ?? false);
 const enableCtrlKeyAdjustColumns = computed(() => props.enableCtrlKeyAdjustColumns ?? false);
@@ -177,10 +175,6 @@ const imageGridColumns = computed(() => uiStore.imageGridColumns);
 // 只有在不处于加载状态且确实没有图片时才显示空状态，避免加载过程中闪现空占位符
 const showEmptyOverlay = computed(() => showEmptyState.value && !hasImages.value && !isLoading.value);
 
-// reorder 状态
-const isReorderMode = ref(false);
-const reorderSourceIndex = ref<number>(-1);
-
 // 入场/退场动画跟踪（仅虚拟滚动模式下使用）
 const enteringIds = ref<Set<string>>(new Set());
 const previousImageIds = ref<Set<string>>(new Set());
@@ -188,9 +182,6 @@ const previousImageIds = ref<Set<string>>(new Set());
 // 缩放动画标记（列数变化时）
 const isZoomingLayout = ref(false);
 let zoomAnimTimer: ReturnType<typeof setTimeout> | null = null;
-
-const isReordering = ref(false);
-let reorderAnimTimer: ReturnType<typeof setTimeout> | null = null;
 
 const gridColumnsCount = computed(() => (imageGridColumns.value > 0 ? imageGridColumns.value : 1));
 const gridGapPx = computed(() => Math.max(4, 16 - (gridColumnsCount.value - 1)));
@@ -464,9 +455,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
     return;
   }
 
-  // ESC：清空选择并退出调整模式
+  // ESC：清空选择
   if (event.key === "Escape") {
-    if (isReorderMode.value) exitReorderMode();
     selectedIds.value = new Set();
     lastSelectedIndex.value = -1;
     closeContextMenu();
@@ -499,11 +489,10 @@ const handleRootClick = (event: MouseEvent) => {
     return;
   }
 
-  // 空白处点击：清除所有选择（单选和多选），退出调整模式
+  // 空白处点击：清除所有选择（单选和多选）
   if (clickedOutside) {
     focusGrid();
     clearSelection();
-    exitReorderMode();
   }
 };
 
@@ -524,14 +513,7 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
   setSingleSelection(image.id, index);
 };
 
-const handleItemDblClick = (image: ImageInfo, index: number, event?: MouseEvent) => {
-  if (isReorderMode.value) {
-    if (event) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-    return;
-  }
+const handleItemDblClick = (image: ImageInfo, index: number) => {
   const action = settingsStore.values.imageClickAction || "none";
   if (action === "preview") {
     previewRef.value?.open(index);
@@ -543,10 +525,6 @@ const handleItemDblClick = (image: ImageInfo, index: number, event?: MouseEvent)
 };
 
 const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
-  if (isReorderMode.value) {
-    exitReorderMode();
-    return;
-  }
   if (!enableContextMenu.value) return;
   openContextMenu(image, index, event);
 };
@@ -716,7 +694,6 @@ onUnmounted(() => {
   window.removeEventListener("resize", updateWindowAspectRatio);
   if (scrollStableTimer) window.clearTimeout(scrollStableTimer);
   if (zoomAnimTimer) clearTimeout(zoomAnimTimer);
-  if (reorderAnimTimer) clearTimeout(reorderAnimTimer);
   if (saveScrollRaf != null) cancelAnimationFrame(saveScrollRaf);
   saveScrollRaf = null;
   if (virtualUpdateRaf != null) cancelAnimationFrame(virtualUpdateRaf);
@@ -814,42 +791,6 @@ watch(
 const handleEnterAnimationEnd = (imageId: string) => {
   enteringIds.value.delete(imageId);
 };
-const exitReorderMode = () => {
-  isReorderMode.value = false;
-  reorderSourceIndex.value = -1;
-};
-
-const handleLongPress = (index: number) => {
-  if (!canReorder.value) return;
-  if (isReorderMode.value) return;
-  isReorderMode.value = true;
-  reorderSourceIndex.value = index;
-};
-
-const handleReorderClick = (targetIndex: number) => {
-  if (!isReorderMode.value) return;
-  let sourceIndex = reorderSourceIndex.value;
-  if (sourceIndex === -1) {
-    reorderSourceIndex.value = targetIndex;
-    return;
-  }
-  if (sourceIndex === targetIndex) return;
-  const source = images.value[sourceIndex];
-  const target = images.value[targetIndex];
-  if (!source || !target) return;
-
-  const sourceOrder = (source.order ?? source.crawledAt ?? 0) as number;
-  const targetOrder = (target.order ?? target.crawledAt ?? 0) as number;
-  isReordering.value = true;
-  if (reorderAnimTimer) clearTimeout(reorderAnimTimer);
-  reorderAnimTimer = setTimeout(() => {
-    isReordering.value = false;
-    reorderAnimTimer = null;
-  }, 450);
-
-  emit("reorder", { aId: source.id, aOrder: sourceOrder, bId: target.id, bOrder: targetOrder });
-  reorderSourceIndex.value = targetIndex;
-};
 
 const getContainerEl = () => containerEl.value;
 
@@ -857,7 +798,6 @@ defineExpose({
   getContainerEl,
   getSelectedIds: () => new Set(selectedIds.value),
   clearSelection,
-  exitReorderMode,
 });
 </script>
 
@@ -893,7 +833,7 @@ defineExpose({
 }
 
 .empty-overlay {
-  inset: 0;
+  inset: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -914,9 +854,5 @@ defineExpose({
 .fade-in-list-leave-to {
   opacity: 0;
   transform: translateY(8px);
-}
-
-.image-grid.reorder-mode :deep(.image-item) {
-  cursor: pointer;
 }
 </style>

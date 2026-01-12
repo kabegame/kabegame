@@ -13,7 +13,7 @@ use crate::storage::Storage;
 /// ```sql
 /// SELECT ... FROM images {decorator} LIMIT ? OFFSET ?
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ImageQuery {
     /// SQL 片段，拼接在 "SELECT ... FROM images" 和 "LIMIT ? OFFSET ?" 之间
     /// 可以包含 JOIN、WHERE、ORDER BY 等任意组合
@@ -30,7 +30,10 @@ impl ImageQuery {
     /// 按插件 ID 过滤
     pub fn by_plugin(plugin_id: String) -> Self {
         Self {
-            decorator: "WHERE plugin_id = ? ORDER BY COALESCE(\"order\", crawled_at) ASC"
+            // 注意：gallery 查询会额外 LEFT JOIN 收藏表（album_images），该表也有 "order" 列；
+            // 这里必须显式加表前缀避免歧义。
+            decorator:
+                "WHERE images.plugin_id = ? ORDER BY COALESCE(images.\"order\", images.crawled_at) ASC"
                 .to_string(),
             params: vec![plugin_id],
         }
@@ -40,7 +43,7 @@ impl ImageQuery {
     pub fn by_date(year_month: String) -> Self {
         Self {
             decorator:
-                "WHERE strftime('%Y-%m', CASE WHEN crawled_at > 253402300799 THEN crawled_at/1000 ELSE crawled_at END, 'unixepoch') = ? ORDER BY COALESCE(\"order\", crawled_at) ASC"
+                "WHERE strftime('%Y-%m', CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') = ? ORDER BY COALESCE(images.\"order\", images.crawled_at) ASC"
                     .to_string(),
             params: vec![year_month],
         }
@@ -56,10 +59,22 @@ impl ImageQuery {
         }
     }
 
+    /// 按任务过滤（使用 JOIN 获取正确排序）
+    pub fn by_task(task_id: String) -> Self {
+        Self {
+            decorator:
+                "INNER JOIN task_images ti ON images.id = ti.image_id WHERE ti.task_id = ? ORDER BY COALESCE(ti.\"order\", ti.rowid) ASC"
+                    .to_string(),
+            params: vec![task_id],
+        }
+    }
+
     /// 全部图片（按时间排序）
     pub fn all_recent() -> Self {
         Self {
-            decorator: "ORDER BY crawled_at ASC".to_string(),
+            // 与前端画廊 `get_images_range` 对齐：优先按 order，其次 crawled_at
+            // 注意：外层会 LEFT JOIN 收藏表，避免 "order" 歧义必须加 images 前缀
+            decorator: "ORDER BY COALESCE(images.\"order\", images.crawled_at) ASC".to_string(),
             params: vec![],
         }
     }
@@ -227,32 +242,31 @@ impl Storage {
         for r in rows {
             let (id, local_path, thumb_path) =
                 r.map_err(|e| format!("Failed to read row: {}", e))?;
-
-            let resolved_path =
-                if !local_path.trim().is_empty() && fs::metadata(&local_path).is_ok() {
-                    Some(local_path.clone())
-                } else if !thumb_path.trim().is_empty() && fs::metadata(&thumb_path).is_ok() {
-                    Some(thumb_path.clone())
-                } else {
-                    None
-                };
+            // 文件存在
+            let resolved_path = if fs::metadata(&local_path).is_ok() {
+                Some(local_path.clone())
+            } else if fs::metadata(&thumb_path).is_ok() {
+                Some(thumb_path.clone())
+            } else {
+                None
+            };
 
             let Some(resolved_path) = resolved_path else {
                 continue;
             };
 
-            let ext_source = if !local_path.trim().is_empty() {
-                &local_path
-            } else {
-                &resolved_path
-            };
-            let ext = std::path::Path::new(ext_source)
+            let ext = std::path::Path::new(&resolved_path)
                 .extension()
                 .and_then(|e| e.to_str())
-                .unwrap_or("jpg");
+                // 未知后缀名，不应该跑这个分支
+                .unwrap_or("");
+
+            let file_name = format!("{}.{}", id, ext);
+            // eprintln!("[VD-FS-ENTRIES] 生成文件条目: image_id={}, file_name={}, resolved_path={:?}, ext={}",
+            //     id, file_name, resolved_path, ext);
 
             entries.push(GalleryImageFsEntry {
-                file_name: format!("{}.{}", id, ext),
+                file_name,
                 image_id: id,
                 resolved_path,
             });
@@ -286,5 +300,81 @@ impl Storage {
         }
 
         Ok(None)
+    }
+
+    /// 获取符合条件的图片信息（分页，给 app-main 画廊 Provider 浏览复用）
+    ///
+    /// 注意：这里不做本地文件 exists 检查（性能考虑），`local_exists` 统一置为 true。
+    pub fn get_images_info_range_by_query(
+        &self,
+        query: &ImageQuery,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<crate::storage::ImageInfo>, String> {
+        use crate::storage::FAVORITE_ALBUM_ID;
+
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        // 参数顺序：decorator params -> limit -> offset
+        let mut params: Vec<Box<dyn ToSql>> = query
+            .params
+            .iter()
+            .map(|p| Box::new(p.clone()) as Box<dyn ToSql>)
+            .collect();
+        params.push(Box::new(limit as i64));
+        params.push(Box::new(offset as i64));
+        let params_ref: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+        // 为避免与 query.decorator 里的 album_images/ai 冲突，这里 favorites join 使用独立 alias：fav_ai
+        let sql = format!(
+            "SELECT
+                CAST(images.id AS TEXT) as id,
+                images.url,
+                images.local_path,
+                images.plugin_id,
+                images.task_id,
+                images.crawled_at,
+                images.metadata,
+                COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
+                images.hash,
+                CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+                images.\"order\"
+             FROM images
+             LEFT JOIN album_images fav_ai
+               ON images.id = fav_ai.image_id AND fav_ai.album_id = '{}'
+             {} LIMIT ? OFFSET ?",
+            FAVORITE_ALBUM_ID, query.decorator
+        );
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("Failed to prepare query: {} (SQL: {})", e, sql))?;
+
+        let rows = stmt
+            .query_map(params_from_iter(params_ref.iter().copied()), |row| {
+                Ok(crate::storage::ImageInfo {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    local_path: row.get(2)?,
+                    plugin_id: row.get(3)?,
+                    task_id: row.get(4)?,
+                    crawled_at: row.get::<_, i64>(5)? as u64,
+                    metadata: row
+                        .get::<_, Option<String>>(6)?
+                        .and_then(|s| serde_json::from_str(&s).ok()),
+                    thumbnail_path: row.get(7)?,
+                    hash: row.get(8)?,
+                    favorite: row.get::<_, i64>(9)? != 0,
+                    local_exists: true,
+                    order: row.get::<_, Option<i64>>(10)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query images: {}", e))?;
+
+        let mut images = Vec::new();
+        for r in rows {
+            images.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
+        }
+        Ok(images)
     }
 }

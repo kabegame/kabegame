@@ -1,12 +1,9 @@
 <template>
   <div ref="rootEl" class="image-item" :class="{
     'image-item-selected': selected,
-    'reorder-mode': isReorderMode,
-    'reorder-selected': reorderSelected,
     'item-entering': isEntering,
     'item-leaving': isLeaving,
-  }" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @mousedown="handleMouseDown"
-    @mouseup="handleMouseUp" @mouseleave="handleMouseLeave" @animationend="handleAnimationEnd">
+  }" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
     <!-- 任务失败图片：下载重试（不阻挡点击/选择/右键） -->
     <el-tooltip v-if="image.isTaskFailed" content="重新下载" placement="top" :show-after="300">
       <div class="retry-download-badge" @click.stop="$emit('retryDownload')">
@@ -78,8 +75,6 @@ interface Props {
   selected?: boolean; // 是否被选中
   gridColumns?: number; // 网格列数
   gridIndex?: number; // 在网格中的索引
-  isReorderMode?: boolean; // 是否处于调整模式
-  reorderSelected?: boolean; // 在调整模式下是否被选中（用于交换）
   isEntering?: boolean; // 是否正在入场（用于虚拟滚动的动画）
   isLeaving?: boolean; // 是否正在离开（用于虚拟滚动的动画）
 }
@@ -90,8 +85,6 @@ const emit = defineEmits<{
   click: [event?: MouseEvent];
   dblclick: [event?: MouseEvent];
   contextmenu: [event: MouseEvent];
-  longPress: []; // 长按事件
-  reorderClick: []; // 调整模式下的点击事件
   retryDownload: []; // 任务失败图片：重试下载
   enterAnimationEnd: []; // 入场动画结束
   leaveAnimationEnd: []; // 退场动画结束
@@ -132,49 +125,7 @@ const aspectRatioStyle = computed(() => {
     : { aspectRatio: "16 / 9" };
 });
 
-// 长按检测
-const longPressTimer = ref<number | null>(null);
-const isLongPressing = ref(false);
-const LONG_PRESS_DURATION = 500; // 500ms 长按时间
-
-const handleMouseDown = (event: MouseEvent) => {
-  if (props.isReorderMode) return;
-  if (event.button !== 0) return;
-
-  isLongPressing.value = true;
-  longPressTimer.value = window.setTimeout(() => {
-    if (isLongPressing.value) {
-      emit("longPress");
-      isLongPressing.value = false;
-    }
-  }, LONG_PRESS_DURATION);
-};
-
-const handleMouseUp = () => {
-  if (longPressTimer.value) {
-    clearTimeout(longPressTimer.value);
-    longPressTimer.value = null;
-  }
-  isLongPressing.value = false;
-};
-
-const handleMouseLeave = () => {
-  if (longPressTimer.value) {
-    clearTimeout(longPressTimer.value);
-    longPressTimer.value = null;
-  }
-  isLongPressing.value = false;
-};
-
 const handleWrapperClick = (event?: MouseEvent) => {
-  if (props.isReorderMode) {
-    if (event) {
-      event.stopPropagation();
-      event.preventDefault();
-    }
-    emit("reorderClick");
-    return;
-  }
   emit("click", event);
 };
 

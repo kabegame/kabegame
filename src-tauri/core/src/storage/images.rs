@@ -510,21 +510,6 @@ impl Storage {
         Ok(())
     }
 
-    pub fn update_images_order(&self, image_orders: &[(String, i64)]) -> Result<(), String> {
-        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let tx = conn.transaction().map_err(|e| format!("Failed to start transaction: {}", e))?;
-
-        for (id, order) in image_orders {
-            tx.execute(
-                "UPDATE images SET \"order\" = ?1 WHERE id = ?2",
-                params![order, id],
-            )
-            .map_err(|e| format!("Failed to update image order: {}", e))?;
-        }
-
-        tx.commit().map_err(|e| format!("Failed to commit transaction: {}", e))?;
-        Ok(())
-    }
 
     pub fn pick_existing_gallery_image_id(&self, mode: &str) -> Result<Option<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;

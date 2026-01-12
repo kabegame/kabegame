@@ -1,17 +1,16 @@
 <template>
   <div class="album-detail">
-    <div v-if="loading" class="detail-body detail-body-loading">
-      <el-skeleton :rows="8" animated />
-    </div>
-
-    <ImageGrid v-else ref="albumViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
-      :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true" :context-menu-component="AlbumImageContextMenu"
-      :on-context-command="handleImageMenuCommand" @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()"
-      @reorder="(...args) => handleImageReorder(args[0])">
+    <!-- 关键：不要用 v-if 在 loading 时卸载 ImageGrid，否则 before-grid 里的 header 会闪烁 -->
+    <ImageGrid ref="albumViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
+      :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true" :loading="loading || isRefreshing"
+      :loading-overlay="loading || isRefreshing" :context-menu-component="AlbumImageContextMenu"
+      :on-context-command="handleImageMenuCommand" @added-to-album="handleAddedToAlbum"
+      @scroll-stable="loadImageUrls()">
 
       <template #before-grid>
-        <PageHeader :title="albumName || '画册'" :subtitle="images.length ? `共 ${images.length} 张` : ''" show-back
-          @back="goBack">
+        <PageHeader :title="albumName || '画册'"
+          :subtitle="totalImagesCount ? `共 ${totalImagesCount} 张` : (images.length ? `共 ${images.length} 张` : '')"
+          show-back @back="goBack">
           <template #title>
             <div class="album-title-wrapper">
               <input v-if="isRenaming" v-model="editingName" ref="renameInputRef" class="album-name-input"
@@ -58,6 +57,16 @@
           </el-icon>
           <span>{{ warningMessage }}</span>
         </div>
+
+        <!-- 分页器：每页 1000（leaf） -->
+        <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
+          :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToPage" />
+      </template>
+
+      <!-- 当前页内“加载更多”（从 leaf 缓存里渐进展示，避免一次渲染 1000） -->
+      <template #footer>
+        <LoadMoreButton v-if="hasMoreInLeaf || images.length > 0" :has-more="hasMoreInLeaf" :loading="isLoadingMore"
+          :show-next-page="false" @load-more="loadMoreInLeaf" @next-page="() => { }" />
       </template>
     </ImageGrid>
 
@@ -99,6 +108,9 @@ import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
+import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
+import LoadMoreButton from "@/components/LoadMoreButton.vue";
+import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
 
 const route = useRoute();
 const router = useRouter();
@@ -125,7 +137,7 @@ const openVirtualDriveAlbumFolder = async () => {
   try {
     // 构建画册对应的虚拟磁盘文件夹路径
     console.log('albumName.value', albumName.value);
-    const albumPath = `${albumDriveMountPoint.value}${albumName.value}`;
+    const albumPath = `${albumDriveMountPoint.value}画册\\${albumName.value}`;
     console.log('albumPath', albumPath);
     await invoke("open_explorer", { path: albumPath });
   } catch (e) {
@@ -143,10 +155,68 @@ const albumId = ref<string>("");
 const albumName = ref<string>("");
 const loading = ref(false);
 const isRefreshing = ref(false);
+const isLoadingMore = ref(false);
 const currentWallpaperImageId = ref<string | null>(null);
 const images = ref<ImageInfo[]>([]);
+let leafAllImages: ImageInfo[] = [];
+const totalImagesCount = ref<number>(0);
 const albumViewRef = ref<any>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
+
+// leaf 分页：每页 1000 张（与后端 provider 对齐）
+const BIG_PAGE_SIZE = 1000;
+const currentPage = ref(1);
+watch(
+  () => route.params.page,
+  (v) => {
+    const n = typeof v === "string" ? parseInt(v, 10) : 1;
+    currentPage.value = Number.isFinite(n) && n > 0 ? n : 1;
+  },
+  { immediate: true }
+);
+const currentOffset = computed(() => (currentPage.value - 1) * BIG_PAGE_SIZE);
+const providerRootPath = computed(() => {
+  if (!albumName.value) return "";
+  // 与 VD 路径一致：画册/<albumName>
+  return `画册/${albumName.value}`;
+});
+const hasMoreInLeaf = computed(() => images.value.length < leafAllImages.length);
+
+const handleJumpToPage = async (page: number) => {
+  const nextPage = Math.max(1, Math.floor(page || 1));
+  if (nextPage === currentPage.value) return;
+  currentPage.value = nextPage;
+  if (nextPage === 1) {
+    await router.replace({ name: "AlbumDetail", params: { id: albumId.value } });
+  } else {
+    await router.replace({
+      name: "AlbumDetailPaged",
+      params: { id: albumId.value, page: String(nextPage) },
+    });
+  }
+  await loadAlbum({ reset: true });
+};
+
+const loadMoreInLeaf = async () => {
+  if (isLoadingMore.value) return;
+  if (!hasMoreInLeaf.value) return;
+  isLoadingMore.value = true;
+  try {
+    // 沿用画廊的渐进加载节奏：每次追加 crawlerStore.pageSize（默认 50）
+    const nextCount = Math.min(
+      leafAllImages.length,
+      images.value.length + crawlerStore.pageSize
+    );
+    const next = leafAllImages.slice(0, nextCount);
+    const existed = new Set(images.value.map((i) => i.id));
+    const newOnes = next.filter((i) => !existed.has(i.id));
+    images.value = next;
+    await nextTick();
+    void loadImageUrls(newOnes);
+  } finally {
+    isLoadingMore.value = false;
+  }
+};
 
 // dragScroll “太快且仍在加速”时的俏皮提示（画册开启）
 const dragScrollTooFastMessages = [
@@ -314,14 +384,40 @@ const handleRefresh = async () => {
   }
 };
 
-const loadAlbum = async () => {
+const loadAlbum = async (opts?: { reset?: boolean }) => {
   if (!albumId.value) return;
+  const reset = opts?.reset ?? false;
   loading.value = true;
-  let imgs: ImageInfo[] = [];
   try {
-    // 仅获取图片列表时显示加载状态
-    imgs = await albumStore.loadAlbumImages(albumId.value);
-    images.value = imgs;
+    if (reset) {
+      clearSelection();
+      images.value = [];
+      leafAllImages = [];
+      await nextTick();
+    }
+    // 通过 provider 浏览获取 total + 当前页 leaf（<=1000）
+    const root = providerRootPath.value;
+    if (!root) return;
+    const rootRes = await invoke<{ total: number }>("browse_gallery_provider", { path: root });
+    totalImagesCount.value = rootRes?.total ?? 0;
+
+    if (totalImagesCount.value <= 0) {
+      leafAllImages = [];
+      images.value = [];
+      resetImageUrlLoader();
+      return;
+    }
+
+    const leaf = buildLeafProviderPathForPage(root, totalImagesCount.value, currentPage.value);
+    const leafRes = await invoke<any>("browse_gallery_provider", { path: leaf.path });
+    const list: ImageInfo[] = (leafRes?.entries ?? [])
+      .filter((e: any) => e?.kind === "image")
+      .map((e: any) => e.image as ImageInfo);
+
+    leafAllImages = list;
+    // 渐进展示：先展示前 pageSize
+    const initial = list.slice(0, crawlerStore.pageSize);
+    images.value = initial;
 
     // 清理旧资源
     resetImageUrlLoader();
@@ -334,38 +430,6 @@ const loadAlbum = async () => {
   requestAnimationFrame(() => void loadImageUrls());
 };
 
-const handleImageReorder = async (payload: { aId: string; aOrder: number; bId: string; bOrder: number }) => {
-  if (!albumId.value) return;
-
-  try {
-    const imageOrders: [string, number][] = [
-      [payload.aId, payload.aOrder],
-      [payload.bId, payload.bOrder],
-    ];
-
-    await invoke("update_album_images_order", {
-      albumId: albumId.value,
-      imageOrders,
-    });
-
-    const idxA = images.value.findIndex((i) => i.id === payload.aId);
-    const idxB = images.value.findIndex((i) => i.id === payload.bId);
-    if (idxA !== -1 && idxB !== -1) {
-      const next = images.value.slice();
-      [next[idxA], next[idxB]] = [next[idxB], next[idxA]];
-      images.value = next.map((img) => {
-        if (img.id === payload.aId) return { ...img, order: payload.aOrder } as ImageInfo;
-        if (img.id === payload.bId) return { ...img, order: payload.bOrder } as ImageInfo;
-        return img;
-      });
-    }
-
-    ElMessage.success("顺序已更新");
-  } catch (error) {
-    console.error("更新画册图片顺序失败:", error);
-    ElMessage.error("更新顺序失败");
-  }
-};
 
 const handleAddedToAlbum = async () => {
   await albumStore.loadAlbums();

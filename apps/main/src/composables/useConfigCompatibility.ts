@@ -54,6 +54,7 @@ export function useConfigCompatibility(
         if (typeof value !== "number" || !Number.isInteger(value)) {
           return { valid: false, error: "值必须是整数" };
         }
+      // falls through（int 与 float 共用数值范围校验：min/max）
       case "float":
         if (typeof value !== "number") {
           return { valid: false, error: "值必须是数字" };

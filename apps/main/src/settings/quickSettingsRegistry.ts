@@ -48,21 +48,6 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         },
         pages: ["gallery", "albumdetail"],
       },
-      {
-        key: "galleryPageSize",
-        label: "每次加载数量",
-        description: "画廊“加载更多”时的加载张数（10-200）",
-        comp: SettingNumberControl,
-        props: {
-          settingKey: "galleryPageSize",
-          command: "set_gallery_page_size",
-          buildArgs: (value: number) => ({ size: value }),
-          min: 10,
-          max: 200,
-          step: 10,
-        },
-        pages: ["gallery"],
-      },
     ],
   },
   {

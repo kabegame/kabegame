@@ -58,3 +58,4 @@ feat!!!!! 支持HarmonyOS
 refactor 迁移到 sea-orm
 # refactor 重构kgpg格式，使得能够不拉取全量数据就能够获取其中的部分信息比如图标、文档等。
     - optional 在下载时可以选择只下载代码部分。
+refactor 引入redis，先在provider缓存处
