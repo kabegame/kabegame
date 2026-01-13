@@ -6,9 +6,9 @@ edition = { workspace = true }
 [dependencies]
 kabegame-core = { workspace = true, features = ["tray", "wallpaper", "virtual-drive"] }
 tauri = { workspace = true, features = ["protocol-asset"] }
-tauri-plugin-dialog = { workspace = true }
-tauri-plugin-shell = { workspace = true }
-tauri-plugin-fs = { workspace = true }
+tauri-plugin-dialog = "2.0"
+tauri-plugin-shell = "2.0"
+tauri-plugin-fs = "2.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -17,7 +17,12 @@ sha2 = { workspace = true }
 uuid = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }
+windows-sys = { version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_System_DataExchange",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [build-dependencies]
 tauri-build = { workspace = true }

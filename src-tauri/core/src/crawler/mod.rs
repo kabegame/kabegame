@@ -329,10 +329,8 @@ pub async fn crawl_images(
     {
         let mut keys: Vec<_> = merged_config.keys().cloned().collect();
         keys.sort();
-        let start_page_val = merged_config.get("start_page").cloned();
-        let max_pages_val = merged_config.get("max_pages").cloned();
         eprintln!(
-            "[rhai-inject] plugin_id={} injected_keys={:?} start_page={:?} max_pages={:?}",
+            "[rhai-inject] plugin_id={} injected_keys={:?}",
             plugin.id, keys, start_page_val, max_pages_val
         );
     }

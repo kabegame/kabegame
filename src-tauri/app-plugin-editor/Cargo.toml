@@ -4,11 +4,11 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-kabegame-core = { workspace = true }
+kabegame-core = { workspace = true, default-features = false }
 tauri = { workspace = true, features = ["protocol-asset"] }
-tauri-plugin-dialog = { workspace = true }
-tauri-plugin-shell = { workspace = true }
-tauri-plugin-fs = { workspace = true }
+tauri-plugin-dialog = "2.0"
+tauri-plugin-shell = "2.0"
+tauri-plugin-fs = "2.0"
 serde_json = { workspace = true }
 serde = { workspace = true }
 image = { workspace = true }

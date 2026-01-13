@@ -5,7 +5,8 @@ use std::sync::Arc;
 use crate::providers::descriptor::ProviderDescriptor;
 use crate::providers::provider::Provider;
 use crate::providers::{
-    AlbumsProvider, AllProvider, DateGroupProvider, PluginGroupProvider, RootProvider, TaskGroupProvider,
+    AlbumsProvider, AllProvider, DateGroupProvider, DateRangeRootProvider, PluginGroupProvider, RootProvider,
+    TaskGroupProvider,
 };
 
 pub struct ProviderFactory;
@@ -21,6 +22,7 @@ impl ProviderFactory {
 
             ProviderDescriptor::PluginGroup => Arc::new(PluginGroupProvider::new()),
             ProviderDescriptor::DateGroup => Arc::new(DateGroupProvider::new()),
+            ProviderDescriptor::DateRangeRoot => Arc::new(DateRangeRootProvider::new()),
             ProviderDescriptor::TaskGroup => Arc::new(TaskGroupProvider::new()),
 
             ProviderDescriptor::All { query } => Arc::new(AllProvider::with_query(query.clone())),

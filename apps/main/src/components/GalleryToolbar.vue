@@ -9,6 +9,10 @@
           <Refresh />
         </el-icon>
       </el-button>
+      <el-date-picker class="date-range-filter" :model-value="dateRangeProxy" type="daterange" unlink-panels
+        range-separator="~" start-placeholder="开始日期" end-placeholder="结束日期" format="YYYY-MM-DD"
+        value-format="YYYY-MM-DD" :clearable="true" :disabled="monthLoading"
+        @update:model-value="(v: [string, string] | null) => (dateRangeProxy = v)" />
       <div class="dedupe-stack">
         <el-tooltip :content="dedupeTooltipText" placement="bottom" :disabled="!dedupeLoading">
           <!-- Tooltip 对 disabled button 不生效，需要包一层 -->
@@ -65,6 +69,9 @@ interface Props {
   totalCount?: number;
   bigPageEnabled?: boolean;
   currentPosition?: number; // 当前位置（分页启用时使用）
+  monthOptions?: string[];
+  monthLoading?: boolean;
+  selectedRange?: [string, string] | null; // YYYY-MM-DD
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -77,6 +84,9 @@ const props = withDefaults(defineProps<Props>(), {
   totalCount: 0,
   bigPageEnabled: false,
   currentPosition: 1,
+  monthOptions: () => [],
+  monthLoading: false,
+  selectedRange: null,
 });
 
 const totalCountText = computed(() => {
@@ -97,7 +107,13 @@ const emit = defineEmits<{
   cancelDedupe: [];
   showQuickSettings: [];
   showCrawlerDialog: [];
+  "update:selectedRange": [value: [string, string] | null];
 }>();
+
+const dateRangeProxy = computed<[string, string] | null>({
+  get: () => props.selectedRange ?? null,
+  set: (v) => emit("update:selectedRange", v ?? null),
+});
 
 const dedupeTooltipText = computed(() => {
   if (!props.dedupeLoading) return "";
@@ -110,6 +126,11 @@ const dedupeTooltipText = computed(() => {
 </script>
 
 <style scoped lang="scss">
+.date-range-filter {
+  width: 260px;
+  margin-left: 8px;
+}
+
 .add-task-btn {
   box-shadow: var(--anime-shadow);
 

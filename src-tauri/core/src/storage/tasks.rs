@@ -1,7 +1,7 @@
+use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::storage::{Storage, FAVORITE_ALBUM_ID, ImageInfo};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,11 +145,9 @@ impl Storage {
         let task_rows = stmt
             .query_map([], |row| {
                 let user_config_json: Option<String> = row.get(3)?;
-                let user_config = user_config_json
-                    .and_then(|s| serde_json::from_str(&s).ok());
+                let user_config = user_config_json.and_then(|s| serde_json::from_str(&s).ok());
                 let http_headers_json: Option<String> = row.get(4)?;
-                let http_headers = http_headers_json
-                    .and_then(|s| serde_json::from_str(&s).ok());
+                let http_headers = http_headers_json.and_then(|s| serde_json::from_str(&s).ok());
                 Ok(TaskInfo {
                     id: row.get(0)?,
                     plugin_id: row.get(1)?,
@@ -192,8 +190,14 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
             .map_err(|e| format!("Failed to delete task: {}", e))?;
-        let _ = conn.execute("DELETE FROM task_images WHERE task_id = ?1", params![task_id]);
-        let _ = conn.execute("DELETE FROM task_failed_images WHERE task_id = ?1", params![task_id]);
+        let _ = conn.execute(
+            "DELETE FROM task_images WHERE task_id = ?1",
+            params![task_id],
+        );
+        let _ = conn.execute(
+            "DELETE FROM task_failed_images WHERE task_id = ?1",
+            params![task_id],
+        );
         Ok(())
     }
 
@@ -220,14 +224,13 @@ impl Storage {
         Ok(ids)
     }
 
-    /// 获取“有图片”的任务 (id + plugin_id)（用于 VD 在目录名中显示插件名/ID）。
+    /// 获取任务 (id + plugin_id)（用于 VD 在目录名中显示插件名/ID）。
     pub fn get_tasks_with_images(&self) -> Result<Vec<(String, String)>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
             .prepare(
                 "SELECT t.id, t.plugin_id
                  FROM tasks t
-                 WHERE EXISTS (SELECT 1 FROM task_images ti WHERE ti.task_id = t.id)
                  ORDER BY COALESCE(t.start_time, 0) DESC",
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -280,11 +283,7 @@ impl Storage {
         Ok(())
     }
 
-    pub fn update_task_failed_image_attempt(
-        &self,
-        id: i64,
-        error: &str,
-    ) -> Result<(), String> {
+    pub fn update_task_failed_image_attempt(&self, id: i64, error: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -443,24 +442,27 @@ impl Storage {
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let image_rows = stmt
-            .query_map(params![task_id, FAVORITE_ALBUM_ID, limit as i64, offset as i64], |row| {
-                Ok(ImageInfo {
-                    id: row.get(0)?,
-                    url: row.get(1)?,
-                    local_path: row.get(2)?,
-                    plugin_id: row.get(3)?,
-                    task_id: row.get(4)?,
-                    crawled_at: row.get(5)?,
-                    metadata: row
-                        .get::<_, Option<String>>(6)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
-                    thumbnail_path: row.get(7)?,
-                    hash: row.get(8)?,
-                    favorite: row.get::<_, i64>(9)? != 0,
-                    local_exists: true,
-                    order: row.get(10)?,
-                })
-            })
+            .query_map(
+                params![task_id, FAVORITE_ALBUM_ID, limit as i64, offset as i64],
+                |row| {
+                    Ok(ImageInfo {
+                        id: row.get(0)?,
+                        url: row.get(1)?,
+                        local_path: row.get(2)?,
+                        plugin_id: row.get(3)?,
+                        task_id: row.get(4)?,
+                        crawled_at: row.get(5)?,
+                        metadata: row
+                            .get::<_, Option<String>>(6)?
+                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        thumbnail_path: row.get(7)?,
+                        hash: row.get(8)?,
+                        favorite: row.get::<_, i64>(9)? != 0,
+                        local_exists: true,
+                        order: row.get(10)?,
+                    })
+                },
+            )
             .map_err(|e| format!("Failed to query task images: {}", e))?;
 
         let mut images = Vec::new();

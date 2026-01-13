@@ -49,6 +49,20 @@ impl ImageQuery {
         }
     }
 
+    /// 按日期范围过滤（闭区间，日粒度）
+    ///
+    /// - start_ymd / end_ymd 格式：`YYYY-MM-DD`
+    /// - 使用 SQLite `date(..., 'unixepoch')` 做比较，兼容 ms/秒时间戳
+    pub fn by_date_range(start_ymd: String, end_ymd: String) -> Self {
+        // 注意：images.crawled_at 为空的行自动被过滤（date(NULL, ...) 为 NULL，与比较结果为 NULL/false）
+        Self {
+            decorator:
+                "WHERE date(CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') >= date(?) AND date(CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') <= date(?) ORDER BY COALESCE(images.\"order\", images.crawled_at) ASC"
+                    .to_string(),
+            params: vec![start_ymd, end_ymd],
+        }
+    }
+
     /// 按画册过滤（使用 JOIN 获取正确排序）
     pub fn by_album(album_id: String) -> Self {
         Self {

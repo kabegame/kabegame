@@ -6,7 +6,9 @@
 use std::sync::Arc;
 
 use crate::providers::all::AllProvider;
-use crate::providers::provider::{DeleteChildKind, DeleteChildMode, FsEntry, Provider};
+#[cfg(feature = "virtual-drive")]
+use crate::providers::provider::{DeleteChildKind, DeleteChildMode};
+use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 use std::path::PathBuf;
@@ -33,7 +35,7 @@ impl Provider for TaskGroupProvider {
     }
 
     fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
-        // 只列出“有图片”的任务，避免出现大量空目录
+        // 列出所有任务（不按“是否有图片”过滤）
         let tasks = storage.get_tasks_with_images()?;
         let mut out: Vec<FsEntry> = tasks
             .into_iter()
@@ -77,13 +79,8 @@ impl Provider for TaskGroupProvider {
         if task_id.is_empty() {
             return None;
         }
-        // 验证任务存在（且仍有图片）
-        let ok = storage.get_task(task_id).ok().flatten().is_some()
-            && storage
-                .get_task_image_ids(task_id)
-                .map(|ids| !ids.is_empty())
-                .unwrap_or(false);
-        if !ok {
+        // 验证任务存在（不要求有图片）
+        if storage.get_task(task_id).ok().flatten().is_none() {
             return None;
         }
         Some(Arc::new(TaskImagesProvider::new(task_id.to_string())))

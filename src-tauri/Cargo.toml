@@ -15,49 +15,13 @@ edition = "2021"
 kabegame-core = { path = "core", default-features = false }
 tauri = { version = "2.0", features = ["tray-icon", "devtools"] }
 tauri-build = { version = "2.0", features = [] }
-tauri-plugin-dialog = "2.0"
-tauri-plugin-shell = "2.0"
-tauri-plugin-fs = "2.0"
-
-clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-regex = "1.11"
-governor = "0.7"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.11", features = ["blocking", "json", "stream", "native-tls"] }
-futures-util = "0.3"
-scraper = "0.19"
-select = "0.6"
 url = "2.5"
 uuid = { version = "1.6", features = ["v4", "serde"] }
-dirs = "5.0"
 image = "0.24"
 zip = "0.6"
 rhai = { version = "1.19", features = ["sync"] }
-auto-launch = "0.5"
-rusqlite = { version = "0.31", features = ["bundled"] }
 sha2 = "0.10"
 base64 = "0.22"
-lru = "0.12"
-sled = "0.34"
-
-winver = "1"
-windows-sys = { version = "0.52", features = [
-  "Win32_Foundation",
-  "Win32_Graphics_Dwm",
-  "Win32_Graphics_Gdi",
-  "Win32_Storage_FileSystem",
-  "Win32_System_Com",
-  "Win32_System_DataExchange",
-  "Win32_System_LibraryLoader",
-  "Win32_System_Memory",
-  "Win32_UI_Shell",
-  "Win32_UI_WindowsAndMessaging",
-] }
-windows = { version = "0.52", features = [
-  "Win32_Foundation",
-  "Win32_System_Com",
-  "Win32_UI_Shell",
-] }
-winreg = "0.52"

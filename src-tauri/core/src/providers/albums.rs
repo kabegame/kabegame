@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use crate::providers::all::AllProvider;
-use crate::providers::provider::{
-    DeleteChildKind, DeleteChildMode, FsEntry, Provider, VdOpsContext,
-};
+#[cfg(feature = "virtual-drive")]
+use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
+use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::{Storage, FAVORITE_ALBUM_ID};
 use std::path::PathBuf;

@@ -46,13 +46,6 @@ pub fn plugin_editor_check_rhai(script: String) -> Result<Vec<EditorMarker>, Str
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginEditorTestResult {
-    pub logs: Vec<String>,
-    pub downloaded_urls: Vec<String>,
-}
-
 /// 处理用户选择的图片，转换为 kgpg v2 icon 格式（128x128 RGB24）
 /// 返回 base64 编码的 RGB24 数据
 pub fn plugin_editor_process_icon(image_path: String) -> Result<String, String> {

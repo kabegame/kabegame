@@ -16,7 +16,7 @@ use sled::Db;
 
 use crate::providers::descriptor::ProviderDescriptor;
 use crate::providers::factory::ProviderFactory;
-use crate::providers::provider::{FsEntry, Provider};
+use crate::providers::provider::{FsEntry, Provider, ResolveChild};
 use crate::storage::Storage;
 
 #[derive(Debug, Clone)]
@@ -247,13 +247,38 @@ impl ProviderRuntime {
         while prefix_len < segments.len() {
             let _ =
                 self.list_and_cache_children(storage, &segments[..prefix_len], provider.clone());
+            let next_name = segments[prefix_len];
             prefix_len += 1;
             let key = self.key_for_segments(&segments[..prefix_len]);
-            let Some(p) = self.get_or_build_provider_by_key(&key)? else {
-                // 列过目录仍拿不到下一层，说明路径不存在或该段不是目录
-                return Ok(None);
-            };
-            provider = p;
+
+            // 优先走“由 list 设置 key”的常规路径
+            if let Some(p) = self.get_or_build_provider_by_key(&key)? {
+                provider = p;
+                continue;
+            }
+            // 显式动态解析：只有 provider 明确返回 Dynamic/Listed 才允许继续
+            match provider.resolve_child(storage, next_name) {
+                ResolveChild::NotFound => {
+                    // 列过目录仍拿不到下一层，且不支持动态解析：路径不存在
+                    return Ok(None);
+                }
+                ResolveChild::Listed(child) => {
+                    // Listed：补写 descriptor，后续可通过 key 直接重建
+                    let desc = child.descriptor();
+                    let _ = self.db_put_descriptor_by_key(&key, &desc);
+                    if let Ok(mut lru) = self.lru.lock() {
+                        lru.put(key, child.clone());
+                    }
+                    provider = child;
+                }
+                ResolveChild::Dynamic(child) => {
+                    // Dynamic：仅进内存 LRU（不落 sled，避免无限组合污染持久缓存）
+                    if let Ok(mut lru) = self.lru.lock() {
+                        lru.put(key, child.clone());
+                    }
+                    provider = child;
+                }
+            }
         }
 
         Ok(Some(provider))

@@ -15,7 +15,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::providers::descriptor::ProviderDescriptor;
-use crate::providers::provider::{DeleteChildKind, DeleteChildMode, FsEntry, Provider, VdOpsContext};
+#[cfg(feature = "virtual-drive")]
+use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
+use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
@@ -128,7 +130,8 @@ impl Provider for AllProvider {
         if mode == DeleteChildMode::Check {
             return Ok(true);
         }
-        let removed = crate::virtual_drive::ops::query_delete_child_file(storage, &self.query, child_name)?;
+        let removed =
+            crate::virtual_drive::ops::query_delete_child_file(storage, &self.query, child_name)?;
         if removed {
             if let Some(album_id) = crate::virtual_drive::ops::album_id_from_query(&self.query) {
                 if let Some(name) = storage.get_album_name_by_id(album_id)? {
@@ -244,7 +247,8 @@ impl Provider for RangeProvider {
         if mode == DeleteChildMode::Check {
             return Ok(true);
         }
-        let removed = crate::virtual_drive::ops::query_delete_child_file(storage, &self.query, child_name)?;
+        let removed =
+            crate::virtual_drive::ops::query_delete_child_file(storage, &self.query, child_name)?;
         if removed {
             if let Some(album_id) = crate::virtual_drive::ops::album_id_from_query(&self.query) {
                 if let Some(name) = storage.get_album_name_by_id(album_id)? {

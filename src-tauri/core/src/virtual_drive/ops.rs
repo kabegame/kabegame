@@ -78,50 +78,7 @@ pub(crate) fn query_delete_child_file(
 
 static PLUGIN_NAME_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
-fn plugins_dir_for_readonly() -> PathBuf {
-    // 尽量复用 plugin 模块的目录约定（不依赖 AppHandle）：
-    // - release：data/plugins-directory
-    // - debug：优先 data/plugins-directory，其次 crawler-plugins/packed
-    let data_plugins_dir = crate::app_paths::user_data_dir("Kabegame").join("plugins-directory");
-
-    #[cfg(debug_assertions)]
-    {
-        if data_plugins_dir.exists() {
-            return data_plugins_dir;
-        }
-        if let Some(repo_root) = crate::app_paths::repo_root_dir() {
-            let packed = repo_root.join("crawler-plugins").join("packed");
-            if packed.exists() {
-                return packed;
-            }
-        }
-    }
-
-    data_plugins_dir
-}
-
-fn find_plugin_file_in_dir(plugins_dir: &PathBuf, plugin_id: &str) -> Option<PathBuf> {
-    let expected = plugins_dir.join(format!("{}.kgpg", plugin_id));
-    if expected.is_file() {
-        return Some(expected);
-    }
-
-    // 兜底：扫一遍（防止文件名不是严格 {id}.kgpg）
-    let rd = std::fs::read_dir(plugins_dir).ok()?;
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("kgpg") {
-            continue;
-        }
-        if p.file_stem()
-            .and_then(|s| s.to_str())
-            .is_some_and(|s| s == plugin_id)
-        {
-            return Some(p);
-        }
-    }
-    None
-}
+// 插件目录定位/manifest 读取已迁移到 crate::plugin 模块中复用
 
 /// 从已安装插件的 manifest.json 解析出展示名（name）。
 ///
@@ -141,30 +98,10 @@ pub(crate) fn plugin_display_name_from_manifest(plugin_id: &str) -> Option<Strin
         }
     }
 
-    let plugins_dir = plugins_dir_for_readonly();
-    let plugin_file = find_plugin_file_in_dir(&plugins_dir, pid)?;
-
-    // 先尝试 KGPG v2 头部
-    if let Ok(Some(s)) = crate::kgpg::read_kgpg2_manifest_json_from_file(&plugin_file) {
-        if !s.trim().is_empty() {
-            if let Ok(m) = serde_json::from_str::<crate::plugin::PluginManifest>(&s) {
-                let name = m.name.trim().to_string();
-                if let Ok(mut guard) = cache.lock() {
-                    guard.insert(pid.to_string(), name.clone());
-                }
-                return if name.is_empty() { None } else { Some(name) };
-            }
-        }
-    }
-
-    // fallback：从 zip 读 manifest.json
-    let file = std::fs::File::open(&plugin_file).ok()?;
-    let mut archive = zip::ZipArchive::new(file).ok()?;
-    let mut mf = archive.by_name("manifest.json").ok()?;
-    let mut content = String::new();
-    use std::io::Read;
-    mf.read_to_string(&mut content).ok()?;
-    let manifest: crate::plugin::PluginManifest = serde_json::from_str(&content).ok()?;
+    // 复用 plugin 模块：目录定位 + manifest 读取
+    let plugins_dir = crate::plugin::plugins_directory_for_readonly();
+    let plugin_file = plugins_dir.join(format!("{}.kgpg", pid));
+    let manifest = crate::plugin::read_plugin_manifest_from_kgpg_file(&plugin_file).ok()?;
     let name = manifest.name.trim().to_string();
 
     if let Ok(mut guard) = cache.lock() {

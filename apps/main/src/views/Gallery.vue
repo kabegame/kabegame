@@ -12,7 +12,8 @@
           <GalleryToolbar :dedupe-loading="dedupeLoading" :dedupe-progress="dedupeProgress"
             :dedupe-processed="dedupeProcessed" :dedupe-total="dedupeTotal" :dedupe-removed="dedupeRemoved"
             :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled" :current-position="currentPosition"
-            @refresh="loadImages(true, { forceReload: true })" @dedupe-by-hash="handleDedupeByHash"
+            :month-options="monthOptions" :month-loading="monthOptionsLoading" v-model:selectedRange="selectedRange"
+            @refresh="handleManualRefresh" @dedupe-by-hash="handleDedupeByHash"
             @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="showCrawlerDialog = true"
             @cancel-dedupe="cancelDedupe" />
 
@@ -141,6 +142,90 @@ watch(
   },
   { immediate: true }
 );
+
+type GalleryBrowseEntry =
+  | { kind: "dir"; name: string }
+  | { kind: "image"; image: ImageInfo };
+
+type GalleryBrowseResult = {
+  total: number;
+  baseOffset: number;
+  rangeTotal: number;
+  entries: GalleryBrowseEntry[];
+};
+
+const monthOptions = ref<string[]>([]);
+const monthOptionsLoading = ref(false);
+const selectedRange = ref<[string, string] | null>(null);
+
+const extractRangeFromProviderRoot = (
+  root: string
+): [string, string] | null => {
+  const segs = (root || "").split("/").map((s) => s.trim()).filter(Boolean);
+  // 按时间/范围/YYYY-MM-DD~YYYY-MM-DD
+  if (segs.length >= 3 && segs[0] === "按时间" && segs[1] === "范围") {
+    const raw = segs[2] ?? "";
+    const parts = raw.split("~").map((s) => s.trim()).filter(Boolean);
+    if (parts.length === 2) return [parts[0]!, parts[1]!] as [string, string];
+  }
+  return null;
+};
+
+watch(
+  () => providerRootPath.value,
+  (root) => {
+    const range = extractRangeFromProviderRoot(root);
+    if (range) {
+      if (
+        !selectedRange.value ||
+        selectedRange.value[0] !== range[0] ||
+        selectedRange.value[1] !== range[1]
+      ) {
+        selectedRange.value = range;
+      }
+      return;
+    }
+
+    // 不在范围路径：清空日历（但不强制改变当前 provider 路径，保持默认按月）
+    if (selectedRange.value !== null) selectedRange.value = null;
+  },
+  { immediate: true }
+);
+
+const replaceRouteForProviderRootAndPage = async (root: string, page: number) => {
+  const safePage = Math.max(1, Math.floor(page || 1));
+  const segs = (root || "全部").split("/").filter(Boolean);
+  if (safePage === 1) {
+    await router.replace({ name: "Gallery", params: { providerPath: segs } });
+  } else {
+    await router.replace({
+      name: "GalleryPaged",
+      params: { providerPath: segs, page: String(safePage) },
+    });
+  }
+};
+
+const loadMonthOptions = async () => {
+  monthOptionsLoading.value = true;
+  try {
+    const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
+      path: "按时间",
+    });
+    const months = (res?.entries ?? [])
+      .filter((e) => e.kind === "dir")
+      .map((e) => (e as any).name as string)
+      .filter(Boolean)
+      .sort()
+      .reverse();
+
+    // 过滤掉范围入口（后端会额外插入“范围”目录）
+    monthOptions.value = months.filter((m) => m !== "范围");
+  } catch (e) {
+    console.error("加载月份列表失败:", e);
+  } finally {
+    monthOptionsLoading.value = false;
+  }
+};
 
 const replaceRouteForPage = async (page: number) => {
   const safe = Math.max(1, Math.floor(page || 1));
@@ -328,6 +413,36 @@ const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => 
     finishLoading();
     isRefreshing.value = false;
   }
+};
+
+watch(
+  () => selectedRange.value,
+  async (r) => {
+    if (!r || r.length !== 2) {
+      return;
+    }
+    const start = (r[0] || "").trim();
+    const end = (r[1] || "").trim();
+    if (!start || !end) return;
+
+    const nextRoot = `按时间/范围/${start}~${end}`;
+    if (nextRoot === providerRootPath.value) return;
+
+    // 切换 provider：回到第 1 页，并重载
+    await replaceRouteForProviderRootAndPage(nextRoot, 1);
+    currentPage.value = 1;
+    await loadTotalImagesCount();
+    await loadImages(true);
+  }
+);
+
+const handleManualRefresh = async () => {
+  // 手动刷新：刷新画廊数据 + 同步刷新月份下拉框选项
+  await Promise.allSettled([
+    loadImages(true, { forceReload: true }),
+    loadMonthOptions(),
+  ]);
+  await loadTotalImagesCount();
 };
 
 
@@ -740,6 +855,7 @@ onMounted(async () => {
   });
   crawlerStore.loadRunConfigs();
   loadTotalImagesCount(); // 加载总图片数
+  loadMonthOptions(); // 加载月份下拉框选项
 
   startLoading();
   loadImages(true).then(() => {

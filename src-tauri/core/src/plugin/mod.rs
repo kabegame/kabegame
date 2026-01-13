@@ -367,54 +367,7 @@ impl PluginManager {
     }
 
     pub fn get_plugins_directory(&self) -> PathBuf {
-        // 开发模式：优先使用 data/plugins_directory，其次使用 crawler-plugins/packed
-        #[cfg(debug_assertions)]
-        {
-            let app_data_dir = crate::app_paths::user_data_dir("Kabegame");
-            let data_plugins_dir = app_data_dir.join("plugins-directory");
-
-            // 优先尝试 data/plugins_directory（开发数据目录）
-            if data_plugins_dir.exists() {
-                return data_plugins_dir;
-            }
-
-            // 其次尝试 crawler-plugins/packed（向后兼容）
-            // 1. 当前工作目录（开发时通常在项目根目录）
-            if let Ok(cwd) = std::env::current_dir() {
-                let packed_path = cwd.join("crawler-plugins").join("packed");
-                if packed_path.exists() {
-                    return packed_path;
-                }
-            }
-
-            // 2. 从可执行文件位置查找
-            if let Ok(exe_path) = std::env::current_exe() {
-                if let Some(exe_dir) = exe_path.parent() {
-                    // 在开发模式下，可执行文件在 target/debug，需要向上到项目根目录
-                    if let Some(project_root) = exe_dir
-                        .parent() // target
-                        .and_then(|p| p.parent()) // src-tauri
-                        .and_then(|p| p.parent())
-                    // 项目根目录
-                    {
-                        let packed_path = project_root.join("crawler-plugins").join("packed");
-                        if packed_path.exists() {
-                            return packed_path;
-                        }
-                    }
-                }
-            }
-
-            // 如果都不存在，返回 data/plugins_directory（即使不存在，也会在后续创建）
-            return data_plugins_dir;
-        }
-
-        // 生产模式：使用应用数据目录
-        #[cfg(not(debug_assertions))]
-        {
-            let app_data_dir = crate::app_paths::user_data_dir("Kabegame");
-            app_data_dir.join("plugins-directory")
-        }
+        plugins_directory_for_readonly()
     }
 
     pub fn load_browser_plugins(&self) -> Result<Vec<BrowserPlugin>, String> {
@@ -457,33 +410,7 @@ impl PluginManager {
 
     /// 从 ZIP 格式的插件文件中读取 manifest.json
     pub fn read_plugin_manifest(&self, zip_path: &Path) -> Result<PluginManifest, String> {
-        // 优先尝试：KGPG v2 固定头部（无需解析 zip）
-        if let Ok(Some(s)) = crate::kgpg::read_kgpg2_manifest_json_from_file(zip_path) {
-            if !s.trim().is_empty() {
-                if let Ok(m) = serde_json::from_str::<PluginManifest>(&s) {
-                    return Ok(m);
-                }
-            }
-        }
-
-        let file =
-            fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
-        let mut archive =
-            ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
-
-        // 只读取 manifest.json，不解压整个文件
-        let mut manifest_file = archive
-            .by_name("manifest.json")
-            .map_err(|_| "manifest.json not found in plugin archive")?;
-
-        let mut content = String::new();
-        manifest_file
-            .read_to_string(&mut content)
-            .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
-
-        let manifest: PluginManifest = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse manifest.json: {}", e))?;
-        Ok(manifest)
+        read_plugin_manifest_from_kgpg_file(zip_path)
     }
 
     /// 从 ZIP 格式的插件文件中读取 doc_root/doc.md
@@ -2259,6 +2186,95 @@ impl PluginManager {
             icon_present,
         })
     }
+}
+
+/// 获取插件目录（不依赖 AppHandle / PluginManager 实例）。
+///
+/// 说明：
+/// - 这是 `PluginManager::get_plugins_directory()` 的可复用实现。
+pub fn plugins_directory_for_readonly() -> PathBuf {
+    // 开发模式：优先使用 data/plugins_directory，其次使用 crawler-plugins/packed
+    #[cfg(debug_assertions)]
+    {
+        let app_data_dir = crate::app_paths::user_data_dir("Kabegame");
+        let data_plugins_dir = app_data_dir.join("plugins-directory");
+
+        // 优先尝试 data/plugins_directory（开发数据目录）
+        if data_plugins_dir.exists() {
+            return data_plugins_dir;
+        }
+
+        // 其次尝试 crawler-plugins/packed（向后兼容）
+        // 1. 当前工作目录（开发时通常在项目根目录）
+        if let Ok(cwd) = std::env::current_dir() {
+            let packed_path = cwd.join("crawler-plugins").join("packed");
+            if packed_path.exists() {
+                return packed_path;
+            }
+        }
+
+        // 2. 从可执行文件位置查找
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                // 在开发模式下，可执行文件在 target/debug，需要向上到项目根目录
+                if let Some(project_root) = exe_dir
+                    .parent() // target
+                    .and_then(|p| p.parent()) // src-tauri
+                    .and_then(|p| p.parent())
+                // 项目根目录
+                {
+                    let packed_path = project_root.join("crawler-plugins").join("packed");
+                    if packed_path.exists() {
+                        return packed_path;
+                    }
+                }
+            }
+        }
+
+        // 如果都不存在，返回 data/plugins_directory（即使不存在，也会在后续创建）
+        return data_plugins_dir;
+    }
+
+    // 生产模式：使用应用数据目录
+    #[cfg(not(debug_assertions))]
+    {
+        let app_data_dir = crate::app_paths::user_data_dir("Kabegame");
+        app_data_dir.join("plugins-directory")
+    }
+}
+
+/// 从任意 `.kgpg` 文件读取 manifest.json（优先 KGPG v2 头部）。
+///
+/// 说明：
+/// - 这是 `PluginManager::read_plugin_manifest()` 的可复用实现。
+pub fn read_plugin_manifest_from_kgpg_file(zip_path: &Path) -> Result<PluginManifest, String> {
+    // 优先尝试：KGPG v2 固定头部（无需解析 zip）
+    if let Ok(Some(s)) = crate::kgpg::read_kgpg2_manifest_json_from_file(zip_path) {
+        if !s.trim().is_empty() {
+            if let Ok(m) = serde_json::from_str::<PluginManifest>(&s) {
+                return Ok(m);
+            }
+        }
+    }
+
+    let file =
+        fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
+
+    // 只读取 manifest.json，不解压整个文件
+    let mut manifest_file = archive
+        .by_name("manifest.json")
+        .map_err(|_| "manifest.json not found in plugin archive")?;
+
+    let mut content = String::new();
+    manifest_file
+        .read_to_string(&mut content)
+        .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
+
+    let manifest: PluginManifest = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse manifest.json: {}", e))?;
+    Ok(manifest)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -17,6 +17,7 @@ pub mod root;
 pub mod albums;
 pub mod all;
 pub mod date_group;
+
 pub mod plugin_group;
 pub mod task_group;
 
@@ -24,6 +25,7 @@ pub use albums::AlbumsProvider;
 pub use all::AllProvider;
 pub use cache::{ProviderCacheConfig, ProviderRuntime};
 pub use date_group::DateGroupProvider;
+pub use date_group::DateRangeRootProvider;
 pub use descriptor::ProviderDescriptor;
 pub use factory::ProviderFactory;
 pub use plugin_group::PluginGroupProvider;

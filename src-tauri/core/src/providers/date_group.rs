@@ -7,6 +7,9 @@ use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 use std::path::PathBuf;
+use crate::providers::provider::ResolveChild;
+
+const DIR_RANGE: &str = "范围";
 
 /// 日期分组列表 Provider - 列出所有年月
 #[derive(Clone)]
@@ -36,6 +39,9 @@ impl Provider for DateGroupProvider {
             .map(|g| FsEntry::dir(g.year_month))
             .collect();
 
+        // 额外入口：范围查询（由前端日历组件驱动）
+        out.insert(0, FsEntry::dir(DIR_RANGE));
+
         // VD 专用：目录说明文件
         #[cfg(feature = "virtual-drive")]
         {
@@ -49,7 +55,12 @@ impl Provider for DateGroupProvider {
     }
 
     fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
-        // 验证日期是否存在
+        // 范围查询：按 "YYYY-MM-DD~YYYY-MM-DD" 编码在子目录名里
+        if name.eq_ignore_ascii_case(DIR_RANGE) {
+            return Some(Arc::new(DateRangeRootProvider::new()) as Arc<dyn Provider>);
+        }
+
+        // 按月查询：验证日期是否存在
         let groups = storage.get_gallery_date_groups().ok()?;
         let date = groups.into_iter().find(|g| g.year_month == name)?;
         Some(Arc::new(DateImagesProvider::new(date.year_month)))
@@ -64,6 +75,100 @@ impl Provider for DateGroupProvider {
         crate::virtual_drive::ops::ensure_note_file(display_name, display_name)
             .ok()
             .map(|(id, path)| (id, path))
+    }
+}
+
+/// “范围”根目录：不列出任何月份；由前端直接用 get_child 解析范围字符串
+#[derive(Clone, Default)]
+pub struct DateRangeRootProvider;
+
+impl DateRangeRootProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Provider for DateRangeRootProvider {
+    fn descriptor(&self) -> crate::providers::descriptor::ProviderDescriptor {
+        crate::providers::descriptor::ProviderDescriptor::DateRangeRoot
+    }
+
+    fn list(&self, _storage: &Storage) -> Result<Vec<FsEntry>, String> {
+        Ok(vec![])
+    }
+
+    fn resolve_child(&self, _storage: &Storage, name: &str) -> ResolveChild {
+        // name: "YYYY-MM-DD~YYYY-MM-DD"
+        let Some((start, end)) = parse_range_name(name) else {
+            return ResolveChild::NotFound;
+        };
+        ResolveChild::Dynamic(Arc::new(DateRangeImagesProvider::new(start, end)) as Arc<dyn Provider>)
+    }
+}
+
+fn parse_range_name(s: &str) -> Option<(String, String)> {
+    let raw = s.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = raw.split('~').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let start = parts[0].trim();
+    let end = parts[1].trim();
+    if start.len() != 10 || end.len() != 10 {
+        return None;
+    }
+    // 仅做轻量校验：YYYY-MM-DD
+    if !start.as_bytes().get(4).is_some_and(|c| *c == b'-')
+        || !start.as_bytes().get(7).is_some_and(|c| *c == b'-')
+        || !end.as_bytes().get(4).is_some_and(|c| *c == b'-')
+        || !end.as_bytes().get(7).is_some_and(|c| *c == b'-')
+    {
+        return None;
+    }
+    Some((start.to_string(), end.to_string()))
+}
+
+/// 日期范围的图片 Provider - 委托给 AllProvider 处理分页
+pub struct DateRangeImagesProvider {
+    start_ymd: String,
+    end_ymd: String,
+    inner: AllProvider,
+}
+
+impl DateRangeImagesProvider {
+    pub fn new(start_ymd: String, end_ymd: String) -> Self {
+        let inner = AllProvider::with_query(ImageQuery::by_date_range(
+            start_ymd.clone(),
+            end_ymd.clone(),
+        ));
+        Self {
+            start_ymd,
+            end_ymd,
+            inner,
+        }
+    }
+}
+
+impl Provider for DateRangeImagesProvider {
+    fn descriptor(&self) -> crate::providers::descriptor::ProviderDescriptor {
+        crate::providers::descriptor::ProviderDescriptor::All {
+            query: ImageQuery::by_date_range(self.start_ymd.clone(), self.end_ymd.clone()),
+        }
+    }
+
+    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
+        self.inner.list(storage)
+    }
+
+    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
+        self.inner.get_child(storage, name)
+    }
+
+    fn resolve_file(&self, storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
+        self.inner.resolve_file(storage, name)
     }
 }
 

@@ -12,6 +12,17 @@ use std::sync::Arc;
 use crate::providers::descriptor::ProviderDescriptor;
 use crate::storage::Storage;
 
+/// 子节点解析结果：显式区分“可列举”和“动态可解析”。
+///
+/// 设计意图：
+/// - Listed：子目录应当能在 `list()` 中出现（常规目录）。
+/// - Dynamic：子目录不会在 `list()` 中出现，但允许通过路径直接访问（例如前端拼出来的范围查询）。
+pub enum ResolveChild {
+    NotFound,
+    Listed(Arc<dyn Provider>),
+    Dynamic(Arc<dyn Provider>),
+}
+
 /// 虚拟文件系统条目（用于 list 返回）
 #[derive(Debug, Clone)]
 pub enum FsEntry {
@@ -70,6 +81,15 @@ pub trait Provider: Send + Sync {
     /// 默认返回 None，表示不支持子目录
     fn get_child(&self, _storage: &Storage, _name: &str) -> Option<Arc<dyn Provider>> {
         None
+    }
+
+    /// 解析子 Provider（显式支持 Dynamic 子节点）。
+    ///
+    /// 默认返回 NotFound：表示“除非出现在 list() 里，否则不允许路径直达”。
+    ///
+    /// 注意：`ProviderRuntime` 的常规解析仍然以 `list()` 为准；只有在“列过目录仍找不到下一段 key”时才会调用该方法。
+    fn resolve_child(&self, _storage: &Storage, _name: &str) -> ResolveChild {
+        ResolveChild::NotFound
     }
 
     /// 获取当前 Provider 的所有子 Provider（用于 warm cache）。
