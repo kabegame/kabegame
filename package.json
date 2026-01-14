@@ -1,6 +1,6 @@
 {
   "name": "kabegame",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "让你的桌面充满二次元气息的壁纸管理器！收集、管理、轮播，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元壁纸资源~",
   "type": "module",
   "scripts": {
@@ -41,7 +41,7 @@
     "@vue/tsconfig": "^0.5.1",
     "archiver": "^7.0.1",
     "chalk": "^5.3.0",
-    "commander": "^12.1.1",
+    "commander": "^12.1.0",
     "husky": "^9.1.7",
     "nodemon": "^3.1.10",
     "nx": "^20.0.0",
