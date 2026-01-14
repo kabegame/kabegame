@@ -20,6 +20,9 @@
   DetailPrint "Move kabegame-cli.exe -> $INSTDIR (exit code: $0)"
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\kabegame-cliw.exe$\" move /Y $\"$INSTDIR\resources\bin\kabegame-cliw.exe$\" $\"$INSTDIR$\"' $0
   DetailPrint "Move kabegame-cliw.exe -> $INSTDIR (exit code: $0)"
+  ; Move dokan2.dll next to main exe so Windows loader can resolve it at process start.
+  ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\dokan2.dll$\" move /Y $\"$INSTDIR\resources\bin\dokan2.dll$\" $\"$INSTDIR$\"' $0
+  DetailPrint "Move dokan2.dll -> $INSTDIR (exit code: $0)"
 
   ; Register .kgpg file association -> kabegame-cliw.exe plugin import "%1"
   ; (kabegame-cliw.exe is built as Windows subsystem and launches kabegame-cli.exe with CREATE_NO_WINDOW)
@@ -49,6 +52,8 @@
     Delete "$INSTDIR\kabegame-cli.exe"
   IfFileExists "$INSTDIR\kabegame-cliw.exe" 0 +2
     Delete "$INSTDIR\kabegame-cliw.exe"
+  IfFileExists "$INSTDIR\dokan2.dll" 0 +2
+    Delete "$INSTDIR\dokan2.dll"
 
   ; Remove folder attributes (best-effort).
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib -s -r $\"$INSTDIR$\"'

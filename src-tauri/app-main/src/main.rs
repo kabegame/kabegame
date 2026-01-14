@@ -435,8 +435,94 @@ fn mount_virtual_drive(
 
 #[cfg(feature = "virtual-drive")]
 #[tauri::command]
-fn unmount_virtual_drive(drive: tauri::State<VirtualDriveService>) -> Result<bool, String> {
-    drive.unmount()
+fn unmount_virtual_drive(
+    drive: tauri::State<VirtualDriveService>,
+    mount_point: Option<String>,
+) -> Result<bool, String> {
+    // 1) 先尝试用当前进程卸载（如果本进程是挂载者或具备权限）
+    match drive.unmount() {
+        Ok(v) if v => return Ok(true),
+        Ok(_) => {
+            // 继续走兜底
+        }
+        Err(_) => {
+            // 继续走兜底
+        }
+    }
+
+    // 2) 兜底：通过提权 helper 卸载（适用于挂载由提权进程完成的情况）
+    #[cfg(target_os = "windows")]
+    {
+        let Some(mp) = mount_point.as_deref() else {
+            return Ok(false);
+        };
+        let mp = mp.trim();
+        if mp.is_empty() {
+            return Ok(false);
+        }
+
+        use kabegame_core::virtual_drive::ipc::{VdIpcRequest, VdIpcResponse};
+
+        let mp_norm = virtual_drive::drive_service::normalize_mount_point(mp)?;
+
+        let try_unmount_via_ipc = || -> Result<VdIpcResponse, String> {
+            tauri::async_runtime::block_on(async {
+                kabegame_core::virtual_drive::ipc::request(VdIpcRequest::Unmount {
+                    mount_point: mp_norm.clone(),
+                })
+                .await
+            })
+        };
+
+        let resp = match try_unmount_via_ipc() {
+            Ok(r) => r,
+            Err(_ipc_err) => {
+                // daemon 不存在：runas 启动
+                let mut cliw =
+                    std::env::current_exe().map_err(|e| format!("current_exe failed: {}", e))?;
+                cliw.set_file_name("kabegame-cliw.exe");
+                if !cliw.is_file() {
+                    return Err(format!(
+                        "卸载需要管理员权限，但找不到提权 helper: {}",
+                        cliw.display()
+                    ));
+                }
+                kabegame_core::shell_open::runas(&cliw.to_string_lossy(), "vd daemon")?;
+
+                // 等待 daemon 就绪
+                let mut ready = false;
+                for _ in 0..100 {
+                    if tauri::async_runtime::block_on(async {
+                        kabegame_core::virtual_drive::ipc::request(VdIpcRequest::Status)
+                            .await
+                            .is_ok()
+                    }) {
+                        ready = true;
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                if !ready {
+                    return Err(
+                        "已请求管理员权限启动 VD daemon，但 IPC 未就绪（可能 UAC 未确认）"
+                            .to_string(),
+                    );
+                }
+
+                try_unmount_via_ipc()?
+            }
+        };
+
+        if !resp.ok {
+            return Err(resp.message.unwrap_or_else(|| "卸载失败".to_string()));
+        }
+        Ok(true)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(false)
+    }
 }
 
 #[cfg(feature = "virtual-drive")]
@@ -447,16 +533,95 @@ fn mount_virtual_drive_and_open_explorer(
     storage: tauri::State<Storage>,
     drive: tauri::State<VirtualDriveService>,
 ) -> Result<(), String> {
-    drive.mount(&mount_point, storage.inner().clone(), app)?;
-    let open_path = drive.current_mount_point().unwrap_or(mount_point);
-    std::process::Command::new("explorer")
-        .arg(open_path)
-        .spawn()
-        .map_err(|e| format!("已挂载，但打开资源管理器失败: {}", e))?;
-    Ok(())
+    // 先尝试直接挂载（如果当前进程已提权，或系统允许）
+    match drive.mount(&mount_point, storage.inner().clone(), app.clone()) {
+        Ok(()) => {
+            let open_path = drive.current_mount_point().unwrap_or(mount_point);
+            std::process::Command::new("explorer")
+                .arg(open_path)
+                .spawn()
+                .map_err(|e| format!("已挂载，但打开资源管理器失败: {}", e))?;
+            return Ok(());
+        }
+        Err(e) => {
+            // Windows：常见是未提权导致 Dokan 挂载失败。这里兜底走提权 daemon + 命名管道 IPC（不重启主进程）。
+            #[cfg(target_os = "windows")]
+            {
+                use kabegame_core::virtual_drive::ipc::{VdIpcRequest, VdIpcResponse};
+
+                let mp_norm = virtual_drive::drive_service::normalize_mount_point(&mount_point)?;
+
+                // 1) 先尝试直接走 IPC（如果 daemon 已存在则不会弹 UAC）
+                let try_mount_via_ipc = || -> Result<VdIpcResponse, String> {
+                    tauri::async_runtime::block_on(async {
+                        kabegame_core::virtual_drive::ipc::request(VdIpcRequest::Mount {
+                            mount_point: mp_norm.clone(),
+                        })
+                        .await
+                    })
+                };
+
+                let resp = match try_mount_via_ipc() {
+                    Ok(r) => r,
+                    Err(_ipc_err) => {
+                        // 2) daemon 不存在：用 runas 启动提权 daemon（常驻）
+                        let mut cliw = std::env::current_exe()
+                            .map_err(|e| format!("current_exe failed: {}", e))?;
+                        cliw.set_file_name("kabegame-cliw.exe");
+                        if !cliw.is_file() {
+                            return Err(format!(
+                                "{}\n\n挂载需要管理员权限，但找不到提权 helper: {}",
+                                e,
+                                cliw.display()
+                            ));
+                        }
+
+                        kabegame_core::shell_open::runas(&cliw.to_string_lossy(), "vd daemon")?;
+
+                        // 3) 等待 daemon 就绪：轮询 IPC status（最多 10s）
+                        let mut ready = false;
+                        for _ in 0..100 {
+                            if tauri::async_runtime::block_on(async {
+                                kabegame_core::virtual_drive::ipc::request(VdIpcRequest::Status)
+                                    .await
+                                    .is_ok()
+                            }) {
+                                ready = true;
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                        if !ready {
+                            return Err(
+                                "已请求管理员权限启动 VD daemon，但 IPC 未就绪（可能 UAC 未确认）"
+                                    .to_string(),
+                            );
+                        }
+
+                        try_mount_via_ipc()?
+                    }
+                };
+
+                if !resp.ok {
+                    return Err(resp.message.unwrap_or_else(|| "挂载失败".to_string()));
+                }
+
+                let open_path = resp.mount_point.unwrap_or_else(|| mp_norm.clone());
+                std::process::Command::new("explorer")
+                    .arg(open_path)
+                    .spawn()
+                    .map_err(|e| format!("已挂载，但打开资源管理器失败: {}", e))?;
+                return Ok(());
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                return Err(e);
+            }
+        }
+    }
 }
 
-#[cfg(target_os = "windows")]
 #[tauri::command]
 fn open_explorer(path: String) -> Result<(), String> {
     kabegame_core::shell_open::open_explorer(&path)

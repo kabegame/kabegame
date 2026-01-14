@@ -72,6 +72,135 @@ function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
 
+function existsFile(p) {
+  try {
+    return fs.existsSync(p) && fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function findFirstExisting(paths) {
+  for (const p of paths) {
+    if (p && existsFile(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * Find dokan2.dll from common install locations (best-effort).
+ * Users can also override via env var: DOKAN2_DLL
+ */
+function findDokan2DllOnWindows() {
+  if (process.platform !== "win32") return null;
+
+  // 1) explicit override
+  const fromEnv = (process.env.DOKAN2_DLL ?? "").trim();
+  if (fromEnv) {
+    if (existsFile(fromEnv)) return fromEnv;
+    console.error(
+      chalk.red(
+        `❌ 环境变量 DOKAN2_DLL 指向的文件不存在: ${fromEnv}\n` +
+          `请改为 dokan2.dll 的绝对路径。`
+      )
+    );
+    process.exit(1);
+  }
+
+  // 2) system dirs
+  const sysCandidates = [
+    path.join(process.env.WINDIR ?? "C:\\Windows", "System32", "dokan2.dll"),
+    path.join(process.env.WINDIR ?? "C:\\Windows", "SysWOW64", "dokan2.dll"),
+  ];
+  const sys = findFirstExisting(sysCandidates);
+  if (sys) return sys;
+
+  // 3) Dokan default install dir (versioned). We scan shallowly to avoid slow recursion.
+  const programFiles = process.env["ProgramFiles"] ?? "C:\\Program Files";
+  const dokanRoot = path.join(programFiles, "Dokan");
+  try {
+    if (fs.existsSync(dokanRoot) && fs.statSync(dokanRoot).isDirectory()) {
+      const entries = fs.readdirSync(dokanRoot, { withFileTypes: true });
+      // Common pattern: "Dokan Library-2.x.x"
+      const dirs = entries
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+        .filter((name) => name.toLowerCase().includes("dokan"));
+
+      // Try a few typical locations:
+      const candidates = [];
+      for (const d of dirs) {
+        candidates.push(path.join(dokanRoot, d, "dokan2.dll"));
+        candidates.push(path.join(dokanRoot, d, "x64", "dokan2.dll"));
+        candidates.push(path.join(dokanRoot, d, "bin", "dokan2.dll"));
+        candidates.push(path.join(dokanRoot, d, "bin", "x64", "dokan2.dll"));
+      }
+      const found = findFirstExisting(candidates);
+      if (found) return found;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+/**
+ * Ensure dokan2.dll is staged into src-tauri/app-main/resources/bin.
+ * This is required by the app-main Windows virtual-drive feature.
+ */
+function ensureDokan2DllResource() {
+  if (process.platform !== "win32") return;
+
+  const dst = path.join(RESOURCES_BIN_DIR, "dokan2.dll");
+  if (existsFile(dst)) return;
+
+  const src = findDokan2DllOnWindows();
+  if (!src) {
+    console.warn(
+      chalk.yellow(
+        `⚠ 未在系统中找到 dokan2.dll，将继续构建/启动，但“虚拟磁盘”功能将不可用。\n\n` +
+          `如果你需要虚拟磁盘：\n` +
+          `1) 安装 Dokan 2.x；或\n` +
+          `2) 设置环境变量 DOKAN2_DLL 指向 dokan2.dll，例如：\n` +
+          `   $env:DOKAN2_DLL="C:\\\\Program Files\\\\Dokan\\\\Dokan Library-2.3.1\\\\dokan2.dll"\n`
+      )
+    );
+    return;
+  }
+
+  ensureDir(RESOURCES_BIN_DIR);
+  fs.copyFileSync(src, dst);
+  console.log(
+    chalk.cyan(
+      `[build] Staged dokan2.dll resource: ${path.relative(
+        root,
+        dst
+      )} (from: ${src})`
+    )
+  );
+}
+
+function copyDokan2DllToTauriReleaseDirBestEffort() {
+  if (process.platform !== "win32") return;
+  const src = path.join(RESOURCES_BIN_DIR, "dokan2.dll");
+  if (!existsFile(src)) return;
+  const dst = path.join(SRC_TAURI_DIR, "target", "release", "dokan2.dll");
+  try {
+    fs.copyFileSync(src, dst);
+    console.log(
+      chalk.cyan(
+        `[build] Copied dokan2.dll next to target/release exe: ${path.relative(
+          root,
+          dst
+        )}`
+      )
+    );
+  } catch {
+    // ignore (some environments may lock the file)
+  }
+}
+
 /**
  * Copy a release-built binary from src-tauri/target/release into src-tauri/resources/bin
  * using fixed file names (no triple suffix). These will be shipped as normal resources
@@ -189,6 +318,10 @@ function dev(options) {
   if (component === "cli") {
     console.error(chalk.red(`❌ CLI 不需要 dev，请使用: pnpm start -c cli`));
     process.exit(1);
+  }
+
+  if (component === "main") {
+    ensureDokan2DllResource();
   }
 
   // Step 1: Package plugins first (to src-tauri/resources/plugins) to ensure resources exist
@@ -311,6 +444,10 @@ function start(options) {
   const builtinPlugins = options.mode === "local" ? scanBuiltinPlugins() : [];
   const env = buildEnv(options, builtinPlugins);
 
+  if (component === "main") {
+    ensureDokan2DllResource();
+  }
+
   if (component === "cli") {
     console.log(chalk.blue(`[start] Running cli (no watch)`));
     run("cargo", ["run", "-p", "kabegame-cli"], { cwd: SRC_TAURI_DIR, env });
@@ -359,6 +496,10 @@ function build(options) {
   // 为了“一个安装包包含三个 app”：默认(all)只打包 app-main 的安装包；
   // plugin-editor/cli 的 exe 作为 resources/bin 资源随主程序一起被打包，
   // 安装时通过 NSIS hooks 移动到安装根目录。
+
+  if (wantMain) {
+    ensureDokan2DllResource();
+  }
 
   if (wantEditor) {
     console.log(chalk.blue(`[build] Building plugin-editor frontend + binary`));
@@ -414,6 +555,8 @@ function build(options) {
   if (wantMain) {
     console.log(chalk.blue(`[build] Building app-main (bundle installer)`));
     run("tauri", ["build"], { cwd: TAURI_APP_MAIN_DIR, env });
+    // Make it runnable directly from src-tauri/target/release (common dev habit)
+    copyDokan2DllToTauriReleaseDirBestEffort();
   }
 }
 

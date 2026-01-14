@@ -135,6 +135,55 @@ pub fn open_explorer(path: &str) -> Result<(), String> {
     }
 }
 
+/// 以管理员权限（UAC）启动一个程序（Windows 专用）。
+///
+/// 说明：
+/// - 会触发 UAC 弹窗（如果当前进程未提权且系统启用了 UAC）。
+/// - 该 API 仅负责“发起提权启动”，不保证子进程成功执行到某一步。
+pub fn runas(exe_path: &str, params: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        let exe_path = normalize_windows_path_for_shell(exe_path);
+        let params_str = params;
+
+        let op: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
+        let file: Vec<u16> = OsStr::new(&exe_path).encode_wide().chain(Some(0)).collect();
+        let params: Vec<u16> = OsStr::new(params_str)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+
+        let rc = unsafe {
+            ShellExecuteW(
+                0,
+                op.as_ptr(),
+                file.as_ptr(),
+                params.as_ptr(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if rc as isize <= 32 {
+            return Err(format!(
+                "Failed to runas (ShellExecuteW rc={}): {} {}",
+                rc, exe_path, params_str
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (exe_path, params);
+        Err("runas 仅支持 Windows".to_string())
+    }
+}
+
 /// 在文件夹中定位一个文件（Windows Explorer 选中；macOS Finder reveal；Linux 打开父目录）。
 pub fn reveal_in_folder(file_path: &str) -> Result<(), String> {
     use std::path::Path;

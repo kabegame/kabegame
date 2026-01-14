@@ -15,3 +15,9 @@ pub mod storage;
 pub mod wallpaper_engine_export;
 #[cfg(target_os = "windows")]
 pub mod windows_effects;
+
+/// 虚拟盘（Windows Dokan）。
+///
+/// 注意：该模块仅在启用 feature `virtual-drive` 时编译，避免在不需要 VD 的 app（如 plugin-editor）里引入 Dokan 相关依赖。
+#[cfg(feature = "virtual-drive")]
+pub mod virtual_drive;

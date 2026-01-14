@@ -3,7 +3,7 @@
 //! - 根据平台导出不同的实现，但统一使用 `VirtualDriveService` 名称，保持代码稳定性。
 //! - 使用 trait 定义统一接口，但不用于动态分发（编译时多态）。
 
-use kabegame_core::storage::Storage;
+use crate::storage::Storage;
 use tauri::AppHandle;
 
 /// 虚拟盘服务 trait（定义所有平台必须实现的接口）
@@ -33,17 +33,23 @@ pub trait VirtualDriveServiceTrait: Default + Send + Sync {
     fn unmount(&self) -> Result<bool, String>;
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
 mod windows;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
 mod stub;
 
-#[cfg(target_os = "windows")]
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
 pub use windows::VirtualDriveService;
 
-#[cfg(target_os = "windows")]
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
 pub use windows::{join_mount_subdir, notify_explorer_dir_changed_path};
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+pub use windows::dokan_unmount_by_mount_point;
+
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+pub use windows::normalize_mount_point;
+
+#[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
 pub use stub::VirtualDriveService;

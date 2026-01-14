@@ -11,6 +11,7 @@ use clap::{Args, Parser, Subcommand};
 use kabegame_core::{
     crawler, kgpg,
     plugin::{ImportPreview, Plugin, PluginDetail, PluginManager, PluginManifest, VarDefinition},
+    providers,
     settings::Settings,
     storage::Storage,
 };
@@ -33,6 +34,10 @@ enum Commands {
     /// 插件相关命令
     #[command(subcommand)]
     Plugin(PluginCommands),
+
+    /// 虚拟盘（Windows Dokan）相关命令
+    #[command(subcommand)]
+    Vd(VdCommands),
 }
 
 #[derive(Subcommand, Debug)]
@@ -43,6 +48,43 @@ enum PluginCommands {
     Pack(PackPluginArgs),
     /// 导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
     Import(ImportPluginArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum VdCommands {
+    /// 提权 daemon：通过命名管道/本地 socket 提供 mount/unmount/status 服务（建议用 runas 启动）
+    Daemon,
+    /// 挂载虚拟盘（需要管理员权限；该命令会常驻直到被卸载）
+    Mount(VdMountArgs),
+    /// 卸载虚拟盘（需要管理员权限）
+    Unmount(VdUnmountArgs),
+    /// 检查挂载点是否可访问（非严格判定，仅用于脚本探测）
+    Status(VdStatusArgs),
+}
+
+#[derive(Args, Debug)]
+struct VdMountArgs {
+    /// 挂载点（例如 K:\\ 或 K: 或 K）
+    #[arg(long = "mount-point")]
+    mount_point: String,
+
+    /// 仅尝试挂载并立即退出（不推荐；默认会常驻作为 Dokan 服务端进程）
+    #[arg(long = "no-wait", default_value_t = false)]
+    no_wait: bool,
+}
+
+#[derive(Args, Debug)]
+struct VdUnmountArgs {
+    /// 挂载点（例如 K:\\ 或 K: 或 K）
+    #[arg(long = "mount-point")]
+    mount_point: String,
+}
+
+#[derive(Args, Debug)]
+struct VdStatusArgs {
+    /// 挂载点（例如 K:\\ 或 K: 或 K）
+    #[arg(long = "mount-point")]
+    mount_point: String,
 }
 
 #[derive(Args, Debug)]
@@ -108,6 +150,12 @@ fn main() {
             PluginCommands::Pack(args) => pack_plugin(args),
             PluginCommands::Import(args) => import_plugin(args),
         },
+        Commands::Vd(cmd) => match cmd {
+            VdCommands::Daemon => vd_daemon(),
+            VdCommands::Mount(args) => vd_mount(args),
+            VdCommands::Unmount(args) => vd_unmount(args),
+            VdCommands::Status(args) => vd_status(args),
+        },
     };
 
     if let Err(e) = res {
@@ -130,6 +178,19 @@ fn build_minimal_app() -> Result<tauri::App, String> {
                 .map_err(|e| format!("Failed to initialize storage: {}", e))?;
             app.manage(storage);
 
+            // 初始化 ProviderRuntime（虚拟盘/画廊 provider 浏览依赖）
+            // 与 app-main 启动逻辑一致：失败则 fallback 默认配置。
+            let rt = providers::ProviderRuntime::new(providers::ProviderCacheConfig::default())
+                .or_else(|e| {
+                    eprintln!(
+                        "[providers] init ProviderRuntime failed, fallback to default cfg: {}",
+                        e
+                    );
+                    providers::ProviderRuntime::new(providers::ProviderCacheConfig::default())
+                })
+                .map_err(|e| format!("ProviderRuntime init failed: {}", e))?;
+            app.manage(rt);
+
             // 初始化设置管理器（下载队列会读设置并发数等）
             let settings = Settings::new(app.app_handle().clone());
             app.manage(settings);
@@ -142,6 +203,157 @@ fn build_minimal_app() -> Result<tauri::App, String> {
         })
         .build(tauri::generate_context!())
         .map_err(|e| format!("Build tauri app failed: {}", e))
+}
+
+fn vd_mount(args: VdMountArgs) -> Result<(), String> {
+    #[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
+    {
+        let _ = args;
+        return Err("当前平台/构建未启用虚拟盘（virtual-drive）".to_string());
+    }
+
+    #[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+    {
+        use kabegame_core::virtual_drive::drive_service::VirtualDriveServiceTrait;
+
+        let app = build_minimal_app()?;
+        let storage = app.handle().state::<Storage>().inner().clone();
+
+        let drive = kabegame_core::virtual_drive::VirtualDriveService::default();
+        drive.mount(&args.mount_point, storage, app.handle().clone())?;
+
+        println!("mounted: {}", args.mount_point);
+
+        if args.no_wait {
+            return Ok(());
+        }
+
+        // Dokan 的用户态文件系统服务端需要常驻进程。
+        // 这里阻塞住，直到外部卸载（vd unmount）触发 mount loop 结束，或进程被终止。
+        loop {
+            std::thread::park();
+        }
+    }
+}
+
+fn vd_unmount(args: VdUnmountArgs) -> Result<(), String> {
+    #[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
+    {
+        let _ = args;
+        return Err("当前平台/构建未启用虚拟盘（virtual-drive）".to_string());
+    }
+
+    #[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+    {
+        let ok = kabegame_core::virtual_drive::drive_service::dokan_unmount_by_mount_point(
+            &args.mount_point,
+        )?;
+        if ok {
+            println!("unmounted: {}", args.mount_point);
+        } else {
+            println!("not mounted: {}", args.mount_point);
+        }
+        Ok(())
+    }
+}
+
+fn vd_status(args: VdStatusArgs) -> Result<(), String> {
+    let mp = args.mount_point.trim();
+    if mp.is_empty() {
+        return Err("mount_point 不能为空".to_string());
+    }
+
+    // 非严格：能 read_dir 则认为“可访问”
+    let p = std::path::PathBuf::from(mp);
+    match std::fs::read_dir(&p) {
+        Ok(_) => {
+            println!("ok");
+            Ok(())
+        }
+        Err(e) => Err(format!("not accessible: {}", e)),
+    }
+}
+
+fn vd_daemon() -> Result<(), String> {
+    #[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
+    {
+        return Err("vd daemon 目前仅用于 Windows virtual-drive 构建".to_string());
+    }
+
+    #[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+    {
+        use kabegame_core::virtual_drive::drive_service::VirtualDriveServiceTrait;
+        use kabegame_core::virtual_drive::ipc::{self, VdIpcRequest, VdIpcResponse};
+
+        use std::sync::Arc;
+
+        let app = build_minimal_app()?;
+        let storage = app.handle().state::<Storage>().inner().clone();
+        let drive = Arc::new(kabegame_core::virtual_drive::VirtualDriveService::default());
+        let app_handle = Arc::new(app.handle().clone());
+
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("create tokio runtime failed: {}", e))?;
+
+        // daemon：单线程处理请求即可（每个连接单次 request/response）
+        rt.block_on(async move {
+            ipc::serve(move |req| {
+                let storage = storage.clone();
+                let app_handle = app_handle.clone();
+                let drive = drive.clone();
+                async move {
+                    match req {
+                        VdIpcRequest::Mount { mount_point } => {
+                            match drive.mount(&mount_point, storage.clone(), (*app_handle).clone()) {
+                                Ok(()) => {
+                                    let mp = drive.current_mount_point().unwrap_or(mount_point);
+                                    VdIpcResponse {
+                                        ok: true,
+                                        message: Some("mounted".to_string()),
+                                        mounted: Some(true),
+                                        mount_point: Some(mp),
+                                    }
+                                }
+                                Err(e) => VdIpcResponse::err(e),
+                            }
+                        }
+                        VdIpcRequest::Unmount { mount_point } => {
+                            // 优先卸载本进程维护的挂载；若不一致则按 mount_point 强制卸载
+                            match drive.unmount() {
+                                Ok(true) => VdIpcResponse {
+                                    ok: true,
+                                    message: Some("unmounted".to_string()),
+                                    mounted: Some(false),
+                                    mount_point: Some(mount_point),
+                                },
+                                _ => match kabegame_core::virtual_drive::drive_service::dokan_unmount_by_mount_point(&mount_point) {
+                                    Ok(ok) => VdIpcResponse {
+                                        ok: true,
+                                        message: Some(if ok { "unmounted".to_string() } else { "not mounted".to_string() }),
+                                        mounted: Some(false),
+                                        mount_point: Some(mount_point),
+                                    },
+                                    Err(e) => VdIpcResponse::err(e),
+                                },
+                            }
+                        }
+                        VdIpcRequest::Status => {
+                            let mp = drive.current_mount_point();
+                            VdIpcResponse {
+                                ok: true,
+                                message: Some("status".to_string()),
+                                mounted: Some(mp.is_some()),
+                                mount_point: mp,
+                            }
+                        }
+                    }
+                }
+            })
+            .await
+        })?;
+
+        Ok(())
+    }
 }
 
 fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {

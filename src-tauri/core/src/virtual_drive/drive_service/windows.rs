@@ -6,11 +6,9 @@ use std::{
     time::Duration,
 };
 
-use kabegame_core::providers::plugin_display_name_from_manifest;
-use kabegame_core::providers::root::{
-    DIR_ALBUMS, DIR_ALL, DIR_BY_DATE, DIR_BY_PLUGIN, DIR_BY_TASK,
-};
-use kabegame_core::storage::Storage;
+use crate::providers::plugin_display_name_from_manifest;
+use crate::providers::root::{DIR_ALBUMS, DIR_ALL, DIR_BY_DATE, DIR_BY_PLUGIN, DIR_BY_TASK};
+use crate::storage::Storage;
 use tauri::AppHandle;
 use widestring::U16CString;
 use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_UPDATEDIR, SHCNF_PATHW};
@@ -289,7 +287,7 @@ impl Drop for VirtualDriveService {
 }
 
 /// 规范化挂载点（Windows 特定：处理 `K:` -> `K:\`）
-fn normalize_mount_point(input: &str) -> Result<String, String> {
+pub fn normalize_mount_point(input: &str) -> Result<String, String> {
     let s = input.trim();
     if s.is_empty() {
         return Err("mount_point 不能为空".to_string());
@@ -304,6 +302,17 @@ fn normalize_mount_point(input: &str) -> Result<String, String> {
         return Ok(format!("{}\\", s.to_uppercase()));
     }
     Ok(s.to_string())
+}
+
+/// 通过挂载点直接卸载（不依赖 VirtualDriveService 实例状态）。
+///
+/// 说明：
+/// - 设计给提权 helper（kabegame-cli vd unmount）使用；
+/// - Windows 下卸载通常也需要管理员权限。
+pub fn dokan_unmount_by_mount_point(mount_point: &str) -> Result<bool, String> {
+    let mount_point = normalize_mount_point(mount_point)?;
+    let mp = U16CString::from_str(&mount_point).map_err(|_| "mount_point 编码失败".to_string())?;
+    Ok(dokan::unmount(mp.as_ucstr()))
 }
 
 /// 拼接挂载点子目录（Windows 特定：使用 `\` 分隔符）

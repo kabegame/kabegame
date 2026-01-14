@@ -1,26 +1,11 @@
 <template>
   <div class="album-drive-setting">
-    <el-switch
-      v-model="enabled"
-      :loading="switchLoading"
-      :disabled="!IS_WINDOWS"
-      @change="handleToggle"
-    />
+    <el-switch v-model="enabled" :loading="switchLoading" :disabled="!IS_WINDOWS" @change="handleToggle" />
 
-    <el-input
-      v-model="mountPoint"
-      class="mount-point-input"
-      size="default"
-      :disabled="enabled || switchLoading"
-      placeholder="例如 K:\\ 或 K:"
-      @blur="handleMountPointBlur"
-    />
+    <el-input v-model="mountPoint" class="mount-point-input" size="default" :disabled="enabled || switchLoading"
+      placeholder="例如 K:\\ 或 K:" @blur="handleMountPointBlur" />
 
-    <el-button
-      v-if="enabled"
-      :disabled="switchLoading"
-      @click="openExplorer"
-    >
+    <el-button v-if="enabled" :disabled="switchLoading" @click="openExplorer">
       打开
     </el-button>
   </div>
@@ -107,7 +92,7 @@ const handleToggle = async (val: boolean) => {
       settingsStore.values.albumDriveEnabled = true;
       ElMessage.success("画册盘已开启");
     } else {
-      await invoke("unmount_virtual_drive");
+      await invoke("unmount_virtual_drive", { mountPoint: mp });
       await invoke("set_album_drive_enabled", { enabled: false });
       settingsStore.values.albumDriveEnabled = false;
       ElMessage.success("画册盘已关闭");
@@ -133,4 +118,3 @@ const handleToggle = async (val: boolean) => {
   width: 180px;
 }
 </style>
-

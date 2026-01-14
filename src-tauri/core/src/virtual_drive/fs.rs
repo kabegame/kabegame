@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use kabegame_core::{providers::provider::Provider, storage::Storage};
+use crate::{providers::provider::Provider, storage::Storage};
 use tauri::AppHandle;
 
 /// Kabegame 虚拟文件系统 Handler（Dokan 实现）

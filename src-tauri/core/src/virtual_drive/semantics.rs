@@ -12,7 +12,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use kabegame_core::{
+use crate::{
     providers::provider::{
         DeleteChildKind, DeleteChildMode, FsEntry, Provider, ResolveResult, VdOpsContext,
     },

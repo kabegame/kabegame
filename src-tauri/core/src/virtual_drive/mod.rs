@@ -2,10 +2,11 @@
 //!
 //! - 具体平台实现放在子模块中：Windows 使用 Dokan；其他平台暂提供 no-op/stub，便于后续扩展。
 
-#[cfg(target_os = "windows")]
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
 mod windows;
 
 pub mod drive_service;
+pub mod ipc;
 mod fs;
 mod semantics;
 #[cfg(all(feature = "virtual-drive", target_os = "windows"))]

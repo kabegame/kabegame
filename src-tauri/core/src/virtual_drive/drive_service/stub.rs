@@ -1,6 +1,6 @@
 //! 非 Windows 平台的占位实现：后续可替换为 Linux/macOS 对应实现。
 
-use kabegame_core::storage::Storage;
+use crate::storage::Storage;
 use tauri::AppHandle;
 
 use super::VirtualDriveServiceTrait;
