@@ -42,6 +42,11 @@
             <span style="margin-left: 4px;">删除画册</span>
           </el-button>
           <TaskDrawerButton />
+          <el-button @click="openHelpDrawer" circle title="帮助">
+            <el-icon>
+              <QuestionFilled />
+            </el-icon>
+          </el-button>
           <el-button @click="openQuickSettings" circle>
             <el-icon>
               <Setting />
@@ -88,7 +93,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Picture, Delete, Setting, Refresh } from "@element-plus/icons-vue";
+import { Picture, Delete, Setting, Refresh, QuestionFilled } from "@element-plus/icons-vue";
 import { Warning, CircleClose } from "@element-plus/icons-vue";
 import AlbumImageContextMenu from "@/components/contextMenu/AlbumImageContextMenu.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
@@ -102,6 +107,7 @@ import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_WINDOWS } from "@kabegame/core/env";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
+import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useGallerySettings } from "@/composables/useGallerySettings";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
@@ -124,6 +130,8 @@ const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
+const helpDrawer = useHelpDrawerStore();
+const openHelpDrawer = () => helpDrawer.open("albumdetail");
 
 // 虚拟磁盘
 const albumDriveEnabled = computed(() => IS_WINDOWS && !!settingsStore.values.albumDriveEnabled);

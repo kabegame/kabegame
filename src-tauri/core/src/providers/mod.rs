@@ -15,15 +15,29 @@ pub mod factory;
 pub mod root;
 
 pub mod albums;
-pub mod all;
+pub mod common;
 pub mod date_group;
 
 pub mod plugin_group;
 pub mod task_group;
 
+// VD 专属的 providers 行为（mkdir/delete/说明文件等）放在 core 的 providers 内部，
+// 通过 `virtual-drive` feature gate 控制，仅 app-main 会开启该 feature。
+#[cfg(feature = "virtual-drive")]
+pub(crate) mod vd_ops;
+
+/// 虚拟盘专用：从插件包（`.kgpg`）读取插件显示名（用于“按任务”目录名展示）。
+///
+/// - 返回 `None` 表示找不到或为空。
+/// - 该函数仅在开启 `virtual-drive` feature 时可用。
+#[cfg(feature = "virtual-drive")]
+pub fn plugin_display_name_from_manifest(plugin_id: &str) -> Option<String> {
+    vd_ops::plugin_display_name_from_manifest(plugin_id)
+}
+
 pub use albums::AlbumsProvider;
-pub use all::AllProvider;
 pub use cache::{ProviderCacheConfig, ProviderRuntime};
+pub use common::CommonProvider;
 pub use date_group::DateGroupProvider;
 pub use date_group::DateRangeRootProvider;
 pub use descriptor::ProviderDescriptor;

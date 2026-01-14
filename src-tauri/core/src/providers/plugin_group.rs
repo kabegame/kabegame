@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::providers::all::AllProvider;
+use crate::providers::common::CommonProvider;
 use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
@@ -33,15 +33,31 @@ impl Provider for PluginGroupProvider {
         let groups = storage.get_gallery_plugin_groups()?;
         let mut out: Vec<FsEntry> = groups
             .into_iter()
-            .map(|g| FsEntry::dir(g.plugin_id))
+            .map(|g| {
+                #[cfg(feature = "virtual-drive")]
+                let plugin_name =
+                    crate::providers::vd_ops::plugin_display_name_from_manifest(&g.plugin_id)
+                        .unwrap_or_else(|| String::new());
+
+                #[cfg(not(feature = "virtual-drive"))]
+                let plugin_name = String::new();
+
+                let plugin_name = plugin_name.trim().to_string();
+                if plugin_name.is_empty() {
+                    FsEntry::dir(g.plugin_id)
+                } else {
+                    FsEntry::dir(format!("{} - {}", plugin_name, g.plugin_id))
+                }
+            })
             .collect();
 
         // VD 专用：目录说明文件
         #[cfg(feature = "virtual-drive")]
         {
-            let display_name = "这里记录了不同插件安装的所有图片";
+            // NOTE: 必须带扩展名，否则某些图片查看器/Explorer 枚举同目录文件时会尝试"打开"该说明文件并弹出错误。
+            let display_name = "这里记录了不同插件安装的所有图片.txt";
             let (id, path) =
-                crate::virtual_drive::ops::ensure_note_file(display_name, display_name)?;
+                crate::providers::vd_ops::ensure_note_file(display_name, display_name)?;
             out.insert(0, FsEntry::file(display_name, id, path));
         }
 
@@ -49,21 +65,30 @@ impl Provider for PluginGroupProvider {
     }
 
     fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
+        // name 可能为 "{plugin_name} - {plugin_id}" 或纯 plugin_id
+        let plugin_id = name
+            .rsplit_once(" - ")
+            .map(|(_, id)| id)
+            .unwrap_or(name)
+            .trim();
+        if plugin_id.is_empty() {
+            return None;
+        }
         // 验证插件是否存在
         let groups = storage.get_gallery_plugin_groups().ok()?;
         let plugin = groups
             .into_iter()
-            .find(|g| g.plugin_id.eq_ignore_ascii_case(name))?;
+            .find(|g| g.plugin_id.eq_ignore_ascii_case(plugin_id))?;
         Some(Arc::new(PluginImagesProvider::new(plugin.plugin_id)))
     }
 
     #[cfg(feature = "virtual-drive")]
     fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
-        let display_name = "这里记录了不同插件安装的所有图片";
+        let display_name = "这里记录了不同插件安装的所有图片.txt";
         if name != display_name {
             return None;
         }
-        crate::virtual_drive::ops::ensure_note_file(display_name, display_name)
+        crate::providers::vd_ops::ensure_note_file(display_name, display_name)
             .ok()
             .map(|(id, path)| (id, path))
     }
@@ -72,12 +97,12 @@ impl Provider for PluginGroupProvider {
 /// 单个插件的图片 Provider - 委托给 AllProvider 处理分页
 pub struct PluginImagesProvider {
     plugin_id: String,
-    inner: AllProvider,
+    inner: CommonProvider,
 }
 
 impl PluginImagesProvider {
     pub fn new(plugin_id: String) -> Self {
-        let inner = AllProvider::with_query(ImageQuery::by_plugin(plugin_id.clone()));
+        let inner = CommonProvider::with_query(ImageQuery::by_plugin(plugin_id.clone()));
         Self { plugin_id, inner }
     }
 }

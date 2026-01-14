@@ -20,6 +20,11 @@
         </el-icon>
         导入源
       </el-button>
+      <el-button @click="openHelpDrawer" circle title="帮助">
+        <el-icon>
+          <QuestionFilled />
+        </el-icon>
+      </el-button>
       <el-button @click="openQuickSettings" circle>
         <el-icon>
           <Setting />
@@ -263,6 +268,7 @@ import {
   Grid,
   Plus,
   Setting,
+  QuestionFilled,
   EditPen,
   Loading,
 } from "@element-plus/icons-vue";
@@ -274,6 +280,7 @@ import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
+import { useHelpDrawerStore } from "@/stores/helpDrawer";
 
 type BuildMode = "normal" | "local";
 
@@ -327,6 +334,8 @@ const pluginStore = usePluginStore();
 const router = useRouter();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("pluginbrowser");
+const helpDrawer = useHelpDrawerStore();
+const openHelpDrawer = () => helpDrawer.open("pluginbrowser");
 
 const buildMode = ref<BuildMode>(
   import.meta.env.VITE_KABEGAME_MODE === "local" ? "local" : "normal"

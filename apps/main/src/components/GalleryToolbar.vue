@@ -9,10 +9,10 @@
           <Refresh />
         </el-icon>
       </el-button>
-      <el-date-picker class="date-range-filter" :model-value="dateRangeProxy" type="daterange" unlink-panels
+      <!-- <el-date-picker class="date-range-filter" :model-value="dateRangeProxy" type="daterange" unlink-panels
         range-separator="~" start-placeholder="开始日期" end-placeholder="结束日期" format="YYYY-MM-DD"
         value-format="YYYY-MM-DD" :clearable="true" :disabled="monthLoading"
-        @update:model-value="(v: [string, string] | null) => (dateRangeProxy = v)" />
+        @update:model-value="(v: [string, string] | null) => (dateRangeProxy = v)" /> -->
       <div class="dedupe-stack">
         <el-tooltip :content="dedupeTooltipText" placement="bottom" :disabled="!dedupeLoading">
           <!-- Tooltip 对 disabled button 不生效，需要包一层 -->
@@ -38,7 +38,12 @@
         </div>
       </div>
     </template>
-    <el-button @click="$emit('showQuickSettings')" circle>
+    <el-button @click="$emit('showHelp')" circle title="帮助">
+      <el-icon>
+        <QuestionFilled />
+      </el-icon>
+    </el-button>
+    <el-button @click="$emit('showQuickSettings')" circle title="快捷设置">
       <el-icon>
         <Setting />
       </el-icon>
@@ -55,7 +60,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Refresh, Plus, Filter, Setting, Close } from "@element-plus/icons-vue";
+import { Refresh, Plus, Filter, Setting, Close, QuestionFilled } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 
@@ -105,6 +110,7 @@ const emit = defineEmits<{
   refresh: [];
   dedupeByHash: [];
   cancelDedupe: [];
+  showHelp: [];
   showQuickSettings: [];
   showCrawlerDialog: [];
   "update:selectedRange": [value: [string, string] | null];

@@ -2,6 +2,7 @@
 
 use rusqlite::{params, params_from_iter, ToSql};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 
 use crate::storage::Storage;
@@ -83,7 +84,7 @@ impl ImageQuery {
         }
     }
 
-    /// 全部图片（按时间排序）
+    /// 全部图片（按时间排序，用于 CommonProvider）
     pub fn all_recent() -> Self {
         Self {
             // 与前端画廊 `get_images_range` 对齐：优先按 order，其次 crawled_at
@@ -118,15 +119,66 @@ pub struct DateGroup {
     pub count: usize,
 }
 
-/// 画廊图片条目（用于虚拟磁盘）
+/// 画廊图片条目
 #[derive(Debug, Clone)]
 pub struct GalleryImageFsEntry {
     pub file_name: String,
     pub image_id: String,
     pub resolved_path: String,
+    /// 画廊排序时间戳：`COALESCE(images."order", images.crawled_at)`
+    pub gallery_ts: u64,
 }
 
 impl Storage {
+    /// 批量获取图片的“画廊排序时间戳”（用于虚拟盘/画廊一致的时间显示）。
+    ///
+    /// 返回 map：`image_id -> ts`，其中 `ts = COALESCE(images."order", images.crawled_at)`。
+    pub fn get_images_gallery_ts_by_ids(
+        &self,
+        image_ids: &[String],
+    ) -> Result<HashMap<String, u64>, String> {
+        let mut out: HashMap<String, u64> = HashMap::new();
+        if image_ids.is_empty() {
+            return Ok(out);
+        }
+
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        // IN (?, ?, ...) 动态占位符
+        let placeholders = std::iter::repeat("?")
+            .take(image_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT CAST(images.id AS TEXT) as id, COALESCE(images.\"order\", images.crawled_at) as ts
+             FROM images
+             WHERE images.id IN ({})",
+            placeholders
+        );
+
+        let params: Vec<&dyn ToSql> = image_ids.iter().map(|s| s as &dyn ToSql).collect();
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("Failed to prepare query: {} (SQL: {})", e, sql))?;
+
+        let rows = stmt
+            .query_map(params_from_iter(params.iter().copied()), |row| {
+                let id: String = row.get(0)?;
+                let ts: i64 = row.get(1)?;
+                Ok((id, ts))
+            })
+            .map_err(|e| format!("Failed to query images: {}", e))?;
+
+        for r in rows {
+            let (id, ts) = r.map_err(|e| format!("Failed to read row: {}", e))?;
+            if ts >= 0 {
+                out.insert(id, ts as u64);
+            }
+        }
+
+        Ok(out)
+    }
+
     /// 获取所有插件分组及其图片数量
     pub fn get_gallery_plugin_groups(&self) -> Result<Vec<PluginGroup>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -195,7 +247,7 @@ impl Storage {
         Ok(groups)
     }
 
-    /// 获取符合条件的图片总数（用于 AllProvider）
+    /// 获取符合条件的图片总数（用于 CommonProvider）
     pub fn get_images_count_by_query(&self, query: &ImageQuery) -> Result<usize, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
@@ -213,7 +265,7 @@ impl Storage {
         Ok(count as usize)
     }
 
-    /// 获取符合条件的图片条目（分页，用于 AllProvider）
+    /// 获取符合条件的图片条目（分页，用于 CommonProvider）
     pub fn get_images_fs_entries_by_query(
         &self,
         query: &ImageQuery,
@@ -223,7 +275,11 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let sql = format!(
-            "SELECT CAST(images.id AS TEXT), images.local_path, images.thumbnail_path
+            "SELECT
+                CAST(images.id AS TEXT),
+                images.local_path,
+                images.thumbnail_path,
+                COALESCE(images.\"order\", images.crawled_at) as gallery_ts
              FROM images {} LIMIT ? OFFSET ?",
             query.decorator
         );
@@ -248,13 +304,14 @@ impl Storage {
                 let id: String = row.get(0)?;
                 let local_path: String = row.get(1)?;
                 let thumb_path: String = row.get(2)?;
-                Ok((id, local_path, thumb_path))
+                let gallery_ts: i64 = row.get(3)?;
+                Ok((id, local_path, thumb_path, gallery_ts))
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
 
         let mut entries = Vec::new();
         for r in rows {
-            let (id, local_path, thumb_path) =
+            let (id, local_path, thumb_path, gallery_ts) =
                 r.map_err(|e| format!("Failed to read row: {}", e))?;
             // 文件存在
             let resolved_path = if fs::metadata(&local_path).is_ok() {
@@ -283,6 +340,11 @@ impl Storage {
                 file_name,
                 image_id: id,
                 resolved_path,
+                gallery_ts: if gallery_ts >= 0 {
+                    gallery_ts as u64
+                } else {
+                    0
+                },
             });
         }
         Ok(entries)

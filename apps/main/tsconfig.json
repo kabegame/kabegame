@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "baseUrl": ".",
+    "noFallthroughCasesInSwitch": false,
     "paths": {
       "@/*": ["src/*"],
       "@kabegame/core/*": ["../../packages/core/src/*"],

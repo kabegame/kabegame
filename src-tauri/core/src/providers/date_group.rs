@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use crate::providers::all::AllProvider;
+use crate::providers::common::CommonProvider;
+use crate::providers::provider::ResolveChild;
 use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 use std::path::PathBuf;
-use crate::providers::provider::ResolveChild;
 
 const DIR_RANGE: &str = "范围";
 
@@ -45,9 +45,10 @@ impl Provider for DateGroupProvider {
         // VD 专用：目录说明文件
         #[cfg(feature = "virtual-drive")]
         {
-            let display_name = "这里按抓取时间归档图片（按月份分组）";
+            // NOTE: 必须带扩展名，否则某些图片查看器/Explorer 枚举同目录文件时会尝试“打开”该说明文件并弹出错误。
+            let display_name = "这里按抓取时间归档图片（按月份分组）.txt";
             let (id, path) =
-                crate::virtual_drive::ops::ensure_note_file(display_name, display_name)?;
+                crate::providers::vd_ops::ensure_note_file(display_name, display_name)?;
             out.insert(0, FsEntry::file(display_name, id, path));
         }
 
@@ -68,11 +69,11 @@ impl Provider for DateGroupProvider {
 
     #[cfg(feature = "virtual-drive")]
     fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
-        let display_name = "这里按抓取时间归档图片（按月份分组）";
+        let display_name = "这里按抓取时间归档图片（按月份分组）.txt";
         if name != display_name {
             return None;
         }
-        crate::virtual_drive::ops::ensure_note_file(display_name, display_name)
+        crate::providers::vd_ops::ensure_note_file(display_name, display_name)
             .ok()
             .map(|(id, path)| (id, path))
     }
@@ -102,7 +103,9 @@ impl Provider for DateRangeRootProvider {
         let Some((start, end)) = parse_range_name(name) else {
             return ResolveChild::NotFound;
         };
-        ResolveChild::Dynamic(Arc::new(DateRangeImagesProvider::new(start, end)) as Arc<dyn Provider>)
+        ResolveChild::Dynamic(
+            Arc::new(DateRangeImagesProvider::new(start, end)) as Arc<dyn Provider>
+        )
     }
 }
 
@@ -135,12 +138,12 @@ fn parse_range_name(s: &str) -> Option<(String, String)> {
 pub struct DateRangeImagesProvider {
     start_ymd: String,
     end_ymd: String,
-    inner: AllProvider,
+    inner: CommonProvider,
 }
 
 impl DateRangeImagesProvider {
     pub fn new(start_ymd: String, end_ymd: String) -> Self {
-        let inner = AllProvider::with_query(ImageQuery::by_date_range(
+        let inner = CommonProvider::with_query(ImageQuery::by_date_range(
             start_ymd.clone(),
             end_ymd.clone(),
         ));
@@ -175,12 +178,12 @@ impl Provider for DateRangeImagesProvider {
 /// 单个日期的图片 Provider - 委托给 AllProvider 处理分页
 pub struct DateImagesProvider {
     year_month: String,
-    inner: AllProvider,
+    inner: CommonProvider,
 }
 
 impl DateImagesProvider {
     pub fn new(year_month: String) -> Self {
-        let inner = AllProvider::with_query(ImageQuery::by_date(year_month.clone()));
+        let inner = CommonProvider::with_query(ImageQuery::by_date(year_month.clone()));
         Self { year_month, inner }
     }
 }

@@ -1,10 +1,10 @@
+use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::storage::{Storage, FAVORITE_ALBUM_ID, default_true};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -392,8 +392,14 @@ impl Storage {
         conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
             .map_err(|e| format!("Failed to delete image from DB: {}", e))?;
 
-        let _ = conn.execute("DELETE FROM album_images WHERE image_id = ?1", params![image_id]);
-        let _ = conn.execute("DELETE FROM task_images WHERE image_id = ?1", params![image_id]);
+        let _ = conn.execute(
+            "DELETE FROM album_images WHERE image_id = ?1",
+            params![image_id],
+        );
+        let _ = conn.execute(
+            "DELETE FROM task_images WHERE image_id = ?1",
+            params![image_id],
+        );
 
         self.invalidate_images_total_cache();
 
@@ -406,8 +412,14 @@ impl Storage {
         conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
             .map_err(|e| format!("Failed to remove image from DB: {}", e))?;
 
-        let _ = conn.execute("DELETE FROM album_images WHERE image_id = ?1", params![image_id]);
-        let _ = conn.execute("DELETE FROM task_images WHERE image_id = ?1", params![image_id]);
+        let _ = conn.execute(
+            "DELETE FROM album_images WHERE image_id = ?1",
+            params![image_id],
+        );
+        let _ = conn.execute(
+            "DELETE FROM task_images WHERE image_id = ?1",
+            params![image_id],
+        );
 
         self.invalidate_images_total_cache();
 
@@ -420,7 +432,9 @@ impl Storage {
         }
 
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let tx = conn.transaction().map_err(|e| format!("Failed to start transaction: {}", e))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {}", e))?;
 
         for id in image_ids {
             let local_path: Option<String> = tx
@@ -443,7 +457,8 @@ impl Storage {
             let _ = tx.execute("DELETE FROM task_images WHERE image_id = ?1", params![id]);
         }
 
-        tx.commit().map_err(|e| format!("Failed to commit transaction: {}", e))?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
         self.invalidate_images_total_cache();
 
@@ -456,7 +471,9 @@ impl Storage {
         }
 
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let tx = conn.transaction().map_err(|e| format!("Failed to start transaction: {}", e))?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {}", e))?;
 
         for id in image_ids {
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])
@@ -466,7 +483,8 @@ impl Storage {
             let _ = tx.execute("DELETE FROM task_images WHERE image_id = ?1", params![id]);
         }
 
-        tx.commit().map_err(|e| format!("Failed to commit transaction: {}", e))?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
         self.invalidate_images_total_cache();
 
@@ -509,7 +527,6 @@ impl Storage {
         .map_err(|e| format!("Failed to update thumbnail path: {}", e))?;
         Ok(())
     }
-
 
     pub fn pick_existing_gallery_image_id(&self, mode: &str) -> Result<Option<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;

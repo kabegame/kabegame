@@ -10,13 +10,6 @@ pub mod providers;
 pub mod settings;
 pub mod shell_open;
 pub mod storage;
-#[cfg(feature = "tray")]
-pub mod tray;
-// 非windows也可以有虚拟盘
-#[cfg(feature = "virtual-drive")]
-pub mod virtual_drive;
-#[cfg(feature = "wallpaper")]
-pub mod wallpaper;
 // 只有 Windows 平台需要导出 wallpaper_engine_export 模块
 #[cfg(target_os = "windows")]
 pub mod wallpaper_engine_export;

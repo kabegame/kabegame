@@ -17,14 +17,19 @@ use windows_sys::Win32::{
 #[cfg(target_os = "windows")]
 const CF_HDROP_FORMAT: u32 = 15; // Clipboard format for file drop
 
+mod storage;
+#[cfg(feature = "tray")]
+mod tray;
+mod wallpaper;
+
 // Workspace 重构：主应用不再在本 crate 内定义这些模块，而是从 `kabegame-core` 复用。
 use crawler::ActiveDownloadInfo;
-use kabegame_core::{crawler, dedupe, plugin, settings, storage, tray, wallpaper};
+use kabegame_core::settings::{AppSettings, Settings, WindowState};
+use kabegame_core::{crawler, dedupe, plugin};
 use plugin::{
     BrowserPlugin, ImportPreview, Plugin, PluginDetail, PluginManager, PluginSource,
     StorePluginResolved, StoreSourceValidationResult,
 };
-use settings::{AppSettings, Settings, WindowState};
 use std::fs;
 #[cfg(debug_assertions)]
 use storage::dedupe::DebugCloneImagesResult;
@@ -33,10 +38,14 @@ use storage::{Album, ImageInfo, RunConfig, Storage, TaskInfo};
 use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
 
 use dedupe::DedupeManager;
-#[cfg(target_os = "windows")]
-use kabegame_core::virtual_drive::VirtualDriveService;
+
 #[cfg(target_os = "windows")]
 use kabegame_core::wallpaper_engine_export::{WeExportOptions, WeExportResult};
+#[cfg(feature = "virtual-drive")]
+mod virtual_drive;
+// 导入trait保证可用
+#[cfg(feature = "virtual-drive")]
+use virtual_drive::{drive_service::VirtualDriveServiceTrait, VirtualDriveService};
 
 // 任务失败图片（用于 TaskDetail 展示 + 重试）
 use storage::albums::AddToAlbumResult;
@@ -363,7 +372,7 @@ fn add_album(
     app: tauri::AppHandle,
     name: String,
     state: tauri::State<Storage>,
-    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
+    drive: tauri::State<VirtualDriveService>,
 ) -> Result<Album, String> {
     let album = state.add_album(&name)?;
     let _ = app.emit(
@@ -413,7 +422,7 @@ fn rename_album(
 
 // --- Windows 虚拟盘（Dokan） ---
 
-#[cfg(target_os = "windows")]
+#[cfg(feature = "virtual-drive")]
 #[tauri::command]
 fn mount_virtual_drive(
     app: tauri::AppHandle,
@@ -424,13 +433,13 @@ fn mount_virtual_drive(
     drive.mount(&mount_point, storage.inner().clone(), app)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(feature = "virtual-drive")]
 #[tauri::command]
 fn unmount_virtual_drive(drive: tauri::State<VirtualDriveService>) -> Result<bool, String> {
     drive.unmount()
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(feature = "virtual-drive")]
 #[tauri::command]
 fn mount_virtual_drive_and_open_explorer(
     app: tauri::AppHandle,
@@ -447,6 +456,7 @@ fn mount_virtual_drive_and_open_explorer(
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
 #[tauri::command]
 fn open_explorer(path: String) -> Result<(), String> {
     kabegame_core::shell_open::open_explorer(&path)
@@ -457,7 +467,7 @@ fn delete_album(
     app: tauri::AppHandle,
     album_id: String,
     state: tauri::State<Storage>,
-    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
+    #[cfg(feature = "virtual-drive")] drive: tauri::State<VirtualDriveService>,
 ) -> Result<(), String> {
     state.delete_album(&album_id)?;
     let _ = app.emit(
@@ -466,7 +476,7 @@ fn delete_album(
             "reason": "delete"
         }),
     );
-    #[cfg(target_os = "windows")]
+    #[cfg(feature = "virtual-drive")]
     {
         drive.bump_albums();
     }
@@ -1112,26 +1122,18 @@ fn get_favorite_album_id() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn set_restore_last_tab(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_restore_last_tab(enabled)
-}
-
-#[tauri::command]
+#[cfg(feature = "virtual-drive")]
 fn set_album_drive_enabled(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
     state.set_album_drive_enabled(enabled)
 }
 
 #[tauri::command]
+#[cfg(feature = "virtual-drive")]
 fn set_album_drive_mount_point(
     mount_point: String,
     state: tauri::State<Settings>,
 ) -> Result<(), String> {
     state.set_album_drive_mount_point(mount_point)
-}
-
-#[tauri::command]
-fn set_last_tab_path(path: Option<String>, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_last_tab_path(path)
 }
 
 #[tauri::command]
@@ -2622,7 +2624,61 @@ fn startup_step_manage_virtual_drive_service(app: &mut tauri::App) {
     // Windows：虚拟盘服务（Dokan）
     #[cfg(target_os = "windows")]
     {
+        use tauri::Listener;
+        use tauri::Manager;
+
         app.manage(VirtualDriveService::default());
+
+        // 通过后端事件监听把“数据变更”转成“Explorer 刷新”，避免 core 直接依赖 VD。
+        let app_handle = app.app_handle().clone();
+        // 1) 画册内容变更：刷新对应画册目录
+        let app_handle_album_images = app_handle.clone();
+        let _album_images_listener = app_handle.listen("album-images-changed", move |event| {
+            let payload = event.payload();
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+                return;
+            };
+            let Some(album_id) = v.get("albumId").and_then(|x| x.as_str()) else {
+                return;
+            };
+            let drive = app_handle_album_images.state::<VirtualDriveService>();
+            let storage = app_handle_album_images.state::<Storage>();
+            drive.notify_album_dir_changed(storage.inner(), album_id);
+        });
+
+        // 2) 画册列表变更：刷新画册子树（新增/删除/重命名等）
+        let app_handle_albums = app_handle.clone();
+        let _albums_listener = app_handle.listen("albums-changed", move |_event: tauri::Event| {
+            let drive = app_handle_albums.state::<VirtualDriveService>();
+            drive.bump_albums();
+        });
+
+        // 3) 任务列表变更：刷新按任务子树（删除任务等）
+        let app_handle_tasks = app_handle.clone();
+        let _tasks_listener = app_handle.listen("tasks-changed", move |_event: tauri::Event| {
+            let drive = app_handle_tasks.state::<VirtualDriveService>();
+            drive.bump_tasks();
+        });
+
+        // 4) 任务运行中新增图片：刷新“按任务”根目录 + 对应任务目录（Explorer 正在浏览该目录时可见更新）
+        let app_handle_task_images = app_handle.clone();
+        let _task_images_listener = app_handle.listen("image-added", move |event: tauri::Event| {
+            let payload = event.payload();
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+                return;
+            };
+            let Some(task_id) = v.get("taskId").and_then(|x| x.as_str()) else {
+                return;
+            };
+            let task_id = task_id.trim();
+            if task_id.is_empty() {
+                return;
+            }
+            let drive = app_handle_task_images.state::<VirtualDriveService>();
+            let storage = app_handle_task_images.state::<Storage>();
+            drive.notify_task_dir_changed(storage.inner(), task_id);
+            drive.notify_gallery_tree_changed();
+        });
     }
 }
 
@@ -2632,34 +2688,32 @@ fn startup_step_manage_settings(app: &mut tauri::App) {
     app.manage(settings);
 }
 
+#[cfg(feature = "virtual-drive")]
 fn startup_step_auto_mount_album_drive(app: &tauri::AppHandle) {
-    // Windows：按设置自动挂载画册盘（不自动弹出 Explorer）
+    // 按设置自动挂载画册盘（不自动弹出 Explorer）
     // 注意：挂载操作可能耗时（尤其是首次挂载或 Dokan 驱动初始化），放到后台线程避免阻塞启动
-    #[cfg(target_os = "windows")]
-    {
-        let settings = app.state::<Settings>().get_settings().ok();
-        if let Some(s) = settings {
-            if s.album_drive_enabled {
-                let mount_point = s.album_drive_mount_point.clone();
-                let storage = app.state::<Storage>().inner().clone();
-                let app_handle = app.clone();
+    let settings = app.state::<Settings>().get_settings().ok();
+    if let Some(s) = settings {
+        if s.album_drive_enabled {
+            let mount_point = s.album_drive_mount_point.clone();
+            let storage = app.state::<Storage>().inner().clone();
+            let app_handle = app.clone();
 
-                // 在后台线程中执行挂载，避免阻塞主线程
-                tauri::async_runtime::spawn(async move {
-                    // 稍等片刻确保所有服务已初始化完成
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            // 在后台线程中执行挂载，避免阻塞主线程
+            tauri::async_runtime::spawn(async move {
+                // 稍等片刻确保所有服务已初始化完成
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-                    let drive = app_handle.state::<VirtualDriveService>();
-                    match drive.mount(&mount_point, storage, app_handle.clone()) {
-                        Ok(_) => {
-                            println!("启动时自动挂载画册盘成功: {}", mount_point);
-                        }
-                        Err(e) => {
-                            eprintln!("启动时自动挂载画册盘失败: {} (挂载点: {})", e, mount_point);
-                        }
+                let drive = app_handle.state::<VirtualDriveService>();
+                match drive.mount(&mount_point, storage, app_handle.clone()) {
+                    Ok(_) => {
+                        println!("启动时自动挂载画册盘成功: {}", mount_point);
                     }
-                });
-            }
+                    Err(e) => {
+                        eprintln!("启动时自动挂载画册盘失败: {} (挂载点: {})", e, mount_point);
+                    }
+                }
+            });
         }
     }
 }
@@ -2807,10 +2861,12 @@ fn main() {
             let is_cleaning_data = startup_step_cleanup_user_data_if_marked();
             startup_step_manage_plugin_manager(app);
             startup_step_manage_storage(app)?;
+            #[cfg(feature = "virtual-drive")]
             startup_step_manage_virtual_drive_service(app);
             startup_step_manage_provider_runtime(app);
             startup_step_manage_settings(app);
             startup_step_warm_provider_cache(app.app_handle());
+            #[cfg(feature = "virtual-drive")]
             startup_step_auto_mount_album_drive(app.app_handle());
             startup_step_manage_dedupe_manager(app);
             startup_step_restore_main_window_state(app.app_handle(), is_cleaning_data);
@@ -2859,12 +2915,13 @@ fn main() {
             get_album_preview,
             get_album_counts,
             // Windows 虚拟盘
-            #[cfg(target_os = "windows")]
+            #[cfg(feature = "virtual-drive")]
             mount_virtual_drive,
-            #[cfg(target_os = "windows")]
+            #[cfg(feature = "virtual-drive")]
             unmount_virtual_drive,
-            #[cfg(target_os = "windows")]
+            #[cfg(feature = "virtual-drive")]
             mount_virtual_drive_and_open_explorer,
+            // TODO: 跨平台实现
             #[cfg(target_os = "windows")]
             open_explorer,
             get_images_count,
@@ -2933,10 +2990,6 @@ fn main() {
             set_wallpaper_style,
             set_wallpaper_rotation_transition,
             set_wallpaper_mode,
-            set_restore_last_tab,
-            set_last_tab_path,
-            set_restore_last_tab,
-            set_last_tab_path,
             get_wallpaper_rotator_status,
             get_native_wallpaper_styles,
             #[cfg(target_os = "windows")]

@@ -10,6 +10,8 @@
     <ImportConfirmDialog ref="importConfirmDialogRef" />
     <!-- 全局唯一的快捷设置抽屉（避免多页面实例冲突） -->
     <QuickSettingsDrawer />
+    <!-- 全局唯一的帮助抽屉（按页面展示帮助内容） -->
+    <HelpDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
     <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
     <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '200px'">
@@ -42,6 +44,12 @@
           </el-icon>
           <span>设置</span>
         </el-menu-item>
+        <el-menu-item index="/help">
+          <el-icon>
+            <QuestionFilled />
+          </el-icon>
+          <span>帮助</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     <el-main class="app-main">
@@ -57,13 +65,14 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
-import { Picture, Grid, Setting, Collection } from "@element-plus/icons-vue";
+import { Picture, Grid, Setting, Collection, QuestionFilled } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import WallpaperLayer from "./components/WallpaperLayer.vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
+import HelpDrawer from "./components/help/HelpDrawer.vue";
 import TaskDrawer from "./components/TaskDrawer.vue";
 import { useTaskDrawerStore } from "./stores/taskDrawer";
 import { useCrawlerStore } from "./stores/crawler";
@@ -99,6 +108,11 @@ const activeRoute = computed(() => {
   // 设置：精确匹配
   if (path === "/settings") {
     return "/settings";
+  }
+
+  // 帮助：匹配 /help 开头的所有路径（包括 /help/tips/:tipId）
+  if (path.startsWith("/help")) {
+    return "/help";
   }
 
   // 默认返回当前路径（用于其他未匹配的路由）
@@ -217,8 +231,6 @@ onMounted(async () => {
     try {
       const currentWindow = getCurrentWebviewWindow();
       fileDropUnlisten = await currentWindow.onDragDropEvent(async (event) => {
-        console.log('[App] 收到拖拽事件:', event.payload.type, event.payload);
-
         if (event.payload.type === 'enter') {
           // 文件/文件夹进入窗口时，显示视觉提示
           const paths = event.payload.paths;
@@ -245,7 +257,6 @@ onMounted(async () => {
           const droppedPaths = event.payload.paths;
           if (droppedPaths && droppedPaths.length > 0) {
             try {
-              console.log('[App] 处理拖入路径:', droppedPaths);
 
               // 处理所有路径，区分文件和文件夹，并过滤文件
               interface ImportItem {
@@ -425,7 +436,6 @@ onMounted(async () => {
           fileDropOverlayRef.value?.hide();
         }
       });
-      console.log('[App] 文件拖拽事件监听器注册成功');
     } catch (error) {
       console.error('[App] 注册文件拖拽事件监听失败:', error);
     }

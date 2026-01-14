@@ -13,7 +13,7 @@
             :dedupe-processed="dedupeProcessed" :dedupe-total="dedupeTotal" :dedupe-removed="dedupeRemoved"
             :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled" :current-position="currentPosition"
             :month-options="monthOptions" :month-loading="monthOptionsLoading" v-model:selectedRange="selectedRange"
-            @refresh="handleManualRefresh" @dedupe-by-hash="handleDedupeByHash"
+            @refresh="handleManualRefresh" @dedupe-by-hash="handleDedupeByHash" @show-help="openHelpDrawer"
             @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="showCrawlerDialog = true"
             @cancel-dedupe="cancelDedupe" />
 
@@ -87,6 +87,7 @@ import { useGalleryImages } from "@/composables/useGalleryImages";
 import { useGallerySettings } from "@/composables/useGallerySettings";
 import { useImageOperations } from "@/composables/useImageOperations";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
+import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { storeToRefs } from "pinia";
@@ -100,6 +101,8 @@ defineOptions({
 const crawlerStore = useCrawlerStore();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettingsDrawer = () => quickSettingsDrawer.open("gallery");
+const helpDrawer = useHelpDrawerStore();
+const openHelpDrawer = () => helpDrawer.open("gallery");
 const pluginStore = usePluginStore();
 const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
@@ -1082,13 +1085,11 @@ onMounted(async () => {
     }>;
 
     const { path, isDirectory, outputDir } = customEvent.detail;
-    console.log('[Gallery] 收到文件拖拽事件:', { path, isDirectory, outputDir });
 
     try {
       // 确保在画廊页面（App.vue 已经处理了路由跳转，这里只是双重保险）
       const currentPath = router.currentRoute.value.path;
       if (currentPath !== '/gallery') {
-        console.log('[Gallery] 当前不在画廊页面，等待路由切换...');
         await router.push("/gallery/全部");
         await nextTick();
         // 再等待一下确保组件已激活
@@ -1120,10 +1121,8 @@ onMounted(async () => {
       }
 
       // 打开对话框
-      console.log('[Gallery] 打开对话框，showCrawlerDialog 当前值:', showCrawlerDialog.value);
       showCrawlerDialog.value = true;
       await nextTick();
-      console.log('[Gallery] 对话框状态:', showCrawlerDialog.value);
     } catch (error) {
       console.error('[Gallery] 处理文件拖拽事件失败:', error);
       ElMessage.error('处理文件拖拽失败: ' + (error instanceof Error ? error.message : String(error)));

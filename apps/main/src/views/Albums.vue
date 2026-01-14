@@ -13,6 +13,11 @@
         </el-button>
         <el-button type="primary" @click="showCreateDialog = true">新建画册</el-button>
         <TaskDrawerButton />
+        <el-button @click="openHelpDrawer" circle title="帮助">
+          <el-icon>
+            <QuestionFilled />
+          </el-icon>
+        </el-button>
         <el-button @click="openQuickSettings" circle>
           <el-icon>
             <Setting />
@@ -52,13 +57,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Refresh, Setting } from "@element-plus/icons-vue";
+import { Refresh, Setting, QuestionFilled } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import AlbumContextMenu from "@/components/contextMenu/AlbumContextMenu.vue";
 import { useAlbumStore } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
+import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
@@ -71,6 +77,8 @@ const { albums, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const router = useRouter();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albums");
+const helpDrawer = useHelpDrawerStore();
+const openHelpDrawer = () => helpDrawer.open("albums");
 
 // 虚拟磁盘
 const settingsStore = useSettingsStore();

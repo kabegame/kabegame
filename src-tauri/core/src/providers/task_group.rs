@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
-use crate::providers::all::AllProvider;
+use crate::providers::common::CommonProvider;
 #[cfg(feature = "virtual-drive")]
-use crate::providers::provider::{DeleteChildKind, DeleteChildMode};
+use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
 use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
@@ -42,7 +42,7 @@ impl Provider for TaskGroupProvider {
             .map(|(id, plugin_id)| {
                 #[cfg(feature = "virtual-drive")]
                 let plugin_name =
-                    crate::virtual_drive::ops::plugin_display_name_from_manifest(&plugin_id)
+                    crate::providers::vd_ops::plugin_display_name_from_manifest(&plugin_id)
                         .unwrap_or_else(|| plugin_id.clone());
 
                 #[cfg(not(feature = "virtual-drive"))]
@@ -60,9 +60,10 @@ impl Provider for TaskGroupProvider {
         // VD 专用：目录说明文件（说明在文件名里）
         #[cfg(feature = "virtual-drive")]
         {
-            let display_name = "这里按任务归档图片（目录名含插件名与任务ID，可删除任务目录）";
+            // NOTE: 必须带扩展名，否则某些图片查看器/Explorer 枚举同目录文件时会尝试“打开”该说明文件并弹出错误。
+            let display_name = "这里按任务归档图片（目录名含插件名与任务ID，可删除任务目录）.txt";
             let (id, path) =
-                crate::virtual_drive::ops::ensure_note_file(display_name, display_name)?;
+                crate::providers::vd_ops::ensure_note_file(display_name, display_name)?;
             out.insert(0, FsEntry::file(display_name, id, path));
         }
 
@@ -88,11 +89,11 @@ impl Provider for TaskGroupProvider {
 
     #[cfg(feature = "virtual-drive")]
     fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
-        let display_name = "这里按任务归档图片（目录名含插件名与任务ID，可删除任务目录）";
+        let display_name = "这里按任务归档图片（目录名含插件名与任务ID，可删除任务目录）.txt";
         if name != display_name {
             return None;
         }
-        crate::virtual_drive::ops::ensure_note_file(display_name, display_name)
+        crate::providers::vd_ops::ensure_note_file(display_name, display_name)
             .ok()
             .map(|(id, path)| (id, path))
     }
@@ -104,7 +105,7 @@ impl Provider for TaskGroupProvider {
         child_name: &str,
         kind: DeleteChildKind,
         mode: DeleteChildMode,
-        ctx: &dyn crate::providers::provider::VdOpsContext,
+        ctx: &dyn VdOpsContext,
     ) -> Result<bool, String> {
         if kind != DeleteChildKind::Directory {
             return Err("不支持删除该类型".to_string());
@@ -129,12 +130,12 @@ impl Provider for TaskGroupProvider {
 /// 单个任务的图片 Provider - 委托给 AllProvider 处理分页
 pub struct TaskImagesProvider {
     task_id: String,
-    inner: AllProvider,
+    inner: CommonProvider,
 }
 
 impl TaskImagesProvider {
     pub fn new(task_id: String) -> Self {
-        let inner = AllProvider::with_query(ImageQuery::by_task(task_id.clone()));
+        let inner = CommonProvider::with_query(ImageQuery::by_task(task_id.clone()));
         Self { task_id, inner }
     }
 }

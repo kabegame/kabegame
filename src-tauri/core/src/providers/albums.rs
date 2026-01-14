@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::providers::all::AllProvider;
+use crate::providers::common::CommonProvider;
 #[cfg(feature = "virtual-drive")]
 use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
 use crate::providers::provider::{FsEntry, Provider};
@@ -55,7 +55,7 @@ impl Provider for AlbumsProvider {
         child_name: &str,
         ctx: &dyn VdOpsContext,
     ) -> Result<(), String> {
-        crate::virtual_drive::ops::albums_create_child_dir(storage, child_name)?;
+        crate::providers::vd_ops::albums_create_child_dir(storage, child_name)?;
         ctx.albums_created(child_name);
         Ok(())
     }
@@ -77,7 +77,6 @@ impl Provider for AlbumsProvider {
             return Err("目录名不能为空".to_string());
         }
         let Some(album_id) = storage.find_album_id_by_name_ci(child_name)? else {
-            // 不存在：视为未删除
             return Ok(false);
         };
         if album_id == FAVORITE_ALBUM_ID {
@@ -95,12 +94,12 @@ impl Provider for AlbumsProvider {
 /// 单个画册 Provider - 委托给 AllProvider 处理分页
 pub struct AlbumProvider {
     album_id: String,
-    inner: AllProvider,
+    inner: CommonProvider,
 }
 
 impl AlbumProvider {
     pub fn new(album_id: String) -> Self {
-        let inner = AllProvider::with_query(ImageQuery::by_album(album_id.clone()));
+        let inner = CommonProvider::with_query(ImageQuery::by_album(album_id.clone()));
         Self { album_id, inner }
     }
 }
@@ -150,11 +149,8 @@ impl Provider for AlbumProvider {
             // 允许删除文件（语义：从画册移除图片）
             return Ok(true);
         }
-        let removed = crate::virtual_drive::ops::album_delete_child_file(
-            storage,
-            &self.album_id,
-            child_name,
-        )?;
+        let removed =
+            crate::providers::vd_ops::album_delete_child_file(storage, &self.album_id, child_name)?;
         if removed {
             if let Some(name) = storage.get_album_name_by_id(&self.album_id)? {
                 ctx.album_images_removed(&name);

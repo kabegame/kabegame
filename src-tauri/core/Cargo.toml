@@ -11,7 +11,6 @@ tauri = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 regex = "1.11"
-governor = { version = "0.7", optional = true }
 tokio = { workspace = true }
 reqwest = { version = "0.11", features = ["blocking", "json", "stream", "native-tls"] }
 futures-util = "0.3"
@@ -31,12 +30,6 @@ lru = "0.12"
 sled = "0.34"
 
 [target.'cfg(windows)'.dependencies]
-winver = { version = "1", optional = true }
-windows = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"], optional = true }
-winreg = { version = "0.52", optional = true }
-dokan = { version = "0.3.1", optional = true }
-widestring = { version = "0.4.3", optional = true }
-winapi = { version = "0.3.9", features = ["ntstatus", "winnt", "winbase"], optional = true }
 windows-sys = { version = "0.52", features = [
   "Win32_Foundation",
   "Win32_Graphics_Dwm",
@@ -48,10 +41,13 @@ windows-sys = { version = "0.52", features = [
   "Win32_System_Memory",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
-], optional = true }
+]}
 
 
 [features]
-tray = ["dep:governor"]
-wallpaper = ["dep:governor", "dep:winver", "dep:windows", "dep:winreg", "dep:windows-sys"]
-virtual-drive = ["dep:dokan", "dep:widestring", "dep:winapi", "dep:winreg", "dep:windows-sys"]
+custom-protocol = ["tauri/custom-protocol"]
+virtual-drive = []
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::providers::provider::{FsEntry, Provider};
 use crate::providers::{
-    AlbumsProvider, AllProvider, DateGroupProvider, PluginGroupProvider, TaskGroupProvider,
+    AlbumsProvider, CommonProvider, DateGroupProvider, PluginGroupProvider, TaskGroupProvider,
 };
 use crate::storage::Storage;
 
@@ -35,9 +35,10 @@ impl Provider for RootProvider {
         // VD 专用：根目录说明文件
         #[cfg(feature = "virtual-drive")]
         {
-            let display_name = "在这里你可以自由查看图片";
+            // NOTE: 必须带扩展名，否则某些图片查看器/Explorer 枚举同目录文件时会尝试“打开”该说明文件并弹出错误。
+            let display_name = "在这里你可以自由查看图片.txt";
             let (id, path) =
-                crate::virtual_drive::ops::ensure_note_file(display_name, display_name)?;
+                crate::providers::vd_ops::ensure_note_file(display_name, display_name)?;
             out.insert(0, FsEntry::file(display_name, id, path));
         }
 
@@ -59,7 +60,7 @@ impl Provider for RootProvider {
                 Some(Arc::new(AlbumsProvider::new()) as Arc<dyn Provider>)
             }
             n if n.eq_ignore_ascii_case(DIR_ALL) => {
-                Some(Arc::new(AllProvider::new()) as Arc<dyn Provider>)
+                Some(Arc::new(CommonProvider::new()) as Arc<dyn Provider>)
             }
             _ => None,
         }
@@ -67,11 +68,11 @@ impl Provider for RootProvider {
 
     #[cfg(feature = "virtual-drive")]
     fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, std::path::PathBuf)> {
-        let display_name = "在这里你可以自由查看图片";
+        let display_name = "在这里你可以自由查看图片.txt";
         if name != display_name {
             return None;
         }
-        crate::virtual_drive::ops::ensure_note_file(display_name, display_name)
+        crate::providers::vd_ops::ensure_note_file(display_name, display_name)
             .ok()
             .map(|(id, path)| (id, path))
     }

@@ -196,18 +196,6 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         },
         pages: ["settings"],
       },
-      {
-        key: "restoreLastTab",
-        label: "恢复上次标签页",
-        description: "应用启动时自动恢复到上次访问的标签页",
-        comp: SettingSwitchControl,
-        props: {
-          settingKey: "restoreLastTab",
-          command: "set_restore_last_tab",
-          buildArgs: (value: boolean) => ({ enabled: value }),
-        },
-        pages: ["settings"],
-      },
     ],
   },
 ];

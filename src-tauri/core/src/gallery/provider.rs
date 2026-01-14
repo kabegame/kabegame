@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use crate::providers::{AllProvider, DateGroupProvider, PluginGroupProvider};
+use crate::providers::{CommonProvider, DateGroupProvider, PluginGroupProvider};
 use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::Storage;
 
@@ -33,7 +33,7 @@ impl Provider for GalleryRootProvider {
 
     fn get_child(&self, _storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
         match name {
-            n if n.eq_ignore_ascii_case(DIR_ALL) => Some(Arc::new(AllProvider::new())),
+            n if n.eq_ignore_ascii_case(DIR_ALL) => Some(Arc::new(CommonProvider::new())),
             n if n.eq_ignore_ascii_case(DIR_BY_PLUGIN) => Some(Arc::new(PluginGroupProvider::new())),
             n if n.eq_ignore_ascii_case(DIR_BY_DATE) => Some(Arc::new(DateGroupProvider::new())),
             _ => None,

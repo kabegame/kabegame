@@ -331,7 +331,7 @@ pub async fn crawl_images(
         keys.sort();
         eprintln!(
             "[rhai-inject] plugin_id={} injected_keys={:?}",
-            plugin.id, keys, start_page_val, max_pages_val
+            plugin.id, keys
         );
     }
 
@@ -957,6 +957,12 @@ fn download_image(
     app: &AppHandle,
     http_headers: &HashMap<String, String>,
 ) -> Result<DownloadedImage, String> {
+    // 统一拒绝协议：上层可用 `reject:<reason>` 来显式拒绝某个下载/导入项
+    const REJECT_PREFIX: &str = "reject:";
+    if let Some(reason) = url.trim().strip_prefix(REJECT_PREFIX) {
+        return Err(reason.trim().to_string());
+    }
+
     // 检查是否是本地文件路径
     let is_local_path = url.starts_with("file://")
         || (!url.starts_with("http://") && !url.starts_with("https://") && Path::new(url).exists());
@@ -1015,6 +1021,100 @@ fn download_image(
                 "Source file does not exist: {}",
                 source_path.display()
             ));
+        }
+
+        // 防无限循环：当虚拟盘开启且导入路径来自虚拟盘挂载点时拒绝导入
+        // - 不依赖 app-main 的虚拟盘服务，只读取 core 的 Settings（跨平台）
+        #[cfg(feature = "virtual-drive")]
+        {
+            fn normalize_mount_point(input: &str) -> String {
+                let s = input.trim();
+                if s.is_empty() {
+                    return String::new();
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    // 兼容：K / K: / K:\ 都归一为 K:\
+                    let upper = s.to_uppercase();
+                    if upper.len() == 1 && upper.chars().next().unwrap().is_ascii_alphabetic() {
+                        return format!("{}:\\", upper);
+                    }
+                    if upper.len() == 2
+                        && upper.chars().next().unwrap().is_ascii_alphabetic()
+                        && upper.chars().nth(1) == Some(':')
+                    {
+                        return format!("{}\\", upper);
+                    }
+                    return upper;
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    s.to_string()
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            fn drive_letter(p: &std::path::Path) -> Option<char> {
+                use std::path::Component;
+                match p.components().next() {
+                    Some(Component::Prefix(prefix)) => match prefix.kind() {
+                        std::path::Prefix::Disk(d) | std::path::Prefix::VerbatimDisk(d) => {
+                            Some((d as char).to_ascii_uppercase())
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            fn is_under_mount_point(source: &std::path::Path, mount_point: &str) -> bool {
+                let mp = normalize_mount_point(mount_point);
+                if mp.is_empty() {
+                    return false;
+                }
+                // 若 mount_point 是盘符挂载：同盘符一律视为虚拟盘来源
+                let mp_path = std::path::Path::new(&mp);
+                if let Some(mp_drive) = drive_letter(mp_path) {
+                    return drive_letter(source) == Some(mp_drive);
+                }
+                // 目录挂载：按路径组件匹配
+                let Ok(mp_canon) = mp_path.canonicalize() else {
+                    return false;
+                };
+                source.starts_with(&mp_canon)
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            fn is_under_mount_point(source: &std::path::Path, mount_point: &str) -> bool {
+                let mp = normalize_mount_point(mount_point);
+                if mp.is_empty() {
+                    return false;
+                }
+                let mp_path = std::path::Path::new(&mp);
+                let Ok(mp_canon) = mp_path.canonicalize() else {
+                    return false;
+                };
+                source.starts_with(&mp_canon)
+            }
+
+            if let Some(settings) = app
+                .try_state::<crate::settings::Settings>()
+                .and_then(|s| s.get_settings().ok())
+            {
+                if settings.album_drive_enabled {
+                    let mp = normalize_mount_point(&settings.album_drive_mount_point);
+                    if !mp.is_empty() && std::path::Path::new(&mp).exists() {
+                        if is_under_mount_point(&source_path, &mp) {
+                            return Err(format!(
+                                "禁止从虚拟盘导入（会导致无限循环）。路径：{}（挂载点：{}）",
+                                source_path.display(),
+                                mp
+                            ));
+                        }
+                    }
+                }
+            }
         }
 
         // 计算源文件哈希
@@ -1741,7 +1841,7 @@ impl DownloadQueue {
 
     fn download_image_with_temp_guard(
         &self,
-        url: String,
+        mut url: String,
         images_dir: PathBuf,
         plugin_id: String,
         task_id: String,
@@ -1751,6 +1851,16 @@ impl DownloadQueue {
         archive_type: Option<ArchiveType>,
         temp_dir_guard: Option<Arc<TempDirGuard>>,
     ) -> Result<(), String> {
+        const REJECT_PREFIX: &str = "reject:";
+        let trimmed = url.trim();
+        if let Some(reason) = trimmed.strip_prefix(REJECT_PREFIX) {
+            return Err(reason.trim().to_string());
+        }
+        // 统一去掉首尾空白，避免后续 starts_with/exists 判断出现诡异行为
+        if trimmed.len() != url.len() {
+            url = trimmed.to_string();
+        }
+
         if self.is_task_canceled(&task_id) {
             return Err("Task canceled".to_string());
         }
@@ -2458,17 +2568,6 @@ fn download_worker_loop(
                                                 "imageIds": [image_id.clone()]
                                             }),
                                         );
-                                        #[cfg(all(
-                                            target_os = "windows",
-                                            feature = "virtual-drive"
-                                        ))]
-                                        {
-                                            if let Some(drive) = app_clone
-                                                .try_state::<crate::virtual_drive::VirtualDriveService>()
-                                            {
-                                                drive.notify_album_dir_changed(&storage, album_id);
-                                            }
-                                        }
                                     }
                                 }
                             }

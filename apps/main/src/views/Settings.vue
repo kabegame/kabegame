@@ -7,6 +7,11 @@
         </el-icon>
         刷新
       </el-button>
+      <el-button @click="openHelpDrawer" circle title="帮助">
+        <el-icon>
+          <QuestionFilled />
+        </el-icon>
+      </el-button>
     </PageHeader>
 
     <StyledTabs v-model="activeTab" sticky>
@@ -105,11 +110,6 @@
                   :build-args="(v: boolean) => ({ enabled: v })" />
               </SettingRow>
 
-              <SettingRow label="恢复上次标签页" description="应用启动时自动恢复到上次访问的标签页">
-                <SettingSwitchControl setting-key="restoreLastTab" command="set_restore_last_tab"
-                  :build-args="(v: boolean) => ({ enabled: v })" />
-              </SettingRow>
-
               <SettingRow v-if="IS_WINDOWS" label="画册盘" description="在资源管理器中以虚拟盘方式浏览画册（只支持有限的操作）">
                 <AlbumDriveSetting />
               </SettingRow>
@@ -145,7 +145,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from "vue";
 import { ElMessage } from "element-plus";
-import { Refresh } from "@element-plus/icons-vue";
+import { Refresh, QuestionFilled } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
@@ -166,6 +166,7 @@ import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetti
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import { IS_WINDOWS } from "@kabegame/core/env";
+import { useHelpDrawerStore } from "@/stores/helpDrawer";
 
 // 使用 300ms 防闪屏加载延迟
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
@@ -175,6 +176,8 @@ const settingsStore = useSettingsStore();
 const activeTab = ref<string>("wallpaper");
 const isRefreshing = ref(false);
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
+const helpDrawer = useHelpDrawerStore();
+const openHelpDrawer = () => helpDrawer.open("settings");
 
 
 const loadSettings = async () => {

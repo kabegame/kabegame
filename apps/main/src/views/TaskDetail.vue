@@ -28,6 +28,11 @@
                         <span style="margin-left: 4px;">删除任务</span>
                     </el-button>
                     <TaskDrawerButton />
+                    <el-button @click="openHelpDrawer" circle title="帮助">
+                        <el-icon>
+                            <QuestionFilled />
+                        </el-icon>
+                    </el-button>
                     <el-button @click="openQuickSettings" circle>
                         <el-icon>
                             <Setting />
@@ -50,7 +55,7 @@ import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { VideoPause, Delete, Setting, Refresh } from "@element-plus/icons-vue";
+import { VideoPause, Delete, Setting, Refresh, QuestionFilled } from "@element-plus/icons-vue";
 import TaskImageContextMenu from "@/components/contextMenu/TaskImageContextMenu.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
@@ -63,6 +68,7 @@ import { useUiStore } from "@kabegame/core/stores/ui";
 import { storeToRefs } from "pinia";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
+import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useGallerySettings } from "@/composables/useGallerySettings";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
@@ -94,6 +100,8 @@ const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
+const helpDrawer = useHelpDrawerStore();
+const openHelpDrawer = () => helpDrawer.open("taskdetail");
 
 // 使用画廊设置 composable
 const {
