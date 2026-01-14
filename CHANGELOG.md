@@ -4,6 +4,16 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [2.1.1]
+### Added
+- cli 添加 vd 子命令，可以常驻后台服务虚拟磁盘
+
+### Changed
+- main 程序在无法挂载磁盘的时候会用cli提权，并通过管道通信
+
+### Fixed
+- 修复actions pnpm老是报错
+
 ## [2.0.3]
 ### Changed
 - 改用mmap优化图片的读取性能
