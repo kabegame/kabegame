@@ -108,6 +108,14 @@ jobs:
             exit 0
           }
 
+          # 0) Prefer repo-bundled Dokan runtime DLL (checked into repo)
+          $repoDll = "bin/dokan2.dll"
+          if (Test-Path $repoDll) {
+            Copy-Item -Path $repoDll -Destination $dst -Force
+            Write-Host "Staged dokan2.dll from repo: $repoDll -> $dst"
+            exit 0
+          }
+
           function Find-Dokan2Dll() {
             $candidates = @(
               (Join-Path $env:WINDIR "System32\\dokan2.dll"),
@@ -129,45 +137,7 @@ jobs:
 
           $dll = Find-Dokan2Dll
           if (-not $dll) {
-            Write-Host "dokan2.dll not found on runner, installing Dokan..."
-
-            # Fetch latest release assets from dokan-dev/dokany
-            $headers = @{ "User-Agent" = "kabegame-ci" }
-            $rel = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/dokan-dev/dokany/releases/latest"
-            if (-not $rel) { throw "Failed to query dokany latest release" }
-
-            # Prefer MSI for reliable silent install
-            $asset = $rel.assets |
-              Where-Object { $_.name -match "\\.msi$" -and $_.name -match "Dokan|DokanSetup|DokanLibrary|dokany" } |
-              Select-Object -First 1
-            if (-not $asset) {
-              $asset = $rel.assets |
-                Where-Object { $_.name -match "\\.exe$" -and $_.name -match "Dokan|DokanSetup|DokanLibrary|dokany" } |
-                Select-Object -First 1
-            }
-            if (-not $asset) {
-              throw "Could not find Dokan installer asset in latest release: $($rel.html_url)"
-            }
-
-            $installer = Join-Path $env:RUNNER_TEMP $asset.name
-            Write-Host "Downloading Dokan installer: $($asset.browser_download_url) -> $installer"
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer
-
-            if ($installer.ToLower().EndsWith(".msi")) {
-              Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$installer`"", "/qn", "/norestart") -Wait
-            } else {
-              # Best-effort silent flags (may vary). If it fails, we'll still try to locate dll (maybe preinstalled).
-              $p = Start-Process -FilePath $installer -ArgumentList @("/S") -Wait -PassThru -ErrorAction SilentlyContinue
-              if ($p -and $p.ExitCode -ne 0) {
-                Write-Host "Dokan installer exited with code $($p.ExitCode) (best-effort)."
-              }
-            }
-
-            $dll = Find-Dokan2Dll
-          }
-
-          if (-not $dll) {
-            throw "dokan2.dll still not found after installation attempt"
+            throw "dokan2.dll not found on runner. Please commit bin/dokan2.dll (recommended) or preinstall Dokan runtime on runner."
           }
 
           Copy-Item -Path $dll -Destination $dst -Force

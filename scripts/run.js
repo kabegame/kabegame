@@ -94,6 +94,10 @@ function findFirstExisting(paths) {
 function findDokan2DllOnWindows() {
   if (process.platform !== "win32") return null;
 
+  // 0) repo bundled dll (preferred for CI/offline reproducibility)
+  const bundled = path.join(root, "bin", "dokan2.dll");
+  if (existsFile(bundled)) return bundled;
+
   // 1) explicit override
   const fromEnv = (process.env.DOKAN2_DLL ?? "").trim();
   if (fromEnv) {
