@@ -24,6 +24,30 @@
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\dokan2.dll$\" move /Y $\"$INSTDIR\resources\bin\dokan2.dll$\" $\"$INSTDIR$\"' $0
   DetailPrint "Move dokan2.dll -> $INSTDIR (exit code: $0)"
 
+  ; Ensure Dokan driver is installed (dokan2.sys). Bundled installer is optional.
+  ; Notes:
+  ; - dokan2.dll alone is NOT enough; the kernel driver must be installed.
+  ; - If NSIS is not elevated, we fallback to running the installer via UAC (runas).
+  ;
+  ; Expected bundled installer path:
+  ; - $INSTDIR\resources\bin\dokan-installer.exe
+  ; NOTE:
+  ; - 仅检查 dokan2.dll 不可靠；驱动关键文件是 dokan2.sys。
+  ; - 32-bit installer 进程可能存在 System32 重定向，这里只做 best-effort 检查；若不确定直接尝试安装。
+  IfFileExists "$SYSDIR\drivers\dokan2.sys" +16 0
+    IfFileExists "$INSTDIR\resources\bin\dokan-installer.exe" 0 +15
+      DetailPrint "Dokan driver not found; installing (via runas)..."
+      ; Marker: record that we attempted to launch installer (for debugging)
+      FileOpen $2 "$INSTDIR\dokan-install-attempt.txt" w
+      FileWrite $2 "attempted\r\n"
+      FileClose $2
+      ; Always use runas to guarantee elevation (GetAccountType may be Admin but not elevated).
+      ExecShell "runas" '"$INSTDIR\resources\bin\dokan-installer.exe"' "/S"
+      DetailPrint "Dokan installer launched (runas, silent)."
+      ; Re-check (best-effort)
+      IfFileExists "$SYSDIR\drivers\dokan2.sys" 0 +2
+        DetailPrint "Dokan driver installed."
+
   ; Register .kgpg file association -> kabegame-cliw.exe plugin import "%1"
   ; (kabegame-cliw.exe is built as Windows subsystem and launches kabegame-cli.exe with CREATE_NO_WINDOW)
   ; HKCR is a merged view of HKLM\Software\Classes and HKCU\Software\Classes.
@@ -54,6 +78,7 @@
     Delete "$INSTDIR\kabegame-cliw.exe"
   IfFileExists "$INSTDIR\dokan2.dll" 0 +2
     Delete "$INSTDIR\dokan2.dll"
+  ; Keep dokan-installer.exe inside resources (if any). It's safe to leave it to installer cleanup.
 
   ; Remove folder attributes (best-effort).
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib -s -r $\"$INSTDIR$\"'

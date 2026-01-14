@@ -153,25 +153,85 @@ where
     #[cfg(target_os = "windows")]
     {
         use tokio::net::windows::named_pipe::ServerOptions;
+        use windows_sys::Win32::Foundation::{LocalFree, BOOL};
+        use windows_sys::Win32::Security::{
+            Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
+            SECURITY_ATTRIBUTES,
+        };
 
+        fn sddl_to_security_attributes(
+            sddl: &str,
+        ) -> Result<(SECURITY_ATTRIBUTES, *mut core::ffi::c_void), String> {
+            use std::ffi::OsStr;
+            use std::os::windows::ffi::OsStrExt;
+
+            let sddl_w: Vec<u16> = OsStr::new(sddl).encode_wide().chain(Some(0)).collect();
+            let mut sd_ptr: *mut core::ffi::c_void = core::ptr::null_mut();
+            let mut sd_len: u32 = 0;
+
+            // SAFETY: windows api contract
+            let ok: BOOL = unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    sddl_w.as_ptr(),
+                    1, // SDDL_REVISION_1
+                    &mut sd_ptr as *mut _ as *mut _,
+                    &mut sd_len,
+                )
+            };
+            if ok == 0 || sd_ptr.is_null() {
+                return Err(format!(
+                    "ConvertStringSecurityDescriptorToSecurityDescriptorW failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+
+            let attrs = SECURITY_ATTRIBUTES {
+                nLength: core::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+                lpSecurityDescriptor: sd_ptr as *mut _,
+                bInheritHandle: 0,
+            };
+            Ok((attrs, sd_ptr))
+        }
+
+        fn create_secure_server() -> Result<tokio::net::windows::named_pipe::NamedPipeServer, String>
+        {
+            // 允许普通用户进程连接管理员创建的 pipe（避免 Win10 上 os error 5）。
+            // SY=LocalSystem, BA=Built-in Administrators, AU=Authenticated Users
+            // 这里给 AU 也授予 GA，简化权限兼容性（仅本机 pipe，且默认 reject_remote_clients=true）。
+            let sddl = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AU)";
+            let (attrs, sd_ptr) = sddl_to_security_attributes(sddl)?;
+            let server = unsafe {
+                ServerOptions::new().create_with_security_attributes_raw(
+                    windows_pipe_name(),
+                    &attrs as *const _ as *mut _,
+                )
+            }
+            .map_err(|e| format!("ipc create pipe failed: {}", e))?;
+
+            // SAFETY: ConvertString... allocates with LocalAlloc; must free with LocalFree.
+            unsafe { LocalFree(sd_ptr as _) };
+            Ok(server)
+        }
+
+        // 按 tokio 文档建议：始终保持至少一个 server instance 可用，避免客户端偶发 NotFound。
+        let mut server = create_secure_server()?;
         loop {
-            // Windows 命名管道：每个 client 连接都需要一个新的 server instance
-            let mut server = ServerOptions::new()
-                .first_pipe_instance(true)
-                .create(windows_pipe_name())
-                .map_err(|e| format!("ipc create pipe failed: {}", e))?;
-
             server
                 .connect()
                 .await
                 .map_err(|e| format!("ipc pipe connect failed: {}", e))?;
 
-            let line = read_one_line(&mut server).await?;
+            // 在处理已连接 client 之前，先准备下一个 server instance
+            let connected = server;
+            server = create_secure_server()?;
+
+            let mut connected = connected;
+            let line = read_one_line(&mut connected).await?;
             let req: VdIpcRequest = decode_line(&line)?;
             let resp = handler(req).await;
             let bytes = encode_line(&resp)?;
-            let _ = write_all(&mut server, &bytes).await;
-            // drop server -> disconnect
+            let _ = write_all(&mut connected, &bytes).await;
+            // drop connected -> disconnect
         }
     }
 

@@ -87,6 +87,19 @@ function findFirstExisting(paths) {
   return null;
 }
 
+function stageResourceFile(src, dstFileName) {
+  if (!fs.existsSync(src)) {
+    console.error(chalk.red(`❌ 找不到资源文件: ${src}`));
+    process.exit(1);
+  }
+  ensureDir(RESOURCES_BIN_DIR);
+  const dst = path.join(RESOURCES_BIN_DIR, dstFileName);
+  fs.copyFileSync(src, dst);
+  console.log(
+    chalk.cyan(`[build] Staged resource file: ${path.relative(root, dst)}`)
+  );
+}
+
 /**
  * Find dokan2.dll from common install locations (best-effort).
  * Users can also override via env var: DOKAN2_DLL
@@ -183,6 +196,57 @@ function ensureDokan2DllResource() {
       )} (from: ${src})`
     )
   );
+}
+
+/**
+ * Ensure Dokan driver installer is staged as a resource (optional but recommended).
+ *
+ * Expected inputs (first match wins):
+ * - env: DOKAN_INSTALLER  (absolute path to installer exe/msi)
+ * - repo: bin/dokan-installer.exe
+ *
+ * Output:
+ * - src-tauri/app-main/resources/bin/dokan-installer.exe
+ */
+function ensureDokanInstallerResourceIfPresent() {
+  if (process.platform !== "win32") return;
+
+  const fromEnv = (process.env.DOKAN_INSTALLER ?? "").trim();
+  const fixed = path.join(root, "bin", "dokan-installer.exe");
+
+  let src = findFirstExisting([fromEnv, fixed].filter(Boolean));
+  if (!src) {
+    // Fallback: scan repo bin/ for a dokan installer (exe/msi) by name.
+    try {
+      const binDir = path.join(root, "bin");
+      if (fs.existsSync(binDir)) {
+        const files = fs.readdirSync(binDir);
+        const hit = files.find((f) => {
+          const lower = f.toLowerCase();
+          return (
+            lower.includes("dokan") &&
+            (lower.endsWith(".exe") || lower.endsWith(".msi"))
+          );
+        });
+        if (hit) {
+          const p = path.join(binDir, hit);
+          if (existsFile(p)) src = p;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (!src) {
+    console.log(
+      chalk.yellow(
+        `[build] Dokan installer not staged (optional). To bundle it, set env DOKAN_INSTALLER or put bin/dokan-installer.exe`
+      )
+    );
+    return;
+  }
+  // Always stage to a stable name for NSIS.
+  stageResourceFile(src, "dokan-installer.exe");
 }
 
 function copyDokan2DllToTauriReleaseDirBestEffort() {
@@ -326,6 +390,7 @@ function dev(options) {
 
   if (component === "main") {
     ensureDokan2DllResource();
+    ensureDokanInstallerResourceIfPresent();
   }
 
   // Step 1: Package plugins first (to src-tauri/resources/plugins) to ensure resources exist
@@ -450,6 +515,7 @@ function start(options) {
 
   if (component === "main") {
     ensureDokan2DllResource();
+    ensureDokanInstallerResourceIfPresent();
   }
 
   if (component === "cli") {
@@ -513,6 +579,7 @@ function build(options) {
 
   if (wantMain) {
     ensureDokan2DllResource();
+    ensureDokanInstallerResourceIfPresent();
   }
 
   if (wantEditor) {

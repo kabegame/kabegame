@@ -54,6 +54,8 @@ enum PluginCommands {
 enum VdCommands {
     /// 提权 daemon：通过命名管道/本地 socket 提供 mount/unmount/status 服务（建议用 runas 启动）
     Daemon,
+    /// 调试：检查 IPC 是否就绪（能否连接到 vd daemon）
+    IpcStatus,
     /// 挂载虚拟盘（需要管理员权限；该命令会常驻直到被卸载）
     Mount(VdMountArgs),
     /// 卸载虚拟盘（需要管理员权限）
@@ -152,6 +154,7 @@ fn main() {
         },
         Commands::Vd(cmd) => match cmd {
             VdCommands::Daemon => vd_daemon(),
+            VdCommands::IpcStatus => vd_ipc_status(),
             VdCommands::Mount(args) => vd_mount(args),
             VdCommands::Unmount(args) => vd_unmount(args),
             VdCommands::Status(args) => vd_status(args),
@@ -165,44 +168,60 @@ fn main() {
 }
 
 fn build_minimal_app() -> Result<tauri::App, String> {
-    tauri::Builder::default()
-        .setup(|app| {
-            // 初始化插件管理器
-            let plugin_manager = PluginManager::new(app.app_handle().clone());
-            app.manage(plugin_manager);
+    build_minimal_app_with_storage().map(|(app, _storage)| app)
+}
 
-            // 初始化存储管理器（下载/入库依赖）
-            let storage = Storage::new(app.app_handle().clone());
-            storage
-                .init()
-                .map_err(|e| format!("Failed to initialize storage: {}", e))?;
-            app.manage(storage);
-
-            // 初始化 ProviderRuntime（虚拟盘/画廊 provider 浏览依赖）
-            // 与 app-main 启动逻辑一致：失败则 fallback 默认配置。
-            let rt = providers::ProviderRuntime::new(providers::ProviderCacheConfig::default())
-                .or_else(|e| {
-                    eprintln!(
-                        "[providers] init ProviderRuntime failed, fallback to default cfg: {}",
-                        e
-                    );
-                    providers::ProviderRuntime::new(providers::ProviderCacheConfig::default())
-                })
-                .map_err(|e| format!("ProviderRuntime init failed: {}", e))?;
-            app.manage(rt);
-
-            // 初始化设置管理器（下载队列会读设置并发数等）
-            let settings = Settings::new(app.app_handle().clone());
-            app.manage(settings);
-
-            // 初始化下载队列
-            let download_queue = crawler::DownloadQueue::new(app.app_handle().clone());
-            app.manage(download_queue);
-
-            Ok(())
-        })
+fn build_minimal_app_with_storage() -> Result<(tauri::App, Storage), String> {
+    // 注意：不要依赖 Builder.setup 的执行时机来初始化 state。
+    // 在某些环境下（尤其是纯 CLI 进程），setup 可能不会在 build 阶段按预期执行，
+    // 从而导致“Storage not available”。这里改为：build 完再手动 manage，保证顺序确定。
+    let app = tauri::Builder::default()
         .build(tauri::generate_context!())
-        .map_err(|e| format!("Build tauri app failed: {}", e))
+        .map_err(|e| format!("Build tauri app failed: {}", e))?;
+
+    let handle = app.app_handle().clone();
+
+    // 初始化插件管理器
+    let plugin_manager = PluginManager::new(handle.clone());
+    app.manage(plugin_manager);
+
+    // 初始化存储管理器（下载/入库依赖）
+    let storage = Storage::new(handle.clone());
+    storage
+        .init()
+        .map_err(|e| format!("Failed to initialize storage: {}", e))?;
+    app.manage(storage.clone());
+
+    // 初始化 ProviderRuntime（虚拟盘/画廊 provider 浏览依赖）
+    // 与 app-main 启动逻辑一致：失败则 fallback 默认配置。
+    let mut cfg = providers::ProviderCacheConfig::default();
+    // 可选覆盖 sled 目录（例如 vd daemon 为避免锁冲突会设置此环境变量）
+    if let Ok(dir) = std::env::var("KABEGAME_PROVIDER_DB_DIR") {
+        let d = dir.trim();
+        if !d.is_empty() {
+            cfg.db_dir = std::path::PathBuf::from(d);
+        }
+    }
+    let rt = providers::ProviderRuntime::new(cfg)
+        .or_else(|e| {
+            eprintln!(
+                "[providers] init ProviderRuntime failed, fallback to default cfg: {}",
+                e
+            );
+            providers::ProviderRuntime::new(providers::ProviderCacheConfig::default())
+        })
+        .map_err(|e| format!("ProviderRuntime init failed: {}", e))?;
+    app.manage(rt);
+
+    // 初始化设置管理器（下载队列会读设置并发数等）
+    let settings = Settings::new(handle.clone());
+    app.manage(settings);
+
+    // 初始化下载队列
+    let download_queue = crawler::DownloadQueue::new(handle);
+    app.manage(download_queue);
+
+    Ok((app, storage))
 }
 
 fn vd_mount(args: VdMountArgs) -> Result<(), String> {
@@ -216,8 +235,7 @@ fn vd_mount(args: VdMountArgs) -> Result<(), String> {
     {
         use kabegame_core::virtual_drive::drive_service::VirtualDriveServiceTrait;
 
-        let app = build_minimal_app()?;
-        let storage = app.handle().state::<Storage>().inner().clone();
+        let (app, storage) = build_minimal_app_with_storage()?;
 
         let drive = kabegame_core::virtual_drive::VirtualDriveService::default();
         drive.mount(&args.mount_point, storage, app.handle().clone())?;
@@ -274,6 +292,33 @@ fn vd_status(args: VdStatusArgs) -> Result<(), String> {
     }
 }
 
+fn vd_ipc_status() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use kabegame_core::virtual_drive::ipc::{self, VdIpcRequest};
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("create tokio runtime failed: {}", e))?;
+        let resp = rt.block_on(async { ipc::request(VdIpcRequest::Status).await })?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string())
+        );
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        use kabegame_core::virtual_drive::ipc::{self, VdIpcRequest};
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("create tokio runtime failed: {}", e))?;
+        let resp = rt.block_on(async { ipc::request(VdIpcRequest::Status).await })?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string())
+        );
+        Ok(())
+    }
+}
+
 fn vd_daemon() -> Result<(), String> {
     #[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
     {
@@ -286,17 +331,85 @@ fn vd_daemon() -> Result<(), String> {
         use kabegame_core::virtual_drive::ipc::{self, VdIpcRequest, VdIpcResponse};
 
         use std::sync::Arc;
+        use std::{fs::OpenOptions, io::Write};
 
-        let app = build_minimal_app()?;
-        let storage = app.handle().state::<Storage>().inner().clone();
+        // 尽量“必出日志”：先打开 log，再做任何可能失败的初始化。
+        let log_path = std::env::temp_dir().join("kabegame-vd-daemon.log");
+        let mut log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map_err(|e| format!("open daemon log failed ({}): {}", log_path.display(), e))?;
+        let _ = writeln!(log, "=== vd daemon start: pid={} ===", std::process::id());
+        let _ = writeln!(
+            log,
+            "exe={}",
+            std::env::current_exe()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "<unknown>".to_string())
+        );
+
+        // 早期检查：尽量输出一些环境信息（给 Win10 用户更明确的“为什么 IPC 不就绪”）
+        let _ = writeln!(
+            log,
+            "cwd={}",
+            std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| "<unknown>".to_string())
+        );
+        let _ = writeln!(
+            log,
+            "is_admin_hint=请确认UAC已允许（本进程应由 runas 启动）"
+        );
+        let _ = log.flush();
+
+        // 关键：vd daemon 不应和主程序共享同一个 provider-cache-db（sled 单进程锁）。
+        // 若用户未显式指定，则给 daemon 分配一个临时的独立目录，避免锁冲突导致 daemon 直接退出。
+        let env_db_dir = std::env::var("KABEGAME_PROVIDER_DB_DIR").ok();
+        let env_db_dir = env_db_dir
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let db_dir = env_db_dir.unwrap_or_else(|| {
+            std::env::temp_dir()
+                .join("kabegame")
+                .join(format!("provider-cache-db-daemon-{}", std::process::id()))
+                .to_string_lossy()
+                .to_string()
+        });
+        let _ = std::fs::create_dir_all(&db_dir);
+        std::env::set_var("KABEGAME_PROVIDER_DB_DIR", &db_dir);
+        let _ = writeln!(log, "KABEGAME_PROVIDER_DB_DIR={}", db_dir);
+        let _ = log.flush();
+
+        let (app, storage) = match build_minimal_app_with_storage() {
+            Ok(a) => a,
+            Err(e) => {
+                let _ = writeln!(log, "build_minimal_app failed: {}", e);
+                let _ = log.flush();
+                return Err(format!("{e}\n(daemon log: {})", log_path.to_string_lossy()));
+            }
+        };
         let drive = Arc::new(kabegame_core::virtual_drive::VirtualDriveService::default());
         let app_handle = Arc::new(app.handle().clone());
 
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("create tokio runtime failed: {}", e))?;
+        let rt = tokio::runtime::Runtime::new().map_err(|e| {
+            let _ = writeln!(log, "create tokio runtime failed: {}", e);
+            let _ = log.flush();
+            format!(
+                "create tokio runtime failed: {}\n(daemon log: {})",
+                e,
+                log_path.to_string_lossy()
+            )
+        })?;
+
+        let _ = writeln!(log, "ipc_listen=\\\\.\\pipe\\kabegame-vd");
+        let _ = writeln!(log, "ipc_status=starting");
+        let _ = log.flush();
 
         // daemon：单线程处理请求即可（每个连接单次 request/response）
-        rt.block_on(async move {
+        let serve_res = rt.block_on(async move {
             ipc::serve(move |req| {
                 let storage = storage.clone();
                 let app_handle = app_handle.clone();
@@ -350,9 +463,24 @@ fn vd_daemon() -> Result<(), String> {
                 }
             })
             .await
-        })?;
+        });
 
-        Ok(())
+        match serve_res {
+            Ok(_) => {
+                let _ = writeln!(log, "vd daemon exit normally");
+                let _ = log.flush();
+                Ok(())
+            }
+            Err(e) => {
+                let _ = writeln!(log, "vd daemon exit with error: {}", e);
+                let _ = log.flush();
+                Err(format!(
+                    "{}\n(daemon log: {})",
+                    e,
+                    log_path.to_string_lossy()
+                ))
+            }
+        }
     }
 }
 

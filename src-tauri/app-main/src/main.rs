@@ -503,10 +503,12 @@ fn unmount_virtual_drive(
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
                 if !ready {
-                    return Err(
-                        "已请求管理员权限启动 VD daemon，但 IPC 未就绪（可能 UAC 未确认）"
-                            .to_string(),
-                    );
+                    let log_path = std::env::temp_dir().join("kabegame-vd-daemon.log");
+                    return Err(format!(
+                        "已请求管理员权限启动 VD daemon，但 IPC 未就绪。\n\n如果找不到日志文件，说明 daemon 大概率没有启动成功：\n- 日志路径：{}\n\n下一步建议：\n1) 让用户打开“任务管理器-详细信息”，确认是否存在 kabegame-cli.exe / kabegame-cliw.exe；\n2) 让用户以管理员手动运行：kabegame-cli.exe vd daemon（看是否立即退出/是否生成日志）；\n3) 如果有杀软/企业策略，检查是否拦截了新进程/命名管道。\n\n原始错误：{}",
+                        log_path.display(),
+                        _ipc_err
+                    ));
                 }
 
                 try_unmount_via_ipc()?
@@ -578,9 +580,9 @@ fn mount_virtual_drive_and_open_explorer(
 
                         kabegame_core::shell_open::runas(&cliw.to_string_lossy(), "vd daemon")?;
 
-                        // 3) 等待 daemon 就绪：轮询 IPC status（最多 10s）
+                        // 3) 等待 daemon 就绪：轮询 IPC status（默认最多 30s；Win10 + 杀软环境可能更慢）
                         let mut ready = false;
-                        for _ in 0..100 {
+                        for _ in 0..300 {
                             if tauri::async_runtime::block_on(async {
                                 kabegame_core::virtual_drive::ipc::request(VdIpcRequest::Status)
                                     .await
@@ -592,10 +594,10 @@ fn mount_virtual_drive_and_open_explorer(
                             std::thread::sleep(std::time::Duration::from_millis(100));
                         }
                         if !ready {
-                            return Err(
-                                "已请求管理员权限启动 VD daemon，但 IPC 未就绪（可能 UAC 未确认）"
-                                    .to_string(),
-                            );
+                            return Err(format!(
+                                "已请求管理员权限启动 VD daemon，但 IPC 未就绪。\n\n可能原因：\n- UAC 未确认/被策略或杀软拦截\n- daemon 启动即崩溃（缺依赖/权限/运行时错误）\n\n请让用户查看日志：%TEMP%\\kabegame-vd-daemon.log\n（如果日志不存在，说明 daemon 可能根本没有启动成功）\n\n原始挂载失败原因：{}",
+                                e
+                            ));
                         }
 
                         try_mount_via_ipc()?

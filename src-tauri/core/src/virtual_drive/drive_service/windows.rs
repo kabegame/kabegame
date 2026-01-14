@@ -115,7 +115,10 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
 
             let options = MountOptions {
                 single_thread: false,
-                flags: MountFlags::empty(),
+                // 默认使用 CURRENT_SESSION：
+                // - 更符合“仅当前用户会话可见”的产品语义
+                // - 在部分 Win10 环境下可降低“必须管理员才能挂载盘符”的概率
+                flags: MountFlags::CURRENT_SESSION,
                 unc_name: None,
                 timeout: Duration::from_secs(30),
                 allocation_unit_size: 4096,
@@ -132,7 +135,21 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
                     drop(fs);
                 }
                 Err(e) => {
-                    let _ = tx.send(Err(format!("挂载失败: {}", e)));
+                    let msg = e.to_string();
+                    // 提示强化：Dokan 驱动未安装/安装失败（os error: can't install driver）
+                    if msg.contains("can't install driver") {
+                        let _ = tx.send(Err(
+                            "挂载失败：Dokan 驱动不可用（can't install driver）。\n\n请安装 Dokan 2.x Runtime/Driver（仅放置 dokan2.dll 不够，还需要内核驱动 dokan2.sys），安装后建议重启系统。\n安装完成后可在管理员终端运行 `kabegame-cli.exe vd daemon` 并用 `kabegame-cli.exe vd ipc-status` 验证 IPC 可用。"
+                                .to_string(),
+                        ));
+                    } else if msg.contains("requested an incompatible version") {
+                        let _ = tx.send(Err(
+                            "挂载失败：Dokan 版本不兼容（requested an incompatible version）。\n\n请确保安装的 Dokan Driver 版本与应用内置的 dokan2.dll/依赖版本匹配（建议安装 Dokan 2.x 最新稳定版），然后重启再试。"
+                                .to_string(),
+                        ));
+                    } else {
+                        let _ = tx.send(Err(format!("挂载失败: {}", e)));
+                    }
                 }
             };
         });
