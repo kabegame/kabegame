@@ -480,14 +480,24 @@ function build(options) {
   const wantCli = component === "all" || component === "cli";
 
   if (wantMain || wantEditor) {
-    const packageTarget =
-      options.mode === "local"
-        ? "crawler-plugins:package-to-resources"
-        : "crawler-plugins:package-local-to-resources";
-    console.log(
-      chalk.blue(`[build] Packaging plugins to resources: ${packageTarget}`)
-    );
-    run("nx", ["run", packageTarget], { env: buildEnv(options) });
+    const skipPluginsPackaging =
+      (process.env.KABEGAME_SKIP_PLUGINS_PACKAGING ?? "").trim() === "1";
+    if (skipPluginsPackaging) {
+      console.log(
+        chalk.yellow(
+          `[build] Skipping plugin packaging (KABEGAME_SKIP_PLUGINS_PACKAGING=1); assuming resources/plugins already prepared`
+        )
+      );
+    } else {
+      const packageTarget =
+        options.mode === "local"
+          ? "crawler-plugins:package-to-resources"
+          : "crawler-plugins:package-local-to-resources";
+      console.log(
+        chalk.blue(`[build] Packaging plugins to resources: ${packageTarget}`)
+      );
+      run("nx", ["run", packageTarget], { env: buildEnv(options) });
+    }
   }
 
   const builtinPlugins = options.mode === "local" ? scanBuiltinPlugins() : [];

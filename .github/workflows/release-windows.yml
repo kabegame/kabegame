@@ -160,8 +160,9 @@ jobs:
           KABEGAME_MODE: ${{ matrix.mode }}
           VITE_KABEGAME_MODE: ${{ matrix.mode }}
           KABEGAME_BUILTIN_PLUGINS: ${{ steps.package-plugins.outputs.builtin_plugins }}
-        run: pnpm exec tauri build --bundles nsis
-        working-directory: src-tauri/app-main
+          # CI 已在上一步把 crawler-plugins/packed 复制到 resources/plugins，这里不再重复打包插件
+          KABEGAME_SKIP_PLUGINS_PACKAGING: "1"
+        run: pnpm build --mode ${{ matrix.mode }}
 
       - name: Restore productName
         if: always()
