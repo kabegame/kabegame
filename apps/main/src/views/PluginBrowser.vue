@@ -52,7 +52,7 @@
                 <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
                   <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
                 </div>
-                <div v-else-if="pluginIconLoading[plugin.id]" class="plugin-icon-placeholder plugin-icon-loading">
+                <div v-else-if="isIconLoading(plugin)" class="plugin-icon-placeholder plugin-icon-loading">
                   <el-icon class="spin">
                     <Loading />
                   </el-icon>
@@ -127,7 +127,7 @@
               <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
                 <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
               </div>
-              <div v-else-if="pluginIconLoading[plugin.id]" class="plugin-icon-placeholder plugin-icon-loading">
+              <div v-else-if="isIconLoading(plugin)" class="plugin-icon-placeholder plugin-icon-loading">
                 <el-icon class="spin">
                   <Loading />
                 </el-icon>
@@ -146,7 +146,7 @@
             <div class="plugin-info">
               <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
               <el-tag v-if="plugin.installedVersion" type="success" size="small">已安装：v{{ plugin.installedVersion
-              }}</el-tag>
+                }}</el-tag>
               <el-tag v-else type="warning" size="small">未安装</el-tag>
               <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
                 size="small">可更新</el-tag>
@@ -410,35 +410,58 @@ const applyInstalledVersions = (arr: StorePluginResolved[] | null | undefined): 
   });
 };
 
-// 插件图标（key: pluginId, value: data URL）
+// 插件图标缓存：
+// - 本地已安装：key = local:<pluginId>
+// - 商店源：key = store:<sourceId>:<pluginId>
+//
+// 关键：商店 tab 绝不能“命中”本地 icon，即使 id 一样；因此必须用不同 key 做隔离。
 const pluginIcons = ref<Record<string, string>>({});
 const pluginIconLoading = ref<Record<string, boolean>>({});
 
-const setPluginIconLoading = (pluginId: string, loading: boolean) => {
-  if (!pluginId) return;
+const localIconKey = (pluginId: string) => `local:${pluginId}`;
+const storeIconKey = (sourceId: string, pluginId: string) => `store:${sourceId}:${pluginId}`;
+const getIconKey = (p: { id: string } & Partial<StorePluginResolved>) => {
+  // StorePluginResolved 一定有 sourceId；本地 Plugin 没有该字段
+  const sid = typeof (p as any).sourceId === "string" ? String((p as any).sourceId) : null;
+  return sid ? storeIconKey(sid, p.id) : localIconKey(p.id);
+};
+const isIconLoading = (p: { id: string } & Partial<StorePluginResolved>) => {
+  const k = getIconKey(p);
+  return !!pluginIconLoading.value[k];
+};
+
+const setPluginIconLoading = (key: string, loading: boolean) => {
+  if (!key) return;
   if (loading) {
-    pluginIconLoading.value = { ...pluginIconLoading.value, [pluginId]: true };
+    pluginIconLoading.value = { ...pluginIconLoading.value, [key]: true };
     return;
   }
   const next = { ...pluginIconLoading.value };
-  delete next[pluginId];
+  delete next[key];
   pluginIconLoading.value = next;
 };
 
-const getPluginIconSrc = (p: { id: string; iconUrl?: string | null }) => {
-  // 已安装：优先本地 icon.png（data URL）
-  const local = pluginIcons.value[p.id];
-  if (local) return local;
-  // 商店/官方源：用 index.json 里的 iconUrl（通常是 https://.../<id>.icon.png）
-  if (p.iconUrl) return p.iconUrl;
-  return null;
+const getPluginIconSrc = (p: { id: string } & Partial<StorePluginResolved>) => {
+  const isStore = typeof (p as any).sourceId === "string";
+  if (isStore) {
+    // 商店/官方源：优先用 index.json 里的 iconUrl（通常是 https://.../<id>.icon.png）
+    // 若 iconUrl 不存在，再用远端 Range 读取的 bytes（data URL）
+    if (p.iconUrl) return p.iconUrl;
+    const key = getIconKey(p);
+    return pluginIcons.value[key] || null;
+  }
+
+  // 已安装：只读本地 icon.png（data URL）
+  const key = localIconKey(p.id);
+  return pluginIcons.value[key] || null;
 };
 
 const loadPluginIcon = async (pluginId: string) => {
   if (!pluginId) return;
-  if (pluginIcons.value[pluginId]) return;
-  if (pluginIconLoading.value[pluginId]) return;
-  setPluginIconLoading(pluginId, true);
+  const key = localIconKey(pluginId);
+  if (pluginIcons.value[key]) return;
+  if (pluginIconLoading.value[key]) return;
+  setPluginIconLoading(key, true);
   try {
     const iconData = await invoke<number[] | null>("get_plugin_icon", {
       pluginId,
@@ -451,24 +474,27 @@ const loadPluginIcon = async (pluginId: string) => {
       .map((byte) => String.fromCharCode(byte))
       .join("");
     const base64 = btoa(binaryString);
-    pluginIcons.value = {
-      ...pluginIcons.value,
-      [pluginId]: `data:image/png;base64,${base64}`,
-    };
+    pluginIcons.value = { ...pluginIcons.value, [key]: `data:image/png;base64,${base64}` };
   } catch (e) {
     // 图标缺失不算错误：保持占位符即可
   } finally {
-    setPluginIconLoading(pluginId, false);
+    setPluginIconLoading(key, false);
   }
 };
 
 // 商店列表：当 index.json 不再提供 iconUrl 时，从 .kgpg 固定头部通过 Range 读取 icon（后端返回 PNG bytes）
-const loadRemotePluginIcon = async (plugin: { id: string; downloadUrl?: string | null }) => {
+const loadRemotePluginIcon = async (plugin: {
+  id: string;
+  sourceId: string;
+  downloadUrl?: string | null;
+}) => {
   if (!plugin?.id) return;
+  if (!plugin.sourceId) return;
   if (!plugin.downloadUrl) return;
-  if (pluginIcons.value[plugin.id]) return;
-  if (pluginIconLoading.value[plugin.id]) return;
-  setPluginIconLoading(plugin.id, true);
+  const key = storeIconKey(plugin.sourceId, plugin.id);
+  if (pluginIcons.value[key]) return;
+  if (pluginIconLoading.value[key]) return;
+  setPluginIconLoading(key, true);
   try {
     const iconData = await invoke<number[] | null>("get_remote_plugin_icon", {
       downloadUrl: plugin.downloadUrl,
@@ -479,14 +505,11 @@ const loadRemotePluginIcon = async (plugin: { id: string; downloadUrl?: string |
       .map((byte) => String.fromCharCode(byte))
       .join("");
     const base64 = btoa(binaryString);
-    pluginIcons.value = {
-      ...pluginIcons.value,
-      [plugin.id]: `data:image/png;base64,${base64}`,
-    };
+    pluginIcons.value = { ...pluginIcons.value, [key]: `data:image/png;base64,${base64}` };
   } catch {
     // 远程 icon 拉取失败：保持占位符即可
   } finally {
-    setPluginIconLoading(plugin.id, false);
+    setPluginIconLoading(key, false);
   }
 };
 
@@ -499,23 +522,28 @@ const prefetchRemoteIconsForSource = async (sourceId: string) => {
       return pv >= 2 && !p.iconUrl && !!p.downloadUrl;
     })
     .slice(0, 24);
-  for (const p of targets) {
-    // 顺序拉取：更稳，避免把网络/后端打爆
-    // eslint-disable-next-line no-await-in-loop
-    await loadRemotePluginIcon(p);
-  }
+  // 有限并发：最多同时拉 10 个，避免请求风暴但也不会“一个接一个”太慢
+  const concurrency = 10;
+  let idx = 0;
+  const workers = new Array(Math.min(concurrency, targets.length)).fill(0).map(async () => {
+    while (idx < targets.length) {
+      const cur = targets[idx];
+      idx += 1;
+      // eslint-disable-next-line no-await-in-loop
+      await loadRemotePluginIcon({
+        id: cur.id,
+        sourceId,
+        downloadUrl: cur.downloadUrl,
+      });
+    }
+  });
+  await Promise.all(workers);
 };
 
 const refreshPluginIcons = async () => {
   const ids = new Set<string>();
   // 已安装源：一定尝试加载本地 icon
   installedPlugins.value.forEach((p) => ids.add(p.id));
-  // 商店列表：仅对“已安装”的条目尝试加载本地 icon（未安装通常没有本地文件可读）
-  for (const arr of Object.values(storePluginsBySource.value)) {
-    for (const p of arr) {
-      if (p.installedVersion) ids.add(p.id);
-    }
-  }
   await Promise.all([...ids].map((id) => loadPluginIcon(id)));
 };
 

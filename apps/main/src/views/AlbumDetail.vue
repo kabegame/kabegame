@@ -2,10 +2,10 @@
   <div class="album-detail">
     <!-- 关键：不要用 v-if 在 loading 时卸载 ImageGrid，否则 before-grid 里的 header 会闪烁 -->
     <ImageGrid ref="albumViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
-      :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true" :loading="loading || isRefreshing"
-      :loading-overlay="loading || isRefreshing" :context-menu-component="AlbumImageContextMenu"
-      :on-context-command="handleImageMenuCommand" @added-to-album="handleAddedToAlbum"
-      @scroll-stable="loadImageUrls()">
+      enable-virtual-scroll :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true"
+      :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing"
+      :context-menu-component="AlbumImageContextMenu" :on-context-command="handleImageMenuCommand"
+      @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()">
 
       <template #before-grid>
         <PageHeader :title="albumName || '画册'"
@@ -113,6 +113,7 @@ import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
+import { useBigPageRoute } from "@/composables/useBigPageRoute";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import LoadMoreButton from "@/components/LoadMoreButton.vue";
@@ -173,16 +174,15 @@ const albumContainerRef = ref<HTMLElement | null>(null);
 
 // leaf 分页：每页 1000 张（与后端 provider 对齐）
 const BIG_PAGE_SIZE = 1000;
-const currentPage = ref(1);
-watch(
-  () => route.params.page,
-  (v) => {
-    const n = typeof v === "string" ? parseInt(v, 10) : 1;
-    currentPage.value = Number.isFinite(n) && n > 0 ? n : 1;
-  },
-  { immediate: true }
-);
-const currentOffset = computed(() => (currentPage.value - 1) * BIG_PAGE_SIZE);
+const { currentPage, currentOffset, jumpToPage } = useBigPageRoute({
+  route,
+  router,
+  baseRouteName: "AlbumDetail",
+  pagedRouteName: "AlbumDetailPaged",
+  bigPageSize: BIG_PAGE_SIZE,
+  getBaseParams: () => ({ id: albumId.value }),
+  getPagedParams: (page) => ({ id: albumId.value, page: String(page) }),
+});
 const providerRootPath = computed(() => {
   if (!albumName.value) return "";
   // 与 VD 路径一致：画册/<albumName>
@@ -191,19 +191,19 @@ const providerRootPath = computed(() => {
 const hasMoreInLeaf = computed(() => images.value.length < leafAllImages.length);
 
 const handleJumpToPage = async (page: number) => {
-  const nextPage = Math.max(1, Math.floor(page || 1));
-  if (nextPage === currentPage.value) return;
-  currentPage.value = nextPage;
-  if (nextPage === 1) {
-    await router.replace({ name: "AlbumDetail", params: { id: albumId.value } });
-  } else {
-    await router.replace({
-      name: "AlbumDetailPaged",
-      params: { id: albumId.value, page: String(nextPage) },
-    });
-  }
-  await loadAlbum({ reset: true });
+  await jumpToPage(page);
 };
+
+// 跟随 page 变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
+watch(
+  () => currentPage.value,
+  (p, prev) => {
+    if (!albumId.value) return;
+    if (!albumName.value) return;
+    if (p === prev) return;
+    void loadAlbum({ reset: true });
+  }
+);
 
 const loadMoreInLeaf = async () => {
   if (isLoadingMore.value) return;

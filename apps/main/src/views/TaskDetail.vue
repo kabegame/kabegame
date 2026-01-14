@@ -4,7 +4,7 @@
             <el-skeleton :rows="8" animated />
         </div>
         <ImageGrid v-else ref="taskViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
-            :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true"
+            enable-virtual-scroll :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true"
             :context-menu-component="TaskImageContextMenu" :on-context-command="handleImageMenuCommand"
             @retry-download="handleRetryDownload" @scroll-stable="loadImageUrls()">
             <template #before-grid>
@@ -39,6 +39,10 @@
                         </el-icon>
                     </el-button>
                 </PageHeader>
+
+                <!-- 大页分页器（与 Gallery/AlbumDetail 一致：1000/页，对齐后端 provider 叶子目录） -->
+                <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
+                    :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToPage" />
             </template>
         </ImageGrid>
 
@@ -75,6 +79,8 @@ import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
 import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
+import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
+import { useBigPageRoute } from "@/composables/useBigPageRoute";
 
 type TaskFailedImage = {
     id: number;
@@ -98,6 +104,11 @@ const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
+const isOnTaskRoute = computed(() => {
+    const n = String(route.name ?? "");
+    return n === "TaskDetail" || n === "TaskDetailPaged";
+});
+
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 const helpDrawer = useHelpDrawerStore();
@@ -112,6 +123,7 @@ const taskId = ref<string>("");
 const taskName = ref<string>("");
 const taskStatus = ref<string>("");
 const taskInfo = ref<any>(null);
+const totalImagesCount = ref<number>(0); // provider.total（成功下载的图片数）
 
 // 从 store 获取任务状态（确保状态同步）
 const taskStatusFromStore = computed(() => {
@@ -174,12 +186,11 @@ let unlistenDownloadState: (() => void) | null = null;
 
 const taskSubtitle = computed(() => {
     const parts: string[] = [];
-    // 优先显示当前图片数量
-    if (images.value.length > 0) {
-        parts.push(`共 ${images.value.length} 张`);
-    } else {
-        parts.push(`共 0 张`);
-    }
+    // 总数：以 provider.total 为准（避免被分页/leaf 限制成 1000）
+    const failedTotal = failedImages.value.length;
+    const okTotal = totalImagesCount.value;
+    parts.push(`共 ${okTotal} 张`);
+    if (failedTotal > 0) parts.push(`失败 ${failedTotal} 张`);
     // 如果已删除数量 > 0，显示已删除数量
     if (taskInfo.value?.deletedCount && taskInfo.value.deletedCount > 0) {
         parts.push(`已删除 ${taskInfo.value.deletedCount} 张`);
@@ -216,6 +227,9 @@ const formatDuration = (startTime: number, endTime?: number, currentTimeMs?: num
 watch(
     () => route.params.id,
     async (newId) => {
+        // keep-alive 场景：离开任务页后 route 仍会变化（比如其它页面也有 :id）。
+        // 这里必须只在 TaskDetail/TaskDetailPaged 激活时才响应，否则会错误地把其它页面的 id 当成 taskId。
+        if (!isOnTaskRoute.value) return;
         if (newId && typeof newId === "string" && newId !== taskId.value) {
             // 清理旧的定时器和监听器
             stopTimersAndListeners();
@@ -248,14 +262,29 @@ const handleRefresh = async () => {
 
 // leaf 分页：每页 1000 张（与后端 provider 对齐）
 const BIG_PAGE_SIZE = 1000;
-const currentPage = ref(1);
+const { currentPage, currentOffset, jumpToPage } = useBigPageRoute({
+    route,
+    router,
+    baseRouteName: "TaskDetail",
+    pagedRouteName: "TaskDetailPaged",
+    bigPageSize: BIG_PAGE_SIZE,
+    getBaseParams: () => ({ id: taskId.value }),
+    getPagedParams: (page) => ({ id: taskId.value, page: String(page) }),
+});
+
+const handleJumpToPage = async (page: number) => {
+    await jumpToPage(page);
+};
+
+// 跟随 page 变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
 watch(
-    () => route.params.page,
-    (v) => {
-        const n = typeof v === "string" ? parseInt(v, 10) : 1;
-        currentPage.value = Number.isFinite(n) && n > 0 ? n : 1;
-    },
-    { immediate: true }
+    () => currentPage.value,
+    (p, prev) => {
+        if (!isOnTaskRoute.value) return;
+        if (!taskId.value) return;
+        if (p === prev) return;
+        void loadTaskImages({ showSkeleton: false });
+    }
 );
 
 const providerRootPath = computed(() => {
@@ -274,6 +303,7 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
         if (root) {
             const probe = await invoke<any>("browse_gallery_provider", { path: root });
             const total = (probe?.total ?? 0) as number;
+            totalImagesCount.value = total;
             if (total <= 0) {
                 imgs = [];
             } else if (total <= BIG_PAGE_SIZE) {
@@ -293,7 +323,19 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
         // - 之后成功下载：通过 image-added 追加（保持“image-add 之后的顺序”）
         const failed = await invoke<TaskFailedImage[]>("get_task_failed_images", { taskId: taskId.value });
         failedImages.value = failed || [];
-        const failedAsImages: ImageInfo[] = (failedImages.value || []).map((f) => ({
+
+        // 失败占位需要按当前大页过滤，否则翻页后仍会把第 1 页失败项混进来，看起来像“永远停在前 1000”
+        const orders = failedImages.value.map((f) => f.order ?? 0);
+        const minOrder = orders.length > 0 ? Math.min(...orders) : 0;
+        const base = minOrder === 1 ? 1 : 0; // 兼容 order 1-based/0-based
+        const startOrder = currentOffset.value + base;
+        const endOrder = currentOffset.value + BIG_PAGE_SIZE + base;
+        const failedInPage = failedImages.value.filter((f) => {
+            const o = f.order ?? 0;
+            return o >= startOrder && o < endOrder;
+        });
+
+        const failedAsImages: ImageInfo[] = (failedInPage || []).map((f) => ({
             id: `failed:${f.id}`,
             url: f.url,
             localPath: "",
@@ -317,6 +359,10 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
 
         // 清理旧资源
         resetImageUrlLoader();
+    } catch (e) {
+        console.error("加载任务图片失败:", e);
+        // 兜底：避免“静默 0 张”让用户误判，提示可能是 provider-path 解析/缓存导致的问题
+        ElMessage.error("加载任务图片失败，请稍后重试或点击右上角“刷新”");
     } finally {
         if (showSkeleton) loading.value = false;
     }
@@ -329,13 +375,23 @@ const syncFailedPlaceholdersIncremental = async () => {
         const failed = await invoke<TaskFailedImage[]>("get_task_failed_images", { taskId: taskId.value });
         failedImages.value = failed || [];
 
+        const orders = failedImages.value.map((f) => f.order ?? 0);
+        const minOrder = orders.length > 0 ? Math.min(...orders) : 0;
+        const base = minOrder === 1 ? 1 : 0;
+        const startOrder = currentOffset.value + base;
+        const endOrder = currentOffset.value + BIG_PAGE_SIZE + base;
+        const failedInPage = failedImages.value.filter((f) => {
+            const o = f.order ?? 0;
+            return o >= startOrder && o < endOrder;
+        });
+
         const existingFailedIds = new Set<number>();
         for (const img of images.value) {
             if (img.isTaskFailed && img.taskFailedId) existingFailedIds.add(img.taskFailedId);
         }
 
         const toAppend: ImageInfo[] = [];
-        for (const f of failedImages.value) {
+        for (const f of failedInPage) {
             if (existingFailedIds.has(f.id)) continue;
             toAppend.push({
                 id: `failed:${f.id}`,

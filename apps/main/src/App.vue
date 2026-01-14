@@ -486,6 +486,16 @@ onMounted(() => {
   // WebView/窗口初始化可能有时序问题，再延迟补一次，提升稳定性
   window.setTimeout(() => void updateSidebarDwmBlur(), 500);
   window.addEventListener("resize", updateSidebarDwmBlur, { passive: true });
+  // 预加载关键路由组件，避免首次点击时的卡顿
+  // 使用 requestIdleCallback（如有）或 setTimeout 在空闲时加载
+  const preloadRouteComponents = () => {
+    // 预加载"收集源"页面（通常是用户第二个访问的页面）
+    void import("@/views/PluginBrowser.vue");
+    // 可选：预加载其他常用页面
+    void import("@/views/Albums.vue");
+    void import("@/views/Settings.vue");
+  };
+  window.requestIdleCallback(preloadRouteComponents, { timeout: 3000 });
 });
 
 onUnmounted(() => {

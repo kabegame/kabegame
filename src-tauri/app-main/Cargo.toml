@@ -16,6 +16,8 @@ tokio = { workspace = true }
 image = { workspace = true }
 sha2 = { workspace = true }
 uuid = { workspace = true }
+lru = { version = "0.12", optional = true }
+memmap2 = { version = "0.9", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
@@ -37,7 +39,7 @@ tauri-build = { workspace = true }
 default = ["custom-protocol", "tray", "virtual-drive"]
 tray = ["dep:governor"]
 custom-protocol = ["tauri/custom-protocol", "kabegame-core/custom-protocol"]
-virtual-drive = ["dep:dokan", "dep:widestring", "dep:winapi", "kabegame-core/virtual-drive"]
+virtual-drive = ["dep:dokan", "dep:widestring", "dep:winapi", "dep:lru", "dep:memmap2", "kabegame-core/virtual-drive"]
 
 
 [[bin]]

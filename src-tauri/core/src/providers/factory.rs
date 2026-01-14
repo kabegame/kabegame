@@ -15,9 +15,6 @@ impl ProviderFactory {
     pub fn build(desc: &ProviderDescriptor) -> Arc<dyn Provider> {
         match desc {
             ProviderDescriptor::Root => Arc::new(RootProvider::default()),
-            ProviderDescriptor::GalleryRoot => {
-                Arc::new(crate::gallery::provider::GalleryRootProvider::default())
-            }
 
             ProviderDescriptor::Albums => Arc::new(AlbumsProvider::new()),
             ProviderDescriptor::Album { album_id } => Arc::new(

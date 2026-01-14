@@ -23,7 +23,6 @@
 //! ```
 
 use std::{
-    fs::File,
     path::PathBuf,
     sync::{Arc, Once},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -32,6 +31,8 @@ use std::{
 use super::drive_service::{join_mount_subdir, notify_explorer_dir_changed_path};
 use super::fs::KabegameFs;
 use super::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
 use dokan::{
     CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, OperationInfo, OperationResult,
     VolumeInfo,
@@ -64,28 +65,8 @@ fn now() -> SystemTime {
     SystemTime::now()
 }
 
-fn system_time_from_fs_metadata(meta: &std::fs::Metadata) -> (SystemTime, SystemTime, SystemTime) {
-    let created = meta.created().unwrap_or(UNIX_EPOCH);
-    let accessed = meta.accessed().unwrap_or(created);
-    let modified = meta.modified().unwrap_or(accessed);
-    (created, accessed, modified)
-}
-
-fn normalize_unix_secs(ts: u64) -> u64 {
-    const MAX_SEC_9999: u64 = 253402300799;
-    if ts > MAX_SEC_9999 {
-        ts / 1000
-    } else {
-        ts
-    }
-}
-
-fn system_time_from_gallery_ts(ts: u64) -> SystemTime {
-    let secs = normalize_unix_secs(ts);
-    UNIX_EPOCH
-        .checked_add(Duration::from_secs(secs))
-        .unwrap_or_else(now)
-}
+// NOTE: 文件时间戳由语义层（VfsSemantics::open_existing/read_dir）统一决定并缓存到 context；
+// 这里的几个 helper 仅用于历史逻辑，保留无害，但不应再在高频路径中调用。
 
 fn parse_segments(file_name: &U16CStr) -> Vec<String> {
     let s = file_name.to_string_lossy();
@@ -138,11 +119,10 @@ pub enum FsItem {
     File {
         path: Vec<String>,
         image_id: String,
-        resolved_path: PathBuf,
         size: u64,
-        /// 缓存的文件句柄：避免每次 read_file 都重新 open
-        /// 用 FileExt::seek_read(offset) 无锁读取，避免 seek + mutex 导致的游标竞争
-        file_handle: Arc<File>,
+        meta: VdFileMeta,
+        /// 缓存的只读读取句柄：优先 mmap，fallback seek_read（面向 Explorer 缩略图/预览）
+        read_handle: Arc<VdReadHandle>,
     },
 }
 
@@ -392,17 +372,17 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             }),
             Ok(VfsOpenedItem::File {
                 image_id,
-                resolved_path,
                 size,
-                file_handle,
+                meta,
+                read_handle,
                 ..
             }) => Ok(CreateFileInfo {
                 context: FsItem::File {
                     path: segs,
                     image_id,
-                    resolved_path,
                     size,
-                    file_handle,
+                    meta,
+                    read_handle,
                 },
                 is_dir: false,
                 new_file_created: false,
@@ -475,39 +455,19 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 })
             }
             FsItem::File {
-                resolved_path,
                 size,
                 image_id,
+                meta,
                 ..
-            } => {
-                // 文件时间戳与画廊数据一致：优先取 DB 的 COALESCE(order, crawled_at)
-                // 若查不到则回退到磁盘文件 metadata。
-                let (created, accessed, modified) =
-                    if let Ok(Some(img)) = self.storage.find_image_by_id(image_id) {
-                        let ts = img.order.unwrap_or(img.crawled_at as i64);
-                        if ts >= 0 {
-                            let t = system_time_from_gallery_ts(ts as u64);
-                            (t, t, t)
-                        } else {
-                            let meta = std::fs::metadata(resolved_path)
-                                .map_err(|_| STATUS_OBJECT_NAME_NOT_FOUND)?;
-                            system_time_from_fs_metadata(&meta)
-                        }
-                    } else {
-                        let meta = std::fs::metadata(resolved_path)
-                            .map_err(|_| STATUS_OBJECT_NAME_NOT_FOUND)?;
-                        system_time_from_fs_metadata(&meta)
-                    };
-                Ok(FileInfo {
-                    attributes: FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE,
-                    creation_time: created,
-                    last_access_time: accessed,
-                    last_write_time: modified,
-                    file_size: *size,
-                    number_of_links: 1,
-                    file_index: file_index_from_numeric_id(image_id),
-                })
-            }
+            } => Ok(FileInfo {
+                attributes: FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE,
+                creation_time: meta.created,
+                last_access_time: meta.accessed,
+                last_write_time: meta.modified,
+                file_size: *size,
+                number_of_links: 1,
+                file_index: file_index_from_numeric_id(image_id),
+            }),
         }
     }
 
@@ -571,7 +531,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<u32> {
-        let FsItem::File { file_handle, .. } = context else {
+        let FsItem::File { read_handle, .. } = context else {
             return Err(STATUS_INVALID_PARAMETER);
         };
         if offset < 0 {
@@ -582,7 +542,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             .state::<kabegame_core::providers::ProviderRuntime>();
         let sem = VfsSemantics::new(&self.storage, &self.root, &*rt);
         let n = sem
-            .read_file(file_handle, offset as u64, buffer)
+            .read_file(read_handle, offset as u64, buffer)
             .map_err(Self::map_vfs_error)?;
         Ok(n as u32)
     }

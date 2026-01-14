@@ -92,6 +92,7 @@ import { useLoadingDelay } from "@/composables/useLoadingDelay";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
+import { useBigPageRoute } from "@/composables/useBigPageRoute";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -120,6 +121,7 @@ const bigPageEnabled = computed(() => {
 const currentBigPageOffset = computed(() => currentOffset.value);
 
 const route = useRoute();
+const router = useRouter();
 
 // 纯 path 驱动：
 // - /gallery/<providerPath>[/page/<n>]
@@ -135,16 +137,25 @@ const providerRootPath = computed(() => {
   const s = segs.map((x) => String(x || "").trim()).filter(Boolean).join("/");
   return s || "全部";
 });
-
-const currentPage = ref(1);
-watch(
-  () => route.params.page,
-  (v) => {
-    const n = typeof v === "string" ? parseInt(v, 10) : 1;
-    currentPage.value = Number.isFinite(n) && n > 0 ? n : 1;
-  },
-  { immediate: true }
-);
+const {
+  currentPage,
+  currentOffset,
+  jumpToPage,
+  replaceRouteForPage,
+} = useBigPageRoute({
+  route,
+  router,
+  baseRouteName: "Gallery",
+  pagedRouteName: "GalleryPaged",
+  bigPageSize: BIG_PAGE_SIZE,
+  getBaseParams: () => ({
+    providerPath: providerRootPath.value.split("/").filter(Boolean),
+  }),
+  getPagedParams: (page) => ({
+    providerPath: providerRootPath.value.split("/").filter(Boolean),
+    page: String(page),
+  }),
+});
 
 type GalleryBrowseEntry =
   | { kind: "dir"; name: string }
@@ -230,33 +241,7 @@ const loadMonthOptions = async () => {
   }
 };
 
-const replaceRouteForPage = async (page: number) => {
-  const safe = Math.max(1, Math.floor(page || 1));
-  const segs = providerRootPath.value.split("/").filter(Boolean);
-  if (safe === 1) {
-    await router.replace({ name: "Gallery", params: { providerPath: segs } });
-  } else {
-    await router.replace({
-      name: "GalleryPaged",
-      params: { providerPath: segs, page: String(safe) },
-    });
-  }
-};
-
-// 将 currentPage 的变化（可能来自代码自动纠正）同步回 URL（无 query）
-watch(
-  () => currentPage.value,
-  (p) => {
-    const next = Math.max(1, Math.floor(p || 1));
-    const cur =
-      typeof route.params.page === "string" ? parseInt(route.params.page, 10) : 1;
-    if (Number.isFinite(cur) && cur === next) return;
-    void replaceRouteForPage(next);
-  }
-);
-
 // 跟踪当前的实际偏移量（用于 paginator：offset = (page-1)*1000）
-const currentOffset = computed(() => (currentPage.value - 1) * BIG_PAGE_SIZE);
 
 // 计算当前位置（用于 header subtitle 显示）
 const currentPosition = computed(() => {
@@ -286,7 +271,6 @@ const crawlerDialogInitialConfig = ref<{
   outputDir?: string;
   vars?: Record<string, any>;
 } | undefined>(undefined);
-const router = useRouter();
 const showDedupeDialog = ref(false); // 去重确认对话框
 const dedupeDeleteFiles = ref(false); // 是否删除本地文件
 // 移除/删除对话框相关
@@ -454,8 +438,7 @@ const handleJumpToBigPage = async (bigPage: number) => {
   startLoading();
   try {
     await jumpToBigPage(bigPage, BIG_PAGE_SIZE);
-    currentPage.value = bigPage;
-    void replaceRouteForPage(bigPage);
+    await jumpToPage(bigPage);
   } finally {
     finishLoading();
   }

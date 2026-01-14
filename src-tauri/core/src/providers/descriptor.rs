@@ -9,8 +9,6 @@ use crate::storage::gallery::ImageQuery;
 pub enum ProviderDescriptor {
     Root,
 
-    GalleryRoot,
-
     Albums,
     Album {
         album_id: String,

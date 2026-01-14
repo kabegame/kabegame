@@ -195,8 +195,8 @@ function dev(options) {
   // This prevents Tauri from failing on empty resources glob pattern
   const packageTarget =
     options.mode === "local"
-      ? "crawler-plugins:package-local-to-resources"
-      : "crawler-plugins:package-to-resources";
+      ? "crawler-plugins:package-local-to-data"
+      : "crawler-plugins:package-to-data";
   console.log(
     chalk.blue(`[dev] Packaging plugins to resources: ${packageTarget}`)
   );

@@ -268,6 +268,9 @@ export function useImageUrlLoader<
     }
   };
 
+  // 交互期的“延后加载”合并开关：避免 scroll-stable / 自动加载在交互期频繁触发时反复排队
+  let deferredVisibleLoadScheduled = false;
+
   const loadSingleImageUrl = async (image: TImage, needOriginal: boolean) => {
     const existing = imageSrcMap.value[image.id] || {};
     const hasThumb =
@@ -320,7 +323,19 @@ export function useImageUrlLoader<
   };
 
   const loadImageUrls = async (targetImages?: TImage[]) => {
-    if (params.isInteracting?.value && !targetImages) return;
+    // 强交互期间：不要直接开加载任务（避免抢占滚动帧率），但也不能“静默丢掉触发”，
+    // 否则会出现“高速滚动停住后仍是骨架，需要再滚一下才加载”的体验。
+    // 做法：合并成一个“交互结束后立刻补一次”的延后任务。
+    if (params.isInteracting?.value && !targetImages) {
+      if (!deferredVisibleLoadScheduled) {
+        deferredVisibleLoadScheduled = true;
+        scheduleNext(() => {
+          deferredVisibleLoadScheduled = false;
+          void loadImageUrls();
+        });
+      }
+      return;
+    }
 
     const range = estimateVisibleIndexRange();
     // 关键：避免在“一次性塞入 10k 图片”时把全量图片纳入本次扫描/队列。

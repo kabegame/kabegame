@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::providers::common::CommonProvider;
 #[cfg(feature = "virtual-drive")]
 use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
-use crate::providers::provider::{FsEntry, Provider};
+use crate::providers::provider::{FsEntry, Provider, ResolveChild};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 use std::path::PathBuf;
@@ -85,6 +85,31 @@ impl Provider for TaskGroupProvider {
             return None;
         }
         Some(Arc::new(TaskImagesProvider::new(task_id.to_string())))
+    }
+
+    fn resolve_child(&self, storage: &Storage, name: &str) -> ResolveChild {
+        // 允许“路径直达”：
+        // - VD 的 list() 里通常是 "{plugin_name} - {task_id}"
+        // - 但前端（TaskDetail）会直接用纯 taskId 拼路径：`按任务/<taskId>`
+        //
+        // 因此这里把“纯 taskId”视作 Dynamic child（不会出现在 list 中，也不落持久缓存），
+        // 把 "{plugin} - {taskId}" 视作 Listed child（与 list 的语义一致）。
+        let (listed, task_id) = match name.rsplit_once(" - ") {
+            Some((_, id)) => (true, id.trim()),
+            None => (false, name.trim()),
+        };
+        if task_id.is_empty() {
+            return ResolveChild::NotFound;
+        }
+        if storage.get_task(task_id).ok().flatten().is_none() {
+            return ResolveChild::NotFound;
+        }
+        let child: Arc<dyn Provider> = Arc::new(TaskImagesProvider::new(task_id.to_string()));
+        if listed {
+            ResolveChild::Listed(child)
+        } else {
+            ResolveChild::Dynamic(child)
+        }
     }
 
     #[cfg(feature = "virtual-drive")]

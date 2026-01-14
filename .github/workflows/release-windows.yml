@@ -63,7 +63,8 @@ jobs:
         run: |
           # 改为直接使用仓库中已提交的 crawler-plugins/packed 产物，不在 CI 内重新打包插件
           $packedDir = "crawler-plugins/packed"
-          $dstDir = "src-tauri/resources/plugins"
+          # 注意：Tauri app-main 的 bundle.resources 配置为 resources/plugins（相对 app-main）
+          $dstDir = "src-tauri/app-main/resources/plugins"
 
           if (-not (Test-Path $packedDir)) {
             throw "packed 目录不存在：$packedDir（请先在仓库中提交 crawler-plugins/packed）"
@@ -128,7 +129,7 @@ jobs:
 
           {
             echo "changelog<<EOF"
-            echo "## 📝 更新内容"
+            echo "## 📝 アプデ内容"
             echo ""
             if [ -z "$CHANGES" ]; then
               echo "- 无变更记录"
@@ -145,7 +146,8 @@ jobs:
           node -e "
           const fs = require('fs');
           const path = require('path');
-          const configPath = 'src-tauri/tauri.conf.json';
+          // Tauri 2 多 app：main 的配置在 src-tauri/app-main/tauri.conf.json
+          const configPath = 'src-tauri/app-main/tauri.conf.json';
           const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
           const originalName = config.productName;
           config.productName = originalName + '-${{ matrix.mode }}';
@@ -159,7 +161,7 @@ jobs:
           VITE_KABEGAME_MODE: ${{ matrix.mode }}
           KABEGAME_BUILTIN_PLUGINS: ${{ steps.package-plugins.outputs.builtin_plugins }}
         run: pnpm exec tauri build --bundles nsis
-        working-directory: src-tauri
+        working-directory: src-tauri/app-main
 
       - name: Restore productName
         if: always()
@@ -169,7 +171,7 @@ jobs:
           node -e "
           const fs = require('fs');
           const path = require('path');
-          const configPath = 'src-tauri/tauri.conf.json';
+          const configPath = 'src-tauri/app-main/tauri.conf.json';
           const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
           config.productName = config.productName.replace(/-normal$|-local$/, '');
           fs.writeFileSync(configPath, JSON.stringify(config, null, 2));

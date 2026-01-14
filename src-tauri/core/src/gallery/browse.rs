@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::providers::descriptor::ProviderDescriptor;
+use crate::providers::root::{DIR_ALBUMS, DIR_ALL, DIR_BY_DATE, DIR_BY_PLUGIN, DIR_BY_TASK};
 use crate::providers::{ProviderRuntime, RootProvider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::{ImageInfo, Storage};
@@ -57,14 +58,14 @@ pub fn browse_gallery_provider(
 
     // 兼容旧路径：all/by-plugin/by-date/by-task/by-album 映射到 VD 风格路径
     let mapped: Vec<&str> = match raw_segs[0] {
-        "all" => std::iter::once("全部")
+        "all" => std::iter::once(DIR_ALL)
             .chain(raw_segs[1..].iter().copied())
             .collect(),
         "by-plugin" => {
             if raw_segs.len() < 2 {
                 return Err("by-plugin 需要 pluginId".to_string());
             }
-            std::iter::once("按插件")
+            std::iter::once(DIR_BY_PLUGIN)
                 .chain(raw_segs[1..].iter().copied())
                 .collect()
         }
@@ -72,7 +73,7 @@ pub fn browse_gallery_provider(
             if raw_segs.len() < 2 {
                 return Err("by-date 需要 yyyy-mm".to_string());
             }
-            std::iter::once("按时间")
+            std::iter::once(DIR_BY_DATE)
                 .chain(raw_segs[1..].iter().copied())
                 .collect()
         }
@@ -80,7 +81,7 @@ pub fn browse_gallery_provider(
             if raw_segs.len() < 2 {
                 return Err("by-task 需要 taskId".to_string());
             }
-            std::iter::once("按任务")
+            std::iter::once(DIR_BY_TASK)
                 .chain(raw_segs[1..].iter().copied())
                 .collect()
         }
@@ -88,7 +89,7 @@ pub fn browse_gallery_provider(
             if raw_segs.len() < 2 {
                 return Err("by-album 需要 albumName".to_string());
             }
-            std::iter::once("画册")
+            std::iter::once(DIR_ALBUMS)
                 .chain(raw_segs[1..].iter().copied())
                 .collect()
         }

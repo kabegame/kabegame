@@ -76,6 +76,9 @@ export function useImageGridAutoLoad(params: UseImageGridAutoLoadParams) {
 
   // 加载防抖相关
   let loadDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  // 滚动结束兜底：用于“滚太快 -> 速度阈值拦截 -> 停住后不再有低速 scroll 事件”的场景
+  let scrollEndFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+  let skippedDueToSpeed = false;
 
   const bindContainerScrollListener = (el: HTMLElement | null) => {
     if (cleanupContainerScrollListener) {
@@ -94,6 +97,11 @@ export function useImageGridAutoLoad(params: UseImageGridAutoLoadParams) {
       clearTimeout(loadDebounceTimer);
       loadDebounceTimer = null;
     }
+    if (scrollEndFallbackTimer) {
+      clearTimeout(scrollEndFallbackTimer);
+      scrollEndFallbackTimer = null;
+    }
+    skippedDueToSpeed = false;
     if (!el) return;
 
     // 初始化滚动检测
@@ -111,6 +119,7 @@ export function useImageGridAutoLoad(params: UseImageGridAutoLoadParams) {
 
       // 速度检测禁用时（阈值 <= 0），直接用 rAF 触发
       if (loadSpeedThreshold <= 0) {
+        skippedDueToSpeed = false;
         if (rafScrollScheduled) return;
         rafScrollScheduled = true;
         requestAnimationFrame(() => {
@@ -123,6 +132,7 @@ export function useImageGridAutoLoad(params: UseImageGridAutoLoadParams) {
 
       // 速度高于阈值时，不触发加载，等速度降下来
       if (currentSpeed > loadSpeedThreshold) {
+        skippedDueToSpeed = true;
         return;
       }
 
@@ -131,6 +141,7 @@ export function useImageGridAutoLoad(params: UseImageGridAutoLoadParams) {
         loadDebounceTimer = null;
         if (!enabled.value) return;
         if (isDragScrolling.value) return;
+        skippedDueToSpeed = false;
         params.onLoad();
       }, loadDebounceMs);
     };
@@ -168,6 +179,22 @@ export function useImageGridAutoLoad(params: UseImageGridAutoLoadParams) {
 
       // 触发加载（带速度防抖）
       scheduleLoad();
+
+      // 兜底：当“速度阈值拦截”导致 scheduleLoad 没有设置定时器时，
+      // 若用户高速滚动后直接停住，可能不会再产生低速 scroll 事件，从而一直不触发加载。
+      // 用“滚动结束（短时间无 scroll 事件）”来补一次。
+      if (scrollEndFallbackTimer) {
+        clearTimeout(scrollEndFallbackTimer);
+        scrollEndFallbackTimer = null;
+      }
+      scrollEndFallbackTimer = setTimeout(() => {
+        scrollEndFallbackTimer = null;
+        if (!enabled.value) return;
+        if (isDragScrolling.value) return;
+        if (!skippedDueToSpeed) return;
+        skippedDueToSpeed = false;
+        params.onLoad();
+      }, Math.max(80, loadDebounceMs));
     };
 
     const onDragScrollActiveChange = (ev: Event) => {
@@ -237,6 +264,10 @@ export function useImageGridAutoLoad(params: UseImageGridAutoLoadParams) {
     if (loadDebounceTimer) {
       clearTimeout(loadDebounceTimer);
       loadDebounceTimer = null;
+    }
+    if (scrollEndFallbackTimer) {
+      clearTimeout(scrollEndFallbackTimer);
+      scrollEndFallbackTimer = null;
     }
   });
 

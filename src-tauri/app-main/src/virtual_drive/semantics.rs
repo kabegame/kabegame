@@ -7,7 +7,6 @@
 #![allow(dead_code)]
 
 use std::{
-    fs::File,
     path::PathBuf,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -20,6 +19,9 @@ use kabegame_core::{
     providers::{root::DIR_ALBUMS, root::DIR_BY_TASK, ProviderRuntime},
     storage::Storage,
 };
+
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
 
 #[derive(Debug, Clone)]
 pub struct VfsMetadata {
@@ -63,7 +65,8 @@ pub enum VfsOpenedItem {
         image_id: String,
         resolved_path: PathBuf,
         size: u64,
-        file_handle: Arc<File>,
+        meta: VdFileMeta,
+        read_handle: Arc<VdReadHandle>,
     },
 }
 
@@ -218,18 +221,32 @@ impl<'a> VfsSemantics<'a> {
                 image_id,
                 resolved_path,
             } => {
-                let meta = std::fs::metadata(&resolved_path)
+                let (handle, meta) = VdReadHandle::open(&resolved_path)
                     .map_err(|_| VfsError::NotFound("文件不存在".to_string()))?;
-                let size = meta.len();
-                let file_handle = File::open(&resolved_path)
-                    .map(Arc::new)
-                    .map_err(|_| VfsError::NotFound("文件不存在".to_string()))?;
+                let size = handle.len();
+                // 文件时间戳与画廊数据一致：优先取 DB 的 COALESCE(order, crawled_at)。
+                // 这里做一次轻量查询并缓存到 context，避免 get_file_information 再次查 DB / stat。
+                let meta = self
+                    .storage
+                    .get_images_gallery_ts_by_ids(&[image_id.clone()])
+                    .ok()
+                    .and_then(|m| m.get(&image_id).copied())
+                    .map(|ts| {
+                        let t = system_time_from_gallery_ts(ts);
+                        VdFileMeta {
+                            created: t,
+                            accessed: t,
+                            modified: t,
+                        }
+                    })
+                    .unwrap_or(meta);
                 Ok(VfsOpenedItem::File {
                     path: path.to_vec(),
                     image_id,
                     resolved_path,
                     size,
-                    file_handle,
+                    meta,
+                    read_handle: Arc::new(handle),
                 })
             }
             ResolveResult::NotFound => Err(VfsError::NotFound("路径不存在".to_string())),
@@ -356,29 +373,13 @@ impl<'a> VfsSemantics<'a> {
 
     pub fn read_file(
         &self,
-        file_handle: &Arc<File>,
+        read_handle: &Arc<VdReadHandle>,
         offset: u64,
         buffer: &mut [u8],
     ) -> Result<usize, VfsError> {
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::fs::FileExt;
-            return file_handle
-                .seek_read(buffer, offset)
-                .map_err(|e| VfsError::Other(format!("read_file failed: {}", e)));
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            use std::io::{Read, Seek, SeekFrom};
-            let mut f = (&**file_handle)
-                .try_clone()
-                .map_err(|e| VfsError::Other(format!("clone file failed: {}", e)))?;
-            f.seek(SeekFrom::Start(offset))
-                .map_err(|e| VfsError::Other(format!("seek failed: {}", e)))?;
-            f.read(buffer)
-                .map_err(|e| VfsError::Other(format!("read failed: {}", e)))
-        }
+        read_handle
+            .read_at(offset, buffer)
+            .map_err(|e| VfsError::Other(e))
     }
 
     pub fn create_dir(

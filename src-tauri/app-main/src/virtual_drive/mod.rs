@@ -8,6 +8,8 @@ mod windows;
 pub mod drive_service;
 mod fs;
 mod semantics;
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+mod virtual_drive_io;
 // 从 drive_service 模块导出 VirtualDriveService（根据平台自动选择实现）
 
 pub use drive_service::VirtualDriveService;

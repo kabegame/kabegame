@@ -18,83 +18,93 @@
 - 📸 **画册浏览**: 查看已爬取的壁纸，支持按插件和画册筛选
 - 🎨 **壁纸轮播**: 自动从指定画册中轮播更换桌面壁纸，支持随机和顺序模式
 - 📦 **本地存储**: 壁纸和元数据存储在本地应用数据目录
+- 💾 **虚拟磁盘**: 在 Windows 上将画册挂载为虚拟磁盘，在资源管理器中像文件夹一样浏览图片
 - 🌐 **源管理**: 浏览、安装、收藏和管理壁纸源插件
+- 📋 **任务管理**: 实时查看收集任务进度、状态和已收集图片，支持停止、删除等操作
+- 🛠️ **插件编辑器**: 内置强大的插件编辑器，支持创建、编辑和调试 Rhai 爬虫脚本
+- ⌨️ **命令行工具**: 提供完整的 CLI 工具，支持通过命令行运行插件、导入图片等操作
+- 🖱️ **拖拽导入**: 支持拖入本地图片、文件夹或压缩包快速导入到画廊
 
-## 软件截图
+## 主要功能
+
+### 🖼️ 画廊浏览与图片管理
+
+画廊是 Kabegame 的核心，所有收集到的壁纸都会在这里展示。支持分页浏览、快速预览、多选操作、去重清理等功能。你可以直接拖入本地文件快速导入。双击图片即可在应用内预览大图，支持缩放、拖拽、切换等操作，也可以设置系统看图软件打开。
 
 <div align="center">
-  <img src="docs/images/ScreenShot1.png" alt="Kabegame 截图 1" width="800"/>
+  <img src="docs/images/main-screenshot1.png" alt="Kabegame 截图 1" width="800"/>
   <br/>
-  <img src="docs/images/ScreenShot2.png" alt="Kabegame 截图 2" width="800"/>
+  <img src="docs/images/main-screenshot2.png" alt="Kabegame 截图 2" width="800"/>
 </div>
 
-## 使用说明
+### 📸 画册管理
 
-### 1. 导入插件源
+画册功能让你可以自由整理和分类收集到的壁纸。创建自定义画册，将喜欢的图片加入其中，支持拖拽调整顺序。画册可以用于壁纸轮播，也可以作为虚拟磁盘的目录结构。每个画册都有独立的封面和描述，让你的收藏更有条理。
 
-插件以 `.kgpg` 文件格式提供（本质上是一个 ZIP 压缩包）。你可以通过以下方式导入插件：
+<div align="center">
+  <img src="docs/images/album.png" alt="画册列表" width="400"/>
+  <img src="docs/images/album-detail.png" alt="画册详情" width="400"/>
+</div>
 
-1. 进入"源管理"页面
-2. 点击"导入源"按钮
-3. 选择 `.kgpg` 插件文件
-4. 插件会自动安装并显示在"已安装源"列表中
 
-**提示**: 你也可以直接将 `.kgpg` 文件放到应用的插件目录下，应用会自动识别。
+### 🔌 强大的插件系统
 
-### 2. 浏览和安装插件
+Kabegame 的核心竞争力在于其插件化的爬虫系统（本地导入文件功能本质上是一个爬虫插件）。通过 `.kgpg` 插件文件，你可以轻松从各种二次元壁纸网站收集资源。插件使用 Rhai 脚本语言编写，支持复杂的爬取逻辑。应用内置插件商店（[插件仓库](./crawler-plugins)），可以一键安装热门插件，也可以导入别人开发的插件，甚至可以编写你自己的插件。每个插件都可以配置参数，在运行脚本的时候由用户输入。你也可以在运行的时候配置http头，分かるな。
 
-1. 进入"源管理"页面
-2. 在"源商店"标签页中浏览可用的插件
-3. 点击插件卡片查看详细信息
-4. 点击"安装"按钮安装插件
-5. 已安装的插件会显示在"已安装源"标签页中
-6. 可以点击"收藏"按钮收藏喜欢的插件
+<div align="center">
+  <img src="docs/images/shop.png" alt="插件商店" width="400"/>
+  <img src="docs/images/shop-detail-1.png" alt="插件细节1" width="400"/>
+  <img src="docs/images/shop-detail-2.png" alt="插件细节2" width="400"/>
+</div>
 
-### 3. 使用爬虫功能
+### 🎨 壁纸设置与轮播
 
-1. 进入"爬虫管理"页面
-2. 从下拉菜单中选择已安装并启用的插件
-3. 输入要爬取的目标 URL
-4. （可选）选择自定义输出目录，留空则使用默认目录
-5. 点击"开始爬取"按钮
-6. 爬取进度会实时显示，完成后壁纸会自动保存到本地
+一键设置桌面壁纸（图片右键抱到桌面上），支持原生模式和窗口模式。原生模式性能优秀，窗口模式功能更丰富。开启壁纸轮播后，可以自动从指定画册中更换壁纸，支持随机和顺序两种模式，可自定义轮播间隔。让桌面每天都有新惊喜！
 
-**提示**: 爬取过程中可以随时点击"停止"按钮中断任务。
+![设置壁纸](./docs/images/set-wallpaper.gif)
 
-### 4. 查看和管理壁纸
+### 📋 任务管理
 
-#### 画廊视图
-1. 进入"画廊"页面
-2. 可以按插件和画册筛选壁纸
-3. 点击壁纸可预览大图
-4. 可以删除不需要的壁纸
+所有收集任务都在这里统一管理。实时查看任务进度、状态、已收集图片数量等信息。支持查看任务详情、停止运行中的任务、删除已完成的任务。任务详情页以网格形式展示已收集的图片，可以预览、选择、添加到画册或删除。
 
-#### 画册管理
-1. 进入"画册"页面
-2. 点击"新建画册"创建自定义画册
-3. 点击画册卡片查看画册内容
-4. 可以将壁纸添加到画册中
-5. 支持拖拽调整画册中壁纸的顺序
+<div align="center">
+  <img src="docs/images/task.png" alt="任务抽屉" width="400"/>
+  <img src="docs/images/task-detail.png" alt="任务详情" width="400"/>
+  <br/>
+  <img src="docs/images/start-task.png" alt="开始任务" width="400"/>
+  <img src="docs/images/task-running.png" alt="任务运行中" width="400" />
+</div>
 
-### 5. 设置壁纸轮播
+### 💾 虚拟磁盘
 
-1. 进入"设置"页面
-2. 切换到"壁纸轮播"标签页
-3. 启用"壁纸轮播"开关
-4. 点击"选择画册"按钮，前往画册页面选择要轮播的画册
-5. 设置轮播间隔时间（分钟）
-6. 选择轮播模式：
-   - **随机模式**: 每次随机选择画册中的壁纸
-   - **顺序模式**: 按顺序依次更换壁纸
+在 Windows 系统上（目前），Kabegame 可以将画册挂载为虚拟磁盘，让你在资源管理器中像浏览普通文件夹一样浏览画册和图片。支持按插件、按时间、按任务、按画册等多种目录结构，带来更加灵活和原生的浏览体验。
 
-**提示**: 壁纸轮播功能需要应用在后台运行。如果关闭应用，轮播会自动停止。
+<div align="center">
+  <img src="docs/images/setting-VD.png" alt="设置虚拟磁盘" width="400"/>
+  <img src="docs/images/VD-view.png" alt="VD 浏览视图" width="400" />
+</div>
 
-### 6. 下载管理
+### 🛠️ 插件编辑器
 
-1. 进入"下载"页面
-2. 查看所有下载任务的进度和状态
-3. 可以暂停、恢复或取消下载任务
-4. 下载完成后，壁纸会自动添加到对应的画册中
+内置强大的插件编辑器，支持创建、编辑和调试 Rhai 爬虫脚本。提供语法高亮、代码补全、实时预览等功能。可以配置插件的 manifest.json 和 config.json，添加图标和文档，一键打包为 `.kgpg` 文件并导入。让插件开发变得简单高效！
+
+<div align="center">
+  <img src="docs/images/plugin-editor.png" alt="插件编辑器" width="800"/>
+</div>
+
+### ⌨️ 命令行工具
+
+提供精巧的 CLI 工具，支持通过命令行运行插件、导入图片、管理画册等操作。适合自动化脚本、批量处理等场景。可以轻松集成到你的工作流中，让壁纸收集更加自动化。当你双击一个`kgpg`文件的时候，默认通过命令行工具打开查看详情。
+
+<div align="center">
+  <img src="docs/images/cli-plugin-import.png" alt="命令行工具导入插件示例" width="800"/>
+</div>
+
+### 更多用法
+应用内置一个帮助页面，能够帮助你更好了解龟龟！
+![help](./docs/images/help.png)
+
+これからもっと機能や改良を行っていく予定です。ぜひご期待を。
 
 ## 注意事项
 
@@ -180,48 +190,97 @@ pnpm build --mode local       # 构建 local 模式（无商店版本，预打�
 
 ```
 .
-├── src/                    # 主应用前端代码（Vue 3 + TypeScript）
-│   ├── components/        # Vue 组件
-│   ├── stores/           # Pinia 状态管理
-│   ├── views/            # 页面视图
-│   ├── router/           # 路由配置
-│   └── main.ts           # 入口文件
-├── src-plugin-editor/     # 插件编辑器前端代码（Vue 3 + TypeScript）
-│   └── ...               # 类似主应用结构
+├── apps/                  # 前端应用（Nx Monorepo）
+│   ├── main/             # 主应用前端（Vue 3 + TypeScript，端口 1420）
+│   │   ├── src/
+│   │   │   ├── components/# Vue 组件
+│   │   │   ├── stores/   # Pinia 状态管理
+│   │   │   ├── views/   # 页面视图
+│   │   │   ├── router/  # 路由配置
+│   │   │   ├── help/    # 帮助系统
+│   │   │   └── main.ts  # 入口文件
+│   │   ├── html/        # HTML 模板
+│   │   ├── vite.config.ts
+│   │   └── package.json
+│   ├── plugin-editor/    # 插件编辑器前端（Vue 3 + TypeScript，端口 1421）
+│   │   ├── src/
+│   │   │   └── plugin-editor/
+│   │   ├── html/
+│   │   ├── vite.config.ts
+│   │   └── package.json
+│   └── cli/              # CLI 工具前端（Vue 3 + TypeScript）
+│       ├── src/
+│       ├── html/
+│       ├── vite.config.ts
+│       └── package.json
+├── packages/             # 共享包（Nx Monorepo）
+│   └── core/             # 共享前端组件和工具
+│       ├── src/         # Vue 组件、工具函数等
+│       └── package.json
 ├── src-tauri/            # Rust 后端代码（Cargo Workspace）
 │   ├── Cargo.toml        # Workspace 配置
 │   ├── core/             # 共享核心库（kabegame-core）
 │   │   ├── src/
 │   │   │   ├── lib.rs    # 核心库入口
-│   │   │   ├── plugin.rs # 插件管理
-│   │   │   ├── crawler.rs# 爬虫逻辑
+│   │   │   ├── plugin/   # 插件管理
+│   │   │   ├── crawler/  # 爬虫逻辑
+│   │   │   ├── providers/# 数据提供者（画册、任务等）
+│   │   │   ├── storage/  # 存储层
 │   │   │   └── ...       # 其他共享模块
+│   │   ├── build.rs
 │   │   └── Cargo.toml
 │   ├── app-main/         # 主应用（Tauri GUI）
 │   │   ├── src/
-│   │   │   └── main.rs   # 主应用入口，包装 core 的 Tauri commands
+│   │   │   ├── main.rs   # 主应用入口，包装 core 的 Tauri commands
+│   │   │   ├── tray.rs   # 系统托盘
+│   │   │   ├── wallpaper/# 壁纸相关
+│   │   │   └── virtual_drive/# 虚拟磁盘（Windows）
+│   │   ├── resources/    # 资源文件
+│   │   │   ├── plugins/  # 打包后的插件文件（.kgpg）
+│   │   │   └── bin/      # Sidecar 二进制文件
+│   │   ├── capabilities/ # Tauri 权限配置
+│   │   ├── nsis/         # NSIS 安装脚本
 │   │   ├── tauri.conf.json
 │   │   └── Cargo.toml
 │   ├── app-plugin-editor/# 插件编辑器（Tauri GUI）
 │   │   ├── src/
-│   │   │   └── main.rs   # 插件编辑器入口
+│   │   │   ├── main.rs   # 插件编辑器入口
+│   │   │   └── plugin_editor.rs
+│   │   ├── capabilities/
 │   │   ├── tauri.conf.json
 │   │   └── Cargo.toml
 │   ├── app-cli/          # CLI 工具（命令行）
 │   │   ├── src/
+│   │   │   ├── main.rs
 │   │   │   └── bin/
 │   │   │       └── kabegame-cli.rs
 │   │   ├── tauri.conf.json
 │   │   └── Cargo.toml
-│   └── resources/        # 资源文件
-│       └── plugins/      # 打包后的插件文件（.kgpg）
-├── crawler-plugins/      # 插件相关
+│   └── icons/            # 应用图标资源
+├── crawler-plugins/      # 插件相关（Nx 项目）
 │   ├── plugins/          # 本地插件源码
-│   └── packed/           # 打包后的插件文件
+│   │   ├── anihonet-wallpaper/
+│   │   ├── konachan/
+│   │   └── local-import/
+│   ├── packed/           # 打包后的插件文件（.kgpg）
+│   ├── scripts/          # 插件构建脚本
+│   ├── generate-index.js # 生成插件索引
+│   ├── package-plugin.js # 插件打包脚本
+│   ├── project.json      # Nx 项目配置
+│   └── package.json
 ├── scripts/              # 构建脚本
-│   └── run.js            # 统一开发/构建入口
-├── vite-main.config.ts   # 主应用 Vite 配置（端口 1420）
-├── vite-plugin-editor.config.ts # 插件编辑器 Vite 配置（端口 1421）
+│   ├── run.js            # 统一开发/构建入口
+│   ├── nx-nodemon-plugin-watch.mjs # 插件监听脚本
+│   └── git/              # Git 相关脚本
+├── docs/                 # 文档
+│   ├── images/           # 文档图片
+│   ├── README_PLUGIN_DEV.md
+│   ├── PLUGIN_FORMAT.md
+│   └── RHAI_API.md
+├── static/               # 静态资源
+├── nx.json               # Nx 工作区配置
+├── pnpm-workspace.yaml    # pnpm 工作区配置
+├── project.json          # 根项目配置
 └── package.json          # Node.js 依赖
 ```
 
