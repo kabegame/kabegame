@@ -1,1 +1,1 @@
-node crawler-plugins/scripts/git/ensure-tag.mjs
+node src-crawler-plugins/scripts/git/ensure-tag.mjs

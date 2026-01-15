@@ -1,8 +1,6 @@
 //! 非 Windows 平台的占位实现：后续可替换为 Linux/macOS 对应实现。
 
 use crate::storage::Storage;
-use tauri::AppHandle;
-
 use super::VirtualDriveServiceTrait;
 
 /// 非 Windows 平台的占位实现：后续可替换为 Linux/macOS 对应实现。
@@ -22,7 +20,7 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
 
     fn bump_albums(&self) {}
 
-    fn mount(&self, _mount_point: &str, _storage: Storage, _app: AppHandle) -> Result<(), String> {
+    fn mount(&self, _mount_point: &str, _storage: Storage) -> Result<(), String> {
         Err("当前平台暂不支持虚拟盘".to_string())
     }
 
@@ -52,8 +50,8 @@ impl VirtualDriveService {
         VirtualDriveServiceTrait::bump_albums(self)
     }
 
-    pub fn mount(&self, mount_point: &str, storage: Storage, app: AppHandle) -> Result<(), String> {
-        VirtualDriveServiceTrait::mount(self, mount_point, storage, app)
+    pub fn mount(&self, mount_point: &str, storage: Storage) -> Result<(), String> {
+        VirtualDriveServiceTrait::mount(self, mount_point, storage)
     }
 
     pub fn unmount(&self) -> Result<bool, String> {

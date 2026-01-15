@@ -46,15 +46,15 @@
                   ]" />
               </SettingRow>
 
-              <SettingRow label="壁纸显示方式" description="原生模式：根据系统支持显示可用样式；窗口模式：支持所有显示方式">
+              <SettingRow label="壁纸显示方式" description="原生模式：根据系统支持显示可用样式">
                 <WallpaperStyleSetting />
               </SettingRow>
 
-              <SettingRow label="过渡效果" description="仅轮播支持过渡预览；原生模式下仅支持无过渡和淡入淡出">
+              <SettingRow label="过渡效果" description="仅轮播支持过渡预览">
                 <WallpaperTransitionSetting />
               </SettingRow>
 
-              <SettingRow label="壁纸模式" description="原生模式：性能好但功能有限；窗口模式：更灵活（类似 Wallpaper Engine）">
+              <SettingRow label="壁纸模式">
                 <WallpaperModeSetting />
               </SettingRow>
 

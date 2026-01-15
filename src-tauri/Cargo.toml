@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "core",
+  "daemon",
   "app-main",
   "app-plugin-editor",
   "app-cli",

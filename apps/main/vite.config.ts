@@ -9,41 +9,14 @@ const appRoot = __dirname;
 // 判断是否为 Windows 平台（窗口模式仅在 Windows 可用）
 const isWindows = process.env.TAURI_ENV_PLATFORM === "windows";
 
+// 判断是否为 Plasma 构建模式（启用 Plasma 插件模式选项）
+const isPlasma = process.env.VITE_IS_PLASMA === "1";
+
 // console.log(process.env);
 
 export default defineConfig({
   plugins: [
     vue(),
-    {
-      // 复制根目录 static 的共享资源到 public（保持兼容性）
-      name: "kabegame-copy-shared-static",
-      apply: "build",
-      async writeBundle(outputOptions) {
-        const outDir = outputOptions.dir;
-        if (!outDir) return;
-        const staticDir = path.resolve(repoRoot, "static");
-        const publicOutDir = path.resolve(outDir);
-        try {
-          const { copyFile, mkdir } = await import("node:fs/promises");
-          const { readdir, stat } = await import("node:fs/promises");
-          const files = await readdir(staticDir);
-          for (const file of files) {
-            const src = path.join(staticDir, file);
-            const dst = path.join(publicOutDir, file);
-            const st = await stat(src);
-            if (st.isFile()) {
-              await copyFile(src, dst);
-            }
-          }
-        } catch (e) {
-          // 忽略错误（static 目录可能不存在或为空）
-          console.warn(
-            "[kabegame-copy-shared-static] 复制共享静态资源失败:",
-            e
-          );
-        }
-      },
-    },
     {
       name: "kabegame-html-entry-rewrite-main",
       configureServer(server) {
@@ -127,6 +100,7 @@ export default defineConfig({
   define: {
     __DEV__: process.env.NODE_ENV === "development",
     __WINDOWS__: isWindows,
+    __PLASMA__: isPlasma,
   },
 
   // 使用 apps/main/public 作为 public 目录（main app 专用）

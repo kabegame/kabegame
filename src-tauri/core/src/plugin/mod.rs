@@ -1,3 +1,8 @@
+#![allow(dead_code)]
+
+// Rhai 爬虫运行时/脚本执行
+pub mod rhai;
+
 use reqwest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -8,12 +13,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 use zip::ZipArchive;
-
-// Rhai 爬虫运行时/脚本执行（原先位于 crawler/rhai.rs）
-pub mod rhai;
 
 const BUILD_MODE: &str = env!("KABEGAME_BUILD_MODE"); // injected by build.rs
 
@@ -22,8 +23,8 @@ fn is_local_mode() -> bool {
 }
 
 fn is_immutable_builtin_id(builtins: &HashSet<String>, plugin_id: &str) -> bool {
-    // 只有 local 模式才把内置插件视为“不可变/不可卸载”。
-    // normal 模式的“本地两个插件”只是首次安装的种子，不应阻止用户覆盖/卸载。
+    // 只有 local 模式才把内置插件视为"不可变/不可卸载"。
+    // normal 模式的"本地两个插件"只是首次安装的种子，不应阻止用户覆盖/卸载。
     is_local_mode() && builtins.contains(plugin_id)
 }
 
@@ -59,7 +60,6 @@ pub struct PluginSelector {
 }
 
 pub struct PluginManager {
-    app: AppHandle,
     remote_zip_cache: Mutex<HashMap<String, RemoteZipCacheEntry>>,
     builtins_cache: Mutex<Option<HashSet<String>>>,
     installed_cache: Mutex<InstalledPluginsCache>,
@@ -109,9 +109,8 @@ struct ParsedKgpgForCache {
 }
 
 impl PluginManager {
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new() -> Self {
         Self {
-            app,
             remote_zip_cache: Mutex::new(HashMap::new()),
             builtins_cache: Mutex::new(None),
             installed_cache: Mutex::new(InstalledPluginsCache::default()),
@@ -123,8 +122,7 @@ impl PluginManager {
     }
 
     fn prepackaged_plugins_dir(&self) -> Result<PathBuf, String> {
-        // 开发模式：Tauri resource_dir 指向 target/debug 等，不包含我们的 resources 文件
-        // 需要回退到项目源码里的 src-tauri/resources/plugins
+        // 开发模式：从项目源码里的 src-tauri/resources/plugins 定位
         #[cfg(debug_assertions)]
         {
             // 尝试从 repo root 定位
@@ -140,16 +138,7 @@ impl PluginManager {
         }
 
         // 生产模式：尝试多个位置查找 resources/plugins
-        // 1. 首先尝试使用 Tauri resource_dir
-        if let Ok(resource_dir) = self.app.path().resource_dir() {
-            let dir = resource_dir.join("plugins");
-            if dir.exists() {
-                return Ok(dir);
-            }
-        }
-
-        // 2. 如果 resource_dir 不存在或目录不存在，尝试从可执行文件目录查找
-        // 在 Windows 安装包中，resources 可能在可执行文件目录下
+        // 1. 从可执行文件目录查找（Windows 安装包中，resources 可能在可执行文件目录下）
         if let Ok(exe_path) = std::env::current_exe() {
             if let Some(exe_dir) = exe_path.parent() {
                 // 尝试 exe_dir/resources/plugins
@@ -167,17 +156,26 @@ impl PluginManager {
             }
         }
 
-        // 如果都找不到，尝试使用 resource_dir 的默认路径（即使目录可能不存在）
+        // 2. 尝试从系统数据目录查找（某些打包方式可能把 resources 放在数据目录）
+        let data_dir = crate::app_paths::user_data_dir("Kabegame");
+        let data_resources_dir = data_dir.join("resources").join("plugins");
+        if data_resources_dir.exists() {
+            return Ok(data_resources_dir);
+        }
+
+        // 如果都找不到，返回一个默认路径（即使目录可能不存在）
         // 这样可以让调用方得到更有意义的错误信息
-        let default_dir = self
-            .app
-            .path()
-            .resource_dir()
-            .map_err(|e| format!("Failed to resolve resource_dir: {}", e))?
-            .join("plugins");
+        let default_dir = if let Ok(exe_path) = std::env::current_exe() {
+            exe_path
+                .parent()
+                .map(|p| p.join("resources").join("plugins"))
+                .unwrap_or_else(|| PathBuf::from("resources/plugins"))
+        } else {
+            PathBuf::from("resources/plugins")
+        };
 
         Err(format!(
-            "无法找到预打包插件目录。已尝试以下位置：\n  - {}\n  - 可执行文件目录下的 resources/plugins\n请确认插件文件已正确打包到 resources/plugins 目录",
+            "无法找到预打包插件目录。已尝试以下位置：\n  - {}\n  - 可执行文件目录下的 resources/plugins\n  - 数据目录下的 resources/plugins\n请确认插件文件已正确打包到 resources/plugins 目录",
             default_dir.display()
         ))
     }
@@ -1551,7 +1549,10 @@ impl PluginManager {
     ) -> Result<Option<Vec<u8>>, String> {
         use reqwest::header::RANGE;
 
-        let client = crate::crawler::create_client()?;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
         let end = crate::kgpg::KGPG2_TOTAL_HEADER_SIZE.saturating_sub(1);
         let range_value = format!("bytes=0-{}", end);
         let resp = client
@@ -2193,7 +2194,7 @@ impl PluginManager {
 /// 说明：
 /// - 这是 `PluginManager::get_plugins_directory()` 的可复用实现。
 pub fn plugins_directory_for_readonly() -> PathBuf {
-    // 开发模式：优先使用 data/plugins_directory，其次使用 crawler-plugins/packed
+    // 开发模式：优先使用 data/plugins_directory，其次使用 src-crawler-plugins/packed
     #[cfg(debug_assertions)]
     {
         let app_data_dir = crate::app_paths::user_data_dir("Kabegame");
@@ -2204,10 +2205,10 @@ pub fn plugins_directory_for_readonly() -> PathBuf {
             return data_plugins_dir;
         }
 
-        // 其次尝试 crawler-plugins/packed（向后兼容）
+        // 其次尝试 src-crawler-plugins/packed（向后兼容）
         // 1. 当前工作目录（开发时通常在项目根目录）
         if let Ok(cwd) = std::env::current_dir() {
-            let packed_path = cwd.join("crawler-plugins").join("packed");
+            let packed_path = cwd.join("src-crawler-plugins").join("packed");
             if packed_path.exists() {
                 return packed_path;
             }
@@ -2223,7 +2224,7 @@ pub fn plugins_directory_for_readonly() -> PathBuf {
                     .and_then(|p| p.parent())
                 // 项目根目录
                 {
-                    let packed_path = project_root.join("crawler-plugins").join("packed");
+                    let packed_path = project_root.join("src-crawler-plugins").join("packed");
                     if packed_path.exists() {
                         return packed_path;
                     }

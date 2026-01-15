@@ -1,5 +1,6 @@
 use crate::crawler::DownloadQueue;
 use crate::plugin::PluginManager;
+use crate::runtime::EventEmitter;
 use crate::settings::Settings;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,6 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,28 +39,35 @@ pub struct TaskStatusEvent {
 
 #[derive(Clone)]
 pub struct TaskScheduler {
-    app: AppHandle,
+    plugin_manager: Arc<PluginManager>,
+    download_queue: Arc<DownloadQueue>,
     queue: Arc<(Mutex<VecDeque<CrawlTaskRequest>>, Condvar)>,
     running_workers: Arc<AtomicUsize>,
 }
 
 impl TaskScheduler {
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new(plugin_manager: Arc<PluginManager>, download_queue: Arc<DownloadQueue>) -> Self {
         let s = Self {
-            app: app.clone(),
+            plugin_manager,
+            download_queue,
             queue: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
             running_workers: Arc::new(AtomicUsize::new(0)),
         };
+        // 写死创建10个worker
         s.start_workers(10);
         s
     }
 
     fn start_workers(&self, count: usize) {
         for _ in 0..count {
-            let app = self.app.clone();
+            let plugin_manager = Arc::clone(&self.plugin_manager);
+            let download_queue = Arc::clone(&self.download_queue);
             let queue = Arc::clone(&self.queue);
             let running = Arc::clone(&self.running_workers);
-            std::thread::spawn(move || worker_loop(app, queue, running));
+            // worker_loop 是阻塞函数（使用 Condvar::wait），必须在 blocking 线程池中运行
+            tokio::task::spawn_blocking(move || {
+                worker_loop(plugin_manager, download_queue, queue, running)
+            });
         }
     }
 
@@ -69,8 +76,10 @@ impl TaskScheduler {
     /// - 若当前 10 个 worker 都忙，则任务保持 pending 并排队等待
     pub fn enqueue(&self, req: CrawlTaskRequest) -> Result<(), String> {
         // 先保证 DB 状态为 pending（前端也会写，但这里做幂等兜底）
-        let _ = persist_task_status(&self.app, &req.task_id, "pending", None, None, None);
-        emit_task_status(&self.app, &req.task_id, "pending", None, None, None);
+        let storage = self.download_queue.storage_arc();
+        let emitter = self.download_queue.emitter_arc();
+        let _ = persist_task_status(&storage, &req.task_id, "pending", None, None, None);
+        emit_task_status(&*emitter, &req.task_id, "pending", None, None, None);
 
         let (m, cv) = &*self.queue;
         let mut guard = m.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -79,11 +88,16 @@ impl TaskScheduler {
         Ok(())
     }
 
+    /// 获取当前正在下载的任务列表
+    pub fn get_active_downloads(&self) -> Result<Vec<super::ActiveDownloadInfo>, String> {
+        self.download_queue.get_active_downloads()
+    }
+
     /// 应用启动时恢复队列：
     /// - pending：直接重新入队
     /// - running：认为上次运行被中断，改成 pending 并重新入队（避免永久卡死）
     pub fn restore_pending_tasks(&self) -> Result<usize, String> {
-        let storage = self.app.state::<Storage>();
+        let storage = self.download_queue.storage_arc();
         let tasks = storage.get_all_tasks()?;
         let mut restored = 0usize;
 
@@ -117,6 +131,56 @@ impl TaskScheduler {
     pub fn running_worker_count(&self) -> usize {
         self.running_workers.load(Ordering::Relaxed)
     }
+
+    /// 取消任务（标记取消 + 唤醒等待中的下载）
+    pub fn cancel_task(&self, task_id: &str) -> Result<(), String> {
+        self.download_queue.cancel_task(task_id)
+    }
+
+    /// 失败图片重试：在 daemon 侧直接复用 DownloadQueue
+    pub fn retry_failed_image(&self, failed_id: i64) -> Result<(), String> {
+        let storage = self.download_queue.storage_arc();
+        let item = storage
+            .get_task_failed_image_by_id(failed_id)?
+            .ok_or_else(|| "失败图片记录不存在".to_string())?;
+
+        // 标记一次尝试（清空 last_error）
+        let _ = storage.update_task_failed_image_attempt(failed_id, "");
+
+        let task = storage
+            .get_task(&item.task_id)?
+            .ok_or_else(|| "任务不存在".to_string())?;
+
+        let images_dir = task
+            .output_dir
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| crate::crawler::get_default_images_dir());
+
+        let start_time = if item.order > 0 {
+            item.order as u64
+        } else {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64
+        };
+
+        self.download_queue.download_image(
+            item.url,
+            images_dir,
+            item.plugin_id,
+            item.task_id,
+            start_time,
+            task.output_album_id,
+            task.http_headers.unwrap_or_default(),
+        )
+    }
+
+    pub fn set_download_concurrency(&self, desired: u32) {
+        self.download_queue.set_desired_concurrency(desired);
+        self.download_queue.notify_all_waiting();
+    }
 }
 
 fn now_ms() -> u64 {
@@ -127,36 +191,37 @@ fn now_ms() -> u64 {
 }
 
 fn emit_task_status(
-    app: &AppHandle,
+    emitter: &dyn EventEmitter,
     task_id: &str,
     status: &str,
     start_time: Option<u64>,
     end_time: Option<u64>,
     error: Option<String>,
 ) {
-    let _ = app.emit(
+    // IPC 侧：统一用 task-status 事件
+    emitter.emit_task_status(task_id, status, None, error.as_deref(), None);
+
+    // 兼容：仍广播一个 generic 事件，payload 与旧前端一致
+    emitter.emit(
         "task-status",
-        TaskStatusEvent {
+        serde_json::json!(TaskStatusEvent {
             task_id: task_id.to_string(),
             status: status.to_string(),
             start_time,
             end_time,
             error,
-        },
+        }),
     );
 }
 
 fn persist_task_status(
-    app: &AppHandle,
+    storage: &Storage,
     task_id: &str,
     status: &str,
     start_time: Option<u64>,
     end_time: Option<u64>,
     error: Option<String>,
 ) -> Result<(), String> {
-    let storage = app
-        .try_state::<Storage>()
-        .ok_or_else(|| "Storage not ready".to_string())?;
     let Some(mut task) = storage.get_task(task_id)? else {
         return Ok(());
     };
@@ -176,12 +241,17 @@ fn persist_task_status(
 }
 
 fn worker_loop(
-    app: AppHandle,
+    plugin_manager: Arc<PluginManager>,
+    download_queue: Arc<DownloadQueue>,
     queue: Arc<(Mutex<VecDeque<CrawlTaskRequest>>, Condvar)>,
     running: Arc<AtomicUsize>,
 ) {
-    // 每个 task worker 线程初始化一次 Rhai Engine，并在多任务之间复用（避免每次 Engine::new + 反复 register_fn）
-    let mut rhai_runtime = crate::plugin::rhai::RhaiCrawlerRuntime::new(app.clone());
+    // 每个 task worker 线程初始化一次 Rhai Engine，并在多任务之间复用
+    let mut rhai_runtime = crate::plugin::rhai::RhaiCrawlerRuntime::new(Arc::clone(&download_queue));
+
+    let storage = download_queue.storage_arc();
+    let settings = download_queue.settings_arc();
+    let emitter = download_queue.emitter_arc();
 
     loop {
         let req = {
@@ -201,53 +271,46 @@ fn worker_loop(
 
         let Some(req) = req else { continue };
 
-        // 如果任务已被用户取消（可能在排队期间），直接标记 canceled，避免进入 running/最终被 completed 覆盖。
-        {
-            let dq = app.state::<DownloadQueue>();
-            if dq.is_task_canceled(&req.task_id) {
-                let end = now_ms();
-                let e = "Task canceled".to_string();
-
-                // 兼容旧逻辑：前端也监听 task-error 来识别取消
-                let _ = app.emit(
-                    "task-error",
-                    serde_json::json!({
-                        "taskId": req.task_id.clone(),
-                        "error": e.clone()
-                    }),
-                );
-
-                let _ = persist_task_status(
-                    &app,
-                    &req.task_id,
-                    "canceled",
-                    None,
-                    Some(end),
-                    Some(e.clone()),
-                );
-                emit_task_status(&app, &req.task_id, "canceled", None, Some(end), Some(e));
-                continue;
-            }
+        // 若任务已取消（排队期间），直接 canceled
+        if download_queue.is_task_canceled(&req.task_id) {
+            let end = now_ms();
+            let e = "Task canceled".to_string();
+            emitter.emit(
+                "task-error",
+                serde_json::json!({
+                    "taskId": req.task_id.clone(),
+                    "error": e.clone()
+                }),
+            );
+            let _ =
+                persist_task_status(&storage, &req.task_id, "canceled", None, Some(end), Some(e.clone()));
+            emit_task_status(&*emitter, &req.task_id, "canceled", None, Some(end), Some(e));
+            continue;
         }
 
         running.fetch_add(1, Ordering::Relaxed);
 
-        // 标记 running（写库 + 事件）
+        // running
         let start = now_ms();
-        let _ = persist_task_status(&app, &req.task_id, "running", Some(start), None, None);
-        emit_task_status(&app, &req.task_id, "running", Some(start), None, None);
+        let _ = persist_task_status(&storage, &req.task_id, "running", Some(start), None, None);
+        emit_task_status(&*emitter, &req.task_id, "running", Some(start), None, None);
 
-        let res = run_task(&app, &req, &mut rhai_runtime);
+        let res = run_task(
+            &plugin_manager,
+            &storage,
+            &settings,
+            Arc::clone(&download_queue),
+            emitter.clone(),
+            &req,
+            &mut rhai_runtime,
+        );
 
         match res {
             Ok(_) => {
                 let end = now_ms();
-                // 取消优先：即使脚本执行返回 Ok，只要用户请求了取消，就不要把任务标成 completed。
-                // 这能修复“手动停止后仍被标记完成”（常见于脚本很快结束、或取消发生在下载阶段）。
-                let dq = app.state::<DownloadQueue>();
-                if dq.is_task_canceled(&req.task_id) {
+                if download_queue.is_task_canceled(&req.task_id) {
                     let e = "Task canceled".to_string();
-                    let _ = app.emit(
+                    emitter.emit(
                         "task-error",
                         serde_json::json!({
                             "taskId": req.task_id.clone(),
@@ -255,18 +318,17 @@ fn worker_loop(
                         }),
                     );
                     let _ = persist_task_status(
-                        &app,
+                        &storage,
                         &req.task_id,
                         "canceled",
                         None,
                         Some(end),
                         Some(e.clone()),
                     );
-                    emit_task_status(&app, &req.task_id, "canceled", None, Some(end), Some(e));
+                    emit_task_status(&*emitter, &req.task_id, "canceled", None, Some(end), Some(e));
                 } else {
-                    let _ =
-                        persist_task_status(&app, &req.task_id, "completed", None, Some(end), None);
-                    emit_task_status(&app, &req.task_id, "completed", None, Some(end), None);
+                    let _ = persist_task_status(&storage, &req.task_id, "completed", None, Some(end), None);
+                    emit_task_status(&*emitter, &req.task_id, "completed", None, Some(end), None);
                 }
             }
             Err(e) => {
@@ -274,8 +336,7 @@ fn worker_loop(
                 let end = now_ms();
                 let status = if is_canceled { "canceled" } else { "failed" };
 
-                // 兼容旧逻辑：仍然发 task-error 事件（前端已有处理）
-                let _ = app.emit(
+                emitter.emit(
                     "task-error",
                     serde_json::json!({
                         "taskId": req.task_id,
@@ -283,15 +344,8 @@ fn worker_loop(
                     }),
                 );
 
-                let _ = persist_task_status(
-                    &app,
-                    &req.task_id,
-                    status,
-                    None,
-                    Some(end),
-                    Some(e.clone()),
-                );
-                emit_task_status(&app, &req.task_id, status, None, Some(end), Some(e));
+                let _ = persist_task_status(&storage, &req.task_id, status, None, Some(end), Some(e.clone()));
+                emit_task_status(&*emitter, &req.task_id, status, None, Some(end), Some(e));
             }
         }
 
@@ -300,28 +354,28 @@ fn worker_loop(
 }
 
 fn run_task(
-    app: &AppHandle,
+    plugin_manager: &PluginManager,
+    storage: &Storage,
+    settings_state: &Settings,
+    download_queue: Arc<DownloadQueue>,
+    emitter: Arc<dyn EventEmitter>,
     req: &CrawlTaskRequest,
     rhai_runtime: &mut crate::plugin::rhai::RhaiCrawlerRuntime,
 ) -> Result<(), String> {
-    crate::crawler::emit_task_log(
-        app,
+    emitter.emit_task_log(
         &req.task_id,
         "info",
-        format!(
+        &format!(
             "TaskScheduler: 开始执行任务（pluginId={}, taskId={}）",
             req.plugin_id, req.task_id
         ),
     );
-    let plugin_manager = app.state::<PluginManager>();
+
     // 两种运行模式：
     // 1) 已安装插件：通过 plugin_id 查找并运行
     // 2) 临时插件文件：通过 plugin_file_path 读取 manifest/config 并运行（不要求安装）
     let (plugin, plugin_file_path) = plugin_manager
         .resolve_plugin_for_task_request(&req.plugin_id, req.plugin_file_path.as_deref())?;
-
-    let storage = app.state::<Storage>();
-    let settings_state = app.state::<Settings>();
 
     // 如果指定了输出目录，使用指定目录；否则使用默认下载目录（若配置）或回退到 Storage 的 images_dir
     let images_dir = if let Some(ref dir) = req.output_dir {
@@ -337,7 +391,7 @@ fn run_task(
         }
     };
 
-    // 关键：在 task worker 内复用 Rhai Engine（脚本运行本身是同步 eval）
+    // 读取脚本
     let script_content = if let Some(path) = plugin_file_path.as_ref() {
         plugin_manager
             .read_plugin_script(path)?
@@ -355,17 +409,17 @@ fn run_task(
     let var_defs = if let Some(path) = plugin_file_path.as_ref() {
         plugin_manager.get_plugin_vars_from_file(path)?
     } else {
-        plugin_manager
-            .get_plugin_vars(&plugin.id)?
-            .unwrap_or_default()
+        plugin_manager.get_plugin_vars(&plugin.id)?.unwrap_or_default()
     };
     let merged_config = super::build_effective_user_config_from_var_defs(&var_defs, user_cfg);
+
+    // 确保 Rhai runtime 绑定的是当前 daemon 的 DownloadQueue
+    *rhai_runtime = crate::plugin::rhai::RhaiCrawlerRuntime::new(download_queue);
 
     crate::plugin::rhai::execute_crawler_script_with_runtime(
         rhai_runtime,
         &plugin,
         &images_dir,
-        app,
         &plugin.id,
         &req.task_id,
         &script_content,

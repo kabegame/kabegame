@@ -9,6 +9,12 @@ lerna-debug.log*
 
 node_modules
 dist-*
+!dist-cli/
+!dist-cli/.gitkeep
+!dist-daemon/
+!dist-daemon/.gitkeep
+!dist-main/
+!dist-main/.gitkeep
 *.local
 
 # Editor directories and files
@@ -39,4 +45,12 @@ src-tauri/icons/*
 .nx/workspace-data
 
 # GitHub Actions Runner (self-hosted)
-actions-runner/
+/actions-runner/
+
+# plasma wallpaper code example
+/wallpaper-example/
+
+# crawler-venv
+/crawler-venv/
+
+/build/

@@ -1,6 +1,5 @@
 use super::WallpaperManager;
-use kabegame_core::settings::Settings;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 /// 原生壁纸管理器（使用系统原生 API）
 pub struct NativeWallpaperManager {
@@ -12,16 +11,187 @@ impl NativeWallpaperManager {
         Self { _app: app }
     }
 
-    #[cfg(target_os = "windows")]
     fn current_wallpaper_path_from_settings(&self) -> Option<String> {
-        let settings = self._app.try_state::<Settings>()?.get_settings().ok()?;
-        let id = settings.current_wallpaper_image_id?;
-        let storage = self._app.try_state::<crate::storage::Storage>()?;
-        storage
-            .find_image_by_id(&id)
-            .ok()
-            .flatten()
-            .map(|img| img.local_path)
+        let v = tauri::async_runtime::block_on(async {
+            crate::daemon_client::get_ipc_client().settings_get().await
+        })
+        .ok()?;
+        let id = v.get("currentWallpaperImageId").and_then(|x| x.as_str())?;
+        let img = tauri::async_runtime::block_on(async {
+            crate::daemon_client::get_ipc_client()
+                .storage_get_image_by_id(id.to_string())
+                .await
+        })
+        .ok()?;
+        img.get("localPath").and_then(|x| x.as_str()).map(|s| s.to_string())
+    }
+
+    fn current_wallpaper_transition_from_ipc(&self) -> Option<String> {
+        let v = tauri::async_runtime::block_on(async {
+            crate::daemon_client::get_ipc_client().settings_get().await
+        })
+        .ok()?;
+        Some(
+            v.get("wallpaperRotationTransition")
+                .and_then(|x| x.as_str())
+                .unwrap_or("none")
+                .to_string(),
+        )
+    }
+
+    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    fn percent_encode_path_for_file_url(path: &str) -> String {
+        // Plasma 的 org.kde.image 的 Image 通常是 URL（file:///...）。
+        // 这里做一个轻量 percent-encode（UTF-8 bytes）来避免空格等字符导致解析失败。
+        fn is_unreserved(b: u8) -> bool {
+            matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~')
+        }
+
+        let mut out = String::with_capacity(path.len() + 16);
+        for &b in path.as_bytes() {
+            if is_unreserved(b) || b == b'/' {
+                out.push(b as char);
+            } else {
+                out.push('%');
+                out.push_str(&format!("{:02X}", b));
+            }
+        }
+        out
+    }
+
+    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    fn escape_js_single_quoted(s: &str) -> String {
+        // 用于构造 evaluateScript 的 JS 字符串字面量：'<here>'
+        // 需要转义：\ 和 '
+        s.replace('\\', "\\\\").replace('\'', "\\'")
+    }
+
+    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    fn style_to_plasma_fill_mode(style: &str) -> &'static str {
+        // KDE Plasma wallpaper plugin `org.kde.image` 的 FillMode（常见映射）：
+        // 0: scaled (stretch)
+        // 1: centered
+        // 2: scaled & cropped (fill)
+        // 3: tiled
+        // 5: scaled keep proportions (fit)
+        match style {
+            "fit" => "5",
+            "stretch" => "0",
+            "center" => "1",
+            "tile" => "3",
+            _ => "2", // fill（默认）
+        }
+    }
+
+    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    fn run_qdbus_evaluate_script(script: &str) -> Result<(), String> {
+        use std::process::{Command, Stdio};
+        use std::sync::OnceLock;
+
+        static QDBUS_PROGRAM: OnceLock<Result<String, String>> = OnceLock::new();
+
+        fn detect_qdbus_program() -> Result<String, String> {
+            // 说明：Plasma 6 上可能是 qdbus6，Plasma 5 通常是 qdbus。
+            // 我们只做“存在性”探测，不依赖特定输出格式。
+            for program in ["qdbus6", "qdbus"] {
+                match Command::new(program)
+                    .arg("--help")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                {
+                    Ok(_) => return Ok(program.to_string()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => {
+                        return Err(format!(
+                            "检测 `{}` 是否可用时失败：{}（请确认命令可执行且在 PATH 中）",
+                            program, e
+                        ))
+                    }
+                }
+            }
+
+            Err(
+                "Plasma 原生壁纸模式需要 `qdbus`（Plasma 5）或 `qdbus6`（Plasma 6），但当前系统未找到该命令。\n\
+请安装 Qt tools 并确保命令在 PATH 中后重试。\n\
+示例：\n\
+- Debian/Ubuntu: `sudo apt install qttools5-dev-tools` 或 `sudo apt install qt6-tools-dev-tools`\n\
+- Arch: `sudo pacman -S qt5-tools` 或 `sudo pacman -S qt6-tools`\n\
+- Fedora: `sudo dnf install qt5-qttools` 或 `sudo dnf install qt6-qttools`"
+                    .to_string(),
+            )
+        }
+
+        let program = QDBUS_PROGRAM
+            .get_or_init(detect_qdbus_program)
+            .as_ref()
+            .map_err(|e| e.clone())?;
+
+        let out = Command::new(program)
+            .args([
+                "org.kde.plasmashell",
+                "/PlasmaShell",
+                "org.kde.PlasmaShell.evaluateScript",
+                script,
+            ])
+            .output()
+            .map_err(|e| format!("执行 `{}` 失败：{}", program, e))?;
+
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            return Err(format!(
+                "`{}` evaluateScript 失败 (code={:?})。\n\
+这通常表示 PlasmaShell 未运行、DBus 会话不可用、或脚本执行出错。\n\
+stdout: {}\n\
+stderr: {}",
+                program,
+                out.status.code(),
+                stdout.trim(),
+                stderr.trim()
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    fn set_wallpaper_plasma(&self, file_path: &str, style: &str) -> Result<(), String> {
+        use std::path::Path;
+
+        let path = Path::new(file_path);
+        if !path.exists() {
+            return Err("File does not exist".to_string());
+        }
+
+        let abs = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string();
+
+        let file_url = format!(
+            "file:///{}",
+            Self::percent_encode_path_for_file_url(abs.trim_start_matches('/'))
+        );
+        let file_url_js = Self::escape_js_single_quoted(&file_url);
+        let fill_mode = Self::style_to_plasma_fill_mode(style);
+
+        // 通过 org.kde.plasmashell 的 evaluateScript 设置所有桌面的壁纸
+        // 参考常见脚本：desktops() / wallpaperPlugin / currentConfigGroup / writeConfig
+        let script = format!(
+            "var allDesktops = desktops();\n\
+for (var i=0; i<allDesktops.length; i++) {{\n\
+  var d = allDesktops[i];\n\
+  d.wallpaperPlugin = 'org.kde.image';\n\
+  d.currentConfigGroup = ['Wallpaper', 'org.kde.image', 'General'];\n\
+  d.writeConfig('Image', '{}');\n\
+  d.writeConfig('FillMode', '{}');\n\
+}}\n",
+            file_url_js, fill_mode
+        );
+
+        Self::run_qdbus_evaluate_script(&script)?;
+        Ok(())
     }
 
     /// 确保系统启用壁纸淡入淡出效果（通过注册表设置）
@@ -115,14 +285,24 @@ impl WallpaperManager for NativeWallpaperManager {
         Ok(style.to_string())
     }
 
+    #[cfg(not(target_os = "windows"))]
+    fn get_style(&self) -> Result<String, String> {
+        // 非 Windows 平台：暂不支持读取系统样式，返回默认值即可（避免阻塞 UI）
+        Ok("fill".to_string())
+    }
+
     fn get_transition(&self) -> Result<String, String> {
-        // 从 app 中获取 transition
-        let settings = self._app.state::<Settings>().get_settings().unwrap();
-        Ok(settings.wallpaper_rotation_transition.clone())
+        let v = tauri::async_runtime::block_on(async {
+            crate::daemon_client::get_ipc_client().settings_get().await
+        })
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+        Ok(v.get("wallpaperRotationTransition")
+            .and_then(|x| x.as_str())
+            .unwrap_or("none")
+            .to_string())
     }
 
     fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String> {
-        use std::os::windows::ffi::OsStrExt;
         use std::path::Path;
 
         println!("[DEBUG] NativeWallpaperManager::set_wallpaper_path 被调用");
@@ -136,6 +316,7 @@ impl WallpaperManager for NativeWallpaperManager {
 
         #[cfg(target_os = "windows")]
         {
+            use std::os::windows::ffi::OsStrExt;
             // 优化：直接使用 FFI 调用 Windows API，而不是通过 PowerShell
             // 这样可以大幅提升性能（避免启动 PowerShell 进程的开销）
 
@@ -151,11 +332,8 @@ impl WallpaperManager for NativeWallpaperManager {
                 .collect();
 
             let transition = self
-                ._app
-                .state::<Settings>()
-                .get_settings()
-                .map(|s| s.wallpaper_rotation_transition)
-                .unwrap_or_else(|_| "none".to_string());
+                .current_wallpaper_transition_from_ipc()
+                .unwrap_or_else(|| "none".to_string());
 
             // 参考 wallpaper_rotator.rs 的实现：使用模拟方式实现淡入淡出
             // wallpaper_rotator.rs 中的实现能工作，它使用延迟 + SPIF_SENDWININICHANGE 来触发系统动画
@@ -284,9 +462,25 @@ impl WallpaperManager for NativeWallpaperManager {
         // TODO: 非 Windows 平台使用系统命令设置壁纸
         #[cfg(not(target_os = "windows"))]
         {
-            // 非 Windows 平台使用系统命令设置壁纸
-            // macOS 和 Linux 的实现可以在这里添加
-            Err("当前平台不支持原生壁纸设置".to_string())
+            // Plasma 原生壁纸：由 Kabegame 的 --plasma 编译期开关启用
+            #[cfg(all(target_os = "linux", desktop = "plasma"))]
+            {
+                let _ = immediate;
+                // style 从 daemon 读取（与前端保持一致）
+                let style = tauri::async_runtime::block_on(async {
+                    crate::daemon_client::get_ipc_client().settings_get().await
+                })
+                .ok()
+                .and_then(|v| v.get("wallpaperRotationStyle").and_then(|x| x.as_str()).map(|s| s.to_string()))
+                .unwrap_or_else(|| "fill".to_string());
+                return self.set_wallpaper_plasma(file_path, &style);
+            }
+
+            #[cfg(not(all(target_os = "linux", desktop = "plasma")))]
+            {
+                let _ = immediate;
+                return Err("当前平台不支持原生壁纸设置（NativeWallpaperManager）".to_string());
+            }
         }
     }
 
@@ -360,6 +554,28 @@ impl WallpaperManager for NativeWallpaperManager {
         Ok(())
     }
 
+    #[cfg(not(target_os = "windows"))]
+    fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
+        // 非 Windows 平台：
+        // - 默认 no-op（由 WindowWallpaperManager/KDE 插件等负责）
+        // - Plasma 原生壁纸（--plasma 编译期开关）下：通过 qdbus 写 FillMode，并尽量对当前壁纸立即生效
+
+        #[cfg(all(target_os = "linux", desktop = "plasma"))]
+        {
+            if immediate {
+                if let Some(path) = self.current_wallpaper_path_from_settings() {
+                    if std::path::Path::new(&path).exists() {
+                        let _ = self.set_wallpaper_plasma(&path, style);
+                    }
+                }
+            }
+        }
+
+        let _ = style;
+        let _ = immediate;
+        Ok(())
+    }
+
     #[cfg(target_os = "windows")]
     fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String> {
         use std::thread;
@@ -417,6 +633,17 @@ impl WallpaperManager for NativeWallpaperManager {
         Ok(())
     }
 
+    #[cfg(not(target_os = "windows"))]
+    fn set_transition(&self, transition: &str, _immediate: bool) -> Result<(), String> {
+        // 非 Windows 平台：仅保存设置，不做系统级预览
+        let _ = tauri::async_runtime::block_on(async {
+            crate::daemon_client::get_ipc_client()
+                .settings_set_wallpaper_rotation_transition(transition.to_string())
+                .await
+        });
+        Ok(())
+    }
+
     fn cleanup(&self) -> Result<(), String> {
         // 原生模式不需要清理资源
         Ok(())
@@ -449,6 +676,11 @@ impl WallpaperManager for NativeWallpaperManager {
         }
 
         println!("[DEBUG] 桌面刷新完成（使用 FFI，快速）");
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn refresh_desktop(&self) -> Result<(), String> {
         Ok(())
     }
 

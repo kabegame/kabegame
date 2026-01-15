@@ -64,7 +64,7 @@ impl DedupeManager {
         *guard = Some(cancel.clone());
         drop(guard);
 
-        std::thread::spawn(move || {
+        tokio::spawn(async move {
             let res = run_dedupe_batched(app.clone(), storage, delete_files, batch_size, cancel);
             if let Err(e) = res {
                 eprintln!("[dedupe] 任务失败: {}", e);

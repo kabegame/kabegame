@@ -1,14 +1,13 @@
 {
   "watch": [
-    ".",
-    "crawler-plugins"
+    "."
   ],
   "ignore": [
     "**/*.kgpg",
     "**/node_modules/**",
-    "crawler-plugins/node_modules/**",
-    "crawler-plugins/packed/**",
     "dist/**",
+    "src-crawler-plugins/node_modules/**",
+    "src-crawler-plugins/packed/**",
     "src-tauri/target/**"
   ],
   "ext": "bmp,cjs,gif,ico,jpeg,jpg,js,json,md,mjs,png,rhai,svg,txt,webp",

@@ -171,7 +171,7 @@ async function main() {
   const nxJson = readJsonFile(nxJsonPath);
 
   // Runtime script: avoid Nx "Tree" APIs; read the project's `project.json` directly.
-  const projectRoot = "crawler-plugins";
+  const projectRoot = "src-crawler-plugins";
   const projectJsonPath = joinPathFragments(root, projectRoot, "project.json");
   const projectJson = readJsonFile(projectJsonPath);
   const target = projectJson?.targets?.[targetName];

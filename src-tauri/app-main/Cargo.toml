@@ -4,7 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-kabegame-core = { workspace = true }
+kabegame-core = { workspace = true, default-features = false }
 tauri = { workspace = true, features = ["protocol-asset"] }
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-shell = "=2.3.3"
@@ -16,6 +16,7 @@ tokio = { workspace = true }
 image = { workspace = true }
 sha2 = { workspace = true }
 uuid = { workspace = true }
+base64 = { workspace = true }
 lru = { version = "0.12", optional = true }
 memmap2 = { version = "0.9", optional = true }
 
@@ -36,11 +37,11 @@ windows = { version = "0.52", features = [
 tauri-build = { workspace = true }
 
 [features]
-default = ["custom-protocol", "tray", "virtual-drive"]
+default = ["custom-protocol", "tray"]
 tray = ["dep:governor"]
-custom-protocol = ["tauri/custom-protocol", "kabegame-core/custom-protocol"]
-virtual-drive = ["dep:dokan", "dep:widestring", "dep:winapi", "dep:lru", "dep:memmap2", "kabegame-core/virtual-drive"]
-
+custom-protocol = ["tauri/custom-protocol"]
+virtual-drive = ["local-backend", "dep:dokan", "dep:widestring", "dep:winapi", "dep:lru", "dep:memmap2", "kabegame-core/virtual-drive", "kabegame-core/virtual-drive-windows"]
+local-backend = ["kabegame-core/tauri"]
 
 [[bin]]
 name = "kabegame"

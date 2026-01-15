@@ -4,8 +4,6 @@
 //! - 使用 trait 定义统一接口，但不用于动态分发（编译时多态）。
 
 use crate::storage::Storage;
-use tauri::AppHandle;
-
 /// 虚拟盘服务 trait（定义所有平台必须实现的接口）
 ///
 /// 注意：此 trait 不用于动态分发（`dyn VirtualDriveServiceTrait`），
@@ -27,29 +25,29 @@ pub trait VirtualDriveServiceTrait: Default + Send + Sync {
     fn bump_albums(&self);
 
     /// 挂载虚拟盘
-    fn mount(&self, mount_point: &str, storage: Storage, app: AppHandle) -> Result<(), String>;
+    fn mount(&self, mount_point: &str, storage: Storage) -> Result<(), String>;
 
     /// 卸载虚拟盘
     fn unmount(&self) -> Result<bool, String>;
 }
 
-#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
 mod windows;
 
-#[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
+#[cfg(not(all(feature = "virtual-drive-windows", target_os = "windows")))]
 mod stub;
 
-#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
 pub use windows::VirtualDriveService;
 
-#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
 pub use windows::{join_mount_subdir, notify_explorer_dir_changed_path};
 
-#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
 pub use windows::dokan_unmount_by_mount_point;
 
-#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
 pub use windows::normalize_mount_point;
 
-#[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
+#[cfg(not(all(feature = "virtual-drive-windows", target_os = "windows")))]
 pub use stub::VirtualDriveService;

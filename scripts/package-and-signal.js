@@ -27,8 +27,8 @@ let command;
 if (toData) {
   // 输出到 data/plugins-directory，通过 pnpm 调用 nx
   const target = isLocal
-    ? "crawler-plugins:package-local-to-data"
-    : "crawler-plugins:package-to-data";
+    ? "src-crawler-plugins:package-local-to-data"
+    : "src-crawler-plugins:package-to-data";
   command = `${runner} -s nx run ${target}`;
 } else {
   // 默认输出到 crawler-plugins/packed，通过 pnpm 调用脚本

@@ -21,7 +21,7 @@ tauri-build = { workspace = true }
 [features]
 # 默认启用 VD：Windows 下可用于提权挂载画册盘（Dokan）。
 default = ["virtual-drive"]
-virtual-drive = ["kabegame-core/virtual-drive"]
+virtual-drive = ["kabegame-core/virtual-drive", "kabegame-core/virtual-drive-windows"]
 
 [[bin]]
 name = "kabegame-cli"

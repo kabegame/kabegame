@@ -155,32 +155,9 @@ pub fn setup_tray(app: AppHandle) {
     });
 }
 
-/// 恢复窗口状态
-fn restore_window_state(app: &AppHandle, window: &tauri::WebviewWindow) {
-    use kabegame_core::settings::Settings;
-    if let Some(settings) = app.try_state::<Settings>() {
-        if let Ok(Some(window_state)) = settings.get_window_state() {
-            // 恢复窗口大小
-            if let Err(e) = window.set_size(tauri::LogicalSize::new(
-                window_state.width,
-                window_state.height,
-            )) {
-                eprintln!("恢复窗口大小失败: {}", e);
-            }
-            // 恢复窗口位置
-            if let (Some(x), Some(y)) = (window_state.x, window_state.y) {
-                if let Err(e) = window.set_position(tauri::LogicalPosition::new(x, y)) {
-                    eprintln!("恢复窗口位置失败: {}", e);
-                }
-            }
-            // 恢复最大化状态
-            if window_state.maximized {
-                if let Err(e) = window.maximize() {
-                    eprintln!("恢复窗口最大化状态失败: {}", e);
-                }
-            }
-        }
-    }
+/// 不保存/恢复 window_state：每次显示主窗口时居中弹出
+fn restore_window_state(_app: &AppHandle, window: &tauri::WebviewWindow) {
+    let _ = window.center();
 }
 
 /// 处理菜单事件

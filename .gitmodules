@@ -1,3 +1,6 @@
-[submodule "crawler-plugins"]
-	path = crawler-plugins
+[submodule "src-crawler-plugins"]
+	path = src-crawler-plugins
 	url = https://github.com/kabegame/crawler-plugins.git
+[submodule "src-plasma-wallpaper-plugin"]
+	path = src-plasma-wallpaper-plugin
+	url = git@github.com:kabegame/plasma-wallpaper-plugin.git

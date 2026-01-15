@@ -268,7 +268,6 @@ const pluginVarMetaMap = ref<Record<string, Record<string, PluginVarMeta>>>({});
 
 // 下载信息
 const activeDownloads = ref<ActiveDownloadInfo[]>([]);
-let downloadRefreshInterval: number | null = null;
 
 const downloadProgressByKey = ref<Record<string, DownloadProgressState>>({});
 let unlistenDownloadProgress: null | (() => void) = null;
@@ -288,6 +287,39 @@ const getEffectiveDownloadState = (d: ActiveDownloadInfo) => {
 const shouldShowDownloadProgress = (d: ActiveDownloadInfo) => {
   const st = getEffectiveDownloadState(d);
   return st === "downloading";
+};
+
+const isTerminalDownloadState = (state: string) => {
+  const st = String(state || "").toLowerCase();
+  return st === "completed" || st === "failed" || st === "canceled";
+};
+
+const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
+  const key = downloadStateKeyFromPayload(p);
+  const idx = activeDownloads.value.findIndex((d) => downloadKey(d) === key);
+
+  if (isTerminalDownloadState(p.state)) {
+    if (idx !== -1) activeDownloads.value.splice(idx, 1);
+    // 同时清理缓存，避免内存增长
+    const nextProgress = { ...downloadProgressByKey.value };
+    delete nextProgress[key];
+    downloadProgressByKey.value = nextProgress;
+
+    const nextState = { ...downloadStateByKey.value };
+    delete nextState[key];
+    downloadStateByKey.value = nextState;
+    return;
+  }
+
+  const nextItem: ActiveDownloadInfo = {
+    task_id: p.taskId,
+    start_time: p.startTime,
+    url: p.url,
+    plugin_id: p.pluginId,
+    state: p.state || "downloading",
+  };
+  if (idx === -1) activeDownloads.value.push(nextItem);
+  else activeDownloads.value[idx] = { ...activeDownloads.value[idx], ...nextItem };
 };
 
 const isShimmerState = (d: ActiveDownloadInfo) => {
@@ -391,6 +423,18 @@ const initEventListeners = async () => {
     unlistenDownloadProgress = await listen<DownloadProgressPayload>("download-progress", (event) => {
       const p = event.payload;
       const key = downloadKeyFromPayload(p);
+
+      // 进度事件可能先于 download-state 到达：确保列表里有项
+      if (!activeDownloads.value.some((d) => downloadKey(d) === key)) {
+        activeDownloads.value.push({
+          task_id: p.taskId,
+          start_time: p.startTime,
+          url: p.url,
+          plugin_id: p.pluginId,
+          state: "downloading",
+        });
+      }
+
       downloadProgressByKey.value = {
         ...downloadProgressByKey.value,
         [key]: {
@@ -412,25 +456,35 @@ const initEventListeners = async () => {
         ...downloadStateByKey.value,
         [key]: { state: p.state, error: p.error, updatedAt: Date.now() },
       };
+      upsertActiveDownloadFromPayload(p);
     });
   } catch (error) {
     console.error("监听下载状态失败:", error);
   }
 };
 
-const startDownloadLoop = async () => {
+const startDownloadSync = async () => {
   await initEventListeners();
+  // 仅首次做一次快照：用于补齐“抽屉打开前已存在的下载”，以及纠正可能错过的事件
   await loadDownloads();
-  if (downloadRefreshInterval === null) {
-    downloadRefreshInterval = window.setInterval(loadDownloads, 1000);
-  }
 };
 
-const stopDownloadLoop = () => {
-  if (downloadRefreshInterval !== null) {
-    clearInterval(downloadRefreshInterval);
-    downloadRefreshInterval = null;
+const stopDownloadSync = () => {
+  try {
+    unlistenDownloadProgress?.();
+  } catch {
+    // ignore
+  } finally {
+    unlistenDownloadProgress = null;
   }
+  try {
+    unlistenDownloadState?.();
+  } catch {
+    // ignore
+  } finally {
+    unlistenDownloadState = null;
+  }
+  eventListenersInitialized = false;
 };
 
 const getPluginName = (pluginId: string) => {
@@ -568,28 +622,14 @@ async function handleCopyError(task: ScriptTask) {
 watch(
   () => !!props.active,
   async (val) => {
-    if (val) await startDownloadLoop();
-    else stopDownloadLoop();
+    if (val) await startDownloadSync();
+    else stopDownloadSync();
   },
   { immediate: true }
 );
 
 onUnmounted(() => {
-  stopDownloadLoop();
-  try {
-    unlistenDownloadProgress?.();
-  } catch {
-    // ignore
-  } finally {
-    unlistenDownloadProgress = null;
-  }
-  try {
-    unlistenDownloadState?.();
-  } catch {
-    // ignore
-  } finally {
-    unlistenDownloadState = null;
-  }
+  stopDownloadSync();
 });
 </script>
 

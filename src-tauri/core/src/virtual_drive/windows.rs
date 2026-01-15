@@ -31,7 +31,7 @@ use std::{
 use super::drive_service::{join_mount_subdir, notify_explorer_dir_changed_path};
 use super::fs::KabegameFs;
 use super::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
-#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
 use crate::providers::provider::{DeleteChildMode, FsEntry, Provider, VdOpsContext};
 use crate::providers::root::{DIR_ALBUMS, DIR_BY_TASK};

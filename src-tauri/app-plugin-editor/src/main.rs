@@ -458,22 +458,22 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             // 初始化插件管理器（TaskScheduler 在运行临时 .kgpg 时会用到）
-            let plugin_manager = PluginManager::new(app.app_handle().clone());
+            let plugin_manager = PluginManager::new();
             app.manage(plugin_manager);
 
             // 初始化存储（复用主程序的 DB / images_dir）
-            let storage = Storage::new(app.app_handle().clone());
+            let storage = Storage::new();
             storage
                 .init()
                 .map_err(|e| format!("Failed to initialize storage: {}", e))?;
             app.manage(storage);
 
             // 初始化设置（复用用户 settings.json）
-            let settings = Settings::new(app.app_handle().clone());
+            let settings = Settings::new();
             app.manage(settings);
 
             // 初始化下载队列（复用下载并发设置等）
-            let download_queue = crawler::DownloadQueue::new(app.app_handle().clone());
+            let download_queue = crawler::DownloadQueue::new(&settings, Some(app.app_handle().clone()));
             app.manage(download_queue);
 
             // 初始化主程序同款 TaskScheduler（10 worker 并发）

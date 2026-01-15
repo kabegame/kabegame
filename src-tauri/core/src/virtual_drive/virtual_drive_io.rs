@@ -5,7 +5,7 @@
 //! - Windows 下优先使用 file mapping（section / mmap）减少大量小块 ReadFile syscall。
 //! - 失败/不适用时回退到 `FileExt::seek_read`。
 
-#![cfg(all(feature = "virtual-drive", target_os = "windows"))]
+#![cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
 
 use std::{
     fs::File,

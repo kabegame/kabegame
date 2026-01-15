@@ -4,9 +4,10 @@ use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tauri::AppHandle;
+// Storage 不再依赖 Tauri AppHandle
 
 pub mod albums;
+#[cfg(feature = "dedupe")]
 pub mod dedupe;
 pub mod gallery;
 pub mod images;
@@ -30,7 +31,7 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn new(_app: AppHandle) -> Self {
+    pub fn new() -> Self {
         let db_path = Self::get_db_path();
         // 确保应用数据目录存在
         if let Some(parent) = db_path.parent() {

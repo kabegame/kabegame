@@ -1,11 +1,11 @@
 use crate::plugin::Plugin;
+use crate::runtime::EventEmitter;
 use rhai::{Dynamic, Engine, Map, Position, Scope};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager};
 use url::Url;
 
 type Shared<T> = Arc<Mutex<T>>;
@@ -127,9 +127,10 @@ fn get_task_id(task_id_holder: &Shared<String>) -> String {
     lock_or_inner(task_id_holder).clone()
 }
 
-fn get_network_retry_count(app: &AppHandle) -> u32 {
-    app.try_state::<crate::settings::Settings>()
-        .and_then(|s| s.get_settings().ok())
+fn get_network_retry_count(dq: &crate::crawler::DownloadQueue) -> u32 {
+    dq.settings_arc()
+        .get_settings()
+        .ok()
         .map(|s| s.network_retry_count)
         .unwrap_or(0)
 }
@@ -145,29 +146,30 @@ fn is_retryable_status(status: reqwest::StatusCode) -> bool {
     status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error()
 }
 
-fn emit_http_warn(app: &AppHandle, task_id: &str, message: impl Into<String>) {
-    crate::crawler::emit_task_log(app, task_id, "warn", message.into());
+fn emit_http_warn(dq: &crate::crawler::DownloadQueue, task_id: &str, message: impl Into<String>) {
+    let emitter = dq.emitter_arc();
+    emitter.emit_task_log(task_id, "warn", &message.into());
 }
 
-fn emit_http_error(app: &AppHandle, task_id: &str, message: impl Into<String>) {
-    crate::crawler::emit_task_log(app, task_id, "error", message.into());
+fn emit_http_error(dq: &crate::crawler::DownloadQueue, task_id: &str, message: impl Into<String>) {
+    let emitter = dq.emitter_arc();
+    emitter.emit_task_log(task_id, "error", &message.into());
 }
 
 fn http_get_text_with_retry(
-    app: &AppHandle,
+    dq: &crate::crawler::DownloadQueue,
     task_id: &str,
     url: &str,
     label: &str,
     headers: &HashMap<String, String>,
 ) -> Result<String, String> {
     let client = crate::crawler::create_blocking_client()?;
-    let header_map = build_reqwest_header_map(app, task_id, headers);
-    let retry_count = get_network_retry_count(app);
+    let header_map = build_reqwest_header_map(dq, task_id, headers);
+    let retry_count = get_network_retry_count(dq);
     let max_attempts = retry_count.saturating_add(1).max(1);
 
     for attempt in 1..=max_attempts {
         // 若任务已被取消，尽早退出（与 download_image 一致）
-        let dq = app.state::<crate::crawler::DownloadQueue>();
         if dq.is_task_canceled(task_id) {
             return Err("Task canceled".to_string());
         }
@@ -182,7 +184,7 @@ fn http_get_text_with_retry(
                 if attempt < max_attempts {
                     let backoff_ms = backoff_ms_for_attempt(attempt);
                     emit_http_warn(
-                        app,
+                        dq,
                         task_id,
                         format!(
                             "[{label}] 请求失败，将在 {backoff_ms}ms 后重试 ({attempt}/{max_attempts})：{e}"
@@ -193,7 +195,7 @@ fn http_get_text_with_retry(
                 }
                 let msg = format!("[{label}] 请求失败：{e}");
                 eprintln!("{msg} URL: {url}");
-                emit_http_error(app, task_id, format!("{msg}，URL: {url}"));
+                emit_http_error(dq, task_id, format!("{msg}，URL: {url}"));
                 return Err(format!("Failed to fetch: {e}"));
             }
         };
@@ -204,7 +206,7 @@ fn http_get_text_with_retry(
             if retryable && attempt < max_attempts {
                 let backoff_ms = backoff_ms_for_attempt(attempt);
                 emit_http_warn(
-                    app,
+                    dq,
                     task_id,
                     format!(
                         "[{label}] HTTP {status}，将于 {backoff_ms}ms 后重试 ({attempt}/{max_attempts})，URL: {url}"
@@ -215,7 +217,7 @@ fn http_get_text_with_retry(
             }
             let msg = format!("[{label}] HTTP 错误：{status}");
             eprintln!("{msg} URL: {url}");
-            emit_http_error(app, task_id, format!("{msg}，URL: {url}"));
+            emit_http_error(dq, task_id, format!("{msg}，URL: {url}"));
             return Err(format!("HTTP error: {status}"));
         }
 
@@ -225,7 +227,7 @@ fn http_get_text_with_retry(
                 if attempt < max_attempts {
                     let backoff_ms = backoff_ms_for_attempt(attempt);
                     emit_http_warn(
-                        app,
+                        dq,
                         task_id,
                         format!(
                             "[{label}] 读取响应失败，将在 {backoff_ms}ms 后重试 ({attempt}/{max_attempts})：{e}"
@@ -236,7 +238,7 @@ fn http_get_text_with_retry(
                 }
                 let msg = format!("[{label}] 读取响应失败：{e}");
                 eprintln!("{msg} URL: {url}");
-                emit_http_error(app, task_id, format!("{msg}，URL: {url}"));
+                emit_http_error(dq, task_id, format!("{msg}，URL: {url}"));
                 return Err(format!("Failed to fetch: {e}"));
             }
         }
@@ -246,7 +248,7 @@ fn http_get_text_with_retry(
 }
 
 fn build_reqwest_header_map(
-    app: &AppHandle,
+    dq: &crate::crawler::DownloadQueue,
     task_id: &str,
     headers: &HashMap<String, String>,
 ) -> HeaderMap {
@@ -260,7 +262,7 @@ fn build_reqwest_header_map(
             Ok(n) => n,
             Err(e) => {
                 emit_http_warn(
-                    app,
+                    dq,
                     task_id,
                     format!("[headers] 跳过无效 header 名：{key} ({e})"),
                 );
@@ -271,7 +273,7 @@ fn build_reqwest_header_map(
             Ok(v) => v,
             Err(e) => {
                 emit_http_warn(
-                    app,
+                    dq,
                     task_id,
                     format!("[headers] 跳过无效 header 值：{key} ({e})"),
                 );
@@ -289,7 +291,8 @@ fn build_reqwest_header_map(
 /// - 每个任务开始前仅更新这些共享 holder，脚本运行期间函数从 holder 读取当前上下文
 pub struct RhaiCrawlerRuntime {
     pub(crate) engine: Engine,
-    app: AppHandle,
+    download_queue: Arc<crate::crawler::DownloadQueue>,
+    emitter: Arc<dyn EventEmitter>,
     page_stack: Shared<Arc<Mutex<Vec<(String, String)>>>>,
     images_dir: Shared<PathBuf>,
     plugin_id: Shared<String>,
@@ -300,8 +303,9 @@ pub struct RhaiCrawlerRuntime {
 }
 
 impl RhaiCrawlerRuntime {
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new(download_queue: Arc<crate::crawler::DownloadQueue>) -> Self {
         let mut engine = Engine::new();
+        let emitter = download_queue.emitter_arc();
         let page_stack: Shared<Arc<Mutex<Vec<(String, String)>>>> =
             Arc::new(Mutex::new(Arc::new(Mutex::new(Vec::new()))));
         let images_dir: Shared<PathBuf> = Arc::new(Mutex::new(PathBuf::new()));
@@ -314,18 +318,18 @@ impl RhaiCrawlerRuntime {
 
         // 将 Rhai 的 print/debug 输出重定向为 task-log 事件，供前端实时展示
         {
-            let app_for_print = app.clone();
+            let emitter_for_print = Arc::clone(&emitter);
             let task_id_for_print = Arc::clone(&task_id);
             engine.on_print(move |s: &str| {
                 let tid = match task_id_for_print.lock() {
                     Ok(g) => g.clone(),
                     Err(e) => e.into_inner().clone(),
                 };
-                crate::crawler::emit_task_log(&app_for_print, &tid, "print", s.to_string());
+                emitter_for_print.emit_task_log(&tid, "print", s);
             });
         }
         {
-            let app_for_debug = app.clone();
+            let emitter_for_debug = Arc::clone(&emitter);
             let task_id_for_debug = Arc::clone(&task_id);
             engine.on_debug(move |s: &str, src: Option<&str>, pos: Position| {
                 let tid = match task_id_for_debug.lock() {
@@ -333,12 +337,7 @@ impl RhaiCrawlerRuntime {
                     Err(e) => e.into_inner().clone(),
                 };
                 let src = src.unwrap_or("unknown");
-                crate::crawler::emit_task_log(
-                    &app_for_debug,
-                    &tid,
-                    "debug",
-                    format!("{src} @ {pos:?} > {s}"),
-                );
+                emitter_for_debug.emit_task_log(&tid, "debug", &format!("{src} @ {pos:?} > {s}"));
             });
         }
 
@@ -346,7 +345,7 @@ impl RhaiCrawlerRuntime {
             &mut engine,
             Arc::clone(&page_stack),
             Arc::clone(&images_dir),
-            app.clone(),
+            Arc::clone(&download_queue),
             Arc::clone(&plugin_id),
             Arc::clone(&task_id),
             Arc::clone(&current_progress),
@@ -356,7 +355,8 @@ impl RhaiCrawlerRuntime {
 
         Self {
             engine,
-            app,
+            download_queue,
+            emitter,
             page_stack,
             images_dir,
             plugin_id,
@@ -433,7 +433,7 @@ pub fn register_crawler_functions(
     engine: &mut Engine,
     page_stack: Shared<Arc<Mutex<Vec<(String, String)>>>>,
     images_dir: Shared<PathBuf>,
-    app: AppHandle,
+    download_queue: Arc<crate::crawler::DownloadQueue>,
     plugin_id: Shared<String>,
     task_id: Shared<String>,
     current_progress: Shared<Arc<Mutex<f64>>>,
@@ -453,7 +453,7 @@ pub fn register_crawler_functions(
     // to(url) - 访问一个网页，将当前页面入栈
     engine.register_fn("to", {
         let stack_holder = Arc::clone(&stack_holder);
-        let app_holder = app.clone();
+        let dq_holder = Arc::clone(&download_queue);
         let task_id_holder = Arc::clone(&task_id);
         let headers_holder = Arc::clone(&http_headers);
         // 注意：返回 Result<T, Box<EvalAltResult>> 时，脚本侧拿到的是 T（失败会直接抛出运行时错误）
@@ -486,7 +486,7 @@ pub fn register_crawler_functions(
             // 在单独的线程中执行阻塞的 HTTP 请求，避免在 Tokio runtime 中创建新的 runtime
             // 并增加失败重试 + 日志输出（风格与 download_image 一致：可取消、指数退避、最终失败 eprintln）
             let url_clone = resolved_url.clone();
-            let app_for_http = app_holder.clone();
+            let dq_for_http = Arc::clone(&dq_holder);
             let task_id_for_http = get_task_id(&task_id_holder);
             let headers_for_http = {
                 let guard = lock_or_inner(&headers_holder);
@@ -495,7 +495,7 @@ pub fn register_crawler_functions(
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let result =
-                    http_get_text_with_retry(&app_for_http, &task_id_for_http, &url_clone, "to", &headers_for_http);
+                    http_get_text_with_retry(&dq_for_http, &task_id_for_http, &url_clone, "to", &headers_for_http);
                 let _ = tx.send(result);
             });
             let html = rx
@@ -513,7 +513,7 @@ pub fn register_crawler_functions(
     // to_json(url) - 访问一个 JSON API，返回 JSON 对象
     engine.register_fn("to_json", {
         let stack_holder = Arc::clone(&stack_holder);
-        let app_holder = app.clone();
+        let dq_holder = Arc::clone(&download_queue);
         let task_id_holder = Arc::clone(&task_id);
         let headers_holder = Arc::clone(&http_headers);
         move |url: &str| -> Result<Map, Box<rhai::EvalAltResult>> {
@@ -544,7 +544,7 @@ pub fn register_crawler_functions(
             // 在单独的线程中执行阻塞的 HTTP 请求，避免在 Tokio runtime 中创建新的 runtime
             // 并增加失败重试 + 日志输出（风格与 download_image 一致）
             let url_clone = resolved_url.clone();
-            let app_for_http = app_holder.clone();
+            let dq_for_http = Arc::clone(&dq_holder);
             let task_id_for_http = get_task_id(&task_id_holder);
             let task_id_for_http_thread = task_id_for_http.clone();
             let headers_for_http = {
@@ -554,7 +554,7 @@ pub fn register_crawler_functions(
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let result = http_get_text_with_retry(
-                    &app_for_http,
+                    &dq_for_http,
                     &task_id_for_http_thread,
                     &url_clone,
                     "to_json",
@@ -570,7 +570,7 @@ pub fn register_crawler_functions(
                 let msg = format!("[to_json] JSON 解析失败：{e}");
                 eprintln!("{msg} URL: {resolved_url}");
                 emit_http_error(
-                    &app_holder,
+                    &dq_holder,
                     &task_id_for_http,
                     format!("{msg}，URL: {resolved_url}"),
                 );
@@ -1142,7 +1142,7 @@ pub fn register_crawler_functions(
     );
 
     // add_progress(percentage) - 增加任务运行进度（单位为%，累加）
-    let app_handle = app.clone();
+    let dq_handle = Arc::clone(&download_queue);
     let task_id_holder = Arc::clone(&task_id);
     let progress_holder = Arc::clone(&current_progress);
     engine.register_fn(
@@ -1155,7 +1155,6 @@ pub fn register_crawler_functions(
                 };
                 guard.clone()
             };
-            let app_handle = app_handle.clone();
             let progress_guard = {
                 let guard = match progress_holder.lock() {
                     Ok(g) => g,
@@ -1165,8 +1164,7 @@ pub fn register_crawler_functions(
             };
 
             // 若任务已被取消，直接让脚本失败退出
-            let dq = app_handle.state::<crate::crawler::DownloadQueue>();
-            if dq.is_task_canceled(&task_id) {
+            if dq_handle.is_task_canceled(&task_id) {
                 return Err("Task canceled".into());
             }
 
@@ -1189,22 +1187,20 @@ pub fn register_crawler_functions(
             let final_progress = *current;
 
             // 通过事件发送进度更新
-            app_handle
-                .emit(
-                    "task-progress",
-                    serde_json::json!({
-                        "taskId": task_id,
-                        "progress": final_progress
-                    }),
-                )
-                .map_err(|e| format!("Failed to emit progress event: {}", e))?;
+            dq_handle.emitter_arc().emit(
+                "task-progress",
+                serde_json::json!({
+                    "taskId": task_id,
+                    "progress": final_progress
+                }),
+            );
 
             Ok(())
         },
     );
 
     // download_image(url) - 同步下载图片并添加到 gallery（等待窗口有空位后直接执行）
-    let app_handle = app.clone();
+    let dq_handle = Arc::clone(&download_queue);
     let images_dir_holder = Arc::clone(&images_dir);
     let plugin_id_holder = Arc::clone(&plugin_id);
     let task_id_holder = Arc::clone(&task_id);
@@ -1250,13 +1246,11 @@ pub fn register_crawler_functions(
             };
 
             // 如果任务已被取消，让脚本失败退出
-            let dq = app_handle.state::<crate::crawler::DownloadQueue>();
-            if dq.is_task_canceled(&task_id_for_download) {
+            if dq_handle.is_task_canceled(&task_id_for_download) {
                 return Err("Task canceled".into());
             }
 
             let images_dir = images_dir.clone();
-            let app_handle = app_handle.clone();
             let plugin_id = plugin_id.clone();
             let task_id = task_id_for_download.clone();
 
@@ -1266,7 +1260,7 @@ pub fn register_crawler_functions(
 
             // 检查任务图片数量限制（最多10000张）
             const MAX_TASK_IMAGES: usize = 10000;
-            let storage = app_handle.state::<crate::storage::Storage>();
+            let storage = dq_handle.storage_arc();
             match storage.get_task_image_ids(&task_id) {
                 Ok(image_ids) => {
                     if image_ids.len() >= MAX_TASK_IMAGES {
@@ -1289,8 +1283,7 @@ pub fn register_crawler_functions(
                 .as_millis() as u64;
 
             // 同步下载图片（等待窗口有空位后直接执行）
-            let download_queue = app_handle.state::<crate::crawler::DownloadQueue>();
-            download_queue
+            dq_handle
                 .download_image(
                     url.to_string(),
                     images_dir,
@@ -1305,7 +1298,7 @@ pub fn register_crawler_functions(
     );
 
     // download_archive(url, type) - 导入压缩包（目前仅支持 zip）
-    let app_handle = app.clone();
+    let dq_handle = Arc::clone(&download_queue);
     let images_dir_holder = Arc::clone(&images_dir);
     let plugin_id_holder = Arc::clone(&plugin_id);
     let task_id_holder = Arc::clone(&task_id);
@@ -1351,8 +1344,7 @@ pub fn register_crawler_functions(
             };
 
             // 如果任务已被取消，让脚本失败退出
-            let dq = app_handle.state::<crate::crawler::DownloadQueue>();
-            if dq.is_task_canceled(&task_id_for_download) {
+            if dq_handle.is_task_canceled(&task_id_for_download) {
                 return Err("Task canceled".into());
             }
 
@@ -1362,8 +1354,7 @@ pub fn register_crawler_functions(
                 .unwrap()
                 .as_millis() as u64;
 
-            let download_queue = app_handle.state::<crate::crawler::DownloadQueue>();
-            download_queue
+            dq_handle
                 .download_archive(
                     url.to_string(),
                     archive_type,
@@ -1384,7 +1375,6 @@ pub fn execute_crawler_script_with_runtime(
     runtime: &mut RhaiCrawlerRuntime,
     plugin: &Plugin,
     images_dir: &Path,
-    _app: &AppHandle,
     plugin_id: &str,
     task_id: &str,
     script_content: &str,
@@ -1400,11 +1390,10 @@ pub fn execute_crawler_script_with_runtime(
         output_album_id,
         http_headers.unwrap_or_default(),
     );
-    crate::crawler::emit_task_log(
-        &runtime.app,
+    runtime.emitter.emit_task_log(
         task_id,
         "info",
-        format!("开始执行脚本（pluginId={plugin_id}, taskId={task_id}）"),
+        &format!("开始执行脚本（pluginId={plugin_id}, taskId={task_id}）"),
     );
 
     // 创建作用域
@@ -1494,15 +1483,11 @@ pub fn execute_crawler_script_with_runtime(
 
             // 1) 保存到任务表（供 UI “确认”）
             if let Some(ref text) = dump_text {
-                if let Some(storage) = runtime.app.try_state::<crate::storage::Storage>() {
-                    if let Err(err) = storage.set_task_rhai_dump(task_id, text) {
-                        crate::crawler::emit_task_log(
-                            &runtime.app,
-                            task_id,
-                            "warn",
-                            format!("Rhai dump 保存到任务表失败：{err}"),
-                        );
-                    }
+                let storage = runtime.download_queue.storage_arc();
+                if let Err(err) = storage.set_task_rhai_dump(task_id, text) {
+                    runtime
+                        .emitter
+                        .emit_task_log(task_id, "warn", &format!("Rhai dump 保存到任务表失败：{err}"));
                 }
             }
 
@@ -1513,7 +1498,7 @@ pub fn execute_crawler_script_with_runtime(
                         Ok(p) => Some(p),
                         Err(dump_err) => {
                             let msg = format!("Rhai 脚本失败：生成变量 dump 文件失败：{dump_err}");
-                            crate::crawler::emit_task_log(&runtime.app, task_id, "warn", msg);
+                            runtime.emitter.emit_task_log(task_id, "warn", &msg);
                             None
                         }
                     }
@@ -1530,7 +1515,7 @@ pub fn execute_crawler_script_with_runtime(
                 if let Some(p) = dump_path {
                     msg.push_str(&format!("\nScope dump: {}", p.display()));
                 }
-                crate::crawler::emit_task_log(&runtime.app, task_id, "error", msg.clone());
+                runtime.emitter.emit_task_log(task_id, "error", &msg);
                 msg
             } else {
                 eprintln!("Script execution error: {}", e);
@@ -1538,16 +1523,15 @@ pub fn execute_crawler_script_with_runtime(
                 if let Some(p) = dump_path {
                     msg.push_str(&format!("\nScope dump: {}", p.display()));
                 }
-                crate::crawler::emit_task_log(&runtime.app, task_id, "error", msg.clone());
+                runtime.emitter.emit_task_log(task_id, "error", &msg);
                 msg
             }
         })?;
 
-    crate::crawler::emit_task_log(
-        &runtime.app,
+    runtime.emitter.emit_task_log(
         task_id,
         "info",
-        "脚本执行完成：图片应已通过 download_image() 入队".to_string(),
+        "脚本执行完成：图片应已通过 download_image() 入队",
     );
     Ok(())
 }
@@ -1556,19 +1540,18 @@ pub fn execute_crawler_script_with_runtime(
 pub fn execute_crawler_script(
     _plugin: &Plugin,
     images_dir: &Path,
-    app: &AppHandle,
+    download_queue: Arc<crate::crawler::DownloadQueue>,
     plugin_id: &str,
     task_id: &str,
     script_content: &str,
     merged_config: HashMap<String, serde_json::Value>,
     output_album_id: Option<String>, // 输出画册ID，如果指定则下载完成后自动添加到画册
 ) -> Result<(), String> {
-    let mut runtime = RhaiCrawlerRuntime::new(app.clone());
+    let mut runtime = RhaiCrawlerRuntime::new(download_queue);
     execute_crawler_script_with_runtime(
         &mut runtime,
         _plugin,
         images_dir,
-        app,
         plugin_id,
         task_id,
         script_content,

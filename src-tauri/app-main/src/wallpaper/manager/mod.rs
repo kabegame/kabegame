@@ -1,15 +1,20 @@
 pub mod native;
+#[cfg(all(target_os = "linux", desktop = "plasma"))]
+pub mod plasma_plugin;
 #[cfg(target_os = "windows")]
 pub mod window;
 
 // 导出管理器类型
 pub use native::NativeWallpaperManager;
+#[cfg(all(target_os = "linux", desktop = "plasma"))]
+pub use plasma_plugin::PlasmaPluginWallpaperManager;
 #[cfg(target_os = "windows")]
 pub use window::WindowWallpaperManager;
 
-use kabegame_core::settings::Settings;
-use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager};
+use std::sync::Arc;
+#[cfg(target_os = "windows")]
+use std::sync::Mutex;
+use tauri::AppHandle;
 
 #[cfg(target_os = "windows")]
 use crate::wallpaper::window::WallpaperWindow;
@@ -20,6 +25,8 @@ use crate::wallpaper::window::WallpaperWindow;
 pub struct WallpaperController {
     app: AppHandle,
     native: Arc<NativeWallpaperManager>,
+    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    plasma_plugin: Arc<PlasmaPluginWallpaperManager>,
     #[cfg(target_os = "windows")]
     window: Arc<WindowWallpaperManager>,
 }
@@ -27,6 +34,9 @@ pub struct WallpaperController {
 impl WallpaperController {
     pub fn new(app: AppHandle) -> Self {
         let native = Arc::new(NativeWallpaperManager::new(app.clone()));
+
+        #[cfg(all(target_os = "linux", desktop = "plasma"))]
+        let plasma_plugin = Arc::new(PlasmaPluginWallpaperManager::new(app.clone()));
 
         #[cfg(target_os = "windows")]
         let wallpaper_window: Arc<Mutex<Option<WallpaperWindow>>> = Arc::new(Mutex::new(None));
@@ -40,6 +50,8 @@ impl WallpaperController {
         Self {
             app,
             native,
+            #[cfg(all(target_os = "linux", desktop = "plasma"))]
+            plasma_plugin,
             #[cfg(target_os = "windows")]
             window,
         }
@@ -47,18 +59,19 @@ impl WallpaperController {
 
     /// 根据当前设置选择活动后端（native/window）。
     pub fn active_manager(&self) -> Result<Arc<dyn WallpaperManager + Send + Sync>, String> {
-        let settings_state = self
-            .app
-            .try_state::<Settings>()
-            .ok_or_else(|| "无法获取设置状态".to_string())?;
-
-        let settings = settings_state
-            .get_settings()
-            .map_err(|e| format!("获取设置失败: {}", e))?;
-
-        Ok(match settings.wallpaper_mode.as_str() {
+        let v = tauri::async_runtime::block_on(async {
+            crate::daemon_client::get_ipc_client().settings_get().await
+        })
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+        let mode = v
+            .get("wallpaperMode")
+            .and_then(|x| x.as_str())
+            .unwrap_or("native");
+        Ok(match mode {
             #[cfg(target_os = "windows")]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            #[cfg(all(target_os = "linux", desktop = "plasma"))]
+            "plasma-plugin" => self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
         })
     }
@@ -68,6 +81,8 @@ impl WallpaperController {
         match mode {
             #[cfg(target_os = "windows")]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            #[cfg(all(target_os = "linux", desktop = "plasma"))]
+            "plasma-plugin" => self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
         }
     }

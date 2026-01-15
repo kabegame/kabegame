@@ -1,12 +1,18 @@
 //! Kabegame 后端核心库入口（供多个 app crate 复用）。
 
 pub mod app_paths;
+pub mod ipc;
+
 pub mod crawler;
+// 去重任务管理器（GUI/本地模式使用）。daemon 侧只需要 storage::dedupe 的扫描能力。
+#[cfg(all(feature = "dedupe", feature = "tauri-adapter"))]
 pub mod dedupe;
+
 pub mod gallery;
 pub mod kgpg;
 pub mod plugin;
 pub mod providers;
+pub mod runtime;
 pub mod settings;
 pub mod shell_open;
 pub mod storage;

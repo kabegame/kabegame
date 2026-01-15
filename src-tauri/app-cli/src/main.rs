@@ -9,14 +9,10 @@
 
 use clap::{Args, Parser, Subcommand};
 use kabegame_core::{
-    crawler, kgpg,
-    plugin::{ImportPreview, Plugin, PluginDetail, PluginManager, PluginManifest, VarDefinition},
-    providers,
-    settings::Settings,
-    storage::Storage,
+    kgpg,
+    plugin::{ImportPreview, Plugin, PluginDetail, PluginManager, PluginManifest},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::Manager;
 
@@ -52,15 +48,13 @@ enum PluginCommands {
 
 #[derive(Subcommand, Debug)]
 enum VdCommands {
-    /// 提权 daemon：通过命名管道/本地 socket 提供 mount/unmount/status 服务（建议用 runas 启动）
-    Daemon,
-    /// 调试：检查 IPC 是否就绪（能否连接到 vd daemon）
+    /// 调试：检查 daemon IPC 是否就绪
     IpcStatus,
-    /// 挂载虚拟盘（需要管理员权限；该命令会常驻直到被卸载）
+    /// 挂载虚拟盘（通过 daemon IPC 触发）
     Mount(VdMountArgs),
-    /// 卸载虚拟盘（需要管理员权限）
+    /// 卸载虚拟盘（通过 daemon IPC 触发）
     Unmount(VdUnmountArgs),
-    /// 检查挂载点是否可访问（非严格判定，仅用于脚本探测）
+    /// 检查挂载点是否可访问（通过 daemon IPC 触发）
     Status(VdStatusArgs),
 }
 
@@ -139,21 +133,43 @@ fn main() {
     let res = match cli.command {
         Commands::Plugin(cmd) => match cmd {
             PluginCommands::Run(args) => {
-                let app = build_minimal_app().unwrap_or_else(|e| {
-                    eprintln!("初始化失败: {e}");
-                    std::process::exit(1);
-                });
+                // 仅通过 daemon IPC 执行（CLI 不再本地直跑，避免多进程争抢数据目录/DB）
                 let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
                     eprintln!("创建 Tokio Runtime 失败: {e}");
                     std::process::exit(1);
                 });
-                rt.block_on(run_plugin(app.handle().clone(), args))
+                let req = kabegame_core::ipc::ipc::CliIpcRequest::PluginRun {
+                    plugin: args.plugin,
+                    output_dir: args
+                        .output_dir
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().to_string()),
+                    task_id: args.task_id,
+                    output_album_id: args.output_album_id,
+                    plugin_args: args.plugin_args,
+                };
+                match rt.block_on(kabegame_core::ipc::ipc::request(req)) {
+                    Ok(resp) if resp.ok => {
+                        if let Some(msg) = resp.message {
+                            println!("{msg}");
+                        } else {
+                            println!("ok");
+                        }
+                        Ok(())
+                    }
+                    Ok(resp) => Err(resp
+                        .message
+                        .unwrap_or_else(|| "daemon returned error".to_string())),
+                    Err(e) => Err(format!(
+                        "无法连接 kabegame-daemon：{}\n提示：请先启动 `kabegame-daemon`",
+                        e
+                    )),
+                }
             }
             PluginCommands::Pack(args) => pack_plugin(args),
             PluginCommands::Import(args) => import_plugin(args),
         },
         Commands::Vd(cmd) => match cmd {
-            VdCommands::Daemon => vd_daemon(),
             VdCommands::IpcStatus => vd_ipc_status(),
             VdCommands::Mount(args) => vd_mount(args),
             VdCommands::Unmount(args) => vd_unmount(args),
@@ -167,322 +183,61 @@ fn main() {
     }
 }
 
-fn build_minimal_app() -> Result<tauri::App, String> {
-    build_minimal_app_with_storage().map(|(app, _storage)| app)
-}
-
-fn build_minimal_app_with_storage() -> Result<(tauri::App, Storage), String> {
-    // 注意：不要依赖 Builder.setup 的执行时机来初始化 state。
-    // 在某些环境下（尤其是纯 CLI 进程），setup 可能不会在 build 阶段按预期执行，
-    // 从而导致“Storage not available”。这里改为：build 完再手动 manage，保证顺序确定。
-    let app = tauri::Builder::default()
-        .build(tauri::generate_context!())
-        .map_err(|e| format!("Build tauri app failed: {}", e))?;
-
-    let handle = app.app_handle().clone();
-
-    // 初始化插件管理器
-    let plugin_manager = PluginManager::new(handle.clone());
-    app.manage(plugin_manager);
-
-    // 初始化存储管理器（下载/入库依赖）
-    let storage = Storage::new(handle.clone());
-    storage
-        .init()
-        .map_err(|e| format!("Failed to initialize storage: {}", e))?;
-    app.manage(storage.clone());
-
-    // 初始化 ProviderRuntime（虚拟盘/画廊 provider 浏览依赖）
-    // 与 app-main 启动逻辑一致：失败则 fallback 默认配置。
-    let mut cfg = providers::ProviderCacheConfig::default();
-    // 可选覆盖 sled 目录（例如 vd daemon 为避免锁冲突会设置此环境变量）
-    if let Ok(dir) = std::env::var("KABEGAME_PROVIDER_DB_DIR") {
-        let d = dir.trim();
-        if !d.is_empty() {
-            cfg.db_dir = std::path::PathBuf::from(d);
-        }
-    }
-    let rt = providers::ProviderRuntime::new(cfg)
-        .or_else(|e| {
-            eprintln!(
-                "[providers] init ProviderRuntime failed, fallback to default cfg: {}",
-                e
-            );
-            providers::ProviderRuntime::new(providers::ProviderCacheConfig::default())
-        })
-        .map_err(|e| format!("ProviderRuntime init failed: {}", e))?;
-    app.manage(rt);
-
-    // 初始化设置管理器（下载队列会读设置并发数等）
-    let settings = Settings::new(handle.clone());
-    app.manage(settings);
-
-    // 初始化下载队列
-    let download_queue = crawler::DownloadQueue::new(handle);
-    app.manage(download_queue);
-
-    Ok((app, storage))
-}
+// NOTE: build_minimal_app / run_plugin 等“后台能力”已迁移到独立的 `kabegame-daemon` 中。
 
 fn vd_mount(args: VdMountArgs) -> Result<(), String> {
-    #[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
-    {
-        let _ = args;
-        return Err("当前平台/构建未启用虚拟盘（virtual-drive）".to_string());
-    }
-
-    #[cfg(all(feature = "virtual-drive", target_os = "windows"))]
-    {
-        use kabegame_core::virtual_drive::drive_service::VirtualDriveServiceTrait;
-
-        let (app, storage) = build_minimal_app_with_storage()?;
-
-        let drive = kabegame_core::virtual_drive::VirtualDriveService::default();
-        drive.mount(&args.mount_point, storage, app.handle().clone())?;
-
-        println!("mounted: {}", args.mount_point);
-
-        if args.no_wait {
-            return Ok(());
-        }
-
-        // Dokan 的用户态文件系统服务端需要常驻进程。
-        // 这里阻塞住，直到外部卸载（vd unmount）触发 mount loop 结束，或进程被终止。
-        loop {
-            std::thread::park();
-        }
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
+    let req = kabegame_core::ipc::ipc::CliIpcRequest::VdMount {
+        mount_point: args.mount_point,
+        no_wait: args.no_wait,
+    };
+    let resp = rt.block_on(kabegame_core::ipc::ipc::request(req))?;
+    if resp.ok {
+        println!("{}", resp.message.unwrap_or_else(|| "ok".to_string()));
+        Ok(())
+    } else {
+        Err(resp.message.unwrap_or_else(|| "daemon returned error".to_string()))
     }
 }
 
 fn vd_unmount(args: VdUnmountArgs) -> Result<(), String> {
-    #[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
-    {
-        let _ = args;
-        return Err("当前平台/构建未启用虚拟盘（virtual-drive）".to_string());
-    }
-
-    #[cfg(all(feature = "virtual-drive", target_os = "windows"))]
-    {
-        let ok = kabegame_core::virtual_drive::drive_service::dokan_unmount_by_mount_point(
-            &args.mount_point,
-        )?;
-        if ok {
-            println!("unmounted: {}", args.mount_point);
-        } else {
-            println!("not mounted: {}", args.mount_point);
-        }
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
+    let req = kabegame_core::ipc::ipc::CliIpcRequest::VdUnmount {
+        mount_point: args.mount_point,
+    };
+    let resp = rt.block_on(kabegame_core::ipc::ipc::request(req))?;
+    if resp.ok {
+        println!("{}", resp.message.unwrap_or_else(|| "ok".to_string()));
         Ok(())
+    } else {
+        Err(resp.message.unwrap_or_else(|| "daemon returned error".to_string()))
     }
 }
 
 fn vd_status(args: VdStatusArgs) -> Result<(), String> {
-    let mp = args.mount_point.trim();
-    if mp.is_empty() {
-        return Err("mount_point 不能为空".to_string());
-    }
-
-    // 非严格：能 read_dir 则认为“可访问”
-    let p = std::path::PathBuf::from(mp);
-    match std::fs::read_dir(&p) {
-        Ok(_) => {
-            println!("ok");
-            Ok(())
-        }
-        Err(e) => Err(format!("not accessible: {}", e)),
-    }
+    let _ = args;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
+    let req = kabegame_core::ipc::ipc::CliIpcRequest::VdStatus;
+    let resp = rt.block_on(kabegame_core::ipc::ipc::request(req))?;
+    println!("{}", serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string()));
+    Ok(())
 }
 
 fn vd_ipc_status() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use kabegame_core::virtual_drive::ipc::{self, VdIpcRequest};
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("create tokio runtime failed: {}", e))?;
-        let resp = rt.block_on(async { ipc::request(VdIpcRequest::Status).await })?;
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string())
-        );
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        use kabegame_core::virtual_drive::ipc::{self, VdIpcRequest};
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("create tokio runtime failed: {}", e))?;
-        let resp = rt.block_on(async { ipc::request(VdIpcRequest::Status).await })?;
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string())
-        );
-        Ok(())
-    }
-}
-
-fn vd_daemon() -> Result<(), String> {
-    #[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
-    {
-        return Err("vd daemon 目前仅用于 Windows virtual-drive 构建".to_string());
-    }
-
-    #[cfg(all(feature = "virtual-drive", target_os = "windows"))]
-    {
-        use kabegame_core::virtual_drive::drive_service::VirtualDriveServiceTrait;
-        use kabegame_core::virtual_drive::ipc::{self, VdIpcRequest, VdIpcResponse};
-
-        use std::sync::Arc;
-        use std::{fs::OpenOptions, io::Write};
-
-        // 尽量“必出日志”：先打开 log，再做任何可能失败的初始化。
-        let log_path = std::env::temp_dir().join("kabegame-vd-daemon.log");
-        let mut log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .map_err(|e| format!("open daemon log failed ({}): {}", log_path.display(), e))?;
-        let _ = writeln!(log, "=== vd daemon start: pid={} ===", std::process::id());
-        let _ = writeln!(
-            log,
-            "exe={}",
-            std::env::current_exe()
-                .ok()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| "<unknown>".to_string())
-        );
-
-        // 早期检查：尽量输出一些环境信息（给 Win10 用户更明确的“为什么 IPC 不就绪”）
-        let _ = writeln!(
-            log,
-            "cwd={}",
-            std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "<unknown>".to_string())
-        );
-        let _ = writeln!(
-            log,
-            "is_admin_hint=请确认UAC已允许（本进程应由 runas 启动）"
-        );
-        let _ = log.flush();
-
-        // 关键：vd daemon 不应和主程序共享同一个 provider-cache-db（sled 单进程锁）。
-        // 若用户未显式指定，则给 daemon 分配一个临时的独立目录，避免锁冲突导致 daemon 直接退出。
-        let env_db_dir = std::env::var("KABEGAME_PROVIDER_DB_DIR").ok();
-        let env_db_dir = env_db_dir
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-
-        let db_dir = env_db_dir.unwrap_or_else(|| {
-            std::env::temp_dir()
-                .join("kabegame")
-                .join(format!("provider-cache-db-daemon-{}", std::process::id()))
-                .to_string_lossy()
-                .to_string()
-        });
-        let _ = std::fs::create_dir_all(&db_dir);
-        std::env::set_var("KABEGAME_PROVIDER_DB_DIR", &db_dir);
-        let _ = writeln!(log, "KABEGAME_PROVIDER_DB_DIR={}", db_dir);
-        let _ = log.flush();
-
-        let (app, storage) = match build_minimal_app_with_storage() {
-            Ok(a) => a,
-            Err(e) => {
-                let _ = writeln!(log, "build_minimal_app failed: {}", e);
-                let _ = log.flush();
-                return Err(format!("{e}\n(daemon log: {})", log_path.to_string_lossy()));
-            }
-        };
-        let drive = Arc::new(kabegame_core::virtual_drive::VirtualDriveService::default());
-        let app_handle = Arc::new(app.handle().clone());
-
-        let rt = tokio::runtime::Runtime::new().map_err(|e| {
-            let _ = writeln!(log, "create tokio runtime failed: {}", e);
-            let _ = log.flush();
-            format!(
-                "create tokio runtime failed: {}\n(daemon log: {})",
-                e,
-                log_path.to_string_lossy()
-            )
-        })?;
-
-        let _ = writeln!(log, "ipc_listen=\\\\.\\pipe\\kabegame-vd");
-        let _ = writeln!(log, "ipc_status=starting");
-        let _ = log.flush();
-
-        // daemon：单线程处理请求即可（每个连接单次 request/response）
-        let serve_res = rt.block_on(async move {
-            ipc::serve(move |req| {
-                let storage = storage.clone();
-                let app_handle = app_handle.clone();
-                let drive = drive.clone();
-                async move {
-                    match req {
-                        VdIpcRequest::Mount { mount_point } => {
-                            match drive.mount(&mount_point, storage.clone(), (*app_handle).clone()) {
-                                Ok(()) => {
-                                    let mp = drive.current_mount_point().unwrap_or(mount_point);
-                                    VdIpcResponse {
-                                        ok: true,
-                                        message: Some("mounted".to_string()),
-                                        mounted: Some(true),
-                                        mount_point: Some(mp),
-                                    }
-                                }
-                                Err(e) => VdIpcResponse::err(e),
-                            }
-                        }
-                        VdIpcRequest::Unmount { mount_point } => {
-                            // 优先卸载本进程维护的挂载；若不一致则按 mount_point 强制卸载
-                            match drive.unmount() {
-                                Ok(true) => VdIpcResponse {
-                                    ok: true,
-                                    message: Some("unmounted".to_string()),
-                                    mounted: Some(false),
-                                    mount_point: Some(mount_point),
-                                },
-                                _ => match kabegame_core::virtual_drive::drive_service::dokan_unmount_by_mount_point(&mount_point) {
-                                    Ok(ok) => VdIpcResponse {
-                                        ok: true,
-                                        message: Some(if ok { "unmounted".to_string() } else { "not mounted".to_string() }),
-                                        mounted: Some(false),
-                                        mount_point: Some(mount_point),
-                                    },
-                                    Err(e) => VdIpcResponse::err(e),
-                                },
-                            }
-                        }
-                        VdIpcRequest::Status => {
-                            let mp = drive.current_mount_point();
-                            VdIpcResponse {
-                                ok: true,
-                                message: Some("status".to_string()),
-                                mounted: Some(mp.is_some()),
-                                mount_point: mp,
-                            }
-                        }
-                    }
-                }
-            })
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {}", e))?;
+    let resp = rt.block_on(async {
+        kabegame_core::ipc::ipc::request(kabegame_core::ipc::ipc::CliIpcRequest::Status)
             .await
-        });
-
-        match serve_res {
-            Ok(_) => {
-                let _ = writeln!(log, "vd daemon exit normally");
-                let _ = log.flush();
-                Ok(())
-            }
-            Err(e) => {
-                let _ = writeln!(log, "vd daemon exit with error: {}", e);
-                let _ = log.flush();
-                Err(format!(
-                    "{}\n(daemon log: {})",
-                    e,
-                    log_path.to_string_lossy()
-                ))
-            }
-        }
-    }
+    })?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string())
+    );
+    Ok(())
 }
+
+// NOTE: vd daemon 已迁移到独立的 `kabegame-daemon` 中，通过统一 IPC 提供服务。
 
 fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {
     let p = args.path;
@@ -522,6 +277,20 @@ fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
         plugins_dir.display()
     );
     Ok(())
+}
+
+fn build_minimal_app() -> Result<tauri::App, String> {
+    // 仅用于 CLI 的“导入/读取插件包信息”等轻量场景：
+    // - 不初始化 Storage/ProviderRuntime/DownloadQueue
+    // - 只需要 PluginManager 提供 plugins_directory 与 kgpg 解析能力
+    let app = tauri::Builder::default()
+        .build(tauri::generate_context!())
+        .map_err(|e| format!("Build tauri app failed: {}", e))?;
+
+    let plugin_manager = PluginManager::new();
+    app.manage(plugin_manager);
+
+    Ok(app)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -676,7 +445,7 @@ fn import_plugin_with_ui(p: PathBuf) -> Result<(), String> {
     tauri::Builder::default()
         .setup(move |app| {
             // 只初始化插件管理器（导入 UI 不需要 Storage/Settings/DownloadQueue）
-            let plugin_manager = PluginManager::new(app.app_handle().clone());
+            let plugin_manager = PluginManager::new();
             app.manage(plugin_manager);
 
             let _ = WebviewWindowBuilder::new(app, "cli-import", url.clone())
@@ -834,215 +603,4 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-async fn run_plugin(app: tauri::AppHandle, args: RunPluginArgs) -> Result<(), String> {
-    let plugin_manager = app.state::<PluginManager>();
-
-    // 确保内置插件已装到用户插件目录（id 运行依赖）
-    if let Err(e) = plugin_manager.ensure_prepackaged_plugins_installed() {
-        eprintln!("[WARN] 安装内置插件失败（将继续）：{e}");
-    }
-
-    let task_id = args
-        .task_id
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let images_dir = args
-        .output_dir
-        .unwrap_or_else(crawler::get_default_images_dir);
-
-    let (plugin, plugin_file_opt, var_defs) =
-        plugin_manager.resolve_plugin_for_cli_run(&args.plugin)?;
-
-    let user_cfg = parse_plugin_vars_from_tokens(&var_defs, &args.plugin_args)?;
-
-    // required 检查（规则：default 不存在即 required）
-    let missing = required_missing_keys(&var_defs, &user_cfg);
-    if !missing.is_empty() {
-        return Err(format!(
-            "缺少必填参数（required）：{}\n提示：required 规则与前端一致，var 定义中 default 为空即视为必填。",
-            missing.join(", ")
-        ));
-    }
-
-    // 运行
-    if let Some(plugin_file) = plugin_file_opt {
-        crawler::crawl_images_from_plugin_file(
-            &plugin,
-            &plugin_file,
-            &task_id,
-            images_dir,
-            app,
-            Some(user_cfg),
-            args.output_album_id,
-        )
-        .await?;
-    } else {
-        // id 模式：沿用既有实现（会从 plugins_directory 查找对应 .kgpg）
-        crawler::crawl_images(
-            &plugin,
-            &task_id,
-            images_dir,
-            app,
-            Some(user_cfg),
-            args.output_album_id,
-        )
-        .await?;
-    }
-
-    Ok(())
-}
-
-fn required_missing_keys(
-    var_defs: &[VarDefinition],
-    user_cfg: &HashMap<String, serde_json::Value>,
-) -> Vec<String> {
-    let mut missing = Vec::new();
-    for def in var_defs {
-        let is_required = def.default.is_none();
-        if is_required && !user_cfg.contains_key(&def.key) {
-            missing.push(def.key.clone());
-        }
-    }
-    missing
-}
-
-fn parse_plugin_vars_from_tokens(
-    var_defs: &[VarDefinition],
-    tokens: &[String],
-) -> Result<HashMap<String, serde_json::Value>, String> {
-    // 1) 先把 tokens 分成：命名参数（key -> raw string）和位置参数（Vec）
-    let mut named: HashMap<String, Vec<String>> = HashMap::new();
-    let mut positional: Vec<String> = Vec::new();
-
-    let mut i = 0usize;
-    while i < tokens.len() {
-        let t = &tokens[i];
-
-        // 支持：--key=value
-        if let Some(rest) = t.strip_prefix("--") {
-            if rest.is_empty() {
-                i += 1;
-                continue;
-            }
-            if let Some((k, v)) = rest.split_once('=') {
-                named.entry(k.to_string()).or_default().push(v.to_string());
-                i += 1;
-                continue;
-            }
-            // 支持：--key value / --flag
-            let k = rest.to_string();
-            let v = if i + 1 < tokens.len() && !tokens[i + 1].starts_with("--") {
-                i += 1;
-                tokens[i].clone()
-            } else {
-                "true".to_string()
-            };
-            named.entry(k).or_default().push(v);
-            i += 1;
-            continue;
-        }
-
-        // 支持：key=value
-        if let Some((k, v)) = t.split_once('=') {
-            if !k.is_empty() {
-                named.entry(k.to_string()).or_default().push(v.to_string());
-                i += 1;
-                continue;
-            }
-        }
-
-        positional.push(t.clone());
-        i += 1;
-    }
-
-    // 2) 按 var_defs 顺序消费 positional，并把 named 转成 JSON value
-    let mut out: HashMap<String, serde_json::Value> = HashMap::new();
-    let mut pos_idx = 0usize;
-
-    for def in var_defs {
-        let key = def.key.as_str();
-        let raw_opt = match named.remove(key) {
-            Some(mut vs) if !vs.is_empty() => Some(vs.remove(0)),
-            _ => {
-                if pos_idx < positional.len() {
-                    let v = positional[pos_idx].clone();
-                    pos_idx += 1;
-                    Some(v)
-                } else {
-                    None
-                }
-            }
-        };
-
-        if let Some(raw) = raw_opt {
-            let v = parse_value_for_var(def, &raw)?;
-            out.insert(def.key.clone(), v);
-        }
-    }
-
-    // 3) 仍然残留的 named（不在 var_defs 内）也注入（保持兼容扩展变量）
-    for (k, mut vs) in named {
-        if let Some(v0) = vs.pop() {
-            out.insert(k, parse_value_fallback(&v0));
-        }
-    }
-
-    Ok(out)
-}
-
-fn parse_value_for_var(def: &VarDefinition, raw: &str) -> Result<serde_json::Value, String> {
-    let t = def.var_type.as_str();
-    match t {
-        "int" => raw
-            .trim()
-            .parse::<i64>()
-            .map(|n| serde_json::Value::Number(n.into()))
-            .map_err(|_| format!("参数 {} 需要 int，但得到：{}", def.key, raw)),
-        "float" => raw
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .and_then(serde_json::Number::from_f64)
-            .map(serde_json::Value::Number)
-            .ok_or_else(|| format!("参数 {} 需要 float，但得到：{}", def.key, raw)),
-        "boolean" => parse_bool(raw).map(serde_json::Value::Bool).ok_or_else(|| {
-            format!(
-                "参数 {} 需要 boolean(true/false/1/0)，但得到：{}",
-                def.key, raw
-            )
-        }),
-        "list" => {
-            // 支持 JSON 数组；否则用逗号分隔为 string[]
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
-                Ok(v)
-            } else {
-                let arr: Vec<_> = raw
-                    .split(',')
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| serde_json::Value::String(s.to_string()))
-                    .collect();
-                Ok(serde_json::Value::Array(arr))
-            }
-        }
-        "checkbox" => {
-            // normalize_var_value 会将 string/array/object 统一成 { option: bool }
-            Ok(parse_value_fallback(raw))
-        }
-        "options" => Ok(serde_json::Value::String(raw.to_string())),
-        _ => Ok(parse_value_fallback(raw)),
-    }
-}
-
-fn parse_value_fallback(raw: &str) -> serde_json::Value {
-    // 尝试解析 JSON（支持数字/数组/对象/bool），失败则当作字符串
-    serde_json::from_str::<serde_json::Value>(raw)
-        .unwrap_or_else(|_| serde_json::Value::String(raw.to_string()))
-}
-
-fn parse_bool(raw: &str) -> Option<bool> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" | "y" | "on" => Some(true),
-        "false" | "0" | "no" | "n" | "off" => Some(false),
-        _ => None,
-    }
-}
+// NOTE: plugin 参数解析/运行逻辑已迁移到 `kabegame-daemon`。

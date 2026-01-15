@@ -1,12 +1,12 @@
 {
   "watch": [
-    "crawler-plugins"
+    "src-crawler-plugins"
   ],
   "ignore": [
     "**/*.kgpg",
     "**/node_modules/**",
-    "crawler-plugins/node_modules/**",
-    "crawler-plugins/packed/**",
+    "src-crawler-plugins/node_modules/**",
+    "src-crawler-plugins/packed/**",
     "dist/**",
     "src-tauri/target/**"
   ],

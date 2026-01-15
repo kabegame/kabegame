@@ -39,6 +39,7 @@ const allOptions: Opt[] = [
 
 const options = computed(() => {
   if (mode.value === "window" && IS_WINDOWS) return allOptions;
+  if (mode.value === "plasma-plugin") return allOptions;
   if (!nativeWallpaperStyles.value.length) return allOptions;
   return allOptions.filter((o) => nativeWallpaperStyles.value.includes(o.value));
 });

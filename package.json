@@ -13,8 +13,8 @@
     "build:frontend-cli": "pnpm -C apps/cli build",
     "build:frontend-main": "pnpm -C apps/main build",
     "build:frontend-plugin-editor": "pnpm -C apps/plugin-editor build",
-    "package-plugin": "nx run crawler-plugins:package",
-    "package-plugin:local": "nx run crawler-plugins:package-local",
+    "package-plugin": "nx run src-crawler-plugins:package",
+    "package-plugin:local": "nx run src-crawler-plugins:package-local",
     "clean-nx-cache": "node scripts/clean-nx-cache.js",
     "prepare": "husky"
   },
@@ -50,5 +50,10 @@
     "typescript": "^5.4.5",
     "vite": "^5.1.4",
     "vue-tsc": "^2.0.6"
+  },
+
+  "engines": {
+    "node": ">= 16.0.0 <= 22.0.0",
+    "pnpm": "^9.x"
   }
 }

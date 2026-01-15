@@ -332,13 +332,31 @@ function scanBuiltinPlugins() {
  */
 function buildEnv(options, builtinPlugins = []) {
   const mode = options.mode === "local" ? "local" : "normal";
+  const isPlasma = options.plasma === true;
+  
   const env = {
     ...process.env,
     // For Rust build.rs (compile-time injected)
     KABEGAME_MODE: mode,
     // For Vite (compile-time constant for potential tree-shaking)
     VITE_KABEGAME_MODE: mode,
+    // Plasma 模式标识（用于前端条件编译）
+    VITE_IS_PLASMA: isPlasma ? "1" : "",
   };
+
+  // Linux: 强制 WebView 使用软件渲染，避免 DRM/KMS 权限问题
+  // 当遇到 "DRM_IOCTL_MODE_CREATE_DUMB failed: 权限不够" 时，这些变量可以绕过硬件加速
+  if (process.platform === "linux") {
+    // 如果用户没有显式设置，则启用软件渲染（避免权限问题）
+    if (!env.WEBKIT_DISABLE_DMABUF_RENDERER) {
+      env.WEBKIT_DISABLE_DMABUF_RENDERER = "1";
+      console.log(
+        chalk.yellow(
+          `[env] WEBKIT_DISABLE_DMABUF_RENDERER=1 (Linux: 强制软件渲染以避免 DRM/KMS 权限问题)`
+        )
+      );
+    }
+  }
 
   // local 模式：注入内置插件列表（Rust 编译期使用）
   if (mode === "local" && builtinPlugins.length > 0) {
@@ -348,6 +366,16 @@ function buildEnv(options, builtinPlugins = []) {
         `[env] KABEGAME_BUILTIN_PLUGINS=${env.KABEGAME_BUILTIN_PLUGINS}`
       )
     );
+  }
+
+  if (isPlasma) {
+    console.log(chalk.cyan(`[env] VITE_IS_PLASMA=1 (Plasma 插件模式启用)`));
+    // Rust 编译期：注入 cfg(desktop="plasma")，用于后端按桌面环境选择实现
+    // 注意：这是“编译期假设”，用户不切换桌面环境。
+    const prev = env.RUSTFLAGS ? String(env.RUSTFLAGS) : "";
+    const flag = '--cfg desktop="plasma"';
+    env.RUSTFLAGS = prev ? `${prev} ${flag}` : flag;
+    console.log(chalk.cyan(`[env] RUSTFLAGS+=${flag}`));
   }
 
   return env;
@@ -360,6 +388,7 @@ function parseComponent(raw) {
   if (v === "plugin-editor" || v === "plugineditor" || v === "editor")
     return "plugin-editor";
   if (v === "cli") return "cli";
+  if (v === "daemon" || v === "app-daemon") return "daemon";
   if (v === "all") return "all";
   return "unknown";
 }
@@ -411,16 +440,16 @@ function dev(options) {
 
   const children = [];
 
-  if (options.watch) {
-    const watchArgs = ["scripts/nx-nodemon-plugin-watch.mjs"];
-    if (options.verbose) watchArgs.push("--verbose");
-    console.log(
-      chalk.blue(
-        `[dev] Starting plugin watcher (nodemon, nx-config-derived) mode=all-plugins`
-      )
-    );
-    children.push(spawnProc("node", watchArgs, { env }));
-  }
+  // if (options.watch) {
+  //   const watchArgs = ["scripts/nx-nodemon-plugin-watch.mjs"];
+  //   if (options.verbose) watchArgs.push("--verbose");
+  //   console.log(
+  //     chalk.blue(
+  //       `[dev] Starting plugin watcher (nodemon, nx-config-derived) mode=all-plugins`
+  //     )
+  //   );
+  //   children.push(spawnProc("node", watchArgs, { env }));
+  // }
 
   const appDir = getAppDir(component);
   console.log(chalk.blue(`[dev] Starting tauri dev: ${component}`));
@@ -490,7 +519,7 @@ function start(options) {
   if (component === "unknown") {
     console.error(
       chalk.red(
-        `❌ 参数错误：start 的 -c 只能是 main/plugin-editor/cli（当前: ${String(
+        `❌ 参数错误：start 的 -c 只能是 main/plugin-editor/cli/daemon（当前: ${String(
           options.component
         )}）`
       )
@@ -499,7 +528,8 @@ function start(options) {
   }
 
   // start：无 watch
-  if (component !== "cli") {
+  // cli/daemon 不需要打包前端资源（它们不是 tauri 前端应用）
+  if (component !== "cli" && component !== "daemon") {
     const packageTarget =
       options.mode === "local"
         ? "crawler-plugins:package-local-to-resources"
@@ -521,6 +551,12 @@ function start(options) {
   if (component === "cli") {
     console.log(chalk.blue(`[start] Running cli (no watch)`));
     run("cargo", ["run", "-p", "kabegame-cli"], { cwd: SRC_TAURI_DIR, env });
+    return;
+  }
+
+  if (component === "daemon") {
+    console.log(chalk.blue(`[start] Running daemon (no watch)`));
+    run("cargo", ["run", "-p", "kabegame-daemon"], { cwd: SRC_TAURI_DIR, env });
     return;
   }
 
@@ -659,6 +695,7 @@ program
     "构建模式：normal（一般版本，带商店源）或 local（无商店版本，仅本地源 + 预打包全部插件）",
     "normal"
   )
+  .option("--plasma", "启用 Plasma 插件模式（在设置中显示插件模式选项）", false)
   .option("--watch", "启用插件源监听 + 自动重建", false)
   .option("--verbose", "显示详细输出", false)
   .action((options) => {
@@ -680,7 +717,7 @@ program
   .description("启动（无 watch）")
   .option(
     "-c, --component <component>",
-    "要启动的组件：main | plugin-editor | cli",
+    "要启动的组件：main | plugin-editor | cli | daemon",
     "main"
   )
   .option(
@@ -688,6 +725,7 @@ program
     "构建模式：normal 或 local（仅影响插件预打包与内置列表）",
     "normal"
   )
+  .option("--plasma", "启用 Plasma 插件模式（在设置中显示插件模式选项）", false)
   .action((options) => {
     if (options.mode !== "normal" && options.mode !== "local") {
       console.error(
@@ -714,6 +752,7 @@ program
     "构建模式：normal（一般版本，带商店源）或 local（无商店版本，无商店安装包）",
     "normal"
   )
+  .option("--plasma", "启用 Plasma 插件模式（在设置中显示插件模式选项）", false)
   .action((options) => {
     // 验证 mode 参数
     if (options.mode !== "normal" && options.mode !== "local") {

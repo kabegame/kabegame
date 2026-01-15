@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: true # 检出 git 子模块（crawler-plugins）
+          submodules: true # 检出 git 子模块（src-crawler-plugins）
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -61,13 +61,13 @@ jobs:
         id: package-plugins
         shell: pwsh
         run: |
-          # 改为直接使用仓库中已提交的 crawler-plugins/packed 产物，不在 CI 内重新打包插件
-          $packedDir = "crawler-plugins/packed"
+          # 改为直接使用仓库中已提交的 src-crawler-plugins/packed 产物，不在 CI 内重新打包插件
+          $packedDir = "src-crawler-plugins/packed"
           # 注意：Tauri app-main 的 bundle.resources 配置为 resources/plugins（相对 app-main）
           $dstDir = "src-tauri/app-main/resources/plugins"
 
           if (-not (Test-Path $packedDir)) {
-            throw "packed 目录不存在：$packedDir（请先在仓库中提交 crawler-plugins/packed）"
+            throw "packed 目录不存在：$packedDir（请先在仓库中提交 src-crawler-plugins/packed）"
           }
 
           New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
@@ -207,7 +207,7 @@ jobs:
           KABEGAME_MODE: ${{ matrix.mode }}
           VITE_KABEGAME_MODE: ${{ matrix.mode }}
           KABEGAME_BUILTIN_PLUGINS: ${{ steps.package-plugins.outputs.builtin_plugins }}
-          # CI 已在上一步把 crawler-plugins/packed 复制到 resources/plugins，这里不再重复打包插件
+          # CI 已在上一步把 src-crawler-plugins/packed 复制到 resources/plugins，这里不再重复打包插件
           KABEGAME_SKIP_PLUGINS_PACKAGING: "1"
         run: pnpm build --mode ${{ matrix.mode }}
 

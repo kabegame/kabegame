@@ -495,7 +495,11 @@ onMounted(() => {
     void import("@/views/Albums.vue");
     void import("@/views/Settings.vue");
   };
-  window.requestIdleCallback(preloadRouteComponents, { timeout: 3000 });
+  if (typeof requestIdleCallback !== "undefined") {
+    requestIdleCallback(() => preloadRouteComponents(), { timeout: 2000 });
+  } else {
+    setTimeout(preloadRouteComponents, 50);
+  }
 });
 
 onUnmounted(() => {

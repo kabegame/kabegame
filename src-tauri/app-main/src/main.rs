@@ -1,8 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::HashMap;
 use tauri::{Emitter, Manager};
+use base64::Engine;
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
@@ -17,30 +17,118 @@ use windows_sys::Win32::{
 #[cfg(target_os = "windows")]
 const CF_HDROP_FORMAT: u32 = 15; // Clipboard format for file drop
 
+#[cfg(feature = "local-backend")]
 mod storage;
 #[cfg(feature = "tray")]
 mod tray;
 mod wallpaper;
+mod daemon_client;
+mod event_listeners;
 
-// Workspace 重构：主应用不再在本 crate 内定义这些模块，而是从 `kabegame-core` 复用。
-use crawler::ActiveDownloadInfo;
-use kabegame_core::settings::{AppSettings, Settings, WindowState};
-use kabegame_core::{crawler, dedupe, plugin};
-use plugin::{
-    BrowserPlugin, ImportPreview, Plugin, PluginDetail, PluginManager, PluginSource,
-    StorePluginResolved, StoreSourceValidationResult,
-};
+// ==================== Daemon IPC 命令（客户端侧 wrappers）====================
+
+#[tauri::command]
+async fn check_daemon_status() -> Result<serde_json::Value, String> {
+    daemon_client::try_connect_daemon().await
+}
+
+#[tauri::command]
+async fn get_images() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_images()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+async fn get_images_paginated(page: usize, page_size: usize) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_images_paginated(page, page_size)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+async fn get_albums() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_albums()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+async fn add_album(name: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_add_album(name)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+async fn delete_album(album_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_delete_album(album_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+async fn get_all_tasks() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_all_tasks()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+async fn get_task(task_id: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_task(task_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+async fn add_task(task: serde_json::Value) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_add_task(task)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+async fn update_task(task: serde_json::Value) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_update_task(task)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+async fn delete_task(task_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_delete_task(task_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[cfg(feature = "local-backend")]
+use kabegame_core::settings::Settings;
+// app-main 默认只做 IPC client：不要直接依赖 kabegame_core::plugin（除非 local-backend）
+#[cfg(feature = "local-backend")]
+use kabegame_core::plugin;
+#[cfg(feature = "local-backend")]
+use plugin::PluginManager;
 use std::fs;
-#[cfg(debug_assertions)]
-use storage::dedupe::DebugCloneImagesResult;
-use storage::images::{PaginatedImages, RangedImages};
-use storage::{Album, ImageInfo, RunConfig, Storage, TaskInfo};
-use wallpaper::{WallpaperController, WallpaperRotator, WallpaperWindow};
-
-use dedupe::DedupeManager;
-
+#[cfg(feature = "local-backend")]
+use storage::images::PaginatedImages;
+#[cfg(feature = "local-backend")]
+use storage::{Album, ImageInfo, Storage, TaskInfo};
+use wallpaper::{WallpaperController, WallpaperRotator};
 #[cfg(target_os = "windows")]
-use kabegame_core::wallpaper_engine_export::{WeExportOptions, WeExportResult};
+use wallpaper::WallpaperWindow;
+
+// Wallpaper Engine 导出：走 daemon IPC（不直接依赖 core 的 Settings/Storage）
 #[cfg(feature = "virtual-drive")]
 mod virtual_drive;
 // 导入trait保证可用
@@ -48,86 +136,57 @@ mod virtual_drive;
 use virtual_drive::{drive_service::VirtualDriveServiceTrait, VirtualDriveService};
 
 // 任务失败图片（用于 TaskDetail 展示 + 重试）
-use storage::albums::AddToAlbumResult;
-use storage::tasks::TaskFailedImage;
 
 // ---- wrappers: tauri::command 必须在当前 app crate 中定义，不能直接复用依赖 crate 的 command 宏产物 ----
 
 /// TaskDetail 专用：分页结果（字段名使用 camelCase，与前端 `PaginatedImages` 对齐）。
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TaskPaginatedImages {
-    images: Vec<ImageInfo>,
-    total: usize,
-    page: usize,
-    page_size: usize,
-}
-
 #[tauri::command]
 #[cfg(target_os = "windows")]
-fn export_album_to_we_project(
+async fn export_album_to_we_project(
     album_id: String,
     album_name: String,
     output_parent_dir: String,
-    options: Option<WeExportOptions>,
-    storage: tauri::State<Storage>,
-    settings: tauri::State<Settings>,
-) -> Result<WeExportResult, String> {
-    kabegame_core::wallpaper_engine_export::export_album_to_we_project(
-        album_id,
-        album_name,
-        output_parent_dir,
-        options,
-        storage.inner(),
-        settings.inner(),
-    )
+    options: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .we_export_album_to_project(album_id, album_name, output_parent_dir, options)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
 #[cfg(target_os = "windows")]
-fn export_images_to_we_project(
+async fn export_images_to_we_project(
     image_paths: Vec<String>,
     title: Option<String>,
     output_parent_dir: String,
-    options: Option<WeExportOptions>,
-    settings: tauri::State<Settings>,
-) -> Result<WeExportResult, String> {
-    kabegame_core::wallpaper_engine_export::export_images_to_we_project(
-        image_paths,
-        title,
-        output_parent_dir,
-        options,
-        settings.inner(),
-    )
-}
-
-/// 调试命令：批量克隆图片记录，生成大量测试数据（仅开发构建可用）。
-#[cfg(debug_assertions)]
-#[tauri::command]
-async fn debug_clone_images(
-    app: tauri::AppHandle,
-    storage: tauri::State<'_, Storage>,
-    count: usize,
-    pool_size: Option<usize>,
-    seed: Option<u64>,
-) -> Result<DebugCloneImagesResult, String> {
-    let pool_size = pool_size.unwrap_or(2000);
-    let storage = storage.inner().clone();
-    let app = app.clone();
-    tokio::task::spawn_blocking(move || storage.debug_clone_images(app, count, pool_size, seed))
+    options: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .we_export_images_to_project(image_paths, title, output_parent_dir, options)
         .await
-        .map_err(|e| format!("debug_clone_images task join error: {}", e))?
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
-fn get_current_wallpaper_path_from_settings(app: &tauri::AppHandle) -> Option<String> {
-    let settings = app.try_state::<Settings>()?.get_settings().ok()?;
-    let id = settings.current_wallpaper_image_id?;
-    let storage = app.try_state::<Storage>()?;
-    storage
-        .find_image_by_id(&id)
-        .ok()
-        .flatten()
-        .map(|img| img.local_path)
+fn get_current_wallpaper_path_from_settings(_app: &tauri::AppHandle) -> Option<String> {
+    // IPC-only：从 daemon 获取 settings + image localPath
+    let v = tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client().settings_get().await
+    })
+    .ok()?;
+    let id = v
+        .get("currentWallpaperImageId")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())?;
+    let img = tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .storage_get_image_by_id(id)
+        .await
+    })
+    .ok()?;
+    img.get("localPath")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
 }
 
 /// 启动时初始化“当前壁纸”并按规则回退/降级
@@ -135,200 +194,124 @@ fn get_current_wallpaper_path_from_settings(app: &tauri::AppHandle) -> Option<St
 /// 规则（按用户需求）：
 /// - 非轮播：尝试设置 currentWallpaperImageId；失败则清空并停止
 /// - 轮播：优先在轮播源中找到 currentWallpaperImageId；找不到则回退到轮播源的一张；源无可用则画册->画廊->关闭轮播并清空
-fn init_wallpaper_on_startup(app: &tauri::AppHandle) -> Result<(), String> {
+async fn init_wallpaper_on_startup(app: &tauri::AppHandle) -> Result<(), String> {
     use std::path::Path;
 
-    let settings_state = app.state::<Settings>();
-    let storage = app.state::<Storage>();
     let controller = app.state::<WallpaperController>();
+    // IPC-only：启动时只“尝试还原 currentWallpaperImageId”，不在客户端做大规模选图/回退，
+    // 回退与轮播逻辑由 daemon + rotator 负责（避免客户端依赖 Storage/Settings）。
+    let settings_v = daemon_client::get_ipc_client()
+        .settings_get()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
 
-    let mut settings = settings_state.get_settings()?;
+    let style = settings_v
+        .get("wallpaperRotationStyle")
+        .and_then(|x| x.as_str())
+        .unwrap_or("fill")
+        .to_string();
 
-    // 约定兼容：轮播启用但未配置来源（None） => 默认当作“画廊轮播”
-    if settings.wallpaper_rotation_enabled && settings.wallpaper_rotation_album_id.is_none() {
-        settings_state.set_wallpaper_rotation_album_id(Some("".to_string()))?;
-        settings = settings_state.get_settings()?;
-    }
-
-    let cur_id = settings.current_wallpaper_image_id.clone();
-
-    // 非轮播：只尝试还原当前壁纸
-    if !settings.wallpaper_rotation_enabled {
-        let Some(id) = cur_id else {
-            return Ok(());
-        };
-        let image = storage
-            .find_image_by_id(&id)?
-            .ok_or_else(|| "当前壁纸记录不存在".to_string())?;
-        if !Path::new(&image.local_path).exists() {
-            settings_state.set_current_wallpaper_image_id(None)?;
-            return Ok(());
-        }
-        if controller
-            .set_wallpaper(&image.local_path, &settings.wallpaper_rotation_style)
-            .is_err()
-        {
-            settings_state.set_current_wallpaper_image_id(None)?;
-        }
-        return Ok(());
-    }
-
-    // 轮播：避免加载大量 images 数据（百万级会明显卡顿）。
-    // 只做“membership/existence + LIMIT/采样”级别的查询。
-    let mut source_album_id = settings
-        .wallpaper_rotation_album_id
-        .clone()
-        .unwrap_or_default();
-    let mode = settings.wallpaper_rotation_mode.clone();
-
-    // 优先：若 currentWallpaperImageId 仍然有效且属于当前来源，则继续用它。
-    let mut chosen_id: Option<String> = None;
-    if let Some(id) = cur_id.clone() {
-        let in_source = if source_album_id.trim().is_empty() {
-            // 画廊轮播：只要图片存在即可
-            storage.find_image_by_id(&id)?.is_some()
-        } else {
-            storage
-                .is_image_in_album(&source_album_id, &id)
-                .unwrap_or(false)
-        };
-
-        if in_source {
-            if let Some(img) = storage.find_image_by_id(&id)? {
-                if Path::new(&img.local_path).exists() {
-                    chosen_id = Some(id);
-                }
-            }
-        }
-    }
-
-    // 否则：从来源里挑一张“存在且文件存在”的图片作为回退。
-    if chosen_id.is_none() {
-        chosen_id = if source_album_id.trim().is_empty() {
-            storage.pick_existing_gallery_image_id(&mode)?
-        } else {
-            storage.pick_existing_album_image_id(&source_album_id, &mode)?
-        };
-    }
-
-    // 若画册无可用图：回退到画廊
-    if chosen_id.is_none() && !source_album_id.trim().is_empty() {
-        source_album_id = "".to_string();
-        settings_state.set_wallpaper_rotation_album_id(Some(source_album_id.clone()))?;
-        settings = settings_state.get_settings()?;
-        chosen_id = storage.pick_existing_gallery_image_id(&mode)?;
-    }
-
-    // 若画廊也无图：降级到非轮播并清空
-    let Some(chosen_id) = chosen_id else {
-        settings_state.set_wallpaper_rotation_enabled(false)?;
-        settings_state.set_wallpaper_rotation_album_id(None)?;
-        settings_state.set_current_wallpaper_image_id(None)?;
+    let Some(id) = settings_v
+        .get("currentWallpaperImageId")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+    else {
         return Ok(());
     };
 
-    let image = storage
-        .find_image_by_id(&chosen_id)?
-        .ok_or_else(|| "选择的壁纸不存在".to_string())?;
-    if !Path::new(&image.local_path).exists() {
-        settings_state.set_current_wallpaper_image_id(None)?;
+    let img_v = daemon_client::get_ipc_client()
+        .storage_get_image_by_id(id.clone())
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let Some(path) = img_v.get("localPath").and_then(|x| x.as_str()) else {
+        let _ = daemon_client::get_ipc_client()
+            .settings_set_current_wallpaper_image_id(None)
+            .await;
+        return Ok(());
+    };
+
+    if !Path::new(path).exists() {
+        let _ = daemon_client::get_ipc_client()
+            .settings_set_current_wallpaper_image_id(None)
+            .await;
         return Ok(());
     }
 
-    if controller
-        .set_wallpaper(&image.local_path, &settings.wallpaper_rotation_style)
-        .is_ok()
-    {
-        settings_state.set_current_wallpaper_image_id(Some(chosen_id))?;
-    } else {
-        settings_state.set_current_wallpaper_image_id(None)?;
+    if controller.set_wallpaper(path, &style).is_err() {
+        let _ = daemon_client::get_ipc_client()
+            .settings_set_current_wallpaper_image_id(None)
+            .await;
     }
 
     Ok(())
 }
 
 #[tauri::command]
-fn get_plugins(state: tauri::State<PluginManager>) -> Result<Vec<Plugin>, String> {
-    state.get_all()
+async fn get_plugins() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .plugin_get_plugins()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 /// 前端手动刷新“已安装源”：触发后端重扫 plugins-directory 并重建缓存
 #[tauri::command]
-fn refresh_installed_plugins_cache(state: tauri::State<PluginManager>) -> Result<(), String> {
-    state.refresh_installed_plugins_cache()
+async fn refresh_installed_plugins_cache() -> Result<(), String> {
+    // daemon 侧会在 get_plugins 时刷新 installed cache
+    let _ = daemon_client::get_ipc_client()
+        .plugin_get_plugins()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    Ok(())
 }
 
 /// 前端安装/更新后可调用：按 pluginId 局部刷新缓存
 #[tauri::command]
 fn refresh_installed_plugin_cache(
     plugin_id: String,
-    state: tauri::State<PluginManager>,
 ) -> Result<(), String> {
-    state.refresh_installed_plugin_cache(&plugin_id)
+    // 兜底：触发一次 detail 加载，相当于“按 id 刷新缓存”
+    tauri::async_runtime::block_on(async {
+        let _ = daemon_client::get_ipc_client()
+            .plugin_get_detail(plugin_id)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))?;
+        Ok(())
+    })
 }
 
 #[tauri::command]
-fn get_build_mode(state: tauri::State<PluginManager>) -> Result<String, String> {
-    Ok(state.build_mode().to_string())
+fn get_build_mode() -> Result<String, String> {
+    Ok(env!("KABEGAME_BUILD_MODE").to_string())
 }
 
 #[tauri::command]
-fn delete_plugin(plugin_id: String, state: tauri::State<PluginManager>) -> Result<(), String> {
-    state.delete(&plugin_id)
-}
-
-#[tauri::command]
-fn crawl_images_command(
-    plugin_id: String,
-    task_id: String,
-    output_dir: Option<String>,
-    user_config: Option<HashMap<String, serde_json::Value>>, // 用户配置的变量
-    output_album_id: Option<String>, // 输出画册ID，如果指定则下载完成后自动添加到画册
-    app: tauri::AppHandle,
-) -> Result<(), String> {
-    let scheduler = app.state::<crawler::TaskScheduler>();
-    scheduler.enqueue(crawler::CrawlTaskRequest {
-        plugin_id,
-        task_id,
-        output_dir,
-        user_config,
-        http_headers: None,
-        output_album_id,
-        plugin_file_path: None,
-    })?;
-    Ok(())
+async fn delete_plugin(plugin_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .plugin_delete(plugin_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 /// 创建任务并立刻入队执行（合并 `add_task` + `crawl_images_command`）
 #[tauri::command]
-fn start_task(
-    task: TaskInfo,
-    app: tauri::AppHandle,
-    state: tauri::State<Storage>,
-) -> Result<(), String> {
-    // 先落库
-    state.add_task(task.clone())?;
-    // 再入队（由 TaskScheduler 负责并发/取消/事件）
-    let scheduler = app.state::<crawler::TaskScheduler>();
-    scheduler.enqueue(crawler::CrawlTaskRequest {
-        plugin_id: task.plugin_id,
-        task_id: task.id,
-        output_dir: task.output_dir,
-        user_config: task.user_config,
-        http_headers: task.http_headers,
-        output_album_id: task.output_album_id,
-        plugin_file_path: None,
-    })?;
+async fn start_task(task: serde_json::Value) -> Result<(), String> {
+    let _task_id = daemon_client::get_ipc_client()
+        .task_start(task)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
     Ok(())
 }
 
 #[tauri::command]
-fn get_images(state: tauri::State<Storage>) -> Result<Vec<ImageInfo>, String> {
+#[cfg(feature = "local-backend")]
+fn local_get_images(state: tauri::State<Storage>) -> Result<Vec<ImageInfo>, String> {
     state.get_all_images()
 }
 
 #[tauri::command]
-fn get_images_paginated(
+#[cfg(feature = "local-backend")]
+fn local_get_images_paginated(
     page: usize,
     page_size: usize,
     state: tauri::State<Storage>,
@@ -337,42 +320,46 @@ fn get_images_paginated(
 }
 
 #[tauri::command]
-fn get_images_range(
-    offset: usize,
-    limit: usize,
-    state: tauri::State<Storage>,
-) -> Result<RangedImages, String> {
-    state.get_images_range(offset, limit)
+async fn get_images_range(offset: usize, limit: usize) -> Result<serde_json::Value, String> {
+    // 兼容旧前端 offset+limit：使用 daemon 的 page+page_size
+    let page = if limit == 0 { 0 } else { offset / limit };
+    daemon_client::get_ipc_client()
+        .storage_get_images_paginated(page, limit)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn browse_gallery_provider(
-    path: String,
-    state: tauri::State<Storage>,
-    provider_rt: tauri::State<kabegame_core::providers::ProviderRuntime>,
-) -> Result<kabegame_core::gallery::GalleryBrowseResult, String> {
-    kabegame_core::gallery::browse_gallery_provider(&state, &provider_rt, &path)
+async fn browse_gallery_provider(path: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .gallery_browse_provider(path)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+// NOTE: 旧的 browse_gallery_provider_main（客户端拼虚拟目录树 + query helpers）已废弃，
+// 现在完全由 daemon 侧 ProviderRuntime + `GalleryBrowseProvider` 提供。
+
+#[tauri::command]
+async fn get_image_by_id(image_id: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_image_by_id(image_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn get_image_by_id(
-    image_id: String,
-    state: tauri::State<Storage>,
-) -> Result<Option<ImageInfo>, String> {
-    state.find_image_by_id(&image_id)
-}
-
-#[tauri::command]
-fn get_albums(state: tauri::State<Storage>) -> Result<Vec<Album>, String> {
+#[cfg(feature = "local-backend")]
+fn local_get_albums(state: tauri::State<Storage>) -> Result<Vec<Album>, String> {
     state.get_albums()
 }
 
 #[tauri::command]
-fn add_album(
+#[cfg(feature = "local-backend")]
+fn local_add_album(
     app: tauri::AppHandle,
     name: String,
     state: tauri::State<Storage>,
-    drive: tauri::State<VirtualDriveService>,
+    #[cfg(feature = "virtual-drive")] drive: tauri::State<VirtualDriveService>,
 ) -> Result<Album, String> {
     let album = state.add_album(&name)?;
     let _ = app.emit(
@@ -381,7 +368,7 @@ fn add_album(
             "reason": "add"
         }),
     );
-    #[cfg(target_os = "windows")]
+    #[cfg(feature = "virtual-drive")]
     {
         drive.bump_albums();
     }
@@ -389,34 +376,31 @@ fn add_album(
 }
 
 #[tauri::command]
-fn rename_album(
-    app: tauri::AppHandle,
+#[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
+async fn rename_album(
+    _app: tauri::AppHandle,
     album_id: String,
     new_name: String,
-    state: tauri::State<Storage>,
-    provider_rt: tauri::State<kabegame_core::providers::ProviderRuntime>,
-    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
 ) -> Result<(), String> {
-    // B 策略：重命名只为“新路径”写入同一个 provider_id（旧路径允许成为幽灵）
-    let old_name = state.get_album_name_by_id(&album_id)?.unwrap_or_default();
-    state.rename_album(&album_id, &new_name)?;
-    if !old_name.trim().is_empty() {
-        let old_segs = ["画册", old_name.as_str()];
-        let new_segs = ["画册", new_name.as_str()];
-        if let Ok(Some(desc)) = provider_rt.get_descriptor_for_path(&old_segs) {
-            let _ = provider_rt.set_descriptor_for_path(&new_segs, &desc);
-        }
-    }
-    let _ = app.emit(
-        "albums-changed",
-        serde_json::json!({
-            "reason": "rename"
-        }),
-    );
-    #[cfg(target_os = "windows")]
-    {
-        drive.bump_albums();
-    }
+    daemon_client::get_ipc_client()
+        .storage_rename_album(album_id, new_name)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+async fn rename_album(
+    _app: tauri::AppHandle,
+    album_id: String,
+    new_name: String,
+    drive: tauri::State<VirtualDriveService>,
+) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_rename_album(album_id, new_name)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    drive.bump_albums();
     Ok(())
 }
 
@@ -626,11 +610,86 @@ fn mount_virtual_drive_and_open_explorer(
 
 #[tauri::command]
 fn open_explorer(path: String) -> Result<(), String> {
-    kabegame_core::shell_open::open_explorer(&path)
+    open_path_native(&path)
+}
+
+fn open_path_native(path: &str) -> Result<(), String> {
+    use std::process::Command;
+    let p = path.trim();
+    if p.is_empty() {
+        return Err("Empty path".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(p)
+            .spawn()
+            .map_err(|e| format!("Failed to open path: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(p)
+            .spawn()
+            .map_err(|e| format!("Failed to open path: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(p)
+            .spawn()
+            .map_err(|e| format!("Failed to open path: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = p;
+        Err("Unsupported platform".to_string())
+    }
+}
+
+fn reveal_in_folder_native(file_path: &str) -> Result<(), String> {
+    use std::path::Path;
+    let p = file_path.trim();
+    if p.is_empty() {
+        return Err("Empty path".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", p])
+            .spawn()
+            .map_err(|e| format!("Failed to reveal in folder: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", p])
+            .spawn()
+            .map_err(|e| format!("Failed to reveal in folder: {e}"))?;
+        return Ok(());
+    }
+
+    // Linux/others: fallback to opening the parent directory
+    let dir = Path::new(p).parent().map(|x| x.to_path_buf());
+    let Some(dir) = dir else {
+        return open_path_native(p);
+    };
+    open_path_native(&dir.to_string_lossy())
 }
 
 #[tauri::command]
-fn delete_album(
+#[cfg(feature = "local-backend")]
+fn local_delete_album(
     app: tauri::AppHandle,
     album_id: String,
     state: tauri::State<Storage>,
@@ -651,14 +710,16 @@ fn delete_album(
 }
 
 #[tauri::command]
-fn add_images_to_album(
+#[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
+async fn add_images_to_album(
     app: tauri::AppHandle,
     album_id: String,
     image_ids: Vec<String>,
-    state: tauri::State<Storage>,
-    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
-) -> Result<AddToAlbumResult, String> {
-    let r = state.add_images_to_album(&album_id, &image_ids)?;
+ ) -> Result<serde_json::Value, String> {
+    let r = daemon_client::get_ipc_client()
+        .storage_add_images_to_album(album_id.clone(), image_ids.clone())
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
     let _ = app.emit(
         "album-images-changed",
         serde_json::json!({
@@ -667,22 +728,21 @@ fn add_images_to_album(
             ,"imageIds": image_ids
         }),
     );
-    #[cfg(target_os = "windows")]
-    {
-        drive.notify_album_dir_changed(state.inner(), &album_id);
-    }
     Ok(r)
 }
 
 #[tauri::command]
-fn remove_images_from_album(
+#[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
+async fn remove_images_from_album(
     app: tauri::AppHandle,
     album_id: String,
     image_ids: Vec<String>,
-    state: tauri::State<Storage>,
-    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
 ) -> Result<usize, String> {
-    let removed = state.remove_images_from_album(&album_id, &image_ids)?;
+    let v = daemon_client::get_ipc_client()
+        .storage_remove_images_from_album(album_id.clone(), image_ids.clone())
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let removed = v.as_u64().unwrap_or(0) as usize;
     let _ = app.emit(
         "album-images-changed",
         serde_json::json!({
@@ -691,153 +751,226 @@ fn remove_images_from_album(
             ,"imageIds": image_ids
         }),
     );
-    #[cfg(target_os = "windows")]
-    {
-        drive.notify_album_dir_changed(state.inner(), &album_id);
-    }
     Ok(removed)
 }
 
 #[tauri::command]
-fn get_album_images(
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+async fn add_images_to_album(
+    app: tauri::AppHandle,
     album_id: String,
+    image_ids: Vec<String>,
     state: tauri::State<Storage>,
-) -> Result<Vec<ImageInfo>, String> {
-    state.get_album_images(&album_id)
+    drive: tauri::State<VirtualDriveService>,
+) -> Result<serde_json::Value, String> {
+    let r = daemon_client::get_ipc_client()
+        .storage_add_images_to_album(album_id.clone(), image_ids.clone())
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let _ = app.emit(
+        "album-images-changed",
+        serde_json::json!({
+            "albumId": album_id,
+            "reason": "add"
+            ,"imageIds": image_ids
+        }),
+    );
+        drive.notify_album_dir_changed(state.inner(), &album_id);
+    Ok(r)
 }
 
 #[tauri::command]
-fn get_album_image_ids(
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+async fn remove_images_from_album(
+    app: tauri::AppHandle,
     album_id: String,
+    image_ids: Vec<String>,
     state: tauri::State<Storage>,
-) -> Result<Vec<String>, String> {
-    state.get_album_image_ids(&album_id)
+    drive: tauri::State<VirtualDriveService>,
+) -> Result<usize, String> {
+    let v = daemon_client::get_ipc_client()
+        .storage_remove_images_from_album(album_id.clone(), image_ids.clone())
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let removed = v.as_u64().unwrap_or(0) as usize;
+    let _ = app.emit(
+        "album-images-changed",
+        serde_json::json!({
+            "albumId": album_id,
+            "reason": "remove"
+            ,"imageIds": image_ids
+        }),
+    );
+    drive.notify_album_dir_changed(state.inner(), &album_id);
+    Ok(removed)
 }
 
 #[tauri::command]
-fn get_album_preview(
-    album_id: String,
-    limit: usize,
-    state: tauri::State<Storage>,
-) -> Result<Vec<ImageInfo>, String> {
-    state.get_album_preview(&album_id, limit)
+async fn get_album_images(album_id: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_album_images(album_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn get_album_counts(
-    state: tauri::State<Storage>,
-) -> Result<std::collections::HashMap<String, usize>, String> {
-    state.get_album_counts()
+async fn get_album_image_ids(album_id: String) -> Result<Vec<String>, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_album_image_ids(album_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn update_album_images_order(
+async fn get_album_preview(album_id: String, limit: usize) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_album_preview(album_id, limit)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+async fn get_album_counts() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_album_counts()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+}
+
+#[tauri::command]
+async fn update_album_images_order(
     album_id: String,
     image_orders: Vec<(String, i64)>,
-    state: tauri::State<Storage>,
 ) -> Result<(), String> {
-    state.update_album_images_order(&album_id, &image_orders)
+    daemon_client::get_ipc_client()
+        .storage_update_album_images_order(album_id, image_orders)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn get_images_count(state: tauri::State<Storage>) -> Result<usize, String> {
-    state.get_total_count()
+async fn get_images_count() -> Result<usize, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_images_count()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn delete_image(
-    image_id: String,
-    state: tauri::State<Storage>,
-    settings: tauri::State<Settings>,
-) -> Result<(), String> {
-    state.delete_image(&image_id)?;
-    let s = settings.get_settings().unwrap_or_default();
-    if s.current_wallpaper_image_id.as_deref() == Some(image_id.as_str()) {
-        let _ = settings.set_current_wallpaper_image_id(None);
+async fn delete_image(image_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_delete_image(image_id.clone())
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let settings_v = daemon_client::get_ipc_client()
+        .settings_get()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    if settings_v
+        .get("currentWallpaperImageId")
+        .and_then(|x| x.as_str())
+        == Some(image_id.as_str())
+    {
+        let _ = daemon_client::get_ipc_client()
+            .settings_set_current_wallpaper_image_id(None)
+            .await;
     }
     Ok(())
 }
 
 #[tauri::command]
-fn remove_image(
-    image_id: String,
-    state: tauri::State<Storage>,
-    settings: tauri::State<Settings>,
-) -> Result<(), String> {
-    state.remove_image(&image_id)?;
-    let s = settings.get_settings().unwrap_or_default();
-    if s.current_wallpaper_image_id.as_deref() == Some(image_id.as_str()) {
-        let _ = settings.set_current_wallpaper_image_id(None);
+async fn remove_image(image_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_remove_image(image_id.clone())
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let settings_v = daemon_client::get_ipc_client()
+        .settings_get()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    if settings_v
+        .get("currentWallpaperImageId")
+        .and_then(|x| x.as_str())
+        == Some(image_id.as_str())
+    {
+        let _ = daemon_client::get_ipc_client()
+            .settings_set_current_wallpaper_image_id(None)
+            .await;
     }
     Ok(())
 }
 
 #[tauri::command]
-fn batch_delete_images(
-    image_ids: Vec<String>,
-    state: tauri::State<Storage>,
-    settings: tauri::State<Settings>,
-) -> Result<(), String> {
-    state.batch_delete_images(&image_ids)?;
-    let s = settings.get_settings().unwrap_or_default();
-    if let Some(current_id) = &s.current_wallpaper_image_id {
-        if image_ids.contains(current_id) {
-            let _ = settings.set_current_wallpaper_image_id(None);
+async fn batch_delete_images(image_ids: Vec<String>) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_batch_delete_images(image_ids.clone())
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let settings_v = daemon_client::get_ipc_client()
+        .settings_get()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    if let Some(cur) = settings_v.get("currentWallpaperImageId").and_then(|x| x.as_str()) {
+        if image_ids.iter().any(|id| id == cur) {
+            let _ = daemon_client::get_ipc_client()
+                .settings_set_current_wallpaper_image_id(None)
+                .await;
         }
     }
     Ok(())
 }
 
 #[tauri::command]
-fn batch_remove_images(
-    image_ids: Vec<String>,
-    state: tauri::State<Storage>,
-    settings: tauri::State<Settings>,
-) -> Result<(), String> {
-    state.batch_remove_images(&image_ids)?;
-    let s = settings.get_settings().unwrap_or_default();
-    if let Some(current_id) = &s.current_wallpaper_image_id {
-        if image_ids.contains(current_id) {
-            let _ = settings.set_current_wallpaper_image_id(None);
+async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_batch_remove_images(image_ids.clone())
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let settings_v = daemon_client::get_ipc_client()
+        .settings_get()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    if let Some(cur) = settings_v.get("currentWallpaperImageId").and_then(|x| x.as_str()) {
+        if image_ids.iter().any(|id| id == cur) {
+            let _ = daemon_client::get_ipc_client()
+                .settings_set_current_wallpaper_image_id(None)
+                .await;
         }
     }
     Ok(())
 }
 
-/// 启动“分批按 hash 去重”后台任务（前端应通过事件订阅进度/批量移除/完成）。
+/// 启动“分批按 hash 去重”后台任务（daemon 执行，事件通过 Generic 转发到前端）。
 #[tauri::command]
-fn start_dedupe_gallery_by_hash_batched(
-    delete_files: bool,
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Storage>,
-    manager: tauri::State<'_, DedupeManager>,
-) -> Result<(), String> {
-    // 固定每批 10000（与你的需求一致）；后续如需可扩展为参数
-    let batch_size = 10_000usize;
-    manager.start_batched(app, state.inner().clone(), delete_files, batch_size)
+async fn start_dedupe_gallery_by_hash_batched(delete_files: bool) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .dedupe_start_gallery_by_hash_batched(delete_files, Some(10_000))
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 /// 取消“分批按 hash 去重”后台任务。
 #[tauri::command]
-fn cancel_dedupe_gallery_by_hash_batched(
-    manager: tauri::State<'_, DedupeManager>,
-) -> Result<bool, String> {
-    manager.cancel()
+async fn cancel_dedupe_gallery_by_hash_batched() -> Result<bool, String> {
+    daemon_client::get_ipc_client()
+        .dedupe_cancel_gallery_by_hash_batched()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 // 清理应用数据（仅用户数据，不包括应用本身）
 #[tauri::command]
 async fn clear_user_data(app: tauri::AppHandle) -> Result<(), String> {
-    let app_data_dir = kabegame_core::app_paths::kabegame_data_dir();
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
 
     if !app_data_dir.exists() {
         return Ok(()); // 目录不存在，无需清理
     }
 
-    // 清除窗口状态（清理数据时不保存窗口位置）
-    if let Some(settings_state) = app.try_state::<Settings>() {
-        let _ = settings_state.clear_window_state();
-    }
+    // 不处理 window_state：已取消保存/恢复
 
     // 方案：创建清理标记文件，在应用重启后清理
     // 这样可以避免删除正在使用的文件
@@ -855,40 +988,64 @@ async fn clear_user_data(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn toggle_image_favorite(
+#[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
+async fn toggle_image_favorite(
     app: tauri::AppHandle,
     image_id: String,
     favorite: bool,
-    state: tauri::State<Storage>,
-    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
 ) -> Result<(), String> {
-    state.toggle_image_favorite(&image_id, favorite)?;
+    daemon_client::get_ipc_client()
+        .storage_toggle_image_favorite(image_id.clone(), favorite)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
 
     let _ = app.emit(
         "album-images-changed",
         serde_json::json!({
-            "albumId": kabegame_core::storage::FAVORITE_ALBUM_ID,
+            "albumId": "00000000-0000-0000-0000-000000000001",
             "reason": if favorite { "add" } else { "remove" },
             "imageIds": [image_id]
         }),
     );
 
-    #[cfg(target_os = "windows")]
-    {
-        drive.notify_album_dir_changed(state.inner(), kabegame_core::storage::FAVORITE_ALBUM_ID);
-    }
+    Ok(())
+}
 
+#[tauri::command]
+#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+async fn toggle_image_favorite(
+    app: tauri::AppHandle,
+    image_id: String,
+    favorite: bool,
+    state: tauri::State<Storage>,
+    drive: tauri::State<VirtualDriveService>,
+) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_toggle_image_favorite(image_id.clone(), favorite)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+
+    let _ = app.emit(
+        "album-images-changed",
+        serde_json::json!({
+            "albumId": "00000000-0000-0000-0000-000000000001",
+            "reason": if favorite { "add" } else { "remove" },
+            "imageIds": [image_id]
+        }),
+    );
+
+    drive.notify_album_dir_changed(state.inner(), "00000000-0000-0000-0000-000000000001");
     Ok(())
 }
 
 #[tauri::command]
 fn open_file_path(file_path: String) -> Result<(), String> {
-    kabegame_core::shell_open::open_path(&file_path)
+    open_path_native(&file_path)
 }
 
 #[tauri::command]
 fn open_file_folder(file_path: String) -> Result<(), String> {
-    kabegame_core::shell_open::reveal_in_folder(&file_path)
+    reveal_in_folder_native(&file_path)
 }
 
 #[tauri::command]
@@ -907,8 +1064,14 @@ async fn set_wallpaper(file_path: String, app: tauri::AppHandle) -> Result<(), S
         // 使用全局 WallpaperController：适配“单张壁纸”并支持 native/window 两种后端模式。
         // 注意：这里不涉及 transition（过渡效果由“轮播 manager”负责，并受“是否启用轮播”约束）。
         let controller = app_clone.state::<WallpaperController>();
-        let settings_state = app_clone.state::<Settings>();
-        let settings = settings_state.get_settings()?;
+        let settings_v = tauri::async_runtime::block_on(async {
+            daemon_client::get_ipc_client().settings_get().await
+        })
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+        let style = settings_v
+            .get("wallpaperRotationStyle")
+            .and_then(|x| x.as_str())
+            .unwrap_or("fill");
 
         let abs = path
             .canonicalize()
@@ -916,16 +1079,24 @@ async fn set_wallpaper(file_path: String, app: tauri::AppHandle) -> Result<(), S
             .to_string_lossy()
             .to_string();
 
-        controller.set_wallpaper(&abs, &settings.wallpaper_rotation_style)?;
+        controller.set_wallpaper(&abs, style)?;
 
         // 维护全局“当前壁纸”（imageId）
         // - 若能从 DB 根据 local_path 找到 image：写入该 imageId
         // - 否则清空（避免残留旧值）
-        if let Some(storage) = app_clone.try_state::<Storage>() {
-            if let Ok(found) = storage.find_image_by_path(&abs) {
-                let _ = settings_state.set_current_wallpaper_image_id(found.map(|img| img.id));
-            }
-        }
+        let found = tauri::async_runtime::block_on(async {
+            daemon_client::get_ipc_client().storage_find_image_by_path(abs.clone()).await
+        })
+        .ok();
+        let image_id = found
+            .as_ref()
+            .and_then(|v| v.get("id").and_then(|x| x.as_str()))
+            .map(|s| s.to_string());
+        let _ = tauri::async_runtime::block_on(async {
+            daemon_client::get_ipc_client()
+                .settings_set_current_wallpaper_image_id(image_id)
+                .await
+        });
 
         Ok(())
     })
@@ -940,24 +1111,46 @@ async fn set_wallpaper_by_image_id(image_id: String, app: tauri::AppHandle) -> R
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         use std::path::Path;
 
-        let storage = app_clone.state::<Storage>();
-        let settings_state = app_clone.state::<Settings>();
-        let settings = settings_state.get_settings()?;
+        let settings_v = tauri::async_runtime::block_on(async {
+            daemon_client::get_ipc_client().settings_get().await
+        })
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+        let style = settings_v
+            .get("wallpaperRotationStyle")
+            .and_then(|x| x.as_str())
+            .unwrap_or("fill");
 
-        let image = storage
-            .find_image_by_id(&image_id)?
-            .ok_or_else(|| "图片不存在".to_string())?;
+        let image = tauri::async_runtime::block_on(async {
+            daemon_client::get_ipc_client()
+                .storage_get_image_by_id(image_id.clone())
+                .await
+        })
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+        let local_path = image
+            .get("localPath")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| "图片不存在".to_string())?
+            .to_string();
 
-        if !Path::new(&image.local_path).exists() {
+        if !Path::new(&local_path).exists() {
             // 图片已被删除/移除/文件丢失：清空 currentWallpaperImageId
-            let _ = settings_state.set_current_wallpaper_image_id(None);
+            let _ = tauri::async_runtime::block_on(async {
+                daemon_client::get_ipc_client()
+                    .settings_set_current_wallpaper_image_id(None)
+                    .await
+            });
             return Err("图片文件不存在".to_string());
         }
 
         let controller = app_clone.state::<WallpaperController>();
-        controller.set_wallpaper(&image.local_path, &settings.wallpaper_rotation_style)?;
+        controller.set_wallpaper(&local_path, style)?;
 
-        settings_state.set_current_wallpaper_image_id(Some(image_id))?;
+        tauri::async_runtime::block_on(async {
+            daemon_client::get_ipc_client()
+                .settings_set_current_wallpaper_image_id(Some(image_id))
+                .await
+                .map_err(|e| format!("Daemon unavailable: {}", e))
+        })?;
         Ok(())
     })
     .await
@@ -965,23 +1158,40 @@ async fn set_wallpaper_by_image_id(image_id: String, app: tauri::AppHandle) -> R
 }
 
 #[tauri::command]
-fn get_current_wallpaper_image_id(state: tauri::State<Settings>) -> Result<Option<String>, String> {
-    let s = state.get_settings()?;
-    Ok(s.current_wallpaper_image_id)
+fn get_current_wallpaper_image_id() -> Result<Option<String>, String> {
+    // IPC-only：从 daemon 获取
+    let v = tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client().settings_get().await
+    })
+    .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    Ok(v.get("currentWallpaperImageId")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string()))
 }
 
 #[tauri::command]
-fn clear_current_wallpaper_image_id(state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_current_wallpaper_image_id(None)
+fn clear_current_wallpaper_image_id() -> Result<(), String> {
+    // IPC-only：从 daemon 设置
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_current_wallpaper_image_id(None)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 /// 根据 imageId 取图片本地路径（用于 UI 展示/定位）
 #[tauri::command]
 fn get_image_local_path_by_id(
     image_id: String,
-    state: tauri::State<Storage>,
 ) -> Result<Option<String>, String> {
-    Ok(state.find_image_by_id(&image_id)?.map(|img| img.local_path))
+    let v = tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .storage_get_image_by_id(image_id)
+            .await
+    })
+    .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    Ok(v.get("localPath").and_then(|x| x.as_str()).map(|s| s.to_string()))
 }
 
 /// 获取当前正在使用的壁纸路径（与当前 wallpaper_mode 对应）
@@ -994,45 +1204,52 @@ fn get_current_wallpaper_path(app: tauri::AppHandle) -> Result<Option<String>, S
 }
 
 #[tauri::command]
+#[cfg(feature = "local-backend")]
 fn migrate_images_from_json(state: tauri::State<Storage>) -> Result<usize, String> {
     state.migrate_from_json()
 }
 
 #[tauri::command]
-fn get_plugin_vars(
-    plugin_id: String,
-    state: tauri::State<PluginManager>,
-) -> Result<Option<Vec<plugin::VarDefinition>>, String> {
-    state.get_plugin_vars(&plugin_id)
+async fn get_plugin_vars(plugin_id: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .plugin_get_vars(plugin_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn get_browser_plugins(state: tauri::State<PluginManager>) -> Result<Vec<BrowserPlugin>, String> {
-    state.load_browser_plugins()
+async fn get_browser_plugins() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .plugin_get_browser_plugins()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn get_plugin_sources(state: tauri::State<PluginManager>) -> Result<Vec<PluginSource>, String> {
-    state.load_plugin_sources()
+async fn get_plugin_sources() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .plugin_get_plugin_sources()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn save_plugin_sources(
-    sources: Vec<PluginSource>,
-    state: tauri::State<PluginManager>,
-) -> Result<(), String> {
-    state.save_plugin_sources(&sources)
+async fn save_plugin_sources(sources: serde_json::Value) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .plugin_save_plugin_sources(sources)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
 async fn get_store_plugins(
     source_id: Option<String>,
     force_refresh: Option<bool>,
-    state: tauri::State<'_, PluginManager>,
-) -> Result<Vec<StorePluginResolved>, String> {
-    state
-        .fetch_store_plugins(source_id.as_deref(), force_refresh.unwrap_or(false))
+) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .plugin_get_store_plugins(source_id, force_refresh.unwrap_or(false))
         .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 /// 统一的“源详情”加载：
@@ -1044,40 +1261,30 @@ async fn get_plugin_detail(
     download_url: Option<String>,
     sha256: Option<String>,
     size_bytes: Option<u64>,
-    state: tauri::State<'_, PluginManager>,
-) -> Result<PluginDetail, String> {
-    match download_url {
-        Some(url) => {
-            state
-                .load_remote_plugin_detail(&plugin_id, &url, sha256.as_deref(), size_bytes)
+) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .plugin_get_detail_for_ui(plugin_id, download_url, sha256, size_bytes)
                 .await
-        }
-        None => state.load_installed_plugin_detail(&plugin_id),
-    }
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-async fn validate_plugin_source(
-    index_url: String,
-    state: tauri::State<'_, PluginManager>,
-) -> Result<StoreSourceValidationResult, String> {
-    state.validate_store_source_index(&index_url).await
+async fn validate_plugin_source(index_url: String) -> Result<(), String> {
+    let _ = daemon_client::get_ipc_client()
+        .plugin_validate_source(index_url)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    Ok(())
 }
 
 #[tauri::command]
-fn preview_import_plugin(
+async fn preview_import_plugin(
     zip_path: String,
-    state: tauri::State<PluginManager>,
-) -> Result<ImportPreview, String> {
-    let path = std::path::PathBuf::from(zip_path);
-    state.preview_import_from_zip(&path)
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StoreInstallPreview {
-    tmp_path: String,
-    preview: ImportPreview,
+) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .plugin_preview_import(zip_path)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 /// 商店安装/更新：先下载到临时文件并做预览（版本变更/变更日志），由前端确认后再调用 import_plugin_from_zip 安装
@@ -1086,33 +1293,28 @@ async fn preview_store_install(
     download_url: String,
     sha256: Option<String>,
     size_bytes: Option<u64>,
-    state: tauri::State<'_, PluginManager>,
-) -> Result<StoreInstallPreview, String> {
-    let tmp = state
-        .download_plugin_to_temp(&download_url, sha256.as_deref(), size_bytes)
-        .await?;
-    let preview = state.preview_import_from_zip(&tmp)?;
-    Ok(StoreInstallPreview {
-        tmp_path: tmp.to_string_lossy().to_string(),
-        preview,
-    })
+) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .plugin_preview_store_install(download_url, sha256, size_bytes)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn import_plugin_from_zip(
-    zip_path: String,
-    state: tauri::State<PluginManager>,
-) -> Result<Plugin, String> {
-    let path = std::path::PathBuf::from(zip_path);
-    state.install_plugin_from_zip(&path)
+async fn import_plugin_from_zip(zip_path: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .plugin_import(zip_path)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map(|plugin_id| serde_json::json!({ "pluginId": plugin_id }))
 }
 
 #[tauri::command]
-fn install_browser_plugin(
-    plugin_id: String,
-    state: tauri::State<PluginManager>,
-) -> Result<Plugin, String> {
-    state.install_browser_plugin(plugin_id)
+async fn install_browser_plugin(plugin_id: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .plugin_install_browser_plugin(plugin_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
@@ -1133,101 +1335,36 @@ async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
 // ============================
 
 #[tauri::command]
-fn get_task_failed_images(
-    task_id: String,
-    state: tauri::State<Storage>,
-) -> Result<Vec<TaskFailedImage>, String> {
-    state.get_task_failed_images(&task_id)
+async fn get_task_failed_images(task_id: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_task_failed_images(task_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
-/// 失败图片重试：走后端 download_image 队列（会触发 image-added）
+/// 失败图片重试：daemon 侧复用 DownloadQueue（会触发 download-state 等事件）
 #[tauri::command]
-async fn retry_task_failed_image(
-    app: tauri::AppHandle,
-    failed_id: i64,
-    state: tauri::State<'_, Storage>,
-) -> Result<(), String> {
-    // 在 spawn_blocking 之前先获取需要的数据
-    let item = {
-        let Some(item) = state.get_task_failed_image_by_id(failed_id)? else {
-            return Err("失败图片记录不存在".to_string());
-        };
-        item.clone()
-    };
-
-    // 标记一次尝试（清空 last_error）
-    let _ = state.update_task_failed_image_attempt(failed_id, "");
-
-    // 取任务配置（输出目录/画册）
-    let task = {
-        let task = state
-            .get_task(&item.task_id)?
-            .ok_or_else(|| "任务不存在".to_string())?;
-        task.clone()
-    };
-
-    let images_dir = task
-        .output_dir
-        .as_deref()
-        .map(|s| std::path::PathBuf::from(s))
-        .unwrap_or_else(|| crawler::get_default_images_dir());
-
-    let start_time = if item.order > 0 {
-        item.order as u64
-    } else {
-        // 兜底：使用当前时间戳，保证排序稳定
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64
-    };
-
-    // 为了不阻塞 UI，放到 blocking 线程
-    let app_clone = app.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let dq = app_clone.state::<crawler::DownloadQueue>();
-        dq.download_image(
-            item.url.clone(),
-            images_dir,
-            item.plugin_id.clone(),
-            item.task_id.clone(),
-            start_time,
-            task.output_album_id.clone(),
-            task.http_headers.unwrap_or_default(),
-        )
-    })
+async fn retry_task_failed_image(failed_id: i64) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .task_retry_failed_image(failed_id)
     .await
-    .map_err(|e| format!("Join error: {}", e))?
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-async fn get_plugin_image(
-    plugin_id: String,
-    image_path: String,
-    state: tauri::State<'_, PluginManager>,
-) -> Result<Vec<u8>, String> {
-    // 找到插件文件
-    let plugins_dir = state.get_plugins_directory();
-    let entries = std::fs::read_dir(&plugins_dir)
-        .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-        let path = entry.path();
-
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-            let file_name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            if file_name == plugin_id {
-                return state.read_plugin_image(&path, &image_path);
-            }
-        }
-    }
-
-    Err(format!("Plugin {} not found", plugin_id))
+async fn get_plugin_image(plugin_id: String, image_path: String) -> Result<Vec<u8>, String> {
+    // 统一走 daemon（已安装插件也可读取），返回 base64
+    let v = daemon_client::get_ipc_client()
+        .plugin_get_image_for_detail(plugin_id, image_path, None, None, None)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let b64 = v
+        .get("base64")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "Invalid response: missing base64".to_string())?;
+    base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 decode failed: {}", e))
 }
 
 /// 详情页渲染文档图片用：本地已安装/远程商店源统一入口
@@ -1238,115 +1375,165 @@ async fn get_plugin_image_for_detail(
     download_url: Option<String>,
     sha256: Option<String>,
     size_bytes: Option<u64>,
-    state: tauri::State<'_, PluginManager>,
 ) -> Result<Vec<u8>, String> {
-    state
-        .load_plugin_image_for_detail(
-            &plugin_id,
-            download_url.as_deref(),
-            sha256.as_deref(),
-            size_bytes,
-            &image_path,
-        )
+    let v = daemon_client::get_ipc_client()
+        .plugin_get_image_for_detail(plugin_id, image_path, download_url, sha256, size_bytes)
         .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let b64 = v
+        .get("base64")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "Invalid response: missing base64".to_string())?;
+    base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 decode failed: {}", e))
 }
 
 #[tauri::command]
 async fn get_plugin_icon(
     plugin_id: String,
-    state: tauri::State<'_, PluginManager>,
 ) -> Result<Option<Vec<u8>>, String> {
-    state.get_plugin_icon_by_id(&plugin_id)
+    let v = daemon_client::get_ipc_client()
+        .plugin_get_icon(plugin_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let b64_opt = v.get("base64").and_then(|x| x.as_str()).map(|s| s.to_string());
+    let Some(b64) = b64_opt else { return Ok(None) };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 decode failed: {}", e))?;
+    Ok(Some(bytes))
 }
 
 /// 商店列表 icon：KGPG v2 固定头部 + HTTP Range 读取（返回 PNG bytes）。
 #[tauri::command]
 async fn get_remote_plugin_icon(
     download_url: String,
-    state: tauri::State<'_, PluginManager>,
 ) -> Result<Option<Vec<u8>>, String> {
-    state.fetch_remote_plugin_icon_v2(&download_url).await
+    let v = daemon_client::get_ipc_client()
+        .plugin_get_remote_icon_v2(download_url)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let b64_opt = v.get("base64").and_then(|x| x.as_str()).map(|s| s.to_string());
+    let Some(b64) = b64_opt else { return Ok(None) };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 decode failed: {}", e))?;
+    Ok(Some(bytes))
 }
 
 #[tauri::command]
-fn get_settings(state: tauri::State<Settings>) -> Result<AppSettings, String> {
-    state.get_settings()
+async fn get_settings() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .settings_get()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn get_setting(key: String, state: tauri::State<Settings>) -> Result<serde_json::Value, String> {
-    let settings = state.get_settings()?;
-    let v = serde_json::to_value(settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    v.get(&key)
-        .cloned()
-        .ok_or_else(|| format!("Unknown setting key: {}", key))
+async fn get_setting(key: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .settings_get_key(key)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
 fn get_favorite_album_id() -> Result<String, String> {
-    Ok(kabegame_core::storage::FAVORITE_ALBUM_ID.to_string())
+    Ok("00000000-0000-0000-0000-000000000001".to_string())
 }
 
 #[tauri::command]
 #[cfg(feature = "virtual-drive")]
-fn set_album_drive_enabled(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_album_drive_enabled(enabled)
+fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_album_drive_enabled(enabled)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 #[tauri::command]
 #[cfg(feature = "virtual-drive")]
 fn set_album_drive_mount_point(
     mount_point: String,
-    state: tauri::State<Settings>,
 ) -> Result<(), String> {
-    state.set_album_drive_mount_point(mount_point)
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_album_drive_mount_point(mount_point)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 #[tauri::command]
-fn set_auto_launch(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_auto_launch(enabled)
+fn set_auto_launch(enabled: bool) -> Result<(), String> {
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_auto_launch(enabled)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 #[tauri::command]
 fn set_max_concurrent_downloads(
     count: u32,
-    state: tauri::State<Settings>,
-    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    state.set_max_concurrent_downloads(count)?;
-    // 同步调整 download worker 数量（全局并发下载）
-    if let Some(download_queue) = app.try_state::<crawler::DownloadQueue>() {
-        download_queue.set_desired_concurrency(count);
-        download_queue.notify_all_waiting();
-    }
+    // 设置落盘 + 并发调整在 daemon 完成
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_max_concurrent_downloads(count)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })?;
+    // 本地轮播器可能在跑：唤醒等待（保持原行为）
     Ok(())
 }
 
 #[tauri::command]
-fn set_network_retry_count(count: u32, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_network_retry_count(count)
+fn set_network_retry_count(count: u32) -> Result<(), String> {
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_network_retry_count(count)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 #[tauri::command]
-fn set_image_click_action(action: String, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_image_click_action(action)
+fn set_image_click_action(action: String) -> Result<(), String> {
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_image_click_action(action)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 #[tauri::command]
 fn set_gallery_image_aspect_ratio_match_window(
     enabled: bool,
-    state: tauri::State<Settings>,
 ) -> Result<(), String> {
-    state.set_gallery_image_aspect_ratio_match_window(enabled)
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_gallery_image_aspect_ratio_match_window(enabled)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 #[tauri::command]
 fn set_gallery_image_aspect_ratio(
     aspect_ratio: Option<String>,
-    state: tauri::State<Settings>,
 ) -> Result<(), String> {
-    state.set_gallery_image_aspect_ratio(aspect_ratio)
+    tauri::async_runtime::block_on(async move {
+        daemon_client::get_ipc_client()
+            .settings_set_gallery_image_aspect_ratio(aspect_ratio)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 #[tauri::command]
@@ -1367,34 +1554,53 @@ fn get_desktop_resolution() -> Result<(u32, u32), String> {
 }
 
 #[tauri::command]
-fn set_auto_deduplicate(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_auto_deduplicate(enabled)
+fn set_auto_deduplicate(enabled: bool) -> Result<(), String> {
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_auto_deduplicate(enabled)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 #[tauri::command]
 fn set_default_download_dir(
     dir: Option<String>,
-    state: tauri::State<Settings>,
 ) -> Result<(), String> {
-    state.set_default_download_dir(dir)
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_default_download_dir(dir)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 #[tauri::command]
 fn set_wallpaper_engine_dir(
     dir: Option<String>,
-    state: tauri::State<Settings>,
 ) -> Result<(), String> {
-    state.set_wallpaper_engine_dir(dir)
+    tokio::runtime::Handle::current().block_on(async move {
+        daemon_client::get_ipc_client()
+            .settings_set_wallpaper_engine_dir(dir)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 #[tauri::command]
 fn get_wallpaper_engine_myprojects_dir(
-    state: tauri::State<Settings>,
 ) -> Result<Option<String>, String> {
-    state.get_wallpaper_engine_myprojects_dir()
+    tokio::runtime::Handle::current().block_on(async move {
+        let v = daemon_client::get_ipc_client()
+            .settings_get_wallpaper_engine_myprojects_dir()
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))?;
+        serde_json::from_value(v).map_err(|e| format!("Invalid response: {e}"))
+    })
 }
 
 #[tauri::command]
+#[cfg(feature = "local-backend")]
 fn get_default_images_dir(state: tauri::State<Storage>) -> Result<String, String> {
     Ok(state
         .get_images_dir()
@@ -1405,172 +1611,124 @@ fn get_default_images_dir(state: tauri::State<Storage>) -> Result<String, String
 }
 
 #[tauri::command]
-fn get_active_downloads(app: tauri::AppHandle) -> Result<Vec<ActiveDownloadInfo>, String> {
-    let download_queue = app.state::<crawler::DownloadQueue>();
-    download_queue.get_active_downloads()
+async fn add_run_config(config: serde_json::Value) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_add_run_config(config)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn add_run_config(config: RunConfig, state: tauri::State<Storage>) -> Result<RunConfig, String> {
-    state.add_run_config(config.clone())?;
-    Ok(config)
+async fn update_run_config(config: serde_json::Value) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_update_run_config(config)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn update_run_config(config: RunConfig, state: tauri::State<Storage>) -> Result<(), String> {
-    state.update_run_config(config)
+async fn get_run_configs() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_run_configs()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn get_run_configs(state: tauri::State<Storage>) -> Result<Vec<RunConfig>, String> {
-    state.get_run_configs()
+async fn delete_run_config(config_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_delete_run_config(config_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn delete_run_config(config_id: String, state: tauri::State<Storage>) -> Result<(), String> {
-    state.delete_run_config(&config_id)
+async fn cancel_task(task_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .task_cancel(task_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
-    let download_queue = app.state::<crawler::DownloadQueue>();
-    download_queue.cancel_task(&task_id)?;
-
-    // 同步更新任务状态：用户手动停止应为 canceled，而不是等 task worker 结束后被 completed 覆盖。
-    // 注意：只有在任务存在且尚未终结（completed/failed/canceled）时才更新与发事件。
-    let end = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    let canceled_err = "Task canceled".to_string();
-
-    if let Some(storage) = app.try_state::<Storage>() {
-        if let Ok(Some(mut task)) = storage.get_task(&task_id) {
-            let is_terminal = matches!(task.status.as_str(), "completed" | "failed" | "canceled");
-            if !is_terminal {
-                task.status = "canceled".to_string();
-                task.end_time = Some(end);
-                task.error = Some(canceled_err.clone());
-                let _ = storage.update_task(task);
-
-                // 前端优先靠 task-status 驱动 UI；同时保留 task-error 兼容旧逻辑
-                let _ = app.emit(
-                    "task-status",
-                    serde_json::json!({
-                        "taskId": task_id.clone(),
-                        "status": "canceled",
-                        "endTime": end,
-                        "error": canceled_err.clone()
-                    }),
-                );
-                let _ = app.emit(
-                    "task-error",
-                    serde_json::json!({
-                        "taskId": task_id,
-                        "error": canceled_err
-                    }),
-                );
-            }
-        }
-    }
-    Ok(())
+async fn get_active_downloads() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .get_active_downloads()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 // 任务相关命令
 #[tauri::command]
-fn add_task(task: TaskInfo, state: tauri::State<Storage>) -> Result<(), String> {
+#[cfg(feature = "local-backend")]
+fn local_add_task(task: TaskInfo, state: tauri::State<Storage>) -> Result<(), String> {
     state.add_task(task)
 }
 
 #[tauri::command]
-fn update_task(task: TaskInfo, state: tauri::State<Storage>) -> Result<(), String> {
+#[cfg(feature = "local-backend")]
+fn local_update_task(task: TaskInfo, state: tauri::State<Storage>) -> Result<(), String> {
     state.update_task(task)
 }
 
 #[tauri::command]
-fn get_task(task_id: String, state: tauri::State<Storage>) -> Result<Option<TaskInfo>, String> {
+#[cfg(feature = "local-backend")]
+fn local_get_task(task_id: String, state: tauri::State<Storage>) -> Result<Option<TaskInfo>, String> {
     state.get_task(&task_id)
 }
 
 #[tauri::command]
-fn get_all_tasks(state: tauri::State<Storage>) -> Result<Vec<TaskInfo>, String> {
+#[cfg(feature = "local-backend")]
+fn local_get_all_tasks(state: tauri::State<Storage>) -> Result<Vec<TaskInfo>, String> {
     state.get_all_tasks()
 }
 
 /// 将任务的 Rhai 失败 dump 标记为“已确认/已读”（用于任务列表右上角小按钮）
 #[tauri::command]
-fn confirm_task_rhai_dump(task_id: String, state: tauri::State<Storage>) -> Result<(), String> {
-    state.confirm_task_rhai_dump(&task_id)
-}
-
-#[tauri::command]
-fn delete_task(
-    app: tauri::AppHandle,
-    task_id: String,
-    state: tauri::State<Storage>,
-    settings: tauri::State<Settings>,
-    #[cfg(target_os = "windows")] drive: tauri::State<VirtualDriveService>,
-) -> Result<(), String> {
-    // 如果任务正在运行，先标记为取消，阻止后续入库
-    let download_queue = app.state::<crawler::DownloadQueue>();
-    let _ = download_queue.cancel_task(&task_id);
-
-    // 先取出该任务关联的图片 id 列表（避免删除后无法判断是否包含"当前壁纸"）
-    let ids = state.get_task_image_ids(&task_id).unwrap_or_default();
-    state.delete_task(&task_id)?;
-    #[cfg(target_os = "windows")]
-    {
-        // 任务删除会改变“按任务”路径映射：bump + 通知 Explorer 刷新
-        drive.bump_tasks();
-    }
-    let s = settings.get_settings().unwrap_or_default();
-    if let Some(cur) = s.current_wallpaper_image_id.as_deref() {
-        if ids.iter().any(|id| id == cur) {
-            let _ = settings.set_current_wallpaper_image_id(None);
-        }
-    }
-    Ok(())
+async fn confirm_task_rhai_dump(task_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .storage_confirm_task_rhai_dump(task_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 /// 清除所有已完成、失败或取消的任务（保留 pending 和 running 的任务）
 /// 返回被删除的任务数量
 #[tauri::command]
-fn clear_finished_tasks(state: tauri::State<Storage>) -> Result<usize, String> {
-    state.clear_finished_tasks()
+async fn clear_finished_tasks() -> Result<usize, String> {
+    daemon_client::get_ipc_client()
+        .storage_clear_finished_tasks()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn get_task_images(
-    task_id: String,
-    state: tauri::State<Storage>,
-) -> Result<Vec<ImageInfo>, String> {
-    state.get_task_images(&task_id)
+async fn get_task_images(task_id: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_task_images(task_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn get_task_images_paginated(
+async fn get_task_images_paginated(
     task_id: String,
     page: usize,
     page_size: usize,
-    state: tauri::State<Storage>,
-) -> Result<TaskPaginatedImages, String> {
+) -> Result<serde_json::Value, String> {
     let offset = page.saturating_mul(page_size);
-    let images = state.get_task_images_paginated(&task_id, offset, page_size)?;
-    let total = state.get_task_image_ids(&task_id)?.len();
-    Ok(TaskPaginatedImages {
-        images,
-        total,
-        page,
-        page_size,
-    })
+    daemon_client::get_ipc_client()
+        .storage_get_task_images_paginated(task_id, offset, page_size)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn get_task_image_ids(
-    task_id: String,
-    state: tauri::State<Storage>,
-) -> Result<Vec<String>, String> {
-    state.get_task_image_ids(&task_id)
+async fn get_task_image_ids(task_id: String) -> Result<Vec<String>, String> {
+    daemon_client::get_ipc_client()
+        .storage_get_task_image_ids(task_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 // Windows：将文件列表写入剪贴板为 CF_HDROP，便于原生应用粘贴/拖拽识别
@@ -1578,10 +1736,14 @@ fn get_task_image_ids(
 #[tauri::command]
 fn set_wallpaper_rotation_enabled(
     enabled: bool,
-    state: tauri::State<Settings>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    state.set_wallpaper_rotation_enabled(enabled)?;
+    tokio::runtime::Handle::current().block_on(async move {
+        daemon_client::get_ipc_client()
+            .settings_set_wallpaper_rotation_enabled(enabled)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })?;
 
     // 注意：此命令只负责“开关落盘/停播清理”，不负责启动轮播线程。
     // 轮播线程仅在“设置轮播画册ID”（或回落到画廊轮播）时启动，避免在未选择来源时启动后立刻退出/假死。
@@ -1606,7 +1768,6 @@ struct RotationStartResult {
 #[tauri::command]
 fn set_wallpaper_rotation_album_id(
     album_id: Option<String>,
-    state: tauri::State<Settings>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     // 约定：
@@ -1622,7 +1783,13 @@ fn set_wallpaper_rotation_album_id(
         }
     });
 
-    state.set_wallpaper_rotation_album_id(normalized.clone())?;
+    let normalized_for_ipc = normalized.clone();
+    tokio::runtime::Handle::current().block_on(async move {
+        daemon_client::get_ipc_client()
+            .settings_set_wallpaper_rotation_album_id(normalized_for_ipc)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })?;
 
     // 清空来源：停止线程（但不更改 enabled 开关）
     if normalized.is_none() {
@@ -1632,13 +1799,23 @@ fn set_wallpaper_rotation_album_id(
     }
 
     // 仅当“轮播已启用”时才尝试启动线程
-    let settings = state.get_settings()?;
-    if settings.wallpaper_rotation_enabled {
+    // daemon settings 用于判断 enabled（避免本地 settings 依赖）
+    let settings_v = tokio::runtime::Handle::current().block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_get()
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })?;
+    if settings_v
+        .get("wallpaperRotationEnabled")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false)
+    {
         let rotator = app.state::<WallpaperRotator>();
         // 当选择为画廊轮播（空字符串）时：从当前壁纸开始
-        let start_from_current = settings
-            .wallpaper_rotation_album_id
-            .as_deref()
+        let start_from_current = settings_v
+            .get("wallpaperRotationAlbumId")
+            .and_then(|x| x.as_str())
             .map(|s| s.is_empty())
             .unwrap_or(false);
         rotator
@@ -1655,11 +1832,19 @@ fn set_wallpaper_rotation_album_id(
 /// - 若失败或未保存：回落到“画廊轮播”（album_id = ""），并从当前壁纸开始
 #[tauri::command]
 fn start_wallpaper_rotation(
-    state: tauri::State<Settings>,
     app: tauri::AppHandle,
 ) -> Result<RotationStartResult, String> {
-    let settings = state.get_settings()?;
-    if !settings.wallpaper_rotation_enabled {
+    let settings_v = tokio::runtime::Handle::current().block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_get()
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })?;
+    if !settings_v
+        .get("wallpaperRotationEnabled")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false)
+    {
         return Err("壁纸轮播未启用".to_string());
     }
 
@@ -1668,7 +1853,7 @@ fn start_wallpaper_rotation(
     let mut warning: Option<String> = None;
 
     // 1) 优先尝试：如果保存了“上次画册ID”且非空，则先用画册轮播
-    if let Some(saved) = settings.wallpaper_rotation_album_id.clone() {
+    if let Some(saved) = settings_v.get("wallpaperRotationAlbumId").and_then(|x| x.as_str()) {
         if !saved.trim().is_empty() {
             // 先不改设置，直接按当前设置尝试启动
             match rotator.ensure_running(false) {
@@ -1676,7 +1861,7 @@ fn start_wallpaper_rotation(
                     return Ok(RotationStartResult {
                         started: true,
                         source: "album".to_string(),
-                        album_id: Some(saved),
+                        album_id: Some(saved.to_string()),
                         fallback: false,
                         warning: None,
                     });
@@ -1704,7 +1889,12 @@ fn start_wallpaper_rotation(
     }
 
     // 2) 回落到画廊轮播：写入 album_id="" 并启动（从当前壁纸开始）
-    state.set_wallpaper_rotation_album_id(Some("".to_string()))?;
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_wallpaper_rotation_album_id(Some("".to_string()))
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })?;
     rotator.ensure_running(true)?;
 
     Ok(RotationStartResult {
@@ -1718,10 +1908,14 @@ fn start_wallpaper_rotation(
 #[tauri::command]
 fn set_wallpaper_rotation_interval_minutes(
     minutes: u32,
-    state: tauri::State<Settings>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    state.set_wallpaper_rotation_interval_minutes(minutes)?;
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_wallpaper_rotation_interval_minutes(minutes)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })?;
 
     // 如果轮播器正在运行，重置定时器以应用新的间隔设置
     if let Some(rotator) = app.try_state::<WallpaperRotator>() {
@@ -1734,14 +1928,18 @@ fn set_wallpaper_rotation_interval_minutes(
 }
 
 #[tauri::command]
-fn set_wallpaper_rotation_mode(mode: String, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_wallpaper_rotation_mode(mode)
+fn set_wallpaper_rotation_mode(mode: String) -> Result<(), String> {
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_wallpaper_rotation_mode(mode)
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })
 }
 
 #[tauri::command]
 fn set_wallpaper_style(
     style: String,
-    state: tauri::State<Settings>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     println!(
@@ -1749,8 +1947,13 @@ fn set_wallpaper_style(
         style
     );
 
-    // 先保存设置
-    state.set_wallpaper_style(style.clone())?;
+    // 先保存设置（daemon）
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_wallpaper_style(style.clone())
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })?;
     println!("[DEBUG] 已保存新 style: {}", style);
 
     // 原生模式下应用样式可能较慢（PowerShell/注册表/广播），放到后台线程避免前端卡顿
@@ -1799,7 +2002,6 @@ fn set_wallpaper_style(
 #[tauri::command]
 fn set_wallpaper_rotation_transition(
     transition: String,
-    state: tauri::State<Settings>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     println!(
@@ -1808,13 +2010,25 @@ fn set_wallpaper_rotation_transition(
     );
 
     // 未开启轮播时，不允许设置过渡效果（单张模式不支持 transition）
-    let current_settings = state.get_settings()?;
-    if !current_settings.wallpaper_rotation_enabled {
+    let settings_v = tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client().settings_get().await
+    })
+    .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let enabled = settings_v
+        .get("wallpaperRotationEnabled")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    if !enabled {
         return Err("未开启壁纸轮播，无法设置过渡效果".to_string());
     }
 
-    // 先保存设置
-    state.set_wallpaper_rotation_transition(transition.clone())?;
+    // 先保存设置（daemon）
+    tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client()
+            .settings_set_wallpaper_rotation_transition(transition.clone())
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
+    })?;
     println!("[DEBUG] 已保存新 transition: {}", transition);
 
     // 立即触发一次展示效果（先应用 transition，再切换一张壁纸）
@@ -1867,13 +2081,19 @@ fn set_wallpaper_rotation_transition(
 #[tauri::command]
 fn set_wallpaper_mode(
     mode: String,
-    state: tauri::State<Settings>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     use tauri::Manager;
 
-    let current_settings = state.get_settings()?;
-    let old_mode = current_settings.wallpaper_mode.clone();
+    let current_settings_v = tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client().settings_get().await
+    })
+    .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let old_mode = current_settings_v
+        .get("wallpaperMode")
+        .and_then(|x| x.as_str())
+        .unwrap_or("native")
+        .to_string();
 
     // 如果模式和当前设置相同，直接返回成功
     if old_mode == mode {
@@ -1886,7 +2106,6 @@ fn set_wallpaper_mode(
     let app_clone = app.clone();
 
     std::thread::spawn(move || {
-        let settings_state = app_clone.state::<Settings>();
         let rotator = app_clone.state::<WallpaperRotator>();
         let controller = app_clone.state::<WallpaperController>();
 
@@ -1898,8 +2117,10 @@ fn set_wallpaper_mode(
         }
 
         // 读取最新设置（style/transition/是否启用轮播）
-        let s = match settings_state.get_settings() {
-            Ok(s) => s,
+        let s_v = match tauri::async_runtime::block_on(async {
+            daemon_client::get_ipc_client().settings_get().await
+        }) {
+            Ok(v) => v,
             Err(e) => {
                 let _ = app_clone.emit(
                     "wallpaper-mode-switch-complete",
@@ -1912,13 +2133,36 @@ fn set_wallpaper_mode(
                 return;
             }
         };
+        let rotation_enabled = s_v
+            .get("wallpaperRotationEnabled")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        let rotation_mode = s_v
+            .get("wallpaperRotationMode")
+            .and_then(|x| x.as_str())
+            .unwrap_or("random")
+            .to_string();
+        let cur_style = s_v
+            .get("wallpaperRotationStyle")
+            .and_then(|x| x.as_str())
+            .unwrap_or("fill")
+            .to_string();
+        let cur_transition = s_v
+            .get("wallpaperRotationTransition")
+            .and_then(|x| x.as_str())
+            .unwrap_or("none")
+            .to_string();
 
         // 1) 从旧后端读取“当前壁纸路径”（尽量保持当前壁纸不变）
         let current_wallpaper = match get_current_wallpaper_path_from_settings(&app_clone) {
             Some(p) => p,
             None => {
                 // 没有当前壁纸：仍允许切换模式（仅保存 mode），但不做 reapply
-                match settings_state.set_wallpaper_mode(mode_clone.clone()) {
+                match tauri::async_runtime::block_on(async {
+                    daemon_client::get_ipc_client()
+                        .settings_set_wallpaper_mode(mode_clone.clone())
+                        .await
+                }) {
                     Ok(_) => {
                         let _ = app_clone.emit(
                             "wallpaper-mode-switch-complete",
@@ -1960,24 +2204,31 @@ fn set_wallpaper_mode(
             // - sequential：取画廊排序中的第一张存在图片（与轮播的顺序语义一致）
             // - random：从所有存在图片中随机挑一张
             let picked_from_gallery: Option<String> = (|| {
-                let storage = app_clone.try_state::<Storage>()?;
-                let images = storage.get_all_images().ok()?;
-                let existing: Vec<_> = images
-                    .into_iter()
-                    .filter(|img| std::path::Path::new(&img.local_path).exists())
-                    .collect();
+                let images_v = tauri::async_runtime::block_on(async {
+                    daemon_client::get_ipc_client().storage_get_images().await
+                })
+                .ok()?;
+                let arr = images_v.as_array()?;
+                let mut existing: Vec<String> = Vec::new();
+                for it in arr {
+                    if let Some(p) = it.get("localPath").and_then(|x| x.as_str()) {
+                        if std::path::Path::new(p).exists() {
+                            existing.push(p.to_string());
+                        }
+                    }
+                }
                 if existing.is_empty() {
                     return None;
                 }
-                match s.wallpaper_rotation_mode.as_str() {
-                    "sequential" => Some(existing[0].local_path.clone()),
+                match rotation_mode.as_str() {
+                    "sequential" => Some(existing[0].clone()),
                     _ => {
                         let idx = (std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_nanos() as usize)
                             % existing.len();
-                        Some(existing[idx].local_path.clone())
+                        Some(existing[idx].clone())
                     }
                 }
             })();
@@ -1998,19 +2249,22 @@ fn set_wallpaper_mode(
         // - 优先“尽量保留当前值”：如果当前值在目标模式下仍可用，就沿用当前值
         // - 若当前值在目标模式下不可用：回退到目标模式的“上一次值”（若存在）
         // - 同时对 native 做 normalize，避免 slide/zoom 等不支持值污染全局设置
-        let (style_to_apply, transition_to_apply) = match settings_state
-            .swap_style_transition_for_mode_switch(&old_mode_clone, &mode_clone)
-        {
+        let (style_to_apply, transition_to_apply) =
+            match tauri::async_runtime::block_on(async {
+                daemon_client::get_ipc_client()
+                    .settings_swap_style_transition_for_mode_switch(
+                        old_mode_clone.clone(),
+                        mode_clone.clone(),
+                    )
+                    .await
+            }) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!(
                     "[WARN] set_wallpaper_mode: swap_style_transition_for_mode_switch 失败: {}",
                     e
                 );
-                (
-                    s.wallpaper_rotation_style.clone(),
-                    s.wallpaper_rotation_transition.clone(),
-                )
+                    (cur_style.clone(), cur_transition.clone())
             }
         };
 
@@ -2051,7 +2305,7 @@ fn set_wallpaper_mode(
             target.set_style(&style_to_apply, true)?;
             eprintln!("[DEBUG] set_wallpaper_mode: target.set_style 完成");
             // 过渡效果属于轮播能力：只在轮播启用时做立即预览
-            if s.wallpaper_rotation_enabled {
+            if rotation_enabled {
                 // 最后应用transition
                 eprintln!(
                     "[DEBUG] set_wallpaper_mode: 调用 target.set_transition: {}",
@@ -2087,7 +2341,11 @@ fn set_wallpaper_mode(
                 }
                 // 3) 应用成功后再持久化 mode
                 eprintln!("[DEBUG] set_wallpaper_mode: 保存模式设置");
-                if let Err(e) = settings_state.set_wallpaper_mode(mode_clone.clone()) {
+                if let Err(e) = tauri::async_runtime::block_on(async {
+                    daemon_client::get_ipc_client()
+                        .settings_set_wallpaper_mode(mode_clone.clone())
+                        .await
+                }) {
                     eprintln!("[ERROR] set_wallpaper_mode: 保存模式失败: {}", e);
                     let _ = app_clone.emit(
                         "wallpaper-mode-switch-complete",
@@ -2102,7 +2360,7 @@ fn set_wallpaper_mode(
                 eprintln!("[DEBUG] set_wallpaper_mode: 模式设置已保存");
 
                 // 4) 轮播开启时重置定时器（切换模式也算一次“用户触发”）
-                if s.wallpaper_rotation_enabled {
+                if rotation_enabled {
                     eprintln!("[DEBUG] set_wallpaper_mode: 恢复轮播");
                     // 切换完成后再恢复轮播（若之前在跑或用户开启了轮播）
                     // 这里用 start 确保轮播线程按新 mode 工作
@@ -2200,16 +2458,13 @@ fn fix_wallpaper_window_zorder(app: &tauri::AppHandle) {
         SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW,
     };
 
-    // 检查是否是窗口模式
-    let is_window_mode = if let Some(settings_state) = app.try_state::<Settings>() {
-        if let Ok(settings) = settings_state.get_settings() {
-            settings.wallpaper_mode == "window"
-        } else {
-            false
-        }
-    } else {
-        false
-    };
+    // 检查是否是窗口模式（IPC-only：从 daemon 读取 settings.wallpaperMode）
+    let is_window_mode = tauri::async_runtime::block_on(async {
+        daemon_client::get_ipc_client().settings_get().await
+    })
+    .ok()
+    .and_then(|v| v.get("wallpaperMode").and_then(|x| x.as_str()).map(|s| s == "window"))
+    .unwrap_or(false);
 
     if !is_window_mode {
         return;
@@ -2313,27 +2568,7 @@ fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
         return Err("找不到主窗口".to_string());
     };
 
-    // 在隐藏窗口前保存窗口状态
-    let position = window.outer_position().ok();
-    let size = window.outer_size().ok();
-    let maximized = window.is_maximized().unwrap_or(false);
-
-    if let (Some(pos), Some(sz)) = (position, size) {
-        let window_state = WindowState {
-            x: if maximized { None } else { Some(pos.x as f64) },
-            y: if maximized { None } else { Some(pos.y as f64) },
-            width: sz.width as f64,
-            height: sz.height as f64,
-            maximized,
-        };
-
-        // 保存窗口状态
-        if let Some(settings_state) = app.try_state::<Settings>() {
-            if let Err(e) = settings_state.save_window_state(window_state) {
-                eprintln!("保存窗口状态失败: {}", e);
-            }
-        }
-    }
+    // 不保存 window_state：用户要求每次居中弹出
 
     window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
 
@@ -2669,9 +2904,15 @@ fn copy_files_to_clipboard(_paths: Vec<String>) -> Result<(), String> {
 // Startup steps (split setup into small functions)
 // =========================
 
-fn startup_step_cleanup_user_data_if_marked() -> bool {
+fn startup_step_cleanup_user_data_if_marked(app: &tauri::AppHandle) -> bool {
     // 检查清理标记，如果存在则先清理旧数据目录
-    let app_data_dir = kabegame_core::app_paths::kabegame_data_dir();
+    let app_data_dir = match app.path().app_data_dir() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Failed to resolve app data dir: {e}");
+            return false;
+        }
+    };
     let cleanup_marker = app_data_dir.join(".cleanup_marker");
     let is_cleaning_data = cleanup_marker.exists();
     if is_cleaning_data {
@@ -2708,9 +2949,10 @@ fn startup_step_cleanup_user_data_if_marked() -> bool {
     is_cleaning_data
 }
 
+#[cfg(feature = "local-backend")]
 fn startup_step_manage_plugin_manager(app: &mut tauri::App) {
     // 初始化插件管理器
-    let plugin_manager = PluginManager::new(app.app_handle().clone());
+    let plugin_manager = PluginManager::new();
     app.manage(plugin_manager);
 
     // 每次启动：异步覆盖复制内置插件到用户插件目录（确保可用性/不变性）
@@ -2725,9 +2967,10 @@ fn startup_step_manage_plugin_manager(app: &mut tauri::App) {
     });
 }
 
+#[cfg(feature = "local-backend")]
 fn startup_step_manage_storage(app: &mut tauri::App) -> Result<(), String> {
     // 初始化存储管理器
-    let storage = Storage::new(app.app_handle().clone());
+    let storage = Storage::new();
     storage
         .init()
         .map_err(|e| format!("Failed to initialize storage: {}", e))?;
@@ -2746,6 +2989,7 @@ fn startup_step_manage_storage(app: &mut tauri::App) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "local-backend")]
 fn startup_step_manage_provider_runtime(app: &mut tauri::App) {
     let mut cfg = kabegame_core::providers::ProviderCacheConfig::default();
     // 可选覆盖 RocksDB 目录
@@ -2768,6 +3012,7 @@ fn startup_step_manage_provider_runtime(app: &mut tauri::App) {
     app.manage(rt);
 }
 
+#[cfg(feature = "local-backend")]
 fn startup_step_warm_provider_cache(app: &tauri::AppHandle) {
     // Provider 树缓存 warm：后台执行，失败只记录 warning（不阻塞启动）
     let app_handle = app.clone();
@@ -2787,7 +3032,8 @@ fn startup_step_warm_provider_cache(app: &tauri::AppHandle) {
     });
 }
 
-fn startup_step_manage_virtual_drive_service(app: &mut tauri::App) {
+#[cfg(feature = "virtual-drive")]
+fn startup_step_manage_virtual_drive_service(_app: &mut tauri::App) {
     // Windows：虚拟盘服务（Dokan）
     #[cfg(target_os = "windows")]
     {
@@ -2849,9 +3095,10 @@ fn startup_step_manage_virtual_drive_service(app: &mut tauri::App) {
     }
 }
 
+#[cfg(feature = "local-backend")]
 fn startup_step_manage_settings(app: &mut tauri::App) {
     // 初始化设置管理器
-    let settings = Settings::new(app.app_handle().clone());
+    let settings = Settings::new();
     app.manage(settings);
 }
 
@@ -2885,69 +3132,14 @@ fn startup_step_auto_mount_album_drive(app: &tauri::AppHandle) {
     }
 }
 
-fn startup_step_manage_dedupe_manager(app: &mut tauri::App) {
-    // 初始化去重任务管理器（单例，允许 cancel）
-    let dedupe_manager = DedupeManager::new();
-    app.manage(dedupe_manager);
-}
-
 fn startup_step_restore_main_window_state(app: &tauri::AppHandle, is_cleaning_data: bool) {
-    // 恢复窗口状态（如果不在清理数据模式）
+    // 不恢复 window_state：用户要求每次居中弹出
     if is_cleaning_data {
         return;
     }
     if let Some(main_window) = app.get_webview_window("main") {
-        let settings = app.state::<Settings>();
-        if let Ok(Some(window_state)) = settings.get_window_state() {
-            // 恢复窗口大小
-            if let Err(e) = main_window.set_size(tauri::LogicalSize::new(
-                window_state.width,
-                window_state.height,
-            )) {
-                eprintln!("恢复窗口大小失败: {}", e);
-            }
-            // 恢复窗口位置
-            if let (Some(x), Some(y)) = (window_state.x, window_state.y) {
-                if let Err(e) = main_window.set_position(tauri::LogicalPosition::new(x, y)) {
-                    eprintln!("恢复窗口位置失败: {}", e);
-                }
-            }
-            // 恢复最大化状态
-            if window_state.maximized {
-                if let Err(e) = main_window.maximize() {
-                    eprintln!("恢复窗口最大化状态失败: {}", e);
-                }
-            }
-        }
+        let _ = main_window.center();
     }
-}
-
-fn startup_step_manage_download_queue(app: &mut tauri::App) {
-    // 初始化下载队列管理器
-    let download_queue = crawler::DownloadQueue::new(app.app_handle().clone());
-    app.manage(download_queue);
-}
-
-fn startup_step_mark_pending_tasks_as_failed(app: &tauri::AppHandle) {
-    // 应用启动时，将所有 pending 和 running 状态的任务标记为失败
-    let storage_for_cleanup = app.state::<Storage>();
-    match storage_for_cleanup.mark_pending_running_tasks_as_failed() {
-        Ok(count) => {
-            if count > 0 {
-                println!("启动时已将 {} 个 pending/running 任务标记为失败", count);
-            }
-        }
-        Err(e) => {
-            eprintln!("启动时标记任务为失败失败: {}", e);
-        }
-    }
-}
-
-fn startup_step_manage_task_scheduler(app: &mut tauri::App) {
-    // 初始化 task 调度器（固定 10 个 task worker）
-    // 注意：不再恢复 pending/running 任务，它们已在启动时被标记为失败
-    let task_scheduler = crawler::TaskScheduler::new(app.app_handle().clone());
-    app.manage(task_scheduler);
 }
 
 fn startup_step_manage_wallpaper_components(app: &mut tauri::App) {
@@ -2984,38 +3176,36 @@ fn startup_step_manage_wallpaper_components(app: &mut tauri::App) {
     tray::setup_tray(app.app_handle().clone());
 
     // 初始化壁纸控制器，然后根据设置决定是否启动轮播
+    // 注意：不要在 Tokio runtime 内再 `block_on`（会触发 “Cannot start a runtime from within a runtime”）
     let app_handle = app.app_handle().clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500)); // 延迟启动，确保应用完全初始化
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // 延迟启动，确保应用完全初始化
 
-        // 创建 Tokio runtime 用于异步初始化
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+        // 初始化壁纸控制器（如创建窗口等）
+        let controller = app_handle.state::<WallpaperController>();
+        if let Err(e) = controller.init().await {
+            eprintln!("初始化壁纸控制器失败: {}", e);
+        }
 
-        rt.block_on(async {
-            // 初始化壁纸控制器（如创建窗口等）
-            let controller = app_handle.state::<WallpaperController>();
-            if let Err(e) = controller.init().await {
-                eprintln!("初始化壁纸控制器失败: {}", e);
-            }
+        println!("初始化壁纸控制器完成");
 
-            println!("初始化壁纸控制器完成");
+        // 启动时：按规则恢复/回退“当前壁纸”
+        if let Err(e) = init_wallpaper_on_startup(&app_handle).await {
+            eprintln!("启动时初始化壁纸失败: {}", e);
+        }
 
-            // 启动时：按规则恢复/回退“当前壁纸”
-            if let Err(e) = init_wallpaper_on_startup(&app_handle) {
-                eprintln!("启动时初始化壁纸失败: {}", e);
-            }
-
-            // 初始化完成后：若轮播仍启用，则启动轮播线程
-            let settings = app_handle.state::<Settings>();
-            if let Ok(app_settings) = settings.get_settings() {
-                if app_settings.wallpaper_rotation_enabled {
-                    let rotator = app_handle.state::<WallpaperRotator>();
-                    if let Err(e) = rotator.start() {
-                        eprintln!("启动壁纸轮播失败: {}", e);
-                    }
+        // 初始化完成后：若轮播仍启用，则启动轮播线程
+        if let Ok(v) = daemon_client::get_ipc_client().settings_get().await {
+            if v.get("wallpaperRotationEnabled")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false)
+            {
+                let rotator = app_handle.state::<WallpaperRotator>();
+                if let Err(e) = rotator.start() {
+                    eprintln!("启动壁纸轮播失败: {}", e);
                 }
             }
-        });
+        }
     });
 }
 
@@ -3025,55 +3215,67 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            let is_cleaning_data = startup_step_cleanup_user_data_if_marked();
+            let is_cleaning_data = startup_step_cleanup_user_data_if_marked(app.app_handle());
+            #[cfg(feature = "local-backend")]
             startup_step_manage_plugin_manager(app);
+            #[cfg(feature = "local-backend")]
             startup_step_manage_storage(app)?;
             #[cfg(feature = "virtual-drive")]
             startup_step_manage_virtual_drive_service(app);
+            #[cfg(feature = "local-backend")]
             startup_step_manage_provider_runtime(app);
+            #[cfg(feature = "local-backend")]
             startup_step_manage_settings(app);
+            #[cfg(feature = "local-backend")]
             startup_step_warm_provider_cache(app.app_handle());
             #[cfg(feature = "virtual-drive")]
             startup_step_auto_mount_album_drive(app.app_handle());
-            startup_step_manage_dedupe_manager(app);
+            #[cfg(feature = "local-backend")]
+            {
+                // 本地 dedupe manager 已被 daemon-side DedupeService 替代
+            }
             startup_step_restore_main_window_state(app.app_handle(), is_cleaning_data);
-            startup_step_manage_download_queue(app);
-            startup_step_mark_pending_tasks_as_failed(app.app_handle());
-            startup_step_manage_task_scheduler(app);
             startup_step_manage_wallpaper_components(app);
+
+            // 启动事件监听器（从 daemon 轮询事件并转发到前端）
+            let app_handle_for_events = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                event_listeners::init_event_listeners(app_handle_for_events).await;
+            });
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // 任务相关命令
-            add_task,
-            start_task,
-            update_task,
-            get_task,
+            // ========== Daemon IPC 命令（需要 daemon 运行）==========
+            check_daemon_status,
+            get_images,
+            get_images_paginated,
+            get_albums,
+            add_album,
+            delete_album,
             get_all_tasks,
-            confirm_task_rhai_dump,
+            get_task,
+            add_task,
+            update_task,
             delete_task,
+            // ========== 仍保留的本地命令（非 daemon 范围）==========
+            confirm_task_rhai_dump,
             clear_finished_tasks,
             get_task_images,
             get_task_images_paginated,
             get_task_image_ids,
             get_task_failed_images,
-            retry_task_failed_image,
+            // retry_task_failed_image（本地下载队列）已迁移到 daemon
             // 原有命令
             get_plugins,
             refresh_installed_plugins_cache,
             refresh_installed_plugin_cache,
             get_build_mode,
             delete_plugin,
-            crawl_images_command,
-            get_images,
-            get_images_paginated,
+            // crawl_images_command（本地任务调度）已迁移到 daemon
             get_images_range,
             browse_gallery_provider,
             get_image_by_id,
-            get_albums,
-            add_album,
-            delete_album,
             rename_album,
             add_images_to_album,
             remove_images_from_album,
@@ -3096,8 +3298,7 @@ fn main() {
             remove_image,
             batch_delete_images,
             batch_remove_images,
-            start_dedupe_gallery_by_hash_batched,
-            cancel_dedupe_gallery_by_hash_batched,
+            // start/cancel_dedupe_*（本地去重）已迁移到 daemon
             toggle_image_favorite,
             update_album_images_order,
             open_file_path,
@@ -3108,6 +3309,7 @@ fn main() {
             clear_current_wallpaper_image_id,
             get_image_local_path_by_id,
             get_current_wallpaper_path,
+            #[cfg(feature = "local-backend")]
             migrate_images_from_json,
             get_browser_plugins,
             get_plugin_sources,
@@ -3129,7 +3331,9 @@ fn main() {
             get_setting,
             get_favorite_album_id,
             set_auto_launch,
+            #[cfg(feature = "virtual-drive")]
             set_album_drive_enabled,
+            #[cfg(feature = "virtual-drive")]
             set_album_drive_mount_point,
             set_max_concurrent_downloads,
             set_network_retry_count,
@@ -3137,10 +3341,12 @@ fn main() {
             set_gallery_image_aspect_ratio_match_window,
             set_gallery_image_aspect_ratio,
             get_desktop_resolution,
+            start_task,
             set_auto_deduplicate,
             set_default_download_dir,
             set_wallpaper_engine_dir,
             get_wallpaper_engine_myprojects_dir,
+            #[cfg(feature = "local-backend")]
             get_default_images_dir,
             get_active_downloads,
             add_run_config,
@@ -3149,6 +3355,7 @@ fn main() {
             delete_run_config,
             cancel_task,
             copy_files_to_clipboard,
+            #[cfg(target_os = "windows")]
             set_wallpaper_rotation_enabled,
             set_wallpaper_rotation_album_id,
             start_wallpaper_rotation,
@@ -3166,12 +3373,13 @@ fn main() {
             open_plugin_editor_window,
             fix_wallpaper_zorder,
             // Wallpaper Engine 导出
+            #[cfg(target_os = "windows")]
             export_album_to_we_project,
+            #[cfg(target_os = "windows")]
             export_images_to_we_project,
             clear_user_data,
             // Debug: 生成大量测试图片数据
-            #[cfg(debug_assertions)]
-            debug_clone_images,
+            // 注意：debug_clone_images 依赖本地 storage 扩展（已迁移期移除）
         ])
         .on_window_event(|window, event| {
             use tauri::WindowEvent;
@@ -3180,28 +3388,7 @@ fn main() {
                 if window.label() == "main" {
                     // 阻止默认关闭行为
                     api.prevent_close();
-                    // 获取窗口状态
-                    let position = window.outer_position().ok();
-                    let size = window.outer_size().ok();
-                    let maximized = window.is_maximized().unwrap_or(false);
-
-                    if let (Some(pos), Some(sz)) = (position, size) {
-                        // 如果窗口是最大化的，保存最大化前的状态
-                        let window_state = WindowState {
-                            x: if maximized { None } else { Some(pos.x as f64) },
-                            y: if maximized { None } else { Some(pos.y as f64) },
-                            width: sz.width as f64,
-                            height: sz.height as f64,
-                            maximized,
-                        };
-
-                        // 保存窗口状态
-                        if let Some(settings_state) = window.app_handle().try_state::<Settings>() {
-                            if let Err(e) = settings_state.save_window_state(window_state) {
-                                eprintln!("保存窗口状态失败: {}", e);
-                            }
-                        }
-                    }
+                    // 不保存 window_state：用户要求每次居中弹出
 
                     // 隐藏主窗口（直接隐藏，不关闭）
                     if let Err(e) = window.hide() {

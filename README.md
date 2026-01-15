@@ -163,18 +163,14 @@ pnpm dev -c main              # 启动主应用（端口 1420）
 pnpm dev -c plugin-editor     # 启动插件编辑器（端口 1421）
 pnpm dev -c main --watch      # 启用插件源码监听，自动重建并触发 Tauri 重启
 pnpm dev -c main --mode local # 使用 local 模式（无商店版本，预打包全部插件）
+pnpm dev -c main --plasma     # 启用 Plasma 插件模式（在设置中显示插件模式选项）
 
 # 启动模式（无 watch，直接运行）
-pnpm start -c main            # 启动主应用（无 watch）
-pnpm start -c plugin-editor   # 启动插件编辑器（无 watch）
-pnpm start -c cli             # 运行 CLI 工具
+pnpm start -c main/plugin-editor/cli/daemon 
 
 # 构建生产版本
-pnpm build                    # 构建全部组件（main + plugin-editor + cli）
-pnpm build -c main            # 仅构建主应用
-pnpm build -c plugin-editor   # 仅构建插件编辑器
-pnpm build -c cli             # 仅构建 CLI 工具
-pnpm build --mode local       # 构建 local 模式（无商店版本，预打包全部插件）
+pnpm build                    # 构建全部组件（main + plugin-editor + cli + daemon）
+pnpm build -c main/plugin-editor/cli/daemon 构建组件
 ```
 
 说明：
@@ -183,6 +179,7 @@ pnpm build --mode local       # 构建 local 模式（无商店版本，预打�
 - `--mode`：构建模式
   - `normal`（默认）：一般版本，带商店源，仅打包本地插件到 resources
   - `local`：无商店版本，预打包全部插件到 resources
+- `--plasma`：启用 Plasma 插件模式（在设置中显示插件模式选项），适用于 KDE Plasma 环境
 - `dev` 和 `start` 会自动先打包插件到 `src-tauri/resources/plugins`，确保资源存在
 - 前端资源由各自的 `tauri.conf.json` 中的 `beforeDevCommand` / `beforeBuildCommand` 自动触发构建
 

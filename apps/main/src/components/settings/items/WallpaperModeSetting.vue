@@ -3,6 +3,7 @@
         class="wallpaper-mode-radio-group">
         <el-radio value="native">原生模式</el-radio>
         <el-radio v-if="IS_WINDOWS" value="window">窗口模式</el-radio>
+        <el-radio v-else-if="IS_PLASMA" value="plasma-plugin">Plasma 插件模式</el-radio>
     </el-radio-group>
 </template>
 
@@ -13,7 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
-import { IS_WINDOWS } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_PLASMA } from "@kabegame/core/env";
 
 const settingsStore = useSettingsStore();
 const uiStore = useUiStore();

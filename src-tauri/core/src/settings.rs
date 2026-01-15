@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::AppHandle;
+// Settings 不再依赖 Tauri AppHandle
 
 fn atomic_replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -282,7 +282,7 @@ impl Settings {
         Ok((style, transition))
     }
 
-    pub fn new(_app: AppHandle) -> Self {
+    pub fn new() -> Self {
         Self
     }
 

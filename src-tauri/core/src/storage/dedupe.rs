@@ -1,6 +1,9 @@
+#![cfg(feature = "dedupe")]
+
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use crate::storage::{Storage, XorShift64, FAVORITE_ALBUM_ID};
+#[cfg(feature = "tauri-adapter")]
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,6 +227,7 @@ impl Storage {
         })
     }
 
+    #[cfg(feature = "tauri-adapter")]
     pub fn debug_clone_images(
         &self,
         app: AppHandle,

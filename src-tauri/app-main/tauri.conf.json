@@ -15,7 +15,7 @@
         "fullscreen": false,
         "resizable": true,
         "title": "Kabegame",
-        "transparent": true,
+        "transparent": false,
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -34,7 +34,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["../icons/icon.icns", "../icons/icon.ico"],
+    "icon": ["../icons/icon.png", "../icons/icon.ico"],
     "resources": ["resources/plugins", "resources/bin"],
     "windows": {
       "nsis": {

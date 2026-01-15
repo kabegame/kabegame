@@ -6,7 +6,7 @@ description = "Kabegame 共享后端核心（crawler/plugin/storage 等）"
 build = "build.rs"
 
 [dependencies]
-tauri = { workspace = true }
+tauri = { workspace = true, optional = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -51,8 +51,19 @@ winapi = { version = "0.3.9", features = ["ntstatus", "winnt", "winbase"], optio
 
 
 [features]
-custom-protocol = ["tauri/custom-protocol"]
-virtual-drive = ["dep:dokan", "dep:widestring", "dep:winapi", "dep:memmap2"]
+default = []
+# 去重功能（目前依赖 GUI 事件），默认关闭
+dedupe = []
+# 启用该 feature 才会拉起 tauri 依赖（使 core 可在纯 daemon 环境编译）。
+tauri = ["dep:tauri"]
+# （可选）仅当需要在“非 IPC 的前端直连”场景复用 Tauri 的 state/emit 时启用。
+tauri-adapter = ["tauri"]
+# 依赖 tauri 的 custom-protocol，必须同时启用 tauri feature
+custom-protocol = ["tauri", "tauri/custom-protocol"]
+# virtual-drive 当前使用了 tauri::AppHandle 做事件/状态桥接，因此也必须启用 tauri feature
+virtual-drive = []
+# Windows 下 Dokan 实现（需要 tauri + dokan 相关依赖）
+virtual-drive-windows = ["virtual-drive", "tauri", "dep:dokan", "dep:widestring", "dep:winapi", "dep:memmap2"]
 
 [profile.release]
 lto = "thin"

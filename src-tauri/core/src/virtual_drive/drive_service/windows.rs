@@ -94,7 +94,7 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
 
         let mount_point_for_thread = mount_point.clone();
         let app_for_thread = app.clone();
-        std::thread::spawn(move || {
+        tokio::spawn(async move {
             dokan_init_once();
 
             let root = Arc::new(VirtualDriveRootProvider);

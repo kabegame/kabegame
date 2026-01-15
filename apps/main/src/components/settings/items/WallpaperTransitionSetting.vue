@@ -31,7 +31,7 @@ const options = computed<Opt[]>(() => {
       // windows 暂时没有实现淡入淡出
       // { label: "淡入淡出", value: "fade" },
     ];
-  } else if (mode.value === "window" && IS_WINDOWS) {
+  } else if ((mode.value === "window" && IS_WINDOWS) || mode.value === "plasma-plugin") {
     return [
       { label: "无过渡", value: "none" },
       { label: "淡入淡出", value: "fade" },

@@ -1,10 +1,10 @@
 {
-  "watch": ["crawler-plugins", "data/plugins-directory"],
+  "watch": ["src-crawler-plugins", "data/plugins-directory"],
   "ext": "json,rhai,md,txt,jpeg,jpg,png,gif,webp,ico",
   "ignore": [
     "node_modules",
-    "crawler-plugins/packed",
-    "crawler-plugins/node_modules",
+    "src-crawler-plugins/packed",
+    "src-crawler-plugins/node_modules",
     "*.kgpg",
     "**/node_modules/**"
   ],
