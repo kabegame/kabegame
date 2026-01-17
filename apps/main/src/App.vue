@@ -1,19 +1,32 @@
 <template>
-  <!-- 壁纸窗口：通过 index.html?wallpaper=1 启动，只渲染壁纸层，不渲染侧边栏/路由页面 -->
-  <WallpaperLayer v-if="isWallpaperWindow" />
-
   <!-- 主窗口 -->
-  <el-container v-else class="app-container">
-    <!-- 全局文件拖拽提示层 -->
-    <FileDropOverlay ref="fileDropOverlayRef" />
-    <!-- 文件拖拽导入确认弹窗（封装 ElMessageBox.confirm） -->
-    <ImportConfirmDialog ref="importConfirmDialogRef" />
-    <!-- 全局唯一的快捷设置抽屉（避免多页面实例冲突） -->
-    <QuickSettingsDrawer />
-    <!-- 全局唯一的帮助抽屉（按页面展示帮助内容） -->
-    <HelpDrawer />
-    <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
-    <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
+  <el-container class="app-container">
+    <!-- Daemon 启动错误页面 -->
+    <DaemonStartupError
+      v-if="daemonError"
+      :error="daemonError.error"
+      :daemon-path="daemonError.daemon_path"
+    />
+    <!-- Daemon 启动中 - 显示加载态 -->
+    <div v-else-if="!daemonReady" class="daemon-loading">
+      <div class="loading-content">
+        <img src="/icon.png" alt="Logo" class="loading-logo" />
+        <h2>正在启动后台服务…</h2>
+        <div class="loading-spinner"></div>
+      </div>
+    </div>
+    <!-- Daemon 已就绪 - 显示主内容 -->
+    <template v-else>
+      <!-- 全局文件拖拽提示层 -->
+      <FileDropOverlay ref="fileDropOverlayRef" />
+      <!-- 文件拖拽导入确认弹窗（封装 ElMessageBox.confirm） -->
+      <ImportConfirmDialog ref="importConfirmDialogRef" />
+      <!-- 全局唯一的快捷设置抽屉（避免多页面实例冲突） -->
+      <QuickSettingsDrawer />
+      <!-- 全局唯一的帮助抽屉（按页面展示帮助内容） -->
+      <HelpDrawer />
+      <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
+      <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
     <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '200px'">
       <div class="sidebar-header">
         <img src="/icon.png" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
@@ -59,433 +72,63 @@
         </keep-alive>
       </router-view>
     </el-main>
+    </template>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from "vue";
-import { useRoute } from "vue-router";
+import { ref, onMounted } from "vue";
 import { Picture, Grid, Setting, Collection, QuestionFilled } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
-import { invoke } from "@tauri-apps/api/core";
-import WallpaperLayer from "./components/WallpaperLayer.vue";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import HelpDrawer from "./components/help/HelpDrawer.vue";
 import TaskDrawer from "./components/TaskDrawer.vue";
 import { useTaskDrawerStore } from "./stores/taskDrawer";
-import { useCrawlerStore } from "./stores/crawler";
-import { useAlbumStore } from "./stores/albums";
-import { usePluginStore } from "@/stores/plugins";
 import { storeToRefs } from "pinia";
 import FileDropOverlay from "./components/FileDropOverlay.vue";
-import { stat } from "@tauri-apps/plugin-fs";
 import ImportConfirmDialog from "./components/import/ImportConfirmDialog.vue";
-import { watch } from "vue";
+import { useActiveRoute } from "./composables/useActiveRoute";
+import { useDaemonStatus } from "./composables/useDaemonStatus";
+import { useWindowEvents } from "./composables/useWindowEvents";
+import { useFileDrop } from "./composables/useFileDrop";
+import { useSidebar } from "./composables/useSidebar";
+import DaemonStartupError from "@kabegame/core/components/common/DaemonStartupError.vue";
 
-const route = useRoute();
-// 根据当前路由路径计算应该高亮的菜单项
-// 需要匹配基础路径，忽略分页等参数
-const activeRoute = computed(() => {
-  const path = route.path;
 
-  // 画廊：匹配 /gallery 开头的所有路径（包括分页）
-  if (path.startsWith("/gallery")) {
-    return "/gallery";
-  }
-
-  // 画册：匹配 /albums 开头的所有路径（包括详情和分页）
-  if (path.startsWith("/albums")) {
-    return "/albums";
-  }
-
-  // 收集源：匹配 /plugin-browser 和 /plugin-detail 开头的路径
-  if (path.startsWith("/plugin-browser") || path.startsWith("/plugin-detail")) {
-    return "/plugin-browser";
-  }
-
-  // 设置：精确匹配
-  if (path === "/settings") {
-    return "/settings";
-  }
-
-  // 帮助：匹配 /help 开头的所有路径（包括 /help/tips/:tipId）
-  if (path.startsWith("/help")) {
-    return "/help";
-  }
-
-  // 默认返回当前路径（用于其他未匹配的路由）
-  return path;
-});
+// 路由高亮
+const { activeRoute } = useActiveRoute();
 
 // 任务抽屉 store
 const taskDrawerStore = useTaskDrawerStore();
 const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskDrawerStore);
 
-// 爬虫 store
-const crawlerStore = useCrawlerStore();
-const albumStore = useAlbumStore();
-const pluginStore = usePluginStore();
-
 // 文件拖拽提示层引用
-const fileDropOverlayRef = ref<InstanceType<typeof FileDropOverlay> | null>(null);
-const importConfirmDialogRef = ref<InstanceType<typeof ImportConfirmDialog> | null>(null);
+const fileDropOverlayRef = ref<any>(null);
+const importConfirmDialogRef = ref<any>(null);
 
-// 支持的图片格式
-const SUPPORTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'];
-const SUPPORTED_ZIP_EXTENSIONS = ['zip'];
-const SUPPORTED_KGPG_EXTENSIONS = ['kgpg'];
+// Daemon 状态管理
+const { init: initDaemonStatus, daemonError, daemonReady } = useDaemonStatus();
 
-// 让出 UI：避免在一次性批量导入/创建任务时长时间占用主线程导致“界面卡死”
-const yieldToUi = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+// 窗口事件监听
+const { init: initWindowEvents } = useWindowEvents();
 
-// 从文件路径提取扩展名（小写，不含点号）
-const getFileExtension = (filePath: string): string => {
-  const lastDot = filePath.lastIndexOf('.');
-  if (lastDot >= 0 && lastDot < filePath.length - 1) {
-    return filePath.substring(lastDot + 1).toLowerCase();
-  }
-  return '';
-};
+// 文件拖拽
+const { init: initFileDrop } = useFileDrop(fileDropOverlayRef, importConfirmDialogRef);
 
-// 检查文件是否为支持的图片格式
-const isSupportedImageFile = (filePath: string): boolean => {
-  const ext = getFileExtension(filePath);
-  return SUPPORTED_IMAGE_EXTENSIONS.includes(ext);
-};
+// 侧边栏
+const { isCollapsed, toggleCollapse } = useSidebar();
 
-// 检查文件是否为 zip（压缩包导入：后端会解压到临时目录再递归导入图片）
-const isZipFile = (filePath: string): boolean => {
-  const ext = getFileExtension(filePath);
-  return SUPPORTED_ZIP_EXTENSIONS.includes(ext);
-};
-
-// 检查文件是否为 kgpg 插件包
-const isKgpgFile = (filePath: string): boolean => {
-  const ext = getFileExtension(filePath);
-  return SUPPORTED_KGPG_EXTENSIONS.includes(ext);
-};
-
-// 辅助函数：从文件路径提取目录路径
-const getDirectoryFromPath = (filePath: string): string => {
-  const lastSlash = Math.max(filePath.lastIndexOf('\\'), filePath.lastIndexOf('/'));
-  if (lastSlash >= 0) {
-    return filePath.substring(0, lastSlash);
-  }
-  return '';
-};
-
-// 关键：同步判断当前窗口 label，确保壁纸窗口首次渲染就进入 WallpaperLayer
-const isWallpaperWindow = ref(false);
-try {
-  // wallpaper / wallpaper-debug 都渲染壁纸层（便于调试）
-  isWallpaperWindow.value = getCurrentWebviewWindow().label.startsWith("wallpaper");
-} catch {
-  // 非 Tauri 环境（浏览器打开）会走这里
-  isWallpaperWindow.value = false;
-}
-
-let fileDropUnlisten: (() => void) | null = null;
-let minimizeUnlisten: (() => void) | null = null;
 
 onMounted(async () => {
   // 初始化 settings store
   const settingsStore = useSettingsStore();
   await settingsStore.init();
 
-  if (!isWallpaperWindow.value) {
-    // 监听窗口关闭事件 - 隐藏而不是退出
-    try {
-      const currentWindow = getCurrentWebviewWindow();
-      await currentWindow.onCloseRequested(async (event) => {
-        // 阻止默认关闭行为
-        event.preventDefault();
-        // 调用后端命令隐藏窗口
-        try {
-          await invoke("hide_main_window");
-        } catch (error) {
-          console.error("隐藏窗口失败:", error);
-        }
-      });
-    } catch (error) {
-      console.error("注册窗口关闭事件监听失败:", error);
-    }
+  // 初始化各个 composables
+  await initDaemonStatus();
+  await initWindowEvents();
+  await initFileDrop();
 
-    // 监听窗口最小化事件 - 修复壁纸窗口 Z-order（防止覆盖桌面图标）
-    try {
-      const currentWindow = getCurrentWebviewWindow();
-      minimizeUnlisten = await currentWindow.listen('tauri://window-minimized', async () => {
-        // 窗口最小化时，修复壁纸窗口 Z-order
-        try {
-          await invoke("fix_wallpaper_zorder");
-        } catch (error) {
-          // 忽略错误（非 Windows 或壁纸窗口不存在时）
-        }
-      });
-    } catch (error) {
-      console.error("注册窗口最小化事件监听失败:", error);
-    }
-
-    // 注册全局文件拖拽事件监听（使用 onDragDropEvent，根据 Tauri v2 文档）
-    try {
-      const currentWindow = getCurrentWebviewWindow();
-      fileDropUnlisten = await currentWindow.onDragDropEvent(async (event) => {
-        if (event.payload.type === 'enter') {
-          // 文件/文件夹进入窗口时，显示视觉提示
-          const paths = event.payload.paths;
-          if (paths && paths.length > 0) {
-            try {
-              const firstPath = paths[0];
-              const metadata = await stat(firstPath);
-              const text = metadata.isDirectory
-                ? '拖入文件夹以导入'
-                : (isKgpgFile(firstPath) ? '拖入插件包（.kgpg）以导入' : '拖入文件以导入');
-              fileDropOverlayRef.value?.show(text);
-            } catch (error) {
-              // 如果检查失败，显示通用提示
-              fileDropOverlayRef.value?.show('拖入文件或文件夹以导入');
-            }
-          }
-        } else if (event.payload.type === 'over') {
-          // 文件/文件夹在窗口上移动时，保持显示提示（over 事件只有 position，没有 paths）
-          // 这里不需要额外处理，提示已经在 enter 时显示
-        } else if (event.payload.type === 'drop') {
-          // 隐藏视觉提示
-          fileDropOverlayRef.value?.hide();
-
-          const droppedPaths = event.payload.paths;
-          if (droppedPaths && droppedPaths.length > 0) {
-            try {
-
-              // 处理所有路径，区分文件和文件夹，并过滤文件
-              interface ImportItem {
-                path: string;
-                name: string;
-                isDirectory: boolean;
-                isZip?: boolean;
-                isKgpg?: boolean;
-              }
-
-              const items: ImportItem[] = [];
-
-              for (const path of droppedPaths) {
-                try {
-                  const metadata = await stat(path);
-                  const pathParts = path.split(/[/\\]/);
-                  const name = pathParts[pathParts.length - 1] || path;
-
-                  if (metadata.isDirectory) {
-                    // 文件夹：直接添加
-                    items.push({
-                      path,
-                      name,
-                      isDirectory: true,
-                      isZip: false,
-                      isKgpg: false,
-                    });
-                  } else {
-                    // 文件：检查是否为支持的图片格式 / zip / kgpg
-                    if (isSupportedImageFile(path) || isZipFile(path) || isKgpgFile(path)) {
-                      const kgpg = isKgpgFile(path);
-                      items.push({
-                        path,
-                        // 列表里明确标注插件包（不改 ImportConfirmDialog 也能看清用途）
-                        name: kgpg ? `${name}（插件包）` : name,
-                        isDirectory: false,
-                        isZip: isZipFile(path),
-                        isKgpg: kgpg,
-                      });
-                    } else {
-                      console.log('[App] 跳过不支持的文件:', path);
-                    }
-                  }
-                } catch (error) {
-                  console.error('[App] 检查路径失败:', path, error);
-                }
-              }
-
-              if (items.length === 0) {
-                ElMessage.warning('没有找到可导入的文件或文件夹');
-                return;
-              }
-
-              const createAlbumPerSource =
-                (await importConfirmDialogRef.value?.open(items)) ?? null;
-              if (createAlbumPerSource === null) {
-                // 用户取消
-                console.log("[App] 用户取消导入");
-                return;
-              }
-
-              // 用户确认，开始导入
-              console.log('[App] 用户确认导入，开始添加任务');
-
-              const hasCrawlerImport = items.some((it) => it.isDirectory || (!it.isDirectory && !it.isKgpg));
-              // 只有存在“图片/zip/文件夹导入任务”时才打开任务抽屉；仅导入 kgpg 时避免打扰
-              if (hasCrawlerImport) {
-                try {
-                  taskDrawerStore.open();
-                } catch {
-                  // ignore
-                }
-              }
-
-              // 关键：不要在拖拽回调里长时间串行 await；放到后台任务并分批让出 UI
-              void (async () => {
-                let createdAnyAlbum = false;
-                let importedPluginCount = 0;
-                let addedCrawlerTaskCount = 0;
-                for (let i = 0; i < items.length; i++) {
-                  const item = items[i];
-                  try {
-                    // kgpg：自动尝试导入/安装到“已安装源”
-                    if (item.isKgpg) {
-                      await invoke("import_plugin_from_zip", { zipPath: item.path });
-                      importedPluginCount++;
-                      console.log('[App] 已导入插件包:', item.path);
-                      continue;
-                    }
-
-                    // 可选：为每个“文件夹/压缩包”单独创建画册，并把 outputAlbumId 传给任务
-                    let outputAlbumId: string | undefined = undefined;
-                    if (createAlbumPerSource && (item.isDirectory || item.isZip)) {
-                      try {
-                        // 批量导入时避免每个画册都 reload 一次，最后再统一 load
-                        const created = await albumStore.createAlbum(item.name, { reload: false });
-                        outputAlbumId = created.id;
-                        createdAnyAlbum = true;
-                      } catch (e: any) {
-                        console.warn("[App] 创建导入画册失败，将仅导入到画廊:", item.name, e);
-                        // 提取友好的错误信息
-                        const errorMessage = typeof e === "string"
-                          ? e
-                          : e?.message || String(e) || "创建画册失败";
-                        ElMessage.warning(`${errorMessage}，将仅导入到画廊：${item.name}`);
-                        outputAlbumId = undefined;
-                      }
-                    }
-
-                    if (item.isDirectory) {
-                      // 文件夹：使用 local-import，递归子文件夹
-                      await crawlerStore.addTask(
-                        'local-import',
-                        item.path, // outputDir 为文件夹自身
-                        {
-                          folder_path: item.path,
-                          recursive: true, // 递归子文件夹
-                        },
-                        outputAlbumId
-                      );
-                      addedCrawlerTaskCount++;
-                      console.log('[App] 已添加文件夹导入任务:', item.path);
-                    } else {
-                      // 文件：使用 local-import
-                      // - 图片：默认输出到文件所在目录（保持原行为）
-                      // - ZIP：不指定 outputDir，让后端按“默认下载目录/内置目录”决定（修复 ZIP 默认落在 ZIP 所在目录的问题）
-                      const fileDir = getDirectoryFromPath(item.path);
-                      await crawlerStore.addTask(
-                        'local-import',
-                        item.isZip ? undefined : fileDir,
-                        {
-                          file_path: item.path,
-                        },
-                        outputAlbumId
-                      );
-                      addedCrawlerTaskCount++;
-                      console.log('[App] 已添加文件导入任务:', item.path);
-                    }
-                  } catch (error) {
-                    console.error('[App] 添加任务失败:', item.path, error);
-                    ElMessage.error(item.isKgpg ? `导入插件失败: ${item.name}` : `添加任务失败: ${item.name}`);
-                  }
-
-                  // 每处理 2 个让出一次主线程，让渲染/输入有机会执行
-                  if (i % 2 === 1) {
-                    await yieldToUi();
-                  }
-                }
-
-                // 批量创建画册后，统一刷新一次（放后台，不阻塞 UI）
-                if (createdAnyAlbum) {
-                  void albumStore.loadAlbums();
-                }
-
-                // kgpg 导入后刷新“已安装源”
-                if (importedPluginCount > 0) {
-                  void pluginStore.loadPlugins();
-                }
-
-                if (addedCrawlerTaskCount > 0 && importedPluginCount > 0) {
-                  ElMessage.success(`已添加 ${addedCrawlerTaskCount} 个导入任务，已导入 ${importedPluginCount} 个源插件`);
-                } else if (addedCrawlerTaskCount > 0) {
-                  ElMessage.success(`已添加 ${addedCrawlerTaskCount} 个导入任务`);
-                } else if (importedPluginCount > 0) {
-                  ElMessage.success(`已导入 ${importedPluginCount} 个源插件`);
-                } else {
-                  ElMessage.info("没有可导入的内容");
-                }
-              })();
-            } catch (error) {
-              console.error('[App] 处理文件拖入失败:', error);
-              ElMessage.error('处理文件拖入失败: ' + (error instanceof Error ? error.message : String(error)));
-            }
-          }
-        } else if (event.payload.type === 'leave') {
-          // 文件/文件夹离开窗口时，隐藏提示
-          fileDropOverlayRef.value?.hide();
-        }
-      });
-    } catch (error) {
-      console.error('[App] 注册文件拖拽事件监听失败:', error);
-    }
-  }
-});
-
-onUnmounted(() => {
-  // 清理文件拖拽事件监听
-  if (fileDropUnlisten) {
-    fileDropUnlisten();
-    fileDropUnlisten = null;
-  }
-  // 清理最小化事件监听
-  if (minimizeUnlisten) {
-    minimizeUnlisten();
-    minimizeUnlisten = null;
-  }
-});
-
-// 侧边栏收起状态
-const isCollapsed = ref(false);
-
-const toggleCollapse = () => {
-  isCollapsed.value = !isCollapsed.value;
-};
-
-// Windows DWM 毛玻璃：通知后端把 blur region 设为侧栏宽度
-const updateSidebarDwmBlur = async () => {
-  // 仅主窗口需要；壁纸窗口不渲染侧栏
-  if (isWallpaperWindow.value) return;
-
-  // 非 Tauri 环境直接跳过
-  try {
-    await invoke("set_main_sidebar_dwm_blur", { sidebarWidth: isCollapsed.value ? 64 : 200 });
-  } catch (e) {
-    // 之前这里吞掉错误会导致“没效果也没报错”，所以至少在控制台给个提示
-    console.warn("[DWM] set_main_sidebar_dwm_blur failed:", e);
-  }
-};
-
-watch(isCollapsed, () => {
-  void updateSidebarDwmBlur();
-});
-
-onMounted(() => {
-  // 首次进入时设置一次；后续折叠/窗口 resize 再更新
-  void updateSidebarDwmBlur();
-  // WebView/窗口初始化可能有时序问题，再延迟补一次，提升稳定性
-  window.setTimeout(() => void updateSidebarDwmBlur(), 500);
-  window.addEventListener("resize", updateSidebarDwmBlur, { passive: true });
   // 预加载关键路由组件，避免首次点击时的卡顿
   // 使用 requestIdleCallback（如有）或 setTimeout 在空闲时加载
   const preloadRouteComponents = () => {
@@ -502,9 +145,6 @@ onMounted(() => {
   }
 });
 
-onUnmounted(() => {
-  window.removeEventListener("resize", updateSidebarDwmBlur);
-});
 
 </script>
 
@@ -717,7 +357,7 @@ body,
 }
 
 // 文件拖拽确认对话框样式
-:deep(.file-drop-confirm-dialog) {
+.file-drop-confirm-dialog {
   .import-confirm-content {
     max-width: 500px;
 
@@ -851,6 +491,66 @@ body,
     min-height: 160px;
     max-height: 45vh;
     overflow-y: auto;
+  }
+}
+
+// Daemon 加载态样式
+.daemon-loading {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--anime-bg-main);
+  
+  .loading-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+    
+    .loading-logo {
+      width: 80px;
+      height: 80px;
+      object-fit: contain;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    
+    h2 {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--anime-text-primary);
+      margin: 0;
+    }
+    
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid var(--anime-border);
+      border-top-color: var(--anime-primary);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(0.95);
+  }
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
   }
 }
 </style>

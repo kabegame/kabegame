@@ -39,7 +39,7 @@ async fn daemon_main() -> Result<(), String> {
     println!("Kabegame Daemon v{}", env!("CARGO_PKG_VERSION"));
     println!("Initializing...");
 
-    // 初始化所有组件（不依赖 Tauri）
+    // 初始化所有组件
     let plugin_manager = Arc::new(PluginManager::new());
     println!("  ✓ Plugin manager initialized");
 
@@ -47,6 +47,12 @@ async fn daemon_main() -> Result<(), String> {
         let s = Storage::new();
         s.init()
             .map_err(|e| format!("Failed to initialize storage: {}", e))?;
+        // 将 pending 或 running 的任务标记为失败
+        let failed_count = s.mark_pending_running_tasks_as_failed()
+            .unwrap_or(0);
+        if failed_count > 0 {
+            println!("  ✓ Marked {failed_count} pending/running task(s) as failed");
+        }
         s
     });
     println!("  ✓ Storage initialized");
@@ -119,25 +125,28 @@ async fn daemon_main() -> Result<(), String> {
     println!("IPC server listening on /tmp/kabegame-cli.sock");
     println!("Ready to accept requests.\n");
 
-    ipc::serve(move |req| {
-        let ctx = ctx.clone();
-        
-        async move {
-            // 记录请求
-            eprintln!("[REQUEST] {:?}", req);
+    ipc::serve_with_events(
+        move |req| {
+            let ctx = ctx.clone();
             
-            // 分发请求到对应的处理器
-            let resp = dispatch_request(req, ctx).await;
-            
-            // 记录响应
-            if resp.ok {
-                eprintln!("[RESPONSE] OK");
-            } else {
-                eprintln!("[RESPONSE] ERROR: {:?}", resp.message);
+            async move {
+                // 记录请求
+                eprintln!("[DEBUG] Daemon 收到请求: {:?}", req);
+                
+                // 分发请求到对应的处理器
+                let resp = dispatch_request(req, ctx).await;
+                
+                // 记录响应
+                if resp.ok {
+                    eprintln!("[DEBUG] Daemon 发送响应: OK, message={:?}", resp.message);
+                } else {
+                    eprintln!("[DEBUG] Daemon 发送响应: ERROR, message={:?}", resp.message);
+                }
+                
+                resp
             }
-            
-            resp
-        }
-    })
+        },
+        Some(broadcaster.clone() as Arc<dyn std::any::Any + Send + Sync>),
+    )
     .await
 }

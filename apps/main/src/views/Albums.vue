@@ -245,8 +245,42 @@ onMounted(async () => {
     }
   );
 
+  // 监听画册图片变化事件（来自收藏操作等）
+  const unlistenAlbumImagesChanged = await listen<{
+    albumId: string;
+    reason?: string;
+    imageIds?: string[];
+  }>("album-images-changed", async (event) => {
+    const albumId = event.payload?.albumId;
+    const reason = event.payload?.reason;
+    
+    if (!albumId) return;
+
+    // 如果是收藏画册且是添加操作，检查预览图是否需要刷新
+    if (albumId === FAVORITE_ALBUM_ID.value && reason === "add") {
+      const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID.value);
+      if (!favoriteAlbum) return;
+
+      // 检查该画册的预览图列表是否已满
+      const currentUrls = albumPreviewUrls.value[albumId];
+      const validUrls = currentUrls?.filter(url => url && url !== "") || [];
+      const isFull = validUrls.length >= 6;
+
+      // 如果预览图列表未满，刷新该画册的预览图
+      if (!isFull) {
+        // 清除该画册的预览缓存
+        clearAlbumPreviewCache(albumId);
+        // 清除 store 中的预览缓存
+        delete albumStore.albumPreviews[albumId];
+        // 重新加载预览图
+        await prefetchPreview(favoriteAlbum);
+      }
+    }
+  });
+
   // 保存监听器引用以便在卸载时移除
   (window as any).__albumsImageAddedUnlisten = unlistenImageAdded;
+  (window as any).__albumsAlbumImagesChangedUnlisten = unlistenAlbumImagesChanged;
 });
 
 // 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表和轮播设置

@@ -1,4 +1,5 @@
 use super::WallpaperManager;
+use async_trait::async_trait;
 use tauri::AppHandle;
 
 /// 原生壁纸管理器（使用系统原生 API）
@@ -11,26 +12,18 @@ impl NativeWallpaperManager {
         Self { _app: app }
     }
 
-    fn current_wallpaper_path_from_settings(&self) -> Option<String> {
-        let v = tauri::async_runtime::block_on(async {
-            crate::daemon_client::get_ipc_client().settings_get().await
-        })
-        .ok()?;
+    async fn current_wallpaper_path_from_settings(&self) -> Option<String> {
+        let v = crate::daemon_client::get_ipc_client().settings_get().await.ok()?;
         let id = v.get("currentWallpaperImageId").and_then(|x| x.as_str())?;
-        let img = tauri::async_runtime::block_on(async {
-            crate::daemon_client::get_ipc_client()
-                .storage_get_image_by_id(id.to_string())
-                .await
-        })
-        .ok()?;
+        let img = crate::daemon_client::get_ipc_client()
+            .storage_get_image_by_id(id.to_string())
+            .await
+            .ok()?;
         img.get("localPath").and_then(|x| x.as_str()).map(|s| s.to_string())
     }
 
-    fn current_wallpaper_transition_from_ipc(&self) -> Option<String> {
-        let v = tauri::async_runtime::block_on(async {
-            crate::daemon_client::get_ipc_client().settings_get().await
-        })
-        .ok()?;
+    async fn current_wallpaper_transition_from_ipc(&self) -> Option<String> {
+        let v = crate::daemon_client::get_ipc_client().settings_get().await.ok()?;
         Some(
             v.get("wallpaperRotationTransition")
                 .and_then(|x| x.as_str())
@@ -251,6 +244,7 @@ for (var i=0; i<allDesktops.length; i++) {{\n\
     }
 }
 
+#[async_trait]
 impl WallpaperManager for NativeWallpaperManager {
     // 从注册表读取当前壁纸样式
     #[cfg(target_os = "windows")]
@@ -291,18 +285,16 @@ impl WallpaperManager for NativeWallpaperManager {
         Ok("fill".to_string())
     }
 
-    fn get_transition(&self) -> Result<String, String> {
-        let v = tauri::async_runtime::block_on(async {
-            crate::daemon_client::get_ipc_client().settings_get().await
-        })
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    async fn get_transition(&self) -> Result<String, String> {
+        let v = crate::daemon_client::get_ipc_client().settings_get().await
+            .map_err(|e| format!("Daemon unavailable: {}", e))?;
         Ok(v.get("wallpaperRotationTransition")
             .and_then(|x| x.as_str())
             .unwrap_or("none")
             .to_string())
     }
 
-    fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String> {
+    async fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String> {
         use std::path::Path;
 
         println!("[DEBUG] NativeWallpaperManager::set_wallpaper_path 被调用");
@@ -333,6 +325,7 @@ impl WallpaperManager for NativeWallpaperManager {
 
             let transition = self
                 .current_wallpaper_transition_from_ipc()
+                .await
                 .unwrap_or_else(|| "none".to_string());
 
             // 参考 wallpaper_rotator.rs 的实现：使用模拟方式实现淡入淡出
@@ -467,12 +460,10 @@ impl WallpaperManager for NativeWallpaperManager {
             {
                 let _ = immediate;
                 // style 从 daemon 读取（与前端保持一致）
-                let style = tauri::async_runtime::block_on(async {
-                    crate::daemon_client::get_ipc_client().settings_get().await
-                })
-                .ok()
-                .and_then(|v| v.get("wallpaperRotationStyle").and_then(|x| x.as_str()).map(|s| s.to_string()))
-                .unwrap_or_else(|| "fill".to_string());
+                let style = crate::daemon_client::get_ipc_client().settings_get().await
+                    .ok()
+                    .and_then(|v| v.get("wallpaperRotationStyle").and_then(|x| x.as_str()).map(|s| s.to_string()))
+                    .unwrap_or_else(|| "fill".to_string());
                 return self.set_wallpaper_plasma(file_path, &style);
             }
 
@@ -485,7 +476,7 @@ impl WallpaperManager for NativeWallpaperManager {
     }
 
     #[cfg(target_os = "windows")]
-    fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
+    async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
         use winreg::enums::*;
         use winreg::RegKey;
 
@@ -540,9 +531,9 @@ impl WallpaperManager for NativeWallpaperManager {
 
             // 仅刷新 WM_SETTINGCHANGE 在某些系统上仍可能不触发壁纸重新布局，
             // 这里强制"重载一次当前壁纸路径"，确保新 style 立刻反映到桌面。
-            if let Some(path) = self.current_wallpaper_path_from_settings() {
+            if let Some(path) = self.current_wallpaper_path_from_settings().await {
                 if std::path::Path::new(&path).exists() {
-                    let _ = self.set_wallpaper_path(&path, true);
+                    let _ = self.set_wallpaper_path(&path, true).await;
                 }
             }
         }
@@ -555,7 +546,7 @@ impl WallpaperManager for NativeWallpaperManager {
     }
 
     #[cfg(not(target_os = "windows"))]
-    fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
+    async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
         // 非 Windows 平台：
         // - 默认 no-op（由 WindowWallpaperManager/KDE 插件等负责）
         // - Plasma 原生壁纸（--plasma 编译期开关）下：通过 qdbus 写 FillMode，并尽量对当前壁纸立即生效
@@ -563,7 +554,7 @@ impl WallpaperManager for NativeWallpaperManager {
         #[cfg(all(target_os = "linux", desktop = "plasma"))]
         {
             if immediate {
-                if let Some(path) = self.current_wallpaper_path_from_settings() {
+                if let Some(path) = self.current_wallpaper_path_from_settings().await {
                     if std::path::Path::new(&path).exists() {
                         let _ = self.set_wallpaper_plasma(&path, style);
                     }
@@ -577,7 +568,7 @@ impl WallpaperManager for NativeWallpaperManager {
     }
 
     #[cfg(target_os = "windows")]
-    fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String> {
+    async fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String> {
         use std::thread;
         use std::time::Duration;
 
@@ -603,7 +594,7 @@ impl WallpaperManager for NativeWallpaperManager {
             }
 
             // 从全局设置读取当前壁纸路径（由应用维护）
-            let Some(current_wallpaper) = self.current_wallpaper_path_from_settings() else {
+            let Some(current_wallpaper) = self.current_wallpaper_path_from_settings().await else {
                 return Ok(());
             };
 
@@ -616,7 +607,7 @@ impl WallpaperManager for NativeWallpaperManager {
 
             // 重新设置壁纸路径，immediate = true 会立即生效并刷新桌面
             // 这样可以让用户看到过渡效果
-            self.set_wallpaper_path(&current_wallpaper, true)?;
+            self.set_wallpaper_path(&current_wallpaper, true).await?;
 
             println!(
                 "[DEBUG] 壁纸过渡效果设置完成，transition={}, immediate={}",
@@ -634,13 +625,11 @@ impl WallpaperManager for NativeWallpaperManager {
     }
 
     #[cfg(not(target_os = "windows"))]
-    fn set_transition(&self, transition: &str, _immediate: bool) -> Result<(), String> {
+    async fn set_transition(&self, transition: &str, _immediate: bool) -> Result<(), String> {
         // 非 Windows 平台：仅保存设置，不做系统级预览
-        let _ = tauri::async_runtime::block_on(async {
-            crate::daemon_client::get_ipc_client()
-                .settings_set_wallpaper_rotation_transition(transition.to_string())
-                .await
-        });
+        crate::daemon_client::get_ipc_client()
+            .settings_set_wallpaper_rotation_transition(transition.to_string())
+            .await?;
         Ok(())
     }
 

@@ -9,8 +9,8 @@ const appRoot = __dirname;
 // 判断是否为 Windows 平台（窗口模式仅在 Windows 可用）
 const isWindows = process.env.TAURI_ENV_PLATFORM === "windows";
 
-// 判断是否为 Plasma 构建模式（启用 Plasma 插件模式选项）
-const isPlasma = process.env.VITE_IS_PLASMA === "1";
+// 判断桌面环境（从 VITE_DESKTOP 环境变量读取）
+const desktop = process.env.VITE_DESKTOP || "";
 
 // console.log(process.env);
 
@@ -100,7 +100,7 @@ export default defineConfig({
   define: {
     __DEV__: process.env.NODE_ENV === "development",
     __WINDOWS__: isWindows,
-    __PLASMA__: isPlasma,
+    __DESKTOP__: JSON.stringify(desktop),
   },
 
   // 使用 apps/main/public 作为 public 目录（main app 专用）

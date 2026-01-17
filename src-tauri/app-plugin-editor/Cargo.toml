@@ -4,7 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-kabegame-core = { workspace = true, default-features = false }
+kabegame-core = { workspace = true, default-features = false, features = ["tauri"] }
 tauri = { workspace = true, features = ["protocol-asset"] }
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-shell = "=2.3.3"
@@ -15,6 +15,7 @@ image = { workspace = true }
 zip = { workspace = true }
 rhai = { workspace = true }
 base64 = { workspace = true }
+tokio = { workspace = true }
 
 [build-dependencies]
 tauri-build = { workspace = true }

@@ -185,9 +185,9 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         "next_wallpaper" => {
             // 后台切换下一张壁纸，避免阻塞托盘事件线程
             let app_handle = app.clone();
-            std::thread::spawn(move || {
+            tauri::async_runtime::spawn(async move {
                 let rotator = app_handle.state::<crate::wallpaper::WallpaperRotator>();
-                if let Err(e) = rotator.rotate() {
+                if let Err(e) = rotator.rotate().await {
                     eprintln!("托盘切换下一张壁纸失败: {}", e);
                 }
             });

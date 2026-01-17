@@ -7,39 +7,15 @@ use std::sync::Arc;
 /// 处理所有 Events 相关的 IPC 请求
 pub async fn handle_events_request(
     req: &CliIpcRequest,
-    broadcaster: Arc<EventBroadcaster>,
+    _broadcaster: Arc<EventBroadcaster>,
 ) -> Option<CliIpcResponse> {
     match req {
-        CliIpcRequest::GetPendingEvents { since } => {
-            Some(get_pending_events(broadcaster, *since).await)
-        }
-        
         CliIpcRequest::SubscribeEvents => {
-            Some(subscribe_events().await)
-        }
-        
-        CliIpcRequest::UnsubscribeEvents => {
-            Some(unsubscribe_events().await)
+            // 长连接事件订阅：服务器会在连接上持续推送事件
+            // 返回成功后，连接保持打开，服务器会推送事件（每行一个 JSON）
+            Some(CliIpcResponse::ok("subscribed (streaming mode)"))
         }
         
         _ => None,
     }
-}
-
-async fn get_pending_events(
-    broadcaster: Arc<EventBroadcaster>,
-    since: Option<u64>,
-) -> CliIpcResponse {
-    let events = broadcaster.get_events_since(since).await;
-    CliIpcResponse::ok_with_events("ok", events)
-}
-
-async fn subscribe_events() -> CliIpcResponse {
-    // TODO: 实现订阅逻辑（WebSocket 或长轮询）
-    CliIpcResponse::ok("subscribed (polling mode)")
-}
-
-async fn unsubscribe_events() -> CliIpcResponse {
-    // TODO: 实现取消订阅逻辑
-    CliIpcResponse::ok("unsubscribed")
 }

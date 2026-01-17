@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Kabegame
+Name[en]=Kabegame
+Comment=二次元壁纸管理器
+Comment[en]=Anime Wallpaper Manager
+Exec=kabegame
+Icon=kabegame
+Terminal=false
+Categories=Graphics;Viewer;Utility;
+StartupNotify=true
+Keywords=wallpaper;anime;image;gallery;

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Kabegame 插件导入
+Name[en]=Kabegame Plugin Importer
+Comment=导入 Kabegame 插件包 (.kgpg)
+Comment[en]=Import Kabegame Plugin Package (.kgpg)
+MimeType=application/x-kabegame-kgpg
+Exec=kabegame-cli plugin import %f
+Icon=kabegame
+Terminal=false
+NoDisplay=true
+StartupNotify=false

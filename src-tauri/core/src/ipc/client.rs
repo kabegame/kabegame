@@ -17,20 +17,25 @@
 //! let settings = client.settings_get().await?;
 //! ```
 
-use super::ipc::{request, CliIpcRequest, CliIpcResponse};
+use super::connection::PersistentConnection;
+use super::ipc::{CliIpcRequest, CliIpcResponse};
 
-/// IPC 客户端
-#[derive(Debug, Clone)]
-pub struct IpcClient;
+/// IPC 客户端（基于持久连接）
+#[derive(Clone)]
+pub struct IpcClient {
+    connection: PersistentConnection,
+}
 
 impl IpcClient {
     pub fn new() -> Self {
-        Self
+        Self {
+            connection: PersistentConnection::new(),
+        }
     }
 
-    /// 内部辅助函数：发送请求并返回 data 字段（客户端仅依赖 ipc，不暴露 core 业务类型）
+    /// 内部辅助函数：发送请求并返回 data 字段
     async fn request_data(&self, req: CliIpcRequest) -> Result<serde_json::Value, String> {
-        let resp = request(req).await?;
+        let resp = self.connection.request(req).await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
         }
@@ -39,7 +44,7 @@ impl IpcClient {
 
     /// 内部辅助函数：发送请求并检查是否成功
     async fn request_ok(&self, req: CliIpcRequest) -> Result<(), String> {
-        let resp = request(req).await?;
+        let resp = self.connection.request(req).await?;
         if !resp.ok {
             return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
         }
@@ -48,7 +53,7 @@ impl IpcClient {
 
     /// 内部辅助函数：发送请求并返回完整响应
     async fn request_raw(&self, req: CliIpcRequest) -> Result<CliIpcResponse, String> {
-        request(req).await
+        self.connection.request(req).await
     }
 
     // ==================== Status ====================
@@ -790,33 +795,180 @@ impl IpcClient {
 
     // ==================== Events ====================
 
-    /// 获取待处理的事件（轮询模式）
-    pub async fn get_pending_events(&self, since: Option<u64>) -> Result<Vec<serde_json::Value>, String> {
-        let resp = self
-            .request_raw(CliIpcRequest::GetPendingEvents { since })
-            .await?;
-        if !resp.ok {
-            return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
-        }
-        Ok(resp.events.unwrap_or_default())
-    }
+    /// 订阅事件并建立长连接，持续读取事件
+    /// 
+    /// 参数 `on_event` 是回调函数，每当收到一个事件时会被调用。
+    /// 函数会持续运行直到连接关闭或发生错误。
+    /// 
+    /// 事件格式：每行一个 JSON 对象（serde_json::Value）
+    pub async fn subscribe_events_stream<F, Fut>(&self, mut on_event: F) -> Result<(), String>
+    where
+        F: FnMut(serde_json::Value) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send,
+    {
+        use super::ipc::{decode_line, encode_line};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// 订阅事件（WebSocket 或长轮询）
-    pub async fn subscribe_events(&self) -> Result<(), String> {
-        let resp = self.request_raw(CliIpcRequest::SubscribeEvents).await?;
-        if !resp.ok {
-            return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
-        }
-        Ok(())
-    }
+        #[cfg(target_os = "windows")]
+        {
+            use tokio::net::windows::named_pipe::ClientOptions;
+            use super::ipc::windows_pipe_name;
 
-    /// 取消订阅事件
-    pub async fn unsubscribe_events(&self) -> Result<(), String> {
-        let resp = self.request_raw(CliIpcRequest::UnsubscribeEvents).await?;
-        if !resp.ok {
-            return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
+            let mut client = ClientOptions::new()
+                .open(windows_pipe_name())
+                .map_err(|e| format!("ipc open pipe failed: {}", e))?;
+
+            // 发送 SubscribeEvents 请求
+            let bytes = encode_line(&CliIpcRequest::SubscribeEvents)?;
+            client.write_all(&bytes).await
+                .map_err(|e| format!("ipc write failed: {}", e))?;
+            client.flush().await
+                .map_err(|e| format!("ipc flush failed: {}", e))?;
+
+            // 读取响应（确认订阅）
+            let mut line_buf = Vec::with_capacity(1024);
+            let mut tmp = [0u8; 1];
+            loop {
+                let n = client.read(&mut tmp).await
+                    .map_err(|e| format!("ipc read failed: {}", e))?;
+                if n == 0 {
+                    return Err("Connection closed before subscribe response".to_string());
+                }
+                if tmp[0] == b'\n' {
+                    break;
+                }
+                line_buf.push(tmp[0]);
+                if line_buf.len() > 256 * 1024 {
+                    return Err("ipc line too long".to_string());
+                }
+            }
+            let line = String::from_utf8_lossy(&line_buf).to_string();
+            let resp: CliIpcResponse = decode_line(&line)?;
+            if !resp.ok {
+                return Err(resp.message.unwrap_or_else(|| "Subscribe failed".to_string()));
+            }
+
+            eprintln!("[DEBUG] IpcClient::subscribe_events_stream 订阅成功，开始接收事件流");
+
+            // 持续读取事件流（每行一个 JSON 事件）
+            loop {
+                let mut line_buf = Vec::with_capacity(1024);
+                let mut tmp = [0u8; 1];
+                loop {
+                    let n = match client.read(&mut tmp).await {
+                        Ok(n) if n == 0 => {
+                            eprintln!("[DEBUG] IpcClient::subscribe_events_stream 连接关闭");
+                            return Ok(()); // 正常关闭
+                        },
+                        Ok(n) => n,
+                        Err(e) => {
+                            eprintln!("[DEBUG] IpcClient::subscribe_events_stream 读取错误: {}", e);
+                            return Err(format!("Read failed: {}", e));
+                        }
+                    };
+                    if tmp[0] == b'\n' {
+                        break;
+                    }
+                    line_buf.push(tmp[0]);
+                    if line_buf.len() > 256 * 1024 {
+                        return Err("ipc line too long".to_string());
+                    }
+                }
+                let line = String::from_utf8_lossy(&line_buf).to_string();
+                eprintln!("[DEBUG] IpcClient::subscribe_events_stream 收到一行: {}", line);
+                match serde_json::from_str::<serde_json::Value>(&line) {
+                    Ok(event) => {
+                        eprintln!("[DEBUG] IpcClient::subscribe_events_stream 解析事件成功: {:?}", event);
+                        on_event(event).await;
+                    },
+                    Err(e) => {
+                        eprintln!("[DEBUG] IpcClient::subscribe_events_stream 解析事件失败: {}, line: {}", e, line);
+                        // 继续处理下一个事件，不中断连接
+                    }
+                }
+            }
         }
-        Ok(())
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            use tokio::net::UnixStream;
+            use super::ipc::unix_socket_path;
+
+            let path = unix_socket_path();
+            let mut s = UnixStream::connect(&path)
+                .await
+                .map_err(|e| format!("ipc connect failed ({}): {}", path.display(), e))?;
+
+            // 发送 SubscribeEvents 请求
+            let bytes = encode_line(&CliIpcRequest::SubscribeEvents)?;
+            s.write_all(&bytes).await
+                .map_err(|e| format!("ipc write failed: {}", e))?;
+            s.flush().await
+                .map_err(|e| format!("ipc flush failed: {}", e))?;
+
+            // 读取响应（确认订阅）
+            let mut line_buf = Vec::with_capacity(1024);
+            let mut tmp = [0u8; 1];
+            loop {
+                let n = s.read(&mut tmp).await
+                    .map_err(|e| format!("ipc read failed: {}", e))?;
+                if n == 0 {
+                    return Err("Connection closed before subscribe response".to_string());
+                }
+                if tmp[0] == b'\n' {
+                    break;
+                }
+                line_buf.push(tmp[0]);
+                if line_buf.len() > 256 * 1024 {
+                    return Err("ipc line too long".to_string());
+                }
+            }
+            let line = String::from_utf8_lossy(&line_buf).to_string();
+            let resp: CliIpcResponse = decode_line(&line)?;
+            if !resp.ok {
+                return Err(resp.message.unwrap_or_else(|| "Subscribe failed".to_string()));
+            }
+
+            eprintln!("[DEBUG] IpcClient::subscribe_events_stream 订阅成功，开始接收事件流");
+
+            // 持续读取事件流（每行一个 JSON 事件）
+            loop {
+                let mut line_buf = Vec::with_capacity(1024);
+                let mut tmp = [0u8; 1];
+                loop {
+                    match s.read(&mut tmp).await {
+                        Ok(0) => {
+                            eprintln!("[DEBUG] IpcClient::subscribe_events_stream 连接关闭");
+                            return Ok(()); // 正常关闭
+                        },
+                        Ok(_) => {},
+                        Err(e) => {
+                            eprintln!("[DEBUG] IpcClient::subscribe_events_stream 读取错误: {}", e);
+                            return Err(format!("Read failed: {}", e));
+                        }
+                    };
+                    if tmp[0] == b'\n' {
+                        break;
+                    }
+                    line_buf.push(tmp[0]);
+                    if line_buf.len() > 256 * 1024 {
+                        return Err("ipc line too long".to_string());
+                    }
+                }
+                let line = String::from_utf8_lossy(&line_buf).to_string();
+                eprintln!("[DEBUG] IpcClient::subscribe_events_stream 收到一行: {}", line);
+                match serde_json::from_str::<serde_json::Value>(&line) {
+                    Ok(event) => {
+                        eprintln!("[DEBUG] IpcClient::subscribe_events_stream 解析事件成功: {:?}", event);
+                        on_event(event).await;
+                    },
+                    Err(e) => {
+                        eprintln!("[DEBUG] IpcClient::subscribe_events_stream 解析事件失败: {}, line: {}", e, line);
+                        // 继续处理下一个事件，不中断连接
+                    }
+                }
+            }
+        }
     }
 }
 

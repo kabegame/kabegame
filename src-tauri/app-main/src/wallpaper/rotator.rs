@@ -361,7 +361,7 @@ impl WallpaperRotator {
                             break;
                         }
                     };
-                    let manager = match controller.active_manager() {
+                    let manager = match controller.active_manager().await {
                         Ok(m) => m,
                         Err(e) => {
                             eprintln!("获取壁纸后端失败: {}", e);
@@ -376,14 +376,14 @@ impl WallpaperRotator {
                             continue;
                         }
                     };
-                    let transition = match manager.get_transition() {
+                    let transition = match manager.get_transition().await {
                         Ok(t) => t,
                         Err(e) => {
                             eprintln!("获取壁纸过渡效果失败: {}", e);
                             continue;
                         }
                     };
-                    if let Err(e) = manager.set_wallpaper(&wallpaper_path, &style, &transition) {
+                    if let Err(e) = manager.set_wallpaper(&wallpaper_path, &style, &transition).await {
                         eprintln!("设置壁纸失败: {}", e);
                         continue;
                     }
@@ -551,7 +551,7 @@ impl WallpaperRotator {
     /// - 如果轮播已启用但未运行，直接 start 一个实例
     /// - 如果轮播未启用，执行一次壁纸切换（需要画册ID）
     /// - 依赖当前设置：画册、随机/顺序、原生/窗口模式、style/transition
-    pub fn rotate(&self) -> Result<(), String> {
+    pub async fn rotate(&self) -> Result<(), String> {
         use tauri::Manager;
 
         // 检查轮播器是否正在运行
@@ -672,7 +672,7 @@ impl WallpaperRotator {
 
         // 使用壁纸管理器设置壁纸
         let controller = self.app.state::<WallpaperController>();
-        let manager = controller.active_manager()?;
+        let manager = controller.active_manager().await?;
 
         let style = settings_v
             .get("wallpaperRotationStyle")
@@ -688,7 +688,7 @@ impl WallpaperRotator {
             &wallpaper_path,
             &style,
             &transition,
-        )?;
+        ).await?;
 
         println!("壁纸已更换: {}", wallpaper_path);
 

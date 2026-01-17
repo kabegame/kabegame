@@ -8,4 +8,4 @@ declare module "*.vue" {
 
 declare const __DEV__: boolean;
 declare const __WINDOWS__: boolean;
-declare const __PLASMA__: boolean;
+declare const __DESKTOP__: string;

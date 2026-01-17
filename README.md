@@ -163,7 +163,8 @@ pnpm dev -c main              # 启动主应用（端口 1420）
 pnpm dev -c plugin-editor     # 启动插件编辑器（端口 1421）
 pnpm dev -c main --watch      # 启用插件源码监听，自动重建并触发 Tauri 重启
 pnpm dev -c main --mode local # 使用 local 模式（无商店版本，预打包全部插件）
-pnpm dev -c main --plasma     # 启用 Plasma 插件模式（在设置中显示插件模式选项）
+pnpm dev -c main --desktop plasma  # 指定桌面环境为 Plasma（在设置中显示插件模式选项）
+pnpm dev -c main --desktop gnome   # 指定桌面环境为 GNOME
 
 # 启动模式（无 watch，直接运行）
 pnpm start -c main/plugin-editor/cli/daemon 
@@ -175,11 +176,13 @@ pnpm build -c main/plugin-editor/cli/daemon 构建组件
 
 说明：
 - `-c, --component`：指定要开发/启动/构建的组件（`main` | `plugin-editor` | `cli` | `all`）
-- `--watch`：启用插件源码监听（仅 `dev` 命令），使用 nodemon 监听 `crawler-plugins/plugins/` 变更并自动重建
+- `--watch`：启用源码监听（仅 `dev` 命令），rust代码更改时tauri会重启app
 - `--mode`：构建模式
   - `normal`（默认）：一般版本，带商店源，仅打包本地插件到 resources
   - `local`：无商店版本，预打包全部插件到 resources
-- `--plasma`：启用 Plasma 插件模式（在设置中显示插件模式选项），适用于 KDE Plasma 环境
+- `--desktop <desktop>`：指定桌面环境（`plasma` | `gnome`），用于后端按桌面环境选择实现
+  - `plasma`：适用于 KDE Plasma 环境（在设置中显示 Plasma 插件模式选项）
+  - `gnome`：适用于 GNOME 环境
 - `dev` 和 `start` 会自动先打包插件到 `src-tauri/resources/plugins`，确保资源存在
 - 前端资源由各自的 `tauri.conf.json` 中的 `beforeDevCommand` / `beforeBuildCommand` 自动触发构建
 
@@ -223,15 +226,23 @@ pnpm build -c main/plugin-editor/cli/daemon 构建组件
 │   │   │   ├── crawler/  # 爬虫逻辑
 │   │   │   ├── providers/# 数据提供者（画册、任务等）
 │   │   │   ├── storage/  # 存储层
-│   │   │   └── ...       # 其他共享模块
+│   │   │   ├── ipc/      # IPC 通信（事件、客户端等）
+│   │   │   ├── runtime/  # 运行时适配器（Tauri、IPC 等）
+│   │   │   ├── gallery/  # 画廊浏览
+│   │   │   ├── virtual_drive/# 虚拟磁盘实现
+│   │   │   └── ...       # 其他共享模块（设置、路径、去重等）
 │   │   ├── build.rs
 │   │   └── Cargo.toml
 │   ├── app-main/         # 主应用（Tauri GUI）
 │   │   ├── src/
 │   │   │   ├── main.rs   # 主应用入口，包装 core 的 Tauri commands
 │   │   │   ├── tray.rs   # 系统托盘
-│   │   │   ├── wallpaper/# 壁纸相关
-│   │   │   └── virtual_drive/# 虚拟磁盘（Windows）
+│   │   │   ├── storage.rs# 存储相关命令
+│   │   │   ├── daemon_client.rs # Daemon 客户端
+│   │   │   ├── event_listeners.rs # 事件监听器
+│   │   │   ├── virtual_drive.rs # 虚拟磁盘命令
+│   │   │   ├── wallpaper/# 壁纸相关（管理器、轮播、窗口等）
+│   │   │   └── ...
 │   │   ├── resources/    # 资源文件
 │   │   │   ├── plugins/  # 打包后的插件文件（.kgpg）
 │   │   │   └── bin/      # Sidecar 二进制文件
@@ -250,11 +261,18 @@ pnpm build -c main/plugin-editor/cli/daemon 构建组件
 │   │   ├── src/
 │   │   │   ├── main.rs
 │   │   │   └── bin/
-│   │   │       └── kabegame-cli.rs
+│   │   │       └── kabegame-cliw.rs # Windows CLI 入口
+│   │   ├── tauri.conf.json
+│   │   └── Cargo.toml
+│   ├── daemon/           # Daemon 服务（后台进程）
+│   │   ├── src/
+│   │   │   ├── main.rs   # Daemon 入口
+│   │   │   ├── dedupe_service.rs # 去重服务
+│   │   │   └── handlers/ # 请求处理器（画廊、插件、设置、存储等）
 │   │   ├── tauri.conf.json
 │   │   └── Cargo.toml
 │   └── icons/            # 应用图标资源
-├── crawler-plugins/      # 插件相关（Nx 项目）
+├── src-crawler-plugins/      # 插件相关（Nx 项目）
 │   ├── plugins/          # 本地插件源码
 │   │   ├── anihonet-wallpaper/
 │   │   ├── konachan/
@@ -265,9 +283,28 @@ pnpm build -c main/plugin-editor/cli/daemon 构建组件
 │   ├── package-plugin.js # 插件打包脚本
 │   ├── project.json      # Nx 项目配置
 │   └── package.json
+├── src-plasma-wallpaper-plugin/  # KDE Plasma 壁纸插件
+│   ├── CMakeLists.txt    # CMake 构建配置
+│   ├── build.sh          # 构建脚本
+│   ├── install.sh        # 安装脚本
+│   ├── install-restart-plasma.sh # 安装并重启 Plasma
+│   ├── package.sh        # 打包脚本
+│   ├── uninstall.sh      # 卸载脚本
+│   ├── plugin/           # C++ 后端
+│   │   ├── CMakeLists.txt
+│   │   ├── wallpaperbackend.h      # 后端接口定义
+│   │   ├── wallpaperbackend.cpp    # 后端实现（文件夹扫描、文件监视、轮播定时器）
+│   │   ├── kabegamewallpaperplugin.cpp  # QML 插件注册
+│   │   └── qmldir        # QML 模块声明
+│   ├── package/          # QML 前端
+│   │   ├── metadata.json # 插件元数据
+│   │   └── contents/
+│   │       ├── config/   # 配置项定义
+│   │       └── ui/       # 用户界面（壁纸显示、配置界面）
+│   ├── README.md         # 插件文档
+│   └── TESTING.md        # 测试指南
 ├── scripts/              # 构建脚本
 │   ├── run.js            # 统一开发/构建入口
-│   ├── nx-nodemon-plugin-watch.mjs # 插件监听脚本
 │   └── git/              # Git 相关脚本
 ├── docs/                 # 文档
 │   ├── images/           # 文档图片
@@ -290,7 +327,7 @@ pnpm build -c main/plugin-editor/cli/daemon 构建组件
 
 ## 许可证
 
-MIT
+The source code is licensed under GPL v3. License is available [here](./LICENSE).
 
 ## 致谢
 

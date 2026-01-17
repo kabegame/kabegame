@@ -118,9 +118,9 @@ struct RunPluginArgs {
     #[arg(long = "task-id")]
     task_id: Option<String>,
 
-    /// 输出画册 ID（可选）
-    #[arg(long = "output-album-id")]
-    output_album_id: Option<String>,
+    /// 输出画册名称（可选）
+    #[arg(long = "output-album")]
+    output_album: Option<String>,
 
     /// 传给插件的参数（必须放在 `--` 之后）
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -132,40 +132,7 @@ fn main() {
 
     let res = match cli.command {
         Commands::Plugin(cmd) => match cmd {
-            PluginCommands::Run(args) => {
-                // 仅通过 daemon IPC 执行（CLI 不再本地直跑，避免多进程争抢数据目录/DB）
-                let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
-                    eprintln!("创建 Tokio Runtime 失败: {e}");
-                    std::process::exit(1);
-                });
-                let req = kabegame_core::ipc::ipc::CliIpcRequest::PluginRun {
-                    plugin: args.plugin,
-                    output_dir: args
-                        .output_dir
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().to_string()),
-                    task_id: args.task_id,
-                    output_album_id: args.output_album_id,
-                    plugin_args: args.plugin_args,
-                };
-                match rt.block_on(kabegame_core::ipc::ipc::request(req)) {
-                    Ok(resp) if resp.ok => {
-                        if let Some(msg) = resp.message {
-                            println!("{msg}");
-                        } else {
-                            println!("ok");
-                        }
-                        Ok(())
-                    }
-                    Ok(resp) => Err(resp
-                        .message
-                        .unwrap_or_else(|| "daemon returned error".to_string())),
-                    Err(e) => Err(format!(
-                        "无法连接 kabegame-daemon：{}\n提示：请先启动 `kabegame-daemon`",
-                        e
-                    )),
-                }
-            }
+            PluginCommands::Run(args) => run_plugin(args),
             PluginCommands::Pack(args) => pack_plugin(args),
             PluginCommands::Import(args) => import_plugin(args),
         },
@@ -183,10 +150,128 @@ fn main() {
     }
 }
 
-// NOTE: build_minimal_app / run_plugin 等“后台能力”已迁移到独立的 `kabegame-daemon` 中。
+// NOTE: build_minimal_app / run_plugin 等"后台能力"已迁移到独立的 `kabegame-daemon` 中。
+
+/// 运行插件命令
+fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
+    // 仅通过 daemon IPC 执行（CLI 不再本地直跑，避免多进程争抢数据目录/DB）
+    let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
+        eprintln!("创建 Tokio Runtime 失败: {e}");
+        std::process::exit(1);
+    });
+    
+    // 确保 daemon 已启动
+    let _daemon_path = match rt.block_on(ensure_daemon_ready_for_cli()) {
+        Ok(path) => path,
+        Err(e) => {
+            // 尝试获取 daemon 路径用于错误提示
+            let daemon_path = kabegame_core::daemon_startup::find_daemon_executable_basic()
+                .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
+            return Err(format!(
+                "{}\n请检查 {} 能否正常启动",
+                e,
+                daemon_path.display()
+            ));
+        }
+    };
+    
+    // 将画册名称转换为 ID（如果提供了名称）
+    let output_album_id = match args.output_album {
+        Some(name) => {
+            match rt.block_on(resolve_album_name_to_id(&name)) {
+                Ok(Some(id)) => Some(id),
+                Ok(None) => {
+                    return Err(format!("未找到名称为 \"{}\" 的画册", name));
+                }
+                Err(e) => {
+                    return Err(format!("查询画册失败: {}", e));
+                }
+            }
+        }
+        None => None,
+    };
+    
+    let req = kabegame_core::ipc::ipc::CliIpcRequest::PluginRun {
+        plugin: args.plugin,
+        output_dir: args
+            .output_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string()),
+        task_id: args.task_id,
+        output_album_id,
+        plugin_args: args.plugin_args,
+    };
+    match rt.block_on(kabegame_core::ipc::ipc::request(req)) {
+        Ok(resp) if resp.ok => {
+            if let Some(msg) = resp.message {
+                println!("{msg}");
+            } else {
+                println!("ok");
+            }
+            Ok(())
+        }
+        Ok(resp) => Err(resp
+            .message
+            .unwrap_or_else(|| "daemon returned error".to_string())),
+        Err(e) => Err(format!(
+            "无法连接 kabegame-daemon：{}\n提示：请先启动 `kabegame-daemon`",
+            e
+        )),
+    }
+}
+
+/// 将画册名称转换为 ID（通过 IPC 查询）
+async fn resolve_album_name_to_id(name: &str) -> Result<Option<String>, String> {
+    use kabegame_core::ipc::client::IpcClient;
+    use kabegame_core::storage::albums::Album;
+    
+    let client = IpcClient::new();
+    let albums_value = client.storage_get_albums().await?;
+    
+    // 解析画册列表
+    let albums: Vec<Album> = serde_json::from_value(albums_value)
+        .map_err(|e| format!("解析画册列表失败: {}", e))?;
+    
+    // 不区分大小写查找匹配的画册名称
+    let name_lower = name.trim().to_lowercase();
+    for album in albums {
+        if album.name.to_lowercase() == name_lower {
+            return Ok(Some(album.id));
+        }
+    }
+    
+    Ok(None)
+}
+
+/// 确保 daemon 已启动（CLI 版本，在控制台显示等待信息）
+async fn ensure_daemon_ready_for_cli() -> Result<std::path::PathBuf, String> {
+    // 先检查是否已可用
+    if kabegame_core::daemon_startup::is_daemon_available().await {
+        return kabegame_core::daemon_startup::find_daemon_executable_basic();
+    }
+    
+    // 显示等待信息
+    print!("正在启动后台服务");
+    std::io::Write::flush(&mut std::io::stdout()).ok();
+    
+    // 启动 daemon（带超时）
+    let result = kabegame_core::daemon_startup::ensure_daemon_ready_basic().await;
+    
+    match &result {
+        Ok(_) => {
+            println!("\r后台服务已就绪     ");
+        }
+        Err(_) => {
+            println!("\r核心启动失败");
+        }
+    }
+    
+    result
+}
 
 fn vd_mount(args: VdMountArgs) -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
+    let _daemon_path = rt.block_on(ensure_daemon_ready_for_cli())?;
     let req = kabegame_core::ipc::ipc::CliIpcRequest::VdMount {
         mount_point: args.mount_point,
         no_wait: args.no_wait,
@@ -202,6 +287,7 @@ fn vd_mount(args: VdMountArgs) -> Result<(), String> {
 
 fn vd_unmount(args: VdUnmountArgs) -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
+    let _daemon_path = rt.block_on(ensure_daemon_ready_for_cli())?;
     let req = kabegame_core::ipc::ipc::CliIpcRequest::VdUnmount {
         mount_point: args.mount_point,
     };
@@ -217,6 +303,7 @@ fn vd_unmount(args: VdUnmountArgs) -> Result<(), String> {
 fn vd_status(args: VdStatusArgs) -> Result<(), String> {
     let _ = args;
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
+    let _daemon_path = rt.block_on(ensure_daemon_ready_for_cli())?;
     let req = kabegame_core::ipc::ipc::CliIpcRequest::VdStatus;
     let resp = rt.block_on(kabegame_core::ipc::ipc::request(req))?;
     println!("{}", serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string()));
@@ -226,6 +313,7 @@ fn vd_status(args: VdStatusArgs) -> Result<(), String> {
 fn vd_ipc_status() -> Result<(), String> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {}", e))?;
+    let _daemon_path = rt.block_on(ensure_daemon_ready_for_cli())?;
     let resp = rt.block_on(async {
         kabegame_core::ipc::ipc::request(kabegame_core::ipc::ipc::CliIpcRequest::Status)
             .await

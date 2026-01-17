@@ -97,19 +97,27 @@ export const useCrawlerStore = defineStore("crawler", () => {
         endTime?: number;
         error?: string;
       }>("task-status", async (event) => {
+        console.log('[[task-status]]', event.payload);
         const idx = tasks.value.findIndex((t) => t.id === event.payload.taskId);
         if (idx === -1) return;
 
         const cur = tasks.value[idx];
+        const newStatus = event.payload.status as any;
+
+        // 任务结束时（完成/失败/取消），从列表中移除
+        if (newStatus === "completed" || newStatus === "failed" || newStatus === "canceled") {
+          tasks.value.splice(idx, 1);
+          return;
+        }
+
+        // 其他状态更新任务信息
         const next: CrawlTask = {
           ...cur,
-          status: event.payload.status as any,
+          status: newStatus,
           startTime: event.payload.startTime ?? cur.startTime,
           endTime: event.payload.endTime ?? cur.endTime,
           error: event.payload.error ?? cur.error,
-          // 后端标 completed 时，兜底把进度置 100
-          progress:
-            event.payload.status === "completed" ? 100 : cur.progress ?? 0,
+          progress: newStatus === "completed" ? 100 : cur.progress ?? 0,
         };
         tasks.value[idx] = next;
       });

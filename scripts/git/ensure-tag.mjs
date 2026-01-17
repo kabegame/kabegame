@@ -58,8 +58,13 @@ function toTag(version) {
 }
 
 function tagExists(tag) {
-  const res = tryExecGit(["tag", "-l", tag]);
-  return res.ok && res.out === tag;
+  // 检测是否存在以该 tag 为前缀的任何 tag（例如：v3.4.5-release 会阻止创建 v3.4.5）
+  const res = tryExecGit(["tag", "-l", `${tag}*`]);
+  if (!res.ok) return false;
+  
+  // 检查返回结果中是否有任何 tag
+  const tags = res.out.trim().split(/\n/).filter(t => t.trim());
+  return tags.length > 0;
 }
 
 function main() {

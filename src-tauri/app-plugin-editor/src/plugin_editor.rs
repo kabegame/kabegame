@@ -379,10 +379,7 @@ fn read_icon_rgb_base64_from_kgpg(
     Ok(None)
 }
 
-pub fn plugin_editor_import_kgpg(
-    plugin_manager: &PluginManager,
-    file_path: String,
-) -> Result<PluginEditorImportResult, String> {
+pub fn plugin_editor_import_kgpg(file_path: String) -> Result<PluginEditorImportResult, String> {
     let p = std::path::PathBuf::from(&file_path);
     if !p.is_file() {
         return Err(format!("插件文件不存在: {}", file_path));
@@ -401,6 +398,8 @@ pub fn plugin_editor_import_kgpg(
         plugin_id = id;
     }
 
+    // 创建临时 PluginManager 实例来读取文件（这些方法不依赖状态）
+    let plugin_manager = PluginManager::new();
     let manifest = plugin_manager.read_plugin_manifest(&p)?;
     let config = plugin_manager
         .read_plugin_config_public(&p)
@@ -414,7 +413,7 @@ pub fn plugin_editor_import_kgpg(
     let script = plugin_manager
         .read_plugin_script(&p)?
         .unwrap_or_else(|| String::from("// 在这里编写 crawl.rhai\n"));
-    let icon_rgb_base64 = read_icon_rgb_base64_from_kgpg(plugin_manager, &p)?;
+    let icon_rgb_base64 = read_icon_rgb_base64_from_kgpg(&plugin_manager, &p)?;
 
     Ok(PluginEditorImportResult {
         plugin_id,
@@ -455,14 +454,12 @@ pub fn plugin_editor_autosave_save(
     Ok(path.to_string_lossy().to_string())
 }
 
-pub fn plugin_editor_autosave_load(
-    plugin_manager: &PluginManager,
-) -> Result<Option<PluginEditorImportResult>, String> {
+pub fn plugin_editor_autosave_load() -> Result<Option<PluginEditorImportResult>, String> {
     let path = autosave_path();
     if !path.is_file() {
         return Ok(None);
     }
-    let res = plugin_editor_import_kgpg(plugin_manager, path.to_string_lossy().to_string())?;
+    let res = plugin_editor_import_kgpg(path.to_string_lossy().to_string())?;
     Ok(Some(res))
 }
 

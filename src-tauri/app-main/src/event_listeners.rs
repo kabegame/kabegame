@@ -1,6 +1,7 @@
-//! 前端事件监听集成示例
+//! 事件监听器模块（重新导出 core 中的实现）
 //!
-//! 展示如何在 Tauri 前端中使用统一的事件监听 API
+//! 为了保持向后兼容，这里重新导出 core 中的实现。
+//! 新的应用应该直接使用 `kabegame_core::ipc::init_event_listeners`。
 
 use kabegame_core::ipc::{on_task_log, on_download_state, on_task_status, start_listening};
 use kabegame_core::ipc::events::{get_global_listener, DaemonEvent};
@@ -58,7 +59,7 @@ pub async fn init_event_listeners(app: AppHandle) {
     }).await;
 
     // 启动事件监听（每 500ms 轮询一次）
-    if let Err(e) = start_listening(500).await {
+    if let Err(e) = start_listening().await {
         eprintln!("Failed to start event listener: {}", e);
     }
 }
@@ -68,7 +69,7 @@ pub async fn init_event_listeners(app: AppHandle) {
 /// Tauri 命令：手动触发事件监听
 #[tauri::command]
 pub async fn start_event_listener() -> Result<(), String> {
-    start_listening(500).await
+    start_listening().await
 }
 
 /// Tauri 命令：停止事件监听

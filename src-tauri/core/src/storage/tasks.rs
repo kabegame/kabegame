@@ -177,10 +177,14 @@ impl Storage {
 
     pub fn mark_pending_running_tasks_as_failed(&self) -> Result<usize, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
         let count = conn
             .execute(
-                "UPDATE tasks SET status = 'failed', error = '应用异常退出，任务已中断' WHERE status IN ('pending', 'running')",
-                [],
+                "UPDATE tasks SET status = 'failed', error = '任务已失效', end_time = ?1 WHERE status IN ('pending', 'running')",
+                params![now],
             )
             .map_err(|e| format!("Failed to mark tasks as failed: {}", e))?;
         Ok(count)

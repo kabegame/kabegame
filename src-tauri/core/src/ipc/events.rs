@@ -157,10 +157,10 @@ impl EventListener {
         callbacks.push(Arc::new(callback));
     }
 
-    /// 启动事件监听（轮询模式）
+    /// 启动事件监听（长连接模式）
     ///
-    /// 定期向 daemon 请求事件，适用于 request/response 模式的 IPC
-    pub async fn start_polling(&self, interval_ms: u64) -> Result<(), String> {
+    /// 建立长连接并持续接收服务器推送的事件，适用于全双工 IPC
+    pub async fn start(&self) -> Result<(), String> {
         let (tx, mut rx) = mpsc::channel::<()>(1);
         *self.stop_signal.write().await = Some(tx);
 
@@ -170,58 +170,41 @@ impl EventListener {
         let task_status_callbacks = self.task_status_callbacks.clone();
 
         tokio::spawn(async move {
-            let interval = tokio::time::Duration::from_millis(interval_ms);
-            let mut ticker = tokio::time::interval(interval);
             let client = IpcClient::new();
-            // since 表示“下一次请求的起始事件 id”（服务端语义：>= since）
-            let mut since: Option<u64> = None;
-
-            loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        let events = match client.get_pending_events(since).await {
-                            Ok(v) => v,
-                            Err(e) => {
-                                // 连接失败/daemon 不可用：不阻塞 loop，下一次继续尝试
-                                eprintln!("[ipc-events] get_pending_events failed: {e}");
-                                continue;
-                            }
-                        };
-
-                        let mut max_id: Option<u64> = None;
-                        for raw in events {
-                            // 读取 id（若缺失则忽略游标推进）
-                            if let Some(id) = raw.get("id").and_then(|x| x.as_u64()) {
-                                max_id = Some(max_id.map(|m| m.max(id)).unwrap_or(id));
-                            }
-
-                            let evt: DaemonEvent = match serde_json::from_value(raw) {
-                                Ok(e) => e,
-                                Err(e) => {
-                                    eprintln!("[ipc-events] parse DaemonEvent failed: {e}");
-                                    continue;
-                                }
-                            };
-
-                            Self::dispatch_event(
-                                &evt,
-                                &callbacks,
-                                &task_log_callbacks,
-                                &download_state_callbacks,
-                                &task_status_callbacks,
-                            ).await;
+            
+            // 建立长连接并持续接收事件
+            let _ = client.subscribe_events_stream(move |raw| {
+                let callbacks = callbacks.clone();
+                let task_log_callbacks = task_log_callbacks.clone();
+                let download_state_callbacks = download_state_callbacks.clone();
+                let task_status_callbacks = task_status_callbacks.clone();
+                
+                async move {
+                    eprintln!("[DEBUG] EventListener 收到事件: {:?}", raw);
+                    let evt: DaemonEvent = match serde_json::from_value(raw.clone()) {
+                        Ok(e) => {
+                            eprintln!("[DEBUG] EventListener 解析成功: {:?}", e);
+                            e
+                        },
+                        Err(e) => {
+                            eprintln!("[ipc-events] parse DaemonEvent failed: {e}, raw: {:?}", raw);
+                            return;
                         }
+                    };
 
-                        if let Some(id) = max_id {
-                            since = Some(id.saturating_add(1));
-                        }
-                    }
-                    _ = rx.recv() => {
-                        // 收到停止信号
-                        break;
-                    }
+                    eprintln!("[DEBUG] EventListener 分发事件: {:?}", evt);
+                    Self::dispatch_event(
+                        &evt,
+                        &callbacks,
+                        &task_log_callbacks,
+                        &download_state_callbacks,
+                        &task_status_callbacks,
+                    ).await;
                 }
-            }
+            }).await;
+
+            // 连接关闭后，等待停止信号
+            let _ = rx.recv().await;
         });
 
         Ok(())
@@ -326,9 +309,9 @@ where
     get_global_listener().on_task_status(callback).await;
 }
 
-/// 简化的 API：启动监听
-pub async fn start_listening(interval_ms: u64) -> Result<(), String> {
-    get_global_listener().start_polling(interval_ms).await
+/// 简化的 API：启动监听（长连接模式）
+pub async fn start_listening() -> Result<(), String> {
+    get_global_listener().start().await
 }
 
 /// 简化的 API：停止监听

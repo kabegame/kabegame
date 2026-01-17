@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-kabegame-kgpg">
+    <comment>Kabegame 插件包</comment>
+    <comment xml:lang="en">Kabegame Plugin Package</comment>
+    <glob pattern="*.kgpg"/>
+    <icon name="application-x-kabegame-kgpg"/>
+  </mime-type>
+</mime-info>

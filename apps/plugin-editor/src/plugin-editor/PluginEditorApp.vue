@@ -1,5 +1,12 @@
 <template>
   <div class="plugin-editor-root">
+    <!-- Daemon 启动错误页面 -->
+    <DaemonStartupError
+      v-if="daemonError"
+      :error="daemonError.error"
+      :daemon-path="daemonError.daemon_path"
+    />
+    <template v-else>
     <FileDropOverlay ref="fileDropOverlayRef" />
     <div class="plugin-editor-header">
       <div class="header-left">
@@ -132,7 +139,6 @@
                 @cancel-task="cancelTask" @confirm-task-dump="confirmTaskDump" />
             </div>
           </el-card>
-        </div>
       </div>
     </div>
   </div>
@@ -140,6 +146,8 @@
   <QuickSettingsDrawer />
   <TaskImagesDialog v-model="taskImagesDialogVisible" :task-id="taskImagesDialogTaskId" />
   <IconCropDialog v-model="iconCropDialogVisible" :src="iconCropSourceUrl" @confirm="onIconCropConfirm" />
+    </template>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -162,9 +170,11 @@ import PluginInfoCard from "./components/PluginInfoCard.vue";
 import PluginConfigCard from "./components/PluginConfigCard.vue";
 import PluginVarsCard from "./components/PluginVarsCard.vue";
 import ConsoleCard from "./components/ConsoleCard.vue";
+import DaemonStartupError from "@kabegame/core/components/common/DaemonStartupError.vue";
 import { useQuickSettingsDrawerStore } from "./stores/quick-settings-drawer";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useInstalledPluginsStore } from "@kabegame/core/stores/plugins";
+import { useDaemonStatus } from "@kabegame/core/composables/useDaemonStatus";
 
 type MonacoMarkerSeverity = 1 | 2 | 4 | 8;
 
@@ -242,7 +252,7 @@ const draft = reactive<{
 });
 
 const consoleText = ref("");
-// 当前“输出面板”绑定的 taskId：只展示本次点击“测试”触发的任务日志
+// 当前"输出面板"绑定的 taskId：只展示本次点击"测试"触发的任务日志
 const activeConsoleTaskId = ref<string>("");
 const isTesting = ref(false);
 const isExporting = ref(false);
@@ -250,6 +260,9 @@ const isImporting = ref(false);
 const isAutosaving = ref(false);
 const autosaveDirty = ref(false);
 const markers = ref<EditorMarker[]>([]);
+
+// Daemon 状态管理
+const { init: initDaemonStatus, daemonError } = useDaemonStatus();
 
 // Icon 相关
 const iconPreviewUrl = ref<string | null>(null);
@@ -990,6 +1003,9 @@ async function onExportCommand(cmd: "export-file" | "export-install" | "export-f
 }
 
 onMounted(async () => {
+  // 初始化 daemon 状态
+  await initDaemonStatus();
+
   // 初始化 settings store（与主程序共用 settings.json）
   try {
     const settingsStore = useSettingsStore();

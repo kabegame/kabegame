@@ -1,0 +1,19 @@
+[Unit]
+Description=Kabegame Daemon - 壁纸和画册、fuse虚拟盘管理服务。楽しんで～
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/kabegame-daemon
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=default.target

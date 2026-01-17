@@ -2,22 +2,22 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod plugin_editor;
+mod daemon_client;
 
 use kabegame_core::{
-    crawler,
-    plugin::{BrowserPlugin, PluginConfig, PluginManager, PluginManifest},
-    settings::{AppSettings, Settings},
-    storage::{ImageInfo, Storage, TaskInfo},
+    plugin::{PluginConfig, PluginManifest},
+    settings::AppSettings,
+    storage::{ImageInfo, TaskInfo},
 };
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
-/// 运行“当前编辑器中的脚本”，但运行链路完全复用主程序：
+/// 运行"当前编辑器中的脚本"，通过 daemon IPC 执行：
 /// - 先将内容打包成临时 .kgpg（与导出逻辑一致）
-/// - 再走 `crawler::TaskScheduler` 的 worker（并发/取消/进度/下载队列统一）
+/// - 通过 daemon IPC 运行任务（避免本地创建 TaskScheduler）
 #[tauri::command]
-fn plugin_editor_run_task(
+async fn plugin_editor_run_task(
     plugin_id: String,
     task_id: String,
     manifest: PluginManifest,
@@ -27,7 +27,6 @@ fn plugin_editor_run_task(
     user_config: Option<HashMap<String, JsonValue>>,
     output_dir: Option<String>,
     output_album_id: Option<String>,
-    app: tauri::AppHandle,
 ) -> Result<(), String> {
     // 临时 kgpg 路径（每个任务一个文件）
     let tmp_dir = std::env::temp_dir().join("kabegame-plugin-editor");
@@ -43,36 +42,60 @@ fn plugin_editor_run_task(
         icon_rgb_base64,
     )?;
 
-    let scheduler = app.state::<crawler::TaskScheduler>();
-    scheduler.enqueue(crawler::CrawlTaskRequest {
-        plugin_id,
-        task_id,
+    // 将 user_config 转换为 plugin_args（daemon 会解析）
+    // daemon 的 handle_plugin_run 期望 CLI 风格的参数（--key value）
+    // 这里简化处理：将 user_config 的键值对转换为字符串参数
+    let plugin_args = user_config
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|(k, v)| {
+            // 将值转换为字符串
+            let value_str = match v {
+                JsonValue::String(s) => s,
+                JsonValue::Bool(b) => b.to_string(),
+                JsonValue::Number(n) => n.to_string(),
+                JsonValue::Null => "".to_string(),
+                _ => v.to_string(), // 对象、数组等序列化为 JSON 字符串
+            };
+            vec![format!("--{}", k), value_str]
+        })
+        .collect::<Vec<_>>();
+
+    // 通过 daemon IPC 运行任务
+    let req = kabegame_core::ipc::ipc::CliIpcRequest::PluginRun {
+        plugin: tmp_kgpg.to_string_lossy().to_string(),
         output_dir,
-        user_config,
-        http_headers: None,
+        task_id: Some(task_id),
         output_album_id,
-        plugin_file_path: Some(tmp_kgpg.to_string_lossy().to_string()),
-    })?;
-    Ok(())
+        plugin_args,
+    };
+
+    match kabegame_core::ipc::ipc::request(req).await {
+        Ok(resp) if resp.ok => Ok(()),
+        Ok(resp) => Err(resp
+            .message
+            .unwrap_or_else(|| "daemon returned error".to_string())),
+        Err(e) => Err(format!("无法连接 daemon：{}", e)),
+    }
 }
 
 /// 创建任务并立刻执行（合并 `add_task` + `plugin_editor_run_task`）
 #[tauri::command]
-fn start_task(
+async fn start_task(
     task: TaskInfo,
     manifest: PluginManifest,
     config: PluginConfig,
     script: String,
     icon_rgb_base64: Option<String>,
-    app: tauri::AppHandle,
 ) -> Result<(), String> {
     // 与主程序一致：先落库
-    let storage = app.state::<Storage>();
-    if let Err(e) = storage.add_task(task.clone()) {
+    let task_v = serde_json::to_value(task.clone())
+        .map_err(|e| format!("Failed to serialize task: {}", e))?;
+    if let Err(e) = daemon_client::get_ipc_client().storage_add_task(task_v).await {
         eprintln!("[WARN] start_task 落库失败（将继续入队）：{e}");
     }
 
-    // 再复用现有 runner：打包临时 kgpg + 入队 TaskScheduler
+    // 再复用现有 runner：打包临时 kgpg + 通过 daemon IPC 运行
     plugin_editor_run_task(
         task.plugin_id.clone(),
         task.id.clone(),
@@ -83,8 +106,8 @@ fn start_task(
         task.user_config.clone(),
         task.output_dir.clone(),
         task.output_album_id.clone(),
-        app,
     )
+    .await
 }
 
 // ---- wrappers: tauri::command 必须在当前 bin crate 中定义，不能直接复用 lib crate 的 command 宏产物 ----
@@ -123,57 +146,71 @@ fn plugin_editor_export_kgpg(
 }
 
 #[tauri::command]
-fn plugin_editor_list_installed_plugins(
-    state: tauri::State<PluginManager>,
-) -> Result<Vec<BrowserPlugin>, String> {
-    state.load_browser_plugins()
+async fn plugin_editor_list_installed_plugins() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client()
+        .plugin_get_browser_plugins()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
-/// 前端手动刷新“已安装源”：触发后端重扫 plugins-directory 并重建缓存
+/// 前端手动刷新"已安装源"：触发后端重扫 plugins-directory 并重建缓存
 #[tauri::command]
-fn refresh_installed_plugins_cache(state: tauri::State<PluginManager>) -> Result<(), String> {
-    state.refresh_installed_plugins_cache()
+async fn refresh_installed_plugins_cache() -> Result<(), String> {
+    // daemon 侧会在 get_plugins 时刷新 installed cache
+    let _ = daemon_client::get_ipc_client()
+        .plugin_get_plugins()
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    Ok(())
 }
 
 /// 插件编辑器导出安装/覆盖后：按 pluginId 局部刷新缓存
 #[tauri::command]
-fn refresh_installed_plugin_cache(
-    plugin_id: String,
-    state: tauri::State<PluginManager>,
-) -> Result<(), String> {
-    state.refresh_installed_plugin_cache(&plugin_id)
+async fn refresh_installed_plugin_cache(plugin_id: String) -> Result<(), String> {
+    // 触发一次 detail 加载，相当于"按 id 刷新缓存"
+    let _ = daemon_client::get_ipc_client()
+        .plugin_get_detail(plugin_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    Ok(())
 }
 
 #[tauri::command]
-fn get_plugin_icon(
-    plugin_id: String,
-    state: tauri::State<PluginManager>,
-) -> Result<Option<Vec<u8>>, String> {
-    state.get_plugin_icon_by_id(&plugin_id)
+async fn get_plugin_icon(plugin_id: String) -> Result<Option<Vec<u8>>, String> {
+    use base64::Engine;
+    let v = daemon_client::get_ipc_client()
+        .plugin_get_icon(plugin_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let b64_opt = v.get("base64").and_then(|x| x.as_str()).map(|s| s.to_string());
+    let Some(b64) = b64_opt else { return Ok(None) };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 decode failed: {}", e))?;
+    Ok(Some(bytes))
 }
 
 #[tauri::command]
-fn plugin_editor_import_kgpg(
-    state: tauri::State<PluginManager>,
-    file_path: String,
-) -> Result<plugin_editor::PluginEditorImportResult, String> {
-    plugin_editor::plugin_editor_import_kgpg(&state, file_path)
+fn plugin_editor_import_kgpg(file_path: String) -> Result<plugin_editor::PluginEditorImportResult, String> {
+    plugin_editor::plugin_editor_import_kgpg(file_path)
 }
 
 #[tauri::command]
-fn plugin_editor_import_installed(
-    state: tauri::State<PluginManager>,
-    plugin_id: String,
-) -> Result<plugin_editor::PluginEditorImportResult, String> {
-    let p = state
-        .get_plugins_directory()
-        .join(format!("{}.kgpg", plugin_id));
-    plugin_editor::plugin_editor_import_kgpg(&state, p.to_string_lossy().to_string())
+async fn plugin_editor_import_installed(plugin_id: String) -> Result<plugin_editor::PluginEditorImportResult, String> {
+    // 通过 daemon 刷新缓存，然后读取文件
+    let _ = daemon_client::get_ipc_client()
+        .plugin_get_detail(plugin_id.clone())
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    
+    // 从插件目录读取文件
+    let plugins_dir = kabegame_core::plugin::plugins_directory_for_readonly();
+    let p = plugins_dir.join(format!("{}.kgpg", plugin_id));
+    plugin_editor::plugin_editor_import_kgpg(p.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-fn plugin_editor_export_install(
-    state: tauri::State<PluginManager>,
+async fn plugin_editor_export_install(
     overwrite: bool,
     plugin_id: String,
     manifest: PluginManifest,
@@ -181,7 +218,7 @@ fn plugin_editor_export_install(
     script: String,
     icon_rgb_base64: Option<String>,
 ) -> Result<(), String> {
-    let plugins_dir = state.get_plugins_directory();
+    let plugins_dir = kabegame_core::plugin::plugins_directory_for_readonly();
     std::fs::create_dir_all(&plugins_dir).map_err(|e| format!("创建插件目录失败: {}", e))?;
     let plugin_id_trimmed = plugin_id.trim().to_string();
     let target = plugins_dir.join(format!("{}.kgpg", plugin_id_trimmed));
@@ -196,8 +233,10 @@ fn plugin_editor_export_install(
         script,
         icon_rgb_base64,
     )?;
-    // 导出安装/覆盖后：局部刷新缓存，避免前端反复读盘
-    let _ = state.refresh_installed_plugin_cache(&plugin_id_trimmed);
+    // 导出安装/覆盖后：通过 daemon 刷新缓存
+    let _ = daemon_client::get_ipc_client()
+        .plugin_get_detail(plugin_id_trimmed)
+        .await;
     Ok(())
 }
 
@@ -230,10 +269,8 @@ fn plugin_editor_autosave_save(
 }
 
 #[tauri::command]
-fn plugin_editor_autosave_load(
-    state: tauri::State<PluginManager>,
-) -> Result<Option<plugin_editor::PluginEditorImportResult>, String> {
-    plugin_editor::plugin_editor_autosave_load(&state)
+fn plugin_editor_autosave_load() -> Result<Option<plugin_editor::PluginEditorImportResult>, String> {
+    plugin_editor::plugin_editor_autosave_load()
 }
 
 #[tauri::command]
@@ -242,126 +279,122 @@ fn plugin_editor_autosave_clear() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_active_downloads(app: tauri::AppHandle) -> Result<Vec<crawler::ActiveDownloadInfo>, String> {
-    let download_queue = app.state::<crawler::DownloadQueue>();
-    download_queue.get_active_downloads()
+async fn get_active_downloads() -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client().get_active_downloads().await
 }
 
 #[tauri::command]
-fn cancel_task(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
-    let download_queue = app.state::<crawler::DownloadQueue>();
-    download_queue.cancel_task(&task_id)
+async fn cancel_task(task_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client().task_cancel(task_id).await
 }
 
 #[tauri::command]
-fn get_task_images(app: tauri::AppHandle, task_id: String) -> Result<Vec<ImageInfo>, String> {
-    let storage = app.state::<Storage>();
-    storage.get_task_images(&task_id)
+async fn get_task_images(task_id: String) -> Result<Vec<ImageInfo>, String> {
+    let v = daemon_client::get_ipc_client().storage_get_task_images(task_id).await?;
+    serde_json::from_value(v).map_err(|e| format!("Failed to parse task images: {}", e))
 }
 
 #[tauri::command]
-fn add_task(app: tauri::AppHandle, task: TaskInfo) -> Result<(), String> {
-    let storage = app.state::<Storage>();
-    storage.add_task(task)
+async fn add_task(task: TaskInfo) -> Result<(), String> {
+    let task_v = serde_json::to_value(task).map_err(|e| format!("Failed to serialize task: {}", e))?;
+    daemon_client::get_ipc_client().storage_add_task(task_v).await
 }
 
 #[tauri::command]
-fn get_task(app: tauri::AppHandle, task_id: String) -> Result<Option<TaskInfo>, String> {
-    let storage = app.state::<Storage>();
-    storage.get_task(&task_id)
+async fn get_task(task_id: String) -> Result<Option<TaskInfo>, String> {
+    let v = daemon_client::get_ipc_client().storage_get_task(task_id).await?;
+    serde_json::from_value(v).map_err(|e| format!("Failed to parse task: {}", e))
 }
 
 #[tauri::command]
-fn get_all_tasks(app: tauri::AppHandle) -> Result<Vec<TaskInfo>, String> {
-    let storage = app.state::<Storage>();
-    storage.get_all_tasks()
+async fn get_all_tasks() -> Result<Vec<TaskInfo>, String> {
+    let v = daemon_client::get_ipc_client().storage_get_all_tasks().await?;
+    serde_json::from_value(v).map_err(|e| format!("Failed to parse tasks: {}", e))
 }
 
-/// 将任务的 Rhai 失败 dump 标记为“已确认/已读”（用于任务列表右上角小按钮）
+/// 将任务的 Rhai 失败 dump 标记为"已确认/已读"（用于任务列表右上角小按钮）
 #[tauri::command]
-fn confirm_task_rhai_dump(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
-    let storage = app.state::<Storage>();
-    storage.confirm_task_rhai_dump(&task_id)
+async fn confirm_task_rhai_dump(task_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client().storage_confirm_task_rhai_dump(task_id).await
 }
 
 #[tauri::command]
-fn delete_task(
-    app: tauri::AppHandle,
-    task_id: String,
-    state: tauri::State<Storage>,
-    settings: tauri::State<Settings>,
-) -> Result<(), String> {
-    // 如果任务正在运行，先标记为取消，阻止后续入库
-    let download_queue = app.state::<crawler::DownloadQueue>();
-    let _ = download_queue.cancel_task(&task_id);
+async fn delete_task(task_id: String) -> Result<(), String> {
+    // 先取消任务（如果正在运行）
+    let _ = daemon_client::get_ipc_client().task_cancel(task_id.clone()).await;
 
-    // 先取出该任务关联的图片 id 列表（避免删除后无法判断是否包含"当前壁纸"）
-    let ids = state.get_task_image_ids(&task_id).unwrap_or_default();
-    state.delete_task(&task_id)?;
-    let s = settings.get_settings().unwrap_or_default();
-    if let Some(cur) = s.current_wallpaper_image_id.as_deref() {
+    // 获取任务关联的图片 ID 列表
+    let ids = daemon_client::get_ipc_client()
+        .storage_get_task_image_ids(task_id.clone())
+        .await
+        .unwrap_or_default();
+    
+    // 删除任务
+    daemon_client::get_ipc_client().storage_delete_task(task_id).await?;
+    
+    // 如果当前壁纸在被删除的图片中，清除当前壁纸设置
+    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
+    if let Some(cur) = settings_v.get("current_wallpaper_image_id").and_then(|v| v.as_str()) {
         if ids.iter().any(|id| id == cur) {
-            let _ = settings.set_current_wallpaper_image_id(None);
+            let _ = daemon_client::get_ipc_client()
+                .settings_set_current_wallpaper_image_id(None)
+                .await;
         }
     }
     Ok(())
 }
 
 #[tauri::command]
-fn delete_image(
-    image_id: String,
-    state: tauri::State<Storage>,
-    settings: tauri::State<Settings>,
-) -> Result<(), String> {
-    state.delete_image(&image_id)?;
-    let s = settings.get_settings().unwrap_or_default();
-    if s.current_wallpaper_image_id.as_deref() == Some(image_id.as_str()) {
-        let _ = settings.set_current_wallpaper_image_id(None);
+async fn delete_image(image_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client().storage_delete_image(image_id.clone()).await?;
+    
+    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
+    if settings_v.get("current_wallpaper_image_id").and_then(|v| v.as_str()) == Some(image_id.as_str()) {
+        let _ = daemon_client::get_ipc_client()
+            .settings_set_current_wallpaper_image_id(None)
+            .await;
     }
     Ok(())
 }
 
 #[tauri::command]
-fn remove_image(
-    image_id: String,
-    state: tauri::State<Storage>,
-    settings: tauri::State<Settings>,
-) -> Result<(), String> {
-    state.remove_image(&image_id)?;
-    let s = settings.get_settings().unwrap_or_default();
-    if s.current_wallpaper_image_id.as_deref() == Some(image_id.as_str()) {
-        let _ = settings.set_current_wallpaper_image_id(None);
+async fn remove_image(image_id: String) -> Result<(), String> {
+    daemon_client::get_ipc_client().storage_remove_image(image_id.clone()).await?;
+    
+    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
+    if settings_v.get("current_wallpaper_image_id").and_then(|v| v.as_str()) == Some(image_id.as_str()) {
+        let _ = daemon_client::get_ipc_client()
+            .settings_set_current_wallpaper_image_id(None)
+            .await;
     }
     Ok(())
 }
 
 #[tauri::command]
-fn batch_delete_images(
-    image_ids: Vec<String>,
-    state: tauri::State<Storage>,
-    settings: tauri::State<Settings>,
-) -> Result<(), String> {
-    state.batch_delete_images(&image_ids)?;
-    let s = settings.get_settings().unwrap_or_default();
-    if let Some(current_id) = &s.current_wallpaper_image_id {
-        if image_ids.contains(current_id) {
-            let _ = settings.set_current_wallpaper_image_id(None);
+async fn batch_delete_images(image_ids: Vec<String>) -> Result<(), String> {
+    daemon_client::get_ipc_client().storage_batch_delete_images(image_ids.clone()).await?;
+    
+    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
+    if let Some(current_id) = settings_v.get("current_wallpaper_image_id").and_then(|v| v.as_str()) {
+        if image_ids.contains(&current_id.to_string()) {
+            let _ = daemon_client::get_ipc_client()
+                .settings_set_current_wallpaper_image_id(None)
+                .await;
         }
     }
     Ok(())
 }
 
 #[tauri::command]
-fn batch_remove_images(
-    image_ids: Vec<String>,
-    state: tauri::State<Storage>,
-    settings: tauri::State<Settings>,
-) -> Result<(), String> {
-    state.batch_remove_images(&image_ids)?;
-    let s = settings.get_settings().unwrap_or_default();
-    if let Some(current_id) = &s.current_wallpaper_image_id {
-        if image_ids.contains(current_id) {
-            let _ = settings.set_current_wallpaper_image_id(None);
+async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
+    daemon_client::get_ipc_client().storage_batch_remove_images(image_ids.clone()).await?;
+    
+    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
+    if let Some(current_id) = settings_v.get("current_wallpaper_image_id").and_then(|v| v.as_str()) {
+        if image_ids.contains(&current_id.to_string()) {
+            let _ = daemon_client::get_ipc_client()
+                .settings_set_current_wallpaper_image_id(None)
+                .await;
         }
     }
     Ok(())
@@ -370,23 +403,24 @@ fn batch_remove_images(
 /// 清除所有已完成、失败或取消的任务（保留 pending 和 running 的任务）
 /// 返回被删除的任务数量
 #[tauri::command]
-fn clear_finished_tasks(state: tauri::State<Storage>) -> Result<usize, String> {
-    state.clear_finished_tasks()
+async fn clear_finished_tasks() -> Result<usize, String> {
+    daemon_client::get_ipc_client().storage_clear_finished_tasks().await
 }
 
 #[tauri::command]
-fn get_settings(state: tauri::State<Settings>) -> Result<AppSettings, String> {
-    state.get_settings()
+async fn check_daemon_status() -> Result<serde_json::Value, String> {
+    daemon_client::try_connect_daemon().await
 }
 
 #[tauri::command]
-fn get_setting(key: String, state: tauri::State<Settings>) -> Result<serde_json::Value, String> {
-    let settings = state.get_settings()?;
-    let v = serde_json::to_value(settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    v.get(&key)
-        .cloned()
-        .ok_or_else(|| format!("Unknown setting key: {}", key))
+async fn get_settings() -> Result<AppSettings, String> {
+    let v = daemon_client::get_ipc_client().settings_get().await?;
+    serde_json::from_value(v).map_err(|e| format!("Failed to parse settings: {}", e))
+}
+
+#[tauri::command]
+async fn get_setting(key: String) -> Result<serde_json::Value, String> {
+    daemon_client::get_ipc_client().settings_get_key(key).await
 }
 
 #[tauri::command]
@@ -397,42 +431,49 @@ fn get_favorite_album_id() -> Result<String, String> {
 // ---- settings mutators (keep consistent with app-main; plugin-editor 需要可落盘配置) ----
 
 #[tauri::command]
-fn set_max_concurrent_downloads(
-    count: u32,
-    state: tauri::State<Settings>,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
-    state.set_max_concurrent_downloads(count)?;
-    // 同步调整 download worker 数量（全局并发下载）
-    if let Some(download_queue) = app.try_state::<crawler::DownloadQueue>() {
-        download_queue.set_desired_concurrency(count);
-        download_queue.notify_all_waiting();
+async fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .settings_set_max_concurrent_downloads(count)
+        .await
+}
+
+#[tauri::command]
+async fn set_network_retry_count(count: u32) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .settings_set_network_retry_count(count)
+        .await
+}
+
+#[tauri::command]
+async fn set_auto_deduplicate(enabled: bool) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .settings_set_auto_deduplicate(enabled)
+        .await
+}
+
+#[tauri::command]
+async fn set_default_download_dir(dir: Option<String>) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .settings_set_default_download_dir(dir)
+        .await
+}
+
+#[tauri::command]
+async fn get_default_images_dir() -> Result<String, String> {
+    // 通过 daemon 获取设置中的默认下载目录，如果没有则使用默认路径
+    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
+    if let Some(dir) = settings_v.get("default_download_dir").and_then(|v| v.as_str()) {
+        if !dir.is_empty() {
+            return Ok(dir.to_string());
+        }
     }
-    Ok(())
-}
-
-#[tauri::command]
-fn set_network_retry_count(count: u32, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_network_retry_count(count)
-}
-
-#[tauri::command]
-fn set_auto_deduplicate(enabled: bool, state: tauri::State<Settings>) -> Result<(), String> {
-    state.set_auto_deduplicate(enabled)
-}
-
-#[tauri::command]
-fn set_default_download_dir(
-    dir: Option<String>,
-    state: tauri::State<Settings>,
-) -> Result<(), String> {
-    state.set_default_download_dir(dir)
-}
-
-#[tauri::command]
-fn get_default_images_dir(state: tauri::State<Storage>) -> Result<String, String> {
-    Ok(state
-        .get_images_dir()
+    
+    // 如果没有设置，使用默认路径（与 Storage::get_images_dir 逻辑一致）
+    // 注意：这里简化处理，直接使用应用数据目录，因为获取系统图片目录需要 dirs crate
+    // 如果需要精确匹配 Storage 的逻辑，可以通过 daemon 获取
+    let images_dir = kabegame_core::app_paths::kabegame_data_dir().join("images");
+    
+    Ok(images_dir
         .to_string_lossy()
         .to_string()
         .trim_start_matches("\\\\?\\")
@@ -457,32 +498,39 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            // 初始化插件管理器（TaskScheduler 在运行临时 .kgpg 时会用到）
-            let plugin_manager = PluginManager::new();
-            app.manage(plugin_manager);
-
-            // 初始化存储（复用主程序的 DB / images_dir）
-            let storage = Storage::new();
-            storage
-                .init()
-                .map_err(|e| format!("Failed to initialize storage: {}", e))?;
-            app.manage(storage);
-
-            // 初始化设置（复用用户 settings.json）
-            let settings = Settings::new();
-            app.manage(settings);
-
-            // 初始化下载队列（复用下载并发设置等）
-            let download_queue = crawler::DownloadQueue::new(&settings, Some(app.app_handle().clone()));
-            app.manage(download_queue);
-
-            // 初始化主程序同款 TaskScheduler（10 worker 并发）
-            let scheduler = crawler::TaskScheduler::new(app.app_handle().clone());
-            app.manage(scheduler);
+            // 启动 daemon（如果未运行）
+            let app_handle = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match daemon_client::ensure_daemon_ready(&app_handle).await {
+                    Ok(_) => {
+                        // 发送事件通知前端 daemon 已就绪
+                        let _ = app_handle.emit("daemon-ready", serde_json::json!({}));
+                        
+                        // 初始化事件监听器（将 daemon IPC 事件转发为 Tauri 事件）
+                        kabegame_core::ipc::init_event_listeners(app_handle.clone()).await;
+                    }
+                    Err(e) => {
+                        eprintln!("[WARN] Failed to ensure daemon ready: {}", e);
+                        // 获取 daemon 路径用于错误提示
+                        let daemon_path = kabegame_core::daemon_startup::find_daemon_executable(Some(&app_handle))
+                            .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
+                        // 发送事件通知前端 daemon 启动失败
+                        let _ = app_handle.emit(
+                            "daemon-startup-failed",
+                            serde_json::json!({ 
+                                "error": e,
+                                "daemon_path": daemon_path.display().to_string()
+                            }),
+                        );
+                    }
+                }
+            });
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // daemon status check
+            check_daemon_status,
             // plugin editor existing commands
             plugin_editor_check_rhai,
             plugin_editor_export_kgpg,

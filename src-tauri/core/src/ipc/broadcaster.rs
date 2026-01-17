@@ -1,11 +1,12 @@
 //! Daemon 事件存储和广播
 //!
-//! 在 daemon 中维护事件队列，供客户端轮询获取
+//! 在 daemon 中维护事件队列，并通过长连接推送事件到客户端
+//! 同时保留事件历史记录，便于客户端重连后获取历史事件
 
 use super::events::DaemonEvent;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 
 /// 事件广播器
 pub struct EventBroadcaster {
@@ -15,15 +16,19 @@ pub struct EventBroadcaster {
     next_id: Arc<RwLock<u64>>,
     /// 最大队列长度
     max_queue_size: usize,
+    /// 事件广播 channel（用于长连接推送）
+    event_tx: broadcast::Sender<(u64, DaemonEvent)>,
 }
 
 impl EventBroadcaster {
     /// 创建新的事件广播器
     pub fn new(max_queue_size: usize) -> Self {
+        let (event_tx, _) = broadcast::channel(1024);
         Self {
             events: Arc::new(RwLock::new(VecDeque::new())),
             next_id: Arc::new(RwLock::new(0)),
             max_queue_size,
+            event_tx,
         }
     }
 
@@ -35,15 +40,35 @@ impl EventBroadcaster {
         let id = *next_id;
         *next_id += 1;
 
-        events.push_back((id, event));
+        let event_with_id = (id, event.clone());
+        eprintln!("[DEBUG] EventBroadcaster 广播事件: id={}, event={:?}", id, event);
+        events.push_back(event_with_id.clone());
 
         // 限制队列大小
         while events.len() > self.max_queue_size {
             events.pop_front();
         }
+
+        // 推送到广播 channel（忽略错误，因为可能没有订阅者）
+        match self.event_tx.send(event_with_id) {
+            Ok(count) => {
+                eprintln!("[DEBUG] EventBroadcaster 事件已推送到 channel, 订阅者数量: {}", count);
+            },
+            Err(_) => {
+                eprintln!("[DEBUG] EventBroadcaster 事件推送失败（可能没有订阅者）");
+            }
+        }
     }
 
-    /// 获取自指定 ID 以来的所有事件
+    /// 订阅事件（返回接收者，用于长连接推送）
+    pub fn subscribe(&self) -> broadcast::Receiver<(u64, DaemonEvent)> {
+        self.event_tx.subscribe()
+    }
+
+    /// 获取自指定 ID 以来的所有事件（历史查询，已弃用）
+    /// 
+    /// 注意：此方法用于历史事件查询，当前长连接模式下不再使用。
+    /// 保留此方法以便未来扩展（如客户端重连后获取历史事件）。
     pub async fn get_events_since(&self, since: Option<u64>) -> Vec<serde_json::Value> {
         let events = self.events.read().await;
         

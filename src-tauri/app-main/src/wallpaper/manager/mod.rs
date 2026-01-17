@@ -57,12 +57,9 @@ impl WallpaperController {
         }
     }
 
-    /// 根据当前设置选择活动后端（native/window）。
-    pub fn active_manager(&self) -> Result<Arc<dyn WallpaperManager + Send + Sync>, String> {
-        let v = tauri::async_runtime::block_on(async {
-            crate::daemon_client::get_ipc_client().settings_get().await
-        })
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    /// 根据当前设置选择活动后端（native等）。
+    pub async fn active_manager(&self) -> Result<Arc<dyn WallpaperManager + Send + Sync>, String> {
+        let v = crate::daemon_client::get_ipc_client().settings_get().await?;
         let mode = v
             .get("wallpaperMode")
             .and_then(|x| x.as_str())
@@ -88,9 +85,9 @@ impl WallpaperController {
     }
 
     /// 单张壁纸设置：只应用 `file_path + style`，不涉及 transition（用于适配"非轮播/单张"场景）。
-    pub fn set_wallpaper(&self, file_path: &str, style: &str) -> Result<(), String> {
-        let manager = self.active_manager()?;
-        manager.set_wallpaper(file_path, style, "none")?;
+    pub async fn set_wallpaper(&self, file_path: &str, style: &str) -> Result<(), String> {
+        let manager = self.active_manager().await?;
+        manager.set_wallpaper(file_path, style, "none").await?;
         Ok(())
     }
 
@@ -116,7 +113,10 @@ impl WallpaperController {
     }
 }
 
+use async_trait::async_trait;
+
 /// 壁纸管理器 trait，定义壁纸设置的通用接口
+#[async_trait]
 pub trait WallpaperManager: Send + Sync {
     ///
     /// # Returns
@@ -134,25 +134,25 @@ pub trait WallpaperManager: Send + Sync {
     /// # Errors
     /// * `String` - 错误信息
     #[allow(dead_code)]
-    fn get_transition(&self) -> Result<String, String>;
+    async fn get_transition(&self) -> Result<String, String>;
 
     /// 更新壁纸样式，如果immediate为true，则立即生效
     ///
     /// # Arguments
     /// * `style` - 显示样式（fill/fit/stretch/center/tile）
-    fn set_style(&self, style: &str, immediate: bool) -> Result<(), String>;
+    async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String>;
 
     /// 更新壁纸过渡效果，立即生效预览
     ///
     /// # Arguments
     /// * `transition` - 过渡效果（none/fade/slide/zoom）
-    fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String>;
+    async fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String>;
 
     /// 设置壁纸路径，立即生效预览
     ///
     /// # Arguments
     /// * `file_path` - 壁纸文件路径
-    fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String>;
+    async fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String>;
 
     /// 设置壁纸，按照style和transition设置壁纸
     ///
@@ -160,14 +160,14 @@ pub trait WallpaperManager: Send + Sync {
     /// * `file_path` - 壁纸文件路径
     /// * `style` - 显示样式（fill/fit/stretch/center/tile）
     /// * `transition` - 过渡效果（none/fade/slide/zoom）
-    fn set_wallpaper(&self, file_path: &str, style: &str, transition: &str) -> Result<(), String> {
-        self.set_style(style, false)?;
-        self.set_transition(transition, false)?;
-        // 重要：历史实现只会“设置一次壁纸路径”。
+    async fn set_wallpaper(&self, file_path: &str, style: &str, transition: &str) -> Result<(), String> {
+        self.set_style(style, false).await?;
+        self.set_transition(transition, false).await?;
+        // 重要：历史实现只会"设置一次壁纸路径"。
         // 之前这里会连续调用两次 set_wallpaper_path（先 immediate=false 再 immediate=true），
-        // 等于触发两次 SPI_SETDESKWALLPAPER，在一些系统上肉眼会像“淡入/过渡”。
+        // 等于触发两次 SPI_SETDESKWALLPAPER，在一些系统上肉眼会像"淡入/过渡"。
         // 改为：只调用一次 immediate=true（需要立即生效的 set_wallpaper 语义本就如此）。
-        self.set_wallpaper_path(file_path, true)?;
+        self.set_wallpaper_path(file_path, true).await?;
         Ok(())
     }
 

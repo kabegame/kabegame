@@ -1,4 +1,5 @@
 use super::WallpaperManager;
+use async_trait::async_trait;
 use tauri::AppHandle;
 
 /// Plasma 插件壁纸管理器：
@@ -154,6 +155,7 @@ for (var i=0; i<allDesktops.length; i++) {{\n\
 }
 
 #[cfg(all(target_os = "linux", desktop = "plasma"))]
+#[async_trait]
 impl WallpaperManager for PlasmaPluginWallpaperManager {
     fn get_style(&self) -> Result<String, String> {
         // 以 daemon 设置为准（插件会同步 daemon）
@@ -167,18 +169,16 @@ impl WallpaperManager for PlasmaPluginWallpaperManager {
             .to_string())
     }
 
-    fn get_transition(&self) -> Result<String, String> {
-        let v = tauri::async_runtime::block_on(async {
-            crate::daemon_client::get_ipc_client().settings_get().await
-        })
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    async fn get_transition(&self) -> Result<String, String> {
+        let v = crate::daemon_client::get_ipc_client().settings_get().await
+            .map_err(|e| format!("Daemon unavailable: {}", e))?;
         Ok(v.get("wallpaperRotationTransition")
             .and_then(|x| x.as_str())
             .unwrap_or("fade")
             .to_string())
     }
 
-    fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
+    async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
         // 风格以插件配置为即时展示；daemon 侧的保存由上层 command 负责。
         // immediate=false 时只保存到 daemon（由上层处理），这里不强制写 Plasma 配置。
         if immediate {
@@ -187,14 +187,14 @@ impl WallpaperManager for PlasmaPluginWallpaperManager {
         Ok(())
     }
 
-    fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String> {
+    async fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String> {
         if immediate {
             self.apply_plugin_config(None, None, Some(transition), None)?;
         }
         Ok(())
     }
 
-    fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String> {
+    async fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String> {
         use std::path::Path;
         let _ = immediate;
 
