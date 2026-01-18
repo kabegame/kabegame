@@ -2,10 +2,8 @@ name: Build and Release Windows Installer
 
 on:
   push:
-    branches:
-      - main # 当推送到 main 分支时触发
     tags:
-      - "v*-release*" # 当推送以 v 开头以 release 结尾的 tag 时触发
+      - "v*-release" # 当推送以 v 开头以 release 结尾的 tag 时触发
   workflow_dispatch:
     inputs:
       prerelease:
