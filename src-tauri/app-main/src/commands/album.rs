@@ -48,10 +48,10 @@ pub async fn add_images_to_album(
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
     let _ = app.emit(
-        "album-images-changed",
+        "images-change",
         serde_json::json!({
+            "reason": "album-add",
             "albumId": album_id,
-            "reason": "add",
             "imageIds": image_ids
         }),
     );
@@ -71,10 +71,10 @@ pub async fn remove_images_from_album(
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
     let removed = v.as_u64().unwrap_or(0) as usize;
     let _ = app.emit(
-        "album-images-changed",
+        "images-change",
         serde_json::json!({
+            "reason": "album-remove",
             "albumId": album_id,
-            "reason": "remove",
             "imageIds": image_ids
         }),
     );
@@ -95,10 +95,10 @@ pub async fn add_images_to_album(
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
     let _ = app.emit(
-        "album-images-changed",
+        "images-change",
         serde_json::json!({
+            "reason": "album-add",
             "albumId": album_id,
-            "reason": "add",
             "imageIds": image_ids
         }),
     );
@@ -121,10 +121,10 @@ pub async fn remove_images_from_album(
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
     let removed = v.as_u64().unwrap_or(0) as usize;
     let _ = app.emit(
-        "album-images-changed",
+        "images-change",
         serde_json::json!({
+            "reason": "album-remove",
             "albumId": album_id,
-            "reason": "remove",
             "imageIds": image_ids
         }),
     );

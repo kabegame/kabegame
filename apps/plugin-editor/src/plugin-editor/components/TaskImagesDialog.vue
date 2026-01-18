@@ -45,10 +45,11 @@ type ImageInfo = {
   metadata?: Record<string, string>;
 };
 
-type ImageAddedPayload = {
-  taskId: string;
-  imageId: string;
-  image?: any;
+type ImagesChangePayload = {
+  reason?: string;
+  imageIds?: string[];
+  taskId?: string;
+  albumId?: string;
 };
 
 const props = defineProps<{
@@ -80,7 +81,8 @@ const removeDialogMessage = ref("");
 const removeConfirmLoading = ref(false);
 const pendingRemoveImageIds = ref<string[]>([]);
 
-let unlistenImageAdded: null | (() => void) = null;
+let unlistenImagesChange: null | (() => void) = null;
+let reloadTimer: number | null = null;
 
 const uiStore = useUiStore();
 const settingsStore = useSettingsStore();
@@ -240,41 +242,35 @@ async function confirmRemoveImages() {
 }
 
 async function startListeners() {
-  if (unlistenImageAdded) return;
-  unlistenImageAdded = await listen<ImageAddedPayload>("image-added", async (event) => {
+  if (unlistenImagesChange) return;
+  unlistenImagesChange = await listen<ImagesChangePayload>("images-change", async (event) => {
+    if (!visible.value) return;
     if (!taskId.value) return;
-    if (event.payload?.taskId !== taskId.value) return;
-    const raw = event.payload.image as any;
-    if (!raw?.id) return;
-    if (images.value.some((x) => x.id === raw.id)) return;
+    const p = (event.payload ?? {}) as ImagesChangePayload;
+    if ((p.taskId || "").trim() !== taskId.value) return;
 
-    const img: ImageInfo = {
-      id: String(raw.id),
-      localPath: String(raw.localPath || ""),
-      thumbnailPath: raw.thumbnailPath ? String(raw.thumbnailPath) : undefined,
-      taskId: raw.taskId ? String(raw.taskId) : undefined,
-    };
-
-    images.value = [...images.value, img];
-    const thumbPath = (img.thumbnailPath || img.localPath || "").trim();
-    const origPath = (img.localPath || "").trim();
-    const thumbUrl = await fileToSrc(thumbPath);
-    const origUrl =
-      origPath && origPath !== thumbPath ? await fileToSrc(origPath) : thumbUrl;
-    imageUrlMap.value = {
-      ...imageUrlMap.value,
-      [img.id]: { thumbnail: thumbUrl, original: origUrl },
-    };
+    // 统一策略：不做增量 patch，合并 burst 后整页刷新，确保与后端/DB 一致
+    if (reloadTimer !== null) {
+      clearTimeout(reloadTimer);
+    }
+    reloadTimer = window.setTimeout(async () => {
+      reloadTimer = null;
+      await loadTaskImages();
+    }, 250);
   });
 }
 
 function stopListeners() {
   try {
-    unlistenImageAdded?.();
+    unlistenImagesChange?.();
   } catch {
     // ignore
   }
-  unlistenImageAdded = null;
+  unlistenImagesChange = null;
+  if (reloadTimer !== null) {
+    clearTimeout(reloadTimer);
+    reloadTimer = null;
+  }
 }
 
 async function handleOpen() {

@@ -107,6 +107,100 @@ impl EventEmitter for IpcEventEmitter {
                 .await;
         });
     }
+
+    fn emit_dedupe_progress(
+        &self,
+        processed: usize,
+        total: usize,
+        removed: usize,
+        batch_index: usize,
+    ) {
+        let bc = self.broadcaster.clone();
+        tokio::spawn(async move {
+            crate::ipc::broadcaster::emit_dedupe_progress(&bc, processed, total, removed, batch_index).await;
+        });
+    }
+
+    fn emit_dedupe_finished(
+        &self,
+        processed: usize,
+        total: usize,
+        removed: usize,
+        canceled: bool,
+    ) {
+        let bc = self.broadcaster.clone();
+        tokio::spawn(async move {
+            crate::ipc::broadcaster::emit_dedupe_finished(&bc, processed, total, removed, canceled).await;
+        });
+    }
+
+    fn emit_task_progress(&self, task_id: &str, progress: f64) {
+        let bc = self.broadcaster.clone();
+        let task_id = task_id.to_string();
+        tokio::spawn(async move {
+            crate::ipc::broadcaster::emit_task_progress(&bc, task_id, progress).await;
+        });
+    }
+
+    fn emit_task_error(&self, task_id: &str, error: &str) {
+        let bc = self.broadcaster.clone();
+        let task_id = task_id.to_string();
+        let error = error.to_string();
+        tokio::spawn(async move {
+            crate::ipc::broadcaster::emit_task_error(&bc, task_id, error).await;
+        });
+    }
+
+    fn emit_download_progress(
+        &self,
+        task_id: &str,
+        url: &str,
+        start_time: u64,
+        plugin_id: &str,
+        received_bytes: u64,
+        total_bytes: Option<u64>,
+    ) {
+        let bc = self.broadcaster.clone();
+        let task_id = task_id.to_string();
+        let url = url.to_string();
+        let plugin_id = plugin_id.to_string();
+        tokio::spawn(async move {
+            crate::ipc::broadcaster::emit_download_progress(
+                &bc,
+                task_id,
+                url,
+                start_time,
+                plugin_id,
+                received_bytes,
+                total_bytes,
+            )
+            .await;
+        });
+    }
+
+    fn emit_wallpaper_update_image(&self, image_path: &str) {
+        let bc = self.broadcaster.clone();
+        let image_path = image_path.to_string();
+        tokio::spawn(async move {
+            crate::ipc::broadcaster::emit_wallpaper_update_image(&bc, image_path).await;
+        });
+    }
+
+    fn emit_wallpaper_update_style(&self, style: &str) {
+        let bc = self.broadcaster.clone();
+        let style = style.to_string();
+        tokio::spawn(async move {
+            crate::ipc::broadcaster::emit_wallpaper_update_style(&bc, style).await;
+        });
+    }
+
+    fn emit_wallpaper_update_transition(&self, transition: &str) {
+        let bc = self.broadcaster.clone();
+        let transition = transition.to_string();
+        tokio::spawn(async move {
+            crate::ipc::broadcaster::emit_wallpaper_update_transition(&bc, transition).await;
+        });
+    }
 }
 
 /// 基于 HashMap 的状态管理器（与 NoopRuntime 类似，但拆分为独立组件）
@@ -204,6 +298,58 @@ impl EventEmitter for IpcRuntime {
 
     fn emit(&self, event: &str, payload: serde_json::Value) {
         self.emitter.emit(event, payload);
+    }
+
+    fn emit_dedupe_progress(
+        &self,
+        processed: usize,
+        total: usize,
+        removed: usize,
+        batch_index: usize,
+    ) {
+        self.emitter.emit_dedupe_progress(processed, total, removed, batch_index);
+    }
+
+    fn emit_dedupe_finished(
+        &self,
+        processed: usize,
+        total: usize,
+        removed: usize,
+        canceled: bool,
+    ) {
+        self.emitter.emit_dedupe_finished(processed, total, removed, canceled);
+    }
+
+    fn emit_task_progress(&self, task_id: &str, progress: f64) {
+        self.emitter.emit_task_progress(task_id, progress);
+    }
+
+    fn emit_task_error(&self, task_id: &str, error: &str) {
+        self.emitter.emit_task_error(task_id, error);
+    }
+
+    fn emit_download_progress(
+        &self,
+        task_id: &str,
+        url: &str,
+        start_time: u64,
+        plugin_id: &str,
+        received_bytes: u64,
+        total_bytes: Option<u64>,
+    ) {
+        self.emitter.emit_download_progress(task_id, url, start_time, plugin_id, received_bytes, total_bytes);
+    }
+
+    fn emit_wallpaper_update_image(&self, image_path: &str) {
+        self.emitter.emit_wallpaper_update_image(image_path);
+    }
+
+    fn emit_wallpaper_update_style(&self, style: &str) {
+        self.emitter.emit_wallpaper_update_style(style);
+    }
+
+    fn emit_wallpaper_update_transition(&self, transition: &str) {
+        self.emitter.emit_wallpaper_update_transition(transition);
     }
 }
 

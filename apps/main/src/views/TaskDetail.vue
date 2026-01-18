@@ -81,6 +81,8 @@ import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { useBigPageRoute } from "@/composables/useBigPageRoute";
+import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { diffById } from "@/utils/listDiff";
 
 type TaskFailedImage = {
     id: number;
@@ -143,7 +145,7 @@ const failedImages = ref<TaskFailedImage[]>([]);
 const taskViewRef = ref<any>(null);
 const taskContainerRef = ref<HTMLElement | null>(null);
 
-// 记录“用户主动点击重试”的失败记录（用于在 image-added 时精准移除占位）
+// 记录“用户主动点击重试”的失败记录（用于成功下载后刷新时精准移除占位）
 const retryingFailedIds = ref(new Map<number, string>()); // failedId -> url
 
 const { isInteracting } = useImageGridAutoLoad({
@@ -180,7 +182,6 @@ watch(
 // 用于实时更新运行时间的响应式时间戳
 const currentTime = ref<number>(Date.now());
 let timeUpdateInterval: number | null = null;
-let unlistenImageAdded: (() => void) | null = null;
 let unlistenTaskProgress: (() => void) | null = null;
 let unlistenDownloadState: (() => void) | null = null;
 
@@ -320,7 +321,7 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
         }
         // 同步拉取失败图片并合并到同一网格：
         // - 初始显示顺序：按 order 升序（任务开始下载的顺序）
-        // - 之后成功下载：通过 image-added 追加（保持“image-add 之后的顺序”）
+        // - 之后成功下载：由 images-change 触发刷新
         const failed = await invoke<TaskFailedImage[]>("get_task_failed_images", { taskId: taskId.value });
         failedImages.value = failed || [];
 
@@ -413,7 +414,7 @@ const syncFailedPlaceholdersIncremental = async () => {
         }
         if (toAppend.length === 0) return;
 
-        // 增量追加：不对全量 images 排序，避免影响“image-added 之后的顺序”。
+        // 刷新后：不对全量 images 排序，避免影响任务内顺序语义。
         images.value = [...images.value, ...toAppend];
         void loadImageUrls(toAppend);
     } catch (e) {
@@ -693,6 +694,74 @@ const toggleFavoriteForImages = async (imgs: ImageInfo[]) => {
     clearSelection();
 };
 
+// 设置壁纸（单选或多选）
+const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
+    try {
+        if (imagesToProcess.length > 1) {
+            // 多选：创建"桌面画册x"，添加到画册，开启轮播
+            // 1. 找到下一个可用的"桌面画册x"名称
+            await albumStore.loadAlbums();
+            let albumName = "桌面画册1";
+            let counter = 1;
+            while (albumStore.albums.some((a) => a.name === albumName)) {
+                counter++;
+                albumName = `桌面画册${counter}`;
+            }
+
+            // 2. 创建画册
+            const createdAlbum = await albumStore.createAlbum(albumName);
+
+            // 3. 将选中的图片添加到画册
+            const imageIds = imagesToProcess.map((img) => img.id);
+            try {
+                await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
+            } catch (error: any) {
+                // 提取友好的错误信息
+                const errorMessage = typeof error === "string" 
+                    ? error 
+                    : error?.message || String(error) || "添加图片到画册失败";
+                ElMessage.error(errorMessage);
+                throw error;
+            }
+
+            // 4. 获取当前设置
+            const currentSettings = await invoke<{
+                wallpaperRotationEnabled: boolean;
+                wallpaperRotationAlbumId: string | null;
+            }>("get_settings");
+
+            // 5. 如果轮播未开启，开启它
+            if (!currentSettings.wallpaperRotationEnabled) {
+                await invoke("set_wallpaper_rotation_enabled", { enabled: true });
+            }
+
+            // 6. 设置轮播画册为新创建的画册
+            await invoke("set_wallpaper_rotation_album_id", {
+                albumId: createdAlbum.id,
+            });
+
+            ElMessage.success(
+                `已开启轮播：画册「${albumName}」（${imageIds.length} 张）`
+            );
+        } else {
+            // 单选：直接设置壁纸
+            await invoke("set_wallpaper_by_image_id", {
+                imageId: imagesToProcess[0].id,
+            });
+            ElMessage.success("壁纸设置成功");
+        }
+
+        clearSelection();
+    } catch (error: any) {
+        console.error("设置壁纸失败:", error);
+        // 提取友好的错误信息
+        const errorMessage = typeof error === "string" 
+            ? error 
+            : error?.message || String(error) || "未知错误";
+        ElMessage.error(`设置壁纸失败: ${errorMessage}`);
+    }
+};
+
 const handleImageMenuCommand = async (
     payload: any
 ): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
@@ -740,6 +809,11 @@ const handleImageMenuCommand = async (
             if (imagesToProcess.length === 0) return null;
             addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
             showAddToAlbumDialog.value = true;
+            break;
+        case "wallpaper":
+            if (imagesToProcess.length > 0) {
+                await setWallpaper(imagesToProcess);
+            }
             break;
         case "open":
             if (!isMultiSelect && imagesToProcess.length === 1) {
@@ -827,62 +901,6 @@ const startTimersAndListeners = async () => {
         currentTime.value = Date.now();
     }, 1000);
 
-    // 监听图片添加事件（来自爬虫下载完成）
-    if (!unlistenImageAdded) {
-        unlistenImageAdded = await listen<{ taskId: string; imageId: string; image?: any; failedImageId?: number }>(
-            "image-added",
-            async (event) => {
-                // 如果事件中的 taskId 与当前任务ID匹配，则添加新图片到列表
-                if (event.payload.taskId && event.payload.taskId === taskId.value && event.payload.imageId) {
-                    const imageId = event.payload.imageId;
-
-                    // 检查图片是否已经在列表中（避免重复添加）
-                    if (images.value.some(img => img.id === imageId)) {
-                        return;
-                    }
-
-                    try {
-                        // 获取新图片的详细信息
-                        const newImage = await invoke<ImageInfo | null>("get_image_by_id", { imageId });
-                        if (!newImage) {
-                            return;
-                        }
-
-                        // 若该 image-added 来自“失败占位重试”，移除对应占位（优先用 failedImageId，其次用 retrying map）
-                        const fid = event.payload.failedImageId;
-                        if (typeof fid === "number" && fid > 0) {
-                            removeFailedPlaceholderById(fid);
-                            retryingFailedIds.value.delete(fid);
-                        } else {
-                            // fallback：按 url 精准匹配用户点过重试的那条
-                            for (const [k, v] of retryingFailedIds.value.entries()) {
-                                if (v && newImage.url === v) {
-                                    removeFailedPlaceholderById(k);
-                                    retryingFailedIds.value.delete(k);
-                                    break;
-                                }
-                            }
-                        }
-
-                        // 检查图片是否属于当前任务（通过获取任务图片ID列表）
-                        const taskImageIds = await invoke<string[]>("get_task_image_ids", { taskId: taskId.value });
-                        if (!taskImageIds.includes(imageId)) {
-                            return;
-                        }
-
-                        // 添加到列表：
-                        // 注意：useImageUrlLoader 内部用 watch(() => imagesRef.value, { deep: false })
-                        // 维护 imageIdSet；如果这里用 push 原地修改数组引用不变，会导致新图片永远不进入 loader 的集合。
-                        images.value = [...images.value, newImage];
-                        void loadImageUrls([newImage]);
-                    } catch (error) {
-                        console.error("添加新图片到任务失败:", error);
-                    }
-                }
-            }
-        );
-    }
-
     // 监听任务进度更新事件，当任务状态变化时重新加载任务信息
     if (!unlistenTaskProgress) {
         unlistenTaskProgress = await listen<{ taskId: string; progress: number }>(
@@ -929,10 +947,6 @@ const stopTimersAndListeners = () => {
     stopTimers();
 
     // 移除事件监听器
-    if (unlistenImageAdded) {
-        unlistenImageAdded();
-        unlistenImageAdded = null;
-    }
     if (unlistenTaskProgress) {
         unlistenTaskProgress();
         unlistenTaskProgress = null;
@@ -942,6 +956,45 @@ const stopTimersAndListeners = () => {
         unlistenDownloadState = null;
     }
 };
+
+// 统一图片变更事件：不做增量同步，收到 images-change 后刷新“当前页”（250ms trailing 节流，不丢最后一次）
+useImagesChangeRefresh({
+    enabled: isOnTaskRoute,
+    waitMs: 250,
+    filter: (p) => {
+        // 明确 taskId 且不匹配：直接忽略
+        if (p.taskId && p.taskId !== taskId.value) return false;
+        // 新增图片：imageIds 在刷新前必然不在当前列表里，因此不能用“命中当前页”来过滤
+        const reason = String((p as any)?.reason ?? "");
+        if (p.taskId && p.taskId === taskId.value && reason === "add") return true;
+        // 若给了 imageIds：只有命中当前页才刷新（减少无关的全局删除/去重事件导致的刷新）
+        const ids = Array.isArray(p.imageIds) ? p.imageIds : [];
+        if (ids.length > 0) {
+            return ids.some((id) => images.value.some((img) => img.id === id));
+        }
+        // 没有任何可用 hint：保守刷新
+        return true;
+    },
+    onRefresh: async () => {
+        if (!taskId.value) return;
+        const prevList = images.value.slice();
+        await loadTaskInfo();
+        await loadTaskImages({ showSkeleton: false });
+
+        const { addedIds, removedIds } = diffById(prevList, images.value);
+        if (removedIds.length > 0) {
+            removeFromCacheByIds(removedIds);
+            taskViewRef.value?.clearSelection?.();
+        }
+        if (addedIds.length > 0) {
+            const addedSet = new Set(addedIds);
+            const addedImages = images.value.filter((img) => addedSet.has(img.id));
+            if (addedImages.length > 0) {
+                void loadImageUrls(addedImages);
+            }
+        }
+    },
+});
 
 onMounted(async () => {
     const id = route.params.id as string;
@@ -968,9 +1021,8 @@ onActivated(async () => {
 });
 
 onDeactivated(() => {
-    // 页面失活时只清理定时器（节省资源），但保留事件监听器
-    // 这样即使不在 TaskDetail 页面，图片也会继续同步添加到列表
-    stopTimers();
+    // 页面失活时清理定时器和事件监听器：TaskDetail 的数据仅在激活时刷新
+    stopTimersAndListeners();
 });
 
 </script>

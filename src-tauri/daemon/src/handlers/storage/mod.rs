@@ -6,6 +6,7 @@ pub mod tasks;
 pub mod run_configs;
 
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
+use kabegame_core::ipc::EventBroadcaster;
 use kabegame_core::storage::Storage;
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use std::sync::Arc;
 pub async fn handle_storage_request(
     req: &CliIpcRequest,
     storage: Arc<Storage>,
+    broadcaster: Arc<EventBroadcaster>,
 ) -> Option<CliIpcResponse> {
     match req {
         // Images
@@ -28,19 +30,19 @@ pub async fn handle_storage_request(
             Some(images::find_image_by_path(storage, path).await)
         }
         CliIpcRequest::StorageDeleteImage { image_id } => {
-            Some(images::delete_image(storage, image_id).await)
+            Some(images::delete_image(storage, broadcaster, image_id).await)
         }
         CliIpcRequest::StorageRemoveImage { image_id } => {
-            Some(images::remove_image(storage, image_id).await)
+            Some(images::remove_image(storage, broadcaster, image_id).await)
         }
         CliIpcRequest::StorageBatchDeleteImages { image_ids } => {
-            Some(images::batch_delete_images(storage, image_ids).await)
+            Some(images::batch_delete_images(storage, broadcaster, image_ids).await)
         }
         CliIpcRequest::StorageBatchRemoveImages { image_ids } => {
-            Some(images::batch_remove_images(storage, image_ids).await)
+            Some(images::batch_remove_images(storage, broadcaster, image_ids).await)
         }
         CliIpcRequest::StorageToggleImageFavorite { image_id, favorite } => {
-            Some(images::toggle_image_favorite(storage, image_id, *favorite).await)
+            Some(images::toggle_image_favorite(storage, broadcaster, image_id, *favorite).await)
         }
 
         // Albums

@@ -162,14 +162,6 @@ export function useImageOperations(
       const action = deleteFiles ? "删除" : "移除";
       ElMessage.success(`已${action} ${count} 张图片`);
       galleryViewRef.value?.clearSelection?.();
-
-      // 通知其他视图同步（必须在本地移除后再发出，否则 Gallery 自己的监听器会抢先 refresh）
-      const eventType = deleteFiles ? "images-deleted" : "images-removed";
-      window.dispatchEvent(
-        new CustomEvent(eventType, {
-          detail: { imageIds },
-        })
-      );
     } catch (error) {
       const action = deleteFiles ? "删除" : "移除";
       console.error(`${action}失败:`, error);

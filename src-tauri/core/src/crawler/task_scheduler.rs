@@ -275,13 +275,7 @@ fn worker_loop(
         if download_queue.is_task_canceled(&req.task_id) {
             let end = now_ms();
             let e = "Task canceled".to_string();
-            emitter.emit(
-                "task-error",
-                serde_json::json!({
-                    "taskId": req.task_id.clone(),
-                    "error": e.clone()
-                }),
-            );
+            emitter.emit_task_error(&req.task_id, &e);
             let _ =
                 persist_task_status(&storage, &req.task_id, "canceled", None, Some(end), Some(e.clone()));
             emit_task_status(&*emitter, &req.task_id, "canceled", None, Some(end), Some(e));
@@ -310,13 +304,7 @@ fn worker_loop(
                 let end = now_ms();
                 if download_queue.is_task_canceled(&req.task_id) {
                     let e = "Task canceled".to_string();
-                    emitter.emit(
-                        "task-error",
-                        serde_json::json!({
-                            "taskId": req.task_id.clone(),
-                            "error": e.clone()
-                        }),
-                    );
+                    emitter.emit_task_error(&req.task_id, &e);
                     let _ = persist_task_status(
                         &storage,
                         &req.task_id,
@@ -336,13 +324,7 @@ fn worker_loop(
                 let end = now_ms();
                 let status = if is_canceled { "canceled" } else { "failed" };
 
-                emitter.emit(
-                    "task-error",
-                    serde_json::json!({
-                        "taskId": req.task_id,
-                        "error": e.clone()
-                    }),
-                );
+                emitter.emit_task_error(&req.task_id, &e);
 
                 let _ = persist_task_status(&storage, &req.task_id, status, None, Some(end), Some(e.clone()));
                 emit_task_status(&*emitter, &req.task_id, status, None, Some(end), Some(e));
@@ -428,3 +410,5 @@ fn run_task(
         req.http_headers.clone(),
     )
 }
+
+

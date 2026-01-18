@@ -1,6 +1,8 @@
 //! Settings 命令处理器
 
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
+use kabegame_core::ipc::EventBroadcaster;
+use kabegame_core::ipc::events::DaemonEvent;
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::settings::Settings;
 use std::sync::Arc;
@@ -10,6 +12,7 @@ pub async fn handle_settings_request(
     req: &CliIpcRequest,
     settings: Arc<Settings>,
     task_scheduler: Arc<TaskScheduler>,
+    broadcaster: Arc<EventBroadcaster>,
 ) -> Option<CliIpcResponse> {
     match req {
         CliIpcRequest::SettingsGet => Some(get_settings(settings).await),

@@ -18,7 +18,7 @@ pub fn mount_virtual_drive(
 
 #[cfg(feature = "virtual-drive")]
 #[tauri::command]
-pub fn unmount_virtual_drive(
+pub async fn unmount_virtual_drive(
     drive: tauri::State<VirtualDriveService>,
     mount_point: Option<String>,
 ) -> Result<bool, String> {
@@ -48,16 +48,14 @@ pub fn unmount_virtual_drive(
 
         let mp_norm = crate::virtual_drive::drive_service::normalize_mount_point(mp)?;
 
-        let try_unmount_via_ipc = || -> Result<VdIpcResponse, String> {
-            tauri::async_runtime::block_on(async {
+        let try_unmount_via_ipc = || async {
                 kabegame_core::virtual_drive::ipc::request(VdIpcRequest::Unmount {
                     mount_point: mp_norm.clone(),
                 })
                 .await
-            })
         };
 
-        let resp = match try_unmount_via_ipc() {
+        let resp: VdIpcResponse = match try_unmount_via_ipc().await {
             Ok(r) => r,
             Err(_ipc_err) => {
                 // daemon 不存在：runas 启动
@@ -72,29 +70,28 @@ pub fn unmount_virtual_drive(
                 }
                 kabegame_core::shell_open::runas(&cliw.to_string_lossy(), "vd daemon")?;
 
-                // 等待 daemon 就绪
+                // 等待 daemon 就绪（最多 10s）
                 let mut ready = false;
                 for _ in 0..100 {
-                    if tauri::async_runtime::block_on(async {
-                        kabegame_core::virtual_drive::ipc::request(VdIpcRequest::Status)
+                    if kabegame_core::virtual_drive::ipc::request(VdIpcRequest::Status)
                             .await
                             .is_ok()
-                    }) {
+                    {
                         ready = true;
                         break;
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
                 if !ready {
                     let log_path = std::env::temp_dir().join("kabegame-vd-daemon.log");
                     return Err(format!(
-                        "已请求管理员权限启动 VD daemon，但 IPC 未就绪。\n\n如果找不到日志文件，说明 daemon 大概率没有启动成功：\n- 日志路径：{}\n\n下一步建议：\n1) 让用户打开任务管理器-详细信息，确认是否存在 kabegame-cli.exe / kabegame-cliw.exe；\n2) 让用户以管理员手动运行：kabegame-cli.exe vd daemon（看是否立即退出/是否生成日志）；\n3) 如果有杀软/企业策略，检查是否拦截了新进程/命名管道。\n\n原始错误：{}",
+                        "已请求管理员权限启动 VD daemon，但 IPC 未就绪。\n\n如果找不到日志文件，说明 daemon 大概率没有启动成功：\n- 日志路径：{}\n\n原始错误：{}",
                         log_path.display(),
                         _ipc_err
                     ));
                 }
 
-                try_unmount_via_ipc()?
+                try_unmount_via_ipc().await?
             }
         };
 
@@ -112,7 +109,7 @@ pub fn unmount_virtual_drive(
 
 #[cfg(feature = "virtual-drive")]
 #[tauri::command]
-pub fn mount_virtual_drive_and_open_explorer(
+pub async fn mount_virtual_drive_and_open_explorer(
     app: tauri::AppHandle,
     mount_point: String,
     storage: tauri::State<Storage>,
@@ -137,16 +134,14 @@ pub fn mount_virtual_drive_and_open_explorer(
                 let mp_norm = crate::virtual_drive::drive_service::normalize_mount_point(&mount_point)?;
 
                 // 1) 先尝试直接走 IPC（如果 daemon 已存在则不会弹 UAC）
-                let try_mount_via_ipc = || -> Result<VdIpcResponse, String> {
-                    tauri::async_runtime::block_on(async {
+                let try_mount_via_ipc = || async {
                         kabegame_core::virtual_drive::ipc::request(VdIpcRequest::Mount {
                             mount_point: mp_norm.clone(),
                         })
                         .await
-                    })
                 };
 
-                let resp = match try_mount_via_ipc() {
+                let resp: VdIpcResponse = match try_mount_via_ipc().await {
                     Ok(r) => r,
                     Err(_ipc_err) => {
                         // 2) daemon 不存在：用 runas 启动提权 daemon（常驻）
@@ -166,15 +161,14 @@ pub fn mount_virtual_drive_and_open_explorer(
                         // 3) 等待 daemon 就绪：轮询 IPC status（默认最多 30s；Win10 + 杀软环境可能更慢）
                         let mut ready = false;
                         for _ in 0..300 {
-                            if tauri::async_runtime::block_on(async {
-                                kabegame_core::virtual_drive::ipc::request(VdIpcRequest::Status)
+                            if kabegame_core::virtual_drive::ipc::request(VdIpcRequest::Status)
                                     .await
                                     .is_ok()
-                            }) {
+                            {
                                 ready = true;
                                 break;
                             }
-                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         }
                         if !ready {
                             return Err(format!(
@@ -183,7 +177,7 @@ pub fn mount_virtual_drive_and_open_explorer(
                             ));
                         }
 
-                        try_mount_via_ipc()?
+                        try_mount_via_ipc().await?
                     }
                 };
 

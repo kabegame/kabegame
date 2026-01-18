@@ -93,6 +93,7 @@ import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
 import { useSidebar } from "./composables/useSidebar";
 import DaemonStartupError from "@kabegame/core/components/common/DaemonStartupError.vue";
+import { listen } from "@tauri-apps/api/event";
 
 
 // 路由高亮
@@ -128,6 +129,17 @@ onMounted(async () => {
   await initDaemonStatus();
   await initWindowEvents();
   await initFileDrop();
+
+  // 监听设置变更事件（事件驱动更新设置）
+  // 当后端设置变化时，自动更新本地设置 store
+  await listen<Record<string, any>>("setting-change", async (event) => {
+    const changes = event.payload;
+    // 只更新变化的部分（后端只广播变化的部分）
+    if (changes && typeof changes === "object") {
+      Object.assign(settingsStore.values, changes);
+      console.log("[Settings] 收到设置变更事件，已更新:", Object.keys(changes));
+    }
+  });
 
   // 预加载关键路由组件，避免首次点击时的卡顿
   // 使用 requestIdleCallback（如有）或 setTimeout 在空闲时加载

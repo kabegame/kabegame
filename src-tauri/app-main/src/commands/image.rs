@@ -5,7 +5,7 @@ use crate::daemon_client;
 use crate::storage::Storage;
 #[cfg(all(feature = "virtual-drive", target_os = "windows"))]
 use crate::virtual_drive::VirtualDriveService;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 #[tauri::command]
 pub async fn get_images_count() -> Result<usize, String> {
@@ -102,7 +102,7 @@ pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
 #[tauri::command]
 #[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
 pub async fn toggle_image_favorite(
-    app: AppHandle,
+    _app: AppHandle,
     image_id: String,
     favorite: bool,
 ) -> Result<(), String> {
@@ -110,23 +110,13 @@ pub async fn toggle_image_favorite(
         .storage_toggle_image_favorite(image_id.clone(), favorite)
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
-
-    let _ = app.emit(
-        "album-images-changed",
-        serde_json::json!({
-            "albumId": "00000000-0000-0000-0000-000000000001",
-            "reason": if favorite { "add" } else { "remove" },
-            "imageIds": [image_id]
-        }),
-    );
-
     Ok(())
 }
 
 #[tauri::command]
 #[cfg(all(feature = "virtual-drive", target_os = "windows"))]
 pub async fn toggle_image_favorite(
-    app: AppHandle,
+    _app: AppHandle,
     image_id: String,
     favorite: bool,
     state: tauri::State<Storage>,
@@ -136,15 +126,6 @@ pub async fn toggle_image_favorite(
         .storage_toggle_image_favorite(image_id.clone(), favorite)
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
-
-    let _ = app.emit(
-        "album-images-changed",
-        serde_json::json!({
-            "albumId": "00000000-0000-0000-0000-000000000001",
-            "reason": if favorite { "add" } else { "remove" },
-            "imageIds": [image_id]
-        }),
-    );
 
     drive.notify_album_dir_changed(state.inner(), "00000000-0000-0000-0000-000000000001");
     Ok(())

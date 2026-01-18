@@ -1,5 +1,5 @@
 <template>
-  <el-select v-model="localValue" placeholder="请选择过渡效果" style="min-width: 180px" :disabled="disabled"
+  <el-select v-model="localValue" placeholder="请选择过渡效果" style="min-width: 180px" :disabled="disabled || externalDisabled"
     @change="handleChange">
     <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value" />
   </el-select>
@@ -13,6 +13,10 @@ import { listen } from "@tauri-apps/api/event";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_WINDOWS } from "@kabegame/core/env";
+
+const props = defineProps<{
+  disabled?: boolean;
+}>();
 
 type Transition = "none" | "fade" | "slide" | "zoom";
 type Opt = { label: string; value: Transition };
@@ -46,13 +50,14 @@ const options = computed<Opt[]>(() => {
   }
 });
 
-const disabled = computed(() => {
+const externalDisabled = computed(() => {
   if (uiStore.wallpaperModeSwitching) return true;
   if (isApplying.value) return true;
   // 移除轮播未启用时的禁用限制，允许用户选择淡入淡出等过渡效果
   // 即使轮播未启用，用户也可以预先设置过渡效果，待启用轮播后生效
   return false;
 });
+const disabled = computed(() => props.disabled || externalDisabled.value);
 
 const localValue = ref<string>("none");
 watch(

@@ -6,6 +6,7 @@
           v-model="localAlbumId"
           class="album-select"
           :loading="albumStore.loading"
+          :disabled="disabled"
           placeholder="选择用于轮播的画册"
           style="min-width: 180px"
           @change="handleAlbumChange"
@@ -22,7 +23,7 @@
     </template>
 
     <template v-else>
-      <el-button type="primary" @click="handleNavigatePickWallpaper">前往画廊选择壁纸</el-button>
+      <el-button type="primary" :disabled="disabled" @click="handleNavigatePickWallpaper">前往画廊选择壁纸</el-button>
     </template>
 
     <div class="hint">
@@ -53,6 +54,10 @@ import { FolderOpened } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useAlbumStore } from "@/stores/albums";
+
+const props = defineProps<{
+  disabled?: boolean;
+}>();
 
 const router = useRouter();
 const settingsStore = useSettingsStore();
@@ -119,6 +124,7 @@ watch(
 );
 
 const handleAlbumChange = async (value: string) => {
+  if (props.disabled) return;
   try {
     // value: "" 表示全画廊；非空表示指定画册
     await invoke("set_wallpaper_rotation_album_id", { albumId: value });

@@ -2340,6 +2340,16 @@ fn download_worker_loop(dq: DownloadQueue) {
             }
         }
 
+        // 关键：对前端显式发出 downloading，配合 download-progress 才能显示下载进度条。
+        dq.emitter.emit_download_state(
+            &job.task_id,
+            &job.url,
+            job.download_start_time,
+            &job.plugin_id,
+            "downloading",
+            None,
+        );
+
         let url_clone = job.url.clone();
         let plugin_id_clone = job.plugin_id.clone();
         let task_id_clone = job.task_id.clone();
@@ -2556,33 +2566,32 @@ fn download_worker_loop(dq: DownloadQueue) {
                                     if added > 0 && album_id == crate::storage::FAVORITE_ALBUM_ID {
                                         image_info_for_event.favorite = true;
                                     }
-                                    if added > 0 {
-                                        dq.emitter.emit(
-                                            "album-images-changed",
-                                            serde_json::json!({
-                                                "albumId": album_id,
-                                                "reason": "add",
-                                                "imageIds": [image_id.clone()]
-                                            }),
-                                        );
-                                    }
                                 }
                             }
 
-                            let _ = serde_json::to_value(&image_info_for_event).map(|img_val| {
-                                let mut payload = serde_json::json!({
-                                    "taskId": task_id_clone,
-                                    "imageId": image_id,
-                                    "image": img_val,
-                                });
-                                if let Some(ref album_id) = output_album_id_clone {
-                                    if !album_id.is_empty() {
-                                        payload["albumId"] =
-                                            serde_json::Value::String(album_id.clone());
-                                    }
-                                }
-                                dq.emitter.emit("image-added", payload);
+                            // 统一图片变更事件：前端通过 images-change 刷新当前 provider 视图
+                            let mut change_payload = serde_json::json!({
+                                "reason": "add",
+                                "imageIds": [image_id.clone()],
                             });
+                            change_payload["taskId"] = serde_json::Value::String(task_id_clone.clone());
+                            if let Some(ref album_id) = output_album_id_clone {
+                                if !album_id.is_empty() {
+                                    change_payload["albumId"] =
+                                        serde_json::Value::String(album_id.clone());
+                                }
+                            }
+                            dq.emitter.emit("images-change", change_payload);
+
+                            // 下载完成：发送 completed 状态，确保下载列表正确更新
+                            dq.emitter.emit_download_state(
+                                &task_id_clone,
+                                &url_clone,
+                                download_start_time,
+                                &plugin_id_clone,
+                                "completed",
+                                None,
+                            );
                         }
                         Err(_) => {
                             dq.emitter.emit_download_state(

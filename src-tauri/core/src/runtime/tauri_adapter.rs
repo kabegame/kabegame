@@ -105,6 +105,58 @@ impl EventEmitter for TauriEventEmitter {
     fn emit(&self, event: &str, payload: serde_json::Value) {
         let _ = self.app.emit(event, payload);
     }
+
+    fn emit_task_progress(&self, task_id: &str, progress: f64) {
+        let payload = serde_json::json!({
+            "taskId": task_id,
+            "progress": progress
+        });
+        let _ = self.app.emit("task-progress", payload);
+    }
+
+    fn emit_task_error(&self, task_id: &str, error: &str) {
+        let payload = serde_json::json!({
+            "taskId": task_id,
+            "error": error
+        });
+        let _ = self.app.emit("task-error", payload);
+    }
+
+    fn emit_download_progress(
+        &self,
+        task_id: &str,
+        url: &str,
+        start_time: u64,
+        plugin_id: &str,
+        received_bytes: u64,
+        total_bytes: Option<u64>,
+    ) {
+        let mut payload = serde_json::json!({
+            "taskId": task_id,
+            "url": url,
+            "startTime": start_time,
+            "pluginId": plugin_id,
+            "receivedBytes": received_bytes,
+        });
+        if let Some(total) = total_bytes {
+            payload["totalBytes"] = serde_json::Value::Number(
+                serde_json::Number::from(total)
+            );
+        }
+        let _ = self.app.emit("download-progress", payload);
+    }
+
+    fn emit_wallpaper_update_image(&self, image_path: &str) {
+        let _ = self.app.emit("wallpaper-update-image", image_path);
+    }
+
+    fn emit_wallpaper_update_style(&self, style: &str) {
+        let _ = self.app.emit("wallpaper-update-style", style);
+    }
+
+    fn emit_wallpaper_update_transition(&self, transition: &str) {
+        let _ = self.app.emit("wallpaper-update-transition", transition);
+    }
 }
 
 /// Tauri 状态管理器：将 Tauri 的 state 方法适配到 StateManager trait
@@ -186,6 +238,38 @@ impl EventEmitter for TauriRuntime {
 
     fn emit(&self, event: &str, payload: serde_json::Value) {
         self.emitter.emit(event, payload);
+    }
+
+    fn emit_task_progress(&self, task_id: &str, progress: f64) {
+        self.emitter.emit_task_progress(task_id, progress);
+    }
+
+    fn emit_task_error(&self, task_id: &str, error: &str) {
+        self.emitter.emit_task_error(task_id, error);
+    }
+
+    fn emit_download_progress(
+        &self,
+        task_id: &str,
+        url: &str,
+        start_time: u64,
+        plugin_id: &str,
+        received_bytes: u64,
+        total_bytes: Option<u64>,
+    ) {
+        self.emitter.emit_download_progress(task_id, url, start_time, plugin_id, received_bytes, total_bytes);
+    }
+
+    fn emit_wallpaper_update_image(&self, image_path: &str) {
+        self.emitter.emit_wallpaper_update_image(image_path);
+    }
+
+    fn emit_wallpaper_update_style(&self, style: &str) {
+        self.emitter.emit_wallpaper_update_style(style);
+    }
+
+    fn emit_wallpaper_update_transition(&self, transition: &str) {
+        self.emitter.emit_wallpaper_update_transition(transition);
     }
 }
 

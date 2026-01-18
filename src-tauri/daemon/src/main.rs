@@ -14,7 +14,7 @@ mod dedupe_service;
 use handlers::{dispatch_request, RequestContext};
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
-    ipc::{ipc, EventBroadcaster},
+    ipc::{ipc, CliIpcRequest, EventBroadcaster},
     plugin::PluginManager,
     providers::{ProviderCacheConfig, ProviderRuntime},
     runtime::ipc_runtime::IpcRuntime,
@@ -95,14 +95,68 @@ async fn daemon_main() -> Result<(), String> {
         if let Ok(dir) = std::env::var("KABEGAME_PROVIDER_DB_DIR") {
             cfg.db_dir = std::path::PathBuf::from(dir);
         }
-        Arc::new(
-            ProviderRuntime::new(cfg)
-                .unwrap_or_else(|e| {
-                    eprintln!("[providers] init ProviderRuntime failed, fallback to default cfg: {}", e);
-                    ProviderRuntime::new(ProviderCacheConfig::default())
-                        .expect("ProviderRuntime init failed")
-                }),
-        )
+        
+        // 尝试初始化 ProviderRuntime
+        match ProviderRuntime::new(cfg.clone()) {
+            Ok(rt) => Arc::new(rt),
+            Err(e) => {
+                // 初始化失败，检查是否是数据库锁定错误
+                let error_msg = format!("{}", e);
+                let is_lock_error = error_msg.contains("could not acquire lock") 
+                    || error_msg.contains("Resource temporarily unavailable")
+                    || error_msg.contains("WouldBlock");
+                
+                if is_lock_error {
+                    // 如果是锁定错误，检查是否有其他 daemon 正在运行
+                    eprintln!("[providers] 检测到数据库锁定错误，检查是否有其他 daemon 正在运行...");
+                    match ipc::request(CliIpcRequest::Status).await {
+                        Ok(_) => {
+                            eprintln!("错误: ProviderRuntime 初始化失败，因为已有其他 daemon 正在运行。");
+                            eprintln!("请先停止正在运行的 daemon，或确保只有一个 daemon 实例。");
+                            return Err(format!("另一个 daemon 实例正在运行（数据库被锁定）"));
+                        },
+                        Err(_) => {
+                            // 无法连接到其他 daemon，可能是其他原因导致的锁定
+                            eprintln!("[providers] 无法连接到其他 daemon，但检测到数据库锁定");
+                        }
+                    }
+                }
+                
+                eprintln!("[providers] init ProviderRuntime failed, fallback to default cfg: {}", e);
+                
+                // 尝试使用默认配置
+                match ProviderRuntime::new(ProviderCacheConfig::default()) {
+                    Ok(rt) => Arc::new(rt),
+                    Err(e2) => {
+                        let error_msg2 = format!("{}", e2);
+                        let is_lock_error2 = error_msg2.contains("could not acquire lock") 
+                            || error_msg2.contains("Resource temporarily unavailable")
+                            || error_msg2.contains("WouldBlock");
+                        
+                        if is_lock_error2 {
+                            // 默认配置也锁定，再次检查
+                            eprintln!("[providers] 默认配置也失败，检查是否有其他 daemon 正在运行...");
+                            match ipc::request(CliIpcRequest::Status).await {
+                                Ok(_) => {
+                                    eprintln!("错误: ProviderRuntime 初始化失败，因为已有其他 daemon 正在运行。");
+                                    eprintln!("请先停止正在运行的 daemon，或确保只有一个 daemon 实例。");
+                                    return Err(format!("另一个 daemon 实例正在运行（数据库被锁定）"));
+                                },
+                                Err(_) => {
+                                    // 无法连接，但确实是锁定错误
+                                    eprintln!("错误: ProviderRuntime 初始化失败，数据库被锁定。");
+                                    eprintln!("请检查是否有其他进程正在使用数据库，或稍后重试。");
+                                    return Err(format!("ProviderRuntime init failed: {}", e2));
+                                }
+                            }
+                        } else {
+                            // 不是锁定错误，直接返回错误
+                            return Err(format!("ProviderRuntime init failed: {}", e2));
+                        }
+                    }
+                }
+            }
+        }
     };
     let ctx = Arc::new(RequestContext {
         storage,
@@ -115,6 +169,7 @@ async fn daemon_main() -> Result<(), String> {
     });
 
     // Virtual Drive（仅 Windows + feature 启用时）
+    // TODO 初始化 virtual drive
     #[cfg(all(feature = "virtual-drive", target_os = "windows"))]
     {
         println!("  ✓ Virtual drive support enabled");

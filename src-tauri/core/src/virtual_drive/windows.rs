@@ -166,10 +166,10 @@ impl VdOpsContext for WindowsVdOpsContext<'_> {
 
     fn album_images_removed(&self, album_name: &str) {
         let _ = self.fs.app.emit(
-            "album-images-changed",
+            "images-change",
             serde_json::json!({
                 "albumName": album_name,
-                "reason": "remove"
+                "reason": "album-remove"
             }),
         );
         notify_explorer_dir_changed_path(self.fs.mount_point.as_ref());

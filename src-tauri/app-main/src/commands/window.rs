@@ -1,7 +1,8 @@
 // 窗口管理相关命令
 
 #[cfg(target_os = "windows")]
-pub fn fix_wallpaper_window_zorder(app: &tauri::AppHandle) {
+pub async fn fix_wallpaper_window_zorder(app: tauri::AppHandle) {
+    use crate::daemon_client;
     use tauri::Manager;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -10,9 +11,9 @@ pub fn fix_wallpaper_window_zorder(app: &tauri::AppHandle) {
     };
 
     // 检查是否是窗口模式（IPC-only：从 daemon 读取 settings.wallpaperMode）
-    let is_window_mode = tauri::async_runtime::block_on(async {
-        daemon_client::get_ipc_client().settings_get().await
-    })
+    let is_window_mode = daemon_client::get_ipc_client()
+        .settings_get()
+        .await
     .ok()
     .and_then(|v| v.get("wallpaperMode").and_then(|x| x.as_str()).map(|s| s == "window"))
     .unwrap_or(false);

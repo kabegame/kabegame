@@ -3,7 +3,7 @@
         class="wallpaper-mode-radio-group">
         <el-radio value="native">原生模式</el-radio>
         <el-radio v-if="IS_WINDOWS" value="window">窗口模式</el-radio>
-        <el-radio v-else-if="IS_PLASMA" value="plasma-plugin">Plasma 插件模式</el-radio>
+        <el-radio v-else-if="IS_PLASMA" value="plasma-plugin" disabled>Plasma 插件模式（开发中，敬请期待）</el-radio>
     </el-radio-group>
 </template>
 

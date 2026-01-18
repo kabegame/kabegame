@@ -98,7 +98,9 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<RequestContext>) -> C
     }
 
     // 尝试各个处理器
-    if let Some(resp) = storage::handle_storage_request(&req, ctx.storage.clone()).await {
+    if let Some(resp) =
+        storage::handle_storage_request(&req, ctx.storage.clone(), ctx.broadcaster.clone()).await
+    {
         return resp;
     }
 
@@ -107,7 +109,7 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<RequestContext>) -> C
     }
 
     if let Some(resp) =
-        settings::handle_settings_request(&req, ctx.settings.clone(), ctx.task_scheduler.clone())
+        settings::handle_settings_request(&req, ctx.settings.clone(), ctx.task_scheduler.clone(), ctx.broadcaster.clone())
             .await
     {
         return resp;

@@ -1,5 +1,5 @@
 <template>
-  <el-select v-model="localValue" placeholder="请选择显示方式" style="min-width: 180px" :disabled="disabled"
+  <el-select v-model="localValue" placeholder="请选择显示方式" style="min-width: 180px" :disabled="disabled || externalDisabled"
     @change="handleChange">
     <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value">
       <span>{{ opt.desc }}</span>
@@ -16,6 +16,10 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_WINDOWS } from "@kabegame/core/env";
 
+const props = defineProps<{
+  disabled?: boolean;
+}>();
+
 type Style = "fill" | "fit" | "stretch" | "center" | "tile";
 type Opt = { label: string; value: Style; desc: string };
 
@@ -27,7 +31,8 @@ const nativeWallpaperStyles = ref<Style[]>([]);
 
 const mode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 
-const disabled = computed(() => uiStore.wallpaperModeSwitching || isApplying.value);
+const externalDisabled = computed(() => uiStore.wallpaperModeSwitching || isApplying.value);
+const disabled = computed(() => props.disabled || externalDisabled.value);
 
 const allOptions: Opt[] = [
   { label: "填充", value: "fill", desc: "填充 - 保持宽高比，填满屏幕（可能裁剪）" },

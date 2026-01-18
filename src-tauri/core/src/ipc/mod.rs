@@ -12,8 +12,14 @@ pub mod event_listeners;
 
 pub use client::IpcClient;
 pub use ipc::{CliIpcRequest, CliIpcResponse};
-pub use events::{EventListener, DaemonEvent, DownloadStateEvent, TaskStatusEvent};
-pub use events::{on_task_log, on_download_state, on_task_status, start_listening, stop_listening};
+pub use events::{
+    DaemonEvent, DedupeFinishedEvent, DedupeProgressEvent, DownloadStateEvent, EventListener,
+    SettingChangeEvent, TaskProgressEvent, TaskStatusEvent,
+};
+pub use events::{
+    on_dedupe_finished, on_dedupe_progress, on_download_state, on_setting_change, on_task_log, on_task_progress,
+    on_task_status, start_listening, stop_listening,
+};
 pub use broadcaster::EventBroadcaster;
 
 #[cfg(feature = "tauri")]

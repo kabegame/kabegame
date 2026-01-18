@@ -1,5 +1,5 @@
 <template>
-  <el-switch v-model="localValue" :disabled="loading" :loading="loading" @change="handleChange" />
+  <el-switch v-model="localValue" :disabled="disabled || loading" :loading="loading" @change="handleChange" />
 </template>
 
 <script setup lang="ts">
@@ -7,6 +7,10 @@ import { ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+
+const props = defineProps<{
+  disabled?: boolean;
+}>();
 
 const settingsStore = useSettingsStore();
 
@@ -33,7 +37,7 @@ const waitForRotatorStatus = async (expected: "running" | "idle", maxRetries: nu
 };
 
 const handleChange = async (value: boolean) => {
-  if (loading.value) return;
+  if (loading.value || props.disabled) return;
   loading.value = true;
   try {
     if (value) {

@@ -93,6 +93,8 @@ import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { useBigPageRoute } from "@/composables/useBigPageRoute";
+import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { diffById } from "@/utils/listDiff";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -319,6 +321,8 @@ const isRefreshing = ref(false); // 刷新中状态，用于阻止刷新时 Empt
 const refreshKey = ref(0);
 // dragScroll 拖拽滚动期间：暂停实时 loadImageUrls，优先保证滚动帧率
 const isInteracting = ref(false);
+// keep-alive：仅在页面激活时响应 images-change（避免后台无意义刷新）
+const isGalleryActive = ref(true);
 // const pendingAlbumImages = ref<ImageInfo[]>([]);
 // const pendingAlbumImageIds = computed(() => pendingAlbumImages.value.map(img => img.id));
 // const selectedImage = ref<ImageInfo | null>(null);
@@ -339,7 +343,6 @@ const {
   imageSrcMap,
   loadImageUrls,
   refreshImagesPreserveCache,
-  refreshLatestIncremental,
   loadMoreImages: loadMoreImagesFromComposable,
   jumpToBigPage,
   removeFromUiCacheByIds,
@@ -828,6 +831,50 @@ watch(tasks, (newTasks, oldTasks) => {
   });
 }, { deep: true });
 
+useImagesChangeRefresh({
+  enabled: isGalleryActive,
+  waitMs: 250,
+  onRefresh: async () => {
+    const prevList = displayedImages.value.slice();
+    // 当前壁纸被删/移除：前端清空当前选中（后端也会清空设置，这里是 UI 兜底）
+
+    // 先更新 total（用于页码越界兜底）
+    await loadTotalImagesCount();
+
+    // 刷新“当前页”数据：不 reset，不卸载组件，只替换 images 数组引用
+    await refreshImagesPreserveCache(false, { preserveScroll: true });
+
+    const { addedIds, removedIds } = diffById(prevList, displayedImages.value);
+
+    // 当前壁纸被删/移除：前端清空当前选中（后端也会清空设置，这里是 UI 兜底）
+    if (
+      currentWallpaperImageId.value &&
+      removedIds.includes(currentWallpaperImageId.value)
+    ) {
+      currentWallpaperImageId.value = null;
+    }
+
+    // 统一 diff 处理：删除项清理缓存，新增项按需加载 URL
+    if (removedIds.length > 0) {
+      removeFromUiCacheByIds(removedIds);
+    }
+    if (addedIds.length > 0) {
+      const addedSet = new Set(addedIds);
+      const addedImages = displayedImages.value.filter((img) =>
+        addedSet.has(img.id)
+      );
+      if (addedImages.length > 0) {
+        void loadImageUrls(addedImages);
+      }
+    }
+
+    // 若当前页被清空但仍有图：尽量跳转到仍可用的最大页
+    if (displayedImages.value.length === 0 && totalImagesCount.value > 0) {
+      await ensureValidGalleryPageAfterMassRemoval();
+    }
+  },
+});
+
 onMounted(async () => {
   loadSettings();
   invoke<string | null>("get_current_wallpaper_image_id").then(id => {
@@ -889,77 +936,7 @@ onMounted(async () => {
   }
   listenersCreated.value = true;
 
-  // 监听图片添加事件，实时同步画廊（仅增量刷新，避免全量图片重新加载）
-  // 使用防抖机制，避免短时间内多次调用导致重复添加
-  const refreshDebounceTimerRef = ref<ReturnType<typeof setTimeout> | null>(null);
   const { listen } = await import("@tauri-apps/api/event");
-  await listen<{ taskId: string; imageId: string }>(
-    "image-added",
-    async () => {
-      // 清除之前的定时器
-      if (refreshDebounceTimerRef.value) {
-        clearTimeout(refreshDebounceTimerRef.value);
-      }
-      // 设置新的防抖定时器（300ms 延迟，批量处理多个连续的 image-added 事件）
-      refreshDebounceTimerRef.value = setTimeout(async () => {
-        await refreshLatestIncremental();
-        // 图片添加后更新总数
-        await loadTotalImagesCount();
-        refreshDebounceTimerRef.value = null;
-      }, 300);
-    }
-  );
-
-  // 监听后端分批去重事件：批量移除/删除
-  await listen<{ imageIds: string[] }>("images-removed", async (event) => {
-    const imageIds = event.payload?.imageIds ?? [];
-    if (!imageIds || imageIds.length === 0) return;
-
-    // 删除触发“后续图片顶上来”的 move 过渡（仅短暂开启）
-    galleryViewRef.value?.startDeleteMoveAnimation?.();
-
-    // 避免极端情况下对超大数组频繁 filter 导致卡顿：太大时只在结束时刷新
-    if (displayedImages.value.length <= 200_000) {
-      removeFromUiCacheByIds(imageIds);
-    }
-    // 去重可能把“当前大页”整页清空：此时应尽量停留当前页码，必要时回退到最大可用页
-    if (displayedImages.value.length === 0) {
-      await ensureValidGalleryPageAfterMassRemoval();
-    }
-    if (
-      currentWallpaperImageId.value &&
-      imageIds.includes(currentWallpaperImageId.value)
-    ) {
-      currentWallpaperImageId.value = null;
-    }
-
-    // 通知其他页面同步（AlbumDetail/Albums 等依赖 window 事件）
-    window.dispatchEvent(
-      new CustomEvent("images-removed", { detail: { imageIds } })
-    );
-  });
-
-  await listen<{ imageIds: string[] }>("images-deleted", async (event) => {
-    const imageIds = event.payload?.imageIds ?? [];
-    if (!imageIds || imageIds.length === 0) return;
-
-    galleryViewRef.value?.startDeleteMoveAnimation?.();
-    if (displayedImages.value.length <= 200_000) {
-      removeFromUiCacheByIds(imageIds);
-    }
-    if (displayedImages.value.length === 0) {
-      await ensureValidGalleryPageAfterMassRemoval();
-    }
-    if (
-      currentWallpaperImageId.value &&
-      imageIds.includes(currentWallpaperImageId.value)
-    ) {
-      currentWallpaperImageId.value = null;
-    }
-    window.dispatchEvent(
-      new CustomEvent("images-deleted", { detail: { imageIds } })
-    );
-  });
 
   // 去重进度 / 完成
   await listen<{
@@ -1007,57 +984,6 @@ onMounted(async () => {
       await ensureValidGalleryPageAfterMassRemoval();
     }
   });
-
-  // 监听图片移除/删除事件，更新总数并刷新显示列表
-  // 注意：如果图片已经在 displayedImages 中不存在（已通过 handleBatchDeleteImages 手动更新），则不需要刷新
-  const imagesRemovedHandler = ((event: Event) => {
-    const customEvent = event as CustomEvent<{ imageIds?: string[] }>;
-    const imageIds = customEvent.detail?.imageIds;
-
-    loadTotalImagesCount();
-
-    // 如果提供了 imageIds，检查这些图片是否还在 displayedImages 中
-    // 如果都不在，说明已经通过 handleBatchDeleteImages 手动更新了，不需要刷新
-    if (imageIds && imageIds.length > 0) {
-      const stillExists = imageIds.some(id =>
-        displayedImages.value.some(img => img.id === id)
-      );
-      if (!stillExists) {
-        // 图片已经被手动移除，不需要刷新
-        return;
-      }
-    }
-
-    // 刷新画廊显示的图片列表（用于从其他视图删除图片的情况）
-    // preserveScroll：避免把用户滚动位置拉回顶部
-    refreshImagesPreserveCache(true, { preserveScroll: true });
-  }) as EventListener;
-  window.addEventListener("images-removed", imagesRemovedHandler);
-  (window as any).__imagesRemovedHandler = imagesRemovedHandler;
-
-  const imagesDeletedHandler = ((event: Event) => {
-    const customEvent = event as CustomEvent<{ imageIds?: string[] }>;
-    const imageIds = customEvent.detail?.imageIds;
-
-    loadTotalImagesCount();
-
-    // 如果提供了 imageIds，检查这些图片是否还在 displayedImages 中
-    // 如果都不在，说明已经通过 handleBatchDeleteImages 手动更新了，不需要刷新
-    if (imageIds && imageIds.length > 0) {
-      const stillExists = imageIds.some(id =>
-        displayedImages.value.some(img => img.id === id)
-      );
-      if (!stillExists) {
-        // 图片已经被手动移除，不需要刷新
-        return;
-      }
-    }
-
-    // 刷新画廊显示的图片列表（用于从其他视图删除图片的情况）
-    // preserveScroll：避免把用户滚动位置拉回顶部
-    refreshImagesPreserveCache(true, { preserveScroll: true });
-  }) as EventListener;
-  window.addEventListener("images-deleted", imagesDeletedHandler);
 
   // 监听 App.vue 发送的文件拖拽事件
   const handleFileDrop = async (event: Event) => {
@@ -1119,6 +1045,7 @@ onMounted(async () => {
 
 // 组件激活时（keep-alive 缓存后重新显示）
 onActivated(async () => {
+  isGalleryActive.value = true;
   // 重新加载设置
   loadSettings();
 
@@ -1161,6 +1088,7 @@ onActivated(async () => {
 
 // 组件停用时（keep-alive 缓存，但不清理 Blob URL）
 onDeactivated(() => {
+  isGalleryActive.value = false;
   // keep-alive 缓存时不清理 Blob URL，保持图片 URL 有效
 });
 </script>

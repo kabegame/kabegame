@@ -71,6 +71,7 @@ import { useRouter } from "vue-router";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_WINDOWS } from "@kabegame/core/env";
+import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 
 const albumStore = useAlbumStore();
 const { albums, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
@@ -187,6 +188,31 @@ const refreshFavoriteAlbumPreview = async () => {
 // 收藏状态以 store 为准：通过收藏画册计数变化触发预览刷新
 const stopFavoriteCountWatch = ref<null | (() => void)>(null);
 
+// 统一图片变更事件：收到 images-change 后，按 albumId 刷新对应画册预览（250ms trailing 节流，不丢最后一次）
+useImagesChangeRefresh({
+  enabled: ref(true),
+  waitMs: 250,
+  filter: (p) => {
+    // 只处理明确给出 albumId 的变更（例如：收藏/画册增删图片/爬虫写入时带 albumId）
+    return !!p.albumId;
+  },
+  onRefresh: async (p) => {
+    const targetAlbumId = p.albumId;
+    if (!targetAlbumId) return;
+    const targetAlbum = albums.value.find((a) => a.id === targetAlbumId);
+    if (!targetAlbum) return;
+
+    // 检查该画册的预览图列表是否已满
+    const currentUrls = albumPreviewUrls.value[targetAlbumId];
+    const isFull = currentUrls && currentUrls.length >= 6 && currentUrls.every((url) => url && url !== "");
+    if (isFull) return;
+
+    clearAlbumPreviewCache(targetAlbumId);
+    delete albumStore.albumPreviews[targetAlbumId];
+    await prefetchPreview(targetAlbum);
+  },
+});
+
 onMounted(async () => {
   startLoading();
   try {
@@ -214,73 +240,7 @@ onMounted(async () => {
     }
   );
 
-  // 监听图片添加事件（来自爬虫下载完成）
-  const { listen } = await import("@tauri-apps/api/event");
-  const unlistenImageAdded = await listen<{ taskId: string; imageId: string; albumId?: string }>(
-    "image-added",
-    async (event) => {
-      // 如果事件中包含 albumId，检查是否需要刷新该画册的预览图
-      if (event.payload.albumId) {
-        const targetAlbumId = event.payload.albumId;
-        const targetAlbum = albums.value.find(a => a.id === targetAlbumId);
-
-        if (!targetAlbum) {
-          return;
-        }
-
-        // 检查该画册的预览图列表是否已满
-        const currentUrls = albumPreviewUrls.value[targetAlbumId];
-        const isFull = currentUrls && currentUrls.length >= 6 && currentUrls.every(url => url && url !== "");
-
-        // 如果预览图列表未满，刷新该画册的预览图
-        if (!isFull) {
-          // 清除该画册的预览缓存
-          clearAlbumPreviewCache(targetAlbumId);
-          // 清除 store 中的预览缓存
-          delete albumStore.albumPreviews[targetAlbumId];
-          // 重新加载预览图
-          await prefetchPreview(targetAlbum);
-        }
-      }
-    }
-  );
-
-  // 监听画册图片变化事件（来自收藏操作等）
-  const unlistenAlbumImagesChanged = await listen<{
-    albumId: string;
-    reason?: string;
-    imageIds?: string[];
-  }>("album-images-changed", async (event) => {
-    const albumId = event.payload?.albumId;
-    const reason = event.payload?.reason;
-    
-    if (!albumId) return;
-
-    // 如果是收藏画册且是添加操作，检查预览图是否需要刷新
-    if (albumId === FAVORITE_ALBUM_ID.value && reason === "add") {
-      const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID.value);
-      if (!favoriteAlbum) return;
-
-      // 检查该画册的预览图列表是否已满
-      const currentUrls = albumPreviewUrls.value[albumId];
-      const validUrls = currentUrls?.filter(url => url && url !== "") || [];
-      const isFull = validUrls.length >= 6;
-
-      // 如果预览图列表未满，刷新该画册的预览图
-      if (!isFull) {
-        // 清除该画册的预览缓存
-        clearAlbumPreviewCache(albumId);
-        // 清除 store 中的预览缓存
-        delete albumStore.albumPreviews[albumId];
-        // 重新加载预览图
-        await prefetchPreview(favoriteAlbum);
-      }
-    }
-  });
-
-  // 保存监听器引用以便在卸载时移除
-  (window as any).__albumsImageAddedUnlisten = unlistenImageAdded;
-  (window as any).__albumsAlbumImagesChangedUnlisten = unlistenAlbumImagesChanged;
+  // 图片变更的预览刷新由 `images-change`（失效信号）驱动，统一节流处理。
 });
 
 // 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表和轮播设置

@@ -4,9 +4,10 @@
 //! 同时保留事件历史记录，便于客户端重连后获取历史事件
 
 use super::events::DaemonEvent;
+use super::events::DaemonEventKind;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 
 /// 事件广播器
 pub struct EventBroadcaster {
@@ -16,19 +17,27 @@ pub struct EventBroadcaster {
     next_id: Arc<RwLock<u64>>,
     /// 最大队列长度
     max_queue_size: usize,
-    /// 事件广播 channel（用于长连接推送）
-    event_tx: broadcast::Sender<(u64, DaemonEvent)>,
+    /// 事件 -> 广播器 映射（固定大小，初始化时与已知事件数量一致）
+    ///
+    /// 注意：这是“daemon 内部事件类型”的广播，不是 Tauri 前端事件名。
+    event_txs: Vec<broadcast::Sender<(u64, DaemonEvent)>>,
 }
 
 impl EventBroadcaster {
     /// 创建新的事件广播器
     pub fn new(max_queue_size: usize) -> Self {
-        let (event_tx, _) = broadcast::channel(1024);
+        // 写死最多接受 1024 个订阅者/事件种类
+        let mut event_txs = Vec::with_capacity(DaemonEventKind::COUNT);
+        for _ in 0..DaemonEventKind::COUNT {
+            let (tx, _) = broadcast::channel(1024);
+            event_txs.push(tx);
+        }
+
         Self {
             events: Arc::new(RwLock::new(VecDeque::new())),
             next_id: Arc::new(RwLock::new(0)),
             max_queue_size,
-            event_tx,
+            event_txs,
         }
     }
 
@@ -44,25 +53,77 @@ impl EventBroadcaster {
         eprintln!("[DEBUG] EventBroadcaster 广播事件: id={}, event={:?}", id, event);
         events.push_back(event_with_id.clone());
 
-        // 限制队列大小
+        // 限制队列大小：只保留最近 max_queue_size 条
         while events.len() > self.max_queue_size {
             events.pop_front();
         }
 
-        // 推送到广播 channel（忽略错误，因为可能没有订阅者）
-        match self.event_tx.send(event_with_id) {
+        // 事件 -> 广播器：自动路由
+        let idx = event.kind().as_usize();
+        let tx = match self.event_txs.get(idx) {
+            Some(tx) => tx,
+            None => {
+                // 理论上不可能：kind()->index 是固定映射，且 event_txs 初始化为 COUNT
+                eprintln!("[DEBUG] EventBroadcaster 路由失败：idx={} 越界", idx);
+                return;
+            }
+        };
+
+        // 检查订阅者数量
+        let receiver_count = tx.receiver_count();
+        
+        // 推送到对应广播 channel（忽略错误，因为可能没有订阅者）
+        match tx.send(event_with_id) {
             Ok(count) => {
-                eprintln!("[DEBUG] EventBroadcaster 事件已推送到 channel, 订阅者数量: {}", count);
+                eprintln!(
+                    "[DEBUG] EventBroadcaster 事件已推送到 channel(kind={:?}), 订阅者数量: {}",
+                    event.kind(),
+                    count
+                );
             },
             Err(_) => {
-                eprintln!("[DEBUG] EventBroadcaster 事件推送失败（可能没有订阅者）");
+                eprintln!(
+                    "[DEBUG] EventBroadcaster 事件推送失败（可能没有订阅者），订阅者数量: {}",
+                    receiver_count
+                );
             }
         }
     }
 
-    /// 订阅事件（返回接收者，用于长连接推送）
-    pub fn subscribe(&self) -> broadcast::Receiver<(u64, DaemonEvent)> {
-        self.event_tx.subscribe()
+    /// 订阅指定事件种类（返回 broadcast Receiver）
+    pub fn subscribe(&self, kind: DaemonEventKind) -> broadcast::Receiver<(u64, DaemonEvent)> {
+        self.event_txs[kind.as_usize()].subscribe()
+    }
+
+    /// 订阅所有事件，并合并为单一接收器（用于长连接推送）
+    ///
+    /// 取消订阅：丢弃返回的 receiver 即可（内部转发任务会自动退出）。
+    pub fn subscribe_all_stream(&self) -> mpsc::UnboundedReceiver<(u64, DaemonEvent)> {
+        let (tx, rx) = mpsc::unbounded_channel::<(u64, DaemonEvent)>();
+
+        for kind in DaemonEventKind::ALL {
+            let mut brx = self.subscribe(kind);
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                loop {
+                    match brx.recv().await {
+                        Ok(item) => {
+                            // 若对端已断开（连接关闭），直接退出转发任务
+                            if tx.send(item).is_err() {
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            // 保持与原逻辑一致：滞后时继续
+                            continue;
+                        }
+                    }
+                }
+            });
+        }
+
+        rx
     }
 
     /// 获取自指定 ID 以来的所有事件（历史查询，已弃用）
@@ -105,6 +166,15 @@ impl EventBroadcaster {
         let next_id = self.next_id.read().await;
         next_id.saturating_sub(1)
     }
+
+    /// 获取指定事件类型的订阅者数量
+    pub fn receiver_count(&self, kind: DaemonEventKind) -> usize {
+        let idx = kind.as_usize();
+        match self.event_txs.get(idx) {
+            Some(tx) => tx.receiver_count(),
+            None => 0,
+        }
+    }
 }
 
 impl Default for EventBroadcaster {
@@ -130,6 +200,7 @@ pub async fn emit_task_log(
 }
 
 /// 辅助函数：发送下载状态事件
+/// 如果没有订阅者，则跳过发送
 pub async fn emit_download_state(
     broadcaster: &EventBroadcaster,
     task_id: impl Into<String>,
@@ -139,6 +210,11 @@ pub async fn emit_download_state(
     state: impl Into<String>,
     error: Option<String>,
 ) {
+    // 检查订阅者数量，如果没有订阅者则不发送
+    if broadcaster.receiver_count(DaemonEventKind::DownloadState) == 0 {
+        return;
+    }
+    
     broadcaster
         .broadcast(DaemonEvent::DownloadState {
             task_id: task_id.into(),
@@ -167,6 +243,134 @@ pub async fn emit_task_status(
             progress,
             error,
             current_wallpaper,
+        })
+        .await;
+}
+
+/// 辅助函数：发送去重进度事件
+pub async fn emit_dedupe_progress(
+    broadcaster: &EventBroadcaster,
+    processed: usize,
+    total: usize,
+    removed: usize,
+    batch_index: usize,
+) {
+    broadcaster
+        .broadcast(DaemonEvent::DedupeProgress {
+            processed,
+            total,
+            removed,
+            batch_index,
+        })
+        .await;
+}
+
+/// 辅助函数：发送去重完成事件
+pub async fn emit_dedupe_finished(
+    broadcaster: &EventBroadcaster,
+    processed: usize,
+    total: usize,
+    removed: usize,
+    canceled: bool,
+) {
+    broadcaster
+        .broadcast(DaemonEvent::DedupeFinished {
+            processed,
+            total,
+            removed,
+            canceled,
+        })
+        .await;
+}
+
+/// 辅助函数：发送任务进度事件
+pub async fn emit_task_progress(
+    broadcaster: &EventBroadcaster,
+    task_id: impl Into<String>,
+    progress: f64,
+) {
+    broadcaster
+        .broadcast(DaemonEvent::TaskProgress {
+            task_id: task_id.into(),
+            progress,
+        })
+        .await;
+}
+
+/// 辅助函数：发送任务错误事件
+pub async fn emit_task_error(
+    broadcaster: &EventBroadcaster,
+    task_id: impl Into<String>,
+    error: impl Into<String>,
+) {
+    broadcaster
+        .broadcast(DaemonEvent::TaskError {
+            task_id: task_id.into(),
+            error: error.into(),
+        })
+        .await;
+}
+
+/// 辅助函数：发送下载进度事件
+/// 如果没有订阅者，则跳过发送
+pub async fn emit_download_progress(
+    broadcaster: &EventBroadcaster,
+    task_id: impl Into<String>,
+    url: impl Into<String>,
+    start_time: u64,
+    plugin_id: impl Into<String>,
+    received_bytes: u64,
+    total_bytes: Option<u64>,
+) {
+    // 检查订阅者数量，如果没有订阅者则不发送
+    if broadcaster.receiver_count(DaemonEventKind::DownloadProgress) == 0 {
+        return;
+    }
+    
+    broadcaster
+        .broadcast(DaemonEvent::DownloadProgress {
+            task_id: task_id.into(),
+            url: url.into(),
+            start_time,
+            plugin_id: plugin_id.into(),
+            received_bytes,
+            total_bytes,
+        })
+        .await;
+}
+
+/// 辅助函数：发送壁纸图片更新事件
+pub async fn emit_wallpaper_update_image(
+    broadcaster: &EventBroadcaster,
+    image_path: impl Into<String>,
+) {
+    broadcaster
+        .broadcast(DaemonEvent::WallpaperUpdateImage {
+            image_path: image_path.into(),
+        })
+        .await;
+}
+
+/// 辅助函数：发送壁纸样式更新事件
+pub async fn emit_wallpaper_update_style(
+    broadcaster: &EventBroadcaster,
+    style: impl Into<String>,
+) {
+    broadcaster
+        .broadcast(DaemonEvent::WallpaperUpdateStyle {
+            style: style.into(),
+        })
+        .await;
+}
+
+/// 辅助函数：发送壁纸过渡效果更新事件
+pub async fn emit_wallpaper_update_transition(
+    broadcaster: &EventBroadcaster,
+    transition: impl Into<String>,
+) {
+    broadcaster
+        .broadcast(DaemonEvent::WallpaperUpdateTransition {
+            transition: transition.into(),
         })
         .await;
 }

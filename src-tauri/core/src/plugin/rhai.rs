@@ -1187,13 +1187,7 @@ pub fn register_crawler_functions(
             let final_progress = *current;
 
             // 通过事件发送进度更新
-            dq_handle.emitter_arc().emit(
-                "task-progress",
-                serde_json::json!({
-                    "taskId": task_id,
-                    "progress": final_progress
-                }),
-            );
+            dq_handle.emitter_arc().emit_task_progress(&task_id, final_progress);
 
             Ok(())
         },

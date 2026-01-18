@@ -16,12 +16,13 @@ impl NativeWallpaperManager {
         let v = crate::daemon_client::get_ipc_client().settings_get().await.ok()?;
         let id = v.get("currentWallpaperImageId").and_then(|x| x.as_str())?;
         let img = crate::daemon_client::get_ipc_client()
-            .storage_get_image_by_id(id.to_string())
-            .await
-            .ok()?;
+                .storage_get_image_by_id(id.to_string())
+                .await
+        .ok()?;
         img.get("localPath").and_then(|x| x.as_str()).map(|s| s.to_string())
     }
 
+    #[cfg(target_os = "windows")]
     async fn current_wallpaper_transition_from_ipc(&self) -> Option<String> {
         let v = crate::daemon_client::get_ipc_client().settings_get().await.ok()?;
         Some(
@@ -77,7 +78,20 @@ impl NativeWallpaperManager {
     }
 
     #[cfg(all(target_os = "linux", desktop = "plasma"))]
-    fn run_qdbus_evaluate_script(script: &str) -> Result<(), String> {
+    fn plasma_fill_mode_to_style(fill_mode: &str) -> &'static str {
+        // 将 Plasma FillMode 字符串映射回 style 字符串
+        match fill_mode.trim() {
+            "0" => "stretch",
+            "1" => "center",
+            "2" => "fill",
+            "3" => "tile",
+            "5" => "fit",
+            _ => "fill", // 默认填充
+        }
+    }
+
+    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    fn run_qdbus_evaluate_script_with_output(script: &str) -> Result<String, String> {
         use std::process::{Command, Stdio};
         use std::sync::OnceLock;
 
@@ -85,7 +99,7 @@ impl NativeWallpaperManager {
 
         fn detect_qdbus_program() -> Result<String, String> {
             // 说明：Plasma 6 上可能是 qdbus6，Plasma 5 通常是 qdbus。
-            // 我们只做“存在性”探测，不依赖特定输出格式。
+            // 我们只做"存在性"探测，不依赖特定输出格式。
             for program in ["qdbus6", "qdbus"] {
                 match Command::new(program)
                     .arg("--help")
@@ -144,7 +158,42 @@ stderr: {}",
                 stderr.trim()
             ));
         }
+
+        // 返回 stdout（可能包含脚本的 print 输出）
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    fn run_qdbus_evaluate_script(script: &str) -> Result<(), String> {
+        // 复用 run_qdbus_evaluate_script_with_output，忽略输出
+        Self::run_qdbus_evaluate_script_with_output(script)?;
         Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    fn get_wallpaper_plasma_fill_mode(&self) -> Result<String, String> {
+        // 通过 qdbus evaluateScript 读取第一个桌面的 FillMode
+        let script = r#"
+            var allDesktops = desktops();
+            if (allDesktops.length > 0) {
+                var d = allDesktops[0];
+                d.currentConfigGroup = ['Wallpaper', 'org.kde.image', 'General'];
+                print(d.readConfig('FillMode'));
+            } else {
+                print('2'); // 默认 fill
+            }
+        "#;
+
+        // 复用 run_qdbus_evaluate_script_with_output 读取输出
+        let stdout = Self::run_qdbus_evaluate_script_with_output(script)?;
+        let fill_mode = stdout.trim();
+
+        // 如果输出为空或不是预期的数字，返回默认值
+        if fill_mode.is_empty() {
+            Ok("2".to_string()) // 默认 fill
+        } else {
+            Ok(fill_mode.to_string())
+        }
     }
 
     #[cfg(all(target_os = "linux", desktop = "plasma"))]
@@ -248,7 +297,7 @@ for (var i=0; i<allDesktops.length; i++) {{\n\
 impl WallpaperManager for NativeWallpaperManager {
     // 从注册表读取当前壁纸样式
     #[cfg(target_os = "windows")]
-    fn get_style(&self) -> Result<String, String> {
+    async fn get_style(&self) -> Result<String, String> {
         // 优化：直接使用 winreg crate 读取注册表，而不是通过 PowerShell
         use winreg::enums::*;
         use winreg::RegKey;
@@ -280,14 +329,30 @@ impl WallpaperManager for NativeWallpaperManager {
     }
 
     #[cfg(not(target_os = "windows"))]
-    fn get_style(&self) -> Result<String, String> {
-        // 非 Windows 平台：暂不支持读取系统样式，返回默认值即可（避免阻塞 UI）
+    async fn get_style(&self) -> Result<String, String> {
+        // 非 Windows 平台：
+        // - Plasma 原生壁纸（--plasma 编译期开关）下：通过 qdbus 读取 FillMode
+        // - 其他平台：返回默认值
+        #[cfg(all(target_os = "linux", desktop = "plasma"))]
+        {
+            match self.get_wallpaper_plasma_fill_mode() {
+                Ok(fill_mode) => Ok(Self::plasma_fill_mode_to_style(&fill_mode).to_string()),
+                Err(e) => {
+                    eprintln!("[WARN] 无法读取 Plasma FillMode: {}，返回默认值 fill", e);
+                    Ok("fill".to_string())
+                }
+            }
+        }
+
+        #[cfg(not(all(target_os = "linux", desktop = "plasma")))]
+        {
         Ok("fill".to_string())
+    }
     }
 
     async fn get_transition(&self) -> Result<String, String> {
         let v = crate::daemon_client::get_ipc_client().settings_get().await
-            .map_err(|e| format!("Daemon unavailable: {}", e))?;
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
         Ok(v.get("wallpaperRotationTransition")
             .and_then(|x| x.as_str())
             .unwrap_or("none")
@@ -461,9 +526,9 @@ impl WallpaperManager for NativeWallpaperManager {
                 let _ = immediate;
                 // style 从 daemon 读取（与前端保持一致）
                 let style = crate::daemon_client::get_ipc_client().settings_get().await
-                    .ok()
-                    .and_then(|v| v.get("wallpaperRotationStyle").and_then(|x| x.as_str()).map(|s| s.to_string()))
-                    .unwrap_or_else(|| "fill".to_string());
+                .ok()
+                .and_then(|v| v.get("wallpaperRotationStyle").and_then(|x| x.as_str()).map(|s| s.to_string()))
+                .unwrap_or_else(|| "fill".to_string());
                 return self.set_wallpaper_plasma(file_path, &style);
             }
 
@@ -556,15 +621,38 @@ impl WallpaperManager for NativeWallpaperManager {
             if immediate {
                 if let Some(path) = self.current_wallpaper_path_from_settings().await {
                     if std::path::Path::new(&path).exists() {
-                        let _ = self.set_wallpaper_plasma(&path, style);
-                    }
+                        // 修复：正确处理错误，而不是忽略
+                        self.set_wallpaper_plasma(&path, style)?;
+                    } else {
+                        return Err(format!("当前壁纸路径不存在: {}", path));
+            }
+                } else {
+                    // 如果没有当前壁纸，仍然尝试通过 qdbus 只设置 FillMode（不改变图片）
+                    // 这样可以确保 style 被正确设置，即使没有当前壁纸路径
+                    let fill_mode = Self::style_to_plasma_fill_mode(style);
+                    let script = format!(
+                        "var allDesktops = desktops();\n\
+                        for (var i=0; i<allDesktops.length; i++) {{\n\
+                          var d = allDesktops[i];\n\
+                          if (d.wallpaperPlugin === 'org.kde.image') {{\n\
+                            d.currentConfigGroup = ['Wallpaper', 'org.kde.image', 'General'];\n\
+                            d.writeConfig('FillMode', '{}');\n\
+                          }}\n\
+                        }}\n",
+                        fill_mode
+                    );
+                    Self::run_qdbus_evaluate_script(&script)?;
                 }
             }
+            return Ok(());
         }
 
+        #[cfg(not(all(target_os = "linux", desktop = "plasma")))]
+        {
         let _ = style;
         let _ = immediate;
         Ok(())
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -627,8 +715,8 @@ impl WallpaperManager for NativeWallpaperManager {
     #[cfg(not(target_os = "windows"))]
     async fn set_transition(&self, transition: &str, _immediate: bool) -> Result<(), String> {
         // 非 Windows 平台：仅保存设置，不做系统级预览
-        crate::daemon_client::get_ipc_client()
-            .settings_set_wallpaper_rotation_transition(transition.to_string())
+            crate::daemon_client::get_ipc_client()
+                .settings_set_wallpaper_rotation_transition(transition.to_string())
             .await?;
         Ok(())
     }

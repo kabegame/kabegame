@@ -156,66 +156,44 @@ pub fn startup_step_manage_virtual_drive_service(app: &mut tauri::App) {
 
         // 通过后端事件监听把"数据变更"转成"Explorer 刷新"，避免 core 直接依赖 VD。
         let app_handle = app.app_handle().clone();
-        // 1) 画册内容变更：刷新对应画册目录
-        let app_handle_album_images = app_handle.clone();
-        let _album_images_listener = app_handle.listen("album-images-changed", move |event| {
-            let payload = event.payload();
-            eprintln!("[DEBUG] 收到 album-images-changed 事件: {}", payload);
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
-                return;
-            };
-            eprintln!("[DEBUG] album-images-changed 解析后的数据: {:?}", v);
-            let Some(album_id) = v.get("albumId").and_then(|x| x.as_str()) else {
-                eprintln!("[DEBUG] album-images-changed 事件中缺少 albumId");
-                return;
-            };
-            let reason = v.get("reason").and_then(|x| x.as_str()).unwrap_or("unknown");
-            let image_ids = v.get("imageIds").and_then(|x| x.as_array());
-            eprintln!("[DEBUG] album-images-changed: albumId={}, reason={}, imageIds={:?}", album_id, reason, image_ids);
-            let drive = app_handle_album_images.state::<VirtualDriveService>();
-            let storage = app_handle_album_images.state::<Storage>();
-            drive.notify_album_dir_changed(storage.inner(), album_id);
-        });
-
-        // 2) 画册列表变更：刷新画册子树（新增/删除/重命名等）
+        // 1) 画册列表变更：刷新画册子树（新增/删除/重命名等）
         let app_handle_albums = app_handle.clone();
         let _albums_listener = app_handle.listen("albums-changed", move |event: tauri::Event| {
-            eprintln!("[DEBUG] 收到 albums-changed 事件: {}", event.payload());
             let drive = app_handle_albums.state::<VirtualDriveService>();
             drive.bump_albums();
         });
 
-        // 3) 任务列表变更：刷新按任务子树（删除任务等）
+        // 2) 任务列表变更：刷新按任务子树（删除任务等）
         let app_handle_tasks = app_handle.clone();
         let _tasks_listener = app_handle.listen("tasks-changed", move |event: tauri::Event| {
-            eprintln!("[DEBUG] 收到 tasks-changed 事件: {}", event.payload());
             let drive = app_handle_tasks.state::<VirtualDriveService>();
             drive.bump_tasks();
         });
 
-        // 4) 任务运行中新增图片：刷新"按任务"根目录 + 对应任务目录（Explorer 正在浏览该目录时可见更新）
-        let app_handle_task_images = app_handle.clone();
-        let _task_images_listener = app_handle.listen("image-added", move |event: tauri::Event| {
+        // 3) 统一图片变更事件：仅保留 images-change
+        // - 若带 taskId：刷新对应任务目录
+        // - 若带 albumId：刷新对应画册目录
+        // - 总是刷新 gallery 树
+        let app_handle_images_change = app_handle.clone();
+        let _images_change_listener = app_handle.listen("images-change", move |event: tauri::Event| {
             let payload = event.payload();
-            eprintln!("[DEBUG] 收到 image-added 事件: {}", payload);
             let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
-                eprintln!("[DEBUG] image-added 事件 payload 解析失败");
                 return;
             };
-            let task_id = v.get("taskId").and_then(|x| x.as_str());
-            let image_id = v.get("imageId").and_then(|x| x.as_str());
-            let album_id = v.get("albumId").and_then(|x| x.as_str());
-            eprintln!("[DEBUG] image-added: taskId={:?}, imageId={:?}, albumId={:?}", task_id, image_id, album_id);
-            let Some(task_id) = task_id else {
-                return;
-            };
-            let task_id = task_id.trim();
-            if task_id.is_empty() {
-                return;
+            let task_id = v.get("taskId").and_then(|x| x.as_str()).map(|s| s.trim().to_string());
+            let album_id = v.get("albumId").and_then(|x| x.as_str()).map(|s| s.trim().to_string());
+            let drive = app_handle_images_change.state::<VirtualDriveService>();
+            let storage = app_handle_images_change.state::<Storage>();
+            if let Some(tid) = task_id {
+                if !tid.is_empty() {
+                    drive.notify_task_dir_changed(storage.inner(), &tid);
+                }
             }
-            let drive = app_handle_task_images.state::<VirtualDriveService>();
-            let storage = app_handle_task_images.state::<Storage>();
-            drive.notify_task_dir_changed(storage.inner(), task_id);
+            if let Some(aid) = album_id {
+                if !aid.is_empty() {
+                    drive.notify_album_dir_changed(storage.inner(), &aid);
+                }
+            }
             drive.notify_gallery_tree_changed();
         });
     }
@@ -339,7 +317,7 @@ pub fn startup_step_manage_wallpaper_components(app: &mut tauri::App) {
                 .unwrap_or(false)
             {
                 let rotator = app_handle.state::<WallpaperRotator>();
-                if let Err(e) = rotator.start() {
+                if let Err(e) = rotator.start().await {
                     eprintln!("启动壁纸轮播失败: {}", e);
                 }
             }

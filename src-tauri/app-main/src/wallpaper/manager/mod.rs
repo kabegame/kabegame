@@ -125,7 +125,7 @@ pub trait WallpaperManager: Send + Sync {
     /// # Errors
     /// * `String` - 错误信息
     #[allow(dead_code)]
-    fn get_style(&self) -> Result<String, String>;
+    async fn get_style(&self) -> Result<String, String>;
 
     ///
     /// # Returns

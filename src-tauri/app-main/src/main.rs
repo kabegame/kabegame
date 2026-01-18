@@ -56,9 +56,8 @@ use commands::wallpaper::{
     set_wallpaper_rotation_album_id, start_wallpaper_rotation, set_wallpaper_rotation_interval_minutes,
     set_wallpaper_rotation_mode, set_wallpaper_style, set_wallpaper_rotation_transition,
     set_wallpaper_mode, get_wallpaper_rotator_status, get_native_wallpaper_styles,
+    set_wallpaper_rotation_enabled,
 };
-#[cfg(target_os = "windows")]
-use commands::wallpaper::set_wallpaper_rotation_enabled;
 use commands::album::{
     rename_album, add_images_to_album, remove_images_from_album, get_album_images,
     get_album_image_ids, get_album_preview, get_album_counts, update_album_images_order,
@@ -72,7 +71,7 @@ use commands::settings::{
     set_max_concurrent_downloads, set_network_retry_count, set_image_click_action,
     set_gallery_image_aspect_ratio_match_window, set_gallery_image_aspect_ratio,
     get_desktop_resolution, set_auto_deduplicate, set_default_download_dir,
-    set_wallpaper_engine_dir, get_wallpaper_engine_myprojects_dir,
+    set_wallpaper_engine_dir, get_wallpaper_engine_myprojects_dir, open_plasma_wallpaper_settings,
 };
 #[cfg(feature = "virtual-drive")]
 use commands::settings::{set_album_drive_enabled, set_album_drive_mount_point};
@@ -81,7 +80,7 @@ use commands::settings::get_default_images_dir;
 use commands::task::{
     add_run_config, update_run_config, get_run_configs, delete_run_config, cancel_task,
     get_active_downloads, confirm_task_rhai_dump, clear_finished_tasks, get_task_images,
-    get_task_images_paginated, get_task_image_ids, get_task_failed_images, retry_task_failed_image,
+    get_task_images_paginated, get_task_image_ids, get_task_failed_images,
 };
 #[cfg(feature = "self-host")]
 use commands::task::{local_add_task, local_update_task, local_get_task, local_get_all_tasks};
@@ -149,6 +148,7 @@ fn main() {
             #[cfg(feature = "self-host")]
             {
                 // 本地 dedupe manager 已被 daemon-side DedupeService 替代
+                // TODO: self hosted 需要加回来
             }
             startup::startup_step_restore_main_window_state(app.app_handle(), is_cleaning_data);
             startup::startup_step_manage_wallpaper_components(app);
@@ -224,7 +224,7 @@ fn main() {
             get_album_image_ids,
             get_album_preview,
             get_album_counts,
-            // Windows 虚拟盘
+            // 虚拟盘
             #[cfg(feature = "virtual-drive")]
             mount_virtual_drive,
             #[cfg(feature = "virtual-drive")]
@@ -287,6 +287,7 @@ fn main() {
             set_default_download_dir,
             set_wallpaper_engine_dir,
             get_wallpaper_engine_myprojects_dir,
+            open_plasma_wallpaper_settings,
             #[cfg(feature = "self-host")]
             get_default_images_dir,
             get_active_downloads,
@@ -296,7 +297,6 @@ fn main() {
             delete_run_config,
             cancel_task,
             copy_files_to_clipboard,
-            #[cfg(target_os = "windows")]
             set_wallpaper_rotation_enabled,
             set_wallpaper_rotation_album_id,
             start_wallpaper_rotation,
@@ -340,7 +340,10 @@ fn main() {
                         // 隐藏主窗口后，修复壁纸窗口的 Z-order（防止壁纸窗口覆盖桌面图标）
                         #[cfg(target_os = "windows")]
                         {
-                            commands::window::fix_wallpaper_window_zorder(window.app_handle());
+                            let app_handle = window.app_handle().clone();
+                            tauri::async_runtime::spawn(async move {
+                                commands::window::fix_wallpaper_window_zorder(app_handle).await;
+                            });
                         }
                     }
                 } else if window.label().starts_with("wallpaper") {

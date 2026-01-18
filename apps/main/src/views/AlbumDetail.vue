@@ -86,7 +86,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, onActivated, watch, nextTick } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
@@ -118,6 +118,8 @@ import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import LoadMoreButton from "@/components/LoadMoreButton.vue";
 import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
+import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { diffById } from "@/utils/listDiff";
 
 const route = useRoute();
 const router = useRouter();
@@ -128,6 +130,7 @@ const settingsStore = useSettingsStore();
 const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
+const isAlbumDetailActive = ref(true);
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
@@ -785,6 +788,7 @@ watch(
 );
 
 onMounted(async () => {
+  isAlbumDetailActive.value = true;
   // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
   // 与 Gallery 共用同一套设置
   try {
@@ -811,138 +815,14 @@ onMounted(async () => {
 
   // 收藏状态以 store 为准：不再通过全局事件同步
 
-  // 监听图片删除事件（来自画廊等页面的删除操作）
-  const imagesDeletedHandler = ((event: Event) => {
-    const ce = event as CustomEvent<{ imageIds: string[] }>;
-    const detail = ce.detail;
-    if (!detail || !Array.isArray(detail.imageIds)) return;
+  // 说明：图片变更的同步由 `images-change`（失效信号）驱动，统一走“刷新当前页”。
 
-    // 从列表中移除已删除的图片
-    const idsToRemove = new Set(detail.imageIds);
-    const beforeCount = images.value.length;
-    images.value = images.value.filter((img) => !idsToRemove.has(img.id));
-
-    // 如果有图片被移除，清理对应的 Blob URL 和 imageSrcMap
-    if (images.value.length < beforeCount) {
-      removeFromCacheByIds(Array.from(idsToRemove));
-    }
-  }) as EventListener;
-
-  window.addEventListener("images-deleted", imagesDeletedHandler);
-  (window as any).__albumDetailImagesDeletedHandler = imagesDeletedHandler;
-
-  // 监听图片移除事件（来自画廊等页面的移除操作）
-  const imagesRemovedHandler = ((event: Event) => {
-    const ce = event as CustomEvent<{ imageIds: string[] }>;
-    const detail = ce.detail;
-    if (!detail || !Array.isArray(detail.imageIds)) return;
-
-    // 从列表中移除已移除的图片
-    const idsToRemove = new Set(detail.imageIds);
-    const beforeCount = images.value.length;
-    images.value = images.value.filter((img) => !idsToRemove.has(img.id));
-
-    // 如果有图片被移除，清理对应的 Blob URL 和 imageSrcMap
-    if (images.value.length < beforeCount) {
-      removeFromCacheByIds(Array.from(idsToRemove));
-    }
-  }) as EventListener;
-
-  window.addEventListener("images-removed", imagesRemovedHandler);
-  (window as any).__albumDetailImagesRemovedHandler = imagesRemovedHandler;
-
-  // 监听图片添加事件（来自爬虫下载完成）
-  const { listen } = await import("@tauri-apps/api/event");
-  const unlistenImageAdded = await listen<{ taskId: string; imageId: string; albumId?: string }>(
-    "image-added",
-    async (event) => {
-      // 如果事件中包含 albumId，且与当前画册ID匹配，则添加新图片到列表
-      if (event.payload.albumId && event.payload.albumId === albumId.value && event.payload.imageId) {
-        const imageId = event.payload.imageId;
-
-        // 检查图片是否已经在列表中（避免重复添加）
-        if (images.value.some(img => img.id === imageId)) {
-          return;
-        }
-
-        try {
-          // 获取新图片的详细信息
-          const newImage = await invoke<ImageInfo | null>("get_image_by_id", { imageId });
-          if (!newImage) {
-            return;
-          }
-
-          // 检查图片是否属于当前画册（通过获取画册图片ID列表）
-          const albumImageIds = await albumStore.getAlbumImageIds(albumId.value);
-          if (!albumImageIds.includes(imageId)) {
-            return;
-          }
-
-          // 添加到列表：
-          // 注意：useImageUrlLoader 内部用 watch(() => imagesRef.value, { deep: false })
-          // 维护 imageIdSet；如果这里用 push 原地修改数组引用不变，会导致新图片永远不进入 loader 的集合。
-          images.value = [...images.value, newImage];
-          void loadImageUrls([newImage]);
-        } catch (error) {
-          console.error("添加新图片到画册失败:", error);
-          // 如果获取失败，可以选择刷新整个画册作为后备方案
-          // await loadAlbum();
-        }
-      }
-    }
-  );
-
-  // 保存监听器引用以便在卸载时移除
-  (window as any).__albumDetailImageAddedUnlisten = unlistenImageAdded;
-
-  // 监听画册图片变更事件（来自 Explorer 删除/其它页面操作/后台任务写入等）
-  let albumImagesReloadTimer: number | null = null;
-  const scheduleReload = () => {
-    if (albumImagesReloadTimer !== null) return;
-    albumImagesReloadTimer = window.setTimeout(async () => {
-      albumImagesReloadTimer = null;
-      // 清除 store 缓存，确保一定从后端取最新列表
-      if (albumId.value) delete albumStore.albumImages[albumId.value];
-      await loadAlbum();
-    }, 120);
-  };
-
-  const unlistenAlbumImagesChanged: UnlistenFn = await listen<{
-    albumId: string;
-    reason?: string;
-    imageIds?: string[];
-  }>("album-images-changed", async (event) => {
-    const p = event.payload;
-    if (!p?.albumId || p.albumId !== albumId.value) return;
-
-    const reason = p.reason || "";
-    const idsArr = Array.isArray(p.imageIds) ? p.imageIds : [];
-    if (idsArr.length === 0) {
-      // 没有明确 id：直接整页 reload 兜底
-      scheduleReload();
-      return;
-    }
-
-    if (reason === "remove") {
-      const idsToRemove = new Set(idsArr);
-      const beforeCount = images.value.length;
-      images.value = images.value.filter((img) => !idsToRemove.has(img.id));
-      if (images.value.length < beforeCount) {
-        removeFromCacheByIds(idsArr);
-        clearSelection();
-      }
-      return;
-    }
-
-    // add / 其它：为了保证顺序正确，做一次轻量延迟 reload（合并频繁事件）
-    scheduleReload();
-  });
-
-  (window as any).__albumDetailAlbumImagesChangedUnlisten = unlistenAlbumImagesChanged;
+  // 画册图片变更：由 `images-change`（失效信号）统一驱动刷新（见下方 useImagesChangeRefresh）
 });
 
 // 组件从缓存激活时检查是否需要刷新
 onActivated(async () => {
+  isAlbumDetailActive.value = true;
   const id = route.params.id as string;
   if (id && id !== albumId.value) {
     await initAlbum(id);
@@ -954,6 +834,10 @@ onActivated(async () => {
     favoriteAlbumDirty.value = false;
     await loadAlbum();
   }
+});
+
+onDeactivated(() => {
+  isAlbumDetailActive.value = false;
 });
 
 // 开始重命名
@@ -1125,37 +1009,48 @@ const loadRotationSettings = async () => {
   }
 };
 
+// 统一图片变更事件：不做增量同步，收到 images-change 后刷新“当前页”（250ms trailing 节流，不丢最后一次）
+useImagesChangeRefresh({
+  enabled: isAlbumDetailActive,
+  waitMs: 250,
+  filter: (p) => {
+    if (!albumId.value) return false;
+    if (p.albumId && p.albumId === albumId.value) return true;
+    const ids = Array.isArray(p.imageIds) ? p.imageIds : [];
+    if (ids.length > 0) {
+      return ids.some((id) => leafAllImages.some((img) => img.id === id));
+    }
+    return true;
+  },
+  onRefresh: async () => {
+    if (!albumId.value) return;
+    const prevList = images.value.slice();
+    // 清缓存强制重载详情（避免 store 缓存让 UI 看起来“没刷新”）
+    delete albumStore.albumImages[albumId.value];
+    delete albumStore.albumPreviews[albumId.value];
+    clearSelection();
+    await loadAlbum();
+
+    const { addedIds, removedIds } = diffById(prevList, images.value);
+    if (removedIds.length > 0) {
+      removeFromCacheByIds(removedIds);
+      clearSelection();
+    }
+    if (addedIds.length > 0) {
+      const addedSet = new Set(addedIds);
+      const addedImages = images.value.filter((img) => addedSet.has(img.id));
+      if (addedImages.length > 0) {
+        void loadImageUrls(addedImages);
+      }
+    }
+  },
+});
+
 onBeforeUnmount(() => {
   cleanupImageUrlLoader();
 
   // 收藏状态以 store 为准：无需移除监听
 
-  // 移除图片删除事件监听
-  const deletedHandler = (window as any).__albumDetailImagesDeletedHandler;
-  if (deletedHandler) {
-    window.removeEventListener("images-deleted", deletedHandler);
-    delete (window as any).__albumDetailImagesDeletedHandler;
-  }
-
-  // 移除图片移除事件监听
-  const removedHandler = (window as any).__albumDetailImagesRemovedHandler;
-  if (removedHandler) {
-    window.removeEventListener("images-removed", removedHandler);
-    delete (window as any).__albumDetailImagesRemovedHandler;
-  }
-
-  // 移除图片添加事件监听
-  const imageAddedUnlisten = (window as any).__albumDetailImageAddedUnlisten;
-  if (imageAddedUnlisten) {
-    imageAddedUnlisten();
-    delete (window as any).__albumDetailImageAddedUnlisten;
-  }
-
-  const albumImagesChangedUnlisten = (window as any).__albumDetailAlbumImagesChangedUnlisten;
-  if (albumImagesChangedUnlisten) {
-    albumImagesChangedUnlisten();
-    delete (window as any).__albumDetailAlbumImagesChangedUnlisten;
-  }
 });
 </script>
 

@@ -24,18 +24,37 @@
 
           <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
             <div v-if="!loading" class="settings-list">
+              <!-- Plasma 插件模式提示 -->
+              <el-alert
+                v-if="isPlasmaPluginMode"
+                type="warning"
+                :closable="false"
+                show-icon
+                class="plasma-plugin-alert"
+              >
+                <template #title>
+                  <div style="display: flex; align-items: center; gap: 12px;">
+                    <span>当前为 Plasma 插件模式，请在 Plasma 壁纸设置面板中配置相关选项</span>
+                    <el-button type="primary" size="small" @click="handleOpenPlasmaSettings">
+                      <el-icon><Setting /></el-icon>
+                      打开壁纸设置面板
+                    </el-button>
+                  </div>
+                </template>
+              </el-alert>
+
               <SettingRow label="启用壁纸轮播" description="自动从指定画册中轮播更换桌面壁纸">
-                <WallpaperRotationEnabledSetting />
+                <WallpaperRotationEnabledSetting :disabled="isPlasmaPluginMode" />
               </SettingRow>
 
               <SettingRow :label="rotationEnabled ? '选择画册' : '选择壁纸'" description="轮播启用时选择画册；关闭时前往画廊选择单张壁纸">
-                <WallpaperRotationTargetSetting />
+                <WallpaperRotationTargetSetting :disabled="isPlasmaPluginMode" />
               </SettingRow>
 
               <SettingRow v-if="rotationEnabled" label="轮播间隔" description="壁纸更换间隔（分钟，1-1440）">
                 <SettingNumberControl setting-key="wallpaperRotationIntervalMinutes"
                   command="set_wallpaper_rotation_interval_minutes" :build-args="(v: number) => ({ minutes: v })"
-                  :min="1" :max="1440" :step="10" />
+                  :min="1" :max="1440" :step="10" :disabled="isPlasmaPluginMode" />
               </SettingRow>
 
               <SettingRow v-if="rotationEnabled" label="轮播模式" description="随机模式：每次随机选择；顺序模式：按顺序依次更换">
@@ -43,15 +62,15 @@
                   :build-args="(v: string) => ({ mode: v })" :options="[
                     { label: '随机', value: 'random' },
                     { label: '顺序', value: 'sequential' },
-                  ]" />
+                  ]" :disabled="isPlasmaPluginMode" />
               </SettingRow>
 
               <SettingRow label="壁纸显示方式" description="原生模式：根据系统支持显示可用样式">
-                <WallpaperStyleSetting />
+                <WallpaperStyleSetting :disabled="isPlasmaPluginMode" />
               </SettingRow>
 
               <SettingRow label="过渡效果" description="仅轮播支持过渡预览">
-                <WallpaperTransitionSetting />
+                <WallpaperTransitionSetting :disabled="isPlasmaPluginMode" />
               </SettingRow>
 
               <SettingRow label="壁纸模式">
@@ -145,7 +164,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from "vue";
 import { ElMessage } from "element-plus";
-import { Refresh, QuestionFilled } from "@element-plus/icons-vue";
+import { Refresh, QuestionFilled, Setting } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { useLoadingDelay } from "@/composables/useLoadingDelay";
@@ -167,6 +186,7 @@ import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerat
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import { IS_WINDOWS } from "@kabegame/core/env";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
+import { invoke } from "@tauri-apps/api/core";
 
 // 使用 300ms 防闪屏加载延迟
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
@@ -176,6 +196,8 @@ const settingsStore = useSettingsStore();
 const activeTab = ref<string>("wallpaper");
 const isRefreshing = ref(false);
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
+const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
+const isPlasmaPluginMode = computed(() => wallpaperMode.value === "plasma-plugin");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("settings");
 
@@ -200,6 +222,17 @@ const handleRefresh = async () => {
     ElMessage.error("刷新失败");
   } finally {
     isRefreshing.value = false;
+  }
+};
+
+// 打开 Plasma 壁纸配置面板
+const handleOpenPlasmaSettings = async () => {
+  try {
+    await invoke("open_plasma_wallpaper_settings");
+    ElMessage.success("已打开 Plasma 壁纸设置面板");
+  } catch (e) {
+    console.error("打开 Plasma 配置面板失败:", e);
+    ElMessage.error(`打开配置面板失败: ${String(e)}`);
   }
 };
 
@@ -342,6 +375,14 @@ onMounted(() => {
   padding: 20px;
   text-align: center;
   color: var(--anime-text-secondary);
+}
+
+.plasma-plugin-alert {
+  margin-bottom: 20px;
+  
+  :deep(.el-alert__title) {
+    width: 100%;
+  }
 }
 
 // 切换模式时的鼠标加载态

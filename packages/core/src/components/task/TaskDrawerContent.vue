@@ -5,7 +5,7 @@
       <div class="downloads-header">
         <span class="downloads-title">正在下载</span>
         <div class="downloads-stats">
-          <el-tag type="warning" size="small">进行中: {{ activeDownloads.length }}</el-tag>
+          <el-tag type="warning" size="small">进行中: {{ activeDownloadsRunningCount }}</el-tag>
         </div>
       </div>
       <div v-if="activeDownloads.length === 0" class="downloads-empty">
@@ -14,26 +14,28 @@
       <div v-else class="downloads-content">
         <!-- 正在下载的图片列表 -->
         <div v-if="activeDownloads.length > 0" class="downloads-list">
-          <div v-for="download in activeDownloads" :key="downloadKey(download)" class="download-item">
-            <div class="download-info">
-              <div class="download-url" :title="download.url">{{ download.url }}</div>
-              <div class="download-meta">
-                <el-tag size="small" type="info">{{ download.plugin_id }}</el-tag>
-                <span v-if="isShimmerState(download)" class="download-state-text shimmer-text"
-                  :title="downloadStateText(download)">
-                  {{ downloadStateText(download) }}
-                </span>
-                <el-tag v-else size="small" :type="downloadStateTagType(download)">
-                  {{ downloadStateText(download) }}
-                </el-tag>
-              </div>
-              <div v-if="shouldShowDownloadProgress(download) && downloadProgressText(download)"
-                class="download-progress">
-                <el-progress :percentage="downloadProgressPercent(download)"
-                  :format="() => downloadProgressText(download)!" :stroke-width="10" />
+          <transition-group name="download-fade" tag="div" class="downloads-list-inner">
+            <div v-for="download in activeDownloads" :key="downloadKey(download)" class="download-item">
+              <div class="download-info">
+                <div class="download-url" :title="download.url">{{ download.url }}</div>
+                <div class="download-meta">
+                  <el-tag size="small" type="info">{{ download.plugin_id }}</el-tag>
+                  <span v-if="isShimmerState(download)" class="download-state-text shimmer-text"
+                    :title="downloadStateText(download)">
+                    {{ downloadStateText(download) }}
+                  </span>
+                  <el-tag v-else size="small" :type="downloadStateTagType(download)">
+                    {{ downloadStateText(download) }}
+                  </el-tag>
+                </div>
+                <div v-if="shouldShowDownloadProgress(download) && downloadProgressText(download)"
+                  class="download-progress">
+                  <el-progress :percentage="downloadProgressPercent(download)"
+                    :format="() => downloadProgressText(download)!" :stroke-width="10" />
+                </div>
               </div>
             </div>
-          </div>
+          </transition-group>
         </div>
       </div>
     </div>
@@ -268,6 +270,10 @@ const pluginVarMetaMap = ref<Record<string, Record<string, PluginVarMeta>>>({});
 
 // 下载信息
 const activeDownloads = ref<ActiveDownloadInfo[]>([]);
+const activeDownloadsRunningCount = computed(() => {
+  // completed 为“短暂展示态”，不计入运行中
+  return activeDownloads.value.filter((d) => getEffectiveDownloadState(d) !== "completed").length;
+});
 
 const downloadProgressByKey = ref<Record<string, DownloadProgressState>>({});
 let unlistenDownloadProgress: null | (() => void) = null;
@@ -294,11 +300,65 @@ const isTerminalDownloadState = (state: string) => {
   return st === "completed" || st === "failed" || st === "canceled";
 };
 
+// completed 状态短暂展示后自动移除（ms）
+const COMPLETED_HOLD_MS = 200;
+const completedRemovalTimers = new Map<string, number>();
+
+const scheduleRemoveCompleted = (key: string) => {
+  if (completedRemovalTimers.has(key)) return;
+  const timer = window.setTimeout(() => {
+    completedRemovalTimers.delete(key);
+
+    const idx = activeDownloads.value.findIndex((d) => downloadKey(d) === key);
+    if (idx !== -1) activeDownloads.value.splice(idx, 1);
+
+    // 同时清理缓存，避免内存增长
+    const nextProgress = { ...downloadProgressByKey.value };
+    delete nextProgress[key];
+    downloadProgressByKey.value = nextProgress;
+
+    const nextState = { ...downloadStateByKey.value };
+    delete nextState[key];
+    downloadStateByKey.value = nextState;
+  }, COMPLETED_HOLD_MS);
+  completedRemovalTimers.set(key, timer);
+};
+
+const cancelRemoveCompleted = (key: string) => {
+  const t = completedRemovalTimers.get(key);
+  if (t != null) {
+    try {
+      clearTimeout(t);
+    } catch {
+      // ignore
+    }
+    completedRemovalTimers.delete(key);
+  }
+};
+
 const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
   const key = downloadStateKeyFromPayload(p);
   const idx = activeDownloads.value.findIndex((d) => downloadKey(d) === key);
 
   if (isTerminalDownloadState(p.state)) {
+    const st = String(p.state || "").toLowerCase();
+    if (st === "completed") {
+      // completed：短暂展示后移除（不计入运行中）
+      const nextItem: ActiveDownloadInfo = {
+        task_id: p.taskId,
+        start_time: p.startTime,
+        url: p.url,
+        plugin_id: p.pluginId,
+        state: p.state || "completed",
+      };
+      if (idx === -1) activeDownloads.value.push(nextItem);
+      else activeDownloads.value[idx] = { ...activeDownloads.value[idx], ...nextItem };
+      scheduleRemoveCompleted(key);
+      return;
+    }
+
+    // failed/canceled：立即移除
+    cancelRemoveCompleted(key);
     if (idx !== -1) activeDownloads.value.splice(idx, 1);
     // 同时清理缓存，避免内存增长
     const nextProgress = { ...downloadProgressByKey.value };
@@ -320,6 +380,9 @@ const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
   };
   if (idx === -1) activeDownloads.value.push(nextItem);
   else activeDownloads.value[idx] = { ...activeDownloads.value[idx], ...nextItem };
+
+  // 非 completed：确保不会误触发延迟移除
+  cancelRemoveCompleted(key);
 };
 
 const isShimmerState = (d: ActiveDownloadInfo) => {
@@ -485,6 +548,16 @@ const stopDownloadSync = () => {
     unlistenDownloadState = null;
   }
   eventListenersInitialized = false;
+
+  // 清理 pending timers
+  for (const t of completedRemovalTimers.values()) {
+    try {
+      clearTimeout(t);
+    } catch {
+      // ignore
+    }
+  }
+  completedRemovalTimers.clear();
 };
 
 const getPluginName = (pluginId: string) => {
@@ -675,6 +748,12 @@ onUnmounted(() => {
         overflow-y: auto;
         margin-bottom: 12px;
 
+        .downloads-list-inner {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
         .download-item {
           display: flex;
           justify-content: space-between;
@@ -738,6 +817,20 @@ onUnmounted(() => {
         padding: 8px 0;
       }
     }
+  }
+
+  /* 下载条目进入/退出动画（completed 0.2s 展示 + 列表更新） */
+  .download-fade-enter-active,
+  .download-fade-leave-active {
+    transition: all 0.2s ease;
+  }
+  .download-fade-enter-from,
+  .download-fade-leave-to {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  .download-fade-move {
+    transition: transform 0.2s ease;
   }
 
   .tasks-summary {

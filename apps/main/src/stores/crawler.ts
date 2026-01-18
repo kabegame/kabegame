@@ -104,12 +104,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
         const cur = tasks.value[idx];
         const newStatus = event.payload.status as any;
 
-        // 任务结束时（完成/失败/取消），从列表中移除
-        if (newStatus === "completed" || newStatus === "failed" || newStatus === "canceled") {
-          tasks.value.splice(idx, 1);
-          return;
-        }
-
         // 其他状态更新任务信息
         const next: CrawlTask = {
           ...cur,
@@ -190,8 +184,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
         }
       );
 
-      // 注意：image-added 事件由 Gallery.vue 处理增量刷新，
-      // store 不再全局监听，避免与 Gallery 的增量刷新逻辑冲突导致闪烁和批量出现问题
+      // 注意：图片数据相关刷新统一由 images-change 驱动（失效信号 + 手动刷新），
+      // store 不再做“增量同步”，避免响应式更新导致闪烁/卡顿
     } catch (error) {
       console.error("设置全局事件监听器失败:", error);
     }
@@ -423,13 +417,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
       await invoke("delete_image", { imageId });
       images.value = images.value.filter((img) => img.id !== imageId);
 
-      // 发送全局事件通知其他页面图片已被删除（传递图片ID以便其他页面更新）
-      window.dispatchEvent(
-        new CustomEvent("images-deleted", {
-          detail: { imageIds: [imageId] },
-        })
-      );
-
       // 如果图片属于某个任务，重新获取任务信息以更新 deletedCount
       if (taskId) {
         try {
@@ -474,13 +461,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
       await invoke("remove_image", { imageId });
       images.value = images.value.filter((img) => img.id !== imageId);
 
-      // 发送全局事件通知其他页面图片已被移除（传递图片ID以便其他页面更新）
-      window.dispatchEvent(
-        new CustomEvent("images-removed", {
-          detail: { imageIds: [imageId] },
-        })
-      );
-
       // 如果图片属于某个任务，重新获取任务信息以更新 deletedCount
       if (taskId) {
         try {
@@ -518,22 +498,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
   // 批量删除图片（删除文件和数据库记录）
   async function batchDeleteImages(
     imageIds: string[],
-    opts: { emitEvent?: boolean } = {}
+    _opts: { emitEvent?: boolean } = {}
   ) {
     try {
       await invoke("batch_delete_images", { imageIds });
       // 从本地 store 中移除图片
       images.value = images.value.filter((img) => !imageIds.includes(img.id));
-
-      // 发送全局事件通知其他页面图片已被批量删除（传递图片ID以便其他页面更新）
-      const emitEvent = opts.emitEvent ?? true;
-      if (emitEvent) {
-        window.dispatchEvent(
-          new CustomEvent("images-deleted", {
-            detail: { imageIds },
-          })
-        );
-      }
     } catch (error) {
       console.error("批量删除图片失败:", error);
       throw error;
@@ -543,22 +513,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
   // 批量移除图片（仅删除数据库记录，不删除文件）
   async function batchRemoveImages(
     imageIds: string[],
-    opts: { emitEvent?: boolean } = {}
+    _opts: { emitEvent?: boolean } = {}
   ) {
     try {
       await invoke("batch_remove_images", { imageIds });
       // 从本地 store 中移除图片
       images.value = images.value.filter((img) => !imageIds.includes(img.id));
-
-      // 发送全局事件通知其他页面图片已被批量移除（传递图片ID以便其他页面更新）
-      const emitEvent = opts.emitEvent ?? true;
-      if (emitEvent) {
-        window.dispatchEvent(
-          new CustomEvent("images-removed", {
-            detail: { imageIds },
-          })
-        );
-      }
     } catch (error) {
       console.error("批量移除图片失败:", error);
       throw error;

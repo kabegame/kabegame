@@ -56,6 +56,50 @@ pub trait EventEmitter: Send + Sync {
 
     /// 发送通用事件（用于扩展）
     fn emit(&self, event: &str, payload: serde_json::Value);
+
+    /// 发送任务进度事件
+    fn emit_task_progress(&self, task_id: &str, progress: f64);
+
+    /// 发送任务错误事件
+    fn emit_task_error(&self, task_id: &str, error: &str);
+
+    /// 发送下载进度事件
+    fn emit_download_progress(
+        &self,
+        task_id: &str,
+        url: &str,
+        start_time: u64,
+        plugin_id: &str,
+        received_bytes: u64,
+        total_bytes: Option<u64>,
+    );
+
+    /// 发送去重进度事件
+    fn emit_dedupe_progress(
+        &self,
+        processed: usize,
+        total: usize,
+        removed: usize,
+        batch_index: usize,
+    );
+
+    /// 发送去重完成事件
+    fn emit_dedupe_finished(
+        &self,
+        processed: usize,
+        total: usize,
+        removed: usize,
+        canceled: bool,
+    );
+
+    /// 发送壁纸图片更新事件
+    fn emit_wallpaper_update_image(&self, image_path: &str);
+
+    /// 发送壁纸样式更新事件
+    fn emit_wallpaper_update_style(&self, style: &str);
+
+    /// 发送壁纸过渡效果更新事件
+    fn emit_wallpaper_update_transition(&self, transition: &str);
 }
 
 /// 状态管理器 trait：抽象状态存储和获取功能
@@ -160,6 +204,74 @@ impl EventEmitter for NoopRuntime {
     fn emit(&self, event: &str, payload: serde_json::Value) {
         eprintln!("[event] {}: {}", event, payload);
     }
+
+    fn emit_dedupe_progress(
+        &self,
+        processed: usize,
+        total: usize,
+        removed: usize,
+        batch_index: usize,
+    ) {
+        eprintln!(
+            "[dedupe-progress] processed: {}/{}, removed: {}, batch: {}",
+            processed, total, removed, batch_index
+        );
+    }
+
+    fn emit_dedupe_finished(
+        &self,
+        processed: usize,
+        total: usize,
+        removed: usize,
+        canceled: bool,
+    ) {
+        eprintln!(
+            "[dedupe-finished] processed: {}/{}, removed: {}, canceled: {}",
+            processed, total, removed, canceled
+        );
+    }
+
+    fn emit_task_progress(&self, task_id: &str, progress: f64) {
+        eprintln!("[task-progress] {} progress: {:.2}%", task_id, progress * 100.0);
+    }
+
+    fn emit_wallpaper_update_image(&self, image_path: &str) {
+        eprintln!("[wallpaper-update-image] {}", image_path);
+    }
+
+    fn emit_wallpaper_update_style(&self, style: &str) {
+        eprintln!("[wallpaper-update-style] {}", style);
+    }
+
+    fn emit_wallpaper_update_transition(&self, transition: &str) {
+        eprintln!("[wallpaper-update-transition] {}", transition);
+    }
+
+    fn emit_task_error(&self, task_id: &str, error: &str) {
+        eprintln!("[task-error] {} error: {}", task_id, error);
+    }
+
+    fn emit_download_progress(
+        &self,
+        task_id: &str,
+        url: &str,
+        _start_time: u64,
+        _plugin_id: &str,
+        received_bytes: u64,
+        total_bytes: Option<u64>,
+    ) {
+        if let Some(total) = total_bytes {
+            eprintln!(
+                "[download-progress] {} {}: {}/{} bytes",
+                task_id, url, received_bytes, total
+            );
+        } else {
+            eprintln!(
+                "[download-progress] {} {}: {} bytes",
+                task_id, url, received_bytes
+            );
+        }
+    }
 }
 
 impl StateManager for NoopRuntime {
@@ -246,6 +358,58 @@ where
     fn emit(&self, event: &str, payload: serde_json::Value) {
         self.emitter.emit(event, payload);
     }
+
+    fn emit_dedupe_progress(
+        &self,
+        processed: usize,
+        total: usize,
+        removed: usize,
+        batch_index: usize,
+    ) {
+        self.emitter.emit_dedupe_progress(processed, total, removed, batch_index);
+    }
+
+    fn emit_dedupe_finished(
+        &self,
+        processed: usize,
+        total: usize,
+        removed: usize,
+        canceled: bool,
+    ) {
+        self.emitter.emit_dedupe_finished(processed, total, removed, canceled);
+    }
+
+    fn emit_task_progress(&self, task_id: &str, progress: f64) {
+        self.emitter.emit_task_progress(task_id, progress);
+    }
+
+    fn emit_task_error(&self, task_id: &str, error: &str) {
+        self.emitter.emit_task_error(task_id, error);
+    }
+
+    fn emit_download_progress(
+        &self,
+        task_id: &str,
+        url: &str,
+        start_time: u64,
+        plugin_id: &str,
+        received_bytes: u64,
+        total_bytes: Option<u64>,
+    ) {
+        self.emitter.emit_download_progress(task_id, url, start_time, plugin_id, received_bytes, total_bytes);
+    }
+
+    fn emit_wallpaper_update_image(&self, image_path: &str) {
+        self.emitter.emit_wallpaper_update_image(image_path);
+    }
+
+    fn emit_wallpaper_update_style(&self, style: &str) {
+        self.emitter.emit_wallpaper_update_style(style);
+    }
+
+    fn emit_wallpaper_update_transition(&self, transition: &str) {
+        self.emitter.emit_wallpaper_update_transition(transition);
+    }
 }
 
 impl<E, S> StateManager for CompositeRuntime<E, S>
@@ -272,4 +436,8 @@ where
     S: StateManager + Send + Sync,
 {
 }
+
+
+
+
 

@@ -44,16 +44,17 @@ impl WallpaperWindow {
             .map_err(|e| format!("推送壁纸图片事件失败: {}", e))?;
 
         // 推送样式和过渡效果事件
-        if let Ok(v) = tauri::async_runtime::block_on(async {
-            crate::daemon_client::get_ipc_client().settings_get().await
-        }) {
+        let app_for_style = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Ok(v) = crate::daemon_client::get_ipc_client().settings_get().await {
             if let Some(style) = v.get("wallpaperRotationStyle").and_then(|x| x.as_str()) {
-                let _ = self.app.emit("wallpaper-update-style", style);
+                    let _ = app_for_style.emit("wallpaper-update-style", style);
             }
             if let Some(tr) = v.get("wallpaperRotationTransition").and_then(|x| x.as_str()) {
-                let _ = self.app.emit("wallpaper-update-transition", tr);
+                    let _ = app_for_style.emit("wallpaper-update-transition", tr);
+                }
             }
-        }
+        });
 
         // 在 Windows 上设置窗口为壁纸层
         self.set_window_as_wallpaper()

@@ -148,11 +148,12 @@ export function useGalleryImages(
     const container = preserveScroll ? galleryContainerRef.value : null;
     const prevScrollTop = container?.scrollTop ?? 0;
 
-    // 强制重载：只清理“当前画廊列表”涉及的 id（全局缓存仍共享，但不会被整库清空）
+    // 强制重载：
+    // - 只清理“当前画廊列表”涉及的 id 对应的 URL 缓存
+    // - 关键：不要清空 displayedImages，否则会导致整页 ImageItem 卸载/重建（破坏 key 复用）
+    // - fetchLeafByPage 会随后用最新数据替换数组引用，让 Vue 仅按 key diff（删除缺失项/复用已有项）
     if (forceReload && displayedImages.value.length > 0) {
       removeFromCacheByIds(displayedImages.value.map((i) => i.id));
-      setDisplayedImages([]);
-      await nextTick();
     }
 
     if (reset) {

@@ -3,9 +3,27 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
+use tokio::time::Instant;
 // Settings 不再依赖 Tauri AppHandle
 
 fn atomic_replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
+    // 确保临时文件存在
+    if !tmp.exists() {
+        return Err(format!(
+            "Failed to replace settings file: temporary file does not exist: {}",
+            tmp.display()
+        ));
+    }
+
+    // 确保目标文件的父目录存在
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create destination directory: {}", e))?;
+    }
+
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -172,7 +190,29 @@ impl Default for AppSettings {
     }
 }
 
-pub struct Settings;
+// Settings 内部状态（线程安全的内存缓存和防抖定时器）
+struct SettingsInner {
+    // 内存中的设置缓存（优先从内存读取，避免频繁文件 I/O）
+    cache: Option<AppSettings>,
+    // 最后一次修改时间（用于防抖）
+    last_modified: Option<Instant>,
+    // 防抖任务句柄（用于取消之前的写入任务）
+    debounce_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Default for SettingsInner {
+    fn default() -> Self {
+        Self {
+            cache: None,
+            last_modified: None,
+            debounce_task: None,
+        }
+    }
+}
+
+pub struct Settings {
+    inner: Arc<Mutex<SettingsInner>>,
+}
 
 impl Settings {
     fn normalize_transition_for_mode(mode: &str, transition: &str) -> String {
@@ -283,7 +323,9 @@ impl Settings {
     }
 
     pub fn new() -> Self {
-        Self
+        Self {
+            inner: Arc::new(Mutex::new(SettingsInner::default())),
+        }
     }
 
     fn get_settings_file(&self) -> PathBuf {
@@ -453,11 +495,25 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
     }
 
     pub fn get_settings(&self) -> Result<AppSettings, String> {
+        // 优先从内存缓存读取
+        {
+            let inner = self.inner.lock().unwrap();
+            if let Some(ref cached) = inner.cache {
+                return Ok(cached.clone());
+            }
+        }
+
+        // 缓存未命中，从文件读取
         let file = self.get_settings_file();
         if !file.exists() {
             // 首次启动，使用系统默认值
             let default = self.get_system_default_settings();
-            self.save_settings(&default)?;
+            // 写入内存缓存并保存到文件
+            {
+                let mut inner = self.inner.lock().unwrap();
+                inner.cache = Some(default.clone());
+            }
+            self.save_settings_immediate(&default)?;
             return Ok(default);
         }
 
@@ -465,11 +521,10 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             .map_err(|e| format!("Failed to read settings file: {}", e))?;
 
         // 处理空文件：
-        // - 这里很可能是“并发写入时被读到空内容”的瞬时状态
+        // - 这里很可能是"并发写入时被读到空内容"的瞬时状态
         // - 为避免把用户已有配置覆盖成默认值（例如 max_concurrent_downloads 被刷回 3），先短暂重试读取
         if content.trim().is_empty() {
             use std::thread::sleep;
-            use std::time::Duration;
             for _ in 0..3 {
                 sleep(Duration::from_millis(20));
                 content = fs::read_to_string(&file)
@@ -634,13 +689,21 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             }
         }
 
-        // 注意：不要在“读取 settings”时写回文件。
+        // 注意：不要在"读取 settings"时写回文件。
         // get_settings() 在运行期会被频繁调用（下载队列、壁纸管理器等），读时写会导致大量 I/O，
         // 也更容易触发并发读到空文件/半文件，从而把值回退到默认（例如 3）。
+        
+        // 从文件读取后，更新内存缓存
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.cache = Some(settings.clone());
+        }
+        
         Ok(settings)
     }
 
-    pub fn save_settings(&self, settings: &AppSettings) -> Result<(), String> {
+    /// 立即写入文件（不经过防抖，用于首次启动等情况）
+    fn save_settings_immediate(&self, settings: &AppSettings) -> Result<(), String> {
         let file = self.get_settings_file();
         if let Some(parent) = file.parent() {
             fs::create_dir_all(parent)
@@ -650,11 +713,59 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
         let content = serde_json::to_string_pretty(settings)
             .map_err(|e| format!("Failed to serialize settings: {}", e))?;
 
-        // 为避免并发读写导致读取到空内容/半文件，采用“写入临时文件 + 原子替换”的方式落盘。
+        // 为避免并发读写导致读取到空内容/半文件，采用"写入临时文件 + 原子替换"的方式落盘。
         let tmp = file.with_extension("json.tmp");
         fs::write(&tmp, content)
             .map_err(|e| format!("Failed to write temp settings file: {}", e))?;
         atomic_replace_file(&tmp, &file)?;
+        Ok(())
+    }
+
+    pub fn save_settings(&self, settings: &AppSettings) -> Result<(), String> {
+        // 更新内存缓存
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.cache = Some(settings.clone());
+            inner.last_modified = Some(Instant::now());
+            
+            // 取消之前的防抖任务（如果存在）
+            if let Some(task) = inner.debounce_task.take() {
+                task.abort();
+            }
+            
+            // 启动新的防抖任务：5秒后写入文件
+            let file = self.get_settings_file();
+            let settings_clone = settings.clone();
+            let inner_clone = Arc::clone(&self.inner);
+            let task = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                
+                // 检查是否仍然是最新的修改（防止在等待期间有新的修改）
+                let should_write = {
+                    let inner_guard = inner_clone.lock().unwrap();
+                    // 如果 last_modified 与当前时间差约等于 5 秒，说明这是应该写入的修改
+                    inner_guard.last_modified
+                        .map(|t| t.elapsed() >= Duration::from_secs(4))
+                        .unwrap_or(false)
+                };
+                
+                if should_write {
+                    // 写入文件
+                    if let Some(parent) = file.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    
+                    if let Ok(content) = serde_json::to_string_pretty(&settings_clone) {
+                        let tmp = file.with_extension("json.tmp");
+                        if fs::write(&tmp, content).is_ok() {
+                            let _ = atomic_replace_file(&tmp, &file);
+                        }
+                    }
+                }
+            });
+            inner.debounce_task = Some(task);
+        }
+        
         Ok(())
     }
 

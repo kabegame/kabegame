@@ -160,19 +160,23 @@ fn run_dedupe_batched(
         if !remove_ids.is_empty() {
             if delete_files {
                 storage.batch_delete_images(&remove_ids)?;
+                // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
                 let _ = app.emit(
-                    "images-deleted",
-                    DedupeBatchRemovedPayload {
-                        image_ids: remove_ids.clone(),
-                    },
+                    "images-change",
+                    serde_json::json!({
+                        "reason": "delete",
+                        "imageIds": remove_ids.clone(),
+                    }),
                 );
             } else {
                 storage.batch_remove_images(&remove_ids)?;
+                // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
                 let _ = app.emit(
-                    "images-removed",
-                    DedupeBatchRemovedPayload {
-                        image_ids: remove_ids.clone(),
-                    },
+                    "images-change",
+                    serde_json::json!({
+                        "reason": "remove",
+                        "imageIds": remove_ids.clone(),
+                    }),
                 );
             }
 

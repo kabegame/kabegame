@@ -3,8 +3,8 @@ import { ref, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { ImageInfo } from "./crawler";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { useCrawlerStore } from "./crawler";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 
 export interface Album {
   id: string;
@@ -14,7 +14,6 @@ export interface Album {
 
 export const useAlbumStore = defineStore("albums", () => {
   const settingsStore = useSettingsStore();
-  const crawlerStore = useCrawlerStore();
   const FAVORITE_ALBUM_ID = computed(() => settingsStore.favoriteAlbumId);
 
   const albums = ref<Album[]>([]);
@@ -25,7 +24,8 @@ export const useAlbumStore = defineStore("albums", () => {
 
   let eventListenersInitialized = false;
   let unlistenAlbumsChanged: UnlistenFn | null = null;
-  let unlistenAlbumImagesChanged: UnlistenFn | null = null;
+  let unlistenImagesChange: UnlistenFn | null = null;
+  let reloadCountsTimer: number | null = null;
 
   const initEventListeners = async () => {
     if (eventListenersInitialized) return;
@@ -36,31 +36,35 @@ export const useAlbumStore = defineStore("albums", () => {
         // 画册列表变化：直接 reload（包含 counts）
         await loadAlbums();
       });
-      unlistenAlbumImagesChanged = await listen<{ albumId: string }>(
-        "album-images-changed",
+      // 统一图片变更事件：作为“数据可能变化”的失效信号，只做缓存失效 + 计数刷新
+      unlistenImagesChange = await listen<ImagesChangePayload>(
+        "images-change",
         async (event) => {
-          const albumId = event.payload?.albumId;
-          const reason = (event.payload as any)?.reason as string | undefined;
-          const imageIds = (event.payload as any)?.imageIds as string[] | undefined;
-          if (!albumId) return;
-          delete albumImages.value[albumId];
-          delete albumPreviews.value[albumId];
+          const p = (event.payload ?? {}) as ImagesChangePayload;
+          const albumId = (p.albumId ?? "").trim();
 
-          // 收藏画册：需要把 favorite 状态同步回画廊缓存（Explorer/后台任务也会触发）
-          if (albumId === FAVORITE_ALBUM_ID.value && Array.isArray(imageIds) && imageIds.length) {
-            const desired = reason === "add";
-            crawlerStore.images = crawlerStore.images.map((img) =>
-              imageIds.includes(img.id)
-                ? ({ ...img, favorite: desired } as ImageInfo)
-                : img
-            );
+          // 1) 缓存失效：带 albumId 则精准失效，否则保守失效全部
+          if (albumId) {
+            delete albumImages.value[albumId];
+            delete albumPreviews.value[albumId];
+          } else {
+            albumImages.value = {};
+            albumPreviews.value = {};
           }
-          try {
-            const counts = await invoke<Record<string, number>>("get_album_counts");
-            albumCounts.value = counts;
-          } catch (e) {
-            console.warn("reload album counts failed", e);
+
+          // 2) counts 可能变化：用轻量 debounce 合并 burst
+          if (reloadCountsTimer !== null) {
+            clearTimeout(reloadCountsTimer);
           }
+          reloadCountsTimer = window.setTimeout(async () => {
+            reloadCountsTimer = null;
+            try {
+              const counts = await invoke<Record<string, number>>("get_album_counts");
+              albumCounts.value = counts;
+            } catch (e) {
+              console.warn("reload album counts failed", e);
+            }
+          }, 250);
         }
       );
     } catch (e) {

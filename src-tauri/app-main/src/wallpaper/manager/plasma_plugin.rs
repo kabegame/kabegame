@@ -157,11 +157,11 @@ for (var i=0; i<allDesktops.length; i++) {{\n\
 #[cfg(all(target_os = "linux", desktop = "plasma"))]
 #[async_trait]
 impl WallpaperManager for PlasmaPluginWallpaperManager {
-    fn get_style(&self) -> Result<String, String> {
+    async fn get_style(&self) -> Result<String, String> {
         // 以 daemon 设置为准（插件会同步 daemon）
-        let v = tauri::async_runtime::block_on(async {
-            crate::daemon_client::get_ipc_client().settings_get().await
-        })
+        let v = crate::daemon_client::get_ipc_client()
+            .settings_get()
+            .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
         Ok(v.get("wallpaperRotationStyle")
             .and_then(|x| x.as_str())
@@ -171,7 +171,7 @@ impl WallpaperManager for PlasmaPluginWallpaperManager {
 
     async fn get_transition(&self) -> Result<String, String> {
         let v = crate::daemon_client::get_ipc_client().settings_get().await
-            .map_err(|e| format!("Daemon unavailable: {}", e))?;
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
         Ok(v.get("wallpaperRotationTransition")
             .and_then(|x| x.as_str())
             .unwrap_or("fade")
@@ -203,9 +203,9 @@ impl WallpaperManager for PlasmaPluginWallpaperManager {
         }
 
         // 用 daemon 的当前 style/transition 初始化插件配置，避免切到插件模式后出现“空白/配置不一致”
-        let v = tauri::async_runtime::block_on(async {
-            crate::daemon_client::get_ipc_client().settings_get().await
-        })
+        let v = crate::daemon_client::get_ipc_client()
+            .settings_get()
+            .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
 
         let style = v

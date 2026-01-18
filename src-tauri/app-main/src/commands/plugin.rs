@@ -1,7 +1,6 @@
 // 插件相关命令
 
 use crate::daemon_client;
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
 #[tauri::command]
@@ -25,17 +24,15 @@ pub async fn refresh_installed_plugins_cache() -> Result<(), String> {
 
 /// 前端安装/更新后可调用：按 pluginId 局部刷新缓存
 #[tauri::command]
-pub fn refresh_installed_plugin_cache(
+pub async fn refresh_installed_plugin_cache(
     plugin_id: String,
 ) -> Result<(), String> {
     // 兜底：触发一次 detail 加载，相当于"按 id 刷新缓存"
-    tauri::async_runtime::block_on(async {
         let _ = daemon_client::get_ipc_client()
             .plugin_get_detail(plugin_id)
             .await
             .map_err(|e| format!("Daemon unavailable: {}", e))?;
         Ok(())
-    })
 }
 
 #[tauri::command]

@@ -3,14 +3,13 @@
 //! 为了保持向后兼容，这里重新导出 core 中的实现。
 //! 新的应用应该直接使用 `kabegame_core::ipc::init_event_listeners`。
 
-use kabegame_core::ipc::{on_task_log, on_download_state, on_task_status, start_listening};
+use kabegame_core::ipc::{on_task_log, on_download_state, on_task_status, on_task_progress, on_dedupe_progress, on_dedupe_finished, on_setting_change, start_listening};
 use kabegame_core::ipc::events::{get_global_listener, DaemonEvent};
 use tauri::{AppHandle, Emitter};
 
 /// 初始化事件监听器（在 Tauri 应用启动时调用）
 pub async fn init_event_listeners(app: AppHandle) {
-    // 转发通用事件（Generic）：允许 daemon 发送任意事件名给前端
-    // 例如：dedupe-progress / dedupe-finished / images-removed / images-deleted
+    // 转发通用事件（Generic）：允许 daemon 发送任意事件名给前端（例如：images-change）
     {
         let app_for_generic = app.clone();
         get_global_listener()
@@ -56,6 +55,43 @@ pub async fn init_event_listeners(app: AppHandle) {
             "error": event.error,
             "currentWallpaper": event.current_wallpaper,
         }));
+    }).await;
+
+    // 监听任务进度（add_progress 驱动）
+    let app_for_task_progress = app.clone();
+    on_task_progress(move |event| {
+        let _ = app_for_task_progress.emit("task-progress", serde_json::json!({
+            "taskId": event.task_id,
+            "progress": event.progress,
+        }));
+    }).await;
+
+    // 监听去重进度
+    let app_for_dedupe_progress = app.clone();
+    on_dedupe_progress(move |event| {
+        let _ = app_for_dedupe_progress.emit("dedupe-progress", serde_json::json!({
+            "processed": event.processed,
+            "total": event.total,
+            "removed": event.removed,
+            "batchIndex": event.batch_index,
+        }));
+    }).await;
+
+    // 监听去重完成
+    let app_for_dedupe_finished = app.clone();
+    on_dedupe_finished(move |event| {
+        let _ = app_for_dedupe_finished.emit("dedupe-finished", serde_json::json!({
+            "processed": event.processed,
+            "total": event.total,
+            "removed": event.removed,
+            "canceled": event.canceled,
+        }));
+    }).await;
+
+    // 监听设置变更
+    let app_for_setting_change = app.clone();
+    on_setting_change(move |event| {
+        let _ = app_for_setting_change.emit("setting-change", event.changes);
     }).await;
 
     // 启动事件监听（每 500ms 轮询一次）

@@ -1,8 +1,11 @@
 //! Images 表相关操作
 
 use kabegame_core::ipc::ipc::CliIpcResponse;
+use kabegame_core::ipc::EventBroadcaster;
+use kabegame_core::ipc::events::DaemonEvent;
 use kabegame_core::storage::Storage;
 use kabegame_core::storage::gallery::ImageQuery;
+use kabegame_core::storage::FAVORITE_ALBUM_ID;
 use std::sync::Arc;
 
 pub async fn get_images(storage: Arc<Storage>) -> CliIpcResponse {
@@ -107,41 +110,116 @@ pub async fn get_images_range_by_query(
     }
 }
 
-pub async fn delete_image(storage: Arc<Storage>, image_id: &str) -> CliIpcResponse {
+pub async fn delete_image(
+    storage: Arc<Storage>,
+    broadcaster: Arc<EventBroadcaster>,
+    image_id: &str,
+) -> CliIpcResponse {
     match storage.delete_image(image_id) {
-        Ok(()) => CliIpcResponse::ok("deleted"),
+        Ok(()) => {
+            // 统一图片变更事件：供前端刷新当前 provider 视图
+            let _ = broadcaster
+                .broadcast(DaemonEvent::Generic {
+                    event: "images-change".to_string(),
+                    payload: serde_json::json!({
+                        "reason": "delete",
+                        "imageIds": [image_id],
+                    }),
+                })
+                .await;
+            CliIpcResponse::ok("deleted")
+        }
         Err(e) => CliIpcResponse::err(e),
     }
 }
 
-pub async fn remove_image(storage: Arc<Storage>, image_id: &str) -> CliIpcResponse {
+pub async fn remove_image(
+    storage: Arc<Storage>,
+    broadcaster: Arc<EventBroadcaster>,
+    image_id: &str,
+) -> CliIpcResponse {
     match storage.remove_image(image_id) {
-        Ok(()) => CliIpcResponse::ok("removed"),
+        Ok(()) => {
+            let _ = broadcaster
+                .broadcast(DaemonEvent::Generic {
+                    event: "images-change".to_string(),
+                    payload: serde_json::json!({
+                        "reason": "remove",
+                        "imageIds": [image_id],
+                    }),
+                })
+                .await;
+            CliIpcResponse::ok("removed")
+        }
         Err(e) => CliIpcResponse::err(e),
     }
 }
 
-pub async fn batch_delete_images(storage: Arc<Storage>, image_ids: &[String]) -> CliIpcResponse {
+pub async fn batch_delete_images(
+    storage: Arc<Storage>,
+    broadcaster: Arc<EventBroadcaster>,
+    image_ids: &[String],
+) -> CliIpcResponse {
     match storage.batch_delete_images(image_ids) {
-        Ok(()) => CliIpcResponse::ok("deleted"),
+        Ok(()) => {
+            let _ = broadcaster
+                .broadcast(DaemonEvent::Generic {
+                    event: "images-change".to_string(),
+                    payload: serde_json::json!({
+                        "reason": "delete",
+                        "imageIds": image_ids,
+                    }),
+                })
+                .await;
+            CliIpcResponse::ok("deleted")
+        }
         Err(e) => CliIpcResponse::err(e),
     }
 }
 
-pub async fn batch_remove_images(storage: Arc<Storage>, image_ids: &[String]) -> CliIpcResponse {
+pub async fn batch_remove_images(
+    storage: Arc<Storage>,
+    broadcaster: Arc<EventBroadcaster>,
+    image_ids: &[String],
+) -> CliIpcResponse {
     match storage.batch_remove_images(image_ids) {
-        Ok(()) => CliIpcResponse::ok("removed"),
+        Ok(()) => {
+            let _ = broadcaster
+                .broadcast(DaemonEvent::Generic {
+                    event: "images-change".to_string(),
+                    payload: serde_json::json!({
+                        "reason": "remove",
+                        "imageIds": image_ids,
+                    }),
+                })
+                .await;
+            CliIpcResponse::ok("removed")
+        }
         Err(e) => CliIpcResponse::err(e),
     }
 }
 
 pub async fn toggle_image_favorite(
     storage: Arc<Storage>,
+    broadcaster: Arc<EventBroadcaster>,
     image_id: &str,
     favorite: bool,
 ) -> CliIpcResponse {
     match storage.toggle_image_favorite(image_id, favorite) {
-        Ok(()) => CliIpcResponse::ok("ok"),
+        Ok(()) => {
+            // 统一图片变更事件：收藏/取消收藏会影响 Gallery 的 favorite 字段 + 收藏画册内容
+            let _ = broadcaster
+                .broadcast(DaemonEvent::Generic {
+                    event: "images-change".to_string(),
+                    payload: serde_json::json!({
+                        "reason": if favorite { "favorite-add" } else { "favorite-remove" },
+                        "albumId": FAVORITE_ALBUM_ID,
+                        "imageIds": [image_id],
+                    }),
+                })
+                .await;
+            CliIpcResponse::ok("ok")
+        }
         Err(e) => CliIpcResponse::err(e),
     }
 }

@@ -9,7 +9,28 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use std::sync::OnceLock;
+
+fn ipc_debug_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        match std::env::var("KABEGAME_IPC_DEBUG") {
+            Ok(v) => {
+                let v = v.to_ascii_lowercase();
+                v == "1" || v == "true" || v == "yes" || v == "on"
+            }
+            Err(_) => false,
+        }
+    })
+}
+
+macro_rules! ipc_dbg {
+    ($($arg:tt)*) => {
+        if ipc_debug_enabled() {
+            eprintln!($($arg)*);
+        }
+    };
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "camelCase")]
@@ -558,6 +579,72 @@ where
     serve_impl(handler, broadcaster).await
 }
 
+/// 检查是否有其他 daemon 正在运行
+async fn check_other_daemon_running() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use tokio::net::windows::named_pipe::ClientOptions;
+        use tokio::time::{timeout, Duration};
+        
+        // 尝试连接现有的命名管道
+        let client_result = timeout(
+            Duration::from_millis(100),
+            async {
+                ClientOptions::new()
+                    .open(windows_pipe_name())
+                    .ok()
+            }
+        ).await;
+        
+        if let Ok(Some(mut client)) = client_result {
+            // 如果连接成功，尝试发送 Status 请求验证
+            let status_req = CliIpcRequest::Status;
+            if let Ok(bytes) = encode_line(&status_req) {
+                if write_all(&mut client, &bytes).await.is_ok() {
+                    // 尝试读取响应（但不等待太久）
+                    if timeout(Duration::from_millis(100), read_one_line(&mut client))
+                        .await
+                        .is_ok()
+                    {
+                        return true; // 成功连接并得到响应，说明有其他 daemon 在运行
+                    }
+                }
+            }
+        }
+        false
+    }
+    
+    #[cfg(not(target_os = "windows"))]
+    {
+        use tokio::net::UnixStream;
+        use tokio::time::{timeout, Duration};
+        
+        let path = unix_socket_path();
+        // 尝试连接现有的 Unix socket
+        let connect_result = timeout(
+            Duration::from_millis(100),
+            UnixStream::connect(&path)
+        ).await;
+        
+        if let Ok(Ok(mut stream)) = connect_result {
+            // 如果连接成功，尝试发送 Status 请求验证
+            let status_req = CliIpcRequest::Status;
+            if let Ok(bytes) = encode_line(&status_req) {
+                if write_all(&mut stream, &bytes).await.is_ok() {
+                    // 尝试读取响应（但不等待太久）
+                    if timeout(Duration::from_millis(100), read_one_line(&mut stream))
+                        .await
+                        .is_ok()
+                    {
+                        return true; // 成功连接并得到响应，说明有其他 daemon 在运行
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
 async fn serve_impl<F, Fut>(
     handler: F,
     broadcaster: Option<Arc<dyn std::any::Any + Send + Sync>>,
@@ -625,7 +712,19 @@ where
             Ok(server)
         }
 
-        let mut server = create_secure_server()?;
+        let mut server = match create_secure_server() {
+            Ok(s) => s,
+            Err(e) => {
+                // 绑定失败，检查是否有其他 daemon 正在运行
+                if check_other_daemon_running().await {
+                    eprintln!("错误: 无法绑定命名管道 {}，因为已有其他 daemon 正在运行。", windows_pipe_name());
+                    eprintln!("请先停止正在运行的 daemon，或确保只有一个 daemon 实例。");
+                    return Err(format!("另一个 daemon 实例正在运行: {}", e));
+                }
+                // 如果没有其他 daemon 运行，可能是其他原因导致的绑定失败
+                return Err(format!("无法创建命名管道: {}", e));
+            }
+        };
         loop {
             server
                 .connect()
@@ -638,86 +737,82 @@ where
             let mut connected = connected;
             let line = match read_one_line(&mut connected).await {
                 Ok(line) => {
-                    eprintln!("[DEBUG] IPC 服务器读取请求成功: {}", line);
+                    ipc_dbg!("[DEBUG] IPC 服务器读取请求成功: {}", line);
                     line
                 },
                 Err(e) => {
-                    eprintln!("[DEBUG] IPC 服务器读取请求失败: {}", e);
+                    ipc_dbg!("[DEBUG] IPC 服务器读取请求失败: {}", e);
                     continue;
                 }
             };
             let req: CliIpcRequest = match decode_line(&line) {
                 Ok(req) => {
-                    eprintln!("[DEBUG] IPC 服务器解析请求成功: {:?}", req);
+                    ipc_dbg!("[DEBUG] IPC 服务器解析请求成功: {:?}", req);
                     req
                 },
                 Err(e) => {
-                    eprintln!("[DEBUG] IPC 服务器解析请求失败: {}", e);
+                    ipc_dbg!("[DEBUG] IPC 服务器解析请求失败: {}", e);
                     continue;
                 }
             };
             
             // 检查是否是 SubscribeEvents 请求（需要长连接）
             if matches!(req, CliIpcRequest::SubscribeEvents) {
-                eprintln!("[DEBUG] IPC 服务器接受新连接（SubscribeEvents 长连接）");
-                eprintln!("[DEBUG] IPC 服务器收到 SubscribeEvents 请求，准备建立长连接");
+                ipc_dbg!("[DEBUG] IPC 服务器接受新连接（SubscribeEvents 长连接）");
+                ipc_dbg!("[DEBUG] IPC 服务器收到 SubscribeEvents 请求，准备建立长连接");
                 // 对于 SubscribeEvents，需要特殊处理
                 // 先调用 handler 获取初始响应
                 let resp = handler(req).await;
                 let bytes = match encode_line(&resp) {
                     Ok(bytes) => bytes,
                     Err(e) => {
-                        eprintln!("[DEBUG] IPC 服务器编码响应失败: {}", e);
+                        ipc_dbg!("[DEBUG] IPC 服务器编码响应失败: {}", e);
                         continue;
                     }
                 };
                 if let Err(e) = write_all(&mut connected, &bytes).await {
-                    eprintln!("[DEBUG] IPC 服务器写入响应失败: {}", e);
+                    ipc_dbg!("[DEBUG] IPC 服务器写入响应失败: {}", e);
                     continue;
                 }
-                eprintln!("[DEBUG] IPC 服务器已发送 SubscribeEvents 响应，开始推送事件");
+                ipc_dbg!("[DEBUG] IPC 服务器已发送 SubscribeEvents 响应，开始推送事件");
                 
                 // 如果有 broadcaster，启动事件推送任务
                 if let Some(broadcaster) = &broadcaster {
                     if let Ok(broadcaster) = broadcaster.clone().downcast::<super::EventBroadcaster>() {
-                        let mut rx = broadcaster.subscribe();
-                        eprintln!("[DEBUG] IPC 服务器已订阅 EventBroadcaster，开始监听事件");
+                        let mut rx = broadcaster.subscribe_all_stream();
+                        ipc_dbg!("[DEBUG] IPC 服务器已订阅 EventBroadcaster，开始监听事件");
                         // Spawn 任务持续推送事件到连接
                         tokio::spawn(async move {
                             use tokio::io::AsyncWriteExt;
                             let mut stream = connected;
                             loop {
                                 match rx.recv().await {
-                                    Ok((id, event)) => {
-                                        eprintln!("[DEBUG] IPC 服务器收到事件: id={}, event={:?}", id, event);
+                                    Some((id, event)) => {
+                                        ipc_dbg!("[DEBUG] IPC 服务器收到事件: id={}, event={:?}", id, event);
                                         // 序列化事件为 JSON
                                         match serde_json::to_string(&event) {
                                             Ok(json) => {
-                                                eprintln!("[DEBUG] IPC 服务器序列化事件成功: {}", json);
+                                                ipc_dbg!("[DEBUG] IPC 服务器序列化事件成功: {}", json);
                                                 let line = format!("{}\n", json);
                                                 if let Err(e) = stream.write_all(line.as_bytes()).await {
-                                                    eprintln!("[DEBUG] IPC 服务器写入事件失败: {}", e);
+                                                    ipc_dbg!("[DEBUG] IPC 服务器写入事件失败: {}", e);
                                                     break;
                                                 }
                                                 if let Err(e) = stream.flush().await {
-                                                    eprintln!("[DEBUG] IPC 服务器刷新流失败: {}", e);
+                                                    ipc_dbg!("[DEBUG] IPC 服务器刷新流失败: {}", e);
                                                     break;
                                                 }
-                                                eprintln!("[DEBUG] IPC 服务器已推送事件到连接: id={}", id);
+                                                ipc_dbg!("[DEBUG] IPC 服务器已推送事件到连接: id={}", id);
                                             },
                                             Err(e) => {
-                                                eprintln!("[DEBUG] IPC 服务器序列化事件失败: {}", e);
+                                                ipc_dbg!("[DEBUG] IPC 服务器序列化事件失败: {}", e);
                                                 // 继续处理下一个事件
                                             }
                                         }
                                     },
-                                    Err(broadcast::error::RecvError::Closed) => {
-                                        eprintln!("[DEBUG] IPC 服务器 EventBroadcaster channel 已关闭");
+                                    None => {
+                                        ipc_dbg!("[DEBUG] IPC 服务器事件流已结束（可能连接已关闭）");
                                         break;
-                                    },
-                                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                                        eprintln!("[DEBUG] IPC 服务器事件接收滞后: {} 个事件被跳过", skipped);
-                                        // 继续接收
                                     }
                                 }
                             }
@@ -734,7 +829,7 @@ where
             // 普通请求：处理并关闭连接
             let resp = handler(req).await;
             let bytes = encode_line(&resp)?;
-            eprintln!("[DEBUG] IPC 服务器发送响应（Windows Named Pipe）");
+            ipc_dbg!("[DEBUG] IPC 服务器发送响应（Windows Named Pipe）");
             let _ = write_all(&mut connected, &bytes).await;
         }
     }
@@ -747,8 +842,19 @@ where
         
         let path = unix_socket_path();
         let _ = std::fs::remove_file(&path);
-        let listener =
-            UnixListener::bind(&path).map_err(|e| format!("ipc bind failed ({}): {}", path.display(), e))?;
+        let listener = match UnixListener::bind(&path) {
+            Ok(l) => l,
+            Err(e) => {
+                // 绑定失败，检查是否有其他 daemon 正在运行
+                if check_other_daemon_running().await {
+                    eprintln!("错误: 无法绑定 Unix socket {}，因为已有其他 daemon 正在运行。", path.display());
+                    eprintln!("请先停止正在运行的 daemon，或确保只有一个 daemon 实例。");
+                    return Err(format!("另一个 daemon 实例正在运行: {}", e));
+                }
+                // 如果没有其他 daemon 运行，可能是其他原因导致的绑定失败（如权限问题）
+                return Err(format!("ipc bind failed ({}): {}", path.display(), e));
+            }
+        };
 
         loop {
             let (stream, _) = listener
@@ -756,7 +862,7 @@ where
                 .await
                 .map_err(|e| format!("ipc accept failed: {}", e))?;
             
-            eprintln!("[DEBUG] IPC 服务器接受新连接（持久连接模式）");
+            ipc_dbg!("[DEBUG] IPC 服务器接受新连接（持久连接模式）");
             
             // 为每个连接 spawn 一个任务来处理多个请求
             let handler = handler.clone();
@@ -773,7 +879,7 @@ where
                     line.clear();
                     match reader.read_line(&mut line).await {
                         Ok(0) => {
-                            eprintln!("[DEBUG] IPC 服务器连接关闭 (EOF)");
+                            ipc_dbg!("[DEBUG] IPC 服务器连接关闭 (EOF)");
                             break;
                         }
                         Ok(_) => {
@@ -782,13 +888,13 @@ where
                                 continue;
                             }
                             
-                            eprintln!("[DEBUG] IPC 服务器读取请求: {}", line_trimmed);
+                            ipc_dbg!("[DEBUG] IPC 服务器读取请求: {}", line_trimmed);
                             
                             // 解析为 JSON
                             let value: serde_json::Value = match serde_json::from_str(line_trimmed) {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    eprintln!("[DEBUG] IPC 服务器解析 JSON 失败: {}", e);
+                                    ipc_dbg!("[DEBUG] IPC 服务器解析 JSON 失败: {}", e);
                                     continue;
                                 }
                             };
@@ -799,18 +905,18 @@ where
                             // 解析为 CliIpcRequest
                             let req: CliIpcRequest = match serde_json::from_value(value.clone()) {
                                 Ok(req) => {
-                                    eprintln!("[DEBUG] IPC 服务器解析请求: {:?}, request_id={:?}", req, request_id);
+                                    ipc_dbg!("[DEBUG] IPC 服务器解析请求: {:?}, request_id={:?}", req, request_id);
                                     req
                                 },
                                 Err(e) => {
-                                    eprintln!("[DEBUG] IPC 服务器解析请求失败: {}", e);
+                                    ipc_dbg!("[DEBUG] IPC 服务器解析请求失败: {}", e);
                                     continue;
                                 }
                             };
                             
                             // 检查是否是 SubscribeEvents 请求
                             if matches!(req, CliIpcRequest::SubscribeEvents) {
-                                eprintln!("[DEBUG] IPC 服务器收到 SubscribeEvents 请求");
+                                ipc_dbg!("[DEBUG] IPC 服务器收到 SubscribeEvents 请求");
                                 
                                 // 发送初始响应
                                 let mut resp = handler(req).await;
@@ -819,13 +925,13 @@ where
                                 let bytes = match encode_line(&resp) {
                                     Ok(b) => b,
                                     Err(e) => {
-                                        eprintln!("[DEBUG] IPC 服务器编码响应失败: {}", e);
+                                        ipc_dbg!("[DEBUG] IPC 服务器编码响应失败: {}", e);
                                         break;
                                     }
                                 };
                                 
                                 if let Err(e) = write_half.write_all(&bytes).await {
-                                    eprintln!("[DEBUG] IPC 服务器写入响应失败: {}", e);
+                                    ipc_dbg!("[DEBUG] IPC 服务器写入响应失败: {}", e);
                                     break;
                                 }
                                 let _ = write_half.flush().await;
@@ -833,34 +939,28 @@ where
                                 // 如果有 broadcaster，在这个连接上推送事件
                                 if let Some(ref broadcaster) = broadcaster {
                                     if let Ok(broadcaster) = broadcaster.clone().downcast::<super::EventBroadcaster>() {
-                                        let mut rx = broadcaster.subscribe();
-                                        eprintln!("[DEBUG] IPC 服务器开始推送事件");
+                                        let mut rx = broadcaster.subscribe_all_stream();
+                                        ipc_dbg!("[DEBUG] IPC 服务器开始推送事件");
                                         
                                         loop {
                                             match rx.recv().await {
-                                                Ok((id, event)) => {
+                                                Some((id, event)) => {
                                                     match serde_json::to_string(&event) {
                                                         Ok(json) => {
                                                             let event_line = format!("{}\n", json);
                                                             if let Err(e) = write_half.write_all(event_line.as_bytes()).await {
-                                                                eprintln!("[DEBUG] IPC 服务器写入事件失败: {}", e);
+                                                                ipc_dbg!("[DEBUG] IPC 服务器写入事件失败: {}", e);
                                                                 break;
                                                             }
                                                             let _ = write_half.flush().await;
-                                                            eprintln!("[DEBUG] IPC 服务器已推送事件: id={}", id);
+                                                            ipc_dbg!("[DEBUG] IPC 服务器已推送事件: id={}", id);
                                                         },
                                                         Err(e) => {
-                                                            eprintln!("[DEBUG] IPC 服务器序列化事件失败: {}", e);
+                                                            ipc_dbg!("[DEBUG] IPC 服务器序列化事件失败: {}", e);
                                                         }
                                                     }
                                                 },
-                                                Err(broadcast::error::RecvError::Closed) => {
-                                                    eprintln!("[DEBUG] IPC 服务器事件 channel 已关闭");
-                                                    break;
-                                                },
-                                                Err(broadcast::error::RecvError::Lagged(n)) => {
-                                                    eprintln!("[DEBUG] IPC 服务器事件滞后: {} 个被跳过", n);
-                                                }
+                                                None => break,
                                             }
                                         }
                                     }
@@ -875,30 +975,30 @@ where
                             let bytes = match encode_line(&resp) {
                                 Ok(b) => b,
                                 Err(e) => {
-                                    eprintln!("[DEBUG] IPC 服务器编码响应失败: {}", e);
+                                    ipc_dbg!("[DEBUG] IPC 服务器编码响应失败: {}", e);
                                     continue;
                                 }
                             };
                             
                             if let Err(e) = write_half.write_all(&bytes).await {
-                                eprintln!("[DEBUG] IPC 服务器写入响应失败: {}", e);
+                                ipc_dbg!("[DEBUG] IPC 服务器写入响应失败: {}", e);
                                 break;
                             }
                             if let Err(e) = write_half.flush().await {
-                                eprintln!("[DEBUG] IPC 服务器刷新失败: {}", e);
+                                ipc_dbg!("[DEBUG] IPC 服务器刷新失败: {}", e);
                                 break;
                             }
                             
-                            eprintln!("[DEBUG] IPC 服务器已发送响应, request_id={:?}", request_id);
+                            ipc_dbg!("[DEBUG] IPC 服务器已发送响应, request_id={:?}", request_id);
                         }
                         Err(e) => {
-                            eprintln!("[DEBUG] IPC 服务器读取失败: {}", e);
+                            ipc_dbg!("[DEBUG] IPC 服务器读取失败: {}", e);
                             break;
                         }
                     }
                 }
                 
-                eprintln!("[DEBUG] IPC 服务器连接处理完成");
+                ipc_dbg!("[DEBUG] IPC 服务器连接处理完成");
             });
         }
     }

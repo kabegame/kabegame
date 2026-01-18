@@ -14,7 +14,7 @@
 //! ```
 
 use super::events::{get_global_listener, DaemonEvent};
-use super::{on_download_state, on_task_log, on_task_status, start_listening};
+use super::{on_download_state, on_task_log, on_task_progress, on_task_status, start_listening};
 use tauri::{AppHandle, Emitter};
 
 /// 初始化事件监听器（在 Tauri 应用启动时调用）
@@ -24,8 +24,7 @@ use tauri::{AppHandle, Emitter};
 /// 2. 将这些事件转发为 Tauri 事件（供前端 JS 监听）
 /// 3. 启动长连接事件监听（持续接收服务器推送的事件）
 pub async fn init_event_listeners(app: AppHandle) {
-    // 转发通用事件（Generic）：允许 daemon 发送任意事件名给前端
-    // 例如：dedupe-progress / dedupe-finished / images-removed / images-deleted
+    // 转发通用事件（Generic）：允许 daemon 发送任意事件名给前端（例如：images-change）
     {
         let app_for_generic = app.clone();
         get_global_listener()
@@ -80,6 +79,19 @@ pub async fn init_event_listeners(app: AppHandle) {
                 "progress": event.progress,
                 "error": event.error,
                 "currentWallpaper": event.current_wallpaper,
+            }),
+        );
+    })
+    .await;
+
+    // 监听任务进度（add_progress 驱动）
+    let app_for_task_progress = app.clone();
+    on_task_progress(move |event| {
+        let _ = app_for_task_progress.emit(
+            "task-progress",
+            serde_json::json!({
+                "taskId": event.task_id,
+                "progress": event.progress,
             }),
         );
     })

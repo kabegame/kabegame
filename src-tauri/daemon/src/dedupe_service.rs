@@ -81,8 +81,40 @@ impl DedupeService {
     }
 }
 
-fn emit_generic(handle: &tokio::runtime::Handle, bc: &EventBroadcaster, event: &str, payload: serde_json::Value) {
+fn emit_dedupe_progress(
+    handle: &tokio::runtime::Handle,
+    bc: &EventBroadcaster,
+    processed: usize,
+    total: usize,
+    removed: usize,
+    batch_index: usize,
+) {
     let bc = bc.clone();
+    handle.block_on(async move {
+        kabegame_core::ipc::broadcaster::emit_dedupe_progress(&bc, processed, total, removed, batch_index).await;
+    });
+}
+
+fn emit_dedupe_finished(
+    handle: &tokio::runtime::Handle,
+    bc: &EventBroadcaster,
+    processed: usize,
+    total: usize,
+    removed: usize,
+    canceled: bool,
+) {
+    let bc = bc.clone();
+    handle.block_on(async move {
+        kabegame_core::ipc::broadcaster::emit_dedupe_finished(&bc, processed, total, removed, canceled).await;
+    });
+}
+
+fn emit_generic(
+    handle: &tokio::runtime::Handle,
+    bc: &EventBroadcaster,
+    event: &str,
+    payload: serde_json::Value,
+) {
     let event = event.to_string();
     handle.block_on(async move {
         bc.broadcast(kabegame_core::ipc::events::DaemonEvent::Generic { event, payload })
@@ -115,16 +147,13 @@ fn run_dedupe_batched(
 
     loop {
         if cancel.load(Ordering::Relaxed) {
-            emit_generic(
+            emit_dedupe_finished(
                 handle,
                 &broadcaster,
-                "dedupe-finished",
-                serde_json::json!({
-                    "processed": processed,
-                    "total": total,
-                    "removed": removed_total,
-                    "canceled": true,
-                }),
+                processed,
+                total,
+                removed_total,
+                true,
             );
             return Ok(());
         }
@@ -152,19 +181,21 @@ fn run_dedupe_batched(
         if !remove_ids.is_empty() {
             if delete_files {
                 storage.batch_delete_images(&remove_ids)?;
+                // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
                 emit_generic(
                     handle,
                     &broadcaster,
-                    "images-deleted",
-                    serde_json::json!({ "imageIds": remove_ids.clone() }),
+                    "images-change",
+                    serde_json::json!({ "reason": "delete", "imageIds": remove_ids.clone() }),
                 );
             } else {
                 storage.batch_remove_images(&remove_ids)?;
+                // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
                 emit_generic(
                     handle,
                     &broadcaster,
-                    "images-removed",
-                    serde_json::json!({ "imageIds": remove_ids.clone() }),
+                    "images-change",
+                    serde_json::json!({ "reason": "remove", "imageIds": remove_ids.clone() }),
                 );
             }
 
@@ -178,30 +209,24 @@ fn run_dedupe_batched(
             removed_total += remove_ids.len();
         }
 
-        emit_generic(
+        emit_dedupe_progress(
             handle,
             &broadcaster,
-            "dedupe-progress",
-            serde_json::json!({
-                "processed": processed,
-                "total": total,
-                "removed": removed_total,
-                "batchIndex": batch_index,
-            }),
+            processed,
+            total,
+            removed_total,
+            batch_index,
         );
         batch_index += 1;
     }
 
-    emit_generic(
+    emit_dedupe_finished(
         handle,
         &broadcaster,
-        "dedupe-finished",
-        serde_json::json!({
-            "processed": processed,
-            "total": total,
-            "removed": removed_total,
-            "canceled": false,
-        }),
+        processed,
+        total,
+        removed_total,
+        false,
     );
     Ok(())
 }
