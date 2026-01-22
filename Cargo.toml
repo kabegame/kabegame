@@ -9,7 +9,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "3.0.0"
+version = "3.0.1"
 
 [workspace.dependencies]
 base64 = "0.22"

@@ -14,6 +14,7 @@
     "build:frontend-plugin-editor": "bun --cwd apps/plugin-editor build",
     "package-plugin": "nx run src-crawler-plugins:package",
     "package-plugin:local": "nx run src-crawler-plugins:package-local",
+    "set-version": "bun scripts/set-version.js",
     "clean-nx-cache": "node scripts/clean-nx-cache.js",
     "prepare": "husky"
   },
