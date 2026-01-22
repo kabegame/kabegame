@@ -2,36 +2,36 @@
 //!
 //! 将不同类型的 IPC 请求分发到对应的处理器
 
-pub mod storage;
-pub mod plugin;
-pub mod settings;
 pub mod events;
 pub mod gallery;
+pub mod plugin;
+pub mod settings;
+pub mod storage;
 
-use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
-use kabegame_core::ipc::EventBroadcaster;
+use crate::dedupe_service::DedupeService;
 use kabegame_core::crawler::{CrawlTaskRequest, TaskScheduler};
+use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
+use kabegame_core::ipc::{EventBroadcaster, SubscriptionManager};
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
-use kabegame_core::storage::Storage;
 use kabegame_core::storage::tasks::TaskInfo;
-use kabegame_core::providers::ProviderRuntime;
+use kabegame_core::storage::Storage;
+use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::Arc;
-use crate::dedupe_service::DedupeService;
 
-/// 处理 IPC 请求的上下文
-pub struct RequestContext {
-    pub storage: Arc<Storage>,
-    pub plugin_manager: Arc<PluginManager>,
-    pub settings: Arc<Settings>,
+/// 全局状态
+pub struct Store {
+    // PluginManager 现在是全局单例，不再需要存储在这里
+    // Storage 现在是全局单例，不再需要存储在这里
+    // TaskScheduler 现在是全局单例，不再需要存储在这里
     pub broadcaster: Arc<EventBroadcaster>,
-    pub task_scheduler: Arc<TaskScheduler>,
+    pub subscription_manager: Arc<SubscriptionManager>,
     pub dedupe_service: Arc<DedupeService>,
-    pub provider_rt: Arc<ProviderRuntime>,
+    pub virtual_drive_service: Arc<VirtualDriveService>,
 }
 
 /// 分发 IPC 请求到对应的处理器
-pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<RequestContext>) -> CliIpcResponse {
+pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResponse {
     // 特殊请求：Status
     if matches!(req, CliIpcRequest::Status) {
         return handle_status();
@@ -70,159 +70,63 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<RequestContext>) -> C
     if matches!(req, CliIpcRequest::GetActiveDownloads) {
         return handle_get_active_downloads(ctx).await;
     }
-    if let CliIpcRequest::DedupeStartGalleryByHashBatched { delete_files, batch_size } = req {
+    if let CliIpcRequest::DedupeStartGalleryByHashBatched {
+        delete_files,
+        batch_size,
+    } = req
+    {
         return handle_dedupe_start(delete_files, batch_size, ctx).await;
     }
     if matches!(req, CliIpcRequest::DedupeCancelGalleryByHashBatched) {
         return handle_dedupe_cancel(ctx).await;
     }
 
-    // Wallpaper Engine Export：daemon 侧执行（需要 Settings/Storage）
-    if let CliIpcRequest::WeExportImagesToProject {
-        image_paths,
-        title,
-        output_parent_dir,
-        options,
-    } = req
-    {
-        return handle_we_export_images(image_paths, title, output_parent_dir, options, ctx).await;
-    }
-    if let CliIpcRequest::WeExportAlbumToProject {
-        album_id,
-        album_name,
-        output_parent_dir,
-        options,
-    } = req
-    {
-        return handle_we_export_album(album_id, album_name, output_parent_dir, options, ctx).await;
-    }
-
     // 尝试各个处理器
-    if let Some(resp) =
-        storage::handle_storage_request(&req, ctx.storage.clone(), ctx.broadcaster.clone()).await
-    {
+    if let Some(resp) = storage::handle_storage_request(&req, ctx.broadcaster.clone()).await {
         return resp;
     }
 
-    if let Some(resp) = plugin::handle_plugin_request(&req, ctx.plugin_manager.clone()).await {
+    if let Some(resp) = plugin::handle_plugin_request(&req).await {
         return resp;
     }
 
-    if let Some(resp) =
-        settings::handle_settings_request(&req, ctx.settings.clone(), ctx.task_scheduler.clone(), ctx.broadcaster.clone())
-            .await
-    {
+    if let Some(resp) = settings::handle_settings_request(&req, ctx.clone()).await {
         return resp;
     }
 
-    if let Some(resp) = events::handle_events_request(&req, ctx.broadcaster.clone()).await {
+    if let Some(resp) = events::handle_events_request(&req).await {
         return resp;
     }
 
-    if let Some(resp) = gallery::handle_gallery_request(&req, ctx.storage.clone(), ctx.provider_rt.clone()).await {
+    if let Some(resp) = gallery::handle_gallery_request(&req).await {
         return resp;
     }
 
-    // Virtual Drive 请求（Windows only）
-    #[cfg(all(feature = "virtual-drive", target_os = "windows"))]
-    {
-        if let Some(resp) = handle_vd_request(&req).await {
-            return resp;
-        }
+    if matches!(req, CliIpcRequest::VdMount) {
+        return handle_vd_mount(ctx).await;
+    }
+    if matches!(req, CliIpcRequest::VdUnmount) {
+        return handle_vd_unmount(ctx).await;
+    }
+    if matches!(req, CliIpcRequest::VdStatus) {
+        return handle_vd_status(ctx).await;
     }
 
     // 未知请求
     CliIpcResponse::err(format!("Unknown request: {:?}", req))
 }
 
-async fn handle_we_export_images(
-    image_paths: Vec<String>,
-    title: Option<String>,
-    output_parent_dir: String,
-    options: Option<serde_json::Value>,
-    ctx: Arc<RequestContext>,
-) -> CliIpcResponse {
-    #[cfg(target_os = "windows")]
-    {
-        use kabegame_core::wallpaper_engine_export::WeExportOptions;
-        let opt: Option<WeExportOptions> = match options {
-            None => None,
-            Some(v) => match serde_json::from_value(v) {
-                Ok(x) => Some(x),
-                Err(e) => return CliIpcResponse::err(format!("Invalid options: {e}")),
-            },
-        };
-        match kabegame_core::wallpaper_engine_export::export_images_to_we_project(
-            image_paths,
-            title,
-            output_parent_dir,
-            opt,
-            ctx.settings.as_ref(),
-        ) {
-            Ok(r) => CliIpcResponse::ok_with_data(
-                "ok",
-                serde_json::to_value(r).unwrap_or_default(),
-            ),
-            Err(e) => CliIpcResponse::err(e),
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (image_paths, title, output_parent_dir, options, ctx);
-        CliIpcResponse::err("Wallpaper Engine export is only supported on Windows".to_string())
-    }
-}
-
-async fn handle_we_export_album(
-    album_id: String,
-    album_name: String,
-    output_parent_dir: String,
-    options: Option<serde_json::Value>,
-    ctx: Arc<RequestContext>,
-) -> CliIpcResponse {
-    #[cfg(target_os = "windows")]
-    {
-        use kabegame_core::wallpaper_engine_export::WeExportOptions;
-        let opt: Option<WeExportOptions> = match options {
-            None => None,
-            Some(v) => match serde_json::from_value(v) {
-                Ok(x) => Some(x),
-                Err(e) => return CliIpcResponse::err(format!("Invalid options: {e}")),
-            },
-        };
-        match kabegame_core::wallpaper_engine_export::export_album_to_we_project(
-            album_id,
-            album_name,
-            output_parent_dir,
-            opt,
-            ctx.storage.as_ref(),
-            ctx.settings.as_ref(),
-        ) {
-            Ok(r) => CliIpcResponse::ok_with_data(
-                "ok",
-                serde_json::to_value(r).unwrap_or_default(),
-            ),
-            Err(e) => CliIpcResponse::err(e),
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (album_id, album_name, output_parent_dir, options, ctx);
-        CliIpcResponse::err("Wallpaper Engine export is only supported on Windows".to_string())
-    }
-}
-
-async fn handle_task_start(task: serde_json::Value, ctx: Arc<RequestContext>) -> CliIpcResponse {
+async fn handle_task_start(task: serde_json::Value, _ctx: Arc<Store>) -> CliIpcResponse {
     let t: TaskInfo = match serde_json::from_value(task) {
         Ok(t) => t,
         Err(e) => return CliIpcResponse::err(format!("Invalid task data: {e}")),
     };
 
     // 确保任务在 DB 中存在（幂等）
-    match ctx.storage.get_task(&t.id) {
+    match Storage::global().get_task(&t.id) {
         Ok(Some(_)) => {}
         Ok(None) => {
-            if let Err(e) = ctx.storage.add_task(t.clone()) {
+            if let Err(e) = Storage::global().add_task(t.clone()) {
                 return CliIpcResponse::err(e);
             }
         }
@@ -239,7 +143,7 @@ async fn handle_task_start(task: serde_json::Value, ctx: Arc<RequestContext>) ->
         plugin_file_path: None,
     };
 
-    if let Err(e) = ctx.task_scheduler.enqueue(req) {
+    if let Err(e) = TaskScheduler::global().enqueue(req) {
         return CliIpcResponse::err(e);
     }
 
@@ -248,22 +152,22 @@ async fn handle_task_start(task: serde_json::Value, ctx: Arc<RequestContext>) ->
     resp
 }
 
-async fn handle_task_cancel(task_id: String, ctx: Arc<RequestContext>) -> CliIpcResponse {
-    match ctx.task_scheduler.cancel_task(&task_id) {
+async fn handle_task_cancel(task_id: String, _ctx: Arc<Store>) -> CliIpcResponse {
+    match TaskScheduler::global().cancel_task(&task_id) {
         Ok(()) => CliIpcResponse::ok("ok"),
         Err(e) => CliIpcResponse::err(e),
     }
 }
 
-async fn handle_task_retry_failed_image(failed_id: i64, ctx: Arc<RequestContext>) -> CliIpcResponse {
-    match ctx.task_scheduler.retry_failed_image(failed_id) {
+async fn handle_task_retry_failed_image(failed_id: i64, _ctx: Arc<Store>) -> CliIpcResponse {
+    match TaskScheduler::global().retry_failed_image(failed_id) {
         Ok(()) => CliIpcResponse::ok("ok"),
         Err(e) => CliIpcResponse::err(e),
     }
 }
 
-async fn handle_get_active_downloads(ctx: Arc<RequestContext>) -> CliIpcResponse {
-    match ctx.task_scheduler.get_active_downloads() {
+async fn handle_get_active_downloads(_ctx: Arc<Store>) -> CliIpcResponse {
+    match TaskScheduler::global().get_active_downloads() {
         Ok(downloads) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(downloads).unwrap_or_default())
         }
@@ -274,25 +178,26 @@ async fn handle_get_active_downloads(ctx: Arc<RequestContext>) -> CliIpcResponse
 async fn handle_dedupe_start(
     delete_files: bool,
     batch_size: Option<usize>,
-    ctx: Arc<RequestContext>,
+    ctx: Arc<Store>,
 ) -> CliIpcResponse {
     let bs = batch_size.unwrap_or(10_000).max(1);
     match ctx
         .dedupe_service
         .clone()
         .start_batched(
-            ctx.storage.clone(),
-            ctx.settings.clone(),
+            Arc::new(Storage::global().clone()),
             ctx.broadcaster.clone(),
             delete_files,
             bs,
-        ) {
+        )
+        .await
+    {
         Ok(()) => CliIpcResponse::ok("ok"),
         Err(e) => CliIpcResponse::err(e),
     }
 }
 
-async fn handle_dedupe_cancel(ctx: Arc<RequestContext>) -> CliIpcResponse {
+async fn handle_dedupe_cancel(ctx: Arc<Store>) -> CliIpcResponse {
     match ctx.dedupe_service.cancel() {
         Ok(v) => CliIpcResponse::ok_with_data("ok", serde_json::Value::Bool(v)),
         Err(e) => CliIpcResponse::err(e),
@@ -305,11 +210,12 @@ async fn handle_plugin_run(
     task_id: Option<String>,
     output_album_id: Option<String>,
     plugin_args: Vec<String>,
-    ctx: Arc<RequestContext>,
+    _ctx: Arc<Store>,
 ) -> CliIpcResponse {
     // resolve plugin：支持 id 或 .kgpg 路径
+    let plugin_manager = PluginManager::global();
     let (plugin_obj, plugin_file_path, var_defs) =
-        match ctx.plugin_manager.resolve_plugin_for_cli_run(&plugin) {
+        match plugin_manager.resolve_plugin_for_cli_run(&plugin) {
             Ok(x) => x,
             Err(e) => return CliIpcResponse::err(e),
         };
@@ -322,10 +228,14 @@ async fn handle_plugin_run(
         Ok(m) => m,
         Err(e) => return CliIpcResponse::err(e),
     };
-    let user_config = if user_cfg.is_empty() { None } else { Some(user_cfg) };
+    let user_config = if user_cfg.is_empty() {
+        None
+    } else {
+        Some(user_cfg)
+    };
 
     // 确保任务在 DB 中存在（否则调度器的 update/persist 是 no-op）
-    match ctx.storage.get_task(&task_id) {
+    match Storage::global().get_task(&task_id) {
         Ok(Some(_)) => {}
         Ok(None) => {
             let t = TaskInfo {
@@ -345,7 +255,7 @@ async fn handle_plugin_run(
                 rhai_dump_confirmed: false,
                 rhai_dump_created_at: None,
             };
-            if let Err(e) = ctx.storage.add_task(t) {
+            if let Err(e) = Storage::global().add_task(t) {
                 return CliIpcResponse::err(e);
             }
         }
@@ -363,7 +273,7 @@ async fn handle_plugin_run(
         plugin_file_path: plugin_file_path.map(|p| p.to_string_lossy().to_string()),
     };
 
-    if let Err(e) = ctx.task_scheduler.enqueue(req) {
+    if let Err(e) = TaskScheduler::global().enqueue(req) {
         return CliIpcResponse::err(e);
     }
 
@@ -457,7 +367,10 @@ fn parse_plugin_args_to_user_config(
                 out.insert(key.to_string(), parse_one(def, v)?);
             } else {
                 // 未在 var_defs 中声明的键：允许直接注入
-                out.insert(key.to_string(), serde_json::Value::String(v.trim().to_string()));
+                out.insert(
+                    key.to_string(),
+                    serde_json::Value::String(v.trim().to_string()),
+                );
             }
             continue;
         }
@@ -473,6 +386,7 @@ fn parse_plugin_args_to_user_config(
     Ok(out)
 }
 
+// TODO: 将此json结构体化
 fn handle_status() -> CliIpcResponse {
     let mut resp = CliIpcResponse::ok("ok");
     resp.info = Some(serde_json::json!({
@@ -484,14 +398,97 @@ fn handle_status() -> CliIpcResponse {
             "settings": true,
             "events": true,
             "pluginRun": false,  // 暂未实现
-            "virtualDrive": cfg!(all(feature="virtual-drive", target_os="windows"))
+            "virtualDrive": cfg!(all(feature="virtual-driver", target_os="windows"))
         }
     }));
     resp
 }
 
-#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
-async fn handle_vd_request(_req: &CliIpcRequest) -> Option<CliIpcResponse> {
-    // TODO: 实现虚拟盘请求处理
-    Some(CliIpcResponse::err("Virtual drive not yet implemented in daemon"))
+async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
+    use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+
+    let path = Settings::global()
+        .get_album_drive_mount_point()
+        .await
+        .unwrap_or_default();
+
+    let vd_service = ctx.virtual_drive_service.clone();
+
+    // 检查是否已挂载（幂等处理）
+    if vd_service.current_mount_point().is_some() {
+        return CliIpcResponse::ok("Already mounted");
+    }
+
+    // 执行挂载（使用 spawn_blocking 避免阻塞 tokio worker）
+    let mount_result = match tokio::task::spawn_blocking({
+        let vd_service = vd_service.clone();
+        let path = path.clone();
+        move || vd_service.mount(path.as_str(), Storage::global().clone())
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => return CliIpcResponse::err(format!("Spawn blocking error: {}", e)),
+    };
+
+    match mount_result {
+        Ok(()) => {
+            // 挂载成功后，设置 enabled 为 true（会自动发送 SettingChange 事件）
+            let settings = Settings::global();
+            if let Err(e) = settings.set_album_drive_enabled(true).await {
+                return CliIpcResponse::err(format!("Failed to set enabled: {}", e));
+            }
+
+            CliIpcResponse::ok("Mount successful")
+        }
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
+async fn handle_vd_unmount(ctx: Arc<Store>) -> CliIpcResponse {
+    use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+
+    let vd_service = ctx.virtual_drive_service.clone();
+
+    // 检查是否已卸载（幂等处理）
+    if vd_service.current_mount_point().is_none() {
+        return CliIpcResponse::ok("Already unmounted");
+    }
+
+    // 执行卸载（使用 spawn_blocking 避免阻塞 tokio worker）
+    let unmount_result = match tokio::task::spawn_blocking({
+        let vd_service = vd_service.clone();
+        move || vd_service.unmount()
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => return CliIpcResponse::err(format!("Spawn blocking error: {}", e)),
+    };
+
+    match unmount_result {
+        Ok(true) => {
+            // 卸载成功后，设置 enabled 为 false（会自动发送 SettingChange 事件）
+            let settings = Settings::global();
+            if let Err(e) = settings.set_album_drive_enabled(false).await {
+                return CliIpcResponse::err(format!("Failed to set enabled: {}", e));
+            }
+
+            CliIpcResponse::ok("Unmount successful")
+        }
+        Ok(false) => {
+            // 卸载失败但可能已经卸载，返回成功（幂等）
+            CliIpcResponse::ok("Already unmounted")
+        }
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
+async fn handle_vd_status(_ctx: Arc<Store>) -> CliIpcResponse {
+    let mut resp = CliIpcResponse::ok("ok");
+    resp.info = Some(serde_json::json!({
+        "status": "ready",
+        "virtualDrive": true
+    }));
+    resp
 }

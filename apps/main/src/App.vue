@@ -1,21 +1,15 @@
 <template>
   <!-- 主窗口 -->
   <el-container class="app-container">
-    <!-- Daemon 启动错误页面 -->
-    <DaemonStartupError
-      v-if="daemonError"
-      :error="daemonError.error"
-      :daemon-path="daemonError.daemon_path"
-    />
     <!-- Daemon 启动中 - 显示加载态 -->
-    <div v-else-if="!daemonReady" class="daemon-loading">
+    <div v-if="!daemonReady && !daemonOffline" class="daemon-loading">
       <div class="loading-content">
         <img src="/icon.png" alt="Logo" class="loading-logo" />
         <h2>正在启动后台服务…</h2>
         <div class="loading-spinner"></div>
       </div>
     </div>
-    <!-- Daemon 已就绪 - 显示主内容 -->
+    <!-- Daemon 已就绪或离线 - 显示主内容 -->
     <template v-else>
       <!-- 全局文件拖拽提示层 -->
       <FileDropOverlay ref="fileDropOverlayRef" />
@@ -27,57 +21,67 @@
       <HelpDrawer />
       <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
       <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
-    <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '200px'">
-      <div class="sidebar-header">
-        <img src="/icon.png" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
-        <h1 v-if="!isCollapsed">Kabegame</h1>
-      </div>
-      <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
-        <el-menu-item index="/gallery">
-          <el-icon>
-            <Picture />
-          </el-icon>
-          <span>画廊</span>
-        </el-menu-item>
-        <el-menu-item index="/albums">
-          <el-icon>
-            <Collection />
-          </el-icon>
-          <span>画册</span>
-        </el-menu-item>
-        <el-menu-item index="/plugin-browser">
-          <el-icon>
-            <Grid />
-          </el-icon>
-          <span>收集源</span>
-        </el-menu-item>
-        <el-menu-item index="/settings">
-          <el-icon>
-            <Setting />
-          </el-icon>
-          <span>设置</span>
-        </el-menu-item>
-        <el-menu-item index="/help">
-          <el-icon>
-            <QuestionFilled />
-          </el-icon>
-          <span>帮助</span>
-        </el-menu-item>
-      </el-menu>
-    </el-aside>
-    <el-main class="app-main">
-      <router-view v-slot="{ Component }">
-        <keep-alive>
-          <component :is="Component" />
-        </keep-alive>
-      </router-view>
-    </el-main>
+      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }"
+        :width="isCollapsed ? '64px' : '200px'">
+        <div class="sidebar-header">
+          <img :src="daemonOffline ? '/lost.png' : '/icon.png'" alt="Logo" class="app-logo logo-clickable"
+            @click="toggleCollapse" />
+          <div v-if="!isCollapsed" class="sidebar-title-section">
+            <h1>Kabegame</h1>
+            <div v-if="daemonOffline" class="offline-section">
+              <p class="offline-hint">呜呜呜，鳄鳄找不到了呢</p>
+              <el-button size="small" @click="handleReconnect" :loading="isReconnecting">
+                找找看
+              </el-button>
+            </div>
+          </div>
+        </div>
+        <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
+          <el-menu-item index="/gallery">
+            <el-icon>
+              <Picture />
+            </el-icon>
+            <span>画廊</span>
+          </el-menu-item>
+          <el-menu-item index="/albums">
+            <el-icon>
+              <Collection />
+            </el-icon>
+            <span>画册</span>
+          </el-menu-item>
+          <el-menu-item index="/plugin-browser">
+            <el-icon>
+              <Grid />
+            </el-icon>
+            <span>收集源</span>
+          </el-menu-item>
+          <el-menu-item index="/settings">
+            <el-icon>
+              <Setting />
+            </el-icon>
+            <span>设置</span>
+          </el-menu-item>
+          <el-menu-item index="/help">
+            <el-icon>
+              <QuestionFilled />
+            </el-icon>
+            <span>帮助</span>
+          </el-menu-item>
+        </el-menu>
+      </el-aside>
+      <el-main class="app-main">
+        <router-view v-slot="{ Component }" :key="routerViewKey">
+          <keep-alive>
+            <component :is="Component" />
+          </keep-alive>
+        </router-view>
+      </el-main>
     </template>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted, watch } from "vue";
 import { Picture, Grid, Setting, Collection, QuestionFilled } from "@element-plus/icons-vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
@@ -92,8 +96,8 @@ import { useDaemonStatus } from "./composables/useDaemonStatus";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
 import { useSidebar } from "./composables/useSidebar";
-import DaemonStartupError from "@kabegame/core/components/common/DaemonStartupError.vue";
-import { listen } from "@tauri-apps/api/event";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { ElMessageBox } from "element-plus";
 
 
 // 路由高亮
@@ -108,7 +112,26 @@ const fileDropOverlayRef = ref<any>(null);
 const importConfirmDialogRef = ref<any>(null);
 
 // Daemon 状态管理
-const { init: initDaemonStatus, daemonError, daemonReady } = useDaemonStatus();
+const { init: initDaemonStatus, daemonOffline, daemonReady, isReconnecting, reconnect } = useDaemonStatus();
+
+// 路由视图 key，用于强制刷新组件
+const routerViewKey = ref(0);
+
+// 监听 daemonReady 变化，当从任何状态变为 ready 时刷新路由视图
+watch(daemonReady, (newVal, oldVal) => {
+  if (newVal && !oldVal) {
+    // daemonReady 从 false 变为 true，刷新路由视图
+    routerViewKey.value += 1;
+  }
+});
+
+// 处理重连
+const handleReconnect = async () => {
+  const error = await reconnect();
+  if (error) {
+    ElMessageBox.alert(error, "重连失败", { type: "error" });
+  }
+};
 
 // 窗口事件监听
 const { init: initWindowEvents } = useWindowEvents();
@@ -119,12 +142,15 @@ const { init: initFileDrop } = useFileDrop(fileDropOverlayRef, importConfirmDial
 // 侧边栏
 const { isCollapsed, toggleCollapse } = useSidebar();
 
+// 设置变更事件监听器
+let unlistenSettingChange: UnlistenFn | null = null;
 
 onMounted(async () => {
   // 初始化 settings store
   const settingsStore = useSettingsStore();
   await settingsStore.init();
 
+  console.log('初始化 daemon 状态');
   // 初始化各个 composables
   await initDaemonStatus();
   await initWindowEvents();
@@ -132,8 +158,8 @@ onMounted(async () => {
 
   // 监听设置变更事件（事件驱动更新设置）
   // 当后端设置变化时，自动更新本地设置 store
-  await listen<Record<string, any>>("setting-change", async (event) => {
-    const changes = event.payload;
+  unlistenSettingChange = await listen<{ changes: Record<string, any> }>("setting-change", async (event) => {
+    const changes = event.payload.changes;
     // 只更新变化的部分（后端只广播变化的部分）
     if (changes && typeof changes === "object") {
       Object.assign(settingsStore.values, changes);
@@ -157,6 +183,13 @@ onMounted(async () => {
   }
 });
 
+onUnmounted(() => {
+  // 清理设置变更事件监听器
+  if (unlistenSettingChange) {
+    unlistenSettingChange();
+    unlistenSettingChange = null;
+  }
+});
 
 </script>
 
@@ -227,6 +260,13 @@ body,
       }
     }
 
+    .sidebar-title-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex: 1;
+    }
+
     h1 {
       font-size: 18px;
       font-weight: 700;
@@ -237,6 +277,20 @@ body,
       margin: 0;
       letter-spacing: 1px;
       transition: all 0.3s ease;
+    }
+
+    .offline-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .offline-hint {
+      font-size: 14px;
+      color: var(--anime-text-secondary);
+      margin: 0;
+      line-height: 1.4;
     }
   }
 
@@ -252,7 +306,7 @@ body,
         height: 40px;
       }
 
-      h1 {
+      .sidebar-title-section {
         display: none;
       }
     }
@@ -514,27 +568,27 @@ body,
   align-items: center;
   justify-content: center;
   background: var(--anime-bg-main);
-  
+
   .loading-content {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 24px;
-    
+
     .loading-logo {
       width: 80px;
       height: 80px;
       object-fit: contain;
       animation: pulse 2s ease-in-out infinite;
     }
-    
+
     h2 {
       font-size: 18px;
       font-weight: 600;
       color: var(--anime-text-primary);
       margin: 0;
     }
-    
+
     .loading-spinner {
       width: 40px;
       height: 40px;
@@ -547,10 +601,13 @@ body,
 }
 
 @keyframes pulse {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 1;
     transform: scale(1);
   }
+
   50% {
     opacity: 0.7;
     transform: scale(0.95);
@@ -561,6 +618,7 @@ body,
   0% {
     transform: rotate(0deg);
   }
+
   100% {
     transform: rotate(360deg);
   }

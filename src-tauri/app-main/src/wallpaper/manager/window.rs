@@ -1,6 +1,6 @@
 use super::WallpaperManager;
-use async_trait::async_trait;
 use crate::wallpaper::window::WallpaperWindow;
+use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -26,23 +26,17 @@ impl WindowWallpaperManager {
 #[async_trait]
 impl WallpaperManager for WindowWallpaperManager {
     async fn get_style(&self) -> Result<String, String> {
-        let v = crate::daemon_client::get_ipc_client()
-            .settings_get()
+        crate::daemon_client::get_ipc_client()
+            .settings_get_wallpaper_rotation_style()
             .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-        Ok(v.get("wallpaperRotationStyle")
-            .and_then(|x| x.as_str())
-            .unwrap_or("fill")
-            .to_string())
+            .map_err(|e| format!("Daemon unavailable: {}", e))
     }
 
     async fn get_transition(&self) -> Result<String, String> {
-        let v = crate::daemon_client::get_ipc_client().settings_get().await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-        Ok(v.get("wallpaperRotationTransition")
-            .and_then(|x| x.as_str())
-            .unwrap_or("none")
-            .to_string())
+        crate::daemon_client::get_ipc_client()
+            .settings_get_wallpaper_rotation_transition()
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
     }
 
     async fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String> {
@@ -104,10 +98,10 @@ impl WallpaperManager for WindowWallpaperManager {
 
     async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
         // 保存样式到 daemon Settings
-            crate::daemon_client::get_ipc_client()
-                .settings_set_wallpaper_style(style.to_string())
-                .await
-        .map_err(|e| format!("保存样式设置失败: {}", e))?;
+        crate::daemon_client::get_ipc_client()
+            .settings_set_wallpaper_style(style.to_string())
+            .await
+            .map_err(|e| format!("保存样式设置失败: {}", e))?;
 
         // 无论窗口是否已创建，都先广播事件，确保前端（WallpaperLayer）立即拿到最新样式
         let _ = self.app.emit("wallpaper-update-style", style);
@@ -142,10 +136,10 @@ impl WallpaperManager for WindowWallpaperManager {
 
     async fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String> {
         // 保存过渡效果到 daemon Settings
-            crate::daemon_client::get_ipc_client()
-                .settings_set_wallpaper_rotation_transition(transition.to_string())
-                .await
-        .map_err(|e| format!("保存过渡效果设置失败: {}", e))?;
+        crate::daemon_client::get_ipc_client()
+            .settings_set_wallpaper_rotation_transition(transition.to_string())
+            .await
+            .map_err(|e| format!("保存过渡效果设置失败: {}", e))?;
 
         // 无论窗口是否已创建，都先广播事件，确保前端（WallpaperLayer）立即拿到最新过渡
         let _ = self.app.emit("wallpaper-update-transition", transition);
@@ -178,7 +172,12 @@ impl WallpaperManager for WindowWallpaperManager {
         Ok(())
     }
 
-    fn set_wallpaper(&self, file_path: &str, style: &str, transition: &str) -> Result<(), String> {
+    async fn set_wallpaper(
+        &self,
+        file_path: &str,
+        style: &str,
+        transition: &str,
+    ) -> Result<(), String> {
         // 同时设置原生壁纸作为后备，如果窗口模式失败，用户至少能看到壁纸
         // 窗口会覆盖在原生壁纸之上，所以不会影响视觉效果
         // let native_manager = NativeWallpaperManager::new(self.app.clone());

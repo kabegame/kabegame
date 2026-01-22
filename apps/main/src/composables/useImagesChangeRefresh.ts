@@ -49,7 +49,9 @@ export function useImagesChangeRefresh(params: {
     const { listen } = await import("@tauri-apps/api/event");
     unlisten = await listen<ImagesChangePayload>("images-change", async (event) => {
       const payload = (event?.payload ?? {}) as ImagesChangePayload;
-      if (params.filter && !params.filter(payload)) return;
+      if (params.filter && !params.filter(payload)) {
+        return;
+      }
       await throttled.trigger(payload);
     });
   };

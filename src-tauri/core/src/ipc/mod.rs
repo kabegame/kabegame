@@ -1,26 +1,39 @@
 //! CLI daemon 模块：IPC 服务端、客户端和事件监听
 
-pub mod ipc;
-pub mod client;
-pub mod connection;
-pub mod server;
+// 共享模块：协议定义和事件类型（客户端和服务端都需要）
 pub mod events;
+pub mod ipc;
+
+// 服务端模块
+#[cfg(feature = "ipc-server")]
 pub mod broadcaster;
+#[cfg(feature = "ipc-server")]
+pub mod subscription;
 
-#[cfg(feature = "tauri")]
-pub mod event_listeners;
+// 客户端模块
+#[cfg(feature = "ipc-client")]
+pub mod client;
+#[cfg(feature = "ipc-client")]
+pub mod connection;
+#[cfg(feature = "ipc-client")]
+pub mod daemon_startup;
 
-pub use client::IpcClient;
+// 共享导出（客户端和服务端都需要）
+pub use events::DaemonEvent;
 pub use ipc::{CliIpcRequest, CliIpcResponse};
-pub use events::{
-    DaemonEvent, DedupeFinishedEvent, DedupeProgressEvent, DownloadStateEvent, EventListener,
-    SettingChangeEvent, TaskProgressEvent, TaskStatusEvent,
-};
-pub use events::{
-    on_dedupe_finished, on_dedupe_progress, on_download_state, on_setting_change, on_task_log, on_task_progress,
-    on_task_status, start_listening, stop_listening,
-};
-pub use broadcaster::EventBroadcaster;
 
-#[cfg(feature = "tauri")]
-pub use event_listeners::{init_event_listeners, start_event_listener, stop_event_listener};
+// 服务端导出
+#[cfg(feature = "ipc-server")]
+pub use broadcaster::EventBroadcaster;
+#[cfg(feature = "ipc-server")]
+pub use subscription::SubscriptionManager;
+
+// 客户端导出
+#[cfg(feature = "ipc-client")]
+pub use client::IpcClient;
+#[cfg(feature = "ipc-client")]
+pub use connection::ConnectionStatus;
+#[cfg(feature = "ipc-client")]
+pub use events::*;
+#[cfg(feature = "ipc-client")]
+pub use events::*;

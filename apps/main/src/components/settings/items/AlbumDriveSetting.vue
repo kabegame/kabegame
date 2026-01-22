@@ -30,6 +30,15 @@ watch(
   () => settingsStore.values.albumDriveEnabled,
   (v) => {
     enabled.value = !!v;
+    // 设置变化时，停止加载状态并显示消息
+    if (switchLoading.value) {
+      switchLoading.value = false;
+      if (v) {
+        ElMessage.success("画册盘已开启");
+      } else {
+        ElMessage.success("画册盘已关闭");
+      }
+    }
   }
 );
 watch(
@@ -84,25 +93,13 @@ const handleToggle = async (val: boolean) => {
 
   switchLoading.value = true;
   try {
-    if (val) {
-      await invoke("mount_virtual_drive_and_open_explorer", { mountPoint: mp });
-      await invoke("set_album_drive_mount_point", { mountPoint: mp });
-      await invoke("set_album_drive_enabled", { enabled: true });
-      settingsStore.values.albumDriveMountPoint = mp;
-      settingsStore.values.albumDriveEnabled = true;
-      ElMessage.success("画册盘已开启");
-    } else {
-      await invoke("unmount_virtual_drive", { mountPoint: mp });
-      await invoke("set_album_drive_enabled", { enabled: false });
-      settingsStore.values.albumDriveEnabled = false;
-      ElMessage.success("画册盘已关闭");
-    }
+    // 直接设置 enabled，daemon 会自动处理挂载/卸载
+    await invoke("set_album_drive_enabled", { enabled: val });
   } catch (e) {
     console.error(e);
     enabled.value = !val;
-    ElMessage.error(String(e));
-  } finally {
     switchLoading.value = false;
+    ElMessage.error(String(e));
   }
 };
 </script>

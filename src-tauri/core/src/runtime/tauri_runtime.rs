@@ -3,31 +3,23 @@
 //! 这个模块提供了 Tauri AppHandle 到 Runtime trait 的适配，
 //! 使得前端应用可以无缝使用 Runtime 抽象。
 
-#[cfg(feature = "tauri")]
 use crate::runtime::{EventEmitter, Runtime, StateGuard, StateManager};
-#[cfg(feature = "tauri")]
 use std::any::{Any, TypeId};
-#[cfg(feature = "tauri")]
 use std::collections::HashMap;
-#[cfg(feature = "tauri")]
 use std::sync::{Arc, RwLock};
-#[cfg(feature = "tauri")]
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Tauri 事件发送器：将 Tauri 的 emit 方法适配到 EventEmitter trait
-#[cfg(feature = "tauri")]
 pub struct TauriEventEmitter {
     app: AppHandle,
 }
 
-#[cfg(feature = "tauri")]
 impl TauriEventEmitter {
     pub fn new(app: AppHandle) -> Self {
         Self { app }
     }
 }
 
-#[cfg(feature = "tauri")]
 impl EventEmitter for TauriEventEmitter {
     fn emit_task_log(&self, task_id: &str, level: &str, message: &str) {
         use crate::crawler::TaskLogEvent;
@@ -139,9 +131,7 @@ impl EventEmitter for TauriEventEmitter {
             "receivedBytes": received_bytes,
         });
         if let Some(total) = total_bytes {
-            payload["totalBytes"] = serde_json::Value::Number(
-                serde_json::Number::from(total)
-            );
+            payload["totalBytes"] = serde_json::Value::Number(serde_json::Number::from(total));
         }
         let _ = self.app.emit("download-progress", payload);
     }
@@ -160,19 +150,16 @@ impl EventEmitter for TauriEventEmitter {
 }
 
 /// Tauri 状态管理器：将 Tauri 的 state 方法适配到 StateManager trait
-#[cfg(feature = "tauri")]
 pub struct TauriStateManager {
     app: AppHandle,
 }
 
-#[cfg(feature = "tauri")]
 impl TauriStateManager {
     pub fn new(app: AppHandle) -> Self {
         Self { app }
     }
 }
 
-#[cfg(feature = "tauri")]
 impl StateManager for TauriStateManager {
     fn state<T: Send + Sync + 'static>(&self) -> StateGuard<T> {
         let tauri_state = self.app.state::<T>();
@@ -191,13 +178,11 @@ impl StateManager for TauriStateManager {
 }
 
 /// Tauri 运行时：组合 Tauri 的事件发送器和状态管理器
-#[cfg(feature = "tauri")]
 pub struct TauriRuntime {
     emitter: Arc<TauriEventEmitter>,
     state_manager: Arc<TauriStateManager>,
 }
 
-#[cfg(feature = "tauri")]
 impl TauriRuntime {
     pub fn new(app: AppHandle) -> Self {
         Self {
@@ -207,7 +192,6 @@ impl TauriRuntime {
     }
 }
 
-#[cfg(feature = "tauri")]
 impl EventEmitter for TauriRuntime {
     fn emit_task_log(&self, task_id: &str, level: &str, message: &str) {
         self.emitter.emit_task_log(task_id, level, message);
@@ -222,7 +206,8 @@ impl EventEmitter for TauriRuntime {
         state: &str,
         error: Option<&str>,
     ) {
-        self.emitter.emit_download_state(task_id, url, start_time, plugin_id, state, error);
+        self.emitter
+            .emit_download_state(task_id, url, start_time, plugin_id, state, error);
     }
 
     fn emit_task_status(
@@ -233,7 +218,8 @@ impl EventEmitter for TauriRuntime {
         error: Option<&str>,
         current_wallpaper: Option<&str>,
     ) {
-        self.emitter.emit_task_status(task_id, status, progress, error, current_wallpaper);
+        self.emitter
+            .emit_task_status(task_id, status, progress, error, current_wallpaper);
     }
 
     fn emit(&self, event: &str, payload: serde_json::Value) {
@@ -257,7 +243,14 @@ impl EventEmitter for TauriRuntime {
         received_bytes: u64,
         total_bytes: Option<u64>,
     ) {
-        self.emitter.emit_download_progress(task_id, url, start_time, plugin_id, received_bytes, total_bytes);
+        self.emitter.emit_download_progress(
+            task_id,
+            url,
+            start_time,
+            plugin_id,
+            received_bytes,
+            total_bytes,
+        );
     }
 
     fn emit_wallpaper_update_image(&self, image_path: &str) {
@@ -273,7 +266,6 @@ impl EventEmitter for TauriRuntime {
     }
 }
 
-#[cfg(feature = "tauri")]
 impl StateManager for TauriRuntime {
     fn state<T: Send + Sync + 'static>(&self) -> StateGuard<T> {
         self.state_manager.state::<T>()
@@ -288,5 +280,4 @@ impl StateManager for TauriRuntime {
     }
 }
 
-#[cfg(feature = "tauri")]
 impl Runtime for TauriRuntime {}

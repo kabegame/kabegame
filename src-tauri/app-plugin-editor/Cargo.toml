@@ -4,7 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-kabegame-core = { workspace = true, default-features = false, features = ["tauri"] }
+kabegame-core = { workspace = true, default-features = false, features = ["ipc-client"] }
 tauri = { workspace = true, features = ["protocol-asset"] }
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-shell = "=2.3.3"

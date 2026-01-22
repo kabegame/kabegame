@@ -1,26 +1,31 @@
 [package]
+edition = {workspace = true}
 name = "kabegame-daemon"
-version = { workspace = true }
-edition = { workspace = true }
+version = {workspace = true}
 
 [dependencies]
-kabegame-core = { workspace = true, default-features = false, features = ["dedupe"] }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tokio = { workspace = true }
-uuid = { workspace = true }
-base64 = { workspace = true }
+base64 = {workspace = true}
+kabegame-core = {workspace = true, default-features = false, features = ["dedupe", "ipc-server"]}
+serde = {workspace = true}
+serde_json = {workspace = true}
+tokio = {workspace = true}
+uuid = {workspace = true}
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+] }
 
 [build-dependencies]
-tauri-build = { workspace = true }
+tauri-build = {workspace = true}
 
 [features]
-# Windows 下可选启用 virtual-drive（与 app-cli 对齐）
-default = []
-virtual-drive = ["kabegame-core/virtual-drive"]
-virtual-drive-windows = ["virtual-drive", "kabegame-core/virtual-drive-windows"]
+# Windows 和 linux 下支持
+default = ["virtual-driver"]
+virtual-driver = ["kabegame-core/virtual-driver"]
 
 [[bin]]
 name = "kabegame-daemon"
 path = "src/main.rs"
-

@@ -24,6 +24,7 @@ impl Provider for RootProvider {
     }
 
     fn list(&self, _storage: &Storage) -> Result<Vec<FsEntry>, String> {
+        #[allow(unused_mut)]
         let mut out = vec![
             FsEntry::dir(DIR_BY_DATE),
             FsEntry::dir(DIR_BY_PLUGIN),
@@ -33,7 +34,7 @@ impl Provider for RootProvider {
         ];
 
         // VD 专用：根目录说明文件
-        #[cfg(feature = "virtual-drive")]
+        #[cfg(feature = "virtual-driver")]
         {
             // NOTE: 必须带扩展名，否则某些图片查看器/Explorer 枚举同目录文件时会尝试“打开”该说明文件并弹出错误。
             let display_name = "在这里你可以自由查看图片.txt";
@@ -66,7 +67,7 @@ impl Provider for RootProvider {
         }
     }
 
-    #[cfg(feature = "virtual-drive")]
+    #[cfg(feature = "virtual-driver")]
     fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, std::path::PathBuf)> {
         let display_name = "在这里你可以自由查看图片.txt";
         if name != display_name {

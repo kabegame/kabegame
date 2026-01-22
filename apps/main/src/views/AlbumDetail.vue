@@ -998,21 +998,21 @@ const handleDeleteAlbum = async () => {
 // 加载轮播设置
 const loadRotationSettings = async () => {
   try {
-    const settings = await invoke<{
-      wallpaperRotationEnabled?: boolean;
-      wallpaperRotationAlbumId?: string | null;
-    }>("get_settings");
-    wallpaperRotationEnabled.value = settings.wallpaperRotationEnabled ?? false;
-    currentRotationAlbumId.value = settings.wallpaperRotationAlbumId || null;
+    const [enabled, albumId] = await Promise.all([
+      invoke<boolean>("get_wallpaper_rotation_enabled"),
+      invoke<string | null>("get_wallpaper_rotation_album_id"),
+    ]);
+    wallpaperRotationEnabled.value = enabled ?? false;
+    currentRotationAlbumId.value = albumId || null;
   } catch (error) {
     console.error("加载轮播设置失败:", error);
   }
 };
 
-// 统一图片变更事件：不做增量同步，收到 images-change 后刷新“当前页”（250ms trailing 节流，不丢最后一次）
+// 统一图片变更事件：不做增量同步，收到 images-change 后刷新“当前页”（1000ms trailing 节流，不丢最后一次）
 useImagesChangeRefresh({
   enabled: isAlbumDetailActive,
-  waitMs: 250,
+  waitMs: 1000,
   filter: (p) => {
     if (!albumId.value) return false;
     if (p.albumId && p.albumId === albumId.value) return true;

@@ -11,9 +11,9 @@ pub use plasma_plugin::PlasmaPluginWallpaperManager;
 #[cfg(target_os = "windows")]
 pub use window::WindowWallpaperManager;
 
-use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use std::sync::Mutex;
+use std::sync::{Arc, OnceLock};
 use tauri::AppHandle;
 
 #[cfg(target_os = "windows")]
@@ -31,7 +31,26 @@ pub struct WallpaperController {
     window: Arc<WindowWallpaperManager>,
 }
 
+// 全局 WallpaperController 单例
+pub static WALLPAPER_CONTROLLER: OnceLock<WallpaperController> = OnceLock::new();
+
 impl WallpaperController {
+    /// 初始化全局 WallpaperController（必须在首次使用前调用）
+    pub fn init_global(app: AppHandle) -> Result<(), String> {
+        let controller = WallpaperController::new(app);
+        WALLPAPER_CONTROLLER
+            .set(controller)
+            .map_err(|_| "WallpaperController already initialized".to_string())?;
+        Ok(())
+    }
+
+    /// 获取全局 WallpaperController 引用
+    pub fn global() -> &'static WallpaperController {
+        WALLPAPER_CONTROLLER.get().expect(
+            "WallpaperController not initialized. Call WallpaperController::init_global() first.",
+        )
+    }
+
     pub fn new(app: AppHandle) -> Self {
         let native = Arc::new(NativeWallpaperManager::new(app.clone()));
 
@@ -59,16 +78,17 @@ impl WallpaperController {
 
     /// 根据当前设置选择活动后端（native等）。
     pub async fn active_manager(&self) -> Result<Arc<dyn WallpaperManager + Send + Sync>, String> {
-        let v = crate::daemon_client::get_ipc_client().settings_get().await?;
-        let mode = v
-            .get("wallpaperMode")
-            .and_then(|x| x.as_str())
-            .unwrap_or("native");
-        Ok(match mode {
+        let mode = crate::daemon_client::get_ipc_client()
+            .settings_get_wallpaper_mode()
+            .await
+            .unwrap_or_else(|_| "native".to_string());
+        Ok(match mode.as_str() {
             #[cfg(target_os = "windows")]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             #[cfg(all(target_os = "linux", desktop = "plasma"))]
-            "plasma-plugin" => self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            "plasma-plugin" => {
+                self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>
+            }
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
         })
     }
@@ -79,7 +99,9 @@ impl WallpaperController {
             #[cfg(target_os = "windows")]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             #[cfg(all(target_os = "linux", desktop = "plasma"))]
-            "plasma-plugin" => self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            "plasma-plugin" => {
+                self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>
+            }
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
         }
     }
@@ -160,7 +182,12 @@ pub trait WallpaperManager: Send + Sync {
     /// * `file_path` - 壁纸文件路径
     /// * `style` - 显示样式（fill/fit/stretch/center/tile）
     /// * `transition` - 过渡效果（none/fade/slide/zoom）
-    async fn set_wallpaper(&self, file_path: &str, style: &str, transition: &str) -> Result<(), String> {
+    async fn set_wallpaper(
+        &self,
+        file_path: &str,
+        style: &str,
+        transition: &str,
+    ) -> Result<(), String> {
         self.set_style(style, false).await?;
         self.set_transition(transition, false).await?;
         // 重要：历史实现只会"设置一次壁纸路径"。

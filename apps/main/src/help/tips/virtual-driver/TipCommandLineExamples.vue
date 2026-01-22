@@ -8,22 +8,26 @@
         <section class="section">
             <h3>1. 导入单张图片到画廊</h3>
             <p>使用 <code>local-import</code> 插件导入单张图片文件：</p>
-            <CodeBlock code='kabegame-cli plugin run --plugin local-import -- --file_path="C:\\Users\\YourName\\Pictures\\image.jpg"' />
+            <CodeBlock
+                code='kabegame-cli plugin run --plugin local-import -- --file_path="C:\\Users\\YourName\\Pictures\\image.jpg"' />
             <p><strong>说明：</strong></p>
             <ul>
                 <li><code>--plugin local-import</code>：使用本地导入插件</li>
                 <li><code>--file_path</code>：要导入的图片文件路径（Windows 路径需要用双反斜杠或正斜杠）</li>
             </ul>
             <p><strong>Windows 路径示例：</strong></p>
-            <CodeBlock code='kabegame-cli plugin run --plugin local-import -- --file_path="C:/Users/YourName/Pictures/image.jpg"' />
+            <CodeBlock
+                code='kabegame-cli plugin run --plugin local-import -- --file_path="C:/Users/YourName/Pictures/image.jpg"' />
             <p><strong>Linux/macOS 路径示例：</strong></p>
-            <CodeBlock code='kabegame-cli plugin run --plugin local-import -- --file_path="/home/username/Pictures/image.jpg"' />
+            <CodeBlock
+                code='kabegame-cli plugin run --plugin local-import -- --file_path="/home/username/Pictures/image.jpg"' />
         </section>
 
         <section class="section">
             <h3>2. 导入文件夹到画廊</h3>
             <p>使用 <code>local-import</code> 插件导入整个文件夹（递归扫描子目录）：</p>
-            <CodeBlock code='kabegame-cli plugin run --plugin local-import -- --folder_path="C:\\Users\\YourName\\Pictures\\MyAlbum" --recursive=true' />
+            <CodeBlock
+                code='kabegame-cli plugin run --plugin local-import -- --folder_path="C:\\Users\\YourName\\Pictures\\MyAlbum" --recursive=true' />
             <p><strong>说明：</strong></p>
             <ul>
                 <li><code>--plugin local-import</code>：使用本地导入插件</li>
@@ -31,24 +35,29 @@
                 <li><code>--recursive=true</code>：递归扫描子目录（设为 <code>false</code> 则只导入当前目录）</li>
             </ul>
             <p><strong>Windows 路径示例：</strong></p>
-            <CodeBlock code='kabegame-cli plugin run --plugin local-import -- --folder_path="C:/Users/YourName/Pictures/MyAlbum" --recursive=true' />
+            <CodeBlock
+                code='kabegame-cli plugin run --plugin local-import -- --folder_path="C:/Users/YourName/Pictures/MyAlbum" --recursive=true' />
             <p><strong>Linux/macOS 路径示例：</strong></p>
-            <CodeBlock code='kabegame-cli plugin run --plugin local-import -- --folder_path="/home/username/Pictures/MyAlbum" --recursive=true' />
+            <CodeBlock
+                code='kabegame-cli plugin run --plugin local-import -- --folder_path="/home/username/Pictures/MyAlbum" --recursive=true' />
             <p><strong>只导入当前目录（不递归）：</strong></p>
-            <CodeBlock code='kabegame-cli plugin run --plugin local-import -- --folder_path="C:/Users/YourName/Pictures/MyAlbum" --recursive=false' />
+            <CodeBlock
+                code='kabegame-cli plugin run --plugin local-import -- --folder_path="C:/Users/YourName/Pictures/MyAlbum" --recursive=false' />
         </section>
 
         <section class="section">
             <h3>3. 指定输出目录</h3>
             <p>导入时可以指定输出目录（图片保存位置）：</p>
-            <CodeBlock code='kabegame-cli plugin run --plugin local-import --output-dir "C:\\Downloads\\Kabegame" -- --folder_path="C:\\Users\\YourName\\Pictures\\MyAlbum" --recursive=true' />
+            <CodeBlock
+                code='kabegame-cli plugin run --plugin local-import --output-dir "C:\\Downloads\\Kabegame" -- --folder_path="C:\\Users\\YourName\\Pictures\\MyAlbum" --recursive=true' />
             <p>如果不指定 <code>--output-dir</code>，图片会保存到默认下载目录。</p>
         </section>
 
         <section class="section">
             <h3>4. 导入到指定画册</h3>
-            <p>导入时可以指定输出画册 ID（需要先创建画册并获取 ID）：</p>
-            <CodeBlock code='kabegame-cli plugin run --plugin local-import --output-album-id "album-id-here" -- --folder_path="C:\\Users\\YourName\\Pictures\\MyAlbum" --recursive=true' />
+            <p>导入时可以指定输出画册（需要先创建画册）：</p>
+            <CodeBlock
+                code='kabegame-cli plugin run --plugin local-import --output-album "album-name-here" -- --folder_path="C:\\Users\\YourName\\Pictures\\MyAlbum" --recursive=true' />
             <p>如果不指定 <code>--output-album-id</code>，图片只会添加到画廊，不会添加到画册。</p>
         </section>
 

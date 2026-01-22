@@ -1,20 +1,25 @@
 // 壁纸相关命令和函数
 
 use crate::daemon_client;
+#[cfg(feature = "self-hosted")]
+use crate::storage::Storage;
 use crate::wallpaper::{WallpaperController, WallpaperRotator};
-use tauri::{AppHandle, Manager, Emitter};
 use std::path::Path;
+use tauri::{AppHandle, Emitter, Manager};
 
-pub async fn get_current_wallpaper_path_from_settings(_app: &tauri::AppHandle) -> Result<Option<String>, String> {
+pub async fn get_current_wallpaper_path_from_settings(
+    _app: &tauri::AppHandle,
+) -> Result<Option<String>, String> {
     // IPC-only：从 daemon 获取 settings + image localPath
-    let v = daemon_client::get_ipc_client().settings_get().await?;
-    let id = v
-        .get("currentWallpaperImageId")
-        .and_then(|x| x.as_str())
-        .map(|s| s.to_string());
+    let id = daemon_client::get_ipc_client()
+        .settings_get_current_wallpaper_image_id()
+        .await?;
     if let Some(id) = id {
-        let img = daemon_client::get_ipc_client().storage_get_image_by_id(id).await?;
-        Ok(img.get("localPath")
+        let img = daemon_client::get_ipc_client()
+            .storage_get_image_by_id(id)
+            .await?;
+        Ok(img
+            .get("localPath")
             .and_then(|x| x.as_str())
             .map(|s| s.to_string()))
     } else {
@@ -27,28 +32,20 @@ pub async fn get_current_wallpaper_path_from_settings(_app: &tauri::AppHandle) -
 /// 规则（按用户需求）：
 /// - 非轮播：尝试设置 currentWallpaperImageId；失败则清空并停止
 /// - 轮播：优先在轮播源中找到 currentWallpaperImageId；找不到则回退到轮播源的一张；源无可用则画册->画廊->关闭轮播并清空
-pub async fn init_wallpaper_on_startup(app: &tauri::AppHandle) -> Result<(), String> {
+pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     use std::path::Path;
 
-    let controller = app.state::<WallpaperController>();
+    let controller = WallpaperController::global();
     // IPC-only：启动时只"尝试还原 currentWallpaperImageId"，不在客户端做大规模选图/回退，
     // 回退与轮播逻辑由 daemon + rotator 负责（避免客户端依赖 Storage/Settings）。
-    let settings_v = daemon_client::get_ipc_client()
-        .settings_get()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let client = daemon_client::get_ipc_client();
+    let (style_result, id_result) = tokio::join!(
+        client.settings_get_wallpaper_rotation_style(),
+        client.settings_get_current_wallpaper_image_id()
+    );
 
-    let style = settings_v
-        .get("wallpaperRotationStyle")
-        .and_then(|x| x.as_str())
-        .unwrap_or("fill")
-        .to_string();
-
-    let Some(id) = settings_v
-        .get("currentWallpaperImageId")
-        .and_then(|x| x.as_str())
-        .map(|s| s.to_string())
-    else {
+    let style = style_result.unwrap_or_else(|_| "fill".to_string());
+    let Some(id) = id_result.ok().flatten() else {
         return Ok(());
     };
 
@@ -86,15 +83,11 @@ pub async fn set_wallpaper(file_path: String, app: AppHandle) -> Result<(), Stri
         return Err("File does not exist".to_string());
     }
 
-    let controller = app.state::<WallpaperController>();
-    let settings_v = daemon_client::get_ipc_client()
-        .settings_get()
+    let controller = WallpaperController::global();
+    let style = daemon_client::get_ipc_client()
+        .settings_get_wallpaper_rotation_style()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let style = settings_v
-        .get("wallpaperRotationStyle")
-        .and_then(|x| x.as_str())
-        .unwrap_or("fill");
+        .unwrap_or_else(|_| "fill".to_string());
 
     let abs = path
         .canonicalize()
@@ -102,7 +95,7 @@ pub async fn set_wallpaper(file_path: String, app: AppHandle) -> Result<(), Stri
         .to_string_lossy()
         .to_string();
 
-    controller.set_wallpaper(&abs, style).await?;
+    controller.set_wallpaper(&abs, &style).await?;
 
     // 尽力同步更新“当前壁纸”（imageId）；失败不阻断
     let found = daemon_client::get_ipc_client()
@@ -121,15 +114,11 @@ pub async fn set_wallpaper(file_path: String, app: AppHandle) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_by_image_id(image_id: String, app: AppHandle) -> Result<(), String> {
-    let settings_v = daemon_client::get_ipc_client()
-        .settings_get()
+pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
+    let style = daemon_client::get_ipc_client()
+        .settings_get_wallpaper_rotation_style()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let style = settings_v
-        .get("wallpaperRotationStyle")
-        .and_then(|x| x.as_str())
-        .unwrap_or("fill");
+        .unwrap_or_else(|_| "fill".to_string());
 
     let image = daemon_client::get_ipc_client()
         .storage_get_image_by_id(image_id.clone())
@@ -148,8 +137,8 @@ pub async fn set_wallpaper_by_image_id(image_id: String, app: AppHandle) -> Resu
         return Err("图片文件不存在".to_string());
     }
 
-    let controller = app.state::<WallpaperController>();
-    controller.set_wallpaper(&local_path, style).await?;
+    // let controller = WallpaperController::global();
+    // controller.set_wallpaper(&local_path, &style).await?;
 
     daemon_client::get_ipc_client()
         .settings_set_current_wallpaper_image_id(Some(image_id))
@@ -160,13 +149,10 @@ pub async fn set_wallpaper_by_image_id(image_id: String, app: AppHandle) -> Resu
 
 #[tauri::command]
 pub async fn get_current_wallpaper_image_id() -> Result<Option<String>, String> {
-    let v = daemon_client::get_ipc_client()
-        .settings_get()
+    daemon_client::get_ipc_client()
+        .settings_get_current_wallpaper_image_id()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    Ok(v.get("currentWallpaperImageId")
-        .and_then(|x| x.as_str())
-        .map(|s| s.to_string()))
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
@@ -183,9 +169,9 @@ pub async fn get_current_wallpaper_path(app: AppHandle) -> Result<Option<String>
 }
 
 #[tauri::command]
-#[cfg(feature = "self-host")]
-pub fn migrate_images_from_json(state: tauri::State<crate::storage::Storage>) -> Result<usize, String> {
-    state.migrate_from_json()
+#[cfg(feature = "self-hosted")]
+pub fn migrate_images_from_json() -> Result<usize, String> {
+    Storage::global().migrate_from_json()
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -198,14 +184,16 @@ pub struct RotationStartResult {
     pub warning: Option<String>,
 }
 
+// TODO: setting-change event driven
 #[tauri::command]
-pub async fn set_wallpaper_rotation_enabled(enabled: bool, app: AppHandle) -> Result<(), String> {
-    daemon_client::get_ipc_client().settings_set_wallpaper_rotation_enabled(enabled)
+pub async fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String> {
+    daemon_client::get_ipc_client()
+        .settings_set_wallpaper_rotation_enabled(enabled)
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
 
     if !enabled {
-        let rotator = app.state::<WallpaperRotator>();
+        let rotator = WallpaperRotator::global();
         rotator.stop();
     }
 
@@ -213,7 +201,7 @@ pub async fn set_wallpaper_rotation_enabled(enabled: bool, app: AppHandle) -> Re
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_rotation_album_id(album_id: Option<String>, app: AppHandle) -> Result<(), String> {
+pub async fn set_wallpaper_rotation_album_id(album_id: Option<String>) -> Result<(), String> {
     let normalized = album_id.map(|s| {
         let t = s.trim().to_string();
         if t.is_empty() {
@@ -229,24 +217,22 @@ pub async fn set_wallpaper_rotation_album_id(album_id: Option<String>, app: AppH
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
 
     if normalized.is_none() {
-        let rotator = app.state::<WallpaperRotator>();
+        let rotator = WallpaperRotator::global();
         rotator.stop();
         return Ok(());
     }
 
-    let settings_v = daemon_client::get_ipc_client()
-        .settings_get()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    if settings_v
-        .get("wallpaperRotationEnabled")
-        .and_then(|x| x.as_bool())
-        .unwrap_or(false)
-    {
-        let rotator = app.state::<WallpaperRotator>();
-        let start_from_current = settings_v
-            .get("wallpaperRotationAlbumId")
-            .and_then(|x| x.as_str())
+    let client = daemon_client::get_ipc_client();
+    let (enabled_result, album_id_result) = tokio::join!(
+        client.settings_get_wallpaper_rotation_enabled(),
+        client.settings_get_wallpaper_rotation_album_id()
+    );
+
+    if enabled_result.unwrap_or(false) {
+        let rotator = WallpaperRotator::global();
+        let start_from_current = album_id_result
+            .ok()
+            .flatten()
             .map(|s| s.is_empty())
             .unwrap_or(false);
         rotator
@@ -260,23 +246,21 @@ pub async fn set_wallpaper_rotation_album_id(album_id: Option<String>, app: AppH
 
 #[tauri::command]
 pub async fn start_wallpaper_rotation(app: AppHandle) -> Result<RotationStartResult, String> {
-    let settings_v = daemon_client::get_ipc_client()
-        .settings_get()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    if !settings_v
-        .get("wallpaperRotationEnabled")
-        .and_then(|x| x.as_bool())
-        .unwrap_or(false)
-    {
+    let client = daemon_client::get_ipc_client();
+    let (enabled_result, album_id_result) = tokio::join!(
+        client.settings_get_wallpaper_rotation_enabled(),
+        client.settings_get_wallpaper_rotation_album_id()
+    );
+
+    if !enabled_result.unwrap_or(false) {
         return Err("壁纸轮播未启用".to_string());
     }
 
-    let rotator = app.state::<WallpaperRotator>();
+    let rotator = WallpaperRotator::global();
     let mut did_fallback = false;
     let mut warning: Option<String> = None;
 
-    if let Some(saved) = settings_v.get("wallpaperRotationAlbumId").and_then(|x| x.as_str()) {
+    if let Some(saved) = album_id_result.ok().flatten().as_deref() {
         if !saved.trim().is_empty() {
             match rotator.ensure_running(false).await {
                 Ok(_) => {
@@ -323,16 +307,15 @@ pub async fn start_wallpaper_rotation(app: AppHandle) -> Result<RotationStartRes
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_rotation_interval_minutes(minutes: u32, app: AppHandle) -> Result<(), String> {
+pub async fn set_wallpaper_rotation_interval_minutes(minutes: u32) -> Result<(), String> {
     daemon_client::get_ipc_client()
         .settings_set_wallpaper_rotation_interval_minutes(minutes)
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
 
-    if let Some(rotator) = app.try_state::<WallpaperRotator>() {
-        if rotator.is_running() {
-            rotator.reset();
-        }
+    let rotator = WallpaperRotator::global();
+    if rotator.is_running() {
+        rotator.reset();
     }
 
     Ok(())
@@ -348,14 +331,19 @@ pub async fn set_wallpaper_rotation_mode(mode: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn set_wallpaper_style(style: String, app: AppHandle) -> Result<(), String> {
-    println!("[DEBUG] set_wallpaper_style 被调用，传入的 style: {}", style);
+    println!(
+        "[DEBUG] set_wallpaper_style 被调用，传入的 style: {}",
+        style
+    );
 
-    daemon_client::get_ipc_client().settings_set_wallpaper_style(style.clone()).await?;
+    daemon_client::get_ipc_client()
+        .settings_set_wallpaper_style(style.clone())
+        .await?;
     println!("[DEBUG] 已保存新 style: {}", style);
 
     let app_clone = app.clone();
     let style_clone = style.clone();
-    let controller = app_clone.state::<WallpaperController>();
+    let controller = WallpaperController::global();
     let manager = controller.active_manager().await?;
     let res = manager.set_style(&style_clone, true).await;
     if let Ok(Some(path)) = get_current_wallpaper_path_from_settings(&app_clone).await {
@@ -388,18 +376,22 @@ pub async fn set_wallpaper_style(style: String, app: AppHandle) -> Result<(), St
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_rotation_transition(transition: String, app: AppHandle) -> Result<(), String> {
-    println!("[DEBUG] set_wallpaper_rotation_transition 被调用，传入的 transition: {}", transition);
+pub async fn set_wallpaper_rotation_transition(
+    transition: String,
+    app: AppHandle,
+) -> Result<(), String> {
+    println!(
+        "[DEBUG] set_wallpaper_rotation_transition 被调用，传入的 transition: {}",
+        transition
+    );
 
-    let settings_v = daemon_client::get_ipc_client().settings_get().await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let enabled = settings_v
-        .get("wallpaperRotationEnabled")
-        .and_then(|x| x.as_bool())
+    let enabled = daemon_client::get_ipc_client()
+        .settings_get_wallpaper_rotation_enabled()
+        .await
         .unwrap_or(false);
-    if !enabled {
-        return Err("未开启壁纸轮播，无法设置过渡效果".to_string());
-    }
+    // if !enabled {
+    //     return Err("未开启壁纸轮播，无法设置过渡效果".to_string());
+    // }
 
     daemon_client::get_ipc_client()
         .settings_set_wallpaper_rotation_transition(transition.clone())
@@ -409,35 +401,34 @@ pub async fn set_wallpaper_rotation_transition(transition: String, app: AppHandl
 
     let app_clone = app.clone();
     let transition_clone = transition.clone();
-    let controller = app_clone.state::<WallpaperController>();
-    let rotator = app_clone.state::<WallpaperRotator>();
+    let controller = WallpaperController::global();
+    let rotator = WallpaperRotator::global();
 
     let manager = controller.active_manager().await?;
-    let res = manager.set_transition(&transition_clone, true).await;
+    let res = manager.set_transition(&transition_clone, enabled).await;
 
-    if res.is_ok() && transition_clone != "none" {
+    if res.is_ok() && transition_clone != "none" && enabled {
         rotator.rotate().await?;
-    }
-
-    match res {
-        Ok(_) => {
-            let _ = app_clone.emit(
-                "wallpaper-transition-apply-complete",
-                serde_json::json!({
-                    "success": true,
-                    "transition": transition_clone
-                }),
-            );
-        }
-        Err(e) => {
-            let _ = app_clone.emit(
-                "wallpaper-transition-apply-complete",
-                serde_json::json!({
-                    "success": false,
-                    "transition": transition_clone,
-                    "error": e
-                }),
-            );
+        match res {
+            Ok(_) => {
+                let _ = app_clone.emit(
+                    "wallpaper-transition-apply-complete",
+                    serde_json::json!({
+                        "success": true,
+                        "transition": transition_clone
+                    }),
+                );
+            }
+            Err(e) => {
+                let _ = app_clone.emit(
+                    "wallpaper-transition-apply-complete",
+                    serde_json::json!({
+                        "success": false,
+                        "transition": transition_clone,
+                        "error": e
+                    }),
+                );
+            }
         }
     }
 
@@ -448,13 +439,10 @@ pub async fn set_wallpaper_rotation_transition(transition: String, app: AppHandl
 pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), String> {
     use tauri::Manager;
 
-    let current_settings_v = daemon_client::get_ipc_client().settings_get().await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let old_mode = current_settings_v
-        .get("wallpaperMode")
-        .and_then(|x| x.as_str())
-        .unwrap_or("native")
-        .to_string();
+    let old_mode = daemon_client::get_ipc_client()
+        .settings_get_wallpaper_mode()
+        .await
+        .unwrap_or_else(|_| "native".to_string());
 
     if old_mode == mode {
         return Ok(());
@@ -465,47 +453,31 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
     let app_clone = app.clone();
 
     tauri::async_runtime::spawn(async move {
-        let rotator = app_clone.state::<WallpaperRotator>();
-        let controller = app_clone.state::<WallpaperController>();
+        let rotator = WallpaperRotator::global();
+        let controller = WallpaperController::global();
 
         let was_running = rotator.is_running();
         if was_running {
             rotator.stop();
         }
 
-        let s_v = match daemon_client::get_ipc_client().settings_get().await {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = app_clone.emit(
-                    "wallpaper-mode-switch-complete",
-                    serde_json::json!({
-                        "success": false,
-                        "mode": mode_clone,
-                        "error": format!("获取设置失败: {}", e)
-                    }),
-                );
-                return;
-            }
-        };
-        let rotation_enabled = s_v
-            .get("wallpaperRotationEnabled")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(false);
-        let rotation_mode = s_v
-            .get("wallpaperRotationMode")
-            .and_then(|x| x.as_str())
-            .unwrap_or("random")
-            .to_string();
-        let cur_style = s_v
-            .get("wallpaperRotationStyle")
-            .and_then(|x| x.as_str())
-            .unwrap_or("fill")
-            .to_string();
-        let cur_transition = s_v
-            .get("wallpaperRotationTransition")
-            .and_then(|x| x.as_str())
-            .unwrap_or("none")
-            .to_string();
+        let client = daemon_client::get_ipc_client();
+        let (
+            rotation_enabled_result,
+            rotation_mode_result,
+            cur_style_result,
+            cur_transition_result,
+        ) = tokio::join!(
+            client.settings_get_wallpaper_rotation_enabled(),
+            client.settings_get_wallpaper_rotation_mode(),
+            client.settings_get_wallpaper_rotation_style(),
+            client.settings_get_wallpaper_rotation_transition()
+        );
+
+        let rotation_enabled = rotation_enabled_result.unwrap_or(false);
+        let rotation_mode = rotation_mode_result.unwrap_or_else(|_| "random".to_string());
+        let cur_style = cur_style_result.unwrap_or_else(|_| "fill".to_string());
+        let cur_transition = cur_transition_result.unwrap_or_else(|_| "none".to_string());
 
         let current_wallpaper = match get_current_wallpaper_path_from_settings(&app_clone).await {
             Ok(Some(p)) => p,
@@ -579,7 +551,8 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
                         }
                     }
                 }
-            }.await;
+            }
+            .await;
 
             if let Some(p) = picked_from_gallery {
                 eprintln!(
@@ -591,23 +564,22 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
                 current_cleaned.clone()
             }
         };
-        let (style_to_apply, transition_to_apply) =
-            match daemon_client::get_ipc_client()
-                .settings_swap_style_transition_for_mode_switch(
-                    old_mode_clone.clone(),
-                    mode_clone.clone(),
-                )
-                .await
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!(
-                        "[WARN] set_wallpaper_mode: swap_style_transition_for_mode_switch 失败: {}",
-                        e
-                    );
-                    (cur_style.clone(), cur_transition.clone())
-                }
-            };
+        let (style_to_apply, transition_to_apply) = match daemon_client::get_ipc_client()
+            .settings_swap_style_transition_for_mode_switch(
+                old_mode_clone.clone(),
+                mode_clone.clone(),
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!(
+                    "[WARN] set_wallpaper_mode: swap_style_transition_for_mode_switch 失败: {}",
+                    e
+                );
+                (cur_style.clone(), cur_transition.clone())
+            }
+        };
 
         let apply_res = async {
             eprintln!("[DEBUG] set_wallpaper_mode: 开始应用模式 {}", mode_clone);
@@ -724,8 +696,8 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn get_wallpaper_rotator_status(app: AppHandle) -> Result<String, String> {
-    let rotator = app.state::<WallpaperRotator>();
+pub fn get_wallpaper_rotator_status() -> Result<String, String> {
+    let rotator = WallpaperRotator::global();
     Ok(rotator.get_status())
 }
 

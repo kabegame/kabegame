@@ -1,10 +1,10 @@
 // Image 相关命令
 
 use crate::daemon_client;
-#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+#[cfg(all(feature = "virtual-driver", feature = "self-hosted"))]
 use crate::storage::Storage;
-#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
-use crate::virtual_drive::VirtualDriveService;
+#[cfg(all(feature = "virtual-driver", feature = "self-hosted"))]
+use crate::virtual_driver::VirtualDriveService;
 use tauri::AppHandle;
 
 #[tauri::command]
@@ -21,15 +21,12 @@ pub async fn delete_image(image_id: String) -> Result<(), String> {
         .storage_delete_image(image_id.clone())
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let settings_v = daemon_client::get_ipc_client()
-        .settings_get()
+    let current_id = daemon_client::get_ipc_client()
+        .settings_get_current_wallpaper_image_id()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    if settings_v
-        .get("currentWallpaperImageId")
-        .and_then(|x| x.as_str())
-        == Some(image_id.as_str())
-    {
+        .ok()
+        .flatten();
+    if current_id.as_deref() == Some(image_id.as_str()) {
         let _ = daemon_client::get_ipc_client()
             .settings_set_current_wallpaper_image_id(None)
             .await;
@@ -43,15 +40,12 @@ pub async fn remove_image(image_id: String) -> Result<(), String> {
         .storage_remove_image(image_id.clone())
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let settings_v = daemon_client::get_ipc_client()
-        .settings_get()
+    let current_id = daemon_client::get_ipc_client()
+        .settings_get_current_wallpaper_image_id()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    if settings_v
-        .get("currentWallpaperImageId")
-        .and_then(|x| x.as_str())
-        == Some(image_id.as_str())
-    {
+        .ok()
+        .flatten();
+    if current_id.as_deref() == Some(image_id.as_str()) {
         let _ = daemon_client::get_ipc_client()
             .settings_set_current_wallpaper_image_id(None)
             .await;
@@ -65,11 +59,12 @@ pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<(), String> {
         .storage_batch_delete_images(image_ids.clone())
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let settings_v = daemon_client::get_ipc_client()
-        .settings_get()
+    let current_id = daemon_client::get_ipc_client()
+        .settings_get_current_wallpaper_image_id()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    if let Some(cur) = settings_v.get("currentWallpaperImageId").and_then(|x| x.as_str()) {
+        .ok()
+        .flatten();
+    if let Some(cur) = current_id.as_deref() {
         if image_ids.iter().any(|id| id == cur) {
             let _ = daemon_client::get_ipc_client()
                 .settings_set_current_wallpaper_image_id(None)
@@ -85,11 +80,12 @@ pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
         .storage_batch_remove_images(image_ids.clone())
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let settings_v = daemon_client::get_ipc_client()
-        .settings_get()
+    let current_id = daemon_client::get_ipc_client()
+        .settings_get_current_wallpaper_image_id()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    if let Some(cur) = settings_v.get("currentWallpaperImageId").and_then(|x| x.as_str()) {
+        .ok()
+        .flatten();
+    if let Some(cur) = current_id.as_deref() {
         if image_ids.iter().any(|id| id == cur) {
             let _ = daemon_client::get_ipc_client()
                 .settings_set_current_wallpaper_image_id(None)
@@ -100,34 +96,32 @@ pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-#[cfg(not(all(feature = "virtual-drive", target_os = "windows")))]
+#[cfg(not(all(feature = "virtual-driver", feature = "self-hosted")))]
 pub async fn toggle_image_favorite(
     _app: AppHandle,
     image_id: String,
     favorite: bool,
 ) -> Result<(), String> {
     daemon_client::get_ipc_client()
-        .storage_toggle_image_favorite(image_id.clone(), favorite)
+        .storage_toggle_image_favorite(image_id, favorite)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    Ok(())
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-#[cfg(all(feature = "virtual-drive", target_os = "windows"))]
+#[cfg(all(feature = "virtual-driver", feature = "self-hosted"))]
 pub async fn toggle_image_favorite(
     _app: AppHandle,
     image_id: String,
     favorite: bool,
-    state: tauri::State<Storage>,
-    drive: tauri::State<VirtualDriveService>,
 ) -> Result<(), String> {
     daemon_client::get_ipc_client()
         .storage_toggle_image_favorite(image_id.clone(), favorite)
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
 
-    drive.notify_album_dir_changed(state.inner(), "00000000-0000-0000-0000-000000000001");
+    VirtualDriveService::global()
+        .notify_album_dir_changed(Storage::global(), "00000000-0000-0000-0000-000000000001");
     Ok(())
 }
 
@@ -137,5 +131,7 @@ pub async fn get_image_local_path_by_id(image_id: String) -> Result<Option<Strin
         .storage_get_image_by_id(image_id)
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    Ok(v.get("localPath").and_then(|x| x.as_str()).map(|s| s.to_string()))
+    Ok(v.get("localPath")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string()))
 }

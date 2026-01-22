@@ -2,36 +2,17 @@
 //!
 //! 这个模块提供了与 Tauri 的 `Manager` 和 `Emitter` trait 类似的抽象，
 //! 但完全独立，可以在 daemon 模式或非 Tauri 环境中使用。
-//!
-//! ## 使用示例
-//!
-//! ### Daemon 模式（无 Tauri）
-//! ```rust
-//! use kabegame_core::runtime::{NoopRuntime, Runtime};
-//!
-//! let runtime = NoopRuntime::new();
-//! runtime.manage(plugin_manager);
-//! runtime.manage(storage);
-//! let pm = runtime.state::<PluginManager>();
-//! ```
-//!
-//! ### Tauri 前端应用（可选）
-//! ```rust
-//! #[cfg(feature = "tauri-adapter")]
-//! use kabegame_core::runtime::tauri_adapter::TauriRuntime;
-//!
-//! #[cfg(feature = "tauri-adapter")]
-//! let runtime = TauriRuntime::new(app.handle().clone());
-//! #[cfg(feature = "tauri-adapter")]
-//! runtime.manage(plugin_manager);
-//! #[cfg(feature = "tauri-adapter")]
-//! let pm = runtime.state::<PluginManager>();
-//! ```
+//! 只要开启了 ipc-server 或者 ipc-client feature，就会使用 IPC 运行时。
+//! 否则使用 Tauri 运行时。
 
 mod core;
 pub use core::*;
 
+// IPC 服务器将用这个runtime发送事件
+#[cfg(feature = "ipc-server")]
 pub mod ipc_runtime;
 
-#[cfg(feature = "tauri-adapter")]
-pub mod tauri_adapter;
+#[cfg(not(any(feature = "ipc-server", feature = "ipc-client")))]
+pub mod tauri_runtime;
+
+pub mod global_emitter;

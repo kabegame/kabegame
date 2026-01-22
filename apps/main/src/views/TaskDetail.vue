@@ -717,21 +717,21 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
                 await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
             } catch (error: any) {
                 // 提取友好的错误信息
-                const errorMessage = typeof error === "string" 
-                    ? error 
+                const errorMessage = typeof error === "string"
+                    ? error
                     : error?.message || String(error) || "添加图片到画册失败";
                 ElMessage.error(errorMessage);
                 throw error;
             }
 
-            // 4. 获取当前设置
-            const currentSettings = await invoke<{
-                wallpaperRotationEnabled: boolean;
-                wallpaperRotationAlbumId: string | null;
-            }>("get_settings");
+            // 4. 获取当前设置（并发获取）
+            const [wallpaperRotationEnabled, wallpaperRotationAlbumId] = await Promise.all([
+                invoke<boolean>("get_wallpaper_rotation_enabled"),
+                invoke<string | null>("get_wallpaper_rotation_album_id"),
+            ]);
 
             // 5. 如果轮播未开启，开启它
-            if (!currentSettings.wallpaperRotationEnabled) {
+            if (!wallpaperRotationEnabled) {
                 await invoke("set_wallpaper_rotation_enabled", { enabled: true });
             }
 
@@ -755,8 +755,8 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
     } catch (error: any) {
         console.error("设置壁纸失败:", error);
         // 提取友好的错误信息
-        const errorMessage = typeof error === "string" 
-            ? error 
+        const errorMessage = typeof error === "string"
+            ? error
             : error?.message || String(error) || "未知错误";
         ElMessage.error(`设置壁纸失败: ${errorMessage}`);
     }
@@ -957,10 +957,10 @@ const stopTimersAndListeners = () => {
     }
 };
 
-// 统一图片变更事件：不做增量同步，收到 images-change 后刷新“当前页”（250ms trailing 节流，不丢最后一次）
+// 统一图片变更事件：不做增量同步，收到 images-change 后刷新“当前页”（1000ms trailing 节流，不丢最后一次）
 useImagesChangeRefresh({
     enabled: isOnTaskRoute,
-    waitMs: 250,
+    waitMs: 1000,
     filter: (p) => {
         // 明确 taskId 且不匹配：直接忽略
         if (p.taskId && p.taskId !== taskId.value) return false;

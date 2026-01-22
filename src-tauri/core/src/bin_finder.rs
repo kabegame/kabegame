@@ -61,6 +61,7 @@ impl BinaryType {
 
 /// 是否为开发环境（debug 构建）
 #[inline]
+#[allow(dead_code)]
 fn is_dev() -> bool {
     cfg!(debug_assertions)
 }
@@ -73,6 +74,7 @@ fn is_dev() -> bool {
 /// - 不查找 resources 目录
 pub fn find_binary(binary_type: BinaryType) -> Result<PathBuf, String> {
     let binary_name = binary_type.full_name();
+    #[allow(unused_variables)]
     let base_name = binary_type.base_name();
 
     // Linux 生产环境：优先从 PATH 查找
@@ -97,16 +99,6 @@ pub fn find_binary(binary_type: BinaryType) -> Result<PathBuf, String> {
         "找不到可执行文件: {}\n请确认安装包已正确安装。",
         binary_name
     ))
-}
-
-/// 查找可执行文件路径（带 Tauri AppHandle，但仅用于兼容性，不查找 resources）
-#[cfg(feature = "tauri")]
-pub fn find_binary_with_app_handle(
-    binary_type: BinaryType,
-    _app_handle: Option<&tauri::AppHandle>,
-) -> Result<PathBuf, String> {
-    // 不查找 resources 目录，直接使用基础查找
-    find_binary(binary_type)
 }
 
 /// 从 PATH 中查找可执行文件（Linux）
@@ -156,15 +148,6 @@ pub fn find_binary_by_keyword(keyword: &str) -> Result<PathBuf, String> {
     find_binary(binary_type)
 }
 
-/// 从关键字查找可执行文件（带 Tauri AppHandle）
-#[cfg(feature = "tauri")]
-pub fn find_binary_by_keyword_with_app_handle(
-    keyword: &str,
-    _app_handle: Option<&tauri::AppHandle>,
-) -> Result<PathBuf, String> {
-    find_binary_by_keyword(keyword)
-}
-
 /// 执行可执行文件的选项
 #[derive(Debug)]
 pub struct ExecuteOptions {
@@ -204,16 +187,6 @@ pub fn execute_binary(
     execute_binary_at_path(&binary_path, binary_type, execute_options)
 }
 
-/// 执行可执行文件（带 Tauri AppHandle）
-#[cfg(feature = "tauri")]
-pub fn execute_binary_with_app_handle(
-    binary_type: BinaryType,
-    execute_options: &mut ExecuteOptions,
-    _app_handle: Option<&tauri::AppHandle>,
-) -> Result<(), String> {
-    execute_binary(binary_type, execute_options)
-}
-
 /// 在指定路径执行可执行文件
 pub fn execute_binary_at_path(
     binary_path: &PathBuf,
@@ -231,7 +204,7 @@ pub fn execute_binary_at_path(
             return Ok(());
         }
     }
-    
+
     // 在非 Windows 平台上，binary_type 参数保留用于未来扩展
     #[allow(unused_variables)]
     let _ = binary_type;
@@ -298,16 +271,6 @@ pub fn execute_binary_by_keyword(
     let binary_type = BinaryType::from_keyword(keyword)
         .ok_or_else(|| format!("未知的可执行文件关键字: {}", keyword))?;
     execute_binary(binary_type, execute_options)
-}
-
-/// 从关键字执行可执行文件（带 Tauri AppHandle）
-#[cfg(feature = "tauri")]
-pub fn execute_binary_by_keyword_with_app_handle(
-    keyword: &str,
-    execute_options: &mut ExecuteOptions,
-    _app_handle: Option<&tauri::AppHandle>,
-) -> Result<(), String> {
-    execute_binary_by_keyword(keyword, execute_options)
 }
 
 /// 便捷函数：查找并执行（后台运行）

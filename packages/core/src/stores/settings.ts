@@ -9,7 +9,6 @@ export interface AppSettings {
   networkRetryCount: number;
   imageClickAction: "preview" | "open" | "none";
   galleryImageAspectRatio: string | null;
-  galleryPageSize: number;
   autoDeduplicate: boolean;
   defaultDownloadDir: string | null;
   wallpaperEngineDir: string | null;
@@ -36,8 +35,6 @@ export interface AppSettings {
     height: number;
     maximized: boolean;
   } | null;
-  restoreLastTab: boolean;
-  lastTabPath: string | null;
   currentWallpaperImageId: string | null;
 
   // Windows：画册虚拟盘（Dokan）
@@ -71,12 +68,47 @@ export const useSettingsStore = defineStore("settings", () => {
   const isLoading = (key: AppSettingKey) => !!loadingByKey[key];
   const isSaving = (key: AppSettingKey) => !!savingByKey[key];
 
+  // 将 key 映射到对应的 getter 命令名
+  const getGetterCommand = (key: AppSettingKey): string | null => {
+    const keyMap: Partial<Record<AppSettingKey, string>> = {
+      autoLaunch: "get_auto_launch",
+      maxConcurrentDownloads: "get_max_concurrent_downloads",
+      networkRetryCount: "get_network_retry_count",
+      imageClickAction: "get_image_click_action",
+      galleryImageAspectRatio: "get_gallery_image_aspect_ratio",
+      autoDeduplicate: "get_auto_deduplicate",
+      defaultDownloadDir: "get_default_download_dir",
+      wallpaperEngineDir: "get_wallpaper_engine_dir",
+      wallpaperRotationEnabled: "get_wallpaper_rotation_enabled",
+      wallpaperRotationAlbumId: "get_wallpaper_rotation_album_id",
+      wallpaperRotationIntervalMinutes: "get_wallpaper_rotation_interval_minutes",
+      wallpaperRotationMode: "get_wallpaper_rotation_mode",
+      wallpaperRotationStyle: "get_wallpaper_rotation_style",
+      wallpaperRotationTransition: "get_wallpaper_rotation_transition",
+      wallpaperStyleByMode: "get_wallpaper_style_by_mode",
+      wallpaperTransitionByMode: "get_wallpaper_transition_by_mode",
+      wallpaperMode: "get_wallpaper_mode",
+      windowState: "get_window_state",
+      currentWallpaperImageId: "get_current_wallpaper_image_id",
+      albumDriveEnabled: "get_album_drive_enabled",
+      albumDriveMountPoint: "get_album_drive_mount_point",
+    };
+    return keyMap[key] || null;
+  };
+
   const load = async <K extends AppSettingKey>(key: K) => {
     if (loadingByKey[key]) return;
     loadingByKey[key] = true;
     try {
-      const v = await invoke<any>("get_setting", { key });
+      const command = getGetterCommand(key);
+      if (!command) {
+        console.warn(`No getter command found for key: ${key}`);
+        return;
+      }
+      const v = await invoke<any>(command);
       (values as any)[key] = v;
+    } catch (error) {
+      console.error(`Failed to load setting ${key}:`, error);
     } finally {
       loadingByKey[key] = false;
     }
@@ -87,8 +119,32 @@ export const useSettingsStore = defineStore("settings", () => {
   };
 
   const loadAll = async () => {
-    const s = await invoke<AppSettings>("get_settings");
-    Object.assign(values, s);
+    // 并发获取所有设置（只加载后端实际存在的字段）
+    const allKeys: AppSettingKey[] = [
+      "autoLaunch",
+      "maxConcurrentDownloads",
+      "networkRetryCount",
+      "imageClickAction",
+      "galleryImageAspectRatio",
+      "autoDeduplicate",
+      "defaultDownloadDir",
+      "wallpaperEngineDir",
+      "wallpaperRotationEnabled",
+      "wallpaperRotationAlbumId",
+      "wallpaperRotationIntervalMinutes",
+      "wallpaperRotationMode",
+      "wallpaperRotationStyle",
+      "wallpaperRotationTransition",
+      "wallpaperStyleByMode",
+      "wallpaperTransitionByMode",
+      "wallpaperMode",
+      "windowState",
+      "currentWallpaperImageId",
+      "albumDriveEnabled",
+      "albumDriveMountPoint",
+    ];
+    
+    await Promise.all(allKeys.map((k) => load(k)));
   };
 
   return {

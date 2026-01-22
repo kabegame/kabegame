@@ -111,12 +111,12 @@ const albumsListKey = ref(0);
 
 const loadRotationSettings = async () => {
   try {
-    const settings = await invoke<{
-      wallpaperRotationEnabled?: boolean;
-      wallpaperRotationAlbumId?: string | null;
-    }>("get_settings");
-    wallpaperRotationEnabled.value = settings.wallpaperRotationEnabled ?? false;
-    currentRotationAlbumId.value = settings.wallpaperRotationAlbumId || null;
+    const [enabled, albumId] = await Promise.all([
+      invoke<boolean>("get_wallpaper_rotation_enabled"),
+      invoke<string | null>("get_wallpaper_rotation_album_id"),
+    ]);
+    wallpaperRotationEnabled.value = enabled ?? false;
+    currentRotationAlbumId.value = albumId || null;
   } catch (error) {
     console.error("加载轮播设置失败:", error);
   }
@@ -188,10 +188,10 @@ const refreshFavoriteAlbumPreview = async () => {
 // 收藏状态以 store 为准：通过收藏画册计数变化触发预览刷新
 const stopFavoriteCountWatch = ref<null | (() => void)>(null);
 
-// 统一图片变更事件：收到 images-change 后，按 albumId 刷新对应画册预览（250ms trailing 节流，不丢最后一次）
+// 统一图片变更事件：收到 images-change 后，按 albumId 刷新对应画册预览（1000ms trailing 节流，不丢最后一次）
 useImagesChangeRefresh({
   enabled: ref(true),
-  waitMs: 250,
+  waitMs: 1000,
   filter: (p) => {
     // 只处理明确给出 albumId 的变更（例如：收藏/画册增删图片/爬虫写入时带 albumId）
     return !!p.albumId;

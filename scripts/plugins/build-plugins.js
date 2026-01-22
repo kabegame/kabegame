@@ -62,8 +62,8 @@ export class PackagePluginsPlugin extends BasePlugin {
 
       const packageTarget =
         context.mode === "local"
-          ? "crawler-plugins:package-to-resources"
-          : "crawler-plugins:package-local-to-resources";
+          ? "crawler-plugins:package-local-to-resources"
+          : "crawler-plugins:package-to-resources";
       console.log(chalk.blue(`[build] 打包插件: ${packageTarget}`));
       run("nx", ["run", packageTarget], { env: context.env });
     });
@@ -118,10 +118,10 @@ export class BuildFrontendPlugin extends BasePlugin {
     buildSystem.hooks.build.tapPromise(this.name, async (context, component) => {
       if (component === "plugin-editor") {
         console.log(chalk.blue(`[build] 构建 plugin-editor 前端`));
-        run("pnpm", ["-C", "apps/plugin-editor", "build"], { env: context.env });
+        run("bun", ["--cwd", "apps/plugin-editor", "build"], { env: context.env });
       } else if (component === "cli") {
         console.log(chalk.blue(`[build] 构建 cli 前端`));
-        run("pnpm", ["-C", "apps/cli", "build"], { env: context.env });
+        run("bun", ["--cwd", "apps/cli", "build"], { env: context.env });
       }
     });
   }
@@ -245,7 +245,7 @@ export class BuildMainAppPlugin extends BasePlugin {
         }
         
         if (!resourceBinaryExists("kabegame-plugin-editor")) {
-          run("pnpm", ["-C", "apps/plugin-editor", "build"], { env: context.env });
+          run("bun", ["--cwd", "apps/plugin-editor", "build"], { env: context.env });
           run("cargo", ["build", "--release", "-p", "kabegame-plugin-editor"], {
             cwd: SRC_TAURI_DIR,
             env: context.env,
@@ -254,7 +254,36 @@ export class BuildMainAppPlugin extends BasePlugin {
       }
 
       console.log(chalk.blue(`[build] 构建主应用 (bundle installer)`));
-      run("tauri", ["build"], { cwd: TAURI_APP_MAIN_DIR, env: context.env });
+      // 当不是 Windows、Linux、macOS 时添加 self-hosted feature
+      const isStandardPlatform = context.os.isWindows || context.os.isLinux || context.os.isMacOS;
+      const features = [];
+      
+      if (!isStandardPlatform) {
+        features.push("self-hosted");
+        console.log(chalk.cyan(`[build] 检测到非标准平台，添加 self-hosted feature`));
+      }
+      
+      // light 模式下添加 self-hosted feature
+      if (context.mode === "light") {
+        features.push("self-hosted");
+        console.log(chalk.cyan(`[build] light 模式，添加 self-hosted feature`));
+      }
+      
+      // 当 mode 不是 light 且目标不是 android 时添加 virtual-driver feature
+      const shouldAddVirtualDriver = context.mode !== "light" && !context.os.isAndroid;
+      if (shouldAddVirtualDriver) {
+        features.push("virtual-driver");
+        console.log(chalk.cyan(`[build] 添加 virtual-driver feature`));
+      } else if (context.mode === "light") {
+        console.log(chalk.cyan(`[build] light 模式，跳过 virtual-driver feature`));
+      } else if (context.os.isAndroid) {
+        console.log(chalk.cyan(`[build] Android 平台，跳过 virtual-driver feature`));
+      }
+      
+      const tauriArgs = features.length > 0 
+        ? ["build", "--features", features.join(",")]
+        : ["build"];
+      run("tauri", tauriArgs, { cwd: TAURI_APP_MAIN_DIR, env: context.env });
       copyDokan2DllToTauriReleaseDirBestEffort();
     });
   }

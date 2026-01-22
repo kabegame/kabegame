@@ -84,10 +84,10 @@ export class ModeParsePlugin extends BasePlugin {
     buildSystem.hooks.parseParams.tap(this.name, (context, rawOptions) => {
       const mode = rawOptions.mode || "normal";
       
-      if (mode !== "normal" && mode !== "local") {
+      if (mode !== "normal" && mode !== "local" && mode !== "light") {
         console.error(
           chalk.red(
-            `❌ 参数错误：--mode 必须是 "normal" 或 "local"，当前值: ${mode}`
+            `❌ 参数错误：--mode 必须是 "normal"、"local" 或 "light"，当前值: ${mode}`
           )
         );
         process.exit(1);
@@ -116,6 +116,7 @@ export class OSParsePlugin extends BasePlugin {
         isWindows: platform === "win32",
         isLinux: platform === "linux",
         isMacOS: platform === "darwin",
+        isAndroid: platform === "android",
       };
       console.log(chalk.cyan(`[parse] 操作系统: ${platform}`));
     });

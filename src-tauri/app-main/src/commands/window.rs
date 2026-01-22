@@ -12,11 +12,11 @@ pub async fn fix_wallpaper_window_zorder(app: tauri::AppHandle) {
 
     // 检查是否是窗口模式（IPC-only：从 daemon 读取 settings.wallpaperMode）
     let is_window_mode = daemon_client::get_ipc_client()
-        .settings_get()
+        .settings_get_wallpaper_mode()
         .await
-    .ok()
-    .and_then(|v| v.get("wallpaperMode").and_then(|x| x.as_str()).map(|s| s == "window"))
-    .unwrap_or(false);
+        .ok()
+        .map(|s| s == "window")
+        .unwrap_or(false);
 
     if !is_window_mode {
         return;
@@ -127,7 +127,7 @@ pub fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     // 隐藏主窗口后，修复壁纸窗口的 Z-order（防止壁纸窗口覆盖桌面图标）
     #[cfg(target_os = "windows")]
     {
-        fix_wallpaper_window_zorder(&app);
+        fix_wallpaper_window_zorder(app);
     }
 
     Ok(())
@@ -135,8 +135,10 @@ pub fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
 
 /// Windows：为主窗口左侧导航栏启用 DWM 模糊（BlurBehind + HRGN）。
 /// - sidebar_width: 侧栏宽度（px）
+/// TODO: MacOS用不同的实现
 #[tauri::command]
-pub fn set_main_sidebar_dwm_blur(app: tauri::AppHandle, sidebar_width: u32) -> Result<(), String> {
+#[cfg(target_os = "windows")]
+pub fn set_main_sidebar_blur(app: tauri::AppHandle, sidebar_width: u32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use std::ffi::c_void;
@@ -164,47 +166,154 @@ pub fn set_main_sidebar_dwm_blur(app: tauri::AppHandle, sidebar_width: u32) -> R
 
         #[cfg(debug_assertions)]
         {
-            eprintln!("[DWM] set_main_sidebar_dwm_blur: hwnd={:?}, sidebar_width={}", hwnd, sidebar_width);
+            eprintln!(
+                "[DWM] set_main_sidebar_dwm_blur: hwnd={:?}, sidebar_width={}",
+                hwnd, sidebar_width
+            );
+        }
+
+        if hwnd == 0 {
+            return Err("hwnd is null".into());
+        }
+
+        // ---- 优先：SetWindowCompositionAttribute + ACCENT_ENABLE_ACRYLICBLURBEHIND（Win11 更常见/更稳定）----
+        // 我们给"整个窗口"开启 acrylic，但由于主内容区域是不透明背景，视觉上只有侧栏（半透明）会显现毛玻璃。
+        #[repr(C)]
+        struct ACCENT_POLICY {
+            accent_state: i32,
+            accent_flags: i32,
+            gradient_color: u32,
+            animation_id: i32,
+        }
+
+        #[repr(C)]
+        struct WINDOWCOMPOSITIONATTRIBDATA {
+            attrib: i32,
+            pv_data: *mut c_void,
+            cb_data: u32,
+        }
+
+        // Undocumented: WCA_ACCENT_POLICY = 19
+        const WCA_ACCENT_POLICY: i32 = 19;
+        // Undocumented: ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
+        const ACCENT_ENABLE_ACRYLICBLURBEHIND: i32 = 4;
+
+        unsafe {
+            // 动态加载：避免 MSVC 链接阶段找不到 __imp_SetWindowCompositionAttribute 导致 LNK2019
+            unsafe fn wide(s: &str) -> Vec<u16> {
+                use std::ffi::OsStr;
+                use std::os::windows::ffi::OsStrExt;
+                OsStr::new(s).encode_wide().chain(Some(0)).collect()
+            }
+
+            type SetWcaFn =
+                unsafe extern "system" fn(HWND, *mut WINDOWCOMPOSITIONATTRIBDATA) -> BOOL;
+
+            let user32 = {
+                let m = GetModuleHandleW(wide("user32.dll").as_ptr());
+                if m != 0 {
+                    m
+                } else {
+                    LoadLibraryW(wide("user32.dll").as_ptr())
+                }
+            };
+
+            let set_wca: Option<SetWcaFn> = if user32 != 0 {
+                // windows-sys 的 GetProcAddress 返回 Option<FARPROC>
+                GetProcAddress(user32, b"SetWindowCompositionAttribute\0".as_ptr())
+                    .map(|f| transmute(f))
+            } else {
+                None
+            };
+
+            // GradientColor 常见实现为 0xAABBGGRR；白色不受通道顺序影响。
+            let accent = ACCENT_POLICY {
+                accent_state: ACCENT_ENABLE_ACRYLICBLURBEHIND,
+                accent_flags: 2,
+                gradient_color: 0x99FFFFFF, // 半透明白
+                animation_id: 0,
+            };
+
+            let mut data = WINDOWCOMPOSITIONATTRIBDATA {
+                attrib: WCA_ACCENT_POLICY,
+                pv_data: (&accent as *const ACCENT_POLICY) as *mut c_void,
+                cb_data: std::mem::size_of::<ACCENT_POLICY>() as u32,
+            };
+
+            if let Some(set_wca) = set_wca {
+                let ok = set_wca(hwnd, &mut data);
+                if ok != 0 {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[DWM] acrylic enabled via SetWindowCompositionAttribute");
+                    return Ok(());
+                }
+            } else {
+                #[cfg(debug_assertions)]
+                eprintln!("[DWM] SetWindowCompositionAttribute not found (GetProcAddress)");
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        eprintln!("[DWM] acrylic failed, fallback to DwmEnableBlurBehindWindow");
+
+        if sidebar_width == 0 {
+            unsafe {
+                let bb = DWM_BLURBEHIND {
+                    dwFlags: DWM_BB_ENABLE,
+                    fEnable: 0 as BOOL,
+                    hRgnBlur: 0,
+                    fTransitionOnMaximized: 0 as BOOL,
+                };
+                let hr = DwmEnableBlurBehindWindow(hwnd, &bb);
+                if hr != 0 {
+                    return Err(format!(
+                        "DwmEnableBlurBehindWindow(disable) failed: HRESULT=0x{hr:08X}"
+                    ));
+                }
+            }
+            return Ok(());
         }
 
         unsafe {
-            // 获取窗口客户区大小
-            let mut rect = std::mem::zeroed();
-            if GetClientRect(hwnd, &mut rect) == 0 {
-                return Err("GetClientRect failed".to_string());
+            let mut rect = std::mem::MaybeUninit::uninit();
+            if GetClientRect(hwnd, rect.as_mut_ptr()) == 0 {
+                return Err("GetClientRect failed".into());
+            }
+            let rect = rect.assume_init();
+            let height = rect.bottom - rect.top;
+            if height <= 0 {
+                return Err("client rect height is invalid".into());
             }
 
-            // 创建模糊区域（左侧 sidebar_width 宽度的矩形）
-            let h_region = CreateRectRgn(0, 0, sidebar_width as i32, rect.bottom);
-            if h_region == 0 {
-                return Err("CreateRectRgn failed".to_string());
+            let width = (sidebar_width as i32).min(rect.right - rect.left).max(1);
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[DWM] client_rect={}x{}, blur_width={}",
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                width
+            );
+            let rgn = CreateRectRgn(0, 0, width, height);
+            if rgn == 0 {
+                return Err("CreateRectRgn failed".into());
             }
 
-            // 配置 DWM BlurBehind
-            let mut blur_behind = DWM_BLURBEHIND {
+            let bb = DWM_BLURBEHIND {
                 dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
-                fEnable: BOOL::from(true),
-                hRgnBlur: h_region,
-                fTransitionOnMaximized: BOOL::from(false),
+                fEnable: 1 as BOOL,
+                hRgnBlur: rgn,
+                fTransitionOnMaximized: 0 as BOOL,
             };
 
-            // 调用 DwmEnableBlurBehindWindow
-            let result = DwmEnableBlurBehindWindow(hwnd, &mut blur_behind);
-            if result != 0 {
-                DeleteObject(h_region as *mut c_void);
-                return Err(format!("DwmEnableBlurBehindWindow failed: {}", result));
+            let hr = DwmEnableBlurBehindWindow(hwnd, &bb);
+            let _ = DeleteObject(rgn);
+            if hr != 0 {
+                return Err(format!(
+                    "DwmEnableBlurBehindWindow failed: HRESULT=0x{hr:08X}"
+                ));
             }
-
-            // 清理区域句柄（DWM 会复制区域）
-            DeleteObject(h_region as *mut c_void);
-
-            #[cfg(debug_assertions)]
-            {
-                eprintln!("[DWM] set_main_sidebar_dwm_blur: ✓ 成功");
-            }
+            Ok(())
         }
-
-        Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -217,15 +326,9 @@ pub fn set_main_sidebar_dwm_blur(app: tauri::AppHandle, sidebar_width: u32) -> R
 
 /// 修复壁纸窗口 Z-order（供前端在最小化等事件时调用）
 #[tauri::command]
-pub fn fix_wallpaper_zorder(app: tauri::AppHandle) {
-    #[cfg(target_os = "windows")]
-    {
-        fix_wallpaper_window_zorder(&app);
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = app;
-    }
+#[cfg(target_os = "windows")]
+pub async fn fix_wallpaper_zorder(app: tauri::AppHandle) {
+    fix_wallpaper_window_zorder(app).await;
 }
 
 /// 壁纸窗口前端 ready 后调用，用于触发一次"推送当前壁纸到壁纸窗口"。
@@ -240,8 +343,8 @@ pub fn wallpaper_window_ready(_app: tauri::AppHandle) -> Result<(), String> {
 }
 
 // Windows：将文件列表写入剪贴板为 CF_HDROP，便于原生应用粘贴/拖拽识别
-#[cfg(target_os = "windows")]
 #[tauri::command]
+#[cfg(target_os = "windows")]
 pub fn copy_files_to_clipboard(paths: Vec<String>) -> Result<(), String> {
     use windows_sys::Win32::System::{
         DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
@@ -249,7 +352,7 @@ pub fn copy_files_to_clipboard(paths: Vec<String>) -> Result<(), String> {
     };
     use windows_sys::Win32::UI::Shell::DROPFILES;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
-    
+
     const CF_HDROP_FORMAT: u32 = 15; // Clipboard format for file drop
 
     if paths.is_empty() {
@@ -276,7 +379,7 @@ pub fn copy_files_to_clipboard(paths: Vec<String>) -> Result<(), String> {
     unsafe {
         // 分配全局内存
         let h_mem = GlobalAlloc(GMEM_MOVEABLE, total_size);
-        if h_mem == 0 {
+        if h_mem == std::ptr::null_mut() {
             return Err("GlobalAlloc failed".into());
         }
 
@@ -294,13 +397,13 @@ pub fn copy_files_to_clipboard(paths: Vec<String>) -> Result<(), String> {
         };
         std::ptr::copy_nonoverlapping(
             &dropfiles as *const _ as *const u8,
-            p_mem,
+            p_mem as *mut u8,
             dropfiles_size,
         );
 
         // 写入路径列表
         let paths_ptr = p_mem.add(dropfiles_size);
-        std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, paths_ptr, bytes_len);
+        std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, paths_ptr as *mut u8, bytes_len);
 
         GlobalUnlock(h_mem);
 
@@ -314,7 +417,7 @@ pub fn copy_files_to_clipboard(paths: Vec<String>) -> Result<(), String> {
             return Err("EmptyClipboard failed".into());
         }
 
-        if SetClipboardData(CF_HDROP_FORMAT, h_mem) == 0 {
+        if SetClipboardData(CF_HDROP_FORMAT, h_mem as isize) == 0 {
             CloseClipboard();
             return Err("SetClipboardData failed".into());
         }

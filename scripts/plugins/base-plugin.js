@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+
+import chalk from "chalk";
+
 /**
  * 插件基类
  * 所有插件都应该继承此类或实现相同的接口
@@ -7,6 +10,10 @@
 export class BasePlugin {
   constructor(name) {
     this.name = name;
+  }
+
+  log(...args) {
+    console.log(`[${this.name}]`, ...args)
   }
 
   /**
@@ -21,5 +28,16 @@ export class BasePlugin {
    */
   getName() {
     return this.name;
+  }
+
+  setEnv(env, value) {
+    process.env[env] = value;
+    this.log(chalk.cyan(`set ${env}=${value}`))
+  }
+
+  addRustFlags(flag) {
+    const prev = process.env.RUSTFLAGS ? String(process.env.RUSTFLAGS) : "";
+    process.env.RUSTFLAGS = prev ? `${prev} ${flag}` : flag;
+    this.log(chalk.cyan(`RUSTFLAGS+=${flag}`))
   }
 }

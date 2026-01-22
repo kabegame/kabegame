@@ -4,8 +4,8 @@
   "version": "3.0.0",
   "identifier": "com.kabegame",
   "build": {
-    "beforeDevCommand": "pnpm -C .. dev:frontend-main",
-    "beforeBuildCommand": "pnpm -C .. build:frontend-main",
+    "beforeDevCommand": "bun --cwd .. run dev:frontend-main",
+    "beforeBuildCommand": "bun --cwd .. run build:frontend-main",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../../dist-main"
   },

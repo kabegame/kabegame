@@ -346,6 +346,7 @@ const {
   loadMoreImages: loadMoreImagesFromComposable,
   jumpToBigPage,
   removeFromUiCacheByIds,
+  removeFromCacheByIds,
 } = useGalleryImages(
   galleryContainerRef,
   isLoadingMore,
@@ -833,7 +834,7 @@ watch(tasks, (newTasks, oldTasks) => {
 
 useImagesChangeRefresh({
   enabled: isGalleryActive,
-  waitMs: 250,
+  waitMs: 1000,
   onRefresh: async () => {
     const prevList = displayedImages.value.slice();
     // 当前壁纸被删/移除：前端清空当前选中（后端也会清空设置，这里是 UI 兜底）
@@ -841,7 +842,7 @@ useImagesChangeRefresh({
     // 先更新 total（用于页码越界兜底）
     await loadTotalImagesCount();
 
-    // 刷新“当前页”数据：不 reset，不卸载组件，只替换 images 数组引用
+    // 刷新"当前页"数据：不 reset，不卸载组件，只替换 images 数组引用
     await refreshImagesPreserveCache(false, { preserveScroll: true });
 
     const { addedIds, removedIds } = diffById(prevList, displayedImages.value);
@@ -854,19 +855,12 @@ useImagesChangeRefresh({
       currentWallpaperImageId.value = null;
     }
 
-    // 统一 diff 处理：删除项清理缓存，新增项按需加载 URL
+    // 只清 URL 缓存，不修改 displayedImages（已由 refreshImagesPreserveCache 更新）
     if (removedIds.length > 0) {
-      removeFromUiCacheByIds(removedIds);
+      removeFromCacheByIds(removedIds);
     }
-    if (addedIds.length > 0) {
-      const addedSet = new Set(addedIds);
-      const addedImages = displayedImages.value.filter((img) =>
-        addedSet.has(img.id)
-      );
-      if (addedImages.length > 0) {
-        void loadImageUrls(addedImages);
-      }
-    }
+    // 新增项由 setLeafAndResetDisplay 中的 loadImageUrls 自动处理
+    // 删除动画由 ImageGrid 的 transition-group/虚拟滚动 watch 自动处理
 
     // 若当前页被清空但仍有图：尽量跳转到仍可用的最大页
     if (displayedImages.value.length === 0 && totalImagesCount.value > 0) {

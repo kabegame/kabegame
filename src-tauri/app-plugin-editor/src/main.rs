@@ -1,12 +1,12 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod plugin_editor;
 mod daemon_client;
+mod event_listeners;
+mod plugin_editor;
 
 use kabegame_core::{
     plugin::{PluginConfig, PluginManifest},
-    settings::AppSettings,
     storage::{ImageInfo, TaskInfo},
 };
 use serde_json::Value as JsonValue;
@@ -91,7 +91,10 @@ async fn start_task(
     // 与主程序一致：先落库
     let task_v = serde_json::to_value(task.clone())
         .map_err(|e| format!("Failed to serialize task: {}", e))?;
-    if let Err(e) = daemon_client::get_ipc_client().storage_add_task(task_v).await {
+    if let Err(e) = daemon_client::get_ipc_client()
+        .storage_add_task(task_v)
+        .await
+    {
         eprintln!("[WARN] start_task 落库失败（将继续入队）：{e}");
     }
 
@@ -177,32 +180,29 @@ async fn refresh_installed_plugin_cache(plugin_id: String) -> Result<(), String>
 
 #[tauri::command]
 async fn get_plugin_icon(plugin_id: String) -> Result<Option<Vec<u8>>, String> {
-    use base64::Engine;
-    let v = daemon_client::get_ipc_client()
+    daemon_client::get_ipc_client()
         .plugin_get_icon(plugin_id)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let b64_opt = v.get("base64").and_then(|x| x.as_str()).map(|s| s.to_string());
-    let Some(b64) = b64_opt else { return Ok(None) };
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .map_err(|e| format!("base64 decode failed: {}", e))?;
-    Ok(Some(bytes))
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
-fn plugin_editor_import_kgpg(file_path: String) -> Result<plugin_editor::PluginEditorImportResult, String> {
+fn plugin_editor_import_kgpg(
+    file_path: String,
+) -> Result<plugin_editor::PluginEditorImportResult, String> {
     plugin_editor::plugin_editor_import_kgpg(file_path)
 }
 
 #[tauri::command]
-async fn plugin_editor_import_installed(plugin_id: String) -> Result<plugin_editor::PluginEditorImportResult, String> {
+async fn plugin_editor_import_installed(
+    plugin_id: String,
+) -> Result<plugin_editor::PluginEditorImportResult, String> {
     // 通过 daemon 刷新缓存，然后读取文件
     let _ = daemon_client::get_ipc_client()
         .plugin_get_detail(plugin_id.clone())
         .await
         .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    
+
     // 从插件目录读取文件
     let plugins_dir = kabegame_core::plugin::plugins_directory_for_readonly();
     let p = plugins_dir.join(format!("{}.kgpg", plugin_id));
@@ -269,7 +269,8 @@ fn plugin_editor_autosave_save(
 }
 
 #[tauri::command]
-fn plugin_editor_autosave_load() -> Result<Option<plugin_editor::PluginEditorImportResult>, String> {
+fn plugin_editor_autosave_load() -> Result<Option<plugin_editor::PluginEditorImportResult>, String>
+{
     plugin_editor::plugin_editor_autosave_load()
 }
 
@@ -290,51 +291,70 @@ async fn cancel_task(task_id: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_task_images(task_id: String) -> Result<Vec<ImageInfo>, String> {
-    let v = daemon_client::get_ipc_client().storage_get_task_images(task_id).await?;
+    let v = daemon_client::get_ipc_client()
+        .storage_get_task_images(task_id)
+        .await?;
     serde_json::from_value(v).map_err(|e| format!("Failed to parse task images: {}", e))
 }
 
 #[tauri::command]
 async fn add_task(task: TaskInfo) -> Result<(), String> {
-    let task_v = serde_json::to_value(task).map_err(|e| format!("Failed to serialize task: {}", e))?;
-    daemon_client::get_ipc_client().storage_add_task(task_v).await
+    let task_v =
+        serde_json::to_value(task).map_err(|e| format!("Failed to serialize task: {}", e))?;
+    daemon_client::get_ipc_client()
+        .storage_add_task(task_v)
+        .await
 }
 
 #[tauri::command]
 async fn get_task(task_id: String) -> Result<Option<TaskInfo>, String> {
-    let v = daemon_client::get_ipc_client().storage_get_task(task_id).await?;
+    let v = daemon_client::get_ipc_client()
+        .storage_get_task(task_id)
+        .await?;
     serde_json::from_value(v).map_err(|e| format!("Failed to parse task: {}", e))
 }
 
 #[tauri::command]
 async fn get_all_tasks() -> Result<Vec<TaskInfo>, String> {
-    let v = daemon_client::get_ipc_client().storage_get_all_tasks().await?;
+    let v = daemon_client::get_ipc_client()
+        .storage_get_all_tasks()
+        .await?;
     serde_json::from_value(v).map_err(|e| format!("Failed to parse tasks: {}", e))
 }
 
 /// 将任务的 Rhai 失败 dump 标记为"已确认/已读"（用于任务列表右上角小按钮）
 #[tauri::command]
 async fn confirm_task_rhai_dump(task_id: String) -> Result<(), String> {
-    daemon_client::get_ipc_client().storage_confirm_task_rhai_dump(task_id).await
+    daemon_client::get_ipc_client()
+        .storage_confirm_task_rhai_dump(task_id)
+        .await
 }
 
 #[tauri::command]
 async fn delete_task(task_id: String) -> Result<(), String> {
     // 先取消任务（如果正在运行）
-    let _ = daemon_client::get_ipc_client().task_cancel(task_id.clone()).await;
+    let _ = daemon_client::get_ipc_client()
+        .task_cancel(task_id.clone())
+        .await;
 
     // 获取任务关联的图片 ID 列表
     let ids = daemon_client::get_ipc_client()
         .storage_get_task_image_ids(task_id.clone())
         .await
         .unwrap_or_default();
-    
+
     // 删除任务
-    daemon_client::get_ipc_client().storage_delete_task(task_id).await?;
-    
+    daemon_client::get_ipc_client()
+        .storage_delete_task(task_id)
+        .await?;
+
     // 如果当前壁纸在被删除的图片中，清除当前壁纸设置
-    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
-    if let Some(cur) = settings_v.get("current_wallpaper_image_id").and_then(|v| v.as_str()) {
+    let current_id = daemon_client::get_ipc_client()
+        .settings_get_current_wallpaper_image_id()
+        .await
+        .ok()
+        .flatten();
+    if let Some(cur) = current_id.as_deref() {
         if ids.iter().any(|id| id == cur) {
             let _ = daemon_client::get_ipc_client()
                 .settings_set_current_wallpaper_image_id(None)
@@ -346,10 +366,16 @@ async fn delete_task(task_id: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn delete_image(image_id: String) -> Result<(), String> {
-    daemon_client::get_ipc_client().storage_delete_image(image_id.clone()).await?;
-    
-    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
-    if settings_v.get("current_wallpaper_image_id").and_then(|v| v.as_str()) == Some(image_id.as_str()) {
+    daemon_client::get_ipc_client()
+        .storage_delete_image(image_id.clone())
+        .await?;
+
+    let current_id = daemon_client::get_ipc_client()
+        .settings_get_current_wallpaper_image_id()
+        .await
+        .ok()
+        .flatten();
+    if current_id.as_deref() == Some(image_id.as_str()) {
         let _ = daemon_client::get_ipc_client()
             .settings_set_current_wallpaper_image_id(None)
             .await;
@@ -359,10 +385,16 @@ async fn delete_image(image_id: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn remove_image(image_id: String) -> Result<(), String> {
-    daemon_client::get_ipc_client().storage_remove_image(image_id.clone()).await?;
-    
-    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
-    if settings_v.get("current_wallpaper_image_id").and_then(|v| v.as_str()) == Some(image_id.as_str()) {
+    daemon_client::get_ipc_client()
+        .storage_remove_image(image_id.clone())
+        .await?;
+
+    let current_id = daemon_client::get_ipc_client()
+        .settings_get_current_wallpaper_image_id()
+        .await
+        .ok()
+        .flatten();
+    if current_id.as_deref() == Some(image_id.as_str()) {
         let _ = daemon_client::get_ipc_client()
             .settings_set_current_wallpaper_image_id(None)
             .await;
@@ -372,11 +404,17 @@ async fn remove_image(image_id: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn batch_delete_images(image_ids: Vec<String>) -> Result<(), String> {
-    daemon_client::get_ipc_client().storage_batch_delete_images(image_ids.clone()).await?;
-    
-    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
-    if let Some(current_id) = settings_v.get("current_wallpaper_image_id").and_then(|v| v.as_str()) {
-        if image_ids.contains(&current_id.to_string()) {
+    daemon_client::get_ipc_client()
+        .storage_batch_delete_images(image_ids.clone())
+        .await?;
+
+    let current_id = daemon_client::get_ipc_client()
+        .settings_get_current_wallpaper_image_id()
+        .await
+        .ok()
+        .flatten();
+    if let Some(cur) = current_id.as_deref() {
+        if image_ids.contains(&cur.to_string()) {
             let _ = daemon_client::get_ipc_client()
                 .settings_set_current_wallpaper_image_id(None)
                 .await;
@@ -387,11 +425,17 @@ async fn batch_delete_images(image_ids: Vec<String>) -> Result<(), String> {
 
 #[tauri::command]
 async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
-    daemon_client::get_ipc_client().storage_batch_remove_images(image_ids.clone()).await?;
-    
-    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
-    if let Some(current_id) = settings_v.get("current_wallpaper_image_id").and_then(|v| v.as_str()) {
-        if image_ids.contains(&current_id.to_string()) {
+    daemon_client::get_ipc_client()
+        .storage_batch_remove_images(image_ids.clone())
+        .await?;
+
+    let current_id = daemon_client::get_ipc_client()
+        .settings_get_current_wallpaper_image_id()
+        .await
+        .ok()
+        .flatten();
+    if let Some(cur) = current_id.as_deref() {
+        if image_ids.contains(&cur.to_string()) {
             let _ = daemon_client::get_ipc_client()
                 .settings_set_current_wallpaper_image_id(None)
                 .await;
@@ -404,23 +448,53 @@ async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
 /// 返回被删除的任务数量
 #[tauri::command]
 async fn clear_finished_tasks() -> Result<usize, String> {
-    daemon_client::get_ipc_client().storage_clear_finished_tasks().await
+    daemon_client::get_ipc_client()
+        .storage_clear_finished_tasks()
+        .await
 }
 
 #[tauri::command]
 async fn check_daemon_status() -> Result<serde_json::Value, String> {
-    daemon_client::try_connect_daemon().await
+    use kabegame_core::ipc::ConnectionStatus;
+    
+    let client = daemon_client::get_ipc_client();
+    let conn_status = client.connection_status().await;
+    
+    // 尝试获取 daemon 状态信息
+    let status_result = client.status().await;
+    
+    // 构建返回结果
+    let mut result = serde_json::json!({
+        "status": match conn_status {
+            ConnectionStatus::Disconnected => "disconnected",
+            ConnectionStatus::Connecting => "connecting",
+            ConnectionStatus::Connected => "connected",
+        }
+    });
+    
+    match status_result {
+        Ok(info) => {
+            result["info"] = info;
+        }
+        Err(e) => {
+            result["error"] = serde_json::Value::String(e);
+        }
+    }
+    
+    Ok(result)
 }
 
 #[tauri::command]
-async fn get_settings() -> Result<AppSettings, String> {
-    let v = daemon_client::get_ipc_client().settings_get().await?;
-    serde_json::from_value(v).map_err(|e| format!("Failed to parse settings: {}", e))
+async fn get_settings() -> Result<serde_json::Value, String> {
+    // settings_get 已被废弃，使用具体的 getter 方法构建设置对象
+    // 注意：这个方法现在返回错误，建议前端使用具体的 getter 方法
+    Err("get_settings is deprecated. Use individual getter methods instead.".to_string())
 }
 
 #[tauri::command]
-async fn get_setting(key: String) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client().settings_get_key(key).await
+async fn get_setting(_key: String) -> Result<serde_json::Value, String> {
+    // settings_get_key 已被废弃，使用具体的 getter 方法
+    Err("get_setting is deprecated. Use individual getter methods instead.".to_string())
 }
 
 #[tauri::command]
@@ -461,18 +535,20 @@ async fn set_default_download_dir(dir: Option<String>) -> Result<(), String> {
 #[tauri::command]
 async fn get_default_images_dir() -> Result<String, String> {
     // 通过 daemon 获取设置中的默认下载目录，如果没有则使用默认路径
-    let settings_v = daemon_client::get_ipc_client().settings_get().await?;
-    if let Some(dir) = settings_v.get("default_download_dir").and_then(|v| v.as_str()) {
+    if let Ok(Some(dir)) = daemon_client::get_ipc_client()
+        .settings_get_default_download_dir()
+        .await
+    {
         if !dir.is_empty() {
-            return Ok(dir.to_string());
+            return Ok(dir);
         }
     }
-    
+
     // 如果没有设置，使用默认路径（与 Storage::get_images_dir 逻辑一致）
     // 注意：这里简化处理，直接使用应用数据目录，因为获取系统图片目录需要 dirs crate
     // 如果需要精确匹配 Storage 的逻辑，可以通过 daemon 获取
     let images_dir = kabegame_core::app_paths::kabegame_data_dir().join("images");
-    
+
     Ok(images_dir
         .to_string_lossy()
         .to_string()
@@ -498,26 +574,30 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            // 启动连接状态监听任务（监听 IPC 连接状态变化）
+            daemon_client::spawn_connection_status_watcher(app.app_handle().clone());
+            
             // 启动 daemon（如果未运行）
             let app_handle = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {
-                match daemon_client::ensure_daemon_ready(&app_handle).await {
+                match daemon_client::ensure_daemon_ready().await {
                     Ok(_) => {
                         // 发送事件通知前端 daemon 已就绪
                         let _ = app_handle.emit("daemon-ready", serde_json::json!({}));
-                        
+
                         // 初始化事件监听器（将 daemon IPC 事件转发为 Tauri 事件）
-                        kabegame_core::ipc::init_event_listeners(app_handle.clone()).await;
+                        crate::event_listeners::init_event_listeners(app_handle.clone()).await;
                     }
                     Err(e) => {
                         eprintln!("[WARN] Failed to ensure daemon ready: {}", e);
                         // 获取 daemon 路径用于错误提示
-                        let daemon_path = kabegame_core::daemon_startup::find_daemon_executable(Some(&app_handle))
-                            .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
+                        let daemon_path =
+                            kabegame_core::ipc::daemon_startup::find_daemon_executable()
+                                .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
                         // 发送事件通知前端 daemon 启动失败
                         let _ = app_handle.emit(
                             "daemon-startup-failed",
-                            serde_json::json!({ 
+                            serde_json::json!({
                                 "error": e,
                                 "daemon_path": daemon_path.display().to_string()
                             }),
@@ -569,8 +649,6 @@ fn main() {
             batch_delete_images,
             batch_remove_images,
             // settings (for shared click behavior, etc.)
-            get_settings,
-            get_setting,
             get_favorite_album_id,
             set_max_concurrent_downloads,
             set_network_retry_count,

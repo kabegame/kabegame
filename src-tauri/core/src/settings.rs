@@ -3,14 +3,15 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
+use tokio::sync::Mutex as TokioMutex;
 use tokio::time::Instant;
-// Settings 不再依赖 Tauri AppHandle
+
+#[cfg(feature = "ipc-server")]
+use crate::runtime::global_emitter::GlobalEmitter;
 
 fn atomic_replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
-    // 确保临时文件存在
     if !tmp.exists() {
         return Err(format!(
             "Failed to replace settings file: temporary file does not exist: {}",
@@ -18,7 +19,6 @@ fn atomic_replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
         ));
     }
 
-    // 确保目标文件的父目录存在
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create destination directory: {}", e))?;
@@ -57,43 +57,6 @@ fn atomic_replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
     }
 }
 
-fn default_wallpaper_rotation_style() -> String {
-    "fill".to_string()
-}
-
-fn default_wallpaper_rotation_transition() -> String {
-    #[cfg(target_os = "windows")]
-    {
-        "fade".to_string()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        "none".to_string()
-    }
-}
-
-fn default_wallpaper_mode() -> String {
-    #[cfg(target_os = "windows")]
-    {
-        "window".to_string()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        "native".to_string()
-    }
-}
-
-fn default_album_drive_mount_point() -> String {
-    #[cfg(target_os = "windows")]
-    {
-        "K:\\".to_string()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        "".to_string()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowState {
@@ -104,239 +67,269 @@ pub struct WindowState {
     pub maximized: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AppSettings {
-    pub auto_launch: bool,
-    pub max_concurrent_downloads: u32,
-    pub network_retry_count: u32,   // 网络失效/请求失败时的重试次数
-    pub image_click_action: String, // "preview" 或 "open"
-    pub gallery_image_aspect_ratio_match_window: bool, // 画廊图片宽高比是否与窗口相同
-    #[serde(default)]
-    pub gallery_image_aspect_ratio: Option<String>, // 画廊图片宽高比（如 "16:9" 或 "custom:1920:1080"）
-    #[serde(default)]
-    pub auto_deduplicate: bool, // 是否自动去重（根据哈希值跳过重复图片）
-    #[serde(default)]
-    pub default_download_dir: Option<String>, // 默认下载目录（为空则使用应用内置目录）
-    #[serde(default)]
-    pub wallpaper_engine_dir: Option<String>, // Wallpaper Engine 安装目录（用于自动导入工程到 myprojects）
-    #[serde(default)]
-    pub wallpaper_rotation_enabled: bool, // 壁纸轮播是否启用
-    #[serde(default)]
-    pub wallpaper_rotation_album_id: Option<String>, // 轮播的画册ID
-    #[serde(default)]
-    pub wallpaper_rotation_interval_minutes: u32, // 轮播间隔（分钟）
-    #[serde(default)]
-    pub wallpaper_rotation_mode: String, // 轮播模式："random" 或 "sequential"
-    #[serde(default = "default_wallpaper_rotation_style")]
-    pub wallpaper_rotation_style: String, // 壁纸显示方式："fill"（填充）、"fit"（适应）、"stretch"（拉伸）、"center"（居中）、"tile"（平铺）
-    #[serde(default = "default_wallpaper_rotation_transition")]
-    pub wallpaper_rotation_transition: String, // 过渡方式："none"（无）、"fade"（淡入淡出）
-    /// 按 wallpaper_mode 记忆每个模式下最近一次使用的 style（用于切换模式时恢复）
-    #[serde(default)]
-    pub wallpaper_style_by_mode: HashMap<String, String>,
-    /// 按 wallpaper_mode 记忆每个模式下最近一次使用的 transition（用于切换模式时恢复）
-    #[serde(default)]
-    pub wallpaper_transition_by_mode: HashMap<String, String>,
-    #[serde(default = "default_wallpaper_mode")]
-    pub wallpaper_mode: String, // 壁纸模式："native"（原生）、"window"（窗口句柄）
-    #[serde(default)]
-    pub window_state: Option<WindowState>, // 窗口位置和大小
-    /// 全局"当前壁纸"设置（存 imageId）
-    ///
-    /// - None 表示未设置或已失效
-    /// - 仅用于应用自身的“恢复/回退”逻辑；不代表系统当前壁纸一定等于该值
-    #[serde(default)]
-    pub current_wallpaper_image_id: Option<String>,
-
-    /// 画册虚拟盘
-    #[cfg(feature = "virtual-drive")]
-    #[serde(default)]
-    pub album_drive_enabled: bool,
-    #[cfg(feature = "virtual-drive")]
-    #[serde(default = "default_album_drive_mount_point")]
-    pub album_drive_mount_point: String,
+pub enum SettingKey {
+    /// 开机启动
+    AutoLaunch,
+    /// 最大并发下载数
+    MaxConcurrentDownloads,
+    /// 网络重试次数
+    NetworkRetryCount,
+    /// 图片双击动作
+    ImageClickAction,
+    /// 画廊图片宽高比
+    GalleryImageAspectRatio,
+    /// 自动去重
+    AutoDeduplicate,
+    /// 默认下载目录
+    DefaultDownloadDir,
+    /// 壁纸引擎目录
+    WallpaperEngineDir,
+    /// 壁纸轮播启用
+    WallpaperRotationEnabled,
+    /// 壁纸轮播画册ID，为空则为画廊
+    WallpaperRotationAlbumId,
+    /// 壁纸轮播间隔分钟
+    WallpaperRotationIntervalMinutes,
+    /// 壁纸轮播模式（随机、顺序）
+    WallpaperRotationMode,
+    /// 壁纸轮播样式
+    WallpaperRotationStyle,
+    /// 壁纸轮播过渡效果
+    WallpaperRotationTransition,
+    /// 不同轮播模式下单独存储的style
+    WallpaperStyleByMode,
+    /// 不同轮播模式下单独存储的transition
+    WallpaperTransitionByMode,
+    /// 壁纸模式（原生等）
+    WallpaperMode,
+    /// 窗口状态（窗口位置、大小、是否最大化）
+    WindowState,
+    /// 当前壁纸图片ID
+    CurrentWallpaperImageId,
+    /// 画册盘启用
+    #[cfg(feature = "virtual-driver")]
+    AlbumDriveEnabled,
+    /// 画册盘挂载点
+    #[cfg(feature = "virtual-driver")]
+    AlbumDriveMountPoint,
 }
 
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            auto_launch: false,
-            max_concurrent_downloads: 3,
-            network_retry_count: 2,
-            image_click_action: "preview".to_string(),
-            gallery_image_aspect_ratio_match_window: false,
-            gallery_image_aspect_ratio: None,
-            auto_deduplicate: false, // 默认不去重
-            default_download_dir: None,
-            wallpaper_engine_dir: None,
-            wallpaper_rotation_enabled: false,
-            wallpaper_rotation_album_id: None,
-            wallpaper_rotation_interval_minutes: 60,
-            wallpaper_rotation_mode: "random".to_string(),
-            wallpaper_rotation_style: "fill".to_string(),
-            wallpaper_rotation_transition: default_wallpaper_rotation_transition(),
-            wallpaper_style_by_mode: HashMap::new(),
-            wallpaper_transition_by_mode: HashMap::new(),
-            wallpaper_mode: default_wallpaper_mode(),
-            window_state: None,
-            current_wallpaper_image_id: None,
+// 用于序列化的值类型
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SettingValue {
+    Bool(bool),
+    U32(u32),
+    String(String),
+    OptionString(Option<String>),
+    WindowState(WindowState),
+    OptionWindowState(Option<WindowState>),
+    HashMapStringString(HashMap<String, String>),
+}
 
-            #[cfg(feature = "virtual-drive")]
-            album_drive_enabled: false,
-            #[cfg(feature = "virtual-drive")]
-            album_drive_mount_point: default_album_drive_mount_point(),
+impl SettingValue {
+    fn as_bool(&self) -> Option<bool> {
+        match self {
+            SettingValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    fn as_u32(&self) -> Option<u32> {
+        match self {
+            SettingValue::U32(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    fn as_string(&self) -> Option<String> {
+        match self {
+            SettingValue::String(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    fn as_option_string(&self) -> Option<Option<String>> {
+        match self {
+            SettingValue::OptionString(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    fn as_window_state(&self) -> Option<WindowState> {
+        match self {
+            SettingValue::WindowState(ws) => Some(ws.clone()),
+            SettingValue::OptionWindowState(Some(ws)) => Some(ws.clone()),
+            _ => None,
+        }
+    }
+
+    fn as_option_window_state(&self) -> Option<Option<WindowState>> {
+        match self {
+            SettingValue::OptionWindowState(ws) => Some(ws.clone()),
+            SettingValue::WindowState(ws) => Some(Some(ws.clone())),
+            _ => None,
+        }
+    }
+
+    fn as_hashmap_string_string(&self) -> Option<HashMap<String, String>> {
+        match self {
+            SettingValue::HashMapStringString(m) => Some(m.clone()),
+            _ => None,
         }
     }
 }
 
-// Settings 内部状态（线程安全的内存缓存和防抖定时器）
-struct SettingsInner {
-    // 内存中的设置缓存（优先从内存读取，避免频繁文件 I/O）
-    cache: Option<AppSettings>,
-    // 最后一次修改时间（用于防抖）
+// AppSettings 是 HashMap<SettingKey, SettingValue>
+pub type AppSettings = HashMap<SettingKey, SettingValue>;
+
+// 直接使用 OnceLock 存储 cells
+static CELLS: OnceLock<HashMap<SettingKey, TokioMutex<SettingValue>>> = OnceLock::new();
+
+// 防抖状态（独立保护）
+struct DebounceState {
     last_modified: Option<Instant>,
-    // 防抖任务句柄（用于取消之前的写入任务）
     debounce_task: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl Default for SettingsInner {
-    fn default() -> Self {
-        Self {
-            cache: None,
-            last_modified: None,
-            debounce_task: None,
-        }
-    }
-}
+static DEBOUNCE_STATE: OnceLock<tokio::sync::RwLock<DebounceState>> = OnceLock::new();
 
-pub struct Settings {
-    inner: Arc<Mutex<SettingsInner>>,
-}
+// 为了保持 API 兼容性，保留 Settings 结构体（但它是空的）
+pub struct Settings;
+
+// 为了向后兼容，保留 SETTINGS
+static SETTINGS: OnceLock<Settings> = OnceLock::new();
 
 impl Settings {
-    fn normalize_transition_for_mode(mode: &str, transition: &str) -> String {
-        if mode == "native" {
-            match transition {
-                "none" | "fade" => transition.to_string(),
-                _ => "none".to_string(),
+    /// 初始化全局 Settings（必须在首次使用前调用）
+    pub fn init_global() -> Result<(), String> {
+        let settings_file = Self::get_settings_file();
+        let cells = Self::load_settings_map(&settings_file)?;
+
+        CELLS
+            .set(cells)
+            .map_err(|_| "Settings already initialized".to_string())?;
+        DEBOUNCE_STATE
+            .set(tokio::sync::RwLock::new(DebounceState {
+                last_modified: None,
+                debounce_task: None,
+            }))
+            .map_err(|_| "Debounce state already initialized".to_string())?;
+        SETTINGS
+            .set(Settings)
+            .map_err(|_| "Settings already initialized".to_string())?;
+
+        Ok(())
+    }
+
+    /// 获取全局 Settings 引用
+    pub fn global() -> &'static Settings {
+        SETTINGS
+            .get()
+            .expect("Settings not initialized. Call Settings::init_global() first.")
+    }
+
+    /// 获取 cells（内部使用）
+    fn cells() -> &'static HashMap<SettingKey, TokioMutex<SettingValue>> {
+        CELLS
+            .get()
+            .expect("Settings not initialized. Call Settings::init_global() first.")
+    }
+
+    /// 获取防抖状态（内部使用）
+    fn debounce_state() -> &'static tokio::sync::RwLock<DebounceState> {
+        DEBOUNCE_STATE
+            .get()
+            .expect("Settings not initialized. Call Settings::init_global() first.")
+    }
+
+    fn get_settings_file() -> PathBuf {
+        crate::app_paths::kabegame_data_dir().join("settings.json")
+    }
+
+    fn default_value(key: SettingKey) -> SettingValue {
+        match key {
+            SettingKey::AutoLaunch => SettingValue::Bool(false),
+            SettingKey::MaxConcurrentDownloads => SettingValue::U32(3),
+            SettingKey::NetworkRetryCount => SettingValue::U32(2),
+            SettingKey::ImageClickAction => SettingValue::String("preview".to_string()),
+            SettingKey::GalleryImageAspectRatio => SettingValue::OptionString(None),
+            SettingKey::AutoDeduplicate => SettingValue::Bool(false),
+            SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
+            SettingKey::WallpaperEngineDir => SettingValue::OptionString(None),
+            SettingKey::WallpaperRotationEnabled => SettingValue::Bool(false),
+            SettingKey::WallpaperRotationAlbumId => SettingValue::OptionString(None),
+            SettingKey::WallpaperRotationIntervalMinutes => SettingValue::U32(60),
+            SettingKey::WallpaperRotationMode => SettingValue::String("random".to_string()),
+            SettingKey::WallpaperRotationStyle => {
+                SettingValue::String(Self::default_wallpaper_rotation_style())
             }
-        } else {
-            transition.to_string()
+            SettingKey::WallpaperRotationTransition => {
+                SettingValue::String(Self::default_wallpaper_rotation_transition())
+            }
+            SettingKey::WallpaperStyleByMode => SettingValue::HashMapStringString(HashMap::new()),
+            SettingKey::WallpaperTransitionByMode => {
+                SettingValue::HashMapStringString(HashMap::new())
+            }
+            SettingKey::WallpaperMode => SettingValue::String(Self::default_wallpaper_mode()),
+            SettingKey::WindowState => SettingValue::OptionWindowState(None),
+            SettingKey::CurrentWallpaperImageId => SettingValue::OptionString(None),
+            #[cfg(feature = "virtual-driver")]
+            SettingKey::AlbumDriveEnabled => SettingValue::Bool(false),
+            #[cfg(feature = "virtual-driver")]
+            SettingKey::AlbumDriveMountPoint => {
+                SettingValue::String(Self::default_album_drive_mount_point())
+            }
         }
     }
 
-    fn normalize_style_for_mode(mode: &str, style: &str) -> String {
-        // 目前 window 模式支持全部样式；native 模式在不同系统上可支持的集合不同
-        if mode != "native" {
-            return style.to_string();
-        }
+    fn default_wallpaper_rotation_style() -> String {
+        "fill".to_string()
+    }
 
+    fn default_wallpaper_rotation_transition() -> String {
         #[cfg(target_os = "windows")]
         {
-            // Windows 原生支持所有样式
-            return style.to_string();
+            "fade".to_string()
         }
-
-        #[cfg(target_os = "macos")]
+        #[cfg(not(target_os = "windows"))]
         {
-            let supported = ["fill", "center"];
-            if supported.contains(&style) {
-                return style.to_string();
-            }
-            return "fill".to_string();
+            "none".to_string()
         }
+    }
 
+    fn default_wallpaper_mode() -> String {
+        #[cfg(target_os = "windows")]
+        {
+            "window".to_string()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            "native".to_string()
+        }
+    }
+
+    #[cfg(feature = "virtual-driver")]
+    fn default_album_drive_mount_point() -> String {
+        #[cfg(target_os = "windows")]
+        {
+            "K:\\".to_string()
+        }
         #[cfg(target_os = "linux")]
         {
-            // Linux 取决于桌面环境：先不强行限制，保持旧逻辑
-            return style.to_string();
+            "/mnt/kabegame".to_string()
         }
-
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        #[cfg(target_os = "macos")]
         {
-            if style == "fill" {
-                return "fill".to_string();
-            }
-            return "fill".to_string();
+            "/Volumes/kabegame".to_string()
         }
     }
 
-    /// 切换模式前调用：
-    /// - 把 old_mode 下当前的 style/transition 写入缓存
-    /// - 优先“尽量保留当前值”：如果当前值在 new_mode 下仍然可用，就沿用当前值
-    /// - 只有当当前值在 new_mode 下不可用时，才回退到 new_mode 的“上一次值”（若存在）
-    /// - 同时对 new_mode 做一次轻量 normalize（避免 native 下出现 slide/zoom 等非法值）
-    ///
-    /// 返回：切换后应该应用到目标后端的 (style, transition)
-    pub fn swap_style_transition_for_mode_switch(
-        &self,
-        old_mode: &str,
-        new_mode: &str,
-    ) -> Result<(String, String), String> {
-        let mut settings = self.get_settings()?;
-
-        // 1) 先缓存旧模式的“当前值”
-        let cur_style = settings.wallpaper_rotation_style.clone();
-        let cur_transition = settings.wallpaper_rotation_transition.clone();
-        settings
-            .wallpaper_style_by_mode
-            .insert(old_mode.to_string(), cur_style.clone());
-        settings
-            .wallpaper_transition_by_mode
-            .insert(old_mode.to_string(), cur_transition.clone());
-
-        // 2) 尽量保留当前值：如果当前值在新模式下仍然可用，就直接沿用
-        //    否则回退到新模式“上一次值”（若存在）
-        let mut next_style = Self::normalize_style_for_mode(new_mode, &cur_style);
-        let mut next_transition = Self::normalize_transition_for_mode(new_mode, &cur_transition);
-
-        // 如果 normalize 改变了值，说明“当前值在 new_mode 下不可用”，尝试用 new_mode 缓存兜底
-        if next_style != cur_style {
-            if let Some(v) = settings.wallpaper_style_by_mode.get(new_mode).cloned() {
-                next_style = Self::normalize_style_for_mode(new_mode, &v);
-            }
-        }
-        if next_transition != cur_transition {
-            if let Some(v) = settings.wallpaper_transition_by_mode.get(new_mode).cloned() {
-                next_transition = Self::normalize_transition_for_mode(new_mode, &v);
-            }
-        }
-
-        settings.wallpaper_rotation_style = next_style;
-        settings.wallpaper_rotation_transition = next_transition;
-
-        // 3) 同步写回新模式缓存（保证“首次切换到某模式且无缓存”的 normalize 结果可被记住）
-        settings.wallpaper_style_by_mode.insert(
-            new_mode.to_string(),
-            settings.wallpaper_rotation_style.clone(),
-        );
-        settings.wallpaper_transition_by_mode.insert(
-            new_mode.to_string(),
-            settings.wallpaper_rotation_transition.clone(),
-        );
-
-        let style = settings.wallpaper_rotation_style.clone();
-        let transition = settings.wallpaper_rotation_transition.clone();
-        self.save_settings(&settings)?;
-        Ok((style, transition))
-    }
-
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(SettingsInner::default())),
-        }
-    }
-
-    fn get_settings_file(&self) -> PathBuf {
-        let app_data_dir = crate::app_paths::kabegame_data_dir();
-        app_data_dir.join("settings.json")
-    }
-
-    /// 获取系统默认的壁纸设置（从 Windows 注册表读取）
+    /// 获取系统默认的壁纸设置
     #[cfg(target_os = "windows")]
-    fn get_system_wallpaper_settings(&self) -> (String, String) {
-        // 读取 Windows 注册表中的壁纸设置
+    fn get_system_wallpaper_settings() -> (String, String) {
         let script = r#"
 $regPath = "HKCU:\Control Panel\Desktop";
 $style = (Get-ItemProperty -Path $regPath -Name "WallpaperStyle" -ErrorAction SilentlyContinue).WallpaperStyle;
@@ -357,60 +350,31 @@ Write-Output "$style,$tile"
                     let style_value: u32 = parts[0].trim().parse().unwrap_or(10);
                     let tile_value: u32 = parts[1].trim().parse().unwrap_or(0);
 
-                    // 将 Windows 注册表值转换为应用内部的样式值
                     let style = match (style_value, tile_value) {
                         (0, 1) => "tile",
                         (0, 0) => "center",
                         (2, 0) => "stretch",
                         (6, 0) => "fit",
                         (10, 0) => "fill",
-                        _ => "fill", // 默认填充
+                        _ => "fill",
                     };
 
-                    // Windows 原生壁纸切换的淡入属于系统行为，应用不读取/不干预系统动画参数。
-                    // 因此系统默认 transition 统一返回 none。
-                    let transition = "none";
-
-                    (style.to_string(), transition.to_string())
+                    (style.to_string(), "none".to_string())
                 } else {
                     ("fill".to_string(), "none".to_string())
                 }
             }
-            Err(_) => {
-                // 如果读取失败，使用默认值
-                ("fill".to_string(), "none".to_string())
-            }
+            Err(_) => ("fill".to_string(), "none".to_string()),
         }
     }
 
-    /// 获取系统默认的壁纸设置（macOS 平台）
     #[cfg(target_os = "macos")]
-    fn get_system_wallpaper_settings(&self) -> (String, String) {
-        // macOS 使用 defaults 命令读取壁纸设置
-        // 注意：macOS 的壁纸设置比较复杂，可能包含多个屏幕
-        // 这里尝试读取，如果失败则使用默认值
-        let script = r#"
-defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImagePath" = "[^"]*"' | head -1 | sed 's/.*"defaultImagePath" = "\([^"]*\)".*/\1/'
-"#;
-
-        // macOS 的壁纸样式通常不支持像 Windows 那样的多种模式
-        // 默认使用 fill（填充）模式
-        let style = "fill".to_string();
-        let transition = "none".to_string();
-
-        // 尝试读取壁纸路径（虽然不直接用于样式，但可以验证系统设置是否可读）
-        let _ = Command::new("sh").args(["-c", script]).output();
-
-        (style, transition)
+    fn get_system_wallpaper_settings() -> (String, String) {
+        ("fill".to_string(), "none".to_string())
     }
 
-    /// 获取系统默认的壁纸设置（Linux 平台）
     #[cfg(target_os = "linux")]
-    fn get_system_wallpaper_settings(&self) -> (String, String) {
-        // Linux 不同桌面环境有不同的方法
-        // 尝试检测桌面环境并读取相应的设置
-
-        // 1. 尝试 GNOME (gsettings)
+    fn get_system_wallpaper_settings() -> (String, String) {
         if let Ok(output) = Command::new("gsettings")
             .args(["get", "org.gnome.desktop.background", "picture-options"])
             .output()
@@ -428,7 +392,6 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             return (style.to_string(), "none".to_string());
         }
 
-        // 2. 尝试 XFCE (xfconf-query)
         if let Ok(output) = Command::new("xfconf-query")
             .args([
                 "-c",
@@ -444,14 +407,12 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
                 "1" => "tile",
                 "2" => "stretch",
                 "3" => "fit",
-                "4" => "fill",
-                "5" => "fill",
+                "4" | "5" => "fill",
                 _ => "fill",
             };
             return (style.to_string(), "none".to_string());
         }
 
-        // 3. 尝试 KDE (kreadconfig5)
         if let Ok(output) = Command::new("kreadconfig5")
             .args([
                 "--file",
@@ -481,298 +442,601 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             return (style.to_string(), "none".to_string());
         }
 
-        // 如果所有方法都失败，使用默认值
         ("fill".to_string(), "none".to_string())
     }
 
-    /// 获取使用系统默认值的设置
-    fn get_system_default_settings(&self) -> AppSettings {
-        let (style, transition) = self.get_system_wallpaper_settings();
-        let mut default = AppSettings::default();
-        default.wallpaper_rotation_style = style;
-        default.wallpaper_rotation_transition = transition;
-        default
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    fn get_system_wallpaper_settings() -> (String, String) {
+        ("fill".to_string(), "none".to_string())
     }
 
-    pub fn get_settings(&self) -> Result<AppSettings, String> {
-        // 优先从内存缓存读取
-        {
-            let inner = self.inner.lock().unwrap();
-            if let Some(ref cached) = inner.cache {
-                return Ok(cached.clone());
-            }
-        }
+    fn load_settings_map(
+        file: &Path,
+    ) -> Result<HashMap<SettingKey, TokioMutex<SettingValue>>, String> {
+        let mut cells = HashMap::new();
 
-        // 缓存未命中，从文件读取
-        let file = self.get_settings_file();
-        if !file.exists() {
-            // 首次启动，使用系统默认值
-            let default = self.get_system_default_settings();
-            // 写入内存缓存并保存到文件
-            {
-                let mut inner = self.inner.lock().unwrap();
-                inner.cache = Some(default.clone());
-            }
-            self.save_settings_immediate(&default)?;
-            return Ok(default);
-        }
+        // 初始化所有键的默认值
+        let all_keys = vec![
+            SettingKey::AutoLaunch,
+            SettingKey::MaxConcurrentDownloads,
+            SettingKey::NetworkRetryCount,
+            SettingKey::ImageClickAction,
+            SettingKey::GalleryImageAspectRatio,
+            SettingKey::AutoDeduplicate,
+            SettingKey::DefaultDownloadDir,
+            SettingKey::WallpaperEngineDir,
+            SettingKey::WallpaperRotationEnabled,
+            SettingKey::WallpaperRotationAlbumId,
+            SettingKey::WallpaperRotationIntervalMinutes,
+            SettingKey::WallpaperRotationMode,
+            SettingKey::WallpaperRotationStyle,
+            SettingKey::WallpaperRotationTransition,
+            SettingKey::WallpaperStyleByMode,
+            SettingKey::WallpaperTransitionByMode,
+            SettingKey::WallpaperMode,
+            SettingKey::WindowState,
+            SettingKey::CurrentWallpaperImageId,
+            #[cfg(feature = "virtual-driver")]
+            SettingKey::AlbumDriveEnabled,
+            #[cfg(feature = "virtual-driver")]
+            SettingKey::AlbumDriveMountPoint,
+        ];
 
-        let mut content = fs::read_to_string(&file)
-            .map_err(|e| format!("Failed to read settings file: {}", e))?;
+        // 先读取 JSON（如果存在）
+        let json_value = if file.exists() {
+            let mut content =
+                fs::read_to_string(file).map_err(|e| format!("读取设置文件失败！ {}", e))?;
 
-        // 处理空文件：
-        // - 这里很可能是"并发写入时被读到空内容"的瞬时状态
-        // - 为避免把用户已有配置覆盖成默认值（例如 max_concurrent_downloads 被刷回 3），先短暂重试读取
-        if content.trim().is_empty() {
-            use std::thread::sleep;
-            for _ in 0..3 {
-                sleep(Duration::from_millis(20));
-                content = fs::read_to_string(&file)
-                    .map_err(|e| format!("Failed to read settings file: {}", e))?;
-                if !content.trim().is_empty() {
-                    break;
-                }
-            }
-        }
-
-        // 仍为空：返回默认值作为兜底，但不要写回（避免覆盖旧文件）
-        if content.trim().is_empty() {
-            return Ok(self.get_system_default_settings());
-        }
-
-        // 尝试解析为 JSON 值，然后手动构建 AppSettings，使用默认值填充缺失字段
-        let json_value: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse settings JSON: {}", e))?;
-
-        let mut settings = AppSettings::default();
-
-        if let Some(auto_launch) = json_value.get("autoLaunch").and_then(|v| v.as_bool()) {
-            settings.auto_launch = auto_launch;
-        }
-        if let Some(max_concurrent) = json_value
-            .get("maxConcurrentDownloads")
-            .and_then(|v| v.as_u64())
-        {
-            settings.max_concurrent_downloads = max_concurrent as u32;
-        }
-        if let Some(retry) = json_value.get("networkRetryCount").and_then(|v| v.as_u64()) {
-            settings.network_retry_count = retry as u32;
-        }
-        if let Some(image_click_action) =
-            json_value.get("imageClickAction").and_then(|v| v.as_str())
-        {
-            settings.image_click_action = image_click_action.to_string();
-        }
-        if let Some(match_window) = json_value
-            .get("galleryImageAspectRatioMatchWindow")
-            .and_then(|v| v.as_bool())
-        {
-            settings.gallery_image_aspect_ratio_match_window = match_window;
-        }
-        if let Some(aspect_ratio) = json_value
-            .get("galleryImageAspectRatio")
-            .and_then(|v| v.as_str())
-        {
-            settings.gallery_image_aspect_ratio = Some(aspect_ratio.to_string());
-        }
-        if let Some(auto_deduplicate) = json_value.get("autoDeduplicate").and_then(|v| v.as_bool())
-        {
-            settings.auto_deduplicate = auto_deduplicate;
-        }
-        if let Some(dir) = json_value.get("defaultDownloadDir") {
-            settings.default_download_dir = match dir {
-                serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.to_string()),
-                _ => None,
-            };
-        }
-        if let Some(dir) = json_value.get("wallpaperEngineDir") {
-            settings.wallpaper_engine_dir = match dir {
-                serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.to_string()),
-                _ => None,
-            };
-        }
-        if let Some(enabled) = json_value
-            .get("wallpaperRotationEnabled")
-            .and_then(|v| v.as_bool())
-        {
-            settings.wallpaper_rotation_enabled = enabled;
-        }
-        if let Some(album_id) = json_value.get("wallpaperRotationAlbumId") {
-            settings.wallpaper_rotation_album_id = match album_id {
-                // 约定：空字符串表示“全画廊轮播”，需要保留为 Some("")
-                serde_json::Value::String(s) => Some(if s.trim().is_empty() {
-                    "".to_string()
-                } else {
-                    s.to_string()
-                }),
-                _ => None,
-            };
-        }
-        if let Some(interval) = json_value
-            .get("wallpaperRotationIntervalMinutes")
-            .and_then(|v| v.as_u64())
-        {
-            settings.wallpaper_rotation_interval_minutes = interval as u32;
-        }
-        if let Some(mode) = json_value
-            .get("wallpaperRotationMode")
-            .and_then(|v| v.as_str())
-        {
-            settings.wallpaper_rotation_mode = mode.to_string();
-        }
-        if let Some(style) = json_value
-            .get("wallpaperRotationStyle")
-            .and_then(|v| v.as_str())
-        {
-            settings.wallpaper_rotation_style = style.to_string();
-        }
-        if let Some(transition) = json_value
-            .get("wallpaperRotationTransition")
-            .and_then(|v| v.as_str())
-        {
-            settings.wallpaper_rotation_transition = transition.to_string();
-        }
-        // 按模式缓存（用于切换模式时恢复）
-        // - 兼容历史键名（camelCase / snake_case）
-        if let Some(map) = json_value
-            .get("wallpaperStyleByMode")
-            .or_else(|| json_value.get("wallpaper_style_by_mode"))
-            .and_then(|v| v.as_object())
-        {
-            for (k, v) in map.iter() {
-                if let Some(s) = v.as_str() {
-                    settings
-                        .wallpaper_style_by_mode
-                        .insert(k.clone(), s.to_string());
-                }
-            }
-        }
-        if let Some(map) = json_value
-            .get("wallpaperTransitionByMode")
-            .or_else(|| json_value.get("wallpaper_transition_by_mode"))
-            .and_then(|v| v.as_object())
-        {
-            for (k, v) in map.iter() {
-                if let Some(s) = v.as_str() {
-                    settings
-                        .wallpaper_transition_by_mode
-                        .insert(k.clone(), s.to_string());
-                }
-            }
-        }
-        if let Some(mode) = json_value.get("wallpaperMode").and_then(|v| v.as_str()) {
-            settings.wallpaper_mode = mode.to_string();
-        }
-        if let Some(id) = json_value.get("currentWallpaperImageId") {
-            settings.current_wallpaper_image_id = match id {
-                serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.to_string()),
-                _ => None,
-            };
-        }
-
-        // Windows：画册盘
-        #[cfg(feature = "virtual-drive")]
-        if let Some(enabled) = json_value
-            .get("albumDriveEnabled")
-            .and_then(|v| v.as_bool())
-        {
-            settings.album_drive_enabled = enabled;
-        }
-        #[cfg(feature = "virtual-drive")]
-        if let Some(mp) = json_value
-            .get("albumDriveMountPoint")
-            .and_then(|v| v.as_str())
-        {
-            let t = mp.trim().to_string();
-            if !t.is_empty() {
-                settings.album_drive_mount_point = t;
-            }
-        }
-
-        // 注意：不要在"读取 settings"时写回文件。
-        // get_settings() 在运行期会被频繁调用（下载队列、壁纸管理器等），读时写会导致大量 I/O，
-        // 也更容易触发并发读到空文件/半文件，从而把值回退到默认（例如 3）。
-        
-        // 从文件读取后，更新内存缓存
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.cache = Some(settings.clone());
-        }
-        
-        Ok(settings)
-    }
-
-    /// 立即写入文件（不经过防抖，用于首次启动等情况）
-    fn save_settings_immediate(&self, settings: &AppSettings) -> Result<(), String> {
-        let file = self.get_settings_file();
-        if let Some(parent) = file.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create settings directory: {}", e))?;
-        }
-
-        let content = serde_json::to_string_pretty(settings)
-            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-
-        // 为避免并发读写导致读取到空内容/半文件，采用"写入临时文件 + 原子替换"的方式落盘。
-        let tmp = file.with_extension("json.tmp");
-        fs::write(&tmp, content)
-            .map_err(|e| format!("Failed to write temp settings file: {}", e))?;
-        atomic_replace_file(&tmp, &file)?;
-        Ok(())
-    }
-
-    pub fn save_settings(&self, settings: &AppSettings) -> Result<(), String> {
-        // 更新内存缓存
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.cache = Some(settings.clone());
-            inner.last_modified = Some(Instant::now());
-            
-            // 取消之前的防抖任务（如果存在）
-            if let Some(task) = inner.debounce_task.take() {
-                task.abort();
-            }
-            
-            // 启动新的防抖任务：5秒后写入文件
-            let file = self.get_settings_file();
-            let settings_clone = settings.clone();
-            let inner_clone = Arc::clone(&self.inner);
-            let task = tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                
-                // 检查是否仍然是最新的修改（防止在等待期间有新的修改）
-                let should_write = {
-                    let inner_guard = inner_clone.lock().unwrap();
-                    // 如果 last_modified 与当前时间差约等于 5 秒，说明这是应该写入的修改
-                    inner_guard.last_modified
-                        .map(|t| t.elapsed() >= Duration::from_secs(4))
-                        .unwrap_or(false)
-                };
-                
-                if should_write {
-                    // 写入文件
-                    if let Some(parent) = file.parent() {
-                        let _ = fs::create_dir_all(parent);
+            // 处理空文件
+            if content.trim().is_empty() {
+                for _ in 0..3 {
+                    std::thread::sleep(Duration::from_millis(20));
+                    content = fs::read_to_string(file)
+                        .map_err(|e| format!("Failed to read settings file: {}", e))?;
+                    if !content.trim().is_empty() {
+                        break;
                     }
-                    
-                    if let Ok(content) = serde_json::to_string_pretty(&settings_clone) {
+                }
+            }
+
+            // TODO: 落回到默认设置
+            if !content.trim().is_empty() {
+                match serde_json::from_str::<serde_json::Value>(&content) {
+                    Ok(json) => Some(json),
+                    Err(e) => {
+                        eprintln!("[Warn] Failed to parse settings JSON: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // 创建所有键的值（从 JSON 读取或使用默认值）
+        for key in all_keys {
+            let value = if let Some(ref json) = json_value {
+                Self::get_value_from_json(key, json).unwrap_or_else(|| Self::default_value(key))
+            } else {
+                Self::default_value(key)
+            };
+            cells.insert(key, TokioMutex::new(value));
+        }
+
+        // 如果文件不存在或为空，使用系统默认值覆盖壁纸相关设置
+        if json_value.is_none() {
+            let (style, transition) = Self::get_system_wallpaper_settings();
+            *cells.get_mut(&SettingKey::WallpaperRotationStyle).unwrap() =
+                TokioMutex::new(SettingValue::String(style));
+            *cells
+                .get_mut(&SettingKey::WallpaperRotationTransition)
+                .unwrap() = TokioMutex::new(SettingValue::String(transition));
+        }
+
+        Ok(cells)
+    }
+
+    fn get_value_from_json(key: SettingKey, json: &serde_json::Value) -> Option<SettingValue> {
+        // 兼容历史键名
+        let value = match key {
+            SettingKey::WallpaperStyleByMode => json
+                .get("wallpaperStyleByMode")
+                .or_else(|| json.get("wallpaper_style_by_mode")),
+            SettingKey::WallpaperTransitionByMode => json
+                .get("wallpaperTransitionByMode")
+                .or_else(|| json.get("wallpaper_transition_by_mode")),
+            _ => {
+                let key_str = Self::key_to_json_string(key);
+                json.get(&key_str)
+            }
+        }?;
+        Self::json_value_to_setting_value(key, value).ok()
+    }
+
+    fn json_value_to_setting_value(
+        key: SettingKey,
+        json: &serde_json::Value,
+    ) -> Result<SettingValue, String> {
+        // json 参数已经是值了，不需要再次查找
+        match key {
+            SettingKey::AutoLaunch
+            | SettingKey::AutoDeduplicate
+            | SettingKey::WallpaperRotationEnabled => {
+                Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
+            }
+            #[cfg(feature = "virtual-driver")]
+            SettingKey::AlbumDriveEnabled => {
+                Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
+            }
+            SettingKey::MaxConcurrentDownloads
+            | SettingKey::NetworkRetryCount
+            | SettingKey::WallpaperRotationIntervalMinutes => {
+                Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32))
+            }
+            SettingKey::ImageClickAction
+            | SettingKey::WallpaperRotationMode
+            | SettingKey::WallpaperRotationStyle
+            | SettingKey::WallpaperRotationTransition
+            | SettingKey::WallpaperMode => Ok(SettingValue::String(
+                json.as_str().unwrap_or("").to_string(),
+            )),
+            #[cfg(feature = "virtual-driver")]
+            SettingKey::AlbumDriveMountPoint => Ok(SettingValue::String(
+                json.as_str().unwrap_or("").to_string(),
+            )),
+            SettingKey::GalleryImageAspectRatio
+            | SettingKey::DefaultDownloadDir
+            | SettingKey::WallpaperEngineDir
+            | SettingKey::CurrentWallpaperImageId => match json {
+                serde_json::Value::String(s) if !s.trim().is_empty() => {
+                    Ok(SettingValue::OptionString(Some(s.clone())))
+                }
+                _ => Ok(SettingValue::OptionString(None)),
+            },
+            SettingKey::WallpaperRotationAlbumId => {
+                match json {
+                    serde_json::Value::String(s) => {
+                        // 空字符串表示全画廊轮播，需要保留
+                        Ok(SettingValue::OptionString(Some(s.clone())))
+                    }
+                    _ => Ok(SettingValue::OptionString(None)),
+                }
+            }
+            SettingKey::WallpaperStyleByMode | SettingKey::WallpaperTransitionByMode => {
+                let mut map = HashMap::new();
+                if let Some(obj) = json.as_object() {
+                    for (k, v) in obj {
+                        if let Some(s) = v.as_str() {
+                            map.insert(k.clone(), s.to_string());
+                        }
+                    }
+                }
+                Ok(SettingValue::HashMapStringString(map))
+            }
+            SettingKey::WindowState => {
+                if let Ok(ws) = serde_json::from_value::<WindowState>(json.clone()) {
+                    Ok(SettingValue::OptionWindowState(Some(ws)))
+                } else {
+                    Ok(SettingValue::OptionWindowState(None))
+                }
+            }
+        }
+    }
+
+    /// 序列化当前所有设置到 JSON
+    async fn serialize_to_json() -> Result<serde_json::Value, String> {
+        let cells = Self::cells();
+        let mut json_map = serde_json::Map::new();
+
+        // 按 SettingKey 顺序获取所有值
+        let keys: Vec<SettingKey> = cells.keys().cloned().collect();
+        for key in keys {
+            if let Some(cell) = cells.get(&key) {
+                let val = cell.lock().await;
+                let json_val = Self::setting_value_to_json(key, &val)?;
+                let key_str = Self::key_to_json_string(key);
+                json_map.insert(key_str, json_val);
+            }
+        }
+
+        Ok(serde_json::Value::Object(json_map))
+    }
+
+    fn key_to_json_string(key: SettingKey) -> String {
+        match key {
+            SettingKey::AutoLaunch => "autoLaunch".to_string(),
+            SettingKey::MaxConcurrentDownloads => "maxConcurrentDownloads".to_string(),
+            SettingKey::NetworkRetryCount => "networkRetryCount".to_string(),
+            SettingKey::ImageClickAction => "imageClickAction".to_string(),
+            SettingKey::GalleryImageAspectRatio => "galleryImageAspectRatio".to_string(),
+            SettingKey::AutoDeduplicate => "autoDeduplicate".to_string(),
+            SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
+            SettingKey::WallpaperEngineDir => "wallpaperEngineDir".to_string(),
+            SettingKey::WallpaperRotationEnabled => "wallpaperRotationEnabled".to_string(),
+            SettingKey::WallpaperRotationAlbumId => "wallpaperRotationAlbumId".to_string(),
+            SettingKey::WallpaperRotationIntervalMinutes => {
+                "wallpaperRotationIntervalMinutes".to_string()
+            }
+            SettingKey::WallpaperRotationMode => "wallpaperRotationMode".to_string(),
+            SettingKey::WallpaperRotationStyle => "wallpaperRotationStyle".to_string(),
+            SettingKey::WallpaperRotationTransition => "wallpaperRotationTransition".to_string(),
+            SettingKey::WallpaperStyleByMode => "wallpaperStyleByMode".to_string(),
+            SettingKey::WallpaperTransitionByMode => "wallpaperTransitionByMode".to_string(),
+            SettingKey::WallpaperMode => "wallpaperMode".to_string(),
+            SettingKey::WindowState => "windowState".to_string(),
+            SettingKey::CurrentWallpaperImageId => "currentWallpaperImageId".to_string(),
+            #[cfg(feature = "virtual-driver")]
+            SettingKey::AlbumDriveEnabled => "albumDriveEnabled".to_string(),
+            #[cfg(feature = "virtual-driver")]
+            SettingKey::AlbumDriveMountPoint => "albumDriveMountPoint".to_string(),
+        }
+    }
+
+    fn setting_value_to_json(
+        _key: SettingKey,
+        val: &SettingValue,
+    ) -> Result<serde_json::Value, String> {
+        match val {
+            SettingValue::Bool(b) => Ok(serde_json::Value::Bool(*b)),
+            SettingValue::U32(n) => Ok(serde_json::Value::Number((*n).into())),
+            SettingValue::String(s) => Ok(serde_json::Value::String(s.clone())),
+            SettingValue::OptionString(opt) => match opt {
+                Some(s) => Ok(serde_json::Value::String(s.clone())),
+                None => Ok(serde_json::Value::Null),
+            },
+            SettingValue::WindowState(ws) => serde_json::to_value(ws)
+                .map_err(|e| format!("Failed to serialize WindowState: {}", e)),
+            SettingValue::OptionWindowState(opt) => match opt {
+                Some(ws) => serde_json::to_value(ws)
+                    .map_err(|e| format!("Failed to serialize WindowState: {}", e)),
+                None => Ok(serde_json::Value::Null),
+            },
+            SettingValue::HashMapStringString(map) => {
+                let mut json_map = serde_json::Map::new();
+                for (k, v) in map {
+                    json_map.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
+                Ok(serde_json::Value::Object(json_map))
+            }
+        }
+    }
+
+    /// 发送设置变更事件
+    #[cfg(feature = "ipc-server")]
+    async fn emit_setting_change(key: SettingKey, value: &SettingValue) {
+        // 尝试通过 GlobalEmitter 发送事件
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            // 将 SettingKey 和 SettingValue 转换为 JSON
+            let key_str = Self::key_to_json_string(key);
+            let json_value = match Self::setting_value_to_json(key, value) {
+                Ok(v) => v,
+                Err(_) => return, // 序列化失败，跳过发送
+            };
+
+            // 构造 changes 对象
+            let changes = serde_json::json!({
+                key_str: json_value
+            });
+
+            // 在 daemon 模式下，GlobalEmitterType 就是 IpcEventEmitter
+            // 直接调用 emit_setting_change 方法
+            use crate::runtime::ipc_runtime::IpcEventEmitter;
+            // 由于 GlobalEmitterType 在 daemon 模式下就是 IpcEventEmitter，
+            // 我们可以通过类型别名来访问
+            let ipc_emitter: &IpcEventEmitter = emitter;
+            ipc_emitter.emit_setting_change(changes);
+        }
+    }
+
+    /// 发送设置变更事件（非 daemon 模式，使用通用事件）
+    #[cfg(not(feature = "ipc-server"))]
+    async fn emit_setting_change(_key: SettingKey, _value: &SettingValue) {
+        // 在非 daemon 模式下，可以尝试使用 GlobalEmitter 的 emit 方法
+        // 但这里暂时不实现，因为主要使用场景是 daemon
+    }
+
+    /// 触发防抖写盘
+    async fn trigger_debounce_save() -> Result<(), String> {
+        let state = Self::debounce_state();
+        let mut state_guard = state.write().await;
+        state_guard.last_modified = Some(Instant::now());
+
+        // 取消之前的任务
+        if let Some(task) = state_guard.debounce_task.take() {
+            task.abort();
+        }
+
+        let file = Self::get_settings_file();
+
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            let should_write = {
+                let state = Self::debounce_state();
+                let state_guard = state.read().await;
+                state_guard
+                    .last_modified
+                    .map(|t| t.elapsed() >= Duration::from_secs(4))
+                    .unwrap_or(false)
+            };
+
+            if should_write {
+                if let Some(parent) = file.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+
+                // 序列化并写入
+                if let Ok(json_val) = Self::serialize_to_json().await {
+                    if let Ok(content) = serde_json::to_string_pretty(&json_val) {
                         let tmp = file.with_extension("json.tmp");
                         if fs::write(&tmp, content).is_ok() {
                             let _ = atomic_replace_file(&tmp, &file);
                         }
                     }
                 }
-            });
-            inner.debounce_task = Some(task);
-        }
-        
+            }
+        });
+
+        state_guard.debounce_task = Some(task);
         Ok(())
     }
 
-    pub fn set_auto_launch(&self, enabled: bool) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.auto_launch = enabled;
-        self.save_settings(&settings)?;
+    /// 立即写入文件
+    async fn save_immediate() -> Result<(), String> {
+        let file = Self::get_settings_file();
+
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create settings directory: {}", e))?;
+        }
+
+        let json_val = Self::serialize_to_json().await?;
+        let content = serde_json::to_string_pretty(&json_val)
+            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+
+        let tmp = file.with_extension("json.tmp");
+        fs::write(&tmp, content)
+            .map_err(|e| format!("Failed to write temp settings file: {}", e))?;
+        atomic_replace_file(&tmp, &file)?;
+
+        Ok(())
+    }
+
+    // ========== Getter 方法 ==========
+
+    pub async fn get_auto_launch(&self) -> Result<bool, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::AutoLaunch) {
+            let val = cell.lock().await;
+            Ok(val.as_bool().unwrap_or(false))
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn get_max_concurrent_downloads(&self) -> Result<u32, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::MaxConcurrentDownloads) {
+            let val = cell.lock().await;
+            Ok(val.as_u32().unwrap_or(3))
+        } else {
+            Ok(3)
+        }
+    }
+
+    pub async fn get_network_retry_count(&self) -> Result<u32, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::NetworkRetryCount) {
+            let val = cell.lock().await;
+            Ok(val.as_u32().unwrap_or(2))
+        } else {
+            Ok(2)
+        }
+    }
+
+    pub async fn get_image_click_action(&self) -> Result<String, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::ImageClickAction) {
+            let val = cell.lock().await;
+            Ok(val.as_string().unwrap_or_else(|| "preview".to_string()))
+        } else {
+            Ok("preview".to_string())
+        }
+    }
+
+    pub async fn get_gallery_image_aspect_ratio(&self) -> Result<Option<String>, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::GalleryImageAspectRatio) {
+            let val = cell.lock().await;
+            Ok(val.as_option_string().unwrap_or(None))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_auto_deduplicate(&self) -> Result<bool, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::AutoDeduplicate) {
+            let val = cell.lock().await;
+            Ok(val.as_bool().unwrap_or(false))
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn get_default_download_dir(&self) -> Result<Option<String>, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::DefaultDownloadDir) {
+            let val = cell.lock().await;
+            Ok(val.as_option_string().unwrap_or(None))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_wallpaper_engine_dir(&self) -> Result<Option<String>, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperEngineDir) {
+            let val = cell.lock().await;
+            Ok(val.as_option_string().unwrap_or(None))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_wallpaper_rotation_enabled(&self) -> Result<bool, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationEnabled) {
+            let val = cell.lock().await;
+            Ok(val.as_bool().unwrap_or(false))
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn get_wallpaper_rotation_album_id(&self) -> Result<Option<String>, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationAlbumId) {
+            let val = cell.lock().await;
+            Ok(val.as_option_string().unwrap_or(None))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_wallpaper_rotation_interval_minutes(&self) -> Result<u32, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationIntervalMinutes) {
+            let val = cell.lock().await;
+            Ok(val.as_u32().unwrap_or(60))
+        } else {
+            Ok(60)
+        }
+    }
+
+    pub async fn get_wallpaper_rotation_mode(&self) -> Result<String, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationMode) {
+            let val = cell.lock().await;
+            Ok(val.as_string().unwrap_or_else(|| "random".to_string()))
+        } else {
+            Ok("random".to_string())
+        }
+    }
+
+    pub async fn get_wallpaper_rotation_style(&self) -> Result<String, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationStyle) {
+            let val = cell.lock().await;
+            Ok(val.as_string().unwrap_or_else(|| "fill".to_string()))
+        } else {
+            Ok("fill".to_string())
+        }
+    }
+
+    pub async fn get_wallpaper_rotation_transition(&self) -> Result<String, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationTransition) {
+            let val = cell.lock().await;
+            Ok(val
+                .as_string()
+                .unwrap_or_else(|| Self::default_wallpaper_rotation_transition()))
+        } else {
+            Ok(Self::default_wallpaper_rotation_transition())
+        }
+    }
+
+    pub async fn get_wallpaper_style_by_mode(&self) -> Result<HashMap<String, String>, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperStyleByMode) {
+            let val = cell.lock().await;
+            Ok(val.as_hashmap_string_string().unwrap_or_default())
+        } else {
+            Ok(HashMap::new())
+        }
+    }
+
+    pub async fn get_wallpaper_transition_by_mode(
+        &self,
+    ) -> Result<HashMap<String, String>, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperTransitionByMode) {
+            let val = cell.lock().await;
+            Ok(val.as_hashmap_string_string().unwrap_or_default())
+        } else {
+            Ok(HashMap::new())
+        }
+    }
+
+    pub async fn get_wallpaper_mode(&self) -> Result<String, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperMode) {
+            let val = cell.lock().await;
+            Ok(val
+                .as_string()
+                .unwrap_or_else(|| Self::default_wallpaper_mode()))
+        } else {
+            Ok(Self::default_wallpaper_mode())
+        }
+    }
+
+    pub async fn get_window_state(&self) -> Result<Option<WindowState>, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WindowState) {
+            let val = cell.lock().await;
+            Ok(val.as_option_window_state().unwrap_or(None))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_current_wallpaper_image_id(&self) -> Result<Option<String>, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::CurrentWallpaperImageId) {
+            let val = cell.lock().await;
+            Ok(val.as_option_string().unwrap_or(None))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[cfg(feature = "virtual-driver")]
+    pub async fn get_album_drive_enabled(&self) -> Result<bool, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::AlbumDriveEnabled) {
+            let val = cell.lock().await;
+            Ok(val.as_bool().unwrap_or(false))
+        } else {
+            Ok(false)
+        }
+    }
+
+    #[cfg(feature = "virtual-driver")]
+    pub async fn get_album_drive_mount_point(&self) -> Result<String, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::AlbumDriveMountPoint) {
+            let val = cell.lock().await;
+            Ok(val
+                .as_string()
+                .unwrap_or_else(|| Self::default_album_drive_mount_point()))
+        } else {
+            Ok(Self::default_album_drive_mount_point())
+        }
+    }
+
+    // ========== Setter 方法 ==========
+
+    pub async fn set_auto_launch(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::AutoLaunch) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::AutoLaunch, &new_value).await;
+        Self::trigger_debounce_save().await?;
 
         // 设置开机启动
         #[cfg(target_os = "windows")]
@@ -798,61 +1062,73 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             }
         }
 
-        #[cfg(not(target_os = "windows"))]
-        {
-            // 其他平台的实现可以在这里添加
+        Ok(())
+    }
+
+    pub async fn set_max_concurrent_downloads(&self, count: u32) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::U32(count);
+        if let Some(cell) = cells.get(&SettingKey::MaxConcurrentDownloads) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
         }
-
+        Self::emit_setting_change(SettingKey::MaxConcurrentDownloads, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_max_concurrent_downloads(&self, count: u32) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.max_concurrent_downloads = count;
-        self.save_settings(&settings)?;
+    pub async fn set_network_retry_count(&self, count: u32) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::U32(count);
+        if let Some(cell) = cells.get(&SettingKey::NetworkRetryCount) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::NetworkRetryCount, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_network_retry_count(&self, count: u32) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.network_retry_count = count;
-        self.save_settings(&settings)?;
+    pub async fn set_image_click_action(&self, action: String) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::String(action);
+        if let Some(cell) = cells.get(&SettingKey::ImageClickAction) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::ImageClickAction, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_image_click_action(&self, action: String) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.image_click_action = action;
-        self.save_settings(&settings)?;
-        Ok(())
-    }
-
-    pub fn set_gallery_image_aspect_ratio_match_window(&self, enabled: bool) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.gallery_image_aspect_ratio_match_window = enabled;
-        self.save_settings(&settings)?;
-        Ok(())
-    }
-
-    pub fn set_gallery_image_aspect_ratio(
+    pub async fn set_gallery_image_aspect_ratio(
         &self,
         aspect_ratio: Option<String>,
     ) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.gallery_image_aspect_ratio = aspect_ratio;
-        self.save_settings(&settings)?;
+        let cells = Self::cells();
+        let new_value = SettingValue::OptionString(aspect_ratio);
+        if let Some(cell) = cells.get(&SettingKey::GalleryImageAspectRatio) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::GalleryImageAspectRatio, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_auto_deduplicate(&self, enabled: bool) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.auto_deduplicate = enabled;
-        self.save_settings(&settings)?;
+    pub async fn set_auto_deduplicate(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::AutoDeduplicate) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::AutoDeduplicate, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_default_download_dir(&self, dir: Option<String>) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
+    pub async fn set_default_download_dir(&self, dir: Option<String>) -> Result<(), String> {
         let normalized = dir.and_then(|s| {
             let t = s.trim().to_string();
             if t.is_empty() {
@@ -862,7 +1138,7 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             }
         });
 
-        // 若提供了目录，则做基本校验：存在且为目录；不存在则尝试创建
+        // 若提供了目录，则做基本校验
         if let Some(ref path) = normalized {
             let p = PathBuf::from(path);
             if p.exists() {
@@ -874,13 +1150,18 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             }
         }
 
-        settings.default_download_dir = normalized;
-        self.save_settings(&settings)?;
+        let cells = Self::cells();
+        let new_value = SettingValue::OptionString(normalized.clone());
+        if let Some(cell) = cells.get(&SettingKey::DefaultDownloadDir) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::DefaultDownloadDir, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_wallpaper_engine_dir(&self, dir: Option<String>) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
+    pub async fn set_wallpaper_engine_dir(&self, dir: Option<String>) -> Result<(), String> {
         let normalized = dir.and_then(|s| {
             let t = s.trim().to_string();
             if t.is_empty() {
@@ -897,17 +1178,20 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             }
         }
 
-        settings.wallpaper_engine_dir = normalized;
-        self.save_settings(&settings)?;
+        let cells = Self::cells();
+        let new_value = SettingValue::OptionString(normalized.clone());
+        if let Some(cell) = cells.get(&SettingKey::WallpaperEngineDir) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::WallpaperEngineDir, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    /// 推导 Wallpaper Engine 的 myprojects 目录（用于自动导入 Web 工程）
-    ///
-    /// - 支持用户选择的是：WE 根目录 / WE\\projects / WE\\projects\\myprojects / 甚至直接选 myprojects
-    pub fn get_wallpaper_engine_myprojects_dir(&self) -> Result<Option<String>, String> {
-        let settings = self.get_settings()?;
-        let Some(ref base) = settings.wallpaper_engine_dir else {
+    pub async fn get_wallpaper_engine_myprojects_dir(&self) -> Result<Option<String>, String> {
+        let base = self.get_wallpaper_engine_dir().await?;
+        let Some(ref base) = base else {
             return Ok(None);
         };
 
@@ -940,7 +1224,6 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             if mp.exists() && mp.is_dir() {
                 return Ok(Some(mp.to_string_lossy().to_string()));
             }
-            // 没有就尝试创建（WE 通常会自动建，但我们也可以提前建）
             fs::create_dir_all(&mp).map_err(|e| format!("创建 myprojects 目录失败: {}", e))?;
             return Ok(Some(mp.to_string_lossy().to_string()));
         }
@@ -956,113 +1239,200 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
             return Ok(Some(mp.to_string_lossy().to_string()));
         }
 
-        // 如果找不到 projects，就不强行创建，避免用户选错目录导致乱写
         Ok(None)
     }
 
-    pub fn set_wallpaper_rotation_enabled(&self, enabled: bool) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.wallpaper_rotation_enabled = enabled;
-        self.save_settings(&settings)?;
+    pub async fn set_wallpaper_rotation_enabled(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationEnabled) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::WallpaperRotationEnabled, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_wallpaper_rotation_album_id(&self, album_id: Option<String>) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.wallpaper_rotation_album_id = album_id;
-        self.save_settings(&settings)?;
+    pub async fn set_wallpaper_rotation_album_id(
+        &self,
+        album_id: Option<String>,
+    ) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::OptionString(album_id);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationAlbumId) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::WallpaperRotationAlbumId, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_wallpaper_rotation_interval_minutes(&self, minutes: u32) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.wallpaper_rotation_interval_minutes = minutes;
-        self.save_settings(&settings)?;
+    pub async fn set_wallpaper_rotation_interval_minutes(
+        &self,
+        minutes: u32,
+    ) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::U32(minutes);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationIntervalMinutes) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::WallpaperRotationIntervalMinutes, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_wallpaper_rotation_mode(&self, mode: String) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.wallpaper_rotation_mode = mode;
-        self.save_settings(&settings)?;
+    pub async fn set_wallpaper_rotation_mode(&self, mode: String) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::String(mode);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationMode) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::WallpaperRotationMode, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_wallpaper_style(&self, style: String) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.wallpaper_rotation_style = style;
-        // 同步写入“当前模式”的缓存，确保退出应用也能记住每个模式的最后值
-        let mode = settings.wallpaper_mode.clone();
-        settings
-            .wallpaper_style_by_mode
-            .insert(mode, settings.wallpaper_rotation_style.clone());
-        self.save_settings(&settings)?;
+    pub async fn set_wallpaper_style(&self, style: String) -> Result<(), String> {
+        let mode = self.get_wallpaper_mode().await?;
+        let cells = Self::cells();
+
+        // 更新 style
+        let new_style_value = SettingValue::String(style.clone());
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationStyle) {
+            let mut val = cell.lock().await;
+            *val = new_style_value.clone();
+        }
+
+        // 更新 style_by_mode
+        let mut style_by_mode_value = None;
+        if let Some(cell) = cells.get(&SettingKey::WallpaperStyleByMode) {
+            let mut val = cell.lock().await;
+            if let SettingValue::HashMapStringString(ref mut map) = *val {
+                map.insert(mode.clone(), style);
+                style_by_mode_value = Some(SettingValue::HashMapStringString(map.clone()));
+            }
+        }
+
+        Self::emit_setting_change(SettingKey::WallpaperRotationStyle, &new_style_value).await;
+        if let Some(ref v) = style_by_mode_value {
+            Self::emit_setting_change(SettingKey::WallpaperStyleByMode, v).await;
+        }
+
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_wallpaper_rotation_transition(&self, transition: String) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.wallpaper_rotation_transition = transition;
-        // 同步写入“当前模式”的缓存
-        let mode = settings.wallpaper_mode.clone();
-        settings
-            .wallpaper_transition_by_mode
-            .insert(mode, settings.wallpaper_rotation_transition.clone());
-        self.save_settings(&settings)?;
+    pub async fn set_wallpaper_rotation_transition(
+        &self,
+        transition: String,
+    ) -> Result<(), String> {
+        let mode = self.get_wallpaper_mode().await?;
+        let cells = Self::cells();
+
+        // 更新 transition
+        let new_transition_value = SettingValue::String(transition.clone());
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationTransition) {
+            let mut val = cell.lock().await;
+            *val = new_transition_value.clone();
+        }
+
+        // 更新 transition_by_mode
+        let mut transition_by_mode_value = None;
+        if let Some(cell) = cells.get(&SettingKey::WallpaperTransitionByMode) {
+            let mut val = cell.lock().await;
+            if let SettingValue::HashMapStringString(ref mut map) = *val {
+                map.insert(mode.clone(), transition);
+                transition_by_mode_value = Some(SettingValue::HashMapStringString(map.clone()));
+            }
+        }
+
+        Self::emit_setting_change(
+            SettingKey::WallpaperRotationTransition,
+            &new_transition_value,
+        )
+        .await;
+        if let Some(ref v) = transition_by_mode_value {
+            Self::emit_setting_change(SettingKey::WallpaperTransitionByMode, v).await;
+        }
+
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_wallpaper_mode(&self, mode: String) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.wallpaper_mode = mode;
-        self.save_settings(&settings)?;
+    pub async fn set_wallpaper_mode(&self, mode: String) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::String(mode);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperMode) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::WallpaperMode, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    /// 保存窗口状态
-    pub fn save_window_state(&self, window_state: WindowState) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.window_state = Some(window_state);
-        self.save_settings(&settings)?;
+    pub async fn save_window_state(&self, window_state: WindowState) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::OptionWindowState(Some(window_state));
+        if let Some(cell) = cells.get(&SettingKey::WindowState) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::WindowState, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    /// 获取窗口状态
-    pub fn get_window_state(&self) -> Result<Option<WindowState>, String> {
-        let settings = self.get_settings()?;
-        Ok(settings.window_state)
-    }
-
-    /// 清除窗口状态（用于清理数据时）
-    pub fn clear_window_state(&self) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.window_state = None;
-        self.save_settings(&settings)?;
+    pub async fn clear_window_state(&self) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::OptionWindowState(None);
+        if let Some(cell) = cells.get(&SettingKey::WindowState) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::WindowState, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    #[cfg(feature = "virtual-drive")]
-    pub fn set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
-        settings.album_drive_enabled = enabled;
-        self.save_settings(&settings)?;
+    #[cfg(feature = "virtual-driver")]
+    pub async fn set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::AlbumDriveEnabled) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::AlbumDriveEnabled, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    #[cfg(feature = "virtual-drive")]
-    pub fn set_album_drive_mount_point(&self, mount_point: String) -> Result<(), String> {
+    #[cfg(feature = "virtual-driver")]
+    pub async fn set_album_drive_mount_point(&self, mount_point: String) -> Result<(), String> {
         let t = mount_point.trim().to_string();
         if t.is_empty() {
             return Err("挂载点不能为空".to_string());
         }
-        let mut settings = self.get_settings()?;
-        settings.album_drive_mount_point = t;
-        self.save_settings(&settings)?;
+        let cells = Self::cells();
+        let new_value = SettingValue::String(t.clone());
+        if let Some(cell) = cells.get(&SettingKey::AlbumDriveMountPoint) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::AlbumDriveMountPoint, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 
-    pub fn set_current_wallpaper_image_id(&self, image_id: Option<String>) -> Result<(), String> {
-        let mut settings = self.get_settings()?;
+    pub async fn set_current_wallpaper_image_id(
+        &self,
+        image_id: Option<String>,
+    ) -> Result<(), String> {
         let normalized = image_id.and_then(|s| {
             let t = s.trim().to_string();
             if t.is_empty() {
@@ -1071,8 +1441,132 @@ defaults read com.apple.desktop Background 2>/dev/null | grep -o '"defaultImageP
                 Some(t)
             }
         });
-        settings.current_wallpaper_image_id = normalized;
-        self.save_settings(&settings)?;
+        let cells = Self::cells();
+        let new_value = SettingValue::OptionString(normalized);
+        if let Some(cell) = cells.get(&SettingKey::CurrentWallpaperImageId) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::CurrentWallpaperImageId, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
+    }
+
+    /// 切换模式前调用：交换 style/transition
+    pub async fn swap_style_transition_for_mode_switch(
+        &self,
+        old_mode: &str,
+        new_mode: &str,
+    ) -> Result<(String, String), String> {
+        // 获取当前值
+        let cur_style = self.get_wallpaper_rotation_style().await?;
+        let cur_transition = self.get_wallpaper_rotation_transition().await?;
+
+        // 缓存旧模式的值
+        let mut style_by_mode = self.get_wallpaper_style_by_mode().await?;
+        let mut transition_by_mode = self.get_wallpaper_transition_by_mode().await?;
+        style_by_mode.insert(old_mode.to_string(), cur_style.clone());
+        transition_by_mode.insert(old_mode.to_string(), cur_transition.clone());
+
+        // 尽量保留当前值
+        let mut next_style = Self::normalize_style_for_mode(new_mode, &cur_style);
+        let mut next_transition = Self::normalize_transition_for_mode(new_mode, &cur_transition);
+
+        // 如果 normalize 改变了值，尝试用新模式缓存兜底
+        if next_style != cur_style {
+            if let Some(v) = style_by_mode.get(new_mode).cloned() {
+                next_style = Self::normalize_style_for_mode(new_mode, &v);
+            }
+        }
+        if next_transition != cur_transition {
+            if let Some(v) = transition_by_mode.get(new_mode).cloned() {
+                next_transition = Self::normalize_transition_for_mode(new_mode, &v);
+            }
+        }
+
+        // 更新当前值和缓存
+        style_by_mode.insert(new_mode.to_string(), next_style.clone());
+        transition_by_mode.insert(new_mode.to_string(), next_transition.clone());
+
+        let cells = Self::cells();
+        let new_style_value = SettingValue::String(next_style.clone());
+        let new_transition_value = SettingValue::String(next_transition.clone());
+        let new_style_by_mode_value = SettingValue::HashMapStringString(style_by_mode.clone());
+        let new_transition_by_mode_value =
+            SettingValue::HashMapStringString(transition_by_mode.clone());
+
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationStyle) {
+            let mut val = cell.lock().await;
+            *val = new_style_value.clone();
+        }
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationTransition) {
+            let mut val = cell.lock().await;
+            *val = new_transition_value.clone();
+        }
+        if let Some(cell) = cells.get(&SettingKey::WallpaperStyleByMode) {
+            let mut val = cell.lock().await;
+            *val = new_style_by_mode_value.clone();
+        }
+        if let Some(cell) = cells.get(&SettingKey::WallpaperTransitionByMode) {
+            let mut val = cell.lock().await;
+            *val = new_transition_by_mode_value.clone();
+        }
+
+        Self::emit_setting_change(SettingKey::WallpaperRotationStyle, &new_style_value).await;
+        Self::emit_setting_change(
+            SettingKey::WallpaperRotationTransition,
+            &new_transition_value,
+        )
+        .await;
+        Self::emit_setting_change(SettingKey::WallpaperStyleByMode, &new_style_by_mode_value).await;
+        Self::emit_setting_change(
+            SettingKey::WallpaperTransitionByMode,
+            &new_transition_by_mode_value,
+        )
+        .await;
+        Self::trigger_debounce_save().await?;
+
+        Ok((next_style, next_transition))
+    }
+
+    fn normalize_transition_for_mode(mode: &str, transition: &str) -> String {
+        if mode == "native" {
+            match transition {
+                "none" | "fade" => transition.to_string(),
+                _ => "none".to_string(),
+            }
+        } else {
+            transition.to_string()
+        }
+    }
+
+    fn normalize_style_for_mode(mode: &str, style: &str) -> String {
+        if mode != "native" {
+            return style.to_string();
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            return style.to_string();
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let supported = ["fill", "center"];
+            if supported.contains(&style) {
+                return style.to_string();
+            }
+            return "fill".to_string();
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            return style.to_string();
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        {
+            "fill".to_string()
+        }
     }
 }

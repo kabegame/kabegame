@@ -1,13 +1,13 @@
 use crate::crawler::DownloadQueue;
 use crate::plugin::PluginManager;
-use crate::runtime::EventEmitter;
+use crate::runtime::{global_emitter::GlobalEmitter, EventEmitter};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,16 +39,18 @@ pub struct TaskStatusEvent {
 
 #[derive(Clone)]
 pub struct TaskScheduler {
-    plugin_manager: Arc<PluginManager>,
+    // PluginManager 现在是全局单例，不需要存储
     download_queue: Arc<DownloadQueue>,
     queue: Arc<(Mutex<VecDeque<CrawlTaskRequest>>, Condvar)>,
     running_workers: Arc<AtomicUsize>,
 }
 
+// 全局 TaskScheduler 单例
+static TASK_SCHEDULER: OnceLock<TaskScheduler> = OnceLock::new();
+
 impl TaskScheduler {
-    pub fn new(plugin_manager: Arc<PluginManager>, download_queue: Arc<DownloadQueue>) -> Self {
+    pub fn new(download_queue: Arc<DownloadQueue>) -> Self {
         let s = Self {
-            plugin_manager,
             download_queue,
             queue: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
             running_workers: Arc::new(AtomicUsize::new(0)),
@@ -60,14 +62,11 @@ impl TaskScheduler {
 
     fn start_workers(&self, count: usize) {
         for _ in 0..count {
-            let plugin_manager = Arc::clone(&self.plugin_manager);
             let download_queue = Arc::clone(&self.download_queue);
             let queue = Arc::clone(&self.queue);
             let running = Arc::clone(&self.running_workers);
             // worker_loop 是阻塞函数（使用 Condvar::wait），必须在 blocking 线程池中运行
-            tokio::task::spawn_blocking(move || {
-                worker_loop(plugin_manager, download_queue, queue, running)
-            });
+            tokio::task::spawn_blocking(move || worker_loop(download_queue, queue, running));
         }
     }
 
@@ -76,10 +75,10 @@ impl TaskScheduler {
     /// - 若当前 10 个 worker 都忙，则任务保持 pending 并排队等待
     pub fn enqueue(&self, req: CrawlTaskRequest) -> Result<(), String> {
         // 先保证 DB 状态为 pending（前端也会写，但这里做幂等兜底）
-        let storage = self.download_queue.storage_arc();
-        let emitter = self.download_queue.emitter_arc();
-        let _ = persist_task_status(&storage, &req.task_id, "pending", None, None, None);
-        emit_task_status(&*emitter, &req.task_id, "pending", None, None, None);
+        let storage = Storage::global();
+        let emitter = GlobalEmitter::global();
+        let _ = persist_task_status(storage, &req.task_id, "pending", None, None, None);
+        emit_task_status(emitter, &req.task_id, "pending", None, None, None);
 
         let (m, cv) = &*self.queue;
         let mut guard = m.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -97,7 +96,7 @@ impl TaskScheduler {
     /// - pending：直接重新入队
     /// - running：认为上次运行被中断，改成 pending 并重新入队（避免永久卡死）
     pub fn restore_pending_tasks(&self) -> Result<usize, String> {
-        let storage = self.download_queue.storage_arc();
+        let storage = Storage::global();
         let tasks = storage.get_all_tasks()?;
         let mut restored = 0usize;
 
@@ -139,7 +138,7 @@ impl TaskScheduler {
 
     /// 失败图片重试：在 daemon 侧直接复用 DownloadQueue
     pub fn retry_failed_image(&self, failed_id: i64) -> Result<(), String> {
-        let storage = self.download_queue.storage_arc();
+        let storage = Storage::global();
         let item = storage
             .get_task_failed_image_by_id(failed_id)?
             .ok_or_else(|| "失败图片记录不存在".to_string())?;
@@ -181,6 +180,27 @@ impl TaskScheduler {
         self.download_queue.set_desired_concurrency(desired);
         self.download_queue.notify_all_waiting();
     }
+
+    /// 初始化全局 TaskScheduler（必须在首次使用前调用）
+    pub fn init_global(download_queue: Arc<DownloadQueue>) -> Result<(), String> {
+        let scheduler = Self::new(download_queue);
+        TASK_SCHEDULER
+            .set(scheduler)
+            .map_err(|_| "TaskScheduler already initialized".to_string())?;
+        Ok(())
+    }
+
+    /// 获取全局 TaskScheduler 引用
+    pub fn global() -> &'static TaskScheduler {
+        TASK_SCHEDULER
+            .get()
+            .expect("TaskScheduler not initialized. Call TaskScheduler::init_global() first.")
+    }
+
+    /// 获取 DownloadQueue（用于需要 DownloadQueue 的地方）
+    pub fn download_queue(&self) -> Arc<DownloadQueue> {
+        Arc::clone(&self.download_queue)
+    }
 }
 
 fn now_ms() -> u64 {
@@ -191,7 +211,7 @@ fn now_ms() -> u64 {
 }
 
 fn emit_task_status(
-    emitter: &dyn EventEmitter,
+    _emitter: &dyn EventEmitter,
     task_id: &str,
     status: &str,
     start_time: Option<u64>,
@@ -199,10 +219,10 @@ fn emit_task_status(
     error: Option<String>,
 ) {
     // IPC 侧：统一用 task-status 事件
-    emitter.emit_task_status(task_id, status, None, error.as_deref(), None);
+    GlobalEmitter::global().emit_task_status(task_id, status, None, error.as_deref(), None);
 
     // 兼容：仍广播一个 generic 事件，payload 与旧前端一致
-    emitter.emit(
+    GlobalEmitter::global().emit(
         "task-status",
         serde_json::json!(TaskStatusEvent {
             task_id: task_id.to_string(),
@@ -241,17 +261,17 @@ fn persist_task_status(
 }
 
 fn worker_loop(
-    plugin_manager: Arc<PluginManager>,
     download_queue: Arc<DownloadQueue>,
     queue: Arc<(Mutex<VecDeque<CrawlTaskRequest>>, Condvar)>,
     running: Arc<AtomicUsize>,
 ) {
     // 每个 task worker 线程初始化一次 Rhai Engine，并在多任务之间复用
-    let mut rhai_runtime = crate::plugin::rhai::RhaiCrawlerRuntime::new(Arc::clone(&download_queue));
+    let mut rhai_runtime =
+        crate::plugin::rhai::RhaiCrawlerRuntime::new(Arc::clone(&download_queue));
 
-    let storage = download_queue.storage_arc();
-    let settings = download_queue.settings_arc();
-    let emitter = download_queue.emitter_arc();
+    let storage = Storage::global();
+    // Settings 现在是全局单例
+    // emitter 现在是全局单例，不需要局部变量
 
     loop {
         let req = {
@@ -275,10 +295,23 @@ fn worker_loop(
         if download_queue.is_task_canceled(&req.task_id) {
             let end = now_ms();
             let e = "Task canceled".to_string();
-            emitter.emit_task_error(&req.task_id, &e);
-            let _ =
-                persist_task_status(&storage, &req.task_id, "canceled", None, Some(end), Some(e.clone()));
-            emit_task_status(&*emitter, &req.task_id, "canceled", None, Some(end), Some(e));
+            GlobalEmitter::global().emit_task_error(&req.task_id, &e);
+            let _ = persist_task_status(
+                &storage,
+                &req.task_id,
+                "canceled",
+                None,
+                Some(end),
+                Some(e.clone()),
+            );
+            emit_task_status(
+                GlobalEmitter::global(),
+                &req.task_id,
+                "canceled",
+                None,
+                Some(end),
+                Some(e),
+            );
             continue;
         }
 
@@ -287,14 +320,18 @@ fn worker_loop(
         // running
         let start = now_ms();
         let _ = persist_task_status(&storage, &req.task_id, "running", Some(start), None, None);
-        emit_task_status(&*emitter, &req.task_id, "running", Some(start), None, None);
+        emit_task_status(
+            GlobalEmitter::global(),
+            &req.task_id,
+            "running",
+            Some(start),
+            None,
+            None,
+        );
 
         let res = run_task(
-            &plugin_manager,
             &storage,
-            &settings,
             Arc::clone(&download_queue),
-            emitter.clone(),
             &req,
             &mut rhai_runtime,
         );
@@ -304,7 +341,7 @@ fn worker_loop(
                 let end = now_ms();
                 if download_queue.is_task_canceled(&req.task_id) {
                     let e = "Task canceled".to_string();
-                    emitter.emit_task_error(&req.task_id, &e);
+                    GlobalEmitter::global().emit_task_error(&req.task_id, &e);
                     let _ = persist_task_status(
                         &storage,
                         &req.task_id,
@@ -313,10 +350,31 @@ fn worker_loop(
                         Some(end),
                         Some(e.clone()),
                     );
-                    emit_task_status(&*emitter, &req.task_id, "canceled", None, Some(end), Some(e));
+                    emit_task_status(
+                        GlobalEmitter::global(),
+                        &req.task_id,
+                        "canceled",
+                        None,
+                        Some(end),
+                        Some(e),
+                    );
                 } else {
-                    let _ = persist_task_status(&storage, &req.task_id, "completed", None, Some(end), None);
-                    emit_task_status(&*emitter, &req.task_id, "completed", None, Some(end), None);
+                    let _ = persist_task_status(
+                        &storage,
+                        &req.task_id,
+                        "completed",
+                        None,
+                        Some(end),
+                        None,
+                    );
+                    emit_task_status(
+                        GlobalEmitter::global(),
+                        &req.task_id,
+                        "completed",
+                        None,
+                        Some(end),
+                        None,
+                    );
                 }
             }
             Err(e) => {
@@ -324,10 +382,24 @@ fn worker_loop(
                 let end = now_ms();
                 let status = if is_canceled { "canceled" } else { "failed" };
 
-                emitter.emit_task_error(&req.task_id, &e);
+                GlobalEmitter::global().emit_task_error(&req.task_id, &e);
 
-                let _ = persist_task_status(&storage, &req.task_id, status, None, Some(end), Some(e.clone()));
-                emit_task_status(&*emitter, &req.task_id, status, None, Some(end), Some(e));
+                let _ = persist_task_status(
+                    &storage,
+                    &req.task_id,
+                    status,
+                    None,
+                    Some(end),
+                    Some(e.clone()),
+                );
+                emit_task_status(
+                    GlobalEmitter::global(),
+                    &req.task_id,
+                    status,
+                    None,
+                    Some(end),
+                    Some(e),
+                );
             }
         }
 
@@ -336,15 +408,16 @@ fn worker_loop(
 }
 
 fn run_task(
-    plugin_manager: &PluginManager,
     storage: &Storage,
-    settings_state: &Settings,
+    // PluginManager 现在是全局单例，不需要传递
+    // Settings 现在是全局单例，不需要传递
     download_queue: Arc<DownloadQueue>,
-    emitter: Arc<dyn EventEmitter>,
+    // emitter 现在是全局单例，不需要传递
     req: &CrawlTaskRequest,
     rhai_runtime: &mut crate::plugin::rhai::RhaiCrawlerRuntime,
 ) -> Result<(), String> {
-    emitter.emit_task_log(
+    let plugin_manager = PluginManager::global();
+    GlobalEmitter::global().emit_task_log(
         &req.task_id,
         "info",
         &format!(
@@ -360,16 +433,17 @@ fn run_task(
         .resolve_plugin_for_task_request(&req.plugin_id, req.plugin_file_path.as_deref())?;
 
     // 如果指定了输出目录，使用指定目录；否则使用默认下载目录（若配置）或回退到 Storage 的 images_dir
+    // 注意：run_task 是同步函数，但需要调用 async getter，这里使用 block_on
     let images_dir = if let Some(ref dir) = req.output_dir {
         PathBuf::from(dir)
     } else {
-        match settings_state
-            .get_settings()
-            .ok()
-            .and_then(|s| s.default_download_dir)
-        {
-            Some(dir) => PathBuf::from(dir),
-            None => storage.get_images_dir(),
+        let handle = tokio::runtime::Handle::try_current();
+        match handle {
+            Ok(handle) => match handle.block_on(Settings::global().get_default_download_dir()) {
+                Ok(Some(dir)) => PathBuf::from(dir),
+                _ => storage.get_images_dir(),
+            },
+            Err(_) => storage.get_images_dir(),
         }
     };
 
@@ -391,7 +465,9 @@ fn run_task(
     let var_defs = if let Some(path) = plugin_file_path.as_ref() {
         plugin_manager.get_plugin_vars_from_file(path)?
     } else {
-        plugin_manager.get_plugin_vars(&plugin.id)?.unwrap_or_default()
+        plugin_manager
+            .get_plugin_vars(&plugin.id)?
+            .unwrap_or_default()
     };
     let merged_config = super::build_effective_user_config_from_var_defs(&var_defs, user_cfg);
 
@@ -410,5 +486,3 @@ fn run_task(
         req.http_headers.clone(),
     )
 }
-
-

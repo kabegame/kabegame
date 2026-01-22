@@ -1,4 +1,4 @@
-use kabegame_core::ipc::EventBroadcaster;
+use kabegame_core::ipc::{DaemonEvent, EventBroadcaster};
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
 use std::collections::HashSet;
@@ -17,10 +17,9 @@ impl DedupeService {
         Self::default()
     }
 
-    pub fn start_batched(
+    pub async fn start_batched(
         self: Arc<Self>,
         storage: Arc<Storage>,
-        settings: Arc<Settings>,
         broadcaster: Arc<EventBroadcaster>,
         delete_files: bool,
         batch_size: usize,
@@ -44,7 +43,6 @@ impl DedupeService {
             let res = run_dedupe_batched(
                 &handle,
                 storage,
-                settings,
                 broadcaster,
                 delete_files,
                 batch_size,
@@ -89,9 +87,15 @@ fn emit_dedupe_progress(
     removed: usize,
     batch_index: usize,
 ) {
-    let bc = bc.clone();
     handle.block_on(async move {
-        kabegame_core::ipc::broadcaster::emit_dedupe_progress(&bc, processed, total, removed, batch_index).await;
+        kabegame_core::ipc::broadcaster::emit_dedupe_progress(
+            &bc,
+            processed,
+            total,
+            removed,
+            batch_index,
+        )
+        .await;
     });
 }
 
@@ -103,29 +107,17 @@ fn emit_dedupe_finished(
     removed: usize,
     canceled: bool,
 ) {
-    let bc = bc.clone();
     handle.block_on(async move {
-        kabegame_core::ipc::broadcaster::emit_dedupe_finished(&bc, processed, total, removed, canceled).await;
-    });
-}
-
-fn emit_generic(
-    handle: &tokio::runtime::Handle,
-    bc: &EventBroadcaster,
-    event: &str,
-    payload: serde_json::Value,
-) {
-    let event = event.to_string();
-    handle.block_on(async move {
-        bc.broadcast(kabegame_core::ipc::events::DaemonEvent::Generic { event, payload })
-            .await;
+        kabegame_core::ipc::broadcaster::emit_dedupe_finished(
+            &bc, processed, total, removed, canceled,
+        )
+        .await;
     });
 }
 
 fn run_dedupe_batched(
     handle: &tokio::runtime::Handle,
     storage: Arc<Storage>,
-    settings: Arc<Settings>,
     broadcaster: Arc<EventBroadcaster>,
     delete_files: bool,
     batch_size: usize,
@@ -140,21 +132,13 @@ fn run_dedupe_batched(
     let mut cursor: Option<kabegame_core::storage::dedupe::DedupeCursor> = None;
 
     // 当前壁纸 id：若被移除则清空（与历史行为保持一致）
-    let mut current_wallpaper_id = settings
-        .get_settings()
-        .ok()
-        .and_then(|s| s.current_wallpaper_image_id);
+    let mut current_wallpaper_id = handle.block_on(async {
+        Settings::global().get_current_wallpaper_image_id().await.ok().flatten()
+    });
 
     loop {
         if cancel.load(Ordering::Relaxed) {
-            emit_dedupe_finished(
-                handle,
-                &broadcaster,
-                processed,
-                total,
-                removed_total,
-                true,
-            );
+            emit_dedupe_finished(handle, &broadcaster, processed, total, removed_total, true);
             return Ok(());
         }
 
@@ -182,26 +166,24 @@ fn run_dedupe_batched(
             if delete_files {
                 storage.batch_delete_images(&remove_ids)?;
                 // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
-                emit_generic(
-                    handle,
-                    &broadcaster,
-                    "images-change",
-                    serde_json::json!({ "reason": "delete", "imageIds": remove_ids.clone() }),
-                );
+                broadcaster.broadcast_sync(DaemonEvent::ImagesChange {
+                    reason: "delete".to_string(),
+                    image_ids: remove_ids.clone(),
+                });
             } else {
                 storage.batch_remove_images(&remove_ids)?;
                 // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
-                emit_generic(
-                    handle,
-                    &broadcaster,
-                    "images-change",
-                    serde_json::json!({ "reason": "remove", "imageIds": remove_ids.clone() }),
-                );
+                broadcaster.broadcast_sync(DaemonEvent::ImagesChange {
+                    reason: "remove".to_string(),
+                    image_ids: remove_ids.clone(),
+                });
             }
 
             if let Some(cur) = current_wallpaper_id.as_deref() {
                 if remove_ids.iter().any(|id| id == cur) {
-                    let _ = settings.set_current_wallpaper_image_id(None);
+                    let _ = handle.block_on(async {
+                        Settings::global().set_current_wallpaper_image_id(None).await
+                    });
                     current_wallpaper_id = None;
                 }
             }
@@ -209,25 +191,16 @@ fn run_dedupe_batched(
             removed_total += remove_ids.len();
         }
 
-        emit_dedupe_progress(
-            handle,
-            &broadcaster,
+        broadcaster.broadcast_sync(DaemonEvent::DedupeProgress {
             processed,
             total,
-            removed_total,
+            removed: removed_total,
             batch_index,
-        );
+        });
+
         batch_index += 1;
     }
 
-    emit_dedupe_finished(
-        handle,
-        &broadcaster,
-        processed,
-        total,
-        removed_total,
-        false,
-    );
+    emit_dedupe_finished(handle, &broadcaster, processed, total, removed_total, false);
     Ok(())
 }
-

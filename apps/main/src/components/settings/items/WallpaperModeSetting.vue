@@ -111,10 +111,7 @@ const handleChange = async (mode: string) => {
         const result = await waitForSwitchComplete;
         if (result.success) {
             ElMessage.success("壁纸模式已切换");
-            // 后端在切换时可能会按“模式缓存”恢复 style/transition，这里强制刷新以保持 UI 同步
-            try {
-                await settingsStore.loadAll();
-            } catch { }
+            // 设置变更会通过 setting-change 事件自动更新 UI
         } else {
             const errorMsg = result.error || "切换模式失败";
             ElMessage.error(`切换模式失败: ${errorMsg}`);

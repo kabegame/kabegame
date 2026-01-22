@@ -528,10 +528,10 @@ fn write_we_web_project(
     })
 }
 
-fn resolve_options_from_settings(
-    settings: &crate::settings::AppSettings,
+async fn resolve_options_from_settings(
     override_opt: Option<WeExportOptions>,
-) -> WeExportOptions {
+) -> Result<WeExportOptions, String> {
+    let settings = Settings::global();
     let o = override_opt.unwrap_or(WeExportOptions {
         style: None,
         transition: None,
@@ -539,36 +539,28 @@ fn resolve_options_from_settings(
         order: None,
     });
 
-    WeExportOptions {
-        style: Some(
-            o.style
-                .unwrap_or_else(|| settings.wallpaper_rotation_style.clone()),
-        ),
-        transition: Some(
-            o.transition
-                .unwrap_or_else(|| settings.wallpaper_rotation_transition.clone()),
-        ),
-        interval_ms: Some(
-            o.interval_ms
-                .unwrap_or_else(|| settings.wallpaper_rotation_interval_minutes as u64 * 60_000),
-        ),
-        order: Some(
-            o.order
-                .unwrap_or_else(|| settings.wallpaper_rotation_mode.clone()),
-        ),
-    }
+    let style = settings.get_wallpaper_rotation_style().await?;
+    let transition = settings.get_wallpaper_rotation_transition().await?;
+    let interval_minutes = settings.get_wallpaper_rotation_interval_minutes().await?;
+    let mode = settings.get_wallpaper_rotation_mode().await?;
+
+    Ok(WeExportOptions {
+        style: Some(o.style.unwrap_or(style)),
+        transition: Some(o.transition.unwrap_or(transition)),
+        interval_ms: Some(o.interval_ms.unwrap_or(interval_minutes as u64 * 60_000)),
+        order: Some(o.order.unwrap_or(mode)),
+    })
 }
 
-pub fn export_album_to_we_project(
+pub async fn export_album_to_we_project(
     album_id: String,
     album_name: String,
     output_parent_dir: String,
     options: Option<WeExportOptions>,
     storage: &Storage,
-    settings: &Settings,
+    _settings: &Settings,
 ) -> Result<WeExportResult, String> {
-    let app_settings = settings.get_settings()?;
-    let options = resolve_options_from_settings(&app_settings, options);
+    let options = resolve_options_from_settings(options).await?;
 
     let images: Vec<ImageInfo> = storage.get_album_images(&album_id)?;
     let image_paths: Vec<String> = images.into_iter().map(|i| i.local_path).collect();
@@ -580,15 +572,14 @@ pub fn export_album_to_we_project(
     write_we_web_project(&output_parent_dir, &title, &image_paths, &options)
 }
 
-pub fn export_images_to_we_project(
+pub async fn export_images_to_we_project(
     image_paths: Vec<String>,
     title: Option<String>,
     output_parent_dir: String,
     options: Option<WeExportOptions>,
-    settings: &Settings,
+    _settings: &Settings,
 ) -> Result<WeExportResult, String> {
-    let app_settings = settings.get_settings()?;
-    let options = resolve_options_from_settings(&app_settings, options);
+    let options = resolve_options_from_settings(options).await?;
 
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -3,15 +3,15 @@
   "description": "让你的桌面充满二次元气息的壁纸管理器！收集、管理、轮播，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元壁纸资源~",
   "type": "module",
   "scripts": {
-    "dev": "node scripts/run.js dev",
-    "start": "node scripts/run.js start",
-    "build": "node scripts/run.js build",
+    "dev": "bun scripts/run.js dev",
+    "start": "bun scripts/run.js start",
+    "build": "bun scripts/run.js build",
     "typecheck": "vue-tsc",
-    "dev:frontend-main": "pnpm -C apps/main dev",
-    "dev:frontend-plugin-editor": "pnpm -C apps/plugin-editor dev",
-    "build:frontend-cli": "pnpm -C apps/cli build",
-    "build:frontend-main": "pnpm -C apps/main build",
-    "build:frontend-plugin-editor": "pnpm -C apps/plugin-editor build",
+    "dev:frontend-main": "bun --cwd apps/main dev",
+    "dev:frontend-plugin-editor": "bun --cwd apps/plugin-editor dev",
+    "build:frontend-cli": "bun --cwd apps/cli build",
+    "build:frontend-main": "bun --cwd apps/main build",
+    "build:frontend-plugin-editor": "bun --cwd apps/plugin-editor build",
     "package-plugin": "nx run src-crawler-plugins:package",
     "package-plugin:local": "nx run src-crawler-plugins:package-local",
     "clean-nx-cache": "node scripts/clean-nx-cache.js",
@@ -34,7 +34,7 @@
   },
   "devDependencies": {
     "@nx/devkit": "^20.0.0",
-    "@tauri-apps/cli": "^2.0",
+    "@types/bun": "^1.3.6",
     "@types/lodash-es": "^4.17.12",
     "@vitejs/plugin-vue": "^5.0.4",
     "@vue/tsconfig": "^0.5.1",
@@ -51,7 +51,6 @@
     "vue-tsc": "^2.0.6"
   },
   "engines": {
-    "node": ">= 16.0.0 <= 22.0.0",
-    "pnpm": "^9.x"
+    "bun": ">= 1.3.0"
   }
 }

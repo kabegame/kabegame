@@ -22,8 +22,7 @@ dist-*
 .DS_Store
 
 # Tauri
-src-tauri/target
-src-tauri/Cargo.lock
+target
 src-tauri/app-main/resources/plugins/*.kgpg
 src-tauri/*/gen/*
 src-tauri/app-main/resources/bin/*
@@ -36,7 +35,6 @@ src-tauri/icons/*
 
 # development data
 /data
-/src-tauri/resources/plugins/*.kgpg
 
 # Nx
 .nx/cache

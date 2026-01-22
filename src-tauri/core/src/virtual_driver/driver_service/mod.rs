@@ -31,23 +31,20 @@ pub trait VirtualDriveServiceTrait: Default + Send + Sync {
     fn unmount(&self) -> Result<bool, String>;
 }
 
-#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
+#[cfg(all(feature = "virtual-driver", target_os = "windows"))]
 mod windows;
 
-#[cfg(not(all(feature = "virtual-drive-windows", target_os = "windows")))]
+#[cfg(not(all(feature = "virtual-driver", target_os = "windows")))]
 mod stub;
 
-#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
+#[cfg(all(feature = "virtual-driver", target_os = "windows"))]
 pub use windows::VirtualDriveService;
 
-#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
+#[cfg(all(feature = "virtual-driver", target_os = "windows"))]
 pub use windows::{join_mount_subdir, notify_explorer_dir_changed_path};
 
-#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
-pub use windows::dokan_unmount_by_mount_point;
-
-#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
+#[cfg(all(feature = "virtual-driver", target_os = "windows"))]
 pub use windows::normalize_mount_point;
 
-#[cfg(not(all(feature = "virtual-drive-windows", target_os = "windows")))]
+#[cfg(not(all(feature = "virtual-driver", target_os = "windows")))]
 pub use stub::VirtualDriveService;

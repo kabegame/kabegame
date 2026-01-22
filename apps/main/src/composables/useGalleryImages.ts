@@ -280,6 +280,7 @@ export function useGalleryImages(
     cancelLoadAll,
     jumpToBigPage,
     removeFromUiCacheByIds,
+    removeFromCacheByIds,
     recreateImageUrl,
     cleanup,
     totalImages,

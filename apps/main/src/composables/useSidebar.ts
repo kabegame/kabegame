@@ -16,10 +16,10 @@ export function useSidebar() {
   const updateSidebarDwmBlur = async () => {
     // 非 Tauri 环境直接跳过
     try {
-      await invoke("set_main_sidebar_dwm_blur", { sidebarWidth: isCollapsed.value ? 64 : 200 });
+      await invoke("set_main_sidebar_blur", { sidebarWidth: isCollapsed.value ? 64 : 200 });
     } catch (e) {
       // 之前这里吞掉错误会导致"没效果也没报错"，所以至少在控制台给个提示
-      console.warn("[DWM] set_main_sidebar_dwm_blur failed:", e);
+      console.warn("set_main_sidebar_blur failed:", e);
     }
   };
 

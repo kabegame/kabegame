@@ -398,8 +398,8 @@ pub fn plugin_editor_import_kgpg(file_path: String) -> Result<PluginEditorImport
         plugin_id = id;
     }
 
-    // 创建临时 PluginManager 实例来读取文件（这些方法不依赖状态）
-    let plugin_manager = PluginManager::new();
+    // 使用全局 PluginManager 读取文件（这些方法不依赖状态）
+    let plugin_manager = PluginManager::global();
     let manifest = plugin_manager.read_plugin_manifest(&p)?;
     let config = plugin_manager
         .read_plugin_config_public(&p)

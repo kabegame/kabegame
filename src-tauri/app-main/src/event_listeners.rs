@@ -1,118 +1,128 @@
-//! 事件监听器模块（重新导出 core 中的实现）
+//! 事件监听器模块
 //!
-//! 为了保持向后兼容，这里重新导出 core 中的实现。
-//! 新的应用应该直接使用 `kabegame_core::ipc::init_event_listeners`。
+//! 统一的事件转发机制：客户端注册感兴趣的事件类型，daemon 只推送这些事件。
+//! 收到事件后：
+//! - 如果注册了回调，则执行回调（不自动转发）
+//! - 如果没有注册回调，则通过默认 emitter 自动转发到前端 Vue
+//!
+//! 壁纸相关事件（WallpaperUpdateImage/Style/Transition）被拦截处理，不再转发到前端。
 
-use kabegame_core::ipc::{on_task_log, on_download_state, on_task_status, on_task_progress, on_dedupe_progress, on_dedupe_finished, on_setting_change, start_listening};
-use kabegame_core::ipc::events::{get_global_listener, DaemonEvent};
+use kabegame_core::ipc::events::{get_global_listener, DaemonEventKind};
+use kabegame_core::ipc::start_listening;
+use serde::Deserialize;
 use tauri::{AppHandle, Emitter};
+
+/// 定义 app-main 不需要的事件（排除列表）
+/// 例如 DownloadProgress 太频繁，main 不需要
+const EXCLUDED_EVENTS: &[DaemonEventKind] = &[
+    // 可以在这里添加不需要的事件类型
+    // DaemonEventKind::DownloadProgress, // 如果不需要下载进度事件
+];
+
+/// 壁纸图片更新事件 payload
+#[derive(Debug, Deserialize)]
+struct WallpaperUpdateImagePayload {
+    image_path: String,
+}
+
+/// 壁纸样式更新事件 payload
+#[derive(Debug, Deserialize)]
+struct WallpaperUpdateStylePayload {
+    style: String,
+}
+
+/// 壁纸过渡效果更新事件 payload
+#[derive(Debug, Deserialize)]
+struct WallpaperUpdateTransitionPayload {
+    transition: String,
+}
 
 /// 初始化事件监听器（在 Tauri 应用启动时调用）
 pub async fn init_event_listeners(app: AppHandle) {
-    // 转发通用事件（Generic）：允许 daemon 发送任意事件名给前端（例如：images-change）
-    {
-        let app_for_generic = app.clone();
-        get_global_listener()
-            .on(move |event| {
-                if let DaemonEvent::Generic { event, payload } = event {
-                    let _ = app_for_generic.emit(&event, payload);
-                }
-            })
-            .await;
-    }
+    // 计算感兴趣的事件 = ALL - EXCLUDED
+    let interested: Vec<DaemonEventKind> = DaemonEventKind::ALL
+        .iter()
+        .filter(|k| !EXCLUDED_EVENTS.contains(k))
+        .copied()
+        .collect();
 
-    // 监听任务日志
-    let app_for_task_log = app.clone();
-    on_task_log(move |task_id, level, message| {
-        // 转发到前端
-        let _ = app_for_task_log.emit("task-log", serde_json::json!({
-            "taskId": task_id,
-            "level": level,
-            "message": message,
-        }));
-    }).await;
+    eprintln!(
+        "[event_listeners] app-main 感兴趣的事件类型: {:?}",
+        interested
+    );
 
-    // 监听下载状态
-    let app_for_download_state = app.clone();
-    on_download_state(move |event| {
-        let _ = app_for_download_state.emit("download-state", serde_json::json!({
-            "taskId": event.task_id,
-            "url": event.url,
-            "startTime": event.start_time,
-            "pluginId": event.plugin_id,
-            "state": event.state,
-            "error": event.error,
-        }));
-    }).await;
+    let listener = get_global_listener();
 
-    // 监听任务状态
-    let app_for_task_status = app.clone();
-    on_task_status(move |event| {
-        let _ = app_for_task_status.emit("task-status", serde_json::json!({
-            "taskId": event.task_id,
-            "status": event.status,
-            "progress": event.progress,
-            "error": event.error,
-            "currentWallpaper": event.current_wallpaper,
-        }));
-    }).await;
+    // 设置默认 emitter：无回调时自动转发到前端
+    let app_clone = app.clone();
+    listener
+        .set_default_emitter(move |event_name, payload| {
+            let _ = app_clone.emit(event_name, payload);
+        })
+        .await;
 
-    // 监听任务进度（add_progress 驱动）
-    let app_for_task_progress = app.clone();
-    on_task_progress(move |event| {
-        let _ = app_for_task_progress.emit("task-progress", serde_json::json!({
-            "taskId": event.task_id,
-            "progress": event.progress,
-        }));
-    }).await;
+    // 注册壁纸相关事件回调（拦截处理，不转发到前端）
 
-    // 监听去重进度
-    let app_for_dedupe_progress = app.clone();
-    on_dedupe_progress(move |event| {
-        let _ = app_for_dedupe_progress.emit("dedupe-progress", serde_json::json!({
-            "processed": event.processed,
-            "total": event.total,
-            "removed": event.removed,
-            "batchIndex": event.batch_index,
-        }));
-    }).await;
+    // 注册壁纸相关事件回调（拦截处理，不转发到前端）
 
-    // 监听去重完成
-    let app_for_dedupe_finished = app.clone();
-    on_dedupe_finished(move |event| {
-        let _ = app_for_dedupe_finished.emit("dedupe-finished", serde_json::json!({
-            "processed": event.processed,
-            "total": event.total,
-            "removed": event.removed,
-            "canceled": event.canceled,
-        }));
-    }).await;
+    // WallpaperUpdateImage: 更新壁纸图片
+    listener
+        .on(DaemonEventKind::WallpaperUpdateImage, move |payload| {
+            if let Ok(event) = serde_json::from_value::<WallpaperUpdateImagePayload>(payload) {
+                let controller = crate::wallpaper::WallpaperController::global();
+                tauri::async_runtime::spawn(async move {
+                    // 获取当前样式和过渡效果
+                    let client = crate::daemon_client::get_ipc_client();
+                    let style = client
+                        .settings_get_wallpaper_rotation_style()
+                        .await
+                        .unwrap_or_else(|_| "fill".to_string());
 
-    // 监听设置变更
-    let app_for_setting_change = app.clone();
-    on_setting_change(move |event| {
-        let _ = app_for_setting_change.emit("setting-change", event.changes);
-    }).await;
+                    // 设置壁纸
+                    if let Err(e) = controller.set_wallpaper(&event.image_path, &style).await {
+                        eprintln!("[event_listeners] 设置壁纸失败: {}", e);
+                    }
+                });
+            }
+        })
+        .await;
 
-    // 启动事件监听（每 500ms 轮询一次）
-    if let Err(e) = start_listening().await {
+    // WallpaperUpdateStyle: 更新壁纸样式
+    listener
+        .on(DaemonEventKind::WallpaperUpdateStyle, move |payload| {
+            if let Ok(event) = serde_json::from_value::<WallpaperUpdateStylePayload>(payload) {
+                let controller = crate::wallpaper::WallpaperController::global();
+                tauri::async_runtime::spawn(async move {
+                    if let Ok(manager) = controller.active_manager().await {
+                        if let Err(e) = manager.set_style(&event.style, true).await {
+                            eprintln!("[event_listeners] 设置壁纸样式失败: {}", e);
+                        }
+                    }
+                });
+            }
+        })
+        .await;
+
+    // WallpaperUpdateTransition: 更新壁纸过渡效果
+    listener
+        .on(DaemonEventKind::WallpaperUpdateTransition, move |payload| {
+            if let Ok(event) = serde_json::from_value::<WallpaperUpdateTransitionPayload>(payload) {
+                let controller = crate::wallpaper::WallpaperController::global();
+                tauri::async_runtime::spawn(async move {
+                    if let Ok(manager) = controller.active_manager().await {
+                        if let Err(e) = manager.set_transition(&event.transition, true).await {
+                            eprintln!("[event_listeners] 设置壁纸过渡效果失败: {}", e);
+                        }
+                    }
+                });
+            }
+        })
+        .await;
+
+    // 启动事件监听（只订阅感兴趣的事件）
+    if let Err(e) = start_listening(&interested).await {
         eprintln!("Failed to start event listener: {}", e);
     }
-}
-
-// ==================== Tauri 命令示例 ====================
-
-/// Tauri 命令：手动触发事件监听
-#[tauri::command]
-pub async fn start_event_listener() -> Result<(), String> {
-    start_listening().await
-}
-
-/// Tauri 命令：停止事件监听
-#[tauri::command]
-pub async fn stop_event_listener() -> Result<(), String> {
-    kabegame_core::ipc::stop_listening().await;
-    Ok(())
 }
 
 // ==================== Vue/TypeScript 使用示例 ====================
@@ -155,7 +165,7 @@ onMounted(async () => {
 onUnmounted(async () => {
   // 停止事件监听
   await invoke('stop_event_listener');
-  
+
   // 清理监听器
   unlistenTaskLog?.();
   unlistenDownloadState?.();

@@ -43,7 +43,7 @@ impl Provider for DateGroupProvider {
         out.insert(0, FsEntry::dir(DIR_RANGE));
 
         // VD 专用：目录说明文件
-        #[cfg(feature = "virtual-drive")]
+        #[cfg(feature = "virtual-driver")]
         {
             // NOTE: 必须带扩展名，否则某些图片查看器/Explorer 枚举同目录文件时会尝试“打开”该说明文件并弹出错误。
             let display_name = "这里按抓取时间归档图片（按月份分组）.txt";
@@ -67,7 +67,7 @@ impl Provider for DateGroupProvider {
         Some(Arc::new(DateImagesProvider::new(date.year_month)))
     }
 
-    #[cfg(feature = "virtual-drive")]
+    #[cfg(feature = "virtual-driver")]
     fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
         let display_name = "这里按抓取时间归档图片（按月份分组）.txt";
         if name != display_name {

@@ -1,7 +1,9 @@
 use crate::plugin::Plugin;
-use crate::runtime::EventEmitter;
-use rhai::{Dynamic, Engine, Map, Position, Scope};
+use crate::runtime::{global_emitter::GlobalEmitter, EventEmitter};
+use crate::settings::Settings;
+use crate::storage::Storage;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use rhai::{Dynamic, Engine, Map, Position, Scope};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -127,12 +129,29 @@ fn get_task_id(task_id_holder: &Shared<String>) -> String {
     lock_or_inner(task_id_holder).clone()
 }
 
-fn get_network_retry_count(dq: &crate::crawler::DownloadQueue) -> u32 {
-    dq.settings_arc()
-        .get_settings()
-        .ok()
-        .map(|s| s.network_retry_count)
-        .unwrap_or(0)
+async fn get_network_retry_count_async(_dq: &crate::crawler::DownloadQueue) -> u32 {
+    // 注意：这个函数现在需要 async，但调用它的地方可能还是同步的
+    // 我们需要在调用处使用 block_on 或改为 async
+    Settings::global()
+        .get_network_retry_count()
+        .await
+        .unwrap_or(2)
+}
+
+fn get_network_retry_count(_dq: &crate::crawler::DownloadQueue) -> u32 {
+    // 临时实现：使用 block_on（需要 runtime handle）
+    // 更好的方式是让调用链也变成 async
+    let handle = tokio::runtime::Handle::try_current();
+    if let Ok(handle) = handle {
+        handle.block_on(async {
+            Settings::global()
+                .get_network_retry_count()
+                .await
+                .unwrap_or(2)
+        })
+    } else {
+        2 // 默认值
+    }
 }
 
 fn backoff_ms_for_attempt(attempt: u32) -> u64 {
@@ -292,7 +311,7 @@ fn build_reqwest_header_map(
 pub struct RhaiCrawlerRuntime {
     pub(crate) engine: Engine,
     download_queue: Arc<crate::crawler::DownloadQueue>,
-    emitter: Arc<dyn EventEmitter>,
+    // emitter 现在是全局单例，不需要存储
     page_stack: Shared<Arc<Mutex<Vec<(String, String)>>>>,
     images_dir: Shared<PathBuf>,
     plugin_id: Shared<String>,
@@ -305,7 +324,6 @@ pub struct RhaiCrawlerRuntime {
 impl RhaiCrawlerRuntime {
     pub fn new(download_queue: Arc<crate::crawler::DownloadQueue>) -> Self {
         let mut engine = Engine::new();
-        let emitter = download_queue.emitter_arc();
         let page_stack: Shared<Arc<Mutex<Vec<(String, String)>>>> =
             Arc::new(Mutex::new(Arc::new(Mutex::new(Vec::new()))));
         let images_dir: Shared<PathBuf> = Arc::new(Mutex::new(PathBuf::new()));
@@ -318,26 +336,30 @@ impl RhaiCrawlerRuntime {
 
         // 将 Rhai 的 print/debug 输出重定向为 task-log 事件，供前端实时展示
         {
-            let emitter_for_print = Arc::clone(&emitter);
             let task_id_for_print = Arc::clone(&task_id);
             engine.on_print(move |s: &str| {
+                use crate::runtime::EventEmitter;
                 let tid = match task_id_for_print.lock() {
                     Ok(g) => g.clone(),
                     Err(e) => e.into_inner().clone(),
                 };
-                emitter_for_print.emit_task_log(&tid, "print", s);
+                GlobalEmitter::global().emit_task_log(&tid, "print", s);
             });
         }
         {
-            let emitter_for_debug = Arc::clone(&emitter);
             let task_id_for_debug = Arc::clone(&task_id);
             engine.on_debug(move |s: &str, src: Option<&str>, pos: Position| {
+                use crate::runtime::EventEmitter;
                 let tid = match task_id_for_debug.lock() {
                     Ok(g) => g.clone(),
                     Err(e) => e.into_inner().clone(),
                 };
                 let src = src.unwrap_or("unknown");
-                emitter_for_debug.emit_task_log(&tid, "debug", &format!("{src} @ {pos:?} > {s}"));
+                GlobalEmitter::global().emit_task_log(
+                    &tid,
+                    "debug",
+                    &format!("{src} @ {pos:?} > {s}"),
+                );
             });
         }
 
@@ -356,7 +378,6 @@ impl RhaiCrawlerRuntime {
         Self {
             engine,
             download_queue,
-            emitter,
             page_stack,
             images_dir,
             plugin_id,
@@ -494,8 +515,13 @@ pub fn register_crawler_functions(
             };
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
-                let result =
-                    http_get_text_with_retry(&dq_for_http, &task_id_for_http, &url_clone, "to", &headers_for_http);
+                let result = http_get_text_with_retry(
+                    &dq_for_http,
+                    &task_id_for_http,
+                    &url_clone,
+                    "to",
+                    &headers_for_http,
+                );
                 let _ = tx.send(result);
             });
             let html = rx
@@ -1187,7 +1213,9 @@ pub fn register_crawler_functions(
             let final_progress = *current;
 
             // 通过事件发送进度更新
-            dq_handle.emitter_arc().emit_task_progress(&task_id, final_progress);
+            dq_handle
+                .emitter_arc()
+                .emit_task_progress(&task_id, final_progress);
 
             Ok(())
         },
@@ -1254,7 +1282,7 @@ pub fn register_crawler_functions(
 
             // 检查任务图片数量限制（最多10000张）
             const MAX_TASK_IMAGES: usize = 10000;
-            let storage = dq_handle.storage_arc();
+            let storage = Storage::global();
             match storage.get_task_image_ids(&task_id) {
                 Ok(image_ids) => {
                     if image_ids.len() >= MAX_TASK_IMAGES {
@@ -1384,7 +1412,7 @@ pub fn execute_crawler_script_with_runtime(
         output_album_id,
         http_headers.unwrap_or_default(),
     );
-    runtime.emitter.emit_task_log(
+    GlobalEmitter::global().emit_task_log(
         task_id,
         "info",
         &format!("开始执行脚本（pluginId={plugin_id}, taskId={task_id}）"),
@@ -1475,13 +1503,15 @@ pub fn execute_crawler_script_with_runtime(
             let dump_text = build_rhai_scope_dump_json(plugin_id, task_id, &scope, e.as_ref());
             let dump_text = serde_json::to_string_pretty(&dump_text).ok();
 
-            // 1) 保存到任务表（供 UI “确认”）
+            // 1) 保存到任务表（供 UI "确认"）
             if let Some(ref text) = dump_text {
-                let storage = runtime.download_queue.storage_arc();
+                let storage = Storage::global();
                 if let Err(err) = storage.set_task_rhai_dump(task_id, text) {
-                    runtime
-                        .emitter
-                        .emit_task_log(task_id, "warn", &format!("Rhai dump 保存到任务表失败：{err}"));
+                    GlobalEmitter::global().emit_task_log(
+                        task_id,
+                        "warn",
+                        &format!("Rhai dump 保存到任务表失败：{err}"),
+                    );
                 }
             }
 
@@ -1492,7 +1522,7 @@ pub fn execute_crawler_script_with_runtime(
                         Ok(p) => Some(p),
                         Err(dump_err) => {
                             let msg = format!("Rhai 脚本失败：生成变量 dump 文件失败：{dump_err}");
-                            runtime.emitter.emit_task_log(task_id, "warn", &msg);
+                            GlobalEmitter::global().emit_task_log(task_id, "warn", &msg);
                             None
                         }
                     }
@@ -1509,7 +1539,7 @@ pub fn execute_crawler_script_with_runtime(
                 if let Some(p) = dump_path {
                     msg.push_str(&format!("\nScope dump: {}", p.display()));
                 }
-                runtime.emitter.emit_task_log(task_id, "error", &msg);
+                GlobalEmitter::global().emit_task_log(task_id, "error", &msg);
                 msg
             } else {
                 eprintln!("Script execution error: {}", e);
@@ -1517,12 +1547,12 @@ pub fn execute_crawler_script_with_runtime(
                 if let Some(p) = dump_path {
                     msg.push_str(&format!("\nScope dump: {}", p.display()));
                 }
-                runtime.emitter.emit_task_log(task_id, "error", &msg);
+                GlobalEmitter::global().emit_task_log(task_id, "error", &msg);
                 msg
             }
         })?;
 
-    runtime.emitter.emit_task_log(
+    GlobalEmitter::global().emit_task_log(
         task_id,
         "info",
         "脚本执行完成：图片应已通过 download_image() 入队",

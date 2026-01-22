@@ -19,26 +19,55 @@
 import { fileURLToPath } from "url";
 import path from "path";
 import { Command } from "commander";
+import { BuildSystem } from './build-system.js';
+
+export class Cmd {
+  static DEV = 'dev';
+  static START = 'start';
+  static BUILD = 'build';
+
+  constructor(cmd) {
+    this.cmd = cmd;
+  }
+
+  get isDev() {
+    return this.cmd === Cmd.DEV
+  }
+
+  get isStart() {
+    return this.cmd === Cmd.START
+  }
+
+  get isBuild() {
+    return this.cmd === Cmd.BUILD
+  }
+}
+
 
 // 保留对 run.js 中仍使用的函数的引用（dev/start 命令）
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+const buildSystem = new BuildSystem();
+
+/**
+ * 构建命令的固定执行流程
+ */
 async function build(options) {
-  const { BuildSystem } = await import("./build-system.js");
-  const buildSystem = new BuildSystem();
-  await buildSystem.run("build", options);
+  buildSystem.build(options);
 }
 
+/**
+ * dev 命令的固定执行流程
+ */
 async function dev(options) {
-  const { BuildSystem } = await import("./build-system.js");
-  const buildSystem = new BuildSystem();
-  await buildSystem.run("dev", options);
+  buildSystem.dev(options)
 }
 
+/**
+ * start 命令的固定执行流程
+ */
 async function start(options) {
-  const { BuildSystem } = await import("./build-system.js");
-  const buildSystem = new BuildSystem();
-  await buildSystem.run("start", options);
+  buildSystem.start(options)
 }
 
 // 创建 Commander 程序
@@ -65,7 +94,9 @@ program
   )
   .option("--verbose", "显示详细输出", false)
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
-  .action(async (options) => {
+  .argument("[args...]", "剩余参数（放在 -- 之后）")
+  .action(async (args, options) => {
+    options.args = args || [];
     await dev(options);
   });
 
@@ -80,7 +111,7 @@ program
   )
   .option(
     "--mode <mode>",
-    "构建模式：normal 或 local（仅影响插件预打包与内置列表）",
+    "构建模式：normal、local（仅影响插件预打包与内置列表）或 light（轻量模式，不使用 virtual-driver feature）",
     "normal"
   )
   .option(
@@ -88,7 +119,9 @@ program
     "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）"
   )
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
-  .action(async (options) => {
+  .argument("[args...]", "剩余参数（放在 -- 之后）")
+  .action(async (args, options) => {
+    options.args = args || [];
     await start(options);
   });
 
@@ -103,16 +136,19 @@ program
   )
   .option(
     "--mode <mode>",
-    "构建模式：normal（一般版本，带商店源）或 local（无商店版本，无商店安装包）",
+    "构建模式：normal（一般版本，带商店源）、local（无商店版本，无商店安装包）或 light（轻量模式，不使用 virtual-driver feature）",
     "normal"
   )
   .option(
     "--desktop <desktop>",
     "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）"
   )
-  .action(async (options) => {
+  .argument("[args...]", "剩余参数（放在 -- 之后）")
+  .action(async (args, options) => {
+    options.args = args || [];
     await build(options);
   });
 
 // 解析命令行参数
 program.parse();
+

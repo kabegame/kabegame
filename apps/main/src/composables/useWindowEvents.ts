@@ -28,15 +28,17 @@ export function useWindowEvents() {
 
     // 监听窗口最小化事件 - 修复壁纸窗口 Z-order（防止覆盖桌面图标）
     try {
-      const currentWindow = getCurrentWebviewWindow();
-      minimizeUnlisten = await currentWindow.listen("tauri://window-minimized", async () => {
-        // 窗口最小化时，修复壁纸窗口 Z-order
-        try {
-          await invoke("fix_wallpaper_zorder");
-        } catch (error) {
-          // 忽略错误（非 Windows 或壁纸窗口不存在时）
-        }
-      });
+      if (__WINDOWS__) {
+        const currentWindow = getCurrentWebviewWindow();
+        minimizeUnlisten = await currentWindow.listen("tauri://window-minimized", async () => {
+          // 窗口最小化时，修复壁纸窗口 Z-order
+          try {
+            await invoke("fix_wallpaper_zorder");
+          } catch (error) {
+            // 忽略错误（非 Windows 或壁纸窗口不存在时）
+          }
+        });
+      }
     } catch (error) {
       console.error("注册窗口最小化事件监听失败:", error);
     }

@@ -9,7 +9,7 @@
 //!   2) 画册重命名：将新路径 key 写入旧路径的 descriptor（B 策略），旧 key 允许成为幽灵
 //! - “找不到 key” 时：按最长前缀回退到已知 provider，然后 `list()` 刷新 child keys
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use lru::LruCache;
 use sled::Db;
@@ -49,6 +49,9 @@ pub struct ProviderRuntime {
     lru: Mutex<LruCache<String, Arc<dyn Provider>>>,
 }
 
+// 全局单例
+static PROVIDER_RT: OnceLock<ProviderRuntime> = OnceLock::new();
+
 impl ProviderRuntime {
     pub fn new(cfg: ProviderCacheConfig) -> Result<Self, String> {
         let db = sled::open(&cfg.db_dir).map_err(|e| format!("open sled failed: {}", e))?;
@@ -59,6 +62,23 @@ impl ProviderRuntime {
             db,
             lru: Mutex::new(LruCache::new(cap)),
         })
+    }
+
+    /// 初始化全局 ProviderRuntime（必须在首次使用前调用）
+    pub fn init_global(cfg: ProviderCacheConfig) -> Result<(), String> {
+        let rt = Self::new(cfg)?;
+        PROVIDER_RT
+            .set(rt)
+            .map_err(|_| "ProviderRuntime already initialized".to_string())?;
+        Ok(())
+    }
+
+    /// 获取全局 ProviderRuntime 引用
+    #[inline]
+    pub fn global() -> &'static ProviderRuntime {
+        PROVIDER_RT
+            .get()
+            .expect("ProviderRuntime not initialized. Call ProviderRuntime::init_global() first.")
     }
 
     fn normalize_seg(seg: &str) -> String {

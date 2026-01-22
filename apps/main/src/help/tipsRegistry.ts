@@ -8,11 +8,11 @@ import TipPluginImport from "@/help/tips/plugins/TipPluginImport.vue";
 import TipPluginUsage from "@/help/tips/plugins/TipPluginUsage.vue";
 import TipEasterEggTurtleComplaint from "@/help/tips/easter-egg/TipEasterEggTurtleComplaint.vue";
 import TipTrayIntroduction from "@/help/tips/tray/TipTrayIntroduction.vue";
-import TipVirtualDriveBasics from "@/help/tips/virtual-drive/TipVirtualDriveBasics.vue";
-import TipVirtualDriveDirectories from "@/help/tips/virtual-drive/TipVirtualDriveDirectories.vue";
+import TipVirtualDriveBasics from "@/help/tips/virtual-driver/TipVirtualDriveBasics.vue";
+import TipVirtualDriveDirectories from "@/help/tips/virtual-driver/TipVirtualDriveDirectories.vue";
 import TipPluginEditor from "@/help/tips/plugin-editor/TipPluginEditor.vue";
-import TipCommandLineBasics from "@/help/tips/virtual-drive/TipCommandLineBasics.vue";
-import TipCommandLineExamples from "@/help/tips/virtual-drive/TipCommandLineExamples.vue";
+import TipCommandLineBasics from "@/help/tips/virtual-driver/TipCommandLineBasics.vue";
+import TipCommandLineExamples from "@/help/tips/virtual-driver/TipCommandLineExamples.vue";
 import TipAlbumsIntroduction from "@/help/tips/albums/TipAlbumsIntroduction.vue";
 import TipWallpaperBasic from "@/help/tips/wallpaper/TipWallpaperBasic.vue";
 import TipWallpaperRotation from "@/help/tips/wallpaper/TipWallpaperRotation.vue";
@@ -27,7 +27,7 @@ export type TipCategoryId =
   | "plugins"
   | "easter-egg"
   | "tray"
-  | "virtual-drive"
+  | "virtual-driver"
   | "plugin-editor"
   | "command-line"
   | "wallpaper"
@@ -44,8 +44,8 @@ export type TipId =
   | "plugin-usage"
   | "easter-egg-turtle-complaint"
   | "tray-introduction"
-  | "virtual-drive-basics"
-  | "virtual-drive-directories"
+  | "virtual-driver-basics"
+  | "virtual-driver-directories"
   | "plugin-editor-basics"
   | "command-line-basics"
   | "command-line-examples"
@@ -226,18 +226,18 @@ export const TIP_CATEGORIES: TipCategory[] = [
     ],
   },
   {
-    id: "virtual-drive",
+    id: "virtual-driver",
     title: "虚拟盘（VD）",
     description: "在资源管理器里像磁盘一样浏览画册（Windows）",
     tips: [
       {
-        id: "virtual-drive-basics",
+        id: "virtual-driver-basics",
         title: "用虚拟盘在资源管理器里浏览图片",
         summary: "开启“画册盘”后，可在资源管理器中文件方式浏览画册与图片文件。",
         component: TipVirtualDriveBasics,
       },
       {
-        id: "virtual-drive-directories",
+        id: "virtual-driver-directories",
         title: "虚拟盘各目录说明",
         summary:
           "了解虚拟盘根目录下的各个目录（全部、按插件、按时间、按任务、画册）的用途和使用场景。",

@@ -1,9 +1,9 @@
 #![cfg(feature = "dedupe")]
 
+use crate::storage::{Storage, FAVORITE_ALBUM_ID};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-use crate::storage::{Storage, XorShift64, FAVORITE_ALBUM_ID};
-#[cfg(feature = "tauri-adapter")]
+#[cfg(not(any(feature = "ipc-server", feature = "ipc-client")))]
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,11 +73,9 @@ impl Storage {
     pub fn get_dedupe_total_hash_images_count(&self) -> Result<usize, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let count: usize = conn
-            .query_row(
-                "SELECT COUNT(*) FROM images WHERE hash != ''",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM images WHERE hash != ''", [], |row| {
+                row.get(0)
+            })
             .map_err(|e| format!("Failed to query hash count: {}", e))?;
         Ok(count)
     }
@@ -88,7 +86,7 @@ impl Storage {
         limit: usize,
     ) -> Result<Vec<DedupeScanRow>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        
+
         let query = format!(
             "SELECT CAST(images.id AS TEXT), images.hash,
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
@@ -150,7 +148,7 @@ impl Storage {
 
     pub fn dedupe_gallery_by_hash(&self, delete_files: bool) -> Result<DedupeRemoveResult, String> {
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        
+
         let mut seen_hashes = std::collections::HashSet::new();
         let mut to_remove_ids = Vec::new();
         let mut to_remove_paths = Vec::new();
@@ -195,8 +193,10 @@ impl Storage {
             });
         }
 
-        let tx = conn.transaction().map_err(|e| format!("Failed to start transaction: {}", e))?;
-        
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Failed to start transaction: {}", e))?;
+
         for id in &to_remove_ids {
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])
                 .map_err(|e| format!("Failed to delete image: {}", e))?;
@@ -204,7 +204,8 @@ impl Storage {
             let _ = tx.execute("DELETE FROM task_images WHERE image_id = ?1", params![id]);
         }
 
-        tx.commit().map_err(|e| format!("Failed to commit transaction: {}", e))?;
+        tx.commit()
+            .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
         if delete_files {
             for path in to_remove_paths {
@@ -227,7 +228,7 @@ impl Storage {
         })
     }
 
-    #[cfg(feature = "tauri-adapter")]
+    #[cfg(not(any(feature = "ipc-server", feature = "ipc-client")))]
     pub fn debug_clone_images(
         &self,
         app: AppHandle,

@@ -11,20 +11,20 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 
 /// 事件广播器
 pub struct EventBroadcaster {
-    /// 事件队列（FIFO）
-    events: Arc<RwLock<VecDeque<(u64, DaemonEvent)>>>,
     /// 下一个事件 ID
     next_id: Arc<RwLock<u64>>,
-    /// 最大队列长度
-    max_queue_size: usize,
     /// 事件 -> 广播器 映射（固定大小，初始化时与已知事件数量一致）
-    ///
-    /// 注意：这是“daemon 内部事件类型”的广播，不是 Tauri 前端事件名。
     event_txs: Vec<broadcast::Sender<(u64, DaemonEvent)>>,
+    /// 同步广播通道（供 broadcast_sync 使用）
+    sync_tx: mpsc::UnboundedSender<DaemonEvent>,
 }
 
 impl EventBroadcaster {
     /// 创建新的事件广播器
+    /// 工作机制：
+    /// 1. 创建事件种类COUNT个广播通道，每个通道对应一个事件种类，每个通道通过 subscribe 添加订阅者
+    /// 2. 创建一个 事件队列，任何事件都塞到这个队列里
+    /// 3. 从队列中取出事件，再送到广播通道中
     pub fn new(max_queue_size: usize) -> Self {
         // 写死最多接受 1024 个订阅者/事件种类
         let mut event_txs = Vec::with_capacity(DaemonEventKind::COUNT);
@@ -33,61 +33,83 @@ impl EventBroadcaster {
             event_txs.push(tx);
         }
 
-        Self {
-            events: Arc::new(RwLock::new(VecDeque::new())),
+        let (sync_tx, mut sync_rx) = mpsc::unbounded_channel::<DaemonEvent>();
+
+        let broadcaster = Self {
             next_id: Arc::new(RwLock::new(0)),
-            max_queue_size,
             event_txs,
-        }
-    }
-
-    /// 广播事件
-    pub async fn broadcast(&self, event: DaemonEvent) {
-        let mut events = self.events.write().await;
-        let mut next_id = self.next_id.write().await;
-
-        let id = *next_id;
-        *next_id += 1;
-
-        let event_with_id = (id, event.clone());
-        eprintln!("[DEBUG] EventBroadcaster 广播事件: id={}, event={:?}", id, event);
-        events.push_back(event_with_id.clone());
-
-        // 限制队列大小：只保留最近 max_queue_size 条
-        while events.len() > self.max_queue_size {
-            events.pop_front();
-        }
-
-        // 事件 -> 广播器：自动路由
-        let idx = event.kind().as_usize();
-        let tx = match self.event_txs.get(idx) {
-            Some(tx) => tx,
-            None => {
-                // 理论上不可能：kind()->index 是固定映射，且 event_txs 初始化为 COUNT
-                eprintln!("[DEBUG] EventBroadcaster 路由失败：idx={} 越界", idx);
-                return;
-            }
+            sync_tx,
         };
 
-        // 检查订阅者数量
-        let receiver_count = tx.receiver_count();
-        
-        // 推送到对应广播 channel（忽略错误，因为可能没有订阅者）
-        match tx.send(event_with_id) {
-            Ok(count) => {
-                eprintln!(
-                    "[DEBUG] EventBroadcaster 事件已推送到 channel(kind={:?}), 订阅者数量: {}",
-                    event.kind(),
-                    count
-                );
-            },
-            Err(_) => {
-                eprintln!(
-                    "[DEBUG] EventBroadcaster 事件推送失败（可能没有订阅者），订阅者数量: {}",
-                    receiver_count
-                );
+        // 启动后台任务处理同步广播
+        let next_id = broadcaster.next_id.clone();
+        let event_txs = broadcaster.event_txs.clone();
+        tokio::spawn(async move {
+            while let Some(event) = sync_rx.recv().await {
+                // 构造临时的 broadcaster 来调用 broadcast 逻辑
+
+                let event_with_id = {
+                    let mut next_id_guard = next_id.write().await;
+                    let id = *next_id_guard;
+                    *next_id_guard += 1;
+                    #[cfg(debug_assertions)]
+                    {
+                        eprintln!(
+                            "[DEBUG] EventBroadcaster 广播事件(同步): id={}, event={:?}",
+                            id, event
+                        );
+                    }
+                    (id, event.clone())
+                };
+
+                // 事件 -> 广播器：自动路由
+                let idx = event.kind().as_usize();
+                let tx = match event_txs.get(idx) {
+                    Some(tx) => tx,
+                    None => {
+                        eprintln!("[DEBUG] EventBroadcaster 路由失败(同步)：idx={} 越界", idx);
+                        continue;
+                    }
+                };
+
+                // 检查订阅者数量
+                let receiver_count = tx.receiver_count();
+
+                if receiver_count == 0 {
+                    continue;
+                }
+
+                // 推送到对应广播 channel（忽略错误，因为可能没有订阅者）
+                match tx.send(event_with_id) {
+                    Ok(count) => {
+                        eprintln!(
+                            "[DEBUG] EventBroadcaster 事件已推送到 channel(kind={:?}), 订阅者数量: {}",
+                            event.kind(),
+                            count
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("[DEBUG] EventBroadcaster 事件推送失败 {}", e);
+                    }
+                }
             }
-        }
+        });
+
+        broadcaster
+    }
+
+    /// 广播事件（异步版本）
+    /// 将事件发送到通道，由后台异步任务处理
+    pub async fn broadcast(&self, event: DaemonEvent) {
+        // 发送到通道，由后台异步任务处理（非阻塞）
+        let _ = self.sync_tx.send(event);
+    }
+
+    /// 同步版本的广播（在非 async 环境中可用）
+    /// 将事件发送到通道，由后台异步任务处理
+    pub fn broadcast_sync(&self, event: DaemonEvent) {
+        // 发送到通道，由后台异步任务处理（非阻塞）
+        let _ = self.sync_tx.send(event);
     }
 
     /// 订阅指定事件种类（返回 broadcast Receiver）
@@ -99,10 +121,21 @@ impl EventBroadcaster {
     ///
     /// 取消订阅：丢弃返回的 receiver 即可（内部转发任务会自动退出）。
     pub fn subscribe_all_stream(&self) -> mpsc::UnboundedReceiver<(u64, DaemonEvent)> {
+        self.subscribe_filtered_stream(&DaemonEventKind::ALL)
+    }
+
+    /// 订阅指定事件类型列表，并合并为单一接收器（用于长连接推送）
+    ///
+    /// 取消订阅：丢弃返回的 receiver 即可（内部转发任务会自动退出）。
+    /// 如果 kinds 为空，返回一个永远不会收到消息的 receiver。
+    pub fn subscribe_filtered_stream(
+        &self,
+        kinds: &[DaemonEventKind],
+    ) -> mpsc::UnboundedReceiver<(u64, DaemonEvent)> {
         let (tx, rx) = mpsc::unbounded_channel::<(u64, DaemonEvent)>();
 
-        for kind in DaemonEventKind::ALL {
-            let mut brx = self.subscribe(kind);
+        for kind in kinds {
+            let mut brx = self.subscribe(*kind);
             let tx = tx.clone();
             tokio::spawn(async move {
                 loop {
@@ -124,41 +157,6 @@ impl EventBroadcaster {
         }
 
         rx
-    }
-
-    /// 获取自指定 ID 以来的所有事件（历史查询，已弃用）
-    /// 
-    /// 注意：此方法用于历史事件查询，当前长连接模式下不再使用。
-    /// 保留此方法以便未来扩展（如客户端重连后获取历史事件）。
-    pub async fn get_events_since(&self, since: Option<u64>) -> Vec<serde_json::Value> {
-        let events = self.events.read().await;
-        
-        let start_id = since.unwrap_or(0);
-        events
-            .iter()
-            .filter(|(id, _)| *id >= start_id)
-            .filter_map(|(id, event)| {
-                // 兼容：在事件对象中注入 id 字段，便于客户端推进 since 游标。
-                // DaemonEvent 的反序列化会忽略未知字段，因此不会破坏现有解析逻辑。
-                let mut v = serde_json::to_value(event).ok()?;
-                if let Some(obj) = v.as_object_mut() {
-                    obj.insert("id".to_string(), serde_json::Value::Number((*id).into()));
-                }
-                Some(v)
-            })
-            .collect()
-    }
-
-    /// 清空所有事件
-    pub async fn clear(&self) {
-        let mut events = self.events.write().await;
-        events.clear();
-    }
-
-    /// 获取当前事件数量
-    pub async fn len(&self) -> usize {
-        let events = self.events.read().await;
-        events.len()
     }
 
     /// 获取最新的事件 ID
@@ -214,7 +212,7 @@ pub async fn emit_download_state(
     if broadcaster.receiver_count(DaemonEventKind::DownloadState) == 0 {
         return;
     }
-    
+
     broadcaster
         .broadcast(DaemonEvent::DownloadState {
             task_id: task_id.into(),
@@ -326,7 +324,7 @@ pub async fn emit_download_progress(
     if broadcaster.receiver_count(DaemonEventKind::DownloadProgress) == 0 {
         return;
     }
-    
+
     broadcaster
         .broadcast(DaemonEvent::DownloadProgress {
             task_id: task_id.into(),
@@ -352,10 +350,7 @@ pub async fn emit_wallpaper_update_image(
 }
 
 /// 辅助函数：发送壁纸样式更新事件
-pub async fn emit_wallpaper_update_style(
-    broadcaster: &EventBroadcaster,
-    style: impl Into<String>,
-) {
+pub async fn emit_wallpaper_update_style(broadcaster: &EventBroadcaster, style: impl Into<String>) {
     broadcaster
         .broadcast(DaemonEvent::WallpaperUpdateStyle {
             style: style.into(),

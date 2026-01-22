@@ -1,6 +1,7 @@
 // Wallpaper Engine 导出相关命令
 
-use crate::daemon_client;
+use crate::wallpaper::engine_export::WeExportOptions;
+use serde_json;
 
 #[tauri::command]
 #[cfg(target_os = "windows")]
@@ -10,10 +11,18 @@ pub async fn export_album_to_we_project(
     output_parent_dir: String,
     options: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .we_export_album_to_project(album_id, album_name, output_parent_dir, options)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let opt: Option<WeExportOptions> = match options {
+        None => None,
+        Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid options: {}", e))?,
+    };
+    let result = crate::wallpaper::engine_export::export_album_to_we_project(
+        album_id,
+        album_name,
+        output_parent_dir,
+        opt,
+    )
+    .await?;
+    serde_json::to_value(result).map_err(|e| format!("序列化结果失败: {}", e))
 }
 
 #[tauri::command]
@@ -24,8 +33,16 @@ pub async fn export_images_to_we_project(
     output_parent_dir: String,
     options: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .we_export_images_to_project(image_paths, title, output_parent_dir, options)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let opt: Option<WeExportOptions> = match options {
+        None => None,
+        Some(v) => serde_json::from_value(v).map_err(|e| format!("Invalid options: {}", e))?,
+    };
+    let result = crate::wallpaper::engine_export::export_images_to_we_project(
+        image_paths,
+        title,
+        output_parent_dir,
+        opt,
+    )
+    .await?;
+    serde_json::to_value(result).map_err(|e| format!("序列化结果失败: {}", e))
 }

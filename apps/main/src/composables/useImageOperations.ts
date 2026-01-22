@@ -239,14 +239,14 @@ export function useImageOperations(
           throw error;
         }
 
-        // 4. 获取当前设置
-        const currentSettings = await invoke<{
-          wallpaperRotationEnabled: boolean;
-          wallpaperRotationAlbumId: string | null;
-        }>("get_settings");
+        // 4. 获取当前设置（并发获取）
+        const [wallpaperRotationEnabled, wallpaperRotationAlbumId] = await Promise.all([
+          invoke<boolean>("get_wallpaper_rotation_enabled"),
+          invoke<string | null>("get_wallpaper_rotation_album_id"),
+        ]);
 
         // 5. 如果轮播未开启，开启它
-        if (!currentSettings.wallpaperRotationEnabled) {
+        if (!wallpaperRotationEnabled) {
           await invoke("set_wallpaper_rotation_enabled", { enabled: true });
         }
 

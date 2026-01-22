@@ -31,15 +31,17 @@ impl Provider for PluginGroupProvider {
 
     fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
         let groups = storage.get_gallery_plugin_groups()?;
+        // 这个变量可能mut，随编译目标变化
+        #[allow(unused_mut)]
         let mut out: Vec<FsEntry> = groups
             .into_iter()
             .map(|g| {
-                #[cfg(feature = "virtual-drive")]
+                #[cfg(feature = "virtual-driver")]
                 let plugin_name =
                     crate::providers::vd_ops::plugin_display_name_from_manifest(&g.plugin_id)
                         .unwrap_or_else(|| String::new());
 
-                #[cfg(not(feature = "virtual-drive"))]
+                #[cfg(not(feature = "virtual-driver"))]
                 let plugin_name = String::new();
 
                 let plugin_name = plugin_name.trim().to_string();
@@ -52,7 +54,7 @@ impl Provider for PluginGroupProvider {
             .collect();
 
         // VD 专用：目录说明文件
-        #[cfg(feature = "virtual-drive")]
+        #[cfg(feature = "virtual-driver")]
         {
             // NOTE: 必须带扩展名，否则某些图片查看器/Explorer 枚举同目录文件时会尝试"打开"该说明文件并弹出错误。
             let display_name = "这里记录了不同插件安装的所有图片.txt";
@@ -82,7 +84,7 @@ impl Provider for PluginGroupProvider {
         Some(Arc::new(PluginImagesProvider::new(plugin.plugin_id)))
     }
 
-    #[cfg(feature = "virtual-drive")]
+    #[cfg(feature = "virtual-driver")]
     fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
         let display_name = "这里记录了不同插件安装的所有图片.txt";
         if name != display_name {

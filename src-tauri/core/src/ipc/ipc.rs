@@ -2,53 +2,48 @@
 //!
 //! - Windows：命名管道（\\.\pipe\...）
 //! - Unix：Unix domain socket（临时目录）
-//! - 协议：单行 JSON（request/response 各一行）
+//! - 协议：长度前缀帧 + CBOR payload（二进制）
 //!
 //! 设计目的：给 `kabegame-cli daemon` 提供一个轻量常驻后台入口，
-//! 让外部（例如 KDE Plasma 壁纸插件）能触发“运行一次爬虫插件”并获取结果/状态。
+//! 让外部（例如 KDE Plasma 壁纸插件）能触发"运行一次爬虫插件"并获取结果/状态。
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use serde_bytes::ByteBuf;
 use std::sync::OnceLock;
 
-fn ipc_debug_enabled() -> bool {
+pub fn ipc_debug_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        match std::env::var("KABEGAME_IPC_DEBUG") {
-            Ok(v) => {
-                let v = v.to_ascii_lowercase();
-                v == "1" || v == "true" || v == "yes" || v == "on"
-            }
-            Err(_) => false,
+    *ENABLED.get_or_init(|| match std::env::var("KABEGAME_IPC_DEBUG") {
+        Ok(v) => {
+            let v = v.to_ascii_lowercase();
+            v == "1" || v == "true" || v == "yes" || v == "on"
         }
+        Err(_) => false,
     })
 }
 
+#[macro_export]
 macro_rules! ipc_dbg {
     ($($arg:tt)*) => {
-        if ipc_debug_enabled() {
+        if $crate::ipc::ipc::ipc_debug_enabled() {
             eprintln!($($arg)*);
         }
     };
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "cmd", rename_all = "camelCase")]
+#[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum CliIpcRequest {
     /// 探活
     Status,
 
-    /// 虚拟盘：挂载（Windows + virtual-drive）
-    VdMount {
-        mount_point: String,
-        #[serde(default)]
-        no_wait: bool,
-    },
+    /// 虚拟盘：挂载（Windows + virtual-driver）
+    VdMount,
 
-    /// 虚拟盘：卸载（Windows + virtual-drive）
-    VdUnmount { mount_point: String },
+    /// 虚拟盘：卸载（Windows + virtual-driver）
+    VdUnmount,
 
-    /// 虚拟盘：状态（Windows + virtual-drive）
+    /// 虚拟盘：状态（Windows + virtual-driver）
     VdStatus,
 
     /// 运行一次 Rhai 插件（等价于 `kabegame-cli plugin run`）
@@ -78,62 +73,68 @@ pub enum CliIpcRequest {
     StorageGetImages,
 
     /// 分页获取图片
-    StorageGetImagesPaginated { page: usize, page_size: usize },
+    StorageGetImagesPaginated {
+        page: usize,
+        page_size: usize,
+    },
 
     /// 获取图片总数
     StorageGetImagesCount,
 
     /// 根据 ID 获取图片
-    StorageGetImageById { image_id: String },
-
-    /// 根据本地路径查找图片（用于把“外部选择的壁纸路径”映射回 imageId）
-    StorageFindImageByPath { path: String },
-
-    // ==================== Wallpaper Engine Export ====================
-
-    /// 导出选中的图片路径到 Wallpaper Engine Web 工程目录
-    WeExportImagesToProject {
-        image_paths: Vec<String>,
-        title: Option<String>,
-        output_parent_dir: String,
-        /// 透传 options（由 daemon 反序列化为 WeExportOptions）
-        options: Option<serde_json::Value>,
+    StorageGetImageById {
+        image_id: String,
     },
 
-    /// 导出画册到 Wallpaper Engine Web 工程目录
-    WeExportAlbumToProject {
-        album_id: String,
-        album_name: String,
-        output_parent_dir: String,
-        options: Option<serde_json::Value>,
+    /// 根据本地路径查找图片（用于把“外部选择的壁纸路径”映射回 imageId）
+    StorageFindImageByPath {
+        path: String,
     },
 
     /// 删除图片
-    StorageDeleteImage { image_id: String },
+    StorageDeleteImage {
+        image_id: String,
+    },
 
     /// 仅从数据库移除图片（不删除本地文件）
-    StorageRemoveImage { image_id: String },
+    StorageRemoveImage {
+        image_id: String,
+    },
 
     /// 批量删除图片（删除本地文件 + DB）
-    StorageBatchDeleteImages { image_ids: Vec<String> },
+    StorageBatchDeleteImages {
+        image_ids: Vec<String>,
+    },
 
     /// 批量仅移除图片（仅 DB）
-    StorageBatchRemoveImages { image_ids: Vec<String> },
+    StorageBatchRemoveImages {
+        image_ids: Vec<String>,
+    },
 
     /// 收藏/取消收藏图片（收藏画册）
-    StorageToggleImageFavorite { image_id: String, favorite: bool },
+    StorageToggleImageFavorite {
+        image_id: String,
+        favorite: bool,
+    },
 
     /// 获取所有画册
     StorageGetAlbums,
 
     /// 添加画册
-    StorageAddAlbum { name: String },
+    StorageAddAlbum {
+        name: String,
+    },
 
     /// 删除画册
-    StorageDeleteAlbum { album_id: String },
+    StorageDeleteAlbum {
+        album_id: String,
+    },
 
     /// 重命名画册
-    StorageRenameAlbum { album_id: String, new_name: String },
+    StorageRenameAlbum {
+        album_id: String,
+        new_name: String,
+    },
 
     /// 添加图片到画册
     StorageAddImagesToAlbum {
@@ -148,10 +149,15 @@ pub enum CliIpcRequest {
     },
 
     /// 获取画册图片
-    StorageGetAlbumImages { album_id: String },
+    StorageGetAlbumImages {
+        album_id: String,
+    },
 
     /// 获取画册预览图片（前 N 张）
-    StorageGetAlbumPreview { album_id: String, limit: usize },
+    StorageGetAlbumPreview {
+        album_id: String,
+        limit: usize,
+    },
 
     /// 获取各画册图片数量（用于侧边栏/列表徽标）
     StorageGetAlbumCounts,
@@ -163,28 +169,42 @@ pub enum CliIpcRequest {
     },
 
     /// 获取画册图片 ID 列表
-    StorageGetAlbumImageIds { album_id: String },
+    StorageGetAlbumImageIds {
+        album_id: String,
+    },
 
     /// 获取所有任务
     StorageGetAllTasks,
 
     /// 根据 ID 获取任务
-    StorageGetTask { task_id: String },
+    StorageGetTask {
+        task_id: String,
+    },
 
     /// 添加任务
-    StorageAddTask { task: serde_json::Value },
+    StorageAddTask {
+        task: serde_json::Value,
+    },
 
     /// 更新任务
-    StorageUpdateTask { task: serde_json::Value },
+    StorageUpdateTask {
+        task: serde_json::Value,
+    },
 
     /// 删除任务
-    StorageDeleteTask { task_id: String },
+    StorageDeleteTask {
+        task_id: String,
+    },
 
     /// 获取任务图片
-    StorageGetTaskImages { task_id: String },
+    StorageGetTaskImages {
+        task_id: String,
+    },
 
     /// 获取任务图片 id 列表
-    StorageGetTaskImageIds { task_id: String },
+    StorageGetTaskImageIds {
+        task_id: String,
+    },
 
     /// 获取任务图片分页
     StorageGetTaskImagesPaginated {
@@ -194,10 +214,14 @@ pub enum CliIpcRequest {
     },
 
     /// 获取任务失败图片
-    StorageGetTaskFailedImages { task_id: String },
+    StorageGetTaskFailedImages {
+        task_id: String,
+    },
 
     /// 确认（已读）任务 Rhai dump
-    StorageConfirmTaskRhaiDump { task_id: String },
+    StorageConfirmTaskRhaiDump {
+        task_id: String,
+    },
 
     /// 清除所有已完成/失败/取消的任务
     StorageClearFinishedTasks,
@@ -206,13 +230,19 @@ pub enum CliIpcRequest {
     StorageGetRunConfigs,
 
     /// 添加运行配置
-    StorageAddRunConfig { config: serde_json::Value },
+    StorageAddRunConfig {
+        config: serde_json::Value,
+    },
 
     /// 更新运行配置
-    StorageUpdateRunConfig { config: serde_json::Value },
+    StorageUpdateRunConfig {
+        config: serde_json::Value,
+    },
 
     /// 删除运行配置
-    StorageDeleteRunConfig { config_id: String },
+    StorageDeleteRunConfig {
+        config_id: String,
+    },
 
     // ======== Storage - Gallery Query Helpers（供 app-main 组装画廊虚拟路径）========
     /// 获取“按时间”分组（yearMonth 列表）
@@ -225,7 +255,9 @@ pub enum CliIpcRequest {
     StorageGetTasksWithImages,
 
     /// 按 query 统计图片数量
-    StorageGetImagesCountByQuery { query: serde_json::Value },
+    StorageGetImagesCountByQuery {
+        query: serde_json::Value,
+    },
 
     /// 按 query 获取图片范围
     StorageGetImagesRangeByQuery {
@@ -236,13 +268,19 @@ pub enum CliIpcRequest {
 
     // ======== Task 调度（daemon 侧）========
     /// 入队一个任务（daemon 负责落库幂等 + 入队执行）
-    TaskStart { task: serde_json::Value },
+    TaskStart {
+        task: serde_json::Value,
+    },
 
     /// 取消任务
-    TaskCancel { task_id: String },
+    TaskCancel {
+        task_id: String,
+    },
 
     /// 重试一条失败图片下载（task_failed_images.id）
-    TaskRetryFailedImage { failed_id: i64 },
+    TaskRetryFailedImage {
+        failed_id: i64,
+    },
 
     /// 获取正在下载的任务列表
     GetActiveDownloads,
@@ -263,16 +301,24 @@ pub enum CliIpcRequest {
     PluginGetPlugins,
 
     /// 获取插件详情
-    PluginGetDetail { plugin_id: String },
+    PluginGetDetail {
+        plugin_id: String,
+    },
 
     /// 删除插件
-    PluginDelete { plugin_id: String },
+    PluginDelete {
+        plugin_id: String,
+    },
 
     /// 导入插件
-    PluginImport { kgpg_path: String },
+    PluginImport {
+        kgpg_path: String,
+    },
 
     /// 获取插件变量定义
-    PluginGetVars { plugin_id: String },
+    PluginGetVars {
+        plugin_id: String,
+    },
 
     /// 获取浏览器插件列表
     PluginGetBrowserPlugins,
@@ -281,13 +327,19 @@ pub enum CliIpcRequest {
     PluginGetPluginSources,
 
     /// 验证插件源 index.json
-    PluginValidateSource { index_url: String },
+    PluginValidateSource {
+        index_url: String,
+    },
 
     /// 保存插件源列表
-    PluginSavePluginSources { sources: serde_json::Value },
+    PluginSavePluginSources {
+        sources: serde_json::Value,
+    },
 
     /// 安装浏览器插件（从商店下载并安装）
-    PluginInstallBrowserPlugin { plugin_id: String },
+    PluginInstallBrowserPlugin {
+        plugin_id: String,
+    },
 
     /// 获取商店插件列表（可选指定 source_id）
     PluginGetStorePlugins {
@@ -309,7 +361,9 @@ pub enum CliIpcRequest {
     },
 
     /// 预览导入插件（读取 .kgpg）
-    PluginPreviewImport { zip_path: String },
+    PluginPreviewImport {
+        zip_path: String,
+    },
 
     /// 商店安装预览：下载到临时文件 + preview_import_from_zip
     PluginPreviewStoreInstall {
@@ -321,10 +375,14 @@ pub enum CliIpcRequest {
     },
 
     /// 获取已安装插件 icon（base64）
-    PluginGetIcon { plugin_id: String },
+    PluginGetIcon {
+        plugin_id: String,
+    },
 
     /// KGPG v2：远程获取 icon（base64）
-    PluginGetRemoteIconV2 { download_url: String },
+    PluginGetRemoteIconV2 {
+        download_url: String,
+    },
 
     /// 详情页文档图片：本地已安装/远程商店源统一入口（base64）
     PluginGetImageForDetail {
@@ -339,55 +397,124 @@ pub enum CliIpcRequest {
     },
 
     // ======== Settings 相关 ========
-    /// 获取所有设置
-    SettingsGet,
+    // 注意：整包 SettingsGet/Update/Key 已移除，改为细粒度 getter/setter
 
-    /// 获取单个设置
-    SettingsGetKey { key: String },
+    // ======== Settings Getter（细粒度）========
+    SettingsGetAutoLaunch,
+    SettingsGetMaxConcurrentDownloads,
+    SettingsGetNetworkRetryCount,
+    SettingsGetImageClickAction,
+    SettingsGetGalleryImageAspectRatio,
+    SettingsGetAutoDeduplicate,
+    SettingsGetDefaultDownloadDir,
+    SettingsGetWallpaperEngineDir,
+    SettingsGetWallpaperRotationEnabled,
+    SettingsGetWallpaperRotationAlbumId,
+    SettingsGetWallpaperRotationIntervalMinutes,
+    SettingsGetWallpaperRotationMode,
+    SettingsGetWallpaperRotationStyle,
+    SettingsGetWallpaperRotationTransition,
+    SettingsGetWallpaperStyleByMode,
+    SettingsGetWallpaperTransitionByMode,
+    SettingsGetWallpaperMode,
+    SettingsGetWindowState,
+    SettingsGetCurrentWallpaperImageId,
+    SettingsGetDefaultImagesDir,
+    #[cfg(feature = "virtual-driver")]
+    SettingsGetAlbumDriveEnabled,
+    #[cfg(feature = "virtual-driver")]
+    SettingsGetAlbumDriveMountPoint,
 
-    /// 更新设置
-    SettingsUpdate { settings: serde_json::Value },
-
-    /// 更新单个设置
-    SettingsUpdateKey {
-        key: String,
-        value: serde_json::Value,
+    // ======== Settings Setter（保留 core::Settings 的校验逻辑）========
+    SettingsSetGalleryImageAspectRatio {
+        aspect_ratio: Option<String>,
     },
-
-    // ======== Settings 专用（保留 core::Settings 的校验逻辑）========
-    SettingsSetGalleryImageAspectRatio { aspect_ratio: Option<String> },
-    SettingsSetWallpaperEngineDir { dir: Option<String> },
+    SettingsSetWallpaperEngineDir {
+        dir: Option<String>,
+    },
     SettingsGetWallpaperEngineMyprojectsDir,
-    SettingsSetWallpaperRotationEnabled { enabled: bool },
-    SettingsSetWallpaperRotationAlbumId { album_id: Option<String> },
-    SettingsSetWallpaperRotationTransition { transition: String },
-    SettingsSetWallpaperStyle { style: String },
-    SettingsSetWallpaperMode { mode: String },
-    SettingsSetAlbumDriveEnabled { enabled: bool },
-    SettingsSetAlbumDriveMountPoint { mount_point: String },
-    SettingsSetAutoLaunch { enabled: bool },
-    SettingsSetMaxConcurrentDownloads { count: u32 },
-    SettingsSetNetworkRetryCount { count: u32 },
-    SettingsSetImageClickAction { action: String },
-    SettingsSetGalleryImageAspectRatioMatchWindow { enabled: bool },
-    SettingsSetAutoDeduplicate { enabled: bool },
-    SettingsSetDefaultDownloadDir { dir: Option<String> },
-    SettingsSetWallpaperRotationIntervalMinutes { minutes: u32 },
-    SettingsSetWallpaperRotationMode { mode: String },
-    SettingsSetCurrentWallpaperImageId { image_id: Option<String> },
-    SettingsSwapStyleTransitionForModeSwitch { old_mode: String, new_mode: String },
+    SettingsSetWallpaperRotationEnabled {
+        enabled: bool,
+    },
+    SettingsSetWallpaperRotationAlbumId {
+        album_id: Option<String>,
+    },
+    SettingsSetWallpaperRotationTransition {
+        transition: String,
+    },
+    SettingsSetWallpaperStyle {
+        style: String,
+    },
+    SettingsSetWallpaperMode {
+        mode: String,
+    },
+    SettingsSetAlbumDriveEnabled {
+        enabled: bool,
+    },
+    SettingsSetAlbumDriveMountPoint {
+        mount_point: String,
+    },
+    SettingsSetAutoLaunch {
+        enabled: bool,
+    },
+    SettingsSetMaxConcurrentDownloads {
+        count: u32,
+    },
+    SettingsSetNetworkRetryCount {
+        count: u32,
+    },
+    SettingsSetImageClickAction {
+        action: String,
+    },
+    SettingsSetAutoDeduplicate {
+        enabled: bool,
+    },
+    SettingsSetDefaultDownloadDir {
+        dir: Option<String>,
+    },
+    SettingsSetWallpaperRotationIntervalMinutes {
+        minutes: u32,
+    },
+    SettingsSetWallpaperRotationMode {
+        mode: String,
+    },
+    SettingsSetCurrentWallpaperImageId {
+        image_id: Option<String>,
+    },
+    SettingsSwapStyleTransitionForModeSwitch {
+        old_mode: String,
+        new_mode: String,
+    },
 
     // ======== Gallery / Provider 相关 ========
     /// 浏览虚拟 Provider 路径（用于 Gallery/Album/Task 视图的虚拟目录树）
-    GalleryBrowseProvider { path: String },
+    GalleryBrowseProvider {
+        path: String,
+    },
 
     // ======== 事件订阅 ========
     /// 订阅事件（建立长连接，服务器会持续推送事件）
-    SubscribeEvents,
+    SubscribeEvents {
+        /// 感兴趣的事件类型列表（空=订阅全部，向后兼容）
+        /// 事件类型字符串：taskLog, downloadState, taskStatus, taskProgress, taskError,
+        /// downloadProgress, generic, connectionStatus, dedupeProgress, dedupeFinished,
+        /// wallpaperUpdateImage, imagesChange, wallpaperUpdateStyle, wallpaperUpdateTransition,
+        /// settingChange, albumAdded
+        #[serde(default)]
+        kinds: Vec<String>,
+    },
+}
+
+/// IPC 请求信封（用于携带 request_id）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IpcEnvelope<T> {
+    pub request_id: u64,
+    #[serde(flatten)]
+    pub payload: T,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "kebab-case")]
 pub struct CliIpcResponse {
     pub ok: bool,
     #[serde(default)]
@@ -415,9 +542,17 @@ pub struct CliIpcResponse {
 
     /// 通用数据载荷（用于返回 Storage/Plugin/Settings 查询结果）
     /// 可以是：图片列表、画册列表、任务列表、插件列表、设置对象等
+    /// 默认为 `null`，表示无数据
     #[serde(default)]
-    pub data: Option<serde_json::Value>,
+    pub data: serde_json::Value,
 
+    /// 二进制载荷（用于图片等二进制数据）
+    #[serde(default)]
+    pub bytes: Option<ByteBuf>,
+
+    /// 二进制载荷的 MIME 类型（例如 "image/png"）
+    #[serde(default)]
+    pub bytes_mime: Option<String>,
 }
 
 impl CliIpcResponse {
@@ -430,7 +565,9 @@ impl CliIpcResponse {
             mounted: None,
             mount_point: None,
             info: None,
-            data: None,
+            data: serde_json::Value::Null,
+            bytes: None,
+            bytes_mime: None,
         }
     }
 
@@ -443,7 +580,9 @@ impl CliIpcResponse {
             mounted: None,
             mount_point: None,
             info: None,
-            data: None,
+            data: serde_json::Value::Null,
+            bytes: None,
+            bytes_mime: None,
         }
     }
 
@@ -456,23 +595,96 @@ impl CliIpcResponse {
             mounted: None,
             mount_point: None,
             info: None,
-            data: Some(data),
+            data: data,
+            bytes: None,
+            bytes_mime: None,
         }
     }
 
+    pub fn ok_with_bytes(
+        message: impl Into<String>,
+        mime: impl Into<String>,
+        bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            ok: true,
+            message: Some(message.into()),
+            request_id: None,
+            task_id: None,
+            mounted: None,
+            mount_point: None,
+            info: None,
+            data: serde_json::Value::Null,
+            bytes: Some(ByteBuf::from(bytes)),
+            bytes_mime: Some(mime.into()),
+        }
+    }
 }
 
-pub(crate) fn encode_line<T: Serialize>(v: &T) -> Result<Vec<u8>, String> {
+/// 编码 CBOR 帧（长度前缀 + CBOR payload）
+pub fn encode_frame<T: Serialize>(v: &T) -> Result<Vec<u8>, String> {
+    let payload = serde_cbor::to_vec(v).map_err(|e| format!("ipc cbor encode failed: {}", e))?;
+
+    if payload.len() > 64 * 1024 * 1024 {
+        return Err("ipc frame payload too large (max 64MB)".to_string());
+    }
+
+    let len = payload.len() as u32;
+    let mut frame = Vec::with_capacity(4 + payload.len());
+    frame.extend_from_slice(&len.to_le_bytes());
+    frame.extend_from_slice(&payload);
+    Ok(frame)
+}
+
+/// 解码 CBOR 帧
+pub fn decode_frame<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, String> {
+    serde_cbor::from_slice(bytes).map_err(|e| format!("ipc cbor decode failed: {}", e))
+}
+
+/// 读取一个 CBOR 帧（长度前缀 + payload）
+pub async fn read_one_frame<R>(mut r: R) -> Result<Vec<u8>, String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+
+    // 读取长度前缀（4 bytes, little-endian）
+    let mut len_bytes = [0u8; 4];
+    r.read_exact(&mut len_bytes)
+        .await
+        .map_err(|e| format!("ipc read frame length failed: {}", e))?;
+
+    let len = u32::from_le_bytes(len_bytes) as usize;
+
+    // 限制最大帧大小（64MB）
+    if len > 64 * 1024 * 1024 {
+        return Err(format!("ipc frame too large: {} bytes (max 64MB)", len));
+    }
+
+    // 读取 payload
+    let mut payload = vec![0u8; len];
+    r.read_exact(&mut payload)
+        .await
+        .map_err(|e| format!("ipc read frame payload failed: {}", e))?;
+
+    Ok(payload)
+}
+
+// 保留旧函数用于兼容（已废弃，但暂时保留以防万一）
+#[deprecated(note = "Use encode_frame instead")]
+pub fn encode_line<T: Serialize>(v: &T) -> Result<Vec<u8>, String> {
     let mut s = serde_json::to_string(v).map_err(|e| format!("ipc json encode failed: {}", e))?;
     s.push('\n');
     Ok(s.into_bytes())
 }
 
-pub(crate) fn decode_line<T: for<'de> Deserialize<'de>>(line: &str) -> Result<T, String> {
+#[deprecated(note = "Use decode_frame instead")]
+pub fn decode_line<T: for<'de> Deserialize<'de>>(line: &str) -> Result<T, String> {
     serde_json::from_str(line).map_err(|e| format!("ipc json decode failed: {}", e))
 }
 
-pub(crate) async fn read_one_line<R>(mut r: R) -> Result<String, String>
+#[deprecated(note = "Use read_one_frame instead")]
+pub async fn read_one_line<R>(mut r: R) -> Result<String, String>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
@@ -498,7 +710,7 @@ where
     Ok(String::from_utf8_lossy(&buf).to_string())
 }
 
-pub(crate) async fn write_all<W>(mut w: W, bytes: &[u8]) -> Result<(), String>
+pub async fn write_all<W>(mut w: W, bytes: &[u8]) -> Result<(), String>
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
@@ -513,13 +725,13 @@ where
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn windows_pipe_name() -> &'static str {
-    r"\\.\pipe\kabegame-cli"
+pub fn windows_pipe_name() -> &'static str {
+    r"\\.\pipe\kabegame-daemon"
 }
 
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn unix_socket_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("kabegame-cli.sock")
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn unix_socket_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("kabegame-daemon.sock")
 }
 
 /// 客户端：发送一次请求并等待响应。
@@ -532,475 +744,24 @@ pub async fn request(req: CliIpcRequest) -> Result<CliIpcResponse, String> {
             .open(windows_pipe_name())
             .map_err(|e| format!("ipc open pipe failed: {}", e))?;
 
-        let bytes = encode_line(&req)?;
+        let bytes = encode_frame(&req)?;
         write_all(&mut client, &bytes).await?;
-        let line = read_one_line(&mut client).await?;
-        let resp: CliIpcResponse = decode_line(&line)?;
+        let payload = read_one_frame(&mut client).await?;
+        let resp: CliIpcResponse = decode_frame(&payload)?;
         return Ok(resp);
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         use tokio::net::UnixStream;
         let path = unix_socket_path();
         let mut s = UnixStream::connect(&path)
             .await
             .map_err(|e| format!("ipc connect failed ({}): {}", path.display(), e))?;
-        let bytes = encode_line(&req)?;
+        let bytes = encode_frame(&req)?;
         write_all(&mut s, &bytes).await?;
-        let line = read_one_line(&mut s).await?;
-        let resp: CliIpcResponse = decode_line(&line)?;
+        let payload = read_one_frame(&mut s).await?;
+        let resp: CliIpcResponse = decode_frame(&payload)?;
         return Ok(resp);
     }
 }
-
-/// 服务端：循环处理请求（每个连接只处理一次 request/response）。
-/// 
-/// 对于 `SubscribeEvents` 请求，需要额外提供一个 `EventBroadcaster` 来推送事件。
-pub async fn serve<F, Fut>(handler: F) -> Result<(), String>
-where
-    F: Fn(CliIpcRequest) -> Fut + Send + Sync + Clone + 'static,
-    Fut: std::future::Future<Output = CliIpcResponse> + Send,
-{
-    // 注意：此函数不支持长连接事件推送
-    // 如需支持 SubscribeEvents，请使用 `serve_with_events`
-    serve_impl(handler, None).await
-}
-
-/// 服务端：循环处理请求，支持长连接事件推送
-pub async fn serve_with_events<F, Fut>(
-    handler: F,
-    broadcaster: Option<Arc<dyn std::any::Any + Send + Sync>>,
-) -> Result<(), String>
-where
-    F: Fn(CliIpcRequest) -> Fut + Send + Sync + Clone + 'static,
-    Fut: std::future::Future<Output = CliIpcResponse> + Send,
-{
-    serve_impl(handler, broadcaster).await
-}
-
-/// 检查是否有其他 daemon 正在运行
-async fn check_other_daemon_running() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        use tokio::net::windows::named_pipe::ClientOptions;
-        use tokio::time::{timeout, Duration};
-        
-        // 尝试连接现有的命名管道
-        let client_result = timeout(
-            Duration::from_millis(100),
-            async {
-                ClientOptions::new()
-                    .open(windows_pipe_name())
-                    .ok()
-            }
-        ).await;
-        
-        if let Ok(Some(mut client)) = client_result {
-            // 如果连接成功，尝试发送 Status 请求验证
-            let status_req = CliIpcRequest::Status;
-            if let Ok(bytes) = encode_line(&status_req) {
-                if write_all(&mut client, &bytes).await.is_ok() {
-                    // 尝试读取响应（但不等待太久）
-                    if timeout(Duration::from_millis(100), read_one_line(&mut client))
-                        .await
-                        .is_ok()
-                    {
-                        return true; // 成功连接并得到响应，说明有其他 daemon 在运行
-                    }
-                }
-            }
-        }
-        false
-    }
-    
-    #[cfg(not(target_os = "windows"))]
-    {
-        use tokio::net::UnixStream;
-        use tokio::time::{timeout, Duration};
-        
-        let path = unix_socket_path();
-        // 尝试连接现有的 Unix socket
-        let connect_result = timeout(
-            Duration::from_millis(100),
-            UnixStream::connect(&path)
-        ).await;
-        
-        if let Ok(Ok(mut stream)) = connect_result {
-            // 如果连接成功，尝试发送 Status 请求验证
-            let status_req = CliIpcRequest::Status;
-            if let Ok(bytes) = encode_line(&status_req) {
-                if write_all(&mut stream, &bytes).await.is_ok() {
-                    // 尝试读取响应（但不等待太久）
-                    if timeout(Duration::from_millis(100), read_one_line(&mut stream))
-                        .await
-                        .is_ok()
-                    {
-                        return true; // 成功连接并得到响应，说明有其他 daemon 在运行
-                    }
-                }
-            }
-        }
-        false
-    }
-}
-
-async fn serve_impl<F, Fut>(
-    handler: F,
-    broadcaster: Option<Arc<dyn std::any::Any + Send + Sync>>,
-) -> Result<(), String>
-where
-    F: Fn(CliIpcRequest) -> Fut + Send + Sync + Clone + 'static,
-    Fut: std::future::Future<Output = CliIpcResponse> + Send,
-{
-    #[cfg(target_os = "windows")]
-    {
-        use tokio::net::windows::named_pipe::ServerOptions;
-        use windows_sys::Win32::Foundation::{LocalFree, BOOL};
-        use windows_sys::Win32::Security::{
-            Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW, SECURITY_ATTRIBUTES,
-        };
-
-        fn sddl_to_security_attributes(
-            sddl: &str,
-        ) -> Result<(SECURITY_ATTRIBUTES, *mut core::ffi::c_void), String> {
-            use std::ffi::OsStr;
-            use std::os::windows::ffi::OsStrExt;
-
-            let sddl_w: Vec<u16> = OsStr::new(sddl).encode_wide().chain(Some(0)).collect();
-            let mut sd_ptr: *mut core::ffi::c_void = core::ptr::null_mut();
-            let mut sd_len: u32 = 0;
-
-            let ok: BOOL = unsafe {
-                ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                    sddl_w.as_ptr(),
-                    1,
-                    &mut sd_ptr as *mut _ as *mut _,
-                    &mut sd_len,
-                )
-            };
-            if ok == 0 || sd_ptr.is_null() {
-                return Err(format!(
-                    "ConvertStringSecurityDescriptorToSecurityDescriptorW failed: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
-
-            let attrs = SECURITY_ATTRIBUTES {
-                nLength: core::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-                lpSecurityDescriptor: sd_ptr as *mut _,
-                bInheritHandle: 0,
-            };
-            Ok((attrs, sd_ptr))
-        }
-
-        fn create_secure_server(
-        ) -> Result<tokio::net::windows::named_pipe::NamedPipeServer, String> {
-            // SY=LocalSystem, BA=Built-in Administrators, AU=Authenticated Users
-            // 允许普通用户连接（仅本机 pipe）
-            let sddl = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;AU)";
-            let (attrs, sd_ptr) = sddl_to_security_attributes(sddl)?;
-            let server = unsafe {
-                ServerOptions::new().create_with_security_attributes_raw(
-                    windows_pipe_name(),
-                    &attrs as *const _ as *mut _,
-                )
-            }
-            .map_err(|e| format!("ipc create pipe failed: {}", e))?;
-
-            unsafe { LocalFree(sd_ptr as _) };
-            Ok(server)
-        }
-
-        let mut server = match create_secure_server() {
-            Ok(s) => s,
-            Err(e) => {
-                // 绑定失败，检查是否有其他 daemon 正在运行
-                if check_other_daemon_running().await {
-                    eprintln!("错误: 无法绑定命名管道 {}，因为已有其他 daemon 正在运行。", windows_pipe_name());
-                    eprintln!("请先停止正在运行的 daemon，或确保只有一个 daemon 实例。");
-                    return Err(format!("另一个 daemon 实例正在运行: {}", e));
-                }
-                // 如果没有其他 daemon 运行，可能是其他原因导致的绑定失败
-                return Err(format!("无法创建命名管道: {}", e));
-            }
-        };
-        loop {
-            server
-                .connect()
-                .await
-                .map_err(|e| format!("ipc pipe connect failed: {}", e))?;
-
-            let connected = server;
-            server = create_secure_server()?;
-
-            let mut connected = connected;
-            let line = match read_one_line(&mut connected).await {
-                Ok(line) => {
-                    ipc_dbg!("[DEBUG] IPC 服务器读取请求成功: {}", line);
-                    line
-                },
-                Err(e) => {
-                    ipc_dbg!("[DEBUG] IPC 服务器读取请求失败: {}", e);
-                    continue;
-                }
-            };
-            let req: CliIpcRequest = match decode_line(&line) {
-                Ok(req) => {
-                    ipc_dbg!("[DEBUG] IPC 服务器解析请求成功: {:?}", req);
-                    req
-                },
-                Err(e) => {
-                    ipc_dbg!("[DEBUG] IPC 服务器解析请求失败: {}", e);
-                    continue;
-                }
-            };
-            
-            // 检查是否是 SubscribeEvents 请求（需要长连接）
-            if matches!(req, CliIpcRequest::SubscribeEvents) {
-                ipc_dbg!("[DEBUG] IPC 服务器接受新连接（SubscribeEvents 长连接）");
-                ipc_dbg!("[DEBUG] IPC 服务器收到 SubscribeEvents 请求，准备建立长连接");
-                // 对于 SubscribeEvents，需要特殊处理
-                // 先调用 handler 获取初始响应
-                let resp = handler(req).await;
-                let bytes = match encode_line(&resp) {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        ipc_dbg!("[DEBUG] IPC 服务器编码响应失败: {}", e);
-                        continue;
-                    }
-                };
-                if let Err(e) = write_all(&mut connected, &bytes).await {
-                    ipc_dbg!("[DEBUG] IPC 服务器写入响应失败: {}", e);
-                    continue;
-                }
-                ipc_dbg!("[DEBUG] IPC 服务器已发送 SubscribeEvents 响应，开始推送事件");
-                
-                // 如果有 broadcaster，启动事件推送任务
-                if let Some(broadcaster) = &broadcaster {
-                    if let Ok(broadcaster) = broadcaster.clone().downcast::<super::EventBroadcaster>() {
-                        let mut rx = broadcaster.subscribe_all_stream();
-                        ipc_dbg!("[DEBUG] IPC 服务器已订阅 EventBroadcaster，开始监听事件");
-                        // Spawn 任务持续推送事件到连接
-                        tokio::spawn(async move {
-                            use tokio::io::AsyncWriteExt;
-                            let mut stream = connected;
-                            loop {
-                                match rx.recv().await {
-                                    Some((id, event)) => {
-                                        ipc_dbg!("[DEBUG] IPC 服务器收到事件: id={}, event={:?}", id, event);
-                                        // 序列化事件为 JSON
-                                        match serde_json::to_string(&event) {
-                                            Ok(json) => {
-                                                ipc_dbg!("[DEBUG] IPC 服务器序列化事件成功: {}", json);
-                                                let line = format!("{}\n", json);
-                                                if let Err(e) = stream.write_all(line.as_bytes()).await {
-                                                    ipc_dbg!("[DEBUG] IPC 服务器写入事件失败: {}", e);
-                                                    break;
-                                                }
-                                                if let Err(e) = stream.flush().await {
-                                                    ipc_dbg!("[DEBUG] IPC 服务器刷新流失败: {}", e);
-                                                    break;
-                                                }
-                                                ipc_dbg!("[DEBUG] IPC 服务器已推送事件到连接: id={}", id);
-                                            },
-                                            Err(e) => {
-                                                ipc_dbg!("[DEBUG] IPC 服务器序列化事件失败: {}", e);
-                                                // 继续处理下一个事件
-                                            }
-                                        }
-                                    },
-                                    None => {
-                                        ipc_dbg!("[DEBUG] IPC 服务器事件流已结束（可能连接已关闭）");
-                                        break;
-                                    }
-                                }
-                            }
-                        });
-                        // 连接由 spawn 的任务持有，不在这里关闭
-                        continue;
-                    }
-                }
-                
-                // 如果没有 broadcaster，保持连接打开但不推送事件
-                continue;
-            }
-            
-            // 普通请求：处理并关闭连接
-            let resp = handler(req).await;
-            let bytes = encode_line(&resp)?;
-            ipc_dbg!("[DEBUG] IPC 服务器发送响应（Windows Named Pipe）");
-            let _ = write_all(&mut connected, &bytes).await;
-        }
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        use tokio::net::UnixListener;
-        use tokio::io::BufReader;
-        use tokio::io::AsyncBufReadExt;
-        
-        let path = unix_socket_path();
-        let _ = std::fs::remove_file(&path);
-        let listener = match UnixListener::bind(&path) {
-            Ok(l) => l,
-            Err(e) => {
-                // 绑定失败，检查是否有其他 daemon 正在运行
-                if check_other_daemon_running().await {
-                    eprintln!("错误: 无法绑定 Unix socket {}，因为已有其他 daemon 正在运行。", path.display());
-                    eprintln!("请先停止正在运行的 daemon，或确保只有一个 daemon 实例。");
-                    return Err(format!("另一个 daemon 实例正在运行: {}", e));
-                }
-                // 如果没有其他 daemon 运行，可能是其他原因导致的绑定失败（如权限问题）
-                return Err(format!("ipc bind failed ({}): {}", path.display(), e));
-            }
-        };
-
-        loop {
-            let (stream, _) = listener
-                .accept()
-                .await
-                .map_err(|e| format!("ipc accept failed: {}", e))?;
-            
-            ipc_dbg!("[DEBUG] IPC 服务器接受新连接（持久连接模式）");
-            
-            // 为每个连接 spawn 一个任务来处理多个请求
-            let handler = handler.clone();
-            let broadcaster = broadcaster.clone();
-            
-            tokio::spawn(async move {
-                use tokio::io::AsyncWriteExt;
-                
-                let (read_half, mut write_half) = tokio::io::split(stream);
-                let mut reader = BufReader::new(read_half);
-                let mut line = String::new();
-                
-                loop {
-                    line.clear();
-                    match reader.read_line(&mut line).await {
-                        Ok(0) => {
-                            ipc_dbg!("[DEBUG] IPC 服务器连接关闭 (EOF)");
-                            break;
-                        }
-                        Ok(_) => {
-                            let line_trimmed = line.trim();
-                            if line_trimmed.is_empty() {
-                                continue;
-                            }
-                            
-                            ipc_dbg!("[DEBUG] IPC 服务器读取请求: {}", line_trimmed);
-                            
-                            // 解析为 JSON
-                            let value: serde_json::Value = match serde_json::from_str(line_trimmed) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    ipc_dbg!("[DEBUG] IPC 服务器解析 JSON 失败: {}", e);
-                                    continue;
-                                }
-                            };
-                            
-                            // 提取 request_id
-                            let request_id = value.get("request_id").and_then(|v| v.as_u64());
-                            
-                            // 解析为 CliIpcRequest
-                            let req: CliIpcRequest = match serde_json::from_value(value.clone()) {
-                                Ok(req) => {
-                                    ipc_dbg!("[DEBUG] IPC 服务器解析请求: {:?}, request_id={:?}", req, request_id);
-                                    req
-                                },
-                                Err(e) => {
-                                    ipc_dbg!("[DEBUG] IPC 服务器解析请求失败: {}", e);
-                                    continue;
-                                }
-                            };
-                            
-                            // 检查是否是 SubscribeEvents 请求
-                            if matches!(req, CliIpcRequest::SubscribeEvents) {
-                                ipc_dbg!("[DEBUG] IPC 服务器收到 SubscribeEvents 请求");
-                                
-                                // 发送初始响应
-                                let mut resp = handler(req).await;
-                                resp.request_id = request_id;
-                                
-                                let bytes = match encode_line(&resp) {
-                                    Ok(b) => b,
-                                    Err(e) => {
-                                        ipc_dbg!("[DEBUG] IPC 服务器编码响应失败: {}", e);
-                                        break;
-                                    }
-                                };
-                                
-                                if let Err(e) = write_half.write_all(&bytes).await {
-                                    ipc_dbg!("[DEBUG] IPC 服务器写入响应失败: {}", e);
-                                    break;
-                                }
-                                let _ = write_half.flush().await;
-                                
-                                // 如果有 broadcaster，在这个连接上推送事件
-                                if let Some(ref broadcaster) = broadcaster {
-                                    if let Ok(broadcaster) = broadcaster.clone().downcast::<super::EventBroadcaster>() {
-                                        let mut rx = broadcaster.subscribe_all_stream();
-                                        ipc_dbg!("[DEBUG] IPC 服务器开始推送事件");
-                                        
-                                        loop {
-                                            match rx.recv().await {
-                                                Some((id, event)) => {
-                                                    match serde_json::to_string(&event) {
-                                                        Ok(json) => {
-                                                            let event_line = format!("{}\n", json);
-                                                            if let Err(e) = write_half.write_all(event_line.as_bytes()).await {
-                                                                ipc_dbg!("[DEBUG] IPC 服务器写入事件失败: {}", e);
-                                                                break;
-                                                            }
-                                                            let _ = write_half.flush().await;
-                                                            ipc_dbg!("[DEBUG] IPC 服务器已推送事件: id={}", id);
-                                                        },
-                                                        Err(e) => {
-                                                            ipc_dbg!("[DEBUG] IPC 服务器序列化事件失败: {}", e);
-                                                        }
-                                                    }
-                                                },
-                                                None => break,
-                                            }
-                                        }
-                                    }
-                                }
-                                break; // SubscribeEvents 后结束请求循环
-                            }
-                            
-                            // 普通请求：处理并发送响应（保持连接）
-                            let mut resp = handler(req).await;
-                            resp.request_id = request_id;
-                            
-                            let bytes = match encode_line(&resp) {
-                                Ok(b) => b,
-                                Err(e) => {
-                                    ipc_dbg!("[DEBUG] IPC 服务器编码响应失败: {}", e);
-                                    continue;
-                                }
-                            };
-                            
-                            if let Err(e) = write_half.write_all(&bytes).await {
-                                ipc_dbg!("[DEBUG] IPC 服务器写入响应失败: {}", e);
-                                break;
-                            }
-                            if let Err(e) = write_half.flush().await {
-                                ipc_dbg!("[DEBUG] IPC 服务器刷新失败: {}", e);
-                                break;
-                            }
-                            
-                            ipc_dbg!("[DEBUG] IPC 服务器已发送响应, request_id={:?}", request_id);
-                        }
-                        Err(e) => {
-                            ipc_dbg!("[DEBUG] IPC 服务器读取失败: {}", e);
-                            break;
-                        }
-                    }
-                }
-                
-                ipc_dbg!("[DEBUG] IPC 服务器连接处理完成");
-            });
-        }
-    }
-}
-

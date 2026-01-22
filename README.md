@@ -137,7 +137,7 @@ Kabegame 的核心竞争力在于其插件化的爬虫系统（本地导入文�
 ### 安装依赖
 
 ```bash
-pnpm install
+bun install
 ```
 
 ### Git 钩子：push 前自动尝试打 tag（可选）
@@ -145,8 +145,8 @@ pnpm install
 本仓库使用 Husky 提供 git hooks：在 `git push` 之前会读取 `crawler-plugins/package.json` 的 `version`，
 并尝试创建 `v{version}` 的 tag（例如 `1.0.0` → `v1.0.0`）。如果 tag 已存在或创建失败会**跳过且不阻断 push**。
 
-- 启用方式：执行 `pnpm install`（会自动运行 `prepare` 安装 hooks）
-- 手动重装 hooks：执行 `pnpm prepare`
+- 启用方式：执行 `bun install`（会自动运行 `prepare` 安装 hooks）
+- 手动重装 hooks：执行 `bun run prepare`
 
 ### 开发/构建命令（统一入口）
 
@@ -159,24 +159,22 @@ pnpm install
 
 ```bash
 # 开发模式（带 watch，热重载）
-pnpm dev -c main              # 启动主应用（端口 1420）
-pnpm dev -c plugin-editor     # 启动插件编辑器（端口 1421）
-pnpm dev -c main --watch      # 启用插件源码监听，自动重建并触发 Tauri 重启
-pnpm dev -c main --mode local # 使用 local 模式（无商店版本，预打包全部插件）
-pnpm dev -c main --desktop plasma  # 指定桌面环境为 Plasma（在设置中显示插件模式选项）
-pnpm dev -c main --desktop gnome   # 指定桌面环境为 GNOME
+bun dev -c main              # 启动主应用（端口 1420）
+bun dev -c plugin-editor     # 启动插件编辑器（端口 1421）
+bun dev -c main --mode local # 使用 local 模式（无商店版本，预打包全部插件）
+bun dev -c main --desktop plasma  # 指定桌面环境为 Plasma（在设置中显示插件模式选项）
+bun dev -c main --desktop gnome   # 指定桌面环境为 GNOME
 
 # 启动模式（无 watch，直接运行）
-pnpm start -c main/plugin-editor/cli/daemon 
+bun start -c main/plugin-editor/cli/daemon 
 
 # 构建生产版本
-pnpm build                    # 构建全部组件（main + plugin-editor + cli + daemon）
-pnpm build -c main/plugin-editor/cli/daemon 构建组件
+bun build                    # 构建全部组件（main + plugin-editor + cli + daemon）
+bun build -c main/plugin-editor/cli/daemon 构建组件
 ```
 
 说明：
-- `-c, --component`：指定要开发/启动/构建的组件（`main` | `plugin-editor` | `cli` | `all`）
-- `--watch`：启用源码监听（仅 `dev` 命令），rust代码更改时tauri会重启app
+- `-c, --component`：指定要开发/启动/构建的组件（`main` | `plugin-editor` | `cli`）
 - `--mode`：构建模式
   - `normal`（默认）：一般版本，带商店源，仅打包本地插件到 resources
   - `local`：无商店版本，预打包全部插件到 resources
@@ -229,7 +227,7 @@ pnpm build -c main/plugin-editor/cli/daemon 构建组件
 │   │   │   ├── ipc/      # IPC 通信（事件、客户端等）
 │   │   │   ├── runtime/  # 运行时适配器（Tauri、IPC 等）
 │   │   │   ├── gallery/  # 画廊浏览
-│   │   │   ├── virtual_drive/# 虚拟磁盘实现
+│   │   │   ├── virtual_driver/# 虚拟磁盘实现
 │   │   │   └── ...       # 其他共享模块（设置、路径、去重等）
 │   │   ├── build.rs
 │   │   └── Cargo.toml
@@ -240,7 +238,7 @@ pnpm build -c main/plugin-editor/cli/daemon 构建组件
 │   │   │   ├── storage.rs# 存储相关命令
 │   │   │   ├── daemon_client.rs # Daemon 客户端
 │   │   │   ├── event_listeners.rs # 事件监听器
-│   │   │   ├── virtual_drive.rs # 虚拟磁盘命令
+│   │   │   ├── virtual_driver.rs # 虚拟磁盘命令
 │   │   │   ├── wallpaper/# 壁纸相关（管理器、轮播、窗口等）
 │   │   │   └── ...
 │   │   ├── resources/    # 资源文件

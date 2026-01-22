@@ -14,7 +14,6 @@ use kabegame_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::Manager;
 
 #[derive(Parser, Debug)]
 #[command(name = "kabegame-cli")]
@@ -59,22 +58,10 @@ enum VdCommands {
 }
 
 #[derive(Args, Debug)]
-struct VdMountArgs {
-    /// 挂载点（例如 K:\\ 或 K: 或 K）
-    #[arg(long = "mount-point")]
-    mount_point: String,
-
-    /// 仅尝试挂载并立即退出（不推荐；默认会常驻作为 Dokan 服务端进程）
-    #[arg(long = "no-wait", default_value_t = false)]
-    no_wait: bool,
-}
+struct VdMountArgs {}
 
 #[derive(Args, Debug)]
-struct VdUnmountArgs {
-    /// 挂载点（例如 K:\\ 或 K: 或 K）
-    #[arg(long = "mount-point")]
-    mount_point: String,
-}
+struct VdUnmountArgs {}
 
 #[derive(Args, Debug)]
 struct VdStatusArgs {
@@ -159,38 +146,31 @@ fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
         eprintln!("创建 Tokio Runtime 失败: {e}");
         std::process::exit(1);
     });
-    
-    // 确保 daemon 已启动
-    let _daemon_path = match rt.block_on(ensure_daemon_ready_for_cli()) {
-        Ok(path) => path,
-        Err(e) => {
-            // 尝试获取 daemon 路径用于错误提示
-            let daemon_path = kabegame_core::daemon_startup::find_daemon_executable_basic()
-                .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
-            return Err(format!(
-                "{}\n请检查 {} 能否正常启动",
-                e,
-                daemon_path.display()
-            ));
-        }
-    };
-    
+
+    // 检查 daemon 是否可用（不自动启动）
+    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
+        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+            .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
+        return Err(format!(
+            "无法连接 kabegame-daemon\n提示：请先启动 `{}`",
+            daemon_path.display()
+        ));
+    }
+
     // 将画册名称转换为 ID（如果提供了名称）
     let output_album_id = match args.output_album {
-        Some(name) => {
-            match rt.block_on(resolve_album_name_to_id(&name)) {
-                Ok(Some(id)) => Some(id),
-                Ok(None) => {
-                    return Err(format!("未找到名称为 \"{}\" 的画册", name));
-                }
-                Err(e) => {
-                    return Err(format!("查询画册失败: {}", e));
-                }
+        Some(name) => match rt.block_on(resolve_album_name_to_id(&name)) {
+            Ok(Some(id)) => Some(id),
+            Ok(None) => {
+                return Err(format!("未找到名称为 \"{}\" 的画册", name));
             }
-        }
+            Err(e) => {
+                return Err(format!("查询画册失败: {}", e));
+            }
+        },
         None => None,
     };
-    
+
     let req = kabegame_core::ipc::ipc::CliIpcRequest::PluginRun {
         plugin: args.plugin,
         output_dir: args
@@ -224,14 +204,14 @@ fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
 async fn resolve_album_name_to_id(name: &str) -> Result<Option<String>, String> {
     use kabegame_core::ipc::client::IpcClient;
     use kabegame_core::storage::albums::Album;
-    
+
     let client = IpcClient::new();
     let albums_value = client.storage_get_albums().await?;
-    
+
     // 解析画册列表
-    let albums: Vec<Album> = serde_json::from_value(albums_value)
-        .map_err(|e| format!("解析画册列表失败: {}", e))?;
-    
+    let albums: Vec<Album> =
+        serde_json::from_value(albums_value).map_err(|e| format!("解析画册列表失败: {}", e))?;
+
     // 不区分大小写查找匹配的画册名称
     let name_lower = name.trim().to_lowercase();
     for album in albums {
@@ -239,24 +219,24 @@ async fn resolve_album_name_to_id(name: &str) -> Result<Option<String>, String> 
             return Ok(Some(album.id));
         }
     }
-    
+
     Ok(None)
 }
 
 /// 确保 daemon 已启动（CLI 版本，在控制台显示等待信息）
 async fn ensure_daemon_ready_for_cli() -> Result<std::path::PathBuf, String> {
     // 先检查是否已可用
-    if kabegame_core::daemon_startup::is_daemon_available().await {
-        return kabegame_core::daemon_startup::find_daemon_executable_basic();
+    if kabegame_core::ipc::daemon_startup::is_daemon_available().await {
+        return kabegame_core::ipc::daemon_startup::find_daemon_executable();
     }
-    
+
     // 显示等待信息
     print!("正在启动后台服务");
     std::io::Write::flush(&mut std::io::stdout()).ok();
-    
+
     // 启动 daemon（带超时）
-    let result = kabegame_core::daemon_startup::ensure_daemon_ready_basic().await;
-    
+    let result = kabegame_core::ipc::daemon_startup::ensure_daemon_ready_basic().await;
+
     match &result {
         Ok(_) => {
             println!("\r后台服务已就绪     ");
@@ -265,58 +245,94 @@ async fn ensure_daemon_ready_for_cli() -> Result<std::path::PathBuf, String> {
             println!("\r核心启动失败");
         }
     }
-    
+
     result
 }
 
-fn vd_mount(args: VdMountArgs) -> Result<(), String> {
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
-    let _daemon_path = rt.block_on(ensure_daemon_ready_for_cli())?;
-    let req = kabegame_core::ipc::ipc::CliIpcRequest::VdMount {
-        mount_point: args.mount_point,
-        no_wait: args.no_wait,
-    };
+fn vd_mount(_args: VdMountArgs) -> Result<(), String> {
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
+    // 检查 daemon 是否可用（不自动启动）
+    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
+        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+            .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
+        return Err(format!(
+            "无法连接 kabegame-daemon\n提示：请先启动 `{}`",
+            daemon_path.display()
+        ));
+    }
+    let req = kabegame_core::ipc::ipc::CliIpcRequest::VdMount;
     let resp = rt.block_on(kabegame_core::ipc::ipc::request(req))?;
     if resp.ok {
         println!("{}", resp.message.unwrap_or_else(|| "ok".to_string()));
         Ok(())
     } else {
-        Err(resp.message.unwrap_or_else(|| "daemon returned error".to_string()))
+        Err(resp
+            .message
+            .unwrap_or_else(|| "daemon returned error".to_string()))
     }
 }
 
-fn vd_unmount(args: VdUnmountArgs) -> Result<(), String> {
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
-    let _daemon_path = rt.block_on(ensure_daemon_ready_for_cli())?;
-    let req = kabegame_core::ipc::ipc::CliIpcRequest::VdUnmount {
-        mount_point: args.mount_point,
-    };
+fn vd_unmount(_args: VdUnmountArgs) -> Result<(), String> {
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
+    // 检查 daemon 是否可用（不自动启动）
+    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
+        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+            .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
+        return Err(format!(
+            "无法连接 kabegame-daemon\n提示：请先启动 `{}`",
+            daemon_path.display()
+        ));
+    }
+    let req = kabegame_core::ipc::ipc::CliIpcRequest::VdUnmount;
     let resp = rt.block_on(kabegame_core::ipc::ipc::request(req))?;
     if resp.ok {
         println!("{}", resp.message.unwrap_or_else(|| "ok".to_string()));
         Ok(())
     } else {
-        Err(resp.message.unwrap_or_else(|| "daemon returned error".to_string()))
+        Err(resp
+            .message
+            .unwrap_or_else(|| "daemon returned error".to_string()))
     }
 }
 
 fn vd_status(args: VdStatusArgs) -> Result<(), String> {
     let _ = args;
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
-    let _daemon_path = rt.block_on(ensure_daemon_ready_for_cli())?;
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
+    // 检查 daemon 是否可用（不自动启动）
+    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
+        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+            .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
+        return Err(format!(
+            "无法连接 kabegame-daemon\n提示：请先启动 `{}`",
+            daemon_path.display()
+        ));
+    }
     let req = kabegame_core::ipc::ipc::CliIpcRequest::VdStatus;
     let resp = rt.block_on(kabegame_core::ipc::ipc::request(req))?;
-    println!("{}", serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string()));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string())
+    );
     Ok(())
 }
 
 fn vd_ipc_status() -> Result<(), String> {
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {}", e))?;
-    let _daemon_path = rt.block_on(ensure_daemon_ready_for_cli())?;
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| format!("create tokio runtime failed: {}", e))?;
+    // 检查 daemon 是否可用（不自动启动）
+    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
+        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+            .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
+        return Err(format!(
+            "无法连接 kabegame-daemon\n提示：请先启动 `{}`",
+            daemon_path.display()
+        ));
+    }
     let resp = rt.block_on(async {
-        kabegame_core::ipc::ipc::request(kabegame_core::ipc::ipc::CliIpcRequest::Status)
-            .await
+        kabegame_core::ipc::ipc::request(kabegame_core::ipc::ipc::CliIpcRequest::Status).await
     })?;
     println!(
         "{}",
@@ -343,8 +359,9 @@ fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {
 }
 
 fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
-    let app = build_minimal_app()?;
-    let pm = app.handle().state::<PluginManager>();
+    // 初始化全局 PluginManager（不再使用 manage）
+    PluginManager::init_global()?;
+    let pm = PluginManager::global();
 
     // 先确保内置插件安装（主要是为了保证 plugins_directory 初始化/存在；失败不阻断导入）
     if let Err(e) = pm.ensure_prepackaged_plugins_installed() {
@@ -352,7 +369,7 @@ fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
     }
 
     // 结构检查（尽量给出更友好的错误）
-    validate_kgpg_structure(&pm, &p)?;
+    validate_kgpg_structure(pm, &p)?;
 
     let plugin = pm.install_plugin_from_zip(&p)?;
     let plugins_dir = pm.get_plugins_directory();
@@ -368,15 +385,15 @@ fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
 }
 
 fn build_minimal_app() -> Result<tauri::App, String> {
-    // 仅用于 CLI 的“导入/读取插件包信息”等轻量场景：
+    // 仅用于 CLI 的"导入/读取插件包信息"等轻量场景：
     // - 不初始化 Storage/ProviderRuntime/DownloadQueue
     // - 只需要 PluginManager 提供 plugins_directory 与 kgpg 解析能力
     let app = tauri::Builder::default()
         .build(tauri::generate_context!())
         .map_err(|e| format!("Build tauri app failed: {}", e))?;
 
-    let plugin_manager = PluginManager::new();
-    app.manage(plugin_manager);
+    // 初始化全局 PluginManager（不再使用 manage）
+    PluginManager::init_global()?;
 
     Ok(app)
 }
@@ -392,10 +409,7 @@ struct CliImportPreview {
 }
 
 #[tauri::command]
-fn cli_preview_import_plugin(
-    zip_path: String,
-    state: tauri::State<PluginManager>,
-) -> Result<CliImportPreview, String> {
+fn cli_preview_import_plugin(zip_path: String) -> Result<CliImportPreview, String> {
     let path = std::path::PathBuf::from(&zip_path);
     if !path.is_file() {
         return Err(format!("插件文件不存在: {}", zip_path));
@@ -404,19 +418,22 @@ fn cli_preview_import_plugin(
         return Err(format!("不是 .kgpg 文件: {}", zip_path));
     }
 
+    // 使用全局单例（不再使用 state）
+    let pm = PluginManager::global();
+
     // 先确保内置插件安装（主要为了初始化 plugins_directory；失败不阻断预览）
-    if let Err(e) = state.ensure_prepackaged_plugins_installed() {
+    if let Err(e) = pm.ensure_prepackaged_plugins_installed() {
         eprintln!("[WARN] 安装内置插件失败（将继续预览）：{e}");
     }
 
     // 结构检查
-    validate_kgpg_structure(&state, &path)?;
+    validate_kgpg_structure(pm, &path)?;
 
-    let preview = state.preview_import_from_zip(&path)?;
-    let manifest = state.read_plugin_manifest(&path)?;
+    let preview = pm.preview_import_from_zip(&path)?;
+    let manifest = pm.read_plugin_manifest(&path)?;
     let icon_png_base64 = {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
-        match state.read_plugin_icon(&path)? {
+        match pm.read_plugin_icon(&path)? {
             Some(bytes) if !bytes.is_empty() => Some(STANDARD.encode(bytes)),
             _ => None,
         }
@@ -427,15 +444,12 @@ fn cli_preview_import_plugin(
         manifest,
         icon_png_base64,
         file_path: path.to_string_lossy().to_string(),
-        plugins_dir: state.get_plugins_directory().to_string_lossy().to_string(),
+        plugins_dir: pm.get_plugins_directory().to_string_lossy().to_string(),
     })
 }
 
 #[tauri::command]
-fn cli_import_plugin_from_zip(
-    zip_path: String,
-    state: tauri::State<PluginManager>,
-) -> Result<Plugin, String> {
+fn cli_import_plugin_from_zip(zip_path: String) -> Result<Plugin, String> {
     let path = std::path::PathBuf::from(&zip_path);
     if !path.is_file() {
         return Err(format!("插件文件不存在: {}", zip_path));
@@ -444,16 +458,16 @@ fn cli_import_plugin_from_zip(
         return Err(format!("不是 .kgpg 文件: {}", zip_path));
     }
 
+    // 使用全局单例（不再使用 state）
+    let pm = PluginManager::global();
+
     // 再做一次结构检查，避免 UI 预览后文件被替换/损坏
-    validate_kgpg_structure(&state, &path)?;
-    state.install_plugin_from_zip(&path)
+    validate_kgpg_structure(pm, &path)?;
+    pm.install_plugin_from_zip(&path)
 }
 
 #[tauri::command]
-fn cli_get_plugin_detail_from_zip(
-    zip_path: String,
-    state: tauri::State<PluginManager>,
-) -> Result<PluginDetail, String> {
+fn cli_get_plugin_detail_from_zip(zip_path: String) -> Result<PluginDetail, String> {
     let path = std::path::PathBuf::from(&zip_path);
     if !path.is_file() {
         return Err(format!("插件文件不存在: {}", zip_path));
@@ -462,8 +476,11 @@ fn cli_get_plugin_detail_from_zip(
         return Err(format!("不是 .kgpg 文件: {}", zip_path));
     }
 
+    // 使用全局单例（不再使用 state）
+    let pm = PluginManager::global();
+
     // 复用结构检查，提前给出友好错误
-    validate_kgpg_structure(&state, &path)?;
+    validate_kgpg_structure(pm, &path)?;
 
     let plugin_id = path
         .file_stem()
@@ -471,10 +488,10 @@ fn cli_get_plugin_detail_from_zip(
         .unwrap_or("plugin")
         .to_string();
 
-    let manifest = state.read_plugin_manifest(&path)?;
-    let doc = state.read_plugin_doc_public(&path).ok().flatten();
-    let icon_data = state.read_plugin_icon(&path).ok().flatten();
-    let config = state.read_plugin_config_public(&path).ok().flatten();
+    let manifest = pm.read_plugin_manifest(&path)?;
+    let doc = pm.read_plugin_doc_public(&path).ok().flatten();
+    let icon_data = pm.read_plugin_icon(&path).ok().flatten();
+    let config = pm.read_plugin_config_public(&path).ok().flatten();
     let base_url = config.and_then(|c| c.base_url);
 
     Ok(PluginDetail {
@@ -489,11 +506,7 @@ fn cli_get_plugin_detail_from_zip(
 }
 
 #[tauri::command]
-fn cli_get_plugin_image_from_zip(
-    zip_path: String,
-    image_path: String,
-    state: tauri::State<PluginManager>,
-) -> Result<Vec<u8>, String> {
+fn cli_get_plugin_image_from_zip(zip_path: String, image_path: String) -> Result<Vec<u8>, String> {
     let path = std::path::PathBuf::from(&zip_path);
     if !path.is_file() {
         return Err(format!("插件文件不存在: {}", zip_path));
@@ -501,8 +514,10 @@ fn cli_get_plugin_image_from_zip(
     if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
         return Err(format!("不是 .kgpg 文件: {}", zip_path));
     }
+    // 使用全局单例（不再使用 state）
+    let pm = PluginManager::global();
     // image_path 的安全性由 read_plugin_image 内部校验
-    state.read_plugin_image(&path, &image_path)
+    pm.read_plugin_image(&path, &image_path)
 }
 
 fn validate_kgpg_structure(pm: &PluginManager, zip_path: &std::path::Path) -> Result<(), String> {
@@ -515,7 +530,7 @@ fn validate_kgpg_structure(pm: &PluginManager, zip_path: &std::path::Path) -> Re
         return Err("插件包缺少 crawl.rhai（或内容为空）".to_string());
     }
 
-    // 3) config.json 若存在必须可解析（避免“安装后才炸”）
+    // 3) config.json 若存在必须可解析（避免"安装后才炸"）
     let _ = pm.read_plugin_config_public(zip_path)?;
 
     Ok(())
@@ -523,6 +538,25 @@ fn validate_kgpg_structure(pm: &PluginManager, zip_path: &std::path::Path) -> Re
 
 fn import_plugin_with_ui(p: PathBuf) -> Result<(), String> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    // 确保 daemon 已启动（仅在安装插件时自动启动）
+    let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
+        eprintln!("创建 Tokio Runtime 失败: {e}");
+        std::process::exit(1);
+    });
+    let _daemon_path = match rt.block_on(ensure_daemon_ready_for_cli()) {
+        Ok(path) => path,
+        Err(e) => {
+            // 尝试获取 daemon 路径用于错误提示
+            let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+                .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
+            return Err(format!(
+                "{}\n请检查 {} 能否正常启动",
+                e,
+                daemon_path.display()
+            ));
+        }
+    };
 
     let zip_path = p.to_string_lossy().to_string();
     let encoded = url::form_urlencoded::byte_serialize(zip_path.as_bytes()).collect::<String>();
@@ -533,8 +567,11 @@ fn import_plugin_with_ui(p: PathBuf) -> Result<(), String> {
     tauri::Builder::default()
         .setup(move |app| {
             // 只初始化插件管理器（导入 UI 不需要 Storage/Settings/DownloadQueue）
-            let plugin_manager = PluginManager::new();
-            app.manage(plugin_manager);
+            // 使用全局单例（不再使用 manage）
+            if let Err(e) = PluginManager::init_global() {
+                eprintln!("Failed to initialize plugin manager: {}", e);
+                return Err(e.into());
+            }
 
             let _ = WebviewWindowBuilder::new(app, "cli-import", url.clone())
                 .title("Kabegame 插件导入")

@@ -58,15 +58,13 @@ const handleChange = async (value: boolean) => {
       // 3) 等待状态变为 running
       await waitForRotatorStatus("running", 20);
 
-      // 4) 重新拉全量设置，让 UI 与后端保持一致（比如回落到画廊会把 albumId 写成空字符串）
-      await settingsStore.loadAll();
-
+      // 设置变更会通过 setting-change 事件自动更新 UI
       if (res.fallback && res.warning) ElMessage.warning(res.warning);
       ElMessage.success(res.source === "album" ? "已开启轮播：画册" : "已开启轮播：画廊");
     } else {
       await invoke("set_wallpaper_rotation_enabled", { enabled: false });
       await waitForRotatorStatus("idle", 50);
-      await settingsStore.loadAll();
+      // 设置变更会通过 setting-change 事件自动更新 UI
       ElMessage.info("壁纸轮播已禁用");
     }
   } catch (e: any) {

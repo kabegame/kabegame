@@ -4,8 +4,8 @@
   "version": "3.0.0",
   "identifier": "com.kabegame.plugin-editor",
   "build": {
-    "beforeDevCommand": "pnpm -C .. dev:frontend-plugin-editor",
-    "beforeBuildCommand": "pnpm -C .. build:frontend-plugin-editor",
+    "beforeDevCommand": "bun --cwd .. run dev:frontend-plugin-editor",
+    "beforeBuildCommand": "bun --cwd .. run build:frontend-plugin-editor",
     "devUrl": "http://localhost:1421",
     "frontendDist": "../../dist-plugin-editor"
   },

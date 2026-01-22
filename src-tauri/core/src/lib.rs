@@ -1,17 +1,14 @@
 //! Kabegame 后端核心库入口（供多个 app crate 复用）。
 
-pub mod bin_finder;
 pub mod app_paths;
+pub mod bin_finder;
+#[cfg(any(feature = "ipc-client", feature = "ipc-server"))]
 pub mod ipc;
 
 pub mod crawler;
 // 去重任务管理器（GUI/本地模式使用）。daemon 侧只需要 storage::dedupe 的扫描能力。
-#[cfg(all(feature = "dedupe", feature = "tauri-adapter"))]
+#[cfg(all(feature = "dedupe", feature = "tauri-runtime"))]
 pub mod dedupe;
-
-/// Daemon 启动管理模块
-#[cfg(feature = "tauri")]
-pub mod daemon_startup;
 
 pub mod gallery;
 pub mod kgpg;
@@ -29,6 +26,6 @@ pub mod windows_effects;
 
 /// 虚拟盘（Windows Dokan）。
 ///
-/// 注意：该模块仅在启用 feature `virtual-drive` 时编译，避免在不需要 VD 的 app（如 plugin-editor）里引入 Dokan 相关依赖。
-#[cfg(feature = "virtual-drive")]
-pub mod virtual_drive;
+/// 注意：该模块仅在启用 feature `virtual-driver` 时编译，避免在不需要 VD 的 app（如 plugin-editor）里引入 Dokan 相关依赖。
+#[cfg(feature = "virtual-driver")]
+pub mod virtual_driver;

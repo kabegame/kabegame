@@ -25,16 +25,47 @@
 //! listener.start().await?;
 //! ```
 
+#[cfg(feature = "ipc-client")]
+use crate::ipc::daemon_startup;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
-use crate::ipc::IpcClient;
+use tokio::sync::RwLock;
 
-/// Daemon 事件种类（不含 payload），用于做"事件 -> 广播器"的固定映射。
-///
-/// 注意：这是 daemon -> client 的事件流里的"类型"，不是 Tauri 前端的事件名。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DaemonEventKind {
+macro_rules! daemon_event_kinds {
+    (
+        $(
+            $name:ident
+        ),* $(,)?
+    ) => {
+           /// Daemon 事件种类（不含 payload），用于做"事件 -> 广播器"的固定映射。
+        ///
+        /// 注意：这是 daemon -> client 的事件流里的"类型"，不是 Tauri 前端的事件名。
+        #[repr(usize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        pub enum DaemonEventKind {
+            $($name),*
+        }
+
+        impl DaemonEventKind {
+            /// 已知事件数量（用于初始化固定大小映射表）。
+
+            pub const COUNT: usize = daemon_event_kinds!(@count $($name),*);
+            /// 所有种类（用于遍历初始化/订阅）。
+
+            pub const ALL: [DaemonEventKind; Self::COUNT] = [
+                $(DaemonEventKind::$name),*
+            ];
+        }
+    };
+
+    (@count $($name:ident),*) => {
+        <[()]>::len(&[$(daemon_event_kinds!(@unit $name)),*])
+    };
+    (@unit $name:ident) => { () };
+}
+
+daemon_event_kinds! {
     TaskLog,
     DownloadState,
     TaskStatus,
@@ -46,57 +77,80 @@ pub enum DaemonEventKind {
     DedupeProgress,
     DedupeFinished,
     WallpaperUpdateImage,
+    ImagesChange,
     WallpaperUpdateStyle,
     WallpaperUpdateTransition,
     SettingChange,
+    AlbumAdded,
 }
 
 impl DaemonEventKind {
-    /// 已知事件数量（用于初始化固定大小映射表）。
-    pub const COUNT: usize = 14;
-
-    /// 所有种类（用于遍历初始化/订阅）。
-    pub const ALL: [DaemonEventKind; Self::COUNT] = [
-        DaemonEventKind::TaskLog,
-        DaemonEventKind::DownloadState,
-        DaemonEventKind::TaskStatus,
-        DaemonEventKind::TaskProgress,
-        DaemonEventKind::TaskError,
-        DaemonEventKind::DownloadProgress,
-        DaemonEventKind::Generic,
-        DaemonEventKind::ConnectionStatus,
-        DaemonEventKind::DedupeProgress,
-        DaemonEventKind::DedupeFinished,
-        DaemonEventKind::WallpaperUpdateImage,
-        DaemonEventKind::WallpaperUpdateStyle,
-        DaemonEventKind::WallpaperUpdateTransition,
-        DaemonEventKind::SettingChange,
-    ];
-
     #[inline]
     pub const fn as_usize(self) -> usize {
+        self as usize
+    }
+
+    /// 获取事件名（kebab-case，不带引号）
+    /// 例如：TaskLog -> "task-log", SettingChange -> "setting-change"
+    pub fn as_event_name(&self) -> String {
         match self {
-            DaemonEventKind::TaskLog => 0,
-            DaemonEventKind::DownloadState => 1,
-            DaemonEventKind::TaskStatus => 2,
-            DaemonEventKind::TaskProgress => 3,
-            DaemonEventKind::TaskError => 4,
-            DaemonEventKind::DownloadProgress => 5,
-            DaemonEventKind::Generic => 6,
-            DaemonEventKind::ConnectionStatus => 7,
-            DaemonEventKind::DedupeProgress => 8,
-            DaemonEventKind::DedupeFinished => 9,
-            DaemonEventKind::WallpaperUpdateImage => 10,
-            DaemonEventKind::WallpaperUpdateStyle => 11,
-            DaemonEventKind::WallpaperUpdateTransition => 12,
-            DaemonEventKind::SettingChange => 13,
+            DaemonEventKind::TaskLog => "task-log",
+            DaemonEventKind::DownloadState => "download-state",
+            DaemonEventKind::TaskStatus => "task-status",
+            DaemonEventKind::TaskProgress => "task-progress",
+            DaemonEventKind::TaskError => "task-error",
+            DaemonEventKind::DownloadProgress => "download-progress",
+            DaemonEventKind::Generic => "generic",
+            DaemonEventKind::ConnectionStatus => "connection-status",
+            DaemonEventKind::DedupeProgress => "dedupe-progress",
+            DaemonEventKind::DedupeFinished => "dedupe-finished",
+            DaemonEventKind::WallpaperUpdateImage => "wallpaper-update-image",
+            DaemonEventKind::ImagesChange => "images-change",
+            DaemonEventKind::WallpaperUpdateStyle => "wallpaper-update-style",
+            DaemonEventKind::WallpaperUpdateTransition => "wallpaper-update-transition",
+            DaemonEventKind::SettingChange => "setting-change",
+            DaemonEventKind::AlbumAdded => "album-added",
         }
+        .to_string()
+    }
+
+    /// 从事件名解析事件类型（kebab-case）
+    pub fn from_event_name(s: &str) -> Option<Self> {
+        match s {
+            "task-log" => Some(DaemonEventKind::TaskLog),
+            "download-state" => Some(DaemonEventKind::DownloadState),
+            "task-status" => Some(DaemonEventKind::TaskStatus),
+            "task-progress" => Some(DaemonEventKind::TaskProgress),
+            "task-error" => Some(DaemonEventKind::TaskError),
+            "download-progress" => Some(DaemonEventKind::DownloadProgress),
+            "generic" => Some(DaemonEventKind::Generic),
+            "connection-status" => Some(DaemonEventKind::ConnectionStatus),
+            "dedupe-progress" => Some(DaemonEventKind::DedupeProgress),
+            "dedupe-finished" => Some(DaemonEventKind::DedupeFinished),
+            "wallpaper-update-image" => Some(DaemonEventKind::WallpaperUpdateImage),
+            "images-change" => Some(DaemonEventKind::ImagesChange),
+            "wallpaper-update-style" => Some(DaemonEventKind::WallpaperUpdateStyle),
+            "wallpaper-update-transition" => Some(DaemonEventKind::WallpaperUpdateTransition),
+            "setting-change" => Some(DaemonEventKind::SettingChange),
+            "album-added" => Some(DaemonEventKind::AlbumAdded),
+            _ => None,
+        }
+    }
+
+    /// 从字符串解析事件类型（用于 IPC 协议，支持 JSON 格式和 kebab-case）
+    pub fn from_str(s: &str) -> Option<Self> {
+        // 先尝试 JSON 格式（向后兼容）
+        if let Ok(res) = serde_json::from_str::<Self>(s) {
+            return Some(res);
+        }
+        // 再尝试 kebab-case 格式
+        Self::from_event_name(s)
     }
 }
 
 /// Daemon 事件类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "kebab-case")]
 pub enum DaemonEvent {
     /// 任务日志事件
     TaskLog {
@@ -125,16 +179,10 @@ pub enum DaemonEvent {
     },
 
     /// 任务进度事件（Rhai add_progress 驱动）
-    TaskProgress {
-        task_id: String,
-        progress: f64,
-    },
+    TaskProgress { task_id: String, progress: f64 },
 
     /// 任务错误事件
-    TaskError {
-        task_id: String,
-        error: String,
-    },
+    TaskError { task_id: String, error: String },
 
     /// 下载进度事件（细粒度进度更新）
     DownloadProgress {
@@ -153,10 +201,7 @@ pub enum DaemonEvent {
     },
 
     /// 连接状态变化
-    ConnectionStatus {
-        connected: bool,
-        message: String,
-    },
+    ConnectionStatus { connected: bool, message: String },
 
     /// 去重进度事件
     DedupeProgress {
@@ -174,30 +219,37 @@ pub enum DaemonEvent {
         canceled: bool,
     },
 
-    /// 壁纸图片更新事件
-    WallpaperUpdateImage {
-        image_path: String,
+    ImagesChange {
+        reason: String,
+        image_ids: Vec<String>,
     },
+
+    /// 壁纸图片更新事件
+    WallpaperUpdateImage { image_path: String },
 
     /// 壁纸样式更新事件
-    WallpaperUpdateStyle {
-        style: String,
-    },
+    WallpaperUpdateStyle { style: String },
 
     /// 壁纸过渡效果更新事件
-    WallpaperUpdateTransition {
-        transition: String,
-    },
+    WallpaperUpdateTransition { transition: String },
 
     /// 设置变更事件（只包含变化的部分）
     SettingChange {
         /// 变更的设置项，键值对形式
         changes: serde_json::Value,
     },
+
+    /// 画册添加
+    AlbumAdded {
+        id: String,
+        name: String,
+        created_at: u64,
+    },
 }
 
 impl DaemonEvent {
     /// 获取事件种类（用于路由到对应广播器）。
+    /// TODO: 这个函数太长不好维护
     #[inline]
     pub fn kind(&self) -> DaemonEventKind {
         match self {
@@ -211,511 +263,226 @@ impl DaemonEvent {
             DaemonEvent::ConnectionStatus { .. } => DaemonEventKind::ConnectionStatus,
             DaemonEvent::DedupeProgress { .. } => DaemonEventKind::DedupeProgress,
             DaemonEvent::DedupeFinished { .. } => DaemonEventKind::DedupeFinished,
+            DaemonEvent::ImagesChange { .. } => DaemonEventKind::ImagesChange,
             DaemonEvent::WallpaperUpdateImage { .. } => DaemonEventKind::WallpaperUpdateImage,
             DaemonEvent::WallpaperUpdateStyle { .. } => DaemonEventKind::WallpaperUpdateStyle,
-            DaemonEvent::WallpaperUpdateTransition { .. } => DaemonEventKind::WallpaperUpdateTransition,
+            DaemonEvent::WallpaperUpdateTransition { .. } => {
+                DaemonEventKind::WallpaperUpdateTransition
+            }
             DaemonEvent::SettingChange { .. } => DaemonEventKind::SettingChange,
+            DaemonEvent::AlbumAdded { .. } => DaemonEventKind::AlbumAdded,
         }
     }
 }
 
-/// 事件回调类型
-pub type EventCallback = Arc<dyn Fn(DaemonEvent) + Send + Sync>;
+use std::collections::HashMap;
+
+/// 事件回调类型（接收原始 JSON payload）
+pub type EventCallback = Arc<dyn Fn(serde_json::Value) + Send + Sync>;
+
+/// 默认事件发送器（用于无回调时自动转发到前端）
+pub type DefaultEmitter = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 
 /// 事件监听器
 pub struct EventListener {
-    /// 事件回调列表
-    callbacks: Arc<RwLock<Vec<EventCallback>>>,
-    /// 任务日志回调
-    task_log_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(String, String, String) + Send + Sync>>>>,
-    /// 下载状态回调
-    download_state_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(DownloadStateEvent) + Send + Sync>>>>,
-    /// 任务状态回调
-    task_status_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(TaskStatusEvent) + Send + Sync>>>>,
-    /// 任务进度回调
-    task_progress_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(TaskProgressEvent) + Send + Sync>>>>,
-    /// 任务错误回调
-    task_error_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(TaskErrorEvent) + Send + Sync>>>>,
-    /// 下载进度回调
-    download_progress_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(DownloadProgressEvent) + Send + Sync>>>>,
-    /// 去重进度回调
-    dedupe_progress_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(DedupeProgressEvent) + Send + Sync>>>>,
-    /// 去重完成回调
-    dedupe_finished_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(DedupeFinishedEvent) + Send + Sync>>>>,
-    /// 壁纸图片更新回调
-    wallpaper_update_image_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(WallpaperUpdateImageEvent) + Send + Sync>>>>,
-    /// 壁纸样式更新回调
-    wallpaper_update_style_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(WallpaperUpdateStyleEvent) + Send + Sync>>>>,
-    /// 壁纸过渡效果更新回调
-    wallpaper_update_transition_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(WallpaperUpdateTransitionEvent) + Send + Sync>>>>,
-    /// 设置变更回调
-    setting_change_callbacks: Arc<RwLock<Vec<Arc<dyn Fn(SettingChangeEvent) + Send + Sync>>>>,
-    /// 停止信号
-    stop_signal: Arc<RwLock<Option<mpsc::Sender<()>>>>,
+    /// 按事件类型组织的回调表：kind -> Vec<callback>
+    callbacks: Arc<RwLock<HashMap<DaemonEventKind, Vec<EventCallback>>>>,
+    /// 默认事件发送器（当某个 kind 没有回调时使用）
+    default_emitter: Arc<RwLock<Option<DefaultEmitter>>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct DownloadStateEvent {
-    pub task_id: String,
-    pub url: String,
-    pub start_time: u64,
-    pub plugin_id: String,
-    pub state: String,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TaskStatusEvent {
-    pub task_id: String,
-    pub status: String,
-    pub progress: Option<f64>,
-    pub error: Option<String>,
-    pub current_wallpaper: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TaskProgressEvent {
-    pub task_id: String,
-    pub progress: f64,
-}
-
-#[derive(Debug, Clone)]
-pub struct TaskErrorEvent {
-    pub task_id: String,
-    pub error: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct DownloadProgressEvent {
-    pub task_id: String,
-    pub url: String,
-    pub start_time: u64,
-    pub plugin_id: String,
-    pub received_bytes: u64,
-    pub total_bytes: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct DedupeProgressEvent {
-    pub processed: usize,
-    pub total: usize,
-    pub removed: usize,
-    pub batch_index: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct DedupeFinishedEvent {
-    pub processed: usize,
-    pub total: usize,
-    pub removed: usize,
-    pub canceled: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct WallpaperUpdateImageEvent {
-    pub image_path: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct WallpaperUpdateStyleEvent {
-    pub style: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct WallpaperUpdateTransitionEvent {
-    pub transition: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct SettingChangeEvent {
-    pub changes: serde_json::Value,
+impl Default for EventListener {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EventListener {
     /// 创建新的事件监听器
     pub fn new() -> Self {
         Self {
-            callbacks: Arc::new(RwLock::new(Vec::new())),
-            task_log_callbacks: Arc::new(RwLock::new(Vec::new())),
-            download_state_callbacks: Arc::new(RwLock::new(Vec::new())),
-            task_status_callbacks: Arc::new(RwLock::new(Vec::new())),
-            task_progress_callbacks: Arc::new(RwLock::new(Vec::new())),
-            task_error_callbacks: Arc::new(RwLock::new(Vec::new())),
-            download_progress_callbacks: Arc::new(RwLock::new(Vec::new())),
-            dedupe_progress_callbacks: Arc::new(RwLock::new(Vec::new())),
-            dedupe_finished_callbacks: Arc::new(RwLock::new(Vec::new())),
-            wallpaper_update_image_callbacks: Arc::new(RwLock::new(Vec::new())),
-            wallpaper_update_style_callbacks: Arc::new(RwLock::new(Vec::new())),
-            wallpaper_update_transition_callbacks: Arc::new(RwLock::new(Vec::new())),
-            setting_change_callbacks: Arc::new(RwLock::new(Vec::new())),
-            stop_signal: Arc::new(RwLock::new(None)),
+            callbacks: Arc::new(RwLock::new(HashMap::new())),
+            default_emitter: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// 注册通用事件回调
-    pub async fn on<F>(&self, callback: F)
+    /// 注册事件回调：按事件类型注册，回调接收原始 JSON payload
+    ///
+    /// # 参数
+    /// - `kind`: 事件类型
+    /// - `callback`: 回调函数，接收 `serde_json::Value`（原始 payload）
+    ///
+    /// # 行为
+    /// - 如果某个 `kind` 注册了回调，则只执行回调（不自动转发）
+    /// - 如果某个 `kind` 没有回调，且设置了默认 emitter，则自动转发
+    pub async fn on<F>(&self, kind: DaemonEventKind, callback: F)
     where
-        F: Fn(DaemonEvent) + Send + Sync + 'static,
+        F: Fn(serde_json::Value) + Send + Sync + 'static,
     {
         let mut callbacks = self.callbacks.write().await;
-        callbacks.push(Arc::new(callback));
+        callbacks
+            .entry(kind)
+            .or_insert_with(Vec::new)
+            .push(Arc::new(callback));
     }
 
-    /// 监听任务日志事件
-    pub async fn on_task_log<F>(&self, callback: F)
+    /// 设置默认事件发送器（用于无回调时自动转发到前端）
+    ///
+    /// # 参数
+    /// - `emitter`: 发送器函数，接收 `(event_name: &str, payload: serde_json::Value)`
+    pub async fn set_default_emitter<F>(&self, emitter: F)
     where
-        F: Fn(String, String, String) + Send + Sync + 'static,
+        F: Fn(&str, serde_json::Value) + Send + Sync + 'static,
     {
-        let mut callbacks = self.task_log_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
+        let mut default_emitter = self.default_emitter.write().await;
+        *default_emitter = Some(Arc::new(emitter));
     }
 
-    /// 监听下载状态事件
-    pub async fn on_download_state<F>(&self, callback: F)
-    where
-        F: Fn(DownloadStateEvent) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.download_state_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
-    }
-
-    /// 监听任务状态事件
-    pub async fn on_task_status<F>(&self, callback: F)
-    where
-        F: Fn(TaskStatusEvent) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.task_status_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
-    }
-
-    /// 监听任务进度事件
-    pub async fn on_task_progress<F>(&self, callback: F)
-    where
-        F: Fn(TaskProgressEvent) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.task_progress_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
-    }
-
-    /// 监听任务错误事件
-    pub async fn on_task_error<F>(&self, callback: F)
-    where
-        F: Fn(TaskErrorEvent) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.task_error_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
-    }
-
-    /// 监听下载进度事件
-    pub async fn on_download_progress<F>(&self, callback: F)
-    where
-        F: Fn(DownloadProgressEvent) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.download_progress_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
-    }
-
-    /// 监听去重进度事件
-    pub async fn on_dedupe_progress<F>(&self, callback: F)
-    where
-        F: Fn(DedupeProgressEvent) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.dedupe_progress_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
-    }
-
-    /// 监听去重完成事件
-    pub async fn on_dedupe_finished<F>(&self, callback: F)
-    where
-        F: Fn(DedupeFinishedEvent) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.dedupe_finished_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
-    }
-
-    /// 监听壁纸图片更新事件
-    pub async fn on_wallpaper_update_image<F>(&self, callback: F)
-    where
-        F: Fn(WallpaperUpdateImageEvent) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.wallpaper_update_image_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
-    }
-
-    /// 监听壁纸样式更新事件
-    pub async fn on_wallpaper_update_style<F>(&self, callback: F)
-    where
-        F: Fn(WallpaperUpdateStyleEvent) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.wallpaper_update_style_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
-    }
-
-    /// 监听壁纸过渡效果更新事件
-    pub async fn on_wallpaper_update_transition<F>(&self, callback: F)
-    where
-        F: Fn(WallpaperUpdateTransitionEvent) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.wallpaper_update_transition_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
-    }
-
-    /// 监听设置变更事件
-    pub async fn on_setting_change<F>(&self, callback: F)
-    where
-        F: Fn(SettingChangeEvent) + Send + Sync + 'static,
-    {
-        let mut callbacks = self.setting_change_callbacks.write().await;
-        callbacks.push(Arc::new(callback));
-    }
-
-    /// 启动事件监听（长连接模式）
+    /// 启动事件监听（长连接模式，按事件类型过滤）
     ///
     /// 建立长连接并持续接收服务器推送的事件，适用于全双工 IPC
-    pub async fn start(&self) -> Result<(), String> {
-        let (tx, mut rx) = mpsc::channel::<()>(1);
-        *self.stop_signal.write().await = Some(tx);
-
+    /// kinds 为空表示订阅全部事件
+    ///
+    /// 此方法会监听连接状态，当连接上时自动注册事件，断开时自动停止并释放资源
+    /// 当连接状态通道关闭时，监听循环会自动退出
+    #[cfg(feature = "ipc-client")]
+    pub async fn start(&self, kinds: &[DaemonEventKind]) -> Result<(), String> {
         let callbacks = self.callbacks.clone();
-        let task_log_callbacks = self.task_log_callbacks.clone();
-        let download_state_callbacks = self.download_state_callbacks.clone();
-        let task_status_callbacks = self.task_status_callbacks.clone();
-        let task_progress_callbacks = self.task_progress_callbacks.clone();
-        let task_error_callbacks = self.task_error_callbacks.clone();
-        let download_progress_callbacks = self.download_progress_callbacks.clone();
-        let dedupe_progress_callbacks = self.dedupe_progress_callbacks.clone();
-        let dedupe_finished_callbacks = self.dedupe_finished_callbacks.clone();
-        let wallpaper_update_image_callbacks = self.wallpaper_update_image_callbacks.clone();
-        let wallpaper_update_style_callbacks = self.wallpaper_update_style_callbacks.clone();
-        let wallpaper_update_transition_callbacks = self.wallpaper_update_transition_callbacks.clone();
-        let setting_change_callbacks = self.setting_change_callbacks.clone();
+        let default_emitter = self.default_emitter.clone();
+        let kinds_vec = kinds.to_vec();
 
         tokio::spawn(async move {
-            let client = IpcClient::new();
-            
-            // 建立长连接并持续接收事件
-            let _ = client.subscribe_events_stream(move |raw| {
-                let callbacks = callbacks.clone();
-                let task_log_callbacks = task_log_callbacks.clone();
-                let download_state_callbacks = download_state_callbacks.clone();
-                let task_status_callbacks = task_status_callbacks.clone();
-                let task_progress_callbacks = task_progress_callbacks.clone();
-                let task_error_callbacks = task_error_callbacks.clone();
-                let download_progress_callbacks = download_progress_callbacks.clone();
-                let dedupe_progress_callbacks = dedupe_progress_callbacks.clone();
-                let dedupe_finished_callbacks = dedupe_finished_callbacks.clone();
-                let wallpaper_update_image_callbacks = wallpaper_update_image_callbacks.clone();
-                let wallpaper_update_style_callbacks = wallpaper_update_style_callbacks.clone();
-                let wallpaper_update_transition_callbacks = wallpaper_update_transition_callbacks.clone();
-                let setting_change_callbacks = setting_change_callbacks.clone();
-                
-                async move {
-                    eprintln!("[DEBUG] EventListener 收到事件: {:?}", raw);
-                    let evt: DaemonEvent = match serde_json::from_value(raw.clone()) {
-                        Ok(e) => {
-                            eprintln!("[DEBUG] EventListener 解析成功: {:?}", e);
-                            e
-                        },
-                                Err(e) => {
-                            eprintln!("[ipc-events] parse DaemonEvent failed: {e}, raw: {:?}", raw);
-                            return;
+            // 使用全局 IpcClient（与请求共享连接）
+            let client = daemon_startup::get_ipc_client();
+
+            // 获取连接状态订阅
+            let mut status_rx = client.subscribe_connection_status();
+
+            // 当前事件订阅任务的句柄（用于在断开时取消）
+            let mut event_task_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+            loop {
+                // 监听连接状态变化
+                match status_rx.changed().await {
+                    Ok(()) => {
+                        let status = *status_rx.borrow();
+                        eprintln!("[DEBUG] EventListener 连接状态变化: {:?}", status);
+
+                        match status {
+                            crate::ipc::connection::ConnectionStatus::Connected => {
+                                // 连接上：启动事件订阅任务
+                                if event_task_handle.is_none() {
+                                    eprintln!("[DEBUG] EventListener 连接已建立，开始订阅事件");
+
+                                    let callbacks_clone = callbacks.clone();
+                                    let default_emitter_clone = default_emitter.clone();
+                                    let kinds_clone = kinds_vec.clone();
+                                    let mut client_clone = client.clone();
+
+                                    let task = tokio::spawn(async move {
+                                        // 建立长连接并持续接收事件（带过滤）
+                                        let _ = client_clone
+                                            .subscribe_events_stream(&kinds_clone, move |raw| {
+                                                let callbacks = callbacks_clone.clone();
+                                                let default_emitter = default_emitter_clone.clone();
+
+                                                async move {
+                                                    eprintln!("[DEBUG] EventListener 收到事件: {:?}", raw);
+
+                                                    // 从 payload 解析事件类型
+                                                    let kind = if let Some(type_val) = raw.get("type") {
+                                                        if let Some(type_str) = type_val.as_str() {
+                                                            DaemonEventKind::from_str(type_str)
+                                                        } else {
+                                                            None
+                                                        }
+                                                    } else {
+                                                        None
+                                                    };
+
+                                                    let kind = match kind {
+                                                        Some(k) => k,
+                                                        None => {
+                                                            eprintln!("[ipc-events] 无法解析事件类型，raw: {:?}", raw);
+                                                            return;
+                                                        }
+                                                    };
+
+                                                    // 检查是否有该 kind 的回调
+                                                    let has_callbacks = {
+                                                        let callbacks_guard = callbacks.read().await;
+                                                        callbacks_guard
+                                                            .get(&kind)
+                                                            .map(|v| !v.is_empty())
+                                                            .unwrap_or(false)
+                                                    };
+
+                                                    if has_callbacks {
+                                                        // 有回调：执行所有回调
+                                                        let callbacks_guard = callbacks.read().await;
+                                                        if let Some(cb_list) = callbacks_guard.get(&kind) {
+                                                            for cb in cb_list.iter() {
+                                                                cb(raw.clone());
+                                                            }
+                                                        }
+                                                    } else {
+                                                        // 无回调：使用默认 emitter（如果设置了）
+                                                        let default_emitter_guard = default_emitter.read().await;
+                                                        if let Some(emitter) = default_emitter_guard.as_ref() {
+                                                            let event_name = kind.as_event_name();
+
+                                                            // Generic 事件特殊处理：使用 event 字段作为事件名，payload 用 payload 字段
+                                                            if kind == DaemonEventKind::Generic {
+                                                                if let (Some(event_name_val), Some(payload_val)) = (
+                                                                    raw.get("event").and_then(|v| v.as_str()),
+                                                                    raw.get("payload"),
+                                                                ) {
+                                                                    emitter(event_name_val, payload_val.clone());
+                                                                }
+                                                            } else {
+                                                                // 其他事件：使用 kind 对应的事件名，payload 为整个 raw
+                                                                emitter(&event_name, raw);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            })
+                                            .await;
+
+                                        eprintln!("[DEBUG] EventListener 事件流已结束");
+                                    });
+
+                                    event_task_handle = Some(task);
                                 }
-                            };
-
-                    eprintln!("[DEBUG] EventListener 分发事件: {:?}", evt);
-                            Self::dispatch_event(
-                                &evt,
-                                &callbacks,
-                                &task_log_callbacks,
-                                &download_state_callbacks,
-                                &task_status_callbacks,
-                        &task_progress_callbacks,
-                        &task_error_callbacks,
-                        &download_progress_callbacks,
-                        &dedupe_progress_callbacks,
-                        &dedupe_finished_callbacks,
-                        &wallpaper_update_image_callbacks,
-                        &wallpaper_update_style_callbacks,
-                        &wallpaper_update_transition_callbacks,
-                        &setting_change_callbacks,
-                            ).await;
+                            }
+                            crate::ipc::connection::ConnectionStatus::Disconnected => {
+                                // 断开连接：停止并释放事件订阅任务
+                                if let Some(handle) = event_task_handle.take() {
+                                    eprintln!("[DEBUG] EventListener 连接已断开，停止事件订阅");
+                                    handle.abort();
+                                }
+                            }
+                            crate::ipc::connection::ConnectionStatus::Connecting => {
+                                // 正在连接：不做任何操作，等待连接完成或失败
+                            }
                         }
-            }).await;
+                    }
+                    Err(_) => {
+                        // 连接状态通道已关闭，退出循环
+                        eprintln!("[DEBUG] EventListener 连接状态通道已关闭，退出监听循环");
+                        // 取消当前事件订阅任务
+                        if let Some(handle) = event_task_handle.take() {
+                            handle.abort();
+                        }
+                        break;
+                    }
+                }
+            }
 
-            // 连接关闭后，等待停止信号
-            let _ = rx.recv().await;
+            eprintln!("[DEBUG] EventListener 主循环已退出");
         });
 
         Ok(())
-    }
-
-    /// 分发事件到所有注册的回调
-    async fn dispatch_event(
-        event: &DaemonEvent,
-        callbacks: &Arc<RwLock<Vec<EventCallback>>>,
-        task_log_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(String, String, String) + Send + Sync>>>>,
-        download_state_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(DownloadStateEvent) + Send + Sync>>>>,
-        task_status_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(TaskStatusEvent) + Send + Sync>>>>,
-        task_progress_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(TaskProgressEvent) + Send + Sync>>>>,
-        task_error_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(TaskErrorEvent) + Send + Sync>>>>,
-        download_progress_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(DownloadProgressEvent) + Send + Sync>>>>,
-        dedupe_progress_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(DedupeProgressEvent) + Send + Sync>>>>,
-        dedupe_finished_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(DedupeFinishedEvent) + Send + Sync>>>>,
-        wallpaper_update_image_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(WallpaperUpdateImageEvent) + Send + Sync>>>>,
-        wallpaper_update_style_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(WallpaperUpdateStyleEvent) + Send + Sync>>>>,
-        wallpaper_update_transition_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(WallpaperUpdateTransitionEvent) + Send + Sync>>>>,
-        setting_change_callbacks: &Arc<RwLock<Vec<Arc<dyn Fn(SettingChangeEvent) + Send + Sync>>>>,
-    ) {
-        // 调用通用回调
-        let cbs = callbacks.read().await;
-        for callback in cbs.iter() {
-            callback(event.clone());
-        }
-
-        // 调用特定类型的回调
-        match event {
-            DaemonEvent::TaskLog { task_id, level, message } => {
-                let cbs = task_log_callbacks.read().await;
-                for callback in cbs.iter() {
-                    callback(task_id.clone(), level.clone(), message.clone());
-                }
-            }
-            DaemonEvent::DownloadState { task_id, url, start_time, plugin_id, state, error } => {
-                let cbs = download_state_callbacks.read().await;
-                let event = DownloadStateEvent {
-                    task_id: task_id.clone(),
-                    url: url.clone(),
-                    start_time: *start_time,
-                    plugin_id: plugin_id.clone(),
-                    state: state.clone(),
-                    error: error.clone(),
-                };
-                for callback in cbs.iter() {
-                    callback(event.clone());
-                }
-            }
-            DaemonEvent::TaskStatus { task_id, status, progress, error, current_wallpaper } => {
-                let cbs = task_status_callbacks.read().await;
-                let event = TaskStatusEvent {
-                    task_id: task_id.clone(),
-                    status: status.clone(),
-                    progress: *progress,
-                    error: error.clone(),
-                    current_wallpaper: current_wallpaper.clone(),
-                };
-                for callback in cbs.iter() {
-                    callback(event.clone());
-                }
-            }
-            DaemonEvent::TaskProgress { task_id, progress } => {
-                let cbs = task_progress_callbacks.read().await;
-                let event = TaskProgressEvent {
-                    task_id: task_id.clone(),
-                    progress: *progress,
-                };
-                for callback in cbs.iter() {
-                    callback(event.clone());
-                }
-            }
-            DaemonEvent::TaskError { task_id, error } => {
-                let cbs = task_error_callbacks.read().await;
-                let event = TaskErrorEvent {
-                    task_id: task_id.clone(),
-                    error: error.clone(),
-                };
-                for callback in cbs.iter() {
-                    callback(event.clone());
-                }
-            }
-            DaemonEvent::DownloadProgress { task_id, url, start_time, plugin_id, received_bytes, total_bytes } => {
-                let cbs = download_progress_callbacks.read().await;
-                let event = DownloadProgressEvent {
-                    task_id: task_id.clone(),
-                    url: url.clone(),
-                    start_time: *start_time,
-                    plugin_id: plugin_id.clone(),
-                    received_bytes: *received_bytes,
-                    total_bytes: *total_bytes,
-                };
-                for callback in cbs.iter() {
-                    callback(event.clone());
-                }
-            }
-            DaemonEvent::DedupeProgress { processed, total, removed, batch_index } => {
-                let cbs = dedupe_progress_callbacks.read().await;
-                let event = DedupeProgressEvent {
-                    processed: *processed,
-                    total: *total,
-                    removed: *removed,
-                    batch_index: *batch_index,
-                };
-                for callback in cbs.iter() {
-                    callback(event.clone());
-                }
-            }
-            DaemonEvent::DedupeFinished { processed, total, removed, canceled } => {
-                let cbs = dedupe_finished_callbacks.read().await;
-                let event = DedupeFinishedEvent {
-                    processed: *processed,
-                    total: *total,
-                    removed: *removed,
-                    canceled: *canceled,
-                };
-                for callback in cbs.iter() {
-                    callback(event.clone());
-                }
-            }
-            DaemonEvent::WallpaperUpdateImage { image_path } => {
-                let cbs = wallpaper_update_image_callbacks.read().await;
-                let event = WallpaperUpdateImageEvent {
-                    image_path: image_path.clone(),
-                };
-                for callback in cbs.iter() {
-                    callback(event.clone());
-                }
-            }
-            DaemonEvent::WallpaperUpdateStyle { style } => {
-                let cbs = wallpaper_update_style_callbacks.read().await;
-                let event = WallpaperUpdateStyleEvent {
-                    style: style.clone(),
-                };
-                for callback in cbs.iter() {
-                    callback(event.clone());
-                }
-            }
-            DaemonEvent::WallpaperUpdateTransition { transition } => {
-                let cbs = wallpaper_update_transition_callbacks.read().await;
-                let event = WallpaperUpdateTransitionEvent {
-                    transition: transition.clone(),
-                };
-                for callback in cbs.iter() {
-                    callback(event.clone());
-                }
-            }
-            DaemonEvent::SettingChange { changes } => {
-                let cbs = setting_change_callbacks.read().await;
-                let event = SettingChangeEvent {
-                    changes: changes.clone(),
-                };
-                for callback in cbs.iter() {
-                    callback(event.clone());
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// 停止事件监听
-    pub async fn stop(&self) {
-        if let Some(tx) = self.stop_signal.write().await.take() {
-            let _ = tx.send(()).await;
-        }
-    }
-}
-
-impl Default for EventListener {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -727,108 +494,8 @@ pub fn get_global_listener() -> &'static EventListener {
     GLOBAL_LISTENER.get_or_init(|| EventListener::new())
 }
 
-/// 简化的 API：监听任务日志
-pub async fn on_task_log<F>(callback: F)
-where
-    F: Fn(String, String, String) + Send + Sync + 'static,
-{
-    get_global_listener().on_task_log(callback).await;
-}
-
-/// 简化的 API：监听下载状态
-pub async fn on_download_state<F>(callback: F)
-where
-    F: Fn(DownloadStateEvent) + Send + Sync + 'static,
-{
-    get_global_listener().on_download_state(callback).await;
-}
-
-/// 简化的 API：监听任务状态
-pub async fn on_task_status<F>(callback: F)
-where
-    F: Fn(TaskStatusEvent) + Send + Sync + 'static,
-{
-    get_global_listener().on_task_status(callback).await;
-}
-
-/// 简化的 API：监听任务进度
-pub async fn on_task_progress<F>(callback: F)
-where
-    F: Fn(TaskProgressEvent) + Send + Sync + 'static,
-{
-    get_global_listener().on_task_progress(callback).await;
-}
-
-/// 简化的 API：监听任务错误
-pub async fn on_task_error<F>(callback: F)
-where
-    F: Fn(TaskErrorEvent) + Send + Sync + 'static,
-{
-    get_global_listener().on_task_error(callback).await;
-}
-
-/// 简化的 API：监听下载进度
-pub async fn on_download_progress<F>(callback: F)
-where
-    F: Fn(DownloadProgressEvent) + Send + Sync + 'static,
-{
-    get_global_listener().on_download_progress(callback).await;
-}
-
-/// 简化的 API：监听去重进度
-pub async fn on_dedupe_progress<F>(callback: F)
-where
-    F: Fn(DedupeProgressEvent) + Send + Sync + 'static,
-{
-    get_global_listener().on_dedupe_progress(callback).await;
-}
-
-/// 简化的 API：监听去重完成
-pub async fn on_dedupe_finished<F>(callback: F)
-where
-    F: Fn(DedupeFinishedEvent) + Send + Sync + 'static,
-{
-    get_global_listener().on_dedupe_finished(callback).await;
-}
-
-/// 简化的 API：启动监听（长连接模式）
-pub async fn start_listening() -> Result<(), String> {
-    get_global_listener().start().await
-}
-
-/// 简化的 API：停止监听
-pub async fn stop_listening() {
-    get_global_listener().stop().await;
-}
-
-/// 简化的 API：监听壁纸图片更新
-pub async fn on_wallpaper_update_image<F>(callback: F)
-where
-    F: Fn(WallpaperUpdateImageEvent) + Send + Sync + 'static,
-{
-    get_global_listener().on_wallpaper_update_image(callback).await;
-}
-
-/// 简化的 API：监听壁纸样式更新
-pub async fn on_wallpaper_update_style<F>(callback: F)
-where
-    F: Fn(WallpaperUpdateStyleEvent) + Send + Sync + 'static,
-{
-    get_global_listener().on_wallpaper_update_style(callback).await;
-}
-
-/// 简化的 API：监听壁纸过渡效果更新
-pub async fn on_wallpaper_update_transition<F>(callback: F)
-where
-    F: Fn(WallpaperUpdateTransitionEvent) + Send + Sync + 'static,
-{
-    get_global_listener().on_wallpaper_update_transition(callback).await;
-}
-
-/// 简化的 API：监听设置变更
-pub async fn on_setting_change<F>(callback: F)
-where
-    F: Fn(SettingChangeEvent) + Send + Sync + 'static,
-{
-    get_global_listener().on_setting_change(callback).await;
+/// 简化的 API：启动监听（长连接模式，按事件类型过滤）
+#[cfg(feature = "ipc-client")]
+pub async fn start_listening(kinds: &[DaemonEventKind]) -> Result<(), String> {
+    get_global_listener().start(kinds).await
 }

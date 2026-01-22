@@ -1,7 +1,6 @@
 // 插件相关命令
 
 use crate::daemon_client;
-use base64::Engine;
 
 #[tauri::command]
 pub async fn get_plugins() -> Result<serde_json::Value, String> {
@@ -24,15 +23,13 @@ pub async fn refresh_installed_plugins_cache() -> Result<(), String> {
 
 /// 前端安装/更新后可调用：按 pluginId 局部刷新缓存
 #[tauri::command]
-pub async fn refresh_installed_plugin_cache(
-    plugin_id: String,
-) -> Result<(), String> {
+pub async fn refresh_installed_plugin_cache(plugin_id: String) -> Result<(), String> {
     // 兜底：触发一次 detail 加载，相当于"按 id 刷新缓存"
-        let _ = daemon_client::get_ipc_client()
-            .plugin_get_detail(plugin_id)
-            .await
-            .map_err(|e| format!("Daemon unavailable: {}", e))?;
-        Ok(())
+    let _ = daemon_client::get_ipc_client()
+        .plugin_get_detail(plugin_id)
+        .await
+        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -152,17 +149,10 @@ pub async fn install_browser_plugin(plugin_id: String) -> Result<serde_json::Val
 
 #[tauri::command]
 pub async fn get_plugin_image(plugin_id: String, image_path: String) -> Result<Vec<u8>, String> {
-    let v = daemon_client::get_ipc_client()
+    daemon_client::get_ipc_client()
         .plugin_get_image_for_detail(plugin_id, image_path, None, None, None)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let b64 = v
-        .get("base64")
-        .and_then(|x| x.as_str())
-        .ok_or_else(|| "Invalid response: missing base64".to_string())?;
-    base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .map_err(|e| format!("base64 decode failed: {}", e))
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
@@ -173,43 +163,24 @@ pub async fn get_plugin_image_for_detail(
     sha256: Option<String>,
     size_bytes: Option<u64>,
 ) -> Result<Vec<u8>, String> {
-    let v = daemon_client::get_ipc_client()
+    daemon_client::get_ipc_client()
         .plugin_get_image_for_detail(plugin_id, image_path, download_url, sha256, size_bytes)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let b64 = v
-        .get("base64")
-        .and_then(|x| x.as_str())
-        .ok_or_else(|| "Invalid response: missing base64".to_string())?;
-    base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .map_err(|e| format!("base64 decode failed: {}", e))
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
 pub async fn get_plugin_icon(plugin_id: String) -> Result<Option<Vec<u8>>, String> {
-    let v = daemon_client::get_ipc_client()
+    daemon_client::get_ipc_client()
         .plugin_get_icon(plugin_id)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let b64_opt = v.get("base64").and_then(|x| x.as_str()).map(|s| s.to_string());
-    let Some(b64) = b64_opt else { return Ok(None) };
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .map_err(|e| format!("base64 decode failed: {}", e))?;
-    Ok(Some(bytes))
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
 pub async fn get_remote_plugin_icon(download_url: String) -> Result<Option<Vec<u8>>, String> {
-    let v = daemon_client::get_ipc_client()
+    daemon_client::get_ipc_client()
         .plugin_get_remote_icon_v2(download_url)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let b64_opt = v.get("base64").and_then(|x| x.as_str()).map(|s| s.to_string());
-    let Some(b64) = b64_opt else { return Ok(None) };
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .map_err(|e| format!("base64 decode failed: {}", e))?;
-    Ok(Some(bytes))
+        .map_err(|e| format!("Daemon unavailable: {}", e))
 }

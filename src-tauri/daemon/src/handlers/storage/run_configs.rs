@@ -2,9 +2,9 @@
 
 use kabegame_core::ipc::ipc::CliIpcResponse;
 use kabegame_core::storage::Storage;
-use std::sync::Arc;
 
-pub async fn get_run_configs(storage: Arc<Storage>) -> CliIpcResponse {
+pub async fn get_run_configs() -> CliIpcResponse {
+    let storage = Storage::global();
     match storage.get_run_configs() {
         Ok(configs) => CliIpcResponse::ok_with_data(
             "ok",
@@ -14,7 +14,8 @@ pub async fn get_run_configs(storage: Arc<Storage>) -> CliIpcResponse {
     }
 }
 
-pub async fn add_run_config(storage: Arc<Storage>, config: &serde_json::Value) -> CliIpcResponse {
+pub async fn add_run_config(config: &serde_json::Value) -> CliIpcResponse {
+    let storage = Storage::global();
     match serde_json::from_value::<kabegame_core::storage::RunConfig>(config.clone()) {
         Ok(config) => match storage.add_run_config(config.clone()) {
             Ok(()) => CliIpcResponse::ok_with_data(
@@ -28,9 +29,9 @@ pub async fn add_run_config(storage: Arc<Storage>, config: &serde_json::Value) -
 }
 
 pub async fn update_run_config(
-    storage: Arc<Storage>,
     config: &serde_json::Value,
 ) -> CliIpcResponse {
+    let storage = Storage::global();
     match serde_json::from_value::<kabegame_core::storage::RunConfig>(config.clone()) {
         Ok(config) => match storage.update_run_config(config) {
             Ok(()) => CliIpcResponse::ok("updated"),
@@ -40,7 +41,8 @@ pub async fn update_run_config(
     }
 }
 
-pub async fn delete_run_config(storage: Arc<Storage>, config_id: &str) -> CliIpcResponse {
+pub async fn delete_run_config(config_id: &str) -> CliIpcResponse {
+    let storage = Storage::global();
     match storage.delete_run_config(config_id) {
         Ok(()) => CliIpcResponse::ok("deleted"),
         Err(e) => CliIpcResponse::err(e),

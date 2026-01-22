@@ -46,13 +46,12 @@ impl WallpaperWindow {
         // 推送样式和过渡效果事件
         let app_for_style = self.app.clone();
         tauri::async_runtime::spawn(async move {
-            if let Ok(v) = crate::daemon_client::get_ipc_client().settings_get().await {
-            if let Some(style) = v.get("wallpaperRotationStyle").and_then(|x| x.as_str()) {
-                    let _ = app_for_style.emit("wallpaper-update-style", style);
+            let client = crate::daemon_client::get_ipc_client();
+            if let Ok(style) = client.settings_get_wallpaper_rotation_style().await {
+                let _ = app_for_style.emit("wallpaper-update-style", style);
             }
-            if let Some(tr) = v.get("wallpaperRotationTransition").and_then(|x| x.as_str()) {
-                    let _ = app_for_style.emit("wallpaper-update-transition", tr);
-                }
+            if let Ok(tr) = client.settings_get_wallpaper_rotation_transition().await {
+                let _ = app_for_style.emit("wallpaper-update-transition", tr);
             }
         });
 

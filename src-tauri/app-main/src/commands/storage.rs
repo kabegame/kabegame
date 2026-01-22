@@ -1,74 +1,63 @@
-// 存储相关命令（包括 self-host 和 daemon IPC）
+// 存储相关命令（包括 self-hosted 和 daemon IPC）
 
-#[cfg(feature = "self-host")]
-use crate::storage::{Album, ImageInfo, Storage};
-#[cfg(feature = "self-host")]
+#[cfg(feature = "self-hosted")]
 use crate::storage::images::PaginatedImages;
+#[cfg(feature = "self-hosted")]
+use crate::storage::{Album, ImageInfo, Storage};
 
-// 这些命令已经在 daemon.rs 中定义，这里只保留 self-host 特有的
+// 这些命令已经在 daemon.rs 中定义，这里只保留 self-hosted 特有的
 
 #[tauri::command]
-#[cfg(feature = "self-host")]
-pub fn local_get_images(state: tauri::State<Storage>) -> Result<Vec<ImageInfo>, String> {
-    state.get_all_images()
+#[cfg(feature = "self-hosted")]
+pub fn local_get_images() -> Result<Vec<ImageInfo>, String> {
+    Storage::global().get_all_images()
 }
 
 #[tauri::command]
-#[cfg(feature = "self-host")]
+#[cfg(feature = "self-hosted")]
 pub fn local_get_images_paginated(
     page: usize,
     page_size: usize,
-    state: tauri::State<Storage>,
 ) -> Result<PaginatedImages, String> {
-    state.get_images_paginated(page, page_size)
+    Storage::global().get_images_paginated(page, page_size)
 }
 
 #[tauri::command]
-#[cfg(feature = "self-host")]
-pub fn local_get_albums(state: tauri::State<Storage>) -> Result<Vec<Album>, String> {
-    state.get_albums()
+#[cfg(feature = "self-hosted")]
+pub fn local_get_albums() -> Result<Vec<Album>, String> {
+    Storage::global().get_albums()
 }
 
 #[tauri::command]
-#[cfg(feature = "self-host")]
-pub fn local_add_album(
-    app: tauri::AppHandle,
-    name: String,
-    state: tauri::State<Storage>,
-    #[cfg(feature = "virtual-drive")] drive: tauri::State<crate::virtual_drive::VirtualDriveService>,
-) -> Result<Album, String> {
-    let album = state.add_album(&name)?;
+#[cfg(feature = "self-hosted")]
+pub fn local_add_album(app: tauri::AppHandle, name: String) -> Result<Album, String> {
+    let album = Storage::global().add_album(&name)?;
     let _ = app.emit(
         "albums-changed",
         serde_json::json!({
             "reason": "add"
         }),
     );
-    #[cfg(feature = "virtual-drive")]
+    #[cfg(all(feature = "virtual-driver", feature = "self-hosted"))]
     {
-        drive.bump_albums();
+        crate::virtual_driver::VirtualDriveService::global().bump_albums();
     }
     Ok(album)
 }
 
 #[tauri::command]
-#[cfg(feature = "self-host")]
-pub fn local_delete_album(
-    app: tauri::AppHandle,
-    album_id: String,
-    state: tauri::State<Storage>,
-    #[cfg(feature = "virtual-drive")] drive: tauri::State<crate::virtual_drive::VirtualDriveService>,
-) -> Result<(), String> {
-    state.delete_album(&album_id)?;
+#[cfg(feature = "self-hosted")]
+pub fn local_delete_album(app: tauri::AppHandle, album_id: String) -> Result<(), String> {
+    Storage::global().delete_album(&album_id)?;
     let _ = app.emit(
         "albums-changed",
         serde_json::json!({
             "reason": "delete"
         }),
     );
-    #[cfg(feature = "virtual-drive")]
+    #[cfg(all(feature = "virtual-driver", feature = "self-hosted"))]
     {
-        drive.bump_albums();
+        crate::virtual_driver::VirtualDriveService::global().bump_albums();
     }
     Ok(())
 }

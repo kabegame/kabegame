@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::providers::descriptor::ProviderDescriptor;
-#[cfg(feature = "virtual-drive")]
+#[cfg(feature = "virtual-driver")]
 use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
 use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
@@ -112,7 +112,7 @@ impl Provider for CommonProvider {
         Some((image_id.to_string(), PathBuf::from(resolved)))
     }
 
-    #[cfg(all(target_os = "windows", feature = "virtual-drive"))]
+    #[cfg(all(target_os = "windows", feature = "virtual-driver"))]
     fn delete_child(
         &self,
         storage: &Storage,
@@ -229,7 +229,7 @@ impl Provider for RangeProvider {
         Some((image_id.to_string(), PathBuf::from(resolved)))
     }
 
-    #[cfg(all(target_os = "windows", feature = "virtual-drive"))]
+    #[cfg(all(target_os = "windows", feature = "virtual-driver"))]
     fn delete_child(
         &self,
         storage: &Storage,

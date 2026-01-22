@@ -17,17 +17,16 @@
 //!
 //! ### Tauri 前端应用
 //! ```rust
-//! use kabegame_core::runtime::tauri_adapter::TauriRuntime;
+//! use kabegame_core::runtime::tauri_runtime::TauriRuntime;
 //!
 //! let runtime = TauriRuntime::new(app.handle().clone());
 //! runtime.manage(plugin_manager);
 //! let pm = runtime.state::<PluginManager>();
 //! ```
 
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
+// TODO: 具化事件，只有动态事件才用通用emit
 /// 事件发送器 trait：抽象事件发送功能
 pub trait EventEmitter: Send + Sync {
     /// 发送任务日志事件
@@ -84,13 +83,7 @@ pub trait EventEmitter: Send + Sync {
     );
 
     /// 发送去重完成事件
-    fn emit_dedupe_finished(
-        &self,
-        processed: usize,
-        total: usize,
-        removed: usize,
-        canceled: bool,
-    );
+    fn emit_dedupe_finished(&self, processed: usize, total: usize, removed: usize, canceled: bool);
 
     /// 发送壁纸图片更新事件
     fn emit_wallpaper_update_image(&self, image_path: &str);
@@ -141,29 +134,11 @@ impl<T> std::ops::Deref for StateGuard<T> {
     }
 }
 
-/// 运行时上下文：组合事件发送器和状态管理器
-pub trait Runtime: EventEmitter + StateManager {}
+/// 无实现，占位
+/// 这里的代码最终不会运行，但没有这个编译无法通过
+pub struct NoopEventEmitter;
 
-/// 空实现：用于 daemon 模式或不需要事件/状态管理的场景
-pub struct NoopRuntime {
-    states: Arc<RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>>,
-}
-
-impl NoopRuntime {
-    pub fn new() -> Self {
-        Self {
-            states: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-}
-
-impl Default for NoopRuntime {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EventEmitter for NoopRuntime {
+impl EventEmitter for NoopEventEmitter {
     fn emit_task_log(&self, task_id: &str, level: &str, message: &str) {
         eprintln!("[task-log] {} [{}] {}", task_id, level, message);
     }
@@ -178,9 +153,15 @@ impl EventEmitter for NoopRuntime {
         error: Option<&str>,
     ) {
         if let Some(err) = error {
-            eprintln!("[download-state] {} [{}] {} {}: {}", task_id, state, plugin_id, url, err);
+            eprintln!(
+                "[download-state] {} [{}] {} {}: {}",
+                task_id, state, plugin_id, url, err
+            );
         } else {
-            eprintln!("[download-state] {} [{}] {} {}", task_id, state, plugin_id, url);
+            eprintln!(
+                "[download-state] {} [{}] {} {}",
+                task_id, state, plugin_id, url
+            );
         }
     }
 
@@ -195,7 +176,12 @@ impl EventEmitter for NoopRuntime {
         if let Some(err) = error {
             eprintln!("[task-status] {} [{}] error: {}", task_id, status, err);
         } else if let Some(prog) = progress {
-            eprintln!("[task-status] {} [{}] progress: {:.2}%", task_id, status, prog * 100.0);
+            eprintln!(
+                "[task-status] {} [{}] progress: {:.2}%",
+                task_id,
+                status,
+                prog * 100.0
+            );
         } else {
             eprintln!("[task-status] {} [{}]", task_id, status);
         }
@@ -218,13 +204,7 @@ impl EventEmitter for NoopRuntime {
         );
     }
 
-    fn emit_dedupe_finished(
-        &self,
-        processed: usize,
-        total: usize,
-        removed: usize,
-        canceled: bool,
-    ) {
+    fn emit_dedupe_finished(&self, processed: usize, total: usize, removed: usize, canceled: bool) {
         eprintln!(
             "[dedupe-finished] processed: {}/{}, removed: {}, canceled: {}",
             processed, total, removed, canceled
@@ -232,7 +212,11 @@ impl EventEmitter for NoopRuntime {
     }
 
     fn emit_task_progress(&self, task_id: &str, progress: f64) {
-        eprintln!("[task-progress] {} progress: {:.2}%", task_id, progress * 100.0);
+        eprintln!(
+            "[task-progress] {} progress: {:.2}%",
+            task_id,
+            progress * 100.0
+        );
     }
 
     fn emit_wallpaper_update_image(&self, image_path: &str) {
@@ -273,171 +257,3 @@ impl EventEmitter for NoopRuntime {
         }
     }
 }
-
-impl StateManager for NoopRuntime {
-    fn state<T: Send + Sync + 'static>(&self) -> StateGuard<T> {
-        self.try_state::<T>()
-            .expect("State not found")
-    }
-
-    fn try_state<T: Send + Sync + 'static>(&self) -> Option<StateGuard<T>> {
-        let type_id = TypeId::of::<T>();
-        let states = self.states.read().ok()?;
-        let state = states.get(&type_id)?;
-        let state = state.clone().downcast::<T>().ok()?;
-        Some(StateGuard::new(state))
-    }
-
-    fn manage<T: Send + Sync + 'static>(&self, state: T) -> Result<(), String> {
-        let type_id = TypeId::of::<T>();
-        let mut states = self.states.write()
-            .map_err(|e| format!("Failed to acquire write lock: {}", e))?;
-        
-        if states.contains_key(&type_id) {
-            return Err(format!("State of type {:?} already exists", type_id));
-        }
-
-        states.insert(type_id, Arc::new(state));
-        Ok(())
-    }
-}
-
-impl Runtime for NoopRuntime {}
-
-/// 组合运行时：将事件发送器和状态管理器组合在一起
-pub struct CompositeRuntime<E, S> {
-    emitter: Arc<E>,
-    state_manager: Arc<S>,
-}
-
-impl<E, S> CompositeRuntime<E, S>
-where
-    E: EventEmitter + Send + Sync,
-    S: StateManager + Send + Sync,
-{
-    pub fn new(emitter: E, state_manager: S) -> Self {
-        Self {
-            emitter: Arc::new(emitter),
-            state_manager: Arc::new(state_manager),
-        }
-    }
-}
-
-impl<E, S> EventEmitter for CompositeRuntime<E, S>
-where
-    E: EventEmitter + Send + Sync,
-    S: StateManager + Send + Sync,
-{
-    fn emit_task_log(&self, task_id: &str, level: &str, message: &str) {
-        self.emitter.emit_task_log(task_id, level, message);
-    }
-
-    fn emit_download_state(
-        &self,
-        task_id: &str,
-        url: &str,
-        start_time: u64,
-        plugin_id: &str,
-        state: &str,
-        error: Option<&str>,
-    ) {
-        self.emitter.emit_download_state(task_id, url, start_time, plugin_id, state, error);
-    }
-
-    fn emit_task_status(
-        &self,
-        task_id: &str,
-        status: &str,
-        progress: Option<f64>,
-        error: Option<&str>,
-        current_wallpaper: Option<&str>,
-    ) {
-        self.emitter.emit_task_status(task_id, status, progress, error, current_wallpaper);
-    }
-
-    fn emit(&self, event: &str, payload: serde_json::Value) {
-        self.emitter.emit(event, payload);
-    }
-
-    fn emit_dedupe_progress(
-        &self,
-        processed: usize,
-        total: usize,
-        removed: usize,
-        batch_index: usize,
-    ) {
-        self.emitter.emit_dedupe_progress(processed, total, removed, batch_index);
-    }
-
-    fn emit_dedupe_finished(
-        &self,
-        processed: usize,
-        total: usize,
-        removed: usize,
-        canceled: bool,
-    ) {
-        self.emitter.emit_dedupe_finished(processed, total, removed, canceled);
-    }
-
-    fn emit_task_progress(&self, task_id: &str, progress: f64) {
-        self.emitter.emit_task_progress(task_id, progress);
-    }
-
-    fn emit_task_error(&self, task_id: &str, error: &str) {
-        self.emitter.emit_task_error(task_id, error);
-    }
-
-    fn emit_download_progress(
-        &self,
-        task_id: &str,
-        url: &str,
-        start_time: u64,
-        plugin_id: &str,
-        received_bytes: u64,
-        total_bytes: Option<u64>,
-    ) {
-        self.emitter.emit_download_progress(task_id, url, start_time, plugin_id, received_bytes, total_bytes);
-    }
-
-    fn emit_wallpaper_update_image(&self, image_path: &str) {
-        self.emitter.emit_wallpaper_update_image(image_path);
-    }
-
-    fn emit_wallpaper_update_style(&self, style: &str) {
-        self.emitter.emit_wallpaper_update_style(style);
-    }
-
-    fn emit_wallpaper_update_transition(&self, transition: &str) {
-        self.emitter.emit_wallpaper_update_transition(transition);
-    }
-}
-
-impl<E, S> StateManager for CompositeRuntime<E, S>
-where
-    E: EventEmitter + Send + Sync,
-    S: StateManager + Send + Sync,
-{
-    fn state<T: Send + Sync + 'static>(&self) -> StateGuard<T> {
-        self.state_manager.state::<T>()
-    }
-
-    fn try_state<T: Send + Sync + 'static>(&self) -> Option<StateGuard<T>> {
-        self.state_manager.try_state::<T>()
-    }
-
-    fn manage<T: Send + Sync + 'static>(&self, state: T) -> Result<(), String> {
-        self.state_manager.manage(state)
-    }
-}
-
-impl<E, S> Runtime for CompositeRuntime<E, S>
-where
-    E: EventEmitter + Send + Sync,
-    S: StateManager + Send + Sync,
-{
-}
-
-
-
-
-

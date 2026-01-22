@@ -13,24 +13,28 @@ impl NativeWallpaperManager {
     }
 
     async fn current_wallpaper_path_from_settings(&self) -> Option<String> {
-        let v = crate::daemon_client::get_ipc_client().settings_get().await.ok()?;
-        let id = v.get("currentWallpaperImageId").and_then(|x| x.as_str())?;
-        let img = crate::daemon_client::get_ipc_client()
-                .storage_get_image_by_id(id.to_string())
+        if let Ok(Some(id)) = crate::daemon_client::get_ipc_client()
+            .settings_get_current_wallpaper_image_id()
+            .await
+        {
+            let img = crate::daemon_client::get_ipc_client()
+                .storage_get_image_by_id(id)
                 .await
-        .ok()?;
-        img.get("localPath").and_then(|x| x.as_str()).map(|s| s.to_string())
+                .ok()?;
+            img.get("localPath")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
     }
 
     #[cfg(target_os = "windows")]
     async fn current_wallpaper_transition_from_ipc(&self) -> Option<String> {
-        let v = crate::daemon_client::get_ipc_client().settings_get().await.ok()?;
-        Some(
-            v.get("wallpaperRotationTransition")
-                .and_then(|x| x.as_str())
-                .unwrap_or("none")
-                .to_string(),
-        )
+        crate::daemon_client::get_ipc_client()
+            .settings_get_wallpaper_rotation_transition()
+            .await
+            .ok()
     }
 
     #[cfg(all(target_os = "linux", desktop = "plasma"))]
@@ -346,17 +350,15 @@ impl WallpaperManager for NativeWallpaperManager {
 
         #[cfg(not(all(target_os = "linux", desktop = "plasma")))]
         {
-        Ok("fill".to_string())
-    }
+            Ok("fill".to_string())
+        }
     }
 
     async fn get_transition(&self) -> Result<String, String> {
-        let v = crate::daemon_client::get_ipc_client().settings_get().await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-        Ok(v.get("wallpaperRotationTransition")
-            .and_then(|x| x.as_str())
-            .unwrap_or("none")
-            .to_string())
+        crate::daemon_client::get_ipc_client()
+            .settings_get_wallpaper_rotation_transition()
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
     }
 
     async fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String> {
@@ -525,10 +527,10 @@ impl WallpaperManager for NativeWallpaperManager {
             {
                 let _ = immediate;
                 // style 从 daemon 读取（与前端保持一致）
-                let style = crate::daemon_client::get_ipc_client().settings_get().await
-                .ok()
-                .and_then(|v| v.get("wallpaperRotationStyle").and_then(|x| x.as_str()).map(|s| s.to_string()))
-                .unwrap_or_else(|| "fill".to_string());
+                let style = crate::daemon_client::get_ipc_client()
+                    .settings_get_wallpaper_rotation_style()
+                    .await
+                    .unwrap_or_else(|_| "fill".to_string());
                 return self.set_wallpaper_plasma(file_path, &style);
             }
 
@@ -625,7 +627,7 @@ impl WallpaperManager for NativeWallpaperManager {
                         self.set_wallpaper_plasma(&path, style)?;
                     } else {
                         return Err(format!("当前壁纸路径不存在: {}", path));
-            }
+                    }
                 } else {
                     // 如果没有当前壁纸，仍然尝试通过 qdbus 只设置 FillMode（不改变图片）
                     // 这样可以确保 style 被正确设置，即使没有当前壁纸路径
@@ -649,9 +651,9 @@ impl WallpaperManager for NativeWallpaperManager {
 
         #[cfg(not(all(target_os = "linux", desktop = "plasma")))]
         {
-        let _ = style;
-        let _ = immediate;
-        Ok(())
+            let _ = style;
+            let _ = immediate;
+            Ok(())
         }
     }
 
@@ -661,9 +663,10 @@ impl WallpaperManager for NativeWallpaperManager {
         use std::time::Duration;
 
         // 保存设置到用户配置中
-        let settings = self._app.state::<Settings>();
+        let settings = kabegame_core::settings::Settings::global();
         settings
             .set_wallpaper_rotation_transition(transition.to_string())
+            .await
             .map_err(|e| format!("保存过渡效果设置失败: {}", e))?;
 
         // 方案 A：不修改系统级动画相关注册表。
@@ -715,8 +718,8 @@ impl WallpaperManager for NativeWallpaperManager {
     #[cfg(not(target_os = "windows"))]
     async fn set_transition(&self, transition: &str, _immediate: bool) -> Result<(), String> {
         // 非 Windows 平台：仅保存设置，不做系统级预览
-            crate::daemon_client::get_ipc_client()
-                .settings_set_wallpaper_rotation_transition(transition.to_string())
+        crate::daemon_client::get_ipc_client()
+            .settings_set_wallpaper_rotation_transition(transition.to_string())
             .await?;
         Ok(())
     }

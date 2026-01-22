@@ -9,6 +9,7 @@ import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
 import chalk from "chalk";
+import { OSPlugin } from "./plugins/os-plugn";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,11 +32,25 @@ export const RESOURCES_BIN_DIR = path.join(
 export const SRC_TAURI_DIR = path.join(root, "src-tauri");
 export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
 
+// 传入 opt.bin 为运行工具，可以为 bun、cargo。如果不传则为二进制
 export function run(cmd, args, opts = {}) {
+  // console.log('runopts: ', cmd, args, opts)
+  switch (opts.bin) {
+    case 'bun': {
+      args = ["--bun", cmd, ...args]; cmd = "bunx";
+      break; 
+    }
+    case "cargo": {
+      args = [cmd, ...args]; cmd = "cargo";
+      break;
+    }
+  }
+  delete opts.bin;
+  console.log(chalk.yellow('RUN'), JSON.stringify(opts), chalk.bold.italic(cmd, args.join(' ')))
   const res = spawnSync(cmd, args, {
     stdio: "inherit",
     cwd: root,
-    shell: process.platform === "win32",
+    shell: OSPlugin.isWindows,
     ...opts,
   });
   if (res.status !== 0) {
@@ -270,61 +285,61 @@ export function scanBuiltinPlugins() {
 }
 
 export function buildEnv(options, builtinPlugins = [], trace = false) {
-  const mode = options.mode === "local" ? "local" : "normal";
-  const desktop = options.desktop ? String(options.desktop).toLowerCase() : null;
+  // const mode = options.mode === "local" ? "local" : "normal";
+  // const desktop = options.desktop ? String(options.desktop).toLowerCase() : null;
   
-  const env = {
-    ...process.env,
-    KABEGAME_MODE: mode,
-    VITE_KABEGAME_MODE: mode,
-    VITE_DESKTOP: desktop || "",
-  };
+  // const env = {
+  //   ...process.env,
+  //   KABEGAME_MODE: mode,
+  //   VITE_KABEGAME_MODE: mode,
+  //   VITE_DESKTOP: desktop || "",
+  // };
 
   // 设置 RUST_BACKTRACE
-  if (trace) {
-    env.RUST_BACKTRACE = "full";
-    console.log(chalk.cyan(`[env] RUST_BACKTRACE=full`));
-  }
+  // if (trace) {
+  //   env.RUST_BACKTRACE = "full";
+  //   console.log(chalk.cyan(`[env] RUST_BACKTRACE=full`));
+  // }
 
-  if (process.platform === "linux") {
-    if (!env.WEBKIT_DISABLE_DMABUF_RENDERER) {
-      env.WEBKIT_DISABLE_DMABUF_RENDERER = "1";
-      console.log(
-        chalk.yellow(
-          `[env] WEBKIT_DISABLE_DMABUF_RENDERER=1 (Linux: 强制软件渲染以避免 DRM/KMS 权限问题)`
-        )
-      );
-    }
-  }
+  // if (process.platform === "linux") {
+  //   if (!env.WEBKIT_DISABLE_DMABUF_RENDERER) {
+  //     env.WEBKIT_DISABLE_DMABUF_RENDERER = "1";
+  //     console.log(
+  //       chalk.yellow(
+  //         `[env] WEBKIT_DISABLE_DMABUF_RENDERER=1 (Linux: 强制软件渲染以避免 DRM/KMS 权限问题)`
+  //       )
+  //     );
+  //   }
+  // }
 
-  if (mode === "local" && builtinPlugins.length > 0) {
-    env.KABEGAME_BUILTIN_PLUGINS = builtinPlugins.join(",");
-    console.log(
-      chalk.cyan(
-        `[env] KABEGAME_BUILTIN_PLUGINS=${env.KABEGAME_BUILTIN_PLUGINS}`
-      )
-    );
-  }
+  // if (mode === "local" && builtinPlugins.length > 0) {
+  //   env.KABEGAME_BUILTIN_PLUGINS = builtinPlugins.join(",");
+  //   console.log(
+  //     chalk.cyan(
+  //       `[env] KABEGAME_BUILTIN_PLUGINS=${env.KABEGAME_BUILTIN_PLUGINS}`
+  //     )
+  //   );
+  // }
 
-  if (desktop) {
-    const validDesktops = ["plasma", "gnome"];
-    if (!validDesktops.includes(desktop)) {
-      console.error(
-        chalk.red(
-          `❌ 无效的桌面环境选项: ${desktop}\n` +
-            `支持的选项: ${validDesktops.join(", ")}`
-        )
-      );
-      process.exit(1);
-    }
+  // if (desktop) {
+  //   const validDesktops = ["plasma", "gnome"];
+  //   if (!validDesktops.includes(desktop)) {
+  //     console.error(
+  //       chalk.red(
+  //         `❌ 无效的桌面环境选项: ${desktop}\n` +
+  //           `支持的选项: ${validDesktops.join(", ")}`
+  //       )
+  //     );
+  //     process.exit(1);
+  //   }
     
-    console.log(chalk.cyan(`[env] 桌面环境: ${desktop}`));
-    console.log(chalk.cyan(`[env] VITE_DESKTOP=${desktop}`));
-    const prev = env.RUSTFLAGS ? String(env.RUSTFLAGS) : "";
-    const flag = `--cfg desktop="${desktop}"`;
-    env.RUSTFLAGS = prev ? `${prev} ${flag}` : flag;
-    console.log(chalk.cyan(`[env] RUSTFLAGS+=${flag}`));
-  }
+  //   console.log(chalk.cyan(`[env] 桌面环境: ${desktop}`));
+  //   console.log(chalk.cyan(`[env] VITE_DESKTOP=${desktop}`));
+  //   const prev = env.RUSTFLAGS ? String(env.RUSTFLAGS) : "";
+  //   const flag = `--cfg desktop="${desktop}"`;
+  //   env.RUSTFLAGS = prev ? `${prev} ${flag}` : flag;
+  //   console.log(chalk.cyan(`[env] RUSTFLAGS+=${flag}`));
+  // }
 
   return env;
 }

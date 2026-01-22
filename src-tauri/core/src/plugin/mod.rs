@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -65,6 +65,9 @@ pub struct PluginManager {
     installed_cache: Mutex<InstalledPluginsCache>,
 }
 
+// 全局 PluginManager 单例
+static PLUGIN_MANAGER: OnceLock<PluginManager> = OnceLock::new();
+
 #[derive(Debug, Clone, Copy)]
 struct FileStamp {
     len: u64,
@@ -115,6 +118,22 @@ impl PluginManager {
             builtins_cache: Mutex::new(None),
             installed_cache: Mutex::new(InstalledPluginsCache::default()),
         }
+    }
+
+    /// 初始化全局 PluginManager（必须在首次使用前调用）
+    pub fn init_global() -> Result<(), String> {
+        let plugin_manager = PluginManager::new();
+        PLUGIN_MANAGER
+            .set(plugin_manager)
+            .map_err(|_| "PluginManager already initialized".to_string())?;
+        Ok(())
+    }
+
+    /// 获取全局 PluginManager 引用
+    pub fn global() -> &'static PluginManager {
+        PLUGIN_MANAGER
+            .get()
+            .expect("PluginManager not initialized. Call PluginManager::init_global() first.")
     }
 
     pub fn build_mode(&self) -> &'static str {

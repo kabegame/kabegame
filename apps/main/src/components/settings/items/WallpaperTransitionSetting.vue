@@ -1,6 +1,6 @@
 <template>
-  <el-select v-model="localValue" placeholder="请选择过渡效果" style="min-width: 180px" :disabled="disabled || externalDisabled"
-    @change="handleChange">
+  <el-select v-model="localValue" placeholder="请选择过渡效果" style="min-width: 180px"
+    :disabled="disabled || externalDisabled" @change="handleChange">
     <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value" />
   </el-select>
 </template>
@@ -51,6 +51,7 @@ const options = computed<Opt[]>(() => {
 });
 
 const externalDisabled = computed(() => {
+  console.log(uiStore.wallpaperModeSwitching, isApplying.value)
   if (uiStore.wallpaperModeSwitching) return true;
   if (isApplying.value) return true;
   // 移除轮播未启用时的禁用限制，允许用户选择淡入淡出等过渡效果
@@ -94,26 +95,29 @@ const handleChange = async (transition: string) => {
   }
 
   isApplying.value = true;
+
   const prev = settingsStore.values.wallpaperRotationTransition as any;
   settingsStore.values.wallpaperRotationTransition = transition as any;
   settingsStore.savingByKey.wallpaperRotationTransition = true;
   try {
-    const waitForApply = new Promise<{ success: boolean; error?: string }>(async (resolve) => {
-      const unlistenFn = await listen<{ success: boolean; transition: string; error?: string }>(
-        "wallpaper-transition-apply-complete",
-        (event) => {
-          if (event.payload.transition === transition) {
-            unlistenFn();
-            resolve({ success: event.payload.success, error: event.payload.error });
+    if (rotationEnabled.value) {
+      const waitForApply = new Promise<{ success: boolean; error?: string }>(async (resolve) => {
+        const unlistenFn = await listen<{ success: boolean; transition: string; error?: string }>(
+          "wallpaper-transition-apply-complete",
+          (event) => {
+            if (event.payload.transition === transition) {
+              unlistenFn();
+              resolve({ success: event.payload.success, error: event.payload.error });
+            }
           }
-        }
-      );
-    });
-
-    await invoke("set_wallpaper_rotation_transition", { transition });
-
-    const result = await waitForApply;
-    if (!result.success) ElMessage.error(result.error || "应用过渡效果失败");
+        );
+      });
+      await invoke("set_wallpaper_rotation_transition", { transition });
+      const result = await waitForApply;
+      if (!result.success) ElMessage.error(result.error || "应用过渡效果失败");
+    } else {
+      await invoke("set_wallpaper_rotation_transition", { transition });
+    }
   } catch (e) {
     settingsStore.values.wallpaperRotationTransition = prev;
     localValue.value = (prev as any as string) || "none";

@@ -6,7 +6,10 @@ pub use task_scheduler::{CrawlTaskRequest, TaskScheduler};
 
 use crate::plugin::Plugin;
 use crate::plugin::{VarDefinition, VarOption};
-use crate::runtime::{EventEmitter, Runtime};
+use crate::runtime::global_emitter::GlobalEmitter;
+use crate::runtime::EventEmitter;
+use crate::settings::Settings;
+use crate::storage::Storage;
 use reqwest;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -46,24 +49,16 @@ pub struct TaskLogEvent {
     pub ts: u64,
 }
 
-pub fn emit_task_log<R: Runtime + ?Sized>(runtime: Option<&R>, task_id: &str, level: &str, message: impl Into<String>) {
+pub fn emit_task_log(task_id: &str, level: &str, message: impl Into<String>) {
     let task_id = task_id.trim();
     if task_id.is_empty() {
         return;
     }
-    let Some(runtime) = runtime else {
-        // 无 runtime：只打印到 stderr
-        eprintln!("[task-log] {} [{}] {}", task_id, level, message.into());
-        return;
-    };
-    runtime.emit_task_log(task_id, level, &message.into());
+    // 使用全局 emitter
+    GlobalEmitter::global().emit_task_log(task_id, level, &message.into());
 }
 
-fn build_reqwest_header_map<R: Runtime + ?Sized>(
-    runtime: Option<&R>,
-    task_id: &str,
-    headers: &HashMap<String, String>,
-) -> HeaderMap {
+fn build_reqwest_header_map(task_id: &str, headers: &HashMap<String, String>) -> HeaderMap {
     let mut map = HeaderMap::new();
     for (k, v) in headers {
         let key = k.trim();
@@ -74,7 +69,6 @@ fn build_reqwest_header_map<R: Runtime + ?Sized>(
             Ok(n) => n,
             Err(e) => {
                 emit_task_log(
-                    runtime,
                     task_id,
                     "warn",
                     format!("[headers] 跳过无效 header 名：{key} ({e})"),
@@ -86,7 +80,6 @@ fn build_reqwest_header_map<R: Runtime + ?Sized>(
             Ok(v) => v,
             Err(e) => {
                 emit_task_log(
-                    runtime,
                     task_id,
                     "warn",
                     format!("[headers] 跳过无效 header 值：{key} ({e})"),
@@ -100,7 +93,6 @@ fn build_reqwest_header_map<R: Runtime + ?Sized>(
 }
 
 fn build_reqwest_header_map_for_emitter(
-    emitter: &dyn EventEmitter,
     task_id: &str,
     headers: &HashMap<String, String>,
 ) -> HeaderMap {
@@ -113,7 +105,7 @@ fn build_reqwest_header_map_for_emitter(
         let name = match HeaderName::from_bytes(key.as_bytes()) {
             Ok(n) => n,
             Err(e) => {
-                emitter.emit_task_log(
+                GlobalEmitter::global().emit_task_log(
                     task_id,
                     "warn",
                     &format!("[headers] 跳过无效 header 名：{key} ({e})"),
@@ -124,7 +116,7 @@ fn build_reqwest_header_map_for_emitter(
         let value = match HeaderValue::from_str(v) {
             Ok(v) => v,
             Err(e) => {
-                emitter.emit_task_log(
+                GlobalEmitter::global().emit_task_log(
                     task_id,
                     "warn",
                     &format!("[headers] 跳过无效 header 值：{key} ({e})"),
@@ -138,7 +130,6 @@ fn build_reqwest_header_map_for_emitter(
 }
 
 fn download_file_to_path_with_retry(
-    emitter: &dyn EventEmitter,
     cancel_check: &dyn Fn() -> bool,
     task_id: &str,
     url: &str,
@@ -147,10 +138,10 @@ fn download_file_to_path_with_retry(
     retry_count: u32,
 ) -> Result<(), String> {
     let client = create_blocking_client()?;
-    let header_map = build_reqwest_header_map_for_emitter(emitter, task_id, headers);
+    let header_map = build_reqwest_header_map_for_emitter(task_id, headers);
     let max_attempts = retry_count.saturating_add(1).max(1);
 
-        let mut attempt: u32 = 0;
+    let mut attempt: u32 = 0;
     loop {
         attempt += 1;
 
@@ -330,16 +321,15 @@ pub struct ImageData {
     pub thumbnail_path: String,
 }
 
-pub async fn crawl_images<R: Runtime>(
+pub async fn crawl_images(
     plugin: &Plugin,
     task_id: &str, // 用于设置任务进度
     images_dir: PathBuf,
-    runtime: &R,
     user_config: Option<HashMap<String, serde_json::Value>>, // 用户配置的变量
     output_album_id: Option<String>, // 输出画册ID，如果指定则下载完成后自动添加到画册
 ) -> Result<CrawlResult, String> {
-    // 获取插件文件路径
-    let plugin_manager = runtime.state::<crate::plugin::PluginManager>();
+    // 获取插件文件路径（使用全局单例）
+    let plugin_manager = crate::plugin::PluginManager::global();
     let plugins_dir = plugin_manager.get_plugins_directory();
 
     // 查找插件文件
@@ -354,7 +344,7 @@ pub async fn crawl_images<R: Runtime>(
     // - 先从插件 config.json 的 var 定义里拿默认值（确保 start_page 等变量始终存在）
     // - 再用 user_config 覆盖默认值
     // - checkbox 默认/输入统一规范化为对象：{ option: bool }
-    let merged_config = build_effective_user_config(runtime, &plugin.id, user_config)?;
+    let merged_config = build_effective_user_config(&plugin.id, user_config)?;
 
     // Debug：打印最终注入的变量，定位"为什么脚本里变量不存在"
     #[cfg(debug_assertions)]
@@ -368,11 +358,12 @@ pub async fn crawl_images<R: Runtime>(
     }
 
     // 执行 Rhai 爬虫脚本（位于 plugin 模块中）
-    let dq = runtime.state::<DownloadQueue>().clone_inner();
+    // 通过 TaskScheduler 获取 DownloadQueue
+    let dq = TaskScheduler::global().download_queue();
     crate::plugin::rhai::execute_crawler_script(
         plugin,
         &images_dir,
-        dq,
+        dq.clone(),
         &plugin.id,
         task_id,
         &script_content,
@@ -381,8 +372,7 @@ pub async fn crawl_images<R: Runtime>(
     )?;
 
     // 获取正在下载的任务数量（已移除队列，只有正在下载的）
-    let download_queue = runtime.state::<DownloadQueue>();
-    let active_downloads = download_queue.get_active_downloads().unwrap_or_default();
+    let active_downloads = dq.get_active_downloads().unwrap_or_default();
 
     let total = active_downloads.len();
 
@@ -396,12 +386,11 @@ pub async fn crawl_images<R: Runtime>(
 }
 
 /// 读取插件变量定义，合并默认值与用户配置，并对部分类型进行规范化（尤其是 checkbox）。
-fn build_effective_user_config<R: Runtime>(
-    runtime: &R,
+fn build_effective_user_config(
     plugin_id: &str,
     user_config: Option<HashMap<String, serde_json::Value>>,
 ) -> Result<HashMap<String, serde_json::Value>, String> {
-    let plugin_manager = runtime.state::<crate::plugin::PluginManager>();
+    let plugin_manager = crate::plugin::PluginManager::global();
     let user_cfg = user_config.unwrap_or_default();
 
     // 读取插件变量定义（config.json 的 var）
@@ -454,11 +443,11 @@ pub async fn crawl_images_from_plugin_file(
     plugin_file: &Path,
     task_id: &str,
     images_dir: PathBuf,
-    runtime: &impl Runtime,
     user_config: Option<HashMap<String, serde_json::Value>>, // 用户配置的变量
     output_album_id: Option<String>,
 ) -> Result<CrawlResult, String> {
-    let plugin_manager = runtime.state::<crate::plugin::PluginManager>();
+    // 使用全局单例
+    let plugin_manager = crate::plugin::PluginManager::global();
 
     // 读取爬取脚本（必须存在，否则报错）
     let script_content = plugin_manager
@@ -473,11 +462,12 @@ pub async fn crawl_images_from_plugin_file(
         build_effective_user_config_from_var_defs(&var_defs, user_config.unwrap_or_default());
 
     // 执行 Rhai 爬虫脚本（位于 plugin 模块中）
-    let dq = runtime.state::<DownloadQueue>().clone_inner();
+    // 通过 TaskScheduler 获取 DownloadQueue
+    let dq = TaskScheduler::global().download_queue();
     crate::plugin::rhai::execute_crawler_script(
         plugin,
         &images_dir,
-        dq,
+        dq.clone(),
         &plugin.id,
         task_id,
         &script_content,
@@ -486,8 +476,7 @@ pub async fn crawl_images_from_plugin_file(
     )?;
 
     // 获取正在下载的任务数量（已移除队列，只有正在下载的）
-    let download_queue = runtime.state::<DownloadQueue>();
-    let active_downloads = download_queue.get_active_downloads().unwrap_or_default();
+    let active_downloads = dq.get_active_downloads().unwrap_or_default();
 
     let total = active_downloads.len();
 
@@ -988,7 +977,7 @@ fn download_image(
     plugin_id: &str,
     task_id: &str,
     download_start_time: u64,
-    settings: &crate::settings::Settings,
+    // Settings 现在是全局单例，不需要传递
     storage: &crate::storage::Storage,
     emitter: &dyn EventEmitter,
     dq: &DownloadQueue,
@@ -1062,7 +1051,7 @@ fn download_image(
 
         // 防无限循环：当虚拟盘开启且导入路径来自虚拟盘挂载点时拒绝导入
         // - 不依赖 app-main 的虚拟盘服务，只读取 core 的 Settings（跨平台）
-        #[cfg(feature = "virtual-drive")]
+        #[cfg(feature = "virtual-driver")]
         {
             fn normalize_mount_point(input: &str) -> String {
                 let s = input.trim();
@@ -1135,16 +1124,25 @@ fn download_image(
                 source.starts_with(&mp_canon)
             }
 
-            if let Ok(s) = settings.get_settings() {
-                if s.album_drive_enabled {
-                    let mp = normalize_mount_point(&s.album_drive_mount_point);
-                    if !mp.is_empty() && std::path::Path::new(&mp).exists() {
-                        if is_under_mount_point(&source_path, &mp) {
-                            return Err(format!(
-                                "禁止从虚拟盘导入（会导致无限循环）。路径：{}（挂载点：{}）",
-                                source_path.display(),
-                                mp
-                            ));
+            // 使用 block_on 调用 async getter（在同步上下文中）
+            let handle = tokio::runtime::Handle::try_current();
+            if let Ok(handle) = handle {
+                if let (Ok(enabled), Ok(mp)) = handle.block_on(async {
+                    tokio::join!(
+                        Settings::global().get_album_drive_enabled(),
+                        Settings::global().get_album_drive_mount_point()
+                    )
+                }) {
+                    if enabled {
+                        let mp = normalize_mount_point(&mp);
+                        if !mp.is_empty() && std::path::Path::new(&mp).exists() {
+                            if is_under_mount_point(&source_path, &mp) {
+                                return Err(format!(
+                                    "禁止从虚拟盘导入（会导致无限循环）。路径：{}（挂载点：{}）",
+                                    source_path.display(),
+                                    mp
+                                ));
+                            }
                         }
                     }
                 }
@@ -1155,11 +1153,17 @@ fn download_image(
         let source_hash = compute_file_hash(&source_path)?;
 
         // 去重开关
-        let auto_deduplicate = settings
-            .get_settings()
-            .ok()
-            .map(|s| s.auto_deduplicate)
-            .unwrap_or(false);
+        let handle = tokio::runtime::Handle::try_current();
+        let auto_deduplicate = if let Ok(handle) = handle {
+            handle.block_on(async {
+                Settings::global()
+                    .get_auto_deduplicate()
+                    .await
+                    .unwrap_or(false)
+            })
+        } else {
+            false
+        };
 
         // 若启用自动去重：本地文件也仅按哈希判断是否复用（不看 URL/路径）
         if auto_deduplicate {
@@ -1268,11 +1272,17 @@ fn download_image(
         let plugin_id_clone = plugin_id.to_string();
         let task_id_clone = task_id.to_string();
         let http_headers_clone = http_headers.clone();
-        let retry_count = settings
-            .get_settings()
-            .ok()
-            .map(|s| s.network_retry_count)
-            .unwrap_or(0);
+        let handle = tokio::runtime::Handle::try_current();
+        let retry_count = if let Ok(handle) = handle {
+            handle.block_on(async {
+                Settings::global()
+                    .get_network_retry_count()
+                    .await
+                    .unwrap_or(2)
+            })
+        } else {
+            2
+        };
 
         // 从 URL 获取文件名（用于落盘；实际写入先写到 temp，再 rename）
         let parsed_url = Url::parse(url).map_err(|e| format!("Invalid image URL: {}", e))?;
@@ -1293,7 +1303,8 @@ fn download_image(
         // 这样可以确保“并发下载数 x”真正对应 x 个 worker 的并发度。
         let (content_hash, final_or_temp_path) = (|| -> Result<(String, PathBuf), String> {
             let client = create_blocking_client()?;
-            let header_map = build_reqwest_header_map_for_emitter(emitter, &task_id_clone, &http_headers_clone);
+            let header_map =
+                build_reqwest_header_map_for_emitter(&task_id_clone, &http_headers_clone);
 
             // 失败重试：每次 attempt 都重新下载并写入新的临时文件（避免脏数据）
             let max_attempts = retry_count.saturating_add(1).max(1);
@@ -1479,11 +1490,17 @@ fn download_image(
         })()?;
 
         // 若已有相同哈希且文件存在，复用（仅在启用自动去重时检查）
-        let should_check_hash_dedupe = settings
-            .get_settings()
-            .ok()
-            .map(|s| s.auto_deduplicate)
-            .unwrap_or(false);
+        let handle = tokio::runtime::Handle::try_current();
+        let should_check_hash_dedupe = if let Ok(handle) = handle {
+            handle.block_on(async {
+                Settings::global()
+                    .get_auto_deduplicate()
+                    .await
+                    .unwrap_or(false)
+            })
+        } else {
+            false
+        };
 
         if should_check_hash_dedupe {
             if let Ok(Some(existing)) = storage.find_image_by_hash(&content_hash) {
@@ -1655,8 +1672,7 @@ pub struct ActiveDownloadInfo {
     pub state: String,
 }
 
-fn emit_download_state<R: Runtime + ?Sized>(
-    runtime: Option<&R>,
+fn emit_download_state(
     task_id: &str,
     url: &str,
     start_time: u64,
@@ -1664,16 +1680,8 @@ fn emit_download_state<R: Runtime + ?Sized>(
     state: &str,
     error: Option<&str>,
 ) {
-    let Some(runtime) = runtime else {
-        // 无 runtime：只打印到 stderr
-        if let Some(e) = error {
-            eprintln!("[download-state] {} [{}] {}: {}", task_id, state, url, e);
-        } else {
-            eprintln!("[download-state] {} [{}] {}", task_id, state, url);
-        }
-        return;
-    };
-    runtime.emit_download_state(task_id, url, start_time, plugin_id, state, error);
+    // 使用全局 emitter
+    GlobalEmitter::global().emit_download_state(task_id, url, start_time, plugin_id, state, error);
 }
 
 #[derive(Debug, Clone)]
@@ -1733,9 +1741,8 @@ impl DownloadPool {
 // 下载调度器：固定/可伸缩 download worker（并发=设置 max_concurrent_downloads）
 #[derive(Clone)]
 pub struct DownloadQueue {
-    emitter: Arc<dyn EventEmitter>,
-    settings: Arc<crate::settings::Settings>,
-    storage: Arc<crate::storage::Storage>,
+    // emitter 现在是全局单例，不需要存储
+    // Settings 和 Storage 现在是全局单例，不需要存储
     pool: Arc<DownloadPool>,
     active_tasks: Arc<Mutex<Vec<ActiveDownloadInfo>>>,
     canceled_tasks: Arc<Mutex<HashSet<String>>>,
@@ -1744,23 +1751,14 @@ pub struct DownloadQueue {
 impl DownloadQueue {
     /// 创建 DownloadQueue（daemon 侧使用）。
     ///
-    /// - `emitter`：用于发送下载/任务事件（通常是 IPC emitter）
-    /// - `settings/storage`：worker 线程会用到（因此用 Arc 持有）
-    pub fn new(
-        emitter: Arc<dyn EventEmitter>,
-        settings: Arc<crate::settings::Settings>,
-        storage: Arc<crate::storage::Storage>,
-    ) -> Self {
-        let initial = settings
-            .get_settings()
-            .ok()
-            .map(|s| s.max_concurrent_downloads)
+    /// Emitter、Settings 和 Storage 现在是全局单例，不需要传递
+    pub async fn new() -> Self {
+        let initial = Settings::global()
+            .get_max_concurrent_downloads()
+            .await
             .unwrap_or(3);
         let pool = Arc::new(DownloadPool::new(initial));
         Self {
-            emitter,
-            settings,
-            storage,
             pool: Arc::clone(&pool),
             active_tasks: Arc::new(Mutex::new(Vec::new())),
             canceled_tasks: Arc::new(Mutex::new(HashSet::new())),
@@ -1902,11 +1900,22 @@ impl DownloadQueue {
                 if !is_http_url {
                     false
                 } else {
-                    match self.settings.get_settings() {
-                        Ok(s) if s.auto_deduplicate => {
-                            self.storage.find_image_by_url(&url).ok().flatten().is_some()
+                    // 使用 block_on 调用 async getter
+                    let handle = tokio::runtime::Handle::try_current();
+                    if let Ok(handle) = handle {
+                        if let Ok(true) = handle
+                            .block_on(async { Settings::global().get_auto_deduplicate().await })
+                        {
+                            Storage::global()
+                                .find_image_by_url(&url)
+                                .ok()
+                                .flatten()
+                                .is_some()
+                        } else {
+                            false
                         }
-                        _ => false,
+                    } else {
+                        false
                     }
                 }
             }
@@ -1918,10 +1927,9 @@ impl DownloadQueue {
             let url_clone = url.clone();
             let task_id_clone = task_id.clone();
             let plugin_id_clone = plugin_id.clone();
-            let emitter = Arc::clone(&self.emitter);
-            let storage = Arc::clone(&self.storage);
 
             std::thread::spawn(move || {
+                let emitter = GlobalEmitter::global();
                 emitter.emit_download_state(
                     &task_id_clone,
                     &url_clone,
@@ -1931,7 +1939,7 @@ impl DownloadQueue {
                     None,
                 );
 
-                if let Ok(Some(existing)) = storage.find_image_by_url(&url_clone) {
+                if let Ok(Some(existing)) = Storage::global().find_image_by_url(&url_clone) {
                     let existing_path = PathBuf::from(&existing.local_path);
                     if existing_path.exists() {
                         let mut need_backfill = existing.thumbnail_path.trim().is_empty();
@@ -1950,7 +1958,8 @@ impl DownloadQueue {
                                     .to_string()
                                     .trim_start_matches("\\\\?\\")
                                     .to_string();
-                                let _ = storage.update_image_thumbnail_path(&existing.id, &canonical_thumb);
+                                let _ = Storage::global()
+                                    .update_image_thumbnail_path(&existing.id, &canonical_thumb);
                             }
                         }
                     }
@@ -2019,7 +2028,7 @@ impl DownloadQueue {
             tasks.push(download_info.clone());
         }
 
-        self.emitter.emit_download_state(
+        GlobalEmitter::global().emit_download_state(
             &task_id,
             &url,
             download_start_time,
@@ -2076,16 +2085,17 @@ impl DownloadQueue {
         }
     }
 
-    pub fn emitter_arc(&self) -> Arc<dyn EventEmitter> {
-        Arc::clone(&self.emitter)
+    pub fn emitter_arc(&self) -> &'static dyn EventEmitter {
+        GlobalEmitter::global() as &'static dyn EventEmitter
     }
 
-    pub fn settings_arc(&self) -> Arc<crate::settings::Settings> {
-        Arc::clone(&self.settings)
+    // Settings 现在是全局单例，不需要返回 Arc
+    pub fn settings_arc(&self) -> &'static crate::settings::Settings {
+        Settings::global()
     }
 
-    pub fn storage_arc(&self) -> Arc<crate::storage::Storage> {
-        Arc::clone(&self.storage)
+    pub fn storage(&self) -> &'static crate::storage::Storage {
+        Storage::global()
     }
 }
 
@@ -2149,7 +2159,7 @@ fn download_worker_loop(dq: DownloadQueue) {
             let http_headers_clone = job.http_headers.clone();
             let download_start_time = job.download_start_time;
 
-            dq.emitter.emit_download_state(
+            GlobalEmitter::global().emit_download_state(
                 &task_id_clone,
                 &url_clone,
                 download_start_time,
@@ -2180,15 +2190,19 @@ fn download_worker_loop(dq: DownloadQueue) {
                     p
                 } else if url_clone.starts_with("http://") || url_clone.starts_with("https://") {
                     let archive_path = temp_dir.join("__kg_archive.zip");
-                    let retry_count = dq
-                        .settings
-                        .get_settings()
-                        .ok()
-                        .map(|s| s.network_retry_count)
-                        .unwrap_or(0);
+                    let handle = tokio::runtime::Handle::try_current();
+                    let retry_count = if let Ok(handle) = handle {
+                        handle.block_on(async {
+                            Settings::global()
+                                .get_network_retry_count()
+                                .await
+                                .unwrap_or(2)
+                        })
+                    } else {
+                        2
+                    };
                     let cancel_check = || dq.is_task_canceled(&task_id_clone);
                     download_file_to_path_with_retry(
-                        dq.emitter.as_ref(),
                         &cancel_check,
                         &task_id_clone,
                         &url_clone,
@@ -2223,7 +2237,7 @@ fn download_worker_loop(dq: DownloadQueue) {
                         t.state = "processing".to_string();
                     }
                 }
-                dq.emitter.emit_download_state(
+                GlobalEmitter::global().emit_download_state(
                     &task_id_clone,
                     &url_clone,
                     download_start_time,
@@ -2243,8 +2257,7 @@ fn download_worker_loop(dq: DownloadQueue) {
 
                 // 逐个入队（不新建线程，复用当前 worker；入队过程会按并发限制阻塞等待）
                 const MAX_TASK_IMAGES: usize = 10000;
-                let base_count = dq
-                    .storage
+                let base_count = Storage::global()
                     .get_task_image_ids(&task_id_clone)
                     .map(|v| v.len())
                     .unwrap_or(0);
@@ -2280,7 +2293,7 @@ fn download_worker_loop(dq: DownloadQueue) {
 
             match &result {
                 Ok(_) => {
-                    dq.emitter.emit_download_state(
+                    GlobalEmitter::global().emit_download_state(
                         &task_id_clone,
                         &url_clone,
                         download_start_time,
@@ -2293,7 +2306,7 @@ fn download_worker_loop(dq: DownloadQueue) {
                     if !e.contains("Task canceled") {
                         eprintln!("[下载失败] URL: {}, 错误: {}", url_clone, e);
                         // 记录失败图片（用于 TaskDetail 展示 + 手动重试）
-                        let _ = dq.storage.add_task_failed_image(
+                        let _ = Storage::global().add_task_failed_image(
                             &task_id_clone,
                             &plugin_id_clone,
                             &url_clone,
@@ -2301,12 +2314,16 @@ fn download_worker_loop(dq: DownloadQueue) {
                             Some(e.as_str()),
                         );
                     }
-                    dq.emitter.emit_download_state(
+                    GlobalEmitter::global().emit_download_state(
                         &task_id_clone,
                         &url_clone,
                         download_start_time,
                         &plugin_id_clone,
-                        if e.contains("Task canceled") { "canceled" } else { "failed" },
+                        if e.contains("Task canceled") {
+                            "canceled"
+                        } else {
+                            "failed"
+                        },
                         Some(e),
                     );
                 }
@@ -2341,7 +2358,7 @@ fn download_worker_loop(dq: DownloadQueue) {
         }
 
         // 关键：对前端显式发出 downloading，配合 download-progress 才能显示下载进度条。
-        dq.emitter.emit_download_state(
+        GlobalEmitter::global().emit_download_state(
             &job.task_id,
             &job.url,
             job.download_start_time,
@@ -2363,9 +2380,8 @@ fn download_worker_loop(dq: DownloadQueue) {
             &job.plugin_id,
             &job.task_id,
             job.download_start_time,
-            dq.settings.as_ref(),
-            dq.storage.as_ref(),
-            dq.emitter.as_ref(),
+            Storage::global(),
+            GlobalEmitter::global(),
             &dq,
             &job.http_headers,
         );
@@ -2395,7 +2411,7 @@ fn download_worker_loop(dq: DownloadQueue) {
 
         match &result {
             Ok(_) => {
-                dq.emitter.emit_download_state(
+                GlobalEmitter::global().emit_download_state(
                     &task_id_clone,
                     &url_clone,
                     download_start_time,
@@ -2409,7 +2425,7 @@ fn download_worker_loop(dq: DownloadQueue) {
                     eprintln!("[下载失败] URL: {}, 错误: {}", url_clone, e);
                     // 记录失败图片（用于 TaskDetail 展示 + 手动重试）
                     // 说明：允许重复记录，因此这里不做去重。
-                    let _ = dq.storage.add_task_failed_image(
+                    let _ = Storage::global().add_task_failed_image(
                         &task_id_clone,
                         &plugin_id_clone,
                         &url_clone,
@@ -2417,12 +2433,16 @@ fn download_worker_loop(dq: DownloadQueue) {
                         Some(e.as_str()),
                     );
                 }
-                dq.emitter.emit_download_state(
+                GlobalEmitter::global().emit_download_state(
                     &task_id_clone,
                     &url_clone,
                     download_start_time,
                     &plugin_id_clone,
-                    if e.contains("Task canceled") { "canceled" } else { "failed" },
+                    if e.contains("Task canceled") {
+                        "canceled"
+                    } else {
+                        "failed"
+                    },
                     Some(e),
                 );
             }
@@ -2436,7 +2456,7 @@ fn download_worker_loop(dq: DownloadQueue) {
                 // 注意：取消任务时不应删除任何“最终文件”（无论是复制到输出目录的，还是已在输出目录内的源文件）。
                 // 临时文件（.part-*）已在下载阶段/失败分支里清理。
 
-                dq.emitter.emit_download_state(
+                GlobalEmitter::global().emit_download_state(
                     &task_id_clone,
                     &url_clone,
                     download_start_time,
@@ -2472,7 +2492,7 @@ fn download_worker_loop(dq: DownloadQueue) {
                 }
             }
 
-            let storage = dq.storage.as_ref();
+            let storage = Storage::global();
             // 规范化路径为绝对路径，并移除 Windows 长路径前缀
             let local_path_str = downloaded
                 .path
@@ -2496,9 +2516,12 @@ fn download_worker_loop(dq: DownloadQueue) {
 
             if !downloaded.reused {
                 // 检查是否启用自动去重（URL 仅网络；哈希 网络+本地）
+                let handle = tokio::runtime::Handle::try_current();
                 let should_skip = {
-                    match dq.settings.get_settings() {
-                        Ok(s) if s.auto_deduplicate => {
+                    if let Ok(handle) = handle {
+                        if let Ok(true) = handle
+                            .block_on(async { Settings::global().get_auto_deduplicate().await })
+                        {
                             let is_http_url = url_clone.starts_with("http://")
                                 || url_clone.starts_with("https://");
                             if is_http_url {
@@ -2522,8 +2545,11 @@ fn download_worker_loop(dq: DownloadQueue) {
                             } else {
                                 false
                             }
+                        } else {
+                            false
                         }
-                        _ => false,
+                    } else {
+                        false
                     }
                 };
 
@@ -2574,17 +2600,18 @@ fn download_worker_loop(dq: DownloadQueue) {
                                 "reason": "add",
                                 "imageIds": [image_id.clone()],
                             });
-                            change_payload["taskId"] = serde_json::Value::String(task_id_clone.clone());
+                            change_payload["taskId"] =
+                                serde_json::Value::String(task_id_clone.clone());
                             if let Some(ref album_id) = output_album_id_clone {
                                 if !album_id.is_empty() {
                                     change_payload["albumId"] =
                                         serde_json::Value::String(album_id.clone());
                                 }
                             }
-                            dq.emitter.emit("images-change", change_payload);
+                            GlobalEmitter::global().emit("images-change", change_payload);
 
                             // 下载完成：发送 completed 状态，确保下载列表正确更新
-                            dq.emitter.emit_download_state(
+                            GlobalEmitter::global().emit_download_state(
                                 &task_id_clone,
                                 &url_clone,
                                 download_start_time,
@@ -2594,7 +2621,7 @@ fn download_worker_loop(dq: DownloadQueue) {
                             );
                         }
                         Err(_) => {
-                            dq.emitter.emit_download_state(
+                            GlobalEmitter::global().emit_download_state(
                                 &task_id_clone,
                                 &url_clone,
                                 download_start_time,

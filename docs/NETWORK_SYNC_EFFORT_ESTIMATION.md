@@ -124,7 +124,7 @@
   - **复杂度**：低
 
 **虚拟盘集成**
-- **修改文件**：`src-tauri/core/src/virtual_drive/windows.rs`
+- **修改文件**：`src-tauri/core/src/virtual_driver/windows.rs`
   - 网络 Provider 支持：约 100 行
   - **小计**：约 100 行
   - **工作量**：1 人天

@@ -159,23 +159,17 @@ for (var i=0; i<allDesktops.length; i++) {{\n\
 impl WallpaperManager for PlasmaPluginWallpaperManager {
     async fn get_style(&self) -> Result<String, String> {
         // 以 daemon 设置为准（插件会同步 daemon）
-        let v = crate::daemon_client::get_ipc_client()
-            .settings_get()
+        crate::daemon_client::get_ipc_client()
+            .settings_get_wallpaper_rotation_style()
             .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-        Ok(v.get("wallpaperRotationStyle")
-            .and_then(|x| x.as_str())
-            .unwrap_or("fill")
-            .to_string())
+            .map_err(|e| format!("Daemon unavailable: {}", e))
     }
 
     async fn get_transition(&self) -> Result<String, String> {
-        let v = crate::daemon_client::get_ipc_client().settings_get().await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-        Ok(v.get("wallpaperRotationTransition")
-            .and_then(|x| x.as_str())
-            .unwrap_or("fade")
-            .to_string())
+        crate::daemon_client::get_ipc_client()
+            .settings_get_wallpaper_rotation_transition()
+            .await
+            .map_err(|e| format!("Daemon unavailable: {}", e))
     }
 
     async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
@@ -202,27 +196,24 @@ impl WallpaperManager for PlasmaPluginWallpaperManager {
             return Err("File does not exist".to_string());
         }
 
-        // 用 daemon 的当前 style/transition 初始化插件配置，避免切到插件模式后出现“空白/配置不一致”
-        let v = crate::daemon_client::get_ipc_client()
-            .settings_get()
-            .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+        // 用 daemon 的当前 style/transition 初始化插件配置，避免切到插件模式后出现"空白/配置不一致"
+        let client = crate::daemon_client::get_ipc_client();
+        let (style_result, transition_result) = tokio::join!(
+            client.settings_get_wallpaper_rotation_style(),
+            client.settings_get_wallpaper_rotation_transition()
+        );
 
-        let style = v
-            .get("wallpaperRotationStyle")
-            .and_then(|x| x.as_str())
-            .unwrap_or("fill");
-        let transition = v
-            .get("wallpaperRotationTransition")
-            .and_then(|x| x.as_str())
-            .unwrap_or("fade");
-        let duration = v
-            .get("wallpaperTransitionDuration")
-            .and_then(|x| x.as_i64())
-            .or_else(|| v.get("wallpaperRotationTransitionDuration").and_then(|x| x.as_i64()))
-            .unwrap_or(500);
+        let style = style_result.unwrap_or_else(|_| "fill".to_string());
+        let transition = transition_result.unwrap_or_else(|_| "fade".to_string());
+        // TODO: 如果将来需要 duration，需要添加对应的 getter 方法
+        let duration = 500;
 
-        self.apply_plugin_config(Some(file_path), Some(style), Some(transition), Some(duration))?;
+        self.apply_plugin_config(
+            Some(file_path),
+            Some(style),
+            Some(transition),
+            Some(duration),
+        )?;
         Ok(())
     }
 
@@ -238,4 +229,3 @@ impl WallpaperManager for PlasmaPluginWallpaperManager {
         Ok(())
     }
 }
-

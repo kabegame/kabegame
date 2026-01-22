@@ -115,11 +115,15 @@ fn run_dedupe_batched(
     let mut cursor: Option<DedupeCursor> = None;
 
     // 当前壁纸 id：若被移除则清空（尽量与 batch_remove/delete 行为一致）
-    let settings = app.state::<Settings>();
-    let mut current_wallpaper_id = settings
-        .get_settings()
-        .ok()
-        .and_then(|s| s.current_wallpaper_image_id);
+    // 注意：这是在同步上下文中，需要使用 block_on
+    let handle = tokio::runtime::Handle::try_current();
+    let mut current_wallpaper_id = if let Ok(handle) = handle {
+        handle.block_on(async {
+            Settings::global().get_current_wallpaper_image_id().await.ok().flatten()
+        })
+    } else {
+        None
+    };
 
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -183,7 +187,12 @@ fn run_dedupe_batched(
             // 若当前壁纸被移除：清空设置（只需要做一次）
             if let Some(cur) = current_wallpaper_id.as_deref() {
                 if remove_ids.iter().any(|id| id == cur) {
-                    let _ = settings.set_current_wallpaper_image_id(None);
+                    let handle = tokio::runtime::Handle::try_current();
+                    if let Ok(handle) = handle {
+                        let _ = handle.block_on(async {
+                            Settings::global().set_current_wallpaper_image_id(None).await
+                        });
+                    }
                     current_wallpaper_id = None;
                 }
             }

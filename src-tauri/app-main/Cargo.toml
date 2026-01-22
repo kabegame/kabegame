@@ -4,7 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-kabegame-core = { workspace = true, default-features = false, features = ["tauri"] }
+kabegame-core = { workspace = true, default-features = false, features = ["ipc-client"] }
 tauri = { workspace = true, features = ["protocol-asset"] }
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-shell = "=2.3.3"
@@ -41,8 +41,9 @@ tauri-build = { workspace = true }
 default = ["custom-protocol", "tray"]
 tray = ["dep:governor"]
 custom-protocol = ["tauri/custom-protocol"]
-virtual-drive = ["self-host", "dep:dokan", "dep:widestring", "dep:winapi", "dep:lru", "dep:memmap2", "kabegame-core/virtual-drive", "kabegame-core/virtual-drive-windows"]
-self-host = ["kabegame-core/tauri"]
+# self-hosted && vd (local) | self-hosted && !vd (light) | !self-hosted && vd (normal)  
+self-hosted = ["kabegame-core/tauri-runtime"]
+virtual-driver = ["dep:dokan", "dep:widestring", "dep:winapi", "dep:lru", "dep:memmap2", "kabegame-core/virtual-driver"]
 
 [[bin]]
 name = "kabegame"

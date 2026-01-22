@@ -1,11 +1,11 @@
-//! 虚拟盘（virtual-drive feature）专用：高频只读文件读取优化（面向 Explorer 缩略图/预览）。
+//! 虚拟盘（virtual-driver feature）专用：高频只读文件读取优化（面向 Explorer 缩略图/预览）。
 //!
 //! 约束：
 //! - 仅提供"按 offset 读取"能力（read_at），供 app-main 的 Dokan handler 使用。
 //! - Windows 下优先使用 file mapping（section / mmap）减少大量小块 ReadFile syscall。
 //! - 失败/不适用时回退到 `FileExt::seek_read`。
 
-#![cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
+#![cfg(all(feature = "virtual-driver", target_os = "windows"))]
 
 use std::{
     fs::File,

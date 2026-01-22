@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 // Storage 不再依赖 Tauri AppHandle
 
 pub mod albums;
@@ -22,6 +22,9 @@ pub use tasks::TaskInfo;
 
 // 收藏画册的固定ID
 pub const FAVORITE_ALBUM_ID: &str = "00000000-0000-0000-0000-000000000001";
+
+// 全局 Storage 单例
+static STORAGE: OnceLock<Storage> = OnceLock::new();
 
 #[derive(Clone)]
 pub struct Storage {
@@ -338,6 +341,23 @@ PRAGMA mmap_size = 268435456;
     fn get_metadata_file(&self) -> PathBuf {
         let app_data_dir = crate::app_paths::kabegame_data_dir();
         app_data_dir.join("images_metadata.json")
+    }
+
+    /// 初始化全局 Storage（必须在首次使用前调用）
+    pub fn init_global() -> Result<(), String> {
+        let storage = Storage::new();
+        storage.init()?;
+        STORAGE
+            .set(storage)
+            .map_err(|_| "Storage already initialized".to_string())?;
+        Ok(())
+    }
+
+    /// 获取全局 Storage 引用
+    pub fn global() -> &'static Storage {
+        STORAGE
+            .get()
+            .expect("Storage not initialized. Call Storage::init_global() first.")
     }
 }
 

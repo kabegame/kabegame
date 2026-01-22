@@ -20,7 +20,7 @@ use crate::{
     storage::Storage,
 };
 
-#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
+#[cfg(all(feature = "virtual-driver", target_os = "windows"))]
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
 
 #[derive(Debug, Clone)]

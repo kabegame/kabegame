@@ -1,10 +1,10 @@
-//! 虚拟盘（virtual-drive feature）专用：可写操作的辅助函数。
+//! 虚拟盘（virtual-driver feature）专用：可写操作的辅助函数。
 //!
 //! 约束：
 //! - 仅用于 core/providers 的 VD 方法实现（mkdir/delete/说明文件等）。
 //! - Dokan/挂载/Windows 句柄等实现细节在 app-main。
 
-#![cfg(feature = "virtual-drive")]
+#![cfg(feature = "virtual-driver")]
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 use std::collections::HashMap;
@@ -111,7 +111,7 @@ pub(crate) fn plugin_display_name_from_manifest(plugin_id: &str) -> Option<Strin
 
 fn note_dir() -> PathBuf {
     crate::app_paths::kabegame_data_dir()
-        .join("virtual-drive")
+        .join("virtual-driver")
         .join("notes")
 }
 

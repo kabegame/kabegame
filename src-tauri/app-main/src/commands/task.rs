@@ -1,7 +1,7 @@
 // 任务相关命令
 
 use crate::daemon_client;
-#[cfg(feature = "self-host")]
+#[cfg(feature = "self-hosted")]
 use crate::storage::{Storage, TaskInfo};
 
 #[tauri::command]
@@ -53,27 +53,27 @@ pub async fn get_active_downloads() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-#[cfg(feature = "self-host")]
-pub fn local_add_task(task: TaskInfo, state: tauri::State<Storage>) -> Result<(), String> {
-    state.add_task(task)
+#[cfg(feature = "self-hosted")]
+pub fn local_add_task(task: TaskInfo) -> Result<(), String> {
+    Storage::global().add_task(task)
 }
 
 #[tauri::command]
-#[cfg(feature = "self-host")]
-pub fn local_update_task(task: TaskInfo, state: tauri::State<Storage>) -> Result<(), String> {
-    state.update_task(task)
+#[cfg(feature = "self-hosted")]
+pub fn local_update_task(task: TaskInfo) -> Result<(), String> {
+    Storage::global().update_task(task)
 }
 
 #[tauri::command]
-#[cfg(feature = "self-host")]
-pub fn local_get_task(task_id: String, state: tauri::State<Storage>) -> Result<Option<TaskInfo>, String> {
-    state.get_task(&task_id)
+#[cfg(feature = "self-hosted")]
+pub fn local_get_task(task_id: String) -> Result<Option<TaskInfo>, String> {
+    Storage::global().get_task(&task_id)
 }
 
 #[tauri::command]
-#[cfg(feature = "self-host")]
-pub fn local_get_all_tasks(state: tauri::State<Storage>) -> Result<Vec<TaskInfo>, String> {
-    state.get_all_tasks()
+#[cfg(feature = "self-hosted")]
+pub fn local_get_all_tasks() -> Result<Vec<TaskInfo>, String> {
+    Storage::global().get_all_tasks()
 }
 
 #[tauri::command]

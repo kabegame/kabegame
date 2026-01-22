@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::providers::common::CommonProvider;
-#[cfg(feature = "virtual-drive")]
+#[cfg(feature = "virtual-driver")]
 use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
 use crate::providers::provider::{FsEntry, Provider, ResolveChild};
 use crate::storage::gallery::ImageQuery;
@@ -37,15 +37,17 @@ impl Provider for TaskGroupProvider {
     fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
         // 列出所有任务（不按“是否有图片”过滤）
         let tasks = storage.get_tasks_with_images()?;
+        // 这个变量可能mut，随编译目标变化
+        #[allow(unused_mut)]
         let mut out: Vec<FsEntry> = tasks
             .into_iter()
             .map(|(id, plugin_id)| {
-                #[cfg(feature = "virtual-drive")]
+                #[cfg(feature = "virtual-driver")]
                 let plugin_name =
                     crate::providers::vd_ops::plugin_display_name_from_manifest(&plugin_id)
                         .unwrap_or_else(|| plugin_id.clone());
 
-                #[cfg(not(feature = "virtual-drive"))]
+                #[cfg(not(feature = "virtual-driver"))]
                 let plugin_name = plugin_id;
 
                 let plugin_name = plugin_name.trim().to_string();
@@ -58,7 +60,7 @@ impl Provider for TaskGroupProvider {
             .collect();
 
         // VD 专用：目录说明文件（说明在文件名里）
-        #[cfg(feature = "virtual-drive")]
+        #[cfg(feature = "virtual-driver")]
         {
             // NOTE: 必须带扩展名，否则某些图片查看器/Explorer 枚举同目录文件时会尝试“打开”该说明文件并弹出错误。
             let display_name = "这里按任务归档图片（目录名含插件名与任务ID，可删除任务目录）.txt";
@@ -112,7 +114,7 @@ impl Provider for TaskGroupProvider {
         }
     }
 
-    #[cfg(feature = "virtual-drive")]
+    #[cfg(feature = "virtual-driver")]
     fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
         let display_name = "这里按任务归档图片（目录名含插件名与任务ID，可删除任务目录）.txt";
         if name != display_name {
@@ -123,7 +125,7 @@ impl Provider for TaskGroupProvider {
             .map(|(id, path)| (id, path))
     }
 
-    #[cfg(feature = "virtual-drive")]
+    #[cfg(feature = "virtual-driver")]
     fn delete_child(
         &self,
         storage: &Storage,

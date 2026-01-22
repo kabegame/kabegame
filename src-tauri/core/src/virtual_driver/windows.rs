@@ -28,21 +28,20 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use super::drive_service::{join_mount_subdir, notify_explorer_dir_changed_path};
+use super::driver_service::{join_mount_subdir, notify_explorer_dir_changed_path};
 use super::fs::KabegameFs;
 use super::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
-#[cfg(all(feature = "virtual-drive-windows", target_os = "windows"))]
+#[cfg(all(feature = "virtual-driver", target_os = "windows"))]
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
 use crate::providers::provider::{DeleteChildMode, FsEntry, Provider, VdOpsContext};
 use crate::providers::root::{DIR_ALBUMS, DIR_BY_TASK};
+use crate::runtime::{global_emitter::GlobalEmitter, EventEmitter};
+use crate::settings::Settings;
 use crate::storage::Storage;
 use dokan::{
     CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, OperationInfo, OperationResult,
     VolumeInfo,
 };
-use tauri::AppHandle;
-use tauri::Emitter;
-use tauri::Manager;
 use widestring::{U16CStr, U16CString};
 use winapi::{
     shared::ntstatus::{
@@ -88,6 +87,21 @@ fn file_index_from_path(path: &[String]) -> u64 {
     hasher.finish()
 }
 
+/// 从全局设置获取挂载点（同步方式，在同步上下文中调用异步方法）
+fn get_mount_point() -> String {
+    const DEFAULT_MOUNT_POINT: &str = "K:\\";
+    tokio::runtime::Handle::try_current()
+        .map(|handle| {
+            handle.block_on(async {
+                Settings::global()
+                    .get_album_drive_mount_point()
+                    .await
+                    .unwrap_or_else(|_| DEFAULT_MOUNT_POINT.to_string())
+            })
+        })
+        .unwrap_or_else(|_| DEFAULT_MOUNT_POINT.to_string())
+}
+
 /// 虚拟盘 RootProvider（VD 用）：包含按时间、按插件、按任务、画册、全部
 pub struct VirtualDriveRootProvider;
 
@@ -126,19 +140,17 @@ pub enum FsItem {
     },
 }
 
-pub struct WindowsVdOpsContext<'a> {
-    fs: &'a KabegameFs,
-}
+pub struct WindowsVdOpsContext;
 
-impl<'a> WindowsVdOpsContext<'a> {
-    pub fn new(fs: &'a KabegameFs) -> Self {
-        Self { fs }
+impl WindowsVdOpsContext {
+    pub fn new() -> Self {
+        Self
     }
 }
 
-impl VdOpsContext for WindowsVdOpsContext<'_> {
+impl VdOpsContext for WindowsVdOpsContext {
     fn albums_created(&self, album_name: &str) {
-        let _ = self.fs.app.emit(
+        GlobalEmitter::global().emit(
             "albums-changed",
             serde_json::json!({
                 "reason": "create",
@@ -146,65 +158,53 @@ impl VdOpsContext for WindowsVdOpsContext<'_> {
             }),
         );
 
-        notify_explorer_dir_changed_path(&join_mount_subdir(
-            self.fs.mount_point.as_ref(),
-            DIR_ALBUMS,
-        ));
-        notify_explorer_dir_changed_path(self.fs.mount_point.as_ref());
+        let mount_point = get_mount_point();
+        notify_explorer_dir_changed_path(&join_mount_subdir(&mount_point, DIR_ALBUMS));
+        notify_explorer_dir_changed_path(&mount_point);
     }
 
     fn albums_deleted(&self, album_name: &str) {
-        let _ = self.fs.app.emit(
+        GlobalEmitter::global().emit(
             "albums-changed",
             serde_json::json!({
                 "reason": "delete",
                 "albumName": album_name
             }),
         );
-        notify_explorer_dir_changed_path(self.fs.mount_point.as_ref());
+        let mount_point = get_mount_point();
+        notify_explorer_dir_changed_path(&mount_point);
     }
 
     fn album_images_removed(&self, album_name: &str) {
-        let _ = self.fs.app.emit(
+        GlobalEmitter::global().emit(
             "images-change",
             serde_json::json!({
                 "albumName": album_name,
                 "reason": "album-remove"
             }),
         );
-        notify_explorer_dir_changed_path(self.fs.mount_point.as_ref());
+        let mount_point = get_mount_point();
+        notify_explorer_dir_changed_path(&mount_point);
     }
 
     fn tasks_deleted(&self, task_id: &str) {
-        let _ = self.fs.app.emit(
+        GlobalEmitter::global().emit(
             "tasks-changed",
             serde_json::json!({
                 "reason": "delete",
                 "taskId": task_id
             }),
         );
-        // 刷新“按任务”目录（以及根目录）
-        notify_explorer_dir_changed_path(&join_mount_subdir(
-            self.fs.mount_point.as_ref(),
-            DIR_BY_TASK,
-        ));
-        notify_explorer_dir_changed_path(self.fs.mount_point.as_ref());
+        // 刷新"按任务"目录（以及根目录）
+        let mount_point = get_mount_point();
+        notify_explorer_dir_changed_path(&join_mount_subdir(&mount_point, DIR_BY_TASK));
+        notify_explorer_dir_changed_path(&mount_point);
     }
 }
 
 impl KabegameFs {
-    pub fn new(
-        storage: Storage,
-        mount_point: Arc<str>,
-        app: AppHandle,
-        root: Arc<dyn Provider>,
-    ) -> Self {
-        Self {
-            storage,
-            mount_point,
-            app,
-            root,
-        }
+    pub fn new(root: Arc<dyn Provider>) -> Self {
+        Self { root }
     }
 
     fn deny_access() -> winapi::shared::ntdef::NTSTATUS {
@@ -246,15 +246,16 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 }
                 let parent_path = &path[..path.len().saturating_sub(1)];
                 let child_name = path.last().map(|s| s.as_str()).unwrap_or("");
-                let ctx = WindowsVdOpsContext::new(self);
-                let rt = self.app.state::<crate::providers::ProviderRuntime>();
-                let sem = VfsSemantics::new(&self.storage, &self.root, &*rt);
+                let ctx = WindowsVdOpsContext::new();
+                let rt = crate::providers::ProviderRuntime::global();
+                let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
                 if sem
                     .delete_dir(parent_path, child_name, DeleteChildMode::Commit, &ctx)
                     .ok()
                     .unwrap_or(false)
                 {
-                    notify_explorer_dir_changed_path(self.mount_point.as_ref());
+                    let mount_point = get_mount_point();
+                    notify_explorer_dir_changed_path(&mount_point);
                 }
             }
             FsItem::File { path, .. } => {
@@ -262,15 +263,16 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 if path.len() >= 3 && path[0].eq_ignore_ascii_case(DIR_ALBUMS) {
                     let file_name = path.last().map(|s| s.as_str()).unwrap_or("");
                     let parent_path = &path[..path.len().saturating_sub(1)];
-                    let ctx = WindowsVdOpsContext::new(self);
-                    let rt = self.app.state::<crate::providers::ProviderRuntime>();
-                    let sem = VfsSemantics::new(&self.storage, &self.root, &*rt);
+                    let ctx = WindowsVdOpsContext::new();
+                    let rt = crate::providers::ProviderRuntime::global();
+                    let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
                     if sem
                         .delete_file(parent_path, file_name, DeleteChildMode::Commit, &ctx)
                         .ok()
                         .unwrap_or(false)
                     {
-                        notify_explorer_dir_changed_path(self.mount_point.as_ref());
+                        let mount_point = get_mount_point();
+                        notify_explorer_dir_changed_path(&mount_point);
                     }
                 }
             }
@@ -295,8 +297,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             create_disposition,
         );
         let segs = parse_segments(file_name);
-        let rt = self.app.state::<crate::providers::ProviderRuntime>();
-        let sem = VfsSemantics::new(&self.storage, &self.root, &*rt);
+        let rt = crate::providers::ProviderRuntime::global();
+        let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
 
         // 3 = OPEN_EXISTING；其他均视为“创建类操作”。
         // 默认只读：只有 provider 覆写允许的场景才放行（目前：画册根目录 mkdir）。
@@ -337,7 +339,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 return Err(STATUS_INVALID_PARAMETER);
             }
 
-            let ctx = WindowsVdOpsContext::new(self);
+            let ctx = WindowsVdOpsContext::new();
             match sem.create_dir(parent_path, dir_name, &ctx) {
                 Ok(()) => {
                     return Ok(CreateFileInfo {
@@ -403,7 +405,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                         .map(|(_, id)| id)
                         .unwrap_or(name)
                         .trim();
-                    if let Ok(Some(task)) = self.storage.get_task(task_id) {
+                    if let Ok(Some(task)) = Storage::global().get_task(task_id) {
                         fn normalize_unix_secs(ts: u64) -> u64 {
                             const MAX_SEC_9999: u64 = 253402300799;
                             if ts > MAX_SEC_9999 {
@@ -474,8 +476,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
     ) -> OperationResult<()> {
         match context {
             FsItem::Directory { path } => {
-                let rt = self.app.state::<crate::providers::ProviderRuntime>();
-                let sem = VfsSemantics::new(&self.storage, &self.root, &*rt);
+                let rt = crate::providers::ProviderRuntime::global();
+                let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
                 let entries = sem.read_dir(path).map_err(Self::map_vfs_error)?;
                 for entry in entries {
                     let (attributes, file_size, created, accessed, modified, file_name) =
@@ -529,8 +531,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         if offset < 0 {
             return Err(STATUS_INVALID_PARAMETER);
         }
-        let rt = self.app.state::<crate::providers::ProviderRuntime>();
-        let sem = VfsSemantics::new(&self.storage, &self.root, &*rt);
+        let rt = crate::providers::ProviderRuntime::global();
+        let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
         let n = sem
             .read_file(read_handle, offset as u64, buffer)
             .map_err(Self::map_vfs_error)?;
@@ -562,14 +564,14 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         if path.len() >= 3 && path[0].eq_ignore_ascii_case(DIR_ALBUMS) {
             let parent_path = &path[..path.len().saturating_sub(1)];
             let file_name = path.last().map(|s| s.as_str()).unwrap_or("");
-            let rt = self.app.state::<crate::providers::ProviderRuntime>();
-            let sem = VfsSemantics::new(&self.storage, &self.root, &*rt);
+            let rt = crate::providers::ProviderRuntime::global();
+            let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
             let ok = sem
                 .delete_file(
                     parent_path,
                     file_name,
                     DeleteChildMode::Check,
-                    &WindowsVdOpsContext::new(self),
+                    &WindowsVdOpsContext::new(),
                 )
                 .is_ok();
             if ok {
@@ -594,13 +596,13 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         }
         let parent_path = &path[..path.len().saturating_sub(1)];
         let child_name = path.last().map(|s| s.as_str()).unwrap_or("");
-        let rt = self.app.state::<crate::providers::ProviderRuntime>();
-        let sem = VfsSemantics::new(&self.storage, &self.root, &*rt);
+        let rt = crate::providers::ProviderRuntime::global();
+        let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
         sem.delete_dir(
             parent_path,
             child_name,
             DeleteChildMode::Check,
-            &WindowsVdOpsContext::new(self),
+            &WindowsVdOpsContext::new(),
         )
         .map(|_| ())
         .map_err(|e| Self::map_vfs_error(e))
@@ -634,12 +636,12 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         }
 
         // 查找 Provider 并执行重命名
-        let rt = self.app.state::<crate::providers::ProviderRuntime>();
-        let sem = VfsSemantics::new(&self.storage, &self.root, &*rt);
+        let rt = crate::providers::ProviderRuntime::global();
+        let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
         sem.rename_dir(path, new_name)
             .map_err(Self::map_vfs_error)?;
 
-        let _ = self.app.emit(
+        GlobalEmitter::global().emit(
             "albums-changed",
             serde_json::json!({
                 "reason": "rename",
@@ -647,7 +649,8 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 "newName": new_name
             }),
         );
-        notify_explorer_dir_changed_path(self.mount_point.as_ref());
+        let mount_point = get_mount_point();
+        notify_explorer_dir_changed_path(&mount_point);
         Ok(())
     }
 

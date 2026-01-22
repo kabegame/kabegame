@@ -4,7 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-kabegame-core = { workspace = true }
+kabegame-core = { workspace = true, features = ['ipc-client'] }
 tauri = { workspace = true }
 clap = { version = "4.5", features = ["derive"] }
 serde = { workspace = true }
@@ -20,8 +20,8 @@ tauri-build = { workspace = true }
 
 [features]
 # 默认启用 VD：Windows 下可用于提权挂载画册盘（Dokan）。
-default = ["virtual-drive"]
-virtual-drive = ["kabegame-core/virtual-drive", "kabegame-core/virtual-drive-windows"]
+default = ["virtual-driver"]
+virtual-driver = ["kabegame-core/virtual-driver"]
 
 [[bin]]
 name = "kabegame-cli"
