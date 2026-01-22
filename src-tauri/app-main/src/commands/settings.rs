@@ -1,17 +1,17 @@
-// 设置相关命令
+﻿// 隶ｾ鄂ｮ逶ｸ蜈ｳ蜻ｽ莉､
 
 use kabegame_core::settings::Settings;
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 use kabegame_core::storage::Storage;
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
 
-// 注意：get_settings 和 get_setting 已废弃，前端应使用细粒度 getter
-// 保留这些函数以向后兼容，但返回错误提示
+// 豕ｨ諢擾ｼ喩et_settings 蜥・get_setting 蟾ｲ蠎溷ｼ・ｼ悟燕遶ｯ蠎比ｽｿ逕ｨ扈・ｲ貞ｺｦ getter
+// 菫晉蕗霑吩ｺ帛・謨ｰ莉･蜷大錘蜈ｼ螳ｹ・御ｽ・ｿ泌屓髞呵ｯｯ謠千､ｺ
 #[tauri::command]
 pub async fn get_settings() -> Result<serde_json::Value, String> {
     Err("get_settings is deprecated. Use individual getter commands instead.".to_string())
@@ -22,7 +22,7 @@ pub async fn get_setting(_key: String) -> Result<serde_json::Value, String> {
     Err("get_setting is deprecated. Use individual getter commands instead.".to_string())
 }
 
-// 添加细粒度 getter commands
+// 豺ｻ蜉扈・ｲ貞ｺｦ getter commands
 #[tauri::command]
 pub async fn get_auto_launch() -> Result<bool, String> {
     Settings::global()
@@ -170,7 +170,7 @@ pub async fn get_window_state() -> Result<Option<serde_json::Value>, String> {
     Ok(serde_json::to_value(window_state).ok())
 }
 
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 #[tauri::command]
 pub async fn get_album_drive_enabled() -> Result<bool, String> {
     Settings::global()
@@ -179,7 +179,7 @@ pub async fn get_album_drive_enabled() -> Result<bool, String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 #[tauri::command]
 pub async fn get_album_drive_mount_point() -> Result<String, String> {
     Settings::global()
@@ -194,7 +194,7 @@ pub fn get_favorite_album_id() -> Result<String, String> {
 }
 
 #[tauri::command]
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
     let settings = Settings::global();
 
@@ -242,7 +242,7 @@ pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 pub async fn set_album_drive_mount_point(mount_point: String) -> Result<(), String> {
     Settings::global()
         .set_album_drive_mount_point(mount_point)

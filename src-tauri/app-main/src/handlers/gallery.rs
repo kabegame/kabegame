@@ -1,4 +1,4 @@
-//! Gallery / Provider 命令处理器
+﻿//! Gallery / Provider 命令处理器
 
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 use kabegame_core::providers::ProviderRuntime;

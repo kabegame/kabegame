@@ -1,66 +1,63 @@
 <template>
   <!-- 主窗口 -->
   <el-container class="app-container">
-      <!-- 全局文件拖拽提示层 -->
-      <FileDropOverlay ref="fileDropOverlayRef" />
-      <!-- 文件拖拽导入确认弹窗（封装 ElMessageBox.confirm） -->
-      <ImportConfirmDialog ref="importConfirmDialogRef" />
-      <!-- 全局唯一的快捷设置抽屉（避免多页面实例冲突） -->
-      <QuickSettingsDrawer />
-      <!-- 全局唯一的帮助抽屉（按页面展示帮助内容） -->
-      <HelpDrawer />
-      <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
-      <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
-      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }"
-        :width="isCollapsed ? '64px' : '200px'">
-        <div class="sidebar-header">
-          <img src="/icon.png" alt="Logo" class="app-logo logo-clickable"
-            @click="toggleCollapse" />
-          <div v-if="!isCollapsed" class="sidebar-title-section">
-            <h1>Kabegame</h1>
-          </div>
+    <!-- 全局文件拖拽提示层 -->
+    <FileDropOverlay ref="fileDropOverlayRef" @click="handleOverlayClick" />
+    <!-- 文件拖拽导入确认弹窗（封装 ElMessageBox.confirm） -->
+    <ImportConfirmDialog ref="importConfirmDialogRef" />
+    <!-- 全局唯一的快捷设置抽屉（避免多页面实例冲突） -->
+    <QuickSettingsDrawer />
+    <!-- 全局唯一的帮助抽屉（按页面展示帮助内容） -->
+    <HelpDrawer />
+    <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
+    <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
+    <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '200px'">
+      <div class="sidebar-header">
+        <img src="/icon.png" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
+        <div v-if="!isCollapsed" class="sidebar-title-section">
+          <h1>Kabegame</h1>
         </div>
-        <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
-          <el-menu-item index="/gallery">
-            <el-icon>
-              <Picture />
-            </el-icon>
-            <span>画廊</span>
-          </el-menu-item>
-          <el-menu-item index="/albums">
-            <el-icon>
-              <Collection />
-            </el-icon>
-            <span>画册</span>
-          </el-menu-item>
-          <el-menu-item index="/plugin-browser">
-            <el-icon>
-              <Grid />
-            </el-icon>
-            <span>收集源</span>
-          </el-menu-item>
-          <el-menu-item index="/settings">
-            <el-icon>
-              <Setting />
-            </el-icon>
-            <span>设置</span>
-          </el-menu-item>
-          <el-menu-item index="/help">
-            <el-icon>
-              <QuestionFilled />
-            </el-icon>
-            <span>帮助</span>
-          </el-menu-item>
-        </el-menu>
-      </el-aside>
-      <el-main class="app-main">
-        <router-view v-slot="{ Component }" :key="routerViewKey">
-          <keep-alive>
-            <component :is="Component" />
-          </keep-alive>
-        </router-view>
-      </el-main>
-    </template>
+      </div>
+      <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
+        <el-menu-item index="/gallery">
+          <el-icon>
+            <Picture />
+          </el-icon>
+          <span>画廊</span>
+        </el-menu-item>
+        <el-menu-item index="/albums">
+          <el-icon>
+            <Collection />
+          </el-icon>
+          <span>画册</span>
+        </el-menu-item>
+        <el-menu-item index="/plugin-browser">
+          <el-icon>
+            <Grid />
+          </el-icon>
+          <span>收集源</span>
+        </el-menu-item>
+        <el-menu-item index="/settings">
+          <el-icon>
+            <Setting />
+          </el-icon>
+          <span>设置</span>
+        </el-menu-item>
+        <el-menu-item index="/help">
+          <el-icon>
+            <QuestionFilled />
+          </el-icon>
+          <span>帮助</span>
+        </el-menu-item>
+      </el-menu>
+    </el-aside>
+    <el-main class="app-main">
+      <router-view v-slot="{ Component }" :key="routerViewKey">
+        <keep-alive>
+          <component :is="Component" />
+        </keep-alive>
+      </router-view>
+    </el-main>
   </el-container>
 </template>
 
@@ -76,12 +73,10 @@ import { storeToRefs } from "pinia";
 import FileDropOverlay from "./components/FileDropOverlay.vue";
 import ImportConfirmDialog from "./components/import/ImportConfirmDialog.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
-import { useDaemonStatus } from "./composables/useDaemonStatus";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
 import { useSidebar } from "./composables/useSidebar";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { ElMessageBox } from "element-plus";
 
 
 // 路由高亮
@@ -103,6 +98,11 @@ const { init: initWindowEvents } = useWindowEvents();
 
 // 文件拖拽
 const { init: initFileDrop } = useFileDrop(fileDropOverlayRef, importConfirmDialogRef);
+
+// 处理拖拽遮罩层点击关闭
+const handleOverlayClick = () => {
+  fileDropOverlayRef.value?.hide();
+};
 
 // 侧边栏
 const { isCollapsed, toggleCollapse } = useSidebar();

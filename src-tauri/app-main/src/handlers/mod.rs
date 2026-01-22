@@ -1,4 +1,4 @@
-//! 命令处理器模块
+﻿//! 命令处理器模块
 //!
 //! 将不同类型的 IPC 请求分发到对应的处理器
 
@@ -40,16 +40,13 @@ impl Store {
     }
 
     pub fn global() -> Arc<Store> {
-        GLOBAL_STORE
-            .get()
-            .expect("Store not initialized")
-            .clone()
+        GLOBAL_STORE.get().expect("Store not initialized").clone()
     }
 }
 
 /// 分发 IPC 请求到对应的处理器
 pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResponse {
-    // 特殊请求：Status
+    // 迚ｹ谿願ｯｷ豎ゑｼ售tatus
     if matches!(req, CliIpcRequest::Status) {
         return handle_status();
     }
@@ -415,7 +412,7 @@ fn handle_status() -> CliIpcResponse {
             "settings": true,
             "events": true,
             "pluginRun": false,  // 暂未实现
-            "virtualDrive": cfg!(all(feature="virtual-driver", target_os="windows"))
+            "virtualDrive": cfg!(all(not(kabegame_mode = "light"), target_os = "windows"))
         }
     }));
     resp
@@ -423,6 +420,10 @@ fn handle_status() -> CliIpcResponse {
 
 async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+
+    if !cfg!(all(not(kabegame_mode = "light"), target_os = "windows")) {
+        return CliIpcResponse::err("Virtual drive is not available".to_string());
+    }
 
     let path = Settings::global()
         .get_album_drive_mount_point()
@@ -465,6 +466,10 @@ async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
 async fn handle_vd_unmount(ctx: Arc<Store>) -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
+    if !cfg!(all(not(kabegame_mode = "light"), target_os = "windows")) {
+        return CliIpcResponse::err("Virtual drive is not available".to_string());
+    }
+
     let vd_service = ctx.virtual_drive_service.clone();
 
     // 检查是否已卸载（幂等处理）
@@ -502,10 +507,11 @@ async fn handle_vd_unmount(ctx: Arc<Store>) -> CliIpcResponse {
 }
 
 async fn handle_vd_status(_ctx: Arc<Store>) -> CliIpcResponse {
+    let enabled = cfg!(all(not(kabegame_mode = "light"), target_os = "windows"));
     let mut resp = CliIpcResponse::ok("ok");
     resp.info = Some(serde_json::json!({
-        "status": "ready",
-        "virtualDrive": true
+        "status": if enabled { "ready" } else { "disabled" },
+        "virtualDrive": enabled
     }));
     resp
 }

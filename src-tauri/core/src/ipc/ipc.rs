@@ -38,12 +38,15 @@ pub enum CliIpcRequest {
     Status,
 
     /// 虚拟盘：挂载（Windows + virtual-driver）
+    #[cfg(all(not(kabegame_mode = "light")))]
     VdMount,
 
     /// 虚拟盘：卸载（Windows + virtual-driver）
+    #[cfg(all(not(kabegame_mode = "light")))]
     VdUnmount,
 
     /// 虚拟盘：状态（Windows + virtual-driver）
+    #[cfg(all(not(kabegame_mode = "light")))]
     VdStatus,
 
     /// 运行一次 Rhai 插件（等价于 `kabegame-cli plugin run`）
@@ -420,9 +423,9 @@ pub enum CliIpcRequest {
     SettingsGetWindowState,
     SettingsGetCurrentWallpaperImageId,
     SettingsGetDefaultImagesDir,
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light")))]
     SettingsGetAlbumDriveEnabled,
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light")))]
     SettingsGetAlbumDriveMountPoint,
 
     // ======== Settings Setter（保留 core::Settings 的校验逻辑）========
@@ -530,10 +533,12 @@ pub struct CliIpcResponse {
 
     /// 对 VD：是否已挂载
     #[serde(default)]
+    #[cfg(all(not(kabegame_mode = "light")))]
     pub mounted: Option<bool>,
 
     /// 对 VD：当前挂载点
     #[serde(default)]
+    #[cfg(all(not(kabegame_mode = "light")))]
     pub mount_point: Option<String>,
 
     /// 对 Status：daemon 版本/能力信息（可选，后续扩展）

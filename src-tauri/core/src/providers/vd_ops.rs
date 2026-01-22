@@ -4,7 +4,7 @@
 //! - 仅用于 core/providers 的 VD 方法实现（mkdir/delete/说明文件等）。
 //! - Dokan/挂载/Windows 句柄等实现细节在 app-main。
 
-#![cfg(feature = "virtual-driver")]
+#[cfg(not(kabegame_mode = "light"))]
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 use std::collections::HashMap;

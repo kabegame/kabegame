@@ -14,8 +14,8 @@ import { Component, ComponentPlugin } from "./plugins/component-plugin.js";
 import { ModePlugin } from "./plugins/mode-plugin.js";
 import { DesktopPlugin } from "./plugins/desktop-plugin.js";
 import { TracePlugin } from "./plugins/trace-plugin.js";
-import { Cmd } from "./run.js";
-import { OSPlugin } from "./plugins/os-plugn.js";
+import { Cmd } from "./run.ts";
+import { OSPlugin } from "./plugins/os-plugin.js";
 import { SyncWaterfallHook } from "tapable";
 import { run } from "./build-utils.js";
 import { features } from "process";
@@ -42,10 +42,38 @@ export const RESOURCES_BIN_DIR = path.join(
 export const SRC_TAURI_DIR = path.join(root, "src-tauri");
 export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
 
+interface BuildOptions {
+  component?: string;
+  mode?: string;
+  desktop?: string;
+  verbose?: boolean;
+  trace?: boolean;
+  args?: string[];
+}
+
+interface BuildContext {
+  cmd: Cmd | null;
+  component?: Component;
+  mode?: any;
+  desktop?: any;
+}
+
+interface BuildHooks {
+  parseParams: SyncHook<[]>;
+  prepareEnv: SyncHook<[]>;
+  beforeBuild: SyncHook<[string?]>;
+  prepareFeatures: SyncWaterfallHook<[any?], any>;
+  afterBuild: AsyncSeriesHook<[string]>;
+}
+
 /**
  * 构建系统核心类
  */
 export class BuildSystem {
+  public readonly options: Readonly<BuildOptions>;
+  public readonly hooks: BuildHooks;
+  public readonly context: BuildContext;
+
   constructor() {
     this.options = Object.freeze({});
     // 生命周期钩子
@@ -74,32 +102,18 @@ export class BuildSystem {
   /**
    * 注册插件
    */
-  use(plugin) {
+  use(plugin: any): void {
     if (!plugin || typeof plugin.apply !== "function") {
       throw new Error(`插件必须实现 apply 方法`);
     }
     plugin.apply(this);
   }
 
-  /**
-   * 解析参数
-   */
-  parseParams(context, rawOptions) {
-    this.hooks.parseParams.call(context, rawOptions);
+  getFeatureList(obj: any): string[] {
+    return obj.features.keys().filter((f: string) => obj.features.get(f));
   }
 
-  /**
-   * 执行命令
-   */
-  async executeCommand(context) {
-    await this.hooks.executeCommand.promise(context);
-  }
-
-  getFeatureList(obj) {
-    return obj.features.keys().filter((f) => obj.features.get(f));
-  }
-
-  commonUse() {
+  commonUse(): void {
     this.use(new OSPlugin());
     // --component
     this.use(new ComponentPlugin());
@@ -114,17 +128,17 @@ export class BuildSystem {
     this.use(new TracePlugin());
   }
 
-  commonBefore() {
+  commonBefore(): void {
     this.hooks.parseParams.call();
     this.hooks.prepareEnv.call();
   }
 
   /**
-   * 构建命令
+   * dev 命令
    */
-  async dev(options) {
+  async dev(options: BuildOptions): Promise<void> {
     this.context.cmd = new Cmd(Cmd.DEV);
-    this.options = Object.freeze(options);
+    (this as any).options = Object.freeze(options);
 
     this.commonUse();
     this.commonBefore();
@@ -132,17 +146,17 @@ export class BuildSystem {
     const { features } = this.hooks.prepareFeatures.call();
     run(
       "tauri",
-      ["dev", "--features", features.join(","), ...this.options.args],
+      ["dev", "--features", features.join(","), ...(this.options.args || [])],
       {
-        cwd: this.context.component.appDir,
+        cwd: (this.context.component as any).appDir,
         bin: "cargo",
       },
     );
   }
 
-  async start(options) {
+  async start(options: BuildOptions): Promise<void> {
     this.context.cmd = new Cmd(Cmd.START);
-    this.options = Object.freeze(options);
+    (this as any).options = Object.freeze(options);
 
     this.commonUse();
     this.commonBefore();
@@ -150,7 +164,7 @@ export class BuildSystem {
     const args = [
       "run",
       "-p",
-      this.context.component.cargoComp,
+      (this.context.component as any).cargoComp,
       "--features",
       features.join(","),
       "--bin",
@@ -167,13 +181,13 @@ export class BuildSystem {
     });
   }
 
-  async build(options) {
+  async build(options: BuildOptions): Promise<void> {
     this.context.cmd = new Cmd(Cmd.BUILD);
-    this.options = Object.freeze(options);
+    (this as any).options = Object.freeze(options);
 
     this.commonUse();
     this.commonBefore();
-    if (this.context.component.isPluginEditor) {
+    if ((this.context.component as any).isPluginEditor) {
       this.hooks.beforeBuild.call(Component.PLUGIN_EDITOR);
       const { features } = this.hooks.prepareFeatures.call(
         Component.PLUGIN_EDITOR,
@@ -188,7 +202,7 @@ export class BuildSystem {
           Component.cargoComp(Component.PLUGIN_EDITOR),
           "--features",
           features.join(","),
-          ...this.options.args,
+          ...(this.options.args || []),
         ],
         {
           cwd: SRC_TAURI_DIR,
@@ -196,7 +210,7 @@ export class BuildSystem {
       );
       // this.hooks.afterBuild.callAsync(Component.PLUGIN_EDITOR)
     }
-    if (this.context.component.isCli) {
+    if ((this.context.component as any).isCli) {
       this.hooks.beforeBuild.call(Component.CLI);
       const { features } = this.hooks.prepareFeatures.call(Component.CLI);
       run("bun", ["--cwd", Component.appDir(Component.CLI), "build"]);
@@ -209,7 +223,7 @@ export class BuildSystem {
           Component.cargoComp(Component.CLI),
           "--features",
           features.join(","),
-          ...this.options.args,
+          ...(this.options.args || []),
         ],
         {
           cwd: SRC_TAURI_DIR,
@@ -217,12 +231,12 @@ export class BuildSystem {
       );
       // this.hooks.afterBuild.callAsync(Component.CLI)
     }
-    if (this.context.component.isMain) {
+    if ((this.context.component as any).isMain) {
       this.hooks.beforeBuild.call(Component.MAIN);
       const { features } = this.hooks.prepareFeatures.call(Component.MAIN);
       run(
         "tauri",
-        ["build", "--features", features.join(","), ...this.options.args],
+        ["build", "--features", features.join(","), ...(this.options.args || [])],
         {
           cwd: Component.appDir(Component.MAIN),
           bin: "cargo",

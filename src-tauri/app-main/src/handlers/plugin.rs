@@ -1,10 +1,9 @@
-//! Plugin 命令处理器
+﻿//! Plugin 蜻ｽ莉､螟・炊蝎ｨ
 
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 use kabegame_core::plugin::PluginManager;
 
-/// 处理所有 Plugin 相关的 IPC 请求
-pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse> {
+/// 螟・炊謇譛・Plugin 逶ｸ蜈ｳ逧・IPC 隸ｷ豎・pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse> {
     match req {
         CliIpcRequest::PluginGetPlugins => Some(get_plugins().await),
 
@@ -86,7 +85,7 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
         ),
 
         CliIpcRequest::PluginRun { .. } => {
-            // 插件运行逻辑较复杂，单独处理
+            // 謠剃ｻｶ霑占｡碁ｻ霎題ｾ・､肴揩・悟黒迢ｬ螟・炊
             None
         }
 
@@ -96,8 +95,7 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
 
 async fn get_plugins() -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    // 确保缓存已初始化/刷新一次（失败不致命，后续 get_all 仍会触发初始化）
-    let _ = plugin_manager.refresh_installed_plugins_cache();
+    // 遑ｮ菫晉ｼ灘ｭ伜ｷｲ蛻晏ｧ句喧/蛻ｷ譁ｰ荳谺｡・亥､ｱ雍･荳崎・蜻ｽ・悟錘扈ｭ get_all 莉堺ｼ夊ｧｦ蜿大・蟋句喧・・    let _ = plugin_manager.refresh_installed_plugins_cache();
     match plugin_manager.get_all() {
         Ok(plugins) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(plugins).unwrap_or_default())

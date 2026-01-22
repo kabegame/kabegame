@@ -108,10 +108,10 @@ pub enum SettingKey {
     /// 当前壁纸图片ID
     CurrentWallpaperImageId,
     /// 画册盘启用
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(not(kabegame_mode = "light"))]
     AlbumDriveEnabled,
     /// 画册盘挂载点
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(not(kabegame_mode = "light"))]
     AlbumDriveMountPoint,
 }
 
@@ -275,9 +275,9 @@ impl Settings {
             SettingKey::WallpaperMode => SettingValue::String(Self::default_wallpaper_mode()),
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
             SettingKey::CurrentWallpaperImageId => SettingValue::OptionString(None),
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             SettingKey::AlbumDriveEnabled => SettingValue::Bool(false),
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             SettingKey::AlbumDriveMountPoint => {
                 SettingValue::String(Self::default_album_drive_mount_point())
             }
@@ -310,7 +310,7 @@ impl Settings {
         }
     }
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(not(kabegame_mode = "light"))]
     fn default_album_drive_mount_point() -> String {
         #[cfg(target_os = "windows")]
         {
@@ -475,9 +475,9 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperMode,
             SettingKey::WindowState,
             SettingKey::CurrentWallpaperImageId,
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             SettingKey::AlbumDriveEnabled,
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             SettingKey::AlbumDriveMountPoint,
         ];
 
@@ -565,7 +565,7 @@ Write-Output "$style,$tile"
             | SettingKey::WallpaperRotationEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             SettingKey::AlbumDriveEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
@@ -581,7 +581,7 @@ Write-Output "$style,$tile"
             | SettingKey::WallpaperMode => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
             )),
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             SettingKey::AlbumDriveMountPoint => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
             )),
@@ -666,9 +666,9 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperMode => "wallpaperMode".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             SettingKey::CurrentWallpaperImageId => "currentWallpaperImageId".to_string(),
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             SettingKey::AlbumDriveEnabled => "albumDriveEnabled".to_string(),
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             SettingKey::AlbumDriveMountPoint => "albumDriveMountPoint".to_string(),
         }
     }
@@ -986,7 +986,7 @@ Write-Output "$style,$tile"
         }
     }
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(not(kabegame_mode = "light"))]
     pub async fn get_album_drive_enabled(&self) -> Result<bool, String> {
         let cells = Self::cells();
         if let Some(cell) = cells.get(&SettingKey::AlbumDriveEnabled) {
@@ -997,7 +997,7 @@ Write-Output "$style,$tile"
         }
     }
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(not(kabegame_mode = "light"))]
     pub async fn get_album_drive_mount_point(&self) -> Result<String, String> {
         let cells = Self::cells();
         if let Some(cell) = cells.get(&SettingKey::AlbumDriveMountPoint) {
@@ -1383,7 +1383,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(not(kabegame_mode = "light"))]
     pub async fn set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
@@ -1396,7 +1396,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(not(kabegame_mode = "light"))]
     pub async fn set_album_drive_mount_point(&self, mount_point: String) -> Result<(), String> {
         let t = mount_point.trim().to_string();
         if t.is_empty() {

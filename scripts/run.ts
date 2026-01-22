@@ -21,23 +21,21 @@ import { Command } from "commander";
 import { BuildSystem } from "./build-system.js";
 
 export class Cmd {
-  static DEV = "dev";
-  static START = "start";
-  static BUILD = "build";
+  static readonly DEV = "dev";
+  static readonly START = "start";
+  static readonly BUILD = "build";
 
-  constructor(cmd) {
-    this.cmd = cmd;
-  }
+  constructor(private cmd: string) {}
 
-  get isDev() {
+  get isDev(): boolean {
     return this.cmd === Cmd.DEV;
   }
 
-  get isStart() {
+  get isStart(): boolean {
     return this.cmd === Cmd.START;
   }
 
-  get isBuild() {
+  get isBuild(): boolean {
     return this.cmd === Cmd.BUILD;
   }
 }
@@ -47,24 +45,33 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const buildSystem = new BuildSystem();
 
+interface BuildOptions {
+  component?: string;
+  mode?: string;
+  desktop?: string;
+  verbose?: boolean;
+  trace?: boolean;
+  args?: string[];
+}
+
 /**
  * 构建命令的固定执行流程
  */
-async function build(options) {
+async function build(options: BuildOptions): Promise<void> {
   buildSystem.build(options);
 }
 
 /**
  * dev 命令的固定执行流程
  */
-async function dev(options) {
+async function dev(options: BuildOptions): Promise<void> {
   buildSystem.dev(options);
 }
 
 /**
  * start 命令的固定执行流程
  */
-async function start(options) {
+async function start(options: BuildOptions): Promise<void> {
   buildSystem.start(options);
 }
 
@@ -93,7 +100,7 @@ program
   .option("--verbose", "显示详细输出", false)
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
   .argument("[args...]", "剩余参数（放在 -- 之后）")
-  .action(async (args, options) => {
+  .action(async (args: string[], options: BuildOptions) => {
     options.args = args || [];
     await dev(options);
   });
@@ -118,7 +125,7 @@ program
   )
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
   .argument("[args...]", "剩余参数（放在 -- 之后）")
-  .action(async (args, options) => {
+  .action(async (args: string[], options: BuildOptions) => {
     options.args = args || [];
     await start(options);
   });
@@ -142,7 +149,7 @@ program
     "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）",
   )
   .argument("[args...]", "剩余参数（放在 -- 之后）")
-  .action(async (args, options) => {
+  .action(async (args: string[], options: BuildOptions) => {
     options.args = args || [];
     await build(options);
   });

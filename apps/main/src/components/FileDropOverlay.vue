@@ -1,6 +1,6 @@
 <template>
   <Transition name="fade">
-    <div v-if="isDragging" class="file-drop-overlay">
+    <div v-if="isDragging" class="file-drop-overlay" @click="handleOverlayClick">
       <div class="drop-zone">
         <div class="drop-icon">
           <el-icon :size="64">
@@ -22,8 +22,17 @@
 import { ref } from "vue";
 import { Upload } from "@element-plus/icons-vue";
 
+const emit = defineEmits<{
+  click: [];
+}>();
+
 const isDragging = ref(false);
 const dropText = ref("拖入文件或文件夹");
+
+// 处理遮罩层点击事件
+const handleOverlayClick = () => {
+  emit('click');
+};
 
 // 暴露给外部使用的方法
 const show = (text?: string) => {

@@ -1,5 +1,4 @@
-//! Storage 命令处理器模块
-
+﻿//! Storage 蜻ｽ莉､螟・炊蝎ｨ讓｡蝮・
 pub mod albums;
 pub mod images;
 pub mod run_configs;
@@ -9,8 +8,7 @@ use crate::server::EventBroadcaster;
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 use std::sync::Arc;
 
-/// 处理所有 Storage 相关的 IPC 请求
-pub async fn handle_storage_request(
+/// 螟・炊謇譛・Storage 逶ｸ蜈ｳ逧・IPC 隸ｷ豎・pub async fn handle_storage_request(
     req: &CliIpcRequest,
     broadcaster: Arc<EventBroadcaster>,
 ) -> Option<CliIpcResponse> {
@@ -46,7 +44,7 @@ pub async fn handle_storage_request(
         // Albums
         CliIpcRequest::StorageGetAlbums => Some(albums::get_albums().await),
         CliIpcRequest::StorageAddAlbum { name } => {
-            // TODO: 前端处理 album_add 事件
+            // TODO: 蜑咲ｫｯ螟・炊 album_add 莠倶ｻｶ
             Some(albums::add_album(broadcaster, name).await)
         }
         CliIpcRequest::StorageDeleteAlbum { album_id } => {
@@ -115,8 +113,7 @@ pub async fn handle_storage_request(
             Some(run_configs::delete_run_config(config_id).await)
         }
 
-        // Gallery Query Helpers（供 app-main 组装画廊虚拟路径）
-        CliIpcRequest::StorageGetGalleryDateGroups => Some(images::get_gallery_date_groups().await),
+        // Gallery Query Helpers・井ｾ・app-main 扈・｣・判蟒願劒諡溯ｷｯ蠕・ｼ・        CliIpcRequest::StorageGetGalleryDateGroups => Some(images::get_gallery_date_groups().await),
         CliIpcRequest::StorageGetGalleryPluginGroups => {
             Some(images::get_gallery_plugin_groups().await)
         }

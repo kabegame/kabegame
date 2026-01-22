@@ -1,4 +1,4 @@
-// 插件相关命令
+﻿// 謠剃ｻｶ逶ｸ蜈ｳ蜻ｽ莉､
 
 use kabegame_core::plugin::{PluginManager, PluginSource};
 use serde_json::Value;
@@ -56,8 +56,8 @@ pub async fn get_plugin_sources() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn save_plugin_sources(sources: serde_json::Value) -> Result<(), String> {
-    let parsed: Vec<PluginSource> = serde_json::from_value(sources)
-        .map_err(|e| format!("Invalid sources data: {}", e))?;
+    let parsed: Vec<PluginSource> =
+        serde_json::from_value(sources).map_err(|e| format!("Invalid sources data: {}", e))?;
     PluginManager::global().save_plugin_sources(&parsed)
 }
 
@@ -94,7 +94,9 @@ pub async fn get_plugin_detail(
 
 #[tauri::command]
 pub async fn validate_plugin_source(index_url: String) -> Result<(), String> {
-    PluginManager::global().validate_store_source_index(&index_url).await?;
+    PluginManager::global()
+        .validate_store_source_index(&index_url)
+        .await?;
     Ok(())
 }
 
@@ -137,7 +139,9 @@ pub async fn install_browser_plugin(plugin_id: String) -> Result<serde_json::Val
 
 #[tauri::command]
 pub async fn get_plugin_image(plugin_id: String, image_path: String) -> Result<Vec<u8>, String> {
-    PluginManager::global().load_plugin_image_for_detail(&plugin_id, None, None, None, &image_path).await
+    PluginManager::global()
+        .load_plugin_image_for_detail(&plugin_id, None, None, None, &image_path)
+        .await
 }
 
 #[tauri::command]
@@ -148,13 +152,15 @@ pub async fn get_plugin_image_for_detail(
     sha256: Option<String>,
     size_bytes: Option<u64>,
 ) -> Result<Vec<u8>, String> {
-    PluginManager::global().load_plugin_image_for_detail(
-        &plugin_id, 
-        download_url.as_deref(), 
-        sha256.as_deref(), 
-        size_bytes, 
-        &image_path
-    ).await
+    PluginManager::global()
+        .load_plugin_image_for_detail(
+            &plugin_id,
+            download_url.as_deref(),
+            sha256.as_deref(),
+            size_bytes,
+            &image_path,
+        )
+        .await
 }
 
 #[tauri::command]
@@ -164,5 +170,7 @@ pub async fn get_plugin_icon(plugin_id: String) -> Result<Option<Vec<u8>>, Strin
 
 #[tauri::command]
 pub async fn get_remote_plugin_icon(download_url: String) -> Result<Option<Vec<u8>>, String> {
-    PluginManager::global().fetch_remote_plugin_icon_v2(&download_url).await
+    PluginManager::global()
+        .fetch_remote_plugin_icon_v2(&download_url)
+        .await
 }

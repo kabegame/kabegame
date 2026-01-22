@@ -179,8 +179,8 @@ bun build -c cli             # 构建 CLI 工具
 - `-c, --component`：指定要开发/启动/构建的组件（`main` | `plugin-editor` | `cli`）
 - `--mode`：构建模式
   - `normal`（默认）：一般版本，带商店源，仅打包本地插件到 resources
-  - `local`：无商店，预打包全部插件到 resources，没有代码编辑器
-  - `light`：轻量模式，无商店，没有虚拟盘功能，没有代码编辑器
+  - `local`：无商店，预打包全部插件到 resources
+  - `light`：轻量模式，无商店，没有插件编辑器，没有虚拟盘功能
 - `--desktop <desktop>`：指定桌面环境（`plasma` | `gnome`），用于后端按桌面环境选择实现
   - `plasma`：适用于 KDE Plasma 环境（在设置中显示 Plasma 插件模式选项）
   - `gnome`：适用于 GNOME 环境

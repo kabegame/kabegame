@@ -4,6 +4,10 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.0.2]
+### Changed
+- 将构建脚本从js升级到ts，类型更安全
+
 ## [3.0.1]
 ### Changed
 - 经过各种考虑，去掉daemon，改成app-main内嵌服务。

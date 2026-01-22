@@ -9,7 +9,7 @@ import { fileURLToPath } from "url";
 import path from "path";
 import fs from "fs";
 import chalk from "chalk";
-import { OSPlugin } from "./plugins/os-plugn";
+import { OSPlugin } from "./plugins/os-plugin";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,8 +32,14 @@ export const RESOURCES_BIN_DIR = path.join(
 export const SRC_TAURI_DIR = path.join(root, "src-tauri");
 export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
 
+interface RunOptions {
+  bin?: string;
+  cwd?: string;
+  [key: string]: any;
+}
+
 // 传入 opt.bin 为运行工具，可以为 bun、cargo。如果不传则为二进制
-export function run(cmd, args, opts = {}) {
+export function run(cmd: string, args: string[], opts: RunOptions = {}): void {
   // console.log('runopts: ', cmd, args, opts)
   switch (opts.bin) {
     case "bun": {
@@ -65,15 +71,15 @@ export function run(cmd, args, opts = {}) {
   }
 }
 
-export function platformExeExt() {
+export function platformExeExt(): string {
   return OSPlugin.isWindows ? ".exe" : "";
 }
 
-export function ensureDir(p) {
+export function ensureDir(p: string): void {
   fs.mkdirSync(p, { recursive: true });
 }
 
-export function existsFile(p) {
+export function existsFile(p: string): boolean {
   try {
     return fs.existsSync(p) && fs.statSync(p).isFile();
   } catch {
@@ -81,14 +87,14 @@ export function existsFile(p) {
   }
 }
 
-export function findFirstExisting(paths) {
+export function findFirstExisting(paths: (string | null | undefined)[]): string | null {
   for (const p of paths) {
     if (p && existsFile(p)) return p;
   }
   return null;
 }
 
-export function stageResourceFile(src, dstFileName) {
+export function stageResourceFile(src: string, dstFileName: string): void {
   if (!fs.existsSync(src)) {
     console.error(chalk.red(`❌ 找不到资源文件: ${src}`));
     process.exit(1);
@@ -101,7 +107,7 @@ export function stageResourceFile(src, dstFileName) {
   );
 }
 
-export function findDokan2DllOnWindows() {
+export function findDokan2DllOnWindows(): string | null {
   if (process.platform !== "win32") return null;
 
   const bundled = path.join(root, "bin", "dokan2.dll");
@@ -132,11 +138,11 @@ export function findDokan2DllOnWindows() {
     if (fs.existsSync(dokanRoot) && fs.statSync(dokanRoot).isDirectory()) {
       const entries = fs.readdirSync(dokanRoot, { withFileTypes: true });
       const dirs = entries
-        .filter((e) => e.isDirectory())
-        .map((e) => e.name)
-        .filter((name) => name.toLowerCase().includes("dokan"));
+        .filter((e: any) => e.isDirectory())
+        .map((e: any) => e.name)
+        .filter((name: string) => name.toLowerCase().includes("dokan"));
 
-      const candidates = [];
+      const candidates: string[] = [];
       for (const d of dirs) {
         candidates.push(path.join(dokanRoot, d, "dokan2.dll"));
         candidates.push(path.join(dokanRoot, d, "x64", "dokan2.dll"));
@@ -153,7 +159,7 @@ export function findDokan2DllOnWindows() {
   return null;
 }
 
-export function ensureDokan2DllResource() {
+export function ensureDokan2DllResource(): void {
   if (process.platform !== "win32") return;
 
   const dst = path.join(RESOURCES_BIN_DIR, "dokan2.dll");
@@ -185,7 +191,7 @@ export function ensureDokan2DllResource() {
   );
 }
 
-export function ensureDokanInstallerResourceIfPresent() {
+export function ensureDokanInstallerResourceIfPresent(): void {
   if (process.platform !== "win32") return;
 
   const fromEnv = (process.env.DOKAN_INSTALLER ?? "").trim();
@@ -197,7 +203,7 @@ export function ensureDokanInstallerResourceIfPresent() {
       const binDir = path.join(root, "bin");
       if (fs.existsSync(binDir)) {
         const files = fs.readdirSync(binDir);
-        const hit = files.find((f) => {
+        const hit = files.find((f: string) => {
           const lower = f.toLowerCase();
           return (
             lower.includes("dokan") &&
@@ -224,7 +230,7 @@ export function ensureDokanInstallerResourceIfPresent() {
   stageResourceFile(src, "dokan-installer.exe");
 }
 
-export function copyDokan2DllToTauriReleaseDirBestEffort() {
+export function copyDokan2DllToTauriReleaseDirBestEffort(): void {
   if (process.platform !== "win32") return;
   const src = path.join(RESOURCES_BIN_DIR, "dokan2.dll");
   if (!existsFile(src)) return;
@@ -244,7 +250,7 @@ export function copyDokan2DllToTauriReleaseDirBestEffort() {
   }
 }
 
-export function stageResourceBinary(binName) {
+export function stageResourceBinary(binName: string): void {
   const ext = platformExeExt();
   const src = path.join(SRC_TAURI_DIR, "target", "release", `${binName}${ext}`);
   const dst = path.join(RESOURCES_BIN_DIR, `${binName}${ext}`);
@@ -264,20 +270,20 @@ export function stageResourceBinary(binName) {
   );
 }
 
-export function resourceBinaryExists(binName) {
+export function resourceBinaryExists(binName: string): boolean {
   const ext = platformExeExt();
   const p = path.join(RESOURCES_BIN_DIR, `${binName}${ext}`);
   return fs.existsSync(p);
 }
 
-export function scanBuiltinPlugins() {
+export function scanBuiltinPlugins(): string[] {
   if (!fs.existsSync(RESOURCES_PLUGINS_DIR)) {
     return [];
   }
   const files = fs.readdirSync(RESOURCES_PLUGINS_DIR);
   return files
-    .filter((f) => f.endsWith(".kgpg"))
-    .map((f) => path.basename(f, ".kgpg"))
+    .filter((f: string) => f.endsWith(".kgpg"))
+    .map((f: string) => path.basename(f, ".kgpg"))
     .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    .sort((a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 }

@@ -1,24 +1,22 @@
-import { OSPlugin } from "./os-plugn";
-import { BasePlugin } from "./base-plugin"
+import { OSPlugin } from "./os-plugin.js";
+import { BasePlugin } from "./base-plugin.js"
 
 
 export class Desktop {
-    static PLASMA = 'plasma';
-    static GNOME = 'gnome';
+    static readonly PLASMA = 'plasma';
+    static readonly GNOME = 'gnome';
 
-    static desktops =  [this.PLASMA, this.GNOME]
+    static readonly desktops = [this.PLASMA, this.GNOME]
 
-    constructor(desktop) {
-        this.desktop = desktop;
-    }
+    constructor(private desktop: string) {}
 
-    get isPlasma() {
+    get isPlasma(): boolean {
         return this.desktop === Desktop.PLASMA
     }
 
-    get isGnome() {
+    get isGnome(): boolean {
         return this.desktop === Desktop.GNOME
-    } 
+    }
 }
 
 /**
@@ -26,12 +24,13 @@ export class Desktop {
  * isMain、isPluginEditor 等布尔变量直接使用。
  */
 export class DesktopPlugin extends BasePlugin {
-    static NAME = 'DesktopPlugin'
+    static readonly NAME = 'DesktopPlugin'
+
     constructor() {
         super(DesktopPlugin.NAME)
     }
 
-    apply(bs) {
+    apply(bs: any): void {
         if (!OSPlugin.isLinux) {
             return;
         }
@@ -40,8 +39,8 @@ export class DesktopPlugin extends BasePlugin {
             if (!desktop) {
                 throw new Error(`请指定一个桌面！${Desktop.desktops}`)
             }
-            if (desktop in Desktop.desktops) {
-                throw new Error(`不存在的组件名称，允许的列表：${components}`)
+            if (!(Desktop.desktops as readonly string[]).includes(desktop)) {
+                throw new Error(`不存在的组件名称，允许的列表：${Desktop.desktops}`)
             }
             this.log('Desktop: ', desktop);
             bs.context.desktop = new Desktop(desktop)

@@ -4,10 +4,10 @@ pub mod task_scheduler;
 
 pub use task_scheduler::{CrawlTaskRequest, TaskScheduler};
 
+use crate::emitter::EventEmitter;
+use crate::emitter::GlobalEmitter;
 use crate::plugin::Plugin;
 use crate::plugin::{VarDefinition, VarOption};
-use crate::emitter::GlobalEmitter;
-use crate::emitter::EventEmitter;
 use crate::settings::Settings;
 use crate::storage::Storage;
 use reqwest;
@@ -1051,7 +1051,7 @@ fn download_image(
 
         // 防无限循环：当虚拟盘开启且导入路径来自虚拟盘挂载点时拒绝导入
         // - 不依赖 app-main 的虚拟盘服务，只读取 core 的 Settings（跨平台）
-        #[cfg(feature = "virtual-driver")]
+        #[cfg(all(not(kabegame_mode = "light")))]
         {
             fn normalize_mount_point(input: &str) -> String {
                 let s = input.trim();

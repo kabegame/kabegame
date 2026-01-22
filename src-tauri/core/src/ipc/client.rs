@@ -1,4 +1,4 @@
-//! IPC 客户端：封装与 daemon 的通信，供所有前端（app-main、plugin-editor、cli）复用
+﻿//! IPC 客户端：封装与 daemon 的通信，供所有前端（app-main、plugin-editor、cli）复用
 //!
 //! 使用示例：
 //! ```rust
@@ -786,7 +786,7 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light")))]
     pub async fn settings_get_album_drive_enabled(&self) -> Result<bool, String> {
         let v = self
             .request_data(CliIpcRequest::SettingsGetAlbumDriveEnabled)
@@ -794,7 +794,7 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light")))]
     pub async fn settings_get_album_drive_mount_point(&self) -> Result<String, String> {
         let v = self
             .request_data(CliIpcRequest::SettingsGetAlbumDriveMountPoint)
@@ -995,7 +995,7 @@ impl IpcClient {
     // ==================== Virtual Driver ====================
 
     /// 挂载虚拟盘
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light")))]
     pub async fn vd_mount(&self) -> Result<(), String> {
         let resp = self.request_raw(CliIpcRequest::VdMount).await?;
         if !resp.ok {
@@ -1005,7 +1005,7 @@ impl IpcClient {
     }
 
     /// 卸载虚拟盘
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light")))]
     pub async fn vd_unmount(&self) -> Result<(), String> {
         let resp = self.request_raw(CliIpcRequest::VdUnmount).await?;
         if !resp.ok {
@@ -1015,7 +1015,7 @@ impl IpcClient {
     }
 
     /// 获取虚拟盘状态
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light")))]
     pub async fn vd_status(&self) -> Result<(bool, Option<String>), String> {
         let resp = self.request_raw(CliIpcRequest::VdStatus).await?;
         if !resp.ok {

@@ -1,4 +1,4 @@
-//! 可复用的“核心 Provider”集合（不依赖虚拟盘/Dokan）。
+﻿//! 可复用的“核心 Provider”集合（不依赖虚拟盘/Dokan）。
 //!
 //! - `provider`: Provider trait + FsEntry + ResolveResult
 //! - `all`: AllProvider（贪心分解 + range 子目录）
@@ -23,14 +23,14 @@ pub mod task_group;
 
 // VD 专属的 providers 行为（mkdir/delete/说明文件等）放在 core 的 providers 内部，
 // 通过 `virtual-driver` feature gate 控制，仅 app-main 会开启该 feature。
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light")))]
 pub(crate) mod vd_ops;
 
 /// 虚拟盘专用：从插件包（`.kgpg`）读取插件显示名（用于“按任务”目录名展示）。
 ///
 /// - 返回 `None` 表示找不到或为空。
 /// - 该函数仅在开启 `virtual-driver` feature 时可用。
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light")))]
 pub fn plugin_display_name_from_manifest(plugin_id: &str) -> Option<String> {
     vd_ops::plugin_display_name_from_manifest(plugin_id)
 }

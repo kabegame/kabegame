@@ -1,12 +1,33 @@
-// Image 相关命令
+﻿// Image 相关命令
 
+use kabegame_core::providers::ProviderRuntime;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::{Storage, FAVORITE_ALBUM_ID};
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use tauri::AppHandle;
+
+#[tauri::command]
+pub async fn get_images_range(offset: usize, limit: usize) -> Result<serde_json::Value, String> {
+    let result = Storage::global().get_images_range(offset, limit)?;
+    Ok(serde_json::to_value(result).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+pub async fn browse_gallery_provider(path: String) -> Result<serde_json::Value, String> {
+    let storage = Storage::global();
+    let provider_rt = ProviderRuntime::global();
+    let result = kabegame_core::gallery::browse_gallery_provider(storage, provider_rt, &path)?;
+    Ok(serde_json::to_value(result).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+pub async fn get_image_by_id(image_id: String) -> Result<serde_json::Value, String> {
+    let image = Storage::global().find_image_by_id(&image_id)?;
+    Ok(serde_json::to_value(image).map_err(|e| e.to_string())?)
+}
 
 #[tauri::command]
 pub async fn get_images_count() -> Result<usize, String> {
@@ -93,7 +114,7 @@ pub async fn toggle_image_favorite(
 ) -> Result<(), String> {
     Storage::global().toggle_image_favorite(&image_id, favorite)?;
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
     VirtualDriveService::global().notify_album_dir_changed(Storage::global(), FAVORITE_ALBUM_ID);
     Ok(())
 }

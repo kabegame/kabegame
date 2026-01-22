@@ -50,6 +50,16 @@
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh"
       }
+    },
+    "plugins": {
+      "globalShortcut": {
+        "shortcuts": [
+          {
+            "shortcut": "F11",
+            "action": "toggleFullscreen"
+          }
+        ]
+      }
     }
   }
 }

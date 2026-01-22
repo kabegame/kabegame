@@ -1,4 +1,4 @@
-//! Provider 工厂：根据描述符重建 Provider（避免用 id 引用导致内存膨胀）。
+﻿//! Provider 工厂：根据描述符重建 Provider（避免用 id 引用导致内存膨胀）。
 
 use std::sync::Arc;
 

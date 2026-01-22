@@ -36,6 +36,7 @@
     "packages/**/src/**/*.ts",
     "packages/**/src/**/*.d.ts",
     "packages/**/src/**/*.tsx",
-    "packages/**/src/**/*.vue"
+    "packages/**/src/**/*.vue",
+    "scripts/**/*.ts"
   ]
 }

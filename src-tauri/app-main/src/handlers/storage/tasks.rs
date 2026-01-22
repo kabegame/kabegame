@@ -1,4 +1,4 @@
-//! Tasks 表相关操作
+﻿//! Tasks 表相关操作
 
 use kabegame_core::ipc::ipc::CliIpcResponse;
 use kabegame_core::storage::Storage;
@@ -56,10 +56,9 @@ pub async fn delete_task(task_id: &str) -> CliIpcResponse {
 pub async fn get_task_images(task_id: &str) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.get_task_images(task_id) {
-        Ok(images) => CliIpcResponse::ok_with_data(
-            "ok",
-            serde_json::to_value(images).unwrap_or_default(),
-        ),
+        Ok(images) => {
+            CliIpcResponse::ok_with_data("ok", serde_json::to_value(images).unwrap_or_default())
+        }
         Err(e) => CliIpcResponse::err(e),
     }
 }
@@ -67,7 +66,9 @@ pub async fn get_task_images(task_id: &str) -> CliIpcResponse {
 pub async fn get_task_image_ids(task_id: &str) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.get_task_image_ids(task_id) {
-        Ok(ids) => CliIpcResponse::ok_with_data("ok", serde_json::to_value(ids).unwrap_or_default()),
+        Ok(ids) => {
+            CliIpcResponse::ok_with_data("ok", serde_json::to_value(ids).unwrap_or_default())
+        }
         Err(e) => CliIpcResponse::err(e),
     }
 }
@@ -100,10 +101,9 @@ pub async fn get_task_images_paginated(
 pub async fn get_task_failed_images(task_id: &str) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.get_task_failed_images(task_id) {
-        Ok(images) => CliIpcResponse::ok_with_data(
-            "ok",
-            serde_json::to_value(images).unwrap_or_default(),
-        ),
+        Ok(images) => {
+            CliIpcResponse::ok_with_data("ok", serde_json::to_value(images).unwrap_or_default())
+        }
         Err(e) => CliIpcResponse::err(e),
     }
 }

@@ -132,14 +132,13 @@
                 @cancel-task="cancelTask" @confirm-task-dump="confirmTaskDump" />
             </div>
           </el-card>
+        </div>
       </div>
     </div>
-  </div>
 
-  <QuickSettingsDrawer />
-  <TaskImagesDialog v-model="taskImagesDialogVisible" :task-id="taskImagesDialogTaskId" />
-  <IconCropDialog v-model="iconCropDialogVisible" :src="iconCropSourceUrl" @confirm="onIconCropConfirm" />
-    </template>
+    <QuickSettingsDrawer />
+    <TaskImagesDialog v-model="taskImagesDialogVisible" :task-id="taskImagesDialogTaskId" />
+    <IconCropDialog v-model="iconCropDialogVisible" :src="iconCropSourceUrl" @confirm="onIconCropConfirm" />
   </div>
 </template>
 
@@ -166,7 +165,6 @@ import ConsoleCard from "./components/ConsoleCard.vue";
 import { useQuickSettingsDrawerStore } from "./stores/quick-settings-drawer";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useInstalledPluginsStore } from "@kabegame/core/stores/plugins";
-import { useDaemonStatus } from "@kabegame/core/composables/useDaemonStatus";
 
 type MonacoMarkerSeverity = 1 | 2 | 4 | 8;
 

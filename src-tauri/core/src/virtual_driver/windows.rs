@@ -1,4 +1,4 @@
-//! Windows 虚拟盘（Dokan）：使用 Provider 系统将 Kabegame 的画册和画廊映射为虚拟文件系统。
+﻿//! Windows 虚拟盘（Dokan）：使用 Provider 系统将 Kabegame 的画册和画廊映射为虚拟文件系统。
 //!
 //! 设计原则：
 //! - Provider 对路径完全无感知
@@ -31,11 +31,10 @@ use std::{
 use super::driver_service::{join_mount_subdir, notify_explorer_dir_changed_path};
 use super::fs::KabegameFs;
 use super::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
-#[cfg(all(feature = "virtual-driver", target_os = "windows"))]
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
+use crate::emitter::{EventEmitter, GlobalEmitter};
 use crate::providers::provider::{DeleteChildMode, FsEntry, Provider, VdOpsContext};
 use crate::providers::root::{DIR_ALBUMS, DIR_BY_TASK};
-use crate::emitter::{GlobalEmitter, EventEmitter};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use dokan::{

@@ -1,5 +1,4 @@
-// Commands 模块
-pub mod album;
+﻿// Commands 讓｡蝮・pub mod album;
 pub mod filesystem;
 pub mod image;
 pub mod misc;

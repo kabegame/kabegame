@@ -1,6 +1,5 @@
-use std::sync::Arc;
+﻿use std::sync::Arc;
 
-use kabegame_core::emitter::DaemonEventSink;
 use kabegame_core::ipc::events::{DaemonEvent, DaemonEventKind};
 use kabegame_core::ipc::{CliIpcRequest, CliIpcResponse};
 use tokio::sync::{broadcast, mpsc, RwLock};
@@ -128,16 +127,6 @@ impl EventBroadcaster {
 impl Default for EventBroadcaster {
     fn default() -> Self {
         Self::new(1000)
-    }
-}
-
-impl DaemonEventSink for EventBroadcaster {
-    fn broadcast(&self, event: DaemonEvent) {
-        self.broadcast_sync(event);
-    }
-
-    fn receiver_count(&self, kind: DaemonEventKind) -> usize {
-        EventBroadcaster::receiver_count(self, kind)
     }
 }
 

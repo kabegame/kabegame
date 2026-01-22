@@ -1,7 +1,8 @@
-//! 非 Windows 平台的占位实现：后续可替换为 Linux/macOS 对应实现。
+﻿//! 非 Windows 平台的占位实现：后续可替换为 Linux/macOS 对应实现。
 
-use crate::storage::Storage;
 use super::VirtualDriveServiceTrait;
+use crate::storage::Storage;
+use crate::storage::Storage;
 
 /// 非 Windows 平台的占位实现：后续可替换为 Linux/macOS 对应实现。
 #[derive(Default)]
@@ -41,6 +42,10 @@ impl VirtualDriveService {
     pub fn notify_album_dir_changed(&self, storage: &Storage, album_id: &str) {
         VirtualDriveServiceTrait::notify_album_dir_changed(self, storage, album_id)
     }
+
+    pub fn notify_task_dir_changed(&self, _storage: &Storage, _task_id: &str) {}
+
+    pub fn notify_gallery_tree_changed(&self) {}
 
     pub fn bump_tasks(&self) {
         VirtualDriveServiceTrait::bump_tasks(self)

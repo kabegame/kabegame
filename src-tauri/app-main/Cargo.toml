@@ -17,6 +17,7 @@ sha2 = {workspace = true}
 tauri = {workspace = true, features = ["protocol-asset"]}
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-fs = "=2.4.4"
+tauri-plugin-global-shortcut = "=2.5.0"
 tauri-plugin-shell = "=2.3.3"
 tokio = {workspace = true}
 uuid = {workspace = true}
@@ -39,8 +40,7 @@ tauri-build = {workspace = true}
 
 [features]
 custom-protocol = ["tauri/custom-protocol", "kabegame-core/custom-protocol"]
-default = ["custom-protocol", "tray", "virtual-driver", "ipc-service"]
-ipc-service = []
+default = ["custom-protocol", "tray", "virtual-driver"]
 tray = ["dep:governor"]
 virtual-driver = ["dep:dokan", "dep:widestring", "dep:winapi", "dep:lru", "dep:memmap2", "kabegame-core/virtual-driver"]
 

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::providers::common::CommonProvider;
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light")))]
 use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
 use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
@@ -42,13 +42,13 @@ impl Provider for AlbumsProvider {
         Some(Arc::new(AlbumProvider::new(album_id)))
     }
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light")))]
     fn can_create_child_dir(&self) -> bool {
         // `画册\` 下 mkdir = 创建画册（VD 专用语义）
         true
     }
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light")))]
     fn create_child_dir(
         &self,
         storage: &Storage,
@@ -60,7 +60,7 @@ impl Provider for AlbumsProvider {
         Ok(())
     }
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light")))]
     fn delete_child(
         &self,
         storage: &Storage,
@@ -133,7 +133,7 @@ impl Provider for AlbumProvider {
         storage.rename_album(&self.album_id, new_name)
     }
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light")))]
     fn delete_child(
         &self,
         storage: &Storage,

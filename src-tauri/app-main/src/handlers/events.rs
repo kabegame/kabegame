@@ -1,4 +1,4 @@
-//! Events 命令处理器
+﻿//! Events 命令处理器
 //!
 //! 注意：实际的事件订阅逻辑在 server.rs 中通过 SubscriptionManager 处理。
 //! 此模块仅负责返回订阅确认响应。

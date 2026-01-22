@@ -5,45 +5,47 @@ import {
   copyDokan2DllToTauriReleaseDirBestEffort,
   stageResourceBinary,
 } from "../build-utils";
-import { OSPlugin } from "./os-plugn";
+import { OSPlugin } from "./os-plugin";
 
 // 组件对象
 export class Component {
-  static MAIN = "main";
-  static PLUGIN_EDITOR = "plugin-editor";
-  static CLI = "cli";
+  static readonly MAIN = "main";
+  static readonly PLUGIN_EDITOR = "plugin-editor";
+  static readonly CLI = "cli";
 
-  static components = [this.MAIN, this.PLUGIN_EDITOR, this.CLI];
+  static readonly components = [this.MAIN, this.PLUGIN_EDITOR, this.CLI];
 
-  constructor(comp) {
-    this.comp = comp;
+  constructor(private readonly _comp: string) {}
+
+  get comp() {
+    return this._comp
   }
 
-  get isMain() {
+  get isMain(): boolean {
     return this.comp === Component.MAIN || this.isAll;
   }
 
-  get isPluginEditor() {
+  get isPluginEditor(): boolean {
     return this.comp === Component.PLUGIN_EDITOR || this.isAll;
   }
 
-  get isCli() {
+  get isCli(): boolean {
     return this.comp === Component.CLI || this.isAll;
   }
 
-  get isAll() {
+  get isAll(): boolean {
     return !this.comp;
   }
 
-  static cargoComp(comp) {
+  static cargoComp(comp: string): string {
     return "kabegame-" + comp;
   }
 
-  get cargoComp() {
+  get cargoComp(): string {
     return Component.cargoComp(this.comp);
   }
 
-  static appDir(cmp) {
+  static appDir(cmp: string): string {
     switch (cmp) {
       case this.MAIN: {
         return path.join(SRC_TAURI_DIR, "app-main");
@@ -60,7 +62,7 @@ export class Component {
     }
   }
 
-  get appDir() {
+  get appDir(): string {
     return Component.appDir(this.comp);
   }
 }
@@ -70,16 +72,18 @@ export class Component {
  * isMain、isPluginEditor 等布尔变量直接使用。
  */
 export class ComponentPlugin extends BasePlugin {
-  static NAME = "ComponentPlugin";
+  static readonly NAME = "ComponentPlugin";
+
+  private component?: Component;
 
   constructor() {
     super(ComponentPlugin.NAME);
   }
 
-  apply(bs) {
+  apply(bs: any): void {
     bs.hooks.parseParams.tap(this.name, () => {
       let component = bs.options.component || "";
-      if (component && (!component) in Component.components) {
+      if (component && !(Component.components as readonly string[]).includes(component)) {
         throw new Error(
           `不存在的组件名称，允许的列表：${Component.components}`,
         );
@@ -89,22 +93,26 @@ export class ComponentPlugin extends BasePlugin {
           `非构建模式必须用 -c 指定一个组件：${Component.components}`,
         );
       }
-      component = new Component(component);
-      if (bs.context.cmd.isDev && component.isCli) {
+      const comp = new Component(component);
+      if (bs.context.cmd.isDev && comp.isCli) {
         throw new Error(`当前 dev 不支持 cli ！cli请构建后测试运行`);
       }
-      if (bs.context.cmd.isStart && !component.isCli) {
+      if (bs.context.cmd.isStart && !comp.isCli) {
         throw new Error(`当前 start 只支持 cli！`);
       }
-      this.component = component;
-      bs.context.component = component;
+      this.component = comp;
+      bs.context.component = comp;
+    });
+
+    bs.hooks.prepareEnv.tap(this.name, () => {
+      this.setEnv("KABEGAME_COMPONENT", this.component?.comp || "");
     });
 
     if (bs.context.cmd.isBuild) {
       // 无论平台，把这些二进制通通打包到resources里
-      bs.hooks.beforeBuild.tap(this.name, (comp) => {
-        comp = comp ? new Component(comp) : this.component;
-        if (comp.isMain) {
+      bs.hooks.beforeBuild.tap(this.name, (comp: string) => {
+        const component = comp ? new Component(comp) : this.component!;
+        if (component.isMain) {
           stageResourceBinary(Component.cargoComp(Component.CLI));
           stageResourceBinary(Component.cargoComp(`${Component.CLI}w`));
           stageResourceBinary(Component.cargoComp(Component.PLUGIN_EDITOR));

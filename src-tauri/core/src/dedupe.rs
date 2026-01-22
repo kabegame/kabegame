@@ -1,13 +1,13 @@
+﻿use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
-use crate::storage::Storage;
 use crate::storage::dedupe::DedupeCursor;
+use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use tauri::{AppHandle, Emitter, Manager};
 
 /// 分批去重任务管理器（单例：同一时间只允许一个去重任务运行）。
 #[derive(Default)]
@@ -47,7 +47,6 @@ impl DedupeManager {
 
     pub fn start_batched(
         &self,
-        app: AppHandle,
         storage: Storage,
         delete_files: bool,
         batch_size: usize,
@@ -65,17 +64,9 @@ impl DedupeManager {
         drop(guard);
 
         tokio::spawn(async move {
-            let res = run_dedupe_batched(app.clone(), storage, delete_files, batch_size, cancel);
+            let res = run_dedupe_batched(storage, delete_files, batch_size, cancel);
             if let Err(e) = res {
                 eprintln!("[dedupe] 任务失败: {}", e);
-            }
-            // 清理运行状态（无论成功/失败/取消都需要释放）
-            if let Some(m) = app.try_state::<DedupeManager>() {
-                let mut g = match m.cancel_flag.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                *g = None;
             }
         });
 
@@ -97,7 +88,6 @@ impl DedupeManager {
 }
 
 fn run_dedupe_batched(
-    app: AppHandle,
     storage: Storage,
     delete_files: bool,
     batch_size: usize,
@@ -119,7 +109,11 @@ fn run_dedupe_batched(
     let handle = tokio::runtime::Handle::try_current();
     let mut current_wallpaper_id = if let Ok(handle) = handle {
         handle.block_on(async {
-            Settings::global().get_current_wallpaper_image_id().await.ok().flatten()
+            Settings::global()
+                .get_current_wallpaper_image_id()
+                .await
+                .ok()
+                .flatten()
         })
     } else {
         None
@@ -127,15 +121,7 @@ fn run_dedupe_batched(
 
     loop {
         if cancel.load(Ordering::Relaxed) {
-            let _ = app.emit(
-                "dedupe-finished",
-                DedupeFinishedPayload {
-                    processed,
-                    total,
-                    removed: removed_total,
-                    canceled: true,
-                },
-            );
+            GlobalEmitter::global().emit_dedupe_finished(processed, total, removed_total, true);
             return Ok(());
         }
 
@@ -165,7 +151,7 @@ fn run_dedupe_batched(
             if delete_files {
                 storage.batch_delete_images(&remove_ids)?;
                 // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
-                let _ = app.emit(
+                GlobalEmitter::global().emit(
                     "images-change",
                     serde_json::json!({
                         "reason": "delete",
@@ -175,7 +161,7 @@ fn run_dedupe_batched(
             } else {
                 storage.batch_remove_images(&remove_ids)?;
                 // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
-                let _ = app.emit(
+                GlobalEmitter::global().emit(
                     "images-change",
                     serde_json::json!({
                         "reason": "remove",
@@ -190,7 +176,9 @@ fn run_dedupe_batched(
                     let handle = tokio::runtime::Handle::try_current();
                     if let Ok(handle) = handle {
                         let _ = handle.block_on(async {
-                            Settings::global().set_current_wallpaper_image_id(None).await
+                            Settings::global()
+                                .set_current_wallpaper_image_id(None)
+                                .await
                         });
                     }
                     current_wallpaper_id = None;
@@ -200,27 +188,11 @@ fn run_dedupe_batched(
             removed_total += remove_ids.len();
         }
 
-        let _ = app.emit(
-            "dedupe-progress",
-            DedupeProgressPayload {
-                processed,
-                total,
-                removed: removed_total,
-                batch_index,
-            },
-        );
+        GlobalEmitter::global().emit_dedupe_progress(processed, total, removed_total, batch_index);
 
         batch_index += 1;
     }
 
-    let _ = app.emit(
-        "dedupe-finished",
-        DedupeFinishedPayload {
-            processed,
-            total,
-            removed: removed_total,
-            canceled: false,
-        },
-    );
+    GlobalEmitter::global().emit_dedupe_finished(processed, total, removed_total, false);
     Ok(())
 }

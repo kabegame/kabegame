@@ -1,4 +1,4 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+﻿// Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Arc;
@@ -22,12 +22,13 @@ mod server;
 mod server_unix;
 #[cfg(target_os = "windows")]
 mod server_windows;
-#[cfg(all(feature = "virtual-driver"))]
+#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 mod vd_listener;
 
 use commands::album;
 use commands::album::*;
 use commands::filesystem::*;
+use commands::image::*;
 use commands::plugin::*;
 use commands::settings::*;
 use commands::task::*;
@@ -98,7 +99,7 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
     println!("  ✓ Subscription manager initialized");
 
     // 初始化全局 emitter
-    GlobalEmitter::init_global_ipc(broadcaster.clone())
+    GlobalEmitter::init_global(Box::new(broadcaster))
         .map_err(|e| format!("Failed to initialize global emitter: {}", e))?;
     println!("  ✓ Global emitter initialized");
 
@@ -136,18 +137,18 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
     }
     println!("  ✓ ProviderRuntime initialized");
 
-    // Virtual Drive（仅 Windows + feature 启用时）
-    #[cfg(feature = "virtual-driver")]
+    // Virtual Drive（仅 Windows + 非 light mode + virtual-driver feature）
+    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
     {
         VirtualDriveService::init_global()
             .map_err(|e| format!("Failed to init VD service: {}", e))?;
     }
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
     let virtual_drive_service = VirtualDriveService::global();
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
     println!("  ✓ Virtual drive support enabled");
 
-    #[cfg(feature = "virtual-driver")]
+    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
     let ctx = Arc::new(Store {
         broadcaster: broadcaster.clone(),
         subscription_manager: subscription_manager.clone(),
@@ -155,7 +156,7 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
         virtual_drive_service: virtual_drive_service.clone(),
     });
 
-    #[cfg(not(feature = "virtual-driver"))]
+    #[cfg(not(all(not(kabegame_mode = "light"), target_os = "windows")))]
     let ctx = Arc::new(Store {
         broadcaster: broadcaster.clone(),
         subscription_manager: subscription_manager.clone(),
@@ -165,8 +166,8 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
 
     Store::init_global(ctx.clone())?;
 
-    // 启动虚拟磁盘事件监听器（仅在 Windows + virtual-driver feature 启用时）
-    #[cfg(feature = "virtual-driver")]
+    // 启动虚拟磁盘事件监听器（仅在 Windows + 非 light mode + virtual-driver feature）
+    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
     {
         tokio::spawn(vd_listener::start_vd_event_listener(
             broadcaster.clone(),
@@ -210,7 +211,7 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
 }
 
 /// 启动 IPC 服务
-#[cfg(feature = "ipc-service")]
+#[cfg(not(kabegame_mode = "light"))]
 async fn start_ipc_server(ctx: Arc<Store>) -> Result<(), String> {
     println!("Starting IPC server...");
 
@@ -295,7 +296,31 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
+            // 设置全局快捷键
+            {
+                use tauri_plugin_global_shortcut::{GlobalShortcutManager, Shortcut};
+
+                let app_handle = app.app_handle().clone();
+                let shortcuts = app.global_shortcut_manager();
+
+                // 注册 F11 快捷键切换全屏
+                let f11_shortcut =
+                    shortcuts.register(Shortcut::from_str("F11").unwrap(), move || {
+                        let app_handle = app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = commands::window::toggle_fullscreen(app_handle);
+                        });
+                    });
+
+                if let Err(e) = f11_shortcut {
+                    eprintln!("Failed to register F11 shortcut: {}", e);
+                } else {
+                    println!("✓ F11 shortcut registered for fullscreen toggle");
+                }
+            }
+
             // 启动连接状态监听任务（监听 IPC 连接状态变化）
             // 注意：现在我们是 Embedded 模式，这个 watcher 主要用于兼容旧代码，
             // 但如果 daemon_client 不再连接，这个 watcher 可能没用。
@@ -314,19 +339,10 @@ fn main() {
                             start_local_event_loop(app_handle_for_events, broadcaster).await;
                         });
 
-                        // 2. 发送 Ready 信号给前端
-                        // 稍微延迟一下确保前端就绪？
-                        // tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        let _ = app_handle.emit(
-                            "daemon-ready",
-                            serde_json::json!({
-                                "mode": "embedded"
-                            }),
-                        );
                         println!("Backend initialized (Embedded).");
 
                         // 3. 启动 IPC Server (如果启用)
-                        #[cfg(feature = "ipc-service")]
+                        #[cfg(not(kabegame_mode = "light"))]
                         {
                             if let Err(e) = start_ipc_server(ctx).await {
                                 eprintln!("IPC Server Fatal Error: {}", e);
@@ -348,8 +364,6 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_images,
-            get_images_paginated,
             get_albums,
             add_album,
             delete_album,
@@ -413,13 +427,13 @@ fn main() {
             open_plasma_wallpaper_settings,
             get_favorite_album_id,
             // Virtual Driver Settings
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             get_album_drive_enabled,
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             get_album_drive_mount_point,
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             set_album_drive_enabled,
-            #[cfg(feature = "virtual-driver")]
+            #[cfg(not(kabegame_mode = "light"))]
             set_album_drive_mount_point,
             // Task
             add_run_config,
@@ -452,6 +466,7 @@ fn main() {
             set_main_sidebar_blur,
             #[cfg(target_os = "windows")]
             wallpaper_window_ready,
+            toggle_fullscreen,
             // Filesystem
             open_explorer,
             open_file_path,

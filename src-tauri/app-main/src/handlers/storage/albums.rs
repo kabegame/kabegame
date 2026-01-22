@@ -1,5 +1,4 @@
-//! Albums 表相关操作
-
+﻿//! Albums 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
 use crate::server::EventBroadcaster;
 use kabegame_core::ipc::events::DaemonEvent;
 use kabegame_core::ipc::ipc::CliIpcResponse;
@@ -16,10 +15,7 @@ pub async fn get_albums() -> CliIpcResponse {
     }
 }
 
-pub async fn add_album(
-    broadcaster: Arc<EventBroadcaster>,
-    name: &str,
-) -> CliIpcResponse {
+pub async fn add_album(broadcaster: Arc<EventBroadcaster>, name: &str) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.add_album(name) {
         Ok(album) => {
@@ -59,10 +55,7 @@ pub async fn rename_album(album_id: &str, new_name: &str) -> CliIpcResponse {
     }
 }
 
-pub async fn add_images_to_album(
-    album_id: &str,
-    image_ids: &[String],
-) -> CliIpcResponse {
+pub async fn add_images_to_album(album_id: &str, image_ids: &[String]) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.add_images_to_album(album_id, image_ids) {
         Ok(result) => {
@@ -72,10 +65,7 @@ pub async fn add_images_to_album(
     }
 }
 
-pub async fn remove_images_from_album(
-    album_id: &str,
-    image_ids: &[String],
-) -> CliIpcResponse {
+pub async fn remove_images_from_album(album_id: &str, image_ids: &[String]) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.remove_images_from_album(album_id, image_ids) {
         Ok(removed) => {
@@ -95,10 +85,7 @@ pub async fn get_album_images(album_id: &str) -> CliIpcResponse {
     }
 }
 
-pub async fn get_album_preview(
-    album_id: &str,
-    limit: usize,
-) -> CliIpcResponse {
+pub async fn get_album_preview(album_id: &str, limit: usize) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.get_album_preview(album_id, limit) {
         Ok(images) => {

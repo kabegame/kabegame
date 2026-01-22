@@ -1,5 +1,4 @@
-//! Images 表相关操作
-
+﻿//! Images 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
 use crate::server::EventBroadcaster;
 use kabegame_core::ipc::events::DaemonEvent;
 use kabegame_core::ipc::ipc::CliIpcResponse;
@@ -18,10 +17,7 @@ pub async fn get_images() -> CliIpcResponse {
     }
 }
 
-pub async fn get_images_paginated(
-    page: usize,
-    page_size: usize,
-) -> CliIpcResponse {
+pub async fn get_images_paginated(page: usize, page_size: usize) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.get_images_paginated(page, page_size) {
         Ok(result) => {
@@ -81,9 +77,7 @@ pub async fn get_gallery_plugin_groups() -> CliIpcResponse {
     }
 }
 
-pub async fn get_images_count_by_query(
-    query: &serde_json::Value,
-) -> CliIpcResponse {
+pub async fn get_images_count_by_query(query: &serde_json::Value) -> CliIpcResponse {
     let storage = Storage::global();
     let q = match serde_json::from_value::<ImageQuery>(query.clone()) {
         Ok(v) => v,
@@ -113,14 +107,11 @@ pub async fn get_images_range_by_query(
     }
 }
 
-pub async fn delete_image(
-    broadcaster: Arc<EventBroadcaster>,
-    image_id: &str,
-) -> CliIpcResponse {
+pub async fn delete_image(broadcaster: Arc<EventBroadcaster>, image_id: &str) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.delete_image(image_id) {
         Ok(()) => {
-            // 统一图片变更事件：供前端刷新当前 provider 视图
+            // 扈滉ｸ蝗ｾ迚・序譖ｴ莠倶ｻｶ・壻ｾ帛燕遶ｯ蛻ｷ譁ｰ蠖灘燕 provider 隗・崟
             let _ = broadcaster
                 .broadcast(DaemonEvent::Generic {
                     event: "images-change".to_string(),
@@ -136,10 +127,7 @@ pub async fn delete_image(
     }
 }
 
-pub async fn remove_image(
-    broadcaster: Arc<EventBroadcaster>,
-    image_id: &str,
-) -> CliIpcResponse {
+pub async fn remove_image(broadcaster: Arc<EventBroadcaster>, image_id: &str) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.remove_image(image_id) {
         Ok(()) => {
@@ -201,7 +189,7 @@ pub async fn toggle_image_favorite(
     let storage = Storage::global();
     match storage.toggle_image_favorite(image_id, favorite) {
         Ok(()) => {
-            // 统一图片变更事件：收藏/取消收藏会影响 Gallery 的 favorite 字段 + 收藏画册内容
+            // 扈滉ｸ蝗ｾ迚・序譖ｴ莠倶ｻｶ・壽噺阯・蜿匁ｶ域噺阯丈ｼ壼ｽｱ蜩・Gallery 逧・favorite 蟄玲ｮｵ + 謾ｶ阯冗判蜀悟・螳ｹ
             let _ = broadcaster
                 .broadcast(DaemonEvent::Generic {
                     event: "images-change".to_string(),

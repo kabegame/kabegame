@@ -1,14 +1,13 @@
-//! 虚拟磁盘事件监听器
+﻿//! 虚拟磁盘事件监听器
 //!
 //! 监听 EventBroadcaster 的事件，并调用 VirtualDriveService 的相应方法更新虚拟磁盘状态。
 
-#[cfg(feature = "virtual-driver")]
+use crate::server::EventBroadcaster;
 use kabegame_core::ipc::events::DaemonEvent;
 use kabegame_core::storage::Storage;
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::Arc;
-use crate::server::EventBroadcaster;
 
 /// 启动虚拟磁盘事件监听器
 ///
@@ -18,7 +17,7 @@ use crate::server::EventBroadcaster;
 /// - `Generic` 事件中的 `albums-changed` → `bump_albums()`
 /// - `Generic` 事件中的 `tasks-changed` → `bump_tasks()`
 /// - `Generic` 事件中的 `images-change` → 根据 payload 处理
-#[cfg(feature = "virtual-driver")]
+#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 pub async fn start_vd_event_listener(
     broadcaster: Arc<EventBroadcaster>,
     vd_service: Arc<VirtualDriveService>,
@@ -101,7 +100,7 @@ pub async fn start_vd_event_listener(
 }
 
 /// 非 Windows 或未启用 virtual-driver feature 时的空实现
-#[cfg(not(feature = "virtual-driver"))]
+#[cfg(not(all(not(kabegame_mode = "light"), target_os = "windows")))]
 pub async fn start_vd_event_listener(
     _broadcaster: Arc<EventBroadcaster>,
     _vd_service: Arc<VirtualDriveService>,
