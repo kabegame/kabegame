@@ -93,13 +93,14 @@ const handleToggle = async (val: boolean) => {
 
   switchLoading.value = true;
   try {
-    // 直接设置 enabled，daemon 会自动处理挂载/卸载
     await invoke("set_album_drive_enabled", { enabled: val });
+    settingsStore.values.albumDriveEnabled = val;
   } catch (e) {
     console.error(e);
     enabled.value = !val;
-    switchLoading.value = false;
     ElMessage.error(String(e));
+  } finally {
+    switchLoading.value = false;
   }
 };
 </script>

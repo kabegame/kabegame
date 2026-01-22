@@ -31,18 +31,22 @@ pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn start_dedupe_gallery_by_hash_batched(delete_files: bool) -> Result<(), String> {
-    crate::daemon_client::get_ipc_client()
-        .dedupe_start_gallery_by_hash_batched(delete_files, Some(10_000))
+    let ctx = crate::handlers::Store::global();
+    ctx.dedupe_service
+        .clone()
+        .start_batched(
+            std::sync::Arc::new(kabegame_core::storage::Storage::global().clone()),
+            ctx.broadcaster.clone(),
+            delete_files,
+            10_000,
+        )
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
 #[tauri::command]
 pub async fn cancel_dedupe_gallery_by_hash_batched() -> Result<bool, String> {
-    crate::daemon_client::get_ipc_client()
-        .dedupe_cancel_gallery_by_hash_batched()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let ctx = crate::handlers::Store::global();
+    ctx.dedupe_service.cancel()
 }
 
 #[tauri::command]

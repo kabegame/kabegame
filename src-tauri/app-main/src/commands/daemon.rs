@@ -1,60 +1,33 @@
-// Daemon IPC 命令（客户端侧 wrappers）
+// Local Storage Commands (replacing Daemon IPC)
+// Refactored to use embedded Storage directly
 
-use crate::daemon_client;
-use kabegame_core::ipc::ConnectionStatus;
+use kabegame_core::storage::Storage;
+use tauri::{AppHandle, Emitter};
 
 #[tauri::command]
 pub async fn check_daemon_status() -> Result<serde_json::Value, String> {
-    let client = daemon_client::get_ipc_client();
-    let conn_status = client.connection_status().await;
-
-    // 尝试获取 daemon 状态信息
-    let status_result = client.status().await;
-
-    // 构建返回结果
-    let mut result = serde_json::json!({
-        "status": match conn_status {
-            ConnectionStatus::Disconnected => "disconnected",
-            ConnectionStatus::Connecting => "connecting",
-            ConnectionStatus::Connected => "connected",
+    // Since we are embedded, we are always connected
+    Ok(serde_json::json!({
+        "status": "connected",
+        "info": {
+            "version": env!("CARGO_PKG_VERSION"),
+            "mode": "embedded"
         }
-    });
-
-    match status_result {
-        Ok(info) => {
-            result["info"] = info;
-        }
-        Err(e) => {
-            result["error"] = serde_json::Value::String(e);
-        }
-    }
-
-    Ok(result)
+    }))
 }
 
 #[tauri::command]
 pub async fn reconnect_daemon() -> Result<(), String> {
-    // 先尝试检查 daemon 状态
-    match daemon_client::try_connect_daemon().await {
-        Ok(_) => {
-            // daemon 已可用，发送就绪事件
-            eprintln!("[reconnect_daemon] daemon 已可用");
-            Ok(())
-        }
-        Err(_) => {
-            // status 检查失败，尝试重启 daemon
-            eprintln!("[reconnect_daemon] 尝试重启 daemon");
-            daemon_client::ensure_daemon_ready().await
-        }
-    }
+    // No-op for embedded mode
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn get_images() -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .storage_get_images()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let images = Storage::global()
+        .get_all_images()
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::to_value(images).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -62,62 +35,83 @@ pub async fn get_images_paginated(
     page: usize,
     page_size: usize,
 ) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .storage_get_images_paginated(page, page_size)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let result = Storage::global()
+        .get_images_paginated(page, page_size)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::to_value(result).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn get_albums() -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .storage_get_albums()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let albums = Storage::global().get_albums().map_err(|e| e.to_string())?;
+    Ok(serde_json::to_value(albums).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
-pub async fn add_album(name: String) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .storage_add_album(name)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+pub async fn add_album(app: AppHandle, name: String) -> Result<serde_json::Value, String> {
+    let album = Storage::global().add_album(&name).map_err(|e| e.to_string())?;
+    
+    // Emit event
+    let _ = app.emit(
+        "albums-changed",
+        serde_json::json!({ "reason": "add" }),
+    );
+
+    #[cfg(feature = "virtual-driver")]
+    {
+        use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+        use kabegame_core::virtual_driver::VirtualDriveService;
+        VirtualDriveService::global().bump_albums();
+    }
+
+    Ok(serde_json::to_value(album).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
-pub async fn delete_album(album_id: String) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .storage_delete_album(album_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
-}
+pub async fn delete_album(app: AppHandle, album_id: String) -> Result<(), String> {
+    Storage::global().delete_album(&album_id).map_err(|e| e.to_string())?;
+    
+    // Emit event
+    let _ = app.emit(
+        "albums-changed",
+        serde_json::json!({ "reason": "delete" }),
+    );
 
-// Moved to task.rs
+    #[cfg(feature = "virtual-driver")]
+    {
+        use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+        use kabegame_core::virtual_driver::VirtualDriveService;
+        VirtualDriveService::global().bump_albums();
+    }
+
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn get_images_range(offset: usize, limit: usize) -> Result<serde_json::Value, String> {
-    // 兼容旧前端 offset+limit：使用 daemon 的 page+page_size
+    // Compat: calculate page/size
     let page = if limit == 0 { 0 } else { offset / limit };
-    daemon_client::get_ipc_client()
-        .storage_get_images_paginated(page, limit)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let result = Storage::global()
+        .get_images_paginated(page, limit)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::to_value(result).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn browse_gallery_provider(path: String) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .gallery_browse_provider(path)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let result = kabegame_core::gallery::browse::browse_gallery_provider(
+        Storage::global(),
+        kabegame_core::providers::ProviderRuntime::global(),
+        &path,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(serde_json::to_value(result).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn get_image_by_id(image_id: String) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .storage_get_image_by_id(image_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let image = Storage::global()
+        .find_image_by_id(&image_id)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::to_value(image).map_err(|e| e.to_string())?)
 }
-
-// Moved to task.rs

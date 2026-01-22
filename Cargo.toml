@@ -1,34 +1,32 @@
 [workspace]
-resolver = "2"
 members = [
   "src-tauri/core",
-  "src-tauri/daemon",
   "src-tauri/app-main",
   "src-tauri/app-plugin-editor",
   "src-tauri/app-cli",
 ]
+resolver = "2"
 
 [workspace.package]
-version = "3.0.0"
 edition = "2021"
+version = "3.0.0"
 
 [workspace.dependencies]
-kabegame-core = { path = "./src-tauri/core", default-features = false }
-tauri = { version = "2.0", features = ["tray-icon", "devtools"] }
-tauri-build = { version = "2.0", features = [] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1", features = ["full"] }
-url = "2.5"
-uuid = { version = "1.6", features = ["v4", "serde"] }
-image = "0.24"
-zip = "0.6"
-rhai = { version = "1.19", features = ["sync"] }
-sha2 = "0.10"
 base64 = "0.22"
-serde_cbor = "0.11"
+image = "0.24"
+kabegame-core = {path = "./src-tauri/core", default-features = false}
+rhai = {version = "1.19", features = ["sync"]}
+serde = {version = "1.0", features = ["derive"]}
 serde_bytes = "0.11"
-windows-sys = { version = "0.52", features = [
+serde_cbor = "0.11"
+serde_json = "1.0"
+sha2 = "0.10"
+tauri = {version = "2.0", features = ["tray-icon", "devtools"]}
+tauri-build = {version = "2.0", features = []}
+tokio = {version = "1", features = ["full"]}
+url = "2.5"
+uuid = {version = "1.6", features = ["v4", "serde"]}
+windows-sys = {version = "0.52", features = [
   "Win32_Foundation",
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
@@ -39,8 +37,9 @@ windows-sys = { version = "0.52", features = [
   "Win32_System_Memory",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
-] }
+]}
+zip = "0.6"
 
 [profile.release]
-lto = "thin"
 codegen-units = 1
+lto = "thin"

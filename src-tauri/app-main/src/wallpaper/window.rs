@@ -1,5 +1,6 @@
 // 窗口壁纸模块 - 类似 Wallpaper Engine 的实现
 
+use kabegame_core::settings::Settings;
 use std::sync::{Condvar, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
@@ -46,11 +47,11 @@ impl WallpaperWindow {
         // 推送样式和过渡效果事件
         let app_for_style = self.app.clone();
         tauri::async_runtime::spawn(async move {
-            let client = crate::daemon_client::get_ipc_client();
-            if let Ok(style) = client.settings_get_wallpaper_rotation_style().await {
+            let settings = Settings::global();
+            if let Ok(style) = settings.get_wallpaper_rotation_style().await {
                 let _ = app_for_style.emit("wallpaper-update-style", style);
             }
-            if let Ok(tr) = client.settings_get_wallpaper_rotation_transition().await {
+            if let Ok(tr) = settings.get_wallpaper_rotation_transition().await {
                 let _ = app_for_style.emit("wallpaper-update-transition", tr);
             }
         });

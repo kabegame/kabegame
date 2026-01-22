@@ -6,7 +6,6 @@ pub mod image;
 pub mod misc;
 pub mod plugin;
 pub mod settings;
-pub mod storage;
 pub mod task;
 pub mod wallpaper;
 pub mod window;

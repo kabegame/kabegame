@@ -18,6 +18,7 @@ use tauri::AppHandle;
 
 #[cfg(target_os = "windows")]
 use crate::wallpaper::window::WallpaperWindow;
+use kabegame_core::settings::Settings;
 
 /// 全局壁纸控制器（基础 manager）：负责根据当前 `wallpaper_mode` 选择后端（native/window），并保留 window 模式的运行状态。
 ///
@@ -78,8 +79,8 @@ impl WallpaperController {
 
     /// 根据当前设置选择活动后端（native等）。
     pub async fn active_manager(&self) -> Result<Arc<dyn WallpaperManager + Send + Sync>, String> {
-        let mode = crate::daemon_client::get_ipc_client()
-            .settings_get_wallpaper_mode()
+        let mode = Settings::global()
+            .get_wallpaper_mode()
             .await
             .unwrap_or_else(|_| "native".to_string());
         Ok(match mode.as_str() {

@@ -17,7 +17,7 @@ use kabegame_core::settings::Settings;
 use kabegame_core::storage::tasks::TaskInfo;
 use kabegame_core::storage::Storage;
 use kabegame_core::virtual_driver::VirtualDriveService;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// 全局状态
 pub struct Store {
@@ -28,6 +28,23 @@ pub struct Store {
     pub subscription_manager: Arc<SubscriptionManager>,
     pub dedupe_service: Arc<DedupeService>,
     pub virtual_drive_service: Arc<VirtualDriveService>,
+}
+
+static GLOBAL_STORE: OnceLock<Arc<Store>> = OnceLock::new();
+
+impl Store {
+    pub fn init_global(ctx: Arc<Store>) -> Result<(), String> {
+        GLOBAL_STORE
+            .set(ctx)
+            .map_err(|_| "Store already initialized".to_string())
+    }
+
+    pub fn global() -> Arc<Store> {
+        GLOBAL_STORE
+            .get()
+            .expect("Store not initialized")
+            .clone()
+    }
 }
 
 /// 分发 IPC 请求到对应的处理器

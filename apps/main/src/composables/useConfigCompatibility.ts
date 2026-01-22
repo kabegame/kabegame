@@ -54,7 +54,13 @@ export function useConfigCompatibility(
         if (typeof value !== "number" || !Number.isInteger(value)) {
           return { valid: false, error: "值必须是整数" };
         }
-      // falls through（int 与 float 共用数值范围校验：min/max）
+        if (!isNil(varDef.min) && value < varDef.min) {
+          return { valid: false, error: `值不能小于 ${varDef.min}` };
+        }
+        if (!isNil(varDef.max) && value > varDef.max) {
+          return { valid: false, error: `值不能大于 ${varDef.max}` };
+        }
+        break;
       case "float":
         if (typeof value !== "number") {
           return { valid: false, error: "值必须是数字" };

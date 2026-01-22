@@ -197,10 +197,10 @@ impl WallpaperManager for PlasmaPluginWallpaperManager {
         }
 
         // 用 daemon 的当前 style/transition 初始化插件配置，避免切到插件模式后出现"空白/配置不一致"
-        let client = crate::daemon_client::get_ipc_client();
+        let settings = Settings::global();
         let (style_result, transition_result) = tokio::join!(
-            client.settings_get_wallpaper_rotation_style(),
-            client.settings_get_wallpaper_rotation_transition()
+            settings.get_wallpaper_rotation_style(),
+            settings.get_wallpaper_rotation_transition()
         );
 
         let style = style_result.unwrap_or_else(|_| "fill".to_string());

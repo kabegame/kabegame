@@ -2507,20 +2507,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kabegame-daemon"
-version = "3.0.0"
-dependencies = [
- "base64 0.22.1",
- "kabegame-core",
- "serde",
- "serde_json",
- "tauri-build",
- "tokio",
- "uuid",
- "windows-sys 0.52.0",
-]
-
-[[package]]
 name = "kabegame-plugin-editor"
 version = "3.0.0"
 dependencies = [

@@ -26,17 +26,15 @@ impl WindowWallpaperManager {
 #[async_trait]
 impl WallpaperManager for WindowWallpaperManager {
     async fn get_style(&self) -> Result<String, String> {
-        crate::daemon_client::get_ipc_client()
-            .settings_get_wallpaper_rotation_style()
+        kabegame_core::settings::Settings::global()
+            .get_wallpaper_rotation_style()
             .await
-            .map_err(|e| format!("Daemon unavailable: {}", e))
     }
 
     async fn get_transition(&self) -> Result<String, String> {
-        crate::daemon_client::get_ipc_client()
-            .settings_get_wallpaper_rotation_transition()
+        kabegame_core::settings::Settings::global()
+            .get_wallpaper_rotation_transition()
             .await
-            .map_err(|e| format!("Daemon unavailable: {}", e))
     }
 
     async fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String> {
@@ -97,9 +95,8 @@ impl WallpaperManager for WindowWallpaperManager {
     }
 
     async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
-        // 保存样式到 daemon Settings
-        crate::daemon_client::get_ipc_client()
-            .settings_set_wallpaper_style(style.to_string())
+        kabegame_core::settings::Settings::global()
+            .set_wallpaper_style(style.to_string())
             .await
             .map_err(|e| format!("保存样式设置失败: {}", e))?;
 
@@ -135,9 +132,8 @@ impl WallpaperManager for WindowWallpaperManager {
     }
 
     async fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String> {
-        // 保存过渡效果到 daemon Settings
-        crate::daemon_client::get_ipc_client()
-            .settings_set_wallpaper_rotation_transition(transition.to_string())
+        kabegame_core::settings::Settings::global()
+            .set_wallpaper_rotation_transition(transition.to_string())
             .await
             .map_err(|e| format!("保存过渡效果设置失败: {}", e))?;
 

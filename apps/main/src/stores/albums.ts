@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import type { ImageInfo } from "./crawler";
+import { useCrawlerStore, type ImageInfo } from "./crawler";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
@@ -14,6 +14,7 @@ export interface Album {
 
 export const useAlbumStore = defineStore("albums", () => {
   const settingsStore = useSettingsStore();
+  const crawlerStore = useCrawlerStore();
   const FAVORITE_ALBUM_ID = computed(() => settingsStore.favoriteAlbumId);
 
   const albums = ref<Album[]>([]);

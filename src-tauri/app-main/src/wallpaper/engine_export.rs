@@ -1,6 +1,5 @@
-// Wallpaper Engine 导出功能（在 app-main 中执行，通过 daemon 获取设置）
+// Wallpaper Engine 导出功能（在 app-main 中执行）
 
-use crate::daemon_client;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -533,7 +532,6 @@ fn write_we_web_project(
 async fn resolve_options_from_settings(
     override_opt: Option<WeExportOptions>,
 ) -> Result<WeExportOptions, String> {
-    let client = daemon_client::get_ipc_client();
     let o = override_opt.unwrap_or(WeExportOptions {
         style: None,
         transition: None,
@@ -541,21 +539,21 @@ async fn resolve_options_from_settings(
         order: None,
     });
 
-    // 通过 daemon 获取设置
-    let style = client
-        .settings_get_wallpaper_rotation_style()
+    let settings = kabegame_core::settings::Settings::global();
+    let style = settings
+        .get_wallpaper_rotation_style()
         .await
         .map_err(|e| format!("获取壁纸样式设置失败: {}", e))?;
-    let transition = client
-        .settings_get_wallpaper_rotation_transition()
+    let transition = settings
+        .get_wallpaper_rotation_transition()
         .await
         .map_err(|e| format!("获取壁纸过渡设置失败: {}", e))?;
-    let interval_minutes = client
-        .settings_get_wallpaper_rotation_interval_minutes()
+    let interval_minutes = settings
+        .get_wallpaper_rotation_interval_minutes()
         .await
         .map_err(|e| format!("获取壁纸间隔设置失败: {}", e))?;
-    let mode = client
-        .settings_get_wallpaper_rotation_mode()
+    let mode = settings
+        .get_wallpaper_rotation_mode()
         .await
         .map_err(|e| format!("获取壁纸模式设置失败: {}", e))?;
 
@@ -576,21 +574,9 @@ pub async fn export_album_to_we_project(
 ) -> Result<WeExportResult, String> {
     let options = resolve_options_from_settings(options).await?;
 
-    // 通过 daemon 获取相册图片
-    let client = daemon_client::get_ipc_client();
-    let images_value = client
-        .storage_get_album_images(album_id.clone())
-        .await
+    let images = kabegame_core::storage::Storage::global()
+        .get_album_images(&album_id)
         .map_err(|e| format!("获取相册图片失败: {}", e))?;
-
-    // 解析图片列表
-    #[derive(Deserialize)]
-    struct ImageInfo {
-        local_path: String,
-    }
-    let images: Vec<ImageInfo> = serde_json::from_value(images_value)
-        .map_err(|e| format!("解析相册图片失败: {}", e))?;
-
     let image_paths: Vec<String> = images.into_iter().map(|i| i.local_path).collect();
     let title = if album_name.trim().is_empty() {
         format!("Kabegame_Album_{}", album_id)

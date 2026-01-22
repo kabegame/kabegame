@@ -62,5 +62,5 @@ ipc = []
 # 将来安卓或者清洁版self-hosted环境需要使用这个feature
 custom-protocol = ["dep:tauri", "tauri/custom-protocol"]
 tauri = ["dep:tauri"]
-tauri-runtime = []
+tauri-runtime = ["dep:tauri"]
 virtual-driver = ["dep:dokan", "dep:widestring", "dep:winapi", "dep:memmap2"]

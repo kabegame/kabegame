@@ -72,9 +72,8 @@ pub async fn init_event_listeners(app: AppHandle) {
                 let controller = crate::wallpaper::WallpaperController::global();
                 tauri::async_runtime::spawn(async move {
                     // 获取当前样式和过渡效果
-                    let client = crate::daemon_client::get_ipc_client();
-                    let style = client
-                        .settings_get_wallpaper_rotation_style()
+                    let style = kabegame_core::settings::Settings::global()
+                        .get_wallpaper_rotation_style()
                         .await
                         .unwrap_or_else(|_| "fill".to_string());
 

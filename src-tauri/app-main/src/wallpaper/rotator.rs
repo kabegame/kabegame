@@ -1,4 +1,6 @@
 use super::manager::WallpaperController;
+use kabegame_core::settings::Settings;
+use kabegame_core::storage::{ImageInfo, Storage};
 use serde_json::Value;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -76,21 +78,12 @@ impl WallpaperRotator {
             .to_ascii_lowercase()
     }
 
-    fn images_from_value(v: &Value) -> Vec<ImageLite> {
-        let Some(arr) = v.as_array() else {
-            return vec![];
-        };
-        let mut out: Vec<ImageLite> = Vec::with_capacity(arr.len());
-        for it in arr {
-            let Some(id) = it.get("id").and_then(|x| x.as_str()) else {
-                continue;
-            };
-            let Some(local_path) = it.get("localPath").and_then(|x| x.as_str()) else {
-                continue;
-            };
+    fn images_from_info(v: Vec<ImageInfo>) -> Vec<ImageLite> {
+        let mut out: Vec<ImageLite> = Vec::with_capacity(v.len());
+        for it in v {
             out.push(ImageLite {
-                id: id.to_string(),
-                local_path: local_path.to_string(),
+                id: it.id,
+                local_path: it.local_path,
             });
         }
         out
@@ -99,33 +92,31 @@ impl WallpaperRotator {
     async fn load_images_for_source(source: &RotationSource) -> Result<Vec<ImageLite>, String> {
         match source {
             RotationSource::Album(id) => {
-                let v = crate::daemon_client::get_ipc_client()
-                    .storage_get_album_images(id.clone())
-                    .await
-                    .map_err(|e| format!("Daemon unavailable: {}", e))?;
-                Ok(Self::images_from_value(&v))
+                let v = Storage::global()
+                    .get_album_images(id)
+                    .map_err(|e| format!("Storage error: {}", e))?;
+                Ok(Self::images_from_info(v))
             }
             RotationSource::Gallery => {
-                let v = crate::daemon_client::get_ipc_client()
-                    .storage_get_images()
-                    .await
-                    .map_err(|e| format!("Daemon unavailable: {}", e))?;
-                Ok(Self::images_from_value(&v))
+                let v = Storage::global()
+                    .get_all_images()
+                    .map_err(|e| format!("Storage error: {}", e))?;
+                Ok(Self::images_from_info(v))
             }
         }
     }
 
     async fn get_current_wallpaper_path(_app: &AppHandle) -> Option<String> {
-        let id = crate::daemon_client::get_ipc_client()
-            .settings_get_current_wallpaper_image_id()
+        let id = Settings::global()
+            .get_current_wallpaper_image_id()
             .await
             .ok()
             .flatten()?;
-        let img = crate::daemon_client::get_ipc_client()
-            .storage_get_image_by_id(id)
-            .await
-            .ok()?;
-        let p = img.get("localPath").and_then(|x| x.as_str())?.to_string();
+        let img = Storage::global()
+            .find_image_by_id(&id)
+            .ok()
+            .flatten()?;
+        let p = img.local_path;
         if Path::new(&p).exists() {
             Some(p)
         } else {
@@ -158,8 +149,8 @@ impl WallpaperRotator {
             state.store(STATE_RUNNING, Ordering::Release);
             // 从用户设置中读取初始 interval
             let initial_interval_secs = {
-                crate::daemon_client::get_ipc_client()
-                    .settings_get_wallpaper_rotation_interval_minutes()
+                Settings::global()
+                    .get_wallpaper_rotation_interval_minutes()
                     .await
                     .unwrap_or(1)
                     .saturating_mul(60)
@@ -188,12 +179,12 @@ impl WallpaperRotator {
                     break;
                 }
 
-                // 获取设置（daemon）
-                let client = crate::daemon_client::get_ipc_client();
+                // 获取设置
+                let settings = Settings::global();
                 let (enabled_result, mode_result, interval_result) = tokio::join!(
-                    client.settings_get_wallpaper_rotation_enabled(),
-                    client.settings_get_wallpaper_mode(),
-                    client.settings_get_wallpaper_rotation_interval_minutes()
+                    settings.get_wallpaper_rotation_enabled(),
+                    settings.get_wallpaper_mode(),
+                    settings.get_wallpaper_rotation_interval_minutes()
                 );
 
                 // 如果获取设置失败，跳过
@@ -236,7 +227,7 @@ impl WallpaperRotator {
                 }
 
                 // 选择轮播来源：画册 / 画廊
-                let album_id_result = client.settings_get_wallpaper_rotation_album_id().await;
+                let album_id_result = settings.get_wallpaper_rotation_album_id().await;
                 let source = match album_id_result {
                     Ok(Some(id)) if !id.trim().is_empty() => RotationSource::Album(id),
                     Ok(Some(_)) | Ok(None) => RotationSource::Gallery,
@@ -254,8 +245,8 @@ impl WallpaperRotator {
                     Err(e) => {
                         // 画册不存在：回退到画廊
                         if e.contains("画册不存在") {
-                            if crate::daemon_client::get_ipc_client()
-                                .settings_set_wallpaper_rotation_album_id(Some("".to_string()))
+                            if settings
+                                .set_wallpaper_rotation_album_id(Some("".to_string()))
                                 .await
                                 .is_ok()
                             {
@@ -279,8 +270,8 @@ impl WallpaperRotator {
                     match source {
                         RotationSource::Album(_) => {
                             // 先回退到画廊
-                            if crate::daemon_client::get_ipc_client()
-                                .settings_set_wallpaper_rotation_album_id(Some("".to_string()))
+                            if settings
+                                .set_wallpaper_rotation_album_id(Some("".to_string()))
                                 .await
                                 .is_ok()
                             {
@@ -295,14 +286,14 @@ impl WallpaperRotator {
 
                     if images.is_empty() {
                         // 画廊也没有：降级到非轮播
-                        let _ = crate::daemon_client::get_ipc_client()
-                            .settings_set_wallpaper_rotation_enabled(false)
+                        let _ = settings
+                            .set_wallpaper_rotation_enabled(false)
                             .await;
-                        let _ = crate::daemon_client::get_ipc_client()
-                            .settings_set_wallpaper_rotation_album_id(None)
+                        let _ = settings
+                            .set_wallpaper_rotation_album_id(None)
                             .await;
-                        let _ = crate::daemon_client::get_ipc_client()
-                            .settings_set_current_wallpaper_image_id(None)
+                        let _ = settings
+                            .set_current_wallpaper_image_id(None)
                             .await;
                     }
                     eprintln!("无可用轮播图片，退出");
@@ -310,8 +301,8 @@ impl WallpaperRotator {
                 }
 
                 // 选择图片
-                let rotation_mode = client
-                    .settings_get_wallpaper_rotation_mode()
+                let rotation_mode = settings
+                    .get_wallpaper_rotation_mode()
                     .await
                     .unwrap_or_else(|_| "random".to_string());
                 let selected_image = match rotation_mode.as_str() {
@@ -424,8 +415,8 @@ impl WallpaperRotator {
                 }
 
                 // 同步更新全局“当前壁纸”（imageId）
-                let _ = crate::daemon_client::get_ipc_client()
-                    .settings_set_current_wallpaper_image_id(Some(selected_image.id.clone()))
+                let _ = settings
+                    .set_current_wallpaper_image_id(Some(selected_image.id.clone()))
                     .await;
 
                 // 本轮执行完后，让下一次从“现在”开始计时，确保手动切换/模式切换会重置计时器
@@ -441,16 +432,16 @@ impl WallpaperRotator {
     pub async fn start(&self) -> Result<(), String> {
         // 兼容旧调用点：start() 尝试按"当前设置"确保轮播线程存在。
         // 注意：如果用户未启用轮播或未选择来源（album_id=None），这里不会强制启动线程。
-        let client = crate::daemon_client::get_ipc_client();
-        let enabled = client
-            .settings_get_wallpaper_rotation_enabled()
+        let settings = Settings::global();
+        let enabled = settings
+            .get_wallpaper_rotation_enabled()
             .await
-            .map_err(|e| format!("Daemon unavailable: {}", e))?;
+            .map_err(|e| format!("Settings error: {}", e))?;
         if !enabled {
             return Ok(());
         }
-        let album_id = client
-            .settings_get_wallpaper_rotation_album_id()
+        let album_id = settings
+            .get_wallpaper_rotation_album_id()
             .await
             .ok()
             .flatten();
@@ -470,10 +461,10 @@ impl WallpaperRotator {
         if self.running.load(Ordering::Relaxed) {
             if start_from_current {
                 // 画廊顺序模式：对齐 current_index 到"当前壁纸之后"
-                let client = crate::daemon_client::get_ipc_client();
+                let settings = Settings::global();
                 let (album_id_result, mode_result) = tokio::join!(
-                    client.settings_get_wallpaper_rotation_album_id(),
-                    client.settings_get_wallpaper_rotation_mode()
+                    settings.get_wallpaper_rotation_album_id(),
+                    settings.get_wallpaper_rotation_mode()
                 );
                 let is_gallery = album_id_result
                     .ok()
@@ -512,19 +503,19 @@ impl WallpaperRotator {
         self.state.store(STATE_STARTING, Ordering::Release);
 
         let start_res: Result<(), String> = async {
-            let client = crate::daemon_client::get_ipc_client();
-            let enabled = client
-                .settings_get_wallpaper_rotation_enabled()
+            let settings = Settings::global();
+            let enabled = settings
+                .get_wallpaper_rotation_enabled()
                 .await
-                .map_err(|e| format!("Daemon unavailable: {}", e))?;
+                .map_err(|e| format!("Settings error: {}", e))?;
             if !enabled {
                 return Err("壁纸轮播未启用".to_string());
             }
 
-            let album_id = client
-                .settings_get_wallpaper_rotation_album_id()
+            let album_id = settings
+                .get_wallpaper_rotation_album_id()
                 .await
-                .map_err(|e| format!("Daemon unavailable: {}", e))?;
+                .map_err(|e| format!("Settings error: {}", e))?;
             let source = match album_id {
                 Some(id) if !id.trim().is_empty() => RotationSource::Album(id),
                 _ => RotationSource::Gallery,
@@ -545,8 +536,8 @@ impl WallpaperRotator {
                     .iter()
                     .any(|img| Self::normalize_path(&img.local_path) == Self::normalize_path(cur))
                 {
-                    let rotation_mode = client
-                        .settings_get_wallpaper_rotation_mode()
+                    let rotation_mode = settings
+                        .get_wallpaper_rotation_mode()
                         .await
                         .unwrap_or_else(|_| "random".to_string());
                     if rotation_mode == "sequential" {
@@ -597,11 +588,11 @@ impl WallpaperRotator {
         println!("[DEBUG] 切换 轮播器没有运行，启动");
 
         // 获取设置
-        let client = crate::daemon_client::get_ipc_client();
-        let album_id = client
-            .settings_get_wallpaper_rotation_album_id()
+        let settings = Settings::global();
+        let album_id = settings
+            .get_wallpaper_rotation_album_id()
             .await
-            .map_err(|e| format!("Daemon unavailable: {}", e))?;
+            .map_err(|e| format!("Settings error: {}", e))?;
         let source = match album_id {
             Some(id) if !id.trim().is_empty() => RotationSource::Album(id),
             _ => RotationSource::Gallery,
@@ -616,8 +607,8 @@ impl WallpaperRotator {
         if images.is_empty() {
             if matches!(source, RotationSource::Album(_)) {
                 // 回退到画廊
-                let _ = crate::daemon_client::get_ipc_client()
-                    .settings_set_wallpaper_rotation_album_id(Some("".to_string()))
+                let _ = settings
+                    .set_wallpaper_rotation_album_id(Some("".to_string()))
                     .await;
                 source = RotationSource::Gallery;
                 images = Self::load_images_for_source(&source)
@@ -627,22 +618,22 @@ impl WallpaperRotator {
 
             if images.is_empty() {
                 // 画廊也没有：降级到非轮播
-                let _ = crate::daemon_client::get_ipc_client()
-                    .settings_set_wallpaper_rotation_enabled(false)
+                let _ = settings
+                    .set_wallpaper_rotation_enabled(false)
                     .await;
-                let _ = crate::daemon_client::get_ipc_client()
-                    .settings_set_wallpaper_rotation_album_id(None)
+                let _ = settings
+                    .set_wallpaper_rotation_album_id(None)
                     .await;
-                let _ = crate::daemon_client::get_ipc_client()
-                    .settings_set_current_wallpaper_image_id(None)
+                let _ = settings
+                    .set_current_wallpaper_image_id(None)
                     .await;
                 return Ok(());
             }
         }
 
         // 选择图片
-        let rotation_mode = client
-            .settings_get_wallpaper_rotation_mode()
+        let rotation_mode = settings
+            .get_wallpaper_rotation_mode()
             .await
             .unwrap_or_else(|_| "random".to_string());
         let selected_image = match rotation_mode.as_str() {
@@ -702,10 +693,9 @@ impl WallpaperRotator {
         let controller = WallpaperController::global();
         let manager = controller.active_manager().await?;
 
-        let client = crate::daemon_client::get_ipc_client();
         let (style_result, transition_result) = tokio::join!(
-            client.settings_get_wallpaper_rotation_style(),
-            client.settings_get_wallpaper_rotation_transition()
+            settings.get_wallpaper_rotation_style(),
+            settings.get_wallpaper_rotation_transition()
         );
         let style = style_result.unwrap_or_else(|_| "fill".to_string());
         let transition = transition_result.unwrap_or_else(|_| "none".to_string());
@@ -716,13 +706,13 @@ impl WallpaperRotator {
         println!("壁纸已更换: {}", wallpaper_path);
 
         // 同步更新全局"当前壁纸"（imageId）
-        let _ = crate::daemon_client::get_ipc_client()
-            .settings_set_current_wallpaper_image_id(Some(selected_image.id.clone()))
+        let _ = settings
+            .set_current_wallpaper_image_id(Some(selected_image.id.clone()))
             .await;
 
         // 如果轮播已启用但未运行，启动轮播器
-        let enabled = client
-            .settings_get_wallpaper_rotation_enabled()
+        let enabled = settings
+            .get_wallpaper_rotation_enabled()
             .await
             .unwrap_or(false);
         if enabled && !self.running.load(Ordering::Relaxed) {

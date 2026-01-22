@@ -2,7 +2,6 @@
 
 #[cfg(target_os = "windows")]
 pub async fn fix_wallpaper_window_zorder(app: tauri::AppHandle) {
-    use crate::daemon_client;
     use tauri::Manager;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -10,9 +9,9 @@ pub async fn fix_wallpaper_window_zorder(app: tauri::AppHandle) {
         SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW,
     };
 
-    // 检查是否是窗口模式（IPC-only：从 daemon 读取 settings.wallpaperMode）
-    let is_window_mode = daemon_client::get_ipc_client()
-        .settings_get_wallpaper_mode()
+    // 检查是否是窗口模式（从 Settings 读取 settings.wallpaperMode）
+    let is_window_mode = kabegame_core::settings::Settings::global()
+        .get_wallpaper_mode()
         .await
         .ok()
         .map(|s| s == "window")
@@ -127,7 +126,9 @@ pub fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     // 隐藏主窗口后，修复壁纸窗口的 Z-order（防止壁纸窗口覆盖桌面图标）
     #[cfg(target_os = "windows")]
     {
-        fix_wallpaper_window_zorder(app);
+        tauri::async_runtime::spawn(async move {
+            fix_wallpaper_window_zorder(app).await;
+        });
     }
 
     Ok(())

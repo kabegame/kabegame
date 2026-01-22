@@ -44,29 +44,6 @@ pub async fn get_active_downloads() -> Result<serde_json::Value, String> {
     Ok(serde_json::to_value(downloads).map_err(|e| e.to_string())?)
 }
 
-#[tauri::command]
-#[cfg(feature = "self-hosted")]
-pub fn local_add_task(task: TaskInfo) -> Result<(), String> {
-    Storage::global().add_task(task)
-}
-
-#[tauri::command]
-#[cfg(feature = "self-hosted")]
-pub fn local_update_task(task: TaskInfo) -> Result<(), String> {
-    Storage::global().update_task(task)
-}
-
-#[tauri::command]
-#[cfg(feature = "self-hosted")]
-pub fn local_get_task(task_id: String) -> Result<Option<TaskInfo>, String> {
-    Storage::global().get_task(&task_id)
-}
-
-#[tauri::command]
-#[cfg(feature = "self-hosted")]
-pub fn local_get_all_tasks() -> Result<Vec<TaskInfo>, String> {
-    Storage::global().get_all_tasks()
-}
 
 #[tauri::command]
 pub async fn confirm_task_rhai_dump(task_id: String) -> Result<(), String> {
