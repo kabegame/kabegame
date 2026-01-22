@@ -1,6 +1,6 @@
 use crate::crawler::DownloadQueue;
+use crate::emitter::{EventEmitter, GlobalEmitter};
 use crate::plugin::PluginManager;
-use crate::emitter::{GlobalEmitter, EventEmitter};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -90,6 +90,12 @@ impl TaskScheduler {
     /// 获取当前正在下载的任务列表
     pub fn get_active_downloads(&self) -> Result<Vec<super::ActiveDownloadInfo>, String> {
         self.download_queue.get_active_downloads()
+    }
+
+    /// 提交新任务
+    pub fn submit_task(&self, req: CrawlTaskRequest) -> Result<String, String> {
+        self.enqueue(req.clone())?;
+        Ok(req.task_id)
     }
 
     /// 应用启动时恢复队列：

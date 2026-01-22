@@ -1,55 +1,47 @@
 // 任务相关命令
 
-use crate::daemon_client;
-#[cfg(feature = "self-hosted")]
-use crate::storage::{Storage, TaskInfo};
+use kabegame_core::storage::{Storage, TaskInfo};
+use tauri::AppHandle;
 
 #[tauri::command]
 pub async fn add_run_config(config: serde_json::Value) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .storage_add_run_config(config)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    use kabegame_core::storage::RunConfig;
+    let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
+    let result = Storage::global().add_run_config(run_config)?;
+    Ok(serde_json::to_value(result).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn update_run_config(config: serde_json::Value) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .storage_update_run_config(config)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    use kabegame_core::storage::RunConfig;
+    let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
+    Storage::global().update_run_config(run_config)
 }
 
 #[tauri::command]
 pub async fn get_run_configs() -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .storage_get_run_configs()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let configs = Storage::global().get_run_configs()?;
+    Ok(serde_json::to_value(configs).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn delete_run_config(config_id: String) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .storage_delete_run_config(config_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    Storage::global().delete_run_config(&config_id)
 }
 
 #[tauri::command]
 pub async fn cancel_task(task_id: String) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .task_cancel(task_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    // 任务取消通常需要通知 Scheduler 或 Runtime
+    // 这里我们直接调用 TaskScheduler 的 cancel
+    use kabegame_core::crawler::TaskScheduler;
+    TaskScheduler::global().cancel_task(&task_id)
 }
 
 #[tauri::command]
 pub async fn get_active_downloads() -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .get_active_downloads()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    use kabegame_core::crawler::TaskScheduler;
+    let downloads = TaskScheduler::global().get_active_downloads();
+    Ok(serde_json::to_value(downloads).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -78,26 +70,18 @@ pub fn local_get_all_tasks() -> Result<Vec<TaskInfo>, String> {
 
 #[tauri::command]
 pub async fn confirm_task_rhai_dump(task_id: String) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .storage_confirm_task_rhai_dump(task_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    Storage::global().confirm_task_rhai_dump(&task_id)
 }
 
 #[tauri::command]
 pub async fn clear_finished_tasks() -> Result<usize, String> {
-    daemon_client::get_ipc_client()
-        .storage_clear_finished_tasks()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    Storage::global().clear_finished_tasks()
 }
 
 #[tauri::command]
 pub async fn get_task_images(task_id: String) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .storage_get_task_images(task_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let images = Storage::global().get_task_images(&task_id)?;
+    Ok(serde_json::to_value(images).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -106,33 +90,71 @@ pub async fn get_task_images_paginated(
     page: usize,
     page_size: usize,
 ) -> Result<serde_json::Value, String> {
+    // 这里的 page/page_size 是前端传来的，后端 get_task_images_paginated 接受 offset 和 limit
     let offset = page.saturating_mul(page_size);
-    daemon_client::get_ipc_client()
-        .storage_get_task_images_paginated(task_id, offset, page_size)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let images = Storage::global().get_task_images_paginated(&task_id, offset, page_size)?;
+    Ok(serde_json::to_value(images).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn get_task_image_ids(task_id: String) -> Result<Vec<String>, String> {
-    daemon_client::get_ipc_client()
-        .storage_get_task_image_ids(task_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    Storage::global().get_task_image_ids(&task_id)
 }
 
 #[tauri::command]
 pub async fn get_task_failed_images(task_id: String) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .storage_get_task_failed_images(task_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let images = Storage::global().get_task_failed_images(&task_id)?;
+    Ok(serde_json::to_value(images).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn retry_task_failed_image(failed_id: i64) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .task_retry_failed_image(failed_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    // 重试逻辑通常涉及 Scheduler
+    use kabegame_core::crawler::TaskScheduler;
+    TaskScheduler::global().retry_failed_image(failed_id)
+}
+
+// 补充：add_task, update_task, delete_task, start_task (之前在 daemon.rs 里的)
+#[tauri::command]
+pub async fn get_all_tasks() -> Result<serde_json::Value, String> {
+    let tasks = Storage::global().get_all_tasks()?;
+    Ok(serde_json::to_value(tasks).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+pub async fn get_task(task_id: String) -> Result<serde_json::Value, String> {
+    let task = Storage::global().get_task(&task_id)?;
+    Ok(serde_json::to_value(task).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+pub async fn add_task(task: serde_json::Value) -> Result<(), String> {
+    // 需要转换 serde_json::Value 到 TaskInfo?
+    // Storage::add_task 接受 TaskInfo
+    let task_info: TaskInfo = serde_json::from_value(task).map_err(|e| e.to_string())?;
+    Storage::global().add_task(task_info)
+}
+
+#[tauri::command]
+pub async fn update_task(task: serde_json::Value) -> Result<(), String> {
+    let task_info: TaskInfo = serde_json::from_value(task).map_err(|e| e.to_string())?;
+    Storage::global().update_task(task_info)
+}
+
+#[tauri::command]
+pub async fn delete_task(task_id: String) -> Result<(), String> {
+    Storage::global().delete_task(&task_id)
+}
+
+#[tauri::command]
+pub async fn start_task(task: serde_json::Value) -> Result<(), String> {
+    use kabegame_core::crawler::CrawlTaskRequest;
+    use kabegame_core::crawler::TaskScheduler;
+
+    // 解析 CrawlTaskRequest
+    let req: CrawlTaskRequest = serde_json::from_value(task).map_err(|e| e.to_string())?;
+    let _task_id = TaskScheduler::global()
+        .submit_task(req)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }

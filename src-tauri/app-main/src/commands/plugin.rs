@@ -1,34 +1,28 @@
 // 插件相关命令
 
-use crate::daemon_client;
+use kabegame_core::plugin::{PluginManager, PluginSource};
+use serde_json::Value;
 
 #[tauri::command]
 pub async fn get_plugins() -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .plugin_get_plugins()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let plugin_manager = PluginManager::global();
+    let _ = plugin_manager.refresh_installed_plugins_cache();
+    let plugins = plugin_manager.get_all()?;
+    Ok(serde_json::to_value(plugins).map_err(|e| e.to_string())?)
 }
 
-/// 前端手动刷新"已安装源"：触发后端重扫 plugins-directory 并重建缓存
 #[tauri::command]
 pub async fn refresh_installed_plugins_cache() -> Result<(), String> {
-    // daemon 侧会在 get_plugins 时刷新 installed cache
-    let _ = daemon_client::get_ipc_client()
-        .plugin_get_plugins()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let plugin_manager = PluginManager::global();
+    let _ = plugin_manager.refresh_installed_plugins_cache();
+    let _ = plugin_manager.get_all()?;
     Ok(())
 }
 
-/// 前端安装/更新后可调用：按 pluginId 局部刷新缓存
 #[tauri::command]
 pub async fn refresh_installed_plugin_cache(plugin_id: String) -> Result<(), String> {
-    // 兜底：触发一次 detail 加载，相当于"按 id 刷新缓存"
-    let _ = daemon_client::get_ipc_client()
-        .plugin_get_detail(plugin_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    let plugin_manager = PluginManager::global();
+    let _ = plugin_manager.load_installed_plugin_detail(&plugin_id)?;
     Ok(())
 }
 
@@ -39,42 +33,32 @@ pub fn get_build_mode() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn delete_plugin(plugin_id: String) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .plugin_delete(plugin_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    PluginManager::global().delete(&plugin_id)
 }
 
 #[tauri::command]
 pub async fn get_plugin_vars(plugin_id: String) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .plugin_get_vars(plugin_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let vars = PluginManager::global().get_plugin_vars(&plugin_id)?;
+    Ok(serde_json::to_value(vars).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn get_browser_plugins() -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .plugin_get_browser_plugins()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let plugins = PluginManager::global().load_browser_plugins()?;
+    Ok(serde_json::to_value(plugins).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn get_plugin_sources() -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .plugin_get_plugin_sources()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let sources = PluginManager::global().load_plugin_sources()?;
+    Ok(serde_json::to_value(sources).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn save_plugin_sources(sources: serde_json::Value) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .plugin_save_plugin_sources(sources)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let parsed: Vec<PluginSource> = serde_json::from_value(sources)
+        .map_err(|e| format!("Invalid sources data: {}", e))?;
+    PluginManager::global().save_plugin_sources(&parsed)
 }
 
 #[tauri::command]
@@ -82,10 +66,10 @@ pub async fn get_store_plugins(
     source_id: Option<String>,
     force_refresh: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .plugin_get_store_plugins(source_id, force_refresh.unwrap_or(false))
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let plugins = PluginManager::global()
+        .fetch_store_plugins(source_id.as_deref(), force_refresh.unwrap_or(false))
+        .await?;
+    Ok(serde_json::to_value(plugins).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -95,27 +79,30 @@ pub async fn get_plugin_detail(
     sha256: Option<String>,
     size_bytes: Option<u64>,
 ) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .plugin_get_detail_for_ui(plugin_id, download_url, sha256, size_bytes)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let plugin_manager = PluginManager::global();
+    let res = match download_url {
+        Some(url) => {
+            plugin_manager
+                .load_remote_plugin_detail(&plugin_id, &url, sha256.as_deref(), size_bytes)
+                .await
+        }
+        None => plugin_manager.load_installed_plugin_detail(&plugin_id),
+    };
+    let detail = res?;
+    Ok(serde_json::to_value(detail).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn validate_plugin_source(index_url: String) -> Result<(), String> {
-    let _ = daemon_client::get_ipc_client()
-        .plugin_validate_source(index_url)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
+    PluginManager::global().validate_store_source_index(&index_url).await?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn preview_import_plugin(zip_path: String) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .plugin_preview_import(zip_path)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let path = std::path::PathBuf::from(&zip_path);
+    let preview = PluginManager::global().preview_import_from_zip(&path)?;
+    Ok(serde_json::to_value(preview).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -124,35 +111,33 @@ pub async fn preview_store_install(
     sha256: Option<String>,
     size_bytes: Option<u64>,
 ) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .plugin_preview_store_install(download_url, sha256, size_bytes)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let plugin_manager = PluginManager::global();
+    let tmp = plugin_manager
+        .download_plugin_to_temp(&download_url, sha256.as_deref(), size_bytes)
+        .await?;
+    let preview = plugin_manager.preview_import_from_zip(&tmp)?;
+    Ok(serde_json::json!({
+        "tmpPath": tmp.to_string_lossy().to_string(),
+        "preview": preview,
+    }))
 }
 
 #[tauri::command]
 pub async fn import_plugin_from_zip(zip_path: String) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .plugin_import(zip_path)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
-        .map(|plugin_id| serde_json::json!({ "pluginId": plugin_id }))
+    let path = std::path::Path::new(&zip_path);
+    let plugin = PluginManager::global().install_plugin_from_zip(path)?;
+    Ok(serde_json::json!({ "pluginId": plugin.id }))
 }
 
 #[tauri::command]
 pub async fn install_browser_plugin(plugin_id: String) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .plugin_install_browser_plugin(plugin_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    let plugin = PluginManager::global().install_browser_plugin(plugin_id)?;
+    Ok(serde_json::to_value(plugin).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn get_plugin_image(plugin_id: String, image_path: String) -> Result<Vec<u8>, String> {
-    daemon_client::get_ipc_client()
-        .plugin_get_image_for_detail(plugin_id, image_path, None, None, None)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    PluginManager::global().load_plugin_image_for_detail(&plugin_id, None, None, None, &image_path).await
 }
 
 #[tauri::command]
@@ -163,24 +148,21 @@ pub async fn get_plugin_image_for_detail(
     sha256: Option<String>,
     size_bytes: Option<u64>,
 ) -> Result<Vec<u8>, String> {
-    daemon_client::get_ipc_client()
-        .plugin_get_image_for_detail(plugin_id, image_path, download_url, sha256, size_bytes)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    PluginManager::global().load_plugin_image_for_detail(
+        &plugin_id, 
+        download_url.as_deref(), 
+        sha256.as_deref(), 
+        size_bytes, 
+        &image_path
+    ).await
 }
 
 #[tauri::command]
 pub async fn get_plugin_icon(plugin_id: String) -> Result<Option<Vec<u8>>, String> {
-    daemon_client::get_ipc_client()
-        .plugin_get_icon(plugin_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    PluginManager::global().get_plugin_icon_by_id(&plugin_id)
 }
 
 #[tauri::command]
 pub async fn get_remote_plugin_icon(download_url: String) -> Result<Option<Vec<u8>>, String> {
-    daemon_client::get_ipc_client()
-        .plugin_get_remote_icon_v2(download_url)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    PluginManager::global().fetch_remote_plugin_icon_v2(&download_url).await
 }

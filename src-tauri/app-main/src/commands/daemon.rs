@@ -92,45 +92,7 @@ pub async fn delete_album(album_id: String) -> Result<(), String> {
         .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
-#[tauri::command]
-pub async fn get_all_tasks() -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .storage_get_all_tasks()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
-}
-
-#[tauri::command]
-pub async fn get_task(task_id: String) -> Result<serde_json::Value, String> {
-    daemon_client::get_ipc_client()
-        .storage_get_task(task_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
-}
-
-#[tauri::command]
-pub async fn add_task(task: serde_json::Value) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .storage_add_task(task)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
-}
-
-#[tauri::command]
-pub async fn update_task(task: serde_json::Value) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .storage_update_task(task)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
-}
-
-#[tauri::command]
-pub async fn delete_task(task_id: String) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .storage_delete_task(task_id)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
-}
+// Moved to task.rs
 
 #[tauri::command]
 pub async fn get_images_range(offset: usize, limit: usize) -> Result<serde_json::Value, String> {
@@ -158,11 +120,4 @@ pub async fn get_image_by_id(image_id: String) -> Result<serde_json::Value, Stri
         .map_err(|e| format!("Daemon unavailable: {}", e))
 }
 
-#[tauri::command]
-pub async fn start_task(task: serde_json::Value) -> Result<(), String> {
-    let _task_id = daemon_client::get_ipc_client()
-        .task_start(task)
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    Ok(())
-}
+// Moved to task.rs

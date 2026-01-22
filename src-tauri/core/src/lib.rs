@@ -14,7 +14,7 @@ pub mod gallery;
 pub mod kgpg;
 pub mod plugin;
 pub mod providers;
-pub mod runtime;
+
 pub mod settings;
 pub mod shell_open;
 pub mod storage;

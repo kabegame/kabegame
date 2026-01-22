@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 
@@ -17,9 +18,20 @@ mod storage;
 mod tray;
 mod wallpaper;
 
+// Copied from daemon
+mod connection_handler;
+mod dedupe_service;
+mod handlers;
+mod server;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod server_unix;
+#[cfg(target_os = "windows")]
+mod server_windows;
+#[cfg(all(feature = "virtual-driver"))]
+mod vd_listener;
+
 use commands::album::*;
 use commands::daemon::*;
-use commands::filesystem::{open_file_folder, open_file_path};
 use commands::image::*;
 use commands::misc::{clear_user_data, get_gallery_image, open_plugin_editor_window};
 use commands::plugin::*;
@@ -31,9 +43,6 @@ use commands::settings::{set_album_drive_enabled, set_album_drive_mount_point};
 #[cfg(feature = "self-hosted")]
 use commands::storage::*;
 use commands::task::*;
-#[cfg(feature = "self-hosted")]
-use commands::task::{local_add_task, local_get_all_tasks, local_get_task, local_update_task};
-use commands::wallpaper::*;
 #[cfg(target_os = "windows")]
 use commands::wallpaper_engine::{export_album_to_we_project, export_images_to_we_project};
 #[cfg(target_os = "windows")]
@@ -42,68 +51,212 @@ use commands::window::set_main_sidebar_blur;
 use commands::window::wallpaper_window_ready;
 use commands::window::*;
 
-// ==================== Daemon IPC 命令（客户端侧 wrappers）====================
-// 已迁移到 commands/daemon.rs
+use crate::commands::misc::*;
 
-#[cfg(feature = "self-hosted")]
-use kabegame_core::settings::Settings;
-// app-main 默认只做 IPC client：不要直接依赖 kabegame_core::plugin（除非 self-hosted）
-#[cfg(feature = "self-hosted")]
-use kabegame_core::plugin;
-#[cfg(feature = "self-hosted")]
-use plugin::PluginManager;
-#[cfg(feature = "self-hosted")]
-use storage::images::PaginatedImages;
-#[cfg(feature = "self-hosted")]
-use storage::{Album, ImageInfo, Storage, TaskInfo};
-
-// Wallpaper Engine 导出：走 daemon IPC（不直接依赖 core 的 Settings/Storage）
-#[cfg(target_os = "windows")]
-use wallpaper::WallpaperWindow;
-
-#[cfg(all(feature = "virtual-driver", feature = "self-hosted"))]
-mod virtual_driver;
-// 导入trait保证可用
-#[cfg(all(feature = "virtual-driver", feature = "self-hosted"))]
-use virtual_driver::{drive_service::VirtualDriveServiceTrait, VirtualDriveService};
-
-use crate::commands::misc::{
-    cancel_dedupe_gallery_by_hash_batched, start_dedupe_gallery_by_hash_batched,
+// Daemon Imports
+use crate::server::{EventBroadcaster, SubscriptionManager};
+use dedupe_service::DedupeService;
+use handlers::{dispatch_request, Store};
+use kabegame_core::{
+    crawler::{DownloadQueue, TaskScheduler},
+    emitter::GlobalEmitter,
+    ipc::{ipc, CliIpcRequest},
+    plugin::PluginManager,
+    providers::{ProviderCacheConfig, ProviderRuntime},
+    settings::Settings,
+    storage::Storage,
+    virtual_driver::VirtualDriveService,
 };
 
-// 任务失败图片（用于 TaskDetail 展示 + 重试）
+// 初始化后端服务（原 Daemon 逻辑）
+async fn init_backend_server() -> Result<(), String> {
+    println!(
+        "Kabegame Backend (Embedded Daemon) v{}",
+        env!("CARGO_PKG_VERSION")
+    );
+    println!("Initializing...");
 
-// ---- wrappers: tauri::command 必须在当前 app crate 中定义，不能直接复用依赖 crate 的 command 宏产物 ----
-// 所有命令已迁移到 commands 模块
+    // 初始化全局 PluginManager
+    PluginManager::init_global()
+        .map_err(|e| format!("Failed to initialize plugin manager: {}", e))?;
+    println!("  ✓ Plugin manager initialized");
 
-// =========================
-// Startup steps (split setup into small functions)
-// =========================
-// 启动步骤函数已迁移到 startup.rs
-
-fn startup_steps(app: &mut tauri::App) {
-    let is_cleaning_data = startup::startup_step_cleanup_user_data_if_marked(app.app_handle());
-    #[cfg(feature = "self-hosted")]
-    startup::startup_step_manage_plugin_manager(app);
-    #[cfg(feature = "self-hosted")]
-    startup::startup_step_manage_storage(app)?;
-    #[cfg(all(feature = "virtual-driver", feature = "self-hosted"))]
-    startup::startup_step_manage_virtual_drive_service(app);
-    #[cfg(feature = "self-hosted")]
-    startup::startup_step_manage_provider_runtime(app);
-    #[cfg(feature = "self-hosted")]
-    startup::startup_step_manage_settings(app);
-    #[cfg(feature = "self-hosted")]
-    startup::startup_step_init_global_emitter(app.app_handle());
-    #[cfg(feature = "self-hosted")]
-    startup::startup_step_warm_provider_cache(app.app_handle());
-    #[cfg(feature = "self-hosted")]
-    {
-        // 本地 dedupe manager 已被 daemon-side DedupeService 替代
-        // TODO: self hosted 需要加回来
+    // 初始化全局 Storage
+    Storage::init_global().map_err(|e| format!("Failed to initialize storage: {}", e))?;
+    // 将 pending 或 running 的任务标记为失败
+    let failed_count = Storage::global()
+        .mark_pending_running_tasks_as_failed()
+        .unwrap_or(0);
+    if failed_count > 0 {
+        println!("  ✓ Marked {failed_count} pending/running task(s) as failed");
     }
-    startup::startup_step_restore_main_window_state(app.app_handle(), is_cleaning_data);
-    startup::startup_step_manage_wallpaper_components(app);
+    println!("  ✓ Storage initialized");
+
+    Settings::init_global().map_err(|e| format!("Failed to initialize settings: {}", e))?;
+    println!("  ✓ Settings initialized");
+
+    // 创建事件广播器（保留最近 1000 个事件）
+    let broadcaster = Arc::new(EventBroadcaster::new(1000));
+    println!("  ✓ Event broadcaster initialized");
+
+    // 创建订阅管理器
+    let subscription_manager = Arc::new(SubscriptionManager::new(broadcaster.clone()));
+    println!("  ✓ Subscription manager initialized");
+
+    // 初始化全局 emitter
+    GlobalEmitter::init_global_ipc(broadcaster.clone())
+        .map_err(|e| format!("Failed to initialize global emitter: {}", e))?;
+    println!("  ✓ Global emitter initialized");
+
+    println!("  ✓ Runtime initialized");
+
+    // DownloadQueue：现在使用全局 emitter
+    let download_queue = Arc::new(DownloadQueue::new().await);
+    println!("  ✓ DownloadQueue initialized");
+
+    // TaskScheduler：负责处理 PluginRun 的任务队列（全局单例）
+    TaskScheduler::init_global(download_queue.clone())
+        .map_err(|e| format!("Failed to initialize task scheduler: {}", e))?;
+    println!("  ✓ TaskScheduler initialized");
+
+    // 创建请求上下文
+    let dedupe_service = Arc::new(DedupeService::new());
+
+    // 初始化全局 ProviderRuntime
+    {
+        let mut cfg = ProviderCacheConfig::default();
+        if let Ok(dir) = std::env::var("KABEGAME_PROVIDER_DB_DIR") {
+            cfg.db_dir = std::path::PathBuf::from(dir);
+        }
+
+        // 尝试初始化 ProviderRuntime
+        match ProviderRuntime::init_global(cfg.clone()) {
+            Ok(()) => {}
+            Err(e) => {
+                // 初始化失败，检查是否是数据库锁定错误
+                let error_msg = format!("{}", e);
+                let is_lock_error = error_msg.contains("could not acquire lock")
+                    || error_msg.contains("Resource temporarily unavailable")
+                    || error_msg.contains("WouldBlock");
+
+                if is_lock_error {
+                    // 如果是锁定错误，检查是否有其他 daemon 正在运行
+                    eprintln!(
+                        "[providers] 检测到数据库锁定错误，检查是否有其他 daemon 正在运行..."
+                    );
+                    match ipc::request(CliIpcRequest::Status).await {
+                        Ok(_) => {
+                            eprintln!(
+                                "错误: ProviderRuntime 初始化失败，因为已有其他 daemon 正在运行。"
+                            );
+                            return Err(format!("另一个 daemon 实例正在运行（数据库被锁定）"));
+                        }
+                        Err(_) => {
+                            eprintln!("[providers] 无法连接到其他 daemon，但检测到数据库锁定");
+                        }
+                    }
+                }
+
+                eprintln!(
+                    "[providers] init ProviderRuntime failed, fallback to default cfg: {}",
+                    e
+                );
+
+                // 尝试使用默认配置
+                match ProviderRuntime::init_global(ProviderCacheConfig::default()) {
+                    Ok(()) => {}
+                    Err(e2) => {
+                        return Err(format!("ProviderRuntime init failed: {}", e2));
+                    }
+                }
+            }
+        }
+    }
+    println!("  ✓ ProviderRuntime initialized");
+
+    // Virtual Drive（仅 Windows + feature 启用时）
+    #[cfg(feature = "virtual-driver")]
+    {
+        VirtualDriveService::init_global()
+            .map_err(|e| format!("Failed to init VD service: {}", e))?;
+    }
+    #[cfg(feature = "virtual-driver")]
+    let virtual_drive_service = VirtualDriveService::global();
+    #[cfg(feature = "virtual-driver")]
+    println!("  ✓ Virtual drive support enabled");
+
+    #[cfg(feature = "virtual-driver")]
+    let ctx = Arc::new(Store {
+        broadcaster: broadcaster.clone(),
+        subscription_manager: subscription_manager.clone(),
+        dedupe_service,
+        virtual_drive_service: virtual_drive_service.clone(),
+    });
+
+    #[cfg(not(feature = "virtual-driver"))]
+    let ctx = Arc::new(Store {
+        broadcaster: broadcaster.clone(),
+        subscription_manager: subscription_manager.clone(),
+        dedupe_service,
+        virtual_drive_service: Arc::new(VirtualDriveService::default()),
+    });
+
+    // 启动虚拟磁盘事件监听器（仅在 Windows + virtual-driver feature 启用时）
+    #[cfg(feature = "virtual-driver")]
+    {
+        tokio::spawn(vd_listener::start_vd_event_listener(
+            broadcaster.clone(),
+            virtual_drive_service.clone(),
+        ));
+        println!("  ✓ Virtual drive event listener started");
+
+        // 启动时根据设置自动挂载画册盘
+        let vd_service_for_mount = virtual_drive_service.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+            let enabled = Settings::global()
+                .get_album_drive_enabled()
+                .await
+                .unwrap_or(false);
+            let mount_point = Settings::global()
+                .get_album_drive_mount_point()
+                .await
+                .unwrap_or_default();
+
+            if enabled && !mount_point.is_empty() {
+                use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+                let mount_result = tokio::task::spawn_blocking({
+                    let vd_service = vd_service_for_mount.clone();
+                    let mount_point = mount_point.clone();
+                    move || vd_service.mount(mount_point.as_str(), Storage::global().clone())
+                })
+                .await;
+
+                if let Err(e) = mount_result {
+                    eprintln!("Auto mount failed: {}", e);
+                } else if let Ok(Err(e)) = mount_result {
+                    eprintln!("Auto mount failed: {}", e);
+                }
+            }
+        });
+    }
+
+    println!("Starting IPC server...");
+
+    server::serve_with_events(
+        move |req| {
+            let ctx = ctx.clone();
+            async move {
+                eprintln!("[DEBUG] Backend 收到请求: {:?}", req);
+                let resp = dispatch_request(req, ctx).await;
+                resp
+            }
+        },
+        Some(broadcaster.clone() as Arc<dyn std::any::Any + Send + Sync>),
+        Some(subscription_manager.clone()),
+    )
+    .await
 }
 
 fn main() {
@@ -115,43 +268,63 @@ fn main() {
             // 启动连接状态监听任务（监听 IPC 连接状态变化）
             daemon_client::spawn_connection_status_watcher(app.app_handle().clone());
 
-            // 确保 daemon 已启动并可用（如果不可用则自动启动）
-            // 连接成功后启动事件监听器（统一连接入口）
-            let app_handle_for_daemon = app.app_handle().clone();
-            startup_steps(app);
+            // 【关键修改】启动内置 Backend Server (原 Daemon)
             tauri::async_runtime::spawn(async move {
-                println!("尝试连接 daemon...");
-                // 先尝试检查 daemon 状态
+                if let Err(e) = init_backend_server().await {
+                    eprintln!("Backend Server Fatal Error: {}", e);
+                    // 考虑退出应用？
+                }
+            });
+
+            // UI 相关的初始化步骤（保留清理、恢复窗口状态等）
+            let is_cleaning_data =
+                startup::startup_step_cleanup_user_data_if_marked(app.app_handle());
+            startup::startup_step_restore_main_window_state(app.app_handle(), is_cleaning_data);
+            startup::startup_step_manage_wallpaper_components(app);
+
+            // 注意：我们不再调用 startup::manage_plugin_manager 等，因为 init_backend_server 已经处理了
+
+            // 连接自身（Loopback IPC）
+            let app_handle_for_daemon = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                println!("UI Client 尝试连接 Backend Server...");
+
+                // 循环重试连接（等待 Server 启动）
                 match daemon_client::try_connect_daemon().await {
                     Ok(_) => {
                         let timestamp = SystemTime::now()
                             .duration_since(UNIX_EPOCH)
                             .unwrap()
                             .as_millis();
-                        println!("daemon 已就绪（status 检查成功）: {}", timestamp);
-                        // 发送事件通知前端 daemon 已就绪
+                        println!("Backend 已就绪: {}", timestamp);
                         let _ = app_handle_for_daemon.emit("daemon-ready", serde_json::json!({}));
-                        // 连接成功，启动事件监听器（使用统一连接）
                         daemon_client::init_event_listeners(app_handle_for_daemon.clone()).await;
                     }
                     Err(e) => {
-                        // status 检查失败，尝试重启 daemon
-                        println!("daemon 不可用，尝试重启...: {}", e);
-                        match daemon_client::ensure_daemon_ready().await {
-                            Ok(_) => {
-                                eprintln!("daemon 已就绪（重启成功）");
-                                // 连接成功，启动事件监听器（使用统一连接）
-                                daemon_client::init_event_listeners(app_handle_for_daemon.clone())
+                        println!("连接 Backend 失败（将自动重试）: {}", e);
+                        // try_connect_daemon 内部可能没有重试循环，这里可以简单处理
+                        // 但由于 daemon_client 实际上会被前端反复调用，且 init_event_listeners 很重要
+                        // 我们应该用 ensure_daemon_ready 的逻辑，但 ensure_daemon_ready 会尝试启动外部进程
+                        // 这里我们只需要等待内部线程启动即可。
+
+                        // 简单的重试逻辑
+                        let mut retries = 0;
+                        while retries < 10 {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                            match daemon_client::try_connect_daemon().await {
+                                Ok(_) => {
+                                    println!("Backend 已就绪 (重试 {})", retries);
+                                    let _ = app_handle_for_daemon
+                                        .emit("daemon-ready", serde_json::json!({}));
+                                    daemon_client::init_event_listeners(
+                                        app_handle_for_daemon.clone(),
+                                    )
                                     .await;
-                                // 发送事件通知前端 daemon 已就绪
-                                let _ = app_handle_for_daemon
-                                    .emit("daemon-ready", serde_json::json!({}));
-                            }
-                            Err(_) => {
-                                eprintln!("[WARN] 启动 daemon 失败，进入离线状态");
-                                // 发送事件通知前端 daemon 离线
-                                let _ = app_handle_for_daemon
-                                    .emit("daemon-offline", serde_json::json!({}));
+                                    break;
+                                }
+                                Err(_) => {
+                                    retries += 1;
+                                }
                             }
                         }
                     }
@@ -161,7 +334,6 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // ========== Daemon IPC 命令（需要 daemon 运行）==========
             check_daemon_status,
             reconnect_daemon,
             get_images,
@@ -174,21 +346,17 @@ fn main() {
             add_task,
             update_task,
             delete_task,
-            // ========== 仍保留的本地命令（非 daemon 范围）==========
             confirm_task_rhai_dump,
             clear_finished_tasks,
             get_task_images,
             get_task_images_paginated,
             get_task_image_ids,
             get_task_failed_images,
-            // retry_task_failed_image（本地下载队列）已迁移到 daemon
-            // 原有命令
             get_plugins,
             refresh_installed_plugins_cache,
             refresh_installed_plugin_cache,
             get_build_mode,
             delete_plugin,
-            // crawl_images_command（本地任务调度）已迁移到 daemon
             get_images_range,
             browse_gallery_provider,
             get_image_by_id,
@@ -198,153 +366,7 @@ fn main() {
             get_album_images,
             get_album_image_ids,
             get_album_preview,
-            get_album_counts,
-            commands::filesystem::open_explorer,
-            get_images_count,
-            delete_image,
-            remove_image,
-            batch_delete_images,
-            batch_remove_images,
-            // start/cancel_dedupe_*（本地去重）已迁移到 daemon
-            toggle_image_favorite,
-            update_album_images_order,
-            open_file_path,
-            open_file_folder,
-            set_wallpaper,
-            set_wallpaper_by_image_id,
-            get_current_wallpaper_image_id,
-            clear_current_wallpaper_image_id,
-            get_image_local_path_by_id,
-            get_current_wallpaper_path,
-            #[cfg(feature = "self-hosted")]
-            migrate_images_from_json,
-            get_browser_plugins,
-            get_plugin_sources,
-            save_plugin_sources,
-            get_store_plugins,
-            get_plugin_detail,
-            validate_plugin_source,
-            preview_import_plugin,
-            preview_store_install,
-            import_plugin_from_zip,
-            install_browser_plugin,
-            get_plugin_image,
-            get_plugin_image_for_detail,
-            get_plugin_icon,
-            get_remote_plugin_icon,
-            get_gallery_image,
-            get_plugin_vars,
-            get_favorite_album_id,
-            // ========== Settings getters（前端 settings store 依赖）==========
-            // deprecated 但保留：避免旧前端直接报 command not found
-            get_settings,
-            get_setting,
-            get_auto_launch,
-            get_max_concurrent_downloads,
-            get_network_retry_count,
-            get_image_click_action,
-            get_gallery_image_aspect_ratio,
-            get_auto_deduplicate,
-            get_default_download_dir,
-            get_wallpaper_engine_dir,
-            get_wallpaper_rotation_enabled,
-            get_wallpaper_rotation_album_id,
-            get_wallpaper_rotation_interval_minutes,
-            get_wallpaper_rotation_mode,
-            get_wallpaper_rotation_style,
-            get_wallpaper_rotation_transition,
-            get_wallpaper_style_by_mode,
-            get_wallpaper_transition_by_mode,
-            get_wallpaper_mode,
-            get_window_state,
-            #[cfg(feature = "virtual-driver")]
-            get_album_drive_enabled,
-            #[cfg(feature = "virtual-driver")]
-            get_album_drive_mount_point,
-            set_auto_launch,
-            #[cfg(feature = "virtual-driver")]
-            set_album_drive_enabled,
-            #[cfg(feature = "virtual-driver")]
-            set_album_drive_mount_point,
-            set_max_concurrent_downloads,
-            set_network_retry_count,
-            set_image_click_action,
-            set_gallery_image_aspect_ratio,
-            get_desktop_resolution,
-            start_task,
-            set_auto_deduplicate,
-            set_default_download_dir,
-            set_wallpaper_engine_dir,
-            get_wallpaper_engine_myprojects_dir,
-            open_plasma_wallpaper_settings,
-            get_default_images_dir,
-            get_active_downloads,
-            add_run_config,
-            update_run_config,
-            get_run_configs,
-            delete_run_config,
-            cancel_task,
-            copy_files_to_clipboard,
-            set_wallpaper_rotation_enabled,
-            set_wallpaper_rotation_album_id,
-            start_wallpaper_rotation,
-            set_wallpaper_rotation_interval_minutes,
-            set_wallpaper_rotation_mode,
-            set_wallpaper_style,
-            set_wallpaper_rotation_transition,
-            set_wallpaper_mode,
-            get_wallpaper_rotator_status,
-            get_native_wallpaper_styles,
-            #[cfg(target_os = "windows")]
-            wallpaper_window_ready,
-            set_main_sidebar_blur,
-            hide_main_window,
-            open_plugin_editor_window,
-            #[cfg(target_os = "windows")]
-            fix_wallpaper_zorder,
-            start_dedupe_gallery_by_hash_batched,
-            cancel_dedupe_gallery_by_hash_batched,
-            // Wallpaper Engine 导出
-            #[cfg(target_os = "windows")]
-            export_album_to_we_project,
-            #[cfg(target_os = "windows")]
-            export_images_to_we_project,
-            clear_user_data,
-            // Debug: 生成大量测试图片数据
-            // 注意：debug_clone_images 依赖本地 storage 扩展（已迁移期移除）
         ])
-        .on_window_event(|window, event| {
-            use tauri::WindowEvent;
-            // 监听窗口关闭事件
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
-                    // 阻止默认关闭行为
-                    api.prevent_close();
-                    // 不保存 window_state：用户要求每次居中弹出
-
-                    // 隐藏主窗口（直接隐藏，不关闭）
-                    if let Err(e) = window.hide() {
-                        eprintln!("隐藏主窗口失败: {}", e);
-                    } else {
-                        // 隐藏主窗口后，修复壁纸窗口的 Z-order（防止壁纸窗口覆盖桌面图标）
-                        #[cfg(target_os = "windows")]
-                        {
-                            let app_handle = window.app_handle().clone();
-                            tauri::async_runtime::spawn(async move {
-                                commands::window::fix_wallpaper_window_zorder(app_handle).await;
-                            });
-                        }
-                    }
-                } else if window.label().starts_with("wallpaper") {
-                    api.prevent_close();
-                } else if window.label() == "plugin-editor" {
-                    // 插件编辑器窗口：阻止销毁，只隐藏
-                    // 避免重新打开时需要动态创建窗口导致 Monaco editor 初始化问题
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
-            }
-        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

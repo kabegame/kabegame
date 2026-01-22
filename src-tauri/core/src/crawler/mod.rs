@@ -6,8 +6,8 @@ pub use task_scheduler::{CrawlTaskRequest, TaskScheduler};
 
 use crate::plugin::Plugin;
 use crate::plugin::{VarDefinition, VarOption};
-use crate::runtime::global_emitter::GlobalEmitter;
-use crate::runtime::EventEmitter;
+use crate::emitter::GlobalEmitter;
+use crate::emitter::EventEmitter;
 use crate::settings::Settings;
 use crate::storage::Storage;
 use reqwest;

@@ -1,8 +1,12 @@
 // 设置相关命令
 
-use crate::daemon_client;
-#[cfg(feature = "self-hosted")]
-use crate::storage::Storage;
+use kabegame_core::settings::Settings;
+#[cfg(feature = "virtual-driver")]
+use kabegame_core::storage::Storage;
+#[cfg(feature = "virtual-driver")]
+use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+#[cfg(feature = "virtual-driver")]
+use kabegame_core::virtual_driver::VirtualDriveService;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
 
@@ -21,175 +25,167 @@ pub async fn get_setting(_key: String) -> Result<serde_json::Value, String> {
 // 添加细粒度 getter commands
 #[tauri::command]
 pub async fn get_auto_launch() -> Result<bool, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_auto_launch()
+    Settings::global()
+        .get_auto_launch()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_max_concurrent_downloads() -> Result<u32, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_max_concurrent_downloads()
+    Settings::global()
+        .get_max_concurrent_downloads()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_network_retry_count() -> Result<u32, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_network_retry_count()
+    Settings::global()
+        .get_network_retry_count()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_image_click_action() -> Result<String, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_image_click_action()
+    Settings::global()
+        .get_image_click_action()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_gallery_image_aspect_ratio() -> Result<Option<String>, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_gallery_image_aspect_ratio()
+    Settings::global()
+        .get_gallery_image_aspect_ratio()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_auto_deduplicate() -> Result<bool, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_auto_deduplicate()
+    Settings::global()
+        .get_auto_deduplicate()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_default_download_dir() -> Result<Option<String>, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_default_download_dir()
+    Settings::global()
+        .get_default_download_dir()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_wallpaper_engine_dir() -> Result<Option<String>, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_wallpaper_engine_dir()
+    Settings::global()
+        .get_wallpaper_engine_dir()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_wallpaper_rotation_enabled() -> Result<bool, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_wallpaper_rotation_enabled()
+    Settings::global()
+        .get_wallpaper_rotation_enabled()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_wallpaper_rotation_album_id() -> Result<Option<String>, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_wallpaper_rotation_album_id()
+    Settings::global()
+        .get_wallpaper_rotation_album_id()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_wallpaper_rotation_interval_minutes() -> Result<u32, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_wallpaper_rotation_interval_minutes()
+    Settings::global()
+        .get_wallpaper_rotation_interval_minutes()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_wallpaper_rotation_mode() -> Result<String, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_wallpaper_rotation_mode()
+    Settings::global()
+        .get_wallpaper_rotation_mode()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_wallpaper_rotation_style() -> Result<String, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_wallpaper_rotation_style()
+    Settings::global()
+        .get_wallpaper_rotation_style()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_wallpaper_rotation_transition() -> Result<String, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_wallpaper_rotation_transition()
+    Settings::global()
+        .get_wallpaper_rotation_transition()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_wallpaper_style_by_mode(
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_wallpaper_style_by_mode()
+    Settings::global()
+        .get_wallpaper_style_by_mode()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_wallpaper_transition_by_mode(
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_wallpaper_transition_by_mode()
+    Settings::global()
+        .get_wallpaper_transition_by_mode()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_wallpaper_mode() -> Result<String, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_wallpaper_mode()
+    Settings::global()
+        .get_wallpaper_mode()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_window_state() -> Result<Option<serde_json::Value>, String> {
-    let window_state = daemon_client::get_ipc_client()
-        .settings_get_window_state()
+    let window_state = Settings::global()
+        .get_window_state()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    let v = match serde_json::to_value(window_state) {
-        Ok(v) => v,
-        Err(e) => return Err(format!("Failed to parse response: {}", e)),
-    };
-    if v.is_null() {
-        Ok(None)
-    } else {
-        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-    }
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::to_value(window_state).ok())
 }
 
 #[cfg(feature = "virtual-driver")]
 #[tauri::command]
 pub async fn get_album_drive_enabled() -> Result<bool, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_album_drive_enabled()
+    Settings::global()
+        .get_album_drive_enabled()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(feature = "virtual-driver")]
 #[tauri::command]
 pub async fn get_album_drive_mount_point() -> Result<String, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_album_drive_mount_point()
+    Settings::global()
+        .get_album_drive_mount_point()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -200,59 +196,98 @@ pub fn get_favorite_album_id() -> Result<String, String> {
 #[tauri::command]
 #[cfg(feature = "virtual-driver")]
 pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .settings_set_album_drive_enabled(enabled)
+    let settings = Settings::global();
+
+    if enabled {
+        // 启用：先挂载虚拟盘
+        let mount_point = settings
+            .get_album_drive_mount_point()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let vd_service = VirtualDriveService::global();
+        let mount_result = tokio::task::spawn_blocking({
+            let mount_point = mount_point.clone();
+            move || vd_service.mount(mount_point.as_str(), Storage::global().clone())
+        })
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| format!("Task join error: {}", e))?;
+
+        if let Err(e) = mount_result {
+            return Err(e);
+        }
+    } else {
+        // 禁用：先卸载虚拟盘
+        let mount_point = settings
+            .get_album_drive_mount_point()
+            .await
+            .map_err(|e| e.to_string())?;
+        let vd_service = VirtualDriveService::global();
+        let unmount_result = tokio::task::spawn_blocking({
+            let mount_point = mount_point.clone();
+            move || vd_service.unmount()
+        })
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?;
+
+        if let Err(e) = unmount_result {
+            return Err(e);
+        }
+    }
+
+    settings
+        .set_album_drive_enabled(enabled)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[cfg(feature = "virtual-driver")]
 pub async fn set_album_drive_mount_point(mount_point: String) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .settings_set_album_drive_mount_point(mount_point)
+    Settings::global()
+        .set_album_drive_mount_point(mount_point)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn set_auto_launch(enabled: bool) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .settings_set_auto_launch(enabled)
+    Settings::global()
+        .set_auto_launch(enabled)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .settings_set_max_concurrent_downloads(count)
+    Settings::global()
+        .set_max_concurrent_downloads(count)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn set_network_retry_count(count: u32) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .settings_set_network_retry_count(count)
+    Settings::global()
+        .set_network_retry_count(count)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn set_image_click_action(action: String) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .settings_set_image_click_action(action)
+    Settings::global()
+        .set_image_click_action(action)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn set_gallery_image_aspect_ratio(aspect_ratio: Option<String>) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .settings_set_gallery_image_aspect_ratio(aspect_ratio)
+    Settings::global()
+        .set_gallery_image_aspect_ratio(aspect_ratio)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -273,43 +308,42 @@ pub fn get_desktop_resolution() -> Result<(u32, u32), String> {
 
 #[tauri::command]
 pub async fn set_auto_deduplicate(enabled: bool) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .settings_set_auto_deduplicate(enabled)
+    Settings::global()
+        .set_auto_deduplicate(enabled)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn set_default_download_dir(dir: Option<String>) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .settings_set_default_download_dir(dir)
+    Settings::global()
+        .set_default_download_dir(dir)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn set_wallpaper_engine_dir(dir: Option<String>) -> Result<(), String> {
-    daemon_client::get_ipc_client()
-        .settings_set_wallpaper_engine_dir(dir)
+    Settings::global()
+        .set_wallpaper_engine_dir(dir)
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_wallpaper_engine_myprojects_dir() -> Result<Option<String>, String> {
-    let v = daemon_client::get_ipc_client()
-        .settings_get_wallpaper_engine_myprojects_dir()
+    Settings::global()
+        .get_wallpaper_engine_myprojects_dir()
         .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))?;
-    serde_json::from_value(v).map_err(|e| format!("Invalid response: {e}"))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_default_images_dir() -> Result<String, String> {
-    daemon_client::get_ipc_client()
-        .settings_get_default_images_dir()
-        .await
-        .map_err(|e| format!("Daemon unavailable: {}", e))
+    Ok(kabegame_core::storage::Storage::global()
+        .get_images_dir()
+        .to_string_lossy()
+        .to_string())
 }
 
 /// 打开 Plasma 壁纸配置面板

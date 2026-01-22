@@ -1,5 +1,5 @@
+use crate::emitter::{EventEmitter, GlobalEmitter};
 use crate::plugin::Plugin;
-use crate::runtime::{global_emitter::GlobalEmitter, EventEmitter};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -338,7 +338,7 @@ impl RhaiCrawlerRuntime {
         {
             let task_id_for_print = Arc::clone(&task_id);
             engine.on_print(move |s: &str| {
-                use crate::runtime::EventEmitter;
+                use crate::emitter::EventEmitter;
                 let tid = match task_id_for_print.lock() {
                     Ok(g) => g.clone(),
                     Err(e) => e.into_inner().clone(),
@@ -349,7 +349,7 @@ impl RhaiCrawlerRuntime {
         {
             let task_id_for_debug = Arc::clone(&task_id);
             engine.on_debug(move |s: &str, src: Option<&str>, pos: Position| {
-                use crate::runtime::EventEmitter;
+                use crate::emitter::EventEmitter;
                 let tid = match task_id_for_debug.lock() {
                     Ok(g) => g.clone(),
                     Err(e) => e.into_inner().clone(),

@@ -35,7 +35,7 @@ use super::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
 use crate::providers::provider::{DeleteChildMode, FsEntry, Provider, VdOpsContext};
 use crate::providers::root::{DIR_ALBUMS, DIR_BY_TASK};
-use crate::runtime::{global_emitter::GlobalEmitter, EventEmitter};
+use crate::emitter::{GlobalEmitter, EventEmitter};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use dokan::{

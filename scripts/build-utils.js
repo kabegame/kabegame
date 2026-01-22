@@ -20,14 +20,14 @@ export const RESOURCES_PLUGINS_DIR = path.join(
   "src-tauri",
   "app-main",
   "resources",
-  "plugins"
+  "plugins",
 );
 export const RESOURCES_BIN_DIR = path.join(
   root,
   "src-tauri",
   "app-main",
   "resources",
-  "bin"
+  "bin",
 );
 export const SRC_TAURI_DIR = path.join(root, "src-tauri");
 export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
@@ -36,17 +36,23 @@ export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
 export function run(cmd, args, opts = {}) {
   // console.log('runopts: ', cmd, args, opts)
   switch (opts.bin) {
-    case 'bun': {
-      args = ["--bun", cmd, ...args]; cmd = "bunx";
-      break; 
+    case "bun": {
+      args = ["run", cmd, ...args];
+      cmd = "bun";
+      break;
     }
     case "cargo": {
-      args = [cmd, ...args]; cmd = "cargo";
+      args = [cmd, ...args];
+      cmd = "cargo";
       break;
     }
   }
   delete opts.bin;
-  console.log(chalk.yellow('RUN'), JSON.stringify(opts), chalk.bold.italic(cmd, args.join(' ')))
+  console.log(
+    chalk.yellow("RUN"),
+    JSON.stringify(opts),
+    chalk.bold.italic(cmd, args.join(" ")),
+  );
   const res = spawnSync(cmd, args, {
     stdio: "inherit",
     cwd: root,
@@ -90,7 +96,7 @@ export function stageResourceFile(src, dstFileName) {
   const dst = path.join(RESOURCES_BIN_DIR, dstFileName);
   fs.copyFileSync(src, dst);
   console.log(
-    chalk.cyan(`[build] Staged resource file: ${path.relative(root, dst)}`)
+    chalk.cyan(`[build] Staged resource file: ${path.relative(root, dst)}`),
   );
 }
 
@@ -106,8 +112,8 @@ export function findDokan2DllOnWindows() {
     console.error(
       chalk.red(
         `❌ 环境变量 DOKAN2_DLL 指向的文件不存在: ${fromEnv}\n` +
-          `请改为 dokan2.dll 的绝对路径。`
-      )
+          `请改为 dokan2.dll 的绝对路径。`,
+      ),
     );
     process.exit(1);
   }
@@ -160,8 +166,8 @@ export function ensureDokan2DllResource() {
           `如果你需要虚拟磁盘：\n` +
           `1) 安装 Dokan 2.x；或\n` +
           `2) 设置环境变量 DOKAN2_DLL 指向 dokan2.dll，例如：\n` +
-          `   $env:DOKAN2_DLL="C:\\\\Program Files\\\\Dokan\\\\Dokan Library-2.3.1\\\\dokan2.dll"\n`
-      )
+          `   $env:DOKAN2_DLL="C:\\\\Program Files\\\\Dokan\\\\Dokan Library-2.3.1\\\\dokan2.dll"\n`,
+      ),
     );
     return;
   }
@@ -172,9 +178,9 @@ export function ensureDokan2DllResource() {
     chalk.cyan(
       `[build] Staged dokan2.dll resource: ${path.relative(
         root,
-        dst
-      )} (from: ${src})`
-    )
+        dst,
+      )} (from: ${src})`,
+    ),
   );
 }
 
@@ -209,8 +215,8 @@ export function ensureDokanInstallerResourceIfPresent() {
   if (!src) {
     console.log(
       chalk.yellow(
-        `[build] Dokan installer not staged (optional). To bundle it, set env DOKAN_INSTALLER or put bin/dokan-installer.exe`
-      )
+        `[build] Dokan installer not staged (optional). To bundle it, set env DOKAN_INSTALLER or put bin/dokan-installer.exe`,
+      ),
     );
     return;
   }
@@ -228,9 +234,9 @@ export function copyDokan2DllToTauriReleaseDirBestEffort() {
       chalk.cyan(
         `[build] Copied dokan2.dll next to target/release exe: ${path.relative(
           root,
-          dst
-        )}`
-      )
+          dst,
+        )}`,
+      ),
     );
   } catch {
     // ignore (some environments may lock the file)
@@ -245,15 +251,15 @@ export function stageResourceBinary(binName) {
     console.error(
       chalk.red(
         `❌ 找不到 sidecar 源二进制: ${src}\n` +
-          `请确认已成功构建: cargo build --release -p <crate>`
-      )
+          `请确认已成功构建: cargo build --release -p <crate>`,
+      ),
     );
     process.exit(1);
   }
   ensureDir(RESOURCES_BIN_DIR);
   fs.copyFileSync(src, dst);
   console.log(
-    chalk.cyan(`[build] Staged exe resource: ${path.relative(root, dst)}`)
+    chalk.cyan(`[build] Staged exe resource: ${path.relative(root, dst)}`),
   );
 }
 
@@ -287,7 +293,7 @@ export function scanBuiltinPlugins() {
 export function buildEnv(options, builtinPlugins = [], trace = false) {
   // const mode = options.mode === "local" ? "local" : "normal";
   // const desktop = options.desktop ? String(options.desktop).toLowerCase() : null;
-  
+
   // const env = {
   //   ...process.env,
   //   KABEGAME_MODE: mode,
@@ -332,7 +338,7 @@ export function buildEnv(options, builtinPlugins = [], trace = false) {
   //     );
   //     process.exit(1);
   //   }
-    
+
   //   console.log(chalk.cyan(`[env] 桌面环境: ${desktop}`));
   //   console.log(chalk.cyan(`[env] VITE_DESKTOP=${desktop}`));
   //   const prev = env.RUSTFLAGS ? String(env.RUSTFLAGS) : "";
@@ -358,7 +364,8 @@ export function parseComponent(raw) {
 
 export function getAppDir(component) {
   if (component === "main") return TAURI_APP_MAIN_DIR;
-  if (component === "plugin-editor") return path.join(SRC_TAURI_DIR, "app-plugin-editor");
+  if (component === "plugin-editor")
+    return path.join(SRC_TAURI_DIR, "app-plugin-editor");
   if (component === "cli") return path.join(SRC_TAURI_DIR, "app-cli");
   return null;
 }

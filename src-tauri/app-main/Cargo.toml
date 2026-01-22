@@ -30,7 +30,7 @@ windows = {version = "0.52", features = [
   "Win32_System_Com",
   "Win32_UI_Shell",
 ]}
-windows-sys = {workspace = true}
+windows-sys = {workspace = true, features = ["Win32_Security", "Win32_Security_Authorization"]}
 winreg = "0.52"
 winver = "1"
 
@@ -39,7 +39,7 @@ tauri-build = {workspace = true}
 
 [features]
 custom-protocol = ["tauri/custom-protocol", "kabegame-core/custom-protocol"]
-default = ["custom-protocol", "tray"]
+default = ["custom-protocol", "tray", "virtual-driver"]
 tray = ["dep:governor"]
 # self-hosted && vd (local) | self-hosted && !vd (light) | !self-hosted && vd (normal)  
 self-hosted = ["kabegame-core/tauri"]
