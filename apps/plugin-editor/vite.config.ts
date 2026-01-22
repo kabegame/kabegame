@@ -11,6 +11,10 @@ const require = createRequire(import.meta.url);
 // 这里通过解析包入口文件位置回推到包根目录，再定位 themes 目录，避免触发 exports 限制。
 const monacoThemesEntry = require.resolve("monaco-themes");
 const monacoThemesRoot = path.resolve(path.dirname(monacoThemesEntry), "..");
+const isWindows = process.env.TAURI_ENV_PLATFORM === "windows";
+const desktop = process.env.VITE_DESKTOP || "";
+const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
+const isLocalMode = process.env.VITE_KABEGAME_MODE === "local";
 
 export default defineConfig({
   plugins: [
@@ -81,6 +85,14 @@ export default defineConfig({
       },
     },
   ],
+
+  define: {
+    __DEV__: process.env.NODE_ENV === "development",
+    __WINDOWS__: isWindows,
+    __DESKTOP__: JSON.stringify(desktop),
+    __LIGHT_MODE__: isLightMode,
+    __LOCAL_MODE__: isLocalMode,
+  },
 
   publicDir: path.resolve(repoRoot, "static"),
 

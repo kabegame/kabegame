@@ -25,18 +25,15 @@
           <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
             <div v-if="!loading" class="settings-list">
               <!-- Plasma 插件模式提示 -->
-              <el-alert
-                v-if="isPlasmaPluginMode"
-                type="warning"
-                :closable="false"
-                show-icon
-                class="plasma-plugin-alert"
-              >
+              <el-alert v-if="isPlasmaPluginMode" type="warning" :closable="false" show-icon
+                class="plasma-plugin-alert">
                 <template #title>
                   <div style="display: flex; align-items: center; gap: 12px;">
                     <span>当前为 Plasma 插件模式，请在 Plasma 壁纸设置面板中配置相关选项</span>
                     <el-button type="primary" size="small" @click="handleOpenPlasmaSettings">
-                      <el-icon><Setting /></el-icon>
+                      <el-icon>
+                        <Setting />
+                      </el-icon>
                       打开壁纸设置面板
                     </el-button>
                   </div>
@@ -129,10 +126,9 @@
                   :build-args="(v: boolean) => ({ enabled: v })" />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS" label="画册盘" description="在资源管理器中以虚拟盘方式浏览画册（只支持有限的操作）">
+              <SettingRow v-if="!isLightMode" label="画册盘" description="在资源管理器中以虚拟盘方式浏览画册（只支持有限的操作）">
                 <AlbumDriveSetting />
               </SettingRow>
-
               <SettingRow label="图片点击行为" description="左键点击图片时的行为">
                 <SettingRadioControl setting-key="imageClickAction" command="set_image_click_action"
                   :build-args="(v: string) => ({ action: v })" :options="[
@@ -184,7 +180,7 @@ import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngi
 import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetting.vue";
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
-import { IS_WINDOWS } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LIGHT_MODE } from "@kabegame/core/env";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -200,6 +196,7 @@ const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any 
 const isPlasmaPluginMode = computed(() => wallpaperMode.value === "plasma-plugin");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("settings");
+const isLightMode = IS_LIGHT_MODE;
 
 
 const loadSettings = async () => {
@@ -379,7 +376,7 @@ onMounted(() => {
 
 .plasma-plugin-alert {
   margin-bottom: 20px;
-  
+
   :deep(.el-alert__title) {
     width: 100%;
   }

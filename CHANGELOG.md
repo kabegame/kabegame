@@ -4,6 +4,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.0.1]
+### Changed
+- 经过各种考虑，去掉daemon，改成app-main内嵌服务。
+
+
 ## [3.0.0]
 ### Added
 - linux plasma 支持（原生壁纸设置以及壁纸插件模式）

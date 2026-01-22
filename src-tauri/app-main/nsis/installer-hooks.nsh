@@ -20,6 +20,11 @@
   DetailPrint "Move kabegame-cli.exe -> $INSTDIR (exit code: $0)"
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\kabegame-cliw.exe$\" move /Y $\"$INSTDIR\resources\bin\kabegame-cliw.exe$\" $\"$INSTDIR$\"' $0
   DetailPrint "Move kabegame-cliw.exe -> $INSTDIR (exit code: $0)"
+  ; Check if dokan2.dll is bundled (not present in light mode)
+  IfFileExists "$INSTDIR\resources\bin\dokan2.dll" 0 +3
+    DetailPrint "dokan2.dll not bundled (light mode), skipping Dokan setup."
+    Goto dokan_done
+
   ; Move dokan2.dll next to main exe so Windows loader can resolve it at process start.
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\dokan2.dll$\" move /Y $\"$INSTDIR\resources\bin\dokan2.dll$\" $\"$INSTDIR$\"' $0
   DetailPrint "Move dokan2.dll -> $INSTDIR (exit code: $0)"
@@ -47,6 +52,8 @@
       ; Re-check (best-effort)
       IfFileExists "$SYSDIR\drivers\dokan2.sys" 0 +2
         DetailPrint "Dokan driver installed."
+
+  dokan_done:
 
   ; Register .kgpg file association -> kabegame-cliw.exe plugin import "%1"
   ; (kabegame-cliw.exe is built as Windows subsystem and launches kabegame-cli.exe with CREATE_NO_WINDOW)
@@ -76,8 +83,16 @@
     Delete "$INSTDIR\kabegame-cli.exe"
   IfFileExists "$INSTDIR\kabegame-cliw.exe" 0 +2
     Delete "$INSTDIR\kabegame-cliw.exe"
+
+  ; Check if dokan2.dll was bundled (skip cleanup if not present)
+  IfFileExists "$INSTDIR\resources\bin\dokan2.dll" 0 +3
+    DetailPrint "dokan2.dll not bundled (light mode), skipping Dokan cleanup."
+    Goto cleanup_done
+
   IfFileExists "$INSTDIR\dokan2.dll" 0 +2
     Delete "$INSTDIR\dokan2.dll"
+
+  cleanup_done:
   ; Keep dokan-installer.exe inside resources (if any). It's safe to leave it to installer cleanup.
 
   ; Remove folder attributes (best-effort).

@@ -1,4 +1,8 @@
-import { scanBuiltinPlugins } from "../build-utils";
+import {
+  scanBuiltinPlugins,
+  ensureDokan2DllResource,
+  ensureDokanInstallerResourceIfPresent,
+} from "../build-utils";
 import { BasePlugin } from "./base-plugin";
 import { run } from "../build-utils";
 import { Component, ComponentPlugin } from "./component-plugin";
@@ -47,7 +51,7 @@ export class ModePlugin extends BasePlugin {
       },
       () => {
         let mode = bs.options.mode || Mode.NORMAL;
-        if ((!mode) in Mode.modes) {
+        if (!Mode.modes.includes(mode)) {
           throw new Error(`未知的模式，允许的列表：${Mode.modes}`);
         }
         mode = new Mode(mode);
@@ -60,14 +64,14 @@ export class ModePlugin extends BasePlugin {
     );
 
     bs.hooks.prepareEnv.tap(this.name, () => {
-      const builtinPlugins = !this.mode.isNormal ? scanBuiltinPlugins() : [];
-      this.setEnv("WEBKIT_DISABLE_DMABUF_RENDERER", builtinPlugins.join(","));
       this.setEnv("KABEGAME_MODE", this.mode.mode);
       this.setEnv("VITE_KABEGAME_MODE", this.mode.mode);
     });
 
     bs.hooks.beforeBuild.tap(this.name, () => {
       this.packagePlugins(bs);
+      this.setBuiltinPluginsEnvIfNeeded();
+      this.prepareResources(bs);
     });
 
     //TODO: 虚拟盘仅在非安卓并且为非light情况下才注入
@@ -99,7 +103,23 @@ export class ModePlugin extends BasePlugin {
     // TODO: 对不同的mode执行不同的tap
   }
 
-  // 打包rhai插件，虽然这不是异步函数
+  // 准备资源文件（仅在需要时包含 dokan 相关文件）
+  prepareResources(bs) {
+    // Light mode 不需要虚拟驱动功能，跳过 dokan 资源处理
+    if (this.mode.isLight) {
+      this.log(chalk.yellow("Light mode: skipping Dokan resource preparation"));
+      return;
+    }
+
+    // 仅在 main 组件构建时才需要处理 dokan 资源
+    if (bs.context.component.isMain) {
+      this.log("Ensuring Dokan resources...");
+      ensureDokan2DllResource();
+      ensureDokanInstallerResourceIfPresent();
+    }
+  }
+
+  // 打包rhai插件
   packagePlugins(bs) {
     this.log("package plugins");
     const cmd = bs.context.cmd;
@@ -117,6 +137,15 @@ export class ModePlugin extends BasePlugin {
       if (!comp.isMain) {
         return;
       }
+      const builtinPlugins = scanBuiltinPlugins();
+      if (builtinPlugins.length > 0) {
+        this.log(
+          chalk.blue(
+            `检测到 resources/plugins 已有 ${builtinPlugins.length} 个插件，跳过 CI 内打包`,
+          ),
+        );
+        return;
+      }
       const packageTarget = mode.isLocal
         ? "crawler-plugins:package-local-to-resources"
         : "crawler-plugins:package-to-resources";
@@ -126,5 +155,16 @@ export class ModePlugin extends BasePlugin {
       });
     }
     // start 命令不打包插件
+  }
+
+  setBuiltinPluginsEnvIfNeeded() {
+    if (!this.mode || !this.mode.isLocal) {
+      return;
+    }
+    const builtinPlugins = scanBuiltinPlugins();
+    const csv = builtinPlugins.join(",");
+    if (csv) {
+      this.setEnv("KABEGAME_BUILTIN_PLUGINS", csv);
+    }
   }
 }

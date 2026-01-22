@@ -70,7 +70,7 @@ import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_WINDOWS } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LIGHT_MODE } from "@kabegame/core/env";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 
 const albumStore = useAlbumStore();
@@ -83,7 +83,8 @@ const openHelpDrawer = () => helpDrawer.open("albums");
 
 // 虚拟磁盘
 const settingsStore = useSettingsStore();
-const albumDriveEnabled = computed(() => IS_WINDOWS && !!settingsStore.values.albumDriveEnabled);
+const isLightMode = IS_LIGHT_MODE;
+const albumDriveEnabled = computed(() => IS_WINDOWS && !isLightMode && !!settingsStore.values.albumDriveEnabled);
 const albumDriveMountPoint = computed(() => settingsStore.values.albumDriveMountPoint || "K:\\");
 
 const openVirtualDrive = async () => {
@@ -332,8 +333,8 @@ const handleCreateAlbum = async () => {
   } catch (error: any) {
     console.error("创建画册失败:", error);
     // 提取友好的错误信息
-    const errorMessage = typeof error === "string" 
-      ? error 
+    const errorMessage = typeof error === "string"
+      ? error
       : error?.message || String(error) || "创建画册失败";
     ElMessage.error(errorMessage);
   }

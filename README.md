@@ -49,7 +49,7 @@
 
 ### 🔌 强大的插件系统
 
-Kabegame 的核心竞争力在于其插件化的爬虫系统（本地导入文件功能本质上是一个爬虫插件）。通过 `.kgpg` 插件文件，你可以轻松从各种二次元壁纸网站收集资源。插件使用 Rhai 脚本语言编写，支持复杂的爬取逻辑。应用内置插件商店（[插件仓库](./crawler-plugins)），可以一键安装热门插件，也可以导入别人开发的插件，甚至可以编写你自己的插件。每个插件都可以配置参数，在运行脚本的时候由用户输入。你也可以在运行的时候配置http头，分かるな。
+Kabegame 的核心竞争力在于其插件化的爬虫系统（本地导入文件功能本质上是一个爬虫插件）。通过 `.kgpg` 插件文件，你可以轻松从各种二次元壁纸网站收集资源。插件使用 Rhai 脚本语言编写，支持复杂的爬取逻辑。应用内置插件商店（[插件仓库](./src-crawler-plugins)），可以一键安装热门插件，也可以导入别人开发的插件，甚至可以编写你自己的插件。每个插件都可以配置参数，在运行脚本的时候由用户输入。你也可以在运行的时候配置http头，分かるな。
 
 <div align="center">
   <img src="docs/images/shop.png" alt="插件商店" width="400"/>
@@ -130,7 +130,7 @@ Kabegame 的核心竞争力在于其插件化的爬虫系统（本地导入文�
 ### 前置要求
 
 - Node.js 16+ 
-- pnpm (推荐使用 npm 安装: `npm install -g pnpm`)
+- Bun 1.3+ (推荐使用官方安装脚本: `curl -fsSL https://bun.sh/install | bash` 或 Windows: `powershell -c "irm bun.sh/install.ps1 | iex"`)
 - Rust 1.70+ (Rust 2021 Edition)
 - [Tauri CLI](https://tauri.app/v2/guides/getting-started/prerequisites)
 
@@ -142,7 +142,7 @@ bun install
 
 ### Git 钩子：push 前自动尝试打 tag（可选）
 
-本仓库使用 Husky 提供 git hooks：在 `git push` 之前会读取 `crawler-plugins/package.json` 的 `version`，
+本仓库使用 Husky 提供 git hooks：在 `git push` 之前会读取 `src-crawler-plugins/package.json` 的 `version`，
 并尝试创建 `v{version}` 的 tag（例如 `1.0.0` → `v1.0.0`）。如果 tag 已存在或创建失败会**跳过且不阻断 push**。
 
 - 启用方式：执行 `bun install`（会自动运行 `prepare` 安装 hooks）
@@ -166,22 +166,25 @@ bun dev -c main --desktop plasma  # 指定桌面环境为 Plasma（在设置中�
 bun dev -c main --desktop gnome   # 指定桌面环境为 GNOME
 
 # 启动模式（无 watch，直接运行）
-bun start -c main/plugin-editor/cli/daemon 
+bun start -c cli            # 启动 CLI 工具
 
 # 构建生产版本
-bun build                    # 构建全部组件（main + plugin-editor + cli + daemon）
-bun build -c main/plugin-editor/cli/daemon 构建组件
+bun build                    # 构建全部组件（main + plugin-editor + cli）
+bun build -c main            # 构建主应用
+bun build -c plugin-editor   # 构建插件编辑器
+bun build -c cli             # 构建 CLI 工具
 ```
 
 说明：
 - `-c, --component`：指定要开发/启动/构建的组件（`main` | `plugin-editor` | `cli`）
 - `--mode`：构建模式
   - `normal`（默认）：一般版本，带商店源，仅打包本地插件到 resources
-  - `local`：无商店版本，预打包全部插件到 resources
+  - `local`：无商店，预打包全部插件到 resources，没有代码编辑器
+  - `light`：轻量模式，无商店，没有虚拟盘功能，没有代码编辑器
 - `--desktop <desktop>`：指定桌面环境（`plasma` | `gnome`），用于后端按桌面环境选择实现
   - `plasma`：适用于 KDE Plasma 环境（在设置中显示 Plasma 插件模式选项）
   - `gnome`：适用于 GNOME 环境
-- `dev` 和 `start` 会自动先打包插件到 `src-tauri/resources/plugins`，确保资源存在
+- `dev` 和 `start` 会自动先打包插件到 `src-tauri/app-main/resources/plugins`，确保资源存在
 - 前端资源由各自的 `tauri.conf.json` 中的 `beforeDevCommand` / `beforeBuildCommand` 自动触发构建
 
 ## 项目结构
@@ -216,7 +219,6 @@ bun build -c main/plugin-editor/cli/daemon 构建组件
 │       ├── src/         # Vue 组件、工具函数等
 │       └── package.json
 ├── src-tauri/            # Rust 后端代码（Cargo Workspace）
-│   ├── Cargo.toml        # Workspace 配置
 │   ├── core/             # 共享核心库（kabegame-core）
 │   │   ├── src/
 │   │   │   ├── lib.rs    # 核心库入口
@@ -262,13 +264,6 @@ bun build -c main/plugin-editor/cli/daemon 构建组件
 │   │   │       └── kabegame-cliw.rs # Windows CLI 入口
 │   │   ├── tauri.conf.json
 │   │   └── Cargo.toml
-│   ├── daemon/           # Daemon 服务（后台进程）
-│   │   ├── src/
-│   │   │   ├── main.rs   # Daemon 入口
-│   │   │   ├── dedupe_service.rs # 去重服务
-│   │   │   └── handlers/ # 请求处理器（画廊、插件、设置、存储等）
-│   │   ├── tauri.conf.json
-│   │   └── Cargo.toml
 │   └── icons/            # 应用图标资源
 ├── src-crawler-plugins/      # 插件相关（Nx 项目）
 │   ├── plugins/          # 本地插件源码
@@ -311,9 +306,9 @@ bun build -c main/plugin-editor/cli/daemon 构建组件
 │   └── RHAI_API.md
 ├── static/               # 静态资源
 ├── nx.json               # Nx 工作区配置
-├── pnpm-workspace.yaml    # pnpm 工作区配置
 ├── project.json          # 根项目配置
-└── package.json          # Node.js 依赖
+├── package.json          # Node.js 依赖（包含 Bun workspace 配置）
+└── Cargo.toml            # Rust Cargo Workspace 配置
 ```
 
 ## 插件开发
@@ -351,9 +346,12 @@ The source code is licensed under GPL v3. License is available [here](./LICENSE)
 - [**Scraper**](https://github.com/causal-agent/scraper) - Rust HTML 解析和选择器库
 - [**Rusqlite**](https://github.com/rusqlite/rusqlite) - SQLite 的 Rust 绑定
 - [**Image**](https://github.com/image-rs/image) - Rust 图像处理库
+- [**Prisma**](https://github.com/prisma/prisma) - 下一代 ORM，用于数据库访问和类型安全
 
 ### 构建与开发工具
 - [**Nx**](https://github.com/nrwl/nx) - 智能、快速和可扩展的构建系统
+- [**Bun**](https://github.com/oven-sh/bun) - 快速的全能 JavaScript 运行时、包管理器和构建工具
+- [**Tapable**](https://github.com/webpack/tapable) - 用于创建钩子系统的库（本项目开发构建系统的核心）
 
 ### 参考项目
 - [**Lively**](https://github.com/rocksdanister/lively) - 动态壁纸应用（本项目参考了其桌面挂载实现）

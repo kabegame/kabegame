@@ -11,6 +11,8 @@ pub mod client;
 pub mod connection;
 #[cfg(feature = "ipc")]
 pub mod daemon_startup;
+#[cfg(feature = "ipc")]
+pub mod daemon_status;
 
 // 共享导出（客户端和服务端都需要）
 pub use events::DaemonEvent;

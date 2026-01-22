@@ -104,7 +104,7 @@ import type { ImageInfo } from "@/stores/crawler";
 import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useUiStore } from "@kabegame/core/stores/ui";
-import { IS_WINDOWS } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LIGHT_MODE } from "@kabegame/core/env";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
@@ -138,7 +138,8 @@ const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("albumdetail");
 
 // 虚拟磁盘
-const albumDriveEnabled = computed(() => IS_WINDOWS && !!settingsStore.values.albumDriveEnabled);
+const isLightMode = IS_LIGHT_MODE;
+const albumDriveEnabled = computed(() => IS_WINDOWS && !isLightMode && !!settingsStore.values.albumDriveEnabled);
 const albumDriveMountPoint = computed(() => settingsStore.values.albumDriveMountPoint || "K:\\");
 
 const openVirtualDriveAlbumFolder = async () => {

@@ -426,14 +426,20 @@ impl PersistentConnection {
     ///
     /// 此方法会等待连接进入 Connected 状态（最多10秒），但不会主动创建连接。
     /// 如果请求失败（发送失败或等待响应超时），会自动将连接状态设置为 Disconnected。
+    /// 如果是连接相关错误，会弹出原生错误窗口提示用户先启动 kabegame。
     pub async fn request(&self, req: CliIpcRequest) -> Result<CliIpcResponse, String> {
         // 等待连接就绪（最多10秒），但不主动创建连接
-        tokio::time::timeout(
+        let connection_result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             self.wait_for_connection(),
         )
-        .await
-        .map_err(|_| "等待连接超时（10秒）".to_string())?;
+        .await;
+
+        if let Err(_) = connection_result {
+            let error_msg = "等待连接超时（10秒）".to_string();
+            super::daemon_status::handle_daemon_connection_error(&error_msg);
+            return Err(error_msg);
+        }
 
         let conn = self.handle.read().await;
         let conn = conn.as_ref().unwrap();
@@ -452,7 +458,9 @@ impl PersistentConnection {
         // 发送请求
         if let Err(e) = conn.request_tx.lock().await.send((request_id, req)) {
             // 发送失败，我们这里也不敢说连接断开了，只能返回错误
-            return Err(format!("发送请求失败: {}", e));
+            let error_msg = format!("发送请求失败: {}", e);
+            super::daemon_status::handle_daemon_connection_error(&error_msg);
+            return Err(error_msg);
         }
 
         // 等待响应
@@ -464,7 +472,9 @@ impl PersistentConnection {
             Err(_) => {
                 // 等待响应失败（可能是连接断开），设置状态为断开
                 self.set_status(ConnectionStatus::Disconnected).await;
-                Err("请求被取消或连接已断开".to_string())
+                let error_msg = "请求被取消或连接已断开".to_string();
+                super::daemon_status::handle_daemon_connection_error(&error_msg);
+                Err(error_msg)
             }
         }
     }

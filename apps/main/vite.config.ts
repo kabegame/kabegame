@@ -12,6 +12,10 @@ const isWindows = process.env.TAURI_ENV_PLATFORM === "windows";
 // 判断桌面环境（从 VITE_DESKTOP 环境变量读取）
 const desktop = process.env.VITE_DESKTOP || "";
 
+const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
+
+const isLocalMode = process.env.VITE_KABEGAME_MODE === "local";
+
 // console.log(process.env);
 
 export default defineConfig({
@@ -45,7 +49,7 @@ export default defineConfig({
             res.end(html);
           } catch (e) {
             server.config.logger.error(
-              `[kabegame-html-entry-rewrite-main] failed: ${String(e)}`
+              `[kabegame-html-entry-rewrite-main] failed: ${String(e)}`,
             );
             res.statusCode = 500;
             res.end("Internal Server Error");
@@ -81,13 +85,13 @@ export default defineConfig({
 
         await moveFile(
           path.join(outDir, "html", "index.html"),
-          path.join(outDir, "index.html")
+          path.join(outDir, "index.html"),
         );
         // 仅在 Windows 平台时移动 wallpaper.html
         if (isWindows) {
           await moveFile(
             path.join(outDir, "html", "wallpaper.html"),
-            path.join(outDir, "wallpaper.html")
+            path.join(outDir, "wallpaper.html"),
           );
         }
 
@@ -101,6 +105,8 @@ export default defineConfig({
     __DEV__: process.env.NODE_ENV === "development",
     __WINDOWS__: isWindows,
     __DESKTOP__: JSON.stringify(desktop),
+    __LIGHT_MODE__: isLightMode,
+    __LOCAL_MODE__: isLocalMode,
   },
 
   // 使用 apps/main/public 作为 public 目录（main app 专用）
@@ -157,7 +163,7 @@ export default defineConfig({
         if (
           warning.message &&
           warning.message.includes(
-            "dynamic import will not move module into another chunk"
+            "dynamic import will not move module into another chunk",
           )
         ) {
           return;

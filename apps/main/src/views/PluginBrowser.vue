@@ -8,7 +8,7 @@
         </el-icon>
         刷新
       </el-button>
-      <el-button @click="openPluginEditor">
+      <el-button v-if="!isLocalMode" @click="openPluginEditor">
         <el-icon>
           <EditPen />
         </el-icon>
@@ -146,7 +146,7 @@
             <div class="plugin-info">
               <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
               <el-tag v-if="plugin.installedVersion" type="success" size="small">已安装：v{{ plugin.installedVersion
-                }}</el-tag>
+              }}</el-tag>
               <el-tag v-else type="warning" size="small">未安装</el-tag>
               <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
                 size="small">可更新</el-tag>
@@ -281,8 +281,7 @@ import StyledTabs from "@/components/common/StyledTabs.vue";
 import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-
-type BuildMode = "normal" | "local";
+import { IS_LOCAL_MODE } from "@kabegame/core/env";
 
 async function openPluginEditor() {
   try {
@@ -337,10 +336,7 @@ const openQuickSettings = () => quickSettingsDrawer.open("pluginbrowser");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("pluginbrowser");
 
-const buildMode = ref<BuildMode>(
-  import.meta.env.VITE_KABEGAME_MODE === "local" ? "local" : "normal"
-);
-const isLocalMode = computed(() => buildMode.value === "local");
+const isLocalMode = computed(() => IS_LOCAL_MODE);
 
 const loadingBySource = ref<Record<string, boolean>>({}); // 按源区分的loading状态
 const showSkeletonBySource = ref<Record<string, boolean>>({}); // 按源区分的骨架屏状态
@@ -1124,14 +1120,6 @@ const handleRefresh = async () => {
 
 onMounted(async () => {
   try {
-    // 运行时从后端获取 build mode（后端为编译期注入，作为最终可信来源）
-    try {
-      const mode = await invoke<string>("get_build_mode");
-      buildMode.value = mode === "local" ? "local" : "normal";
-    } catch {
-      // ignore: fallback to import.meta.env
-    }
-
     // 首次进入：默认 tab=已安装源，不需要拉取商店列表；仅加载本地已安装源即可
     await pluginStore.loadPlugins();
     // normal 模式才加载商店源列表（本地配置），用于渲染动态 tab

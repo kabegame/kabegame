@@ -574,36 +574,10 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
-            // 启动连接状态监听任务（监听 IPC 连接状态变化）
-            daemon_client::spawn_connection_status_watcher(app.app_handle().clone());
-            
-            // 启动 daemon（如果未运行）
+            // 初始化事件监听器（将 daemon IPC 事件转发为 Tauri 事件）
             let app_handle = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {
-                match daemon_client::ensure_daemon_ready().await {
-                    Ok(_) => {
-                        // 发送事件通知前端 daemon 已就绪
-                        let _ = app_handle.emit("daemon-ready", serde_json::json!({}));
-
-                        // 初始化事件监听器（将 daemon IPC 事件转发为 Tauri 事件）
-                        crate::event_listeners::init_event_listeners(app_handle.clone()).await;
-                    }
-                    Err(e) => {
-                        eprintln!("[WARN] Failed to ensure daemon ready: {}", e);
-                        // 获取 daemon 路径用于错误提示
-                        let daemon_path =
-                            kabegame_core::ipc::daemon_startup::find_daemon_executable()
-                                .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
-                        // 发送事件通知前端 daemon 启动失败
-                        let _ = app_handle.emit(
-                            "daemon-startup-failed",
-                            serde_json::json!({
-                                "error": e,
-                                "daemon_path": daemon_path.display().to_string()
-                            }),
-                        );
-                    }
-                }
+                crate::event_listeners::init_event_listeners(app_handle).await;
             });
 
             Ok(())

@@ -13,7 +13,7 @@ export class BasePlugin {
   }
 
   log(...args) {
-    console.log(`[${this.name}]`, ...args)
+    console.log(`[${chalk.blue(this.name)}]`, ...args);
   }
 
   /**
@@ -32,12 +32,12 @@ export class BasePlugin {
 
   setEnv(env, value) {
     process.env[env] = value;
-    this.log(chalk.cyan(`set ${env}=${value}`))
+    this.log(chalk.cyan(`set ${env}=${value}`));
   }
 
   addRustFlags(flag) {
     const prev = process.env.RUSTFLAGS ? String(process.env.RUSTFLAGS) : "";
     process.env.RUSTFLAGS = prev ? `${prev} ${flag}` : flag;
-    this.log(chalk.cyan(`RUSTFLAGS+=${flag}`))
+    this.log(chalk.cyan(`RUSTFLAGS+=${flag}`));
   }
 }

@@ -5,6 +5,10 @@ import { copyFile, readFile, rename, rm } from "node:fs/promises";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const appRoot = __dirname;
+const isWindows = process.env.TAURI_ENV_PLATFORM === "windows";
+const desktop = process.env.VITE_DESKTOP || "";
+const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
+const isLocalMode = process.env.VITE_KABEGAME_MODE === "local";
 
 export default defineConfig({
   plugins: [
@@ -75,6 +79,14 @@ export default defineConfig({
     },
   ],
 
+  define: {
+    __DEV__: process.env.NODE_ENV === "development",
+    __WINDOWS__: isWindows,
+    __DESKTOP__: JSON.stringify(desktop),
+    __LIGHT_MODE__: isLightMode,
+    __LOCAL_MODE__: isLocalMode,
+  },
+
   clearScreen: false,
   server: {
     port: 1422,
@@ -121,4 +133,3 @@ export default defineConfig({
     },
   },
 });
-

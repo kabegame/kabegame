@@ -1,6 +1,5 @@
 // Commands 模块
 pub mod album;
-pub mod daemon;
 pub mod filesystem;
 pub mod image;
 pub mod misc;

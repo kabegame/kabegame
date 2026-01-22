@@ -147,7 +147,7 @@ fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
         std::process::exit(1);
     });
 
-    // 检查 daemon 是否可用（不自动启动）
+    // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
     if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
         let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
@@ -223,36 +223,10 @@ async fn resolve_album_name_to_id(name: &str) -> Result<Option<String>, String> 
     Ok(None)
 }
 
-/// 确保 daemon 已启动（CLI 版本，在控制台显示等待信息）
-async fn ensure_daemon_ready_for_cli() -> Result<std::path::PathBuf, String> {
-    // 先检查是否已可用
-    if kabegame_core::ipc::daemon_startup::is_daemon_available().await {
-        return kabegame_core::ipc::daemon_startup::find_daemon_executable();
-    }
-
-    // 显示等待信息
-    print!("正在启动后台服务");
-    std::io::Write::flush(&mut std::io::stdout()).ok();
-
-    // 启动 daemon（带超时）
-    let result = kabegame_core::ipc::daemon_startup::ensure_daemon_ready_basic().await;
-
-    match &result {
-        Ok(_) => {
-            println!("\r后台服务已就绪     ");
-        }
-        Err(_) => {
-            println!("\r核心启动失败");
-        }
-    }
-
-    result
-}
-
 fn vd_mount(_args: VdMountArgs) -> Result<(), String> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
-    // 检查 daemon 是否可用（不自动启动）
+    // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
     if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
         let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
@@ -276,7 +250,7 @@ fn vd_mount(_args: VdMountArgs) -> Result<(), String> {
 fn vd_unmount(_args: VdUnmountArgs) -> Result<(), String> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
-    // 检查 daemon 是否可用（不自动启动）
+    // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
     if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
         let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
@@ -301,7 +275,7 @@ fn vd_status(args: VdStatusArgs) -> Result<(), String> {
     let _ = args;
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
-    // 检查 daemon 是否可用（不自动启动）
+    // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
     if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
         let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
@@ -322,7 +296,7 @@ fn vd_status(args: VdStatusArgs) -> Result<(), String> {
 fn vd_ipc_status() -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| format!("create tokio runtime failed: {}", e))?;
-    // 检查 daemon 是否可用（不自动启动）
+    // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
     if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
         let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
@@ -539,24 +513,19 @@ fn validate_kgpg_structure(pm: &PluginManager, zip_path: &std::path::Path) -> Re
 fn import_plugin_with_ui(p: PathBuf) -> Result<(), String> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-    // 确保 daemon 已启动（仅在安装插件时自动启动）
+    // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
         eprintln!("创建 Tokio Runtime 失败: {e}");
         std::process::exit(1);
     });
-    let _daemon_path = match rt.block_on(ensure_daemon_ready_for_cli()) {
-        Ok(path) => path,
-        Err(e) => {
-            // 尝试获取 daemon 路径用于错误提示
-            let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
-                .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
-            return Err(format!(
-                "{}\n请检查 {} 能否正常启动",
-                e,
-                daemon_path.display()
-            ));
-        }
-    };
+    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
+        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+            .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
+        return Err(format!(
+            "无法连接 kabegame-daemon\n提示：请先启动 `{}`",
+            daemon_path.display()
+        ));
+    }
 
     let zip_path = p.to_string_lossy().to_string();
     let encoded = url::form_urlencoded::byte_serialize(zip_path.as_bytes()).collect::<String>();

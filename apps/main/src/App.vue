@@ -1,16 +1,6 @@
 <template>
   <!-- 主窗口 -->
   <el-container class="app-container">
-    <!-- Daemon 启动中 - 显示加载态 -->
-    <div v-if="!daemonReady && !daemonOffline" class="daemon-loading">
-      <div class="loading-content">
-        <img src="/icon.png" alt="Logo" class="loading-logo" />
-        <h2>正在启动后台服务…</h2>
-        <div class="loading-spinner"></div>
-      </div>
-    </div>
-    <!-- Daemon 已就绪或离线 - 显示主内容 -->
-    <template v-else>
       <!-- 全局文件拖拽提示层 -->
       <FileDropOverlay ref="fileDropOverlayRef" />
       <!-- 文件拖拽导入确认弹窗（封装 ElMessageBox.confirm） -->
@@ -24,16 +14,10 @@
       <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }"
         :width="isCollapsed ? '64px' : '200px'">
         <div class="sidebar-header">
-          <img :src="daemonOffline ? '/lost.png' : '/icon.png'" alt="Logo" class="app-logo logo-clickable"
+          <img src="/icon.png" alt="Logo" class="app-logo logo-clickable"
             @click="toggleCollapse" />
           <div v-if="!isCollapsed" class="sidebar-title-section">
             <h1>Kabegame</h1>
-            <div v-if="daemonOffline" class="offline-section">
-              <p class="offline-hint">呜呜呜，鳄鳄找不到了呢</p>
-              <el-button size="small" @click="handleReconnect" :loading="isReconnecting">
-                找找看
-              </el-button>
-            </div>
           </div>
         </div>
         <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
@@ -111,27 +95,8 @@ const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskD
 const fileDropOverlayRef = ref<any>(null);
 const importConfirmDialogRef = ref<any>(null);
 
-// Daemon 状态管理
-const { init: initDaemonStatus, daemonOffline, daemonReady, isReconnecting, reconnect } = useDaemonStatus();
-
 // 路由视图 key，用于强制刷新组件
 const routerViewKey = ref(0);
-
-// 监听 daemonReady 变化，当从任何状态变为 ready 时刷新路由视图
-watch(daemonReady, (newVal, oldVal) => {
-  if (newVal && !oldVal) {
-    // daemonReady 从 false 变为 true，刷新路由视图
-    routerViewKey.value += 1;
-  }
-});
-
-// 处理重连
-const handleReconnect = async () => {
-  const error = await reconnect();
-  if (error) {
-    ElMessageBox.alert(error, "重连失败", { type: "error" });
-  }
-};
 
 // 窗口事件监听
 const { init: initWindowEvents } = useWindowEvents();
@@ -150,9 +115,7 @@ onMounted(async () => {
   const settingsStore = useSettingsStore();
   await settingsStore.init();
 
-  console.log('初始化 daemon 状态');
   // 初始化各个 composables
-  await initDaemonStatus();
   await initWindowEvents();
   await initFileDrop();
 
@@ -561,45 +524,6 @@ body,
 }
 
 // Daemon 加载态样式
-.daemon-loading {
-  width: 100%;
-  height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--anime-bg-main);
-
-  .loading-content {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 24px;
-
-    .loading-logo {
-      width: 80px;
-      height: 80px;
-      object-fit: contain;
-      animation: pulse 2s ease-in-out infinite;
-    }
-
-    h2 {
-      font-size: 18px;
-      font-weight: 600;
-      color: var(--anime-text-primary);
-      margin: 0;
-    }
-
-    .loading-spinner {
-      width: 40px;
-      height: 40px;
-      border: 4px solid var(--anime-border);
-      border-top-color: var(--anime-primary);
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-    }
-  }
-}
-
 @keyframes pulse {
 
   0%,

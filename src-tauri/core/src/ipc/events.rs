@@ -25,6 +25,7 @@
 //! listener.start().await?;
 //! ```
 
+#[cfg(feature = "ipc")]
 use crate::ipc::daemon_startup;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -48,9 +49,8 @@ macro_rules! daemon_event_kinds {
 
         impl DaemonEventKind {
             /// 已知事件数量（用于初始化固定大小映射表）。
-
             pub const COUNT: usize = daemon_event_kinds!(@count $($name),*);
-            /// 所有种类（用于遍历初始化/订阅）。
+            /// 已知事件数量（用于初始化固定大小映射表）。
 
             pub const ALL: [DaemonEventKind; Self::COUNT] = [
                 $(DaemonEventKind::$name),*
@@ -246,6 +246,7 @@ pub enum DaemonEvent {
     },
 }
 
+#[cfg(feature = "ipc")]
 impl DaemonEvent {
     /// 获取事件种类（用于路由到对应广播器）。
     /// TODO: 这个函数太长不好维护
@@ -274,15 +275,19 @@ impl DaemonEvent {
     }
 }
 
+#[cfg(feature = "ipc")]
 use std::collections::HashMap;
 
 /// 事件回调类型（接收原始 JSON payload）
+#[cfg(feature = "ipc")]
 pub type EventCallback = Arc<dyn Fn(serde_json::Value) + Send + Sync>;
 
 /// 默认事件发送器（用于无回调时自动转发到前端）
+#[cfg(feature = "ipc")]
 pub type DefaultEmitter = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 
 /// 事件监听器
+#[cfg(feature = "ipc")]
 pub struct EventListener {
     /// 按事件类型组织的回调表：kind -> Vec<callback>
     callbacks: Arc<RwLock<HashMap<DaemonEventKind, Vec<EventCallback>>>>,
@@ -290,12 +295,14 @@ pub struct EventListener {
     default_emitter: Arc<RwLock<Option<DefaultEmitter>>>,
 }
 
+#[cfg(feature = "ipc")]
 impl Default for EventListener {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "ipc")]
 impl EventListener {
     /// 创建新的事件监听器
     pub fn new() -> Self {
@@ -380,7 +387,7 @@ impl EventListener {
                                     let task = tokio::spawn(async move {
                                         // 建立长连接并持续接收事件（带过滤）
                                         let _ = client_clone
-                                            .subscribe_events_stream(&kinds_clone, move |raw| {
+                                            .subscribe_events_stream(&kinds_clone, move |raw: serde_json::Value| {
                                                 let callbacks = callbacks_clone.clone();
                                                 let default_emitter = default_emitter_clone.clone();
 
@@ -432,7 +439,7 @@ impl EventListener {
                                                             // Generic 事件特殊处理：使用 event 字段作为事件名，payload 用 payload 字段
                                                             if kind == DaemonEventKind::Generic {
                                                                 if let (Some(event_name_val), Some(payload_val)) = (
-                                                                    raw.get("event").and_then(|v| v.as_str()),
+                                                                    raw.get("event").and_then(|v: &serde_json::Value| v.as_str()),
                                                                     raw.get("payload"),
                                                                 ) {
                                                                     emitter(event_name_val, payload_val.clone());
@@ -485,14 +492,17 @@ impl EventListener {
 }
 
 /// 全局事件监听器（单例）
+#[cfg(feature = "ipc")]
 static GLOBAL_LISTENER: std::sync::OnceLock<EventListener> = std::sync::OnceLock::new();
 
 /// 获取全局事件监听器
+#[cfg(feature = "ipc")]
 pub fn get_global_listener() -> &'static EventListener {
     GLOBAL_LISTENER.get_or_init(|| EventListener::new())
 }
 
 /// 简化的 API：启动监听（长连接模式，按事件类型过滤）
+#[cfg(feature = "ipc")]
 pub async fn start_listening(kinds: &[DaemonEventKind]) -> Result<(), String> {
     get_global_listener().start(kinds).await
 }

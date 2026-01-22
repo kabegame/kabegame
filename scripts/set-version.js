@@ -1,44 +1,45 @@
 /**
  * scripts/set-version.js
- *
- * Usage:
- *   bun scripts/set-version.js <new-version>
- *
- * Example:
- *   bun scripts/set-version.js 3.0.1
- *
- * This script updates the version number in:
- * - Cargo.toml (workspace.package.version)
- * - packages/core/package.json
- * - src-tauri/app-main/tauri.conf.json
- * - src-tauri/app-cli/tauri.conf.json
- * - src-tauri/app-plugin-editor/tauri.conf.json
+ * 
+ * 用于统一管理项目版本号。
+ * 
+ * 用法:
+ *   1. 设置新版本并同步: bun set-version 3.0.1
+ *   2. 从 Cargo.toml 同步: bun set-version (需先手动修改 Cargo.toml)
  */
 
 const fs = require('fs');
 const path = require('path');
 
-const newVersion = process.argv[2];
-
-if (!newVersion) {
-  console.error('Usage: bun scripts/set-version.js <new-version>');
-  process.exit(1);
-}
-
-// Basic semantic version validation (x.y.z)
-if (!/^\d+\.\d+\.\d+/.test(newVersion)) {
-  console.error('Error: Version must be in format x.y.z');
-  process.exit(1);
-}
-
+let newVersion = process.argv[2];
 const rootDir = path.resolve(__dirname, '..');
 
-// 1. Update Cargo.toml (Workspace Root)
+// 1. 读取/更新 Cargo.toml (Workspace Root)
 const cargoTomlPath = path.join(rootDir, 'Cargo.toml');
-if (fs.existsSync(cargoTomlPath)) {
-    let cargoToml = fs.readFileSync(cargoTomlPath, 'utf8');
-    // Replace version = "x.y.z" inside [workspace.package]
-    const workspacePackageRegex = /(\[workspace\.package\][^\[]*?version\s*=\s*")([^"]+)(")/s;
+if (!fs.existsSync(cargoTomlPath)) {
+    console.error('Error: Cargo.toml not found');
+    process.exit(1);
+}
+
+let cargoToml = fs.readFileSync(cargoTomlPath, 'utf8');
+const workspacePackageRegex = /(\[workspace\.package\][^\[]*?version\s*=\s*")([^"]+)(")/s;
+
+if (!newVersion) {
+    // Mode: Sync from Cargo.toml
+    const match = cargoToml.match(workspacePackageRegex);
+    if (match) {
+        newVersion = match[2];
+        console.log(`Syncing version ${newVersion} from Cargo.toml...`);
+    } else {
+        console.error('Error: Could not find version in Cargo.toml and no argument provided.');
+        process.exit(1);
+    }
+} else {
+    // Mode: Set version
+    if (!/^\d+\.\d+\.\d+/.test(newVersion)) {
+        console.error('Error: Version must be in format x.y.z');
+        process.exit(1);
+    }
 
     if (workspacePackageRegex.test(cargoToml)) {
         cargoToml = cargoToml.replace(workspacePackageRegex, `$1${newVersion}$3`);
@@ -47,8 +48,6 @@ if (fs.existsSync(cargoTomlPath)) {
     } else {
         console.error('Error: Could not find [workspace.package] version in Cargo.toml');
     }
-} else {
-    console.error('Error: Cargo.toml not found');
 }
 
 // 2. Update packages/core/package.json
@@ -62,8 +61,6 @@ if (fs.existsSync(corePkgPath)) {
     } catch (e) {
         console.error(`Error updating ${corePkgPath}:`, e);
     }
-} else {
-    console.warn(`Warning: ${corePkgPath} not found`);
 }
 
 // 3. Update tauri.conf.json files
@@ -84,8 +81,6 @@ tauriConfPaths.forEach(relPath => {
         } catch (e) {
             console.error(`Error updating ${relPath}:`, e);
         }
-    } else {
-        console.warn(`Warning: ${relPath} not found`);
     }
 });
 
@@ -104,4 +99,4 @@ if (fs.existsSync(linuxConfPath)) {
     }
 }
 
-console.log(`\nVersion set to ${newVersion} successfully!`);
+console.log(`\nVersion synced to ${newVersion} successfully!`);

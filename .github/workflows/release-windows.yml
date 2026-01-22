@@ -30,16 +30,24 @@ jobs:
           fetch-depth: 0
           submodules: true # 检出 git 子模块（src-crawler-plugins）
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          version: 9
+          bun-version: latest
+
+      - name: Cache Bun install cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lockb') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
 
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "pnpm"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -53,10 +61,9 @@ jobs:
           cache-on-failure: true
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Package plugins
-        id: package-plugins
         shell: pwsh
         run: |
           # 改为直接使用仓库中已提交的 src-crawler-plugins/packed 产物，不在 CI 内重新打包插件
@@ -75,15 +82,6 @@ jobs:
           if ("${{ matrix.mode }}" -eq "local") {
             # local 模式：打包所有插件（内置插件列表=resources/plugins 下的所有 .kgpg）
             Copy-Item -Path (Join-Path $packedDir "*.kgpg") -Destination $dstDir -Force
-
-            $plugins = Get-ChildItem -Path $dstDir -Filter *.kgpg |
-              ForEach-Object { $_.BaseName } |
-              Sort-Object
-            $pluginsCsv = ($plugins -join ",")
-            if ($pluginsCsv) {
-              "builtin_plugins=$pluginsCsv" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-              Write-Host "Builtin plugins: $pluginsCsv"
-            }
           }
           else {
             # normal 模式：仅打包本地插件（local-import）
@@ -201,13 +199,7 @@ jobs:
           "
 
       - name: Build Tauri app
-        env:
-          KABEGAME_MODE: ${{ matrix.mode }}
-          VITE_KABEGAME_MODE: ${{ matrix.mode }}
-          KABEGAME_BUILTIN_PLUGINS: ${{ steps.package-plugins.outputs.builtin_plugins }}
-          # CI 已在上一步把 src-crawler-plugins/packed 复制到 resources/plugins，这里不再重复打包插件
-          KABEGAME_SKIP_PLUGINS_PACKAGING: "1"
-        run: pnpm build --mode ${{ matrix.mode }}
+        run: bun run build -- --mode ${{ matrix.mode }}
 
       - name: Restore productName
         if: always()

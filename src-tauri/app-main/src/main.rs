@@ -27,7 +27,6 @@ mod vd_listener;
 
 use commands::album;
 use commands::album::*;
-use commands::daemon::*;
 use commands::filesystem::*;
 use commands::plugin::*;
 use commands::settings::*;
@@ -349,8 +348,6 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            check_daemon_status,
-            reconnect_daemon,
             get_images,
             get_images_paginated,
             get_albums,

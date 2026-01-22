@@ -1,12 +1,5 @@
 <template>
   <div class="plugin-editor-root">
-    <!-- Daemon 启动错误页面 -->
-    <DaemonStartupError
-      v-if="daemonError"
-      :error="daemonError.error"
-      :daemon-path="daemonError.daemon_path"
-    />
-    <template v-else>
     <FileDropOverlay ref="fileDropOverlayRef" />
     <div class="plugin-editor-header">
       <div class="header-left">
@@ -170,7 +163,6 @@ import PluginInfoCard from "./components/PluginInfoCard.vue";
 import PluginConfigCard from "./components/PluginConfigCard.vue";
 import PluginVarsCard from "./components/PluginVarsCard.vue";
 import ConsoleCard from "./components/ConsoleCard.vue";
-import DaemonStartupError from "@kabegame/core/components/common/DaemonStartupError.vue";
 import { useQuickSettingsDrawerStore } from "./stores/quick-settings-drawer";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useInstalledPluginsStore } from "@kabegame/core/stores/plugins";
@@ -261,8 +253,6 @@ const isAutosaving = ref(false);
 const autosaveDirty = ref(false);
 const markers = ref<EditorMarker[]>([]);
 
-// Daemon 状态管理
-const { init: initDaemonStatus, daemonError } = useDaemonStatus();
 
 // Icon 相关
 const iconPreviewUrl = ref<string | null>(null);
@@ -1003,9 +993,6 @@ async function onExportCommand(cmd: "export-file" | "export-install" | "export-f
 }
 
 onMounted(async () => {
-  // 初始化 daemon 状态
-  await initDaemonStatus();
-
   // 初始化 settings store（与主程序共用 settings.json）
   try {
     const settingsStore = useSettingsStore();
