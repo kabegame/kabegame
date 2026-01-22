@@ -27,14 +27,15 @@ use dedupe_service::DedupeService;
 use handlers::{dispatch_request, Store};
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
-    ipc::{ipc, CliIpcRequest, EventBroadcaster, SubscriptionManager},
+    ipc::{ipc, CliIpcRequest},
     plugin::PluginManager,
     providers::{ProviderCacheConfig, ProviderRuntime},
-    runtime::global_emitter::GlobalEmitter,
+    emitter::GlobalEmitter,
     settings::Settings,
     storage::Storage,
     virtual_driver::VirtualDriveService,
 };
+use crate::server::{EventBroadcaster, SubscriptionManager};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -78,7 +79,7 @@ async fn daemon_main() -> Result<(), String> {
     println!("  ✓ Subscription manager initialized");
 
     // 初始化全局 emitter
-    GlobalEmitter::init_global(broadcaster.clone())
+    GlobalEmitter::init_global_ipc(broadcaster.clone())
         .map_err(|e| format!("Failed to initialize global emitter: {}", e))?;
     println!("  ✓ Global emitter initialized");
 

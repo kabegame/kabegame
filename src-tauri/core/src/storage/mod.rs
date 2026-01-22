@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 // Storage 不再依赖 Tauri AppHandle
 
 pub mod albums;
-#[cfg(feature = "dedupe")]
 pub mod dedupe;
 pub mod gallery;
 pub mod images;

@@ -8,8 +8,7 @@ use std::time::Duration;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::Instant;
 
-#[cfg(feature = "ipc-server")]
-use crate::runtime::global_emitter::GlobalEmitter;
+use crate::emitter::GlobalEmitter;
 
 fn atomic_replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
     if !tmp.exists() {
@@ -704,7 +703,6 @@ Write-Output "$style,$tile"
     }
 
     /// 发送设置变更事件
-    #[cfg(feature = "ipc-server")]
     async fn emit_setting_change(key: SettingKey, value: &SettingValue) {
         // 尝试通过 GlobalEmitter 发送事件
         if let Some(emitter) = GlobalEmitter::try_global() {
@@ -719,22 +717,8 @@ Write-Output "$style,$tile"
             let changes = serde_json::json!({
                 key_str: json_value
             });
-
-            // 在 daemon 模式下，GlobalEmitterType 就是 IpcEventEmitter
-            // 直接调用 emit_setting_change 方法
-            use crate::runtime::ipc_runtime::IpcEventEmitter;
-            // 由于 GlobalEmitterType 在 daemon 模式下就是 IpcEventEmitter，
-            // 我们可以通过类型别名来访问
-            let ipc_emitter: &IpcEventEmitter = emitter;
-            ipc_emitter.emit_setting_change(changes);
+            emitter.emit_setting_change(changes);
         }
-    }
-
-    /// 发送设置变更事件（非 daemon 模式，使用通用事件）
-    #[cfg(not(feature = "ipc-server"))]
-    async fn emit_setting_change(_key: SettingKey, _value: &SettingValue) {
-        // 在非 daemon 模式下，可以尝试使用 GlobalEmitter 的 emit 方法
-        // 但这里暂时不实现，因为主要使用场景是 daemon
     }
 
     /// 触发防抖写盘

@@ -4,11 +4,11 @@
 
 #[cfg(feature = "virtual-driver")]
 use kabegame_core::ipc::events::DaemonEvent;
-use kabegame_core::ipc::EventBroadcaster;
 use kabegame_core::storage::Storage;
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::Arc;
+use crate::server::EventBroadcaster;
 
 /// 启动虚拟磁盘事件监听器
 ///

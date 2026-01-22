@@ -4,13 +4,14 @@ use std::sync::Arc;
 
 use kabegame_core::ipc::CliIpcRequest;
 use kabegame_core::ipc::CliIpcResponse;
-use kabegame_core::ipc::SubscriptionManager;
 use kabegame_core::{
     ipc::ipc::{decode_frame, encode_frame, read_one_frame},
     ipc_dbg,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
+
+use crate::server::{EventBroadcaster, SubscriptionManager};
 
 /// 处理单个客户端连接
 pub async fn handle_connection<R, W, F, Fut>(
@@ -120,10 +121,9 @@ pub async fn handle_connection<R, W, F, Fut>(
                                 event_rx = Some(sm.subscribe(&client_id, event_kinds).await);
                                 ipc_dbg!("[DEBUG] IPC 服务器开始推送事件（通过 SubscriptionManager）");
                             } else {
-                                // 回退到旧的 broadcaster 方式（向后兼容）
                                 if let Some(ref broadcaster) = broadcaster {
                                     if let Ok(broadcaster) =
-                                        broadcaster.clone().downcast::<kabegame_core::ipc::EventBroadcaster>()
+                                        broadcaster.clone().downcast::<EventBroadcaster>()
                                     {
                                         let event_kinds: Vec<kabegame_core::ipc::events::DaemonEventKind> =
                                             if kinds.is_empty() {

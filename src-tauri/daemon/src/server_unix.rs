@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use kabegame_core::ipc::CliIpcRequest;
 use kabegame_core::ipc::CliIpcResponse;
-use kabegame_core::ipc::SubscriptionManager;
 use kabegame_core::{
     ipc::ipc::{encode_frame, read_one_frame, unix_socket_path, write_all},
     ipc_dbg,
@@ -15,6 +14,7 @@ use tokio::time::{timeout, Duration};
 use uuid;
 
 use crate::connection_handler;
+use crate::server::SubscriptionManager;
 
 /// 检查是否有其他 daemon 正在运行
 pub async fn check_other_daemon_running() -> bool {

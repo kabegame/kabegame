@@ -1,48 +1,48 @@
 [package]
+edition = {workspace = true}
 name = "kabegame"
-version = { workspace = true }
-edition = { workspace = true }
+version = {workspace = true}
 
 [dependencies]
-kabegame-core = { workspace = true, default-features = false, features = ["ipc-client"] }
-tauri = { workspace = true, features = ["protocol-asset"] }
-tauri-plugin-dialog = "=2.4.2"
-tauri-plugin-shell = "=2.3.3"
-tauri-plugin-fs = "=2.4.4"
-governor = {  version = "0.7", optional = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tokio = { workspace = true }
 async-trait = "0.1"
-image = { workspace = true }
-sha2 = { workspace = true }
-uuid = { workspace = true }
-base64 = { workspace = true }
-lru = { version = "0.12", optional = true }
-memmap2 = { version = "0.9", optional = true }
+base64 = {workspace = true}
+governor = {version = "0.7", optional = true}
+image = {workspace = true}
+kabegame-core = {workspace = true, default-features = false, features = ["ipc"]}
+lru = {version = "0.12", optional = true}
+memmap2 = {version = "0.9", optional = true}
+serde = {workspace = true}
+serde_json = {workspace = true}
+sha2 = {workspace = true}
+tauri = {workspace = true, features = ["protocol-asset"]}
+tauri-plugin-dialog = "=2.4.2"
+tauri-plugin-fs = "=2.4.4"
+tauri-plugin-shell = "=2.3.3"
+tokio = {workspace = true}
+uuid = {workspace = true}
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }
-winreg = "0.52"
-winver = "1"
 dokan = {version = "0.3.1", optional = true}
 widestring = {version = "0.4.3", optional = true}
-winapi = { version = "0.3.9", features = ["ntstatus", "winnt", "winbase"], optional = true }
-windows = { version = "0.52", features = [
+winapi = {version = "0.3.9", features = ["ntstatus", "winnt", "winbase"], optional = true}
+windows = {version = "0.52", features = [
   "Win32_Foundation",
   "Win32_System_Com",
   "Win32_UI_Shell",
-] }
+]}
+windows-sys = {workspace = true}
+winreg = "0.52"
+winver = "1"
 
 [build-dependencies]
-tauri-build = { workspace = true }
+tauri-build = {workspace = true}
 
 [features]
+custom-protocol = ["tauri/custom-protocol", "kabegame-core/custom-protocol"]
 default = ["custom-protocol", "tray"]
 tray = ["dep:governor"]
-custom-protocol = ["tauri/custom-protocol"]
 # self-hosted && vd (local) | self-hosted && !vd (light) | !self-hosted && vd (normal)  
-self-hosted = ["kabegame-core/tauri-runtime"]
+self-hosted = ["kabegame-core/tauri"]
 virtual-driver = ["dep:dokan", "dep:widestring", "dep:winapi", "dep:lru", "dep:memmap2", "kabegame-core/virtual-driver"]
 
 [[bin]]

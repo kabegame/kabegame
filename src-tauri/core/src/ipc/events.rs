@@ -25,7 +25,6 @@
 //! listener.start().await?;
 //! ```
 
-#[cfg(feature = "ipc-client")]
 use crate::ipc::daemon_startup;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -345,7 +344,6 @@ impl EventListener {
     ///
     /// 此方法会监听连接状态，当连接上时自动注册事件，断开时自动停止并释放资源
     /// 当连接状态通道关闭时，监听循环会自动退出
-    #[cfg(feature = "ipc-client")]
     pub async fn start(&self, kinds: &[DaemonEventKind]) -> Result<(), String> {
         let callbacks = self.callbacks.clone();
         let default_emitter = self.default_emitter.clone();
@@ -495,7 +493,6 @@ pub fn get_global_listener() -> &'static EventListener {
 }
 
 /// 简化的 API：启动监听（长连接模式，按事件类型过滤）
-#[cfg(feature = "ipc-client")]
 pub async fn start_listening(kinds: &[DaemonEventKind]) -> Result<(), String> {
     get_global_listener().start(kinds).await
 }

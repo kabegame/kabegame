@@ -2,12 +2,12 @@
 
 pub mod app_paths;
 pub mod bin_finder;
-#[cfg(any(feature = "ipc-client", feature = "ipc-server"))]
+pub mod emitter;
 pub mod ipc;
 
 pub mod crawler;
 // 去重任务管理器（GUI/本地模式使用）。daemon 侧只需要 storage::dedupe 的扫描能力。
-#[cfg(all(feature = "dedupe", feature = "tauri-runtime"))]
+#[cfg(feature = "tauri")]
 pub mod dedupe;
 
 pub mod gallery;

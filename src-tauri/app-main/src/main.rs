@@ -94,6 +94,8 @@ fn startup_steps(app: &mut tauri::App) {
     #[cfg(feature = "self-hosted")]
     startup::startup_step_manage_settings(app);
     #[cfg(feature = "self-hosted")]
+    startup::startup_step_init_global_emitter(app.app_handle());
+    #[cfg(feature = "self-hosted")]
     startup::startup_step_warm_provider_cache(app.app_handle());
     #[cfg(feature = "self-hosted")]
     {

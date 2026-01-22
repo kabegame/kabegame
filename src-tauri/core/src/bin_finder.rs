@@ -193,19 +193,6 @@ pub fn execute_binary_at_path(
     binary_type: BinaryType,
     execute_options: &mut ExecuteOptions,
 ) -> Result<(), String> {
-    // Windows 上运行 daemon 时自动使用 runas 提权
-    #[cfg(target_os = "windows")]
-    {
-        if matches!(binary_type, BinaryType::Daemon) {
-            crate::shell_open::runas(
-                &binary_path.to_string_lossy(),
-                &execute_options.args.join(" "),
-            )?;
-            return Ok(());
-        }
-    }
-
-    // 在非 Windows 平台上，binary_type 参数保留用于未来扩展
     #[allow(unused_variables)]
     let _ = binary_type;
 

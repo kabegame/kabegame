@@ -48,8 +48,6 @@ pub fn find_daemon_executable() -> Result<PathBuf, String> {
 /// 查找 daemon 可执行文件的顺序：
 /// 1. 当前可执行文件同目录下的 `kabegame-daemon` / `kabegame-daemon.exe`
 ///
-/// Windows 下会使用 runas 提权启动
-///
 /// 超时时间：10 秒
 pub async fn ensure_daemon_ready_basic() -> Result<PathBuf, String> {
     use std::sync::Mutex;
@@ -100,7 +98,6 @@ pub async fn ensure_daemon_ready_basic() -> Result<PathBuf, String> {
     // 查找 daemon 可执行文件
     let daemon_exe = find_daemon_executable()?;
 
-    // 启动 daemon（Windows 上自动使用 runas）
     use crate::bin_finder::{execute_binary_at_path, BinaryType, ExecuteOptions};
     let mut exec_opts = ExecuteOptions {
         args: Vec::new(),
@@ -139,8 +136,6 @@ pub async fn ensure_daemon_ready_basic() -> Result<PathBuf, String> {
 /// 查找 daemon 可执行文件的顺序：
 /// 1. 当前可执行文件同目录下的 `kabegame-daemon` / `kabegame-daemon.exe`
 /// 2. Tauri resources 目录下的 `bin/kabegame-daemon` / `bin/kabegame-daemon.exe`（如果提供了 app_handle）
-///
-/// Windows 下会使用 runas 提权启动
 ///
 /// 超时时间：10 秒
 pub async fn ensure_daemon_ready() -> Result<PathBuf, String> {
@@ -191,7 +186,6 @@ pub async fn ensure_daemon_ready() -> Result<PathBuf, String> {
         ));
     }
 
-    // 启动 daemon（Windows 上自动使用 runas）
     use crate::bin_finder::{execute_binary_at_path, BinaryType, ExecuteOptions};
     let mut exec_opts = ExecuteOptions {
         args: Vec::new(),
@@ -232,7 +226,7 @@ pub async fn ensure_daemon_ready() -> Result<PathBuf, String> {
 /// - `app`: Tauri AppHandle，用于发送事件
 /// - `connected_event`: 连接建立时发送的事件名（例如 "daemon-ready"）
 /// - `disconnected_event`: 连接断开时发送的事件名（例如 "daemon-offline"）
-#[cfg(feature = "ipc-client")]
+#[cfg(any(feature = "custom-protocol", feature = "tauri-runtime"))]
 pub fn spawn_connection_status_watcher(
     app: tauri::AppHandle,
     connected_event: &'static str,

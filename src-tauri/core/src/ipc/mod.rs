@@ -4,36 +4,22 @@
 pub mod events;
 pub mod ipc;
 
-// 服务端模块
-#[cfg(feature = "ipc-server")]
-pub mod broadcaster;
-#[cfg(feature = "ipc-server")]
-pub mod subscription;
-
 // 客户端模块
-#[cfg(feature = "ipc-client")]
+#[cfg(feature = "ipc")]
 pub mod client;
-#[cfg(feature = "ipc-client")]
+#[cfg(feature = "ipc")]
 pub mod connection;
-#[cfg(feature = "ipc-client")]
+#[cfg(feature = "ipc")]
 pub mod daemon_startup;
 
 // 共享导出（客户端和服务端都需要）
 pub use events::DaemonEvent;
 pub use ipc::{CliIpcRequest, CliIpcResponse};
 
-// 服务端导出
-#[cfg(feature = "ipc-server")]
-pub use broadcaster::EventBroadcaster;
-#[cfg(feature = "ipc-server")]
-pub use subscription::SubscriptionManager;
-
 // 客户端导出
-#[cfg(feature = "ipc-client")]
+#[cfg(feature = "ipc")]
 pub use client::IpcClient;
-#[cfg(feature = "ipc-client")]
+#[cfg(feature = "ipc")]
 pub use connection::ConnectionStatus;
-#[cfg(feature = "ipc-client")]
 pub use events::*;
-#[cfg(feature = "ipc-client")]
 pub use events::*;

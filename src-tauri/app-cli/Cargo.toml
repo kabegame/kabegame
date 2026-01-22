@@ -1,22 +1,22 @@
 [package]
+edition = {workspace = true}
 name = "kabegame-cli"
-version = { workspace = true }
-edition = { workspace = true }
+version = {workspace = true}
 
 [dependencies]
-kabegame-core = { workspace = true, features = ['ipc-client'] }
-tauri = { workspace = true }
-clap = { version = "4.5", features = ["derive"] }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tokio = { workspace = true }
-uuid = { workspace = true }
-zip = { workspace = true }
-base64 = { workspace = true }
-url = { workspace = true }
+base64 = {workspace = true}
+clap = {version = "4.5", features = ["derive"]}
+kabegame-core = {workspace = true, features = ["ipc"]}
+serde = {workspace = true}
+serde_json = {workspace = true}
+tauri = {workspace = true}
+tokio = {workspace = true}
+url = {workspace = true}
+uuid = {workspace = true}
+zip = {workspace = true}
 
 [build-dependencies]
-tauri-build = { workspace = true }
+tauri-build = {workspace = true}
 
 [features]
 # 默认启用 VD：Windows 下可用于提权挂载画册盘（Dokan）。
@@ -26,6 +26,3 @@ virtual-driver = ["kabegame-core/virtual-driver"]
 [[bin]]
 name = "kabegame-cli"
 path = "src/main.rs"
-
-
-

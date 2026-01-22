@@ -1,4 +1,5 @@
-use kabegame_core::ipc::{DaemonEvent, EventBroadcaster};
+use crate::server::EventBroadcaster;
+use kabegame_core::ipc::DaemonEvent;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
 use std::collections::HashSet;
@@ -88,14 +89,12 @@ fn emit_dedupe_progress(
     batch_index: usize,
 ) {
     handle.block_on(async move {
-        kabegame_core::ipc::broadcaster::emit_dedupe_progress(
-            &bc,
+        bc.broadcast_sync(DaemonEvent::DedupeProgress {
             processed,
             total,
             removed,
             batch_index,
-        )
-        .await;
+        });
     });
 }
 
@@ -108,10 +107,12 @@ fn emit_dedupe_finished(
     canceled: bool,
 ) {
     handle.block_on(async move {
-        kabegame_core::ipc::broadcaster::emit_dedupe_finished(
-            &bc, processed, total, removed, canceled,
-        )
-        .await;
+        bc.broadcast_sync(DaemonEvent::DedupeFinished {
+            processed,
+            total,
+            removed,
+            canceled,
+        });
     });
 }
 
@@ -133,7 +134,11 @@ fn run_dedupe_batched(
 
     // 当前壁纸 id：若被移除则清空（与历史行为保持一致）
     let mut current_wallpaper_id = handle.block_on(async {
-        Settings::global().get_current_wallpaper_image_id().await.ok().flatten()
+        Settings::global()
+            .get_current_wallpaper_image_id()
+            .await
+            .ok()
+            .flatten()
     });
 
     loop {
@@ -182,7 +187,9 @@ fn run_dedupe_batched(
             if let Some(cur) = current_wallpaper_id.as_deref() {
                 if remove_ids.iter().any(|id| id == cur) {
                     let _ = handle.block_on(async {
-                        Settings::global().set_current_wallpaper_image_id(None).await
+                        Settings::global()
+                            .set_current_wallpaper_image_id(None)
+                            .await
                     });
                     current_wallpaper_id = None;
                 }

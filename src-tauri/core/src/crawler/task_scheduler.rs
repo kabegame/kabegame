@@ -1,6 +1,6 @@
 use crate::crawler::DownloadQueue;
 use crate::plugin::PluginManager;
-use crate::runtime::{global_emitter::GlobalEmitter, EventEmitter};
+use crate::emitter::{GlobalEmitter, EventEmitter};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};

@@ -1,9 +1,7 @@
-#![cfg(feature = "dedupe")]
-
 use crate::storage::{Storage, FAVORITE_ALBUM_ID};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-#[cfg(not(any(feature = "ipc-server", feature = "ipc-client")))]
+#[cfg(feature = "tauri-runtime")]
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,7 +226,7 @@ impl Storage {
         })
     }
 
-    #[cfg(not(any(feature = "ipc-server", feature = "ipc-client")))]
+    #[cfg(feature = "tauri-runtime")]
     pub fn debug_clone_images(
         &self,
         app: AppHandle,
@@ -236,6 +234,8 @@ impl Storage {
         pool_size: usize,
         seed: Option<u64>,
     ) -> Result<DebugCloneImagesResult, String> {
+        use crate::storage::XorShift64;
+
         if count == 0 {
             return Ok(DebugCloneImagesResult { inserted: 0 });
         }

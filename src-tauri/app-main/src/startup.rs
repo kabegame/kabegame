@@ -11,6 +11,8 @@ use crate::storage::Storage;
 use crate::wallpaper::WallpaperWindow;
 use crate::wallpaper::{WallpaperController, WallpaperRotator};
 #[cfg(feature = "self-hosted")]
+use kabegame_core::emitter::GlobalEmitter;
+#[cfg(feature = "self-hosted")]
 use kabegame_core::plugin::PluginManager;
 #[cfg(feature = "self-hosted")]
 use kabegame_core::settings::Settings;
@@ -299,35 +301,12 @@ pub fn startup_step_manage_wallpaper_components(app: &mut tauri::App) {
                 }
             }
         }
-
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // 延迟启动，确保应用完全初始化
-
-        // 初始化壁纸控制器（如创建窗口等）
-        // 使用全局单例（不再使用 state）
-        let controller = WallpaperController::global();
-        if let Err(e) = controller.init().await {
-            eprintln!("初始化壁纸控制器失败: {}", e);
-        }
-
-        println!("初始化壁纸控制器完成");
-
-        // 启动时：按规则恢复/回退"当前壁纸"
-        if let Err(e) = init_wallpaper_on_startup().await {
-            eprintln!("启动时初始化壁纸失败: {}", e);
-        }
-
-        // 初始化完成后：若轮播仍启用，则启动轮播线程
-        if let Ok(enabled) = daemon_client::get_ipc_client()
-            .settings_get_wallpaper_rotation_enabled()
-            .await
-        {
-            if enabled {
-                // 使用全局单例（不再使用 state）
-                let rotator = WallpaperRotator::global();
-                if let Err(e) = rotator.start().await {
-                    eprintln!("启动壁纸轮播失败: {}", e);
-                }
-            }
-        }
     });
+}
+
+#[cfg(feature = "self-hosted")]
+pub fn startup_step_init_global_emitter(app: &tauri::AppHandle) {
+    if let Err(e) = GlobalEmitter::init_global_tauri(app.clone()) {
+        eprintln!("Failed to initialize GlobalEmitter: {}", e);
+    }
 }
