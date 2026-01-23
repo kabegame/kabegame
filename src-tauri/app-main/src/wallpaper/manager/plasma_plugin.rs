@@ -158,18 +158,18 @@ for (var i=0; i<allDesktops.length; i++) {{\n\
 #[async_trait]
 impl WallpaperManager for PlasmaPluginWallpaperManager {
     async fn get_style(&self) -> Result<String, String> {
-        // 以 daemon 设置为准（插件会同步 daemon）
-        crate::daemon_client::get_ipc_client()
-            .settings_get_wallpaper_rotation_style()
+        // 从本地设置读取
+        Settings::global()
+            .get_wallpaper_rotation_style()
             .await
-            .map_err(|e| format!("Daemon unavailable: {}", e))
+            .map_err(|e| format!("Failed to get wallpaper rotation style: {}", e))
     }
 
     async fn get_transition(&self) -> Result<String, String> {
-        crate::daemon_client::get_ipc_client()
-            .settings_get_wallpaper_rotation_transition()
+        Settings::global()
+            .get_wallpaper_rotation_transition()
             .await
-            .map_err(|e| format!("Daemon unavailable: {}", e))
+            .map_err(|e| format!("Failed to get wallpaper rotation transition: {}", e))
     }
 
     async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {

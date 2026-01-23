@@ -7,6 +7,13 @@
 ## [3.0.2]
 ### Changed
 - 将构建脚本从js升级到ts，类型更安全
+- 将服务端ipc代码移到core
+
+### Added
+- F11全屏快捷键
+
+### Deprecated
+- 去掉 plasma 插件。繁琐且没有必要
 
 ## [3.0.1]
 ### Changed

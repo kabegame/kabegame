@@ -112,10 +112,7 @@ impl WallpaperRotator {
             .await
             .ok()
             .flatten()?;
-        let img = Storage::global()
-            .find_image_by_id(&id)
-            .ok()
-            .flatten()?;
+        let img = Storage::global().find_image_by_id(&id).ok().flatten()?;
         let p = img.local_path;
         if Path::new(&p).exists() {
             Some(p)
@@ -286,15 +283,9 @@ impl WallpaperRotator {
 
                     if images.is_empty() {
                         // 画廊也没有：降级到非轮播
-                        let _ = settings
-                            .set_wallpaper_rotation_enabled(false)
-                            .await;
-                        let _ = settings
-                            .set_wallpaper_rotation_album_id(None)
-                            .await;
-                        let _ = settings
-                            .set_current_wallpaper_image_id(None)
-                            .await;
+                        let _ = settings.set_wallpaper_rotation_enabled(false).await;
+                        let _ = settings.set_wallpaper_rotation_album_id(None).await;
+                        let _ = settings.set_current_wallpaper_image_id(None).await;
                     }
                     eprintln!("无可用轮播图片，退出");
                     continue;
@@ -575,8 +566,6 @@ impl WallpaperRotator {
     /// - 如果轮播未启用，执行一次壁纸切换（需要画册ID）
     /// - 依赖当前设置：画册、随机/顺序、原生/窗口模式、style/transition
     pub async fn rotate(&self) -> Result<(), String> {
-        use tauri::Manager;
-
         // 检查轮播器是否正在运行
         if self.running.load(Ordering::Relaxed) {
             // 轮播线程里可能正在 await tick；如果这里去抢 std::sync::Mutex 会卡住很久。
@@ -618,15 +607,9 @@ impl WallpaperRotator {
 
             if images.is_empty() {
                 // 画廊也没有：降级到非轮播
-                let _ = settings
-                    .set_wallpaper_rotation_enabled(false)
-                    .await;
-                let _ = settings
-                    .set_wallpaper_rotation_album_id(None)
-                    .await;
-                let _ = settings
-                    .set_current_wallpaper_image_id(None)
-                    .await;
+                let _ = settings.set_wallpaper_rotation_enabled(false).await;
+                let _ = settings.set_wallpaper_rotation_album_id(None).await;
+                let _ = settings.set_current_wallpaper_image_id(None).await;
                 return Ok(());
             }
         }

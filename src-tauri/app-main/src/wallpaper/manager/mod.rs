@@ -1,4 +1,4 @@
-pub mod native;
+﻿pub mod native;
 #[cfg(all(target_os = "linux", desktop = "plasma"))]
 pub mod plasma_plugin;
 #[cfg(target_os = "windows")]
@@ -116,7 +116,7 @@ impl WallpaperController {
 
     /// 初始化活动管理器（如创建窗口等）
     /// 异步执行，完成后返回结果
-    pub async fn init(&self) -> Result<(), String> {
+    pub fn init(&self) -> Result<(), String> {
         // 注意：这里不要只初始化 active_manager（它依赖 settings.wallpaper_mode）。
         // 启动时经常是 native 模式，但用户可能随后切换到 window 模式；
         // 若 window manager 未 init，会导致切换时报 "窗口未初始化，请先调用 init 方法"，前端卡在"切换中"。
@@ -124,14 +124,12 @@ impl WallpaperController {
         // 我们在 Windows 上同时初始化两个后端：
         // - native: no-op
         // - window: 只确保 wallpaper 窗口存在且保持隐藏，不做挂载/显示
-        println!("初始化 manager 开始");
         self.native.init(self.app.clone())?;
 
         #[cfg(target_os = "windows")]
         {
             self.window.init(self.app.clone())?;
         }
-        println!("初始化 manager 完成");
         Ok(())
     }
 }
@@ -139,6 +137,7 @@ impl WallpaperController {
 use async_trait::async_trait;
 
 /// 壁纸管理器 trait，定义壁纸设置的通用接口
+/// TODO: 这里的 immediate 是糟糕的设计
 #[async_trait]
 pub trait WallpaperManager: Send + Sync {
     ///

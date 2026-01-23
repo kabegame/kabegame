@@ -25,8 +25,8 @@
 //! listener.start().await?;
 //! ```
 
-#[cfg(feature = "ipc")]
-use crate::ipc::daemon_startup;
+#[cfg(feature = "ipc-client")]
+use crate::ipc::client::daemon_startup;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -147,8 +147,8 @@ impl DaemonEventKind {
     }
 }
 
-/// Daemon 事件类型
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Daemon 事件类型，绝对不Clone
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum DaemonEvent {
     /// 任务日志事件
@@ -246,7 +246,9 @@ pub enum DaemonEvent {
     },
 }
 
-#[cfg(feature = "ipc")]
+/// 包装在 Arc 中的 Daemon 事件，用于零拷贝传递
+pub type ArcDaemonEvent = Arc<DaemonEvent>;
+
 impl DaemonEvent {
     /// 获取事件种类（用于路由到对应广播器）。
     /// TODO: 这个函数太长不好维护
@@ -275,19 +277,19 @@ impl DaemonEvent {
     }
 }
 
-#[cfg(feature = "ipc")]
+#[cfg(feature = "ipc-client")]
 use std::collections::HashMap;
 
 /// 事件回调类型（接收原始 JSON payload）
-#[cfg(feature = "ipc")]
+#[cfg(feature = "ipc-client")]
 pub type EventCallback = Arc<dyn Fn(serde_json::Value) + Send + Sync>;
 
 /// 默认事件发送器（用于无回调时自动转发到前端）
-#[cfg(feature = "ipc")]
+#[cfg(feature = "ipc-client")]
 pub type DefaultEmitter = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 
 /// 事件监听器
-#[cfg(feature = "ipc")]
+#[cfg(feature = "ipc-client")]
 pub struct EventListener {
     /// 按事件类型组织的回调表：kind -> Vec<callback>
     callbacks: Arc<RwLock<HashMap<DaemonEventKind, Vec<EventCallback>>>>,
@@ -295,14 +297,14 @@ pub struct EventListener {
     default_emitter: Arc<RwLock<Option<DefaultEmitter>>>,
 }
 
-#[cfg(feature = "ipc")]
+#[cfg(feature = "ipc-client")]
 impl Default for EventListener {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(feature = "ipc")]
+#[cfg(feature = "ipc-client")]
 impl EventListener {
     /// 创建新的事件监听器
     pub fn new() -> Self {
@@ -374,7 +376,7 @@ impl EventListener {
                         eprintln!("[DEBUG] EventListener 连接状态变化: {:?}", status);
 
                         match status {
-                            crate::ipc::connection::ConnectionStatus::Connected => {
+                            crate::ipc::client::ConnectionStatus::Connected => {
                                 // 连接上：启动事件订阅任务
                                 if event_task_handle.is_none() {
                                     eprintln!("[DEBUG] EventListener 连接已建立，开始订阅事件");
@@ -460,14 +462,14 @@ impl EventListener {
                                     event_task_handle = Some(task);
                                 }
                             }
-                            crate::ipc::connection::ConnectionStatus::Disconnected => {
+                            crate::ipc::client::ConnectionStatus::Disconnected => {
                                 // 断开连接：停止并释放事件订阅任务
                                 if let Some(handle) = event_task_handle.take() {
                                     eprintln!("[DEBUG] EventListener 连接已断开，停止事件订阅");
                                     handle.abort();
                                 }
                             }
-                            crate::ipc::connection::ConnectionStatus::Connecting => {
+                            crate::ipc::client::ConnectionStatus::Connecting => {
                                 // 正在连接：不做任何操作，等待连接完成或失败
                             }
                         }
@@ -492,17 +494,17 @@ impl EventListener {
 }
 
 /// 全局事件监听器（单例）
-#[cfg(feature = "ipc")]
+#[cfg(feature = "ipc-client")]
 static GLOBAL_LISTENER: std::sync::OnceLock<EventListener> = std::sync::OnceLock::new();
 
 /// 获取全局事件监听器
-#[cfg(feature = "ipc")]
+#[cfg(feature = "ipc-client")]
 pub fn get_global_listener() -> &'static EventListener {
     GLOBAL_LISTENER.get_or_init(|| EventListener::new())
 }
 
 /// 简化的 API：启动监听（长连接模式，按事件类型过滤）
-#[cfg(feature = "ipc")]
+#[cfg(feature = "ipc-client")]
 pub async fn start_listening(kinds: &[DaemonEventKind]) -> Result<(), String> {
     get_global_listener().start(kinds).await
 }

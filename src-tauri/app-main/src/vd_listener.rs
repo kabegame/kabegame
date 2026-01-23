@@ -2,9 +2,8 @@
 //!
 //! 监听 EventBroadcaster 的事件，并调用 VirtualDriveService 的相应方法更新虚拟磁盘状态。
 
-use crate::server::EventBroadcaster;
 use kabegame_core::ipc::events::DaemonEvent;
-use kabegame_core::storage::Storage;
+use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::Arc;
@@ -36,7 +35,7 @@ pub async fn start_vd_event_listener(
     loop {
         match rx.recv().await {
             Some((_id, event)) => {
-                match &event {
+                match &*event {
                     DaemonEvent::AlbumAdded { .. } => {
                         vd_service.bump_albums();
                     }
@@ -63,19 +62,17 @@ pub async fn start_vd_event_listener(
                                     .and_then(|v| v.as_str())
                                     .map(|s| s.to_string());
 
-                                let storage = Storage::global();
-
                                 // 如果有 taskId，通知任务目录变更
                                 if let Some(tid) = &task_id {
                                     if !tid.is_empty() {
-                                        vd_service.notify_task_dir_changed(storage, tid);
+                                        vd_service.notify_task_dir_changed(tid);
                                     }
                                 }
 
                                 // 如果有 albumId，通知画册目录变更
                                 if let Some(aid) = &album_id {
                                     if !aid.is_empty() {
-                                        vd_service.notify_album_dir_changed(storage, aid);
+                                        vd_service.notify_album_dir_changed(aid);
                                     }
                                 }
 

@@ -520,9 +520,9 @@ impl WallpaperManager for NativeWallpaperManager {
             #[cfg(all(target_os = "linux", desktop = "plasma"))]
             {
                 let _ = immediate;
-                // style 从 daemon 读取（与前端保持一致）
-                let style = crate::daemon_client::get_ipc_client()
-                    .settings_get_wallpaper_rotation_style()
+                // style 从本地设置读取
+                let style = Settings::global()
+                    .get_wallpaper_rotation_style()
                     .await
                     .unwrap_or_else(|_| "fill".to_string());
                 return self.set_wallpaper_plasma(file_path, &style);

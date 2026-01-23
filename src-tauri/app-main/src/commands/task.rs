@@ -1,4 +1,4 @@
-// 任务相关命令
+﻿// 任务相关命令
 
 use kabegame_core::storage::{Storage, TaskInfo};
 use tauri::AppHandle;
@@ -40,10 +40,9 @@ pub async fn cancel_task(task_id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn get_active_downloads() -> Result<serde_json::Value, String> {
     use kabegame_core::crawler::TaskScheduler;
-    let downloads = TaskScheduler::global().get_active_downloads();
+    let downloads = TaskScheduler::global().get_active_downloads()?;
     Ok(serde_json::to_value(downloads).map_err(|e| e.to_string())?)
 }
-
 
 #[tauri::command]
 pub async fn confirm_task_rhai_dump(task_id: String) -> Result<(), String> {

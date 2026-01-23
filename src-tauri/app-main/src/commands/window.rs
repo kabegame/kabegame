@@ -1,7 +1,7 @@
 // 窗口管理相关命令
 
 #[cfg(target_os = "windows")]
-pub async fn fix_wallpaper_window_zorder(app: tauri::AppHandle) {
+pub(super) async fn fix_wallpaper_window_zorder(app: tauri::AppHandle) {
     use tauri::Manager;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -340,6 +340,24 @@ pub fn wallpaper_window_ready(_app: tauri::AppHandle) -> Result<(), String> {
     // 标记窗口已完全初始化
     println!("壁纸窗口已就绪");
     crate::wallpaper::WallpaperWindow::mark_ready();
+    Ok(())
+}
+
+/// 切换主窗口全屏状态
+#[tauri::command]
+pub async fn toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+
+    let window = app
+        .get_webview_window("main")
+        .ok_or("Main window not found")?;
+
+    let is_fullscreen = window.is_fullscreen().map_err(|e| e.to_string())?;
+
+    window
+        .set_fullscreen(!is_fullscreen)
+        .map_err(|e| e.to_string())?;
+
     Ok(())
 }
 

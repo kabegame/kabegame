@@ -7,6 +7,7 @@ import { BasePlugin } from "./base-plugin";
 import { run } from "../build-utils";
 import { Component, ComponentPlugin } from "./component-plugin";
 import chalk from "chalk";
+import { BuildSystem } from "scripts/build-system";
 
 export class Mode {
   static readonly NORMAL = "normal";
@@ -18,7 +19,7 @@ export class Mode {
   constructor(private readonly _mode: string) {}
 
   get mode() {
-    return this._mode
+    return this._mode;
   }
 
   get isNormal(): boolean {
@@ -47,25 +48,19 @@ export class ModePlugin extends BasePlugin {
     super(ModePlugin.NAME);
   }
 
-  apply(bs: any): void {
-    bs.hooks.parseParams.tap(
-      {
-        name: this.name,
-        after: ComponentPlugin.NAME,
-      },
-      () => {
-        let mode = bs.options.mode || Mode.NORMAL;
-        if (!Mode.modes.includes(mode)) {
-          throw new Error(`未知的模式，允许的列表：${Mode.modes}`);
-        }
-        const modeObj = new Mode(mode);
-        if (modeObj.isLight && !bs.context.component.isMain) {
-          throw new Error("light mode 只支持main组件！");
-        }
-        bs.context.mode = modeObj;
-        this.mode = modeObj;
-      },
-    );
+  apply(bs: BuildSystem): void {
+    bs.hooks.parseParams.tap(this.name, () => {
+      let mode = bs.options.mode || Mode.NORMAL;
+      if (!Mode.modes.includes(mode)) {
+        throw new Error(`未知的模式，允许的列表：${Mode.modes}`);
+      }
+      const modeObj = new Mode(mode);
+      if (modeObj.isLight && !bs.context.component!.isMain) {
+        throw new Error("light mode 只支持main组件！");
+      }
+      bs.context.mode = modeObj;
+      this.mode = modeObj;
+    });
 
     bs.hooks.prepareEnv.tap(this.name, () => {
       this.setEnv("KABEGAME_MODE", this.mode!.mode);
@@ -78,31 +73,39 @@ export class ModePlugin extends BasePlugin {
       this.prepareResources(bs);
     });
 
-    //TODO: 虚拟盘仅在非安卓并且为非light情况下才注入
-    // 可能传入一个参数数组，或者一个component枚举值，或者什么都没有
-    bs.hooks.prepareFeatures.tap(this.name, (nullOrCompOrFeatures: any) => {
-      // self-hosted && vd (local) | self-hosted && !vd (light) | !self-hosted && vd (normal)
-      const mode = this.mode!;
-      const features = Array.isArray(nullOrCompOrFeatures)
-        ? nullOrCompOrFeatures
-        : [];
-      const comp = nullOrCompOrFeatures
-        ? typeof nullOrCompOrFeatures === "string"
-          ? new Component(nullOrCompOrFeatures)
-          : nullOrCompOrFeatures["comp"]
-        : bs.context.component;
-      if (mode.isNormal) {
-        features.push("virtual-driver");
-      } else if (mode.isLocal) {
-        features.push("virtual-driver", "self-hosted");
-      } else if (mode.isLight) {
-        features.push("self-hosted");
-      }
-      return {
-        comp,
-        features,
-      };
-    });
+    bs.hooks.prepareCompileArgs.tap(
+      this.name,
+      // @ts-ignore
+      (
+        nullOrCompOrFeatures:
+          | null
+          | string
+          | { comp: Component; features: string[] },
+      ) => {
+        // virtual-driver 功能现在通过 cfg(kabegame_mode) 控制，不再使用 features
+        // self-hosted 功能仍通过 feature 控制
+        const mode = this.mode!;
+        const features: string[] = Array.isArray(nullOrCompOrFeatures)
+          ? nullOrCompOrFeatures
+          : [];
+        const comp = nullOrCompOrFeatures
+          ? typeof nullOrCompOrFeatures === "string"
+            ? new Component(nullOrCompOrFeatures)
+            : nullOrCompOrFeatures["comp"]
+          : bs.context.component!;
+
+        // cfg 参数：注入 kabegame_mode
+        const cfgs = [`kabegame_mode="${mode.mode}"`];
+
+        this.addRustFlags(`--cfg kabegame_mode="${mode.mode}"`);
+
+        // 只保留 self-hosted feature 的逻辑
+        return {
+          comp,
+          features,
+        };
+      },
+    );
 
     // TODO: 对不同的mode执行不同的tap
   }

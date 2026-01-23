@@ -4,7 +4,6 @@ pub mod task_scheduler;
 
 pub use task_scheduler::{CrawlTaskRequest, TaskScheduler};
 
-use crate::emitter::EventEmitter;
 use crate::emitter::GlobalEmitter;
 use crate::plugin::Plugin;
 use crate::plugin::{VarDefinition, VarOption};
@@ -979,7 +978,6 @@ fn download_image(
     download_start_time: u64,
     // Settings 现在是全局单例，不需要传递
     storage: &crate::storage::Storage,
-    emitter: &dyn EventEmitter,
     dq: &DownloadQueue,
     http_headers: &HashMap<String, String>,
 ) -> Result<DownloadedImage, String> {
@@ -1378,7 +1376,7 @@ fn download_image(
                 let emit_bytes_step: u64 = 256 * 1024;
 
                 // 首次立即发一个（用于 UI 及时出现 "0B / ?"）
-                emitter.emit(
+                GlobalEmitter::global().emit(
                     "download-progress",
                     serde_json::json!({
                         "taskId": task_id_clone,
@@ -1391,7 +1389,7 @@ fn download_image(
                 );
 
                 // 首次下载时发送下载状态
-                emitter.emit_download_state(
+                GlobalEmitter::global().emit_download_state(
                     &task_id_clone,
                     &url_clone,
                     download_start_time,
@@ -1433,7 +1431,7 @@ fn download_image(
                             if should_emit {
                                 last_emit_bytes = received_bytes;
                                 last_emit_at = std::time::Instant::now();
-                                emitter.emit(
+                                GlobalEmitter::global().emit(
                                     "download-progress",
                                     serde_json::json!({
                                         "taskId": task_id_clone,
@@ -1472,7 +1470,7 @@ fn download_image(
                 }
 
                 // 最终再发一次（接近 100%）
-                emitter.emit(
+                GlobalEmitter::global().emit(
                     "download-progress",
                     serde_json::json!({
                         "taskId": task_id_clone,
@@ -1929,8 +1927,7 @@ impl DownloadQueue {
             let plugin_id_clone = plugin_id.clone();
 
             std::thread::spawn(move || {
-                let emitter = GlobalEmitter::global();
-                emitter.emit_download_state(
+                GlobalEmitter::global().emit_download_state(
                     &task_id_clone,
                     &url_clone,
                     download_start_time,
@@ -1967,7 +1964,7 @@ impl DownloadQueue {
 
                 ensure_minimum_duration(download_start_time, 500);
 
-                emitter.emit_download_state(
+                GlobalEmitter::global().emit_download_state(
                     &task_id_clone,
                     &url_clone,
                     download_start_time,
@@ -2085,8 +2082,8 @@ impl DownloadQueue {
         }
     }
 
-    pub fn emitter_arc(&self) -> &'static dyn EventEmitter {
-        GlobalEmitter::global() as &'static dyn EventEmitter
+    pub fn emitter_arc(&self) -> &'static GlobalEmitter {
+        GlobalEmitter::global()
     }
 
     // Settings 现在是全局单例，不需要返回 Arc
@@ -2381,7 +2378,6 @@ fn download_worker_loop(dq: DownloadQueue) {
             &job.task_id,
             job.download_start_time,
             Storage::global(),
-            GlobalEmitter::global(),
             &dq,
             &job.http_headers,
         );

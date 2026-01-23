@@ -7,13 +7,10 @@
 //! - 支持 Tauri AppHandle 和普通路径查找两种模式
 
 use crate::bin_finder::{find_binary, BinaryType};
-use crate::ipc::{ConnectionStatus, IpcClient};
+use super::IpcClient;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;
-// debug 断言
-#[cfg(debug_assertions)]
-use std::backtrace::Backtrace;
 
 pub static IPC_CLIENT: OnceLock<IpcClient> = OnceLock::new();
 
@@ -230,68 +227,4 @@ pub async fn ensure_daemon_ready() -> Result<PathBuf, String> {
         "daemon 启动后未能在 10 秒内就绪\n请检查 {} 能否正常启动",
         daemon_exe.display()
     ))
-}
-
-/// 启动连接状态监听任务（Tauri 版本）
-///
-/// 监听 IPC 连接状态变化，并在状态变化时发送 Tauri 事件。
-///
-/// - `app`: Tauri AppHandle，用于发送事件
-/// - `connected_event`: 连接建立时发送的事件名（例如 "daemon-ready"）
-/// - `disconnected_event`: 连接断开时发送的事件名（例如 "daemon-offline"）
-#[cfg(any(feature = "custom-protocol", feature = "tauri-runtime"))]
-pub fn spawn_connection_status_watcher(
-    app: tauri::AppHandle,
-    connected_event: &'static str,
-    disconnected_event: &'static str,
-) {
-    use tauri::Emitter;
-
-    let mut status_rx = get_ipc_client().subscribe_connection_status();
-    let app_for_connected = app.clone();
-    let app_for_disconnected = app.clone();
-
-    // 使用 tauri::async_runtime::spawn 避免在 setup 时没有 tokio runtime 的问题
-    tauri::async_runtime::spawn(async move {
-        // 跳过初始值，只监听变化
-        let mut last_status = *status_rx.borrow();
-
-        loop {
-            if status_rx.changed().await.is_err() {
-                eprintln!("[connection_status_watcher] 状态通道已关闭");
-                break;
-            }
-
-            let current_status = *status_rx.borrow();
-
-            // 只在状态从非 Connected -> Connected 或非 Disconnected -> Disconnected 时发送事件
-            match (last_status, current_status) {
-                (
-                    ConnectionStatus::Disconnected | ConnectionStatus::Connecting,
-                    ConnectionStatus::Connected,
-                ) => {
-                    eprintln!(
-                        "[connection_status_watcher] 连接已建立，发送 {}",
-                        connected_event
-                    );
-                    let _ = app_for_connected.emit(connected_event, serde_json::json!({}));
-                }
-                (
-                    ConnectionStatus::Connected | ConnectionStatus::Connecting,
-                    ConnectionStatus::Disconnected,
-                ) => {
-                    eprintln!(
-                        "[connection_status_watcher] 连接已断开，发送 {}",
-                        disconnected_event
-                    );
-                    let _ = app_for_disconnected.emit(disconnected_event, serde_json::json!({}));
-                }
-                _ => {
-                    // Connecting 状态不发送事件
-                }
-            }
-
-            last_status = current_status;
-        }
-    });
 }

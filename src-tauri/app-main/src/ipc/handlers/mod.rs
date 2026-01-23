@@ -8,8 +8,8 @@ pub mod plugin;
 pub mod settings;
 pub mod storage;
 
-use crate::dedupe_service::DedupeService;
-use crate::server::{EventBroadcaster, SubscriptionManager};
+use crate::ipc::dedupe_service::DedupeService;
+use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
 use kabegame_core::crawler::{CrawlTaskRequest, TaskScheduler};
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 use kabegame_core::plugin::PluginManager;
@@ -441,7 +441,7 @@ async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
     let mount_result = match tokio::task::spawn_blocking({
         let vd_service = vd_service.clone();
         let path = path.clone();
-        move || vd_service.mount(path.as_str(), Storage::global().clone())
+        move || vd_service.mount(path.as_str())
     })
     .await
     {

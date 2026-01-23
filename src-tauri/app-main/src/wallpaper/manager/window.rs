@@ -247,7 +247,7 @@ impl WallpaperManager for WindowWallpaperManager {
             }
         }
 
-        // 关键：init 阶段不要调用 WallpaperWindow::create("")。
+        // 这里不创建窗口，因为只能拿到app句柄，拿不到manager
         // create() 会把窗口挂载到桌面层并 show，如果此时没有有效图片路径，会导致桌面上“看不到壁纸”（被空内容窗口覆盖）。
         // 我们只确保 wallpaper WebviewWindow 已存在且保持隐藏；真正显示/挂载留到第一次 set_wallpaper_path(immediate=true) 触发 remount。
         if app.get_webview_window("wallpaper").is_none() {

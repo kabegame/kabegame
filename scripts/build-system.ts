@@ -1,14 +1,12 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * 基于 Tapable 的构建系统
  *
  * 使用钩子系统组织构建流程，支持插件化扩展
  */
 
-import { AsyncSeriesHook, AsyncParallelHook, SyncHook } from "tapable";
+import { AsyncSeriesHook, SyncHook } from "tapable";
 import path from "path";
-import fs from "fs";
-import chalk from "chalk";
 import { fileURLToPath } from "url";
 import { Component, ComponentPlugin } from "./plugins/component-plugin.js";
 import { ModePlugin } from "./plugins/mode-plugin.js";
@@ -18,7 +16,7 @@ import { Cmd } from "./run.ts";
 import { OSPlugin } from "./plugins/os-plugin.js";
 import { SyncWaterfallHook } from "tapable";
 import { run } from "./build-utils.js";
-import { features } from "process";
+import { BasePlugin } from "./plugins/base-plugin.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,7 +60,10 @@ interface BuildHooks {
   parseParams: SyncHook<[]>;
   prepareEnv: SyncHook<[]>;
   beforeBuild: SyncHook<[string?]>;
-  prepareFeatures: SyncWaterfallHook<[any?], any>;
+  prepareCompileArgs: SyncWaterfallHook<
+    [string?],
+    { comp: Component; features: string[] }
+  >;
   afterBuild: AsyncSeriesHook<[string]>;
 }
 
@@ -87,8 +88,8 @@ export class BuildSystem {
       // 预处理阶段（主要是打包rhai插件）
       beforeBuild: new SyncHook(["comp"]),
 
-      // 准备命令参数阶段（参数为 comp，如 Component.MAIN，没传则默认为当前上下文组件）
-      prepareFeatures: new SyncWaterfallHook(["comp"]),
+      // 准备编译参数阶段（features 和 cfg 参数）
+      prepareCompileArgs: new SyncWaterfallHook(["comp"]),
 
       // 构建后阶段
       afterBuild: new AsyncSeriesHook(["comp"]),
@@ -102,7 +103,7 @@ export class BuildSystem {
   /**
    * 注册插件
    */
-  use(plugin: any): void {
+  use<T extends BasePlugin>(plugin: T): void {
     if (!plugin || typeof plugin.apply !== "function") {
       throw new Error(`插件必须实现 apply 方法`);
     }
@@ -111,6 +112,24 @@ export class BuildSystem {
 
   getFeatureList(obj: any): string[] {
     return obj.features.keys().filter((f: string) => obj.features.get(f));
+  }
+
+  /**
+   * 将 features 和 cfgs 转换为 cargo 命令行参数
+   */
+  private buildCargoArgs(
+    baseArgs: string[],
+    features: string[],
+    additionalArgs?: string[],
+  ): string[] {
+    const args = [...baseArgs];
+    if (features.length > 0) {
+      args.push("--features", features.join(","));
+    }
+    if (additionalArgs && additionalArgs.length > 0) {
+      args.push(...additionalArgs);
+    }
+    return args;
   }
 
   commonUse(): void {
@@ -143,33 +162,30 @@ export class BuildSystem {
     this.commonUse();
     this.commonBefore();
     this.hooks.beforeBuild.call();
-    const { features } = this.hooks.prepareFeatures.call();
-    run(
-      "tauri",
-      ["dev", "--features", features.join(","), ...(this.options.args || [])],
-      {
-        cwd: (this.context.component as any).appDir,
-        bin: "cargo",
-      },
-    );
+    const { features } = this.hooks.prepareCompileArgs.call();
+    const args = this.buildCargoArgs(["dev"], features, this.options.args);
+    run("tauri", args, {
+      cwd: (this.context.component as any).appDir,
+      bin: "cargo",
+    });
   }
 
   async start(options: BuildOptions): Promise<void> {
     this.context.cmd = new Cmd(Cmd.START);
-    (this as any).options = Object.freeze(options);
+    // @ts-ignore
+    this.options = Object.freeze(options);
 
     this.commonUse();
     this.commonBefore();
-    const { features } = this.hooks.prepareFeatures.call();
-    const args = [
+    const { features } = this.hooks.prepareCompileArgs.call();
+    const baseArgs = [
       "run",
       "-p",
       (this.context.component as any).cargoComp,
-      "--features",
-      features.join(","),
       "--bin",
       Component.cargoComp(Component.CLI),
     ];
+    const args = this.buildCargoArgs(baseArgs, features);
 
     if (this.options.args && this.options.args.length > 0) {
       args.push("--");
@@ -187,61 +203,49 @@ export class BuildSystem {
 
     this.commonUse();
     this.commonBefore();
-    if ((this.context.component as any).isPluginEditor) {
+    if (this.context.component!.isPluginEditor) {
       this.hooks.beforeBuild.call(Component.PLUGIN_EDITOR);
-      const { features } = this.hooks.prepareFeatures.call(
+      const { features } = this.hooks.prepareCompileArgs.call(
         Component.PLUGIN_EDITOR,
       );
       run("bun", ["--cwd", Component.appDir(Component.PLUGIN_EDITOR), "build"]);
-      run(
-        "cargo",
+      const args = this.buildCargoArgs(
         [
           "build",
           "--release",
           "-p",
           Component.cargoComp(Component.PLUGIN_EDITOR),
-          "--features",
-          features.join(","),
-          ...(this.options.args || []),
         ],
-        {
-          cwd: SRC_TAURI_DIR,
-        },
+        features,
+        this.options.args,
       );
+      run("cargo", args, {
+        cwd: SRC_TAURI_DIR,
+      });
       // this.hooks.afterBuild.callAsync(Component.PLUGIN_EDITOR)
     }
     if ((this.context.component as any).isCli) {
       this.hooks.beforeBuild.call(Component.CLI);
-      const { features } = this.hooks.prepareFeatures.call(Component.CLI);
+      const { features } = this.hooks.prepareCompileArgs.call(Component.CLI);
       run("bun", ["--cwd", Component.appDir(Component.CLI), "build"]);
-      run(
-        "cargo",
-        [
-          "build",
-          "--release",
-          "-p",
-          Component.cargoComp(Component.CLI),
-          "--features",
-          features.join(","),
-          ...(this.options.args || []),
-        ],
-        {
-          cwd: SRC_TAURI_DIR,
-        },
+      const args = this.buildCargoArgs(
+        ["build", "--release", "-p", Component.cargoComp(Component.CLI)],
+        features,
+        this.options.args,
       );
+      run("cargo", args, {
+        cwd: SRC_TAURI_DIR,
+      });
       // this.hooks.afterBuild.callAsync(Component.CLI)
     }
     if ((this.context.component as any).isMain) {
       this.hooks.beforeBuild.call(Component.MAIN);
-      const { features } = this.hooks.prepareFeatures.call(Component.MAIN);
-      run(
-        "tauri",
-        ["build", "--features", features.join(","), ...(this.options.args || [])],
-        {
-          cwd: Component.appDir(Component.MAIN),
-          bin: "cargo",
-        },
-      );
+      const { features } = this.hooks.prepareCompileArgs.call(Component.MAIN);
+      const args = this.buildCargoArgs(["build"], features, this.options.args);
+      run("tauri", args, {
+        cwd: Component.appDir(Component.MAIN),
+        bin: "cargo",
+      });
       // TODO: 添加linux脚本到deb包中
       // this.hooks.afterBuild.callAsync(Component.MAIN)
     }

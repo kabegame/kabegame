@@ -1,4 +1,4 @@
-use crate::server::EventBroadcaster;
+use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::ipc::DaemonEvent;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
@@ -80,24 +80,6 @@ impl DedupeService {
     }
 }
 
-fn emit_dedupe_progress(
-    handle: &tokio::runtime::Handle,
-    bc: &EventBroadcaster,
-    processed: usize,
-    total: usize,
-    removed: usize,
-    batch_index: usize,
-) {
-    handle.block_on(async move {
-        bc.broadcast_sync(DaemonEvent::DedupeProgress {
-            processed,
-            total,
-            removed,
-            batch_index,
-        });
-    });
-}
-
 fn emit_dedupe_finished(
     handle: &tokio::runtime::Handle,
     bc: &EventBroadcaster,
@@ -107,12 +89,12 @@ fn emit_dedupe_finished(
     canceled: bool,
 ) {
     handle.block_on(async move {
-        bc.broadcast_sync(DaemonEvent::DedupeFinished {
+        bc.broadcast_sync(Arc::new(DaemonEvent::DedupeFinished {
             processed,
             total,
             removed,
             canceled,
-        });
+        }));
     });
 }
 
@@ -171,17 +153,17 @@ fn run_dedupe_batched(
             if delete_files {
                 storage.batch_delete_images(&remove_ids)?;
                 // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
-                broadcaster.broadcast_sync(DaemonEvent::ImagesChange {
+                broadcaster.broadcast_sync(Arc::new(DaemonEvent::ImagesChange {
                     reason: "delete".to_string(),
                     image_ids: remove_ids.clone(),
-                });
+                }));
             } else {
                 storage.batch_remove_images(&remove_ids)?;
                 // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
-                broadcaster.broadcast_sync(DaemonEvent::ImagesChange {
+                broadcaster.broadcast_sync(Arc::new(DaemonEvent::ImagesChange {
                     reason: "remove".to_string(),
                     image_ids: remove_ids.clone(),
-                });
+                }));
             }
 
             if let Some(cur) = current_wallpaper_id.as_deref() {
@@ -198,12 +180,12 @@ fn run_dedupe_batched(
             removed_total += remove_ids.len();
         }
 
-        broadcaster.broadcast_sync(DaemonEvent::DedupeProgress {
+        broadcaster.broadcast_sync(Arc::new(DaemonEvent::DedupeProgress {
             processed,
             total,
             removed: removed_total,
             batch_index,
-        });
+        }));
 
         batch_index += 1;
     }

@@ -1,5 +1,5 @@
 use crate::crawler::DownloadQueue;
-use crate::emitter::{EventEmitter, GlobalEmitter};
+use crate::emitter::GlobalEmitter;
 use crate::plugin::PluginManager;
 use crate::settings::Settings;
 use crate::storage::Storage;
@@ -78,7 +78,7 @@ impl TaskScheduler {
         let storage = Storage::global();
         let emitter = GlobalEmitter::global();
         let _ = persist_task_status(storage, &req.task_id, "pending", None, None, None);
-        emit_task_status(emitter, &req.task_id, "pending", None, None, None);
+        emit_task_status(&req.task_id, "pending", None, None, None);
 
         let (m, cv) = &*self.queue;
         let mut guard = m.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -217,7 +217,6 @@ fn now_ms() -> u64 {
 }
 
 fn emit_task_status(
-    _emitter: &dyn EventEmitter,
     task_id: &str,
     status: &str,
     start_time: Option<u64>,
@@ -310,14 +309,7 @@ fn worker_loop(
                 Some(end),
                 Some(e.clone()),
             );
-            emit_task_status(
-                GlobalEmitter::global(),
-                &req.task_id,
-                "canceled",
-                None,
-                Some(end),
-                Some(e),
-            );
+            emit_task_status(&req.task_id, "canceled", None, Some(end), Some(e));
             continue;
         }
 
@@ -326,14 +318,7 @@ fn worker_loop(
         // running
         let start = now_ms();
         let _ = persist_task_status(&storage, &req.task_id, "running", Some(start), None, None);
-        emit_task_status(
-            GlobalEmitter::global(),
-            &req.task_id,
-            "running",
-            Some(start),
-            None,
-            None,
-        );
+        emit_task_status(&req.task_id, "running", Some(start), None, None);
 
         let res = run_task(
             &storage,
@@ -356,14 +341,7 @@ fn worker_loop(
                         Some(end),
                         Some(e.clone()),
                     );
-                    emit_task_status(
-                        GlobalEmitter::global(),
-                        &req.task_id,
-                        "canceled",
-                        None,
-                        Some(end),
-                        Some(e),
-                    );
+                    emit_task_status(&req.task_id, "canceled", None, Some(end), Some(e));
                 } else {
                     let _ = persist_task_status(
                         &storage,
@@ -373,14 +351,7 @@ fn worker_loop(
                         Some(end),
                         None,
                     );
-                    emit_task_status(
-                        GlobalEmitter::global(),
-                        &req.task_id,
-                        "completed",
-                        None,
-                        Some(end),
-                        None,
-                    );
+                    emit_task_status(&req.task_id, "completed", None, Some(end), None);
                 }
             }
             Err(e) => {
@@ -398,14 +369,7 @@ fn worker_loop(
                     Some(end),
                     Some(e.clone()),
                 );
-                emit_task_status(
-                    GlobalEmitter::global(),
-                    &req.task_id,
-                    status,
-                    None,
-                    Some(end),
-                    Some(e),
-                );
+                emit_task_status(&req.task_id, status, None, Some(end), Some(e));
             }
         }
 

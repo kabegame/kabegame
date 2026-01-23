@@ -8,7 +8,8 @@ use kabegame_core::storage::Storage;
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use std::sync::Arc;
 
-/// 螟・炊謇譛・Settings 逶ｸ蜈ｳ逧・IPC 隸ｷ豎・pub async fn handle_settings_request(
+/// 处理所有 Settings 相关的 IPC 请求
+pub async fn handle_settings_request(
     req: &CliIpcRequest,
     ctx: Arc<Store>,
 ) -> Option<CliIpcResponse> {
@@ -54,9 +55,9 @@ use std::sync::Arc;
             Some(get_current_wallpaper_image_id().await)
         }
         CliIpcRequest::SettingsGetDefaultImagesDir => Some(get_default_images_dir().await),
-        #[cfg(all(not(kabegame_mode = \"light\"), target_os = "windows"))]
+        #[cfg(not(kabegame_mode = "light"))]
         CliIpcRequest::SettingsGetAlbumDriveEnabled => Some(get_album_drive_enabled().await),
-        #[cfg(all(not(kabegame_mode = \"light\"), target_os = "windows"))]
+        #[cfg(not(kabegame_mode = "light"))]
         CliIpcRequest::SettingsGetAlbumDriveMountPoint => Some(get_album_drive_mount_point().await),
 
         CliIpcRequest::SettingsSetGalleryImageAspectRatio { aspect_ratio } => {
@@ -83,11 +84,11 @@ use std::sync::Arc;
         CliIpcRequest::SettingsSetWallpaperMode { mode } => {
             Some(set_wallpaper_mode(mode.clone()).await)
         }
-        #[cfg(all(not(kabegame_mode = \"light\"), target_os = "windows"))]
+        #[cfg(not(kabegame_mode = "light"))]
         CliIpcRequest::SettingsSetAlbumDriveEnabled { enabled } => {
             Some(set_album_drive_enabled(*enabled, ctx.clone()).await)
         }
-        #[cfg(all(not(kabegame_mode = \"light\"), target_os = "windows"))]
+        #[cfg(not(kabegame_mode = "light"))]
         CliIpcRequest::SettingsSetAlbumDriveMountPoint { mount_point } => {
             Some(set_album_drive_mount_point(mount_point.clone()).await)
         }
@@ -188,12 +189,13 @@ async fn set_wallpaper_mode(mode: String) -> CliIpcResponse {
     }
 }
 
-#[cfg(all(not(kabegame_mode = \"light\"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 async fn set_album_drive_enabled(enabled: bool, ctx: Arc<Store>) -> CliIpcResponse {
     let settings = Settings::global();
 
     if enabled {
-        // 蜷ｯ逕ｨ・壼・謖りｽｽ陌壽供逶・        let mount_point = match settings.get_album_drive_mount_point().await {
+        // 启用：先挂载虚拟盘
+        let mount_point = match settings.get_album_drive_mount_point().await {
             Ok(mp) => mp,
             Err(e) => return CliIpcResponse::err(format!("Failed to get mount point: {}", e)),
         };
@@ -204,18 +206,20 @@ async fn set_album_drive_enabled(enabled: bool, ctx: Arc<Store>) -> CliIpcRespon
 
         let vd_service = ctx.virtual_drive_service.clone();
 
-        // 譽譟･譏ｯ蜷ｦ蟾ｲ謖りｽｽ・亥ｹらｭ牙､・炊・・        if vd_service.current_mount_point().is_some() {
-            // 蟾ｲ謖りｽｽ・檎峩謗･譖ｴ譁ｰ隶ｾ鄂ｮ
+        // 检查是否已挂载（幂等处理）
+        if vd_service.current_mount_point().is_some() {
+            // 已挂载，直接更新设置
             match settings.set_album_drive_enabled(true).await {
                 Ok(()) => return CliIpcResponse::ok("updated"),
                 Err(e) => return CliIpcResponse::err(e),
             }
         }
 
-        // 謇ｧ陦梧撃霓ｽ・井ｽｿ逕ｨ spawn_blocking 驕ｿ蜈埼仆蝪・tokio worker・・        let mount_result = match tokio::task::spawn_blocking({
+        // 执行挂载（使用 spawn_blocking 避免阻塞 tokio worker）
+        let mount_result = match tokio::task::spawn_blocking({
             let vd_service = vd_service.clone();
             let mount_point = mount_point.clone();
-            move || vd_service.mount(mount_point.as_str(), Storage::global().clone())
+            move || vd_service.mount(mount_point.as_str())
         })
         .await
         {
@@ -225,7 +229,7 @@ async fn set_album_drive_enabled(enabled: bool, ctx: Arc<Store>) -> CliIpcRespon
 
         match mount_result {
             Ok(()) => {
-                // 謖りｽｽ謌仙粥蜷趣ｼ瑚ｮｾ鄂ｮ enabled 荳ｺ true
+                // 挂载成功后，设置 enabled 为 true
                 match settings.set_album_drive_enabled(true).await {
                     Ok(()) => CliIpcResponse::ok("updated"),
                     Err(e) => CliIpcResponse::err(format!("Failed to set enabled: {}", e)),
@@ -234,17 +238,20 @@ async fn set_album_drive_enabled(enabled: bool, ctx: Arc<Store>) -> CliIpcRespon
             Err(e) => CliIpcResponse::err(format!("Failed to mount: {}", e)),
         }
     } else {
-        // 遖∫畑・壼・蜊ｸ霓ｽ陌壽供逶・        let vd_service = ctx.virtual_drive_service.clone();
+        // 禁用：先卸载虚拟盘
+        let vd_service = ctx.virtual_drive_service.clone();
 
-        // 譽譟･譏ｯ蜷ｦ蟾ｲ蜊ｸ霓ｽ・亥ｹらｭ牙､・炊・・        if vd_service.current_mount_point().is_none() {
-            // 蟾ｲ蜊ｸ霓ｽ・檎峩謗･譖ｴ譁ｰ隶ｾ鄂ｮ
+        // 检查是否已卸载（幂等处理）
+        if vd_service.current_mount_point().is_none() {
+            // 已卸载，直接更新设置
             match settings.set_album_drive_enabled(false).await {
                 Ok(()) => return CliIpcResponse::ok("updated"),
                 Err(e) => return CliIpcResponse::err(e),
             }
         }
 
-        // 謇ｧ陦悟査霓ｽ・井ｽｿ逕ｨ spawn_blocking 驕ｿ蜈埼仆蝪・tokio worker・・        let unmount_result = match tokio::task::spawn_blocking({
+        // 执行卸载（使用 spawn_blocking 避免阻塞 tokio worker）
+        let unmount_result = match tokio::task::spawn_blocking({
             let vd_service = vd_service.clone();
             move || vd_service.unmount()
         })
@@ -256,14 +263,15 @@ async fn set_album_drive_enabled(enabled: bool, ctx: Arc<Store>) -> CliIpcRespon
 
         match unmount_result {
             Ok(true) => {
-                // 蜊ｸ霓ｽ謌仙粥蜷趣ｼ瑚ｮｾ鄂ｮ enabled 荳ｺ false
+                // 卸载成功后，设置 enabled 为 false
                 match settings.set_album_drive_enabled(false).await {
                     Ok(()) => CliIpcResponse::ok("updated"),
                     Err(e) => CliIpcResponse::err(format!("Failed to set enabled: {}", e)),
                 }
             }
             Ok(false) => {
-                // 蜊ｸ霓ｽ螟ｱ雍･菴・庄閭ｽ蟾ｲ扈丞査霓ｽ・檎峩謗･譖ｴ譁ｰ隶ｾ鄂ｮ・亥ｹらｭ会ｼ・                match settings.set_album_drive_enabled(false).await {
+                // 卸载失败但可能已经卸载，直接更新设置（幂等）
+                match settings.set_album_drive_enabled(false).await {
                     Ok(()) => CliIpcResponse::ok("updated"),
                     Err(e) => CliIpcResponse::err(e),
                 }
@@ -273,7 +281,7 @@ async fn set_album_drive_enabled(enabled: bool, ctx: Arc<Store>) -> CliIpcRespon
     }
 }
 
-#[cfg(all(not(kabegame_mode = \"light\"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 async fn set_album_drive_mount_point(mount_point: String) -> CliIpcResponse {
     let settings = Settings::global();
     match settings.set_album_drive_mount_point(mount_point).await {
@@ -377,7 +385,7 @@ async fn swap_style_transition_for_mode_switch(
     }
 }
 
-// ========== Getter 蜃ｽ謨ｰ ==========
+// ========== Getter 函数 ==========
 
 async fn get_auto_launch() -> CliIpcResponse {
     let settings = Settings::global();
@@ -565,7 +573,7 @@ async fn get_default_images_dir() -> CliIpcResponse {
     CliIpcResponse::ok_with_data("ok", serde_json::json!(dir_str))
 }
 
-#[cfg(all(not(kabegame_mode = \"light\"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 async fn get_album_drive_enabled() -> CliIpcResponse {
     let settings = Settings::global();
     match settings.get_album_drive_enabled().await {
@@ -574,7 +582,7 @@ async fn get_album_drive_enabled() -> CliIpcResponse {
     }
 }
 
-#[cfg(all(not(kabegame_mode = \"light\"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 async fn get_album_drive_mount_point() -> CliIpcResponse {
     let settings = Settings::global();
     match settings.get_album_drive_mount_point().await {

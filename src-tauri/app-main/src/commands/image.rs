@@ -3,9 +3,9 @@
 use kabegame_core::providers::ProviderRuntime;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::{Storage, FAVORITE_ALBUM_ID};
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use tauri::AppHandle;
 
@@ -114,8 +114,8 @@ pub async fn toggle_image_favorite(
 ) -> Result<(), String> {
     Storage::global().toggle_image_favorite(&image_id, favorite)?;
 
-    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
-    VirtualDriveService::global().notify_album_dir_changed(Storage::global(), FAVORITE_ALBUM_ID);
+    #[cfg(not(kabegame_mode = "light"))]
+    VirtualDriveService::global().notify_album_dir_changed(FAVORITE_ALBUM_ID);
     Ok(())
 }
 

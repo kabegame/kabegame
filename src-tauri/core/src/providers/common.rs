@@ -1,32 +1,32 @@
-//! È«²¿Í¼Æ¬ Provider£º°´·ÖÒ³ÏÔÊ¾ËùÓĞÍ¼Æ¬£¬Ö§³ÖÇ¶Ì××ÓÄ¿Â¼
+//! å…¨éƒ¨å›¾ç‰‡ Providerï¼šæŒ‰åˆ†é¡µæ˜¾ç¤ºæ‰€æœ‰å›¾ç‰‡ï¼Œæ”¯æŒåµŒå¥—å­ç›®å½•
 //!
-//! Ê¹ÓÃÌ°ĞÄ·Ö½â²ßÂÔ£º´Ó×î´ó·¶Î§¿ªÊ¼£¬Öğ¼¶ÓÃ½ÏĞ¡·¶Î§Ìî³äÊ£Óà²¿·Ö¡£
+//! ä½¿ç”¨è´ªå¿ƒåˆ†è§£ç­–ç•¥ï¼šä»æœ€å¤§èŒƒå›´å¼€å§‹ï¼Œé€çº§ç”¨è¾ƒå°èŒƒå›´å¡«å……å‰©ä½™éƒ¨åˆ†ã€‚
 //!
-//! ÀıÈç 112400 ÕÅÍ¼Æ¬»áÏÔÊ¾Îª£º
-//! - 1-100000/      (10Íò¼¶Ä¿Â¼)
-//! - 100001-110000/ (1Íò¼¶Ä¿Â¼)
-//! - 110001-111000/ (1Ç§¼¶Ä¿Â¼)
-//! - 111001-112000/ (1Ç§¼¶Ä¿Â¼)
-//! - 400 ¸öÎÄ¼ş     (Ê£ÓàÖ±½ÓÏÔÊ¾)
+//! ä¾‹å¦‚ 112400 å¼ å›¾ç‰‡ä¼šæ˜¾ç¤ºä¸ºï¼š
+//! - 1-100000/      (10ä¸‡çº§ç›®å½•)
+//! - 100001-110000/ (1ä¸‡çº§ç›®å½•)
+//! - 110001-111000/ (1åƒçº§ç›®å½•)
+//! - 111001-112000/ (1åƒçº§ç›®å½•)
+//! - 400 ä¸ªæ–‡ä»¶     (å‰©ä½™ç›´æ¥æ˜¾ç¤º)
 //!
-//! Ö§³ÖÍ¨¹ı ImageQuery ²ÎÊı×Ô¶¨Òå²éÑ¯Ìõ¼ş£¬¿ÉÓÃÓÚ»­²á¡¢²å¼ş¡¢ÈÕÆÚµÈ¹ıÂË¡£
+//! æ”¯æŒé€šè¿‡ ImageQuery å‚æ•°è‡ªå®šä¹‰æŸ¥è¯¢æ¡ä»¶ï¼Œå¯ç”¨äºç”»å†Œã€æ’ä»¶ã€æ—¥æœŸç­‰è¿‡æ»¤ã€‚
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::providers::descriptor::ProviderDescriptor;
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
 use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
-/// Ã¿¸öÒ¶×ÓÄ¿Â¼×î¶à°üº¬µÄÍ¼Æ¬ÊıÁ¿
+/// æ¯ä¸ªå¶å­ç›®å½•æœ€å¤šåŒ…å«çš„å›¾ç‰‡æ•°é‡
 const LEAF_SIZE: usize = 1000;
-/// Ã¿¸ö·Ö×éÄ¿Â¼×î¶à°üº¬µÄ×ÓÄ¿Â¼ÊıÁ¿
+/// æ¯ä¸ªåˆ†ç»„ç›®å½•æœ€å¤šåŒ…å«çš„å­ç›®å½•æ•°é‡
 const GROUP_SIZE: usize = 10;
 
-/// È«²¿Í¼Æ¬ Provider - Ö§³Ö×Ô¶¨Òå²éÑ¯Ìõ¼ş
+/// å…¨éƒ¨å›¾ç‰‡ Provider - æ”¯æŒè‡ªå®šä¹‰æŸ¥è¯¢æ¡ä»¶
 #[derive(Clone)]
 pub struct CommonProvider {
     query: ImageQuery,
@@ -39,7 +39,7 @@ impl CommonProvider {
         }
     }
 
-    /// Ê¹ÓÃ×Ô¶¨Òå²éÑ¯Ìõ¼ş´´½¨ Provider
+    /// ä½¿ç”¨è‡ªå®šä¹‰æŸ¥è¯¢æ¡ä»¶åˆ›å»º Provider
     pub fn with_query(query: ImageQuery) -> Self {
         Self { query }
     }
@@ -65,7 +65,7 @@ impl Provider for CommonProvider {
         }
 
         if total <= LEAF_SIZE {
-            // Ö±½ÓÏÔÊ¾Í¼Æ¬
+            // ç›´æ¥æ˜¾ç¤ºå›¾ç‰‡
             let entries = storage.get_images_fs_entries_by_query(&self.query, 0, total)?;
             return Ok(entries
                 .into_iter()
@@ -73,7 +73,7 @@ impl Provider for CommonProvider {
                 .collect());
         }
 
-        // Ê¹ÓÃÌ°ĞÄ·Ö½â²ßÂÔÁĞ³ö×ÓÄ¿Â¼ + Ê£ÓàÎÄ¼ş
+        // ä½¿ç”¨è´ªå¿ƒåˆ†è§£ç­–ç•¥åˆ—å‡ºå­ç›®å½• + å‰©ä½™æ–‡ä»¶
         list_greedy_subdirs_with_remainder(storage, &self.query, 0, total)
     }
 
@@ -83,15 +83,15 @@ impl Provider for CommonProvider {
             return None;
         }
 
-        // ½âÎö·¶Î§Ãû³Æ
+        // è§£æèŒƒå›´åç§°
         let (offset, count) = parse_range(name)?;
 
-        // ÑéÖ¤·¶Î§ÊÇ·ñÔÚÌ°ĞÄ·Ö½âµÄ½á¹ûÖĞ
+        // éªŒè¯èŒƒå›´æ˜¯å¦åœ¨è´ªå¿ƒåˆ†è§£çš„ç»“æœä¸­
         if !validate_greedy_range(offset, count, total) {
             return None;
         }
 
-        // ¼ÆËã¸Ã·¶Î§µÄÉî¶È
+        // è®¡ç®—è¯¥èŒƒå›´çš„æ·±åº¦
         let depth = calc_depth_for_size(count);
 
         Some(Arc::new(RangeProvider::new(
@@ -103,7 +103,7 @@ impl Provider for CommonProvider {
     }
 
     fn resolve_file(&self, storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
-        // ÎÄ¼şÃû¸ñÊ½Í¨³£Îª "<id>.<ext>"£¬ÕâÀïÈ¡×îºóÒ»¸ö '.' Ö®Ç°µÄ²¿·Ö×÷Îª image_id
+        // æ–‡ä»¶åæ ¼å¼é€šå¸¸ä¸º "<id>.<ext>"ï¼Œè¿™é‡Œå–æœ€åä¸€ä¸ª '.' ä¹‹å‰çš„éƒ¨åˆ†ä½œä¸º image_id
         let image_id = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
         if image_id.trim().is_empty() {
             return None;
@@ -112,11 +112,7 @@ impl Provider for CommonProvider {
         Some((image_id.to_string(), PathBuf::from(resolved)))
     }
 
-    #[cfg(all(
-        feature = "virtual-driver",
-        not(kabegame_mode = "light"),
-        target_os = "windows"
-    ))]
+    #[cfg(not(kabegame_mode = "light"))]
     fn delete_child(
         &self,
         storage: &Storage,
@@ -126,10 +122,10 @@ impl Provider for CommonProvider {
         ctx: &dyn VdOpsContext,
     ) -> Result<bool, String> {
         if kind != DeleteChildKind::File {
-            return Err("²»Ö§³ÖÉ¾³ı¸ÃÀàĞÍ".to_string());
+            return Err("ä¸æ”¯æŒåˆ é™¤è¯¥ç±»å‹".to_string());
         }
         if !crate::providers::vd_ops::query_can_delete_child_file(&self.query) {
-            return Err("µ±Ç°Ä¿Â¼²»Ö§³ÖÉ¾³ıÎÄ¼ş".to_string());
+            return Err("å½“å‰ç›®å½•ä¸æ”¯æŒåˆ é™¤æ–‡ä»¶".to_string());
         }
         if mode == DeleteChildMode::Check {
             return Ok(true);
@@ -147,15 +143,15 @@ impl Provider for CommonProvider {
     }
 }
 
-/// ·¶Î§ Provider - ±íÊ¾Ò»¸ö·¶Î§ÄÚµÄÍ¼Æ¬»ò×Ó·¶Î§
+/// èŒƒå›´ Provider - è¡¨ç¤ºä¸€ä¸ªèŒƒå›´å†…çš„å›¾ç‰‡æˆ–å­èŒƒå›´
 pub struct RangeProvider {
-    /// ²éÑ¯Ìõ¼ş
+    /// æŸ¥è¯¢æ¡ä»¶
     query: ImageQuery,
-    /// ÆğÊ¼Æ«ÒÆ£¨0-based£©
+    /// èµ·å§‹åç§»ï¼ˆ0-basedï¼‰
     offset: usize,
-    /// ·¶Î§ÄÚµÄÍ¼Æ¬ÊıÁ¿
+    /// èŒƒå›´å†…çš„å›¾ç‰‡æ•°é‡
     count: usize,
-    /// µ±Ç°Éî¶È£¨0 = Ò¶×Ó²ã£¬Ö±½ÓÏÔÊ¾Í¼Æ¬£©
+    /// å½“å‰æ·±åº¦ï¼ˆ0 = å¶å­å±‚ï¼Œç›´æ¥æ˜¾ç¤ºå›¾ç‰‡ï¼‰
     depth: usize,
 }
 
@@ -182,7 +178,7 @@ impl Provider for RangeProvider {
 
     fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
         if self.depth == 0 {
-            // Ò¶×Ó²ã£ºÏÔÊ¾Í¼Æ¬
+            // å¶å­å±‚ï¼šæ˜¾ç¤ºå›¾ç‰‡
             let entries =
                 storage.get_images_fs_entries_by_query(&self.query, self.offset, self.count)?;
             return Ok(entries
@@ -191,28 +187,28 @@ impl Provider for RangeProvider {
                 .collect());
         }
 
-        // ·ÇÒ¶×Ó²ã£ºÊ¹ÓÃÌ°ĞÄ·Ö½âÏÔÊ¾×ÓÄ¿Â¼ + Ê£ÓàÎÄ¼ş
+        // éå¶å­å±‚ï¼šä½¿ç”¨è´ªå¿ƒåˆ†è§£æ˜¾ç¤ºå­ç›®å½• + å‰©ä½™æ–‡ä»¶
         list_greedy_subdirs_with_remainder(storage, &self.query, self.offset, self.count)
     }
 
     fn get_child(&self, _storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
         if self.depth == 0 {
-            // Ò¶×Ó²ãÃ»ÓĞ×ÓÄ¿Â¼
+            // å¶å­å±‚æ²¡æœ‰å­ç›®å½•
             return None;
         }
 
-        // ½âÎö·¶Î§Ãû³Æ£¨Ïà¶ÔÓÚµ±Ç°·¶Î§£©
+        // è§£æèŒƒå›´åç§°ï¼ˆç›¸å¯¹äºå½“å‰èŒƒå›´ï¼‰
         let (local_offset, local_count) = parse_range(name)?;
 
-        // ÑéÖ¤·¶Î§ÊÇ·ñÔÚÌ°ĞÄ·Ö½âµÄ½á¹ûÖĞ
+        // éªŒè¯èŒƒå›´æ˜¯å¦åœ¨è´ªå¿ƒåˆ†è§£çš„ç»“æœä¸­
         if !validate_greedy_range(local_offset, local_count, self.count) {
             return None;
         }
 
-        // ¼ÆËã¾ø¶ÔÆ«ÒÆ
+        // è®¡ç®—ç»å¯¹åç§»
         let absolute_offset = self.offset + local_offset;
 
-        // ¼ÆËã¸Ã·¶Î§µÄÉî¶È
+        // è®¡ç®—è¯¥èŒƒå›´çš„æ·±åº¦
         let child_depth = calc_depth_for_size(local_count);
 
         Some(Arc::new(RangeProvider::new(
@@ -224,7 +220,7 @@ impl Provider for RangeProvider {
     }
 
     fn resolve_file(&self, storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
-        // Í¬ AllProvider£ºÖ±½Ó°´ÎÄ¼şÃû½âÎö image_id
+        // åŒ AllProviderï¼šç›´æ¥æŒ‰æ–‡ä»¶åè§£æ image_id
         let image_id = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
         if image_id.trim().is_empty() {
             return None;
@@ -233,7 +229,7 @@ impl Provider for RangeProvider {
         Some((image_id.to_string(), PathBuf::from(resolved)))
     }
 
-    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+    #[cfg(not(kabegame_mode = "light"))]
     fn delete_child(
         &self,
         storage: &Storage,
@@ -243,10 +239,10 @@ impl Provider for RangeProvider {
         ctx: &dyn VdOpsContext,
     ) -> Result<bool, String> {
         if kind != DeleteChildKind::File {
-            return Err("²»Ö§³ÖÉ¾³ı¸ÃÀàĞÍ".to_string());
+            return Err("ä¸æ”¯æŒåˆ é™¤è¯¥ç±»å‹".to_string());
         }
         if !crate::providers::vd_ops::query_can_delete_child_file(&self.query) {
-            return Err("µ±Ç°Ä¿Â¼²»Ö§³ÖÉ¾³ıÎÄ¼ş".to_string());
+            return Err("å½“å‰ç›®å½•ä¸æ”¯æŒåˆ é™¤æ–‡ä»¶".to_string());
         }
         if mode == DeleteChildMode::Check {
             return Ok(true);
@@ -264,10 +260,10 @@ impl Provider for RangeProvider {
     }
 }
 
-// === ¸¨Öúº¯Êı£¨Óë¾ÉÊµÏÖ±£³ÖÒ»ÖÂ£©===
+// === è¾…åŠ©å‡½æ•°ï¼ˆä¸æ—§å®ç°ä¿æŒä¸€è‡´ï¼‰===
 
-/// ¼ÆËã¸ø¶¨´óĞ¡¶ÔÓ¦µÄÉî¶È£¨ÓÃÓÚ RangeProvider£©
-/// ÀıÈç£º1000 -> 0, 10000 -> 1, 100000 -> 2
+/// è®¡ç®—ç»™å®šå¤§å°å¯¹åº”çš„æ·±åº¦ï¼ˆç”¨äº RangeProviderï¼‰
+/// ä¾‹å¦‚ï¼š1000 -> 0, 10000 -> 1, 100000 -> 2
 fn calc_depth_for_size(size: usize) -> usize {
     if size <= LEAF_SIZE {
         return 0;
@@ -281,8 +277,8 @@ fn calc_depth_for_size(size: usize) -> usize {
     depth
 }
 
-/// »ñÈ¡ËùÓĞ¿ÉÄÜµÄ·¶Î§´óĞ¡£¨´Ó´óµ½Ğ¡£©
-/// ÀıÈç£º[100000, 10000, 1000]
+/// è·å–æ‰€æœ‰å¯èƒ½çš„èŒƒå›´å¤§å°ï¼ˆä»å¤§åˆ°å°ï¼‰
+/// ä¾‹å¦‚ï¼š[100000, 10000, 1000]
 fn get_range_sizes(total: usize) -> Vec<usize> {
     let mut sizes = Vec::new();
     let mut size = LEAF_SIZE;
@@ -294,12 +290,12 @@ fn get_range_sizes(total: usize) -> Vec<usize> {
     sizes
 }
 
-/// Éú³É·¶Î§Ãû³Æ
+/// ç”ŸæˆèŒƒå›´åç§°
 fn range_name(start_1based: usize, end_1based: usize) -> String {
     format!("{}-{}", start_1based, end_1based)
 }
 
-/// ½âÎö·¶Î§Ãû³Æ£¬·µ»Ø (offset, count)
+/// è§£æèŒƒå›´åç§°ï¼Œè¿”å› (offset, count)
 fn parse_range(range: &str) -> Option<(usize, usize)> {
     let parts: Vec<&str> = range.split('-').collect();
     if parts.len() != 2 {
@@ -319,15 +315,15 @@ fn parse_range(range: &str) -> Option<(usize, usize)> {
     Some((offset, count))
 }
 
-/// Ì°ĞÄ·Ö½â£ºÉú³ÉÄ¿Â¼·¶Î§ÁĞ±í
-/// ·µ»Ø Vec<(offset, count)>£¬²»°üº¬×îºóµÄÊ£ÓàÎÄ¼ş
+/// è´ªå¿ƒåˆ†è§£ï¼šç”Ÿæˆç›®å½•èŒƒå›´åˆ—è¡¨
+/// è¿”å› Vec<(offset, count)>ï¼Œä¸åŒ…å«æœ€åçš„å‰©ä½™æ–‡ä»¶
 fn greedy_decompose(total: usize) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let sizes = get_range_sizes(total);
     let mut pos = 0;
 
     for size in sizes {
-        // ÖØÒª£ºÌø¹ıÓë total ÍêÈ«ÏàµÈµÄ·¶Î§£¬±ÜÃâÉú³É¡°Ä¿Â¼Àï»¹ÊÇÍ¬ÃûÄ¿Â¼¡±µÄÎŞÏŞÇ¶Ì×
+        // é‡è¦ï¼šè·³è¿‡ä¸ total å®Œå…¨ç›¸ç­‰çš„èŒƒå›´ï¼Œé¿å…ç”Ÿæˆâ€œç›®å½•é‡Œè¿˜æ˜¯åŒåç›®å½•â€çš„æ— é™åµŒå¥—
         if size == total {
             continue;
         }
@@ -340,13 +336,13 @@ fn greedy_decompose(total: usize) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// ÑéÖ¤·¶Î§ÊÇ·ñÔÚÌ°ĞÄ·Ö½âµÄ½á¹ûÖĞ
+/// éªŒè¯èŒƒå›´æ˜¯å¦åœ¨è´ªå¿ƒåˆ†è§£çš„ç»“æœä¸­
 fn validate_greedy_range(offset: usize, count: usize, total: usize) -> bool {
     let ranges = greedy_decompose(total);
     ranges.contains(&(offset, count))
 }
 
-/// Ê¹ÓÃÌ°ĞÄ·Ö½â²ßÂÔÁĞ³ö×ÓÄ¿Â¼ + Ê£ÓàÎÄ¼ş
+/// ä½¿ç”¨è´ªå¿ƒåˆ†è§£ç­–ç•¥åˆ—å‡ºå­ç›®å½• + å‰©ä½™æ–‡ä»¶
 fn list_greedy_subdirs_with_remainder(
     storage: &Storage,
     query: &ImageQuery,
@@ -356,16 +352,16 @@ fn list_greedy_subdirs_with_remainder(
     let mut entries = Vec::new();
     let ranges = greedy_decompose(total);
 
-    // Ìí¼ÓÄ¿Â¼
+    // æ·»åŠ ç›®å½•
     for (offset, count) in &ranges {
         entries.push(FsEntry::dir(range_name(*offset + 1, *offset + *count)));
     }
 
-    // ¼ÆËãÊ£ÓàÎÄ¼şµÄÆğÊ¼Î»ÖÃ
+    // è®¡ç®—å‰©ä½™æ–‡ä»¶çš„èµ·å§‹ä½ç½®
     let covered: usize = ranges.iter().map(|(_, c)| c).sum();
     let remainder = total - covered;
 
-    // Ìí¼ÓÊ£ÓàÎÄ¼ş£¨Ö±½ÓÏÔÊ¾£©
+    // æ·»åŠ å‰©ä½™æ–‡ä»¶ï¼ˆç›´æ¥æ˜¾ç¤ºï¼‰
     if remainder > 0 {
         let remainder_offset = base_offset + covered;
         let file_entries =

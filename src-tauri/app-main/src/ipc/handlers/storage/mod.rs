@@ -1,14 +1,14 @@
-﻿//! Storage 蜻ｽ莉､螟・炊蝎ｨ讓｡蝮・
+﻿//! Storage 相关请求
 pub mod albums;
 pub mod images;
 pub mod run_configs;
 pub mod tasks;
 
-use crate::server::EventBroadcaster;
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
+use kabegame_core::ipc::server::EventBroadcaster;
 use std::sync::Arc;
 
-/// 螟・炊謇譛・Storage 逶ｸ蜈ｳ逧・IPC 隸ｷ豎・pub async fn handle_storage_request(
+pub async fn handle_storage_request(
     req: &CliIpcRequest,
     broadcaster: Arc<EventBroadcaster>,
 ) -> Option<CliIpcResponse> {

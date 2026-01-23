@@ -1,6 +1,7 @@
-// 壁纸相关命令和函数
+﻿// 壁纸相关命令和函数
 
-use crate::wallpaper::{WallpaperController, WallpaperRotator};
+use crate::wallpaper::manager::{WallpaperController, WallpaperManager};
+use crate::wallpaper::WallpaperRotator;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
 use std::path::Path;
@@ -47,6 +48,8 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
         return Ok(());
     };
 
+    println!("参数 style: {} id: {}", style, id);
+
     let img_v = Storage::global()
         .find_image_by_id(&id)
         .map_err(|e| format!("Storage error: {}", e))?;
@@ -62,7 +65,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
         return Ok(());
     }
 
-    if controller.set_wallpaper(&path, &style).await.is_err() {
+    if controller.set_wallpaper(&path, &style).await.is_err() as bool {
         let _ = settings.set_current_wallpaper_image_id(None).await;
     }
 
@@ -70,12 +73,12 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn set_wallpaper(file_path: String, app: AppHandle) -> Result<(), String> {
+pub async fn set_wallpaper(file_path: String) -> Result<(), String> {
     let path = Path::new(&file_path);
     if !path.exists() {
+        println!("DEBUG: File does not exist: {}", file_path);
         return Err("File does not exist".to_string());
     }
-
     let controller = WallpaperController::global();
     let settings = Settings::global();
     let style = settings
@@ -95,14 +98,13 @@ pub async fn set_wallpaper(file_path: String, app: AppHandle) -> Result<(), Stri
     let found = Storage::global().find_image_by_path(&abs).ok().flatten();
     let image_id = found.as_ref().map(|v| v.id.clone());
     let _ = settings.set_current_wallpaper_image_id(image_id).await;
-
     Ok(())
 }
 
 #[tauri::command]
 pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     let settings = Settings::global();
-    let _style = settings
+    let style = settings
         .get_wallpaper_rotation_style()
         .await
         .unwrap_or_else(|_| "fill".to_string());
@@ -121,8 +123,8 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
         return Err("图片文件不存在".to_string());
     }
 
-    // let controller = WallpaperController::global();
-    // controller.set_wallpaper(&local_path, &style).await?;
+    let controller = WallpaperController::global();
+    controller.set_wallpaper(&local_path, &style).await?;
 
     settings
         .set_current_wallpaper_image_id(Some(image_id))
@@ -228,7 +230,7 @@ pub async fn set_wallpaper_rotation_album_id(album_id: Option<String>) -> Result
 }
 
 #[tauri::command]
-pub async fn start_wallpaper_rotation(app: AppHandle) -> Result<RotationStartResult, String> {
+pub async fn start_wallpaper_rotation() -> Result<RotationStartResult, String> {
     let settings = Settings::global();
     let (enabled_result, album_id_result) = tokio::join!(
         settings.get_wallpaper_rotation_enabled(),
@@ -420,8 +422,6 @@ pub async fn set_wallpaper_rotation_transition(
 
 #[tauri::command(rename = "set_wallpaper_rotation_mode")]
 pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), String> {
-    use tauri::Manager;
-
     let settings = Settings::global();
     let old_mode = settings
         .get_wallpaper_mode()

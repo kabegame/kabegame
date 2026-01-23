@@ -1,7 +1,7 @@
 ﻿//! Images 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
-use crate::server::EventBroadcaster;
 use kabegame_core::ipc::events::DaemonEvent;
 use kabegame_core::ipc::ipc::CliIpcResponse;
+use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::storage::gallery::ImageQuery;
 use kabegame_core::storage::Storage;
 use kabegame_core::storage::FAVORITE_ALBUM_ID;
@@ -57,6 +57,8 @@ pub async fn find_image_by_path(path: &str) -> CliIpcResponse {
     }
 }
 
+// TODO: 画廊按时间显示
+#[allow(dead_code)]
 pub async fn get_gallery_date_groups() -> CliIpcResponse {
     let storage = Storage::global();
     match storage.get_gallery_date_groups() {
@@ -113,13 +115,13 @@ pub async fn delete_image(broadcaster: Arc<EventBroadcaster>, image_id: &str) ->
         Ok(()) => {
             // 扈滉ｸ蝗ｾ迚・序譖ｴ莠倶ｻｶ・壻ｾ帛燕遶ｯ蛻ｷ譁ｰ蠖灘燕 provider 隗・崟
             let _ = broadcaster
-                .broadcast(DaemonEvent::Generic {
+                .broadcast(Arc::new(DaemonEvent::Generic {
                     event: "images-change".to_string(),
                     payload: serde_json::json!({
                         "reason": "delete",
                         "imageIds": [image_id],
                     }),
-                })
+                }))
                 .await;
             CliIpcResponse::ok("deleted")
         }
@@ -132,10 +134,10 @@ pub async fn remove_image(broadcaster: Arc<EventBroadcaster>, image_id: &str) ->
     match storage.remove_image(image_id) {
         Ok(()) => {
             let _ = broadcaster
-                .broadcast(DaemonEvent::ImagesChange {
+                .broadcast(Arc::new(DaemonEvent::ImagesChange {
                     reason: "remove".to_string(),
                     image_ids: vec![image_id.to_string()],
-                })
+                }))
                 .await;
             CliIpcResponse::ok("removed")
         }
@@ -151,10 +153,10 @@ pub async fn batch_delete_images(
     match storage.batch_delete_images(image_ids) {
         Ok(()) => {
             let _ = broadcaster
-                .broadcast(DaemonEvent::ImagesChange {
+                .broadcast(Arc::new(DaemonEvent::ImagesChange {
                     reason: "delete".to_string(),
                     image_ids: image_ids.to_vec(),
-                })
+                }))
                 .await;
             CliIpcResponse::ok("deleted")
         }
@@ -170,10 +172,10 @@ pub async fn batch_remove_images(
     match storage.batch_remove_images(image_ids) {
         Ok(()) => {
             let _ = broadcaster
-                .broadcast(DaemonEvent::ImagesChange {
+                .broadcast(Arc::new(DaemonEvent::ImagesChange {
                     reason: "remove".to_string(),
                     image_ids: image_ids.to_vec(),
-                })
+                }))
                 .await;
             CliIpcResponse::ok("removed")
         }
@@ -191,14 +193,14 @@ pub async fn toggle_image_favorite(
         Ok(()) => {
             // 扈滉ｸ蝗ｾ迚・序譖ｴ莠倶ｻｶ・壽噺阯・蜿匁ｶ域噺阯丈ｼ壼ｽｱ蜩・Gallery 逧・favorite 蟄玲ｮｵ + 謾ｶ阯冗判蜀悟・螳ｹ
             let _ = broadcaster
-                .broadcast(DaemonEvent::Generic {
+                .broadcast(Arc::new(DaemonEvent::Generic {
                     event: "images-change".to_string(),
                     payload: serde_json::json!({
                         "reason": if favorite { "favorite-add" } else { "favorite-remove" },
                         "albumId": FAVORITE_ALBUM_ID,
                         "imageIds": [image_id],
                     }),
-                })
+                }))
                 .await;
             CliIpcResponse::ok("ok")
         }

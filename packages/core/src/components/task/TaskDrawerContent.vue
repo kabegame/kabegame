@@ -824,11 +824,13 @@ onUnmounted(() => {
   .download-fade-leave-active {
     transition: all 0.2s ease;
   }
+
   .download-fade-enter-from,
   .download-fade-leave-to {
     opacity: 0;
     transform: translateY(6px);
   }
+
   .download-fade-move {
     transition: transform 0.2s ease;
   }

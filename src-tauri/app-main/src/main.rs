@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 #[cfg(target_os = "windows")]
 const CF_HDROP_FORMAT: u32 = 15; // Clipboard format for file drop
@@ -13,47 +14,21 @@ mod startup;
 mod tray;
 mod wallpaper;
 
-// Copied from daemon
-mod connection_handler;
-mod dedupe_service;
-mod handlers;
-mod server;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod server_unix;
-#[cfg(target_os = "windows")]
-mod server_windows;
+// IPC and daemon related modules
+mod ipc;
 #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 mod vd_listener;
-
-use commands::album;
-use commands::album::*;
-use commands::filesystem::*;
-use commands::image::*;
-use commands::plugin::*;
-use commands::settings::*;
-use commands::task::*;
-use commands::wallpaper as wallpaper_cmds;
-use commands::wallpaper_engine;
-#[cfg(target_os = "windows")]
-use commands::wallpaper_engine::{export_album_to_we_project, export_images_to_we_project};
-#[cfg(target_os = "windows")]
-use commands::window::set_main_sidebar_blur;
-#[cfg(target_os = "windows")]
-use commands::window::wallpaper_window_ready;
-use commands::window::*;
-
-use crate::commands::misc::*;
+use commands::*;
 
 // Daemon Imports
-use crate::server::{EventBroadcaster, SubscriptionManager};
-use dedupe_service::DedupeService;
-use handlers::{dispatch_request, Store};
+use crate::ipc::dedupe_service::DedupeService;
+use crate::ipc::handlers::{dispatch_request, Store};
+use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
-    emitter::GlobalEmitter,
     ipc::{
         events::{DaemonEvent, DaemonEventKind},
-        ipc, CliIpcRequest,
+        CliIpcRequest,
     },
     plugin::PluginManager,
     providers::{ProviderCacheConfig, ProviderRuntime},
@@ -99,7 +74,9 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
     println!("  ✓ Subscription manager initialized");
 
     // 初始化全局 emitter
-    GlobalEmitter::init_global(Box::new(broadcaster))
+    // 注意：core 中的 GlobalEmitter 需要 EventBroadcaster，但这里我们传入的是 Arc<EventBroadcaster>
+    // 需要解引用为 EventBroadcaster
+    kabegame_core::emitter::GlobalEmitter::init_global(broadcaster.clone())
         .map_err(|e| format!("Failed to initialize global emitter: {}", e))?;
     println!("  ✓ Global emitter initialized");
 
@@ -194,7 +171,7 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
                 let mount_result = tokio::task::spawn_blocking({
                     let vd_service = vd_service_for_mount.clone();
                     let mount_point = mount_point.clone();
-                    move || vd_service.mount(mount_point.as_str(), Storage::global().clone())
+                    move || vd_service.mount(mount_point.as_str())
                 })
                 .await;
 
@@ -220,7 +197,7 @@ async fn start_ipc_server(ctx: Arc<Store>) -> Result<(), String> {
     let broadcaster = ctx.broadcaster.clone();
     let subscription_manager = ctx.subscription_manager.clone();
 
-    server::serve_with_events(
+    kabegame_core::ipc::server::serve_with_events(
         move |req| {
             let ctx = ctx.clone();
             async move {
@@ -243,7 +220,7 @@ async fn start_local_event_loop(app: AppHandle, broadcaster: Arc<EventBroadcaste
     while let Some((_id, event)) = rx.recv().await {
         let kind = event.kind();
 
-        match &event {
+        match &*event {
             DaemonEvent::Generic { event, payload } => {
                 let _ = app.emit(event.as_str(), payload.clone());
             }
@@ -252,7 +229,7 @@ async fn start_local_event_loop(app: AppHandle, broadcaster: Arc<EventBroadcaste
             }
             DaemonEvent::WallpaperUpdateImage { image_path } => {
                 let path = image_path.clone();
-                let controller = crate::wallpaper::WallpaperController::global();
+                let controller = crate::wallpaper::manager::WallpaperController::global();
                 tokio::spawn(async move {
                     let style = Settings::global()
                         .get_wallpaper_rotation_style()
@@ -265,7 +242,7 @@ async fn start_local_event_loop(app: AppHandle, broadcaster: Arc<EventBroadcaste
             }
             DaemonEvent::WallpaperUpdateStyle { style } => {
                 let style = style.clone();
-                let controller = crate::wallpaper::WallpaperController::global();
+                let controller = crate::wallpaper::manager::WallpaperController::global();
                 tokio::spawn(async move {
                     if let Ok(manager) = controller.active_manager().await {
                         let _ = manager.set_style(&style, true).await;
@@ -274,7 +251,7 @@ async fn start_local_event_loop(app: AppHandle, broadcaster: Arc<EventBroadcaste
             }
             DaemonEvent::WallpaperUpdateTransition { transition } => {
                 let transition = transition.clone();
-                let controller = crate::wallpaper::WallpaperController::global();
+                let controller = crate::wallpaper::manager::WallpaperController::global();
                 tokio::spawn(async move {
                     if let Ok(manager) = controller.active_manager().await {
                         let _ = manager.set_transition(&transition, true).await;
@@ -300,32 +277,39 @@ fn main() {
         .setup(|app| {
             // 设置全局快捷键
             {
-                use tauri_plugin_global_shortcut::{GlobalShortcutManager, Shortcut};
+                use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent};
 
                 let app_handle = app.app_handle().clone();
-                let shortcuts = app.global_shortcut_manager();
+                let shortcuts = app.global_shortcut();
 
-                // 注册 F11 快捷键切换全屏
-                let f11_shortcut =
-                    shortcuts.register(Shortcut::from_str("F11").unwrap(), move || {
-                        let app_handle = app_handle.clone();
+                // 注册并监听 F11 快捷键切换全屏
+                let f11_shortcut = Shortcut::new(
+                    Some(tauri_plugin_global_shortcut::Modifiers::empty()),
+                    tauri_plugin_global_shortcut::Code::F11,
+                );
+
+                let app_handle_clone = app_handle.clone();
+                let f11_shortcut_clone = f11_shortcut.clone();
+                shortcuts.on_shortcuts([f11_shortcut], move |app_handle, shortcut, event| {
+                    // 检查是否是 F11 快捷键（无修饰键 + F11）且是按下事件
+                    if shortcut.mods.is_empty()
+                        && shortcut.key.eq(&tauri_plugin_global_shortcut::Code::F11)
+                        && matches!(
+                            event.state,
+                            tauri_plugin_global_shortcut::ShortcutState::Pressed
+                        )
+                    {
+                        let app_handle = app_handle_clone.clone();
                         tauri::async_runtime::spawn(async move {
-                            let _ = commands::window::toggle_fullscreen(app_handle);
+                            if let Err(e) = commands::window::toggle_fullscreen(app_handle).await {
+                                eprintln!("Failed to toggle fullscreen: {}", e);
+                            }
                         });
-                    });
+                    }
+                })?;
 
-                if let Err(e) = f11_shortcut {
-                    eprintln!("Failed to register F11 shortcut: {}", e);
-                } else {
-                    println!("✓ F11 shortcut registered for fullscreen toggle");
-                }
+                println!("✓ F11 shortcut registered for fullscreen toggle");
             }
-
-            // 启动连接状态监听任务（监听 IPC 连接状态变化）
-            // 注意：现在我们是 Embedded 模式，这个 watcher 主要用于兼容旧代码，
-            // 但如果 daemon_client 不再连接，这个 watcher 可能没用。
-            // 我们可以保留它，但实际上它不会触发 "daemon-offline" 因为我们不连接外部。
-            // daemon_client::spawn_connection_status_watcher(app.app_handle().clone());
 
             let app_handle = app.app_handle().clone();
 
@@ -364,9 +348,15 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Albums
             get_albums,
             add_album,
             delete_album,
+            get_album_preview,
+            get_album_images,
+            get_album_image_ids,
+            remove_images_from_album,
+            // Tasks
             get_all_tasks,
             get_task,
             add_task,
@@ -378,20 +368,19 @@ fn main() {
             get_task_images_paginated,
             get_task_image_ids,
             get_task_failed_images,
+            // plugins
             get_plugins,
             refresh_installed_plugins_cache,
             refresh_installed_plugin_cache,
             get_build_mode,
             delete_plugin,
+            // images
             get_images_range,
             browse_gallery_provider,
             get_image_by_id,
             rename_album,
             add_images_to_album,
-            remove_images_from_album,
-            get_album_images,
-            get_album_image_ids,
-            get_album_preview,
+            batch_delete_images,
             // Settings
             get_settings,
             get_setting,
@@ -409,6 +398,7 @@ fn main() {
             set_auto_deduplicate,
             get_default_download_dir,
             set_default_download_dir,
+            // wallpaper
             get_wallpaper_engine_dir,
             set_wallpaper_engine_dir,
             get_wallpaper_engine_myprojects_dir,
@@ -422,6 +412,7 @@ fn main() {
             get_wallpaper_transition_by_mode,
             get_wallpaper_mode,
             get_window_state,
+            get_wallpaper_rotator_status,
             get_desktop_resolution,
             get_default_images_dir,
             open_plasma_wallpaper_settings,
@@ -462,11 +453,11 @@ fn main() {
             get_remote_plugin_icon,
             // Window
             hide_main_window,
+            toggle_fullscreen,
             #[cfg(target_os = "windows")]
             set_main_sidebar_blur,
             #[cfg(target_os = "windows")]
             wallpaper_window_ready,
-            toggle_fullscreen,
             // Filesystem
             open_explorer,
             open_file_path,
@@ -478,33 +469,33 @@ fn main() {
             open_plugin_editor_window,
             get_gallery_image,
             // Album
-            album::get_album_counts,
-            album::get_album_images,
-            album::get_album_image_ids,
-            album::get_album_preview,
-            album::rename_album,
-            album::add_images_to_album,
-            album::remove_images_from_album,
-            album::update_album_images_order,
+            get_album_counts,
+            get_album_images,
+            get_album_image_ids,
+            get_album_preview,
+            rename_album,
+            add_images_to_album,
+            remove_images_from_album,
+            update_album_images_order,
             // Wallpaper
-            wallpaper_cmds::get_current_wallpaper_image_id,
-            wallpaper_cmds::set_wallpaper,
-            wallpaper_cmds::set_wallpaper_by_image_id,
-            wallpaper_cmds::clear_current_wallpaper_image_id,
-            wallpaper_cmds::get_current_wallpaper_path,
-            wallpaper_cmds::migrate_images_from_json,
-            wallpaper_cmds::set_wallpaper_rotation_enabled,
-            wallpaper_cmds::set_wallpaper_rotation_album_id,
-            wallpaper_cmds::start_wallpaper_rotation,
-            wallpaper_cmds::set_wallpaper_rotation_interval_minutes,
-            wallpaper_cmds::set_wallpaper_mode,
-            wallpaper_cmds::set_wallpaper_style,
-            wallpaper_cmds::set_wallpaper_rotation_transition,
+            get_current_wallpaper_image_id,
+            set_wallpaper,
+            set_wallpaper_by_image_id,
+            clear_current_wallpaper_image_id,
+            get_current_wallpaper_path,
+            migrate_images_from_json,
+            set_wallpaper_rotation_enabled,
+            set_wallpaper_rotation_album_id,
+            start_wallpaper_rotation,
+            set_wallpaper_rotation_interval_minutes,
+            set_wallpaper_mode,
+            set_wallpaper_style,
+            set_wallpaper_rotation_transition,
             // Wallpaper Engine
             #[cfg(target_os = "windows")]
-            wallpaper_engine::export_album_to_we_project,
+            export_album_to_we_project,
             #[cfg(target_os = "windows")]
-            wallpaper_engine::export_images_to_we_project,
+            export_images_to_we_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

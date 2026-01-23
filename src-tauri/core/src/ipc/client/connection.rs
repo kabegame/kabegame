@@ -7,16 +7,13 @@
 //! - 并发请求支持
 //! - 防止并发创建多个连接
 
-use crate::ipc::daemon_startup::IPC_CLIENT;
-use crate::ipc::DaemonEventKind;
-
-use super::ipc::{
+use crate::ipc::ipc::{
     decode_frame, encode_frame, read_one_frame, CliIpcRequest, CliIpcResponse, IpcEnvelope,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::{collections::HashMap, sync::OnceLock};
-use tokio::sync::{mpsc, mpsc::channel, oneshot, watch, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot, watch, Mutex, RwLock};
 
 /// 请求响应状态
 struct RequestState {
@@ -497,7 +494,7 @@ impl PersistentConnection {
     #[cfg(target_os = "windows")]
     async fn create_connection() -> Result<tokio::net::windows::named_pipe::NamedPipeClient, String>
     {
-        use super::ipc::windows_pipe_name;
+        use crate::ipc::ipc::windows_pipe_name;
         use tokio::net::windows::named_pipe::ClientOptions;
 
         let pipe_name = windows_pipe_name();

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import chalk from "chalk";
+import { BuildSystem } from "scripts/build-system";
 
 /**
  * 插件基类
@@ -17,7 +18,7 @@ export class BasePlugin {
   /**
    * 插件应用（同步）
    */
-  apply(buildSystem: any): void {
+  apply(_buildSystem: BuildSystem): void {
     throw new Error(`Plugin ${this.name} must implement apply method`);
   }
 

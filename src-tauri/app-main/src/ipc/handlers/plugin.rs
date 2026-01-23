@@ -1,9 +1,9 @@
-﻿//! Plugin 蜻ｽ莉､螟・炊蝎ｨ
+﻿//! Plugin 相关请求
 
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 use kabegame_core::plugin::PluginManager;
 
-/// 螟・炊謇譛・Plugin 逶ｸ蜈ｳ逧・IPC 隸ｷ豎・pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse> {
+pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse> {
     match req {
         CliIpcRequest::PluginGetPlugins => Some(get_plugins().await),
 

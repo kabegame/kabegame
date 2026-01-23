@@ -1,11 +1,11 @@
 ﻿// 隶ｾ鄂ｮ逶ｸ蜈ｳ蜻ｽ莉､
 
 use kabegame_core::settings::Settings;
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::storage::Storage;
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
@@ -170,7 +170,7 @@ pub async fn get_window_state() -> Result<Option<serde_json::Value>, String> {
     Ok(serde_json::to_value(window_state).ok())
 }
 
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 #[tauri::command]
 pub async fn get_album_drive_enabled() -> Result<bool, String> {
     Settings::global()
@@ -179,7 +179,7 @@ pub async fn get_album_drive_enabled() -> Result<bool, String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 #[tauri::command]
 pub async fn get_album_drive_mount_point() -> Result<String, String> {
     Settings::global()
@@ -194,7 +194,7 @@ pub fn get_favorite_album_id() -> Result<String, String> {
 }
 
 #[tauri::command]
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
     let settings = Settings::global();
 
@@ -208,7 +208,7 @@ pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
         let vd_service = VirtualDriveService::global();
         let mount_result = tokio::task::spawn_blocking({
             let mount_point = mount_point.clone();
-            move || vd_service.mount(mount_point.as_str(), Storage::global().clone())
+            move || vd_service.mount(mount_point.as_str())
         })
         .await
         .map_err(|e| format!("Task join error: {}", e))?;
@@ -242,7 +242,7 @@ pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 pub async fn set_album_drive_mount_point(mount_point: String) -> Result<(), String> {
     Settings::global()
         .set_album_drive_mount_point(mount_point)

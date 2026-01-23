@@ -1,8 +1,7 @@
+use crate::emitter::GlobalEmitter;
 use crate::storage::{Storage, FAVORITE_ALBUM_ID};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "tauri-runtime")]
-use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -226,10 +225,8 @@ impl Storage {
         })
     }
 
-    #[cfg(feature = "tauri-runtime")]
     pub fn debug_clone_images(
         &self,
-        app: AppHandle,
         count: usize,
         pool_size: usize,
         seed: Option<u64>,
@@ -355,9 +352,10 @@ impl Storage {
                 .map_err(|e| format!("Failed to commit debug clone transaction: {}", e))?;
 
             inserted += cur;
-            let _ = app.emit(
+            let _ = GlobalEmitter::global().emit(
                 "debug-clone-images-progress",
-                DebugCloneImagesProgress { inserted, total },
+                serde_json::to_value(DebugCloneImagesProgress { inserted, total })
+                    .unwrap_or_default(),
             );
         }
 

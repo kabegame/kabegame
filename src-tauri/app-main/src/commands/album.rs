@@ -1,9 +1,9 @@
 ﻿// Album 相关命令
 
 use kabegame_core::storage::Storage;
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use tauri::AppHandle;
 
@@ -22,7 +22,7 @@ pub async fn add_album(_app: AppHandle, name: String) -> Result<serde_json::Valu
 #[tauri::command]
 pub async fn delete_album(_app: AppHandle, album_id: String) -> Result<(), String> {
     Storage::global().delete_album(&album_id)?;
-    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+    #[cfg(not(kabegame_mode = "light"))]
     VirtualDriveService::global().bump_albums();
     Ok(())
 }
@@ -34,7 +34,7 @@ pub async fn rename_album(
     new_name: String,
 ) -> Result<(), String> {
     Storage::global().rename_album(&album_id, &new_name)?;
-    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+    #[cfg(not(kabegame_mode = "light"))]
     VirtualDriveService::global().bump_albums();
     Ok(())
 }
@@ -46,8 +46,8 @@ pub async fn add_images_to_album(
     image_ids: Vec<String>,
 ) -> Result<serde_json::Value, String> {
     let r = Storage::global().add_images_to_album(&album_id, &image_ids)?;
-    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
-    VirtualDriveService::global().notify_album_dir_changed(Storage::global(), &album_id);
+    #[cfg(not(kabegame_mode = "light"))]
+    VirtualDriveService::global().notify_album_dir_changed(&album_id);
     Ok(serde_json::to_value(r).map_err(|e| e.to_string())?)
 }
 
@@ -58,8 +58,8 @@ pub async fn remove_images_from_album(
     image_ids: Vec<String>,
 ) -> Result<usize, String> {
     let removed = Storage::global().remove_images_from_album(&album_id, &image_ids)?;
-    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
-    VirtualDriveService::global().notify_album_dir_changed(Storage::global(), &album_id);
+    #[cfg(not(kabegame_mode = "light"))]
+    VirtualDriveService::global().notify_album_dir_changed(&album_id);
     Ok(removed)
 }
 

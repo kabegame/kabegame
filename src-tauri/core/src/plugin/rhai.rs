@@ -1,4 +1,4 @@
-use crate::emitter::{EventEmitter, GlobalEmitter};
+use crate::emitter::GlobalEmitter;
 use crate::plugin::Plugin;
 use crate::settings::Settings;
 use crate::storage::Storage;
@@ -165,14 +165,12 @@ fn is_retryable_status(status: reqwest::StatusCode) -> bool {
     status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error()
 }
 
-fn emit_http_warn(dq: &crate::crawler::DownloadQueue, task_id: &str, message: impl Into<String>) {
-    let emitter = dq.emitter_arc();
-    emitter.emit_task_log(task_id, "warn", &message.into());
+fn emit_http_warn(_dq: &crate::crawler::DownloadQueue, task_id: &str, message: impl Into<String>) {
+    GlobalEmitter::global().emit_task_log(task_id, "warn", &message.into());
 }
 
-fn emit_http_error(dq: &crate::crawler::DownloadQueue, task_id: &str, message: impl Into<String>) {
-    let emitter = dq.emitter_arc();
-    emitter.emit_task_log(task_id, "error", &message.into());
+fn emit_http_error(_dq: &crate::crawler::DownloadQueue, task_id: &str, message: impl Into<String>) {
+    GlobalEmitter::global().emit_task_log(task_id, "error", &message.into());
 }
 
 fn http_get_text_with_retry(
@@ -338,7 +336,6 @@ impl RhaiCrawlerRuntime {
         {
             let task_id_for_print = Arc::clone(&task_id);
             engine.on_print(move |s: &str| {
-                use crate::emitter::EventEmitter;
                 let tid = match task_id_for_print.lock() {
                     Ok(g) => g.clone(),
                     Err(e) => e.into_inner().clone(),
@@ -349,7 +346,6 @@ impl RhaiCrawlerRuntime {
         {
             let task_id_for_debug = Arc::clone(&task_id);
             engine.on_debug(move |s: &str, src: Option<&str>, pos: Position| {
-                use crate::emitter::EventEmitter;
                 let tid = match task_id_for_debug.lock() {
                     Ok(g) => g.clone(),
                     Err(e) => e.into_inner().clone(),
@@ -1213,9 +1209,7 @@ pub fn register_crawler_functions(
             let final_progress = *current;
 
             // 通过事件发送进度更新
-            dq_handle
-                .emitter_arc()
-                .emit_task_progress(&task_id, final_progress);
+            GlobalEmitter::global().emit_task_progress(&task_id, final_progress);
 
             Ok(())
         },

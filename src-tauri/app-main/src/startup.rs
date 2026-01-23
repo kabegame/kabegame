@@ -1,12 +1,13 @@
-// 启动步骤函数
+﻿// 启动步骤函数
 
 use std::fs;
 use tauri::{Listener, Manager};
 
 use crate::commands::wallpaper::init_wallpaper_on_startup;
+use crate::wallpaper::manager::WallpaperController;
+use crate::wallpaper::WallpaperRotator;
 #[cfg(target_os = "windows")]
 use crate::wallpaper::WallpaperWindow;
-use crate::wallpaper::{WallpaperController, WallpaperRotator};
 
 pub fn startup_step_cleanup_user_data_if_marked(app: &tauri::AppHandle) -> bool {
     // 检查清理标记，如果存在则先清理旧数据目录
@@ -105,21 +106,11 @@ pub fn startup_step_manage_wallpaper_components(app: &mut tauri::App) {
         crate::tray::setup_tray(app.app_handle().clone());
     }
 
-    // 初始化壁纸控制器，然后根据设置决定是否启动轮播
-    // 注意：不要在 Tokio runtime 内再 `block_on`（会触发 "Cannot start a runtime from within a runtime"）
-    let app_handle = app.app_handle().clone();
     tauri::async_runtime::spawn(async move {
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
-
-        let tx_ready = tx.clone();
-        let _listener_ready = app_handle.once("daemon-ready", move |_event| {
-            if let Some(sender) = tx_ready.lock().unwrap().take() {
-                let _ = sender.send(());
-            }
-        });
-
-        let _ = tokio::time::timeout(tokio::time::Duration::from_secs(30), rx).await;
+        // 初始化壁纸控制器（如创建窗口等）
+        if let Err(e) = WallpaperController::global().init() {
+            eprintln!("[WARN] Failed to initialize wallpaper controller: {}", e);
+        }
 
         if let Err(e) = init_wallpaper_on_startup().await {
             eprintln!("[WARN] init_wallpaper_on_startup failed: {}", e);

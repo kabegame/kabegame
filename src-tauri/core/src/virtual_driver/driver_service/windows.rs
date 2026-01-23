@@ -54,6 +54,7 @@ impl Default for VirtualDriveService {
     }
 }
 
+// windows实现
 impl VirtualDriveServiceTrait for VirtualDriveService {
     fn current_mount_point(&self) -> Option<String> {
         self.mounted
@@ -71,11 +72,12 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
         notify_explorer_dir_changed_path(mp.as_ref());
     }
 
-    fn notify_album_dir_changed(&self, storage: &Storage, album_id: &str) {
+    fn notify_album_dir_changed(&self, album_id: &str) {
         let mounted_arc = self.mounted.load_full();
         let Some(mp) = mounted_arc.as_ref().as_ref() else {
             return;
         };
+        let storage = Storage::global();
         let Ok(Some(name)) = storage.get_album_name_by_id(album_id) else {
             // 画册不存在，刷新画册列表
             self.notify_albums_root_dir_changed();
@@ -98,7 +100,7 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
     }
 
     // windows 挂载
-    fn mount(&self, mount_point: &str, _storage: Storage) -> Result<(), String> {
+    fn mount(&self, mount_point: &str) -> Result<(), String> {
         let mount_point = normalize_mount_point(mount_point)?;
         let mount_point: Arc<str> = Arc::from(mount_point);
 
@@ -131,7 +133,7 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
                 // 默认使用 CURRENT_SESSION：
                 // - 更符合“仅当前用户会话可见”的产品语义
                 // - 在部分 Win10 环境下可降低“必须管理员才能挂载盘符”的概率
-                flags: MountFlags::CURRENT_SESSION,
+                flags: MountFlags::CURRENT_SESSION | MountFlags::CASE_SENSITIVE,
                 unc_name: None,
                 timeout: Duration::from_secs(30),
                 allocation_unit_size: 4096,
@@ -239,7 +241,7 @@ impl VirtualDriveService {
     /// - 若可读到插件显示名：`"{pluginName} - {taskId}"`
     /// - 否则退回 `"{pluginId} - {taskId}"`
     /// - 若插件名为空：仅 `"{taskId}"`
-    pub fn notify_task_dir_changed(&self, storage: &Storage, task_id: &str) {
+    pub fn notify_task_dir_changed(&self, task_id: &str) {
         let task_id = task_id.trim();
         if task_id.is_empty() {
             return;
@@ -261,10 +263,11 @@ impl VirtualDriveService {
             guard.insert(task_id.to_string(), now);
         }
 
-        // 刷新“按任务”根目录：确保首次出现图片时该任务目录可见
+        // 刷新"按任务"根目录：确保首次出现图片时该任务目录可见
         self.notify_task_root_dir_changed();
 
         // 刷新具体任务目录：确保 Explorer 正在浏览该目录时也能更新文件列表
+        let storage = Storage::global();
         let plugin_id = storage
             .get_task(task_id)
             .ok()

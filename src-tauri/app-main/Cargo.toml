@@ -8,7 +8,7 @@ async-trait = "0.1"
 base64 = {workspace = true}
 governor = {version = "0.7", optional = true}
 image = {workspace = true}
-kabegame-core = {workspace = true, default-features = false, features = ["ipc", "tauri-runtime"]}
+kabegame-core = {workspace = true, default-features = false, features = ["ipc-server"]}
 lru = {version = "0.12", optional = true}
 memmap2 = {version = "0.9", optional = true}
 serde = {workspace = true}
@@ -17,7 +17,7 @@ sha2 = {workspace = true}
 tauri = {workspace = true, features = ["protocol-asset"]}
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-fs = "=2.4.4"
-tauri-plugin-global-shortcut = "=2.5.0"
+tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-shell = "=2.3.3"
 tokio = {workspace = true}
 uuid = {workspace = true}
@@ -39,10 +39,9 @@ winver = "1"
 tauri-build = {workspace = true}
 
 [features]
-custom-protocol = ["tauri/custom-protocol", "kabegame-core/custom-protocol"]
-default = ["custom-protocol", "tray", "virtual-driver"]
+custom-protocol = ["tauri/custom-protocol"]
+default = ["custom-protocol", "tray"]
 tray = ["dep:governor"]
-virtual-driver = ["dep:dokan", "dep:widestring", "dep:winapi", "dep:lru", "dep:memmap2", "kabegame-core/virtual-driver"]
 
 [[bin]]
 name = "kabegame"

@@ -227,8 +227,8 @@ fn vd_mount(_args: VdMountArgs) -> Result<(), String> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
     // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
-    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
-        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+    if !rt.block_on(kabegame_core::ipc::client::daemon_startup::is_daemon_available()) {
+        let daemon_path = kabegame_core::ipc::client::daemon_startup::find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
         return Err(format!(
             "无法连接 kabegame-daemon\n提示：请先启动 `{}`",

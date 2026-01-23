@@ -16,7 +16,7 @@ pub trait VirtualDriveServiceTrait: Default + Send + Sync {
     fn notify_root_dir_changed(&self);
 
     /// 通知画册目录变更
-    fn notify_album_dir_changed(&self, storage: &Storage, album_id: &str);
+    fn notify_album_dir_changed(&self, album_id: &str);
 
     /// 统一 bump：按任务子树（并通知文件管理器刷新）
     fn bump_tasks(&self);
@@ -25,7 +25,7 @@ pub trait VirtualDriveServiceTrait: Default + Send + Sync {
     fn bump_albums(&self);
 
     /// 挂载虚拟盘
-    fn mount(&self, mount_point: &str, storage: Storage) -> Result<(), String>;
+    fn mount(&self, mount_point: &str) -> Result<(), String>;
 
     /// 卸载虚拟盘
     fn unmount(&self) -> Result<bool, String>;

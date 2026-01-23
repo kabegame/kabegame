@@ -20,7 +20,7 @@ use crate::{
     storage::Storage,
 };
 
-#[cfg(all(feature = "virtual-driver", target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
 
 #[derive(Debug, Clone)]

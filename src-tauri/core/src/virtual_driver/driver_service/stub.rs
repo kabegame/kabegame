@@ -15,13 +15,13 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
 
     fn notify_root_dir_changed(&self) {}
 
-    fn notify_album_dir_changed(&self, _storage: &Storage, _album_id: &str) {}
+    fn notify_album_dir_changed(&self, _album_id: &str) {}
 
     fn bump_tasks(&self) {}
 
     fn bump_albums(&self) {}
 
-    fn mount(&self, _mount_point: &str, _storage: Storage) -> Result<(), String> {
+    fn mount(&self, _mount_point: &str) -> Result<(), String> {
         Err("当前平台暂不支持虚拟盘".to_string())
     }
 
@@ -39,11 +39,11 @@ impl VirtualDriveService {
         VirtualDriveServiceTrait::notify_root_dir_changed(self)
     }
 
-    pub fn notify_album_dir_changed(&self, storage: &Storage, album_id: &str) {
-        VirtualDriveServiceTrait::notify_album_dir_changed(self, storage, album_id)
+    pub fn notify_album_dir_changed(&self, album_id: &str) {
+        VirtualDriveServiceTrait::notify_album_dir_changed(self, album_id)
     }
 
-    pub fn notify_task_dir_changed(&self, _storage: &Storage, _task_id: &str) {}
+    pub fn notify_task_dir_changed(&self, _task_id: &str) {}
 
     pub fn notify_gallery_tree_changed(&self) {}
 
@@ -55,8 +55,8 @@ impl VirtualDriveService {
         VirtualDriveServiceTrait::bump_albums(self)
     }
 
-    pub fn mount(&self, mount_point: &str, storage: Storage) -> Result<(), String> {
-        VirtualDriveServiceTrait::mount(self, mount_point, storage)
+    pub fn mount(&self, mount_point: &str) -> Result<(), String> {
+        VirtualDriveServiceTrait::mount(self, mount_point)
     }
 
     pub fn unmount(&self) -> Result<bool, String> {

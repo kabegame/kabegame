@@ -1,7 +1,7 @@
-﻿//! Albums 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
-use crate::server::EventBroadcaster;
+﻿//! Albums 相关代码
 use kabegame_core::ipc::events::DaemonEvent;
 use kabegame_core::ipc::ipc::CliIpcResponse;
+use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::storage::Storage;
 use std::sync::Arc;
 
@@ -27,11 +27,11 @@ pub async fn add_album(broadcaster: Arc<EventBroadcaster>, name: &str) -> CliIpc
                 serde_json::to_value(album).unwrap_or_default(),
             );
             broadcaster
-                .broadcast(DaemonEvent::AlbumAdded {
+                .broadcast(Arc::new(DaemonEvent::AlbumAdded {
                     id: id,
                     name: name,
                     created_at: created_at,
-                })
+                }))
                 .await;
             CliIpcResponse::ok("created")
         }

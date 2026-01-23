@@ -2,22 +2,29 @@
 //!
 //! 替代原有的 runtime 模块，提供统一的事件发送接口。
 //! 直接使用 IPC 事件发送器实现。
+//!
+//! 注意：此模块需要 `ipc-server` feature，因为它依赖于 EventBroadcaster。
 
+#[cfg(feature = "ipc-server")]
 use crate::ipc::events::{DaemonEvent, DaemonEventKind};
-use crate::server::EventBroadcaster;
-use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
+#[cfg(feature = "ipc-server")]
+use crate::ipc::server::EventBroadcaster;
+use std::sync::{Arc, OnceLock};
 
 // ==================== IPC 实现 ====================
 
 /// 全局 IPC 事件发送器
+///
+/// 注意：此类型仅在启用 `ipc-server` feature 时可用
+#[cfg(feature = "ipc-server")]
 pub struct GlobalEmitter {
-    broadcaster: crate::server::EventBroadcaster,
+    broadcaster: Arc<EventBroadcaster>,
 }
 
+#[cfg(feature = "ipc-server")]
 impl GlobalEmitter {
     /// 创建新的全局 emitter
-    pub fn new(broadcaster: crate::server::EventBroadcaster) -> Self {
+    pub fn new(broadcaster: Arc<EventBroadcaster>) -> Self {
         Self { broadcaster }
     }
 
@@ -25,7 +32,7 @@ impl GlobalEmitter {
     ///
     /// # Panics
     /// 如果已经初始化，会 panic
-    pub fn init_global(broadcaster: crate::server::EventBroadcaster) -> Result<(), String> {
+    pub fn init_global(broadcaster: Arc<EventBroadcaster>) -> Result<(), String> {
         GLOBAL_EMITTER
             .set(Self::new(broadcaster))
             .map_err(|_| "Global emitter already initialized".to_string())
@@ -51,11 +58,11 @@ impl GlobalEmitter {
 
     /// 发送任务日志事件
     pub fn emit_task_log(&self, task_id: &str, level: &str, message: &str) {
-        let event = DaemonEvent::TaskLog {
+        let event = Arc::new(DaemonEvent::TaskLog {
             task_id: task_id.to_string(),
             level: level.to_string(),
             message: message.to_string(),
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
@@ -76,14 +83,14 @@ impl GlobalEmitter {
         {
             return;
         }
-        let event = DaemonEvent::DownloadState {
+        let event = Arc::new(DaemonEvent::DownloadState {
             task_id: task_id.to_string(),
             url: url.to_string(),
             start_time,
             plugin_id: plugin_id.to_string(),
             state: state.to_string(),
             error: error.map(|e| e.to_string()),
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
@@ -96,40 +103,40 @@ impl GlobalEmitter {
         error: Option<&str>,
         current_wallpaper: Option<&str>,
     ) {
-        let event = DaemonEvent::TaskStatus {
+        let event = Arc::new(DaemonEvent::TaskStatus {
             task_id: task_id.to_string(),
             status: status.to_string(),
             progress,
             error: error.map(|e| e.to_string()),
             current_wallpaper: current_wallpaper.map(|w| w.to_string()),
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
     /// 发送通用事件（用于扩展）
     pub fn emit(&self, event: &str, payload: serde_json::Value) {
-        let event = DaemonEvent::Generic {
+        let event = Arc::new(DaemonEvent::Generic {
             event: event.to_string(),
             payload,
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
     /// 发送任务进度事件
     pub fn emit_task_progress(&self, task_id: &str, progress: f64) {
-        let event = DaemonEvent::TaskProgress {
+        let event = Arc::new(DaemonEvent::TaskProgress {
             task_id: task_id.to_string(),
             progress,
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
     /// 发送任务错误事件
     pub fn emit_task_error(&self, task_id: &str, error: &str) {
-        let event = DaemonEvent::TaskError {
+        let event = Arc::new(DaemonEvent::TaskError {
             task_id: task_id.to_string(),
             error: error.to_string(),
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
@@ -150,14 +157,14 @@ impl GlobalEmitter {
         {
             return;
         }
-        let event = DaemonEvent::DownloadProgress {
+        let event = Arc::new(DaemonEvent::DownloadProgress {
             task_id: task_id.to_string(),
             url: url.to_string(),
             start_time,
             plugin_id: plugin_id.to_string(),
             received_bytes,
             total_bytes,
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
@@ -169,12 +176,12 @@ impl GlobalEmitter {
         removed: usize,
         batch_index: usize,
     ) {
-        let event = DaemonEvent::DedupeProgress {
+        let event = Arc::new(DaemonEvent::DedupeProgress {
             processed,
             total,
             removed,
             batch_index,
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
@@ -186,45 +193,46 @@ impl GlobalEmitter {
         removed: usize,
         canceled: bool,
     ) {
-        let event = DaemonEvent::DedupeFinished {
+        let event = Arc::new(DaemonEvent::DedupeFinished {
             processed,
             total,
             removed,
             canceled,
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
     /// 发送壁纸图片更新事件
     pub fn emit_wallpaper_update_image(&self, image_path: &str) {
-        let event = DaemonEvent::WallpaperUpdateImage {
+        let event = Arc::new(DaemonEvent::WallpaperUpdateImage {
             image_path: image_path.to_string(),
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
     /// 发送壁纸样式更新事件
     pub fn emit_wallpaper_update_style(&self, style: &str) {
-        let event = DaemonEvent::WallpaperUpdateStyle {
+        let event = Arc::new(DaemonEvent::WallpaperUpdateStyle {
             style: style.to_string(),
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
     /// 发送壁纸过渡效果更新事件
     pub fn emit_wallpaper_update_transition(&self, transition: &str) {
-        let event = DaemonEvent::WallpaperUpdateTransition {
+        let event = Arc::new(DaemonEvent::WallpaperUpdateTransition {
             transition: transition.to_string(),
-        };
+        });
         self.broadcaster.broadcast_sync(event);
     }
 
     /// 发送设置变更事件
     pub fn emit_setting_change(&self, changes: serde_json::Value) {
-        let event = DaemonEvent::SettingChange { changes };
+        let event = Arc::new(DaemonEvent::SettingChange { changes });
         self.broadcaster.broadcast_sync(event);
     }
 }
 
 /// 全局 emitter 单例存储
+#[cfg(feature = "ipc-server")]
 static GLOBAL_EMITTER: OnceLock<GlobalEmitter> = OnceLock::new();
