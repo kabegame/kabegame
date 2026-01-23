@@ -1,9 +1,9 @@
 <template>
   <div class="we-dir-setting">
-    <el-input v-model="localDir" placeholder="导入到 WE（建议选择 WE 安装目录或 projects/myprojects）" clearable :disabled="saving"
+    <el-input v-model="localDir" placeholder="导入到 WE（建议选择 WE 安装目录或 projects/myprojects）" clearable :disabled="disabled" :loading="showDisabled"
       @clear="handleClear">
       <template #append>
-        <el-button :disabled="saving" @click="handleChoose">
+        <el-button :disabled="disabled" :loading="showDisabled" @click="handleChoose">
           <el-icon>
             <FolderOpened />
           </el-icon>
@@ -33,16 +33,15 @@ import { ElMessage } from "element-plus";
 import { FolderOpened } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 
-const settingsStore = useSettingsStore();
-const saving = computed(() => settingsStore.savingByKey.wallpaperEngineDir === true);
+const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperEngineDir");
 
 const localDir = ref<string>("");
 const myprojectsDir = ref<string>("");
 
 watch(
-  () => settingsStore.values.wallpaperEngineDir,
+  () => settingValue.value,
   (v) => {
     localDir.value = (v as any as string | null) || "";
   },
@@ -63,23 +62,16 @@ onMounted(async () => {
 });
 
 const saveDir = async (dir: string | null) => {
-  const prev = settingsStore.values.wallpaperEngineDir as any;
-  settingsStore.values.wallpaperEngineDir = dir as any;
-  settingsStore.savingByKey.wallpaperEngineDir = true;
   try {
-    await invoke("set_wallpaper_engine_dir", { dir });
-    await refreshMyprojects();
-    if (dir && !myprojectsDir.value) {
-      ElMessage.warning("未识别到 projects/myprojects，请换一个目录（比如 WE 安装目录或 projects 目录）");
-    }
+    await set(dir, async () => {
+      await refreshMyprojects();
+      if (dir && !myprojectsDir.value) {
+        ElMessage.warning("未识别到 projects/myprojects，请换一个目录（比如 WE 安装目录或 projects 目录）");
+      }
+    });
   } catch (e) {
-    settingsStore.values.wallpaperEngineDir = prev;
-    localDir.value = (prev as any as string | null) || "";
-    ElMessage.error("保存失败");
-    // eslint-disable-next-line no-console
     console.error("保存 Wallpaper Engine 目录失败:", e);
-  } finally {
-    settingsStore.savingByKey.wallpaperEngineDir = false;
+    // localDir will be reverted by watch
   }
 };
 

@@ -1,6 +1,5 @@
 <template>
-    <el-radio-group v-model="localValue" :disabled="switching" @change="handleChange"
-        class="wallpaper-mode-radio-group">
+    <el-radio-group v-model="localValue" :disabled="switching" class="wallpaper-mode-radio-group">
         <el-radio value="native">原生模式</el-radio>
         <el-radio v-if="IS_WINDOWS" value="window">窗口模式</el-radio>
         <el-radio v-else-if="IS_PLASMA" value="plasma-plugin" disabled>Plasma 插件模式（开发中，敬请期待）</el-radio>
@@ -12,18 +11,18 @@ import { computed, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_WINDOWS, IS_PLASMA } from "@kabegame/core/env";
 
-const settingsStore = useSettingsStore();
+const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperMode");
 const uiStore = useUiStore();
 
 const switching = computed(() => uiStore.wallpaperModeSwitching === true);
 
 const localValue = ref<string>("native");
 watch(
-    () => settingsStore.values.wallpaperMode,
+    () => settingValue.value,
     (v) => {
         localValue.value = (v as any as string) || "native";
     },
@@ -47,93 +46,59 @@ const handleChange = async (mode: string) => {
             );
         } catch {
             // 用户取消，恢复原值
-            localValue.value = (settingsStore.values.wallpaperMode as any as string) || "native";
+            localValue.value = (settingValue.value as any as string) || "native";
             return;
         }
     }
 
-    const prevMode = (settingsStore.values.wallpaperMode as any as string) || "native";
+    const prevMode = (settingValue.value as any as string) || "native";
     uiStore.wallpaperModeSwitching = true as any;
 
-    let unlistenFn: (() => void) | null = null;
-    try {
-        const waitForSwitchComplete = new Promise<{ success: boolean; error?: string }>(
-            async (resolve, reject) => {
-                const timeoutId = setTimeout(() => {
-                    const fn = unlistenFn as (() => void) | null;
-                    if (fn) {
-                        fn();
-                        unlistenFn = null;
-                    }
-                    reject(new Error("切换模式超时：后端未在 30 秒内响应"));
-                }, 30000);
-
+    // 特殊逻辑：等待模式切换完成
+    const onAfterSave = async () => {
+        return new Promise<void>((resolve, reject) => {
+            const waitForSwitchComplete = async () => {
                 try {
-                    const listenFn = await listen<{ success: boolean; mode: string; error?: string }>(
+                    const timeoutId = setTimeout(() => {
+                        reject(new Error("切换模式超时：后端未在 30 秒内响应"));
+                    }, 30000);
+
+                    const unlistenFn = await listen<{ success: boolean; mode: string; error?: string }>(
                         "wallpaper-mode-switch-complete",
                         (event) => {
                             if (event.payload.mode === mode) {
                                 clearTimeout(timeoutId);
-                                const fn = unlistenFn as (() => void) | null;
-                                if (fn) {
-                                    fn();
-                                    unlistenFn = null;
+                                unlistenFn();
+                                if (event.payload.success) {
+                                    ElMessage.success("壁纸模式已切换");
+                                    resolve();
+                                } else {
+                                    const errorMsg = event.payload.error || "切换模式失败";
+                                    ElMessage.error(`切换模式失败: ${errorMsg}`);
+                                    reject(new Error(errorMsg));
                                 }
-                                resolve({ success: event.payload.success, error: event.payload.error });
                             }
                         }
                     );
-                    unlistenFn = listenFn;
                 } catch (listenError) {
-                    clearTimeout(timeoutId);
                     reject(new Error(`监听切换完成事件失败: ${listenError}`));
                 }
-            }
-        );
+            };
 
-        // 启动切换（不等待完成）
-        settingsStore.values.wallpaperMode = mode as any;
-        try {
-            await invoke("set_wallpaper_mode", { mode });
-        } catch (invokeError: any) {
-            const fn = unlistenFn as (() => void) | null;
-            if (fn) {
-                fn();
-                unlistenFn = null;
-            }
-            const errorMsg = invokeError?.message || invokeError?.toString() || "未知错误";
-            ElMessage.error(`启动模式切换失败: ${errorMsg}`);
-            settingsStore.values.wallpaperMode = prevMode as any;
-            localValue.value = prevMode;
-            return;
-        }
+            waitForSwitchComplete();
+        });
+    };
 
-        const result = await waitForSwitchComplete;
-        if (result.success) {
-            ElMessage.success("壁纸模式已切换");
-            // 设置变更会通过 setting-change 事件自动更新 UI
-        } else {
-            const errorMsg = result.error || "切换模式失败";
-            ElMessage.error(`切换模式失败: ${errorMsg}`);
-            // 回滚
-            settingsStore.values.wallpaperMode = prevMode as any;
-            localValue.value = prevMode;
-        }
+    try {
+        await set(mode, onAfterSave);
     } catch (e: any) {
         const msg = e?.message || String(e);
         ElMessage.error(`切换模式失败: ${msg}`);
-        settingsStore.values.wallpaperMode = prevMode as any;
+        // 回滚
         localValue.value = prevMode;
         // eslint-disable-next-line no-console
         console.error("切换模式异常:", e);
     } finally {
-        const fn = unlistenFn as (() => void) | null;
-        if (fn) {
-            try {
-                fn();
-            } catch { }
-            unlistenFn = null;
-        }
         uiStore.wallpaperModeSwitching = false as any;
     }
 };

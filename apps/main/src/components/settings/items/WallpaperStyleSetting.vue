@@ -1,6 +1,6 @@
 <template>
-  <el-select v-model="localValue" placeholder="请选择显示方式" style="min-width: 180px" :disabled="disabled || externalDisabled"
-    @change="handleChange">
+  <el-select v-model="localValue" placeholder="请选择显示方式" style="min-width: 180px"
+    :disabled="props.disabled || disabled" @change="handleChange">
     <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value">
       <span>{{ opt.desc }}</span>
     </el-option>
@@ -10,10 +10,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_WINDOWS } from "@kabegame/core/env";
 
 const props = defineProps<{
@@ -23,16 +23,12 @@ const props = defineProps<{
 type Style = "fill" | "fit" | "stretch" | "center" | "tile";
 type Opt = { label: string; value: Style; desc: string };
 
+const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperRotationStyle");
 const settingsStore = useSettingsStore();
-const uiStore = useUiStore();
 
-const isApplying = ref(false);
 const nativeWallpaperStyles = ref<Style[]>([]);
 
 const mode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
-
-const externalDisabled = computed(() => uiStore.wallpaperModeSwitching || isApplying.value);
-const disabled = computed(() => props.disabled || externalDisabled.value);
 
 const allOptions: Opt[] = [
   { label: "填充", value: "fill", desc: "填充 - 保持宽高比，填满屏幕（可能裁剪）" },
@@ -51,7 +47,7 @@ const options = computed(() => {
 
 const localValue = ref<string>("fill");
 watch(
-  () => settingsStore.values.wallpaperRotationStyle,
+  () => settingValue.value,
   (v) => {
     localValue.value = (v as any as string) || "fill";
   },
@@ -67,39 +63,34 @@ onMounted(async () => {
 });
 
 const handleChange = async (style: string) => {
-  if (disabled.value) return;
-  isApplying.value = true;
-  const prev = settingsStore.values.wallpaperRotationStyle as any;
-  settingsStore.values.wallpaperRotationStyle = style as any;
-  settingsStore.savingByKey.wallpaperRotationStyle = true;
-
-  try {
-    const waitForApply = new Promise<{ success: boolean; error?: string }>(async (resolve) => {
-      const unlistenFn = await listen<{ success: boolean; style: string; error?: string }>(
-        "wallpaper-style-apply-complete",
-        (event) => {
-          if (event.payload.style === style) {
-            unlistenFn();
-            resolve({ success: event.payload.success, error: event.payload.error });
-          }
+  // 特殊逻辑：等待壁纸应用完成
+  const onAfterSave = async () => {
+    return new Promise<void>((resolve, reject) => {
+      const waitForApply = async () => {
+        try {
+          const unlistenFn = await listen<{ success: boolean; style: string; error?: string }>(
+            "wallpaper-style-apply-complete",
+            (event) => {
+              if (event.payload.style === style) {
+                unlistenFn();
+                if (!event.payload.success) {
+                  ElMessage.error(event.payload.error || "应用样式失败");
+                  reject(new Error(event.payload.error || "应用样式失败"));
+                } else {
+                  resolve();
+                }
+              }
+            }
+          );
+        } catch (e) {
+          reject(e);
         }
-      );
+      };
+
+      waitForApply();
     });
+  };
 
-    // 触发保存 + 后台应用（命令会立即返回）
-    await invoke("set_wallpaper_style", { style });
-
-    const result = await waitForApply;
-    if (!result.success) ElMessage.error(result.error || "应用样式失败");
-  } catch (e) {
-    settingsStore.values.wallpaperRotationStyle = prev;
-    localValue.value = (prev as any as string) || "fill";
-    ElMessage.error("保存设置失败");
-    // eslint-disable-next-line no-console
-    console.error(e);
-  } finally {
-    settingsStore.savingByKey.wallpaperRotationStyle = false;
-    isApplying.value = false;
-  }
+  await set(style, onAfterSave);
 };
 </script>

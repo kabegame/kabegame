@@ -1,24 +1,22 @@
 <template>
-  <el-switch v-model="localValue" :disabled="disabled || loading" :loading="loading" @change="handleChange" />
+  <el-switch v-model="localValue" :disabled="props.disabled || disabled" :loading="showDisabled" @change="handleChange" />
 </template>
 
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 
 const props = defineProps<{
   disabled?: boolean;
 }>();
 
-const settingsStore = useSettingsStore();
-
-const loading = ref(false);
+const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperRotationEnabled");
 const localValue = ref(false);
 
 watch(
-  () => settingsStore.values.wallpaperRotationEnabled,
+  () => settingValue.value,
   (v) => {
     localValue.value = !!v;
   },
@@ -37,56 +35,45 @@ const waitForRotatorStatus = async (expected: "running" | "idle", maxRetries: nu
 };
 
 const handleChange = async (value: boolean) => {
-  if (loading.value || props.disabled) return;
-  loading.value = true;
-  try {
-    if (value) {
-      // 1) 仅落盘开启（不启动线程）
-      await invoke("set_wallpaper_rotation_enabled", { enabled: true });
-
-      // 2) 由后端根据“上次画册ID -> 失败回落到画廊”逻辑启动轮播线程
-      const res = await invoke<{
-        started: boolean;
-        source: "album" | "gallery";
-        albumId?: string | null;
-        fallback?: boolean;
-        warning?: string | null;
-      }>("start_wallpaper_rotation");
-
-      if (!res?.started) throw new Error("轮播线程未能启动");
-
-      // 3) 等待状态变为 running
-      await waitForRotatorStatus("running", 20);
-
-      // 设置变更会通过 setting-change 事件自动更新 UI
-      if (res.fallback && res.warning) ElMessage.warning(res.warning);
-      ElMessage.success(res.source === "album" ? "已开启轮播：画册" : "已开启轮播：画廊");
-    } else {
-      await invoke("set_wallpaper_rotation_enabled", { enabled: false });
-      await waitForRotatorStatus("idle", 50);
-      // 设置变更会通过 setting-change 事件自动更新 UI
-      ElMessage.info("壁纸轮播已禁用");
-    }
-  } catch (e: any) {
-    // 回滚 UI，并确保后端状态关闭
-    localValue.value = false;
-    settingsStore.values.wallpaperRotationEnabled = false as any;
+  // 特殊逻辑：启动/停止轮播线程
+  const onAfterSave = async () => {
     try {
-      await invoke("set_wallpaper_rotation_enabled", { enabled: false });
-    } catch { }
+      if (value) {
+        // 启动轮播线程
+        const res = await invoke<{
+          started: boolean;
+          source: "album" | "gallery";
+          albumId?: string | null;
+          fallback?: boolean;
+          warning?: string | null;
+        }>("start_wallpaper_rotation");
 
-    const msg = e?.message || String(e);
-    if (String(msg).includes("画廊内没有图片")) {
-      ElMessage.warning("画廊没有图片，请先去收集图片，开启轮播失败");
-    } else if (String(msg).includes("画册内没有图片")) {
-      ElMessage.warning("画册为空，请先添加图片，开启轮播失败");
-    } else {
-      ElMessage.error(`操作失败：${msg}`);
+        if (!res?.started) throw new Error("轮播线程未能启动");
+
+        // 等待状态变为 running
+        await waitForRotatorStatus("running", 20);
+
+        if (res.fallback && res.warning) ElMessage.warning(res.warning);
+        ElMessage.success(res.source === "album" ? "已开启轮播：画册" : "已开启轮播：画廊");
+      } else {
+        // 停止轮播线程
+        await waitForRotatorStatus("idle", 50);
+        ElMessage.info("壁纸轮播已禁用");
+      }
+    } catch (e: any) {
+      // 如果启动失败，抛出错误让 set 函数处理回滚
+      const msg = e?.message || String(e);
+      if (String(msg).includes("画廊内没有图片")) {
+        ElMessage.warning("画廊没有图片，请先去收集图片，开启轮播失败");
+      } else if (String(msg).includes("画册内没有图片")) {
+        ElMessage.warning("画册为空，请先添加图片，开启轮播失败");
+      } else {
+        ElMessage.error(`操作失败：${msg}`);
+      }
+      throw e; // 重新抛出错误，让 set 函数处理回滚
     }
-    // eslint-disable-next-line no-console
-    console.error(e);
-  } finally {
-    loading.value = false;
-  }
+  };
+
+  await set(value, onAfterSave);
 };
 </script>

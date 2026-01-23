@@ -1,8 +1,8 @@
 <template>
   <div class="default-download-dir-setting">
-    <el-input v-model="localDir" placeholder="留空使用默认位置" clearable :disabled="saving" @clear="handleClear">
+    <el-input v-model="localDir" placeholder="留空使用默认位置" clearable :disabled="disabled" :loading="showDisabled" @clear="handleClear">
       <template #append>
-        <el-button :disabled="saving" @click="handleChoose">
+        <el-button :disabled="disabled" :loading="showDisabled" @click="handleChoose">
           <el-icon>
             <FolderOpened />
           </el-icon>
@@ -19,7 +19,7 @@
         </el-icon>
         <span class="path-text">{{ effectiveDownloadDir || "（未知）" }}</span>
       </el-button>
-      <el-button v-if="(settingsStore.values.defaultDownloadDir as any)" link type="warning" :disabled="saving" @click="handleClear">
+      <el-button v-if="(settingValue as any)" link type="warning" :disabled="disabled" :loading="showDisabled" @click="handleClear">
         恢复默认
       </el-button>
     </div>
@@ -32,20 +32,19 @@ import { ElMessage } from "element-plus";
 import { FolderOpened } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useSettingsStore } from "../../../stores/settings";
+import { useSettingKeyState } from "../../../composables/useSettingKeyState";
 
-const settingsStore = useSettingsStore();
-const saving = computed(() => settingsStore.savingByKey.defaultDownloadDir === true);
+const { settingValue, disabled, showDisabled, set } = useSettingKeyState("defaultDownloadDir");
 
 const defaultImagesDir = ref<string>("");
 const effectiveDownloadDir = computed(() => {
-  const custom = settingsStore.values.defaultDownloadDir as any as string | null | undefined;
+  const custom = settingValue.value as string | null | undefined;
   return custom && custom.trim() ? custom : defaultImagesDir.value || "";
 });
 
 const localDir = ref<string>("");
 watch(
-  () => settingsStore.values.defaultDownloadDir,
+  () => settingValue.value,
   (v) => {
     localDir.value = (v as any as string | null) || "";
   },
@@ -61,19 +60,11 @@ onMounted(async () => {
 });
 
 const saveDir = async (dir: string | null) => {
-  const prev = settingsStore.values.defaultDownloadDir as any;
-  settingsStore.values.defaultDownloadDir = dir as any;
-  settingsStore.savingByKey.defaultDownloadDir = true;
   try {
-    await invoke("set_default_download_dir", { dir });
+    await set(dir);
   } catch (e) {
-    settingsStore.values.defaultDownloadDir = prev;
-    localDir.value = (prev as any as string | null) || "";
-    ElMessage.error("保存失败");
-    // eslint-disable-next-line no-console
     console.error("保存默认下载目录失败:", e);
-  } finally {
-    settingsStore.savingByKey.defaultDownloadDir = false;
+    // localDir will be reverted by watch
   }
 };
 
@@ -142,4 +133,3 @@ const handleOpenEffective = async () => {
   vertical-align: bottom;
 }
 </style>
-

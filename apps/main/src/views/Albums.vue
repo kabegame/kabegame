@@ -65,7 +65,7 @@ import AlbumCard from "@/components/albums/AlbumCard.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { useLoadingDelay } from "@/composables/useLoadingDelay";
+import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";

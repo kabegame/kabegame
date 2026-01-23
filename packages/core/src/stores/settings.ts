@@ -45,6 +45,12 @@ export interface AppSettings {
 export type AppSettingKey = keyof AppSettings;
 export type ImageClickAction = AppSettings["imageClickAction"];
 
+/**
+ * 设置键状态机                   (一般也很短)
+ * 初始状态 -> loading -> down -> saving
+              (很短的过程)  ^---<----|        
+ *  
+*/
 export const useSettingsStore = defineStore("settings", () => {
   // 旧逻辑：收藏画册 ID（不是 AppSettings 的字段）
   const favoriteAlbumId = ref<string>("");
@@ -65,6 +71,7 @@ export const useSettingsStore = defineStore("settings", () => {
     }
   };
 
+  // TODO: 将这些落实到前端状态管理中
   const isLoading = (key: AppSettingKey) => !!loadingByKey[key];
   const isSaving = (key: AppSettingKey) => !!savingByKey[key];
 
@@ -92,6 +99,34 @@ export const useSettingsStore = defineStore("settings", () => {
       currentWallpaperImageId: "get_current_wallpaper_image_id",
       albumDriveEnabled: "get_album_drive_enabled",
       albumDriveMountPoint: "get_album_drive_mount_point",
+    };
+    return keyMap[key] || null;
+  };
+
+  // 将 key 映射到对应的 setter 命令名
+  const getSetterCommand = (key: AppSettingKey): string | null => {
+    const keyMap: Partial<Record<AppSettingKey, string>> = {
+      autoLaunch: "set_auto_launch",
+      maxConcurrentDownloads: "set_max_concurrent_downloads",
+      networkRetryCount: "set_network_retry_count",
+      imageClickAction: "set_image_click_action",
+      galleryImageAspectRatio: "set_gallery_image_aspect_ratio",
+      autoDeduplicate: "set_auto_deduplicate",
+      defaultDownloadDir: "set_default_download_dir",
+      wallpaperEngineDir: "set_wallpaper_engine_dir",
+      wallpaperRotationEnabled: "set_wallpaper_rotation_enabled",
+      wallpaperRotationAlbumId: "set_wallpaper_rotation_album_id",
+      wallpaperRotationIntervalMinutes: "set_wallpaper_rotation_interval_minutes",
+      wallpaperRotationMode: "set_wallpaper_rotation_mode",
+      wallpaperRotationStyle: "set_wallpaper_rotation_style",
+      wallpaperRotationTransition: "set_wallpaper_rotation_transition",
+      wallpaperStyleByMode: "set_wallpaper_style_by_mode",
+      wallpaperTransitionByMode: "set_wallpaper_transition_by_mode",
+      wallpaperMode: "set_wallpaper_mode",
+      windowState: "set_window_state",
+      currentWallpaperImageId: "set_current_wallpaper_image_id",
+      albumDriveEnabled: "set_album_drive_enabled",
+      albumDriveMountPoint: "set_album_drive_mount_point",
     };
     return keyMap[key] || null;
   };
@@ -143,8 +178,86 @@ export const useSettingsStore = defineStore("settings", () => {
       "albumDriveEnabled",
       "albumDriveMountPoint",
     ];
-    
+
     await Promise.all(allKeys.map((k) => load(k)));
+  };
+
+  // 将 key 映射到对应的 setter 参数名
+  const getSetterParamKey = (key: AppSettingKey): string => {
+    const paramMap: Partial<Record<AppSettingKey, string>> = {
+      autoLaunch: "enabled",
+      maxConcurrentDownloads: "count",
+      networkRetryCount: "count",
+      imageClickAction: "action",
+      galleryImageAspectRatio: "ratio",
+      autoDeduplicate: "enabled",
+      defaultDownloadDir: "dir",
+      wallpaperEngineDir: "dir",
+      wallpaperRotationEnabled: "enabled",
+      wallpaperRotationAlbumId: "album_id",
+      wallpaperRotationIntervalMinutes: "minutes",
+      wallpaperRotationMode: "mode",
+      wallpaperRotationStyle: "style",
+      wallpaperRotationTransition: "transition",
+      wallpaperMode: "mode",
+      albumDriveEnabled: "enabled",
+      albumDriveMountPoint: "mount_point",
+    };
+    return paramMap[key] || camelToSnake(key);
+  };
+
+  // 将 camelCase 转换为 snake_case
+  const camelToSnake = (str: string): string => {
+    return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+  };
+
+  const save = async <K extends AppSettingKey>(
+    key: K,
+    value: AppSettings[K],
+    onAfterSave?: () => Promise<void> | void
+  ) => {
+    if (savingByKey[key]) return;
+    if (loadingByKey[key]) return;
+
+    savingByKey[key] = true;
+    const prevValue = (values as any)[key];
+
+    try {
+      // 更新本地值
+      (values as any)[key] = value;
+
+      // 调用后端接口
+      const command = getSetterCommand(key);
+      if (!command) {
+        console.warn(`No setter command found for key: ${key}`);
+        // 回滚本地值
+        (values as any)[key] = prevValue;
+        return;
+      }
+
+      // 构建参数对象：将 camelCase key 转换为 snake_case 参数名
+      const paramKey = getSetterParamKey(key);
+      const args: Record<string, any> = { [paramKey]: value };
+
+      await invoke(command, args);
+
+      // 执行可选的回调
+      if (onAfterSave) {
+        await onAfterSave();
+      }
+    } catch (error) {
+      // 回滚本地值
+      (values as any)[key] = prevValue;
+      console.error(`Failed to save setting ${key}:`, error);
+      throw error;
+    } finally {
+      savingByKey[key] = false;
+    }
+  };
+
+  // 判断状态是否为 down（既不在 loading 也不在 saving）
+  const isDown = (key: AppSettingKey) => {
+    return !loadingByKey[key] && !savingByKey[key];
   };
 
   return {
@@ -157,8 +270,10 @@ export const useSettingsStore = defineStore("settings", () => {
     savingByKey,
     isLoading,
     isSaving,
+    isDown,
     load,
     loadMany,
     loadAll,
+    save,
   };
 });

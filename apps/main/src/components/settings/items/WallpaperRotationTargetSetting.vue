@@ -2,15 +2,9 @@
   <div class="rotation-target-setting">
     <template v-if="rotationEnabled">
       <div class="select-row">
-        <el-select
-          v-model="localAlbumId"
-          class="album-select"
-          :loading="albumStore.loading"
-          :disabled="disabled"
-          placeholder="选择用于轮播的画册"
-          style="min-width: 180px"
-          @change="handleAlbumChange"
-        >
+        <el-select v-model="localAlbumId" class="album-select" :loading="albumStore.loading || showDisabled"
+          :disabled="disabled || keyDisabled" placeholder="选择用于轮播的画册" style="min-width: 180px"
+          @change="handleAlbumChange">
           <el-option value="">
             <div class="gallery-option">
               <div class="gallery-option__title">全画廊</div>
@@ -53,6 +47,7 @@ import { ElMessage } from "element-plus";
 import { FolderOpened } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useAlbumStore } from "@/stores/albums";
 
 const props = defineProps<{
@@ -62,6 +57,13 @@ const props = defineProps<{
 const router = useRouter();
 const settingsStore = useSettingsStore();
 const albumStore = useAlbumStore();
+
+const {
+  settingValue,
+  set,
+  disabled: keyDisabled,
+  showDisabled
+} = useSettingKeyState("wallpaperRotationAlbumId");
 
 const currentWallpaperPath = ref<string | null>(null);
 const localAlbumId = ref<string>("");
@@ -101,7 +103,7 @@ watch(
 
 // 同步 settings -> local（以及“画册被删/变更后”的矫正）
 watch(
-  () => [settingsStore.values.wallpaperRotationAlbumId, albumStore.albums] as const,
+  () => [settingValue.value, albumStore.albums] as const,
   ([rawId]) => {
     const id = (rawId as any as string | null | undefined) ?? "";
     // 约定：空字符串表示“全画廊轮播”；null/undefined 也视为 ""
@@ -113,26 +115,26 @@ watch(
     // 选中的画册已不存在：自动回退到“全画廊”，并同步落盘
     localAlbumId.value = "";
     if (rotationEnabled.value) {
-      invoke("set_wallpaper_rotation_album_id", { albumId: "" })
-        .then(() => settingsStore.loadAll())
-        .catch(() => {
-          // 静默失败：避免在列表频繁变化时刷屏
-        });
+      // 使用 set 方法持久化
+      set("", async () => {
+        await settingsStore.loadAll();
+      }).catch(() => {
+        // 静默失败
+      });
     }
   },
   { immediate: true }
 );
 
 const handleAlbumChange = async (value: string) => {
-  if (props.disabled) return;
+  if (props.disabled || keyDisabled.value) return;
   try {
     // value: "" 表示全画廊；非空表示指定画册
-    await invoke("set_wallpaper_rotation_album_id", { albumId: value });
-    await settingsStore.loadAll();
+    await set(value, async () => {
+      await settingsStore.loadAll();
+    });
   } catch (e: any) {
-    // 回滚到后端值
-    const id = (settingsStore.values.wallpaperRotationAlbumId as any as string | null | undefined) ?? "";
-    localAlbumId.value = id;
+    // 错误时 watcher 会自动回滚 localAlbumId (如果 store 值被 revert)
     ElMessage.error(`设置失败：${e?.message || String(e)}`);
   }
 };

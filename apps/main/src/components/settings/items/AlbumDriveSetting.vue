@@ -1,11 +1,13 @@
 <template>
   <div class="album-drive-setting">
-    <el-switch v-model="enabled" :loading="switchLoading" :disabled="!IS_WINDOWS" @change="handleToggle" />
+    <el-switch v-model="enabled" :loading="showEnabledLoading" :disabled="!IS_WINDOWS || enabledDisabled"
+      @change="handleToggle" />
 
-    <el-input v-model="mountPoint" class="mount-point-input" size="default" :disabled="enabled || switchLoading"
-      placeholder="例如 K:\\ 或 K:" @blur="handleMountPointBlur" />
+    <el-input v-model="mountPoint" class="mount-point-input" size="default"
+      :disabled="enabled || showEnabledLoading || showMountPointLoading" placeholder="例如 K:\\ 或 K:"
+      @blur="handleMountPointBlur" />
 
-    <el-button v-if="enabled" :disabled="switchLoading" @click="openExplorer">
+    <el-button v-if="enabled" :disabled="showEnabledLoading" @click="openExplorer">
       打开
     </el-button>
   </div>
@@ -15,54 +17,58 @@
 import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessage } from "element-plus";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_WINDOWS } from "@kabegame/core/env";
 
-const settingsStore = useSettingsStore();
+const {
+  settingValue: enabledValue,
+  set: setEnabled,
+  showDisabled: showEnabledLoading,
+  disabled: enabledDisabled
+} = useSettingKeyState("albumDriveEnabled");
 
-const enabled = ref<boolean>(!!settingsStore.values.albumDriveEnabled);
-const mountPoint = ref<string>(
-  (settingsStore.values.albumDriveMountPoint as string | undefined) ?? "K:\\"
-);
-const switchLoading = ref(false);
+const {
+  settingValue: mountPointValue,
+  set: setMountPoint,
+  showDisabled: showMountPointLoading,
+} = useSettingKeyState("albumDriveMountPoint");
+
+const enabled = ref<boolean>(!!enabledValue.value);
+const mountPoint = ref<string>((mountPointValue.value as string) ?? "K:\\");
 
 watch(
-  () => settingsStore.values.albumDriveEnabled,
+  enabledValue,
   (v) => {
     enabled.value = !!v;
-    // 设置变化时，停止加载状态并显示消息
-    if (switchLoading.value) {
-      switchLoading.value = false;
-      if (v) {
-        ElMessage.success("画册盘已开启");
-      } else {
-        ElMessage.success("画册盘已关闭");
-      }
-    }
-  }
+  },
+  { immediate: true }
 );
+
 watch(
-  () => settingsStore.values.albumDriveMountPoint,
+  mountPointValue,
   (v) => {
-    if (typeof v === "string" && v.trim() && !enabled.value) {
-      mountPoint.value = v;
+    // 仅当本地值与 store 值不一致时更新（避免输入时的光标跳动问题，虽然 blur 才保存）
+    // 但这里 mountPoint 是 v-model，且只有 blur 才保存，所以平时 store 不会变
+    // 当 store 变了（比如初始化，或保存失败回滚），更新本地
+    const newVal = (v as string) ?? "K:\\";
+    if (mountPoint.value !== newVal) {
+      mountPoint.value = newVal;
     }
-  }
+  },
+  { immediate: true }
 );
 
 const normalizedMountPoint = computed(() => mountPoint.value.trim());
 
-const persistMountPoint = async () => {
+const handleMountPointBlur = async () => {
   const mp = normalizedMountPoint.value;
   if (!mp) return;
-  await invoke("set_album_drive_mount_point", { mountPoint: mp });
-  settingsStore.values.albumDriveMountPoint = mp;
-};
 
-const handleMountPointBlur = async () => {
-  // 仅保存，不自动挂载
+  // 如果值没有变化，不触发保存
+  if (mp === mountPointValue.value) return;
+
   try {
-    await persistMountPoint();
+    await setMountPoint(mp);
   } catch (e) {
     console.error(e);
     ElMessage.error(String(e));
@@ -91,16 +97,17 @@ const handleToggle = async (val: boolean) => {
     return;
   }
 
-  switchLoading.value = true;
   try {
-    await invoke("set_album_drive_enabled", { enabled: val });
-    settingsStore.values.albumDriveEnabled = val;
+    await setEnabled(val, async () => {
+      if (val) {
+        ElMessage.success("画册盘已开启");
+      } else {
+        ElMessage.success("画册盘已关闭");
+      }
+    });
   } catch (e) {
     console.error(e);
-    enabled.value = !val;
-    ElMessage.error(String(e));
-  } finally {
-    switchLoading.value = false;
+    // 错误时 enabled.value 会由 watch 回滚
   }
 };
 </script>

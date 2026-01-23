@@ -1,6 +1,6 @@
 <template>
   <div class="aspect-ratio-setting">
-    <el-select v-model="localValue" placeholder="选择宽高比" style="width: 180px" clearable :disabled="saving"
+    <el-select v-model="localValue" placeholder="选择宽高比" style="width: 180px" clearable :disabled="disabled" :loading="showDisabled"
       @change="onChange">
       <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value" />
     </el-select>
@@ -12,12 +12,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 
-const settingsStore = useSettingsStore();
-const saving = computed(() => settingsStore.savingByKey.galleryImageAspectRatio === true);
+const { settingValue, disabled, showDisabled, set } = useSettingKeyState("galleryImageAspectRatio");
 
 const desktopResolution = ref<{ width: number; height: number } | null>(null);
 
@@ -60,32 +58,16 @@ const options = computed(() => {
 
 const localValue = ref<string | null>(null);
 watch(
-  () => settingsStore.values.galleryImageAspectRatio,
+  () => settingValue.value,
   (v) => {
     localValue.value = (v as any as string | null) || null;
   },
   { immediate: true }
 );
 
-const save = async (value: string | null) => {
-  const prev = settingsStore.values.galleryImageAspectRatio;
-  settingsStore.values.galleryImageAspectRatio = value;
-  settingsStore.savingByKey.galleryImageAspectRatio = true;
-  try {
-    await invoke("set_gallery_image_aspect_ratio", { aspectRatio: value });
-  } catch (e) {
-    settingsStore.values.galleryImageAspectRatio = prev;
-    localValue.value = (prev as any as string | null) || null;
-    ElMessage.error("保存设置失败");
-    // eslint-disable-next-line no-console
-    console.error("保存宽高比失败:", e);
-  } finally {
-    settingsStore.savingByKey.galleryImageAspectRatio = false;
-  }
-};
-
 const onChange = async (v: any) => {
-  await save(v == null ? null : String(v));
+  const val = v == null ? null : String(v);
+  await set(val);
 };
 
 onMounted(async () => {
@@ -97,13 +79,18 @@ onMounted(async () => {
   }
 
   // 若未设置，则自动匹配桌面宽高比（保持与旧 Settings.vue 行为一致）
-  if (!settingsStore.values.galleryImageAspectRatio && desktopResolution.value) {
+  if (!settingValue.value && desktopResolution.value) {
     const ratio = desktopResolution.value.width / desktopResolution.value.height;
     const matched = commonAspectRatios.find((ar) => Math.abs(ar.ratio - ratio) < 0.01);
     const autoValue = matched
       ? matched.value
       : `custom:${desktopResolution.value.width}:${desktopResolution.value.height}`;
-    await save(autoValue);
+
+    try {
+      await set(autoValue);
+    } catch {
+      // ignore
+    }
   }
 });
 </script>

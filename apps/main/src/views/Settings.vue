@@ -50,13 +50,11 @@
 
               <SettingRow v-if="rotationEnabled" label="轮播间隔" description="壁纸更换间隔（分钟，1-1440）">
                 <SettingNumberControl setting-key="wallpaperRotationIntervalMinutes"
-                  command="set_wallpaper_rotation_interval_minutes" :build-args="(v: number) => ({ minutes: v })"
                   :min="1" :max="1440" :step="10" :disabled="isPlasmaPluginMode" />
               </SettingRow>
 
               <SettingRow v-if="rotationEnabled" label="轮播模式" description="随机模式：每次随机选择；顺序模式：按顺序依次更换">
-                <SettingRadioControl setting-key="wallpaperRotationMode" command="set_wallpaper_rotation_mode"
-                  :build-args="(v: string) => ({ mode: v })" :options="[
+                <SettingRadioControl setting-key="wallpaperRotationMode" :options="[
                     { label: '随机', value: 'random' },
                     { label: '顺序', value: 'sequential' },
                   ]" :disabled="isPlasmaPluginMode" />
@@ -91,18 +89,17 @@
           <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
             <div v-if="!loading" class="settings-list">
               <SettingRow label="最大并发下载量" description="同时下载的图片数量（1-10）">
-                <SettingNumberControl setting-key="maxConcurrentDownloads" command="set_max_concurrent_downloads"
-                  :build-args="(v: number) => ({ count: v })" :min="1" :max="10" :step="1" />
+                <SettingNumberControl setting-key="maxConcurrentDownloads"
+                  :min="1" :max="10" :step="1" />
               </SettingRow>
 
               <SettingRow label="网络失效重试次数" description="下载图片遇到网络错误/超时等情况时，额外重试的次数（0-10）">
-                <SettingNumberControl setting-key="networkRetryCount" command="set_network_retry_count"
-                  :build-args="(v: number) => ({ count: v })" :min="0" :max="10" :step="1" />
+                <SettingNumberControl setting-key="networkRetryCount"
+                  :min="0" :max="10" :step="1" />
               </SettingRow>
 
               <SettingRow label="自动去重" description="根据文件哈希值自动跳过重复图片，避免在画廊中重复添加相同文件">
-                <SettingSwitchControl setting-key="autoDeduplicate" command="set_auto_deduplicate"
-                  :build-args="(v: boolean) => ({ enabled: v })" />
+                <SettingSwitchControl setting-key="autoDeduplicate" />
               </SettingRow>
 
               <SettingRow label="默认下载目录" description="未在任务里指定输出目录时，将下载到该目录（按插件分文件夹保存）">
@@ -122,16 +119,14 @@
           <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
             <div v-if="!loading" class="settings-list">
               <SettingRow label="开机启动" description="应用启动时自动运行">
-                <SettingSwitchControl setting-key="autoLaunch" command="set_auto_launch"
-                  :build-args="(v: boolean) => ({ enabled: v })" />
+                <SettingSwitchControl setting-key="autoLaunch" />
               </SettingRow>
 
               <SettingRow v-if="!isLightMode" label="画册盘" description="在资源管理器中以虚拟盘方式浏览画册（只支持有限的操作）">
                 <AlbumDriveSetting />
               </SettingRow>
               <SettingRow label="图片点击行为" description="左键点击图片时的行为">
-                <SettingRadioControl setting-key="imageClickAction" command="set_image_click_action"
-                  :build-args="(v: string) => ({ action: v })" :options="[
+                <SettingRadioControl setting-key="imageClickAction" :options="[
                     { label: '应用内预览', value: 'preview' },
                     { label: '系统默认打开', value: 'open' },
                   ]" />
@@ -163,7 +158,7 @@ import { ElMessage } from "element-plus";
 import { Refresh, QuestionFilled, Setting } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
-import { useLoadingDelay } from "@/composables/useLoadingDelay";
+import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
