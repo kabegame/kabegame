@@ -136,8 +136,8 @@ program
   .description("构建生产版本")
   .option(
     "-c, --component <component>",
-    "要构建的组件：main | plugin-editor | cli | all",
-    "all",
+    "要构建的组件：main | plugin-editor | cli",
+    "",
   )
   .option(
     "--mode <mode>",

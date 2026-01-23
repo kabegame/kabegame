@@ -8,7 +8,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -32,11 +31,9 @@ const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationE
 const options = computed<Opt[]>(() => {
   if (mode.value === "native") {
     return [
-      { label: "无过渡", value: "none" },
-      // windows 暂时没有实现淡入淡出
-      // { label: "淡入淡出", value: "fade" },
+      { label: "跟随系统", value: "none" },
     ];
-  } else if ((mode.value === "window" && IS_WINDOWS) || mode.value === "plasma-plugin") {
+  } else if (mode.value === "window" && IS_WINDOWS) {
     return [
       { label: "无过渡", value: "none" },
       { label: "淡入淡出", value: "fade" },
@@ -46,7 +43,7 @@ const options = computed<Opt[]>(() => {
   } else {
     // 其他系统的非原生，暂未实现
     return [
-      { label: "无过渡", value: "none" }
+      { label: "（未实现）", value: "none" }
     ]
   }
 });
@@ -83,36 +80,6 @@ const handleChange = async (transition: string) => {
     ElMessage.info("未启用轮播：过渡效果将在启用轮播后生效");
   }
 
-  // 特殊逻辑：等待过渡效果应用完成（仅当轮播启用时）
-  const onAfterSave = async () => {
-    if (!rotationEnabled.value) return;
-
-    return new Promise<void>((resolve, reject) => {
-      const waitForApply = async () => {
-        try {
-          const unlistenFn = await listen<{ success: boolean; transition: string; error?: string }>(
-            "wallpaper-transition-apply-complete",
-            (event) => {
-              if (event.payload.transition === transition) {
-                unlistenFn();
-                if (!event.payload.success) {
-                  ElMessage.error(event.payload.error || "应用过渡效果失败");
-                  reject(new Error(event.payload.error || "应用过渡效果失败"));
-                } else {
-                  resolve();
-                }
-              }
-            }
-          );
-        } catch (e) {
-          reject(e);
-        }
-      };
-
-      waitForApply();
-    });
-  };
-
-  await set(transition, onAfterSave);
+  await set(transition);
 };
 </script>

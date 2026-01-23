@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "bun scripts/run.ts dev",
     "start": "bun scripts/run.ts start",
-    "build": "bun scripts/run.ts build",
+    "b": "bun scripts/run.ts build",
     "typecheck": "vue-tsc",
     "dev:frontend-main": "bun --cwd apps/main dev",
     "dev:frontend-plugin-editor": "bun --cwd apps/plugin-editor dev",

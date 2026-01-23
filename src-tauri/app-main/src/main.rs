@@ -348,40 +348,69 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Albums
+            // --- Albums ---
             get_albums,
+            get_album_counts,
             add_album,
             delete_album,
+            rename_album,
             get_album_preview,
             get_album_images,
             get_album_image_ids,
+            add_images_to_album,
             remove_images_from_album,
-            // Tasks
+            update_album_images_order,
+            get_favorite_album_id,
+            // --- Images ---
+            get_images_range,
+            get_image_by_id,
+            get_gallery_image,
+            batch_delete_images,
+            browse_gallery_provider,
+            // --- Tasks ---
             get_all_tasks,
             get_task,
             add_task,
             update_task,
             delete_task,
-            confirm_task_rhai_dump,
+            start_task,
+            cancel_task,
             clear_finished_tasks,
+            confirm_task_rhai_dump,
             get_task_images,
             get_task_images_paginated,
             get_task_image_ids,
             get_task_failed_images,
-            // plugins
+            retry_task_failed_image,
+            get_active_downloads,
+            // --- Run Configs ---
+            get_run_configs,
+            add_run_config,
+            update_run_config,
+            delete_run_config,
+            // --- Plugins ---
             get_plugins,
+            get_plugin_detail,
+            delete_plugin,
+            get_browser_plugins,
+            install_browser_plugin,
             refresh_installed_plugins_cache,
             refresh_installed_plugin_cache,
+            get_plugin_sources,
+            save_plugin_sources,
+            validate_plugin_source,
+            get_store_plugins,
+            preview_import_plugin,
+            preview_store_install,
+            import_plugin_from_zip,
+            get_plugin_image,
+            get_plugin_image_for_detail,
+            get_plugin_icon,
+            get_remote_plugin_icon,
+            get_plugin_vars,
+            open_plugin_editor_window,
             get_build_mode,
-            delete_plugin,
-            // images
-            get_images_range,
-            browse_gallery_provider,
-            get_image_by_id,
-            rename_album,
-            add_images_to_album,
-            batch_delete_images,
-            // Settings
+            // --- Settings ---
             get_settings,
             get_setting,
             get_auto_launch,
@@ -398,104 +427,70 @@ fn main() {
             set_auto_deduplicate,
             get_default_download_dir,
             set_default_download_dir,
-            // wallpaper
-            get_wallpaper_engine_dir,
-            set_wallpaper_engine_dir,
-            get_wallpaper_engine_myprojects_dir,
-            get_wallpaper_rotation_enabled,
-            get_wallpaper_rotation_album_id,
-            get_wallpaper_rotation_interval_minutes,
-            get_wallpaper_rotation_mode,
-            get_wallpaper_rotation_style,
-            get_wallpaper_rotation_transition,
-            get_wallpaper_style_by_mode,
-            get_wallpaper_transition_by_mode,
-            get_wallpaper_mode,
-            get_window_state,
-            get_wallpaper_rotator_status,
-            get_desktop_resolution,
             get_default_images_dir,
-            open_plasma_wallpaper_settings,
-            get_favorite_album_id,
-            // Virtual Driver Settings
-            #[cfg(not(kabegame_mode = "light"))]
-            get_album_drive_enabled,
-            #[cfg(not(kabegame_mode = "light"))]
-            get_album_drive_mount_point,
-            #[cfg(not(kabegame_mode = "light"))]
-            set_album_drive_enabled,
-            #[cfg(not(kabegame_mode = "light"))]
-            set_album_drive_mount_point,
-            // Task
-            add_run_config,
-            update_run_config,
-            get_run_configs,
-            delete_run_config,
-            cancel_task,
-            get_active_downloads,
-            retry_task_failed_image,
-            start_task,
-            // Plugin
-            get_plugin_vars,
-            get_browser_plugins,
-            get_plugin_sources,
-            save_plugin_sources,
-            get_store_plugins,
-            get_plugin_detail,
-            validate_plugin_source,
-            preview_import_plugin,
-            preview_store_install,
-            import_plugin_from_zip,
-            install_browser_plugin,
-            get_plugin_image,
-            get_plugin_image_for_detail,
-            get_plugin_icon,
-            get_remote_plugin_icon,
-            // Window
-            hide_main_window,
-            toggle_fullscreen,
-            #[cfg(target_os = "windows")]
-            set_main_sidebar_blur,
-            #[cfg(target_os = "windows")]
-            wallpaper_window_ready,
-            // Filesystem
-            open_explorer,
-            open_file_path,
-            open_file_folder,
-            // Misc
+            get_desktop_resolution,
             clear_user_data,
-            start_dedupe_gallery_by_hash_batched,
-            cancel_dedupe_gallery_by_hash_batched,
-            open_plugin_editor_window,
-            get_gallery_image,
-            // Album
-            get_album_counts,
-            get_album_images,
-            get_album_image_ids,
-            get_album_preview,
-            rename_album,
-            add_images_to_album,
-            remove_images_from_album,
-            update_album_images_order,
-            // Wallpaper
-            get_current_wallpaper_image_id,
+            // --- Wallpaper ---
             set_wallpaper,
+            set_wallpaper_mode,
             set_wallpaper_by_image_id,
+            get_current_wallpaper_image_id,
             clear_current_wallpaper_image_id,
             get_current_wallpaper_path,
-            migrate_images_from_json,
             set_wallpaper_rotation_enabled,
+            get_wallpaper_rotation_enabled,
             set_wallpaper_rotation_album_id,
+            get_wallpaper_rotation_album_id,
             start_wallpaper_rotation,
             set_wallpaper_rotation_interval_minutes,
-            set_wallpaper_mode,
+            get_wallpaper_rotation_interval_minutes,
+            set_wallpaper_rotation_mode,
+            get_wallpaper_rotation_mode,
             set_wallpaper_style,
+            get_wallpaper_style_by_mode,
+            get_wallpaper_rotation_style,
             set_wallpaper_rotation_transition,
-            // Wallpaper Engine
+            get_wallpaper_rotation_transition,
+            get_wallpaper_transition_by_mode,
+            get_wallpaper_mode,
+            get_wallpaper_rotator_status,
+            open_plasma_wallpaper_settings,
+            // --- Wallpaper Engine (Windows) ---
+            #[cfg(target_os = "windows")]
+            get_wallpaper_engine_dir,
+            #[cfg(target_os = "windows")]
+            set_wallpaper_engine_dir,
+            #[cfg(target_os = "windows")]
+            get_wallpaper_engine_myprojects_dir,
             #[cfg(target_os = "windows")]
             export_album_to_we_project,
             #[cfg(target_os = "windows")]
             export_images_to_we_project,
+            // --- Virtual Drive ---
+            #[cfg(not(kabegame_mode = "light"))]
+            get_album_drive_enabled,
+            #[cfg(not(kabegame_mode = "light"))]
+            set_album_drive_enabled,
+            #[cfg(not(kabegame_mode = "light"))]
+            get_album_drive_mount_point,
+            #[cfg(not(kabegame_mode = "light"))]
+            set_album_drive_mount_point,
+            // --- Window ---
+            hide_main_window,
+            toggle_fullscreen,
+            get_window_state,
+            #[cfg(target_os = "windows")]
+            set_main_sidebar_blur,
+            #[cfg(target_os = "windows")]
+            wallpaper_window_ready,
+            // --- Filesystem ---
+            open_explorer,
+            open_file_path,
+            open_file_folder,
+            // --- Misc ---
+            migrate_images_from_json,
+            start_dedupe_gallery_by_hash_batched,
+            cancel_dedupe_gallery_by_hash_batched,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

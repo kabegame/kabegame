@@ -1,5 +1,6 @@
 <template>
-  <el-switch v-model="localValue" :disabled="props.disabled || disabled" :loading="showDisabled" @change="handleChange" />
+  <el-switch v-model="localValue" :disabled="props.disabled || disabled || wallpaperModeSwitching"
+    :loading="showDisabled" @change="handleChange" />
 </template>
 
 <script setup lang="ts">
@@ -7,6 +8,7 @@ import { ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = defineProps<{
   disabled?: boolean;
@@ -14,6 +16,8 @@ const props = defineProps<{
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperRotationEnabled");
 const localValue = ref(false);
+
+const { wallpaperModeSwitching } = useUiStore();
 
 watch(
   () => settingValue.value,

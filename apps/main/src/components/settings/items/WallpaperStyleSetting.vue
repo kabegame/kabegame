@@ -1,6 +1,6 @@
 <template>
-  <el-select v-model="localValue" placeholder="请选择显示方式" style="min-width: 180px" :disabled="props.disabled || disabled"
-    @change="handleChange">
+  <el-select v-model="localValue" placeholder="请选择显示方式" style="min-width: 180px"
+    :disabled="props.disabled || disabled || wallpaperModeSwitching" @change="handleChange">
     <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value">
       <span>{{ opt.desc }}</span>
     </el-option>
@@ -9,12 +9,11 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_WINDOWS } from "@kabegame/core/env";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = defineProps<{
   disabled?: boolean;
@@ -23,8 +22,9 @@ const props = defineProps<{
 type Style = "fill" | "fit" | "stretch" | "center" | "tile";
 type Opt = { label: string; value: Style; desc: string };
 
-const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperRotationStyle");
+const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperStyle");
 const settingsStore = useSettingsStore();
+const { wallpaperModeSwitching } = useUiStore();
 
 const nativeWallpaperStyles = ref<Style[]>([]);
 
@@ -62,32 +62,9 @@ onMounted(async () => {
 });
 
 const handleChange = async (style: string) => {
-  // 特殊逻辑：等待壁纸应用完成
+  // 特殊逻辑：不再等待事件，因为方法会在设置完毕后返回，等待事件会导致时序问题
   const onAfterSave = async () => {
-    return new Promise<void>((resolve, reject) => {
-      const waitForApply = async () => {
-        try {
-          const unlistenFn = await listen<{ success: boolean; style: string; error?: string }>(
-            "wallpaper-style-apply-complete",
-            (event) => {
-              if (event.payload.style === style) {
-                unlistenFn();
-                if (!event.payload.success) {
-                  ElMessage.error(event.payload.error || "应用样式失败");
-                  reject(new Error(event.payload.error || "应用样式失败"));
-                } else {
-                  resolve();
-                }
-              }
-            }
-          );
-        } catch (e) {
-          reject(e);
-        }
-      };
-
-      waitForApply();
-    });
+    return;
   };
 
   await set(style, onAfterSave);

@@ -149,7 +149,7 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         pages: ["gallery", "albumdetail", "albums"],
       },
       {
-        key: "wallpaperRotationStyle",
+        key: "wallpaperStyle",
         label: "壁纸显示方式",
         description:
           "原生模式：根据系统支持显示可用样式；窗口模式：支持所有显示方式",

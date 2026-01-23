@@ -93,8 +93,8 @@ pub enum SettingKey {
     WallpaperRotationIntervalMinutes,
     /// 壁纸轮播模式（随机、顺序）
     WallpaperRotationMode,
-    /// 壁纸轮播样式
-    WallpaperRotationStyle,
+    /// 壁纸样式
+    WallpaperStyle,
     /// 壁纸轮播过渡效果
     WallpaperRotationTransition,
     /// 不同轮播模式下单独存储的style
@@ -262,7 +262,7 @@ impl Settings {
             SettingKey::WallpaperRotationAlbumId => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationIntervalMinutes => SettingValue::U32(60),
             SettingKey::WallpaperRotationMode => SettingValue::String("random".to_string()),
-            SettingKey::WallpaperRotationStyle => {
+            SettingKey::WallpaperStyle => {
                 SettingValue::String(Self::default_wallpaper_rotation_style())
             }
             SettingKey::WallpaperRotationTransition => {
@@ -468,7 +468,7 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperRotationAlbumId,
             SettingKey::WallpaperRotationIntervalMinutes,
             SettingKey::WallpaperRotationMode,
-            SettingKey::WallpaperRotationStyle,
+            SettingKey::WallpaperStyle,
             SettingKey::WallpaperRotationTransition,
             SettingKey::WallpaperStyleByMode,
             SettingKey::WallpaperTransitionByMode,
@@ -527,7 +527,7 @@ Write-Output "$style,$tile"
         // 如果文件不存在或为空，使用系统默认值覆盖壁纸相关设置
         if json_value.is_none() {
             let (style, transition) = Self::get_system_wallpaper_settings();
-            *cells.get_mut(&SettingKey::WallpaperRotationStyle).unwrap() =
+            *cells.get_mut(&SettingKey::WallpaperStyle).unwrap() =
                 TokioMutex::new(SettingValue::String(style));
             *cells
                 .get_mut(&SettingKey::WallpaperRotationTransition)
@@ -576,7 +576,7 @@ Write-Output "$style,$tile"
             }
             SettingKey::ImageClickAction
             | SettingKey::WallpaperRotationMode
-            | SettingKey::WallpaperRotationStyle
+            | SettingKey::WallpaperStyle
             | SettingKey::WallpaperRotationTransition
             | SettingKey::WallpaperMode => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
@@ -659,7 +659,7 @@ Write-Output "$style,$tile"
                 "wallpaperRotationIntervalMinutes".to_string()
             }
             SettingKey::WallpaperRotationMode => "wallpaperRotationMode".to_string(),
-            SettingKey::WallpaperRotationStyle => "wallpaperRotationStyle".to_string(),
+            SettingKey::WallpaperStyle => "wallpaperStyle".to_string(),
             SettingKey::WallpaperRotationTransition => "wallpaperRotationTransition".to_string(),
             SettingKey::WallpaperStyleByMode => "wallpaperStyleByMode".to_string(),
             SettingKey::WallpaperTransitionByMode => "wallpaperTransitionByMode".to_string(),
@@ -912,7 +912,7 @@ Write-Output "$style,$tile"
 
     pub async fn get_wallpaper_rotation_style(&self) -> Result<String, String> {
         let cells = Self::cells();
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationStyle) {
+        if let Some(cell) = cells.get(&SettingKey::WallpaperStyle) {
             let val = cell.lock().await;
             Ok(val.as_string().unwrap_or_else(|| "fill".to_string()))
         } else {
@@ -1286,7 +1286,7 @@ Write-Output "$style,$tile"
 
         // 更新 style
         let new_style_value = SettingValue::String(style.clone());
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationStyle) {
+        if let Some(cell) = cells.get(&SettingKey::WallpaperStyle) {
             let mut val = cell.lock().await;
             *val = new_style_value.clone();
         }
@@ -1301,7 +1301,7 @@ Write-Output "$style,$tile"
             }
         }
 
-        Self::emit_setting_change(SettingKey::WallpaperRotationStyle, &new_style_value).await;
+        Self::emit_setting_change(SettingKey::WallpaperStyle, &new_style_value).await;
         if let Some(ref v) = style_by_mode_value {
             Self::emit_setting_change(SettingKey::WallpaperStyleByMode, v).await;
         }
@@ -1479,7 +1479,7 @@ Write-Output "$style,$tile"
         let new_transition_by_mode_value =
             SettingValue::HashMapStringString(transition_by_mode.clone());
 
-        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationStyle) {
+        if let Some(cell) = cells.get(&SettingKey::WallpaperStyle) {
             let mut val = cell.lock().await;
             *val = new_style_value.clone();
         }
@@ -1496,7 +1496,7 @@ Write-Output "$style,$tile"
             *val = new_transition_by_mode_value.clone();
         }
 
-        Self::emit_setting_change(SettingKey::WallpaperRotationStyle, &new_style_value).await;
+        Self::emit_setting_change(SettingKey::WallpaperStyle, &new_style_value).await;
         Self::emit_setting_change(
             SettingKey::WallpaperRotationTransition,
             &new_transition_value,

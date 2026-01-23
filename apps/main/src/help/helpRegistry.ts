@@ -33,6 +33,27 @@ export type HelpGroup<PageId extends string> = {
  */
 export const HELP_GROUPS: HelpGroup<HelpPageId>[] = [
   {
+    id: "global",
+    title: "全局",
+    items: [
+      {
+        id: "global-fullscreen",
+        label: "切换全屏",
+        description: "切换应用的全屏显示模式",
+        kind: "shortcut",
+        keys: ["F11"],
+        pages: [
+          "gallery",
+          "albums",
+          "albumdetail",
+          "taskdetail",
+          "pluginbrowser",
+          "settings",
+        ],
+      },
+    ],
+  },
+  {
     id: "grid-layout",
     title: "网格布局",
     items: [

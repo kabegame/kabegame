@@ -76,7 +76,7 @@ impl TaskScheduler {
     pub fn enqueue(&self, req: CrawlTaskRequest) -> Result<(), String> {
         // 先保证 DB 状态为 pending（前端也会写，但这里做幂等兜底）
         let storage = Storage::global();
-        let emitter = GlobalEmitter::global();
+        // let emitter = GlobalEmitter::global();
         let _ = persist_task_status(storage, &req.task_id, "pending", None, None, None);
         emit_task_status(&req.task_id, "pending", None, None, None);
 
@@ -332,6 +332,7 @@ fn worker_loop(
                 let end = now_ms();
                 if download_queue.is_task_canceled(&req.task_id) {
                     let e = "Task canceled".to_string();
+                    #[cfg(feature = "ipc-server")]
                     GlobalEmitter::global().emit_task_error(&req.task_id, &e);
                     let _ = persist_task_status(
                         &storage,

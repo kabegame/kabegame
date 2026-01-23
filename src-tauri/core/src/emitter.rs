@@ -236,3 +236,92 @@ impl GlobalEmitter {
 /// 全局 emitter 单例存储
 #[cfg(feature = "ipc-server")]
 static GLOBAL_EMITTER: OnceLock<GlobalEmitter> = OnceLock::new();
+
+// ==================== No-op 实现 ====================
+
+/// No-op 全局事件发送器
+///
+/// 用于在未启用 `ipc-server` feature 时（如 plugin-editor）通过编译。
+/// 所有方法均为空实现。
+#[cfg(not(feature = "ipc-server"))]
+pub struct GlobalEmitter;
+
+#[cfg(not(feature = "ipc-server"))]
+impl GlobalEmitter {
+    /// 获取全局 emitter 引用（No-op）
+    pub fn global() -> &'static GlobalEmitter {
+        static INSTANCE: GlobalEmitter = GlobalEmitter;
+        &INSTANCE
+    }
+
+    /// 尝试获取全局 emitter 引用（No-op）
+    pub fn try_global() -> Option<&'static GlobalEmitter> {
+        Some(Self::global())
+    }
+
+    pub fn emit_task_log(&self, _task_id: &str, _level: &str, _message: &str) {}
+
+    pub fn emit_download_state(
+        &self,
+        _task_id: &str,
+        _url: &str,
+        _start_time: u64,
+        _plugin_id: &str,
+        _state: &str,
+        _error: Option<&str>,
+    ) {
+    }
+
+    pub fn emit_task_status(
+        &self,
+        _task_id: &str,
+        _status: &str,
+        _progress: Option<f64>,
+        _error: Option<&str>,
+        _current_wallpaper: Option<&str>,
+    ) {
+    }
+
+    pub fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+
+    pub fn emit_task_progress(&self, _task_id: &str, _progress: f64) {}
+
+    pub fn emit_task_error(&self, _task_id: &str, _error: &str) {}
+
+    pub fn emit_download_progress(
+        &self,
+        _task_id: &str,
+        _url: &str,
+        _start_time: u64,
+        _plugin_id: &str,
+        _received_bytes: u64,
+        _total_bytes: Option<u64>,
+    ) {
+    }
+
+    pub fn emit_dedupe_progress(
+        &self,
+        _processed: usize,
+        _total: usize,
+        _removed: usize,
+        _batch_index: usize,
+    ) {
+    }
+
+    pub fn emit_dedupe_finished(
+        &self,
+        _processed: usize,
+        _total: usize,
+        _removed: usize,
+        _canceled: bool,
+    ) {
+    }
+
+    pub fn emit_wallpaper_update_image(&self, _image_path: &str) {}
+
+    pub fn emit_wallpaper_update_style(&self, _style: &str) {}
+
+    pub fn emit_wallpaper_update_transition(&self, _transition: &str) {}
+
+    pub fn emit_setting_change(&self, _changes: serde_json::Value) {}
+}

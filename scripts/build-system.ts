@@ -38,6 +38,7 @@ export const RESOURCES_BIN_DIR = path.join(
   "bin",
 );
 export const SRC_TAURI_DIR = path.join(root, "src-tauri");
+export const SRC_FE_DIR = path.join(root, "apps");
 export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
 
 interface BuildOptions {
@@ -165,7 +166,7 @@ export class BuildSystem {
     const { features } = this.hooks.prepareCompileArgs.call();
     const args = this.buildCargoArgs(["dev"], features, this.options.args);
     run("tauri", args, {
-      cwd: (this.context.component as any).appDir,
+      cwd: this.context.component!.appDir,
       bin: "cargo",
     });
   }
@@ -181,7 +182,7 @@ export class BuildSystem {
     const baseArgs = [
       "run",
       "-p",
-      (this.context.component as any).cargoComp,
+      this.context.component!.cargoComp,
       "--bin",
       Component.cargoComp(Component.CLI),
     ];
@@ -208,7 +209,11 @@ export class BuildSystem {
       const { features } = this.hooks.prepareCompileArgs.call(
         Component.PLUGIN_EDITOR,
       );
-      run("bun", ["--cwd", Component.appDir(Component.PLUGIN_EDITOR), "build"]);
+      run("bun", [
+        "--cwd",
+        Component.appFeDir(Component.PLUGIN_EDITOR),
+        "build",
+      ]);
       const args = this.buildCargoArgs(
         [
           "build",
@@ -227,7 +232,7 @@ export class BuildSystem {
     if ((this.context.component as any).isCli) {
       this.hooks.beforeBuild.call(Component.CLI);
       const { features } = this.hooks.prepareCompileArgs.call(Component.CLI);
-      run("bun", ["--cwd", Component.appDir(Component.CLI), "build"]);
+      run("bun", ["--cwd", Component.appFeDir(Component.CLI), "build"]);
       const args = this.buildCargoArgs(
         ["build", "--release", "-p", Component.cargoComp(Component.CLI)],
         features,

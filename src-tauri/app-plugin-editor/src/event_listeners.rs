@@ -4,8 +4,8 @@
 //! 使用默认 emitter 自动转发所有事件到前端。
 
 use kabegame_core::ipc::events::get_global_listener;
-use kabegame_core::ipc::start_listening;
-use kabegame_core::ipc::DaemonEventKind;
+use kabegame_core::ipc::events::start_listening;
+use kabegame_core::ipc::events::DaemonEventKind;
 use tauri::{AppHandle, Emitter};
 
 /// 定义 plugin-editor 感兴趣的事件类型

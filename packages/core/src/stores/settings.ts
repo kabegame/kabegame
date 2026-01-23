@@ -16,13 +16,7 @@ export interface AppSettings {
   wallpaperRotationAlbumId: string | null;
   wallpaperRotationIntervalMinutes: number;
   wallpaperRotationMode: "random" | "sequential" | string;
-  wallpaperRotationStyle:
-    | "fill"
-    | "fit"
-    | "stretch"
-    | "center"
-    | "tile"
-    | string;
+  wallpaperStyle: "fill" | "fit" | "stretch" | "center" | "tile" | string;
   wallpaperRotationTransition: "none" | "fade" | "slide" | "zoom" | string;
   // 按 wallpaperMode 记忆各模式的最后 style/transition（切换模式时用于恢复）
   wallpaperStyleByMode: Record<string, string>;
@@ -88,9 +82,10 @@ export const useSettingsStore = defineStore("settings", () => {
       wallpaperEngineDir: "get_wallpaper_engine_dir",
       wallpaperRotationEnabled: "get_wallpaper_rotation_enabled",
       wallpaperRotationAlbumId: "get_wallpaper_rotation_album_id",
-      wallpaperRotationIntervalMinutes: "get_wallpaper_rotation_interval_minutes",
+      wallpaperRotationIntervalMinutes:
+        "get_wallpaper_rotation_interval_minutes",
       wallpaperRotationMode: "get_wallpaper_rotation_mode",
-      wallpaperRotationStyle: "get_wallpaper_rotation_style",
+      wallpaperStyle: "get_wallpaper_rotation_style",
       wallpaperRotationTransition: "get_wallpaper_rotation_transition",
       wallpaperStyleByMode: "get_wallpaper_style_by_mode",
       wallpaperTransitionByMode: "get_wallpaper_transition_by_mode",
@@ -116,9 +111,10 @@ export const useSettingsStore = defineStore("settings", () => {
       wallpaperEngineDir: "set_wallpaper_engine_dir",
       wallpaperRotationEnabled: "set_wallpaper_rotation_enabled",
       wallpaperRotationAlbumId: "set_wallpaper_rotation_album_id",
-      wallpaperRotationIntervalMinutes: "set_wallpaper_rotation_interval_minutes",
+      wallpaperRotationIntervalMinutes:
+        "set_wallpaper_rotation_interval_minutes",
       wallpaperRotationMode: "set_wallpaper_rotation_mode",
-      wallpaperRotationStyle: "set_wallpaper_rotation_style",
+      wallpaperStyle: "set_wallpaper_style",
       wallpaperRotationTransition: "set_wallpaper_rotation_transition",
       wallpaperStyleByMode: "set_wallpaper_style_by_mode",
       wallpaperTransitionByMode: "set_wallpaper_transition_by_mode",
@@ -168,7 +164,7 @@ export const useSettingsStore = defineStore("settings", () => {
       "wallpaperRotationAlbumId",
       "wallpaperRotationIntervalMinutes",
       "wallpaperRotationMode",
-      "wallpaperRotationStyle",
+      "wallpaperStyle",
       "wallpaperRotationTransition",
       "wallpaperStyleByMode",
       "wallpaperTransitionByMode",
@@ -197,7 +193,7 @@ export const useSettingsStore = defineStore("settings", () => {
       wallpaperRotationAlbumId: "album_id",
       wallpaperRotationIntervalMinutes: "minutes",
       wallpaperRotationMode: "mode",
-      wallpaperRotationStyle: "style",
+      wallpaperStyle: "style",
       wallpaperRotationTransition: "transition",
       wallpaperMode: "mode",
       albumDriveEnabled: "enabled",
@@ -214,7 +210,7 @@ export const useSettingsStore = defineStore("settings", () => {
   const save = async <K extends AppSettingKey>(
     key: K,
     value: AppSettings[K],
-    onAfterSave?: () => Promise<void> | void
+    onAfterSave?: () => Promise<void> | void,
   ) => {
     if (savingByKey[key]) return;
     if (loadingByKey[key]) return;

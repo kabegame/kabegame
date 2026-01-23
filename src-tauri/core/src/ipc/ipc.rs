@@ -415,7 +415,7 @@ pub enum CliIpcRequest {
     SettingsGetWallpaperRotationAlbumId,
     SettingsGetWallpaperRotationIntervalMinutes,
     SettingsGetWallpaperRotationMode,
-    SettingsGetWallpaperRotationStyle,
+    SettingsGetWallpaperStyle,
     SettingsGetWallpaperRotationTransition,
     SettingsGetWallpaperStyleByMode,
     SettingsGetWallpaperTransitionByMode,

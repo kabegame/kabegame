@@ -276,26 +276,6 @@ bun build -c cli             # 构建 CLI 工具
 │   ├── package-plugin.js # 插件打包脚本
 │   ├── project.json      # Nx 项目配置
 │   └── package.json
-├── src-plasma-wallpaper-plugin/  # KDE Plasma 壁纸插件
-│   ├── CMakeLists.txt    # CMake 构建配置
-│   ├── build.sh          # 构建脚本
-│   ├── install.sh        # 安装脚本
-│   ├── install-restart-plasma.sh # 安装并重启 Plasma
-│   ├── package.sh        # 打包脚本
-│   ├── uninstall.sh      # 卸载脚本
-│   ├── plugin/           # C++ 后端
-│   │   ├── CMakeLists.txt
-│   │   ├── wallpaperbackend.h      # 后端接口定义
-│   │   ├── wallpaperbackend.cpp    # 后端实现（文件夹扫描、文件监视、轮播定时器）
-│   │   ├── kabegamewallpaperplugin.cpp  # QML 插件注册
-│   │   └── qmldir        # QML 模块声明
-│   ├── package/          # QML 前端
-│   │   ├── metadata.json # 插件元数据
-│   │   └── contents/
-│   │       ├── config/   # 配置项定义
-│   │       └── ui/       # 用户界面（壁纸显示、配置界面）
-│   ├── README.md         # 插件文档
-│   └── TESTING.md        # 测试指南
 ├── scripts/              # 构建脚本
 │   ├── run.js            # 统一开发/构建入口
 │   └── git/              # Git 相关脚本

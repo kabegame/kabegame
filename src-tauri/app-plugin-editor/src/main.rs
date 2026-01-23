@@ -4,9 +4,9 @@
 mod event_listeners;
 mod plugin_editor;
 
-use kabegame_core::ipc::daemon_startup::get_ipc_client;
+use kabegame_core::ipc::client::get_ipc_client;
 use kabegame_core::{
-    plugin::{PluginConfig, PluginManifest},
+    plugin::{PluginConfig, PluginManager, PluginManifest},
     storage::{ImageInfo, TaskInfo},
 };
 use serde_json::Value as JsonValue;
@@ -231,9 +231,7 @@ async fn plugin_editor_export_install(
         icon_rgb_base64,
     )?;
     // 导出安装/覆盖后：通过 daemon 刷新缓存
-    let _ = daemon_client::get_ipc_client()
-        .plugin_get_detail(plugin_id_trimmed)
-        .await;
+    let _ = get_ipc_client().plugin_get_detail(plugin_id_trimmed).await;
     Ok(())
 }
 
@@ -325,7 +323,7 @@ async fn delete_task(task_id: String) -> Result<(), String> {
     let _ = get_ipc_client().task_cancel(task_id.clone()).await;
 
     // 获取任务关联的图片 ID 列表
-    let ids = daemon_client::get_ipc_client()
+    let ids = get_ipc_client()
         .storage_get_task_image_ids(task_id.clone())
         .await
         .unwrap_or_default();
@@ -505,10 +503,7 @@ async fn set_default_download_dir(dir: Option<String>) -> Result<(), String> {
 #[tauri::command]
 async fn get_default_images_dir() -> Result<String, String> {
     // 通过 daemon 获取设置中的默认下载目录，如果没有则使用默认路径
-    if let Ok(Some(dir)) = daemon_client::get_ipc_client()
-        .settings_get_default_download_dir()
-        .await
-    {
+    if let Ok(Some(dir)) = get_ipc_client().settings_get_default_download_dir().await {
         if !dir.is_empty() {
             return Ok(dir);
         }
@@ -524,6 +519,35 @@ async fn get_default_images_dir() -> Result<String, String> {
         .to_string()
         .trim_start_matches("\\\\?\\")
         .to_string())
+}
+
+#[tauri::command]
+async fn get_image_click_action() -> Result<String, String> {
+    get_ipc_client().settings_get_image_click_action().await
+}
+
+#[tauri::command]
+async fn get_gallery_image_aspect_ratio() -> Result<Option<String>, String> {
+    get_ipc_client()
+        .settings_get_gallery_image_aspect_ratio()
+        .await
+}
+
+#[tauri::command]
+async fn get_max_concurrent_downloads() -> Result<u32, String> {
+    get_ipc_client()
+        .settings_get_max_concurrent_downloads()
+        .await
+}
+
+#[tauri::command]
+async fn get_network_retry_count() -> Result<u32, String> {
+    get_ipc_client().settings_get_network_retry_count().await
+}
+
+#[tauri::command]
+async fn get_auto_deduplicate() -> Result<bool, String> {
+    get_ipc_client().settings_get_auto_deduplicate().await
 }
 
 #[tauri::command]
@@ -544,6 +568,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            PluginManager::init_global();
             // 初始化事件监听器（将 daemon IPC 事件转发为 Tauri 事件）
             let app_handle = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -599,6 +624,11 @@ fn main() {
             set_auto_deduplicate,
             set_default_download_dir,
             get_default_images_dir,
+            get_image_click_action,
+            get_gallery_image_aspect_ratio,
+            get_max_concurrent_downloads,
+            get_network_retry_count,
+            get_auto_deduplicate,
             open_file_path,
             // lifecycle
             plugin_editor_exit_app,

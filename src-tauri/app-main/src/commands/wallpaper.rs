@@ -314,113 +314,50 @@ pub async fn set_wallpaper_rotation_mode(mode: String) -> Result<(), String> {
         .map_err(|e| format!("Settings error: {}", e))
 }
 
-#[tauri::command(rename = "set_wallpaper_rotation_style")]
+#[tauri::command]
 pub async fn set_wallpaper_style(style: String, app: AppHandle) -> Result<(), String> {
-    println!(
-        "[DEBUG] set_wallpaper_style 被调用，传入的 style: {}",
-        style
-    );
-
     Settings::global()
         .set_wallpaper_style(style.clone())
         .await?;
-    println!("[DEBUG] 已保存新 style: {}", style);
 
     let app_clone = app.clone();
     let style_clone = style.clone();
     let controller = WallpaperController::global();
     let manager = controller.active_manager().await?;
-    let res = manager.set_style(&style_clone, true).await;
+    manager.set_style(&style_clone, true).await?;
     if let Ok(Some(path)) = get_current_wallpaper_path_from_settings(&app_clone).await {
         if Path::new(&path).exists() {
             let _ = manager.set_wallpaper_path(&path, true).await;
-        }
-    }
-    match res {
-        Ok(_) => {
-            let _ = app_clone.emit(
-                "wallpaper-style-apply-complete",
-                serde_json::json!({
-                    "success": true,
-                    "style": style_clone
-                }),
-            );
-        }
-        Err(e) => {
-            let _ = app_clone.emit(
-                "wallpaper-style-apply-complete",
-                serde_json::json!({
-                    "success": false,
-                    "style": style_clone,
-                    "error": e
-                }),
-            );
         }
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_rotation_transition(
-    transition: String,
-    app: AppHandle,
-) -> Result<(), String> {
-    println!(
-        "[DEBUG] set_wallpaper_rotation_transition 被调用，传入的 transition: {}",
-        transition
-    );
-
+pub async fn set_wallpaper_rotation_transition(transition: String) -> Result<(), String> {
     let enabled = Settings::global()
         .get_wallpaper_rotation_enabled()
         .await
         .unwrap_or(false);
-    // if !enabled {
-    //     return Err("未开启壁纸轮播，无法设置过渡效果".to_string());
-    // }
 
     Settings::global()
         .set_wallpaper_rotation_transition(transition.clone())
         .await
         .map_err(|e| format!("Settings error: {}", e))?;
-    println!("[DEBUG] 已保存新 transition: {}", transition);
 
-    let app_clone = app.clone();
     let transition_clone = transition.clone();
     let controller = WallpaperController::global();
     let rotator = WallpaperRotator::global();
 
     let manager = controller.active_manager().await?;
-    let res = manager.set_transition(&transition_clone, enabled).await;
-
-    if res.is_ok() && transition_clone != "none" && enabled {
+    let res = manager.set_transition(&transition_clone, enabled).await?;
+    if (transition_clone != "none") {
         rotator.rotate().await?;
-        match res {
-            Ok(_) => {
-                let _ = app_clone.emit(
-                    "wallpaper-transition-apply-complete",
-                    serde_json::json!({
-                        "success": true,
-                        "transition": transition_clone
-                    }),
-                );
-            }
-            Err(e) => {
-                let _ = app_clone.emit(
-                    "wallpaper-transition-apply-complete",
-                    serde_json::json!({
-                        "success": false,
-                        "transition": transition_clone,
-                        "error": e
-                    }),
-                );
-            }
-        }
     }
-
     Ok(())
 }
 
-#[tauri::command(rename = "set_wallpaper_rotation_mode")]
+#[tauri::command]
 pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), String> {
     let settings = Settings::global();
     let old_mode = settings

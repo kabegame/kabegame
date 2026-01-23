@@ -12,7 +12,6 @@ SERVICE_SRC="$APP_DIR/deb/kabegame-daemon.service"
 BUNDLE_DIR="$APP_DIR/../../target/release/bundle/deb"
 SRC_TAURI_DIR="$APP_DIR/.."
 DAEMON_BINARY_SRC="$SRC_TAURI_DIR/target/release/kabegame-daemon"
-PLASMA_PLUGIN_DIR="$APP_DIR/../../../src-plasma-wallpaper-plugin"
 
 # Check if postinst source exists
 if [ ! -f "$POSTINST_SRC" ]; then
@@ -130,81 +129,6 @@ for DEB_FILE in "$BUNDLE_DIR"/*.deb; do
         chmod 644 "$TEMP_DIR/extracted/usr/share/kabegame/kabegame.desktop"
     else
         echo "Warning: main application desktop file not found at $MAIN_DESKTOP_SRC (skipping)"
-    fi
-
-    # Build and install Plasma wallpaper plugin (only for Plasma desktop)
-    # Check if desktop environment is Plasma via VITE_DESKTOP or RUSTFLAGS
-    IS_PLASMA=false
-    if [ -n "$VITE_DESKTOP" ] && [ "$VITE_DESKTOP" = "plasma" ]; then
-        IS_PLASMA=true
-    elif echo "$RUSTFLAGS" | grep -q 'desktop="plasma"'; then
-        IS_PLASMA=true
-    fi
-
-    if [ "$IS_PLASMA" = "true" ] && [ -d "$PLASMA_PLUGIN_DIR" ]; then
-        echo "Building Plasma wallpaper plugin (desktop environment: plasma)..."
-        PLASMA_BUILD_DIR="$PLASMA_PLUGIN_DIR/build"
-        ORIGINAL_DIR="$(pwd)"
-        
-        # Build the plugin if not already built
-        if [ ! -f "$PLASMA_BUILD_DIR/plugin/libplasma_wallpaper_kabegame.so" ]; then
-            echo "Plasma plugin not built, building now..."
-            cd "$PLASMA_PLUGIN_DIR"
-            mkdir -p "$PLASMA_BUILD_DIR"
-            cd "$PLASMA_BUILD_DIR"
-            
-            # Configure and build (non-interactive, install to staging directory)
-            if ! cmake .. \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_INSTALL_PREFIX="/usr" \
-                -DKDE_INSTALL_USE_QT_SYS_PATHS=ON 2>&1; then
-                echo "Warning: Failed to configure Plasma plugin (missing dependencies?)"
-                echo "Skipping Plasma plugin installation"
-                cd "$ORIGINAL_DIR"
-            elif ! make -j$(nproc) 2>&1; then
-                echo "Warning: Failed to compile Plasma plugin"
-                echo "Skipping Plasma plugin installation"
-                cd "$ORIGINAL_DIR"
-            else
-                # Install to staging directory for packaging (will be installed to user dir by postinst)
-                # We install to /usr/share/kabegame/plasma-plugin so postinst can copy to user directory
-                echo "Installing Plasma plugin to package (temporary location)..."
-                PLUGIN_STAGING_DIR="$TEMP_DIR/extracted/usr/share/kabegame/plasma-plugin"
-                mkdir -p "$PLUGIN_STAGING_DIR"
-                
-                # Manually copy plugin files to staging directory
-                # The plugin files are installed by make install, but we need to copy them to staging
-                # First install normally to get the file structure
-                if ! make install DESTDIR="$TEMP_DIR/extracted/plugin-temp" 2>&1; then
-                    echo "Warning: Failed to install Plasma plugin (checking structure)..."
-                fi
-                
-                # Copy from temp install location to staging
-                if [ -d "$TEMP_DIR/extracted/plugin-temp/usr/share/plasma/wallpapers/org.kabegame.wallpaper" ]; then
-                    cp -r "$TEMP_DIR/extracted/plugin-temp/usr/share/plasma/wallpapers/org.kabegame.wallpaper"/* "$PLUGIN_STAGING_DIR/" 2>/dev/null || true
-                    rm -rf "$TEMP_DIR/extracted/plugin-temp"
-                    echo "Plasma plugin staged for user installation"
-                else
-                    echo "Warning: Plugin install location not found after make install"
-                fi
-                cd "$ORIGINAL_DIR"
-            fi
-        else
-            # Plugin already built, install to staging
-            echo "Plasma plugin already built, staging for user installation..."
-            PLUGIN_STAGING_DIR="$TEMP_DIR/extracted/usr/share/kabegame/plasma-plugin"
-            mkdir -p "$PLUGIN_STAGING_DIR"
-            
-            # Install to temp location first
-            if ! make install DESTDIR="$TEMP_DIR/extracted/plugin-temp" 2>&1; then
-                echo "Warning: Failed to stage Plasma plugin"
-            elif [ -d "$TEMP_DIR/extracted/plugin-temp/usr/share/plasma/wallpapers/org.kabegame.wallpaper" ]; then
-                cp -r "$TEMP_DIR/extracted/plugin-temp/usr/share/plasma/wallpapers/org.kabegame.wallpaper"/* "$PLUGIN_STAGING_DIR/" 2>/dev/null || true
-                rm -rf "$TEMP_DIR/extracted/plugin-temp"
-                echo "Plasma plugin staged for user installation"
-            fi
-            cd "$ORIGINAL_DIR"
-        fi
     fi
     
     # Rebuild deb package

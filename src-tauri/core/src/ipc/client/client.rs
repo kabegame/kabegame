@@ -718,7 +718,7 @@ impl IpcClient {
 
     pub async fn settings_get_wallpaper_rotation_style(&self) -> Result<String, String> {
         let v = self
-            .request_data(CliIpcRequest::SettingsGetWallpaperRotationStyle)
+            .request_data(CliIpcRequest::SettingsGetWallpaperStyle)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }

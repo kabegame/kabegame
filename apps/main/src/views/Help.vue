@@ -176,6 +176,12 @@ const closeTipDetail = () => {
 // - 图片预览（packages/core/src/components/common/ImagePreviewDialog.vue）
 const shortcutItems = computed<ShortcutItem[]>(() => [
     {
+        id: "global-fullscreen",
+        label: "切换全屏",
+        description: "切换应用的全屏显示模式",
+        keys: ["F11"],
+    },
+    {
         id: "grid-zoom-wheel",
         label: "调整网格列数",
         description: "按住 Ctrl（macOS 为 Cmd）并滚动鼠标滚轮，可快速调整图片网格的列数",

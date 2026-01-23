@@ -3,7 +3,7 @@
     <template v-if="rotationEnabled">
       <div class="select-row">
         <el-select v-model="localAlbumId" class="album-select" :loading="albumStore.loading || showDisabled"
-          :disabled="disabled || keyDisabled" placeholder="选择用于轮播的画册" style="min-width: 180px"
+          :disabled="disabled || keyDisabled || wallpaperModeSwitching" placeholder="选择用于轮播的画册" style="min-width: 180px"
           @change="handleAlbumChange">
           <el-option value="">
             <div class="gallery-option">
@@ -49,6 +49,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useAlbumStore } from "@/stores/albums";
+import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = defineProps<{
   disabled?: boolean;
@@ -57,6 +58,7 @@ const props = defineProps<{
 const router = useRouter();
 const settingsStore = useSettingsStore();
 const albumStore = useAlbumStore();
+const { wallpaperModeSwitching } = useUiStore();
 
 const {
   settingValue,

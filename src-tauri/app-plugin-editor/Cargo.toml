@@ -6,7 +6,7 @@ version = {workspace = true}
 [dependencies]
 base64 = {workspace = true}
 image = {workspace = true}
-kabegame-core = {workspace = true, default-features = false, features = ["ipc-client"]}
+kabegame-core = {workspace = true, features = ["ipc-client"]}
 rhai = {workspace = true}
 serde = {workspace = true}
 serde_json = {workspace = true}

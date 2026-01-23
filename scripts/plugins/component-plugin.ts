@@ -1,5 +1,5 @@
 import { BasePlugin } from "./base-plugin";
-import { SRC_TAURI_DIR } from "../build-system";
+import { BuildSystem, SRC_FE_DIR, SRC_TAURI_DIR } from "../build-system";
 import * as path from "path";
 import {
   copyDokan2DllToTauriReleaseDirBestEffort,
@@ -18,7 +18,7 @@ export class Component {
   constructor(private readonly _comp: string) {}
 
   get comp() {
-    return this._comp
+    return this._comp;
   }
 
   get isMain(): boolean {
@@ -62,8 +62,16 @@ export class Component {
     }
   }
 
+  static appFeDir(comp: string): string {
+    return path.join(SRC_FE_DIR, comp);
+  }
+
   get appDir(): string {
     return Component.appDir(this.comp);
+  }
+
+  get appFeDir(): string {
+    return Component.appFeDir(this.comp);
   }
 }
 
@@ -80,24 +88,24 @@ export class ComponentPlugin extends BasePlugin {
     super(ComponentPlugin.NAME);
   }
 
-  apply(bs: any): void {
+  apply(bs: BuildSystem): void {
     bs.hooks.parseParams.tap(this.name, () => {
       let component = bs.options.component || "";
-      if (component && !(Component.components as readonly string[]).includes(component)) {
+      if (component && !Component.components.includes(component)) {
         throw new Error(
-          `不存在的组件名称，允许的列表：${Component.components}`,
+          `不存在的组件名称 ${component}，允许的列表：${Component.components}`,
         );
       }
-      if (!component && !bs.cmd.isBuild) {
+      if (!component && !bs.context.cmd!.isBuild) {
         throw new Error(
           `非构建模式必须用 -c 指定一个组件：${Component.components}`,
         );
       }
       const comp = new Component(component);
-      if (bs.context.cmd.isDev && comp.isCli) {
+      if (bs.context.cmd!.isDev && comp.isCli) {
         throw new Error(`当前 dev 不支持 cli ！cli请构建后测试运行`);
       }
-      if (bs.context.cmd.isStart && !comp.isCli) {
+      if (bs.context.cmd!.isStart && !comp.isCli) {
         throw new Error(`当前 start 只支持 cli！`);
       }
       this.component = comp;
@@ -108,9 +116,9 @@ export class ComponentPlugin extends BasePlugin {
       this.setEnv("KABEGAME_COMPONENT", this.component?.comp || "");
     });
 
-    if (bs.context.cmd.isBuild) {
+    if (bs.context.cmd!.isBuild) {
       // 无论平台，把这些二进制通通打包到resources里
-      bs.hooks.beforeBuild.tap(this.name, (comp: string) => {
+      bs.hooks.beforeBuild.tap(this.name, (comp?: string) => {
         const component = comp ? new Component(comp) : this.component!;
         if (component.isMain) {
           stageResourceBinary(Component.cargoComp(Component.CLI));

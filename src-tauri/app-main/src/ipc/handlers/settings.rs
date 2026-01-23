@@ -39,9 +39,7 @@ pub async fn handle_settings_request(
         CliIpcRequest::SettingsGetWallpaperRotationMode => {
             Some(get_wallpaper_rotation_mode().await)
         }
-        CliIpcRequest::SettingsGetWallpaperRotationStyle => {
-            Some(get_wallpaper_rotation_style().await)
-        }
+        CliIpcRequest::SettingsGetWallpaperStyle => Some(get_wallpaper_rotation_style().await),
         CliIpcRequest::SettingsGetWallpaperRotationTransition => {
             Some(get_wallpaper_rotation_transition().await)
         }
