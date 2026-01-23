@@ -24,48 +24,31 @@
 
           <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
             <div v-if="!loading" class="settings-list">
-              <!-- Plasma 插件模式提示 -->
-              <el-alert v-if="isPlasmaPluginMode" type="warning" :closable="false" show-icon
-                class="plasma-plugin-alert">
-                <template #title>
-                  <div style="display: flex; align-items: center; gap: 12px;">
-                    <span>当前为 Plasma 插件模式，请在 Plasma 壁纸设置面板中配置相关选项</span>
-                    <el-button type="primary" size="small" @click="handleOpenPlasmaSettings">
-                      <el-icon>
-                        <Setting />
-                      </el-icon>
-                      打开壁纸设置面板
-                    </el-button>
-                  </div>
-                </template>
-              </el-alert>
-
               <SettingRow label="启用壁纸轮播" description="自动从指定画册中轮播更换桌面壁纸">
-                <WallpaperRotationEnabledSetting :disabled="isPlasmaPluginMode" />
+                <WallpaperRotationEnabledSetting />
               </SettingRow>
 
               <SettingRow :label="rotationEnabled ? '选择画册' : '选择壁纸'" description="轮播启用时选择画册；关闭时前往画廊选择单张壁纸">
-                <WallpaperRotationTargetSetting :disabled="isPlasmaPluginMode" />
+                <WallpaperRotationTargetSetting />
               </SettingRow>
 
               <SettingRow v-if="rotationEnabled" label="轮播间隔" description="壁纸更换间隔（分钟，1-1440）">
-                <SettingNumberControl setting-key="wallpaperRotationIntervalMinutes"
-                  :min="1" :max="1440" :step="10" :disabled="isPlasmaPluginMode" />
+                <SettingNumberControl setting-key="wallpaperRotationIntervalMinutes" :min="1" :max="1440" :step="10" />
               </SettingRow>
 
               <SettingRow v-if="rotationEnabled" label="轮播模式" description="随机模式：每次随机选择；顺序模式：按顺序依次更换">
                 <SettingRadioControl setting-key="wallpaperRotationMode" :options="[
-                    { label: '随机', value: 'random' },
-                    { label: '顺序', value: 'sequential' },
-                  ]" :disabled="isPlasmaPluginMode" />
+                  { label: '随机', value: 'random' },
+                  { label: '顺序', value: 'sequential' },
+                ]" />
               </SettingRow>
 
               <SettingRow label="壁纸显示方式" description="原生模式：根据系统支持显示可用样式">
-                <WallpaperStyleSetting :disabled="isPlasmaPluginMode" />
+                <WallpaperStyleSetting />
               </SettingRow>
 
               <SettingRow label="过渡效果" description="仅轮播支持过渡预览">
-                <WallpaperTransitionSetting :disabled="isPlasmaPluginMode" />
+                <WallpaperTransitionSetting />
               </SettingRow>
 
               <SettingRow label="壁纸模式">
@@ -89,13 +72,11 @@
           <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
             <div v-if="!loading" class="settings-list">
               <SettingRow label="最大并发下载量" description="同时下载的图片数量（1-10）">
-                <SettingNumberControl setting-key="maxConcurrentDownloads"
-                  :min="1" :max="10" :step="1" />
+                <SettingNumberControl setting-key="maxConcurrentDownloads" :min="1" :max="10" :step="1" />
               </SettingRow>
 
               <SettingRow label="网络失效重试次数" description="下载图片遇到网络错误/超时等情况时，额外重试的次数（0-10）">
-                <SettingNumberControl setting-key="networkRetryCount"
-                  :min="0" :max="10" :step="1" />
+                <SettingNumberControl setting-key="networkRetryCount" :min="0" :max="10" :step="1" />
               </SettingRow>
 
               <SettingRow label="自动去重" description="根据文件哈希值自动跳过重复图片，避免在画廊中重复添加相同文件">
@@ -127,9 +108,9 @@
               </SettingRow>
               <SettingRow label="图片点击行为" description="左键点击图片时的行为">
                 <SettingRadioControl setting-key="imageClickAction" :options="[
-                    { label: '应用内预览', value: 'preview' },
-                    { label: '系统默认打开', value: 'open' },
-                  ]" />
+                  { label: '应用内预览', value: 'preview' },
+                  { label: '系统默认打开', value: 'open' },
+                ]" />
               </SettingRow>
 
               <SettingRow label="图片宽高比" description="影响画廊/画册中图片卡片的展示宽高比">
@@ -188,7 +169,6 @@ const activeTab = ref<string>("wallpaper");
 const isRefreshing = ref(false);
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
-const isPlasmaPluginMode = computed(() => wallpaperMode.value === "plasma-plugin");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("settings");
 const isLightMode = IS_LIGHT_MODE;
@@ -214,17 +194,6 @@ const handleRefresh = async () => {
     ElMessage.error("刷新失败");
   } finally {
     isRefreshing.value = false;
-  }
-};
-
-// 打开 Plasma 壁纸配置面板
-const handleOpenPlasmaSettings = async () => {
-  try {
-    await invoke("open_plasma_wallpaper_settings");
-    ElMessage.success("已打开 Plasma 壁纸设置面板");
-  } catch (e) {
-    console.error("打开 Plasma 配置面板失败:", e);
-    ElMessage.error(`打开配置面板失败: ${String(e)}`);
   }
 };
 
@@ -367,14 +336,6 @@ onMounted(() => {
   padding: 20px;
   text-align: center;
   color: var(--anime-text-secondary);
-}
-
-.plasma-plugin-alert {
-  margin-bottom: 20px;
-
-  :deep(.el-alert__title) {
-    width: 100%;
-  }
 }
 
 // 切换模式时的鼠标加载态

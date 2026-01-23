@@ -1,6 +1,6 @@
 <template>
-  <el-select v-model="localValue" placeholder="请选择显示方式" style="min-width: 180px"
-    :disabled="props.disabled || disabled" @change="handleChange">
+  <el-select v-model="localValue" placeholder="请选择显示方式" style="min-width: 180px" :disabled="props.disabled || disabled"
+    @change="handleChange">
     <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value">
       <span>{{ opt.desc }}</span>
     </el-option>
@@ -40,7 +40,6 @@ const allOptions: Opt[] = [
 
 const options = computed(() => {
   if (mode.value === "window" && IS_WINDOWS) return allOptions;
-  if (mode.value === "plasma-plugin") return allOptions;
   if (!nativeWallpaperStyles.value.length) return allOptions;
   return allOptions.filter((o) => nativeWallpaperStyles.value.includes(o.value));
 });

@@ -1,6 +1,6 @@
 <template>
   <el-select v-model="localValue" placeholder="请选择过渡效果" style="min-width: 180px"
-    :disabled="props.disabled || disabled" @change="handleChange">
+    :disabled="props.disabled || wallpaperModeSwitching || disabled" @change="handleChange">
     <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value" />
   </el-select>
 </template>
@@ -23,7 +23,7 @@ type Transition = "none" | "fade" | "slide" | "zoom";
 type Opt = { label: string; value: Transition };
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperRotationTransition");
-const uiStore = useUiStore();
+const { wallpaperModeSwitching } = useUiStore();
 const settingsStore = useSettingsStore();
 
 const mode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");

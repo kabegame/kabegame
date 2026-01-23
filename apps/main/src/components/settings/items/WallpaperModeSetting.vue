@@ -1,19 +1,18 @@
 <template>
-    <el-radio-group v-model="localValue" :disabled="switching" class="wallpaper-mode-radio-group">
+    <el-radio-group v-model="localValue" :disabled="switching" class="wallpaper-mode-radio-group"
+        @change="handleChange">
         <el-radio value="native">原生模式</el-radio>
         <el-radio v-if="IS_WINDOWS" value="window">窗口模式</el-radio>
-        <el-radio v-else-if="IS_PLASMA" value="plasma-plugin" disabled>Plasma 插件模式（开发中，敬请期待）</el-radio>
     </el-radio-group>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
-import { IS_WINDOWS, IS_PLASMA } from "@kabegame/core/env";
+import { IS_WINDOWS } from "@kabegame/core/env";
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperMode");
 const uiStore = useUiStore();
