@@ -671,6 +671,16 @@ const handlePreviewImageError = () => {
 const handlePreviewKeyDown = (event: KeyboardEvent) => {
   if (!previewVisible.value) return;
   if (isTextInputLike(event.target)) return;
+  if ((event.ctrlKey || event.metaKey) && (event.key === "c" || event.key === "C")) {
+    if (!previewImage.value) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if ("stopImmediatePropagation" in event) {
+      (event as any).stopImmediatePropagation();
+    }
+    emit("contextCommand", { command: "copy", image: previewImage.value });
+    return;
+  }
   if (event.key === "ArrowLeft") {
     event.preventDefault();
     void goPrev();
@@ -866,13 +876,13 @@ const setupResizeObserver = () => {
 onMounted(() => {
   window.addEventListener("mouseup", stopPreviewDrag);
   window.addEventListener("mousemove", handlePreviewDragMove);
-  window.addEventListener("keydown", handlePreviewKeyDown);
+  window.addEventListener("keydown", handlePreviewKeyDown, true);
 });
 
 onUnmounted(() => {
   window.removeEventListener("mouseup", stopPreviewDrag);
   window.removeEventListener("mousemove", handlePreviewDragMove);
-  window.removeEventListener("keydown", handlePreviewKeyDown);
+  window.removeEventListener("keydown", handlePreviewKeyDown, true);
   if (wheelZoomTimer) {
     clearTimeout(wheelZoomTimer);
     wheelZoomTimer = null;

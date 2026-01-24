@@ -3,9 +3,10 @@
         <div class="import-summary">
             <p>是否导入以下 <strong>{{ itemCount }}</strong> 个项目？</p>
             <div class="summary-stats">
-                <span>📁 文件夹: <strong>{{ folderCount }}</strong> 个</span>
-                <span>🖼️ 图片: <strong>{{ imageCount }}</strong> 个</span>
-                <span>📦 ZIP: <strong>{{ zipCount }}</strong> 个</span>
+                <span v-if="folderCount > 0">📁 文件夹: <strong>{{ folderCount }}</strong> 个</span>
+                <span v-if="imageCount > 0">🖼️ 图片: <strong>{{ imageCount }}</strong> 个</span>
+                <span v-if="archiveCount > 0">📦 压缩包: <strong>{{ archiveCount }}</strong> 个</span>
+                <span v-if="pluginCount > 0">🔌 插件: <strong>{{ pluginCount }}</strong> 个</span>
             </div>
         </div>
 
@@ -33,7 +34,8 @@ type ImportItem = {
     path?: string;
     name: string;
     isDirectory: boolean;
-    isZip?: boolean;
+    isArchive?: boolean;
+    isKgpg?: boolean;
 };
 
 const props = defineProps<{
@@ -47,9 +49,12 @@ const props = defineProps<{
 
 const itemCount = computed(() => props.items.length);
 const folderCount = computed(() => props.items.filter(i => i.isDirectory).length);
-const zipCount = computed(() => props.items.filter(i => !i.isDirectory && i.isZip).length);
-const imageCount = computed(() => props.items.filter(i => !i.isDirectory && !i.isZip).length);
-const showOptions = computed(() => folderCount.value + zipCount.value > 0);
+const archiveCount = computed(() => props.items.filter(i => !i.isDirectory && i.isArchive).length);
+const pluginCount = computed(() => props.items.filter(i => !i.isDirectory && i.isKgpg).length);
+const imageCount = computed(
+    () => props.items.filter(i => !i.isDirectory && !i.isArchive && !i.isKgpg).length
+);
+const showOptions = computed(() => folderCount.value + archiveCount.value > 0);
 
 // checkbox 状态：优先使用外部 ref；否则使用内部状态（兼容潜在的其他用法）
 const innerCreateAlbumPerSource = ref(false);
@@ -67,11 +72,11 @@ const createAlbumPerSourceModel = computed<boolean>({
 });
 
 function getItemIcon(item: ImportItem) {
-    return item.isDirectory ? "📁" : item.isZip ? "📦" : "🖼️";
+    return item.isDirectory ? "📁" : item.isArchive ? "📦" : item.isKgpg ? "🔌" : "🖼️";
 }
 
 function getItemType(item: ImportItem) {
-    return item.isDirectory ? "文件夹" : item.isZip ? "压缩包" : "图片";
+    return item.isDirectory ? "文件夹" : item.isArchive ? "压缩包" : item.isKgpg ? "源插件" : "图片";
 }
 </script>
 

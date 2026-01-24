@@ -5,11 +5,6 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ## [3.0.2]
-### Changed
-- 将构建脚本从js升级到ts，类型更安全
-- 将服务端ipc代码移到core
-- 构建命令支持 `--skip vue|cargo`（只能一个值；main 支持 `--skip vue` 跳过前端构建）
-
 ### Added
 - F11全屏快捷键
 - 新增 `bun check` 命令：按组件依次检查 `vue-tsc` 与 `cargo check`
@@ -17,15 +12,30 @@
   - `--skip` 统一为 `vue|cargo` 且只能指定其中一个值
 - plugin editor 支持全量的变量类型
 - plugin editor 支持不手动输入json指定变量类型
+- ctrl + c 复制图片快捷键
+- rar 解压缩导入支持
 
+### Changed
+- 将构建脚本从js升级到ts，类型更安全
+- 将服务端ipc代码移到core
+- 构建命令支持 `--skip vue|cargo`（只能一个值；main 支持 `--skip vue` 跳过前端构建）
 
-### Deprecated
-- 去掉 plasma 插件。繁琐且没有必要
+### Removed
+- 经过考虑去掉 plasma 插件。文档少、调试困难、同步问题繁琐，功能不强。
+
+### Fixed
+- plugin editor 任务列表显示插件名称问题
+- 画廊切换到其他tab导致画廊页面归一的问题
+- kgpg拖拽导入将kgpg当作图片的bug
+
 
 ## [3.0.1]
 ### Changed
-- 经过各种考虑，去掉daemon，改成app-main内嵌服务。
-
+- 经过各种考虑，去掉daemon，改成app-main内嵌服务，原因如下：
+  1. daemon状态管理太复杂
+  2. 与app-main的交互存在显著性能开销
+  3. 未来做self-hosted不好迁移
+  4. 用户无法轻易关闭的后台服务很令人反感。
 
 ## [3.0.0]
 ### Added

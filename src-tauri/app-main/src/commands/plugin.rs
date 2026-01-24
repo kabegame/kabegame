@@ -1,7 +1,6 @@
 ﻿// 謠剃ｻｶ逶ｸ蜈ｳ蜻ｽ莉､
 
 use kabegame_core::plugin::{PluginManager, PluginSource};
-use serde_json::Value;
 
 #[tauri::command]
 pub async fn get_plugins() -> Result<serde_json::Value, String> {

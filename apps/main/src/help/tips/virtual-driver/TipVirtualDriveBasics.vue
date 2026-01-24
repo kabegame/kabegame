@@ -1,5 +1,8 @@
 <template>
     <div class="tip-article">
+        <el-alert class="note" type="warning" show-icon :closable="false" style="margin-bottom: 10px;">
+            Light 模式不支持此功能
+        </el-alert>
         <section class="section">
             <h3>这是什么</h3>
             <p>“虚拟盘（VD）”会把你的图库以一个盘符的形式挂载到资源管理器里。</p>

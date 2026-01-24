@@ -455,6 +455,17 @@ const handleKeyDown = (event: KeyboardEvent) => {
     return;
   }
 
+  // Ctrl/Cmd + C：复制（仅单选；多选请走右键菜单）
+  if ((event.ctrlKey || event.metaKey) && (event.key === "c" || event.key === "C")) {
+    if (selectedIds.value.size !== 1) return;
+    const onlyId = Array.from(selectedIds.value)[0];
+    const image = onlyId ? props.images.find((img) => img.id === onlyId) : undefined;
+    if (!image) return;
+    event.preventDefault();
+    void dispatchContextCommand(buildContextPayload("copy", image));
+    return;
+  }
+
   // ESC：清空选择
   if (event.key === "Escape") {
     selectedIds.value = new Set();

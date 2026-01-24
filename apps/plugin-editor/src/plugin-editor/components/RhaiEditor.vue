@@ -170,6 +170,32 @@ const RHAI_API_DOCS: Record<string, ApiDoc> = {
     markdown: ["**download_image(url)**", "", "下载图片并加入下载队列（异步）。"].join("\n"),
     params: [{ label: "url", documentation: "图片 URL。" }],
   },
+  download_archive: {
+    signature: "download_archive(url, type)",
+    markdown: [
+      "**download_archive(url, type)**",
+      "",
+      "导入压缩包（异步）。",
+      "",
+      "- 参数：`url` (string) 压缩包 URL 或本地路径",
+      "- 参数：`type` (string | ()) 类型（如 \"zip\", \"rar\"）。传入 \"none\" 或 `()` 可自动检测。",
+    ].join("\n"),
+    params: [
+      { label: "url", documentation: "压缩包 URL 或本地路径。" },
+      { label: "type", documentation: "类型（如 \"zip\"）。传入 \"none\" 或 `()` 可自动检测。" },
+    ],
+  },
+  get_supported_archive_types: {
+    signature: "get_supported_archive_types()",
+    markdown: [
+      "**get_supported_archive_types()**",
+      "",
+      "获取当前系统支持的压缩包类型列表。",
+      "",
+      "- 返回：`Array<String>` (如 `[\"zip\", \"rar\"]`)",
+    ].join("\n"),
+    params: [],
+  },
   add_progress: {
     signature: "add_progress(p)",
     markdown: ["**add_progress(p)**", "", "上报进度（0~100，或增量，取决于插件实现）。"].join("\n"),

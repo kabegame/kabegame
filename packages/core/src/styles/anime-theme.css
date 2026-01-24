@@ -223,13 +223,12 @@ textarea,
  * 另外在 Windows WebView2（Tauri）下，`display:none` 有时不如 `width/height:0` 稳定。
  */
 
-/* 1) 主内容区 + 常见页面容器 */
+/* 1) 主内容区 + 常见页面容器（画册详情 .detail-body 不隐藏，与画廊 ImageGrid 一致保留滚动条） */
 .app-main,
 .gallery-container,
 .plugin-browser-container,
 .plugin-detail-container,
 .albums-page .albums-scroll-container,
-.album-detail .detail-body,
 .task-detail .detail-body,
 .downloads-container,
 .settings-container,
@@ -248,7 +247,6 @@ textarea,
 .plugin-browser-container::-webkit-scrollbar,
 .plugin-detail-container::-webkit-scrollbar,
 .albums-page .albums-scroll-container::-webkit-scrollbar,
-.album-detail .detail-body::-webkit-scrollbar,
 .task-detail .detail-body::-webkit-scrollbar,
 .downloads-container::-webkit-scrollbar,
 .settings-container::-webkit-scrollbar,

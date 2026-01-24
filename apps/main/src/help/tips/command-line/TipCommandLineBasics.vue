@@ -1,5 +1,8 @@
 <template>
     <div class="tip-article">
+        <el-alert class="note" type="warning" show-icon :closable="false" style="margin-bottom: 10px;">
+            Light 模式不支持此功能
+        </el-alert>
         <section class="section">
             <h3>什么是命令行工具</h3>
             <p>Kabegame 提供了一个命令行工具（CLI），可以通过终端/命令提示符来执行插件相关操作。</p>

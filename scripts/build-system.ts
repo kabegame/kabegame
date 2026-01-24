@@ -278,7 +278,7 @@ export class BuildSystem {
     this.commonBefore();
 
     if (!this.context.skip?.isVue) {
-      run("typecheck", [], {
+      run("vue-tsc", [], {
         bin: "bun",
         cwd: this.context.component!.appFeDir,
       });

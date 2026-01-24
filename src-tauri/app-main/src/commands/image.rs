@@ -1,5 +1,6 @@
-﻿// Image 相关命令
+// Image 相关命令
 
+use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::providers::ProviderRuntime;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::{Storage, FAVORITE_ALBUM_ID};
@@ -7,6 +8,7 @@ use kabegame_core::storage::{Storage, FAVORITE_ALBUM_ID};
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 #[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
+use serde_json::json;
 use tauri::AppHandle;
 
 #[tauri::command]
@@ -48,6 +50,15 @@ pub async fn delete_image(image_id: String) -> Result<(), String> {
             .set_current_wallpaper_image_id(None)
             .await;
     }
+
+    GlobalEmitter::global().emit(
+        "images-change",
+        json!({
+            "reason": "delete",
+            "imageIds": [image_id]
+        }),
+    );
+
     Ok(())
 }
 
@@ -65,6 +76,15 @@ pub async fn remove_image(image_id: String) -> Result<(), String> {
             .set_current_wallpaper_image_id(None)
             .await;
     }
+
+    GlobalEmitter::global().emit(
+        "images-change",
+        json!({
+            "reason": "remove",
+            "imageIds": [image_id]
+        }),
+    );
+
     Ok(())
 }
 
@@ -84,6 +104,15 @@ pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<(), String> {
                 .await;
         }
     }
+
+    GlobalEmitter::global().emit(
+        "images-change",
+        json!({
+            "reason": "delete",
+            "imageIds": image_ids
+        }),
+    );
+
     Ok(())
 }
 
@@ -103,6 +132,15 @@ pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
                 .await;
         }
     }
+
+    GlobalEmitter::global().emit(
+        "images-change",
+        json!({
+            "reason": "remove",
+            "imageIds": image_ids
+        }),
+    );
+
     Ok(())
 }
 
@@ -119,8 +157,8 @@ pub async fn toggle_image_favorite(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn get_image_local_path_by_id(image_id: String) -> Result<Option<String>, String> {
-    let img = Storage::global().find_image_by_id(&image_id)?;
-    Ok(img.map(|i| i.local_path))
-}
+// #[tauri::command]
+// pub async fn get_image_local_path_by_id(image_id: String) -> Result<Option<String>, String> {
+//     let img = Storage::global().find_image_by_id(&image_id)?;
+//     Ok(img.map(|i| i.local_path))
+// }

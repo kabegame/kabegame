@@ -1,11 +1,11 @@
 ﻿// 壁纸相关命令和函数
 
-use crate::wallpaper::manager::{WallpaperController, WallpaperManager};
+use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
 use std::path::Path;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 pub async fn get_current_wallpaper_path_from_settings(
     _app: &tauri::AppHandle,
@@ -187,6 +187,7 @@ pub async fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String>
 
 #[tauri::command]
 pub async fn set_wallpaper_rotation_album_id(album_id: Option<String>) -> Result<(), String> {
+    println!("call me {} {:?} {:?}", file!(), line!(), album_id);
     let normalized = album_id.map(|s| {
         let t = s.trim().to_string();
         if t.is_empty() {
@@ -350,8 +351,8 @@ pub async fn set_wallpaper_rotation_transition(transition: String) -> Result<(),
     let rotator = WallpaperRotator::global();
 
     let manager = controller.active_manager().await?;
-    let res = manager.set_transition(&transition_clone, enabled).await?;
-    if (transition_clone != "none") {
+    manager.set_transition(&transition_clone, enabled).await?;
+    if enabled && transition_clone != "none" {
         rotator.rotate().await?;
     }
     Ok(())

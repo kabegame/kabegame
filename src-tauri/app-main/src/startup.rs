@@ -1,13 +1,11 @@
 ﻿// 启动步骤函数
 
 use std::fs;
-use tauri::{Listener, Manager};
+use tauri::{Manager};
 
 use crate::commands::wallpaper::init_wallpaper_on_startup;
 use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
-#[cfg(target_os = "windows")]
-use crate::wallpaper::WallpaperWindow;
 
 pub fn startup_step_cleanup_user_data_if_marked(app: &tauri::AppHandle) -> bool {
     // 检查清理标记，如果存在则先清理旧数据目录

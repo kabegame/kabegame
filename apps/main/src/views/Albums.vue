@@ -70,6 +70,7 @@ import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_WINDOWS, IS_LIGHT_MODE } from "@kabegame/core/env";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 
@@ -83,6 +84,8 @@ const openHelpDrawer = () => helpDrawer.open("albums");
 
 // 虚拟磁盘
 const settingsStore = useSettingsStore();
+const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
+const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 const isLightMode = IS_LIGHT_MODE;
 const albumDriveEnabled = computed(() => IS_WINDOWS && !isLightMode && !!settingsStore.values.albumDriveEnabled);
 const albumDriveMountPoint = computed(() => settingsStore.values.albumDriveMountPoint || "K:\\");
@@ -97,9 +100,13 @@ const openVirtualDrive = async () => {
 };
 
 // 当前轮播画册ID
-const currentRotationAlbumId = ref<string | null>(null);
+const currentRotationAlbumId = computed(() => {
+  const raw = settingsStore.values.wallpaperRotationAlbumId as any as string | null | undefined;
+  const id = (raw ?? "").trim();
+  return id ? id : null;
+});
 // 轮播是否开启
-const wallpaperRotationEnabled = ref<boolean>(false);
+const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 
 const showCreateDialog = ref(false);
 const newAlbumName = ref("");
@@ -109,19 +116,6 @@ const albumCardRefs = ref<Record<string, any>>({});
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 // 用于强制重新挂载列表（让“刷新”能触发完整 enter 动画 + 重置卡片内部状态）
 const albumsListKey = ref(0);
-
-const loadRotationSettings = async () => {
-  try {
-    const [enabled, albumId] = await Promise.all([
-      invoke<boolean>("get_wallpaper_rotation_enabled"),
-      invoke<string | null>("get_wallpaper_rotation_album_id"),
-    ]);
-    wallpaperRotationEnabled.value = enabled ?? false;
-    currentRotationAlbumId.value = albumId || null;
-  } catch (error) {
-    console.error("加载轮播设置失败:", error);
-  }
-};
 
 // 如果删除的画册正在被“壁纸轮播”引用：自动关闭轮播，切回单张壁纸，并尽量保持当前壁纸不变
 const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
@@ -141,17 +135,17 @@ const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
 
   // 清除轮播画册
   try {
-    await invoke("set_wallpaper_rotation_album_id", { albumId: null });
-  } finally {
-    currentRotationAlbumId.value = null;
+    await setWallpaperRotationAlbumId(null);
+  } catch {
+    // 静默失败
   }
 
   // 若轮播开启中：关闭轮播并切回单张壁纸
   if (wasEnabled) {
     try {
-      await invoke("set_wallpaper_rotation_enabled", { enabled: false });
-    } finally {
-      wallpaperRotationEnabled.value = false;
+      await setWallpaperRotationEnabled(false);
+    } catch {
+      // 静默失败
     }
 
     // 切回单张壁纸：用当前壁纸路径再 set 一次，确保“单张模式”一致且设置页能显示
@@ -218,9 +212,13 @@ onMounted(async () => {
   startLoading();
   try {
     await albumStore.loadAlbums();
-    await loadRotationSettings();
     // 加载虚拟磁盘设置
-    await settingsStore.loadMany(["albumDriveEnabled", "albumDriveMountPoint"]);
+    await settingsStore.loadMany([
+      "albumDriveEnabled",
+      "albumDriveMountPoint",
+      "wallpaperRotationEnabled",
+      "wallpaperRotationAlbumId",
+    ]);
   } finally {
     finishLoading();
   }
@@ -247,9 +245,13 @@ onMounted(async () => {
 // 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表和轮播设置
 onActivated(async () => {
   await albumStore.loadAlbums();
-  await loadRotationSettings();
   // 重新加载虚拟磁盘设置（可能在设置页修改后返回）
-  await settingsStore.loadMany(["albumDriveEnabled", "albumDriveMountPoint"]);
+  await settingsStore.loadMany([
+    "albumDriveEnabled",
+    "albumDriveMountPoint",
+    "wallpaperRotationEnabled",
+    "wallpaperRotationAlbumId",
+  ]);
 
   // 对于收藏画册，如果数量大于0但预览为空，清除缓存并重新加载
   const favoriteAlbum = albums.value.find(a => a.id === FAVORITE_ALBUM_ID.value);
@@ -288,7 +290,7 @@ const handleRefresh = async () => {
   isRefreshing.value = true;
   try {
     await albumStore.loadAlbums();
-    await loadRotationSettings();
+    await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
     // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来"没刷新"）
     const albumsToPreload = albums.value.slice(0, 6);
     for (const album of albumsToPreload) {
@@ -521,13 +523,9 @@ const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpap
   if (command === "setWallpaperRotation") {
     try {
       // 如果轮播未开启，先开启轮播
-      if (!wallpaperRotationEnabled.value) {
-        await invoke("set_wallpaper_rotation_enabled", { enabled: true });
-        wallpaperRotationEnabled.value = true;
-      }
+      if (!wallpaperRotationEnabled.value) await setWallpaperRotationEnabled(true);
       // 设置轮播画册
-      await invoke("set_wallpaper_rotation_album_id", { albumId: id });
-      currentRotationAlbumId.value = id;
+      await setWallpaperRotationAlbumId(id);
       ElMessage.success(`已开启轮播：画册「${name}」`);
     } catch (error) {
       console.error("设置轮播画册失败:", error);

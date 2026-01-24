@@ -4,6 +4,7 @@ pub mod app_paths;
 pub mod bin_finder;
 pub mod ipc;
 
+pub mod archive;
 pub mod crawler;
 
 pub mod gallery;

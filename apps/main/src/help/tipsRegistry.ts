@@ -11,8 +11,8 @@ import TipTrayIntroduction from "@/help/tips/tray/TipTrayIntroduction.vue";
 import TipVirtualDriveBasics from "@/help/tips/virtual-driver/TipVirtualDriveBasics.vue";
 import TipVirtualDriveDirectories from "@/help/tips/virtual-driver/TipVirtualDriveDirectories.vue";
 import TipPluginEditor from "@/help/tips/plugin-editor/TipPluginEditor.vue";
-import TipCommandLineBasics from "@/help/tips/virtual-driver/TipCommandLineBasics.vue";
-import TipCommandLineExamples from "@/help/tips/virtual-driver/TipCommandLineExamples.vue";
+import TipCommandLineBasics from "@/help/tips/command-line/TipCommandLineBasics.vue";
+import TipCommandLineExamples from "@/help/tips/command-line/TipCommandLineExamples.vue";
 import TipAlbumsIntroduction from "@/help/tips/albums/TipAlbumsIntroduction.vue";
 import TipWallpaperBasic from "@/help/tips/wallpaper/TipWallpaperBasic.vue";
 import TipWallpaperRotation from "@/help/tips/wallpaper/TipWallpaperRotation.vue";
@@ -20,6 +20,12 @@ import TipWallpaperMode from "@/help/tips/wallpaper/TipWallpaperMode.vue";
 import TipTaskViewing from "@/help/tips/tasks/TipTaskViewing.vue";
 import TipTaskManagement from "@/help/tips/tasks/TipTaskManagement.vue";
 import TipTaskIntroduction from "@/help/tips/tasks/TipTaskIntroduction.vue";
+
+import { IS_LIGHT_MODE } from "@kabegame/core/env";
+
+const lightModeTags = IS_LIGHT_MODE
+  ? [{ text: "Light 模式不可用", type: "danger" as const }]
+  : [];
 
 export type TipCategoryId =
   | "gallery"
@@ -71,12 +77,20 @@ export type Tip = {
       note?: string;
     }>;
   };
+  tags?: Array<{
+    text: string;
+    type: "success" | "warning" | "danger" | "info";
+  }>;
 };
 
 export type TipCategory = {
   id: TipCategoryId;
   title: string; // 目录名
   description?: string;
+  tags?: Array<{
+    text: string;
+    type: "success" | "warning" | "danger" | "info";
+  }>;
   tips: Tip[]; // 该分类下的所有技巧
 };
 
@@ -229,12 +243,14 @@ export const TIP_CATEGORIES: TipCategory[] = [
     id: "virtual-driver",
     title: "虚拟盘（VD）",
     description: "在资源管理器里像磁盘一样浏览画册（Windows）",
+    tags: lightModeTags,
     tips: [
       {
         id: "virtual-driver-basics",
         title: "用虚拟盘在资源管理器里浏览图片",
         summary: "开启“画册盘”后，可在资源管理器中文件方式浏览画册与图片文件。",
         component: TipVirtualDriveBasics,
+        tags: lightModeTags,
       },
       {
         id: "virtual-driver-directories",
@@ -242,6 +258,7 @@ export const TIP_CATEGORIES: TipCategory[] = [
         summary:
           "了解虚拟盘根目录下的各个目录（全部、按插件、按时间、按任务、画册）的用途和使用场景。",
         component: TipVirtualDriveDirectories,
+        tags: lightModeTags,
       },
     ],
   },
@@ -249,6 +266,7 @@ export const TIP_CATEGORIES: TipCategory[] = [
     id: "plugin-editor",
     title: "插件编辑器",
     description: "创建、编辑和调试收集源插件的开发工具",
+    tags: lightModeTags,
     tips: [
       {
         id: "plugin-editor-basics",
@@ -256,6 +274,7 @@ export const TIP_CATEGORIES: TipCategory[] = [
         summary:
           "了解如何打开插件编辑器，以及它的基本功能：创建插件、编辑代码、配置信息和打包导入。",
         component: TipPluginEditor,
+        tags: lightModeTags,
       },
     ],
   },
@@ -263,6 +282,7 @@ export const TIP_CATEGORIES: TipCategory[] = [
     id: "command-line",
     title: "命令行",
     description: "使用命令行工具运行插件、打包和导入插件",
+    tags: lightModeTags,
     tips: [
       {
         id: "command-line-basics",
@@ -270,6 +290,7 @@ export const TIP_CATEGORIES: TipCategory[] = [
         summary:
           "了解 Kabegame CLI 工具的基本用法，包括如何运行插件、打包插件和导入插件。",
         component: TipCommandLineBasics,
+        tags: lightModeTags,
       },
       {
         id: "command-line-examples",
@@ -277,6 +298,7 @@ export const TIP_CATEGORIES: TipCategory[] = [
         summary:
           "实用的命令行操作示例：导入单张图片、导入文件夹到画廊等常用场景。",
         component: TipCommandLineExamples,
+        tags: lightModeTags,
       },
     ],
   },

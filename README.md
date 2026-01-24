@@ -2,14 +2,18 @@
 
 一个基于 Tauri 的二次元壁纸管理器！收集、管理、轮播，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元壁纸资源~
 
-<div align="center">
-  <img src="docs/images/image1.png" alt="Kabegame 形象图 1" width="100"/>
-  <img src="docs/images/image2.png" alt="Kabegame 形象图 2" width="100"/>
+<div style="display: flex; justify-content: space-between">
+  <img src="docs/images/image2.png" alt="Kabegame 形象图 1" width="256"/>
+  <img src="docs/images/image1.png" alt="Kabegame 形象图 2" width="256"/>
 </div>
 
 ## 名称由来 🐢
 
 **Kabegame** 是日语「壁亀」（かべがめ）的罗马音，与「壁纸」（かべがみ）发音相近~ 就像一只安静的龟龟趴在你的桌面上，默默守护着你的二次元壁纸收藏，不吵不闹，只负责治愈你~ これで毎日癒やされるね。やったぁ～ ✨
+
+> 我的观念：拥抱开源，做二次元人自己的软件
+
+> 私のこだわり：オープンソースに取り入れ、オタクだけのためのソフトウェアを作り上げる。
 
 ## 功能特性
 
@@ -23,7 +27,43 @@
 - 📋 **任务管理**: 实时查看收集任务进度、状态和已收集图片，支持停止、删除等操作
 - 🛠️ **插件编辑器**: 内置强大的插件编辑器，支持创建、编辑和调试 Rhai 爬虫脚本
 - ⌨️ **命令行工具**: 提供完整的 CLI 工具，支持通过命令行运行插件、导入图片等操作
-- 🖱️ **拖拽导入**: 支持拖入本地图片、文件夹或压缩包快速导入到画廊
+- 🖱️ **拖拽导入**: 支持拖入本地图片、文件夹或压缩包（zip、rar）快速导入到画廊，也可以拖入kgpg插件文件导入插件
+
+## 安装方法
+
+Kabegame 提供三种模式供下载，满足不同使用场景：
+
+| 功能 | Normal 模式 | Local 模式 | Light 模式 |
+|------|------------|-----------|-----------|
+| **插件商店** | ✅ 支持 | 🟡 预置插件 | 🟡 预置插件 |
+| **插件编辑器** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
+| **虚拟磁盘** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
+| **cli** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
+| **内置插件** | 本地导入插件(`local-import`) | 发布时的全部插件 | 发布时的全部插件 |
+| **适用场景** | 日常使用，需要从商店安装插件 | 离线使用，需要所有插件内置 | 轻量使用，仅需基本功能 |
+| **文件大小** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐⭐ | ⭐⭐ |
+
+**根据你的操作系统和需求，选择合适的安装包**
+
+| 操作系统 | Normal 模式 | Local 模式 | Light 模式 |
+|---------|------------|-----------|-----------|
+| Windows | [Kabegame-normal_3.0.1_x64-setup.exe](release/Kabegame-normal_3.0.1_x64-setup.exe) | [Kabegame-local_3.0.1_x64-setup.exe](release/Kabegame-local_3.0.1_x64-setup.exe) | [Kabegame-light_3.0.1_x64-setup.exe](release/Kabegame-light_3.0.1_x64-setup.exe) |
+| macOS | coming... | coming... | coming... |
+| Linux (Plasma) | coming... | coming... | coming... |
+| Linux (GNOME) | coming... | coming... | coming... |
+
+Windows 双击运行即可（**安装和更新**）。
+Linux（Debian分发（Ubuntu等））运行以下命令
+```sh
+sudo dpkg -i Kabegame-<mode>_<desktop>_<version>_<arch>.deb
+```
+你的桌面环境的确认方法：
+- Plasma：`plasmashell --version`
+- GNOME(coming...)：`gnome-shell --version`
+<div style="color: red; background-color: #fdd;">
+安装错误desktop版本可能导致无法正常设置壁纸！
+</div>
+
 
 ## 主要功能
 
@@ -77,6 +117,8 @@ Kabegame 的核心竞争力在于其插件化的爬虫系统（本地导入文�
 
 ### 💾 虚拟磁盘
 
+**<del>Light 模式不支持</del>**
+
 在 Windows 系统上（目前），Kabegame 可以将画册挂载为虚拟磁盘，让你在资源管理器中像浏览普通文件夹一样浏览画册和图片。支持按插件、按时间、按任务、按画册等多种目录结构，带来更加灵活和原生的浏览体验。
 
 <div align="center">
@@ -85,6 +127,8 @@ Kabegame 的核心竞争力在于其插件化的爬虫系统（本地导入文�
 </div>
 
 ### 🛠️ 插件编辑器
+
+**<del>Light 模式不支持</del>**
 
 内置强大的插件编辑器，支持创建、编辑和调试 Rhai 爬虫脚本。提供语法高亮、代码补全、实时预览等功能。可以配置插件的 manifest.json 和 config.json，添加图标和文档，一键打包为 `.kgpg` 文件并导入。让插件开发变得简单高效！
 
@@ -113,6 +157,20 @@ Kabegame 的核心竞争力在于其插件化的爬虫系统（本地导入文�
 - 插件配置保存在应用数据目录中
 - 壁纸轮播功能需要应用在后台运行，关闭应用后轮播会自动停止
 - 插件文件格式为 `.kgpg`（ZIP 压缩包），包含 `manifest.json`、`crawl.rhai` 等文件
+
+## 卸载方法
+
+### Windows
+#### 方法一
+打开设置 -> 应用 -> 已安装应用 -> 搜索 Kabegame -> 点击右边三个点 -> 卸载
+#### 方法二
+右键点击应用快捷方式 -> 打开文件所在位置 -> 找到 uninstall.exe -> 双击运行即可删除
+
+### Linux（Debian分发）
+运行以下命令：
+```sh
+sudo dpkg -r Kabegame
+```
 
 ---
 
@@ -186,7 +244,7 @@ bun check -c plugin-editor --skip vue  # 仅检查 cargo
 - `--mode`：构建模式
   - `normal`（默认）：一般版本，带商店源，仅打包本地插件到 resources
   - `local`：无商店，预打包全部插件到 resources
-  - `light`：轻量模式，无商店，没有插件编辑器，没有虚拟盘功能
+  - `light`：轻量模式，无商店，没有插件编辑器，没有虚拟盘功能、没有cli工具
 - `--desktop <desktop>`：指定桌面环境（`plasma` | `gnome`），用于后端按桌面环境选择实现
   - `plasma`：适用于 KDE Plasma 环境（在设置中显示 Plasma 插件模式选项）
   - `gnome`：适用于 GNOME 环境

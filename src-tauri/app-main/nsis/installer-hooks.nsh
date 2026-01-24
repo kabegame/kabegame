@@ -14,16 +14,11 @@
 
   ; Move extra executables from resources/bin to install root ($INSTDIR).
   ; We intentionally avoid Tauri sidecar/externalBin and instead ship exe as resources.
-  ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\kabegame-plugin-editor.exe$\" move /Y $\"$INSTDIR\resources\bin\kabegame-plugin-editor.exe$\" $\"$INSTDIR$\"' $0
-  DetailPrint "Move kabegame-plugin-editor.exe -> $INSTDIR (exit code: $0)"
-  ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\kabegame-cli.exe$\" move /Y $\"$INSTDIR\resources\bin\kabegame-cli.exe$\" $\"$INSTDIR$\"' $0
-  DetailPrint "Move kabegame-cli.exe -> $INSTDIR (exit code: $0)"
-  ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\kabegame-cliw.exe$\" move /Y $\"$INSTDIR\resources\bin\kabegame-cliw.exe$\" $\"$INSTDIR$\"' $0
-  DetailPrint "Move kabegame-cliw.exe -> $INSTDIR (exit code: $0)"
   ; Check if dokan2.dll is bundled (not present in light mode)
   IfFileExists "$INSTDIR\resources\bin\dokan2.dll" 0 +3
     DetailPrint "dokan2.dll not bundled (light mode), skipping Dokan setup."
-    Goto dokan_done
+    ; is light mode, skip copy binary
+    Goto no_light_done
 
   ; Move dokan2.dll next to main exe so Windows loader can resolve it at process start.
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\dokan2.dll$\" move /Y $\"$INSTDIR\resources\bin\dokan2.dll$\" $\"$INSTDIR$\"' $0
@@ -53,7 +48,12 @@
       IfFileExists "$SYSDIR\drivers\dokan2.sys" 0 +2
         DetailPrint "Dokan driver installed."
 
-  dokan_done:
+  ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\kabegame-plugin-editor.exe$\" move /Y $\"$INSTDIR\resources\bin\kabegame-plugin-editor.exe$\" $\"$INSTDIR$\"' $0
+  DetailPrint "Move kabegame-plugin-editor.exe -> $INSTDIR (exit code: $0)"
+  ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\kabegame-cli.exe$\" move /Y $\"$INSTDIR\resources\bin\kabegame-cli.exe$\" $\"$INSTDIR$\"' $0
+  DetailPrint "Move kabegame-cli.exe -> $INSTDIR (exit code: $0)"
+  ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\kabegame-cliw.exe$\" move /Y $\"$INSTDIR\resources\bin\kabegame-cliw.exe$\" $\"$INSTDIR$\"' $0
+  DetailPrint "Move kabegame-cliw.exe -> $INSTDIR (exit code: $0)"
 
   ; Register .kgpg file association -> kabegame-cliw.exe plugin import "%1"
   ; (kabegame-cliw.exe is built as Windows subsystem and launches kabegame-cli.exe with CREATE_NO_WINDOW)
@@ -65,6 +65,8 @@
   WriteRegStr HKCU "Software\Classes\Kabegame.KGPG\shell" "" "open"
   WriteRegStr HKCU "Software\Classes\Kabegame.KGPG\shell\open" "" "导入插件"
   WriteRegStr HKCU "Software\Classes\Kabegame.KGPG\shell\open\command" "" '"$INSTDIR\kabegame-cliw.exe" plugin import "%1"'
+
+  no_light_done:
 
   ; Mark install dir as system + readonly so Explorer applies desktop.ini customization
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib +s +r $\"$INSTDIR$\"'

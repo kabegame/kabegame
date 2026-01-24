@@ -157,6 +157,7 @@ impl SettingValue {
         }
     }
 
+    #[allow(unused)]
     fn as_window_state(&self) -> Option<WindowState> {
         match self {
             SettingValue::WindowState(ws) => Some(ws.clone()),
@@ -768,25 +769,25 @@ Write-Output "$style,$tile"
     }
 
     /// 立即写入文件
-    async fn save_immediate() -> Result<(), String> {
-        let file = Self::get_settings_file();
+    // async fn save_immediate() -> Result<(), String> {
+    //     let file = Self::get_settings_file();
 
-        if let Some(parent) = file.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create settings directory: {}", e))?;
-        }
+    //     if let Some(parent) = file.parent() {
+    //         fs::create_dir_all(parent)
+    //             .map_err(|e| format!("Failed to create settings directory: {}", e))?;
+    //     }
 
-        let json_val = Self::serialize_to_json().await?;
-        let content = serde_json::to_string_pretty(&json_val)
-            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    //     let json_val = Self::serialize_to_json().await?;
+    //     let content = serde_json::to_string_pretty(&json_val)
+    //         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
 
-        let tmp = file.with_extension("json.tmp");
-        fs::write(&tmp, content)
-            .map_err(|e| format!("Failed to write temp settings file: {}", e))?;
-        atomic_replace_file(&tmp, &file)?;
+    //     let tmp = file.with_extension("json.tmp");
+    //     fs::write(&tmp, content)
+    //         .map_err(|e| format!("Failed to write temp settings file: {}", e))?;
+    //     atomic_replace_file(&tmp, &file)?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     // ========== Getter 方法 ==========
 

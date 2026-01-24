@@ -1,12 +1,9 @@
-﻿// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
-
-#[cfg(target_os = "windows")]
-const CF_HDROP_FORMAT: u32 = 15; // Clipboard format for file drop
 
 mod commands;
 mod startup;
@@ -26,10 +23,7 @@ use crate::ipc::handlers::{dispatch_request, Store};
 use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
-    ipc::{
-        events::{DaemonEvent, DaemonEventKind},
-        CliIpcRequest,
-    },
+    ipc::events::{DaemonEvent, DaemonEventKind},
     plugin::PluginManager,
     providers::{ProviderCacheConfig, ProviderRuntime},
     settings::Settings,
@@ -277,7 +271,7 @@ fn main() {
         .setup(|app| {
             // 设置全局快捷键
             {
-                use tauri_plugin_global_shortcut::{Shortcut, ShortcutEvent};
+                use tauri_plugin_global_shortcut::Shortcut;
 
                 let app_handle = app.app_handle().clone();
                 let shortcuts = app.global_shortcut();
@@ -289,8 +283,7 @@ fn main() {
                 );
 
                 let app_handle_clone = app_handle.clone();
-                let f11_shortcut_clone = f11_shortcut.clone();
-                shortcuts.on_shortcuts([f11_shortcut], move |app_handle, shortcut, event| {
+                shortcuts.on_shortcuts([f11_shortcut], move |_app_handle, shortcut, event| {
                     // 检查是否是 F11 快捷键（无修饰键 + F11）且是按下事件
                     if shortcut.mods.is_empty()
                         && shortcut.key.eq(&tauri_plugin_global_shortcut::Code::F11)
@@ -365,8 +358,14 @@ fn main() {
             get_images_range,
             get_image_by_id,
             get_gallery_image,
+            copy_image_to_clipboard,
+            delete_image,
+            remove_image,
             batch_delete_images,
+            batch_remove_images,
+            get_images_count,
             browse_gallery_provider,
+            toggle_image_favorite,
             // --- Tasks ---
             get_all_tasks,
             get_task,
@@ -454,7 +453,9 @@ fn main() {
             get_wallpaper_transition_by_mode,
             get_wallpaper_mode,
             get_wallpaper_rotator_status,
-            open_plasma_wallpaper_settings,
+            get_native_wallpaper_styles,
+            #[cfg(target_os = "windows")]
+            fix_wallpaper_zorder,
             // --- Wallpaper Engine (Windows) ---
             #[cfg(target_os = "windows")]
             get_wallpaper_engine_dir,
@@ -488,6 +489,7 @@ fn main() {
             open_file_path,
             open_file_folder,
             // --- Misc ---
+            get_file_drop_supported_types,
             migrate_images_from_json,
             start_dedupe_gallery_by_hash_batched,
             cancel_dedupe_gallery_by_hash_batched,

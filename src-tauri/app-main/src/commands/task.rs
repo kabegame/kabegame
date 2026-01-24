@@ -1,7 +1,6 @@
 // 任务相关命令
 
 use kabegame_core::storage::{Storage, TaskInfo};
-use tauri::AppHandle;
 
 #[tauri::command]
 pub async fn add_run_config(config: serde_json::Value) -> Result<serde_json::Value, String> {

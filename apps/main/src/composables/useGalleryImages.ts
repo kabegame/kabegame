@@ -63,6 +63,7 @@ export function useGalleryImages(
   });
 
   const totalImages = ref(0);
+  const loadedKey = ref("");
 
   const setLeafAndResetDisplay = async (images: ImageInfo[]) => {
     leafAllImages = images;
@@ -76,6 +77,7 @@ export function useGalleryImages(
 
   const fetchLeafByPage = async (page: number) => {
     const root = (providerRootPathRef.value || "全部").trim() || "全部";
+    const safePage = Math.max(1, Math.floor(page || 1));
 
     // 关键：每次都先 probe root 拿最新 total，避免去重后 total 大幅变化导致旧 total 计算出的 path 失效
     const probe = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
@@ -86,6 +88,7 @@ export function useGalleryImages(
 
     if (totalImages.value <= 0) {
       await setLeafAndResetDisplay([]);
+      loadedKey.value = `${root}::${safePage}`;
       return;
     }
 
@@ -95,6 +98,7 @@ export function useGalleryImages(
         .filter((e) => e.kind === "image")
         .map((e) => (e as any).image as ImageInfo);
       await setLeafAndResetDisplay(images);
+      loadedKey.value = `${root}::${safePage}`;
       return;
     }
 
@@ -102,7 +106,7 @@ export function useGalleryImages(
       const { path } = buildLeafProviderPathForPage(
         root,
         totalImages.value,
-        page
+        safePage
       );
       const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
         path,
@@ -116,9 +120,10 @@ export function useGalleryImages(
         .map((e) => (e as any).image as ImageInfo);
 
       await setLeafAndResetDisplay(images);
+      loadedKey.value = `${root}::${safePage}`;
     } catch (e) {
       // 如果在去重过程中 total 继续变化导致 path 失效，兜底回到第 1 页再试一次
-      if (page !== 1) {
+      if (safePage !== 1) {
         await fetchLeafByPage(1);
         return;
       }
@@ -284,5 +289,6 @@ export function useGalleryImages(
     recreateImageUrl,
     cleanup,
     totalImages,
+    loadedKey,
   };
 }

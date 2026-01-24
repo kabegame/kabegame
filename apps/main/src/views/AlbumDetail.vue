@@ -5,7 +5,7 @@
       enable-virtual-scroll :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true"
       :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing"
       :context-menu-component="AlbumImageContextMenu" :on-context-command="handleImageMenuCommand"
-      @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()">
+      :hide-scrollbar="false" @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()">
 
       <template #before-grid>
         <PageHeader :title="albumName || '画册'"
@@ -67,12 +67,6 @@
         <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
           :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToPage" />
       </template>
-
-      <!-- 当前页内“加载更多”（从 leaf 缓存里渐进展示，避免一次渲染 1000） -->
-      <template #footer>
-        <LoadMoreButton v-if="hasMoreInLeaf || images.length > 0" :has-more="hasMoreInLeaf" :loading="isLoadingMore"
-          :show-next-page="false" @load-more="loadMoreInLeaf" @next-page="() => { }" />
-      </template>
     </ImageGrid>
 
     <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
@@ -89,7 +83,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -103,12 +97,14 @@ import { useCrawlerStore, type ImageInfo as CrawlerImageInfo } from "@/stores/cr
 import type { ImageInfo } from "@/stores/crawler";
 import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_WINDOWS, IS_LIGHT_MODE } from "@kabegame/core/env";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useGallerySettings } from "@/composables/useGallerySettings";
+import { useImageOperations } from "@/composables/useImageOperations";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
@@ -116,7 +112,6 @@ import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { useBigPageRoute } from "@/composables/useBigPageRoute";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
-import LoadMoreButton from "@/components/LoadMoreButton.vue";
 import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
@@ -127,6 +122,8 @@ const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const crawlerStore = useCrawlerStore();
 const settingsStore = useSettingsStore();
+const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
+const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
@@ -168,7 +165,6 @@ const albumId = ref<string>("");
 const albumName = ref<string>("");
 const loading = ref(false);
 const isRefreshing = ref(false);
-const isLoadingMore = ref(false);
 const currentWallpaperImageId = ref<string | null>(null);
 const images = ref<ImageInfo[]>([]);
 let leafAllImages: ImageInfo[] = [];
@@ -192,7 +188,6 @@ const providerRootPath = computed(() => {
   // 与 VD 路径一致：画册/<albumName>
   return `画册/${albumName.value}`;
 });
-const hasMoreInLeaf = computed(() => images.value.length < leafAllImages.length);
 
 const handleJumpToPage = async (page: number) => {
   await jumpToPage(page);
@@ -208,27 +203,6 @@ watch(
     void loadAlbum({ reset: true });
   }
 );
-
-const loadMoreInLeaf = async () => {
-  if (isLoadingMore.value) return;
-  if (!hasMoreInLeaf.value) return;
-  isLoadingMore.value = true;
-  try {
-    // 沿用画廊的渐进加载节奏：每次追加 crawlerStore.pageSize（默认 50）
-    const nextCount = Math.min(
-      leafAllImages.length,
-      images.value.length + crawlerStore.pageSize
-    );
-    const next = leafAllImages.slice(0, nextCount);
-    const existed = new Set(images.value.map((i) => i.id));
-    const newOnes = next.filter((i) => !existed.has(i.id));
-    images.value = next;
-    await nextTick();
-    void loadImageUrls(newOnes);
-  } finally {
-    isLoadingMore.value = false;
-  }
-};
 
 // dragScroll “太快且仍在加速”时的俏皮提示（画册开启）
 const dragScrollTooFastMessages = [
@@ -345,8 +319,12 @@ const editingName = ref("");
 const renameInputRef = ref<HTMLInputElement | null>(null);
 
 // 轮播壁纸相关
-const wallpaperRotationEnabled = ref(false);
-const currentRotationAlbumId = ref<string | null>(null);
+const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
+const currentRotationAlbumId = computed(() => {
+  const raw = settingsStore.values.wallpaperRotationAlbumId as any as string | null | undefined;
+  const id = (raw ?? "").trim();
+  return id ? id : null;
+});
 
 // 收藏画册标记：当收藏状态变化时，如果页面在后台，标记为需要刷新
 const favoriteAlbumDirty = ref(false);
@@ -373,7 +351,7 @@ const handleRefresh = async () => {
     if (found) albumName.value = found.name;
 
     // 2) 刷新轮播/当前壁纸状态（避免 UI 与后端设置不同步）
-    await loadRotationSettings();
+    await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
     try {
       currentWallpaperImageId.value = await invoke<string | null>("get_current_wallpaper_image_id");
     } catch {
@@ -427,9 +405,7 @@ const loadAlbum = async (opts?: { reset?: boolean }) => {
       .map((e: any) => e.image as ImageInfo);
 
     leafAllImages = list;
-    // 渐进展示：先展示前 pageSize
-    const initial = list.slice(0, crawlerStore.pageSize);
-    images.value = initial;
+    images.value = list;
 
     // 清理旧资源
     resetImageUrlLoader();
@@ -447,36 +423,16 @@ const handleAddedToAlbum = async () => {
   await albumStore.loadAlbums();
 };
 
-const handleCopyImage = async (image: CoreImageInfo) => {
-  const imageUrl = imageSrcMap.value[image.id]?.original || imageSrcMap.value[image.id]?.thumbnail;
-  if (!imageUrl) {
-    ElMessage.warning("图片尚未加载完成，请稍后再试");
-    return;
+const { handleCopyImage } = useImageOperations(
+  images,
+  imageSrcMap,
+  currentWallpaperImageId,
+  albumViewRef,
+  () => { },
+  async (reset?: boolean) => {
+    await loadAlbum({ reset: !!reset });
   }
-  const response = await fetch(imageUrl);
-  let blob = await response.blob();
-
-  if (blob.type === "image/jpeg" || blob.type === "image/jpg") {
-    const img = new Image();
-    img.src = imageUrl;
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = reject;
-    });
-    const canvas = document.createElement("canvas");
-    canvas.width = img.width;
-    canvas.height = img.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("无法创建 canvas context");
-    ctx.drawImage(img, 0, 0);
-    blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("转换图片失败"))), "image/png");
-    });
-  }
-
-  await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-  ElMessage.success("图片已复制到剪贴板");
-};
+);
 
 // 确认移除图片（合并了原来的 remove 和 delete 逻辑）
 const confirmRemoveImages = async () => {
@@ -532,8 +488,12 @@ const confirmRemoveImages = async () => {
 
     // 如果删除了文件，需要从列表中移除；如果只是从画册移除，也需要从列表中移除
     images.value = images.value.filter((img) => !ids.has(img.id));
+    leafAllImages = leafAllImages.filter((img) => !ids.has(img.id));
     removeFromCacheByIds(idsArr);
     clearSelection();
+    if (totalImagesCount.value > 0) {
+      totalImagesCount.value = Math.max(0, totalImagesCount.value - idsArr.length);
+    }
 
     // 根据操作类型显示不同的成功消息
     if (shouldDeleteFiles) {
@@ -605,8 +565,15 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       // 1) 更新当前页面列表
       if (isFavoriteAlbum && !desiredFavorite) {
         images.value = images.value.filter((img) => !succeededSet.has(img.id));
+        leafAllImages = leafAllImages.filter((img) => !succeededSet.has(img.id));
+        if (totalImagesCount.value > 0) {
+          totalImagesCount.value = Math.max(0, totalImagesCount.value - succeededIds.length);
+        }
       } else {
         images.value = images.value.map((img) =>
+          succeededSet.has(img.id) ? ({ ...img, favorite: desiredFavorite } as ImageInfo) : img
+        );
+        leafAllImages = leafAllImages.map((img) =>
           succeededSet.has(img.id) ? ({ ...img, favorite: desiredFavorite } as ImageInfo) : img
         );
       }
@@ -806,7 +773,7 @@ onMounted(async () => {
     currentWallpaperImageId.value = null;
   }
 
-  await loadRotationSettings();
+  await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
   const id = route.params.id as string;
   if (id) {
     await initAlbum(id);
@@ -908,12 +875,10 @@ const handleSetAsWallpaperCarousel = async () => {
     }
     // 如果轮播未开启，先开启轮播
     if (!wallpaperRotationEnabled.value) {
-      await invoke("set_wallpaper_rotation_enabled", { enabled: true });
-      wallpaperRotationEnabled.value = true;
+      await setWallpaperRotationEnabled(true);
     }
     // 设置轮播画册
-    await invoke("set_wallpaper_rotation_album_id", { albumId: albumId.value });
-    currentRotationAlbumId.value = albumId.value;
+    await setWallpaperRotationAlbumId(albumId.value);
     ElMessage.success(`已开启轮播：画册「${albumName.value}」`);
   } catch (error) {
     console.error("设置轮播画册失败:", error);
@@ -959,17 +924,17 @@ const handleDeleteAlbum = async () => {
     if (wasCurrentRotation) {
       // 清除轮播画册
       try {
-        await invoke("set_wallpaper_rotation_album_id", { albumId: null });
-      } finally {
-        currentRotationAlbumId.value = null;
+        await setWallpaperRotationAlbumId(null);
+      } catch {
+        // 静默失败
       }
 
       // 若轮播开启中：关闭轮播并切回单张壁纸
       if (wasEnabled) {
         try {
-          await invoke("set_wallpaper_rotation_enabled", { enabled: false });
-        } finally {
-          wallpaperRotationEnabled.value = false;
+          await setWallpaperRotationEnabled(false);
+        } catch {
+          // 静默失败
         }
 
         // 切回单张壁纸：用当前壁纸路径再 set 一次，确保"单张模式"一致且设置页能显示
@@ -996,27 +961,17 @@ const handleDeleteAlbum = async () => {
   }
 };
 
-// 加载轮播设置
-const loadRotationSettings = async () => {
-  try {
-    const [enabled, albumId] = await Promise.all([
-      invoke<boolean>("get_wallpaper_rotation_enabled"),
-      invoke<string | null>("get_wallpaper_rotation_album_id"),
-    ]);
-    wallpaperRotationEnabled.value = enabled ?? false;
-    currentRotationAlbumId.value = albumId || null;
-  } catch (error) {
-    console.error("加载轮播设置失败:", error);
-  }
-};
-
 // 统一图片变更事件：不做增量同步，收到 images-change 后刷新“当前页”（1000ms trailing 节流，不丢最后一次）
 useImagesChangeRefresh({
   enabled: isAlbumDetailActive,
   waitMs: 1000,
   filter: (p) => {
     if (!albumId.value) return false;
-    if (p.albumId && p.albumId === albumId.value) return true;
+    // 如果指定了 albumId，必须匹配当前画册
+    if (p.albumId) {
+      return p.albumId === albumId.value;
+    }
+    // 全局事件（如删除图片）：检查是否涉及当前显示的图片
     const ids = Array.isArray(p.imageIds) ? p.imageIds : [];
     if (ids.length > 0) {
       return ids.some((id) => leafAllImages.some((img) => img.id === id));

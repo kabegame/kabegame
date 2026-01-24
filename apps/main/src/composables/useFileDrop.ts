@@ -11,9 +11,18 @@ import { useAlbumStore } from "@/stores/albums";
 import { usePluginStore } from "@/stores/plugins";
 
 // 支持的图片格式
-const SUPPORTED_IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico"];
-const SUPPORTED_ZIP_EXTENSIONS = ["zip"];
-const SUPPORTED_KGPG_EXTENSIONS = ["kgpg"];
+const SUPPORTED_IMAGE_EXTENSIONS = [
+  "jpg",
+  "jpeg",
+  "png",
+  "gif",
+  "webp",
+  "bmp",
+  "svg",
+  "ico",
+];
+let SUPPORTED_ARCHIVE_EXTENSIONS = ["zip", "rar"]; // 默认值，会从后端更新
+let SUPPORTED_KGPG_EXTENSIONS = ["kgpg"]; // 默认值，会从后端更新
 
 // 让出 UI：避免在一次性批量导入/创建任务时长时间占用主线程导致"界面卡死"
 const yieldToUi = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -33,10 +42,10 @@ const isSupportedImageFile = (filePath: string): boolean => {
   return SUPPORTED_IMAGE_EXTENSIONS.includes(ext);
 };
 
-// 检查文件是否为 zip（压缩包导入：后端会解压到临时目录再递归导入图片）
-const isZipFile = (filePath: string): boolean => {
+// 检查文件是否为支持的压缩包
+const isArchiveFile = (filePath: string): boolean => {
   const ext = getFileExtension(filePath);
-  return SUPPORTED_ZIP_EXTENSIONS.includes(ext);
+  return SUPPORTED_ARCHIVE_EXTENSIONS.includes(ext);
 };
 
 // 检查文件是否为 kgpg 插件包
@@ -47,7 +56,10 @@ const isKgpgFile = (filePath: string): boolean => {
 
 // 辅助函数：从文件路径提取目录路径
 const getDirectoryFromPath = (filePath: string): string => {
-  const lastSlash = Math.max(filePath.lastIndexOf("\\"), filePath.lastIndexOf("/"));
+  const lastSlash = Math.max(
+    filePath.lastIndexOf("\\"),
+    filePath.lastIndexOf("/"),
+  );
   if (lastSlash >= 0) {
     return filePath.substring(0, lastSlash);
   }
@@ -58,7 +70,7 @@ export interface ImportItem {
   path: string;
   name: string;
   isDirectory: boolean;
-  isZip?: boolean;
+  isArchive?: boolean;
   isKgpg?: boolean;
 }
 
@@ -67,7 +79,7 @@ export interface ImportItem {
  */
 export function useFileDrop(
   fileDropOverlayRef: Ref<any>,
-  importConfirmDialogRef: Ref<any>
+  importConfirmDialogRef: Ref<any>,
 ) {
   const taskDrawerStore = useTaskDrawerStore();
   const crawlerStore = useCrawlerStore();
@@ -76,7 +88,28 @@ export function useFileDrop(
 
   let fileDropUnlisten: (() => void) | null = null;
 
+  const updateSupportedTypes = async () => {
+    try {
+      const res = await invoke<{
+        archiveExtensions: string[];
+        pluginExtensions: string[];
+      }>("get_file_drop_supported_types");
+
+      if (res && res.archiveExtensions) {
+        SUPPORTED_ARCHIVE_EXTENSIONS = res.archiveExtensions;
+      }
+      if (res && res.pluginExtensions) {
+        SUPPORTED_KGPG_EXTENSIONS = res.pluginExtensions;
+      }
+    } catch (e) {
+      console.warn("[App] 获取支持的文件类型失败，使用默认值:", e);
+    }
+  };
+
   const init = async () => {
+    // 初始化时获取支持的类型
+    await updateSupportedTypes();
+
     // 注册全局文件拖拽事件监听（使用 onDragDropEvent，根据 Tauri v2 文档）
     try {
       const currentWindow = getCurrentWebviewWindow();
@@ -88,15 +121,28 @@ export function useFileDrop(
             try {
               const firstPath = paths[0];
               const metadata = await stat(firstPath);
-              const text = metadata.isDirectory
-                ? "拖入文件夹以导入"
-                : isKgpgFile(firstPath)
-                  ? "拖入插件包（.kgpg）以导入"
-                  : "拖入文件以导入";
+              let text = "拖入文件以导入";
+
+              if (metadata.isDirectory) {
+                text = "拖入文件夹以导入";
+              } else if (isKgpgFile(firstPath)) {
+                text = "拖入插件包（.kgpg）以导入";
+              } else if (isArchiveFile(firstPath)) {
+                const exts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
+                text = `拖入压缩包（${exts}）以导入`;
+              } else {
+                // 如果是图片或其他文件，显示默认提示，或者也可以显示支持的格式
+                const archiveExts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
+                text = `支持拖入文件夹、插件(.kgpg)、图片或压缩包(${archiveExts})`;
+              }
+
               fileDropOverlayRef.value?.show(text);
             } catch (error) {
               // 如果检查失败，显示通用提示
-              fileDropOverlayRef.value?.show("拖入文件或文件夹以导入");
+              const archiveExts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
+              fileDropOverlayRef.value?.show(
+                `拖入文件夹、插件(.kgpg)、图片或压缩包(${archiveExts})`,
+              );
             }
           }
         } else if (event.payload.type === "over") {
@@ -124,19 +170,23 @@ export function useFileDrop(
                       path,
                       name,
                       isDirectory: true,
-                      isZip: false,
+                      isArchive: false,
                       isKgpg: false,
                     });
                   } else {
-                    // 文件：检查是否为支持的图片格式 / zip / kgpg
-                    if (isSupportedImageFile(path) || isZipFile(path) || isKgpgFile(path)) {
+                    // 文件：检查是否为支持的图片格式 / archive / kgpg
+                    if (
+                      isSupportedImageFile(path) ||
+                      isArchiveFile(path) ||
+                      isKgpgFile(path)
+                    ) {
                       const kgpg = isKgpgFile(path);
                       items.push({
                         path,
                         // 列表里明确标注插件包（不改 ImportConfirmDialog 也能看清用途）
                         name: kgpg ? `${name}（插件包）` : name,
                         isDirectory: false,
-                        isZip: isZipFile(path),
+                        isArchive: isArchiveFile(path),
                         isKgpg: kgpg,
                       });
                     } else {
@@ -165,9 +215,9 @@ export function useFileDrop(
               console.log("[App] 用户确认导入，开始添加任务");
 
               const hasCrawlerImport = items.some(
-                (it) => it.isDirectory || (!it.isDirectory && !it.isKgpg)
+                (it) => it.isDirectory || (!it.isDirectory && !it.isKgpg),
               );
-              // 只有存在"图片/zip/文件夹导入任务"时才打开任务抽屉；仅导入 kgpg 时避免打扰
+              // 只有存在"图片/archive/文件夹导入任务"时才打开任务抽屉；仅导入 kgpg 时避免打扰
               if (hasCrawlerImport) {
                 try {
                   taskDrawerStore.open();
@@ -186,7 +236,9 @@ export function useFileDrop(
                   try {
                     // kgpg：自动尝试导入/安装到"已安装源"
                     if (item.isKgpg) {
-                      await invoke("import_plugin_from_zip", { zipPath: item.path });
+                      await invoke("import_plugin_from_zip", {
+                        zipPath: item.path,
+                      });
                       importedPluginCount++;
                       console.log("[App] 已导入插件包:", item.path);
                       continue;
@@ -194,20 +246,32 @@ export function useFileDrop(
 
                     // 可选：为每个"文件夹/压缩包"单独创建画册，并把 outputAlbumId 传给任务
                     let outputAlbumId: string | undefined = undefined;
-                    if (createAlbumPerSource && (item.isDirectory || item.isZip)) {
+                    if (
+                      createAlbumPerSource &&
+                      (item.isDirectory || item.isArchive)
+                    ) {
                       try {
                         // 批量导入时避免每个画册都 reload 一次，最后再统一 load
-                        const created = await albumStore.createAlbum(item.name, { reload: false });
+                        const created = await albumStore.createAlbum(
+                          item.name,
+                          { reload: false },
+                        );
                         outputAlbumId = created.id;
                         createdAnyAlbum = true;
                       } catch (e: any) {
-                        console.warn("[App] 创建导入画册失败，将仅导入到画廊:", item.name, e);
+                        console.warn(
+                          "[App] 创建导入画册失败，将仅导入到画廊:",
+                          item.name,
+                          e,
+                        );
                         // 提取友好的错误信息
                         const errorMessage =
                           typeof e === "string"
                             ? e
                             : e?.message || String(e) || "创建画册失败";
-                        ElMessage.warning(`${errorMessage}，将仅导入到画廊：${item.name}`);
+                        ElMessage.warning(
+                          `${errorMessage}，将仅导入到画廊：${item.name}`,
+                        );
                         outputAlbumId = undefined;
                       }
                     }
@@ -221,22 +285,22 @@ export function useFileDrop(
                           folder_path: item.path,
                           recursive: true, // 递归子文件夹
                         },
-                        outputAlbumId
+                        outputAlbumId,
                       );
                       addedCrawlerTaskCount++;
                       console.log("[App] 已添加文件夹导入任务:", item.path);
                     } else {
                       // 文件：使用 local-import
                       // - 图片：默认输出到文件所在目录（保持原行为）
-                      // - ZIP：不指定 outputDir，让后端按"默认下载目录/内置目录"决定（修复 ZIP 默认落在 ZIP 所在目录的问题）
+                      // - Archive：不指定 outputDir，让后端按"默认下载目录/内置目录"决定（修复 ZIP 默认落在 ZIP 所在目录的问题）
                       const fileDir = getDirectoryFromPath(item.path);
                       await crawlerStore.addTask(
                         "local-import",
-                        item.isZip ? undefined : fileDir,
+                        item.isArchive ? undefined : fileDir,
                         {
                           file_path: item.path,
                         },
-                        outputAlbumId
+                        outputAlbumId,
                       );
                       addedCrawlerTaskCount++;
                       console.log("[App] 已添加文件导入任务:", item.path);
@@ -244,7 +308,9 @@ export function useFileDrop(
                   } catch (error) {
                     console.error("[App] 添加任务失败:", item.path, error);
                     ElMessage.error(
-                      item.isKgpg ? `导入插件失败: ${item.name}` : `添加任务失败: ${item.name}`
+                      item.isKgpg
+                        ? `导入插件失败: ${item.name}`
+                        : `添加任务失败: ${item.name}`,
                     );
                   }
 
@@ -266,10 +332,12 @@ export function useFileDrop(
 
                 if (addedCrawlerTaskCount > 0 && importedPluginCount > 0) {
                   ElMessage.success(
-                    `已添加 ${addedCrawlerTaskCount} 个导入任务，已导入 ${importedPluginCount} 个源插件`
+                    `已添加 ${addedCrawlerTaskCount} 个导入任务，已导入 ${importedPluginCount} 个源插件`,
                   );
                 } else if (addedCrawlerTaskCount > 0) {
-                  ElMessage.success(`已添加 ${addedCrawlerTaskCount} 个导入任务`);
+                  ElMessage.success(
+                    `已添加 ${addedCrawlerTaskCount} 个导入任务`,
+                  );
                 } else if (importedPluginCount > 0) {
                   ElMessage.success(`已导入 ${importedPluginCount} 个源插件`);
                 } else {
@@ -279,7 +347,8 @@ export function useFileDrop(
             } catch (error) {
               console.error("[App] 处理文件拖入失败:", error);
               ElMessage.error(
-                "处理文件拖入失败: " + (error instanceof Error ? error.message : String(error))
+                "处理文件拖入失败: " +
+                  (error instanceof Error ? error.message : String(error)),
               );
             }
           }

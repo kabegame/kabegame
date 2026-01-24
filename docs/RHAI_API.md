@@ -530,16 +530,17 @@ image_list
 
 ### `download_archive(url, type)`
 
-导入压缩包（异步处理）。目前仅支持 `zip`。
+导入压缩包（异步处理）。支持 `zip` 和 `rar` 等。
 
 **参数：**
 - `url` (string): 压缩包 URL 或本地路径
-- `type` (string): 压缩包类型，目前仅支持 `"zip"`
+- `type` (string | ()): 压缩包类型，支持 `"zip"`, `"rar"` 等。如果不确定类型，可以传入 `"none"` 或 `()`，系统会自动根据文件后缀名判断。
 
 **说明：**
-- 本地 `.zip` 会解压到临时目录并递归导入其中的图片
-- `http(s)` 的 zip 会先下载 zip 到临时目录再解压导入
+- 本地压缩包会解压到临时目录并递归导入其中的图片
+- `http(s)` 的压缩包会先下载到临时目录再解压导入
 - 解压产生的图片会作为“独立下载请求”逐个入队，受全局并发下载限制
+- 支持自动检测类型：传入 `"none"` 或 `()` 时，系统会根据 URL 后缀（如 `.zip`, `.rar`）自动选择合适的处理器
 
 **示例：**
 ```rhai
@@ -548,6 +549,32 @@ download_archive("D:\\Downloads\\pack.zip", "zip");
 
 // 导入远程 zip
 download_archive("https://example.com/pack.zip", "zip");
+
+// 自动检测类型（推荐）
+download_archive("D:\\Downloads\\pack.zip", ());
+// 或者
+download_archive("D:\\Downloads\\pack.rar", "none");
+```
+
+### `get_supported_archive_types()`
+
+获取当前系统支持的压缩包类型列表。
+
+**参数：**
+- 无
+
+**返回值：**
+- `Array<String>`: 支持的类型列表，例如 `["rar", "zip"]`。
+
+**示例：**
+```rhai
+let types = get_supported_archive_types();
+print(types); // ["rar", "zip"]
+
+// 检查是否支持 zip
+if types.contains("zip") {
+    download_archive("pack.zip", "zip");
+}
 ```
 
 5. **JSON 处理**：

@@ -1,6 +1,6 @@
 <template>
-  <el-select :model-value="valueForSelect" multiple :placeholder="placeholder" :clearable="allowUnset" collapse-tags
-    collapse-tags-tooltip style="width: 100%" @update:model-value="$emit('update:modelValue', $event)">
+  <el-select :model-value="valueForSelect" multiple :placeholder="placeholder" :clearable="allowUnset"
+    style="width: 100%" @update:model-value="$emit('update:modelValue', $event)">
     <el-option v-for="opt in normalizedOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
   </el-select>
 </template>

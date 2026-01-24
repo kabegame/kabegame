@@ -1,8 +1,6 @@
-﻿// 隶ｾ鄂ｮ逶ｸ蜈ｳ蜻ｽ莉､
+// 隶ｾ鄂ｮ逶ｸ蜈ｳ蜻ｽ莉､
 
 use kabegame_core::settings::Settings;
-#[cfg(not(kabegame_mode = "light"))]
-use kabegame_core::storage::Storage;
 #[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 #[cfg(not(kabegame_mode = "light"))]
@@ -218,17 +216,10 @@ pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
         }
     } else {
         // 禁用：先卸载虚拟盘
-        let mount_point = settings
-            .get_album_drive_mount_point()
-            .await
-            .map_err(|e| e.to_string())?;
         let vd_service = VirtualDriveService::global();
-        let unmount_result = tokio::task::spawn_blocking({
-            let mount_point = mount_point.clone();
-            move || vd_service.unmount()
-        })
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?;
+        let unmount_result = tokio::task::spawn_blocking(move || vd_service.unmount())
+            .await
+            .map_err(|e| format!("Task join error: {}", e))?;
 
         if let Err(e) = unmount_result {
             return Err(e);
@@ -263,7 +254,11 @@ pub async fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
     Settings::global()
         .set_max_concurrent_downloads(count)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    
+    // 同时更新运行时调度器配置
+    kabegame_core::crawler::TaskScheduler::global().set_download_concurrency(count);
+    Ok(())
 }
 
 #[tauri::command]
@@ -344,38 +339,4 @@ pub async fn get_default_images_dir() -> Result<String, String> {
         .get_images_dir()
         .to_string_lossy()
         .to_string())
-}
-
-/// 打开 Plasma 壁纸配置面板
-#[tauri::command]
-#[cfg(all(target_os = "linux", desktop = "plasma"))]
-pub async fn open_plasma_wallpaper_settings() -> Result<(), String> {
-    use std::process::{Command, Stdio};
-
-    // 直接打开 systemsettings5/systemsettings6
-    // 用户可以在快速设置中配置壁纸
-    for cmd in ["systemsettings6", "systemsettings5", "systemsettings"] {
-        match Command::new(cmd)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(mut child) => {
-                // 成功启动，不等待进程结束（在后台运行）
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-                return Ok(());
-            }
-            Err(_) => continue,
-        }
-    }
-
-    Err("无法打开 Plasma 配置面板。请确保已安装 systemsettings5 或 systemsettings6。\n提示：您也可以右键桌面选择\"配置桌面和壁纸\"来打开壁纸设置。".to_string())
-}
-
-#[tauri::command]
-#[cfg(not(all(target_os = "linux", desktop = "plasma")))]
-pub async fn open_plasma_wallpaper_settings() -> Result<(), String> {
-    Err("此功能仅在 Plasma 桌面环境下可用".to_string())
 }

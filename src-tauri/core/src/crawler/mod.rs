@@ -17,16 +17,16 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use url::Url;
-use zip::ZipArchive;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArchiveType {
     Zip,
+    Rar,
 }
 
 impl ArchiveType {
@@ -34,18 +34,10 @@ impl ArchiveType {
         let t = s.trim().to_ascii_lowercase();
         match t.as_str() {
             "zip" => Some(ArchiveType::Zip),
+            "rar" => Some(ArchiveType::Rar),
             _ => None,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskLogEvent {
-    pub task_id: String,
-    pub level: String,
-    pub message: String,
-    pub ts: u64,
 }
 
 pub fn emit_task_log(task_id: &str, level: &str, message: impl Into<String>) {
@@ -665,64 +657,10 @@ fn compute_file_hash(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+use crate::archive;
+
 fn resolve_local_path_from_url(url: &str) -> Option<PathBuf> {
-    // 支持：
-    // - file:///xxx
-    // - file://xxx
-    // - 直接的本地绝对/相对路径（但必须存在）
-    let path = if url.starts_with("file://") {
-        let path_str = if url.starts_with("file:///") {
-            &url[8..]
-        } else {
-            &url[7..]
-        };
-        #[cfg(windows)]
-        let path_str = path_str.replace("/", "\\");
-        #[cfg(not(windows))]
-        let path_str = path_str;
-        PathBuf::from(path_str)
-    } else {
-        let p = PathBuf::from(url);
-        if !p.exists() {
-            return None;
-        }
-        p
-    };
-
-    path.canonicalize().ok()
-}
-
-fn is_zip_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("zip"))
-        .unwrap_or(false)
-}
-
-fn is_supported_image_ext(ext: &str) -> bool {
-    // 与 local-import 默认扩展名保持一致（避免 svg 等非 raster 格式导致 thumbnail 失败）
-    matches!(
-        ext.to_ascii_lowercase().as_str(),
-        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "ico"
-    )
-}
-
-fn collect_images_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
-    let entries = fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-        let p = entry.path();
-        if p.is_dir() {
-            collect_images_recursive(&p, out)?;
-        } else if p.is_file() {
-            if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-                if is_supported_image_ext(ext) {
-                    out.push(p);
-                }
-            }
-        }
-    }
-    Ok(())
+    archive::resolve_local_path_from_url(url)
 }
 
 #[derive(Debug)]
@@ -735,42 +673,6 @@ impl Drop for TempDirGuard {
         // 需求：任何时候都要清理（best-effort）
         let _ = fs::remove_dir_all(&self.path);
     }
-}
-
-fn extract_zip_to_dir(zip_path: &Path, dst_dir: &Path) -> Result<(), String> {
-    let file = fs::File::open(zip_path).map_err(|e| format!("Failed to open zip: {}", e))?;
-    let mut archive = ZipArchive::new(file).map_err(|e| format!("Failed to open zip: {}", e))?;
-
-    for i in 0..archive.len() {
-        let mut f = archive
-            .by_index(i)
-            .map_err(|e| format!("Failed to read zip entry #{}: {}", i, e))?;
-
-        // 安全：拒绝路径穿越
-        let Some(rel) = f.enclosed_name().map(|p| p.to_owned()) else {
-            continue;
-        };
-
-        let out_path = dst_dir.join(rel);
-        if f.name().ends_with('/') {
-            fs::create_dir_all(&out_path)
-                .map_err(|e| format!("Failed to create dir {}: {}", out_path.display(), e))?;
-            continue;
-        }
-
-        if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
-        }
-
-        let mut out_file =
-            fs::File::create(&out_path).map_err(|e| format!("Failed to write file: {}", e))?;
-        std::io::copy(&mut f, &mut out_file)
-            .map_err(|e| format!("Failed to extract zip entry: {}", e))?;
-        let _ = out_file.flush();
-    }
-
-    Ok(())
 }
 
 #[allow(dead_code)]
@@ -1844,8 +1746,28 @@ impl DownloadQueue {
         output_album_id: Option<String>,
         http_headers: HashMap<String, String>,
     ) -> Result<(), String> {
-        let Some(t) = ArchiveType::parse(archive_type) else {
-            return Err(format!("Unsupported archive type: {archive_type}"));
+        let t = if archive_type.trim().is_empty() || archive_type.eq_ignore_ascii_case("none") {
+            let mgr = crate::archive::manager();
+            if let Some(processor) = mgr.get_processor(None, &url) {
+                let types = processor.supported_types();
+                if types.contains(&"zip") {
+                    Some(ArchiveType::Zip)
+                } else if types.contains(&"rar") {
+                    Some(ArchiveType::Rar)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            ArchiveType::parse(archive_type)
+        };
+
+        let Some(t) = t else {
+            return Err(format!(
+                "Unsupported or undetectable archive type: {archive_type}"
+            ));
         };
         self.download_image_with_temp_guard(
             url,
@@ -2127,15 +2049,17 @@ fn download_worker_loop(dq: DownloadQueue) {
 
         let Some(job) = job else { continue };
 
-        // archive(zip) 导入：zip 可以是本地路径/file URL，也可以是 http(s) URL。
-        // 同时兼容旧逻辑：未显式指定 archive_type，但 url 是本地 zip 时也走这里。
-        let is_zip_archive_job = job.archive_type == Some(ArchiveType::Zip)
-            || resolve_local_path_from_url(&job.url)
-                .as_deref()
-                .map(is_zip_path)
-                .unwrap_or(false);
-        if is_zip_archive_job {
-            // 更新 active download 状态为 extracting（zip 导入整体视为一次 download job）
+        // archive 导入：支持 zip 等格式
+        // 兼容旧逻辑：通过 archive_type 或 URL 自动识别
+        let archive_type_hint = job.archive_type.map(|t| match t {
+            ArchiveType::Zip => "zip",
+            ArchiveType::Rar => "rar",
+        });
+
+        let processor = crate::archive::manager().get_processor(archive_type_hint, &job.url);
+
+        if let Some(processor) = processor {
+            // 更新 active download 状态为 extracting（archive 导入整体视为一次 download job）
             {
                 let mut tasks = match active_tasks.lock() {
                     Ok(g) => g,
@@ -2180,17 +2104,14 @@ fn download_worker_loop(dq: DownloadQueue) {
                     path: temp_dir.clone(),
                 });
 
-                // 取 zip 源：
-                // - 本地 zip：直接用路径
-                // - 远程 zip：http(s) 下载到 temp_dir 后再解压
-                let zip_path = if let Some(p) = resolve_local_path_from_url(&url_clone) {
-                    p
-                } else if url_clone.starts_with("http://") || url_clone.starts_with("https://") {
-                    let archive_path = temp_dir.join("__kg_archive.zip");
+                // 定义下载器闭包
+                let task_id_for_dl = task_id_clone.clone();
+                let headers_for_dl = http_headers_clone.clone();
+                let downloader = |url: &str, dest: &Path| -> Result<(), String> {
                     let handle = tokio::runtime::Handle::try_current();
                     let retry_count = if let Ok(handle) = handle {
                         handle.block_on(async {
-                            Settings::global()
+                            crate::settings::Settings::global()
                                 .get_network_retry_count()
                                 .await
                                 .unwrap_or(2)
@@ -2198,30 +2119,25 @@ fn download_worker_loop(dq: DownloadQueue) {
                     } else {
                         2
                     };
-                    let cancel_check = || dq.is_task_canceled(&task_id_clone);
+
+                    let cancel_check = || dq.is_task_canceled(&task_id_for_dl);
                     download_file_to_path_with_retry(
                         &cancel_check,
-                        &task_id_clone,
-                        &url_clone,
-                        &archive_path,
-                        &http_headers_clone,
+                        &task_id_for_dl,
+                        url,
+                        dest,
+                        &headers_for_dl,
                         retry_count,
-                    )?;
-                    archive_path
-                } else {
-                    return Err(format!("Unsupported archive url: {}", url_clone));
+                    )
                 };
 
-                if !is_zip_path(&zip_path) {
-                    return Err(format!(
-                        "Archive type mismatch, expected zip: {}",
-                        zip_path.display()
-                    ));
-                }
+                let cancel_check = || dq.is_task_canceled(&task_id_clone);
 
-                extract_zip_to_dir(&zip_path, &temp_dir)?;
+                // 调用处理器
+                let images =
+                    processor.process(&url_clone, &temp_dir, &downloader, &cancel_check)?;
 
-                // 解压完成：zip 进入 processing（递归扫描 + 入队都算处理阶段）
+                // 解压完成：进入 processing（递归扫描 + 入队都算处理阶段）
                 {
                     let mut tasks = match active_tasks.lock() {
                         Ok(g) => g,
@@ -2243,9 +2159,6 @@ fn download_worker_loop(dq: DownloadQueue) {
                     None,
                 );
 
-                // 递归收集图片
-                let mut images = Vec::<PathBuf>::new();
-                collect_images_recursive(&temp_dir, &mut images)?;
                 if images.is_empty() {
                     // 空包：立刻清理临时目录（best-effort）
                     let _ = fs::remove_dir_all(&temp_dir);
@@ -2269,12 +2182,17 @@ fn download_worker_loop(dq: DownloadQueue) {
                     }
 
                     let url_for_image = img.to_string_lossy().to_string();
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+
                     let res = dq.download_image_with_temp_guard(
                         url_for_image,
                         job.images_dir.clone(),
                         plugin_id_clone.clone(),
                         task_id_clone.clone(),
-                        0,
+                        now,
                         output_album_id_clone.clone(),
                         HashMap::new(),
                         None,
@@ -2336,7 +2254,10 @@ fn download_worker_loop(dq: DownloadQueue) {
             }
 
             // 释放/退出 worker
-            release_or_exit_worker(&pool);
+            if release_or_exit_worker(&pool) {
+                println!("退出");
+                return;
+            }
             continue;
         }
 
@@ -2471,7 +2392,9 @@ fn download_worker_loop(dq: DownloadQueue) {
                 }
 
                 // 释放/退出 worker
-                release_or_exit_worker(&pool);
+                if release_or_exit_worker(&pool) {
+                    return;
+                }
                 continue;
             }
 

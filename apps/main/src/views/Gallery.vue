@@ -347,6 +347,7 @@ const {
   jumpToBigPage,
   removeFromUiCacheByIds,
   removeFromCacheByIds,
+  loadedKey,
 } = useGalleryImages(
   galleryContainerRef,
   isLoadingMore,
@@ -447,6 +448,24 @@ const handleJumpToBigPage = async (bigPage: number) => {
     finishLoading();
   }
 };
+
+watch(
+  () => route.fullPath,
+  async () => {
+    if (!isGalleryActive.value) return;
+    if (!route.path.startsWith("/gallery")) return;
+    const root = (providerRootPath.value || "全部").trim() || "全部";
+    const page = Math.max(1, Math.floor(currentPage.value || 1));
+    const targetKey = `${root}::${page}`;
+    if (loadedKey.value === targetKey) return;
+    startLoading();
+    try {
+      await jumpToBigPage(page, BIG_PAGE_SIZE);
+    } finally {
+      finishLoading();
+    }
+  }
+);
 
 
 // 使用图片操作 composable
@@ -597,13 +616,7 @@ const handleGridContextCommand = async (
     case "detail":
       return "detail";
     case "copy":
-      if (imagesToProcess.length > 1) {
-        // 多选时复制第一张（浏览器限制一次只能复制一张）
-        await handleCopyImage(imagesToProcess[0]);
-        ElMessage.success(`已复制 ${imagesToProcess.length} 张图片`);
-      } else {
-        if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
-      }
+      if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
       return null;
     case "favorite":
       if (imagesToProcess.length === 1) {
@@ -835,6 +848,7 @@ watch(tasks, (newTasks, oldTasks) => {
 useImagesChangeRefresh({
   enabled: isGalleryActive,
   waitMs: 1000,
+  filter: (p) => !p.albumId, // 忽略特定画册的变动（如添加到画册、从画册移除）
   onRefresh: async () => {
     const prevList = displayedImages.value.slice();
     // 当前壁纸被删/移除：前端清空当前选中（后端也会清空设置，这里是 UI 兜底）

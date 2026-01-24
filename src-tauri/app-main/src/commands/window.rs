@@ -361,94 +361,94 @@ pub async fn toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-// Windows：将文件列表写入剪贴板为 CF_HDROP，便于原生应用粘贴/拖拽识别
-#[tauri::command]
-#[cfg(target_os = "windows")]
-pub fn copy_files_to_clipboard(paths: Vec<String>) -> Result<(), String> {
-    use windows_sys::Win32::System::{
-        DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
-        Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
-    };
-    use windows_sys::Win32::UI::Shell::DROPFILES;
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
+// // Windows：将文件列表写入剪贴板为 CF_HDROP，便于原生应用粘贴/拖拽识别
+// #[tauri::command]
+// #[cfg(target_os = "windows")]
+// pub fn copy_files_to_clipboard(paths: Vec<String>) -> Result<(), String> {
+//     use windows_sys::Win32::System::{
+//         DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+//         Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+//     };
+//     use windows_sys::Win32::UI::Shell::DROPFILES;
+//     use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
 
-    const CF_HDROP_FORMAT: u32 = 15; // Clipboard format for file drop
+//     const CF_HDROP_FORMAT: u32 = 15; // Clipboard format for file drop
 
-    if paths.is_empty() {
-        return Err("paths is empty".into());
-    }
+//     if paths.is_empty() {
+//         return Err("paths is empty".into());
+//     }
 
-    // 构造双零结尾的 UTF-16 路径列表（以 '\0' 分隔，末尾再加 '\0'）
-    let mut path_list = String::new();
-    for (idx, p) in paths.iter().enumerate() {
-        if idx > 0 {
-            path_list.push('\0');
-        }
-        // 去掉 Windows 长路径前缀 \\?\
-        let cleaned = p.trim_start_matches(r"\\?\");
-        path_list.push_str(cleaned);
-    }
-    path_list.push('\0'); // 额外终止符
+//     // 构造双零结尾的 UTF-16 路径列表（以 '\0' 分隔，末尾再加 '\0'）
+//     let mut path_list = String::new();
+//     for (idx, p) in paths.iter().enumerate() {
+//         if idx > 0 {
+//             path_list.push('\0');
+//         }
+//         // 去掉 Windows 长路径前缀 \\?\
+//         let cleaned = p.trim_start_matches(r"\\?\");
+//         path_list.push_str(cleaned);
+//     }
+//     path_list.push('\0'); // 额外终止符
 
-    let wide: Vec<u16> = path_list.encode_utf16().collect();
-    let bytes_len = wide.len() * 2;
-    let dropfiles_size = std::mem::size_of::<DROPFILES>();
-    let total_size = dropfiles_size + bytes_len;
+//     let wide: Vec<u16> = path_list.encode_utf16().collect();
+//     let bytes_len = wide.len() * 2;
+//     let dropfiles_size = std::mem::size_of::<DROPFILES>();
+//     let total_size = dropfiles_size + bytes_len;
 
-    unsafe {
-        // 分配全局内存
-        let h_mem = GlobalAlloc(GMEM_MOVEABLE, total_size);
-        if h_mem == std::ptr::null_mut() {
-            return Err("GlobalAlloc failed".into());
-        }
+//     unsafe {
+//         // 分配全局内存
+//         let h_mem = GlobalAlloc(GMEM_MOVEABLE, total_size);
+//         if h_mem == std::ptr::null_mut() {
+//             return Err("GlobalAlloc failed".into());
+//         }
 
-        let p_mem = GlobalLock(h_mem);
-        if p_mem.is_null() {
-            return Err("GlobalLock failed".into());
-        }
+//         let p_mem = GlobalLock(h_mem);
+//         if p_mem.is_null() {
+//             return Err("GlobalLock failed".into());
+//         }
 
-        // 写入 DROPFILES 结构
-        let dropfiles = DROPFILES {
-            pFiles: dropfiles_size as u32,
-            pt: std::mem::zeroed(),
-            fNC: 0,
-            fWide: 1, // 使用 Unicode
-        };
-        std::ptr::copy_nonoverlapping(
-            &dropfiles as *const _ as *const u8,
-            p_mem as *mut u8,
-            dropfiles_size,
-        );
+//         // 写入 DROPFILES 结构
+//         let dropfiles = DROPFILES {
+//             pFiles: dropfiles_size as u32,
+//             pt: std::mem::zeroed(),
+//             fNC: 0,
+//             fWide: 1, // 使用 Unicode
+//         };
+//         std::ptr::copy_nonoverlapping(
+//             &dropfiles as *const _ as *const u8,
+//             p_mem as *mut u8,
+//             dropfiles_size,
+//         );
 
-        // 写入路径列表
-        let paths_ptr = p_mem.add(dropfiles_size);
-        std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, paths_ptr as *mut u8, bytes_len);
+//         // 写入路径列表
+//         let paths_ptr = p_mem.add(dropfiles_size);
+//         std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, paths_ptr as *mut u8, bytes_len);
 
-        GlobalUnlock(h_mem);
+//         GlobalUnlock(h_mem);
 
-        // 打开剪贴板并设置数据
-        if OpenClipboard(0) == 0 {
-            return Err("OpenClipboard failed".into());
-        }
+//         // 打开剪贴板并设置数据
+//         if OpenClipboard(0) == 0 {
+//             return Err("OpenClipboard failed".into());
+//         }
 
-        if EmptyClipboard() == 0 {
-            CloseClipboard();
-            return Err("EmptyClipboard failed".into());
-        }
+//         if EmptyClipboard() == 0 {
+//             CloseClipboard();
+//             return Err("EmptyClipboard failed".into());
+//         }
 
-        if SetClipboardData(CF_HDROP_FORMAT, h_mem as isize) == 0 {
-            CloseClipboard();
-            return Err("SetClipboardData failed".into());
-        }
+//         if SetClipboardData(CF_HDROP_FORMAT, h_mem as isize) == 0 {
+//             CloseClipboard();
+//             return Err("SetClipboardData failed".into());
+//         }
 
-        CloseClipboard();
-    }
+//         CloseClipboard();
+//     }
 
-    Ok(())
-}
+//     Ok(())
+// }
 
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-pub fn copy_files_to_clipboard(_paths: Vec<String>) -> Result<(), String> {
-    Err("copy_files_to_clipboard is only supported on Windows".into())
-}
+// #[cfg(not(target_os = "windows"))]
+// #[tauri::command]
+// pub fn copy_files_to_clipboard(_paths: Vec<String>) -> Result<(), String> {
+//     Err("copy_files_to_clipboard is only supported on Windows".into())
+// }

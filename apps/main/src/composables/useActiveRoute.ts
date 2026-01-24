@@ -1,5 +1,7 @@
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
+
+const lastGalleryRoute = ref("/gallery/全部");
 
 /**
  * 路由高亮 composable
@@ -8,6 +10,16 @@ import { useRoute } from "vue-router";
 export function useActiveRoute() {
   const route = useRoute();
 
+  watch(
+    () => route.fullPath,
+    () => {
+      if (route.path.startsWith("/gallery")) {
+        lastGalleryRoute.value = route.fullPath || route.path;
+      }
+    },
+    { immediate: true },
+  );
+
   // 根据当前路由路径计算应该高亮的菜单项
   // 需要匹配基础路径，忽略分页等参数
   const activeRoute = computed(() => {
@@ -15,7 +27,7 @@ export function useActiveRoute() {
 
     // 画廊：匹配 /gallery 开头的所有路径（包括分页）
     if (path.startsWith("/gallery")) {
-      return "/gallery";
+      return lastGalleryRoute.value || "/gallery/全部";
     }
 
     // 画册：匹配 /albums 开头的所有路径（包括详情和分页）
@@ -24,7 +36,10 @@ export function useActiveRoute() {
     }
 
     // 收集源：匹配 /plugin-browser 和 /plugin-detail 开头的路径
-    if (path.startsWith("/plugin-browser") || path.startsWith("/plugin-detail")) {
+    if (
+      path.startsWith("/plugin-browser") ||
+      path.startsWith("/plugin-detail")
+    ) {
       return "/plugin-browser";
     }
 
@@ -44,5 +59,6 @@ export function useActiveRoute() {
 
   return {
     activeRoute,
+    galleryMenuRoute: computed(() => lastGalleryRoute.value || "/gallery/全部"),
   };
 }

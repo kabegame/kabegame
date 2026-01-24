@@ -1,5 +1,8 @@
 <template>
     <div class="tip-article">
+        <el-alert class="note" type="warning" show-icon :closable="false" style="margin-bottom: 10px;">
+            Light 模式不支持此功能
+        </el-alert>
         <section class="section">
             <h3>插件编辑器是什么</h3>
             <p>插件编辑器是一个独立的窗口，用于创建、编辑和调试 Kabegame 的收集源插件。</p>

@@ -7,7 +7,6 @@
     "start": "bun scripts/run.ts start",
     "b": "bun scripts/run.ts build",
     "check": "bun scripts/run.ts check",
-    "typecheck": "vue-tsc",
     "dev:frontend-main": "bun --cwd apps/main dev",
     "dev:frontend-plugin-editor": "bun --cwd apps/plugin-editor dev",
     "//": "以下命令为构建前端的命令，通过 bun b 调用不要直接调用因为没有设置相关环境变量",

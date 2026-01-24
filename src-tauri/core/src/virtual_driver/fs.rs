@@ -2,7 +2,7 @@
 
 use crate::providers::provider::Provider;
 
-/// Kabegame 陌壽供譁・ｻｶ邉ｻ扈・Handler
+/// Kabegame 虚拟文件系统 Handler
 pub struct KabegameFs {
     pub root: Arc<dyn Provider>,
 }

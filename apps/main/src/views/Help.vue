@@ -23,6 +23,10 @@
                                 <template #title>
                                     <div class="category-title">
                                         <span class="category-name">{{ c.title }}</span>
+                                        <el-tag v-for="(tag, idx) in c.tags" :key="idx" :type="tag.type" size="small"
+                                            effect="dark" style="margin-left: 8px;">
+                                            {{ tag.text }}
+                                        </el-tag>
                                         <span class="category-desc" v-if="c.description">{{ c.description }}</span>
                                     </div>
                                 </template>
@@ -33,7 +37,14 @@
                                         <template #default="{ row }">
                                             <div class="tip-row-content">
                                                 <div class="tip-row-text">
-                                                    <div class="tip-row-title">{{ row.title }}</div>
+                                                    <div class="tip-row-title">
+                                                        {{ row.title }}
+                                                        <el-tag v-for="(tag, idx) in row.tags" :key="idx"
+                                                            :type="tag.type" size="small" effect="dark"
+                                                            style="margin-left: 8px; vertical-align: text-bottom;">
+                                                            {{ tag.text }}
+                                                        </el-tag>
+                                                    </div>
                                                     <div class="tip-row-summary">{{ row.summary }}</div>
                                                 </div>
                                                 <el-icon class="tip-row-arrow">
@@ -49,7 +60,13 @@
 
                     <!-- 详情 -->
                     <div v-else class="tip-detail">
-                        <div class="tip-title">{{ selectedTip.title }}</div>
+                        <div class="tip-title">
+                            {{ selectedTip.title }}
+                            <el-tag v-for="(tag, idx) in selectedTip.tags" :key="idx" :type="tag.type" size="default"
+                                effect="dark" style="margin-left: 10px; vertical-align: middle;">
+                                {{ tag.text }}
+                            </el-tag>
+                        </div>
                         <div class="tip-summary">{{ selectedTip.summary }}</div>
 
                         <!-- 复杂详情：优先渲染组件 -->
@@ -228,6 +245,12 @@ const shortcutItems = computed<ShortcutItem[]>(() => [
         label: "预览上一张/下一张",
         description: "在图片预览对话框中切换上一张/下一张",
         keys: ["←", "→"],
+    },
+    {
+        id: "copy-image",
+        label: "复制图片",
+        description: "在图片预览对话框中，或图片网格单选时，复制当前图片到剪贴板",
+        keys: ["Ctrl/Cmd", "C"],
     },
     {
         id: "preview-delete",

@@ -12,7 +12,8 @@ export type ImportItem = {
     path: string;
     name: string;
     isDirectory: boolean;
-    isZip?: boolean;
+    isArchive?: boolean;
+    isKgpg?: boolean;
 };
 
 async function open(items: ImportItem[]): Promise<boolean | null> {

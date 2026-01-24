@@ -1,11 +1,10 @@
 use super::manager::WallpaperController;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::{ImageInfo, Storage};
-use serde_json::Value;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle};
 use tokio::sync::Notify;
 use tokio::time::{interval, Duration};
 

@@ -19,7 +19,7 @@
         </div>
       </div>
       <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
-        <el-menu-item index="/gallery">
+        <el-menu-item :index="galleryMenuRoute">
           <el-icon>
             <Picture />
           </el-icon>
@@ -80,7 +80,7 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 
 // 路由高亮
-const { activeRoute } = useActiveRoute();
+const { activeRoute, galleryMenuRoute } = useActiveRoute();
 
 // 任务抽屉 store
 const taskDrawerStore = useTaskDrawerStore();

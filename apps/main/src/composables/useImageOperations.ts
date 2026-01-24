@@ -1,10 +1,12 @@
 import { computed, type Ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useAlbumStore } from "@/stores/albums";
 import { storeToRefs } from "pinia";
 import { useImageUrlMapCache } from "@kabegame/core/composables/useImageUrlMapCache";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 
 export type FavoriteStatusChangedDetail = {
   imageIds: string[];
@@ -20,13 +22,38 @@ export function useImageOperations(
   currentWallpaperImageId: Ref<string | null>,
   galleryViewRef: Ref<any>,
   _removeFromUiCacheByIds: (imageIds: string[]) => void,
-  _loadImages: (reset?: boolean, opts?: any) => Promise<void>
+  _loadImages: (reset?: boolean, opts?: any) => Promise<void>,
 ) {
   const crawlerStore = useCrawlerStore();
   const albumStore = useAlbumStore();
+  const settingsStore = useSettingsStore();
   const urlCache = useImageUrlMapCache();
   const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
   const albums = computed(() => albumStore.albums);
+  const { set: setWallpaperRotationEnabled } = useSettingKeyState(
+    "wallpaperRotationEnabled",
+  );
+  const { set: setWallpaperRotationAlbumId } = useSettingKeyState(
+    "wallpaperRotationAlbumId",
+  );
+  const detectImageMimeByPath = (path: string): string => {
+    const ext = (path.split(".").pop() || "").toLowerCase();
+    if (ext === "png") return "image/png";
+    if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+    if (ext === "gif") return "image/gif";
+    if (ext === "webp") return "image/webp";
+    if (ext === "bmp") return "image/bmp";
+    return "";
+  };
+  const toArrayBuffer = (u8: Uint8Array): ArrayBuffer => {
+    if (u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength) {
+      return u8.buffer as unknown as ArrayBuffer;
+    }
+    return u8.buffer.slice(
+      u8.byteOffset,
+      u8.byteOffset + u8.byteLength,
+    ) as unknown as ArrayBuffer;
+  };
 
   // 打开文件路径
   const handleOpenImagePath = async (localPath: string) => {
@@ -41,56 +68,144 @@ export function useImageOperations(
   // 复制图片到剪贴板
   const handleCopyImage = async (image: ImageInfo) => {
     try {
-      // 获取图片的 Blob URL
-      const imageUrl =
-        imageSrcMap.value[image.id]?.original ||
-        imageSrcMap.value[image.id]?.thumbnail;
+      const writeImageBlobToClipboard = async (blob: Blob) => {
+        const mime = blob.type || "image/png";
+        await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
+      };
+
+      const convertImageBlobToPng = async (blob: Blob): Promise<Blob> => {
+        if (typeof createImageBitmap === "function") {
+          const bitmap = await createImageBitmap(blob);
+          try {
+            if (typeof OffscreenCanvas !== "undefined") {
+              const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+              const ctx = canvas.getContext("2d");
+              if (!ctx) throw new Error("Failed to create canvas context");
+              ctx.drawImage(bitmap, 0, 0);
+              return await canvas.convertToBlob({ type: "image/png" });
+            }
+
+            const canvas = document.createElement("canvas");
+            canvas.width = bitmap.width;
+            canvas.height = bitmap.height;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) throw new Error("Failed to create canvas context");
+            ctx.drawImage(bitmap, 0, 0);
+            return await new Promise<Blob>((resolve, reject) => {
+              canvas.toBlob(
+                (b) =>
+                  b ? resolve(b) : reject(new Error("canvas.toBlob failed")),
+                "image/png",
+              );
+            });
+          } finally {
+            try {
+              bitmap.close();
+            } catch {
+              // ignore
+            }
+          }
+        }
+
+        const url = URL.createObjectURL(blob);
+        try {
+          const img = new Image();
+          img.src = url;
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = () => reject(new Error("Image decode failed"));
+          });
+          const canvas = document.createElement("canvas");
+          canvas.width = img.naturalWidth || img.width;
+          canvas.height = img.naturalHeight || img.height;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) throw new Error("Failed to create canvas context");
+          ctx.drawImage(img, 0, 0);
+          return await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob(
+              (b) =>
+                b ? resolve(b) : reject(new Error("canvas.toBlob failed")),
+              "image/png",
+            );
+          });
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      };
+
+      const tryCopyByLoadedUrl = async (imageUrl: string) => {
+        const response = await fetch(imageUrl);
+        const fetched = await response.blob();
+        const mime = fetched.type || detectImageMimeByPath(imageUrl);
+        const blob =
+          fetched.type && fetched.type === mime
+            ? fetched
+            : new Blob([await fetched.arrayBuffer()], {
+                type: mime || "image/png",
+              });
+
+        try {
+          await writeImageBlobToClipboard(blob);
+          return;
+        } catch (e) {
+          const mt = (mime || blob.type || "").toLowerCase();
+          if (mt === "image/jpeg" || mt === "image/jpg") {
+            const png = await convertImageBlobToPng(blob);
+            await writeImageBlobToClipboard(png);
+            return;
+          }
+          throw e;
+        }
+      };
+
+      const localPath = (image.localPath || "").trim();
+
+      const fromMap = imageSrcMap.value[image.id] ?? {};
+      const imageUrl = fromMap.original || fromMap.thumbnail;
+
+      if (isTauri() && localPath) {
+        if (imageUrl) {
+          try {
+            await tryCopyByLoadedUrl(imageUrl);
+            ElMessage.success("图片已复制到剪贴板");
+            return;
+          } catch {
+            // ignore
+          }
+        }
+        try {
+          await invoke("copy_image_to_clipboard", { imagePath: localPath });
+          ElMessage.success("图片已复制到剪贴板");
+          return;
+        } catch {
+          if (imageUrl) {
+            await tryCopyByLoadedUrl(imageUrl);
+            ElMessage.success("图片已复制到剪贴板");
+            return;
+          }
+          const bytes = await invoke<number[] | Uint8Array>(
+            "get_gallery_image",
+            {
+              imagePath: localPath,
+            },
+          );
+          const u8 =
+            bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+          const mime = detectImageMimeByPath(localPath) || "image/png";
+          await writeImageBlobToClipboard(
+            new Blob([toArrayBuffer(u8)], { type: mime }),
+          );
+          ElMessage.success("图片已复制到剪贴板");
+          return;
+        }
+      }
+
       if (!imageUrl) {
         ElMessage.warning("图片尚未加载完成，请稍后再试");
         return;
       }
 
-      // 从 Blob URL 获取 Blob
-      const response = await fetch(imageUrl);
-      let blob = await response.blob();
-
-      // 如果 blob 类型是 image/jpeg，转换为 PNG（因为某些浏览器不支持 image/jpeg）
-      if (blob.type === "image/jpeg" || blob.type === "image/jpg") {
-        // 创建一个 canvas 来转换图片格式
-        const img = new Image();
-        img.src = imageUrl;
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = reject;
-        });
-
-        const canvas = document.createElement("canvas");
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) {
-          throw new Error("无法创建 canvas context");
-        }
-        ctx.drawImage(img, 0, 0);
-
-        // 将 canvas 转换为 PNG blob
-        blob = await new Promise<Blob>((resolve, reject) => {
-          canvas.toBlob((blob) => {
-            if (blob) {
-              resolve(blob);
-            } else {
-              reject(new Error("转换图片失败"));
-            }
-          }, "image/png");
-        });
-      }
-
-      // 使用 Clipboard API 复制图片
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          [blob.type]: blob,
-        }),
-      ]);
+      await tryCopyByLoadedUrl(imageUrl);
 
       ElMessage.success("图片已复制到剪贴板");
     } catch (error) {
@@ -102,7 +217,7 @@ export function useImageOperations(
   // 应用收藏状态变化到画廊缓存
   const applyFavoriteChangeToGalleryCache = (
     imageIds: string[],
-    favorite: boolean
+    favorite: boolean,
   ) => {
     if (!imageIds || imageIds.length === 0) return;
     const idSet = new Set(imageIds);
@@ -124,7 +239,7 @@ export function useImageOperations(
   // 注意：此函数不再显示确认对话框，调用方需要自行处理确认逻辑
   const handleBatchDeleteImages = async (
     imagesToProcess: ImageInfo[],
-    deleteFiles: boolean
+    deleteFiles: boolean,
   ) => {
     if (imagesToProcess.length === 0) return;
 
@@ -153,7 +268,7 @@ export function useImageOperations(
 
       // 从 displayedImages 中移除已处理的图片
       displayedImages.value = displayedImages.value.filter(
-        (img) => !idSet.has(img.id)
+        (img) => !idSet.has(img.id),
       );
 
       // 清理全局 URL 缓存（thumbnail=blob 需要 revoke；由 cache 统一处理）
@@ -189,7 +304,7 @@ export function useImageOperations(
       const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
       albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(
         0,
-        currentCount + (newFavorite ? 1 : -1)
+        currentCount + (newFavorite ? 1 : -1),
       );
       // 3) 若收藏画册图片缓存已加载：取消收藏应从缓存数组中移除（而不是清缓存）
       const favList = albumStore.albumImages[FAVORITE_ALBUM_ID.value];
@@ -232,31 +347,29 @@ export function useImageOperations(
           await albumStore.addImagesToAlbum(createdAlbum.id, imageIds);
         } catch (error: any) {
           // 提取友好的错误信息
-          const errorMessage = typeof error === "string" 
-            ? error 
-            : error?.message || String(error) || "添加图片到画册失败";
+          const errorMessage =
+            typeof error === "string"
+              ? error
+              : error?.message || String(error) || "添加图片到画册失败";
           ElMessage.error(errorMessage);
           throw error;
         }
 
-        // 4. 获取当前设置（并发获取）
-        const [wallpaperRotationEnabled, wallpaperRotationAlbumId] = await Promise.all([
-          invoke<boolean>("get_wallpaper_rotation_enabled"),
-          invoke<string | null>("get_wallpaper_rotation_album_id"),
+        await settingsStore.loadMany([
+          "wallpaperRotationEnabled",
+          "wallpaperRotationAlbumId",
         ]);
 
         // 5. 如果轮播未开启，开启它
-        if (!wallpaperRotationEnabled) {
-          await invoke("set_wallpaper_rotation_enabled", { enabled: true });
+        if (!settingsStore.values.wallpaperRotationEnabled) {
+          await setWallpaperRotationEnabled(true);
         }
 
         // 6. 设置轮播画册为新创建的画册
-        await invoke("set_wallpaper_rotation_album_id", {
-          albumId: createdAlbum.id,
-        });
+        await setWallpaperRotationAlbumId(createdAlbum.id);
 
         ElMessage.success(
-          `已开启轮播：画册「${albumName}」（${imageIds.length} 张）`
+          `已开启轮播：画册「${albumName}」（${imageIds.length} 张）`,
         );
       } else {
         // 单选：直接设置壁纸
@@ -271,9 +384,10 @@ export function useImageOperations(
     } catch (error: any) {
       console.error("设置壁纸失败:", error);
       // 提取友好的错误信息
-      const errorMessage = typeof error === "string" 
-        ? error 
-        : error?.message || String(error) || "未知错误";
+      const errorMessage =
+        typeof error === "string"
+          ? error
+          : error?.message || String(error) || "未知错误";
       ElMessage.error(`设置壁纸失败: ${errorMessage}`);
     }
   };
@@ -297,17 +411,17 @@ export function useImageOperations(
             }
             return true;
           },
-        }
+        },
       ).catch(() => ({ value: null })); // 用户取消时返回 null
 
       if (projectName === null) return; // 用户取消
 
       const mp = await invoke<string | null>(
-        "get_wallpaper_engine_myprojects_dir"
+        "get_wallpaper_engine_myprojects_dir",
       );
       if (!mp) {
         ElMessage.warning(
-          "未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择"
+          "未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择",
         );
         return;
       }
@@ -322,10 +436,10 @@ export function useImageOperations(
           title: finalName,
           outputParentDir: mp,
           options: null,
-        }
+        },
       );
       ElMessage.success(
-        `已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`
+        `已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`,
       );
       await invoke("open_file_path", { filePath: res.projectDir });
     } catch (error) {

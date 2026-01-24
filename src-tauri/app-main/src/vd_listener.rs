@@ -39,7 +39,7 @@ pub async fn start_vd_event_listener(
                     DaemonEvent::AlbumAdded { .. } => {
                         vd_service.bump_albums();
                     }
-                    DaemonEvent::ImagesChange { reason, image_ids } => {
+                    DaemonEvent::ImagesChange { .. } => {
                         // ImagesChange 事件通常需要刷新整个 gallery 树
                         vd_service.notify_gallery_tree_changed();
                     }

@@ -190,7 +190,7 @@ export const useSettingsStore = defineStore("settings", () => {
       defaultDownloadDir: "dir",
       wallpaperEngineDir: "dir",
       wallpaperRotationEnabled: "enabled",
-      wallpaperRotationAlbumId: "album_id",
+      wallpaperRotationAlbumId: "albumId",
       wallpaperRotationIntervalMinutes: "minutes",
       wallpaperRotationMode: "mode",
       wallpaperStyle: "style",
@@ -217,7 +217,6 @@ export const useSettingsStore = defineStore("settings", () => {
 
     savingByKey[key] = true;
     const prevValue = (values as any)[key];
-
     try {
       // 更新本地值
       (values as any)[key] = value;
@@ -234,7 +233,9 @@ export const useSettingsStore = defineStore("settings", () => {
       // 构建参数对象：将 camelCase key 转换为 snake_case 参数名
       const paramKey = getSetterParamKey(key);
       const args: Record<string, any> = { [paramKey]: value };
-
+      if (__DEV__) {
+        console.log(`Saving setting ${key} with value ${value}`, args);
+      }
       await invoke(command, args);
 
       // 执行可选的回调

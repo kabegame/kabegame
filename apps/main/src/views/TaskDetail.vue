@@ -74,9 +74,11 @@ import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useGallerySettings } from "@/composables/useGallerySettings";
+import { useImageOperations } from "@/composables/useImageOperations";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
+import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
@@ -105,6 +107,9 @@ const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
+
+const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
+const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 
 const isOnTaskRoute = computed(() => {
     const n = String(route.name ?? "");
@@ -144,6 +149,7 @@ const images = ref<ImageInfo[]>([]);
 const failedImages = ref<TaskFailedImage[]>([]);
 const taskViewRef = ref<any>(null);
 const taskContainerRef = ref<HTMLElement | null>(null);
+const currentWallpaperImageId = ref<string | null>(null);
 
 // 记录“用户主动点击重试”的失败记录（用于成功下载后刷新时精准移除占位）
 const retryingFailedIds = ref(new Map<number, string>()); // failedId -> url
@@ -166,6 +172,15 @@ const {
     gridColumns: imageGridColumns,
     isInteracting,
 });
+
+const { handleCopyImage } = useImageOperations(
+    images,
+    imageSrcMap,
+    currentWallpaperImageId,
+    taskViewRef,
+    () => { },
+    async () => { }
+);
 
 watch(
     () => taskViewRef.value,
@@ -534,105 +549,6 @@ const handleAddedToAlbum = () => {
     clearSelection();
 };
 
-// 将单个图片转换为 Blob（处理 JPEG 转 PNG）
-const convertImageToBlob = async (imageUrl: string): Promise<Blob> => {
-    const response = await fetch(imageUrl);
-    let blob = await response.blob();
-
-    // 某些环境对 jpeg 写入剪贴板支持较差：转换为 png
-    if (blob.type === "image/jpeg" || blob.type === "image/jpg") {
-        // 使用 blob URL 来避免 tainted canvas 问题（跨域/特殊协议会导致 canvas 被污染）
-        const blobUrl = URL.createObjectURL(blob);
-        try {
-            const img = new Image();
-            img.src = blobUrl;
-            await new Promise((resolve, reject) => {
-                img.onload = resolve;
-                img.onerror = reject;
-            });
-
-            const canvas = document.createElement("canvas");
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext("2d");
-            if (!ctx) throw new Error("无法创建 canvas context");
-            ctx.drawImage(img, 0, 0);
-
-            blob = await new Promise<Blob>((resolve, reject) => {
-                canvas.toBlob((b) => {
-                    if (b) resolve(b);
-                    else reject(new Error("转换图片格式失败"));
-                }, "image/png");
-            });
-        } finally {
-            URL.revokeObjectURL(blobUrl);
-        }
-    }
-
-    return blob;
-};
-
-// 复制单张图片到剪贴板（复用当前页面的 imageSrcMap）
-const handleCopyImage = async (image: ImageInfo) => {
-    try {
-        const imageUrl = imageSrcMap.value[image.id]?.original || imageSrcMap.value[image.id]?.thumbnail;
-        if (!imageUrl) {
-            ElMessage.warning("图片尚未加载完成，请稍后再试");
-            return;
-        }
-
-        const blob = await convertImageToBlob(imageUrl);
-        await navigator.clipboard.write([
-            new ClipboardItem({
-                [blob.type]: blob,
-            }),
-        ]);
-        ElMessage.success("图片已复制到剪贴板");
-    } catch (error) {
-        console.error("复制图片失败:", error);
-        ElMessage.error("复制图片失败");
-    }
-};
-
-// 复制多张图片到剪贴板（Clipboard API 支持多个 ClipboardItem，但部分应用可能只读取第一张）
-const handleCopyImages = async (images: ImageInfo[]) => {
-    if (images.length === 0) return;
-    if (images.length === 1) {
-        await handleCopyImage(images[0]);
-        return;
-    }
-
-    try {
-        // 收集所有图片的 URL
-        const imageUrls: string[] = [];
-        for (const image of images) {
-            const imageUrl = imageSrcMap.value[image.id]?.original || imageSrcMap.value[image.id]?.thumbnail;
-            if (imageUrl) {
-                imageUrls.push(imageUrl);
-            }
-        }
-
-        if (imageUrls.length === 0) {
-            ElMessage.warning("没有可复制的图片");
-            return;
-        }
-
-        // 并发转换所有图片为 Blob
-        const blobs = await Promise.all(imageUrls.map((url) => convertImageToBlob(url)));
-
-        // 创建 ClipboardItem 数组
-        const clipboardItems = blobs.map((blob) => new ClipboardItem({ [blob.type]: blob }));
-
-        // 写入剪贴板（支持多图片，但某些应用可能只读取第一张）
-        await navigator.clipboard.write(clipboardItems);
-
-        ElMessage.success(`已复制 ${blobs.length} 张图片到剪贴板`);
-    } catch (error) {
-        console.error("复制图片失败:", error);
-        ElMessage.error("复制图片失败");
-    }
-};
-
 // 切换收藏（仅更新本页 images + 收藏画册缓存/计数；不触碰 Gallery 的 crawlerStore.images）
 const toggleFavoriteForImages = async (imgs: ImageInfo[]) => {
     if (imgs.length === 0) return;
@@ -724,21 +640,15 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
                 throw error;
             }
 
-            // 4. 获取当前设置（并发获取）
-            const [wallpaperRotationEnabled, wallpaperRotationAlbumId] = await Promise.all([
-                invoke<boolean>("get_wallpaper_rotation_enabled"),
-                invoke<string | null>("get_wallpaper_rotation_album_id"),
-            ]);
+            await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
 
             // 5. 如果轮播未开启，开启它
-            if (!wallpaperRotationEnabled) {
-                await invoke("set_wallpaper_rotation_enabled", { enabled: true });
+            if (!settingsStore.values.wallpaperRotationEnabled) {
+                await setWallpaperRotationEnabled(true);
             }
 
             // 6. 设置轮播画册为新创建的画册
-            await invoke("set_wallpaper_rotation_album_id", {
-                albumId: createdAlbum.id,
-            });
+            await setWallpaperRotationAlbumId(createdAlbum.id);
 
             ElMessage.success(
                 `已开启轮播：画册「${albumName}」（${imageIds.length} 张）`
@@ -787,9 +697,7 @@ const handleImageMenuCommand = async (
 
     switch (command) {
         case "copy":
-            if (imagesToProcess.length > 0) {
-                await handleCopyImages(imagesToProcess);
-            }
+            if (imagesToProcess[0]) await handleCopyImage(imagesToProcess[0]);
             break;
         case "favorite":
             if (imagesToProcess.length === 0) return null;

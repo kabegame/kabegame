@@ -26,6 +26,7 @@ serde_json = {workspace = true}
 sha2 = {workspace = true}
 sled = "0.34"
 tokio = {workspace = true}
+unrar = "0.5.8"
 url = {workspace = true}
 uuid = {workspace = true}
 zip = {workspace = true}

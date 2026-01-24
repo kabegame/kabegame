@@ -1322,7 +1322,15 @@ pub fn register_crawler_functions(
     let http_headers_holder = Arc::clone(&http_headers);
     engine.register_fn(
         "download_archive",
-        move |url: &str, archive_type: &str| -> Result<(), Box<rhai::EvalAltResult>> {
+        move |url: &str, archive_type: Dynamic| -> Result<(), Box<rhai::EvalAltResult>> {
+            let archive_type_str = if archive_type.is_unit() {
+                "none".to_string()
+            } else if archive_type.is_string() {
+                archive_type.into_string().unwrap()
+            } else {
+                return Err("archive_type must be a string or none".into());
+            };
+
             let images_dir = {
                 let guard = match images_dir_holder.lock() {
                     Ok(g) => g,
@@ -1373,7 +1381,7 @@ pub fn register_crawler_functions(
             dq_handle
                 .download_archive(
                     url.to_string(),
-                    archive_type,
+                    &archive_type_str,
                     images_dir,
                     plugin_id,
                     task_id_for_download,
@@ -1384,6 +1392,13 @@ pub fn register_crawler_functions(
                 .map_err(|e| format!("Failed to download archive: {}", e).into())
         },
     );
+
+    engine.register_fn("get_supported_archive_types", || -> Vec<Dynamic> {
+        crate::archive::supported_types()
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    });
 }
 
 /// 执行 Rhai 爬虫脚本
