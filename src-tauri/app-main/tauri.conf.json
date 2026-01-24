@@ -5,7 +5,6 @@
   "identifier": "com.kabegame",
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
-    "beforeBuildCommand": "bun run build:frontend-main",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../../dist-main"
   },
@@ -23,29 +22,19 @@
       }
     ],
     "security": {
-      "capabilities": [
-        "main-capability"
-      ],
+      "capabilities": ["main-capability"],
       "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost ws: wss:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "**"
-        ]
+        "scope": ["**"]
       }
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": [
-      "../icons/icon.png",
-      "../icons/icon.ico"
-    ],
-    "resources": [
-      "resources/plugins",
-      "resources/bin"
-    ],
+    "icon": ["../icons/icon.png", "../icons/icon.ico"],
+    "resources": ["resources/plugins", "resources/bin"],
     "windows": {
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh"

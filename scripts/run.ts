@@ -18,12 +18,13 @@
 import { fileURLToPath } from "url";
 import path from "path";
 import { Command } from "commander";
-import { BuildSystem } from "./build-system.js";
+import { BuildSystem } from "./build-system";
 
 export class Cmd {
   static readonly DEV = "dev";
   static readonly START = "start";
   static readonly BUILD = "build";
+  static readonly CHECK = "check";
 
   constructor(private cmd: string) {}
 
@@ -38,6 +39,10 @@ export class Cmd {
   get isBuild(): boolean {
     return this.cmd === Cmd.BUILD;
   }
+
+  get isCheck(): boolean {
+    return this.cmd === Cmd.CHECK;
+  }
 }
 
 // 保留对 run.js 中仍使用的函数的引用（dev/start 命令）
@@ -51,6 +56,7 @@ interface BuildOptions {
   desktop?: string;
   verbose?: boolean;
   trace?: boolean;
+  skip?: string;
   args?: string[];
 }
 
@@ -73,6 +79,10 @@ async function dev(options: BuildOptions): Promise<void> {
  */
 async function start(options: BuildOptions): Promise<void> {
   buildSystem.start(options);
+}
+
+async function check(options: BuildOptions): Promise<void> {
+  buildSystem.check(options);
 }
 
 // 创建 Commander 程序
@@ -140,6 +150,11 @@ program
     "",
   )
   .option(
+    "--skip <skip>",
+    "跳过流程：vue/cargo（只能一个值；main 仅支持跳过 vue）",
+    "",
+  )
+  .option(
     "--mode <mode>",
     "构建模式：normal（一般版本，带商店源）、local（无商店版本，无商店安装包）或 light（轻量模式，不使用 virtual-driver feature）",
     "normal",
@@ -152,6 +167,28 @@ program
   .action(async (args: string[], options: BuildOptions) => {
     options.args = args || [];
     await build(options);
+  });
+
+program
+  .command("check")
+  .description("检查类型与 Rust Cargo")
+  .requiredOption(
+    "-c, --component <component>",
+    "要检查的组件：main | plugin-editor | cli",
+  )
+  .option("--skip <skip>", "跳过检查项：vue/cargo（只能一个值）", "")
+  .option(
+    "--mode <mode>",
+    "构建模式：normal、local 或 light（影响 cfg 与前端环境变量）",
+    "normal",
+  )
+  .option(
+    "--desktop <desktop>",
+    "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）",
+  )
+  .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
+  .action(async (options: BuildOptions) => {
+    await check(options);
   });
 
 // 解析命令行参数

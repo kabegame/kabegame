@@ -87,7 +87,9 @@ export function existsFile(p: string): boolean {
   }
 }
 
-export function findFirstExisting(paths: (string | null | undefined)[]): string | null {
+export function findFirstExisting(
+  paths: (string | null | undefined)[],
+): string | null {
   for (const p of paths) {
     if (p && existsFile(p)) return p;
   }
@@ -252,7 +254,7 @@ export function copyDokan2DllToTauriReleaseDirBestEffort(): void {
 
 export function stageResourceBinary(binName: string): void {
   const ext = platformExeExt();
-  const src = path.join(SRC_TAURI_DIR, "target", "release", `${binName}${ext}`);
+  const src = path.join(root, "target", "release", `${binName}${ext}`);
   const dst = path.join(RESOURCES_BIN_DIR, `${binName}${ext}`);
   if (!fs.existsSync(src)) {
     console.error(
@@ -285,5 +287,7 @@ export function scanBuiltinPlugins(): string[] {
     .filter((f: string) => f.endsWith(".kgpg"))
     .map((f: string) => path.basename(f, ".kgpg"))
     .filter(Boolean)
-    .sort((a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    .sort((a: string, b: string) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" }),
+    );
 }

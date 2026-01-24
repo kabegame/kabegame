@@ -31,7 +31,9 @@ async fn plugin_editor_run_task(
     // 临时 kgpg 路径（每个任务一个文件）
     let tmp_dir = std::env::temp_dir().join("kabegame-plugin-editor");
     let _ = std::fs::create_dir_all(&tmp_dir);
-    let tmp_kgpg = tmp_dir.join(format!("{}-{}.kgpg", plugin_id, task_id));
+    let tmp_task_dir = tmp_dir.join(&task_id);
+    let _ = std::fs::create_dir_all(&tmp_task_dir);
+    let tmp_kgpg = tmp_task_dir.join(format!("{}.kgpg", plugin_id));
 
     plugin_editor::plugin_editor_export_kgpg(
         tmp_kgpg.to_string_lossy().to_string(),
@@ -501,6 +503,11 @@ async fn set_default_download_dir(dir: Option<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn get_default_download_dir() -> Result<Option<String>, String> {
+    get_ipc_client().settings_get_default_download_dir().await
+}
+
+#[tauri::command]
 async fn get_default_images_dir() -> Result<String, String> {
     // 通过 daemon 获取设置中的默认下载目录，如果没有则使用默认路径
     if let Ok(Some(dir)) = get_ipc_client().settings_get_default_download_dir().await {
@@ -524,6 +531,13 @@ async fn get_default_images_dir() -> Result<String, String> {
 #[tauri::command]
 async fn get_image_click_action() -> Result<String, String> {
     get_ipc_client().settings_get_image_click_action().await
+}
+
+#[tauri::command]
+async fn set_image_click_action(action: String) -> Result<(), String> {
+    get_ipc_client()
+        .settings_set_image_click_action(action)
+        .await
 }
 
 #[tauri::command]
@@ -623,8 +637,10 @@ fn main() {
             set_network_retry_count,
             set_auto_deduplicate,
             set_default_download_dir,
+            get_default_download_dir,
             get_default_images_dir,
             get_image_click_action,
+            set_image_click_action,
             get_gallery_image_aspect_ratio,
             get_max_concurrent_downloads,
             get_network_retry_count,

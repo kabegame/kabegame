@@ -24,19 +24,6 @@ pub struct CrawlTaskRequest {
     pub plugin_file_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskStatusEvent {
-    pub task_id: String,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_time: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub end_time: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
 #[derive(Clone)]
 pub struct TaskScheduler {
     // PluginManager 现在是全局单例，不需要存储
@@ -78,7 +65,15 @@ impl TaskScheduler {
         let storage = Storage::global();
         // let emitter = GlobalEmitter::global();
         let _ = persist_task_status(storage, &req.task_id, "pending", None, None, None);
-        emit_task_status(&req.task_id, "pending", None, None, None);
+        GlobalEmitter::global().emit_task_status(
+            &req.task_id,
+            "pending",
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
 
         let (m, cv) = &*self.queue;
         let mut guard = m.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -216,29 +211,6 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn emit_task_status(
-    task_id: &str,
-    status: &str,
-    start_time: Option<u64>,
-    end_time: Option<u64>,
-    error: Option<String>,
-) {
-    // IPC 侧：统一用 task-status 事件
-    GlobalEmitter::global().emit_task_status(task_id, status, None, error.as_deref(), None);
-
-    // 兼容：仍广播一个 generic 事件，payload 与旧前端一致
-    GlobalEmitter::global().emit(
-        "task-status",
-        serde_json::json!(TaskStatusEvent {
-            task_id: task_id.to_string(),
-            status: status.to_string(),
-            start_time,
-            end_time,
-            error,
-        }),
-    );
-}
-
 fn persist_task_status(
     storage: &Storage,
     task_id: &str,
@@ -309,7 +281,15 @@ fn worker_loop(
                 Some(end),
                 Some(e.clone()),
             );
-            emit_task_status(&req.task_id, "canceled", None, Some(end), Some(e));
+            GlobalEmitter::global().emit_task_status(
+                &req.task_id,
+                "canceled",
+                None,
+                None,
+                Some(end),
+                Some(e.as_str()),
+                None,
+            );
             continue;
         }
 
@@ -318,7 +298,15 @@ fn worker_loop(
         // running
         let start = now_ms();
         let _ = persist_task_status(&storage, &req.task_id, "running", Some(start), None, None);
-        emit_task_status(&req.task_id, "running", Some(start), None, None);
+        GlobalEmitter::global().emit_task_status(
+            &req.task_id,
+            "running",
+            None,
+            Some(start),
+            None,
+            None,
+            None,
+        );
 
         let res = run_task(
             &storage,
@@ -342,7 +330,15 @@ fn worker_loop(
                         Some(end),
                         Some(e.clone()),
                     );
-                    emit_task_status(&req.task_id, "canceled", None, Some(end), Some(e));
+                    GlobalEmitter::global().emit_task_status(
+                        &req.task_id,
+                        "canceled",
+                        None,
+                        None,
+                        Some(end),
+                        Some(e.as_str()),
+                        None,
+                    );
                 } else {
                     let _ = persist_task_status(
                         &storage,
@@ -352,7 +348,15 @@ fn worker_loop(
                         Some(end),
                         None,
                     );
-                    emit_task_status(&req.task_id, "completed", None, Some(end), None);
+                    GlobalEmitter::global().emit_task_status(
+                        &req.task_id,
+                        "completed",
+                        None,
+                        None,
+                        Some(end),
+                        None,
+                        None,
+                    );
                 }
             }
             Err(e) => {
@@ -370,7 +374,15 @@ fn worker_loop(
                     Some(end),
                     Some(e.clone()),
                 );
-                emit_task_status(&req.task_id, status, None, Some(end), Some(e));
+                GlobalEmitter::global().emit_task_status(
+                    &req.task_id,
+                    status,
+                    None,
+                    None,
+                    Some(end),
+                    Some(e.as_str()),
+                    None,
+                );
             }
         }
 

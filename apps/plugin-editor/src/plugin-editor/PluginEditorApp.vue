@@ -81,7 +81,7 @@
           <PluginConfigCard :base-url="draft.config.baseUrl" @update:base-url="draft.config.baseUrl = $event" />
 
           <!-- 变量管理 -->
-          <PluginVarsCard :vars="draft.config.var" :test-input-text="testInputText"
+          <PluginVarsCard :vars="draft.config.var" :test-values="testInputValues"
             :collapse-active-names="varCollapseActiveNames" @add-var="addVar" @remove-var="removeVar"
             @use-default-as-test-value="useDefaultAsTestValue" @clear-test-value="clearTestValue"
             @update:collapse-active-names="varCollapseActiveNames = $event" />
@@ -127,7 +127,7 @@
               </div>
             </template>
             <div class="task-card-body">
-              <TaskDrawerContent :tasks="tasks" :plugins="[]" :active="true" :enable-context-menu="false"
+              <TaskDrawerContent :tasks="tasks" :plugins="taskPlugins" :active="true" :enable-context-menu="false"
                 @clear-finished-tasks="clearFinishedTasks" @open-task-images="openTaskImages" @delete-task="deleteTask"
                 @cancel-task="cancelTask" @confirm-task-dump="confirmTaskDump" />
             </div>
@@ -165,6 +165,7 @@ import ConsoleCard from "./components/ConsoleCard.vue";
 import { useQuickSettingsDrawerStore } from "./stores/quick-settings-drawer";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useInstalledPluginsStore } from "@kabegame/core/stores/plugins";
+import { useCrawlerStore } from "@kabegame/core/stores/crawler";
 
 type MonacoMarkerSeverity = 1 | 2 | 4 | 8;
 
@@ -188,7 +189,17 @@ type VarOption = string | { name: string; variable: string };
 
 type VarDefinition = {
   key: string;
-  type: "int" | "float" | "options" | "checkbox" | "boolean" | "list";
+  type:
+  | "int"
+  | "float"
+  | "options"
+  | "checkbox"
+  | "boolean"
+  | "list"
+  | "path"
+  | "file_or_folder"
+  | "file"
+  | "folder";
   name: string;
   descripts?: string;
   default?: unknown;
@@ -259,25 +270,11 @@ const iconCropDialogVisible = ref(false);
 const iconCropSourceUrl = ref<string>("");
 let iconCropOwnedBlobUrl: string | null = null;
 
-// 按变量索引保存测试值（JSON 文本）；不参与导出，只用于“测试”时注入 user_config
-const testInputText = ref<string[]>([]);
+// 按变量索引保存测试值；不参与导出，只用于“测试”时注入 user_config
+const testInputValues = ref<unknown[]>([]);
 
-type TaskStatus = "pending" | "running" | "completed" | "failed" | "canceled";
-type ScriptTask = {
-  id: string;
-  pluginId: string;
-  status: TaskStatus;
-  progress: number;
-  startTime?: number;
-  endTime?: number;
-  error?: string;
-  rhaiDumpPresent?: boolean;
-  rhaiDumpConfirmed?: boolean;
-  rhaiDumpCreatedAt?: number;
-};
-
-const tasks = ref<ScriptTask[]>([]);
-const lastProgressUpdateAt = new Map<string, number>();
+const crawlerStore = useCrawlerStore();
+const tasks = computed(() => crawlerStore.tasks);
 
 const taskImagesDialogVisible = ref(false);
 const taskImagesDialogTaskId = ref("");
@@ -301,9 +298,6 @@ const editorUserVars = computed(() =>
   }))
 );
 
-let unlistenTaskStatus: (() => void) | null = null;
-let unlistenTaskProgress: (() => void) | null = null;
-let unlistenTaskError: (() => void) | null = null;
 let unlistenTaskLog: (() => void) | null = null;
 
 // 导入（已安装列表）- 使用共用 store
@@ -311,6 +305,23 @@ const installedPluginsStore = useInstalledPluginsStore();
 const installedPlugins = computed(() => installedPluginsStore.plugins);
 const isLoadingInstalledPlugins = computed(() => installedPluginsStore.isLoading);
 const pluginIcons = computed(() => installedPluginsStore.icons);
+
+const taskPlugins = computed(() => {
+  const map = new Map<string, { id: string; name?: string }>();
+  for (const p of installedPlugins.value || []) {
+    const id = String(p.id || "").trim();
+    if (!id) continue;
+    map.set(id, { id, name: p.name });
+  }
+
+  const draftId = String(draft.id || "").trim();
+  const draftName = String(draft.manifest?.name || "").trim();
+  if (draftId) {
+    map.set(draftId, { id: draftId, name: draftName || map.get(draftId)?.name });
+  }
+
+  return Array.from(map.values());
+});
 
 // 文件拖拽提示层引用
 const fileDropOverlayRef = ref<InstanceType<typeof FileDropOverlay> | null>(null);
@@ -322,6 +333,29 @@ let autosaveIntervalTimer: number | null = null;
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("plugin-editor");
+
+watch(
+  () => tasks.value.map((t) => `${t.id}:${t.status}`),
+  () => {
+    for (const taskId of Array.from(pendingFinishPopup)) {
+      const t = tasks.value.find((x) => x.id === taskId);
+      if (!t) continue;
+      const status = t.status;
+      if (status !== "completed" && status !== "failed" && status !== "canceled") continue;
+      pendingFinishPopup.delete(taskId);
+      const msg =
+        status === "completed" ? "任务已完成" : status === "canceled" ? "任务已取消" : "任务已失败";
+      if (status === "completed") {
+        void ElMessage.success(msg);
+      } else if (status === "canceled") {
+        void ElMessage.warning(msg);
+      } else {
+        void ElMessage.error(msg);
+      }
+    }
+  },
+  { immediate: true }
+);
 
 
 /** 将 RGB24 raw bytes（base64）转换为 data URL 用于预览 */
@@ -470,7 +504,9 @@ function applyImportResult(res: ImportResult) {
   const baseUrl = res.config?.baseUrl ?? "";
   const vars = (res.config?.var ?? []).map((v) => ({
     key: v.key ?? "",
-    type: v.type as VarDefinition["type"],
+    type: (v.type === "file" || v.type === "folder" || v.type === "file_or_folder"
+      ? "path"
+      : (v.type as VarDefinition["type"])),
     name: v.name ?? "",
     descripts: (v.descripts as any) ?? "",
     defaultText: toJsonText(v.default),
@@ -486,7 +522,7 @@ function applyImportResult(res: ImportResult) {
   draft.script = res.script ?? "";
 
   // reset UI-only state
-  testInputText.value = vars.map(() => "");
+  testInputValues.value = vars.map(() => undefined);
   varCollapseActiveNames.value = [];
   markers.value = [];
 
@@ -622,12 +658,12 @@ function addVar() {
     maxText: "",
   });
   varCollapseActiveNames.value.push(draft.config.var.length - 1);
-  testInputText.value.push("");
+  testInputValues.value.push(undefined);
 }
 
 function removeVar(idx: number) {
   draft.config.var.splice(idx, 1);
-  testInputText.value.splice(idx, 1);
+  testInputValues.value.splice(idx, 1);
 }
 
 function clearFinishedTasks() {
@@ -638,34 +674,24 @@ function clearFinishedTasks() {
     } catch (e) {
       ElMessage.error(`清除失败：${String(e)}`);
     } finally {
-      await loadTasksFromBackend();
+      await crawlerStore.loadTasks();
     }
   })();
 }
 
 async function cancelTask(taskId: string) {
-  // 测试任务：只做本地取消（不保证能中断后端脚本执行）
-  const idxLocal = tasks.value.findIndex((t) => t.id === taskId);
-  if (idxLocal !== -1 && (tasks.value[idxLocal].status === "pending" || tasks.value[idxLocal].status === "running")) {
-    tasks.value[idxLocal] = {
-      ...tasks.value[idxLocal],
-      status: "canceled",
-      endTime: Date.now(),
-      error: "Task canceled",
-    };
-    // 同时尝试通知后端取消（若该 taskId 参与 download_queue，会尽快停止后续下载）
-    try {
-      await invoke("cancel_task", { taskId });
-    } catch {
-      // ignore
-    }
-    return;
-  }
-
   try {
-    await invoke("cancel_task", { taskId });
+    await ElMessageBox.confirm(
+      "确定要停止这个任务吗？已下载的图片将保留，未开始的任务将取消。",
+      "停止任务",
+      { type: "warning" }
+    );
+    await crawlerStore.stopTask(taskId);
+    ElMessage.info("任务已请求停止");
   } catch (e) {
-    ElMessage.error(`取消失败：${String(e)}`);
+    if (e !== "cancel") {
+      ElMessage.error(`取消失败：${String(e)}`);
+    }
   }
 }
 
@@ -681,44 +707,16 @@ async function deleteTask(taskId: string) {
     return;
   }
   try {
-    await invoke("delete_task", { taskId });
+    await crawlerStore.deleteTask(taskId);
     ElMessage.success("任务已删除");
   } catch (e) {
     ElMessage.error(`删除失败：${String(e)}`);
-  } finally {
-    await loadTasksFromBackend();
-  }
-}
-
-async function loadTasksFromBackend() {
-  try {
-    const all = await invoke<any[]>("get_all_tasks");
-    if (Array.isArray(all)) {
-      tasks.value = all.map((t) => ({
-        id: String(t.id),
-        pluginId: String(t.pluginId || t.plugin_id || "unknown"),
-        status: (t.status as TaskStatus) || "pending",
-        progress: Number(t.progress ?? 0),
-        startTime: t.startTime ?? t.start_time,
-        endTime: t.endTime ?? t.end_time,
-        error: t.error ?? undefined,
-        rhaiDumpPresent: Boolean(t.rhaiDumpPresent ?? t.rhai_dump_present),
-        rhaiDumpConfirmed: Boolean(t.rhaiDumpConfirmed ?? t.rhai_dump_confirmed),
-        rhaiDumpCreatedAt: t.rhaiDumpCreatedAt ?? t.rhai_dump_created_at,
-      }));
-    }
-  } catch {
-    // ignore
   }
 }
 
 async function confirmTaskDump(taskId: string) {
   try {
-    await invoke("confirm_task_rhai_dump", { taskId });
-    const idx = tasks.value.findIndex((t) => t.id === taskId);
-    if (idx !== -1) {
-      tasks.value[idx] = { ...tasks.value[idx], rhaiDumpConfirmed: true };
-    }
+    await crawlerStore.confirmTaskRhaiDump(taskId);
     ElMessage.success("已确认");
   } catch (e) {
     ElMessage.error(`确认失败：${String(e)}`);
@@ -737,9 +735,13 @@ function tryParseJson(text: string): unknown | undefined {
 
 function buildConfigForBackend(): { config: { baseUrl?: string; var?: VarDefinition[] } } {
   const vars: VarDefinition[] = draft.config.var.map((v) => {
+    const t =
+      v.type === "file" || v.type === "folder" || v.type === "file_or_folder"
+        ? "path"
+        : v.type;
     const def: VarDefinition = {
       key: v.key.trim(),
-      type: v.type,
+      type: t,
       name: v.name,
       descripts: v.descripts?.trim() || undefined,
     };
@@ -769,13 +771,39 @@ function buildUserConfigForBackend(): Record<string, unknown> {
   for (const [idx, v] of draft.config.var.entries()) {
     const key = v.key.trim();
     if (!key) continue;
-    const raw = (testInputText.value[idx] ?? "").trim();
-    if (!raw) continue;
-    const val = tryParseJson(raw);
-    if (val === undefined) {
-      throw new Error(`测试值 JSON 解析失败：${key}\n请输入合法 JSON，例如 "abc" / 123 / true / ["a","b"]`);
+    const rawVal = testInputValues.value[idx];
+
+    if (rawVal === undefined || rawVal === null) continue;
+
+    if (typeof rawVal === "string") {
+      const s = rawVal.trim();
+      if (!s) continue;
+      if (
+        v.type === "options" ||
+        v.type === "path" ||
+        v.type === "file_or_folder" ||
+        v.type === "file" ||
+        v.type === "folder"
+      ) {
+        out[key] = s;
+        continue;
+      }
+
+      const parsed = tryParseJson(s);
+      if (parsed === undefined) {
+        throw new Error(`测试值 JSON 解析失败：${key}\n请输入合法 JSON，例如 "abc" / 123 / true / ["a","b"]`);
+      }
+      out[key] = parsed;
+      continue;
     }
-    out[key] = val;
+
+    if (Array.isArray(rawVal)) {
+      if (rawVal.length === 0) continue;
+      out[key] = rawVal;
+      continue;
+    }
+
+    out[key] = rawVal;
   }
   return out;
 }
@@ -784,11 +812,15 @@ function useDefaultAsTestValue(idx: number) {
   const v = draft.config.var[idx];
   if (!v) return;
   const t = (v.defaultText ?? "").trim();
-  testInputText.value[idx] = t;
+  if (!t) {
+    testInputValues.value[idx] = undefined;
+    return;
+  }
+  testInputValues.value[idx] = tryParseJson(t);
 }
 
 function clearTestValue(idx: number) {
-  testInputText.value[idx] = "";
+  testInputValues.value[idx] = undefined;
 }
 
 const checkScript = useDebounceFn(async () => {
@@ -828,12 +860,12 @@ async function runTest() {
 
     const startTime = Date.now();
 
-    // 先将任务添加到本地列表，避免后端事件到达时因找不到任务而创建 pluginId: "unknown" 的条目
-    tasks.value.unshift({
+    crawlerStore.tasks.unshift({
       id: taskId,
       pluginId,
       status: "pending",
       progress: 0,
+      deletedCount: 0,
       startTime,
     });
 
@@ -1017,7 +1049,7 @@ onMounted(async () => {
       // 阻止默认关闭行为
       event.preventDefault();
       try {
-        await ElMessageBox.confirm("确定要退出插件编辑器吗？所做更改不会保存", "确认退出", {
+        await ElMessageBox.confirm("确定要退出插件编辑器吗？下次启动将恢复工作区", "确认退出", {
           type: "warning",
           confirmButtonText: "退出",
           cancelButtonText: "取消",
@@ -1044,133 +1076,20 @@ onMounted(async () => {
     // 非 Tauri 环境忽略
   }
 
-  // 任务事件监听（复用主程序事件协议）
-  unlistenTaskStatus = await listen<{
-    taskId: string;
-    status: TaskStatus;
-    startTime?: number;
-    endTime?: number;
-    error?: string;
-  }>("task-status", (event) => {
-    const idx = tasks.value.findIndex((t) => t.id === event.payload.taskId);
-    if (idx === -1) {
-      tasks.value.unshift({
-        id: event.payload.taskId,
-        pluginId: "unknown",
-        status: event.payload.status,
-        progress: event.payload.status === "completed" ? 100 : 0,
-        startTime: event.payload.startTime,
-        endTime: event.payload.endTime,
-        error: event.payload.error,
-      });
-    } else {
-      const cur = tasks.value[idx];
-      tasks.value[idx] = {
-        ...cur,
-        status: event.payload.status,
-        startTime: event.payload.startTime ?? cur.startTime,
-        endTime: event.payload.endTime ?? cur.endTime,
-        error: event.payload.error ?? cur.error,
-        progress: event.payload.status === "completed" ? 100 : cur.progress ?? 0,
-      };
-    }
-
-    // 结束弹窗：仅对本次点击"测试"发起的任务提示一次
-    if (
-      (event.payload.status === "completed" ||
-        event.payload.status === "failed" ||
-        event.payload.status === "canceled") &&
-      pendingFinishPopup.has(event.payload.taskId)
-    ) {
-      pendingFinishPopup.delete(event.payload.taskId);
-      const msg =
-        event.payload.status === "completed"
-          ? "任务已完成"
-          : event.payload.status === "canceled"
-            ? "任务已取消"
-            : "任务已失败";
-      if (event.payload.status === "completed") {
-        void ElMessage.success(msg);
-      } else if (event.payload.status === "canceled") {
-        void ElMessage.warning(msg);
-      } else {
-        void ElMessage.error(msg);
-      }
-    }
-  });
-
-  unlistenTaskProgress = await listen<{ taskId: string; progress: number }>(
-    "task-progress",
-    (event) => {
-      const idx = tasks.value.findIndex((t) => t.id === event.payload.taskId);
-      if (idx === -1) {
-        tasks.value.unshift({
-          id: event.payload.taskId,
-          pluginId: "unknown",
-          status: "running",
-          progress: event.payload.progress,
-          startTime: Date.now(),
-        });
-        return;
-      }
-      const cur = tasks.value[idx];
-      const newProgress = event.payload.progress;
-      if (newProgress <= (cur.progress ?? 0)) return;
-
-      const now = Date.now();
-      const lastAt = lastProgressUpdateAt.get(event.payload.taskId) ?? 0;
-      if (newProgress < 100 && now - lastAt < 100) return;
-      lastProgressUpdateAt.set(event.payload.taskId, now);
-
-      tasks.value[idx] = { ...cur, progress: newProgress };
-    }
-  );
-
-  unlistenTaskError = await listen<{ taskId: string; error: string }>(
-    "task-error",
-    (event) => {
-      const idx = tasks.value.findIndex((t) => t.id === event.payload.taskId);
-      if (idx === -1) {
-        const isCanceled = String(event.payload.error || "").includes("Task canceled");
-        tasks.value.unshift({
-          id: event.payload.taskId,
-          pluginId: "unknown",
-          status: isCanceled ? "canceled" : "failed",
-          progress: 0,
-          startTime: Date.now(),
-          endTime: Date.now(),
-          error: event.payload.error,
-        });
-        return;
-      }
-      const cur = tasks.value[idx];
-      const isCanceled = String(event.payload.error || "").includes("Task canceled");
-      tasks.value[idx] = {
-        ...cur,
-        status: isCanceled ? "canceled" : "failed",
-        error: event.payload.error,
-        endTime: Date.now(),
-      };
-    }
-  );
-
   // 任务日志：后端将 Rhai 的 print/debug 等输出通过 task-log 推送到前端
-  unlistenTaskLog = await listen<{
-    taskId: string;
-    level: string;
-    message: string;
-    ts: number;
-  }>("task-log", (event) => {
-    if (activeConsoleTaskId.value && event.payload.taskId !== activeConsoleTaskId.value) return;
-    const level = String(event.payload.level || "").trim();
+  unlistenTaskLog = await listen("task-log", (event) => {
+    const payload: any = event.payload as any;
+    const taskId = String(payload?.task_id ?? "").trim();
+    if (!taskId) return;
+    if (activeConsoleTaskId.value && taskId !== activeConsoleTaskId.value) return;
+    const level = String(payload?.level || "").trim();
     const prefix = level ? `[${level}] ` : "";
-    const msg = `${prefix}${String(event.payload.message ?? "")}`.trimEnd();
+    const msg = `${prefix}${String(payload?.message ?? "")}`.trimEnd();
     if (!msg) return;
     consoleText.value = consoleText.value ? `${consoleText.value}\n${msg}` : msg;
   });
 
-  // 启动时恢复历史任务（与 main 一致：任务持久化在 SQLite）
-  await loadTasksFromBackend();
+  await crawlerStore.loadTasks();
 
   // 加载已安装插件列表（用于导入下拉）
   await refreshInstalledPlugins();
@@ -1212,9 +1131,6 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   try {
-    unlistenTaskStatus?.();
-    unlistenTaskProgress?.();
-    unlistenTaskError?.();
     unlistenTaskLog?.();
     fileDropUnlisten?.();
   } catch {

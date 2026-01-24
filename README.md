@@ -169,14 +169,20 @@ bun dev -c main --desktop gnome   # 指定桌面环境为 GNOME
 bun start -c cli            # 启动 CLI 工具
 
 # 构建生产版本
-bun build                    # 构建全部组件（main + plugin-editor + cli）
-bun build -c main            # 构建主应用
-bun build -c plugin-editor   # 构建插件编辑器
-bun build -c cli             # 构建 CLI 工具
+bun b                    # 构建全部组件（main + plugin-editor + cli）
+bun b -c main            # 构建主应用
+bun b -c plugin-editor   # 构建插件编辑器
+bun b -c cli             # 构建 CLI 工具
+
+# 检查（不产出构建产物）
+bun check -c main                # 依次检查 vue 与 cargo
+bun check -c main --skip cargo   # 仅检查 vue
+bun check -c plugin-editor --skip vue  # 仅检查 cargo
 ```
 
 说明：
 - `-c, --component`：指定要开发/启动/构建的组件（`main` | `plugin-editor` | `cli`）
+- `bun check` 必须用 `-c, --component` 指定组件
 - `--mode`：构建模式
   - `normal`（默认）：一般版本，带商店源，仅打包本地插件到 resources
   - `local`：无商店，预打包全部插件到 resources
@@ -184,8 +190,13 @@ bun build -c cli             # 构建 CLI 工具
 - `--desktop <desktop>`：指定桌面环境（`plasma` | `gnome`），用于后端按桌面环境选择实现
   - `plasma`：适用于 KDE Plasma 环境（在设置中显示 Plasma 插件模式选项）
   - `gnome`：适用于 GNOME 环境
+- `--skip <skip>`：跳过某个流程（只能一个值：`vue` | `cargo`）
+  - 在 `check` 中始终生效：`--skip vue` 跳过 `vue-tsc`，`--skip cargo` 跳过 `cargo check`
+  - 在 `build` 中：
+    - `cli/plugin-editor`：`--skip vue` 跳过前端构建，`--skip cargo` 跳过后端构建
+    - `main`：仅支持 `--skip vue` 跳过前端构建（仍会执行 `cargo tauri build`）
 - `dev` 和 `start` 会自动先打包插件到 `src-tauri/app-main/resources/plugins`，确保资源存在
-- 前端资源由各自的 `tauri.conf.json` 中的 `beforeDevCommand` / `beforeBuildCommand` 自动触发构建
+- `dev` 的前端由各自的 `tauri.conf.json` 的 `beforeDevCommand` 启动；`build` 时前端由构建脚本显式构建（`nx run .:build-*`）
 
 ## 项目结构
 
@@ -338,4 +349,3 @@ The source code is licensed under GPL v3. License is available [here](./LICENSE)
 - [**Clash Verge**](https://github.com/clash-verge-rev/clash-verge-rev) - Clash 代理客户端（本项目参考了其托盘代码）
 
 如果这些项目对你有帮助，请考虑给它们一个 ⭐ Star，这是对开源社区最好的支持！
-

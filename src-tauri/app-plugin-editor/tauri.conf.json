@@ -5,7 +5,7 @@
   "identifier": "com.kabegame.plugin-editor",
   "build": {
     "beforeDevCommand": "bun run dev:frontend-plugin-editor",
-    "beforeBuildCommand": "bun run build:frontend-plugin-editor",
+    "beforeBuildCommand": "bun nx run .:build-plugin-editor",
     "devUrl": "http://localhost:1421",
     "frontendDist": "../../dist-plugin-editor"
   },

@@ -4,8 +4,8 @@
   "version": "3.0.1",
   "identifier": "com.kabegame",
   "build": {
-    "beforeDevCommand": "bun --cwd .. run dev:frontend-main",
-    "beforeBuildCommand": "bun --cwd .. run build:frontend-main",
+    "beforeDevCommand": "bun run dev:frontend-main",
+    "beforeBuildCommand": "bun nx run build-main",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../../dist-main"
   },
@@ -23,37 +23,22 @@
       }
     ],
     "security": {
-      "capabilities": [
-        "main-capability"
-      ],
+      "capabilities": ["main-capability"],
       "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost ws: wss:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "**"
-        ]
+        "scope": ["**"]
       }
     }
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "deb"
-    ],
-    "icon": [
-      "../icons/icon.png",
-      "../icons/icon.ico"
-    ],
-    "resources": [
-      "resources/plugins",
-      "resources/bin"
-    ],
+    "targets": ["deb"],
+    "icon": ["../icons/icon.png", "../icons/icon.ico"],
+    "resources": ["resources/plugins", "resources/bin"],
     "linux": {
       "deb": {
-        "depends": [
-          "libfuse3-3",
-          "adduser"
-        ]
+        "depends": ["libfuse3-3", "adduser"]
       }
     }
   }

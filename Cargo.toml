@@ -41,5 +41,6 @@ windows-sys = {version = "0.52", features = [
 zip = "0.6"
 
 [profile.release]
-codegen-units = 1
-lto = "thin"
+# on when release
+# codegen-units = 1
+# lto = "thin"

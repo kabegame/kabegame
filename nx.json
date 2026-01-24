@@ -1,15 +1,59 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
-  "maxCacheSize": "10MB",
+  "maxCacheSize": "1GB",
   "targetDefaults": {
     "package": {
       "cache": true,
       "inputs": ["default", "^default"],
       "outputs": ["{projectRoot}/packed/**/*"]
+    },
+    "build-cli": {
+      "cache": true,
+      "inputs": ["frontendCli"],
+      "outputs": ["{workspaceRoot}/dist-cli/**/*"]
+    },
+    "build-main": {
+      "cache": true,
+      "inputs": ["frontendMain"],
+      "outputs": ["{workspaceRoot}/dist-main/**/*"]
+    },
+    "build-plugin-editor": {
+      "cache": true,
+      "inputs": ["frontendPluginEditor"],
+      "outputs": ["{workspaceRoot}/dist-plugin-editor/**/*"]
     }
   },
   "namedInputs": {
     "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "frontendEnv": [
+      { "env": "VITE_DESKTOP" },
+      { "env": "VITE_KABEGAME_MODE" },
+      { "env": "KABEGAME_MODE" },
+      { "env": "TAURI_ENV_PLATFORM" },
+      { "env": "TAURI_DEBUG" }
+    ],
+    "frontendCli": [
+      "{workspaceRoot}/apps/cli/**/*",
+      "{workspaceRoot}/packages/core/**/*",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "frontendEnv"
+    ],
+    "frontendMain": [
+      "{workspaceRoot}/apps/main/**/*",
+      "{workspaceRoot}/packages/core/**/*",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "frontendEnv"
+    ],
+    "frontendPluginEditor": [
+      "{workspaceRoot}/apps/plugin-editor/**/*",
+      "{workspaceRoot}/packages/core/**/*",
+      "{workspaceRoot}/static/**/*",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "frontendEnv"
+    ],
     "production": [
       "default",
       "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)",

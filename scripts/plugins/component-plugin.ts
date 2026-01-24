@@ -38,7 +38,7 @@ export class Component {
   }
 
   static cargoComp(comp: string): string {
-    return "kabegame-" + comp;
+    return comp === Component.MAIN ? "kabegame" : "kabegame-" + comp;
   }
 
   get cargoComp(): string {
@@ -105,9 +105,9 @@ export class ComponentPlugin extends BasePlugin {
       if (bs.context.cmd!.isDev && comp.isCli) {
         throw new Error(`当前 dev 不支持 cli ！cli请构建后测试运行`);
       }
-      if (bs.context.cmd!.isStart && !comp.isCli) {
-        throw new Error(`当前 start 只支持 cli！`);
-      }
+      // if (bs.context.cmd!.isStart && comp.isPluginEditor) {
+      //   throw new Error(`当前 start 不支持 p`);
+      // }
       this.component = comp;
       bs.context.component = comp;
     });

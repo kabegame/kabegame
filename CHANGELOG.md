@@ -8,9 +8,16 @@
 ### Changed
 - 将构建脚本从js升级到ts，类型更安全
 - 将服务端ipc代码移到core
+- 构建命令支持 `--skip vue|cargo`（只能一个值；main 支持 `--skip vue` 跳过前端构建）
 
 ### Added
 - F11全屏快捷键
+- 新增 `bun check` 命令：按组件依次检查 `vue-tsc` 与 `cargo check`
+  - `bun check` 必须指定 `-c, --component`
+  - `--skip` 统一为 `vue|cargo` 且只能指定其中一个值
+- plugin editor 支持全量的变量类型
+- plugin editor 支持不手动输入json指定变量类型
+
 
 ### Deprecated
 - 去掉 plasma 插件。繁琐且没有必要

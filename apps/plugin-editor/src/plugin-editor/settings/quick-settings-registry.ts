@@ -2,6 +2,7 @@ import type { QuickSettingsPageId } from "../stores/quick-settings-drawer";
 import type { QuickSettingGroup } from "@kabegame/core/components/settings/quick-settings-registry-types";
 
 import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
+import SettingSelectControl from "@kabegame/core/components/settings/controls/SettingSelectControl.vue";
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
 import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
 
@@ -19,7 +20,6 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         comp: SettingNumberControl,
         props: {
           settingKey: "maxConcurrentDownloads",
-          command: "set_max_concurrent_downloads",
           buildArgs: (value: number) => ({ count: value }),
           min: 1,
           max: 10,
@@ -34,7 +34,6 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         comp: SettingNumberControl,
         props: {
           settingKey: "networkRetryCount",
-          command: "set_network_retry_count",
           buildArgs: (value: number) => ({ count: value }),
           min: 0,
           max: 10,
@@ -49,8 +48,24 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         comp: SettingSwitchControl,
         props: {
           settingKey: "autoDeduplicate",
-          command: "set_auto_deduplicate",
           buildArgs: (value: boolean) => ({ enabled: value }),
+        },
+        pages: ["plugin-editor"],
+      },
+      {
+        key: "imageClickAction",
+        label: "双击图片行为",
+        description: "影响任务图片面板的双击操作",
+        comp: SettingSelectControl,
+        props: {
+          settingKey: "imageClickAction",
+          placeholder: "请选择",
+          clearable: false,
+          options: [
+            { label: "应用内预览", value: "preview" },
+            { label: "系统默认打开", value: "open" },
+            { label: "无动作", value: "none" },
+          ],
         },
         pages: ["plugin-editor"],
       },

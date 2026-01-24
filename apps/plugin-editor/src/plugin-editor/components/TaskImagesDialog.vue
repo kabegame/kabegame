@@ -73,6 +73,7 @@ const imageUrlMap = ref<ImageUrlMap>({});
 const brokenIds = new Set<string>();
 const ownedBlobUrls = new Set<string>();
 const gridRef = ref<any>(null);
+const imagePathSigById = new Map<string, string>();
 
 // 删除/移除确认对话框（main 同款）
 const showRemoveDialog = ref(false);
@@ -90,6 +91,32 @@ const { imageGridColumns } = storeToRefs(uiStore);
 
 function markBroken(id: string) {
   brokenIds.add(id);
+}
+
+function buildImagePathSignature(img: ImageInfo) {
+  const thumbPath = String(img.thumbnailPath || img.localPath || "").trim();
+  const origPath = String(img.localPath || "").trim();
+  return `${thumbPath}@@${origPath}`;
+}
+
+async function buildUrlItem(img: ImageInfo) {
+  const thumbPath = String(img.thumbnailPath || img.localPath || "").trim();
+  const origPath = String(img.localPath || "").trim();
+  const thumbUrl = await fileToSrc(thumbPath);
+  const origUrl = origPath && origPath !== thumbPath ? await fileToSrc(origPath) : thumbUrl;
+  return { thumbnail: thumbUrl, original: origUrl };
+}
+
+function revokeBlobUrlsInMapByIds(map: ImageUrlMap, ids: string[]) {
+  for (const id of ids) {
+    const item = map?.[id];
+    if (item?.thumbnail && item.thumbnail.startsWith("blob:")) {
+      try { URL.revokeObjectURL(item.thumbnail); } catch { }
+    }
+    if (item?.original && item.original.startsWith("blob:")) {
+      try { URL.revokeObjectURL(item.original); } catch { }
+    }
+  }
 }
 
 function detectMime(filePath: string) {
@@ -143,20 +170,78 @@ async function loadTaskImages() {
     const list = await invoke<ImageInfo[]>("get_task_images", { taskId: taskId.value });
     images.value = list || [];
 
+    imagePathSigById.clear();
     const map: ImageUrlMap = {};
     for (const img of images.value) {
-      const thumbPath = (img.thumbnailPath || img.localPath || "").trim();
-      const origPath = (img.localPath || "").trim();
-      const thumbUrl = await fileToSrc(thumbPath);
-      // 列数<=2 时 ImageItem 会优先用 original；这里必须提供，行为才与 before-src 一致
-      // 若没有独立缩略图或原图路径异常，则尽量复用 thumbnail，避免重复读取文件
-      const origUrl =
-        origPath && origPath !== thumbPath ? await fileToSrc(origPath) : thumbUrl;
-      map[img.id] = { thumbnail: thumbUrl, original: origUrl };
+      const id = String(img.id);
+      imagePathSigById.set(id, buildImagePathSignature(img));
+      map[id] = await buildUrlItem(img);
     }
     imageUrlMap.value = map;
   } finally {
     loading.value = false;
+  }
+}
+
+let isRefreshingByDiff = false;
+async function refreshTaskImagesByDiff() {
+  if (!taskId.value) return;
+  if (isRefreshingByDiff) return;
+  isRefreshingByDiff = true;
+  const currentTaskId = taskId.value;
+  try {
+    const prevImages = images.value.slice();
+    const prevMap: ImageUrlMap = { ...(imageUrlMap.value || {}) };
+    const prevSig = new Map(imagePathSigById);
+
+    const nextList = (await invoke<ImageInfo[]>("get_task_images", { taskId: currentTaskId })) || [];
+    if (!visible.value) return;
+    if (taskId.value !== currentTaskId) return;
+
+    const nextSig = new Map<string, string>();
+    const nextIds = new Set<string>();
+    for (const img of nextList) {
+      const id = String(img.id);
+      nextIds.add(id);
+      nextSig.set(id, buildImagePathSignature(img));
+    }
+
+    const prevIds = new Set(prevImages.map((x) => String(x.id)));
+    const removedIds: string[] = [];
+    prevIds.forEach((id) => {
+      if (!nextIds.has(id)) removedIds.push(id);
+    });
+
+    const addedOrChangedImages: ImageInfo[] = [];
+    for (const img of nextList) {
+      const id = String(img.id);
+      const sig = nextSig.get(id) ?? "";
+      const prev = prevSig.get(id);
+      if (!prev || prev !== sig || !prevMap[id]) {
+        addedOrChangedImages.push(img);
+      }
+    }
+
+    if (removedIds.length > 0) {
+      revokeBlobUrlsInMapByIds(prevMap, removedIds);
+      for (const id of removedIds) delete prevMap[id];
+    }
+
+    for (const img of addedOrChangedImages) {
+      const id = String(img.id);
+      const prevItem = prevMap[id];
+      if (prevItem) {
+        revokeBlobUrlsInMapByIds(prevMap, [id]);
+      }
+      prevMap[id] = await buildUrlItem(img);
+    }
+
+    images.value = nextList;
+    imageUrlMap.value = prevMap;
+    imagePathSigById.clear();
+    nextSig.forEach((v, k) => imagePathSigById.set(k, v));
+  } finally {
+    isRefreshingByDiff = false;
   }
 }
 
@@ -198,6 +283,31 @@ async function handleContextCommand(payload: ContextCommandPayload) {
     case "detail":
       // 对齐 main：view 层 return 'detail'，由 ImageGrid wrapper 打开详情弹窗
       return "detail";
+    case "open": {
+      const p = String(image?.localPath || "").trim().replace(/^\\\\\?\\/, "");
+      if (!p) return null;
+      try {
+        await invoke("open_file_path", { filePath: p });
+      } catch (e) {
+        console.error("打开文件失败:", e);
+        ElMessage.error("打开文件失败");
+      }
+      return null;
+    }
+    case "openFolder": {
+      const p = String(image?.localPath || "").trim().replace(/^\\\\\?\\/, "");
+      if (!p) return null;
+      const idx = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
+      const dir = idx >= 0 ? p.slice(0, idx) : p;
+      if (!dir) return null;
+      try {
+        await invoke("open_file_path", { filePath: dir });
+      } catch (e) {
+        console.error("打开文件夹失败:", e);
+        ElMessage.error("打开文件夹失败");
+      }
+      return null;
+    }
     case "remove": {
       const ids = Array.from(selectedSet).map((x) => String(x));
       pendingRemoveImageIds.value = ids.length > 0 ? ids : [String(image.id)];
@@ -255,7 +365,7 @@ async function startListeners() {
     }
     reloadTimer = window.setTimeout(async () => {
       reloadTimer = null;
-      await loadTaskImages();
+      await refreshTaskImagesByDiff();
     }, 250);
   });
 }
@@ -289,6 +399,7 @@ function handleClosed() {
   stopListeners();
   images.value = [];
   imageUrlMap.value = {};
+  imagePathSigById.clear();
   cleanupOwnedBlobUrls();
 }
 
@@ -299,6 +410,7 @@ watch(
     stopListeners();
     images.value = [];
     imageUrlMap.value = {};
+    imagePathSigById.clear();
     await handleOpen();
   }
 );
@@ -312,5 +424,12 @@ onBeforeUnmount(() => {
 .task-images-dialog {
   height: 90vh;
   overflow-y: auto;
+}
+
+.task-images-dialog .el-dialog__header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--el-bg-color);
 }
 </style>

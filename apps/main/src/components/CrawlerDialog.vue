@@ -89,75 +89,13 @@
                 <el-divider content-position="left">插件配置</el-divider>
                 <el-form-item v-for="varDef in pluginVars" :key="varDef.key" :label="varDef.name"
                     :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
-                    <el-input-number v-if="varDef.type === 'int' || varDef.type === 'float'"
-                        v-model="form.vars[varDef.key]"
+                    <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="varDef.options"
                         :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
                         :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
-                        :placeholder="varDef.descripts || `请输入${varDef.name}`" style="width: 100%" />
-                    <el-select v-else-if="varDef.type === 'options'" v-model="form.vars[varDef.key]"
-                        :placeholder="varDef.descripts || `请选择${varDef.name}`" style="width: 100%">
-                        <el-option v-for="option in varDef.options" :key="optionValue(option)"
-                            :label="optionLabel(option)" :value="optionValue(option)" />
-                    </el-select>
-                    <el-switch v-else-if="varDef.type === 'boolean'" v-model="form.vars[varDef.key]" />
-                    <el-select v-else-if="varDef.type === 'list'" v-model="form.vars[varDef.key]" multiple
-                        :placeholder="varDef.descripts || `请选择${varDef.name}`" style="width: 100%">
-                        <el-option v-for="option in varDef.options" :key="optionValue(option)"
-                            :label="optionLabel(option)" :value="optionValue(option)" />
-                    </el-select>
-                    <el-checkbox-group v-else-if="varDef.type === 'checkbox'" v-model="form.vars[varDef.key]">
-                        <el-checkbox v-for="option in (varDef.options || [])" :key="optionValue(option)"
-                            :label="optionValue(option)">
-                            {{ optionLabel(option) }}
-                        </el-checkbox>
-                    </el-checkbox-group>
-                    <el-input v-else-if="varDef.type === 'path' || varDef.type === 'file_or_folder'"
-                        v-model="form.vars[varDef.key]" :placeholder="varDef.descripts || `请选择${varDef.name}`"
-                        clearable>
-                        <template #append>
-                            <el-dropdown trigger="click" @command="(cmd: string) => {
-                                if (cmd === 'file') return selectFileByExtensions(varDef.key, getFileExtensions(varDef));
-                                if (cmd === 'folder') return selectFolder(varDef.key);
-                            }">
-                                <el-button>
-                                    <el-icon>
-                                        <FolderOpened />
-                                    </el-icon>
-                                    浏览
-                                </el-button>
-                                <template #dropdown>
-                                    <el-dropdown-menu>
-                                        <el-dropdown-item command="file">选择文件</el-dropdown-item>
-                                        <el-dropdown-item command="folder">选择文件夹</el-dropdown-item>
-                                    </el-dropdown-menu>
-                                </template>
-                            </el-dropdown>
-                        </template>
-                    </el-input>
-                    <el-input v-else-if="varDef.type === 'file'" v-model="form.vars[varDef.key]"
-                        :placeholder="varDef.descripts || `请选择${varDef.name}`" clearable>
-                        <template #append>
-                            <el-button @click="() => selectFile(varDef.key)">
-                                <el-icon>
-                                    <FolderOpened />
-                                </el-icon>
-                                选择文件
-                            </el-button>
-                        </template>
-                    </el-input>
-                    <el-input v-else-if="varDef.type === 'folder'" v-model="form.vars[varDef.key]"
-                        :placeholder="varDef.descripts || `请选择${varDef.name}`" clearable>
-                        <template #append>
-                            <el-button @click="() => selectFolder(varDef.key)">
-                                <el-icon>
-                                    <FolderOpened />
-                                </el-icon>
-                                选择
-                            </el-button>
-                        </template>
-                    </el-input>
-                    <el-input v-else v-model="form.vars[varDef.key]"
-                        :placeholder="varDef.descripts || `请输入${varDef.name}`" style="width: 100%" />
+                        :file-extensions="getFileExtensions(varDef)"
+                        :placeholder="varDef.descripts || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' ? `请选择${varDef.name}` : `请输入${varDef.name}`)"
+                        :allow-unset="!isRequired(varDef)"
+                        @update:model-value="(val) => (form.vars[varDef.key] = val)" />
                     <div v-if="varDef.descripts">
                         {{ varDef.descripts }}
                     </div>
@@ -214,6 +152,7 @@ import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore } from "@/stores/albums";
+import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import { ElMessage } from "element-plus";
 import { stat } from "@tauri-apps/plugin-fs";
 

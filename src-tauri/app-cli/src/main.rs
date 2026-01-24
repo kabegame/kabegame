@@ -8,6 +8,7 @@
 //! - `plugin import`：导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
 
 use clap::{Args, Parser, Subcommand};
+use kabegame_core::ipc::client::daemon_startup::*;
 use kabegame_core::{
     kgpg,
     plugin::{ImportPreview, Plugin, PluginDetail, PluginManager, PluginManifest},
@@ -148,8 +149,8 @@ fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
     });
 
     // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
-    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
-        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+    if !rt.block_on(is_daemon_available()) {
+        let daemon_path = find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
         return Err(format!(
             "无法连接 kabegame-daemon\n提示：请先启动 `{}`",
@@ -251,8 +252,8 @@ fn vd_unmount(_args: VdUnmountArgs) -> Result<(), String> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
     // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
-    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
-        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+    if !rt.block_on(is_daemon_available()) {
+        let daemon_path = find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
         return Err(format!(
             "无法连接 kabegame-daemon\n提示：请先启动 `{}`",
@@ -276,8 +277,8 @@ fn vd_status(args: VdStatusArgs) -> Result<(), String> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
     // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
-    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
-        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+    if !rt.block_on(is_daemon_available()) {
+        let daemon_path = find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
         return Err(format!(
             "无法连接 kabegame-daemon\n提示：请先启动 `{}`",
@@ -297,8 +298,8 @@ fn vd_ipc_status() -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| format!("create tokio runtime failed: {}", e))?;
     // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
-    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
-        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+    if !rt.block_on(is_daemon_available()) {
+        let daemon_path = find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
         return Err(format!(
             "无法连接 kabegame-daemon\n提示：请先启动 `{}`",
@@ -518,8 +519,8 @@ fn import_plugin_with_ui(p: PathBuf) -> Result<(), String> {
         eprintln!("创建 Tokio Runtime 失败: {e}");
         std::process::exit(1);
     });
-    if !rt.block_on(kabegame_core::ipc::daemon_startup::is_daemon_available()) {
-        let daemon_path = kabegame_core::ipc::daemon_startup::find_daemon_executable()
+    if !rt.block_on(is_daemon_available()) {
+        let daemon_path = find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
         return Err(format!(
             "无法连接 kabegame-daemon\n提示：请先启动 `{}`",

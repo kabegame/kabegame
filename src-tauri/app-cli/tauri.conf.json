@@ -4,7 +4,7 @@
   "version": "3.0.1",
   "identifier": "com.kabegame.cli",
   "build": {
-    "beforeBuildCommand": "bun --cwd .. run build:frontend-cli",
+    "beforeBuildCommand": "bun nx run build-cli",
     "frontendDist": "../../dist-cli"
   },
   "app": {
@@ -15,10 +15,7 @@
   "bundle": {
     "active": false,
     "targets": "all",
-    "icon": [
-      "../icons/icon.png",
-      "../icons/icon.ico"
-    ],
+    "icon": ["../icons/icon.png", "../icons/icon.ico"],
     "resources": []
   }
 }

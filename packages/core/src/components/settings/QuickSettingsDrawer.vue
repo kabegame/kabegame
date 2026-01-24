@@ -118,18 +118,22 @@ const getEffectiveDescription = (
 };
 
 watch(
-    () => drawer.isOpen,
-    async (open) => {
+    () => [drawer.isOpen, drawer.pageId] as const,
+    async ([open]) => {
         if (!open) return;
         if (!props.loadOnOpen) return;
+        const keys = Array.from(
+            new Set(filteredGroups.value.flatMap((g) => g.items.map((it) => it.key)))
+        );
+        if (keys.length === 0) return;
         loading.value = true;
         try {
-            // 目前先全量拉取（设置页/抽屉都更顺滑），后续可按 keysForPage 细化为 loadMany
-            await settingsStore.loadAll();
+            await settingsStore.loadMany(keys);
         } finally {
             loading.value = false;
         }
-    }
+    },
+    { flush: "post" }
 );
 </script>
 

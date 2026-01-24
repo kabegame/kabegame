@@ -17,6 +17,7 @@ import { OSPlugin } from "./plugins/os-plugin.js";
 import { SyncWaterfallHook } from "tapable";
 import { run } from "./build-utils.js";
 import { BasePlugin } from "./plugins/base-plugin.ts";
+import { Skip, SkipPlugin } from "./plugins/skip-plugin.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,6 +48,7 @@ interface BuildOptions {
   desktop?: string;
   verbose?: boolean;
   trace?: boolean;
+  skip?: string;
   args?: string[];
 }
 
@@ -55,6 +57,7 @@ interface BuildContext {
   component?: Component;
   mode?: any;
   desktop?: any;
+  skip?: Skip;
 }
 
 interface BuildHooks {
@@ -146,6 +149,9 @@ export class BuildSystem {
 
     // --trace
     this.use(new TracePlugin());
+
+    // --skip
+    this.use(new SkipPlugin());
   }
 
   commonBefore(): void {
@@ -179,23 +185,18 @@ export class BuildSystem {
     this.commonUse();
     this.commonBefore();
     const { features } = this.hooks.prepareCompileArgs.call();
-    const baseArgs = [
-      "run",
-      "-p",
-      this.context.component!.cargoComp,
-      "--bin",
-      Component.cargoComp(Component.CLI),
-    ];
+    const baseArgs = ["run", "-p", this.context.component!.cargoComp];
     const args = this.buildCargoArgs(baseArgs, features);
 
     if (this.options.args && this.options.args.length > 0) {
       args.push("--");
       args.push(...this.options.args);
     }
-
-    run("cargo", args, {
-      cwd: SRC_TAURI_DIR,
+    // 先构建前端资源
+    run("nx", ["run", `.:build-${this.context.component!.comp}`], {
+      bin: "bun",
     });
+    run("cargo", args);
   }
 
   async build(options: BuildOptions): Promise<void> {
@@ -209,11 +210,11 @@ export class BuildSystem {
       const { features } = this.hooks.prepareCompileArgs.call(
         Component.PLUGIN_EDITOR,
       );
-      run("bun", [
-        "--cwd",
-        Component.appFeDir(Component.PLUGIN_EDITOR),
-        "build",
-      ]);
+      if (!this.context.skip?.isVue) {
+        run("nx", ["run", ".:build-plugin-editor"], {
+          bin: "bun",
+        });
+      }
       const args = this.buildCargoArgs(
         [
           "build",
@@ -224,35 +225,68 @@ export class BuildSystem {
         features,
         this.options.args,
       );
-      run("cargo", args, {
-        cwd: SRC_TAURI_DIR,
-      });
+      if (!this.context.skip?.isCargo) {
+        run("cargo", args, {
+          cwd: SRC_TAURI_DIR,
+        });
+      }
       // this.hooks.afterBuild.callAsync(Component.PLUGIN_EDITOR)
     }
-    if ((this.context.component as any).isCli) {
+    if (this.context.component!.isCli) {
       this.hooks.beforeBuild.call(Component.CLI);
       const { features } = this.hooks.prepareCompileArgs.call(Component.CLI);
-      run("bun", ["--cwd", Component.appFeDir(Component.CLI), "build"]);
+      if (!this.context.skip?.isVue) {
+        run("nx", ["run", ".:build-cli"], {
+          bin: "bun",
+        });
+      }
       const args = this.buildCargoArgs(
         ["build", "--release", "-p", Component.cargoComp(Component.CLI)],
         features,
         this.options.args,
       );
-      run("cargo", args, {
-        cwd: SRC_TAURI_DIR,
-      });
+      if (!this.context.skip?.isCargo) {
+        run("cargo", args, {
+          cwd: SRC_TAURI_DIR,
+        });
+      }
       // this.hooks.afterBuild.callAsync(Component.CLI)
     }
-    if ((this.context.component as any).isMain) {
+    if (this.context.component!.isMain) {
       this.hooks.beforeBuild.call(Component.MAIN);
       const { features } = this.hooks.prepareCompileArgs.call(Component.MAIN);
       const args = this.buildCargoArgs(["build"], features, this.options.args);
+      if (!this.context.skip?.isVue) {
+        run("nx", ["run", ".:build-main"], {
+          bin: "bun",
+        });
+      }
       run("tauri", args, {
         cwd: Component.appDir(Component.MAIN),
         bin: "cargo",
       });
       // TODO: 添加linux脚本到deb包中
       // this.hooks.afterBuild.callAsync(Component.MAIN)
+    }
+  }
+
+  async check(options: BuildOptions): Promise<void> {
+    this.context.cmd = new Cmd(Cmd.CHECK);
+    (this as any).options = Object.freeze(options);
+
+    this.commonUse();
+    this.commonBefore();
+
+    if (!this.context.skip?.isVue) {
+      run("typecheck", [], {
+        bin: "bun",
+        cwd: this.context.component!.appFeDir,
+      });
+    }
+
+    if (!this.context.skip?.isCargo) {
+      this.hooks.prepareCompileArgs.call(this.context.component!.comp);
+      run("cargo", ["check", "-p", this.context.component!.cargoComp]);
     }
   }
 }

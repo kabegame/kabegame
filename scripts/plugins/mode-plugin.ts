@@ -65,11 +65,11 @@ export class ModePlugin extends BasePlugin {
     bs.hooks.prepareEnv.tap(this.name, () => {
       this.setEnv("KABEGAME_MODE", this.mode!.mode);
       this.setEnv("VITE_KABEGAME_MODE", this.mode!.mode);
+      this.setBuiltinPluginsEnvIfNeeded();
     });
 
     bs.hooks.beforeBuild.tap(this.name, () => {
       this.packagePlugins(bs);
-      this.setBuiltinPluginsEnvIfNeeded();
       this.prepareResources(bs);
     });
 
@@ -142,15 +142,6 @@ export class ModePlugin extends BasePlugin {
       });
     } else if (cmd.isBuild) {
       if (!comp.isMain) {
-        return;
-      }
-      const builtinPlugins = scanBuiltinPlugins();
-      if (builtinPlugins.length > 0) {
-        this.log(
-          chalk.blue(
-            `检测到 resources/plugins 已有 ${builtinPlugins.length} 个插件，跳过 CI 内打包`,
-          ),
-        );
         return;
       }
       const packageTarget = mode.isLocal

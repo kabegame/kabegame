@@ -903,10 +903,12 @@ const startTimersAndListeners = async () => {
 
     // 监听任务进度更新事件，当任务状态变化时重新加载任务信息
     if (!unlistenTaskProgress) {
-        unlistenTaskProgress = await listen<{ taskId: string; progress: number }>(
+        unlistenTaskProgress = await listen(
             "task-progress",
             async (event) => {
-                if (event.payload.taskId === taskId.value) {
+                const payload: any = event.payload as any;
+                const tid = String(payload?.task_id ?? "").trim();
+                if (tid && tid === taskId.value) {
                     // 重新加载任务信息以获取最新的状态和结束时间
                     await loadTaskInfo();
                 }
@@ -916,16 +918,11 @@ const startTimersAndListeners = async () => {
 
     // 监听下载状态：当出现失败时，实时把失败占位插入 TaskDetail（无需用户手动刷新）
     if (!unlistenDownloadState) {
-        unlistenDownloadState = await listen<{
-            taskId: string;
-            url: string;
-            startTime: number;
-            pluginId: string;
-            state: string;
-            error?: string;
-        }>("download-state", async (event) => {
-            if (!event.payload?.taskId || event.payload.taskId !== taskId.value) return;
-            if (event.payload.state !== "failed") return;
+        unlistenDownloadState = await listen("download-state", async (event) => {
+            const payload: any = event.payload as any;
+            const tid = String(payload?.task_id ?? "").trim();
+            if (!tid || tid !== taskId.value) return;
+            if (String(payload?.state ?? "") !== "failed") return;
             // 后端在 emit failed 前已写入 task_failed_images，因此这里可直接拉取增量
             await syncFailedPlaceholdersIncremental();
         });

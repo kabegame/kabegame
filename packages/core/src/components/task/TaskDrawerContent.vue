@@ -270,6 +270,7 @@ const pluginVarMetaMap = ref<Record<string, Record<string, PluginVarMeta>>>({});
 
 // 下载信息
 const activeDownloads = ref<ActiveDownloadInfo[]>([]);
+let activeDownloadKeysSnapshot = new Set<string>();
 const activeDownloadsRunningCount = computed(() => {
   // completed 为“短暂展示态”，不计入运行中
   return activeDownloads.value.filter((d) => getEffectiveDownloadState(d) !== "completed").length;
@@ -452,6 +453,7 @@ const loadDownloads = async () => {
 
     // 清理已不在 active 列表里的进度，避免内存增长
     const aliveKeys = new Set(downloads.map(downloadKey));
+    activeDownloadKeysSnapshot = aliveKeys;
     const next: Record<string, DownloadProgressState> = {};
     for (const [k, v] of Object.entries(downloadProgressByKey.value)) {
       if (aliveKeys.has(k)) next[k] = v;
@@ -472,6 +474,17 @@ const loadDownloads = async () => {
       }
     }
     downloadStateByKey.value = nextState;
+
+    for (const d of downloads) {
+      const key = downloadKey(d);
+      const st = String(d.state || "").toLowerCase();
+      if (st === "completed") scheduleRemoveCompleted(key);
+      if (st === "failed" || st === "canceled") {
+        cancelRemoveCompleted(key);
+        const idx = activeDownloads.value.findIndex((x) => downloadKey(x) === key);
+        if (idx !== -1) activeDownloads.value.splice(idx, 1);
+      }
+    }
   } catch (error) {
     console.error("加载下载列表失败:", error);
   }
@@ -481,14 +494,43 @@ let eventListenersInitialized = false;
 const initEventListeners = async () => {
   if (eventListenersInitialized) return;
   eventListenersInitialized = true;
+  const normalizeDownloadProgressPayload = (raw: any): DownloadProgressPayload | null => {
+    const taskId = String(raw?.taskId ?? raw?.task_id ?? "").trim();
+    const url = String(raw?.url ?? "").trim();
+    const startTime = Number(raw?.startTime ?? raw?.start_time ?? NaN);
+    const pluginId = String(raw?.pluginId ?? raw?.plugin_id ?? "").trim();
+    if (!taskId || !url || !Number.isFinite(startTime) || !pluginId) return null;
+    return {
+      taskId,
+      url,
+      startTime,
+      pluginId,
+      receivedBytes: Number(raw?.receivedBytes ?? raw?.received_bytes ?? 0),
+      totalBytes: raw?.totalBytes ?? raw?.total_bytes ?? null,
+    };
+  };
+
+  const normalizeDownloadStatePayload = (raw: any): DownloadStatePayload | null => {
+    const taskId = String(raw?.taskId ?? raw?.task_id ?? "").trim();
+    const url = String(raw?.url ?? "").trim();
+    const startTime = Number(raw?.startTime ?? raw?.start_time ?? NaN);
+    const pluginId = String(raw?.pluginId ?? raw?.plugin_id ?? "").trim();
+    const state = String(raw?.state ?? "").trim();
+    if (!taskId || !url || !Number.isFinite(startTime) || !pluginId || !state) return null;
+    const error = raw?.error != null ? String(raw.error) : undefined;
+    return { taskId, url, startTime, pluginId, state, error };
+  };
   try {
     const { listen } = await import("@tauri-apps/api/event");
     unlistenDownloadProgress = await listen<DownloadProgressPayload>("download-progress", (event) => {
-      const p = event.payload;
+      const p = normalizeDownloadProgressPayload(event.payload as any);
+      if (!p) return;
       const key = downloadKeyFromPayload(p);
 
-      // 进度事件可能先于 download-state 到达：确保列表里有项
-      if (!activeDownloads.value.some((d) => downloadKey(d) === key)) {
+      if (
+        !activeDownloads.value.some((d) => downloadKey(d) === key) &&
+        activeDownloadKeysSnapshot.has(key)
+      ) {
         activeDownloads.value.push({
           task_id: p.taskId,
           start_time: p.startTime,
@@ -513,7 +555,8 @@ const initEventListeners = async () => {
   try {
     const { listen } = await import("@tauri-apps/api/event");
     unlistenDownloadState = await listen<DownloadStatePayload>("download-state", (event) => {
-      const p = event.payload;
+      const p = normalizeDownloadStatePayload(event.payload as any);
+      if (!p) return;
       const key = downloadStateKeyFromPayload(p);
       downloadStateByKey.value = {
         ...downloadStateByKey.value,

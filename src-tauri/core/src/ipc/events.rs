@@ -173,6 +173,8 @@ pub enum DaemonEvent {
         task_id: String,
         status: String,
         progress: Option<f64>,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
         error: Option<String>,
         current_wallpaper: Option<String>,
     },
@@ -220,11 +222,15 @@ pub enum DaemonEvent {
 
     ImagesChange {
         reason: String,
+        #[serde(rename = "imageIds")]
         image_ids: Vec<String>,
     },
 
     /// 壁纸图片更新事件
-    WallpaperUpdateImage { image_path: String },
+    WallpaperUpdateImage {
+        #[serde(rename = "imagePath")]
+        image_path: String,
+    },
 
     /// 壁纸样式更新事件
     WallpaperUpdateStyle { style: String },
@@ -242,6 +248,7 @@ pub enum DaemonEvent {
     AlbumAdded {
         id: String,
         name: String,
+        #[serde(rename = "createdAt")]
         created_at: u64,
     },
 }

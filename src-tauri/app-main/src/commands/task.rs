@@ -1,4 +1,4 @@
-﻿// 任务相关命令
+// 任务相关命令
 
 use kabegame_core::storage::{Storage, TaskInfo};
 use tauri::AppHandle;
@@ -129,6 +129,36 @@ pub async fn start_task(task: serde_json::Value) -> Result<(), String> {
 
     // 解析 CrawlTaskRequest
     let req: CrawlTaskRequest = serde_json::from_value(task).map_err(|e| e.to_string())?;
+
+    // 确保任务在 DB 中存在（否则调度器的状态持久化会变成 no-op）
+    match Storage::global().get_task(&req.task_id)? {
+        Some(_) => {}
+        None => {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let t = TaskInfo {
+                id: req.task_id.clone(),
+                plugin_id: req.plugin_id.clone(),
+                output_dir: req.output_dir.clone(),
+                user_config: req.user_config.clone(),
+                http_headers: req.http_headers.clone(),
+                output_album_id: req.output_album_id.clone(),
+                status: "pending".to_string(),
+                progress: 0.0,
+                deleted_count: 0,
+                start_time: Some(now_ms),
+                end_time: None,
+                error: None,
+                rhai_dump_present: false,
+                rhai_dump_confirmed: false,
+                rhai_dump_created_at: None,
+            };
+            let _ = Storage::global().add_task(t);
+        }
+    }
+
     let _task_id = TaskScheduler::global()
         .submit_task(req)
         .map_err(|e| e.to_string())?;

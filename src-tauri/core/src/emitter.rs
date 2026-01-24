@@ -100,6 +100,8 @@ impl GlobalEmitter {
         task_id: &str,
         status: &str,
         progress: Option<f64>,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
         error: Option<&str>,
         current_wallpaper: Option<&str>,
     ) {
@@ -107,6 +109,8 @@ impl GlobalEmitter {
             task_id: task_id.to_string(),
             status: status.to_string(),
             progress,
+            start_time,
+            end_time,
             error: error.map(|e| e.to_string()),
             current_wallpaper: current_wallpaper.map(|w| w.to_string()),
         });
@@ -277,6 +281,8 @@ impl GlobalEmitter {
         _task_id: &str,
         _status: &str,
         _progress: Option<f64>,
+        _start_time: Option<u64>,
+        _end_time: Option<u64>,
         _error: Option<&str>,
         _current_wallpaper: Option<&str>,
     ) {
