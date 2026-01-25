@@ -255,7 +255,7 @@ pub async fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
         .set_max_concurrent_downloads(count)
         .await
         .map_err(|e| e.to_string())?;
-    
+
     // 同时更新运行时调度器配置
     kabegame_core::crawler::TaskScheduler::global().set_download_concurrency(count);
     Ok(())

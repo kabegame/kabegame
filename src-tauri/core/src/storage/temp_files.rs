@@ -1,5 +1,5 @@
-use rusqlite::params;
 use crate::storage::Storage;
+use rusqlite::params;
 
 impl Storage {
     pub fn add_temp_file(&self, file_path: &str) -> Result<(), String> {

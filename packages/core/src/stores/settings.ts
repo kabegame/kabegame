@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { reactive, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { IS_DEV } from "../env";
 
 // 与后端 settings.rs 的 AppSettings（serde rename_all = camelCase）保持一致
 export interface AppSettings {
@@ -233,7 +234,7 @@ export const useSettingsStore = defineStore("settings", () => {
       // 构建参数对象：将 camelCase key 转换为 snake_case 参数名
       const paramKey = getSetterParamKey(key);
       const args: Record<string, any> = { [paramKey]: value };
-      if (__DEV__) {
+      if (IS_DEV) {
         console.log(`Saving setting ${key} with value ${value}`, args);
       }
       await invoke(command, args);

@@ -7,7 +7,7 @@ const repoRoot = path.resolve(__dirname, "../..");
 const appRoot = __dirname;
 
 // 判断是否为 Windows 平台（窗口模式仅在 Windows 可用）
-const isWindows = process.env.TAURI_ENV_PLATFORM === "windows";
+const isWindows = process.platform === "win32";
 
 // 判断桌面环境（从 VITE_DESKTOP 环境变量读取）
 const desktop = process.env.VITE_DESKTOP || "";
@@ -15,8 +15,6 @@ const desktop = process.env.VITE_DESKTOP || "";
 const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
 
 const isLocalMode = process.env.VITE_KABEGAME_MODE === "local";
-
-// console.log(process.env);
 
 export default defineConfig({
   plugins: [

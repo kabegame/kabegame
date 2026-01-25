@@ -1,7 +1,7 @@
+use crate::storage::Storage;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::storage::Storage;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,11 +57,9 @@ impl Storage {
         let rows = stmt
             .query_map([], |row| {
                 let user_config_json: Option<String> = row.get(6)?;
-                let user_config = user_config_json
-                    .and_then(|s| serde_json::from_str(&s).ok());
+                let user_config = user_config_json.and_then(|s| serde_json::from_str(&s).ok());
                 let http_headers_json: Option<String> = row.get(7)?;
-                let http_headers = http_headers_json
-                    .and_then(|s| serde_json::from_str(&s).ok());
+                let http_headers = http_headers_json.and_then(|s| serde_json::from_str(&s).ok());
                 Ok(RunConfig {
                     id: row.get(0)?,
                     name: row.get(1)?,

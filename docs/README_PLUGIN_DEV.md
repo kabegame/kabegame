@@ -160,6 +160,8 @@ node package-plugin.js --outDir ../data/plugins-directory
 - `resolve_url(relative)` - 解析相对 URL（基于当前栈顶 URL）
 - `is_image_url(url)` - 检查是否是图片 URL
 - `download_image(url)` - 下载图片并添加到 gallery，返回 `true` 表示成功，`false` 或错误表示失败
+- `set_concurrency(limit)` - 设置当前任务的最大并发下载数量（`limit` 必须大于 0）
+- `set_interval(ms)` - 设置当前任务下载请求之间的最小间隔时间（毫秒）
 - `add_progress(percentage)` - 增加任务运行进度（单位为%，累加）。进度会自动限制在 0-99.9% 之间，任务成功完成时会自动设置为 100%
 - `list_local_files(folder_url, extensions)` - 列出本地文件夹内的文件（非递归）。`folder_url` 应为 `file:///` 开头的 URL，`extensions` 为文件扩展名数组（不包含点号）。返回文件 URL 数组，错误时抛出异常
 

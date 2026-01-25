@@ -25,6 +25,7 @@ async fn plugin_editor_run_task(
     script: String,
     icon_rgb_base64: Option<String>,
     user_config: Option<HashMap<String, JsonValue>>,
+    http_headers: Option<HashMap<String, String>>,
     output_dir: Option<String>,
     output_album_id: Option<String>,
 ) -> Result<(), String> {
@@ -70,6 +71,7 @@ async fn plugin_editor_run_task(
         task_id: Some(task_id),
         output_album_id,
         plugin_args,
+        http_headers,
     };
 
     match kabegame_core::ipc::ipc::request(req).await {
@@ -106,6 +108,7 @@ async fn start_task(
         script,
         icon_rgb_base64,
         task.user_config.clone(),
+        task.http_headers.clone(),
         task.output_dir.clone(),
         task.output_album_id.clone(),
     )

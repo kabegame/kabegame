@@ -159,7 +159,10 @@ pub fn icon_png_to_rgb24_fixed(path: &Path) -> Result<Vec<u8>, String> {
 ///
 /// - `icon_rgb24`：若为 None 或长度不正确，则视为 icon 不存在（写全 0）
 /// - `manifest_json`：UTF-8 JSON bytes（长度必须 <= 4096）
-pub fn build_kgpg2_header(icon_rgb24: Option<&[u8]>, manifest_json: &[u8]) -> Result<Vec<u8>, String> {
+pub fn build_kgpg2_header(
+    icon_rgb24: Option<&[u8]>,
+    manifest_json: &[u8],
+) -> Result<Vec<u8>, String> {
     if manifest_json.len() > KGPG2_MANIFEST_SLOT_SIZE {
         return Err(format!(
             "manifest 槽位超限：{} bytes（上限 {}）",
@@ -171,8 +174,7 @@ pub fn build_kgpg2_header(icon_rgb24: Option<&[u8]>, manifest_json: &[u8]) -> Re
     let icon_ok = icon_rgb24
         .map(|b| b.len() == KGPG2_ICON_SIZE)
         .unwrap_or(false);
-    let flags: u8 = (if icon_ok { 0b0000_0001 } else { 0 })
-        | 0b0000_0010; // manifest_present
+    let flags: u8 = (if icon_ok { 0b0000_0001 } else { 0 }) | 0b0000_0010; // manifest_present
 
     let mut header = vec![0u8; KGPG2_TOTAL_HEADER_SIZE];
     // meta
@@ -213,8 +215,7 @@ pub fn write_kgpg2_from_zip_bytes(
         ));
     }
     if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建输出目录失败: {}", e))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建输出目录失败: {}", e))?;
     }
 
     let tmp = output_path.with_extension("kgpg.tmp");
@@ -236,4 +237,3 @@ pub fn write_kgpg2_from_zip_bytes(
     std::fs::rename(&tmp, output_path).map_err(|e| format!("完成输出失败: {}", e))?;
     Ok(())
 }
-

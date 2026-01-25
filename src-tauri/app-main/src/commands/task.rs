@@ -33,13 +33,13 @@ pub async fn cancel_task(task_id: String) -> Result<(), String> {
     // 任务取消通常需要通知 Scheduler 或 Runtime
     // 这里我们直接调用 TaskScheduler 的 cancel
     use kabegame_core::crawler::TaskScheduler;
-    TaskScheduler::global().cancel_task(&task_id)
+    TaskScheduler::global().cancel_task(&task_id).await
 }
 
 #[tauri::command]
 pub async fn get_active_downloads() -> Result<serde_json::Value, String> {
     use kabegame_core::crawler::TaskScheduler;
-    let downloads = TaskScheduler::global().get_active_downloads()?;
+    let downloads = TaskScheduler::global().get_active_downloads().await?;
     Ok(serde_json::to_value(downloads).map_err(|e| e.to_string())?)
 }
 

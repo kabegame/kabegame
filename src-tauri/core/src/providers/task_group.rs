@@ -125,7 +125,7 @@ impl Provider for TaskGroupProvider {
             .map(|(id, path)| (id, path))
     }
 
-    #[cfg(kabegame_mode = "light")]
+    #[cfg(not(kabegame_mode = "light"))]
     fn delete_child(
         &self,
         storage: &Storage,

@@ -1,7 +1,7 @@
-﻿// 启动步骤函数
+// 启动步骤函数
 
 use std::fs;
-use tauri::{Manager};
+use tauri::Manager;
 
 use crate::commands::wallpaper::init_wallpaper_on_startup;
 use crate::wallpaper::manager::WallpaperController;

@@ -35,10 +35,7 @@
     // Builtin plugins list (comma-separated):
     // - local mode: all plugins are built-in
     // - normal mode: empty list
-    let builtins = if normalized == "local" {
-        env::var("KABEGAME_BUILTIN_PLUGINS").unwrap_or_else(|_| "local-import".to_string())
-    } else {
-        String::new()
-    };
+    let builtins =
+        env::var("KABEGAME_BUILTIN_PLUGINS").unwrap_or_else(|_| "local-import".to_string());
     println!("cargo:rustc-env=KABEGAME_BUILTIN_PLUGINS={}", builtins);
 }

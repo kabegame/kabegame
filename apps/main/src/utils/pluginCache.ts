@@ -1,4 +1,4 @@
-interface BrowserPlugin {
+export interface BrowserPlugin {
   id: string;
   name: string;
   desp: string;
@@ -6,6 +6,7 @@ interface BrowserPlugin {
   filePath?: string;
   doc?: string;
   baseUrl?: string;
+  isBuiltIn: boolean;
 }
 
 export interface CachedPluginData {
@@ -26,7 +27,7 @@ export class LRUCache<K, V> {
     if (!this.cache.has(key)) {
       console.log(
         `[LRU缓存] 未找到键: ${key}，当前缓存键:`,
-        Array.from(this.cache.keys())
+        Array.from(this.cache.keys()),
       );
       return undefined;
     }

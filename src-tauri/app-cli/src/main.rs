@@ -181,6 +181,7 @@ fn run_plugin(args: RunPluginArgs) -> Result<(), String> {
         task_id: args.task_id,
         output_album_id,
         plugin_args: args.plugin_args,
+        http_headers: None,
     };
     match rt.block_on(kabegame_core::ipc::ipc::request(req)) {
         Ok(resp) if resp.ok => {

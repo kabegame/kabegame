@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kabegame Plugin Editor",
-  "version": "3.0.1",
-  "identifier": "com.kabegame.plugin-editor",
+  "version": "3.0.2",
+  "identifier": "KabegamePluginEditor",
   "build": {
     "beforeDevCommand": "bun run dev:frontend-plugin-editor",
     "beforeBuildCommand": "bun nx run .:build-plugin-editor",

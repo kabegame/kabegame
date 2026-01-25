@@ -1,4 +1,4 @@
-﻿//! 全局事件发送器模块
+//! 全局事件发送器模块
 //!
 //! 替代原有的 runtime 模块，提供统一的事件发送接口。
 //! 直接使用 IPC 事件发送器实现。
@@ -76,13 +76,6 @@ impl GlobalEmitter {
         state: &str,
         error: Option<&str>,
     ) {
-        if self
-            .broadcaster
-            .receiver_count(DaemonEventKind::DownloadState)
-            == 0
-        {
-            return;
-        }
         let event = Arc::new(DaemonEvent::DownloadState {
             task_id: task_id.to_string(),
             url: url.to_string(),
@@ -154,13 +147,6 @@ impl GlobalEmitter {
         received_bytes: u64,
         total_bytes: Option<u64>,
     ) {
-        if self
-            .broadcaster
-            .receiver_count(DaemonEventKind::DownloadProgress)
-            == 0
-        {
-            return;
-        }
         let event = Arc::new(DaemonEvent::DownloadProgress {
             task_id: task_id.to_string(),
             url: url.to_string(),
@@ -233,6 +219,12 @@ impl GlobalEmitter {
     /// 发送设置变更事件
     pub fn emit_setting_change(&self, changes: serde_json::Value) {
         let event = Arc::new(DaemonEvent::SettingChange { changes });
+        self.broadcaster.broadcast_sync(event);
+    }
+
+    /// 发送 pending 队列变化事件
+    pub fn emit_pending_queue_change(&self, pending_count: usize) {
+        let event = Arc::new(DaemonEvent::PendingQueueChange { pending_count });
         self.broadcaster.broadcast_sync(event);
     }
 }
@@ -330,4 +322,6 @@ impl GlobalEmitter {
     pub fn emit_wallpaper_update_transition(&self, _transition: &str) {}
 
     pub fn emit_setting_change(&self, _changes: serde_json::Value) {}
+
+    pub fn emit_pending_queue_change(&self, _pending_count: usize) {}
 }

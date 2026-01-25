@@ -148,6 +148,50 @@ const RHAI_API_DOCS: Record<string, ApiDoc> = {
     markdown: ["**resolve_url(relative)**", "", "将相对 URL 解析为绝对 URL（基于当前栈顶 URL）。"].join("\n"),
     params: [{ label: "relative", documentation: "相对 URL。" }],
   },
+  set_header: {
+    signature: "set_header(key, value)",
+    markdown: [
+      "**set_header(key, value)**",
+      "",
+      "设置一个 HTTP Header（覆盖同名值）。",
+      "",
+      "- 仅影响当前任务中由 Rhai 发起的 HTTP 请求（如 `to()` / `to_json()` / `download_image()` / `download_archive()`）",
+      "- `key` / `value` 会做合法性校验；不合法会被忽略，并在任务日志中提示",
+    ].join("\n"),
+    params: [
+      { label: "key", documentation: "Header 名（如 Authorization、User-Agent）。" },
+      { label: "value", documentation: "Header 值。" },
+    ],
+  },
+  del_header: {
+    signature: "del_header(key)",
+    markdown: ["**del_header(key)**", "", "删除一个 HTTP Header。"].join("\n"),
+    params: [{ label: "key", documentation: "Header 名。" }],
+  },
+  set_concurrency: {
+    signature: "set_concurrency(limit)",
+    markdown: [
+      "**set_concurrency(limit)**",
+      "",
+      "设置当前任务的最大并发下载数量。",
+      "",
+      "- 参数：`limit` (int) 最大并发数（必须大于 0）",
+      "- 默认无限制",
+    ].join("\n"),
+    params: [{ label: "limit", documentation: "最大并发数。" }],
+  },
+  set_interval: {
+    signature: "set_interval(ms)",
+    markdown: [
+      "**set_interval(ms)**",
+      "",
+      "设置当前任务下载请求之间的最小间隔时间（毫秒）。",
+      "",
+      "- 参数：`ms` (int) 最小间隔时间（毫秒）",
+      "- 计时基准是“上一个下载完成的时间”",
+    ].join("\n"),
+    params: [{ label: "ms", documentation: "最小间隔时间（毫秒）。" }],
+  },
   is_image_url: {
     signature: "is_image_url(url)",
     markdown: ["**is_image_url(url)**", "", "检查 URL 是否是图片 URL。"].join("\n"),

@@ -17,15 +17,19 @@ use uuid::Uuid;
 use zip::ZipArchive;
 
 const BUILD_MODE: &str = env!("KABEGAME_BUILD_MODE"); // injected by build.rs
+static BUILTIN_PLUGINS: &str = env!("KABEGAME_BUILTIN_PLUGINS");
 
 fn is_local_mode() -> bool {
     BUILD_MODE == "local"
 }
 
-fn is_immutable_builtin_id(builtins: &HashSet<String>, plugin_id: &str) -> bool {
+fn is_immutable_builtin_id(plugin_id: &str) -> bool {
     // 只有 local 模式才把内置插件视为"不可变/不可卸载"。
     // normal 模式的"本地两个插件"只是首次安装的种子，不应阻止用户覆盖/卸载。
-    is_local_mode() && builtins.contains(plugin_id)
+    BUILTIN_PLUGINS
+        .split(',')
+        .map(|s| s.trim())
+        .any(|s| s == plugin_id)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,7 +65,6 @@ pub struct PluginSelector {
 
 pub struct PluginManager {
     remote_zip_cache: Mutex<HashMap<String, RemoteZipCacheEntry>>,
-    builtins_cache: Mutex<Option<HashSet<String>>>,
     installed_cache: Mutex<InstalledPluginsCache>,
 }
 
@@ -115,7 +118,6 @@ impl PluginManager {
     pub fn new() -> Self {
         Self {
             remote_zip_cache: Mutex::new(HashMap::new()),
-            builtins_cache: Mutex::new(None),
             installed_cache: Mutex::new(InstalledPluginsCache::default()),
         }
     }
@@ -199,32 +201,9 @@ impl PluginManager {
         ))
     }
 
-    /// 从编译期常量解析内置插件列表（逗号分隔）
-    fn parse_builtin_plugins() -> HashSet<String> {
-        const BUILTINS_STR: &str = env!("KABEGAME_BUILTIN_PLUGINS");
-        BUILTINS_STR
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    }
-
-    fn builtins(&self) -> HashSet<String> {
-        if let Ok(mut guard) = self.builtins_cache.lock() {
-            if let Some(cached) = guard.as_ref() {
-                return cached.clone();
-            }
-            let loaded = Self::parse_builtin_plugins();
-            *guard = Some(loaded.clone());
-            return loaded;
-        }
-        Self::parse_builtin_plugins()
-    }
-
     /// 每次启动：将 resources/plugins 下的内置插件覆盖复制到用户插件目录，确保可用性/不变性
     pub fn ensure_prepackaged_plugins_installed(&self) -> Result<(), String> {
-        let builtins = self.builtins();
-        if builtins.is_empty() {
+        if BUILTIN_PLUGINS.is_empty() {
             return Ok(());
         }
 
@@ -236,7 +215,11 @@ impl PluginManager {
         fs::create_dir_all(&dst_dir)
             .map_err(|e| format!("Failed to create plugins directory: {}", e))?;
 
-        for id in builtins {
+        for id in BUILTIN_PLUGINS
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             let src = src_dir.join(format!("{}.kgpg", id));
             if !src.is_file() {
                 // 资源缺失：跳过（不算致命）
@@ -371,7 +354,7 @@ impl PluginManager {
     /// 删除插件（删除对应的 .kgpg 文件）
     pub fn delete(&self, id: &str) -> Result<(), String> {
         // 内置插件不可卸载（仅 local 模式；normal 模式允许用户覆盖/卸载）
-        if is_immutable_builtin_id(&self.builtins(), id) {
+        if is_immutable_builtin_id(id) {
             return Err("该插件为内置插件，禁止卸载。请切换应用程序版本。".to_string());
         }
 
@@ -740,7 +723,7 @@ impl PluginManager {
                 .and_then(|c| c.base_url.clone())
                 .unwrap_or_default(),
             size_bytes,
-            built_in: is_immutable_builtin_id(&self.builtins(), &plugin_id),
+            built_in: is_immutable_builtin_id(&plugin_id),
             config: HashMap::new(),
             selector: config.and_then(|c| c.selector),
         };
@@ -1649,7 +1632,11 @@ impl PluginManager {
             desp: manifest.description,
             doc,
             icon_data,
-            origin: "installed".to_string(),
+            origin: if is_immutable_builtin_id(plugin_id) {
+                "builtin".to_string()
+            } else {
+                "installed".to_string()
+            },
             base_url,
         })
     }
@@ -1936,7 +1923,6 @@ impl PluginManager {
     /// 前端手动“刷新已安装源”：重扫插件目录并重建缓存（全量刷新）
     pub fn refresh_installed_plugins_cache(&self) -> Result<(), String> {
         let plugins_dir = self.get_plugins_directory();
-        let builtins = self.builtins();
 
         let mut by_id: HashMap<String, PathBuf> = HashMap::new();
         let mut plugins: HashMap<String, Plugin> = HashMap::new();
@@ -1963,7 +1949,7 @@ impl PluginManager {
                 let stamp = FileStamp::from_path(&path)?;
                 let parsed = self.parse_kgpg_for_cache(&path)?;
 
-                let built_in = is_immutable_builtin_id(&builtins, &plugin_id);
+                let built_in = is_immutable_builtin_id(&plugin_id);
                 let plugin = Plugin {
                     id: plugin_id.clone(),
                     name: parsed.manifest.name.clone(),
@@ -2049,13 +2035,11 @@ impl PluginManager {
             None
         };
 
-        let builtins = self.builtins();
-
         // 找到文件：重新解析并更新（不持锁做 IO）
         if let Some(path) = found_path {
             let stamp = FileStamp::from_path(&path)?;
             let parsed = self.parse_kgpg_for_cache(&path)?;
-            let built_in = is_immutable_builtin_id(&builtins, plugin_id);
+            let built_in = is_immutable_builtin_id(plugin_id);
 
             let plugin = Plugin {
                 id: plugin_id.to_string(),

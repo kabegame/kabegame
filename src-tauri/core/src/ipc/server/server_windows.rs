@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use crate::ipc::{CliIpcRequest, CliIpcResponse};
 use crate::ipc::ipc::{encode_frame, read_one_frame, windows_pipe_name, write_all};
+use crate::ipc::{CliIpcRequest, CliIpcResponse};
 use crate::ipc_dbg;
 use tokio::io::split;
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};

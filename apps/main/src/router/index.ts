@@ -94,9 +94,4 @@ const router = createRouter({
   routes,
 });
 
-router.beforeEach((to, _from, next) => {
-  document.title = `${to.meta.title || "Kabegame"} - 老婆收集器`;
-  next();
-});
-
 export default router;

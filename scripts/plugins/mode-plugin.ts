@@ -2,9 +2,9 @@ import {
   scanBuiltinPlugins,
   ensureDokan2DllResource,
   ensureDokanInstallerResourceIfPresent,
-} from "../build-utils";
+} from "../utils";
 import { BasePlugin } from "./base-plugin";
-import { run } from "../build-utils";
+import { run } from "../utils";
 import { Component, ComponentPlugin } from "./component-plugin";
 import chalk from "chalk";
 import { BuildSystem } from "scripts/build-system";
@@ -65,12 +65,14 @@ export class ModePlugin extends BasePlugin {
     bs.hooks.prepareEnv.tap(this.name, () => {
       this.setEnv("KABEGAME_MODE", this.mode!.mode);
       this.setEnv("VITE_KABEGAME_MODE", this.mode!.mode);
-      this.setBuiltinPluginsEnvIfNeeded();
+      this.addRustFlags(`--cfg kabegame_mode="${this.mode!.mode}"`);
     });
 
     bs.hooks.beforeBuild.tap(this.name, () => {
       this.packagePlugins(bs);
       this.prepareResources(bs);
+      // 这一步一定要到 packagePlugin 之后，否则会扫描不到插件
+      this.setBuiltinPluginsEnvIfNeeded(!bs.context.cmd.isBuild);
     });
 
     bs.hooks.prepareCompileArgs.tap(
@@ -94,11 +96,6 @@ export class ModePlugin extends BasePlugin {
             : nullOrCompOrFeatures["comp"]
           : bs.context.component!;
 
-        // cfg 参数：注入 kabegame_mode
-        const cfgs = [`kabegame_mode="${mode.mode}"`];
-
-        this.addRustFlags(`--cfg kabegame_mode="${mode.mode}"`);
-
         // 只保留 self-hosted feature 的逻辑
         return {
           comp,
@@ -111,7 +108,10 @@ export class ModePlugin extends BasePlugin {
   }
 
   // 准备资源文件（仅在需要时包含 dokan 相关文件）
-  prepareResources(bs: any): void {
+  prepareResources(bs: BuildSystem): void {
+    if (!bs.context.cmd.isBuild) {
+      return;
+    }
     // Light mode 不需要虚拟驱动功能，跳过 dokan 资源处理
     if (this.mode!.isLight) {
       this.log(chalk.yellow("Light mode: skipping Dokan resource preparation"));
@@ -119,7 +119,7 @@ export class ModePlugin extends BasePlugin {
     }
 
     // 仅在 main 组件构建时才需要处理 dokan 资源
-    if (bs.context.component.isMain) {
+    if (bs.context.component!.isMain) {
       this.log("Ensuring Dokan resources...");
       ensureDokan2DllResource();
       ensureDokanInstallerResourceIfPresent();
@@ -127,15 +127,15 @@ export class ModePlugin extends BasePlugin {
   }
 
   // 打包rhai插件
-  packagePlugins(bs: any): void {
-    this.log("package plugins");
+  packagePlugins(bs: BuildSystem): void {
     const cmd = bs.context.cmd;
-    const mode = bs.context.mode;
-    const comp = bs.context.component;
+    const mode = bs.context.mode!;
+    const comp = bs.context.component!;
     if (cmd.isDev) {
-      const packageTarget = mode.isLocal
-        ? "crawler-plugins:package-local-to-data"
-        : "crawler-plugins:package-to-data";
+      const packageTarget = !mode.isNormal
+        ? "crawler-plugins:package-to-data"
+        : // 注意，这里的 local-to-data 是指只打包 local-import 插件
+          "crawler-plugins:package-local-to-data";
       this.log(chalk.blue(`打包插件到开发目录: ${packageTarget}`));
       run("nx", ["run", packageTarget], {
         bin: "bun",
@@ -144,9 +144,9 @@ export class ModePlugin extends BasePlugin {
       if (!comp.isMain) {
         return;
       }
-      const packageTarget = mode.isLocal
-        ? "crawler-plugins:package-local-to-resources"
-        : "crawler-plugins:package-to-resources";
+      const packageTarget = !mode.isNormal
+        ? "crawler-plugins:package-to-resources"
+        : "crawler-plugins:package-local-to-resources";
       this.log(chalk.blue(`打包插件到资源: ${packageTarget}`));
       run("nx", ["run", packageTarget], {
         bin: "bun",
@@ -155,7 +155,7 @@ export class ModePlugin extends BasePlugin {
     // start 命令不打包插件
   }
 
-  setBuiltinPluginsEnvIfNeeded(): void {
+  setBuiltinPluginsEnvIfNeeded(isDev: boolean = false): void {
     if (!this.mode) {
       return;
     }
@@ -166,7 +166,7 @@ export class ModePlugin extends BasePlugin {
       builtinPlugins = ["local-import"];
     } else {
       // Local 和 Light 模式包含所有预打包插件
-      builtinPlugins = scanBuiltinPlugins();
+      builtinPlugins = scanBuiltinPlugins(isDev);
     }
 
     const csv = builtinPlugins.join(",");

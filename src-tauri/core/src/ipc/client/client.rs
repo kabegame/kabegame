@@ -1,20 +1,22 @@
 ﻿//! IPC 客户端：封装与 daemon 的通信，供所有前端（app-main、plugin-editor、cli）复用
 //!
 //! 使用示例：
-//! ```rust
+//! ```rust,no_run
 //! use kabegame_core::ipc::client::IpcClient;
 //!
-//! let client = IpcClient::new();
+//! fn main() -> Result<(), String> {
+//!     let rt = tokio::runtime::Runtime::new().unwrap();
+//!     rt.block_on(async {
+//!         let client = IpcClient::new();
+//!         client.connect().await?;
 //!
-//! // Storage 操作
-//! let images = client.storage_get_images().await?;
-//! let albums = client.storage_get_albums().await?;
-//!
-//! // Plugin 操作
-//! let plugins = client.plugin_get_plugins().await?;
-//!
-//! // Settings 操作
-//! let settings = client.settings_get().await?;
+//!         let _images = client.storage_get_images().await?;
+//!         let _albums = client.storage_get_albums().await?;
+//!         let _plugins = client.plugin_get_plugins().await?;
+//!         let _auto_launch = client.settings_get_auto_launch().await?;
+//!         Ok(())
+//!     })
+//! }
 //! ```
 
 use std::sync::Arc;
@@ -606,6 +608,7 @@ impl IpcClient {
                 task_id: task_id.clone(),
                 output_album_id,
                 plugin_args,
+                http_headers: None,
             })
             .await?;
         if !resp.ok {
@@ -859,11 +862,13 @@ impl IpcClient {
             .await
     }
 
+    #[cfg(not(kabegame_mode = "light"))]
     pub async fn settings_set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
         self.request_ok(CliIpcRequest::SettingsSetAlbumDriveEnabled { enabled })
             .await
     }
 
+    #[cfg(not(kabegame_mode = "light"))]
     pub async fn settings_set_album_drive_mount_point(
         &self,
         mount_point: String,

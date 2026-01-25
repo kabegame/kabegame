@@ -9,10 +9,12 @@
  *   2. 从 Cargo.toml 同步: bun run set-version --sync
  */
 
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { Command } from 'commander';
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { Command } from "commander";
+import { readCargoTomlVersion } from "./utils";
+import { ROOT } from "./utils";
 
 interface PackageJson {
   version: string;
@@ -26,167 +28,149 @@ interface TauriConf {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, '..');
-
-// 读取/更新 Cargo.toml (Workspace Root)
-function readCargoTomlVersion(): string {
-    const cargoTomlPath = path.join(rootDir, 'Cargo.toml');
-    if (!fs.existsSync(cargoTomlPath)) {
-        throw new Error('Cargo.toml not found');
-    }
-
-    const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8');
-    const workspacePackageRegex = /(\[workspace\.package\][^\[]*?version\s*=\s*")([^"]+)(")/s;
-    const match = cargoToml.match(workspacePackageRegex);
-
-    if (!match) {
-        throw new Error('Could not find [workspace.package] version in Cargo.toml');
-    }
-
-    return match[2];
-}
 
 function updateCargoTomlVersion(newVersion: string): void {
-    const cargoTomlPath = path.join(rootDir, 'Cargo.toml');
-    const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8');
-    const workspacePackageRegex = /(\[workspace\.package\][^\[]*?version\s*=\s*")([^"]+)(")/s;
+  const cargoTomlPath = path.join(ROOT, "Cargo.toml");
+  const cargoToml = fs.readFileSync(cargoTomlPath, "utf8");
+  const workspacePackageRegex =
+    /(\[workspace\.package\][^\[]*?version\s*=\s*")([^"]+)(")/s;
 
-    if (!workspacePackageRegex.test(cargoToml)) {
-        throw new Error('Could not find [workspace.package] version in Cargo.toml');
-    }
+  if (!workspacePackageRegex.test(cargoToml)) {
+    throw new Error("Could not find [workspace.package] version in Cargo.toml");
+  }
 
-    const updatedCargoToml = cargoToml.replace(workspacePackageRegex, `$1${newVersion}$3`);
-    fs.writeFileSync(cargoTomlPath, updatedCargoToml);
-    console.log(`✓ Updated Cargo.toml to ${newVersion}`);
+  const updatedCargoToml = cargoToml.replace(
+    workspacePackageRegex,
+    `$1${newVersion}$3`,
+  );
+  fs.writeFileSync(cargoTomlPath, updatedCargoToml);
+  console.log(`✓ Updated Cargo.toml to ${newVersion}`);
 }
 
 // 更新 packages/core/package.json
 function updateCorePackageJson(newVersion: string): void {
-    const corePkgPath = path.join(rootDir, 'packages', 'core', 'package.json');
-    if (!fs.existsSync(corePkgPath)) {
-        return;
-    }
+  const corePkgPath = path.join(ROOT, "packages", "core", "package.json");
+  if (!fs.existsSync(corePkgPath)) {
+    return;
+  }
 
-    try {
-        const pkg: PackageJson = JSON.parse(fs.readFileSync(corePkgPath, 'utf8'));
-        pkg.version = newVersion;
-        fs.writeFileSync(corePkgPath, JSON.stringify(pkg, null, 2) + '\n');
-        console.log(`✓ Updated packages/core/package.json to ${newVersion}`);
-    } catch (e: any) {
-        console.error(`✗ Error updating ${corePkgPath}:`, e.message);
-    }
+  try {
+    const pkg: PackageJson = JSON.parse(fs.readFileSync(corePkgPath, "utf8"));
+    pkg.version = newVersion;
+    fs.writeFileSync(corePkgPath, JSON.stringify(pkg, null, 2) + "\n");
+    console.log(`✓ Updated packages/core/package.json to ${newVersion}`);
+  } catch (e: any) {
+    console.error(`✗ Error updating ${corePkgPath}:`, e.message);
+  }
 }
 
 // 更新 Tauri 配置文件
 function updateTauriConf(relPath: string, newVersion: string): void {
-    const fullPath = path.join(rootDir, relPath);
-    if (!fs.existsSync(fullPath)) {
-        return;
-    }
+  const fullPath = path.join(ROOT, relPath);
+  if (!fs.existsSync(fullPath)) {
+    return;
+  }
 
-    try {
-        const conf: TauriConf = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
-        conf.version = newVersion;
-        fs.writeFileSync(fullPath, JSON.stringify(conf, null, 2));
-        console.log(`✓ Updated ${relPath} to ${newVersion}`);
-    } catch (e: any) {
-        console.error(`✗ Error updating ${relPath}:`, e.message);
-    }
+  try {
+    const conf: TauriConf = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+    conf.version = newVersion;
+    fs.writeFileSync(fullPath, JSON.stringify(conf, null, 2));
+    console.log(`✓ Updated ${relPath} to ${newVersion}`);
+  } catch (e: any) {
+    console.error(`✗ Error updating ${relPath}:`, e.message);
+  }
 }
 
 // 更新所有 Tauri 配置文件
 function updateAllTauriConfs(newVersion: string): void {
-    const tauriConfPaths = [
-        'src-tauri/app-main/tauri.conf.json',
-        'src-tauri/app-cli/tauri.conf.json',
-        'src-tauri/app-plugin-editor/tauri.conf.json'
-    ];
+  const tauriConfPaths = [
+    "src-tauri/app-main/tauri.conf.json",
+    "src-tauri/app-cli/tauri.conf.json",
+    "src-tauri/app-plugin-editor/tauri.conf.json",
+  ];
 
-    tauriConfPaths.forEach(relPath => {
-        updateTauriConf(relPath, newVersion);
-    });
+  tauriConfPaths.forEach((relPath) => {
+    updateTauriConf(relPath, newVersion);
+  });
 
-    // 更新 Linux 配置文件（如果存在）
-    const linuxConfPath = 'src-tauri/app-main/tauri.linux.conf.json';
-    if (fs.existsSync(path.join(rootDir, linuxConfPath))) {
-        updateTauriConf(linuxConfPath, newVersion);
-    }
+  // 更新 Linux 配置文件（如果存在）
+  const linuxConfPath = "src-tauri/app-main/tauri.linux.conf.json";
+  if (fs.existsSync(path.join(ROOT, linuxConfPath))) {
+    updateTauriConf(linuxConfPath, newVersion);
+  }
 }
 
 // 验证版本号格式
 function validateVersion(version: string): boolean {
-    return /^\d+\.\d+\.\d+/.test(version);
+  return /^\d+\.\d+\.\d+/.test(version);
 }
 
 // 主函数：设置版本
 function setVersion(newVersion: string): void {
-    console.log(`Setting version to ${newVersion}...`);
+  console.log(`Setting version to ${newVersion}...`);
 
-    if (!validateVersion(newVersion)) {
-        console.error('✗ Error: Version must be in format x.y.z');
-        process.exit(1);
-    }
+  if (!validateVersion(newVersion)) {
+    console.error("✗ Error: Version must be in format x.y.z");
+    process.exit(1);
+  }
 
-    try {
-        updateCargoTomlVersion(newVersion);
-        updateCorePackageJson(newVersion);
-        updateAllTauriConfs(newVersion);
-        console.log(`\n🎉 Version successfully set to ${newVersion}!`);
-    } catch (error) {
-        console.error('✗ Error:', (error as Error).message);
-        process.exit(1);
-    }
+  try {
+    updateCargoTomlVersion(newVersion);
+    updateCorePackageJson(newVersion);
+    updateAllTauriConfs(newVersion);
+    console.log(`\n🎉 Version successfully set to ${newVersion}!`);
+  } catch (error) {
+    console.error("✗ Error:", (error as Error).message);
+    process.exit(1);
+  }
 }
 
 // 主函数：从 Cargo.toml 同步版本
 function syncVersion(): void {
-    console.log('Syncing version from Cargo.toml...');
+  console.log("Syncing version from Cargo.toml...");
 
-    try {
-        const version = readCargoTomlVersion();
-        console.log(`Found version ${version} in Cargo.toml`);
+  try {
+    const version = readCargoTomlVersion();
+    console.log(`Found version ${version} in Cargo.toml`);
 
-        updateCorePackageJson(version);
-        updateAllTauriConfs(version);
-        console.log(`\n🎉 Version successfully synced to ${version}!`);
-    } catch (error) {
-        console.error('✗ Error:', (error as Error).message);
-        process.exit(1);
-    }
+    updateCorePackageJson(version);
+    updateAllTauriConfs(version);
+    console.log(`\n🎉 Version successfully synced to ${version}!`);
+  } catch (error) {
+    console.error("✗ Error:", (error as Error).message);
+    process.exit(1);
+  }
 }
 
 // 创建 Commander 程序
 const program = new Command();
 
-program
-    .name('set-version')
-    .description('统一管理项目版本号')
-    .version('1.0.0');
+program.name("set-version").description("统一管理项目版本号").version("1.0.0");
 
 program
-    .command('set <version>')
-    .description('设置新版本并同步到所有配置文件')
-    .action((version: string) => {
-        setVersion(version);
-    });
+  .command("set <version>")
+  .description("设置新版本并同步到所有配置文件")
+  .action((version: string) => {
+    setVersion(version);
+  });
 
 program
-    .command('sync')
-    .description('从 Cargo.toml 同步版本到其他配置文件')
-    .action(() => {
-        syncVersion();
-    });
+  .command("sync")
+  .description("从 Cargo.toml 同步版本到其他配置文件")
+  .action(() => {
+    syncVersion();
+  });
 
 // 如果没有提供子命令，则默认为 set 命令（向后兼容）
 program
-    .argument('[version]', '要设置的版本号（格式：x.y.z）')
-    .action((version: string) => {
-        if (version) {
-            setVersion(version);
-        } else {
-            syncVersion();
-        }
-    });
+  .argument("[version]", "要设置的版本号（格式：x.y.z）")
+  .action((version: string) => {
+    if (version) {
+      setVersion(version);
+    } else {
+      syncVersion();
+    }
+  });
 
 // 解析命令行参数
 program.parse();

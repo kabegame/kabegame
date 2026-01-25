@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --config vite.config.ts",
-    "build": "vue-tsc && vite build --config vite.config.ts"
+    "build": "vite build --config vite.config.ts"
   },
   "dependencies": {
     "@kabegame/core": "workspace:*",

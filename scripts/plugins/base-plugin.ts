@@ -8,7 +8,7 @@ import { BuildSystem } from "scripts/build-system";
  * 所有插件都应该继承此类或实现相同的接口
  */
 
-export class BasePlugin {
+export abstract class BasePlugin {
   constructor(protected name: string) {}
 
   log(...args: any[]): void {
@@ -18,9 +18,7 @@ export class BasePlugin {
   /**
    * 插件应用（同步）
    */
-  apply(_buildSystem: BuildSystem): void {
-    throw new Error(`Plugin ${this.name} must implement apply method`);
-  }
+  abstract apply(_buildSystem: BuildSystem): void;
 
   /**
    * 获取插件名称
@@ -31,7 +29,7 @@ export class BasePlugin {
 
   setEnv(env: string, value: string): void {
     process.env[env] = value;
-    this.log(chalk.cyan(`set ${env}=${value}`));
+    this.log(chalk.cyan(`${env}=${value}`));
   }
 
   addRustFlags(flag: string): void {

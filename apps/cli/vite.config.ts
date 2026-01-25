@@ -40,7 +40,7 @@ export default defineConfig({
             res.end(html);
           } catch (e) {
             server.config.logger.error(
-              `[kabegame-html-entry-rewrite-cli] failed: ${String(e)}`
+              `[kabegame-html-entry-rewrite-cli] failed: ${String(e)}`,
             );
             res.statusCode = 500;
             res.end("Internal Server Error");
@@ -72,7 +72,7 @@ export default defineConfig({
 
         await moveFile(
           path.join(outDir, "html", "index.html"),
-          path.join(outDir, "index.html")
+          path.join(outDir, "index.html"),
         );
         await rm(path.join(outDir, "html"), { recursive: true, force: true });
       },

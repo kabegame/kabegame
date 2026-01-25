@@ -15,7 +15,7 @@
   ; Move extra executables from resources/bin to install root ($INSTDIR).
   ; We intentionally avoid Tauri sidecar/externalBin and instead ship exe as resources.
   ; Check if dokan2.dll is bundled (not present in light mode)
-  IfFileExists "$INSTDIR\resources\bin\dokan2.dll" 0 +3
+  IfFileExists "$INSTDIR\resources\bin\dokan2.dll" +4 0
     DetailPrint "dokan2.dll not bundled (light mode), skipping Dokan setup."
     ; is light mode, skip copy binary
     Goto no_light_done
@@ -34,8 +34,8 @@
   ; NOTE:
   ; - 仅检查 dokan2.dll 不可靠；驱动关键文件是 dokan2.sys。
   ; - 32-bit installer 进程可能存在 System32 重定向，这里只做 best-effort 检查；若不确定直接尝试安装。
-  IfFileExists "$SYSDIR\drivers\dokan2.sys" +16 0
-    IfFileExists "$INSTDIR\resources\bin\dokan-installer.exe" 0 +15
+  IfFileExists "$SYSDIR\drivers\dokan2.sys" +12 0
+    IfFileExists "$INSTDIR\resources\bin\dokan-installer.exe" 0 +11
       DetailPrint "Dokan driver not found; installing (via runas)..."
       ; Marker: record that we attempted to launch installer (for debugging)
       FileOpen $2 "$INSTDIR\dokan-install-attempt.txt" w
@@ -86,16 +86,8 @@
   IfFileExists "$INSTDIR\kabegame-cliw.exe" 0 +2
     Delete "$INSTDIR\kabegame-cliw.exe"
 
-  ; Check if dokan2.dll was bundled (skip cleanup if not present)
-  IfFileExists "$INSTDIR\resources\bin\dokan2.dll" 0 +3
-    DetailPrint "dokan2.dll not bundled (light mode), skipping Dokan cleanup."
-    Goto cleanup_done
-
   IfFileExists "$INSTDIR\dokan2.dll" 0 +2
     Delete "$INSTDIR\dokan2.dll"
-
-  cleanup_done:
-  ; Keep dokan-installer.exe inside resources (if any). It's safe to leave it to installer cleanup.
 
   ; Remove folder attributes (best-effort).
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib -s -r $\"$INSTDIR$\"'
