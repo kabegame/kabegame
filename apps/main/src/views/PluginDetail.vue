@@ -1,4 +1,5 @@
 <template>
+    <!-- TODO: 这里AI写的代码太乱，不能细看 -->
     <PluginDetailPage :title="plugin?.name || '源详情'" :show-back="true" :loading="loading" :show-skeleton="showSkeleton"
         :plugin="plugin" :installed="isInstalled" :installing="installing" :show-uninstall="true"
         :load-doc-image-bytes="loadDocImageBytes" @back="goBack" @install="handleInstall" @uninstall="handleUninstall"
@@ -13,16 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { usePluginStore } from "@/stores/plugins";
 import { pluginCache } from "@/utils/pluginCache";
 import PluginDetailPage from "@kabegame/core/components/plugin/PluginDetailPage.vue";
-
-interface BrowserPlugin {
-    id: string;
-    name: string;
-    desp: string;
-    icon?: string;
-    filePath?: string;
-    doc?: string;
-    baseUrl?: string;
-}
+import { BrowserPlugin } from "@/utils/pluginCache";
 
 interface PluginDetailDto {
     id: string;
@@ -30,7 +22,7 @@ interface PluginDetailDto {
     desp: string;
     doc?: string | null;
     iconData?: number[] | null;
-    origin: "installed" | "remote" | string;
+    origin: "installed" | "remote" | "builtin" | string;
     baseUrl?: string | null;
 }
 
@@ -142,6 +134,7 @@ const loadPlugin = async () => {
             icon,
             doc: detail.doc ?? undefined,
             baseUrl: detail.baseUrl ?? undefined,
+            isBuiltIn: detail.origin === "builtin",
         };
 
         plugin.value = found;

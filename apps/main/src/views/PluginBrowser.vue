@@ -2,13 +2,13 @@
   <div class="plugin-browser-container">
     <!-- 顶部工具栏 -->
     <PageHeader title="源管理">
-      <el-button v-if="!isLocalMode" @click="handleRefresh" :loading="isRefreshing">
+      <el-button @click="handleRefresh" :loading="isRefreshing">
         <el-icon>
           <Refresh />
         </el-icon>
         刷新
       </el-button>
-      <el-button @click="openPluginEditor">
+      <el-button @click="openPluginEditor" v-if="!IS_LIGHT_MODE">
         <el-icon>
           <EditPen />
         </el-icon>
@@ -73,8 +73,7 @@
               </div>
 
               <div class="plugin-footer">
-                <el-button type="danger" size="small" v-if="!(isLocalMode && plugin.builtIn)"
-                  @click.stop="handleDelete(plugin)">
+                <el-button type="danger" size="small" v-if="!plugin.builtIn" @click.stop="handleDelete(plugin)">
                   卸载
                 </el-button>
               </div>
@@ -83,18 +82,8 @@
         </div>
       </el-tab-pane>
       <!-- 商店源：按"源名称"动态生成 tab；每个 tab 只显示该源的数据 -->
-      <el-tab-pane v-for="s in storeSourcesToRender" :key="s.id" :label="s.name" :name="storeTabName(s.id)">
-        <!-- 搜索（暂不实现：先保留 UI） -->
-        <!-- <div class="filter-bar">
-          <el-input v-model="searchQuery" placeholder="搜索（开发中）" clearable disabled style="width: 300px;">
-            <template #prefix>
-              <el-icon>
-                <Search />
-              </el-icon>
-            </template>
-</el-input>
-</div> -->
-
+      <el-tab-pane v-if="!IS_LOCAL_MODE && !IS_LIGHT_MODE" v-for="s in storeSourcesToRender" :key="s.id" :label="s.name"
+        :name="storeTabName(s.id)">
         <!-- 插件列表（300ms 延迟显示骨架屏，避免快速刷新时闪屏） -->
         <div v-if="showSkeletonBySource[s.id]" class="loading-skeleton">
           <div class="skeleton-grid">
@@ -173,7 +162,7 @@
       </el-tab-pane>
 
       <!-- 添加源 tab -->
-      <el-tab-pane v-if="!isLocalMode" name="add-source">
+      <el-tab-pane v-if="!IS_LOCAL_MODE && !IS_LIGHT_MODE" name="add-source">
         <template #label>
           <el-icon style="margin-right: 4px;">
             <Plus />
@@ -187,7 +176,7 @@
     </StyledTabs>
 
     <!-- 商店源管理 -->
-    <el-dialog v-if="!isLocalMode" v-model="showSourcesDialog" title="商店源" width="720px">
+    <el-dialog v-if="!IS_LOCAL_MODE && !IS_LIGHT_MODE" v-model="showSourcesDialog" title="商店源" width="720px">
       <div class="sources-hint">
         商店源是一个可访问的 <code>index.json</code> 地址（推荐指向 GitHub Releases 资产直链）。
       </div>
@@ -215,8 +204,8 @@
     </el-dialog>
 
     <!-- 新增/编辑源 -->
-    <el-dialog v-if="!isLocalMode" v-model="showEditSourceDialog" :title="editingSourceIndex === null ? '新增源' : '编辑源'"
-      width="620px">
+    <el-dialog v-if="!IS_LOCAL_MODE && !IS_LIGHT_MODE" v-model="showEditSourceDialog"
+      :title="editingSourceIndex === null ? '新增源' : '编辑源'" width="620px">
       <el-form label-width="110px">
         <el-form-item label="名称">
           <el-input v-model="editSourceForm.name" placeholder="例如：官方源" />
@@ -281,7 +270,7 @@ import StyledTabs from "@/components/common/StyledTabs.vue";
 import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { IS_LOCAL_MODE } from "@kabegame/core/env";
+import { IS_LIGHT_MODE, IS_LOCAL_MODE } from "@kabegame/core/env";
 
 async function openPluginEditor() {
   try {
@@ -377,6 +366,7 @@ const editSourceForm = reactive<{ id: string; name: string; indexUrl: string }>(
 });
 
 const installedPlugins = computed(() => pluginStore.plugins);
+console.log("installedPlugins", installedPlugins.value);
 
 const storeTabName = (sourceId: string) => `store:${sourceId}`;
 const isStoreTab = (tabName: string) => tabName.startsWith("store:");

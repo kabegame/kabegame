@@ -15,38 +15,10 @@
  * - main/plugin-editor 的前端由各自 tauri.conf.json 的 beforeDev/BuildCommand 触发
  */
 
-import { fileURLToPath } from "url";
-import path from "path";
 import { Command } from "commander";
 import { BuildSystem } from "./build-system";
-
-export class Cmd {
-  static readonly DEV = "dev";
-  static readonly START = "start";
-  static readonly BUILD = "build";
-  static readonly CHECK = "check";
-
-  constructor(private cmd: string) {}
-
-  get isDev(): boolean {
-    return this.cmd === Cmd.DEV;
-  }
-
-  get isStart(): boolean {
-    return this.cmd === Cmd.START;
-  }
-
-  get isBuild(): boolean {
-    return this.cmd === Cmd.BUILD;
-  }
-
-  get isCheck(): boolean {
-    return this.cmd === Cmd.CHECK;
-  }
-}
-
-// 保留对 run.js 中仍使用的函数的引用（dev/start 命令）
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { Component } from "./plugins/component-plugin";
+import { Mode } from "./plugins/mode-plugin";
 
 const buildSystem = new BuildSystem();
 
@@ -58,31 +30,32 @@ interface BuildOptions {
   trace?: boolean;
   skip?: string;
   args?: string[];
+  release?: boolean;
 }
 
 /**
  * 构建命令的固定执行流程
  */
 async function build(options: BuildOptions): Promise<void> {
-  buildSystem.build(options);
+  await buildSystem.build(options);
 }
 
 /**
  * dev 命令的固定执行流程
  */
 async function dev(options: BuildOptions): Promise<void> {
-  buildSystem.dev(options);
+  await buildSystem.dev(options);
 }
 
 /**
  * start 命令的固定执行流程
  */
 async function start(options: BuildOptions): Promise<void> {
-  buildSystem.start(options);
+  await buildSystem.start(options);
 }
 
 async function check(options: BuildOptions): Promise<void> {
-  buildSystem.check(options);
+  await buildSystem.check(options);
 }
 
 // 创建 Commander 程序
@@ -97,18 +70,18 @@ program
   .requiredOption(
     "-c, --component <component>",
     "要启动的组件：main | plugin-editor",
+    Component.MAIN,
   )
   .option(
     "--mode <mode>",
     "构建模式：normal（一般版本，带商店源）或 local（无商店版本，仅本地源 + 预打包全部插件）",
-    "normal",
+    Mode.NORMAL,
   )
   .option(
     "--desktop <desktop>",
     "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）",
   )
-  .option("--verbose", "显示详细输出", false)
-  .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
+  .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", true)
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {
     options.args = args || [];
@@ -122,12 +95,12 @@ program
   .option(
     "-c, --component <component>",
     "要启动的组件：main | plugin-editor | cli",
-    "main",
+    Component.MAIN,
   )
   .option(
     "--mode <mode>",
     "构建模式：normal、local（仅影响插件预打包与内置列表）或 light（轻量模式，不使用 virtual-driver feature）",
-    "normal",
+    Mode.NORMAL,
   )
   .option(
     "--desktop <desktop>",
@@ -157,11 +130,16 @@ program
   .option(
     "--mode <mode>",
     "构建模式：normal（一般版本，带商店源）、local（无商店版本，无商店安装包）或 light（轻量模式，不使用 virtual-driver feature）",
-    "normal",
+    Mode.NORMAL,
   )
   .option(
     "--desktop <desktop>",
     "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）",
+  )
+  .option(
+    "--release",
+    "构建完成后复制安装包到 release/ 目录，只有构建main获取全量的情况下才可用",
+    false,
   )
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {
@@ -175,18 +153,18 @@ program
   .requiredOption(
     "-c, --component <component>",
     "要检查的组件：main | plugin-editor | cli",
+    Component.MAIN,
   )
   .option("--skip <skip>", "跳过检查项：vue/cargo（只能一个值）", "")
   .option(
     "--mode <mode>",
     "构建模式：normal、local 或 light（影响 cfg 与前端环境变量）",
-    "normal",
+    Mode.NORMAL,
   )
   .option(
     "--desktop <desktop>",
     "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）",
   )
-  .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
   .action(async (options: BuildOptions) => {
     await check(options);
   });

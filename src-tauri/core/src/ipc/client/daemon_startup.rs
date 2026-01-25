@@ -6,8 +6,8 @@
 //! - 等待 daemon 就绪（10 秒超时）
 //! - 支持 Tauri AppHandle 和普通路径查找两种模式
 
-use crate::bin_finder::{find_binary, BinaryType};
 use super::IpcClient;
+use crate::bin_finder::{find_binary, BinaryType};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Duration;

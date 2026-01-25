@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kabegame",
-  "version": "3.0.1",
-  "identifier": "com.kabegame",
+  "version": "3.0.2",
+  "identifier": "Kabegame",
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
     "devUrl": "http://localhost:1420",
@@ -15,8 +15,8 @@
         "resizable": true,
         "title": "Kabegame",
         "transparent": true,
-        "width": 1200,
-        "height": 800,
+        "width": 1600,
+        "height": 1200,
         "minWidth": 800,
         "minHeight": 600
       }
@@ -32,12 +32,19 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "deb"],
     "icon": ["../icons/icon.png", "../icons/icon.ico"],
     "resources": ["resources/plugins", "resources/bin"],
     "windows": {
       "nsis": {
-        "installerHooks": "nsis/installer-hooks.nsh"
+        "installerHooks": "nsis/installer-hooks.nsh",
+        "languages": ["SimpChinese"],
+        "installerIcon": "../icons/icon.ico"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libfuse3-3", "adduser"]
       }
     }
   }

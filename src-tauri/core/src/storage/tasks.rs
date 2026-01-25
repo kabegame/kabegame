@@ -258,7 +258,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let count = conn
             .execute(
-                "DELETE FROM tasks WHERE status IN ('completed', 'failed', 'cancelled')",
+                "DELETE FROM tasks WHERE status IN ('completed', 'failed', 'canceled', 'cancelled')",
                 [],
             )
             .map_err(|e| format!("Failed to clear finished tasks: {}", e))?;

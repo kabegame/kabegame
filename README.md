@@ -41,13 +41,13 @@ Kabegame 提供三种模式供下载，满足不同使用场景：
 | **cli** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
 | **内置插件** | 本地导入插件(`local-import`) | 发布时的全部插件 | 发布时的全部插件 |
 | **适用场景** | 日常使用，需要从商店安装插件 | 离线使用，需要所有插件内置 | 轻量使用，仅需基本功能 |
-| **文件大小** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐⭐ | ⭐⭐ |
+| **文件大小** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
 
 **根据你的操作系统和需求，选择合适的安装包**
 
 | 操作系统 | Normal 模式 | Local 模式 | Light 模式 |
 |---------|------------|-----------|-----------|
-| Windows | [Kabegame-normal_3.0.1_x64-setup.exe](release/Kabegame-normal_3.0.1_x64-setup.exe) | [Kabegame-local_3.0.1_x64-setup.exe](release/Kabegame-local_3.0.1_x64-setup.exe) | [Kabegame-light_3.0.1_x64-setup.exe](release/Kabegame-light_3.0.1_x64-setup.exe) |
+| Windows | [Kabegame-normal_3.0.2_x64-setup.exe](release/Kabegame-normal_3.0.2_x64-setup.exe) | [Kabegame-local_3.0.2_x64-setup.exe](release/Kabegame-local_3.0.2_x64-setup.exe) | [Kabegame-light_3.0.2_x64-setup.exe](release/Kabegame-light_3.0.2_x64-setup.exe) |
 | macOS | coming... | coming... | coming... |
 | Linux (Plasma) | coming... | coming... | coming... |
 | Linux (GNOME) | coming... | coming... | coming... |
@@ -60,9 +60,9 @@ sudo dpkg -i Kabegame-<mode>_<desktop>_<version>_<arch>.deb
 你的桌面环境的确认方法：
 - Plasma：`plasmashell --version`
 - GNOME(coming...)：`gnome-shell --version`
-<div style="color: red; background-color: #fdd;">
+<b style="color: red; background-color: #fdd;">
 安装错误desktop版本可能导致无法正常设置壁纸！
-</div>
+</b>
 
 
 ## 主要功能

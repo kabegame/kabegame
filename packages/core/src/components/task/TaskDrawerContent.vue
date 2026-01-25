@@ -5,6 +5,7 @@
       <div class="downloads-header">
         <span class="downloads-title">正在下载</span>
         <div class="downloads-stats">
+          <el-tag v-if="pendingCount > 0" type="info" size="small">等待中: {{ pendingCount }}</el-tag>
           <el-tag type="warning" size="small">进行中: {{ activeDownloadsRunningCount }}</el-tag>
         </div>
       </div>
@@ -37,6 +38,9 @@
             </div>
           </transition-group>
         </div>
+      </div>
+      <div v-if="appStatusText" class="downloads-substatus" :title="appStatusText">
+        {{ appStatusText }}
       </div>
     </div>
 
@@ -281,6 +285,13 @@ let unlistenDownloadProgress: null | (() => void) = null;
 
 const downloadStateByKey = ref<Record<string, { state: string; error?: string; updatedAt: number }>>({});
 let unlistenDownloadState: null | (() => void) = null;
+
+const appStatusText = ref("");
+let unlistenAppStatus: null | (() => void) = null;
+
+// pending 队列数量（等待中的下载）
+const pendingCount = ref(0);
+let unlistenPendingQueueChange: null | (() => void) = null;
 
 const downloadKey = (d: ActiveDownloadInfo) => `${d.task_id}::${d.start_time}::${d.url}`;
 const downloadKeyFromPayload = (p: DownloadProgressPayload) => `${p.taskId}::${p.startTime}::${p.url}`;
@@ -567,6 +578,24 @@ const initEventListeners = async () => {
   } catch (error) {
     console.error("监听下载状态失败:", error);
   }
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    unlistenAppStatus = await listen<{ text?: string }>("app-status", (event) => {
+      const next = String((event.payload as any)?.text ?? "").trim();
+      appStatusText.value = next;
+    });
+  } catch (error) {
+    console.error("监听 app-status 失败:", error);
+  }
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    unlistenPendingQueueChange = await listen<{ pendingCount?: number }>("pending-queue-change", (event) => {
+      const count = Number((event.payload as any)?.pendingCount ?? 0);
+      pendingCount.value = count;
+    });
+  } catch (error) {
+    console.error("监听 pending-queue-change 失败:", error);
+  }
 };
 
 const startDownloadSync = async () => {
@@ -589,6 +618,20 @@ const stopDownloadSync = () => {
     // ignore
   } finally {
     unlistenDownloadState = null;
+  }
+  try {
+    unlistenAppStatus?.();
+  } catch {
+    // ignore
+  } finally {
+    unlistenAppStatus = null;
+  }
+  try {
+    unlistenPendingQueueChange?.();
+  } catch {
+    // ignore
+  } finally {
+    unlistenPendingQueueChange = null;
   }
   eventListenersInitialized = false;
 
@@ -859,6 +902,16 @@ onUnmounted(() => {
       .queue-info {
         padding: 8px 0;
       }
+    }
+
+    .downloads-substatus {
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--anime-text-muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
   }
 

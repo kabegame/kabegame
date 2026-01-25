@@ -3,9 +3,11 @@ import { BuildSystem, SRC_FE_DIR, SRC_TAURI_DIR } from "../build-system";
 import * as path from "path";
 import {
   copyDokan2DllToTauriReleaseDirBestEffort,
+  RESOURCES_DIR,
   stageResourceBinary,
-} from "../build-utils";
+} from "../utils";
 import { OSPlugin } from "./os-plugin";
+import { readdirSync, statSync, unlinkSync } from "fs";
 
 // 组件对象
 export class Component {
@@ -121,6 +123,20 @@ export class ComponentPlugin extends BasePlugin {
       bs.hooks.beforeBuild.tap(this.name, (comp?: string) => {
         const component = comp ? new Component(comp) : this.component!;
         if (component.isMain) {
+          // 先清空 resources 下所有非.gitkeep（保留文件夹）
+          const resourcesDir = path.join(RESOURCES_DIR);
+          const files = readdirSync(resourcesDir, {
+            recursive: true,
+          }) as string[];
+          for (const file of files) {
+            const stat = statSync(path.join(resourcesDir, file));
+            if (!file.endsWith(".gitkeep") && stat.isFile()) {
+              unlinkSync(path.join(resourcesDir, file));
+              this.log(`删除文件 ${file}`);
+            }
+          }
+        }
+        if (component.isMain && !bs.context.mode!.isLight) {
           stageResourceBinary(Component.cargoComp(Component.CLI));
           stageResourceBinary(Component.cargoComp(`${Component.CLI}w`));
           stageResourceBinary(Component.cargoComp(Component.PLUGIN_EDITOR));

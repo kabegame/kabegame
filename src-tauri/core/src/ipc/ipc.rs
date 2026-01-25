@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 pub fn ipc_debug_enabled() -> bool {
@@ -38,15 +39,15 @@ pub enum CliIpcRequest {
     Status,
 
     /// 虚拟盘：挂载（Windows + virtual-driver）
-    #[cfg(all(not(kabegame_mode = "light")))]
+    #[cfg(not(kabegame_mode = "light"))]
     VdMount,
 
     /// 虚拟盘：卸载（Windows + virtual-driver）
-    #[cfg(all(not(kabegame_mode = "light")))]
+    #[cfg(not(kabegame_mode = "light"))]
     VdUnmount,
 
     /// 虚拟盘：状态（Windows + virtual-driver）
-    #[cfg(all(not(kabegame_mode = "light")))]
+    #[cfg(not(kabegame_mode = "light"))]
     VdStatus,
 
     /// 运行一次 Rhai 插件（等价于 `kabegame-cli plugin run`）
@@ -69,6 +70,10 @@ pub enum CliIpcRequest {
         /// 传给插件的参数（等价于 `--` 之后的 tokens）
         #[serde(default)]
         plugin_args: Vec<String>,
+
+        /// 运行时 HTTP 头（用于 to/to_json/download_image 等请求）
+        #[serde(default)]
+        http_headers: Option<HashMap<String, String>>,
     },
 
     // ======== Storage 相关 ========
@@ -451,9 +456,11 @@ pub enum CliIpcRequest {
     SettingsSetWallpaperMode {
         mode: String,
     },
+    #[cfg(not(kabegame_mode = "light"))]
     SettingsSetAlbumDriveEnabled {
         enabled: bool,
     },
+    #[cfg(not(kabegame_mode = "light"))]
     SettingsSetAlbumDriveMountPoint {
         mount_point: String,
     },
@@ -567,7 +574,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
+            #[cfg(not(kabegame_mode = "light"))]
             mounted: None,
+            #[cfg(not(kabegame_mode = "light"))]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,
@@ -582,7 +591,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
+            #[cfg(not(kabegame_mode = "light"))]
             mounted: None,
+            #[cfg(not(kabegame_mode = "light"))]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,
@@ -597,7 +608,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
+            #[cfg(not(kabegame_mode = "light"))]
             mounted: None,
+            #[cfg(not(kabegame_mode = "light"))]
             mount_point: None,
             info: None,
             data: data,
@@ -616,7 +629,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
+            #[cfg(not(kabegame_mode = "light"))]
             mounted: None,
+            #[cfg(not(kabegame_mode = "light"))]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,

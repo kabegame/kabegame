@@ -28,8 +28,10 @@ use kabegame_core::{
     providers::{ProviderCacheConfig, ProviderRuntime},
     settings::Settings,
     storage::Storage,
-    virtual_driver::VirtualDriveService,
 };
+
+#[cfg(not(kabegame_mode = "light"))]
+use kabegame_core::virtual_driver::VirtualDriveService;
 
 /// 初始化全局状态，并返回 Context 和 Broadcaster
 async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
@@ -108,37 +110,26 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
     }
     println!("  ✓ ProviderRuntime initialized");
 
-    // Virtual Drive（仅 Windows + 非 light mode + virtual-driver feature）
-    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
-    {
-        VirtualDriveService::init_global()
-            .map_err(|e| format!("Failed to init VD service: {}", e))?;
-    }
-    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+    // Virtual Drive（仅 非 light mode）
+    #[cfg(not(kabegame_mode = "light"))]
+    VirtualDriveService::init_global().map_err(|e| format!("Failed to init VD service: {}", e))?;
+    #[cfg(not(kabegame_mode = "light"))]
     let virtual_drive_service = VirtualDriveService::global();
-    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+    #[cfg(not(kabegame_mode = "light"))]
     println!("  ✓ Virtual drive support enabled");
 
-    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
     let ctx = Arc::new(Store {
         broadcaster: broadcaster.clone(),
         subscription_manager: subscription_manager.clone(),
         dedupe_service,
+        #[cfg(not(kabegame_mode = "light"))]
         virtual_drive_service: virtual_drive_service.clone(),
-    });
-
-    #[cfg(not(all(not(kabegame_mode = "light"), target_os = "windows")))]
-    let ctx = Arc::new(Store {
-        broadcaster: broadcaster.clone(),
-        subscription_manager: subscription_manager.clone(),
-        dedupe_service,
-        virtual_drive_service: Arc::new(VirtualDriveService::default()),
     });
 
     Store::init_global(ctx.clone())?;
 
-    // 启动虚拟磁盘事件监听器（仅在 Windows + 非 light mode + virtual-driver feature）
-    #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+    // 启动虚拟磁盘事件监听器（仅在 非 light mode）
+    #[cfg(not(kabegame_mode = "light"))]
     {
         tokio::spawn(vd_listener::start_vd_event_listener(
             broadcaster.clone(),

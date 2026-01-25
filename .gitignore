@@ -38,14 +38,3 @@ src-tauri/icons/*
 # Nx
 .nx/cache
 .nx/workspace-data
-
-# GitHub Actions Runner (self-hosted)
-/actions-runner/
-
-# plasma wallpaper code example
-/wallpaper-example/
-
-# crawler-venv
-/crawler-venv/
-
-/build/

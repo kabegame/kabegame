@@ -9,15 +9,16 @@ import { AsyncSeriesHook, SyncHook } from "tapable";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Component, ComponentPlugin } from "./plugins/component-plugin.js";
-import { ModePlugin } from "./plugins/mode-plugin.js";
-import { DesktopPlugin } from "./plugins/desktop-plugin.js";
+import { Mode, ModePlugin } from "./plugins/mode-plugin.js";
+import { Desktop, DesktopPlugin } from "./plugins/desktop-plugin.js";
 import { TracePlugin } from "./plugins/trace-plugin.js";
-import { Cmd } from "./run.ts";
+import { Cmd, CmdPlugin } from "./plugins/cmd-plugin.ts";
 import { OSPlugin } from "./plugins/os-plugin.js";
 import { SyncWaterfallHook } from "tapable";
-import { run } from "./build-utils.js";
+import { run } from "./utils.js";
 import { BasePlugin } from "./plugins/base-plugin.ts";
 import { Skip, SkipPlugin } from "./plugins/skip-plugin.js";
+import { ReleasePlugin } from "./plugins/release-plugin.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,14 +50,15 @@ interface BuildOptions {
   verbose?: boolean;
   trace?: boolean;
   skip?: string;
+  release?: boolean;
   args?: string[];
 }
 
 interface BuildContext {
-  cmd: Cmd | null;
+  cmd: Cmd;
   component?: Component;
-  mode?: any;
-  desktop?: any;
+  mode?: Mode;
+  desktop?: Desktop;
   skip?: Skip;
 }
 
@@ -100,7 +102,8 @@ export class BuildSystem {
     };
 
     this.context = {
-      cmd: null, // "build" / "dev" / "start"
+      //@ts-ignore
+      cmd: null, // "build" / "dev" / "start" / "check"
     };
   }
 
@@ -136,13 +139,17 @@ export class BuildSystem {
     return args;
   }
 
-  commonUse(): void {
+  commonUse(cmd: string): void {
+    this.use(new CmdPlugin(cmd));
     this.use(new OSPlugin());
     // --component
     this.use(new ComponentPlugin());
 
     // --mode
     this.use(new ModePlugin());
+
+    // --release
+    this.use(new ReleasePlugin());
 
     // --desktop
     this.use(new DesktopPlugin());
@@ -163,10 +170,10 @@ export class BuildSystem {
    * dev 命令
    */
   async dev(options: BuildOptions): Promise<void> {
-    this.context.cmd = new Cmd(Cmd.DEV);
-    (this as any).options = Object.freeze(options);
+    //@ts-ignore
+    this.options = Object.freeze(options);
 
-    this.commonUse();
+    this.commonUse(Cmd.DEV);
     this.commonBefore();
     this.hooks.beforeBuild.call();
     const { features } = this.hooks.prepareCompileArgs.call();
@@ -178,11 +185,10 @@ export class BuildSystem {
   }
 
   async start(options: BuildOptions): Promise<void> {
-    this.context.cmd = new Cmd(Cmd.START);
     // @ts-ignore
     this.options = Object.freeze(options);
 
-    this.commonUse();
+    this.commonUse(Cmd.START);
     this.commonBefore();
     const { features } = this.hooks.prepareCompileArgs.call();
     const baseArgs = ["run", "-p", this.context.component!.cargoComp];
@@ -200,12 +206,12 @@ export class BuildSystem {
   }
 
   async build(options: BuildOptions): Promise<void> {
-    this.context.cmd = new Cmd(Cmd.BUILD);
-    (this as any).options = Object.freeze(options);
+    //@ts-ignore
+    this.options = Object.freeze(options);
 
-    this.commonUse();
+    this.commonUse(Cmd.BUILD);
     this.commonBefore();
-    if (this.context.component!.isPluginEditor) {
+    if (this.context.component!.isPluginEditor && !this.context.mode!.isLight) {
       this.hooks.beforeBuild.call(Component.PLUGIN_EDITOR);
       const { features } = this.hooks.prepareCompileArgs.call(
         Component.PLUGIN_EDITOR,
@@ -232,7 +238,7 @@ export class BuildSystem {
       }
       // this.hooks.afterBuild.callAsync(Component.PLUGIN_EDITOR)
     }
-    if (this.context.component!.isCli) {
+    if (this.context.component!.isCli && !this.context.mode!.isLight) {
       this.hooks.beforeBuild.call(Component.CLI);
       const { features } = this.hooks.prepareCompileArgs.call(Component.CLI);
       if (!this.context.skip?.isVue) {
@@ -266,15 +272,15 @@ export class BuildSystem {
         bin: "cargo",
       });
       // TODO: 添加linux脚本到deb包中
-      // this.hooks.afterBuild.callAsync(Component.MAIN)
+      await this.hooks.afterBuild.promise(Component.MAIN);
     }
   }
 
   async check(options: BuildOptions): Promise<void> {
-    this.context.cmd = new Cmd(Cmd.CHECK);
-    (this as any).options = Object.freeze(options);
+    //@ts-ignore
+    this.options = Object.freeze(options);
 
-    this.commonUse();
+    this.commonUse(Cmd.CHECK);
     this.commonBefore();
 
     if (!this.context.skip?.isVue) {

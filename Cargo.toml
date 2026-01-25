@@ -9,7 +9,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "3.0.1"
+version = "3.0.2"
 
 [workspace.dependencies]
 base64 = "0.22"
@@ -40,7 +40,7 @@ windows-sys = {version = "0.52", features = [
 ]}
 zip = "0.6"
 
-[profile.release]
+# [profile.release]
 # on when release
 # codegen-units = 1
 # lto = "thin"

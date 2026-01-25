@@ -5,24 +5,22 @@
 //!
 //! ## 使用示例
 //!
-//! ```rust
-//! use kabegame_core::ipc::events::{EventListener, DaemonEvent};
+//! ```rust,no_run
+//! use kabegame_core::ipc::events::{DaemonEventKind, EventListener};
 //!
-//! // 创建事件监听器
-//! let listener = EventListener::new();
-//!
-//! // 监听任务日志
-//! listener.on_task_log(|event| {
-//!     println!("[{}] {}: {}", event.task_id, event.level, event.message);
-//! });
-//!
-//! // 监听下载状态
-//! listener.on_download_state(|event| {
-//!     println!("下载: {} - {}", event.url, event.state);
-//! });
-//!
-//! // 启动监听（异步）
-//! listener.start().await?;
+//! fn main() -> Result<(), String> {
+//!     let rt = tokio::runtime::Runtime::new().unwrap();
+//!     rt.block_on(async {
+//!         let listener = EventListener::new();
+//!         listener
+//!             .on(DaemonEventKind::TaskLog, |payload| {
+//!                 println!("task-log: {}", payload);
+//!             })
+//!             .await;
+//!         listener.start(&[DaemonEventKind::TaskLog]).await?;
+//!         Ok(())
+//!     })
+//! }
 //! ```
 
 #[cfg(feature = "ipc-client")]
@@ -71,6 +69,7 @@ daemon_event_kinds! {
     TaskProgress,
     TaskError,
     DownloadProgress,
+    PendingQueueChange,
     Generic,
     ConnectionStatus,
     DedupeProgress,
@@ -99,6 +98,7 @@ impl DaemonEventKind {
             DaemonEventKind::TaskProgress => "task-progress",
             DaemonEventKind::TaskError => "task-error",
             DaemonEventKind::DownloadProgress => "download-progress",
+            DaemonEventKind::PendingQueueChange => "pending-queue-change",
             DaemonEventKind::Generic => "generic",
             DaemonEventKind::ConnectionStatus => "connection-status",
             DaemonEventKind::DedupeProgress => "dedupe-progress",
@@ -122,6 +122,7 @@ impl DaemonEventKind {
             "task-progress" => Some(DaemonEventKind::TaskProgress),
             "task-error" => Some(DaemonEventKind::TaskError),
             "download-progress" => Some(DaemonEventKind::DownloadProgress),
+            "pending-queue-change" => Some(DaemonEventKind::PendingQueueChange),
             "generic" => Some(DaemonEventKind::Generic),
             "connection-status" => Some(DaemonEventKind::ConnectionStatus),
             "dedupe-progress" => Some(DaemonEventKind::DedupeProgress),
@@ -193,6 +194,13 @@ pub enum DaemonEvent {
         plugin_id: String,
         received_bytes: u64,
         total_bytes: Option<u64>,
+    },
+
+    /// pending 队列变化事件（等待中下载数量变化）
+    PendingQueueChange {
+        /// pending 队列中的任务数量
+        #[serde(rename = "pendingCount")]
+        pending_count: usize,
     },
 
     /// 通用事件
@@ -268,6 +276,7 @@ impl DaemonEvent {
             DaemonEvent::TaskProgress { .. } => DaemonEventKind::TaskProgress,
             DaemonEvent::TaskError { .. } => DaemonEventKind::TaskError,
             DaemonEvent::DownloadProgress { .. } => DaemonEventKind::DownloadProgress,
+            DaemonEvent::PendingQueueChange { .. } => DaemonEventKind::PendingQueueChange,
             DaemonEvent::Generic { .. } => DaemonEventKind::Generic,
             DaemonEvent::ConnectionStatus { .. } => DaemonEventKind::ConnectionStatus,
             DaemonEvent::DedupeProgress { .. } => DaemonEventKind::DedupeProgress,

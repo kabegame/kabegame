@@ -4,7 +4,7 @@ use kabegame_core::storage::{ImageInfo, Storage};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use tauri::{AppHandle};
+use tauri::AppHandle;
 use tokio::sync::Notify;
 use tokio::time::{interval, Duration};
 

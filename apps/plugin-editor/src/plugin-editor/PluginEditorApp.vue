@@ -85,6 +85,27 @@
             :collapse-active-names="varCollapseActiveNames" @add-var="addVar" @remove-var="removeVar"
             @use-default-as-test-value="useDefaultAsTestValue" @clear-test-value="clearTestValue"
             @update:collapse-active-names="varCollapseActiveNames = $event" />
+
+          <el-card shadow="hover">
+            <template #header>
+              <div class="card-header">
+                <span>HTTP 头（测试用）</span>
+              </div>
+            </template>
+            <div class="headers-editor">
+              <div v-for="(row, idx) in httpHeaderRows" :key="idx" class="header-row">
+                <el-input v-model="row.key" placeholder="Header 名（如 Authorization）" />
+                <el-input v-model="row.value" placeholder="Header 值（如 Bearer xxx）" />
+                <el-button type="danger" link @click="removeHeaderRow(idx)">删除</el-button>
+              </div>
+              <div class="header-actions">
+                <el-button size="small" @click="addHeaderRow">添加 Header</el-button>
+              </div>
+              <div class="config-hint">
+                提示：这里的 HTTP 头会用于爬虫请求（to/to_json）与图片下载（download_image），不会注入到脚本变量里。
+              </div>
+            </div>
+          </el-card>
         </div>
 
         <!-- 编辑器区域 -->
@@ -272,6 +293,19 @@ let iconCropOwnedBlobUrl: string | null = null;
 
 // 按变量索引保存测试值；不参与导出，只用于“测试”时注入 user_config
 const testInputValues = ref<unknown[]>([]);
+type HttpHeaderRow = { key: string; value: string };
+const httpHeaderRows = ref<HttpHeaderRow[]>([]);
+const addHeaderRow = () => httpHeaderRows.value.push({ key: "", value: "" });
+const removeHeaderRow = (idx: number) => httpHeaderRows.value.splice(idx, 1);
+const toHttpHeadersMap = () => {
+  const out: Record<string, string> = {};
+  for (const r of httpHeaderRows.value) {
+    const k = `${r.key ?? ""}`.trim();
+    if (!k) continue;
+    out[k] = `${r.value ?? ""}`;
+  }
+  return out;
+};
 
 const crawlerStore = useCrawlerStore();
 const tasks = computed(() => crawlerStore.tasks);
@@ -850,7 +884,11 @@ async function runTest() {
   try {
     const { config } = buildConfigForBackend();
 
+    console.log("配置", config);
+
     const userConfig = buildUserConfigForBackend();
+
+    console.log("用户配置", userConfig);
 
     // 与 main 一致：合并落库 + 入队（状态/进度由后端事件驱动）
     const pluginId = draft.id.trim() || "plugin-editor-test";
@@ -859,15 +897,17 @@ async function runTest() {
     pendingFinishPopup.add(taskId);
 
     const startTime = Date.now();
+    const httpHeadersMap = toHttpHeadersMap();
+    const httpHeaders = Object.keys(httpHeadersMap).length > 0 ? httpHeadersMap : null;
 
-    crawlerStore.tasks.unshift({
-      id: taskId,
-      pluginId,
-      status: "pending",
-      progress: 0,
-      deletedCount: 0,
-      startTime,
-    });
+    // crawlerStore.tasks.unshift({
+    //   id: taskId,
+    //   pluginId,
+    //   status: "pending",
+    //   progress: 0,
+    //   deletedCount: 0,
+    //   startTime,
+    // });
 
     await invoke("start_task", {
       task: {
@@ -875,6 +915,7 @@ async function runTest() {
         pluginId,
         outputDir: null,
         userConfig,
+        httpHeaders,
         outputAlbumId: null,
         status: "pending",
         progress: 0,
@@ -1262,6 +1303,30 @@ onBeforeUnmount(() => {
   gap: 16px;
   overflow-y: auto;
   padding-right: 8px;
+}
+
+.headers-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  .header-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .header-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .config-hint {
+    font-size: 12px;
+    color: var(--anime-text-muted);
+    line-height: 1.4;
+  }
 }
 
 .card-header {

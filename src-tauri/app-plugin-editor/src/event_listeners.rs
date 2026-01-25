@@ -16,6 +16,8 @@ const INTERESTED_EVENTS: &[DaemonEventKind] = &[
     DaemonEventKind::TaskProgress,
     DaemonEventKind::TaskError,
     DaemonEventKind::DownloadState,
+    DaemonEventKind::DownloadProgress,
+    DaemonEventKind::PendingQueueChange,
     DaemonEventKind::Generic, // 用于 images-change 等通用事件
 ];
 

@@ -5,6 +5,7 @@ use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
+#[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use std::sync::Arc;
 

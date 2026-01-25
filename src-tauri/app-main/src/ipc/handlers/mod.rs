@@ -9,13 +9,14 @@ pub mod settings;
 pub mod storage;
 
 use crate::ipc::dedupe_service::DedupeService;
-use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
 use kabegame_core::crawler::{CrawlTaskRequest, TaskScheduler};
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
+use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::tasks::TaskInfo;
 use kabegame_core::storage::Storage;
+#[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::{Arc, OnceLock};
 
@@ -27,6 +28,7 @@ pub struct Store {
     pub broadcaster: Arc<EventBroadcaster>,
     pub subscription_manager: Arc<SubscriptionManager>,
     pub dedupe_service: Arc<DedupeService>,
+    #[cfg(not(kabegame_mode = "light"))]
     pub virtual_drive_service: Arc<VirtualDriveService>,
 }
 
@@ -46,7 +48,7 @@ impl Store {
 
 /// 分发 IPC 请求到对应的处理器
 pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResponse {
-    // 迚ｹ谿願ｯｷ豎ゑｼ售tatus
+    // 获取s tatus
     if matches!(req, CliIpcRequest::Status) {
         return handle_status();
     }
@@ -58,6 +60,7 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResp
         task_id,
         output_album_id,
         plugin_args,
+        http_headers,
     } = req
     {
         return handle_plugin_run(
@@ -66,6 +69,7 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResp
             task_id,
             output_album_id,
             plugin_args,
+            http_headers,
             ctx,
         )
         .await;
@@ -115,15 +119,17 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResp
     if let Some(resp) = gallery::handle_gallery_request(&req).await {
         return resp;
     }
-
-    if matches!(req, CliIpcRequest::VdMount) {
-        return handle_vd_mount(ctx).await;
-    }
-    if matches!(req, CliIpcRequest::VdUnmount) {
-        return handle_vd_unmount(ctx).await;
-    }
-    if matches!(req, CliIpcRequest::VdStatus) {
-        return handle_vd_status(ctx).await;
+    #[cfg(not(kabegame_mode = "light"))]
+    {
+        if matches!(req, CliIpcRequest::VdMount) {
+            return handle_vd_mount(ctx).await;
+        }
+        if matches!(req, CliIpcRequest::VdUnmount) {
+            return handle_vd_unmount(ctx).await;
+        }
+        if matches!(req, CliIpcRequest::VdStatus) {
+            return handle_vd_status(ctx).await;
+        }
     }
 
     // 未知请求
@@ -167,7 +173,7 @@ async fn handle_task_start(task: serde_json::Value, _ctx: Arc<Store>) -> CliIpcR
 }
 
 async fn handle_task_cancel(task_id: String, _ctx: Arc<Store>) -> CliIpcResponse {
-    match TaskScheduler::global().cancel_task(&task_id) {
+    match TaskScheduler::global().cancel_task(&task_id).await {
         Ok(()) => CliIpcResponse::ok("ok"),
         Err(e) => CliIpcResponse::err(e),
     }
@@ -181,7 +187,7 @@ async fn handle_task_retry_failed_image(failed_id: i64, _ctx: Arc<Store>) -> Cli
 }
 
 async fn handle_get_active_downloads(_ctx: Arc<Store>) -> CliIpcResponse {
-    match TaskScheduler::global().get_active_downloads() {
+    match TaskScheduler::global().get_active_downloads().await {
         Ok(downloads) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(downloads).unwrap_or_default())
         }
@@ -224,6 +230,7 @@ async fn handle_plugin_run(
     task_id: Option<String>,
     output_album_id: Option<String>,
     plugin_args: Vec<String>,
+    http_headers: Option<std::collections::HashMap<String, String>>,
     _ctx: Arc<Store>,
 ) -> CliIpcResponse {
     // resolve plugin：支持 id 或 .kgpg 路径
@@ -257,7 +264,7 @@ async fn handle_plugin_run(
                 plugin_id: plugin_obj.id.clone(),
                 output_dir: output_dir.clone(),
                 user_config: user_config.clone(),
-                http_headers: None,
+                http_headers: http_headers.clone(),
                 output_album_id: output_album_id.clone(),
                 status: "pending".to_string(),
                 progress: 0.0,
@@ -282,7 +289,7 @@ async fn handle_plugin_run(
         task_id: task_id.clone(),
         output_dir,
         user_config,
-        http_headers: None,
+        http_headers,
         output_album_id,
         plugin_file_path: plugin_file_path.map(|p| p.to_string_lossy().to_string()),
     };
@@ -412,12 +419,13 @@ fn handle_status() -> CliIpcResponse {
             "settings": true,
             "events": true,
             "pluginRun": false,  // 暂未实现
-            "virtualDrive": cfg!(all(not(kabegame_mode = "light"), target_os = "windows"))
+            "virtualDrive": cfg!(not(kabegame_mode = "light"))
         }
     }));
     resp
 }
 
+#[cfg(not(kabegame_mode = "light"))]
 async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
@@ -463,6 +471,7 @@ async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
     }
 }
 
+#[cfg(not(kabegame_mode = "light"))]
 async fn handle_vd_unmount(ctx: Arc<Store>) -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 

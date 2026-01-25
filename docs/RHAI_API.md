@@ -89,6 +89,7 @@ if wallpaper_type.mobile {
 - [页面信息](#页面信息)
 - [元素查询](#元素查询)
 - [URL 处理](#url-处理)
+- [HTTP 头](#http-头)
 - [图片处理](#图片处理)
 
 ---
@@ -428,6 +429,96 @@ print(re_is_match("imgpc", url));           // true
 print(re_is_match("^https://", url));      // true
 print(re_is_match("imgsp", url));          // false
 print(re_is_match("(", url));              // false（非法正则，返回 false）
+```
+
+---
+
+## HTTP 头
+
+### `set_concurrency(limit)`
+
+设置当前任务的最大并发下载数量。
+
+**参数：**
+- `limit` (int): 最大并发数（必须大于 0）
+
+**返回值：**
+- `()`
+
+**说明：**
+- 默认情况下没有并发限制
+- 这是一个任务级别的设置，会影响整个任务的执行
+- 只有通过 `download_image` 添加的下载请求会受到此限制
+
+**示例：**
+```rhai
+// 限制并发下载数为 3
+set_concurrency(3);
+```
+
+---
+
+### `set_interval(ms)`
+
+设置当前任务下载请求之间的最小间隔时间（毫秒）。
+
+**参数：**
+- `ms` (int): 最小间隔时间（毫秒，必须大于等于 0）
+
+**返回值：**
+- `()`
+
+**说明：**
+- 默认情况下没有间隔限制
+- 计时基准是“上一个下载完成的时间”，即确保前一个下载完成后至少经过 `ms` 毫秒才会开始下一个下载
+- 用于防止因请求过快被目标网站封禁
+
+**示例：**
+```rhai
+// 设置下载间隔为 2000 毫秒（2秒）
+set_interval(2000);
+```
+
+---
+
+### `set_header(key, value)`
+
+设置一个 HTTP Header（覆盖同名值）。
+
+**参数：**
+- `key` (string): Header 名（如 `Authorization`、`User-Agent`）
+- `value` (string): Header 值
+
+**返回值：**
+- `()`
+
+**说明：**
+- 仅影响当前任务中由 Rhai 发起的 HTTP 请求（如 `to()`、`to_json()`、`download_image()`、`download_archive()`）
+- `key` / `value` 会做合法性校验；不合法会被忽略，并在任务日志中提示
+
+**示例：**
+```rhai
+set_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+set_header("Authorization", "Bearer " + token);
+
+to("https://example.com/protected");
+```
+
+---
+
+### `del_header(key)`
+
+删除一个 HTTP Header。
+
+**参数：**
+- `key` (string): Header 名
+
+**返回值：**
+- `()`
+
+**示例：**
+```rhai
+del_header("Authorization");
 ```
 
 ---

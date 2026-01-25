@@ -8,6 +8,7 @@ use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use url::Url;
 
 type Shared<T> = Arc<Mutex<T>>;
@@ -179,23 +180,75 @@ fn http_get_text_with_retry(
     url: &str,
     label: &str,
     headers: &HashMap<String, String>,
-) -> Result<String, String> {
-    let client = crate::crawler::create_blocking_client()?;
+) -> Result<(String, String), String> {
+    let client = create_blocking_client()?;
     let header_map = build_reqwest_header_map(dq, task_id, headers);
     let retry_count = get_network_retry_count(dq);
     let max_attempts = retry_count.saturating_add(1).max(1);
 
     for attempt in 1..=max_attempts {
-        // 若任务已被取消，尽早退出（与 download_image 一致）
-        if dq.is_task_canceled(task_id) {
-            return Err("Task canceled".to_string());
-        }
+        let mut current_url = url.to_string();
+        let mut redirect_count = 0;
 
-        let mut req = client.get(url);
-        if !header_map.is_empty() {
-            req = req.headers(header_map.clone());
-        }
-        let response = match req.send() {
+        let response = loop {
+            if tokio::runtime::Handle::current().block_on(dq.is_task_canceled(task_id)) {
+                return Err("Task canceled".to_string());
+            }
+
+            let mut req = client.get(&current_url);
+            if !header_map.is_empty() {
+                req = req.headers(header_map.clone());
+            }
+            let resp = match req.send() {
+                Ok(r) => r,
+                Err(e) => break Err(format!("Failed to fetch: {}", e)),
+            };
+
+            let status = resp.status();
+            if status.is_redirection() {
+                if redirect_count >= 10 {
+                    let msg = format!("[{label}] 重定向次数过多（>10）");
+                    eprintln!("{msg} URL: {current_url}");
+                    emit_http_error(dq, task_id, format!("{msg}，URL: {current_url}"));
+                    break Err("Too many redirects".to_string());
+                }
+                if let Some(loc) = resp.headers().get(reqwest::header::LOCATION) {
+                    if let Ok(loc_str) = loc.to_str() {
+                        let next_url =
+                            if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
+                                loc_str.to_string()
+                            } else {
+                                match Url::parse(&current_url).and_then(|u| u.join(loc_str)) {
+                                    Ok(u) => u.to_string(),
+                                    Err(e) => {
+                                        let msg = format!("[{label}] 重定向 URL 解析失败：{e}");
+                                        eprintln!("{msg} URL: {current_url}");
+                                        emit_http_error(
+                                            dq,
+                                            task_id,
+                                            format!("{msg}，URL: {current_url}"),
+                                        );
+                                        break Err(format!("Redirect parse error: {e}"));
+                                    }
+                                }
+                            };
+
+                        redirect_count += 1;
+                        emit_http_warn(
+                            dq,
+                            task_id,
+                            format!("[{label}] HTTP {} 跳转到：{next_url}", status.as_u16()),
+                        );
+                        current_url = next_url;
+                        continue;
+                    }
+                }
+            }
+
+            break Ok(resp);
+        };
+
+        let response = match response {
             Ok(r) => r,
             Err(e) => {
                 if attempt < max_attempts {
@@ -213,7 +266,7 @@ fn http_get_text_with_retry(
                 let msg = format!("[{label}] 请求失败：{e}");
                 eprintln!("{msg} URL: {url}");
                 emit_http_error(dq, task_id, format!("{msg}，URL: {url}"));
-                return Err(format!("Failed to fetch: {e}"));
+                return Err(e);
             }
         };
 
@@ -226,20 +279,21 @@ fn http_get_text_with_retry(
                     dq,
                     task_id,
                     format!(
-                        "[{label}] HTTP {status}，将于 {backoff_ms}ms 后重试 ({attempt}/{max_attempts})，URL: {url}"
+                        "[{label}] HTTP {status}，将于 {backoff_ms}ms 后重试 ({attempt}/{max_attempts})，URL: {current_url}"
                     ),
                 );
                 std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
                 continue;
             }
             let msg = format!("[{label}] HTTP 错误：{status}");
-            eprintln!("{msg} URL: {url}");
-            emit_http_error(dq, task_id, format!("{msg}，URL: {url}"));
+            eprintln!("{msg} URL: {current_url}");
+            emit_http_error(dq, task_id, format!("{msg}，URL: {current_url}"));
             return Err(format!("HTTP error: {status}"));
         }
 
+        let final_url = current_url;
         match response.text() {
-            Ok(text) => return Ok(text),
+            Ok(text) => return Ok((final_url, text)),
             Err(e) => {
                 if attempt < max_attempts {
                     let backoff_ms = backoff_ms_for_attempt(attempt);
@@ -254,14 +308,64 @@ fn http_get_text_with_retry(
                     continue;
                 }
                 let msg = format!("[{label}] 读取响应失败：{e}");
-                eprintln!("{msg} URL: {url}");
-                emit_http_error(dq, task_id, format!("{msg}，URL: {url}"));
+                eprintln!("{msg} URL: {final_url}");
+                emit_http_error(dq, task_id, format!("{msg}，URL: {final_url}"));
                 return Err(format!("Failed to fetch: {e}"));
             }
         }
     }
 
     Err("Unreachable".to_string())
+}
+
+fn create_blocking_client() -> Result<reqwest::blocking::Client, String> {
+    let mut client_builder = reqwest::blocking::Client::builder();
+
+    if let Ok(proxy_url) = std::env::var("HTTP_PROXY")
+        .or_else(|_| std::env::var("http_proxy"))
+        .or_else(|_| std::env::var("HTTPS_PROXY"))
+        .or_else(|_| std::env::var("https_proxy"))
+    {
+        if !proxy_url.trim().is_empty() {
+            match reqwest::Proxy::all(&proxy_url) {
+                Ok(proxy) => {
+                    client_builder = client_builder.proxy(proxy);
+                    eprintln!("网络代理已配置 (blocking): {}", proxy_url);
+                }
+                Err(e) => {
+                    eprintln!("代理配置无效 ({}), 将使用直连 (blocking): {}", proxy_url, e);
+                }
+            }
+        }
+    }
+
+    if let Ok(no_proxy) = std::env::var("NO_PROXY").or_else(|_| std::env::var("no_proxy")) {
+        if !no_proxy.trim().is_empty() {
+            let no_proxy_list: Vec<&str> = no_proxy.split(',').map(|s| s.trim()).collect();
+            for domain in no_proxy_list {
+                if !domain.is_empty() {
+                    match reqwest::Proxy::all(&format!("direct://{}", domain)) {
+                        Ok(proxy) => {
+                            client_builder = client_builder.proxy(proxy);
+                        }
+                        Err(e) => {
+                            eprintln!("跳过无效的 NO_PROXY 配置 {}: {}", domain, e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    client_builder = client_builder
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("Kabegame/1.0");
+
+    client_builder
+        .build()
+        .map_err(|e| format!("Failed to create blocking HTTP client: {}", e))
 }
 
 fn build_reqwest_header_map(
@@ -467,6 +571,96 @@ pub fn register_crawler_functions(
             .unwrap_or(false)
     });
 
+    engine.register_fn("set_header", {
+        let headers_holder = Arc::clone(&http_headers);
+        let dq_holder = Arc::clone(&download_queue);
+        let task_id_holder = Arc::clone(&task_id);
+        move |key: &str, value: &str| {
+            let k = key.trim();
+            if k.is_empty() {
+                return;
+            }
+            if let Err(e) = HeaderName::from_bytes(k.as_bytes()) {
+                let tid = get_task_id(&task_id_holder);
+                emit_http_warn(
+                    dq_holder.as_ref(),
+                    &tid,
+                    format!("[headers] 跳过无效 header 名：{k} ({e})"),
+                );
+                return;
+            }
+            if let Err(e) = HeaderValue::from_str(value) {
+                let tid = get_task_id(&task_id_holder);
+                emit_http_warn(
+                    dq_holder.as_ref(),
+                    &tid,
+                    format!("[headers] 跳过无效 header 值：{k} ({e})"),
+                );
+                return;
+            }
+            let mut guard = lock_or_inner(&headers_holder);
+            guard.insert(k.to_string(), value.to_string());
+        }
+    });
+
+    engine.register_fn("del_header", {
+        let headers_holder = Arc::clone(&http_headers);
+        move |key: &str| {
+            let k = key.trim();
+            if k.is_empty() {
+                return;
+            }
+            let mut guard = lock_or_inner(&headers_holder);
+            guard.remove(k);
+        }
+    });
+
+    engine.register_fn("set_concurrency", {
+        let dq_holder = Arc::clone(&download_queue);
+        let task_id_holder = Arc::clone(&task_id);
+        move |limit: i64| {
+            let tid = get_task_id(&task_id_holder);
+            if limit > 0 {
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => {
+                        handle.block_on(dq_holder.set_task_concurrency(&tid, limit as u32));
+                    }
+                    Err(_) => {
+                        if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            rt.block_on(dq_holder.set_task_concurrency(&tid, limit as u32));
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    engine.register_fn("set_interval", {
+        let dq_holder = Arc::clone(&download_queue);
+        let task_id_holder = Arc::clone(&task_id);
+        move |ms: i64| {
+            let tid = get_task_id(&task_id_holder);
+            if ms >= 0 {
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => {
+                        handle.block_on(dq_holder.set_task_interval(&tid, ms as u64));
+                    }
+                    Err(_) => {
+                        if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        {
+                            rt.block_on(dq_holder.set_task_interval(&tid, ms as u64));
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     // to(url) - 访问一个网页，将当前页面入栈
     engine.register_fn("to", {
         let stack_holder = Arc::clone(&stack_holder);
@@ -510,24 +704,22 @@ pub fn register_crawler_functions(
                 guard.clone()
             };
             let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let result = http_get_text_with_retry(
-                    &dq_for_http,
-                    &task_id_for_http,
-                    &url_clone,
-                    "to",
-                    &headers_for_http,
-                );
-                let _ = tx.send(result);
-            });
-            let html = rx
+            let result = http_get_text_with_retry(
+                &dq_for_http,
+                &task_id_for_http,
+                &url_clone,
+                "to",
+                &headers_for_http,
+            );
+            let _ = tx.send(result);
+            let (final_url, html) = rx
                 .recv()
                 .map_err(|e| format!("Thread communication error: {}", e))?
                 .map_err(|e| e)?;
 
             // 将当前页面推入栈（如果栈不为空，先保存当前页面）
             let mut stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
-            stack_guard.push((resolved_url, html));
+            stack_guard.push((final_url, html));
             Ok(())
         }
     });
@@ -584,17 +776,17 @@ pub fn register_crawler_functions(
                 );
                 let _ = tx.send(result);
             });
-            let text = rx
+            let (final_url, text) = rx
                 .recv()
                 .map_err(|e| format!("Thread communication error: {}", e))?
                 .map_err(|e| e)?;
             let json_value = serde_json::from_str::<serde_json::Value>(&text).map_err(|e| {
                 let msg = format!("[to_json] JSON 解析失败：{e}");
-                eprintln!("{msg} URL: {resolved_url}");
+                eprintln!("{msg} URL: {final_url}");
                 emit_http_error(
                     &dq_holder,
                     &task_id_for_http,
-                    format!("{msg}，URL: {resolved_url}"),
+                    format!("{msg}，URL: {final_url}"),
                 );
                 format!("Failed to parse JSON: {}", e)
             })?;
@@ -603,7 +795,7 @@ pub fn register_crawler_functions(
             let json_string = serde_json::to_string(&json_value)
                 .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
             let mut stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
-            stack_guard.push((resolved_url, json_string));
+            stack_guard.push((final_url, json_string));
 
             // 将 JSON 值转换为 Rhai 类型
             match &json_value {
@@ -1015,14 +1207,13 @@ pub fn register_crawler_functions(
                 },
                 Err(_) => return relative.to_string(),
             };
+            Url::parse(&base_url)
+                .unwrap()
+                .join(relative)
+                .unwrap()
+                .to_string()
 
-            match Url::parse(&base_url) {
-                Ok(base) => match base.join(relative) {
-                    Ok(resolved) => resolved.to_string(),
-                    Err(_) => relative.to_string(),
-                },
-                Err(_) => relative.to_string(),
-            }
+            // resolve_url_against_base(&base_url, relative)
         }
     });
 
@@ -1186,7 +1377,7 @@ pub fn register_crawler_functions(
             };
 
             // 若任务已被取消，直接让脚本失败退出
-            if dq_handle.is_task_canceled(&task_id) {
+            if tokio::runtime::Handle::current().block_on(dq_handle.is_task_canceled(&task_id)) {
                 return Err("Task canceled".into());
             }
 
@@ -1262,7 +1453,9 @@ pub fn register_crawler_functions(
             };
 
             // 如果任务已被取消，让脚本失败退出
-            if dq_handle.is_task_canceled(&task_id_for_download) {
+            if tokio::runtime::Handle::current()
+                .block_on(dq_handle.is_task_canceled(&task_id_for_download))
+            {
                 return Err("Task canceled".into());
             }
 
@@ -1299,16 +1492,17 @@ pub fn register_crawler_functions(
                 .as_millis() as u64;
 
             // 同步下载图片（等待窗口有空位后直接执行）
-            dq_handle
-                .download_image(
-                    url.to_string(),
-                    images_dir,
-                    plugin_id,
-                    task_id,
-                    download_start_time,
-                    output_album_id_for_download.clone(),
-                    http_headers_for_download,
-                )
+            let fut = dq_handle.download_image(
+                url.to_string(),
+                images_dir,
+                plugin_id,
+                task_id,
+                download_start_time,
+                output_album_id_for_download.clone(),
+                http_headers_for_download,
+            );
+            tokio::runtime::Handle::current()
+                .block_on(fut)
                 .map_err(|e| format!("Failed to download image: {}", e).into())
         },
     );
@@ -1368,7 +1562,9 @@ pub fn register_crawler_functions(
             };
 
             // 如果任务已被取消，让脚本失败退出
-            if dq_handle.is_task_canceled(&task_id_for_download) {
+            if tokio::runtime::Handle::current()
+                .block_on(dq_handle.is_task_canceled(&task_id_for_download))
+            {
                 return Err("Task canceled".into());
             }
 
@@ -1378,17 +1574,18 @@ pub fn register_crawler_functions(
                 .unwrap()
                 .as_millis() as u64;
 
-            dq_handle
-                .download_archive(
-                    url.to_string(),
-                    &archive_type_str,
-                    images_dir,
-                    plugin_id,
-                    task_id_for_download,
-                    download_start_time,
-                    output_album_id_for_download.clone(),
-                    http_headers_for_download,
-                )
+            let fut = dq_handle.download_archive(
+                url.to_string(),
+                &archive_type_str,
+                images_dir,
+                plugin_id,
+                task_id_for_download,
+                download_start_time,
+                output_album_id_for_download,
+                http_headers_for_download,
+            );
+            tokio::runtime::Handle::current()
+                .block_on(fut)
                 .map_err(|e| format!("Failed to download archive: {}", e).into())
         },
     );

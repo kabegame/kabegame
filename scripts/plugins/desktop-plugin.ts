@@ -1,22 +1,25 @@
 import { OSPlugin } from "./os-plugin.js";
-import { BasePlugin } from "./base-plugin.js"
-
+import { BasePlugin } from "./base-plugin.js";
 
 export class Desktop {
-    static readonly PLASMA = 'plasma';
-    static readonly GNOME = 'gnome';
+  static readonly PLASMA = "plasma";
+  static readonly GNOME = "gnome";
 
-    static readonly desktops = [this.PLASMA, this.GNOME]
+  static readonly desktops = [this.PLASMA, this.GNOME];
 
-    constructor(private desktop: string) {}
+  constructor(private _desktop: string) {}
 
-    get isPlasma(): boolean {
-        return this.desktop === Desktop.PLASMA
-    }
+  get desktop(): string {
+    return this._desktop;
+  }
 
-    get isGnome(): boolean {
-        return this.desktop === Desktop.GNOME
-    }
+  get isPlasma(): boolean {
+    return this.desktop === Desktop.PLASMA;
+  }
+
+  get isGnome(): boolean {
+    return this.desktop === Desktop.GNOME;
+  }
 }
 
 /**
@@ -24,31 +27,31 @@ export class Desktop {
  * isMain、isPluginEditor 等布尔变量直接使用。
  */
 export class DesktopPlugin extends BasePlugin {
-    static readonly NAME = 'DesktopPlugin'
+  static readonly NAME = "DesktopPlugin";
 
-    constructor() {
-        super(DesktopPlugin.NAME)
+  constructor() {
+    super(DesktopPlugin.NAME);
+  }
+
+  apply(bs: any): void {
+    if (!OSPlugin.isLinux) {
+      return;
     }
+    bs.hooks.parseParams.tap(this.name, () => {
+      const desktop = bs.options.desktop;
+      if (!desktop) {
+        throw new Error(`请指定一个桌面！${Desktop.desktops}`);
+      }
+      if (!(Desktop.desktops as readonly string[]).includes(desktop)) {
+        throw new Error(`不存在的组件名称，允许的列表：${Desktop.desktops}`);
+      }
+      this.log("Desktop: ", desktop);
+      bs.context.desktop = new Desktop(desktop);
+    });
 
-    apply(bs: any): void {
-        if (!OSPlugin.isLinux) {
-            return;
-        }
-        bs.hooks.parseParams.tap(this.name, () => {
-            const desktop = bs.options.desktop;
-            if (!desktop) {
-                throw new Error(`请指定一个桌面！${Desktop.desktops}`)
-            }
-            if (!(Desktop.desktops as readonly string[]).includes(desktop)) {
-                throw new Error(`不存在的组件名称，允许的列表：${Desktop.desktops}`)
-            }
-            this.log('Desktop: ', desktop);
-            bs.context.desktop = new Desktop(desktop)
-        })
-
-        bs.hooks.prepareEnv.tap(this.name, () => {
-            this.setEnv('VITE_DESKTOP', bs.context.desktop.desktop);
-            this.addRustFlags(`--cfg desktop=${bs.context.desktop.desktop}`)
-        })
-    }
+    bs.hooks.prepareEnv.tap(this.name, () => {
+      this.setEnv("VITE_DESKTOP", bs.context.desktop.desktop);
+      this.addRustFlags(`--cfg desktop=${bs.context.desktop.desktop}`);
+    });
+  }
 }

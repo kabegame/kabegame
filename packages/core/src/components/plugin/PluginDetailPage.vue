@@ -12,7 +12,7 @@
     </template>
 
     <template #actions>
-      <div v-if="plugin" class="header-actions">
+      <div v-if="plugin && !plugin.isBuiltIn" class="header-actions">
         <el-tooltip content="卸载" placement="bottom" v-if="showUninstall && installed">
           <el-button :icon="Delete" circle type="danger" @click="$emit('uninstall')" />
         </el-tooltip>
@@ -30,30 +30,13 @@
     <div v-else class="plugin-detail-content">
       <!-- 基本信息 -->
       <div class="plugin-info-section">
-        <PluginDetail
-          v-if="plugin"
-          :show-header="false"
-          :plugin-id="plugin.id"
-          :name="plugin.name"
-          :description="plugin.desp"
-          :base-url="plugin.baseUrl"
-          :installed="installed"
-          :show-copy-id="true"
-          :show-primary-action="true"
-          :primary-action-loading="installing"
-          :primary-action-disabled="installing"
-          :primary-action-text="installing ? installingText : installText"
-          @primary-action="$emit('install')"
-          @copy-id="$emit('copy-id', $event)"
-        >
+        <PluginDetail v-if="plugin" :show-header="false" :plugin-id="plugin.id" :name="plugin.name"
+          :description="plugin.desp" :base-url="plugin.baseUrl" :installed="installed" :show-copy-id="true"
+          :show-primary-action="true" :primary-action-loading="installing" :primary-action-disabled="installing"
+          :primary-action-text="installing ? installingText : installText" @primary-action="$emit('install')"
+          @copy-id="$emit('copy-id', $event)">
           <template #copy-id-button="{ pluginId }">
-            <el-button
-              :icon="DocumentCopy"
-              circle
-              size="small"
-              title="复制插件ID"
-              @click="$emit('copy-id', pluginId)"
-            />
+            <el-button :icon="DocumentCopy" circle size="small" title="复制插件ID" @click="$emit('copy-id', pluginId)" />
           </template>
           <template v-if="$slots['detail-extra-items']" #extra-items>
             <slot name="detail-extra-items" />
@@ -66,12 +49,8 @@
 
       <!-- 文档 -->
       <div class="plugin-doc-section">
-        <PluginDocRenderer
-          v-if="plugin?.doc"
-          :markdown="plugin.doc"
-          :load-image-bytes="loadDocImageBytes"
-          :empty-description="docEmptyDescription"
-        />
+        <PluginDocRenderer v-if="plugin?.doc" :markdown="plugin.doc" :load-image-bytes="loadDocImageBytes"
+          :empty-description="docEmptyDescription" />
         <el-empty v-else :description="docEmptyDescription" :image-size="100" />
       </div>
     </div>
@@ -91,9 +70,11 @@ type PluginVm = {
   icon?: string;
   doc?: string;
   baseUrl?: string;
+  isBuiltIn?: boolean;
 };
 
 type LoadImageBytes = (imagePath: string) => Promise<Uint8Array | number[]>;
+
 
 withDefaults(
   defineProps<{
@@ -156,11 +137,9 @@ defineEmits<{
 }
 
 .plugin-icon-placeholder {
-  background: linear-gradient(
-    135deg,
-    rgba(255, 107, 157, 0.2) 0%,
-    rgba(167, 139, 250, 0.2) 100%
-  );
+  background: linear-gradient(135deg,
+      rgba(255, 107, 157, 0.2) 0%,
+      rgba(167, 139, 250, 0.2) 100%);
   color: var(--anime-primary);
   font-size: 32px;
 }
@@ -190,4 +169,3 @@ defineEmits<{
   }
 }
 </style>
-
