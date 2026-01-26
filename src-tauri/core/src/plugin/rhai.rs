@@ -694,7 +694,6 @@ pub fn register_crawler_functions(
             };
 
             // 获取 HTML
-            // 在单独的线程中执行阻塞的 HTTP 请求，避免在 Tokio runtime 中创建新的 runtime
             // 并增加失败重试 + 日志输出（风格与 download_image 一致：可取消、指数退避、最终失败 eprintln）
             let url_clone = resolved_url.clone();
             let dq_for_http = Arc::clone(&dq_holder);
