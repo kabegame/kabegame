@@ -38,7 +38,7 @@ Kabegame 提供三种模式供下载，满足不同使用场景：
 | **插件商店** | ✅ 支持 | 🟡 预置插件 | 🟡 预置插件 |
 | **插件编辑器** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
 | **虚拟磁盘** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
-| **cli** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
+| **cli** | ✅ 支持 | ✅ 支持 | ❌ Windows不支持  ✅ Linux支持|
 | **内置插件** | 本地导入插件(`local-import`) | 发布时的全部插件 | 发布时的全部插件 |
 | **适用场景** | 日常使用，需要从商店安装插件 | 离线使用，需要所有插件内置 | 轻量使用，仅需基本功能 |
 | **文件大小** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
@@ -53,13 +53,13 @@ Kabegame 提供三种模式供下载，满足不同使用场景：
 | Linux (GNOME) | coming... | coming... | coming... |
 
 Windows 双击运行即可（**安装和更新**）。
+
 Linux（Debian分发（Ubuntu等））运行以下命令
 ```sh
 sudo dpkg -i Kabegame-<mode>_<desktop>_<version>_<arch>.deb
 ```
 你的桌面环境的确认方法：
-- Plasma：`plasmashell --version`
-- GNOME(coming...)：`gnome-shell --version`
+`systemctl --user list-units --type=service | grep -E "plasma|gnome|xfce|cinnamon|mate|sway|hyprland"`
 <b style="color: red; background-color: #fdd;">
 安装错误desktop版本可能导致无法正常设置壁纸！
 </b>
@@ -187,7 +187,6 @@ sudo dpkg -r Kabegame
 
 ### 前置要求
 
-- Node.js 16+ 
 - Bun 1.3+ (推荐使用官方安装脚本: `curl -fsSL https://bun.sh/install | bash` 或 Windows: `powershell -c "irm bun.sh/install.ps1 | iex"`)
 - Rust 1.70+ (Rust 2021 Edition)
 - [Tauri CLI](https://tauri.app/v2/guides/getting-started/prerequisites)

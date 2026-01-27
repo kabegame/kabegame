@@ -7,7 +7,7 @@ import { BasePlugin } from "./base-plugin";
 import { run } from "../utils";
 import { Component, ComponentPlugin } from "./component-plugin";
 import chalk from "chalk";
-import { BuildSystem } from "scripts/build-system";
+import { BuildSystem } from "../build-system";
 
 export class Mode {
   static readonly NORMAL = "normal";

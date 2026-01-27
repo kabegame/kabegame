@@ -897,15 +897,17 @@ const handleDeleteAlbum = async () => {
   }
 
   try {
+   
+
+    const deletedAlbumId = albumId.value;
+    const wasEnabled = wallpaperRotationEnabled.value;
+    const wasCurrentRotation = currentRotationAlbumId.value === deletedAlbumId;
+  
     await ElMessageBox.confirm(
       `确定要删除画册"${albumName.value}"吗？此操作仅删除画册及其关联，不会删除图片文件。`,
       "确认删除",
       { type: "warning" }
     );
-
-    const deletedAlbumId = albumId.value;
-    const wasEnabled = wallpaperRotationEnabled.value;
-    const wasCurrentRotation = currentRotationAlbumId.value === deletedAlbumId;
 
     // 先读一下当前壁纸（用于切回单张壁纸时保持不变）
     let currentWallpaperPath: string | null = null;
@@ -921,34 +923,34 @@ const handleDeleteAlbum = async () => {
     await albumStore.deleteAlbum(deletedAlbumId);
 
     // 如果删除的是当前轮播画册：自动关闭轮播并切回单张壁纸
-    if (wasCurrentRotation) {
-      // 清除轮播画册
-      try {
-        await setWallpaperRotationAlbumId(null);
-      } catch {
-        // 静默失败
-      }
+    // if (wasCurrentRotation) {
+    //   // 清除轮播画册
+    //   try {
+    //     await setWallpaperRotationAlbumId(null);
+    //   } catch {
+    //     // 静默失败
+    //   }
 
-      // 若轮播开启中：关闭轮播并切回单张壁纸
-      if (wasEnabled) {
-        try {
-          await setWallpaperRotationEnabled(false);
-        } catch {
-          // 静默失败
-        }
+    //   // 若轮播开启中：关闭轮播并切回单张壁纸
+    //   if (wasEnabled) {
+    //     try {
+    //       await setWallpaperRotationEnabled(false);
+    //     } catch {
+    //       // 静默失败
+    //     }
 
-        // 切回单张壁纸：用当前壁纸路径再 set 一次，确保"单张模式"一致且设置页能显示
-        if (currentWallpaperPath) {
-          try {
-            await invoke("set_wallpaper", { filePath: currentWallpaperPath });
-          } catch (e) {
-            console.warn("切回单张壁纸失败:", e);
-          }
-        }
+    //     // 切回单张壁纸：用当前壁纸路径再 set 一次，确保"单张模式"一致且设置页能显示
+    //     if (currentWallpaperPath) {
+    //       try {
+    //         await invoke("set_wallpaper", { filePath: currentWallpaperPath });
+    //       } catch (e) {
+    //         console.warn("切回单张壁纸失败:", e);
+    //       }
+    //     }
 
-        ElMessage.info("删除的画册正在用于轮播：已自动关闭轮播并切换为单张壁纸");
-      }
-    }
+    //     ElMessage.info("删除的画册正在用于轮播：已自动关闭轮播并切换为单张壁纸");
+    //   }
+    // }
 
     ElMessage.success("删除成功");
     // 返回上一页

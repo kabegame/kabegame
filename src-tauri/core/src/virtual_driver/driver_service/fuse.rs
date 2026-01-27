@@ -2,7 +2,6 @@
 
 use super::VirtualDriveServiceTrait;
 use crate::storage::Storage;
-use crate::storage::Storage;
 
 /// 非 Windows 平台的占位实现：后续可替换为 Linux/macOS 对应实现。
 #[derive(Default)]

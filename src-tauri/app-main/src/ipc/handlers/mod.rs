@@ -11,7 +11,7 @@ pub mod storage;
 use crate::ipc::dedupe_service::DedupeService;
 use kabegame_core::crawler::{CrawlTaskRequest, TaskScheduler};
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
-use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
+use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::tasks::TaskInfo;
@@ -22,11 +22,6 @@ use std::sync::{Arc, OnceLock};
 
 /// 全局状态
 pub struct Store {
-    // PluginManager 现在是全局单例，不再需要存储在这里
-    // Storage 现在是全局单例，不再需要存储在这里
-    // TaskScheduler 现在是全局单例，不再需要存储在这里
-    pub broadcaster: Arc<EventBroadcaster>,
-    pub subscription_manager: Arc<SubscriptionManager>,
     pub dedupe_service: Arc<DedupeService>,
     #[cfg(not(kabegame_mode = "light"))]
     pub virtual_drive_service: Arc<VirtualDriveService>,
@@ -100,7 +95,7 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResp
     }
 
     // 尝试各个处理器
-    if let Some(resp) = storage::handle_storage_request(&req, ctx.broadcaster.clone()).await {
+    if let Some(resp) = storage::handle_storage_request(&req).await {
         return resp;
     }
 
@@ -206,7 +201,6 @@ async fn handle_dedupe_start(
         .clone()
         .start_batched(
             Arc::new(Storage::global().clone()),
-            ctx.broadcaster.clone(),
             delete_files,
             bs,
         )

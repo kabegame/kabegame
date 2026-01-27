@@ -1,13 +1,9 @@
 ﻿pub mod native;
-#[cfg(all(target_os = "linux", desktop = "plasma"))]
-pub mod plasma_plugin;
 #[cfg(target_os = "windows")]
 pub mod window;
 
 // 导出管理器类型
 pub use native::NativeWallpaperManager;
-#[cfg(all(target_os = "linux", desktop = "plasma"))]
-pub use plasma_plugin::PlasmaPluginWallpaperManager;
 #[cfg(target_os = "windows")]
 pub use window::WindowWallpaperManager;
 
@@ -26,8 +22,6 @@ use kabegame_core::settings::Settings;
 pub struct WallpaperController {
     app: AppHandle,
     native: Arc<NativeWallpaperManager>,
-    #[cfg(all(target_os = "linux", desktop = "plasma"))]
-    plasma_plugin: Arc<PlasmaPluginWallpaperManager>,
     #[cfg(target_os = "windows")]
     window: Arc<WindowWallpaperManager>,
 }
@@ -55,9 +49,6 @@ impl WallpaperController {
     pub fn new(app: AppHandle) -> Self {
         let native = Arc::new(NativeWallpaperManager::new(app.clone()));
 
-        #[cfg(all(target_os = "linux", desktop = "plasma"))]
-        let plasma_plugin = Arc::new(PlasmaPluginWallpaperManager::new(app.clone()));
-
         #[cfg(target_os = "windows")]
         let wallpaper_window: Arc<Mutex<Option<WallpaperWindow>>> = Arc::new(Mutex::new(None));
 
@@ -70,8 +61,6 @@ impl WallpaperController {
         Self {
             app,
             native,
-            #[cfg(all(target_os = "linux", desktop = "plasma"))]
-            plasma_plugin,
             #[cfg(target_os = "windows")]
             window,
         }
@@ -86,10 +75,6 @@ impl WallpaperController {
         Ok(match mode.as_str() {
             #[cfg(target_os = "windows")]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
-            #[cfg(all(target_os = "linux", desktop = "plasma"))]
-            "plasma-plugin" => {
-                self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>
-            }
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
         })
     }
@@ -99,10 +84,6 @@ impl WallpaperController {
         match mode {
             #[cfg(target_os = "windows")]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
-            #[cfg(all(target_os = "linux", desktop = "plasma"))]
-            "plasma-plugin" => {
-                self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>
-            }
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
         }
     }

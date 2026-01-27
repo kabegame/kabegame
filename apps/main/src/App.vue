@@ -11,7 +11,7 @@
     <HelpDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
     <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
-    <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed }" :width="isCollapsed ? '64px' : '200px'">
+    <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': IS_WINDOWS, 'bg-white': !IS_WINDOWS }" :width="isCollapsed ? '64px' : '200px'">
       <div class="sidebar-header">
         <img src="/icon.png" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
         <div v-if="!isCollapsed" class="sidebar-title-section">
@@ -77,6 +77,7 @@ import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
 import { useSidebar } from "./composables/useSidebar";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { IS_WINDOWS } from "@kabegame/core/env";
 
 
 // 路由高亮
@@ -179,7 +180,7 @@ body,
 
 .app-sidebar {
   // 关键：侧栏背景必须半透明，DWM 才能透出模糊效果
-  background: transparent;
+  // background: transparent;
   // 非 Windows / DWM 失效时的降级（浏览器预览也能看到“玻璃感”）
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);

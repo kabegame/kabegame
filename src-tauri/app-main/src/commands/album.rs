@@ -1,6 +1,7 @@
 // Album 相关命令
 
 use kabegame_core::emitter::GlobalEmitter;
+use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
 #[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
@@ -24,6 +25,12 @@ pub async fn add_album(_app: AppHandle, name: String) -> Result<serde_json::Valu
 #[tauri::command]
 pub async fn delete_album(_app: AppHandle, album_id: String) -> Result<(), String> {
     Storage::global().delete_album(&album_id)?;
+    // 轮播画册没有了，回到画廊。这里前端会提示，所以不用报错
+    if let Ok(Some(id)) = Settings::global().get_wallpaper_rotation_album_id().await {
+        if id == album_id {
+            Settings::global().set_wallpaper_rotation_album_id(None).await?;
+        }
+    }
     #[cfg(not(kabegame_mode = "light"))]
     VirtualDriveService::global().bump_albums();
     Ok(())

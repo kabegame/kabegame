@@ -1,13 +1,23 @@
 // 启动步骤函数
 
 use std::fs;
-use tauri::Manager;
+use std::sync::Arc;
+use kabegame_core::crawler::TaskScheduler;
+use kabegame_core::ipc::{DaemonEvent, EventBroadcaster};
+use kabegame_core::ipc::events::DaemonEventKind;
+use kabegame_core::settings::Settings;
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
+use crate::commands;
 use crate::commands::wallpaper::init_wallpaper_on_startup;
+#[cfg(not(kabegame_mode = "light"))]
+use crate::ipc::Store;
 use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
 
-pub fn startup_step_cleanup_user_data_if_marked(app: &tauri::AppHandle) -> bool {
+// 清理用户数据（清理后重启处理真正的清理操作）
+pub fn cleanup_user_data_if_marked(app: &tauri::AppHandle) -> bool {
     // 检查清理标记，如果存在则先清理旧数据目录
     let app_data_dir = match app.path().app_data_dir() {
         Ok(p) => p,
@@ -52,17 +62,18 @@ pub fn startup_step_cleanup_user_data_if_marked(app: &tauri::AppHandle) -> bool 
     is_cleaning_data
 }
 
-pub fn startup_step_restore_main_window_state(app: &tauri::AppHandle, is_cleaning_data: bool) {
+// 恢复窗口位置
+pub fn restore_main_window_state(app: &tauri::AppHandle) {
     // 不恢复 window_state：用户要求每次居中弹出
-    if is_cleaning_data {
-        return;
-    }
     if let Some(main_window) = app.get_webview_window("main") {
+        eprintln!("找到窗口");
         let _ = main_window.center();
+        main_window.show().unwrap();
     }
 }
 
-pub fn startup_step_manage_wallpaper_components(app: &mut tauri::App) {
+// 壁纸组件，壁纸设置、轮播等功能
+pub fn init_wallpaper_controller(app: &mut tauri::App) {
     // 初始化全局壁纸控制器（基础 manager）
     // 使用全局单例（不再使用 manage）
     if let Err(e) = WallpaperController::init_global(app.app_handle().clone()) {
@@ -112,6 +123,163 @@ pub fn startup_step_manage_wallpaper_components(app: &mut tauri::App) {
 
         if let Err(e) = init_wallpaper_on_startup().await {
             eprintln!("[WARN] init_wallpaper_on_startup failed: {}", e);
+        } else {
+            println!("[WALLPAPER_CONTROLLER] init finished");
         }
     });
+    tauri::async_runtime::spawn(async{
+        WallpaperRotator::global().ensure_running(true).await;
+    });
+}
+
+/// 启动事件转发任务（将同步广播和异步广播都收拢到一个接口处）
+pub fn start_event_forward_task() {
+    tauri::async_runtime::spawn(async {
+        EventBroadcaster::start_forward_task().await;
+    });
+}
+
+/// 启动本地事件转发循环（将 Broadcaster 事件转发给 Tauri 前端）
+pub fn start_local_event_loop(app: AppHandle) {
+    let broadcaster = EventBroadcaster::global();
+    tauri::async_runtime::spawn(async move {
+
+        let mut rx = broadcaster.subscribe_filtered_stream(&DaemonEventKind::ALL);
+        eprintln!("[LOCAL_EVENT_LOOP] ready for recieve event");
+        while let Some((_id, event)) = rx.recv().await {
+               let kind = event.kind();
+
+        match &*event {
+            DaemonEvent::Generic { event, payload } => {
+                let _ = app.emit(event.as_str(), payload.clone());
+            }
+            DaemonEvent::SettingChange { changes } => {
+                let _ = app.emit("setting-change", changes.clone());
+            }
+            DaemonEvent::WallpaperUpdateImage { image_path } => {
+                let path = image_path.clone();
+                let controller = crate::wallpaper::manager::WallpaperController::global();
+                tokio::spawn(async move {
+                    let style = Settings::global()
+                        .get_wallpaper_rotation_style()
+                        .await
+                        .unwrap_or("fill".to_string());
+                    if let Err(e) = controller.set_wallpaper(&path, &style).await {
+                        eprintln!("[LocalEvent] Set wallpaper failed: {}", e);
+                    }
+                });
+            }
+            DaemonEvent::WallpaperUpdateStyle { style } => {
+                let style = style.clone();
+                let controller = crate::wallpaper::manager::WallpaperController::global();
+                tokio::spawn(async move {
+                    if let Ok(manager) = controller.active_manager().await {
+                        let _ = manager.set_style(&style, true).await;
+                    }
+                });
+            }
+            DaemonEvent::WallpaperUpdateTransition { transition } => {
+                let transition = transition.clone();
+                let controller = crate::wallpaper::manager::WallpaperController::global();
+                tokio::spawn(async move {
+                    if let Ok(manager) = controller.active_manager().await {
+                        let _ = manager.set_transition(&transition, true).await;
+                    }
+                });
+            }
+            _ => {
+                let event_name = kind.as_event_name();
+                let payload =
+                    serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null);
+                let _ = app.emit(event_name.as_str(), payload);
+            }
+        }
+    }});
+}
+
+/// 启动 IPC 服务
+#[cfg(not(kabegame_mode = "light"))]
+pub fn start_ipc_server(ctx: Arc<Store>) {
+    println!("Starting IPC server...");
+
+    tauri::async_runtime::spawn(async {
+        let res = kabegame_core::ipc::server::serve_with_events(
+            move |req| {
+                let ctx = ctx.clone();
+                async move {
+                    // eprintln!("[DEBUG] Backend 收到请求: {:?}", req);
+
+                    use crate::ipc::dispatch_request;
+                    let resp = dispatch_request(req, ctx).await;
+                    resp
+                }
+            },
+        ).await;
+        if let Err(e) = res {
+            //TODO: 处理服务器退出错误
+            eprintln!("[IPC_SERVER] 服务器退出: {}", e);
+        }
+    });
+}
+
+pub fn init_download_workers() {
+    tauri::async_runtime::spawn(async {
+        TaskScheduler::global().set_download_concurrency(
+            Settings::global().get_max_concurrent_downloads().await.unwrap()
+        )
+    });
+}
+
+pub fn start_download_workers() {
+    tauri::async_runtime::spawn(async {
+        TaskScheduler::global().start_workers(10).await;
+    });
+}
+
+/// 启动 TaskScheduler（启动 DownloadQueue 的 worker）
+pub fn start_task_scheduler() {
+    tauri::async_runtime::spawn(async {
+        TaskScheduler::global().start_decompression_worker().await;
+    });
+    tauri::async_runtime::spawn(async {
+        TaskScheduler::global().start_dispatcher_loop().await;
+    });
+    tauri::async_runtime::spawn(async {
+        TaskScheduler::global().start_download_workers_async().await;
+    });
+}
+
+pub fn init_shortcut(app: &tauri::App) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    let app_handle = app.app_handle().clone();
+    let shortcuts = app.global_shortcut();
+
+    // 注册并监听 F11 快捷键切换全屏
+    let f11_shortcut = Shortcut::new(
+        Some(tauri_plugin_global_shortcut::Modifiers::empty()),
+        tauri_plugin_global_shortcut::Code::F11,
+    );
+
+    let app_handle_clone = app_handle.clone();
+    shortcuts.on_shortcuts([f11_shortcut], move |_app_handle, shortcut, event| {
+        // 检查是否是 F11 快捷键（无修饰键 + F11）且是按下事件
+        if shortcut.mods.is_empty()
+            && shortcut.key.eq(&tauri_plugin_global_shortcut::Code::F11)
+            && matches!(
+                event.state,
+                tauri_plugin_global_shortcut::ShortcutState::Pressed
+            )
+        {
+            let app_handle = app_handle_clone.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = commands::window::toggle_fullscreen(app_handle).await {
+                    eprintln!("Failed to toggle fullscreen: {}", e);
+                }
+            });
+        }
+    }).map_err(|e| format!("初始化快捷键失败"))?;
+
+    println!("✓ F11 shortcut registered for fullscreen toggle");
+    Ok(())
 }

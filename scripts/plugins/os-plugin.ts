@@ -1,4 +1,4 @@
-import { BuildSystem } from "scripts/build-system.js";
+import { BuildSystem } from "../build-system.js";
 import { BasePlugin } from "./base-plugin.js";
 import { Component } from "./component-plugin.js";
 import chalk from "chalk";

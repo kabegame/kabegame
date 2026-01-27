@@ -2,7 +2,7 @@
   <div class="rotation-target-setting">
     <template v-if="rotationEnabled">
       <div class="select-row">
-        <el-select v-model="localAlbumId" class="album-select" :loading="albumStore.loading || showDisabled"
+        <el-select :modelValue="settingValue" class="album-select" :loading="albumStore.loading || showDisabled"
           :disabled="disabled || keyDisabled || wallpaperModeSwitching" placeholder="选择用于轮播的画册" style="min-width: 180px"
           @change="handleAlbumChange">
           <el-option value="">
@@ -104,37 +104,36 @@ watch(
 );
 
 // 同步 settings -> local（以及“画册被删/变更后”的矫正）
-watch(
-  () => [settingValue.value, albumStore.albums] as const,
-  ([rawId]) => {
-    const id = (rawId as any as string | null | undefined) ?? "";
-    // 约定：空字符串表示“全画廊轮播”；null/undefined 也视为 ""
-    if (id === "" || albumStore.albums.some((a) => a.id === id)) {
-      localAlbumId.value = id;
-      return;
-    }
+// 这里不应该由前端做
+// watch(
+//   () => [settingValue.value, albumStore.albums] as const,
+//   ([rawId]) => {
+//     const id = (rawId as any as string | null | undefined) ?? "";
+//     // 约定：空字符串表示“全画廊轮播”；null/undefined 也视为 ""
+//     if (id === "" || albumStore.albums.some((a) => a.id === id)) {
+//       localAlbumId.value = id;
+//       return;
+//     }
 
-    // 选中的画册已不存在：自动回退到“全画廊”，并同步落盘
-    localAlbumId.value = "";
-    if (rotationEnabled.value) {
-      // 使用 set 方法持久化
-      set("", async () => {
-        await settingsStore.loadAll();
-      }).catch(() => {
-        // 静默失败
-      });
-    }
-  },
-  { immediate: true }
-);
+//     // 选中的画册已不存在：自动回退到“全画廊”，并同步落盘
+//     localAlbumId.value = "";
+//     if (rotationEnabled.value) {
+//       // 使用 set 方法持久化
+//       set("", async () => {
+//         await settingsStore.loadAll();
+//       }).catch(() => {
+//         // 静默失败
+//       });
+//     }
+//   },
+//   { immediate: true }
+// );
 
 const handleAlbumChange = async (value: string) => {
   if (props.disabled || keyDisabled.value) return;
   try {
     // value: "" 表示全画廊；非空表示指定画册
-    await set(value, async () => {
-      await settingsStore.loadAll();
-    });
+    await set(value);
   } catch (e: any) {
     // 错误时 watcher 会自动回滚 localAlbumId (如果 store 值被 revert)
     ElMessage.error(`设置失败：${e?.message || String(e)}`);
@@ -152,7 +151,7 @@ const handleRevealCurrentWallpaper = async () => {
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("定位当前壁纸失败:", e);
-    ElMessage.error("定位失败");
+    ElMessage.error("定位当前壁纸失败");
   }
 };
 </script>

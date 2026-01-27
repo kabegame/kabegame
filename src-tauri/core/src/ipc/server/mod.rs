@@ -5,7 +5,11 @@
 #[cfg(feature = "ipc-server")]
 mod connection_handler;
 #[cfg(feature = "ipc-server")]
+mod event_broadcaster;
+#[cfg(feature = "ipc-server")]
 mod server_impl;
+#[cfg(feature = "ipc-server")]
+mod subscription_manager;
 
 #[cfg(feature = "ipc-server")]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -18,4 +22,8 @@ mod server_windows;
 #[cfg(feature = "ipc-server")]
 pub use connection_handler::handle_connection;
 #[cfg(feature = "ipc-server")]
-pub use server_impl::{serve_with_events, EventBroadcaster, SubscriptionManager};
+pub use event_broadcaster::EventBroadcaster;
+#[cfg(feature = "ipc-server")]
+pub use server_impl::serve_with_events;
+#[cfg(feature = "ipc-server")]
+pub use subscription_manager::SubscriptionManager;

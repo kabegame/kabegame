@@ -141,24 +141,24 @@ const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
   }
 
   // 若轮播开启中：关闭轮播并切回单张壁纸
-  if (wasEnabled) {
-    try {
-      await setWallpaperRotationEnabled(false);
-    } catch {
-      // 静默失败
-    }
+  // if (wasEnabled) {
+  //   try {
+  //     await setWallpaperRotationEnabled(false);
+  //   } catch {
+  //     // 静默失败
+  //   }
 
-    // 切回单张壁纸：用当前壁纸路径再 set 一次，确保“单张模式”一致且设置页能显示
-    if (currentWallpaperPath) {
-      try {
-        await invoke("set_wallpaper", { filePath: currentWallpaperPath });
-      } catch (e) {
-        console.warn("切回单张壁纸失败:", e);
-      }
-    }
+  //   // 切回单张壁纸：用当前壁纸路径再 set 一次，确保“单张模式”一致且设置页能显示
+  //   if (currentWallpaperPath) {
+  //     try {
+  //       await invoke("set_wallpaper", { filePath: currentWallpaperPath });
+  //     } catch (e) {
+  //       console.warn("切回单张壁纸失败:", e);
+  //     }
+  //   }
 
-    ElMessage.info("删除的画册正在用于轮播：已自动关闭轮播并切换为单张壁纸");
-  }
+  //   ElMessage.info("删除的画册正在用于轮播：已自动关闭轮播并切换为单张壁纸");
+  // }
 };
 
 // 刷新收藏画册的预览（用于收藏状态变化时）

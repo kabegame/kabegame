@@ -138,6 +138,8 @@ export class ComponentPlugin extends BasePlugin {
         }
         if (component.isMain && !bs.context.mode!.isLight) {
           stageResourceBinary(Component.cargoComp(Component.CLI));
+          // 只有windows才编译壳
+          if (OSPlugin.isWindows)
           stageResourceBinary(Component.cargoComp(`${Component.CLI}w`));
           stageResourceBinary(Component.cargoComp(Component.PLUGIN_EDITOR));
         }

@@ -53,7 +53,6 @@ pub async fn start_dedupe_gallery_by_hash_batched(delete_files: bool) -> Result<
         .clone()
         .start_batched(
             std::sync::Arc::new(kabegame_core::storage::Storage::global().clone()),
-            ctx.broadcaster.clone(),
             delete_files,
             10_000,
         )

@@ -143,6 +143,7 @@ impl WallpaperRotator {
         tauri::async_runtime::spawn(async move {
             // 线程启动成功，设置状态为“运行中”
             state.store(STATE_RUNNING, Ordering::Release);
+            println!("[WALLPAPER_ROTATOR] start");
             // 从用户设置中读取初始 interval
             let initial_interval_secs = {
                 Settings::global()
@@ -166,7 +167,7 @@ impl WallpaperRotator {
                     _ = notify.notified() => { /* manual/reset */ }
                 }
 
-                eprintln!("尝试轮播下一张");
+                eprintln!("[WALLPAPER_ROTATOR] 尝试轮播下一张");
 
                 // 检查状态：如果是 Stopping 或 running=false，则退出
                 let current_state = state.load(Ordering::Acquire);

@@ -2,6 +2,11 @@
   "name": "kabegame",
   "description": "让你的桌面充满二次元气息的壁纸管理器！收集、管理、轮播，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元壁纸资源~",
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "src-crawler-plugins"
+  ],
   "scripts": {
     "dev": "bun scripts/run.ts dev",
     "start": "bun scripts/run.ts start",
@@ -47,6 +52,7 @@
     "sharp": "^0.34.5",
     "tapable": "^2.3.0",
     "typescript": "^5.4.5",
+    "unocss": "^66.6.0",
     "vite": "^5.1.4",
     "vue-tsc": "^2.0.6"
   },

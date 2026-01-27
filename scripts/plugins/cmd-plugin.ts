@@ -1,6 +1,5 @@
-import { BuildSystem } from "scripts/build-system.js";
+import { BuildSystem } from "../build-system.js";
 import { BasePlugin } from "./base-plugin.js";
-import chalk from "chalk";
 import { resolve } from "path";
 
 export class Cmd {

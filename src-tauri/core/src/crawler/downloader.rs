@@ -1,7 +1,6 @@
 use crate::archive;
-use crate::crawler::decompression::{decompression_worker_loop, DecompressionJob};
+use crate::crawler::decompression::DecompressionJob;
 use crate::emitter::GlobalEmitter;
-use crate::ipc::DaemonEvent;
 use crate::settings::Settings;
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -572,13 +571,10 @@ pub struct DownloadQueue {
 }
 
 impl DownloadQueue {
-    pub async fn new() -> Self {
-        let initial = Settings::global()
-            .get_max_concurrent_downloads()
-            .await
-            .unwrap_or(3);
-        let pool = Arc::new(DownloadPool::new(initial));
-        let dq = Self {
+    // new 的时候先只创建一个下载线程，等init阶段完成之后，再手动扩容(用set_desired_concurrency)
+    pub fn new() -> Self {
+        let pool = Arc::new(DownloadPool::new(1));
+        Self {
             pool: Arc::clone(&pool),
             active_tasks: Arc::new(Mutex::new(Vec::new())),
             canceled_tasks: Arc::new(Mutex::new(HashSet::new())),
@@ -586,27 +582,14 @@ impl DownloadQueue {
             pending_queue: Arc::new((Mutex::new(VecDeque::new()), Notify::new())),
             task_limits: Arc::new(Mutex::new(HashMap::new())),
             task_states: Arc::new(Mutex::new(HashMap::new())),
-        };
-
-        {
-            let dq = dq.clone();
-            tokio::spawn(async move { decompression_worker_loop(dq).await });
         }
-
-        {
-            let dq = dq.clone();
-            tokio::spawn(async move { dispatcher_loop(dq).await });
-        }
-
-        dq.start_download_workers(pool.total_workers.load(Ordering::Relaxed))
     }
 
-    pub fn start_download_workers(self, count: u32) -> Self {
+    pub fn start_download_workers(&self, count: u32) {
         for _ in 0..count {
-            let dq = self.clone();
+            let dq = Arc::new(self.clone());
             tokio::spawn(async move { download_worker_loop(dq).await });
         }
-        self
     }
 
     pub fn set_desired_concurrency(&self, desired: u32) {
@@ -619,7 +602,7 @@ impl DownloadQueue {
             let add = desired - total;
             self.pool.total_workers.fetch_add(add, Ordering::Relaxed);
             for _ in 0..add {
-                let dq = self.clone();
+                let dq = Arc::new(self.clone());
                 tokio::spawn(async move { download_worker_loop(dq).await });
             }
             break;
@@ -802,23 +785,19 @@ impl DownloadQueue {
                             // Run thumbnail generation in blocking task
                             let existing_path_clone = existing_path.clone();
                             let existing_id = existing.id.clone();
-                            tokio::task::spawn_blocking(move || {
-                                if let Ok(Some(gen)) = generate_thumbnail(&existing_path_clone) {
-                                    let canonical_thumb = gen
-                                        .canonicalize()
-                                        .unwrap_or(gen)
-                                        .to_string_lossy()
-                                        .to_string()
-                                        .trim_start_matches("\\\\?\\")
-                                        .to_string();
-                                    let _ = Storage::global().update_image_thumbnail_path(
-                                        &existing_id,
-                                        &canonical_thumb,
-                                    );
-                                }
-                            })
-                            .await
-                            .ok();
+                            if let Ok(Some(gen)) = generate_thumbnail(&existing_path_clone).await {
+                                let canonical_thumb = gen
+                                    .canonicalize()
+                                    .unwrap_or(gen)
+                                    .to_string_lossy()
+                                    .to_string()
+                                    .trim_start_matches("\\\\?\\")
+                                    .to_string();
+                                let _ = Storage::global().update_image_thumbnail_path(
+                                    &existing_id,
+                                    &canonical_thumb,
+                                );
+                            }
                         }
                     }
                 }
@@ -896,7 +875,7 @@ impl DownloadQueue {
     }
 }
 
-async fn dispatcher_loop(dq: DownloadQueue) {
+pub(crate) async fn dispatcher_loop(dq: Arc<DownloadQueue>) {
     let (pending_lock, pending_notify) = &*dq.pending_queue;
     let pool = Arc::clone(&dq.pool);
     let task_limits = Arc::clone(&dq.task_limits);
@@ -995,7 +974,7 @@ async fn dispatcher_loop(dq: DownloadQueue) {
     }
 }
 
-async fn download_worker_loop(dq: DownloadQueue) {
+async fn download_worker_loop(dq: Arc<DownloadQueue>) {
     let pool = Arc::clone(&dq.pool);
     let active_tasks = Arc::clone(&dq.active_tasks);
     loop {
@@ -1660,21 +1639,19 @@ async fn download_image(
                     if need_backfill {
                         let existing_path_clone = existing_path.clone();
                         let existing_id = existing.id.clone();
-                        tokio::task::spawn_blocking(move || {
-                            if let Ok(Some(gen)) = generate_thumbnail(&existing_path_clone) {
-                                let canonical_thumb = gen
-                                    .canonicalize()
-                                    .unwrap_or(gen)
-                                    .to_string_lossy()
-                                    .to_string()
-                                    .trim_start_matches("\\\\?\\")
-                                    .to_string();
-                                let _ = Storage::global()
-                                    .update_image_thumbnail_path(&existing_id, &canonical_thumb);
-                            }
-                        })
-                        .await
-                        .ok();
+                        if let Ok(Some(gen)) = generate_thumbnail(&existing_path_clone).await {
+                            let canonical_thumb = gen
+                                .canonicalize()
+                                .unwrap_or(gen)
+                                .to_string_lossy()
+                                .to_string()
+                                .trim_start_matches("\\\\?\\")
+                                .to_string();
+                            let _ = Storage::global()
+                                .update_image_thumbnail_path(&existing_id, &canonical_thumb);
+                        } else {
+                            eprintln!("缩略图生成失败 {}", existing_id)
+                        }
                     }
 
                     ensure_minimum_duration(download_start_time, 500).await;
@@ -1692,10 +1669,8 @@ async fn download_image(
         if let Ok(target_dir_canonical) = target_dir.canonicalize() {
             if source_path.starts_with(&target_dir_canonical) {
                 let source_path_clone = source_path.clone();
-                let thumbnail_path =
-                    tokio::task::spawn_blocking(move || generate_thumbnail(&source_path_clone))
-                        .await
-                        .map_err(|e| e.to_string())??;
+                let thumbnail_path = generate_thumbnail(&source_path_clone).await
+                        .map_err(|e| e.to_string())?;
                 ensure_minimum_duration(download_start_time, 500).await;
                 return Ok(DownloadedImage {
                     path: source_path.clone(),
@@ -1730,10 +1705,10 @@ async fn download_image(
         remove_zone_identifier(&target_path);
 
         let target_path_clone = target_path.clone();
-        let thumbnail_path =
-            tokio::task::spawn_blocking(move || generate_thumbnail(&target_path_clone))
-                .await
-                .map_err(|e| e.to_string())??;
+        let thumbnail_path = 
+            generate_thumbnail(&target_path_clone)
+                    .await
+                    .map_err(|e| e.to_string())?;
 
         ensure_minimum_duration(download_start_time, 500).await;
 
@@ -2001,11 +1976,9 @@ async fn download_image(
                     if !thumb_path.exists() {
                         let existing_path_clone = existing_path.clone();
                         let existing_id = existing.id.clone();
-                        let thumb = tokio::task::spawn_blocking(move || {
-                            generate_thumbnail(&existing_path_clone)
-                        })
+                        let thumb = generate_thumbnail(&existing_path_clone)
                         .await
-                        .map_err(|e| e.to_string())??;
+                        .map_err(|e| e.to_string())?;
 
                         if let Some(gen) = thumb {
                             thumb_path = gen;
@@ -2066,9 +2039,9 @@ async fn download_image(
 
         let final_file_path_clone = final_file_path.clone();
         let thumbnail_path =
-            tokio::task::spawn_blocking(move || generate_thumbnail(&final_file_path_clone))
+           generate_thumbnail(&final_file_path_clone)
                 .await
-                .map_err(|e| e.to_string())??;
+                .map_err(|e| e.to_string())?;
 
         ensure_minimum_duration(download_start_time, 500).await;
 
@@ -2101,13 +2074,10 @@ fn remove_zone_identifier(file_path: &Path) {
     }
 }
 
-#[cfg(not(windows))]
-fn remove_zone_identifier(_file_path: &Path) {}
-
-pub fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, String> {
+pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, String> {
     let app_data_dir = crate::app_paths::kabegame_data_dir();
     let thumbnails_dir = app_data_dir.join("thumbnails");
-    std::fs::create_dir_all(&thumbnails_dir)
+    tokio::fs::create_dir_all(&thumbnails_dir).await
         .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
 
     let img = match image::open(image_path) {

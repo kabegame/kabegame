@@ -1,4 +1,4 @@
-// 隶ｾ鄂ｮ逶ｸ蜈ｳ蜻ｽ莉､
+// Settings related commands
 
 use kabegame_core::settings::Settings;
 #[cfg(not(kabegame_mode = "light"))]
@@ -8,19 +8,7 @@ use kabegame_core::virtual_driver::VirtualDriveService;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
 
-// 豕ｨ諢擾ｼ喩et_settings 蜥・get_setting 蟾ｲ蠎溷ｼ・ｼ悟燕遶ｯ蠎比ｽｿ逕ｨ扈・ｲ貞ｺｦ getter
-// 菫晉蕗霑吩ｺ帛・謨ｰ莉･蜷大錘蜈ｼ螳ｹ・御ｽ・ｿ泌屓髞呵ｯｯ謠千､ｺ
-#[tauri::command]
-pub async fn get_settings() -> Result<serde_json::Value, String> {
-    Err("get_settings is deprecated. Use individual getter commands instead.".to_string())
-}
-
-#[tauri::command]
-pub async fn get_setting(_key: String) -> Result<serde_json::Value, String> {
-    Err("get_setting is deprecated. Use individual getter commands instead.".to_string())
-}
-
-// 豺ｻ蜉扈・ｲ貞ｺｦ getter commands
+// fields' getter commands
 #[tauri::command]
 pub async fn get_auto_launch() -> Result<bool, String> {
     Settings::global()
@@ -78,6 +66,7 @@ pub async fn get_default_download_dir() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+#[cfg(target_os = "windows")]
 pub async fn get_wallpaper_engine_dir() -> Result<Option<String>, String> {
     Settings::global()
         .get_wallpaper_engine_dir()
@@ -318,6 +307,7 @@ pub async fn set_default_download_dir(dir: Option<String>) -> Result<(), String>
 }
 
 #[tauri::command]
+#[cfg(target_os = "windows")]
 pub async fn set_wallpaper_engine_dir(dir: Option<String>) -> Result<(), String> {
     Settings::global()
         .set_wallpaper_engine_dir(dir)
@@ -326,6 +316,7 @@ pub async fn set_wallpaper_engine_dir(dir: Option<String>) -> Result<(), String>
 }
 
 #[tauri::command]
+#[cfg(target_os = "windows")]
 pub async fn get_wallpaper_engine_myprojects_dir() -> Result<Option<String>, String> {
     Settings::global()
         .get_wallpaper_engine_myprojects_dir()

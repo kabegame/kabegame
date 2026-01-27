@@ -59,7 +59,7 @@ export function useSettingKeyState<K extends AppSettingKey>(key: K) {
     if (!isDown.value) {
       return;
     }
-
+    console.log('set', key, value);
     await settingsStore.save(key, value, onAfterSave);
   };
 

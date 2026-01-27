@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import ElementPlus from "element-plus";
 import "element-plus/dist/index.css";
 import * as ElementPlusIconsVue from "@element-plus/icons-vue";
+import "virtual:uno.css";
 import "@kabegame/core/styles/anime-theme.css";
 
 import App from "./ui/App.vue";

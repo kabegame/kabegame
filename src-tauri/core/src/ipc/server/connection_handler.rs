@@ -1,22 +1,18 @@
 //! 连接处理逻辑（Windows 和 Unix 通用）
 
-use std::sync::Arc;
-
 use crate::ipc::ipc::{decode_frame, encode_frame, read_one_frame};
 use crate::ipc::{CliIpcRequest, CliIpcResponse};
 use crate::ipc_dbg;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
-use super::{EventBroadcaster, SubscriptionManager};
+use super::SubscriptionManager;
 
 /// 处理单个客户端连接
 pub async fn handle_connection<R, W, F, Fut>(
     mut read_half: R,
     mut write_half: W,
     handler: F,
-    broadcaster: Option<Arc<dyn std::any::Any + Send + Sync>>,
-    subscription_manager: Option<Arc<SubscriptionManager>>,
     client_id: String,
 ) where
     R: AsyncRead + Unpin + Send + 'static,
@@ -104,43 +100,21 @@ pub async fn handle_connection<R, W, F, Fut>(
                             }
 
                             // 使用 SubscriptionManager 订阅事件
-                            if let Some(ref sm) = subscription_manager {
-                                // 解析事件类型列表：空列表 = 订阅全部
-                                let event_kinds: Vec<crate::ipc::events::DaemonEventKind> =
-                                    if kinds.is_empty() {
-                                        crate::ipc::events::DaemonEventKind::ALL.to_vec()
-                                    } else {
-                                        kinds
-                                        .iter()
-                                        .filter_map(|s| {
-                                            crate::ipc::events::DaemonEventKind::from_str(s)
-                                        })
-                                        .collect()
-                                    };
-                                ipc_dbg!("[DEBUG] IPC 服务器解析后的事件类型: {:?}", event_kinds);
-                                event_rx = Some(sm.subscribe(&client_id, event_kinds).await);
-                                ipc_dbg!("[DEBUG] IPC 服务器开始推送事件（通过 SubscriptionManager）");
-                            } else {
-                                if let Some(ref broadcaster) = broadcaster {
-                                    if let Ok(broadcaster) =
-                                        broadcaster.clone().downcast::<EventBroadcaster>()
-                                    {
-                                        let event_kinds: Vec<crate::ipc::events::DaemonEventKind> =
-                                            if kinds.is_empty() {
-                                                crate::ipc::events::DaemonEventKind::ALL.to_vec()
-                                            } else {
-                                                kinds
-                                                .iter()
-                                                .filter_map(|s| {
-                                                    crate::ipc::events::DaemonEventKind::from_str(s)
-                                                })
-                                                .collect()
-                                            };
-                                        event_rx = Some(broadcaster.subscribe_filtered_stream(&event_kinds));
-                                        ipc_dbg!("[DEBUG] IPC 服务器开始推送事件（回退到 broadcaster）");
-                                    }
-                                }
-                            }
+                            // 解析事件类型列表：空列表 = 订阅全部
+                            let event_kinds: Vec<crate::ipc::events::DaemonEventKind> =
+                                if kinds.is_empty() {
+                                    crate::ipc::events::DaemonEventKind::ALL.to_vec()
+                                } else {
+                                    kinds
+                                    .iter()
+                                    .filter_map(|s| {
+                                        crate::ipc::events::DaemonEventKind::from_str(s)
+                                    })
+                                    .collect()
+                                };
+                            ipc_dbg!("[DEBUG] IPC 服务器解析后的事件类型: {:?}", event_kinds);
+                            event_rx = Some(SubscriptionManager::global().subscribe(&client_id, event_kinds).await);
+                            ipc_dbg!("[DEBUG] IPC 服务器开始推送事件（通过 SubscriptionManager）");
                             // 不再 return，继续处理后续请求
                             continue;
                         }
@@ -225,18 +199,11 @@ pub async fn handle_connection<R, W, F, Fut>(
     let _ = write_task.await;
 
     // 清理订阅
-    if let Some(ref sm) = subscription_manager {
-        let cleaned = sm.unsubscribe(&client_id).await;
-        eprintln!(
-            "[DEBUG] IPC 服务器清理客户端订阅: client_id={}, cleaned={}",
-            client_id, cleaned
-        );
-    } else {
-        eprintln!(
-            "[DEBUG] IPC 服务器连接结束但无 subscription_manager: client_id={}",
-            client_id
-        );
-    }
+    let cleaned = SubscriptionManager::global().unsubscribe(&client_id).await;
+    eprintln!(
+        "[DEBUG] IPC 服务器清理客户端订阅: client_id={}, cleaned={}",
+        client_id, cleaned
+    );
 
     eprintln!("[DEBUG] IPC 服务器连接处理完成: client_id={}", client_id);
 }
