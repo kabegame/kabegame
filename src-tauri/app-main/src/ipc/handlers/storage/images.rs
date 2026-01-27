@@ -109,36 +109,31 @@ pub async fn get_images_range_by_query(
     }
 }
 
-pub async fn delete_image(broadcaster: Arc<EventBroadcaster>, image_id: &str) -> CliIpcResponse {
+pub async fn delete_image(image_id: &str) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.delete_image(image_id) {
         Ok(()) => {
-            // 扈滉ｸ蝗ｾ迚・序譖ｴ莠倶ｻｶ・壻ｾ帛燕遶ｯ蛻ｷ譁ｰ蠖灘燕 provider 隗・崟
-            let _ = broadcaster
-                .broadcast(Arc::new(DaemonEvent::Generic {
-                    event: "images-change".to_string(),
-                    payload: serde_json::json!({
-                        "reason": "delete",
-                        "imageIds": [image_id],
-                    }),
-                }))
-                .await;
+            EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::Generic {
+                event: "images-change".to_string(),
+                payload: serde_json::json!({
+                    "reason": "delete",
+                    "imageIds": [image_id],
+                }),
+            }));
             CliIpcResponse::ok("deleted")
         }
         Err(e) => CliIpcResponse::err(e),
     }
 }
 
-pub async fn remove_image(broadcaster: Arc<EventBroadcaster>, image_id: &str) -> CliIpcResponse {
+pub async fn remove_image(image_id: &str) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.remove_image(image_id) {
         Ok(()) => {
-            let _ = broadcaster
-                .broadcast(Arc::new(DaemonEvent::ImagesChange {
-                    reason: "remove".to_string(),
-                    image_ids: vec![image_id.to_string()],
-                }))
-                .await;
+            EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::ImagesChange {
+                reason: "remove".to_string(),
+                image_ids: vec![image_id.to_string()],
+            }));
             CliIpcResponse::ok("removed")
         }
         Err(e) => CliIpcResponse::err(e),
@@ -146,18 +141,15 @@ pub async fn remove_image(broadcaster: Arc<EventBroadcaster>, image_id: &str) ->
 }
 
 pub async fn batch_delete_images(
-    broadcaster: Arc<EventBroadcaster>,
     image_ids: &[String],
 ) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.batch_delete_images(image_ids) {
         Ok(()) => {
-            let _ = broadcaster
-                .broadcast(Arc::new(DaemonEvent::ImagesChange {
-                    reason: "delete".to_string(),
-                    image_ids: image_ids.to_vec(),
-                }))
-                .await;
+            EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::ImagesChange {
+                reason: "delete".to_string(),
+                image_ids: image_ids.to_vec(),
+            }));
             CliIpcResponse::ok("deleted")
         }
         Err(e) => CliIpcResponse::err(e),
@@ -165,18 +157,15 @@ pub async fn batch_delete_images(
 }
 
 pub async fn batch_remove_images(
-    broadcaster: Arc<EventBroadcaster>,
     image_ids: &[String],
 ) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.batch_remove_images(image_ids) {
         Ok(()) => {
-            let _ = broadcaster
-                .broadcast(Arc::new(DaemonEvent::ImagesChange {
-                    reason: "remove".to_string(),
-                    image_ids: image_ids.to_vec(),
-                }))
-                .await;
+            EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::ImagesChange {
+                reason: "remove".to_string(),
+                image_ids: image_ids.to_vec(),
+            }));
             CliIpcResponse::ok("removed")
         }
         Err(e) => CliIpcResponse::err(e),
@@ -184,7 +173,6 @@ pub async fn batch_remove_images(
 }
 
 pub async fn toggle_image_favorite(
-    broadcaster: Arc<EventBroadcaster>,
     image_id: &str,
     favorite: bool,
 ) -> CliIpcResponse {
@@ -192,16 +180,14 @@ pub async fn toggle_image_favorite(
     match storage.toggle_image_favorite(image_id, favorite) {
         Ok(()) => {
             // 扈滉ｸ蝗ｾ迚・序譖ｴ莠倶ｻｶ・壽噺阯・蜿匁ｶ域噺阯丈ｼ壼ｽｱ蜩・Gallery 逧・favorite 蟄玲ｮｵ + 謾ｶ阯冗判蜀悟・螳ｹ
-            let _ = broadcaster
-                .broadcast(Arc::new(DaemonEvent::Generic {
-                    event: "images-change".to_string(),
-                    payload: serde_json::json!({
-                        "reason": if favorite { "favorite-add" } else { "favorite-remove" },
-                        "albumId": FAVORITE_ALBUM_ID,
-                        "imageIds": [image_id],
-                    }),
-                }))
-                .await;
+            EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::Generic {
+                event: "images-change".to_string(),
+                payload: serde_json::json!({
+                    "reason": if favorite { "favorite-add" } else { "favorite-remove" },
+                    "albumId": FAVORITE_ALBUM_ID,
+                    "imageIds": [image_id],
+                }),
+            }));
             CliIpcResponse::ok("ok")
         }
         Err(e) => CliIpcResponse::err(e),

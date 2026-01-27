@@ -44,7 +44,12 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libfuse3-3", "adduser"]
+        "depends": ["fuse3"],
+        "files": {
+          "/usr/share/applications/kabegame.desktop": "./deb/kabegame.desktop",
+          "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
+          "/usr/share/applications/kabegame-kgpg.desktop": "./deb/kabegame-kgpg.desktop"
+        }
       }
     }
   }

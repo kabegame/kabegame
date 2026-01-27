@@ -72,8 +72,6 @@ function releaseAssetFileName(params: {
 
 function findBundleDir(root: string): string | null {
   const candidates = [
-    path.join(root, "src-tauri", "app-main", "target", "release", "bundle"),
-    path.join(root, "src-tauri", "target", "release", "bundle"),
     path.join(root, "target", "release", "bundle"),
   ];
   for (const p of candidates) {

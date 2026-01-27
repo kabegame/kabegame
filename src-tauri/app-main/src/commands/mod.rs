@@ -19,5 +19,6 @@ pub use plugin::*;
 pub use settings::*;
 pub use task::*;
 pub use wallpaper::*;
+#[cfg(target_os = "windows")]
 pub use wallpaper_engine::*;
 pub use window::*;

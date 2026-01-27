@@ -15,7 +15,7 @@ pub async fn get_albums() -> CliIpcResponse {
     }
 }
 
-pub async fn add_album(broadcaster: Arc<EventBroadcaster>, name: &str) -> CliIpcResponse {
+pub async fn add_album(name: &str) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.add_album(name) {
         Ok(album) => {
@@ -26,13 +26,11 @@ pub async fn add_album(broadcaster: Arc<EventBroadcaster>, name: &str) -> CliIpc
                 "created",
                 serde_json::to_value(album).unwrap_or_default(),
             );
-            broadcaster
-                .broadcast(Arc::new(DaemonEvent::AlbumAdded {
-                    id: id,
-                    name: name,
-                    created_at: created_at,
-                }))
-                .await;
+            EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::AlbumAdded {
+                id: id,
+                name: name,
+                created_at: created_at,
+            }));
             CliIpcResponse::ok("created")
         }
         Err(e) => CliIpcResponse::err(e),

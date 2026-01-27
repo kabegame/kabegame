@@ -1,5 +1,6 @@
-import { OSPlugin } from "./os-plugin.js";
-import { BasePlugin } from "./base-plugin.js";
+import { OSPlugin } from "./os-plugin";
+import { BasePlugin } from "./base-plugin";
+import { BuildSystem } from "../build-system";
 
 export class Desktop {
   static readonly PLASMA = "plasma";
@@ -33,8 +34,8 @@ export class DesktopPlugin extends BasePlugin {
     super(DesktopPlugin.NAME);
   }
 
-  apply(bs: any): void {
-    if (!OSPlugin.isLinux) {
+  apply(bs: BuildSystem): void {
+    if (!OSPlugin.isLinux && !bs.context.component!.isMain) {
       return;
     }
     bs.hooks.parseParams.tap(this.name, () => {
@@ -50,8 +51,8 @@ export class DesktopPlugin extends BasePlugin {
     });
 
     bs.hooks.prepareEnv.tap(this.name, () => {
-      this.setEnv("VITE_DESKTOP", bs.context.desktop.desktop);
-      this.addRustFlags(`--cfg desktop=${bs.context.desktop.desktop}`);
+      this.setEnv("VITE_DESKTOP", bs.context.desktop!.desktop);
+      this.addRustFlags(`--cfg desktop="${bs.context.desktop!.desktop}"`);
     });
   }
 }

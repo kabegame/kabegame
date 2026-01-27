@@ -921,31 +921,21 @@ const handleImport = async () => {
 
 const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = false) => {
   try {
-    setInstalling(plugin.id, true);
-    const res = await invoke<StoreInstallPreview>("preview_store_install", {
-      downloadUrl: plugin.downloadUrl,
-      sha256: plugin.sha256 ?? null,
-      sizeBytes: plugin.sizeBytes || null,
-    });
-
-    const actualVersion = res.preview?.version || plugin.version;
-    const actualName = res.preview?.name || plugin.name;
-    const actualSizeBytes = typeof res.preview?.sizeBytes === "number" ? res.preview.sizeBytes : plugin.sizeBytes;
-
-    const willUpdate = isUpdateAvailable(plugin.installedVersion, actualVersion);
-    const isReinstall = forceReinstall && plugin.installedVersion === actualVersion;
+    // 之所以先下载，是为了避免实际版本不一致
+    const willUpdate = isUpdateAvailable(plugin.installedVersion, plugin.version);
+    const isReinstall = forceReinstall && plugin.installedVersion === plugin.version;
     const title = isReinstall ? "确认重新安装" : willUpdate ? "确认更新" : "确认安装";
     const confirmButtonText = isReinstall ? "重新安装" : willUpdate ? "更新" : "安装";
     const msg = isReinstall
-      ? `将重新安装 <b>${escapeHtml(actualName)}</b>（v${escapeHtml(actualVersion)}，${formatBytes(
-        actualSizeBytes
+      ? `将重新安装 <b>${escapeHtml(plugin.name)}</b>（v${escapeHtml(plugin.version)}，${formatBytes(
+        plugin.sizeBytes
       )}），是否继续？`
       : willUpdate
         ? `将从 <b>v${escapeHtml(plugin.installedVersion || "?")}</b> 更新为 <b>v${escapeHtml(
-          actualVersion
-        )}</b>（${formatBytes(actualSizeBytes)}），是否继续？`
-        : `将安装 <b>${escapeHtml(actualName)}</b>（v${escapeHtml(actualVersion)}，${formatBytes(
-          actualSizeBytes
+          plugin.version
+        )}</b>（${formatBytes(plugin.sizeBytes)}），是否继续？`
+        : `将安装 <b>${escapeHtml(plugin.name)}</b>（v${escapeHtml(plugin.version)}，${formatBytes(
+          plugin.sizeBytes
         )}），是否继续？`;
 
     await ElMessageBox.confirm(msg, title, {
@@ -953,6 +943,13 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
       dangerouslyUseHTMLString: true,
       confirmButtonText,
       cancelButtonText: "取消",
+    });
+
+    setInstalling(plugin.id, true);
+    const res = await invoke<StoreInstallPreview>("preview_store_install", {
+      downloadUrl: plugin.downloadUrl,
+      sha256: plugin.sha256 ?? null,
+      sizeBytes: plugin.sizeBytes || null,
     });
 
     await invoke("import_plugin_from_zip", { zipPath: res.tmpPath });

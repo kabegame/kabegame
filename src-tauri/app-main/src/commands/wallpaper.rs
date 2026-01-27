@@ -36,7 +36,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
 
     let controller = WallpaperController::global();
     // 启动时只"尝试还原 currentWallpaperImageId"，不在客户端做大规模选图/回退，
-    // 回退与轮播逻辑由 daemon + rotator 负责（避免客户端依赖 Storage/Settings）。
+    // 回退与轮播逻辑由 rotator 负责（避免客户端依赖 Storage/Settings）。
     let settings = Settings::global();
     let (style_result, id_result) = tokio::join!(
         settings.get_wallpaper_rotation_style(),
@@ -47,8 +47,6 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     let Some(id) = id_result.ok().flatten() else {
         return Ok(());
     };
-
-    println!("参数 style: {} id: {}", style, id);
 
     let img_v = Storage::global()
         .find_image_by_id(&id)
@@ -186,17 +184,14 @@ pub async fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String>
 }
 
 #[tauri::command]
-pub async fn set_wallpaper_rotation_album_id(album_id: Option<String>) -> Result<(), String> {
-    println!("call me {} {:?} {:?}", file!(), line!(), album_id);
-    let normalized = album_id.map(|s| {
-        let t = s.trim().to_string();
-        if t.is_empty() {
-            "".to_string()
-        } else {
-            t
+pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), String> {
+    if album_id != "" {
+        if Storage::global().get_album_image_ids(&album_id).unwrap().len() == 0 {
+            return Err(String::from("该画册没有画哟，先去画廊添加进去吧！"))
         }
-    });
-
+    }
+    let normalized: Option<String> = if album_id.clone() == "" { None } else { Some(album_id) };
+    
     Settings::global()
         .set_wallpaper_rotation_album_id(normalized.clone())
         .await
@@ -632,6 +627,7 @@ pub fn get_native_wallpaper_styles() -> Result<Vec<String>, String> {
         Ok(vec![
             "fill".to_string(),
             "fit".to_string(),
+            #[cfg(not(desktop = "plasma"))]
             "stretch".to_string(),
             "center".to_string(),
             "tile".to_string(),

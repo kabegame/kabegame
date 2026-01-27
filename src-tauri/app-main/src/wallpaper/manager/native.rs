@@ -67,10 +67,11 @@ impl NativeWallpaperManager {
         // 3: tiled
         // 5: scaled keep proportions (fit)
         match style {
-            "fit" => "5",
-            "stretch" => "0",
-            "center" => "1",
+            "fit" => "1",
+            "fill" => "2",
+            "center" => "6",
             "tile" => "3",
+
             _ => "2", // fill（默认）
         }
     }
@@ -606,39 +607,34 @@ impl WallpaperManager for NativeWallpaperManager {
         Ok(())
     }
 
-    #[cfg(not(target_os = "windows"))]
+    /// - Plasma 原生壁纸（--plasma 编译期开关）下：通过 qdbus 写 FillMode，并尽量对当前壁纸立即生效
+    #[cfg(all(target_os = "linux", desktop = "plasma"))]
     async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
-        // 非 Windows 平台：
-        // - 默认 no-op（由 WindowWallpaperManager/KDE 插件等负责）
-        // - Plasma 原生壁纸（--plasma 编译期开关）下：通过 qdbus 写 FillMode，并尽量对当前壁纸立即生效
-
-        #[cfg(all(target_os = "linux", desktop = "plasma"))]
         {
-            if immediate {
-                if let Some(path) = self.current_wallpaper_path_from_settings().await {
-                    if std::path::Path::new(&path).exists() {
-                        // 修复：正确处理错误，而不是忽略
-                        self.set_wallpaper_plasma(&path, style)?;
-                    } else {
-                        return Err(format!("当前壁纸路径不存在: {}", path));
-                    }
+            if let Some(path) = self.current_wallpaper_path_from_settings().await {
+                if std::path::Path::new(&path).exists() {
+                    // 修复：正确处理错误，而不是忽略
+                    self.set_wallpaper_plasma(&path, style)?;
                 } else {
-                    // 如果没有当前壁纸，仍然尝试通过 qdbus 只设置 FillMode（不改变图片）
-                    // 这样可以确保 style 被正确设置，即使没有当前壁纸路径
-                    let fill_mode = Self::style_to_plasma_fill_mode(style);
-                    let script = format!(
-                        "var allDesktops = desktops();\n\
-                        for (var i=0; i<allDesktops.length; i++) {{\n\
-                          var d = allDesktops[i];\n\
-                          if (d.wallpaperPlugin === 'org.kde.image') {{\n\
-                            d.currentConfigGroup = ['Wallpaper', 'org.kde.image', 'General'];\n\
-                            d.writeConfig('FillMode', '{}');\n\
-                          }}\n\
-                        }}\n",
-                        fill_mode
-                    );
-                    Self::run_qdbus_evaluate_script(&script)?;
+                    return Err(format!("当前壁纸路径不存在: {}", path));
                 }
+            } else {
+                // 如果没有当前壁纸，仍然尝试通过 qdbus 只设置 FillMode（不改变图片）
+                // 这样可以确保 style 被正确设置，即使没有当前壁纸路径
+                let fill_mode = Self::style_to_plasma_fill_mode(style);
+                let script = format!(
+                    "var allDesktops = desktops();\n\
+                    for (var i=0; i<allDesktops.length; i++) {{\n\
+                      var d = allDesktops[i];\n\
+                      if (d.wallpaperPlugin === 'org.kde.image') {{\n\
+                        d.currentConfigGroup = ['Wallpaper', 'org.kde.image', 'General'];\n\
+                        d.writeConfig('FillMode', '{}');\n\
+                      }}\n\
+                    }}\n",
+                    fill_mode
+                );
+                println!("fill_mode {}", fill_mode);
+                Self::run_qdbus_evaluate_script(&script)?;
             }
             return Ok(());
         }

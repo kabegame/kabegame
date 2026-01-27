@@ -6,10 +6,10 @@
 //! 注意：此模块需要 `ipc-server` feature，因为它依赖于 EventBroadcaster。
 
 #[cfg(feature = "ipc-server")]
-use crate::ipc::events::{DaemonEvent, DaemonEventKind};
+use crate::ipc::events::DaemonEvent;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::server::EventBroadcaster;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 // ==================== IPC 实现 ====================
 
@@ -17,24 +17,17 @@ use std::sync::{Arc, OnceLock};
 ///
 /// 注意：此类型仅在启用 `ipc-server` feature 时可用
 #[cfg(feature = "ipc-server")]
-pub struct GlobalEmitter {
-    broadcaster: Arc<EventBroadcaster>,
-}
+pub struct GlobalEmitter;
 
 #[cfg(feature = "ipc-server")]
 impl GlobalEmitter {
-    /// 创建新的全局 emitter
-    pub fn new(broadcaster: Arc<EventBroadcaster>) -> Self {
-        Self { broadcaster }
-    }
-
     /// 初始化全局 emitter
     ///
     /// # Panics
     /// 如果已经初始化，会 panic
-    pub fn init_global(broadcaster: Arc<EventBroadcaster>) -> Result<(), String> {
+    pub fn init_global() -> Result<(), String> {
         GLOBAL_EMITTER
-            .set(Self::new(broadcaster))
+            .set(GlobalEmitter)
             .map_err(|_| "Global emitter already initialized".to_string())
     }
 
@@ -58,12 +51,12 @@ impl GlobalEmitter {
 
     /// 发送任务日志事件
     pub fn emit_task_log(&self, task_id: &str, level: &str, message: &str) {
-        let event = Arc::new(DaemonEvent::TaskLog {
+        let event = std::sync::Arc::new(DaemonEvent::TaskLog {
             task_id: task_id.to_string(),
             level: level.to_string(),
             message: message.to_string(),
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送下载状态事件
@@ -76,7 +69,7 @@ impl GlobalEmitter {
         state: &str,
         error: Option<&str>,
     ) {
-        let event = Arc::new(DaemonEvent::DownloadState {
+        let event = std::sync::Arc::new(DaemonEvent::DownloadState {
             task_id: task_id.to_string(),
             url: url.to_string(),
             start_time,
@@ -84,7 +77,7 @@ impl GlobalEmitter {
             state: state.to_string(),
             error: error.map(|e| e.to_string()),
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送任务状态事件
@@ -98,7 +91,7 @@ impl GlobalEmitter {
         error: Option<&str>,
         current_wallpaper: Option<&str>,
     ) {
-        let event = Arc::new(DaemonEvent::TaskStatus {
+        let event = std::sync::Arc::new(DaemonEvent::TaskStatus {
             task_id: task_id.to_string(),
             status: status.to_string(),
             progress,
@@ -107,34 +100,34 @@ impl GlobalEmitter {
             error: error.map(|e| e.to_string()),
             current_wallpaper: current_wallpaper.map(|w| w.to_string()),
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送通用事件（用于扩展）
     pub fn emit(&self, event: &str, payload: serde_json::Value) {
-        let event = Arc::new(DaemonEvent::Generic {
+        let event = std::sync::Arc::new(DaemonEvent::Generic {
             event: event.to_string(),
             payload,
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送任务进度事件
     pub fn emit_task_progress(&self, task_id: &str, progress: f64) {
-        let event = Arc::new(DaemonEvent::TaskProgress {
+        let event = std::sync::Arc::new(DaemonEvent::TaskProgress {
             task_id: task_id.to_string(),
             progress,
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送任务错误事件
     pub fn emit_task_error(&self, task_id: &str, error: &str) {
-        let event = Arc::new(DaemonEvent::TaskError {
+        let event = std::sync::Arc::new(DaemonEvent::TaskError {
             task_id: task_id.to_string(),
             error: error.to_string(),
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送下载进度事件
@@ -147,7 +140,7 @@ impl GlobalEmitter {
         received_bytes: u64,
         total_bytes: Option<u64>,
     ) {
-        let event = Arc::new(DaemonEvent::DownloadProgress {
+        let event = std::sync::Arc::new(DaemonEvent::DownloadProgress {
             task_id: task_id.to_string(),
             url: url.to_string(),
             start_time,
@@ -155,7 +148,7 @@ impl GlobalEmitter {
             received_bytes,
             total_bytes,
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送去重进度事件
@@ -166,13 +159,13 @@ impl GlobalEmitter {
         removed: usize,
         batch_index: usize,
     ) {
-        let event = Arc::new(DaemonEvent::DedupeProgress {
+        let event = std::sync::Arc::new(DaemonEvent::DedupeProgress {
             processed,
             total,
             removed,
             batch_index,
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送去重完成事件
@@ -183,49 +176,49 @@ impl GlobalEmitter {
         removed: usize,
         canceled: bool,
     ) {
-        let event = Arc::new(DaemonEvent::DedupeFinished {
+        let event = std::sync::Arc::new(DaemonEvent::DedupeFinished {
             processed,
             total,
             removed,
             canceled,
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送壁纸图片更新事件
     pub fn emit_wallpaper_update_image(&self, image_path: &str) {
-        let event = Arc::new(DaemonEvent::WallpaperUpdateImage {
+        let event = std::sync::Arc::new(DaemonEvent::WallpaperUpdateImage {
             image_path: image_path.to_string(),
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送壁纸样式更新事件
     pub fn emit_wallpaper_update_style(&self, style: &str) {
-        let event = Arc::new(DaemonEvent::WallpaperUpdateStyle {
+        let event = std::sync::Arc::new(DaemonEvent::WallpaperUpdateStyle {
             style: style.to_string(),
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送壁纸过渡效果更新事件
     pub fn emit_wallpaper_update_transition(&self, transition: &str) {
-        let event = Arc::new(DaemonEvent::WallpaperUpdateTransition {
+        let event = std::sync::Arc::new(DaemonEvent::WallpaperUpdateTransition {
             transition: transition.to_string(),
         });
-        self.broadcaster.broadcast_sync(event);
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送设置变更事件
     pub fn emit_setting_change(&self, changes: serde_json::Value) {
-        let event = Arc::new(DaemonEvent::SettingChange { changes });
-        self.broadcaster.broadcast_sync(event);
+        let event = std::sync::Arc::new(DaemonEvent::SettingChange { changes });
+        EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送 pending 队列变化事件
     pub fn emit_pending_queue_change(&self, pending_count: usize) {
-        let event = Arc::new(DaemonEvent::PendingQueueChange { pending_count });
-        self.broadcaster.broadcast_sync(event);
+        let event = std::sync::Arc::new(DaemonEvent::PendingQueueChange { pending_count });
+        EventBroadcaster::global().broadcast(event);
     }
 }
 

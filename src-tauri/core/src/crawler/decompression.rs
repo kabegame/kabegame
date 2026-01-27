@@ -9,7 +9,7 @@ use serde_json::json;
 use url::Url;
 
 #[derive(Debug, Clone)]
-pub(crate) struct DecompressionJob {
+pub struct DecompressionJob {
     pub archive_path: PathBuf,
     pub images_dir: PathBuf,
     pub original_url: String,
@@ -21,7 +21,7 @@ pub(crate) struct DecompressionJob {
     pub temp_dir_guard: Option<Arc<TempDirGuard>>,
 }
 
-pub(crate) async fn decompression_worker_loop(dq: DownloadQueue) {
+pub(crate) async fn decompression_worker_loop(dq: Arc<DownloadQueue>) {
     let queue_pair = Arc::clone(&dq.decompression_queue);
 
     // active_tasks is no longer used here as decompression tasks are removed from the active list

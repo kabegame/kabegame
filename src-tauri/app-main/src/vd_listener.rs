@@ -1,4 +1,4 @@
-﻿//! 虚拟磁盘事件监听器
+//! 虚拟磁盘事件监听器
 //!
 //! 监听 EventBroadcaster 的事件，并调用 VirtualDriveService 的相应方法更新虚拟磁盘状态。
 
@@ -18,7 +18,6 @@ use std::sync::Arc;
 /// - `Generic` 事件中的 `images-change` → 根据 payload 处理
 #[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
 pub async fn start_vd_event_listener(
-    broadcaster: Arc<EventBroadcaster>,
     vd_service: Arc<VirtualDriveService>,
 ) {
     use kabegame_core::ipc::events::DaemonEventKind;
@@ -30,6 +29,7 @@ pub async fn start_vd_event_listener(
         DaemonEventKind::Generic,
     ];
 
+    let broadcaster = EventBroadcaster::global();
     let mut rx = broadcaster.subscribe_filtered_stream(&event_kinds);
 
     loop {
@@ -96,11 +96,10 @@ pub async fn start_vd_event_listener(
     }
 }
 
-/// 非 Windows 或未启用 virtual-driver feature 时的空实现
-#[cfg(not(all(not(kabegame_mode = "light"), target_os = "windows")))]
-pub async fn start_vd_event_listener(
-    _broadcaster: Arc<EventBroadcaster>,
-    _vd_service: Arc<VirtualDriveService>,
-) {
-    // 空实现：非 Windows 或未启用 virtual-driver feature 时不做任何事
-}
+// /// 非 Windows 或未启用 virtual-driver feature 时的空实现
+// #[cfg(all(not(kabegame_mode = "light"), any(target_os = "macos", target_os = "linux")))]
+// pub async fn start_vd_event_listener(
+//     _vd_service: Arc<VirtualDriveService>,
+// ) {
+//     // 空实现：非 Windows 或未启用 virtual-driver feature 时不做任何事
+// }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import chalk from "chalk";
-import { BuildSystem } from "scripts/build-system";
+import { BuildSystem } from "../build-system";
 
 /**
  * 插件基类

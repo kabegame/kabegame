@@ -21,11 +21,8 @@
     "noFallthroughCasesInSwitch": true,
 
     /* Path aliases */
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["apps/main/src/*", "apps/plugin-editor/src/*"],
-      "@kabegame/core/*": ["packages/core/src/*"],
-      "@kabegame/core/stores/*": ["packages/core/src/stores/*"]
+      "@kabegame/core/*": ["./packages/core/src/*"],
     }
   },
   "include": [
@@ -37,6 +34,7 @@
     "packages/**/src/**/*.d.ts",
     "packages/**/src/**/*.tsx",
     "packages/**/src/**/*.vue",
-    "scripts/**/*.ts"
+    "scripts/**/*.ts",
+    "./*.ts"
   ]
 }

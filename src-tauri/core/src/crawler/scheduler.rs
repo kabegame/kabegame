@@ -1,6 +1,6 @@
 use crate::crawler::downloader::{get_default_images_dir, ActiveDownloadInfo, DownloadQueue};
 use crate::emitter::GlobalEmitter;
-use crate::plugin::{Plugin, PluginManager, VarDefinition, VarOption};
+use crate::plugin::{PluginManager, VarDefinition, VarOption};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -44,11 +44,10 @@ impl TaskScheduler {
             running_workers: Arc::new(AtomicUsize::new(0)),
         };
         // 写死创建10个worker
-        s.start_workers(10);
         s
     }
 
-    fn start_workers(&self, count: usize) {
+    pub async fn start_workers(&self, count: usize) {
         for _ in 0..count {
             let download_queue = Arc::clone(&self.download_queue);
             let queue = Arc::clone(&self.queue);
@@ -203,6 +202,33 @@ impl TaskScheduler {
     /// 获取 DownloadQueue（用于需要 DownloadQueue 的地方）
     pub fn download_queue(&self) -> Arc<DownloadQueue> {
         Arc::clone(&self.download_queue)
+    }
+
+    /// 启动解压缩 worker
+    pub async fn start_decompression_worker(&self) {
+        use crate::crawler::decompression::decompression_worker_loop;
+        let dq = self.download_queue();
+        let dq = dq.clone();
+        tokio::spawn(async move { 
+            decompression_worker_loop(dq).await 
+        });
+    }
+
+    /// 启动 dispatcher loop
+    pub async fn start_dispatcher_loop(&self) {
+        use crate::crawler::downloader::dispatcher_loop;
+        let dq = self.download_queue();
+        let dq = dq.clone();
+        tokio::spawn(async move { 
+            dispatcher_loop(dq).await 
+        });
+    }
+
+    /// 启动下载 worker
+    pub async fn start_download_workers_async(&self) {
+        let dq = self.download_queue();
+        let initial_workers = dq.pool.total_workers.load(std::sync::atomic::Ordering::Relaxed);
+        dq.start_download_workers(initial_workers);
     }
 }
 

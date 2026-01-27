@@ -478,13 +478,18 @@ impl PersistentConnection {
 
     /// 连接（Unix）- 直接尝试连接，失败则返回错误
     #[cfg(not(target_os = "windows"))]
-    async fn create_connection(path: &std::path::Path) -> Result<tokio::net::UnixStream, String> {
+    async fn create_connection() -> Result<tokio::net::UnixStream, String> {
         use tokio::net::UnixStream;
 
-        UnixStream::connect(path).await.map_err(|e| {
+        use crate::ipc::ipc::unix_socket_path;
+
+        let path_buf = unix_socket_path();
+        let uds_path = path_buf.as_path();
+
+        UnixStream::connect(uds_path).await.map_err(|e| {
             format!(
                 "连接 daemon 失败 ({}): {}\n请确保 kabegame-daemon 已启动",
-                path.display(),
+                uds_path.display(),
                 e
             )
         })

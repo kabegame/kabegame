@@ -7,6 +7,7 @@ import * as ElementPlusIconsVue from "@element-plus/icons-vue";
 
 import PluginEditorApp from "./plugin-editor/PluginEditorApp.vue";
 import "@kabegame/core/styles/anime-theme.css";
+import "virtual:uno.css";
 
 const app = createApp(PluginEditorApp);
 

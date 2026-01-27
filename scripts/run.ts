@@ -5,10 +5,10 @@
  * - 3 个 Rust crate：app-main / app-plugin-editor / cli，共用 kabegame-core
  *
  * 用法（PowerShell）：
- * - pnpm dev -c main
- * - pnpm dev -c plugin-editor
- * - pnpm build                             （默认构建全部：main + plugin-editor + cli）
- * - pnpm build -c main|plugin-editor|cli
+ * - bun dev -c main
+ * - bun dev -c plugin-editor
+ * - bun b                             （默认构建全部：main + plugin-editor + cli）
+ * - bun b -c main|plugin-editor|cli
  *
  * 说明：
  * - dev/start 会先打包插件到 src-tauri/resources/plugins（确保资源存在）

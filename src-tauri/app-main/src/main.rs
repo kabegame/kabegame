@@ -1,21 +1,26 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
-
 mod commands;
 mod startup;
+mod utils;
 #[cfg(feature = "tray")]
 mod tray;
 mod wallpaper;
 
 // IPC and daemon related modules
 mod ipc;
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(not(kabegame_mode = "light"))]
 mod vd_listener;
+
+
+use core::fmt;
+use std::process;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use commands::*;
+use startup::*;
 
 // Daemon Imports
 use crate::ipc::dedupe_service::DedupeService;
@@ -33,13 +38,16 @@ use kabegame_core::{
 #[cfg(not(kabegame_mode = "light"))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 
-/// 初始化全局状态，并返回 Context 和 Broadcaster
-async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
-    println!(
-        "Kabegame Backend (Embedded Daemon) v{}",
+/// 初始化全局状态，并返回 Context
+fn init_globals() -> Result<Arc<Store>, String> {
+     println!(
+        "Kabegame v{} bootstrap...",
         env!("CARGO_PKG_VERSION")
     );
     println!("Initializing Globals...");
+    
+    Settings::init_global().map_err(|e| format!("Failed to initialize settings: {}", e))?;
+    println!("  ✓ Settings initialized");
 
     // 初始化全局 PluginManager
     PluginManager::init_global()
@@ -58,28 +66,24 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
     }
     println!("  ✓ Storage initialized");
 
-    Settings::init_global().map_err(|e| format!("Failed to initialize settings: {}", e))?;
-    println!("  ✓ Settings initialized");
-
-    // 创建事件广播器（保留最近 1000 个事件）
-    let broadcaster = Arc::new(EventBroadcaster::new(1000));
+    // 初始化全局事件广播器（保留最近 1000 个事件）
+    EventBroadcaster::init_global(1000)
+        .map_err(|e| format!("Failed to initialize event broadcaster: {}", e))?;
     println!("  ✓ Event broadcaster initialized");
 
-    // 创建订阅管理器
-    let subscription_manager = Arc::new(SubscriptionManager::new(broadcaster.clone()));
+    // 初始化全局订阅管理器
+    SubscriptionManager::init_global()
+        .map_err(|e| format!("Failed to initialize subscription manager: {}", e))?;
     println!("  ✓ Subscription manager initialized");
 
     // 初始化全局 emitter
-    // 注意：core 中的 GlobalEmitter 需要 EventBroadcaster，但这里我们传入的是 Arc<EventBroadcaster>
-    // 需要解引用为 EventBroadcaster
-    kabegame_core::emitter::GlobalEmitter::init_global(broadcaster.clone())
+    kabegame_core::emitter::GlobalEmitter::init_global()
         .map_err(|e| format!("Failed to initialize global emitter: {}", e))?;
     println!("  ✓ Global emitter initialized");
 
     println!("  ✓ Runtime initialized");
 
-    // DownloadQueue：现在使用全局 emitter
-    let download_queue = Arc::new(DownloadQueue::new().await);
+    let download_queue = Arc::new(DownloadQueue::new());
     println!("  ✓ DownloadQueue initialized");
 
     // TaskScheduler：负责处理 PluginRun 的任务队列（全局单例）
@@ -110,7 +114,7 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
     }
     println!("  ✓ ProviderRuntime initialized");
 
-    // Virtual Drive（仅 非 light mode）
+    // Virtual Driver
     #[cfg(not(kabegame_mode = "light"))]
     VirtualDriveService::init_global().map_err(|e| format!("Failed to init VD service: {}", e))?;
     #[cfg(not(kabegame_mode = "light"))]
@@ -119,8 +123,6 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
     println!("  ✓ Virtual drive support enabled");
 
     let ctx = Arc::new(Store {
-        broadcaster: broadcaster.clone(),
-        subscription_manager: subscription_manager.clone(),
         dedupe_service,
         #[cfg(not(kabegame_mode = "light"))]
         virtual_drive_service: virtual_drive_service.clone(),
@@ -131,15 +133,17 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
     // 启动虚拟磁盘事件监听器（仅在 非 light mode）
     #[cfg(not(kabegame_mode = "light"))]
     {
-        tokio::spawn(vd_listener::start_vd_event_listener(
-            broadcaster.clone(),
-            virtual_drive_service.clone(),
-        ));
-        println!("  ✓ Virtual drive event listener started");
+        #[cfg(target_os = "windows")]
+        tauri::async_runtime::spawn({
+            vd_listener::start_vd_event_listener(
+                virtual_drive_service.clone(),
+            );
+            println!("  ✓ Virtual drive event listener started");
+        });
 
         // 启动时根据设置自动挂载画册盘
         let vd_service_for_mount = virtual_drive_service.clone();
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
             let enabled = Settings::global()
@@ -169,88 +173,7 @@ async fn init_globals() -> Result<(Arc<Store>, Arc<EventBroadcaster>), String> {
         });
     }
 
-    Ok((ctx, broadcaster))
-}
-
-/// 启动 IPC 服务
-#[cfg(not(kabegame_mode = "light"))]
-async fn start_ipc_server(ctx: Arc<Store>) -> Result<(), String> {
-    println!("Starting IPC server...");
-
-    // 从 ctx 中提取 broadcaster 和 subscription_manager
-    // 这里我们假设 ctx 内部持有它们的引用
-    let broadcaster = ctx.broadcaster.clone();
-    let subscription_manager = ctx.subscription_manager.clone();
-
-    kabegame_core::ipc::server::serve_with_events(
-        move |req| {
-            let ctx = ctx.clone();
-            async move {
-                // eprintln!("[DEBUG] Backend 收到请求: {:?}", req);
-                let resp = dispatch_request(req, ctx).await;
-                resp
-            }
-        },
-        Some(broadcaster as Arc<dyn std::any::Any + Send + Sync>),
-        Some(subscription_manager),
-    )
-    .await
-}
-
-/// 启动本地事件转发循环（将 Broadcaster 事件转发给 Tauri 前端）
-async fn start_local_event_loop(app: AppHandle, broadcaster: Arc<EventBroadcaster>) {
-    // 订阅所有事件
-    let mut rx = broadcaster.subscribe_filtered_stream(&DaemonEventKind::ALL);
-
-    while let Some((_id, event)) = rx.recv().await {
-        let kind = event.kind();
-
-        match &*event {
-            DaemonEvent::Generic { event, payload } => {
-                let _ = app.emit(event.as_str(), payload.clone());
-            }
-            DaemonEvent::SettingChange { changes } => {
-                let _ = app.emit("setting-change", changes.clone());
-            }
-            DaemonEvent::WallpaperUpdateImage { image_path } => {
-                let path = image_path.clone();
-                let controller = crate::wallpaper::manager::WallpaperController::global();
-                tokio::spawn(async move {
-                    let style = Settings::global()
-                        .get_wallpaper_rotation_style()
-                        .await
-                        .unwrap_or("fill".to_string());
-                    if let Err(e) = controller.set_wallpaper(&path, &style).await {
-                        eprintln!("[LocalEvent] Set wallpaper failed: {}", e);
-                    }
-                });
-            }
-            DaemonEvent::WallpaperUpdateStyle { style } => {
-                let style = style.clone();
-                let controller = crate::wallpaper::manager::WallpaperController::global();
-                tokio::spawn(async move {
-                    if let Ok(manager) = controller.active_manager().await {
-                        let _ = manager.set_style(&style, true).await;
-                    }
-                });
-            }
-            DaemonEvent::WallpaperUpdateTransition { transition } => {
-                let transition = transition.clone();
-                let controller = crate::wallpaper::manager::WallpaperController::global();
-                tokio::spawn(async move {
-                    if let Ok(manager) = controller.active_manager().await {
-                        let _ = manager.set_transition(&transition, true).await;
-                    }
-                });
-            }
-            _ => {
-                let event_name = kind.as_event_name();
-                let payload =
-                    serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null);
-                let _ = app.emit(event_name.as_str(), payload);
-            }
-        }
-    }
+    Ok(ctx)
 }
 
 fn main() {
@@ -261,74 +184,42 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // 设置全局快捷键
-            {
-                use tauri_plugin_global_shortcut::Shortcut;
-
-                let app_handle = app.app_handle().clone();
-                let shortcuts = app.global_shortcut();
-
-                // 注册并监听 F11 快捷键切换全屏
-                let f11_shortcut = Shortcut::new(
-                    Some(tauri_plugin_global_shortcut::Modifiers::empty()),
-                    tauri_plugin_global_shortcut::Code::F11,
-                );
-
-                let app_handle_clone = app_handle.clone();
-                shortcuts.on_shortcuts([f11_shortcut], move |_app_handle, shortcut, event| {
-                    // 检查是否是 F11 快捷键（无修饰键 + F11）且是按下事件
-                    if shortcut.mods.is_empty()
-                        && shortcut.key.eq(&tauri_plugin_global_shortcut::Code::F11)
-                        && matches!(
-                            event.state,
-                            tauri_plugin_global_shortcut::ShortcutState::Pressed
-                        )
-                    {
-                        let app_handle = app_handle_clone.clone();
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(e) = commands::window::toggle_fullscreen(app_handle).await {
-                                eprintln!("Failed to toggle fullscreen: {}", e);
-                            }
-                        });
-                    }
-                })?;
-
-                println!("✓ F11 shortcut registered for fullscreen toggle");
-            }
+            init_shortcut(app).unwrap();
 
             let app_handle = app.app_handle().clone();
 
             // 启动内置 Backend
-            tauri::async_runtime::spawn(async move {
-                match init_globals().await {
-                    Ok((ctx, broadcaster)) => {
-                        // 1. 启动本地事件转发
-                        let app_handle_for_events = app_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            start_local_event_loop(app_handle_for_events, broadcaster).await;
-                        });
+            match init_globals() {
+                Ok(ctx) => {
+                    // 启动本地事件转发
+                    let app_handle_for_events = app_handle.clone();
+                    start_local_event_loop(app_handle_for_events);
+                    // 清理用户数据
+                    cleanup_user_data_if_marked(app.app_handle());
+                    // 恢复窗口状态（当前实现仅将窗口居屏幕中央）
+                    restore_main_window_state(app.app_handle());
+                    // 初始化壁纸控制器
+                    init_wallpaper_controller(app);
+                    // 启动 TaskScheduler（启动 DownloadQueue 的 worker）
+                    start_task_scheduler();
+                    // 初始化download worker的并发数
+                    init_download_workers();
+                    // 初始化任务阻塞worker
+                    start_download_workers();
+                    // 启动事件转发任务
+                    start_event_forward_task();
 
-                        println!("Backend initialized (Embedded).");
-
-                        // 3. 启动 IPC Server (如果启用)
-                        #[cfg(not(kabegame_mode = "light"))]
-                        {
-                            if let Err(e) = start_ipc_server(ctx).await {
-                                eprintln!("IPC Server Fatal Error: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Backend Initialization Fatal Error: {}", e);
-                    }
+                    // 启动 IPC Server
+                    #[cfg(not(kabegame_mode = "light"))]
+                    start_ipc_server(ctx);
                 }
-            });
-
-            // UI 相关的初始化步骤
-            let is_cleaning_data =
-                startup::startup_step_cleanup_user_data_if_marked(app.app_handle());
-            startup::startup_step_restore_main_window_state(app.app_handle(), is_cleaning_data);
-            startup::startup_step_manage_wallpaper_components(app);
-
+                Err(e) => {
+                    utils::show_error(app.app_handle(), format!("出现了致命错误！: {}", e));
+                    eprintln!("出现了致命错误！:{}", e);
+                    process::exit(1);
+                }
+            }
+            eprintln!("set up over");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -401,8 +292,6 @@ fn main() {
             open_plugin_editor_window,
             get_build_mode,
             // --- Settings ---
-            get_settings,
-            get_setting,
             get_auto_launch,
             set_auto_launch,
             get_max_concurrent_downloads,

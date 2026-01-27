@@ -26,25 +26,6 @@ pub struct VirtualDriveService {
     task_dir_refresh_limiter: Mutex<HashMap<String, std::time::Instant>>,
 }
 
-// 全局 VirtualDriveService 单例
-static VIRTUAL_DRIVE_SERVICE: OnceLock<Arc<VirtualDriveService>> = OnceLock::new();
-
-impl VirtualDriveService {
-    pub fn init_global() -> Result<(), String> {
-        let service = Arc::new(Self::default());
-        VIRTUAL_DRIVE_SERVICE
-            .set(service)
-            .map_err(|_| "VirtualDriveService already initialized".to_string())
-    }
-
-    pub fn global() -> Arc<VirtualDriveService> {
-        VIRTUAL_DRIVE_SERVICE
-            .get()
-            .expect("VirtualDriveService not initialized")
-            .clone()
-    }
-}
-
 impl Default for VirtualDriveService {
     fn default() -> Self {
         Self {
@@ -201,22 +182,6 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
 }
 
 impl VirtualDriveService {
-    /// 初始化全局 VirtualDriveService（必须在首次使用前调用）
-    // pub fn init_global() -> Result<(), String> {
-    //     let service = VirtualDriveService::default();
-    //     VIRTUAL_DRIVE_SERVICE
-    //         .set(service)
-    //         .map_err(|_| "VirtualDriveService already initialized".to_string())?;
-    //     Ok(())
-    // }
-
-    /// 获取全局 VirtualDriveService 引用
-    // pub fn global() -> &'static VirtualDriveService {
-    //     VIRTUAL_DRIVE_SERVICE.get().expect(
-    //         "VirtualDriveService not initialized. Call VirtualDriveService::init_global() first.",
-    //     )
-    // }
-
     /// 通知按任务根目录变更（私有辅助方法）
     fn notify_task_root_dir_changed(&self) {
         let mounted_arc = self.mounted.load_full();

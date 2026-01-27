@@ -1,7 +1,5 @@
 //! Windows 特定的服务器实现
 
-use std::sync::Arc;
-
 use crate::ipc::ipc::{encode_frame, read_one_frame, windows_pipe_name, write_all};
 use crate::ipc::{CliIpcRequest, CliIpcResponse};
 use crate::ipc_dbg;
@@ -15,7 +13,6 @@ use windows_sys::Win32::Security::{
 };
 
 use super::connection_handler;
-use super::SubscriptionManager;
 
 /// 检查是否有其他 daemon 正在运行
 pub async fn check_other_daemon_running() -> bool {
@@ -94,8 +91,6 @@ fn create_secure_server() -> Result<NamedPipeServer, String> {
 /// Windows 平台的服务实现
 pub async fn serve<F, Fut>(
     handler: F,
-    broadcaster: Option<Arc<dyn std::any::Any + Send + Sync>>,
-    subscription_manager: Option<Arc<SubscriptionManager>>,
 ) -> Result<(), String>
 where
     F: Fn(CliIpcRequest) -> Fut + Send + Sync + Clone + 'static,
@@ -132,8 +127,6 @@ where
 
         // 为每个连接 spawn 一个任务来处理多个请求
         let handler = handler.clone();
-        let broadcaster = broadcaster.clone();
-        let subscription_manager = subscription_manager.clone();
 
         // 为每个连接生成唯一的 client_id
         let client_id = uuid::Uuid::new_v4().to_string();
@@ -146,8 +139,6 @@ where
                 read_half,
                 write_half,
                 handler,
-                broadcaster,
-                subscription_manager,
                 client_id,
             )
             .await;

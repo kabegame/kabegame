@@ -1,4 +1,4 @@
-use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
+use crate::{settings::Settings, storage::{FAVORITE_ALBUM_ID, ImageInfo, Storage}};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs};

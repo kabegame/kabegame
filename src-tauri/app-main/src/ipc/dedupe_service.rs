@@ -21,7 +21,6 @@ impl DedupeService {
     pub async fn start_batched(
         self: Arc<Self>,
         storage: Arc<Storage>,
-        broadcaster: Arc<EventBroadcaster>,
         delete_files: bool,
         batch_size: usize,
     ) -> Result<(), String> {
@@ -44,7 +43,6 @@ impl DedupeService {
             let res = run_dedupe_batched(
                 &handle,
                 storage,
-                broadcaster,
                 delete_files,
                 batch_size,
                 cancel,
@@ -82,14 +80,13 @@ impl DedupeService {
 
 fn emit_dedupe_finished(
     handle: &tokio::runtime::Handle,
-    bc: &EventBroadcaster,
     processed: usize,
     total: usize,
     removed: usize,
     canceled: bool,
 ) {
     handle.block_on(async move {
-        bc.broadcast_sync(Arc::new(DaemonEvent::DedupeFinished {
+        EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::DedupeFinished {
             processed,
             total,
             removed,
@@ -101,7 +98,6 @@ fn emit_dedupe_finished(
 fn run_dedupe_batched(
     handle: &tokio::runtime::Handle,
     storage: Arc<Storage>,
-    broadcaster: Arc<EventBroadcaster>,
     delete_files: bool,
     batch_size: usize,
     cancel: Arc<AtomicBool>,
@@ -125,7 +121,7 @@ fn run_dedupe_batched(
 
     loop {
         if cancel.load(Ordering::Relaxed) {
-            emit_dedupe_finished(handle, &broadcaster, processed, total, removed_total, true);
+            emit_dedupe_finished(handle, processed, total, removed_total, true);
             return Ok(());
         }
 
@@ -152,15 +148,15 @@ fn run_dedupe_batched(
         if !remove_ids.is_empty() {
             if delete_files {
                 storage.batch_delete_images(&remove_ids)?;
-                // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
-                broadcaster.broadcast_sync(Arc::new(DaemonEvent::ImagesChange {
+                // 新事件：统一"图片数据变更"，前端按需刷新当前 provider 视图
+                EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::ImagesChange {
                     reason: "delete".to_string(),
                     image_ids: remove_ids.clone(),
                 }));
             } else {
                 storage.batch_remove_images(&remove_ids)?;
-                // 新事件：统一“图片数据变更”，前端按需刷新当前 provider 视图
-                broadcaster.broadcast_sync(Arc::new(DaemonEvent::ImagesChange {
+                // 新事件：统一"图片数据变更"，前端按需刷新当前 provider 视图
+                EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::ImagesChange {
                     reason: "remove".to_string(),
                     image_ids: remove_ids.clone(),
                 }));
@@ -180,7 +176,7 @@ fn run_dedupe_batched(
             removed_total += remove_ids.len();
         }
 
-        broadcaster.broadcast_sync(Arc::new(DaemonEvent::DedupeProgress {
+        EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::DedupeProgress {
             processed,
             total,
             removed: removed_total,
@@ -190,6 +186,6 @@ fn run_dedupe_batched(
         batch_index += 1;
     }
 
-    emit_dedupe_finished(handle, &broadcaster, processed, total, removed_total, false);
+    emit_dedupe_finished(handle, processed, total, removed_total, false);
     Ok(())
 }

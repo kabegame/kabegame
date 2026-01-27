@@ -5,12 +5,9 @@ pub mod run_configs;
 pub mod tasks;
 
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
-use kabegame_core::ipc::server::EventBroadcaster;
-use std::sync::Arc;
 
 pub async fn handle_storage_request(
     req: &CliIpcRequest,
-    broadcaster: Arc<EventBroadcaster>,
 ) -> Option<CliIpcResponse> {
     match req {
         // Images
@@ -26,26 +23,26 @@ pub async fn handle_storage_request(
             Some(images::find_image_by_path(path).await)
         }
         CliIpcRequest::StorageDeleteImage { image_id } => {
-            Some(images::delete_image(broadcaster, image_id).await)
+            Some(images::delete_image(image_id).await)
         }
         CliIpcRequest::StorageRemoveImage { image_id } => {
-            Some(images::remove_image(broadcaster, image_id).await)
+            Some(images::remove_image(image_id).await)
         }
         CliIpcRequest::StorageBatchDeleteImages { image_ids } => {
-            Some(images::batch_delete_images(broadcaster, image_ids).await)
+            Some(images::batch_delete_images(image_ids).await)
         }
         CliIpcRequest::StorageBatchRemoveImages { image_ids } => {
-            Some(images::batch_remove_images(broadcaster, image_ids).await)
+            Some(images::batch_remove_images(image_ids).await)
         }
         CliIpcRequest::StorageToggleImageFavorite { image_id, favorite } => {
-            Some(images::toggle_image_favorite(broadcaster, image_id, *favorite).await)
+            Some(images::toggle_image_favorite(image_id, *favorite).await)
         }
 
         // Albums
         CliIpcRequest::StorageGetAlbums => Some(albums::get_albums().await),
         CliIpcRequest::StorageAddAlbum { name } => {
             // TODO: 蜑咲ｫｯ螟・炊 album_add 莠倶ｻｶ
-            Some(albums::add_album(broadcaster, name).await)
+            Some(albums::add_album(name).await)
         }
         CliIpcRequest::StorageDeleteAlbum { album_id } => {
             Some(albums::delete_album(album_id).await)
