@@ -72,9 +72,9 @@ function updateTauriConf(relPath: string, newVersion: string): void {
   }
 
   try {
-    const conf: TauriConf = JSON.parse(fs.readFileSync(fullPath, "utf8"));
-    conf.version = newVersion;
-    fs.writeFileSync(fullPath, JSON.stringify(conf, null, 2));
+    const content = fs.readFileSync(fullPath, "utf8");
+    const newContent = content.replace(content.match(/"version": ".*?"/)![0], `"version": "${newVersion}"`);
+    fs.writeFileSync(fullPath, newContent);
     console.log(`✓ Updated ${relPath} to ${newVersion}`);
   } catch (e: any) {
     console.error(`✗ Error updating ${relPath}:`, e.message);
@@ -84,20 +84,14 @@ function updateTauriConf(relPath: string, newVersion: string): void {
 // 更新所有 Tauri 配置文件
 function updateAllTauriConfs(newVersion: string): void {
   const tauriConfPaths = [
-    "src-tauri/app-main/tauri.conf.json",
-    "src-tauri/app-cli/tauri.conf.json",
-    "src-tauri/app-plugin-editor/tauri.conf.json",
+    "src-tauri/app-main/tauri.conf.json.handlebars",
+    "src-tauri/app-cli/tauri.conf.json.handlebars",
+    "src-tauri/app-plugin-editor/tauri.conf.json.handlebars",
   ];
 
   tauriConfPaths.forEach((relPath) => {
     updateTauriConf(relPath, newVersion);
   });
-
-  // 更新 Linux 配置文件（如果存在）
-  const linuxConfPath = "src-tauri/app-main/tauri.linux.conf.json";
-  if (fs.existsSync(path.join(ROOT, linuxConfPath))) {
-    updateTauriConf(linuxConfPath, newVersion);
-  }
 }
 
 // 验证版本号格式

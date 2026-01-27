@@ -7,7 +7,8 @@ import {
   stageResourceBinary,
 } from "../utils";
 import { OSPlugin } from "./os-plugin";
-import { readdirSync, statSync, unlinkSync } from "fs";
+import { fstat, fstatSync, readdirSync, statSync, unlinkSync, existsSync, readFileSync, writeFileSync } from "fs";
+import Handlebars from "handlebars";
 
 // 组件对象
 export class Component {
@@ -119,11 +120,24 @@ export class ComponentPlugin extends BasePlugin {
     });
 
     if (bs.context.cmd!.isBuild) {
-      // 无论平台，把这些二进制通通打包到resources里
       bs.hooks.beforeBuild.tap(this.name, (comp?: string) => {
         const component = comp ? new Component(comp) : this.component!;
+        // 编译可能存在的handlebars覆盖 tauri.config.json
+        const tauriConfigHandlebars = path.resolve(component.appDir, 'tauri.conf.json.handlebars');
+        if (existsSync(tauriConfigHandlebars)) {
+          const tauriConfig = path.resolve(component.appDir, 'tauri.conf.json');
+          const template = Handlebars.compile(readFileSync(tauriConfigHandlebars, {
+            encoding: 'utf-8'
+          }).toString());
+          writeFileSync(tauriConfig, template({
+            // TODO: 当需要更多环境的时候维护这个上下文
+            isWindows: OSPlugin.isWindows,
+            isLight: bs.context.mode!.isLight,
+          }))
+        }
         if (component.isMain) {
           // 先清空 resources 下所有非.gitkeep（保留文件夹）
+          // TODO: 直接清除所有文件
           const resourcesDir = path.join(RESOURCES_DIR);
           const files = readdirSync(resourcesDir, {
             recursive: true,
@@ -136,9 +150,10 @@ export class ComponentPlugin extends BasePlugin {
             }
           }
         }
-        if (component.isMain && !bs.context.mode!.isLight) {
+        // linux 不需要（MacOS暂时未定）
+        if (component.isMain && !bs.context.mode!.isLight && !OSPlugin.isLinux) {
           stageResourceBinary(Component.cargoComp(Component.CLI));
-          // 只有windows才编译壳
+          // 只有windows才需要壳
           if (OSPlugin.isWindows)
           stageResourceBinary(Component.cargoComp(`${Component.CLI}w`));
           stageResourceBinary(Component.cargoComp(Component.PLUGIN_EDITOR));

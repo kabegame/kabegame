@@ -27,12 +27,15 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// 调试：检查 daemon IPC 是否就绪
+    IpcStatus,
     /// 插件相关命令
     #[command(subcommand)]
     Plugin(PluginCommands),
 
     /// 虚拟盘（Windows Dokan）相关命令
     #[command(subcommand)]
+    #[cfg(not(kabegame_mode = "light"))]
     Vd(VdCommands),
 }
 
@@ -47,23 +50,28 @@ enum PluginCommands {
 }
 
 #[derive(Subcommand, Debug)]
+#[cfg(not(kabegame_mode = "light"))]
 enum VdCommands {
-    /// 调试：检查 daemon IPC 是否就绪
-    IpcStatus,
     /// 挂载虚拟盘（通过 daemon IPC 触发）
+    #[cfg(not(kabegame_mode = "light"))]
     Mount(VdMountArgs),
     /// 卸载虚拟盘（通过 daemon IPC 触发）
+    #[cfg(not(kabegame_mode = "light"))]
     Unmount(VdUnmountArgs),
     /// 检查挂载点是否可访问（通过 daemon IPC 触发）
+    #[cfg(not(kabegame_mode = "light"))]
     Status(VdStatusArgs),
 }
 
+#[cfg(not(kabegame_mode = "light"))]
 #[derive(Args, Debug)]
 struct VdMountArgs {}
 
+#[cfg(not(kabegame_mode = "light"))]
 #[derive(Args, Debug)]
 struct VdUnmountArgs {}
 
+#[cfg(not(kabegame_mode = "light"))]
 #[derive(Args, Debug)]
 struct VdStatusArgs {
     /// 挂载点（例如 K:\\ 或 K: 或 K）
@@ -115,17 +123,22 @@ struct RunPluginArgs {
     plugin_args: Vec<String>,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
+     // 执行绕过
+    #[cfg(target_os = "linux")]
+    kabegame_core::workarounds::apply_nvidia_dmabuf_renderer_workaround();
     let cli = Cli::parse();
 
     let res = match cli.command {
+        Commands::IpcStatus => ipc_status(),
         Commands::Plugin(cmd) => match cmd {
             PluginCommands::Run(args) => run_plugin(args),
             PluginCommands::Pack(args) => pack_plugin(args),
-            PluginCommands::Import(args) => import_plugin(args),
+            PluginCommands::Import(args) => import_plugin(args).await,
         },
+        #[cfg(not(kabegame_mode = "light"))]
         Commands::Vd(cmd) => match cmd {
-            VdCommands::IpcStatus => vd_ipc_status(),
             VdCommands::Mount(args) => vd_mount(args),
             VdCommands::Unmount(args) => vd_unmount(args),
             VdCommands::Status(args) => vd_status(args),
@@ -225,6 +238,7 @@ async fn resolve_album_name_to_id(name: &str) -> Result<Option<String>, String> 
     Ok(None)
 }
 
+#[cfg(not(kabegame_mode = "light"))]
 fn vd_mount(_args: VdMountArgs) -> Result<(), String> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
@@ -249,6 +263,7 @@ fn vd_mount(_args: VdMountArgs) -> Result<(), String> {
     }
 }
 
+#[cfg(not(kabegame_mode = "light"))]
 fn vd_unmount(_args: VdUnmountArgs) -> Result<(), String> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| format!("create tokio runtime failed: {e}"))?;
@@ -273,6 +288,7 @@ fn vd_unmount(_args: VdUnmountArgs) -> Result<(), String> {
     }
 }
 
+#[cfg(not(kabegame_mode = "light"))]
 fn vd_status(args: VdStatusArgs) -> Result<(), String> {
     let _ = args;
     let rt =
@@ -295,7 +311,7 @@ fn vd_status(args: VdStatusArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn vd_ipc_status() -> Result<(), String> {
+fn ipc_status() -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| format!("create tokio runtime failed: {}", e))?;
     // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
@@ -319,7 +335,7 @@ fn vd_ipc_status() -> Result<(), String> {
 
 // NOTE: vd daemon 已迁移到独立的 `kabegame-daemon` 中，通过统一 IPC 提供服务。
 
-fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {
+async fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {
     let p = args.path;
     if !p.is_file() {
         return Err(format!("插件文件不存在: {}", p.display()));
@@ -329,25 +345,25 @@ fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {
     }
 
     if args.no_ui {
-        return import_plugin_no_ui(p);
+        return import_plugin_no_ui(p).await;
     }
-    import_plugin_with_ui(p)
+    import_plugin_with_ui(p).await
 }
 
-fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
+async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
     // 初始化全局 PluginManager（不再使用 manage）
     PluginManager::init_global()?;
     let pm = PluginManager::global();
 
     // 先确保内置插件安装（主要是为了保证 plugins_directory 初始化/存在；失败不阻断导入）
-    if let Err(e) = pm.ensure_prepackaged_plugins_installed() {
+    if let Err(e) = pm.ensure_prepackaged_plugins_installed().await {
         eprintln!("[WARN] 安装内置插件失败（将继续导入）：{e}");
     }
 
     // 结构检查（尽量给出更友好的错误）
     validate_kgpg_structure(pm, &p)?;
 
-    let plugin = pm.install_plugin_from_zip(&p)?;
+    let plugin = pm.install_plugin_from_zip(&p).await?;
     let plugins_dir = pm.get_plugins_directory();
 
     println!(
@@ -358,20 +374,6 @@ fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
         plugins_dir.display()
     );
     Ok(())
-}
-
-fn build_minimal_app() -> Result<tauri::App, String> {
-    // 仅用于 CLI 的"导入/读取插件包信息"等轻量场景：
-    // - 不初始化 Storage/ProviderRuntime/DownloadQueue
-    // - 只需要 PluginManager 提供 plugins_directory 与 kgpg 解析能力
-    let app = tauri::Builder::default()
-        .build(tauri::generate_context!())
-        .map_err(|e| format!("Build tauri app failed: {}", e))?;
-
-    // 初始化全局 PluginManager（不再使用 manage）
-    PluginManager::init_global()?;
-
-    Ok(app)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -385,7 +387,7 @@ struct CliImportPreview {
 }
 
 #[tauri::command]
-fn cli_preview_import_plugin(zip_path: String) -> Result<CliImportPreview, String> {
+async fn cli_preview_import_plugin(zip_path: String) -> Result<CliImportPreview, String> {
     let path = std::path::PathBuf::from(&zip_path);
     if !path.is_file() {
         return Err(format!("插件文件不存在: {}", zip_path));
@@ -393,19 +395,13 @@ fn cli_preview_import_plugin(zip_path: String) -> Result<CliImportPreview, Strin
     if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
         return Err(format!("不是 .kgpg 文件: {}", zip_path));
     }
-
     // 使用全局单例（不再使用 state）
     let pm = PluginManager::global();
-
-    // 先确保内置插件安装（主要为了初始化 plugins_directory；失败不阻断预览）
-    if let Err(e) = pm.ensure_prepackaged_plugins_installed() {
-        eprintln!("[WARN] 安装内置插件失败（将继续预览）：{e}");
-    }
 
     // 结构检查
     validate_kgpg_structure(pm, &path)?;
 
-    let preview = pm.preview_import_from_zip(&path)?;
+    let preview = pm.preview_import_from_zip(&path).await?;
     let manifest = pm.read_plugin_manifest(&path)?;
     let icon_png_base64 = {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -425,7 +421,7 @@ fn cli_preview_import_plugin(zip_path: String) -> Result<CliImportPreview, Strin
 }
 
 #[tauri::command]
-fn cli_import_plugin_from_zip(zip_path: String) -> Result<Plugin, String> {
+async fn cli_import_plugin_from_zip(zip_path: String) -> Result<Plugin, String> {
     let path = std::path::PathBuf::from(&zip_path);
     if !path.is_file() {
         return Err(format!("插件文件不存在: {}", zip_path));
@@ -439,7 +435,7 @@ fn cli_import_plugin_from_zip(zip_path: String) -> Result<Plugin, String> {
 
     // 再做一次结构检查，避免 UI 预览后文件被替换/损坏
     validate_kgpg_structure(pm, &path)?;
-    pm.install_plugin_from_zip(&path)
+    pm.install_plugin_from_zip(&path).await
 }
 
 #[tauri::command]
@@ -512,15 +508,11 @@ fn validate_kgpg_structure(pm: &PluginManager, zip_path: &std::path::Path) -> Re
     Ok(())
 }
 
-fn import_plugin_with_ui(p: PathBuf) -> Result<(), String> {
+async fn import_plugin_with_ui(p: PathBuf) -> Result<(), String> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
     // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
-    let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
-        eprintln!("创建 Tokio Runtime 失败: {e}");
-        std::process::exit(1);
-    });
-    if !rt.block_on(is_daemon_available()) {
+    if !is_daemon_available().await {
         let daemon_path = find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
         return Err(format!(
@@ -698,5 +690,3 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf) -> Result<Vec<u8>, String> {
     }
     Ok(buf)
 }
-
-// NOTE: plugin 参数解析/运行逻辑已迁移到 `kabegame-daemon`。

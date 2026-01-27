@@ -96,7 +96,7 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
 async fn get_plugins() -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
     // 遑ｮ菫晉ｼ灘ｭ伜ｷｲ蛻晏ｧ句喧/蛻ｷ譁ｰ荳谺｡・亥､ｱ雍･荳崎・蜻ｽ・悟錘扈ｭ get_all 莉堺ｼ夊ｧｦ蜿大・蟋句喧・・    let _ = plugin_manager.refresh_installed_plugins_cache();
-    match plugin_manager.get_all() {
+    match plugin_manager.get_all().await {
         Ok(plugins) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(plugins).unwrap_or_default())
         }
@@ -106,7 +106,7 @@ async fn get_plugins() -> CliIpcResponse {
 
 async fn get_plugin_detail(plugin_id: &str) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    match plugin_manager.load_installed_plugin_detail(plugin_id) {
+    match plugin_manager.load_installed_plugin_detail(plugin_id).await {
         Ok(detail) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(detail).unwrap_or_default())
         }
@@ -116,7 +116,7 @@ async fn get_plugin_detail(plugin_id: &str) -> CliIpcResponse {
 
 async fn delete_plugin(plugin_id: &str) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    match plugin_manager.delete(plugin_id) {
+    match plugin_manager.delete(plugin_id).await {
         Ok(()) => CliIpcResponse::ok("deleted"),
         Err(e) => CliIpcResponse::err(e),
     }
@@ -125,7 +125,7 @@ async fn delete_plugin(plugin_id: &str) -> CliIpcResponse {
 async fn import_plugin(kgpg_path: &str) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
     let path = std::path::Path::new(kgpg_path);
-    match plugin_manager.install_plugin_from_zip(path) {
+    match plugin_manager.install_plugin_from_zip(path).await {
         Ok(plugin) => {
             CliIpcResponse::ok_with_data("imported", serde_json::json!({ "pluginId": plugin.id }))
         }
@@ -135,7 +135,7 @@ async fn import_plugin(kgpg_path: &str) -> CliIpcResponse {
 
 async fn get_plugin_vars(plugin_id: &str) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    match plugin_manager.get_plugin_vars(plugin_id) {
+    match plugin_manager.get_plugin_vars(plugin_id).await {
         Ok(Some(vars)) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(vars).unwrap_or_default())
         }
@@ -146,7 +146,7 @@ async fn get_plugin_vars(plugin_id: &str) -> CliIpcResponse {
 
 async fn get_browser_plugins() -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    match plugin_manager.load_browser_plugins() {
+    match plugin_manager.load_browser_plugins().await {
         Ok(plugins) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(plugins).unwrap_or_default())
         }
@@ -189,7 +189,7 @@ async fn save_plugin_sources(sources: &serde_json::Value) -> CliIpcResponse {
 
 async fn install_browser_plugin(plugin_id: &str) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    match plugin_manager.install_browser_plugin(plugin_id.to_string()) {
+    match plugin_manager.install_browser_plugin(plugin_id.to_string()).await {
         Ok(plugin) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(plugin).unwrap_or_default())
         }
@@ -223,7 +223,7 @@ async fn get_plugin_detail_for_ui(
                 .load_remote_plugin_detail(plugin_id, url, sha256, size_bytes)
                 .await
         }
-        None => plugin_manager.load_installed_plugin_detail(plugin_id),
+        None => plugin_manager.load_installed_plugin_detail(plugin_id).await,
     };
     match res {
         Ok(detail) => {
@@ -236,7 +236,7 @@ async fn get_plugin_detail_for_ui(
 async fn preview_import_plugin(zip_path: &str) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
     let path = std::path::PathBuf::from(zip_path);
-    match plugin_manager.preview_import_from_zip(&path) {
+    match plugin_manager.preview_import_from_zip(&path).await {
         Ok(preview) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(preview).unwrap_or_default())
         }
@@ -257,7 +257,7 @@ async fn preview_store_install(
         Ok(t) => t,
         Err(e) => return CliIpcResponse::err(e),
     };
-    let preview = match plugin_manager.preview_import_from_zip(&tmp) {
+    let preview = match plugin_manager.preview_import_from_zip(&tmp).await {
         Ok(p) => p,
         Err(e) => return CliIpcResponse::err(e),
     };
@@ -272,7 +272,7 @@ async fn preview_store_install(
 
 async fn get_plugin_icon(plugin_id: &str) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    let bytes = match plugin_manager.get_plugin_icon_by_id(plugin_id) {
+    let bytes = match plugin_manager.get_plugin_icon_by_id(plugin_id).await {
         Ok(b) => b,
         Err(e) => return CliIpcResponse::err(e),
     };

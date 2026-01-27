@@ -245,3 +245,10 @@ pub async fn copy_image_to_clipboard(image_path: String) -> Result<(), String> {
         Err("copy_image_to_clipboard is only supported on Windows".to_string())
     }
 }
+
+#[tauri::command]
+#[cfg(target_os = "linux")]
+pub async fn read_file(path: String) -> tauri::ipc::Response {
+  let data = tokio::fs::read(path).await.unwrap();
+  tauri::ipc::Response::new(data)
+}

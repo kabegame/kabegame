@@ -20,6 +20,9 @@ dist-*
 .idea
 .DS_Store
 
+# app main 的 tauri config 是动态生成的
+# src-tauri/*/tauri.conf.json
+
 # Tauri
 target
 src-tauri/app-main/resources/plugins/*.kgpg

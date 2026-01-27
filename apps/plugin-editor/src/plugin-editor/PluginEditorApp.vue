@@ -171,7 +171,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { save, open } from "@tauri-apps/plugin-dialog";
-import { readFile } from "@tauri-apps/plugin-fs";
+import { readFile } from "@kabegame/core/fs/readFile";
 import { useDebounceFn } from "@vueuse/core";
 import RhaiEditor from "./components/RhaiEditor.vue";
 import FileDropOverlay from "./components/FileDropOverlay.vue";

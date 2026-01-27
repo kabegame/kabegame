@@ -1,7 +1,8 @@
 import { ref, type Ref } from "vue";
-import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
-import { readFile } from "@tauri-apps/plugin-fs";
+import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { readFile } from "../fs/readFile";
 import type { ImageInfo, ImageUrlMap } from "../types/image";
+import { IS_LINUX } from "../env";
 
 type Entry = {
   thumbnail?: string; // blob:
@@ -35,11 +36,11 @@ function guessMimeType(path: string): string {
 
 /**
  * 全局图片 URL 缓存（LRU，capacity=10000）：
- * - thumbnail：始终是 Blob URL（需要 readFile -> Blob -> createObjectURL）
+ * - thumbnail：默认是 Blob URL（需要 readFile -> Blob -> createObjectURL）；在 Linux 上改为 asset URL（与 original 一致）
  * - original：始终是 asset URL（convertFileSrc，同步）
  *
  * 注意：
- * - LRU 淘汰必须 revokeObjectURL，否则会泄漏
+ * - LRU 淘汰必须 revokeObjectURL，否则会泄漏（仅对 blob: 生效）
  * - 这里的 key 是 imageId（符合 imageSrcMap 语义），不做“按路径共享”
  */
 class ImageUrlMapLruCache {

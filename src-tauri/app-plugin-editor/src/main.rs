@@ -579,7 +579,18 @@ fn plugin_editor_exit_app(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn read_file(path: String) -> tauri::ipc::Response {
+  let data = tokio::fs::read(path).await.unwrap();
+  tauri::ipc::Response::new(data)
+}
+
 fn main() {
+     // 执行绕过
+    #[cfg(target_os = "linux")]
+    kabegame_core::workarounds::apply_nvidia_dmabuf_renderer_workaround();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -595,6 +606,8 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            #[cfg(target_os = "linux")]
+            read_file,
             // daemon status check
             check_daemon_status,
             // plugin editor existing commands

@@ -366,7 +366,6 @@ const editSourceForm = reactive<{ id: string; name: string; indexUrl: string }>(
 });
 
 const installedPlugins = computed(() => pluginStore.plugins);
-console.log("installedPlugins", installedPlugins.value);
 
 const storeTabName = (sourceId: string) => `store:${sourceId}`;
 const isStoreTab = (tabName: string) => tabName.startsWith("store:");

@@ -230,7 +230,7 @@ async fn handle_plugin_run(
     // resolve plugin：支持 id 或 .kgpg 路径
     let plugin_manager = PluginManager::global();
     let (plugin_obj, plugin_file_path, var_defs) =
-        match plugin_manager.resolve_plugin_for_cli_run(&plugin) {
+        match plugin_manager.resolve_plugin_for_cli_run(&plugin).await {
             Ok(x) => x,
             Err(e) => return CliIpcResponse::err(e),
         };

@@ -2,11 +2,6 @@
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
   "maxCacheSize": "1GB",
   "targetDefaults": {
-    "package": {
-      "cache": true,
-      "inputs": ["default", "^default"],
-      "outputs": ["{projectRoot}/packed/**/*"]
-    },
     "build-cli": {
       "cache": true,
       "inputs": ["frontendCli"],
@@ -24,7 +19,7 @@
     }
   },
   "namedInputs": {
-    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "default": ["{workspaceRoot}/*.pub.ts"],
     "frontendEnv": [
       { "env": "VITE_DESKTOP" },
       { "env": "VITE_KABEGAME_MODE" },
@@ -37,14 +32,16 @@
       "{workspaceRoot}/packages/core/**/*",
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",
-      "frontendEnv"
+      "frontendEnv",
+      "default"
     ],
     "frontendMain": [
       "{workspaceRoot}/apps/main/**/*",
       "{workspaceRoot}/packages/core/**/*",
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",
-      "frontendEnv"
+      "frontendEnv",
+      "default"
     ],
     "frontendPluginEditor": [
       "{workspaceRoot}/apps/plugin-editor/**/*",
@@ -52,16 +49,8 @@
       "{workspaceRoot}/static/**/*",
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",
-      "frontendEnv"
-    ],
-    "production": [
-      "default",
-      "!{projectRoot}/**/?(*.)+(spec|test).[jt]s?(x)?(.snap)",
-      "!{projectRoot}/tsconfig.spec.json",
-      "!{projectRoot}/.eslintrc.json",
-      "!{projectRoot}/jest.config.[jt]s",
-      "!{projectRoot}/src/test-setup.[jt]s",
-      "!{projectRoot}/test-setup.[jt]s"
+      "frontendEnv",
+      "default"
     ],
     "sharedGlobals": []
   }

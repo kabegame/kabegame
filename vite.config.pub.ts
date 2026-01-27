@@ -1,22 +1,21 @@
 import { UserConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import path from "path";
-import { copyFile, readFile, rename, rm } from "node:fs/promises";
 import UnoCSS from 'unocss/vite';
 
-const root = __dirname;
+export const root = __dirname;
 
 // 判断是否为 Windows 平台（窗口模式仅在 Windows 可用）
-const isWindows = process.platform === "win32";
-const isLinux = process.platform === 'linux';
-const isMacOS = process.platform === 'darwin';
+export const isWindows = process.platform === "win32";
+export const isLinux = process.platform === 'linux';
+export const isMacOS = process.platform === 'darwin';
 
 // 判断桌面环境（从 VITE_DESKTOP 环境变量读取）
-const desktop = process.env.VITE_DESKTOP || "";
+export const desktop = process.env.VITE_DESKTOP || "";
 
-const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
+export const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
 
-const isLocalMode = process.env.VITE_KABEGAME_MODE === "local";
+export const isLocalMode = process.env.VITE_KABEGAME_MODE === "local";
 
 export default {
   plugins: [
@@ -80,14 +79,10 @@ export default {
       input: {
         index: path.resolve(process.cwd(), "index.html"),
       },
-      // output: {
-      //   // ⚠️ 这里不能把所有 chunk 都强制塞进同一个名字（比如 "index"），
-      //   // 否则多入口（index / wallpaper）在生产构建会被合并，导致主窗口也执行 wallpaper 入口逻辑。
-      //   // 只把 node_modules 抽到 vendor，保留多入口各自的 entry chunk。
-      //   manualChunks(id) {
-      //     if (id.includes("node_modules")) return "vendor";
-      //   },
-      // },
+      output: {
+        inlineDynamicImports: true,
+        manualChunks: undefined,
+      }
     },
   },
 } satisfies UserConfig;
