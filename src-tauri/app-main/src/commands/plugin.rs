@@ -5,23 +5,23 @@ use kabegame_core::plugin::{PluginManager, PluginSource};
 #[tauri::command]
 pub async fn get_plugins() -> Result<serde_json::Value, String> {
     let plugin_manager = PluginManager::global();
-    let _ = plugin_manager.refresh_installed_plugins_cache();
-    let plugins = plugin_manager.get_all()?;
+    plugin_manager.refresh_installed_plugins_cache().await?;
+    let plugins = plugin_manager.get_all().await?;
     Ok(serde_json::to_value(plugins).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn refresh_installed_plugins_cache() -> Result<(), String> {
     let plugin_manager = PluginManager::global();
-    let _ = plugin_manager.refresh_installed_plugins_cache();
-    let _ = plugin_manager.get_all()?;
+    plugin_manager.refresh_installed_plugins_cache().await?;
+    plugin_manager.get_all().await?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn refresh_installed_plugin_cache(plugin_id: String) -> Result<(), String> {
     let plugin_manager = PluginManager::global();
-    let _ = plugin_manager.load_installed_plugin_detail(&plugin_id)?;
+    plugin_manager.load_installed_plugin_detail(&plugin_id).await?;
     Ok(())
 }
 
@@ -32,18 +32,18 @@ pub fn get_build_mode() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn delete_plugin(plugin_id: String) -> Result<(), String> {
-    PluginManager::global().delete(&plugin_id)
+    PluginManager::global().delete(&plugin_id).await
 }
 
 #[tauri::command]
 pub async fn get_plugin_vars(plugin_id: String) -> Result<serde_json::Value, String> {
-    let vars = PluginManager::global().get_plugin_vars(&plugin_id)?;
+    let vars = PluginManager::global().get_plugin_vars(&plugin_id).await?;
     Ok(serde_json::to_value(vars).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
 pub async fn get_browser_plugins() -> Result<serde_json::Value, String> {
-    let plugins = PluginManager::global().load_browser_plugins()?;
+    let plugins = PluginManager::global().load_browser_plugins().await?;
     Ok(serde_json::to_value(plugins).map_err(|e| e.to_string())?)
 }
 
@@ -85,7 +85,7 @@ pub async fn get_plugin_detail(
                 .load_remote_plugin_detail(&plugin_id, &url, sha256.as_deref(), size_bytes)
                 .await
         }
-        None => plugin_manager.load_installed_plugin_detail(&plugin_id),
+        None => plugin_manager.load_installed_plugin_detail(&plugin_id).await,
     };
     let detail = res?;
     Ok(serde_json::to_value(detail).map_err(|e| e.to_string())?)
@@ -102,7 +102,7 @@ pub async fn validate_plugin_source(index_url: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn preview_import_plugin(zip_path: String) -> Result<serde_json::Value, String> {
     let path = std::path::PathBuf::from(&zip_path);
-    let preview = PluginManager::global().preview_import_from_zip(&path)?;
+    let preview = PluginManager::global().preview_import_from_zip(&path).await?;
     Ok(serde_json::to_value(preview).map_err(|e| e.to_string())?)
 }
 
@@ -116,7 +116,7 @@ pub async fn preview_store_install(
     let tmp = plugin_manager
         .download_plugin_to_temp(&download_url, sha256.as_deref(), size_bytes)
         .await?;
-    let preview = plugin_manager.preview_import_from_zip(&tmp)?;
+    let preview = plugin_manager.preview_import_from_zip(&tmp).await?;
     Ok(serde_json::json!({
         "tmpPath": tmp.to_string_lossy().to_string(),
         "preview": preview,
@@ -126,13 +126,13 @@ pub async fn preview_store_install(
 #[tauri::command]
 pub async fn import_plugin_from_zip(zip_path: String) -> Result<serde_json::Value, String> {
     let path = std::path::Path::new(&zip_path);
-    let plugin = PluginManager::global().install_plugin_from_zip(path)?;
+    let plugin = PluginManager::global().install_plugin_from_zip(path).await?;
     Ok(serde_json::json!({ "pluginId": plugin.id }))
 }
 
 #[tauri::command]
 pub async fn install_browser_plugin(plugin_id: String) -> Result<serde_json::Value, String> {
-    let plugin = PluginManager::global().install_browser_plugin(plugin_id)?;
+    let plugin = PluginManager::global().install_browser_plugin(plugin_id).await?;
     Ok(serde_json::to_value(plugin).map_err(|e| e.to_string())?)
 }
 
@@ -164,7 +164,7 @@ pub async fn get_plugin_image_for_detail(
 
 #[tauri::command]
 pub async fn get_plugin_icon(plugin_id: String) -> Result<Option<Vec<u8>>, String> {
-    PluginManager::global().get_plugin_icon_by_id(&plugin_id)
+    PluginManager::global().get_plugin_icon_by_id(&plugin_id).await
 }
 
 #[tauri::command]

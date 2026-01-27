@@ -24,7 +24,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { readFile } from "@tauri-apps/plugin-fs";
+import { readFile } from "@kabegame/core/fs/readFile";
 import { ElMessage } from "element-plus";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@kabegame/core/stores/ui";

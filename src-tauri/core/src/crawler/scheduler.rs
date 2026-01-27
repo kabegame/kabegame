@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use tokio::runtime::Handle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,8 +54,11 @@ impl TaskScheduler {
             let queue = Arc::clone(&self.queue);
             let running = Arc::clone(&self.running_workers);
             // worker_loop 是阻塞函数（使用 Condvar::wait），必须在 blocking 线程池中运行
-            // 因为 rhai 是单线程，不能在tokio上下文中运行
-            tokio::task::spawn_blocking(move || worker_loop(download_queue, queue, running));
+            // 因为 rhai 是单线程，不能在主线程的tokio上下文中运行
+            tokio::task::spawn_blocking(move || {
+                tokio::runtime::Runtime::new().unwrap(); 
+                worker_loop(download_queue, queue, running)
+            });
         }
     }
 
@@ -441,9 +445,10 @@ fn run_task(
     // 两种运行模式：
     // 1) 已安装插件：通过 plugin_id 查找并运行
     // 2) 临时插件文件：通过 plugin_file_path 读取 manifest/config 并运行（不要求安装）
-    let (plugin, plugin_file_path) = plugin_manager
-        .resolve_plugin_for_task_request(&req.plugin_id, req.plugin_file_path.as_deref())?;
-
+    let (plugin, plugin_file_path) =Handle::current().block_on(
+  plugin_manager
+        .resolve_plugin_for_task_request(&req.plugin_id, req.plugin_file_path.as_deref())
+    )?;
     // 如果指定了输出目录，使用指定目录；否则使用默认下载目录（若配置）或回退到 Storage 的 images_dir
     // 注意：run_task 是同步函数，但需要调用 async getter，这里使用 block_on
     let images_dir = if let Some(ref dir) = req.output_dir {
@@ -477,8 +482,8 @@ fn run_task(
     let var_defs = if let Some(path) = plugin_file_path.as_ref() {
         plugin_manager.get_plugin_vars_from_file(path)?
     } else {
-        plugin_manager
-            .get_plugin_vars(&plugin.id)?
+        Handle::current().block_on(plugin_manager
+            .get_plugin_vars(&plugin.id))?
             .unwrap_or_default()
     };
     let merged_config = build_effective_user_config_from_var_defs(&var_defs, user_cfg);
@@ -527,8 +532,8 @@ fn build_effective_user_config(
     let user_cfg = user_config.unwrap_or_default();
 
     // 读取插件变量定义（config.json 的 var）
-    let var_defs: Vec<VarDefinition> = plugin_manager
-        .get_plugin_vars(plugin_id)?
+    let var_defs: Vec<VarDefinition> = Handle::current().block_on(plugin_manager
+        .get_plugin_vars(plugin_id))?
         .unwrap_or_default();
 
     Ok(build_effective_user_config_from_var_defs(

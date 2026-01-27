@@ -177,6 +177,10 @@ fn init_globals() -> Result<Arc<Store>, String> {
 }
 
 fn main() {
+    // 执行绕过
+    #[cfg(target_os = "linux")]
+    kabegame_core::workarounds::apply_nvidia_dmabuf_renderer_workaround();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -184,16 +188,16 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // 设置全局快捷键
-            init_shortcut(app).unwrap();
+            init_app_paths(app.app_handle());
 
-            let app_handle = app.app_handle().clone();
+            init_shortcut(app).unwrap();
 
             // 启动内置 Backend
             match init_globals() {
                 Ok(ctx) => {
+
                     // 启动本地事件转发
-                    let app_handle_for_events = app_handle.clone();
-                    start_local_event_loop(app_handle_for_events);
+                    start_local_event_loop(app.app_handle().clone());
                     // 清理用户数据
                     cleanup_user_data_if_marked(app.app_handle());
                     // 恢复窗口状态（当前实现仅将窗口居屏幕中央）
@@ -208,9 +212,14 @@ fn main() {
                     start_download_workers();
                     // 启动事件转发任务
                     start_event_forward_task();
+                    // 初始化插件
+                    init_plugin();
 
                     // 启动 IPC Server
-                    #[cfg(not(kabegame_mode = "light"))]
+                    #[cfg(any(
+                        not(kabegame_mode = "light"), 
+                        all(kabegame_mode = "light", not(target_os = "windows"))
+                    ))]
                     start_ipc_server(ctx);
                 }
                 Err(e) => {
@@ -219,10 +228,11 @@ fn main() {
                     process::exit(1);
                 }
             }
-            eprintln!("set up over");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            #[cfg(target_os = "linux")]
+            read_file,
             // --- Albums ---
             get_albums,
             get_album_counts,

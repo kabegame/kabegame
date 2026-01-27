@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::OnceLock};
 
 /// 是否为开发模式（debug 构建）。
 #[inline]
@@ -32,7 +32,7 @@ pub fn repo_root_dir() -> Option<PathBuf> {
 ///
 /// - 开发模式（debug）：使用源码根目录下的 `data/`（即 `<repo>/data`）
 /// - 生产模式（release）：使用系统数据目录并追加 `app_folder_name`（保持现有行为）
-pub fn user_data_dir(app_folder_name: &str) -> PathBuf {
+fn user_data_dir(app_folder_name: &str) -> PathBuf {
     if is_dev() {
         if let Some(repo_root) = repo_root_dir() {
             return repo_root.join("data");
@@ -49,4 +49,14 @@ pub fn user_data_dir(app_folder_name: &str) -> PathBuf {
 #[inline]
 pub fn kabegame_data_dir() -> PathBuf {
     user_data_dir("Kabegame")
+}
+
+static RESOURCE_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn resource_dir() -> PathBuf {
+    return RESOURCE_PATH.get().unwrap().clone()
+}
+
+pub fn init_resource_path(path: PathBuf) {
+    RESOURCE_PATH.set(path).unwrap();
 }

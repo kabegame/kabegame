@@ -1,10 +1,7 @@
-declare const __WINDOWS__: boolean;
-declare const __DEV__: boolean;
-declare const __DESKTOP__: string;
-declare const __LIGHT_MODE__: boolean;
-declare const __LOCAL_MODE__: boolean;
+import "./env.d.ts";
 
 export const IS_WINDOWS = __WINDOWS__;
+export const IS_LINUX = __LINUX__;
 export const IS_DEV = __DEV__;
 // 从 __DESKTOP__ 常量计算 IS_PLASMA
 export const IS_PLASMA = __DESKTOP__ === "plasma";

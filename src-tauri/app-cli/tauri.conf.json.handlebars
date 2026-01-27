@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kabegame CLI",
+  "version": "3.0.3",
+  "identifier": "KabegameCLI",
+  "build": {
+    "beforeBuildCommand": "bun nx run build-cli",
+    "frontendDist": "../../dist-cli"
+  },
+  "app": {
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": [
+      "../icons/icon.png",
+      "../icons/icon.ico"
+    ],
+    "resources": []
+  }
+}

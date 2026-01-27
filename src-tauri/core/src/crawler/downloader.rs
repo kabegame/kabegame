@@ -1557,30 +1557,10 @@ async fn download_image(
     let is_local_path = url.starts_with("file://")
         || (!url.starts_with("http://") && !url.starts_with("https://") && Path::new(url).exists());
 
-    let default_images_dir = get_default_images_dir();
-    let is_default_dir = base_dir
-        .canonicalize()
-        .ok()
-        .and_then(|base| {
-            default_images_dir
-                .canonicalize()
-                .ok()
-                .map(|def| base == def)
-        })
-        .unwrap_or(false);
-
-    let target_dir = if is_default_dir {
-        let plugin_dir = base_dir.join(plugin_id);
-        tokio::fs::create_dir_all(&plugin_dir)
-            .await
-            .map_err(|e| format!("Failed to create plugin directory: {}", e))?;
-        plugin_dir
-    } else {
-        tokio::fs::create_dir_all(base_dir)
-            .await
-            .map_err(|e| format!("Failed to create output directory: {}", e))?;
-        base_dir.to_path_buf()
-    };
+    tokio::fs::create_dir_all(base_dir)
+        .await
+        .map_err(|e| format!("Failed to create output directory: {}", e))?;
+    let target_dir = base_dir.to_path_buf();
 
     if is_local_path {
         let source_path = if url.starts_with("file://") {
@@ -1589,13 +1569,13 @@ async fn download_image(
             } else {
                 &url[7..]
             };
-            #[cfg(windows)]
+            #[cfg(target_os = "windows")]
             let path_str = if path_str.len() > 1 && &path_str[1..2] == ":" {
                 path_str.replace("/", "\\")
             } else {
                 path_str.replace("/", "\\")
             };
-            #[cfg(not(windows))]
+            #[cfg(not(target_os = "windows"))]
             let path_str = path_str;
             PathBuf::from(path_str)
         } else {
@@ -1701,7 +1681,7 @@ async fn download_image(
             .await
             .map_err(|e| format!("Failed to copy file: {}", e))?;
 
-        #[cfg(windows)]
+        #[cfg(target_os = "windows")]
         remove_zone_identifier(&target_path);
 
         let target_path_clone = target_path.clone();

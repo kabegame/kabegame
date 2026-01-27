@@ -5,16 +5,30 @@ use std::sync::Arc;
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::ipc::{DaemonEvent, EventBroadcaster};
 use kabegame_core::ipc::events::DaemonEventKind;
+use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 use crate::commands;
 use crate::commands::wallpaper::init_wallpaper_on_startup;
-#[cfg(not(kabegame_mode = "light"))]
+ #[cfg(any(
+    not(kabegame_mode = "light"), 
+    all(kabegame_mode = "light", not(target_os = "windows"))
+))]
 use crate::ipc::Store;
 use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
+
+pub fn init_app_paths(app: &tauri::AppHandle) {
+    kabegame_core::app_paths::init_resource_path(app.path().resolve("resources", tauri::path::BaseDirectory::Resource).unwrap());
+}
+
+pub fn init_plugin() {
+    tauri::async_runtime::spawn(async {
+        PluginManager::global().ensure_prepackaged_plugins_installed().await
+    });
+}
 
 // 清理用户数据（清理后重启处理真正的清理操作）
 pub fn cleanup_user_data_if_marked(app: &tauri::AppHandle) -> bool {
@@ -66,7 +80,6 @@ pub fn cleanup_user_data_if_marked(app: &tauri::AppHandle) -> bool {
 pub fn restore_main_window_state(app: &tauri::AppHandle) {
     // 不恢复 window_state：用户要求每次居中弹出
     if let Some(main_window) = app.get_webview_window("main") {
-        eprintln!("找到窗口");
         let _ = main_window.center();
         main_window.show().unwrap();
     }
@@ -198,9 +211,12 @@ pub fn start_local_event_loop(app: AppHandle) {
 }
 
 /// 启动 IPC 服务
-#[cfg(not(kabegame_mode = "light"))]
+ #[cfg(any(
+    not(kabegame_mode = "light"), 
+    all(kabegame_mode = "light", not(target_os = "windows"))
+))]
 pub fn start_ipc_server(ctx: Arc<Store>) {
-    println!("Starting IPC server...");
+    println!("[IPC_SERVER] Starting IPC server...");
 
     tauri::async_runtime::spawn(async {
         let res = kabegame_core::ipc::server::serve_with_events(

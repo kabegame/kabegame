@@ -38,7 +38,7 @@ Kabegame 提供三种模式供下载，满足不同使用场景：
 | **插件商店** | ✅ 支持 | 🟡 预置插件 | 🟡 预置插件 |
 | **插件编辑器** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
 | **虚拟磁盘** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
-| **cli** | ✅ 支持 | ✅ 支持 | ❌ Windows不支持  ✅ Linux支持|
+| **cli** | ✅ 支持 | ✅ 支持 | ❌ Windows不支持 <br/> ✅ Linux支持|
 | **内置插件** | 本地导入插件(`local-import`) | 发布时的全部插件 | 发布时的全部插件 |
 | **适用场景** | 日常使用，需要从商店安装插件 | 离线使用，需要所有插件内置 | 轻量使用，仅需基本功能 |
 | **文件大小** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
@@ -49,7 +49,7 @@ Kabegame 提供三种模式供下载，满足不同使用场景：
 |---------|------------|-----------|-----------|
 | Windows | [Kabegame-normal_3.0.2_x64-setup.exe](release/Kabegame-normal_3.0.2_x64-setup.exe) | [Kabegame-local_3.0.2_x64-setup.exe](release/Kabegame-local_3.0.2_x64-setup.exe) | [Kabegame-light_3.0.2_x64-setup.exe](release/Kabegame-light_3.0.2_x64-setup.exe) |
 | macOS | coming... | coming... | coming... |
-| Linux (Plasma) | coming... | coming... | coming... |
+| Linux (Plasma) | coming... | coming... | [Kabegame-light_plasma_3.0.3_amd64.deb](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
 | Linux (GNOME) | coming... | coming... | coming... |
 
 Windows 双击运行即可（**安装和更新**）。
@@ -60,6 +60,7 @@ sudo dpkg -i Kabegame-<mode>_<desktop>_<version>_<arch>.deb
 ```
 你的桌面环境的确认方法：
 `systemctl --user list-units --type=service | grep -E "plasma|gnome|xfce|cinnamon|mate|sway|hyprland"`
+
 <b style="color: red; background-color: #fdd;">
 安装错误desktop版本可能导致无法正常设置壁纸！
 </b>
@@ -366,7 +367,7 @@ bun check -c plugin-editor --skip vue  # 仅检查 cargo
 - [插件文件格式](docs/PLUGIN_FORMAT.md)
 - [Rhai API 文档](docs/RHAI_API.md)
 
-## 许可证
+## License
 
 The source code is licensed under GPL v3. License is available [here](./LICENSE).
 
@@ -385,6 +386,7 @@ The source code is licensed under GPL v3. License is available [here](./LICENSE)
 - [**Pinia**](https://github.com/vuejs/pinia) - Vue 的状态管理库
 - [**Vue Router**](https://github.com/vuejs/router) - Vue.js 官方路由管理器
 - [**Axios**](https://github.com/axios/axios) - 基于 Promise 的 HTTP 客户端
+- [**UnoCSS**](https://github.com/unocss/unocss) - 原子动态CSS框架
 
 ### 后端与工具
 - [**Rhai**](https://github.com/rhaiscript/rhai) - 嵌入式脚本语言引擎（本项目插件脚本的核心支持）
@@ -400,9 +402,10 @@ The source code is licensed under GPL v3. License is available [here](./LICENSE)
 - [**Nx**](https://github.com/nrwl/nx) - 智能、快速和可扩展的构建系统
 - [**Bun**](https://github.com/oven-sh/bun) - 快速的全能 JavaScript 运行时、包管理器和构建工具
 - [**Tapable**](https://github.com/webpack/tapable) - 用于创建钩子系统的库（本项目开发构建系统的核心）
+- [**Handlebars**](https://github.com/handlebars-lang/handlebars.js) - 模板工具，本项目用来生成 tauri.config.json
 
 ### 参考项目
 - [**Lively**](https://github.com/rocksdanister/lively) - 动态壁纸应用（本项目参考了其桌面挂载实现）
-- [**Clash Verge**](https://github.com/clash-verge-rev/clash-verge-rev) - Clash 代理客户端（本项目参考了其托盘代码）
+- [**Clash Verge**](https://github.com/clash-verge-rev/clash-verge-rev) - Clash 代理客户端（本项目参考了其托盘代码、tauri config写法以及linux workaround 写法）
 
 如果这些项目对你有帮助，请考虑给它们一个 ⭐ Star，这是对开源社区最好的支持！

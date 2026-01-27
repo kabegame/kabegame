@@ -2453,7 +2453,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2484,7 +2484,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame-cli"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -2501,7 +2501,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame-core"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "arc-swap",
  "auto-launch",
@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame-plugin-editor"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "base64 0.22.1",
  "image",

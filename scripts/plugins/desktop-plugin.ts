@@ -35,10 +35,13 @@ export class DesktopPlugin extends BasePlugin {
   }
 
   apply(bs: BuildSystem): void {
-    if (!OSPlugin.isLinux && !bs.context.component!.isMain) {
+    if (!OSPlugin.isLinux) {
       return;
     }
     bs.hooks.parseParams.tap(this.name, () => {
+      if (!bs.context.component!.isMain) {
+        return;
+      }
       const desktop = bs.options.desktop;
       if (!desktop) {
         throw new Error(`请指定一个桌面！${Desktop.desktops}`);
@@ -51,6 +54,9 @@ export class DesktopPlugin extends BasePlugin {
     });
 
     bs.hooks.prepareEnv.tap(this.name, () => {
+      if (!bs.context.component!.isMain) {
+        return;
+      }
       this.setEnv("VITE_DESKTOP", bs.context.desktop!.desktop);
       this.addRustFlags(`--cfg desktop="${bs.context.desktop!.desktop}"`);
     });

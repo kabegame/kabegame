@@ -238,7 +238,8 @@ export class BuildSystem {
       }
       // this.hooks.afterBuild.callAsync(Component.PLUGIN_EDITOR)
     }
-    if (this.context.component!.isCli && !this.context.mode!.isLight) {
+    // linux 下构建cli
+    if (this.context.component!.isCli && (!this.context.mode!.isLight || OSPlugin.isLinux)) {
       this.hooks.beforeBuild.call(Component.CLI);
       const { features } = this.hooks.prepareCompileArgs.call(Component.CLI);
       if (!this.context.skip?.isVue) {
@@ -271,7 +272,6 @@ export class BuildSystem {
         cwd: Component.appDir(Component.MAIN),
         bin: "cargo",
       });
-      // TODO: 添加linux脚本到deb包中
       await this.hooks.afterBuild.promise(Component.MAIN);
     }
   }

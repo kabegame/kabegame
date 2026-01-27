@@ -5,8 +5,13 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ## [3.0.3]
+### Added
+- 添加linux plasma light mode 构建
+
+
 ### Fixed
 - 整理了启动流程，重新整理了一下架构
+- 修复默认输出目录包含插件目录的bug
 
 ## [3.0.2]
 ### Added

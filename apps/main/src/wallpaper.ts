@@ -1,6 +1,6 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { readFile } from "@tauri-apps/plugin-fs";
+import { readFile } from "@kabegame/core/fs/readFile";
 import { IS_DEV } from "@kabegame/core/env";
 
 type Mode = "fill" | "fit" | "stretch" | "center" | "tile";
