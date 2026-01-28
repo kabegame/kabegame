@@ -75,11 +75,11 @@ pub trait Provider: Send + Sync {
     fn descriptor(&self) -> ProviderDescriptor;
 
     /// 列出该 Provider 下的所有条目
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String>;
+    fn list(&self) -> Result<Vec<FsEntry>, String>;
 
     /// 获取指定名称的子 Provider
     /// 默认返回 None，表示不支持子目录
-    fn get_child(&self, _storage: &Storage, _name: &str) -> Option<Arc<dyn Provider>> {
+    fn get_child(&self, _name: &str) -> Option<Arc<dyn Provider>> {
         None
     }
 
@@ -88,21 +88,21 @@ pub trait Provider: Send + Sync {
     /// 默认返回 NotFound：表示“除非出现在 list() 里，否则不允许路径直达”。
     ///
     /// 注意：`ProviderRuntime` 的常规解析仍然以 `list()` 为准；只有在“列过目录仍找不到下一段 key”时才会调用该方法。
-    fn resolve_child(&self, _storage: &Storage, _name: &str) -> ResolveChild {
+    fn resolve_child(&self, _name: &str) -> ResolveChild {
         ResolveChild::NotFound
     }
 
     /// 获取当前 Provider 的所有子 Provider（用于 warm cache）。
     ///
     /// 默认实现：`list()` 出所有目录项，然后逐个调用 `get_child()`。
-    fn get_children(&self, storage: &Storage) -> Result<Vec<(String, Arc<dyn Provider>)>, String> {
-        let entries = self.list(storage)?;
+    fn get_children(&self) -> Result<Vec<(String, Arc<dyn Provider>)>, String> {
+        let entries = self.list()?;
         let mut out = Vec::new();
         for e in entries {
             let FsEntry::Directory { name } = e else {
                 continue;
             };
-            if let Some(child) = self.get_child(storage, &name) {
+            if let Some(child) = self.get_child(&name) {
                 out.push((name, child));
             }
         }
@@ -112,7 +112,7 @@ pub trait Provider: Send + Sync {
     /// 直接解析当前目录下的文件（避免为了解析单个文件反复 list 全目录）
     ///
     /// 返回 (image_id, resolved_path)。默认返回 None。
-    fn resolve_file(&self, _storage: &Storage, _name: &str) -> Option<(String, PathBuf)> {
+    fn resolve_file(&self, _name: &str) -> Option<(String, PathBuf)> {
         None
     }
 
@@ -122,7 +122,7 @@ pub trait Provider: Send + Sync {
     }
 
     /// 重命名该节点
-    fn rename(&self, _storage: &Storage, _new_name: &str) -> Result<(), String> {
+    fn rename(&self, _new_name: &str) -> Result<(), String> {
         Err("不支持重命名".to_string())
     }
 
@@ -142,7 +142,6 @@ pub trait Provider: Send + Sync {
     #[cfg(not(kabegame_mode = "light"))]
     fn create_child_dir(
         &self,
-        _storage: &Storage,
         _child_name: &str,
         _ctx: &dyn VdOpsContext,
     ) -> Result<(), String> {
@@ -158,7 +157,6 @@ pub trait Provider: Send + Sync {
     #[cfg(not(kabegame_mode = "light"))]
     fn delete_child(
         &self,
-        _storage: &Storage,
         _child_name: &str,
         _kind: DeleteChildKind,
         _mode: DeleteChildMode,

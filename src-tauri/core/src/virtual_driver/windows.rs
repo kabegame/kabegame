@@ -110,16 +110,16 @@ impl Provider for VirtualDriveRootProvider {
         crate::providers::descriptor::ProviderDescriptor::Root
     }
 
-    fn list(&self, _storage: &Storage) -> Result<Vec<FsEntry>, String> {
-        crate::providers::RootProvider::default().list(_storage)
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        crate::providers::RootProvider::default().list()
     }
 
-    fn get_child(&self, _storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
-        crate::providers::RootProvider::default().get_child(_storage, name)
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        crate::providers::RootProvider::default().get_child(name)
     }
 
-    fn resolve_file(&self, storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
-        crate::providers::RootProvider::default().resolve_file(storage, name)
+    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
+        crate::providers::RootProvider::default().resolve_file(name)
     }
 }
 
@@ -247,7 +247,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 let child_name = path.last().map(|s| s.as_str()).unwrap_or("");
                 let ctx = WindowsVdOpsContext::new();
                 let rt = crate::providers::ProviderRuntime::global();
-                let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
+                let sem = VfsSemantics::new(&self.root, &*rt);
                 if sem
                     .delete_dir(parent_path, child_name, DeleteChildMode::Commit, &ctx)
                     .ok()
@@ -264,7 +264,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                     let parent_path = &path[..path.len().saturating_sub(1)];
                     let ctx = WindowsVdOpsContext::new();
                     let rt = crate::providers::ProviderRuntime::global();
-                    let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
+                    let sem = VfsSemantics::new(&self.root, &*rt);
                     if sem
                         .delete_file(parent_path, file_name, DeleteChildMode::Commit, &ctx)
                         .ok()
@@ -297,7 +297,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         );
         let segs = parse_segments(file_name);
         let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
+        let sem = VfsSemantics::new(&self.root, &*rt);
 
         // 3 = OPEN_EXISTING；其他均视为“创建类操作”。
         // 默认只读：只有 provider 覆写允许的场景才放行（目前：画册根目录 mkdir）。
@@ -476,7 +476,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         match context {
             FsItem::Directory { path } => {
                 let rt = crate::providers::ProviderRuntime::global();
-                let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
+                let sem = VfsSemantics::new(&self.root, &*rt);
                 let entries = sem.read_dir(path).map_err(Self::map_vfs_error)?;
                 for entry in entries {
                     let (attributes, file_size, created, accessed, modified, file_name) =
@@ -531,7 +531,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             return Err(STATUS_INVALID_PARAMETER);
         }
         let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
+        let sem = VfsSemantics::new(&self.root, &*rt);
         let n = sem
             .read_file(read_handle, offset as u64, buffer)
             .map_err(Self::map_vfs_error)?;
@@ -564,7 +564,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             let parent_path = &path[..path.len().saturating_sub(1)];
             let file_name = path.last().map(|s| s.as_str()).unwrap_or("");
             let rt = crate::providers::ProviderRuntime::global();
-            let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
+            let sem = VfsSemantics::new(&self.root, &*rt);
             let ok = sem
                 .delete_file(
                     parent_path,
@@ -596,7 +596,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         let parent_path = &path[..path.len().saturating_sub(1)];
         let child_name = path.last().map(|s| s.as_str()).unwrap_or("");
         let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
+        let sem = VfsSemantics::new(&self.root, &*rt);
         sem.delete_dir(
             parent_path,
             child_name,
@@ -636,7 +636,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
 
         // 查找 Provider 并执行重命名
         let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(Storage::global(), &self.root, &*rt);
+        let sem = VfsSemantics::new(&self.root, &*rt);
         sem.rename_dir(path, new_name)
             .map_err(Self::map_vfs_error)?;
 

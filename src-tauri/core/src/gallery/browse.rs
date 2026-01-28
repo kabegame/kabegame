@@ -101,7 +101,7 @@ pub fn browse_gallery_provider(
 
     // 解析到 provider
     let provider = provider_rt
-        .resolve_provider_for_root(storage, root, &mapped)?
+        .resolve_provider_for_root(root, &mapped)?
         .ok_or_else(|| "路径不存在".to_string())?;
 
     let desc = provider.descriptor();
@@ -152,7 +152,7 @@ pub fn browse_gallery_provider(
         }
         _ => {
             // 非图片集合 provider：只返回目录列表
-            let entries = provider.list(storage)?;
+            let entries = provider.list()?;
             Ok(GalleryBrowseResult {
                 total: 0,
                 base_offset: 0,

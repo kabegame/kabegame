@@ -199,7 +199,7 @@ fn main() {
                     // 启动本地事件转发
                     start_local_event_loop(app.app_handle().clone());
                     // 清理用户数据
-                    cleanup_user_data_if_marked(app.app_handle());
+                    cleanup_user_data_if_marked();
                     // 恢复窗口状态（当前实现仅将窗口居屏幕中央）
                     restore_main_window_state(app.app_handle());
                     // 初始化壁纸控制器

@@ -12,6 +12,11 @@ export default defineConfig(merge<UserConfig, UserConfig>(
     },
     build: {
       outDir: path.resolve(root, 'dist-plugin-editor'),
+    },
+    resolve: {
+      alias: {
+        'monaco-themes/themes': path.resolve(__dirname, './node_modules/monaco-themes/themes')
+      }
     }
   }
 ));

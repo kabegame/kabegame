@@ -23,7 +23,7 @@ impl Provider for RootProvider {
         crate::providers::descriptor::ProviderDescriptor::Root
     }
 
-    fn list(&self, _storage: &Storage) -> Result<Vec<FsEntry>, String> {
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
         #[allow(unused_mut)]
         let mut out = vec![
             FsEntry::dir(DIR_BY_DATE),
@@ -46,7 +46,7 @@ impl Provider for RootProvider {
         Ok(out)
     }
 
-    fn get_child(&self, _storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         match name {
             n if n.eq_ignore_ascii_case(DIR_BY_DATE) => {
                 Some(Arc::new(DateGroupProvider::new()) as Arc<dyn Provider>)
@@ -68,7 +68,7 @@ impl Provider for RootProvider {
     }
 
     #[cfg(not(kabegame_mode = "light"))]
-    fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, std::path::PathBuf)> {
+    fn resolve_file(&self, name: &str) -> Option<(String, std::path::PathBuf)> {
         let display_name = "在这里你可以自由查看图片.txt";
         if name != display_name {
             return None;

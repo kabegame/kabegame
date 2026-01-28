@@ -1,5 +1,6 @@
 import { ref, watch, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { IS_WINDOWS } from "@kabegame/core/env";
 
 /**
  * 侧边栏 composable
@@ -14,6 +15,7 @@ export function useSidebar() {
 
   // Windows DWM 毛玻璃：通知后端把 blur region 设为侧栏宽度
   const updateSidebarDwmBlur = async () => {
+    if (!IS_WINDOWS) return;
     // 非 Tauri 环境直接跳过
     try {
       await invoke("set_main_sidebar_blur", { sidebarWidth: isCollapsed.value ? 64 : 200 });

@@ -31,14 +31,14 @@ impl Provider for AlbumsProvider {
         crate::providers::descriptor::ProviderDescriptor::Albums
     }
 
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
-        let albums = storage.get_albums()?;
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        let albums = Storage::global().get_albums()?;
         Ok(albums.into_iter().map(|a| FsEntry::dir(a.name)).collect())
     }
 
-    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         // 根据名称查找画册 ID
-        let album_id = storage.find_album_id_by_name_ci(name).ok()??;
+        let album_id = Storage::global().find_album_id_by_name_ci(name).ok()??;
         Some(Arc::new(AlbumProvider::new(album_id)))
     }
 
@@ -51,11 +51,10 @@ impl Provider for AlbumsProvider {
     #[cfg(all(not(kabegame_mode = "light")))]
     fn create_child_dir(
         &self,
-        storage: &Storage,
         child_name: &str,
         ctx: &dyn VdOpsContext,
     ) -> Result<(), String> {
-        crate::providers::vd_ops::albums_create_child_dir(storage, child_name)?;
+        crate::providers::vd_ops::albums_create_child_dir(child_name)?;
         ctx.albums_created(child_name);
         Ok(())
     }
@@ -63,7 +62,6 @@ impl Provider for AlbumsProvider {
     #[cfg(all(not(kabegame_mode = "light")))]
     fn delete_child(
         &self,
-        storage: &Storage,
         child_name: &str,
         kind: DeleteChildKind,
         mode: DeleteChildMode,
@@ -76,7 +74,7 @@ impl Provider for AlbumsProvider {
         if child_name.is_empty() {
             return Err("目录名不能为空".to_string());
         }
-        let Some(album_id) = storage.find_album_id_by_name_ci(child_name)? else {
+        let Some(album_id) = Storage::global().find_album_id_by_name_ci(child_name)? else {
             return Ok(false);
         };
         if album_id == FAVORITE_ALBUM_ID {
@@ -85,7 +83,7 @@ impl Provider for AlbumsProvider {
         if mode == DeleteChildMode::Check {
             return Ok(true);
         }
-        storage.delete_album(&album_id)?;
+        Storage::global().delete_album(&album_id)?;
         ctx.albums_deleted(child_name);
         Ok(true)
     }
@@ -111,17 +109,17 @@ impl Provider for AlbumProvider {
         }
     }
 
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
-        self.inner.list(storage)
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        self.inner.list()
     }
 
-    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
-        self.inner.get_child(storage, name)
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        self.inner.get_child(name)
     }
 
-    fn resolve_file(&self, storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
+    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
         // 关键：让虚拟盘能从“画册\<album>”目录中打开文件（包括收藏画册）。
-        self.inner.resolve_file(storage, name)
+        self.inner.resolve_file(name)
     }
 
     fn can_rename(&self) -> bool {
@@ -129,14 +127,13 @@ impl Provider for AlbumProvider {
         self.album_id != FAVORITE_ALBUM_ID
     }
 
-    fn rename(&self, storage: &Storage, new_name: &str) -> Result<(), String> {
-        storage.rename_album(&self.album_id, new_name)
+    fn rename(&self, new_name: &str) -> Result<(), String> {
+        Storage::global().rename_album(&self.album_id, new_name)
     }
 
     #[cfg(all(not(kabegame_mode = "light")))]
     fn delete_child(
         &self,
-        storage: &Storage,
         child_name: &str,
         kind: DeleteChildKind,
         mode: DeleteChildMode,
@@ -150,9 +147,9 @@ impl Provider for AlbumProvider {
             return Ok(true);
         }
         let removed =
-            crate::providers::vd_ops::album_delete_child_file(storage, &self.album_id, child_name)?;
+            crate::providers::vd_ops::album_delete_child_file(&self.album_id, child_name)?;
         if removed {
-            if let Some(name) = storage.get_album_name_by_id(&self.album_id)? {
+            if let Some(name) = Storage::global().get_album_name_by_id(&self.album_id)? {
                 ctx.album_images_removed(&name);
             }
         }

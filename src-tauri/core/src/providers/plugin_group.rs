@@ -29,8 +29,8 @@ impl Provider for PluginGroupProvider {
         crate::providers::descriptor::ProviderDescriptor::PluginGroup
     }
 
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
-        let groups = storage.get_gallery_plugin_groups()?;
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        let groups = Storage::global().get_gallery_plugin_groups()?;
         // 这个变量可能mut，随编译目标变化
         #[allow(unused_mut)]
         let mut out: Vec<FsEntry> = groups
@@ -66,7 +66,7 @@ impl Provider for PluginGroupProvider {
         Ok(out)
     }
 
-    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         // name 可能为 "{plugin_name} - {plugin_id}" 或纯 plugin_id
         let plugin_id = name
             .rsplit_once(" - ")
@@ -77,7 +77,7 @@ impl Provider for PluginGroupProvider {
             return None;
         }
         // 验证插件是否存在
-        let groups = storage.get_gallery_plugin_groups().ok()?;
+        let groups = Storage::global().get_gallery_plugin_groups().ok()?;
         let plugin = groups
             .into_iter()
             .find(|g| g.plugin_id.eq_ignore_ascii_case(plugin_id))?;
@@ -85,7 +85,7 @@ impl Provider for PluginGroupProvider {
     }
 
     #[cfg(not(kabegame_mode = "light"))]
-    fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
+    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
         let display_name = "这里记录了不同插件安装的所有图片.txt";
         if name != display_name {
             return None;
@@ -116,16 +116,16 @@ impl Provider for PluginImagesProvider {
         }
     }
 
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
-        self.inner.list(storage)
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        self.inner.list()
     }
 
-    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
-        self.inner.get_child(storage, name)
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        self.inner.get_child(name)
     }
 
-    fn resolve_file(&self, storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
+    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
         // 关键：让虚拟盘能从“按插件\<plugin>”目录中打开文件。
-        self.inner.resolve_file(storage, name)
+        self.inner.resolve_file(name)
     }
 }

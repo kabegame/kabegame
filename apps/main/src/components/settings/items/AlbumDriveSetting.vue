@@ -1,6 +1,6 @@
 <template>
   <div class="album-drive-setting">
-    <el-switch v-model="enabled" :loading="showEnabledLoading" :disabled="!IS_WINDOWS || enabledDisabled"
+    <el-switch v-model="enabled" :loading="showEnabledLoading" :disabled="enabledDisabled"
       @change="handleToggle" />
 
     <el-input v-model="mountPoint" class="mount-point-input" size="default"
@@ -18,7 +18,6 @@ import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessage } from "element-plus";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_WINDOWS } from "@kabegame/core/env";
 
 const {
   settingValue: enabledValue,
@@ -86,10 +85,6 @@ const openExplorer = async () => {
 };
 
 const handleToggle = async (val: boolean) => {
-  if (!IS_WINDOWS) {
-    enabled.value = false;
-    return;
-  }
   const mp = normalizedMountPoint.value;
   if (val && !mp) {
     enabled.value = false;
@@ -108,6 +103,7 @@ const handleToggle = async (val: boolean) => {
   } catch (e) {
     console.error(e);
     // 错误时 enabled.value 会由 watch 回滚
+    ElMessage.error(String(e));
   }
 };
 </script>

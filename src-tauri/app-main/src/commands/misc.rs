@@ -22,10 +22,7 @@ pub async fn get_file_drop_supported_types() -> Result<serde_json::Value, String
 
 #[tauri::command]
 pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
+    let app_data_dir = kabegame_core::app_paths::kabegame_data_dir();
 
     if !app_data_dir.exists() {
         return Ok(()); // 目录不存在，无需清理
