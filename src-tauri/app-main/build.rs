@@ -1,10 +1,10 @@
-﻿fn main() {
+fn main() {
     tauri_build::build();
 
     // Rust check-cfg: declare custom cfg keys used in this crate.
-    // We inject `--cfg desktop="plasma"` at compile-time (via scripts/run.js --plasma),
+    // We inject `--cfg desktop="plasma"` or `--cfg desktop="gnome"` at compile-time (via scripts/run.js --desktop),
     // so silence `unexpected_cfgs` warnings by declaring the allowed values here.
-    println!("cargo:rustc-check-cfg=cfg(desktop, values(\"plasma\"))");
+    println!("cargo:rustc-check-cfg=cfg(desktop, values(\"plasma\", \"gnome\"))");
     println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"normal\", \"local\", \"light\"))");
     println!(
         "cargo:rustc-check-cfg=cfg(kabegame_component, values(\"main\", \"plugin-editor\", \"cli\", \"unknown\"))"

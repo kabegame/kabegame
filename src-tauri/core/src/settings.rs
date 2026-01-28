@@ -390,12 +390,12 @@ Write-Output "$style,$tile"
         {
             let output_str = String::from_utf8_lossy(&output.stdout);
             let style = match output_str.trim() {
-                s if s.contains("scaled") => "fill",
-                s if s.contains("zoom") => "fill",
-                s if s.contains("spanned") => "fill",
-                s if s.contains("stretched") => "stretch",
-                s if s.contains("centered") => "center",
-                s if s.contains("wallpaper") => "tile",
+                s if s.contains("scaled") => "fit",      // 修正：scaled 对应 fit（适应）
+                s if s.contains("zoom") => "fill",       // zoom 对应 fill（填充）
+                s if s.contains("spanned") => "fill",    // spanned 对应 fill（多屏横向拼接）
+                s if s.contains("stretched") => "stretch", // stretched 对应 stretch（拉伸）
+                s if s.contains("centered") => "center",   // centered 对应 center（居中）
+                s if s.contains("wallpaper") => "tile",     // wallpaper 对应 tile（平铺）
                 _ => "fill",
             };
             return (style.to_string(), "none".to_string());

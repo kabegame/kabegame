@@ -2,7 +2,7 @@
 
 一个基于 Tauri 的二次元壁纸管理器！收集、管理、轮播，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元壁纸资源~
 
-<div style="display: flex; justify-content: space-between">
+<div align="center">
   <img src="docs/images/image2.png" alt="Kabegame 形象图 1" width="256"/>
   <img src="docs/images/image1.png" alt="Kabegame 形象图 2" width="256"/>
 </div>
@@ -50,7 +50,7 @@ Kabegame 提供三种模式供下载，满足不同使用场景：
 | Windows | [Kabegame-normal_3.0.2_x64-setup.exe](release/Kabegame-normal_3.0.2_x64-setup.exe) | [Kabegame-local_3.0.2_x64-setup.exe](release/Kabegame-local_3.0.2_x64-setup.exe) | [Kabegame-light_3.0.2_x64-setup.exe](release/Kabegame-light_3.0.2_x64-setup.exe) |
 | macOS | coming... | coming... | coming... |
 | Linux (Plasma) | [Kabegame-normal_plasma_3.0.3_amd64.deb](release/Kabegame-normal_plasma_3.0.3_amd64.deb)  | [Kabegame-local_plasma_3.0.3_amd64.deb](release/Kabegame-local_plasma_3.0.3_amd64.deb)  | [Kabegame-light_plasma_3.0.3_amd64.deb](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
-| Linux (GNOME) | coming... | coming... | coming... |
+| Linux (GNOME) | [Kabegame-normal_gnome_3.0.3_amd64.deb](release/Kabegame-normal_gnome_3.0.3_amd64.deb) | [Kabegame-local_gnome_3.0.3_amd64.deb](release/Kabegame-local_gnome_3.0.3_amd64.deb) | [Kabegame-light_gnome_3.0.3_amd64.deb](release/Kabegame-light_gnome_3.0.3_amd64.deb) |
 
 Windows 双击运行即可（**安装和更新**）。
 
