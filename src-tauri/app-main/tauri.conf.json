@@ -14,6 +14,7 @@
         "fullscreen": false,
         "resizable": true,
         "title": "Kabegame",
+        "devtools": false,
         "transparent": false,
         "width": 1600,
         "height": 1200,
@@ -45,9 +46,10 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libayatana-appindicator3-1"],
+        "depends": ["fuse3", "libayatana-appindicator3-1"],
         "files": {
           "/usr/bin/kabegame-cli": "../../target/release/kabegame-cli",
+          "/usr/bin/kabegame-plugin-editor": "../../target/release/kabegame-plugin-editor",
           "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
           "/usr/share/applications/kabegame-kgpg.desktop": "./deb/kabegame-kgpg.desktop",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "../icons/icon.png"

@@ -6,8 +6,8 @@
 
 ## [3.0.3]
 ### Added
-- 添加linux plasma light mode 构建
-
+- 添加linux plasma支持
+- 添加linux fuse虚拟盘支持
 
 ### Fixed
 - 整理了启动流程，重新整理了一下架构

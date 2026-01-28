@@ -31,24 +31,34 @@ impl NativeWallpaperManager {
             .ok()
     }
 
-    #[cfg(all(target_os = "linux", desktop = "plasma"))]
-    fn percent_encode_path_for_file_url(path: &str) -> String {
-        // Plasma 的 org.kde.image 的 Image 通常是 URL（file:///...）。
-        // 这里做一个轻量 percent-encode（UTF-8 bytes）来避免空格等字符导致解析失败。
+    /// 将路径转换为 file:// URI，并进行 percent-encode
+    /// 用于 Plasma 和 GNOME 的壁纸设置
+    #[cfg(target_os = "linux")]
+    fn path_to_file_uri(path: &str) -> String {
+        // 做一个轻量 percent-encode（UTF-8 bytes）来避免空格等字符导致解析失败。
         fn is_unreserved(b: u8) -> bool {
             matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~')
         }
 
-        let mut out = String::with_capacity(path.len() + 16);
-        for &b in path.as_bytes() {
+        // 对于绝对路径，先 trim 掉开头的 '/'，然后编码
+        let path_to_encode = path.trim_start_matches('/');
+        let mut encoded = String::with_capacity(path_to_encode.len() + 16);
+        for &b in path_to_encode.as_bytes() {
             if is_unreserved(b) || b == b'/' {
-                out.push(b as char);
+                encoded.push(b as char);
             } else {
-                out.push('%');
-                out.push_str(&format!("{:02X}", b));
+                encoded.push('%');
+                encoded.push_str(&format!("{:02X}", b));
             }
         }
-        out
+        format!("file:///{}", encoded)
+    }
+
+    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    fn percent_encode_path_for_file_url(path: &str) -> String {
+        // Plasma 的 org.kde.image 的 Image 通常是 URL（file:///...）。
+        // 复用通用函数
+        Self::path_to_file_uri(path)
     }
 
     #[cfg(all(target_os = "linux", desktop = "plasma"))]
@@ -87,6 +97,148 @@ impl NativeWallpaperManager {
             "5" => "fit",
             _ => "fill", // 默认填充
         }
+    }
+
+    /// 将应用内部的 style 字符串映射到 GNOME picture-options
+    #[cfg(all(target_os = "linux", desktop = "gnome"))]
+    fn style_to_gnome_picture_options(style: &str) -> &'static str {
+        // GNOME picture-options 映射：
+        // zoom: 填满屏幕，裁剪溢出部分（对应 fill）
+        // scaled: 完整显示，不裁剪，可能留黑边（对应 fit）
+        // centered: 原尺寸居中（对应 center）
+        // stretched: 拉伸填满（变形）（对应 stretch）
+        // wallpaper: 平铺（对应 tile）
+        // spanned: 多显示器横向拼接（暂不暴露）
+        match style {
+            "fill" => "zoom",
+            "fit" => "scaled",
+            "center" => "centered",
+            "stretch" => "stretched",
+            "tile" => "wallpaper",
+            _ => "zoom", // 默认填充
+        }
+    }
+
+    /// 从 GNOME picture-options 读取当前样式
+    #[cfg(all(target_os = "linux", desktop = "gnome"))]
+    fn get_wallpaper_gnome_picture_options(&self) -> Result<String, String> {
+        use std::process::Command;
+
+        let output = Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.background", "picture-options"])
+            .output()
+            .map_err(|e| format!("执行 `gsettings` 失败：{}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "`gsettings get picture-options` 失败 (code={:?})。\nstderr: {}",
+                output.status.code(),
+                stderr.trim()
+            ));
+        }
+
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        let style = match output_str.trim() {
+            s if s.contains("scaled") => "fit",
+            s if s.contains("zoom") => "fill",
+            s if s.contains("spanned") => "fill",
+            s if s.contains("stretched") => "stretch",
+            s if s.contains("centered") => "center",
+            s if s.contains("wallpaper") => "tile",
+            _ => "fill", // 默认填充
+        };
+
+        Ok(style.to_string())
+    }
+
+    /// 通过 gsettings 设置 GNOME 壁纸
+    #[cfg(all(target_os = "linux", desktop = "gnome"))]
+    fn set_wallpaper_gnome(&self, file_path: &str, style: &str) -> Result<(), String> {
+        use std::path::Path;
+        use std::process::Command;
+
+        let path = Path::new(file_path);
+        if !path.exists() {
+            return Err("File does not exist".to_string());
+        }
+
+        // 获取绝对路径并转换为 file:// URI
+        let abs = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string();
+
+        let file_uri = Self::path_to_file_uri(&abs);
+
+        // 设置 picture-uri（必须成功）
+        let output = Command::new("gsettings")
+            .args([
+                "set",
+                "org.gnome.desktop.background",
+                "picture-uri",
+                &file_uri,
+            ])
+            .output()
+            .map_err(|e| format!("执行 `gsettings set picture-uri` 失败：{}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "`gsettings set picture-uri` 失败 (code={:?})。\nstderr: {}",
+                output.status.code(),
+                stderr.trim()
+            ));
+        }
+
+        // 尝试设置 picture-uri-dark（best-effort，失败不阻断）
+        let dark_output = Command::new("gsettings")
+            .args([
+                "set",
+                "org.gnome.desktop.background",
+                "picture-uri-dark",
+                &file_uri,
+            ])
+            .output();
+
+        if let Err(e) = dark_output {
+            eprintln!(
+                "[WARN] 设置 `picture-uri-dark` 失败（可能该 key 不存在于当前 GNOME 版本）：{}",
+                e
+            );
+        } else if let Ok(output) = dark_output {
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!(
+                    "[WARN] `gsettings set picture-uri-dark` 失败（可能该 key 不存在于当前 GNOME 版本）：{}",
+                    stderr.trim()
+                );
+            }
+        }
+
+        // 设置 picture-options（样式）
+        let picture_options = Self::style_to_gnome_picture_options(style);
+        let style_output = Command::new("gsettings")
+            .args([
+                "set",
+                "org.gnome.desktop.background",
+                "picture-options",
+                picture_options,
+            ])
+            .output()
+            .map_err(|e| format!("执行 `gsettings set picture-options` 失败：{}", e))?;
+
+        if !style_output.status.success() {
+            let stderr = String::from_utf8_lossy(&style_output.stderr);
+            return Err(format!(
+                "`gsettings set picture-options` 失败 (code={:?})。\nstderr: {}",
+                style_output.status.code(),
+                stderr.trim()
+            ));
+        }
+
+        Ok(())
     }
 
     #[cfg(all(target_os = "linux", desktop = "plasma"))]
@@ -219,6 +371,8 @@ stderr: {}",
 
         // 通过 org.kde.plasmashell 的 evaluateScript 设置所有桌面的壁纸
         // 参考常见脚本：desktops() / wallpaperPlugin / currentConfigGroup / writeConfig
+        println!("mode: {}", fill_mode);
+
         let script = format!(
             "var allDesktops = desktops();\n\
 for (var i=0; i<allDesktops.length; i++) {{\n\
@@ -330,7 +484,8 @@ impl WallpaperManager for NativeWallpaperManager {
     #[cfg(not(target_os = "windows"))]
     async fn get_style(&self) -> Result<String, String> {
         // 非 Windows 平台：
-        // - Plasma 原生壁纸（--plasma 编译期开关）下：通过 qdbus 读取 FillMode
+        // - Plasma 原生壁纸（--desktop plasma 编译期开关）下：通过 qdbus 读取 FillMode
+        // - GNOME 原生壁纸（--desktop gnome 编译期开关）下：通过 gsettings 读取 picture-options
         // - 其他平台：返回默认值
         #[cfg(all(target_os = "linux", desktop = "plasma"))]
         {
@@ -343,7 +498,21 @@ impl WallpaperManager for NativeWallpaperManager {
             }
         }
 
-        #[cfg(not(all(target_os = "linux", desktop = "plasma")))]
+        #[cfg(all(target_os = "linux", desktop = "gnome"))]
+        {
+            match self.get_wallpaper_gnome_picture_options() {
+                Ok(style) => Ok(style),
+                Err(e) => {
+                    eprintln!("[WARN] 无法读取 GNOME picture-options: {}，返回默认值 fill", e);
+                    Ok("fill".to_string())
+                }
+            }
+        }
+
+        #[cfg(not(any(
+            all(target_os = "linux", desktop = "plasma"),
+            all(target_os = "linux", desktop = "gnome")
+        )))]
         {
             Ok("fill".to_string())
         }
@@ -529,7 +698,22 @@ impl WallpaperManager for NativeWallpaperManager {
                 return self.set_wallpaper_plasma(file_path, &style);
             }
 
-            #[cfg(not(all(target_os = "linux", desktop = "plasma")))]
+            // GNOME 原生壁纸：由 Kabegame 的 --desktop gnome 编译期开关启用
+            #[cfg(all(target_os = "linux", desktop = "gnome"))]
+            {
+                let _ = immediate;
+                // style 从本地设置读取
+                let style = Settings::global()
+                    .get_wallpaper_rotation_style()
+                    .await
+                    .unwrap_or_else(|_| "fill".to_string());
+                return self.set_wallpaper_gnome(file_path, &style);
+            }
+
+            #[cfg(not(any(
+                all(target_os = "linux", desktop = "plasma"),
+                all(target_os = "linux", desktop = "gnome")
+            )))]
             {
                 let _ = immediate;
                 return Err("当前平台不支持原生壁纸设置（NativeWallpaperManager）".to_string());
@@ -607,9 +791,11 @@ impl WallpaperManager for NativeWallpaperManager {
         Ok(())
     }
 
-    /// - Plasma 原生壁纸（--plasma 编译期开关）下：通过 qdbus 写 FillMode，并尽量对当前壁纸立即生效
-    #[cfg(all(target_os = "linux", desktop = "plasma"))]
-    async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
+    /// - Plasma 原生壁纸（--desktop plasma 编译期开关）下：通过 qdbus 写 FillMode，并尽量对当前壁纸立即生效
+    /// - GNOME 原生壁纸（--desktop gnome 编译期开关）下：通过 gsettings 写 picture-options，并尽量对当前壁纸立即生效
+    #[cfg(all(target_os = "linux"))]
+    async fn set_style(&self, style: &str, _immediate: bool) -> Result<(), String> {
+        #[cfg(desktop = "plasma")]
         {
             if let Some(path) = self.current_wallpaper_path_from_settings().await {
                 if std::path::Path::new(&path).exists() {
@@ -639,7 +825,43 @@ impl WallpaperManager for NativeWallpaperManager {
             return Ok(());
         }
 
-        #[cfg(not(all(target_os = "linux", desktop = "plasma")))]
+        #[cfg(desktop = "gnome")]
+        {
+            use std::process::Command;
+
+            // 设置 picture-options
+            let picture_options = Self::style_to_gnome_picture_options(style);
+            let output = Command::new("gsettings")
+                .args([
+                    "set",
+                    "org.gnome.desktop.background",
+                    "picture-options",
+                    picture_options,
+                ])
+                .output()
+                .map_err(|e| format!("执行 `gsettings set picture-options` 失败：{}", e))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!(
+                    "`gsettings set picture-options` 失败 (code={:?})。\nstderr: {}",
+                    output.status.code(),
+                    stderr.trim()
+                ));
+            }
+
+            // 如果有当前壁纸路径，重新设置壁纸以应用新样式
+            if let Some(path) = self.current_wallpaper_path_from_settings().await {
+                if std::path::Path::new(&path).exists() {
+                    // 重新设置壁纸以应用新样式
+                    self.set_wallpaper_gnome(&path, style)?;
+                }
+            }
+
+            return Ok(());
+        }
+
+        #[cfg(not(any(desktop = "plasma", desktop = "gnome")))]
         {
             let _ = style;
             let _ = immediate;
@@ -756,7 +978,6 @@ impl WallpaperManager for NativeWallpaperManager {
     }
 
     fn init(&self, _app: AppHandle) -> Result<(), String> {
-        // 原生模式不需要初始化窗口
         Ok(())
     }
 }
