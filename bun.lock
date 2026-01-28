@@ -115,7 +115,7 @@
     },
     "packages/core": {
       "name": "@kabegame/core",
-      "version": "3.0.2",
+      "version": "3.0.3",
     },
     "src-crawler-plugins": {
       "name": "crawler-plugins",

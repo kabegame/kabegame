@@ -7,6 +7,12 @@
   <img src="docs/images/image1.png" alt="Kabegame 形象图 2" width="256"/>
 </div>
 
+
+<div align="center">
+  <img src="docs/images/main-screenshot1.png" alt="Kabegame 截图 1" width="500"/>
+  <img src="docs/images/main-screenshot2.png" alt="Kabegame 截图 2" width="500"/>
+</div>
+
 ## 名称由来 🐢
 
 **Kabegame** 是日语「壁亀」（かべがめ）的罗马音，与「壁纸」（かべがみ）发音相近~ 就像一只安静的龟龟趴在你的桌面上，默默守护着你的二次元壁纸收藏，不吵不闹，只负责治愈你~ これで毎日癒やされるね。やったぁ～ ✨
@@ -14,6 +20,8 @@
 > 我的观念：拥抱开源，做二次元人自己的软件
 
 > 私のこだわり：オープンソースに取り入れ、オタクだけのためのソフトウェアを作り上げる。
+
+
 
 ## 功能特性
 
@@ -47,7 +55,7 @@ Kabegame 提供三种模式供下载，满足不同使用场景：
 
 | 操作系统 | Normal 模式 | Local 模式 | Light 模式 |
 |---------|------------|-----------|-----------|
-| Windows | [Kabegame-normal_3.0.2_x64-setup.exe](release/Kabegame-normal_3.0.2_x64-setup.exe) | [Kabegame-local_3.0.2_x64-setup.exe](release/Kabegame-local_3.0.2_x64-setup.exe) | [Kabegame-light_3.0.2_x64-setup.exe](release/Kabegame-light_3.0.2_x64-setup.exe) |
+| Windows | [Kabegame-normal_3.0.3_x64-setup.exe](release/Kabegame-normal_3.0.3_x64-setup.exe) | [Kabegame-local_3.0.3_x64-setup.exe](release/Kabegame-local_3.0.3_x64-setup.exe) | [Kabegame-light_3.0.3_x64-setup.exe](release/Kabegame-light_3.0.3_x64-setup.exe) |
 | macOS | coming... | coming... | coming... |
 | Linux (Plasma) | [Kabegame-normal_plasma_3.0.3_amd64.deb](release/Kabegame-normal_plasma_3.0.3_amd64.deb)  | [Kabegame-local_plasma_3.0.3_amd64.deb](release/Kabegame-local_plasma_3.0.3_amd64.deb)  | [Kabegame-light_plasma_3.0.3_amd64.deb](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
 | Linux (GNOME) | [Kabegame-normal_gnome_3.0.3_amd64.deb](release/Kabegame-normal_gnome_3.0.3_amd64.deb) | [Kabegame-local_gnome_3.0.3_amd64.deb](release/Kabegame-local_gnome_3.0.3_amd64.deb) | [Kabegame-light_gnome_3.0.3_amd64.deb](release/Kabegame-light_gnome_3.0.3_amd64.deb) |

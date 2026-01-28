@@ -68,7 +68,10 @@ export class ModePlugin extends BasePlugin {
       this.addRustFlags(`--cfg kabegame_mode="${this.mode!.mode}"`);
     });
 
-    bs.hooks.beforeBuild.tap(this.name, () => {
+    bs.hooks.beforeBuild.tap(this.name, (comp) => {
+      if (comp !== Component.MAIN) {
+        return;
+      }
       this.packagePlugins(bs);
       this.prepareResources(bs);
       // 这一步一定要到 packagePlugin 之后，否则会扫描不到插件

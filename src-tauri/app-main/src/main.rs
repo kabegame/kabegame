@@ -3,9 +3,9 @@
 
 mod commands;
 mod startup;
-mod utils;
 #[cfg(feature = "tray")]
 mod tray;
+mod utils;
 mod wallpaper;
 
 // IPC and daemon related modules
@@ -13,14 +13,13 @@ mod ipc;
 #[cfg(not(kabegame_mode = "light"))]
 mod vd_listener;
 
-
+use commands::*;
 use core::fmt;
+use startup::*;
 use std::process;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
-use commands::*;
-use startup::*;
 
 // Daemon Imports
 use crate::ipc::dedupe_service::DedupeService;
@@ -40,12 +39,9 @@ use kabegame_core::virtual_driver::VirtualDriveService;
 
 /// 初始化全局状态，并返回 Context
 fn init_globals() -> Result<Arc<Store>, String> {
-     println!(
-        "Kabegame v{} bootstrap...",
-        env!("CARGO_PKG_VERSION")
-    );
+    println!("Kabegame v{} bootstrap...", env!("CARGO_PKG_VERSION"));
     println!("Initializing Globals...");
-    
+
     Settings::init_global().map_err(|e| format!("Failed to initialize settings: {}", e))?;
     println!("  ✓ Settings initialized");
 
@@ -134,12 +130,9 @@ fn init_globals() -> Result<Arc<Store>, String> {
     #[cfg(not(kabegame_mode = "light"))]
     {
         #[cfg(target_os = "windows")]
-        tauri::async_runtime::spawn({
-            vd_listener::start_vd_event_listener(
-                virtual_drive_service.clone(),
-            );
-            println!("  ✓ Virtual drive event listener started");
-        });
+        tauri::async_runtime::spawn(vd_listener::start_vd_event_listener(
+            virtual_drive_service.clone(),
+        ));
 
         // 启动时根据设置自动挂载画册盘
         let vd_service_for_mount = virtual_drive_service.clone();
@@ -195,7 +188,6 @@ fn main() {
             // 启动内置 Backend
             match init_globals() {
                 Ok(ctx) => {
-
                     // 启动本地事件转发
                     start_local_event_loop(app.app_handle().clone());
                     // 清理用户数据
@@ -217,7 +209,7 @@ fn main() {
 
                     // 启动 IPC Server
                     #[cfg(any(
-                        not(kabegame_mode = "light"), 
+                        not(kabegame_mode = "light"),
                         all(kabegame_mode = "light", not(target_os = "windows"))
                     ))]
                     start_ipc_server(ctx);
