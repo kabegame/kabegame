@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::sync::Arc;
+use kabegame_core::app_paths::kabegame_data_dir;
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::ipc::{DaemonEvent, EventBroadcaster};
 use kabegame_core::ipc::events::DaemonEventKind;
@@ -31,15 +32,9 @@ pub fn init_plugin() {
 }
 
 // 清理用户数据（清理后重启处理真正的清理操作）
-pub fn cleanup_user_data_if_marked(app: &tauri::AppHandle) -> bool {
+pub fn cleanup_user_data_if_marked() -> bool {
     // 检查清理标记，如果存在则先清理旧数据目录
-    let app_data_dir = match app.path().app_data_dir() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Failed to resolve app data dir: {e}");
-            return false;
-        }
-    };
+    let app_data_dir = kabegame_data_dir();
     let cleanup_marker = app_data_dir.join(".cleanup_marker");
     let is_cleaning_data = cleanup_marker.exists();
     if is_cleaning_data {

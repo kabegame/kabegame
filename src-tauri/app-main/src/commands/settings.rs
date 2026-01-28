@@ -191,7 +191,7 @@ pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
             .get_album_drive_mount_point()
             .await
             .map_err(|e| e.to_string())?;
-
+        println!("mount point: {}", mount_point);
         let vd_service = VirtualDriveService::global();
         let mount_result = tokio::task::spawn_blocking({
             let mount_point = mount_point.clone();
@@ -199,7 +199,7 @@ pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
         })
         .await
         .map_err(|e| format!("Task join error: {}", e))?;
-
+        println!("mount over {:?}", mount_result);
         if let Err(e) = mount_result {
             return Err(e);
         }

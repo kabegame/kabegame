@@ -10,6 +10,9 @@ use tokio::time::Instant;
 
 use crate::emitter::GlobalEmitter;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use dirs;
+
 fn atomic_replace_file(tmp: &Path, dest: &Path) -> Result<(), String> {
     if !tmp.exists() {
         return Err(format!(
@@ -319,11 +322,17 @@ impl Settings {
         }
         #[cfg(target_os = "linux")]
         {
-            "/mnt/kabegame".to_string()
+            // 使用用户 home 目录下的 kabegame-vd，避免需要 root 权限
+            dirs::home_dir()
+                .map(|p| p.join("kabegame-vd").to_string_lossy().to_string())
+                .unwrap_or_else(|| "/tmp/kabegame-vd".to_string())
         }
         #[cfg(target_os = "macos")]
         {
-            "/Volumes/kabegame".to_string()
+            // macOS 也可以使用用户目录，避免需要 root 权限
+            dirs::home_dir()
+                .map(|p| p.join("kabegame-vd").to_string_lossy().to_string())
+                .unwrap_or_else(|| "/tmp/kabegame-vd".to_string())
         }
     }
 

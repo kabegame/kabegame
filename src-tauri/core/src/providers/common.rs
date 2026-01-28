@@ -58,15 +58,15 @@ impl Provider for CommonProvider {
         }
     }
 
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
-        let total = storage.get_images_count_by_query(&self.query)?;
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        let total = Storage::global().get_images_count_by_query(&self.query)?;
         if total == 0 {
             return Ok(Vec::new());
         }
 
         if total <= LEAF_SIZE {
             // 直接显示图片
-            let entries = storage.get_images_fs_entries_by_query(&self.query, 0, total)?;
+            let entries = Storage::global().get_images_fs_entries_by_query(&self.query, 0, total)?;
             return Ok(entries
                 .into_iter()
                 .map(|e| FsEntry::file(e.file_name, e.image_id, PathBuf::from(e.resolved_path)))
@@ -74,11 +74,11 @@ impl Provider for CommonProvider {
         }
 
         // 使用贪心分解策略列出子目录 + 剩余文件
-        list_greedy_subdirs_with_remainder(storage, &self.query, 0, total)
+        list_greedy_subdirs_with_remainder(&self.query, 0, total)
     }
 
-    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
-        let total = storage.get_images_count_by_query(&self.query).ok()?;
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        let total = Storage::global().get_images_count_by_query(&self.query).ok()?;
         if total == 0 || total <= LEAF_SIZE {
             return None;
         }
@@ -102,20 +102,19 @@ impl Provider for CommonProvider {
         )))
     }
 
-    fn resolve_file(&self, storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
+    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
         // 文件名格式通常为 "<id>.<ext>"，这里取最后一个 '.' 之前的部分作为 image_id
         let image_id = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
         if image_id.trim().is_empty() {
             return None;
         }
-        let resolved = storage.resolve_gallery_image_path(image_id).ok()??;
+        let resolved = Storage::global().resolve_gallery_image_path(image_id).ok()??;
         Some((image_id.to_string(), PathBuf::from(resolved)))
     }
 
     #[cfg(not(kabegame_mode = "light"))]
     fn delete_child(
         &self,
-        storage: &Storage,
         child_name: &str,
         kind: DeleteChildKind,
         mode: DeleteChildMode,
@@ -131,10 +130,10 @@ impl Provider for CommonProvider {
             return Ok(true);
         }
         let removed =
-            crate::providers::vd_ops::query_delete_child_file(storage, &self.query, child_name)?;
+            crate::providers::vd_ops::query_delete_child_file(&self.query, child_name)?;
         if removed {
             if let Some(album_id) = crate::providers::vd_ops::album_id_from_query(&self.query) {
-                if let Some(name) = storage.get_album_name_by_id(album_id)? {
+                if let Some(name) = Storage::global().get_album_name_by_id(album_id)? {
                     ctx.album_images_removed(&name);
                 }
             }
@@ -176,11 +175,11 @@ impl Provider for RangeProvider {
         }
     }
 
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
         if self.depth == 0 {
             // 叶子层：显示图片
             let entries =
-                storage.get_images_fs_entries_by_query(&self.query, self.offset, self.count)?;
+                Storage::global().get_images_fs_entries_by_query(&self.query, self.offset, self.count)?;
             return Ok(entries
                 .into_iter()
                 .map(|e| FsEntry::file(e.file_name, e.image_id, PathBuf::from(e.resolved_path)))
@@ -188,10 +187,10 @@ impl Provider for RangeProvider {
         }
 
         // 非叶子层：使用贪心分解显示子目录 + 剩余文件
-        list_greedy_subdirs_with_remainder(storage, &self.query, self.offset, self.count)
+        list_greedy_subdirs_with_remainder(&self.query, self.offset, self.count)
     }
 
-    fn get_child(&self, _storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         if self.depth == 0 {
             // 叶子层没有子目录
             return None;
@@ -219,20 +218,19 @@ impl Provider for RangeProvider {
         )))
     }
 
-    fn resolve_file(&self, storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
+    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
         // 同 AllProvider：直接按文件名解析 image_id
         let image_id = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
         if image_id.trim().is_empty() {
             return None;
         }
-        let resolved = storage.resolve_gallery_image_path(image_id).ok()??;
+        let resolved = Storage::global().resolve_gallery_image_path(image_id).ok()??;
         Some((image_id.to_string(), PathBuf::from(resolved)))
     }
 
     #[cfg(not(kabegame_mode = "light"))]
     fn delete_child(
         &self,
-        storage: &Storage,
         child_name: &str,
         kind: DeleteChildKind,
         mode: DeleteChildMode,
@@ -248,10 +246,10 @@ impl Provider for RangeProvider {
             return Ok(true);
         }
         let removed =
-            crate::providers::vd_ops::query_delete_child_file(storage, &self.query, child_name)?;
+            crate::providers::vd_ops::query_delete_child_file(&self.query, child_name)?;
         if removed {
             if let Some(album_id) = crate::providers::vd_ops::album_id_from_query(&self.query) {
-                if let Some(name) = storage.get_album_name_by_id(album_id)? {
+                if let Some(name) = Storage::global().get_album_name_by_id(album_id)? {
                     ctx.album_images_removed(&name);
                 }
             }
@@ -344,7 +342,6 @@ fn validate_greedy_range(offset: usize, count: usize, total: usize) -> bool {
 
 /// 使用贪心分解策略列出子目录 + 剩余文件
 fn list_greedy_subdirs_with_remainder(
-    storage: &Storage,
     query: &ImageQuery,
     base_offset: usize,
     total: usize,
@@ -365,7 +362,7 @@ fn list_greedy_subdirs_with_remainder(
     if remainder > 0 {
         let remainder_offset = base_offset + covered;
         let file_entries =
-            storage.get_images_fs_entries_by_query(query, remainder_offset, remainder)?;
+            Storage::global().get_images_fs_entries_by_query(query, remainder_offset, remainder)?;
         for e in file_entries {
             entries.push(FsEntry::file(
                 e.file_name,

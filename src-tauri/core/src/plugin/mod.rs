@@ -1837,14 +1837,12 @@ impl PluginManager {
                     .to_string(),
             );
         }
-        println!("s6");
 
         let existing_version = if already_exists {
             self.get(&plugin_id).await.map(|p| p.version)
         } else {
             None
         };
-        println!("s6");
 
         // TODO: 实现变更日志差异比较
         let change_log_diff = None;

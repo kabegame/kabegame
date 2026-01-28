@@ -32,8 +32,8 @@ impl Provider for DateGroupProvider {
         crate::providers::descriptor::ProviderDescriptor::DateGroup
     }
 
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
-        let groups = storage.get_gallery_date_groups()?;
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        let groups = Storage::global().get_gallery_date_groups()?;
         let mut out: Vec<FsEntry> = groups
             .into_iter()
             .map(|g| FsEntry::dir(g.year_month))
@@ -55,20 +55,20 @@ impl Provider for DateGroupProvider {
         Ok(out)
     }
 
-    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         // 范围查询：按 "YYYY-MM-DD~YYYY-MM-DD" 编码在子目录名里
         if name.eq_ignore_ascii_case(DIR_RANGE) {
             return Some(Arc::new(DateRangeRootProvider::new()) as Arc<dyn Provider>);
         }
 
         // 按月查询：验证日期是否存在
-        let groups = storage.get_gallery_date_groups().ok()?;
+        let groups = Storage::global().get_gallery_date_groups().ok()?;
         let date = groups.into_iter().find(|g| g.year_month == name)?;
         Some(Arc::new(DateImagesProvider::new(date.year_month)))
     }
 
     #[cfg(all(not(kabegame_mode = "light")))]
-    fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
+    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
         let display_name = "这里按抓取时间归档图片（按月份分组）.txt";
         if name != display_name {
             return None;
@@ -94,11 +94,11 @@ impl Provider for DateRangeRootProvider {
         crate::providers::descriptor::ProviderDescriptor::DateRangeRoot
     }
 
-    fn list(&self, _storage: &Storage) -> Result<Vec<FsEntry>, String> {
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
         Ok(vec![])
     }
 
-    fn resolve_child(&self, _storage: &Storage, name: &str) -> ResolveChild {
+    fn resolve_child(&self, name: &str) -> ResolveChild {
         // name: "YYYY-MM-DD~YYYY-MM-DD"
         let Some((start, end)) = parse_range_name(name) else {
             return ResolveChild::NotFound;
@@ -162,16 +162,16 @@ impl Provider for DateRangeImagesProvider {
         }
     }
 
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
-        self.inner.list(storage)
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        self.inner.list()
     }
 
-    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
-        self.inner.get_child(storage, name)
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        self.inner.get_child(name)
     }
 
-    fn resolve_file(&self, storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
-        self.inner.resolve_file(storage, name)
+    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
+        self.inner.resolve_file(name)
     }
 }
 
@@ -195,16 +195,16 @@ impl Provider for DateImagesProvider {
         }
     }
 
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
-        self.inner.list(storage)
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        self.inner.list()
     }
 
-    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
-        self.inner.get_child(storage, name)
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        self.inner.get_child(name)
     }
 
-    fn resolve_file(&self, storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
+    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
         // 关键：让虚拟盘能从“按时间\YYYY-MM”目录中打开文件（Explorer 会走 parent.resolve_file）。
-        self.inner.resolve_file(storage, name)
+        self.inner.resolve_file(name)
     }
 }

@@ -125,19 +125,16 @@ fn system_time_from_fs_metadata(meta: &std::fs::Metadata) -> (SystemTime, System
 
 /// app-main 的虚拟盘语义执行器：基于 core 的 Provider 树实现“文件系统操作语义”。
 pub struct VfsSemantics<'a> {
-    storage: &'a Storage,
     root: &'a Arc<dyn Provider>,
     provider_rt: &'a ProviderRuntime,
 }
 
 impl<'a> VfsSemantics<'a> {
     pub fn new(
-        storage: &'a Storage,
         root: &'a Arc<dyn Provider>,
         provider_rt: &'a ProviderRuntime,
     ) -> Self {
         Self {
-            storage,
             root,
             provider_rt,
         }
@@ -162,7 +159,7 @@ impl<'a> VfsSemantics<'a> {
             let file_name = segments[segments.len() - 1];
             if let Ok(Some(parent)) = self.resolve_provider(parent_segs) {
                 if let Some((image_id, resolved_path)) =
-                    parent.resolve_file(self.storage, file_name)
+                    parent.resolve_file(file_name)
                 {
                     return ResolveResult::File {
                         image_id,
@@ -183,7 +180,7 @@ impl<'a> VfsSemantics<'a> {
             let file_name = segments[segments.len() - 1];
             if let Ok(Some(parent)) = self.resolve_provider(parent_segs) {
                 if let Some((image_id, resolved_path)) =
-                    parent.resolve_file(self.storage, file_name)
+                    parent.resolve_file(file_name)
                 {
                     return ResolveResult::File {
                         image_id,
@@ -206,7 +203,7 @@ impl<'a> VfsSemantics<'a> {
         // - list 刷新写入 child key
         // - Dynamic 子节点仅入 LRU（避免污染持久缓存）
         self.provider_rt
-            .resolve_provider_for_root(self.storage, self.root.clone(), segments)
+            .resolve_provider_for_root(self.root.clone(), segments)
             .map_err(VfsError::Other)
     }
 
@@ -226,8 +223,7 @@ impl<'a> VfsSemantics<'a> {
                 let size = handle.len();
                 // 文件时间戳与画廊数据一致：优先取 DB 的 COALESCE(order, crawled_at)。
                 // 这里做一次轻量查询并缓存到 context，避免 get_file_information 再次查 DB / stat。
-                let meta = self
-                    .storage
+                let meta = Storage::global()
                     .get_images_gallery_ts_by_ids(&[image_id.clone()])
                     .ok()
                     .and_then(|m| m.get(&image_id).copied())
@@ -266,7 +262,7 @@ impl<'a> VfsSemantics<'a> {
         // 走 core runtime：list 并缓存 child keys/provider（避免后续 resolve 再做昂贵 get_child）
         let entries = self
             .provider_rt
-            .list_and_cache_children(self.storage, &segments, provider)
+            .list_and_cache_children(&segments, provider)
             .map_err(VfsError::Other)?;
 
         // 为了让虚拟盘“文件时间戳”与画廊数据一致：
@@ -278,8 +274,7 @@ impl<'a> VfsSemantics<'a> {
                 file_ids.push(image_id.clone());
             }
         }
-        let ts_map = self
-            .storage
+        let ts_map = Storage::global()
             .get_images_gallery_ts_by_ids(&file_ids)
             .unwrap_or_default();
 
@@ -296,7 +291,7 @@ impl<'a> VfsSemantics<'a> {
                                 .unwrap_or(name.as_str())
                                 .trim();
 
-                            if let Ok(Some(task)) = self.storage.get_task(task_id) {
+                            if let Ok(Some(task)) = Storage::global().get_task(task_id) {
                                 // 兼容：若是毫秒时间戳（大于 9999-12-31 秒级阈值），则降为秒
                                 fn normalize_unix_secs(ts: u64) -> u64 {
                                     const MAX_SEC_9999: u64 = 253402300799;
@@ -397,7 +392,7 @@ impl<'a> VfsSemantics<'a> {
             return Err(VfsError::AccessDenied("不支持创建目录".to_string()));
         }
         parent
-            .create_child_dir(self.storage, dir_name, ctx)
+            .create_child_dir(dir_name, ctx)
             .map_err(VfsError::Other)?;
         Ok(())
     }
@@ -421,7 +416,6 @@ impl<'a> VfsSemantics<'a> {
             .ok_or_else(|| VfsError::NotFound("父目录不存在".to_string()))?;
         parent
             .delete_child(
-                self.storage,
                 dir_name,
                 DeleteChildKind::Directory,
                 mode,
@@ -442,7 +436,7 @@ impl<'a> VfsSemantics<'a> {
             .resolve_provider(&parent_segs)?
             .ok_or_else(|| VfsError::NotFound("父目录不存在".to_string()))?;
         parent
-            .delete_child(self.storage, file_name, DeleteChildKind::File, mode, ctx)
+            .delete_child(file_name, DeleteChildKind::File, mode, ctx)
             .map_err(VfsError::Other)
     }
 
@@ -455,7 +449,7 @@ impl<'a> VfsSemantics<'a> {
             return Err(VfsError::AccessDenied("不支持重命名".to_string()));
         }
         provider
-            .rename(self.storage, new_name)
+            .rename(new_name)
             .map_err(VfsError::Other)?;
         Ok(())
     }

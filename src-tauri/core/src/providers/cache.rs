@@ -182,17 +182,16 @@ impl ProviderRuntime {
     /// 从 list 结果缓存子目录
     fn cache_children_from_list(
         &self,
-        storage: &Storage,
         parent_segments: &[&str],
         parent: Arc<dyn Provider>,
     ) -> Result<Vec<(String, Arc<dyn Provider>)>, String> {
-        let entries = parent.list(storage)?;
+        let entries = parent.list()?;
         let mut children: Vec<(String, Arc<dyn Provider>)> = Vec::new();
         for e in &entries {
             let FsEntry::Directory { name } = e else {
                 continue;
             };
-            if let Some(child) = parent.get_child(storage, name) {
+            if let Some(child) = parent.get_child(name) {
                 let mut child_path: Vec<&str> = parent_segments.to_vec();
                 child_path.push(name);
                 let key = self.key_for_segments(&child_path);
@@ -212,15 +211,14 @@ impl ProviderRuntime {
     /// 返回 list 结果（原样）。
     pub fn list_and_cache_children(
         &self,
-        storage: &Storage,
         parent_segments: &[&str],
         parent: Arc<dyn Provider>,
     ) -> Result<Vec<FsEntry>, String> {
         // 先 cache 一次 children（符合“由 list 设置 key”的规则）
-        let _ = self.cache_children_from_list(storage, parent_segments, parent.clone());
+        let _ = self.cache_children_from_list(parent_segments, parent.clone());
         // 再返回 list 结果（避免为了返回 entries 重复 list：这里直接再 list 一次，成本可接受；
         // 如需极致优化可把 entries 缓存下来一起返回）
-        parent.list(storage)
+        parent.list()
     }
 
     fn ensure_root_descriptor(&self, root: Arc<dyn Provider>) -> Result<(), String> {
@@ -240,7 +238,6 @@ impl ProviderRuntime {
     /// 若该路径未缓存，则从最长前缀开始不断 `list_and_cache_children` 刷新，直到解析到目标或无法推进。
     pub fn resolve_provider_for_root(
         &self,
-        storage: &Storage,
         root: Arc<dyn Provider>,
         segments: &[&str],
     ) -> Result<Option<Arc<dyn Provider>>, String> {
@@ -254,7 +251,7 @@ impl ProviderRuntime {
         let Some((mut prefix_len, mut provider)) = self.find_longest_prefix_provider(segments)?
         else {
             // 理论上不应发生：ensure_root_descriptor 已写入 root key，并把 root 放入 LRU。
-            let _ = self.list_and_cache_children(storage, &[], root.clone());
+            let _ = self.list_and_cache_children(&[], root.clone());
             return Ok(None);
         };
 
@@ -266,7 +263,7 @@ impl ProviderRuntime {
         // 线性推进：每次用当前 prefix provider 刷新下一层，然后尝试获取 prefix_len+1 的 provider
         while prefix_len < segments.len() {
             let _ =
-                self.list_and_cache_children(storage, &segments[..prefix_len], provider.clone());
+                self.list_and_cache_children(&segments[..prefix_len], provider.clone());
             let next_name = segments[prefix_len];
             prefix_len += 1;
             let key = self.key_for_segments(&segments[..prefix_len]);
@@ -277,7 +274,7 @@ impl ProviderRuntime {
                 continue;
             }
             // 显式动态解析：只有 provider 明确返回 Dynamic/Listed 才允许继续
-            match provider.resolve_child(storage, next_name) {
+            match provider.resolve_child(next_name) {
                 ResolveChild::NotFound => {
                     // 列过目录仍拿不到下一层，且不支持动态解析：路径不存在
                     return Ok(None);
@@ -309,7 +306,6 @@ impl ProviderRuntime {
     /// 返回 root 的 descriptor（便于调试）。
     pub fn warm_cache(
         &self,
-        storage: &Storage,
         root: Arc<dyn Provider>,
     ) -> Result<ProviderDescriptor, String> {
         // 写入 root key
@@ -320,13 +316,12 @@ impl ProviderRuntime {
             lru.put(root_key, root.clone());
         }
         let mut visited = 0usize;
-        self.warm_recursive(storage, Vec::new(), root, &mut visited)?;
+        self.warm_recursive(Vec::new(), root, &mut visited)?;
         Ok(root_desc)
     }
 
     fn warm_recursive(
         &self,
-        storage: &Storage,
         parent_segments: Vec<String>,
         parent: Arc<dyn Provider>,
         visited: &mut usize,
@@ -339,12 +334,12 @@ impl ProviderRuntime {
         }
 
         let parent_segs_ref: Vec<&str> = parent_segments.iter().map(|s| s.as_str()).collect();
-        let children = self.cache_children_from_list(storage, &parent_segs_ref, parent.clone())?;
+        let children = self.cache_children_from_list(&parent_segs_ref, parent.clone())?;
         for (name, child) in children {
             *visited += 1;
             let mut next = parent_segments.clone();
             next.push(name);
-            self.warm_recursive(storage, next, child, visited)?;
+            self.warm_recursive(next, child, visited)?;
         }
         Ok(())
     }

@@ -41,7 +41,7 @@ Kabegame 提供三种模式供下载，满足不同使用场景：
 | **cli** | ✅ 支持 | ✅ 支持 | ❌ Windows不支持 <br/> ✅ Linux支持|
 | **内置插件** | 本地导入插件(`local-import`) | 发布时的全部插件 | 发布时的全部插件 |
 | **适用场景** | 日常使用，需要从商店安装插件 | 离线使用，需要所有插件内置 | 轻量使用，仅需基本功能 |
-| **文件大小** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
+| **文件大小** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Windows: ⭐ <br/> Linux: ⭐⭐ |
 
 **根据你的操作系统和需求，选择合适的安装包**
 
@@ -49,7 +49,7 @@ Kabegame 提供三种模式供下载，满足不同使用场景：
 |---------|------------|-----------|-----------|
 | Windows | [Kabegame-normal_3.0.2_x64-setup.exe](release/Kabegame-normal_3.0.2_x64-setup.exe) | [Kabegame-local_3.0.2_x64-setup.exe](release/Kabegame-local_3.0.2_x64-setup.exe) | [Kabegame-light_3.0.2_x64-setup.exe](release/Kabegame-light_3.0.2_x64-setup.exe) |
 | macOS | coming... | coming... | coming... |
-| Linux (Plasma) | coming... | coming... | [Kabegame-light_plasma_3.0.3_amd64.deb](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
+| Linux (Plasma) | [Kabegame-normal_plasma_3.0.3_amd64.deb](release/Kabegame-normal_plasma_3.0.3_amd64.deb)  | [Kabegame-local_plasma_3.0.3_amd64.deb](release/Kabegame-local_plasma_3.0.3_amd64.deb)  | [Kabegame-light_plasma_3.0.3_amd64.deb](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
 | Linux (GNOME) | coming... | coming... | coming... |
 
 Windows 双击运行即可（**安装和更新**）。
@@ -170,7 +170,7 @@ Kabegame 的核心竞争力在于其插件化的爬虫系统（本地导入文�
 ### Linux（Debian分发）
 运行以下命令：
 ```sh
-sudo dpkg -r Kabegame
+sudo dpkg -r kabegame
 ```
 
 ---

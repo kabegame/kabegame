@@ -198,7 +198,7 @@ export const useSettingsStore = defineStore("settings", () => {
       wallpaperRotationTransition: "transition",
       wallpaperMode: "mode",
       albumDriveEnabled: "enabled",
-      albumDriveMountPoint: "mount_point",
+      albumDriveMountPoint: "mountPoint",
     };
     return paramMap[key] || camelToSnake(key);
   };

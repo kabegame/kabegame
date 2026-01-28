@@ -87,7 +87,7 @@ const settingsStore = useSettingsStore();
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 const isLightMode = IS_LIGHT_MODE;
-const albumDriveEnabled = computed(() => IS_WINDOWS && !isLightMode && !!settingsStore.values.albumDriveEnabled);
+const albumDriveEnabled = computed(() => !isLightMode && !!settingsStore.values.albumDriveEnabled);
 const albumDriveMountPoint = computed(() => settingsStore.values.albumDriveMountPoint || "K:\\");
 
 const openVirtualDrive = async () => {

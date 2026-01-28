@@ -43,7 +43,6 @@ pub(crate) fn query_can_delete_child_file(query: &ImageQuery) -> bool {
 }
 
 pub(crate) fn query_delete_child_file(
-    storage: &Storage,
     query: &ImageQuery,
     child_name: &str,
 ) -> Result<bool, String> {
@@ -53,25 +52,24 @@ pub(crate) fn query_delete_child_file(
     let image_id = image_id_from_filename(child_name)
         .ok_or_else(|| "文件名无效".to_string())?
         .to_string();
-    let removed = storage.remove_images_from_album(album_id, &[image_id])?;
+    let removed = Storage::global().remove_images_from_album(album_id, &[image_id])?;
     Ok(removed > 0)
 }
 
 /// 在虚拟盘中创建画册子目录
-pub(crate) fn albums_create_child_dir(storage: &Storage, child_name: &str) -> Result<(), String> {
-    storage.add_album(child_name).map(|_| ())
+pub(crate) fn albums_create_child_dir(child_name: &str) -> Result<(), String> {
+    Storage::global().add_album(child_name).map(|_| ())
 }
 
 /// 在虚拟盘中将一张图片移除画册
 pub(crate) fn album_delete_child_file(
-    storage: &Storage,
     album_id: &str,
     child_name: &str,
 ) -> Result<bool, String> {
     let image_id = image_id_from_filename(child_name)
         .ok_or_else(|| "文件名无效".to_string())?
         .to_string();
-    let removed = storage.remove_images_from_album(album_id, &[image_id])?;
+    let removed = Storage::global().remove_images_from_album(album_id, &[image_id])?;
     Ok(removed > 0)
 }
 

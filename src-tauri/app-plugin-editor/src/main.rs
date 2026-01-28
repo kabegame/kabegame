@@ -581,7 +581,7 @@ fn plugin_editor_exit_app(app: tauri::AppHandle) -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 #[tauri::command]
-pub async fn read_file(path: String) -> tauri::ipc::Response {
+async fn read_file(path: String) -> tauri::ipc::Response {
   let data = tokio::fs::read(path).await.unwrap();
   tauri::ipc::Response::new(data)
 }

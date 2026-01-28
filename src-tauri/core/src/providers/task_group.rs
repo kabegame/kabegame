@@ -34,9 +34,9 @@ impl Provider for TaskGroupProvider {
         crate::providers::descriptor::ProviderDescriptor::TaskGroup
     }
 
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
         // 列出所有任务（不按“是否有图片”过滤）
-        let tasks = storage.get_tasks_with_images()?;
+        let tasks = Storage::global().get_tasks_with_images()?;
         // 这个变量可能mut，随编译目标变化
         #[allow(unused_mut)]
         let mut out: Vec<FsEntry> = tasks
@@ -72,7 +72,7 @@ impl Provider for TaskGroupProvider {
         Ok(out)
     }
 
-    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         // name 可能为 "{plugin_name_or_id} - {task_id}"
         let task_id = name
             .rsplit_once(" - ")
@@ -83,13 +83,13 @@ impl Provider for TaskGroupProvider {
             return None;
         }
         // 验证任务存在（不要求有图片）
-        if storage.get_task(task_id).ok().flatten().is_none() {
+        if Storage::global().get_task(task_id).ok().flatten().is_none() {
             return None;
         }
         Some(Arc::new(TaskImagesProvider::new(task_id.to_string())))
     }
 
-    fn resolve_child(&self, storage: &Storage, name: &str) -> ResolveChild {
+    fn resolve_child(&self, name: &str) -> ResolveChild {
         // 允许“路径直达”：
         // - VD 的 list() 里通常是 "{plugin_name} - {task_id}"
         // - 但前端（TaskDetail）会直接用纯 taskId 拼路径：`按任务/<taskId>`
@@ -103,7 +103,7 @@ impl Provider for TaskGroupProvider {
         if task_id.is_empty() {
             return ResolveChild::NotFound;
         }
-        if storage.get_task(task_id).ok().flatten().is_none() {
+        if Storage::global().get_task(task_id).ok().flatten().is_none() {
             return ResolveChild::NotFound;
         }
         let child: Arc<dyn Provider> = Arc::new(TaskImagesProvider::new(task_id.to_string()));
@@ -115,7 +115,7 @@ impl Provider for TaskGroupProvider {
     }
 
     #[cfg(not(kabegame_mode = "light"))]
-    fn resolve_file(&self, _storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
+    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
         let display_name = "这里按任务归档图片（目录名含插件名与任务ID，可删除任务目录）.txt";
         if name != display_name {
             return None;
@@ -128,7 +128,6 @@ impl Provider for TaskGroupProvider {
     #[cfg(not(kabegame_mode = "light"))]
     fn delete_child(
         &self,
-        storage: &Storage,
         child_name: &str,
         kind: DeleteChildKind,
         mode: DeleteChildMode,
@@ -148,7 +147,7 @@ impl Provider for TaskGroupProvider {
         if mode == DeleteChildMode::Check {
             return Ok(true);
         }
-        storage.delete_task(task_id)?;
+        Storage::global().delete_task(task_id)?;
         ctx.tasks_deleted(task_id);
         Ok(true)
     }
@@ -174,17 +173,17 @@ impl Provider for TaskImagesProvider {
         }
     }
 
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
-        self.inner.list(storage)
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        self.inner.list()
     }
 
-    fn get_child(&self, storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
-        self.inner.get_child(storage, name)
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        self.inner.get_child(name)
     }
 
-    fn resolve_file(&self, storage: &Storage, name: &str) -> Option<(String, PathBuf)> {
+    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
         // 关键：让虚拟盘能从“按任务\<taskId>”目录中打开文件。
-        self.inner.resolve_file(storage, name)
+        self.inner.resolve_file(name)
     }
 
     // 删除任务应由父目录（TaskGroupProvider）负责；这里不实现 delete_child。
