@@ -15,11 +15,11 @@
         "resizable": true,
         "title": "Kabegame",
         "devtools": false,
-        "transparent": false,
-        "width": 1600,
-        "height": 1200,
-        "minWidth": 1200,
-        "minHeight": 800
+        "transparent": true,
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600
       }
     ],
     "security": {
@@ -36,7 +36,7 @@
     "targets": ["nsis", "deb"],
     "icon": ["../icons/icon.png", "../icons/icon.ico"],
 
-    "resources": ["resources/plugins/*.kgpg"],
+    "resources": ["resources/bin", "resources/plugins/*.kgpg"],
     "windows": {
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh",
