@@ -51,6 +51,7 @@ Kabegame 提供三种模式供下载，满足不同使用场景：
 | macOS | coming... | coming... | coming... |
 | Linux (Plasma) | [Kabegame-normal_plasma_3.0.3_amd64.deb](release/Kabegame-normal_plasma_3.0.3_amd64.deb)  | [Kabegame-local_plasma_3.0.3_amd64.deb](release/Kabegame-local_plasma_3.0.3_amd64.deb)  | [Kabegame-light_plasma_3.0.3_amd64.deb](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
 | Linux (GNOME) | [Kabegame-normal_gnome_3.0.3_amd64.deb](release/Kabegame-normal_gnome_3.0.3_amd64.deb) | [Kabegame-local_gnome_3.0.3_amd64.deb](release/Kabegame-local_gnome_3.0.3_amd64.deb) | [Kabegame-light_gnome_3.0.3_amd64.deb](release/Kabegame-light_gnome_3.0.3_amd64.deb) |
+| Android | planing... | planing... | planing... |
 
 Windows 双击运行即可（**安装和更新**）。
 
