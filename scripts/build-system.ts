@@ -19,6 +19,7 @@ import { run } from "./utils.js";
 import { BasePlugin } from "./plugins/base-plugin.ts";
 import { Skip, SkipPlugin } from "./plugins/skip-plugin.js";
 import { ReleasePlugin } from "./plugins/release-plugin.js";
+import { AndroidPlugin } from "./plugins/android-plugin.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,6 +48,7 @@ interface BuildOptions {
   component?: string;
   mode?: string;
   desktop?: string;
+  android?: boolean;
   verbose?: boolean;
   trace?: boolean;
   skip?: string;
@@ -59,6 +61,7 @@ interface BuildContext {
   component?: Component;
   mode?: Mode;
   desktop?: Desktop;
+  isAndroid?: boolean;
   skip?: Skip;
 }
 
@@ -151,6 +154,9 @@ export class BuildSystem {
     // --release
     this.use(new ReleasePlugin());
 
+    // --android（仅 main 的 dev/build）
+    this.use(new AndroidPlugin());
+
     // --desktop
     this.use(new DesktopPlugin());
 
@@ -177,11 +183,16 @@ export class BuildSystem {
     this.commonBefore();
     this.hooks.beforeBuild.call();
     const { features } = this.hooks.prepareCompileArgs.call();
-    const args = this.buildCargoArgs(["dev"], features, this.options.args);
-    run("tauri", args, {
-      cwd: this.context.component!.appDir,
-      bin: "cargo",
-    });
+    const cwd = this.context.component!.appDir;
+    if (this.context.isAndroid) {
+      const args = ["android", "dev"]
+        .concat(features.length ? ["-f", features.join(",")] : [])
+        .concat(this.options.args?.length ? ["--", ...(this.options.args ?? [])] : []);
+      run("tauri", args, { cwd, bin: "cargo" });
+    } else {
+      const args = this.buildCargoArgs(["dev"], features, this.options.args);
+      run("tauri", args, { cwd, bin: "cargo" });
+    }
   }
 
   async start(options: BuildOptions): Promise<void> {
@@ -262,16 +273,21 @@ export class BuildSystem {
     if (this.context.component!.isMain) {
       this.hooks.beforeBuild.call(Component.MAIN);
       const { features } = this.hooks.prepareCompileArgs.call(Component.MAIN);
-      const args = this.buildCargoArgs(["build"], features, this.options.args);
+      const cwd = Component.appDir(Component.MAIN);
       if (!this.context.skip?.isVue) {
         run("nx", ["run", ".:build-main"], {
           bin: "bun",
         });
       }
-      run("tauri", args, {
-        cwd: Component.appDir(Component.MAIN),
-        bin: "cargo",
-      });
+      if (this.context.isAndroid) {
+        const args = ["android", "build"]
+          .concat(features.length ? ["-f", features.join(",")] : [])
+          .concat(this.options.args?.length ? ["--", ...(this.options.args ?? [])] : []);
+        run("tauri", args, { cwd, bin: "cargo" });
+      } else {
+        const args = this.buildCargoArgs(["build"], features, this.options.args);
+        run("tauri", args, { cwd, bin: "cargo" });
+      }
       await this.hooks.afterBuild.promise(Component.MAIN);
     }
   }

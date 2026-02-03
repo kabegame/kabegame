@@ -3,6 +3,7 @@
 //! 目标：
 //! - Windows 下不要通过 `cmd.exe /C start`（会弹黑框）。
 //! - 尽量使用系统级 API（Windows: ShellExecuteW）来交给默认程序处理。
+//! - Android 需通过 Intent 打开，当前为占位实现（返回 Err），可后续用 tauri-plugin-opener 或 JNI/Intent 实现。
 
 #[cfg(target_os = "windows")]
 fn normalize_windows_path_for_shell(path: &str) -> String {
@@ -65,6 +66,13 @@ pub fn open_path(path: &str) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to open path: {}", e))?;
         return Ok(());
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        // Android 需通过 Intent (ACTION_VIEW) 打开，可由 tauri-plugin-opener 或 Kotlin/Java 侧实现后调用。
+        let _ = path;
+        Err("Android 上暂不支持通过默认程序打开路径，可后续接入 Intent 或 opener 插件".to_string())
     }
 }
 
@@ -133,6 +141,13 @@ pub fn open_explorer(path: &str) -> Result<(), String> {
             .map_err(|e| format!("打开文件管理器失败: {}", e))?;
         Ok(())
     }
+
+    #[cfg(target_os = "android")]
+    {
+        // Android 可用 Intent(Intent.ACTION_VIEW) + Uri 打开文件管理器或目录，需在 Kotlin 侧或插件中实现。
+        let _ = p;
+        Err("Android 上暂不支持在文件管理器中打开目录".to_string())
+    }
 }
 
 /// 以管理员权限（UAC）启动一个程序（Windows 专用）。
@@ -177,7 +192,7 @@ pub fn runas(exe_path: &str, params: &str) -> Result<(), String> {
         Ok(())
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(any(not(target_os = "windows"), target_os = "android"))]
     {
         let _ = (exe_path, params);
         Err("runas 仅支持 Windows".to_string())
@@ -240,5 +255,12 @@ pub fn reveal_in_folder(file_path: &str) -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
         return Ok(());
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        // Android 可用 Intent(Intent.ACTION_VIEW) 指向文件父目录，或通过 Storage Access Framework 实现。
+        let _ = file_path;
+        Err("Android 上暂不支持在文件夹中定位文件".to_string())
     }
 }

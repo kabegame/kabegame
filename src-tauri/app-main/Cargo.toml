@@ -3,6 +3,11 @@ edition = {workspace = true}
 name = "kabegame"
 version = {workspace = true}
 
+[lib]
+name = "kabegame"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 async-trait = "0.1"
 base64 = {workspace = true}

@@ -1,11 +1,11 @@
-﻿//! Settings 蜻ｽ莉､螟・炊蝎ｨ
+//! Settings 蜻ｽ莉､螟・炊蝎ｨ
 
 use crate::Store;
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 use std::sync::Arc;
 
@@ -54,9 +54,9 @@ pub async fn handle_settings_request(
             Some(get_current_wallpaper_image_id().await)
         }
         CliIpcRequest::SettingsGetDefaultImagesDir => Some(get_default_images_dir().await),
-        #[cfg(not(kabegame_mode = "light"))]
+        #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
         CliIpcRequest::SettingsGetAlbumDriveEnabled => Some(get_album_drive_enabled().await),
-        #[cfg(not(kabegame_mode = "light"))]
+        #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
         CliIpcRequest::SettingsGetAlbumDriveMountPoint => Some(get_album_drive_mount_point().await),
 
         CliIpcRequest::SettingsSetGalleryImageAspectRatio { aspect_ratio } => {
@@ -83,11 +83,11 @@ pub async fn handle_settings_request(
         CliIpcRequest::SettingsSetWallpaperMode { mode } => {
             Some(set_wallpaper_mode(mode.clone()).await)
         }
-        #[cfg(not(kabegame_mode = "light"))]
+        #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
         CliIpcRequest::SettingsSetAlbumDriveEnabled { enabled } => {
             Some(set_album_drive_enabled(*enabled, ctx.clone()).await)
         }
-        #[cfg(not(kabegame_mode = "light"))]
+        #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
         CliIpcRequest::SettingsSetAlbumDriveMountPoint { mount_point } => {
             Some(set_album_drive_mount_point(mount_point.clone()).await)
         }
@@ -188,7 +188,7 @@ async fn set_wallpaper_mode(mode: String) -> CliIpcResponse {
     }
 }
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 async fn set_album_drive_enabled(enabled: bool, ctx: Arc<Store>) -> CliIpcResponse {
     let settings = Settings::global();
 
@@ -280,7 +280,7 @@ async fn set_album_drive_enabled(enabled: bool, ctx: Arc<Store>) -> CliIpcRespon
     }
 }
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 async fn set_album_drive_mount_point(mount_point: String) -> CliIpcResponse {
     let settings = Settings::global();
     match settings.set_album_drive_mount_point(mount_point).await {
@@ -572,7 +572,7 @@ async fn get_default_images_dir() -> CliIpcResponse {
     CliIpcResponse::ok_with_data("ok", serde_json::json!(dir_str))
 }
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 async fn get_album_drive_enabled() -> CliIpcResponse {
     let settings = Settings::global();
     match settings.get_album_drive_enabled().await {
@@ -581,7 +581,7 @@ async fn get_album_drive_enabled() -> CliIpcResponse {
     }
 }
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 async fn get_album_drive_mount_point() -> CliIpcResponse {
     let settings = Settings::global();
     match settings.get_album_drive_mount_point().await {

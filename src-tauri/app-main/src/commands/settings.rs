@@ -1,9 +1,9 @@
 // Settings related commands
 
 use kabegame_core::settings::Settings;
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
@@ -157,7 +157,7 @@ pub async fn get_window_state() -> Result<Option<serde_json::Value>, String> {
     Ok(serde_json::to_value(window_state).ok())
 }
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 #[tauri::command]
 pub async fn get_album_drive_enabled() -> Result<bool, String> {
     Settings::global()
@@ -166,7 +166,7 @@ pub async fn get_album_drive_enabled() -> Result<bool, String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 #[tauri::command]
 pub async fn get_album_drive_mount_point() -> Result<String, String> {
     Settings::global()
@@ -181,7 +181,7 @@ pub fn get_favorite_album_id() -> Result<String, String> {
 }
 
 #[tauri::command]
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
     let settings = Settings::global();
 
@@ -222,7 +222,7 @@ pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
 }
 
 #[tauri::command]
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 pub async fn set_album_drive_mount_point(mount_point: String) -> Result<(), String> {
     Settings::global()
         .set_album_drive_mount_point(mount_point)

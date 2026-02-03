@@ -794,7 +794,7 @@ impl WallpaperManager for NativeWallpaperManager {
     /// - Plasma 原生壁纸（--desktop plasma 编译期开关）下：通过 qdbus 写 FillMode，并尽量对当前壁纸立即生效
     /// - GNOME 原生壁纸（--desktop gnome 编译期开关）下：通过 gsettings 写 picture-options，并尽量对当前壁纸立即生效
     #[cfg(all(target_os = "linux"))]
-    async fn set_style(&self, style: &str, _immediate: bool) -> Result<(), String> {
+    async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
         #[cfg(desktop = "plasma")]
         {
             if let Some(path) = self.current_wallpaper_path_from_settings().await {
@@ -863,8 +863,7 @@ impl WallpaperManager for NativeWallpaperManager {
 
         #[cfg(not(any(desktop = "plasma", desktop = "gnome")))]
         {
-            let _ = style;
-            let _ = immediate;
+            let _ = (style, immediate);
             Ok(())
         }
     }

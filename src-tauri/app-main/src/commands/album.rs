@@ -3,9 +3,9 @@
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use serde_json::json;
 use tauri::AppHandle;
@@ -31,7 +31,7 @@ pub async fn delete_album(_app: AppHandle, album_id: String) -> Result<(), Strin
             Settings::global().set_wallpaper_rotation_album_id(None).await?;
         }
     }
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VirtualDriveService::global().bump_albums();
     Ok(())
 }
@@ -43,7 +43,7 @@ pub async fn rename_album(
     new_name: String,
 ) -> Result<(), String> {
     Storage::global().rename_album(&album_id, &new_name)?;
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VirtualDriveService::global().bump_albums();
     Ok(())
 }
@@ -55,7 +55,7 @@ pub async fn add_images_to_album(
     image_ids: Vec<String>,
 ) -> Result<serde_json::Value, String> {
     let r = Storage::global().add_images_to_album(&album_id, &image_ids)?;
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
 
     GlobalEmitter::global().emit(
@@ -77,7 +77,7 @@ pub async fn remove_images_from_album(
     image_ids: Vec<String>,
 ) -> Result<usize, String> {
     let removed = Storage::global().remove_images_from_album(&album_id, &image_ids)?;
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
 
     GlobalEmitter::global().emit(

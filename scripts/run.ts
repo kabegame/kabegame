@@ -26,6 +26,7 @@ interface BuildOptions {
   component?: string;
   mode?: string;
   desktop?: string;
+  android?: boolean;
   verbose?: boolean;
   trace?: boolean;
   skip?: string;
@@ -81,6 +82,7 @@ program
     "--desktop <desktop>",
     "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）",
   )
+  .option("--android", "开发 Android 目标（仅 main，使用底部 Tab 布局等）")
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", true)
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {
@@ -136,6 +138,7 @@ program
     "--desktop <desktop>",
     "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）",
   )
+  .option("--android", "构建 Android 目标（仅 main，产出 APK/AAB）")
   .option(
     "--release",
     "构建完成后复制安装包到 release/ 目录，只有构建main获取全量的情况下才可用",

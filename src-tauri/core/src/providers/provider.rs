@@ -1,4 +1,4 @@
-﻿//! 虚拟文件系统 Provider trait 和相关类型（核心可复用部分）。
+//! 虚拟文件系统 Provider trait 和相关类型（核心可复用部分）。
 //!
 //! 设计原则：
 //! - Provider 对路径完全无感知
@@ -133,13 +133,13 @@ pub trait Provider: Send + Sync {
     // - 因此它们只在 Windows + virtual-driver feature 下编译，避免把 VD 语义带到 core 的常规构建中。
 
     /// 是否支持在当前目录下创建子目录（mkdir）
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn can_create_child_dir(&self) -> bool {
         false
     }
 
     /// 在当前目录下创建子目录（mkdir）
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn create_child_dir(
         &self,
         _child_name: &str,
@@ -154,7 +154,7 @@ pub trait Provider: Send + Sync {
     /// - **只有一个函数**：VD 不再通过 can_* 进行预判。
     /// - 通过 `mode` 支持 Dokan 的“两阶段”删除：先 Check(允许/拒绝)，后 Commit(真正删除)。
     /// - 返回 `bool` 表示是否实际发生删除（Commit 时才有意义；Check 可返回 true 表示允许）。
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn delete_child(
         &self,
         _child_name: &str,
@@ -171,7 +171,7 @@ pub trait Provider: Send + Sync {
 /// 设计原则：
 /// - providers 只依赖该 trait，不直接依赖 dokan/tauri/windows 实现细节。
 /// - 虚拟盘 handler（Windows Dokan）提供具体实现，把“刷新/事件/缓存失效”落到这里。
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 pub trait VdOpsContext {
     fn albums_created(&self, album_name: &str);
     fn albums_deleted(&self, album_name: &str);
@@ -180,7 +180,7 @@ pub trait VdOpsContext {
 }
 
 /// delete_child 的 child 类型（文件/目录）
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeleteChildKind {
     File,
@@ -188,7 +188,7 @@ pub enum DeleteChildKind {
 }
 
 /// delete_child 的模式：Check 仅用于允许/拒绝；Commit 才真正修改数据
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeleteChildMode {
     Check,
@@ -196,7 +196,7 @@ pub enum DeleteChildMode {
 }
 
 /// 路径解析结果（给 virtual_driver 使用）
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 pub enum ResolveResult {
     /// 路径指向一个目录
     Directory(Arc<dyn Provider>),

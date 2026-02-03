@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// - `Generic` 事件中的 `albums-changed` → `bump_albums()`
 /// - `Generic` 事件中的 `tasks-changed` → `bump_tasks()`
 /// - `Generic` 事件中的 `images-change` → 根据 payload 处理
-#[cfg(all(not(kabegame_mode = "light"), target_os = "windows"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android"), target_os = "windows"))]
 pub async fn start_vd_event_listener(
     vd_service: Arc<VirtualDriveService>,
 ) {

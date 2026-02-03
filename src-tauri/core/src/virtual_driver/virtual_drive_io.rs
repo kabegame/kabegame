@@ -4,7 +4,7 @@
 //! - Windows: 使用内存映射优化（virtual_drive_io_windows.rs）
 //! - Linux: 使用普通文件读取（virtual_drive_io_linux.rs）
 
-#![cfg(not(kabegame_mode = "light"))]
+#![cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 
 #[cfg(target_os = "windows")]
 #[path = "virtual_drive_io_windows.rs"]

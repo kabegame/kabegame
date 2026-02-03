@@ -14,7 +14,7 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use crate::commands;
 use crate::commands::wallpaper::init_wallpaper_on_startup;
  #[cfg(any(
-    not(kabegame_mode = "light"), 
+    all(not(kabegame_mode = "light"), not(target_os = "android")), 
     all(kabegame_mode = "light", not(target_os = "windows"))
 ))]
 use crate::ipc::Store;
@@ -207,7 +207,7 @@ pub fn start_local_event_loop(app: AppHandle) {
 
 /// 启动 IPC 服务
  #[cfg(any(
-    not(kabegame_mode = "light"), 
+    all(not(kabegame_mode = "light"), not(target_os = "android")), 
     all(kabegame_mode = "light", not(target_os = "windows"))
 ))]
 pub fn start_ipc_server(ctx: Arc<Store>) {
