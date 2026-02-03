@@ -345,6 +345,7 @@ pub fn wallpaper_window_ready(_app: tauri::AppHandle) -> Result<(), String> {
 
 /// 切换主窗口全屏状态
 #[tauri::command]
+#[cfg(not(target_os = "android"))]
 pub async fn toggle_fullscreen(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
 

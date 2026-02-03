@@ -117,6 +117,12 @@ export class ComponentPlugin extends BasePlugin {
 
     bs.hooks.prepareEnv.tap(this.name, () => {
       this.setEnv("KABEGAME_COMPONENT", this.component?.comp || "");
+      if (bs.context.cmd!.isDev && this.component && !this.component.isCli) {
+        this.setEnv(
+          "TAURI_CLI_WATCHER_IGNORE_FILENAME",
+          `${this.component.comp}.taurignore`,
+        );
+      }
     });
 
     if (bs.context.cmd!.isBuild) {

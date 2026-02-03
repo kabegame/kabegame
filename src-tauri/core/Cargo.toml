@@ -26,15 +26,22 @@ serde_json = {workspace = true}
 sha2 = {workspace = true}
 sled = "0.34"
 tokio = {workspace = true}
-unrar = "0.5.8"
 url = {workspace = true}
 uuid = {workspace = true}
 zip = {workspace = true}
+
+# unrar 的 C++ 代码使用 lutimes，Android NDK 不支持，仅非 Android 启用
+[target.'cfg(not(target_os = "android"))'.dependencies]
+unrar = "0.5.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 which = {version = "6.0", optional = true}
 fuser = "0.16"
 libc = "0.2"
+
+# Android 交叉编译时无系统 OpenSSL，使用 vendored 从源码编译
+[target.'cfg(target_os = "android")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(windows)'.dependencies]
 dokan = "0.3.1"

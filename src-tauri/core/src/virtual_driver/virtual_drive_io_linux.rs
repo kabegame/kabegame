@@ -4,7 +4,7 @@
 //! - 仅提供"按 offset 读取"能力（read_at），供 FUSE handler 使用。
 //! - Linux 版本直接使用文件读取，不使用内存映射优化。
 
-#![cfg(all(not(kabegame_mode = "light"), target_os = "linux"))]
+#![cfg(all(not(kabegame_mode = "light"), not(target_os = "android"), target_os = "linux"))]
 
 use std::{
     fs::File,

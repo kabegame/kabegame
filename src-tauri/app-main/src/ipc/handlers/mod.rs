@@ -1,4 +1,4 @@
-﻿//! 命令处理器模块
+//! 命令处理器模块
 //!
 //! 将不同类型的 IPC 请求分发到对应的处理器
 
@@ -16,14 +16,14 @@ use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::tasks::TaskInfo;
 use kabegame_core::storage::Storage;
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::{Arc, OnceLock};
 
 /// 全局状态
 pub struct Store {
     pub dedupe_service: Arc<DedupeService>,
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     pub virtual_drive_service: Arc<VirtualDriveService>,
 }
 
@@ -114,7 +114,7 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResp
     if let Some(resp) = gallery::handle_gallery_request(&req).await {
         return resp;
     }
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     {
         if matches!(req, CliIpcRequest::VdMount) {
             return handle_vd_mount(ctx).await;
@@ -413,17 +413,17 @@ fn handle_status() -> CliIpcResponse {
             "settings": true,
             "events": true,
             "pluginRun": false,  // 暂未实现
-            "virtualDrive": cfg!(not(kabegame_mode = "light"))
+            "virtualDrive": cfg!(all(not(kabegame_mode = "light"), not(target_os = "android")))
         }
     }));
     resp
 }
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
-    if !cfg!(all(not(kabegame_mode = "light"), target_os = "windows")) {
+    if !cfg!(all(not(kabegame_mode = "light"), not(target_os = "android"), target_os = "windows")) {
         return CliIpcResponse::err("Virtual drive is not available".to_string());
     }
 
@@ -465,11 +465,11 @@ async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
     }
 }
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 async fn handle_vd_unmount(ctx: Arc<Store>) -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
-    if !cfg!(all(not(kabegame_mode = "light"), target_os = "windows")) {
+    if !cfg!(all(not(kabegame_mode = "light"), not(target_os = "android"), target_os = "windows")) {
         return CliIpcResponse::err("Virtual drive is not available".to_string());
     }
 
@@ -509,8 +509,9 @@ async fn handle_vd_unmount(ctx: Arc<Store>) -> CliIpcResponse {
     }
 }
 
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 async fn handle_vd_status(_ctx: Arc<Store>) -> CliIpcResponse {
-    let enabled = cfg!(all(not(kabegame_mode = "light"), target_os = "windows"));
+    let enabled = cfg!(all(not(kabegame_mode = "light"), not(target_os = "android"), target_os = "windows"));
     let mut resp = CliIpcResponse::ok("ok");
     resp.info = Some(serde_json::json!({
         "status": if enabled { "ready" } else { "disabled" },

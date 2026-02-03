@@ -20,7 +20,7 @@ use crate::{
     storage::Storage,
 };
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
 
 #[derive(Debug, Clone)]

@@ -27,7 +27,7 @@ pub mod windows_effects;
 /// 虚拟盘（Windows Dokan）。
 ///
 /// 注意：该模块仅在启用 feature `virtual-driver` 时编译，避免在不需要 VD 的 app（如 plugin-editor）里引入 Dokan 相关依赖。
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 pub mod virtual_driver;
 
 const BUILD_MODE: &str = env!("KABEGAME_BUILD_MODE"); // injected by build.rs

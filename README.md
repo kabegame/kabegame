@@ -353,7 +353,8 @@ bun check -c plugin-editor --skip vue  # 仅检查 cargo
 │   ├── images/           # 文档图片
 │   ├── README_PLUGIN_DEV.md
 │   ├── PLUGIN_FORMAT.md
-│   └── RHAI_API.md
+│   ├── RHAI_API.md
+│   └── CRAWLER_WEBVIEW_DESIGN.md  # 爬虫 WebView 架构设计（规划中）
 ├── static/               # 静态资源
 ├── nx.json               # Nx 工作区配置
 ├── project.json          # 根项目配置
@@ -367,6 +368,7 @@ bun check -c plugin-editor --skip vue  # 仅检查 cargo
 - [插件开发指南](docs/README_PLUGIN_DEV.md)
 - [插件文件格式](docs/PLUGIN_FORMAT.md)
 - [Rhai API 文档](docs/RHAI_API.md)
+- [爬虫 WebView 架构设计](docs/CRAWLER_WEBVIEW_DESIGN.md)（规划中）
 
 ## License
 

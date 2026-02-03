@@ -6,8 +6,8 @@
       "name": "kabegame",
       "dependencies": {
         "@element-plus/icons-vue": "^2.3.1",
-        "@tauri-apps/api": "^2.0",
-        "@tauri-apps/plugin-dialog": "2.4.2",
+        "@tauri-apps/api": "^2.10",
+        "@tauri-apps/plugin-dialog": "^2.0",
         "@tauri-apps/plugin-fs": "^2.0",
         "@tauri-apps/plugin-shell": "^2.0",
         "@vueuse/core": "^14.1.0",
@@ -43,7 +43,7 @@
     "apps/cli": {
       "name": "@kabegame/app-cli-frontend",
       "dependencies": {
-        "@tauri-apps/api": "^2.0",
+        "@tauri-apps/api": "^2.10",
         "element-plus": "^2.5.14",
         "vue": "^3.4.21",
       },
@@ -61,8 +61,8 @@
       "dependencies": {
         "@element-plus/icons-vue": "^2.3.1",
         "@kabegame/core": "workspace:*",
-        "@tauri-apps/api": "^2.0",
-        "@tauri-apps/plugin-dialog": "2.4.2",
+        "@tauri-apps/api": "^2.10",
+        "@tauri-apps/plugin-dialog": "^2.0",
         "@tauri-apps/plugin-fs": "^2.0",
         "@tauri-apps/plugin-shell": "^2.0",
         "@vueuse/core": "^14.1.0",
@@ -115,7 +115,7 @@
     },
     "packages/core": {
       "name": "@kabegame/core",
-      "version": "3.0.2",
+      "version": "3.0.3",
     },
     "src-crawler-plugins": {
       "name": "crawler-plugins",
@@ -394,7 +394,7 @@
 
     "@sinclair/typebox": ["@sinclair/typebox@0.27.8", "", {}, "sha512-+Fj43pSMwJs4KRrH/938Uf+uAELIgVBmQzg/q1YG10djyfA3TnrU8N8XzqCh/okZdszqBQTZf96idMfE5lnwTA=="],
 
-    "@tauri-apps/api": ["@tauri-apps/api@2.9.1", "", {}, "sha512-IGlhP6EivjXHepbBic618GOmiWe4URJiIeZFlB7x3czM0yDHHYviH1Xvoiv4FefdkQtn6v7TuwWCRfOGdnVUGw=="],
+    "@tauri-apps/api": ["@tauri-apps/api@2.10.1", "", {}, "sha512-hKL/jWf293UDSUN09rR69hrToyIXBb8CjGaWC7gfinvnQrBVvnLr08FeFi38gxtugAVyVcTa5/FD/Xnkb1siBw=="],
 
     "@tauri-apps/plugin-dialog": ["@tauri-apps/plugin-dialog@2.4.2", "", { "dependencies": { "@tauri-apps/api": "2.9.1" } }, "sha512-lNIn5CZuw8WZOn8zHzmFmDSzg5zfohWoa3mdULP0YFh/VogVdMVWZPcWSHlydsiJhRQYaTNSYKN7RmZKE2lCYQ=="],
 
@@ -1058,7 +1058,15 @@
 
     "@isaacs/cliui/wrap-ansi": ["wrap-ansi@8.1.0", "", { "dependencies": { "ansi-styles": "6.2.3", "string-width": "5.1.2", "strip-ansi": "7.1.2" } }, "sha512-si7QWI6zUMq56bESFvagtmzMdGOtoxfR+Sez11Mobfc7tm+VkUckk9bW2UeffTGVUbOksxmSw0AA2gs8g71NCQ=="],
 
+    "@kabegame/app-plugin-editor-frontend/@tauri-apps/api": ["@tauri-apps/api@2.9.1", "", {}, "sha512-IGlhP6EivjXHepbBic618GOmiWe4URJiIeZFlB7x3czM0yDHHYviH1Xvoiv4FefdkQtn6v7TuwWCRfOGdnVUGw=="],
+
     "@parcel/watcher/detect-libc": ["detect-libc@1.0.3", "", { "bin": { "detect-libc": "./bin/detect-libc.js" } }, "sha512-pGjwhsmsp4kL2RTz08wcOlGN83otlqHeD/Z5T8GXZB+/YcpQ/dgo+lbU8ZsGxV0HIvqqxo9l7mqYwyYMD9bKDg=="],
+
+    "@tauri-apps/plugin-dialog/@tauri-apps/api": ["@tauri-apps/api@2.9.1", "", {}, "sha512-IGlhP6EivjXHepbBic618GOmiWe4URJiIeZFlB7x3czM0yDHHYviH1Xvoiv4FefdkQtn6v7TuwWCRfOGdnVUGw=="],
+
+    "@tauri-apps/plugin-fs/@tauri-apps/api": ["@tauri-apps/api@2.9.1", "", {}, "sha512-IGlhP6EivjXHepbBic618GOmiWe4URJiIeZFlB7x3czM0yDHHYviH1Xvoiv4FefdkQtn6v7TuwWCRfOGdnVUGw=="],
+
+    "@tauri-apps/plugin-shell/@tauri-apps/api": ["@tauri-apps/api@2.9.1", "", {}, "sha512-IGlhP6EivjXHepbBic618GOmiWe4URJiIeZFlB7x3czM0yDHHYviH1Xvoiv4FefdkQtn6v7TuwWCRfOGdnVUGw=="],
 
     "@unocss/cli/chokidar": ["chokidar@5.0.0", "", { "dependencies": { "readdirp": "^5.0.0" } }, "sha512-TQMmc3w+5AxjpL8iIiwebF73dRDF4fBIieAqGn9RGCWaEVwQ6Fb2cGe31Yns0RRIzii5goJ1Y7xbMwo1TxMplw=="],
 

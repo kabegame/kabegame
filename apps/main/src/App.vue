@@ -1,6 +1,6 @@
 <template>
   <!-- 主窗口 -->
-  <el-container class="app-container">
+  <el-container class="app-container" :class="{ 'app-container-android': IS_ANDROID }">
     <!-- 全局文件拖拽提示层 -->
     <FileDropOverlay ref="fileDropOverlayRef" @click="handleOverlayClick" />
     <!-- 文件拖拽导入确认弹窗（封装 ElMessageBox.confirm） -->
@@ -11,46 +11,49 @@
     <HelpDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
     <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
-    <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': IS_WINDOWS, 'bg-white': !IS_WINDOWS }" :width="isCollapsed ? '64px' : '200px'">
-      <div class="sidebar-header">
-        <img src="/icon.png" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
-        <div v-if="!isCollapsed" class="sidebar-title-section">
-          <h1>Kabegame</h1>
+    <!-- 非 Android：侧边栏 + 主内容 -->
+    <template v-if="!IS_ANDROID">
+      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': IS_WINDOWS, 'bg-white': !IS_WINDOWS }" :width="isCollapsed ? '64px' : '200px'">
+        <div class="sidebar-header">
+          <img src="/icon.png" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
+          <div v-if="!isCollapsed" class="sidebar-title-section">
+            <h1>Kabegame</h1>
+          </div>
         </div>
-      </div>
-      <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
-        <el-menu-item :index="galleryMenuRoute">
-          <el-icon>
-            <Picture />
-          </el-icon>
-          <span>画廊</span>
-        </el-menu-item>
-        <el-menu-item index="/albums">
-          <el-icon>
-            <Collection />
-          </el-icon>
-          <span>画册</span>
-        </el-menu-item>
-        <el-menu-item index="/plugin-browser">
-          <el-icon>
-            <Grid />
-          </el-icon>
-          <span>收集源</span>
-        </el-menu-item>
-        <el-menu-item index="/settings">
-          <el-icon>
-            <Setting />
-          </el-icon>
-          <span>设置</span>
-        </el-menu-item>
-        <el-menu-item index="/help">
-          <el-icon>
-            <QuestionFilled />
-          </el-icon>
-          <span>帮助</span>
-        </el-menu-item>
-      </el-menu>
-    </el-aside>
+        <el-menu :default-active="activeRoute" router class="sidebar-menu" :collapse="isCollapsed">
+          <el-menu-item :index="galleryMenuRoute">
+            <el-icon>
+              <Picture />
+            </el-icon>
+            <span>画廊</span>
+          </el-menu-item>
+          <el-menu-item index="/albums">
+            <el-icon>
+              <Collection />
+            </el-icon>
+            <span>画册</span>
+          </el-menu-item>
+          <el-menu-item index="/plugin-browser">
+            <el-icon>
+              <Grid />
+            </el-icon>
+            <span>收集源</span>
+          </el-menu-item>
+          <el-menu-item index="/settings">
+            <el-icon>
+              <Setting />
+            </el-icon>
+            <span>设置</span>
+          </el-menu-item>
+          <el-menu-item index="/help">
+            <el-icon>
+              <QuestionFilled />
+            </el-icon>
+            <span>帮助</span>
+          </el-menu-item>
+        </el-menu>
+      </el-aside>
+    </template>
     <el-main class="app-main">
       <router-view v-slot="{ Component }" :key="routerViewKey">
         <keep-alive>
@@ -58,11 +61,26 @@
         </keep-alive>
       </router-view>
     </el-main>
+    <!-- Android：底部均匀分布的 Tab 栏 -->
+    <nav v-if="IS_ANDROID" class="app-bottom-tabs" aria-label="主导航">
+      <router-link
+        v-for="tab in bottomTabs"
+        :key="tab.index"
+        :to="tab.index"
+        class="bottom-tab-item"
+        :class="{ 'is-active': activeRoute === tab.index }"
+      >
+        <el-icon class="bottom-tab-icon">
+          <component :is="tab.icon" />
+        </el-icon>
+        <span class="bottom-tab-label">{{ tab.label }}</span>
+      </router-link>
+    </nav>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { Picture, Grid, Setting, Collection, QuestionFilled } from "@element-plus/icons-vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
@@ -77,11 +95,19 @@ import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
 import { useSidebar } from "./composables/useSidebar";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { IS_WINDOWS } from "@kabegame/core/env";
-
+import { IS_WINDOWS, IS_ANDROID } from "@kabegame/core/env";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
+
+// Android 底部 Tab 配置（均匀分布，与侧边栏菜单项一致）
+const bottomTabs = computed(() => [
+  { index: galleryMenuRoute.value, icon: Picture, label: "画廊" },
+  { index: "/albums", icon: Collection, label: "画册" },
+  { index: "/plugin-browser", icon: Grid, label: "收集源" },
+  { index: "/settings", icon: Setting, label: "设置" },
+  { index: "/help", icon: QuestionFilled, label: "帮助" },
+]);
 
 // 任务抽屉 store
 const taskDrawerStore = useTaskDrawerStore();
@@ -176,6 +202,59 @@ body,
   display: flex;
   // 让窗口透明层透出（DWM blur behind 只在透明像素处可见）
   background: transparent;
+
+  &.app-container-android {
+    flex-direction: column;
+  }
+}
+
+// Android 底部 Tab 栏：均匀分布
+.app-bottom-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  border-top: 2px solid var(--anime-border);
+  background: var(--anime-bg-card);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  box-shadow: 0 -4px 20px rgba(255, 107, 157, 0.08);
+
+  .bottom-tab-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 4px;
+    min-width: 0;
+    color: var(--anime-text-secondary);
+    text-decoration: none;
+    transition: color 0.2s ease, background 0.2s ease;
+
+    &:active {
+      background: rgba(255, 107, 157, 0.08);
+    }
+
+    &.is-active {
+      color: var(--anime-primary);
+      background: linear-gradient(180deg, rgba(255, 107, 157, 0.12) 0%, rgba(167, 139, 250, 0.08) 100%);
+    }
+  }
+
+  .bottom-tab-icon {
+    font-size: 22px;
+    flex-shrink: 0;
+  }
+
+  .bottom-tab-label {
+    font-size: 11px;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
 }
 
 .app-sidebar {

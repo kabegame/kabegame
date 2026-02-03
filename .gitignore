@@ -26,7 +26,7 @@ dist-*
 # Tauri
 target
 src-tauri/app-main/resources/plugins/*.kgpg
-src-tauri/*/gen/*
+src-tauri/*/gen/schemas/*
 src-tauri/app-main/resources/bin/*
 !src-tauri/app-main/resources/bin/.gitkeep
 
