@@ -1,6 +1,5 @@
 import { BuildSystem } from "../build-system.js";
 import { BasePlugin } from "./base-plugin.js";
-import { resolve } from "path";
 
 export class Cmd {
   static readonly DEV = "dev";
@@ -46,18 +45,8 @@ export class CmdPlugin extends BasePlugin {
 
   apply(bs: BuildSystem): void {
     bs.hooks.prepareEnv.tap(this.name, () => {
-      switch (true) {
-        case this.cmd.isBuild: {
-          this.addRustFlags("-Awarnings");
-          break;
-        }
-        case this.cmd.isDev: {
-          this.setEnv(
-            "TAURI_DEV_WATCHER_IGNORE_FILE",
-            resolve(bs.context.component!.appDir, ".taurignore"),
-          );
-          break;
-        }
+      if (this.cmd.isBuild) {
+        this.addRustFlags("-Awarnings");
       }
     });
     bs.context.cmd = this.cmd;

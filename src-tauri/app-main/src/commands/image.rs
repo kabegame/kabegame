@@ -4,9 +4,9 @@ use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::providers::ProviderRuntime;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::{Storage, FAVORITE_ALBUM_ID};
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use serde_json::json;
 use tauri::AppHandle;
@@ -152,7 +152,7 @@ pub async fn toggle_image_favorite(
 ) -> Result<(), String> {
     Storage::global().toggle_image_favorite(&image_id, favorite)?;
 
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VirtualDriveService::global().notify_album_dir_changed(FAVORITE_ALBUM_ID);
     Ok(())
 }

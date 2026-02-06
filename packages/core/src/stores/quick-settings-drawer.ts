@@ -15,7 +15,7 @@ export type QuickSettingsDrawerStoreOptions<PageId extends string> = {
 /**
  * QuickSettingsDrawer 的共用 store 工厂
  *
- * - 之所以做成工厂：main / plugin-editor 的 pageId 枚举不同，且 storeId 也不同
+ * - 之所以做成工厂：各 app 的 pageId 枚举不同，且 storeId 也不同
  * - 通过 options 保持每个 app 的 storeId 与默认页不变
  */
 export function createQuickSettingsDrawerStore<PageId extends string>(

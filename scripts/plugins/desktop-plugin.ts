@@ -39,7 +39,7 @@ export class DesktopPlugin extends BasePlugin {
       return;
     }
     bs.hooks.parseParams.tap(this.name, () => {
-      if (!bs.context.component!.isMain) {
+      if (!bs.context.component!.isMain || bs.context.isAndroid) {
         return;
       }
       const desktop = bs.options.desktop;
@@ -54,7 +54,7 @@ export class DesktopPlugin extends BasePlugin {
     });
 
     bs.hooks.prepareEnv.tap(this.name, () => {
-      if (!bs.context.component!.isMain) {
+      if (!bs.context.component!.isMain || bs.context.isAndroid) {
         return;
       }
       this.setEnv("VITE_DESKTOP", bs.context.desktop!.desktop);

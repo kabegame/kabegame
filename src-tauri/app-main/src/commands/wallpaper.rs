@@ -186,12 +186,21 @@ pub async fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String>
 #[tauri::command]
 pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), String> {
     if album_id != "" {
-        if Storage::global().get_album_image_ids(&album_id).unwrap().len() == 0 {
-            return Err(String::from("该画册没有画哟，先去画廊添加进去吧！"))
+        if Storage::global()
+            .get_album_image_ids(&album_id)
+            .unwrap()
+            .len()
+            == 0
+        {
+            return Err(String::from("该画册没有画哟，先去画廊添加进去吧！"));
         }
     }
-    let normalized: Option<String> = if album_id.clone() == "" { None } else { Some(album_id) };
-    
+    let normalized: Option<String> = if album_id.clone() == "" {
+        None
+    } else {
+        Some(album_id)
+    };
+
     Settings::global()
         .set_wallpaper_rotation_album_id(normalized.clone())
         .await
@@ -619,7 +628,7 @@ pub fn get_native_wallpaper_styles() -> Result<Vec<String>, String> {
 
     #[cfg(target_os = "macos")]
     {
-        Ok(vec!["fill".to_string(), "center".to_string()])
+        Ok(vec![])
     }
 
     #[cfg(target_os = "linux")]

@@ -34,6 +34,8 @@ interface ImportPreview {
     alreadyExists: boolean;
     existingVersion?: string | null;
     changeLogDiff?: string | null;
+    canInstall?: boolean;
+    installError?: string | null;
 }
 
 interface StoreInstallPreview {
@@ -203,6 +205,13 @@ const handleInstall = async () => {
                 sha256: sha256.value ?? null,
                 sizeBytes: sizeBytes.value ?? null,
             });
+            
+            // 检查是否允许安装
+            if (res.preview.canInstall === false) {
+                ElMessage.warning(res.preview.installError || "该插件不允许安装");
+                return;
+            }
+            
             await invoke("import_plugin_from_zip", { zipPath: res.tmpPath });
             ElMessage.success("安装成功");
         } else {

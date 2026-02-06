@@ -19,6 +19,7 @@ import { run } from "./utils.js";
 import { BasePlugin } from "./plugins/base-plugin.ts";
 import { Skip, SkipPlugin } from "./plugins/skip-plugin.js";
 import { ReleasePlugin } from "./plugins/release-plugin.js";
+import { AndroidPlugin } from "./plugins/android-plugin.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,6 +48,7 @@ interface BuildOptions {
   component?: string;
   mode?: string;
   desktop?: string;
+  android?: boolean;
   verbose?: boolean;
   trace?: boolean;
   skip?: string;
@@ -59,6 +61,7 @@ interface BuildContext {
   component?: Component;
   mode?: Mode;
   desktop?: Desktop;
+  isAndroid?: boolean;
   skip?: Skip;
 }
 
@@ -68,7 +71,7 @@ interface BuildHooks {
   beforeBuild: SyncHook<[string?]>;
   prepareCompileArgs: SyncWaterfallHook<
     [string?],
-    { comp: Component; features: string[] }
+    { comp: Component; features: string[]; args?: string[] }
   >;
   afterBuild: AsyncSeriesHook<[string]>;
 }
@@ -151,6 +154,9 @@ export class BuildSystem {
     // --release
     this.use(new ReleasePlugin());
 
+    // --android（仅 main 的 dev/build）
+    this.use(new AndroidPlugin());
+
     // --desktop
     this.use(new DesktopPlugin());
 
@@ -177,11 +183,21 @@ export class BuildSystem {
     this.commonBefore();
     this.hooks.beforeBuild.call();
     const { features } = this.hooks.prepareCompileArgs.call();
-    const args = this.buildCargoArgs(["dev"], features, this.options.args);
-    run("tauri", args, {
-      cwd: this.context.component!.appDir,
-      bin: "cargo",
-    });
+    const cwd = this.context.component!.appDir;
+    if (this.context.isAndroid) {
+      const args = ["android", "dev"]
+        .concat(features.length ? ["-f", features.join(",")] : [])
+        .concat(this.options.args?.length ? ["--", ...(this.options.args ?? [])] : []);
+      run("tauri", args, { cwd, bin: "cargo" });
+    } else {
+      const baseArgs = ["dev"];
+      const args = this.buildCargoArgs(baseArgs, features);
+      if (this.options.args && this.options.args.length > 0) {
+        args.push("--");
+        args.push(...this.options.args);
+      }
+      run("tauri", args, { cwd, bin: "cargo" });
+    }
   }
 
   async start(options: BuildOptions): Promise<void> {
@@ -211,46 +227,15 @@ export class BuildSystem {
 
     this.commonUse(Cmd.BUILD);
     this.commonBefore();
-    if (this.context.component!.isPluginEditor && !this.context.mode!.isLight) {
-      this.hooks.beforeBuild.call(Component.PLUGIN_EDITOR);
-      const { features } = this.hooks.prepareCompileArgs.call(
-        Component.PLUGIN_EDITOR,
-      );
-      if (!this.context.skip?.isVue) {
-        run("nx", ["run", ".:build-plugin-editor"], {
-          bin: "bun",
-        });
-      }
-      const args = this.buildCargoArgs(
-        [
-          "build",
-          "--release",
-          "-p",
-          Component.cargoComp(Component.PLUGIN_EDITOR),
-        ],
-        features,
-        this.options.args,
-      );
-      if (!this.context.skip?.isCargo) {
-        run("cargo", args, {
-          cwd: SRC_TAURI_DIR,
-        });
-      }
-      // this.hooks.afterBuild.callAsync(Component.PLUGIN_EDITOR)
-    }
     // linux 下构建cli
     if (this.context.component!.isCli && (!this.context.mode!.isLight || OSPlugin.isLinux)) {
       this.hooks.beforeBuild.call(Component.CLI);
-      const { features } = this.hooks.prepareCompileArgs.call(Component.CLI);
-      if (!this.context.skip?.isVue) {
-        run("nx", ["run", ".:build-cli"], {
-          bin: "bun",
-        });
-      }
+      const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.CLI);
+      const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
       const args = this.buildCargoArgs(
         ["build", "--release", "-p", Component.cargoComp(Component.CLI)],
         features,
-        this.options.args,
+        mergedArgs.length > 0 ? mergedArgs : undefined,
       );
       if (!this.context.skip?.isCargo) {
         run("cargo", args, {
@@ -261,17 +246,24 @@ export class BuildSystem {
     }
     if (this.context.component!.isMain) {
       this.hooks.beforeBuild.call(Component.MAIN);
-      const { features } = this.hooks.prepareCompileArgs.call(Component.MAIN);
-      const args = this.buildCargoArgs(["build"], features, this.options.args);
+      const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.MAIN);
+      const cwd = Component.appDir(Component.MAIN);
       if (!this.context.skip?.isVue) {
         run("nx", ["run", ".:build-main"], {
           bin: "bun",
         });
       }
-      run("tauri", args, {
-        cwd: Component.appDir(Component.MAIN),
-        bin: "cargo",
-      });
+      if (this.context.isAndroid) {
+        const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
+        const args = ["android", "build"]
+          .concat(features.length ? ["-f", features.join(",")] : [])
+          .concat(mergedArgs.length > 0 ? ["--", ...mergedArgs] : []);
+        run("tauri", args, { cwd, bin: "cargo" });
+      } else {
+        const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
+        const args = this.buildCargoArgs(["build"], features, mergedArgs.length > 0 ? mergedArgs : undefined);
+        run("tauri", args, { cwd, bin: "cargo" });
+      }
       await this.hooks.afterBuild.promise(Component.MAIN);
     }
   }

@@ -1,0 +1,2 @@
+# 基础规则，供所有组件共享
+# 具体排除由 TAURI_CLI_WATCHER_IGNORE_FILENAME 指定的 <component>.taurignore 控制

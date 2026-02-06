@@ -9,9 +9,7 @@ lerna-debug.log*
 
 node_modules
 dist-*
-!dist-cli/.gitkeep
 !dist-main/.gitkeep
-!dist-plugin-editor/.gitkeep
 *.local
 
 # Editor directories and files
@@ -26,7 +24,7 @@ dist-*
 # Tauri
 target
 src-tauri/app-main/resources/plugins/*.kgpg
-src-tauri/*/gen/*
+src-tauri/*/gen/schemas/*
 src-tauri/app-main/resources/bin/*
 !src-tauri/app-main/resources/bin/.gitkeep
 

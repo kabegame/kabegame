@@ -100,13 +100,24 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            if mount_path.exists() {
+                // macOS 上尝试卸载残留的挂载点
+                // 使用 umount 命令（macOS 上 FUSE 使用 umount）
+                let _ = std::process::Command::new("umount")
+                    .arg(&mount_path)
+                    .output();
+            }
+        }
+
         // 确保挂载点目录存在（容错：AlreadyExists 继续，但要求它必须是目录）
         if let Err(e) = std::fs::create_dir_all(&mount_path) {
             if e.kind() != std::io::ErrorKind::AlreadyExists {
                 return Err(format!("创建挂载点目录失败: {}", e));
             }
         }
-        
+
         // 再次检查：如果仍然不是目录，可能是残留的挂载点，尝试强制卸载
         if !mount_path.is_dir() {
             #[cfg(target_os = "linux")]
@@ -116,17 +127,17 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
                     .arg("-uz") // -z: lazy unmount
                     .arg(&mount_path)
                     .output();
-                
+
                 // 等待一下让卸载完成
                 std::thread::sleep(std::time::Duration::from_millis(100));
-                
+
                 // 再次尝试创建目录
                 if let Err(e) = std::fs::create_dir_all(&mount_path) {
                     if e.kind() != std::io::ErrorKind::AlreadyExists {
                         return Err(format!("创建挂载点目录失败: {} (已尝试卸载残留挂载点)", e));
                     }
                 }
-                
+
                 // 如果仍然不是目录，报错
                 if !mount_path.is_dir() {
                     return Err(format!(
@@ -136,7 +147,34 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
                     ));
                 }
             }
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
+            {
+                // macOS 上尝试强制卸载
+                let _ = std::process::Command::new("umount")
+                    .arg("-f") // -f: force unmount
+                    .arg(&mount_path)
+                    .output();
+
+                // 等待一下让卸载完成
+                std::thread::sleep(std::time::Duration::from_millis(100));
+
+                // 再次尝试创建目录
+                if let Err(e) = std::fs::create_dir_all(&mount_path) {
+                    if e.kind() != std::io::ErrorKind::AlreadyExists {
+                        return Err(format!("创建挂载点目录失败: {} (已尝试卸载残留挂载点)", e));
+                    }
+                }
+
+                // 如果仍然不是目录，报错
+                if !mount_path.is_dir() {
+                    return Err(format!(
+                        "挂载点不是目录: {} (可能是残留的挂载点，请手动运行: umount -f {})",
+                        mount_path.display(),
+                        mount_path.display()
+                    ));
+                }
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             {
                 return Err(format!("挂载点不是目录: {}", mount_path.display()));
             }
@@ -157,8 +195,8 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
         ];
 
         // 挂载文件系统
-        let session = spawn_mount2(fs, &mount_path, mount_options)
-            .map_err(|e| format!("挂载失败: {}", e))?;
+        let session =
+            spawn_mount2(fs, &mount_path, mount_options).map_err(|e| format!("挂载失败: {}", e))?;
 
         // 保存状态
         let mount_point_arc: Arc<str> = Arc::from(mount_path.to_string_lossy().to_string());

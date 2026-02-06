@@ -7,10 +7,10 @@
   <img src="docs/images/image1.png" alt="Kabegame 形象图 2" width="256"/>
 </div>
 
-
 <div align="center">
-  <img src="docs/images/main-screenshot1.png" alt="Kabegame 截图 1" width="500"/>
-  <img src="docs/images/main-screenshot2.png" alt="Kabegame 截图 2" width="500"/>
+  <img src="docs/images/main-screenshot1.png" alt="Kabegame 截图 1" width="800"/>
+  <img src="docs/images/main-screenshot2.png" alt="Kabegame 截图 2" width="800"/>
+  <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame 截图 3" width="800"/>
 </div>
 
 ## 名称由来 🐢
@@ -33,46 +33,97 @@
 - 💾 **虚拟磁盘**: 在 Windows 上将画册挂载为虚拟磁盘，在资源管理器中像文件夹一样浏览图片
 - 🌐 **源管理**: 浏览、安装、收藏和管理壁纸源插件
 - 📋 **任务管理**: 实时查看收集任务进度、状态和已收集图片，支持停止、删除等操作
-- 🛠️ **插件编辑器**: 内置强大的插件编辑器，支持创建、编辑和调试 Rhai 爬虫脚本
 - ⌨️ **命令行工具**: 提供完整的 CLI 工具，支持通过命令行运行插件、导入图片等操作
 - 🖱️ **拖拽导入**: 支持拖入本地图片、文件夹或压缩包（zip、rar）快速导入到画廊，也可以拖入kgpg插件文件导入插件
 
 ## 安装方法
 
-Kabegame 提供三种模式供下载，满足不同使用场景：
+
+**桌面端 Kabegame** 提供三种模式供下载，满足不同使用场景：
 
 | 功能 | Normal 模式 | Local 模式 | Light 模式 |
 |------|------------|-----------|-----------|
 | **插件商店** | ✅ 支持 | 🟡 预置插件 | 🟡 预置插件 |
-| **插件编辑器** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
 | **虚拟磁盘** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
-| **cli** | ✅ 支持 | ✅ 支持 | ❌ Windows不支持 <br/> ✅ Linux支持|
+| **cli** | ✅ 支持 | ✅ 支持 | ❌ 不支持|
 | **内置插件** | 本地导入插件(`local-import`) | 发布时的全部插件 | 发布时的全部插件 |
 | **适用场景** | 日常使用，需要从商店安装插件 | 离线使用，需要所有插件内置 | 轻量使用，仅需基本功能 |
-| **文件大小** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Windows: ⭐ <br/> Linux: ⭐⭐ |
+| **文件大小** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
 
 **根据你的操作系统和需求，选择合适的安装包**
 
 | 操作系统 | Normal 模式 | Local 模式 | Light 模式 |
 |---------|------------|-----------|-----------|
-| Windows | [Kabegame-normal_3.0.3_x64-setup.exe](release/Kabegame-normal_3.0.3_x64-setup.exe) | [Kabegame-local_3.0.3_x64-setup.exe](release/Kabegame-local_3.0.3_x64-setup.exe) | [Kabegame-light_3.0.3_x64-setup.exe](release/Kabegame-light_3.0.3_x64-setup.exe) |
-| macOS | coming... | coming... | coming... |
-| Linux (Plasma) | [Kabegame-normal_plasma_3.0.3_amd64.deb](release/Kabegame-normal_plasma_3.0.3_amd64.deb)  | [Kabegame-local_plasma_3.0.3_amd64.deb](release/Kabegame-local_plasma_3.0.3_amd64.deb)  | [Kabegame-light_plasma_3.0.3_amd64.deb](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
-| Linux (GNOME) | [Kabegame-normal_gnome_3.0.3_amd64.deb](release/Kabegame-normal_gnome_3.0.3_amd64.deb) | [Kabegame-local_gnome_3.0.3_amd64.deb](release/Kabegame-local_gnome_3.0.3_amd64.deb) | [Kabegame-light_gnome_3.0.3_amd64.deb](release/Kabegame-light_gnome_3.0.3_amd64.deb) |
-| Android | planing... | planing... | planing... |
+| Windows | [setup.exe](release/Kabegame-normal_3.0.3_x64-setup.exe) | [setup.exe](release/Kabegame-local_3.0.3_x64-setup.exe) | [setup.exe](release/Kabegame-light_3.0.3_x64-setup.exe) |
+| MacOS | [dmg映像](release/Kabegame-normal_3.0.4_aarch64.dmg) | [dmg映像](release/Kabegame-local_3.0.4_aarch64.dmg) | [dmg映像](release/Kabegame-light_3.0.4_aarch64.dmg) |
+| Linux (Plasma) | [deb包](release/Kabegame-normal_plasma_3.0.3_amd64.deb)  | [deb包](release/Kabegame-local_plasma_3.0.3_amd64.deb)  | [deb包](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
+| Linux (GNOME) | [deb包](release/Kabegame-normal_gnome_3.0.3_amd64.deb) | [deb包](release/Kabegame-local_gnome_3.0.3_amd64.deb) | [deb包](release/Kabegame-light_gnome_3.0.3_amd64.deb) |
 
-Windows 双击运行即可（**安装和更新**）。
+**Android 版 Kabegame** (开发中) 将不分模式，只有light模式+商店（内置全量插件+商店源） 
 
-Linux（Debian分发（Ubuntu等））运行以下命令
-```sh
-sudo dpkg -i Kabegame-<mode>_<desktop>_<version>_<arch>.deb
-```
-你的桌面环境的确认方法：
-`systemctl --user list-units --type=service | grep -E "plasma|gnome|xfce|cinnamon|mate|sway|hyprland"`
+## 安装方法
 
-<b style="color: red; background-color: #fdd;">
-安装错误desktop版本可能导致无法正常设置壁纸！
-</b>
+### Windows
+
+1. **下载安装包**：根据你的需求选择 Normal、Local 或 Light 模式的 `setup.exe` 文件
+2. **运行安装程序**：双击 `setup.exe` 文件，按照向导完成安装
+3. **虚拟磁盘驱动（仅 Normal / Local 模式）**：
+   - 安装过程中，如果检测到未安装 Dokan 虚拟磁盘驱动，安装程序会**自动弹出管理员权限请求**
+   - 点击「是」允许安装 Dokan 驱动（虚拟磁盘功能需要）
+   - Light 模式不包含虚拟磁盘功能，因此不会安装 Dokan 驱动
+4. **CLI 工具（仅 Normal / Local 模式）**：
+   - CLI 可执行文件 `kabegame-cli.exe` 会被安装到应用安装目录
+   - 如需在命令行中使用，请将安装目录添加到系统 PATH 环境变量，或直接使用完整路径
+
+> **提示**：安装程序支持自动更新，再次运行安装程序即可更新到新版本。
+
+### macOS
+
+1. **下载 DMG 文件**：根据你的需求选择 Normal、Local 或 Light 模式的 `.dmg` 文件
+2. **安装应用**：
+   - 打开下载的 `.dmg` 文件
+   - 将 `Kabegame.app` 拖拽到「应用程序」文件夹
+3. **虚拟磁盘fuse依赖（仅 Normal / Local 模式）**：
+   - macOS的虚拟磁盘功能依赖macfuse，通过 `brew install macfuse`安装
+   - 首次挂载会弹窗请求权限
+4. **CLI 工具（仅 Normal / Local 模式）**：
+   - CLI 可执行文件已随应用一起打包，位于：`/Applications/Kabegame.app/Contents/Resources/resources/bin/kabegame-cli`
+   - 如需在终端中全局使用，可以手动创建软链接（需要管理员权限）：
+   ```bash
+   sudo ln -s "/Applications/Kabegame.app/Contents/Resources/resources/bin/MacOS/kabegame-cli" /usr/local/bin/kabegame-cli
+   ```
+   - 之后即可在终端中使用：`kabegame-cli --help`
+   - Light 模式不提供 CLI 工具
+
+### Linux（Debian 分发，如 Ubuntu）
+
+1. **确认桌面环境**：
+   ```bash
+   systemctl --user list-units --type=service | grep -E "plasma|gnome|xfce|cinnamon|mate|sway|hyprland"
+   ```
+   根据输出选择对应的安装包（Plasma 或 GNOME）
+
+   <b style="color: red; background-color: #fdd;">
+   安装错误 desktop 版本可能导致无法正常设置壁纸！
+   </b>
+
+2. **安装依赖（仅 Normal / Local 模式）**：
+   - 虚拟磁盘功能需要 `fuse3` 依赖，如果系统未安装，请先安装：
+   ```bash
+   sudo apt update
+   sudo apt install fuse3
+   ```
+   - Light 模式不需要 `fuse3` 依赖
+
+3. **安装应用**：
+   ```bash
+   sudo dpkg -i Kabegame-<mode>_<desktop>_<version>_<arch>.deb
+   ```
+   - 如果遇到依赖问题，可以运行：`sudo apt-get install -f` 自动修复
+
+4. **CLI 工具（仅 Normal / Local 模式）**：
+   - CLI 会自动安装到 `/usr/bin/kabegame-cli`，可直接在终端使用：`kabegame-cli --help`
+   - Light 模式不提供 CLI 工具
 
 
 ## 主要功能
@@ -134,16 +185,6 @@ Kabegame 的核心竞争力在于其插件化的爬虫系统（本地导入文�
 <div align="center">
   <img src="docs/images/setting-VD.png" alt="设置虚拟磁盘" width="400"/>
   <img src="docs/images/VD-view.png" alt="VD 浏览视图" width="400" />
-</div>
-
-### 🛠️ 插件编辑器
-
-**<del>Light 模式不支持</del>**
-
-内置强大的插件编辑器，支持创建、编辑和调试 Rhai 爬虫脚本。提供语法高亮、代码补全、实时预览等功能。可以配置插件的 manifest.json 和 config.json，添加图标和文档，一键打包为 `.kgpg` 文件并导入。让插件开发变得简单高效！
-
-<div align="center">
-  <img src="docs/images/plugin-editor.png" alt="插件编辑器" width="800"/>
 </div>
 
 ### ⌨️ 命令行工具
@@ -219,7 +260,6 @@ bun install
 
 项目采用 **Cargo Workspace** 架构，包含三个独立应用：
 - **main**：主应用（Tauri GUI，前端端口 1420）
-- **plugin-editor**：插件编辑器（Tauri GUI，前端端口 1421）
 - **cli**：命令行工具（无界面）
 
 所有应用共享 `kabegame-core` 核心库。
@@ -227,7 +267,6 @@ bun install
 ```bash
 # 开发模式（带 watch，热重载）
 bun dev -c main              # 启动主应用（端口 1420）
-bun dev -c plugin-editor     # 启动插件编辑器（端口 1421）
 bun dev -c main --mode local # 使用 local 模式（无商店版本，预打包全部插件）
 bun dev -c main --desktop plasma  # 指定桌面环境为 Plasma（在设置中显示插件模式选项）
 bun dev -c main --desktop gnome   # 指定桌面环境为 GNOME
@@ -236,31 +275,29 @@ bun dev -c main --desktop gnome   # 指定桌面环境为 GNOME
 bun start -c cli            # 启动 CLI 工具
 
 # 构建生产版本
-bun b                    # 构建全部组件（main + plugin-editor + cli）
+bun b                    # 构建全部组件（main + cli）
 bun b -c main            # 构建主应用
-bun b -c plugin-editor   # 构建插件编辑器
 bun b -c cli             # 构建 CLI 工具
 
 # 检查（不产出构建产物）
 bun check -c main                # 依次检查 vue 与 cargo
 bun check -c main --skip cargo   # 仅检查 vue
-bun check -c plugin-editor --skip vue  # 仅检查 cargo
 ```
 
 说明：
-- `-c, --component`：指定要开发/启动/构建的组件（`main` | `plugin-editor` | `cli`）
+- `-c, --component`：指定要开发/启动/构建的组件（`main` | `cli`）
 - `bun check` 必须用 `-c, --component` 指定组件
 - `--mode`：构建模式
   - `normal`（默认）：一般版本，带商店源，仅打包本地插件到 resources
   - `local`：无商店，预打包全部插件到 resources
-  - `light`：轻量模式，无商店，没有插件编辑器，没有虚拟盘功能、没有cli工具
+  - `light`：轻量模式，无商店，没有虚拟盘功能、没有cli工具
 - `--desktop <desktop>`：指定桌面环境（`plasma` | `gnome`），用于后端按桌面环境选择实现
   - `plasma`：适用于 KDE Plasma 环境（在设置中显示 Plasma 插件模式选项）
   - `gnome`：适用于 GNOME 环境
 - `--skip <skip>`：跳过某个流程（只能一个值：`vue` | `cargo`）
   - 在 `check` 中始终生效：`--skip vue` 跳过 `vue-tsc`，`--skip cargo` 跳过 `cargo check`
   - 在 `build` 中：
-    - `cli/plugin-editor`：`--skip vue` 跳过前端构建，`--skip cargo` 跳过后端构建
+    - `cli`：`--skip vue` 跳过前端构建，`--skip cargo` 跳过后端构建
     - `main`：仅支持 `--skip vue` 跳过前端构建（仍会执行 `cargo tauri build`）
 - `dev` 和 `start` 会自动先打包插件到 `src-tauri/app-main/resources/plugins`，确保资源存在
 - `dev` 的前端由各自的 `tauri.conf.json` 的 `beforeDevCommand` 启动；`build` 时前端由构建脚本显式构建（`nx run .:build-*`）
@@ -279,12 +316,6 @@ bun check -c plugin-editor --skip vue  # 仅检查 cargo
 │   │   │   ├── help/    # 帮助系统
 │   │   │   └── main.ts  # 入口文件
 │   │   ├── html/        # HTML 模板
-│   │   ├── vite.config.ts
-│   │   └── package.json
-│   ├── plugin-editor/    # 插件编辑器前端（Vue 3 + TypeScript，端口 1421）
-│   │   ├── src/
-│   │   │   └── plugin-editor/
-│   │   ├── html/
 │   │   ├── vite.config.ts
 │   │   └── package.json
 │   └── cli/              # CLI 工具前端（Vue 3 + TypeScript）
@@ -328,13 +359,6 @@ bun check -c plugin-editor --skip vue  # 仅检查 cargo
 │   │   ├── nsis/         # NSIS 安装脚本
 │   │   ├── tauri.conf.json
 │   │   └── Cargo.toml
-│   ├── app-plugin-editor/# 插件编辑器（Tauri GUI）
-│   │   ├── src/
-│   │   │   ├── main.rs   # 插件编辑器入口
-│   │   │   └── plugin_editor.rs
-│   │   ├── capabilities/
-│   │   ├── tauri.conf.json
-│   │   └── Cargo.toml
 │   ├── app-cli/          # CLI 工具（命令行）
 │   │   ├── src/
 │   │   │   ├── main.rs
@@ -343,6 +367,7 @@ bun check -c plugin-editor --skip vue  # 仅检查 cargo
 │   │   ├── tauri.conf.json
 │   │   └── Cargo.toml
 │   └── icons/            # 应用图标资源
+
 ├── src-crawler-plugins/      # 插件相关（Nx 项目）
 │   ├── plugins/          # 本地插件源码
 │   │   ├── anihonet-wallpaper/
@@ -361,7 +386,8 @@ bun check -c plugin-editor --skip vue  # 仅检查 cargo
 │   ├── images/           # 文档图片
 │   ├── README_PLUGIN_DEV.md
 │   ├── PLUGIN_FORMAT.md
-│   └── RHAI_API.md
+│   ├── RHAI_API.md
+│   └── CRAWLER_WEBVIEW_DESIGN.md  # 爬虫 WebView 架构设计（规划中）
 ├── static/               # 静态资源
 ├── nx.json               # Nx 工作区配置
 ├── project.json          # 根项目配置
@@ -375,6 +401,7 @@ bun check -c plugin-editor --skip vue  # 仅检查 cargo
 - [插件开发指南](docs/README_PLUGIN_DEV.md)
 - [插件文件格式](docs/PLUGIN_FORMAT.md)
 - [Rhai API 文档](docs/RHAI_API.md)
+- [爬虫 WebView 架构设计](docs/CRAWLER_WEBVIEW_DESIGN.md)（规划中）
 
 ## License
 

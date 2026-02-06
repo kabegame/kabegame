@@ -192,33 +192,6 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
                 }
             });
         }
-        #[cfg(debug_assertions)]
-        "debug_wallpaper" => {
-            // 打开一个普通可见窗口（不挂到桌面层），用于确认 WallpaperLayer 是否在渲染/收事件
-            let app_handle = app.clone();
-            std::thread::spawn(move || {
-                use tauri::{WebviewUrl, WebviewWindowBuilder};
-                if let Some(w) = app_handle.get_webview_window("wallpaper-debug") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                    return;
-                }
-
-                let _ = WebviewWindowBuilder::new(
-                    &app_handle,
-                    "wallpaper-debug",
-                    WebviewUrl::App("index.html".into()),
-                )
-                .title("Kabegame Wallpaper Debug")
-                .resizable(true)
-                .decorations(true)
-                .transparent(false)
-                .visible(true)
-                .skip_taskbar(false)
-                .inner_size(900.0, 600.0)
-                .build();
-            });
-        }
         _ => {}
     }
 }

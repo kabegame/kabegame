@@ -75,6 +75,7 @@ fn is_supported_image_ext(ext: &str) -> bool {
     )
 }
 
+#[cfg(not(target_os = "android"))]
 pub mod rar;
 pub mod zip;
 
@@ -85,9 +86,11 @@ pub struct ArchiveManager {
 
 impl ArchiveManager {
     pub fn new() -> Self {
-        Self {
-            processors: vec![Box::new(zip::ZipProcessor), Box::new(rar::RarProcessor)],
-        }
+        let mut processors: Vec<Box<dyn ArchiveProcessor>> =
+            vec![Box::new(zip::ZipProcessor)];
+        #[cfg(not(target_os = "android"))]
+        processors.push(Box::new(rar::RarProcessor));
+        Self { processors }
     }
 
     pub fn register(&mut self, processor: Box<dyn ArchiveProcessor>) {

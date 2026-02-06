@@ -24,6 +24,40 @@ export class OSPlugin extends BasePlugin {
     return OSPlugin.isLinux || OSPlugin.isMacOS;
   }
 
-  apply(_bs: BuildSystem): void {
+  apply(bs: BuildSystem): void {
+    bs.hooks.prepareCompileArgs.tap(
+      this.name,
+      // @ts-ignore
+      (
+        nullOrCompOrResult:
+          | null
+          | string
+          | { comp: Component; features: string[]; args?: string[] },
+      ) => {
+        const args: string[] = [];
+        
+        // 处理 waterfall hook 的输入
+        if (typeof nullOrCompOrResult === "object" && nullOrCompOrResult !== null && "comp" in nullOrCompOrResult) {
+          // 前一个 hook 的返回值
+          return {
+            comp: nullOrCompOrResult.comp,
+            features: nullOrCompOrResult.features || [],
+            args: [...(nullOrCompOrResult.args || []), ...args],
+          };
+        }
+        
+        // 初始调用或字符串输入
+        const comp =
+          typeof nullOrCompOrResult === "string"
+            ? new Component(nullOrCompOrResult)
+            : bs.context.component!;
+        
+        return {
+          comp,
+          features: [],
+          args,
+        };
+      },
+    );
   }
 }

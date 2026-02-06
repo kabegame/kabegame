@@ -73,7 +73,6 @@ import { storeToRefs } from "pinia";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { useGallerySettings } from "@/composables/useGallerySettings";
 import { useImageOperations } from "@/composables/useImageOperations";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
@@ -121,10 +120,6 @@ const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("taskdetail");
 
-// 使用画廊设置 composable
-const {
-    loadSettings,
-} = useGallerySettings();
 
 const taskId = ref<string>("");
 const taskName = ref<string>("");
@@ -479,6 +474,13 @@ const loadTaskInfo = async () => {
             // 获取插件名称
             const plugin = pluginStore.plugins.find((p) => p.id === task.pluginId);
             taskName.value = plugin?.name || task.pluginId || "任务";
+            // 同步更新 store 中的任务信息（确保 deletedCount 等字段同步）
+            const taskIndex = crawlerStore.tasks.findIndex((t) => t.id === taskId.value);
+            if (taskIndex !== -1) {
+                crawlerStore.tasks[taskIndex].deletedCount = task.deletedCount ?? 0;
+                crawlerStore.tasks[taskIndex].status = task.status;
+                crawlerStore.tasks[taskIndex].progress = task.progress ?? 0;
+            }
         }
     } catch (e) {
         console.error("加载任务信息失败:", e);
@@ -791,7 +793,7 @@ const confirmRemoveImages = async () => {
 
 const initTask = async (id: string) => {
     taskId.value = id;
-    await loadSettings();
+    await settingsStore.loadAll();
     await loadTaskInfo();
     await loadTaskImages();
 };
@@ -862,9 +864,10 @@ const stopTimersAndListeners = () => {
     }
 };
 
-// 统一图片变更事件：不做增量同步，收到 images-change 后刷新“当前页”（1000ms trailing 节流，不丢最后一次）
+// 统一图片变更事件：不做增量同步，收到 images-change 后刷新"当前页"（1000ms trailing 节流，不丢最后一次）
+// 始终启用，不管是否在前台（用于同步删除等操作和更新 deletedCount）
 useImagesChangeRefresh({
-    enabled: isOnTaskRoute,
+    enabled: ref(true),
     waitMs: 1000,
     filter: (p) => {
         // 明确 taskId 且不匹配：直接忽略

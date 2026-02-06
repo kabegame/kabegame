@@ -27,3 +27,11 @@ pub use event_broadcaster::EventBroadcaster;
 pub use server_impl::serve_with_events;
 #[cfg(feature = "ipc-server")]
 pub use subscription_manager::SubscriptionManager;
+
+#[cfg(feature = "ipc-server")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use server_unix::check_other_daemon_running;
+
+#[cfg(feature = "ipc-server")]
+#[cfg(target_os = "windows")]
+pub use server_windows::check_other_daemon_running;

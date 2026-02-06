@@ -10,7 +10,6 @@ import TipEasterEggTurtleComplaint from "@/help/tips/easter-egg/TipEasterEggTurt
 import TipTrayIntroduction from "@/help/tips/tray/TipTrayIntroduction.vue";
 import TipVirtualDriveBasics from "@/help/tips/virtual-driver/TipVirtualDriveBasics.vue";
 import TipVirtualDriveDirectories from "@/help/tips/virtual-driver/TipVirtualDriveDirectories.vue";
-import TipPluginEditor from "@/help/tips/plugin-editor/TipPluginEditor.vue";
 import TipCommandLineBasics from "@/help/tips/command-line/TipCommandLineBasics.vue";
 import TipCommandLineExamples from "@/help/tips/command-line/TipCommandLineExamples.vue";
 import TipAlbumsIntroduction from "@/help/tips/albums/TipAlbumsIntroduction.vue";
@@ -34,7 +33,6 @@ export type TipCategoryId =
   | "easter-egg"
   | "tray"
   | "virtual-driver"
-  | "plugin-editor"
   | "command-line"
   | "wallpaper"
   | "tasks";
@@ -52,7 +50,6 @@ export type TipId =
   | "tray-introduction"
   | "virtual-driver-basics"
   | "virtual-driver-directories"
-  | "plugin-editor-basics"
   | "command-line-basics"
   | "command-line-examples"
   | "wallpaper-basic"
@@ -258,22 +255,6 @@ export const TIP_CATEGORIES: TipCategory[] = [
         summary:
           "了解虚拟盘根目录下的各个目录（全部、按插件、按时间、按任务、画册）的用途和使用场景。",
         component: TipVirtualDriveDirectories,
-        tags: lightModeTags,
-      },
-    ],
-  },
-  {
-    id: "plugin-editor",
-    title: "插件编辑器",
-    description: "创建、编辑和调试收集源插件的开发工具",
-    tags: lightModeTags,
-    tips: [
-      {
-        id: "plugin-editor-basics",
-        title: "插件编辑器打开方法和基本功能",
-        summary:
-          "了解如何打开插件编辑器，以及它的基本功能：创建插件、编辑代码、配置信息和打包导入。",
-        component: TipPluginEditor,
         tags: lightModeTags,
       },
     ],

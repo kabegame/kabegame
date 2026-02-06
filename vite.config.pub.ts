@@ -9,6 +9,8 @@ export const root = __dirname;
 export const isWindows = process.platform === "win32";
 export const isLinux = process.platform === 'linux';
 export const isMacOS = process.platform === 'darwin';
+// 是否为 Android 构建（Tauri 构建时设置 TAURI_PLATFORM，或通过 VITE_ANDROID 显式指定）
+export const isAndroid = process.env.TAURI_PLATFORM === 'android' || process.env.VITE_ANDROID === 'true';
 
 // 判断桌面环境（从 VITE_DESKTOP 环境变量读取）
 export const desktop = process.env.VITE_DESKTOP || "";
@@ -28,6 +30,7 @@ export default {
     __WINDOWS__: isWindows,
     __LINUX__: isLinux,
     __MACOS__: isMacOS,
+    __ANDROID__: isAndroid,
     __DESKTOP__: JSON.stringify(desktop),
     __LIGHT_MODE__: isLightMode,
     __LOCAL_MODE__: isLocalMode,

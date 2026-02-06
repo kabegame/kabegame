@@ -6,7 +6,7 @@ pub mod rhai;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -22,8 +22,7 @@ use crate::app_paths::resource_dir;
 static BUILTIN_PLUGINS: &str = env!("KABEGAME_BUILTIN_PLUGINS");
 
 fn is_immutable_builtin_id(plugin_id: &str) -> bool {
-    // 只有 local 模式才把内置插件视为"不可变/不可卸载"。
-    // normal 模式的"本地两个插件"只是首次安装的种子，不应阻止用户覆盖/卸载。
+    // 内置插件始终不可变/不可卸载（基于 BUILTIN_PLUGINS 环境变量）
     BUILTIN_PLUGINS
         .split(',')
         .map(|s| s.trim())
@@ -99,7 +98,8 @@ struct KgpgFileCacheEntry {
 #[derive(Default)]
 struct InstalledPluginsCache {
     initialized: bool,
-    plugins_dir: PathBuf,
+    user_plugins_dir: PathBuf,
+    builtin_plugins_dir: PathBuf,
     by_id: HashMap<String, PathBuf>,
     plugins: HashMap<String, Plugin>,
     files: HashMap<PathBuf, KgpgFileCacheEntry>,
@@ -144,6 +144,7 @@ impl PluginManager {
             if let Some(repo_root) = crate::app_paths::repo_root_dir() {
                 let dev_path = repo_root
                     .join("src-tauri")
+                    .join("app-main")
                     .join("resources")
                     .join("plugins");
                 if dev_path.exists() {
@@ -153,58 +154,17 @@ impl PluginManager {
         }
 
         // 生产模式：直接从函数调用获取
-
         let resource_dir = resource_dir();
         Ok(resource_dir.join("plugins"))
     }
 
-    /// 每次启动：将 resources/plugins 下的内置插件覆盖复制到用户插件目录，确保可用性/不变性
-    pub async fn ensure_prepackaged_plugins_installed(&self) -> Result<(), String> {
-        if BUILTIN_PLUGINS.is_empty() {
-            return Ok(());
-        }
-
-        let src_dir = self.prepackaged_plugins_dir()?;
-
-        // 强制使用用户插件目录（并创建），以确保 debug 模式也不会回退到 crawler-plugins/packed
-        let data_dir = crate::app_paths::kabegame_data_dir();
-        let dst_dir = data_dir.join("plugins-directory");
-        tokio::fs::create_dir_all(&dst_dir).await
-            .map_err(|e| format!("Failed to create plugins directory: {}", e))?;
-
-        for id in BUILTIN_PLUGINS
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-        {
-            let src = src_dir.join(format!("{}.kgpg", id));
-            if !src.is_file() {
-                // 资源缺失：跳过（不算致命）
-                continue;
-            }
-            let dst = dst_dir.join(format!("{}.kgpg", id));
-
-            // local 模式：无差别覆盖，确保可用性/不变性
-            // normal 模式：仅首次安装（目标不存在才复制），允许用户后续覆盖/卸载
-            if !crate::is_normal_mode() && dst.exists() {
-                continue;
-            }
-
-            // 先拷贝到临时文件再原子替换（避免进程中途退出留下半文件）
-            let tmp = dst_dir.join(format!("{}.kgpg.tmp", id));
-            tokio::fs::copy(&src, &tmp).await.map_err(|e| format!("Failed to copy {}: {}", id, e))?;
-            // Windows 上 rename 覆盖行为不一致：先删除旧文件再 rename
-            if dst.exists() {
-                let _ = fs::remove_file(&dst);
-            }
-            tokio::fs::rename(&tmp, &dst).await.map_err(|e| format!("Failed to finalize {}: {}", id, e))?;
-        }
-        Ok(())
+    /// 获取内置插件目录（公开方法）
+    pub fn get_builtin_plugins_directory(&self) -> Result<PathBuf, String> {
+        self.prepackaged_plugins_dir()
     }
 
     /// 从插件目录中的 .kgpg 文件加载所有已安装的插件
     pub async fn get_all(&self) -> Result<Vec<Plugin>, String> {
-        self.ensure_installed_cache_initialized().await?;
         let guard = self
             .installed_cache
             .lock()
@@ -215,7 +175,6 @@ impl PluginManager {
     }
 
     pub async fn get(&self, id: &str) -> Option<Plugin> {
-        self.ensure_installed_cache_initialized().await.ok()?;
         let guard = self.installed_cache.lock().await;
         guard.plugins.get(id).cloned()
     }
@@ -308,16 +267,27 @@ impl PluginManager {
 
     /// 删除插件（删除对应的 .kgpg 文件）
     pub async fn delete(&self, id: &str) -> Result<(), String> {
-        // 内置插件不可卸载（仅 local 模式；normal 模式允许用户覆盖/卸载）
+        // 内置插件不可卸载
         if is_immutable_builtin_id(id) {
             return Err("该插件为内置插件，禁止卸载。请切换应用程序版本。".to_string());
         }
 
+        // 只能删除用户目录中的插件，不能删除内置插件
         let plugins_dir = self.get_plugins_directory();
         let path = self.find_plugin_file(&plugins_dir, id).await?;
+        
+        // 检查是否是内置插件路径（防止删除内置插件）
+        let builtin_dir = self.get_builtin_plugins_directory().ok();
+        if let Some(ref builtin) = builtin_dir {
+            if path.starts_with(builtin) {
+                return Err("该插件为内置插件，禁止卸载。请切换应用程序版本。".to_string());
+            }
+        }
+        
         fs::remove_file(&path).map_err(|e| format!("Failed to delete plugin file: {}", e))?;
         // 删除后局部刷新缓存（避免前端仍看到旧列表/旧图标）
-        let _ = self.refresh_installed_plugin_cache(id);
+        // 注意：必须 await 以避免死锁（refresh_installed_plugin_cache 内部需要获取 installed_cache 锁）
+        let _ = self.refresh_installed_plugin_cache(id).await;
         Ok(())
     }
 
@@ -326,7 +296,6 @@ impl PluginManager {
     }
 
     pub async fn load_browser_plugins(&self) -> Result<Vec<BrowserPlugin>, String> {
-        self.ensure_installed_cache_initialized().await?;
         let guard = self
             .installed_cache
             .lock().await;
@@ -564,26 +533,30 @@ impl PluginManager {
     /// 根据插件 ID 查找并读取插件图标
     /// 返回 PNG bytes，如果插件不存在或没有图标则返回错误或 None
     pub async fn get_plugin_icon_by_id(&self, plugin_id: &str) -> Result<Option<Vec<u8>>, String> {
-        self.ensure_installed_cache_initialized().await?;
         let plugins_dir = self.get_plugins_directory();
         let path = self.find_plugin_file(&plugins_dir, plugin_id).await?;
-        // 先尝试缓存命中（不在持锁时做 IO）
+
+        // 先尝试缓存命中
+        {
+            let guard = self.installed_cache.lock().await;
+            if let Some(entry) = guard.files.get(&path) {
+                let cur = FileStamp::from_path(&path)?;
+                if entry.stamp.len == cur.len && entry.stamp.modified == cur.modified {
+                    if let Some(cached) = entry.icon_png_bytes.clone() {
+                        return Ok(cached);
+                    }
+                }
+            }
+        } // guard 在此处 drop，避免持锁做文件 IO
+
+        // 缓存未命中或文件变化：不持锁读取图标（可能涉及 ZIP 解压）
+        let icon = self.read_plugin_icon(&path).ok().flatten();
+
+        // 读取完成后再获取锁，写回缓存
         let mut guard = self.installed_cache.lock().await;
         if let Some(entry) = guard.files.get_mut(&path) {
             let cur = FileStamp::from_path(&path)?;
-            if entry.stamp.len == cur.len && entry.stamp.modified == cur.modified {
-                if let Some(cached) = entry.icon_png_bytes.clone() {
-                    return Ok(cached);
-                }
-            } else {
-                // 文件变化：清空 icon bytes 缓存，避免返回旧图标
-                entry.stamp = cur;
-                entry.icon_png_bytes = None;
-            }
-        }
-
-        let icon = self.read_plugin_icon(&path).ok().flatten();
-        if let Some(entry) = guard.files.get_mut(&path) {
+            entry.stamp = cur;
             entry.icon_png_bytes = Some(icon.clone());
         }
         Ok(icon)
@@ -633,16 +606,15 @@ impl PluginManager {
         // 目标文件路径
         let target_path = plugins_dir.join(file_name);
 
-        // local 模式：禁止导入同 ID（提醒用户切换应用程序版本）
+        // 内置插件不允许覆盖导入
         let file_stem = zip_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        if crate::is_local_mode() && self.get(&file_stem).await.is_some() {
+        if is_immutable_builtin_id(&file_stem) {
             return Err(
-                "检测到同 ID 插件已存在，本版本禁止覆盖导入。请切换应用程序版本获取该插件的对应更新。"
-                    .to_string(),
+                "该插件为内置插件，不允许覆盖导入。".to_string(),
             );
         }
 
@@ -679,7 +651,8 @@ impl PluginManager {
         };
 
         // 安装/覆盖后：局部刷新缓存，避免后续命令重复扫目录/读盘
-        let _ = self.refresh_installed_plugin_cache(&plugin_id);
+        // 注意：必须 await 以避免死锁（refresh_installed_plugin_cache 内部需要获取 installed_cache 锁）
+        let _ = self.refresh_installed_plugin_cache(&plugin_id).await;
         Ok(plugin)
     }
 
@@ -687,11 +660,10 @@ impl PluginManager {
     /// 实际上，如果文件已经在插件目录中，就已经是"已安装"状态了
     /// 这个方法主要用于标记插件为已安装（如果之前未安装的话）
     pub async fn install_browser_plugin(&self, plugin_id: String) -> Result<Plugin, String> {
-        // 这个方法在历史上用于“标记安装”，但实际插件文件已在目录里即视为安装。
+        // 这个方法在历史上用于"标记安装"，但实际插件文件已在目录里即视为安装。
         // 这里直接复用缓存，避免扫目录/频繁读盘。
-        self.ensure_installed_cache_initialized().await?;
-        let plugins_dir = self.get_plugins_directory();
-        let _path = self.find_plugin_file(&plugins_dir, &plugin_id).await?;
+        let user_plugins_dir = self.get_plugins_directory();
+        let _path = self.find_plugin_file(&user_plugins_dir, &plugin_id).await?;
 
         let guard = self
             .installed_cache
@@ -700,7 +672,7 @@ impl PluginManager {
             return Err(format!("Plugin {} not found", plugin_id));
         };
 
-        // 保持旧行为：built_in=false（浏览器安装不参与“内置不可卸载”逻辑）
+        // 保持旧行为：built_in=false（浏览器安装不参与"内置不可卸载"逻辑）
         let mut out = p.clone();
         out.built_in = false;
         Ok(out)
@@ -708,7 +680,6 @@ impl PluginManager {
 
     /// 获取插件的变量定义（从 config.json 中读取）
     pub async fn get_plugin_vars(&self, plugin_id: &str) -> Result<Option<Vec<VarDefinition>>, String> {
-        self.ensure_installed_cache_initialized().await?;
         let plugins_dir = self.get_plugins_directory();
         let plugin_file = self.find_plugin_file(&plugins_dir, plugin_id).await?;
         let guard = self
@@ -720,40 +691,38 @@ impl PluginManager {
         Ok(file.config.clone().and_then(|c| c.var))
     }
 
-    /// 查找插件文件
-    async fn find_plugin_file(&self, plugins_dir: &Path, plugin_id: &str) -> Result<PathBuf, String> {
+    /// 查找插件文件（优先查内置目录，再查用户目录）
+    async fn find_plugin_file(&self, _plugins_dir: &Path, plugin_id: &str) -> Result<PathBuf, String> {
         // 先走缓存索引（避免每次都扫目录）
-        self.ensure_installed_cache_initialized().await?;
-        let guard = self.installed_cache.lock().await;
-        if guard.plugins_dir == plugins_dir {
-            if let Some(p) = guard.by_id.get(plugin_id) {
-                return Ok(p.clone());
+        {
+            let guard = self.installed_cache.lock().await;
+            if guard.initialized {
+                if let Some(p) = guard.by_id.get(plugin_id) {
+                    return Ok(p.clone());
+                }
             }
-        }
+        } // guard 在此处 drop，避免下方 refresh 重入死锁
 
         // 缓存未命中：尝试局部刷新一次（兼容外部手动复制/替换文件的场景）
-        let _ = self.refresh_installed_plugin_cache(plugin_id);
+        let _ = self.refresh_installed_plugin_cache(plugin_id).await;
         let guard = self.installed_cache.lock().await; 
         if let Some(p) = guard.by_id.get(plugin_id) {
             return Ok(p.clone());
         }
 
-        // 最终兜底：扫目录（保持历史行为）
-        let entries = fs::read_dir(plugins_dir)
-            .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-            let path = entry.path();
-            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-                let file_name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                if file_name == plugin_id {
-                    return Ok(path);
-                }
+        // 最终兜底：直接查找两个目录
+        let builtin_dir = self.get_builtin_plugins_directory().ok();
+        if let Some(ref builtin) = builtin_dir {
+            let builtin_path = builtin.join(format!("{}.kgpg", plugin_id));
+            if builtin_path.is_file() {
+                return Ok(builtin_path);
             }
+        }
+        
+        let user_dir = self.get_plugins_directory();
+        let user_path = user_dir.join(format!("{}.kgpg", plugin_id));
+        if user_path.is_file() {
+            return Ok(user_path);
         }
 
         Err(format!("Plugin {} not found", plugin_id))
@@ -1549,7 +1518,6 @@ impl PluginManager {
     }
 
     pub async fn load_installed_plugin_detail(&self, plugin_id: &str) -> Result<PluginDetail, String> {
-        self.ensure_installed_cache_initialized().await?;
         let plugins_dir = self.get_plugins_directory();
         let path = self.find_plugin_file(&plugins_dir, plugin_id).await?;
         let (manifest, doc, base_url) = {
@@ -1565,10 +1533,8 @@ impl PluginManager {
                 file.config.clone().and_then(|c| c.base_url),
             )
         };
-
         // icon bytes：走懒加载缓存（避免每次详情都重新读盘）
         let icon_data = self.get_plugin_icon_by_id(plugin_id).await.ok().flatten();
-
         Ok(PluginDetail {
             id: plugin_id.to_string(),
             name: manifest.name,
@@ -1594,7 +1560,6 @@ impl PluginManager {
         let bytes = self
             .get_remote_zip_bytes_cached(download_url, expected_sha256, expected_size)
             .await?;
-
         // 检查是否是 kgpgv2 格式，并提取头部 icon（如果存在）
         let mut cursor = std::io::Cursor::new(bytes.as_slice());
         let (is_v2, v2_icon_data) = match crate::kgpg::read_kgpg2_meta(&mut cursor) {
@@ -1816,6 +1781,7 @@ impl PluginManager {
     }
 
     /// 预览导入插件（从 ZIP 文件读取信息）
+    /// 即使插件为内置插件不允许覆盖导入，也会返回预览信息，但标记为不可安装
     pub async fn preview_import_from_zip(&self, zip_path: &Path) -> Result<ImportPreview, String> {
         let manifest = self.read_plugin_manifest(zip_path)?;
         // 获取文件大小
@@ -1830,13 +1796,14 @@ impl PluginManager {
             .to_string();
         let plugin_id = file_name.clone();
         let already_exists = self.get(&plugin_id).await.is_some();
-        // local 模式：禁止导入同 ID（包含内置/用户插件）
-        if already_exists && crate::is_local_mode() {
-            return Err(
-                "检测到同 ID 插件已存在，本版本禁止覆盖导入。请切换应用程序版本获取该插件的对应更新。"
-                    .to_string(),
-            );
-        }
+        
+        // 检查是否为内置插件
+        let is_builtin = is_immutable_builtin_id(&plugin_id);
+        let (can_install, install_error) = if is_builtin {
+            (false, Some("该插件为内置插件，不允许覆盖导入。".to_string()))
+        } else {
+            (true, None)
+        };
 
         let existing_version = if already_exists {
             self.get(&plugin_id).await.map(|p| p.version)
@@ -1855,19 +1822,24 @@ impl PluginManager {
             already_exists,
             existing_version,
             change_log_diff,
+            can_install,
+            install_error,
         })
     }
 
-    /// 前端手动“刷新已安装源”：重扫插件目录并重建缓存（全量刷新）
+    /// 前端手动"刷新已安装源"：重扫插件目录并重建缓存（全量刷新）
+    /// 合并读取用户目录和内置目录，内置目录的插件优先（ID相同时覆盖用户目录）
     pub async fn refresh_installed_plugins_cache(&self) -> Result<(), String> {
-        let plugins_dir = self.get_plugins_directory();
-
+        let user_plugins_dir = self.get_plugins_directory();
+        let builtin_plugins_dir = self.get_builtin_plugins_directory()?;
+        
         let mut by_id: HashMap<String, PathBuf> = HashMap::new();
         let mut plugins: HashMap<String, Plugin> = HashMap::new();
         let mut files: HashMap<PathBuf, KgpgFileCacheEntry> = HashMap::new();
-
-        if plugins_dir.exists() {
-            let entries = fs::read_dir(&plugins_dir)
+        
+        // 先扫描用户目录
+        if user_plugins_dir.exists() {
+            let entries = fs::read_dir(&user_plugins_dir)
                 .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
             for entry in entries {
                 let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
@@ -1886,7 +1858,6 @@ impl PluginManager {
 
                 let stamp = FileStamp::from_path(&path)?;
                 let parsed = self.parse_kgpg_for_cache(&path)?;
-
                 let built_in = is_immutable_builtin_id(&plugin_id);
                 let plugin = Plugin {
                     id: plugin_id.clone(),
@@ -1903,7 +1874,66 @@ impl PluginManager {
                     config: HashMap::new(),
                     selector: parsed.config.clone().and_then(|c| c.selector),
                 };
+                by_id.insert(plugin_id.clone(), path.clone());
+                plugins.insert(plugin_id, plugin);
+                files.insert(
+                    path.clone(),
+                    KgpgFileCacheEntry {
+                        stamp,
+                        manifest: parsed.manifest,
+                        config: parsed.config,
+                        doc: parsed.doc,
+                        icon_present: parsed.icon_present,
+                        icon_png_bytes: None,
+                    },
+                );
+            }
+        }
+        
+        // 再扫描内置目录，覆盖相同ID的插件（内置优先）
+        if builtin_plugins_dir.exists() {
+            let entries = fs::read_dir(&builtin_plugins_dir)
+                .map_err(|e| format!("Failed to read builtin plugins directory: {}", e))?;
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+                let path = entry.path();
+                if !(path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg")) {
+                    continue;
+                }
+                let plugin_id = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if plugin_id.trim().is_empty() {
+                    continue;
+                }
 
+                let stamp = FileStamp::from_path(&path)?;
+                let parsed = self.parse_kgpg_for_cache(&path)?;
+                // 内置插件始终标记为 built_in
+                let built_in = true;
+                let plugin = Plugin {
+                    id: plugin_id.clone(),
+                    name: parsed.manifest.name.clone(),
+                    description: parsed.manifest.description.clone(),
+                    version: parsed.manifest.version.clone(),
+                    base_url: parsed
+                        .config
+                        .as_ref()
+                        .and_then(|c| c.base_url.clone())
+                        .unwrap_or_default(),
+                    size_bytes: stamp.len,
+                    built_in,
+                    config: HashMap::new(),
+                    selector: parsed.config.clone().and_then(|c| c.selector),
+                };
+                
+                // 如果已存在（用户目录），先移除旧条目
+                if let Some(old_path) = by_id.remove(&plugin_id) {
+                    files.remove(&old_path);
+                }
+                
                 by_id.insert(plugin_id.clone(), path.clone());
                 plugins.insert(plugin_id, plugin);
                 files.insert(
@@ -1924,7 +1954,8 @@ impl PluginManager {
             .installed_cache
             .lock().await;
         guard.initialized = true;
-        guard.plugins_dir = plugins_dir;
+        guard.user_plugins_dir = user_plugins_dir;
+        guard.builtin_plugins_dir = builtin_plugins_dir;
         guard.by_id = by_id;
         guard.plugins = plugins;
         guard.files = files;
@@ -1932,50 +1963,88 @@ impl PluginManager {
     }
 
     /// 安装/更新/删除后：按 pluginId 局部刷新（部分刷新）
+    /// 在两个目录中查找指定 plugin_id，内置目录优先
     pub async fn refresh_installed_plugin_cache(&self, plugin_id: &str) -> Result<(), String> {
-        let plugins_dir = self.get_plugins_directory();
+        let user_plugins_dir = self.get_plugins_directory();
+        let builtin_plugins_dir = self.get_builtin_plugins_directory()?;
 
-        // 先处理目录切换（debug 模式可能从 packed 切到 data/plugins-directory）
-        let guard = self.installed_cache.lock().await; 
-        if guard.initialized && guard.plugins_dir != plugins_dir {
-            drop(guard);
-            return self.refresh_installed_plugins_cache().await;
-        }
+        // 先处理目录切换
+        {
+            let guard = self.installed_cache.lock().await;
+            if guard.initialized 
+                && (guard.user_plugins_dir != user_plugins_dir 
+                    || guard.builtin_plugins_dir != builtin_plugins_dir) {
+                drop(guard);
+                return self.refresh_installed_plugins_cache().await;
+            }
+        } // guard 在此处 drop，避免下方重新获取锁时死锁
 
-        // 尝试直接命中默认路径（最常见：{plugins_dir}/{id}.kgpg）
-        let expected = plugins_dir.join(format!("{}.kgpg", plugin_id));
-        let found_path = if expected.is_file() {
-            Some(expected)
-        } else if plugins_dir.is_dir() {
-            // 兜底：扫目录找 stem=plugin_id（兼容用户手动重命名）
-            let entries = fs::read_dir(&plugins_dir)
-                .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
-            let mut hit = None;
-            for entry in entries {
-                let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-                let path = entry.path();
-                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-                    let stem = path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    if stem == plugin_id {
-                        hit = Some(path);
-                        break;
+        // 优先查内置目录，再查用户目录
+        let mut found_path = None;
+        let mut is_builtin = false;
+        
+        // 先查内置目录
+        if builtin_plugins_dir.exists() {
+            let expected = builtin_plugins_dir.join(format!("{}.kgpg", plugin_id));
+            if expected.is_file() {
+                found_path = Some(expected);
+                is_builtin = true;
+            } else {
+                // 兜底：扫目录找 stem=plugin_id
+                let entries = fs::read_dir(&builtin_plugins_dir)
+                    .map_err(|e| format!("Failed to read builtin plugins directory: {}", e))?;
+                for entry in entries {
+                    let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+                    let path = entry.path();
+                    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
+                        let stem = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if stem == plugin_id {
+                            found_path = Some(path);
+                            is_builtin = true;
+                            break;
+                        }
                     }
                 }
             }
-            hit
-        } else {
-            None
-        };
+        }
+        
+        // 如果内置目录没找到，再查用户目录
+        if found_path.is_none() && user_plugins_dir.exists() {
+            let expected = user_plugins_dir.join(format!("{}.kgpg", plugin_id));
+            if expected.is_file() {
+                found_path = Some(expected);
+            } else {
+                // 兜底：扫目录找 stem=plugin_id
+                let entries = fs::read_dir(&user_plugins_dir)
+                    .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
+                for entry in entries {
+                    let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+                    let path = entry.path();
+                    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
+                        let stem = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if stem == plugin_id {
+                            found_path = Some(path);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
 
         // 找到文件：重新解析并更新（不持锁做 IO）
         if let Some(path) = found_path {
             let stamp = FileStamp::from_path(&path)?;
             let parsed = self.parse_kgpg_for_cache(&path)?;
-            let built_in = is_immutable_builtin_id(plugin_id);
+            // 内置插件始终标记为 built_in
+            let built_in = is_builtin;
 
             let plugin = Plugin {
                 id: plugin_id.to_string(),
@@ -1997,7 +2066,14 @@ impl PluginManager {
                 .installed_cache
                 .lock().await;
             guard.initialized = true;
-            guard.plugins_dir = plugins_dir;
+            guard.user_plugins_dir = user_plugins_dir;
+            guard.builtin_plugins_dir = builtin_plugins_dir;
+            
+            // 如果已存在（可能是用户目录的），先移除旧条目
+            if let Some(old_path) = guard.by_id.remove(plugin_id) {
+                guard.files.remove(&old_path);
+            }
+            
             guard.by_id.insert(plugin_id.to_string(), path.clone());
             guard.plugins.insert(plugin_id.to_string(), plugin);
             guard.files.insert(
@@ -2019,7 +2095,8 @@ impl PluginManager {
             .installed_cache
             .lock().await;
         guard.initialized = true;
-        guard.plugins_dir = plugins_dir;
+        guard.user_plugins_dir = user_plugins_dir;
+        guard.builtin_plugins_dir = builtin_plugins_dir;
         if let Some(old_path) = guard.by_id.remove(plugin_id) {
             guard.files.remove(&old_path);
         }
@@ -2027,11 +2104,15 @@ impl PluginManager {
         Ok(())
     }
 
-    async fn ensure_installed_cache_initialized(&self) -> Result<(), String> {
-        let plugins_dir = self.get_plugins_directory();
+    /// 确保已安装插件缓存已初始化（公开函数，用于启动时初始化）
+    pub async fn ensure_installed_cache_initialized(&self) -> Result<(), String> {
+        let user_plugins_dir = self.get_plugins_directory();
+        let builtin_plugins_dir = self.get_builtin_plugins_directory()?;
         {
             let guard = self.installed_cache.lock().await;
-            if guard.initialized && guard.plugins_dir == plugins_dir {
+            if guard.initialized 
+                && guard.user_plugins_dir == user_plugins_dir 
+                && guard.builtin_plugins_dir == builtin_plugins_dir {
                 return Ok(());
             }
         }
@@ -2127,59 +2208,59 @@ impl PluginManager {
     }
 }
 
-/// 获取插件目录（不依赖 AppHandle / PluginManager 实例）。
+/// 获取用户插件目录（不依赖 AppHandle / PluginManager 实例）。
 ///
 /// 说明：
 /// - 这是 `PluginManager::get_plugins_directory()` 的可复用实现。
+/// - 仅返回用户数据目录，用于写入操作（导入、删除等）。
+/// - 读取插件时应该使用 `PluginManager` 的方法，它们会合并内置和用户目录。
 pub fn plugins_directory_for_readonly() -> PathBuf {
-    // 开发模式：优先使用 data/plugins_directory，其次使用 src-crawler-plugins/packed
+    let app_data_dir = crate::app_paths::kabegame_data_dir();
+    app_data_dir.join("plugins-directory")
+}
+
+/// 查找插件文件路径（同步函数，优先查内置目录，再查用户目录）
+/// 
+/// 用于不方便使用 async PluginManager 的场景（如 vd_ops.rs）
+pub fn find_plugin_kgpg_path(plugin_id: &str) -> Option<PathBuf> {
+    // 先查内置目录
+    let builtin_dir = builtin_plugins_directory_for_readonly().ok()?;
+    let builtin_path = builtin_dir.join(format!("{}.kgpg", plugin_id));
+    if builtin_path.is_file() {
+        return Some(builtin_path);
+    }
+    
+    // 再查用户目录
+    let user_dir = plugins_directory_for_readonly();
+    let user_path = user_dir.join(format!("{}.kgpg", plugin_id));
+    if user_path.is_file() {
+        return Some(user_path);
+    }
+    
+    None
+}
+
+/// 获取内置插件目录（不依赖 AppHandle / PluginManager 实例）
+fn builtin_plugins_directory_for_readonly() -> Result<PathBuf, String> {
+    // 开发模式：从项目源码里的 src-tauri/app-main/resources/plugins 定位
     #[cfg(debug_assertions)]
     {
-        let app_data_dir = crate::app_paths::kabegame_data_dir();
-        let data_plugins_dir = app_data_dir.join("plugins-directory");
-
-        // 优先尝试 data/plugins_directory（开发数据目录）
-        if data_plugins_dir.exists() {
-            return data_plugins_dir;
-        }
-
-        // 其次尝试 src-crawler-plugins/packed（向后兼容）
-        // 1. 当前工作目录（开发时通常在项目根目录）
-        if let Ok(cwd) = std::env::current_dir() {
-            let packed_path = cwd.join("src-crawler-plugins").join("packed");
-            if packed_path.exists() {
-                return packed_path;
+        // 尝试从 repo root 定位
+        if let Some(repo_root) = crate::app_paths::repo_root_dir() {
+            let dev_path = repo_root
+                .join("src-tauri")
+                .join("app-main")
+                .join("resources")
+                .join("plugins");
+            if dev_path.exists() {
+                return Ok(dev_path);
             }
         }
-
-        // 2. 从可执行文件位置查找
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                // 在开发模式下，可执行文件在 target/debug，需要向上到项目根目录
-                if let Some(project_root) = exe_dir
-                    .parent() // target
-                    .and_then(|p| p.parent()) // src-tauri
-                    .and_then(|p| p.parent())
-                // 项目根目录
-                {
-                    let packed_path = project_root.join("src-crawler-plugins").join("packed");
-                    if packed_path.exists() {
-                        return packed_path;
-                    }
-                }
-            }
-        }
-
-        // 如果都不存在，返回 data/plugins_directory（即使不存在，也会在后续创建）
-        return data_plugins_dir;
     }
 
-    // 生产模式：使用应用数据目录
-    #[cfg(not(debug_assertions))]
-    {
-        let app_data_dir = crate::app_paths::kabegame_data_dir();
-        app_data_dir.join("plugins-directory")
-    }
+    // 生产模式：直接从函数调用获取
+    let resource_dir = resource_dir();
+    Ok(resource_dir.join("plugins"))
 }
 
 /// 从任意 `.kgpg` 文件读取 manifest.json（优先 KGPG v2 头部）。
@@ -2345,6 +2426,16 @@ pub struct ImportPreview {
     pub existing_version: Option<String>,
     #[serde(rename = "changeLogDiff")]
     pub change_log_diff: Option<String>,
+    /// 是否允许安装（false 时表示不允许安装，如内置插件）
+    #[serde(rename = "canInstall", default = "default_true")]
+    pub can_install: bool,
+    /// 不允许安装时的错误信息
+    #[serde(rename = "installError", skip_serializing_if = "Option::is_none")]
+    pub install_error: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

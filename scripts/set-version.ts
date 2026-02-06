@@ -85,8 +85,6 @@ function updateTauriConf(relPath: string, newVersion: string): void {
 function updateAllTauriConfs(newVersion: string): void {
   const tauriConfPaths = [
     "src-tauri/app-main/tauri.conf.json.handlebars",
-    "src-tauri/app-cli/tauri.conf.json.handlebars",
-    "src-tauri/app-plugin-editor/tauri.conf.json.handlebars",
   ];
 
   tauriConfPaths.forEach((relPath) => {
