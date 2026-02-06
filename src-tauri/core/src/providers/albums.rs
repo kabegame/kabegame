@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::providers::common::CommonProvider;
-#[cfg(all(not(kabegame_mode = "light")))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
 use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
@@ -42,13 +42,13 @@ impl Provider for AlbumsProvider {
         Some(Arc::new(AlbumProvider::new(album_id)))
     }
 
-    #[cfg(all(not(kabegame_mode = "light")))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn can_create_child_dir(&self) -> bool {
         // `画册\` 下 mkdir = 创建画册（VD 专用语义）
         true
     }
 
-    #[cfg(all(not(kabegame_mode = "light")))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn create_child_dir(
         &self,
         child_name: &str,
@@ -59,7 +59,7 @@ impl Provider for AlbumsProvider {
         Ok(())
     }
 
-    #[cfg(all(not(kabegame_mode = "light")))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn delete_child(
         &self,
         child_name: &str,
@@ -131,7 +131,7 @@ impl Provider for AlbumProvider {
         Storage::global().rename_album(&self.album_id, new_name)
     }
 
-    #[cfg(all(not(kabegame_mode = "light")))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn delete_child(
         &self,
         child_name: &str,

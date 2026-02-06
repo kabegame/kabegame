@@ -4,7 +4,7 @@
 //! - 仅用于 core/providers 的 VD 方法实现（mkdir/delete/说明文件等）。
 //! - Dokan/挂载/Windows 句柄等实现细节在 app-main。
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 use std::collections::HashMap;
@@ -90,8 +90,7 @@ pub(crate) fn plugin_display_name_from_manifest(plugin_id: &str) -> Option<Strin
         }
     }
 
-    let plugins_dir = crate::plugin::plugins_directory_for_readonly();
-    let plugin_file = plugins_dir.join(format!("{}.kgpg", pid));
+    let plugin_file = crate::plugin::find_plugin_kgpg_path(pid)?;
     let manifest = crate::plugin::read_plugin_manifest_from_kgpg_file(&plugin_file).ok()?;
     let name = manifest.name.trim().to_string();
 

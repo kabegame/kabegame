@@ -25,5 +25,13 @@ where
     F: Fn(CliIpcRequest) -> Fut + Send + Sync + Clone + 'static,
     Fut: std::future::Future<Output = CliIpcResponse> + Send,
 {
-    serve(handler).await
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+    {
+        serve(handler).await
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        let _ = handler;
+        Err("IPC server not supported on Android".to_string())
+    }
 }

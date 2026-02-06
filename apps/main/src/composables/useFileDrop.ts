@@ -87,6 +87,20 @@ export function useFileDrop(
   const pluginStore = usePluginStore();
 
   let fileDropUnlisten: (() => void) | null = null;
+  let currentWindow: ReturnType<typeof getCurrentWebviewWindow> | null = null;
+  let isOverlayVisible = false; // 跟踪遮罩是否显示
+
+  // 辅助函数：将窗口带到前台并聚焦（只置顶一次，不设置 alwaysOnTop）
+  const bringWindowToFront = async () => {
+    if (!currentWindow) {
+      currentWindow = getCurrentWebviewWindow();
+    }
+    try {
+      await currentWindow.setFocus();
+    } catch (error) {
+      console.warn("[FileDrop] 将窗口带到前台失败:", error);
+    }
+  };
 
   const updateSupportedTypes = async () => {
     try {
@@ -112,7 +126,8 @@ export function useFileDrop(
 
     // 注册全局文件拖拽事件监听（使用 onDragDropEvent，根据 Tauri v2 文档）
     try {
-      const currentWindow = getCurrentWebviewWindow();
+      currentWindow = getCurrentWebviewWindow();
+      
       fileDropUnlisten = await currentWindow.onDragDropEvent(async (event) => {
         if (event.payload.type === "enter") {
           // 文件/文件夹进入窗口时，显示视觉提示
@@ -122,35 +137,57 @@ export function useFileDrop(
               const firstPath = paths[0];
               const metadata = await stat(firstPath);
               let text = "拖入文件以导入";
+              let isImportable = false;
 
               if (metadata.isDirectory) {
                 text = "拖入文件夹以导入";
+                isImportable = true;
               } else if (isKgpgFile(firstPath)) {
                 text = "拖入插件包（.kgpg）以导入";
+                isImportable = true;
               } else if (isArchiveFile(firstPath)) {
                 const exts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
                 text = `拖入压缩包（${exts}）以导入`;
+                isImportable = true;
+              } else if (isSupportedImageFile(firstPath)) {
+                // 图片文件也是可导入的
+                isImportable = true;
+                text = "拖入图片以导入";
               } else {
-                // 如果是图片或其他文件，显示默认提示，或者也可以显示支持的格式
+                // 如果是其他不支持的文件，显示默认提示
                 const archiveExts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
                 text = `支持拖入文件夹、插件(.kgpg)、图片或压缩包(${archiveExts})`;
               }
 
-              fileDropOverlayRef.value?.show(text);
+              // 检测到可导入类型，显示遮罩并将窗口带到前台
+              if (isImportable) {
+                fileDropOverlayRef.value?.show(text);
+                isOverlayVisible = true;
+                await bringWindowToFront();
+              } else {
+                fileDropOverlayRef.value?.show(text);
+                isOverlayVisible = true;
+              }
             } catch (error) {
               // 如果检查失败，显示通用提示
               const archiveExts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
               fileDropOverlayRef.value?.show(
                 `拖入文件夹、插件(.kgpg)、图片或压缩包(${archiveExts})`,
               );
+              isOverlayVisible = true;
             }
           }
         } else if (event.payload.type === "over") {
-          // 文件/文件夹在窗口上移动时，保持显示提示（over 事件只有 position，没有 paths）
-          // 这里不需要额外处理，提示已经在 enter 时显示
+          // 文件/文件夹在窗口上移动时，保持显示提示并将窗口带到前台
+          // over 事件只有 position，没有 paths，但遮罩已经在 enter 时显示
+          // 如果遮罩正在显示，说明文件是可导入的，保持窗口在前台
+          if (isOverlayVisible) {
+            await bringWindowToFront();
+          }
         } else if (event.payload.type === "drop") {
           // 隐藏视觉提示
           fileDropOverlayRef.value?.hide();
+          isOverlayVisible = false;
 
           const droppedPaths = event.payload.paths;
           if (droppedPaths && droppedPaths.length > 0) {
@@ -355,6 +392,7 @@ export function useFileDrop(
         } else if (event.payload.type === "leave") {
           // 文件/文件夹离开窗口时，隐藏提示
           fileDropOverlayRef.value?.hide();
+          isOverlayVisible = false;
         }
       });
     } catch (error) {
@@ -362,11 +400,18 @@ export function useFileDrop(
     }
   };
 
+  // 处理遮罩点击关闭
+  const handleOverlayClick = async () => {
+    fileDropOverlayRef.value?.hide();
+    isOverlayVisible = false;
+  };
+
   const cleanup = () => {
     if (fileDropUnlisten) {
       fileDropUnlisten();
       fileDropUnlisten = null;
     }
+    currentWindow = null;
   };
 
   onUnmounted(() => {
@@ -376,5 +421,6 @@ export function useFileDrop(
   return {
     init,
     cleanup,
+    handleOverlayClick,
   };
 }

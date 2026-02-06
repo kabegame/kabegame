@@ -1,4 +1,4 @@
-﻿//! 命令处理器模块
+//! 命令处理器模块
 //!
 //! 将不同类型的 IPC 请求分发到对应的处理器
 
@@ -16,15 +16,17 @@ use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::tasks::TaskInfo;
 use kabegame_core::storage::Storage;
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::{Arc, OnceLock};
+use tauri::Emitter;
 
 /// 全局状态
 pub struct Store {
     pub dedupe_service: Arc<DedupeService>,
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     pub virtual_drive_service: Arc<VirtualDriveService>,
+    pub app_handle: Arc<tokio::sync::RwLock<Option<tauri::AppHandle>>>,
 }
 
 static GLOBAL_STORE: OnceLock<Arc<Store>> = OnceLock::new();
@@ -46,6 +48,14 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResp
     // 获取s tatus
     if matches!(req, CliIpcRequest::Status) {
         return handle_status();
+    }
+
+    if matches!(req, CliIpcRequest::AppShowWindow) {
+        return handle_app_show_window(ctx).await;
+    }
+
+    if let CliIpcRequest::AppImportPlugin { kgpg_path } = req {
+        return handle_app_import_plugin(ctx, kgpg_path).await;
     }
 
     // PluginRun：daemon 侧实现（入队执行）
@@ -114,7 +124,7 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResp
     if let Some(resp) = gallery::handle_gallery_request(&req).await {
         return resp;
     }
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     {
         if matches!(req, CliIpcRequest::VdMount) {
             return handle_vd_mount(ctx).await;
@@ -199,11 +209,7 @@ async fn handle_dedupe_start(
     match ctx
         .dedupe_service
         .clone()
-        .start_batched(
-            Arc::new(Storage::global().clone()),
-            delete_files,
-            bs,
-        )
+        .start_batched(Arc::new(Storage::global().clone()), delete_files, bs)
         .await
     {
         Ok(()) => CliIpcResponse::ok("ok"),
@@ -401,6 +407,34 @@ fn parse_plugin_args_to_user_config(
     Ok(out)
 }
 
+async fn handle_app_show_window(ctx: Arc<Store>) -> CliIpcResponse {
+    if let Some(app_handle) = ctx.app_handle.read().await.as_ref() {
+        let _ = app_handle.emit("app-show-window", ());
+    }
+    CliIpcResponse::ok("window-shown")
+}
+
+async fn handle_app_import_plugin(ctx: Arc<Store>, kgpg_path: String) -> CliIpcResponse {
+    let path = std::path::PathBuf::from(&kgpg_path);
+    if !path.is_file() {
+        return CliIpcResponse::err(format!("File not found: {}", kgpg_path));
+    }
+    if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
+        return CliIpcResponse::err(format!("Not a .kgpg file: {}", kgpg_path));
+    }
+
+    if let Some(app_handle) = ctx.app_handle.read().await.as_ref() {
+        let _ = app_handle.emit(
+            "app-import-plugin",
+            serde_json::json!({
+                "kgpgPath": kgpg_path
+            }),
+        );
+    }
+
+    CliIpcResponse::ok("import-request-sent")
+}
+
 // TODO: 将此json结构体化
 fn handle_status() -> CliIpcResponse {
     let mut resp = CliIpcResponse::ok("ok");
@@ -413,17 +447,21 @@ fn handle_status() -> CliIpcResponse {
             "settings": true,
             "events": true,
             "pluginRun": false,  // 暂未实现
-            "virtualDrive": cfg!(not(kabegame_mode = "light"))
+            "virtualDrive": cfg!(all(not(kabegame_mode = "light"), not(target_os = "android")))
         }
     }));
     resp
 }
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
-    if !cfg!(all(not(kabegame_mode = "light"), target_os = "windows")) {
+    if !cfg!(all(
+        not(kabegame_mode = "light"),
+        not(target_os = "android"),
+        target_os = "windows"
+    )) {
         return CliIpcResponse::err("Virtual drive is not available".to_string());
     }
 
@@ -465,11 +503,15 @@ async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
     }
 }
 
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 async fn handle_vd_unmount(ctx: Arc<Store>) -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
-    if !cfg!(all(not(kabegame_mode = "light"), target_os = "windows")) {
+    if !cfg!(all(
+        not(kabegame_mode = "light"),
+        not(target_os = "android"),
+        target_os = "windows"
+    )) {
         return CliIpcResponse::err("Virtual drive is not available".to_string());
     }
 
@@ -509,8 +551,13 @@ async fn handle_vd_unmount(ctx: Arc<Store>) -> CliIpcResponse {
     }
 }
 
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 async fn handle_vd_status(_ctx: Arc<Store>) -> CliIpcResponse {
-    let enabled = cfg!(all(not(kabegame_mode = "light"), target_os = "windows"));
+    let enabled = cfg!(all(
+        not(kabegame_mode = "light"),
+        not(target_os = "android"),
+        target_os = "windows"
+    ));
     let mut resp = CliIpcResponse::ok("ok");
     resp.info = Some(serde_json::json!({
         "status": if enabled { "ready" } else { "disabled" },

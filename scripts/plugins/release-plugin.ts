@@ -1,6 +1,7 @@
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { glob } from "glob";
 import { BasePlugin } from "./base-plugin";
 import { BuildSystem } from "../build-system";
 import { Component } from "./component-plugin";
@@ -9,35 +10,11 @@ import { ensureDir, readCargoTomlVersion, run } from "../utils";
 import { ROOT } from "../utils";
 
 function walkFiles(dir: string): string[] {
-  const out: string[] = [];
-  const stack: string[] = [dir];
-  while (stack.length) {
-    const cur = stack.pop()!;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(cur, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const ent of entries) {
-      const p = path.join(cur, ent.name);
-      if (ent.isDirectory()) stack.push(p);
-      else if (ent.isFile()) out.push(p);
-    }
-  }
-  return out;
-}
-
-function readVersion(root: string): string {
-  const packageJson = path.join(root, "package.json");
-  const conf = JSON.parse(fs.readFileSync(packageJson, "utf-8")) as {
-    version?: string;
-  };
-  const v = String(conf?.version ?? "").trim();
-  if (!v) {
-    throw new Error(`无法读取版本号: ${path.relative(root, packageJson)}`);
-  }
-  return v;
+  return glob.sync("**/*", {
+    cwd: dir,
+    absolute: true,
+    nodir: true,
+  });
 }
 
 function archForWindows(): string {
@@ -52,6 +29,12 @@ function archForDeb(): string {
   return process.arch;
 }
 
+function archForMacOS(): string {
+  if (process.arch === "x64") return "x64";
+  if (process.arch === "arm64") return "aarch64";
+  return process.arch;
+}
+
 function releaseAssetFileName(params: {
   mode: string;
   desktop?: string;
@@ -60,14 +43,16 @@ function releaseAssetFileName(params: {
 }): string {
   const { mode, desktop, version, srcPath } = params;
   const ext = path.extname(srcPath);
-  if (process.platform === "win32") {
+  if (OSPlugin.isWindows) {
     return `Kabegame-${mode}_${version}_${archForWindows()}-setup${ext}`;
   }
-  if (process.platform === "linux") {
-    const desk = (desktop || "plasma").trim();
-    return `Kabegame-${mode}_${desk}_${version}_${archForDeb()}${ext}`;
+  if (OSPlugin.isLinux) {
+    return `Kabegame-${mode}_${desktop}_${version}_${archForDeb()}${ext}`;
   }
-  return path.basename(srcPath);
+  if (OSPlugin.isMacOS) {
+    return `Kabegame-${mode}_${version}_${archForMacOS()}${ext}`;
+  }
+  return "unknown";
 }
 
 function findBundleDir(root: string): string | null {
@@ -86,26 +71,26 @@ function findBundleDir(root: string): string | null {
 
 function pickBundleAssets(bundleDir: string, version: string): string[] {
   const files = walkFiles(bundleDir);
-  if (process.platform === "win32") {
+  if (OSPlugin.isWindows) {
     const arch = archForWindows().toLowerCase();
     const preferred = files.filter(
       (p) =>
-        p.toLowerCase().endsWith("-setup.exe") &&
+        p.endsWith("-setup.exe") &&
         p.includes(`_${version}_`) &&
-        p.toLowerCase().includes(`_${arch}-setup.exe`),
+        p.includes(`_${arch}-setup.exe`),
     );
     if (preferred.length) return preferred;
-    return files.filter((p) => p.toLowerCase().endsWith("-setup.exe"));
+    return files.filter((p) => p.endsWith("-setup.exe"));
   }
-  if (process.platform === "linux") {
+  if (OSPlugin.isLinux) {
     const preferred = files.filter(
-      (p) => p.toLowerCase().endsWith(".deb") && p.includes(`_${version}_`),
+      (p) => p.endsWith(".deb") && p.includes(`_${version}_`),
     );
     if (preferred.length) return preferred;
-    return files.filter((p) => p.toLowerCase().endsWith(".deb"));
+    return files.filter((p) => p.endsWith(".deb"));
   }
-  if (process.platform === "darwin") {
-    return files.filter((p) => p.toLowerCase().endsWith(".dmg"));
+  if (OSPlugin.isMacOS) {
+    return files.filter((p) => p.endsWith(".dmg"));
   }
   return [];
 }

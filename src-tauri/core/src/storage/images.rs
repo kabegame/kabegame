@@ -385,6 +385,23 @@ impl Storage {
             .optional()
             .map_err(|e| format!("Failed to query image path: {}", e))?;
 
+        // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
+        let task_ids: Vec<String> = conn
+            .prepare("SELECT DISTINCT task_id FROM task_images WHERE image_id = ?1")
+            .and_then(|mut stmt| {
+                stmt.query_map(params![image_id], |row| row.get::<_, String>(0))
+                    .and_then(|rows| {
+                        let mut ids = Vec::new();
+                        for row_result in rows {
+                            if let Ok(id) = row_result {
+                                ids.push(id);
+                            }
+                        }
+                        Ok(ids)
+                    })
+            })
+            .map_err(|e| format!("Failed to query task IDs: {}", e))?;
+
         if let Some(path) = local_path {
             let _ = fs::remove_file(path);
         }
@@ -401,6 +418,14 @@ impl Storage {
             params![image_id],
         );
 
+        // 更新所有相关任务的 deleted_count
+        for task_id in task_ids {
+            let _ = conn.execute(
+                "UPDATE tasks SET deleted_count = deleted_count + 1 WHERE id = ?1",
+                params![task_id],
+            );
+        }
+
         self.invalidate_images_total_cache();
 
         Ok(())
@@ -408,6 +433,23 @@ impl Storage {
 
     pub fn remove_image(&self, image_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
+        let task_ids: Vec<String> = conn
+            .prepare("SELECT DISTINCT task_id FROM task_images WHERE image_id = ?1")
+            .and_then(|mut stmt| {
+                stmt.query_map(params![image_id], |row| row.get::<_, String>(0))
+                    .and_then(|rows| {
+                        let mut ids = Vec::new();
+                        for row_result in rows {
+                            if let Ok(id) = row_result {
+                                ids.push(id);
+                            }
+                        }
+                        Ok(ids)
+                    })
+            })
+            .map_err(|e| format!("Failed to query task IDs: {}", e))?;
 
         conn.execute("DELETE FROM images WHERE id = ?1", params![image_id])
             .map_err(|e| format!("Failed to remove image from DB: {}", e))?;
@@ -420,6 +462,14 @@ impl Storage {
             "DELETE FROM task_images WHERE image_id = ?1",
             params![image_id],
         );
+
+        // 更新所有相关任务的 deleted_count
+        for task_id in task_ids {
+            let _ = conn.execute(
+                "UPDATE tasks SET deleted_count = deleted_count + 1 WHERE id = ?1",
+                params![task_id],
+            );
+        }
 
         self.invalidate_images_total_cache();
 
@@ -435,6 +485,30 @@ impl Storage {
         let tx = conn
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
+
+        // 在删除前，查询所有图片所属的任务，并统计每个任务需要增加的 deleted_count
+        let mut task_deleted_counts: HashMap<String, i64> = HashMap::new();
+        for id in image_ids {
+            let task_ids: Vec<String> = tx
+                .prepare("SELECT DISTINCT task_id FROM task_images WHERE image_id = ?1")
+                .and_then(|mut stmt| {
+                    stmt.query_map(params![id], |row| row.get::<_, String>(0))
+                        .and_then(|rows| {
+                            let mut ids = Vec::new();
+                            for row_result in rows {
+                                if let Ok(task_id) = row_result {
+                                    ids.push(task_id);
+                                }
+                            }
+                            Ok(ids)
+                        })
+                })
+                .unwrap_or_default();
+            
+            for task_id in task_ids {
+                *task_deleted_counts.entry(task_id).or_insert(0) += 1;
+            }
+        }
 
         for id in image_ids {
             let local_path: Option<String> = tx
@@ -457,6 +531,14 @@ impl Storage {
             let _ = tx.execute("DELETE FROM task_images WHERE image_id = ?1", params![id]);
         }
 
+        // 更新所有相关任务的 deleted_count
+        for (task_id, count) in task_deleted_counts {
+            let _ = tx.execute(
+                "UPDATE tasks SET deleted_count = deleted_count + ?1 WHERE id = ?2",
+                params![count, task_id],
+            );
+        }
+
         tx.commit()
             .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
@@ -475,12 +557,44 @@ impl Storage {
             .transaction()
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
 
+        // 在删除前，查询所有图片所属的任务，并统计每个任务需要增加的 deleted_count
+        let mut task_deleted_counts: HashMap<String, i64> = HashMap::new();
+        for id in image_ids {
+            let task_ids: Vec<String> = tx
+                .prepare("SELECT DISTINCT task_id FROM task_images WHERE image_id = ?1")
+                .and_then(|mut stmt| {
+                    stmt.query_map(params![id], |row| row.get::<_, String>(0))
+                        .and_then(|rows| {
+                            let mut ids = Vec::new();
+                            for row_result in rows {
+                                if let Ok(task_id) = row_result {
+                                    ids.push(task_id);
+                                }
+                            }
+                            Ok(ids)
+                        })
+                })
+                .unwrap_or_default();
+            
+            for task_id in task_ids {
+                *task_deleted_counts.entry(task_id).or_insert(0) += 1;
+            }
+        }
+
         for id in image_ids {
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])
                 .map_err(|e| format!("Failed to remove image: {}", e))?;
 
             let _ = tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id]);
             let _ = tx.execute("DELETE FROM task_images WHERE image_id = ?1", params![id]);
+        }
+
+        // 更新所有相关任务的 deleted_count
+        for (task_id, count) in task_deleted_counts {
+            let _ = tx.execute(
+                "UPDATE tasks SET deleted_count = deleted_count + ?1 WHERE id = ?2",
+                params![count, task_id],
+            );
         }
 
         tx.commit()

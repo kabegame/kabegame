@@ -4,6 +4,27 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.0.4]
+### Fixed
+- 随着预览图切换，所选择的图片项也跟着切换
+- 任务正确显示删除图片数量
+- 当拖入可识别文件类型，应用会自动置顶
+- 桌面宽高比计算问题
+
+### Added
+- 添加 MacOS M芯片应用打包（normal、loccal、light三模式）
+
+### Changed
+- 将cli从导入中移除，导入插件时直接启动main，大大减小light模式下linux的打包大小，并兼容macos的mime打开方法。
+- 随着预览图的切换，当前选择项目也会跟着变化
+- 重复启动应用会导致原来的应用窗口显示，而非
+- 内置插件不复制到用户数据目录，而是保持在资源目录
+
+### Removed
+- 去掉cli打开插件显示预览
+- 去掉light模式的linux的虚拟磁盘支持
+- **去掉插件编辑器**，为之后的js插件做准备
+
 ## [3.0.3]
 ### Added
 - 添加linux plasma支持

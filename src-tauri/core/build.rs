@@ -1,4 +1,4 @@
-﻿fn main() {
+fn main() {
     use std::env;
 
     // Build-time mode injection:
@@ -10,7 +10,7 @@
 
     println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"normal\", \"local\", \"light\"))");
     println!(
-        "cargo:rustc-check-cfg=cfg(kabegame_component, values(\"main\", \"plugin-editor\", \"cli\", \"unknown\"))"
+        "cargo:rustc-check-cfg=cfg(kabegame_component, values(\"main\", \"cli\", \"unknown\"))"
     );
 
     let mode = env::var("KABEGAME_MODE").unwrap_or_else(|_| "normal".to_string());
@@ -26,7 +26,6 @@
     let component = env::var("KABEGAME_COMPONENT").unwrap_or_else(|_| "unknown".to_string());
     let component = match component.as_str() {
         "main" => "main",
-        "plugin-editor" => "plugin-editor",
         "cli" => "cli",
         _ => "unknown",
     };

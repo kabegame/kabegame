@@ -3,14 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --config vite.config.ts",
-    "build": "vite build --config vite.config.ts"
+    "dev": "bun -b vite --config vite.config.ts",
+    "build": "bun -b vite build --config vite.config.ts"
   },
   "dependencies": {
     "@kabegame/core": "workspace:*",
     "@element-plus/icons-vue": "^2.3.1",
-    "@tauri-apps/api": "^2.0",
-    "@tauri-apps/plugin-dialog": "2.4.2",
+    "@tauri-apps/api": "^2.10",
+    "@tauri-apps/plugin-dialog": "^2.0",
     "@tauri-apps/plugin-fs": "^2.0",
     "@tauri-apps/plugin-shell": "^2.0",
     "@vueuse/core": "^14.1.0",

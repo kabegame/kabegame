@@ -8,12 +8,6 @@
         </el-icon>
         刷新
       </el-button>
-      <el-button @click="openPluginEditor" v-if="!IS_LIGHT_MODE">
-        <el-icon>
-          <EditPen />
-        </el-icon>
-        插件编辑器
-      </el-button>
       <el-button type="primary" @click="showImportDialog = true">
         <el-icon>
           <Upload />
@@ -258,7 +252,6 @@ import {
   Plus,
   Setting,
   QuestionFilled,
-  EditPen,
   Loading,
 } from "@element-plus/icons-vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
@@ -271,14 +264,6 @@ import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { IS_LIGHT_MODE, IS_LOCAL_MODE } from "@kabegame/core/env";
-
-async function openPluginEditor() {
-  try {
-    await invoke("open_plugin_editor_window");
-  } catch (e) {
-    ElMessage.error(`打开插件编辑器失败：${String(e)}`);
-  }
-}
 
 interface PluginSource {
   id: string;
@@ -311,6 +296,8 @@ interface ImportPreview {
   alreadyExists: boolean;
   existingVersion?: string | null;
   changeLogDiff?: string | null;
+  canInstall?: boolean;
+  installError?: string | null;
 }
 
 interface StoreInstallPreview {
@@ -873,6 +860,13 @@ const handleImport = async () => {
 
     if (fileExt === "kgpg") {
       const preview = await invoke<ImportPreview>("preview_import_plugin", { zipPath: filePath });
+      
+      // 检查是否允许安装
+      if (preview.canInstall === false) {
+        ElMessage.warning(preview.installError || "该插件不允许导入");
+        return;
+      }
+      
       if (preview.alreadyExists && preview.existingVersion && preview.existingVersion === preview.version) {
         ElMessage.info(`插件已存在（v${preview.version}），无需重复导入`);
         return;

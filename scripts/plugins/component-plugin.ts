@@ -2,30 +2,19 @@ import { BasePlugin } from "./base-plugin";
 import { BuildSystem, SRC_FE_DIR, SRC_TAURI_DIR } from "../build-system";
 import * as path from "path";
 import {
-  copyDokan2DllToTauriReleaseDirBestEffort,
   RESOURCES_DIR,
   stageResourceBinary,
 } from "../utils";
 import { OSPlugin } from "./os-plugin";
-import {
-  fstat,
-  fstatSync,
-  readdirSync,
-  statSync,
-  unlinkSync,
-  existsSync,
-  readFileSync,
-  writeFileSync,
-} from "fs";
+import { readdirSync, statSync, unlinkSync, existsSync, readFileSync, writeFileSync } from "fs";
 import Handlebars from "handlebars";
 
 // 组件对象
 export class Component {
   static readonly MAIN = "main";
-  static readonly PLUGIN_EDITOR = "plugin-editor";
   static readonly CLI = "cli";
 
-  static readonly components = [this.MAIN, this.PLUGIN_EDITOR, this.CLI];
+  static readonly components = [this.MAIN, this.CLI];
 
   constructor(private readonly _comp: string) {}
 
@@ -35,10 +24,6 @@ export class Component {
 
   get isMain(): boolean {
     return this.comp === Component.MAIN || this.isAll;
-  }
-
-  get isPluginEditor(): boolean {
-    return this.comp === Component.PLUGIN_EDITOR || this.isAll;
   }
 
   get isCli(): boolean {
@@ -61,9 +46,6 @@ export class Component {
     switch (cmp) {
       case this.MAIN: {
         return path.join(SRC_TAURI_DIR, "app-main");
-      }
-      case this.PLUGIN_EDITOR: {
-        return path.join(SRC_TAURI_DIR, "app-plugin-editor");
       }
       case this.CLI: {
         return path.join(SRC_TAURI_DIR, "app-cli");
@@ -124,19 +106,21 @@ export class ComponentPlugin extends BasePlugin {
       bs.context.component = comp;
     });
 
-    // bs.hooks.prepareEnv.tap(this.name, () => {
-    //   this.setEnv("KABEGAME_COMPONENT", this.component?.comp || "");
-    // });
-
-    if (bs.context.cmd!.isBuild) {
-      bs.hooks.beforeBuild.tap(this.name, (comp?: string) => {
-        this.setEnv("KABEGAME_COMPONENT", this.component?.comp || comp || "");
-        const component = comp ? new Component(comp) : this.component!;
-        // 编译可能存在的handlebars覆盖 tauri.config.json
-        const tauriConfigHandlebars = path.resolve(
-          component.appDir,
-          "tauri.conf.json.handlebars",
+    bs.hooks.prepareEnv.tap(this.name, () => {
+      this.setEnv("KABEGAME_COMPONENT", this.component?.comp || "");
+      if (bs.context.cmd!.isDev && this.component && !this.component.isCli) {
+        this.setEnv(
+          "TAURI_CLI_WATCHER_IGNORE_FILENAME",
+          `${this.component.comp}.taurignore`,
         );
+      }
+    });
+
+    bs.hooks.beforeBuild.tap(this.name, (comp?: string) => {
+      const component = comp ? new Component(comp) : this.component!;
+        // 编译可能存在的handlebars覆盖 tauri.config.json
+        const tauriConfigHandlebars = path.resolve(component.appDir, 'tauri.conf.json.handlebars');
+        this.log(`tauriConfigHandlebars: ${tauriConfigHandlebars}`);
         if (existsSync(tauriConfigHandlebars)) {
           const tauriConfig = path.resolve(component.appDir, "tauri.conf.json");
           const template = Handlebars.compile(
@@ -149,10 +133,20 @@ export class ComponentPlugin extends BasePlugin {
             template({
               // TODO: 当需要更多环境的时候维护这个上下文
               isWindows: OSPlugin.isWindows,
+              isMacOS: OSPlugin.isMacOS,
+              isLinux: OSPlugin.isLinux,
               isLight: bs.context.mode!.isLight,
+              isDev: bs.context.cmd!.isDev,
+              isAndroid: !!bs.context.isAndroid,
             }),
           );
         }
+    });
+
+    if (bs.context.cmd!.isBuild) {
+      bs.hooks.beforeBuild.tap(this.name, (comp?: string) => {
+        this.setEnv("KABEGAME_COMPONENT", this.component?.comp || comp || "");
+        const component = comp ? new Component(comp) : this.component!;
         if (component.isMain) {
           // 先清空 resources 下所有非.gitkeep（保留文件夹）
           // TODO: 直接清除所有文件
@@ -175,10 +169,6 @@ export class ComponentPlugin extends BasePlugin {
           !OSPlugin.isLinux
         ) {
           stageResourceBinary(Component.cargoComp(Component.CLI));
-          // 只有windows才需要壳
-          if (OSPlugin.isWindows)
-            stageResourceBinary(Component.cargoComp(`${Component.CLI}w`));
-          stageResourceBinary(Component.cargoComp(Component.PLUGIN_EDITOR));
         }
       });
     }

@@ -34,7 +34,7 @@ impl Provider for RootProvider {
         ];
 
         // VD 专用：根目录说明文件
-        #[cfg(not(kabegame_mode = "light"))]
+        #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
         {
             // NOTE: 必须带扩展名，否则某些图片查看器/Explorer 枚举同目录文件时会尝试“打开”该说明文件并弹出错误。
             let display_name = "在这里你可以自由查看图片.txt";
@@ -67,7 +67,7 @@ impl Provider for RootProvider {
         }
     }
 
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn resolve_file(&self, name: &str) -> Option<(String, std::path::PathBuf)> {
         let display_name = "在这里你可以自由查看图片.txt";
         if name != display_name {

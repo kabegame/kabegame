@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 use std::fs;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,13 +60,6 @@ pub async fn start_dedupe_gallery_by_hash_batched(delete_files: bool) -> Result<
 pub async fn cancel_dedupe_gallery_by_hash_batched() -> Result<bool, String> {
     let ctx = crate::ipc::handlers::Store::global();
     ctx.dedupe_service.cancel()
-}
-
-#[tauri::command]
-pub fn open_plugin_editor_window(_app: AppHandle) -> Result<(), String> {
-    use kabegame_core::bin_finder::spawn_binary;
-
-    spawn_binary("plugin-editor", Vec::new()).map_err(|e| format!("启动插件编辑器失败: {e}"))
 }
 
 #[tauri::command]
@@ -236,10 +229,63 @@ pub async fn copy_image_to_clipboard(image_path: String) -> Result<(), String> {
         .map_err(|e| format!("copy_image_to_clipboard join error: {e}"))?
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        // Tauri 命令默认在主线程上执行，可以直接使用 NSPasteboard
+        use std::path::Path;
+        use objc2_app_kit::NSPasteboard;
+        use objc2_foundation::{NSData, NSString};
+
+        let path = Path::new(&image_path);
+        if !path.exists() {
+            return Err(format!("Image file not found: {}", image_path));
+        }
+
+        let bytes = fs::read(&path).map_err(|e| format!("Failed to read image file: {}", e))?;
+
+        unsafe {
+            let pasteboard = NSPasteboard::generalPasteboard();
+
+            // 清空剪贴板
+            pasteboard.clearContents();
+
+            // 根据文件扩展名确定类型
+            let ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            let type_str = if ext == "png" {
+                "public.png"
+            } else if ext == "jpg" || ext == "jpeg" {
+                "public.jpeg"
+            } else if ext == "gif" {
+                "com.compuserve.gif"
+            } else if ext == "tiff" || ext == "tif" {
+                "public.tiff"
+            } else {
+                // 默认使用 PNG，或者尝试从文件内容判断
+                "public.png"
+            };
+
+            let type_nsstring = NSString::from_str(type_str);
+            let data = NSData::from_vec(bytes);
+
+            let success = pasteboard.setData_forType(Some(&*data), &*type_nsstring);
+
+            if success {
+                Ok(())
+            } else {
+                Err("Failed to set clipboard data".to_string())
+            }
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = image_path;
-        Err("copy_image_to_clipboard is only supported on Windows".to_string())
+        Err("copy_image_to_clipboard is only supported on Windows and macOS".to_string())
     }
 }
 

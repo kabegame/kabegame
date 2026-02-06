@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::providers::descriptor::ProviderDescriptor;
-#[cfg(not(kabegame_mode = "light"))]
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
 use crate::providers::provider::{FsEntry, Provider};
 use crate::storage::gallery::ImageQuery;
@@ -112,7 +112,7 @@ impl Provider for CommonProvider {
         Some((image_id.to_string(), PathBuf::from(resolved)))
     }
 
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn delete_child(
         &self,
         child_name: &str,
@@ -228,7 +228,7 @@ impl Provider for RangeProvider {
         Some((image_id.to_string(), PathBuf::from(resolved)))
     }
 
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn delete_child(
         &self,
         child_name: &str,

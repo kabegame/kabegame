@@ -255,6 +255,16 @@ const contextMenuVisible = ref(false);
 const contextMenuImage = ref<ImageInfo | null>(null);
 const contextMenuPosition = ref({ x: 0, y: 0 });
 
+// 检查预览是否打开
+const isPreviewOpen = computed(() => {
+  return previewRef.value?.previewVisible ?? false;
+});
+
+// 当前预览索引（响应式）
+const currentPreviewIndex = computed(() => {
+  return previewRef.value?.previewIndex ?? -1;
+});
+
 const getEffectiveImageUrl = (id: string) => props.imageUrlMap?.[id];
 const imageUrlMapForPreview = computed(() => props.imageUrlMap || {});
 
@@ -433,6 +443,18 @@ const shouldIgnoreKeyTarget = (event: KeyboardEvent) => {
 const handleKeyDown = (event: KeyboardEvent) => {
   if (shouldIgnoreKeyTarget(event)) return;
 
+  // 预览打开时屏蔽 Ctrl+/- 和 Ctrl+A
+  if (isPreviewOpen.value) {
+    if (enableCtrlKeyAdjustColumns.value && (event.ctrlKey || event.metaKey)) {
+      if (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "_") {
+        return;
+      }
+    }
+    if ((event.ctrlKey || event.metaKey) && (event.key === "a" || event.key === "A")) {
+      return;
+    }
+  }
+
   // Ctrl/Cmd + +/-：调整列数（原来是 window 监听）
   if (enableCtrlKeyAdjustColumns.value && (event.ctrlKey || event.metaKey)) {
     if (event.key === "+" || event.key === "=") {
@@ -463,14 +485,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
     if (!image) return;
     event.preventDefault();
     void dispatchContextCommand(buildContextPayload("copy", image));
-    return;
-  }
-
-  // ESC：清空选择
-  if (event.key === "Escape") {
-    selectedIds.value = new Set();
-    lastSelectedIndex.value = -1;
-    closeContextMenu();
     return;
   }
 
@@ -693,6 +707,13 @@ onMounted(async () => {
       if (!enableCtrlWheelAdjustColumns.value) return;
       if (!(e.ctrlKey || e.metaKey)) return;
       if (shouldIgnoreKeyTarget(e as any)) return;
+      // 预览打开时屏蔽 Ctrl+Wheel 调整列数
+      if (isPreviewOpen.value) return;
+      // 检查事件是否来自预览对话框内部（双重保险）
+      const target = e.target as HTMLElement | null;
+      if (target?.closest(".image-preview-dialog") || target?.closest(".el-dialog")) {
+        return;
+      }
       const delta = e.deltaY > 0 ? 1 : -1;
       uiStore.adjustImageGridColumn(delta);
     },
@@ -802,6 +823,53 @@ watch(
 const handleEnterAnimationEnd = (imageId: string) => {
   enteringIds.value.delete(imageId);
 };
+
+// 滚动到指定索引的图片
+const scrollToIndex = (index: number) => {
+  const container = containerEl.value;
+  if (!container) return;
+  if (index < 0 || index >= images.value.length) return;
+
+  const cols = gridColumnsCount.value;
+  const row = Math.floor(index / cols);
+  const rowTop = row * rowHeightWithGap.value;
+  const containerHeight = container.clientHeight;
+  const scrollTop = container.scrollTop;
+
+  // 检查目标行是否在视口内
+  const rowBottom = rowTop + rowHeightWithGap.value;
+  const viewportTop = scrollTop;
+  const viewportBottom = scrollTop + containerHeight;
+
+  // 如果目标行在视口上方，滚动到顶部对齐
+  if (rowTop < viewportTop) {
+    container.scrollTop = rowTop;
+  }
+  // 如果目标行在视口下方，滚动到底部对齐
+  else if (rowBottom > viewportBottom) {
+    container.scrollTop = rowBottom - containerHeight;
+  }
+  // 如果已在视口内，不滚动
+};
+
+// 监听预览索引变化，同步选中项和视口
+watch(
+  currentPreviewIndex,
+  (newIndex) => {
+    // 仅在预览打开且非多选时执行
+    if (!isPreviewOpen.value || selectedIds.value.size > 1) return;
+    if (newIndex < 0 || newIndex >= images.value.length) return;
+
+    const image = images.value[newIndex];
+    if (!image) return;
+
+    // 更新选中项为当前预览图片
+    setSingleSelection(image.id, newIndex);
+
+    // 滚动到目标图片
+    scrollToIndex(newIndex);
+  }
+);
 
 const getContainerEl = () => containerEl.value;
 

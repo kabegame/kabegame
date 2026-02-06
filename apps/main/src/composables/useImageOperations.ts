@@ -7,6 +7,7 @@ import { storeToRefs } from "pinia";
 import { useImageUrlMapCache } from "@kabegame/core/composables/useImageUrlMapCache";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { IS_MACOS } from "@kabegame/core/env";
 
 export type FavoriteStatusChangedDetail = {
   imageIds: string[];
@@ -164,6 +165,20 @@ export function useImageOperations(
       const imageUrl = fromMap.original || fromMap.thumbnail;
 
       if (isTauri() && localPath) {
+        // macOS 和 Windows 优先使用后端 API（不依赖用户手势上下文）
+        if (IS_MACOS) {
+          try {
+            await invoke("copy_image_to_clipboard", { imagePath: localPath });
+            ElMessage.success("图片已复制到剪贴板");
+            return;
+          } catch (error) {
+            console.error("复制图片失败:", error);
+            ElMessage.error("复制图片失败");
+            return;
+          }
+        }
+
+        // Windows 和其他平台：先尝试后端 API，失败则回退到前端 API
         if (imageUrl) {
           try {
             await tryCopyByLoadedUrl(imageUrl);

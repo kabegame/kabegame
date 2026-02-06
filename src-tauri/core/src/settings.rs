@@ -111,10 +111,10 @@ pub enum SettingKey {
     /// 当前壁纸图片ID
     CurrentWallpaperImageId,
     /// 画册盘启用
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     AlbumDriveEnabled,
     /// 画册盘挂载点
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     AlbumDriveMountPoint,
 }
 
@@ -279,9 +279,9 @@ impl Settings {
             SettingKey::WallpaperMode => SettingValue::String(Self::default_wallpaper_mode()),
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
             SettingKey::CurrentWallpaperImageId => SettingValue::OptionString(None),
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveEnabled => SettingValue::Bool(false),
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveMountPoint => {
                 SettingValue::String(Self::default_album_drive_mount_point())
             }
@@ -314,7 +314,7 @@ impl Settings {
         }
     }
 
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn default_album_drive_mount_point() -> String {
         #[cfg(target_os = "windows")]
         {
@@ -390,12 +390,12 @@ Write-Output "$style,$tile"
         {
             let output_str = String::from_utf8_lossy(&output.stdout);
             let style = match output_str.trim() {
-                s if s.contains("scaled") => "fit",      // 修正：scaled 对应 fit（适应）
-                s if s.contains("zoom") => "fill",       // zoom 对应 fill（填充）
-                s if s.contains("spanned") => "fill",    // spanned 对应 fill（多屏横向拼接）
+                s if s.contains("scaled") => "fit", // 修正：scaled 对应 fit（适应）
+                s if s.contains("zoom") => "fill",  // zoom 对应 fill（填充）
+                s if s.contains("spanned") => "fill", // spanned 对应 fill（多屏横向拼接）
                 s if s.contains("stretched") => "stretch", // stretched 对应 stretch（拉伸）
-                s if s.contains("centered") => "center",   // centered 对应 center（居中）
-                s if s.contains("wallpaper") => "tile",     // wallpaper 对应 tile（平铺）
+                s if s.contains("centered") => "center", // centered 对应 center（居中）
+                s if s.contains("wallpaper") => "tile", // wallpaper 对应 tile（平铺）
                 _ => "fill",
             };
             return (style.to_string(), "none".to_string());
@@ -485,9 +485,9 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperMode,
             SettingKey::WindowState,
             SettingKey::CurrentWallpaperImageId,
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveEnabled,
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveMountPoint,
         ];
 
@@ -575,7 +575,7 @@ Write-Output "$style,$tile"
             | SettingKey::WallpaperRotationEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
@@ -591,7 +591,7 @@ Write-Output "$style,$tile"
             | SettingKey::WallpaperMode => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
             )),
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveMountPoint => Ok(SettingValue::String(
                 json.as_str().unwrap_or("").to_string(),
             )),
@@ -676,9 +676,9 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperMode => "wallpaperMode".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             SettingKey::CurrentWallpaperImageId => "currentWallpaperImageId".to_string(),
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveEnabled => "albumDriveEnabled".to_string(),
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveMountPoint => "albumDriveMountPoint".to_string(),
         }
     }
@@ -996,7 +996,7 @@ Write-Output "$style,$tile"
         }
     }
 
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     pub async fn get_album_drive_enabled(&self) -> Result<bool, String> {
         let cells = Self::cells();
         if let Some(cell) = cells.get(&SettingKey::AlbumDriveEnabled) {
@@ -1007,7 +1007,7 @@ Write-Output "$style,$tile"
         }
     }
 
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     pub async fn get_album_drive_mount_point(&self) -> Result<String, String> {
         let cells = Self::cells();
         if let Some(cell) = cells.get(&SettingKey::AlbumDriveMountPoint) {
@@ -1032,16 +1032,24 @@ Write-Output "$style,$tile"
         Self::emit_setting_change(SettingKey::AutoLaunch, &new_value).await;
         Self::trigger_debounce_save().await?;
 
-        // 设置开机启动
-        #[cfg(target_os = "windows")]
+        // 设置开机启动（Windows、Linux、macOS 共用逻辑）
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         {
             use auto_launch::AutoLaunchBuilder;
             let app_path = std::env::current_exe()
                 .map_err(|e| format!("Failed to get current exe path: {}", e))?;
+            let app_path_str = app_path.to_str().unwrap();
 
-            let auto_launch = AutoLaunchBuilder::new()
-                .set_app_name("Kabegame")
-                .set_app_path(app_path.to_str().unwrap())
+            let mut builder = AutoLaunchBuilder::new();
+            builder.set_app_name("Kabegame");
+            builder.set_app_path(app_path_str);
+            
+            // 如果启用开机启动，添加 --auto-startup 参数
+            if enabled {
+                builder.set_args(&["--auto-startup"]);
+            }
+
+            let auto_launch = builder
                 .build()
                 .map_err(|e| format!("Failed to create auto launch: {}", e))?;
 
@@ -1393,7 +1401,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     pub async fn set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::Bool(enabled);
@@ -1406,7 +1414,7 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     pub async fn set_album_drive_mount_point(&self, mount_point: String) -> Result<(), String> {
         let t = mount_point.trim().to_string();
         if t.is_empty() {

@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { reactive, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { IS_DEV } from "../env";
+import { IS_DEV, IS_LIGHT_MODE } from "../env";
 
 // 与后端 settings.rs 的 AppSettings（serde rename_all = camelCase）保持一致
 export interface AppSettings {
@@ -152,7 +152,7 @@ export const useSettingsStore = defineStore("settings", () => {
 
   const loadAll = async () => {
     // 并发获取所有设置（只加载后端实际存在的字段）
-    const allKeys: AppSettingKey[] = [
+    const commonKeys: AppSettingKey[] = [
       "autoLaunch",
       "maxConcurrentDownloads",
       "networkRetryCount",
@@ -172,9 +172,11 @@ export const useSettingsStore = defineStore("settings", () => {
       "wallpaperMode",
       "windowState",
       "currentWallpaperImageId",
-      "albumDriveEnabled",
-      "albumDriveMountPoint",
     ];
+
+    const allKeys: AppSettingKey[] = IS_LIGHT_MODE
+      ? commonKeys
+      : [...commonKeys, "albumDriveEnabled", "albumDriveMountPoint"];
 
     await Promise.all(allKeys.map((k) => load(k)));
   };
@@ -186,7 +188,7 @@ export const useSettingsStore = defineStore("settings", () => {
       maxConcurrentDownloads: "count",
       networkRetryCount: "count",
       imageClickAction: "action",
-      galleryImageAspectRatio: "ratio",
+      galleryImageAspectRatio: "aspectRatio",
       autoDeduplicate: "enabled",
       defaultDownloadDir: "dir",
       wallpaperEngineDir: "dir",

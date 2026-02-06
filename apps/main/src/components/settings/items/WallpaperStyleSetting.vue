@@ -12,7 +12,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_WINDOWS } from "@kabegame/core/env";
+import { IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = defineProps<{
@@ -40,15 +40,17 @@ const allOptions: Opt[] = [
 
 const options = computed(() => {
   if (mode.value === "window" && IS_WINDOWS) return allOptions;
-  if (!nativeWallpaperStyles.value.length) return allOptions;
+  if (!nativeWallpaperStyles.value.length) return [
+    { label: "跟随系统", value: "system", desc: "跟随系统 - 根据系统设置显示" },
+  ];
   return allOptions.filter((o) => nativeWallpaperStyles.value.includes(o.value));
 });
 
-const localValue = ref<string>("fill");
+const localValue = ref<string>("system");
 watch(
   () => settingValue.value,
   (v) => {
-    localValue.value = (v as any as string) || "fill";
+    localValue.value = (v as any as string) || "system";
   },
   { immediate: true }
 );

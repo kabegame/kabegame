@@ -39,16 +39,25 @@ pub enum CliIpcRequest {
     Status,
 
     /// 虚拟盘：挂载（Windows + virtual-driver）
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VdMount,
 
     /// 虚拟盘：卸载（Windows + virtual-driver）
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VdUnmount,
 
     /// 虚拟盘：状态（Windows + virtual-driver）
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VdStatus,
+
+    /// 导入插件请求（从 .kgpg 文件）
+    AppImportPlugin {
+        /// .kgpg 文件路径
+        kgpg_path: String,
+    },
+
+    /// 显示应用窗口（如果隐藏）
+    AppShowWindow,
 
     /// 运行一次 Rhai 插件（等价于 `kabegame-cli plugin run`）
     PluginRun {
@@ -428,9 +437,9 @@ pub enum CliIpcRequest {
     SettingsGetWindowState,
     SettingsGetCurrentWallpaperImageId,
     SettingsGetDefaultImagesDir,
-    #[cfg(all(not(kabegame_mode = "light")))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     SettingsGetAlbumDriveEnabled,
-    #[cfg(all(not(kabegame_mode = "light")))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     SettingsGetAlbumDriveMountPoint,
 
     // ======== Settings Setter（保留 core::Settings 的校验逻辑）========
@@ -456,11 +465,11 @@ pub enum CliIpcRequest {
     SettingsSetWallpaperMode {
         mode: String,
     },
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     SettingsSetAlbumDriveEnabled {
         enabled: bool,
     },
-    #[cfg(not(kabegame_mode = "light"))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     SettingsSetAlbumDriveMountPoint {
         mount_point: String,
     },
@@ -540,12 +549,12 @@ pub struct CliIpcResponse {
 
     /// 对 VD：是否已挂载
     #[serde(default)]
-    #[cfg(all(not(kabegame_mode = "light")))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     pub mounted: Option<bool>,
 
     /// 对 VD：当前挂载点
     #[serde(default)]
-    #[cfg(all(not(kabegame_mode = "light")))]
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     pub mount_point: Option<String>,
 
     /// 对 Status：daemon 版本/能力信息（可选，后续扩展）
@@ -574,9 +583,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             mounted: None,
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,
@@ -591,9 +600,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             mounted: None,
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,
@@ -608,9 +617,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             mounted: None,
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             mount_point: None,
             info: None,
             data: data,
@@ -629,9 +638,9 @@ impl CliIpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             mounted: None,
-            #[cfg(not(kabegame_mode = "light"))]
+            #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             mount_point: None,
             info: None,
             data: serde_json::Value::Null,
@@ -690,46 +699,6 @@ where
     Ok(payload)
 }
 
-// 保留旧函数用于兼容（已废弃，但暂时保留以防万一）
-#[deprecated(note = "Use encode_frame instead")]
-pub fn encode_line<T: Serialize>(v: &T) -> Result<Vec<u8>, String> {
-    let mut s = serde_json::to_string(v).map_err(|e| format!("ipc json encode failed: {}", e))?;
-    s.push('\n');
-    Ok(s.into_bytes())
-}
-
-#[deprecated(note = "Use decode_frame instead")]
-pub fn decode_line<T: for<'de> Deserialize<'de>>(line: &str) -> Result<T, String> {
-    serde_json::from_str(line).map_err(|e| format!("ipc json decode failed: {}", e))
-}
-
-#[deprecated(note = "Use read_one_frame instead")]
-pub async fn read_one_line<R>(mut r: R) -> Result<String, String>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    use tokio::io::AsyncReadExt;
-    let mut buf = Vec::with_capacity(1024);
-    let mut tmp = [0u8; 1];
-    loop {
-        let n = r
-            .read(&mut tmp)
-            .await
-            .map_err(|e| format!("ipc read failed: {}", e))?;
-        if n == 0 {
-            break;
-        }
-        if tmp[0] == b'\n' {
-            break;
-        }
-        buf.push(tmp[0]);
-        if buf.len() > 256 * 1024 {
-            return Err("ipc line too long".to_string());
-        }
-    }
-    Ok(String::from_utf8_lossy(&buf).to_string())
-}
-
 pub async fn write_all<W>(mut w: W, bytes: &[u8]) -> Result<(), String>
 where
     W: tokio::io::AsyncWrite + Unpin,
@@ -754,6 +723,7 @@ pub fn unix_socket_path() -> std::path::PathBuf {
     std::env::temp_dir().join("kabegame-daemon.sock")
 }
 
+#[cfg(feature = "ipc-client")]
 /// 客户端：发送一次请求并等待响应。
 pub async fn request(req: CliIpcRequest) -> Result<CliIpcResponse, String> {
     #[cfg(target_os = "windows")]
