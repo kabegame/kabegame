@@ -103,32 +103,6 @@ watch(
   }
 );
 
-// 同步 settings -> local（以及“画册被删/变更后”的矫正）
-// 这里不应该由前端做
-// watch(
-//   () => [settingValue.value, albumStore.albums] as const,
-//   ([rawId]) => {
-//     const id = (rawId as any as string | null | undefined) ?? "";
-//     // 约定：空字符串表示“全画廊轮播”；null/undefined 也视为 ""
-//     if (id === "" || albumStore.albums.some((a) => a.id === id)) {
-//       localAlbumId.value = id;
-//       return;
-//     }
-
-//     // 选中的画册已不存在：自动回退到“全画廊”，并同步落盘
-//     localAlbumId.value = "";
-//     if (rotationEnabled.value) {
-//       // 使用 set 方法持久化
-//       set("", async () => {
-//         await settingsStore.loadAll();
-//       }).catch(() => {
-//         // 静默失败
-//       });
-//     }
-//   },
-//   { immediate: true }
-// );
-
 const handleAlbumChange = async (value: string) => {
   if (props.disabled || keyDisabled.value) return;
   try {

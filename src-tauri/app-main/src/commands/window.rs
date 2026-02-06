@@ -134,11 +134,11 @@ pub fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Windows：为主窗口左侧导航栏启用 DWM 模糊（BlurBehind + HRGN）。
-/// - sidebar_width: 侧栏宽度（px）
-/// TODO: MacOS用不同的实现
+/// 为主窗口左侧导航栏启用毛玻璃效果。
+/// - Windows: 使用 DWM 模糊（BlurBehind + HRGN）
+/// - macOS: 使用 NSVisualEffectView Sidebar 材质
+/// - sidebar_width: 侧栏宽度（px，macOS 上用于兼容性，实际效果针对整个窗口）
 #[tauri::command]
-#[cfg(target_os = "windows")]
 pub fn set_main_sidebar_blur(app: tauri::AppHandle, sidebar_width: u32) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -317,7 +317,52 @@ pub fn set_main_sidebar_blur(app: tauri::AppHandle, sidebar_width: u32) -> Resul
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::Manager;
+        use tauri::window::{Effect, EffectState, EffectsBuilder};
+
+        let Some(window) = app.get_webview_window("main") else {
+            return Err("找不到主窗口".to_string());
+        };
+
+        #[cfg(debug_assertions)]
+        {
+            eprintln!(
+                "[macOS Vibrancy] set_main_sidebar_blur: sidebar_width={}",
+                sidebar_width
+            );
+        }
+
+        if sidebar_width == 0 {
+            // 关闭毛玻璃效果
+            window
+                .set_effects(None)
+                .map_err(|e| format!("set_effects(None) failed: {}", e))?;
+            #[cfg(debug_assertions)]
+            eprintln!("[macOS Vibrancy] vibrancy disabled");
+            return Ok(());
+        }
+
+        // 启用侧边栏毛玻璃效果
+        // 使用 Sidebar 材质，这是 macOS 侧边栏的标准毛玻璃效果
+        // 由于效果是针对整个窗口的，需要前端侧栏区域使用半透明背景才能看到效果
+        let effects = EffectsBuilder::new()
+            .effect(Effect::Sidebar)
+            .state(EffectState::FollowsWindowActiveState)
+            .build();
+
+        window
+            .set_effects(Some(effects))
+            .map_err(|e| format!("set_effects failed: {}", e))?;
+
+        #[cfg(debug_assertions)]
+        eprintln!("[macOS Vibrancy] sidebar vibrancy enabled");
+
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = app;
         let _ = sidebar_width;

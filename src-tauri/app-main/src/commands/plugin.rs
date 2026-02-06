@@ -1,4 +1,4 @@
-﻿// 謠剃ｻｶ逶ｸ蜈ｳ蜻ｽ莉､
+// 謠剃ｻｶ逶ｸ蜈ｳ蜻ｽ莉､
 
 use kabegame_core::plugin::{PluginManager, PluginSource};
 
@@ -85,7 +85,9 @@ pub async fn get_plugin_detail(
                 .load_remote_plugin_detail(&plugin_id, &url, sha256.as_deref(), size_bytes)
                 .await
         }
-        None => plugin_manager.load_installed_plugin_detail(&plugin_id).await,
+        None => {
+            plugin_manager.load_installed_plugin_detail(&plugin_id).await
+        }
     };
     let detail = res?;
     Ok(serde_json::to_value(detail).map_err(|e| e.to_string())?)
@@ -97,6 +99,34 @@ pub async fn validate_plugin_source(index_url: String) -> Result<(), String> {
         .validate_store_source_index(&index_url)
         .await?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn preview_import_plugin_with_icon(zip_path: String) -> Result<serde_json::Value, String> {
+    let path = std::path::PathBuf::from(&zip_path);
+    let pm = PluginManager::global();
+    let preview = pm.preview_import_from_zip(&path).await?;
+    let manifest = pm.read_plugin_manifest(&path)?;
+    
+    // Icon
+    let icon_base64 = match pm.read_plugin_icon(&path) {
+        Ok(Some(bytes)) if !bytes.is_empty() => {
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            Some(STANDARD.encode(bytes))
+        }
+        _ => None,
+    };
+
+    let config = pm.read_plugin_config_public(&path).ok().flatten();
+    let plugins_dir = pm.get_plugins_directory();
+
+    Ok(serde_json::json!({
+        "preview": preview,
+        "manifest": manifest,
+        "iconBase64": icon_base64,
+        "baseUrl": config.and_then(|c| c.base_url),
+        "pluginsDir": plugins_dir.to_string_lossy().to_string(),
+    }))
 }
 
 #[tauri::command]
@@ -172,4 +202,16 @@ pub async fn get_remote_plugin_icon(download_url: String) -> Result<Option<Vec<u
     PluginManager::global()
         .fetch_remote_plugin_icon_v2(&download_url)
         .await
+}
+
+#[tauri::command]
+pub async fn get_plugin_doc_from_zip(zip_path: String) -> Result<Option<String>, String> {
+    let path = std::path::PathBuf::from(&zip_path);
+    PluginManager::global().read_plugin_doc_public(&path)
+}
+
+#[tauri::command]
+pub async fn get_plugin_image_from_zip(zip_path: String, image_path: String) -> Result<Vec<u8>, String> {
+    let path = std::path::PathBuf::from(&zip_path);
+    PluginManager::global().read_plugin_image(&path, &image_path)
 }

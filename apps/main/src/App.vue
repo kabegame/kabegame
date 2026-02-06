@@ -5,6 +5,11 @@
     <FileDropOverlay ref="fileDropOverlayRef" @click="handleOverlayClick" />
     <!-- 文件拖拽导入确认弹窗（封装 ElMessageBox.confirm） -->
     <ImportConfirmDialog ref="importConfirmDialogRef" />
+    <!-- 外部插件导入弹窗 -->
+    <PluginImportDialog 
+      v-model:visible="showImportDialog" 
+      :kgpg-path="importKgpgPath"
+    />
     <!-- 全局唯一的快捷设置抽屉（避免多页面实例冲突） -->
     <QuickSettingsDrawer />
     <!-- 全局唯一的帮助抽屉（按页面展示帮助内容） -->
@@ -13,7 +18,7 @@
     <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
     <!-- 非 Android：侧边栏 + 主内容 -->
     <template v-if="!IS_ANDROID">
-      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': IS_WINDOWS, 'bg-white': !IS_WINDOWS }" :width="isCollapsed ? '64px' : '200px'">
+      <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': IS_WINDOWS || IS_MACOS, 'bg-white': !IS_WINDOWS && !IS_MACOS }" :width="isCollapsed ? '64px' : '200px'">
         <div class="sidebar-header">
           <img src="/icon.png" alt="Logo" class="app-logo logo-clickable" @click="toggleCollapse" />
           <div v-if="!isCollapsed" class="sidebar-title-section">
@@ -90,12 +95,14 @@ import { useTaskDrawerStore } from "./stores/taskDrawer";
 import { storeToRefs } from "pinia";
 import FileDropOverlay from "./components/FileDropOverlay.vue";
 import ImportConfirmDialog from "./components/import/ImportConfirmDialog.vue";
+import PluginImportDialog from "./components/import/PluginImportDialog.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
 import { useSidebar } from "./composables/useSidebar";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { IS_WINDOWS, IS_ANDROID } from "@kabegame/core/env";
+import { listen, emit, UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { IS_WINDOWS, IS_MACOS, IS_ANDROID } from "@kabegame/core/env";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
@@ -117,6 +124,10 @@ const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskD
 const fileDropOverlayRef = ref<any>(null);
 const importConfirmDialogRef = ref<any>(null);
 
+// 外部导入插件对话框
+const showImportDialog = ref(false);
+const importKgpgPath = ref<string | null>(null);
+
 // 路由视图 key，用于强制刷新组件
 const routerViewKey = ref(0);
 
@@ -124,12 +135,7 @@ const routerViewKey = ref(0);
 const { init: initWindowEvents } = useWindowEvents();
 
 // 文件拖拽
-const { init: initFileDrop } = useFileDrop(fileDropOverlayRef, importConfirmDialogRef);
-
-// 处理拖拽遮罩层点击关闭
-const handleOverlayClick = () => {
-  fileDropOverlayRef.value?.hide();
-};
+const { init: initFileDrop, handleOverlayClick } = useFileDrop(fileDropOverlayRef, importConfirmDialogRef);
 
 // 侧边栏
 const { isCollapsed, toggleCollapse } = useSidebar();
@@ -141,6 +147,8 @@ onMounted(async () => {
   // 初始化 settings store
   const settingsStore = useSettingsStore();
   await settingsStore.init();
+  // 加载全部设置
+  await settingsStore.loadAll();
 
   // 初始化各个 composables
   await initWindowEvents();
@@ -156,6 +164,38 @@ onMounted(async () => {
       console.log("[Settings] 收到设置变更事件，已更新:", Object.keys(changes));
     }
   });
+
+  // 监听显示窗口事件（IPC）
+  await listen('app-show-window', async () => {
+    const win = getCurrentWindow();
+    await win.show();
+    await win.setFocus();
+  });
+
+  // 监听插件导入事件（IPC）
+  await listen<{ kgpgPath: string }>('app-import-plugin', async (event) => {
+    console.log("Received app-import-plugin:", event.payload);
+    const win = getCurrentWindow();
+    
+    // 尝试显示窗口并获取焦点（如果窗口被隐藏或最小化）
+    // 使用 try-catch 包裹，避免权限错误或窗口状态异常
+    try {
+      const isVisible = await win.isVisible();
+      if (!isVisible) {
+        await win.show();
+      }
+      await win.setFocus();
+    } catch (error) {
+      console.warn("无法显示窗口或设置焦点:", error);
+      // 即使失败也继续显示 dialog
+    }
+    
+    importKgpgPath.value = event.payload.kgpgPath;
+    showImportDialog.value = true;
+  });
+  
+  // 通知后端已准备好接收事件
+  emit('app-ready');
 
   // 预加载关键路由组件，避免首次点击时的卡顿
   // 使用 requestIdleCallback（如有）或 setTimeout 在空闲时加载
@@ -260,7 +300,7 @@ body,
 .app-sidebar {
   // 关键：侧栏背景必须半透明，DWM 才能透出模糊效果
   // background: transparent;
-  // 非 Windows / DWM 失效时的降级（浏览器预览也能看到“玻璃感”）
+  // 非 Windows / DWM 失效时的降级（浏览器预览也能看到"玻璃感"）
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
   border-right: 2px solid var(--anime-border);
@@ -269,6 +309,9 @@ body,
   height: 100vh;
   box-shadow: 4px 0 20px rgba(255, 107, 157, 0.1);
   transition: width 0.3s ease;
+  // 防止横向滚动条
+  overflow-x: hidden;
+  overflow-y: auto;
 
   .sidebar-header {
     padding: 24px 20px;
@@ -356,6 +399,9 @@ body,
 
     .sidebar-menu {
       padding: 8px 0;
+      // 防止菜单溢出导致横向滚动
+      overflow-x: hidden;
+      width: 100%;
 
       .el-menu-item {
         display: flex;
@@ -363,11 +409,15 @@ body,
         align-items: center;
         padding: 0;
         height: 48px;
-        margin: 4px 8px;
+        // 折叠状态下减少左右 margin，避免超出 64px 宽度
+        margin: 4px 4px;
         border-radius: 8px;
         text-align: center;
         position: relative;
         transition: all 0.3s ease;
+        // 确保菜单项不会超出容器
+        max-width: 100%;
+        box-sizing: border-box;
 
         &.is-active {
           background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
@@ -406,7 +456,7 @@ body,
     border-right: none;
     padding: 10px 0;
     transition: padding 0.3s ease;
-    // Element Plus 默认给 el-menu 一个不透明背景，会把“半透明侧栏”盖住，导致看起来没有毛玻璃
+    // Element Plus 默认给 el-menu 一个不透明背景，会把"半透明侧栏"盖住，导致看起来没有毛玻璃
     background: transparent;
 
     // 覆盖 Element Plus 菜单的背景色（展开/折叠都需要）
@@ -442,6 +492,89 @@ body,
         align-items: center;
         justify-content: center;
         margin-right: 8px;
+      }
+    }
+  }
+
+  // macOS 毛玻璃效果下，文字需要白色才能看清
+  &.bg-transparent {
+    .sidebar-header {
+      h1 {
+        // 标题文字在毛玻璃背景下使用白色，但保持渐变效果
+        -webkit-text-fill-color: white;
+        color: white;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+      }
+    }
+
+    .sidebar-menu {
+      .el-menu-item {
+        color: white;
+
+        .el-icon {
+          color: white;
+        }
+
+        span {
+          color: white;
+        }
+
+        // 激活状态保持渐变背景，文字为白色
+        &.is-active {
+          color: white;
+
+          .el-icon {
+            color: white;
+          }
+
+          span {
+            color: white;
+          }
+        }
+
+        // 悬浮状态：文字稍微变亮
+        &:hover {
+          color: rgba(255, 255, 255, 0.9);
+
+          .el-icon {
+            color: rgba(255, 255, 255, 0.9);
+          }
+
+          span {
+            color: rgba(255, 255, 255, 0.9);
+          }
+        }
+      }
+    }
+
+    // 折叠状态下的菜单项也需要白色
+    &.sidebar-collapsed {
+      .sidebar-menu {
+        .el-menu-item {
+          color: white;
+
+          .el-icon {
+            color: white;
+          }
+
+          // 激活状态：渐变背景 + 白色图标
+          &.is-active {
+            color: white;
+
+            .el-icon {
+              color: white;
+            }
+          }
+
+          // 悬浮状态
+          &:hover {
+            color: rgba(255, 255, 255, 0.9);
+
+            .el-icon {
+              color: rgba(255, 255, 255, 0.9);
+            }
+          }
+        }
       }
     }
   }

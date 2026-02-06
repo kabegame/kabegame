@@ -5,8 +5,6 @@
 //! - Windows 下优先使用 file mapping（section / mmap）减少大量小块 ReadFile syscall。
 //! - 失败/不适用时回退到 `FileExt::seek_read`。
 
-#![cfg(all(not(kabegame_mode = "light"), not(target_os = "android"), target_os = "windows"))]
-
 use std::{
     fs::File,
     num::NonZeroUsize,

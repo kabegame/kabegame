@@ -275,7 +275,7 @@ pub async fn set_gallery_image_aspect_ratio(aspect_ratio: Option<String>) -> Res
 }
 
 #[tauri::command]
-pub fn get_desktop_resolution() -> Result<(u32, u32), String> {
+pub fn get_desktop_resolution(app: tauri::AppHandle) -> Result<(u32, u32), String> {
     #[cfg(target_os = "windows")]
     {
         unsafe {
@@ -286,7 +286,19 @@ pub fn get_desktop_resolution() -> Result<(u32, u32), String> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        Ok((1920, 1080))
+        use tauri::Manager;
+        // 获取主窗口，然后获取主显示器
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "找不到主窗口".to_string())?;
+        
+        let monitor = window
+            .primary_monitor()
+            .map_err(|e| format!("获取主显示器失败: {}", e))?
+            .ok_or_else(|| "找不到主显示器".to_string())?;
+        
+        let size = monitor.size();
+        Ok((size.width, size.height))
     }
 }
 

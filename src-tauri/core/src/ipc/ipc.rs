@@ -50,6 +50,15 @@ pub enum CliIpcRequest {
     #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VdStatus,
 
+    /// 导入插件请求（从 .kgpg 文件）
+    AppImportPlugin {
+        /// .kgpg 文件路径
+        kgpg_path: String,
+    },
+
+    /// 显示应用窗口（如果隐藏）
+    AppShowWindow,
+
     /// 运行一次 Rhai 插件（等价于 `kabegame-cli plugin run`）
     PluginRun {
         /// 插件 ID（已安装的 .kgpg 文件名，不含扩展名）或插件文件路径（.kgpg）

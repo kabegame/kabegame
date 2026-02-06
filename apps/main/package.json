@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --config vite.config.ts",
-    "build": "vite build --config vite.config.ts"
+    "dev": "bun -b vite --config vite.config.ts",
+    "build": "bun -b vite build --config vite.config.ts"
   },
   "dependencies": {
     "@kabegame/core": "workspace:*",

@@ -2,9 +2,12 @@
   "identifier": "main-capability",
   "description": "Main capability for Kabegame (workspace app-main)",
   "local": true,
-  "windows": ["main", "wallpaper", "wallpaper-debug", "plugin-editor"],
+  "windows": ["main", "wallpaper", "wallpaper-debug"],
   "permissions": [
     "core:default",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-always-on-top",
     "dialog:default",
     "shell:default",
     "fs:default",

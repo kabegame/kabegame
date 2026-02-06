@@ -8,10 +8,9 @@ use kabegame_core::ipc::{DaemonEvent, EventBroadcaster};
 use kabegame_core::ipc::events::DaemonEventKind;
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-use crate::commands;
 use crate::commands::wallpaper::init_wallpaper_on_startup;
  #[cfg(any(
     all(not(kabegame_mode = "light"), not(target_os = "android")), 
@@ -27,7 +26,10 @@ pub fn init_app_paths(app: &tauri::AppHandle) {
 
 pub fn init_plugin() {
     tauri::async_runtime::spawn(async {
-        PluginManager::global().ensure_prepackaged_plugins_installed().await
+        // 初始化已安装插件缓存（会自动合并读取内置和用户目录）
+        if let Err(e) = PluginManager::global().ensure_installed_cache_initialized().await {
+            eprintln!("Failed to initialize plugin cache: {}", e);
+        }
     });
 }
 
@@ -73,11 +75,26 @@ pub fn cleanup_user_data_if_marked() -> bool {
 
 // 恢复窗口位置
 pub fn restore_main_window_state(app: &tauri::AppHandle) {
-    // 不恢复 window_state：用户要求每次居中弹出
+    // 检查是否是开机启动（没有额外命令行参数，且开启了开机启动）
+    let is_auto_startup = is_auto_startup();
+    
     if let Some(main_window) = app.get_webview_window("main") {
         let _ = main_window.center();
-        main_window.show().unwrap();
+        if is_auto_startup {
+            // 开机启动时隐藏窗口
+            let _ = main_window.hide();
+        } else {
+            // 正常启动时显示窗口
+            let _ = main_window.show();
+        }
     }
+}
+
+/// 检测是否是开机启动
+/// 判断逻辑：检查命令行参数中是否有 --auto-startup 参数
+fn is_auto_startup() -> bool {
+    // 检查命令行参数中是否有 --auto-startup 参数
+    std::env::args().any(|arg| arg == "--auto-startup")
 }
 
 // 壁纸组件，壁纸设置、轮播等功能
@@ -136,7 +153,9 @@ pub fn init_wallpaper_controller(app: &mut tauri::App) {
         }
     });
     tauri::async_runtime::spawn(async{
-        WallpaperRotator::global().ensure_running(true).await;
+        if let Err(e) = WallpaperRotator::global().ensure_running(true).await {
+            eprintln!("[WARN] Failed to ensure wallpaper rotator running: {}", e);
+        }
     });
 }
 
@@ -206,31 +225,67 @@ pub fn start_local_event_loop(app: AppHandle) {
 }
 
 /// 启动 IPC 服务
- #[cfg(any(
-    all(not(kabegame_mode = "light"), not(target_os = "android")), 
-    all(kabegame_mode = "light", not(target_os = "windows"))
-))]
-pub fn start_ipc_server(ctx: Arc<Store>) {
+#[cfg(not(target_os = "android"))]
+pub fn start_ipc_server(ctx: Arc<Store>, app_handle: AppHandle) {
     println!("[IPC_SERVER] Starting IPC server...");
 
-    tauri::async_runtime::spawn(async {
+    tauri::async_runtime::spawn(async move {
+        // 1. 检查是否有其他实例运行
+        if kabegame_core::ipc::server::check_other_daemon_running().await {
+            println!("[IPC_SERVER] Another instance detected. Forwarding request and exiting...");
+            
+            use kabegame_core::ipc::ipc::{CliIpcRequest, request};
+            
+            // 请求 1: 显示窗口
+            let _ = request(CliIpcRequest::AppShowWindow).await;
+            
+            // 请求 2: 导入插件
+            if let Some(path) = extract_kgpg_file_from_args() {
+                let _ = request(CliIpcRequest::AppImportPlugin { kgpg_path: path }).await;
+            }
+            
+            std::process::exit(0);
+        }
+
+        // 2. 首次启动：处理启动参数
+        if let Some(path) = extract_kgpg_file_from_args() {
+             let app_handle_clone = app_handle.clone();
+             // 等待前端准备好
+             app_handle.once("app-ready", move |_| {
+                 let _ = app_handle_clone.emit("app-import-plugin", serde_json::json!({
+                     "kgpgPath": path
+                 }));
+             });
+        }
+
+        // 3. 启动服务器
         let res = kabegame_core::ipc::server::serve_with_events(
             move |req| {
                 let ctx = ctx.clone();
                 async move {
                     // eprintln!("[DEBUG] Backend 收到请求: {:?}", req);
-
                     use crate::ipc::dispatch_request;
                     let resp = dispatch_request(req, ctx).await;
                     resp
                 }
             },
         ).await;
+        
         if let Err(e) = res {
-            //TODO: 处理服务器退出错误
             eprintln!("[IPC_SERVER] 服务器退出: {}", e);
         }
     });
+}
+
+fn extract_kgpg_file_from_args() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    // 简单启发式：找第一个以 .kgpg 结尾的参数
+    for arg in args.iter().skip(1) {
+        if arg.ends_with(".kgpg") {
+            return Some(arg.clone());
+        }
+    }
+    None
 }
 
 pub fn init_download_workers() {
@@ -261,36 +316,44 @@ pub fn start_task_scheduler() {
 }
 
 pub fn init_shortcut(app: &tauri::App) -> Result<(), String> {
-    use tauri_plugin_global_shortcut::Shortcut;
+    // macOS 使用系统自带的 Control + Command + F 全屏快捷键，无需手动注册
+    // 其他平台（Windows/Linux）注册 F11 快捷键切换全屏
+    #[cfg(not(target_os = "macos"))]
+    {
+        use tauri_plugin_global_shortcut::Shortcut;
 
-    let app_handle = app.app_handle().clone();
-    let shortcuts = app.global_shortcut();
+        let app_handle = app.app_handle().clone();
+        let shortcuts = app.global_shortcut();
 
-    // 注册并监听 F11 快捷键切换全屏
-    let f11_shortcut = Shortcut::new(
-        Some(tauri_plugin_global_shortcut::Modifiers::empty()),
-        tauri_plugin_global_shortcut::Code::F11,
-    );
+        // 注册并监听 F11 快捷键切换全屏
+        let f11_shortcut = Shortcut::new(
+            Some(tauri_plugin_global_shortcut::Modifiers::empty()),
+            tauri_plugin_global_shortcut::Code::F11,
+        );
 
-    let app_handle_clone = app_handle.clone();
-    shortcuts.on_shortcuts([f11_shortcut], move |_app_handle, shortcut, event| {
-        // 检查是否是 F11 快捷键（无修饰键 + F11）且是按下事件
-        if shortcut.mods.is_empty()
-            && shortcut.key.eq(&tauri_plugin_global_shortcut::Code::F11)
-            && matches!(
-                event.state,
-                tauri_plugin_global_shortcut::ShortcutState::Pressed
-            )
-        {
-            let app_handle = app_handle_clone.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = commands::window::toggle_fullscreen(app_handle).await {
-                    eprintln!("Failed to toggle fullscreen: {}", e);
-                }
-            });
-        }
-    }).map_err(|e| format!("初始化快捷键失败"))?;
+        let app_handle_clone = app_handle.clone();
+        shortcuts.on_shortcuts([f11_shortcut], move |_app_handle, shortcut, event| {
+            // 检查是否是 F11 快捷键（无修饰键 + F11）且是按下事件
+            if shortcut.mods.is_empty()
+                && shortcut.key.eq(&tauri_plugin_global_shortcut::Code::F11)
+                && matches!(
+                    event.state,
+                    tauri_plugin_global_shortcut::ShortcutState::Pressed
+                )
+            {
+                let app_handle = app_handle_clone.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = commands::window::toggle_fullscreen(app_handle).await {
+                        eprintln!("Failed to toggle fullscreen: {}", e);
+                    }
+                });
+            }
+        }).map_err(|e| format!("初始化快捷键失败"))?;
 
-    println!("✓ F11 shortcut registered for fullscreen toggle");
+        println!("✓ F11 shortcut registered for fullscreen toggle");
+    }
+    
     Ok(())
 }
+
+

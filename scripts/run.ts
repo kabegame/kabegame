@@ -1,18 +1,17 @@
 #!/usr/bin/env node
 /**
  * Unified entry for Kabegame workspace:
- * - 2 个前端应用（main / plugin-editor）分别跑在 1420 / 1421
- * - 3 个 Rust crate：app-main / app-plugin-editor / cli，共用 kabegame-core
+ * - 1 个前端应用（main）跑在 1420
+ * - 2 个 Rust crate：app-main / app-cli，共用 kabegame-core
  *
  * 用法（PowerShell）：
  * - bun dev -c main
- * - bun dev -c plugin-editor
- * - bun b                             （默认构建全部：main + plugin-editor + cli）
- * - bun b -c main|plugin-editor|cli
+ * - bun b                             （默认构建全部：main + cli）
+ * - bun b -c main|cli
  *
  * 说明：
  * - dev/start 会先打包插件到 src-tauri/resources/plugins（确保资源存在）
- * - main/plugin-editor 的前端由各自 tauri.conf.json 的 beforeDev/BuildCommand 触发
+ * - main 的前端由各自 tauri.conf.json 的 beforeDev/BuildCommand 触发
  */
 
 import { Command } from "commander";
@@ -70,7 +69,7 @@ program
   .description("启动开发模式")
   .requiredOption(
     "-c, --component <component>",
-    "要启动的组件：main | plugin-editor",
+    "要启动的组件：main",
     Component.MAIN,
   )
   .option(
@@ -96,7 +95,7 @@ program
   .description("启动")
   .option(
     "-c, --component <component>",
-    "要启动的组件：main | plugin-editor | cli",
+    "要启动的组件：main | cli",
     Component.MAIN,
   )
   .option(
@@ -121,7 +120,7 @@ program
   .description("构建生产版本")
   .option(
     "-c, --component <component>",
-    "要构建的组件：main | plugin-editor | cli",
+    "要构建的组件：main | cli",
     "",
   )
   .option(
@@ -155,7 +154,7 @@ program
   .description("检查类型与 Rust Cargo")
   .requiredOption(
     "-c, --component <component>",
-    "要检查的组件：main | plugin-editor | cli",
+    "要检查的组件：main | cli",
     Component.MAIN,
   )
   .option("--skip <skip>", "跳过检查项：vue/cargo（只能一个值）", "")

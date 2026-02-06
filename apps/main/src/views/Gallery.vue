@@ -84,8 +84,8 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import { useGalleryImages } from "@/composables/useGalleryImages";
-import { useGallerySettings } from "@/composables/useGallerySettings";
 import { useImageOperations } from "@/composables/useImageOperations";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
@@ -321,15 +321,13 @@ const isRefreshing = ref(false); // 刷新中状态，用于阻止刷新时 Empt
 const refreshKey = ref(0);
 // dragScroll 拖拽滚动期间：暂停实时 loadImageUrls，优先保证滚动帧率
 const isInteracting = ref(false);
-// keep-alive：仅在页面激活时响应 images-change（避免后台无意义刷新）
+// 始终启用 images-change 监听，不管是否在前台（用于同步删除等操作）
 const isGalleryActive = ref(true);
 // const pendingAlbumImages = ref<ImageInfo[]>([]);
 // const pendingAlbumImageIds = computed(() => pendingAlbumImages.value.map(img => img.id));
 // const selectedImage = ref<ImageInfo | null>(null);
-// 使用画廊设置 composable
-const {
-  loadSettings
-} = useGallerySettings();
+// 设置 store
+const settingsStore = useSettingsStore();
 
 // effectiveAspectRatio 已移除，ImageGrid 现在始终使用窗口宽高比
 const plugins = computed(() => pluginStore.plugins);
@@ -846,7 +844,7 @@ watch(tasks, (newTasks, oldTasks) => {
 }, { deep: true });
 
 useImagesChangeRefresh({
-  enabled: isGalleryActive,
+  enabled: ref(true), // 始终启用，不管是否在前台（用于同步删除等操作）
   waitMs: 1000,
   filter: (p) => !p.albumId, // 忽略特定画册的变动（如添加到画册、从画册移除）
   onRefresh: async () => {
@@ -884,7 +882,7 @@ useImagesChangeRefresh({
 });
 
 onMounted(async () => {
-  loadSettings();
+  await settingsStore.loadAll();
   invoke<string | null>("get_current_wallpaper_image_id").then(id => {
     currentWallpaperImageId.value = id;
   }).catch(() => {
@@ -1055,7 +1053,7 @@ onMounted(async () => {
 onActivated(async () => {
   isGalleryActive.value = true;
   // 重新加载设置
-  loadSettings();
+  await settingsStore.loadAll();
 
   // 如果图片列表为空，需要重新加载
   if (displayedImages.value.length === 0) {

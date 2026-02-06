@@ -521,8 +521,45 @@ export const useCrawlerStore = defineStore("crawler", () => {
     _opts: { emitEvent?: boolean } = {},
   ) {
     try {
+      // 在删除前收集所有相关的 taskId
+      const taskIds = new Set<string>();
+      for (const imageId of imageIds) {
+        const image = images.value.find((img) => img.id === imageId);
+        if (image?.taskId) {
+          taskIds.add(image.taskId);
+        }
+      }
+
       await invoke("batch_delete_images", { imageIds });
       images.value = images.value.filter((img) => !imageIds.includes(img.id));
+
+      // 更新所有相关任务的 deletedCount
+      for (const taskId of taskIds) {
+        try {
+          const updatedTask = await invoke<{
+            id: string;
+            pluginId: string;
+            outputDir?: string;
+            userConfig?: Record<string, any>;
+            outputAlbumId?: string;
+            status: string;
+            progress: number;
+            deletedCount: number;
+            startTime?: number;
+            endTime?: number;
+            error?: string;
+          }>("get_task", { taskId });
+
+          if (updatedTask) {
+            const taskIndex = tasks.value.findIndex((t) => t.id === taskId);
+            if (taskIndex !== -1) {
+              tasks.value[taskIndex].deletedCount = updatedTask.deletedCount;
+            }
+          }
+        } catch (error) {
+          console.error(`更新任务 ${taskId} deletedCount 失败:`, error);
+        }
+      }
     } catch (error) {
       console.error("批量删除图片失败:", error);
       throw error;
@@ -534,8 +571,45 @@ export const useCrawlerStore = defineStore("crawler", () => {
     _opts: { emitEvent?: boolean } = {},
   ) {
     try {
+      // 在移除前收集所有相关的 taskId
+      const taskIds = new Set<string>();
+      for (const imageId of imageIds) {
+        const image = images.value.find((img) => img.id === imageId);
+        if (image?.taskId) {
+          taskIds.add(image.taskId);
+        }
+      }
+
       await invoke("batch_remove_images", { imageIds });
       images.value = images.value.filter((img) => !imageIds.includes(img.id));
+
+      // 更新所有相关任务的 deletedCount
+      for (const taskId of taskIds) {
+        try {
+          const updatedTask = await invoke<{
+            id: string;
+            pluginId: string;
+            outputDir?: string;
+            userConfig?: Record<string, any>;
+            outputAlbumId?: string;
+            status: string;
+            progress: number;
+            deletedCount: number;
+            startTime?: number;
+            endTime?: number;
+            error?: string;
+          }>("get_task", { taskId });
+
+          if (updatedTask) {
+            const taskIndex = tasks.value.findIndex((t) => t.id === taskId);
+            if (taskIndex !== -1) {
+              tasks.value[taskIndex].deletedCount = updatedTask.deletedCount;
+            }
+          }
+        } catch (error) {
+          console.error(`更新任务 ${taskId} deletedCount 失败:`, error);
+        }
+      }
     } catch (error) {
       console.error("批量移除图片失败:", error);
       throw error;

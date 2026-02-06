@@ -11,11 +11,6 @@
       "cache": true,
       "inputs": ["frontendMain"],
       "outputs": ["{workspaceRoot}/dist-main/**/*"]
-    },
-    "build-plugin-editor": {
-      "cache": true,
-      "inputs": ["frontendPluginEditor"],
-      "outputs": ["{workspaceRoot}/dist-plugin-editor/**/*"]
     }
   },
   "namedInputs": {
@@ -38,15 +33,6 @@
     "frontendMain": [
       "{workspaceRoot}/apps/main/**/*",
       "{workspaceRoot}/packages/core/**/*",
-      "{workspaceRoot}/package.json",
-      "{workspaceRoot}/bun.lock",
-      "frontendEnv",
-      "default"
-    ],
-    "frontendPluginEditor": [
-      "{workspaceRoot}/apps/plugin-editor/**/*",
-      "{workspaceRoot}/packages/core/**/*",
-      "{workspaceRoot}/static/**/*",
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",
       "frontendEnv",

@@ -250,7 +250,7 @@ const props = withDefaults(
     plugins?: Array<{ id: string; name?: string }>;
     /** active=false 时停止下载轮询与事件监听（main drawer 关闭时用） */
     active?: boolean;
-    /** plugin-editor 可关闭右键菜单 */
+    /** 可关闭右键菜单 */
     enableContextMenu?: boolean;
   }>(),
   { plugins: () => [], active: true, enableContextMenu: true }

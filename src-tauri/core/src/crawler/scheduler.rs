@@ -470,8 +470,9 @@ fn run_task(
             .read_plugin_script(path)?
             .ok_or_else(|| format!("插件 {} 没有提供 crawl.rhai 脚本文件，无法执行", plugin.id))?
     } else {
-        let plugins_dir = plugin_manager.get_plugins_directory();
-        let plugin_file = find_plugin_file(&plugins_dir, &plugin.id)?;
+        // 使用 find_plugin_kgpg_path 查找插件文件（支持双目录查找）
+        let plugin_file = crate::plugin::find_plugin_kgpg_path(&plugin.id)
+            .ok_or_else(|| format!("插件 {} 未找到", plugin.id))?;
         plugin_manager
             .read_plugin_script(&plugin_file)?
             .ok_or_else(|| format!("插件 {} 没有提供 crawl.rhai 脚本文件，无法执行", plugin.id))?

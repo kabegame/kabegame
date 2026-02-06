@@ -94,10 +94,6 @@ struct PackPluginArgs {
 struct ImportPluginArgs {
     /// 本地插件文件路径（.kgpg）
     path: PathBuf,
-
-    /// 不启动 UI，直接执行导入（适合脚本/自动化）
-    #[arg(long = "no-ui", default_value_t = false)]
-    no_ui: bool,
 }
 
 #[derive(Args, Debug)]
@@ -344,10 +340,7 @@ async fn import_plugin(args: ImportPluginArgs) -> Result<(), String> {
         return Err(format!("不是 .kgpg 文件: {}", p.display()));
     }
 
-    if args.no_ui {
-        return import_plugin_no_ui(p).await;
-    }
-    import_plugin_with_ui(p).await
+    import_plugin_no_ui(p).await
 }
 
 async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
@@ -355,9 +348,9 @@ async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
     PluginManager::init_global()?;
     let pm = PluginManager::global();
 
-    // 先确保内置插件安装（主要是为了保证 plugins_directory 初始化/存在；失败不阻断导入）
-    if let Err(e) = pm.ensure_prepackaged_plugins_installed().await {
-        eprintln!("[WARN] 安装内置插件失败（将继续导入）：{e}");
+    // 初始化插件缓存（会自动合并读取内置和用户目录）
+    if let Err(e) = pm.ensure_installed_cache_initialized().await {
+        eprintln!("[WARN] 初始化插件缓存失败（将继续导入）：{e}");
     }
 
     // 结构检查（尽量给出更友好的错误）
@@ -376,122 +369,6 @@ async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CliImportPreview {
-    preview: ImportPreview,
-    manifest: PluginManifest,
-    icon_png_base64: Option<String>,
-    file_path: String,
-    plugins_dir: String,
-}
-
-#[tauri::command]
-async fn cli_preview_import_plugin(zip_path: String) -> Result<CliImportPreview, String> {
-    let path = std::path::PathBuf::from(&zip_path);
-    if !path.is_file() {
-        return Err(format!("插件文件不存在: {}", zip_path));
-    }
-    if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
-        return Err(format!("不是 .kgpg 文件: {}", zip_path));
-    }
-    // 使用全局单例（不再使用 state）
-    let pm = PluginManager::global();
-
-    // 结构检查
-    validate_kgpg_structure(pm, &path)?;
-
-    let preview = pm.preview_import_from_zip(&path).await?;
-    let manifest = pm.read_plugin_manifest(&path)?;
-    let icon_png_base64 = {
-        use base64::{engine::general_purpose::STANDARD, Engine as _};
-        match pm.read_plugin_icon(&path)? {
-            Some(bytes) if !bytes.is_empty() => Some(STANDARD.encode(bytes)),
-            _ => None,
-        }
-    };
-
-    Ok(CliImportPreview {
-        preview,
-        manifest,
-        icon_png_base64,
-        file_path: path.to_string_lossy().to_string(),
-        plugins_dir: pm.get_plugins_directory().to_string_lossy().to_string(),
-    })
-}
-
-#[tauri::command]
-async fn cli_import_plugin_from_zip(zip_path: String) -> Result<Plugin, String> {
-    let path = std::path::PathBuf::from(&zip_path);
-    if !path.is_file() {
-        return Err(format!("插件文件不存在: {}", zip_path));
-    }
-    if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
-        return Err(format!("不是 .kgpg 文件: {}", zip_path));
-    }
-
-    // 使用全局单例（不再使用 state）
-    let pm = PluginManager::global();
-
-    // 再做一次结构检查，避免 UI 预览后文件被替换/损坏
-    validate_kgpg_structure(pm, &path)?;
-    pm.install_plugin_from_zip(&path).await
-}
-
-#[tauri::command]
-fn cli_get_plugin_detail_from_zip(zip_path: String) -> Result<PluginDetail, String> {
-    let path = std::path::PathBuf::from(&zip_path);
-    if !path.is_file() {
-        return Err(format!("插件文件不存在: {}", zip_path));
-    }
-    if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
-        return Err(format!("不是 .kgpg 文件: {}", zip_path));
-    }
-
-    // 使用全局单例（不再使用 state）
-    let pm = PluginManager::global();
-
-    // 复用结构检查，提前给出友好错误
-    validate_kgpg_structure(pm, &path)?;
-
-    let plugin_id = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("plugin")
-        .to_string();
-
-    let manifest = pm.read_plugin_manifest(&path)?;
-    let doc = pm.read_plugin_doc_public(&path).ok().flatten();
-    let icon_data = pm.read_plugin_icon(&path).ok().flatten();
-    let config = pm.read_plugin_config_public(&path).ok().flatten();
-    let base_url = config.and_then(|c| c.base_url);
-
-    Ok(PluginDetail {
-        id: plugin_id,
-        name: manifest.name,
-        desp: manifest.description,
-        doc,
-        icon_data,
-        origin: "local".to_string(),
-        base_url,
-    })
-}
-
-#[tauri::command]
-fn cli_get_plugin_image_from_zip(zip_path: String, image_path: String) -> Result<Vec<u8>, String> {
-    let path = std::path::PathBuf::from(&zip_path);
-    if !path.is_file() {
-        return Err(format!("插件文件不存在: {}", zip_path));
-    }
-    if path.extension().and_then(|s| s.to_str()) != Some("kgpg") {
-        return Err(format!("不是 .kgpg 文件: {}", zip_path));
-    }
-    // 使用全局单例（不再使用 state）
-    let pm = PluginManager::global();
-    // image_path 的安全性由 read_plugin_image 内部校验
-    pm.read_plugin_image(&path, &image_path)
-}
-
 fn validate_kgpg_structure(pm: &PluginManager, zip_path: &std::path::Path) -> Result<(), String> {
     // 1) manifest 必须可读/可解析
     let _ = pm.read_plugin_manifest(zip_path)?;
@@ -504,54 +381,6 @@ fn validate_kgpg_structure(pm: &PluginManager, zip_path: &std::path::Path) -> Re
 
     // 3) config.json 若存在必须可解析（避免"安装后才炸"）
     let _ = pm.read_plugin_config_public(zip_path)?;
-
-    Ok(())
-}
-
-async fn import_plugin_with_ui(p: PathBuf) -> Result<(), String> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
-
-    // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
-    if !is_daemon_available().await {
-        let daemon_path = find_daemon_executable()
-            .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
-        return Err(format!(
-            "无法连接 kabegame-daemon\n提示：请先启动 `{}`",
-            daemon_path.display()
-        ));
-    }
-
-    let zip_path = p.to_string_lossy().to_string();
-    let encoded = url::form_urlencoded::byte_serialize(zip_path.as_bytes()).collect::<String>();
-    let url = WebviewUrl::App(format!("index.html?zipPath={}", encoded).into());
-
-    let context = tauri::generate_context!();
-
-    tauri::Builder::default()
-        .setup(move |app| {
-            // 只初始化插件管理器（导入 UI 不需要 Storage/Settings/DownloadQueue）
-            // 使用全局单例（不再使用 manage）
-            if let Err(e) = PluginManager::init_global() {
-                eprintln!("Failed to initialize plugin manager: {}", e);
-                return Err(e.into());
-            }
-
-            let _ = WebviewWindowBuilder::new(app, "cli-import", url.clone())
-                .title("Kabegame 插件导入")
-                .inner_size(800.0, 1000.0)
-                .resizable(true)
-                .build();
-
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            cli_preview_import_plugin,
-            cli_import_plugin_from_zip,
-            cli_get_plugin_detail_from_zip,
-            cli_get_plugin_image_from_zip
-        ])
-        .run(context)
-        .map_err(|e| format!("运行导入窗口失败: {}", e))?;
 
     Ok(())
 }
