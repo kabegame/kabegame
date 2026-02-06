@@ -24,9 +24,9 @@ pub mod wallpaper_engine_export;
 #[cfg(target_os = "windows")]
 pub mod windows_effects;
 
-/// 虚拟盘（Windows Dokan）。
+/// 虚拟盘。
 ///
-/// 注意：该模块仅在启用 feature `virtual-driver` 时编译，避免在不需要 VD 的 app 里引入 Dokan 相关依赖。
+/// 注意：该模块仅在启用 feature `virtual-driver` 时编译，避免在不需要 VD 的 app 里引入相关依赖。
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 pub mod virtual_driver;
 

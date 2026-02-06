@@ -33,7 +33,7 @@ enum Commands {
     #[command(subcommand)]
     Plugin(PluginCommands),
 
-    /// 虚拟盘（Windows Dokan）相关命令
+    /// 虚拟盘相关命令
     #[command(subcommand)]
     #[cfg(not(kabegame_mode = "light"))]
     Vd(VdCommands),
@@ -53,13 +53,10 @@ enum PluginCommands {
 #[cfg(not(kabegame_mode = "light"))]
 enum VdCommands {
     /// 挂载虚拟盘（通过 daemon IPC 触发）
-    #[cfg(not(kabegame_mode = "light"))]
     Mount(VdMountArgs),
     /// 卸载虚拟盘（通过 daemon IPC 触发）
-    #[cfg(not(kabegame_mode = "light"))]
     Unmount(VdUnmountArgs),
     /// 检查挂载点是否可访问（通过 daemon IPC 触发）
-    #[cfg(not(kabegame_mode = "light"))]
     Status(VdStatusArgs),
 }
 
@@ -74,7 +71,7 @@ struct VdUnmountArgs {}
 #[cfg(not(kabegame_mode = "light"))]
 #[derive(Args, Debug)]
 struct VdStatusArgs {
-    /// 挂载点（例如 K:\\ 或 K: 或 K）
+    /// 挂载点（例如 K:\\ 或 K: 或 K）（Unix默认为 $HOME/kabegame-vd）
     #[arg(long = "mount-point")]
     mount_point: String,
 }
@@ -127,7 +124,7 @@ async fn main() {
     let cli = Cli::parse();
 
     let res = match cli.command {
-        Commands::IpcStatus => ipc_status(),
+        Commands::IpcStatus => ipc_status().await,
         Commands::Plugin(cmd) => match cmd {
             PluginCommands::Run(args) => run_plugin(args),
             PluginCommands::Pack(args) => pack_plugin(args),
@@ -307,11 +304,9 @@ fn vd_status(args: VdStatusArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn ipc_status() -> Result<(), String> {
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| format!("create tokio runtime failed: {}", e))?;
+async fn ipc_status() -> Result<(), String> {
     // 检查 daemon 是否可用（连接失败时会自动弹出错误窗口）
-    if !rt.block_on(is_daemon_available()) {
+    if !is_daemon_available().await {
         let daemon_path = find_daemon_executable()
             .unwrap_or_else(|_| std::path::PathBuf::from("kabegame-daemon"));
         return Err(format!(
@@ -319,9 +314,7 @@ fn ipc_status() -> Result<(), String> {
             daemon_path.display()
         ));
     }
-    let resp = rt.block_on(async {
-        kabegame_core::ipc::ipc::request(kabegame_core::ipc::ipc::CliIpcRequest::Status).await
-    })?;
+    let resp = kabegame_core::ipc::ipc::request(kabegame_core::ipc::ipc::CliIpcRequest::Status).await?;
     println!(
         "{}",
         serde_json::to_string_pretty(&resp).unwrap_or_else(|_| "ok".to_string())
