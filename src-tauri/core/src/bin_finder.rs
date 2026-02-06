@@ -3,7 +3,6 @@
 //! 提供跨平台的可执行文件查找和执行功能，支持通过关键字查找：
 //! - `daemon` -> `kabegame-daemon`
 //! - `cli` -> `kabegame-cli`
-//! - `plugin-editor` -> `kabegame-plugin-editor`
 //! - `main` -> `kabegame` (主程序)
 //!
 //! 查找策略：
@@ -19,7 +18,6 @@ use std::process::{Command, Stdio};
 pub enum BinaryType {
     Daemon,
     Cli,
-    PluginEditor,
     Main,
 }
 
@@ -29,7 +27,6 @@ impl BinaryType {
         match self {
             BinaryType::Daemon => "kabegame-daemon",
             BinaryType::Cli => "kabegame-cli",
-            BinaryType::PluginEditor => "kabegame-plugin-editor",
             BinaryType::Main => "kabegame",
         }
     }
@@ -52,7 +49,6 @@ impl BinaryType {
         match keyword.to_lowercase().as_str() {
             "daemon" => Some(BinaryType::Daemon),
             "cli" => Some(BinaryType::Cli),
-            "plugin-editor" | "plugin_editor" | "plugineditor" => Some(BinaryType::PluginEditor),
             "main" => Some(BinaryType::Main),
             _ => None,
         }

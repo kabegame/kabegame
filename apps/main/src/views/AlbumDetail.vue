@@ -103,7 +103,6 @@ import { IS_WINDOWS, IS_LIGHT_MODE } from "@kabegame/core/env";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { useGallerySettings } from "@/composables/useGallerySettings";
 import { useImageOperations } from "@/composables/useImageOperations";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
@@ -156,10 +155,6 @@ const openVirtualDriveAlbumFolder = async () => {
   }
 };
 
-// 使用画廊设置 composable
-const {
-  loadSettings,
-} = useGallerySettings();
 
 const albumId = ref<string>("");
 const albumName = ref<string>("");
@@ -760,7 +755,7 @@ onMounted(async () => {
   // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
   // 与 Gallery 共用同一套设置
   try {
-    await loadSettings();
+    await settingsStore.loadAll();
     // 加载虚拟磁盘设置
     await settingsStore.loadMany(["albumDriveEnabled", "albumDriveMountPoint"]);
   } catch (e) {
@@ -963,9 +958,10 @@ const handleDeleteAlbum = async () => {
   }
 };
 
-// 统一图片变更事件：不做增量同步，收到 images-change 后刷新“当前页”（1000ms trailing 节流，不丢最后一次）
+// 统一图片变更事件：不做增量同步，收到 images-change 后刷新"当前页"（1000ms trailing 节流，不丢最后一次）
+// 始终启用，不管是否在前台（用于同步删除等操作）
 useImagesChangeRefresh({
-  enabled: isAlbumDetailActive,
+  enabled: ref(true),
   waitMs: 1000,
   filter: (p) => {
     if (!albumId.value) return false;

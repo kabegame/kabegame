@@ -575,6 +575,7 @@ const applyWheelZoom = () => {
 const handlePreviewWheel = (event: WheelEvent) => {
   if (!previewVisible.value) return;
   event.preventDefault();
+  event.stopPropagation();
   // wheel 属于强交互：通知上层暂停后台加载
   markPreviewInteracting();
 
@@ -1013,6 +1014,8 @@ const open = (index: number) => {
 defineExpose({
   open,
   close: closePreview,
+  previewVisible,
+  previewIndex,
 });
 </script>
 

@@ -1,7 +1,7 @@
 <template>
   <Transition name="fade">
     <div v-if="isDragging" class="file-drop-overlay" @click="handleOverlayClick">
-      <div class="drop-zone">
+      <div class="drop-zone" @click.stop>
         <div class="drop-icon">
           <el-icon :size="64">
             <Upload />
@@ -67,7 +67,8 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: default;
 }
 
 .drop-zone {

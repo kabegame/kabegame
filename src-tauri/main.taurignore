@@ -1,3 +1,2 @@
 # main 组件 dev 时排除的目录，避免无关 workspace 成员触发重建
 app-cli/
-app-plugin-editor/

@@ -31,6 +31,55 @@ impl NativeWallpaperManager {
             .ok()
     }
 
+    /// 使用 osascript 设置 macOS 壁纸（仅设置路径，样式跟随系统）
+    #[cfg(target_os = "macos")]
+    fn set_wallpaper_macos(&self, file_path: &str) -> Result<(), String> {
+        use std::path::Path;
+        use std::process::Command;
+
+        let path = Path::new(file_path);
+        if !path.exists() {
+            return Err("File does not exist".to_string());
+        }
+
+        // 获取绝对路径
+        let abs = path
+            .canonicalize()
+            .map_err(|e| format!("Failed to canonicalize path: {}", e))?
+            .to_string_lossy()
+            .to_string();
+
+        // macOS 使用 osascript 设置壁纸
+        // 转义路径中的特殊字符（反斜杠和双引号）
+        let escaped_path = abs.replace('\\', "\\\\").replace('"', "\\\"");
+
+        let script = format!(
+            r#"tell application "System Events"
+    tell every desktop
+        set picture to "{}"
+    end tell
+end tell"#,
+            escaped_path
+        );
+
+        let output = Command::new("osascript")
+            .args(["-e", &script])
+            .output()
+            .map_err(|e| format!("执行 `osascript` 失败：{}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "`osascript` 设置壁纸失败 (code={:?})。\nstderr: {}",
+                output.status.code(),
+                stderr.trim()
+            ));
+        }
+
+        println!("[DEBUG] macOS 壁纸路径设置完成（使用 osascript，样式跟随系统）");
+        Ok(())
+    }
+
     /// 将路径转换为 file:// URI，并进行 percent-encode
     /// 用于 Plasma 和 GNOME 的壁纸设置
     #[cfg(target_os = "linux")]
@@ -509,9 +558,17 @@ impl WallpaperManager for NativeWallpaperManager {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        {
+            // macOS 原生壁纸：样式跟随系统，不读取系统设置
+            // 返回默认值，实际样式由系统决定
+            Ok("fill".to_string())
+        }
+
         #[cfg(not(any(
             all(target_os = "linux", desktop = "plasma"),
-            all(target_os = "linux", desktop = "gnome")
+            all(target_os = "linux", desktop = "gnome"),
+            target_os = "macos"
         )))]
         {
             Ok("fill".to_string())
@@ -710,9 +767,18 @@ impl WallpaperManager for NativeWallpaperManager {
                 return self.set_wallpaper_gnome(file_path, &style);
             }
 
+            // macOS 原生壁纸：仅设置壁纸路径，样式跟随系统
+            #[cfg(target_os = "macos")]
+            {
+                let _ = immediate;
+                // macOS 不设置样式，只设置壁纸路径，样式由系统决定
+                return self.set_wallpaper_macos(file_path);
+            }
+
             #[cfg(not(any(
                 all(target_os = "linux", desktop = "plasma"),
-                all(target_os = "linux", desktop = "gnome")
+                all(target_os = "linux", desktop = "gnome"),
+                target_os = "macos"
             )))]
             {
                 let _ = immediate;
@@ -793,6 +859,7 @@ impl WallpaperManager for NativeWallpaperManager {
 
     /// - Plasma 原生壁纸（--desktop plasma 编译期开关）下：通过 qdbus 写 FillMode，并尽量对当前壁纸立即生效
     /// - GNOME 原生壁纸（--desktop gnome 编译期开关）下：通过 gsettings 写 picture-options，并尽量对当前壁纸立即生效
+    /// - macOS 原生壁纸：样式跟随系统，不设置样式
     #[cfg(all(target_os = "linux"))]
     async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
         #[cfg(desktop = "plasma")]
@@ -866,6 +933,14 @@ impl WallpaperManager for NativeWallpaperManager {
             let _ = (style, immediate);
             Ok(())
         }
+    }
+
+    /// macOS 原生壁纸：样式跟随系统，不设置样式
+    #[cfg(target_os = "macos")]
+    async fn set_style(&self, _style: &str, _immediate: bool) -> Result<(), String> {
+        // macOS 样式跟随系统，不进行任何设置操作
+        println!("[DEBUG] macOS 壁纸样式跟随系统，不设置样式");
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]

@@ -230,7 +230,7 @@ static GLOBAL_EMITTER: OnceLock<GlobalEmitter> = OnceLock::new();
 
 /// No-op 全局事件发送器
 ///
-/// 用于在未启用 `ipc-server` feature 时（如 plugin-editor）通过编译。
+/// 用于在未启用 `ipc-server` feature 时通过编译。
 /// 所有方法均为空实现。
 #[cfg(not(feature = "ipc-server"))]
 pub struct GlobalEmitter;

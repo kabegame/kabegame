@@ -13,13 +13,13 @@ async-trait = "0.1"
 base64 = {workspace = true}
 governor = {version = "0.7", optional = true}
 image = {workspace = true}
-kabegame-core = {workspace = true, default-features = false, features = ["ipc-server"]}
+kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "ipc-client"]}
 lru = {version = "0.12", optional = true}
 memmap2 = {version = "0.9", optional = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
-tauri = {workspace = true, features = ["protocol-asset"]}
+tauri = {workspace = true, features = ["protocol-asset", "macos-private-api"]}
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-fs = "=2.4.4"
 tauri-plugin-global-shortcut = "2.3.1"
@@ -46,6 +46,18 @@ windows-sys = {workspace = true, features = [
 ]}
 winreg = "0.52"
 winver = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+window-vibrancy = "0.6"
+raw-window-handle = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSPasteboard",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSData",
+] }
 
 [build-dependencies]
 tauri-build = {workspace = true}

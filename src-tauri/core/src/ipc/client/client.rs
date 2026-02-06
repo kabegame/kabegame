@@ -1,4 +1,4 @@
-//! IPC 客户端：封装与 daemon 的通信，供所有前端（app-main、plugin-editor、cli）复用
+//! IPC 客户端：封装与 daemon 的通信，供所有前端（app-main、cli）复用
 //!
 //! 使用示例：
 //! ```rust,no_run

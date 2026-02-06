@@ -390,12 +390,12 @@ Write-Output "$style,$tile"
         {
             let output_str = String::from_utf8_lossy(&output.stdout);
             let style = match output_str.trim() {
-                s if s.contains("scaled") => "fit",      // 修正：scaled 对应 fit（适应）
-                s if s.contains("zoom") => "fill",       // zoom 对应 fill（填充）
-                s if s.contains("spanned") => "fill",    // spanned 对应 fill（多屏横向拼接）
+                s if s.contains("scaled") => "fit", // 修正：scaled 对应 fit（适应）
+                s if s.contains("zoom") => "fill",  // zoom 对应 fill（填充）
+                s if s.contains("spanned") => "fill", // spanned 对应 fill（多屏横向拼接）
                 s if s.contains("stretched") => "stretch", // stretched 对应 stretch（拉伸）
-                s if s.contains("centered") => "center",   // centered 对应 center（居中）
-                s if s.contains("wallpaper") => "tile",     // wallpaper 对应 tile（平铺）
+                s if s.contains("centered") => "center", // centered 对应 center（居中）
+                s if s.contains("wallpaper") => "tile", // wallpaper 对应 tile（平铺）
                 _ => "fill",
             };
             return (style.to_string(), "none".to_string());
@@ -1032,16 +1032,24 @@ Write-Output "$style,$tile"
         Self::emit_setting_change(SettingKey::AutoLaunch, &new_value).await;
         Self::trigger_debounce_save().await?;
 
-        // 设置开机启动
-        #[cfg(target_os = "windows")]
+        // 设置开机启动（Windows、Linux、macOS 共用逻辑）
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         {
             use auto_launch::AutoLaunchBuilder;
             let app_path = std::env::current_exe()
                 .map_err(|e| format!("Failed to get current exe path: {}", e))?;
+            let app_path_str = app_path.to_str().unwrap();
 
-            let auto_launch = AutoLaunchBuilder::new()
-                .set_app_name("Kabegame")
-                .set_app_path(app_path.to_str().unwrap())
+            let mut builder = AutoLaunchBuilder::new();
+            builder.set_app_name("Kabegame");
+            builder.set_app_path(app_path_str);
+            
+            // 如果启用开机启动，添加 --auto-startup 参数
+            if enabled {
+                builder.set_args(&["--auto-startup"]);
+            }
+
+            let auto_launch = builder
                 .build()
                 .map_err(|e| format!("Failed to create auto launch: {}", e))?;
 

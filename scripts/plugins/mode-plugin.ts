@@ -82,7 +82,7 @@ export class ModePlugin extends BasePlugin {
         nullOrCompOrFeatures:
           | null
           | string
-          | { comp: Component; features: string[] },
+          | { comp: Component; features: string[]; args?: string[] },
       ) => {
         // virtual-driver 功能现在通过 cfg(kabegame_mode) 控制，不再使用 features
         // self-hosted 功能仍通过 feature 控制
@@ -96,10 +96,19 @@ export class ModePlugin extends BasePlugin {
             : nullOrCompOrFeatures["comp"]
           : bs.context.component!;
 
+        // 保留前一个 hook 传递的 args
+        const args =
+          typeof nullOrCompOrFeatures === "object" &&
+          nullOrCompOrFeatures !== null &&
+          "args" in nullOrCompOrFeatures
+            ? nullOrCompOrFeatures.args
+            : undefined;
+
         // 只保留 self-hosted feature 的逻辑
         return {
           comp,
           features,
+          ...(args && { args }),
         };
       },
     );
@@ -131,19 +140,11 @@ export class ModePlugin extends BasePlugin {
     const cmd = bs.context.cmd;
     const mode = bs.context.mode!;
     const comp = bs.context.component!;
-    if (cmd.isDev) {
-      const packageTarget = !mode.isNormal
-        ? "crawler-plugins:package-to-data"
-        : // 注意，这里的 local-to-data 是指只打包 local-import 插件
-          "crawler-plugins:package-local-to-data";
-      this.log(chalk.blue(`打包插件到开发目录: ${packageTarget}`));
-      run("nx", ["run", packageTarget], {
-        bin: "bun",
-      });
-    } else if (cmd.isBuild) {
-      if (!comp.isMain) {
+    if (cmd.isDev || cmd.isBuild) {
+      if (cmd.isBuild && !comp.isMain) {
         return;
       }
+      // 开发和生产都打包到 resources 目录
       const packageTarget = !mode.isNormal
         ? "crawler-plugins:package-to-resources"
         : "crawler-plugins:package-local-to-resources";
@@ -165,8 +166,8 @@ export class ModePlugin extends BasePlugin {
       // Normal 模式只包含 local-import 插件
       builtinPlugins = ["local-import"];
     } else {
-      // Local 和 Light 模式包含所有预打包插件
-      builtinPlugins = scanBuiltinPlugins(isDev);
+      // Local 和 Light 模式包含所有预打包插件（始终从 resources 目录扫描）
+      builtinPlugins = scanBuiltinPlugins();
     }
 
     const csv = builtinPlugins.join(",");

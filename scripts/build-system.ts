@@ -71,7 +71,7 @@ interface BuildHooks {
   beforeBuild: SyncHook<[string?]>;
   prepareCompileArgs: SyncWaterfallHook<
     [string?],
-    { comp: Component; features: string[] }
+    { comp: Component; features: string[]; args?: string[] }
   >;
   afterBuild: AsyncSeriesHook<[string]>;
 }
@@ -190,7 +190,12 @@ export class BuildSystem {
         .concat(this.options.args?.length ? ["--", ...(this.options.args ?? [])] : []);
       run("tauri", args, { cwd, bin: "cargo" });
     } else {
-      const args = this.buildCargoArgs(["dev"], features, this.options.args);
+      const baseArgs = ["dev"];
+      const args = this.buildCargoArgs(baseArgs, features);
+      if (this.options.args && this.options.args.length > 0) {
+        args.push("--");
+        args.push(...this.options.args);
+      }
       run("tauri", args, { cwd, bin: "cargo" });
     }
   }
@@ -222,46 +227,15 @@ export class BuildSystem {
 
     this.commonUse(Cmd.BUILD);
     this.commonBefore();
-    if (this.context.component!.isPluginEditor && !this.context.mode!.isLight) {
-      this.hooks.beforeBuild.call(Component.PLUGIN_EDITOR);
-      const { features } = this.hooks.prepareCompileArgs.call(
-        Component.PLUGIN_EDITOR,
-      );
-      if (!this.context.skip?.isVue) {
-        run("nx", ["run", ".:build-plugin-editor"], {
-          bin: "bun",
-        });
-      }
-      const args = this.buildCargoArgs(
-        [
-          "build",
-          "--release",
-          "-p",
-          Component.cargoComp(Component.PLUGIN_EDITOR),
-        ],
-        features,
-        this.options.args,
-      );
-      if (!this.context.skip?.isCargo) {
-        run("cargo", args, {
-          cwd: SRC_TAURI_DIR,
-        });
-      }
-      // this.hooks.afterBuild.callAsync(Component.PLUGIN_EDITOR)
-    }
     // linux 下构建cli
     if (this.context.component!.isCli && (!this.context.mode!.isLight || OSPlugin.isLinux)) {
       this.hooks.beforeBuild.call(Component.CLI);
-      const { features } = this.hooks.prepareCompileArgs.call(Component.CLI);
-      if (!this.context.skip?.isVue) {
-        run("nx", ["run", ".:build-cli"], {
-          bin: "bun",
-        });
-      }
+      const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.CLI);
+      const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
       const args = this.buildCargoArgs(
         ["build", "--release", "-p", Component.cargoComp(Component.CLI)],
         features,
-        this.options.args,
+        mergedArgs.length > 0 ? mergedArgs : undefined,
       );
       if (!this.context.skip?.isCargo) {
         run("cargo", args, {
@@ -272,7 +246,7 @@ export class BuildSystem {
     }
     if (this.context.component!.isMain) {
       this.hooks.beforeBuild.call(Component.MAIN);
-      const { features } = this.hooks.prepareCompileArgs.call(Component.MAIN);
+      const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.MAIN);
       const cwd = Component.appDir(Component.MAIN);
       if (!this.context.skip?.isVue) {
         run("nx", ["run", ".:build-main"], {
@@ -280,12 +254,14 @@ export class BuildSystem {
         });
       }
       if (this.context.isAndroid) {
+        const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
         const args = ["android", "build"]
           .concat(features.length ? ["-f", features.join(",")] : [])
-          .concat(this.options.args?.length ? ["--", ...(this.options.args ?? [])] : []);
+          .concat(mergedArgs.length > 0 ? ["--", ...mergedArgs] : []);
         run("tauri", args, { cwd, bin: "cargo" });
       } else {
-        const args = this.buildCargoArgs(["build"], features, this.options.args);
+        const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
+        const args = this.buildCargoArgs(["build"], features, mergedArgs.length > 0 ? mergedArgs : undefined);
         run("tauri", args, { cwd, bin: "cargo" });
       }
       await this.hooks.afterBuild.promise(Component.MAIN);

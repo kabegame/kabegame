@@ -2,14 +2,13 @@
 members = [
   "src-tauri/core",
   "src-tauri/app-main",
-  "src-tauri/app-plugin-editor",
   "src-tauri/app-cli",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "3.0.3"
+version = "3.0.4"
 
 [workspace.dependencies]
 base64 = "0.22"

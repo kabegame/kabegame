@@ -90,8 +90,7 @@ pub(crate) fn plugin_display_name_from_manifest(plugin_id: &str) -> Option<Strin
         }
     }
 
-    let plugins_dir = crate::plugin::plugins_directory_for_readonly();
-    let plugin_file = plugins_dir.join(format!("{}.kgpg", pid));
+    let plugin_file = crate::plugin::find_plugin_kgpg_path(pid)?;
     let manifest = crate::plugin::read_plugin_manifest_from_kgpg_file(&plugin_file).ok()?;
     let name = manifest.name.trim().to_string();
 

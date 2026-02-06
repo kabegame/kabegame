@@ -1,8 +1,8 @@
 mod commands;
 mod startup;
-mod utils;
 #[cfg(feature = "tray")]
 mod tray;
+mod utils;
 mod wallpaper;
 
 // IPC and daemon related modules
@@ -10,14 +10,13 @@ mod ipc;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 mod vd_listener;
 
-
+use commands::*;
 use core::fmt;
+use startup::*;
 use std::process;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
-use commands::*;
-use startup::*;
 
 // Daemon Imports
 use crate::ipc::dedupe_service::DedupeService;
@@ -36,13 +35,10 @@ use kabegame_core::{
 use kabegame_core::virtual_driver::VirtualDriveService;
 
 /// 初始化全局状态，并返回 Context
-fn init_globals() -> Result<Arc<Store>, String> {
-     println!(
-        "Kabegame v{} bootstrap...",
-        env!("CARGO_PKG_VERSION")
-    );
+fn init_globals(app_handle: tauri::AppHandle) -> Result<Arc<Store>, String> {
+    println!("Kabegame v{} bootstrap...", env!("CARGO_PKG_VERSION"));
     println!("Initializing Globals...");
-    
+
     Settings::init_global().map_err(|e| format!("Failed to initialize settings: {}", e))?;
     println!("  ✓ Settings initialized");
 
@@ -123,6 +119,7 @@ fn init_globals() -> Result<Arc<Store>, String> {
         dedupe_service,
         #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
         virtual_drive_service: virtual_drive_service.clone(),
+        app_handle: Arc::new(tokio::sync::RwLock::new(Some(app_handle))),
     });
 
     Store::init_global(ctx.clone())?;
@@ -132,9 +129,7 @@ fn init_globals() -> Result<Arc<Store>, String> {
     {
         #[cfg(target_os = "windows")]
         tauri::async_runtime::spawn({
-            vd_listener::start_vd_event_listener(
-                virtual_drive_service.clone(),
-            );
+            vd_listener::start_vd_event_listener(virtual_drive_service.clone());
             println!("  ✓ Virtual drive event listener started");
         });
 
@@ -176,7 +171,7 @@ fn init_globals() -> Result<Arc<Store>, String> {
 /// Tauri 应用入口（桌面 binary 与 Android/iOS 共用）
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
@@ -188,9 +183,8 @@ pub fn run() {
             init_shortcut(app).unwrap();
 
             // 启动内置 Backend
-            match init_globals() {
+            match init_globals(app.app_handle().clone()) {
                 Ok(ctx) => {
-
                     // 启动本地事件转发
                     start_local_event_loop(app.app_handle().clone());
                     // 清理用户数据
@@ -211,11 +205,8 @@ pub fn run() {
                     init_plugin();
 
                     // 启动 IPC Server（Android 不启用以避免虚拟盘等依赖）
-                    #[cfg(any(
-                        all(not(kabegame_mode = "light"), not(target_os = "android")),
-                        all(kabegame_mode = "light", not(target_os = "windows"))
-                    ))]
-                    start_ipc_server(ctx);
+                    #[cfg(not(target_os = "android"))]
+                    start_ipc_server(ctx, app.app_handle().clone());
                 }
                 Err(e) => {
                     utils::show_error(app.app_handle(), format!("出现了致命错误！: {}", e));
@@ -287,14 +278,16 @@ pub fn run() {
             validate_plugin_source,
             get_store_plugins,
             preview_import_plugin,
+            preview_import_plugin_with_icon,
             preview_store_install,
             import_plugin_from_zip,
             get_plugin_image,
             get_plugin_image_for_detail,
             get_plugin_icon,
             get_remote_plugin_icon,
+            get_plugin_doc_from_zip,
+            get_plugin_image_from_zip,
             get_plugin_vars,
-            open_plugin_editor_window,
             get_build_mode,
             // --- Settings ---
             get_auto_launch,
@@ -366,7 +359,7 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             toggle_fullscreen,
             get_window_state,
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             set_main_sidebar_blur,
             #[cfg(target_os = "windows")]
             wallpaper_window_ready,
@@ -380,6 +373,36 @@ pub fn run() {
             start_dedupe_gallery_by_hash_batched,
             cancel_dedupe_gallery_by_hash_batched,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle: &tauri::AppHandle, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Opened { urls } = event {
+            eprintln!("[KGPG_DEBUG] [macOS] 收到 RunEvent::Opened 事件，URL 数量: {}", urls.len());
+            for url in urls {
+                eprintln!("[KGPG_DEBUG] [macOS] 处理 URL: {}", url);
+                if let Ok(path) = url.to_file_path() {
+                    if let Some(s) = path.to_str() {
+                        eprintln!("[KGPG_DEBUG] [macOS] 文件路径: {}", s);
+                        if s.ends_with(".kgpg") {
+                            eprintln!("[KGPG_DEBUG] [macOS] ✓ 检测到 kgpg 文件，发送 app-import-plugin 事件: {}", s);
+                            let _ = app_handle.emit(
+                                "app-import-plugin",
+                                serde_json::json!({
+                                    "kgpgPath": s
+                                }),
+                            );
+                        } else {
+                            eprintln!("[KGPG_DEBUG] [macOS] ✗ 文件不是 .kgpg 格式: {}", s);
+                        }
+                    } else {
+                        eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法将路径转换为字符串: {:?}", path);
+                    }
+                } else {
+                    eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法从 URL 提取文件路径: {}", url);
+                }
+            }
+        }
+    });
 }
