@@ -215,9 +215,10 @@ export class BuildSystem {
       args.push(...this.options.args);
     }
     // 先构建前端资源
-    run("nx", ["run", `.:build-${this.context.component!.comp}`], {
-      bin: "bun",
-    });
+    if (this.context.component?.isMain)
+      run("nx", ["run", `.:build-${this.context.component!.comp}`], {
+        bin: "bun",
+      });
     run("cargo", args);
   }
 

@@ -170,7 +170,7 @@ pub trait Provider: Send + Sync {
 ///
 /// 设计原则：
 /// - providers 只依赖该 trait，不直接依赖 dokan/tauri/windows 实现细节。
-/// - 虚拟盘 handler（Windows Dokan）提供具体实现，把“刷新/事件/缓存失效”落到这里。
+/// - 虚拟盘 handler提供具体实现，把“刷新/事件/缓存失效”落到这里。
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 pub trait VdOpsContext {
     fn albums_created(&self, album_name: &str);
