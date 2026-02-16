@@ -301,7 +301,7 @@ async fn set_max_concurrent_downloads(count: u32) -> CliIpcResponse {
     let settings = Settings::global();
     match settings.set_max_concurrent_downloads(count).await {
         Ok(()) => {
-            TaskScheduler::global().set_download_concurrency(count);
+            TaskScheduler::global().set_download_concurrency().await;
             CliIpcResponse::ok("updated")
         }
         Err(e) => CliIpcResponse::err(e),

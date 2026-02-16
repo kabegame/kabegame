@@ -1,7 +1,7 @@
 <template>
   <div ref="rootEl" class="image-item" :class="{
     'image-item-selected': selected,
-    'item-entering': isEntering,
+    'item-entering': enteringClassActive,
     'item-leaving': isLeaving,
   }" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
     <!-- 任务失败图片：下载重试（不阻挡点击/选择/右键） -->
@@ -23,7 +23,8 @@
     <transition name="fade-in" mode="out-in">
       <div v-if="!attemptUrl" key="loading" class="image-wrapper" :style="aspectRatioStyle"
         @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)"
-        @click.stop="handleWrapperClick">
+        @click.stop="handleWrapperClick"
+        @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd">
         <div v-if="isLost" class="thumbnail-lost">
           <ImageNotFound :show-image="false" />
         </div>
@@ -39,7 +40,8 @@
       <div v-else key="content"
         :class="[imageClickAction === 'preview' && originalUrl ? 'image-preview-wrapper' : 'image-wrapper']"
         :style="aspectRatioStyle" @dblclick.stop="$emit('dblclick', $event)"
-        @contextmenu.prevent.stop="$emit('contextmenu', $event)" @click.stop="handleWrapperClick">
+        @contextmenu.prevent.stop="$emit('contextmenu', $event)" @click.stop="handleWrapperClick"
+        @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd">
         <!-- 加载期间始终显示骨架覆盖层，避免出现“破裂图”闪现 -->
         <div v-if="isImageLoading" class="thumbnail-loading thumbnail-loading-overlay">
           <el-skeleton :rows="0" animated>
@@ -49,7 +51,7 @@
           </el-skeleton>
         </div>
         <img :src="attemptUrl"
-          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading }]"
+          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': IS_ANDROID }]"
           :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" loading="lazy"
           draggable="false" @load="handleImageLoad" @error="handleImageError" />
       </div>
@@ -58,13 +60,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted } from "vue";
+import { computed, nextTick, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
 import { WarningFilled, Download } from "@element-plus/icons-vue";
 import type { ImageInfo } from "../../types/image";
 import type { ImageClickAction } from "../../stores/settings";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import { useImageItemLoader } from "../../composables/useImageItemLoader";
+import { IS_ANDROID } from "../../env";
 
 interface Props {
   image: ImageInfo;
@@ -85,6 +88,7 @@ const emit = defineEmits<{
   click: [event?: MouseEvent];
   dblclick: [event?: MouseEvent];
   contextmenu: [event: MouseEvent];
+  longpress: []; // Android 长按事件
   retryDownload: []; // 任务失败图片：重试下载
   enterAnimationEnd: []; // 入场动画结束
   leaveAnimationEnd: []; // 退场动画结束
@@ -95,6 +99,25 @@ const imageUrlRef = toRef(props, "imageUrl");
 const useOriginalRef = toRef(props, "useOriginal");
 
 const rootEl = ref<HTMLElement | null>(null);
+
+// 虚拟滚动下挂载时已有 isEntering，若直接绑 class 浏览器可能不触发 CSS 动画；延迟一帧再加 class 以触发入场动画
+const enteringClassActive = ref(false);
+watch(
+  () => props.isEntering,
+  (isEntering) => {
+    if (isEntering) {
+      enteringClassActive.value = false;
+      nextTick(() => {
+        requestAnimationFrame(() => {
+          enteringClassActive.value = true;
+        });
+      });
+    } else {
+      enteringClassActive.value = false;
+    }
+  },
+  { immediate: true }
+);
 
 const {
   attemptUrl,
@@ -108,13 +131,73 @@ const {
   image: imageRef,
   imageUrl: imageUrlRef,
   useOriginal: useOriginalRef,
-  // 大列表“跳滚动条到中间”场景下，Blob 缩略图可能排队较久；这里提高阈值，避免误报“丢失”。
+  // 大列表"跳滚动条到中间"场景下，Blob 缩略图可能排队较久；这里提高阈值，避免误报"丢失"。
   // 真正缺失/失败会通过 localExists/isTaskFailed 更快体现。
   missingUrlTimeoutMs: 60000,
 });
 
+// Android 长按检测
+let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+let longPressFired = false;
+let touchStartPos = { x: 0, y: 0 };
+let touchMoved = false;
+
+const handleTouchStart = (event: TouchEvent) => {
+  if (!IS_ANDROID) return;
+  if (event.touches.length !== 1) {
+    // 多指触摸，取消长按检测
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    return;
+  }
+  const touch = event.touches[0];
+  touchStartPos = { x: touch.clientX, y: touch.clientY };
+  touchMoved = false;
+  longPressFired = false;
+  
+  longPressTimer = setTimeout(() => {
+    if (!touchMoved && !longPressFired) {
+      longPressFired = true;
+      emit("longpress");
+    }
+    longPressTimer = null;
+  }, 500);
+};
+
+const handleTouchMove = (event: TouchEvent) => {
+  if (!IS_ANDROID) return;
+  // 检测移动距离，超过阈值则取消长按
+  if (event.touches.length === 1 && longPressTimer) {
+    const touch = event.touches[0];
+    const dx = Math.abs(touch.clientX - touchStartPos.x);
+    const dy = Math.abs(touch.clientY - touchStartPos.y);
+    if (dx > 10 || dy > 10) {
+      touchMoved = true;
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    }
+  }
+};
+
+const handleTouchEnd = () => {
+  if (!IS_ANDROID) return;
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+  // 如果长按已触发，标记需要跳过本次 click
+  // 标记会在 handleWrapperClick 中使用，然后重置
+};
+
 onUnmounted(() => {
-  // 预留：若未来需要在卸载时做统计/打点，可在这里扩展
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
 });
 
 const aspectRatioStyle = computed(() => {
@@ -126,6 +209,11 @@ const aspectRatioStyle = computed(() => {
 });
 
 const handleWrapperClick = (event?: MouseEvent) => {
+  // Android 下，如果刚触发了长按，跳过本次 click
+  if (IS_ANDROID && longPressFired) {
+    longPressFired = false;
+    return;
+  }
   emit("click", event);
 };
 
@@ -150,8 +238,10 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   box-shadow: var(--anime-shadow);
   box-sizing: border-box;
   will-change: transform, box-shadow;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 
-  &:hover {
+  html:not(.platform-android) &:hover {
     // transform: translateY(-6px) scale(1.015);
     // box-shadow: var(--anime-shadow-hover);
     outline: 3px solid var(--anime-primary-light);
@@ -168,7 +258,7 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     outline: 4px solid #ff6b9d;
     outline-offset: -2px;
 
-    &:hover {
+    html:not(.platform-android) &:hover {
       border-color: #ff4d8a;
       outline: 5px solid #ff4d8a;
       outline-offset: -2px;
@@ -187,6 +277,7 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     overflow: hidden;
     border-radius: 14px 14px 0 0;
     will-change: contents;
+    -webkit-tap-highlight-color: transparent;
 
     &::before {
       content: '';
@@ -204,9 +295,16 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     border-radius: 14px 14px 0 0;
     object-fit: cover;
     will-change: contents, opacity;
+    -webkit-tap-highlight-color: transparent;
 
     &.thumbnail-loading {
       animation: fadeInImage 0.4s ease-in;
+    }
+
+    // Android 下使用 contain 模式，完整展示图片
+    &.thumbnail-android {
+      object-fit: contain;
+      background: var(--anime-bg-card);
     }
   }
 

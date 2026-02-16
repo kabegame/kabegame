@@ -4,7 +4,7 @@
       <span>{{ totalCountText }}</span>
     </template>
     <template #left>
-      <el-button @click="$emit('refresh')" circle>
+      <el-button v-if="!IS_ANDROID && hasRefreshFeature" @click="$emit('refresh')" circle>
         <el-icon>
           <Refresh />
         </el-icon>
@@ -13,7 +13,8 @@
         range-separator="~" start-placeholder="开始日期" end-placeholder="结束日期" format="YYYY-MM-DD"
         value-format="YYYY-MM-DD" :clearable="true" :disabled="monthLoading"
         @update:model-value="(v: [string, string] | null) => (dateRangeProxy = v)" /> -->
-      <div class="dedupe-stack">
+      <!-- 去重按钮：Android 下折叠到 overflow，非 Android 直显 -->
+      <div v-if="!IS_ANDROID" class="dedupe-stack">
         <el-tooltip :content="dedupeTooltipText" placement="bottom" :disabled="!dedupeLoading">
           <!-- Tooltip 对 disabled button 不生效，需要包一层 -->
           <span class="dedupe-btn-wrapper">
@@ -38,31 +39,66 @@
         </div>
       </div>
     </template>
-    <el-button @click="$emit('showHelp')" circle title="帮助">
-      <el-icon>
-        <QuestionFilled />
-      </el-icon>
-    </el-button>
-    <el-button @click="$emit('showQuickSettings')" circle title="快捷设置">
-      <el-icon>
-        <Setting />
-      </el-icon>
-    </el-button>
-    <TaskDrawerButton />
-    <el-button type="primary" @click="$emit('showCrawlerDialog')" class="add-task-btn">
-      <el-icon>
-        <Plus />
-      </el-icon>
-      收集
-    </el-button>
+    <!-- 非 Android：保持原有布局 -->
+    <template v-if="!IS_ANDROID">
+      <el-button @click="$emit('showHelp')" circle title="帮助">
+        <el-icon>
+          <QuestionFilled />
+        </el-icon>
+      </el-button>
+      <el-button @click="$emit('showQuickSettings')" circle title="快捷设置">
+        <el-icon>
+          <Setting />
+        </el-icon>
+      </el-button>
+      <TaskDrawerButton />
+      <el-button @click="$emit('showLocalImport')" class="add-task-btn">
+        <el-icon>
+          <FolderOpened />
+        </el-icon>
+        本地导入'
+      </el-button>
+      <el-button type="primary" @click="handleShowCrawlerDialog" class="add-task-btn">
+        <el-icon>
+          <Plus />
+        </el-icon>
+        收集
+      </el-button>
+    </template>
+    <!-- Android：使用 headerFeatures 驱动 -->
+    <template v-else>
+      <!-- 直显功能：本地导入、收集 -->
+      <el-button @click="$emit('showLocalImport')" class="add-task-btn">
+        <el-icon>
+          <FolderOpened />
+        </el-icon>
+      </el-button>
+      <el-button type="primary" @click="handleShowCrawlerDialog" class="add-task-btn">
+        <el-icon>
+          <Plus />
+        </el-icon>
+      </el-button>
+      <!-- 任务按钮：保持直显 -->
+      <TaskDrawerButton />
+      <!-- 溢出菜单：去重/帮助/设置 -->
+      <AndroidHeaderOverflow
+        v-if="foldedFeatures.length > 0"
+        :features="foldedFeatures"
+        @select="handleOverflowSelect"
+      />
+    </template>
   </PageHeader>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Refresh, Plus, Filter, Setting, Close, QuestionFilled } from "@element-plus/icons-vue";
+import { Refresh, Plus, Filter, Setting, Close, QuestionFilled, FolderOpened } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
+import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
+import { IS_ANDROID } from "@kabegame/core/env";
+import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
+import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
 
 interface Props {
   dedupeLoading?: boolean;
@@ -113,8 +149,19 @@ const emit = defineEmits<{
   showHelp: [];
   showQuickSettings: [];
   showCrawlerDialog: [];
+  showLocalImport: [];
   "update:selectedRange": [value: [string, string] | null];
 }>();
+
+const crawlerDrawerStore = useCrawlerDrawerStore();
+
+const handleShowCrawlerDialog = () => {
+  if (IS_ANDROID) {
+    crawlerDrawerStore.open();
+  } else {
+    emit("showCrawlerDialog");
+  }
+};
 
 const dateRangeProxy = computed<[string, string] | null>({
   get: () => props.selectedRange ?? null,
@@ -129,6 +176,29 @@ const dedupeTooltipText = computed(() => {
   if (!total) return `已处理 ${processed}/? · 已移除 ${removed}`;
   return `已处理 ${processed}/${total} · 已移除 ${removed}`;
 });
+
+// Android 下折叠的功能
+const foldedFeatures = computed(() => {
+  return getFoldedFeaturesForPage("gallery");
+});
+
+// 根据 pages 列表判断刷新功能是否存在
+const hasRefreshFeature = computed(() => hasFeatureInPage("gallery", "refresh"));
+
+// 处理溢出菜单选择
+const handleOverflowSelect = (featureId: HeaderFeatureId) => {
+  switch (featureId) {
+    case "help":
+      emit("showHelp");
+      break;
+    case "quickSettings":
+      emit("showQuickSettings");
+      break;
+    case "dedupe":
+      emit("dedupeByHash");
+      break;
+  }
+};
 </script>
 
 <style scoped lang="scss">

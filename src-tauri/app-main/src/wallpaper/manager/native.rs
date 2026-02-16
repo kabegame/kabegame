@@ -552,7 +552,10 @@ impl WallpaperManager for NativeWallpaperManager {
             match self.get_wallpaper_gnome_picture_options() {
                 Ok(style) => Ok(style),
                 Err(e) => {
-                    eprintln!("[WARN] 无法读取 GNOME picture-options: {}，返回默认值 fill", e);
+                    eprintln!(
+                        "[WARN] 无法读取 GNOME picture-options: {}，返回默认值 fill",
+                        e
+                    );
                     Ok("fill".to_string())
                 }
             }
@@ -747,24 +750,36 @@ impl WallpaperManager for NativeWallpaperManager {
             #[cfg(all(target_os = "linux", desktop = "plasma"))]
             {
                 let _ = immediate;
-                // style 从本地设置读取
                 let style = Settings::global()
                     .get_wallpaper_rotation_style()
                     .await
-                    .unwrap_or_else(|_| "fill".to_string());
-                return self.set_wallpaper_plasma(file_path, &style);
+                    .unwrap_or_else(|_| "system".to_string());
+                let effective = if style == "system" {
+                    self.get_style()
+                        .await
+                        .unwrap_or_else(|_| "fill".to_string())
+                } else {
+                    style
+                };
+                return self.set_wallpaper_plasma(file_path, &effective);
             }
 
             // GNOME 原生壁纸：由 Kabegame 的 --desktop gnome 编译期开关启用
             #[cfg(all(target_os = "linux", desktop = "gnome"))]
             {
                 let _ = immediate;
-                // style 从本地设置读取
                 let style = Settings::global()
                     .get_wallpaper_rotation_style()
                     .await
-                    .unwrap_or_else(|_| "fill".to_string());
-                return self.set_wallpaper_gnome(file_path, &style);
+                    .unwrap_or_else(|_| "system".to_string());
+                let effective = if style == "system" {
+                    self.get_style()
+                        .await
+                        .unwrap_or_else(|_| "fill".to_string())
+                } else {
+                    style
+                };
+                return self.set_wallpaper_gnome(file_path, &effective);
             }
 
             // macOS 原生壁纸：仅设置壁纸路径，样式跟随系统
@@ -789,6 +804,9 @@ impl WallpaperManager for NativeWallpaperManager {
 
     #[cfg(target_os = "windows")]
     async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
+        if style == "system" {
+            return Ok(());
+        }
         use winreg::enums::*;
         use winreg::RegKey;
 
@@ -862,6 +880,9 @@ impl WallpaperManager for NativeWallpaperManager {
     /// - macOS 原生壁纸：样式跟随系统，不设置样式
     #[cfg(all(target_os = "linux"))]
     async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
+        if style == "system" {
+            return Ok(());
+        }
         #[cfg(desktop = "plasma")]
         {
             if let Some(path) = self.current_wallpaper_path_from_settings().await {
@@ -940,6 +961,14 @@ impl WallpaperManager for NativeWallpaperManager {
     async fn set_style(&self, _style: &str, _immediate: bool) -> Result<(), String> {
         // macOS 样式跟随系统，不进行任何设置操作
         println!("[DEBUG] macOS 壁纸样式跟随系统，不设置样式");
+        Ok(())
+    }
+
+    /// Android/iOS 原生壁纸：仅保存设置，不进行系统级设置
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    async fn set_style(&self, _style: &str, _immediate: bool) -> Result<(), String> {
+        // Android/iOS 平台：仅保存设置到配置，不进行系统级设置
+        println!("[DEBUG] Android/iOS 壁纸样式仅保存设置");
         Ok(())
     }
 

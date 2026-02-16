@@ -11,7 +11,7 @@ function toPngDataUrl(iconData: number[]): string {
   return `data:image/png;base64,${base64}`;
 }
 
-/** 浏览器插件（已安装）的基本信息 */
+/** 插件（已安装）的基本信息 */
 export interface BrowserPlugin {
   id: string;
   name: string;

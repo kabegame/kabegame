@@ -11,6 +11,7 @@ edition = "2021"
 version = "3.0.4"
 
 [workspace.dependencies]
+async-trait = "0.1"
 base64 = "0.22"
 image = "0.24"
 kabegame-core = {path = "./src-tauri/core", default-features = false}
@@ -20,19 +21,17 @@ serde_bytes = "0.11"
 serde_cbor = "0.11"
 serde_json = "1.0"
 sha2 = "0.10"
-tauri = {version = "2.10", features = ["tray-icon", "devtools"]}
+tauri = {version = "2.10", features = ["tray-icon", "devtools", "protocol-asset", "image-png"]}
 tauri-build = {version = "2.5", features = []}
 tokio = {version = "1", features = ["full"]}
 url = "2.5"
 uuid = {version = "1.6", features = ["v4", "serde"]}
 windows-sys = {version = "0.52", features = [
   "Win32_Foundation",
-  "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_DataExchange",
-  "Win32_System_LibraryLoader",
   "Win32_System_Memory",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",

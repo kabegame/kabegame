@@ -1,6 +1,7 @@
-﻿//! Images 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
+//! Images 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
 use kabegame_core::ipc::events::DaemonEvent;
 use kabegame_core::ipc::ipc::CliIpcResponse;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::storage::gallery::ImageQuery;
 use kabegame_core::storage::Storage;
@@ -140,9 +141,7 @@ pub async fn remove_image(image_id: &str) -> CliIpcResponse {
     }
 }
 
-pub async fn batch_delete_images(
-    image_ids: &[String],
-) -> CliIpcResponse {
+pub async fn batch_delete_images(image_ids: &[String]) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.batch_delete_images(image_ids) {
         Ok(()) => {
@@ -156,9 +155,7 @@ pub async fn batch_delete_images(
     }
 }
 
-pub async fn batch_remove_images(
-    image_ids: &[String],
-) -> CliIpcResponse {
+pub async fn batch_remove_images(image_ids: &[String]) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.batch_remove_images(image_ids) {
         Ok(()) => {
@@ -172,10 +169,7 @@ pub async fn batch_remove_images(
     }
 }
 
-pub async fn toggle_image_favorite(
-    image_id: &str,
-    favorite: bool,
-) -> CliIpcResponse {
+pub async fn toggle_image_favorite(image_id: &str, favorite: bool) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.toggle_image_favorite(image_id, favorite) {
         Ok(()) => {

@@ -80,14 +80,22 @@ defineEmits<{
   .left-slot {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     margin-left: auto;
+
+    & > * {
+      margin: 0;
+    }
   }
 
   .right {
     display: flex;
     align-items: center;
     gap: 8px;
+
+    & > * {
+      margin: 0;
+    }
   }
 
   .text {

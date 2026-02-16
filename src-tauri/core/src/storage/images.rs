@@ -10,7 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[serde(rename_all = "camelCase")]
 pub struct ImageInfo {
     pub id: String,
-    pub url: String,
+    /// 图片源 URL，本地导入时可为空。
+    pub url: Option<String>,
     pub local_path: String,
     #[serde(rename = "pluginId")]
     pub plugin_id: String,
@@ -74,7 +75,7 @@ impl Storage {
             .query_map(params![limit as i64, offset as i64], |row| {
                 Ok(ImageInfo {
                     id: row.get(0)?,
-                    url: row.get(1)?,
+                    url: row.get::<_, Option<String>>(1)?,
                     local_path: row.get(2)?,
                     plugin_id: row.get(3)?,
                     task_id: row.get(4)?,
@@ -141,7 +142,7 @@ impl Storage {
                     let local_exists = PathBuf::from(&local_path).exists();
                     Ok(ImageInfo {
                         id: row.get(0)?,
-                        url: row.get(1)?,
+                        url: row.get::<_, Option<String>>(1)?,
                         local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
@@ -191,7 +192,7 @@ impl Storage {
                     let local_exists = PathBuf::from(&local_path).exists();
                     Ok(ImageInfo {
                         id: row.get(0)?,
-                        url: row.get(1)?,
+                        url: row.get::<_, Option<String>>(1)?,
                         local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
@@ -240,7 +241,7 @@ impl Storage {
                     let local_exists = PathBuf::from(&local_path).exists();
                     Ok(ImageInfo {
                         id: row.get(0)?,
-                        url: row.get(1)?,
+                        url: row.get::<_, Option<String>>(1)?,
                         local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
@@ -292,7 +293,7 @@ impl Storage {
                     let local_exists = PathBuf::from(&local_path).exists();
                     Ok(ImageInfo {
                         id: row.get(0)?,
-                        url: row.get(1)?,
+                        url: row.get::<_, Option<String>>(1)?,
                         local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
@@ -342,7 +343,7 @@ impl Storage {
             "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\")
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
-                image.url,
+                &image.url,
                 image.local_path,
                 image.plugin_id,
                 image.task_id,

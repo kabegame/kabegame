@@ -314,12 +314,12 @@ const getSubmenuStyle = (index: number): CSSProperties => {
 }
 
 .context-menu {
-    background: var(--anime-bg-card, rgba(30, 30, 30, 0.96));
-    border: 1px solid var(--anime-border, rgba(255, 255, 255, 0.1));
+    background: var(--anime-bg-card);
+    border: 1px solid var(--anime-border);
     border-radius: 12px;
     padding: 6px;
     min-width: 180px;
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--anime-shadow);
     backdrop-filter: blur(10px);
 }
 
@@ -331,15 +331,16 @@ const getSubmenuStyle = (index: number): CSSProperties => {
     cursor: pointer;
     user-select: none;
     transition: background 0.15s ease;
+    color: var(--anime-text-primary);
 }
 
 .context-menu-item:hover {
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(255, 107, 157, 0.12);
 }
 
 .context-menu-divider {
     height: 1px;
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--anime-border);
     margin: 6px 0;
 }
 
@@ -352,16 +353,17 @@ const getSubmenuStyle = (index: number): CSSProperties => {
     left: 100%;
     top: 0;
     margin-left: 8px;
-    background: var(--anime-bg-card, rgba(30, 30, 30, 0.96));
-    border: 1px solid var(--anime-border, rgba(255, 255, 255, 0.1));
+    background: var(--anime-bg-card);
+    border: 1px solid var(--anime-border);
     border-radius: 12px;
     padding: 6px;
     min-width: 180px;
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--anime-shadow);
 }
 
 .submenu-arrow {
     margin-left: auto;
-    opacity: 0.7;
+    color: var(--anime-text-muted);
+    opacity: 0.9;
 }
 </style>

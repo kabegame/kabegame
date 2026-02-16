@@ -680,7 +680,7 @@ impl WallpaperRotator {
             settings.get_wallpaper_rotation_style(),
             settings.get_wallpaper_rotation_transition()
         );
-        let style = style_result.unwrap_or_else(|_| "fill".to_string());
+        let style = style_result.unwrap_or_else(|_| "system".to_string());
         let transition = transition_result.unwrap_or_else(|_| "none".to_string());
         manager
             .set_wallpaper(&wallpaper_path, &style, &transition)

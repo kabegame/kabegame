@@ -1,20 +1,21 @@
 <template>
-  <div class="settings-container">
-    <PageHeader title="设置" sticky>
-      <el-button @click="handleRefresh" :loading="isRefreshing">
-        <el-icon>
-          <Refresh />
-        </el-icon>
-        刷新
-      </el-button>
-      <el-button @click="openHelpDrawer" circle title="帮助">
-        <el-icon>
-          <QuestionFilled />
-        </el-icon>
-      </el-button>
-    </PageHeader>
+  <div class="settings-container" v-pull-to-refresh="pullToRefreshOpts">
+    <div class="settings-content">
+      <PageHeader title="设置" sticky>
+        <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing">
+            <el-icon>
+              <Refresh />
+            </el-icon>
+            刷新
+          </el-button>
+          <el-button @click="openHelpDrawer" circle title="帮助">
+            <el-icon>
+              <QuestionFilled />
+            </el-icon>
+          </el-button>
+        </PageHeader>
 
-    <StyledTabs v-model="activeTab" sticky>
+        <StyledTabs v-model="activeTab" sticky>
 
       <el-tab-pane label="壁纸轮播" name="wallpaper">
         <el-card class="settings-card">
@@ -83,7 +84,7 @@
                 <SettingSwitchControl setting-key="autoDeduplicate" />
               </SettingRow>
 
-              <SettingRow label="默认下载目录" description="未在任务里指定输出目录时，将下载到该目录（按插件分文件夹保存）">
+              <SettingRow v-if="!IS_ANDROID" label="默认下载目录" description="未在任务里指定输出目录时，将下载到该目录（按插件分文件夹保存）">
                 <DefaultDownloadDirSetting />
               </SettingRow>
             </div>
@@ -99,21 +100,21 @@
 
           <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
             <div v-if="!loading" class="settings-list">
-              <SettingRow label="开机启动" description="应用启动时自动运行">
+              <SettingRow v-if="!IS_ANDROID" label="开机启动" description="应用启动时自动运行">
                 <SettingSwitchControl setting-key="autoLaunch" />
               </SettingRow>
 
               <SettingRow v-if="!isLightMode" label="画册盘" description="在资源管理器中以虚拟盘方式浏览画册（只支持有限的操作）">
                 <AlbumDriveSetting />
               </SettingRow>
-              <SettingRow label="图片点击行为" description="左键点击图片时的行为">
+              <SettingRow v-if="!IS_ANDROID" label="图片点击行为" description="左键点击图片时的行为">
                 <SettingRadioControl setting-key="imageClickAction" :options="[
                   { label: '应用内预览', value: 'preview' },
                   { label: '系统默认打开', value: 'open' },
                 ]" />
               </SettingRow>
 
-              <SettingRow label="图片宽高比" description="影响画廊/画册中图片卡片的展示宽高比">
+              <SettingRow v-if="!IS_ANDROID" label="图片宽高比" description="影响画廊/画册中图片卡片的展示宽高比">
                 <GalleryImageAspectRatioSetting />
               </SettingRow>
 
@@ -127,9 +128,10 @@
             </div>
           </div>
         </el-card>
-      </el-tab-pane>
+        </el-tab-pane>
 
-    </StyledTabs>
+        </StyledTabs>
+    </div>
   </div>
 </template>
 
@@ -156,13 +158,13 @@ import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngi
 import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetting.vue";
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
-import { IS_WINDOWS, IS_LIGHT_MODE } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_DEV } from "@kabegame/core/env";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { invoke } from "@tauri-apps/api/core";
+import { hasFeatureInPage } from "@/header/headerFeatures";
 
 // 使用 300ms 防闪屏加载延迟
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
-import { IS_DEV } from "@kabegame/core/env";
 
 const settingsStore = useSettingsStore();
 const activeTab = ref<string>("wallpaper");
@@ -172,6 +174,14 @@ const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any 
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("settings");
 const isLightMode = IS_LIGHT_MODE;
+
+// 根据 pages 列表判断刷新功能是否存在
+const hasRefreshFeature = computed(() => hasFeatureInPage("settings", "refresh"));
+const pullToRefreshOpts = computed(() =>
+  IS_ANDROID && hasRefreshFeature.value
+    ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
+    : undefined
+);
 
 
 const loadSettings = async () => {
@@ -221,8 +231,20 @@ onMounted(() => {
 .settings-container {
   width: 100%;
   height: 100%;
+  display: flex;
+  flex-direction: column;
   padding: 20px;
+  /* 隐藏滚动条 */
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* IE and Edge */
+}
+
+.settings-content {
+  height: 100%;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   /* 隐藏滚动条 */
   scrollbar-width: none;
   /* Firefox */

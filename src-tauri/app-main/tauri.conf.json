@@ -5,7 +5,7 @@
   "identifier": "Kabegame",
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://192.168.0.6:1420",
     "frontendDist": "../../dist-main"
   },
   "app": {
@@ -15,12 +15,13 @@
         "fullscreen": false,
         "resizable": true,
         "title": "Kabegame",
-        "devtools": false,
+        "devtools": true,
         "transparent": true,
         "width": 1200,
         "height": 800,
         "minWidth": 800,
-        "minHeight": 600
+        "minHeight": 600,
+        "windowEffects": { "effects": ["sidebar", "acrylic"], "state": "followsWindowActiveState" }
       }
     ],
     "security": {
@@ -49,7 +50,6 @@
     ],
 
     "resources": ["resources/**/*"],
-
     "windows": {
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh",
@@ -57,10 +57,16 @@
         "installerIcon": "../icons/icon.ico"
       }
     },
+    "macOS": {
+      "dmg": {
+        "background": "dmg/background.jpg"
+      }
+    },
     "linux": {
       "deb": {
-        "depends": ["libayatana-appindicator3-1"],
+        "depends": ["fuse3", "libayatana-appindicator3-1"],
         "files": {
+          "/usr/bin/kabegame-cli": "../../target/release/kabegame-cli",
           "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "../icons/icon.png"
         },
@@ -70,11 +76,6 @@
         "provides": ["kabegame"],
         "conflicts": ["kabegame"],
         "replaces": ["kabegame"]
-      }
-    },
-    "macOS": {
-      "dmg": {
-        "background": "dmg/background.jpg"
       }
     }
   }

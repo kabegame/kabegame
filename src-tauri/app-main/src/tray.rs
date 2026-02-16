@@ -1,4 +1,5 @@
 // 系统托盘模块（app-main）
+// 仅在非移动端平台编译
 
 use governor::{Quota, RateLimiter};
 use std::num::NonZeroU32;
@@ -57,22 +58,6 @@ pub fn setup_tray(app: AppHandle) {
                 }
             };
 
-        // 仅在开发模式下创建调试菜单项
-        #[cfg(debug_assertions)]
-        let debug_wallpaper_item = match MenuItem::with_id(
-            &app,
-            "debug_wallpaper",
-            "调试：打开调试窗口",
-            true,
-            None::<&str>,
-        ) {
-            Ok(item) => item,
-            Err(e) => {
-                eprintln!("创建菜单项失败: {}", e);
-                return;
-            }
-        };
-
         let quit_item = match MenuItem::with_id(&app, "quit", "退出", true, None::<&str>) {
             Ok(item) => item,
             Err(e) => {
@@ -89,7 +74,6 @@ pub fn setup_tray(app: AppHandle) {
                 &show_item,
                 &hide_item,
                 &next_wallpaper_item,
-                &debug_wallpaper_item,
                 &quit_item,
             ],
         ) {

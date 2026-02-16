@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 use std::fs;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +16,22 @@ pub async fn get_file_drop_supported_types() -> Result<serde_json::Value, String
     let payload = FileDropSupportedTypes {
         archive_extensions: kabegame_core::archive::supported_types(),
         plugin_extensions: vec!["kgpg".to_string()],
+    };
+    Ok(serde_json::to_value(payload).map_err(|e| e.to_string())?)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SupportedImageTypes {
+    extensions: Vec<String>,
+    mime_by_ext: std::collections::HashMap<String, String>,
+}
+
+#[tauri::command]
+pub async fn get_supported_image_types() -> Result<serde_json::Value, String> {
+    let payload = SupportedImageTypes {
+        extensions: kabegame_core::image_type::supported_image_extensions(),
+        mime_by_ext: kabegame_core::image_type::mime_by_ext(),
     };
     Ok(serde_json::to_value(payload).map_err(|e| e.to_string())?)
 }
@@ -44,6 +60,7 @@ pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn start_dedupe_gallery_by_hash_batched(delete_files: bool) -> Result<(), String> {
     let ctx = crate::ipc::handlers::Store::global();
     ctx.dedupe_service
@@ -57,6 +74,7 @@ pub async fn start_dedupe_gallery_by_hash_batched(delete_files: bool) -> Result<
 }
 
 #[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn cancel_dedupe_gallery_by_hash_batched() -> Result<bool, String> {
     let ctx = crate::ipc::handlers::Store::global();
     ctx.dedupe_service.cancel()
@@ -74,6 +92,7 @@ pub async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
     fs::read(&path).map_err(|e| format!("Failed to read image file: {}", e))
 }
 
+/// 复制图片到系统剪贴板（不依赖 Tauri 剪贴板插件）。支持 Windows、macOS、Linux。
 #[tauri::command]
 pub async fn copy_image_to_clipboard(image_path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
@@ -231,7 +250,6 @@ pub async fn copy_image_to_clipboard(image_path: String) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        // Tauri 命令默认在主线程上执行，可以直接使用 NSPasteboard
         use std::path::Path;
         use objc2_app_kit::NSPasteboard;
         use objc2_foundation::{NSData, NSString};
@@ -243,13 +261,12 @@ pub async fn copy_image_to_clipboard(image_path: String) -> Result<(), String> {
 
         let bytes = fs::read(&path).map_err(|e| format!("Failed to read image file: {}", e))?;
 
+        #[allow(unused_unsafe)]
         unsafe {
             let pasteboard = NSPasteboard::generalPasteboard();
 
-            // 清空剪贴板
             pasteboard.clearContents();
 
-            // 根据文件扩展名确定类型
             let ext = path
                 .extension()
                 .and_then(|s| s.to_str())
@@ -265,7 +282,6 @@ pub async fn copy_image_to_clipboard(image_path: String) -> Result<(), String> {
             } else if ext == "tiff" || ext == "tif" {
                 "public.tiff"
             } else {
-                // 默认使用 PNG，或者尝试从文件内容判断
                 "public.png"
             };
 
@@ -282,16 +298,92 @@ pub async fn copy_image_to_clipboard(image_path: String) -> Result<(), String> {
         }
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        use std::borrow::Cow;
+        use std::path::Path;
+
+        let path = Path::new(&image_path);
+        if !path.exists() {
+            return Err(format!("Image file not found: {}", image_path));
+        }
+
+        let bytes = fs::read(&path).map_err(|e| format!("Failed to read image file: {}", e))?;
+
+        let (width, height, rgba) = tokio::task::spawn_blocking(move || {
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| format!("Failed to decode image: {}", e))?;
+            let rgba_img = img.to_rgba8();
+            let w = rgba_img.width() as usize;
+            let h = rgba_img.height() as usize;
+            let raw = rgba_img.into_raw();
+            Ok::<_, String>((w, h, raw))
+        })
+        .await
+        .map_err(|e| format!("copy_image_to_clipboard join error: {e}"))??;
+
+        let mut clipboard = arboard::Clipboard::new()
+            .map_err(|e| format!("Failed to open clipboard: {}", e))?;
+        let image_data = arboard::ImageData {
+            width,
+            height,
+            bytes: Cow::Owned(rgba),
+        };
+        clipboard
+            .set_image(image_data)
+            .map_err(|e| format!("Failed to set clipboard image: {}", e))?;
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         let _ = image_path;
-        Err("copy_image_to_clipboard is only supported on Windows and macOS".to_string())
+        Err("copy_image_to_clipboard is only supported on Windows, macOS and Linux".to_string())
     }
 }
 
 #[tauri::command]
 #[cfg(target_os = "linux")]
 pub async fn read_file(path: String) -> tauri::ipc::Response {
-  let data = tokio::fs::read(path).await.unwrap();
-  tauri::ipc::Response::new(data)
+    let data = tokio::fs::read(path).await.unwrap();
+    tauri::ipc::Response::new(data)
+}
+
+#[tauri::command]
+#[cfg(target_os = "android")]
+pub async fn share_file(app: AppHandle, file_path: String, mime_type: String) -> Result<(), String> {
+    use serde::{Deserialize, Serialize};
+    use tauri::plugin::PluginHandle;
+
+    #[derive(Serialize)]
+    struct ShareArgs {
+        file_path: String,
+        mime_type: String,
+    }
+
+    #[derive(Deserialize)]
+    struct ShareResponse {
+        success: bool,
+    }
+
+    let plugin_handle = app
+        .try_state::<PluginHandle<tauri::Wry>>()
+        .ok_or("Share plugin not found")?;
+
+    let response: ShareResponse = plugin_handle
+        .run_mobile_plugin_async::<ShareResponse>(
+            "shareFile",
+            ShareArgs {
+                file_path,
+                mime_type,
+            },
+        )
+        .await
+        .map_err(|e| format!("Failed to call share plugin: {}", e))?;
+
+    if !response.success {
+        return Err("Share operation failed".to_string());
+    }
+
+    Ok(())
 }

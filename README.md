@@ -84,13 +84,13 @@
    - 打开下载的 `.dmg` 文件
    - 将 `Kabegame.app` 拖拽到「应用程序」文件夹
 3. **虚拟磁盘fuse依赖（仅 Normal / Local 模式）**：
-   - macOS的虚拟磁盘功能依赖macfuse，通过 `brew install macfuse`安装
+   - MacOS的虚拟磁盘功能依赖macfuse，通过 `brew install macfuse`安装
    - 首次挂载会弹窗请求权限
 4. **CLI 工具（仅 Normal / Local 模式）**：
    - CLI 可执行文件已随应用一起打包，位于：`/Applications/Kabegame.app/Contents/Resources/resources/bin/kabegame-cli`
    - 如需在终端中全局使用，可以手动创建软链接（需要管理员权限）：
    ```bash
-   sudo ln -s "/Applications/Kabegame.app/Contents/Resources/resources/bin/MacOS/kabegame-cli" /usr/local/bin/kabegame-cli
+   sudo ln -s "/Applications/Kabegame.app/Contents/Resources/resources/bin/kabegame-cli" /usr/local/bin/kabegame-cli
    ```
    - 之后即可在终端中使用：`kabegame-cli --help`
    - Light 模式不提供 CLI 工具
@@ -298,6 +298,60 @@ bun check -c main --skip cargo   # 仅检查 vue
     - `main`：仅支持 `--skip vue` 跳过前端构建（仍会执行 `cargo tauri build`）
 - 主应用的开发会自动先打包插件到 `src-tauri/app-main/resources/plugins`，确保资源存在，而这个操作依赖cli的存在，因此需要先运行 `bun b -c cli` 来构建cli，否则无法开发主应用
 - `dev` 的前端由各自的 `tauri.conf.json` 的 `beforeDevCommand` 启动；`build` 时前端由构建脚本显式构建（`nx run .:build-*`）
+
+### Android 开发
+
+#### 前置要求
+
+Android 开发需要额外的环境配置，详见 [Android 迁移指南](docs/TAURI_ANDROID_MIGRATION.md)。主要要求包括：
+
+> **壁纸功能实现**：Android 平台壁纸设置（填充模式、过渡效果、视差滚动）的完整实现方案，详见 [Android 壁纸实现方案](docs/ANDROID_WALLPAPER_IMPLEMENTATION.md)。
+
+- Android Studio（需安装）
+- `JAVA_HOME` 环境变量（指向 Android Studio 的 JBR）
+- `ANDROID_HOME` 环境变量（指向 Android SDK 目录）
+- `NDK_HOME` 环境变量（**必须配置**，否则编译会失败）
+- Rust Android 目标：`rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android`
+
+#### 打开开发者工具
+
+在 Android 平台上，Tauri 不支持像桌面端那样直接调用 `open_devtools()` API。需要使用 **Chrome DevTools** 进行远程调试：
+
+**方法一：使用 Chrome DevTools（推荐）**
+
+1. **确保设备已连接并开启 USB 调试**
+   ```bash
+   # 检查设备是否连接
+   adb devices
+   ```
+
+2. **在 Chrome 浏览器中打开开发者工具**
+   - 在桌面 Chrome 中访问：`chrome://inspect/#devices`
+   - 确保 "Discover USB devices" 已勾选
+   - 在设备列表中会显示你的 Android 设备
+   - 找到你的应用（Kabegame），点击 "inspect" 打开开发者工具
+
+**方法二：通过 ADB 命令**
+
+```bash
+# 1. 确保设备已连接
+adb devices
+
+# 2. 转发端口（如果需要）
+adb forward tcp:9222 localabstract:chrome_devtools_remote
+
+# 3. 在 Chrome 中访问
+# chrome://inspect/#devices
+```
+
+**注意事项：**
+
+- 确保应用以 **Debug 模式**运行（开发模式会自动启用）
+- Android WebView 在 Debug 构建中默认启用调试，无需额外配置
+- 如果看不到设备：
+  - 检查 USB 调试是否开启
+  - 检查 ADB 驱动是否安装
+  - 尝试重新连接设备：`adb kill-server && adb start-server`
 
 ## 项目结构
 

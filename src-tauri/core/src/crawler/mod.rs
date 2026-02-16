@@ -1,5 +1,7 @@
+pub mod archiver;
 pub mod decompression;
 pub mod downloader;
+pub mod local_import;
 pub mod scheduler;
 
 pub use downloader::{

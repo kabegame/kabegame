@@ -28,21 +28,36 @@ pub fn repo_root_dir() -> Option<PathBuf> {
     None
 }
 
-/// 获取“用户程序数据目录”。
+/// 获取"用户程序数据目录"。
 ///
 /// - 开发模式（debug）：使用源码根目录下的 `data/`（即 `<repo>/data`）
 /// - 生产模式（release）：使用系统数据目录并追加 `app_folder_name`（保持现有行为）
+/// - Android/iOS：使用 Tauri 路径 API 获取的数据目录（需要先调用 `init_app_data_dir`）
 fn user_data_dir(app_folder_name: &str) -> PathBuf {
-    if is_dev() {
-        if let Some(repo_root) = repo_root_dir() {
-            return repo_root.join("data");
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        // 移动端使用 Tauri 路径 API
+        if let Some(path) = APP_DATA_DIR.get() {
+            return path.clone();
         }
+        // 如果未初始化，返回一个默认路径（不应该发生）
+        panic!("App data directory not initialized. Call init_app_data_dir() first.");
     }
 
-    dirs::data_local_dir()
-        .or_else(|| dirs::data_dir())
-        .expect("Failed to get app data directory")
-        .join(app_folder_name)
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        // 桌面端使用 dirs crate
+        if is_dev() {
+            if let Some(repo_root) = repo_root_dir() {
+                return repo_root.join("data");
+            }
+        }
+
+        dirs::data_local_dir()
+            .or_else(|| dirs::data_dir())
+            .expect("Failed to get app data directory")
+            .join(app_folder_name)
+    }
 }
 
 /// Kabegame 主应用数据目录（便于统一调用）。
@@ -59,4 +74,13 @@ pub fn resource_dir() -> PathBuf {
 
 pub fn init_resource_path(path: PathBuf) {
     RESOURCE_PATH.set(path).unwrap();
+}
+
+// Android/iOS 应用数据目录（通过 Tauri 路径 API 获取）
+#[cfg(any(target_os = "android", target_os = "ios"))]
+static APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn init_app_data_dir(path: PathBuf) {
+    APP_DATA_DIR.set(path).expect("App data directory already initialized");
 }

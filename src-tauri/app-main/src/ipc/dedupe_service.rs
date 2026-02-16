@@ -1,3 +1,4 @@
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::ipc::DaemonEvent;
 use kabegame_core::settings::Settings;
@@ -40,13 +41,7 @@ impl DedupeService {
         let svc = Arc::clone(&self);
 
         tokio::task::spawn_blocking(move || {
-            let res = run_dedupe_batched(
-                &handle,
-                storage,
-                delete_files,
-                batch_size,
-                cancel,
-            );
+            let res = run_dedupe_batched(&handle, storage, delete_files, batch_size, cancel);
             if let Err(e) = res {
                 eprintln!("[dedupe] 任务失败: {}", e);
             }

@@ -66,7 +66,7 @@ export function useImageOperations(
     }
   };
 
-  // 复制图片到剪贴板
+  // 复制图片到剪贴板（不依赖 Tauri 剪贴板插件：本地文件用后端 copy_image_to_clipboard，否则用 navigator.clipboard）
   const handleCopyImage = async (image: ImageInfo) => {
     try {
       const writeImageBlobToClipboard = async (blob: Blob) => {
@@ -160,12 +160,10 @@ export function useImageOperations(
       };
 
       const localPath = (image.localPath || "").trim();
-
       const fromMap = imageSrcMap.value[image.id] ?? {};
       const imageUrl = fromMap.original || fromMap.thumbnail;
 
       if (isTauri() && localPath) {
-        // macOS 和 Windows 优先使用后端 API（不依赖用户手势上下文）
         if (IS_MACOS) {
           try {
             await invoke("copy_image_to_clipboard", { imagePath: localPath });
@@ -178,7 +176,6 @@ export function useImageOperations(
           }
         }
 
-        // Windows 和其他平台：先尝试后端 API，失败则回退到前端 API
         if (imageUrl) {
           try {
             await tryCopyByLoadedUrl(imageUrl);
@@ -200,9 +197,7 @@ export function useImageOperations(
           }
           const bytes = await invoke<number[] | Uint8Array>(
             "get_gallery_image",
-            {
-              imagePath: localPath,
-            },
+            { imagePath: localPath },
           );
           const u8 =
             bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -221,7 +216,6 @@ export function useImageOperations(
       }
 
       await tryCopyByLoadedUrl(imageUrl);
-
       ElMessage.success("图片已复制到剪贴板");
     } catch (error) {
       console.error("复制图片失败:", error);

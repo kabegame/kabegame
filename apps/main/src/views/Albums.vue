@@ -1,28 +1,42 @@
 <template>
-  <div class="albums-page">
+  <div class="albums-page" v-pull-to-refresh="pullToRefreshOpts">
     <div class="albums-scroll-container">
       <PageHeader title="画册">
-        <el-button v-if="albumDriveEnabled" type="primary" plain @click="openVirtualDrive">
-          去VD查看
-        </el-button>
-        <el-button @click="handleRefresh" :loading="isRefreshing">
-          <el-icon>
-            <Refresh />
-          </el-icon>
-          刷新
-        </el-button>
-        <el-button type="primary" @click="showCreateDialog = true">新建画册</el-button>
-        <TaskDrawerButton />
-        <el-button @click="openHelpDrawer" circle title="帮助">
-          <el-icon>
-            <QuestionFilled />
-          </el-icon>
-        </el-button>
-        <el-button @click="openQuickSettings" circle>
-          <el-icon>
-            <Setting />
-          </el-icon>
-        </el-button>
+        <!-- 非 Android：保持原有布局 -->
+        <template v-if="!IS_ANDROID">
+          <el-button v-if="albumDriveEnabled" type="primary" plain @click="openVirtualDrive">
+            去VD查看
+          </el-button>
+          <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing">
+            <el-icon>
+              <Refresh />
+            </el-icon>
+            刷新
+          </el-button>
+          <el-button type="primary" @click="showCreateDialog = true">新建画册</el-button>
+          <TaskDrawerButton />
+          <el-button @click="openHelpDrawer" circle title="帮助">
+            <el-icon>
+              <QuestionFilled />
+            </el-icon>
+          </el-button>
+          <el-button @click="openQuickSettings" circle>
+            <el-icon>
+              <Setting />
+            </el-icon>
+          </el-button>
+        </template>
+        <!-- Android：使用 headerFeatures 驱动 -->
+        <template v-else>
+          <!-- 任务按钮：保持直显 -->
+          <TaskDrawerButton />
+          <!-- 溢出菜单：除任务外的所有功能 -->
+          <AndroidHeaderOverflow
+            v-if="foldedFeatures.length > 0"
+            :features="foldedFeatures"
+            @select="handleOverflowSelect"
+          />
+        </template>
       </PageHeader>
 
       <div v-loading="showLoading" style="min-height: 200px;">
@@ -38,11 +52,13 @@
       </div>
     </div>
 
-    <AlbumContextMenu :visible="albumMenuVisible" :position="albumMenuPosition" :album-id="menuAlbum?.id"
-      :album-name="menuAlbum?.name" :current-rotation-album-id="currentRotationAlbumId"
-      :wallpaper-rotation-enabled="wallpaperRotationEnabled"
-      :album-image-count="menuAlbum ? (albumCounts[menuAlbum.id] || 0) : 0" @close="closeAlbumContextMenu"
-      @command="handleAlbumMenuCommand" />
+    <ActionRenderer
+      :visible="albumMenu.visible.value"
+      :position="albumMenu.position.value"
+      :actions="(albumActions as import('@kabegame/core/actions/types').ActionItem<unknown>[])"
+      :context="albumMenuContext"
+      @close="albumMenu.hide"
+      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename')" />
 
     <el-dialog v-model="showCreateDialog" title="新建画册" width="360px">
       <el-input v-model="newAlbumName" placeholder="输入画册名称" />
@@ -59,20 +75,25 @@ import { ref, computed, onMounted, onActivated, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Refresh, Setting, QuestionFilled } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
-import AlbumContextMenu from "@/components/contextMenu/AlbumContextMenu.vue";
+import { createAlbumActions, type AlbumActionContext } from "@/actions/albumActions";
+import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
+import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
 import { useAlbumStore } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
+import type { Album } from "@/stores/albums";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
+import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_WINDOWS, IS_LIGHT_MODE } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
 
 const albumStore = useAlbumStore();
 const { albums, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
@@ -81,6 +102,43 @@ const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albums");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("albums");
+
+const foldedFeatures = computed(() => {
+  const features = getFoldedFeaturesForPage("albums");
+  // 过滤掉 VD 未启用时的 openVirtualDrive 功能
+  return features.filter((f) => {
+    if (f.id === "openVirtualDrive") {
+      return albumDriveEnabled.value;
+    }
+    return true;
+  });
+});
+
+// 根据 pages 列表判断刷新功能是否存在
+const hasRefreshFeature = computed(() => hasFeatureInPage("albums", "refresh"));
+const pullToRefreshOpts = computed(() =>
+  IS_ANDROID && hasRefreshFeature.value
+    ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
+    : undefined
+);
+
+// 处理溢出菜单选择
+const handleOverflowSelect = (featureId: HeaderFeatureId) => {
+  switch (featureId) {
+    case "help":
+      openHelpDrawer();
+      break;
+    case "quickSettings":
+      openQuickSettings();
+      break;
+    case "createAlbum":
+      showCreateDialog.value = true;
+      break;
+    case "openVirtualDrive":
+      openVirtualDrive();
+      break;
+  }
+};
 
 // 虚拟磁盘
 const settingsStore = useSettingsStore();
@@ -362,9 +420,30 @@ const clearAlbumPreviewCache = (albumId: string) => {
 };
 
 // 画册右键菜单状态
-const albumMenuVisible = ref(false);
-const albumMenuPosition = ref({ x: 0, y: 0 });
-const menuAlbum = ref<{ id: string; name: string } | null>(null);
+// Album actions
+const albumActions = computed(() => createAlbumActions());
+
+// Find album by ID helper
+const findAlbumById = (id: string): Album | null => {
+  return albums.value.find((a) => a.id === id) ?? null;
+};
+
+// Album menu using useActionMenu (visible/position/context passed to ActionRenderer)
+const albumMenu = useActionMenu<Album>();
+
+// Album menu context with extended fields (must include ActionContext<Album> for ActionRenderer)
+const albumMenuContext = computed<AlbumActionContext>(() => {
+  const album = albumMenu.context.value.target;
+  return {
+    target: album,
+    selectedIds: new Set<string>(),
+    selectedCount: 0,
+    currentRotationAlbumId: currentRotationAlbumId.value,
+    wallpaperRotationEnabled: wallpaperRotationEnabled.value,
+    albumImageCount: album ? (albumCounts.value[album.id] || 0) : 0,
+    favoriteAlbumId: FAVORITE_ALBUM_ID.value,
+  };
+});
 
 const getImageUrl = async (localPath: string): Promise<string> => {
   const p = (localPath || "").trim();
@@ -499,20 +578,20 @@ const openAlbum = (album: { id: string; name: string }) => {
 };
 
 const openAlbumContextMenu = (event: MouseEvent, album: { id: string; name: string }) => {
-  albumMenuVisible.value = true;
-  menuAlbum.value = album;
-  albumMenuPosition.value = { x: event.clientX, y: event.clientY };
+  const albumObj = findAlbumById(album.id);
+  if (albumObj) {
+    albumMenu.show(albumObj, event);
+  }
 };
 
-const closeAlbumContextMenu = () => {
-  albumMenuVisible.value = false;
-  menuAlbum.value = null;
-};
-
-const handleAlbumMenuCommand = async (command: "browse" | "delete" | "setWallpaperRotation" | "rename") => {
-  if (!menuAlbum.value) return;
-  const { id, name } = menuAlbum.value;
-  closeAlbumContextMenu();
+const handleAlbumMenuCommand = async (
+  command: "browse" | "delete" | "setWallpaperRotation" | "rename"
+) => {
+  const context = albumMenuContext.value;
+  const album = context.target;
+  if (!album) return;
+  const { id, name } = album;
+  albumMenu.hide();
 
   if (command === "browse") {
     router.push(`/albums/${id}`);

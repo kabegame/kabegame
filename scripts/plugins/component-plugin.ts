@@ -4,6 +4,7 @@ import * as path from "path";
 import {
   RESOURCES_DIR,
   stageResourceBinary,
+  getDevServerHost,
 } from "../utils";
 import { OSPlugin } from "./os-plugin";
 import { readdirSync, statSync, unlinkSync, existsSync, readFileSync, writeFileSync } from "fs";
@@ -123,21 +124,24 @@ export class ComponentPlugin extends BasePlugin {
         this.log(`tauriConfigHandlebars: ${tauriConfigHandlebars}`);
         if (existsSync(tauriConfigHandlebars)) {
           const tauriConfig = path.resolve(component.appDir, "tauri.conf.json");
+          Handlebars.registerHelper("devServerHost", () => getDevServerHost());
           const template = Handlebars.compile(
             readFileSync(tauriConfigHandlebars, {
               encoding: "utf-8",
             }).toString(),
           );
+          const isAndroid = !!bs.context.isAndroid;
           writeFileSync(
             tauriConfig,
             template({
               // TODO: 当需要更多环境的时候维护这个上下文
-              isWindows: OSPlugin.isWindows,
-              isMacOS: OSPlugin.isMacOS,
-              isLinux: OSPlugin.isLinux,
-              isLight: bs.context.mode!.isLight,
+              isWindows: !isAndroid && OSPlugin.isWindows,
+              isMacOS: !isAndroid && OSPlugin.isMacOS,
+              isLinux: !isAndroid && OSPlugin.isLinux,
+              isLight: isAndroid || bs.context.mode!.isLight,
               isDev: bs.context.cmd!.isDev,
-              isAndroid: !!bs.context.isAndroid,
+              isAndroid: isAndroid,
+              isWindowEffect: !isAndroid && (OSPlugin.isWindows || OSPlugin.isMacOS)
             }),
           );
         }
@@ -162,11 +166,11 @@ export class ComponentPlugin extends BasePlugin {
             }
           }
         }
-        // linux 不需要（MacOS暂时未定）
+        // 安卓、linux 不需要
         if (
           component.isMain &&
           !bs.context.mode!.isLight &&
-          !OSPlugin.isLinux
+          (!OSPlugin.isLinux && !bs.context.isAndroid)
         ) {
           stageResourceBinary(Component.cargoComp(Component.CLI));
         }

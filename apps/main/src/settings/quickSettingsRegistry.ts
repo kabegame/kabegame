@@ -1,5 +1,6 @@
 import type { QuickSettingsPageId } from "@/stores/quickSettingsDrawer";
-import type { QuickSettingGroup } from "@kabegame/core/components/settings/quick-settings-registry-types";
+import type { QuickSettingGroup, QuickSettingItem } from "@kabegame/core/components/settings/quick-settings-registry-types";
+import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
 
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
@@ -25,14 +26,14 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
     id: "display",
     title: "显示",
     items: [
-      {
+      ...(!IS_ANDROID ? [{
         key: "galleryImageAspectRatio",
         label: "图片宽高比",
         description: "影响画廊/画册中图片卡片的展示宽高比",
         comp: GalleryImageAspectRatioSetting,
         pages: ["gallery", "albumdetail"],
-      },
-      {
+      } as QuickSettingItem<QuickSettingsPageId>] : []),
+      ...(!IS_ANDROID ? [{
         key: "imageClickAction",
         label: "双击图片",
         description: "双击图片时的行为",
@@ -47,7 +48,7 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
           ],
         },
         pages: ["gallery", "albumdetail"],
-      },
+      } as QuickSettingItem<QuickSettingsPageId>] : []),
     ],
   },
   {
@@ -96,14 +97,14 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         },
         pages: ["gallery", "albumdetail"],
       },
-      {
+      ...(!IS_ANDROID ? [{
         key: "defaultDownloadDir",
         label: "默认下载目录",
         description:
           "未在任务里指定输出目录时，将下载到该目录（按插件分文件夹保存）",
         comp: DefaultDownloadDirSetting,
         pages: ["gallery", "albumdetail"],
-      },
+      } as QuickSettingItem<QuickSettingsPageId>] : []),
     ],
   },
   {
@@ -171,20 +172,20 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         comp: WallpaperModeSetting,
         pages: ["gallery", "albumdetail", "albums"],
       },
-      {
+      ...(IS_WINDOWS ? [{
         key: "wallpaperEngineDir",
         label: "Wallpaper Engine 目录",
-        description: "用于“导出并自动导入到 WE”",
+        description: "用于\"导出并自动导入到 WE\"",
         comp: WallpaperEngineDirSetting,
         pages: [],
-      },
+      } as QuickSettingItem<QuickSettingsPageId>] : []),
     ],
   },
   {
     id: "app",
     title: "应用",
     items: [
-      {
+      ...(!IS_ANDROID ? [{
         key: "autoLaunch",
         label: "开机启动",
         description: "应用启动时自动运行",
@@ -195,7 +196,7 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
           buildArgs: (value: boolean) => ({ enabled: value }),
         },
         pages: ["settings"],
-      },
+      } as QuickSettingItem<QuickSettingsPageId>] : []),
     ],
   },
 ];

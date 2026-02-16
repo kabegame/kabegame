@@ -1,18 +1,21 @@
 <template>
   <el-dialog
     v-model="visible"
-    title="导入插件"
-    width="800"
-    top="5vh"
+    :title="pageTitle"
+    :width="IS_ANDROID ? '100%' : '800px'"
+    :top="IS_ANDROID ? '0' : '5vh'"
+    :fullscreen="IS_ANDROID"
     :close-on-click-modal="false"
     append-to-body
     class="plugin-import-dialog"
+    :class="{ 'mobile-fullscreen': IS_ANDROID }"
+    @close="handleClose"
   >
     <PluginDetailPage
       v-if="preview"
       :title="pageTitle"
       :subtitle="props.kgpgPath || '（未提供文件路径）'"
-      :show-back="false"
+      :show-back="IS_ANDROID"
       :loading="false"
       :show-skeleton="false"
       :plugin="pluginVm"
@@ -26,6 +29,7 @@
       :load-doc-image-bytes="loadDocImageBytes"
       @install="doInstall"
       @copy-id="copyText"
+      @back="handleBack"
     >
       <template #detail-extra-items>
         <el-descriptions-item label="版本" v-if="preview">
@@ -65,6 +69,8 @@ import { ElMessage } from 'element-plus';
 import PluginDetailPage from '@kabegame/core/components/plugin/PluginDetailPage.vue';
 import { usePluginStore } from '@/stores/plugins';
 import { isUpdateAvailable } from '@kabegame/core/utils/version';
+import { IS_ANDROID } from '@kabegame/core/env';
+import { useModalStackStore } from '@kabegame/core/stores/modalStack';
 
 type ImportPreview = {
   id: string;
@@ -103,6 +109,16 @@ const emit = defineEmits<{
   (e: 'success'): void;
 }>();
 
+const handleClose = () => {
+  emit('update:visible', false);
+};
+
+const handleBack = () => {
+  if (IS_ANDROID) {
+    handleClose();
+  }
+};
+
 const visible = computed({
   get: () => props.visible,
   set: (val) => emit('update:visible', val),
@@ -115,6 +131,8 @@ const installed = ref(false);
 const installing = ref(false);
 const detail = ref<any | null>(null);
 const pluginStore = usePluginStore();
+const modalStack = useModalStackStore();
+const modalStackId = ref<string | null>(null);
 
 watch(() => props.kgpgPath, async (newPath) => {
   if (newPath && visible.value) {
@@ -123,6 +141,15 @@ watch(() => props.kgpgPath, async (newPath) => {
 });
 
 watch(() => visible.value, async (val) => {
+  if (val && IS_ANDROID) {
+    modalStackId.value = modalStack.push(() => {
+      visible.value = false;
+    });
+  } else if (!val && modalStackId.value) {
+    modalStack.remove(modalStackId.value);
+    modalStackId.value = null;
+  }
+
   if (val && props.kgpgPath) {
     await loadPreview(props.kgpgPath);
   } else {
@@ -227,7 +254,13 @@ const doInstall = async () => {
 
 const copyText = async (text: string) => {
   try {
-    await navigator.clipboard.writeText(text);
+    const { isTauri } = await import("@tauri-apps/api/core");
+    if (isTauri()) {
+      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+      await writeText(text);
+    } else {
+      await navigator.clipboard.writeText(text);
+    }
     ElMessage.success("已复制");
   } catch {
     ElMessage.error("复制失败");
@@ -252,6 +285,22 @@ const copyText = async (text: string) => {
 .plugin-import-dialog {
   display: flex;
   flex-direction: column;
+}
+
+.plugin-import-dialog.mobile-fullscreen {
+  margin: 0 !important;
+}
+
+.plugin-import-dialog.mobile-fullscreen .el-dialog {
+  margin: 0 !important;
+  max-height: 100vh !important;
+  height: 100vh !important;
+  border-radius: 0 !important;
+}
+
+.plugin-import-dialog.mobile-fullscreen .el-dialog__body {
+  padding: 0 !important;
+  height: calc(100vh - 60px) !important;
 }
 
 .plugin-import-dialog .el-dialog {

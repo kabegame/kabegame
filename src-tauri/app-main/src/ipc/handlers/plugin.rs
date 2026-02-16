@@ -1,4 +1,4 @@
-﻿//! Plugin 相关请求
+//! Plugin 相关请求
 
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 use kabegame_core::plugin::PluginManager;
@@ -189,7 +189,10 @@ async fn save_plugin_sources(sources: &serde_json::Value) -> CliIpcResponse {
 
 async fn install_browser_plugin(plugin_id: &str) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    match plugin_manager.install_browser_plugin(plugin_id.to_string()).await {
+    match plugin_manager
+        .install_browser_plugin(plugin_id.to_string())
+        .await
+    {
         Ok(plugin) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(plugin).unwrap_or_default())
         }

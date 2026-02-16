@@ -5,7 +5,7 @@
         <span class="detail-label">源：</span>
         <span class="detail-value">{{ getPluginName(image.pluginId) }}</span>
       </div>
-      <div v-if="!isFileUrl(image.url)" class="detail-item">
+      <div v-if="image.url && !isFileUrl(image.url)" class="detail-item">
         <span class="detail-label">URL：</span>
         <span class="detail-value clickable-link" @click="handleOpenUrl(image.url)">{{ image.url }}</span>
       </div>

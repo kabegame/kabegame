@@ -10,11 +10,6 @@
 //
 // ============================================
 
-generator client {
-    provider = "prisma-client-js"
-    output   = "./prisma-client"
-}
-
 datasource db {
     provider = "sqlite"
 }
@@ -57,7 +52,7 @@ model RunConfig {
 // 图片表
 model Image {
     id            Int     @id @default(autoincrement())
-    url           String
+    url           String?  // 本地导入的时候没有url
     localPath     String  @map("local_path")
     pluginId      String  @map("plugin_id")
     taskId        String? @map("task_id")

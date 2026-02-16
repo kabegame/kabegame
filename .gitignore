@@ -26,7 +26,6 @@ target
 src-tauri/app-main/resources/plugins/*.kgpg
 src-tauri/*/gen/schemas/*
 src-tauri/app-main/resources/bin/*
-!src-tauri/app-main/resources/bin/.gitkeep
 
 # Tauri generated icons (keep only icon.png and README.md)
 src-tauri/icons/*

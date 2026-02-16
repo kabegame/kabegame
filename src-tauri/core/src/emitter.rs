@@ -19,6 +19,7 @@ use std::sync::OnceLock;
 #[cfg(feature = "ipc-server")]
 pub struct GlobalEmitter;
 
+// TODO: 写一个emit宏，用于简化事件发送
 #[cfg(feature = "ipc-server")]
 impl GlobalEmitter {
     /// 初始化全局 emitter
@@ -50,6 +51,7 @@ impl GlobalEmitter {
     }
 
     /// 发送任务日志事件
+    /// TODO: 将最后一条log显示到任务项，并提供全部log的查看入口
     pub fn emit_task_log(&self, task_id: &str, level: &str, message: &str) {
         let event = std::sync::Arc::new(DaemonEvent::TaskLog {
             task_id: task_id.to_string(),

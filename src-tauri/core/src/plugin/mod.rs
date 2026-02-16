@@ -137,6 +137,13 @@ impl PluginManager {
     }
 
     fn prepackaged_plugins_dir(&self) -> Result<PathBuf, String> {
+        // Android: 使用提取到 app data 目录的内置插件
+        #[cfg(target_os = "android")]
+        {
+            let app_data = crate::app_paths::kabegame_data_dir();
+            return Ok(app_data.join("builtin-plugins"));
+        }
+
         // 开发模式：从项目源码里的 src-tauri/resources/plugins 定位
         #[cfg(debug_assertions)]
         {
@@ -2242,6 +2249,13 @@ pub fn find_plugin_kgpg_path(plugin_id: &str) -> Option<PathBuf> {
 
 /// 获取内置插件目录（不依赖 AppHandle / PluginManager 实例）
 fn builtin_plugins_directory_for_readonly() -> Result<PathBuf, String> {
+    // Android: 使用提取到 app data 目录的内置插件
+    #[cfg(target_os = "android")]
+    {
+        let app_data = crate::app_paths::kabegame_data_dir();
+        return Ok(app_data.join("builtin-plugins"));
+    }
+
     // 开发模式：从项目源码里的 src-tauri/app-main/resources/plugins 定位
     #[cfg(debug_assertions)]
     {

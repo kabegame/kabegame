@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 /**
  * 基于 Tapable 的构建系统
  *
@@ -228,8 +227,7 @@ export class BuildSystem {
 
     this.commonUse(Cmd.BUILD);
     this.commonBefore();
-    // linux 下构建cli
-    if (this.context.component!.isCli && (!this.context.mode!.isLight || OSPlugin.isLinux)) {
+    if (this.context.component!.isCli && !this.context.mode!.isLight) {
       this.hooks.beforeBuild.call(Component.CLI);
       const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.CLI);
       const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
@@ -258,7 +256,7 @@ export class BuildSystem {
         const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
         const args = ["android", "build"]
           .concat(features.length ? ["-f", features.join(",")] : [])
-          .concat(mergedArgs.length > 0 ? ["--", ...mergedArgs] : []);
+          .concat(mergedArgs);
         run("tauri", args, { cwd, bin: "cargo" });
       } else {
         const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];

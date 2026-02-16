@@ -113,11 +113,11 @@ PRAGMA mmap_size = 268435456;
         .expect("Failed to create run_configs table");
         let _ = conn.execute("ALTER TABLE run_configs ADD COLUMN http_headers TEXT", []);
 
-        // 创建图片表
+        // 创建图片表（url 可选，本地导入时无 URL）
         conn.execute(
             "CREATE TABLE IF NOT EXISTS images (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                url TEXT NOT NULL,
+                url TEXT,
                 local_path TEXT NOT NULL,
                 plugin_id TEXT NOT NULL,
                 task_id TEXT,
@@ -483,7 +483,7 @@ fn compute_file_hash(path: &PathBuf) -> Result<String, String> {
 }
 
 fn perform_complex_migrations(conn: &mut Connection) {
-    let (images_id_is_text, images_has_favorite_col, images_thumb_notnull) = {
+    let (images_id_is_text, images_has_favorite_col, images_thumb_notnull, images_url_notnull) = {
         let mut stmt = conn
             .prepare("PRAGMA table_info(images)")
             .expect("Failed to prepare table_info(images)");
@@ -499,6 +499,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
         let mut id_type: Option<String> = None;
         let mut has_favorite = false;
         let mut thumb_notnull: Option<i64> = None;
+        let mut url_notnull: Option<i64> = None;
         for r in rows {
             if let Ok((name, col_type, notnull)) = r {
                 if name == "id" {
@@ -510,10 +511,18 @@ fn perform_complex_migrations(conn: &mut Connection) {
                 if name == "thumbnail_path" {
                     thumb_notnull = Some(notnull);
                 }
+                if name == "url" {
+                    url_notnull = Some(notnull);
+                }
             }
         }
         let id_is_text = id_type.unwrap_or_default().to_uppercase().contains("TEXT");
-        (id_is_text, has_favorite, thumb_notnull.unwrap_or(0) == 1)
+        (
+            id_is_text,
+            has_favorite,
+            thumb_notnull.unwrap_or(0) == 1,
+            url_notnull.unwrap_or(0) == 1,
+        )
     };
 
     let (album_image_id_is_text, task_image_id_is_text) = {
@@ -545,7 +554,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
     };
 
     let needs_rebuild_images =
-        images_id_is_text || images_has_favorite_col || !images_thumb_notnull;
+        images_id_is_text || images_has_favorite_col || !images_thumb_notnull || images_url_notnull;
     let needs_rebuild_relations =
         images_id_is_text || album_image_id_is_text || task_image_id_is_text;
 
@@ -645,7 +654,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
             tx.execute(
                 "CREATE TABLE images_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    url TEXT NOT NULL,
+                    url TEXT,
                     local_path TEXT NOT NULL,
                     plugin_id TEXT NOT NULL,
                     task_id TEXT,

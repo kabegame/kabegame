@@ -1,11 +1,14 @@
 <template>
-  <div class="album-detail">
-    <!-- 关键：不要用 v-if 在 loading 时卸载 ImageGrid，否则 before-grid 里的 header 会闪烁 -->
+  <div class="album-detail" v-pull-to-refresh="pullToRefreshOpts">
     <ImageGrid ref="albumViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
-      enable-virtual-scroll :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true"
+      :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
+      :enable-ctrl-key-adjust-columns="!IS_ANDROID"
+      enable-virtual-scroll :show-empty-state="true"
       :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing"
-      :context-menu-component="AlbumImageContextMenu" :on-context-command="handleImageMenuCommand"
-      :hide-scrollbar="false" @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()">
+      :actions="imageActions"
+      :on-context-command="handleImageMenuCommand"
+      :hide-scrollbar="false" @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()"
+      @android-selection-change="handleAndroidSelectionChange">
 
       <template #before-grid>
         <PageHeader :title="albumName || '画册'"
@@ -20,38 +23,50 @@
                 '画册' }}</span>
             </div>
           </template>
-          <el-button v-if="albumDriveEnabled" type="primary" plain @click="openVirtualDriveAlbumFolder">
-            去VD查看
-          </el-button>
-          <el-button @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !albumId">
-            <el-icon>
-              <Refresh />
-            </el-icon>
-            刷新
-          </el-button>
-          <el-button type="primary" @click="handleSetAsWallpaperCarousel">
-            <el-icon>
-              <Picture />
-            </el-icon>
-            <span style="margin-left: 4px;">设为轮播壁纸</span>
-          </el-button>
-          <el-button type="danger" @click="handleDeleteAlbum">
-            <el-icon>
-              <Delete />
-            </el-icon>
-            <span style="margin-left: 4px;">删除画册</span>
-          </el-button>
-          <TaskDrawerButton />
-          <el-button @click="openHelpDrawer" circle title="帮助">
-            <el-icon>
-              <QuestionFilled />
-            </el-icon>
-          </el-button>
-          <el-button @click="openQuickSettings" circle>
-            <el-icon>
-              <Setting />
-            </el-icon>
-          </el-button>
+          <!-- 非 Android：保持原有布局 -->
+          <template v-if="!IS_ANDROID">
+            <el-button v-if="albumDriveEnabled" type="primary" plain @click="openVirtualDriveAlbumFolder">
+              去VD查看
+            </el-button>
+            <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !albumId">
+              <el-icon>
+                <Refresh />
+              </el-icon>
+              刷新
+            </el-button>
+            <el-button type="primary" @click="handleSetAsWallpaperCarousel">
+              <el-icon>
+                <Picture />
+              </el-icon>
+              <span style="margin-left: 4px;">设为轮播壁纸</span>
+            </el-button>
+            <el-button type="danger" @click="handleDeleteAlbum">
+              <el-icon>
+                <Delete />
+              </el-icon>
+              <span style="margin-left: 4px;">删除画册</span>
+            </el-button>
+            <TaskDrawerButton />
+            <el-button @click="openHelpDrawer" circle title="帮助">
+              <el-icon>
+                <QuestionFilled />
+              </el-icon>
+            </el-button>
+            <el-button @click="openQuickSettings" circle>
+              <el-icon>
+                <Setting />
+              </el-icon>
+            </el-button>
+          </template>
+          <!-- Android：使用 headerFeatures 驱动 -->
+          <template v-else>
+            <TaskDrawerButton />
+            <AndroidHeaderOverflow
+              v-if="foldedFeatures.length > 0"
+              :features="foldedFeatures"
+              @select="handleOverflowSelect"
+            />
+          </template>
         </PageHeader>
 
         <!-- 画册图片数量上限警告 -->
@@ -63,7 +78,6 @@
           <span>{{ warningMessage }}</span>
         </div>
 
-        <!-- 分页器：每页 1000（leaf） -->
         <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
           :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToPage" />
       </template>
@@ -83,28 +97,30 @@
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
-import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Picture, Delete, Setting, Refresh, QuestionFilled } from "@element-plus/icons-vue";
+import { Picture, Delete, Setting, Refresh, QuestionFilled, Star, StarFilled, FolderAdd, InfoFilled, DocumentCopy } from "@element-plus/icons-vue";
 import { Warning, CircleClose } from "@element-plus/icons-vue";
-import AlbumImageContextMenu from "@/components/contextMenu/AlbumImageContextMenu.vue";
+import { createImageActions } from "@/actions/imageActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 import { useAlbumStore } from "@/stores/albums";
-import { useCrawlerStore, type ImageInfo as CrawlerImageInfo } from "@/stores/crawler";
+import { useCrawlerStore } from "@/stores/crawler";
 import type { ImageInfo } from "@/stores/crawler";
 import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
-import { IS_WINDOWS, IS_LIGHT_MODE } from "@kabegame/core/env";
+import { IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
+import { useDesktopSelectionStore, type DesktopSelectionAction } from "@/stores/desktopSelection";
 import { useImageOperations } from "@/composables/useImageOperations";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
+import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
+import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
@@ -114,6 +130,7 @@ import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
+import { useImageTypes } from "@/composables/useImageTypes";
 
 const route = useRoute();
 const router = useRouter();
@@ -124,7 +141,9 @@ const settingsStore = useSettingsStore();
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 const uiStore = useUiStore();
+const { load: loadImageTypes, getMimeType } = useImageTypes();
 const { imageGridColumns } = storeToRefs(uiStore);
+const desktopSelectionStore = useDesktopSelectionStore();
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 const isAlbumDetailActive = ref(true);
 
@@ -132,6 +151,46 @@ const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("albumdetail");
+
+const foldedFeatures = computed(() => {
+  const features = getFoldedFeaturesForPage("albumdetail");
+  // 过滤掉 VD 未启用时的 openVirtualDriveAlbumFolder 功能
+  return features.filter((f) => {
+    if (f.id === "openVirtualDriveAlbumFolder") {
+      return albumDriveEnabled.value;
+    }
+    return true;
+  });
+});
+
+// 根据 pages 列表判断刷新功能是否存在
+const hasRefreshFeature = computed(() => hasFeatureInPage("albumdetail", "refresh"));
+const pullToRefreshOpts = computed(() =>
+  IS_ANDROID && hasRefreshFeature.value
+    ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
+    : undefined
+);
+
+// 处理溢出菜单选择
+const handleOverflowSelect = (featureId: HeaderFeatureId) => {
+  switch (featureId) {
+    case "help":
+      openHelpDrawer();
+      break;
+    case "quickSettings":
+      openQuickSettings();
+      break;
+    case "openVirtualDriveAlbumFolder":
+      openVirtualDriveAlbumFolder();
+      break;
+    case "setAsWallpaperCarousel":
+      handleSetAsWallpaperCarousel();
+      break;
+    case "deleteAlbum":
+      handleDeleteAlbum();
+      break;
+  }
+};
 
 // 虚拟磁盘
 const isLightMode = IS_LIGHT_MODE;
@@ -244,6 +303,9 @@ const { isInteracting } = useImageGridAutoLoad({
   containerRef: albumContainerRef,
   onLoad: () => void loadImageUrls(),
 });
+
+// Image actions for context menu / action sheet
+const imageActions = computed(() => createImageActions({ removeText: "从画册移除" }));
 
 const {
   imageSrcMap,
@@ -506,6 +568,57 @@ const confirmRemoveImages = async () => {
   }
 };
 
+// Android 选择模式：构建操作栏 actions
+const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): DesktopSelectionAction[] => {
+  const countText = selectedCount > 1 ? `(${selectedCount})` : "";
+  const firstSelectedImage = images.value.find(img => selectedIds.has(img.id));
+  const isFavorite = firstSelectedImage?.favorite ?? false;
+  
+  if (selectedCount === 1) {
+    return [
+      { key: "favorite", label: isFavorite ? "取消收藏" : "收藏", icon: isFavorite ? StarFilled : Star, command: "favorite" },
+      { key: "addToAlbum", label: "加入画册", icon: FolderAdd, command: "addToAlbum" },
+      { key: "remove", label: "从画册移除", icon: Delete, command: "remove" },
+    ];
+  } else {
+    return [
+      { key: "favorite", label: `收藏${countText}`, icon: Star, command: "favorite" },
+      { key: "addToAlbum", label: `加入画册${countText}`, icon: FolderAdd, command: "addToAlbum" },
+      { key: "remove", label: `从画册移除${countText}`, icon: Delete, command: "remove" },
+    ];
+  }
+};
+
+// Android 选择变化处理：用 desktop 选择数量决定状态
+const handleAndroidSelectionChange = (payload: { active: boolean; selectedCount: number; selectedIds: ReadonlySet<string> }) => {
+  if (!IS_ANDROID) return;
+  
+  if (!payload.active || payload.selectedCount === 0) {
+    desktopSelectionStore.clear();
+    return;
+  }
+  const actions = buildSelectionActions(payload.selectedCount, payload.selectedIds);
+  if (desktopSelectionStore.selectedCount > 0) {
+    desktopSelectionStore.update(payload.selectedCount, actions);
+  } else {
+    const firstImage = images.value.find(img => payload.selectedIds.has(img.id));
+    if (!firstImage) return;
+    desktopSelectionStore.set(
+      payload.selectedCount,
+      actions,
+      (cmd: string) => {
+        const commandPayload: ContextCommandPayload = {
+          command: cmd as any,
+          image: firstImage,
+          selectedImageIds: payload.selectedIds,
+        };
+        void handleImageMenuCommand(commandPayload);
+      },
+      () => albumViewRef.value?.exitAndroidSelectionMode?.()
+    );
+  }
+};
+
 const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
   const command = payload.command;
   const image = payload.image;
@@ -621,6 +734,25 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       if (!isMultiSelect) {
         await invoke("set_wallpaper_by_image_id", { imageId: image.id });
         currentWallpaperImageId.value = image.id;
+      }
+      break;
+    case "share":
+      if (!isMultiSelect && image) {
+        try {
+          const filePath = image.localPath;
+          if (!filePath) {
+            ElMessage.error("图片路径不存在");
+            break;
+          }
+          
+          const ext = filePath.split('.').pop()?.toLowerCase() || '';
+          await loadImageTypes();
+          const mimeType = getMimeType(ext);
+          await invoke("share_file", { filePath, mimeType });
+        } catch (error) {
+          console.error("分享失败:", error);
+          ElMessage.error("分享失败");
+        }
       }
       break;
     case "exportToWE":
@@ -801,6 +933,7 @@ onActivated(async () => {
 
 onDeactivated(() => {
   isAlbumDetailActive.value = false;
+  desktopSelectionStore.clear();
 });
 
 // 开始重命名

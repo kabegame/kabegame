@@ -9,17 +9,20 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-async-trait = "0.1"
+async-trait = { workspace = true }
 base64 = {workspace = true}
-governor = {version = "0.7", optional = true}
 image = {workspace = true}
-kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "ipc-client"]}
 lru = {version = "0.12", optional = true}
 memmap2 = {version = "0.9", optional = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
-tauri = {workspace = true, features = ["protocol-asset", "macos-private-api"]}
+tauri = {workspace = true, features = [
+  "image-png",  # 剪贴板 writeImage 需解码 PNG/JPEG，否则 macOS 报 "expected RGBA image data, found raw bytes"
+#  编译macos的时候必须开启！！
+  "macos-private-api",
+]}
+tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-fs = "=2.4.4"
 tauri-plugin-global-shortcut = "2.3.1"
@@ -27,7 +30,15 @@ tauri-plugin-shell = "=2.3.3"
 tokio = {workspace = true}
 uuid = {workspace = true}
 
-[target.'cfg(windows)'.dependencies]
+# 桌面端启用 IPC 功能，移动端禁用
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "ipc-client"]}
+governor = "0.7"
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+kabegame-core = {workspace = true, default-features = false}
+
+[target.'cfg(target_os = "windows")'.dependencies]
 dokan = {version = "0.3.1", optional = true}
 widestring = {version = "0.4.3", optional = true}
 winapi = {version = "0.3.9", features = ["ntstatus", "winnt", "winbase"], optional = true}
@@ -47,9 +58,11 @@ windows-sys = {workspace = true, features = [
 winreg = "0.52"
 winver = "1"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = "3.6"
+
 [target.'cfg(target_os = "macos")'.dependencies]
-window-vibrancy = "0.6"
-raw-window-handle = "0.6"
+tauri = {workspace = true, features = ["macos-private-api"]}
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "std",
   "NSPasteboard",
@@ -64,12 +77,18 @@ tauri-build = {workspace = true}
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
-default = ["custom-protocol", "tray"]
-tray = ["dep:governor"]
+default = ["custom-protocol"]
 
 [[bin]]
 name = "kabegame"
 path = "src/main.rs"
 
-[build]
-rustflags = ["-A", "unused"]
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+debug = false
+strip = true
+overflow-checks = false
+rpath = false

@@ -1,5 +1,5 @@
 <template>
-  <el-drawer v-model="drawer.isOpen" :title="drawer.title" size="420px" append-to-body>
+  <el-drawer v-model="drawer.isOpen" :title="drawer.title" :size="drawerSize" append-to-body class="help-drawer drawer-max-width">
     <div v-if="filteredGroups.length === 0" class="empty">
       <el-empty description="此页面暂无帮助内容" :image-size="100" />
     </div>
@@ -30,12 +30,30 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch, ref } from "vue";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { HELP_GROUPS } from "@/help/helpRegistry";
+import { IS_ANDROID } from "@kabegame/core/env";
+import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 
 const drawer = useHelpDrawerStore();
+const modalStack = useModalStackStore();
+const modalStackId = ref<string | null>(null);
+
+watch(
+  () => drawer.isOpen,
+  (visible) => {
+    if (visible && IS_ANDROID) {
+      modalStackId.value = modalStack.push(() => drawer.close());
+    } else if (!visible && modalStackId.value) {
+      modalStack.remove(modalStackId.value);
+      modalStackId.value = null;
+    }
+  }
+);
+
+const drawerSize = computed(() => IS_ANDROID ? "70%" : "420px");
 
 const filteredGroups = computed(() => {
   const pid = drawer.pageId;
@@ -120,3 +138,5 @@ const filteredGroups = computed(() => {
 }
 </style>
 
+<style lang="scss">
+</style>

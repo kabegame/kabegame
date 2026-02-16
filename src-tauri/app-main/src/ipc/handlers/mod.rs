@@ -8,9 +8,11 @@ pub mod plugin;
 pub mod settings;
 pub mod storage;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ipc::dedupe_service::DedupeService;
 use kabegame_core::crawler::{CrawlTaskRequest, TaskScheduler};
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
@@ -178,10 +180,8 @@ async fn handle_task_start(task: serde_json::Value, _ctx: Arc<Store>) -> CliIpcR
 }
 
 async fn handle_task_cancel(task_id: String, _ctx: Arc<Store>) -> CliIpcResponse {
-    match TaskScheduler::global().cancel_task(&task_id).await {
-        Ok(()) => CliIpcResponse::ok("ok"),
-        Err(e) => CliIpcResponse::err(e),
-    }
+    TaskScheduler::global().cancel_task(&task_id).await;
+    CliIpcResponse::ok("ok")
 }
 
 async fn handle_task_retry_failed_image(failed_id: i64, _ctx: Arc<Store>) -> CliIpcResponse {

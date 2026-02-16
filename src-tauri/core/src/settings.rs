@@ -69,6 +69,7 @@ pub struct WindowState {
     pub maximized: bool,
 }
 
+// TODO: 将 setting 写成非哈希表的形式，因为这些是编译期已知结构
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SettingKey {
@@ -289,7 +290,7 @@ impl Settings {
     }
 
     fn default_wallpaper_rotation_style() -> String {
-        "fill".to_string()
+        "system".to_string()
     }
 
     fn default_wallpaper_rotation_transition() -> String {

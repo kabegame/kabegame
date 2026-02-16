@@ -35,6 +35,6 @@ fn main() {
     // - local mode: all plugins are built-in
     // - normal mode: empty list
     let builtins =
-        env::var("KABEGAME_BUILTIN_PLUGINS").unwrap_or_else(|_| "local-import".to_string());
+        env::var("KABEGAME_BUILTIN_PLUGINS").unwrap_or_else(|_| "".to_string());
     println!("cargo:rustc-env=KABEGAME_BUILTIN_PLUGINS={}", builtins);
 }

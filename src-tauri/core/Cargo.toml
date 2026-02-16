@@ -7,6 +7,7 @@ version = { workspace = true }
 
 [dependencies]
 arc-swap = "1.7"
+async-trait = { workspace = true }
 auto-launch = "0.5"
 base64 = { workspace = true }
 dirs = "5.0"
@@ -14,12 +15,6 @@ futures-util = "0.3"
 image = { workspace = true }
 lru = "0.12"
 regex = "1.11"
-reqwest = { version = "0.11", features = [
-  "blocking",
-  "json",
-  "stream",
-  "native-tls",
-] }
 rhai = { workspace = true }
 rusqlite = { version = "0.31", features = ["bundled"] }
 scraper = "0.19"
@@ -33,7 +28,26 @@ sled = "0.34"
 tokio = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+walkdir = "2"
 zip = { workspace = true }
+
+# 桌面端使用 native-tls，移动端使用 rustls
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+reqwest = { version = "0.11", features = [
+  "blocking",
+  "json",
+  "stream",
+  "native-tls",
+] }
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+reqwest = { version = "0.11", features = [
+  "blocking",
+  "json",
+  "stream",
+  "rustls-tls",
+] }
+
 
 # unrar 的 C++ 代码使用 lutimes，Android NDK 不支持，仅非 Android 启用
 [target.'cfg(not(target_os = "android"))'.dependencies]
@@ -55,14 +69,11 @@ widestring = "0.4.3"
 winapi = { version = "0.3.9", features = ["ntstatus", "winnt", "winbase"] }
 windows-sys = { version = "0.52", features = [
   "Win32_Foundation",
-  "Win32_Graphics_Dwm",
-  "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_Security_Authorization",
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_DataExchange",
-  "Win32_System_LibraryLoader",
   "Win32_System_Memory",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",

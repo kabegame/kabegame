@@ -2,22 +2,23 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kabegame",
   "version": "3.0.4",
-  "identifier": "Kabegame",
+  "identifier": {{#if isAndroid}}"app.kabegame"{{else}}"Kabegame"{{/if}},
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://{{devServerHost}}:1420",
     "frontendDist": "../../dist-main"
   },
   "app": {
     {{#if isMacOS}}
     "macOSPrivateApi": true,
     {{/if}}
+    {{!-- 注意：安卓也必须有 windows 配置，否则白屏 --}}
     "windows": [
       {
         "fullscreen": false,
         "resizable": true,
         "title": "Kabegame",
-        "devtools": {{#if isDev}}true{{else}}false{{/if}},
+        "devtools": {{isDev}},
         {{#if isLinux}}
         "transparent": false,
         "width": 1600,
@@ -29,13 +30,15 @@
         "width": 1200,
         "height": 800,
         "minWidth": 800,
-        "minHeight": 600
+        "minHeight": 600{{#if isWindowEffect}},
+        "windowEffects": { "effects": ["sidebar", "acrylic"], "state": "followsWindowActiveState" }
+        {{/if}}
         {{/if}}
       }
     ],
     "security": {
       "capabilities": ["main-capability"],
-      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost ws: wss:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
+      "csp": "default-src 'self' ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]
@@ -44,9 +47,11 @@
   },
   "bundle": {
     "active": true,
+    {{#unless isAndroid}}
     "targets": [
-      {{#if isWindows}}"nsis"{{else if isMacOS}}"dmg"{{else if isLinux}}"deb"{{else if isAndroid}}"apk"{{/if}}
+      {{#if isWindows}}"nsis"{{else if isMacOS}}"dmg"{{else if isLinux}}"deb"{{/if}}
     ],
+    {{/unless}}
     "icon": ["../icons/icon.png", "../icons/icon.ico"],
     {{!-- 只有非linux平台需要文件关联，linux用手动关联 desktop 文件 --}}
     {{#unless isLinux}}
@@ -69,6 +74,11 @@
         "installerIcon": "../icons/icon.ico"
       }
     },
+    "macOS": {
+      "dmg": {
+        "background": "dmg/background.jpg"
+      }
+    },
     "linux": {
       "deb": {
         "depends": [{{#unless isLight}}"fuse3", {{/unless}}"libayatana-appindicator3-1"],
@@ -85,11 +95,6 @@
         "provides": ["kabegame"],
         "conflicts": ["kabegame"],
         "replaces": ["kabegame"]
-      }
-    },
-    "macOS": {
-      "dmg": {
-        "background": "dmg/background.jpg"
       }
     }
   }
