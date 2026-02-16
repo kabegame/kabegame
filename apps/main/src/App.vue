@@ -1,10 +1,10 @@
 <template>
   <!-- 主窗口 -->
   <el-container class="app-container" :class="{ 'app-container-android': IS_ANDROID }">
-    <!-- 全局文件拖拽提示层 -->
-    <FileDropOverlay ref="fileDropOverlayRef" @click="handleOverlayClick" />
-    <!-- 文件拖拽导入确认弹窗（封装 ElMessageBox.confirm） -->
-    <ImportConfirmDialog ref="importConfirmDialogRef" />
+    <!-- 全局文件拖拽提示层（仅非安卓平台） -->
+    <FileDropOverlay v-if="!IS_ANDROID" ref="fileDropOverlayRef" @click="handleOverlayClick" />
+    <!-- 文件拖拽导入确认弹窗（仅非安卓平台） -->
+    <ImportConfirmDialog v-if="!IS_ANDROID" ref="importConfirmDialogRef" />
     <!-- 外部插件导入弹窗 -->
     <PluginImportDialog 
       v-model:visible="showImportDialog" 
@@ -16,6 +16,9 @@
     <HelpDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
     <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
+    <!-- Android：全局导入抽屉 -->
+    <CrawlerDialog v-if="IS_ANDROID" v-model="crawlerDrawerVisible" :plugin-icons="pluginIcons"
+      :initial-config="crawlerDrawerInitialConfig" />
     <!-- 非 Android：侧边栏 + 主内容 -->
     <template v-if="!IS_ANDROID">
       <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': IS_WINDOWS || IS_MACOS, 'bg-white': !IS_WINDOWS && !IS_MACOS }" :width="isCollapsed ? '64px' : '200px'">
@@ -66,7 +69,7 @@
         </keep-alive>
       </router-view>
     </el-main>
-    <!-- Android：底部均匀分布的 Tab 栏 -->
+    <!-- Android：底部 Tab 栏（长按操作由 ActionRenderer 统一处理） -->
     <nav v-if="IS_ANDROID" class="app-bottom-tabs" aria-label="主导航">
       <router-link
         v-for="tab in bottomTabs"
@@ -92,17 +95,24 @@ import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import HelpDrawer from "./components/help/HelpDrawer.vue";
 import TaskDrawer from "./components/TaskDrawer.vue";
 import { useTaskDrawerStore } from "./stores/taskDrawer";
+import { useCrawlerDrawerStore } from "./stores/crawlerDrawer";
 import { storeToRefs } from "pinia";
 import FileDropOverlay from "./components/FileDropOverlay.vue";
 import ImportConfirmDialog from "./components/import/ImportConfirmDialog.vue";
 import PluginImportDialog from "./components/import/PluginImportDialog.vue";
+import CrawlerDialog from "./components/CrawlerDialog.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
 import { useSidebar } from "./composables/useSidebar";
 import { listen, emit, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invoke } from "@tauri-apps/api/core";
 import { IS_WINDOWS, IS_MACOS, IS_ANDROID } from "@kabegame/core/env";
+import { usePluginStore } from "./stores/plugins";
+import { useRouter } from "vue-router";
+import { useModalStackStore } from "@kabegame/core/stores/modalStack";
+import { ElMessageBox } from "element-plus";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
@@ -119,6 +129,43 @@ const bottomTabs = computed(() => [
 // 任务抽屉 store
 const taskDrawerStore = useTaskDrawerStore();
 const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskDrawerStore);
+
+// Android：导入抽屉 store
+const crawlerDrawerStore = useCrawlerDrawerStore();
+const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig } = storeToRefs(crawlerDrawerStore);
+
+// 插件图标（用于全局抽屉，Android 上 CrawlerDialog 使用）
+const pluginStore = usePluginStore();
+const pluginIcons = ref<Record<string, string>>({});
+
+const loadPluginIcons = async () => {
+  for (const plugin of pluginStore.plugins) {
+    if (pluginIcons.value[plugin.id]) continue;
+    try {
+      const iconData = await invoke<number[] | null>("get_plugin_icon", {
+        pluginId: plugin.id,
+      });
+      if (iconData && iconData.length > 0) {
+        const bytes = new Uint8Array(iconData);
+        const base64 = btoa(Array.from(bytes).map((b) => String.fromCharCode(b)).join(""));
+        pluginIcons.value = { ...pluginIcons.value, [plugin.id]: `data:image/png;base64,${base64}` };
+      }
+    } catch {
+      // 插件可能没有图标，忽略
+    }
+  }
+};
+
+watch(
+  () => pluginStore.plugins,
+  (plugins) => {
+    if (IS_ANDROID && plugins.length > 0) void loadPluginIcons();
+  },
+  { deep: true }
+);
+
+const router = useRouter();
+const modalStack = useModalStackStore();
 
 // 文件拖拽提示层引用
 const fileDropOverlayRef = ref<any>(null);
@@ -144,6 +191,53 @@ const { isCollapsed, toggleCollapse } = useSidebar();
 let unlistenSettingChange: UnlistenFn | null = null;
 
 onMounted(async () => {
+  // Android Back Button Handling
+  if (IS_ANDROID) {
+    try {
+      const { onBackButtonPress } = await import("@tauri-apps/api/app");
+      let lastModalClosedAt = 0;
+      const EXIT_COOLDOWN_MS = 400;
+      await onBackButtonPress(async () => {
+        // 1. Modal Stack
+        if (await modalStack.closeTop()) {
+          lastModalClosedAt = Date.now();
+          return;
+        }
+
+        // 2. Router Back
+        const currentPath = router.currentRoute.value.path;
+        const rootPaths = bottomTabs.value.map((t) => t.index);
+        // If not at root, go back
+        if (!rootPaths.includes(currentPath) && currentPath !== "/") {
+          router.back();
+          return;
+        }
+
+        // 防止关 modal 后同一按键或连按再次触发时误弹退出确认
+        if (Date.now() - lastModalClosedAt < EXIT_COOLDOWN_MS) {
+          return;
+        }
+
+        // 3. Exit Confirm
+        try {
+          await ElMessageBox.confirm("确定要退出应用吗？", "退出提示", {
+            confirmButtonText: "退出",
+            cancelButtonText: "取消",
+            type: "warning",
+            center: true,
+            customClass: "exit-confirm-dialog",
+          });
+          const win = getCurrentWindow();
+          await win.close();
+        } catch {
+          // Cancelled
+        }
+      });
+    } catch (e) {
+      console.warn("Failed to register Android back button listener:", e);
+    }
+  }
+
   // 初始化 settings store
   const settingsStore = useSettingsStore();
   await settingsStore.init();
@@ -152,7 +246,13 @@ onMounted(async () => {
 
   // 初始化各个 composables
   await initWindowEvents();
-  await initFileDrop();
+  // 安卓下不支持拖拽导入，跳过初始化
+  if (!IS_ANDROID) {
+    await initFileDrop();
+  }
+
+  // Android：右滑手势已移除，避免与手机左右滑动导航冲突
+  // 现在只能通过点击导入按钮打开 drawer
 
   // 监听设置变更事件（事件驱动更新设置）
   // 当后端设置变化时，自动更新本地设置 store
@@ -193,6 +293,16 @@ onMounted(async () => {
     importKgpgPath.value = event.payload.kgpgPath;
     showImportDialog.value = true;
   });
+
+  // Android 适配：供原生代码调用的全局方法
+  if (IS_ANDROID) {
+    (window as any).onKabegameImportPlugin = (path: string) => {
+      console.log("[Android] Received import request:", path);
+      // 触发相同的逻辑
+      importKgpgPath.value = path;
+      showImportDialog.value = true;
+    };
+  }
   
   // 通知后端已准备好接收事件
   emit('app-ready');
@@ -246,6 +356,18 @@ body,
   &.app-container-android {
     flex-direction: column;
   }
+}
+
+// Android：主内容区顶部留出状态栏高度，避免与系统状态栏重叠
+.app-container.app-container-android .app-main {
+  padding-top: env(safe-area-inset-top, 24px);
+}
+
+// Android：全局去除触摸时的浅蓝色高亮（与画廊图片等一致）
+.app-container.app-container-android,
+.app-container.app-container-android * {
+  -webkit-tap-highlight-color: transparent;
+  tap-highlight-color: transparent;
 }
 
 // Android 底部 Tab 栏：均匀分布
@@ -759,5 +881,13 @@ body,
   100% {
     transform: rotate(360deg);
   }
+}
+</style>
+
+<style lang="scss">
+/* 安卓下全局 Dialog 宽度固定为 90vw（el-dialog 挂载在 body，需非 scoped） */
+html.platform-android .el-dialog {
+  width: 90vw !important;
+  max-width: 90vw !important;
 }
 </style>

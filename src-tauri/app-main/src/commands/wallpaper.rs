@@ -1,4 +1,4 @@
-﻿// 壁纸相关命令和函数
+// 壁纸相关命令和函数
 
 use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
@@ -611,40 +611,4 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
 pub fn get_wallpaper_rotator_status() -> Result<String, String> {
     let rotator = WallpaperRotator::global();
     Ok(rotator.get_status())
-}
-
-#[tauri::command]
-pub fn get_native_wallpaper_styles() -> Result<Vec<String>, String> {
-    #[cfg(target_os = "windows")]
-    {
-        Ok(vec![
-            "fill".to_string(),
-            "fit".to_string(),
-            "stretch".to_string(),
-            "center".to_string(),
-            "tile".to_string(),
-        ])
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        Ok(vec![])
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        Ok(vec![
-            "fill".to_string(),
-            "fit".to_string(),
-            #[cfg(not(desktop = "plasma"))]
-            "stretch".to_string(),
-            "center".to_string(),
-            "tile".to_string(),
-        ])
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        Ok(vec!["fill".to_string()])
-    }
 }

@@ -1,5 +1,143 @@
 <template>
-    <el-dialog v-model="visible" title="开始收集图片" width="600px" :close-on-click-modal="false" class="crawl-dialog"
+    <!-- Android：自研全宽抽屉，不显示右上角关闭按钮，关闭靠遮罩/返回 -->
+    <AndroidDrawer v-if="IS_ANDROID" v-model="visible" show-close-button class="crawl-dialog">
+        <template #header>
+            <div class="crawl-drawer-header">
+                <h3>开始收集图片</h3>
+            </div>
+        </template>
+        <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
+            <el-form-item label="运行配置">
+                <el-select v-model="selectedRunConfigId" placeholder="选择配置（可选）" style="width: 100%" clearable
+                    popper-class="run-config-select-dropdown">
+                    <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="cfg.name" :value="cfg.id">
+                        <div class="run-config-option">
+                            <div class="run-config-info">
+                                <div class="name">
+                                    <el-tag v-if="configCompatibilityStatus[cfg.id]?.versionCompatible === false"
+                                        type="danger" size="small" style="margin-right: 6px;">
+                                        不兼容
+                                    </el-tag>
+                                    <el-tag v-else-if="configCompatibilityStatus[cfg.id]?.contentCompatible === false"
+                                        type="warning" size="small" style="margin-right: 6px;">
+                                        不兼容
+                                    </el-tag>
+                                    {{ cfg.name }}
+                                    <span v-if="cfg.description" class="desc"> - {{ cfg.description }}</span>
+                                </div>
+                            </div>
+                            <div class="run-config-actions">
+                                <el-button type="danger" link size="small" @click.stop="handleDeleteConfig(cfg.id)">
+                                    删除
+                                </el-button>
+                            </div>
+                        </div>
+                    </el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item label="选择源">
+                <el-select v-model="form.pluginId" placeholder="请选择源" style="width: 100%"
+                    popper-class="crawl-plugin-select-dropdown">
+                    <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
+                        <div class="plugin-option">
+                            <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]"
+                                class="plugin-option-icon" />
+                            <el-icon v-else class="plugin-option-icon-placeholder">
+                                <Grid />
+                            </el-icon>
+                            <span>{{ plugin.name }}</span>
+                        </div>
+                    </el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item v-if="!IS_ANDROID" label="输出目录">
+                <el-input v-model="form.outputDir" placeholder="留空使用默认位置" clearable>
+                    <template #append>
+                        <el-button @click="selectOutputDir">
+                            <el-icon>
+                                <FolderOpened />
+                            </el-icon>
+                            选择
+                        </el-button>
+                    </template>
+                </el-input>
+            </el-form-item>
+
+            <el-form-item label="输出画册">
+                <el-select v-model="selectedOutputAlbumId" placeholder="默认仅添加到画廊" clearable style="width: 100%">
+                    <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
+                    <el-option value="__create_new__" label="+ 新建画册">
+                        <span style="color: var(--el-color-primary); font-weight: 500;">+ 新建画册</span>
+                    </el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item v-if="isCreatingNewOutputAlbum" label="画册名称" required>
+                <el-input v-model="newOutputAlbumName" placeholder="请输入画册名称" maxlength="50" show-word-limit
+                    @keyup.enter="handleCreateOutputAlbum" ref="newOutputAlbumNameInputRef" />
+            </el-form-item>
+
+            <template v-if="pluginVars.length > 0">
+                <el-divider content-position="left">插件配置</el-divider>
+                <el-form-item v-for="varDef in pluginVars" :key="varDef.key" :label="varDef.name"
+                    :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
+                    <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="varDef.options"
+                        :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
+                        :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
+                        :file-extensions="getFileExtensions(varDef)"
+                        :placeholder="varDef.descripts || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' ? `请选择${varDef.name}` : `请输入${varDef.name}`)"
+                        :allow-unset="!isRequired(varDef)"
+                        @update:model-value="(val) => (form.vars[varDef.key] = val)" />
+                    <div v-if="varDef.descripts">
+                        {{ varDef.descripts }}
+                    </div>
+                </el-form-item>
+            </template>
+
+            <el-divider content-position="left">高级设置</el-divider>
+            <el-form-item label="HTTP 头">
+                <div class="headers-editor">
+                    <div v-for="(row, idx) in httpHeaderRows" :key="idx" class="header-row">
+                        <el-input v-model="row.key" placeholder="Header 名（如 Authorization）" />
+                        <el-input v-model="row.value" placeholder="Header 值（如 Bearer xxx）" />
+                        <el-button type="danger" link @click="removeHeaderRow(idx)">删除</el-button>
+                    </div>
+                    <div class="header-actions">
+                        <el-button size="small" @click="addHeaderRow">添加 Header</el-button>
+                        <el-button v-if="selectedRunConfigId" size="small" type="primary"
+                            @click="saveHeadersToSelectedConfig">
+                            保存到当前配置
+                        </el-button>
+                    </div>
+                    <div class="config-hint">
+                        提示：这里的 HTTP 头会用于爬虫请求（to/to_json）与图片下载（download_image），不会注入到脚本变量里。
+                    </div>
+                </div>
+            </el-form-item>
+
+            <el-divider content-position="left">保存为配置（可选）</el-divider>
+            <el-form-item>
+                <el-checkbox v-model="saveAsConfig">保存为配置（下次再使用啦）</el-checkbox>
+            </el-form-item>
+            <el-form-item label="配置名称" v-if="saveAsConfig">
+                <el-input v-model="configName" placeholder="请输入配置名称" />
+            </el-form-item>
+            <el-form-item label="配置描述" v-if="saveAsConfig">
+                <el-input v-model="configDescription" placeholder="可选：配置说明" />
+            </el-form-item>
+        </el-form>
+        <div class="crawl-dialog-footer crawl-dialog-footer--android">
+            <el-button type="primary" @click="handleStartCrawl" :disabled="!selectedRunConfigId && !form.pluginId">
+                开始收集
+            </el-button>
+        </div>
+    </AndroidDrawer>
+
+    <ElDialog
+        v-else
+        v-model="visible"
+        title="开始收集图片"
+        width="600px"
+        class="crawl-dialog"
         :show-close="true">
         <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
             <el-form-item label="运行配置">
@@ -45,7 +183,7 @@
                     </el-option>
                 </el-select>
             </el-form-item>
-            <el-form-item label="输出目录">
+            <el-form-item v-if="!IS_ANDROID" label="输出目录">
                 <el-input v-model="form.outputDir" placeholder="留空使用默认位置" clearable>
                     <template #append>
                         <el-button @click="selectOutputDir">
@@ -69,19 +207,6 @@
             <el-form-item v-if="isCreatingNewOutputAlbum" label="画册名称" required>
                 <el-input v-model="newOutputAlbumName" placeholder="请输入画册名称" maxlength="50" show-word-limit
                     @keyup.enter="handleCreateOutputAlbum" ref="newOutputAlbumNameInputRef" />
-            </el-form-item>
-
-            <!-- local-import：导入文件夹/zip 时，可选“自动创建画册（名称=文件夹名/zip文件名）” -->
-            <el-form-item v-if="showAutoCreateAlbumOption" label="导入画册">
-                <div class="auto-album-row">
-                    <el-checkbox v-model="autoCreateAlbumForLocalImport" :disabled="autoCreateAlbumDisabled">
-                        为该{{ localImportTypeLabel }}创建画册
-                        <span v-if="suggestedAlbumName" class="auto-album-hint">（名称：{{ suggestedAlbumName }}）</span>
-                    </el-checkbox>
-                    <div v-if="autoCreateAlbumDisabled" class="auto-album-tip">
-                        已选择“输出画册”，该选项将被忽略
-                    </div>
-                </div>
             </el-form-item>
 
             <!-- 插件变量配置 -->
@@ -141,12 +266,14 @@
                 开始收集
             </el-button>
         </template>
-    </el-dialog>
+    </ElDialog>
 </template>
 
 <script setup lang="ts">
 import { computed, watch, ref, nextTick } from "vue";
 import { FolderOpened, Grid } from "@element-plus/icons-vue";
+import { ElDialog } from "element-plus";
+import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
 import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore } from "@/stores/crawler";
@@ -154,7 +281,8 @@ import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import { ElMessage } from "element-plus";
-import { stat } from "@tauri-apps/plugin-fs";
+import { IS_ANDROID } from "@kabegame/core/env";
+import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 
 interface Props {
     modelValue: boolean;
@@ -223,6 +351,23 @@ const visible = computed({
     set: (v) => emit("update:modelValue", v),
 });
 
+const modalStack = useModalStackStore();
+const modalStackId = ref<string | null>(null);
+
+watch(
+  () => visible.value,
+  (val) => {
+    if (val && IS_ANDROID) {
+      modalStackId.value = modalStack.push(() => {
+        visible.value = false;
+      });
+    } else if (!val && modalStackId.value) {
+      modalStack.remove(modalStackId.value);
+      modalStackId.value = null;
+    }
+  }
+);
+
 const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);
 const albums = computed(() => albumStore.albums);
@@ -234,28 +379,6 @@ const newOutputAlbumName = ref<string>("");
 const newOutputAlbumNameInputRef = ref<any>(null);
 // 是否正在创建新画册
 const isCreatingNewOutputAlbum = computed(() => selectedOutputAlbumId.value === "__create_new__");
-
-// local-import：自动为当前“文件夹/zip”创建画册（名称=文件夹名或 zip 文件名）
-const autoCreateAlbumForLocalImport = ref(false);
-const localImportType = ref<"folder" | "zip" | null>(null);
-const suggestedAlbumName = ref("");
-
-const normalizeBasenameFromPath = (p: string): string => {
-    const trimmed = `${p}`.trim().replace(/[\\/]+$/, "");
-    const parts = trimmed.split(/[/\\]/).filter(Boolean);
-    return parts.length > 0 ? parts[parts.length - 1] : trimmed;
-};
-
-const autoCreateAlbumDisabled = computed(() => {
-    // 如果用户已手选输出画册（含"新建画册"流程），则自动创建无意义
-    return !!selectedOutputAlbumId.value;
-});
-
-const localImportTypeLabel = computed(() => {
-    if (localImportType.value === "zip") return "压缩包";
-    if (localImportType.value === "folder") return "文件夹";
-    return "来源";
-});
 
 // 使用插件配置 composable
 const pluginConfig = usePluginConfig();
@@ -280,49 +403,6 @@ const {
     selectFileByExtensions,
     resetForm,
 } = pluginConfig;
-
-// 以下 computed 和 watch 依赖 form，必须放在 form 定义之后
-const currentLocalImportPath = computed(() => {
-    const vars = form.value.vars || {};
-    // 新字段优先，其次兼容旧字段
-    return (vars as any).path || (vars as any).file_path || (vars as any).folder_path || "";
-});
-
-const showAutoCreateAlbumOption = computed(() => {
-    return form.value.pluginId === "local-import" && localImportType.value !== null;
-});
-
-watch(
-    () => [form.value.pluginId, currentLocalImportPath.value] as const,
-    async ([pluginId, p]) => {
-        // 重置
-        localImportType.value = null;
-        suggestedAlbumName.value = "";
-        // 自动勾选不做强制重置：用户可能想手动保持；但当不是 folder/zip 时隐藏即可
-
-        if (pluginId !== "local-import") return;
-        if (!p || typeof p !== "string") return;
-
-        const lower = p.toLowerCase().trim();
-        if (lower.endsWith(".zip")) {
-            localImportType.value = "zip";
-            suggestedAlbumName.value = normalizeBasenameFromPath(p); // zip：带后缀
-            return;
-        }
-
-        // 尝试判断是否为文件夹
-        try {
-            const meta = await stat(p);
-            if ((meta as any)?.isDirectory) {
-                localImportType.value = "folder";
-                suggestedAlbumName.value = normalizeBasenameFromPath(p); // folder：文件夹名
-            }
-        } catch {
-            // ignore：可能是不存在/无权限/非文件夹
-        }
-    },
-    { immediate: true }
-);
 
 // file_or_folder 类型：将 varDef.options 作为可选择文件扩展名列表（不带点号）
 const getFileExtensions = (varDef: any): string[] | undefined => {
@@ -406,30 +486,6 @@ const handleStartCrawl = async () => {
                     : error?.message || String(error) || "创建画册失败";
                 ElMessage.error(errorMessage);
                 return; // 创建画册失败，停止后续流程
-            }
-        }
-
-        // local-import：导入文件夹/zip 时，可选自动创建画册（仅当未手选输出画册时生效）
-        if (
-            !selectedOutputAlbumId.value &&
-            autoCreateAlbumForLocalImport.value === true &&
-            form.value.pluginId === "local-import" &&
-            localImportType.value !== null
-        ) {
-            const name = suggestedAlbumName.value?.trim();
-            if (name) {
-                try {
-                    const created = await albumStore.createAlbum(name);
-                    selectedOutputAlbumId.value = created.id;
-                    ElMessage.success(`已创建画册「${created.name}」`);
-                } catch (e: any) {
-                    console.warn("自动创建画册失败，将仅添加到画廊:", e);
-                    // 提取友好的错误信息
-                    const errorMessage = typeof e === "string"
-                        ? e
-                        : e?.message || String(e) || "自动创建画册失败";
-                    ElMessage.warning(`自动创建画册失败：${errorMessage}，将仅添加到画廊`);
-                }
             }
         }
 
@@ -595,6 +651,28 @@ watch(selectedRunConfigId, async (cfgId) => {
 </script>
 
 <style lang="scss" scoped>
+.crawl-drawer-header {
+    h3 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--anime-text-primary);
+    }
+}
+
+.crawl-dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 20px 0;
+    margin-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.crawl-dialog-footer--android {
+    justify-content: center;
+}
+
 .crawl-form {
     margin-bottom: 20px;
 
@@ -602,24 +680,6 @@ watch(selectedRunConfigId, async (cfgId) => {
         color: var(--anime-text-primary);
         font-weight: 500;
     }
-}
-
-.auto-album-row {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    align-items: flex-start;
-}
-
-.auto-album-hint {
-    color: var(--anime-text-secondary);
-    font-size: 12px;
-    margin-left: 6px;
-}
-
-.auto-album-tip {
-    color: var(--anime-text-secondary);
-    font-size: 12px;
 }
 
 .config-hint {
@@ -743,6 +803,51 @@ watch(selectedRunConfigId, async (cfgId) => {
         flex-shrink: 0 !important;
         padding: 10px 20px 20px !important;
         border-top: 1px solid var(--anime-border);
+    }
+}
+
+.crawl-dialog.el-drawer {
+    max-width: 500px !important;
+
+    .el-drawer__header {
+        flex-shrink: 0 !important;
+        padding: 20px 20px 10px !important;
+        border-bottom: 1px solid var(--anime-border);
+        margin-bottom: 0 !important;
+    }
+
+    .el-drawer__body {
+        flex: 1 1 auto !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        padding: 20px !important;
+        min-height: 0 !important;
+        display: flex !important;
+        flex-direction: column !important;
+    }
+
+    .el-drawer__footer {
+        flex-shrink: 0 !important;
+        padding: 10px 20px 20px !important;
+        border-top: 1px solid var(--anime-border);
+
+        .el-button--primary {
+            background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%) !important;
+            border: none !important;
+            box-shadow: var(--anime-shadow) !important;
+            color: white !important;
+        }
+
+        .el-button--primary:hover {
+            background: linear-gradient(135deg, var(--anime-primary-dark) 0%, var(--anime-secondary-dark) 100%) !important;
+            box-shadow: var(--anime-shadow-hover) !important;
+        }
+
+        .el-button--primary:disabled {
+            background: var(--el-button-disabled-bg-color) !important;
+            color: var(--el-button-disabled-text-color) !important;
+            box-shadow: none !important;
+        }
     }
 }
 

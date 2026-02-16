@@ -1,6 +1,19 @@
 <template>
-  <el-drawer v-model="visible" title="任务列表" :size="400" direction="rtl" :with-header="true" :append-to-body="true"
-    :modal-class="'task-drawer-modal'" @open="handleDrawerOpen">
+  <!-- Android：自研全宽抽屉，支持划入动画与拖拽滑出、背景透明度随拖拽变化 -->
+  <AndroidDrawer
+    v-if="IS_ANDROID"
+    v-model="visible"
+    @open="handleDrawerOpen">
+    <template #header>
+      <h3 class="task-drawer-android-title">任务列表</h3>
+    </template>
+    <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
+      @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
+      @cancel-task="handleCancelTaskById" @confirm-task-dump="handleConfirmTaskDumpById"
+      @task-contextmenu="openTaskContextMenu" />
+  </AndroidDrawer>
+  <el-drawer v-else v-model="visible" title="任务列表" :size="drawerSize" direction="rtl" :with-header="true" :append-to-body="true"
+    :modal-class="'task-drawer-modal'" class="task-drawer drawer-max-width" @open="handleDrawerOpen">
     <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
       @cancel-task="handleCancelTaskById" @confirm-task-dump="handleConfirmTaskDumpById"
@@ -28,14 +41,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
+import { IS_ANDROID } from "@kabegame/core/env";
+import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import TaskDrawerContent from "@kabegame/core/components/task/TaskDrawerContent.vue";
 import TaskContextMenu from "./contextMenu/TaskContextMenu.vue";
+import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 
 interface Props {
   modelValue: boolean;
@@ -57,6 +73,25 @@ const visible = computed({
   get: () => props.modelValue,
   set: (value) => emit('update:modelValue', value)
 });
+
+const modalStack = useModalStackStore();
+const modalStackId = ref<string | null>(null);
+
+watch(
+  () => visible.value,
+  (val) => {
+    if (val && IS_ANDROID) {
+      modalStackId.value = modalStack.push(() => {
+        visible.value = false;
+      });
+    } else if (!val && modalStackId.value) {
+      modalStack.remove(modalStackId.value);
+      modalStackId.value = null;
+    }
+  }
+);
+
+const drawerSize = computed(() => IS_ANDROID ? "70%" : "420px");
 
 // 任务右键菜单
 const contextMenuVisible = ref(false);
@@ -304,5 +339,11 @@ const handleDeleteAllTasks = async () => {
   /* 确保遮罩层有稳定的初始状态，避免闪烁 */
   will-change: opacity;
   backface-visibility: hidden;
+}
+
+.task-drawer-android-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
 }
 </style>

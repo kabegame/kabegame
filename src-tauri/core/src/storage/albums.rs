@@ -351,7 +351,7 @@ impl Storage {
             .query_map(params![album_id], |row| {
                 Ok(ImageInfo {
                     id: row.get(0)?,
-                    url: row.get(1)?,
+                    url: row.get::<_, Option<String>>(1)?,
                     local_path: row.get(2)?,
                     plugin_id: row.get(3)?,
                     task_id: row.get(4)?,
@@ -412,7 +412,7 @@ impl Storage {
             .query_map(params![album_id, limit as i64], |row| {
                 Ok(ImageInfo {
                     id: row.get(0)?,
-                    url: row.get(1)?,
+                    url: row.get::<_, Option<String>>(1)?,
                     local_path: row.get(2)?,
                     plugin_id: row.get(3)?,
                     task_id: row.get(4)?,

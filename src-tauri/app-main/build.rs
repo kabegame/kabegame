@@ -1,5 +1,20 @@
 fn main() {
-    tauri_build::build();
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .plugin(
+                "folder-picker",
+                tauri_build::InlinedPlugin::new()
+                    .commands(&["pickFolder", "listContentChildren", "readContentUri"])
+                    .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
+            )
+            .plugin(
+                "resource",
+                tauri_build::InlinedPlugin::new()
+                    .commands(&["pickKgpgFile", "extractBundledPlugins"])
+                    .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
+            ),
+    )
+    .expect("failed to run tauri-build");
 
     // Rust check-cfg: declare custom cfg keys used in this crate.
     // We inject `--cfg desktop="plasma"` or `--cfg desktop="gnome"` at compile-time (via scripts/run.js --desktop),

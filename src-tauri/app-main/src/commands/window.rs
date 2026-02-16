@@ -121,7 +121,10 @@ pub fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
 
     // 不保存 window_state：用户要求每次居中弹出
 
-    window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        window.hide().map_err(|e| format!("隐藏窗口失败: {}", e))?;
+    }
 
     // 隐藏主窗口后，修复壁纸窗口的 Z-order（防止壁纸窗口覆盖桌面图标）
     #[cfg(target_os = "windows")]
@@ -134,231 +137,25 @@ pub fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 为主窗口左侧导航栏启用毛玻璃效果。
-/// - Windows: 使用 DWM 模糊（BlurBehind + HRGN）
-/// - macOS: 使用 NSVisualEffectView Sidebar 材质
-/// - sidebar_width: 侧栏宽度（px，macOS 上用于兼容性，实际效果针对整个窗口）
+/// 为主窗口启用毛玻璃效果。
+/// Windows/macOS 均在窗口创建时通过 tauri.conf 的 windowEffects 设置一次（Tauri 接口）。
+/// 此处仅在需要关闭效果时（sidebar_width == 0）调用 set_effects(None)。
 #[tauri::command]
 pub fn set_main_sidebar_blur(app: tauri::AppHandle, sidebar_width: u32) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::ffi::c_void;
-        use std::mem::transmute;
-        use tauri::Manager;
-        use windows_sys::Win32::Foundation::BOOL;
-        use windows_sys::Win32::Foundation::HWND;
-        use windows_sys::Win32::Graphics::Dwm::{
-            DwmEnableBlurBehindWindow, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND,
-        };
-        use windows_sys::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject};
-        use windows_sys::Win32::System::LibraryLoader::{
-            GetModuleHandleW, GetProcAddress, LoadLibraryW,
-        };
-        use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
-
-        let Some(window) = app.get_webview_window("main") else {
-            return Err("找不到主窗口".to_string());
-        };
-
-        let tauri_hwnd = window
-            .hwnd()
-            .map_err(|e| format!("获取主窗口 HWND 失败: {}", e))?;
-        let hwnd: HWND = tauri_hwnd.0 as isize;
-
-        #[cfg(debug_assertions)]
-        {
-            eprintln!(
-                "[DWM] set_main_sidebar_dwm_blur: hwnd={:?}, sidebar_width={}",
-                hwnd, sidebar_width
-            );
-        }
-
-        if hwnd == 0 {
-            return Err("hwnd is null".into());
-        }
-
-        // ---- 优先：SetWindowCompositionAttribute + ACCENT_ENABLE_ACRYLICBLURBEHIND（Win11 更常见/更稳定）----
-        // 我们给"整个窗口"开启 acrylic，但由于主内容区域是不透明背景，视觉上只有侧栏（半透明）会显现毛玻璃。
-        #[repr(C)]
-        struct ACCENT_POLICY {
-            accent_state: i32,
-            accent_flags: i32,
-            gradient_color: u32,
-            animation_id: i32,
-        }
-
-        #[repr(C)]
-        struct WINDOWCOMPOSITIONATTRIBDATA {
-            attrib: i32,
-            pv_data: *mut c_void,
-            cb_data: u32,
-        }
-
-        // Undocumented: WCA_ACCENT_POLICY = 19
-        const WCA_ACCENT_POLICY: i32 = 19;
-        // Undocumented: ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
-        const ACCENT_ENABLE_ACRYLICBLURBEHIND: i32 = 4;
-
-        unsafe {
-            // 动态加载：避免 MSVC 链接阶段找不到 __imp_SetWindowCompositionAttribute 导致 LNK2019
-            unsafe fn wide(s: &str) -> Vec<u16> {
-                use std::ffi::OsStr;
-                use std::os::windows::ffi::OsStrExt;
-                OsStr::new(s).encode_wide().chain(Some(0)).collect()
-            }
-
-            type SetWcaFn =
-                unsafe extern "system" fn(HWND, *mut WINDOWCOMPOSITIONATTRIBDATA) -> BOOL;
-
-            let user32 = {
-                let m = GetModuleHandleW(wide("user32.dll").as_ptr());
-                if m != 0 {
-                    m
-                } else {
-                    LoadLibraryW(wide("user32.dll").as_ptr())
-                }
-            };
-
-            let set_wca: Option<SetWcaFn> = if user32 != 0 {
-                // windows-sys 的 GetProcAddress 返回 Option<FARPROC>
-                GetProcAddress(user32, b"SetWindowCompositionAttribute\0".as_ptr())
-                    .map(|f| transmute(f))
-            } else {
-                None
-            };
-
-            // GradientColor 常见实现为 0xAABBGGRR；白色不受通道顺序影响。
-            let accent = ACCENT_POLICY {
-                accent_state: ACCENT_ENABLE_ACRYLICBLURBEHIND,
-                accent_flags: 2,
-                gradient_color: 0x99FFFFFF, // 半透明白
-                animation_id: 0,
-            };
-
-            let mut data = WINDOWCOMPOSITIONATTRIBDATA {
-                attrib: WCA_ACCENT_POLICY,
-                pv_data: (&accent as *const ACCENT_POLICY) as *mut c_void,
-                cb_data: std::mem::size_of::<ACCENT_POLICY>() as u32,
-            };
-
-            if let Some(set_wca) = set_wca {
-                let ok = set_wca(hwnd, &mut data);
-                if ok != 0 {
-                    #[cfg(debug_assertions)]
-                    eprintln!("[DWM] acrylic enabled via SetWindowCompositionAttribute");
-                    return Ok(());
-                }
-            } else {
-                #[cfg(debug_assertions)]
-                eprintln!("[DWM] SetWindowCompositionAttribute not found (GetProcAddress)");
-            }
-        }
-
-        #[cfg(debug_assertions)]
-        eprintln!("[DWM] acrylic failed, fallback to DwmEnableBlurBehindWindow");
-
-        if sidebar_width == 0 {
-            unsafe {
-                let bb = DWM_BLURBEHIND {
-                    dwFlags: DWM_BB_ENABLE,
-                    fEnable: 0 as BOOL,
-                    hRgnBlur: 0,
-                    fTransitionOnMaximized: 0 as BOOL,
-                };
-                let hr = DwmEnableBlurBehindWindow(hwnd, &bb);
-                if hr != 0 {
-                    return Err(format!(
-                        "DwmEnableBlurBehindWindow(disable) failed: HRESULT=0x{hr:08X}"
-                    ));
-                }
-            }
-            return Ok(());
-        }
-
-        unsafe {
-            let mut rect = std::mem::MaybeUninit::uninit();
-            if GetClientRect(hwnd, rect.as_mut_ptr()) == 0 {
-                return Err("GetClientRect failed".into());
-            }
-            let rect = rect.assume_init();
-            let height = rect.bottom - rect.top;
-            if height <= 0 {
-                return Err("client rect height is invalid".into());
-            }
-
-            let width = (sidebar_width as i32).min(rect.right - rect.left).max(1);
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[DWM] client_rect={}x{}, blur_width={}",
-                rect.right - rect.left,
-                rect.bottom - rect.top,
-                width
-            );
-            let rgn = CreateRectRgn(0, 0, width, height);
-            if rgn == 0 {
-                return Err("CreateRectRgn failed".into());
-            }
-
-            let bb = DWM_BLURBEHIND {
-                dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
-                fEnable: 1 as BOOL,
-                hRgnBlur: rgn,
-                fTransitionOnMaximized: 0 as BOOL,
-            };
-
-            let hr = DwmEnableBlurBehindWindow(hwnd, &bb);
-            let _ = DeleteObject(rgn);
-            if hr != 0 {
-                return Err(format!(
-                    "DwmEnableBlurBehindWindow failed: HRESULT=0x{hr:08X}"
-                ));
-            }
-            Ok(())
-        }
-    }
-
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         use tauri::Manager;
-        use tauri::window::{Effect, EffectState, EffectsBuilder};
-
-        let Some(window) = app.get_webview_window("main") else {
-            return Err("找不到主窗口".to_string());
-        };
-
-        #[cfg(debug_assertions)]
-        {
-            eprintln!(
-                "[macOS Vibrancy] set_main_sidebar_blur: sidebar_width={}",
-                sidebar_width
-            );
-        }
 
         if sidebar_width == 0 {
-            // 关闭毛玻璃效果
+            let Some(window) = app.get_webview_window("main") else {
+                return Err("找不到主窗口".to_string());
+            };
             window
                 .set_effects(None)
                 .map_err(|e| format!("set_effects(None) failed: {}", e))?;
             #[cfg(debug_assertions)]
-            eprintln!("[macOS Vibrancy] vibrancy disabled");
-            return Ok(());
+            eprintln!("[Vibrancy] window effects disabled");
         }
-
-        // 启用侧边栏毛玻璃效果
-        // 使用 Sidebar 材质，这是 macOS 侧边栏的标准毛玻璃效果
-        // 由于效果是针对整个窗口的，需要前端侧栏区域使用半透明背景才能看到效果
-        let effects = EffectsBuilder::new()
-            .effect(Effect::Sidebar)
-            .state(EffectState::FollowsWindowActiveState)
-            .build();
-
-        window
-            .set_effects(Some(effects))
-            .map_err(|e| format!("set_effects failed: {}", e))?;
-
-        #[cfg(debug_assertions)]
-        eprintln!("[macOS Vibrancy] sidebar vibrancy enabled");
-
         Ok(())
     }
 

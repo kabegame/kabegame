@@ -1,5 +1,5 @@
 <template>
-    <el-drawer v-model="drawer.isOpen" :title="drawer.title" :size="drawerSize" :append-to-body="appendToBody">
+    <el-drawer v-model="drawer.isOpen" :title="drawer.title" :size="drawerSize" :append-to-body="appendToBody" class="quick-settings-drawer drawer-max-width">
         <div v-loading="loading" style="min-height: 120px;">
             <div v-if="filteredGroups.length === 0" class="empty">
                 <el-empty :description="emptyDescription" :image-size="100" />
@@ -180,4 +180,7 @@ watch(
 .empty {
     padding: 12px 0;
 }
+</style>
+
+<style lang="scss">
 </style>

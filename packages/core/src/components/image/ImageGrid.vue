@@ -15,6 +15,7 @@
             :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
             @click="(e) => handleItemClick(item.image, item.index, e)"
             @dblclick="() => handleItemDblClick(item.image, item.index)"
+            @longpress="() => handleItemLongPress(item.image, item.index)"
             @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
             @retry-download="() => emit('retry-download', { image: item.image })"
             @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
@@ -27,6 +28,7 @@
             :window-aspect-ratio="effectiveAspectRatio" :selected="effectiveSelectedIds.has(image.id)"
             :grid-columns="gridColumnsCount" :grid-index="index" @click="(e) => handleItemClick(image, index, e)"
             @dblclick="() => handleItemDblClick(image, index)"
+            @longpress="() => handleItemLongPress(image, index)"
             @contextmenu="(e) => handleItemContextMenu(image, index, e)"
             @retry-download="() => emit('retry-download', { image })" />
         </transition-group>
@@ -39,13 +41,22 @@
         </slot>
       </div>
 
-      <component :is="contextMenuComponent" v-if="enableContextMenu && contextMenuComponent"
-        :visible="contextMenuVisible" :position="contextMenuPosition" :image="contextMenuImage"
-        :selected-count="effectiveSelectedIds.size" :selected-image-ids="effectiveSelectedIds" @close="closeContextMenu"
+      <!-- New action-based context menu -->
+      <ActionRenderer
+        v-if="enableContextMenu && actions && actions.length > 0"
+        :visible="contextMenuVisible"
+        :position="contextMenuPosition"
+        :actions="actions"
+        :context="contextMenuActionContext"
+        @close="closeContextMenu"
         @command="handleContextMenuCommand" />
 
-      <ImagePreviewDialog ref="previewRef" :images="images" :image-url-map="imageUrlMapForPreview"
-        :context-menu-component="contextMenuComponent" @context-command="handlePreviewContextCommand" />
+      <ImagePreviewDialog
+        ref="previewRef"
+        :images="images"
+        :image-url-map="imageUrlMapForPreview"
+        :actions="actions"
+        @context-command="handlePreviewContextCommand" />
     </div>
 
     <slot name="footer" />
@@ -55,21 +66,26 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch, type Component } from "vue";
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
 import ImageItem from "./ImageItem.vue";
 import type { ImageInfo, ImageUrlMap } from "../../types/image";
 import EmptyState from "../common/EmptyState.vue";
 import ImagePreviewDialog from "../common/ImagePreviewDialog.vue";
 import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
+import { useModalStackStore } from "../../stores/modalStack";
 import { useUiStore } from "../../stores/ui";
 import { useDragScroll } from "../../composables/useDragScroll";
+import { IS_ANDROID } from "../../env";
+import ActionRenderer from "../ActionRenderer.vue";
+import type { ActionItem, ActionContext } from "../../actions/types";
 
 // core 版：明确去掉 favorite/addToAlbum
 export type ContextCommand =
   | "detail"
   | "copy"
   | "open"
+  | "share"
   | "openFolder"
   | "wallpaper"
   | "exportToWE"
@@ -85,6 +101,7 @@ type ContextCommandPayloadMap = {
   detail: ImagePayload;
   copy: ImagePayload & MultiImagePayload;
   wallpaper: ImagePayload & MultiImagePayload;
+  share: ImagePayload;
   exportToWE: ImagePayload & MultiImagePayload;
   exportToWEAuto: ImagePayload & MultiImagePayload;
   remove: ImagePayload & MultiImagePayload;
@@ -92,12 +109,13 @@ type ContextCommandPayloadMap = {
 
 export type ContextCommandPayload<T extends ContextCommand = ContextCommand> = {
   command: T;
-} & ContextCommandPayloadMap[T];
+} & (T extends keyof ContextCommandPayloadMap ? ContextCommandPayloadMap[T] : ImagePayload);
 
 interface Props {
   images: ImageInfo[];
   imageUrlMap: ImageUrlMap;
-  contextMenuComponent?: Component;
+  /** Actions for context menu / action sheet. */
+  actions?: ActionItem<ImageInfo>[];
   onContextCommand?: (
     payload: ContextCommandPayload
   ) => ContextCommand | null | undefined | Promise<ContextCommand | null | undefined>;
@@ -126,9 +144,11 @@ const emit = defineEmits<{
   "retry-download": [payload: { image: ImageInfo }];
   // 兼容旧 API（不再由 core 触发，但保留事件名避免上层 TS/模板报错）
   addedToAlbum: [];
+  "android-selection-change": [payload: { active: boolean; selectedCount: number; selectedIds: ReadonlySet<string> }];
 }>();
 
 const settingsStore = useSettingsStore();
+const modalStackStore = useModalStackStore();
 const uiStore = useUiStore();
 const showEmptyState = computed(() => props.showEmptyState ?? false);
 const isLoading = computed(() => props.loading ?? false);
@@ -158,7 +178,6 @@ const parseAspectRatioFromStore = (value: string | null | undefined): number | n
 const storeAspectRatio = computed(() => {
   return parseAspectRatioFromStore(settingsStore.values.galleryImageAspectRatio);
 });
-const enableContextMenu = computed(() => !!props.contextMenuComponent);
 const enableCtrlWheelAdjustColumns = computed(() => props.enableCtrlWheelAdjustColumns ?? false);
 const enableCtrlKeyAdjustColumns = computed(() => props.enableCtrlKeyAdjustColumns ?? false);
 const hideScrollbar = computed(() => props.hideScrollbar ?? false);
@@ -249,21 +268,41 @@ const selectedIds = ref<Set<string>>(new Set());
 const lastSelectedIndex = ref<number>(-1);
 const effectiveSelectedIds = computed<Set<string>>(() => selectedIds.value);
 
+// Android 选择模式
+const androidSelectionMode = ref(false);
+// 选择模式在返回栈中的条目 id，用于按返回时清空选择后 remove
+const selectionModeStackId = ref<string | null>(null);
+
 // 预览与 context menu
 const previewRef = ref<InstanceType<typeof ImagePreviewDialog> | null>(null);
 const contextMenuVisible = ref(false);
 const contextMenuImage = ref<ImageInfo | null>(null);
 const contextMenuPosition = ref({ x: 0, y: 0 });
 
-// 检查预览是否打开
+const contextMenuActionContext = computed<ActionContext<ImageInfo>>(() => ({
+  target: contextMenuImage.value,
+  selectedIds: effectiveSelectedIds.value,
+  selectedCount: effectiveSelectedIds.value.size,
+}));
+
+const enableContextMenu = computed(() => {
+  return !!(props.actions && props.actions.length > 0);
+});
+
+// 检查预览是否打开（必须读取 ref 的 .value，否则暴露的 ref 对象始终 truthy，导致栈未正确注册/注销）
 const isPreviewOpen = computed(() => {
-  return previewRef.value?.previewVisible ?? false;
+  const v = previewRef.value?.previewVisible as { value?: boolean } | boolean | undefined;
+  if (v == null) return false;
+  return typeof v === "object" && "value" in v ? !!v.value : !!v;
 });
 
 // 当前预览索引（响应式）
 const currentPreviewIndex = computed(() => {
   return previewRef.value?.previewIndex ?? -1;
 });
+
+// Android 系统返回键：预览打开时注册到 modalStack
+const modalStackId = ref<string | null>(null);
 
 const getEffectiveImageUrl = (id: string) => props.imageUrlMap?.[id];
 const imageUrlMapForPreview = computed(() => props.imageUrlMap || {});
@@ -274,6 +313,10 @@ const updateWindowAspectRatio = () => {
   windowAspectRatio.value = window.innerWidth / window.innerHeight;
 };
 const effectiveAspectRatio = computed(() => {
+  // 安卓上固定为正方形（宽高比 1）
+  if (IS_ANDROID) {
+    return 1;
+  }
   // 优先使用 store 中的宽高比设置，其次使用外部传入的 prop，最后使用实际窗口宽高比
   if (storeAspectRatio.value !== null && storeAspectRatio.value > 0) {
     return storeAspectRatio.value;
@@ -456,7 +499,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
   }
 
   // Ctrl/Cmd + +/-：调整列数（原来是 window 监听）
-  if (enableCtrlKeyAdjustColumns.value && (event.ctrlKey || event.metaKey)) {
+  // Android 下不允许调整列数
+  if (!IS_ANDROID && enableCtrlKeyAdjustColumns.value && (event.ctrlKey || event.metaKey)) {
     if (event.key === "+" || event.key === "=") {
       event.preventDefault();
       uiStore.adjustImageGridColumn(-1);
@@ -514,6 +558,11 @@ const handleRootClick = (event: MouseEvent) => {
     return;
   }
 
+  // Android 选择模式下，点击空白处不清空选择（仅通过取消按钮退出）
+  if (IS_ANDROID && androidSelectionMode.value) {
+    return;
+  }
+
   // 空白处点击：清除所有选择（单选和多选）
   if (clickedOutside) {
     focusGrid();
@@ -524,6 +573,33 @@ const handleRootClick = (event: MouseEvent) => {
 const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) => {
   if (!event) return;
   focusGrid();
+  
+  // Android 选择模式下的点击行为
+  if (IS_ANDROID && androidSelectionMode.value) {
+    toggleSelection(image.id, index);
+    // 若取消选择后没有选中项，立即退出选择模式并同步通知父组件收起 bar（同步 emit 确保父组件在本帧内 clear）
+    if (selectedIds.value.size === 0) {
+      androidSelectionMode.value = false;
+      emitAndroidSelectionChange();
+    }
+    return;
+  }
+  
+  // Android 非选择模式下，单击直接预览
+  if (IS_ANDROID && !androidSelectionMode.value) {
+    const action = settingsStore.values.imageClickAction || "none";
+    if (action === "preview") {
+      previewRef.value?.open(index);
+      return;
+    }
+    if (action === "open") {
+      void dispatchContextCommand(buildContextPayload("open", image));
+      return;
+    }
+    return;
+  }
+  
+  // 桌面端原有逻辑
   if (event.shiftKey) {
     rangeSelect(index);
     return;
@@ -547,6 +623,28 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
   if (action === "open") {
     void dispatchContextCommand(buildContextPayload("open", image));
   }
+};
+
+const handleItemLongPress = (image: ImageInfo, index: number) => {
+  if (!IS_ANDROID) return;
+  focusGrid();
+
+  if (!androidSelectionMode.value) {
+    // 进入选择模式
+    androidSelectionMode.value = true;
+    setSingleSelection(image.id, index);
+  } else {
+    // 已在选择模式，切换选择
+    toggleSelection(image.id, index);
+    if (selectedIds.value.size === 0) {
+      androidSelectionMode.value = false;
+      emitAndroidSelectionChange();
+      return;
+    }
+  }
+
+  // 发出选择变化事件
+  emitAndroidSelectionChange();
 };
 
 const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
@@ -685,7 +783,7 @@ onMounted(async () => {
   window.addEventListener("resize", updateWindowAspectRatio);
 
   try {
-    await settingsStore.loadMany(["imageClickAction", "galleryImageAspectRatio"]);
+    !IS_ANDROID && await settingsStore.loadMany(["imageClickAction", "galleryImageAspectRatio"]);
   } catch { }
 
   await nextTick();
@@ -701,29 +799,36 @@ onMounted(async () => {
     scheduleVirtualUpdate();
   }
 
-  window.addEventListener(
-    "wheel",
-    (e: WheelEvent) => {
-      if (!enableCtrlWheelAdjustColumns.value) return;
-      if (!(e.ctrlKey || e.metaKey)) return;
-      if (shouldIgnoreKeyTarget(e as any)) return;
-      // 预览打开时屏蔽 Ctrl+Wheel 调整列数
-      if (isPreviewOpen.value) return;
-      // 检查事件是否来自预览对话框内部（双重保险）
-      const target = e.target as HTMLElement | null;
-      if (target?.closest(".image-preview-dialog") || target?.closest(".el-dialog")) {
-        return;
-      }
-      const delta = e.deltaY > 0 ? 1 : -1;
-      uiStore.adjustImageGridColumn(delta);
-    },
-    { passive: true }
-  );
+  // Android 下不允许通过 Ctrl+Wheel 调整列数
+  if (!IS_ANDROID) {
+    window.addEventListener(
+      "wheel",
+      (e: WheelEvent) => {
+        if (!enableCtrlWheelAdjustColumns.value) return;
+        if (!(e.ctrlKey || e.metaKey)) return;
+        if (shouldIgnoreKeyTarget(e as any)) return;
+        // 预览打开时屏蔽 Ctrl+Wheel 调整列数
+        if (isPreviewOpen.value) return;
+        // 检查事件是否来自预览对话框内部（双重保险）
+        const target = e.target as HTMLElement | null;
+        if (target?.closest(".image-preview-dialog") || target?.closest(".el-dialog")) {
+          return;
+        }
+        const delta = e.deltaY > 0 ? 1 : -1;
+        uiStore.adjustImageGridColumn(delta);
+      },
+      { passive: true }
+    );
+  }
 });
 
-onUnmounted(() => {
+onUnmounted(async () => {
   gridDestroyed = true;
   window.removeEventListener("resize", updateWindowAspectRatio);
+  if (modalStackId.value) {
+    modalStackStore.remove(modalStackId.value);
+    modalStackId.value = null;
+  }
   if (scrollStableTimer) window.clearTimeout(scrollStableTimer);
   if (zoomAnimTimer) clearTimeout(zoomAnimTimer);
   if (saveScrollRaf != null) cancelAnimationFrame(saveScrollRaf);
@@ -758,6 +863,25 @@ onActivated(() => {
 onDeactivated(() => {
   // deactivated 时不主动重置 measuredItemHeight（保留上一次可见时的正确值）
 });
+
+// Android：预览打开时注册到 modalStack
+watch(
+  () => isPreviewOpen.value,
+  (visible) => {
+    if (visible) {
+      if (IS_ANDROID) {
+        modalStackId.value = modalStackStore.push(() => {
+          previewRef.value?.close();
+        });
+      }
+    } else {
+      if (IS_ANDROID && modalStackId.value) {
+        modalStackStore.remove(modalStackId.value);
+        modalStackId.value = null;
+      }
+    }
+  }
+);
 
 // 检测图片列表变化，标记新增/删除的图片（仅虚拟滚动模式）
 watch(
@@ -863,6 +987,13 @@ watch(
     const image = images.value[newIndex];
     if (!image) return;
 
+    // Android 下预览与选择解耦，不同步选中项
+    if (IS_ANDROID) {
+      // 仅滚动到目标图片
+      scrollToIndex(newIndex);
+      return;
+    }
+
     // 更新选中项为当前预览图片
     setSingleSelection(image.id, newIndex);
 
@@ -871,12 +1002,66 @@ watch(
   }
 );
 
+// 发出 Android 选择变化事件
+const emitAndroidSelectionChange = () => {
+  if (!IS_ANDROID) return;
+  emit("android-selection-change", {
+    active: androidSelectionMode.value,
+    selectedCount: selectedIds.value.size,
+    selectedIds: new Set(selectedIds.value),
+  });
+};
+
+// 监听选择变化，发出 Android 选择变化事件；选择清空时自动退出选择模式（同步 emit 确保父组件 bar 及时收起）
+watch(
+  [() => androidSelectionMode.value, selectedIds],
+  () => {
+    if (IS_ANDROID && androidSelectionMode.value) {
+      if (selectedIds.value.size === 0) {
+        androidSelectionMode.value = false;
+        emitAndroidSelectionChange();
+      } else {
+        emitAndroidSelectionChange();
+      }
+    }
+  },
+  { deep: true }
+);
+
+// Android：选择模式加入返回栈，按系统返回时清空选择并退出选择模式
+watch(
+  () => androidSelectionMode.value,
+  (active) => {
+    if (!IS_ANDROID) return;
+    if (active) {
+      selectionModeStackId.value = modalStackStore.push(() => {
+        exitAndroidSelectionMode();
+      });
+    } else {
+      if (selectionModeStackId.value) {
+        modalStackStore.remove(selectionModeStackId.value);
+        selectionModeStackId.value = null;
+      }
+    }
+  },
+  { immediate: true }
+);
+
+// 退出 Android 选择模式
+const exitAndroidSelectionMode = () => {
+  if (!IS_ANDROID) return;
+  androidSelectionMode.value = false;
+  clearSelection();
+  emitAndroidSelectionChange();
+};
+
 const getContainerEl = () => containerEl.value;
 
 defineExpose({
   getContainerEl,
   getSelectedIds: () => new Set(selectedIds.value),
   clearSelection,
+  exitAndroidSelectionMode,
 });
 </script>
 

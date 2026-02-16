@@ -191,7 +191,7 @@ fn http_get_text_with_retry(
         let mut redirect_count = 0;
 
         let response = loop {
-            if tokio::runtime::Handle::current().block_on(dq.is_task_canceled(task_id)) {
+            if dq.is_task_canceled_blocking(task_id) {
                 return Err("Task canceled".to_string());
             }
 
@@ -1216,15 +1216,8 @@ pub fn register_crawler_functions(
         }
     });
 
-    // is_image_url(url) - 检查是否是图片 URL
-    engine.register_fn("is_image_url", |url: &str| -> bool {
-        let url_lower = url.to_lowercase();
-        url_lower.ends_with(".jpg")
-            || url_lower.ends_with(".jpeg")
-            || url_lower.ends_with(".png")
-            || url_lower.ends_with(".gif")
-            || url_lower.ends_with(".webp")
-    });
+    // is_image_url(url) - 检查是否是图片 URL（与 image_type 一致）
+    engine.register_fn("is_image_url", crate::image_type::url_has_image_extension);
 
     // 辅助函数：递归扫描目录
     fn scan_directory_recursive(
@@ -1376,7 +1369,7 @@ pub fn register_crawler_functions(
             };
 
             // 若任务已被取消，直接让脚本失败退出
-            if tokio::runtime::Handle::current().block_on(dq_handle.is_task_canceled(&task_id)) {
+            if dq_handle.is_task_canceled_blocking(&task_id) {
                 return Err("Task canceled".into());
             }
 
@@ -1452,9 +1445,7 @@ pub fn register_crawler_functions(
             };
 
             // 如果任务已被取消，让脚本失败退出
-            if tokio::runtime::Handle::current()
-                .block_on(dq_handle.is_task_canceled(&task_id_for_download))
-            {
+            if dq_handle.is_task_canceled_blocking(&task_id_for_download) {
                 return Err("Task canceled".into());
             }
 
@@ -1491,8 +1482,9 @@ pub fn register_crawler_functions(
                 .as_millis() as u64;
 
             // 同步下载图片（等待窗口有空位后直接执行）
+            let parsed_url = Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
             let fut = dq_handle.download_image(
-                url.to_string(),
+                parsed_url,
                 images_dir,
                 plugin_id,
                 task_id,
@@ -1561,9 +1553,7 @@ pub fn register_crawler_functions(
             };
 
             // 如果任务已被取消，让脚本失败退出
-            if tokio::runtime::Handle::current()
-                .block_on(dq_handle.is_task_canceled(&task_id_for_download))
-            {
+            if dq_handle.is_task_canceled_blocking(&task_id_for_download) {
                 return Err("Task canceled".into());
             }
 
@@ -1573,8 +1563,9 @@ pub fn register_crawler_functions(
                 .unwrap()
                 .as_millis() as u64;
 
+            let parsed_url = Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
             let fut = dq_handle.download_archive(
-                url.to_string(),
+                parsed_url,
                 &archive_type_str,
                 images_dir,
                 plugin_id,

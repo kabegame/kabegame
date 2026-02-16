@@ -1,0 +1,12 @@
+# Copyright 2019-2024 Tauri Programme within The Commons Conservancy
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
+
+[[permission]]
+identifier = "allow-pick-folder"
+description = "Enables the pickFolder command."
+commands.allow = ["pickFolder", "listContentChildren", "readContentUri"]
+
+[default]
+description = "Default permissions for the folder-picker plugin, which enables all commands."
+permissions = ["allow-pick-folder"]

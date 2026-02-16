@@ -2,6 +2,7 @@ import { UserConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import path from "path";
 import UnoCSS from 'unocss/vite';
+import { getDevServerHost } from "./scripts/utils";
 
 export const root = __dirname;
 
@@ -27,13 +28,13 @@ export default {
 
   define: {
     __DEV__: process.env.NODE_ENV === "development",
-    __WINDOWS__: isWindows,
-    __LINUX__: isLinux,
-    __MACOS__: isMacOS,
+    __WINDOWS__: !isAndroid && isWindows,
+    __LINUX__: !isAndroid && isLinux,
+    __MACOS__: !isAndroid && isMacOS,
     __ANDROID__: isAndroid,
     __DESKTOP__: JSON.stringify(desktop),
-    __LIGHT_MODE__: isLightMode,
-    __LOCAL_MODE__: isLocalMode,
+    __LIGHT_MODE__: isAndroid || isLightMode,
+    __LOCAL_MODE__: !isAndroid &&isLocalMode,
   },
 
   // 使用 apps/main/public 作为 public 目录（main app 专用）
@@ -44,6 +45,17 @@ export default {
   server: {
     port: 1420,
     strictPort: true,
+    host: true,
+    // Android 真机：HMR WebSocket 必须指向开发机 IP，否则会连到手机的 localhost 导致 ERR_CONNECTION_REFUSED
+    ...(isAndroid
+      ? {
+          hmr: {
+            protocol: "ws",
+            host: getDevServerHost(),
+            port: 1420,
+          },
+        }
+      : {}),
     watch: {
       ignored: ["**/src-tauri/**"],
     },

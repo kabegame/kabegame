@@ -1,5 +1,54 @@
 <template>
-  <el-dialog v-model="previewVisible" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
+  <!-- Android 全屏预览（透明度动画展开/关闭） -->
+  <Teleport v-if="IS_ANDROID" to="body">
+    <Transition name="preview-fade">
+      <div v-if="previewVisible" class="image-preview-fullscreen" @click.self="closePreview">
+      <div ref="previewContainerRef" class="preview-container"
+        @contextmenu.prevent.stop="handlePreviewDialogContextMenu"
+        @touchstart.prevent="handleTouchStart"
+        @touchmove.prevent="handleTouchMove"
+        @touchend.prevent="handleTouchEnd"
+        @touchcancel.prevent="handleTouchEnd"  
+      >
+        <!-- Pager 结构：prev/current/next 三张图片 -->
+        <div class="preview-pager" :style="{ transform: `translateX(${pagerOffset}px)`, transition: pagerSettling ? 'transform 0.16s ease-out' : 'none' }">
+          <!-- 上一张 -->
+          <div v-if="prevImageUrl && props.images.length > 1" class="preview-pager-item preview-pager-prev">
+            <img :src="prevImageUrl" class="preview-image preview-image-android preview-image-adjacent" alt="上一张" />
+          </div>
+          <!-- 当前张 -->
+          <div class="preview-pager-item preview-pager-current">
+            <img v-if="previewImageUrl" ref="previewImageRef" :src="previewImageUrl" class="preview-image preview-image-android" alt="预览图片"
+              :style="previewImageStyle" @load="handlePreviewImageLoad" @error="handlePreviewImageError" />
+            <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
+              <ImageNotFound />
+            </div>
+          </div>
+          <!-- 下一张 -->
+          <div v-if="nextImageUrl && props.images.length > 1" class="preview-pager-item preview-pager-next">
+            <img :src="nextImageUrl" class="preview-image preview-image-android preview-image-adjacent" alt="下一张" />
+          </div>
+        </div>
+        <div v-if="previewImageLoading" class="preview-loading">
+          <div class="preview-loading-inner">正在加载原图…</div>
+        </div>
+        <!-- Android 操作栏 / Desktop 上下文菜单 -->
+        <ActionRenderer
+          v-if="previewActions && previewActions.length > 0"
+          :visible="IS_ANDROID ? actionBarVisible : previewContextMenuVisible"
+          :position="previewContextMenuPosition"
+          :actions="previewActions"
+          :context="previewActionContext"
+          :mode="IS_ANDROID ? 'actionsheet' : 'contextmenu'"
+          @close="handlePreviewActionClose"
+          @command="handlePreviewActionCommand" />
+      </div>
+    </div>
+    </Transition>
+  </Teleport>
+
+  <!-- 桌面端 Dialog 预览 -->
+  <el-dialog v-else v-model="previewVisible" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
     class="image-preview-dialog" :show-close="true" :lock-scroll="true" @close="closePreview">
     <div v-if="previewVisible" ref="previewContainerRef" class="preview-container"
       @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMoveWithDrag"
@@ -32,27 +81,26 @@
     </div>
   </el-dialog>
 
-  <div class="preview-context-menu-wrapper">
-    <component :is="contextMenuComponent" v-if="contextMenuComponent" :visible="previewContextMenuVisible"
-      :position="previewContextMenuPosition" :image="previewImage" :selected-count="1"
-      :selected-image-ids="previewImage ? new Set([previewImage.id]) : new Set()" @close="closePreviewContextMenu"
-      @command="handlePreviewContextMenuCommand" />
-  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
-import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
+import { isTauri } from "@tauri-apps/api/core";
 import type { ImageInfo, ImageUrlMap } from "../../types/image";
 import ImageNotFound from "./ImageNotFound.vue";
 import { useImageUrlMapCache } from "../../composables/useImageUrlMapCache";
+import { IS_ANDROID } from "../../env";
+import { useModalStackStore } from "../../stores/modalStack";
+import ActionRenderer from "../ActionRenderer.vue";
+import type { ActionItem, ActionContext } from "../../actions/types";
 
 const props = defineProps<{
   images: ImageInfo[];
   imageUrlMap: ImageUrlMap;
-  contextMenuComponent?: Component;
+  /** Actions for context menu / action sheet. */
+  actions?: ActionItem<ImageInfo>[];
 }>();
 
 const emit = defineEmits<{
@@ -93,10 +141,114 @@ const inFlightOriginalLoads = new Map<string, Promise<boolean>>();
 const previewContextMenuVisible = ref(false);
 const previewContextMenuPosition = ref({ x: 0, y: 0 });
 
+// Android 触摸手势状态
+const touchState = ref<{
+  touches: Touch[];
+  initialDistance: number;
+  initialScale: number;
+  initialTranslate: { x: number; y: number };
+  swipeStartX: number;
+  swipeStartY: number;
+  isSwiping: boolean;
+  isPinching: boolean;
+  // Pager 状态
+  pagerOffset: number;
+  isPagerDragging: boolean;
+  pagerSettling: boolean;
+} | null>(null);
+
+// 双击检测状态（独立于 touchState，避免 touchEnd 清空时丢失）
+const lastTapTime = ref(0);
+const lastTapX = ref(0);
+const lastTapY = ref(0);
+
+// Android 操作栏状态（长按预览区触发/关闭）
+const actionBarVisible = ref(false);
+const LONG_PRESS_MS = 500;
+let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Android 系统返回栈：预览时操作栏显示则注册一层，第一次返回关闭操作栏，第二次返回关闭预览
+const modalStack = useModalStackStore();
+const actionBarStackId = ref<string | null>(null);
+watch(
+  () => IS_ANDROID && previewVisible.value && actionBarVisible.value,
+  (shouldRegister) => {
+    if (!shouldRegister) {
+      if (actionBarStackId.value) {
+        modalStack.remove(actionBarStackId.value);
+        actionBarStackId.value = null;
+      }
+      return;
+    }
+    // 使用 nextTick 确保操作栏层压在预览层之上，避免单次返回同时关闭预览和 bar
+    nextTick(() => {
+      if (!previewVisible.value || !actionBarVisible.value) return;
+      actionBarStackId.value = modalStack.push(() => {
+        actionBarVisible.value = false;
+      });
+    });
+  },
+  { immediate: true }
+);
+
 // 全局 cache（用于同步生成 original asset URL）
 const urlCache = useImageUrlMapCache();
 
 const clamp = (val: number, min: number, max: number) => Math.min(max, Math.max(min, val));
+
+// 计算 cover scale（填满屏幕的缩放比例）
+const computeCoverScale = (): number => {
+  const available = previewAvailableSize.value;
+  const base = previewBaseSize.value;
+  if (available.width > 0 && available.height > 0 && base.width > 0 && base.height > 0) {
+    const widthRatio = available.width / base.width;
+    const heightRatio = available.height / base.height;
+    return clamp(Math.max(widthRatio, heightRatio), 1, 10);
+  }
+  return 1;
+};
+
+// 双击缩放：以点击点为中心进行 cover/contain 切换
+const handleDoubleTapZoom = async (tapX: number, tapY: number) => {
+  if (!IS_ANDROID || !previewVisible.value) return;
+  
+  measureContainerSize();
+  await nextTick();
+  measureBaseSize();
+  
+  const coverScale = computeCoverScale();
+  const currentScale = previewScale.value;
+  const isCurrentlyCovered = currentScale >= coverScale * 0.95; // 允许 5% 误差
+  
+  let targetScale: number;
+  if (isCurrentlyCovered) {
+    // 当前已 cover，缩回 contain
+    targetScale = 1;
+  } else {
+    // 当前未 cover，放大到 cover
+    targetScale = coverScale;
+  }
+  
+  if (Math.abs(targetScale - currentScale) < 0.01) return; // 已经达到目标
+  
+  // 计算点击点相对容器中心的坐标
+  const rect = previewContainerRect.value;
+  const containerCenterX = rect.width / 2;
+  const containerCenterY = rect.height / 2;
+  const relativeX = tapX - (rect.left + containerCenterX);
+  const relativeY = tapY - (rect.top + containerCenterY);
+  
+  // 计算当前点击点在图片坐标系中的位置
+  // 图片坐标 u = (屏幕坐标 p - 平移 t) / 缩放 s
+  const imageX = (relativeX - previewTranslateX.value) / currentScale;
+  const imageY = (relativeY - previewTranslateY.value) / currentScale;
+  
+  // 目标缩放时，让该点成为屏幕中心
+  const targetX = -imageX * targetScale;
+  const targetY = -imageY * targetScale;
+  
+  setPreviewTransform(targetScale, targetX, targetY);
+};
 
 // wheel 缩放：合批到 rAF，每帧最多执行一次布局测量与 transform 更新
 const previewWheelZooming = ref(false);
@@ -208,6 +360,10 @@ const previewDialogTitle = computed(() => {
   const fileName = path.split(/[/\\]/).pop() || path;
   return fileName || "图片预览";
 });
+
+// Android 下 actionsheet 不展示「仔细欣赏」「欣赏更多」
+// Actions 可见性由各 action 的 visible() 控制（如 imageActions 在 Android 上隐藏 open/openFolder）
+const previewActions = computed(() => props.actions ?? []);
 
 const isTextInputLike = (target: EventTarget | null) => {
   const el = target as HTMLElement | null;
@@ -363,6 +519,30 @@ const isAtLast = computed(() => {
   return idx === props.images.length - 1;
 });
 
+// 获取相邻图片的 URL（用于 pager）
+const getAdjacentImageUrl = (offset: number): string => {
+  const idx = previewIndex.value;
+  if (idx < 0) return "";
+  const targetIdx = idx + offset;
+  if (targetIdx < 0 || targetIdx >= props.images.length) return "";
+  const img = props.images[targetIdx];
+  if (!img) return "";
+  
+  // 优先使用 original，否则使用 thumbnail
+  const originalUrl = getOriginalUrlFor(img.id);
+  if (originalUrl) return originalUrl;
+  
+  const data = props.imageUrlMap?.[img.id];
+  return data?.thumbnail || "";
+};
+
+const prevImageUrl = computed(() => getAdjacentImageUrl(-1));
+const nextImageUrl = computed(() => getAdjacentImageUrl(1));
+
+// Pager offset（用于滑动切换动画）
+const pagerOffset = ref(0);
+const pagerSettling = ref(false);
+
 // 切换节流：100ms 内最多只执行一次切换，避免快速连击导致状态混乱
 let navThrottleTimer: ReturnType<typeof setTimeout> | null = null;
 let isNavThrottled = false;
@@ -447,6 +627,11 @@ const navigateWithPreloadGate = async (targetIndex: number) => {
     previewImageLoading.value = false;
   }
   resetPreviewTransform();
+  // 切换图片时重置 pager
+  if (IS_ANDROID) {
+    pagerOffset.value = 0;
+    pagerSettling.value = false;
+  }
   pendingNav.value = null;
 };
 
@@ -495,6 +680,7 @@ const goNext = async () => {
 
 const handlePreviewDialogContextMenu = (event: MouseEvent) => {
   if (!previewImage.value) return;
+  if (!props.actions?.length) return;
   previewContextMenuPosition.value = { x: event.clientX, y: event.clientY };
   previewContextMenuVisible.value = true;
 };
@@ -503,13 +689,34 @@ const closePreviewContextMenu = () => {
   previewContextMenuVisible.value = false;
 };
 
-const handlePreviewContextMenuCommand = (command: string) => {
+const previewActionContext = computed<ActionContext<ImageInfo>>(() => ({
+  target: previewImage.value,
+  selectedIds: previewImage.value ? new Set([previewImage.value.id]) : new Set<string>(),
+  selectedCount: previewImage.value ? 1 : 0,
+}));
+
+const handlePreviewActionClose = () => {
+  if (IS_ANDROID) {
+    actionBarVisible.value = false;
+  } else {
+    closePreviewContextMenu();
+  }
+};
+
+const handlePreviewActionCommand = (command: string) => {
   if (!previewImage.value) return;
   const payload = {
     command,
     image: previewImage.value,
   };
-  closePreviewContextMenu();
+  if (IS_ANDROID) {
+    // On Android, hide action bar after command (except for remove which may close preview)
+    if (command !== "remove") {
+      actionBarVisible.value = false;
+    }
+  } else {
+    closePreviewContextMenu();
+  }
   emit("contextCommand", payload);
 };
 
@@ -622,6 +829,285 @@ const stopPreviewDrag = () => {
   markPreviewInteracting();
 };
 
+// Android 触摸手势处理
+const getDistance = (touch1: Touch, touch2: Touch): number => {
+  const dx = touch2.clientX - touch1.clientX;
+  const dy = touch2.clientY - touch1.clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+};
+
+const getCenter = (touch1: Touch, touch2: Touch): { x: number; y: number } => {
+  return {
+    x: (touch1.clientX + touch2.clientX) / 2,
+    y: (touch1.clientY + touch2.clientY) / 2,
+  };
+};
+
+const handleTouchStart = (event: TouchEvent) => {
+  if (!IS_ANDROID || !previewVisible.value) return;
+  
+  const touches = Array.from(event.touches);
+  if (touches.length === 0) return;
+
+  measureContainerSize();
+  
+  // 重置 pager 状态
+  pagerSettling.value = false;
+  
+  if (touches.length === 2) {
+    // 双指缩放：取消 pager 拖拽
+    const distance = getDistance(touches[0], touches[1]);
+    touchState.value = {
+      touches,
+      initialDistance: distance,
+      initialScale: previewScale.value,
+      initialTranslate: { x: previewTranslateX.value, y: previewTranslateY.value },
+      swipeStartX: 0,
+      swipeStartY: 0,
+      isSwiping: false,
+      isPinching: true,
+      pagerOffset: 0,
+      isPagerDragging: false,
+      pagerSettling: false,
+    };
+    pagerOffset.value = 0;
+    notifyPreviewInteracting(true);
+  } else if (touches.length === 1) {
+    // 单指：可能是滑动切换、拖拽平移或双击
+    const touch = touches[0];
+    const now = Date.now();
+    const isDoubleTap = 
+      (now - lastTapTime.value) < 300 &&
+      Math.abs(touch.clientX - lastTapX.value) < 50 &&
+      Math.abs(touch.clientY - lastTapY.value) < 50;
+    
+    if (isDoubleTap) {
+      // 双击：执行缩放（移除 scale 限制，任意状态下都可以双击）
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+      void handleDoubleTapZoom(touch.clientX, touch.clientY);
+      touchState.value = null;
+      pagerOffset.value = 0;
+      // 重置双击检测时间，避免连续三次点击被误判为双击
+      lastTapTime.value = 0;
+      return;
+    }
+    
+    // 更新双击检测状态
+    lastTapTime.value = now;
+    lastTapX.value = touch.clientX;
+    lastTapY.value = touch.clientY;
+    
+    touchState.value = {
+      touches,
+      initialDistance: 0,
+      initialScale: previewScale.value,
+      initialTranslate: { x: previewTranslateX.value, y: previewTranslateY.value },
+      swipeStartX: touch.clientX,
+      swipeStartY: touch.clientY,
+      isSwiping: previewScale.value === 1, // scale=1 时用于滑动切换
+      isPinching: false,
+      pagerOffset: 0,
+      isPagerDragging: false,
+      pagerSettling: false,
+    };
+    pagerOffset.value = 0;
+    if (previewScale.value > 1) {
+      // scale>1 时用于拖拽平移
+      notifyPreviewInteracting(true);
+    }
+    // 单指长按：达到时长后切换操作栏（触发/关闭）
+    const hasActions = previewActions.value && previewActions.value.length > 0;
+    if (hasActions && longPressTimer === null) {
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        if (previewVisible.value) {
+          actionBarVisible.value = !actionBarVisible.value;
+        }
+      }, LONG_PRESS_MS);
+    }
+  }
+};
+
+const handleTouchMove = (event: TouchEvent) => {
+  if (!IS_ANDROID || !previewVisible.value || !touchState.value) return;
+  
+  const touches = Array.from(event.touches);
+  if (touches.length === 0) return;
+
+  if (touches.length === 2 && touchState.value.isPinching) {
+    // 双指缩放：取消 pager
+    const distance = getDistance(touches[0], touches[1]);
+    if (touchState.value.initialDistance > 0) {
+      const scaleRatio = distance / touchState.value.initialDistance;
+      const newScale = clamp(
+        touchState.value.initialScale * scaleRatio,
+        1,
+        10
+      );
+      
+      // 以两指中心为缩放中心
+      const center = getCenter(touches[0], touches[1]);
+      const rect = previewContainerRect.value;
+      const centerX = center.x - (rect.left + rect.width / 2);
+      const centerY = center.y - (rect.top + rect.height / 2);
+      
+      const scaleChange = newScale / touchState.value.initialScale;
+      const newX = centerX - scaleChange * (centerX - touchState.value.initialTranslate.x);
+      const newY = centerY - scaleChange * (centerY - touchState.value.initialTranslate.y);
+      
+      setPreviewTransform(newScale, newX, newY);
+    }
+    touchState.value.touches = touches;
+    pagerOffset.value = 0;
+  } else if (touches.length === 1) {
+    const touch = touches[0];
+    const dx = touch.clientX - touchState.value.swipeStartX;
+    const dy = touch.clientY - touchState.value.swipeStartY;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    // 移动超过阈值则取消长按（不触发/关闭操作栏）
+    const movement = Math.sqrt(dx * dx + dy * dy);
+    if (movement > 10 && longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    if (touchState.value.isSwiping && previewScale.value === 1) {
+      // scale=1 时：直接作为 pager 拖拽
+      const containerWidth = previewContainerRect.value.width;
+      if (containerWidth > 0) {
+        // 限制拖拽范围，允许一定程度的越界
+        const maxOffset = containerWidth * 0.8;
+        pagerOffset.value = clamp(dx, -maxOffset, maxOffset);
+        touchState.value.isPagerDragging = true;
+      }
+      touchState.value.touches = touches;
+    } else if (previewScale.value > 1 && !touchState.value.isPinching) {
+      // scale>1 时：先做图片平移，到达边缘后转为 pager 拖拽
+      const newX = touchState.value.initialTranslate.x + dx;
+      const newY = touchState.value.initialTranslate.y + dy;
+      
+      // 计算平移后的边界
+      const clamped = clampTranslate(previewScale.value, newX, newY);
+      const isAtEdgeX = Math.abs(newX - clamped.x) > 1; // 有越界
+      
+      if (isAtEdgeX && absDx > absDy * 1.5) {
+        // 到达 X 方向边缘且水平滑动占主导：转为 pager 拖拽
+        const overX = newX - clamped.x; // 越界量
+        const containerWidth = previewContainerRect.value.width;
+        if (containerWidth > 0) {
+          // 将越界量转换为 pager offset（带阻尼）
+          const damping = 0.5; // 阻尼系数，使拖拽感觉更自然
+          pagerOffset.value = clamp(overX * damping, -containerWidth * 0.8, containerWidth * 0.8);
+          touchState.value.isPagerDragging = true;
+        }
+        // 图片本身保持在边界
+        setPreviewTransform(previewScale.value, clamped.x, clamped.y);
+      } else {
+        // 正常平移
+        setPreviewTransform(previewScale.value, newX, newY);
+        pagerOffset.value = 0;
+        touchState.value.isPagerDragging = false;
+      }
+      touchState.value.touches = touches;
+    }
+  }
+};
+
+const handleTouchEnd = (event: TouchEvent) => {
+  if (!IS_ANDROID || !previewVisible.value || !touchState.value) return;
+  
+  const touches = Array.from(event.touches);
+  
+  if (touches.length === 0) {
+    // 所有手指都离开
+    const wasPagerDragging = touchState.value.isPagerDragging;
+    const currentOffset = pagerOffset.value;
+    const containerWidth = previewContainerRect.value.width;
+    const threshold = containerWidth * 0.2; // 20% 阈值
+    
+    if (wasPagerDragging && Math.abs(currentOffset) > threshold) {
+      // 超过阈值：完成切换
+      pagerSettling.value = true;
+      const targetOffset = currentOffset > 0 ? containerWidth : -containerWidth;
+      pagerOffset.value = targetOffset;
+      
+      // 动画结束后切换图片并重置
+      setTimeout(() => {
+        if (currentOffset > 0) {
+          void goPrev();
+        } else {
+          void goNext();
+        }
+        pagerOffset.value = 0;
+        pagerSettling.value = false;
+      }, 160);
+    } else if (wasPagerDragging) {
+      // 未超过阈值：回弹
+      pagerSettling.value = true;
+      pagerOffset.value = 0;
+      setTimeout(() => {
+        pagerSettling.value = false;
+      }, 160);
+    } else if (touchState.value.isSwiping && previewScale.value === 1) {
+      // 原有的滑动切换逻辑（向后兼容）
+      const lastTouch = touchState.value.touches[0];
+      if (lastTouch) {
+        const dx = lastTouch.clientX - touchState.value.swipeStartX;
+        const dy = lastTouch.clientY - touchState.value.swipeStartY;
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+        
+        // 水平滑动超过 80px 且水平滑动距离大于垂直滑动距离的 2 倍
+        if (absDx > 80 && absDx > absDy * 2) {
+          if (dx > 0) {
+            // 向右滑动 -> 上一张
+            void goPrev();
+          } else {
+            // 向左滑动 -> 下一张
+            void goNext();
+          }
+        }
+        // 滑动距离不足时不再用点击切换操作栏，改为长按触发/关闭
+      }
+    } else {
+      // 非滑动情况：仅清理长按计时器（长按已在 timer 回调里处理）
+    }
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    touchState.value = null;
+    markPreviewInteracting();
+  } else if (touches.length === 1 && touchState.value.isPinching) {
+    // 双指变单指：转为单指拖拽模式（如果已放大）
+    const touch = touches[0];
+    if (previewScale.value > 1) {
+      touchState.value = {
+        touches,
+        initialDistance: 0,
+        initialScale: previewScale.value,
+        initialTranslate: { x: previewTranslateX.value, y: previewTranslateY.value },
+        swipeStartX: touch.clientX,
+        swipeStartY: touch.clientY,
+        isSwiping: false,
+        isPinching: false,
+        pagerOffset: 0,
+        isPagerDragging: false,
+        pagerSettling: false,
+      };
+      pagerOffset.value = 0;
+    } else {
+      // 如果缩放回到 1，清理状态
+      touchState.value = null;
+      pagerOffset.value = 0;
+      markPreviewInteracting();
+    }
+  }
+};
+
 const handlePreviewImageLoad = async () => {
   await measureSizesAfterRender();
   if (previewBaseSize.value.width > 0 && previewBaseSize.value.height > 0) {
@@ -723,6 +1209,17 @@ const closePreview = () => {
   isNavThrottled = false;
   releaseAllOwnedOriginalUrls();
   pendingNav.value = null;
+  // Android 触摸状态清理
+  if (IS_ANDROID) {
+    touchState.value = null;
+    pagerOffset.value = 0;
+    pagerSettling.value = false;
+    actionBarVisible.value = false;
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
 };
 
 const handlePreviewImageDeleted = () => {
@@ -801,6 +1298,11 @@ watch(
   (url) => {
     if (url) {
       setPreviewTransform(1, 0, 0);
+      // 切换图片时重置 pager
+      if (IS_ANDROID) {
+        pagerOffset.value = 0;
+        pagerSettling.value = false;
+      }
     }
   }
 );
@@ -1174,8 +1676,169 @@ defineExpose({
   }
 }
 
-.preview-context-menu-wrapper {
-  position: relative;
-  z-index: 10000;
+// Android 全屏预览：展开/关闭透明度动画
+.preview-fade-enter-active,
+.preview-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.preview-fade-enter-from,
+.preview-fade-leave-to {
+  opacity: 0;
+}
+
+// Android 全屏预览样式
+.image-preview-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  touch-action: none; // 禁用默认触摸行为
+
+  .preview-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    box-sizing: border-box;
+    position: relative;
+    touch-action: none;
+  }
+
+  .preview-pager {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    will-change: transform;
+  }
+
+  .preview-pager-item {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .preview-pager-prev {
+    transform: translateX(-100%);
+  }
+
+  .preview-pager-next {
+    transform: translateX(100%);
+  }
+
+  .preview-image-android {
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  .preview-image-adjacent {
+    transform: none !important;
+    transition: none !important;
+  }
+
+  .preview-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(3px);
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .preview-loading-inner {
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.45);
+    color: #ffffff;
+    font-size: 14px;
+    line-height: 1;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    user-select: none;
+  }
+
+  .preview-not-found {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px;
+    box-sizing: border-box;
+    color: rgba(255, 255, 255, 0.78);
+    text-align: center;
+    user-select: none;
+    z-index: 1;
+  }
+
+  .preview-nav-zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 20%;
+    display: flex;
+    align-items: center;
+    z-index: 2;
+    transition: opacity 0.12s ease;
+
+    &.left {
+      left: 0;
+      justify-content: flex-start;
+      padding-left: 18px;
+    }
+
+    &.right {
+      right: 0;
+      justify-content: flex-end;
+      padding-right: 18px;
+    }
+  }
+
+  .preview-nav-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    border: none;
+    background: rgba(255, 95, 184, 0.9);
+    color: #ffffff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 10px 24px rgba(255, 95, 184, 0.28);
+    transition: transform 0.12s ease, background-color 0.12s ease, box-shadow 0.12s ease;
+    user-select: none;
+    backdrop-filter: blur(8px);
+
+    &:active {
+      transform: scale(0.95);
+      box-shadow: 0 8px 20px rgba(255, 95, 184, 0.24);
+    }
+
+    &.disabled {
+      background: rgba(201, 201, 201, 0.9);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+    }
+
+    .el-icon {
+      font-size: 18px;
+    }
+  }
+
 }
 </style>

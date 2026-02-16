@@ -2,11 +2,12 @@
     <div class="empty-state">
         <img src="/album-empty.png" alt="空状態" class="empty-image" />
         <p class="empty-tip">まだ空っぽだけど、これから色々お友達を作っていくのだ！</p>
-        <p class="empty-tip">提示：把图片文件夹拖进来有惊喜</p>
+        <p v-if="!IS_ANDROID" class="empty-tip">提示：把图片文件夹拖进来有惊喜</p>
     </div>
 </template>
 
 <script setup lang="ts">
+import { IS_ANDROID } from "@kabegame/core/env";
 // 统一的空状态组件：显示空状态图片和日文文本
 </script>
 

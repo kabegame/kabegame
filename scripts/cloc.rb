@@ -11,7 +11,7 @@ require 'tmpdir'
 # 默认配置
 DEFAULT_PATH = '.'
 DEFAULT_EXCLUDE = 'node_modules,dist,build,.git,target,.nx,public,data,release'
-DEFAULT_INCLUDE_EXT = 'ts,tsx,js,jsx,mjs,vue,rs,go,py,java,kt,swift,cs,cpp,c,h,cc,hpp,rb,php,html,css,scss,rhai,kt,kts,handlebars'
+DEFAULT_INCLUDE_EXT = 'ts,tsx,js,mjs,vue,rs,py,java,kt,swift,cs,cpp,c,h,cc,hpp,rb,html,css,scss,rhai,kt,kts,handlebars,prisma'
 
 def usage
   puts <<~USAGE
@@ -198,11 +198,19 @@ def generate_html(stats, counters, path)
     }
   end
   
-  # 生成颜色（使用 HSL 颜色空间，确保颜色区分度高）
+  # 使用 GitHub Linguist 定义的语言官方颜色
   colors = []
-  sorted_stats.each_with_index do |_, i|
-    hue = (i * 137.508) % 360  # 使用黄金角度确保颜色分布均匀
-    colors << "hsl(#{hue}, 70%, 60%)"
+  sorted_stats.each_with_index do |(lang_name, _), i|
+    lang_obj = Linguist::Language[lang_name] || Linguist::Language.find_by_name(lang_name)
+    color = lang_obj&.color
+    if color
+      # Linguist 返回 hex 如 #3178c6，确保有 # 前缀
+      colors << (color.start_with?('#') ? color : "##{color}")
+    else
+      # 无定义颜色时使用 HSL 备用
+      hue = (i * 137.508) % 360
+      colors << "hsl(#{hue}, 70%, 60%)"
+    end
   end
   
   html = <<~HTML

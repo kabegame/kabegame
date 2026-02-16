@@ -1,15 +1,19 @@
 <template>
-    <div class="task-detail">
+    <div class="task-detail" v-pull-to-refresh="pullToRefreshOpts">
         <div v-if="loading" class="detail-body detail-body-loading">
             <el-skeleton :rows="8" animated />
         </div>
         <ImageGrid v-else ref="taskViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
-            enable-virtual-scroll :enable-ctrl-wheel-adjust-columns="true" :show-empty-state="true"
-            :context-menu-component="TaskImageContextMenu" :on-context-command="handleImageMenuCommand"
-            @retry-download="handleRetryDownload" @scroll-stable="loadImageUrls()">
+            :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
+            :enable-ctrl-key-adjust-columns="!IS_ANDROID"
+            enable-virtual-scroll :show-empty-state="true"
+            :actions="imageActions"
+            :on-context-command="handleImageMenuCommand"
+            @retry-download="handleRetryDownload" @scroll-stable="loadImageUrls()"
+            @android-selection-change="handleAndroidSelectionChange">
             <template #before-grid>
                 <PageHeader :title="taskName || '任务'" :subtitle="taskSubtitle" show-back @back="goBack">
-                    <el-button @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !taskId">
+                    <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !taskId">
                         <el-icon>
                             <Refresh />
                         </el-icon>
@@ -21,26 +25,52 @@
                         </el-icon>
                         <span style="margin-left: 4px;">停止任务</span>
                     </el-button>
-                    <el-button type="danger" @click="handleDeleteTask">
+                    <el-button v-if="!IS_ANDROID" type="danger" @click="handleDeleteTask">
                         <el-icon>
                             <Delete />
                         </el-icon>
                         <span style="margin-left: 4px;">删除任务</span>
                     </el-button>
                     <TaskDrawerButton />
-                    <el-button @click="openHelpDrawer" circle title="帮助">
-                        <el-icon>
-                            <QuestionFilled />
-                        </el-icon>
-                    </el-button>
-                    <el-button @click="openQuickSettings" circle>
-                        <el-icon>
-                            <Setting />
-                        </el-icon>
-                    </el-button>
+                    <template v-if="IS_ANDROID">
+                        <el-dropdown trigger="click" placement="bottom-end" @command="handleTaskDetailMoreCommand">
+                            <el-button circle title="更多">
+                                <el-icon>
+                                    <MoreFilled />
+                                </el-icon>
+                            </el-button>
+                            <template #dropdown>
+                                <el-dropdown-menu>
+                                    <el-dropdown-item command="deleteTask">
+                                        <el-icon><Delete /></el-icon>
+                                        <span style="margin-left: 6px;">删除任务</span>
+                                    </el-dropdown-item>
+                                    <el-dropdown-item command="help">
+                                        <el-icon><QuestionFilled /></el-icon>
+                                        <span style="margin-left: 6px;">帮助</span>
+                                    </el-dropdown-item>
+                                    <el-dropdown-item command="settings">
+                                        <el-icon><Setting /></el-icon>
+                                        <span style="margin-left: 6px;">设置</span>
+                                    </el-dropdown-item>
+                                </el-dropdown-menu>
+                            </template>
+                        </el-dropdown>
+                    </template>
+                    <template v-else>
+                        <el-button @click="openHelpDrawer" circle title="帮助">
+                            <el-icon>
+                                <QuestionFilled />
+                            </el-icon>
+                        </el-button>
+                        <el-button @click="openQuickSettings" circle>
+                            <el-icon>
+                                <Setting />
+                            </el-icon>
+                        </el-button>
+                    </template>
                 </PageHeader>
 
-                <!-- 大页分页器（与 Gallery/AlbumDetail 一致：1000/页，对齐后端 provider 叶子目录） -->
                 <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
                     :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToPage" />
             </template>
@@ -59,9 +89,10 @@ import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { VideoPause, Delete, Setting, Refresh, QuestionFilled } from "@element-plus/icons-vue";
-import TaskImageContextMenu from "@/components/contextMenu/TaskImageContextMenu.vue";
+import { VideoPause, Delete, Setting, Refresh, QuestionFilled, Star, StarFilled, InfoFilled, DocumentCopy, Picture, FolderAdd, MoreFilled } from "@element-plus/icons-vue";
+import { createImageActions } from "@/actions/imageActions";
 import ImageGrid from "@/components/ImageGrid.vue";
+import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
@@ -73,6 +104,7 @@ import { storeToRefs } from "pinia";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
+import { useDesktopSelectionStore, type DesktopSelectionAction } from "@/stores/desktopSelection";
 import { useImageOperations } from "@/composables/useImageOperations";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
@@ -84,6 +116,9 @@ import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { useBigPageRoute } from "@/composables/useBigPageRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
+import { IS_ANDROID } from "@kabegame/core/env";
+import { hasFeatureInPage } from "@/header/headerFeatures";
+import { useImageTypes } from "@/composables/useImageTypes";
 
 type TaskFailedImage = {
     id: number;
@@ -100,6 +135,7 @@ const route = useRoute();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const settingsStore = useSettingsStore();
+const desktopSelectionStore = useDesktopSelectionStore();
 const pluginStore = usePluginStore();
 const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
@@ -119,6 +155,12 @@ const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("taskdetail");
+
+function handleTaskDetailMoreCommand(cmd: string) {
+    if (cmd === "deleteTask") handleDeleteTask();
+    else if (cmd === "help") openHelpDrawer();
+    else if (cmd === "settings") openQuickSettings();
+}
 
 
 const taskId = ref<string>("");
@@ -140,6 +182,13 @@ const shouldShowStopButton = computed(() => {
 });
 const loading = ref(false);
 const isRefreshing = ref(false);
+// 根据 pages 列表判断刷新功能是否存在；安卓下隐藏刷新（含下拉刷新）
+const hasRefreshFeature = computed(() => !IS_ANDROID && hasFeatureInPage("taskdetail", "refresh"));
+const pullToRefreshOpts = computed(() =>
+  hasRefreshFeature.value
+    ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
+    : undefined
+);
 const images = ref<ImageInfo[]>([]);
 const failedImages = ref<TaskFailedImage[]>([]);
 const taskViewRef = ref<any>(null);
@@ -153,6 +202,12 @@ const { isInteracting } = useImageGridAutoLoad({
     containerRef: taskContainerRef,
     onLoad: () => void loadImageUrls(),
 });
+
+// Image actions for context menu / action sheet
+const imageActions = computed(() => createImageActions({ 
+    removeText: "删除",
+    multiHide: ["favorite", "addToAlbum"]
+}));
 
 const {
     imageSrcMap,
@@ -168,6 +223,7 @@ const {
     isInteracting,
 });
 
+const { load: loadImageTypes, getMimeType } = useImageTypes();
 const { handleCopyImage } = useImageOperations(
     images,
     imageSrcMap,
@@ -475,11 +531,14 @@ const loadTaskInfo = async () => {
             const plugin = pluginStore.plugins.find((p) => p.id === task.pluginId);
             taskName.value = plugin?.name || task.pluginId || "任务";
             // 同步更新 store 中的任务信息（确保 deletedCount 等字段同步）
+            // 运行中任务不覆盖 progress，避免用 DB 的旧值覆盖事件驱动的实时进度
             const taskIndex = crawlerStore.tasks.findIndex((t) => t.id === taskId.value);
             if (taskIndex !== -1) {
                 crawlerStore.tasks[taskIndex].deletedCount = task.deletedCount ?? 0;
                 crawlerStore.tasks[taskIndex].status = task.status;
-                crawlerStore.tasks[taskIndex].progress = task.progress ?? 0;
+                if (task.status !== "running") {
+                    crawlerStore.tasks[taskIndex].progress = task.progress ?? 0;
+                }
             }
         }
     } catch (e) {
@@ -674,6 +733,54 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
     }
 };
 
+// Android 选择模式：构建操作栏 actions
+const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): DesktopSelectionAction[] => {
+  const countText = selectedCount > 1 ? `(${selectedCount})` : "";
+  const firstSelectedImage = images.value.find(img => selectedIds.has(img.id));
+  const isFavorite = firstSelectedImage?.favorite ?? false;
+  
+  if (selectedCount === 1) {
+    return [
+      { key: "favorite", label: isFavorite ? "取消收藏" : "收藏", icon: isFavorite ? StarFilled : Star, command: "favorite" },
+      { key: "remove", label: "删除", icon: Delete, command: "remove" },
+    ];
+  } else {
+    return [
+      { key: "remove", label: `删除${countText}`, icon: Delete, command: "remove" },
+    ];
+  }
+};
+
+// Android 选择变化处理：用 desktop 选择数量决定状态
+const handleAndroidSelectionChange = (payload: { active: boolean; selectedCount: number; selectedIds: ReadonlySet<string> }) => {
+  if (!IS_ANDROID) return;
+  
+  if (!payload.active || payload.selectedCount === 0) {
+    desktopSelectionStore.clear();
+    return;
+  }
+  const actions = buildSelectionActions(payload.selectedCount, payload.selectedIds);
+  if (desktopSelectionStore.selectedCount > 0) {
+    desktopSelectionStore.update(payload.selectedCount, actions);
+  } else {
+    const firstImage = images.value.find(img => payload.selectedIds.has(img.id));
+    if (!firstImage) return;
+    desktopSelectionStore.set(
+      payload.selectedCount,
+      actions,
+      (cmd: string) => {
+        const commandPayload: any = {
+          command: cmd,
+          image: firstImage,
+          selectedImageIds: payload.selectedIds,
+        };
+        void handleImageMenuCommand(commandPayload);
+      },
+      () => taskViewRef.value?.exitAndroidSelectionMode?.()
+    );
+  }
+};
+
 const handleImageMenuCommand = async (
     payload: any
 ): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
@@ -686,7 +793,7 @@ const handleImageMenuCommand = async (
     if (command === "detail") return command;
     if (!image) return null;
     const selectedSet =
-        payload?.selectedImageIds && payload.selectedImageIds.size > 0
+        "selectedImageIds" in payload && payload.selectedImageIds && payload.selectedImageIds.size > 0
             ? payload.selectedImageIds
             : new Set([image.id]);
 
@@ -723,6 +830,26 @@ const handleImageMenuCommand = async (
         case "wallpaper":
             if (imagesToProcess.length > 0) {
                 await setWallpaper(imagesToProcess);
+            }
+            break;
+        case "share":
+            if (!isMultiSelect && imagesToProcess[0]) {
+                try {
+                    const image = imagesToProcess[0];
+                    const filePath = image.localPath;
+                    if (!filePath) {
+                        ElMessage.error("图片路径不存在");
+                        break;
+                    }
+                    
+                    const ext = filePath.split('.').pop()?.toLowerCase() || '';
+                    await loadImageTypes();
+                    const mimeType = getMimeType(ext);
+                    await invoke("share_file", { filePath, mimeType });
+                } catch (error) {
+                    console.error("分享失败:", error);
+                    ElMessage.error("分享失败");
+                }
             }
             break;
         case "open":
@@ -811,15 +938,22 @@ const startTimersAndListeners = async () => {
         currentTime.value = Date.now();
     }, 1000);
 
-    // 监听任务进度更新事件，当任务状态变化时重新加载任务信息
+    // 监听任务进度更新事件：用事件中的 progress 更新 store（避免被 loadTaskInfo 的 DB 旧值覆盖）；
+    // 仅在进度 100% 时拉取任务信息以同步 end_time 等
     if (!unlistenTaskProgress) {
         unlistenTaskProgress = await listen(
             "task-progress",
             async (event) => {
                 const payload: any = event.payload as any;
                 const tid = String(payload?.task_id ?? "").trim();
-                if (tid && tid === taskId.value) {
-                    // 重新加载任务信息以获取最新的状态和结束时间
+                if (!tid || tid !== taskId.value) return;
+                const newProgress = Number(payload?.progress ?? NaN);
+                if (!Number.isFinite(newProgress)) return;
+                const taskIndex = crawlerStore.tasks.findIndex((t) => t.id === tid);
+                if (taskIndex !== -1) {
+                    crawlerStore.tasks[taskIndex].progress = newProgress;
+                }
+                if (newProgress >= 100) {
                     await loadTaskInfo();
                 }
             }
@@ -929,9 +1063,9 @@ onActivated(async () => {
 });
 
 onDeactivated(() => {
-    // 页面失活时清理定时器和事件监听器：TaskDetail 的数据仅在激活时刷新
     stopTimersAndListeners();
-});
+    desktopSelectionStore.clear();
+  });
 
 </script>
 

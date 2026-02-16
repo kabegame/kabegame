@@ -1,7 +1,8 @@
 <template>
   <CoreImageGrid ref="coreRef" v-bind="coreGridBind" :window-aspect-ratio="props.windowAspectRatio"
     :on-context-command="handleContextCommand" @scroll-stable="$emit('scroll-stable')"
-    @retry-download="(p) => $emit('retry-download', p)">
+    @retry-download="(p) => $emit('retry-download', p)"
+    @android-selection-change="(p) => $emit('android-selection-change', p)">
     <template #before-grid>
       <slot name="before-grid" />
     </template>
@@ -32,14 +33,15 @@ import type {
   ContextCommand as CoreContextCommand,
   ContextCommandPayload as CoreContextCommandPayload,
 } from "@kabegame/core/components/image/ImageGrid.vue";
+import type { ActionItem } from "@kabegame/core/actions/types";
 
 // 扩展 ContextCommand 类型，添加 app-main 特有的命令
-export type ContextCommand = CoreContextCommand | "favorite" | "addToAlbum";
+export type ContextCommand = CoreContextCommand | "favorite" | "addToAlbum" | "share";
 
 // 扩展 ContextCommandPayload 类型
 // 对于扩展命令，payload 结构与 core 一致，只是 command 字段不同
 export type ContextCommandPayload<T extends ContextCommand = ContextCommand> =
-  T extends "favorite" | "addToAlbum"
+  T extends "favorite" | "addToAlbum" | "share"
   ? Omit<CoreContextCommandPayload, "command"> & { command: T }
   : CoreContextCommandPayload;
 
@@ -49,7 +51,8 @@ defineOptions({ inheritAttrs: false });
 interface Props {
   images: ImageInfo[];
   imageUrlMap: Record<string, { thumbnail?: string; original?: string }>;
-  contextMenuComponent?: any;
+  /** Actions for context menu (desktop) / action sheet (Android). Uses ActionRenderer abstraction. */
+  actions?: ActionItem<ImageInfo>[];
   onContextCommand?: (
     payload: ContextCommandPayload
   ) =>
@@ -77,10 +80,20 @@ defineEmits<{
   addedToAlbum: [];
   // 注意：事件来自 core ImageGrid，因此 image 类型应与 core 对齐（url 在 core 为可选）
   "retry-download": [payload: { image: CoreImageInfo }];
+  "android-selection-change": [payload: { active: boolean; selectedCount: number; selectedIds: ReadonlySet<string> }];
 }>();
 
 const attrs = useAttrs();
-const coreGridBind = computed(() => ({ ...attrs, ...props }));
+// 传 core 时需将 actions 断言为 ActionItem<CoreImageInfo>[]：crawler ImageInfo 的 url 必填，
+// core ImageInfo 的 url 可选，协变不兼容；运行时 actions 收到的 target 多为 crawler 数据（含 url）
+const coreGridBind = computed(() => {
+  const { actions, ...rest } = props;
+  return {
+    ...attrs,
+    ...rest,
+    actions: actions as ActionItem<CoreImageInfo>[] | undefined,
+  };
+});
 
 const coreRef = ref<any>(null);
 
@@ -115,5 +128,6 @@ defineExpose({
   getContainerEl: () => coreRef.value?.getContainerEl?.(),
   getSelectedIds: () => coreRef.value?.getSelectedIds?.(),
   clearSelection: () => coreRef.value?.clearSelection?.(),
+  exitAndroidSelectionMode: () => coreRef.value?.exitAndroidSelectionMode?.(),
 });
 </script>

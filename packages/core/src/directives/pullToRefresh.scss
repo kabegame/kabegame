@@ -1,0 +1,156 @@
+/* 下拉刷新指令样式（与 PullToRefresh 组件一致） */
+.pull-to-refresh {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  touch-action: pan-y;
+  display: flex;
+  flex-direction: column;
+
+  .spinner-wrapper {
+    width: 5vw;
+    height: 5vw;
+    min-width: 24px;
+    min-height: 24px;
+    max-width: 40px;
+    max-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .spinner {
+    width: 100%;
+    height: 100%;
+    transition: transform 0.3s ease;
+
+    &.is-spinning {
+      animation: pull-to-refresh-spin 1s linear infinite;
+    }
+  }
+
+  .spinner-svg {
+    width: 100%;
+    height: 100%;
+    color: var(--anime-primary);
+    filter: drop-shadow(0 2px 4px rgba(255, 107, 157, 0.3));
+  }
+
+  .spinner-circle {
+    transition: stroke-dashoffset 0.3s ease;
+    stroke: var(--anime-primary);
+  }
+
+  &.is-refreshing .spinner {
+    animation: pull-to-refresh-spin 1s linear infinite;
+  }
+}
+
+.pull-to-refresh-head {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 80px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.pull-to-refresh-indicator {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 100%;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  transition: transform 0.3s ease;
+  pointer-events: none;
+}
+
+.pull-to-refresh-body {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  & > * {
+    flex: 1;
+    min-height: 0;
+  }
+}
+
+@keyframes pull-to-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ========== v-pull-to-refresh 指令：spin 固定于页面顶部，无需容器包裹 ========== */
+.v-pull-to-refresh-head {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 80px;
+  z-index: 9999;
+  pointer-events: none;
+
+  .v-pull-to-refresh-indicator {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 100%;
+    height: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.3s ease;
+  }
+
+  .spinner-wrapper {
+    width: 5vw;
+    height: 5vw;
+    min-width: 24px;
+    min-height: 24px;
+    max-width: 40px;
+    max-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .spinner {
+    width: 100%;
+    height: 100%;
+    transition: transform 0.3s ease;
+
+    &.is-spinning {
+      animation: pull-to-refresh-spin 1s linear infinite;
+    }
+  }
+
+  .spinner-svg {
+    width: 100%;
+    height: 100%;
+    color: var(--anime-primary);
+    filter: drop-shadow(0 2px 4px rgba(255, 107, 157, 0.3));
+  }
+
+  .spinner-circle {
+    transition: stroke-dashoffset 0.3s ease;
+    stroke: var(--anime-primary);
+  }
+
+  &.is-refreshing .spinner {
+    animation: pull-to-refresh-spin 1s linear infinite;
+  }
+}

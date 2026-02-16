@@ -1,12 +1,15 @@
 <template>
   <div class="gallery-page">
-    <div class="gallery-container">
-      <!-- 关键：不要用 v-if 在 loading 时卸载 ImageGrid，否则 before-grid 里的 header 会闪烁 -->
+    <div class="gallery-container" v-pull-to-refresh="pullToRefreshOpts">
       <ImageGrid ref="galleryViewRef" :images="displayedImages" :image-url-map="imageSrcMap"
-        enable-ctrl-wheel-adjust-columns enable-ctrl-key-adjust-columns :enable-virtual-scroll="true"
+        :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
+        :enable-ctrl-key-adjust-columns="!IS_ANDROID"
+        :enable-virtual-scroll="true"
         :show-empty-state="true" :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing"
-        :context-menu-component="GalleryContextMenu" :on-context-command="handleGridContextCommand"
-        @scroll-stable="loadImageUrls()">
+        :actions="imageActions"
+        :on-context-command="handleGridContextCommand"
+        @scroll-stable="loadImageUrls()"
+        @android-selection-change="handleAndroidSelectionChange">
         <template #before-grid>
           <!-- 顶部工具栏 -->
           <GalleryToolbar :dedupe-loading="dedupeLoading" :dedupe-progress="dedupeProgress"
@@ -14,7 +17,7 @@
             :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled" :current-position="currentPosition"
             :month-options="monthOptions" :month-loading="monthOptionsLoading" v-model:selectedRange="selectedRange"
             @refresh="handleManualRefresh" @dedupe-by-hash="handleDedupeByHash" @show-help="openHelpDrawer"
-            @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="showCrawlerDialog = true"
+            @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="IS_ANDROID ? (showMediaPicker = true) : (showLocalImportDialog = true)"
             @cancel-dedupe="cancelDedupe" />
 
           <!-- 大页分页器 -->
@@ -22,26 +25,27 @@
             :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToBigPage" />
         </template>
 
-
         <!-- 无图片空状态：使用 ImageGrid 的 empty 插槽（只隐藏 ImageItem，不影响 header/插槽挂载） -->
         <template #empty>
           <div v-if="displayedImages.length === 0 && !loading && !isRefreshing" :key="'empty-' + refreshKey"
             class="empty fade-in">
             <EmptyState />
-            <el-button type="primary" class="empty-action-btn" @click="showCrawlerDialog = true">
+            <el-button type="primary" class="empty-action-btn" @click="IS_ANDROID ? (showMediaPicker = true) : (showLocalImportDialog = true)">
               <el-icon>
                 <Plus />
               </el-icon>
-              开始导入
+              本地导入
             </el-button>
           </div>
         </template>
       </ImageGrid>
     </div>
 
-    <!-- 收集对话框（无需放在 ImageGrid 插槽里） -->
-    <CrawlerDialog v-model="showCrawlerDialog" :plugin-icons="pluginIcons"
+    <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
+    <CrawlerDialog v-if="!IS_ANDROID" v-model="showCrawlerDialog" :plugin-icons="pluginIcons"
       :initial-config="crawlerDialogInitialConfig" />
+    <LocalImportDialog v-model="showLocalImportDialog" />
+
 
     <!-- 去重确认对话框（无需放在 ImageGrid 插槽里） -->
     <el-dialog v-model="showDedupeDialog" title="确认去重" width="420px" destroy-on-close>
@@ -63,6 +67,9 @@
       :message="removeDialogMessage" title="确认删除" @confirm="confirmRemoveImages" />
 
     <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
+
+    <!-- 安卓媒体选择器 -->
+    <MediaPicker v-if="IS_ANDROID" v-model="showMediaPicker" @select="handleMediaPickerSelect" />
   </div>
 </template>
 
@@ -71,7 +78,7 @@ import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick }
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Plus, Loading } from "@element-plus/icons-vue";
+import { Plus, Loading, Star, StarFilled, FolderAdd, Delete, InfoFilled, DocumentCopy, Picture } from "@element-plus/icons-vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -79,7 +86,9 @@ import GalleryToolbar from "@/components/GalleryToolbar.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
-import GalleryContextMenu from "@/components/contextMenu/GalleryContextMenu.vue";
+import LocalImportDialog from "@/components/LocalImportDialog.vue";
+import { createImageActions } from "@/actions/imageActions";
+import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import EmptyState from "@/components/common/EmptyState.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
@@ -95,6 +104,15 @@ import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { useBigPageRoute } from "@/composables/useBigPageRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
+import { IS_ANDROID } from "@kabegame/core/env";
+import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
+import { hasFeatureInPage } from "@/header/headerFeatures";
+import { useDesktopSelectionStore, type DesktopSelectionAction } from "@/stores/desktopSelection";
+import { open } from "@tauri-apps/plugin-dialog";
+import { stat } from "@tauri-apps/plugin-fs";
+import { useTaskDrawerStore } from "@/stores/taskDrawer";
+import MediaPicker from "@/components/MediaPicker.vue";
+import { useImageTypes } from "@/composables/useImageTypes";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -109,6 +127,9 @@ const openHelpDrawer = () => helpDrawer.open("gallery");
 const pluginStore = usePluginStore();
 const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
+const crawlerDrawerStore = useCrawlerDrawerStore();
+const desktopSelectionStore = useDesktopSelectionStore();
+const { extensions: imageExtensions, load: loadImageTypes, getMimeType } = useImageTypes();
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
 // leaf 分页：每页 1000 张图片（与后端 provider 叶子目录对齐）
@@ -268,11 +289,167 @@ const dedupeProgress = computed(() => {
   return Math.max(0, Math.min(100, pct));
 });
 const showCrawlerDialog = ref(false);
+const showLocalImportDialog = ref(false);
+const showMediaPicker = ref(false);
 const crawlerDialogInitialConfig = ref<{
   pluginId?: string;
   outputDir?: string;
   vars?: Record<string, any>;
 } | undefined>(undefined);
+
+// 打开导入对话框/抽屉的统一处理函数
+const handleShowCrawlerDialog = async () => {
+  if (IS_ANDROID) {
+    // 安卓下：显示媒体选择器
+    showMediaPicker.value = true;
+  } else {
+    showCrawlerDialog.value = true;
+  }
+};
+
+// 处理媒体选择器的选择事件（先关闭抽屉，再处理）
+const handleMediaPickerSelect = async (type: "image" | "folder" | "archive") => {
+  showMediaPicker.value = false;
+  await handleAndroidMediaSelection(type);
+};
+
+// 安卓下的媒体选择处理函数
+const handleAndroidMediaSelection = async (type: "image" | "folder" | "archive") => {
+  try {
+    if (type === 'image') {
+      await loadImageTypes();
+      const selected = await open({
+        directory: false,
+        multiple: true,
+        filters: [
+          {
+            name: '图片',
+            extensions: imageExtensions.value.length ? imageExtensions.value : ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'],
+          },
+        ],
+      });
+
+      if (!selected) {
+        return; // 用户取消
+      }
+
+      const paths = Array.isArray(selected) ? selected : [selected];
+      if (paths.length === 0) {
+        return;
+      }
+
+      // 处理多个图片文件
+      const items: Array<{ path: string; isDirectory: boolean }> = [];
+      for (const path of paths) {
+        try {
+          const metadata = await stat(path);
+          if (!metadata.isDirectory) {
+            items.push({ path, isDirectory: false });
+          }
+        } catch (error) {
+          console.error('[Gallery] 检查文件失败:', path, error);
+        }
+      }
+
+      if (items.length === 0) {
+        ElMessage.warning('没有找到可导入的图片');
+        return;
+      }
+
+      const pathsToImport = items.map((it) => it.path);
+      crawlerStore.addTask("本地导入", undefined, {
+        paths: pathsToImport,
+        recursive: true,
+        include_archive: false,
+      });
+      ElMessage.success("已添加本地导入任务");
+    } else if (type === 'archive') {
+      // 选择压缩文件（支持 .zip、.rar、.7z、.tar、.gz、.bz2、.xz）
+      const selected = await open({
+        directory: false,
+        multiple: true,
+        filters: [
+          {
+            name: '压缩文件',
+            extensions: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'],
+          },
+        ],
+      });
+
+      if (!selected) {
+        return;
+      }
+
+      const paths = Array.isArray(selected) ? selected : [selected];
+      if (paths.length === 0) return;
+
+      const items: Array<{ path: string; isDirectory: boolean }> = [];
+      for (const path of paths) {
+        try {
+          const metadata = await stat(path);
+          if (!metadata.isDirectory) {
+            items.push({ path, isDirectory: false });
+          }
+        } catch (error) {
+          console.error('[Gallery] 检查压缩文件失败:', path, error);
+        }
+      }
+
+      if (items.length === 0) {
+        ElMessage.warning('没有找到可导入的压缩文件');
+        return;
+      }
+
+      const pathsToImport = items.map((it) => it.path);
+      crawlerStore.addTask("本地导入", undefined, {
+        paths: pathsToImport,
+        recursive: true,
+        include_archive: false,
+      });
+      ElMessage.success("已添加本地导入任务");
+    } else if (type === 'folder') {
+      // 选择文件夹（Android 使用自定义插件）
+      try {
+        const result = await invoke<{ uri: string; path?: string }>('plugin:folder-picker|pickFolder');
+        
+        if (!result || !result.uri) {
+          return; // 用户取消
+        }
+
+        // 优先使用 path，如果没有则使用 uri
+        const folderPath = result.path || result.uri;
+
+        // 检查是否为文件夹（如果有 path）
+        if (result.path) {
+          try {
+            const metadata = await stat(result.path);
+            if (!metadata.isDirectory) {
+              ElMessage.warning('请选择文件夹');
+              return;
+            }
+          } catch (error) {
+            console.error('[Gallery] 检查文件夹失败:', result.path, error);
+            // 继续使用 uri，即使无法验证路径
+          }
+        }
+
+        crawlerStore.addTask("本地导入", undefined, {
+          paths: [folderPath],
+          recursive: true,
+          include_archive: false,
+        });
+        ElMessage.success("已添加本地导入任务");
+      } catch (error) {
+        console.error('[Gallery] 选择文件夹失败:', error);
+      }
+    }
+  } catch (error) {
+    console.error('[Gallery] 安卓媒体选择失败:', error);
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error('选择失败: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+};
 const showDedupeDialog = ref(false); // 去重确认对话框
 const dedupeDeleteFiles = ref(false); // 是否删除本地文件
 // 移除/删除对话框相关
@@ -319,6 +496,17 @@ const addToAlbumImageIds = ref<string[]>([]);
 const isRefreshing = ref(false); // 刷新中状态，用于阻止刷新时 EmptyState 闪烁
 // 刷新计数器，用于强制空占位符重新挂载以触发动画
 const refreshKey = ref(0);
+// 根据 pages 列表判断刷新功能是否存在
+const hasRefreshFeature = computed(() => hasFeatureInPage("gallery", "refresh"));
+const pullToRefreshOpts = computed(() =>
+  IS_ANDROID && hasRefreshFeature.value
+    ? { onRefresh: handleManualRefresh, refreshing: isRefreshing.value }
+    : undefined
+);
+
+// Image actions for context menu / action sheet
+const imageActions = computed(() => createImageActions({ removeText: "删除" }));
+
 // dragScroll 拖拽滚动期间：暂停实时 loadImageUrls，优先保证滚动帧率
 const isInteracting = ref(false);
 // 始终启用 images-change 监听，不管是否在前台（用于同步删除等操作）
@@ -592,6 +780,100 @@ const loadPluginIcons = async () => {
   }
 };
 
+// Android 选择模式：构建操作栏 actions
+const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): DesktopSelectionAction[] => {
+  const countText = selectedCount > 1 ? `(${selectedCount})` : "";
+  
+  // 获取第一个选中图片的状态（用于判断收藏状态）
+  const firstSelectedImage = displayedImages.value.find(img => selectedIds.has(img.id));
+  const isFavorite = firstSelectedImage?.favorite ?? false;
+  
+  if (selectedCount === 1) {
+    // 单选
+    return [
+      {
+        key: "favorite",
+        label: isFavorite ? "取消收藏" : "收藏",
+        icon: isFavorite ? StarFilled : Star,
+        command: "favorite",
+      },
+      {
+        key: "addToAlbum",
+        label: "加入画册",
+        icon: FolderAdd,
+        command: "addToAlbum",
+      },
+      {
+        key: "remove",
+        label: "删除",
+        icon: Delete,
+        command: "remove",
+      },
+    ];
+  } else {
+    // 多选
+    return [
+      {
+        key: "favorite",
+        label: `收藏${countText}`,
+        icon: Star,
+        command: "favorite",
+      },
+      {
+        key: "addToAlbum",
+        label: `加入画册${countText}`,
+        icon: FolderAdd,
+        command: "addToAlbum",
+      },
+      {
+        key: "remove",
+        label: `删除${countText}`,
+        icon: Delete,
+        command: "remove",
+      },
+    ];
+  }
+};
+
+// 统一关闭/清理 Android 选择模式：清空 Grid 选择并收起底部 bar（用于返回键、取消按钮、选择归零等）
+const closeSelectionMode = () => {
+  if (!IS_ANDROID) return;
+  galleryViewRef.value?.exitAndroidSelectionMode?.();
+  desktopSelectionStore.clear();
+};
+
+// Android 选择变化处理：用 desktop 选择数量决定状态
+const handleAndroidSelectionChange = (payload: { active: boolean; selectedCount: number; selectedIds: ReadonlySet<string> }) => {
+  if (!IS_ANDROID) return;
+  
+  if (!payload.active || payload.selectedCount === 0) {
+    desktopSelectionStore.clear();
+    return;
+  }
+
+  const actions = buildSelectionActions(payload.selectedCount, payload.selectedIds);
+  
+  if (desktopSelectionStore.selectedCount > 0) {
+    desktopSelectionStore.update(payload.selectedCount, actions);
+  } else {
+    desktopSelectionStore.set(
+      payload.selectedCount,
+      actions,
+      (cmd: string) => {
+        const firstImage = displayedImages.value.find(img => payload.selectedIds.has(img.id));
+        if (!firstImage) return;
+        const commandPayload: ContextCommandPayload = {
+          command: cmd as any,
+          image: firstImage,
+          selectedImageIds: payload.selectedIds,
+        };
+        void handleGridContextCommand(commandPayload);
+      },
+      () => closeSelectionMode()
+    );
+  }
+};
+
 const handleGridContextCommand = async (
   payload: ContextCommandPayload
 ): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
@@ -684,6 +966,26 @@ const handleGridContextCommand = async (
     case "addToAlbum":
       addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
       showAddToAlbumDialog.value = true;
+      return null;
+    case "share":
+      if (!isMultiSelect && imagesToProcess[0]) {
+        try {
+          const image = imagesToProcess[0];
+          const filePath = image.localPath;
+          if (!filePath) {
+            ElMessage.error("图片路径不存在");
+            return null;
+          }
+          
+          const ext = filePath.split('.').pop()?.toLowerCase() || '';
+          await loadImageTypes();
+          const mimeType = getMimeType(ext);
+          await invoke("share_file", { filePath, mimeType });
+        } catch (error) {
+          console.error("分享失败:", error);
+          ElMessage.error("分享失败");
+        }
+      }
       return null;
 
     // 画廊特有：删除/移除确认对话框
@@ -991,59 +1293,40 @@ onMounted(async () => {
     }
   });
 
-  // 监听 App.vue 发送的文件拖拽事件
-  const handleFileDrop = async (event: Event) => {
-    const customEvent = event as CustomEvent<{
-      path: string;
-      isDirectory: boolean;
-      outputDir: string;
-    }>;
+  // 监听 App.vue 发送的文件拖拽事件（仅非安卓平台）
+  if (!IS_ANDROID) {
+    const handleFileDrop = async (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        path: string;
+        isDirectory: boolean;
+        outputDir: string;
+      }>;
 
-    const { path, isDirectory, outputDir } = customEvent.detail;
+      const { path, isDirectory, outputDir } = customEvent.detail;
 
-    try {
-      // 确保在画廊页面（App.vue 已经处理了路由跳转，这里只是双重保险）
-      const currentPath = router.currentRoute.value.path;
-      if (currentPath !== '/gallery') {
-        await router.push("/gallery/全部");
-        await nextTick();
-        // 再等待一下确保组件已激活
-        await new Promise(resolve => setTimeout(resolve, 200));
+      try {
+        // 确保在画廊页面（App.vue 已经处理了路由跳转，这里只是双重保险）
+        const currentPath = router.currentRoute.value.path;
+        if (currentPath !== '/gallery') {
+          await router.push("/gallery/全部");
+          await nextTick();
+          // 再等待一下确保组件已激活
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+
+        crawlerStore.addTask("本地导入", undefined, {
+          paths: [path],
+          recursive: true,
+          include_archive: false,
+        });
+        ElMessage.success("已添加本地导入任务");
+      } catch (error) {
+        console.error('[Gallery] 处理文件拖拽事件失败:', error);
+        ElMessage.error('处理文件拖拽失败: ' + (error instanceof Error ? error.message : String(error)));
       }
-
-      if (isDirectory) {
-        // 文件夹：使用 local-import 插件
-        console.log('[Gallery] 设置文件夹导入配置，路径:', path);
-        crawlerDialogInitialConfig.value = {
-          pluginId: 'local-import',
-          outputDir: path,
-          vars: {
-            folder_path: path,
-          },
-        };
-        ElMessage.success('文件夹已准备导入');
-      } else {
-        // 文件：使用 local-import 插件
-        console.log('[Gallery] 设置文件导入配置，路径:', path, '目录:', outputDir);
-        crawlerDialogInitialConfig.value = {
-          pluginId: 'local-import',
-          outputDir: outputDir,
-          vars: {
-            file_path: path,
-          },
-        };
-        ElMessage.success('文件已准备导入');
-      }
-
-      // 打开对话框
-      showCrawlerDialog.value = true;
-      await nextTick();
-    } catch (error) {
-      console.error('[Gallery] 处理文件拖拽事件失败:', error);
-      ElMessage.error('处理文件拖拽失败: ' + (error instanceof Error ? error.message : String(error)));
-    }
-  };
-  window.addEventListener('file-drop', handleFileDrop);
+    };
+    window.addEventListener('file-drop', handleFileDrop);
+  }
 });
 
 // 在开发环境中监控组件更新，帮助调试重新渲染问题
@@ -1096,6 +1379,10 @@ onActivated(async () => {
 onDeactivated(() => {
   isGalleryActive.value = false;
   // keep-alive 缓存时不清理 Blob URL，保持图片 URL 有效
+  // Android 选择模式：统一关闭并收起 bar
+  if (IS_ANDROID) {
+    closeSelectionMode();
+  }
 });
 </script>
 

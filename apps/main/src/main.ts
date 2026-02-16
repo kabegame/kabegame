@@ -7,8 +7,16 @@ import App from "./App.vue";
 import router from "./router";
 import "virtual:uno.css";
 import "@kabegame/core/styles/anime-theme.css";
+import { vPullToRefresh } from "@kabegame/core/directives/pullToRefresh";
+import { IS_ANDROID } from "@kabegame/core/env";
+
+if (IS_ANDROID) {
+  document.documentElement.classList.add("platform-android");
+}
 
 const app = createApp(App);
+
+app.directive("pull-to-refresh", vPullToRefresh);
 
 // 注册所有图标
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {

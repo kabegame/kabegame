@@ -246,7 +246,9 @@ pub async fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     // 同时更新运行时调度器配置
-    kabegame_core::crawler::TaskScheduler::global().set_download_concurrency(count);
+    kabegame_core::crawler::TaskScheduler::global()
+        .set_download_concurrency()
+        .await;
     Ok(())
 }
 
@@ -291,12 +293,12 @@ pub fn get_desktop_resolution(app: tauri::AppHandle) -> Result<(u32, u32), Strin
         let window = app
             .get_webview_window("main")
             .ok_or_else(|| "找不到主窗口".to_string())?;
-        
+
         let monitor = window
             .primary_monitor()
             .map_err(|e| format!("获取主显示器失败: {}", e))?
             .ok_or_else(|| "找不到主显示器".to_string())?;
-        
+
         let size = monitor.size();
         Ok((size.width, size.height))
     }

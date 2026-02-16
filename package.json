@@ -22,6 +22,7 @@
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
     "@tauri-apps/api": "^2.10",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.0",
     "@tauri-apps/plugin-fs": "^2.0",
     "@tauri-apps/plugin-shell": "^2.0",
@@ -32,7 +33,8 @@
     "monaco-editor": "^0.52.0",
     "pinia": "^2.1.7",
     "vue": "^3.4.21",
-    "vue-router": "^4.3.0"
+    "vue-router": "^4.3.0",
+    "winston": "^3.19.0"
   },
   "devDependencies": {
     "@nx/devkit": "^20.0.0",

@@ -1,0 +1,15 @@
+# Kabegame resource plugin (Android: extract bundled plugins, pick kgpg file)
+
+[[permission]]
+identifier = "allow-pick-kgpg-file"
+description = "Enables the pickKgpgFile command (Android: open file picker, copy content URI to cache)."
+commands.allow = ["pickKgpgFile"]
+
+[[permission]]
+identifier = "allow-extract-bundled-plugins"
+description = "Enables the extractBundledPlugins command (Android: extract APK assets to data dir)."
+commands.allow = ["extractBundledPlugins"]
+
+[default]
+description = "Default permissions for the resource plugin, which enables all commands."
+permissions = ["allow-pick-kgpg-file", "allow-extract-bundled-plugins"]

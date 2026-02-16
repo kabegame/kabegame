@@ -4,6 +4,7 @@ use crate::plugin::{PluginManager, VarDefinition, VarOption};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
+use url::Url;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -54,7 +55,7 @@ impl TaskScheduler {
             let queue = Arc::clone(&self.queue);
             let running = Arc::clone(&self.running_workers);
             // worker_loop 是阻塞函数（使用 Condvar::wait），必须在 blocking 线程池中运行
-            // 因为 rhai 是单线程，不能在主线程的tokio上下文中运行
+            // 因为 rhai 是同步，不能在主线程的tokio上下文中运行
             tokio::task::spawn_blocking(move || {
                 tokio::runtime::Runtime::new().unwrap(); 
                 worker_loop(download_queue, queue, running)
@@ -98,48 +99,14 @@ impl TaskScheduler {
         Ok(req.task_id)
     }
 
-    /// 应用启动时恢复队列：
-    /// - pending：直接重新入队
-    /// - running：认为上次运行被中断，改成 pending 并重新入队（避免永久卡死）
-    pub fn restore_pending_tasks(&self) -> Result<usize, String> {
-        let storage = Storage::global();
-        let tasks = storage.get_all_tasks()?;
-        let mut restored = 0usize;
-
-        for t in tasks {
-            if t.status == "pending" || t.status == "running" {
-                if t.status == "running" {
-                    let mut tt = t.clone();
-                    tt.status = "pending".to_string();
-                    tt.error = Some("上次运行中断，已重新排队".to_string());
-                    tt.end_time = None;
-                    let _ = storage.update_task(tt);
-                }
-
-                self.enqueue(CrawlTaskRequest {
-                    plugin_id: t.plugin_id,
-                    task_id: t.id,
-                    output_dir: t.output_dir,
-                    user_config: t.user_config,
-                    http_headers: t.http_headers,
-                    output_album_id: t.output_album_id,
-                    plugin_file_path: None,
-                })?;
-                restored += 1;
-            }
-        }
-
-        Ok(restored)
-    }
-
     #[allow(dead_code)]
     pub fn running_worker_count(&self) -> usize {
         self.running_workers.load(Ordering::Relaxed)
     }
 
     /// 取消任务（标记取消 + 唤醒等待中的下载）
-    pub async fn cancel_task(&self, task_id: &str) -> Result<(), String> {
-        self.download_queue.cancel_task(task_id).await
+    pub async fn cancel_task(&self, task_id: &str) {
+        self.download_queue.cancel_task(task_id).await;
     }
 
     /// 失败图片重试：在 daemon 侧直接复用 DownloadQueue
@@ -171,8 +138,9 @@ impl TaskScheduler {
                 .as_millis() as u64
         };
 
+        let url = Url::parse(&item.url).map_err(|e| format!("Invalid URL: {}", e))?;
         tokio::runtime::Handle::current().block_on(self.download_queue.download_image(
-            item.url,
+            url,
             images_dir,
             item.plugin_id,
             item.task_id,
@@ -182,8 +150,8 @@ impl TaskScheduler {
         ))
     }
 
-    pub fn set_download_concurrency(&self, desired: u32) {
-        self.download_queue.set_desired_concurrency(desired);
+    pub async fn set_download_concurrency(&self) {
+        self.download_queue.set_desired_concurrency_from_settings().await;
         self.download_queue.notify_all_waiting();
     }
 
@@ -231,8 +199,8 @@ impl TaskScheduler {
     /// 启动下载 worker
     pub async fn start_download_workers_async(&self) {
         let dq = self.download_queue();
-        let initial_workers = dq.pool.total_workers.load(std::sync::atomic::Ordering::Relaxed);
-        dq.start_download_workers(initial_workers);
+        let initial_workers = dq.pool.total_workers.lock().await;
+        dq.start_download_workers(*initial_workers).await;
     }
 }
 
@@ -293,14 +261,15 @@ fn worker_loop(
                     Err(e) => e.into_inner(),
                 };
             }
-            guard.pop_front()
+            if let Some(req) = guard.pop_front() {
+                req
+            } else {
+                continue;
+            }
         };
 
-        let Some(req) = req else { continue };
-
         // 若任务已取消（排队期间），直接 canceled
-        if tokio::runtime::Handle::current().block_on(download_queue.is_task_canceled(&req.task_id))
-        {
+        if download_queue.is_task_canceled_blocking(&req.task_id) {
             let end = now_ms();
             let e = "Task canceled".to_string();
             GlobalEmitter::global().emit_task_error(&req.task_id, &e);
@@ -349,9 +318,7 @@ fn worker_loop(
         match res {
             Ok(_) => {
                 let end = now_ms();
-                if tokio::runtime::Handle::current()
-                    .block_on(download_queue.is_task_canceled(&req.task_id))
-                {
+                if download_queue.is_task_canceled_blocking(&req.task_id) {
                     let e = "Task canceled".to_string();
                     #[cfg(feature = "ipc-server")]
                     GlobalEmitter::global().emit_task_error(&req.task_id, &e);
@@ -441,6 +408,16 @@ fn run_task(
             req.plugin_id, req.task_id
         ),
     );
+
+    // 内置本地导入：不运行 Rhai，直接执行内置例程
+    if req.plugin_id == "本地导入" {
+        return crate::crawler::local_import::run_builtin_local_import(
+            &req.task_id,
+            req.user_config.clone(),
+            req.output_album_id.clone(),
+            &*download_queue,
+        );
+    }
 
     // 两种运行模式：
     // 1) 已安装插件：通过 plugin_id 查找并运行

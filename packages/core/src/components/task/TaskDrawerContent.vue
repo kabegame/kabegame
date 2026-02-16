@@ -21,11 +21,7 @@
                 <div class="download-url" :title="download.url">{{ download.url }}</div>
                 <div class="download-meta">
                   <el-tag size="small" type="info">{{ download.plugin_id }}</el-tag>
-                  <span v-if="isShimmerState(download)" class="download-state-text shimmer-text"
-                    :title="downloadStateText(download)">
-                    {{ downloadStateText(download) }}
-                  </span>
-                  <el-tag v-else size="small" :type="downloadStateTagType(download)">
+                  <el-tag size="small" :type="downloadStateTagType(download)">
                     {{ downloadStateText(download) }}
                   </el-tag>
                 </div>
@@ -39,8 +35,8 @@
           </transition-group>
         </div>
       </div>
-      <div v-if="appStatusText" class="downloads-substatus" :title="appStatusText">
-        {{ appStatusText }}
+      <div v-if="archiverLogText" class="downloads-substatus" :title="archiverLogText">
+        {{ archiverLogText }}
       </div>
     </div>
 
@@ -286,8 +282,8 @@ let unlistenDownloadProgress: null | (() => void) = null;
 const downloadStateByKey = ref<Record<string, { state: string; error?: string; updatedAt: number }>>({});
 let unlistenDownloadState: null | (() => void) = null;
 
-const appStatusText = ref("");
-let unlistenAppStatus: null | (() => void) = null;
+const archiverLogText = ref("");
+let unlistenArchiverLog: null | (() => void) = null;
 
 // pending 队列数量（等待中的下载）
 const pendingCount = ref(0);
@@ -395,11 +391,6 @@ const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
 
   // 非 completed：确保不会误触发延迟移除
   cancelRemoveCompleted(key);
-};
-
-const isShimmerState = (d: ActiveDownloadInfo) => {
-  const st = getEffectiveDownloadState(d);
-  return st === "processing" || st === "extracting";
 };
 
 const downloadStateText = (d: ActiveDownloadInfo) => {
@@ -580,12 +571,12 @@ const initEventListeners = async () => {
   }
   try {
     const { listen } = await import("@tauri-apps/api/event");
-    unlistenAppStatus = await listen<{ text?: string }>("app-status", (event) => {
+    unlistenArchiverLog = await listen<{ text?: string }>("archiver-log", (event) => {
       const next = String((event.payload as any)?.text ?? "").trim();
-      appStatusText.value = next;
+      archiverLogText.value = next;
     });
   } catch (error) {
-    console.error("监听 app-status 失败:", error);
+    console.error("监听 archiver-log 失败:", error);
   }
   try {
     const { listen } = await import("@tauri-apps/api/event");
@@ -620,11 +611,11 @@ const stopDownloadSync = () => {
     unlistenDownloadState = null;
   }
   try {
-    unlistenAppStatus?.();
+    unlistenArchiverLog?.();
   } catch {
     // ignore
   } finally {
-    unlistenAppStatus = null;
+    unlistenArchiverLog = null;
   }
   try {
     unlistenPendingQueueChange?.();
@@ -690,8 +681,17 @@ const getStatusText = (status: string) => {
   return map[status] || status;
 };
 
+const BUILTIN_LOCAL_IMPORT_META: Record<string, PluginVarMeta> = {
+  paths: { name: "路径列表", type: "text" },
+  recursive: { name: "递归子文件夹", type: "boolean" },
+};
+
 const ensurePluginVars = async (pluginId: string) => {
   if (pluginVarMetaMap.value[pluginId]) return;
+  if (pluginId === "本地导入") {
+    pluginVarMetaMap.value = { ...pluginVarMetaMap.value, [pluginId]: BUILTIN_LOCAL_IMPORT_META };
+    return;
+  }
   try {
     const vars = await invoke<Array<{ key: string; name: string; type?: string; options?: VarOption[] }> | null>(
       "get_plugin_vars",
@@ -718,14 +718,22 @@ const ensurePluginVars = async (pluginId: string) => {
   }
 };
 
-const getVarDisplayName = (pluginId: string, key: string) => pluginVarMetaMap.value[pluginId]?.[key]?.name || key;
+const getVarDisplayName = (pluginId: string, key: string) =>
+  (pluginId === "本地导入" && BUILTIN_LOCAL_IMPORT_META[key]?.name) ||
+  pluginVarMetaMap.value[pluginId]?.[key]?.name ||
+  key;
 
 const formatConfigValue = (pluginId: string, key: string, value: any): string => {
   const meta = pluginVarMetaMap.value[pluginId]?.[key];
   const map = meta?.optionNameByVariable || {};
   if (value === null || value === undefined) return "未设置";
   if (typeof value === "boolean") return value ? "是" : "否";
-  if (Array.isArray(value)) return value.map((v) => (typeof v === "string" ? map[v] || v : String(v))).join(", ");
+  if (Array.isArray(value)) {
+    if (pluginId === "本地导入" && key === "paths" && value.length > 3) {
+      return `${value.length} 个路径`;
+    }
+    return value.map((v) => (typeof v === "string" ? map[v] || v : String(v))).join(", ");
+  }
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, any>);
     if (entries.length > 0 && entries.every(([, v]) => typeof v === "boolean")) {
@@ -770,7 +778,13 @@ async function handleCopyError(task: ScriptTask) {
   if (task.endTime) text += `结束时间：${formatDate(task.endTime)}\n`;
   text += `进度：${Math.round(Number(task.progress || 0))}%\n`;
   try {
-    await navigator.clipboard.writeText(text);
+    const { isTauri } = await import("@tauri-apps/api/core");
+    if (isTauri()) {
+      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+      await writeText(text);
+    } else {
+      await navigator.clipboard.writeText(text);
+    }
     ElMessage.success("已复制到剪贴板");
   } catch (error) {
     console.error("复制失败:", error);
@@ -868,28 +882,6 @@ onUnmounted(() => {
               display: flex;
               align-items: center;
               gap: 8px;
-
-              .download-state-text {
-                font-size: 12px;
-                font-weight: 600;
-                max-width: 160px;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-              }
-
-              .shimmer-text {
-                color: var(--anime-text-primary);
-                background: linear-gradient(90deg,
-                    rgba(255, 255, 255, 0.15) 0%,
-                    rgba(255, 255, 255, 0.85) 50%,
-                    rgba(255, 255, 255, 0.15) 100%);
-                background-size: 200% 100%;
-                -webkit-background-clip: text;
-                background-clip: text;
-                -webkit-text-fill-color: transparent;
-                animation: shimmer-move 1.25s linear infinite;
-              }
             }
 
             .download-progress {
@@ -1047,7 +1039,7 @@ onUnmounted(() => {
 
     .error-message {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 8px;
       margin-bottom: 12px;
       color: var(--anime-text-primary);
@@ -1075,6 +1067,7 @@ onUnmounted(() => {
       font-size: 14px;
       word-break: break-word;
       line-height: 1.5;
+      white-space: pre-wrap;
     }
 
     .task-header-right {
@@ -1284,16 +1277,6 @@ onUnmounted(() => {
       color: var(--anime-text-secondary);
       font-size: 13px;
     }
-  }
-}
-
-@keyframes shimmer-move {
-  0% {
-    background-position: 200% 0;
-  }
-
-  100% {
-    background-position: -200% 0;
   }
 }
 

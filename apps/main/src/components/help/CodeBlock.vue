@@ -19,7 +19,13 @@ const copied = ref(false);
 
 const handleCopy = async () => {
     try {
-        await navigator.clipboard.writeText(props.code);
+        const { isTauri } = await import("@tauri-apps/api/core");
+        if (isTauri()) {
+            const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+            await writeText(props.code);
+        } else {
+            await navigator.clipboard.writeText(props.code);
+        }
         copied.value = true;
         ElMessage.success("已复制到剪贴板");
         setTimeout(() => {

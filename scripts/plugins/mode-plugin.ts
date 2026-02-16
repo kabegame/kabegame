@@ -69,7 +69,8 @@ export class ModePlugin extends BasePlugin {
     });
 
     bs.hooks.beforeBuild.tap(this.name, (comp) => {
-      if (comp !== Component.MAIN) {
+      const component = comp ? new Component(comp) : bs.context.component!;
+      if (!component.isMain) {
         return;
       }
       this.packagePlugins(bs);
@@ -147,10 +148,12 @@ export class ModePlugin extends BasePlugin {
       if (cmd.isBuild && !comp.isMain) {
         return;
       }
+      // 目前 normal模式不打包插件
+      if (mode.isNormal) {
+        return;
+      }
       // 开发和生产都打包到 resources 目录
-      const packageTarget = !mode.isNormal
-        ? "crawler-plugins:package-to-resources"
-        : "crawler-plugins:package-local-to-resources";
+      const packageTarget = "crawler-plugins:package-to-resources"
       this.log(chalk.blue(`打包插件到资源: ${packageTarget}`));
       run("nx", ["run", packageTarget], {
         bin: "bun",

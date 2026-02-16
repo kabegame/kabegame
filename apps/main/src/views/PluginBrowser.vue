@@ -1,33 +1,52 @@
 <template>
-  <div class="plugin-browser-container">
-    <!-- 顶部工具栏 -->
-    <PageHeader title="源管理">
-      <el-button @click="handleRefresh" :loading="isRefreshing">
-        <el-icon>
-          <Refresh />
-        </el-icon>
-        刷新
-      </el-button>
-      <el-button type="primary" @click="showImportDialog = true">
-        <el-icon>
-          <Upload />
-        </el-icon>
-        导入源
-      </el-button>
-      <el-button @click="openHelpDrawer" circle title="帮助">
-        <el-icon>
-          <QuestionFilled />
-        </el-icon>
-      </el-button>
-      <el-button @click="openQuickSettings" circle>
-        <el-icon>
-          <Setting />
-        </el-icon>
-      </el-button>
-    </PageHeader>
+  <div class="plugin-browser-container" v-pull-to-refresh="pullToRefreshOpts">
+    <div class="plugin-browser-content">
+        <PageHeader title="源管理">
+          <!-- 非 Android：保持原有布局 -->
+          <template v-if="!IS_ANDROID">
+            <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing">
+              <el-icon>
+                <Refresh />
+              </el-icon>
+              刷新
+            </el-button>
+            <el-button type="primary" @click="showImportDialog = true">
+              <el-icon>
+                <Upload />
+              </el-icon>
+              导入源
+            </el-button>
+            <el-button @click="openHelpDrawer" circle title="帮助">
+              <el-icon>
+                <QuestionFilled />
+              </el-icon>
+            </el-button>
+            <el-button @click="openQuickSettings" circle>
+              <el-icon>
+                <Setting />
+              </el-icon>
+            </el-button>
+          </template>
+          <!-- Android：使用 headerFeatures 驱动 -->
+          <template v-else>
+            <!-- 直显功能：导入源（主操作）；Android 直接打开文件选择器，无需弹窗 -->
+            <el-button type="primary" @click="IS_ANDROID ? triggerImportDirect() : (showImportDialog = true)">
+              <el-icon>
+                <Upload />
+              </el-icon>
+              导入源
+            </el-button>
+            <!-- 溢出菜单：设置/管理 -->
+            <AndroidHeaderOverflow
+              v-if="foldedFeatures.length > 0"
+              :features="foldedFeatures"
+              @select="handleOverflowSelect"
+            />
+          </template>
+        </PageHeader>
 
-    <!-- Tab 切换 -->
-    <StyledTabs v-model="activeTab" :before-leave="beforeLeaveTab">
+        <!-- Tab 切换 -->
+        <StyledTabs v-model="activeTab" :before-leave="beforeLeaveTab">
       <el-tab-pane label="已安装源" name="installed">
         <!-- 已安装插件配置表格 -->
         <div v-if="showSkeletonBySource['installed'] && activeTab === 'installed'" class="loading-skeleton">
@@ -167,7 +186,8 @@
           <el-empty description="点击上方“添加源”标签页可添加新的商店源" />
         </div>
       </el-tab-pane>
-    </StyledTabs>
+        </StyledTabs>
+    </div>
 
     <!-- 商店源管理 -->
     <el-dialog v-if="!IS_LOCAL_MODE && !IS_LIGHT_MODE" v-model="showSourcesDialog" title="商店源" width="720px">
@@ -260,10 +280,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
+import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
 import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { IS_LIGHT_MODE, IS_LOCAL_MODE } from "@kabegame/core/env";
+import { IS_LIGHT_MODE, IS_LOCAL_MODE, IS_ANDROID } from "@kabegame/core/env";
+import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
 
 interface PluginSource {
   id: string;
@@ -311,6 +333,33 @@ const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("pluginbrowser");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("pluginbrowser");
+
+const foldedFeatures = computed(() => {
+  return getFoldedFeaturesForPage("pluginbrowser");
+});
+
+// 根据 pages 列表判断刷新功能是否存在
+const hasRefreshFeature = computed(() => hasFeatureInPage("pluginbrowser", "refresh"));
+const pullToRefreshOpts = computed(() =>
+  IS_ANDROID && hasRefreshFeature.value
+    ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
+    : undefined
+);
+
+// 处理溢出菜单选择
+const handleOverflowSelect = (featureId: HeaderFeatureId) => {
+  switch (featureId) {
+    case "help":
+      openHelpDrawer();
+      break;
+    case "quickSettings":
+      openQuickSettings();
+      break;
+    case "manageSources":
+      showSourcesDialog.value = true;
+      break;
+  }
+};
 
 const isLocalMode = computed(() => IS_LOCAL_MODE);
 
@@ -851,6 +900,22 @@ const selectPluginFile = async () => {
   }
 };
 
+/** Android：直接打开文件选择器，选择后执行导入（不显示导入弹窗）。
+ *  使用 Kotlin pickKgpgFile 将 content:// URI 复制到应用私有目录，返回可读路径 */
+const triggerImportDirect = async () => {
+  try {
+    const res = await invoke<{ path: string }>("plugin:resource|pickKgpgFile");
+    const filePath = res?.path;
+    if (!filePath) return;
+
+    selectedFilePath.value = filePath;
+    await handleImport();
+  } catch (error) {
+    console.error("选择文件失败:", error);
+    ElMessage.error("选择文件失败");
+  }
+};
+
 const handleImport = async () => {
   if (!selectedFilePath.value) return;
 
@@ -1155,8 +1220,9 @@ watch(activeTab, async (tab) => {
 .plugin-browser-container {
   width: 100%;
   height: 100%;
+  display: flex;
+  flex-direction: column;
   padding: 20px;
-  overflow-y: auto;
   /* 隐藏滚动条 */
   scrollbar-width: none;
   /* Firefox */
@@ -1167,7 +1233,22 @@ watch(activeTab, async (tab) => {
     display: none;
     /* Chrome, Safari, Opera */
   }
+}
 
+.plugin-browser-content {
+  height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  /* 隐藏滚动条 */
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* IE and Edge */
+
+  &::-webkit-scrollbar {
+    display: none;
+    /* Chrome, Safari, Opera */
+  }
 
   .filter-bar {
     display: flex;

@@ -5,6 +5,7 @@
 import { spawnSync, spawn } from "child_process";
 import { fileURLToPath } from "url";
 import path from "path";
+import os from "os";
 import fs from "fs";
 import chalk from "chalk";
 import { OSPlugin } from "./plugins/os-plugin";
@@ -26,6 +27,19 @@ export const RESOURCES_PLUGINS_DIR = path.join(RESOURCES_DIR, "plugins");
 export const RESOURCES_BIN_DIR = path.join(RESOURCES_DIR, "bin");
 export const SRC_TAURI_DIR = path.join(ROOT, "src-tauri");
 export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
+
+/** 开发服务器 host：供 tauri.conf 的 devUrl / CSP 等使用；可被 TAURI_DEV_HOST / VITE_DEV_SERVER_HOST 覆盖 */
+export function getDevServerHost(): string {
+  const envHost = process.env.TAURI_DEV_HOST || process.env.VITE_DEV_SERVER_HOST;
+  if (envHost) return envHost;
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces || {})) {
+    for (const iface of ifaces![name]!) {
+      if (iface.family === "IPv4" && !iface.internal) return iface.address;
+    }
+  }
+  return "localhost";
+}
 
 interface RunOptions {
   bin?: string;

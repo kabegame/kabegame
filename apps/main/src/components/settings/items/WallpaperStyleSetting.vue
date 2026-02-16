@@ -8,29 +8,45 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { computed, ref, watch } from "vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
+import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_PLASMA, IS_WINDOWS } from "@kabegame/core/env";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
 const props = defineProps<{
   disabled?: boolean;
 }>();
 
-type Style = "fill" | "fit" | "stretch" | "center" | "tile";
+type Style = "fill" | "fit" | "stretch" | "center" | "tile" | "system";
 type Opt = { label: string; value: Style; desc: string };
+
+const SYSTEM_OPT: Opt = {
+  label: "按照系统",
+  value: "system",
+  desc: "按照系统 - 根据系统设置显示",
+};
+
+const ALL_STYLES: Style[] = ["fill", "fit", "stretch", "center", "tile"];
+
+/** 根据当前运行环境返回原生壁纸支持的填充模式列表 */
+function getNativeWallpaperStyles(): Style[] {
+  if (IS_WINDOWS) return [...ALL_STYLES];
+  if (IS_MACOS) return [];
+  if (IS_LINUX) return IS_PLASMA ? ["fill", "fit", "center", "tile"] : [...ALL_STYLES];
+  if (IS_ANDROID) return ["fill"];
+  return ["fill"];
+}
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperStyle");
 const settingsStore = useSettingsStore();
 const { wallpaperModeSwitching } = useUiStore();
 
-const nativeWallpaperStyles = ref<Style[]>([]);
+const nativeWallpaperStyles = computed<Style[]>(() => getNativeWallpaperStyles());
 
 const mode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 
-const allOptions: Opt[] = [
+const styleOptions: Opt[] = [
   { label: "填充", value: "fill", desc: "填充 - 保持宽高比，填满屏幕（可能裁剪）" },
   { label: "适应", value: "fit", desc: "适应 - 保持宽高比，完整显示（可能有黑边）" },
   { label: "拉伸", value: "stretch", desc: "拉伸 - 拉伸填满屏幕（可能变形）" },
@@ -39,11 +55,10 @@ const allOptions: Opt[] = [
 ];
 
 const options = computed(() => {
-  if (mode.value === "window" && IS_WINDOWS) return allOptions;
-  if (!nativeWallpaperStyles.value.length) return [
-    { label: "跟随系统", value: "system", desc: "跟随系统 - 根据系统设置显示" },
-  ];
-  return allOptions.filter((o) => nativeWallpaperStyles.value.includes(o.value));
+  const list = mode.value === "window" && IS_WINDOWS
+    ? styleOptions
+    : styleOptions.filter((o) => nativeWallpaperStyles.value.includes(o.value as Style));
+  return [SYSTEM_OPT, ...list];
 });
 
 const localValue = ref<string>("system");
@@ -54,14 +69,6 @@ watch(
   },
   { immediate: true }
 );
-
-onMounted(async () => {
-  try {
-    nativeWallpaperStyles.value = (await invoke<string[]>("get_native_wallpaper_styles")) as any;
-  } catch {
-    nativeWallpaperStyles.value = ["fill", "fit", "stretch", "center", "tile"];
-  }
-});
 
 const handleChange = async (style: string) => {
   // 特殊逻辑：不再等待事件，因为方法会在设置完毕后返回，等待事件会导致时序问题

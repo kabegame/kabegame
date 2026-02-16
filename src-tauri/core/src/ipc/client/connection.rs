@@ -477,7 +477,7 @@ impl PersistentConnection {
     }
 
     /// 连接（Unix）- 直接尝试连接，失败则返回错误
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     async fn create_connection() -> Result<tokio::net::UnixStream, String> {
         use tokio::net::UnixStream;
 

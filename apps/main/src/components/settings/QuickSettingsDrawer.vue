@@ -1,17 +1,35 @@
 <template>
     <CoreQuickSettingsDrawer :drawer="drawer" :groups="QUICK_SETTINGS_GROUPS" :get-item-disabled="isItemDisabled"
-        :get-item-props="getEffectiveProps" :get-item-description="getEffectiveDescription" />
+        :get-item-props="getEffectiveProps" :get-item-description="getEffectiveDescription" :drawer-size="drawerSize" />
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch, ref } from "vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useSettingsStore, type AppSettingKey } from "@kabegame/core/stores/settings";
 import CoreQuickSettingsDrawer from "@kabegame/core/components/settings/QuickSettingsDrawer.vue";
 import { QUICK_SETTINGS_GROUPS } from "@/settings/quickSettingsRegistry";
+import { IS_ANDROID } from "@kabegame/core/env";
+import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 
 const drawer = useQuickSettingsDrawerStore();
 const settingsStore = useSettingsStore();
+const modalStack = useModalStackStore();
+const modalStackId = ref<string | null>(null);
+
+watch(
+  () => drawer.isOpen,
+  (visible) => {
+    if (visible && IS_ANDROID) {
+      modalStackId.value = modalStack.push(() => drawer.close());
+    } else if (!visible && modalStackId.value) {
+      modalStack.remove(modalStackId.value);
+      modalStackId.value = null;
+    }
+  }
+);
+
+const drawerSize = computed(() => IS_ANDROID ? "70%" : "420px");
 
 // 依赖轮播启用的设置项（未启用时应禁用+提示）
 const ROTATION_DEPENDENT_KEYS: AppSettingKey[] = [

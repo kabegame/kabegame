@@ -263,7 +263,13 @@ const handleCopyPluginId = async (id?: string) => {
     if (!pluginId) return;
 
     try {
-        await navigator.clipboard.writeText(pluginId);
+        const { isTauri } = await import("@tauri-apps/api/core");
+        if (isTauri()) {
+            const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+            await writeText(pluginId);
+        } else {
+            await navigator.clipboard.writeText(pluginId);
+        }
         ElMessage.success("插件ID已复制到剪贴板");
     } catch (error) {
         console.error("复制失败:", error);

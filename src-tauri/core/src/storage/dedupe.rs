@@ -55,7 +55,7 @@ pub struct DebugCloneImagesProgress {
 
 #[derive(Debug, Clone)]
 pub(crate) struct BaseImageRow {
-    pub(crate) url: String,
+    pub(crate) url: Option<String>,
     pub(crate) local_path: String,
     pub(crate) plugin_id: String,
     pub(crate) task_id: Option<String>,
@@ -286,7 +286,7 @@ impl Storage {
             let rows = pool_stmt
                 .query_map(params![pool_size as i64], |row| {
                     Ok(BaseImageRow {
-                        url: row.get(0)?,
+                        url: row.get::<_, Option<String>>(0)?,
                         local_path: row.get(1)?,
                         plugin_id: row.get(2)?,
                         task_id: row.get(3)?,
@@ -356,7 +356,7 @@ impl Storage {
 
                     insert_img
                         .execute(params![
-                            &base.url,
+                            base.url.as_deref(),
                             &base.local_path,
                             &base.plugin_id,
                             &base.task_id,

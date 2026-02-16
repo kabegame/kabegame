@@ -1,4 +1,4 @@
-﻿//! Storage 相关请求
+//! Storage 相关请求
 pub mod albums;
 pub mod images;
 pub mod run_configs;
@@ -6,9 +6,7 @@ pub mod tasks;
 
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 
-pub async fn handle_storage_request(
-    req: &CliIpcRequest,
-) -> Option<CliIpcResponse> {
+pub async fn handle_storage_request(req: &CliIpcRequest) -> Option<CliIpcResponse> {
     match req {
         // Images
         CliIpcRequest::StorageGetImages => Some(images::get_images().await),

@@ -1,6 +1,7 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useImageTypes } from "@/composables/useImageTypes";
 
 export type VarOption = string | { name: string; variable: string };
 
@@ -19,6 +20,7 @@ export type PluginVarDef = {
  * 插件配置管理 composable
  */
 export function usePluginConfig() {
+  const { extensions: imageExtensions, load: loadImageTypes } = useImageTypes();
   const form = ref({
     pluginId: "",
     outputDir: "",
@@ -202,12 +204,10 @@ export function usePluginConfig() {
       pluginVars.value = vars || [];
 
       // DEV 调试：确认后端实际返回的 var 定义是否已更新（排查"插件已更新但导入仍旧配置"）
-      if (import.meta.env.DEV) {
-        console.info("[loadPluginVars] get_plugin_vars result:", {
-          pluginId,
-          vars: pluginVars.value,
-        });
-      }
+      console.debug("[loadPluginVars] get_plugin_vars result:", {
+        pluginId,
+        vars: pluginVars.value,
+      });
 
       // 使用默认值初始化表单
       form.value.vars = normalizeVarsForUI(
@@ -264,12 +264,17 @@ export function usePluginConfig() {
     extensions?: string[]
   ) => {
     try {
-      const exts =
-        extensions && extensions.length > 0
-          ? extensions
-              .map((e) => `${e}`.trim().replace(/^\./, "").toLowerCase())
-              .filter(Boolean)
+      let exts: string[];
+      if (extensions && extensions.length > 0) {
+        exts = extensions
+          .map((e) => `${e}`.trim().replace(/^\./, "").toLowerCase())
+          .filter(Boolean);
+      } else {
+        await loadImageTypes();
+        exts = imageExtensions.value.length
+          ? [...imageExtensions.value, "zip"]
           : ["jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "zip"];
+      }
 
       const selected = await open({
         directory: false,

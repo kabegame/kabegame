@@ -1,4 +1,3 @@
-use super::resolve_local_path_from_url;
 use super::ArchiveProcessor;
 use std::path::{Path, PathBuf};
 use unrar::Archive;
@@ -11,6 +10,7 @@ impl ArchiveProcessor for RarProcessor {
     }
 
     fn can_handle(&self, url: &str) -> bool {
+        use super::resolve_local_path_from_url;
         if let Some(path) = resolve_local_path_from_url(url) {
             return path
                 .extension()
@@ -21,31 +21,21 @@ impl ArchiveProcessor for RarProcessor {
         url.to_ascii_lowercase().ends_with(".rar")
     }
 
-    fn process(
-        &self,
-        url: &str,
-        temp_dir: &Path,
-        downloader: &dyn Fn(&str, &Path) -> Result<(), String>,
-        cancel_check: &dyn Fn() -> bool,
-    ) -> Result<Vec<PathBuf>, String> {
-        // 1. Get the rar file path
-        let rar_path = if let Some(p) = resolve_local_path_from_url(url) {
-            p
-        } else if url.starts_with("http://") || url.starts_with("https://") {
-            let archive_path = temp_dir.join("__kg_archive.rar");
-            downloader(url, &archive_path)?;
-            archive_path
-        } else {
-            return Err(format!("Unsupported archive url: {}", url));
-        };
-
-        if cancel_check() {
-            return Err("Task canceled".to_string());
+    fn process(&self, path: &Path, temp_dir: &Path) -> Result<PathBuf, String> {
+        if !path.exists() {
+            return Err(format!("Archive file not found: {}", path.display()));
         }
 
+        let archive_stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("archive");
+        let extract_dir = temp_dir.join(archive_stem);
+        std::fs::create_dir_all(&extract_dir)
+            .map_err(|e| format!("Failed to create extract dir: {}", e))?;
+
         // 2. Extract
-        // Note: unrar extract_to extracts relative to the destination directory
-        let mut archive = Archive::new(&rar_path)
+        let mut archive = Archive::new(path)
             .open_for_processing()
             .map_err(|e| format!("Failed to open rar archive: {}", e))?;
 
@@ -53,20 +43,12 @@ impl ArchiveProcessor for RarProcessor {
             .read_header()
             .map_err(|e| format!("Failed to read rar header: {}", e))?
         {
-            if cancel_check() {
-                return Err("Task canceled".to_string());
-            }
-
             let entry = header.entry();
             let entry_filename = entry.filename.clone();
             let is_directory = entry.is_directory();
 
             if is_directory {
-                // For directories, we just ensure they exist if we were extracting properly,
-                // but since we handle file extraction manually below by creating parents,
-                // we can just skip directory entries or create them if empty dirs matter.
-                // Let's create them to be safe.
-                let dest_path = temp_dir.join(&entry_filename);
+                let dest_path = extract_dir.join(&entry_filename);
                 std::fs::create_dir_all(&dest_path)
                     .map_err(|e| format!("Failed to create directory {:?}: {}", dest_path, e))?;
 
@@ -82,7 +64,7 @@ impl ArchiveProcessor for RarProcessor {
                 .map_err(|e| format!("Failed to read rar entry {:?}: {}", entry_filename, e))?;
             archive = new_archive;
 
-            let dest_path = temp_dir.join(&entry_filename);
+            let dest_path = extract_dir.join(&entry_filename);
 
             // Ensure parent directory exists
             if let Some(parent) = dest_path.parent() {
@@ -100,14 +82,6 @@ impl ArchiveProcessor for RarProcessor {
                 .map_err(|e| format!("Failed to write file {:?}: {}", dest_path, e))?;
         }
 
-        if cancel_check() {
-            return Err("Task canceled".to_string());
-        }
-
-        // 3. Collect images
-        let mut images = Vec::new();
-        super::collect_images_recursive(temp_dir, &mut images)?;
-
-        Ok(images)
+        Ok(extract_dir)
     }
 }

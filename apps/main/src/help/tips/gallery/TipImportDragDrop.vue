@@ -23,6 +23,16 @@
     </section>
 
     <section class="section">
+      <h3>macOS：若导入「图片」「桌面」等文件夹失败</h3>
+      <p>在 macOS 上，「图片」「桌面」「文稿」「下载」等为系统受保护文件夹。<strong>拖拽导入</strong>可能无法访问这些目录（会提示“权限不足”）。</p>
+      <p><strong>解决办法：</strong></p>
+      <ul>
+        <li>优先使用「添加文件夹」按钮，在系统选择器中选中该文件夹，再开始导入。</li>
+        <li>若仍无法访问，请打开 <strong>系统设置 → 隐私与安全性 → 文件与文件夹</strong>，为 Kabegame 开启对应目录（如「图片」）的访问权限。</li>
+      </ul>
+    </section>
+
+    <section class="section">
       <h3>重要说明：本地导入插件必须存在</h3>
       <p>拖入导入依赖内置的本地导入源插件：<code>本地导入（local-import）</code>。</p>
       <p>如果你的已安装源中缺少 <code>本地导入</code>插件，导入会失败（因为无法创建对应任务）。</p>
@@ -74,6 +84,18 @@ const zipImages = ref<TipImage[]>([]);
     color: var(--anime-text-primary);
     font-size: 13px;
     line-height: 1.7;
+  }
+
+  ul {
+    margin: 0 0 8px 0;
+    padding-left: 20px;
+    color: var(--anime-text-primary);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  li {
+    margin-bottom: 4px;
   }
 
   code {

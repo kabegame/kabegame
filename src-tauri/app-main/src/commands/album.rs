@@ -28,7 +28,9 @@ pub async fn delete_album(_app: AppHandle, album_id: String) -> Result<(), Strin
     // 轮播画册没有了，回到画廊。这里前端会提示，所以不用报错
     if let Ok(Some(id)) = Settings::global().get_wallpaper_rotation_album_id().await {
         if id == album_id {
-            Settings::global().set_wallpaper_rotation_album_id(None).await?;
+            Settings::global()
+                .set_wallpaper_rotation_album_id(None)
+                .await?;
         }
     }
     #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]

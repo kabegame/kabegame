@@ -398,7 +398,7 @@ impl Storage {
             .query_map(params![task_id, FAVORITE_ALBUM_ID], |row| {
                 Ok(ImageInfo {
                     id: row.get(0)?,
-                    url: row.get(1)?,
+                    url: row.get::<_, Option<String>>(1)?,
                     local_path: row.get(2)?,
                     plugin_id: row.get(3)?,
                     task_id: row.get(4)?,
@@ -451,7 +451,7 @@ impl Storage {
                 |row| {
                     Ok(ImageInfo {
                         id: row.get(0)?,
-                        url: row.get(1)?,
+                        url: row.get::<_, Option<String>>(1)?,
                         local_path: row.get(2)?,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
