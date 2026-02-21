@@ -131,19 +131,27 @@ export class ComponentPlugin extends BasePlugin {
             }).toString(),
           );
           const isAndroid = !!bs.context.isAndroid;
-          writeFileSync(
-            tauriConfig,
-            template({
-              // TODO: 当需要更多环境的时候维护这个上下文
-              isWindows: !isAndroid && OSPlugin.isWindows,
-              isMacOS: !isAndroid && OSPlugin.isMacOS,
-              isLinux: !isAndroid && OSPlugin.isLinux,
-              isLight: isAndroid || bs.context.mode!.isLight,
-              isDev: bs.context.cmd!.isDev,
-              isAndroid: isAndroid,
-              isWindowEffect: !isAndroid && (OSPlugin.isWindows || OSPlugin.isMacOS)
-            }),
-          );
+          const templateCtx = {
+            isWindows: !isAndroid && OSPlugin.isWindows,
+            isMacOS: !isAndroid && OSPlugin.isMacOS,
+            isLinux: !isAndroid && OSPlugin.isLinux,
+            isLight: isAndroid || bs.context.mode!.isLight,
+            isDev: bs.context.cmd!.isDev,
+            isAndroid: isAndroid,
+            isWindowEffect: !isAndroid && (OSPlugin.isWindows || OSPlugin.isMacOS)
+          };
+          writeFileSync(tauriConfig, template(templateCtx));
+          // 仅 main 组件：用 handlebars 生成 capabilities/main.json（桌面不含 picker 权限，移动端含）
+          if (component.isMain) {
+            const capHandlebars = path.resolve(component.appDir, "capabilities", "main.json.handlebars");
+            if (existsSync(capHandlebars)) {
+              const capOut = path.resolve(component.appDir, "capabilities", "main.json");
+              const capTemplate = Handlebars.compile(
+                readFileSync(capHandlebars, { encoding: "utf-8" }).toString(),
+              );
+              writeFileSync(capOut, capTemplate(templateCtx));
+            }
+          }
         }
     });
 

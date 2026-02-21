@@ -48,6 +48,7 @@
       "dependencies": {
         "@element-plus/icons-vue": "^2.3.1",
         "@kabegame/core": "workspace:*",
+        "@kabegame/image-type": "workspace:*",
         "@tauri-apps/api": "^2.10",
         "@tauri-apps/plugin-dialog": "^2.0",
         "@tauri-apps/plugin-fs": "^2.0",
@@ -56,6 +57,7 @@
         "axios": "^1.6.7",
         "element-plus": "^2.5.14",
         "pinia": "^2.1.7",
+        "tauri-plugin-picker-api": "workspace:*",
         "vue": "^3.4.21",
         "vue-router": "^4.3.0",
       },
@@ -71,6 +73,13 @@
     "packages/core": {
       "name": "@kabegame/core",
       "version": "3.0.4",
+      "dependencies": {
+        "photoswipe": "^5.4.4",
+      },
+    },
+    "packages/image-type": {
+      "name": "@kabegame/image-type",
+      "version": "1.0.0",
     },
     "src-crawler-plugins": {
       "name": "crawler-plugins",
@@ -83,6 +92,13 @@
         "glob": "^10.5.0",
         "husky": "^9.1.7",
         "typescript": "^5.5.0",
+      },
+    },
+    "src-tauri-plugins/tauri-plugin-picker": {
+      "name": "tauri-plugin-picker-api",
+      "version": "0.1.0",
+      "dependencies": {
+        "@tauri-apps/api": "^2.0.0",
       },
     },
   },
@@ -246,6 +262,8 @@
     "@kabegame/app-main-frontend": ["@kabegame/app-main-frontend@workspace:apps/main"],
 
     "@kabegame/core": ["@kabegame/core@workspace:packages/core"],
+
+    "@kabegame/image-type": ["@kabegame/image-type@workspace:packages/image-type"],
 
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@0.2.4", "", { "dependencies": { "@emnapi/core": "1.7.1", "@emnapi/runtime": "1.7.1", "@tybys/wasm-util": "0.9.0" } }, "sha512-9zESzOO5aDByvhIAsOy9TbpZ0Ur2AJbUI7UT73kcUTS2mxAMHOBaa1st/jAymNoCtvrit99kkzT1FZuXVcgfIQ=="],
 
@@ -843,6 +861,8 @@
 
     "perfect-debounce": ["perfect-debounce@2.1.0", "", {}, "sha512-LjgdTytVFXeUgtHZr9WYViYSM/g8MkcTPYDlPa3cDqMirHjKiSZPYd6DoL7pK8AJQr+uWkQvCjHNdiMqsrJs+g=="],
 
+    "photoswipe": ["photoswipe@5.4.4", "", {}, "sha512-WNFHoKrkZNnvFFhbHL93WDkW3ifwVOXSW3w1UuZZelSmgXpIGiZSNlZJq37rR8YejqME2rHs9EhH9ZvlvFH2NA=="],
+
     "picocolors": ["picocolors@1.1.1", "", {}, "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA=="],
 
     "picomatch": ["picomatch@2.3.1", "", {}, "sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA=="],
@@ -924,6 +944,8 @@
     "tapable": ["tapable@2.3.0", "", {}, "sha512-g9ljZiwki/LfxmQADO3dEY1CbpmXT5Hm2fJ+QaGKwSXUylMybePR7/67YW7jOrrvjEgL1Fmz5kzyAjWVWLlucg=="],
 
     "tar-stream": ["tar-stream@3.1.7", "", { "dependencies": { "b4a": "1.7.3", "fast-fifo": "1.3.2", "streamx": "2.23.0" } }, "sha512-qJj60CXt7IU1Ffyc3NJMjh6EkuCFej46zUqJ4J7pqYlThyd9bO0XBTmcOIhSzZJVWfsLks0+nle/j538YAW9RQ=="],
+
+    "tauri-plugin-picker-api": ["tauri-plugin-picker-api@workspace:src-tauri-plugins/tauri-plugin-picker"],
 
     "text-decoder": ["text-decoder@1.2.3", "", { "dependencies": { "b4a": "1.7.3" } }, "sha512-3/o9z3X0X0fTupwsYvR03pJ/DjWuqqrfwBgTQzdWDiQSm9KitAyz/9WqsT2JQW7KV2m+bC2ol/zqpW37NHxLaA=="],
 
@@ -1052,6 +1074,8 @@
     "crawler-plugins/glob": ["glob@10.5.0", "", { "dependencies": { "foreground-child": "3.3.1", "jackspeak": "3.4.3", "minimatch": "9.0.5", "minipass": "7.1.2", "package-json-from-dist": "1.0.1", "path-scurry": "1.11.1" }, "bin": { "glob": "dist/esm/bin.mjs" } }, "sha512-DfXN8DfhJ7NH3Oe7cFmu3NCu1wKbkReJ8TorzSAFbSKrlNaQSKfIzqYqVY8zlbs2NLBbWpRiU52GX2PbaBVNkg=="],
 
     "element-plus/@vueuse/core": ["@vueuse/core@10.11.1", "", { "dependencies": { "@types/web-bluetooth": "0.0.20", "@vueuse/metadata": "10.11.1", "@vueuse/shared": "10.11.1", "vue-demi": "0.14.10" } }, "sha512-guoy26JQktXPcz+0n3GukWIy/JDNKti9v6VEMu6kV2sYBsWuGiTU8OWdg+ADfUbHg3/3DlqySDe7JmdHrktiww=="],
+
+    "fdir/picomatch": ["picomatch@4.0.3", "", {}, "sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q=="],
 
     "filelist/minimatch": ["minimatch@5.1.6", "", { "dependencies": { "brace-expansion": "2.0.2" } }, "sha512-lKwV/1brpG6mBUFHtb7NUmtABCb2WZZmm2wNiOA5hAb8VdCS4B3dtMWyvcoViccwAW/COERjXLt0zP1zXUN26g=="],
 

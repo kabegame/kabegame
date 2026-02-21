@@ -1,20 +1,5 @@
 fn main() {
-    tauri_build::try_build(
-        tauri_build::Attributes::new()
-            .plugin(
-                "folder-picker",
-                tauri_build::InlinedPlugin::new()
-                    .commands(&["pickFolder", "listContentChildren", "readContentUri"])
-                    .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
-            )
-            .plugin(
-                "resource",
-                tauri_build::InlinedPlugin::new()
-                    .commands(&["pickKgpgFile", "extractBundledPlugins"])
-                    .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
-            ),
-    )
-    .expect("failed to run tauri-build");
+    tauri_build::build();
 
     // Rust check-cfg: declare custom cfg keys used in this crate.
     // We inject `--cfg desktop="plasma"` or `--cfg desktop="gnome"` at compile-time (via scripts/run.js --desktop),
@@ -46,14 +31,13 @@ fn main() {
         _ => "unknown",
     };
     println!("cargo:rustc-cfg=kabegame_component=\"{}\"", component);
-    let vd_feature_enabled = std::env::var_os("CARGO_FEATURE_VIRTUAL_DRIVER").is_some();
 
     // On Windows, the virtual-driver feature depends on dokan2.dll.
     // Use delay-load so the app can start even when dokan2.dll isn't present;
     // we can then show a friendly error only when the user actually tries to mount VD.
     //
     // This only works on MSVC toolchain.
-    if normalized != "light" && vd_feature_enabled {
+    if normalized != "light" {
         #[cfg(all(target_os = "windows", target_env = "msvc"))]
         {
             // Needed for /DELAYLOAD.

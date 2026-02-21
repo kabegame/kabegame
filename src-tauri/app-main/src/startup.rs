@@ -111,10 +111,10 @@ pub fn restore_main_window_state(app: &tauri::AppHandle) {
 }
 
 /// 检测是否是开机启动
-/// 判断逻辑：检查命令行参数中是否有 --auto-startup 参数
+/// 判断逻辑：检查命令行参数中是否有 --minimized 参数
 fn is_auto_startup() -> bool {
-    // 检查命令行参数中是否有 --auto-startup 参数
-    std::env::args().any(|arg| arg == "--auto-startup")
+    // 检查命令行参数中是否有 --minimized 参数
+    std::env::args().any(|arg| arg == "--minimized")
 }
 
 // 壁纸组件，壁纸设置、轮播等功能
@@ -328,9 +328,6 @@ pub fn start_download_workers() {
 pub fn start_task_scheduler() {
     tauri::async_runtime::spawn(async {
         TaskScheduler::global().start_decompression_worker().await;
-    });
-    tauri::async_runtime::spawn(async {
-        TaskScheduler::global().start_dispatcher_loop().await;
     });
     tauri::async_runtime::spawn(async {
         TaskScheduler::global().start_download_workers_async().await;

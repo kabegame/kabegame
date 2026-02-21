@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 use std::fs;
+use std::path::Path;
 use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +23,54 @@ pub async fn get_file_drop_supported_types() -> Result<serde_json::Value, String
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FileDropKindItem {
+    path: String,
+    is_directory: bool,
+    is_image: bool,
+    is_archive: bool,
+    is_kgpg: bool,
+}
+
+/// 根据本地路径推断文件类型（图片/压缩包/kgpg），用于前端拖入文件分类。使用扩展名 + infer 内容推断。
+#[tauri::command]
+pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindItem>, String> {
+    let mut out = Vec::with_capacity(paths.len());
+    for path_str in paths {
+        let path = Path::new(&path_str);
+        let meta = match tokio::fs::metadata(&path).await {
+            Ok(m) => m,
+            Err(_) => {
+                out.push(FileDropKindItem {
+                    path: path_str,
+                    is_directory: false,
+                    is_image: false,
+                    is_archive: false,
+                    is_kgpg: false,
+                });
+                continue;
+            }
+        };
+        let is_directory = meta.is_dir();
+        let is_image = !is_directory && kabegame_core::image_type::is_image_by_path(path);
+        let is_archive = !is_directory && kabegame_core::archive::is_archive_by_path(path);
+        let is_kgpg = !is_directory
+            && path_str
+                .rsplit_once('.')
+                .map(|(_, ext)| ext.eq_ignore_ascii_case("kgpg"))
+                .unwrap_or(false);
+        out.push(FileDropKindItem {
+            path: path_str,
+            is_directory,
+            is_image,
+            is_archive,
+            is_kgpg,
+        });
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SupportedImageTypes {
     extensions: Vec<String>,
     mime_by_ext: std::collections::HashMap<String, String>,
@@ -34,6 +83,13 @@ pub async fn get_supported_image_types() -> Result<serde_json::Value, String> {
         mime_by_ext: kabegame_core::image_type::mime_by_ext(),
     };
     Ok(serde_json::to_value(payload).map_err(|e| e.to_string())?)
+}
+
+/// 前端在启动时调用，上报当前 WebView 可解码的图片格式（如 webp、avif、heic、svg），用于扩展后端支持列表。
+#[tauri::command]
+pub async fn set_supported_image_formats(formats: Vec<String>) -> Result<(), String> {
+    kabegame_core::image_type::set_frontend_supported_image_formats(formats);
+    Ok(())
 }
 
 #[tauri::command]
@@ -343,8 +399,17 @@ pub async fn copy_image_to_clipboard(image_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub async fn read_file(path: String) -> tauri::ipc::Response {
+    #[cfg(target_os = "android")]
+    if path.starts_with("content://") {
+        if let Some(io) = kabegame_core::crawler::content_io::get_content_io_provider() {
+            match io.read_file_bytes(&path) {
+                Ok(data) => return tauri::ipc::Response::new(data),
+                Err(_) => {}
+            }
+        }
+    }
     let data = tokio::fs::read(path).await.unwrap();
     tauri::ipc::Response::new(data)
 }

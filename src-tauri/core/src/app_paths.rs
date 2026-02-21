@@ -84,3 +84,53 @@ static APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub fn init_app_data_dir(path: PathBuf) {
     APP_DATA_DIR.set(path).expect("App data directory already initialized");
 }
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+static PROVIDER_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+static STORE_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn init_android_cache_dirs(provider_dir: PathBuf, store_dir: PathBuf) {
+    PROVIDER_CACHE_DIR
+        .set(provider_dir)
+        .expect("Provider cache dir already initialized");
+    STORE_CACHE_DIR
+        .set(store_dir)
+        .expect("Store cache dir already initialized");
+}
+
+pub fn provider_cache_dir() -> PathBuf {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        PROVIDER_CACHE_DIR
+            .get()
+            .expect("Provider cache dir not initialized")
+            .clone()
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        dirs::cache_dir()
+            .expect("Failed to get cache dir")
+            .join("Kabegame")
+            .join("provider-cache")
+    }
+}
+
+pub fn store_cache_dir() -> PathBuf {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        STORE_CACHE_DIR
+            .get()
+            .expect("Store cache dir not initialized")
+            .clone()
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        dirs::cache_dir()
+            .expect("Failed to get cache dir")
+            .join("Kabegame")
+            .join("store-cache")
+    }
+}

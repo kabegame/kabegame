@@ -2,11 +2,7 @@
   "identifier": "main-capability",
   "description": "Main capability for Kabegame (workspace app-main)",
   "local": true,
-  "windows": [
-    "main",
-    "wallpaper",
-    "wallpaper-debug"
-  ],
+  "windows": [{{#if isWindows}}"wallpaper", {{/if}}"main"],
   "permissions": [
     "core:default",
     "core:window:allow-show",
@@ -17,18 +13,11 @@
     "fs:default",
     "fs:read-all",
     "fs:write-all",
-    {
-      "identifier": "fs:allow-read-file",
-      "allow": [
-        {
-          "path": "**"
-        }
-      ]
-    },
-    "folder-picker:default",
-    "resource:default",
+    {"identifier": "fs:allow-read-file", "allow": [{"path": "**"}]},
+    {{#if isAndroid}}
+    "picker:default",
+    {{/if}}
     "clipboard-manager:default",
-    "clipboard-manager:allow-write-text",
-    "clipboard-manager:allow-write-image"
+    "clipboard-manager:allow-write-text"
   ]
 }

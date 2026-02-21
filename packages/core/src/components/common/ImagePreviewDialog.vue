@@ -1,50 +1,23 @@
 <template>
-  <!-- Android 全屏预览（透明度动画展开/关闭） -->
+  <!-- Android 全屏预览：PhotoSwipe 实现（滑动切换、缩放、点击出工具） -->
   <Teleport v-if="IS_ANDROID" to="body">
-    <Transition name="preview-fade">
-      <div v-if="previewVisible" class="image-preview-fullscreen" @click.self="closePreview">
-      <div ref="previewContainerRef" class="preview-container"
-        @contextmenu.prevent.stop="handlePreviewDialogContextMenu"
-        @touchstart.prevent="handleTouchStart"
-        @touchmove.prevent="handleTouchMove"
-        @touchend.prevent="handleTouchEnd"
-        @touchcancel.prevent="handleTouchEnd"  
-      >
-        <!-- Pager 结构：prev/current/next 三张图片 -->
-        <div class="preview-pager" :style="{ transform: `translateX(${pagerOffset}px)`, transition: pagerSettling ? 'transform 0.16s ease-out' : 'none' }">
-          <!-- 上一张 -->
-          <div v-if="prevImageUrl && props.images.length > 1" class="preview-pager-item preview-pager-prev">
-            <img :src="prevImageUrl" class="preview-image preview-image-android preview-image-adjacent" alt="上一张" />
-          </div>
-          <!-- 当前张 -->
-          <div class="preview-pager-item preview-pager-current">
-            <img v-if="previewImageUrl" ref="previewImageRef" :src="previewImageUrl" class="preview-image preview-image-android" alt="预览图片"
-              :style="previewImageStyle" @load="handlePreviewImageLoad" @error="handlePreviewImageError" />
-            <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
-              <ImageNotFound />
-            </div>
-          </div>
-          <!-- 下一张 -->
-          <div v-if="nextImageUrl && props.images.length > 1" class="preview-pager-item preview-pager-next">
-            <img :src="nextImageUrl" class="preview-image preview-image-android preview-image-adjacent" alt="下一张" />
-          </div>
-        </div>
-        <div v-if="previewImageLoading" class="preview-loading">
-          <div class="preview-loading-inner">正在加载原图…</div>
-        </div>
-        <!-- Android 操作栏 / Desktop 上下文菜单 -->
-        <ActionRenderer
-          v-if="previewActions && previewActions.length > 0"
-          :visible="IS_ANDROID ? actionBarVisible : previewContextMenuVisible"
-          :position="previewContextMenuPosition"
-          :actions="previewActions"
-          :context="previewActionContext"
-          :mode="IS_ANDROID ? 'actionsheet' : 'contextmenu'"
-          @close="handlePreviewActionClose"
-          @command="handlePreviewActionCommand" />
-      </div>
+    <div
+      ref="androidPswpContainerRef"
+      class="image-preview-fullscreen image-preview-pswp-root"
+      :class="{ 'is-visible': previewVisible }"
+    >
+      <!-- PhotoSwipe 会通过 appendToEl 挂载到此容器内 -->
+      <ActionRenderer
+        v-if="previewActions && previewActions.length > 0"
+        :visible="actionBarVisible"
+        :position="previewContextMenuPosition"
+        :actions="previewActions"
+        :context="previewActionContext"
+        mode="actionsheet"
+        @close="handlePreviewActionClose"
+        @command="handlePreviewActionCommand"
+      />
     </div>
-    </Transition>
   </Teleport>
 
   <!-- 桌面端 Dialog 预览 -->
@@ -95,6 +68,8 @@ import { IS_ANDROID } from "../../env";
 import { useModalStackStore } from "../../stores/modalStack";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
+import PhotoSwipeLightbox from "photoswipe/lightbox";
+import "photoswipe/style.css";
 
 const props = defineProps<{
   images: ImageInfo[];
@@ -117,6 +92,9 @@ const previewNotFound = ref(false);
 
 const previewContainerRef = ref<HTMLElement | null>(null);
 const previewImageRef = ref<HTMLImageElement | null>(null);
+// Android PhotoSwipe：容器与 lightbox 实例
+const androidPswpContainerRef = ref<HTMLElement | null>(null);
+let androidLightbox: InstanceType<typeof PhotoSwipeLightbox> | null = null;
 const previewScale = ref(1);
 const previewTranslateX = ref(0);
 const previewTranslateY = ref(0);
@@ -391,6 +369,21 @@ const getOrCreateOriginalUrlFor = (image: ImageInfo) => {
   if (hit) return hit;
   if (!image.localPath) return "";
   return urlCache.ensureOriginalAssetUrl(image.id, image.localPath) || "";
+};
+
+/** Android PhotoSwipe：根据当前 images 构建 dataSource 数组，每项需含 src、width、height */
+const buildPswpDataSource = (): { src: string; width: number; height: number }[] => {
+  const items: { src: string; width: number; height: number }[] = [];
+  const fallbackW = 1920;
+  const fallbackH = 1080;
+  for (const img of props.images) {
+    const url = getOrCreateOriginalUrlFor(img) || props.imageUrlMap?.[img.id]?.thumbnail || "";
+    const meta = img.metadata as { width?: number; height?: number } | undefined;
+    const w = meta?.width && meta?.height ? meta.width : fallbackW;
+    const h = meta?.width && meta?.height ? meta.height : fallbackH;
+    items.push({ src: url || "", width: w, height: h });
+  }
+  return items;
 };
 
 const ensureOriginalPreload = (image: ImageInfo, originalUrl: string) => {
@@ -1187,6 +1180,11 @@ const handlePreviewKeyDown = (event: KeyboardEvent) => {
 };
 
 const closePreview = () => {
+  // Android：若 PhotoSwipe 已打开，先交给 pswp.close()，由 destroy 事件再执行下方清理
+  if (IS_ANDROID && androidLightbox?.pswp) {
+    androidLightbox.pswp.close();
+    return;
+  }
   previewVisible.value = false;
   previewImageUrl.value = "";
   previewImagePath.value = "";
@@ -1209,11 +1207,7 @@ const closePreview = () => {
   isNavThrottled = false;
   releaseAllOwnedOriginalUrls();
   pendingNav.value = null;
-  // Android 触摸状态清理
   if (IS_ANDROID) {
-    touchState.value = null;
-    pagerOffset.value = 0;
-    pagerSettling.value = false;
     actionBarVisible.value = false;
     if (longPressTimer) {
       clearTimeout(longPressTimer);
@@ -1296,13 +1290,8 @@ watch(
 watch(
   () => previewImageUrl.value,
   (url) => {
-    if (url) {
+    if (url && !IS_ANDROID) {
       setPreviewTransform(1, 0, 0);
-      // 切换图片时重置 pager
-      if (IS_ANDROID) {
-        pagerOffset.value = 0;
-        pagerSettling.value = false;
-      }
     }
   }
 );
@@ -1376,10 +1365,48 @@ const setupResizeObserver = () => {
   resizeObserver.observe(container);
 };
 
+function initAndroidLightbox() {
+  const container = androidPswpContainerRef.value;
+  if (!IS_ANDROID || !container || androidLightbox) return;
+  androidLightbox = new PhotoSwipeLightbox({
+    pswpModule: () => import("photoswipe"),
+    appendToEl: container,
+    tapAction: () => {
+      actionBarVisible.value = !actionBarVisible.value;
+    },
+    bgClickAction: "close",
+    imageClickAction: "zoom-or-close",
+    doubleTapAction: "zoom",
+    errorMsg: "图片无法加载",
+    closeTitle: "关闭",
+    zoomTitle: "缩放",
+    arrowPrevTitle: "上一张",
+    arrowNextTitle: "下一张",
+    indexIndicatorSep: " / ",
+    loop: true,
+  });
+  androidLightbox.on("change", () => {
+    const pswp = androidLightbox?.pswp;
+    if (!pswp || !previewVisible.value) return;
+    const i = pswp.currSlide?.index ?? previewIndex.value;
+    if (i >= 0 && i < props.images.length) {
+      previewIndex.value = i;
+      previewImage.value = props.images[i] ?? null;
+    }
+  });
+  androidLightbox.on("destroy", () => {
+    closePreview();
+  });
+  androidLightbox.init();
+}
+
 onMounted(() => {
   window.addEventListener("mouseup", stopPreviewDrag);
   window.addEventListener("mousemove", handlePreviewDragMove);
   window.addEventListener("keydown", handlePreviewKeyDown, true);
+  if (IS_ANDROID) {
+    nextTick(() => initAndroidLightbox());
+  }
 });
 
 onUnmounted(() => {
@@ -1409,6 +1436,10 @@ onUnmounted(() => {
     resizeObserver = null;
   }
   releaseAllOwnedOriginalUrls();
+  if (IS_ANDROID && androidLightbox) {
+    androidLightbox.destroy();
+    androidLightbox = null;
+  }
 });
 
 watch(
@@ -1507,8 +1538,28 @@ function prefetchAdjacent() {
   }
 }
 
+/** Android：使用 PhotoSwipe 打开全屏预览 */
+const openAndroidPreview = (index: number) => {
+  if (!androidLightbox || !androidPswpContainerRef.value || props.images.length === 0) return;
+  const img = props.images[index];
+  if (!img) return;
+  previewIndex.value = index;
+  previewImage.value = img;
+  previewVisible.value = true;
+  actionBarVisible.value = false;
+  const dataSource = buildPswpDataSource();
+  nextTick(() => {
+    if (!previewVisible.value || !androidLightbox) return;
+    androidLightbox.loadAndOpen(index, dataSource);
+  });
+};
+
 const open = (index: number) => {
-  // 先打开 dialog，再触发 setPreviewByIndex；避免 ensureOriginalReady 在 previewVisible=false 时错过写入 previewImageUrl
+  if (IS_ANDROID) {
+    openAndroidPreview(index);
+    return;
+  }
+  // 桌面端：先打开 dialog，再触发 setPreviewByIndex
   previewVisible.value = true;
   setPreviewByIndex(index);
 };
@@ -1676,18 +1727,32 @@ defineExpose({
   }
 }
 
-// Android 全屏预览：展开/关闭透明度动画
-.preview-fade-enter-active,
-.preview-fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-.preview-fade-enter-from,
-.preview-fade-leave-to {
+// Android 全屏预览（PhotoSwipe 根容器）
+.image-preview-pswp-root.image-preview-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: transparent;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
   opacity: 0;
+  transition: opacity 0.2s ease;
+
+  &.is-visible {
+    visibility: visible;
+    pointer-events: auto;
+    opacity: 1;
+  }
+
+  // PhotoSwipe 挂载在此容器内，需占满以便 pswp 全屏
+  .pswp {
+    z-index: 1;
+  }
 }
 
-// Android 全屏预览样式
-.image-preview-fullscreen {
+// Android 全屏预览样式（旧 pager 用，保留给桌面端或兼容）
+.image-preview-fullscreen:not(.image-preview-pswp-root) {
   position: fixed;
   inset: 0;
   z-index: 2000;
@@ -1696,7 +1761,7 @@ defineExpose({
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  touch-action: none; // 禁用默认触摸行为
+  touch-action: none;
 
   .preview-container {
     width: 100%;

@@ -1,0 +1,20 @@
+[package]
+name = "tauri-plugin-picker"
+version = "0.1.0"
+authors = [ "You" ]
+description = ""
+edition = "2021"
+rust-version = "1.77.2"
+exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules"]
+links = "tauri-plugin-picker"
+
+[dependencies]
+tauri = { version = "2.10.0" }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2"
+
+[target.'cfg(desktop)'.dependencies]
+tauri-plugin-dialog = "2"
+
+[build-dependencies]
+tauri-plugin = { version = "2.5.3", features = ["build"] }

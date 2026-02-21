@@ -1,8 +1,8 @@
 import { ref, type Ref } from "vue";
-import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import { readFile } from "../fs/readFile";
 import type { ImageInfo, ImageUrlMap } from "../types/image";
-import { IS_LINUX } from "../env";
+import { IS_ANDROID } from "../env";
 
 type Entry = {
   thumbnail?: string; // blob:
@@ -108,6 +108,13 @@ class ImageUrlMapLruCache {
           // ignore
         }
       }
+      if (e?.original?.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(e.original);
+        } catch {
+          // ignore
+        }
+      }
       // 响应式 map 同步删除
       delete (this.imageUrlMap.value as any)[id];
     }
@@ -127,6 +134,13 @@ class ImageUrlMapLruCache {
       if (e?.thumbnail?.startsWith("blob:")) {
         try {
           URL.revokeObjectURL(e.thumbnail);
+        } catch {
+          // ignore
+        }
+      }
+      if (e?.original?.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(e.original);
         } catch {
           // ignore
         }
@@ -168,8 +182,15 @@ class ImageUrlMapLruCache {
     }
   }
 
-  /** original：始终 asset url（同步）。返回写入后的 url（可能为空字符串）。 */
+  /** original：asset url（同步）或 content:// 时走 blob url（异步）。返回写入后的 url（可能为空字符串）。 */
   public ensureOriginalAssetUrl(imageId: string, localPath: string | undefined | null) {
+    const raw = (localPath || "").trim();
+    if (!raw) return "";
+    if (!isTauri()) return "";
+    if (IS_ANDROID && raw.startsWith("content://")) {
+      void this.ensureOriginalBlobUrl(imageId, raw);
+      return "";
+    }
     const url = this.toAssetUrl(localPath);
     if (!url) return "";
     const prev = this.lru.get(imageId) || {};
@@ -179,6 +200,50 @@ class ImageUrlMapLruCache {
     this.imageUrlMap.value[imageId] = { ...(this.imageUrlMap.value[imageId] || {}), original: url };
     this.evictIfNeeded();
     return url;
+  }
+
+  /** original：content:// 时通过 readFile → Blob → createObjectURL 生成 blob url。 */
+  public async ensureOriginalBlobUrl(
+    imageId: string,
+    contentUri: string | undefined | null
+  ): Promise<string> {
+    const raw = (contentUri || "").trim();
+    if (!imageId || !raw || !raw.startsWith("content://")) return "";
+
+    const hit = this.lru.get(imageId)?.original;
+    if (hit && hit.startsWith("blob:")) {
+      const e = this.lru.get(imageId);
+      if (e) this.touch(imageId, e);
+      return hit;
+    }
+
+    try {
+      const fileData = await readFile(raw);
+      if (!fileData || fileData.length === 0) return "";
+      const mime = guessMimeType(raw);
+      const blob = new Blob([fileData], { type: mime });
+      if (!blob.size) return "";
+      const url = URL.createObjectURL(blob);
+      const prev = this.lru.get(imageId) || {};
+      if (prev.original?.startsWith("blob:") && prev.original !== url) {
+        try {
+          URL.revokeObjectURL(prev.original);
+        } catch {
+          /* ignore */
+        }
+      }
+      const next: Entry = { ...prev, original: url };
+      this.lru.set(imageId, next);
+      this.touch(imageId, next);
+      this.imageUrlMap.value[imageId] = {
+        ...(this.imageUrlMap.value[imageId] || {}),
+        original: url,
+      };
+      this.evictIfNeeded();
+      return url;
+    } catch {
+      return "";
+    }
   }
 
   /**
@@ -335,7 +400,11 @@ class ImageUrlMapLruCache {
     }
 
     if (needOriginal && !current.original) {
-      this.ensureOriginalAssetUrl(image.id, image.localPath);
+      if (IS_ANDROID && (image.localPath || "").startsWith("content://")) {
+        await this.ensureOriginalBlobUrl(image.id, image.localPath);
+      } else {
+        this.ensureOriginalAssetUrl(image.id, image.localPath);
+      }
     }
   }
 }

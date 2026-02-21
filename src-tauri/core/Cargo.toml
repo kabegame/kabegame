@@ -10,9 +10,11 @@ arc-swap = "1.7"
 async-trait = { workspace = true }
 auto-launch = "0.5"
 base64 = { workspace = true }
+encoding_rs = "0.8"
 dirs = "5.0"
 futures-util = "0.3"
 image = { workspace = true }
+infer = "0.19"
 lru = "0.12"
 regex = "1.11"
 rhai = { workspace = true }

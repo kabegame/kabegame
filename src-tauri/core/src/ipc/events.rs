@@ -69,7 +69,6 @@ daemon_event_kinds! {
     TaskProgress,
     TaskError,
     DownloadProgress,
-    PendingQueueChange,
     Generic,
     ConnectionStatus,
     DedupeProgress,
@@ -98,7 +97,6 @@ impl DaemonEventKind {
             DaemonEventKind::TaskProgress => "task-progress",
             DaemonEventKind::TaskError => "task-error",
             DaemonEventKind::DownloadProgress => "download-progress",
-            DaemonEventKind::PendingQueueChange => "pending-queue-change",
             DaemonEventKind::Generic => "generic",
             DaemonEventKind::ConnectionStatus => "connection-status",
             DaemonEventKind::DedupeProgress => "dedupe-progress",
@@ -122,7 +120,6 @@ impl DaemonEventKind {
             "task-progress" => Some(DaemonEventKind::TaskProgress),
             "task-error" => Some(DaemonEventKind::TaskError),
             "download-progress" => Some(DaemonEventKind::DownloadProgress),
-            "pending-queue-change" => Some(DaemonEventKind::PendingQueueChange),
             "generic" => Some(DaemonEventKind::Generic),
             "connection-status" => Some(DaemonEventKind::ConnectionStatus),
             "dedupe-progress" => Some(DaemonEventKind::DedupeProgress),
@@ -194,13 +191,6 @@ pub enum DaemonEvent {
         plugin_id: String,
         received_bytes: u64,
         total_bytes: Option<u64>,
-    },
-
-    /// pending 队列变化事件（等待中下载数量变化）
-    PendingQueueChange {
-        /// pending 队列中的任务数量
-        #[serde(rename = "pendingCount")]
-        pending_count: usize,
     },
 
     /// 通用事件
@@ -276,7 +266,6 @@ impl DaemonEvent {
             DaemonEvent::TaskProgress { .. } => DaemonEventKind::TaskProgress,
             DaemonEvent::TaskError { .. } => DaemonEventKind::TaskError,
             DaemonEvent::DownloadProgress { .. } => DaemonEventKind::DownloadProgress,
-            DaemonEvent::PendingQueueChange { .. } => DaemonEventKind::PendingQueueChange,
             DaemonEvent::Generic { .. } => DaemonEventKind::Generic,
             DaemonEvent::ConnectionStatus { .. } => DaemonEventKind::ConnectionStatus,
             DaemonEvent::DedupeProgress { .. } => DaemonEventKind::DedupeProgress,

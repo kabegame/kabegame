@@ -1,53 +1,74 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use url::Url;
 
 /// Trait for archive processors
 pub trait ArchiveProcessor: Send + Sync {
     /// Returns a list of supported archive types (e.g., "zip")
     fn supported_types(&self) -> Vec<&str>;
 
-    /// Check if this processor can handle the given URL (e.g., based on extension)
-    fn can_handle(&self, url: &str) -> bool;
+    /// Check if this processor can handle the given URL (e.g., based on path/extension).
+    fn can_handle(&self, url: &Url) -> bool;
 
-    /// Process the archive: extract to a subdirectory named after the archive (without extension),
-    /// and return the path of the extracted folder. The caller is responsible for recursively
-    /// processing the folder. The caller should check for cancellation before calling.
+    /// Process the archive: extract to a subdirectory named after the archive (without extension)
+    /// under the given directory, and return the path of the extracted folder.
+    /// The caller is responsible for recursively processing the folder. The caller should check for cancellation before calling.
     ///
     /// # Arguments
     /// * `path` - The local path of the archive file
-    /// * `temp_dir` - The temporary directory; extraction will create `temp_dir/{archive_stem}/`
-    fn process(&self, path: &Path, temp_dir: &Path) -> Result<PathBuf, String>;
-}
-
-/// Helper to resolve local path from URL
-pub fn resolve_local_path_from_url(url: &str) -> Option<PathBuf> {
-    let path = if url.starts_with("file://") {
-        let path_str = if url.starts_with("file:///") {
-            &url[8..]
-        } else {
-            &url[7..]
-        };
-        #[cfg(windows)]
-        let path_str = path_str.replace("/", "\\");
-        #[cfg(not(windows))]
-        let path_str = path_str;
-        PathBuf::from(path_str)
-    } else {
-        let p = PathBuf::from(url);
-        if !p.exists() {
-            return None;
-        }
-        p
-    };
-
-    path.canonicalize().ok()
+    /// * `extract_dir` - Target directory; extraction will create `extract_dir/{archive_stem}/`
+    fn process(&self, path: &Path, extract_dir: &Path) -> Result<PathBuf, String>;
 }
 
 /// Check if the given file extension is a supported image type.
 /// 委托给统一数据源 [crate::image_type].
 pub fn is_supported_image_ext(ext: &str) -> bool {
     crate::image_type::is_supported_image_ext(ext)
+}
+
+/// 支持的压缩扩展名（小写），与 [ArchiveManager] 的 supported_types 一致。
+fn supported_archive_extensions() -> Vec<String> {
+    manager().supported_types()
+}
+
+/// 根据本地路径判断是否为支持的压缩包：先看扩展名，再按文件内容用 infer 推断。
+/// 用于本地导入、解压队列及前端拖入文件分类。
+pub fn is_archive_by_path(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    let supported = supported_archive_extensions();
+    if supported.iter().any(|s| s == &ext) {
+        return true;
+    }
+    if let Ok(Some(kind)) = infer::get_from_path(path) {
+        let inferred_ext = kind.extension().to_lowercase();
+        if supported.iter().any(|s| s == &inferred_ext) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 根据本地路径获取对应的压缩处理器：先按路径转 file URL 匹配，再按 infer 推断扩展名匹配。
+pub fn get_processor_by_path(path: &Path) -> Option<&dyn ArchiveProcessor> {
+    if let Ok(url) = Url::from_file_path(path) {
+        if let Some(p) = manager().get_processor_by_url(&url) {
+            return Some(p);
+        }
+    }
+    if let Ok(Some(kind)) = infer::get_from_path(path) {
+        let ext = kind.extension();
+        if let Ok(url) = Url::parse(&format!("file:///dummy.{}", ext)) {
+            if let Some(p) = manager().get_processor_by_url(&url) {
+                return Some(p);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(not(target_os = "android"))]
@@ -122,9 +143,9 @@ impl ArchiveManager {
     }
 
     /// 根据 URL 猜测格式并返回对应处理器。
-    pub fn get_processor_by_url(&self, url_hint: &str) -> Option<&dyn ArchiveProcessor> {
+    pub fn get_processor_by_url(&self, url: &Url) -> Option<&dyn ArchiveProcessor> {
         for p in self.processors.values() {
-            if p.can_handle(url_hint) {
+            if p.can_handle(url) {
                 return Some(p.as_ref());
             }
         }

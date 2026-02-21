@@ -11,10 +11,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.ActivityResultCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import app.kabegame.plugin.picker.PickerLauncherHost
 import java.io.File
 import java.io.FileOutputStream
 
-class MainActivity : TauriActivity() {
+class MainActivity : TauriActivity(), PickerLauncherHost {
   private var folderPickerCallback: ActivityResultCallback<ActivityResult>? = null
   private var filePickerCallback: ActivityResultCallback<ActivityResult>? = null
   private var webView: WebView? = null
@@ -34,10 +35,33 @@ class MainActivity : TauriActivity() {
     filePickerCallback = null
   }
 
+  private var pickImagesCallback: ((List<Uri>) -> Unit)? = null
+  private val pickImagesLauncher = registerForActivityResult(
+    ActivityResultContracts.PickMultipleVisualMedia()
+  ) { uris ->
+    pickImagesCallback?.invoke(uris)
+    pickImagesCallback = null
+  }
+
+  private var pickKgpgCallback: ((ActivityResult) -> Unit)? = null
+  private val pickKgpgFileLauncher = registerForActivityResult(
+    ActivityResultContracts.StartActivityForResult()
+  ) { result ->
+    pickKgpgCallback?.invoke(result)
+    pickKgpgCallback = null
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
-    enableEdgeToEdge()
-    super.onCreate(savedInstanceState)
-    handleIntent(intent)
+    android.util.Log.i("Kabegame", "MainActivity.onCreate start")
+    try {
+      enableEdgeToEdge()
+      super.onCreate(savedInstanceState)
+      handleIntent(intent)
+      android.util.Log.i("Kabegame", "MainActivity.onCreate done")
+    } catch (e: Throwable) {
+      android.util.Log.e("Kabegame", "MainActivity.onCreate crash", e)
+      throw e
+    }
   }
 
   override fun onNewIntent(intent: Intent) {
@@ -77,7 +101,24 @@ class MainActivity : TauriActivity() {
     filePickerLauncher.launch(intent)
   }
 
-  /** 供 ResourcePlugin 等调用：将 content:// URI 转为可读文件路径 */
+  override fun launchFolderPicker(intent: Intent, onResult: (ActivityResult) -> Unit) {
+    startFolderPicker(intent, ActivityResultCallback { onResult(it) })
+  }
+
+  override fun launchPickImages(onResult: (List<Uri>) -> Unit) {
+    pickImagesCallback = onResult
+    val request = androidx.activity.result.PickVisualMediaRequest.Builder()
+      .setMediaType(ActivityResultContracts.PickVisualMedia.ImageOnly)
+      .build()
+    pickImagesLauncher.launch(request)
+  }
+
+  override fun launchPickKgpgFile(intent: Intent, onResult: (ActivityResult) -> Unit) {
+    pickKgpgCallback = onResult
+    pickKgpgFileLauncher.launch(intent)
+  }
+
+  /** 将 content:// URI 转为可读文件路径（供需要时使用） */
   fun copyContentUriToFile(uri: Uri): String? = copyContentUriToPrivateStorage(uri)
 
   private fun handleIntent(intent: Intent?) {

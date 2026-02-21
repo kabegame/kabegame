@@ -2592,6 +2592,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-global-shortcut",
+ "tauri-plugin-picker",
  "tauri-plugin-shell",
  "tokio",
  "uuid",
@@ -2628,9 +2629,11 @@ dependencies = [
  "base64 0.22.1",
  "dirs 5.0.1",
  "dokan",
+ "encoding_rs",
  "fuser",
  "futures-util",
  "image 0.24.9",
+ "infer",
  "libc",
  "lru",
  "memmap2",
@@ -5245,9 +5248,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-build"
-version = "2.5.4"
+version = "2.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76809f63061c8b25537b87f46b8733b31397cf419706dc874e1602be6479ba90"
+checksum = "ca7bd893329425df750813e95bd2b643d5369d929438da96d5bbb7cc2c918f74"
 dependencies = [
  "anyhow",
  "cargo_toml",
@@ -5390,6 +5393,17 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-plugin",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tauri-plugin-picker"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
+ "tauri-plugin-dialog",
  "thiserror 2.0.18",
 ]
 
