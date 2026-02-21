@@ -24,6 +24,17 @@ use url::Url;
 
 const PLUGIN_ID: &'static str = "本地导入";
 
+/// 按已入队数量计算并上报本地导入进度（0..99），避免结束前一直为 0。完成后由调用方发 100。
+fn emit_local_import_progress(task_id: &str, image_count: usize, archive_count: usize) {
+    let n = image_count + archive_count;
+    let pct = if n == 0 {
+        0.0
+    } else {
+        (n as f64 * 2.0).min(99.0) // 每项约 2%，上限 99
+    };
+    GlobalEmitter::global().emit_task_progress(task_id, pct);
+}
+
 /// On macOS, map permission-denied (EPERM) to a user-friendly message with drag-drop hint and System Settings instructions.
 fn map_io_error_for_user(e: io::Error, context: &str) -> String {
     #[cfg(target_os = "macos")]
@@ -164,14 +175,14 @@ async fn process_file_url(
         .to_file_path()
         .map_err(|_| format!("Invalid file URL: {}", url))?;
     if image_type::is_image_by_path(&path) {
-        enqueue_image(url.clone(), ctx, image_count).await?;
+        enqueue_image(url.clone(), ctx, image_count, archive_count).await?;
         return Ok(());
     }
     if crate::archive::is_archive_by_path(&path) && ctx.include_archive {
         if crate::archive::get_processor_by_path(&path).is_none() {
             return Err(format!("不支持的压缩格式: {}", path.display()));
         }
-        enqueue_archive(url.clone(), ctx, archive_count).await?;
+        enqueue_archive(url.clone(), ctx, image_count, archive_count).await?;
     }
     Ok(())
 }
@@ -189,11 +200,11 @@ async fn process_content_file_url(
 
     let mime = io.get_mime_type(uri)?;
     if image_type::is_image_mime(&mime) {
-        enqueue_image(url.clone(), ctx, image_count).await?;
+        enqueue_image(url.clone(), ctx, image_count, archive_count).await?;
         return Ok(());
     }
     if image_type::is_archive_mime(&mime) && ctx.include_archive {
-        enqueue_archive(url.clone(), ctx, archive_count).await?;
+        enqueue_archive(url.clone(), ctx, image_count, archive_count).await?;
     }
     Ok(())
 }
@@ -202,6 +213,7 @@ async fn enqueue_image(
     url: Url,
     ctx: &LocalImportContext<'_>,
     image_count: &mut usize,
+    archive_count: &usize,
 ) -> Result<(), String> {
     match ctx
         .download_queue
@@ -216,7 +228,10 @@ async fn enqueue_image(
         )
         .await
     {
-        Ok(()) => *image_count += 1,
+        Ok(()) => {
+            *image_count += 1;
+            emit_local_import_progress(ctx.task_id, *image_count, *archive_count);
+        }
         Err(e) => {
             GlobalEmitter::global().emit_task_log(
                 ctx.task_id,
@@ -231,6 +246,7 @@ async fn enqueue_image(
 async fn enqueue_archive(
     url: Url,
     ctx: &LocalImportContext<'_>,
+    image_count: &usize,
     archive_count: &mut usize,
 ) -> Result<(), String> {
     let job = DecompressionJob {
@@ -247,6 +263,7 @@ async fn enqueue_archive(
     queue.push_back(job);
     notify.notify_waiters();
     *archive_count += 1;
+    emit_local_import_progress(ctx.task_id, *image_count, *archive_count);
     Ok(())
 }
 
@@ -315,6 +332,7 @@ pub async fn run_builtin_local_import(
         "info",
         &format!("本地导入: 开始流式遍历 {} 个路径...", paths.len()),
     );
+    GlobalEmitter::global().emit_task_progress(task_id, 0.0);
 
     let mut image_count = 0usize;
     let mut archive_count = 0usize;

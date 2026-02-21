@@ -329,5 +329,7 @@ impl GlobalEmitter {
 
     pub fn emit_setting_change(&self, _changes: serde_json::Value) {}
 
+    pub fn emit_pending_queue_change(&self, _pending_count: usize) {}
+
     pub fn emit_task_status_from_storage(&self, _task_id: &str) {}
 }
