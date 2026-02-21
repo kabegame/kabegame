@@ -615,51 +615,6 @@ pub fn register_crawler_functions(
         }
     });
 
-    engine.register_fn("set_concurrency", {
-        let dq_holder = Arc::clone(&download_queue);
-        let task_id_holder = Arc::clone(&task_id);
-        move |limit: i64| {
-            let tid = get_task_id(&task_id_holder);
-            if limit > 0 {
-                match tokio::runtime::Handle::try_current() {
-                    Ok(handle) => {
-                        handle.block_on(dq_holder.set_task_concurrency(&tid, limit as u32));
-                    }
-                    Err(_) => {
-                        if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                        {
-                            rt.block_on(dq_holder.set_task_concurrency(&tid, limit as u32));
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    engine.register_fn("set_interval", {
-        let dq_holder = Arc::clone(&download_queue);
-        let task_id_holder = Arc::clone(&task_id);
-        move |ms: i64| {
-            let tid = get_task_id(&task_id_holder);
-            if ms >= 0 {
-                match tokio::runtime::Handle::try_current() {
-                    Ok(handle) => {
-                        handle.block_on(dq_holder.set_task_interval(&tid, ms as u64));
-                    }
-                    Err(_) => {
-                        if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                        {
-                            rt.block_on(dq_holder.set_task_interval(&tid, ms as u64));
-                        }
-                    }
-                }
-            }
-        }
-    });
 
     // to(url) - 访问一个网页，将当前页面入栈
     engine.register_fn("to", {

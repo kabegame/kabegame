@@ -8,7 +8,9 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
+    "tauri-plugin-picker-api": "workspace:*",
     "@kabegame/core": "workspace:*",
+    "@kabegame/image-type": "workspace:*",
     "@tauri-apps/api": "^2.10",
     "@tauri-apps/plugin-dialog": "^2.0",
     "@tauri-apps/plugin-fs": "^2.0",

@@ -186,21 +186,11 @@ impl TaskScheduler {
         });
     }
 
-    /// 启动 dispatcher loop
-    pub async fn start_dispatcher_loop(&self) {
-        use crate::crawler::downloader::dispatcher_loop;
-        let dq = self.download_queue();
-        let dq = dq.clone();
-        tokio::spawn(async move { 
-            dispatcher_loop(dq).await 
-        });
-    }
-
-    /// 启动下载 worker
+    /// 启动下载 worker（先根据设置设置并发数并 spawn 对应数量，避免 total_workers 仍为 0 时 spawn 0 个 worker）
     pub async fn start_download_workers_async(&self) {
         let dq = self.download_queue();
-        let initial_workers = dq.pool.total_workers.lock().await;
-        dq.start_download_workers(*initial_workers).await;
+        dq.set_desired_concurrency_from_settings().await;
+        dq.notify_all_waiting();
     }
 }
 
@@ -411,12 +401,12 @@ fn run_task(
 
     // 内置本地导入：不运行 Rhai，直接执行内置例程
     if req.plugin_id == "本地导入" {
-        return crate::crawler::local_import::run_builtin_local_import(
+        return Handle::current().block_on(crate::crawler::local_import::run_builtin_local_import(
             &req.task_id,
             req.user_config.clone(),
             req.output_album_id.clone(),
             &*download_queue,
-        );
+        ));
     }
 
     // 两种运行模式：

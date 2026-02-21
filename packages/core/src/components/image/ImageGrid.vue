@@ -967,11 +967,11 @@ const scrollToIndex = (index: number) => {
 
   // 如果目标行在视口上方，滚动到顶部对齐
   if (rowTop < viewportTop) {
-    container.scrollTop = rowTop;
+    container.scrollTo({ top: rowTop, behavior: "smooth" });
   }
   // 如果目标行在视口下方，滚动到底部对齐
   else if (rowBottom > viewportBottom) {
-    container.scrollTop = rowBottom - containerHeight;
+    container.scrollTo({ top: rowBottom - containerHeight, behavior: "smooth" });
   }
   // 如果已在视口内，不滚动
 };

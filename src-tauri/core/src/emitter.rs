@@ -217,10 +217,21 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送 pending 队列变化事件
-    pub fn emit_pending_queue_change(&self, pending_count: usize) {
-        let event = std::sync::Arc::new(DaemonEvent::PendingQueueChange { pending_count });
-        EventBroadcaster::global().broadcast(event);
+
+    /// 从存储读取任务并发送 task-status，用于下载失败等场景下刷新任务列表（避免一直显示“处理中”）。
+    pub fn emit_task_status_from_storage(&self, task_id: &str) {
+        let storage = crate::storage::Storage::global();
+        if let Ok(Some(task)) = storage.get_task(task_id) {
+            self.emit_task_status(
+                task_id,
+                &task.status,
+                Some(task.progress),
+                task.start_time,
+                task.end_time,
+                task.error.as_deref(),
+                None,
+            );
+        }
     }
 }
 
@@ -318,5 +329,5 @@ impl GlobalEmitter {
 
     pub fn emit_setting_change(&self, _changes: serde_json::Value) {}
 
-    pub fn emit_pending_queue_change(&self, _pending_count: usize) {}
+    pub fn emit_task_status_from_storage(&self, _task_id: &str) {}
 }

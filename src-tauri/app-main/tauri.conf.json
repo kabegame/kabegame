@@ -5,7 +5,7 @@
   "identifier": "Kabegame",
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
-    "devUrl": "http://192.168.0.6:1420",
+    "devUrl": "http://192.168.0.11:1420",
     "frontendDist": "../../dist-main"
   },
   "app": {

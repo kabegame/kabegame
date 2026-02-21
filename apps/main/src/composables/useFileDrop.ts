@@ -1,7 +1,6 @@
 import { ref, Ref, onUnmounted } from "vue";
 import { ElMessage } from "element-plus";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { stat } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import FileDropOverlay from "@/components/FileDropOverlay.vue";
 import ImportConfirmDialog from "@/components/import/ImportConfirmDialog.vue";
@@ -10,48 +9,22 @@ import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { IS_ANDROID } from "@kabegame/core/env";
 
-// 支持的图片格式（默认值，运行时由 updateSupportedTypes 从后端覆盖）
-let SUPPORTED_IMAGE_EXTENSIONS: string[] = [
-  "jpg",
-  "jpeg",
-  "png",
-  "gif",
-  "webp",
-  "bmp",
-  "svg",
-  "ico",
-];
-let SUPPORTED_ARCHIVE_EXTENSIONS = ["zip", "rar"]; // 默认值，会从后端更新
-let SUPPORTED_KGPG_EXTENSIONS = ["kgpg"]; // 默认值，会从后端更新
+// 支持的扩展名列表（用于默认提示文案），运行时由 updateSupportedTypes 从后端覆盖
+let SUPPORTED_ARCHIVE_EXTENSIONS = ["zip", "rar"];
+let SUPPORTED_KGPG_EXTENSIONS = ["kgpg"];
 
-// 让出 UI：避免在一次性批量导入/创建任务时长时间占用主线程导致"界面卡死"
-const yieldToUi = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+/** 后端根据路径推断类型（扩展名 + infer），用于拖入文件分类 */
+interface FileDropKindItem {
+  path: string;
+  isDirectory: boolean;
+  isImage: boolean;
+  isArchive: boolean;
+  isKgpg: boolean;
+}
 
-// 从文件路径提取扩展名（小写，不含点号）
-const getFileExtension = (filePath: string): string => {
-  const lastDot = filePath.lastIndexOf(".");
-  if (lastDot >= 0 && lastDot < filePath.length - 1) {
-    return filePath.substring(lastDot + 1).toLowerCase();
-  }
-  return "";
-};
-
-// 检查文件是否为支持的图片格式
-const isSupportedImageFile = (filePath: string): boolean => {
-  const ext = getFileExtension(filePath);
-  return SUPPORTED_IMAGE_EXTENSIONS.includes(ext);
-};
-
-// 检查文件是否为支持的压缩包
-const isArchiveFile = (filePath: string): boolean => {
-  const ext = getFileExtension(filePath);
-  return SUPPORTED_ARCHIVE_EXTENSIONS.includes(ext);
-};
-
-// 检查文件是否为 kgpg 插件包
-const isKgpgFile = (filePath: string): boolean => {
-  const ext = getFileExtension(filePath);
-  return SUPPORTED_KGPG_EXTENSIONS.includes(ext);
+const getFileDropKinds = async (paths: string[]): Promise<FileDropKindItem[]> => {
+  if (paths.length === 0) return [];
+  return invoke<FileDropKindItem[]>("get_file_drop_kinds", { paths });
 };
 
 export interface ImportItem {
@@ -91,22 +64,15 @@ export function useFileDrop(
 
   const updateSupportedTypes = async () => {
     try {
-      const [dropRes, imageRes] = await Promise.all([
-        invoke<{
-          archiveExtensions: string[];
-          pluginExtensions: string[];
-        }>("get_file_drop_supported_types"),
-        invoke<{ extensions: string[] }>("get_supported_image_types"),
-      ]);
-
+      const dropRes = await invoke<{
+        archiveExtensions: string[];
+        pluginExtensions: string[];
+      }>("get_file_drop_supported_types");
       if (dropRes?.archiveExtensions) {
         SUPPORTED_ARCHIVE_EXTENSIONS = dropRes.archiveExtensions;
       }
       if (dropRes?.pluginExtensions) {
         SUPPORTED_KGPG_EXTENSIONS = dropRes.pluginExtensions;
-      }
-      if (imageRes?.extensions?.length) {
-        SUPPORTED_IMAGE_EXTENSIONS = imageRes.extensions;
       }
     } catch (e) {
       console.warn("[App] 获取支持的文件类型失败，使用默认值:", e);
@@ -128,46 +94,41 @@ export function useFileDrop(
       
       fileDropUnlisten = await currentWindow.onDragDropEvent(async (event) => {
         if (event.payload.type === "enter") {
-          // 文件/文件夹进入窗口时，显示视觉提示
+          // 文件/文件夹进入窗口时，显示视觉提示（后端按路径推断类型：扩展名 + infer）
           const paths = event.payload.paths;
           if (paths && paths.length > 0) {
             try {
-              const firstPath = paths[0];
-              const metadata = await stat(firstPath);
+              const kinds = await getFileDropKinds(paths.slice(0, 1));
+              const first = kinds[0];
               let text = "拖入文件以导入";
               let isImportable = false;
 
-              if (metadata.isDirectory) {
-                text = "拖入文件夹以导入";
-                isImportable = true;
-              } else if (isKgpgFile(firstPath)) {
-                text = "拖入插件包（.kgpg）以导入";
-                isImportable = true;
-              } else if (isArchiveFile(firstPath)) {
-                const exts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
-                text = `拖入压缩包（${exts}）以导入`;
-                isImportable = true;
-              } else if (isSupportedImageFile(firstPath)) {
-                // 图片文件也是可导入的
-                isImportable = true;
-                text = "拖入图片以导入";
-              } else {
-                // 如果是其他不支持的文件，显示默认提示
-                const archiveExts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
-                text = `支持拖入文件夹、插件(.kgpg)、图片或压缩包(${archiveExts})`;
+              if (first) {
+                if (first.isDirectory) {
+                  text = "拖入文件夹以导入";
+                  isImportable = true;
+                } else if (first.isKgpg) {
+                  text = "拖入插件包（.kgpg）以导入";
+                  isImportable = true;
+                } else if (first.isArchive) {
+                  const exts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
+                  text = `拖入压缩包（${exts}）以导入`;
+                  isImportable = true;
+                } else if (first.isImage) {
+                  isImportable = true;
+                  text = "拖入图片以导入";
+                } else {
+                  const archiveExts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
+                  text = `支持拖入文件夹、插件(.kgpg)、图片或压缩包(${archiveExts})`;
+                }
               }
 
-              // 检测到可导入类型，显示遮罩并将窗口带到前台
+              fileDropOverlayRef.value?.show(text);
+              isOverlayVisible = true;
               if (isImportable) {
-                fileDropOverlayRef.value?.show(text);
-                isOverlayVisible = true;
                 await bringWindowToFront();
-              } else {
-                fileDropOverlayRef.value?.show(text);
-                isOverlayVisible = true;
               }
             } catch (error) {
-              // 如果检查失败，显示通用提示
               const archiveExts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
               fileDropOverlayRef.value?.show(
                 `拖入文件夹、插件(.kgpg)、图片或压缩包(${archiveExts})`,
@@ -190,46 +151,32 @@ export function useFileDrop(
           const droppedPaths = event.payload.paths;
           if (droppedPaths && droppedPaths.length > 0) {
             try {
-              // 处理所有路径，区分文件和文件夹，并过滤文件
+              // 后端根据路径推断类型（扩展名 + infer），一次调用得到所有分类
+              const kinds = await getFileDropKinds(droppedPaths);
               const items: ImportItem[] = [];
 
-              for (const path of droppedPaths) {
-                try {
-                  const metadata = await stat(path);
-                  const pathParts = path.split(/[/\\]/);
-                  const name = pathParts[pathParts.length - 1] || path;
+              for (const k of kinds) {
+                const pathParts = k.path.split(/[/\\]/);
+                const name = pathParts[pathParts.length - 1] || k.path;
 
-                  if (metadata.isDirectory) {
-                    // 文件夹：直接添加
-                    items.push({
-                      path,
-                      name,
-                      isDirectory: true,
-                      isArchive: false,
-                      isKgpg: false,
-                    });
-                  } else {
-                    // 文件：检查是否为支持的图片格式 / archive / kgpg
-                    if (
-                      isSupportedImageFile(path) ||
-                      isArchiveFile(path) ||
-                      isKgpgFile(path)
-                    ) {
-                      const kgpg = isKgpgFile(path);
-                      items.push({
-                        path,
-                        // 列表里明确标注插件包（不改 ImportConfirmDialog 也能看清用途）
-                        name: kgpg ? `${name}（插件包）` : name,
-                        isDirectory: false,
-                        isArchive: isArchiveFile(path),
-                        isKgpg: kgpg,
-                      });
-                    } else {
-                      console.log("[App] 跳过不支持的文件:", path);
-                    }
-                  }
-                } catch (error) {
-                  console.error("[App] 检查路径失败:", path, error);
+                if (k.isDirectory) {
+                  items.push({
+                    path: k.path,
+                    name,
+                    isDirectory: true,
+                    isArchive: false,
+                    isKgpg: false,
+                  });
+                } else if (k.isImage || k.isArchive || k.isKgpg) {
+                  items.push({
+                    path: k.path,
+                    name: k.isKgpg ? `${name}（插件包）` : name,
+                    isDirectory: false,
+                    isArchive: k.isArchive,
+                    isKgpg: k.isKgpg,
+                  });
+                } else {
+                  console.log("[App] 跳过不支持的文件:", k.path);
                 }
               }
 

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use crate::crawler::archiver;
+#[cfg(target_os = "android")]
+use crate::crawler::content_io::get_content_io_provider;
 use crate::crawler::decompression::DecompressionJob;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
@@ -7,10 +8,8 @@ use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, Notify, RwLock};
@@ -169,39 +168,6 @@ pub async fn download_file_to_path_with_retry(
     downloader.download(dq, &parsed, dest, task_id, progress).await
 }
 
-/// content:// 协议解析器类型：将 content URI 复制到目标路径（由 Android 应用注入）
-pub type ContentResolverFn = Arc<
-    dyn Fn(String, PathBuf) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>>
-        + Send
-        + Sync,
->;
-
-static CONTENT_RESOLVER: OnceLock<ContentResolverFn> = OnceLock::new();
-
-/// 设置 content:// 解析器（仅 Android 需调用，用于将 content URI 复制到 dest）
-pub fn set_content_resolver(f: ContentResolverFn) {
-    let _ = CONTENT_RESOLVER.set(f);
-}
-
-pub(crate) fn get_content_resolver() -> Option<&'static ContentResolverFn> {
-    CONTENT_RESOLVER.get()
-}
-
-/// content:// 复制前调用的「注册可访问权限」回调（由 Android 注入，内部可调 `takePersistableUriPermission`）。
-pub type ContentPermissionRegisterFn =
-    Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync>;
-
-static CONTENT_PERMISSION_REGISTER: OnceLock<ContentPermissionRegisterFn> = OnceLock::new();
-
-/// 设置 content:// 复制前的权限注册回调（仅 Android 需调用）。
-pub fn set_content_permission_register(f: ContentPermissionRegisterFn) {
-    let _ = CONTENT_PERMISSION_REGISTER.set(f);
-}
-
-pub(crate) fn get_content_permission_register() -> Option<&'static ContentPermissionRegisterFn> {
-    CONTENT_PERMISSION_REGISTER.get()
-}
-
 pub async fn ensure_minimum_duration(download_start_time: u64, min_duration_ms: u64) {
     let elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -214,6 +180,7 @@ pub async fn ensure_minimum_duration(download_start_time: u64, min_duration_ms: 
     }
 }
 
+/// 在阻塞线程中计算文件 SHA256，使用大缓冲区顺序读，避免 tokio 小缓冲 + 多次 await 的开销。
 pub async fn compute_file_hash(path: &Path) -> Result<String, String> {
     let mut file = tokio::fs::File::open(path)
         .await
@@ -233,23 +200,6 @@ pub async fn compute_file_hash(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-pub fn resolve_local_path_from_url(url: &str) -> Option<PathBuf> {
-    archiver::resolve_local_path_from_url(url)
-}
-
-#[derive(Debug)]
-pub struct TempDirGuard {
-    pub path: PathBuf,
-}
-
-impl Drop for TempDirGuard {
-    fn drop(&mut self) {
-        let path = self.path.clone();
-        tokio::task::spawn(async move {
-            let _ = tokio::fs::remove_dir_all(path).await;
-        });
-    }
-}
 
 #[allow(dead_code)]
 pub fn compute_bytes_hash(bytes: &[u8]) -> String {
@@ -397,29 +347,26 @@ fn compute_image_download_path(url: &str, base_dir: &Path) -> Result<PathBuf, St
     downloader.compute_destination_path(&parsed, base_dir)
 }
 
-/// 准备下载目标：归档返回 (temp_dir 内路径, Some(guard))，图片返回 (images_dir 内路径, None)。
+/// 准备下载目标：归档保存到 images_dir/.archives/；图片为 images_dir 内路径。
 async fn prepare_download_destination(
     job: &DownloadRequest,
     is_archive: bool,
     processor_ext: Option<&str>,
-) -> Result<(PathBuf, Option<Arc<TempDirGuard>>), String> {
+) -> Result<PathBuf, String> {
     if is_archive {
         let ext = processor_ext.unwrap_or("zip");
-        let temp_dir = std::env::temp_dir().join("kabegame_archive");
-        tokio::fs::create_dir_all(&temp_dir)
+        let archive_dir = job.images_dir.join(".archives");
+        tokio::fs::create_dir_all(&archive_dir)
             .await
-            .map_err(|e| format!("Failed to create temp dir: {}", e))?;
-        let temp_guard = Arc::new(TempDirGuard {
-            path: temp_dir.clone(),
-        });
-        let path = temp_dir.join(format!("{}__kg_archive.{}", uuid::Uuid::new_v4(), ext));
-        Ok((path, Some(temp_guard)))
+            .map_err(|e| format!("Failed to create archive dir: {}", e))?;
+        let path = archive_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext));
+        Ok(path)
     } else {
         tokio::fs::create_dir_all(&job.images_dir)
             .await
             .map_err(|e| format!("Failed to create output directory: {}", e))?;
         let path = compute_image_download_path(job.url.as_str(), &job.images_dir)?;
-        Ok((path, None))
+        Ok(path)
     }
 }
 
@@ -461,12 +408,10 @@ pub struct DownloadRequest {
     pub output_album_id: Option<String>,
     pub http_headers: HashMap<String, String>,
     pub archive_type: Option<ArchiveType>,
-    pub temp_dir_guard: Option<Arc<TempDirGuard>>,
 }
 
 #[derive(Debug)]
 pub struct DownloadPoolState {
-    pub in_flight: u32,
     pub queue: VecDeque<DownloadRequest>,
 }
 
@@ -486,7 +431,6 @@ impl DownloadPool {
         Self {
             total_workers: Mutex::new(0),
             state: Mutex::new(DownloadPoolState {
-                in_flight: 0,
                 queue: VecDeque::new(),
             }),
             job_notify: Notify::new(),
@@ -495,27 +439,12 @@ impl DownloadPool {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct TaskRateLimit {
-    pub concurrency: Option<u32>,
-    pub min_interval_ms: Option<u64>,
-}
-
-#[derive(Debug, Default)]
-pub struct TaskRuntimeState {
-    pub in_flight: u32,
-    pub last_finished: u64,
-}
-
 #[derive(Clone)]
 pub struct DownloadQueue {
     pub pool: Arc<DownloadPool>,
     pub active_tasks: Arc<Mutex<Vec<ActiveDownloadInfo>>>,
     pub canceled_tasks: Arc<RwLock<HashSet<String>>>,
     pub decompression_queue: Arc<(Mutex<VecDeque<DecompressionJob>>, Notify)>,
-    pub pending_queue: Arc<(Mutex<VecDeque<DownloadRequest>>, Notify)>,
-    pub task_limits: Arc<Mutex<HashMap<String, TaskRateLimit>>>,
-    pub task_states: Arc<Mutex<HashMap<String, TaskRuntimeState>>>,
 }
 
 impl DownloadQueue {
@@ -527,9 +456,6 @@ impl DownloadQueue {
             active_tasks: Arc::new(Mutex::new(Vec::new())),
             canceled_tasks: Arc::new(RwLock::new(HashSet::new())),
             decompression_queue: Arc::new((Mutex::new(VecDeque::new()), Notify::new())),
-            pending_queue: Arc::new((Mutex::new(VecDeque::new()), Notify::new())),
-            task_limits: Arc::new(Mutex::new(HashMap::new())),
-            task_states: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -574,19 +500,6 @@ impl DownloadQueue {
         self.pool.job_notify.notify_waiters();
     }
 
-    pub async fn set_task_concurrency(&self, task_id: &str, limit: u32) {
-        let mut limits = self.task_limits.lock().await;
-        let entry = limits.entry(task_id.to_string()).or_default();
-        entry.concurrency = Some(limit);
-        self.pending_queue.1.notify_waiters();
-    }
-
-    pub async fn set_task_interval(&self, task_id: &str, interval_ms: u64) {
-        let mut limits = self.task_limits.lock().await;
-        let entry = limits.entry(task_id.to_string()).or_default();
-        entry.min_interval_ms = Some(interval_ms);
-    }
-
     pub async fn get_active_downloads(&self) -> Result<Vec<ActiveDownloadInfo>, String> {
         let tasks = self.active_tasks.lock().await;
         Ok(tasks.clone())
@@ -611,7 +524,6 @@ impl DownloadQueue {
             output_album_id,
             http_headers,
             None,
-            None,
         )
         .await
     }
@@ -629,7 +541,7 @@ impl DownloadQueue {
     ) -> Result<(), String> {
         let t = if archive_type.trim().is_empty() || archive_type.eq_ignore_ascii_case("none") {
             let mgr = crate::crawler::archiver::manager();
-            if let Some(processor) = mgr.get_processor_by_url(url.as_str()) {
+            if let Some(processor) = mgr.get_processor_by_url(&url) {
                 let types = processor.supported_types();
                 if types.contains(&"zip") {
                     Some(ArchiveType::Zip)
@@ -659,7 +571,6 @@ impl DownloadQueue {
             output_album_id,
             http_headers,
             Some(t),
-            None,
         )
         .await
     }
@@ -674,33 +585,27 @@ impl DownloadQueue {
         output_album_id: Option<String>,
         http_headers: HashMap<String, String>,
         archive_type: Option<ArchiveType>,
-        temp_dir_guard: Option<Arc<TempDirGuard>>,
     ) -> Result<(), String> {
         // 检查任务是否取消
         if self.is_task_canceled(&task_id).await {
             return Err("Task canceled".to_string());
         }
 
-        // 入队到 pending_queue
-        let (queue_lock, notify) = &*self.pending_queue;
-        let pending_count = {
-            let mut queue = queue_lock.lock().await;
-            queue.push_back(DownloadRequest {
-                url,
-                images_dir,
-                plugin_id,
-                task_id,
-                download_start_time,
-                output_album_id,
-                http_headers,
-                archive_type,
-                temp_dir_guard,
-            });
-            notify.notify_one();
-            queue.len()
-        };
-        // 发送 pending 队列变化事件
-        GlobalEmitter::global().emit_pending_queue_change(pending_count);
+        eprintln!("download: {}", url.as_str());
+        // 直接推入 pool.state.queue，由 worker 消费
+        let mut pool_st = self.pool.state.lock().await;
+        pool_st.queue.push_back(DownloadRequest {
+            url,
+            images_dir,
+            plugin_id,
+            task_id,
+            download_start_time,
+            output_album_id,
+            http_headers,
+            archive_type,
+        });
+        drop(pool_st);
+        self.pool.job_notify.notify_waiters();
 
         Ok(())
     }
@@ -733,137 +638,34 @@ impl DownloadQueue {
     }
 }
 
-pub(crate) async fn dispatcher_loop(dq: Arc<DownloadQueue>) {
-    let (pending_lock, pending_notify) = &*dq.pending_queue;
-    let pool = Arc::clone(&dq.pool);
-    let task_limits = Arc::clone(&dq.task_limits);
-    let task_states = Arc::clone(&dq.task_states);
-
-    loop {
-        let mut pending = pending_lock.lock().await;
-        if pending.is_empty() {
-            drop(pending);
-            pending_notify.notified().await;
-            pending = pending_lock.lock().await;
-        }
-
-        let count = pending.len();
-        let mut min_wait_ms: Option<u64> = None;
-
-        for _ in 0..count {
-            if pending.is_empty() {
-                break;
-            }
-
-            let job_ref = pending.front().unwrap();
-            let task_id = job_ref.task_id.clone();
-
-            let desired = Settings::global()
-                .get_max_concurrent_downloads()
-                .await
-                .unwrap_or(1)
-                .max(1);
-            let mut pool_st = pool.state.lock().await;
-            if pool_st.in_flight >= desired {
-                drop(pool_st);
-                break;
-            }
-
-            let limits = task_limits.lock().await;
-            let limit = limits.get(&task_id).cloned().unwrap_or_default();
-            drop(limits);
-
-            let mut states = task_states.lock().await;
-            let state = states.entry(task_id.clone()).or_default();
-
-            let is_canceled = dq.is_task_canceled(&task_id).await;
-
-            let concurrency_ok =
-                is_canceled || limit.concurrency.map_or(true, |c| state.in_flight < c);
-
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64;
-
-            let mut interval_wait = 0u64;
-            let interval_ok = is_canceled
-                || limit.min_interval_ms.map_or(true, |i| {
-                    let next_allowed = state.last_finished + i;
-                    if now >= next_allowed {
-                        true
-                    } else {
-                        interval_wait = next_allowed - now;
-                        false
-                    }
-                });
-
-            if concurrency_ok && interval_ok {
-                let job = pending.pop_front().unwrap();
-                let pending_count = pending.len();
-                state.in_flight += 1;
-                drop(states);
-
-                pool_st.queue.push_back(job);
-                pool_st.in_flight += 1;
-                pool.job_notify.notify_one();
-                drop(pool_st);
-
-                // 发送 pending 队列变化事件
-                GlobalEmitter::global().emit_pending_queue_change(pending_count);
-            } else {
-                if concurrency_ok && !interval_ok {
-                    if let Some(min) = min_wait_ms {
-                        min_wait_ms = Some(min.min(interval_wait));
-                    } else {
-                        min_wait_ms = Some(interval_wait);
-                    }
-                }
-
-                drop(states);
-                drop(pool_st);
-                let job = pending.pop_front().unwrap();
-                pending.push_back(job);
-            }
-        }
-
-        drop(pending);
-
-        if let Some(wait_ms) = min_wait_ms {
-            let _ = tokio::time::timeout(Duration::from_millis(wait_ms), pending_notify.notified())
-                .await;
-        }
-    }
-}
 
 async fn download_worker_loop(dq: Arc<DownloadQueue>) {
     let pool = Arc::clone(&dq.pool);
     let active_tasks = Arc::clone(&dq.active_tasks);
     loop {
-        let job = tokio::select! {
-            _ = pool.exit_notify.notified() => {
+        let job = {
+            let mut st = pool.state.lock().await;
+            loop {
+                if let Some(job) = st.queue.pop_front() {
+                    break job;
+                }
                 let desired = Settings::global()
                     .get_max_concurrent_downloads()
                     .await
                     .unwrap_or(1)
                     .max(1);
-                let mut total = pool.total_workers.lock().await;
-                if *total > desired {
-                    *total -= 1;
+                drop(st);
+                let total = *pool.total_workers.lock().await;
+                if total > desired {
+                    let mut tw = pool.total_workers.lock().await;
+                    *tw -= 1;
                     return;
                 }
-                continue;
-            }
-            _ = pool.job_notify.notified() => {
-                let mut st = pool.state.lock().await;
-
-                if let Some(job) = st.queue.pop_front() {
-                    job
-                } else {
-                    continue;
-                }
+                pool.job_notify.notified().await;
+                st = pool.state.lock().await;
             }
         };
+        eprintln!("download_worker_loop: {}", job.url.as_str());
 
         // 取出任务后，添加到 active_tasks 并发送 "preparing" 事件
         {
@@ -888,7 +690,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
 
         let processor = match job.archive_type {
             Some(ty) => crate::crawler::archiver::manager().get_processor(ty),
-            None => crate::crawler::archiver::manager().get_processor_by_url(job.url.as_str()),
+            None => crate::crawler::archiver::manager().get_processor_by_url(&job.url),
         };
 
         // 先计算下载位置并下载，再按类型分支（归档入解压队 / 图片读内容后处理）
@@ -992,28 +794,14 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     tasks.retain(|t| t.url != url_clone.as_str() || t.start_time != download_start_time);
                     drop(tasks);
                     let pool = Arc::clone(&dq.pool);
-                    let task_states = Arc::clone(&dq.task_states);
-                    let mut st = pool.state.lock().await;
-                    st.in_flight = st.in_flight.saturating_sub(1);
-                    drop(st);
-                    let mut states = task_states.lock().await;
-                    if let Some(state) = states.get_mut(&job.task_id) {
-                        state.in_flight = state.in_flight.saturating_sub(1);
-                        state.last_finished = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as u64;
-                    }
-                    drop(states);
-                    dq.pending_queue.1.notify_waiters();
-                    pool.job_notify.notify_one();
+                    pool.job_notify.notify_waiters();
                     continue;
                 }
             }
         }
 
         let dest = match prepare_download_destination(&job, is_archive, processor_ext).await {
-            Ok(x) => Some(x),
+            Ok(path) => Some(path),
             Err(e) => {
                 GlobalEmitter::global().emit_download_state(
                     &task_id_clone,
@@ -1023,13 +811,14 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     "failed",
                     Some(e.as_str()),
                 );
+                GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
                 let mut tasks = active_tasks.lock().await;
                 tasks.retain(|t| t.url != url_clone.as_str() || t.start_time != download_start_time);
                 None
             }
         };
 
-        if let Some((download_path, temp_guard)) = dest {
+        if let Some(download_path) = dest {
             let progress_ctx = DownloadProgressContext {
                 plugin_id: &job.plugin_id,
                 start_time: download_start_time,
@@ -1044,19 +833,19 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             .await;
 
             match download_result {
-                Ok(final_url) => {
-                    // 归档：解压队列
+                Ok(_) => {
+                    // 归档：解压到 images_dir，解压 worker 会添加 file:// 下载请求
                     if is_archive {
+                        let archive_url = Url::from_file_path(&download_path)
+                            .expect("download_path must be valid for archive");
                         let decompression_job = DecompressionJob {
-                            archive_path: download_path,
+                            archive_url,
                             images_dir: job.images_dir.clone(),
-                            original_url: url_clone.to_string(),
                             task_id: task_id_clone.clone(),
                             plugin_id: plugin_id_clone.clone(),
                             download_start_time,
                             output_album_id: job.output_album_id.clone(),
                             http_headers: job.http_headers.clone(),
-                            temp_dir_guard: temp_guard,
                         };
                         let (lock, notify) = &*dq.decompression_queue;
                         let mut queue = lock.lock().await;
@@ -1071,22 +860,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             None,
                         );
                     } else {
-                        // 非归档：后处理
-                        let path_for_post = if final_url != job.url.as_str() {
-                            if let Ok(new_path) =
-                                compute_image_download_path(&final_url, &job.images_dir)
-                            {
-                                if tokio::fs::rename(&download_path, &new_path).await.is_ok() {
-                                    new_path
-                                } else {
-                                    download_path
-                                }
-                            } else {
-                                download_path
-                            }
-                        } else {
-                            download_path
-                        };
+                        // 非归档：后处理。content:// 用 readFileBytes；file:// 用 path。
+                        let is_content = job.url.scheme() == "content";
 
                         // 后处理：processing 状态、去重逻辑、缩略图、入库、入画册、发事件
                         {
@@ -1120,6 +895,86 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                 .get_auto_deduplicate()
                                 .await
                                 .unwrap_or(false);
+
+                            #[cfg(target_os = "android")]
+                            let use_path_flow = !is_content;
+                            #[cfg(not(target_os = "android"))]
+                            let use_path_flow = true;
+
+                            #[cfg(target_os = "android")]
+                            if !use_path_flow {
+                                let bytes = match get_content_io_provider()
+                                    .ok_or_else(|| "ContentIoProvider 未注册".to_string())
+                                    .and_then(|io| io.read_file_bytes(url_clone.as_str()))
+                                {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        let _ = Storage::global().add_task_failed_image(
+                                            &task_id_clone,
+                                            &plugin_id_clone,
+                                            url_clone.as_str(),
+                                            download_start_time as i64,
+                                            Some(e.as_str()),
+                                        );
+                                        GlobalEmitter::global().emit_download_state(
+                                            &task_id_clone,
+                                            url_clone.as_str(),
+                                            download_start_time,
+                                            &plugin_id_clone,
+                                            "failed",
+                                            Some(e.as_str()),
+                                        );
+                                        GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
+                                        continue;
+                                    }
+                                };
+                                ensure_minimum_duration(download_start_time, 500).await;
+                                let hash = compute_bytes_hash(&bytes);
+                                match generate_thumbnail_from_bytes(&bytes).await {
+                                    Ok(thumb_opt) => {
+                                        let thumb_path_str = thumb_opt
+                                            .as_ref()
+                                            .and_then(|p| p.canonicalize().ok())
+                                            .map(|p| {
+                                                p.to_string_lossy()
+                                                    .trim_start_matches("\\\\?\\")
+                                                    .to_string()
+                                            })
+                                            .unwrap_or_else(|| url_clone.to_string());
+                                        let _ = process_downloaded_content_image_to_storage(
+                                            url_clone.as_str(),
+                                            &hash,
+                                            thumb_opt.as_ref(),
+                                            &thumb_path_str,
+                                            &plugin_id_clone,
+                                            &task_id_clone,
+                                            download_start_time,
+                                            job.output_album_id.as_deref(),
+                                        )
+                                        .await;
+                                    }
+                                    Err(e) => {
+                                        let _ = Storage::global().add_task_failed_image(
+                                            &task_id_clone,
+                                            &plugin_id_clone,
+                                            url_clone.as_str(),
+                                            download_start_time as i64,
+                                            Some(e.as_str()),
+                                        );
+                                        GlobalEmitter::global().emit_download_state(
+                                            &task_id_clone,
+                                            url_clone.as_str(),
+                                            download_start_time,
+                                            &plugin_id_clone,
+                                            "failed",
+                                            Some(e.as_str()),
+                                        );
+                                        GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
+                                    }
+                                }
+                                ensure_minimum_duration(download_start_time, 500).await;
+                            } else if use_path_flow {
+                            let path_for_post = download_path;
 
                             if !auto_deduplicate {
                                 // 去重关闭：完整流程，并统计后处理各步骤耗时
@@ -1156,6 +1011,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                             "failed",
                                             Some(e.as_str()),
                                         );
+                                        GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
                                     }
                                 }
                             } else {
@@ -1259,10 +1115,12 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                             "failed",
                                             Some(e.as_str()),
                                         );
+                                        GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
                                     }
                                 }
                             }
                             ensure_minimum_duration(download_start_time, 500).await;
+                            }
                         }
                     }
                     let mut tasks = active_tasks.lock().await;
@@ -1296,31 +1154,112 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         },
                         Some(&e),
                     );
+                    if !e.contains("Task canceled") {
+                        GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
+                    }
                     let mut tasks = active_tasks.lock().await;
                     tasks.retain(|t| t.url != url_clone.as_str() || t.start_time != download_start_time);
                 }
             }
         }
 
-        // 两个分支的公共收尾：扣减 in_flight、更新 task_states、通知
+        // 两个分支的公共收尾：通知等待中的 worker
         let pool = Arc::clone(&dq.pool);
-        let task_states = Arc::clone(&dq.task_states);
-        let mut st = pool.state.lock().await;
-        st.in_flight = st.in_flight.saturating_sub(1);
-        drop(st);
+        pool.job_notify.notify_waiters();
+    }
+}
 
-        let mut states = task_states.lock().await;
-        if let Some(state) = states.get_mut(&job.task_id) {
-            state.in_flight = state.in_flight.saturating_sub(1);
-            state.last_finished = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64;
+/// content:// 图片入库：local_path 存 URI，thumbnail_path 为本地路径。
+#[cfg(target_os = "android")]
+async fn process_downloaded_content_image_to_storage(
+    content_uri: &str,
+    hash: &str,
+    thumbnail_path: Option<&PathBuf>,
+    thumbnail_path_str: &str,
+    plugin_id: &str,
+    task_id: &str,
+    download_start_time: u64,
+    output_album_id: Option<&str>,
+) -> Result<(), String> {
+    let image_info = ImageInfo {
+        id: "".to_string(),
+        url: None,
+        local_path: content_uri.to_string(),
+        plugin_id: plugin_id.to_string(),
+        task_id: Some(task_id.to_string()),
+        crawled_at: download_start_time,
+        metadata: None,
+        thumbnail_path: thumbnail_path_str.to_string(),
+        favorite: false,
+        hash: hash.to_string(),
+        order: Some(download_start_time as i64),
+        local_exists: true,
+    };
+    match Storage::global().add_image(image_info) {
+        Ok(inserted) => {
+            let image_id = inserted.id.clone();
+            GlobalEmitter::global().emit(
+                "images-change",
+                serde_json::json!({
+                    "reason": "add",
+                    "taskId": task_id,
+                    "imageIds": [image_id.clone()],
+                }),
+            );
+            if let Some(album_id) = output_album_id {
+                if !album_id.trim().is_empty() {
+                    let added =
+                        Storage::global().add_images_to_album_silent(album_id, &[image_id.clone()]);
+                    if added > 0 {
+                        let reason = if album_id == FAVORITE_ALBUM_ID {
+                            "favorite-add"
+                        } else {
+                            "album-add"
+                        };
+                        GlobalEmitter::global().emit(
+                            "images-change",
+                            serde_json::json!({
+                                "reason": reason,
+                                "albumId": album_id,
+                                "taskId": task_id,
+                                "imageIds": [image_id.clone()],
+                            }),
+                        );
+                    }
+                }
+            }
+            GlobalEmitter::global().emit_download_state(
+                task_id,
+                content_uri,
+                download_start_time,
+                plugin_id,
+                "completed",
+                None,
+            );
+            Ok(())
         }
-        drop(states);
-
-        dq.pending_queue.1.notify_waiters();
-        pool.job_notify.notify_one();
+        Err(e) => {
+            if let Some(thumb) = thumbnail_path {
+                let _ = tokio::fs::remove_file(thumb).await;
+            }
+            let _ = Storage::global().add_task_failed_image(
+                task_id,
+                plugin_id,
+                content_uri,
+                download_start_time as i64,
+                Some(e.as_str()),
+            );
+            GlobalEmitter::global().emit_download_state(
+                task_id,
+                content_uri,
+                download_start_time,
+                plugin_id,
+                "failed",
+                Some(e.as_str()),
+            );
+            GlobalEmitter::global().emit_task_status_from_storage(task_id);
+            Err(e)
+        }
     }
 }
 
@@ -1360,6 +1299,7 @@ async fn process_downloaded_image_to_storage(
                 "failed",
                 Some(e.as_str()),
             );
+            GlobalEmitter::global().emit_task_status_from_storage(task_id);
             return Err(e);
         }
     };
@@ -1485,6 +1425,7 @@ async fn process_downloaded_image_to_storage(
                 "failed",
                 Some(e.as_str()),
             );
+            GlobalEmitter::global().emit_task_status_from_storage(task_id);
             Err(e)
         }
     }
@@ -1517,7 +1458,35 @@ fn remove_zone_identifier(file_path: &Path) {
     }
 }
 
+/// 从字节生成缩略图（用于 content:// URI）。
+pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBuf>, String> {
+    let img = match image::load_from_memory(bytes) {
+        Ok(img) => img,
+        Err(_) => return Ok(None),
+    };
+    let app_data_dir = crate::app_paths::kabegame_data_dir();
+    let thumbnails_dir = app_data_dir.join("thumbnails");
+    tokio::fs::create_dir_all(&thumbnails_dir)
+        .await
+        .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
+    let thumbnail = img.thumbnail(300, 300);
+    let thumbnail_filename = format!(
+        "{}.{}",
+        uuid::Uuid::new_v4(),
+        crate::image_type::default_image_extension()
+    );
+    let thumbnail_path = thumbnails_dir.join(&thumbnail_filename);
+    thumbnail
+        .save(&thumbnail_path)
+        .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
+    Ok(Some(thumbnail_path))
+}
+
 pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, String> {
+    // 制作缩略图时用后缀+infer 推断，非图片则跳过
+    if !crate::image_type::is_image_by_path(image_path) {
+        return Ok(None);
+    }
     let app_data_dir = crate::app_paths::kabegame_data_dir();
     let thumbnails_dir = app_data_dir.join("thumbnails");
     tokio::fs::create_dir_all(&thumbnails_dir)

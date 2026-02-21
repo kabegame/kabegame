@@ -75,6 +75,7 @@ import { ElDrawer, ElIcon } from "element-plus";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { watch, ref } from "vue";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
+import { pickFolder, type PickFolderResult } from "tauri-plugin-picker-api";
 
 interface Props {
   modelValue: boolean;
@@ -87,7 +88,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
-  (e: "select", type: "image" | "folder" | "archive"): void;
+  (e: "select", type: "image" | "folder" | "archive", payload?: PickFolderResult): void;
 }>();
 
 const modalStackStore = useModalStackStore();
@@ -107,8 +108,16 @@ watch(
   }
 );
 
-// 受控：仅通过 modelValue 控制显示；选择时只发 select，由父组件关闭
-const handleSelect = (type: "image" | "folder" | "archive") => {
+// 受控：仅通过 modelValue 控制显示；选择时发 select，由父组件关闭
+// 移动端选文件夹时在此调用 picker 插件并带上结果
+const handleSelect = async (type: "image" | "folder" | "archive") => {
+  if (type === "folder") {
+    const result = await pickFolder();
+    if (result?.uri ?? result?.path) {
+      emit("select", "folder", result);
+    }
+    return;
+  }
   emit("select", type);
 };
 </script>

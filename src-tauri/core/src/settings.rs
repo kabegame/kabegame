@@ -1045,9 +1045,9 @@ Write-Output "$style,$tile"
             builder.set_app_name("Kabegame");
             builder.set_app_path(app_path_str);
             
-            // 如果启用开机启动，添加 --auto-startup 参数
+            // 如果启用开机启动，添加 --minimized 参数
             if enabled {
-                builder.set_args(&["--auto-startup"]);
+                builder.set_args(&["--minimized"]);
             }
 
             let auto_launch = builder

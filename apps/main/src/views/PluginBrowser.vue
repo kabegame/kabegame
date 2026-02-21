@@ -278,6 +278,7 @@ import { usePluginStore, type Plugin } from "@/stores/plugins";
 import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { pickKgpgFile } from "tauri-plugin-picker-api";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
@@ -901,11 +902,10 @@ const selectPluginFile = async () => {
 };
 
 /** Android：直接打开文件选择器，选择后执行导入（不显示导入弹窗）。
- *  使用 Kotlin pickKgpgFile 将 content:// URI 复制到应用私有目录，返回可读路径 */
+ *  使用 picker 插件的 pickKgpgFile 将 content:// URI 复制到应用私有目录，返回可读路径 */
 const triggerImportDirect = async () => {
   try {
-    const res = await invoke<{ path: string }>("plugin:resource|pickKgpgFile");
-    const filePath = res?.path;
+    const filePath = await pickKgpgFile();
     if (!filePath) return;
 
     selectedFilePath.value = filePath;

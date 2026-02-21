@@ -1,6 +1,10 @@
 mod commands;
 mod startup;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(target_os = "android")]
+mod content_io_provider;
+#[cfg(target_os = "android")]
+mod pathes_plugin;
+#[cfg(not(mobile))]
 mod tray;
 mod utils;
 mod wallpaper;
@@ -238,94 +242,6 @@ fn init_globals_mobile(app_handle: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 注册 Android 文件夹选择器插件，并注册 content URI 解析器供本地导入使用。
-/// 解析器使用 listContentChildren / readContentUri 两个原语，在 Rust 端做递归与扩展名过滤。
-#[cfg(target_os = "android")]
-fn init_folder_picker_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    use kabegame_core::crawler::local_import::set_content_uri_resolver;
-    use serde::{Deserialize, Serialize};
-    use std::path::PathBuf;
-    use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
-
-    fn is_wanted_file_ext(name: &str) -> bool {
-        let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
-        matches!(
-            ext.as_str(),
-            "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "ico" | "zip" | "rar"
-        )
-    }
-
-    Builder::new("folder-picker")
-        .setup(|_app, api| {
-            let handle =
-                api.register_android_plugin("app.kabegame.plugin", "FolderPickerPlugin")?;
-
-            #[derive(Serialize)]
-            struct ListContentChildrenArgs {
-                uri: String,
-            }
-
-            #[derive(Deserialize)]
-            struct ContentEntry {
-                uri: String,
-                name: String,
-                #[serde(rename = "isDirectory")]
-                is_directory: bool,
-            }
-
-            #[derive(Deserialize)]
-            struct ListContentChildrenResponse {
-                entries: Vec<ContentEntry>,
-            }
-
-            #[derive(Serialize)]
-            struct ReadContentUriArgs {
-                uri: String,
-            }
-
-            #[derive(Deserialize)]
-            struct ReadContentUriResponse {
-                path: String,
-            }
-
-            fn resolve_content_uri_rec(
-                handle: &PluginHandle<R>,
-                uri: String,
-                recursive: bool,
-            ) -> Result<Vec<PathBuf>, String> {
-                let list_args = ListContentChildrenArgs { uri: uri.clone() };
-                let list_resp: ListContentChildrenResponse = tauri::async_runtime::block_on(
-                    handle.run_mobile_plugin_async("listContentChildren", list_args),
-                )
-                .map_err(|e| format!("listContentChildren 失败: {}", e))?;
-
-                let mut out = Vec::new();
-                for e in list_resp.entries {
-                    if e.is_directory {
-                        if recursive {
-                            out.extend(resolve_content_uri_rec(handle, e.uri, true)?);
-                        }
-                    } else if is_wanted_file_ext(&e.name) {
-                        let read_args = ReadContentUriArgs { uri: e.uri };
-                        let read_resp: ReadContentUriResponse = tauri::async_runtime::block_on(
-                            handle.run_mobile_plugin_async("readContentUri", read_args),
-                        )
-                        .map_err(|e| format!("readContentUri 失败: {}", e))?;
-                        out.push(PathBuf::from(read_resp.path));
-                    }
-                }
-                Ok(out)
-            }
-
-            set_content_uri_resolver(move |uri: String, recursive: bool| {
-                resolve_content_uri_rec(&handle, uri, recursive)
-            });
-
-            Ok(())
-        })
-        .build()
-}
-
 /// 注册 Android 壁纸插件
 #[cfg(target_os = "android")]
 fn init_wallpaper_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
@@ -354,71 +270,29 @@ fn init_share_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 }
 
 #[cfg(target_os = "android")]
-fn init_resource_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    use tauri::plugin::{Builder, TauriPlugin};
-
-    Builder::new("resource")
-        .setup(|app, api| {
-            let handle = api.register_android_plugin("app.kabegame.plugin", "ResourcePlugin")?;
-            // Extract plugins after registration (init_app_paths has already been called)
-            let app_handle = app.app_handle().clone();
-            let handle_clone = handle.clone();
-            tauri::async_runtime::spawn(async move {
-                // Small delay to ensure all initialization is complete
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                if let Err(e) = extract_bundled_plugins(&app_handle, &handle_clone).await {
-                    eprintln!("Failed to extract bundled plugins: {}", e);
-                }
-            });
-            Ok(())
-        })
-        .build()
-}
-
-#[cfg(target_os = "android")]
-async fn extract_bundled_plugins<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    plugin_handle: &tauri::plugin::PluginHandle<R>,
-) -> Result<(), String> {
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Serialize)]
-    struct ExtractArgs {
-        target_dir: String,
-    }
-
-    #[derive(Deserialize)]
-    struct ExtractResponse {
-        files: Vec<String>,
-        count: usize,
-    }
-
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
-    let builtin_dir = app_data_dir.join("builtin-plugins");
-
-    std::fs::create_dir_all(&builtin_dir)
-        .map_err(|e| format!("Failed to create builtin-plugins directory: {}", e))?;
-
-    let target_dir_str = builtin_dir.to_string_lossy().to_string();
-    let response: ExtractResponse = plugin_handle
-        .run_mobile_plugin_async(
-            "extractBundledPlugins",
-            ExtractArgs {
-                target_dir: target_dir_str,
-            },
-        )
-        .await
-        .map_err(|e| format!("Failed to call extractBundledPlugins: {}", e))?;
-
-    println!(
-        "Extracted {} bundled plugins to {}",
-        response.count,
-        builtin_dir.display()
-    );
-    Ok(())
+fn spawn_extract_bundled_plugins<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    use tauri_plugin_picker::PickerExt;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        let app_data_dir = match app.path().app_data_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Failed to get app data directory: {}", e);
+                return;
+            }
+        };
+        let builtin_dir = app_data_dir.join("builtin-plugins");
+        if let Err(e) = std::fs::create_dir_all(&builtin_dir) {
+            eprintln!("Failed to create builtin-plugins directory: {}", e);
+            return;
+        }
+        let target_dir = builtin_dir.to_string_lossy().to_string();
+        let picker = app.picker();
+        match picker.extract_bundled_plugins(target_dir).await {
+            Ok(r) => println!("Extracted {} bundled plugins to {}", r.count, builtin_dir.display()),
+            Err(e) => eprintln!("Failed to extract bundled plugins: {}", e),
+        }
+    });
 }
 
 /// Tauri 应用入口（桌面 binary 与 Android/iOS 共用）
@@ -432,15 +306,20 @@ pub fn run() {
 
     #[cfg(target_os = "android")]
     {
-        builder = builder.plugin(init_folder_picker_plugin());
+        builder = builder.plugin(tauri_plugin_picker::init());
         builder = builder.plugin(init_wallpaper_plugin());
         builder = builder.plugin(init_share_plugin());
-        builder = builder.plugin(init_resource_plugin());
+        builder = builder.plugin(pathes_plugin::init_pathes_plugin());
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+        builder = builder.plugin(tauri_plugin_picker::init());
     }
 
     let app = builder
@@ -475,7 +354,6 @@ pub fn run() {
                     init_plugin();
 
                     // 启动 IPC Server（Android 不启用以避免虚拟盘等依赖）
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     startup::start_ipc_server(ctx, app.app_handle().clone());
                 }
                 Err(e) => {
@@ -484,7 +362,7 @@ pub fn run() {
                     process::exit(1);
                 }
             }
-            #[cfg(any(target_os = "android", target_os = "ios"))]
+            #[cfg(target_os = "android")]
             {
                 // Android/iOS 平台：简化初始化流程
                 match init_globals_mobile(app.app_handle().clone()) {
@@ -495,6 +373,10 @@ pub fn run() {
                         init_download_workers();
                         start_download_workers();
                         init_plugin();
+                        spawn_extract_bundled_plugins(app.app_handle().clone());
+                        let provider =
+                            content_io_provider::PickerContentIoProvider::new(app.app_handle().clone());
+                        kabegame_core::crawler::content_io::set_content_io_provider(Box::new(provider));
                     }
                     Err(e) => {
                         utils::show_error(app.app_handle(), format!("出现了致命错误！: {}", e));
@@ -506,7 +388,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             read_file,
             // --- Albums ---
             get_albums,
@@ -647,8 +529,6 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             toggle_fullscreen,
             get_window_state,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            set_main_sidebar_blur,
             #[cfg(target_os = "windows")]
             wallpaper_window_ready,
             // --- Filesystem ---
@@ -657,7 +537,9 @@ pub fn run() {
             open_file_folder,
             // --- Misc ---
             get_file_drop_supported_types,
+            get_file_drop_kinds,
             get_supported_image_types,
+            set_supported_image_formats,
             migrate_images_from_json,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             start_dedupe_gallery_by_hash_batched,
@@ -675,17 +557,15 @@ pub fn run() {
         if let tauri::RunEvent::Opened { urls } = event {
             for url in urls {
                 if let Ok(path) = url.to_file_path() {
-                    if let Some(s) = path.to_str() {
-                        if s.ends_with(".kgpg") {
-                            let _ = app_handle.emit(
-                                "app-import-plugin",
-                                serde_json::json!({
-                                    "kgpgPath": s
-                                }),
-                            );
-                        } else {
-                            eprintln!("[KGPG_DEBUG] [macOS] ✗ 文件不是 .kgpg 格式: {}", s);
-                        }
+                    use std::ffi::OsStr;
+
+                    if path.extension() == Some(OsStr::new("kgpg")) {
+                        let _ = app_handle.emit(
+                            "app-import-plugin",
+                            serde_json::json!({
+                                "kgpgPath": path.to_string_lossy()
+                            }),
+                        );
                     } else {
                         eprintln!("[KGPG_DEBUG] [macOS] ✗ 无法将路径转换为字符串: {:?}", path);
                     }

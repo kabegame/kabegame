@@ -2,37 +2,91 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use url::Url;
 use walkdir::WalkDir;
 
-use crate::crawler::downloader::{DownloadQueue, TempDirGuard};
+#[cfg(target_os = "android")]
+use crate::crawler::content_io::get_content_io_provider;
+use crate::crawler::downloader::DownloadQueue;
 use crate::emitter::GlobalEmitter;
 use serde_json::json;
-use url::Url;
 
 #[derive(Debug, Clone)]
 pub struct DecompressionJob {
-    pub archive_path: PathBuf,
+    pub archive_url: Url,
+    /// 解压目标目录（网络下载的压缩包解压到此目录；本地导入的也解压到此默认输出目录）
     pub images_dir: PathBuf,
-    pub original_url: String,
     pub task_id: String,
     pub plugin_id: String,
     pub download_start_time: u64,
     pub output_album_id: Option<String>,
     pub http_headers: HashMap<String, String>,
-    pub temp_dir_guard: Option<Arc<TempDirGuard>>,
 }
 
-/// Recursively walk the directory and download each image file (streaming, no upfront collection).
-async fn walk_images_and_download(
+#[cfg(target_os = "android")]
+async fn process_content_archive(
+    archive_url: &Url,
+    job: &DecompressionJob,
+    dq: &DownloadQueue,
+    task_id: &str,
+    plugin_id: &str,
+    download_start_time: u64,
+) -> Result<(), String> {
+    let io = get_content_io_provider()
+        .ok_or_else(|| "Android ContentIoProvider 未注册".to_string())?;
+
+    let folder_name = archive_url
+        .path_segments()
+        .and_then(|s| s.last())
+        .unwrap_or("archive")
+        .trim_end_matches(".zip")
+        .trim_end_matches(".rar")
+        .to_string();
+    let folder_name = if folder_name.is_empty() {
+        "archive".to_string()
+    } else {
+        folder_name
+    };
+
+    let result = io.extract_archive_to_media_store(archive_url.as_str(), &folder_name)?;
+
+    GlobalEmitter::global().emit(
+        "archiver-log",
+        json!({
+            "text": format!("正在导入 {} 中的图片...", result.count)
+        }),
+    );
+
+    for uri in &result.uris {
+        if dq.is_task_canceled(task_id).await {
+            return Err("Task canceled".to_string());
+        }
+        let url = Url::parse(uri).map_err(|e| format!("Invalid URI: {}", e))?;
+        let _ = dq
+            .download(
+                url,
+                job.images_dir.clone(),
+                plugin_id.to_string(),
+                task_id.to_string(),
+                download_start_time,
+                job.output_album_id.clone(),
+                job.http_headers.clone(),
+                None,
+            )
+            .await;
+    }
+    Ok(())
+}
+
+/// 递归遍历解压目录，将每个图片以 file:// 协议加入下载队列（本地导入流程，不复制文件）。
+async fn walk_images_and_enqueue_file_downloads(
     dir: &Path,
     dq: &DownloadQueue,
     task_id: &str,
-    images_dir: &PathBuf,
     plugin_id: &str,
     download_start_time: u64,
     output_album_id: &Option<String>,
     http_headers: &HashMap<String, String>,
-    temp_guard: Option<&Arc<TempDirGuard>>,
 ) -> Result<(), String> {
     for entry in WalkDir::new(dir)
         .into_iter()
@@ -46,17 +100,17 @@ async fn walk_images_and_download(
         if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
             if crate::archive::is_supported_image_ext(ext) {
                 let img_url = url::Url::from_file_path(p).unwrap();
+                // file:// 不复制，目标路径即源路径；加入下载队列后由 download worker 做后处理（哈希、缩略图、入库）
                 let _ = dq
                     .download(
                         img_url,
-                        images_dir.clone(),
+                        dir.to_path_buf(), // file 协议下 images_dir 仅用于 compute_destination_path，file 会返回源路径
                         plugin_id.to_string(),
                         task_id.to_string(),
                         download_start_time,
                         output_album_id.clone(),
                         http_headers.clone(),
                         None,
-                        temp_guard.cloned(),
                     )
                     .await;
             }
@@ -86,21 +140,16 @@ pub(crate) async fn decompression_worker_loop(dq: Arc<DownloadQueue>) {
 
         println!("Decompression job: {:?}", job);
 
-        let url_clone = job.original_url.clone();
         let plugin_id_clone = job.plugin_id.clone();
         let task_id_clone = job.task_id.clone();
         let download_start_time = job.download_start_time;
-        let archive_path = job.archive_path.clone();
+        let archive_url = job.archive_url.clone();
 
-        let archive_name = if let Ok(parsed) = Url::parse(&job.original_url) {
-            parsed
-                .path_segments()
-                .and_then(|s| s.last())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "archive".to_string())
-        } else {
-            "archive".to_string()
-        };
+        let archive_name = archive_url
+            .path_segments()
+            .and_then(|s| s.last())
+            .unwrap_or("archive")
+            .to_string();
 
         // Emit archiver log: Unzipping
         GlobalEmitter::global().emit(
@@ -115,24 +164,33 @@ pub(crate) async fn decompression_worker_loop(dq: Arc<DownloadQueue>) {
                 return Err("Task canceled".to_string());
             }
 
-            let path_hint = archive_path.display().to_string();
+            #[cfg(target_os = "android")]
+            if archive_url.scheme() == "content" {
+                return process_content_archive(
+                    &archive_url,
+                    &job,
+                    &dq,
+                    &task_id_clone,
+                    &plugin_id_clone,
+                    download_start_time,
+                )
+                .await;
+            }
 
-            // Check if processor exists
-            if crate::archive::manager()
-                .get_processor_by_url(&path_hint)
-                .is_none()
-            {
+            // file://：桌面解压逻辑
+            let archive_path = archive_url
+                .to_file_path()
+                .map_err(|_| "Invalid file URL for archive".to_string())?;
+            if crate::archive::get_processor_by_path(&archive_path).is_none() {
                 return Err("Failed to find archive processor for downloaded file".to_string());
             }
 
-            let temp_dir = archive_path.parent().unwrap().to_path_buf();
+            let extract_base = job.images_dir.clone();
             let archive_path_clone = archive_path.clone();
 
             let extract_dir = tokio::task::spawn_blocking(move || {
-                let processor = crate::archive::manager()
-                    .get_processor_by_url(&archive_path_clone.display().to_string())
-                    .unwrap();
-                processor.process(&archive_path_clone, &temp_dir)
+                let processor = crate::archive::get_processor_by_path(&archive_path_clone).unwrap();
+                processor.process(&archive_path_clone, &extract_base)
             })
             .await
             .map_err(|e| format!("Decompression task failed: {}", e))??;
@@ -145,23 +203,19 @@ pub(crate) async fn decompression_worker_loop(dq: Arc<DownloadQueue>) {
                 }),
             );
 
-            let temp_guard = job.temp_dir_guard.clone();
-            let job_images_dir = job.images_dir.clone();
             let job_plugin_id = plugin_id_clone.clone();
             let job_task_id = task_id_clone.clone();
             let job_output_album_id = job.output_album_id.clone();
             let job_http_headers = job.http_headers.clone();
 
-            walk_images_and_download(
+            walk_images_and_enqueue_file_downloads(
                 &extract_dir,
                 &dq,
                 &job_task_id,
-                &job_images_dir,
                 &job_plugin_id,
                 download_start_time,
                 &job_output_album_id,
                 &job_http_headers,
-                temp_guard.as_ref(),
             )
             .await?;
             Ok(())
@@ -170,21 +224,21 @@ pub(crate) async fn decompression_worker_loop(dq: Arc<DownloadQueue>) {
 
         match result {
             Ok(_) => {
-                // Clear status on success
                 GlobalEmitter::global().emit(
                     "archiver-log",
                     json!({
-                        "text": "" // Clear status
+                        "text": format!("解压完成 {}", archive_name)
                     }),
                 );
             }
             Err(e) => {
                 if !e.contains("Task canceled") {
                     eprintln!(
-                        "[Decompression Error] Task: {}, URL: {}, Error: {}",
-                        task_id_clone, url_clone, e
+                        "[Decompression Error] Task: {}, archive: {}, Error: {}",
+                        task_id_clone,
+                        archive_url,
+                        e
                     );
-                    // Show error in status bar
                     GlobalEmitter::global().emit(
                         "archiver-log",
                         json!({
@@ -195,7 +249,7 @@ pub(crate) async fn decompression_worker_loop(dq: Arc<DownloadQueue>) {
                     GlobalEmitter::global().emit(
                         "archiver-log",
                         json!({
-                            "text": ""
+                            "text": format!("解压取消 {}", archive_name)
                         }),
                     );
                 }

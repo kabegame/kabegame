@@ -23,6 +23,8 @@ dist-*
 
 # Tauri
 target
+# app-main capability 由 handlebars 生成
+src-tauri/app-main/capabilities/main.json
 src-tauri/app-main/resources/plugins/*.kgpg
 src-tauri/*/gen/schemas/*
 src-tauri/app-main/resources/bin/*

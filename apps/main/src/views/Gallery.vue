@@ -113,6 +113,7 @@ import { stat } from "@tauri-apps/plugin-fs";
 import { useTaskDrawerStore } from "@/stores/taskDrawer";
 import MediaPicker from "@/components/MediaPicker.vue";
 import { useImageTypes } from "@/composables/useImageTypes";
+import { pickImages, type PickFolderResult } from "tauri-plugin-picker-api";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -308,58 +309,28 @@ const handleShowCrawlerDialog = async () => {
 };
 
 // 处理媒体选择器的选择事件（先关闭抽屉，再处理）
-const handleMediaPickerSelect = async (type: "image" | "folder" | "archive") => {
+const handleMediaPickerSelect = async (
+  type: "image" | "folder" | "archive",
+  payload?: PickFolderResult
+) => {
   showMediaPicker.value = false;
-  await handleAndroidMediaSelection(type);
+  await handleAndroidMediaSelection(type, payload);
 };
 
-// 安卓下的媒体选择处理函数
-const handleAndroidMediaSelection = async (type: "image" | "folder" | "archive") => {
+// 安卓下的媒体选择处理函数；选文件夹时由 MediaPicker 调 pickFolder，结果通过 payload 传入
+const handleAndroidMediaSelection = async (
+  type: "image" | "folder" | "archive",
+  folderResult?: PickFolderResult
+) => {
   try {
     if (type === 'image') {
-      await loadImageTypes();
-      const selected = await open({
-        directory: false,
-        multiple: true,
-        filters: [
-          {
-            name: '图片',
-            extensions: imageExtensions.value.length ? imageExtensions.value : ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'],
-          },
-        ],
-      });
-
-      if (!selected) {
-        return; // 用户取消
+      const uris = await pickImages();
+      if (!uris || uris.length === 0) {
+        return; // 用户取消或无选择
       }
-
-      const paths = Array.isArray(selected) ? selected : [selected];
-      if (paths.length === 0) {
-        return;
-      }
-
-      // 处理多个图片文件
-      const items: Array<{ path: string; isDirectory: boolean }> = [];
-      for (const path of paths) {
-        try {
-          const metadata = await stat(path);
-          if (!metadata.isDirectory) {
-            items.push({ path, isDirectory: false });
-          }
-        } catch (error) {
-          console.error('[Gallery] 检查文件失败:', path, error);
-        }
-      }
-
-      if (items.length === 0) {
-        ElMessage.warning('没有找到可导入的图片');
-        return;
-      }
-
-      const pathsToImport = items.map((it) => it.path);
       crawlerStore.addTask("本地导入", undefined, {
-        paths: pathsToImport,
-        recursive: true,
+        paths: uris,
+        recursive: false,
         include_archive: false,
       });
       ElMessage.success("已添加本地导入任务");
@@ -371,7 +342,7 @@ const handleAndroidMediaSelection = async (type: "image" | "folder" | "archive")
         filters: [
           {
             name: '压缩文件',
-            extensions: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'],
+            extensions: ['zip'],
           },
         ],
       });
@@ -383,65 +354,57 @@ const handleAndroidMediaSelection = async (type: "image" | "folder" | "archive")
       const paths = Array.isArray(selected) ? selected : [selected];
       if (paths.length === 0) return;
 
-      const items: Array<{ path: string; isDirectory: boolean }> = [];
-      for (const path of paths) {
-        try {
-          const metadata = await stat(path);
-          if (!metadata.isDirectory) {
-            items.push({ path, isDirectory: false });
-          }
-        } catch (error) {
-          console.error('[Gallery] 检查压缩文件失败:', path, error);
-        }
-      }
+      // 安卓 content:// 路径跳过 stat（stat 不支持 content URI）
+      const pathsToImport = paths.some((p) => p.startsWith("content://"))
+        ? paths
+        : (
+            await Promise.all(
+              paths.map(async (path) => {
+                try {
+                  const metadata = await stat(path);
+                  return metadata.isDirectory ? null : path;
+                } catch {
+                  return null;
+                }
+              })
+            )
+          ).filter((p): p is string => p != null);
 
-      if (items.length === 0) {
+      if (pathsToImport.length === 0) {
         ElMessage.warning('没有找到可导入的压缩文件');
         return;
       }
 
-      const pathsToImport = items.map((it) => it.path);
       crawlerStore.addTask("本地导入", undefined, {
         paths: pathsToImport,
+        recursive: false,
+        include_archive: true,
+      });
+      ElMessage.success("已添加本地导入任务");
+    } else if (type === 'folder' && folderResult) {
+      const folderPath = folderResult.uri ?? folderResult.path;
+      if (!folderPath) return;
+
+      // 安卓 content:// 路径跳过 stat
+      if (!folderPath.startsWith("content://")) {
+        try {
+          const metadata = await stat(folderPath);
+          if (!metadata.isDirectory) {
+            ElMessage.warning('请选择文件夹');
+            return;
+          }
+        } catch (error) {
+          console.error('[Gallery] 检查文件夹失败:', folderPath, error);
+          return;
+        }
+      }
+
+      crawlerStore.addTask("本地导入", undefined, {
+        paths: [folderPath],
         recursive: true,
         include_archive: false,
       });
       ElMessage.success("已添加本地导入任务");
-    } else if (type === 'folder') {
-      // 选择文件夹（Android 使用自定义插件）
-      try {
-        const result = await invoke<{ uri: string; path?: string }>('plugin:folder-picker|pickFolder');
-        
-        if (!result || !result.uri) {
-          return; // 用户取消
-        }
-
-        // 优先使用 path，如果没有则使用 uri
-        const folderPath = result.path || result.uri;
-
-        // 检查是否为文件夹（如果有 path）
-        if (result.path) {
-          try {
-            const metadata = await stat(result.path);
-            if (!metadata.isDirectory) {
-              ElMessage.warning('请选择文件夹');
-              return;
-            }
-          } catch (error) {
-            console.error('[Gallery] 检查文件夹失败:', result.path, error);
-            // 继续使用 uri，即使无法验证路径
-          }
-        }
-
-        crawlerStore.addTask("本地导入", undefined, {
-          paths: [folderPath],
-          recursive: true,
-          include_archive: false,
-        });
-        ElMessage.success("已添加本地导入任务");
-      } catch (error) {
-        console.error('[Gallery] 选择文件夹失败:', error);
-      }
     }
   } catch (error) {
     console.error('[Gallery] 安卓媒体选择失败:', error);
@@ -671,6 +634,7 @@ const {
   loadImages
 );
 
+// TODO: 这代码能删吗
 const handleAddedToAlbum = async () => {
   // 画廊本身不依赖画册列表，但这里留个钩子以便其他页面/计数能及时刷新
   try {

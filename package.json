@@ -5,7 +5,8 @@
   "workspaces": [
     "apps/*",
     "packages/*",
-    "src-crawler-plugins"
+    "src-crawler-plugins",
+    "src-tauri-plugins/*"
   ],
   "scripts": {
     "dev": "bun scripts/run.ts dev",

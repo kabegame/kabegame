@@ -5,7 +5,6 @@
       <div class="downloads-header">
         <span class="downloads-title">正在下载</span>
         <div class="downloads-stats">
-          <el-tag v-if="pendingCount > 0" type="info" size="small">等待中: {{ pendingCount }}</el-tag>
           <el-tag type="warning" size="small">进行中: {{ activeDownloadsRunningCount }}</el-tag>
         </div>
       </div>
@@ -35,7 +34,7 @@
           </transition-group>
         </div>
       </div>
-      <div v-if="archiverLogText" class="downloads-substatus" :title="archiverLogText">
+      <div class="downloads-substatus" :title="archiverLogText">
         {{ archiverLogText }}
       </div>
     </div>
@@ -179,7 +178,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { ArrowDown, Clock, Close, CopyDocument, Document, Picture, WarningFilled } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
@@ -284,10 +283,6 @@ let unlistenDownloadState: null | (() => void) = null;
 
 const archiverLogText = ref("");
 let unlistenArchiverLog: null | (() => void) = null;
-
-// pending 队列数量（等待中的下载）
-const pendingCount = ref(0);
-let unlistenPendingQueueChange: null | (() => void) = null;
 
 const downloadKey = (d: ActiveDownloadInfo) => `${d.task_id}::${d.start_time}::${d.url}`;
 const downloadKeyFromPayload = (p: DownloadProgressPayload) => `${p.taskId}::${p.startTime}::${p.url}`;
@@ -493,7 +488,9 @@ const loadDownloads = async () => {
 };
 
 let eventListenersInitialized = false;
-const initEventListeners = async () => {
+
+/** 渐进式事件，挂载时统一监听，不依赖抽屉开关，避免丢失信息 */
+const initAllEventListeners = async () => {
   if (eventListenersInitialized) return;
   eventListenersInitialized = true;
   const normalizeDownloadProgressPayload = (raw: any): DownloadProgressPayload | null => {
@@ -578,24 +575,9 @@ const initEventListeners = async () => {
   } catch (error) {
     console.error("监听 archiver-log 失败:", error);
   }
-  try {
-    const { listen } = await import("@tauri-apps/api/event");
-    unlistenPendingQueueChange = await listen<{ pendingCount?: number }>("pending-queue-change", (event) => {
-      const count = Number((event.payload as any)?.pendingCount ?? 0);
-      pendingCount.value = count;
-    });
-  } catch (error) {
-    console.error("监听 pending-queue-change 失败:", error);
-  }
 };
 
-const startDownloadSync = async () => {
-  await initEventListeners();
-  // 仅首次做一次快照：用于补齐“抽屉打开前已存在的下载”，以及纠正可能错过的事件
-  await loadDownloads();
-};
-
-const stopDownloadSync = () => {
+const stopAllEventListeners = () => {
   try {
     unlistenDownloadProgress?.();
   } catch {
@@ -617,16 +599,8 @@ const stopDownloadSync = () => {
   } finally {
     unlistenArchiverLog = null;
   }
-  try {
-    unlistenPendingQueueChange?.();
-  } catch {
-    // ignore
-  } finally {
-    unlistenPendingQueueChange = null;
-  }
   eventListenersInitialized = false;
 
-  // 清理 pending timers
   for (const t of completedRemovalTimers.values()) {
     try {
       clearTimeout(t);
@@ -635,6 +609,11 @@ const stopDownloadSync = () => {
     }
   }
   completedRemovalTimers.clear();
+};
+
+/** 抽屉打开时同步一次快照，纠正可能错过的事件 */
+const syncDownloadsOnDrawerOpen = async () => {
+  await loadDownloads();
 };
 
 const getPluginName = (pluginId: string) => {
@@ -792,17 +771,21 @@ async function handleCopyError(task: ScriptTask) {
   }
 }
 
+onMounted(() => {
+  initAllEventListeners();
+});
+
 watch(
   () => !!props.active,
   async (val) => {
-    if (val) await startDownloadSync();
-    else stopDownloadSync();
+    if (val) await syncDownloadsOnDrawerOpen();
   },
   { immediate: true }
 );
 
+
 onUnmounted(() => {
-  stopDownloadSync();
+  stopAllEventListeners();
 });
 </script>
 

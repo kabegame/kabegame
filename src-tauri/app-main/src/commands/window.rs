@@ -137,36 +137,6 @@ pub fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 为主窗口启用毛玻璃效果。
-/// Windows/macOS 均在窗口创建时通过 tauri.conf 的 windowEffects 设置一次（Tauri 接口）。
-/// 此处仅在需要关闭效果时（sidebar_width == 0）调用 set_effects(None)。
-#[tauri::command]
-pub fn set_main_sidebar_blur(app: tauri::AppHandle, sidebar_width: u32) -> Result<(), String> {
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    {
-        use tauri::Manager;
-
-        if sidebar_width == 0 {
-            let Some(window) = app.get_webview_window("main") else {
-                return Err("找不到主窗口".to_string());
-            };
-            window
-                .set_effects(None)
-                .map_err(|e| format!("set_effects(None) failed: {}", e))?;
-            #[cfg(debug_assertions)]
-            eprintln!("[Vibrancy] window effects disabled");
-        }
-        Ok(())
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let _ = app;
-        let _ = sidebar_width;
-        Ok(())
-    }
-}
-
 /// 修复壁纸窗口 Z-order（供前端在最小化等事件时调用）
 #[tauri::command]
 #[cfg(target_os = "windows")]

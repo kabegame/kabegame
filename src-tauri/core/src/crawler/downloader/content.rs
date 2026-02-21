@@ -1,12 +1,15 @@
-//! content://（Android）协议：复制前注册可访问权限，再通过 resolver 复制到目标路径；以及计算目标路径。
+//! content://（Android）协议：请求持久化权限后直接引用 content URI，不复制文件。
 
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use url::Url;
 
-use super::{get_content_permission_register, get_content_resolver, unique_path, DownloadProgressContext, DownloadQueue, SchemeDownloader, UrlDownloaderKind};
+use super::{short_hash8, DownloadProgressContext, DownloadQueue, SchemeDownloader, UrlDownloaderKind};
 
-/// content://：目标文件名为 content_<uuid>.bin。
+#[cfg(target_os = "android")]
+use crate::crawler::content_io::get_content_io_provider;
+
+/// content://：不复制，dest 为占位路径（不被使用），返回原 URI。
 pub struct ContentSchemeDownloader;
 
 #[async_trait]
@@ -15,9 +18,9 @@ impl SchemeDownloader for ContentSchemeDownloader {
         &["content"]
     }
 
-    fn compute_destination_path(&self, _url: &Url, base_dir: &Path) -> Result<PathBuf, String> {
-        let filename = format!("content_{}.bin", uuid::Uuid::new_v4());
-        Ok(unique_path(base_dir, &filename))
+    fn compute_destination_path(&self, url: &Url, base_dir: &Path) -> Result<PathBuf, String> {
+        let hash = short_hash8(url.as_str());
+        Ok(base_dir.join(format!(".content_sentinel_{}", hash)))
     }
 
     fn download_kind(&self) -> UrlDownloaderKind {
@@ -36,33 +39,34 @@ impl SchemeDownloader for ContentSchemeDownloader {
     }
 }
 
-/// 调用已注册的权限注册回调（如有），然后直接引用 content url。结束时上报一次进度供前端展示。
+/// 请求持久化权限（失败静默），然后返回原 content URI。
 async fn handle_content(
     dq: &DownloadQueue,
     task_id: &str,
     url: &str,
     progress: &DownloadProgressContext<'_>,
 ) -> Result<String, String> {
-    if dq.is_task_canceled(task_id).await {
-        return Err("Task canceled".to_string());
+    #[cfg(not(target_os = "android"))]
+    return Err("content:// is only supported on Android".to_string());
+
+    #[cfg(target_os = "android")] {
+        if dq.is_task_canceled(task_id).await {
+            return Err("Task canceled".to_string());
+        }
+    
+        if let Some(io) = get_content_io_provider() {
+            let _ = io.take_persistable_permission(url);
+        }
+    
+        crate::emitter::GlobalEmitter::global().emit_download_progress(
+            task_id,
+            url,
+            progress.start_time,
+            progress.plugin_id,
+            1,
+            Some(1),
+        );
+    
+        Ok(url.to_string())
     }
-
-    if let Some(register) = get_content_permission_register() {
-        register(url.to_string()).await?;
-    }
-
-    let _resolver = get_content_resolver().ok_or_else(|| {
-        "content:// is only supported on Android; set a content resolver (e.g. copy content URI to dest path) or resolve to file:// first.".to_string()
-    })?;
-
-    crate::emitter::GlobalEmitter::global().emit_download_progress(
-        task_id,
-        url,
-        progress.start_time,
-        progress.plugin_id,
-        1,
-        Some(1),
-    );
-
-    Ok(url.to_string())
 }
