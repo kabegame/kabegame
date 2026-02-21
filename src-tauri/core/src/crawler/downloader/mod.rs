@@ -412,6 +412,7 @@ pub struct DownloadRequest {
 
 #[derive(Debug)]
 pub struct DownloadPoolState {
+    pub in_flight: u32,
     pub queue: VecDeque<DownloadRequest>,
 }
 
@@ -424,6 +425,8 @@ pub struct DownloadPool {
     pub job_notify: Notify,
     /// 需要缩减 worker 时 notify_one，worker 被唤醒后从设置取 desired，若 total > desired 则减 1 并退出
     pub exit_notify: Notify,
+    /// 当 worker 完成时 notify_waiters，唤醒等待入队的 download() 调用者
+    pub capacity_notify: Notify,
 }
 
 impl DownloadPool {
@@ -431,10 +434,12 @@ impl DownloadPool {
         Self {
             total_workers: Mutex::new(0),
             state: Mutex::new(DownloadPoolState {
+                in_flight: 0,
                 queue: VecDeque::new(),
             }),
             job_notify: Notify::new(),
             exit_notify: Notify::new(),
+            capacity_notify: Notify::new(),
         }
     }
 }
@@ -487,6 +492,7 @@ impl DownloadQueue {
                 tokio::spawn(async move { download_worker_loop(dq).await });
             }
             self.pool.job_notify.notify_waiters();
+            self.pool.capacity_notify.notify_waiters(); // 增加并发上限后，唤醒等待中的 download() 调用
         } else if *total > desired {
             let exit_count = *total - desired;
             drop(total);
@@ -591,28 +597,51 @@ impl DownloadQueue {
             return Err("Task canceled".to_string());
         }
 
-        eprintln!("download: {}", url.as_str());
-        // 直接推入 pool.state.queue，由 worker 消费
-        let mut pool_st = self.pool.state.lock().await;
-        pool_st.queue.push_back(DownloadRequest {
+        let request = DownloadRequest {
             url,
             images_dir,
             plugin_id,
-            task_id,
+            task_id: task_id.clone(),
             download_start_time,
             output_album_id,
             http_headers,
             archive_type,
-        });
-        drop(pool_st);
-        self.pool.job_notify.notify_waiters();
+        };
 
-        Ok(())
+        loop {
+            let notified = self.pool.capacity_notify.notified();
+            tokio::pin!(notified);
+
+            {
+                let mut pool_st = self.pool.state.lock().await;
+                let desired = Settings::global()
+                    .get_max_concurrent_downloads()
+                    .await
+                    .unwrap_or(1)
+                    .max(1);
+                if pool_st.in_flight < desired {
+                    pool_st.queue.push_back(request);
+                    pool_st.in_flight += 1;
+                    drop(pool_st);
+                    self.pool.job_notify.notify_one();
+                    return Ok(());
+                }
+                notified.as_mut().enable(); // 注册等待（在持锁期间），防止错过通知
+            }
+            // 锁已释放，安全 await
+            notified.await;
+
+            if self.is_task_canceled(&task_id).await {
+                return Err("Task canceled".to_string());
+            }
+        }
     }
 
     pub async fn cancel_task(&self, task_id: &str) {
         let mut canceled = self.canceled_tasks.write().await;
         canceled.insert(task_id.to_string());
+        drop(canceled);
+        self.pool.capacity_notify.notify_waiters(); // 唤醒被阻塞的 download() 调用，让它们检查取消状态
     }
 
     pub async fn is_task_canceled(&self, task_id: &str) -> bool {
@@ -643,29 +672,30 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
     let pool = Arc::clone(&dq.pool);
     let active_tasks = Arc::clone(&dq.active_tasks);
     loop {
-        let job = {
-            let mut st = pool.state.lock().await;
-            loop {
-                if let Some(job) = st.queue.pop_front() {
-                    break job;
-                }
+        let job = tokio::select! {
+            _ = pool.exit_notify.notified() => {
                 let desired = Settings::global()
                     .get_max_concurrent_downloads()
                     .await
                     .unwrap_or(1)
                     .max(1);
-                drop(st);
-                let total = *pool.total_workers.lock().await;
-                if total > desired {
-                    let mut tw = pool.total_workers.lock().await;
-                    *tw -= 1;
+                let mut total = pool.total_workers.lock().await;
+                if *total > desired {
+                    *total -= 1;
                     return;
                 }
-                pool.job_notify.notified().await;
-                st = pool.state.lock().await;
+                continue;
+            }
+            _ = pool.job_notify.notified() => {
+                let mut st = pool.state.lock().await;
+
+                if let Some(job) = st.queue.pop_front() {
+                    job
+                } else {
+                    continue;
+                }
             }
         };
-        eprintln!("download_worker_loop: {}", job.url.as_str());
 
         // 取出任务后，添加到 active_tasks 并发送 "preparing" 事件
         {
@@ -794,7 +824,11 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     tasks.retain(|t| t.url != url_clone.as_str() || t.start_time != download_start_time);
                     drop(tasks);
                     let pool = Arc::clone(&dq.pool);
-                    pool.job_notify.notify_waiters();
+                    let mut st = pool.state.lock().await;
+                    st.in_flight = st.in_flight.saturating_sub(1);
+                    drop(st);
+                    pool.capacity_notify.notify_waiters(); // 唤醒所有等待入队的 download() 调用
+                    pool.job_notify.notify_one();
                     continue;
                 }
             }
@@ -901,6 +935,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             #[cfg(not(target_os = "android"))]
                             let use_path_flow = true;
 
+                            // Android content://：读字节 → 哈希 → 缩略图 → 入库（local_path 存 URI）
                             #[cfg(target_os = "android")]
                             if !use_path_flow {
                                 let bytes = match get_content_io_provider()
@@ -973,48 +1008,51 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                     }
                                 }
                                 ensure_minimum_duration(download_start_time, 500).await;
-                            } else if use_path_flow {
-                            let path_for_post = download_path;
+                            }
 
-                            if !auto_deduplicate {
-                                // 去重关闭：完整流程，并统计后处理各步骤耗时
-                                let post_start = Instant::now();
-                                match compute_file_hash(&path_for_post).await {
-                                    Ok(hash) => {
-                                        let hash_ms = post_start.elapsed().as_millis() as u64;
-                                        let _ = process_downloaded_image_to_storage(
-                                            &path_for_post,
-                                            &hash,
-                                            url_clone.as_str(),
-                                            &plugin_id_clone,
-                                            &task_id_clone,
-                                            download_start_time,
-                                            job.output_album_id.as_deref(),
-                                            Some(hash_ms),
-                                        )
-                                        .await;
+                            // 桌面或 Android 的 file 路径：用本地 path 做哈希/缩略图/入库
+                            if use_path_flow {
+                                let path_for_post = download_path;
+
+                                if !auto_deduplicate {
+                                    // 去重关闭：完整流程，并统计后处理各步骤耗时
+                                    let post_start = Instant::now();
+                                    match compute_file_hash(&path_for_post).await {
+                                        Ok(hash) => {
+                                            let hash_ms = post_start.elapsed().as_millis() as u64;
+                                            let _ = process_downloaded_image_to_storage(
+                                                &path_for_post,
+                                                &hash,
+                                                url_clone.as_str(),
+                                                &plugin_id_clone,
+                                                &task_id_clone,
+                                                download_start_time,
+                                                job.output_album_id.as_deref(),
+                                                Some(hash_ms),
+                                            )
+                                            .await;
+                                        }
+                                        Err(e) => {
+                                            let _ = tokio::fs::remove_file(&path_for_post).await;
+                                            let _ = Storage::global().add_task_failed_image(
+                                                &task_id_clone,
+                                                &plugin_id_clone,
+                                                url_clone.as_str(),
+                                                download_start_time as i64,
+                                                Some(e.as_str()),
+                                            );
+                                            GlobalEmitter::global().emit_download_state(
+                                                &task_id_clone,
+                                                url_clone.as_str(),
+                                                download_start_time,
+                                                &plugin_id_clone,
+                                                "failed",
+                                                Some(e.as_str()),
+                                            );
+                                            GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
+                                        }
                                     }
-                                    Err(e) => {
-                                        let _ = tokio::fs::remove_file(&path_for_post).await;
-                                        let _ = Storage::global().add_task_failed_image(
-                                            &task_id_clone,
-                                            &plugin_id_clone,
-                                            url_clone.as_str(),
-                                            download_start_time as i64,
-                                            Some(e.as_str()),
-                                        );
-                                        GlobalEmitter::global().emit_download_state(
-                                            &task_id_clone,
-                                            url_clone.as_str(),
-                                            download_start_time,
-                                            &plugin_id_clone,
-                                            "failed",
-                                            Some(e.as_str()),
-                                        );
-                                        GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
-                                    }
-                                }
-                            } else {
+                                } else {
                                 // 去重开启，URL 不在库中（已下载）：算哈希后分支
                                 match compute_file_hash(&path_for_post).await {
                                     Ok(hash) => {
@@ -1119,7 +1157,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                     }
                                 }
                             }
-                            ensure_minimum_duration(download_start_time, 500).await;
+                                ensure_minimum_duration(download_start_time, 500).await;
                             }
                         }
                     }
@@ -1163,9 +1201,13 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             }
         }
 
-        // 两个分支的公共收尾：通知等待中的 worker
+        // 两个分支的公共收尾：扣减 in_flight、通知
         let pool = Arc::clone(&dq.pool);
-        pool.job_notify.notify_waiters();
+        let mut st = pool.state.lock().await;
+        st.in_flight = st.in_flight.saturating_sub(1);
+        drop(st);
+        pool.capacity_notify.notify_waiters(); // 唤醒所有等待入队的 download() 调用
+        pool.job_notify.notify_one();
     }
 }
 
