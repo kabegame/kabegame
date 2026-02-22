@@ -55,7 +55,7 @@ async fn handle_content(
         }
     
         if let Some(io) = get_content_io_provider() {
-            let _ = io.take_persistable_permission(url);
+            let _ = io.take_persistable_permission(url).await;
         }
     
         crate::emitter::GlobalEmitter::global().emit_download_progress(

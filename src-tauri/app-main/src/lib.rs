@@ -376,7 +376,8 @@ pub fn run() {
                         spawn_extract_bundled_plugins(app.app_handle().clone());
                         let provider =
                             content_io_provider::PickerContentIoProvider::new(app.app_handle().clone());
-                        kabegame_core::crawler::content_io::set_content_io_provider(Box::new(provider));
+                        let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
+                        kabegame_core::crawler::content_io::set_content_io_provider(Box::new(proxy));
                     }
                     Err(e) => {
                         utils::show_error(app.app_handle(), format!("出现了致命错误！: {}", e));

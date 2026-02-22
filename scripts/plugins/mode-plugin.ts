@@ -8,6 +8,7 @@ import { run } from "../utils";
 import { Component, ComponentPlugin } from "./component-plugin";
 import chalk from "chalk";
 import { BuildSystem } from "../build-system";
+import { OSPlugin } from "./os-plugin";
 
 export class Mode {
   static readonly NORMAL = "normal";
@@ -132,7 +133,7 @@ export class ModePlugin extends BasePlugin {
     }
 
     // 仅在 main 组件构建时才需要处理 dokan 资源
-    if (bs.context.component!.isMain) {
+    if (bs.context.component!.isMain && OSPlugin.isWindows) {
       this.log("Ensuring Dokan resources...");
       ensureDokan2DllResource();
       ensureDokanInstallerResourceIfPresent();
@@ -144,12 +145,9 @@ export class ModePlugin extends BasePlugin {
     const cmd = bs.context.cmd;
     const mode = bs.context.mode!;
     const comp = bs.context.component!;
-    if (cmd.isDev || cmd.isBuild) {
-      if (cmd.isBuild && !comp.isMain) {
-        return;
-      }
+    if (comp.isMain && (cmd.isDev || cmd.isBuild)) {
       // 目前 normal模式不打包插件
-      if (mode.isNormal) {
+      if (!bs.context.isAndroid && mode.isNormal) {
         return;
       }
       // 开发和生产都打包到 resources 目录
