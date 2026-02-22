@@ -404,9 +404,8 @@ pub async fn read_file(path: String) -> tauri::ipc::Response {
     #[cfg(target_os = "android")]
     if path.starts_with("content://") {
         if let Some(io) = kabegame_core::crawler::content_io::get_content_io_provider() {
-            match io.read_file_bytes(&path) {
-                Ok(data) => return tauri::ipc::Response::new(data),
-                Err(_) => {}
+            if let Ok(data) = io.read_file_bytes(&path).await {
+                return tauri::ipc::Response::new(data);
             }
         }
     }

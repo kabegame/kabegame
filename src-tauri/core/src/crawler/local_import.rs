@@ -89,9 +89,9 @@ async fn process_content_url(
     let io = get_content_io_provider()
         .ok_or_else(|| "Android ContentIoProvider 未注册".to_string())?;
 
-    let is_dir = io.is_directory(uri)?;
+    let is_dir = io.is_directory(uri).await?;
     if is_dir {
-        let children = io.list_children(uri)?;
+        let children = io.list_children(uri).await?;
         for child in children {
             if ctx.download_queue.is_task_canceled(ctx.task_id).await {
                 return Err("Task canceled".to_string());
@@ -198,7 +198,7 @@ async fn process_content_file_url(
     let io = get_content_io_provider()
         .ok_or_else(|| "Android ContentIoProvider 未注册".to_string())?;
 
-    let mime = io.get_mime_type(uri)?;
+    let mime = io.get_mime_type(uri).await?;
     if image_type::is_image_mime(&mime) {
         enqueue_image(url.clone(), ctx, image_count, archive_count).await?;
         return Ok(());

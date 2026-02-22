@@ -48,7 +48,9 @@ async fn process_content_archive(
         folder_name
     };
 
-    let result = io.extract_archive_to_media_store(archive_url.as_str(), &folder_name)?;
+    let result = io
+        .extract_archive_to_media_store(archive_url.as_str(), &folder_name)
+        .await?;
 
     GlobalEmitter::global().emit(
         "archiver-log",

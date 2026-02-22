@@ -18,15 +18,16 @@ pub struct ExtractArchiveResult {
     pub count: u32,
 }
 
-/// Android content:// IO 操作抽象。由 app-main 用 PluginHandle 实现并注册。
+/// Android content:// IO 操作抽象。由 app-main 用 PluginHandle 实现并注册。异步 trait，避免在调度器 runtime 上 block_on 导致死锁。
 #[cfg(target_os = "android")]
+#[async_trait::async_trait]
 pub trait ContentIoProvider: Send + Sync {
-    fn is_directory(&self, uri: &str) -> Result<bool, String>;
-    fn get_mime_type(&self, uri: &str) -> Result<Option<String>, String>;
-    fn list_children(&self, uri: &str) -> Result<Vec<ContentEntry>, String>;
-    fn read_file_bytes(&self, uri: &str) -> Result<Vec<u8>, String>;
-    fn take_persistable_permission(&self, uri: &str) -> Result<(), String>;
-    fn extract_archive_to_media_store(
+    async fn is_directory(&self, uri: &str) -> Result<bool, String>;
+    async fn get_mime_type(&self, uri: &str) -> Result<Option<String>, String>;
+    async fn list_children(&self, uri: &str) -> Result<Vec<ContentEntry>, String>;
+    async fn read_file_bytes(&self, uri: &str) -> Result<Vec<u8>, String>;
+    async fn take_persistable_permission(&self, uri: &str) -> Result<(), String>;
+    async fn extract_archive_to_media_store(
         &self,
         archive_uri: &str,
         folder_name: &str,

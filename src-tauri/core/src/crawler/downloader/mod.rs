@@ -938,18 +938,15 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             // Android content://：读字节 → 哈希 → 缩略图 → 入库（local_path 存 URI）
                             #[cfg(target_os = "android")]
                             if !use_path_flow {
-                                let bytes = match get_content_io_provider()
-                                    .ok_or_else(|| "ContentIoProvider 未注册".to_string())
-                                    .and_then(|io| io.read_file_bytes(url_clone.as_str()))
-                                {
-                                    Ok(b) => b,
-                                    Err(e) => {
+                                let bytes = match get_content_io_provider() {
+                                    None => {
+                                        let e = "ContentIoProvider 未注册";
                                         let _ = Storage::global().add_task_failed_image(
                                             &task_id_clone,
                                             &plugin_id_clone,
                                             url_clone.as_str(),
                                             download_start_time as i64,
-                                            Some(e.as_str()),
+                                            Some(e),
                                         );
                                         GlobalEmitter::global().emit_download_state(
                                             &task_id_clone,
@@ -957,11 +954,33 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                             download_start_time,
                                             &plugin_id_clone,
                                             "failed",
-                                            Some(e.as_str()),
+                                            Some(e),
                                         );
                                         GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
                                         continue;
                                     }
+                                    Some(io) => match io.read_file_bytes(url_clone.as_str()).await {
+                                        Ok(b) => b,
+                                        Err(e) => {
+                                            let _ = Storage::global().add_task_failed_image(
+                                                &task_id_clone,
+                                                &plugin_id_clone,
+                                                url_clone.as_str(),
+                                                download_start_time as i64,
+                                                Some(e.as_str()),
+                                            );
+                                            GlobalEmitter::global().emit_download_state(
+                                                &task_id_clone,
+                                                url_clone.as_str(),
+                                                download_start_time,
+                                                &plugin_id_clone,
+                                                "failed",
+                                                Some(e.as_str()),
+                                            );
+                                            GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
+                                            continue;
+                                        }
+                                    },
                                 };
                                 ensure_minimum_duration(download_start_time, 500).await;
                                 let hash = compute_bytes_hash(&bytes);

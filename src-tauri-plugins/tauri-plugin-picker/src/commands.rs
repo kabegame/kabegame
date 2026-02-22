@@ -3,8 +3,8 @@ use tauri::{command, AppHandle, Runtime};
 use crate::models::*;
 use crate::PickerExt;
 
-#[command(rename = "pickFolder")]
-pub(crate) async fn pick_folder<R: Runtime>(app: AppHandle<R>) -> Result<PickFolderResult, String> {
+#[command]
+pub(crate) async fn pickFolder<R: Runtime>(app: AppHandle<R>) -> Result<PickFolderResult, String> {
   let result: PickFolderResult = app
     .picker()
     .0
@@ -14,8 +14,8 @@ pub(crate) async fn pick_folder<R: Runtime>(app: AppHandle<R>) -> Result<PickFol
   Ok(result)
 }
 
-#[command(rename = "pickImages")]
-pub(crate) async fn pick_images<R: Runtime>(app: AppHandle<R>) -> Result<PickImagesResponse, String> {
+#[command]
+pub(crate) async fn pickImages<R: Runtime>(app: AppHandle<R>) -> Result<PickImagesResponse, String> {
   let result: PickImagesResponse = app
     .picker()
     .0
@@ -25,8 +25,8 @@ pub(crate) async fn pick_images<R: Runtime>(app: AppHandle<R>) -> Result<PickIma
   Ok(result)
 }
 
-#[command(rename = "pickKgpgFile")]
-pub(crate) async fn pick_kgpg_file<R: Runtime>(app: AppHandle<R>) -> Result<PickKgpgFileResponse, String> {
+#[command]
+pub(crate) async fn pickKgpgFile<R: Runtime>(app: AppHandle<R>) -> Result<PickKgpgFileResponse, String> {
   let result: PickKgpgFileResponse = app
     .picker()
     .0

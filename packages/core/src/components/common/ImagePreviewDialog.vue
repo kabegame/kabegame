@@ -6,6 +6,22 @@
       class="image-preview-fullscreen image-preview-pswp-root"
       :class="{ 'is-visible': previewVisible }"
     >
+      <!-- 右上角关闭按钮，避免仅能通过返回键关闭且关闭后遮罩残留 -->
+      <button
+        v-show="previewVisible"
+        type="button"
+        class="android-preview-close-btn"
+        aria-label="关闭"
+        @click="closePreview"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 6L6 18M6 6l12 12" />
+        </svg>
+      </button>
+      <!-- 解析图片尺寸时的加载态，保证打开即原宽高比 -->
+      <div v-show="androidPreviewResolving" class="android-preview-resolving">
+        <span>加载中…</span>
+      </div>
       <!-- PhotoSwipe 会通过 appendToEl 挂载到此容器内 -->
       <ActionRenderer
         v-if="previewActions && previewActions.length > 0"
@@ -142,6 +158,8 @@ const lastTapY = ref(0);
 
 // Android 操作栏状态（长按预览区触发/关闭）
 const actionBarVisible = ref(false);
+// Android 打开前解析图片尺寸时的加载态
+const androidPreviewResolving = ref(false);
 const LONG_PRESS_MS = 500;
 let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -371,16 +389,55 @@ const getOrCreateOriginalUrlFor = (image: ImageInfo) => {
   return urlCache.ensureOriginalAssetUrl(image.id, image.localPath) || "";
 };
 
-/** Android PhotoSwipe：根据当前 images 构建 dataSource 数组，每项需含 src、width、height */
-const buildPswpDataSource = (): { src: string; width: number; height: number }[] => {
+/** 通过加载图片获取真实宽高，用于无 metadata 时保证原宽高比 fit 屏幕 */
+function loadImageDimensions(
+  url: string,
+  timeoutMs = 3000
+): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    if (!url) {
+      reject(new Error("no url"));
+      return;
+    }
+    const img = new Image();
+    const timer = setTimeout(() => {
+      img.src = "";
+      reject(new Error("timeout"));
+    }, timeoutMs);
+    img.onload = () => {
+      clearTimeout(timer);
+      resolve({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 });
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("load error"));
+    };
+    img.src = url;
+  });
+}
+
+/** Android PhotoSwipe：根据当前 images 构建 dataSource，支持按索引注入已解析的宽高（避免无 metadata 时固定 16:9） */
+const buildPswpDataSource = (dimensionOverrides?: Map<number, { width: number; height: number }>): { src: string; width: number; height: number }[] => {
   const items: { src: string; width: number; height: number }[] = [];
   const fallbackW = 1920;
   const fallbackH = 1080;
-  for (const img of props.images) {
+  for (let i = 0; i < props.images.length; i++) {
+    const img = props.images[i];
     const url = getOrCreateOriginalUrlFor(img) || props.imageUrlMap?.[img.id]?.thumbnail || "";
+    const override = dimensionOverrides?.get(i);
     const meta = img.metadata as { width?: number; height?: number } | undefined;
-    const w = meta?.width && meta?.height ? meta.width : fallbackW;
-    const h = meta?.width && meta?.height ? meta.height : fallbackH;
+    let w: number;
+    let h: number;
+    if (override) {
+      w = override.width;
+      h = override.height;
+    } else if (meta?.width && meta?.height) {
+      w = meta.width;
+      h = meta.height;
+    } else {
+      w = fallbackW;
+      h = fallbackH;
+    }
     items.push({ src: url || "", width: w, height: h });
   }
   return items;
@@ -1179,10 +1236,30 @@ const handlePreviewKeyDown = (event: KeyboardEvent) => {
   }
 };
 
+/** Android 预览关闭后的清理（不调用 pswp.close），避免 destroy 时重复关闭且确保遮罩移除 */
+function doAndroidPreviewCleanup() {
+  if (!IS_ANDROID) return;
+  previewVisible.value = false;
+  actionBarVisible.value = false;
+  androidPreviewResolving.value = false;
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+  closePreviewContextMenu();
+  releaseAllOwnedOriginalUrls();
+}
+
 const closePreview = () => {
-  // Android：若 PhotoSwipe 已打开，先交给 pswp.close()，由 destroy 事件再执行下方清理
+  // Android：若 PhotoSwipe 已打开，只触发 pswp.close()，由 destroy 事件执行 doAndroidPreviewCleanup，避免遮罩残留
   if (IS_ANDROID && androidLightbox?.pswp) {
     androidLightbox.pswp.close();
+    return;
+  }
+  if (IS_ANDROID) {
+    doAndroidPreviewCleanup();
+    previewImage.value = null;
+    previewIndex.value = -1;
     return;
   }
   previewVisible.value = false;
@@ -1207,13 +1284,6 @@ const closePreview = () => {
   isNavThrottled = false;
   releaseAllOwnedOriginalUrls();
   pendingNav.value = null;
-  if (IS_ANDROID) {
-    actionBarVisible.value = false;
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-    }
-  }
 };
 
 const handlePreviewImageDeleted = () => {
@@ -1371,6 +1441,7 @@ function initAndroidLightbox() {
   androidLightbox = new PhotoSwipeLightbox({
     pswpModule: () => import("photoswipe"),
     appendToEl: container,
+    initialZoomLevel: "fit",
     tapAction: () => {
       actionBarVisible.value = !actionBarVisible.value;
     },
@@ -1395,7 +1466,9 @@ function initAndroidLightbox() {
     }
   });
   androidLightbox.on("destroy", () => {
-    closePreview();
+    doAndroidPreviewCleanup();
+    previewImage.value = null;
+    previewIndex.value = -1;
   });
   androidLightbox.init();
 }
@@ -1538,8 +1611,11 @@ function prefetchAdjacent() {
   }
 }
 
-/** Android：使用 PhotoSwipe 打开全屏预览 */
-const openAndroidPreview = (index: number) => {
+/** 滑动窗口半径：打开前解析该范围内无 metadata 的图片尺寸，滑动时保持原宽高比 */
+const ANDROID_PREVIEW_DIMENSION_WINDOW = 15;
+
+/** Android：使用 PhotoSwipe 打开全屏预览；无 metadata 时先加载图片取真实宽高，保证原宽高比 fit 屏幕 */
+async function openAndroidPreview(index: number) {
   if (!androidLightbox || !androidPswpContainerRef.value || props.images.length === 0) return;
   const img = props.images[index];
   if (!img) return;
@@ -1547,12 +1623,36 @@ const openAndroidPreview = (index: number) => {
   previewImage.value = img;
   previewVisible.value = true;
   actionBarVisible.value = false;
-  const dataSource = buildPswpDataSource();
-  nextTick(() => {
-    if (!previewVisible.value || !androidLightbox) return;
-    androidLightbox.loadAndOpen(index, dataSource);
-  });
-};
+  androidPreviewResolving.value = true;
+
+  const dimensionOverrides = new Map<number, { width: number; height: number }>();
+  const start = Math.max(0, index - ANDROID_PREVIEW_DIMENSION_WINDOW);
+  const end = Math.min(props.images.length, index + ANDROID_PREVIEW_DIMENSION_WINDOW + 1);
+  const indicesToResolve: number[] = [];
+  for (let i = start; i < end; i++) indicesToResolve.push(i);
+
+  const timeoutMs = 2500;
+  const results = await Promise.allSettled(
+    indicesToResolve.map(async (i) => {
+      const im = props.images[i];
+      const meta = im?.metadata as { width?: number; height?: number } | undefined;
+      if (meta?.width && meta?.height) return { i, width: meta.width, height: meta.height };
+      const url = im ? getOrCreateOriginalUrlFor(im) || props.imageUrlMap?.[im.id]?.thumbnail || "" : "";
+      if (!url) return null;
+      const dim = await loadImageDimensions(url, timeoutMs);
+      return { i, width: dim.width, height: dim.height };
+    })
+  );
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) dimensionOverrides.set(r.value.i, { width: r.value.width, height: r.value.height });
+  }
+
+  androidPreviewResolving.value = false;
+  const dataSource = buildPswpDataSource(dimensionOverrides);
+  await nextTick();
+  if (!previewVisible.value || !androidLightbox) return;
+  androidLightbox.loadAndOpen(index, dataSource);
+}
 
 const open = (index: number) => {
   if (IS_ANDROID) {
@@ -1748,6 +1848,55 @@ defineExpose({
   // PhotoSwipe 挂载在此容器内，需占满以便 pswp 全屏
   .pswp {
     z-index: 1;
+  }
+}
+
+// Android 打开前解析尺寸时的加载态
+.android-preview-resolving {
+  position: absolute;
+  inset: 0;
+  z-index: 2005;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 16px;
+
+  span {
+    padding: 12px 20px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
+
+// Android 预览右上角关闭按钮（保证关闭后无遮罩，且不依赖系统返回键）
+.android-preview-close-btn {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 2010;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+
+  &:active {
+    background: rgba(0, 0, 0, 0.6);
+  }
+
+  svg {
+    width: 24px;
+    height: 24px;
   }
 }
 
