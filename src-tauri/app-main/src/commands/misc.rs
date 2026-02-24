@@ -1,5 +1,6 @@
 // 杂项命令
 
+use kabegame_core::storage::Storage;
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
@@ -93,8 +94,14 @@ pub async fn set_supported_image_formats(formats: Vec<String>) -> Result<(), Str
 }
 
 #[tauri::command]
+pub async fn update_image_dimensions(image_id: String, width: u32, height: u32) -> Result<(), String> {
+    Storage::global().update_image_dimensions(&image_id, width, height)
+}
+
+#[tauri::command]
+#[cfg(not(target_os = "android"))]
 pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
-    let app_data_dir = kabegame_core::app_paths::kabegame_data_dir();
+    let app_data_dir = kabegame_core::app_paths::AppPaths::global().data_dir.clone();
 
     if !app_data_dir.exists() {
         return Ok(()); // 目录不存在，无需清理
@@ -102,7 +109,7 @@ pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
 
     // 方案：创建清理标记文件，在应用重启后清理
     // 这样可以避免删除正在使用的文件
-    let cleanup_marker = app_data_dir.join(".cleanup_marker");
+    let cleanup_marker = kabegame_core::app_paths::AppPaths::global().cleanup_marker();
     fs::write(&cleanup_marker, "1")
         .map_err(|e| format!("Failed to create cleanup marker: {}", e))?;
 
@@ -403,10 +410,8 @@ pub async fn copy_image_to_clipboard(image_path: String) -> Result<(), String> {
 pub async fn read_file(path: String) -> tauri::ipc::Response {
     #[cfg(target_os = "android")]
     if path.starts_with("content://") {
-        if let Some(io) = kabegame_core::crawler::content_io::get_content_io_provider() {
-            if let Ok(data) = io.read_file_bytes(&path).await {
-                return tauri::ipc::Response::new(data);
-            }
+        if let Ok(data) = kabegame_core::crawler::content_io::get_content_io_provider().read_file_bytes(&path).await {
+            return tauri::ipc::Response::new(data);
         }
     }
     let data = tokio::fs::read(path).await.unwrap();

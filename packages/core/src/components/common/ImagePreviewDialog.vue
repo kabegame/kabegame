@@ -1,12 +1,12 @@
 <template>
-  <!-- Android 全屏预览：PhotoSwipe 实现（滑动切换、缩放、点击出工具） -->
+  <!-- Android 全屏预览：容器仅挂载一次、初始不可见，通过 is-visible 控制显示，避免反复挂载卸载 -->
   <Teleport v-if="IS_ANDROID" to="body">
     <div
       ref="androidPswpContainerRef"
       class="image-preview-fullscreen image-preview-pswp-root"
-      :class="{ 'is-visible': previewVisible }"
+      :class="{ 'is-visible': previewVisible, 'android-toolbar-visible': actionBarVisible }"
     >
-      <!-- 右上角关闭按钮，避免仅能通过返回键关闭且关闭后遮罩残留 -->
+      <!-- 右上角关闭按钮 -->
       <button
         v-show="previewVisible"
         type="button"
@@ -18,21 +18,30 @@
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>
       </button>
-      <!-- 解析图片尺寸时的加载态，保证打开即原宽高比 -->
-      <div v-show="androidPreviewResolving" class="android-preview-resolving">
-        <span>加载中…</span>
-      </div>
-      <!-- PhotoSwipe 会通过 appendToEl 挂载到此容器内 -->
+      <!-- ActionRenderer 用 v-show 保持挂载，仅切换可见性 -->
       <ActionRenderer
-        v-if="previewActions && previewActions.length > 0"
+        v-show="previewVisible && previewActions && previewActions.length > 0"
         :visible="actionBarVisible"
         :position="previewContextMenuPosition"
-        :actions="previewActions"
+        :actions="previewActions || []"
         :context="previewActionContext"
         mode="actionsheet"
         @close="handlePreviewActionClose"
         @command="handlePreviewActionCommand"
       />
+      <!-- 上划删除警告区域 -->
+      <Transition name="swipe-delete-zone">
+        <div v-show="swipeDeleteActive" class="swipe-delete-zone" :class="{ ready: swipeDeleteReady }">
+          <div class="swipe-delete-zone-content">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+              <line x1="10" y1="11" x2="10" y2="17" />
+              <line x1="14" y1="11" x2="14" y2="17" />
+            </svg>
+            <span>{{ swipeDeleteReady ? '释放删除' : '上划删除' }}</span>
+          </div>
+        </div>
+      </Transition>
     </div>
   </Teleport>
 
@@ -76,7 +85,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
-import { isTauri } from "@tauri-apps/api/core";
+import { isTauri, invoke } from "@tauri-apps/api/core";
 import type { ImageInfo, ImageUrlMap } from "../../types/image";
 import ImageNotFound from "./ImageNotFound.vue";
 import { useImageUrlMapCache } from "../../composables/useImageUrlMapCache";
@@ -94,6 +103,10 @@ const props = defineProps<{
   actions?: ActionItem<ImageInfo>[];
 }>();
 
+watch(() => props.images.length, () => {
+  console.log(props.images);
+});
+
 const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
 }>();
@@ -108,9 +121,17 @@ const previewNotFound = ref(false);
 
 const previewContainerRef = ref<HTMLElement | null>(null);
 const previewImageRef = ref<HTMLImageElement | null>(null);
-// Android PhotoSwipe：容器与 lightbox 实例
+// Android PhotoSwipe：容器与 lightbox 实例；关闭时仅隐藏 .pswp 不销毁，避免反复挂载卸载
 const androidPswpContainerRef = ref<HTMLElement | null>(null);
 let androidLightbox: InstanceType<typeof PhotoSwipeLightbox> | null = null;
+const androidPswpHidden = ref(false);
+const lastOpenContentKey = ref("");
+let pendingOpenAfterDestroy: { index: number; dataSource: { src: string; width: number; height: number }[] } | null = null;
+// Android 上划删除相关状态
+const swipeDeleteActive = ref(false);
+const swipeDeleteReady = ref(false);
+let isFromVerticalDrag = false;
+let verticalDragResetTimer: ReturnType<typeof setTimeout> | null = null;
 const previewScale = ref(1);
 const previewTranslateX = ref(0);
 const previewTranslateY = ref(0);
@@ -158,8 +179,6 @@ const lastTapY = ref(0);
 
 // Android 操作栏状态（长按预览区触发/关闭）
 const actionBarVisible = ref(false);
-// Android 打开前解析图片尺寸时的加载态
-const androidPreviewResolving = ref(false);
 const LONG_PRESS_MS = 500;
 let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -367,8 +386,14 @@ const isTextInputLike = (target: EventTarget | null) => {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
 };
 
+/** 优先从全局 cache 取原图 URL（网格已加载的 blob 会写在这里），避免依赖 props 未同步导致预览先灰再出图 */
 const getOriginalUrlFor = (imageId: string) => {
-  return props.imageUrlMap?.[imageId]?.original || ownedOriginalBlobUrls.value.get(imageId) || "";
+  return (
+    urlCache.imageUrlMap.value[imageId]?.original ||
+    props.imageUrlMap?.[imageId]?.original ||
+    ownedOriginalBlobUrls.value.get(imageId) ||
+    ""
+  );
 };
 
 async function preloadImageUrl(url: string): Promise<void> {
@@ -389,59 +414,77 @@ const getOrCreateOriginalUrlFor = (image: ImageInfo) => {
   return urlCache.ensureOriginalAssetUrl(image.id, image.localPath) || "";
 };
 
-/** 通过加载图片获取真实宽高，用于无 metadata 时保证原宽高比 fit 屏幕 */
-function loadImageDimensions(
-  url: string,
-  timeoutMs = 3000
-): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    if (!url) {
-      reject(new Error("no url"));
-      return;
-    }
-    const img = new Image();
-    const timer = setTimeout(() => {
-      img.src = "";
-      reject(new Error("timeout"));
-    }, timeoutMs);
-    img.onload = () => {
-      clearTimeout(timer);
-      resolve({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 });
-    };
-    img.onerror = () => {
-      clearTimeout(timer);
-      reject(new Error("load error"));
-    };
-    img.src = url;
-  });
-}
-
-/** Android PhotoSwipe：根据当前 images 构建 dataSource，支持按索引注入已解析的宽高（避免无 metadata 时固定 16:9） */
-const buildPswpDataSource = (dimensionOverrides?: Map<number, { width: number; height: number }>): { src: string; width: number; height: number }[] => {
+/** Android PhotoSwipe：根据当前 images 构建 dataSource 数组，每项需含 src、width、height */
+const buildPswpDataSource = (): { src: string; width: number; height: number }[] => {
   const items: { src: string; width: number; height: number }[] = [];
   const fallbackW = 1920;
   const fallbackH = 1080;
-  for (let i = 0; i < props.images.length; i++) {
-    const img = props.images[i];
+  for (const img of props.images) {
     const url = getOrCreateOriginalUrlFor(img) || props.imageUrlMap?.[img.id]?.thumbnail || "";
-    const override = dimensionOverrides?.get(i);
-    const meta = img.metadata as { width?: number; height?: number } | undefined;
-    let w: number;
-    let h: number;
-    if (override) {
-      w = override.width;
-      h = override.height;
-    } else if (meta?.width && meta?.height) {
-      w = meta.width;
-      h = meta.height;
-    } else {
-      w = fallbackW;
-      h = fallbackH;
-    }
+    // 优先使用 ImageInfo 的 width/height 字段，否则使用 fallback
+    const w = img.width || fallbackW;
+    const h = img.height || fallbackH;
     items.push({ src: url || "", width: w, height: h });
+
+    // Android 下，如果宽高缺失且 URL 存在，异步加载图片获取 naturalWidth/naturalHeight 并回写 DB
+    if (IS_ANDROID && (!img.width || !img.height) && url) {
+      const idx = items.length - 1;
+      resolveAndSyncDimensions(img, url, idx);
+    }
   }
   return items;
 };
+
+/** Android 下异步解析图片宽高并回写 DB，成功后更新 PhotoSwipe slide */
+const resolveAndSyncDimensions = async (img: ImageInfo, url: string, slideIndex: number) => {
+  // 如果已经在解析中，跳过
+  if (inFlightDimensionResolves.has(img.id)) {
+    return;
+  }
+
+  const resolvePromise = new Promise<void>((resolve) => {
+    const imageElement = new Image();
+    imageElement.onload = async () => {
+      const width = imageElement.naturalWidth;
+      const height = imageElement.naturalHeight;
+      
+      // 如果获取到有效尺寸
+      if (width > 0 && height > 0) {
+        // Fire-and-forget：调用后端命令回写 DB（不等待结果）
+        invoke("update_image_dimensions", {
+          imageId: img.id,
+          width,
+          height,
+        }).catch((err) => {
+          console.warn(`Failed to update image dimensions for ${img.id}:`, err);
+        });
+
+        // 更新本地 ImageInfo 对象，避免重复解析
+        (img as any).width = width;
+        (img as any).height = height;
+
+        // 如果 PhotoSwipe 已打开且当前 slide 就是这一张，刷新 slide 内容以立即生效
+        if (androidLightbox?.pswp && previewVisible.value && previewIndex.value === slideIndex) {
+          androidLightbox.pswp.refreshSlideContent(slideIndex);
+        }
+      }
+      
+      inFlightDimensionResolves.delete(img.id);
+      resolve();
+    };
+    imageElement.onerror = () => {
+      inFlightDimensionResolves.delete(img.id);
+      resolve();
+    };
+    imageElement.src = url;
+  });
+
+  inFlightDimensionResolves.set(img.id, resolvePromise);
+  await resolvePromise;
+};
+
+// 跟踪正在解析的图片 ID，避免重复解析
+const inFlightDimensionResolves = new Map<string, Promise<void>>();
 
 const ensureOriginalPreload = (image: ImageInfo, originalUrl: string) => {
   if (!originalUrl) return Promise.resolve(false);
@@ -1241,7 +1284,6 @@ function doAndroidPreviewCleanup() {
   if (!IS_ANDROID) return;
   previewVisible.value = false;
   actionBarVisible.value = false;
-  androidPreviewResolving.value = false;
   if (longPressTimer) {
     clearTimeout(longPressTimer);
     longPressTimer = null;
@@ -1251,9 +1293,18 @@ function doAndroidPreviewCleanup() {
 }
 
 const closePreview = () => {
-  // Android：若 PhotoSwipe 已打开，只触发 pswp.close()，由 destroy 事件执行 doAndroidPreviewCleanup，避免遮罩残留
-  if (IS_ANDROID && androidLightbox?.pswp) {
-    androidLightbox.pswp.close();
+  // Android：不调用 pswp.close()，仅隐藏 .pswp 根元素并做清理，使 pswp 保持挂载、初始不可见，避免反复挂载卸载
+  if (IS_ANDROID && androidLightbox?.pswp && androidPswpContainerRef.value) {
+    const pswpEl = androidPswpContainerRef.value.querySelector<HTMLElement>(".pswp");
+    if (pswpEl) {
+      pswpEl.style.visibility = "hidden";
+      androidPswpHidden.value = true;
+      lastOpenContentKey.value =
+        `${props.images.length}-${props.images[0]?.id ?? ""}-${props.images[props.images.length - 1]?.id ?? ""}`;
+    }
+    doAndroidPreviewCleanup();
+    previewImage.value = null;
+    previewIndex.value = -1;
     return;
   }
   if (IS_ANDROID) {
@@ -1286,18 +1337,31 @@ const closePreview = () => {
   pendingNav.value = null;
 };
 
+const performSwipeDelete = () => {
+  if (!previewImage.value) return;
+  emit("contextCommand", { command: "swipe-remove", image: previewImage.value });
+};
+
 const handlePreviewImageDeleted = () => {
   if (!previewVisible.value) return;
   if (props.images.length === 0) {
     closePreview();
     return;
   }
+  let newIndex: number;
   if (previewIndex.value >= 0 && previewIndex.value < props.images.length) {
-    setPreviewByIndex(previewIndex.value);
+    newIndex = previewIndex.value;
   } else if (previewIndex.value >= props.images.length) {
-    setPreviewByIndex(props.images.length - 1);
+    newIndex = props.images.length - 1;
   } else {
-    setPreviewByIndex(0);
+    newIndex = 0;
+  }
+  
+  // Android: 删除后需要重载 pswp 的数据源，使用 openAndroidPreview 触发 destroy + re-open
+  if (IS_ANDROID && androidLightbox) {
+    openAndroidPreview(newIndex);
+  } else {
+    setPreviewByIndex(newIndex);
   }
 };
 
@@ -1466,10 +1530,153 @@ function initAndroidLightbox() {
     }
   });
   androidLightbox.on("destroy", () => {
+    androidPswpHidden.value = false;
     doAndroidPreviewCleanup();
     previewImage.value = null;
     previewIndex.value = -1;
+    // 重置上划删除状态
+    swipeDeleteActive.value = false;
+    swipeDeleteReady.value = false;
+    isFromVerticalDrag = false;
+    if (verticalDragResetTimer) {
+      clearTimeout(verticalDragResetTimer);
+      verticalDragResetTimer = null;
+    }
+    const pending = pendingOpenAfterDestroy;
+    pendingOpenAfterDestroy = null;
+    if (pending && androidLightbox) {
+      previewVisible.value = true;
+      previewIndex.value = pending.index;
+      previewImage.value = props.images[pending.index] ?? null;
+      nextTick(() => {
+        if (androidLightbox) androidLightbox.loadAndOpen(pending.index, pending.dataSource);
+      });
+    }
   });
+  
+  // 监听垂直拖拽事件，实现上划删除、禁用下划关闭
+  androidLightbox.on("verticalDrag", (e: { panY: number; preventDefault?: () => void }) => {
+    const pswp = androidLightbox?.pswp;
+    if (!pswp || !pswp.currSlide) return;
+    
+    // 计算垂直拖拽比例（参考 PhotoSwipe 源码 _getVerticalDragRatio）
+    const centerY = pswp.currSlide.bounds.center.y;
+    const viewportHeight = pswp.viewportSize.y;
+    const ratio = (e.panY - centerY) / (viewportHeight / 3);
+    
+    // 清除之前的重置定时器
+    if (verticalDragResetTimer) {
+      clearTimeout(verticalDragResetTimer);
+      verticalDragResetTimer = null;
+    }
+    
+    if (ratio > 0) {
+      // 下划：阻止默认行为（视觉效果和关闭）
+      if (e.preventDefault) {
+        e.preventDefault();
+      }
+      swipeDeleteActive.value = false;
+      swipeDeleteReady.value = false;
+      isFromVerticalDrag = false;
+    } else {
+      // 上划：允许默认视觉效果，追踪删除状态
+      swipeDeleteActive.value = true;
+      const absRatio = Math.abs(ratio);
+      swipeDeleteReady.value = absRatio >= 0.4; // PhotoSwipe 的 MIN_RATIO_TO_CLOSE 阈值
+      isFromVerticalDrag = true;
+      
+      // 设置延时重置标志（确保 drag end → close 调用链中标志有效）
+      verticalDragResetTimer = setTimeout(() => {
+        isFromVerticalDrag = false;
+        verticalDragResetTimer = null;
+      }, 300);
+    }
+  });
+  
+  // 在 beforeOpen 事件中重写 pswp.close() 方法（每次打开都会触发，因为每次都是新的 pswp 实例）
+  androidLightbox.on("beforeOpen", () => {
+    const pswp = androidLightbox?.pswp;
+    if (!pswp) return;
+    
+    const originalClose = pswp.close.bind(pswp);
+    pswp.close = function() {
+      // 检查是否由垂直拖拽触发
+      if (isFromVerticalDrag) {
+        // 重置状态标志（先重置，避免后续逻辑误判）
+        const wasDeleteReady = swipeDeleteReady.value;
+        swipeDeleteActive.value = false;
+        swipeDeleteReady.value = false;
+        isFromVerticalDrag = false;
+        if (verticalDragResetTimer) {
+          clearTimeout(verticalDragResetTimer);
+          verticalDragResetTimer = null;
+        }
+        
+        if (wasDeleteReady) {
+          // 上划删除：先恢复视觉状态，再触发删除操作
+          const currSlide = pswp.currSlide;
+          if (currSlide) {
+            // 立即恢复背景透明度和图片位置
+            (pswp as any).applyBgOpacity(1);
+            const centerY = currSlide.bounds.center.y;
+            currSlide.pan.y = centerY;
+            currSlide.applyCurrentZoomPan();
+          }
+          // 触发删除操作，不关闭预览
+          performSwipeDelete();
+          return;
+        } else {
+          // 上划但未达阈值：执行回弹动画，恢复到正常状态
+          const currSlide = pswp.currSlide;
+          if (currSlide) {
+            const centerY = currSlide.bounds.center.y;
+            const currentPanY = currSlide.pan.y;
+            const initialBgOpacity = (pswp as any).bgOpacity;
+            const totalPanDist = centerY - currentPanY;
+            
+            if (Math.abs(totalPanDist) > 0.5) {
+              // 使用 spring 动画回弹
+              (pswp as any).animations.startSpring({
+                name: "panGesturey",
+                isPan: true,
+                start: currentPanY,
+                end: centerY,
+                velocity: 0,
+                dampingRatio: 0.82,
+                onUpdate: (pos: number) => {
+                  if ((pswp as any).bgOpacity < 1) {
+                    const progress = 1 - (centerY - pos) / totalPanDist;
+                    (pswp as any).applyBgOpacity(
+                      Math.min(1, Math.max(0, initialBgOpacity + (1 - initialBgOpacity) * progress))
+                    );
+                  }
+                  currSlide.pan.y = Math.floor(pos);
+                  currSlide.applyCurrentZoomPan();
+                },
+              });
+            } else {
+              // 距离很小，直接恢复
+              (pswp as any).applyBgOpacity(1);
+              currSlide.pan.y = centerY;
+              currSlide.applyCurrentZoomPan();
+            }
+          }
+          return;
+        }
+      }
+      
+      // 其他情况（点击关闭按钮、背景点击等）：正常关闭
+      swipeDeleteActive.value = false;
+      swipeDeleteReady.value = false;
+      isFromVerticalDrag = false;
+      if (verticalDragResetTimer) {
+        clearTimeout(verticalDragResetTimer);
+        verticalDragResetTimer = null;
+      }
+      originalClose();
+    };
+  });
+  
   androidLightbox.init();
 }
 
@@ -1611,11 +1818,8 @@ function prefetchAdjacent() {
   }
 }
 
-/** 滑动窗口半径：打开前解析该范围内无 metadata 的图片尺寸，滑动时保持原宽高比 */
-const ANDROID_PREVIEW_DIMENSION_WINDOW = 15;
-
-/** Android：使用 PhotoSwipe 打开全屏预览；无 metadata 时先加载图片取真实宽高，保证原宽高比 fit 屏幕 */
-async function openAndroidPreview(index: number) {
+/** Android：使用 PhotoSwipe 打开全屏预览。若上次仅隐藏未销毁且内容相同则只显示并 goTo，否则 loadAndOpen。 */
+const openAndroidPreview = (index: number) => {
   if (!androidLightbox || !androidPswpContainerRef.value || props.images.length === 0) return;
   const img = props.images[index];
   if (!img) return;
@@ -1623,36 +1827,36 @@ async function openAndroidPreview(index: number) {
   previewImage.value = img;
   previewVisible.value = true;
   actionBarVisible.value = false;
-  androidPreviewResolving.value = true;
+  const dataSource = buildPswpDataSource();
+  const contentKey = `${props.images.length}-${props.images[0]?.id ?? ""}-${props.images[props.images.length - 1]?.id ?? ""}`;
 
-  const dimensionOverrides = new Map<number, { width: number; height: number }>();
-  const start = Math.max(0, index - ANDROID_PREVIEW_DIMENSION_WINDOW);
-  const end = Math.min(props.images.length, index + ANDROID_PREVIEW_DIMENSION_WINDOW + 1);
-  const indicesToResolve: number[] = [];
-  for (let i = start; i < end; i++) indicesToResolve.push(i);
-
-  const timeoutMs = 2500;
-  const results = await Promise.allSettled(
-    indicesToResolve.map(async (i) => {
-      const im = props.images[i];
-      const meta = im?.metadata as { width?: number; height?: number } | undefined;
-      if (meta?.width && meta?.height) return { i, width: meta.width, height: meta.height };
-      const url = im ? getOrCreateOriginalUrlFor(im) || props.imageUrlMap?.[im.id]?.thumbnail || "" : "";
-      if (!url) return null;
-      const dim = await loadImageDimensions(url, timeoutMs);
-      return { i, width: dim.width, height: dim.height };
-    })
-  );
-  for (const r of results) {
-    if (r.status === "fulfilled" && r.value) dimensionOverrides.set(r.value.i, { width: r.value.width, height: r.value.height });
-  }
-
-  androidPreviewResolving.value = false;
-  const dataSource = buildPswpDataSource(dimensionOverrides);
-  await nextTick();
-  if (!previewVisible.value || !androidLightbox) return;
-  androidLightbox.loadAndOpen(index, dataSource);
-}
+  nextTick(() => {
+    if (!previewVisible.value || !androidLightbox) return;
+    const pswp = androidLightbox.pswp;
+    const container = androidPswpContainerRef.value;
+    if (pswp && androidPswpHidden.value && container && contentKey === lastOpenContentKey.value) {
+      const pswpEl = container.querySelector<HTMLElement>(".pswp");
+      if (pswpEl) {
+        pswpEl.style.visibility = "";
+        androidPswpHidden.value = false;
+        pswp.goTo(index);
+      }
+      return;
+    }
+    if (pswp && androidPswpHidden.value) {
+      pendingOpenAfterDestroy = { index, dataSource };
+      pswp.close();
+      return;
+    }
+    // pswp 当前处于打开且可见状态 -> destroy 并通过 pendingOpenAfterDestroy 重新打开
+    if (pswp && !androidPswpHidden.value) {
+      pendingOpenAfterDestroy = { index, dataSource };
+      pswp.destroy();
+      return;
+    }
+    androidLightbox.loadAndOpen(index, dataSource);
+  });
+};
 
 const open = (index: number) => {
   if (IS_ANDROID) {
@@ -1849,24 +2053,12 @@ defineExpose({
   .pswp {
     z-index: 1;
   }
-}
 
-// Android 打开前解析尺寸时的加载态
-.android-preview-resolving {
-  position: absolute;
-  inset: 0;
-  z-index: 2005;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
-  font-size: 16px;
-
-  span {
-    padding: 12px 20px;
-    border-radius: 8px;
-    background: rgba(0, 0, 0, 0.5);
+  // 左右箭头仅在显示工具栏时显示（与 PhotoSwipe 源码 button-arrow.js 中 className 一致）
+  &:not(.android-toolbar-visible) .pswp .pswp__button--arrow--prev,
+  &:not(.android-toolbar-visible) .pswp .pswp__button--arrow--next {
+    visibility: hidden;
+    pointer-events: none;
   }
 }
 
@@ -1898,6 +2090,62 @@ defineExpose({
     width: 24px;
     height: 24px;
   }
+}
+
+// Android 上划删除警告区域
+.swipe-delete-zone {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2005;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.3) 50%, transparent 100%);
+  pointer-events: none;
+  transition: background 0.2s ease;
+
+  &.ready {
+    background: linear-gradient(to bottom, rgba(220, 38, 38, 0.7) 0%, rgba(220, 38, 38, 0.4) 50%, transparent 100%);
+  }
+
+  .swipe-delete-zone-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 500;
+
+    svg {
+      width: 24px;
+      height: 24px;
+      stroke-width: 2;
+    }
+
+    span {
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    }
+  }
+}
+
+// 删除警告区域过渡动画
+.swipe-delete-zone-enter-active,
+.swipe-delete-zone-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.swipe-delete-zone-enter-from {
+  opacity: 0;
+  transform: translateY(-20px);
+}
+
+.swipe-delete-zone-leave-to {
+  opacity: 0;
+  transform: translateY(-20px);
 }
 
 // Android 全屏预览样式（旧 pager 用，保留给桌面端或兼容）

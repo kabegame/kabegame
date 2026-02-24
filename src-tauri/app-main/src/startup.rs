@@ -1,6 +1,5 @@
 // 启动步骤函数
 
-use kabegame_core::app_paths::kabegame_data_dir;
 use kabegame_core::crawler::TaskScheduler;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use kabegame_core::ipc::events::DaemonEventKind;
@@ -20,22 +19,8 @@ use crate::ipc::Store;
 use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
 
-pub fn init_app_paths(app: &tauri::AppHandle) {
-    kabegame_core::app_paths::init_resource_path(
-        app.path()
-            .resolve("resources", tauri::path::BaseDirectory::Resource)
-            .unwrap(),
-    );
-
-    // Android/iOS 需要初始化应用数据目录
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        let app_data_dir = app
-            .path()
-            .app_data_dir()
-            .expect("Failed to get app data directory");
-        kabegame_core::app_paths::init_app_data_dir(app_data_dir);
-    }
+pub fn init_app_paths(_app: &tauri::AppHandle) {
+    // Paths are initialized by tauri-plugin-pathes in its setup hook
 }
 
 pub fn init_plugin() {
@@ -51,10 +36,11 @@ pub fn init_plugin() {
 }
 
 // 清理用户数据（清理后重启处理真正的清理操作）
+#[cfg(not(target_os = "android"))]
 pub fn cleanup_user_data_if_marked() -> bool {
     // 检查清理标记，如果存在则先清理旧数据目录
-    let app_data_dir = kabegame_data_dir();
-    let cleanup_marker = app_data_dir.join(".cleanup_marker");
+    let cleanup_marker = kabegame_core::app_paths::AppPaths::global().cleanup_marker();
+    let app_data_dir = kabegame_core::app_paths::AppPaths::global().data_dir.clone();
     let is_cleaning_data = cleanup_marker.exists();
     if is_cleaning_data {
         // 删除标记文件
@@ -75,9 +61,8 @@ pub fn cleanup_user_data_if_marked() -> bool {
                             eprintln!("警告：无法完全清理数据目录，部分文件可能仍在使用中: {}", e);
                             // 尝试删除单个文件而不是整个目录
                             // 至少删除数据库和设置文件
-                            let _ = fs::remove_file(app_data_dir.join("images.db"));
-                            let _ = fs::remove_file(app_data_dir.join("settings.json"));
-                            let _ = fs::remove_file(app_data_dir.join("plugins.json"));
+                            let _ = fs::remove_file(kabegame_core::app_paths::AppPaths::global().images_db());
+                            let _ = fs::remove_file(kabegame_core::app_paths::AppPaths::global().settings_json());
                         } else {
                             // 等待一段时间后重试
                             std::thread::sleep(std::time::Duration::from_millis(200));
@@ -326,9 +311,6 @@ pub fn start_download_workers() {
 
 /// 启动 TaskScheduler（启动 DownloadQueue 的 worker）
 pub fn start_task_scheduler() {
-    tauri::async_runtime::spawn(async {
-        TaskScheduler::global().start_decompression_worker().await;
-    });
     tauri::async_runtime::spawn(async {
         TaskScheduler::global().start_download_workers_async().await;
     });

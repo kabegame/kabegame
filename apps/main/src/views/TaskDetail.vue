@@ -327,8 +327,8 @@ const handleRefresh = async () => {
     }
 };
 
-// leaf 分页：每页 1000 张（与后端 provider 对齐）
-const BIG_PAGE_SIZE = 1000;
+// leaf 分页：桌面每页 1000 张（与后端 provider 对齐）；Android 每页 100 便于预览重构
+const BIG_PAGE_SIZE = IS_ANDROID ? 100 : 1000;
 const { currentPage, currentOffset, jumpToPage } = useBigPageRoute({
     route,
     router,
@@ -870,6 +870,30 @@ const handleImageMenuCommand = async (
             removeDialogMessage.value = `将删除${count > 1 ? `这 ${count} 张图片` : "这张图片"}。`;
             removeDeleteFiles.value = false; // 默认不删除文件
             showRemoveDialog.value = true;
+            break;
+        case "swipe-remove" as any:
+            // 上划删除：直接删除，不删除文件，不显示确认对话框
+            if (imagesToProcess.length === 0) return null;
+            void (async () => {
+                try {
+                    const imageIds = imagesToProcess.map(img => img.id);
+                    
+                    // 不删除文件，只从任务中移除
+                    await crawlerStore.batchRemoveImages(imageIds);
+                    
+                    // 更新本地状态
+                    const ids = new Set(imageIds);
+                    images.value = images.value.filter((img) => !ids.has(img.id));
+                    removeFromCacheByIds(imageIds);
+                    clearSelection();
+                    
+                    // 重新加载任务信息以获取最新的 deletedCount
+                    await loadTaskInfo();
+                } catch (error) {
+                    console.error("删除图片失败:", error);
+                    ElMessage.error("删除图片失败");
+                }
+            })();
             break;
     }
     return null;

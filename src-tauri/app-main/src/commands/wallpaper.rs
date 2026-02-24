@@ -152,11 +152,6 @@ pub async fn get_current_wallpaper_path(app: AppHandle) -> Result<Option<String>
     get_current_wallpaper_path_from_settings(&app).await
 }
 
-#[tauri::command]
-pub fn migrate_images_from_json() -> Result<usize, String> {
-    Storage::global().migrate_from_json()
-}
-
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RotationStartResult {

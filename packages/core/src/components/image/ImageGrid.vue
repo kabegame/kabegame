@@ -10,8 +10,8 @@
         <div v-if="enableVirtualScroll" class="image-grid" :style="gridStyle">
           <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
             :image-url="getEffectiveImageUrl(item.image.id)"
-            :image-click-action="settingsStore.values.imageClickAction || 'none'" :use-original="gridColumnsCount <= 2"
-            :window-aspect-ratio="effectiveAspectRatio" :selected="effectiveSelectedIds.has(item.image.id)"
+            :image-click-action="settingsStore.values.imageClickAction || 'none'" :use-original="IS_ANDROID || gridColumnsCount <= 2"
+            :window-aspect-ratio="getEffectiveAspectRatioForItem(item.image)" :selected="effectiveSelectedIds.has(item.image.id)"
             :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
             @click="(e) => handleItemClick(item.image, item.index, e)"
             @dblclick="() => handleItemDblClick(item.image, item.index)"
@@ -24,8 +24,8 @@
         <transition-group v-else name="fade-in-list" tag="div" class="image-grid" :style="gridStyle">
           <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
             :image-url="getEffectiveImageUrl(image.id)"
-            :image-click-action="settingsStore.values.imageClickAction || 'none'" :use-original="gridColumnsCount <= 2"
-            :window-aspect-ratio="effectiveAspectRatio" :selected="effectiveSelectedIds.has(image.id)"
+            :image-click-action="settingsStore.values.imageClickAction || 'none'" :use-original="IS_ANDROID || gridColumnsCount <= 2"
+            :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="effectiveSelectedIds.has(image.id)"
             :grid-columns="gridColumnsCount" :grid-index="index" @click="(e) => handleItemClick(image, index, e)"
             @dblclick="() => handleItemDblClick(image, index)"
             @longpress="() => handleItemLongPress(image, index)"
@@ -90,7 +90,8 @@ export type ContextCommand =
   | "wallpaper"
   | "exportToWE"
   | "exportToWEAuto"
-  | "remove";
+  | "remove"
+  | "swipe-remove";
 
 type MultiImagePayload = { selectedImageIds: ReadonlySet<string> };
 type ImagePayload = { image: ImageInfo };
@@ -105,6 +106,7 @@ type ContextCommandPayloadMap = {
   exportToWE: ImagePayload & MultiImagePayload;
   exportToWEAuto: ImagePayload & MultiImagePayload;
   remove: ImagePayload & MultiImagePayload;
+  "swipe-remove": ImagePayload;
 };
 
 export type ContextCommandPayload<T extends ContextCommand = ContextCommand> = {
@@ -183,7 +185,10 @@ const enableCtrlKeyAdjustColumns = computed(() => props.enableCtrlKeyAdjustColum
 const hideScrollbar = computed(() => props.hideScrollbar ?? false);
 const scrollStableDelay = computed(() => props.scrollStableDelay ?? 180);
 const enableScrollStableEmit = computed(() => props.enableScrollStableEmit ?? true);
-const enableVirtualScroll = computed(() => props.enableVirtualScroll ?? true);
+// Android：不启用虚拟滚动，便于重构预览等逻辑
+const enableVirtualScroll = computed(() =>
+  IS_ANDROID ? false : (props.enableVirtualScroll ?? true)
+);
 const virtualOverscanRows = computed(() => Math.max(0, props.virtualOverscan ?? 20));
 // const enableScrollButtons = computed(() => props.enableScrollButtons ?? true);
 const scrollButtonThreshold = 2000;
@@ -203,9 +208,12 @@ const isZoomingLayout = ref(false);
 let zoomAnimTimer: ReturnType<typeof setTimeout> | null = null;
 
 const gridColumnsCount = computed(() => (imageGridColumns.value > 0 ? imageGridColumns.value : 1));
-const gridGapPx = computed(() => Math.max(4, 16 - (gridColumnsCount.value - 1)));
-const BASE_GRID_PADDING_Y = 6;
-const BASE_GRID_PADDING_X = 8;
+// Android：栅格更紧凑，空白更少
+const gridGapPx = computed(() =>
+  IS_ANDROID ? Math.max(2, 6 - (gridColumnsCount.value - 1)) : Math.max(4, 16 - (gridColumnsCount.value - 1))
+);
+const BASE_GRID_PADDING_Y = computed(() => (IS_ANDROID ? 4 : 6));
+const BASE_GRID_PADDING_X = computed(() => (IS_ANDROID ? 4 : 8));
 
 // 虚拟滚动测量
 const measuredItemHeight = ref<number | null>(null);
@@ -313,25 +321,32 @@ const updateWindowAspectRatio = () => {
   windowAspectRatio.value = window.innerWidth / window.innerHeight;
 };
 const effectiveAspectRatio = computed(() => {
-  // 安卓上固定为正方形（宽高比 1）
-  if (IS_ANDROID) {
-    return 1;
+  // 安卓上不在此处固定 1:1，改为按单张图片在 getEffectiveAspectRatioForItem 里处理
+  if (!IS_ANDROID) {
+    if (storeAspectRatio.value !== null && storeAspectRatio.value > 0) {
+      return storeAspectRatio.value;
+    }
+    if (props.windowAspectRatio !== undefined && props.windowAspectRatio > 0) {
+      return props.windowAspectRatio;
+    }
+    return windowAspectRatio.value;
   }
-  // 优先使用 store 中的宽高比设置，其次使用外部传入的 prop，最后使用实际窗口宽高比
-  if (storeAspectRatio.value !== null && storeAspectRatio.value > 0) {
-    return storeAspectRatio.value;
-  }
-  if (props.windowAspectRatio !== undefined && props.windowAspectRatio > 0) {
-    return props.windowAspectRatio;
-  }
-  return windowAspectRatio.value;
+  return 1; // Android 默认（无 width/height 时用）
 });
+
+/** Android：按该图 width/height 计算宽高比，行高由该行最高图自适应；非 Android 用全局 effectiveAspectRatio */
+const getEffectiveAspectRatioForItem = (image: ImageInfo) => {
+  if (IS_ANDROID && image?.width != null && image?.height != null && image.width > 0 && image.height > 0) {
+    return image.width / image.height;
+  }
+  return effectiveAspectRatio.value;
+};
 
 const estimatedItemHeight = () => {
   const container = containerEl.value;
   if (!container) return 240;
   const availableWidth =
-    container.clientWidth - BASE_GRID_PADDING_X * 2 - gridGapPx.value * (gridColumnsCount.value - 1);
+    container.clientWidth - BASE_GRID_PADDING_X.value * 2 - gridGapPx.value * (gridColumnsCount.value - 1);
   const columnWidth = Math.max(1, availableWidth / gridColumnsCount.value);
   // 行高估算应与 ImageItem 实际使用的 aspectRatio 一致，否则虚拟滚动 paddingTop 会漂移
   const ratio = effectiveAspectRatio.value || 16 / 9;
@@ -423,16 +438,21 @@ let gridDestroyed = false;
 const gridStyle = computed(() => {
   const columns = gridColumnsCount.value;
   const gap = gridGapPx.value;
-  const paddingTop = BASE_GRID_PADDING_Y + (enableVirtualScroll.value ? virtualPaddingTop.value : 0);
-  const paddingBottom = BASE_GRID_PADDING_Y + (enableVirtualScroll.value ? virtualPaddingBottom.value : 0);
-  return {
+  const paddingTop = BASE_GRID_PADDING_Y.value + (enableVirtualScroll.value ? virtualPaddingTop.value : 0);
+  const paddingBottom = BASE_GRID_PADDING_Y.value + (enableVirtualScroll.value ? virtualPaddingBottom.value : 0);
+  const style: Record<string, string> = {
     gridTemplateColumns: `repeat(${columns}, 1fr)`,
     gap: `${gap}px`,
     paddingTop: `${paddingTop}px`,
     paddingBottom: `${paddingBottom}px`,
-    paddingLeft: `${BASE_GRID_PADDING_X}px`,
-    paddingRight: `${BASE_GRID_PADDING_X}px`,
-  } as any;
+    paddingLeft: `${BASE_GRID_PADDING_X.value}px`,
+    paddingRight: `${BASE_GRID_PADDING_X.value}px`,
+  };
+  // Android：行高由该行最高图决定，格子不拉伸
+  if (IS_ANDROID) {
+    style.alignItems = "start";
+  }
+  return style as any;
 });
 
 const closeContextMenu = () => {

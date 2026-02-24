@@ -339,7 +339,9 @@ impl Storage {
                 "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
-                 i.\"order\"
+                 i.\"order\",
+                 i.width,
+                 i.height
                  FROM images i
                  INNER JOIN album_images ai ON i.id = ai.image_id
                  WHERE ai.album_id = ?1
@@ -364,6 +366,8 @@ impl Storage {
                     favorite: album_id == FAVORITE_ALBUM_ID,
                     local_exists: true,
                     order: row.get(9)?,
+                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                 })
             })
             .map_err(|e| format!("Failed to query album images: {}", e))?;
@@ -399,7 +403,9 @@ impl Storage {
                 "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
-                 i.\"order\"
+                 i.\"order\",
+                 i.width,
+                 i.height
                  FROM images i
                  INNER JOIN album_images ai ON i.id = ai.image_id
                  WHERE ai.album_id = ?1
@@ -425,6 +431,8 @@ impl Storage {
                     favorite: album_id == FAVORITE_ALBUM_ID,
                     local_exists: true,
                     order: row.get(9)?,
+                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                 })
             })
             .map_err(|e| format!("Failed to query album preview: {}", e))?;

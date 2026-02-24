@@ -40,3 +40,4 @@ src-tauri/icons/*
 # Nx
 .nx/cache
 .nx/workspace-data
+.cursor/

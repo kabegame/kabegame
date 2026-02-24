@@ -3,6 +3,7 @@
     'image-item-selected': selected,
     'item-entering': enteringClassActive,
     'item-leaving': isLeaving,
+    'image-item-android': IS_ANDROID,
   }" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
     <!-- 任务失败图片：下载重试（不阻挡点击/选择/右键） -->
     <el-tooltip v-if="image.isTaskFailed" content="重新下载" placement="top" :show-after="300">
@@ -240,6 +241,30 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   will-change: transform, box-shadow;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+
+  /* Android：无背景、无边框，更紧凑 */
+  &.image-item-android {
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    border-radius: 0;
+
+    .image-wrapper,
+    .image-preview-wrapper {
+      border-radius: 0;
+    }
+
+    .thumbnail.thumbnail-android {
+      border-radius: 0;
+      background: transparent;
+    }
+
+    &.image-item-selected {
+      border: none;
+      box-shadow: 0 0 0 2px rgba(255, 107, 157, 0.6);
+      outline: none;
+    }
+  }
 
   html:not(.platform-android) &:hover {
     // transform: translateY(-6px) scale(1.015);

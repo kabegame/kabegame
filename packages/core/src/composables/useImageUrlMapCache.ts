@@ -387,19 +387,19 @@ class ImageUrlMapLruCache {
     }
   }
 
-  /** 小工具：按 ImageInfo 统一补齐（只做“缺什么补什么”）。 */
+  /** 小工具：按 ImageInfo 统一补齐（只做“缺什么补什么”）。Android 不生成缩略图，只补齐原图。 */
   public async ensureForImage(image: ImageInfo, needOriginal: boolean) {
     if (!image?.id) return;
     const current = this.imageUrlMap.value[image.id] || {};
 
-    if (!current.thumbnail) {
+    if (!IS_ANDROID && !current.thumbnail) {
       const thumbPath = (image.thumbnailPath || image.localPath || "").trim();
       if (thumbPath) {
         await this.ensureThumbnailBlobUrl(image.id, thumbPath);
       }
     }
 
-    if (needOriginal && !current.original) {
+    if ((needOriginal || IS_ANDROID) && !current.original) {
       if (IS_ANDROID && (image.localPath || "").startsWith("content://")) {
         await this.ensureOriginalBlobUrl(image.id, image.localPath);
       } else {

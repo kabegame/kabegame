@@ -1,4 +1,4 @@
-package app.kabegame.plugin.picker
+package app.kabegame.plugin
 
 import android.app.Activity
 import android.content.ContentValues
@@ -25,6 +25,17 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.zip.ZipInputStream
+
+/**
+ * Activity 在 onCreate 之前注册的 launcher 提供给 PickerPlugin 使用，
+ * 避免插件在 Activity 已 RESUMED 后才被创建时调用 registerForActivityResult 导致崩溃。
+ */
+interface PickerLauncherHost {
+    fun launchFolderPicker(intent: Intent, onResult: (ActivityResult) -> Unit)
+    fun launchPickImages(onResult: (List<Uri>) -> Unit)
+    fun launchPickKgpgFile(intent: Intent, onResult: (ActivityResult) -> Unit)
+}
+
 
 @TauriPlugin
 class PickerPlugin(private val activity: Activity) : Plugin(activity) {
@@ -297,6 +308,86 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @InvokeArg
+    class GetImageDimensionsArgs {
+        var uri: String = ""
+    }
+
+    @Command
+    fun getImageDimensions(invoke: Invoke) {
+        Log.i("PickerPlugin", "getImageDimensions")
+        val args = invoke.parseArgs(GetImageDimensionsArgs::class.java)
+        val uriStr = args.uri
+        if (uriStr.isBlank()) {
+            invoke.reject("uri 不能为空")
+            return
+        }
+        try {
+            val uri = Uri.parse(uriStr)
+            // log
+            Log.i("PickerPlugin", "getImageDimensions: $uriStr")
+            if (uri.scheme != "content") {
+                invoke.reject("仅支持 content:// URI")
+                return
+            }
+            
+            var width: Int? = null
+            var height: Int? = null
+            
+            // 优先尝试从 MediaStore 获取
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val projection = arrayOf(
+                    MediaStore.Images.Media.WIDTH,
+                    MediaStore.Images.Media.HEIGHT
+                )
+                activity.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val widthIndex = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
+                        val heightIndex = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+                        if (widthIndex >= 0 && heightIndex >= 0) {
+                            width = cursor.getInt(widthIndex)
+                            height = cursor.getInt(heightIndex)
+                            // MediaStore 可能返回 0，需要回退到 BitmapFactory
+                            if (width == 0 || height == 0) {
+                                width = null
+                                height = null
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 如果 MediaStore 没有结果，使用 BitmapFactory
+            if (width == null || height == null) {
+                try {
+                    activity.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        val options = android.graphics.BitmapFactory.Options().apply {
+                            inJustDecodeBounds = true
+                        }
+                        android.graphics.BitmapFactory.decodeStream(inputStream, null, options)
+                        width = options.outWidth
+                        height = options.outHeight
+                    }
+                } catch (e: Exception) {
+                    Log.e("PickerPlugin", "BitmapFactory decode failed", e)
+                }
+            }
+            
+            if (width == null || height == null || width == 0 || height == 0) {
+                invoke.reject("无法获取图片尺寸")
+                return
+            }
+            
+            val result = JSObject()
+            result.put("width", width!!)
+            result.put("height", height!!)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            Log.e("PickerPlugin", "getImageDimensions failed", e)
+            invoke.reject("获取图片尺寸失败: ${e.message}", e)
+        }
+    }
+
+    @InvokeArg
     class ReadFileBytesArgs {
         var uri: String = ""
     }
@@ -363,107 +454,6 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
             Log.e("PickerPlugin", "takePersistablePermission failed", e)
             invoke.reject("请求持久权限失败: ${e.message}", e)
         }
-    }
-
-    @InvokeArg
-    class ExtractArchiveArgs {
-        var archiveUri: String = ""
-        var folderName: String = ""
-    }
-
-    private val IMAGE_EXTENSIONS = setOf(
-        "jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"
-    )
-
-    @Command
-    fun extractArchiveToMediaStore(invoke: Invoke) {
-        val args = invoke.parseArgs(ExtractArchiveArgs::class.java)
-        val archiveUriStr = args.archiveUri
-        val folderName = args.folderName
-        if (archiveUriStr.isBlank() || folderName.isBlank()) {
-            invoke.reject("archiveUri 和 folderName 不能为空")
-            return
-        }
-        try {
-            val uri = Uri.parse(archiveUriStr)
-            if (uri.scheme != "content") {
-                invoke.reject("仅支持 content:// URI")
-                return
-            }
-            val result = extractZipToMediaStore(uri, folderName)
-            val resultObj = JSObject()
-            resultObj.put("uris", JSONArray(result.uris))
-            resultObj.put("count", result.count)
-            invoke.resolve(resultObj)
-        } catch (e: Exception) {
-            Log.e("PickerPlugin", "extractArchiveToMediaStore failed", e)
-            invoke.reject("解压到 MediaStore 失败: ${e.message}", e)
-        }
-    }
-
-    private data class ExtractResult(val uris: List<String>, val count: Int)
-
-    private fun extractZipToMediaStore(archiveUri: Uri, folderName: String): ExtractResult {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            throw IllegalStateException("MediaStore RELATIVE_PATH 需要 Android 10+")
-        }
-        val contentResolver = activity.contentResolver
-        val relativePath = "Pictures/Kabegame/$folderName/"
-        val usedNames = mutableSetOf<String>()
-        val uris = mutableListOf<String>()
-
-        contentResolver.openInputStream(archiveUri)?.use { inputStream ->
-            ZipInputStream(inputStream).use { zipStream ->
-                var entry = zipStream.nextEntry
-                while (entry != null) {
-                    if (!entry.isDirectory) {
-                        val name = entry.name
-                        val ext = name.substringAfterLast('.', "").lowercase()
-                        if (ext in IMAGE_EXTENSIONS) {
-                            val baseName = name.substringAfterLast('/').substringBeforeLast('.')
-                            val safeName = baseName.take(100).replace(Regex("[^a-zA-Z0-9._-]"), "_")
-                            var displayName = "$safeName.$ext"
-                            var idx = 1
-                            while (displayName in usedNames) {
-                                displayName = "${safeName} ($idx).$ext"
-                                idx++
-                            }
-                            usedNames.add(displayName)
-
-                            val mimeType = when (ext) {
-                                "jpg", "jpeg" -> "image/jpeg"
-                                "png" -> "image/png"
-                                "gif" -> "image/gif"
-                                "webp" -> "image/webp"
-                                "bmp" -> "image/bmp"
-                                "svg" -> "image/svg+xml"
-                                "ico" -> "image/x-icon"
-                                else -> "image/$ext"
-                            }
-
-                            val values = ContentValues().apply {
-                                put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
-                                put(MediaStore.Images.Media.MIME_TYPE, mimeType)
-                                put(MediaStore.Images.Media.RELATIVE_PATH, relativePath)
-                            }
-                            val insertUri = contentResolver.insert(
-                                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                                values
-                            )
-                            insertUri?.let {
-                                contentResolver.openOutputStream(it)?.use { outputStream ->
-                                    zipStream.copyTo(outputStream)
-                                }
-                                uris.add(it.toString())
-                            }
-                        }
-                    }
-                    zipStream.closeEntry()
-                    entry = zipStream.nextEntry
-                }
-            }
-        } ?: throw IllegalStateException("无法打开压缩包 URI")
-        return ExtractResult(uris, uris.size)
     }
 
     @Command

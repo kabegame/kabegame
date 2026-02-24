@@ -176,16 +176,6 @@ impl TaskScheduler {
         Arc::clone(&self.download_queue)
     }
 
-    /// 启动解压缩 worker
-    pub async fn start_decompression_worker(&self) {
-        use crate::crawler::decompression::decompression_worker_loop;
-        let dq = self.download_queue();
-        let dq = dq.clone();
-        tokio::spawn(async move { 
-            decompression_worker_loop(dq).await 
-        });
-    }
-
     /// 启动下载 worker（先根据设置设置并发数并 spawn 对应数量，避免 total_workers 仍为 0 时 spawn 0 个 worker）
     pub async fn start_download_workers_async(&self) {
         let dq = self.download_queue();

@@ -21,6 +21,7 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-fs = "=2.4.4"
 tauri-plugin-global-shortcut = "2.3.1"
+tauri-plugin-pathes = { workspace = true }
 tauri-plugin-shell = "=2.3.3"
 tokio = {workspace = true}
 uuid = {workspace = true}
@@ -33,6 +34,7 @@ governor = "0.7"
 [target.'cfg(target_os = "android")'.dependencies]
 kabegame-core = {workspace = true, default-features = false}
 tauri-plugin-picker = { workspace = true }
+tauri-plugin-archiver = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 dokan = {version = "0.3.1", optional = true}

@@ -54,9 +54,7 @@ async fn handle_content(
             return Err("Task canceled".to_string());
         }
     
-        if let Some(io) = get_content_io_provider() {
-            let _ = io.take_persistable_permission(url).await;
-        }
+        let _ = get_content_io_provider().take_persistable_permission(url).await;
     
         crate::emitter::GlobalEmitter::global().emit_download_progress(
             task_id,

@@ -15,7 +15,7 @@ mod models;
 
 pub use error::{Error, Result};
 
-use mobile::Picker;
+use crate::mobile::Picker;
 
 /// Extensions to [`tauri::App`], [`tauri::AppHandle`] and [`tauri::Window`] to access the picker APIs.
 pub trait PickerExt<R: Runtime> {

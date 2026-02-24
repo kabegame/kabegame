@@ -1,6 +1,7 @@
 import { ref, watch, type Ref } from "vue";
 import type { ImageInfo, ImageUrlMap } from "../types/image";
 import { useImageUrlMapCache } from "./useImageUrlMapCache";
+import { IS_ANDROID } from "../env";
 
 type LoadKind = "thumbnail" | "original";
 
@@ -282,7 +283,8 @@ export function useImageUrlLoader<
       loadedOriginalIds.has(image.id) ||
       inFlightOriginalIds.has(image.id);
 
-    if (!hasThumb) {
+    // Android：不生成预览图，只加载原图
+    if (!IS_ANDROID && !hasThumb) {
       inFlightThumbnailIds.add(image.id);
       try {
         const thumbPath = pickThumbnailPath(image);
@@ -302,12 +304,16 @@ export function useImageUrlLoader<
       }
     }
 
-    if (needOriginal && !hasOrig) {
+    const needOrig = needOriginal || IS_ANDROID;
+    if (needOrig && !hasOrig) {
       inFlightOriginalIds.add(image.id);
       try {
-        const origUrl = image.localPath
-          ? cache.ensureOriginalAssetUrl(image.id, image.localPath)
-          : "";
+        let origUrl = "";
+        if (IS_ANDROID && (image.localPath || "").startsWith("content://")) {
+          origUrl = await cache.ensureOriginalBlobUrl(image.id, image.localPath);
+        } else if (image.localPath) {
+          origUrl = cache.ensureOriginalAssetUrl(image.id, image.localPath);
+        }
         if (!imageIdSet.has(image.id)) return;
         if (origUrl) {
           loadedOriginalIds.add(image.id);
@@ -348,6 +354,7 @@ export function useImageUrlLoader<
     const visibleSet = new Set(range.visibleIds);
 
     const needOriginal = preferOriginalInGrid.value;
+    const needOrig = needOriginal || IS_ANDROID;
     const imagesToLoad = source.filter((img) => {
       const existing = imageSrcMap.value[img.id];
       const hasThumb =
@@ -358,8 +365,8 @@ export function useImageUrlLoader<
         !!existing?.original ||
         loadedOriginalIds.has(img.id) ||
         inFlightOriginalIds.has(img.id);
-      if (!hasThumb) return true;
-      if (needOriginal && !hasOrig) return true;
+      if (!IS_ANDROID && !hasThumb) return true;
+      if (needOrig && !hasOrig) return true;
       return false;
     });
 
@@ -434,6 +441,16 @@ export function useImageUrlLoader<
   ) => {
     const image = params.imagesRef.value.find((img) => img.id === imageId);
     if (!image) return;
+    // Android：不生成缩略图，只刷新原图
+    if (IS_ANDROID) {
+      if (!localPath) return;
+      if ((localPath || "").startsWith("content://")) {
+        await cache.ensureOriginalBlobUrl(imageId, localPath);
+      } else {
+        cache.ensureOriginalAssetUrl(imageId, localPath);
+      }
+      return;
+    }
     if (isThumbnail) {
       const p = (image.thumbnailPath || localPath || "").trim();
       if (!p) return;

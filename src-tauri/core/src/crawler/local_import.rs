@@ -8,7 +8,7 @@
 
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
-use crate::crawler::decompression::DecompressionJob;
+use crate::crawler::archiver::ArchiveProcessor;
 use crate::crawler::downloader::DownloadQueue;
 use crate::emitter::GlobalEmitter;
 use crate::image_type;
@@ -86,8 +86,7 @@ async fn process_content_url(
     archive_count: &mut usize,
 ) -> Result<(), String> {
     let uri = url.as_str();
-    let io = get_content_io_provider()
-        .ok_or_else(|| "Android ContentIoProvider 未注册".to_string())?;
+    let io = get_content_io_provider();
 
     let is_dir = io.is_directory(uri).await?;
     if is_dir {
@@ -195,8 +194,7 @@ async fn process_content_file_url(
     archive_count: &mut usize,
 ) -> Result<(), String> {
     let uri = url.as_str();
-    let io = get_content_io_provider()
-        .ok_or_else(|| "Android ContentIoProvider 未注册".to_string())?;
+    let io = get_content_io_provider();
 
     let mime = io.get_mime_type(uri).await?;
     if image_type::is_image_mime(&mime) {
@@ -249,21 +247,40 @@ async fn enqueue_archive(
     image_count: &usize,
     archive_count: &mut usize,
 ) -> Result<(), String> {
-    let job = DecompressionJob {
-        archive_url: url,
-        images_dir: ctx.images_dir.clone(),
-        task_id: ctx.task_id.to_string(),
-        plugin_id: PLUGIN_ID.to_string(),
-        download_start_time: ctx.download_start_time,
-        output_album_id: ctx.output_album_id.clone(),
-        http_headers: HashMap::new(),
-    };
-    let (lock, notify) = &*ctx.download_queue.decompression_queue;
-    let mut queue = lock.lock().await;
-    queue.push_back(job);
-    notify.notify_waiters();
-    *archive_count += 1;
-    emit_local_import_progress(ctx.task_id, *image_count, *archive_count);
+    // 获取对应的 processor，解压到固定目录（Android 内部私有目录 / 桌面临时目录）
+    let processor = crate::crawler::archiver::get_processor_by_url(&url);
+    let extract_base = crate::app_paths::AppPaths::global().temp_dir.join("archive_extract");
+    if let Err(e) = tokio::fs::create_dir_all(&extract_base).await {
+        return Err(format!("Failed to create archive extract dir: {}", e));
+    }
+
+    if let Some(proc) = processor {
+        match proc.process(&url, &extract_base).await {
+            Ok(extract_dir) => {
+                // 遍历解压目录，将图片入队
+                use crate::crawler::downloader::walk_images_and_enqueue_file_downloads;
+                if let Err(e) = walk_images_and_enqueue_file_downloads(
+                    &extract_dir,
+                    ctx.download_queue,
+                    ctx.task_id,
+                    PLUGIN_ID,
+                    ctx.download_start_time,
+                    &ctx.output_album_id,
+                    &HashMap::new(),
+                ).await {
+                    return Err(format!("Failed to walk extracted directory: {}", e));
+                }
+                *archive_count += 1;
+                emit_local_import_progress(ctx.task_id, *image_count, *archive_count);
+            }
+            Err(e) => {
+                return Err(format!("Decompression failed: {}", e));
+            }
+        }
+    } else {
+        return Err(format!("No processor found for archive: {}", url));
+    }
+    
     Ok(())
 }
 

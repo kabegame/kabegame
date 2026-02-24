@@ -48,6 +48,7 @@ fn is_safe_relative_path(decoded: &str) -> bool {
 
 pub struct ZipProcessor;
 
+#[async_trait::async_trait]
 impl ArchiveProcessor for ZipProcessor {
     fn supported_types(&self) -> Vec<&str> {
         vec!["zip"]
@@ -64,22 +65,43 @@ impl ArchiveProcessor for ZipProcessor {
         url.path().to_ascii_lowercase().ends_with(".zip")
     }
 
-    fn process(&self, path: &Path, extract_dir: &Path) -> Result<PathBuf, String> {
-        if !path.exists() {
-            return Err(format!("Archive file not found: {}", path.display()));
+    async fn process(&self, url: &Url, extract_dir: &Path) -> Result<PathBuf, String> {
+        #[cfg(target_os = "android")]
+        {
+            use super::get_archive_extract_provider;
+            let provider = get_archive_extract_provider();
+            return provider
+                .extract_zip(url.as_str(), extract_dir.to_str().unwrap())
+                .await;
         }
 
-        let archive_stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("archive");
-        let out_dir = extract_dir.join(archive_stem);
-        fs::create_dir_all(&out_dir)
-            .map_err(|e| format!("Failed to create extract dir: {}", e))?;
+        #[cfg(not(target_os = "android"))]
+        {
+            // Desktop / file:// — 原有同步逻辑包在 spawn_blocking 中
+            let path = url
+                .to_file_path()
+                .map_err(|_| "Invalid file URL for archive".to_string())?;
+            if !path.exists() {
+                return Err(format!("Archive file not found: {}", path.display()));
+            }
 
-        extract_zip_to_dir(path, &out_dir)?;
+            let archive_stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("archive");
+            let out_dir = extract_dir.join(archive_stem);
+            let extract_dir_clone = extract_dir.to_path_buf();
+            let path_clone = path.clone();
 
-        Ok(out_dir)
+            tokio::task::spawn_blocking(move || {
+                fs::create_dir_all(&out_dir)
+                    .map_err(|e| format!("Failed to create extract dir: {}", e))?;
+                extract_zip_to_dir(&path_clone, &out_dir)?;
+                Ok::<PathBuf, String>(out_dir)
+            })
+            .await
+            .map_err(|e| format!("Decompression task failed: {}", e))?
+        }
     }
 }
 
@@ -113,10 +135,7 @@ fn extract_zip_to_dir(zip_path: &Path, extract_dir: &Path) -> Result<(), String>
         }
 
         let out_path = if out_path.exists() {
-            let filename = rel
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("file");
+            let filename = rel.file_name().and_then(|n| n.to_str()).unwrap_or("file");
             crate::crawler::downloader::unique_path(
                 out_path.parent().unwrap_or(extract_dir),
                 filename,

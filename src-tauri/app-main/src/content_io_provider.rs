@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use base64::Engine;
 use kabegame_core::crawler::content_io::{
-    ContentEntry, ContentIoProvider, ExtractArchiveResult,
+    ContentEntry, ContentIoProvider,
 };
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -35,7 +35,7 @@ enum Request {
     ListChildren(String),
     ReadFileBytes(String),
     TakePersistablePermission(String),
-    ExtractArchiveToMediaStore { archive_uri: String, folder_name: String },
+    GetImageDimensions(String),
 }
 
 #[derive(Debug)]
@@ -45,7 +45,7 @@ enum Response {
     ListChildren(Result<Vec<ContentEntry>, String>),
     ReadFileBytes(Result<Vec<u8>, String>),
     TakePersistablePermission(Result<(), String>),
-    ExtractArchiveToMediaStore(Result<ExtractArchiveResult, String>),
+    GetImageDimensions(Result<(u32, u32), String>),
 }
 
 /// 在独立线程中运行真实 Provider，用 channel 接收请求并返回结果。避免 Wry 跨线程 (Send/Sync)。
@@ -138,26 +138,17 @@ fn run_worker_loop<R: Runtime + 'static>(
                     }),
                 )
             }
-            Request::ExtractArchiveToMediaStore {
-                archive_uri,
-                folder_name,
-            } => {
+            Request::GetImageDimensions(uri) => {
                 let p = &provider;
-                Response::ExtractArchiveToMediaStore(
+                Response::GetImageDimensions(
                     rt.block_on(async move {
                         let resp = p
                             .app_handle
                             .picker()
-                            .extract_archive_to_media_store(
-                                archive_uri,
-                                folder_name,
-                            )
+                            .get_image_dimensions(uri)
                             .await
                             .map_err(|e| e.to_string())?;
-                        Ok(ExtractArchiveResult {
-                            uris: resp.uris,
-                            count: resp.count,
-                        })
+                        Ok((resp.width, resp.height))
                     }),
                 )
             }
@@ -238,23 +229,13 @@ impl ContentIoProvider for ChannelContentIoProvider {
         }
     }
 
-    async fn extract_archive_to_media_store(
-        &self,
-        archive_uri: &str,
-        folder_name: &str,
-    ) -> Result<ExtractArchiveResult, String> {
+    async fn get_image_dimensions(&self, uri: &str) -> Result<(u32, u32), String> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.tx
-            .send((
-                Request::ExtractArchiveToMediaStore {
-                    archive_uri: archive_uri.to_string(),
-                    folder_name: folder_name.to_string(),
-                },
-                resp_tx,
-            ))
+            .send((Request::GetImageDimensions(uri.to_string()), resp_tx))
             .map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
-            Response::ExtractArchiveToMediaStore(r) => r,
+            Response::GetImageDimensions(r) => r,
             _ => Err("unexpected response".to_string()),
         }
     }

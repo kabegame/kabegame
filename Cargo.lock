@@ -2588,10 +2588,12 @@ dependencies = [
  "sha2",
  "tauri",
  "tauri-build",
+ "tauri-plugin-archiver",
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-global-shortcut",
+ "tauri-plugin-pathes",
  "tauri-plugin-picker",
  "tauri-plugin-shell",
  "tokio",
@@ -5327,6 +5329,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-archiver"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tauri-plugin-clipboard-manager"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5391,6 +5403,18 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tauri-plugin-pathes"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "kabegame-core",
+ "serde",
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",

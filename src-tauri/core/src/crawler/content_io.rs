@@ -11,13 +11,6 @@ pub struct ContentEntry {
     pub is_directory: bool,
 }
 
-/// extractArchiveToMediaStore 的返回结果。
-#[derive(Debug, Clone)]
-pub struct ExtractArchiveResult {
-    pub uris: Vec<String>,
-    pub count: u32,
-}
-
 /// Android content:// IO 操作抽象。由 app-main 用 PluginHandle 实现并注册。异步 trait，避免在调度器 runtime 上 block_on 导致死锁。
 #[cfg(target_os = "android")]
 #[async_trait::async_trait]
@@ -27,11 +20,7 @@ pub trait ContentIoProvider: Send + Sync {
     async fn list_children(&self, uri: &str) -> Result<Vec<ContentEntry>, String>;
     async fn read_file_bytes(&self, uri: &str) -> Result<Vec<u8>, String>;
     async fn take_persistable_permission(&self, uri: &str) -> Result<(), String>;
-    async fn extract_archive_to_media_store(
-        &self,
-        archive_uri: &str,
-        folder_name: &str,
-    ) -> Result<ExtractArchiveResult, String>;
+    async fn get_image_dimensions(&self, uri: &str) -> Result<(u32, u32), String>;
 }
 
 #[cfg(target_os = "android")]
@@ -45,6 +34,6 @@ pub fn set_content_io_provider(provider: Box<dyn ContentIoProvider>) {
 
 /// 获取已注册的 ContentIoProvider。
 #[cfg(target_os = "android")]
-pub fn get_content_io_provider() -> Option<&'static dyn ContentIoProvider> {
-    CONTENT_IO_PROVIDER.get().map(|b| b.as_ref())
+pub fn get_content_io_provider() -> &'static dyn ContentIoProvider {
+    CONTENT_IO_PROVIDER.get().map(|b| b.as_ref()).unwrap()
 }

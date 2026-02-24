@@ -20,6 +20,8 @@ export interface ImageInfo {
   metadata?: Record<string, any>;
   hash?: string;
   order?: number;
+  width?: number;
+  height?: number;
 
   // UI 状态字段
   favorite?: boolean;

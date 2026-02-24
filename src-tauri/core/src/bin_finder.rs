@@ -82,12 +82,10 @@ pub fn find_binary(binary_type: BinaryType) -> Result<PathBuf, String> {
     }
 
     // 开发环境或 Windows：同目录查找
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(exe_dir) = current_exe.parent() {
-            let binary_path = exe_dir.join(&binary_name);
-            if binary_path.exists() {
-                return Ok(binary_path);
-            }
+    if let Some(exe_dir) = crate::app_paths::AppPaths::global().exe_dir() {
+        let binary_path = exe_dir.join(&binary_name);
+        if binary_path.exists() {
+            return Ok(binary_path);
         }
     }
 

@@ -61,6 +61,8 @@ model Image {
     thumbnailPath String  @default("") @map("thumbnail_path")
     hash          String  @default("")
     order         Int?    @map("order")
+    width         Int?    // 图片宽度（像素）
+    height        Int?    // 图片高度（像素）
 
     task          Task?        @relation("TaskToImage", fields: [taskId], references: [id], onDelete: SetNull)
     albumImages   AlbumImage[]

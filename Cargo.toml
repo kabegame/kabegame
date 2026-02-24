@@ -4,6 +4,8 @@ members = [
   "src-tauri/app-main",
   "src-tauri/app-cli",
   "src-tauri-plugins/tauri-plugin-picker",
+  "src-tauri-plugins/tauri-plugin-archiver",
+  "src-tauri-plugins/tauri-plugin-pathes",
 ]
 resolver = "2"
 
@@ -17,6 +19,8 @@ base64 = "0.22"
 image = "0.24"
 kabegame-core = {path = "./src-tauri/core", default-features = false}
 tauri-plugin-picker = { path = "./src-tauri-plugins/tauri-plugin-picker" }
+tauri-plugin-pathes = { path = "./src-tauri-plugins/tauri-plugin-pathes" }
+tauri-plugin-archiver = { path = "./src-tauri-plugins/tauri-plugin-archiver" }
 rhai = {version = "1.19", features = ["sync"]}
 serde = {version = "1.0", features = ["derive"]}
 serde_bytes = "0.11"

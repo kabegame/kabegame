@@ -66,6 +66,19 @@ pub struct GetMimeTypeResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GetImageDimensionsArgs {
+  pub uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetImageDimensionsResponse {
+  pub width: u32,
+  pub height: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadFileBytesArgs {
   pub uri: String,
 }
@@ -81,20 +94,6 @@ pub struct ReadFileBytesResponse {
 #[serde(rename_all = "camelCase")]
 pub struct TakePersistablePermissionArgs {
   pub uri: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExtractArchiveArgs {
-  pub archive_uri: String,
-  pub folder_name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExtractArchiveResponse {
-  pub uris: Vec<String>,
-  pub count: u32,
 }
 
 /// 选图结果：返回 content:// URI 列表。需 Serialize 供 command 返回前端。
