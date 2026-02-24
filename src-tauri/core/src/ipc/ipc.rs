@@ -720,7 +720,7 @@ pub fn windows_pipe_name() -> &'static str {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn unix_socket_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("kabegame-daemon.sock")
+    crate::app_paths::AppPaths::global().daemon_socket()
 }
 
 #[cfg(feature = "ipc-client")]

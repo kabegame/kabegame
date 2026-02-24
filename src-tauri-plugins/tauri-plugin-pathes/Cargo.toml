@@ -1,0 +1,21 @@
+[package]
+name = "tauri-plugin-pathes"
+version = "0.1.0"
+authors = [ "You" ]
+description = ""
+edition = "2021"
+rust-version = "1.77.2"
+exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules"]
+links = "tauri-plugin-pathes"
+
+[dependencies]
+tauri = { version = "2.10.0" }
+serde = "1.0"
+thiserror = "2"
+kabegame-core = { path = "../../src-tauri/core", default-features = false }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+dirs = "5.0"
+
+[build-dependencies]
+tauri-plugin = { version = "2.5.3", features = ["build"] }

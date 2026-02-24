@@ -414,7 +414,9 @@ impl Storage {
                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                 images.hash,
                 CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-                images.\"order\"
+                images.\"order\",
+                images.width,
+                images.height
              FROM images
              LEFT JOIN album_images fav_ai
                ON images.id = fav_ai.image_id AND fav_ai.album_id = '{}'
@@ -428,22 +430,24 @@ impl Storage {
 
         let rows = stmt
             .query_map(params_from_iter(params_ref.iter().copied()), |row| {
-                Ok(crate::storage::ImageInfo {
-                    id: row.get(0)?,
-                    url: row.get::<_, Option<String>>(1)?,
-                    local_path: row.get(2)?,
-                    plugin_id: row.get(3)?,
-                    task_id: row.get(4)?,
-                    crawled_at: row.get::<_, i64>(5)? as u64,
-                    metadata: row
-                        .get::<_, Option<String>>(6)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
-                    thumbnail_path: row.get(7)?,
-                    hash: row.get(8)?,
-                    favorite: row.get::<_, i64>(9)? != 0,
-                    local_exists: true,
-                    order: row.get::<_, Option<i64>>(10)?,
-                })
+            Ok(crate::storage::ImageInfo {
+                id: row.get(0)?,
+                url: row.get::<_, Option<String>>(1)?,
+                local_path: row.get(2)?,
+                plugin_id: row.get(3)?,
+                task_id: row.get(4)?,
+                crawled_at: row.get::<_, i64>(5)? as u64,
+                metadata: row
+                    .get::<_, Option<String>>(6)?
+                    .and_then(|s| serde_json::from_str(&s).ok()),
+                thumbnail_path: row.get(7)?,
+                hash: row.get(8)?,
+                favorite: row.get::<_, i64>(9)? != 0,
+                local_exists: true,
+                order: row.get::<_, Option<i64>>(10)?,
+                width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+            })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
 

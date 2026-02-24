@@ -1,9 +1,9 @@
 mod commands;
 mod startup;
 #[cfg(target_os = "android")]
-mod content_io_provider;
+mod archiver_provider;
 #[cfg(target_os = "android")]
-mod pathes_plugin;
+mod content_io_provider;
 #[cfg(not(mobile))]
 mod tray;
 mod utils;
@@ -274,14 +274,7 @@ fn spawn_extract_bundled_plugins<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     use tauri_plugin_picker::PickerExt;
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        let app_data_dir = match app.path().app_data_dir() {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("Failed to get app data directory: {}", e);
-                return;
-            }
-        };
-        let builtin_dir = app_data_dir.join("builtin-plugins");
+        let builtin_dir = kabegame_core::app_paths::AppPaths::global().builtin_plugins_dir();
         if let Err(e) = std::fs::create_dir_all(&builtin_dir) {
             eprintln!("Failed to create builtin-plugins directory: {}", e);
             return;
@@ -298,18 +291,20 @@ fn spawn_extract_bundled_plugins<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
 /// Tauri 应用入口（桌面 binary 与 Android/iOS 共用）
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 先注册 pathes，在 .setup() 前完成 AppPaths 初始化，供 Settings/Storage 等使用
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_fs::init());
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_pathes::init());
 
     #[cfg(target_os = "android")]
     {
         builder = builder.plugin(tauri_plugin_picker::init());
+        builder = builder.plugin(tauri_plugin_archiver::init());
         builder = builder.plugin(init_wallpaper_plugin());
         builder = builder.plugin(init_share_plugin());
-        builder = builder.plugin(pathes_plugin::init_pathes_plugin());
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -325,6 +320,8 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             init_app_paths(app.app_handle());
+
+            // Paths are initialized by tauri-plugin-pathes in its setup hook
 
             // 设置全局快捷键
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -353,6 +350,13 @@ pub fn run() {
                     // 初始化插件
                     init_plugin();
 
+                    // 后台补齐缺失的图片宽高数据
+                    tauri::async_runtime::spawn(async {
+                        if let Err(e) = kabegame_core::storage::Storage::global().fill_missing_dimensions() {
+                            eprintln!("Failed to fill missing image dimensions: {}", e);
+                        }
+                    });
+
                     // 启动 IPC Server（Android 不启用以避免虚拟盘等依赖）
                     startup::start_ipc_server(ctx, app.app_handle().clone());
                 }
@@ -367,7 +371,6 @@ pub fn run() {
                 // Android/iOS 平台：简化初始化流程
                 match init_globals_mobile(app.app_handle().clone()) {
                     Ok(_) => {
-                        cleanup_user_data_if_marked();
                         init_wallpaper_controller(app);
                         start_task_scheduler();
                         init_download_workers();
@@ -378,6 +381,14 @@ pub fn run() {
                             content_io_provider::PickerContentIoProvider::new(app.app_handle().clone());
                         let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
                         kabegame_core::crawler::content_io::set_content_io_provider(Box::new(proxy));
+                        
+                        // 注册 ArchiveExtractProvider
+                        let archiver_provider =
+                            archiver_provider::ArchiverContentProvider::new(app.app_handle().clone());
+                        let archiver_proxy = archiver_provider::ChannelArchiveExtractProvider::new(archiver_provider);
+                        kabegame_core::crawler::archiver::set_archive_extract_provider(Box::new(archiver_proxy));
+                        
+                        // Android 下图片宽高由前端通过 img 元素获取并回写，不在此批量补齐
                     }
                     Err(e) => {
                         utils::show_error(app.app_handle(), format!("出现了致命错误！: {}", e));
@@ -416,6 +427,7 @@ pub fn run() {
             get_images_count,
             browse_gallery_provider,
             toggle_image_favorite,
+            update_image_dimensions,
             // --- Tasks ---
             get_all_tasks,
             get_task,
@@ -478,6 +490,7 @@ pub fn run() {
             set_default_download_dir,
             get_default_images_dir,
             get_desktop_resolution,
+            #[cfg(not(target_os = "android"))]
             clear_user_data,
             // --- Wallpaper ---
             set_wallpaper,
@@ -541,7 +554,6 @@ pub fn run() {
             get_file_drop_kinds,
             get_supported_image_types,
             set_supported_image_formats,
-            migrate_images_from_json,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             start_dedupe_gallery_by_hash_batched,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

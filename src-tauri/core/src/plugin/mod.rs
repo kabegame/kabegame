@@ -17,7 +17,6 @@ use uuid::Uuid;
 use zip::ZipArchive;
 use tokio::sync::Mutex;
 
-use crate::app_paths::resource_dir;
 
 static BUILTIN_PLUGINS: &str = env!("KABEGAME_BUILTIN_PLUGINS");
 
@@ -137,32 +136,8 @@ impl PluginManager {
     }
 
     fn prepackaged_plugins_dir(&self) -> Result<PathBuf, String> {
-        // Android: 使用提取到 app data 目录的内置插件
-        #[cfg(target_os = "android")]
-        {
-            let app_data = crate::app_paths::kabegame_data_dir();
-            return Ok(app_data.join("builtin-plugins"));
-        }
-
-        // 开发模式：从项目源码里的 src-tauri/resources/plugins 定位
-        #[cfg(debug_assertions)]
-        {
-            // 尝试从 repo root 定位
-            if let Some(repo_root) = crate::app_paths::repo_root_dir() {
-                let dev_path = repo_root
-                    .join("src-tauri")
-                    .join("app-main")
-                    .join("resources")
-                    .join("plugins");
-                if dev_path.exists() {
-                    return Ok(dev_path);
-                }
-            }
-        }
-
-        // 生产模式：直接从函数调用获取
-        let resource_dir = resource_dir();
-        Ok(resource_dir.join("plugins"))
+        // Use AppPaths which already computed the correct builtin plugins dir
+        Ok(crate::app_paths::AppPaths::global().builtin_plugins_dir())
     }
 
     /// 获取内置插件目录（公开方法）
@@ -299,6 +274,11 @@ impl PluginManager {
     }
 
     pub fn get_plugins_directory(&self) -> PathBuf {
+        crate::app_paths::AppPaths::global().plugins_dir()
+    }
+
+    #[deprecated(note = "Use get_plugins_directory() instead")]
+    fn _old_get_plugins_directory(&self) -> PathBuf {
         plugins_directory_for_readonly()
     }
 
@@ -795,14 +775,12 @@ impl PluginManager {
 
     /// 获取插件源文件路径
     fn get_plugin_sources_file(&self) -> PathBuf {
-        let data_dir = crate::app_paths::kabegame_data_dir();
-        data_dir.join("plugin_sources.json")
+        crate::app_paths::AppPaths::global().plugin_sources_json()
     }
 
     /// 获取商店源 index.json 缓存目录
     fn get_store_cache_dir(&self) -> PathBuf {
-        let data_dir = crate::app_paths::kabegame_data_dir();
-        data_dir.join("store-cache")
+        crate::app_paths::AppPaths::global().store_cache_dir()
     }
 
     /// 获取特定商店源的缓存文件路径
@@ -2222,8 +2200,7 @@ impl PluginManager {
 /// - 仅返回用户数据目录，用于写入操作（导入、删除等）。
 /// - 读取插件时应该使用 `PluginManager` 的方法，它们会合并内置和用户目录。
 pub fn plugins_directory_for_readonly() -> PathBuf {
-    let app_data_dir = crate::app_paths::kabegame_data_dir();
-    app_data_dir.join("plugins-directory")
+    crate::app_paths::AppPaths::global().plugins_dir()
 }
 
 /// 查找插件文件路径（同步函数，优先查内置目录，再查用户目录）
@@ -2249,32 +2226,7 @@ pub fn find_plugin_kgpg_path(plugin_id: &str) -> Option<PathBuf> {
 
 /// 获取内置插件目录（不依赖 AppHandle / PluginManager 实例）
 fn builtin_plugins_directory_for_readonly() -> Result<PathBuf, String> {
-    // Android: 使用提取到 app data 目录的内置插件
-    #[cfg(target_os = "android")]
-    {
-        let app_data = crate::app_paths::kabegame_data_dir();
-        return Ok(app_data.join("builtin-plugins"));
-    }
-
-    // 开发模式：从项目源码里的 src-tauri/app-main/resources/plugins 定位
-    #[cfg(debug_assertions)]
-    {
-        // 尝试从 repo root 定位
-        if let Some(repo_root) = crate::app_paths::repo_root_dir() {
-            let dev_path = repo_root
-                .join("src-tauri")
-                .join("app-main")
-                .join("resources")
-                .join("plugins");
-            if dev_path.exists() {
-                return Ok(dev_path);
-            }
-        }
-    }
-
-    // 生产模式：直接从函数调用获取
-    let resource_dir = resource_dir();
-    Ok(resource_dir.join("plugins"))
+    Ok(crate::app_paths::AppPaths::global().builtin_plugins_dir())
 }
 
 /// 从任意 `.kgpg` 文件读取 manifest.json（优先 KGPG v2 头部）。

@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
-use crate::crawler::decompression::DecompressionJob;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
@@ -15,12 +14,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, Notify, RwLock};
 use tokio::time::{sleep, Duration};
 use url::Url;
+use walkdir::WalkDir;
 
 mod content;
 mod file;
 mod http;
 
-pub use crate::crawler::archiver::ArchiveType;
+pub use crate::crawler::archiver::{ArchiveProcessor, ArchiveType};
 pub use http::{build_reqwest_header_map_for_emitter, create_client};
 
 /// 下载执行类型：按 scheme 选择 http / file / content 的具体实现。
@@ -449,7 +449,6 @@ pub struct DownloadQueue {
     pub pool: Arc<DownloadPool>,
     pub active_tasks: Arc<Mutex<Vec<ActiveDownloadInfo>>>,
     pub canceled_tasks: Arc<RwLock<HashSet<String>>>,
-    pub decompression_queue: Arc<(Mutex<VecDeque<DecompressionJob>>, Notify)>,
 }
 
 impl DownloadQueue {
@@ -460,7 +459,6 @@ impl DownloadQueue {
             pool: Arc::clone(&pool),
             active_tasks: Arc::new(Mutex::new(Vec::new())),
             canceled_tasks: Arc::new(RwLock::new(HashSet::new())),
-            decompression_queue: Arc::new((Mutex::new(VecDeque::new()), Notify::new())),
         }
     }
 
@@ -546,8 +544,7 @@ impl DownloadQueue {
         http_headers: HashMap<String, String>,
     ) -> Result<(), String> {
         let t = if archive_type.trim().is_empty() || archive_type.eq_ignore_ascii_case("none") {
-            let mgr = crate::crawler::archiver::manager();
-            if let Some(processor) = mgr.get_processor_by_url(&url) {
+            if let Some(processor) = crate::crawler::archiver::get_processor_by_url(&url) {
                 let types = processor.supported_types();
                 if types.contains(&"zip") {
                     Some(ArchiveType::Zip)
@@ -719,8 +716,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
         );
 
         let processor = match job.archive_type {
-            Some(ty) => crate::crawler::archiver::manager().get_processor(ty),
-            None => crate::crawler::archiver::manager().get_processor_by_url(&job.url),
+            Some(ty) => crate::crawler::archiver::get_processor(ty),
+            None => crate::crawler::archiver::get_processor_by_url(&job.url),
         };
 
         // 先计算下载位置并下载，再按类型分支（归档入解压队 / 图片读内容后处理）
@@ -748,7 +745,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
         );
 
         let is_archive = processor.is_some();
-        let processor_ext = processor.as_ref().map(|p| p.supported_types()[0]);
+        let processor_ext = processor.map(|p| p.supported_types()[0]);
 
         // 图片且开启去重时：若 URL 已在库中且源文件存在于本机，则跳过下载，仅入画册+发事件
         if !is_archive {
@@ -868,23 +865,62 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
 
             match download_result {
                 Ok(_) => {
-                    // 归档：解压到 images_dir，解压 worker 会添加 file:// 下载请求
+                    // 归档：解压到固定目录（Android 内部私有目录 / 桌面临时目录），再遍历入队图片
                     if is_archive {
                         let archive_url = Url::from_file_path(&download_path)
                             .expect("download_path must be valid for archive");
-                        let decompression_job = DecompressionJob {
-                            archive_url,
-                            images_dir: job.images_dir.clone(),
-                            task_id: task_id_clone.clone(),
-                            plugin_id: plugin_id_clone.clone(),
-                            download_start_time,
-                            output_album_id: job.output_album_id.clone(),
-                            http_headers: job.http_headers.clone(),
+
+                        let extract_base = crate::app_paths::AppPaths::global().temp_dir.join("archive_extract");
+                        if let Err(e) = tokio::fs::create_dir_all(&extract_base).await {
+                            eprintln!("[Download Worker] Failed to create archive extract dir: {}", e);
+                        }
+
+                        // 获取对应的 processor
+                        let processor = match job.archive_type {
+                            Some(ty) => crate::crawler::archiver::get_processor(ty),
+                            None => crate::crawler::archiver::get_processor_by_url(&archive_url),
                         };
-                        let (lock, notify) = &*dq.decompression_queue;
-                        let mut queue = lock.lock().await;
-                        queue.push_back(decompression_job);
-                        notify.notify_waiters();
+
+                        if let Some(proc) = processor {
+                            match proc.process(&archive_url, &extract_base).await {
+                                Ok(extract_dir) => {
+                                    // 遍历解压目录，将图片入队
+                                    if let Err(e) = walk_images_and_enqueue_file_downloads(
+                                        &extract_dir,
+                                        &dq,
+                                        &task_id_clone,
+                                        &plugin_id_clone,
+                                        download_start_time,
+                                        &job.output_album_id,
+                                        &job.http_headers,
+                                    ).await {
+                                        eprintln!("[Download Worker] Failed to walk extracted directory: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("[Download Worker] Decompression failed: {}", e);
+                                    GlobalEmitter::global().emit_download_state(
+                                        &task_id_clone,
+                                        url_clone.as_str(),
+                                        download_start_time,
+                                        &plugin_id_clone,
+                                        "failed",
+                                        Some(&e),
+                                    );
+                                }
+                            }
+                        } else {
+                            eprintln!("[Download Worker] No processor found for archive: {}", archive_url);
+                            GlobalEmitter::global().emit_download_state(
+                                &task_id_clone,
+                                url_clone.as_str(),
+                                download_start_time,
+                                &plugin_id_clone,
+                                "failed",
+                                Some("No processor found for archive"),
+                            );
+                        }
+
                         GlobalEmitter::global().emit_download_state(
                             &task_id_clone,
                             url_clone.as_str(),
@@ -935,18 +971,18 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             #[cfg(not(target_os = "android"))]
                             let use_path_flow = true;
 
-                            // Android content://：读字节 → 哈希 → 缩略图 → 入库（local_path 存 URI）
+                            // Android content://：读字节 → 哈希 → 入库（不生成缩略图，永远用原图）
                             #[cfg(target_os = "android")]
                             if !use_path_flow {
-                                let bytes = match get_content_io_provider() {
-                                    None => {
-                                        let e = "ContentIoProvider 未注册";
+                                let bytes = match get_content_io_provider().read_file_bytes(url_clone.as_str()).await {
+                                   Ok(b) => b,
+                                   Err(e) => {
                                         let _ = Storage::global().add_task_failed_image(
                                             &task_id_clone,
                                             &plugin_id_clone,
                                             url_clone.as_str(),
                                             download_start_time as i64,
-                                            Some(e),
+                                            Some(e.as_str()),
                                         );
                                         GlobalEmitter::global().emit_download_state(
                                             &task_id_clone,
@@ -954,78 +990,25 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                             download_start_time,
                                             &plugin_id_clone,
                                             "failed",
-                                            Some(e),
+                                            Some(e.as_str()),
                                         );
                                         GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
                                         continue;
                                     }
-                                    Some(io) => match io.read_file_bytes(url_clone.as_str()).await {
-                                        Ok(b) => b,
-                                        Err(e) => {
-                                            let _ = Storage::global().add_task_failed_image(
-                                                &task_id_clone,
-                                                &plugin_id_clone,
-                                                url_clone.as_str(),
-                                                download_start_time as i64,
-                                                Some(e.as_str()),
-                                            );
-                                            GlobalEmitter::global().emit_download_state(
-                                                &task_id_clone,
-                                                url_clone.as_str(),
-                                                download_start_time,
-                                                &plugin_id_clone,
-                                                "failed",
-                                                Some(e.as_str()),
-                                            );
-                                            GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
-                                            continue;
-                                        }
-                                    },
                                 };
                                 ensure_minimum_duration(download_start_time, 500).await;
                                 let hash = compute_bytes_hash(&bytes);
-                                match generate_thumbnail_from_bytes(&bytes).await {
-                                    Ok(thumb_opt) => {
-                                        let thumb_path_str = thumb_opt
-                                            .as_ref()
-                                            .and_then(|p| p.canonicalize().ok())
-                                            .map(|p| {
-                                                p.to_string_lossy()
-                                                    .trim_start_matches("\\\\?\\")
-                                                    .to_string()
-                                            })
-                                            .unwrap_or_else(|| url_clone.to_string());
-                                        let _ = process_downloaded_content_image_to_storage(
-                                            url_clone.as_str(),
-                                            &hash,
-                                            thumb_opt.as_ref(),
-                                            &thumb_path_str,
-                                            &plugin_id_clone,
-                                            &task_id_clone,
-                                            download_start_time,
-                                            job.output_album_id.as_deref(),
-                                        )
-                                        .await;
-                                    }
-                                    Err(e) => {
-                                        let _ = Storage::global().add_task_failed_image(
-                                            &task_id_clone,
-                                            &plugin_id_clone,
-                                            url_clone.as_str(),
-                                            download_start_time as i64,
-                                            Some(e.as_str()),
-                                        );
-                                        GlobalEmitter::global().emit_download_state(
-                                            &task_id_clone,
-                                            url_clone.as_str(),
-                                            download_start_time,
-                                            &plugin_id_clone,
-                                            "failed",
-                                            Some(e.as_str()),
-                                        );
-                                        GlobalEmitter::global().emit_task_status_from_storage(&task_id_clone);
-                                    }
-                                }
+                                let _ = process_downloaded_content_image_to_storage(
+                                    url_clone.as_str(),
+                                    &hash,
+                                    None,
+                                    "", // Android 不生成缩略图，thumbnail_path 留空，前端用 local_path（原图）
+                                    &plugin_id_clone,
+                                    &task_id_clone,
+                                    download_start_time,
+                                    job.output_album_id.as_deref(),
+                                )
+                                .await;
                                 ensure_minimum_duration(download_start_time, 500).await;
                             }
 
@@ -1242,6 +1225,12 @@ async fn process_downloaded_content_image_to_storage(
     download_start_time: u64,
     output_album_id: Option<&str>,
 ) -> Result<(), String> {
+    let (width, height) = get_content_io_provider()
+        .get_image_dimensions(content_uri)
+        .await
+        .map(|(w, h)| (Some(w), Some(h)))
+        .unwrap_or((None, None));
+
     let image_info = ImageInfo {
         id: "".to_string(),
         url: None,
@@ -1255,6 +1244,8 @@ async fn process_downloaded_content_image_to_storage(
         hash: hash.to_string(),
         order: Some(download_start_time as i64),
         local_exists: true,
+        width,
+        height,
     };
     match Storage::global().add_image(image_info) {
         Ok(inserted) => {
@@ -1325,6 +1316,7 @@ async fn process_downloaded_content_image_to_storage(
 }
 
 /// 对新下载的图片做完整入库流程：生成缩略图、入库、入画册、发事件。失败时已做清理并发送 failed。
+/// Android 不生成缩略图，thumbnail_path 存为 local_path（前端永远用原图）。
 /// `postprocess_timing_hash_ms`: 当为 Some 时表示来自「未去重」分支，在成功结束时 print 各步骤耗时（含传入的算哈希耗时）。
 async fn process_downloaded_image_to_storage(
     path: &Path,
@@ -1336,35 +1328,6 @@ async fn process_downloaded_image_to_storage(
     output_album_id: Option<&str>,
     postprocess_timing_hash_ms: Option<u64>,
 ) -> Result<(), String> {
-    let t_thumb = if postprocess_timing_hash_ms.is_some() {
-        Some(Instant::now())
-    } else {
-        None
-    };
-    let thumbnail_path = match generate_thumbnail(path).await {
-        Ok(t) => t,
-        Err(e) => {
-            let _ = tokio::fs::remove_file(path).await;
-            let _ = Storage::global().add_task_failed_image(
-                task_id,
-                plugin_id,
-                url,
-                download_start_time as i64,
-                Some(e.as_str()),
-            );
-            GlobalEmitter::global().emit_download_state(
-                task_id,
-                url,
-                download_start_time,
-                plugin_id,
-                "failed",
-                Some(e.as_str()),
-            );
-            GlobalEmitter::global().emit_task_status_from_storage(task_id);
-            return Err(e);
-        }
-    };
-    let thumb_ms = t_thumb.map(|t| t.elapsed().as_millis() as u64);
     let local_path_str = path
         .canonicalize()
         .unwrap_or_else(|_| path.to_path_buf())
@@ -1372,16 +1335,54 @@ async fn process_downloaded_image_to_storage(
         .to_string()
         .trim_start_matches("\\\\?\\")
         .to_string();
-    let thumbnail_path_str = thumbnail_path
-        .as_ref()
-        .and_then(|p| p.canonicalize().ok())
-        .map(|p| {
-            p.to_string_lossy()
-                .to_string()
-                .trim_start_matches("\\\\?\\")
-                .to_string()
-        })
-        .unwrap_or_else(|| local_path_str.clone());
+
+    #[cfg(target_os = "android")]
+    let (thumbnail_path, thumbnail_path_str, thumb_ms): (Option<PathBuf>, String, Option<u64>) =
+        (None, local_path_str.clone(), None);
+
+    #[cfg(not(target_os = "android"))]
+    let (thumbnail_path, thumbnail_path_str, thumb_ms) = {
+        let t_thumb = if postprocess_timing_hash_ms.is_some() {
+            Some(Instant::now())
+        } else {
+            None
+        };
+        let thumbnail_path = match generate_thumbnail(path).await {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(path).await;
+                let _ = Storage::global().add_task_failed_image(
+                    task_id,
+                    plugin_id,
+                    url,
+                    download_start_time as i64,
+                    Some(e.as_str()),
+                );
+                GlobalEmitter::global().emit_download_state(
+                    task_id,
+                    url,
+                    download_start_time,
+                    plugin_id,
+                    "failed",
+                    Some(e.as_str()),
+                );
+                GlobalEmitter::global().emit_task_status_from_storage(task_id);
+                return Err(e);
+            }
+        };
+        let thumb_ms = t_thumb.map(|t| t.elapsed().as_millis() as u64);
+        let thumbnail_path_str = thumbnail_path
+            .as_ref()
+            .and_then(|p| p.canonicalize().ok())
+            .map(|p| {
+                p.to_string_lossy()
+                    .to_string()
+                    .trim_start_matches("\\\\?\\")
+                    .to_string()
+            })
+            .unwrap_or_else(|| local_path_str.clone());
+        (thumbnail_path, thumbnail_path_str, thumb_ms)
+    };
     let image_info = ImageInfo {
         // id 由数据库生成，这里占位
         id: "".to_string(),
@@ -1400,6 +1401,8 @@ async fn process_downloaded_image_to_storage(
         hash: hash.to_string(),
         order: Some(download_start_time as i64),
         local_exists: true,
+        width: None,
+        height: None,
     };
     let t_add = postprocess_timing_hash_ms.map(|_| Instant::now());
     match Storage::global().add_image(image_info) {
@@ -1493,11 +1496,7 @@ async fn process_downloaded_image_to_storage(
 }
 
 pub fn get_default_images_dir() -> PathBuf {
-    if let Some(pictures_dir) = dirs::picture_dir() {
-        pictures_dir.join("Kabegame")
-    } else {
-        crate::app_paths::kabegame_data_dir().join("images")
-    }
+    crate::app_paths::AppPaths::global().images_dir()
 }
 
 #[cfg(windows)]
@@ -1525,8 +1524,7 @@ pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBu
         Ok(img) => img,
         Err(_) => return Ok(None),
     };
-    let app_data_dir = crate::app_paths::kabegame_data_dir();
-    let thumbnails_dir = app_data_dir.join("thumbnails");
+    let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
     tokio::fs::create_dir_all(&thumbnails_dir)
         .await
         .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
@@ -1548,8 +1546,7 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
     if !crate::image_type::is_image_by_path(image_path) {
         return Ok(None);
     }
-    let app_data_dir = crate::app_paths::kabegame_data_dir();
-    let thumbnails_dir = app_data_dir.join("thumbnails");
+    let thumbnails_dir = crate::app_paths::AppPaths::global().thumbnails_dir();
     tokio::fs::create_dir_all(&thumbnails_dir)
         .await
         .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
@@ -1569,4 +1566,45 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
         .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
 
     Ok(Some(thumbnail_path))
+}
+
+/// 递归遍历解压目录，将每个图片以 file:// 协议加入下载队列（本地导入流程，不复制文件）。
+pub(crate) async fn walk_images_and_enqueue_file_downloads(
+    dir: &Path,
+    dq: &DownloadQueue,
+    task_id: &str,
+    plugin_id: &str,
+    download_start_time: u64,
+    output_album_id: &Option<String>,
+    http_headers: &HashMap<String, String>,
+) -> Result<(), String> {
+    for entry in WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        if dq.is_task_canceled(task_id).await {
+            return Err("Task canceled".to_string());
+        }
+        let p = entry.path();
+        if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+            if crate::archive::is_supported_image_ext(ext) {
+                let img_url = url::Url::from_file_path(p).unwrap();
+                // file:// 不复制，目标路径即源路径；加入下载队列后由 download worker 做后处理（哈希、缩略图、入库）
+                let _ = dq
+                    .download(
+                        img_url,
+                        dir.to_path_buf(), // file 协议下 images_dir 仅用于 compute_destination_path，file 会返回源路径
+                        plugin_id.to_string(),
+                        task_id.to_string(),
+                        download_start_time,
+                        output_album_id.clone(),
+                        http_headers.clone(),
+                        None,
+                    )
+                    .await;
+            }
+        }
+    }
+    Ok(())
 }

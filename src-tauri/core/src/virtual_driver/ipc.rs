@@ -106,7 +106,7 @@ fn windows_pipe_name() -> &'static str {
 #[cfg(not(target_os = "windows"))]
 fn unix_socket_path() -> std::path::PathBuf {
     // 放在系统临时目录：不需要额外权限；daemon 退出后文件可清理。
-    std::env::temp_dir().join("kabegame-vd.sock")
+    crate::app_paths::AppPaths::global().vd_socket()
 }
 
 /// 客户端：发送一次请求并等待响应。

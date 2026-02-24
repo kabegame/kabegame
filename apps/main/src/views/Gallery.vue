@@ -133,8 +133,8 @@ const desktopSelectionStore = useDesktopSelectionStore();
 const { extensions: imageExtensions, load: loadImageTypes, getMimeType } = useImageTypes();
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
-// leaf 分页：每页 1000 张图片（与后端 provider 叶子目录对齐）
-const BIG_PAGE_SIZE = 1000;
+// leaf 分页：桌面每页 1000 张（与后端 provider 对齐）；Android 每页 100 便于预览重构
+const BIG_PAGE_SIZE = IS_ANDROID ? 100 : 1000;
 
 // 是否启用分页（总数超过 1000）
 const bigPageEnabled = computed(() => {
@@ -960,6 +960,12 @@ const handleGridContextCommand = async (
       removeDialogMessage.value = `将从画廊${count > 1 ? `移除这 ${count} 张图片` : "移除这张图片"}。`;
       removeDeleteFiles.value = false; // 默认不删除文件
       showRemoveDialog.value = true;
+      return null;
+    case "swipe-remove" as any:
+      // 上划删除：直接删除，不显示确认对话框，不删除本机文件
+      if (imagesToProcess.length > 0) {
+        void handleBatchDeleteImages(imagesToProcess, false);
+      }
       return null;
     default:
       return null;

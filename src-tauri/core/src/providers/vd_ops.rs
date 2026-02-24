@@ -106,10 +106,9 @@ pub(crate) fn plugin_display_name_from_manifest(plugin_id: &str) -> Option<Strin
 
 // === 说明文件（VD 专用）===
 
+#[cfg(not(target_os = "android"))]
 fn note_dir() -> PathBuf {
-    crate::app_paths::kabegame_data_dir()
-        .join("virtual-driver")
-        .join("notes")
+    crate::app_paths::AppPaths::global().virtual_driver_notes()
 }
 
 fn note_id_for_name(name: &str) -> String {

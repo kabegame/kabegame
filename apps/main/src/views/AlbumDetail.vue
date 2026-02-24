@@ -226,8 +226,8 @@ const totalImagesCount = ref<number>(0);
 const albumViewRef = ref<any>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
 
-// leaf 分页：每页 1000 张（与后端 provider 对齐）
-const BIG_PAGE_SIZE = 1000;
+// leaf 分页：桌面每页 1000 张（与后端 provider 对齐）；Android 每页 100 便于预览重构
+const BIG_PAGE_SIZE = IS_ANDROID ? 100 : 1000;
 const { currentPage, currentOffset, jumpToPage } = useBigPageRoute({
   route,
   router,
@@ -838,6 +838,48 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
         ? `\n\n注意：其中包含当前壁纸。移除/删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。`
         : "";
       removeDialogMessage.value = `将从当前画册移除${count > 1 ? `这 ${count} 张图片` : "这张图片"}。${currentHint}`;
+      break;
+    case "swipe-remove" as any:
+      // 上划删除：直接从画册移除，不删除文件，不显示确认对话框
+      if (imagesToProcess.length === 0 || !albumId.value) break;
+      void (async () => {
+        try {
+          const idsArr = imagesToProcess.map((i) => i.id);
+          const isFavoriteAlbum = albumId.value === FAVORITE_ALBUM_ID.value;
+          
+          // 只从当前画册移除，不删除文件
+          await albumStore.removeImagesFromAlbum(albumId.value, idsArr);
+          
+          const ids = new Set(idsArr);
+          const includesCurrentWallpaper =
+            !!currentWallpaperImageId.value &&
+            imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
+          
+          // 如果是从收藏画册移除，更新本地图片的 favorite 字段为 false
+          if (isFavoriteAlbum) {
+            images.value = images.value.map((img) => {
+              if (ids.has(img.id)) {
+                return { ...img, favorite: false } as ImageInfo;
+              }
+              return img;
+            });
+          }
+          
+          // 从列表中移除
+          images.value = images.value.filter((img) => !ids.has(img.id));
+          leafAllImages = leafAllImages.filter((img) => !ids.has(img.id));
+          removeFromCacheByIds(idsArr);
+          
+          // 如果包含当前壁纸，清除壁纸 ID
+          if (includesCurrentWallpaper) {
+            currentWallpaperImageId.value = null;
+          }
+        } catch (error) {
+          console.error("移除图片失败:", error);
+          ElMessage.error("移除图片失败");
+        }
+      })();
+      break;
       removeDeleteFiles.value = false; // 默认不删除文件
       showRemoveDialog.value = true;
       break;

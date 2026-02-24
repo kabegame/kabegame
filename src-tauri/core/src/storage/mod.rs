@@ -137,6 +137,8 @@ PRAGMA mmap_size = 268435456;
             [],
         );
         let _ = conn.execute("ALTER TABLE images ADD COLUMN \"order\" INTEGER", []);
+        let _ = conn.execute("ALTER TABLE images ADD COLUMN width INTEGER", []);
+        let _ = conn.execute("ALTER TABLE images ADD COLUMN height INTEGER", []);
 
         // 创建索引
         let _ = conn.execute(
@@ -254,47 +256,9 @@ PRAGMA mmap_size = 268435456;
         fs::create_dir_all(&thumbnails_dir)
             .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
 
-        let _ = self.migrate_from_json();
         self.ensure_favorite_album()?;
 
         Ok(())
-    }
-
-    pub fn migrate_from_json(&self) -> Result<usize, String> {
-        let metadata_file = self.get_metadata_file();
-        if !metadata_file.exists() {
-            return Err("未找到旧 JSON 文件".to_string());
-        }
-
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM images", [], |row| row.get(0))
-            .map_err(|e| format!("Failed to query count: {}", e))?;
-
-        if count > 0 {
-            return Ok(0);
-        }
-
-        let content = fs::read_to_string(&metadata_file)
-            .map_err(|e| format!("Failed to read metadata file: {}", e))?;
-        let images: Vec<ImageInfo> = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse metadata: {}", e))?;
-
-        drop(conn);
-
-        let mut migrated_count = 0;
-        for mut image in images {
-            image.task_id = None;
-            let hash = compute_file_hash(&PathBuf::from(&image.local_path))
-                .unwrap_or_else(|_| String::new());
-            image.hash = hash;
-            if PathBuf::from(&image.local_path).exists() {
-                let _ = self.add_image(image)?;
-                migrated_count += 1;
-            }
-        }
-
-        Ok(migrated_count)
     }
 
     pub(crate) fn invalidate_images_total_cache(&self) {
@@ -319,27 +283,15 @@ PRAGMA mmap_size = 268435456;
     }
 
     fn get_db_path() -> PathBuf {
-        let app_data_dir = crate::app_paths::kabegame_data_dir();
-        app_data_dir.join("images.db")
+        crate::app_paths::AppPaths::global().images_db()
     }
 
     pub fn get_images_dir(&self) -> PathBuf {
-        if let Some(pictures_dir) = dirs::picture_dir() {
-            pictures_dir.join("Kabegame")
-        } else {
-            let app_data_dir = crate::app_paths::kabegame_data_dir();
-            app_data_dir.join("images")
-        }
+        crate::app_paths::AppPaths::global().images_dir()
     }
 
     pub fn get_thumbnails_dir(&self) -> PathBuf {
-        let app_data_dir = crate::app_paths::kabegame_data_dir();
-        app_data_dir.join("thumbnails")
-    }
-
-    fn get_metadata_file(&self) -> PathBuf {
-        let app_data_dir = crate::app_paths::kabegame_data_dir();
-        app_data_dir.join("images_metadata.json")
+        crate::app_paths::AppPaths::global().thumbnails_dir()
     }
 
     /// 初始化全局 Storage（必须在首次使用前调用）
@@ -572,7 +524,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
         has
     };
 
-    let settings_path = crate::app_paths::kabegame_data_dir().join("settings.json");
+    let settings_path = crate::app_paths::AppPaths::global().settings_json();
     let mut settings_json: Option<serde_json::Value> = None;
     let mut old_current_wallpaper_id: Option<String> = None;
     if settings_path.exists() {
@@ -609,6 +561,8 @@ fn perform_complex_migrations(conn: &mut Connection) {
                    COALESCE(NULLIF(thumbnail_path, ''), local_path) AS thumbnail_path,
                    COALESCE(hash, '') AS hash,
                    \"order\" AS ord,
+                   width,
+                   height,
                    ROW_NUMBER() OVER (
                      ORDER BY COALESCE(\"order\", crawled_at) ASC, crawled_at ASC, id ASC
                    ) AS new_id
@@ -630,6 +584,8 @@ fn perform_complex_migrations(conn: &mut Connection) {
                    COALESCE(NULLIF(thumbnail_path, ''), local_path) AS thumbnail_path,
                    COALESCE(hash, '') AS hash,
                    \"order\" AS ord,
+                   width,
+                   height,
                    CAST(id AS INTEGER) AS new_id
                  FROM images",
                 [],
@@ -662,7 +618,9 @@ fn perform_complex_migrations(conn: &mut Connection) {
                     metadata TEXT,
                     thumbnail_path TEXT NOT NULL DEFAULT '',
                     hash TEXT NOT NULL DEFAULT '',
-                    \"order\" INTEGER
+                    \"order\" INTEGER,
+                    width INTEGER,
+                    height INTEGER
                 )",
                 [],
             )
@@ -670,7 +628,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
 
             tx.execute(
                 "INSERT INTO images_new (
-                    id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\"
+                    id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\", width, height
                  )
                  SELECT
                     new_id,
@@ -682,7 +640,9 @@ fn perform_complex_migrations(conn: &mut Connection) {
                     metadata,
                     COALESCE(NULLIF(thumbnail_path, ''), local_path),
                     COALESCE(hash, ''),
-                    COALESCE(ord, crawled_at)
+                    COALESCE(ord, crawled_at),
+                    width,
+                    height
                  FROM images_ordered",
                 [],
             )

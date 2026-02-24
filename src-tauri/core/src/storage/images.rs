@@ -6,6 +6,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "android")]
+use crate::crawler::content_io::get_content_io_provider;
+#[cfg(target_os = "android")]
+use std::sync::mpsc;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageInfo {
@@ -30,6 +35,10 @@ pub struct ImageInfo {
     pub hash: String,
     #[serde(default)]
     pub order: Option<i64>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,6 +58,27 @@ pub struct RangedImages {
     pub limit: usize,
 }
 
+/// 解析图片宽高：桌面端用 image crate，Android content:// URI 由前端通过 img 元素获取。
+/// Android content:// URI 直接返回 None，由前端异步加载并回写 DB。
+fn resolve_image_dimensions(local_path: &str) -> Option<(u32, u32)> {
+    #[cfg(target_os = "android")]
+    {
+        if local_path.starts_with("content://") {
+            // Android content:// URI 由前端通过 img.naturalWidth/Height 获取，不在此解析
+            return None;
+        }
+    }
+
+    // 桌面端或 Android file:// 路径：使用 image crate
+    match image::image_dimensions(local_path) {
+        Ok((w, h)) => Some((w, h)),
+        Err(e) => {
+            eprintln!("Failed to get image dimensions from image crate: {}", e);
+            None
+        }
+    }
+}
+
 impl Storage {
     pub fn get_images_range(&self, offset: usize, limit: usize) -> Result<RangedImages, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -59,7 +89,9 @@ impl Storage {
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-             images.\"order\"
+             images.\"order\",
+             images.width,
+             images.height
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
              ORDER BY COALESCE(images.\"order\", images.crawled_at) ASC 
@@ -88,6 +120,8 @@ impl Storage {
                     favorite: row.get::<_, i64>(9)? != 0,
                     local_exists: true,
                     order: row.get::<_, Option<i64>>(10)?,
+                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
@@ -133,7 +167,9 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.\"order\"
+                 images.\"order\",
+                 images.width,
+                 images.height
                  FROM images
                  WHERE images.id = ?1",
                 params![image_id],
@@ -155,6 +191,8 @@ impl Storage {
                         favorite: false,
                         local_exists,
                         order: row.get::<_, Option<i64>>(9)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                     })
                 },
             )
@@ -183,7 +221,9 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.\"order\"
+                 images.\"order\",
+                 images.width,
+                 images.height
                  FROM images
                  WHERE images.local_path = ?1",
                 params![local_path],
@@ -204,6 +244,8 @@ impl Storage {
                         favorite: false,
                         local_exists,
                         order: row.get::<_, Option<i64>>(9)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                     })
                 },
             )
@@ -232,7 +274,9 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.\"order\"
+                 images.\"order\",
+                 images.width,
+                 images.height
                  FROM images
                  WHERE images.url = ?1",
                 params![url],
@@ -253,6 +297,8 @@ impl Storage {
                         favorite: false,
                         local_exists,
                         order: row.get::<_, Option<i64>>(9)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                     })
                 },
             )
@@ -284,7 +330,9 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.\"order\"
+                 images.\"order\",
+                 images.width,
+                 images.height
                  FROM images
                  WHERE images.hash = ?1",
                 params![hash],
@@ -305,6 +353,8 @@ impl Storage {
                         favorite: false,
                         local_exists,
                         order: row.get::<_, Option<i64>>(9)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                     })
                 },
             )
@@ -339,9 +389,17 @@ impl Storage {
 
         let order = image.order.unwrap_or(image.crawled_at as i64);
 
+        // 如果 width/height 为空，尝试解析
+        if image.width.is_none() || image.height.is_none() {
+            if let Some((w, h)) = resolve_image_dimensions(&image.local_path) {
+                image.width = Some(w);
+                image.height = Some(h);
+            }
+        }
+
         conn.execute(
-            "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\")
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\", width, height)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 &image.url,
                 image.local_path,
@@ -352,6 +410,8 @@ impl Storage {
                 thumbnail_path,
                 image.hash,
                 order,
+                image.width.map(|v| v as i64),
+                image.height.map(|v| v as i64),
             ],
         )
         .map_err(|e| format!("Failed to add image: {}", e))?;
@@ -372,6 +432,51 @@ impl Storage {
         self.invalidate_images_total_cache();
 
         Ok(image)
+    }
+
+    /// 批量补齐缺失的图片宽高数据（启动时调用）。
+    /// 先收集 (id, path) 后释放锁，再在无锁状态下解析尺寸并逐条更新，避免 resolve_image_dimensions 内 panic 毒化 db 锁。
+    pub fn fill_missing_dimensions(&self) -> Result<(), String> {
+        let to_fill: Vec<(i64, String)> = {
+            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            let mut stmt = conn
+                .prepare("SELECT id, local_path FROM images WHERE width IS NULL OR height IS NULL")
+                .map_err(|e| format!("Failed to prepare query: {}", e))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| format!("Failed to query images: {}", e))?;
+            rows.filter_map(Result::ok).collect()
+        };
+
+        let mut updated_count = 0;
+        let mut failed_count = 0;
+
+        for (id, local_path) in to_fill {
+            if let Some((w, h)) = resolve_image_dimensions(&local_path) {
+                let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+                match conn.execute(
+                    "UPDATE images SET width = ?1, height = ?2 WHERE id = ?3",
+                    params![w as i64, h as i64, id],
+                ) {
+                    Ok(_) => updated_count += 1,
+                    Err(e) => {
+                        eprintln!("Failed to update dimensions for image {}: {}", id, e);
+                        failed_count += 1;
+                    }
+                }
+            } else {
+                eprintln!("Failed to resolve dimensions for image {}: {}", id, local_path);
+                failed_count += 1;
+            }
+        }
+
+        if updated_count > 0 {
+            println!("Filled dimensions for {} images ({} failed)", updated_count, failed_count);
+        }
+
+        Ok(())
     }
 
     pub fn delete_image(&self, image_id: &str) -> Result<(), String> {
@@ -626,6 +731,16 @@ impl Storage {
             );
         }
 
+        Ok(())
+    }
+
+    pub fn update_image_dimensions(&self, image_id: &str, width: u32, height: u32) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.execute(
+            "UPDATE images SET width = ?1, height = ?2 WHERE id = ?3",
+            params![width as i64, height as i64, image_id],
+        )
+        .map_err(|e| format!("Failed to update dimensions: {}", e))?;
         Ok(())
     }
 

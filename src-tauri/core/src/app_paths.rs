@@ -1,12 +1,192 @@
 use std::{path::PathBuf, sync::OnceLock};
 
-/// 是否为开发模式（debug 构建）。
+/// 应用路径集中管理结构体
+/// 
+/// 所有路径在应用启动时由 tauri-plugin-pathes 一次性计算并初始化。
+/// 各模块通过 `AppPaths::global()` 获取路径，只做 `.join()` 操作，不做 IO。
+pub struct AppPaths {
+    /// 数据目录根：桌面 dirs::data_local_dir()/Kabegame；安卓 filesDir
+    pub data_dir: PathBuf,
+    /// 缓存目录根：桌面 dirs::cache_dir()/Kabegame；安卓 cacheDir
+    pub cache_dir: PathBuf,
+    /// 临时目录根：桌面 std::env::temp_dir()/Kabegame；安卓 cacheDir
+    pub temp_dir: PathBuf,
+    /// 资源目录：Tauri BaseDirectory::Resource
+    pub resource_dir: PathBuf,
+    /// 可执行文件所在目录（仅桌面，Android 为 None）
+    pub exe_dir: Option<PathBuf>,
+    /// 外部存储的数据目录（仅安卓 getExternalFilesDir，桌面为 None）
+    pub external_data_dir: Option<PathBuf>,
+    /// 桌面端图片目录（dirs::picture_dir()，Android 为 None）
+    pub pictures_dir: Option<PathBuf>,
+    /// 内置插件目录（在构造时已计算好，避免运行时判断）
+    pub builtin_plugins_dir: PathBuf,
+}
+
+static APP_PATHS: OnceLock<AppPaths> = OnceLock::new();
+
+impl AppPaths {
+    /// 初始化全局 AppPaths（由 tauri-plugin-pathes 在 setup 阶段调用）
+    pub fn init(paths: AppPaths) -> Result<(), String> {
+        APP_PATHS
+            .set(paths)
+            .map_err(|_| "AppPaths already initialized".to_string())
+    }
+
+    /// 获取全局 AppPaths 实例
+    pub fn global() -> &'static AppPaths {
+        APP_PATHS
+            .get()
+            .expect("AppPaths not initialized. Call AppPaths::init() at startup.")
+    }
+
+    // ========== 数据目录下的文件/目录 ==========
+
+    /// settings.json 文件路径
+    pub fn settings_json(&self) -> PathBuf {
+        self.data_dir.join("settings.json")
+    }
+
+    /// images.db 数据库文件路径
+    /// 
+    /// - 桌面：`data_dir/images.db`
+    /// - Android：`data_dir/databases/images.db`（Android 数据库约定）
+    pub fn images_db(&self) -> PathBuf {
+        #[cfg(target_os = "android")]
+        {
+            self.data_dir.join("databases").join("images.db")
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            self.data_dir.join("images.db")
+        }
+    }
+
+    /// plugin_sources.json 文件路径
+    pub fn plugin_sources_json(&self) -> PathBuf {
+        self.data_dir.join("plugin_sources.json")
+    }
+
+    /// plugins-directory 目录（用户安装的插件）
+    pub fn plugins_dir(&self) -> PathBuf {
+        self.data_dir.join("plugins-directory")
+    }
+
+    /// .cleanup_marker 文件路径（仅桌面）
+    #[cfg(not(target_os = "android"))]
+    pub fn cleanup_marker(&self) -> PathBuf {
+        self.data_dir.join(".cleanup_marker")
+    }
+
+    // ========== 图片相关目录 ==========
+
+    /// 图片存储目录
+    /// 
+    /// - 桌面：优先 `pictures_dir/Kabegame`，回退到 `data_dir/images`
+    /// - Android：`external_data_dir/images`
+    pub fn images_dir(&self) -> PathBuf {
+        #[cfg(target_os = "android")]
+        {
+            self.external_data_dir
+                .as_ref()
+                .map(|d| d.join("images"))
+                .unwrap_or_else(|| self.data_dir.join("images"))
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            self.pictures_dir
+                .as_ref()
+                .map(|d| d.join("Kabegame"))
+                .unwrap_or_else(|| self.data_dir.join("images"))
+        }
+    }
+
+    /// 缩略图目录
+    /// 
+    /// - 桌面：`data_dir/thumbnails`
+    /// - Android：`external_data_dir/thumbnails`
+    pub fn thumbnails_dir(&self) -> PathBuf {
+        #[cfg(target_os = "android")]
+        {
+            self.external_data_dir
+                .as_ref()
+                .map(|d| d.join("thumbnails"))
+                .unwrap_or_else(|| self.data_dir.join("thumbnails"))
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            self.data_dir.join("thumbnails")
+        }
+    }
+
+    // ========== 插件相关目录 ==========
+
+    /// 内置插件目录（已计算好，直接返回）
+    pub fn builtin_plugins_dir(&self) -> PathBuf {
+        self.builtin_plugins_dir.clone()
+    }
+
+    // ========== 缓存目录 ==========
+
+    /// provider-cache 目录（RocksDB/sled 等）
+    pub fn provider_cache_dir(&self) -> PathBuf {
+        self.cache_dir.join("provider-cache")
+    }
+
+    /// store-cache 目录（插件商店 index.json 缓存）
+    pub fn store_cache_dir(&self) -> PathBuf {
+        self.cache_dir.join("store-cache")
+    }
+
+    // ========== 临时目录 ==========
+
+    /// 归档下载临时目录
+    pub fn archive_download_temp(&self) -> PathBuf {
+        self.temp_dir.join("archive-download")
+    }
+
+    /// 插件下载临时目录（返回 temp_dir 根目录）
+    pub fn plugin_download_temp(&self) -> PathBuf {
+        self.temp_dir.clone()
+    }
+
+    // ========== 虚拟驱动相关（仅桌面） ==========
+
+    /// 虚拟驱动备注文件目录
+    #[cfg(not(target_os = "android"))]
+    pub fn virtual_driver_notes(&self) -> PathBuf {
+        self.data_dir.join("virtual-driver").join("notes")
+    }
+
+    // ========== IPC Socket（仅桌面非 Windows） ==========
+
+    /// daemon IPC socket 路径
+    #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
+    pub fn daemon_socket(&self) -> PathBuf {
+        self.temp_dir.join("kabegame-daemon.sock")
+    }
+
+    /// virtual driver IPC socket 路径
+    #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
+    pub fn vd_socket(&self) -> PathBuf {
+        self.temp_dir.join("kabegame-vd.sock")
+    }
+
+    // ========== 其他工具方法 ==========
+
+    /// 获取可执行文件所在目录（仅桌面）
+    pub fn exe_dir(&self) -> Option<&PathBuf> {
+        self.exe_dir.as_ref()
+    }
+}
+
+/// 是否为开发模式（debug 构建）
 #[inline]
 pub fn is_dev() -> bool {
     cfg!(debug_assertions)
 }
 
-/// 尝试从当前可执行文件位置推断项目根目录。
+/// 尝试从当前可执行文件位置推断项目根目录
 ///
 /// 典型 Tauri dev：`<repo>/src-tauri/target/debug/<exe>`
 /// 我们向上回溯，找到同时包含 `package.json` 和 `src-tauri/` 的目录，作为 repo 根目录。
@@ -28,109 +208,29 @@ pub fn repo_root_dir() -> Option<PathBuf> {
     None
 }
 
-/// 获取"用户程序数据目录"。
-///
-/// - 开发模式（debug）：使用源码根目录下的 `data/`（即 `<repo>/data`）
-/// - 生产模式（release）：使用系统数据目录并追加 `app_folder_name`（保持现有行为）
-/// - Android/iOS：使用 Tauri 路径 API 获取的数据目录（需要先调用 `init_app_data_dir`）
-fn user_data_dir(app_folder_name: &str) -> PathBuf {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        // 移动端使用 Tauri 路径 API
-        if let Some(path) = APP_DATA_DIR.get() {
-            return path.clone();
-        }
-        // 如果未初始化，返回一个默认路径（不应该发生）
-        panic!("App data directory not initialized. Call init_app_data_dir() first.");
-    }
+// ========== 向后兼容的废弃函数（逐步迁移后删除） ==========
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        // 桌面端使用 dirs crate
-        if is_dev() {
-            if let Some(repo_root) = repo_root_dir() {
-                return repo_root.join("data");
-            }
-        }
-
-        dirs::data_local_dir()
-            .or_else(|| dirs::data_dir())
-            .expect("Failed to get app data directory")
-            .join(app_folder_name)
-    }
-}
-
-/// Kabegame 主应用数据目录（便于统一调用）。
-#[inline]
+#[deprecated(note = "Use AppPaths::global().settings_json() instead")]
 pub fn kabegame_data_dir() -> PathBuf {
-    user_data_dir("Kabegame")
+    AppPaths::global().data_dir.clone()
 }
 
-static RESOURCE_PATH: OnceLock<PathBuf> = OnceLock::new();
-
+#[deprecated(note = "Use AppPaths::global().resource_dir instead")]
 pub fn resource_dir() -> PathBuf {
-    return RESOURCE_PATH.get().unwrap().clone()
+    AppPaths::global().resource_dir.clone()
 }
 
-pub fn init_resource_path(path: PathBuf) {
-    RESOURCE_PATH.set(path).unwrap();
-}
-
-// Android/iOS 应用数据目录（通过 Tauri 路径 API 获取）
-#[cfg(any(target_os = "android", target_os = "ios"))]
-static APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn init_app_data_dir(path: PathBuf) {
-    APP_DATA_DIR.set(path).expect("App data directory already initialized");
-}
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-static PROVIDER_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-static STORE_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn init_android_cache_dirs(provider_dir: PathBuf, store_dir: PathBuf) {
-    PROVIDER_CACHE_DIR
-        .set(provider_dir)
-        .expect("Provider cache dir already initialized");
-    STORE_CACHE_DIR
-        .set(store_dir)
-        .expect("Store cache dir already initialized");
-}
-
+#[deprecated(note = "Use AppPaths::global().provider_cache_dir() instead")]
 pub fn provider_cache_dir() -> PathBuf {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        PROVIDER_CACHE_DIR
-            .get()
-            .expect("Provider cache dir not initialized")
-            .clone()
-    }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        dirs::cache_dir()
-            .expect("Failed to get cache dir")
-            .join("Kabegame")
-            .join("provider-cache")
-    }
+    AppPaths::global().provider_cache_dir()
 }
 
+#[deprecated(note = "Use AppPaths::global().store_cache_dir() instead")]
 pub fn store_cache_dir() -> PathBuf {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        STORE_CACHE_DIR
-            .get()
-            .expect("Store cache dir not initialized")
-            .clone()
-    }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        dirs::cache_dir()
-            .expect("Failed to get cache dir")
-            .join("Kabegame")
-            .join("store-cache")
-    }
+    AppPaths::global().store_cache_dir()
+}
+
+#[deprecated(note = "Archive extraction path should be computed dynamically by caller")]
+pub fn archive_extract_dir() -> PathBuf {
+    AppPaths::global().temp_dir.join("archive_extract")
 }

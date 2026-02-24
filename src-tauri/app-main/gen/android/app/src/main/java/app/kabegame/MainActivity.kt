@@ -11,7 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.ActivityResultCallback
 import androidx.activity.result.contract.ActivityResultContracts
-import app.kabegame.plugin.picker.PickerLauncherHost
+import app.kabegame.plugin.PickerLauncherHost
 import java.io.File
 import java.io.FileOutputStream
 

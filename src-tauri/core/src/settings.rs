@@ -250,7 +250,7 @@ impl Settings {
     }
 
     fn get_settings_file() -> PathBuf {
-        crate::app_paths::kabegame_data_dir().join("settings.json")
+        crate::app_paths::AppPaths::global().settings_json()
     }
 
     fn default_value(key: SettingKey) -> SettingValue {

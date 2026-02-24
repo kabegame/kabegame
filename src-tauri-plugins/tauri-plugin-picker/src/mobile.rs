@@ -11,7 +11,7 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
   _app: &AppHandle<R>,
   api: PluginApi<R, C>,
 ) -> crate::Result<Picker<R>> {
-  let handle = api.register_android_plugin("app.kabegame.plugin.picker", "PickerPlugin")?;
+  let handle = api.register_android_plugin("app.kabegame.plugin", "PickerPlugin")?;
   Ok(Picker(handle))
 }
 
@@ -32,6 +32,15 @@ impl<R: Runtime> Picker<R> {
     let result: GetMimeTypeResponse = self
       .0
       .run_mobile_plugin_async("getMimeType", GetMimeTypeArgs { uri })
+      .await
+      .map_err(crate::Error::from)?;
+    Ok(result)
+  }
+
+  pub async fn get_image_dimensions(&self, uri: String) -> crate::Result<GetImageDimensionsResponse> {
+    let result: GetImageDimensionsResponse = self
+      .0
+      .run_mobile_plugin_async("getImageDimensions", GetImageDimensionsArgs { uri })
       .await
       .map_err(crate::Error::from)?;
     Ok(result)
@@ -62,25 +71,6 @@ impl<R: Runtime> Picker<R> {
       .await
       .map_err(crate::Error::from)?;
     Ok(())
-  }
-
-  pub async fn extract_archive_to_media_store(
-    &self,
-    archive_uri: String,
-    folder_name: String,
-  ) -> crate::Result<ExtractArchiveResponse> {
-    let result: ExtractArchiveResponse = self
-      .0
-      .run_mobile_plugin_async(
-        "extractArchiveToMediaStore",
-        ExtractArchiveArgs {
-          archive_uri,
-          folder_name,
-        },
-      )
-      .await
-      .map_err(crate::Error::from)?;
-    Ok(result)
   }
 
   /// 从 APK assets 的 resources/plugins 解压 .kgpg 到指定目录（仅 Android）。
