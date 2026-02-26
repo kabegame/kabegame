@@ -49,8 +49,8 @@
   <el-dialog v-else v-model="previewVisible" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
     class="image-preview-dialog" :show-close="true" :lock-scroll="true" @close="closePreview">
     <div v-if="previewVisible" ref="previewContainerRef" class="preview-container"
-      @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMoveWithDrag"
-      @mouseleave="handlePreviewMouseLeaveAll" @wheel.prevent="handlePreviewWheel" @mouseup="stopPreviewDrag">
+      @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
+      @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePanzoomWheel">
       <div v-if="props.images.length > 1" class="preview-nav-zone left"
         :class="{ visible: previewHoverSide === 'left' }" @click.stop="goPrev">
         <button class="preview-nav-btn" type="button" :class="{ disabled: isAtFirst }" aria-label="上一张">
@@ -67,9 +67,10 @@
           </el-icon>
         </button>
       </div>
-      <img v-if="previewImageUrl" ref="previewImageRef" :src="previewImageUrl" class="preview-image" alt="预览图片"
-        :style="previewImageStyle" @load="handlePreviewImageLoad" @error="handlePreviewImageError"
-        @mousedown.prevent.stop="startPreviewDrag" @dragstart.prevent />
+      <div v-if="previewImageUrl" ref="panzoomWrapperRef" class="panzoom-wrapper">
+        <img ref="previewImageRef" :src="previewImageUrl" class="preview-image" alt="预览图片"
+          @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
+      </div>
       <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
         <ImageNotFound />
       </div>
@@ -82,6 +83,7 @@
 </template>
 
 <script setup lang="ts">
+import type { Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
@@ -95,6 +97,7 @@ import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 import PhotoSwipeLightbox from "photoswipe/lightbox";
 import "photoswipe/style.css";
+import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 
 const props = defineProps<{
   images: ImageInfo[];
@@ -121,6 +124,11 @@ const previewNotFound = ref(false);
 
 const previewContainerRef = ref<HTMLElement | null>(null);
 const previewImageRef = ref<HTMLImageElement | null>(null);
+// Panzoom 由 usePanzoomPreview 提供，在 notifyPreviewInteracting / markPreviewInteracting 定义后初始化
+let panzoomWrapperRef!: Ref<HTMLElement | null>;
+let handlePanzoomWheel!: (event: WheelEvent) => void;
+let panzoomReset!: () => void;
+let panzoomDestroy!: () => void;
 // Android PhotoSwipe：容器与 lightbox 实例；关闭时仅隐藏 .pswp 不销毁，避免反复挂载卸载
 const androidPswpContainerRef = ref<HTMLElement | null>(null);
 let androidLightbox: InstanceType<typeof PhotoSwipeLightbox> | null = null;
@@ -140,9 +148,7 @@ const previewContainerSize = ref({ width: 0, height: 0 });
 const previewAvailableSize = ref({ width: 0, height: 0 });
 // 缓存 container 的 rect，避免 mousemove/wheel 高频触发时反复 getBoundingClientRect() 导致强制布局与掉帧
 const previewContainerRect = ref({ left: 0, top: 0, width: 0, height: 0 });
-const previewDragging = ref(false);
-const previewDragStart = ref({ x: 0, y: 0 });
-const previewDragStartTranslate = ref({ x: 0, y: 0 });
+// previewDragging、previewDragStart、previewDragStartTranslate 已删除，由 Panzoom 替代（仅桌面端）
 const previewImageLoading = ref(false);
 // 仅释放本组件创建的 blob url，避免误删外部缓存的 url
 const ownedOriginalBlobUrls = ref<Map<string, string>>(new Map());
@@ -265,13 +271,7 @@ const handleDoubleTapZoom = async (tapX: number, tapY: number) => {
   setPreviewTransform(targetScale, targetX, targetY);
 };
 
-// wheel 缩放：合批到 rAF，每帧最多执行一次布局测量与 transform 更新
-const previewWheelZooming = ref(false);
-let wheelZoomTimer: ReturnType<typeof setTimeout> | null = null;
-let wheelRaf: number | null = null;
-let wheelSteps = 0; // 每个 wheel 事件累计 ±1，最终换算到 scale
-let wheelLastClientX = 0;
-let wheelLastClientY = 0;
+// previewWheelZooming、wheelZoomTimer、wheelRaf、wheelSteps、wheelLastClientX/Y 已删除，由 Panzoom 替代（仅桌面端）
 
 // 预览交互标记：用于通知上层暂停后台加载，优先保证预览拖拽/缩放丝滑
 const previewInteracting = ref(false);
@@ -295,6 +295,21 @@ const markPreviewInteracting = () => {
     notifyPreviewInteracting(false);
   }, 260);
 };
+
+// 初始化 Panzoom（需在 markPreviewInteracting 之后，以便传入回调）
+({
+  wrapperRef: panzoomWrapperRef,
+  handleWheel: handlePanzoomWheel,
+  reset: panzoomReset,
+  destroy: panzoomDestroy,
+} = usePanzoomPreview(
+  previewVisible,
+  computed(() => !IS_ANDROID),
+  {
+    onPanzoomStart: () => notifyPreviewInteracting(true),
+    onPanzoomEnd: markPreviewInteracting,
+  }
+));
 
 const clampTranslate = (nextScale: number, nextX: number, nextY: number) => {
   const available = previewAvailableSize.value;
@@ -354,17 +369,9 @@ const measureSizesAfterRender = async () => {
   measureBaseSize();
 };
 
-const resetPreviewTransform = async () => {
-  setPreviewTransform(1, 0, 0);
-  await measureSizesAfterRender();
-};
+// resetPreviewTransform 已删除，由 panzoomReset()（usePanzoomPreview）替代（仅桌面端）
 
-const previewImageStyle = computed(() => ({
-  transform: `translate(${previewTranslateX.value}px, ${previewTranslateY.value}px) scale(${previewScale.value})`,
-  transition: previewDragging.value || previewWheelZooming.value ? "none" : "transform 0.08s ease-out",
-  cursor: previewScale.value > 1 ? (previewDragging.value ? "grabbing" : "grab") : "default",
-  "transform-origin": "center center",
-}));
+// previewImageStyle 已删除，由 Panzoom 自动管理 transform（仅桌面端）
 
 const previewDialogTitle = computed(() => {
   if (!previewImage.value?.localPath) {
@@ -571,8 +578,8 @@ const setPreviewByIndex = (index: number, opts?: { showLoading?: boolean }) => {
   previewImageLoading.value = !!opts?.showLoading;
   previewImageUrl.value = (originalUrl || thumb || "").trim();
 
-  // 尺寸/缩放状态重置：立即触发一次
-  resetPreviewTransform();
+  // 尺寸/缩放状态重置：立即触发一次（仅桌面端）
+  panzoomReset();
 
   // 后台预加载原图（不阻塞 UI；是否显示 loading 由导航层决定）
   if (originalUrl) void ensureOriginalPreload(img, originalUrl);
@@ -719,7 +726,8 @@ const navigateWithPreloadGate = async (targetIndex: number) => {
     previewNotFound.value = true;
     previewImageLoading.value = false;
   }
-  resetPreviewTransform();
+  // 切换图片时重置缩放（仅桌面端）
+  panzoomReset();
   // 切换图片时重置 pager
   if (IS_ANDROID) {
     pagerOffset.value = 0;
@@ -832,95 +840,7 @@ const handlePreviewMouseLeave = () => {
   previewHoverSide.value = null;
 };
 
-const handlePreviewMouseMoveWithDrag = (event: MouseEvent) => {
-  handlePreviewMouseMove(event);
-  handlePreviewDragMove(event);
-};
-
-const handlePreviewMouseLeaveAll = () => {
-  handlePreviewMouseLeave();
-};
-
-const applyWheelZoom = () => {
-  wheelRaf = null;
-  if (!previewVisible.value) return;
-  const container = previewContainerRef.value;
-  if (!container) return;
-
-  // 每帧最多测量一次（强制布局点）
-  measureContainerSize();
-  const rect = previewContainerRect.value;
-  if (rect.width <= 0 || rect.height <= 0) return;
-
-  const steps = wheelSteps;
-  wheelSteps = 0;
-  if (steps === 0) return;
-
-  const prevScale = previewScale.value;
-  const factor = Math.pow(1.1, steps); // steps<0 时会自动缩小
-  const nextScale = clamp(prevScale * factor, 1, 10);
-  if (nextScale === prevScale) return;
-
-  const centerX = rect.left + rect.width / 2;
-  const centerY = rect.top + rect.height / 2;
-  const pointerX = wheelLastClientX - centerX;
-  const pointerY = wheelLastClientY - centerY;
-  const scaleRatio = nextScale / prevScale;
-
-  const nextX = pointerX - scaleRatio * (pointerX - previewTranslateX.value);
-  const nextY = pointerY - scaleRatio * (pointerY - previewTranslateY.value);
-  setPreviewTransform(nextScale, nextX, nextY);
-};
-
-const handlePreviewWheel = (event: WheelEvent) => {
-  if (!previewVisible.value) return;
-  event.preventDefault();
-  event.stopPropagation();
-  // wheel 属于强交互：通知上层暂停后台加载
-  markPreviewInteracting();
-
-  wheelLastClientX = event.clientX;
-  wheelLastClientY = event.clientY;
-  wheelSteps += event.deltaY < 0 ? 1 : -1;
-  wheelSteps = clamp(wheelSteps, -12, 12); // 防止同一帧累计过多导致“跳变”
-
-  // 缩放过程中禁用 transition，避免队列化动画导致掉帧
-  previewWheelZooming.value = true;
-  if (wheelZoomTimer) clearTimeout(wheelZoomTimer);
-  wheelZoomTimer = setTimeout(() => {
-    previewWheelZooming.value = false;
-    wheelZoomTimer = null;
-  }, 120);
-
-  if (wheelRaf == null) {
-    wheelRaf = requestAnimationFrame(applyWheelZoom);
-  }
-};
-
-const startPreviewDrag = (event: MouseEvent) => {
-  if (!previewVisible.value) return;
-  if (previewScale.value <= 1) return;
-  if (event.button !== 0 && event.button !== 1) return;
-  measureContainerSize();
-  previewDragging.value = true;
-  // 拖拽开始：标记交互中
-  notifyPreviewInteracting(true);
-  previewDragStart.value = { x: event.clientX, y: event.clientY };
-  previewDragStartTranslate.value = { x: previewTranslateX.value, y: previewTranslateY.value };
-};
-
-const handlePreviewDragMove = (event: MouseEvent) => {
-  if (!previewDragging.value) return;
-  const dx = event.clientX - previewDragStart.value.x;
-  const dy = event.clientY - previewDragStart.value.y;
-  setPreviewTransform(previewScale.value, previewDragStartTranslate.value.x + dx, previewDragStartTranslate.value.y + dy);
-};
-
-const stopPreviewDrag = () => {
-  previewDragging.value = false;
-  // 拖拽结束后给一点点尾巴（避免马上恢复后台任务导致微卡顿）
-  markPreviewInteracting();
-};
+// stopPreviewDrag 已删除，由 Panzoom 自动处理（仅桌面端）
 
 // Android 触摸手势处理
 const getDistance = (touch1: Touch, touch2: Touch): number => {
@@ -1245,7 +1165,8 @@ const handlePreviewImageError = () => {
   previewImageUrl.value = thumb;
   previewImageLoading.value = false;
   previewNotFound.value = false;
-  resetPreviewTransform();
+  // 图片加载完成后重置缩放（仅桌面端）
+  panzoomReset();
 };
 
 const handlePreviewKeyDown = (event: KeyboardEvent) => {
@@ -1321,12 +1242,7 @@ const closePreview = () => {
   previewHoverSide.value = null;
   closePreviewContextMenu();
   previewImageLoading.value = false;
-  previewWheelZooming.value = false;
-  if (wheelZoomTimer) clearTimeout(wheelZoomTimer);
-  wheelZoomTimer = null;
-  if (wheelRaf != null) cancelAnimationFrame(wheelRaf);
-  wheelRaf = null;
-  wheelSteps = 0;
+  panzoomDestroy();
   if (previewInteractTimer) clearTimeout(previewInteractTimer);
   previewInteractTimer = null;
   notifyPreviewInteracting(false);
@@ -1415,7 +1331,6 @@ watch(
       await measureSizesAfterRender();
       prevAvailableSize.value = { ...previewAvailableSize.value };
     } else {
-      stopPreviewDrag();
       prevAvailableSize.value = { width: 0, height: 0 };
     }
   }
@@ -1681,8 +1596,6 @@ function initAndroidLightbox() {
 }
 
 onMounted(() => {
-  window.addEventListener("mouseup", stopPreviewDrag);
-  window.addEventListener("mousemove", handlePreviewDragMove);
   window.addEventListener("keydown", handlePreviewKeyDown, true);
   if (IS_ANDROID) {
     nextTick(() => initAndroidLightbox());
@@ -1690,17 +1603,8 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  window.removeEventListener("mouseup", stopPreviewDrag);
-  window.removeEventListener("mousemove", handlePreviewDragMove);
   window.removeEventListener("keydown", handlePreviewKeyDown, true);
-  if (wheelZoomTimer) {
-    clearTimeout(wheelZoomTimer);
-    wheelZoomTimer = null;
-  }
-  if (wheelRaf != null) {
-    cancelAnimationFrame(wheelRaf);
-    wheelRaf = null;
-  }
+  panzoomDestroy();
   if (previewInteractTimer) {
     clearTimeout(previewInteractTimer);
     previewInteractTimer = null;
@@ -1759,7 +1663,7 @@ async function ensureOriginalReady(image: ImageInfo, opts: { seq: number; fallba
           previewNotFound.value = true;
         }
         previewImageLoading.value = false;
-        resetPreviewTransform();
+        panzoomReset();
       }
       return;
     }
@@ -1779,7 +1683,7 @@ async function ensureOriginalReady(image: ImageInfo, opts: { seq: number; fallba
         previewNotFound.value = true;
       }
       previewImageLoading.value = false;
-      resetPreviewTransform();
+      panzoomReset();
     }
   } catch (error) {
     console.error("Failed to load original image for preview:", error, image);
@@ -1793,7 +1697,7 @@ async function ensureOriginalReady(image: ImageInfo, opts: { seq: number; fallba
         previewImageUrl.value = opts.fallbackUrl;
         previewImageLoading.value = false;
         previewNotFound.value = false;
-        resetPreviewTransform();
+        panzoomReset();
       } else {
         previewImageLoading.value = false;
         previewImageUrl.value = "";
@@ -1944,6 +1848,14 @@ defineExpose({
     line-height: 1;
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
     user-select: none;
+  }
+
+  .panzoom-wrapper {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .preview-image {

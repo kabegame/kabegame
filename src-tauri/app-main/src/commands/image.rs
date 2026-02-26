@@ -21,7 +21,11 @@ pub async fn get_images_range(offset: usize, limit: usize) -> Result<serde_json:
 pub async fn browse_gallery_provider(path: String) -> Result<serde_json::Value, String> {
     let storage = Storage::global();
     let provider_rt = ProviderRuntime::global();
-    let result = kabegame_core::gallery::browse_gallery_provider(storage, provider_rt, &path)?;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        kabegame_core::gallery::browse_gallery_provider(storage, provider_rt, &path)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     Ok(serde_json::to_value(result).map_err(|e| e.to_string())?)
 }
 

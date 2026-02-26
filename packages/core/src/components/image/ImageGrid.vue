@@ -114,14 +114,13 @@ export type ContextCommandPayload<T extends ContextCommand = ContextCommand> = {
 } & (T extends keyof ContextCommandPayloadMap ? ContextCommandPayloadMap[T] : ImagePayload);
 
 interface Props {
-  images: ImageInfo[];
+  images?: ImageInfo[];
   imageUrlMap: ImageUrlMap;
   /** Actions for context menu / action sheet. */
   actions?: ActionItem<ImageInfo>[];
   onContextCommand?: (
     payload: ContextCommandPayload
   ) => ContextCommand | null | undefined | Promise<ContextCommand | null | undefined>;
-  showEmptyState?: boolean;
   loading?: boolean; // 加载状态：为 true 时不显示空状态，避免加载过程中闪现空占位符
   /**
    * 加载遮罩（仅覆盖 grid 区域，不覆盖 before-grid/footer 等插槽）。
@@ -140,7 +139,17 @@ interface Props {
   windowAspectRatio?: number; // 外部传入的窗口宽高比（可选，不传则使用实际窗口宽高比）
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  images: () => [],
+  enableCtrlWheelAdjustColumns: false,
+  enableCtrlKeyAdjustColumns: false,
+  hideScrollbar: false,
+  scrollStableDelay: 180,
+  enableScrollStableEmit: true,
+  enableVirtualScroll: true,
+  virtualOverscan: 20,
+});
+
 const emit = defineEmits<{
   "scroll-stable": [];
   "retry-download": [payload: { image: ImageInfo }];
@@ -152,11 +161,12 @@ const emit = defineEmits<{
 const settingsStore = useSettingsStore();
 const modalStackStore = useModalStackStore();
 const uiStore = useUiStore();
-const showEmptyState = computed(() => props.showEmptyState ?? false);
+
 const isLoading = computed(() => props.loading ?? false);
 const isLoadingOverlay = computed(() => props.loadingOverlay ?? isLoading.value);
-
+/*----------------- 宽高比相关 -----------------*/
 // 从 store 解析宽高比设置
+// 安卓不需要宽高比设置，图片自动适应
 const parseAspectRatioFromStore = (value: string | null | undefined): number | null => {
   if (!value) return null;
   // 解析 "16:9" 格式
@@ -180,24 +190,17 @@ const parseAspectRatioFromStore = (value: string | null | undefined): number | n
 const storeAspectRatio = computed(() => {
   return parseAspectRatioFromStore(settingsStore.values.galleryImageAspectRatio);
 });
-const enableCtrlWheelAdjustColumns = computed(() => props.enableCtrlWheelAdjustColumns ?? false);
-const enableCtrlKeyAdjustColumns = computed(() => props.enableCtrlKeyAdjustColumns ?? false);
-const hideScrollbar = computed(() => props.hideScrollbar ?? false);
-const scrollStableDelay = computed(() => props.scrollStableDelay ?? 180);
-const enableScrollStableEmit = computed(() => props.enableScrollStableEmit ?? true);
-// Android：不启用虚拟滚动，便于重构预览等逻辑
-const enableVirtualScroll = computed(() =>
-  IS_ANDROID ? false : (props.enableVirtualScroll ?? true)
-);
-const virtualOverscanRows = computed(() => Math.max(0, props.virtualOverscan ?? 20));
+
+/*----------------- 虚拟滚动相关 -----------------*/
+const virtualOverscanRows = computed(() => Math.max(0, props.virtualOverscan));
 // const enableScrollButtons = computed(() => props.enableScrollButtons ?? true);
 const scrollButtonThreshold = 2000;
 
-const images = computed(() => props.images || []);
-const hasImages = computed(() => images.value.length > 0);
+/*----------------- 图片相关 -----------------*/
+const hasImages = computed(() => (props.images ?? []).length > 0);
 const imageGridColumns = computed(() => uiStore.imageGridColumns);
 // 只有在不处于加载状态且确实没有图片时才显示空状态，避免加载过程中闪现空占位符
-const showEmptyOverlay = computed(() => showEmptyState.value && !hasImages.value && !isLoading.value);
+const showEmptyOverlay = computed(() => !hasImages.value && !isLoading.value);
 
 // 入场/退场动画跟踪（仅虚拟滚动模式下使用）
 const enteringIds = ref<Set<string>>(new Set());
@@ -365,22 +368,22 @@ useDragScroll(containerEl, {
 
 const totalRows = computed(() => {
   if (gridColumnsCount.value <= 0) return 0;
-  return Math.ceil(images.value.length / gridColumnsCount.value);
+  return Math.ceil((props.images ?? []).length / gridColumnsCount.value);
 });
 
 const virtualPaddingTop = computed(() => {
-  if (!enableVirtualScroll.value) return 0;
+  if (!props.enableVirtualScroll) return 0;
   return virtualStartRow.value * rowHeightWithGap.value;
 });
 
 const virtualPaddingBottom = computed(() => {
-  if (!enableVirtualScroll.value) return 0;
+  if (!props.enableVirtualScroll) return 0;
   const rowsAfter = Math.max(0, totalRows.value - (virtualEndRow.value + 1));
   return rowsAfter * rowHeightWithGap.value;
 });
 
 const updateVirtualRange = () => {
-  if (!enableVirtualScroll.value) return;
+  if (!props.enableVirtualScroll) return;
   const container = containerEl.value;
   if (!container) return;
   const rh = rowHeightWithGap.value || 1;
@@ -396,7 +399,7 @@ const updateVirtualRange = () => {
 };
 
 const measureItemHeight = () => {
-  if (!enableVirtualScroll.value) return;
+  if (!props.enableVirtualScroll) return;
   if (!canMeasureLayout()) return;
   const grid = containerEl.value?.querySelector<HTMLElement>(".image-grid");
   const firstItem = grid?.querySelector<HTMLElement>(".image-item");
@@ -409,15 +412,16 @@ const measureItemHeight = () => {
 };
 
 const renderedItems = computed(() => {
-  if (!enableVirtualScroll.value) return [];
+  if (!props.enableVirtualScroll) return [];
   const cols = gridColumnsCount.value;
   const start = Math.max(0, virtualStartRow.value * cols);
-  const end = Math.min(images.value.length, (virtualEndRow.value + 1) * cols);
+  const list = props.images ?? [];
+  const end = Math.min(list.length, (virtualEndRow.value + 1) * cols);
   const out: Array<{ image: ImageInfo; index: number; isEntering: boolean }> = [];
 
   // 添加当前可视区域的图片
   for (let i = start; i < end; i++) {
-    const img = images.value[i];
+    const img = list[i];
     if (img) {
       out.push({
         image: img,
@@ -438,8 +442,8 @@ let gridDestroyed = false;
 const gridStyle = computed(() => {
   const columns = gridColumnsCount.value;
   const gap = gridGapPx.value;
-  const paddingTop = BASE_GRID_PADDING_Y.value + (enableVirtualScroll.value ? virtualPaddingTop.value : 0);
-  const paddingBottom = BASE_GRID_PADDING_Y.value + (enableVirtualScroll.value ? virtualPaddingBottom.value : 0);
+  const paddingTop = BASE_GRID_PADDING_Y.value + (props.enableVirtualScroll ? virtualPaddingTop.value : 0);
+  const paddingBottom = BASE_GRID_PADDING_Y.value + (props.enableVirtualScroll ? virtualPaddingBottom.value : 0);
   const style: Record<string, string> = {
     gridTemplateColumns: `repeat(${columns}, 1fr)`,
     gap: `${gap}px`,
@@ -490,7 +494,7 @@ const rangeSelect = (index: number) => {
   const end = Math.max(lastSelectedIndex.value, index);
   const next = new Set(selectedIds.value);
   for (let i = start; i <= end; i++) {
-    const id = images.value[i]?.id;
+    const id = (props.images ?? [])[i]?.id;
     if (id) next.add(id);
   }
   selectedIds.value = next;
@@ -508,7 +512,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
   // 预览打开时屏蔽 Ctrl+/- 和 Ctrl+A
   if (isPreviewOpen.value) {
-    if (enableCtrlKeyAdjustColumns.value && (event.ctrlKey || event.metaKey)) {
+    if (props.enableCtrlKeyAdjustColumns && (event.ctrlKey || event.metaKey)) {
       if (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "_") {
         return;
       }
@@ -520,7 +524,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
   // Ctrl/Cmd + +/-：调整列数（原来是 window 监听）
   // Android 下不允许调整列数
-  if (!IS_ANDROID && enableCtrlKeyAdjustColumns.value && (event.ctrlKey || event.metaKey)) {
+  if (!IS_ANDROID && props.enableCtrlKeyAdjustColumns && (event.ctrlKey || event.metaKey)) {
     if (event.key === "+" || event.key === "=") {
       event.preventDefault();
       uiStore.adjustImageGridColumn(-1);
@@ -536,8 +540,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
   // Ctrl/Cmd + A：全选（对齐 before-src）
   if ((event.ctrlKey || event.metaKey) && (event.key === "a" || event.key === "A")) {
     event.preventDefault();
-    selectedIds.value = new Set(props.images.map((img) => img.id));
-    lastSelectedIndex.value = props.images.length > 0 ? props.images.length - 1 : -1;
+    const list = props.images ?? [];
+    selectedIds.value = new Set(list.map((img) => img.id));
+    lastSelectedIndex.value = list.length > 0 ? list.length - 1 : -1;
     return;
   }
 
@@ -545,7 +550,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
   if ((event.ctrlKey || event.metaKey) && (event.key === "c" || event.key === "C")) {
     if (selectedIds.value.size !== 1) return;
     const onlyId = Array.from(selectedIds.value)[0];
-    const image = onlyId ? props.images.find((img) => img.id === onlyId) : undefined;
+    const image = onlyId ? (props.images ?? []).find((img) => img.id === onlyId) : undefined;
     if (!image) return;
     event.preventDefault();
     void dispatchContextCommand(buildContextPayload("copy", image));
@@ -555,7 +560,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
   // Backspace / Delete：交给父组件执行删除逻辑（grid 只负责发出意图）
   if ((event.key === "Backspace" || event.key === "Delete") && selectedIds.value.size > 0) {
     event.preventDefault();
-    const first = props.images.find((img) => selectedIds.value.has(img.id)) || props.images[0];
+    const list = props.images ?? [];
+    const first = list.find((img) => selectedIds.value.has(img.id)) || list[0];
     if (first) {
       void dispatchContextCommand(buildContextPayload("remove", first));
     }
@@ -712,9 +718,9 @@ const clearSelection = () => {
 // scroll-stable：给上层用于触发“加载图片 URL”
 let scrollStableTimer: number | null = null;
 const emitScrollStable = () => {
-  if (!enableScrollStableEmit.value) return;
+  if (!props.enableScrollStableEmit) return;
   if (scrollStableTimer) window.clearTimeout(scrollStableTimer);
-  scrollStableTimer = window.setTimeout(() => emit("scroll-stable"), scrollStableDelay.value);
+  scrollStableTimer = window.setTimeout(() => emit("scroll-stable"), props.scrollStableDelay);
 };
 
 const pulseZoomAnimation = () => {
@@ -752,7 +758,7 @@ watch(
 // 虚拟滚动测量更新：合并到单个 rAF，避免短时间内多处触发导致重复测量/抖动
 let virtualUpdateRaf: number | null = null;
 const scheduleVirtualUpdate = () => {
-  if (!enableVirtualScroll.value) return;
+  if (!props.enableVirtualScroll) return;
   if (virtualUpdateRaf != null) return;
   virtualUpdateRaf = requestAnimationFrame(() => {
     virtualUpdateRaf = null;
@@ -781,7 +787,7 @@ watch(
 );
 
 watch(
-  () => enableVirtualScroll.value,
+  () => props.enableVirtualScroll,
   () => {
     scheduleVirtualUpdate();
   }
@@ -790,7 +796,7 @@ watch(
 // 虚拟滚动：滚动时用 rAF 实时更新可视行，避免 debounce 导致“滚快一点出现空白区域”
 let virtualScrollRaf: number | null = null;
 const scheduleVirtualRangeUpdate = () => {
-  if (!enableVirtualScroll.value) return;
+  if (!props.enableVirtualScroll) return;
   if (virtualScrollRaf != null) return;
   virtualScrollRaf = requestAnimationFrame(() => {
     virtualScrollRaf = null;
@@ -824,7 +830,7 @@ onMounted(async () => {
     window.addEventListener(
       "wheel",
       (e: WheelEvent) => {
-        if (!enableCtrlWheelAdjustColumns.value) return;
+        if (!props.enableCtrlWheelAdjustColumns) return;
         if (!(e.ctrlKey || e.metaKey)) return;
         if (shouldIgnoreKeyTarget(e as any)) return;
         // 预览打开时屏蔽 Ctrl+Wheel 调整列数
@@ -910,7 +916,7 @@ watch(
     emitScrollStable();
     scheduleVirtualUpdate();
 
-    const newIds = new Set(newImages.map((img) => img.id));
+    const newIds = new Set((newImages ?? []).map((img) => img.id));
     const oldIds = previousImageIds.value;
 
     // 判断是否是刷新/换页（新旧列表完全没有交集）还是图片增减
@@ -926,7 +932,7 @@ watch(
         selectedIds.value = newSelected;
         // 如果 lastSelectedIndex 对应的图片被删除了，重置索引
         if (lastSelectedIndex.value >= 0) {
-          const lastImg = newImages[lastSelectedIndex.value];
+          const lastImg = (newImages ?? [])[lastSelectedIndex.value];
           if (!lastImg || !newSelected.has(lastImg.id)) {
             lastSelectedIndex.value = newSelected.size > 0 ? -1 : -1;
           }
@@ -935,7 +941,7 @@ watch(
     }
 
     // 非虚拟滚动模式下不需要手动处理动画（transition-group 会自动处理）
-    if (!enableVirtualScroll.value) {
+    if (!props.enableVirtualScroll) {
       previousImageIds.value = newIds;
       return;
     }
@@ -944,14 +950,15 @@ watch(
     // 若这里照常计算 leavingItems，会导致旧页的可视区项与新页项在同一索引区间同时渲染，
     // 表现为"隔一个空位/一行只有一半"的错觉（旧项可能还没 URL，只剩骨架）。
     // 把"列表被清空"视为硬重置：直接清空动画跟踪，避免跨页混渲染。
-    if (newImages.length === 0) {
+    const newList = newImages ?? [];
+    if (newList.length === 0) {
       enteringIds.value = new Set();
       previousImageIds.value = new Set();
       return;
     }
 
     // 检测新增的图片
-    for (const img of newImages) {
+    for (const img of newList) {
       if (!oldIds.has(img.id)) {
         enteringIds.value.add(img.id);
       }
@@ -972,7 +979,7 @@ const handleEnterAnimationEnd = (imageId: string) => {
 const scrollToIndex = (index: number) => {
   const container = containerEl.value;
   if (!container) return;
-  if (index < 0 || index >= images.value.length) return;
+  if (index < 0 || index >= (props.images ?? []).length) return;
 
   const cols = gridColumnsCount.value;
   const row = Math.floor(index / cols);
@@ -1002,9 +1009,10 @@ watch(
   (newIndex) => {
     // 仅在预览打开且非多选时执行
     if (!isPreviewOpen.value || selectedIds.value.size > 1) return;
-    if (newIndex < 0 || newIndex >= images.value.length) return;
+    const list = props.images ?? [];
+    if (newIndex < 0 || newIndex >= list.length) return;
 
-    const image = images.value[newIndex];
+    const image = list[newIndex];
     if (!image) return;
 
     // Android 下预览与选择解耦，不同步选中项

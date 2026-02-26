@@ -3,11 +3,11 @@
     <ImageGrid ref="albumViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
       :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
       :enable-ctrl-key-adjust-columns="!IS_ANDROID"
-      enable-virtual-scroll :show-empty-state="true"
+      :enable-virtual-scroll="!IS_ANDROID"
       :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing"
       :actions="imageActions"
       :on-context-command="handleImageMenuCommand"
-      :hide-scrollbar="false" @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()"
+      @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()"
       @android-selection-change="handleAndroidSelectionChange">
 
       <template #before-grid>

@@ -6,7 +6,7 @@
         <ImageGrid v-else ref="taskViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
             :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
             :enable-ctrl-key-adjust-columns="!IS_ANDROID"
-            enable-virtual-scroll :show-empty-state="true"
+            :enable-virtual-scroll="!IS_ANDROID"
             :actions="imageActions"
             :on-context-command="handleImageMenuCommand"
             @retry-download="handleRetryDownload" @scroll-stable="loadImageUrls()"

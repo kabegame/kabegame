@@ -4,8 +4,8 @@
       <ImageGrid ref="galleryViewRef" :images="displayedImages" :image-url-map="imageSrcMap"
         :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
         :enable-ctrl-key-adjust-columns="!IS_ANDROID"
-        :enable-virtual-scroll="true"
-        :show-empty-state="true" :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing"
+        :enable-virtual-scroll="!IS_ANDROID"
+        :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing"
         :actions="imageActions"
         :on-context-command="handleGridContextCommand"
         @scroll-stable="loadImageUrls()"
@@ -128,7 +128,6 @@ const openHelpDrawer = () => helpDrawer.open("gallery");
 const pluginStore = usePluginStore();
 const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
-const crawlerDrawerStore = useCrawlerDrawerStore();
 const desktopSelectionStore = useDesktopSelectionStore();
 const { extensions: imageExtensions, load: loadImageTypes, getMimeType } = useImageTypes();
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
@@ -1561,7 +1560,6 @@ onDeactivated(() => {
     }
   }
 
-  /* 滚动条隐藏下沉到 ImageGrid（通过 :hide-scrollbar 控制），这里不再重复写 :deep 规则 */
 }
 
 /* Dialog 样式需要全局作用域才能正确应用 */
