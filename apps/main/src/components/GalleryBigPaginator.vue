@@ -236,7 +236,7 @@ const handleJumpToPage = (page: number | null | undefined) => {
     }
 
     :deep(.el-input__inner) {
-        text-align: center;
+        text-align: right;
         font-weight: 700;
         font-size: 18px;
         color: var(--anime-primary);
