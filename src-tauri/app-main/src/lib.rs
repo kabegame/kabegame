@@ -160,20 +160,6 @@ fn init_wallpaper_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
-/// 注册 Android 分享插件（将 handle 存入 app state，供 share_file 命令使用）
-#[cfg(target_os = "android")]
-fn init_share_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    use tauri::plugin::{Builder, TauriPlugin};
-
-    Builder::new("share")
-        .setup(|app, api| {
-            let handle = api.register_android_plugin("app.kabegame.plugin", "SharePlugin")?;
-            app.manage(handle);
-            Ok(())
-        })
-        .build()
-}
-
 /// Tauri 应用入口（桌面 binary 与 Android 共用）
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -189,8 +175,8 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_picker::init());
         builder = builder.plugin(tauri_plugin_archiver::init());
+        builder = builder.plugin(tauri_plugin_share::init());
         builder = builder.plugin(init_wallpaper_plugin());
-        builder = builder.plugin(init_share_plugin());
     }
 
     #[cfg(not(target_os = "android"))]

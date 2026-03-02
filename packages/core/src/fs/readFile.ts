@@ -6,6 +6,4 @@ import { invoke } from "@tauri-apps/api/core";
 export const readFile: typeof tauriReadFile =
   !IS_LINUX && !IS_ANDROID
     ? tauriReadFile
-    : async (path, _options) => {
-        return invoke("read_file", { path });
-      };
+    : async (path, _options) => invoke("read_file", { path });

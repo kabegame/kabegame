@@ -168,14 +168,15 @@ fun UriTestScreen(modifier: Modifier = Modifier) {
             }
         }
         // 当最后选择的是图片时，显示用系统 app 打开按钮
-        if (imageUri != null) {
+        imageUri?.let { uri ->
             Button(
                 onClick = {
                     val intent = Intent(Intent.ACTION_VIEW).apply {
-                        setDataAndType(imageUri, context.contentResolver.getType(imageUri) ?: "image/*")
+                        setDataAndType(uri, context.contentResolver.getType(uri) ?: "image/*")
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     }
-                    context.startActivity(Intent.createChooser(intent, "用系统 app 打开图片"))
+                    val chooser = Intent.createChooser(intent, "选择图片查看器")
+                    context.startActivity(chooser)
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {

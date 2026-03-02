@@ -6,7 +6,8 @@
     "apps/*",
     "packages/*",
     "src-crawler-plugins",
-    "src-tauri-plugins/tauri-plugin-picker"
+    "src-tauri-plugins/tauri-plugin-picker",
+    "src-tauri-plugins/tauri-plugin-share"
   ],
   "scripts": {
     "dev": "bun scripts/run.ts dev",

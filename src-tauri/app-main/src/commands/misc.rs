@@ -1,7 +1,7 @@
 // 杂项命令
 
 use kabegame_core::storage::Storage;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use tauri::{AppHandle, Manager};
@@ -153,11 +153,21 @@ pub async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
     fs::read(&path).map_err(|e| format!("Failed to read image file: {}", e))
 }
 
-/// 复制图片到系统剪贴板（不依赖 Tauri 剪贴板插件）。支持 Windows、macOS、Linux。
+#[derive(Deserialize)]
+struct CopyImageToClipboardArgs {
+    #[serde(alias = "imagePath")]
+    image_path: String,
+}
+
+/// 复制图片到系统剪贴板。支持 Windows、macOS、Linux、Android。
 #[tauri::command]
-pub async fn copy_image_to_clipboard(image_path: String) -> Result<(), String> {
+pub async fn copy_image_to_clipboard(
+    app: AppHandle,
+    CopyImageToClipboardArgs { image_path }: CopyImageToClipboardArgs,
+) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
+        let image_path = image_path.clone();
         tokio::task::spawn_blocking(move || {
             use std::path::Path;
             use windows_sys::Win32::Foundation::BOOL;
@@ -396,10 +406,66 @@ pub async fn copy_image_to_clipboard(image_path: String) -> Result<(), String> {
         Ok(())
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "android")]
+    {
+        use serde::Serialize;
+        use tauri_plugin_share::ShareExt;
+
+        fn mime_from_path(path: &str) -> String {
+            let ext = Path::new(path)
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            match ext.as_str() {
+                "jpg" | "jpeg" => "image/jpeg".to_string(),
+                "gif" => "image/gif".to_string(),
+                "webp" => "image/webp".to_string(),
+                "bmp" => "image/bmp".to_string(),
+                _ => "image/png".to_string(),
+            }
+        }
+
+        #[derive(Serialize)]
+        struct CopyImageArgs {
+            file_path: String,
+            mime_type: String,
+        }
+
+        #[derive(Deserialize)]
+        struct CopyImageResponse {
+            success: bool,
+        }
+
+        let mime = mime_from_path(&image_path);
+        let response: CopyImageResponse = app
+            .share()
+            .0
+            .run_mobile_plugin_async(
+                "copyImageToClipboard",
+                CopyImageArgs {
+                    file_path: image_path,
+                    mime_type: mime,
+                },
+            )
+            .await
+            .map_err(|e| format!("复制到剪贴板失败: {}", e))?;
+
+        if !response.success {
+            return Err("复制到剪贴板失败".to_string());
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "android"
+    )))]
     {
         let _ = image_path;
-        Err("copy_image_to_clipboard is only supported on Windows, macOS and Linux".to_string())
+        Err("copy_image_to_clipboard is only supported on Windows, macOS, Linux and Android".to_string())
     }
 }
 
@@ -420,7 +486,7 @@ pub async fn read_file(path: String) -> tauri::ipc::Response {
 #[cfg(target_os = "android")]
 pub async fn share_file(app: AppHandle, file_path: String, mime_type: String) -> Result<(), String> {
     use serde::{Deserialize, Serialize};
-    use tauri::plugin::PluginHandle;
+    use tauri_plugin_share::ShareExt;
 
     #[derive(Serialize)]
     struct ShareArgs {
@@ -433,11 +499,9 @@ pub async fn share_file(app: AppHandle, file_path: String, mime_type: String) ->
         success: bool,
     }
 
-    let plugin_handle = app
-        .try_state::<PluginHandle<tauri::Wry>>()
-        .ok_or("Share plugin not found")?;
-
-    let response: ShareResponse = plugin_handle
+    let response: ShareResponse = app
+        .share()
+        .0
         .run_mobile_plugin_async::<ShareResponse>(
             "shareFile",
             ShareArgs {

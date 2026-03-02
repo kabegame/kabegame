@@ -313,6 +313,18 @@ Android 开发需要额外的环境配置，详见 [Android 迁移指南](docs/T
 - `NDK_HOME` 环境变量（**必须配置**，否则编译会失败）
 - Rust Android 目标：`rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android`
 
+#### 在真机/模拟器上运行
+
+Android 开发需使用 **`bun dev -c main --android`**（不能省略 `--android`，否则会跑桌面版）。若连接了多台设备（真机 + 模拟器），Tauri 可能选错设备，可指定设备 ID：
+
+```bash
+# 查看已连接设备
+adb devices
+
+# 指定设备运行（将 <设备ID> 替换为 adb devices 第一列的值，如 10AECH09ZX001DJ）
+bun dev -c main --android -- <设备ID>
+```
+
 #### 打开开发者工具
 
 在 Android 平台上，Tauri 不支持像桌面端那样直接调用 `open_devtools()` API。需要使用 **Chrome DevTools** 进行远程调试：
