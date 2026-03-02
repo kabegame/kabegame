@@ -2093,6 +2093,8 @@ impl PluginManager {
     pub async fn ensure_installed_cache_initialized(&self) -> Result<(), String> {
         let user_plugins_dir = self.get_plugins_directory();
         let builtin_plugins_dir = self.get_builtin_plugins_directory()?;
+        eprintln!("user_plugins_dir: {}", user_plugins_dir.display());
+        eprintln!("builtin_plugins_dir: {}", builtin_plugins_dir.display());
         {
             let guard = self.installed_cache.lock().await;
             if guard.initialized 

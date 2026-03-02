@@ -1,29 +1,21 @@
 // 启动步骤函数
 
 use kabegame_core::crawler::TaskScheduler;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+// 事件转发到前端（桌面与 Android 均需要，用于 task-status 等）
 use kabegame_core::ipc::events::DaemonEventKind;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use kabegame_core::ipc::{DaemonEvent, EventBroadcaster};
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
 use std::fs;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Listener, Manager};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
-
-use crate::commands::wallpaper::init_wallpaper_on_startup;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::ipc::Store;
 use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
+use kabegame_core::storage::Storage;
 
-pub fn init_app_paths(_app: &tauri::AppHandle) {
-    // Paths are initialized by tauri-plugin-pathes in its setup hook
-}
-
-pub fn init_plugin() {
+pub fn init_kgpg_plugin() {
     tauri::async_runtime::spawn(async {
         // 初始化已安装插件缓存（会自动合并读取内置和用户目录）
         if let Err(e) = PluginManager::global()
@@ -165,20 +157,18 @@ pub fn init_wallpaper_controller(app: &mut tauri::App) {
 }
 
 /// 启动事件转发任务（将同步广播和异步广播都收拢到一个接口处）
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn start_event_forward_task() {
     tauri::async_runtime::spawn(async {
         EventBroadcaster::start_forward_task().await;
     });
 }
 
-/// 启动本地事件转发循环（将 Broadcaster 事件转发给 Tauri 前端）
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+/// 启动本地事件转发循环（将 Broadcaster 事件转发给 Tauri 前端，桌面与 Android 均需）
 pub fn start_local_event_loop(app: AppHandle) {
     let broadcaster = EventBroadcaster::global();
     tauri::async_runtime::spawn(async move {
         let mut rx = broadcaster.subscribe_filtered_stream(&DaemonEventKind::ALL);
-        eprintln!("[LOCAL_EVENT_LOOP] ready for recieve event");
+        eprintln!("[LOCAL_EVENT_LOOP] ready for receive event");
         while let Some((_id, event)) = rx.recv().await {
             let kind = event.kind();
 
@@ -190,35 +180,44 @@ pub fn start_local_event_loop(app: AppHandle) {
                     let _ = app.emit("setting-change", changes.clone());
                 }
                 DaemonEvent::WallpaperUpdateImage { image_path } => {
-                    let path = image_path.clone();
-                    let controller = crate::wallpaper::manager::WallpaperController::global();
-                    tokio::spawn(async move {
-                        let style = Settings::global()
-                            .get_wallpaper_rotation_style()
-                            .await
-                            .unwrap_or("fill".to_string());
-                        if let Err(e) = controller.set_wallpaper(&path, &style).await {
-                            eprintln!("[LocalEvent] Set wallpaper failed: {}", e);
-                        }
-                    });
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        let path = image_path.clone();
+                        let controller = crate::wallpaper::manager::WallpaperController::global();
+                        tokio::spawn(async move {
+                            let style = Settings::global()
+                                .get_wallpaper_rotation_style()
+                                .await
+                                .unwrap_or("fill".to_string());
+                            if let Err(e) = controller.set_wallpaper(&path, &style).await {
+                                eprintln!("[LocalEvent] Set wallpaper failed: {}", e);
+                            }
+                        });
+                    }
                 }
                 DaemonEvent::WallpaperUpdateStyle { style } => {
-                    let style = style.clone();
-                    let controller = crate::wallpaper::manager::WallpaperController::global();
-                    tokio::spawn(async move {
-                        if let Ok(manager) = controller.active_manager().await {
-                            let _ = manager.set_style(&style, true).await;
-                        }
-                    });
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        let style = style.clone();
+                        let controller = crate::wallpaper::manager::WallpaperController::global();
+                        tokio::spawn(async move {
+                            if let Ok(manager) = controller.active_manager().await {
+                                let _ = manager.set_style(&style, true).await;
+                            }
+                        });
+                    }
                 }
                 DaemonEvent::WallpaperUpdateTransition { transition } => {
-                    let transition = transition.clone();
-                    let controller = crate::wallpaper::manager::WallpaperController::global();
-                    tokio::spawn(async move {
-                        if let Ok(manager) = controller.active_manager().await {
-                            let _ = manager.set_transition(&transition, true).await;
-                        }
-                    });
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        let transition = transition.clone();
+                        let controller = crate::wallpaper::manager::WallpaperController::global();
+                        tokio::spawn(async move {
+                            if let Ok(manager) = controller.active_manager().await {
+                                let _ = manager.set_transition(&transition, true).await;
+                            }
+                        });
+                    }
                 }
                 _ => {
                     let event_name = kind.as_event_name();
@@ -231,9 +230,9 @@ pub fn start_local_event_loop(app: AppHandle) {
     });
 }
 
-/// 启动 IPC 服务
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn start_ipc_server(ctx: Arc<Store>, app_handle: AppHandle) {
+/// 启动 IPC 服务（仅需 app_handle，DedupeService / VirtualDriveService 等由全局单例提供）
+#[cfg(not(target_os = "android"))]
+pub fn start_ipc_server(app_handle: AppHandle) {
     println!("[IPC_SERVER] Starting IPC server...");
 
     tauri::async_runtime::spawn(async move {
@@ -268,14 +267,12 @@ pub fn start_ipc_server(ctx: Arc<Store>, app_handle: AppHandle) {
             });
         }
 
-        // 3. 启动服务器
+        // 3. 启动服务器（app_handle 直接传入 dispatch_request）
         let res = kabegame_core::ipc::server::serve_with_events(move |req| {
-            let ctx = ctx.clone();
+            let app_handle = app_handle.clone();
             async move {
-                // eprintln!("[DEBUG] Backend 收到请求: {:?}", req);
                 use crate::ipc::dispatch_request;
-                let resp = dispatch_request(req, ctx).await;
-                resp
+                dispatch_request(req, app_handle).await
             }
         })
         .await;
@@ -316,7 +313,7 @@ pub fn start_task_scheduler() {
     });
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 pub fn init_shortcut(app: &tauri::App) -> Result<(), String> {
     // macOS 使用系统自带的 Control + Command + F 全屏快捷键，无需手动注册
     // 其他平台（Windows/Linux）注册 F11 快捷键切换全屏
@@ -358,4 +355,66 @@ pub fn init_shortcut(app: &tauri::App) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// 启动时初始化"当前壁纸"并按规则回退/降级
+///
+/// 规则（按用户需求）：
+/// - 非轮播：尝试设置 currentWallpaperImageId；失败则清空并停止
+/// - 轮播：优先在轮播源中找到 currentWallpaperImageId；找不到则回退到轮播源的一张；源无可用则画册->画廊->关闭轮播并清空
+pub async fn init_wallpaper_on_startup() -> Result<(), String> {
+    use std::path::Path;
+
+    let controller = WallpaperController::global();
+    // 启动时只"尝试还原 currentWallpaperImageId"，不在客户端做大规模选图/回退，
+    // 回退与轮播逻辑由 rotator 负责（避免客户端依赖 Storage/Settings）。
+    let settings = Settings::global();
+    let (style_result, id_result) = tokio::join!(
+        settings.get_wallpaper_rotation_style(),
+        settings.get_current_wallpaper_image_id()
+    );
+
+    let style = style_result.unwrap_or_else(|_| "fill".to_string());
+    let Some(id) = id_result.ok().flatten() else {
+        return Ok(());
+    };
+
+    let img_v = Storage::global()
+        .find_image_by_id(&id)
+        .map_err(|e| format!("Storage error: {}", e))?;
+
+    let Some(img_info) = img_v else {
+        let _ = settings.set_current_wallpaper_image_id(None).await;
+        return Ok(());
+    };
+    let path = img_info.local_path;
+
+    if !Path::new(&path).exists() {
+        let _ = settings.set_current_wallpaper_image_id(None).await;
+        return Ok(());
+    }
+
+    if controller.set_wallpaper(&path, &style).await.is_err() as bool {
+        let _ = settings.set_current_wallpaper_image_id(None).await;
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+pub fn init_bundled_plugins<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    use tauri_plugin_picker::PickerExt;
+    tauri::async_runtime::spawn(async move {
+        let builtin_dir = kabegame_core::app_paths::AppPaths::global().builtin_plugins_dir();
+        if let Err(e) = std::fs::create_dir_all(&builtin_dir) {
+            eprintln!("Failed to create builtin-plugins directory: {}", e);
+            return;
+        }
+        let target_dir = builtin_dir.to_string_lossy().to_string();
+        let picker = app.picker();
+        match picker.extract_bundled_plugins(target_dir).await {
+            Ok(r) => println!("Extracted {} bundled plugins to {}", r.count, builtin_dir.display()),
+            Err(e) => eprintln!("Failed to extract bundled plugins: {}", e),
+        }
+    });
 }

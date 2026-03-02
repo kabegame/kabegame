@@ -1,7 +1,7 @@
 <template>
-  <Teleport to="body">
+  <Teleport to="body" :disabled="!teleport">
     <!-- Main action sheet -->
-    <Transition name="action-sheet-slide">
+    <Transition :name="noTransition ? '' : 'action-sheet-slide'">
       <div v-if="visible && resolvedActions.length > 0 && !expandedItem" class="action-sheet">
         <button
           v-for="item in resolvedActions"
@@ -20,7 +20,7 @@
     </Transition>
 
     <!-- Submenu overlay (when expandedItem has children) -->
-    <Transition name="submenu-slide">
+    <Transition :name="noTransition ? '' : 'submenu-slide'">
       <div v-if="visible && expandedItem && expandedChildren.length > 0" class="submenu-overlay" @click.stop="closeSubmenu">
         <div class="submenu-panel" @click.stop>
           <div
@@ -61,9 +61,16 @@ interface Props {
   visible: boolean;
   actions: ActionItem[];
   context: ActionContext;
+  /** Whether to teleport to body. Default true. */
+  teleport?: boolean;
+  /** Whether to disable transition animations. Default false. */
+  noTransition?: boolean;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+  teleport: true,
+  noTransition: false,
+});
 
 const emit = defineEmits<{
   command: [command: string];

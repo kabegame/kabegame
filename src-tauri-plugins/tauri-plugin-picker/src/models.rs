@@ -112,6 +112,12 @@ pub struct PickKgpgFileResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct OpenImageArgs {
+  pub uri: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExtractBundledPluginsArgs {
   pub target_dir: String,
 }

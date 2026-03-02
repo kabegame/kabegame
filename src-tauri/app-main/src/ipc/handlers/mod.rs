@@ -20,44 +20,22 @@ use kabegame_core::storage::tasks::TaskInfo;
 use kabegame_core::storage::Storage;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::VirtualDriveService;
-use std::sync::{Arc, OnceLock};
-use tauri::Emitter;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
 
-/// 全局状态
-pub struct Store {
-    pub dedupe_service: Arc<DedupeService>,
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    pub virtual_drive_service: Arc<VirtualDriveService>,
-    pub app_handle: Arc<tokio::sync::RwLock<Option<tauri::AppHandle>>>,
-}
-
-static GLOBAL_STORE: OnceLock<Arc<Store>> = OnceLock::new();
-
-impl Store {
-    pub fn init_global(ctx: Arc<Store>) -> Result<(), String> {
-        GLOBAL_STORE
-            .set(ctx)
-            .map_err(|_| "Store already initialized".to_string())
-    }
-
-    pub fn global() -> Arc<Store> {
-        GLOBAL_STORE.get().expect("Store not initialized").clone()
-    }
-}
-
-/// 分发 IPC 请求到对应的处理器
-pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResponse {
+/// 分发 IPC 请求到对应的处理器（app_handle 由 start_ipc_server 传入，仅需发事件的请求使用）
+pub async fn dispatch_request(req: CliIpcRequest, app_handle: AppHandle) -> CliIpcResponse {
     // 获取s tatus
     if matches!(req, CliIpcRequest::Status) {
         return handle_status();
     }
 
     if matches!(req, CliIpcRequest::AppShowWindow) {
-        return handle_app_show_window(ctx).await;
+        return handle_app_show_window(app_handle).await;
     }
 
     if let CliIpcRequest::AppImportPlugin { kgpg_path } = req {
-        return handle_app_import_plugin(ctx, kgpg_path).await;
+        return handle_app_import_plugin(kgpg_path, app_handle).await;
     }
 
     // PluginRun：daemon 侧实现（入队执行）
@@ -77,33 +55,32 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResp
             output_album_id,
             plugin_args,
             http_headers,
-            ctx,
         )
         .await;
     }
 
     // TaskStart / TaskCancel：daemon 侧调度
     if let CliIpcRequest::TaskStart { task } = req {
-        return handle_task_start(task, ctx).await;
+        return handle_task_start(task).await;
     }
     if let CliIpcRequest::TaskCancel { task_id } = req {
-        return handle_task_cancel(task_id, ctx).await;
+        return handle_task_cancel(task_id).await;
     }
     if let CliIpcRequest::TaskRetryFailedImage { failed_id } = req {
-        return handle_task_retry_failed_image(failed_id, ctx).await;
+        return handle_task_retry_failed_image(failed_id).await;
     }
     if matches!(req, CliIpcRequest::GetActiveDownloads) {
-        return handle_get_active_downloads(ctx).await;
+        return handle_get_active_downloads().await;
     }
     if let CliIpcRequest::DedupeStartGalleryByHashBatched {
         delete_files,
         batch_size,
     } = req
     {
-        return handle_dedupe_start(delete_files, batch_size, ctx).await;
+        return handle_dedupe_start(delete_files, batch_size).await;
     }
     if matches!(req, CliIpcRequest::DedupeCancelGalleryByHashBatched) {
-        return handle_dedupe_cancel(ctx).await;
+        return handle_dedupe_cancel().await;
     }
 
     // 尝试各个处理器
@@ -115,7 +92,7 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResp
         return resp;
     }
 
-    if let Some(resp) = settings::handle_settings_request(&req, ctx.clone()).await {
+    if let Some(resp) = settings::handle_settings_request(&req).await {
         return resp;
     }
 
@@ -129,13 +106,13 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResp
     #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     {
         if matches!(req, CliIpcRequest::VdMount) {
-            return handle_vd_mount(ctx).await;
+            return handle_vd_mount().await;
         }
         if matches!(req, CliIpcRequest::VdUnmount) {
-            return handle_vd_unmount(ctx).await;
+            return handle_vd_unmount().await;
         }
         if matches!(req, CliIpcRequest::VdStatus) {
-            return handle_vd_status(ctx).await;
+            return handle_vd_status().await;
         }
     }
 
@@ -143,7 +120,7 @@ pub async fn dispatch_request(req: CliIpcRequest, ctx: Arc<Store>) -> CliIpcResp
     CliIpcResponse::err(format!("Unknown request: {:?}", req))
 }
 
-async fn handle_task_start(task: serde_json::Value, _ctx: Arc<Store>) -> CliIpcResponse {
+async fn handle_task_start(task: serde_json::Value) -> CliIpcResponse {
     let t: TaskInfo = match serde_json::from_value(task) {
         Ok(t) => t,
         Err(e) => return CliIpcResponse::err(format!("Invalid task data: {e}")),
@@ -179,19 +156,19 @@ async fn handle_task_start(task: serde_json::Value, _ctx: Arc<Store>) -> CliIpcR
     resp
 }
 
-async fn handle_task_cancel(task_id: String, _ctx: Arc<Store>) -> CliIpcResponse {
+async fn handle_task_cancel(task_id: String) -> CliIpcResponse {
     TaskScheduler::global().cancel_task(&task_id).await;
     CliIpcResponse::ok("ok")
 }
 
-async fn handle_task_retry_failed_image(failed_id: i64, _ctx: Arc<Store>) -> CliIpcResponse {
+async fn handle_task_retry_failed_image(failed_id: i64) -> CliIpcResponse {
     match TaskScheduler::global().retry_failed_image(failed_id) {
         Ok(()) => CliIpcResponse::ok("ok"),
         Err(e) => CliIpcResponse::err(e),
     }
 }
 
-async fn handle_get_active_downloads(_ctx: Arc<Store>) -> CliIpcResponse {
+async fn handle_get_active_downloads() -> CliIpcResponse {
     match TaskScheduler::global().get_active_downloads().await {
         Ok(downloads) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(downloads).unwrap_or_default())
@@ -203,11 +180,9 @@ async fn handle_get_active_downloads(_ctx: Arc<Store>) -> CliIpcResponse {
 async fn handle_dedupe_start(
     delete_files: bool,
     batch_size: Option<usize>,
-    ctx: Arc<Store>,
 ) -> CliIpcResponse {
     let bs = batch_size.unwrap_or(10_000).max(1);
-    match ctx
-        .dedupe_service
+    match DedupeService::global()
         .clone()
         .start_batched(Arc::new(Storage::global().clone()), delete_files, bs)
         .await
@@ -217,8 +192,8 @@ async fn handle_dedupe_start(
     }
 }
 
-async fn handle_dedupe_cancel(ctx: Arc<Store>) -> CliIpcResponse {
-    match ctx.dedupe_service.cancel() {
+async fn handle_dedupe_cancel() -> CliIpcResponse {
+    match DedupeService::global().cancel() {
         Ok(v) => CliIpcResponse::ok_with_data("ok", serde_json::Value::Bool(v)),
         Err(e) => CliIpcResponse::err(e),
     }
@@ -231,7 +206,6 @@ async fn handle_plugin_run(
     output_album_id: Option<String>,
     plugin_args: Vec<String>,
     http_headers: Option<std::collections::HashMap<String, String>>,
-    _ctx: Arc<Store>,
 ) -> CliIpcResponse {
     // resolve plugin：支持 id 或 .kgpg 路径
     let plugin_manager = PluginManager::global();
@@ -407,14 +381,12 @@ fn parse_plugin_args_to_user_config(
     Ok(out)
 }
 
-async fn handle_app_show_window(ctx: Arc<Store>) -> CliIpcResponse {
-    if let Some(app_handle) = ctx.app_handle.read().await.as_ref() {
-        let _ = app_handle.emit("app-show-window", ());
-    }
+async fn handle_app_show_window(app_handle: AppHandle) -> CliIpcResponse {
+    let _ = app_handle.emit("app-show-window", ());
     CliIpcResponse::ok("window-shown")
 }
 
-async fn handle_app_import_plugin(ctx: Arc<Store>, kgpg_path: String) -> CliIpcResponse {
+async fn handle_app_import_plugin(kgpg_path: String, app_handle: AppHandle) -> CliIpcResponse {
     let path = std::path::PathBuf::from(&kgpg_path);
     if !path.is_file() {
         return CliIpcResponse::err(format!("File not found: {}", kgpg_path));
@@ -423,14 +395,12 @@ async fn handle_app_import_plugin(ctx: Arc<Store>, kgpg_path: String) -> CliIpcR
         return CliIpcResponse::err(format!("Not a .kgpg file: {}", kgpg_path));
     }
 
-    if let Some(app_handle) = ctx.app_handle.read().await.as_ref() {
-        let _ = app_handle.emit(
-            "app-import-plugin",
-            serde_json::json!({
-                "kgpgPath": kgpg_path
-            }),
-        );
-    }
+    let _ = app_handle.emit(
+        "app-import-plugin",
+        serde_json::json!({
+            "kgpgPath": kgpg_path
+        }),
+    );
 
     CliIpcResponse::ok("import-request-sent")
 }
@@ -454,7 +424,7 @@ fn handle_status() -> CliIpcResponse {
 }
 
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
+async fn handle_vd_mount() -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
     if !cfg!(all(
@@ -470,7 +440,7 @@ async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
         .await
         .unwrap_or_default();
 
-    let vd_service = ctx.virtual_drive_service.clone();
+    let vd_service = VirtualDriveService::global().clone();
 
     // 检查是否已挂载（幂等处理）
     if vd_service.current_mount_point().is_some() {
@@ -504,7 +474,7 @@ async fn handle_vd_mount(ctx: Arc<Store>) -> CliIpcResponse {
 }
 
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-async fn handle_vd_unmount(ctx: Arc<Store>) -> CliIpcResponse {
+async fn handle_vd_unmount() -> CliIpcResponse {
     use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 
     if !cfg!(all(
@@ -515,7 +485,7 @@ async fn handle_vd_unmount(ctx: Arc<Store>) -> CliIpcResponse {
         return CliIpcResponse::err("Virtual drive is not available".to_string());
     }
 
-    let vd_service = ctx.virtual_drive_service.clone();
+    let vd_service = VirtualDriveService::global().clone();
 
     // 检查是否已卸载（幂等处理）
     if vd_service.current_mount_point().is_none() {
@@ -552,7 +522,7 @@ async fn handle_vd_unmount(ctx: Arc<Store>) -> CliIpcResponse {
 }
 
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-async fn handle_vd_status(_ctx: Arc<Store>) -> CliIpcResponse {
+async fn handle_vd_status() -> CliIpcResponse {
     let enabled = cfg!(all(
         not(kabegame_mode = "light"),
         not(target_os = "android"),

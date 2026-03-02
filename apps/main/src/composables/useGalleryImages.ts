@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
 import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
+import { IS_ANDROID } from "@kabegame/core/env";
 
 type GalleryBrowseEntry =
   | { kind: "dir"; name: string }
@@ -15,7 +16,7 @@ type GalleryBrowseResult = {
   entries: GalleryBrowseEntry[];
 };
 
-const LEAF_SIZE = 1000;
+const LEAF_SIZE = IS_ANDROID ? 100 : 1000;
 
 /**
  * 画廊图片列表管理（分页/增量/大页）+ 图片 URL 加载（委托给 useImageUrlLoader）。

@@ -10,7 +10,7 @@ type Entry = {
 };
 
 const DEFAULT_CAPACITY = 10000;
-const DEFAULT_MAX_IN_FLIGHT = 12;
+const DEFAULT_MAX_IN_FLIGHT = 4;
 
 function normalizePath(p: string): string {
   return (p || "")
@@ -56,6 +56,8 @@ class ImageUrlMapLruCache {
   // 缩略图生成中的去重
   private inFlightThumb = new Map<string, Promise<string>>();
   private inFlightThumbCancel = new Map<string, () => void>();
+  // 原图 blob URL 生成中的去重（Android 多个 ImageItem 同时进入视口时避免重复 readFile）
+  private inFlightOriginal = new Map<string, Promise<string>>();
   private active = 0;
   private queue: Array<{
     imageId: string;
@@ -217,10 +219,29 @@ class ImageUrlMapLruCache {
       return hit;
     }
 
+    // 检查是否已有 in-flight 请求
+    const inflight = this.inFlightOriginal.get(imageId);
+    if (inflight) return inflight;
+
+    // 创建新的请求并记录到 in-flight Map
+    const p = this._doEnsureOriginalBlobUrl(imageId, raw);
+    this.inFlightOriginal.set(imageId, p);
     try {
-      const fileData = await readFile(raw);
+      return await p;
+    } finally {
+      this.inFlightOriginal.delete(imageId);
+    }
+  }
+
+  /** 私有方法：实际执行 readFile -> Blob -> createObjectURL */
+  private async _doEnsureOriginalBlobUrl(
+    imageId: string,
+    contentUri: string
+  ): Promise<string> {
+    try {
+      const fileData = await readFile(contentUri);
       if (!fileData || fileData.length === 0) return "";
-      const mime = guessMimeType(raw);
+      const mime = guessMimeType(contentUri);
       const blob = new Blob([fileData], { type: mime });
       if (!blob.size) return "";
       const url = URL.createObjectURL(blob);

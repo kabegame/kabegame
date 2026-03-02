@@ -1,19 +1,14 @@
-//! Settings 蜻ｽ莉､螟・炊蝎ｨ
+//! Settings 相关 IPC 处理
 
-use crate::Store;
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-use std::sync::Arc;
+use kabegame_core::virtual_driver::{driver_service::VirtualDriveServiceTrait, VirtualDriveService};
 
 /// 处理所有 Settings 相关的 IPC 请求
-pub async fn handle_settings_request(
-    req: &CliIpcRequest,
-    ctx: Arc<Store>,
-) -> Option<CliIpcResponse> {
+pub async fn handle_settings_request(req: &CliIpcRequest) -> Option<CliIpcResponse> {
     match req {
         // 扈・ｲ貞ｺｦ Getter
         CliIpcRequest::SettingsGetAutoLaunch => Some(get_auto_launch().await),
@@ -85,7 +80,7 @@ pub async fn handle_settings_request(
         }
         #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
         CliIpcRequest::SettingsSetAlbumDriveEnabled { enabled } => {
-            Some(set_album_drive_enabled(*enabled, ctx.clone()).await)
+            Some(set_album_drive_enabled(*enabled).await)
         }
         #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
         CliIpcRequest::SettingsSetAlbumDriveMountPoint { mount_point } => {
@@ -189,7 +184,7 @@ async fn set_wallpaper_mode(mode: String) -> CliIpcResponse {
 }
 
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-async fn set_album_drive_enabled(enabled: bool, ctx: Arc<Store>) -> CliIpcResponse {
+async fn set_album_drive_enabled(enabled: bool) -> CliIpcResponse {
     let settings = Settings::global();
 
     if enabled {
@@ -203,7 +198,7 @@ async fn set_album_drive_enabled(enabled: bool, ctx: Arc<Store>) -> CliIpcRespon
             return CliIpcResponse::err("Mount point is empty".to_string());
         }
 
-        let vd_service = ctx.virtual_drive_service.clone();
+        let vd_service = VirtualDriveService::global().clone();
 
         // 检查是否已挂载（幂等处理）
         if vd_service.current_mount_point().is_some() {
@@ -238,7 +233,7 @@ async fn set_album_drive_enabled(enabled: bool, ctx: Arc<Store>) -> CliIpcRespon
         }
     } else {
         // 禁用：先卸载虚拟盘
-        let vd_service = ctx.virtual_drive_service.clone();
+        let vd_service = VirtualDriveService::global().clone();
 
         // 检查是否已卸载（幂等处理）
         if vd_service.current_mount_point().is_none() {

@@ -1,21 +1,26 @@
 <template>
-  <!-- Desktop: Context Menu -->
-  <ContextMenu
-    v-if="renderMode === 'contextmenu'"
-    :visible="visible"
-    :position="position"
-    :items="menuItems"
-    @close="$emit('close')"
-    @command="handleCommand" />
+  <!-- 单根包装，避免父级 v-show 等指令作用到 ActionSheet（其根为 Teleport，非 DOM 元素）导致 Element Plus 警告 -->
+  <div class="action-renderer-root">
+    <!-- Desktop: Context Menu -->
+    <ContextMenu
+      v-if="renderMode === 'contextmenu'"
+      :visible="visible"
+      :position="position"
+      :items="menuItems"
+      @close="$emit('close')"
+      @command="handleCommand" />
 
-  <!-- Android: Action Sheet -->
-  <ActionSheet
-    v-else-if="renderMode === 'actionsheet'"
-    :visible="visible"
-    :actions="actions"
-    :context="context"
-    @close="$emit('close')"
-    @command="handleCommand" />
+    <!-- Android: Action Sheet -->
+    <ActionSheet
+      v-else-if="renderMode === 'actionsheet'"
+      :visible="visible"
+      :actions="actions"
+      :context="context"
+      :teleport="teleport"
+      :no-transition="noTransition"
+      @close="$emit('close')"
+      @command="handleCommand" />
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -33,10 +38,16 @@ interface Props {
   context: ActionContext<any>;
   /** Override render mode: 'auto' uses platform detection, 'contextmenu' forces context menu, 'actionsheet' forces action sheet */
   mode?: "auto" | "contextmenu" | "actionsheet";
+  /** Whether to teleport ActionSheet to body. Default true. */
+  teleport?: boolean;
+  /** Whether to disable ActionSheet transition animations. Default false. */
+  noTransition?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   mode: "auto",
+  teleport: true,
+  noTransition: false,
 });
 
 const emit = defineEmits<{
@@ -119,5 +130,7 @@ const handleCommand = (command: string) => {
 </script>
 
 <style scoped lang="scss">
-// Styles are handled by child components
+.action-renderer-root {
+  display: contents;
+}
 </style>

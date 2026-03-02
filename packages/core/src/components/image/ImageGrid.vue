@@ -975,32 +975,30 @@ const handleEnterAnimationEnd = (imageId: string) => {
   enteringIds.value.delete(imageId);
 };
 
-// 滚动到指定索引的图片
+// 滚动到指定索引的图片（基于 DOM 元素位置，兼容行高不一致的栅格）
 const scrollToIndex = (index: number) => {
   const container = containerEl.value;
   if (!container) return;
-  if (index < 0 || index >= (props.images ?? []).length) return;
+  const list = props.images ?? [];
+  if (index < 0 || index >= list.length) return;
 
-  const cols = gridColumnsCount.value;
-  const row = Math.floor(index / cols);
-  const rowTop = row * rowHeightWithGap.value;
-  const containerHeight = container.clientHeight;
-  const scrollTop = container.scrollTop;
+  const imageId = list[index].id;
+  const el = container.querySelector<HTMLElement>(`[data-id="${imageId}"]`);
+  if (!el) return;
 
-  // 检查目标行是否在视口内
-  const rowBottom = rowTop + rowHeightWithGap.value;
-  const viewportTop = scrollTop;
-  const viewportBottom = scrollTop + containerHeight;
+  const containerRect = container.getBoundingClientRect();
+  const elRect = el.getBoundingClientRect();
 
-  // 如果目标行在视口上方，滚动到顶部对齐
-  if (rowTop < viewportTop) {
-    container.scrollTo({ top: rowTop, behavior: "smooth" });
+  const elTop = elRect.top - containerRect.top + container.scrollTop;
+  const elBottom = elTop + elRect.height;
+  const viewportTop = container.scrollTop;
+  const viewportBottom = viewportTop + container.clientHeight;
+
+  if (elTop < viewportTop) {
+    container.scrollTo({ top: elTop, behavior: "smooth" });
+  } else if (elBottom > viewportBottom) {
+    container.scrollTo({ top: elBottom - container.clientHeight, behavior: "smooth" });
   }
-  // 如果目标行在视口下方，滚动到底部对齐
-  else if (rowBottom > viewportBottom) {
-    container.scrollTo({ top: rowBottom - containerHeight, behavior: "smooth" });
-  }
-  // 如果已在视口内，不滚动
 };
 
 // 监听预览索引变化，同步选中项和视口

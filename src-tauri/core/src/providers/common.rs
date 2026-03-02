@@ -22,6 +22,9 @@ use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
 /// 每个叶子目录最多包含的图片数量
+#[cfg(target_os = "android")]
+const LEAF_SIZE: usize = 100;
+#[cfg(not(target_os = "android"))]
 const LEAF_SIZE: usize = 1000;
 /// 每个分组目录最多包含的子目录数量
 const GROUP_SIZE: usize = 10;

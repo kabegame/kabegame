@@ -10,8 +10,8 @@
       v-model:visible="showImportDialog" 
       :kgpg-path="importKgpgPath"
     />
-    <!-- 全局唯一的快捷设置抽屉（避免多页面实例冲突） -->
-    <QuickSettingsDrawer />
+    <!-- 全局唯一的快捷设置抽屉（仅非安卓；安卓上不使用） -->
+    <QuickSettingsDrawer v-if="!IS_ANDROID" />
     <!-- 全局唯一的帮助抽屉（按页面展示帮助内容） -->
     <HelpDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
@@ -214,14 +214,16 @@ onMounted(async () => {
         }
 
         // 防止关 modal 后同一按键或连按再次触发时误弹退出确认
+        // 也防止 Android/WebView 一次返回键触发两次回调导致退出确认弹两次
         if (Date.now() - lastModalClosedAt < EXIT_COOLDOWN_MS) {
           return;
         }
+        lastModalClosedAt = Date.now();
 
         // 3. Exit Confirm
         try {
-          await ElMessageBox.confirm("确定要退出应用吗？", "退出提示", {
-            confirmButtonText: "退出",
+          await ElMessageBox.confirm("确定要退出应用吗？龟龟会想你滴~お疲れ様！", "退出提示", {
+            confirmButtonText: "拜拜",
             cancelButtonText: "取消",
             type: "warning",
             center: true,

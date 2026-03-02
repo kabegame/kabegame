@@ -404,6 +404,7 @@ The source code is licensed under GPL v3. License is available [here](./LICENSE)
 - [**Vue Router**](https://github.com/vuejs/router) - Vue.js 官方路由管理器
 - [**Axios**](https://github.com/axios/axios) - 基于 Promise 的 HTTP 客户端
 - [**UnoCSS**](https://github.com/unocss/unocss) - 原子动态CSS框架
+- [**panzoom**](https://github.com/timmywil/panzoom) - 预览图拖拽放缩库
 
 ### 后端与工具
 - [**Rhai**](https://github.com/rhaiscript/rhai) - 嵌入式脚本语言引擎（本项目插件脚本的核心支持）

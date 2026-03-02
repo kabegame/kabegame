@@ -17,7 +17,8 @@
             :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled" :current-position="currentPosition"
             :month-options="monthOptions" :month-loading="monthOptionsLoading" v-model:selectedRange="selectedRange"
             @refresh="handleManualRefresh" @dedupe-by-hash="handleDedupeByHash" @show-help="openHelpDrawer"
-            @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="IS_ANDROID ? (showMediaPicker = true) : (showLocalImportDialog = true)"
+            @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
+            @open-collect-menu="showCollectSourcePicker = true"
             @cancel-dedupe="cancelDedupe" />
 
           <!-- 大页分页器 -->
@@ -30,11 +31,11 @@
           <div v-if="displayedImages.length === 0 && !loading && !isRefreshing" :key="'empty-' + refreshKey"
             class="empty fade-in">
             <EmptyState />
-            <el-button type="primary" class="empty-action-btn" @click="IS_ANDROID ? (showMediaPicker = true) : (showLocalImportDialog = true)">
+            <el-button type="primary" class="empty-action-btn" @click="handleEmptyStateCollect">
               <el-icon>
                 <Plus />
               </el-icon>
-              本地导入
+              开始收集
             </el-button>
           </div>
         </template>
@@ -44,7 +45,7 @@
     <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
     <CrawlerDialog v-if="!IS_ANDROID" v-model="showCrawlerDialog" :plugin-icons="pluginIcons"
       :initial-config="crawlerDialogInitialConfig" />
-    <LocalImportDialog v-model="showLocalImportDialog" />
+    <LocalImportDialog v-if="!IS_ANDROID" v-model="showLocalImportDialog" />
 
 
     <!-- 去重确认对话框（无需放在 ImageGrid 插槽里） -->
@@ -68,7 +69,23 @@
 
     <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
 
-    <!-- 安卓媒体选择器 -->
+    <!-- 桌面：空状态/无下拉时用对话框选择 本地/网络 -->
+    <el-dialog v-model="showCollectMenuDialog" title="选择收集方式" width="360px" destroy-on-close class="collect-menu-dialog">
+      <div class="collect-menu-options">
+        <div class="collect-menu-option" @click="onDesktopCollectLocal">
+          <el-icon><FolderOpened /></el-icon>
+          <span>本地</span>
+        </div>
+        <div class="collect-menu-option" @click="onDesktopCollectNetwork">
+          <el-icon><Connection /></el-icon>
+          <span>网络</span>
+        </div>
+      </div>
+    </el-dialog>
+
+    <!-- Android：收集方式选择器（本地 → MediaPicker，远程 → 收集 drawer） -->
+    <CollectSourcePicker v-if="IS_ANDROID" v-model="showCollectSourcePicker" @select="handleCollectSourceSelect" />
+    <!-- 安卓媒体选择器（本地导入） -->
     <MediaPicker v-if="IS_ANDROID" v-model="showMediaPicker" @select="handleMediaPickerSelect" />
   </div>
 </template>
@@ -78,7 +95,7 @@ import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick }
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Plus, Loading, Star, StarFilled, FolderAdd, Delete, InfoFilled, DocumentCopy, Picture } from "@element-plus/icons-vue";
+import { Plus, Star, StarFilled, FolderAdd, Delete, FolderOpened, Connection } from "@element-plus/icons-vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -88,7 +105,6 @@ import ImageGrid from "@/components/ImageGrid.vue";
 import CrawlerDialog from "@/components/CrawlerDialog.vue";
 import LocalImportDialog from "@/components/LocalImportDialog.vue";
 import { createImageActions } from "@/actions/imageActions";
-import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import EmptyState from "@/components/common/EmptyState.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
@@ -110,8 +126,8 @@ import { hasFeatureInPage } from "@/header/headerFeatures";
 import { useDesktopSelectionStore, type DesktopSelectionAction } from "@/stores/desktopSelection";
 import { open } from "@tauri-apps/plugin-dialog";
 import { stat } from "@tauri-apps/plugin-fs";
-import { useTaskDrawerStore } from "@/stores/taskDrawer";
 import MediaPicker from "@/components/MediaPicker.vue";
+import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { pickImages, type PickFolderResult } from "tauri-plugin-picker-api";
 
@@ -121,6 +137,7 @@ defineOptions({
 });
 
 const crawlerStore = useCrawlerStore();
+const crawlerDrawerStore = useCrawlerDrawerStore();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettingsDrawer = () => quickSettingsDrawer.open("gallery");
 const helpDrawer = useHelpDrawerStore();
@@ -291,19 +308,47 @@ const dedupeProgress = computed(() => {
 const showCrawlerDialog = ref(false);
 const showLocalImportDialog = ref(false);
 const showMediaPicker = ref(false);
+const showCollectSourcePicker = ref(false);
+const showCollectMenuDialog = ref(false);
 const crawlerDialogInitialConfig = ref<{
   pluginId?: string;
   outputDir?: string;
   vars?: Record<string, any>;
 } | undefined>(undefined);
 
-// 打开导入对话框/抽屉的统一处理函数
-const handleShowCrawlerDialog = async () => {
+// 桌面：打开收集（网络）对话框。Android 上由「开始收集」→ CollectSourcePicker → 远程 打开 drawer
+const handleShowCrawlerDialog = () => {
+  showCrawlerDialog.value = true;
+};
+
+// 空状态按钮：桌面打开选择对话框，Android 打开收集方式选择器
+const handleEmptyStateCollect = () => {
   if (IS_ANDROID) {
-    // 安卓下：显示媒体选择器
+    showCollectSourcePicker.value = true;
+  } else {
+    showCollectMenuDialog.value = true;
+  }
+};
+
+// 桌面：选择收集方式对话框 → 本地
+const onDesktopCollectLocal = () => {
+  showCollectMenuDialog.value = false;
+  showLocalImportDialog.value = true;
+};
+
+// 桌面：选择收集方式对话框 → 网络
+const onDesktopCollectNetwork = () => {
+  showCollectMenuDialog.value = false;
+  showCrawlerDialog.value = true;
+};
+
+// Android：收集方式选择器选「本地」→ MediaPicker，选「远程」→ 收集 drawer
+const handleCollectSourceSelect = (source: "local" | "remote") => {
+  showCollectSourcePicker.value = false;
+  if (source === "local") {
     showMediaPicker.value = true;
   } else {
-    showCrawlerDialog.value = true;
+    crawlerDrawerStore.open();
   }
 };
 
@@ -334,10 +379,11 @@ const handleAndroidMediaSelection = async (
       });
       ElMessage.success("已添加本地导入任务");
     } else if (type === 'archive') {
+      console.log('选择压缩文件');
       // 选择压缩文件（支持 .zip、.rar、.7z、.tar、.gz、.bz2、.xz）
       const selected = await open({
         directory: false,
-        multiple: true,
+        multiple: false,
         filters: [
           {
             name: '压缩文件',
@@ -1723,5 +1769,33 @@ onDeactivated(() => {
 .tooltip-line {
   word-break: break-all;
   font-size: 12px;
+}
+
+/* 选择收集方式对话框（teleport 到 body） */
+.collect-menu-dialog .collect-menu-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.collect-menu-dialog .collect-menu-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 2px solid var(--anime-border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.collect-menu-dialog .collect-menu-option:hover {
+  border-color: var(--anime-primary);
+  background: var(--el-fill-color-light);
+}
+
+.collect-menu-dialog .collect-menu-option .el-icon {
+  font-size: 20px;
+  color: var(--anime-primary);
 }
 </style>

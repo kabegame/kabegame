@@ -1,6 +1,7 @@
 // 画廊 Provider 路径计算（与后端 AllProvider 的贪心分解保持一致）
 
-const LEAF_SIZE = 1000;
+import { IS_ANDROID } from "@kabegame/core/env";
+const LEAF_SIZE = IS_ANDROID ? 100 : 1000;
 const GROUP_SIZE = 10;
 
 export interface GreedyRange {

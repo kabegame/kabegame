@@ -6,8 +6,10 @@ use kabegame_core::storage::Storage;
 use std::collections::HashSet;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, OnceLock,
 };
+
+static GLOBAL_DEDUPE: OnceLock<Arc<DedupeService>> = OnceLock::new();
 
 #[derive(Default)]
 pub struct DedupeService {
@@ -17,6 +19,19 @@ pub struct DedupeService {
 impl DedupeService {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn init_global(svc: Arc<DedupeService>) -> Result<(), String> {
+        GLOBAL_DEDUPE
+            .set(svc)
+            .map_err(|_| "DedupeService already initialized".to_string())
+    }
+
+    pub fn global() -> Arc<DedupeService> {
+        GLOBAL_DEDUPE
+            .get()
+            .expect("DedupeService not initialized")
+            .clone()
     }
 
     pub async fn start_batched(

@@ -3,11 +3,20 @@
     <div class="setting-meta">
       <div class="label">
         {{ label }}
-        <el-tooltip v-if="description" :content="description" placement="top">
-          <el-icon class="help-icon">
+        <template v-if="description">
+          <el-tooltip v-if="!IS_ANDROID" :content="description" placement="top">
+            <el-icon class="help-icon">
+              <QuestionFilled />
+            </el-icon>
+          </el-tooltip>
+          <el-icon
+            v-else
+            class="help-icon help-icon-clickable"
+            @click="onAndroidHelpClick"
+          >
             <QuestionFilled />
           </el-icon>
-        </el-tooltip>
+        </template>
       </div>
     </div>
     <div class="setting-control">
@@ -18,11 +27,18 @@
 
 <script setup lang="ts">
 import { QuestionFilled } from "@element-plus/icons-vue";
+import { IS_ANDROID } from "../../env";
+import { showToast } from "vant";
 
-defineProps<{
+const props = defineProps<{
   label: string;
   description?: string;
 }>();
+
+function onAndroidHelpClick() {
+  if (!props.description) return;
+  showToast({ message: props.description, duration: 3000 });
+}
 </script>
 
 <style scoped lang="scss">
@@ -56,25 +72,31 @@ defineProps<{
   flex-shrink: 0;
 }
 
+.help-icon-clickable {
+  cursor: pointer;
+}
+
 .setting-control {
   display: flex;
   justify-content: flex-start;
 }
 
 @media (max-width: 720px) {
-  .setting-row {
-    grid-template-columns: 1fr;
-  }
+  // .setting-row {
+  //   grid-template-columns: 1fr;
+  // }
 
-  .setting-meta {
-    min-width: 0;
-  }
+  // .setting-meta {
+  //   min-width: 0;
+  //   width: 100%;
+  //   justify-content: flex-start;
+  // }
 
-  .setting-control {
-    width: 100%;
-    min-width: 0;
-    justify-content: flex-start;
-  }
+  // .setting-control {
+  //   width: 100%;
+  //   min-width: 0;
+  //   justify-content: flex-end;
+  // }
 }
 </style>
 

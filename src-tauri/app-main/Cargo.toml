@@ -32,7 +32,7 @@ kabegame-core = {workspace = true, default-features = false, features = ["ipc-se
 governor = "0.7"
 
 [target.'cfg(target_os = "android")'.dependencies]
-kabegame-core = {workspace = true, default-features = false}
+kabegame-core = {workspace = true, default-features = false, features = ["ipc-server"] }
 tauri-plugin-picker = { workspace = true }
 tauri-plugin-archiver = { workspace = true }
 
@@ -60,7 +60,7 @@ winver = "1"
 arboard = "3.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-tauri = { version = "2.10", features = ["macos-private-api", "tray-icon", "devtools", "protocol-asset", "image-png"] }
+tauri = { version = "2.10", features = [ "tray-icon", "devtools", "protocol-asset", "image-png"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "std",
   "NSPasteboard",
@@ -71,7 +71,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 ] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-tauri = { version = "2.10", features = ["macos-private-api", "tray-icon", "devtools", "protocol-asset", "image-png"] }
+tauri = { version = "2.10", features = [ "tray-icon", "devtools", "protocol-asset", "image-png"] }
 
 [build-dependencies]
 tauri-build = {workspace = true}

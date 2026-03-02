@@ -1,6 +1,6 @@
 <template>
   <div ref="cardRef" class="album-card" :data-album-id="album.id" @click="handleCardClick">
-    <div class="hero">
+    <div class="hero" @touchstart.passive="handleSwipeStart" @touchend="handleSwipeEnd">
       <div v-for="(url, idx) in heroAll" :key="idx" class="hero-img" :class="heroClass(idx, url)"
         :style="heroStyle(url)">
         <div v-if="!url && loadingStates[idx]" class="hero-loading">
@@ -114,9 +114,36 @@ defineExpose({
   },
 });
 
+// 滑动手势检测
+const SWIPE_THRESHOLD = 30;
+let swipeStartX = 0;
+let swipeStartY = 0;
+let swiped = false;
+
+const handleSwipeStart = (e: TouchEvent) => {
+  if (e.touches.length !== 1) return;
+  swipeStartX = e.touches[0].clientX;
+  swipeStartY = e.touches[0].clientY;
+  swiped = false;
+};
+
+const handleSwipeEnd = (e: TouchEvent) => {
+  if (e.changedTouches.length !== 1) return;
+  const dx = e.changedTouches[0].clientX - swipeStartX;
+  const dy = e.changedTouches[0].clientY - swipeStartY;
+  if (Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
+    swiped = true;
+    e.preventDefault();
+    e.stopPropagation();
+    if (dx < 0) nextHero();
+    else prevHero();
+  }
+};
+
 const handleCardClick = () => {
-  // 如果正在重命名，不触发点击
-  if (isRenaming.value) {
+  // 如果正在重命名或刚完成滑动，不触发点击
+  if (isRenaming.value || swiped) {
+    swiped = false;
     return;
   }
   emit('click');
@@ -285,7 +312,6 @@ const formatDate = (ts?: number) => {
     display: flex;
     align-items: center;
     justify-content: center;
-    pointer-events: none;
   }
 
   .hero-img {

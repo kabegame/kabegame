@@ -33,6 +33,7 @@
     "lodash-es": "^4.17.22",
     "monaco-editor": "^0.52.0",
     "pinia": "^2.1.7",
+    "vant": "^4.9.22",
     "vue": "^3.4.21",
     "vue-router": "^4.3.0",
     "winston": "^3.19.0"

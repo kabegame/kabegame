@@ -35,6 +35,8 @@ export default {
     __DESKTOP__: JSON.stringify(desktop),
     __LIGHT_MODE__: isAndroid || isLightMode,
     __LOCAL_MODE__: !isAndroid &&isLocalMode,
+    // 切换此开关来强制重启vite服务器
+    __REBOOT__: false,
   },
 
   // 使用 apps/main/public 作为 public 目录（main app 专用）
@@ -46,9 +48,10 @@ export default {
     port: 1420,
     strictPort: true,
     host: true,
-    // Android 真机：HMR WebSocket 必须指向开发机 IP，否则会连到手机的 localhost 导致 ERR_CONNECTION_REFUSED
+    // Android 真机：HMR 与 origin 指向开发机 IP，使设备能连上 WebSocket 并正确解析 script/source map 等请求
     ...(isAndroid
       ? {
+          origin: `http://${getDevServerHost()}:1420`,
           hmr: {
             protocol: "ws",
             host: getDevServerHost(),
@@ -81,6 +84,8 @@ export default {
     entries: [
       path.resolve(process.cwd(), "index.html"),
     ],
+    // 不预构建本地 photoswipe-reactive，始终从源码编译，改包内代码立即生效
+    exclude: ["photoswipe", "photoswipe/lightbox"],
   },
   build: {
     outDir: path.resolve(root, `dist-${process.env.KABEGAME_COMPONENT}`),

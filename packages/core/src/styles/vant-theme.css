@@ -1,0 +1,45 @@
+/**
+ * Vant 主题：使用项目配色（anime-theme.css）
+ *
+ * 使用方式：
+ * 1. 在入口（如 apps/main/src/main.ts）中按顺序引入：
+ *    - @kabegame/core/styles/anime-theme.css
+ *    - vant 的样式（若已使用 Vant 组件，例如：import "vant/lib/index.css" 或按需引入组件的 CSS）
+ *    - @kabegame/core/styles/vant-theme.css
+ * 2. 或通过 ConfigProvider + theme-vars 在 JS 中注入相同变量（见文档）。
+ *
+ * 使用 :root:root 提高优先级，确保覆盖 Vant 默认 :root 变量。
+ */
+:root:root {
+  /* 基础色板 -> Vant 基础变量 */
+  --van-primary-color: var(--anime-primary);
+  --van-success-color: var(--anime-success);
+  --van-danger-color: var(--anime-danger);
+  --van-warning-color: var(--anime-warning);
+  --van-text-color: var(--anime-text-primary);
+  --van-text-color-2: var(--anime-text-secondary);
+  --van-text-color-3: var(--anime-text-muted);
+  --van-active-color: rgba(255, 107, 157, 0.08);
+  /* 使用与 anime-bg-main 渐变起点一致的纯色，避免部分组件背景异常 */
+  --van-background: #fef3f8;
+  --van-background-2: var(--anime-bg-card);
+  --van-border-color: var(--anime-border);
+
+  /* 按钮主色（继承 primary，可单独覆盖） */
+  --van-button-primary-background: var(--anime-primary);
+  --van-button-primary-border-color: var(--anime-primary);
+  --van-button-primary-color: #fff;
+
+  /* 其他常用组件 */
+  --van-tabbar-item-active-color: var(--anime-primary);
+  --van-nav-bar-icon-color: var(--anime-text-primary);
+  --van-nav-bar-text-color: var(--anime-text-primary);
+  --van-nav-bar-title-text-color: var(--anime-text-primary);
+  --van-action-sheet-item-text-color: var(--anime-text-primary);
+  --van-dialog-confirm-button-text-color: var(--anime-primary);
+  --van-switch-on-background: var(--anime-primary);
+  --van-checkbox-checked-icon-color: var(--anime-primary);
+  --van-radio-checked-icon-color: var(--anime-primary);
+  --van-slider-active-background: var(--anime-primary);
+  --van-stepper-input-disabled-color: var(--anime-text-muted);
+}

@@ -39,7 +39,7 @@
         </div>
       </div>
     </template>
-    <!-- 非 Android：保持原有布局 -->
+    <!-- 非 Android：保持原有布局，开始收集为下拉（本地/网络） -->
     <template v-if="!IS_ANDROID">
       <el-button @click="$emit('showHelp')" circle title="帮助">
         <el-icon>
@@ -52,31 +52,37 @@
         </el-icon>
       </el-button>
       <TaskDrawerButton />
-      <el-button @click="$emit('showLocalImport')" class="add-task-btn">
-        <el-icon>
-          <FolderOpened />
-        </el-icon>
-        本地导入'
-      </el-button>
-      <el-button type="primary" @click="handleShowCrawlerDialog" class="add-task-btn">
-        <el-icon>
-          <Plus />
-        </el-icon>
-        收集
-      </el-button>
+      <el-dropdown trigger="click" @command="handleDesktopCollectCommand">
+        <el-button type="primary" class="add-task-btn">
+          <el-icon>
+            <Plus />
+          </el-icon>
+          开始收集
+          <el-icon class="el-icon--right">
+            <ArrowDown />
+          </el-icon>
+        </el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="local">
+              <el-icon><FolderOpened /></el-icon>
+              本地
+            </el-dropdown-item>
+            <el-dropdown-item command="network">
+              <el-icon><Connection /></el-icon>
+              网络
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
     </template>
-    <!-- Android：使用 headerFeatures 驱动 -->
+    <!-- Android：单按钮「开始收集」→ 打开收集方式选择器（本地/远程） -->
     <template v-else>
-      <!-- 直显功能：本地导入、收集 -->
-      <el-button @click="$emit('showLocalImport')" class="add-task-btn">
-        <el-icon>
-          <FolderOpened />
-        </el-icon>
-      </el-button>
-      <el-button type="primary" @click="handleShowCrawlerDialog" class="add-task-btn">
+      <el-button type="primary" @click="handleOpenCollectMenu" class="add-task-btn">
         <el-icon>
           <Plus />
         </el-icon>
+        开始收集
       </el-button>
       <!-- 任务按钮：保持直显 -->
       <TaskDrawerButton />
@@ -92,7 +98,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Refresh, Plus, Filter, Setting, Close, QuestionFilled, FolderOpened } from "@element-plus/icons-vue";
+import { Refresh, Plus, Filter, Setting, Close, QuestionFilled, FolderOpened, ArrowDown, Connection } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
@@ -150,17 +156,24 @@ const emit = defineEmits<{
   showQuickSettings: [];
   showCrawlerDialog: [];
   showLocalImport: [];
+  openCollectMenu: [];
   "update:selectedRange": [value: [string, string] | null];
 }>();
 
 const crawlerDrawerStore = useCrawlerDrawerStore();
 
-const handleShowCrawlerDialog = () => {
-  if (IS_ANDROID) {
-    crawlerDrawerStore.open();
-  } else {
+/** 桌面：下拉选择「本地」或「网络」后打开对应对话框 */
+const handleDesktopCollectCommand = (command: string) => {
+  if (command === "local") {
+    emit("showLocalImport");
+  } else if (command === "network") {
     emit("showCrawlerDialog");
   }
+};
+
+/** Android：打开收集方式选择器（本地/远程），由 Gallery 展示 CollectSourcePicker */
+const handleOpenCollectMenu = () => {
+  emit("openCollectMenu");
 };
 
 const dateRangeProxy = computed<[string, string] | null>({

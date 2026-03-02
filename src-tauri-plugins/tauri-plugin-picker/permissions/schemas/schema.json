@@ -307,6 +307,18 @@
           "markdownDescription": "Denies the extractBundledPlugins command without any pre-configured scope."
         },
         {
+          "description": "Enables the openImage command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-openImage",
+          "markdownDescription": "Enables the openImage command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the openImage command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-openImage",
+          "markdownDescription": "Denies the openImage command without any pre-configured scope."
+        },
+        {
           "description": "Enables the pickFolder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-pickFolder",
@@ -343,10 +355,10 @@
           "markdownDescription": "Denies the pickKgpgFile command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the picker plugin (folder, images, kgpg file).\n#### This default permission set includes:\n\n- `allow-pickFolder`\n- `allow-pickImages`\n- `allow-pickKgpgFile`",
+          "description": "Default permissions for the picker plugin (folder, images, kgpg file).\n#### This default permission set includes:\n\n- `allow-pickFolder`\n- `allow-pickImages`\n- `allow-pickKgpgFile`\n- `allow-openImage`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for the picker plugin (folder, images, kgpg file).\n#### This default permission set includes:\n\n- `allow-pickFolder`\n- `allow-pickImages`\n- `allow-pickKgpgFile`"
+          "markdownDescription": "Default permissions for the picker plugin (folder, images, kgpg file).\n#### This default permission set includes:\n\n- `allow-pickFolder`\n- `allow-pickImages`\n- `allow-pickKgpgFile`\n- `allow-openImage`"
         }
       ]
     }

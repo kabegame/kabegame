@@ -35,3 +35,14 @@ pub(crate) async fn pick_kgpg_file<R: Runtime>(app: AppHandle<R>) -> Result<Pick
     .map_err(|e| e.to_string())?;
   Ok(result)
 }
+
+#[tauri::command]
+pub(crate) async fn open_image<R: Runtime>(app: AppHandle<R>, uri: String) -> Result<(), String> {
+  app
+    .picker()
+    .0
+    .run_mobile_plugin_async::<()>("openImage", crate::models::OpenImageArgs { uri })
+    .await
+    .map_err(|e| e.to_string())?;
+  Ok(())
+}

@@ -125,8 +125,7 @@ pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn start_dedupe_gallery_by_hash_batched(delete_files: bool) -> Result<(), String> {
-    let ctx = crate::ipc::handlers::Store::global();
-    ctx.dedupe_service
+    crate::ipc::DedupeService::global()
         .clone()
         .start_batched(
             std::sync::Arc::new(kabegame_core::storage::Storage::global().clone()),
@@ -139,8 +138,7 @@ pub async fn start_dedupe_gallery_by_hash_batched(delete_files: bool) -> Result<
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn cancel_dedupe_gallery_by_hash_batched() -> Result<bool, String> {
-    let ctx = crate::ipc::handlers::Store::global();
-    ctx.dedupe_service.cancel()
+    crate::ipc::DedupeService::global().cancel()
 }
 
 #[tauri::command]

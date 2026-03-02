@@ -7,8 +7,13 @@ import App from "./App.vue";
 import router from "./router";
 import "virtual:uno.css";
 import "@kabegame/core/styles/anime-theme.css";
+/** Vant：Toast 组件样式（按需引入时显式使用 showToast 必须带样式，见 Vant 文档） */
+import "vant/lib/toast/style";
+/** Vant 使用项目配色。若使用 Vant，请在其样式之后引入，顺序：anime-theme → vant 样式 → vant-theme */
+import "@kabegame/core/styles/vant-theme.css";
 import { vPullToRefresh } from "@kabegame/core/directives/pullToRefresh";
 import { IS_ANDROID } from "@kabegame/core/env";
+import { Toast } from "vant";
 import { getImageSupport, getSupportedFormats } from "@kabegame/image-type";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -28,6 +33,9 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
 app.use(createPinia());
 app.use(router);
 app.use(ElementPlus);
+if (IS_ANDROID) {
+  app.use(Toast);
+}
 
 app.mount("#app");
 

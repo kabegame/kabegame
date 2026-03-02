@@ -1,4 +1,4 @@
-import { MoreFilled, QuestionFilled, Setting, Refresh, Filter, Plus, FolderOpened, Picture, Delete, Upload, Grid } from "@element-plus/icons-vue";
+import { MoreFilled, QuestionFilled, Setting, Refresh, Filter, Plus, FolderOpened, Picture, Delete, Upload, Grid, VideoPause } from "@element-plus/icons-vue";
 import type { Component } from "vue";
 import { IS_ANDROID, IS_LIGHT_MODE, IS_LOCAL_MODE } from "@kabegame/core/env";
 
@@ -29,7 +29,8 @@ export type HeaderFeatureId =
   | "setAsWallpaperCarousel"
   | "deleteAlbum"
   | "importSource"
-  | "manageSources";
+  | "manageSources"
+  | "stopTask";
 
 /**
  * Header 功能配置
@@ -71,14 +72,14 @@ export const headerFeatures: HeaderFeature[] = [
     hide: false,
     order: 100,
   },
-  // 快捷设置
+  // 快捷设置（Android 上隐藏，无 drawer）
   {
     id: "quickSettings",
     label: "快捷设置",
     icon: Setting,
     pages: ["gallery", "albums", "albumdetail", "pluginbrowser", "taskdetail"],
-    fold: IS_ANDROID, // Android 下折叠
-    hide: false,
+    fold: IS_ANDROID,
+    hide: IS_ANDROID,
     order: 101,
   },
   // 刷新
@@ -90,6 +91,16 @@ export const headerFeatures: HeaderFeature[] = [
     fold: false,
     hide: IS_ANDROID, // Android 下隐藏刷新功能
     order: 10,
+  },
+  // 停止任务（TaskDetail 专用，Android 下折叠到更多菜单）
+  {
+    id: "stopTask",
+    label: "停止任务",
+    icon: VideoPause,
+    pages: ["taskdetail"],
+    fold: IS_ANDROID,
+    hide: false,
+    order: 15,
   },
   // 去重（Gallery 专用）
   {
