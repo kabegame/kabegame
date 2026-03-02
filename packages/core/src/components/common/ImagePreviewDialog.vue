@@ -88,7 +88,6 @@ import type { Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
-import { isTauri, invoke } from "@tauri-apps/api/core";
 import type { ImageInfo, ImageUrlMap } from "../../types/image";
 import ImageNotFound from "./ImageNotFound.vue";
 import { useImageUrlMapCache } from "../../composables/useImageUrlMapCache";
@@ -148,14 +147,7 @@ const previewAvailableSize = ref({ width: 0, height: 0 });
 const previewContainerRect = ref({ left: 0, top: 0, width: 0, height: 0 });
 // previewDragging、previewDragStart、previewDragStartTranslate 已删除，由 Panzoom 替代（仅桌面端）
 const previewImageLoading = ref(false);
-// 仅释放本组件创建的 blob url，避免误删外部缓存的 url
-const ownedOriginalBlobUrls = ref<Map<string, string>>(new Map());
-const loadSeq = ref(0);
 // 导航请求序号：用于“阻止切换直到 original ready”时的竞态保护
-const navSeq = ref(0);
-const pendingNav = ref<{ seq: number; index: number } | null>(null);
-// 预加载 promise（按 imageId 去重）：resolve=true 表示预加载成功（能解码/加载），resolve=false 表示失败（文件不存在/权限/解码失败等）
-const inFlightOriginalLoads = new Map<string, Promise<boolean>>();
 
 const previewContextMenuVisible = ref(false);
 const previewContextMenuPosition = ref({ x: 0, y: 0 });
@@ -291,40 +283,21 @@ const isTextInputLike = (target: EventTarget | null) => {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
 };
 
-/** 优先从全局 cache 取原图 URL（网格已加载的 blob 会写在这里），避免依赖 props 未同步导致预览先灰再出图 */
+/** 只读：从全局 cache 或 props 取原图 URL（不主动创建） */
 const getOriginalUrlFor = (imageId: string) => {
   return (
     urlCache.imageUrlMap.value[imageId]?.original ||
     props.imageUrlMap?.[imageId]?.original ||
-    ownedOriginalBlobUrls.value.get(imageId) ||
     ""
   );
 };
 
-async function preloadImageUrl(url: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const img = new Image();
-    img.decoding = "async";
-    img.loading = "eager";
-    img.onload = () => resolve();
-    img.onerror = () => reject(new Error("preload failed"));
-    img.src = url;
-  });
-}
-
-const getOrCreateOriginalUrlFor = (image: ImageInfo) => {
-  const hit = getOriginalUrlFor(image.id);
-  if (hit) return hit;
-  if (!image.localPath) return "";
-  return urlCache.ensureOriginalAssetUrl(image.id, image.localPath) || "";
-};
-
-/** Android PhotoSwipe：根据当前 images 构建 dataSource 数组 */
+/** Android PhotoSwipe：根据当前 images 构建 dataSource 数组（只读 URL） */
 const pswpDataSource = computed(() => {
   const fallbackW = 1920;
   const fallbackH = 1080;
   return props.images.map((img) => {
-    const url = getOrCreateOriginalUrlFor(img) || props.imageUrlMap?.[img.id]?.thumbnail || "";
+    const url = getOriginalUrlFor(img.id) || props.imageUrlMap?.[img.id]?.thumbnail || "";
     return {
       src: url,
       width: img.width || fallbackW,
@@ -333,61 +306,7 @@ const pswpDataSource = computed(() => {
   });
 });
 
-const ensureOriginalPreload = (image: ImageInfo, originalUrl: string) => {
-  if (!originalUrl) return Promise.resolve(false);
-  const inflight = inFlightOriginalLoads.get(image.id);
-  if (inflight) return inflight;
-  const p = preloadImageUrl(originalUrl)
-    .then(() => {
-      // preload 成功后更新到本地缓存（用于 prefetch 场景）
-      if (!ownedOriginalBlobUrls.value.has(image.id)) {
-        ownedOriginalBlobUrls.value.set(image.id, originalUrl);
-      }
-      return true;
-    })
-    .catch(() => false)
-    .finally(() => {
-      inFlightOriginalLoads.delete(image.id);
-    });
-  inFlightOriginalLoads.set(image.id, p);
-  return p;
-};
-
-const waitWithTimeout = async <T,>(
-  p: Promise<T>,
-  ms: number
-): Promise<{ settled: true; value: T } | { settled: false }> => {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const timeout = new Promise<{ settled: false }>((resolve) => {
-    timer = setTimeout(() => resolve({ settled: false }), ms);
-  });
-  const result = await Promise.race([
-    p.then((value) => ({ settled: true as const, value })),
-    timeout,
-  ]);
-  if (timer) clearTimeout(timer);
-  return result;
-};
-
-const releaseOwnedOriginalUrl = (imageId: string) => {
-  const url = ownedOriginalBlobUrls.value.get(imageId);
-  if (url && url.startsWith("blob:")) {
-    try {
-      URL.revokeObjectURL(url);
-    } catch {
-      // ignore
-    }
-  }
-  ownedOriginalBlobUrls.value.delete(imageId);
-};
-
-const releaseAllOwnedOriginalUrls = () => {
-  for (const id of ownedOriginalBlobUrls.value.keys()) {
-    releaseOwnedOriginalUrl(id);
-  }
-};
-
-const setPreviewByIndex = (index: number, opts?: { showLoading?: boolean }) => {
+const setPreviewByIndex = (index: number) => {
   const img = props.images[index];
   if (!img) return;
 
@@ -396,40 +315,17 @@ const setPreviewByIndex = (index: number, opts?: { showLoading?: boolean }) => {
   previewImage.value = img;
   previewNotFound.value = false;
 
-  // // 新策略：预览切换只展示 original（如果 original 未就绪，应由导航层阻止切换）
-  // const originalUrl = getOriginalUrlFor(img.id);
-  // if (!originalUrl) {
-  //   previewImageUrl.value = "";
-  //   previewImageLoading.value = false;
-  //   previewNotFound.value = true;
-  //   return;
-  // }
-
-  // previewImageLoading.value = false;
-  // previewNotFound.value = false;
-  // previewImageUrl.value = originalUrl;
-  // resetPreviewTransform();
-  // 立即同步生成 original asset URL（如果 imageUrlMap 里还没有）
+  // 只读：从 cache 或 props 获取 URL，不主动创建
   const data = props.imageUrlMap?.[img.id];
   const thumb = data?.thumbnail || "";
-  const originalUrl = getOrCreateOriginalUrlFor(img);
+  const originalUrl = getOriginalUrlFor(img.id);
 
   previewNotFound.value = false;
-  previewImageLoading.value = !!opts?.showLoading;
+  previewImageLoading.value = false;
   previewImageUrl.value = (originalUrl || thumb || "").trim();
 
   // 尺寸/缩放状态重置：立即触发一次（仅桌面端）
   panzoomReset();
-
-  // 后台预加载原图（不阻塞 UI；是否显示 loading 由导航层决定）
-  if (originalUrl) void ensureOriginalPreload(img, originalUrl);
-
-  // 预取相邻：始终进行（不依赖当前图是否加载完）
-  if (typeof requestIdleCallback !== "undefined") {
-    requestIdleCallback(() => prefetchAdjacent(), { timeout: 2000 });
-  } else {
-    setTimeout(() => prefetchAdjacent(), 80);
-  }
 };
 
 // 仅用于 UI：首尾循环时，位于边界的方向箭头置灰（但仍可点击触发循环）
@@ -474,95 +370,12 @@ let navThrottleTimer: ReturnType<typeof setTimeout> | null = null;
 let isNavThrottled = false;
 const NAV_THROTTLE_MS = 100;
 
-const NAV_PRELOAD_WAIT_MS = 300;
-
-const navigateWithPreloadGate = async (targetIndex: number) => {
+const navigateWithPreloadGate = (targetIndex: number) => {
   if (!previewVisible.value) return;
-  const target = props.images[targetIndex];
-  if (!target) return;
-
-  // 导航序号：防止连续点击导致旧的 await 回来覆盖新状态
-  const seq = ++navSeq.value;
-  pendingNav.value = { seq, index: targetIndex };
-
-  const data = props.imageUrlMap?.[target.id];
-  const thumb = (data?.thumbnail || "").trim();
-  const originalUrl = getOrCreateOriginalUrlFor(target).trim();
-
-  // 如果没有 originalUrl（例如没有 localPath），只能直接切换（靠 img onerror 决定 notFound/回落）
-  if (!originalUrl) {
-    setPreviewByIndex(targetIndex, { showLoading: false });
-    pendingNav.value = null;
-    return;
-  }
-
-  // 开始预加载（不影响当前图显示）
-  const preloadPromise = ensureOriginalPreload(target, originalUrl);
-  const waited = await waitWithTimeout(preloadPromise, NAV_PRELOAD_WAIT_MS);
-
-  // 被更新的导航请求覆盖了：直接丢弃
-  if (seq !== navSeq.value) return;
-
-  if (waited.settled) {
-    // 300ms 内预加载有结果（成功/失败）-> 无需 loading，直接切换
-    if (waited.value) {
-      setPreviewByIndex(targetIndex, { showLoading: false });
-      // 确保展示 original（setPreviewByIndex 会优先 original）
-      previewImageUrl.value = originalUrl;
-      previewNotFound.value = false;
-      previewImageLoading.value = false;
-    } else {
-      // 预加载失败：优先回落 thumbnail；否则显示 not found
-      setPreviewByIndex(targetIndex, { showLoading: false });
-      if (thumb) {
-        previewImageUrl.value = thumb;
-        previewNotFound.value = false;
-      } else {
-        previewImageUrl.value = "";
-        previewNotFound.value = true;
-      }
-      previewImageLoading.value = false;
-    }
-    pendingNav.value = null;
-    return;
-  }
-
-  // 超过 300ms 仍未出结果：切换到下一张并显示 loading；等预加载完成后再更新成原图/回落/找不到
-  setPreviewByIndex(targetIndex, { showLoading: true });
-  // 这里保持优先 originalUrl：浏览器可能仍显示旧图直到新图就绪，但 loading 会覆盖其上
-  previewImageUrl.value = originalUrl || thumb || "";
-  previewNotFound.value = false;
-  previewImageLoading.value = true;
-
-  const ok = await preloadPromise;
-  if (seq !== navSeq.value) return;
-  if (!previewVisible.value) return;
-  if (previewImage.value?.id !== target.id) return;
-
-  if (ok) {
-    previewImageUrl.value = originalUrl;
-    previewNotFound.value = false;
-    previewImageLoading.value = false;
-  } else if (thumb) {
-    previewImageUrl.value = thumb;
-    previewNotFound.value = false;
-    previewImageLoading.value = false;
-  } else {
-    previewImageUrl.value = "";
-    previewNotFound.value = true;
-    previewImageLoading.value = false;
-  }
-  // 切换图片时重置缩放（仅桌面端）
-  panzoomReset();
-  // 切换图片时重置 pager
-  if (IS_ANDROID) {
-    pagerOffset.value = 0;
-    pagerSettling.value = false;
-  }
-  pendingNav.value = null;
+  setPreviewByIndex(targetIndex);
 };
 
-const goPrev = async () => {
+const goPrev = () => {
   if (!previewVisible.value) return;
   if (isNavThrottled) return;
   const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
@@ -580,10 +393,10 @@ const goPrev = async () => {
     isNavThrottled = false;
   }, NAV_THROTTLE_MS);
 
-  await navigateWithPreloadGate(targetIndex);
+  navigateWithPreloadGate(targetIndex);
 };
 
-const goNext = async () => {
+const goNext = () => {
   if (!previewVisible.value) return;
   if (isNavThrottled) return;
   const lastIndex = props.images.length - 1;
@@ -602,7 +415,7 @@ const goNext = async () => {
     isNavThrottled = false;
   }, NAV_THROTTLE_MS);
 
-  await navigateWithPreloadGate(targetIndex);
+  navigateWithPreloadGate(targetIndex);
 };
 
 const handlePreviewDialogContextMenu = (event: MouseEvent) => {
@@ -691,13 +504,6 @@ const handlePreviewImageLoad = async () => {
     prevAvailableSize.value = { ...previewAvailableSize.value };
   }
   previewImageLoading.value = false;
-  // 当前图已就绪：预取相邻图片的原图，减少切换时 loading 闪烁
-  // 放到空闲时，避免与缩放/拖动交互抢 CPU
-  if (typeof requestIdleCallback !== "undefined") {
-    requestIdleCallback(() => prefetchAdjacent(), { timeout: 2000 });
-  } else {
-    setTimeout(() => prefetchAdjacent(), 80);
-  }
 };
 
 const handlePreviewImageError = () => {
@@ -769,7 +575,6 @@ function doAndroidPreviewCleanup() {
     longPressTimer = null;
   }
   closePreviewContextMenu();
-  releaseAllOwnedOriginalUrls();
 }
 
 const closePreview = () => {
@@ -795,8 +600,6 @@ const closePreview = () => {
   if (navThrottleTimer) clearTimeout(navThrottleTimer);
   navThrottleTimer = null;
   isNavThrottled = false;
-  releaseAllOwnedOriginalUrls();
-  pendingNav.value = null;
 };
 
 const performSwipeDelete = () => {
@@ -863,6 +666,22 @@ watch(
   (url) => {
     if (url && !IS_ANDROID) {
       setPreviewTransform(1, 0, 0);
+    }
+  }
+);
+
+// 桌面端：当 urlCache 中原图 URL 就绪时自动更新 previewImageUrl
+watch(
+  () => {
+    const id = previewImage.value?.id;
+    return id ? urlCache.imageUrlMap.value[id]?.original : undefined;
+  },
+  (newOriginal) => {
+    if (!newOriginal || !previewVisible.value || IS_ANDROID) return;
+    if (previewImageUrl.value !== newOriginal) {
+      previewImageUrl.value = newOriginal;
+      previewNotFound.value = false;
+      previewImageLoading.value = false;
     }
   }
 );
@@ -1014,12 +833,6 @@ const handlePswpChange = ({ index }: { index: number }) => {
   if (index >= 0 && index < props.images.length) {
     previewIndex.value = index;
     previewImage.value = props.images[index] ?? null;
-    // 触发预加载相邻图片
-    if (typeof requestIdleCallback !== "undefined") {
-      requestIdleCallback(() => prefetchAdjacent(), { timeout: 2000 });
-    } else {
-      setTimeout(() => prefetchAdjacent(), 80);
-    }
   }
 };
 
@@ -1064,7 +877,6 @@ onUnmounted(() => {
     resizeObserver.disconnect();
     resizeObserver = null;
   }
-  releaseAllOwnedOriginalUrls();
 });
 
 if (!IS_ANDROID) {
@@ -1082,88 +894,6 @@ if (!IS_ANDROID) {
   );
 }
 
-async function ensureOriginalReady(image: ImageInfo, opts: { seq: number; fallbackUrl?: string }) {
-  if (!image.localPath) return;
-  try {
-    const expectedId = image.id;
-    // seq === -1 表示预取：不应改变当前显示/交互状态
-    const isPrefetch = opts.seq === -1;
-    let normalizedPath = image.localPath.trimStart().replace(/^\\\\\?\\/, "").trim();
-    if (!normalizedPath) return;
-    if (!isTauri()) {
-      // 非 Tauri 环境下无法从 localPath 生成可加载 URL：对当前目标图做兜底，避免一直 loading
-      if (
-        !isPrefetch &&
-        previewVisible.value &&
-        previewImage.value?.id === expectedId &&
-        opts.seq === loadSeq.value
-      ) {
-        if (opts.fallbackUrl) {
-          previewImageUrl.value = opts.fallbackUrl;
-          previewNotFound.value = false;
-        } else {
-          previewImageUrl.value = "";
-          previewNotFound.value = true;
-        }
-        previewImageLoading.value = false;
-        panzoomReset();
-      }
-      return;
-    }
-    const url = getOrCreateOriginalUrlFor(image);
-    if (!url) return;
-    const ok = await ensureOriginalPreload(image, url);
-    if (isPrefetch) return;
-    if (previewVisible.value && previewImage.value?.id === expectedId && opts.seq === loadSeq.value) {
-      if (ok) {
-        previewImageUrl.value = url;
-        previewNotFound.value = false;
-      } else if (opts.fallbackUrl) {
-        previewImageUrl.value = opts.fallbackUrl;
-        previewNotFound.value = false;
-      } else {
-        previewImageUrl.value = "";
-        previewNotFound.value = true;
-      }
-      previewImageLoading.value = false;
-      panzoomReset();
-    }
-  } catch (error) {
-    console.error("Failed to load original image for preview:", error, image);
-    if (
-      opts.seq !== -1 &&
-      previewVisible.value &&
-      previewImage.value?.id === image.id &&
-      opts.seq === loadSeq.value
-    ) {
-      if (opts.fallbackUrl) {
-        previewImageUrl.value = opts.fallbackUrl;
-        previewImageLoading.value = false;
-        previewNotFound.value = false;
-        panzoomReset();
-      } else {
-        previewImageLoading.value = false;
-        previewImageUrl.value = "";
-        previewNotFound.value = true;
-      }
-    }
-  }
-}
-
-function prefetchAdjacent() {
-  if (!previewVisible.value) return;
-  const idx = previewIndex.value;
-  if (idx < 0) return;
-  const candidates = [idx - 1, idx + 1];
-  for (const i of candidates) {
-    const img = props.images[i];
-    if (!img) continue;
-    if (getOriginalUrlFor(img.id)) continue;
-    if (!img.localPath) continue;
-    // 预取不参与 seq（不应影响当前显示），仅填充缓存
-    void ensureOriginalReady(img, { seq: -1 });
-  }
-}
 
 const open = (index: number) => {
   if (IS_ANDROID) {

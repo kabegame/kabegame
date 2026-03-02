@@ -2595,6 +2595,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-pathes",
  "tauri-plugin-picker",
+ "tauri-plugin-share",
  "tauri-plugin-shell",
  "tokio",
  "uuid",
@@ -5428,6 +5429,16 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "tauri-plugin-dialog",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tauri-plugin-share"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
  "thiserror 2.0.18",
 ]
 

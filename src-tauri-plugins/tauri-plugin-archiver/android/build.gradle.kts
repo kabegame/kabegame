@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.plugin.archive"
+    namespace = "app.kabegame.plugin.archiver"
     compileSdk = 36
 
     defaultConfig {

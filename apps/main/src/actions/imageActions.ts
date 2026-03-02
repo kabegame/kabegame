@@ -52,7 +52,8 @@ export function createImageActions(
       label: "详情",
       icon: InfoFilled,
       command: "detail",
-      visible: (ctx) => !hideSet.has("detail"),
+      // On Android: only in "更多" submenu
+      visible: (ctx) => !hideSet.has("detail") && (!IS_ANDROID || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
     },
     {
       key: "favorite",
@@ -66,8 +67,8 @@ export function createImageActions(
       label: "分享",
       icon: Share,
       command: "share",
-      // Only show on Android and single-select
-      visible: (ctx) => !hideSet.has("share") && IS_ANDROID && (!ctx.selectedCount || ctx.selectedCount === 1),
+      // On Android: only in "更多" submenu; on desktop top-level single-select
+      visible: (ctx) => !hideSet.has("share") && (!ctx.selectedCount || ctx.selectedCount === 1) && (!IS_ANDROID || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
     },
     {
       key: "copy",
@@ -119,6 +120,20 @@ export function createImageActions(
       },
       children: IS_ANDROID
         ? [
+            {
+              key: "detail",
+              label: "详情",
+              icon: InfoFilled,
+              command: "detail",
+              visible: () => !hideSet.has("detail"),
+            },
+            {
+              key: "share",
+              label: "分享",
+              icon: Share,
+              command: "share",
+              visible: () => !hideSet.has("share"),
+            },
             {
               key: "copy",
               label: "复制图片",

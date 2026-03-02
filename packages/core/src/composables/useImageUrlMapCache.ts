@@ -10,7 +10,7 @@ type Entry = {
 };
 
 const DEFAULT_CAPACITY = 10000;
-const DEFAULT_MAX_IN_FLIGHT = 4;
+const DEFAULT_MAX_IN_FLIGHT = IS_ANDROID ? 4 : 12;
 
 function normalizePath(p: string): string {
   return (p || "")
@@ -186,11 +186,11 @@ class ImageUrlMapLruCache {
 
   /** original：asset url（同步）或 content:// 时走 blob url（异步）。返回写入后的 url（可能为空字符串）。 */
   public ensureOriginalAssetUrl(imageId: string, localPath: string | undefined | null) {
-    const raw = (localPath || "").trim();
-    if (!raw) return "";
+    const path = (localPath || "").trim();
+    if (!path) return "";
     if (!isTauri()) return "";
-    if (IS_ANDROID && raw.startsWith("content://")) {
-      void this.ensureOriginalBlobUrl(imageId, raw);
+    if (IS_ANDROID && path.startsWith("content://")) {
+      void this.ensureOriginalBlobUrl(imageId, path);
       return "";
     }
     const url = this.toAssetUrl(localPath);
