@@ -35,6 +35,8 @@ import { computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import { ElMessage } from "element-plus";
+import { IS_ANDROID } from "../../env";
+import { openImage } from "tauri-plugin-picker-api";
 
 type ImageLike = {
   url?: string;
@@ -98,7 +100,7 @@ const handleOpenUrl = async (url?: string) => {
 const handleOpenPath = async (path?: string) => {
   if (!path) return;
   try {
-    await invoke("open_file_path", { filePath: path });
+    await openImage(path);
   } catch (error) {
     console.error("打开文件失败:", error);
     ElMessage.error("打开文件失败");

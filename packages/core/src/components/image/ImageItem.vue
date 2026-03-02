@@ -61,13 +61,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
 import { WarningFilled, Download } from "@element-plus/icons-vue";
 import type { ImageInfo } from "../../types/image";
 import type { ImageClickAction } from "../../stores/settings";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import { useImageItemLoader } from "../../composables/useImageItemLoader";
+import { useImageUrlMapCache } from "../../composables/useImageUrlMapCache";
 import { IS_ANDROID } from "../../env";
 
 interface Props {
@@ -101,6 +102,86 @@ const useOriginalRef = toRef(props, "useOriginal");
 
 const rootEl = ref<HTMLElement | null>(null);
 
+// Android 缓存单例（用于按需触发 readFile）
+const cache = IS_ANDROID ? useImageUrlMapCache() : null;
+
+// Android 视口检测 + 状态机：State 0 (created) -> State 1 (in viewport, readFile) -> State 2 (loaded) / State 3 (failed)
+const isInViewport = ref(!IS_ANDROID);
+let loadTriggered = false; // 防止重复触发 readFile
+let viewportObserver: IntersectionObserver | null = null;
+
+const setupViewportObserver = () => {
+  if (!IS_ANDROID || !rootEl.value) return;
+  if (viewportObserver) return; // 已存在则不再创建
+
+  viewportObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          isInViewport.value = true;
+          viewportObserver?.disconnect();
+          viewportObserver = null;
+          break;
+        }
+      }
+    },
+    {
+      rootMargin: "300px", // 提前 300px 开始加载，保证滚动时用户看不到骨架闪烁
+      threshold: 0,
+    }
+  );
+
+  viewportObserver.observe(rootEl.value);
+};
+
+onMounted(() => {
+  setupViewportObserver();
+});
+
+// 核心状态机：当 (isInViewport=true) 且 (imageUrl 无 original) 时，触发 readFile
+watch(
+  [() => isInViewport.value, () => props.imageUrl?.original],
+  ([inVp, origUrl]) => {
+    if (!IS_ANDROID || !inVp) return;
+    if (origUrl || loadTriggered) return; // 已有 URL 或已触发过，跳过
+    loadTriggered = true;
+    void cache!.ensureForImage(props.image, true).then(() => {
+      // ensureForImage 内部已写入 imageUrlMap，imageUrl prop 会自动更新
+      // readFile 失败时 cache 不写入，需主动写失败标记以触发 isExplicitlyFailed
+      if (!cache!.imageUrlMap.value[props.image.id]?.original) {
+        cache!.imageUrlMap.value[props.image.id] = {
+          ...(cache!.imageUrlMap.value[props.image.id] || {}),
+          original: "",
+        };
+      }
+    });
+  },
+  { immediate: true }
+);
+
+// 手动刷新：当 imageUrl 从有值变回 undefined -> 重置状态，回到 State 0
+watch(
+  () => props.imageUrl,
+  (newVal, oldVal) => {
+    if (!IS_ANDROID) return;
+    // imageUrl 被清除（上层 reset cache） -> 回到 State 0，重新 observe
+    if (oldVal !== undefined && newVal === undefined) {
+      isInViewport.value = false;
+      loadTriggered = false;
+      viewportObserver = null;
+      // 重新 observe
+      nextTick(() => {
+        setupViewportObserver();
+      });
+    }
+  }
+);
+
+// 视口门控后的 imageUrl：Android 上未进入视口时返回 undefined，其他平台直接返回原值
+const effectiveImageUrl = computed(() =>
+  isInViewport.value ? props.imageUrl : undefined
+);
+
 // 虚拟滚动下挂载时已有 isEntering，若直接绑 class 浏览器可能不触发 CSS 动画；延迟一帧再加 class 以触发入场动画
 const enteringClassActive = ref(false);
 watch(
@@ -130,11 +211,12 @@ const {
   handleImageError,
 } = useImageItemLoader({
   image: imageRef,
-  imageUrl: imageUrlRef,
+  imageUrl: effectiveImageUrl,
   useOriginal: useOriginalRef,
   // 大列表"跳滚动条到中间"场景下，Blob 缩略图可能排队较久；这里提高阈值，避免误报"丢失"。
   // 真正缺失/失败会通过 localExists/isTaskFailed 更快体现。
-  missingUrlTimeoutMs: 60000,
+  // Android：State 0 未进入视口时不应启动超时，否则 60s 后误显示"图片丢失"；失败由 isExplicitlyFailed 处理。
+  missingUrlTimeoutMs: IS_ANDROID ? 0 : 60000,
 });
 
 // Android 长按检测
@@ -198,6 +280,10 @@ onUnmounted(() => {
   if (longPressTimer) {
     clearTimeout(longPressTimer);
     longPressTimer = null;
+  }
+  if (viewportObserver) {
+    viewportObserver.disconnect();
+    viewportObserver = null;
   }
 });
 

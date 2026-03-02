@@ -3,17 +3,17 @@
 //! 包含所有与 IPC 通信、daemon 服务相关的代码
 #![allow(unused)]
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 pub mod dedupe_service;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 pub mod handlers;
 
 // Re-export commonly used types from core
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 pub use dedupe_service::DedupeService;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub use handlers::{dispatch_request, Store};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
+pub use handlers::dispatch_request;
+#[cfg(not(target_os = "android"))]
 pub use kabegame_core::emitter::GlobalEmitter;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 pub use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};

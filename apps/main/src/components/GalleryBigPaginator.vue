@@ -1,24 +1,28 @@
 <template>
-    <div v-if="showPaginator" class="gallery-big-paginator" :class="{ 'is-sticky': isSticky }">
+    <div v-if="showPaginator" class="gallery-big-paginator" :class="{ 'is-sticky': isSticky, 'is-android': IS_ANDROID }">
         <div class="paginator-content">
             <button class="nav-button prev" :disabled="currentBigPage === 1" @click="handlePrevPage">
                 <el-icon>
                     <ArrowLeft />
                 </el-icon>
-                <span>上一页</span>
+                <span v-if="!IS_ANDROID">上一页</span>
             </button>
 
             <div class="paginator-info">
                 <div class="page-number">
-                    <el-input-number ref="pageInputRef" v-model="inputPage" :min="1" :max="totalBigPages" :precision="0"
-                        size="small" class="page-input-inline" @change="handleJumpToPage" />
-                    <span class="separator">/</span>
-                    <span class="total">{{ totalBigPages }}</span>
+                    <div class="part part-current">
+                        <el-input-number ref="pageInputRef" v-model="inputPage" :min="1" :max="totalBigPages" :precision="0"
+                            size="small" class="page-input-inline" @change="handleJumpToPage" />
+                    </div>
+                    <div class="paginator-diagonal" aria-hidden="true" />
+                    <div class="part part-total">
+                        <span class="total">{{ totalBigPages }}</span>
+                    </div>
                 </div>
             </div>
 
             <button class="nav-button next" :disabled="currentBigPage === totalBigPages" @click="handleNextPage">
-                <span>下一页</span>
+                <span v-if="!IS_ANDROID">下一页</span>
                 <el-icon>
                     <ArrowRight />
                 </el-icon>
@@ -30,6 +34,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
+import { IS_ANDROID } from "@kabegame/core/env";
 
 interface Props {
     totalCount: number;
@@ -194,27 +199,54 @@ const handleJumpToPage = (page: number | null | undefined) => {
 
 .page-number {
     display: flex;
-    align-items: baseline;
-    gap: 4px;
+    align-items: center;
     font-weight: 600;
     line-height: 1.2;
+    min-width: 80px;
+    border: 1px solid var(--anime-border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.6);
 
-    .separator {
-        font-size: 14px;
-        color: var(--anime-text-muted);
-        font-weight: 500;
-        opacity: 0.6;
+    .part {
+        flex: 1;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-width: 0;
+        padding: 4px 8px;
     }
 
-    .total {
+    .part-total .total {
         font-size: 14px;
         color: var(--anime-text-secondary);
         font-weight: 600;
     }
 }
 
+.paginator-diagonal {
+    flex-shrink: 0;
+    width: 20px;
+    height: 28px;
+    position: relative;
+    background: transparent;
+
+    &::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 1px;
+        height: 36px;
+        background: var(--anime-border);
+        transform: translate(-50%, -50%) rotate(-45deg);
+        opacity: 0.7;
+    }
+}
+
 .page-input-inline {
-    width: 70px;
+    min-width: 2.5em;
+    width: auto;
 
     :deep(.el-input__wrapper) {
         background: transparent;
@@ -236,7 +268,7 @@ const handleJumpToPage = (page: number | null | undefined) => {
     }
 
     :deep(.el-input__inner) {
-        text-align: right;
+        text-align: center;
         font-weight: 700;
         font-size: 18px;
         color: var(--anime-primary);
@@ -252,7 +284,7 @@ const handleJumpToPage = (page: number | null | undefined) => {
     }
 }
 
-// 响应式设计
+// 响应式设计（非 Android 小屏时：数字在上方一行，按钮在下方）
 @media (max-width: 768px) {
     .paginator-content {
         flex-wrap: wrap;
@@ -271,6 +303,29 @@ const handleJumpToPage = (page: number | null | undefined) => {
     .nav-button {
         flex: 1;
         min-width: 100px;
+    }
+}
+
+// Android：上一页/下一页箭头与分页数字同一行，不换行
+.gallery-big-paginator.is-android {
+    .paginator-content {
+        flex-wrap: nowrap;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    .paginator-info {
+        order: 0;
+        width: auto;
+        flex: 1;
+        min-width: 0;
+        padding: 0 4px;
+    }
+
+    .nav-button {
+        flex: none;
+        min-width: 0;
+        padding: 6px 10px;
     }
 }
 </style>

@@ -1,4 +1,4 @@
-const COMMANDS: &[&str] = &["pickFolder", "pickImages", "pickKgpgFile", "extractBundledPlugins"];
+const COMMANDS: &[&str] = &["pickFolder", "pickImages", "pickKgpgFile", "extractBundledPlugins", "openImage"];
 
 fn main() {
   tauri_plugin::Builder::new(COMMANDS)

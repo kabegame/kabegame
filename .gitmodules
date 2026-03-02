@@ -1,3 +1,6 @@
 [submodule "src-crawler-plugins"]
 	path = src-crawler-plugins
 	url = https://github.com/kabegame/crawler-plugins.git
+[submodule "packages/photoswipe-vue"]
+	path = packages/photoswipe-vue
+	url = git@github.com:cmtheit/PhotoSwipe-vue.git

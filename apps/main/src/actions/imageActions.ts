@@ -82,8 +82,7 @@ export function createImageActions(
       label: "仔细欣赏",
       icon: FolderOpened,
       command: "open",
-      // Hide on Android
-      visible: (ctx) => !hideSet.has("open") && !IS_ANDROID && (!ctx.selectedCount || ctx.selectedCount === 1),
+      visible: (ctx) => !hideSet.has("open") && (!ctx.selectedCount || ctx.selectedCount === 1),
     },
     {
       key: "openFolder",

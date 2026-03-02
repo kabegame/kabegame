@@ -273,6 +273,34 @@ export function useImageUrlLoader<
   let deferredVisibleLoadScheduled = false;
 
   const loadSingleImageUrl = async (image: TImage, needOriginal: boolean) => {
+    // Android：简化流程，只加载原图，不重试
+    if (IS_ANDROID) {
+      const existing = imageSrcMap.value[image.id] || {};
+      const hasOrig =
+        !!existing.original ||
+        loadedOriginalIds.has(image.id) ||
+        inFlightOriginalIds.has(image.id);
+      if (hasOrig) return;
+
+      inFlightOriginalIds.add(image.id);
+      try {
+        const url = await cache.ensureOriginalBlobUrl(image.id, image.localPath);
+        if (!imageIdSet.has(image.id)) return;
+        loadedOriginalIds.add(image.id);
+        if (!url) {
+          // 显式标记失败，让 ImageItem 立即显示"走丢了"
+          imageSrcMap.value[image.id] = {
+            ...(imageSrcMap.value[image.id] || {}),
+            original: "",
+          };
+        }
+      } finally {
+        inFlightOriginalIds.delete(image.id);
+      }
+      return;
+    }
+
+    // 非 Android：保留原有逻辑（缩略图/原图双路径、重试等）
     const existing = imageSrcMap.value[image.id] || {};
     const hasThumb =
       !!existing.thumbnail ||
@@ -283,8 +311,7 @@ export function useImageUrlLoader<
       loadedOriginalIds.has(image.id) ||
       inFlightOriginalIds.has(image.id);
 
-    // Android：不生成预览图，只加载原图
-    if (!IS_ANDROID && !hasThumb) {
+    if (!hasThumb) {
       inFlightThumbnailIds.add(image.id);
       try {
         const thumbPath = pickThumbnailPath(image);
@@ -309,9 +336,7 @@ export function useImageUrlLoader<
       inFlightOriginalIds.add(image.id);
       try {
         let origUrl = "";
-        if (IS_ANDROID && (image.localPath || "").startsWith("content://")) {
-          origUrl = await cache.ensureOriginalBlobUrl(image.id, image.localPath);
-        } else if (image.localPath) {
+        if (image.localPath) {
           origUrl = cache.ensureOriginalAssetUrl(image.id, image.localPath);
         }
         if (!imageIdSet.has(image.id)) return;
@@ -329,6 +354,11 @@ export function useImageUrlLoader<
   };
 
   const loadImageUrls = async (targetImages?: TImage[]) => {
+    // Android：加载由 ImageItem 的 IntersectionObserver 按需触发，这里不再批量排队
+    if (IS_ANDROID) {
+      return;
+    }
+
     // 强交互期间：不要直接开加载任务（避免抢占滚动帧率），但也不能“静默丢掉触发”，
     // 否则会出现“高速滚动停住后仍是骨架，需要再滚一下才加载”的体验。
     // 做法：合并成一个“交互结束后立刻补一次”的延后任务。
@@ -343,9 +373,12 @@ export function useImageUrlLoader<
       return;
     }
 
+
+    // 非 Android：保留原有复杂逻辑（交互延迟、可见区估算等）
+    const needOriginal = preferOriginalInGrid.value;
+    const needOrig = needOriginal || IS_ANDROID;
+
     const range = estimateVisibleIndexRange();
-    // 关键：避免在“一次性塞入 10k 图片”时把全量图片纳入本次扫描/队列。
-    // 这种场景的用户预期是“当前视口先出图”，而不是后台把 10k 全部排队导致视口饿死。
     const MAX_TARGET_SCAN = 2000;
     const source =
       targetImages && targetImages.length > MAX_TARGET_SCAN
@@ -353,8 +386,6 @@ export function useImageUrlLoader<
         : targetImages ?? params.imagesRef.value.slice(range.start, range.end);
     const visibleSet = new Set(range.visibleIds);
 
-    const needOriginal = preferOriginalInGrid.value;
-    const needOrig = needOriginal || IS_ANDROID;
     const imagesToLoad = source.filter((img) => {
       const existing = imageSrcMap.value[img.id];
       const hasThumb =
@@ -372,7 +403,7 @@ export function useImageUrlLoader<
 
     if (imagesToLoad.length === 0) return;
 
-    // 可见图片优先
+    // 可见图片优先排序
     imagesToLoad.sort((a, b) => {
       const av = visibleSet.has(a.id) ? 0 : 1;
       const bv = visibleSet.has(b.id) ? 0 : 1;
@@ -381,11 +412,11 @@ export function useImageUrlLoader<
     });
 
     const visibleConcurrency = params.isInteracting?.value ? 1 : 8;
-    const likelyVisible = targetImages
+    const toRun = targetImages
       ? imagesToLoad.filter((img) => visibleSet.has(img.id))
       : imagesToLoad;
-    if (likelyVisible.length > 0) {
-      void runPool(likelyVisible, visibleConcurrency, async (img) => {
+    if (toRun.length > 0) {
+      void runPool(toRun, visibleConcurrency, async (img) => {
         await loadSingleImageUrl(img, needOriginal);
       });
     }

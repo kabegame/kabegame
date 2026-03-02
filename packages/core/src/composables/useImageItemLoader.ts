@@ -91,6 +91,14 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
     return img.isTaskFailed || img.localExists === false;
   });
 
+  // Android：检测显式失败（imageUrl 已定义但 original 和 thumbnail 都为空）
+  const isExplicitlyFailed = computed(() => {
+    if (!IS_ANDROID) return false;
+    const url = options.imageUrl.value;
+    if (url === undefined) return false; // 未开始加载
+    return !url.original && !url.thumbnail; // 已加载但都为空 → 失败
+  });
+
   // 当前尝试加载的 URL（永远不为 "" 才会渲染 <img>，避免出现破裂图）
   const attemptUrl = ref<string>("");
 
@@ -133,12 +141,13 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
   // 用于"asset -> blob" warmup 的取消/去抖
   const warmSeq = ref(0);
   watch(
-    [() => computedDisplayUrl.value, () => isKnownUnavailable.value],
-    ([newUrl, knownUnavailable], [, oldKnownUnavailable]) => {
+    [() => computedDisplayUrl.value, () => isKnownUnavailable.value, () => isExplicitlyFailed.value],
+    ([newUrl, knownUnavailable, explicitlyFailed], [, oldKnownUnavailable, oldExplicitlyFailed]) => {
       // 仅"不可用状态变化"时也需要更新（例如加载中任务变失败）
       const urlChanged = newUrl !== previousUrl;
       const unavailableChanged = knownUnavailable !== oldKnownUnavailable;
-      if (!urlChanged && !unavailableChanged) return;
+      const failedChanged = explicitlyFailed !== oldExplicitlyFailed;
+      if (!urlChanged && !unavailableChanged && !failedChanged) return;
 
       const nextUrl = newUrl || "";
       previousUrl = newUrl;
@@ -146,6 +155,14 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
       handledErrorForUrl.value = null;
       isLost.value = false;
       clearMissingUrlTimer();
+
+      // Android 显式失败 → 立即显示"走丢了"
+      if (explicitlyFailed) {
+        attemptUrl.value = "";
+        isLost.value = true;
+        isImageLoading.value = false;
+        return;
+      }
 
       if (nextUrl) {
         isImageLoading.value = true;

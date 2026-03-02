@@ -131,6 +131,7 @@ import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { useImageTypes } from "@/composables/useImageTypes";
+import { openLocalImage } from "@/utils/openLocalImage";
 
 const route = useRoute();
 const router = useRouter();
@@ -721,8 +722,13 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       }
       break;
     case "open":
-      if (!isMultiSelect) {
-        await invoke("open_file_path", { filePath: image.localPath });
+      if (!isMultiSelect && image.localPath) {
+        try {
+          await openLocalImage(image.localPath);
+        } catch (error) {
+          console.error("打开文件失败:", error);
+          ElMessage.error("打开文件失败");
+        }
       }
       break;
     case "openFolder":

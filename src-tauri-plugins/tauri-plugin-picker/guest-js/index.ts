@@ -34,3 +34,11 @@ export async function pickKgpgFile(): Promise<string | null> {
   const result = await invoke<{ path: string }>('plugin:picker|pickKgpgFile')
   return result?.path ?? null
 }
+
+/**
+ * 使用系统默认图片查看器打开指定 URI 的图片。
+ * 仅 Android：传入 content:// 或 file:// URI，会带上 FLAG_GRANT_READ_URI_PERMISSION。
+ */
+export async function openImage(uri: string): Promise<void> {
+  await invoke('plugin:picker|openImage', { uri })
+}

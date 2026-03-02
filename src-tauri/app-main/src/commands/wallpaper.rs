@@ -26,49 +26,6 @@ pub async fn get_current_wallpaper_path_from_settings(
     }
 }
 
-/// 启动时初始化"当前壁纸"并按规则回退/降级
-///
-/// 规则（按用户需求）：
-/// - 非轮播：尝试设置 currentWallpaperImageId；失败则清空并停止
-/// - 轮播：优先在轮播源中找到 currentWallpaperImageId；找不到则回退到轮播源的一张；源无可用则画册->画廊->关闭轮播并清空
-pub async fn init_wallpaper_on_startup() -> Result<(), String> {
-    use std::path::Path;
-
-    let controller = WallpaperController::global();
-    // 启动时只"尝试还原 currentWallpaperImageId"，不在客户端做大规模选图/回退，
-    // 回退与轮播逻辑由 rotator 负责（避免客户端依赖 Storage/Settings）。
-    let settings = Settings::global();
-    let (style_result, id_result) = tokio::join!(
-        settings.get_wallpaper_rotation_style(),
-        settings.get_current_wallpaper_image_id()
-    );
-
-    let style = style_result.unwrap_or_else(|_| "fill".to_string());
-    let Some(id) = id_result.ok().flatten() else {
-        return Ok(());
-    };
-
-    let img_v = Storage::global()
-        .find_image_by_id(&id)
-        .map_err(|e| format!("Storage error: {}", e))?;
-
-    let Some(img_info) = img_v else {
-        let _ = settings.set_current_wallpaper_image_id(None).await;
-        return Ok(());
-    };
-    let path = img_info.local_path;
-
-    if !Path::new(&path).exists() {
-        let _ = settings.set_current_wallpaper_image_id(None).await;
-        return Ok(());
-    }
-
-    if controller.set_wallpaper(&path, &style).await.is_err() as bool {
-        let _ = settings.set_current_wallpaper_image_id(None).await;
-    }
-
-    Ok(())
-}
 
 #[tauri::command]
 pub async fn set_wallpaper(file_path: String) -> Result<(), String> {

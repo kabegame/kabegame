@@ -8,6 +8,7 @@ import { useImageUrlMapCache } from "@kabegame/core/composables/useImageUrlMapCa
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_MACOS } from "@kabegame/core/env";
+import { openLocalImage } from "@/utils/openLocalImage";
 
 export type FavoriteStatusChangedDetail = {
   imageIds: string[];
@@ -56,10 +57,10 @@ export function useImageOperations(
     ) as unknown as ArrayBuffer;
   };
 
-  // 打开文件路径
+  // 打开文件路径（Android 用系统图片查看器 openImage，桌面用 open_file_path）
   const handleOpenImagePath = async (localPath: string) => {
     try {
-      await invoke("open_file_path", { filePath: localPath });
+      await openLocalImage(localPath);
     } catch (error) {
       console.error("打开文件失败:", error);
       ElMessage.error("打开文件失败");

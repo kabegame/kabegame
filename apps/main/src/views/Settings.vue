@@ -118,7 +118,7 @@
                 <GalleryImageAspectRatioSetting />
               </SettingRow>
 
-              <SettingRow label="清理应用数据" description="将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启">
+              <SettingRow v-if="!IS_ANDROID" label="清理应用数据" description="将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启">
                 <ClearUserDataSetting />
               </SettingRow>
 

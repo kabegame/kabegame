@@ -133,6 +133,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       const { listen } = await import("@tauri-apps/api/event");
 
       await listen("task-status", async (event) => {
+        console.log("task-status", event);
         const payload: any = event.payload as any;
         const taskId = String(payload?.task_id ?? "").trim();
         if (!taskId) return;

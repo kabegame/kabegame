@@ -89,20 +89,20 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
 
     @InvokeArg
     class ExtractBundledPluginsArgs {
-        var target_dir: String = ""
+        var targetDir: String = ""
     }
 
     @Command
     fun extractBundledPlugins(invoke: Invoke) {
         val args = invoke.parseArgs(ExtractBundledPluginsArgs::class.java)
-        Log.i("PickerPlugin", "extractBundledPlugins: ${args.target_dir}")
+        Log.i("PickerPlugin", "extractBundledPlugins: ${args.targetDir}")
         try {
-            val targetDirectory = File(args.target_dir)
+            val targetDirectory = File(args.targetDir)
             if (!targetDirectory.exists()) {
                 targetDirectory.mkdirs()
             }
             if (!targetDirectory.isDirectory) {
-                invoke.reject("目标路径不是目录: ${args.target_dir}")
+                invoke.reject("目标路径不是目录: ${args.targetDir}")
                 return
             }
             val assetManager = activity.assets
@@ -314,7 +314,6 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun getImageDimensions(invoke: Invoke) {
-        Log.i("PickerPlugin", "getImageDimensions")
         val args = invoke.parseArgs(GetImageDimensionsArgs::class.java)
         val uriStr = args.uri
         if (uriStr.isBlank()) {
@@ -323,8 +322,6 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
         }
         try {
             val uri = Uri.parse(uriStr)
-            // log
-            Log.i("PickerPlugin", "getImageDimensions: $uriStr")
             if (uri.scheme != "content") {
                 invoke.reject("仅支持 content:// URI")
                 return
@@ -332,30 +329,37 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
             
             var width: Int? = null
             var height: Int? = null
-            
-            // 优先尝试从 MediaStore 获取
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+
+            // Photo Picker 的 content URI 不支持查询 WIDTH/HEIGHT 列，会抛 Unexpected picker URI projection，直接走 BitmapFactory
+            val isPhotoPickerUri = uri.authority?.contains("photopicker") == true
+
+            // 优先尝试从 MediaStore 获取（仅非 Photo Picker URI）
+            if (!isPhotoPickerUri && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val projection = arrayOf(
                     MediaStore.Images.Media.WIDTH,
                     MediaStore.Images.Media.HEIGHT
                 )
-                activity.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val widthIndex = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
-                        val heightIndex = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
-                        if (widthIndex >= 0 && heightIndex >= 0) {
-                            width = cursor.getInt(widthIndex)
-                            height = cursor.getInt(heightIndex)
-                            // MediaStore 可能返回 0，需要回退到 BitmapFactory
-                            if (width == 0 || height == 0) {
-                                width = null
-                                height = null
+                try {
+                    activity.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val widthIndex = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
+                            val heightIndex = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+                            if (widthIndex >= 0 && heightIndex >= 0) {
+                                width = cursor.getInt(widthIndex)
+                                height = cursor.getInt(heightIndex)
+                                // MediaStore 可能返回 0，需要回退到 BitmapFactory
+                                if (width == 0 || height == 0) {
+                                    width = null
+                                    height = null
+                                }
                             }
                         }
                     }
+                } catch (_: Exception) {
+                    // 部分 content provider 不支持该 projection，忽略后走 BitmapFactory
                 }
             }
-            
+
             // 如果 MediaStore 没有结果，使用 BitmapFactory
             if (width == null || height == null) {
                 try {
@@ -419,6 +423,38 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
         } catch (e: Exception) {
             Log.e("PickerPlugin", "readFileBytes failed", e)
             invoke.reject("读取 content URI 失败: ${e.message}", e)
+        }
+    }
+
+    @InvokeArg
+    class OpenImageArgs {
+        var uri: String = ""
+    }
+
+    /**
+     * 使用系统默认图片查看器打开指定 content:// 或 file URI 的图片。
+     */
+    @Command
+    fun openImage(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenImageArgs::class.java)
+        val uriStr = args.uri
+        if (uriStr.isBlank()) {
+            invoke.reject("uri 不能为空")
+            return
+        }
+        try {
+            val uri = Uri.parse(uriStr)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "image/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            activity.startActivity(intent)
+            invoke.resolve(JSObject())
+        } catch (e: android.content.ActivityNotFoundException) {
+            invoke.reject("没有可打开图片的应用")
+        } catch (e: Exception) {
+            Log.e("PickerPlugin", "openImage failed", e)
+            invoke.reject("打开图片失败: ${e.message}", e)
         }
     }
 

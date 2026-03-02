@@ -27,7 +27,7 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ipc::dedupe_service::DedupeService;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::ipc::handlers::{dispatch_request, Store};
+use crate::ipc::handlers::dispatch_request;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use kabegame_core::ipc::events::{DaemonEvent, DaemonEventKind};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -43,24 +43,19 @@ use kabegame_core::{
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::VirtualDriveService;
 
-/// 初始化全局状态，并返回 Context（仅桌面端）
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn init_globals(app_handle: tauri::AppHandle) -> Result<Arc<Store>, String> {
+/// 统一初始化全局状态（安卓与桌面共用主流程，桌面端多出 DedupeService/VD 等用 cfg 收束）
+fn init_globals() -> Result<(), String> {
     println!("Kabegame v{} bootstrap...", env!("CARGO_PKG_VERSION"));
     println!("Initializing Globals...");
 
     Settings::init_global().map_err(|e| format!("Failed to initialize settings: {}", e))?;
     println!("  ✓ Settings initialized");
 
-    // 初始化全局 PluginManager
     PluginManager::init_global()
         .map_err(|e| format!("Failed to initialize plugin manager: {}", e))?;
     println!("  ✓ Plugin manager initialized");
 
-    // 初始化全局 Storage
     Storage::init_global().map_err(|e| format!("Failed to initialize storage: {}", e))?;
-
-    // 将 pending 或 running 的任务标记为失败
     let failed_count = Storage::global()
         .mark_pending_running_tasks_as_failed()
         .unwrap_or(0);
@@ -69,54 +64,30 @@ fn init_globals(app_handle: tauri::AppHandle) -> Result<Arc<Store>, String> {
     }
     println!("  ✓ Storage initialized");
 
-    // 初始化全局事件广播器（保留最近 1000 个事件）
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        EventBroadcaster::init_global(1000)
-            .map_err(|e| format!("Failed to initialize event broadcaster: {}", e))?;
-        println!("  ✓ Event broadcaster initialized");
-
-        // 初始化全局订阅管理器
-        SubscriptionManager::init_global()
-            .map_err(|e| format!("Failed to initialize subscription manager: {}", e))?;
-        println!("  ✓ Subscription manager initialized");
-    }
-
-    // 初始化全局 emitter（仅桌面端）
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        kabegame_core::emitter::GlobalEmitter::init_global()
-            .map_err(|e| format!("Failed to initialize global emitter: {}", e))?;
-        println!("  ✓ Global emitter initialized");
-    }
+    kabegame_core::ipc::server::EventBroadcaster::init_global(1000)
+        .map_err(|e| format!("EventBroadcaster: {}", e))?;
+    kabegame_core::ipc::server::SubscriptionManager::init_global()
+        .map_err(|e| format!("SubscriptionManager: {}", e))?;
+    kabegame_core::emitter::GlobalEmitter::init_global()
+        .map_err(|e| format!("GlobalEmitter: {}", e))?;
+    println!("  ✓ Event broadcaster and emitter initialized");
 
     println!("  ✓ Runtime initialized");
 
     let download_queue = Arc::new(DownloadQueue::new());
     println!("  ✓ DownloadQueue initialized");
 
-    // TaskScheduler：负责处理 PluginRun 的任务队列（全局单例）
     TaskScheduler::init_global(download_queue.clone())
         .map_err(|e| format!("Failed to initialize task scheduler: {}", e))?;
     println!("  ✓ TaskScheduler initialized");
 
-    // 创建请求上下文（仅桌面端）
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let dedupe_service = Arc::new(DedupeService::new());
-
-    // 初始化全局 ProviderRuntime
     {
         let mut cfg = ProviderCacheConfig::default();
         if let Ok(dir) = std::env::var("KABEGAME_PROVIDER_DB_DIR") {
             cfg.db_dir = std::path::PathBuf::from(dir);
         }
-
-        // 尝试初始化 ProviderRuntime
-        // 注意：这里仍然有锁检查逻辑，但因为是内嵌，通常我们是唯一的实例。
-        // 如果有其他实例（如旧版 daemon）运行，这里会报错，这是预期的。
         if let Err(e) = ProviderRuntime::init_global(cfg.clone()) {
             eprintln!("[providers] Init failed: {}", e);
-            // 尝试 fallback
             if let Err(e2) = ProviderRuntime::init_global(ProviderCacheConfig::default()) {
                 return Err(format!("ProviderRuntime init failed: {}", e2));
             }
@@ -124,121 +95,55 @@ fn init_globals(app_handle: tauri::AppHandle) -> Result<Arc<Store>, String> {
     }
     println!("  ✓ ProviderRuntime initialized");
 
-    // Virtual Driver
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    VirtualDriveService::init_global().map_err(|e| format!("Failed to init VD service: {}", e))?;
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    let virtual_drive_service = VirtualDriveService::global();
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    println!("  ✓ Virtual drive support enabled");
+    // 桌面端：DedupeService、VD 等全局单例
+    #[cfg(not(target_os = "android"))]
+    {
+        DedupeService::init_global(Arc::new(DedupeService::new()))?;
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let ctx = Arc::new(Store {
-        dedupe_service,
         #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-        virtual_drive_service: virtual_drive_service.clone(),
-        app_handle: Arc::new(tokio::sync::RwLock::new(Some(app_handle))),
-    });
+        {
+            VirtualDriveService::init_global().map_err(|e| format!("Failed to init VD service: {}", e))?;
+            let virtual_drive_service = VirtualDriveService::global();
+            println!("  ✓ Virtual drive support enabled");
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    Store::init_global(ctx.clone())?;
+            #[cfg(target_os = "windows")]
+            tauri::async_runtime::spawn({
+                vd_listener::start_vd_event_listener(virtual_drive_service.clone());
+                println!("  ✓ Virtual drive event listener started");
+            });
 
-    // 启动虚拟磁盘事件监听器（仅在 非 light 且非 Android）
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    {
-        #[cfg(target_os = "windows")]
-        tauri::async_runtime::spawn({
-            vd_listener::start_vd_event_listener(virtual_drive_service.clone());
-            println!("  ✓ Virtual drive event listener started");
-        });
-
-        // 启动时根据设置自动挂载画册盘
-        let vd_service_for_mount = virtual_drive_service.clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-            let enabled = Settings::global()
-                .get_album_drive_enabled()
-                .await
-                .unwrap_or(false);
-            let mount_point = Settings::global()
-                .get_album_drive_mount_point()
-                .await
-                .unwrap_or_default();
-
-            if enabled && !mount_point.is_empty() {
-                use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-                let mount_result = tokio::task::spawn_blocking({
-                    let vd_service = vd_service_for_mount.clone();
-                    let mount_point = mount_point.clone();
-                    move || vd_service.mount(mount_point.as_str())
-                })
-                .await;
-
-                if let Err(e) = mount_result {
-                    eprintln!("Auto mount failed: {}", e);
-                } else if let Ok(Err(e)) = mount_result {
-                    eprintln!("Auto mount failed: {}", e);
+            let vd_service_for_mount = virtual_drive_service.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                let enabled = Settings::global()
+                    .get_album_drive_enabled()
+                    .await
+                    .unwrap_or(false);
+                let mount_point = Settings::global()
+                    .get_album_drive_mount_point()
+                    .await
+                    .unwrap_or_default();
+                if enabled && !mount_point.is_empty() {
+                    use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
+                    let mount_result = tokio::task::spawn_blocking({
+                        let vd_service = vd_service_for_mount.clone();
+                        let mount_point = mount_point.clone();
+                        move || vd_service.mount(mount_point.as_str())
+                    })
+                    .await;
+                    if let Err(e) = mount_result {
+                        eprintln!("Auto mount failed: {}", e);
+                    } else if let Ok(Err(e)) = mount_result {
+                        eprintln!("Auto mount failed: {}", e);
+                    }
                 }
-            }
-        });
-    }
-
-    Ok(ctx)
-}
-
-/// 初始化全局状态（Android/iOS 简化版本）
-#[cfg(any(target_os = "android", target_os = "ios"))]
-fn init_globals_mobile(app_handle: tauri::AppHandle) -> Result<(), String> {
-    println!("Kabegame v{} bootstrap...", env!("CARGO_PKG_VERSION"));
-    println!("Initializing Globals...");
-
-    Settings::init_global().map_err(|e| format!("Failed to initialize settings: {}", e))?;
-    println!("  ✓ Settings initialized");
-
-    // 初始化全局 PluginManager
-    PluginManager::init_global()
-        .map_err(|e| format!("Failed to initialize plugin manager: {}", e))?;
-    println!("  ✓ Plugin manager initialized");
-
-    // 初始化全局 Storage
-    Storage::init_global().map_err(|e| format!("Failed to initialize storage: {}", e))?;
-
-    // 将 pending 或 running 的任务标记为失败
-    let failed_count = Storage::global()
-        .mark_pending_running_tasks_as_failed()
-        .unwrap_or(0);
-    if failed_count > 0 {
-        println!("  ✓ Marked {failed_count} pending/running task(s) as failed");
-    }
-    println!("  ✓ Storage initialized");
-
-    println!("  ✓ Runtime initialized");
-
-    let download_queue = Arc::new(DownloadQueue::new());
-    println!("  ✓ DownloadQueue initialized");
-
-    // TaskScheduler：负责处理 PluginRun 的任务队列（全局单例）
-    TaskScheduler::init_global(download_queue.clone())
-        .map_err(|e| format!("Failed to initialize task scheduler: {}", e))?;
-    println!("  ✓ TaskScheduler initialized");
-
-    // 初始化全局 ProviderRuntime
-    {
-        let mut cfg = ProviderCacheConfig::default();
-        if let Ok(dir) = std::env::var("KABEGAME_PROVIDER_DB_DIR") {
-            cfg.db_dir = std::path::PathBuf::from(dir);
+            });
         }
 
-        if let Err(e) = ProviderRuntime::init_global(cfg.clone()) {
-            eprintln!("[providers] Init failed: {}", e);
-            if let Err(e2) = ProviderRuntime::init_global(ProviderCacheConfig::default()) {
-                return Err(format!("ProviderRuntime init failed: {}", e2));
-            }
-        }
+        return Ok(());
     }
-    println!("  ✓ ProviderRuntime initialized");
 
+    #[cfg(target_os = "android")]
     Ok(())
 }
 
@@ -269,26 +174,7 @@ fn init_share_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
-#[cfg(target_os = "android")]
-fn spawn_extract_bundled_plugins<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
-    use tauri_plugin_picker::PickerExt;
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        let builtin_dir = kabegame_core::app_paths::AppPaths::global().builtin_plugins_dir();
-        if let Err(e) = std::fs::create_dir_all(&builtin_dir) {
-            eprintln!("Failed to create builtin-plugins directory: {}", e);
-            return;
-        }
-        let target_dir = builtin_dir.to_string_lossy().to_string();
-        let picker = app.picker();
-        match picker.extract_bundled_plugins(target_dir).await {
-            Ok(r) => println!("Extracted {} bundled plugins to {}", r.count, builtin_dir.display()),
-            Err(e) => eprintln!("Failed to extract bundled plugins: {}", e),
-        }
-    });
-}
-
-/// Tauri 应用入口（桌面 binary 与 Android/iOS 共用）
+/// Tauri 应用入口（桌面 binary 与 Android 共用）
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 先注册 pathes，在 .setup() 前完成 AppPaths 初始化，供 Settings/Storage 等使用
@@ -307,94 +193,79 @@ pub fn run() {
         builder = builder.plugin(init_share_plugin());
     }
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(not(target_os = "android"))]
     {
         builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
     }
 
-    #[cfg(target_os = "ios")]
-    {
-        builder = builder.plugin(tauri_plugin_picker::init());
-    }
-
     let app = builder
         .setup(|app| {
-            init_app_paths(app.app_handle());
-
-            // Paths are initialized by tauri-plugin-pathes in its setup hook
-
             // 设置全局快捷键
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            #[cfg(not(target_os = "android"))]
             init_shortcut(app).unwrap();
 
-            // 启动内置 Backend
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            match init_globals(app.app_handle().clone()) {
-                Ok(ctx) => {
-                    // 启动本地事件转发
+            // 启动内置 Backend（安卓与桌面共用 init_globals，用编译开关区分平台差异）
+            match init_globals() {
+                Ok(()) => {
+                    // 公共步骤
                     start_local_event_loop(app.app_handle().clone());
                     // 清理用户数据
+                    #[cfg(not(target_os = "android"))]
                     cleanup_user_data_if_marked();
                     // 恢复窗口状态（当前实现仅将窗口居屏幕中央）
+                    #[cfg(not(target_os = "android"))]
                     restore_main_window_state(app.app_handle());
                     // 初始化壁纸控制器
                     init_wallpaper_controller(app);
                     // 启动 TaskScheduler（启动 DownloadQueue 的 worker）
                     start_task_scheduler();
-                    // 初始化download worker的并发数
+                    // 初始化download worker
                     init_download_workers();
-                    // 初始化任务阻塞worker
+                    // 初始化任务阻塞worker线程池
                     start_download_workers();
                     // 启动事件转发任务
                     start_event_forward_task();
-                    // 初始化插件
-                    init_plugin();
 
-                    // 后台补齐缺失的图片宽高数据
-                    tauri::async_runtime::spawn(async {
-                        if let Err(e) = kabegame_core::storage::Storage::global().fill_missing_dimensions() {
-                            eprintln!("Failed to fill missing image dimensions: {}", e);
-                        }
-                    });
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        tauri::async_runtime::spawn(async {
+                            if let Err(e) =
+                                kabegame_core::storage::Storage::global().fill_missing_dimensions()
+                            {
+                                eprintln!("Failed to fill missing image dimensions: {}", e);
+                            }
+                        });
+                        startup::start_ipc_server(app.app_handle().clone());
+                    }
 
-                    // 启动 IPC Server（Android 不启用以避免虚拟盘等依赖）
-                    startup::start_ipc_server(ctx, app.app_handle().clone());
-                }
-                Err(e) => {
-                    utils::show_error(app.app_handle(), format!("出现了致命错误！: {}", e));
-                    eprintln!("出现了致命错误！:{}", e);
-                    process::exit(1);
-                }
-            }
-            #[cfg(target_os = "android")]
-            {
-                // Android/iOS 平台：简化初始化流程
-                match init_globals_mobile(app.app_handle().clone()) {
-                    Ok(_) => {
-                        init_wallpaper_controller(app);
-                        start_task_scheduler();
-                        init_download_workers();
-                        start_download_workers();
-                        init_plugin();
-                        spawn_extract_bundled_plugins(app.app_handle().clone());
+                    #[cfg(target_os = "android")]
+                    {
+                        // 将内置插件提取到用户目录
+                        init_bundled_plugins(app.app_handle().clone());
                         let provider =
                             content_io_provider::PickerContentIoProvider::new(app.app_handle().clone());
-                        let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
+                        let proxy =
+                            content_io_provider::ChannelContentIoProvider::new(provider);
+                        // 设置内容IO提供者
                         kabegame_core::crawler::content_io::set_content_io_provider(Box::new(proxy));
-                        
-                        // 注册 ArchiveExtractProvider
+                        // 设置归档提取提供者
                         let archiver_provider =
                             archiver_provider::ArchiverContentProvider::new(app.app_handle().clone());
-                        let archiver_proxy = archiver_provider::ChannelArchiveExtractProvider::new(archiver_provider);
-                        kabegame_core::crawler::archiver::set_archive_extract_provider(Box::new(archiver_proxy));
-                        
-                        // Android 下图片宽高由前端通过 img 元素获取并回写，不在此批量补齐
+                        let archiver_proxy =
+                            archiver_provider::ChannelArchiveExtractProvider::new(archiver_provider);
+                        kabegame_core::crawler::archiver::set_archive_extract_provider(Box::new(
+                            archiver_proxy,
+                        ));
                     }
-                    Err(e) => {
-                        utils::show_error(app.app_handle(), format!("出现了致命错误！: {}", e));
-                        eprintln!("出现了致命错误！:{}", e);
-                        process::exit(1);
-                    }
+
+                    // 初始化插件
+                    init_kgpg_plugin();
+
+                }
+                Err(e) => {
+                    utils::show_error(app.app_handle(), format!("初始化过程中出现了致命错误！: {}", e));
+                    eprintln!("初始化过程中出现了致命错误！:{}", e);
+                    process::exit(1);
                 }
             }
             Ok(())
@@ -554,9 +425,9 @@ pub fn run() {
             get_file_drop_kinds,
             get_supported_image_types,
             set_supported_image_formats,
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            #[cfg(not(target_os = "android"))]
             start_dedupe_gallery_by_hash_batched,
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            #[cfg(not(target_os = "android"))]
             cancel_dedupe_gallery_by_hash_batched,
             // --- Share (Android) ---
             #[cfg(target_os = "android")]

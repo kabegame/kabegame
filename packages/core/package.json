@@ -1,12 +1,13 @@
 {
-  "name": "@kabegame/core",
-  "version": "3.0.4",
-  "private": true,
-  "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
-  "dependencies": {
-    "@panzoom/panzoom": "^4.6.1",
-    "photoswipe": "^5.4.4"
-  }
+    "name": "@kabegame/core",
+    "version": "3.0.4",
+    "private": true,
+    "type": "module",
+    "main": "./src/index.ts",
+    "types": "./src/index.ts",
+    "dependencies": {
+        "@panzoom/panzoom": "^4.6.1",
+        "photoswipe-vue": "workspace:*",
+        "tauri-plugin-picker-api": "workspace:*"
+    }
 }

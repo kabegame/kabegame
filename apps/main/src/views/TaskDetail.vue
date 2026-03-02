@@ -19,7 +19,7 @@
                         </el-icon>
                         <span style="margin-left: 4px;">刷新</span>
                     </el-button>
-                    <el-button v-if="shouldShowStopButton" type="warning" @click="handleStopTask">
+                    <el-button v-if="showStopButtonDirect" type="warning" @click="handleStopTask">
                         <el-icon>
                             <VideoPause />
                         </el-icon>
@@ -41,6 +41,10 @@
                             </el-button>
                             <template #dropdown>
                                 <el-dropdown-menu>
+                                    <el-dropdown-item v-if="showStopTaskInFoldedMenu" command="stopTask">
+                                        <el-icon><VideoPause /></el-icon>
+                                        <span style="margin-left: 6px;">停止任务</span>
+                                    </el-dropdown-item>
                                     <el-dropdown-item command="deleteTask">
                                         <el-icon><Delete /></el-icon>
                                         <span style="margin-left: 6px;">删除任务</span>
@@ -117,8 +121,9 @@ import { useBigPageRoute } from "@/composables/useBigPageRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID } from "@kabegame/core/env";
-import { hasFeatureInPage } from "@/header/headerFeatures";
+import { hasFeatureInPage, getDirectFeaturesForPage, getFoldedFeaturesForPage } from "@/header/headerFeatures";
 import { useImageTypes } from "@/composables/useImageTypes";
+import { openLocalImage } from "@/utils/openLocalImage";
 
 type TaskFailedImage = {
     id: number;
@@ -157,7 +162,8 @@ const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("taskdetail");
 
 function handleTaskDetailMoreCommand(cmd: string) {
-    if (cmd === "deleteTask") handleDeleteTask();
+    if (cmd === "stopTask") handleStopTask();
+    else if (cmd === "deleteTask") handleDeleteTask();
     else if (cmd === "help") openHelpDrawer();
     else if (cmd === "settings") openQuickSettings();
 }
@@ -180,6 +186,14 @@ const taskStatusFromStore = computed(() => {
 const shouldShowStopButton = computed(() => {
     return taskStatusFromStore.value === "running";
 });
+// 直显停止按钮：仅在“未折叠”时显示（桌面直显，Android 折叠到更多菜单）
+const showStopButtonDirect = computed(
+    () => shouldShowStopButton.value && getDirectFeaturesForPage("taskdetail").some((f) => f.id === "stopTask")
+);
+// 更多菜单中显示停止任务：Android 下折叠时在此显示
+const showStopTaskInFoldedMenu = computed(
+    () => shouldShowStopButton.value && getFoldedFeaturesForPage("taskdetail").some((f) => f.id === "stopTask")
+);
 const loading = ref(false);
 const isRefreshing = ref(false);
 // 根据 pages 列表判断刷新功能是否存在；安卓下隐藏刷新（含下拉刷新）
@@ -855,7 +869,7 @@ const handleImageMenuCommand = async (
         case "open":
             if (!isMultiSelect && imagesToProcess.length === 1) {
                 try {
-                    await invoke("open_file_path", { filePath: imagesToProcess[0].localPath });
+                    await openLocalImage(imagesToProcess[0].localPath ?? "");
                 } catch (error) {
                     console.error("打开文件失败:", error);
                     ElMessage.error("打开文件失败");

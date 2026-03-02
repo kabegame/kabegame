@@ -10,7 +10,7 @@ require 'tmpdir'
 
 # 默认配置
 DEFAULT_PATH = '.'
-DEFAULT_EXCLUDE = 'node_modules,dist,build,.git,target,.nx,public,data,release'
+DEFAULT_EXCLUDE = 'node_modules,dist,build,.git,target,.nx,public,data,release,photoswipe-vue/src/js'
 DEFAULT_INCLUDE_EXT = 'ts,tsx,js,mjs,vue,rs,py,java,kt,swift,cs,cpp,c,h,cc,hpp,rb,html,css,scss,rhai,kt,kts,handlebars,prisma'
 
 def usage
@@ -180,15 +180,15 @@ def scan_directory(dir_path, exclude_dirs, include_exts, stats, counters)
 end
 
 def generate_html(stats, counters, path)
-  sorted_stats = stats.sort_by { |_, v| -v[:code] }
-  total_code = counters[:code]
+  sorted_stats = stats.sort_by { |_, v| -v[:lines] }
+  total_lines = counters[:lines]
   
-  # 生成饼图数据
+  # 生成饼图数据（按总行数）
   chart_data = sorted_stats.map do |lang, data|
-    percentage = total_code > 0 ? (data[:code].to_f / total_code * 100).round(2) : 0
+    percentage = total_lines > 0 ? (data[:lines].to_f / total_lines * 100).round(2) : 0
     {
       label: lang,
-      value: data[:code],
+      value: data[:lines],
       percentage: percentage,
       files: data[:files],
       lines: data[:lines],

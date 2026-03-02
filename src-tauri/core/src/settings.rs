@@ -380,7 +380,7 @@ Write-Output "$style,$tile"
 
     #[cfg(target_os = "macos")]
     fn get_system_wallpaper_settings() -> (String, String) {
-        ("fill".to_string(), "none".to_string())
+        ("system".to_string(), "none".to_string())
     }
 
     #[cfg(target_os = "linux")]
