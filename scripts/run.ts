@@ -24,7 +24,6 @@ const buildSystem = new BuildSystem();
 interface BuildOptions {
   component?: string;
   mode?: string;
-  desktop?: string;
   android?: boolean;
   verbose?: boolean;
   trace?: boolean;
@@ -77,10 +76,6 @@ program
     "构建模式：normal（一般版本，带商店源）或 local（无商店版本，仅本地源 + 预打包全部插件）",
     Mode.NORMAL,
   )
-  .option(
-    "--desktop <desktop>",
-    "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）",
-  )
   .option("--android", "开发 Android 目标（仅 main，使用底部 Tab 布局等）")
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", true)
   .argument("[args...]", "剩余参数（放在 -- 之后）")
@@ -102,10 +97,6 @@ program
     "--mode <mode>",
     "构建模式：normal、local（仅影响插件预打包与内置列表）或 light（轻量模式，不使用 virtual-driver feature）",
     Mode.NORMAL,
-  )
-  .option(
-    "--desktop <desktop>",
-    "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）",
   )
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
   .argument("[args...]", "剩余参数（放在 -- 之后）")
@@ -133,10 +124,6 @@ program
     "构建模式：normal（一般版本，带商店源）、local（无商店版本，无商店安装包）或 light（轻量模式，不使用 virtual-driver feature）",
     Mode.NORMAL,
   )
-  .option(
-    "--desktop <desktop>",
-    "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）",
-  )
   .option("--android", "构建 Android 目标（仅 main，产出 APK/AAB）")
   .option(
     "--release",
@@ -162,10 +149,6 @@ program
     "--mode <mode>",
     "构建模式：normal、local 或 light（影响 cfg 与前端环境变量）",
     Mode.NORMAL,
-  )
-  .option(
-    "--desktop <desktop>",
-    "指定桌面环境：plasma | gnome（用于后端按桌面环境选择实现）",
   )
   .action(async (options: BuildOptions) => {
     await check(options);
