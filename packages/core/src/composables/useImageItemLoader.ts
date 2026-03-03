@@ -1,7 +1,7 @@
 import { computed, onUnmounted, ref, watch, type Ref } from "vue";
 import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import type { ImageInfo } from "../types/image";
-import { IS_ANDROID } from "../env";
+import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "../env";
 
 export type ImageUrlPair =
   | { thumbnail?: string; original?: string }
@@ -40,8 +40,13 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
   const toAssetUrl = (localPath: string | undefined | null): string => {
     const raw = (localPath || "").trim();
     if (!raw) return "";
-    // Android content:// 不能作为 <img> src（WebView 无法加载），必须等缓存生成 blob URL，这里不兜底
+    // Android content://：转为代理 HTTP URL，由 WebView shouldInterceptRequest 拦截并流式加载
     if (IS_ANDROID) {
+      if (raw.startsWith("content://")) {
+        const proxyUrl = raw.replace("content://", CONTENT_URI_PROXY_PREFIX);
+        assetUrlCache.set(raw, proxyUrl);
+        return proxyUrl;
+      }
       assetUrlCache.set(raw, "");
       return "";
     }

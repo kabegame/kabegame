@@ -2,7 +2,7 @@ import { ref, type Ref } from "vue";
 import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import { readFile } from "../fs/readFile";
 import type { ImageInfo, ImageUrlMap } from "../types/image";
-import { IS_ANDROID } from "../env";
+import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "../env";
 
 type Entry = {
   thumbnail?: string; // blob:
@@ -184,14 +184,21 @@ class ImageUrlMapLruCache {
     }
   }
 
-  /** original：asset url（同步）或 content:// 时走 blob url（异步）。返回写入后的 url（可能为空字符串）。 */
+  /** original：asset url（同步）或 Android content:// 时直接使用 content:// URI（同步）。返回写入后的 url（可能为空字符串）。 */
   public ensureOriginalAssetUrl(imageId: string, localPath: string | undefined | null) {
     const path = (localPath || "").trim();
     if (!path) return "";
     if (!isTauri()) return "";
+    // Android content://：转为代理 HTTP URL，由 WebView shouldInterceptRequest 拦截并流式加载
     if (IS_ANDROID && path.startsWith("content://")) {
-      void this.ensureOriginalBlobUrl(imageId, path);
-      return "";
+      const url = path.replace("content://", CONTENT_URI_PROXY_PREFIX);
+      const prev = this.lru.get(imageId) || {};
+      const next: Entry = { ...prev, original: url };
+      this.touch(imageId, next);
+      this.lru.set(imageId, next);
+      this.imageUrlMap.value[imageId] = { ...(this.imageUrlMap.value[imageId] || {}), original: url };
+      this.evictIfNeeded();
+      return url;
     }
     const url = this.toAssetUrl(localPath);
     if (!url) return "";
@@ -421,11 +428,8 @@ class ImageUrlMapLruCache {
     }
 
     if ((needOriginal || IS_ANDROID) && !current.original) {
-      if (IS_ANDROID && (image.localPath || "").startsWith("content://")) {
-        await this.ensureOriginalBlobUrl(image.id, image.localPath);
-      } else {
-        this.ensureOriginalAssetUrl(image.id, image.localPath);
-      }
+      // Android content:// 现在也走 ensureOriginalAssetUrl（同步，直接写入 content:// URI）
+      this.ensureOriginalAssetUrl(image.id, image.localPath);
     }
   }
 }

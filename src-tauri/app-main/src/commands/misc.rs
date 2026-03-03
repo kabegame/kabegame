@@ -154,7 +154,7 @@ pub async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
 }
 
 #[derive(Deserialize)]
-struct CopyImageToClipboardArgs {
+pub struct CopyImageToClipboardArgs {
     #[serde(alias = "imagePath")]
     image_path: String,
 }
