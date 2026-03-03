@@ -93,6 +93,27 @@ pub async fn set_supported_image_formats(formats: Vec<String>) -> Result<(), Str
     Ok(())
 }
 
+/// 读取后端缓存的 Linux 桌面环境（plasma|gnome|unknown）
+/// 仅在 Linux 平台有效，其他平台统一返回 "unknown"
+#[tauri::command]
+pub async fn get_linux_desktop_env() -> Result<String, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let desktop = crate::desktop_env::linux_desktop();
+        let value = match desktop {
+            crate::desktop_env::LinuxDesktop::Plasma => "plasma",
+            crate::desktop_env::LinuxDesktop::Gnome => "gnome",
+            crate::desktop_env::LinuxDesktop::Unknown => "unknown",
+        };
+        return Ok(value.to_string());
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok("unknown".to_string())
+    }
+}
+
 #[tauri::command]
 pub async fn update_image_dimensions(image_id: String, width: u32, height: u32) -> Result<(), String> {
     Storage::global().update_image_dimensions(&image_id, width, height)

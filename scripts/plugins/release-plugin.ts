@@ -37,17 +37,16 @@ function archForMacOS(): string {
 
 function releaseAssetFileName(params: {
   mode: string;
-  desktop?: string;
   version: string;
   srcPath: string;
 }): string {
-  const { mode, desktop, version, srcPath } = params;
+  const { mode, version, srcPath } = params;
   const ext = path.extname(srcPath);
   if (OSPlugin.isWindows) {
     return `Kabegame-${mode}_${version}_${archForWindows()}-setup${ext}`;
   }
   if (OSPlugin.isLinux) {
-    return `Kabegame-${mode}_${desktop}_${version}_${archForDeb()}${ext}`;
+    return `Kabegame-${mode}_${version}_${archForDeb()}${ext}`;
   }
   if (OSPlugin.isMacOS) {
     return `Kabegame-${mode}_${version}_${archForMacOS()}${ext}`;
@@ -116,9 +115,6 @@ export class ReleasePlugin extends BasePlugin {
       if (comp !== Component.MAIN) return;
 
       const mode = bs.context.mode!.mode;
-      const desktop = OSPlugin.isLinux
-        ? bs.context.desktop!.desktop
-        : undefined;
       const version = readCargoTomlVersion();
 
       const bundleDir = findBundleDir(ROOT);
@@ -137,7 +133,6 @@ export class ReleasePlugin extends BasePlugin {
       for (const srcPath of assets) {
         const dstName = releaseAssetFileName({
           mode,
-          desktop,
           version,
           srcPath,
         });

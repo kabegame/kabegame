@@ -103,21 +103,21 @@ end tell"#,
         format!("file:///{}", encoded)
     }
 
-    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    #[cfg(target_os = "linux")]
     fn percent_encode_path_for_file_url(path: &str) -> String {
         // Plasma 的 org.kde.image 的 Image 通常是 URL（file:///...）。
         // 复用通用函数
         Self::path_to_file_uri(path)
     }
 
-    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    #[cfg(target_os = "linux")]
     fn escape_js_single_quoted(s: &str) -> String {
         // 用于构造 evaluateScript 的 JS 字符串字面量：'<here>'
         // 需要转义：\ 和 '
         s.replace('\\', "\\\\").replace('\'', "\\'")
     }
 
-    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    #[cfg(target_os = "linux")]
     fn style_to_plasma_fill_mode(style: &str) -> &'static str {
         // KDE Plasma wallpaper plugin `org.kde.image` 的 FillMode（常见映射）：
         // 0: scaled (stretch)
@@ -135,7 +135,7 @@ end tell"#,
         }
     }
 
-    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    #[cfg(target_os = "linux")]
     fn plasma_fill_mode_to_style(fill_mode: &str) -> &'static str {
         // 将 Plasma FillMode 字符串映射回 style 字符串
         match fill_mode.trim() {
@@ -149,7 +149,7 @@ end tell"#,
     }
 
     /// 将应用内部的 style 字符串映射到 GNOME picture-options
-    #[cfg(all(target_os = "linux", desktop = "gnome"))]
+    #[cfg(target_os = "linux")]
     fn style_to_gnome_picture_options(style: &str) -> &'static str {
         // GNOME picture-options 映射：
         // zoom: 填满屏幕，裁剪溢出部分（对应 fill）
@@ -169,7 +169,7 @@ end tell"#,
     }
 
     /// 从 GNOME picture-options 读取当前样式
-    #[cfg(all(target_os = "linux", desktop = "gnome"))]
+    #[cfg(target_os = "linux")]
     fn get_wallpaper_gnome_picture_options(&self) -> Result<String, String> {
         use std::process::Command;
 
@@ -202,7 +202,7 @@ end tell"#,
     }
 
     /// 通过 gsettings 设置 GNOME 壁纸
-    #[cfg(all(target_os = "linux", desktop = "gnome"))]
+    #[cfg(target_os = "linux")]
     fn set_wallpaper_gnome(&self, file_path: &str, style: &str) -> Result<(), String> {
         use std::path::Path;
         use std::process::Command;
@@ -290,7 +290,7 @@ end tell"#,
         Ok(())
     }
 
-    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    #[cfg(target_os = "linux")]
     fn run_qdbus_evaluate_script_with_output(script: &str) -> Result<String, String> {
         use std::process::{Command, Stdio};
         use std::sync::OnceLock;
@@ -363,14 +363,14 @@ stderr: {}",
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
-    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    #[cfg(target_os = "linux")]
     fn run_qdbus_evaluate_script(script: &str) -> Result<(), String> {
         // 复用 run_qdbus_evaluate_script_with_output，忽略输出
         Self::run_qdbus_evaluate_script_with_output(script)?;
         Ok(())
     }
 
-    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    #[cfg(target_os = "linux")]
     fn get_wallpaper_plasma_fill_mode(&self) -> Result<String, String> {
         // 通过 qdbus evaluateScript 读取第一个桌面的 FillMode
         let script = r#"
@@ -396,7 +396,7 @@ stderr: {}",
         }
     }
 
-    #[cfg(all(target_os = "linux", desktop = "plasma"))]
+    #[cfg(target_os = "linux")]
     fn set_wallpaper_plasma(&self, file_path: &str, style: &str) -> Result<(), String> {
         use std::path::Path;
 
@@ -497,7 +497,7 @@ for (var i=0; i<allDesktops.length; i++) {{\n\
 
 #[async_trait]
 impl WallpaperManager for NativeWallpaperManager {
-    // 从注册表读取当前壁纸样式
+    // 从注册表读取当前壁纸样式（Windows）
     #[cfg(target_os = "windows")]
     async fn get_style(&self) -> Result<String, String> {
         // 优化：直接使用 winreg crate 读取注册表，而不是通过 PowerShell
@@ -530,52 +530,86 @@ impl WallpaperManager for NativeWallpaperManager {
         Ok(style.to_string())
     }
 
-    #[cfg(not(target_os = "windows"))]
+    // Linux：根据运行时桌面环境选择实现，失败回退
+    #[cfg(target_os = "linux")]
     async fn get_style(&self) -> Result<String, String> {
-        // 非 Windows 平台：
-        // - Plasma 原生壁纸（--desktop plasma 编译期开关）下：通过 qdbus 读取 FillMode
-        // - GNOME 原生壁纸（--desktop gnome 编译期开关）下：通过 gsettings 读取 picture-options
-        // - 其他平台：返回默认值
-        #[cfg(all(target_os = "linux", desktop = "plasma"))]
-        {
-            match self.get_wallpaper_plasma_fill_mode() {
+        use crate::desktop_env::{linux_desktop, LinuxDesktop};
+
+        let desktop = linux_desktop();
+        match desktop {
+            LinuxDesktop::Plasma => match self.get_wallpaper_plasma_fill_mode() {
                 Ok(fill_mode) => Ok(Self::plasma_fill_mode_to_style(&fill_mode).to_string()),
                 Err(e) => {
-                    eprintln!("[WARN] 无法读取 Plasma FillMode: {}，返回默认值 fill", e);
-                    Ok("fill".to_string())
+                    eprintln!(
+                        "[WARN] 无法读取 Plasma FillMode: {}，尝试 GNOME picture-options",
+                        e
+                    );
+                    match self.get_wallpaper_gnome_picture_options() {
+                        Ok(style) => Ok(style),
+                        Err(e2) => {
+                            eprintln!(
+                                "[WARN] 无法读取 GNOME picture-options: {}，返回默认值 fill",
+                                e2
+                            );
+                            Ok("fill".to_string())
+                        }
+                    }
                 }
-            }
-        }
-
-        #[cfg(all(target_os = "linux", desktop = "gnome"))]
-        {
-            match self.get_wallpaper_gnome_picture_options() {
+            },
+            LinuxDesktop::Gnome => match self.get_wallpaper_gnome_picture_options() {
                 Ok(style) => Ok(style),
                 Err(e) => {
                     eprintln!(
-                        "[WARN] 无法读取 GNOME picture-options: {}，返回默认值 fill",
+                        "[WARN] 无法读取 GNOME picture-options: {}，尝试 Plasma FillMode",
                         e
                     );
-                    Ok("fill".to_string())
+                    match self.get_wallpaper_plasma_fill_mode() {
+                        Ok(fill_mode) => Ok(Self::plasma_fill_mode_to_style(&fill_mode).to_string()),
+                        Err(e2) => {
+                            eprintln!(
+                                "[WARN] 无法读取 Plasma FillMode: {}，返回默认值 fill",
+                                e2
+                            );
+                            Ok("fill".to_string())
+                        }
+                    }
+                }
+            },
+            LinuxDesktop::Unknown => {
+                // Unknown 时先尝试 GNOME，再尝试 Plasma
+                match self.get_wallpaper_gnome_picture_options() {
+                    Ok(style) => Ok(style),
+                    Err(e) => {
+                        eprintln!(
+                            "[WARN] Unknown 桌面环境：读取 GNOME picture-options 失败: {}，尝试 Plasma FillMode",
+                            e
+                        );
+                        match self.get_wallpaper_plasma_fill_mode() {
+                            Ok(fill_mode) => Ok(Self::plasma_fill_mode_to_style(&fill_mode).to_string()),
+                            Err(e2) => {
+                                eprintln!(
+                                    "[WARN] Unknown 桌面环境：读取 Plasma FillMode 失败: {}，返回默认值 fill",
+                                    e2
+                                );
+                                Ok("fill".to_string())
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
 
-        #[cfg(target_os = "macos")]
-        {
-            // macOS 原生壁纸：样式跟随系统，不读取系统设置
-            // 返回默认值，实际样式由系统决定
-            Ok("fill".to_string())
-        }
+    // macOS：样式跟随系统，不读取系统设置，返回 fill
+    #[cfg(target_os = "macos")]
+    async fn get_style(&self) -> Result<String, String> {
+        Ok("fill".to_string())
+    }
 
-        #[cfg(not(any(
-            all(target_os = "linux", desktop = "plasma"),
-            all(target_os = "linux", desktop = "gnome"),
-            target_os = "macos"
-        )))]
-        {
-            Ok("fill".to_string())
-        }
+    // 其他平台：返回默认值
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    async fn get_style(&self) -> Result<String, String> {
+        Ok("fill".to_string())
     }
 
     async fn get_transition(&self) -> Result<String, String> {
@@ -743,62 +777,76 @@ impl WallpaperManager for NativeWallpaperManager {
             Ok(())
         }
 
-        // TODO: 非 Windows 平台使用系统命令设置壁纸
-        #[cfg(not(target_os = "windows"))]
+        // 非 Windows 平台使用系统命令设置壁纸
+        #[cfg(target_os = "linux")]
         {
-            // Plasma 原生壁纸：由 Kabegame 的 --plasma 编译期开关启用
-            #[cfg(all(target_os = "linux", desktop = "plasma"))]
-            {
-                let _ = immediate;
-                let style = Settings::global()
-                    .get_wallpaper_rotation_style()
+            use crate::desktop_env::{linux_desktop, LinuxDesktop};
+
+            let _ = immediate;
+            let style = Settings::global()
+                .get_wallpaper_rotation_style()
+                .await
+                .unwrap_or_else(|_| "system".to_string());
+            let effective = if style == "system" {
+                self.get_style()
                     .await
-                    .unwrap_or_else(|_| "system".to_string());
-                let effective = if style == "system" {
-                    self.get_style()
-                        .await
-                        .unwrap_or_else(|_| "fill".to_string())
-                } else {
-                    style
-                };
-                return self.set_wallpaper_plasma(file_path, &effective);
+                    .unwrap_or_else(|_| "fill".to_string())
+            } else {
+                style
+            };
+
+            let desktop = linux_desktop();
+
+            // 内部辅助：先 Plasma 后 GNOME，或相反
+            async fn try_plasma_then_gnome(
+                manager: &NativeWallpaperManager,
+                path: &str,
+                style: &str,
+            ) -> Result<(), String> {
+                match manager.set_wallpaper_plasma(path, style) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        eprintln!("[WARN] Plasma 壁纸设置失败，尝试 GNOME 实现: {}", e);
+                        manager.set_wallpaper_gnome(path, style)
+                    }
+                }
             }
 
-            // GNOME 原生壁纸：由 Kabegame 的 --desktop gnome 编译期开关启用
-            #[cfg(all(target_os = "linux", desktop = "gnome"))]
-            {
-                let _ = immediate;
-                let style = Settings::global()
-                    .get_wallpaper_rotation_style()
-                    .await
-                    .unwrap_or_else(|_| "system".to_string());
-                let effective = if style == "system" {
-                    self.get_style()
-                        .await
-                        .unwrap_or_else(|_| "fill".to_string())
-                } else {
-                    style
-                };
-                return self.set_wallpaper_gnome(file_path, &effective);
+            async fn try_gnome_then_plasma(
+                manager: &NativeWallpaperManager,
+                path: &str,
+                style: &str,
+            ) -> Result<(), String> {
+                match manager.set_wallpaper_gnome(path, style) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        eprintln!("[WARN] GNOME 壁纸设置失败，尝试 Plasma 实现: {}", e);
+                        manager.set_wallpaper_plasma(path, style)
+                    }
+                }
             }
 
-            // macOS 原生壁纸：仅设置壁纸路径，样式跟随系统
-            #[cfg(target_os = "macos")]
-            {
-                let _ = immediate;
-                // macOS 不设置样式，只设置壁纸路径，样式由系统决定
-                return self.set_wallpaper_macos(file_path);
+            match desktop {
+                LinuxDesktop::Plasma => try_plasma_then_gnome(self, file_path, &effective).await,
+                LinuxDesktop::Gnome => try_gnome_then_plasma(self, file_path, &effective).await,
+                LinuxDesktop::Unknown => {
+                    // Unknown 时先尝试 GNOME，再尝试 Plasma
+                    try_gnome_then_plasma(self, file_path, &effective).await
+                }
             }
+        }
 
-            #[cfg(not(any(
-                all(target_os = "linux", desktop = "plasma"),
-                all(target_os = "linux", desktop = "gnome"),
-                target_os = "macos"
-            )))]
-            {
-                let _ = immediate;
-                return Err("当前平台不支持原生壁纸设置（NativeWallpaperManager）".to_string());
-            }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = immediate;
+            // macOS 不设置样式，只设置壁纸路径，样式由系统决定
+            return self.set_wallpaper_macos(file_path);
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+        {
+            let _ = immediate;
+            return Err("当前平台不支持原生壁纸设置（NativeWallpaperManager）".to_string());
         }
     }
 
@@ -875,27 +923,28 @@ impl WallpaperManager for NativeWallpaperManager {
         Ok(())
     }
 
-    /// - Plasma 原生壁纸（--desktop plasma 编译期开关）下：通过 qdbus 写 FillMode，并尽量对当前壁纸立即生效
-    /// - GNOME 原生壁纸（--desktop gnome 编译期开关）下：通过 gsettings 写 picture-options，并尽量对当前壁纸立即生效
-    /// - macOS 原生壁纸：样式跟随系统，不设置样式
-    #[cfg(all(target_os = "linux"))]
+    /// Linux：根据运行时桌面环境设置样式，失败回退
+    #[cfg(target_os = "linux")]
     async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
         if style == "system" {
             return Ok(());
         }
-        #[cfg(desktop = "plasma")]
-        {
-            if let Some(path) = self.current_wallpaper_path_from_settings().await {
+
+        use crate::desktop_env::{linux_desktop, LinuxDesktop};
+
+        let _ = immediate;
+        let desktop = linux_desktop();
+
+        async fn set_style_plasma(manager: &NativeWallpaperManager, style: &str) -> Result<(), String> {
+            if let Some(path) = manager.current_wallpaper_path_from_settings().await {
                 if std::path::Path::new(&path).exists() {
-                    // 修复：正确处理错误，而不是忽略
-                    self.set_wallpaper_plasma(&path, style)?;
+                    manager.set_wallpaper_plasma(&path, style)?;
                 } else {
                     return Err(format!("当前壁纸路径不存在: {}", path));
                 }
             } else {
                 // 如果没有当前壁纸，仍然尝试通过 qdbus 只设置 FillMode（不改变图片）
-                // 这样可以确保 style 被正确设置，即使没有当前壁纸路径
-                let fill_mode = Self::style_to_plasma_fill_mode(style);
+                let fill_mode = NativeWallpaperManager::style_to_plasma_fill_mode(style);
                 let script = format!(
                     "var allDesktops = desktops();\n\
                     for (var i=0; i<allDesktops.length; i++) {{\n\
@@ -908,17 +957,16 @@ impl WallpaperManager for NativeWallpaperManager {
                     fill_mode
                 );
                 println!("fill_mode {}", fill_mode);
-                Self::run_qdbus_evaluate_script(&script)?;
+                NativeWallpaperManager::run_qdbus_evaluate_script(&script)?;
             }
-            return Ok(());
+            Ok(())
         }
 
-        #[cfg(desktop = "gnome")]
-        {
+        async fn set_style_gnome(manager: &NativeWallpaperManager, style: &str) -> Result<(), String> {
             use std::process::Command;
 
             // 设置 picture-options
-            let picture_options = Self::style_to_gnome_picture_options(style);
+            let picture_options = NativeWallpaperManager::style_to_gnome_picture_options(style);
             let output = Command::new("gsettings")
                 .args([
                     "set",
@@ -939,20 +987,48 @@ impl WallpaperManager for NativeWallpaperManager {
             }
 
             // 如果有当前壁纸路径，重新设置壁纸以应用新样式
-            if let Some(path) = self.current_wallpaper_path_from_settings().await {
+            if let Some(path) = manager.current_wallpaper_path_from_settings().await {
                 if std::path::Path::new(&path).exists() {
-                    // 重新设置壁纸以应用新样式
-                    self.set_wallpaper_gnome(&path, style)?;
+                    manager.set_wallpaper_gnome(&path, style)?;
                 }
             }
 
-            return Ok(());
+            Ok(())
         }
 
-        #[cfg(not(any(desktop = "plasma", desktop = "gnome")))]
-        {
-            let _ = (style, immediate);
-            Ok(())
+        async fn try_plasma_then_gnome(
+            manager: &NativeWallpaperManager,
+            style: &str,
+        ) -> Result<(), String> {
+            match set_style_plasma(manager, style).await {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    eprintln!("[WARN] 设置 Plasma 样式失败，尝试 GNOME: {}", e);
+                    set_style_gnome(manager, style).await
+                }
+            }
+        }
+
+        async fn try_gnome_then_plasma(
+            manager: &NativeWallpaperManager,
+            style: &str,
+        ) -> Result<(), String> {
+            match set_style_gnome(manager, style).await {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    eprintln!("[WARN] 设置 GNOME 样式失败，尝试 Plasma: {}", e);
+                    set_style_plasma(manager, style).await
+                }
+            }
+        }
+
+        match desktop {
+            LinuxDesktop::Plasma => try_plasma_then_gnome(self, style).await,
+            LinuxDesktop::Gnome => try_gnome_then_plasma(self, style).await,
+            LinuxDesktop::Unknown => {
+                // Unknown 时先尝试 GNOME，再尝试 Plasma
+                try_gnome_then_plasma(self, style).await
+            }
         }
     }
 
