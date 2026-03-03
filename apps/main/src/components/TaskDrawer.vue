@@ -51,7 +51,7 @@ import { IS_ANDROID } from "@kabegame/core/env";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import TaskDrawerContent from "@kabegame/core/components/task/TaskDrawerContent.vue";
 import TaskContextMenu from "./contextMenu/TaskContextMenu.vue";
-import { useModalStackStore } from "@kabegame/core/stores/modalStack";
+import { useHistoryBack } from "@kabegame/core/composables/useHistoryBack";
 
 interface Props {
   modelValue: boolean;
@@ -74,22 +74,7 @@ const visible = computed({
   set: (value) => emit('update:modelValue', value)
 });
 
-const modalStack = useModalStackStore();
-const modalStackId = ref<string | null>(null);
-
-watch(
-  () => visible.value,
-  (val) => {
-    if (val && IS_ANDROID) {
-      modalStackId.value = modalStack.push(() => {
-        visible.value = false;
-      });
-    } else if (!val && modalStackId.value) {
-      modalStack.remove(modalStackId.value);
-      modalStackId.value = null;
-    }
-  }
-);
+useHistoryBack(visible);
 
 const drawerSize = computed(() => IS_ANDROID ? "70%" : "420px");
 

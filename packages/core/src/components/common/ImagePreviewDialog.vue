@@ -9,7 +9,6 @@
     :loop="true"
     :zIndex="2000"
     :close-on-vertical-drag="true"
-    close-on-back
     :on-vertical-drag="handlePswpVerticalDrag"
     :on-before-close="handlePswpBeforeClose"
     @change="handlePswpChange"
@@ -642,6 +641,19 @@ watch(
       } else {
         handlePreviewImageDeleted();
       }
+    }
+  }
+);
+
+// Keep previewImage in sync with props.images so ActionSheet reacts to data changes (e.g. favorite toggle)
+watch(
+  () => {
+    if (!previewImage.value) return null;
+    return props.images.find(img => img.id === previewImage.value?.id);
+  },
+  (updated) => {
+    if (updated && previewImage.value && updated !== previewImage.value) {
+      previewImage.value = updated;
     }
   }
 );

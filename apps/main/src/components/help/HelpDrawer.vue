@@ -30,27 +30,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch, ref } from "vue";
+import { computed } from "vue";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { HELP_GROUPS } from "@/help/helpRegistry";
-import { IS_ANDROID } from "@kabegame/core/env";
-import { useModalStackStore } from "@kabegame/core/stores/modalStack";
+import { useHistoryBack } from "@kabegame/core/composables/useHistoryBack";
 
 const drawer = useHelpDrawerStore();
-const modalStack = useModalStackStore();
-const modalStackId = ref<string | null>(null);
 
-watch(
+useHistoryBack(
   () => drawer.isOpen,
-  (visible) => {
-    if (visible && IS_ANDROID) {
-      modalStackId.value = modalStack.push(() => drawer.close());
-    } else if (!visible && modalStackId.value) {
-      modalStack.remove(modalStackId.value);
-      modalStackId.value = null;
-    }
-  }
+  () => drawer.close(),
 );
 
 const drawerSize = computed(() => IS_ANDROID ? "70%" : "420px");
