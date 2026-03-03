@@ -52,10 +52,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, type Component } from "vue";
+import { computed, ref, type Component } from "vue";
 import type { ActionItem, ActionContext } from "../actions/types";
-import { IS_ANDROID } from "../env";
-import { useModalStackStore } from "../stores/modalStack";
+import { useHistoryBack } from "../composables/useHistoryBack";
 
 interface Props {
   visible: boolean;
@@ -80,32 +79,10 @@ const emit = defineEmits<{
 // Track which item's submenu is expanded
 const expandedItem = ref<ActionItem | null>(null);
 
-const modalStack = useModalStackStore();
-const stackEntryId = ref<string | null>(null);
-
-// Android: register with modal back stack so system back closes submenu first, then action bar
-watch(
-  () => props.visible,
-  (newVal) => {
-    if (!newVal) {
-      expandedItem.value = null;
-      if (IS_ANDROID && stackEntryId.value) {
-        modalStack.remove(stackEntryId.value);
-        stackEntryId.value = null;
-      }
-      return;
-    }
-    if (IS_ANDROID) {
-      stackEntryId.value = modalStack.push(() => {
-        if (expandedItem.value) {
-          expandedItem.value = null;
-        } else {
-          emit("close");
-        }
-      });
-    }
-  },
-  { immediate: true }
+// System back closes submenu (history-based, works on both desktop and Android)
+useHistoryBack(
+  () => !!expandedItem.value,
+  () => { expandedItem.value = null; },
 );
 
 // Resolve actions with visibility filtering

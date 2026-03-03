@@ -39,9 +39,7 @@
 import type { Component } from "vue";
 import { ArrowRight } from "@element-plus/icons-vue";
 import { ElDrawer, ElIcon } from "element-plus";
-import { IS_ANDROID } from "@kabegame/core/env";
-import { watch, ref } from "vue";
-import { useModalStackStore } from "@kabegame/core/stores/modalStack";
+import { useHistoryBack } from "@kabegame/core/composables/useHistoryBack";
 
 export interface OptionItem {
   id: string;
@@ -65,21 +63,9 @@ const emit = defineEmits<{
   (e: "select", id: string): void;
 }>();
 
-const modalStackStore = useModalStackStore();
-const modalStackId = ref<string | null>(null);
-
-watch(
+useHistoryBack(
   () => props.modelValue,
-  (val) => {
-    if (val && IS_ANDROID) {
-      modalStackId.value = modalStackStore.push(() => {
-        emit("update:modelValue", false);
-      });
-    } else if (!val && modalStackId.value) {
-      modalStackStore.remove(modalStackId.value);
-      modalStackId.value = null;
-    }
-  }
+  () => emit("update:modelValue", false),
 );
 
 const handleSelect = (id: string) => {

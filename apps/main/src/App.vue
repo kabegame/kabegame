@@ -111,7 +111,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { IS_WINDOWS, IS_MACOS, IS_ANDROID } from "@kabegame/core/env";
 import { usePluginStore } from "./stores/plugins";
 import { useRouter } from "vue-router";
-import { useModalStackStore } from "@kabegame/core/stores/modalStack";
+import { historyBackCount } from "@kabegame/core/composables/useHistoryBack";
 import { ElMessageBox } from "element-plus";
 
 // 路由高亮
@@ -165,7 +165,6 @@ watch(
 );
 
 const router = useRouter();
-const modalStack = useModalStackStore();
 
 // 文件拖拽提示层引用
 const fileDropOverlayRef = ref<any>(null);
@@ -195,30 +194,28 @@ onMounted(async () => {
   if (IS_ANDROID) {
     try {
       const { onBackButtonPress } = await import("@tauri-apps/api/app");
-      let lastModalClosedAt = 0;
+      let lastBackAt = 0;
       const EXIT_COOLDOWN_MS = 400;
       await onBackButtonPress(async () => {
-        // 1. Modal Stack
-        if (await modalStack.closeTop()) {
-          lastModalClosedAt = Date.now();
+        // 1. History-based modal stack: let popstate close the topmost modal
+        if (historyBackCount.value > 0) {
+          lastBackAt = Date.now();
+          history.back();
           return;
         }
 
         // 2. Router Back
         const currentPath = router.currentRoute.value.path;
         const rootPaths = bottomTabs.value.map((t) => t.index);
-        // If not at root, go back
         if (!rootPaths.includes(currentPath) && currentPath !== "/") {
           router.back();
           return;
         }
 
-        // 防止关 modal 后同一按键或连按再次触发时误弹退出确认
-        // 也防止 Android/WebView 一次返回键触发两次回调导致退出确认弹两次
-        if (Date.now() - lastModalClosedAt < EXIT_COOLDOWN_MS) {
+        if (Date.now() - lastBackAt < EXIT_COOLDOWN_MS) {
           return;
         }
-        lastModalClosedAt = Date.now();
+        lastBackAt = Date.now();
 
         // 3. Exit Confirm
         try {
@@ -308,21 +305,6 @@ onMounted(async () => {
   
   // 通知后端已准备好接收事件
   emit('app-ready');
-
-  // 预加载关键路由组件，避免首次点击时的卡顿
-  // 使用 requestIdleCallback（如有）或 setTimeout 在空闲时加载
-  const preloadRouteComponents = () => {
-    // 预加载"收集源"页面（通常是用户第二个访问的页面）
-    void import("@/views/PluginBrowser.vue");
-    // 可选：预加载其他常用页面
-    void import("@/views/Albums.vue");
-    void import("@/views/Settings.vue");
-  };
-  if (typeof requestIdleCallback !== "undefined") {
-    requestIdleCallback(() => preloadRouteComponents(), { timeout: 2000 });
-  } else {
-    setTimeout(preloadRouteComponents, 50);
-  }
 });
 
 onUnmounted(() => {

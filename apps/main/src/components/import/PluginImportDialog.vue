@@ -69,8 +69,7 @@ import { ElMessage } from 'element-plus';
 import PluginDetailPage from '@kabegame/core/components/plugin/PluginDetailPage.vue';
 import { usePluginStore } from '@/stores/plugins';
 import { isUpdateAvailable } from '@kabegame/core/utils/version';
-import { IS_ANDROID } from '@kabegame/core/env';
-import { useModalStackStore } from '@kabegame/core/stores/modalStack';
+import { useHistoryBack } from '@kabegame/core/composables/useHistoryBack';
 
 type ImportPreview = {
   id: string;
@@ -131,8 +130,8 @@ const installed = ref(false);
 const installing = ref(false);
 const detail = ref<any | null>(null);
 const pluginStore = usePluginStore();
-const modalStack = useModalStackStore();
-const modalStackId = ref<string | null>(null);
+
+useHistoryBack(visible);
 
 watch(() => props.kgpgPath, async (newPath) => {
   if (newPath && visible.value) {
@@ -141,15 +140,6 @@ watch(() => props.kgpgPath, async (newPath) => {
 });
 
 watch(() => visible.value, async (val) => {
-  if (val && IS_ANDROID) {
-    modalStackId.value = modalStack.push(() => {
-      visible.value = false;
-    });
-  } else if (!val && modalStackId.value) {
-    modalStack.remove(modalStackId.value);
-    modalStackId.value = null;
-  }
-
   if (val && props.kgpgPath) {
     await loadPreview(props.kgpgPath);
   } else {

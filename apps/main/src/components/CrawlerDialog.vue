@@ -282,7 +282,7 @@ import { useAlbumStore } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import { ElMessage } from "element-plus";
 import { IS_ANDROID } from "@kabegame/core/env";
-import { useModalStackStore } from "@kabegame/core/stores/modalStack";
+import { useHistoryBack } from "@kabegame/core/composables/useHistoryBack";
 
 interface Props {
     modelValue: boolean;
@@ -351,22 +351,7 @@ const visible = computed({
     set: (v) => emit("update:modelValue", v),
 });
 
-const modalStack = useModalStackStore();
-const modalStackId = ref<string | null>(null);
-
-watch(
-  () => visible.value,
-  (val) => {
-    if (val && IS_ANDROID) {
-      modalStackId.value = modalStack.push(() => {
-        visible.value = false;
-      });
-    } else if (!val && modalStackId.value) {
-      modalStack.remove(modalStackId.value);
-      modalStackId.value = null;
-    }
-  }
-);
+useHistoryBack(visible);
 
 const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);
