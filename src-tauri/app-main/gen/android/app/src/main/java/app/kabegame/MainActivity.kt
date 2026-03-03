@@ -1,16 +1,24 @@
 package app.kabegame
 
+import android.content.ContentResolver
 import android.content.Intent
 import android.database.Cursor
+import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.ActivityResultCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.webkit.WebViewCompat
 import app.kabegame.plugin.PickerLauncherHost
 import java.io.File
 import java.io.FileOutputStream
@@ -88,6 +96,35 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
       pendingImportPath?.let {
           triggerImportPlugin(it)
           pendingImportPath = null
+      }
+
+      // 包装 WebViewClient 以拦截 content:// 请求并流式返回
+      // 使用 post {} 延迟执行，确保 wry 已完成 setWebViewClient(RustWebViewClient)
+      webView.post {
+          wrapWebViewClientForContentUriStreaming(webView)
+      }
+  }
+
+  /**
+   * 包装 WebViewClient 以支持 content:// URI 流式加载
+   * 仅在 API 26+ 上可用（WebView.getWebViewClient() 需要 API 26）
+   */
+  private fun wrapWebViewClientForContentUriStreaming(webView: WebView) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          try {
+              val originalClient = WebViewCompat.getWebViewClient(webView)
+                  ?: run {
+                      android.util.Log.w("Kabegame", "Failed to get original WebViewClient, skipping content:// streaming wrapper")
+                      return
+                  }
+              val wrappedClient = ContentUriStreamClient(applicationContext.contentResolver, originalClient)
+              webView.webViewClient = wrappedClient
+              android.util.Log.d("Kabegame", "ContentUriStreamClient wrapper installed")
+          } catch (e: Exception) {
+              android.util.Log.e("Kabegame", "Failed to wrap WebViewClient for content:// streaming", e)
+          }
+      } else {
+          android.util.Log.w("Kabegame", "Content:// streaming requires API 26+, current: ${Build.VERSION.SDK_INT}")
       }
   }
 
@@ -215,4 +252,92 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
           webView?.evaluateJavascript(js, null)
       }
   }
+}
+
+/**
+ * WebViewClient 包装类：拦截 content:// URI 请求并返回流式 WebResourceResponse
+ * 
+ * 对于 content:// 请求：
+ * - 使用 ContentResolver.openInputStream() 打开流
+ * - 返回 WebResourceResponse，WebView 会流式读取并解码渲染
+ * 
+ * 对于其他请求：
+ * - 委托给原始 WebViewClient（通常是 wry 的 RustWebViewClient）
+ */
+private class ContentUriStreamClient(
+    private val contentResolver: ContentResolver,
+    private val delegate: WebViewClient
+) : WebViewClient() {
+
+    companion object {
+        private const val PROXY_HOST = "kbg-content.localhost"
+    }
+
+    override fun shouldInterceptRequest(
+        view: WebView?,
+        request: WebResourceRequest?
+    ): WebResourceResponse? {
+        val uri = request?.url ?: return delegate.shouldInterceptRequest(view, request)
+
+        // 拦截代理 URL：http://kbg-content.localhost/... → content://...
+        if (uri.host == PROXY_HOST) {
+            try {
+                val contentUriStr = uri.toString().replace("http://$PROXY_HOST/", "content://")
+                val contentUri = Uri.parse(contentUriStr)
+
+                val mimeType = contentResolver.getType(contentUri) ?: guessMimeTypeFromUri(contentUri)
+
+                val inputStream = contentResolver.openInputStream(contentUri)
+                    ?: run {
+                        android.util.Log.w("Kabegame", "Failed to open InputStream for: $contentUri")
+                        return delegate.shouldInterceptRequest(view, request)
+                    }
+
+                return WebResourceResponse(mimeType, null, inputStream)
+            } catch (e: Exception) {
+                android.util.Log.e("Kabegame", "Error intercepting proxy URI: $uri", e)
+                return delegate.shouldInterceptRequest(view, request)
+            }
+        }
+
+        return delegate.shouldInterceptRequest(view, request)
+    }
+
+    /**
+     * 从 URI 路径猜测 MIME 类型（当 ContentResolver.getType() 返回 null 时使用）
+     */
+    private fun guessMimeTypeFromUri(uri: Uri): String {
+        val path = uri.path ?: return "application/octet-stream"
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "bmp" -> "image/bmp"
+            "avif" -> "image/avif"
+            else -> "application/octet-stream"
+        }
+    }
+
+    // 委托其他方法给原始 client
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+        return delegate.shouldOverrideUrlLoading(view, request)
+    }
+
+    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+        delegate.onPageStarted(view, url, favicon)
+    }
+
+    override fun onPageFinished(view: WebView?, url: String?) {
+        delegate.onPageFinished(view, url)
+    }
+
+    override fun onReceivedError(
+        view: WebView?,
+        request: WebResourceRequest?,
+        error: WebResourceError?
+    ) {
+        delegate.onReceivedError(view, request, error)
+    }
 }
