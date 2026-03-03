@@ -54,7 +54,8 @@
 <script setup lang="ts">
 import { computed, ref, type Component } from "vue";
 import type { ActionItem, ActionContext } from "../actions/types";
-import { useHistoryBack } from "../composables/useHistoryBack";
+import { IS_ANDROID } from "../env";
+import { useModalBack } from "../composables/useModalBack";
 
 interface Props {
   visible: boolean;
@@ -79,11 +80,18 @@ const emit = defineEmits<{
 // Track which item's submenu is expanded
 const expandedItem = ref<ActionItem | null>(null);
 
-// System back closes submenu (history-based, works on both desktop and Android)
-useHistoryBack(
-  () => !!expandedItem.value,
-  () => { expandedItem.value = null; },
-);
+// Android: two useModalBack — sheet visibility and submenu. Back closes submenu first, then sheet.
+const sheetOpen = computed({
+  get: () => props.visible,
+  set: (v) => { if (!v) emit("close"); },
+});
+useModalBack(sheetOpen, { onClose: () => { expandedItem.value = null; } });
+
+const submenuOpen = computed({
+  get: () => !!expandedItem.value,
+  set: (v) => { if (!v) expandedItem.value = null; },
+});
+useModalBack(submenuOpen);
 
 // Resolve actions with visibility filtering
 const resolvedActions = computed(() => {

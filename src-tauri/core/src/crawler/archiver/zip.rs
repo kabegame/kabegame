@@ -3,6 +3,7 @@ use encoding_rs::{GBK, SHIFT_JIS};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use url::Url;
+use uuid;
 use zip::ZipArchive;
 
 /// 解码 ZIP 条目文件名，解决非 UTF-8 编码（如 GBK、Shift-JIS）导致的乱码。
@@ -85,11 +86,7 @@ impl ArchiveProcessor for ZipProcessor {
                 return Err(format!("Archive file not found: {}", path.display()));
             }
 
-            let archive_stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("archive");
-            let out_dir = extract_dir.join(archive_stem);
+            let out_dir = extract_dir.join(uuid::Uuid::new_v4().to_string());
             let extract_dir_clone = extract_dir.to_path_buf();
             let path_clone = path.clone();
 

@@ -16,6 +16,7 @@
     @ui-visible-change="handlePswpUiVisibleChange"
   >
     <!-- ActionSheet 通过 default slot 放入 PswpUI 的 .pswp__hide-on-close 中 -->
+    <!-- visible 为true，与ui一起显隐，ui显隐由 photoswipe-vue 组件自动管理 -->
     <ActionRenderer
       v-if="actions.length > 0"
       visible
@@ -97,6 +98,7 @@ import type { ActionItem, ActionContext } from "../../actions/types";
 import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
 import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
+import { useModalBack } from "../../composables/useModalBack";
 
 const props = withDefaults(defineProps<{
   images: ImageInfo[];
@@ -118,8 +120,13 @@ const emit = defineEmits<{
 const previewVisible = ref(false);
 const previewImageUrl = ref("");
 const previewImagePath = ref("");
-const previewImage = ref<ImageInfo | null>(null);
 const previewIndex = ref<number>(-1);
+// previewImage 改为 computed，确保始终反映 props.images 的最新数据（如收藏状态变化）
+const previewImage = computed<ImageInfo | null>(() => {
+  const idx = previewIndex.value;
+  if (idx < 0 || idx >= props.images.length) return null;
+  return props.images[idx] ?? null;
+});
 const previewHoverSide = ref<"left" | "right" | null>(null);
 const previewNotFound = ref(false);
 
@@ -156,6 +163,9 @@ const previewContextMenuPosition = ref({ x: 0, y: 0 });
 // Android PSWP UI 可见性（ActionSheet 随 PSWP UI 自动显隐，无需手动控制）
 const pswpUiVisible = ref(false);
 let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Android: 使用 useModalBack 管理预览的返回键行为（不使用 close-on-back prop）
+useModalBack(previewVisible);
 
 // 全局 cache（用于同步生成 original asset URL）
 const urlCache = useImageUrlMapCache();
@@ -311,7 +321,7 @@ const setPreviewByIndex = (index: number) => {
 
   previewIndex.value = index;
   previewImagePath.value = img.localPath;
-  previewImage.value = img;
+  // previewImage 现在是 computed，无需手动赋值
   previewNotFound.value = false;
 
   // 只读：从 cache 或 props 获取 URL，不主动创建
@@ -436,16 +446,8 @@ const previewActionContext = computed<ActionContext<ImageInfo>>(() => ({
 
 const handlePswpActionClose = () => {
   if (IS_ANDROID) {
-    // 关闭 ActionSheet 时隐藏 PSWP UI
-    pswpRef.value?.toggleUI();
-  } else {
-    closePreviewContextMenu();
-  }
-};
-
-const handlePreviewActionClose = () => {
-  if (IS_ANDROID) {
-    // 已由 handlePswpActionClose 处理
+    // 关闭 ActionSheet 时隐藏 PSWP UI（使用 setUiVisible 避免 toggle 语义歧义）
+    pswpRef.value?.setUiVisible(false);
   } else {
     closePreviewContextMenu();
   }
@@ -459,9 +461,8 @@ const handlePreviewActionCommand = (command: string) => {
   };
   if (IS_ANDROID) {
     // On Android, hide PSWP UI after command (except for remove which may close preview)
-    if (command !== "remove") {
-      pswpRef.value?.toggleUI();
-    }
+    // ActionSheet 的 handleClick 会同时 emit command 和 close，所以这里不需要再调用 setUiVisible
+    // close 事件会通过 handlePswpActionClose 处理 UI 隐藏
   } else {
     closePreviewContextMenu();
   }
@@ -580,15 +581,15 @@ const closePreview = () => {
   if (IS_ANDROID) {
     previewVisible.value = false;
     doAndroidPreviewCleanup();
-    previewImage.value = null;
     previewIndex.value = -1;
+    // previewImage 现在是 computed，设置 previewIndex = -1 即可
     return;
   }
   previewVisible.value = false;
   previewImageUrl.value = "";
   previewImagePath.value = "";
-  previewImage.value = null;
   previewIndex.value = -1;
+  // previewImage 现在是 computed，设置 previewIndex = -1 即可
   previewHoverSide.value = null;
   closePreviewContextMenu();
   previewImageLoading.value = false;
@@ -621,10 +622,9 @@ const handlePreviewImageDeleted = () => {
     newIndex = 0;
   }
   
-  // Android: 响应式更新，只需同步 index 和 image
+  // Android: 响应式更新，只需同步 index（previewImage 是 computed）
   if (IS_ANDROID) {
     previewIndex.value = newIndex;
-    previewImage.value = props.images[newIndex] ?? null;
   } else {
     setPreviewByIndex(newIndex);
   }
@@ -641,19 +641,6 @@ watch(
       } else {
         handlePreviewImageDeleted();
       }
-    }
-  }
-);
-
-// Keep previewImage in sync with props.images so ActionSheet reacts to data changes (e.g. favorite toggle)
-watch(
-  () => {
-    if (!previewImage.value) return null;
-    return props.images.find(img => img.id === previewImage.value?.id);
-  },
-  (updated) => {
-    if (updated && previewImage.value && updated !== previewImage.value) {
-      previewImage.value = updated;
     }
   }
 );
@@ -844,7 +831,7 @@ const handlePswpBeforeClose = (source?: string): boolean => {
 const handlePswpChange = ({ index }: { index: number }) => {
   if (index >= 0 && index < props.images.length) {
     previewIndex.value = index;
-    previewImage.value = props.images[index] ?? null;
+    // previewImage 现在是 computed，无需手动赋值
   }
 };
 
@@ -857,8 +844,8 @@ const handlePswpUiVisibleChange = ({ visible }: { visible: boolean }) => {
 
 const handlePswpClose = () => {
   doAndroidPreviewCleanup();
-  previewImage.value = null;
   previewIndex.value = -1;
+  // previewImage 现在是 computed，设置 previewIndex = -1 即可
   swipeDeleteActive.value = false;
   swipeDeleteReady.value = false;
   isFromVerticalDrag = false;
@@ -910,7 +897,7 @@ if (!IS_ANDROID) {
 const open = (index: number) => {
   if (IS_ANDROID) {
     previewIndex.value = index;
-    previewImage.value = props.images[index] ?? null;
+    // previewImage 现在是 computed，无需手动赋值
     previewVisible.value = true;
     pswpUiVisible.value = false;
     return;

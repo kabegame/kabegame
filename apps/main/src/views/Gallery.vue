@@ -121,6 +121,7 @@ import { useBigPageRoute } from "@/composables/useBigPageRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID } from "@kabegame/core/env";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { hasFeatureInPage } from "@/header/headerFeatures";
 import { useDesktopSelectionStore, type DesktopSelectionAction } from "@/stores/desktopSelection";
@@ -310,6 +311,7 @@ const showLocalImportDialog = ref(false);
 const showMediaPicker = ref(false);
 const showCollectSourcePicker = ref(false);
 const showCollectMenuDialog = ref(false);
+useModalBack(showCollectMenuDialog);
 const crawlerDialogInitialConfig = ref<{
   pluginId?: string;
   outputDir?: string;
@@ -459,6 +461,7 @@ const handleAndroidMediaSelection = async (
   }
 };
 const showDedupeDialog = ref(false); // 去重确认对话框
+useModalBack(showDedupeDialog);
 const dedupeDeleteFiles = ref(false); // 是否删除本地文件
 // 移除/删除对话框相关
 const showRemoveDialog = ref(false);

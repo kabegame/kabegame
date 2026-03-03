@@ -16,6 +16,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, watch } from "vue";
+import { useModalBack } from "../../composables/useModalBack";
 
 interface Props {
   modelValue: boolean;
@@ -52,6 +53,8 @@ const visible = computed({
   get: () => props.modelValue,
   set: (v) => emit("update:modelValue", v),
 });
+
+useModalBack(visible);
 
 const deleteFiles = computed({
   get: () => props.deleteFiles,

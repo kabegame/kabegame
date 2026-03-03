@@ -37,6 +37,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import { ElMessage } from "element-plus";
 import { IS_ANDROID } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
+import { useModalBack } from "../../composables/useModalBack";
 
 type ImageLike = {
   url?: string;
@@ -63,6 +64,8 @@ const visible = computed({
   get: () => props.modelValue,
   set: (value) => emit("update:modelValue", value),
 });
+
+useModalBack(visible);
 
 const getPluginName = (pluginId?: string) => {
   if (!pluginId) return "unknown";

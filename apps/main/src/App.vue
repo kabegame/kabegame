@@ -111,7 +111,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { IS_WINDOWS, IS_MACOS, IS_ANDROID } from "@kabegame/core/env";
 import { usePluginStore } from "./stores/plugins";
 import { useRouter } from "vue-router";
-import { historyBackCount } from "@kabegame/core/composables/useHistoryBack";
+import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 import { ElMessageBox } from "element-plus";
 
 // 路由高亮
@@ -165,6 +165,7 @@ watch(
 );
 
 const router = useRouter();
+const modalStack = useModalStackStore();
 
 // 文件拖拽提示层引用
 const fileDropOverlayRef = ref<any>(null);
@@ -194,28 +195,30 @@ onMounted(async () => {
   if (IS_ANDROID) {
     try {
       const { onBackButtonPress } = await import("@tauri-apps/api/app");
-      let lastBackAt = 0;
+      let lastModalClosedAt = 0;
       const EXIT_COOLDOWN_MS = 400;
       await onBackButtonPress(async () => {
-        // 1. History-based modal stack: let popstate close the topmost modal
-        if (historyBackCount.value > 0) {
-          lastBackAt = Date.now();
-          history.back();
+        // 1. Modal Stack
+        if (await modalStack.closeTop()) {
+          lastModalClosedAt = Date.now();
           return;
         }
 
         // 2. Router Back
         const currentPath = router.currentRoute.value.path;
         const rootPaths = bottomTabs.value.map((t) => t.index);
+        // If not at root, go back
         if (!rootPaths.includes(currentPath) && currentPath !== "/") {
           router.back();
           return;
         }
 
-        if (Date.now() - lastBackAt < EXIT_COOLDOWN_MS) {
+        // 防止关 modal 后同一按键或连按再次触发时误弹退出确认
+        // 也防止 Android/WebView 一次返回键触发两次回调导致退出确认弹两次
+        if (Date.now() - lastModalClosedAt < EXIT_COOLDOWN_MS) {
           return;
         }
-        lastBackAt = Date.now();
+        lastModalClosedAt = Date.now();
 
         // 3. Exit Confirm
         try {

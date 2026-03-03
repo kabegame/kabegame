@@ -884,9 +884,13 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         if let Some(proc) = processor {
                             match proc.process(&archive_url, &extract_base).await {
                                 Ok(extract_dir) => {
-                                    // 遍历解压目录，将图片入队
-                                    if let Err(e) = walk_images_and_enqueue_file_downloads(
+                                    // 解析压缩包名称
+                                    let archive_name = crate::crawler::archiver::resolve_archive_name(&archive_url).await;
+                                    // 扁平复制图片到 images_dir 子文件夹并逐个入队
+                                    if let Err(e) = copy_extracted_images_and_enqueue(
                                         &extract_dir,
+                                        &job.images_dir,
+                                        &archive_name,
                                         &dq,
                                         &task_id_clone,
                                         &plugin_id_clone,
@@ -894,7 +898,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                         &job.output_album_id,
                                         &job.http_headers,
                                     ).await {
-                                        eprintln!("[Download Worker] Failed to walk extracted directory: {}", e);
+                                        eprintln!("[Download Worker] Failed to copy and enqueue extracted images: {}", e);
                                     }
                                 }
                                 Err(e) => {
@@ -1568,9 +1572,13 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
     Ok(Some(thumbnail_path))
 }
 
-/// 递归遍历解压目录，将每个图片以 file:// 协议加入下载队列（本地导入流程，不复制文件）。
-pub(crate) async fn walk_images_and_enqueue_file_downloads(
-    dir: &Path,
+/// 扁平复制解压目录中的图片到 images_dir 下的子文件夹，并逐个入队下载请求。
+/// 子文件夹名称为压缩包名（带防重名后缀），图片扁平复制到该文件夹根层。
+/// 完成后清理临时解压目录。
+pub(crate) async fn copy_extracted_images_and_enqueue(
+    extract_dir: &Path,
+    images_dir: &Path,
+    archive_name: &str,
     dq: &DownloadQueue,
     task_id: &str,
     plugin_id: &str,
@@ -1578,7 +1586,14 @@ pub(crate) async fn walk_images_and_enqueue_file_downloads(
     output_album_id: &Option<String>,
     http_headers: &HashMap<String, String>,
 ) -> Result<(), String> {
-    for entry in WalkDir::new(dir)
+    // 1. 创建目标子文件夹 images_dir/<archive_name>(dedup)/
+    let subfolder = unique_path(images_dir, archive_name);
+    tokio::fs::create_dir_all(&subfolder)
+        .await
+        .map_err(|e| format!("Failed to create archive subfolder: {}", e))?;
+
+    // 2. WalkDir 遍历解压目录，扁平复制图片
+    for entry in WalkDir::new(extract_dir)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
@@ -1586,15 +1601,31 @@ pub(crate) async fn walk_images_and_enqueue_file_downloads(
         if dq.is_task_canceled(task_id).await {
             return Err("Task canceled".to_string());
         }
-        let p = entry.path();
-        if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+
+        let source_path = entry.path();
+        if let Some(ext) = source_path
+            .extension()
+            .and_then(|e| e.to_str())
+        {
             if crate::archive::is_supported_image_ext(ext) {
-                let img_url = url::Url::from_file_path(p).unwrap();
-                // file:// 不复制，目标路径即源路径；加入下载队列后由 download worker 做后处理（哈希、缩略图、入库）
+                // 3. 扁平复制（只取文件名，unique_path 防重名）
+                let file_name = source_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("image");
+                let dest_path = unique_path(&subfolder, file_name);
+
+                tokio::fs::copy(source_path, &dest_path)
+                    .await
+                    .map_err(|e| format!("Failed to copy image {}: {}", source_path.display(), e))?;
+
+                // 4. 入队下载请求
+                let img_url = url::Url::from_file_path(&dest_path)
+                    .map_err(|_| format!("Failed to convert path to URL: {}", dest_path.display()))?;
                 let _ = dq
                     .download(
                         img_url,
-                        dir.to_path_buf(), // file 协议下 images_dir 仅用于 compute_destination_path，file 会返回源路径
+                        subfolder.clone(),
                         plugin_id.to_string(),
                         task_id.to_string(),
                         download_start_time,
@@ -1606,5 +1637,9 @@ pub(crate) async fn walk_images_and_enqueue_file_downloads(
             }
         }
     }
+
+    // 5. 清理 UUID 临时目录
+    let _ = tokio::fs::remove_dir_all(extract_dir).await;
+
     Ok(())
 }

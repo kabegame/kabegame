@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 #[cfg(not(target_os = "android"))]
 use unrar::Archive;
 use url::Url;
+use uuid;
 
 pub struct RarProcessor;
 
@@ -43,11 +44,7 @@ impl ArchiveProcessor for RarProcessor {
                 return Err(format!("Archive file not found: {}", path.display()));
             }
 
-            let archive_stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("archive");
-            let out_dir = extract_dir.join(archive_stem);
+            let out_dir = extract_dir.join(uuid::Uuid::new_v4().to_string());
             let extract_dir_clone = extract_dir.to_path_buf();
             let path_clone = path.clone();
 

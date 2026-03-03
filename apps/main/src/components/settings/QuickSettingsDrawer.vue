@@ -10,15 +10,16 @@ import { useSettingsStore, type AppSettingKey } from "@kabegame/core/stores/sett
 import CoreQuickSettingsDrawer from "@kabegame/core/components/settings/QuickSettingsDrawer.vue";
 import { QUICK_SETTINGS_GROUPS } from "@/settings/quickSettingsRegistry";
 import { IS_ANDROID } from "@kabegame/core/env";
-import { useHistoryBack } from "@kabegame/core/composables/useHistoryBack";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 const drawer = useQuickSettingsDrawerStore();
 const settingsStore = useSettingsStore();
 
-useHistoryBack(
-  () => drawer.isOpen,
-  () => drawer.close(),
-);
+const quickSettingsOpen = computed({
+  get: () => drawer.isOpen,
+  set: (v) => { if (!v) drawer.close(); },
+});
+useModalBack(quickSettingsOpen);
 
 const drawerSize = computed(() => IS_ANDROID ? "70%" : "420px");
 

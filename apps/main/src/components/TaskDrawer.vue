@@ -41,7 +41,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
@@ -51,7 +51,7 @@ import { IS_ANDROID } from "@kabegame/core/env";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import TaskDrawerContent from "@kabegame/core/components/task/TaskDrawerContent.vue";
 import TaskContextMenu from "./contextMenu/TaskContextMenu.vue";
-import { useHistoryBack } from "@kabegame/core/composables/useHistoryBack";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 interface Props {
   modelValue: boolean;
@@ -74,7 +74,7 @@ const visible = computed({
   set: (value) => emit('update:modelValue', value)
 });
 
-useHistoryBack(visible);
+useModalBack(visible);
 
 const drawerSize = computed(() => IS_ANDROID ? "70%" : "420px");
 
@@ -85,6 +85,7 @@ const contextMenuTask = ref<any | null>(null);
 
 // 保存为运行配置弹窗
 const saveConfigVisible = ref(false);
+useModalBack(saveConfigVisible);
 const savingConfig = ref(false);
 const saveConfigTask = ref<any | null>(null);
 const saveConfigName = ref("");

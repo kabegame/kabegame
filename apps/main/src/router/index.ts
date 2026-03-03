@@ -102,4 +102,9 @@ const router = createRouter({
   routes,
 });
 
+router.beforeEach((to, from, next) => {
+  console.log("beforeEach", to, from);
+  next();
+});
+
 export default router;

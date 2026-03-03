@@ -257,10 +257,14 @@ async fn enqueue_archive(
     if let Some(proc) = processor {
         match proc.process(&url, &extract_base).await {
             Ok(extract_dir) => {
-                // 遍历解压目录，将图片入队
-                use crate::crawler::downloader::walk_images_and_enqueue_file_downloads;
-                if let Err(e) = walk_images_and_enqueue_file_downloads(
+                // 解析压缩包名称
+                let archive_name = crate::crawler::archiver::resolve_archive_name(&url).await;
+                // 扁平复制图片到 images_dir 子文件夹并逐个入队
+                use crate::crawler::downloader::copy_extracted_images_and_enqueue;
+                if let Err(e) = copy_extracted_images_and_enqueue(
                     &extract_dir,
+                    &ctx.images_dir,
+                    &archive_name,
                     ctx.download_queue,
                     ctx.task_id,
                     PLUGIN_ID,
@@ -268,7 +272,7 @@ async fn enqueue_archive(
                     &ctx.output_album_id,
                     &HashMap::new(),
                 ).await {
-                    return Err(format!("Failed to walk extracted directory: {}", e));
+                    return Err(format!("Failed to copy and enqueue extracted images: {}", e));
                 }
                 *archive_count += 1;
                 emit_local_import_progress(ctx.task_id, *image_count, *archive_count);

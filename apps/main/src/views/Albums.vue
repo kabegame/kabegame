@@ -92,6 +92,7 @@ import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
 import { useImageUrlMapCache } from "@kabegame/core/composables/useImageUrlMapCache";
@@ -168,6 +169,7 @@ const currentRotationAlbumId = computed(() => {
 const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 
 const showCreateDialog = ref(false);
+useModalBack(showCreateDialog);
 const newAlbumName = ref("");
 const isRefreshing = ref(false);
 const albumCardRefs = ref<Record<string, any>>({});
