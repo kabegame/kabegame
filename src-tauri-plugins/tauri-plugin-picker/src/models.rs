@@ -96,6 +96,18 @@ pub struct TakePersistablePermissionArgs {
   pub uri: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetDisplayNameArgs {
+  pub uri: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetDisplayNameResponse {
+  pub name: String,
+}
+
 /// 选图结果：返回 content:// URI 列表。需 Serialize 供 command 返回前端。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

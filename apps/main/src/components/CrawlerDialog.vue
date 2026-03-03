@@ -282,7 +282,7 @@ import { useAlbumStore } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import { ElMessage } from "element-plus";
 import { IS_ANDROID } from "@kabegame/core/env";
-import { useHistoryBack } from "@kabegame/core/composables/useHistoryBack";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 interface Props {
     modelValue: boolean;
@@ -351,7 +351,7 @@ const visible = computed({
     set: (v) => emit("update:modelValue", v),
 });
 
-useHistoryBack(visible);
+useModalBack(visible);
 
 const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);

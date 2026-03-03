@@ -286,6 +286,7 @@ import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { IS_LIGHT_MODE, IS_LOCAL_MODE, IS_ANDROID } from "@kabegame/core/env";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
 
 interface PluginSource {
@@ -369,6 +370,7 @@ const showSkeletonBySource = ref<Record<string, boolean>>({}); // 按源区分�
 const skeletonTimersBySource = ref<Record<string, ReturnType<typeof setTimeout>>>({}); // 按源区分的骨架屏定时器
 const activeTab = ref<string>("installed");
 const showImportDialog = ref(false);
+useModalBack(showImportDialog);
 const selectedFilePath = ref<string | null>(null);
 const isRefreshing = ref(false);
 
@@ -393,7 +395,9 @@ const sources = ref<PluginSource[]>([]);
 const storeSourcesToRender = computed(() => (isLocalMode.value ? [] : sources.value));
 const sourcesLoadedOnce = ref(false); // 是否已加载过商店源（仅用于避免重复拉取）
 const showSourcesDialog = ref(false);
+useModalBack(showSourcesDialog);
 const showEditSourceDialog = ref(false);
+useModalBack(showEditSourceDialog);
 const isValidatingSource = ref(false);
 const editingSourceIndex = ref<number | null>(null);
 const editSourceForm = reactive<{ id: string; name: string; indexUrl: string }>({

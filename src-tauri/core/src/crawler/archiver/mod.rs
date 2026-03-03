@@ -13,13 +13,13 @@ pub trait ArchiveProcessor: Send + Sync {
     /// Check if this processor can handle the given URL (e.g., based on path/extension).
     fn can_handle(&self, url: &Url) -> bool;
 
-    /// Process the archive: extract to a subdirectory named after the archive (without extension)
-    /// under the given directory, and return the path of the extracted folder.
+    /// Process the archive: extract to a UUID-named subdirectory under the given directory,
+    /// and return the path of the extracted folder.
     /// The caller is responsible for recursively processing the folder. The caller should check for cancellation before calling.
     ///
     /// # Arguments
     /// * `url` - The URL of the archive file (file:// or content://)
-    /// * `extract_dir` - Target directory; extraction will create `extract_dir/{archive_stem}/`
+    /// * `extract_dir` - Target directory; extraction will create `extract_dir/{uuid}/`
     async fn process(&self, url: &Url, extract_dir: &Path) -> Result<PathBuf, String>;
 }
 
@@ -191,4 +191,33 @@ pub fn set_archive_extract_provider(provider: Box<dyn ArchiveExtractProvider>) {
 #[cfg(target_os = "android")]
 pub fn get_archive_extract_provider() -> &'static dyn ArchiveExtractProvider {
     ARCHIVE_EXTRACT_PROVIDER.get().map(|b| b.as_ref()).unwrap()
+}
+
+/// 从 URL（file:// 或 content://）解析压缩包名称（不含扩展名）。
+/// 用于创建 images_dir 下的子文件夹名称。
+pub async fn resolve_archive_name(url: &Url) -> String {
+    // file:// → path.file_stem()
+    if let Ok(path) = url.to_file_path() {
+        return path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("archive")
+            .to_string();
+    }
+    // content:// (Android) → get_display_name → strip extension
+    #[cfg(target_os = "android")]
+    {
+        use crate::crawler::content_io::get_content_io_provider;
+        if let Ok(name) = get_content_io_provider()
+            .get_display_name(url.as_str())
+            .await
+        {
+            return std::path::Path::new(&name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("archive")
+                .to_string();
+        }
+    }
+    "archive".to_string()
 }

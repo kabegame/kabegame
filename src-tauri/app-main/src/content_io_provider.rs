@@ -36,6 +36,7 @@ enum Request {
     ReadFileBytes(String),
     TakePersistablePermission(String),
     GetImageDimensions(String),
+    GetDisplayName(String),
 }
 
 #[derive(Debug)]
@@ -46,6 +47,7 @@ enum Response {
     ReadFileBytes(Result<Vec<u8>, String>),
     TakePersistablePermission(Result<(), String>),
     GetImageDimensions(Result<(u32, u32), String>),
+    GetDisplayName(Result<String, String>),
 }
 
 /// 在独立线程中运行真实 Provider，用 channel 接收请求并返回结果。避免 Wry 跨线程 (Send/Sync)。
@@ -152,6 +154,20 @@ fn run_worker_loop<R: Runtime + 'static>(
                     }),
                 )
             }
+            Request::GetDisplayName(uri) => {
+                let p = &provider;
+                Response::GetDisplayName(
+                    rt.block_on(async move {
+                        let resp = p
+                            .app_handle
+                            .picker()
+                            .get_display_name(uri)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        Ok(resp.name)
+                    }),
+                )
+            }
         };
         let _ = resp_tx.send(response);
     }
@@ -236,6 +252,17 @@ impl ContentIoProvider for ChannelContentIoProvider {
             .map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
             Response::GetImageDimensions(r) => r,
+            _ => Err("unexpected response".to_string()),
+        }
+    }
+
+    async fn get_display_name(&self, uri: &str) -> Result<String, String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send((Request::GetDisplayName(uri.to_string()), resp_tx))
+            .map_err(|e| e.to_string())?;
+        match resp_rx.await.map_err(|e| e.to_string())? {
+            Response::GetDisplayName(r) => r,
             _ => Err("unexpected response".to_string()),
         }
     }

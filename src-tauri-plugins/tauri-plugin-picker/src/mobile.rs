@@ -73,6 +73,15 @@ impl<R: Runtime> Picker<R> {
     Ok(())
   }
 
+  pub async fn get_display_name(&self, uri: String) -> crate::Result<GetDisplayNameResponse> {
+    let result: GetDisplayNameResponse = self
+      .0
+      .run_mobile_plugin_async("getDisplayName", GetDisplayNameArgs { uri })
+      .await
+      .map_err(crate::Error::from)?;
+    Ok(result)
+  }
+
   /// 从 APK assets 的 resources/plugins 解压 .kgpg 到指定目录（仅 Android）。
   pub async fn extract_bundled_plugins(&self, target_dir: String) -> crate::Result<ExtractBundledPluginsResponse> {
     let result: ExtractBundledPluginsResponse = self

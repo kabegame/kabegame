@@ -28,6 +28,7 @@ import { computed, ref, watch, nextTick } from "vue";
 import { ElMessage } from "element-plus";
 import { storeToRefs } from "pinia";
 import { useAlbumStore } from "@/stores/albums";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 interface Props {
   modelValue: boolean;
@@ -63,6 +64,8 @@ const visible = computed({
   get: () => props.modelValue,
   set: (v) => emit("update:modelValue", v),
 });
+
+useModalBack(visible);
 
 watch(
   () => props.modelValue,

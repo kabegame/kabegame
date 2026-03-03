@@ -73,7 +73,8 @@ import EmptyState from "../common/EmptyState.vue";
 import ImagePreviewDialog from "../common/ImagePreviewDialog.vue";
 import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
-import { useHistoryBack } from "../../composables/useHistoryBack";
+import { useModalBack } from "../../composables/useModalBack";
+import { useModalStackStore } from "../../stores/modalStack";
 import { useUiStore } from "../../stores/ui";
 import { useDragScroll } from "../../composables/useDragScroll";
 import { IS_ANDROID } from "../../env";
@@ -159,6 +160,7 @@ const emit = defineEmits<{
 }>();
 
 const settingsStore = useSettingsStore();
+const modalStackStore = useModalStackStore();
 const uiStore = useUiStore();
 
 const isLoading = computed(() => props.loading ?? false);
@@ -280,11 +282,6 @@ const effectiveSelectedIds = computed<Set<string>>(() => selectedIds.value);
 
 // Android 选择模式
 const androidSelectionMode = ref(false);
-// System back exits selection mode (history-based, cross-platform)
-useHistoryBack(
-  () => androidSelectionMode.value,
-  () => { exitAndroidSelectionMode(); },
-);
 
 // 预览与 context menu
 const previewRef = ref<InstanceType<typeof ImagePreviewDialog> | null>(null);
@@ -314,11 +311,8 @@ const currentPreviewIndex = computed(() => {
   return previewRef.value?.previewIndex ?? -1;
 });
 
-// System back closes preview (history-based, cross-platform)
-useHistoryBack(
-  () => isPreviewOpen.value,
-  () => { previewRef.value?.close(); },
-);
+// Android 系统返回键：预览打开时注册到 modalStack
+const modalStackId = ref<string | null>(null);
 
 const getEffectiveImageUrl = (id: string) => props.imageUrlMap?.[id];
 const imageUrlMapForPreview = computed(() => props.imageUrlMap || {});
@@ -856,6 +850,10 @@ onMounted(async () => {
 onUnmounted(async () => {
   gridDestroyed = true;
   window.removeEventListener("resize", updateWindowAspectRatio);
+  if (modalStackId.value) {
+    modalStackStore.remove(modalStackId.value);
+    modalStackId.value = null;
+  }
   if (scrollStableTimer) window.clearTimeout(scrollStableTimer);
   if (zoomAnimTimer) clearTimeout(zoomAnimTimer);
   if (saveScrollRaf != null) cancelAnimationFrame(saveScrollRaf);
@@ -890,6 +888,25 @@ onActivated(() => {
 onDeactivated(() => {
   // deactivated 时不主动重置 measuredItemHeight（保留上一次可见时的正确值）
 });
+
+// Android：预览打开时注册到 modalStack
+watch(
+  () => isPreviewOpen.value,
+  (visible) => {
+    if (visible) {
+      if (IS_ANDROID) {
+        modalStackId.value = modalStackStore.push(() => {
+          previewRef.value?.close();
+        });
+      }
+    } else {
+      if (IS_ANDROID && modalStackId.value) {
+        modalStackStore.remove(modalStackId.value);
+        modalStackId.value = null;
+      }
+    }
+  }
+);
 
 // 检测图片列表变化，标记新增/删除的图片（仅虚拟滚动模式）
 watch(
@@ -1036,13 +1053,16 @@ watch(
   { deep: true }
 );
 
-// 退出 Android 选择模式
+// 退出 Android 选择模式（清空选择并同步通知父组件收起 bar）
 const exitAndroidSelectionMode = () => {
   if (!IS_ANDROID) return;
   androidSelectionMode.value = false;
   clearSelection();
   emitAndroidSelectionChange();
 };
+
+// Android：选择模式用 useModalBack，变为 false 时 onClose 清除选择状态
+useModalBack(androidSelectionMode, { onClose: exitAndroidSelectionMode });
 
 const getContainerEl = () => containerEl.value;
 

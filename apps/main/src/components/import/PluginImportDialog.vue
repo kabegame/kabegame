@@ -69,7 +69,8 @@ import { ElMessage } from 'element-plus';
 import PluginDetailPage from '@kabegame/core/components/plugin/PluginDetailPage.vue';
 import { usePluginStore } from '@/stores/plugins';
 import { isUpdateAvailable } from '@kabegame/core/utils/version';
-import { useHistoryBack } from '@kabegame/core/composables/useHistoryBack';
+import { IS_ANDROID } from '@kabegame/core/env';
+import { useModalBack } from '@kabegame/core/composables/useModalBack';
 
 type ImportPreview = {
   id: string;
@@ -131,7 +132,7 @@ const installing = ref(false);
 const detail = ref<any | null>(null);
 const pluginStore = usePluginStore();
 
-useHistoryBack(visible);
+useModalBack(visible);
 
 watch(() => props.kgpgPath, async (newPath) => {
   if (newPath && visible.value) {
@@ -142,7 +143,7 @@ watch(() => props.kgpgPath, async (newPath) => {
 watch(() => visible.value, async (val) => {
   if (val && props.kgpgPath) {
     await loadPreview(props.kgpgPath);
-  } else {
+  } else if (!val) {
     // Reset state when closed
     loading.value = false;
     preview.value = null;

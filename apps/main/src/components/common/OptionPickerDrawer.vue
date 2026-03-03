@@ -39,7 +39,9 @@
 import type { Component } from "vue";
 import { ArrowRight } from "@element-plus/icons-vue";
 import { ElDrawer, ElIcon } from "element-plus";
-import { useHistoryBack } from "@kabegame/core/composables/useHistoryBack";
+import { IS_ANDROID } from "@kabegame/core/env";
+import { computed } from "vue";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 export interface OptionItem {
   id: string;
@@ -63,10 +65,11 @@ const emit = defineEmits<{
   (e: "select", id: string): void;
 }>();
 
-useHistoryBack(
-  () => props.modelValue,
-  () => emit("update:modelValue", false),
-);
+const optionPickerOpen = computed({
+  get: () => props.modelValue,
+  set: (v) => emit("update:modelValue", v),
+});
+useModalBack(optionPickerOpen);
 
 const handleSelect = (id: string) => {
   emit("select", id);

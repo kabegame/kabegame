@@ -34,14 +34,16 @@ import { computed } from "vue";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { HELP_GROUPS } from "@/help/helpRegistry";
-import { useHistoryBack } from "@kabegame/core/composables/useHistoryBack";
+import { IS_ANDROID } from "@kabegame/core/env";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 const drawer = useHelpDrawerStore();
 
-useHistoryBack(
-  () => drawer.isOpen,
-  () => drawer.close(),
-);
+const helpDrawerOpen = computed({
+  get: () => drawer.isOpen,
+  set: (v) => { if (!v) drawer.close(); },
+});
+useModalBack(helpDrawerOpen);
 
 const drawerSize = computed(() => IS_ANDROID ? "70%" : "420px");
 

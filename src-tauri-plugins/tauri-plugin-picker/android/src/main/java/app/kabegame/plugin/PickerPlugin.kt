@@ -492,6 +492,54 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    @InvokeArg
+    class GetDisplayNameArgs {
+        var uri: String = ""
+    }
+
+    @Command
+    fun getDisplayName(invoke: Invoke) {
+        val args = invoke.parseArgs(GetDisplayNameArgs::class.java)
+        val uriStr = args.uri
+        if (uriStr.isBlank()) {
+            invoke.reject("uri 不能为空")
+            return
+        }
+        try {
+            val uri = Uri.parse(uriStr)
+            val contentResolver = activity.applicationContext.contentResolver
+            var fileName: String? = null
+
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val displayNameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (displayNameIndex != -1) {
+                        fileName = cursor.getString(displayNameIndex)
+                    }
+                }
+            }
+
+            if (fileName == null) {
+                fileName = uri.lastPathSegment
+            }
+
+            if (fileName == null) {
+                val mimeType = contentResolver.getType(uri)
+                val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "bin"
+                fileName = "content_${System.currentTimeMillis()}.$extension"
+            }
+
+            fileName = File(fileName!!).name
+
+            val result = JSObject()
+            result.put("name", fileName)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            Log.e("PickerPlugin", "getDisplayName failed", e)
+            invoke.reject("获取文件名失败: ${e.message}", e)
+        }
+    }
+
     @Command
     fun pickImages(invoke: Invoke) {
         pendingImagesInvoke = invoke

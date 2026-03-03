@@ -96,6 +96,7 @@ import { stat } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useImageTypes } from "@/composables/useImageTypes";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 interface Album {
   id: string;
@@ -114,6 +115,8 @@ const visible = computed({
   get: () => props.modelValue,
   set: (v) => emit("update:modelValue", v),
 });
+
+useModalBack(visible);
 
 const crawlerStore = useCrawlerStore();
 const { extensions: imageExtensions, load: loadImageTypes } = useImageTypes();
