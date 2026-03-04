@@ -61,6 +61,14 @@ impl SchemeDownloader for HttpSchemeDownloader {
             .unwrap_or(2);
         download_http(dq, task_id, url, dest, &headers, retry, progress).await
     }
+
+    async fn display_name(&self, _url: &Url, final_local_path: &str) -> String {
+        Path::new(final_local_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("image")
+            .to_string()
+    }
 }
 
 pub fn create_client() -> Result<reqwest::Client, String> {

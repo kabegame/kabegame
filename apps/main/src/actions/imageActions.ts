@@ -53,14 +53,14 @@ export function createImageActions(
       icon: InfoFilled,
       command: "detail",
       // On Android: only in "更多" submenu
-      visible: (ctx) => !hideSet.has("detail") && (!IS_ANDROID || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
+      visible: (ctx) => !hideSet.has("detail") && !IS_ANDROID,
     },
     {
       key: "favorite",
       label: (ctx: ActionContext<ImageInfo>) => ctx.target?.favorite ? "取消收藏" : "收藏",
       icon: (ctx: ActionContext<ImageInfo>) => ctx.target?.favorite ? StarFilled : Star,
       command: "favorite",
-      visible: (ctx) => !hideSet.has("favorite") && (!ctx.selectedCount || ctx.selectedCount === 1),
+      visible: (ctx) => !hideSet.has("favorite"),
     },
     {
       key: "share",

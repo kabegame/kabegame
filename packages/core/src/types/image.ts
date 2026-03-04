@@ -27,6 +27,9 @@ export interface ImageInfo {
   favorite?: boolean;
   localExists?: boolean;
 
+  // 显示名称（从数据库 display_name 列读取）
+  displayName?: string;
+
   // 任务失败占位（TaskDetail）：用于在网格中渲染“下载重试”按钮
   isTaskFailed?: boolean;
   taskFailedId?: number;

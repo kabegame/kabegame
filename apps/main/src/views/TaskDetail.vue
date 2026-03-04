@@ -9,8 +9,7 @@
             :enable-virtual-scroll="!IS_ANDROID"
             :actions="imageActions"
             :on-context-command="handleImageMenuCommand"
-            @retry-download="handleRetryDownload" @scroll-stable="loadImageUrls()"
-            @android-selection-change="handleAndroidSelectionChange">
+            @retry-download="handleRetryDownload" @scroll-stable="loadImageUrls()">
             <template #before-grid>
                 <PageHeader :title="taskName || '任务'" :subtitle="taskSubtitle" show-back @back="goBack">
                     <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !taskId">
@@ -108,7 +107,16 @@ import { storeToRefs } from "pinia";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { useDesktopSelectionStore, type DesktopSelectionAction } from "@/stores/desktopSelection";
+import { useSelectionStore } from "@kabegame/core/stores/selection";
+import type { Component } from "vue";
+
+// 选择操作项类型（用于本页选择栏）
+export interface SelectionAction {
+  key: string;
+  label: string;
+  icon: Component;
+  command: string;
+}
 import { useImageOperations } from "@/composables/useImageOperations";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
@@ -140,7 +148,7 @@ const route = useRoute();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const settingsStore = useSettingsStore();
-const desktopSelectionStore = useDesktopSelectionStore();
+const desktopSelectionStore = useSelectionStore();
 const pluginStore = usePluginStore();
 const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
@@ -748,7 +756,7 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
 };
 
 // Android 选择模式：构建操作栏 actions
-const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): DesktopSelectionAction[] => {
+const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): SelectionAction[] => {
   const countText = selectedCount > 1 ? `(${selectedCount})` : "";
   const firstSelectedImage = images.value.find(img => selectedIds.has(img.id));
   const isFavorite = firstSelectedImage?.favorite ?? false;
@@ -765,35 +773,6 @@ const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<s
   }
 };
 
-// Android 选择变化处理：用 desktop 选择数量决定状态
-const handleAndroidSelectionChange = (payload: { active: boolean; selectedCount: number; selectedIds: ReadonlySet<string> }) => {
-  if (!IS_ANDROID) return;
-  
-  if (!payload.active || payload.selectedCount === 0) {
-    desktopSelectionStore.clear();
-    return;
-  }
-  const actions = buildSelectionActions(payload.selectedCount, payload.selectedIds);
-  if (desktopSelectionStore.selectedCount > 0) {
-    desktopSelectionStore.update(payload.selectedCount, actions);
-  } else {
-    const firstImage = images.value.find(img => payload.selectedIds.has(img.id));
-    if (!firstImage) return;
-    desktopSelectionStore.set(
-      payload.selectedCount,
-      actions,
-      (cmd: string) => {
-        const commandPayload: any = {
-          command: cmd,
-          image: firstImage,
-          selectedImageIds: payload.selectedIds,
-        };
-        void handleImageMenuCommand(commandPayload);
-      },
-      () => taskViewRef.value?.exitAndroidSelectionMode?.()
-    );
-  }
-};
 
 const handleImageMenuCommand = async (
     payload: any
@@ -1102,7 +1081,8 @@ onActivated(async () => {
 
 onDeactivated(() => {
     stopTimersAndListeners();
-    desktopSelectionStore.clear();
+    // 页面失活时清空选择
+    desktopSelectionStore.selectedIds = new Set();
   });
 
 </script>

@@ -34,11 +34,12 @@ pub struct ImageInfo {
     #[serde(default)]
     pub hash: String,
     #[serde(default)]
-    pub order: Option<i64>,
-    #[serde(default)]
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
+    #[serde(rename = "displayName")]
+    #[serde(default)]
+    pub display_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -89,12 +90,12 @@ impl Storage {
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-             images.\"order\",
              images.width,
-             images.height
+             images.height,
+             images.display_name
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
-             ORDER BY COALESCE(images.\"order\", images.crawled_at) ASC 
+             ORDER BY images.crawled_at ASC
              LIMIT ? OFFSET ?",
             FAVORITE_ALBUM_ID
         );
@@ -119,9 +120,9 @@ impl Storage {
                     hash: row.get(8)?,
                     favorite: row.get::<_, i64>(9)? != 0,
                     local_exists: true,
-                    order: row.get::<_, Option<i64>>(10)?,
-                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    display_name: row.get(12)?,
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
@@ -167,9 +168,9 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.\"order\",
                  images.width,
-                 images.height
+                 images.height,
+                 images.display_name
                  FROM images
                  WHERE images.id = ?1",
                 params![image_id],
@@ -190,9 +191,9 @@ impl Storage {
                         hash: row.get(8)?,
                         favorite: false,
                         local_exists,
-                        order: row.get::<_, Option<i64>>(9)?,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        width: row.get::<_, Option<i64>>(9)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        display_name: row.get(11)?,
                     })
                 },
             )
@@ -221,9 +222,9 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.\"order\",
                  images.width,
-                 images.height
+                 images.height,
+                 images.display_name
                  FROM images
                  WHERE images.local_path = ?1",
                 params![local_path],
@@ -243,9 +244,9 @@ impl Storage {
                         hash: row.get(8)?,
                         favorite: false,
                         local_exists,
-                        order: row.get::<_, Option<i64>>(9)?,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        width: row.get::<_, Option<i64>>(9)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        display_name: row.get(11)?,
                     })
                 },
             )
@@ -274,9 +275,9 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.\"order\",
                  images.width,
-                 images.height
+                 images.height,
+                 images.display_name
                  FROM images
                  WHERE images.url = ?1",
                 params![url],
@@ -296,9 +297,9 @@ impl Storage {
                         hash: row.get(8)?,
                         favorite: false,
                         local_exists,
-                        order: row.get::<_, Option<i64>>(9)?,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        width: row.get::<_, Option<i64>>(9)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        display_name: row.get(11)?,
                     })
                 },
             )
@@ -330,9 +331,9 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.\"order\",
                  images.width,
-                 images.height
+                 images.height,
+                 images.display_name
                  FROM images
                  WHERE images.hash = ?1",
                 params![hash],
@@ -352,9 +353,9 @@ impl Storage {
                         hash: row.get(8)?,
                         favorite: false,
                         local_exists,
-                        order: row.get::<_, Option<i64>>(9)?,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        width: row.get::<_, Option<i64>>(9)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        display_name: row.get(11)?,
                     })
                 },
             )
@@ -387,8 +388,6 @@ impl Storage {
             image.thumbnail_path.clone()
         };
 
-        let order = image.order.unwrap_or(image.crawled_at as i64);
-
         // 如果 width/height 为空，尝试解析
         if image.width.is_none() || image.height.is_none() {
             if let Some((w, h)) = resolve_image_dimensions(&image.local_path) {
@@ -397,21 +396,22 @@ impl Storage {
             }
         }
 
+        let crawled_at_i64 = image.crawled_at as i64;
         conn.execute(
-            "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\", width, height)
+            "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, width, height, display_name)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 &image.url,
                 image.local_path,
                 image.plugin_id,
                 image.task_id,
-                image.crawled_at as i64,
+                crawled_at_i64,
                 metadata_json,
                 thumbnail_path,
                 image.hash,
-                order,
                 image.width.map(|v| v as i64),
                 image.height.map(|v| v as i64),
+                image.display_name,
             ],
         )
         .map_err(|e| format!("Failed to add image: {}", e))?;
@@ -419,13 +419,12 @@ impl Storage {
         let id = conn.last_insert_rowid();
         image.id = id.to_string();
         image.thumbnail_path = thumbnail_path;
-        image.order = Some(order);
 
         if let Some(task_id) = image.task_id.as_ref() {
             let added_at = image.crawled_at;
             let _ = conn.execute(
                 "INSERT OR REPLACE INTO task_images (task_id, image_id, added_at, \"order\") VALUES (?1, ?2, ?3, ?4)",
-                params![task_id, id, added_at as i64, order],
+                params![task_id, id, added_at as i64, crawled_at_i64],
             );
         }
 
@@ -763,7 +762,7 @@ impl Storage {
 
         let sql = match mode {
             "random" => "SELECT CAST(id AS TEXT) FROM images ORDER BY RANDOM() LIMIT 1",
-            _ => "SELECT CAST(id AS TEXT) FROM images ORDER BY COALESCE(\"order\", crawled_at) ASC LIMIT 1",
+            _ => "SELECT CAST(id AS TEXT) FROM images ORDER BY crawled_at ASC LIMIT 1",
         };
 
         let id: Option<String> = conn

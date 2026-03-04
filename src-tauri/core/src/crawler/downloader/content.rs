@@ -37,6 +37,31 @@ impl SchemeDownloader for ContentSchemeDownloader {
     ) -> Result<String, String> {
         handle_content(dq, task_id, url.as_str(), progress).await
     }
+
+    async fn display_name(&self, _url: &Url, final_local_path: &str) -> String {
+        #[cfg(target_os = "android")]
+        {
+            match get_content_io_provider().get_display_name(final_local_path).await {
+                Ok(name) => name,
+                Err(_) => {
+                    // 回退到 URI 末段
+                    final_local_path
+                        .split('/')
+                        .last()
+                        .unwrap_or("image")
+                        .to_string()
+                }
+            }
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            final_local_path
+                .split('/')
+                .last()
+                .unwrap_or("image")
+                .to_string()
+        }
+    }
 }
 
 /// 请求持久化权限（失败静默），然后返回原 content URI。

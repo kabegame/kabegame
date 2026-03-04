@@ -1,12 +1,12 @@
 import { ref, type Ref } from "vue";
-import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import { readFile } from "../fs/readFile";
 import type { ImageInfo, ImageUrlMap } from "../types/image";
 import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "../env";
+import { fileToUrl } from "../fileServer";
 
 type Entry = {
-  thumbnail?: string; // blob:
-  original?: string; // asset:
+  thumbnail?: string; // blob:/http:
+  original?: string; // asset/http/blob:
 };
 
 const DEFAULT_CAPACITY = 10000;
@@ -17,10 +17,6 @@ function normalizePath(p: string): string {
     .trimStart()
     .replace(/^\\\\\?\\/, "")
     .trim();
-}
-
-function looksLikeWindowsPath(p: string) {
-  return /^[a-zA-Z]:\\/.test(p) || /^[a-zA-Z]:\//.test(p);
 }
 
 function guessMimeType(path: string): string {
@@ -36,8 +32,8 @@ function guessMimeType(path: string): string {
 
 /**
  * 全局图片 URL 缓存（LRU，capacity=10000）：
- * - thumbnail：默认是 Blob URL（需要 readFile -> Blob -> createObjectURL）；在 Linux 上改为 asset URL（与 original 一致）
- * - original：始终是 asset URL（convertFileSrc，同步）
+ * - thumbnail：桌面走 file 服务 URL；Android 仍可为 Blob URL（content://）
+ * - original：桌面走 file 服务 URL；Android content:// 走代理 URL / Blob URL
  *
  * 注意：
  * - LRU 淘汰必须 revokeObjectURL，否则会泄漏（仅对 blob: 生效）
@@ -172,23 +168,16 @@ class ImageUrlMapLruCache {
   private toAssetUrl(localPath: string | undefined | null): string {
     const raw = (localPath || "").trim();
     if (!raw) return "";
-    if (!isTauri()) return "";
+    if (IS_ANDROID) return "";
     const normalized = normalizePath(raw);
     if (!normalized) return "";
-    try {
-      const u = convertFileSrc(normalized);
-      if (!u || looksLikeWindowsPath(u)) return "";
-      return u;
-    } catch {
-      return "";
-    }
+    return fileToUrl(normalized);
   }
 
   /** original：asset url（同步）或 Android content:// 时直接使用 content:// URI（同步）。返回写入后的 url（可能为空字符串）。 */
   public ensureOriginalAssetUrl(imageId: string, localPath: string | undefined | null) {
     const path = (localPath || "").trim();
     if (!path) return "";
-    if (!isTauri()) return "";
     // Android content://：转为代理 HTTP URL，由 WebView shouldInterceptRequest 拦截并流式加载
     if (IS_ANDROID && path.startsWith("content://")) {
       const url = path.replace("content://", CONTENT_URI_PROXY_PREFIX);
@@ -275,19 +264,35 @@ class ImageUrlMapLruCache {
   }
 
   /**
-   * thumbnail：始终 blob url（异步）。
-   * - localPath 传入 thumbnailPath 或 localPath（由调用方决定优先级）
+   * thumbnail：
+   * - 桌面：同步 file 服务 URL
+   * - Android：content:// 时走 Blob URL（异步）
    */
   public ensureThumbnailBlobUrl(imageId: string, localPath: string | undefined | null): Promise<string> {
     const normalized = normalizePath(localPath || "");
     if (!imageId || !normalized) return Promise.resolve("");
 
     const hit = this.lru.get(imageId)?.thumbnail;
-    if (hit && hit.startsWith("blob:")) {
+    if (hit && (!IS_ANDROID || hit.startsWith("blob:"))) {
       // touch
       const e = this.lru.get(imageId);
       if (e) this.touch(imageId, e);
       return Promise.resolve(hit);
+    }
+
+    if (!IS_ANDROID) {
+      const url = fileToUrl(normalized);
+      if (!url) return Promise.resolve("");
+      const prev = this.lru.get(imageId) || {};
+      const next: Entry = { ...prev, thumbnail: url };
+      this.lru.set(imageId, next);
+      this.touch(imageId, next);
+      this.imageUrlMap.value[imageId] = {
+        ...(this.imageUrlMap.value[imageId] || {}),
+        thumbnail: url,
+      };
+      this.evictIfNeeded();
+      return Promise.resolve(url);
     }
 
     const inflight = this.inFlightThumb.get(imageId);

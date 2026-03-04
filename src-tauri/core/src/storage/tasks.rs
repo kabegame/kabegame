@@ -387,7 +387,8 @@ impl Storage {
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                  i.\"order\",
                  i.width,
-                 i.height
+                 i.height,
+                 i.display_name
                  FROM images i
                  INNER JOIN task_images ti ON i.id = ti.image_id
                  LEFT JOIN album_images ON i.id = album_images.image_id AND album_images.album_id = ?2
@@ -412,9 +413,9 @@ impl Storage {
                     hash: row.get(8)?,
                     favorite: row.get::<_, i64>(9)? != 0,
                     local_exists: true,
-                    order: row.get(10)?,
                     width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                     height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    display_name: row.get(13)?,
                 })
             })
             .map_err(|e| format!("Failed to query task images: {}", e))?;
@@ -441,7 +442,8 @@ impl Storage {
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                  i.\"order\",
                  i.width,
-                 i.height
+                 i.height,
+                 i.display_name
                  FROM images i
                  INNER JOIN task_images ti ON i.id = ti.image_id
                  LEFT JOIN album_images ON i.id = album_images.image_id AND album_images.album_id = ?2
@@ -469,9 +471,9 @@ impl Storage {
                         hash: row.get(8)?,
                         favorite: row.get::<_, i64>(9)? != 0,
                         local_exists: true,
-                        order: row.get(10)?,
                         width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        display_name: row.get(13)?,
                     })
                 },
             )

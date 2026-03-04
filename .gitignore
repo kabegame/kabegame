@@ -29,11 +29,6 @@ src-tauri/app-main/resources/plugins/*.kgpg
 src-tauri/*/gen/schemas/*
 src-tauri/app-main/resources/bin/*
 
-# Tauri generated icons (keep only icon.png and README.md)
-src-tauri/icons/*
-!src-tauri/icons/icon.png
-!src-tauri/icons/README.md
-
 # development data
 /data
 

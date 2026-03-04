@@ -8,6 +8,8 @@ export interface ActionContext<T = unknown> {
   target: T | null;
   selectedIds: ReadonlySet<string>;
   selectedCount: number;
+  /** Optional: total item count (e.g. grid images). Used by Android ActionSheet for select-all/deselect-all. */
+  totalCount?: number;
 }
 
 /**

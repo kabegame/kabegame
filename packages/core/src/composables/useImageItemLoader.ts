@@ -1,7 +1,7 @@
 import { computed, onUnmounted, ref, watch, type Ref } from "vue";
-import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import type { ImageInfo } from "../types/image";
 import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "../env";
+import { fileToUrl } from "../fileServer";
 
 export type ImageUrlPair =
   | { thumbnail?: string; original?: string }
@@ -23,10 +23,6 @@ export type UseImageItemLoaderOptions = {
   missingUrlTimeoutMs?: number;
 };
 
-function looksLikeWindowsPath(p: string) {
-  return /^[a-zA-Z]:\\/.test(p) || /^[a-zA-Z]:\//.test(p);
-}
-
 export function useImageItemLoader(options: UseImageItemLoaderOptions) {
   const missingUrlTimeoutMs = computed(
     () => options.missingUrlTimeoutMs ?? 15000
@@ -35,7 +31,7 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
   const thumbnailUrl = computed(() => options.imageUrl.value?.thumbnail);
   const originalUrl = computed(() => options.imageUrl.value?.original);
 
-  // convertFileSrc 本身是同步的；这里做一层缓存避免同一路径在大量渲染/重算时重复转换
+  // fileToUrl 是同步的；这里做一层缓存避免同一路径在大量渲染/重算时重复转换
   const assetUrlCache = new Map<string, string>();
   const toAssetUrl = (localPath: string | undefined | null): string => {
     const raw = (localPath || "").trim();
@@ -53,11 +49,6 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
     const cached = assetUrlCache.get(raw);
     if (cached) return cached;
     try {
-      // 非 Tauri 环境：不要返回 D:\... 给 <img>
-      if (!isTauri()) {
-        assetUrlCache.set(raw, "");
-        return "";
-      }
       // 移除 Windows 长路径前缀 \\?\
       const normalizedPath = raw
         .trimStart()
@@ -67,11 +58,9 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
         assetUrlCache.set(raw, "");
         return "";
       }
-      const u = convertFileSrc(normalizedPath);
-      // 兜底：极端情况下 convertFileSrc 可能返回原路径，避免浏览器尝试加载 Windows 路径并刷屏
-      const finalUrl = !u || looksLikeWindowsPath(u) ? "" : u;
-      assetUrlCache.set(raw, finalUrl);
-      return finalUrl;
+      const url = fileToUrl(normalizedPath);
+      assetUrlCache.set(raw, url);
+      return url;
     } catch {
       assetUrlCache.set(raw, "");
       return "";
@@ -81,7 +70,7 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
   const computedDisplayUrl = computed(() => {
     // 规则已简化：
     // - thumbnail：上层必须提供 blob url（缺失则显示骨架/失败）
-    // - original：上层提供 asset url；若缺失且需要原图，这里做一次同步兜底（convertFileSrc）
+    // - original：上层提供 asset url；若缺失且需要原图，这里做一次同步兜底（fileToUrl）
     if (options.useOriginal.value) {
       if (originalUrl.value) return originalUrl.value;
       const image = options.image.value;

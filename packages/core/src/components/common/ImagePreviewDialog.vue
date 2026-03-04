@@ -15,6 +15,18 @@
     @close="handlePswpClose"
     @ui-visible-change="handlePswpUiVisibleChange"
   >
+    <!-- 安卓：显示名称用 fixed 定位，与叉号同 top/高度，限制宽度并换行 -->
+    <div
+      v-if="previewImage?.displayName"
+      class="fixed left-0 right-0 top-0 z-[2001] flex min-h-[60px] items-center justify-center px-4 pt-[env(safe-area-inset-top,0px)]"
+    >
+      <span
+        class="max-w-[85vw] break-words text-center text-sm font-medium text-white/90"
+        style="text-shadow: 0 1px 2px rgba(0,0,0,0.3)"
+      >
+        {{ previewImage.displayName }}
+      </span>
+    </div>
     <!-- ActionSheet 通过 default slot 放入 PswpUI 的 .pswp__hide-on-close 中 -->
     <!-- visible 为true，与ui一起显隐，ui显隐由 photoswipe-vue 组件自动管理 -->
     <ActionRenderer
@@ -110,9 +122,9 @@ const props = withDefaults(defineProps<{
   actions: () => [],
 });
 
-// watch(() => props.images.length, () => {
-//   console.log(props.images);
-// });
+watch(() => props.images.length, () => {
+  console.log(props.images);
+});
 
 const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
@@ -278,11 +290,13 @@ const measureSizesAfterRender = async () => {
 // previewImageStyle 已删除，由 Panzoom 自动管理 transform（仅桌面端）
 
 const previewDialogTitle = computed(() => {
-  if (!previewImage.value?.localPath) {
+  const img = previewImage.value;
+  if (img?.displayName) return img.displayName;
+  if (!img?.localPath) {
     return "图片预览";
   }
   // 从路径中提取文件名（支持 Windows 和 Unix 路径分隔符）
-  const path = previewImage.value.localPath;
+  const path = img.localPath;
   const fileName = path.split(/[/\\]/).pop() || path;
   return fileName || "图片预览";
 });

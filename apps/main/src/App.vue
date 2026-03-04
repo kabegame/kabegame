@@ -109,6 +109,7 @@ import { listen, emit, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from "@tauri-apps/api/core";
 import { IS_WINDOWS, IS_MACOS, IS_ANDROID } from "@kabegame/core/env";
+import { initFileServerBaseUrl } from "@kabegame/core/fileServer";
 import { usePluginStore } from "./stores/plugins";
 import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
@@ -192,6 +193,10 @@ const { isCollapsed, toggleCollapse } = useSidebar();
 let unlistenSettingChange: UnlistenFn | null = null;
 
 onMounted(async () => {
+  if (!IS_ANDROID) {
+    await initFileServerBaseUrl();
+  }
+
   // Android Back Button Handling
   let confirmingExit = false;
   if (IS_ANDROID) {

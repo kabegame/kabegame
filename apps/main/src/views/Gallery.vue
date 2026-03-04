@@ -8,8 +8,7 @@
         :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing"
         :actions="imageActions"
         :on-context-command="handleGridContextCommand"
-        @scroll-stable="loadImageUrls()"
-        @android-selection-change="handleAndroidSelectionChange">
+        @scroll-stable="loadImageUrls()">
         <template #before-grid>
           <!-- 顶部工具栏 -->
           <GalleryToolbar :dedupe-loading="dedupeLoading" :dedupe-progress="dedupeProgress"
@@ -124,7 +123,16 @@ import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { hasFeatureInPage } from "@/header/headerFeatures";
-import { useDesktopSelectionStore, type DesktopSelectionAction } from "@/stores/desktopSelection";
+import { useSelectionStore } from "@kabegame/core/stores/selection";
+import type { Component } from "vue";
+
+// 选择操作项类型（用于本页选择栏）
+export interface SelectionAction {
+  key: string;
+  label: string;
+  icon: Component;
+  command: string;
+}
 import { open } from "@tauri-apps/plugin-dialog";
 import { stat } from "@tauri-apps/plugin-fs";
 import MediaPicker from "@/components/MediaPicker.vue";
@@ -146,7 +154,7 @@ const openHelpDrawer = () => helpDrawer.open("gallery");
 const pluginStore = usePluginStore();
 const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
-const desktopSelectionStore = useDesktopSelectionStore();
+const selectionStore = useSelectionStore();
 const { extensions: imageExtensions, load: loadImageTypes, getMimeType } = useImageTypes();
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
@@ -793,7 +801,7 @@ const loadPluginIcons = async () => {
 };
 
 // Android 选择模式：构建操作栏 actions
-const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): DesktopSelectionAction[] => {
+const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): SelectionAction[] => {
   const countText = selectedCount > 1 ? `(${selectedCount})` : "";
   
   // 获取第一个选中图片的状态（用于判断收藏状态）
@@ -847,43 +855,10 @@ const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<s
   }
 };
 
-// 统一关闭/清理 Android 选择模式：清空 Grid 选择并收起底部 bar（用于返回键、取消按钮、选择归零等）
+// 统一关闭/清理 Android 选择模式：清空选择（Grid 与 store 共用同一 ref，效果一致）
 const closeSelectionMode = () => {
   if (!IS_ANDROID) return;
-  galleryViewRef.value?.exitAndroidSelectionMode?.();
-  desktopSelectionStore.clear();
-};
-
-// Android 选择变化处理：用 desktop 选择数量决定状态
-const handleAndroidSelectionChange = (payload: { active: boolean; selectedCount: number; selectedIds: ReadonlySet<string> }) => {
-  if (!IS_ANDROID) return;
-  
-  if (!payload.active || payload.selectedCount === 0) {
-    desktopSelectionStore.clear();
-    return;
-  }
-
-  const actions = buildSelectionActions(payload.selectedCount, payload.selectedIds);
-  
-  if (desktopSelectionStore.selectedCount > 0) {
-    desktopSelectionStore.update(payload.selectedCount, actions);
-  } else {
-    desktopSelectionStore.set(
-      payload.selectedCount,
-      actions,
-      (cmd: string) => {
-        const firstImage = displayedImages.value.find(img => payload.selectedIds.has(img.id));
-        if (!firstImage) return;
-        const commandPayload: ContextCommandPayload = {
-          command: cmd as any,
-          image: firstImage,
-          selectedImageIds: payload.selectedIds,
-        };
-        void handleGridContextCommand(commandPayload);
-      },
-      () => closeSelectionMode()
-    );
-  }
+  galleryViewRef.value?.clearSelection?.();
 };
 
 const handleGridContextCommand = async (

@@ -36,8 +36,8 @@ export type UseImageUrlLoaderParams<
 
 /**
  * 统一的图片 URL 加载器（供所有 ImageGrid 页面复用）：
- * - thumbnail：一律 Blob URL（readFile -> Blob -> createObjectURL），由 core 的全局 LRU(10000) 管理
- * - original：一律 asset URL（convertFileSrc，同步）
+ * - thumbnail：桌面走 file 服务 URL，Android 为 Blob URL（content://）
+ * - original：桌面走 file 服务 URL，Android 走 content 代理/Blob
  */
 export function useImageUrlLoader<
   TImage extends Pick<ImageInfo, "id" | "localPath" | "thumbnailPath">
@@ -323,7 +323,7 @@ export function useImageUrlLoader<
           loadedThumbnailIds.add(image.id);
           thumbnailRetryCount.delete(image.id);
           clearRetryTimer(image.id);
-        } else {
+        } else if (IS_ANDROID) {
           scheduleRetry(image.id, "thumbnail");
         }
       } finally {
