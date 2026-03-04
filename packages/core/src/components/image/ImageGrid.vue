@@ -9,8 +9,7 @@
       <div class="image-grid-items" v-show="hasImages">
         <div v-if="enableVirtualScroll" class="image-grid" :style="gridStyle">
           <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
-            :image-url="getEffectiveImageUrl(item.image.id)"
-            :image-click-action="settingsStore.values.imageClickAction || 'none'" :use-original="IS_ANDROID || gridColumnsCount <= 2"
+            :image-click-action="settingsStore.values.imageClickAction || 'none'"
             :window-aspect-ratio="getEffectiveAspectRatioForItem(item.image)" :selected="effectiveSelectedIds.has(item.image.id)"
             :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
             @click="(e) => handleItemClick(item.image, item.index, e)"
@@ -22,8 +21,7 @@
 
         <transition-group v-else name="fade-in-list" tag="div" class="image-grid" :style="gridStyle">
           <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
-            :image-url="getEffectiveImageUrl(image.id)"
-            :image-click-action="settingsStore.values.imageClickAction || 'none'" :use-original="IS_ANDROID || gridColumnsCount <= 2"
+            :image-click-action="settingsStore.values.imageClickAction || 'none'"
             :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="effectiveSelectedIds.has(image.id)"
             :grid-columns="gridColumnsCount" :grid-index="index" @click="(e) => handleItemClick(image, index, e)"
             @dblclick="() => handleItemDblClick(image, index)"
@@ -52,7 +50,6 @@
       <ImagePreviewDialog
         ref="previewRef"
         :images="images"
-        :image-url-map="imageUrlMapForPreview"
         :actions="actions"
         @context-command="handlePreviewContextCommand" />
     </div>
@@ -67,7 +64,7 @@
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch, type Ref } from "vue";
 import { storeToRefs } from "pinia";
 import ImageItem from "./ImageItem.vue";
-import type { ImageInfo, ImageUrlMap } from "../../types/image";
+import type { ImageInfo } from "../../types/image";
 import EmptyState from "../common/EmptyState.vue";
 import ImagePreviewDialog from "../common/ImagePreviewDialog.vue";
 import ScrollButtons from "../common/ScrollButtons.vue";
@@ -116,7 +113,6 @@ export type ContextCommandPayload<T extends ContextCommand = ContextCommand> = {
 
 interface Props {
   images?: ImageInfo[];
-  imageUrlMap: ImageUrlMap;
   /** Actions for context menu / action sheet. */
   actions?: ActionItem<ImageInfo>[];
   onContextCommand?: (
@@ -314,9 +310,6 @@ const currentPreviewIndex = computed(() => {
 
 // Android 系统返回键：预览打开时注册到 modalStack
 const modalStackId = ref<string | null>(null);
-
-const getEffectiveImageUrl = (id: string) => props.imageUrlMap?.[id];
-const imageUrlMapForPreview = computed(() => props.imageUrlMap || {});
 
 // 窗口宽高比（用于 item aspect ratio）
 const windowAspectRatio = ref<number>(16 / 9);

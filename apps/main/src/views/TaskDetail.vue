@@ -3,13 +3,13 @@
         <div v-if="loading" class="detail-body detail-body-loading">
             <el-skeleton :rows="8" animated />
         </div>
-        <ImageGrid v-else ref="taskViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
+        <ImageGrid v-else ref="taskViewRef" class="detail-body" :images="images"
             :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
             :enable-ctrl-key-adjust-columns="!IS_ANDROID"
             :enable-virtual-scroll="!IS_ANDROID"
             :actions="imageActions"
             :on-context-command="handleImageMenuCommand"
-            @retry-download="handleRetryDownload" @scroll-stable="loadImageUrls()">
+            @retry-download="handleRetryDownload">
             <template #before-grid>
                 <PageHeader :title="taskName || '任务'" :subtitle="taskSubtitle" show-back @back="goBack">
                     <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !taskId">
@@ -120,7 +120,6 @@ export interface SelectionAction {
 import { useImageOperations } from "@/composables/useImageOperations";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
-import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
@@ -129,6 +128,7 @@ import { useBigPageRoute } from "@/composables/useBigPageRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID } from "@kabegame/core/env";
+import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { hasFeatureInPage, getDirectFeaturesForPage, getFoldedFeaturesForPage } from "@/header/headerFeatures";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
@@ -154,7 +154,6 @@ const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
-const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
@@ -220,9 +219,9 @@ const currentWallpaperImageId = ref<string | null>(null);
 // 记录“用户主动点击重试”的失败记录（用于成功下载后刷新时精准移除占位）
 const retryingFailedIds = ref(new Map<number, string>()); // failedId -> url
 
-const { isInteracting } = useImageGridAutoLoad({
+useImageGridAutoLoad({
     containerRef: taskContainerRef,
-    onLoad: () => void loadImageUrls(),
+    onLoad: () => {},
 });
 
 // Image actions for context menu / action sheet
@@ -231,24 +230,9 @@ const imageActions = computed(() => createImageActions({
     multiHide: ["favorite", "addToAlbum"]
 }));
 
-const {
-    imageSrcMap,
-    loadImageUrls,
-    removeFromCacheByIds,
-    reset: resetImageUrlLoader,
-    cleanup: cleanupImageUrlLoader,
-} = useImageUrlLoader({
-    containerRef: taskContainerRef,
-    imagesRef: images,
-    preferOriginalInGrid,
-    gridColumns: imageGridColumns,
-    isInteracting,
-});
-
 const { load: loadImageTypes, getMimeType } = useImageTypes();
 const { handleCopyImage } = useImageOperations(
     images,
-    imageSrcMap,
     currentWallpaperImageId,
     taskViewRef,
     () => { },
@@ -260,9 +244,6 @@ watch(
     async () => {
         await nextTick();
         taskContainerRef.value = taskViewRef.value?.getContainerEl?.() ?? null;
-        if (taskContainerRef.value && images.value.length > 0) {
-            requestAnimationFrame(() => void loadImageUrls());
-        }
     },
     { immediate: true }
 );
@@ -275,7 +256,7 @@ let unlistenDownloadState: (() => void) | null = null;
 
 const taskSubtitle = computed(() => {
     const parts: string[] = [];
-    // 总数：以 provider.total 为准（避免被分页/leaf 限制成 1000）
+    // 总数：以 provider.total 为准（避免被分页/leaf 限制）
     const failedTotal = failedImages.value.length;
     const okTotal = totalImagesCount.value;
     parts.push(`共 ${okTotal} 张`);
@@ -338,6 +319,7 @@ const handleRefresh = async () => {
     isRefreshing.value = true;
     try {
         // 手动刷新：重新拉取任务信息与图片列表，确保与后端/DB 同步
+        clearImageStateCache();
         await loadTaskInfo();
         await loadTaskImages({ showSkeleton: false });
         ElMessage.success("刷新成功");
@@ -349,8 +331,8 @@ const handleRefresh = async () => {
     }
 };
 
-// leaf 分页：桌面每页 1000 张（与后端 provider 对齐）；Android 每页 100 便于预览重构
-const BIG_PAGE_SIZE = IS_ANDROID ? 100 : 1000;
+// leaf 分页：安卓与桌面统一每页 100 张，无虚拟滚动
+const BIG_PAGE_SIZE = 100;
 const { currentPage, currentOffset, jumpToPage } = useBigPageRoute({
     route,
     router,
@@ -413,7 +395,7 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
         const failed = await invoke<TaskFailedImage[]>("get_task_failed_images", { taskId: taskId.value });
         failedImages.value = failed || [];
 
-        // 失败占位需要按当前大页过滤，否则翻页后仍会把第 1 页失败项混进来，看起来像“永远停在前 1000”
+        // 失败占位需要按当前大页过滤，否则翻页后仍会把第 1 页失败项混进来
         const orders = failedImages.value.map((f) => f.order ?? 0);
         const minOrder = orders.length > 0 ? Math.min(...orders) : 0;
         const base = minOrder === 1 ? 1 : 0; // 兼容 order 1-based/0-based
@@ -446,8 +428,6 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
         merged.sort((a, b) => (a.order ?? a.crawledAt ?? 0) - (b.order ?? b.crawledAt ?? 0));
         images.value = merged;
 
-        // 清理旧资源
-        resetImageUrlLoader();
     } catch (e) {
         console.error("加载任务图片失败:", e);
         // 兜底：避免“静默 0 张”让用户误判，提示可能是 provider-path 解析/缓存导致的问题
@@ -455,7 +435,6 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
     } finally {
         if (showSkeleton) loading.value = false;
     }
-    requestAnimationFrame(() => void loadImageUrls());
 };
 
 const syncFailedPlaceholdersIncremental = async () => {
@@ -504,7 +483,6 @@ const syncFailedPlaceholdersIncremental = async () => {
 
         // 刷新后：不对全量 images 排序，避免影响任务内顺序语义。
         images.value = [...images.value, ...toAppend];
-        void loadImageUrls(toAppend);
     } catch (e) {
         // ignore（不影响主流程）
     }
@@ -515,7 +493,7 @@ const removeFailedPlaceholderById = (failedId: number) => {
     const before = images.value.length;
     images.value = images.value.filter((img) => img.id !== key);
     if (images.value.length !== before) {
-        removeFromCacheByIds([key]);
+        // no-op
     }
 };
 
@@ -877,7 +855,6 @@ const handleImageMenuCommand = async (
                     // 更新本地状态
                     const ids = new Set(imageIds);
                     images.value = images.value.filter((img) => !ids.has(img.id));
-                    removeFromCacheByIds(imageIds);
                     clearSelection();
                     
                     // 重新加载任务信息以获取最新的 deletedCount
@@ -918,7 +895,6 @@ const confirmRemoveImages = async () => {
         // 更新本地状态（因为批量 API 已经在 store 中更新了全局状态，但这里需要更新局部状态）
         const ids = new Set(imageIds);
         images.value = images.value.filter((img) => !ids.has(img.id));
-        removeFromCacheByIds(imageIds);
         clearSelection();
 
         // 重新加载任务信息以获取最新的 deletedCount
@@ -1040,17 +1016,9 @@ useImagesChangeRefresh({
         await loadTaskInfo();
         await loadTaskImages({ showSkeleton: false });
 
-        const { addedIds, removedIds } = diffById(prevList, images.value);
+        const { removedIds } = diffById(prevList, images.value);
         if (removedIds.length > 0) {
-            removeFromCacheByIds(removedIds);
             taskViewRef.value?.clearSelection?.();
-        }
-        if (addedIds.length > 0) {
-            const addedSet = new Set(addedIds);
-            const addedImages = images.value.filter((img) => addedSet.has(img.id));
-            if (addedImages.length > 0) {
-                void loadImageUrls(addedImages);
-            }
         }
     },
 });
@@ -1067,7 +1035,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
     // 清理定时器和监听器（真正销毁时）
     stopTimersAndListeners();
-    cleanupImageUrlLoader();
 });
 
 onActivated(async () => {

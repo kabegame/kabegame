@@ -81,6 +81,18 @@ impl ProviderRuntime {
             .expect("ProviderRuntime not initialized. Call ProviderRuntime::init_global() first.")
     }
 
+    /// 清空 provider 缓存（sled 持久化 + 内存 LRU），用于分页策略变更等导致「路径不存在」时由前端触发重试。
+    pub fn clear_cache(&self) -> Result<(), String> {
+        self.db.clear().map_err(|e| format!("sled clear failed: {}", e))?;
+        let _ = self.db.flush();
+        let cap = std::num::NonZeroUsize::new(self.cfg.lru_capacity.max(1))
+            .unwrap_or_else(|| std::num::NonZeroUsize::new(1024).unwrap());
+        if let Ok(mut lru) = self.lru.lock() {
+            *lru = LruCache::new(cap);
+        }
+        Ok(())
+    }
+
     fn normalize_seg(seg: &str) -> String {
         // Windows 路径对 ASCII 通常大小写不敏感；这里统一 ASCII lower，非 ASCII 原样
         let mut out = String::with_capacity(seg.len());

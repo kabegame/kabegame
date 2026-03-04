@@ -4,10 +4,10 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useAlbumStore } from "@/stores/albums";
 import { storeToRefs } from "pinia";
-import { useImageUrlMapCache } from "@kabegame/core/composables/useImageUrlMapCache";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_MACOS } from "@kabegame/core/env";
+import { fileToUrl } from "@kabegame/core/fileServer";
 import { openLocalImage } from "@/utils/openLocalImage";
 
 export type FavoriteStatusChangedDetail = {
@@ -20,7 +20,6 @@ export type FavoriteStatusChangedDetail = {
  */
 export function useImageOperations(
   displayedImages: Ref<ImageInfo[]>,
-  imageSrcMap: Ref<Record<string, { thumbnail?: string; original?: string }>>,
   currentWallpaperImageId: Ref<string | null>,
   galleryViewRef: Ref<any>,
   _removeFromUiCacheByIds: (imageIds: string[]) => void,
@@ -29,7 +28,6 @@ export function useImageOperations(
   const crawlerStore = useCrawlerStore();
   const albumStore = useAlbumStore();
   const settingsStore = useSettingsStore();
-  const urlCache = useImageUrlMapCache();
   const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
   const albums = computed(() => albumStore.albums);
   const { set: setWallpaperRotationEnabled } = useSettingKeyState(
@@ -161,8 +159,8 @@ export function useImageOperations(
       };
 
       const localPath = (image.localPath || "").trim();
-      const fromMap = imageSrcMap.value[image.id] ?? {};
-      const imageUrl = fromMap.original || fromMap.thumbnail;
+      const thumbnailPath = (image.thumbnailPath || "").trim();
+      const imageUrl = fileToUrl(localPath) || fileToUrl(thumbnailPath);
 
       if (isTauri() && localPath) {
         try {
@@ -245,9 +243,6 @@ export function useImageOperations(
       displayedImages.value = displayedImages.value.filter(
         (img) => !idSet.has(img.id),
       );
-
-      // 清理全局 URL 缓存（thumbnail=blob 需要 revoke；由 cache 统一处理）
-      urlCache.removeByIds(Array.from(idSet));
 
       const action = deleteFiles ? "删除" : "移除";
       ElMessage.success(`已${action} ${count} 张图片`);

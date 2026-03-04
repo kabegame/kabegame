@@ -299,6 +299,7 @@ pub fn run() {
             batch_remove_images,
             get_images_count,
             browse_gallery_provider,
+            clear_provider_cache,
             toggle_image_favorite,
             update_image_dimensions,
             // --- Tasks ---

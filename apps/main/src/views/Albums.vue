@@ -91,12 +91,12 @@ import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
-import { useImageUrlMapCache } from "@kabegame/core/composables/useImageUrlMapCache";
 import type { ImageInfo } from "@kabegame/core/types/image";
+import { fileToUrl } from "@kabegame/core/fileServer";
 
 const albumStore = useAlbumStore();
 const { albums, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
@@ -202,8 +202,18 @@ const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
   }
 };
 
-// 全局图片 URL 缓存
-const cache = useImageUrlMapCache();
+const toPreviewUrl = (img: ImageInfo): string => {
+  const thumbPath = (img.thumbnailPath || img.localPath || "").trim();
+  if (!thumbPath) return "";
+  if (IS_ANDROID) {
+    return thumbPath.startsWith("content://")
+      ? thumbPath.replace("content://", CONTENT_URI_PROXY_PREFIX)
+      : "";
+  }
+  return fileToUrl(thumbPath);
+};
+
+const hasPreviewUrl = (img: ImageInfo) => !!toPreviewUrl(img);
 
 // 保存每个画册的预览 ImageInfo 列表
 const albumPreviewImages = ref<Record<string, ImageInfo[]>>({});
@@ -242,10 +252,7 @@ useImagesChangeRefresh({
     // 检查该画册的预览图列表是否已满
     const images = albumPreviewImages.value[targetAlbumId];
     if (images && images.length >= 6) {
-      const allLoaded = images.every(img => {
-        const entry = cache.imageUrlMap.value[img.id];
-        return entry?.thumbnail || entry?.original;
-      });
+      const allLoaded = images.every((img) => hasPreviewUrl(img));
       if (allLoaded) return;
     }
 
@@ -298,10 +305,7 @@ onActivated(async () => {
   if (favoriteAlbum) {
     const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID.value] || 0;
     const images = albumPreviewImages.value[FAVORITE_ALBUM_ID.value];
-    const hasValidPreview = images && images.length > 0 && images.some(img => {
-      const entry = cache.imageUrlMap.value[img.id];
-      return entry?.thumbnail || entry?.original;
-    });
+    const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
 
     // 如果画册有内容但预览为空，清除缓存并重新加载
     if (favoriteCount > 0 && !hasValidPreview) {
@@ -317,10 +321,7 @@ onActivated(async () => {
     if (album.id === FAVORITE_ALBUM_ID.value) continue;
 
     const images = albumPreviewImages.value[album.id];
-    if (!images || images.length === 0 || !images.some(img => {
-      const entry = cache.imageUrlMap.value[img.id];
-      return entry?.thumbnail || entry?.original;
-    })) {
+    if (!images || images.length === 0 || !images.some((img) => hasPreviewUrl(img))) {
       prefetchPreview(album);
     }
   }
@@ -383,26 +384,20 @@ const handleCreateAlbum = async () => {
   }
 };
 
-// 从全局 imageUrlMap 计算预览 URL 列表
+// 从 ImageInfo 直接计算预览 URL 列表
 const albumPreviewUrls = computed(() => {
   const result: Record<string, string[]> = {};
   for (const [albumId, images] of Object.entries(albumPreviewImages.value)) {
-    result[albumId] = images.map(img => {
-      const entry = cache.imageUrlMap.value[img.id];
-      return entry?.thumbnail || entry?.original || "";
-    });
+    result[albumId] = images.map((img) => toPreviewUrl(img));
   }
   return result;
 });
 
-// 计算加载状态：根据每个 image 是否已在 imageUrlMap 中有值来判断
+// 简化后不追踪预览图加载态，统一由卡片级 loading 控制
 const albumLoadingStates = computed(() => {
   const result: Record<string, boolean[]> = {};
   for (const [albumId, images] of Object.entries(albumPreviewImages.value)) {
-    result[albumId] = images.map(img => {
-      const entry = cache.imageUrlMap.value[img.id];
-      return !(entry?.thumbnail || entry?.original);
-    });
+    result[albumId] = images.map(() => false);
   }
   return result;
 });
@@ -417,12 +412,6 @@ const albumIsLoadingMap = computed(() => {
 });
 
 const clearAlbumPreviewCache = (albumId: string) => {
-  const images = albumPreviewImages.value[albumId];
-  if (images && images.length > 0) {
-    // 从全局缓存中移除这些图片的 URL
-    const imageIds = images.map(img => img.id);
-    cache.removeByIds(imageIds);
-  }
   delete albumPreviewImages.value[albumId];
   albumIsLoading.value.delete(albumId);
   // 清除 store 中的预览缓存（强制下一次重新拉取预览图片列表）
@@ -460,10 +449,7 @@ const prefetchPreview = async (album: { id: string }) => {
   if (album.id === FAVORITE_ALBUM_ID.value) {
     const favoriteCount = albumCounts.value[FAVORITE_ALBUM_ID.value] || 0;
     const images = albumPreviewImages.value[FAVORITE_ALBUM_ID.value];
-    const hasValidPreview = images && images.length > 0 && images.some(img => {
-      const entry = cache.imageUrlMap.value[img.id];
-      return entry?.thumbnail || entry?.original;
-    });
+    const hasValidPreview = images && images.length > 0 && images.some((img) => hasPreviewUrl(img));
 
     // 如果画册有内容但预览为空，清除缓存
     if (favoriteCount > 0 && !hasValidPreview) {
@@ -474,10 +460,7 @@ const prefetchPreview = async (album: { id: string }) => {
   // 如果已经加载完成，直接返回
   const images = albumPreviewImages.value[album.id];
   if (images && images.length > 0) {
-    const allLoaded = images.every(img => {
-      const entry = cache.imageUrlMap.value[img.id];
-      return entry?.thumbnail || entry?.original;
-    });
+    const allLoaded = images.every((img) => hasPreviewUrl(img));
     if (allLoaded) return;
   }
 
@@ -492,19 +475,6 @@ const prefetchPreview = async (album: { id: string }) => {
     // 加载预览图片列表
     const previewImages = await albumStore.loadAlbumPreview(album.id, 6);
     albumPreviewImages.value[album.id] = previewImages;
-
-    // 对每个图片调用 cache.ensureForImage（false = 不要求原图，预览只需缩略图）
-    // 优先加载前3张，然后异步加载剩余的
-    const priorityImages = previewImages.slice(0, 3);
-    const remainingImages = previewImages.slice(3);
-
-    // 同步加载前3张
-    await Promise.all(priorityImages.map(img => cache.ensureForImage(img, false)));
-
-    // 异步加载剩余的（不等待完成）
-    remainingImages.forEach(img => {
-      void cache.ensureForImage(img, false);
-    });
   } catch (error) {
     console.error("加载画册预览失败:", error);
     delete albumPreviewImages.value[album.id];
