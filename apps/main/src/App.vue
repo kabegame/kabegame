@@ -113,6 +113,7 @@ import { usePluginStore } from "./stores/plugins";
 import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 import { ElMessageBox } from "element-plus";
+import { useThrottleFn } from "@vueuse/core";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
@@ -192,15 +193,19 @@ let unlistenSettingChange: UnlistenFn | null = null;
 
 onMounted(async () => {
   // Android Back Button Handling
+  let confirmingExit = false;
   if (IS_ANDROID) {
     try {
       const { onBackButtonPress } = await import("@tauri-apps/api/app");
-      let lastModalClosedAt = 0;
       const EXIT_COOLDOWN_MS = 400;
-      await onBackButtonPress(async () => {
+      await onBackButtonPress(useThrottleFn(async () => {
+        if (confirmingExit) {
+          ElMessageBox.close();
+          confirmingExit = false;
+          return;
+        }
         // 1. Modal Stack
         if (await modalStack.closeTop()) {
-          lastModalClosedAt = Date.now();
           return;
         }
 
@@ -213,15 +218,9 @@ onMounted(async () => {
           return;
         }
 
-        // 防止关 modal 后同一按键或连按再次触发时误弹退出确认
-        // 也防止 Android/WebView 一次返回键触发两次回调导致退出确认弹两次
-        if (Date.now() - lastModalClosedAt < EXIT_COOLDOWN_MS) {
-          return;
-        }
-        lastModalClosedAt = Date.now();
-
         // 3. Exit Confirm
         try {
+          confirmingExit = true;
           await ElMessageBox.confirm("确定要退出应用吗？龟龟会想你滴~お疲れ様！", "退出提示", {
             confirmButtonText: "拜拜",
             cancelButtonText: "取消",
@@ -229,12 +228,13 @@ onMounted(async () => {
             center: true,
             customClass: "exit-confirm-dialog",
           });
-          const win = getCurrentWindow();
-          await win.close();
+          await invoke("exit_app");
         } catch {
           // Cancelled
+        } finally {
+          confirmingExit = false;
         }
-      });
+      }, EXIT_COOLDOWN_MS));
     } catch (e) {
       console.warn("Failed to register Android back button listener:", e);
     }

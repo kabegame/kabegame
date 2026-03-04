@@ -392,8 +392,8 @@ const downloadStateText = (d: ActiveDownloadInfo) => {
   const st = getEffectiveDownloadState(d);
   const map: Record<string, string> = {
     preparing: "准备中",
-    extracting: "解压中",
     downloading: "下载中",
+    extracting: "解压中",
     processing: "处理中",
     completed: "已完成",
     failed: "失败",

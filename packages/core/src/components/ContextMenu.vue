@@ -13,7 +13,7 @@
                             :class="item.className" @mouseenter="handleSubmenuTriggerEnter(index)"
                             @mouseleave="handleSubmenuTriggerLeave">
                             <el-icon v-if="item.icon">
-                                <component :is="item.icon" />
+                                <component :is="getIcon(item)!" />
                             </el-icon>
                             <span style="margin-left: 8px;">{{ item.label }}</span>
                             <span v-if="item.suffix"
@@ -33,7 +33,7 @@
                                         class="context-menu-item" :class="child.className"
                                         @click.stop="handleItemClick(child)">
                                         <el-icon v-if="child.icon">
-                                            <component :is="child.icon" />
+                                            <component :is="getIcon(child)!" />
                                         </el-icon>
                                         <span style="margin-left: 8px;">{{ child.label }}</span>
                                         <span v-if="child.suffix"
@@ -49,7 +49,7 @@
                         <div v-else class="context-menu-item" :class="item.className"
                             @click.stop="handleItemClick(item)">
                             <el-icon v-if="item.icon">
-                                <component :is="item.icon" />
+                                <component :is="getIcon(item)!" />
                             </el-icon>
                             <span style="margin-left: 8px;">{{ item.label }}</span>
                             <span v-if="item.suffix"
@@ -67,7 +67,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, type CSSProperties } from "vue";
+import { ref, computed, watch, nextTick, markRaw, toRaw, type CSSProperties } from "vue";
 import { ArrowRight } from "@element-plus/icons-vue";
 import type { Component } from "vue";
 
@@ -91,6 +91,13 @@ interface Props {
 }
 
 const props = defineProps<Props>();
+
+/** Resolve icon for <component :is>; avoid reactive proxy when items come from reactive props. */
+function getIcon(item: MenuItem): Component | undefined {
+    const icon = item.icon;
+    if (!icon) return undefined;
+    return markRaw(toRaw(icon));
+}
 
 const emit = defineEmits<{
     close: [];

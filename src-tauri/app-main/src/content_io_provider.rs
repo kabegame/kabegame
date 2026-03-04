@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use base64::Engine;
 use kabegame_core::crawler::content_io::{
-    ContentEntry, ContentIoProvider,
+    ContentEntry, ContentIoProvider, CopiedImageEntry,
 };
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -37,6 +37,12 @@ enum Request {
     TakePersistablePermission(String),
     GetImageDimensions(String),
     GetDisplayName(String),
+    CopyImageToPictures {
+        source_path: String,
+        mime_type: String,
+        display_name: String,
+    },
+    CopyExtractedImagesToPictures(String),
 }
 
 #[derive(Debug)]
@@ -48,6 +54,8 @@ enum Response {
     TakePersistablePermission(Result<(), String>),
     GetImageDimensions(Result<(u32, u32), String>),
     GetDisplayName(Result<String, String>),
+    CopyImageToPictures(Result<String, String>),
+    CopyExtractedImagesToPictures(Result<Vec<CopiedImageEntry>, String>),
 }
 
 /// 在独立线程中运行真实 Provider，用 channel 接收请求并返回结果。避免 Wry 跨线程 (Send/Sync)。
@@ -168,6 +176,41 @@ fn run_worker_loop<R: Runtime + 'static>(
                     }),
                 )
             }
+            Request::CopyImageToPictures {
+                source_path,
+                mime_type,
+                display_name,
+            } => {
+                let p = &provider;
+                Response::CopyImageToPictures(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .picker()
+                        .copy_image_to_pictures(source_path, mime_type, display_name)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(resp.content_uri)
+                }))
+            }
+            Request::CopyExtractedImagesToPictures(source_dir) => {
+                let p = &provider;
+                Response::CopyExtractedImagesToPictures(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .picker()
+                        .copy_extracted_images_to_pictures(source_dir)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(resp
+                        .entries
+                        .into_iter()
+                        .map(|entry| CopiedImageEntry {
+                            content_uri: entry.content_uri,
+                            display_name: entry.display_name,
+                        })
+                        .collect())
+                }))
+            }
         };
         let _ = resp_tx.send(response);
     }
@@ -263,6 +306,43 @@ impl ContentIoProvider for ChannelContentIoProvider {
             .map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
             Response::GetDisplayName(r) => r,
+            _ => Err("unexpected response".to_string()),
+        }
+    }
+
+    async fn copy_image_to_pictures(
+        &self,
+        source_path: &str,
+        mime_type: &str,
+        display_name: &str,
+    ) -> Result<String, String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send((
+                Request::CopyImageToPictures {
+                    source_path: source_path.to_string(),
+                    mime_type: mime_type.to_string(),
+                    display_name: display_name.to_string(),
+                },
+                resp_tx,
+            ))
+            .map_err(|e| e.to_string())?;
+        match resp_rx.await.map_err(|e| e.to_string())? {
+            Response::CopyImageToPictures(r) => r,
+            _ => Err("unexpected response".to_string()),
+        }
+    }
+
+    async fn copy_extracted_images_to_pictures(
+        &self,
+        source_dir: &str,
+    ) -> Result<Vec<CopiedImageEntry>, String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send((Request::CopyExtractedImagesToPictures(source_dir.to_string()), resp_tx))
+            .map_err(|e| e.to_string())?;
+        match resp_rx.await.map_err(|e| e.to_string())? {
+            Response::CopyExtractedImagesToPictures(r) => r,
             _ => Err("unexpected response".to_string()),
         }
     }

@@ -59,7 +59,7 @@
 | Linux (Plasma) | [deb包](release/Kabegame-normal_plasma_3.0.3_amd64.deb)  | [deb包](release/Kabegame-local_plasma_3.0.3_amd64.deb)  | [deb包](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
 | Linux (GNOME) | [deb包](release/Kabegame-normal_gnome_3.0.3_amd64.deb) | [deb包](release/Kabegame-local_gnome_3.0.3_amd64.deb) | [deb包](release/Kabegame-light_gnome_3.0.3_amd64.deb) |
 
-**Android 版 Kabegame** (开发中) 将不分模式，只有light模式+商店（内置全量插件+商店源） 
+**Android 版 Kabegame** (开发中) 将不分模式，只有light模式+商店（内置全量插件+商店源）。**最低要求 Android 8.0+（API 26+）**。 
 
 ## 安装方法
 
@@ -312,6 +312,8 @@ Android 开发需要额外的环境配置，详见 [Android 迁移指南](docs/T
 - `ANDROID_HOME` 环境变量（指向 Android SDK 目录）
 - `NDK_HOME` 环境变量（**必须配置**，否则编译会失败）
 - Rust Android 目标：`rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android`
+
+应用**最低支持 Android 8.0（API 26+）**，构建配置中 `minSdk = 26`。
 
 #### 在真机/模拟器上运行
 

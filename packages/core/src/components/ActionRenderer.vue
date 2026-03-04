@@ -18,6 +18,7 @@
       :context="context"
       :teleport="teleport"
       :no-transition="noTransition"
+      :modal-back="modalBack"
       @close="$emit('close')"
       @command="handleCommand" />
   </div>
@@ -42,12 +43,15 @@ interface Props {
   teleport?: boolean;
   /** Whether to disable ActionSheet transition animations. Default false. */
   noTransition?: boolean;
+  /** Whether to enable modal back behavior. Default true. */
+  modalBack?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   mode: "auto",
   teleport: true,
   noTransition: false,
+  modalBack: true,
 });
 
 const emit = defineEmits<{

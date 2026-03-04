@@ -181,7 +181,7 @@ async fn process_file_url(
         if crate::archive::get_processor_by_path(&path).is_none() {
             return Err(format!("不支持的压缩格式: {}", path.display()));
         }
-        enqueue_archive(url.clone(), ctx, image_count, archive_count).await?;
+        enqueue_archive(url.clone(), ctx, image_count, archive_count, None).await?;
     }
     Ok(())
 }
@@ -202,7 +202,7 @@ async fn process_content_file_url(
         return Ok(());
     }
     if image_type::is_archive_mime(&mime) && ctx.include_archive {
-        enqueue_archive(url.clone(), ctx, image_count, archive_count).await?;
+        enqueue_archive(url.clone(), ctx, image_count, archive_count, mime.as_deref()).await?;
     }
     Ok(())
 }
@@ -246,9 +246,10 @@ async fn enqueue_archive(
     ctx: &LocalImportContext<'_>,
     image_count: &usize,
     archive_count: &mut usize,
+    mime: Option<&str>,
 ) -> Result<(), String> {
     // 获取对应的 processor，解压到固定目录（Android 内部私有目录 / 桌面临时目录）
-    let processor = crate::crawler::archiver::get_processor_by_url(&url);
+    let processor = crate::crawler::archiver::get_processor_by_url(&url, mime);
     let extract_base = crate::app_paths::AppPaths::global().temp_dir.join("archive_extract");
     if let Err(e) = tokio::fs::create_dir_all(&extract_base).await {
         return Err(format!("Failed to create archive extract dir: {}", e));

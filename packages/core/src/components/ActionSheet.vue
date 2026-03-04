@@ -52,7 +52,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, type Component } from "vue";
+import { computed, markRaw, ref, toRaw, type Component } from "vue";
 import type { ActionItem, ActionContext } from "../actions/types";
 import { IS_ANDROID } from "../env";
 import { useModalBack } from "../composables/useModalBack";
@@ -65,11 +65,13 @@ interface Props {
   teleport?: boolean;
   /** Whether to disable transition animations. Default false. */
   noTransition?: boolean;
+  modalBack?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   teleport: true,
   noTransition: false,
+  modalBack: true,
 });
 
 const emit = defineEmits<{
@@ -85,8 +87,9 @@ const sheetOpen = computed({
   get: () => props.visible,
   set: (v) => { if (!v) emit("close"); },
 });
-useModalBack(sheetOpen, { onClose: () => { expandedItem.value = null; } });
-
+if (props.modalBack) {
+  useModalBack(sheetOpen, { onClose: () => { expandedItem.value = null; } });
+}
 const submenuOpen = computed({
   get: () => !!expandedItem.value,
   set: (v) => { if (!v) expandedItem.value = null; },
@@ -134,10 +137,12 @@ const getIcon = (item: ActionItem): Component => {
     // Return a placeholder component if no icon
     return {} as Component;
   }
-  if (typeof icon === "function") {
-    return (icon as (ctx: ActionContext) => Component)(props.context);
-  }
-  return icon;
+  const comp =
+    typeof icon === "function"
+      ? (icon as (ctx: ActionContext) => Component)(props.context)
+      : icon;
+  // toRaw: item may come from reactive props.actions, so icon can be a reactive proxy
+  return markRaw(toRaw(comp));
 };
 
 const getLabel = (item: ActionItem): string => {
@@ -154,10 +159,12 @@ const getChildIcon = (child: ActionItem): Component => {
     // Return a placeholder component if no icon
     return {} as Component;
   }
-  if (typeof icon === "function") {
-    return (icon as (ctx: ActionContext) => Component)(props.context);
-  }
-  return icon;
+  const comp =
+    typeof icon === "function"
+      ? (icon as (ctx: ActionContext) => Component)(props.context)
+      : icon;
+  // toRaw: child may come from reactive props.actions, so icon can be a reactive proxy
+  return markRaw(toRaw(comp));
 };
 
 const getChildLabel = (child: ActionItem): string => {

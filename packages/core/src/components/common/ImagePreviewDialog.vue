@@ -28,6 +28,7 @@
       :no-transition="true"
       @close="handlePswpActionClose"
       @command="handlePreviewActionCommand"
+      :modal-back="false"
     />
     <!-- 上划删除区域通过 overlay slot 放入 .pswp 根级 -->
     <template #overlay>
@@ -109,9 +110,9 @@ const props = withDefaults(defineProps<{
   actions: () => [],
 });
 
-watch(() => props.images.length, () => {
-  console.log(props.images);
-});
+// watch(() => props.images.length, () => {
+//   console.log(props.images);
+// });
 
 const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;

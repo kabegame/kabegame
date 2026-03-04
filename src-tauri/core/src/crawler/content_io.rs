@@ -11,6 +11,13 @@ pub struct ContentEntry {
     pub is_directory: bool,
 }
 
+/// Android 复制到系统图库后的结果项。
+#[derive(Debug, Clone)]
+pub struct CopiedImageEntry {
+    pub content_uri: String,
+    pub display_name: String,
+}
+
 /// Android content:// IO 操作抽象。由 app-main 用 PluginHandle 实现并注册。异步 trait，避免在调度器 runtime 上 block_on 导致死锁。
 #[cfg(target_os = "android")]
 #[async_trait::async_trait]
@@ -22,6 +29,16 @@ pub trait ContentIoProvider: Send + Sync {
     async fn take_persistable_permission(&self, uri: &str) -> Result<(), String>;
     async fn get_image_dimensions(&self, uri: &str) -> Result<(u32, u32), String>;
     async fn get_display_name(&self, uri: &str) -> Result<String, String>;
+    async fn copy_image_to_pictures(
+        &self,
+        source_path: &str,
+        mime_type: &str,
+        display_name: &str,
+    ) -> Result<String, String>;
+    async fn copy_extracted_images_to_pictures(
+        &self,
+        source_dir: &str,
+    ) -> Result<Vec<CopiedImageEntry>, String>;
 }
 
 #[cfg(target_os = "android")]
