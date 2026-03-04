@@ -343,7 +343,7 @@ pub fn init_shortcut(app: &tauri::App) -> Result<(), String> {
                 {
                     let app_handle = app_handle_clone.clone();
                     tauri::async_runtime::spawn(async move {
-                        if let Err(e) = commands::window::toggle_fullscreen(app_handle).await {
+                        if let Err(e) = crate::commands::window::toggle_fullscreen(app_handle).await {
                             eprintln!("Failed to toggle fullscreen: {}", e);
                         }
                     });
