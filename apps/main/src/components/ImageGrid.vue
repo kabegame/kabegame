@@ -50,7 +50,6 @@ defineOptions({ inheritAttrs: false });
 
 interface Props {
   images: ImageInfo[];
-  imageUrlMap: Record<string, { thumbnail?: string; original?: string }>;
   /** Actions for context menu (desktop) / action sheet (Android). Uses ActionRenderer abstraction. */
   actions?: ActionItem<ImageInfo>[];
   onContextCommand?: (

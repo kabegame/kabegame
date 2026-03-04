@@ -1,14 +1,13 @@
 <template>
   <div class="gallery-page">
     <div class="gallery-container" v-pull-to-refresh="pullToRefreshOpts">
-      <ImageGrid ref="galleryViewRef" :images="displayedImages" :image-url-map="imageSrcMap"
+      <ImageGrid ref="galleryViewRef" :images="displayedImages"
         :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
         :enable-ctrl-key-adjust-columns="!IS_ANDROID"
         :enable-virtual-scroll="!IS_ANDROID"
         :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing"
         :actions="imageActions"
-        :on-context-command="handleGridContextCommand"
-        @scroll-stable="loadImageUrls()">
+        :on-context-command="handleGridContextCommand">
         <template #before-grid>
           <!-- 顶部工具栏 -->
           <GalleryToolbar :dedupe-loading="dedupeLoading" :dedupe-progress="dedupeProgress"
@@ -120,6 +119,7 @@ import { useBigPageRoute } from "@/composables/useBigPageRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID } from "@kabegame/core/env";
+import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { hasFeatureInPage } from "@/header/headerFeatures";
@@ -158,10 +158,10 @@ const selectionStore = useSelectionStore();
 const { extensions: imageExtensions, load: loadImageTypes, getMimeType } = useImageTypes();
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
-// leaf 分页：桌面每页 1000 张（与后端 provider 对齐）；Android 每页 100 便于预览重构
-const BIG_PAGE_SIZE = IS_ANDROID ? 100 : 1000;
+// leaf 分页：安卓与桌面统一每页 100 张，无虚拟滚动
+const BIG_PAGE_SIZE = 100;
 
-// 是否启用分页（总数超过 1000）
+// 是否启用分页（总数超过 100）
 const bigPageEnabled = computed(() => {
   return totalImagesCount.value > BIG_PAGE_SIZE;
 });
@@ -290,7 +290,7 @@ const loadMonthOptions = async () => {
   }
 };
 
-// 跟踪当前的实际偏移量（用于 paginator：offset = (page-1)*1000）
+// 跟踪当前的实际偏移量（用于 paginator：offset = (page-1)*BIG_PAGE_SIZE）
 
 // 计算当前位置（用于 header subtitle 显示）
 const currentPosition = computed(() => {
@@ -545,22 +545,16 @@ const tasks = computed(() => crawlerStore.tasks);
 // 使用画廊图片 composable
 const {
   displayedImages,
-  imageSrcMap,
-  loadImageUrls,
   refreshImagesPreserveCache,
   loadMoreImages: loadMoreImagesFromComposable,
   jumpToBigPage,
   removeFromUiCacheByIds,
-  removeFromCacheByIds,
   loadedKey,
 } = useGalleryImages(
   galleryContainerRef,
   isLoadingMore,
   providerRootPath,
-  currentPage,
-  preferOriginalInGrid,
-  imageGridColumns,
-  isInteracting
+  currentPage
 );
 
 watch(
@@ -568,18 +562,13 @@ watch(
   async () => {
     await nextTick();
     galleryContainerRef.value = galleryViewRef.value?.getContainerEl?.() ?? null;
-    // 初次挂载/切换回来时：确保“仅视口内加载”能触发一次
-    // （避免 refreshImagesPreserveCache 发生在 container 绑定之前导致 visibleIds 为空）
-    if (galleryContainerRef.value && displayedImages.value.length > 0) {
-      requestAnimationFrame(() => void loadImageUrls());
-    }
   },
   { immediate: true }
 );
 
 const { isInteracting: autoIsInteracting } = useImageGridAutoLoad({
   containerRef: galleryContainerRef,
-  onLoad: () => void loadImageUrls(),
+  onLoad: () => {},
   onOverspeed: onScrollOverspeed,
 });
 
@@ -635,6 +624,7 @@ watch(
 
 const handleManualRefresh = async () => {
   // 手动刷新：刷新画廊数据 + 同步刷新月份下拉框选项
+  clearImageStateCache();
   await Promise.allSettled([
     loadImages(true, { forceReload: true }),
     loadMonthOptions(),
@@ -683,7 +673,6 @@ const {
   handleBatchDeleteImages,
 } = useImageOperations(
   displayedImages,
-  imageSrcMap,
   currentWallpaperImageId,
   galleryViewRef,
   removeFromUiCacheByIds,
@@ -729,7 +718,7 @@ watch(
   () => totalImagesCount.value,
   async (total) => {
     if (!bigPageEnabled.value) {
-      // total <= 1000 时只允许 page=1
+      // total <= BIG_PAGE_SIZE 时只允许 page=1
       if (currentPage.value !== 1) {
         await handleJumpToBigPage(1);
       }
@@ -1071,30 +1060,6 @@ watch(showCrawlerDialog, (isOpen) => {
 
 
 
-// 监听图片列表变化，加载图片 URL
-// 监听整个数组，但使用 shallow 模式减少深度追踪
-// 当图片列表变化时（包括 filter 等情况），自动加载新图片的 URL
-let imageListWatch: (() => void) | null = null;
-
-// 可控 immediate，避免加载更多后立刻对全量列表触发 loadImageUrls
-const setupImageListWatch = (immediate = true) => {
-  if (imageListWatch) {
-    imageListWatch(); // 停止之前的 watch
-  }
-  imageListWatch = watch(() => displayedImages.value, () => {
-    // 如果正在加载更多，不触发 loadImageUrls（由 loadMoreImages 自己处理）
-    if (isLoadingMore.value) {
-      return;
-    }
-
-    // 图片列表变化时，加载新图片的 URL
-    // loadImageUrls 内部会检查并跳过已加载的图片，所以可以安全地重复调用
-    loadImageUrls();
-  }, { immediate });
-};
-
-setupImageListWatch();
-
 // 监听插件列表变化，加载新插件的图标
 watch(plugins, () => {
   loadPluginIcons();
@@ -1161,13 +1126,6 @@ useImagesChangeRefresh({
     ) {
       currentWallpaperImageId.value = null;
     }
-
-    // 只清 URL 缓存，不修改 displayedImages（已由 refreshImagesPreserveCache 更新）
-    if (removedIds.length > 0) {
-      removeFromCacheByIds(removedIds);
-    }
-    // 新增项由 setLeafAndResetDisplay 中的 loadImageUrls 自动处理
-    // 删除动画由 ImageGrid 的 transition-group/虚拟滚动 watch 自动处理
 
     // 若当前页被清空但仍有图：尽量跳转到仍可用的最大页
     if (displayedImages.value.length === 0 && totalImagesCount.value > 0) {
@@ -1333,39 +1291,21 @@ onActivated(async () => {
 
   // 如果图片列表为空，需要重新加载
   if (displayedImages.value.length === 0) {
-    await loadImages(true);
+    try {
+      await loadImages(true);
+    } catch (e) {
+      const msg = e != null && typeof e === "object" && "message" in e ? String((e as Error).message) : String(e);
+      console.error("[Gallery] onActivated loadImages 失败:", msg);
+      // 「路径不存在」：清空 provider 缓存后重试一次，仍失败则抛出
+      if (msg.includes("路径不存在")) {
+        await invoke("clear_provider_cache").catch(() => {});
+        await loadImages(true);
+      } else {
+        throw e;
+      }
+    }
     return;
   }
-
-  // 检查并重新加载缺失的图片 URL
-  // 统计缺失 URL 的图片数量
-  let missingCount = 0;
-  const imagesToReload: ImageInfo[] = [];
-
-  for (const img of displayedImages.value) {
-    const imageData = imageSrcMap.value[img.id];
-    if (!imageData || (!imageData.thumbnail && !imageData.original)) {
-      missingCount++;
-      imagesToReload.push(img);
-    } else {
-      // 重要：当前主程序已使用 convertFileSrc/asset.localhost（非 blob）来提供 URL。
-      // 这里不能再用 “不是 blob: 就判定无效并删除” 的旧逻辑，
-      // 否则每次切回都会把缓存清空，导致滚动回顶 + 大量骨架屏 + 反复请求（甚至触发 ImageItem 走 readFile 重建）。
-      // 对 URL 的可用性判断交给 <img onerror>，此处只处理“URL 缺失”的情况即可。
-    }
-  }
-
-  // 如果缺失的图片数量较多（超过 10%），重新加载所有缺失的 URL
-  if (missingCount > 0) {
-    if (missingCount > displayedImages.value.length * 0.1) {
-      // 缺失较多，重新加载所有缺失的图片 URL
-      loadImageUrls(imagesToReload);
-    } else {
-      // 缺失较少，只加载缺失的部分
-      loadImageUrls(imagesToReload);
-    }
-  }
-
 });
 
 // 组件停用时（keep-alive 缓存，但不清理 Blob URL）

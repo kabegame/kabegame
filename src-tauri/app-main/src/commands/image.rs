@@ -30,6 +30,15 @@ pub async fn browse_gallery_provider(path: String) -> Result<serde_json::Value, 
 }
 
 #[tauri::command]
+pub async fn clear_provider_cache() -> Result<(), String> {
+    let provider_rt = ProviderRuntime::global();
+    tauri::async_runtime::spawn_blocking(move || provider_rt.clear_cache())
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn get_image_by_id(image_id: String) -> Result<serde_json::Value, String> {
     let image = Storage::global().find_image_by_id(&image_id)?;
     Ok(serde_json::to_value(image).map_err(|e| e.to_string())?)

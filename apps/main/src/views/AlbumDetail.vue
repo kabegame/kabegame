@@ -1,13 +1,13 @@
 <template>
   <div class="album-detail" v-pull-to-refresh="pullToRefreshOpts">
-    <ImageGrid ref="albumViewRef" class="detail-body" :images="images" :image-url-map="imageSrcMap"
+    <ImageGrid ref="albumViewRef" class="detail-body" :images="images"
       :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
       :enable-ctrl-key-adjust-columns="!IS_ANDROID"
       :enable-virtual-scroll="!IS_ANDROID"
       :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing"
       :actions="imageActions"
       :on-context-command="handleImageMenuCommand"
-      @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()">
+      @added-to-album="handleAddedToAlbum">
 
       <template #before-grid>
         <PageHeader :title="albumName || '画册'"
@@ -130,7 +130,6 @@ import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
 import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
-import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { useBigPageRoute } from "@/composables/useBigPageRoute";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
@@ -140,6 +139,7 @@ import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
+import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 
 const route = useRoute();
 const router = useRouter();
@@ -153,7 +153,6 @@ const uiStore = useUiStore();
 const { load: loadImageTypes, getMimeType } = useImageTypes();
 const { imageGridColumns } = storeToRefs(uiStore);
 const desktopSelectionStore = useSelectionStore();
-const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 const isAlbumDetailActive = ref(true);
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
@@ -235,8 +234,8 @@ const totalImagesCount = ref<number>(0);
 const albumViewRef = ref<any>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
 
-// leaf 分页：桌面每页 1000 张（与后端 provider 对齐）；Android 每页 100 便于预览重构
-const BIG_PAGE_SIZE = IS_ANDROID ? 100 : 1000;
+// leaf 分页：安卓与桌面统一每页 100 张，无虚拟滚动
+const BIG_PAGE_SIZE = 100;
 const { currentPage, currentOffset, jumpToPage } = useBigPageRoute({
   route,
   router,
@@ -308,36 +307,19 @@ function onDragScrollOverspeed(_ev: Event) {
   });
 }
 
-const { isInteracting } = useImageGridAutoLoad({
+useImageGridAutoLoad({
   containerRef: albumContainerRef,
-  onLoad: () => void loadImageUrls(),
+  onLoad: () => {},
 });
 
 // Image actions for context menu / action sheet
 const imageActions = computed(() => createImageActions({ removeText: "从画册移除" }));
-
-const {
-  imageSrcMap,
-  loadImageUrls,
-  removeFromCacheByIds,
-  reset: resetImageUrlLoader,
-  cleanup: cleanupImageUrlLoader,
-} = useImageUrlLoader({
-  containerRef: albumContainerRef,
-  imagesRef: images,
-  preferOriginalInGrid,
-  gridColumns: imageGridColumns,
-  isInteracting,
-});
 
 watch(
   () => albumViewRef.value,
   async () => {
     await nextTick();
     albumContainerRef.value = albumViewRef.value?.getContainerEl?.() ?? null;
-    if (albumContainerRef.value && images.value.length > 0) {
-      requestAnimationFrame(() => void loadImageUrls());
-    }
   },
   { immediate: true }
 );
@@ -427,6 +409,7 @@ const handleRefresh = async () => {
     // 3) 手动刷新：清缓存强制重载详情（否则 store 缓存会让 UI 看起来“没刷新”）
     delete albumStore.albumImages[albumId.value];
     delete albumStore.albumPreviews[albumId.value];
+    clearImageStateCache();
 
     // 4) 重新拉取图片列表 + 清理本地选择/URL 缓存
     clearSelection();
@@ -451,7 +434,7 @@ const loadAlbum = async (opts?: { reset?: boolean }) => {
       leafAllImages = [];
       await nextTick();
     }
-    // 通过 provider 浏览获取 total + 当前页 leaf（<=1000）
+    // 通过 provider 浏览获取 total + 当前页 leaf（<=BIG_PAGE_SIZE）
     const root = providerRootPath.value;
     if (!root) return;
     const rootRes = await invoke<{ total: number }>("browse_gallery_provider", { path: root });
@@ -460,7 +443,6 @@ const loadAlbum = async (opts?: { reset?: boolean }) => {
     if (totalImagesCount.value <= 0) {
       leafAllImages = [];
       images.value = [];
-      resetImageUrlLoader();
       return;
     }
 
@@ -472,16 +454,10 @@ const loadAlbum = async (opts?: { reset?: boolean }) => {
 
     leafAllImages = list;
     images.value = list;
-
-    // 清理旧资源
-    resetImageUrlLoader();
   } finally {
     // 获取到列表后立即结束加载状态
     loading.value = false;
   }
-
-  // 只优先加载视口内（以及 overscan）需要的 URL；其余在空闲时渐进补齐
-  requestAnimationFrame(() => void loadImageUrls());
 };
 
 
@@ -491,7 +467,6 @@ const handleAddedToAlbum = async () => {
 
 const { handleCopyImage } = useImageOperations(
   images,
-  imageSrcMap,
   currentWallpaperImageId,
   albumViewRef,
   () => { },
@@ -555,7 +530,6 @@ const confirmRemoveImages = async () => {
     // 如果删除了文件，需要从列表中移除；如果只是从画册移除，也需要从列表中移除
     images.value = images.value.filter((img) => !ids.has(img.id));
     leafAllImages = leafAllImages.filter((img) => !ids.has(img.id));
-    removeFromCacheByIds(idsArr);
     clearSelection();
     if (totalImagesCount.value > 0) {
       totalImagesCount.value = Math.max(0, totalImagesCount.value - idsArr.length);
@@ -853,7 +827,6 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
           // 从列表中移除
           images.value = images.value.filter((img) => !ids.has(img.id));
           leafAllImages = leafAllImages.filter((img) => !ids.has(img.id));
-          removeFromCacheByIds(idsArr);
           
           // 如果包含当前壁纸，清除壁纸 ID
           if (includesCurrentWallpaper) {
@@ -885,7 +858,6 @@ const initAlbum = async (newAlbumId: string) => {
   loading.value = true;
 
   // 清理旧数据
-  resetImageUrlLoader();
   images.value = [];
   clearSelection();
 
@@ -1147,23 +1119,11 @@ useImagesChangeRefresh({
     await loadAlbum();
 
     const { addedIds, removedIds } = diffById(prevList, images.value);
-    if (removedIds.length > 0) {
-      removeFromCacheByIds(removedIds);
-      clearSelection();
-    }
-    if (addedIds.length > 0) {
-      const addedSet = new Set(addedIds);
-      const addedImages = images.value.filter((img) => addedSet.has(img.id));
-      if (addedImages.length > 0) {
-        void loadImageUrls(addedImages);
-      }
-    }
+    if (removedIds.length > 0) clearSelection();
   },
 });
 
 onBeforeUnmount(() => {
-  cleanupImageUrlLoader();
-
   // 收藏状态以 store 为准：无需移除监听
 
 });

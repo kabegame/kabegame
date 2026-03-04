@@ -67,8 +67,8 @@ export function createImageActions(
       label: "分享",
       icon: Share,
       command: "share",
-      // On Android: only in "更多" submenu; on desktop top-level single-select
-      visible: (ctx) => !hideSet.has("share") && (!ctx.selectedCount || ctx.selectedCount === 1) && (!IS_ANDROID || (ctx.selectedCount !== undefined && ctx.selectedCount > 1)),
+      // 仅 Android：单选时在「更多」子菜单，多选时顶层；桌面端不显示分享
+      visible: (ctx) => !hideSet.has("share") && IS_ANDROID && (ctx.selectedCount !== undefined && ctx.selectedCount > 1),
     },
     {
       key: "copy",

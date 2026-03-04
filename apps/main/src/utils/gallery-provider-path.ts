@@ -1,7 +1,7 @@
 // 画廊 Provider 路径计算（与后端 AllProvider 的贪心分解保持一致）
+// 安卓与桌面统一：每页 100 张
 
-import { IS_ANDROID } from "@kabegame/core/env";
-const LEAF_SIZE = IS_ANDROID ? 100 : 1000;
+const LEAF_SIZE = 100;
 const GROUP_SIZE = 10;
 
 export interface GreedyRange {
@@ -46,7 +46,7 @@ export function rangeName(offset: number, count: number): string {
  * 给定 total 与 page（从 1 开始），返回“该页对应的 leaf 节点”路径。
  *
  * - providerRoot: `all` / `by-plugin/konachan` / `by-date/2024-01`
- * - page: 1-based，按 1000 张一页
+ * - page: 1-based，按 LEAF_SIZE（100）张一页
  */
 export function buildLeafProviderPathForPage(
   providerRoot: string,
@@ -75,7 +75,7 @@ export function buildLeafProviderPathForPage(
     const covered = ranges.reduce((sum, r) => sum + r.count, 0);
 
     if (localOffset >= covered) {
-      // 落在 remainder（直接文件列表）里：这一定是最后一页（offset 按 1000 对齐）
+      // 落在 remainder（直接文件列表）里：这一定是最后一页（offset 按 LEAF_SIZE 对齐）
       baseOffset += covered;
       localOffset -= covered;
       rangeTotal = rangeTotal - covered;

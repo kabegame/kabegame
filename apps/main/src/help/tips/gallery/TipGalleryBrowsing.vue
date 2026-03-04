@@ -13,14 +13,14 @@
 
         <section class="section">
             <h3>分页浏览</h3>
-            <p>当画廊中的图片总数超过 <strong>1000 张</strong> 时，会自动启用分页功能。</p>
+            <p>当画廊中的图片总数超过 <strong>100 张</strong> 时，会自动启用分页功能。</p>
             <p>分页器会显示在画廊顶部工具栏下方，包含以下功能：</p>
             <ul>
                 <li><strong>上一页/下一页</strong>：快速切换相邻页面</li>
                 <li><strong>页码输入框</strong>：直接输入页码跳转到指定页面</li>
                 <li><strong>总页数显示</strong>：显示当前为第几页，共多少页</li>
             </ul>
-            <p>每页显示 <strong>1000 张图片</strong>，这样无论多慢的电脑，都能畅游自己的图库啦。</p>
+            <p>每页显示 <strong>100 张图片</strong>，安卓与桌面一致，无虚拟滚动。</p>
             <TipImageCarousel v-if="paginationImages.length > 0" :images="paginationImages" />
         </section>
 

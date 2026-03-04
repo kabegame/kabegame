@@ -2,6 +2,8 @@
 
 本文档总结在 Android 上对图片 URL 加载时机、`readFile` 调用来源的排查结论，以及“仅视口内加载”的改造建议。
 
+**说明**：下文「一～五」描述的是**历史架构**（基于 blob URL、LRU 缓存、视口门控）。「六」为 2025 年简化后的当前架构（直接由路径算 URL，配合全局图片状态缓存避免频繁闪回加载态）。
+
 ---
 
 ## 一、结论摘要
@@ -55,11 +57,62 @@
 
 ---
 
-## 五、相关文件
+## 五、相关文件（历史架构）
+
+| 文件 | 作用（已废弃或已改） |
+|------|----------------------|
+| `packages/core/src/components/image/ImageItem.vue` | 原：视口检测 + ensureForImage 门控 → 现：见「六」 |
+| `packages/core/src/components/common/ImagePreviewDialog.vue` | 原：computed 整表预取原图 → 现：见「六」 |
+| ~~`useImageUrlMapCache.ts`~~ | **已删除**：LRU、blob 生命周期、ensureForImage |
+| ~~`useImageUrlLoader.ts`~~ | **已删除**：批量 URL 调度、视口内加载 |
+| `packages/core/src/fs/readFile.ts` | Android content:// 仍可用于其他场景；当前图片展示不再经 blob |
+
+---
+
+## 六、当前架构（2025 简化：移除 imageSrcMap）
+
+后端可直接提供图片路径等数据，前端不再维护 blob URL / LRU URL 缓存，改为 **images 列表 + 从路径同步计算 URL + 全局图片状态缓存 + onerror 错误状态**。
+
+### 6.1 设计要点
+
+- **无 URL 全局缓存**：不再有 `imageSrcMap` / `ImageUrlMap` / `useImageUrlMapCache` / `useImageUrlLoader`。
+- **URL 来源**：桌面用 `fileToUrl(localPath)`（本地 HTTP 文件服务）；Android 用 `content://` → `CONTENT_URI_PROXY_PREFIX` 代理 URL，由 WebView 拦截请求流式返回。
+- **全局状态缓存**：`useImageStateCache` 以图片 `id` 作为 key，缓存 `primaryUrl/fallbackUrl/primaryKind` 与最终渲染状态（`displayUrl/isLost/originalMissing/stage`）。
+- **缓存失效策略**：`images-change` 自动刷新不清缓存；仅手动刷新（Gallery/AlbumDetail/TaskDetail）时显式 `clearImageStateCache()`。
+- **状态更新**：`useImageItemLoader` 在 `img.onload` 和最终失败分支写缓存，页面切换返回后可直接复用状态。
+
+### 6.2 桌面端 ImageItem
+
+- **始终优先原图**：优先显示原图（`localPath`），失败则回退缩略图（`thumbnailPath` 或 `localPath`）；两者都不可得则显示“图片走丢了”。（与列数无关）
+- **仅原图不可得**（例如能显示缩略图但原图 404）：右上角红色感叹号，悬浮提示“这张图片找不到了”。
+
+### 6.3 移动端（Android）ImageItem
+
+- 始终用原图 URL（content:// 代理）；不可得则直接显示“图片走丢了”，无缩略图 fallback。
+
+### 6.4 预览弹层（ImagePreviewDialog）
+
+- **桌面**：优先原图，onerror 回退缩略图，再 error 显示丢失占位。
+- **Android PhotoSwipe**：暂不管理错误状态与加载中状态；已写入 `todo.ini`：“安卓 photoswipe 管理错误状态（图片丢失占位）和加载中状态”。
+
+### 6.5 当前相关文件
 
 | 文件 | 作用 |
 |------|------|
-| `packages/core/src/components/image/ImageItem.vue` | 视口检测 + ensureForImage 门控 |
-| `packages/core/src/components/common/ImagePreviewDialog.vue` | 预览弹层；computed 中整表 getOrCreateOriginalUrlFor 会率先触发 readFile |
-| `packages/core/src/composables/useImageUrlMapCache.ts` | ensureForImage、ensureOriginalBlobUrl、ensureOriginalAssetUrl；LRU + in-flight 去重 |
-| `packages/core/src/fs/readFile.ts` | Android/Linux 下 content:// 等走自定义 read_file，实际读文件处 |
+| `packages/core/src/composables/useImageItemLoader.ts` | 按 `image` + `gridColumns` 计算 primaryUrl/fallbackUrl，命中缓存时直接恢复状态；onerror 切换与 isLost / originalMissing |
+| `packages/core/src/composables/useImageStateCache.ts` | 全局图片状态缓存（按 id 存储）与手动刷新清空入口 |
+| `packages/core/src/components/image/ImageItem.vue` | 使用 useImageItemLoader，无 imageUrl prop、无 IntersectionObserver |
+| `packages/core/src/fileServer.ts` | 桌面 `fileToUrl`，Android 不参与 |
+| `packages/core/src/components/common/ImagePreviewDialog.vue` | 直接从 ImageInfo 算预览 URL，原图优先、失败回退缩略图再丢失占位 |
+| `packages/core/src/types/image.ts` | `ImageUrlMap` 已移除，仅保留 `ImageInfo` 等 |
+
+### 6.6 images-change 时的增量稳定刷新
+
+当 **images-change** 触发时，各页的 `useImagesChangeRefresh` 会执行 `onRefresh`，对当前页做「整页重拉、整体替换数组」（如 Gallery 的 `refreshImagesPreserveCache`、画册/任务的 `loadAlbum` / `loadTaskImages`）。当前实现通过两层机制避免全页面闪回骨架：
+
+- `ImageGrid` 仍按 `:key="image.id"` 做 diff：删除不存在项、插入新增项、复用同 id 的组件实例。
+- `useImageItemLoader` 的 watch 改为依赖基本类型值（`id + primaryUrl + fallbackUrl + primaryKind + localExists`），避免仅因对象引用变化而重置。
+- `useImageStateCache` 命中（且 URL 计划未变化）时，`ImageItem` 直接恢复上次状态，不会先回到 `isImageLoading=true`。
+- 仅当 URL 计划确实变化、首次出现或缓存未命中时，才进入加载流程并显示骨架。
+
+因此：**当前实现下，images-change 触发后只会让真正变更的条目进入加载态；未变化条目保持已加载状态，页面切换返回也可直接命中缓存，视觉上更平滑。** 如需彻底重新探测图片状态，可通过手动刷新触发缓存清空。

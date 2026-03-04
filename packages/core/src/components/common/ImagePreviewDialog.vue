@@ -60,39 +60,51 @@
   </PhotoSwipe>
 
   <!-- 桌面端 Dialog 预览 -->
-  <el-dialog v-else v-model="previewVisible" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
-    class="image-preview-dialog" :show-close="true" :lock-scroll="true" @close="closePreview">
-    <div v-if="previewVisible" ref="previewContainerRef" class="preview-container"
-      @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
-      @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePanzoomWheel">
-      <div v-if="props.images.length > 1" class="preview-nav-zone left"
-        :class="{ visible: previewHoverSide === 'left' }" @click.stop="goPrev">
-        <button class="preview-nav-btn" type="button" :class="{ disabled: isAtFirst }" aria-label="上一张">
-          <el-icon>
-            <ArrowLeftBold />
-          </el-icon>
-        </button>
+  <template v-else>
+    <el-dialog v-model="previewVisible" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
+      class="image-preview-dialog" :show-close="true" :lock-scroll="true" @close="closePreview">
+      <div v-if="previewVisible" ref="previewContainerRef" class="preview-container"
+        @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
+        @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePanzoomWheel">
+        <div v-if="props.images.length > 1" class="preview-nav-zone left"
+          :class="{ visible: previewHoverSide === 'left' }" @click.stop="goPrev">
+          <button class="preview-nav-btn" type="button" :class="{ disabled: isAtFirst }" aria-label="上一张">
+            <el-icon>
+              <ArrowLeftBold />
+            </el-icon>
+          </button>
+        </div>
+        <div v-if="props.images.length > 1" class="preview-nav-zone right"
+          :class="{ visible: previewHoverSide === 'right' }" @click.stop="goNext">
+          <button class="preview-nav-btn" type="button" :class="{ disabled: isAtLast }" aria-label="下一张">
+            <el-icon>
+              <ArrowRightBold />
+            </el-icon>
+          </button>
+        </div>
+        <div v-if="previewImageUrl" ref="panzoomWrapperRef" class="panzoom-wrapper">
+          <img ref="previewImageRef" :src="previewImageUrl" class="preview-image" alt="预览图片"
+            @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
+        </div>
+        <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
+          <ImageNotFound />
+        </div>
+        <div v-if="previewImageLoading" class="preview-loading">
+          <div class="preview-loading-inner">正在加载原图…</div>
+        </div>
       </div>
-      <div v-if="props.images.length > 1" class="preview-nav-zone right"
-        :class="{ visible: previewHoverSide === 'right' }" @click.stop="goNext">
-        <button class="preview-nav-btn" type="button" :class="{ disabled: isAtLast }" aria-label="下一张">
-          <el-icon>
-            <ArrowRightBold />
-          </el-icon>
-        </button>
-      </div>
-      <div v-if="previewImageUrl" ref="panzoomWrapperRef" class="panzoom-wrapper">
-        <img ref="previewImageRef" :src="previewImageUrl" class="preview-image" alt="预览图片"
-          @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
-      </div>
-      <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
-        <ImageNotFound />
-      </div>
-      <div v-if="previewImageLoading" class="preview-loading">
-        <div class="preview-loading-inner">正在加载原图…</div>
-      </div>
-    </div>
-  </el-dialog>
+    </el-dialog>
+    <!-- 桌面端预览内右键：与单张图片相同的上下文菜单 -->
+    <ActionRenderer
+      v-if="actions.length > 0"
+      :visible="previewContextMenuVisible"
+      :position="previewContextMenuPosition"
+      :actions="actions"
+      :context="previewActionContext"
+      mode="contextmenu"
+      @close="closePreviewContextMenu"
+      @command="handlePreviewActionCommand" />
+  </template>
 
 </template>
 
@@ -101,10 +113,9 @@ import type { Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
-import type { ImageInfo, ImageUrlMap } from "../../types/image";
+import type { ImageInfo } from "../../types/image";
 import ImageNotFound from "./ImageNotFound.vue";
-import { useImageUrlMapCache } from "../../composables/useImageUrlMapCache";
-import { IS_ANDROID } from "../../env";
+import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "../../env";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
@@ -112,18 +123,14 @@ import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
 import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 import { useModalBack } from "../../composables/useModalBack";
+import { fileToUrl } from "../../fileServer";
 
 const props = withDefaults(defineProps<{
   images: ImageInfo[];
-  imageUrlMap: ImageUrlMap;
   /** Actions for context menu / action sheet. */
   actions?: ActionItem<ImageInfo>[];
 }>(), {
   actions: () => [],
-});
-
-watch(() => props.images.length, () => {
-  console.log(props.images);
 });
 
 const emit = defineEmits<{
@@ -180,10 +187,30 @@ let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 // Android: 使用 useModalBack 管理预览的返回键行为（不使用 close-on-back prop）
 useModalBack(previewVisible);
 
-// 全局 cache（用于同步生成 original asset URL）
-const urlCache = useImageUrlMapCache();
-
 const clamp = (val: number, min: number, max: number) => Math.min(max, Math.max(min, val));
+
+const normalizeDesktopPath = (path: string | undefined) =>
+  (path || "").trimStart().replace(/^\\\\\?\\/, "").trim();
+
+const toDesktopUrl = (path: string | undefined) => {
+  const normalized = normalizeDesktopPath(path);
+  if (!normalized) return "";
+  return fileToUrl(normalized);
+};
+
+const toAndroidProxyUrl = (path: string | undefined) => {
+  const raw = (path || "").trim();
+  if (!raw.startsWith("content://")) return "";
+  return raw.replace("content://", CONTENT_URI_PROXY_PREFIX);
+};
+
+const getOriginalPreviewUrl = (image: ImageInfo) =>
+  IS_ANDROID ? toAndroidProxyUrl(image.localPath) : toDesktopUrl(image.localPath);
+
+const getThumbnailPreviewUrl = (image: ImageInfo) => {
+  const thumbPath = image.thumbnailPath || image.localPath;
+  return IS_ANDROID ? toAndroidProxyUrl(thumbPath) : toDesktopUrl(thumbPath);
+};
 
 // 计算 cover scale（填满屏幕的缩放比例）
 
@@ -307,21 +334,12 @@ const isTextInputLike = (target: EventTarget | null) => {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
 };
 
-/** 只读：从全局 cache 或 props 取原图 URL（不主动创建） */
-const getOriginalUrlFor = (imageId: string) => {
-  return (
-    urlCache.imageUrlMap.value[imageId]?.original ||
-    props.imageUrlMap?.[imageId]?.original ||
-    ""
-  );
-};
-
 /** Android PhotoSwipe：根据当前 images 构建 dataSource 数组（只读 URL） */
 const pswpDataSource = computed(() => {
   const fallbackW = 1920;
   const fallbackH = 1080;
   return props.images.map((img) => {
-    const url = getOriginalUrlFor(img.id) || props.imageUrlMap?.[img.id]?.thumbnail || "";
+    const url = getOriginalPreviewUrl(img) || getThumbnailPreviewUrl(img) || "";
     return {
       src: url,
       width: img.width || fallbackW,
@@ -339,10 +357,8 @@ const setPreviewByIndex = (index: number) => {
   // previewImage 现在是 computed，无需手动赋值
   previewNotFound.value = false;
 
-  // 只读：从 cache 或 props 获取 URL，不主动创建
-  const data = props.imageUrlMap?.[img.id];
-  const thumb = data?.thumbnail || "";
-  const originalUrl = getOriginalUrlFor(img.id);
+  const thumb = getThumbnailPreviewUrl(img);
+  const originalUrl = getOriginalPreviewUrl(img);
 
   previewNotFound.value = false;
   previewImageLoading.value = false;
@@ -377,11 +393,10 @@ const getAdjacentImageUrl = (offset: number): string => {
   if (!img) return "";
   
   // 优先使用 original，否则使用 thumbnail
-  const originalUrl = getOriginalUrlFor(img.id);
+  const originalUrl = getOriginalPreviewUrl(img);
   if (originalUrl) return originalUrl;
-  
-  const data = props.imageUrlMap?.[img.id];
-  return data?.thumbnail || "";
+
+  return getThumbnailPreviewUrl(img);
 };
 
 
@@ -530,8 +545,7 @@ const handlePreviewImageError = () => {
     return;
   }
 
-  const data = props.imageUrlMap?.[img.id];
-  const thumb = data?.thumbnail || "";
+  const thumb = getThumbnailPreviewUrl(img);
   const current = previewImageUrl.value || "";
 
   // 避免死循环：如果已经在用 thumbnail 仍失败，则只结束 loading
@@ -685,21 +699,6 @@ watch(
 );
 
 // 桌面端：当 urlCache 中原图 URL 就绪时自动更新 previewImageUrl
-watch(
-  () => {
-    const id = previewImage.value?.id;
-    return id ? urlCache.imageUrlMap.value[id]?.original : undefined;
-  },
-  (newOriginal) => {
-    if (!newOriginal || !previewVisible.value || IS_ANDROID) return;
-    if (previewImageUrl.value !== newOriginal) {
-      previewImageUrl.value = newOriginal;
-      previewNotFound.value = false;
-      previewImageLoading.value = false;
-    }
-  }
-);
-
 let resizeObserver: ResizeObserver | null = null;
 const prevAvailableSize = ref({ width: 0, height: 0 });
 

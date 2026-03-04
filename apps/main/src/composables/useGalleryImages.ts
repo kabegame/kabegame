@@ -1,9 +1,7 @@
 import { nextTick, ref, shallowRef, type Ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
-import { useImageUrlLoader } from "@kabegame/core/composables/useImageUrlLoader";
 import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
-import { IS_ANDROID } from "@kabegame/core/env";
 
 type GalleryBrowseEntry =
   | { kind: "dir"; name: string }
@@ -16,23 +14,17 @@ type GalleryBrowseResult = {
   entries: GalleryBrowseEntry[];
 };
 
-const LEAF_SIZE = IS_ANDROID ? 100 : 1000;
+/** 安卓与桌面统一：每页 100 张，无虚拟滚动 */
+const LEAF_SIZE = 100;
 
 /**
- * 画廊图片列表管理（分页/增量/大页）+ 图片 URL 加载（委托给 useImageUrlLoader）。
- *
- * 规则：
- * - 缩略图：一律 Blob URL（由 core 的全局 LRU 缓存创建/淘汰）
- * - 原图：一律 asset URL（convertFileSrc）
+ * 画廊图片列表管理（分页/增量/大页）。
  */
 export function useGalleryImages(
   galleryContainerRef: Ref<HTMLElement | null>,
   isLoadingMore: Ref<boolean>,
   providerRootPathRef: Ref<string>,
-  currentPageRef: Ref<number>,
-  preferOriginalInGrid: Ref<boolean> = ref(false),
-  gridColumns?: Ref<number>,
-  isInteracting?: Ref<boolean>
+  currentPageRef: Ref<number>
 ) {
   const crawlerStore = useCrawlerStore();
 
@@ -44,36 +36,19 @@ export function useGalleryImages(
     displayedImageIds = new Set(next.map((i) => i.id));
   };
 
-  // 当前 leaf 的完整图片列表（最多 1000；最后一页可能 <1000）
+  // 当前 leaf 的完整图片列表（最多 LEAF_SIZE；最后一页可能 <LEAF_SIZE）
   let leafAllImages: ImageInfo[] = [];
-
-  // URL 加载器（内部使用 core 的全局 imageUrlMap LRU）
-  const {
-    imageSrcMap,
-    loadImageUrls,
-    removeFromCacheByIds,
-    recreateImageUrl,
-    reset: resetUrlLoader,
-    cleanup: cleanupUrlLoader,
-  } = useImageUrlLoader({
-    containerRef: galleryContainerRef,
-    imagesRef: displayedImages as any,
-    preferOriginalInGrid,
-    gridColumns,
-    isInteracting,
-  });
 
   const totalImages = ref(0);
   const loadedKey = ref("");
 
   const setLeafAndResetDisplay = async (images: ImageInfo[]) => {
     leafAllImages = images;
-    // 直接显示整个 leaf（最多 1000 张）
+    // 直接显示整个 leaf（最多 LEAF_SIZE 张）
     setDisplayedImages(images);
     crawlerStore.images = images.slice();
     crawlerStore.hasMore = false;
     await nextTick();
-    void loadImageUrls(images);
   };
 
   const fetchLeafByPage = async (page: number) => {
@@ -93,7 +68,7 @@ export function useGalleryImages(
       return;
     }
 
-    // total <= 1000：root 就是 leaf，直接展示（避免再算路径）
+    // total <= LEAF_SIZE：root 就是 leaf，直接展示（避免再算路径）
     if (totalImages.value <= LEAF_SIZE) {
       const images = (probe.entries || [])
         .filter((e) => e.kind === "image")
@@ -128,6 +103,13 @@ export function useGalleryImages(
         await fetchLeafByPage(1);
         return;
       }
+      // 「路径不存在」常见于后端 provider 缓存与当前分页策略不一致：清空缓存后重试一次，仍失败则抛出
+      const errMsg = e != null && typeof e === "object" && "message" in e ? String((e as Error).message) : String(e);
+      if (errMsg.includes("路径不存在")) {
+        await invoke("clear_provider_cache").catch(() => {});
+        await fetchLeafByPage(safePage);
+        return;
+      }
       throw e;
     }
   };
@@ -159,7 +141,7 @@ export function useGalleryImages(
     // - 关键：不要清空 displayedImages，否则会导致整页 ImageItem 卸载/重建（破坏 key 复用）
     // - fetchLeafByPage 会随后用最新数据替换数组引用，让 Vue 仅按 key diff（删除缺失项/复用已有项）
     if (forceReload && displayedImages.value.length > 0) {
-      removeFromCacheByIds(displayedImages.value.map((i) => i.id));
+      // 简化后不再维护 URL 缓存，这里不需要额外处理
     }
 
     if (reset) {
@@ -241,13 +223,12 @@ export function useGalleryImages(
   };
 
   const jumpToBigPage = async (bigPage: number, _bigPageSize = LEAF_SIZE) => {
-    // 这里的 bigPage 实际就是 leaf page（1000 一页）
+    // 这里的 bigPage 实际就是 leaf page（LEAF_SIZE 一页）
     currentPageRef.value = Math.max(1, Math.floor(bigPage || 1));
     const container = galleryContainerRef.value;
     try {
       setDisplayedImages([]);
       await nextTick();
-      resetUrlLoader();
       if (container) container.scrollTop = 0;
       await fetchLeafByPage(currentPageRef.value);
     } catch (error) {
@@ -265,20 +246,14 @@ export function useGalleryImages(
     setDisplayedImages(
       displayedImages.value.filter((img) => !idSet.has(img.id))
     );
-    removeFromCacheByIds(imageIds);
-
     crawlerStore.images = displayedImages.value.slice();
     crawlerStore.hasMore = false;
   };
 
-  const cleanup = () => {
-    cleanupUrlLoader();
-  };
+  const cleanup = () => {};
 
   return {
     displayedImages,
-    imageSrcMap,
-    loadImageUrls,
     refreshImagesPreserveCache,
     refreshLatestIncremental,
     loadMoreImages,
@@ -286,8 +261,6 @@ export function useGalleryImages(
     cancelLoadAll,
     jumpToBigPage,
     removeFromUiCacheByIds,
-    removeFromCacheByIds,
-    recreateImageUrl,
     cleanup,
     totalImages,
     loadedKey,
