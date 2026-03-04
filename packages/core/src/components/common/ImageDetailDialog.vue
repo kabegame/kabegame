@@ -103,7 +103,16 @@ const handleOpenUrl = async (url?: string) => {
 const handleOpenPath = async (path?: string) => {
   if (!path) return;
   try {
-    await openImage(path);
+    if (IS_ANDROID) {
+      const uri = path.startsWith("content://")
+        ? path
+        : path.startsWith("/")
+          ? `file://${path}`
+          : `file:///${path}`;
+      await openImage(uri);
+    } else {
+      await invoke("open_file_path", { filePath: path });
+    }
   } catch (error) {
     console.error("打开文件失败:", error);
     ElMessage.error("打开文件失败");

@@ -131,6 +131,10 @@ const isCreatingNewOutputAlbum = computed(
   () => selectedOutputAlbumId.value === "__create_new__"
 );
 
+function hasExplicitArchivePath(path: string): boolean {
+  return /\.(zip|rar)$/i.test(path.trim());
+}
+
 async function loadAlbums() {
   try {
     const list = await invoke<Album[]>("get_albums");
@@ -248,10 +252,13 @@ async function handleSubmit() {
     outputAlbumId = selectedOutputAlbumId.value;
   }
 
+  const hasArchiveFiles = paths.value.some(hasExplicitArchivePath);
+  const effectiveIncludeArchive = includeArchive.value || hasArchiveFiles;
+
   crawlerStore.addTask("本地导入", undefined, {
     paths: paths.value,
     recursive: recursive.value,
-    include_archive: includeArchive.value,
+    include_archive: effectiveIncludeArchive,
   }, outputAlbumId);
 
   visible.value = false;

@@ -260,20 +260,67 @@ async fn enqueue_archive(
             Ok(extract_dir) => {
                 // 解析压缩包名称
                 let archive_name = crate::crawler::archiver::resolve_archive_name(&url).await;
-                // 扁平复制图片到 images_dir 子文件夹并逐个入队
-                use crate::crawler::downloader::copy_extracted_images_and_enqueue;
-                if let Err(e) = copy_extracted_images_and_enqueue(
-                    &extract_dir,
-                    &ctx.images_dir,
-                    &archive_name,
-                    ctx.download_queue,
-                    ctx.task_id,
-                    PLUGIN_ID,
-                    ctx.download_start_time,
-                    &ctx.output_album_id,
-                    &HashMap::new(),
-                ).await {
-                    return Err(format!("Failed to copy and enqueue extracted images: {}", e));
+                #[cfg(target_os = "android")]
+                {
+                    let source_dir = extract_dir.to_string_lossy().to_string();
+                    let copy_result = get_content_io_provider()
+                        .copy_extracted_images_to_pictures(&source_dir)
+                        .await;
+                    let _ = tokio::fs::remove_dir_all(&extract_dir).await;
+
+                    let entries = copy_result
+                        .map_err(|e| format!("Failed to copy extracted images to Pictures: {}", e))?;
+                    for (idx, entry) in entries.into_iter().enumerate() {
+                        if ctx.download_queue.is_task_canceled(ctx.task_id).await {
+                            return Err("Task canceled".to_string());
+                        }
+
+                        let img_url = Url::parse(&entry.content_uri)
+                            .map_err(|e| format!("Invalid content URI from picker: {}", e))?;
+                        match ctx
+                            .download_queue
+                            .download_image(
+                                img_url.clone(),
+                                ctx.images_dir.clone(),
+                                PLUGIN_ID.to_string(),
+                                ctx.task_id.to_string(),
+                                ctx.download_start_time,
+                                ctx.output_album_id.clone(),
+                                HashMap::new(),
+                            )
+                            .await
+                        {
+                            Ok(()) => {}
+                            Err(e) => {
+                                GlobalEmitter::global().emit_task_log(
+                                    ctx.task_id,
+                                    "warn",
+                                    &format!("入队失败 {}: {}", img_url, e),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                #[cfg(not(target_os = "android"))]
+                {
+                    // 扁平复制图片到 images_dir 子文件夹并逐个入队
+                    use crate::crawler::downloader::copy_extracted_images_and_enqueue;
+                    if let Err(e) = copy_extracted_images_and_enqueue(
+                        &extract_dir,
+                        &ctx.images_dir,
+                        &archive_name,
+                        ctx.download_queue,
+                        ctx.task_id,
+                        PLUGIN_ID,
+                        ctx.download_start_time,
+                        &ctx.output_album_id,
+                        &HashMap::new(),
+                    )
+                    .await
+                    {
+                        return Err(format!("Failed to copy and enqueue extracted images: {}", e));
+                    }
                 }
                 *archive_count += 1;
                 emit_local_import_progress(ctx.task_id, *image_count, *archive_count);
