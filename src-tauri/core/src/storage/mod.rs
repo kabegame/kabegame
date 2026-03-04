@@ -268,60 +268,8 @@ PRAGMA mmap_size = 268435456;
         Ok(())
     }
 
-    /// 回填 display_name：扫描所有 display_name 为空的记录，从本地文件或 content URI 获取显示名。
-    /// 桌面端：从文件路径提取文件名；Android content://：调用 get_display_name。
-    /// 文件丢失时写入 "（丢失文件）"。
-    #[cfg(target_os = "android")]
-    pub async fn backfill_display_names(&self) -> Result<(), String> {
-        use crate::crawler::content_io::get_content_io_provider;
-        use std::path::Path;
-
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut stmt = conn
-            .prepare("SELECT id, local_path FROM images WHERE display_name = ''")
-            .map_err(|e| format!("Failed to prepare: {}", e))?;
-        let rows: Vec<(i64, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|e| format!("Failed to query images: {}", e))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to read rows: {}", e))?;
-        drop(stmt);
-        drop(conn);
-
-        for (id, local_path) in rows {
-            let display_name = if local_path.starts_with("content://") {
-                // Android content URI
-                get_content_io_provider()
-                    .get_display_name(&local_path)
-                    .await
-                    .unwrap_or_else(|_| "（丢失文件）".to_string())
-            } else {
-                // 桌面端文件路径
-                let path = Path::new(&local_path);
-                if path.exists() {
-                    path.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("image")
-                        .to_string()
-                } else {
-                    "（丢失文件）".to_string()
-                }
-            };
-
-            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-            conn.execute(
-                "UPDATE images SET display_name = ?1 WHERE id = ?2",
-                params![display_name, id],
-            )
-            .map_err(|e| format!("Failed to update display_name: {}", e))?;
-            drop(conn);
-        }
-
-        Ok(())
-    }
-
     #[cfg(not(target_os = "android"))]
-    pub async fn backfill_display_names(&self) -> Result<(), String> {
+    pub fn backfill_display_names(&self) -> Result<(), String> {
         use std::path::Path;
 
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;

@@ -1005,10 +1005,12 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                     #[cfg(target_os = "android")]
                                     {
                                         let source_dir = extract_dir.to_string_lossy().to_string();
-                                        match get_content_io_provider()
+                                        let copy_result = get_content_io_provider()
                                             .copy_extracted_images_to_pictures(&source_dir)
-                                            .await
-                                        {
+                                            .await;
+                                        let _ = tokio::fs::remove_dir_all(&extract_dir).await;
+                                        let _ = tokio::fs::remove_file(&download_path).await;
+                                        match copy_result {
                                             Ok(entries) => {
                                                 for entry in entries {
                                                     if dq.is_task_canceled(&task_id_clone).await {
@@ -1053,8 +1055,6 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                 );
                                             }
                                         }
-                                        let _ = tokio::fs::remove_dir_all(&extract_dir).await;
-                                        let _ = tokio::fs::remove_file(&download_path).await;
                                     }
 
                                     #[cfg(not(target_os = "android"))]

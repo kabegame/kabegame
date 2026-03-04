@@ -33,6 +33,10 @@ import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Activity 在 onCreate 之前注册的 launcher 提供给 PickerPlugin 使用，
@@ -208,29 +212,31 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
             invoke.reject("sourceDir 不能为空")
             return
         }
-        try {
-            val dir = File(sourceDir)
-            if (!dir.exists() || !dir.isDirectory) {
-                invoke.reject("sourceDir 不是有效目录: $sourceDir")
-                return
-            }
-            val entries = JSONArray()
-            dir.walkTopDown()
-                .filter { it.isFile }
-                .forEach { file ->
-                    val mime = guessMimeTypeFromFile(file)
-                    val uri = copyFileToPictures(file, mime, file.name)
-                    val obj = JSONObject()
-                    obj.put("contentUri", uri)
-                    obj.put("displayName", file.name)
-                    entries.put(obj)
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val dir = File(sourceDir)
+                if (!dir.exists() || !dir.isDirectory) {
+                    withContext(Dispatchers.Main) { invoke.reject("sourceDir 不是有效目录: $sourceDir") }
+                    return@launch
                 }
-            val result = JSObject()
-            result.put("entries", entries)
-            invoke.resolve(result)
-        } catch (e: Exception) {
-            Log.e(TAG, "copyExtractedImagesToPictures failed", e)
-            invoke.reject("批量复制到 Pictures 失败: ${e.message}", e)
+                val entries = JSONArray()
+                dir.walkTopDown()
+                    .filter { it.isFile }
+                    .forEach { file ->
+                        val mime = guessMimeTypeFromFile(file)
+                        val uri = copyFileToPictures(file, mime, file.name)
+                        val obj = JSONObject()
+                        obj.put("contentUri", uri)
+                        obj.put("displayName", file.name)
+                        entries.put(obj)
+                    }
+                val result = JSObject()
+                result.put("entries", entries)
+                withContext(Dispatchers.Main) { invoke.resolve(result) }
+            } catch (e: Exception) {
+                Log.e(TAG, "copyExtractedImagesToPictures failed", e)
+                withContext(Dispatchers.Main) { invoke.reject("批量复制到 Pictures 失败: ${e.message}", e) }
+            }
         }
     }
 

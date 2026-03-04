@@ -228,10 +228,11 @@ export function useFileDrop(
                 // 本地导入：单一任务，所有路径
                 if (localImportItems.length > 0) {
                   const allPaths = localImportItems.map((it) => it.path);
+                  const hasArchiveFiles = localImportItems.some((it) => it.isArchive);
                   crawlerStore.addTask("本地导入", undefined, {
                     paths: allPaths,
                     recursive: true,
-                    include_archive: false,
+                    include_archive: hasArchiveFiles,
                   });
                   console.log("[App] 已添加本地导入任务:", allPaths.length, "个路径");
                 }
