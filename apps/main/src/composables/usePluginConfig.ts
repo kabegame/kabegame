@@ -273,7 +273,7 @@ export function usePluginConfig() {
         await loadImageTypes();
         exts = imageExtensions.value.length
           ? [...imageExtensions.value, "zip"]
-          : ["jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "zip"];
+          : ["jpg", "jpeg", "png", "gif", "webp", "bmp", "zip"];
       }
 
       const selected = await open({

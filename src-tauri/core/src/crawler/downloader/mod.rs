@@ -974,7 +974,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             .await;
 
             match download_result {
-                Ok(_) => {
+                Ok(final_path) => {
                     // 归档：解压到固定目录（Android 内部私有目录 / 桌面临时目录），再遍历入队图片
                     if is_archive {
                         let archive_url = Url::from_file_path(&download_path)
@@ -1201,7 +1201,16 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
 
                             // 桌面或 Android 的 file 路径：用本地 path 做哈希/缩略图/入库
                             if use_path_flow {
-                                let path_for_post = download_path;
+                                // Android 上 file:// 的 prepare 给出的是 cache 占位路径，实际文件在下载器返回值里，需用返回值
+                                #[cfg(target_os = "android")]
+                                let path_for_post =
+                                    if url_clone.scheme() == "file" {
+                                        PathBuf::from(&final_path)
+                                    } else {
+                                        download_path.clone()
+                                    };
+                                #[cfg(not(target_os = "android"))]
+                                let path_for_post = download_path.clone();
 
                                 #[cfg(target_os = "android")]
                                 {

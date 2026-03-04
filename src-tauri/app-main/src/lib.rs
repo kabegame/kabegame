@@ -236,6 +236,15 @@ pub fn run() {
                             {
                                 eprintln!("Failed to fill missing image dimensions: {}", e);
                             }
+                            let handle = tauri::async_runtime::Handle::current();
+                            let _ = tauri::async_runtime::spawn_blocking(move || {
+                                if let Err(e) = handle.block_on(
+                                    kabegame_core::storage::Storage::global().backfill_display_names(),
+                                ) {
+                                    eprintln!("Failed to backfill display names: {}", e);
+                                }
+                            })
+                            .await;
                         });
                         startup::start_ipc_server(app.app_handle().clone());
                     }

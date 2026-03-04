@@ -317,7 +317,7 @@ const getSubmenuStyle = (index: number): CSSProperties => {
     left: 0;
     right: 0;
     bottom: 0;
-    z-index: 9998;
+    z-index: v-bind(zIndex);
 }
 
 .context-menu {

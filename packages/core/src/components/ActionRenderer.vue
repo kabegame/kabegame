@@ -7,6 +7,7 @@
       :visible="visible"
       :position="position"
       :items="menuItems"
+      :z-index="zIndex"
       @close="$emit('close')"
       @command="handleCommand" />
 
@@ -19,6 +20,7 @@
       :teleport="teleport"
       :no-transition="noTransition"
       :modal-back="modalBack"
+      :z-index="zIndex"
       @close="$emit('close')"
       @command="handleCommand" />
   </div>
@@ -45,6 +47,8 @@ interface Props {
   noTransition?: boolean;
   /** Whether to enable modal back behavior. Default true. */
   modalBack?: boolean;
+  /** Override z-index of the action renderer. Default 2000. */
+  zIndex?: number;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -52,6 +56,7 @@ const props = withDefaults(defineProps<Props>(), {
   teleport: true,
   noTransition: false,
   modalBack: true,
+  zIndex: 2000,
 });
 
 const emit = defineEmits<{

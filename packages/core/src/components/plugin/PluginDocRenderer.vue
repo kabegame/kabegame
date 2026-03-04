@@ -43,7 +43,6 @@ const guessMime = (path: string): string => {
   if (ext === "gif") return "image/gif";
   if (ext === "webp") return "image/webp";
   if (ext === "bmp") return "image/bmp";
-  if (ext === "svg") return "image/svg+xml";
   return "image/png";
 };
 

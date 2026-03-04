@@ -44,6 +44,7 @@
         :position="contextMenuPosition"
         :actions="actions"
         :context="contextMenuActionContext"
+        :zIndex="1900"
         @close="closeContextMenu"
         @command="handleContextMenuCommand" />
 

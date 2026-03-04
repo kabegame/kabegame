@@ -1,8 +1,7 @@
-export type ImageFormat = "webp" | "avif" | "heic" | "svg"
+export type ImageFormat = "webp" | "avif" | "heic"
 
 export interface ImageSupportResult {
   webp: boolean
   avif: boolean
   heic: boolean
-  svg: boolean
 }

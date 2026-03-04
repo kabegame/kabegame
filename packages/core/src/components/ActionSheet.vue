@@ -80,12 +80,15 @@ interface Props {
   /** Whether to disable transition animations. Default false. */
   noTransition?: boolean;
   modalBack?: boolean;
+  /** Override z-index of the action sheet. Default 2100. */
+  zIndex?: number;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   teleport: true,
   noTransition: false,
   modalBack: true,
+  zIndex: 2100,
 });
 
 const emit = defineEmits<{
@@ -273,7 +276,7 @@ const closeSubmenu = () => {
   background: var(--anime-bg-card);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  z-index: 2100; /* 高于图片预览 modal（.image-preview-fullscreen 为 2000） */
+  z-index: v-bind(zIndex); /* 高于图片预览 modal（.image-preview-fullscreen 为 2000） */
   border-top: 1px solid var(--anime-border);
   box-shadow: 0 -4px 20px rgba(255, 107, 157, 0.12);
 }
@@ -334,7 +337,7 @@ const closeSubmenu = () => {
   right: 0;
   bottom: 0;
   background: rgba(74, 21, 75, 0.25);
-  z-index: 2101; /* 高于主 action sheet (2100) */
+  z-index: v-bind(zIndex + 1); /* 高于主 action sheet (2100) */
   display: flex;
   align-items: flex-end;
   justify-content: center;

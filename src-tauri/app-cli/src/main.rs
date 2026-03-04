@@ -467,7 +467,7 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf) -> Result<Vec<u8>, String> {
                     .to_ascii_lowercase();
                 let ok = matches!(
                     ext.as_str(),
-                    "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg" | "ico"
+                    "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
                 );
                 if !ok {
                     continue;
