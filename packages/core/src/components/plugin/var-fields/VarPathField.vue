@@ -63,11 +63,11 @@ const valueForInput = computed(() => {
 });
 
 function normalizeExtensions(extensions?: string[]): string[] {
-  if (!extensions || extensions.length === 0) return ["jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "zip"];
+  if (!extensions || extensions.length === 0) return ["jpg", "jpeg", "png", "gif", "webp", "bmp", "zip"];
   const exts = extensions
     .map((e) => `${e}`.trim().replace(/^\./, "").toLowerCase())
     .filter(Boolean);
-  return exts.length > 0 ? exts : ["jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "zip"];
+  return exts.length > 0 ? exts : ["jpg", "jpeg", "png", "gif", "webp", "bmp", "zip"];
 }
 
 async function pickFolder() {

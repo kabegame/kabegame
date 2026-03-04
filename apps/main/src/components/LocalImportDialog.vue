@@ -144,7 +144,7 @@ async function loadAlbums() {
 async function handleAddFiles() {
   try {
     await loadImageTypes();
-    const exts = imageExtensions.value.length ? imageExtensions.value : ["jpg", "jpeg", "png", "gif", "webp", "bmp", "ico"];
+    const exts = imageExtensions.value.length ? imageExtensions.value : ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
     const selected = await open({
       directory: false,
       multiple: true,

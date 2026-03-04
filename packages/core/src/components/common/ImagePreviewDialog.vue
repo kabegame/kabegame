@@ -18,7 +18,7 @@
     <!-- 安卓：显示名称用 fixed 定位，与叉号同 top/高度，限制宽度并换行 -->
     <div
       v-if="previewImage?.displayName"
-      class="fixed left-0 right-0 top-0 z-[2001] flex min-h-[60px] items-center justify-center px-4 pt-[env(safe-area-inset-top,0px)]"
+      class="fixed left-0 right-0 top-0 flex min-h-[60px] items-center z-[-1] justify-center px-4 pt-[env(safe-area-inset-top,0px)]"
     >
       <span
         class="max-w-[85vw] break-words text-center text-sm font-medium text-white/90"
@@ -40,6 +40,7 @@
       :no-transition="true"
       @close="handlePswpActionClose"
       @command="handlePreviewActionCommand"
+      :zIndex="2100"
       :modal-back="false"
     />
     <!-- 上划删除区域通过 overlay slot 放入 .pswp 根级 -->
@@ -131,6 +132,10 @@ const props = withDefaults(defineProps<{
   actions?: ActionItem<ImageInfo>[];
 }>(), {
   actions: () => [],
+});
+
+watch(() => props.images.length, () => {
+  console.log("images.length changed", props.images);
 });
 
 const emit = defineEmits<{

@@ -7,7 +7,7 @@ use std::sync::{LazyLock, OnceLock, RwLock};
 
 /// 后端内置支持的图片扩展名（小写，不含点号）。前端可通过 set_frontend_supported_image_formats 扩展。
 const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "gif", "webp", "bmp", "svg",
+    "jpg", "jpeg", "png", "gif", "webp", "bmp",
 ];
 
 /// 扩展名到 MIME 的映射（含前端可能上报的 avif、heic）。
@@ -18,8 +18,6 @@ const EXT_MIME: &[(&str, &str)] = &[
     ("gif", "image/gif"),
     ("webp", "image/webp"),
     ("bmp", "image/bmp"),
-    ("ico", "image/x-icon"),
-    ("svg", "image/svg+xml"),
     ("avif", "image/avif"),
     ("heic", "image/heic"),
 ];

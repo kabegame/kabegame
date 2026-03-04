@@ -41,7 +41,7 @@ if (support.avif) {
 
 // 得到格式列表，便于传给后端
 const formats = getSupportedFormats(support)
-// 例如: ["webp", "avif", "svg"]
+// 例如: ["webp", "avif"]
 ```
 
 ### 仅内存缓存（不写 localStorage）

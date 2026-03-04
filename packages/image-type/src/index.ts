@@ -24,8 +24,7 @@ export async function getImageSupport(
         if (
           typeof parsed?.webp === "boolean" &&
           typeof parsed?.avif === "boolean" &&
-          typeof parsed?.heic === "boolean" &&
-          typeof parsed?.svg === "boolean"
+          typeof parsed?.heic === "boolean"
         ) {
           memoryCache = parsed
           return memoryCache
@@ -73,7 +72,6 @@ export function getSupportedFormats(result: ImageSupportResult): ImageFormat[] {
   if (result.webp) formats.push("webp")
   if (result.avif) formats.push("avif")
   if (result.heic) formats.push("heic")
-  if (result.svg) formats.push("svg")
   return formats
 }
 

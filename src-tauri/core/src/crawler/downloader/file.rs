@@ -46,6 +46,32 @@ impl SchemeDownloader for FileSchemeDownloader {
     }
 }
 
+// #region agent log
+#[cfg(target_os = "android")]
+fn agent_log(loc: &str, msg: &str, data: serde_json::Value, hyp: &str) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let line = serde_json::json!({
+        "sessionId": "e422d1",
+        "location": loc,
+        "message": msg,
+        "data": data,
+        "timestamp": ts,
+        "hypothesisId": hyp
+    });
+    eprintln!("KGM_DEBUG {}", line.to_string());
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open("/Users/cmtheit/code/kabegame/.cursor/debug-e422d1.log")
+    {
+        let _ = std::io::Write::write_all(&mut f, (line.to_string() + "\n").as_bytes());
+    }
+}
+// #endregion agent log
+
 /// file://：什么都不做，只解析并返回本地路径（库函数 Url::to_file_path）；不写入 dest。结束时上报一次进度供前端展示。
 async fn handle_file(
     dq: &DownloadQueue,

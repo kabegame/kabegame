@@ -31,8 +31,6 @@ export function useImageTypes() {
             "gif",
             "webp",
             "bmp",
-            "ico",
-            "svg",
           ];
           mimeByExt.value = {
             jpg: "image/jpeg",
@@ -41,8 +39,6 @@ export function useImageTypes() {
             gif: "image/gif",
             webp: "image/webp",
             bmp: "image/bmp",
-            ico: "image/x-icon",
-            svg: "image/svg+xml",
           };
         });
     }

@@ -412,7 +412,7 @@ private suspend fun extractZipToDirectory(context: Context, archiveUri: Uri): Re
 private val extractScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
 /** 与主程序 image_type 内置扩展名一致（小写，不含点号）。 */
-private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "svg")
+private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp")
 
 private fun isImageFile(file: File): Boolean {
     val ext = file.name.substringAfterLast('.', "").lowercase()
