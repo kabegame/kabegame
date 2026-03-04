@@ -15,7 +15,6 @@
             :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
             @click="(e) => handleItemClick(item.image, item.index, e)"
             @dblclick="() => handleItemDblClick(item.image, item.index)"
-            @longpress="() => handleItemLongPress(item.image, item.index)"
             @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
             @retry-download="() => emit('retry-download', { image: item.image })"
             @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
@@ -28,7 +27,6 @@
             :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="effectiveSelectedIds.has(image.id)"
             :grid-columns="gridColumnsCount" :grid-index="index" @click="(e) => handleItemClick(image, index, e)"
             @dblclick="() => handleItemDblClick(image, index)"
-            @longpress="() => handleItemLongPress(image, index)"
             @contextmenu="(e) => handleItemContextMenu(image, index, e)"
             @retry-download="() => emit('retry-download', { image })" />
         </transition-group>
@@ -66,13 +64,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch, type Ref } from "vue";
+import { storeToRefs } from "pinia";
 import ImageItem from "./ImageItem.vue";
 import type { ImageInfo, ImageUrlMap } from "../../types/image";
 import EmptyState from "../common/EmptyState.vue";
 import ImagePreviewDialog from "../common/ImagePreviewDialog.vue";
 import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
+import { useSelectionStore } from "../../stores/selection";
 import { useModalBack } from "../../composables/useModalBack";
 import { useModalStackStore } from "../../stores/modalStack";
 import { useUiStore } from "../../stores/ui";
@@ -156,10 +156,11 @@ const emit = defineEmits<{
   "retry-download": [payload: { image: ImageInfo }];
   // 兼容旧 API（不再由 core 触发，但保留事件名避免上层 TS/模板报错）
   addedToAlbum: [];
-  "android-selection-change": [payload: { active: boolean; selectedCount: number; selectedIds: ReadonlySet<string> }];
 }>();
 
 const settingsStore = useSettingsStore();
+const selectionStore = useSelectionStore();
+const { selectedIds } = storeToRefs(selectionStore);
 const modalStackStore = useModalStackStore();
 const uiStore = useUiStore();
 
@@ -275,13 +276,12 @@ const saveScrollPosition = () => {
   });
 };
 
-// 选择状态（内部维护）
-const selectedIds = ref<Set<string>>(new Set());
+// 选择状态：使用全局 selectionStore（storeToRefs 保证 selectedIds 为 Ref）
 const lastSelectedIndex = ref<number>(-1);
-const effectiveSelectedIds = computed<Set<string>>(() => selectedIds.value);
+const effectiveSelectedIds = computed<Set<string>>(() => selectedIds.value ?? new Set());
 
-// Android 选择模式
-const androidSelectionMode = ref(false);
+// Android 选择模式：基于 selectedIds 的 computed
+const androidSelectionMode = computed(() => (selectedIds.value ?? new Set()).size > 0);
 
 // 预览与 context menu
 const previewRef = ref<InstanceType<typeof ImagePreviewDialog> | null>(null);
@@ -293,6 +293,7 @@ const contextMenuActionContext = computed<ActionContext<ImageInfo>>(() => ({
   target: contextMenuImage.value,
   selectedIds: effectiveSelectedIds.value,
   selectedCount: effectiveSelectedIds.value.size,
+  totalCount: (props.images ?? []).length,
 }));
 
 const enableContextMenu = computed(() => {
@@ -436,8 +437,6 @@ const renderedItems = computed(() => {
   return out;
 });
 
-let gridDestroyed = false;
-
 const gridStyle = computed(() => {
   const columns = gridColumnsCount.value;
   const gap = gridGapPx.value;
@@ -459,9 +458,14 @@ const gridStyle = computed(() => {
 });
 
 const closeContextMenu = () => {
+  selectedIds.value = new Set();
   contextMenuVisible.value = false;
   contextMenuImage.value = null;
 };
+
+watch(() => selectedIds.value.size, (size) => {
+  if (size === 0) closeContextMenu();
+});
 
 const openContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
   contextMenuImage.value = image;
@@ -602,11 +606,6 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
   // Android 选择模式下的点击行为
   if (IS_ANDROID && androidSelectionMode.value) {
     toggleSelection(image.id, index);
-    // 若取消选择后没有选中项，立即退出选择模式并同步通知父组件收起 bar（同步 emit 确保父组件在本帧内 clear）
-    if (selectedIds.value.size === 0) {
-      androidSelectionMode.value = false;
-      emitAndroidSelectionChange();
-    }
     return;
   }
   
@@ -650,31 +649,14 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
   }
 };
 
-const handleItemLongPress = (image: ImageInfo, index: number) => {
-  if (!IS_ANDROID) return;
-  focusGrid();
-
-  if (!androidSelectionMode.value) {
-    // 进入选择模式
-    androidSelectionMode.value = true;
-    setSingleSelection(image.id, index);
-  } else {
-    // 已在选择模式，切换选择
-    toggleSelection(image.id, index);
-    if (selectedIds.value.size === 0) {
-      androidSelectionMode.value = false;
-      emitAndroidSelectionChange();
-      return;
-    }
-  }
-
-  // 发出选择变化事件
-  emitAndroidSelectionChange();
-};
-
 const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
   if (!enableContextMenu.value) return;
+  if (IS_ANDROID && androidSelectionMode.value) {
+    previewRef.value?.open(index);
+    return;
+  }
   openContextMenu(image, index, event);
+  focusGrid();
 };
 
 const buildContextPayload = (command: ContextCommand, image: ImageInfo): ContextCommandPayload => {
@@ -693,6 +675,17 @@ const dispatchContextCommand = async (payload: ContextCommandPayload) => {
 };
 
 const handleContextMenuCommand = (command: string) => {
+  // Android 全选/取消全选：由 Grid 处理，不关闭菜单、不交给父组件
+  if (command === "selectAll") {
+    const list = props.images ?? [];
+    selectedIds.value = new Set(list.map((img) => img.id));
+    lastSelectedIndex.value = list.length > 0 ? list.length - 1 : -1;
+    return;
+  }
+  if (command === "deselectAll") {
+    clearSelection();
+    return;
+  }
   if (!contextMenuImage.value) return;
   const cmd = command as ContextCommand;
   const payload = buildContextPayload(cmd, contextMenuImage.value);
@@ -848,7 +841,6 @@ onMounted(async () => {
 });
 
 onUnmounted(async () => {
-  gridDestroyed = true;
   window.removeEventListener("resize", updateWindowAspectRatio);
   if (modalStackId.value) {
     modalStackStore.remove(modalStackId.value);
@@ -1008,42 +1000,14 @@ watch(
   }
 );
 
-// 发出 Android 选择变化事件
-const emitAndroidSelectionChange = () => {
-  if (!IS_ANDROID) return;
-  emit("android-selection-change", {
-    active: androidSelectionMode.value,
-    selectedCount: selectedIds.value.size,
-    selectedIds: new Set(selectedIds.value),
-  });
-};
-
-// 监听选择变化，发出 Android 选择变化事件；选择清空时自动退出选择模式（同步 emit 确保父组件 bar 及时收起）
-watch(
-  [() => androidSelectionMode.value, selectedIds],
-  () => {
-    if (IS_ANDROID && androidSelectionMode.value) {
-      if (selectedIds.value.size === 0) {
-        androidSelectionMode.value = false;
-        emitAndroidSelectionChange();
-      } else {
-        emitAndroidSelectionChange();
-      }
-    }
-  },
-  { deep: true }
-);
-
-// 退出 Android 选择模式（清空选择并同步通知父组件收起 bar）
+// 退出 Android 选择模式（清空选择）
 const exitAndroidSelectionMode = () => {
   if (!IS_ANDROID) return;
-  androidSelectionMode.value = false;
   clearSelection();
-  emitAndroidSelectionChange();
 };
 
-// Android：选择模式用 useModalBack，变为 false 时 onClose 清除选择状态
-useModalBack(androidSelectionMode, { onClose: exitAndroidSelectionMode });
+// Android：选择模式用 useModalBack，弹栈时通过 onClose 清除选择状态
+useModalBack(androidSelectionMode, { onClose: clearSelection });
 
 const getContainerEl = () => containerEl.value;
 

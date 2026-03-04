@@ -1,4 +1,4 @@
-import { watch, onBeforeUnmount, type Ref, type WritableComputedRef } from 'vue';
+import { watch, onBeforeUnmount, isReadonly, type Ref, type WritableComputedRef, type ComputedRef } from 'vue';
 import { useModalStackStore } from '../stores/modalStack';
 import { IS_ANDROID } from '../env';
 
@@ -11,14 +11,14 @@ export interface UseModalBackOptions {
 
 /**
  * Composable for managing modal back button behavior on Android.
- * When the provided ref is true, pushes a function to modalStack that sets it to false.
+ * When the provided ref is true, pushes a function to modalStack.
  * When the ref becomes false, removes the function from the stack.
  *
- * @param isOpen - A ref or writable computed ref that tracks whether the modal is open
+ * @param isOpen - A ref, writable computed ref, or readonly computed ref that tracks whether the modal is open
  * @param options - Optional callbacks when the ref becomes true or false
  */
 export function useModalBack(
-  isOpen: Ref<boolean> | WritableComputedRef<boolean>,
+  isOpen: Ref<boolean> | WritableComputedRef<boolean> | ComputedRef<boolean>,
   options?: UseModalBackOptions
 ) {
   if (!IS_ANDROID) return;
@@ -32,7 +32,12 @@ export function useModalBack(
     (val) => {
       if (val) {
         stackId = modalStack.push(() => {
-          isOpen.value = false;
+          // 对于只读 computed，不设置值，只执行 onClose
+          // 对于可写 ref，先设置为 false，再执行 onClose（以便 watch 能收到 false 并从栈中移除）
+          if (!isReadonly(isOpen)) {
+            (isOpen as Ref<boolean>).value = false;
+          }
+          onClose?.();
         });
         onOpen?.();
       } else {

@@ -7,8 +7,7 @@
       :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing"
       :actions="imageActions"
       :on-context-command="handleImageMenuCommand"
-      @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()"
-      @android-selection-change="handleAndroidSelectionChange">
+      @added-to-album="handleAddedToAlbum" @scroll-stable="loadImageUrls()">
 
       <template #before-grid>
         <PageHeader :title="albumName || '画册'"
@@ -116,7 +115,16 @@ import { IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { useDesktopSelectionStore, type DesktopSelectionAction } from "@/stores/desktopSelection";
+import { useSelectionStore } from "@kabegame/core/stores/selection";
+import type { Component } from "vue";
+
+// 选择操作项类型（用于本页选择栏）
+export interface SelectionAction {
+  key: string;
+  label: string;
+  icon: Component;
+  command: string;
+}
 import { useImageOperations } from "@/composables/useImageOperations";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
@@ -144,7 +152,7 @@ const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotati
 const uiStore = useUiStore();
 const { load: loadImageTypes, getMimeType } = useImageTypes();
 const { imageGridColumns } = storeToRefs(uiStore);
-const desktopSelectionStore = useDesktopSelectionStore();
+const desktopSelectionStore = useSelectionStore();
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 const isAlbumDetailActive = ref(true);
 
@@ -570,7 +578,7 @@ const confirmRemoveImages = async () => {
 };
 
 // Android 选择模式：构建操作栏 actions
-const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): DesktopSelectionAction[] => {
+const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): SelectionAction[] => {
   const countText = selectedCount > 1 ? `(${selectedCount})` : "";
   const firstSelectedImage = images.value.find(img => selectedIds.has(img.id));
   const isFavorite = firstSelectedImage?.favorite ?? false;
@@ -590,35 +598,6 @@ const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<s
   }
 };
 
-// Android 选择变化处理：用 desktop 选择数量决定状态
-const handleAndroidSelectionChange = (payload: { active: boolean; selectedCount: number; selectedIds: ReadonlySet<string> }) => {
-  if (!IS_ANDROID) return;
-  
-  if (!payload.active || payload.selectedCount === 0) {
-    desktopSelectionStore.clear();
-    return;
-  }
-  const actions = buildSelectionActions(payload.selectedCount, payload.selectedIds);
-  if (desktopSelectionStore.selectedCount > 0) {
-    desktopSelectionStore.update(payload.selectedCount, actions);
-  } else {
-    const firstImage = images.value.find(img => payload.selectedIds.has(img.id));
-    if (!firstImage) return;
-    desktopSelectionStore.set(
-      payload.selectedCount,
-      actions,
-      (cmd: string) => {
-        const commandPayload: ContextCommandPayload = {
-          command: cmd as any,
-          image: firstImage,
-          selectedImageIds: payload.selectedIds,
-        };
-        void handleImageMenuCommand(commandPayload);
-      },
-      () => albumViewRef.value?.exitAndroidSelectionMode?.()
-    );
-  }
-};
 
 const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
   const command = payload.command;
@@ -981,7 +960,8 @@ onActivated(async () => {
 
 onDeactivated(() => {
   isAlbumDetailActive.value = false;
-  desktopSelectionStore.clear();
+  // 页面失活时清空选择
+  desktopSelectionStore.selectedIds = new Set();
 });
 
 // 开始重命名

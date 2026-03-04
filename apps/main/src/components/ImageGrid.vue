@@ -2,7 +2,7 @@
   <CoreImageGrid ref="coreRef" v-bind="coreGridBind" :window-aspect-ratio="props.windowAspectRatio"
     :on-context-command="handleContextCommand" @scroll-stable="$emit('scroll-stable')"
     @retry-download="(p) => $emit('retry-download', p)"
-    @android-selection-change="(p) => $emit('android-selection-change', p)">
+  >
     <template #before-grid>
       <slot name="before-grid" />
     </template>
@@ -80,7 +80,6 @@ defineEmits<{
   addedToAlbum: [];
   // 注意：事件来自 core ImageGrid，因此 image 类型应与 core 对齐（url 在 core 为可选）
   "retry-download": [payload: { image: CoreImageInfo }];
-  "android-selection-change": [payload: { active: boolean; selectedCount: number; selectedIds: ReadonlySet<string> }];
 }>();
 
 const attrs = useAttrs();

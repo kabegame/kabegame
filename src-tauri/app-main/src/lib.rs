@@ -1,6 +1,8 @@
 mod commands;
 mod startup;
 mod desktop_env;
+#[cfg(not(target_os = "android"))]
+mod file_server;
 #[cfg(target_os = "android")]
 mod archiver_provider;
 #[cfg(target_os = "android")]
@@ -21,6 +23,8 @@ use startup::*;
 use std::process;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(not(target_os = "android"))]
+use file_server::get_file_server_base_url;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -222,6 +226,11 @@ pub fn run() {
                     #[cfg(not(target_os = "android"))]
                     {
                         tauri::async_runtime::spawn(async {
+                            if let Err(e) = file_server::start_file_server().await {
+                                eprintln!("Failed to start file server: {}", e);
+                            }
+                        });
+                        tauri::async_runtime::spawn(async {
                             if let Err(e) =
                                 kabegame_core::storage::Storage::global().fill_missing_dimensions()
                             {
@@ -420,6 +429,8 @@ pub fn run() {
             get_supported_image_types,
             set_supported_image_formats,
             get_linux_desktop_env,
+            #[cfg(not(target_os = "android"))]
+            get_file_server_base_url,
             #[cfg(not(target_os = "android"))]
             start_dedupe_gallery_by_hash_batched,
             #[cfg(not(target_os = "android"))]

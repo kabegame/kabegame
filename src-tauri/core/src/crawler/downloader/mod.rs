@@ -61,6 +61,9 @@ pub trait SchemeDownloader: Send + Sync {
         task_id: &str,
         progress: &DownloadProgressContext<'_>,
     ) -> Result<String, String>;
+    /// 根据最终本地路径计算显示名称。
+    /// `final_local_path`: 入库时的 local_path（桌面端为文件路径，Android 为 content URI）。
+    async fn display_name(&self, url: &Url, final_local_path: &str) -> String;
 }
 
 /// 宏：根据 (scheme 列表, 变体名, 类型路径) 静态生成枚举、trait 实现和注册表，避免重复代码。
@@ -100,6 +103,12 @@ macro_rules! define_scheme_downloader_registry {
             ) -> Result<String, String> {
                 match self {
                     $(SchemeDownloaderEnum::$variant(d) => d.download(dq, url, dest, task_id, progress).await,)*
+                }
+            }
+
+            async fn display_name(&self, url: &Url, final_local_path: &str) -> String {
+                match self {
+                    $(SchemeDownloaderEnum::$variant(d) => d.display_name(url, final_local_path).await,)*
                 }
             }
         }
@@ -382,6 +391,35 @@ fn compute_image_download_path(url: &str, base_dir: &Path) -> Result<PathBuf, St
         )
     })?;
     downloader.compute_destination_path(&parsed, base_dir)
+}
+
+/// 根据 URL 和最终本地路径解析显示名称。
+/// `url`: 原始 URL（用于确定 scheme）
+/// `local_path`: 入库时的 local_path（桌面端为文件路径，Android 为 content URI）
+pub async fn resolve_display_name(url: &str, local_path: &str) -> String {
+    let parsed = match Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => {
+            // URL 解析失败，尝试从 local_path 提取文件名
+            return Path::new(local_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image")
+                .to_string();
+        }
+    };
+    let downloader = match get_downloader_for_url(&parsed) {
+        Some(d) => d,
+        None => {
+            // 无匹配的 downloader，从 local_path 提取文件名
+            return Path::new(local_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image")
+                .to_string();
+        }
+    };
+    downloader.display_name(&parsed, local_path).await
 }
 
 /// 准备下载目标：归档保存到 images_dir/.archives/；图片为 images_dir 内路径。
@@ -1586,6 +1624,11 @@ async fn process_downloaded_content_image_to_storage(
         .map(|(w, h)| (Some(w), Some(h)))
         .unwrap_or((None, None));
 
+    let display_name = get_content_io_provider()
+        .get_display_name(content_uri)
+        .await
+        .unwrap_or_else(|_| "image".to_string());
+
     let image_info = ImageInfo {
         id: "".to_string(),
         url: None,
@@ -1597,10 +1640,10 @@ async fn process_downloaded_content_image_to_storage(
         thumbnail_path: thumbnail_path_str.to_string(),
         favorite: false,
         hash: hash.to_string(),
-        order: Some(download_start_time as i64),
         local_exists: true,
         width,
         height,
+        display_name,
     };
     match Storage::global().add_image(image_info) {
         Ok(inserted) => {
@@ -1738,6 +1781,12 @@ async fn process_downloaded_image_to_storage(
             .unwrap_or_else(|| local_path_str.clone());
         (thumbnail_path, thumbnail_path_str, thumb_ms)
     };
+    // 从最终磁盘路径提取文件名（已经过 build_safe_filename + unique_path 处理）
+    let display_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("image")
+        .to_string();
     let image_info = ImageInfo {
         // id 由数据库生成，这里占位
         id: "".to_string(),
@@ -1754,10 +1803,10 @@ async fn process_downloaded_image_to_storage(
         thumbnail_path: thumbnail_path_str,
         favorite: false,
         hash: hash.to_string(),
-        order: Some(download_start_time as i64),
         local_exists: true,
         width: None,
         height: None,
+        display_name,
     };
     let t_add = postprocess_timing_hash_ms.map(|_| Instant::now());
     match Storage::global().add_image(image_info) {

@@ -125,7 +125,8 @@ PRAGMA mmap_size = 268435456;
                 metadata TEXT,
                 thumbnail_path TEXT NOT NULL DEFAULT '',
                 hash TEXT NOT NULL DEFAULT '',
-                \"order\" INTEGER
+                width INTEGER,
+                height INTEGER
             )",
             [],
         )
@@ -136,11 +137,17 @@ PRAGMA mmap_size = 268435456;
             "ALTER TABLE images ADD COLUMN hash TEXT NOT NULL DEFAULT ''",
             [],
         );
-        let _ = conn.execute("ALTER TABLE images ADD COLUMN \"order\" INTEGER", []);
         let _ = conn.execute("ALTER TABLE images ADD COLUMN width INTEGER", []);
         let _ = conn.execute("ALTER TABLE images ADD COLUMN height INTEGER", []);
+        if !table_has_column(&conn, "images", "display_name") {
+            conn.execute(
+                "ALTER TABLE images ADD COLUMN display_name TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .expect("Failed to add images.display_name column");
+        }
 
-        // 创建索引
+        // 创建索引（新库的 CREATE 已含 width/height，上述 ALTER 用于旧库升级）
         let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_crawled_at ON images(crawled_at DESC)",
             [],
@@ -257,6 +264,97 @@ PRAGMA mmap_size = 268435456;
             .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
 
         self.ensure_favorite_album()?;
+
+        Ok(())
+    }
+
+    /// 回填 display_name：扫描所有 display_name 为空的记录，从本地文件或 content URI 获取显示名。
+    /// 桌面端：从文件路径提取文件名；Android content://：调用 get_display_name。
+    /// 文件丢失时写入 "（丢失文件）"。
+    #[cfg(target_os = "android")]
+    pub async fn backfill_display_names(&self) -> Result<(), String> {
+        use crate::crawler::content_io::get_content_io_provider;
+        use std::path::Path;
+
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare("SELECT id, local_path FROM images WHERE display_name = ''")
+            .map_err(|e| format!("Failed to prepare: {}", e))?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| format!("Failed to query images: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read rows: {}", e))?;
+        drop(stmt);
+        drop(conn);
+
+        for (id, local_path) in rows {
+            let display_name = if local_path.starts_with("content://") {
+                // Android content URI
+                get_content_io_provider()
+                    .get_display_name(&local_path)
+                    .await
+                    .unwrap_or_else(|_| "（丢失文件）".to_string())
+            } else {
+                // 桌面端文件路径
+                let path = Path::new(&local_path);
+                if path.exists() {
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("image")
+                        .to_string()
+                } else {
+                    "（丢失文件）".to_string()
+                }
+            };
+
+            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            conn.execute(
+                "UPDATE images SET display_name = ?1 WHERE id = ?2",
+                params![display_name, id],
+            )
+            .map_err(|e| format!("Failed to update display_name: {}", e))?;
+            drop(conn);
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    pub async fn backfill_display_names(&self) -> Result<(), String> {
+        use std::path::Path;
+
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare("SELECT id, local_path FROM images WHERE display_name = ''")
+            .map_err(|e| format!("Failed to prepare: {}", e))?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| format!("Failed to query images: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to read rows: {}", e))?;
+        drop(stmt);
+        drop(conn);
+
+        for (id, local_path) in rows {
+            let path = Path::new(&local_path);
+            let display_name = if path.exists() {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("image")
+                    .to_string()
+            } else {
+                "（丢失文件）".to_string()
+            };
+
+            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            conn.execute(
+                "UPDATE images SET display_name = ?1 WHERE id = ?2",
+                params![display_name, id],
+            )
+            .map_err(|e| format!("Failed to update display_name: {}", e))?;
+            drop(conn);
+        }
 
         Ok(())
     }
@@ -435,7 +533,7 @@ fn compute_file_hash(path: &PathBuf) -> Result<String, String> {
 }
 
 fn perform_complex_migrations(conn: &mut Connection) {
-    let (images_id_is_text, images_has_favorite_col, images_thumb_notnull, images_url_notnull) = {
+    let (images_id_is_text, images_has_favorite_col, images_thumb_notnull, images_url_notnull, images_has_order_col) = {
         let mut stmt = conn
             .prepare("PRAGMA table_info(images)")
             .expect("Failed to prepare table_info(images)");
@@ -452,6 +550,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
         let mut has_favorite = false;
         let mut thumb_notnull: Option<i64> = None;
         let mut url_notnull: Option<i64> = None;
+        let mut has_order = false;
         for r in rows {
             if let Ok((name, col_type, notnull)) = r {
                 if name == "id" {
@@ -466,6 +565,9 @@ fn perform_complex_migrations(conn: &mut Connection) {
                 if name == "url" {
                     url_notnull = Some(notnull);
                 }
+                if name == "order" {
+                    has_order = true;
+                }
             }
         }
         let id_is_text = id_type.unwrap_or_default().to_uppercase().contains("TEXT");
@@ -474,6 +576,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
             has_favorite,
             thumb_notnull.unwrap_or(0) == 1,
             url_notnull.unwrap_or(0) == 1,
+            has_order,
         )
     };
 
@@ -505,8 +608,11 @@ fn perform_complex_migrations(conn: &mut Connection) {
         )
     };
 
-    let needs_rebuild_images =
-        images_id_is_text || images_has_favorite_col || !images_thumb_notnull || images_url_notnull;
+    let needs_rebuild_images = images_id_is_text
+        || images_has_favorite_col
+        || !images_thumb_notnull
+        || images_url_notnull
+        || images_has_order_col;
     let needs_rebuild_relations =
         images_id_is_text || album_image_id_is_text || task_image_id_is_text;
 
@@ -541,6 +647,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
     }
 
     let mut mapped_current_wallpaper_id: Option<i64> = None;
+    let has_display_name = table_has_column(conn, "images", "display_name");
     if needs_rebuild_images || needs_rebuild_relations {
         let tx = conn
             .transaction()
@@ -548,8 +655,14 @@ fn perform_complex_migrations(conn: &mut Connection) {
 
         tx.execute("DROP TABLE IF EXISTS images_ordered", []).ok();
         if images_id_is_text {
+            let display_col = if has_display_name {
+                "COALESCE(display_name, '') AS display_name,"
+            } else {
+                ""
+            };
             tx.execute(
-                "CREATE TEMP TABLE images_ordered AS
+                &format!(
+                    "CREATE TEMP TABLE images_ordered AS
                  SELECT
                    id AS old_id,
                    url,
@@ -560,19 +673,26 @@ fn perform_complex_migrations(conn: &mut Connection) {
                    metadata,
                    COALESCE(NULLIF(thumbnail_path, ''), local_path) AS thumbnail_path,
                    COALESCE(hash, '') AS hash,
-                   \"order\" AS ord,
                    width,
                    height,
-                   ROW_NUMBER() OVER (
-                     ORDER BY COALESCE(\"order\", crawled_at) ASC, crawled_at ASC, id ASC
+                   {} ROW_NUMBER() OVER (
+                     ORDER BY crawled_at ASC, id ASC
                    ) AS new_id
                  FROM images",
+                    display_col
+                ),
                 [],
             )
             .expect("Failed to create images_ordered (TEXT id)");
         } else {
+            let display_col = if has_display_name {
+                "COALESCE(display_name, '') AS display_name,"
+            } else {
+                ""
+            };
             tx.execute(
-                "CREATE TEMP TABLE images_ordered AS
+                &format!(
+                    "CREATE TEMP TABLE images_ordered AS
                  SELECT
                    CAST(id AS TEXT) AS old_id,
                    url,
@@ -583,11 +703,12 @@ fn perform_complex_migrations(conn: &mut Connection) {
                    metadata,
                    COALESCE(NULLIF(thumbnail_path, ''), local_path) AS thumbnail_path,
                    COALESCE(hash, '') AS hash,
-                   \"order\" AS ord,
                    width,
                    height,
-                   CAST(id AS INTEGER) AS new_id
+                   {} CAST(id AS INTEGER) AS new_id
                  FROM images",
+                    display_col
+                ),
                 [],
             )
             .expect("Failed to create images_ordered (INTEGER id)");
@@ -618,32 +739,32 @@ fn perform_complex_migrations(conn: &mut Connection) {
                     metadata TEXT,
                     thumbnail_path TEXT NOT NULL DEFAULT '',
                     hash TEXT NOT NULL DEFAULT '',
-                    \"order\" INTEGER,
                     width INTEGER,
-                    height INTEGER
+                    height INTEGER,
+                    display_name TEXT NOT NULL DEFAULT ''
                 )",
                 [],
             )
             .expect("Failed to create images_new (INTEGER pk)");
 
+            let (insert_cols, select_cols) = if has_display_name {
+                (
+                    "id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, width, height, display_name",
+                    "new_id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), width, height, COALESCE(display_name, '')",
+                )
+            } else {
+                (
+                    "id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, width, height, display_name",
+                    "new_id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), width, height, ''",
+                )
+            };
             tx.execute(
-                "INSERT INTO images_new (
-                    id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\", width, height
-                 )
-                 SELECT
-                    new_id,
-                    url,
-                    local_path,
-                    plugin_id,
-                    task_id,
-                    crawled_at,
-                    metadata,
-                    COALESCE(NULLIF(thumbnail_path, ''), local_path),
-                    COALESCE(hash, ''),
-                    COALESCE(ord, crawled_at),
-                    width,
-                    height
+                &format!(
+                    "INSERT INTO images_new ({})
+                 SELECT {}
                  FROM images_ordered",
+                    insert_cols, select_cols
+                ),
                 [],
             )
             .expect("Failed to migrate data to images_new");
@@ -710,6 +831,19 @@ fn perform_complex_migrations(conn: &mut Connection) {
 
         tx.execute("DROP TABLE IF EXISTS images_ordered", []).ok();
         tx.commit().expect("Failed to commit images pk migration");
+    }
+
+    // 若未重建 images 表但仍有 order 列（旧版），则删除该列
+    if images_has_order_col && !needs_rebuild_images {
+        let _ = conn.execute("ALTER TABLE images DROP COLUMN \"order\"", []);
+    }
+
+    // 移除 images.order 后清空 Provider 缓存，避免旧 ImageQuery（含 ORDER BY images."order"）被反序列化导致查询报错
+    if images_has_order_col {
+        let cache_dir = crate::app_paths::AppPaths::global().provider_cache_dir();
+        if cache_dir.exists() {
+            let _ = fs::remove_dir_all(&cache_dir);
+        }
     }
 
     // albums: 移除历史遗留的 "order" 列，并把 created_at 统一改成「迁移时间 + order」。

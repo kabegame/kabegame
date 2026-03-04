@@ -31,11 +31,7 @@ impl ImageQuery {
     /// 按插件 ID 过滤
     pub fn by_plugin(plugin_id: String) -> Self {
         Self {
-            // 注意：gallery 查询会额外 LEFT JOIN 收藏表（album_images），该表也有 "order" 列；
-            // 这里必须显式加表前缀避免歧义。
-            decorator:
-                "WHERE images.plugin_id = ? ORDER BY COALESCE(images.\"order\", images.crawled_at) ASC"
-                .to_string(),
+            decorator: "WHERE images.plugin_id = ? ORDER BY images.crawled_at ASC".to_string(),
             params: vec![plugin_id],
         }
     }
@@ -44,7 +40,7 @@ impl ImageQuery {
     pub fn by_date(year_month: String) -> Self {
         Self {
             decorator:
-                "WHERE strftime('%Y-%m', CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') = ? ORDER BY COALESCE(images.\"order\", images.crawled_at) ASC"
+                "WHERE strftime('%Y-%m', CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') = ? ORDER BY images.crawled_at ASC"
                     .to_string(),
             params: vec![year_month],
         }
@@ -58,7 +54,7 @@ impl ImageQuery {
         // 注意：images.crawled_at 为空的行自动被过滤（date(NULL, ...) 为 NULL，与比较结果为 NULL/false）
         Self {
             decorator:
-                "WHERE date(CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') >= date(?) AND date(CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') <= date(?) ORDER BY COALESCE(images.\"order\", images.crawled_at) ASC"
+                "WHERE date(CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') >= date(?) AND date(CASE WHEN images.crawled_at > 253402300799 THEN images.crawled_at/1000 ELSE images.crawled_at END, 'unixepoch') <= date(?) ORDER BY images.crawled_at ASC"
                     .to_string(),
             params: vec![start_ymd, end_ymd],
         }
@@ -87,9 +83,7 @@ impl ImageQuery {
     /// 全部图片（按时间排序，用于 CommonProvider）
     pub fn all_recent() -> Self {
         Self {
-            // 与前端画廊 `get_images_range` 对齐：优先按 order，其次 crawled_at
-            // 注意：外层会 LEFT JOIN 收藏表，避免 "order" 歧义必须加 images 前缀
-            decorator: "ORDER BY COALESCE(images.\"order\", images.crawled_at) ASC".to_string(),
+            decorator: "ORDER BY images.crawled_at ASC".to_string(),
             params: vec![],
         }
     }
@@ -103,6 +97,14 @@ fn extract_count_decorator(decorator: &str) -> String {
     } else {
         decorator.to_string()
     }
+}
+
+/// 兼容旧持久化/缓存的 ImageQuery：将已移除的 images."order" 引用替换为 crawled_at。
+fn normalize_decorator_order(decorator: &str) -> String {
+    decorator.replace(
+        "COALESCE(images.\"order\", images.crawled_at)",
+        "images.crawled_at",
+    )
 }
 
 /// 插件分组信息
@@ -125,14 +127,14 @@ pub struct GalleryImageFsEntry {
     pub file_name: String,
     pub image_id: String,
     pub resolved_path: String,
-    /// 画廊排序时间戳：`COALESCE(images."order", images.crawled_at)`
+    /// 画廊排序时间戳：`images.crawled_at`
     pub gallery_ts: u64,
 }
 
 impl Storage {
     /// 批量获取图片的“画廊排序时间戳”（用于虚拟盘/画廊一致的时间显示）。
     ///
-    /// 返回 map：`image_id -> ts`，其中 `ts = COALESCE(images."order", images.crawled_at)`。
+    /// 返回 map：`image_id -> ts`，其中 `ts = images.crawled_at`。
     pub fn get_images_gallery_ts_by_ids(
         &self,
         image_ids: &[String],
@@ -150,7 +152,7 @@ impl Storage {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT CAST(images.id AS TEXT) as id, COALESCE(images.\"order\", images.crawled_at) as ts
+            "SELECT CAST(images.id AS TEXT) as id, images.crawled_at as ts
              FROM images
              WHERE images.id IN ({})",
             placeholders
@@ -252,7 +254,8 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         // 从 decorator 中提取 COUNT 需要的部分（JOIN 和 WHERE，去掉 ORDER BY）
-        let count_decorator = extract_count_decorator(&query.decorator);
+        let decorator = normalize_decorator_order(&query.decorator);
+        let count_decorator = extract_count_decorator(&decorator);
         let sql = format!("SELECT COUNT(*) FROM images {}", count_decorator);
 
         let params: Vec<&dyn ToSql> = query.params.iter().map(|p| p as &dyn ToSql).collect();
@@ -274,14 +277,15 @@ impl Storage {
     ) -> Result<Vec<GalleryImageFsEntry>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
+        let decorator = normalize_decorator_order(&query.decorator);
         let sql = format!(
             "SELECT
                 CAST(images.id AS TEXT),
                 images.local_path,
                 images.thumbnail_path,
-                COALESCE(images.\"order\", images.crawled_at) as gallery_ts
+                images.crawled_at as gallery_ts
              FROM images {} LIMIT ? OFFSET ?",
-            query.decorator
+            decorator
         );
 
         // 参数顺序：decorator params -> limit -> offset
@@ -402,6 +406,7 @@ impl Storage {
         let params_ref: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
         // 为避免与 query.decorator 里的 album_images/ai 冲突，这里 favorites join 使用独立 alias：fav_ai
+        let decorator = normalize_decorator_order(&query.decorator);
         let sql = format!(
             "SELECT
                 CAST(images.id AS TEXT) as id,
@@ -414,14 +419,14 @@ impl Storage {
                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                 images.hash,
                 CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-                images.\"order\",
                 images.width,
-                images.height
+                images.height,
+                images.display_name
              FROM images
              LEFT JOIN album_images fav_ai
                ON images.id = fav_ai.image_id AND fav_ai.album_id = '{}'
              {} LIMIT ? OFFSET ?",
-            FAVORITE_ALBUM_ID, query.decorator
+            FAVORITE_ALBUM_ID, decorator
         );
 
         let mut stmt = conn
@@ -444,9 +449,9 @@ impl Storage {
                 hash: row.get(8)?,
                 favorite: row.get::<_, i64>(9)? != 0,
                 local_exists: true,
-                order: row.get::<_, Option<i64>>(10)?,
-                width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                display_name: row.get(12)?,
             })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;

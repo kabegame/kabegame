@@ -36,6 +36,14 @@ impl SchemeDownloader for FileSchemeDownloader {
         eprintln!("handle_file: {}", url.as_str());
         handle_file(dq, task_id, url, progress).await
     }
+
+    async fn display_name(&self, _url: &Url, final_local_path: &str) -> String {
+        Path::new(final_local_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("image")
+            .to_string()
+    }
 }
 
 /// file://：什么都不做，只解析并返回本地路径（库函数 Url::to_file_path）；不写入 dest。结束时上报一次进度供前端展示。

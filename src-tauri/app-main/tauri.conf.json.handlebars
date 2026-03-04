@@ -38,7 +38,7 @@
     ],
     "security": {
       "capabilities": ["main-capability"],
-      "csp": "default-src 'self' ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
+      "csp": "default-src 'self' ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src 'self' asset: http://asset.localhost data: blob: http://127.0.0.1:*; media-src 'self' asset: http://asset.localhost data: blob: http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}} http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]
@@ -52,7 +52,7 @@
       {{#if isWindows}}"nsis"{{else if isMacOS}}"dmg"{{else if isLinux}}"deb"{{/if}}
     ],
     {{/unless}}
-    "icon": ["../icons/icon.png", "../icons/icon.ico"],
+    "icon": ["../icons/32x32.png", "../icons/128x128.png", "../icons/128x128@2x.png", "../icons/icon.icns", "../icons/icon.ico"],
     {{!-- 只有非linux平台需要文件关联，linux用手动关联 desktop 文件 --}}
     {{#unless isLinux}}
     "fileAssociations": [

@@ -16,6 +16,19 @@
             {{ getLabel(item) }}
           </span>
         </button>
+        <!-- Android: 全选/取消全选（写死在最右侧，不关闭 sheet） -->
+        <button
+          v-if="showSelectAllButton"
+          type="button"
+          class="action-sheet-button action-sheet-select-all"
+          @click.stop="handleSelectAllClick">
+          <el-icon class="action-sheet-icon">
+            <component :is="selectAllButtonIcon" />
+          </el-icon>
+          <span class="action-sheet-label">
+            {{ selectAllButtonLabel }}
+          </span>
+        </button>
       </div>
     </Transition>
 
@@ -53,6 +66,7 @@
 
 <script setup lang="ts">
 import { computed, markRaw, ref, toRaw, type Component } from "vue";
+import { CloseBold, Select } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "../actions/types";
 import { IS_ANDROID } from "../env";
 import { useModalBack } from "../composables/useModalBack";
@@ -103,6 +117,33 @@ const resolvedActions = computed(() => {
     return item.visible(props.context);
   });
 });
+
+// Android: 全选/取消全选按钮（仅当 totalCount 有值且已有选中时显示）
+const showSelectAllButton = computed(
+  () =>
+    IS_ANDROID &&
+    props.context.totalCount != null &&
+    props.context.selectedCount >= 1
+);
+
+const isAllSelected = computed(
+  () =>
+    props.context.totalCount != null &&
+    props.context.selectedCount >= props.context.totalCount
+);
+
+const selectAllButtonLabel = computed(() =>
+  isAllSelected.value ? "取消全选" : "全选"
+);
+
+const selectAllButtonIcon = computed<Component>(() =>
+  isAllSelected.value ? CloseBold : Select
+);
+
+const handleSelectAllClick = () => {
+  emit("command", isAllSelected.value ? "deselectAll" : "selectAll");
+  // 不 emit("close")，保持 ActionSheet 打开
+};
 
 // Get visible children for expanded item
 const expandedChildren = computed(() => {

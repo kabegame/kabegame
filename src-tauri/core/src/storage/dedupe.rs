@@ -63,7 +63,6 @@ pub(crate) struct BaseImageRow {
     pub(crate) metadata_json: Option<String>,
     pub(crate) thumbnail_path: String,
     pub(crate) hash: String,
-    pub(crate) order: Option<i64>,
 }
 
 impl Storage {
@@ -87,7 +86,7 @@ impl Storage {
         let query = format!(
             "SELECT CAST(images.id AS TEXT), images.hash,
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-             COALESCE(images.\"order\", images.crawled_at) as sort_key,
+             images.crawled_at as sort_key,
              images.crawled_at
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
@@ -157,7 +156,7 @@ impl Storage {
                      CASE WHEN EXISTS(SELECT 1 FROM album_images WHERE image_id = images.id AND album_id = ?1) THEN 1 ELSE 0 END as is_fav
                      FROM images
                      WHERE hash != ''
-                     ORDER BY is_fav DESC, COALESCE(\"order\", crawled_at) ASC, crawled_at ASC, id ASC",
+                     ORDER BY is_fav DESC, crawled_at ASC, id ASC",
                 )
                 .map_err(|e| format!("Failed to prepare dedupe query: {}", e))?;
 
@@ -276,7 +275,7 @@ impl Storage {
             let mut pool_stmt = conn
                 .prepare(
                     "SELECT url, local_path, plugin_id, task_id, crawled_at, metadata,
-                            COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), \"order\"
+                            COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, '')
                      FROM images
                      ORDER BY RANDOM()
                      LIMIT ?1",
@@ -294,7 +293,6 @@ impl Storage {
                         metadata_json: row.get(5)?,
                         thumbnail_path: row.get(6)?,
                         hash: row.get(7)?,
-                        order: row.get(8)?,
                     })
                 })
                 .map_err(|e| format!("Failed to query pool: {}", e))?;
@@ -328,8 +326,8 @@ impl Storage {
             {
                 let mut insert_img = tx
                     .prepare(
-                        "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, \"order\")
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     )
                     .map_err(|e| format!("Failed to prepare insert image: {}", e))?;
 
@@ -351,8 +349,6 @@ impl Storage {
 
                     let jitter = (rng.next_u64() % 1_000_000) as i64;
                     let crawled_at = base.crawled_at.saturating_add(jitter);
-                    let base_order = base.order.unwrap_or(base.crawled_at);
-                    let order = base_order.saturating_add(jitter);
 
                     insert_img
                         .execute(params![
@@ -364,7 +360,6 @@ impl Storage {
                             &base.metadata_json,
                             thumbnail_path,
                             &base.hash,
-                            order,
                         ])
                         .map_err(|e| format!("Failed to insert image (debug clone): {}", e))?;
                     let new_id = tx.last_insert_rowid();
@@ -372,7 +367,7 @@ impl Storage {
                     if let Some(task_id) = base.task_id.as_ref() {
                         let added_at = crawled_at;
                         insert_task_img
-                            .execute(params![task_id, new_id, added_at, order])
+                            .execute(params![task_id, new_id, added_at, crawled_at])
                             .map_err(|e| {
                                 format!("Failed to insert task-image relation (debug clone): {}", e)
                             })?;
