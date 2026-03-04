@@ -1,5 +1,6 @@
 mod commands;
 mod startup;
+mod desktop_env;
 #[cfg(target_os = "android")]
 mod archiver_provider;
 #[cfg(target_os = "android")]
@@ -193,6 +194,12 @@ pub fn run() {
             // 启动内置 Backend（安卓与桌面共用 init_globals，用编译开关区分平台差异）
             match init_globals() {
                 Ok(()) => {
+                    // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
+                    #[cfg(target_os = "linux")]
+                    {
+                        crate::desktop_env::init_linux_desktop();
+                    }
+
                     // 公共步骤
                     start_local_event_loop(app.app_handle().clone());
                     // 清理用户数据
@@ -412,6 +419,7 @@ pub fn run() {
             get_file_drop_kinds,
             get_supported_image_types,
             set_supported_image_formats,
+            get_linux_desktop_env,
             #[cfg(not(target_os = "android"))]
             start_dedupe_gallery_by_hash_batched,
             #[cfg(not(target_os = "android"))]

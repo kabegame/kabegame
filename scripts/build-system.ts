@@ -9,7 +9,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { Component, ComponentPlugin } from "./plugins/component-plugin.js";
 import { Mode, ModePlugin } from "./plugins/mode-plugin.js";
-import { Desktop, DesktopPlugin } from "./plugins/desktop-plugin.js";
 import { TracePlugin } from "./plugins/trace-plugin.js";
 import { Cmd, CmdPlugin } from "./plugins/cmd-plugin.ts";
 import { OSPlugin } from "./plugins/os-plugin.js";
@@ -46,7 +45,6 @@ export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
 interface BuildOptions {
   component?: string;
   mode?: string;
-  desktop?: string;
   android?: boolean;
   verbose?: boolean;
   trace?: boolean;
@@ -59,7 +57,6 @@ interface BuildContext {
   cmd: Cmd;
   component?: Component;
   mode?: Mode;
-  desktop?: Desktop;
   isAndroid?: boolean;
   skip?: Skip;
 }
@@ -155,9 +152,6 @@ export class BuildSystem {
 
     // --android（仅 main 的 dev/build）
     this.use(new AndroidPlugin());
-
-    // --desktop
-    this.use(new DesktopPlugin());
 
     // --trace
     this.use(new TracePlugin());
