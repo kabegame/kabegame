@@ -1,10 +1,14 @@
 package app.kabegame.plugin
 
 import android.app.Activity
+import android.content.pm.PackageManager
 import android.content.ContentValues
 import android.content.Intent
+import android.Manifest
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -19,11 +23,15 @@ import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 
 /**
@@ -39,6 +47,10 @@ interface PickerLauncherHost {
 
 @TauriPlugin
 class PickerPlugin(private val activity: Activity) : Plugin(activity) {
+    companion object {
+        private const val TAG = "PickerPlugin"
+        private const val PICTURES_RELATIVE_PATH = "Pictures/Kabegame/"
+    }
 
     private var pendingInvoke: Invoke? = null
     private var pendingImagesInvoke: Invoke? = null
@@ -143,6 +155,82 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
             }
         } catch (e: Exception) {
             invoke.reject("提取插件失败: ${e.message}", e)
+        }
+    }
+
+    @InvokeArg
+    class CopyImageToPicturesArgs {
+        var sourcePath: String = ""
+        var mimeType: String = ""
+        var displayName: String = ""
+    }
+
+    @Command
+    fun copyImageToPictures(invoke: Invoke) {
+        val args = invoke.parseArgs(CopyImageToPicturesArgs::class.java)
+        val sourcePath = args.sourcePath
+        val mimeType = args.mimeType
+        val displayName = args.displayName
+        if (sourcePath.isBlank()) {
+            invoke.reject("sourcePath 不能为空")
+            return
+        }
+        if (displayName.isBlank()) {
+            invoke.reject("displayName 不能为空")
+            return
+        }
+        try {
+            val sourceFile = File(sourcePath)
+            if (!sourceFile.exists() || !sourceFile.isFile) {
+                invoke.reject("源文件不存在: $sourcePath")
+                return
+            }
+            val contentUri = copyFileToPictures(sourceFile, mimeType, displayName)
+            val result = JSObject()
+            result.put("contentUri", contentUri)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            Log.e(TAG, "copyImageToPictures failed", e)
+            invoke.reject("复制到 Pictures 失败: ${e.message}", e)
+        }
+    }
+
+    @InvokeArg
+    class CopyExtractedImagesToPicturesArgs {
+        var sourceDir: String = ""
+    }
+
+    @Command
+    fun copyExtractedImagesToPictures(invoke: Invoke) {
+        val args = invoke.parseArgs(CopyExtractedImagesToPicturesArgs::class.java)
+        val sourceDir = args.sourceDir
+        if (sourceDir.isBlank()) {
+            invoke.reject("sourceDir 不能为空")
+            return
+        }
+        try {
+            val dir = File(sourceDir)
+            if (!dir.exists() || !dir.isDirectory) {
+                invoke.reject("sourceDir 不是有效目录: $sourceDir")
+                return
+            }
+            val entries = JSONArray()
+            dir.walkTopDown()
+                .filter { it.isFile }
+                .forEach { file ->
+                    val mime = guessMimeTypeFromFile(file)
+                    val uri = copyFileToPictures(file, mime, file.name)
+                    val obj = JSONObject()
+                    obj.put("contentUri", uri)
+                    obj.put("displayName", file.name)
+                    entries.put(obj)
+                }
+            val result = JSObject()
+            result.put("entries", entries)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            Log.e(TAG, "copyExtractedImagesToPictures failed", e)
+            invoke.reject("批量复制到 Pictures 失败: ${e.message}", e)
         }
     }
 
@@ -687,8 +775,140 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
             }
             return destFile.absolutePath
         } catch (e: Exception) {
-            Log.e("PickerPlugin", "copyContentUriToPrivateStorage failed", e)
+            Log.e(TAG, "copyContentUriToPrivateStorage failed", e)
             return null
         }
+    }
+
+    private fun copyFileToPictures(sourceFile: File, mimeTypeHint: String, displayNameHint: String): String {
+        val safeName = sanitizeDisplayName(displayNameHint)
+        val resolvedMime = normalizeMimeType(mimeTypeHint, safeName)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            copyFileToPicturesMediaStore(sourceFile, safeName, resolvedMime)
+        } else {
+            copyFileToPicturesLegacy(sourceFile, safeName, resolvedMime)
+        }
+    }
+
+    private fun copyFileToPicturesMediaStore(sourceFile: File, displayName: String, mimeType: String): String {
+        val resolver = activity.contentResolver
+        var candidate = displayName
+        var index = 1
+        while (mediaStoreNameExists(candidate)) {
+            candidate = appendIndex(displayName, index)
+            index += 1
+        }
+
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, candidate)
+            put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+            put(MediaStore.Images.Media.RELATIVE_PATH, PICTURES_RELATIVE_PATH)
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("MediaStore insert 返回空")
+        try {
+            resolver.openOutputStream(uri)?.use { output ->
+                FileInputStream(sourceFile).use { input ->
+                    input.copyTo(output)
+                }
+            } ?: throw IOException("无法打开 MediaStore 输出流")
+
+            val completeValues = ContentValues().apply {
+                put(MediaStore.Images.Media.IS_PENDING, 0)
+            }
+            resolver.update(uri, completeValues, null, null)
+            return uri.toString()
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            throw e
+        }
+    }
+
+    private fun copyFileToPicturesLegacy(sourceFile: File, displayName: String, mimeType: String): String {
+        if (
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            throw SecurityException("缺少 WRITE_EXTERNAL_STORAGE 权限（Android < 10）")
+        }
+        val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+        val targetDir = File(picturesDir, "Kabegame")
+        if (!targetDir.exists()) {
+            targetDir.mkdirs()
+        }
+        if (!targetDir.isDirectory) {
+            throw IOException("无法创建目标目录: ${targetDir.absolutePath}")
+        }
+        var candidate = File(targetDir, displayName)
+        var index = 1
+        while (candidate.exists()) {
+            candidate = File(targetDir, appendIndex(displayName, index))
+            index += 1
+        }
+        FileInputStream(sourceFile).use { input ->
+            FileOutputStream(candidate).use { output ->
+                input.copyTo(output)
+            }
+        }
+
+        var scannedUri: Uri? = null
+        val latch = CountDownLatch(1)
+        MediaScannerConnection.scanFile(
+            activity,
+            arrayOf(candidate.absolutePath),
+            arrayOf(mimeType),
+        ) { _, uri ->
+            scannedUri = uri
+            latch.countDown()
+        }
+        latch.await(3, TimeUnit.SECONDS)
+        return scannedUri?.toString() ?: Uri.fromFile(candidate).toString()
+    }
+
+    private fun mediaStoreNameExists(displayName: String): Boolean {
+        val projection = arrayOf(MediaStore.Images.Media._ID)
+        val selection = "${MediaStore.Images.Media.RELATIVE_PATH}=? AND ${MediaStore.Images.Media.DISPLAY_NAME}=?"
+        activity.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            selection,
+            arrayOf(PICTURES_RELATIVE_PATH, displayName),
+            null,
+        )?.use { cursor ->
+            return cursor.moveToFirst()
+        }
+        return false
+    }
+
+    private fun appendIndex(fileName: String, index: Int): String {
+        val dot = fileName.lastIndexOf('.')
+        if (dot <= 0 || dot == fileName.length - 1) {
+            return "$fileName($index)"
+        }
+        val name = fileName.substring(0, dot)
+        val ext = fileName.substring(dot)
+        return "$name($index)$ext"
+    }
+
+    private fun sanitizeDisplayName(name: String): String {
+        val fileName = File(name).name.trim()
+        return if (fileName.isBlank()) "image.jpg" else fileName
+    }
+
+    private fun normalizeMimeType(mimeType: String, fileName: String): String {
+        if (mimeType.isNotBlank()) return mimeType
+        return guessMimeTypeFromName(fileName) ?: "image/jpeg"
+    }
+
+    private fun guessMimeTypeFromFile(file: File): String {
+        return guessMimeTypeFromName(file.name) ?: "application/octet-stream"
+    }
+
+    private fun guessMimeTypeFromName(fileName: String): String? {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        if (ext.isBlank()) return null
+        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
     }
 }

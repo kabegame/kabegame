@@ -13,7 +13,9 @@ import "vant/lib/toast/style";
 import "@kabegame/core/styles/vant-theme.css";
 import { vPullToRefresh } from "@kabegame/core/directives/pullToRefresh";
 import { IS_ANDROID } from "@kabegame/core/env";
-import { Toast } from "vant";
+import { Toast, Picker, Popup } from "vant";
+import "vant/lib/picker/style";
+import "vant/lib/popup/style";
 import { getImageSupport, getSupportedFormats } from "@kabegame/image-type";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -35,6 +37,8 @@ app.use(router);
 app.use(ElementPlus);
 if (IS_ANDROID) {
   app.use(Toast);
+  app.use(Picker);
+  app.use(Popup);
 }
 
 app.mount("#app");

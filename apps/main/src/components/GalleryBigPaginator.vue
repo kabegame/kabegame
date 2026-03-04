@@ -9,10 +9,23 @@
             </button>
 
             <div class="paginator-info">
-                <div class="page-number">
+                <!-- 桌面：输入框 + 斜杠 + 总页数 -->
+                <template v-if="!IS_ANDROID">
+                    <div class="page-number">
+                        <div class="part part-current">
+                            <el-input-number ref="pageInputRef" v-model="inputPage" :min="1" :max="totalBigPages" :precision="0"
+                                size="small" class="page-input-inline" @change="handleJumpToPage" />
+                        </div>
+                        <div class="paginator-diagonal" aria-hidden="true" />
+                        <div class="part part-total">
+                            <span class="total">{{ totalBigPages }}</span>
+                        </div>
+                    </div>
+                </template>
+                <!-- Android：点击打开 Vant Picker，按总页数位数多列选择 -->
+                <div v-else class="page-number page-number-android" @click="showPagePicker = true">
                     <div class="part part-current">
-                        <el-input-number ref="pageInputRef" v-model="inputPage" :min="1" :max="totalBigPages" :precision="0"
-                            size="small" class="page-input-inline" @change="handleJumpToPage" />
+                        <span class="current-page">{{ currentBigPage }}</span>
                     </div>
                     <div class="paginator-diagonal" aria-hidden="true" />
                     <div class="part part-total">
@@ -28,6 +41,19 @@
                 </el-icon>
             </button>
         </div>
+
+        <!-- Android：页码选择器（Vant Picker）；Teleport 到 body 避免受父级 sticky 影响，从页面最底部弹出 -->
+        <Teleport v-if="IS_ANDROID" to="body">
+            <van-popup v-model:show="showPagePicker" position="bottom" round>
+                <van-picker
+                    v-model="pickerSelectedValues"
+                    title="跳转到页"
+                    :columns="pickerColumns"
+                    @confirm="onPickerConfirm"
+                    @cancel="showPagePicker = false"
+                />
+            </van-popup>
+        </Teleport>
     </div>
 </template>
 
@@ -35,6 +61,7 @@
 import { computed, ref, watch } from "vue";
 import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
 import { IS_ANDROID } from "@kabegame/core/env";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 interface Props {
     totalCount: number;
@@ -64,26 +91,152 @@ const currentBigPage = computed(() => {
     return Math.floor(props.currentOffset / BIG_PAGE_SIZE.value) + 1;
 });
 
-
 // 是否显示分页器（总数超过一页才显示）
 const showPaginator = computed(() => {
     return props.totalCount > BIG_PAGE_SIZE.value;
 });
 
 const pageInputRef = ref<any>(null);
-// 跳转输入框的值
+// 跳转输入框的值（桌面）
 const inputPage = ref(currentBigPage.value);
 
 // 监听当前页变化，同步输入框
 watch(
     () => currentBigPage.value,
     (newPage) => {
-        // 只有当输入框值不等于新页数时才更新，避免用户输入时被重置
         if (inputPage.value !== newPage) {
             inputPage.value = newPage;
         }
     }
 );
+
+// --- Android：Vant Picker 按总页数每 10 倍一列 ---
+const showPagePicker = ref(false);
+
+useModalBack(showPagePicker);
+
+/** 总页数的位数，即 Picker 列数（1–9→1 列，10–99→2 列，100–999→3 列…） */
+const pickerDigitCount = computed(() => {
+    const t = totalBigPages.value;
+    return t < 10 ? 1 : Math.floor(Math.log10(t)) + 1;
+});
+
+/** Picker 级联选项类型（保证选中值在 1～totalBigPages） */
+interface PickerCascadeOption {
+    text: string;
+    value: number;
+    children?: PickerCascadeOption[];
+}
+
+/** 构建级联列：最小 1、最大 total，避免出现 0 或超过总页数 */
+function buildCascadeColumns(total: number, n: number): PickerCascadeOption[] | PickerCascadeOption[][] {
+    if (n === 1) {
+        return Array.from({ length: total }, (_, i) => ({
+            text: String(i + 1),
+            value: i + 1,
+        }));
+    }
+    const maxFirst = Math.min(9, Math.floor(total / Math.pow(10, n - 1)));
+    const options: PickerCascadeOption[] = [];
+    for (let d0 = 0; d0 <= maxFirst; d0++) {
+        const base = d0 * Math.pow(10, n - 1);
+        const restMax = total - base;
+        const restMin = d0 === 0 ? 1 : 0;
+        const childScale = Math.pow(10, n - 2);
+        const children = buildCascadeLevel(restMin, Math.min(restMax, Math.pow(10, n - 1) - 1), n - 1, childScale);
+        options.push({ text: String(d0), value: d0, children });
+    }
+    return options;
+}
+
+function buildCascadeLevel(
+    minRest: number,
+    maxRest: number,
+    depth: number,
+    scale: number
+): PickerCascadeOption[] {
+    if (depth <= 0 || scale < 1) return [];
+    if (depth === 1) {
+        const low = Math.max(0, minRest);
+        const high = Math.min(9, maxRest);
+        return Array.from({ length: high - low + 1 }, (_, i) => {
+            const v = low + i;
+            return { text: String(v), value: v };
+        });
+    }
+    const nextScale = scale / 10;
+    const low = Math.max(0, Math.floor(minRest / scale));
+    const high = Math.min(9, Math.floor(maxRest / scale));
+    const options: PickerCascadeOption[] = [];
+    for (let d = low; d <= high; d++) {
+        const subMin = Math.max(0, minRest - d * scale);
+        const subMax = Math.min(scale - 1, maxRest - d * scale);
+        const children = buildCascadeLevel(subMin, subMax, depth - 1, nextScale);
+        if (children.length > 0) {
+            options.push({ text: String(d), value: d, children });
+        }
+    }
+    return options;
+}
+
+/** Picker 各列选项：单列为 [ [{text,value},...] ]，多列为级联数组（保证 1～totalBigPages） */
+const pickerColumns = computed(() => {
+    const total = totalBigPages.value;
+    const n = pickerDigitCount.value;
+    const result = buildCascadeColumns(total, n);
+    if (n === 1) {
+        return [result as PickerCascadeOption[]];
+    }
+    return result as PickerCascadeOption[];
+});
+
+/** 将页码拆成各位数字数组（用于 Picker v-model） */
+function pageToDigitValues(page: number, digitCount: number): number[] {
+    const total = totalBigPages.value;
+    if (digitCount === 1) {
+        return [Math.max(1, Math.min(page, total))];
+    }
+    const arr: number[] = [];
+    let p = Math.max(1, Math.min(page, total));
+    for (let i = 0; i < digitCount; i++) {
+        arr.unshift(p % 10);
+        p = Math.floor(p / 10);
+    }
+    return arr;
+}
+
+/** 将各列选中的 value 组合成页码 */
+function digitValuesToPage(values: (string | number)[]): number {
+    let page = 0;
+    for (let i = 0; i < values.length; i++) {
+        page = page * 10 + Number(values[i]);
+    }
+    return page;
+}
+
+/** Picker 当前选中值（与 currentBigPage 同步，打开时写入） */
+const pickerSelectedValues = ref<number[]>([]);
+
+watch(showPagePicker, (open) => {
+    if (open) {
+        pickerSelectedValues.value = pageToDigitValues(currentBigPage.value, pickerDigitCount.value);
+    }
+});
+
+watch([currentBigPage, pickerDigitCount], () => {
+    if (showPagePicker.value) {
+        pickerSelectedValues.value = pageToDigitValues(currentBigPage.value, pickerDigitCount.value);
+    }
+});
+
+const onPickerConfirm = ({ selectedValues }: { selectedValues: (string | number)[] }) => {
+    showPagePicker.value = false;
+    let page = digitValuesToPage(selectedValues);
+    page = Math.max(1, Math.min(totalBigPages.value, page));
+    if (page !== currentBigPage.value) {
+        emit("jumpToPage", page);
+    }
+};
 
 // 上一页
 const handlePrevPage = () => {
@@ -99,7 +252,7 @@ const handleNextPage = () => {
     }
 };
 
-// 跳转到指定页
+// 跳转到指定页（桌面输入框）
 const handleJumpToPage = (page: number | null | undefined) => {
     if (page === null || page === undefined) return;
     const targetPage = Math.max(1, Math.min(totalBigPages.value, page));
@@ -306,7 +459,7 @@ const handleJumpToPage = (page: number | null | undefined) => {
     }
 }
 
-// Android：上一页/下一页箭头与分页数字同一行，不换行
+// Android：上一页/下一页箭头与分页数字同一行，不换行；页码可点开 Picker
 .gallery-big-paginator.is-android {
     .paginator-content {
         flex-wrap: nowrap;
@@ -326,6 +479,17 @@ const handleJumpToPage = (page: number | null | undefined) => {
         flex: none;
         min-width: 0;
         padding: 6px 10px;
+    }
+
+    .page-number-android {
+        cursor: pointer;
+        user-select: none;
+
+        .part-current .current-page {
+            font-weight: 700;
+            font-size: 18px;
+            color: var(--anime-primary);
+        }
     }
 }
 </style>

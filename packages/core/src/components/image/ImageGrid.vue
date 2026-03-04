@@ -889,25 +889,6 @@ onDeactivated(() => {
   // deactivated 时不主动重置 measuredItemHeight（保留上一次可见时的正确值）
 });
 
-// Android：预览打开时注册到 modalStack
-watch(
-  () => isPreviewOpen.value,
-  (visible) => {
-    if (visible) {
-      if (IS_ANDROID) {
-        modalStackId.value = modalStackStore.push(() => {
-          previewRef.value?.close();
-        });
-      }
-    } else {
-      if (IS_ANDROID && modalStackId.value) {
-        modalStackStore.remove(modalStackId.value);
-        modalStackId.value = null;
-      }
-    }
-  }
-);
-
 // 检测图片列表变化，标记新增/删除的图片（仅虚拟滚动模式）
 watch(
   () => props.images,

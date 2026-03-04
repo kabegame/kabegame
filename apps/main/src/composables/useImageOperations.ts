@@ -165,48 +165,13 @@ export function useImageOperations(
       const imageUrl = fromMap.original || fromMap.thumbnail;
 
       if (isTauri() && localPath) {
-        if (IS_MACOS) {
-          try {
-            await invoke("copy_image_to_clipboard", { imagePath: localPath });
-            ElMessage.success("图片已复制到剪贴板");
-            return;
-          } catch (error) {
-            console.error("复制图片失败:", error);
-            ElMessage.error("复制图片失败");
-            return;
-          }
-        }
-
-        if (imageUrl) {
-          try {
-            await tryCopyByLoadedUrl(imageUrl);
-            ElMessage.success("图片已复制到剪贴板");
-            return;
-          } catch {
-            // ignore
-          }
-        }
         try {
           await invoke("copy_image_to_clipboard", { imagePath: localPath });
           ElMessage.success("图片已复制到剪贴板");
           return;
-        } catch {
-          if (imageUrl) {
-            await tryCopyByLoadedUrl(imageUrl);
-            ElMessage.success("图片已复制到剪贴板");
-            return;
-          }
-          const bytes = await invoke<number[] | Uint8Array>(
-            "get_gallery_image",
-            { imagePath: localPath },
-          );
-          const u8 =
-            bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-          const mime = detectImageMimeByPath(localPath) || "image/png";
-          await writeImageBlobToClipboard(
-            new Blob([toArrayBuffer(u8)], { type: mime }),
-          );
-          ElMessage.success("图片已复制到剪贴板");
+        } catch (error) {
+          console.error("复制图片失败:", error);
+          ElMessage.error("复制图片失败");
           return;
         }
       }

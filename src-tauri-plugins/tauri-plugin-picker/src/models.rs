@@ -140,3 +140,36 @@ pub struct ExtractBundledPluginsResponse {
   pub files: Vec<String>,
   pub count: usize,
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyImageToPicturesArgs {
+  pub source_path: String,
+  pub mime_type: String,
+  pub display_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyImageToPicturesResponse {
+  pub content_uri: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyExtractedImagesToPicturesArgs {
+  pub source_dir: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopiedImageEntry {
+  pub content_uri: String,
+  pub display_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyExtractedImagesToPicturesResponse {
+  pub entries: Vec<CopiedImageEntry>,
+}

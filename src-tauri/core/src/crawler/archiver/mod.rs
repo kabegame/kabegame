@@ -10,8 +10,9 @@ pub trait ArchiveProcessor: Send + Sync {
     /// Returns a list of supported archive types (e.g., "zip")
     fn supported_types(&self) -> Vec<&str>;
 
-    /// Check if this processor can handle the given URL (e.g., based on path/extension).
-    fn can_handle(&self, url: &Url) -> bool;
+    /// Check if this processor can handle the given URL (e.g., based on path/extension or MIME).
+    /// When `mime` is Some (e.g. from Android content URI), it is used for matching; otherwise path/extension or infer is used.
+    fn can_handle(&self, url: &Url, mime: Option<&str>) -> bool;
 
     /// Process the archive: extract to a UUID-named subdirectory under the given directory,
     /// and return the path of the extracted folder.
@@ -58,14 +59,14 @@ pub fn is_archive_by_path(path: &Path) -> bool {
 /// 根据本地路径获取对应的压缩处理器：先按路径转 file URL 匹配，再按 infer 推断扩展名匹配。
 pub fn get_processor_by_path(path: &Path) -> Option<&'static ArchiveProcessorEnum> {
     if let Ok(url) = Url::from_file_path(path) {
-        if let Some(p) = get_processor_by_url(&url) {
+        if let Some(p) = get_processor_by_url(&url, None) {
             return Some(p);
         }
     }
     if let Ok(Some(kind)) = infer::get_from_path(path) {
         let ext = kind.extension();
         if let Ok(url) = Url::parse(&format!("file:///dummy.{}", ext)) {
-            if let Some(p) = get_processor_by_url(&url) {
+            if let Some(p) = get_processor_by_url(&url, None) {
                 return Some(p);
             }
         }
@@ -91,9 +92,9 @@ macro_rules! define_archive_processor_registry {
                 }
             }
 
-            fn can_handle(&self, url: &Url) -> bool {
+            fn can_handle(&self, url: &Url, mime: Option<&str>) -> bool {
                 match self {
-                    $(Self::$variant(p) => p.can_handle(url),)*
+                    $(Self::$variant(p) => p.can_handle(url, mime),)*
                 }
             }
 
@@ -151,11 +152,11 @@ pub fn get_processor(archive_type: ArchiveType) -> Option<&'static ArchiveProces
         .map(|(_, p)| p)
 }
 
-/// 根据 URL 猜测格式并返回对应处理器。
-pub fn get_processor_by_url(url: &Url) -> Option<&'static ArchiveProcessorEnum> {
+/// 根据 URL（及可选的 MIME）猜测格式并返回对应处理器。
+pub fn get_processor_by_url(url: &Url, mime: Option<&str>) -> Option<&'static ArchiveProcessorEnum> {
     ARCHIVE_PROCESSOR_REGISTRY
         .iter()
-        .find(|(_, processor)| processor.can_handle(url))
+        .find(|(_, processor)| processor.can_handle(url, mime))
         .map(|(_, p)| p)
 }
 

@@ -13,13 +13,22 @@ impl ArchiveProcessor for RarProcessor {
         vec!["rar"]
     }
 
-    fn can_handle(&self, url: &Url) -> bool {
+    fn can_handle(&self, url: &Url, mime: Option<&str>) -> bool {
         if let Ok(path) = url.to_file_path() {
-            return path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("rar"))
-                .unwrap_or(false);
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                return ext.eq_ignore_ascii_case("rar");
+            }
+            if let Ok(Some(kind)) = infer::get_from_path(&path) {
+                return kind.extension().eq_ignore_ascii_case("rar");
+            }
+            return false;
+        }
+        if let Some(m) = mime {
+            let m = m.trim().to_lowercase();
+            return matches!(
+                m.as_str(),
+                "application/x-rar-compressed" | "application/vnd.rar"
+            );
         }
         url.path().to_ascii_lowercase().ends_with(".rar")
     }

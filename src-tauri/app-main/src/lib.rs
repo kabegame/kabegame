@@ -407,6 +407,7 @@ pub fn run() {
             open_file_path,
             open_file_folder,
             // --- Misc ---
+            exit_app,
             get_file_drop_supported_types,
             get_file_drop_kinds,
             get_supported_image_types,

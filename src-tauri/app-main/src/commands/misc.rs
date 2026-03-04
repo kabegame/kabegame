@@ -6,6 +6,13 @@ use std::fs;
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 
+/// 退出应用。用于 Android 返回键确认退出及桌面/托盘等场景。
+/// 使用 AppHandle::exit 确保进程正确退出（win.close() 在 Android 上可能只关窗口不退出进程）。
+#[tauri::command]
+pub fn exit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FileDropSupportedTypes {
@@ -153,17 +160,11 @@ pub async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
     fs::read(&path).map_err(|e| format!("Failed to read image file: {}", e))
 }
 
-#[derive(Deserialize)]
-pub struct CopyImageToClipboardArgs {
-    #[serde(alias = "imagePath")]
-    image_path: String,
-}
-
 /// 复制图片到系统剪贴板。支持 Windows、macOS、Linux、Android。
 #[tauri::command]
 pub async fn copy_image_to_clipboard(
     app: AppHandle,
-    CopyImageToClipboardArgs { image_path }: CopyImageToClipboardArgs,
+    image_path: String,
 ) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {

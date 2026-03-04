@@ -91,4 +91,40 @@ impl<R: Runtime> Picker<R> {
       .map_err(crate::Error::from)?;
     Ok(result)
   }
+
+  pub async fn copy_image_to_pictures(
+    &self,
+    source_path: String,
+    mime_type: String,
+    display_name: String,
+  ) -> crate::Result<CopyImageToPicturesResponse> {
+    let result: CopyImageToPicturesResponse = self
+      .0
+      .run_mobile_plugin_async(
+        "copyImageToPictures",
+        CopyImageToPicturesArgs {
+          source_path,
+          mime_type,
+          display_name,
+        },
+      )
+      .await
+      .map_err(crate::Error::from)?;
+    Ok(result)
+  }
+
+  pub async fn copy_extracted_images_to_pictures(
+    &self,
+    source_dir: String,
+  ) -> crate::Result<CopyExtractedImagesToPicturesResponse> {
+    let result: CopyExtractedImagesToPicturesResponse = self
+      .0
+      .run_mobile_plugin_async(
+        "copyExtractedImagesToPictures",
+        CopyExtractedImagesToPicturesArgs { source_dir },
+      )
+      .await
+      .map_err(crate::Error::from)?;
+    Ok(result)
+  }
 }
