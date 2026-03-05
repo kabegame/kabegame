@@ -47,7 +47,8 @@ export default {
   server: {
     port: 1420,
     strictPort: true,
-    host: true,
+    // 桌面端仅监听 localhost；Android 真机需监听所有网卡以便设备连接
+    host: isAndroid,
     // Android 真机：HMR 与 origin 指向开发机 IP，使设备能连上 WebSocket 并正确解析 script/source map 等请求
     ...(isAndroid
       ? {

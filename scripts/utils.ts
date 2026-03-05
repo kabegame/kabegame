@@ -30,7 +30,9 @@ export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
 
 /** 开发服务器 host：供 tauri.conf 的 devUrl / CSP 等使用；可被 TAURI_DEV_HOST / VITE_DEV_SERVER_HOST 覆盖 */
 export function getDevServerHost(): string {
-  const envHost = process.env.TAURI_DEV_HOST || process.env.VITE_DEV_SERVER_HOST;
+  if (!OSPlugin.isAndroid) return "localhost";
+  const envHost =
+    process.env.TAURI_DEV_HOST || process.env.VITE_DEV_SERVER_HOST;
   if (envHost) return envHost;
   const ifaces = os.networkInterfaces();
   for (const name of Object.keys(ifaces || {})) {
