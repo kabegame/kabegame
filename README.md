@@ -54,12 +54,12 @@
 
 | 操作系统 | Normal 模式 | Local 模式 | Light 模式 |
 |---------|------------|-----------|-----------|
-| Windows | [setup.exe](release/Kabegame-normal_3.0.3_x64-setup.exe) | [setup.exe](release/Kabegame-local_3.0.3_x64-setup.exe) | [setup.exe](release/Kabegame-light_3.0.3_x64-setup.exe) |
+| Windows | [setup.exe](release/Kabegame-normal_3.0.4_x64-setup.exe) | [setup.exe](release/Kabegame-local_3.0.4_x64-setup.exe) | [setup.exe](release/Kabegame-light_3.0.4_x64-setup.exe) |
 | MacOS | [dmg映像](release/Kabegame-normal_3.0.4_aarch64.dmg) | [dmg映像](release/Kabegame-local_3.0.4_aarch64.dmg) | [dmg映像](release/Kabegame-light_3.0.4_aarch64.dmg) |
 | Linux (Plasma) | [deb包](release/Kabegame-normal_plasma_3.0.3_amd64.deb)  | [deb包](release/Kabegame-local_plasma_3.0.3_amd64.deb)  | [deb包](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
 | Linux (GNOME) | [deb包](release/Kabegame-normal_gnome_3.0.3_amd64.deb) | [deb包](release/Kabegame-local_gnome_3.0.3_amd64.deb) | [deb包](release/Kabegame-light_gnome_3.0.3_amd64.deb) |
 
-- **安卓预览版**（仅支持 Light 模式）：[kabegame_3.0.4_android-preview.apk](release/kabegame_3.0.4_android-preview.apk) 
+- **安卓预览版**（仅支持 Light 模式）：[kabegame_3.0.4_android-preview.apk](release/Kabegame_3.0.4_android-preview.apk) 
 
 ## 安装方法
 
