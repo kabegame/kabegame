@@ -65,8 +65,7 @@
       }
     ],
     {{/unless}}
-
-    "resources": ["resources/**/*"],
+    {{#unless noResources}}"resources": ["resources/**/*"],{{/unless}}
     "windows": {
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh",

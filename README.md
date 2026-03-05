@@ -12,6 +12,10 @@
   <img src="docs/images/main-screenshot-windows-preview.png" alt="Kabegame windows 截图 2" width="800"/>
   <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame macos 截图" width="800"/>
   <img src="docs/images/main-screenshot-linux.png" alt="Kabegame linux 截图" width="800" />
+  <div>
+    <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame android 截图" width="400" />
+    <img src="docs/images/main-screenshot-android-preview.jpg" alt="Kabegame android 截图" width="400" />
+  </div>
 </div>
 
 ## 名称由来 🐢
@@ -123,9 +127,9 @@
 画廊是 Kabegame 的核心，所有收集到的壁纸都会在这里展示。支持分页浏览、快速预览、多选操作、去重清理等功能。你可以直接拖入本地文件快速导入。双击图片即可在应用内预览大图，支持缩放、拖拽、切换等操作，也可以设置系统看图软件打开。
 
 <div align="center">
-  <img src="docs/images/main-screenshot1.png" alt="Kabegame 截图 1" width="800"/>
+  <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame 截图 1" width="800"/>
   <br/>
-  <img src="docs/images/main-screenshot2.png" alt="Kabegame 截图 2" width="800"/>
+  <img src="docs/images/main-screenshot-windows-gallery.png" alt="Kabegame 截图 2" width="800"/>
 </div>
 
 ### 📸 画册管理
