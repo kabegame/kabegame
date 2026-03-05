@@ -8,9 +8,10 @@
 </div>
 
 <div align="center">
-  <img src="docs/images/main-screenshot1.png" alt="Kabegame 截图 1" width="800"/>
-  <img src="docs/images/main-screenshot2.png" alt="Kabegame 截图 2" width="800"/>
-  <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame 截图 3" width="800"/>
+  <img src="docs/images/main-screenshot-windows-gallery.png" alt="Kabegame windows 截图 1" width="800"/>
+  <img src="docs/images/main-screenshot-windows-preview.png" alt="Kabegame windows 截图 2" width="800"/>
+  <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame macos 截图" width="800"/>
+  <img src="docs/images/main-screenshot-linux.png" alt="Kabegame linux 截图" width="800" />
 </div>
 
 ## 名称由来 🐢
@@ -46,7 +47,7 @@
 | **插件商店** | ✅ 支持 | 🟡 预置插件 | 🟡 预置插件 |
 | **虚拟磁盘** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
 | **cli** | ✅ 支持 | ✅ 支持 | ❌ 不支持|
-| **内置插件** | 本地导入插件(`local-import`) | 发布时的全部插件 | 发布时的全部插件 |
+| **内置插件** | 无内置插件 | 发布时的全部插件 | 发布时的全部插件 |
 | **适用场景** | 日常使用，需要从商店安装插件 | 离线使用，需要所有插件内置 | 轻量使用，仅需基本功能 |
 | **文件大小** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
 
@@ -56,8 +57,7 @@
 |---------|------------|-----------|-----------|
 | Windows | [setup.exe](release/Kabegame-normal_3.0.4_x64-setup.exe) | [setup.exe](release/Kabegame-local_3.0.4_x64-setup.exe) | [setup.exe](release/Kabegame-light_3.0.4_x64-setup.exe) |
 | MacOS | [dmg映像](release/Kabegame-normal_3.0.4_aarch64.dmg) | [dmg映像](release/Kabegame-local_3.0.4_aarch64.dmg) | [dmg映像](release/Kabegame-light_3.0.4_aarch64.dmg) |
-| Linux (Plasma) | [deb包](release/Kabegame-normal_plasma_3.0.3_amd64.deb)  | [deb包](release/Kabegame-local_plasma_3.0.3_amd64.deb)  | [deb包](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
-| Linux (GNOME) | [deb包](release/Kabegame-normal_gnome_3.0.3_amd64.deb) | [deb包](release/Kabegame-local_gnome_3.0.3_amd64.deb) | [deb包](release/Kabegame-light_gnome_3.0.3_amd64.deb) |
+| Linux | [deb包](release/Kabegame-normal_3.0.4_amd64.deb) | [deb包](release/Kabegame-local_3.0.4_amd64.deb) | [deb包](release/Kabegame-light_3.0.4_amd64.deb) |
 
 - **安卓预览版**（仅支持 Light 模式）：[kabegame_3.0.4_android-preview.apk](release/Kabegame_3.0.4_android-preview.apk) 
 
@@ -97,17 +97,7 @@
 
 ### Linux（Debian 分发，如 Ubuntu）
 
-1. **确认桌面环境**：
-   ```bash
-   systemctl --user list-units --type=service | grep -E "plasma|gnome|xfce|cinnamon|mate|sway|hyprland"
-   ```
-   根据输出选择对应的安装包（Plasma 或 GNOME）
-
-   <b style="color: red; background-color: #fdd;">
-   安装错误 desktop 版本可能导致无法正常设置壁纸！
-   </b>
-
-2. **安装依赖（仅 Normal / Local 模式）**：
+1. **安装依赖（仅 Normal / Local 模式）**：
    - 虚拟磁盘功能需要 `fuse3` 依赖，如果系统未安装，请先安装：
    ```bash
    sudo apt update
@@ -115,13 +105,13 @@
    ```
    - Light 模式不需要 `fuse3` 依赖
 
-3. **安装应用**：
+2. **安装应用**：
    ```bash
-   sudo dpkg -i Kabegame-<mode>_<desktop>_<version>_<arch>.deb
+   sudo dpkg -i Kabegame-<mode>_<version>_<arch>.deb
    ```
    - 如果遇到依赖问题，可以运行：`sudo apt-get install -f` 自动修复
 
-4. **CLI 工具（仅 Normal / Local 模式）**：
+3. **CLI 工具（仅 Normal / Local 模式）**：
    - CLI 会自动安装到 `/usr/bin/kabegame-cli`，可直接在终端使用：`kabegame-cli --help`
    - Light 模式不提供 CLI 工具
 
@@ -265,8 +255,6 @@ bun install
 # 开发模式（带 watch，热重载）
 bun dev -c main              # 启动主应用（端口 1420）
 bun dev -c main --mode local # 使用 local 模式（无商店版本，预打包全部插件）
-bun dev -c main --desktop plasma  # 指定桌面环境为 Plasma（在设置中显示插件模式选项）
-bun dev -c main --desktop gnome   # 指定桌面环境为 GNOME
 
 # 启动模式（无 watch，直接运行）
 bun start -c cli            # 启动 CLI 工具
@@ -288,9 +276,6 @@ bun check -c main --skip cargo   # 仅检查 vue
   - `normal`（默认）：一般版本，带商店源，仅打包本地插件到 resources
   - `local`：无商店，预打包全部插件到 resources
   - `light`：轻量模式，无商店，没有虚拟盘功能、没有cli工具
-- `--desktop <desktop>`：指定桌面环境（`plasma` | `gnome`），用于后端按桌面环境选择实现
-  - `plasma`：适用于 KDE Plasma 环境（在设置中显示 Plasma 插件模式选项）
-  - `gnome`：适用于 GNOME 环境
 - `--skip <skip>`：跳过某个流程（只能一个值：`vue` | `cargo`）
   - 在 `check` 中始终生效：`--skip vue` 跳过 `vue-tsc`，`--skip cargo` 跳过 `cargo check`
   - 在 `build` 中：

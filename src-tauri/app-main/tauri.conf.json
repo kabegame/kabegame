@@ -5,7 +5,7 @@
   "identifier": "Kabegame",
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
-    "devUrl": "http://198.18.0.1:1420",
+    "devUrl": "http://192.168.10.7:1420",
     "frontendDist": "../../dist-main"
   },
   "app": {
@@ -15,12 +15,11 @@
         "resizable": true,
         "title": "Kabegame",
         "devtools": false,
-        "transparent": true,
-        "width": 1200,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
-        "windowEffects": { "effects": ["sidebar", "acrylic"], "state": "followsWindowActiveState" }
+        "transparent": false,
+        "width": 1600,
+        "height": 1200,
+        "minWidth": 1200,
+        "minHeight": 800
       }
     ],
     "security": {
@@ -35,18 +34,9 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis"
+      "deb"
     ],
     "icon": ["../icons/32x32.png", "../icons/128x128.png", "../icons/128x128@2x.png", "../icons/icon.icns", "../icons/icon.ico"],
-    "fileAssociations": [
-      {
-        "ext": ["kgpg"],
-        "name": "Kabegame Plugin Package",
-        "description": "Kabegame Plugin Package",
-        "role": "Viewer",
-        "mimeType": "application/x-kabegame-kgpg"
-      }
-    ],
 
     "resources": ["resources/**/*"],
     "windows": {
@@ -63,9 +53,8 @@
     },
     "linux": {
       "deb": {
-        "depends": ["fuse3", "libayatana-appindicator3-1"],
+        "depends": ["libayatana-appindicator3-1"],
         "files": {
-          "/usr/bin/kabegame-cli": "../../target/release/kabegame-cli",
           "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "../icons/icon.png"
         },

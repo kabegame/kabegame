@@ -37,17 +37,9 @@ pub fn init_linux_desktop() -> LinuxDesktop {
 /// 业务代码读取缓存结果；若尚未初始化，则返回 Unknown
 #[cfg(target_os = "linux")]
 pub fn linux_desktop() -> LinuxDesktop {
-    #[cfg(target_os = "linux")]
-    {
-        *LINUX_DESKTOP
-            .get()
-            .unwrap_or(&LinuxDesktop::Unknown)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        LinuxDesktop::Unknown
-    }
+    *LINUX_DESKTOP
+        .get()
+        .unwrap_or(&LinuxDesktop::Unknown)
 }
 
 fn detect_linux_desktop() -> LinuxDesktop {
@@ -56,15 +48,20 @@ fn detect_linux_desktop() -> LinuxDesktop {
         return from_env;
     }
 
-    // 2. 能力探测兜底
-    if detect_gnome_capability() {
-        return LinuxDesktop::Gnome;
+    // 2. 用 systemctl --user 看实际在跑的桌面服务，比 gsettings 能力探测更稳妥
+    //    （Plasma 上常有 gsettings，单靠能力探测会误判为 GNOME）
+    if let Some(from_systemd) = detect_from_systemd_services() {
+        return from_systemd;
     }
+
+    // 3. 能力探测兜底（无 systemctl 或非 user session 时）
     if detect_plasma_capability() {
         return LinuxDesktop::Plasma;
     }
+    if detect_gnome_capability() {
+        return LinuxDesktop::Gnome;
+    }
 
-    // 3. 仍无法判断则 Unknown
     LinuxDesktop::Unknown
 }
 
@@ -104,6 +101,32 @@ fn detect_from_env() -> Option<LinuxDesktop> {
         return Some(LinuxDesktop::Gnome);
     }
 
+    None
+}
+
+/// 通过 systemctl --user list-units 检测实际运行的桌面服务，避免仅因存在 gsettings 误判为 GNOME。
+/// 与 README 中「根据输出选择 Plasma 或 GNOME 安装包」的检查方式一致。
+fn detect_from_systemd_services() -> Option<LinuxDesktop> {
+    use std::process::Command;
+
+    let output = Command::new("systemctl")
+        .args(["--user", "list-units", "--type=service"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lower = stdout.to_lowercase();
+    // 先匹配 plasma，再匹配 gnome，避免 Plasma 上同时有 gnome 相关服务时误判
+    eprintln!("detected: {}", lower);
+    if lower.contains("plasma") {
+        return Some(LinuxDesktop::Plasma);
+    }
+    if lower.contains("gnome") {
+        return Some(LinuxDesktop::Gnome);
+    }
+    // 可选：xfce/cinnamon/mate/sway/hyprland 等当前映射为 Unknown，后续可扩展
     None
 }
 

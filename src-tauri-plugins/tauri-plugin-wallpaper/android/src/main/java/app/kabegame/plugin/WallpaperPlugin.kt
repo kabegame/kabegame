@@ -37,16 +37,6 @@ class WallpaperPlugin(private val activity: Activity) : Plugin(activity) {
         var intervalMinutes: Long = 15
     }
 
-    // #region agent log
-    private fun debugLog(hypothesisId: String, message: String, data: String) {
-        try {
-            val payload = """{"sessionId":"9675c0","hypothesisId":"$hypothesisId","location":"WallpaperPlugin.kt","message":"$message","data":$data,"timestamp":${System.currentTimeMillis()}}"""
-            Log.i("DBG9675c0", payload)
-        } catch (_: Throwable) {
-        }
-    }
-    // #endregion
-
     @Command
     fun setWallpaper(invoke: Invoke) {
         val args = invoke.parseArgs(SetWallpaperArgs::class.java)
