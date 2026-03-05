@@ -60,12 +60,15 @@ function findBundleDir(root: string): string | null {
     path.join(root, "target", "release", "bundle"),
     ...(OSPlugin.isAndroid ? [path.join(root, "src-tauri", "app-main", "gen", "android", "app", "build", "outputs", "apk")] : []),
   ];
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) return p;
-    } catch {
-      // ignore
-    }
+  const p = OSPlugin.isAndroid ? path.join(root, "src-tauri", "app-main", "gen", "android", "app", "build", "outputs", "apk") 
+    : OSPlugin.isMacOS ? path.join(root, "target", "release", "bundle", "dmg")
+    : OSPlugin.isWindows ? path.join(root, "target", "release", "bundle", "nsis")
+    : OSPlugin.isLinux ? path.join(root, "target", "release", "bundle", "deb")
+    : path.join(root, "target", "release", "bundle");
+  try {
+    if (fs.existsSync(p) && fs.statSync(p).isDirectory()) return p;
+  } catch {
+    // ignore
   }
   return null;
 }

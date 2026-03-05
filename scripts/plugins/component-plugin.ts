@@ -138,7 +138,8 @@ export class ComponentPlugin extends BasePlugin {
             isLight: isAndroid || bs.context.mode!.isLight,
             isDev: bs.context.cmd!.isDev,
             isAndroid: isAndroid,
-            isWindowEffect: !isAndroid && (OSPlugin.isWindows || OSPlugin.isMacOS)
+            isWindowEffect: !isAndroid && (OSPlugin.isWindows || OSPlugin.isMacOS),
+            noResources: bs.context.mode!.isNormal
           };
           writeFileSync(tauriConfig, template(templateCtx));
           // 仅 main 组件：用 handlebars 生成 capabilities/main.json（桌面不含 picker 权限，移动端含）
