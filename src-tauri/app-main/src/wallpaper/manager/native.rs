@@ -106,13 +106,6 @@ end tell"#,
     }
 
     #[cfg(target_os = "linux")]
-    fn percent_encode_path_for_file_url(path: &str) -> String {
-        // Plasma 的 org.kde.image 的 Image 通常是 URL（file:///...）。
-        // 复用通用函数
-        Self::path_to_file_uri(path)
-    }
-
-    #[cfg(target_os = "linux")]
     fn escape_js_single_quoted(s: &str) -> String {
         // 用于构造 evaluateScript 的 JS 字符串字面量：'<here>'
         // 需要转义：\ 和 '
@@ -413,10 +406,7 @@ stderr: {}",
             .to_string_lossy()
             .to_string();
 
-        let file_url = format!(
-            "file:///{}",
-            Self::percent_encode_path_for_file_url(abs.trim_start_matches('/'))
-        );
+        let file_url = Self::path_to_file_uri(&abs);
         let file_url_js = Self::escape_js_single_quoted(&file_url);
         let fill_mode = Self::style_to_plasma_fill_mode(style);
 
@@ -807,8 +797,12 @@ impl WallpaperManager for NativeWallpaperManager {
                 path: &str,
                 style: &str,
             ) -> Result<(), String> {
+                eprintln!("call plasma then gnome");
                 match manager.set_wallpaper_plasma(path, style) {
-                    Ok(()) => Ok(()),
+                    Ok(()) => {
+                        eprintln!("set ok");
+                        Ok(())
+                    },
                     Err(e) => {
                         eprintln!("[WARN] Plasma 壁纸设置失败，尝试 GNOME 实现: {}", e);
                         manager.set_wallpaper_gnome(path, style)
