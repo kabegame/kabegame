@@ -1,13 +1,13 @@
-mod commands;
-mod startup;
-#[cfg(target_os = "linux")]
-mod linux_desktop;
-#[cfg(not(target_os = "android"))]
-mod file_server;
 #[cfg(target_os = "android")]
 mod archiver_provider;
+mod commands;
 #[cfg(target_os = "android")]
 mod content_io_provider;
+#[cfg(not(target_os = "android"))]
+mod file_server;
+#[cfg(target_os = "linux")]
+mod linux_desktop;
+mod startup;
 #[cfg(not(mobile))]
 mod tray;
 mod utils;
@@ -20,12 +20,12 @@ mod vd_listener;
 
 use commands::*;
 use core::fmt;
+#[cfg(not(target_os = "android"))]
+use file_server::get_file_server_base_url;
 use startup::*;
 use std::process;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
-#[cfg(not(target_os = "android"))]
-use file_server::get_file_server_base_url;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -106,17 +106,21 @@ fn init_globals() -> Result<(), String> {
     {
         DedupeService::init_global(Arc::new(DedupeService::new()))?;
 
-        #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+        #[cfg(not(kabegame_mode = "light"))]
         {
-            VirtualDriveService::init_global().map_err(|e| format!("Failed to init VD service: {}", e))?;
+            VirtualDriveService::init_global()
+                .map_err(|e| format!("Failed to init VD service: {}", e))?;
             let virtual_drive_service = VirtualDriveService::global();
             println!("  ✓ Virtual drive support enabled");
 
             #[cfg(target_os = "windows")]
-            tauri::async_runtime::spawn({
-                vd_listener::start_vd_event_listener(virtual_drive_service.clone());
-                println!("  ✓ Virtual drive event listener started");
-            });
+            {
+                let vd_service_for_listener = virtual_drive_service.clone();
+                tauri::async_runtime::spawn(async move {
+                    vd_listener::start_vd_event_listener(vd_service_for_listener).await;
+                    println!("  ✓ Virtual drive event listener started");
+                });
+            }
 
             let vd_service_for_mount = virtual_drive_service.clone();
             tauri::async_runtime::spawn(async move {
@@ -225,8 +229,8 @@ pub fn run() {
                                 eprintln!("Failed to fill missing image dimensions: {}", e);
                             }
                             let _ = tauri::async_runtime::spawn_blocking(move || {
-                                if let Err(e) =
-                                    kabegame_core::storage::Storage::global().backfill_display_names()
+                                if let Err(e) = kabegame_core::storage::Storage::global()
+                                    .backfill_display_names()
                                 {
                                     eprintln!("Failed to backfill display names: {}", e);
                                 }
@@ -240,17 +244,21 @@ pub fn run() {
                     {
                         // 将内置插件提取到用户目录
                         init_bundled_plugins(app.app_handle().clone());
-                        let provider =
-                            content_io_provider::PickerContentIoProvider::new(app.app_handle().clone());
-                        let proxy =
-                            content_io_provider::ChannelContentIoProvider::new(provider);
+                        let provider = content_io_provider::PickerContentIoProvider::new(
+                            app.app_handle().clone(),
+                        );
+                        let proxy = content_io_provider::ChannelContentIoProvider::new(provider);
                         // 设置内容IO提供者
-                        kabegame_core::crawler::content_io::set_content_io_provider(Box::new(proxy));
+                        kabegame_core::crawler::content_io::set_content_io_provider(Box::new(
+                            proxy,
+                        ));
                         // 设置归档提取提供者
-                        let archiver_provider =
-                            archiver_provider::ArchiverContentProvider::new(app.app_handle().clone());
-                        let archiver_proxy =
-                            archiver_provider::ChannelArchiveExtractProvider::new(archiver_provider);
+                        let archiver_provider = archiver_provider::ArchiverContentProvider::new(
+                            app.app_handle().clone(),
+                        );
+                        let archiver_proxy = archiver_provider::ChannelArchiveExtractProvider::new(
+                            archiver_provider,
+                        );
                         kabegame_core::crawler::archiver::set_archive_extract_provider(Box::new(
                             archiver_proxy,
                         ));
@@ -258,10 +266,12 @@ pub fn run() {
 
                     // 初始化插件
                     init_kgpg_plugin();
-
                 }
                 Err(e) => {
-                    utils::show_error(app.app_handle(), format!("初始化过程中出现了致命错误！: {}", e));
+                    utils::show_error(
+                        app.app_handle(),
+                        format!("初始化过程中出现了致命错误！: {}", e),
+                    );
                     eprintln!("初始化过程中出现了致命错误！:{}", e);
                     process::exit(1);
                 }

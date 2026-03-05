@@ -9,6 +9,8 @@ export interface CachedImageState {
   isLost: boolean;
   originalMissing: boolean;
   stage: ImageStage;
+  /** 桌面双图时：原图是否已加载（用于恢复时跳过骨架） */
+  originalLoaded?: boolean;
 }
 
 const imageStateCache = new Map<string, CachedImageState>();
