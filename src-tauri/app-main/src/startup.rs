@@ -230,28 +230,36 @@ pub fn start_local_event_loop(app: AppHandle) {
     });
 }
 
+/// 单例检测：若已有实例在运行则通过 IPC 转发请求并退出，仅在桌面端、在 setup 最早阶段调用（早于 init_shortcut）。
+#[cfg(not(target_os = "android"))]
+pub fn try_forward_to_existing_instance_and_exit() {
+    use kabegame_core::ipc::ipc::{request, CliIpcRequest};
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    let another = rt.block_on(kabegame_core::ipc::server::check_other_daemon_running());
+    if !another {
+        return;
+    }
+    println!("[IPC] 检测到已有实例在运行，转发请求并退出...");
+    let _ = rt.block_on(request(CliIpcRequest::AppShowWindow));
+    if let Some(path) = extract_kgpg_file_from_args() {
+        let _ = rt.block_on(request(CliIpcRequest::AppImportPlugin {
+            kgpg_path: path,
+        }));
+    }
+    std::process::exit(0);
+}
+
 /// 启动 IPC 服务（仅需 app_handle，DedupeService / VirtualDriveService 等由全局单例提供）
 #[cfg(not(target_os = "android"))]
 pub fn start_ipc_server(app_handle: AppHandle) {
     println!("[IPC_SERVER] Starting IPC server...");
 
     tauri::async_runtime::spawn(async move {
-        // 1. 检查是否有其他实例运行
-        if kabegame_core::ipc::server::check_other_daemon_running().await {
-            println!("[IPC_SERVER] Another instance detected. Forwarding request and exiting...");
-
-            use kabegame_core::ipc::ipc::{request, CliIpcRequest};
-
-            // 请求 1: 显示窗口
-            let _ = request(CliIpcRequest::AppShowWindow).await;
-
-            // 请求 2: 导入插件
-            if let Some(path) = extract_kgpg_file_from_args() {
-                let _ = request(CliIpcRequest::AppImportPlugin { kgpg_path: path }).await;
-            }
-
-            std::process::exit(0);
-        }
+        // 1. 单例检测已在 setup 最早阶段由 try_forward_to_existing_instance_and_exit 完成，此处仅启动服务器
 
         // 2. 首次启动：处理启动参数
         if let Some(path) = extract_kgpg_file_from_args() {

@@ -7,7 +7,7 @@ mod content_io_provider;
 mod file_server;
 #[cfg(target_os = "linux")]
 mod linux_desktop;
-mod startup;
+pub mod startup;
 #[cfg(not(mobile))]
 mod tray;
 mod utils;
