@@ -102,13 +102,13 @@ export const headerFeatures: HeaderFeature[] = [
     hide: false,
     order: 15,
   },
-  // 去重（Gallery 专用）
+  // 去重（Gallery 专用；安卓版暂时关闭）
   {
     id: "dedupe",
     label: "去重",
     icon: Filter,
-    pages: ["gallery"],
-    fold: IS_ANDROID, // Android 下折叠
+    pages: IS_ANDROID ? [] : ["gallery"],
+    fold: IS_ANDROID,
     hide: false,
     order: 20,
   },

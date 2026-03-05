@@ -2,9 +2,25 @@
   <div class="rotation-target-setting">
     <template v-if="rotationEnabled">
       <div class="select-row">
-        <el-select :modelValue="settingValue" class="album-select" :loading="albumStore.loading || showDisabled"
-          :disabled="disabled || keyDisabled || wallpaperModeSwitching" placeholder="选择用于轮播的画册" style="min-width: 180px"
-          @change="handleAlbumChange">
+        <AndroidPickerSelect
+          v-if="IS_ANDROID"
+          :model-value="albumPickerValue"
+          :options="albumPickerOptions"
+          title="选择用于轮播的画册"
+          placeholder="选择用于轮播的画册"
+          :disabled="disabled || keyDisabled || wallpaperModeSwitching"
+          @update:model-value="(v) => handleAlbumChange(v ?? '')"
+        />
+        <el-select
+          v-else
+          :modelValue="settingValue"
+          class="album-select"
+          :loading="albumStore.loading || showDisabled"
+          :disabled="disabled || keyDisabled || wallpaperModeSwitching"
+          placeholder="选择用于轮播的画册"
+          style="min-width: 180px"
+          @change="handleAlbumChange"
+        >
           <el-option value="">
             <div class="gallery-option">
               <div class="gallery-option__title">全画廊</div>
@@ -48,6 +64,8 @@ import { FolderOpened } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
+import { IS_ANDROID } from "@kabegame/core/env";
+import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 import { useAlbumStore } from "@/stores/albums";
 import { useUiStore } from "@kabegame/core/stores/ui";
 
@@ -71,6 +89,12 @@ const currentWallpaperPath = ref<string | null>(null);
 const localAlbumId = ref<string>("");
 
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
+
+const albumPickerValue = computed(() => (settingValue.value as string) ?? "");
+const albumPickerOptions = computed(() => [
+  { label: "全画廊", value: "" },
+  ...albumStore.albums.map((a) => ({ label: a.name, value: a.id })),
+]);
 
 const currentWallpaperName = computed(() => {
   if (!currentWallpaperPath.value) return null;

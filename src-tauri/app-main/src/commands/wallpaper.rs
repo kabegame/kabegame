@@ -29,23 +29,27 @@ pub async fn get_current_wallpaper_path_from_settings(
 
 #[tauri::command]
 pub async fn set_wallpaper(file_path: String) -> Result<(), String> {
-    let path = Path::new(&file_path);
-    if !path.exists() {
-        println!("DEBUG: File does not exist: {}", file_path);
-        return Err("File does not exist".to_string());
-    }
+    // Android 上为 content:// URI，不能做 Path::exists/canonicalize
+    let abs = if file_path.starts_with("content://") {
+        file_path.clone()
+    } else {
+        let path = Path::new(&file_path);
+        if !path.exists() {
+            println!("DEBUG: File does not exist: {}", file_path);
+            return Err("File does not exist".to_string());
+        }
+        path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string()
+    };
+
     let controller = WallpaperController::global();
     let settings = Settings::global();
     let style = settings
         .get_wallpaper_rotation_style()
         .await
         .unwrap_or_else(|_| "fill".to_string());
-
-    let abs = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .to_string();
 
     controller.set_wallpaper(&abs, &style).await?;
 
@@ -73,7 +77,8 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     };
     let local_path = info.local_path;
 
-    if !Path::new(&local_path).exists() {
+    // Android 上为 content:// URI，不能用 Path::exists 判断
+    if !local_path.starts_with("content://") && !Path::new(&local_path).exists() {
         let _ = settings.set_current_wallpaper_image_id(None).await;
         return Err("图片文件不存在".to_string());
     }
@@ -250,6 +255,11 @@ pub async fn start_wallpaper_rotation() -> Result<RotationStartResult, String> {
 
 #[tauri::command]
 pub async fn set_wallpaper_rotation_interval_minutes(minutes: u32) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    let minutes = minutes.max(15);
+    #[cfg(not(target_os = "android"))]
+    let minutes = minutes;
+
     Settings::global()
         .set_wallpaper_rotation_interval_minutes(minutes)
         .await

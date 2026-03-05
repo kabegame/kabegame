@@ -385,7 +385,7 @@ impl Storage {
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-                 i.\"order\",
+                 ti.\"order\",
                  i.width,
                  i.height,
                  i.display_name
@@ -440,7 +440,7 @@ impl Storage {
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-                 i.\"order\",
+                 ti.\"order\",
                  i.width,
                  i.height,
                  i.display_name

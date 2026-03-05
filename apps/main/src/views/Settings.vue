@@ -33,8 +33,8 @@
                 <WallpaperRotationTargetSetting />
               </SettingRow>
 
-              <SettingRow v-if="rotationEnabled" label="轮播间隔" description="壁纸更换间隔（分钟，1-1440）">
-                <SettingNumberControl setting-key="wallpaperRotationIntervalMinutes" :min="1" :max="1440" :step="10" />
+              <SettingRow v-if="rotationEnabled" label="轮播间隔" :description="`壁纸更换间隔（分钟，${rotationIntervalMin}-1440）`">
+                <SettingNumberControl setting-key="wallpaperRotationIntervalMinutes" :min="rotationIntervalMin" :max="1440" :step="10" />
               </SettingRow>
 
               <SettingRow v-if="rotationEnabled" label="轮播模式" description="随机模式：每次随机选择；顺序模式：按顺序依次更换">
@@ -44,15 +44,15 @@
                 ]" />
               </SettingRow>
 
-              <SettingRow label="壁纸显示方式" description="原生模式：根据系统支持显示可用样式">
+              <SettingRow v-if="IS_WINDOWS || IS_LINUX" label="壁纸显示方式" description="原生模式：根据系统支持显示可用样式">
                 <WallpaperStyleSetting />
               </SettingRow>
 
-              <SettingRow label="过渡效果" description="仅轮播支持过渡预览">
+              <SettingRow v-if="IS_WINDOWS" label="过渡效果" description="仅轮播支持过渡预览">
                 <WallpaperTransitionSetting />
               </SettingRow>
 
-              <SettingRow label="壁纸模式">
+              <SettingRow v-if="IS_WINDOWS" label="壁纸模式">
                 <WallpaperModeSetting />
               </SettingRow>
 
@@ -158,7 +158,7 @@ import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngi
 import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetting.vue";
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
-import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, IS_DEV } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV } from "@kabegame/core/env";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { invoke } from "@tauri-apps/api/core";
 import { hasFeatureInPage } from "@/header/headerFeatures";
@@ -170,6 +170,7 @@ const settingsStore = useSettingsStore();
 const activeTab = ref<string>("wallpaper");
 const isRefreshing = ref(false);
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
+const rotationIntervalMin = computed(() => (IS_ANDROID ? 15 : 1));
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("settings");

@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
-  "maxCacheSize": "1GB",
+  "maxCacheSize": "20MB",
   "targetDefaults": {
     "build-cli": {
       "cache": true,
@@ -20,6 +20,7 @@
       { "env": "VITE_KABEGAME_MODE" },
       { "env": "KABEGAME_MODE" },
       { "env": "TAURI_ENV_PLATFORM" },
+      { "env": "TAURI_PLATFORM" },
       { "env": "TAURI_DEBUG" }
     ],
     "frontendCli": [

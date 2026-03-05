@@ -2657,6 +2657,7 @@ dependencies = [
  "tauri-plugin-picker",
  "tauri-plugin-share",
  "tauri-plugin-shell",
+ "tauri-plugin-wallpaper",
  "tokio",
  "tower",
  "tower-http",
@@ -5550,6 +5551,17 @@ dependencies = [
  "tauri-plugin",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "tauri-plugin-wallpaper"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

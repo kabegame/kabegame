@@ -2,8 +2,8 @@
   <el-dialog v-model="visible" :title="title" :width="width" destroy-on-close>
     <div style="margin-bottom: 16px;">
       <p style="margin-bottom: 8px;">{{ message }}</p>
-      <el-checkbox v-model="deleteFiles" :label="checkboxLabel" />
-      <p class="var-description" :style="{ color: deleteFiles ? 'var(--el-color-danger)' : '' }">
+      <el-checkbox v-model="deleteFiles" :label="checkboxLabel" v-if="!hideCheckbox" />
+      <p v-if="!hideCheckbox" class="var-description" :style="{ color: deleteFiles ? 'var(--el-color-danger)' : '' }">
         {{ deleteFiles ? dangerText : safeText }}
       </p>
     </div>
@@ -30,6 +30,7 @@ interface Props {
   cancelText?: string;
   confirmLoading?: boolean;
   width?: string;
+  hideCheckbox?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -41,6 +42,7 @@ const props = withDefaults(defineProps<Props>(), {
   cancelText: "取消",
   confirmLoading: false,
   width: "420px",
+  hideCheckbox: false,
 });
 
 const emit = defineEmits<{

@@ -8,47 +8,23 @@
         </template>
         <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
             <el-form-item label="运行配置">
-                <el-select v-model="selectedRunConfigId" placeholder="选择配置（可选）" style="width: 100%" clearable
-                    popper-class="run-config-select-dropdown">
-                    <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="cfg.name" :value="cfg.id">
-                        <div class="run-config-option">
-                            <div class="run-config-info">
-                                <div class="name">
-                                    <el-tag v-if="configCompatibilityStatus[cfg.id]?.versionCompatible === false"
-                                        type="danger" size="small" style="margin-right: 6px;">
-                                        不兼容
-                                    </el-tag>
-                                    <el-tag v-else-if="configCompatibilityStatus[cfg.id]?.contentCompatible === false"
-                                        type="warning" size="small" style="margin-right: 6px;">
-                                        不兼容
-                                    </el-tag>
-                                    {{ cfg.name }}
-                                    <span v-if="cfg.description" class="desc"> - {{ cfg.description }}</span>
-                                </div>
-                            </div>
-                            <div class="run-config-actions">
-                                <el-button type="danger" link size="small" @click.stop="handleDeleteConfig(cfg.id)">
-                                    删除
-                                </el-button>
-                            </div>
-                        </div>
-                    </el-option>
-                </el-select>
+                <AndroidPickerSelect
+                    :model-value="selectedRunConfigId ?? null"
+                    :options="runConfigPickerOptions"
+                    title="运行配置"
+                    placeholder="选择配置（可选）"
+                    clearable
+                    @update:model-value="setRunConfigId"
+                />
             </el-form-item>
             <el-form-item label="选择源">
-                <el-select v-model="form.pluginId" placeholder="请选择源" style="width: 100%"
-                    popper-class="crawl-plugin-select-dropdown">
-                    <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
-                        <div class="plugin-option">
-                            <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]"
-                                class="plugin-option-icon" />
-                            <el-icon v-else class="plugin-option-icon-placeholder">
-                                <Grid />
-                            </el-icon>
-                            <span>{{ plugin.name }}</span>
-                        </div>
-                    </el-option>
-                </el-select>
+                <AndroidPickerSelect
+                    :model-value="form.pluginId ?? null"
+                    :options="pluginPickerOptions"
+                    title="选择源"
+                    placeholder="请选择源"
+                    @update:model-value="(v) => (form.pluginId = v ?? '')"
+                />
             </el-form-item>
             <el-form-item v-if="!IS_ANDROID" label="输出目录">
                 <el-input v-model="form.outputDir" placeholder="留空使用默认位置" clearable>
@@ -64,12 +40,14 @@
             </el-form-item>
 
             <el-form-item label="输出画册">
-                <el-select v-model="selectedOutputAlbumId" placeholder="默认仅添加到画廊" clearable style="width: 100%">
-                    <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
-                    <el-option value="__create_new__" label="+ 新建画册">
-                        <span style="color: var(--el-color-primary); font-weight: 500;">+ 新建画册</span>
-                    </el-option>
-                </el-select>
+                <AndroidPickerSelect
+                    :model-value="selectedOutputAlbumId"
+                    :options="outputAlbumPickerOptions"
+                    title="输出画册"
+                    placeholder="默认仅添加到画廊"
+                    clearable
+                    @update:model-value="setOutputAlbumId"
+                />
             </el-form-item>
             <el-form-item v-if="isCreatingNewOutputAlbum" label="画册名称" required>
                 <el-input v-model="newOutputAlbumName" placeholder="请输入画册名称" maxlength="50" show-word-limit
@@ -274,6 +252,7 @@ import { computed, watch, ref, nextTick } from "vue";
 import { FolderOpened, Grid } from "@element-plus/icons-vue";
 import { ElDialog } from "element-plus";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
+import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
 import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore } from "@/stores/crawler";
@@ -357,6 +336,20 @@ const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);
 const albums = computed(() => albumStore.albums);
 
+const runConfigPickerOptions = computed(() =>
+    runConfigs.value.map((cfg) => ({
+        label: cfg.description ? `${cfg.name} - ${cfg.description}` : cfg.name,
+        value: cfg.id,
+    }))
+);
+const pluginPickerOptions = computed(() =>
+    plugins.value.map((p) => ({ label: p.name, value: p.id }))
+);
+const outputAlbumPickerOptions = computed(() => [
+    ...albums.value.map((a) => ({ label: a.name, value: a.id })),
+    { label: "+ 新建画册", value: "__create_new__" },
+]);
+
 // 选择的输出画册ID
 const selectedOutputAlbumId = ref<string | null>(null);
 // 新建输出画册相关
@@ -388,6 +381,13 @@ const {
     selectFileByExtensions,
     resetForm,
 } = pluginConfig;
+
+function setRunConfigId(v: string | null) {
+    selectedRunConfigId.value = v ?? null;
+}
+function setOutputAlbumId(v: string | null) {
+    selectedOutputAlbumId.value = v ?? null;
+}
 
 // file_or_folder 类型：将 varDef.options 作为可选择文件扩展名列表（不带点号）
 const getFileExtensions = (varDef: any): string[] | undefined => {

@@ -20,7 +20,7 @@
                 <li><strong>页码输入框</strong>：直接输入页码跳转到指定页面</li>
                 <li><strong>总页数显示</strong>：显示当前为第几页，共多少页</li>
             </ul>
-            <p>每页显示 <strong>100 张图片</strong>，安卓与桌面一致，无虚拟滚动。</p>
+            <p>每页显示 <strong>100 张图片</strong></p>
             <TipImageCarousel v-if="paginationImages.length > 0" :images="paginationImages" />
         </section>
 

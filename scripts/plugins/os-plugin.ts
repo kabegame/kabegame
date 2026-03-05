@@ -9,20 +9,22 @@ export class OSPlugin extends BasePlugin {
   }
 
   static get isLinux(): boolean {
-    return process.platform === "linux";
+    return process.platform === "linux" && !OSPlugin.isAndroid;
   }
 
   static get isWindows(): boolean {
-    return process.platform === "win32";
+    return process.platform === "win32" && !OSPlugin.isAndroid;
   }
 
   static get isMacOS(): boolean {
-    return process.platform === "darwin";
+    return process.platform === "darwin" && !OSPlugin.isAndroid;
   }
 
   static get isUnix(): boolean {
-    return OSPlugin.isLinux || OSPlugin.isMacOS;
+    return (OSPlugin.isLinux || OSPlugin.isMacOS) && !OSPlugin.isAndroid;
   }
+
+  static isAndroid: boolean = false;
 
   apply(bs: BuildSystem): void {
     bs.hooks.prepareCompileArgs.tap(

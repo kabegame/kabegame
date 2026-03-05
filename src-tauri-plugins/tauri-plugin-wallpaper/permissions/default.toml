@@ -1,0 +1,3 @@
+[default]
+description = "Default permissions for the wallpaper plugin."
+permissions = ["allow-setWallpaper"]

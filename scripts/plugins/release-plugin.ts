@@ -50,13 +50,15 @@ function releaseAssetFileName(params: {
   }
   if (OSPlugin.isMacOS) {
     return `Kabegame-${mode}_${version}_${archForMacOS()}${ext}`;
+  } else {
+    return `Kabegame_${version}_android-${ext}`;
   }
-  return "unknown";
 }
 
 function findBundleDir(root: string): string | null {
   const candidates = [
     path.join(root, "target", "release", "bundle"),
+    ...(OSPlugin.isAndroid ? [path.join(root, "src-tauri", "app-main", "gen", "android", "app", "build", "outputs", "apk")] : []),
   ];
   for (const p of candidates) {
     try {
@@ -90,6 +92,9 @@ function pickBundleAssets(bundleDir: string, version: string): string[] {
   }
   if (OSPlugin.isMacOS) {
     return files.filter((p) => p.endsWith(".dmg"));
+  }
+  if (OSPlugin.isAndroid) {
+    return files.filter((p) => p.endsWith(".apk"));
   }
   return [];
 }

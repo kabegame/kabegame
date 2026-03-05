@@ -339,7 +339,7 @@ impl Storage {
                 "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
-                 i.\"order\",
+                 ai.\"order\",
                  i.width,
                  i.height,
                  i.display_name
@@ -404,7 +404,7 @@ impl Storage {
                 "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
-                 i.\"order\",
+                 ai.\"order\",
                  i.width,
                  i.height,
                  i.display_name

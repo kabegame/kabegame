@@ -1,6 +1,21 @@
 <template>
-  <el-select v-model="localValue" placeholder="请选择过渡效果" style="min-width: 180px"
-    :disabled="props.disabled || wallpaperModeSwitching || disabled" @change="handleChange">
+  <AndroidPickerSelect
+    v-if="IS_ANDROID"
+    :model-value="localValue"
+    :options="options"
+    title="过渡效果"
+    placeholder="请选择过渡效果"
+    :disabled="props.disabled || wallpaperModeSwitching || disabled"
+    @update:model-value="(v) => handleChange(v ?? 'none')"
+  />
+  <el-select
+    v-else
+    v-model="localValue"
+    placeholder="请选择过渡效果"
+    style="min-width: 180px"
+    :disabled="props.disabled || wallpaperModeSwitching || disabled"
+    @change="handleChange"
+  >
     <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value" />
   </el-select>
 </template>
@@ -12,7 +27,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_WINDOWS } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
+import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 
 const props = defineProps<{
   disabled?: boolean;
