@@ -2,10 +2,10 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kabegame",
   "version": "3.0.4",
-  "identifier": "app.kabegame",
+  "identifier": "Kabegame",
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
-    "devUrl": "http://192.168.10.2:1420",
+    "devUrl": "http://198.18.0.1:1420",
     "frontendDist": "../../dist-main"
   },
   "app": {
@@ -19,11 +19,13 @@
         "width": 1200,
         "height": 800,
         "minWidth": 800,
-        "minHeight": 600      }
+        "minHeight": 600,
+        "windowEffects": { "effects": ["sidebar", "acrylic"], "state": "followsWindowActiveState" }
+      }
     ],
     "security": {
       "capabilities": ["main-capability"],
-      "csp": "default-src 'self' ipc: http://ipc.localhost http://192.168.10.2:1420 http://10.0.2.2:1420 http://localhost:1420; img-src 'self' asset: http://asset.localhost http://kbg-content.localhost data: blob: http://127.0.0.1:*; media-src 'self' asset: http://asset.localhost http://kbg-content.localhost data: blob: http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost ws: wss: http://192.168.10.2:1420 http://10.0.2.2:1420 http://localhost:1420 http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost http://kbg-content.localhost data: blob: http://127.0.0.1:*; media-src 'self' asset: http://asset.localhost http://kbg-content.localhost data: blob: http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost ws: wss: http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]
@@ -32,6 +34,9 @@
   },
   "bundle": {
     "active": true,
+    "targets": [
+      "nsis"
+    ],
     "icon": ["../icons/32x32.png", "../icons/128x128.png", "../icons/128x128@2x.png", "../icons/icon.icns", "../icons/icon.ico"],
     "fileAssociations": [
       {
@@ -58,8 +63,9 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libayatana-appindicator3-1"],
+        "depends": ["fuse3", "libayatana-appindicator3-1"],
         "files": {
+          "/usr/bin/kabegame-cli": "../../target/release/kabegame-cli",
           "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "../icons/icon.png"
         },

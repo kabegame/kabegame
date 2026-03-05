@@ -1,12 +1,9 @@
 <template>
   <div class="gallery-page">
     <div class="gallery-container" v-pull-to-refresh="pullToRefreshOpts">
-      <ImageGrid ref="galleryViewRef" :images="displayedImages"
-        :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
-        :enable-ctrl-key-adjust-columns="!IS_ANDROID"
-        :enable-virtual-scroll="!IS_ANDROID"
-        :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing"
-        :actions="imageActions"
+      <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
+        :enable-ctrl-key-adjust-columns="!IS_ANDROID" :enable-virtual-scroll="!IS_WINDOWS && !IS_ANDROID"
+        :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
         :on-context-command="handleGridContextCommand">
         <template #before-grid>
           <!-- 顶部工具栏 -->
@@ -15,8 +12,8 @@
             :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled" :current-position="currentPosition"
             :month-options="monthOptions" :month-loading="monthOptionsLoading" v-model:selectedRange="selectedRange"
             @refresh="handleManualRefresh" @dedupe-by-hash="handleDedupeByHash" @show-help="openHelpDrawer"
-            @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
-            @open-collect-menu="showCollectSourcePicker = true"
+            @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="handleShowCrawlerDialog"
+            @show-local-import="showLocalImportDialog = true" @open-collect-menu="showCollectSourcePicker = true"
             @cancel-dedupe="cancelDedupe" />
 
           <!-- 大页分页器 -->
@@ -68,14 +65,19 @@
     <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
 
     <!-- 桌面：空状态/无下拉时用对话框选择 本地/网络 -->
-    <el-dialog v-model="showCollectMenuDialog" title="选择收集方式" width="360px" destroy-on-close class="collect-menu-dialog">
+    <el-dialog v-model="showCollectMenuDialog" title="选择收集方式" width="360px" destroy-on-close
+      class="collect-menu-dialog">
       <div class="collect-menu-options">
         <div class="collect-menu-option" @click="onDesktopCollectLocal">
-          <el-icon><FolderOpened /></el-icon>
+          <el-icon>
+            <FolderOpened />
+          </el-icon>
           <span>本地</span>
         </div>
         <div class="collect-menu-option" @click="onDesktopCollectNetwork">
-          <el-icon><Connection /></el-icon>
+          <el-icon>
+            <Connection />
+          </el-icon>
           <span>网络</span>
         </div>
       </div>
@@ -118,13 +120,16 @@ import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { useBigPageRoute } from "@/composables/useBigPageRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { hasFeatureInPage } from "@/header/headerFeatures";
 import { useSelectionStore } from "@kabegame/core/stores/selection";
 import type { Component } from "vue";
+import { useAlbumStore } from "@/stores/albums";
+import { type ContextCommand } from "@/components/ImageGrid.vue";
+import { listen } from "@tauri-apps/api/event";
 
 // 选择操作项类型（用于本页选择栏）
 export interface SelectionAction {
@@ -413,17 +418,17 @@ const handleAndroidMediaSelection = async (
       const pathsToImport = paths.some((p) => p.startsWith("content://"))
         ? paths
         : (
-            await Promise.all(
-              paths.map(async (path) => {
-                try {
-                  const metadata = await stat(path);
-                  return metadata.isDirectory ? null : path;
-                } catch {
-                  return null;
-                }
-              })
-            )
-          ).filter((p): p is string => p != null);
+          await Promise.all(
+            paths.map(async (path) => {
+              try {
+                const metadata = await stat(path);
+                return metadata.isDirectory ? null : path;
+              } catch {
+                return null;
+              }
+            })
+          )
+        ).filter((p): p is string => p != null);
 
       if (pathsToImport.length === 0) {
         ElMessage.warning('没有找到可导入的压缩文件');
@@ -568,7 +573,7 @@ watch(
 
 const { isInteracting: autoIsInteracting } = useImageGridAutoLoad({
   containerRef: galleryContainerRef,
-  onLoad: () => {},
+  onLoad: () => { },
   onOverspeed: onScrollOverspeed,
 });
 
@@ -679,16 +684,11 @@ const {
   loadImages
 );
 
-// TODO: 这代码能删吗
+const albumStore = useAlbumStore();
+
 const handleAddedToAlbum = async () => {
   // 画廊本身不依赖画册列表，但这里留个钩子以便其他页面/计数能及时刷新
-  try {
-    const { useAlbumStore } = await import("@/stores/albums");
-    const albumStore = useAlbumStore();
-    await albumStore.loadAlbums();
-  } catch {
-    // ignore
-  }
+  await albumStore.loadAlbums();
 };
 
 // 插件图标映射，存储每个插件的图标 URL
@@ -792,11 +792,11 @@ const loadPluginIcons = async () => {
 // Android 选择模式：构建操作栏 actions
 const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): SelectionAction[] => {
   const countText = selectedCount > 1 ? `(${selectedCount})` : "";
-  
+
   // 获取第一个选中图片的状态（用于判断收藏状态）
   const firstSelectedImage = displayedImages.value.find(img => selectedIds.has(img.id));
   const isFavorite = firstSelectedImage?.favorite ?? false;
-  
+
   if (selectedCount === 1) {
     // 单选
     return [
@@ -852,7 +852,7 @@ const closeSelectionMode = () => {
 
 const handleGridContextCommand = async (
   payload: ContextCommandPayload
-): Promise<import("@/components/ImageGrid.vue").ContextCommand | null> => {
+): Promise<ContextCommand | null> => {
   const command = payload.command;
   const image = payload.image;
   // payload.image 来自 core ImageGrid（类型更宽松）；这里的业务操作统一以 displayedImages 中的实体为准（字段更全）。
@@ -952,7 +952,7 @@ const handleGridContextCommand = async (
             ElMessage.error("图片路径不存在");
             return null;
           }
-          
+
           const ext = filePath.split('.').pop()?.toLowerCase() || '';
           await loadImageTypes();
           const mimeType = getMimeType(ext);
@@ -1195,8 +1195,6 @@ onMounted(async () => {
   }
   listenersCreated.value = true;
 
-  const { listen } = await import("@tauri-apps/api/event");
-
   // 去重进度 / 完成
   await listen<{
     processed: number;
@@ -1298,7 +1296,7 @@ onActivated(async () => {
       console.error("[Gallery] onActivated loadImages 失败:", msg);
       // 「路径不存在」：清空 provider 缓存后重试一次，仍失败则抛出
       if (msg.includes("路径不存在")) {
-        await invoke("clear_provider_cache").catch(() => {});
+        await invoke("clear_provider_cache").catch(() => { });
         await loadImages(true);
       } else {
         throw e;

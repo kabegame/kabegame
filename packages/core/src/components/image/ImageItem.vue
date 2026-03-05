@@ -24,8 +24,8 @@
     <transition name="fade-in" mode="out-in">
       <div v-if="!displayUrl" key="loading" class="image-wrapper" :style="aspectRatioStyle"
         @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)"
-        @click.stop="handleWrapperClick"
-        @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd">
+        @click.stop="handleWrapperClick" @touchstart="handleTouchStart" @touchmove="handleTouchMove"
+        @touchend="handleTouchEnd">
         <div v-if="isLost" class="thumbnail-lost">
           <ImageNotFound :show-image="false" />
         </div>
@@ -38,10 +38,10 @@
           </el-skeleton>
         </div>
       </div>
-      <div v-else key="content" class="image-wrapper"
-        :style="aspectRatioStyle" @dblclick.stop="$emit('dblclick', $event)"
-        @contextmenu.prevent.stop="$emit('contextmenu', $event)" @click.stop="handleWrapperClick"
-        @touchstart="handleTouchStart" @touchmove="handleTouchMove" @touchend="handleTouchEnd">
+      <div v-else key="content" class="image-wrapper" :style="aspectRatioStyle"
+        @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)"
+        @click.stop="handleWrapperClick" @touchstart="handleTouchStart" @touchmove="handleTouchMove"
+        @touchend="handleTouchEnd">
         <!-- 加载期间始终显示骨架覆盖层，避免出现“破裂图”闪现 -->
         <div v-if="isImageLoading" class="thumbnail-loading thumbnail-loading-overlay">
           <el-skeleton :rows="0" animated>
@@ -50,10 +50,21 @@
             </template>
           </el-skeleton>
         </div>
-        <img :src="displayUrl"
+        <!-- 桌面双图：先缩略图，原图加载后淡入 -->
+        <template v-if="useDesktopLayers">
+          <img v-if="!thumbnailLoadFailed" :src="thumbnailUrl" loading="lazy" decoding="async"
+            class="thumbnail thumbnail-layer" :alt="image.id" draggable="false"
+            @load="handleThumbnailLoad" @error="handleThumbnailError" />
+          <img :src="originalUrl" loading="lazy" decoding="async"
+            :class="['thumbnail', 'original-layer', { 'original-layer-visible': originalLoaded }]"
+            :alt="image.id" draggable="false"
+            @load="handleOriginalLoad" @error="handleOriginalError" />
+        </template>
+        <!-- 单图（Android 或桌面无独立缩略图） -->
+        <img v-else :src="displayUrl" loading="lazy" decoding="async"
           :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': IS_ANDROID }]"
-          :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" loading="lazy"
-          draggable="false" @load="handleImageLoad" @error="handleImageError" />
+          :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
+          @load="handleImageLoad" @error="handleImageError" />
       </div>
     </transition>
   </div>
@@ -121,8 +132,18 @@ const {
   isImageLoading,
   isLost,
   originalMissing,
+  thumbnailUrl,
+  originalUrl,
+  useDesktopLayers,
+  thumbnailLoaded,
+  originalLoaded,
+  thumbnailLoadFailed,
   handleImageLoad,
   handleImageError,
+  handleThumbnailLoad,
+  handleOriginalLoad,
+  handleThumbnailError,
+  handleOriginalError,
 } = useImageItemLoader({
   image: imageRef,
   gridColumns: gridColumnsRef,
@@ -148,7 +169,7 @@ const handleTouchStart = (event: TouchEvent) => {
   touchStartPos = { x: touch.clientX, y: touch.clientY };
   touchMoved = false;
   longPressFired = false;
-  
+
   longPressTimer = setTimeout(() => {
     if (!touchMoved && !longPressFired) {
       longPressFired = true;
@@ -315,6 +336,21 @@ const handleAnimationEnd = (event: AnimationEvent) => {
 
     &.thumbnail-loading {
       animation: fadeInImage 0.4s ease-in;
+    }
+
+    // 桌面双图：底层缩略图
+    &.thumbnail-layer {
+      z-index: 1;
+    }
+
+    // 桌面双图：顶层原图，加载完成后淡入
+    &.original-layer {
+      z-index: 2;
+      opacity: 0;
+      transition: opacity 0.35s ease-in;
+      &.original-layer-visible {
+        opacity: 1;
+      }
     }
 
     // Android 下使用 contain 模式，完整展示图片

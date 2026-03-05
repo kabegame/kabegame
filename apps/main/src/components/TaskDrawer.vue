@@ -1,9 +1,6 @@
 <template>
   <!-- Android：自研全宽抽屉，支持划入动画与拖拽滑出、背景透明度随拖拽变化 -->
-  <AndroidDrawer
-    v-if="IS_ANDROID"
-    v-model="visible"
-    @open="handleDrawerOpen">
+  <AndroidDrawer v-if="IS_ANDROID" v-model="visible">
     <template #header>
       <h3 class="task-drawer-android-title">任务列表</h3>
     </template>
@@ -12,8 +9,8 @@
       @cancel-task="handleCancelTaskById" @confirm-task-dump="handleConfirmTaskDumpById"
       @task-contextmenu="openTaskContextMenu" />
   </AndroidDrawer>
-  <el-drawer v-else v-model="visible" title="任务列表" :size="drawerSize" direction="rtl" :with-header="true" :append-to-body="true"
-    :modal-class="'task-drawer-modal'" class="task-drawer drawer-max-width" @open="handleDrawerOpen">
+  <el-drawer v-else v-model="visible" title="任务列表" :size="drawerSize" direction="rtl" :with-header="true"
+    :append-to-body="true" :modal-class="'task-drawer-modal'" class="task-drawer drawer-max-width">
     <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
       @cancel-task="handleCancelTaskById" @confirm-task-dump="handleConfirmTaskDumpById"
@@ -179,11 +176,6 @@ const handleGlobalClick = () => {
   }
 };
 
-const handleDrawerOpen = async () => {
-  // 预加载任务详情页代码块，避免首次跳转卡在懒加载上
-  prefetchTaskDetailView();
-};
-
 onMounted(async () => {
   window.addEventListener("click", handleGlobalClick);
 
@@ -256,20 +248,10 @@ const handleDeleteTaskById = async (taskId: string) => {
 const handleOpenTaskImagesById = (taskId: string) => {
   const task = props.tasks.find((t) => t.id === taskId);
   if (!task) return;
-  // 预加载 + 先触发导航，再在下一帧关闭 drawer（避免关闭时的大量 DOM 更新抢占首跳转）
-  prefetchTaskDetailView();
   void router.push(`/tasks/${task.id}`);
   requestAnimationFrame(() => {
     visible.value = false;
   });
-};
-
-// 预加载 TaskDetail 路由的代码块（第一次进入会明显变快）
-let taskDetailPrefetchPromise: Promise<unknown> | null = null;
-const prefetchTaskDetailView = () => {
-  if (!taskDetailPrefetchPromise) {
-    taskDetailPrefetchPromise = import("@/views/TaskDetail.vue");
-  }
 };
 
 const handleDeleteAllTasks = async () => {
