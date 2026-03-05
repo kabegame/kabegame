@@ -106,11 +106,11 @@ pub async fn set_supported_image_formats(formats: Vec<String>) -> Result<(), Str
 pub async fn get_linux_desktop_env() -> Result<String, String> {
     #[cfg(target_os = "linux")]
     {
-        let desktop = crate::desktop_env::linux_desktop();
+        let desktop = crate::linux_desktop::linux_desktop();
         let value = match desktop {
-            crate::desktop_env::LinuxDesktop::Plasma => "plasma",
-            crate::desktop_env::LinuxDesktop::Gnome => "gnome",
-            crate::desktop_env::LinuxDesktop::Unknown => "unknown",
+            crate::linux_desktop::LinuxDesktop::Plasma => "plasma",
+            crate::linux_desktop::LinuxDesktop::Gnome => "gnome",
+            crate::linux_desktop::LinuxDesktop::Unknown => "unknown",
         };
         return Ok(value.to_string());
     }

@@ -38,7 +38,7 @@
     ],
     "security": {
       "capabilities": ["main-capability"],
-      "csp": "default-src 'self' ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src 'self' asset: http://asset.localhost data: blob: http://127.0.0.1:*; media-src 'self' asset: http://asset.localhost data: blob: http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}} http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
+      "csp": "default-src 'self' ipc: http://ipc.localhost{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}}; img-src 'self' asset: http://asset.localhost http://kbg-content.localhost data: blob: http://127.0.0.1:*; media-src 'self' asset: http://asset.localhost http://kbg-content.localhost data: blob: http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost ws: wss:{{#if isAndroid}} http://{{devServerHost}}:1420 http://10.0.2.2:1420 http://localhost:1420{{/if}} http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]

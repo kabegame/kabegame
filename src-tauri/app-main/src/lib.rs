@@ -1,6 +1,7 @@
 mod commands;
 mod startup;
-mod desktop_env;
+#[cfg(target_os = "linux")]
+mod linux_desktop;
 #[cfg(not(target_os = "android"))]
 mod file_server;
 #[cfg(target_os = "android")]
@@ -152,19 +153,6 @@ fn init_globals() -> Result<(), String> {
     Ok(())
 }
 
-/// 注册 Android 壁纸插件
-#[cfg(target_os = "android")]
-fn init_wallpaper_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    use tauri::plugin::{Builder, TauriPlugin};
-
-    Builder::new("wallpaper")
-        .setup(|_app, api| {
-            let _handle = api.register_android_plugin("app.kabegame.plugin", "WallpaperPlugin")?;
-            Ok(())
-        })
-        .build()
-}
-
 /// Tauri 应用入口（桌面 binary 与 Android 共用）
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -181,7 +169,7 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_picker::init());
         builder = builder.plugin(tauri_plugin_archiver::init());
         builder = builder.plugin(tauri_plugin_share::init());
-        builder = builder.plugin(init_wallpaper_plugin());
+        builder = builder.plugin(tauri_plugin_wallpaper::init());
     }
 
     #[cfg(not(target_os = "android"))]
@@ -201,7 +189,7 @@ pub fn run() {
                     // 在初始化全局状态后、初始化壁纸控制器前，检测并缓存 Linux 桌面环境
                     #[cfg(target_os = "linux")]
                     {
-                        crate::desktop_env::init_linux_desktop();
+                        crate::linux_desktop::init_linux_desktop();
                     }
 
                     // 公共步骤

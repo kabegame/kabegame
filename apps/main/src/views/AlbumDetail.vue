@@ -83,7 +83,7 @@
     </ImageGrid>
 
     <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-      :message="removeDialogMessage" title="从画册移除" checkbox-label="同时删除图片（慎用）"
+      :message="removeDialogMessage" title="从画册移除" checkbox-label="同时删除图片（慎用）" :hide-checkbox="IS_ANDROID"
       danger-text="警告：将永久删除电脑文件，并从所有画册和画廊中移除，不可恢复！" safe-text="不勾选仅从当前画册移除，图片文件和其他画册中的记录将保留。"
       @confirm="confirmRemoveImages" />
 

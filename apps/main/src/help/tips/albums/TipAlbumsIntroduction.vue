@@ -48,7 +48,7 @@
             <p>在画册详情页中，选择图片后右键菜单选择“从画册移除”，可以：</p>
             <ul>
                 <li><strong>仅从画册移除</strong>：只移除画册中的记录，图片文件和其他画册中的记录都保留（推荐）</li>
-                <li><strong>同时删除图片</strong>：从画册移除，并永久删除电脑上的图片文件（<strong>慎用，不可恢复</strong>）</li>
+                <li><strong>同时删除图片(仅桌面可用)</strong>：从画册移除，并永久删除电脑上的图片文件（<strong>慎用，不可恢复</strong>）</li>
             </ul>
             <el-alert class="note" type="warning" show-icon :closable="false">
                 如果选择“同时删除图片”，该操作不可恢复，请谨慎使用。建议先选择“仅从画册移除”测试效果。

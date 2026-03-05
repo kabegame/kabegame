@@ -1,5 +1,9 @@
+#![cfg(target_os = "linux")]
+
 use std::env;
 use std::sync::OnceLock;
+
+
 
 /// 运行时检测到的 Linux 桌面环境
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9,7 +13,6 @@ pub enum LinuxDesktop {
     Unknown,
 }
 
-#[cfg(target_os = "linux")]
 static LINUX_DESKTOP: OnceLock<LinuxDesktop> = OnceLock::new();
 
 /// 启动时调用一次，检测并写入缓存
@@ -32,6 +35,7 @@ pub fn init_linux_desktop() -> LinuxDesktop {
 }
 
 /// 业务代码读取缓存结果；若尚未初始化，则返回 Unknown
+#[cfg(target_os = "linux")]
 pub fn linux_desktop() -> LinuxDesktop {
     #[cfg(target_os = "linux")]
     {
@@ -46,7 +50,6 @@ pub fn linux_desktop() -> LinuxDesktop {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn detect_linux_desktop() -> LinuxDesktop {
     // 1. 优先通过环境变量判定
     if let Some(from_env) = detect_from_env() {
@@ -65,7 +68,6 @@ fn detect_linux_desktop() -> LinuxDesktop {
     LinuxDesktop::Unknown
 }
 
-#[cfg(target_os = "linux")]
 fn detect_from_env() -> Option<LinuxDesktop> {
     fn env_lower(name: &str) -> Option<String> {
         env::var(name).ok().map(|v| v.to_lowercase())
@@ -123,7 +125,6 @@ fn detect_gnome_capability() -> bool {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn detect_plasma_capability() -> bool {
     use std::process::{Command, Stdio};
 

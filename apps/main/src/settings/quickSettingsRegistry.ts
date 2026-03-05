@@ -1,6 +1,6 @@
 import type { QuickSettingsPageId } from "@/stores/quickSettingsDrawer";
 import type { QuickSettingGroup, QuickSettingItem } from "@kabegame/core/components/settings/quick-settings-registry-types";
-import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
+import { IS_ANDROID, IS_LINUX, IS_WINDOWS } from "@kabegame/core/env";
 
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
@@ -149,29 +149,29 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         },
         pages: ["gallery", "albumdetail", "albums"],
       },
-      {
+      ...(IS_WINDOWS || IS_LINUX ? [{
         key: "wallpaperStyle",
         label: "壁纸显示方式",
         description:
           "原生模式：根据系统支持显示可用样式；窗口模式：支持所有显示方式",
         comp: WallpaperStyleSetting,
         pages: ["gallery", "albumdetail", "albums"],
-      },
-      {
+      } as QuickSettingItem<QuickSettingsPageId>] : []),
+      ...(IS_WINDOWS ? [{
         key: "wallpaperRotationTransition",
         label: "过渡效果",
         description: "仅轮播支持过渡预览；原生模式下仅支持无过渡和淡入淡出",
         comp: WallpaperTransitionSetting,
         pages: ["gallery", "albumdetail", "albums"],
-      },
-      {
+      } as QuickSettingItem<QuickSettingsPageId>] : []),
+      ...(IS_WINDOWS ? [{
         key: "wallpaperMode",
         label: "壁纸模式",
         description:
           "原生模式性能更好；窗口模式更灵活（类似 Wallpaper Engine）",
         comp: WallpaperModeSetting,
         pages: ["gallery", "albumdetail", "albums"],
-      },
+      } as QuickSettingItem<QuickSettingsPageId>] : []),
       ...(IS_WINDOWS ? [{
         key: "wallpaperEngineDir",
         label: "Wallpaper Engine 目录",

@@ -145,7 +145,7 @@ const props = withDefaults(defineProps<Props>(), {
   scrollStableDelay: 180,
   enableScrollStableEmit: true,
   enableVirtualScroll: true,
-  virtualOverscan: 20,
+  virtualOverscan: 2,
 });
 
 const emit = defineEmits<{

@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- 读取媒体文件权限，没有这个权限就不能扫图片 -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -12,19 +11,6 @@
         android:theme="@style/Theme.kabegame"
         android:requestLegacyExternalStorage="true"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
-
-        <!-- 壁纸服务 -->
-        <service
-            android:name=".service.KabegameWallpaperService"
-            android:permission="android.permission.BIND_WALLPAPER"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.service.wallpaper.WallpaperService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.service.wallpaper"
-                android:resource="@xml/wallpaper" />
-        </service>
 
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"

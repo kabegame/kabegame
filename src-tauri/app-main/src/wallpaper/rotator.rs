@@ -544,9 +544,33 @@ impl WallpaperRotator {
                 // no-op：逻辑已由上面的对齐处理覆盖
             }
 
-            self.running.store(true, Ordering::Relaxed);
-            self.spawn_task();
-            Ok(())
+            #[cfg(target_os = "android")]
+            {
+                use tauri_plugin_wallpaper::WallpaperExt;
+
+                let interval = settings
+                    .get_wallpaper_rotation_interval_minutes()
+                    .await
+                    .unwrap_or(15)
+                    .max(15) as u32;
+
+                self.app
+                    .wallpaper()
+                    .schedule_rotation(interval)
+                    .await
+                    .map_err(|e| format!("WorkManager schedule failed: {}", e))?;
+
+                self.running.store(true, Ordering::Relaxed);
+                self.state.store(STATE_RUNNING, Ordering::Release);
+                return Ok(());
+            }
+
+            #[cfg(not(target_os = "android"))]
+            {
+                self.running.store(true, Ordering::Relaxed);
+                self.spawn_task();
+                Ok(())
+            }
         }
         .await;
 
@@ -720,11 +744,40 @@ impl WallpaperRotator {
         self.control_flags.fetch_or(FLAG_RESET, Ordering::Relaxed);
         self.notify.notify_one();
 
+        #[cfg(target_os = "android")]
+        {
+            let app = self.app.clone();
+            tauri::async_runtime::spawn(async move {
+                use tauri_plugin_wallpaper::WallpaperExt;
+                let _ = app.wallpaper().cancel_rotation().await;
+            });
+            self.state.store(STATE_IDLE, Ordering::Release);
+            return;
+        }
+
         // 注意：这里不等待线程退出，线程会在检查到 STATE_STOPPING 后自行退出并设置为 STATE_IDLE
     }
 
     /// 重置定时器，使其从当前时间重新开始计算间隔
     pub fn reset(&self) {
+        #[cfg(target_os = "android")]
+        {
+            let app = self.app.clone();
+            tauri::async_runtime::spawn(async move {
+                use tauri_plugin_wallpaper::WallpaperExt;
+                if let Ok(interval) = Settings::global()
+                    .get_wallpaper_rotation_interval_minutes()
+                    .await
+                {
+                    let _ = app
+                        .wallpaper()
+                        .schedule_rotation(interval.max(15) as u32)
+                        .await;
+                }
+            });
+            return;
+        }
+
         self.control_flags.fetch_or(FLAG_RESET, Ordering::Relaxed);
         self.notify.notify_one();
     }

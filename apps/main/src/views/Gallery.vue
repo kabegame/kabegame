@@ -61,9 +61,9 @@
       </template>
     </el-dialog>
 
-    <!-- 移除/删除确认对话框（抽成组件复用） -->
+    <!-- 移除/删除确认对话框 -->
     <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-      :message="removeDialogMessage" title="确认删除" @confirm="confirmRemoveImages" />
+      :message="removeDialogMessage" title="确认删除" :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
 
     <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
 

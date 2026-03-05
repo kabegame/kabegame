@@ -82,7 +82,7 @@
         <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
 
         <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-            :message="removeDialogMessage" title="确认删除" @confirm="confirmRemoveImages" />
+            :message="removeDialogMessage" title="确认删除" :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
     </div>
 </template>
 

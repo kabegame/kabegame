@@ -59,7 +59,7 @@
 | Linux (Plasma) | [deb包](release/Kabegame-normal_plasma_3.0.3_amd64.deb)  | [deb包](release/Kabegame-local_plasma_3.0.3_amd64.deb)  | [deb包](release/Kabegame-light_plasma_3.0.3_amd64.deb) |
 | Linux (GNOME) | [deb包](release/Kabegame-normal_gnome_3.0.3_amd64.deb) | [deb包](release/Kabegame-local_gnome_3.0.3_amd64.deb) | [deb包](release/Kabegame-light_gnome_3.0.3_amd64.deb) |
 
-**Android 版 Kabegame** (开发中) 将不分模式，只有light模式+商店（内置全量插件+商店源）。**最低要求 Android 8.0+（API 26+）**。 
+- **安卓预览版**（仅支持 Light 模式）：[kabegame_3.0.4_android-preview.apk](release/kabegame_3.0.4_android-preview.apk) 
 
 ## 安装方法
 

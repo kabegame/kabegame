@@ -1,5 +1,15 @@
 <template>
+  <AndroidPickerSelect
+    v-if="IS_ANDROID"
+    :model-value="valueForSelect ?? null"
+    :options="normalizedOptions"
+    :title="placeholder || '请选择'"
+    :placeholder="placeholder"
+    :clearable="allowUnset"
+    @update:model-value="$emit('update:modelValue', $event ?? undefined)"
+  />
   <el-select
+    v-else
     :model-value="valueForSelect"
     :placeholder="placeholder"
     :clearable="allowUnset"
@@ -12,6 +22,8 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { IS_ANDROID } from "../../../env";
+import AndroidPickerSelect from "../../AndroidPickerSelect.vue";
 
 type VarOption = string | { name: string; variable: string };
 

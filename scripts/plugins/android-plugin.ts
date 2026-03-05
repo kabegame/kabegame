@@ -1,6 +1,7 @@
 import { BasePlugin } from "./base-plugin";
 import { BuildSystem } from "../build-system";
 import { Component } from "./component-plugin";
+import { OSPlugin } from "./os-plugin";
 
 /**
  * 解析 --android，在 dev/build -c main 时使用 Tauri Android 目标。
@@ -26,6 +27,7 @@ export class AndroidPlugin extends BasePlugin {
         throw new Error("--android 仅支持 dev 与 build 命令");
       }
       bs.context.isAndroid = isAndroid;
+      OSPlugin.isAndroid = isAndroid;
     });
 
     bs.hooks.prepareEnv.tap(this.name, () => {

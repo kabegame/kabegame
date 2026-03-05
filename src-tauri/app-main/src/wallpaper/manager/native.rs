@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
 use tauri::AppHandle;
+#[cfg(target_os = "android")]
+use tauri_plugin_wallpaper::WallpaperExt;
 
 /// 原生壁纸管理器（使用系统原生 API）
 pub struct NativeWallpaperManager {
@@ -533,7 +535,7 @@ impl WallpaperManager for NativeWallpaperManager {
     // Linux：根据运行时桌面环境选择实现，失败回退
     #[cfg(target_os = "linux")]
     async fn get_style(&self) -> Result<String, String> {
-        use crate::desktop_env::{linux_desktop, LinuxDesktop};
+        use crate::linux_desktop::{linux_desktop, LinuxDesktop};
 
         let desktop = linux_desktop();
         match desktop {
@@ -626,7 +628,9 @@ impl WallpaperManager for NativeWallpaperManager {
         println!("[DEBUG] file_path: {}", file_path);
         println!("[DEBUG] immediate: {}", immediate);
 
+        // Android 上为 content:// URI，不能按文件路径检查存在
         let path = Path::new(file_path);
+        #[cfg(not(target_os = "android"))]
         if !path.exists() {
             return Err("File does not exist".to_string());
         }
@@ -780,7 +784,7 @@ impl WallpaperManager for NativeWallpaperManager {
         // 非 Windows 平台使用系统命令设置壁纸
         #[cfg(target_os = "linux")]
         {
-            use crate::desktop_env::{linux_desktop, LinuxDesktop};
+            use crate::linux_desktop::{linux_desktop, LinuxDesktop};
 
             let _ = immediate;
             let style = Settings::global()
@@ -843,7 +847,29 @@ impl WallpaperManager for NativeWallpaperManager {
             return self.set_wallpaper_macos(file_path);
         }
 
-        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+        #[cfg(target_os = "android")]
+        {
+            let _ = immediate;
+            let style = Settings::global()
+                .get_wallpaper_rotation_style()
+                .await
+                .unwrap_or_else(|_| "fill".to_string());
+            // Android 无 "system" 样式，用 fill 作为兜底
+            let style = if style == "system" { "fill" } else { style.as_str() };
+            self._app
+                .wallpaper()
+                .set_wallpaper(file_path, style)
+                .await
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "android"
+        )))]
         {
             let _ = immediate;
             return Err("当前平台不支持原生壁纸设置（NativeWallpaperManager）".to_string());
@@ -930,7 +956,7 @@ impl WallpaperManager for NativeWallpaperManager {
             return Ok(());
         }
 
-        use crate::desktop_env::{linux_desktop, LinuxDesktop};
+        use crate::linux_desktop::{linux_desktop, LinuxDesktop};
 
         let _ = immediate;
         let desktop = linux_desktop();

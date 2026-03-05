@@ -20,11 +20,13 @@ import TipTaskViewing from "@/help/tips/tasks/TipTaskViewing.vue";
 import TipTaskManagement from "@/help/tips/tasks/TipTaskManagement.vue";
 import TipTaskIntroduction from "@/help/tips/tasks/TipTaskIntroduction.vue";
 
-import { IS_LIGHT_MODE } from "@kabegame/core/env";
+import { IS_ANDROID, IS_LIGHT_MODE } from "@kabegame/core/env";
 
-const lightModeTags = IS_LIGHT_MODE
-  ? [{ text: "Light 模式不可用", type: "danger" as const }]
-  : [];
+const lightModeTags = IS_ANDROID 
+  ? [{ text: "安卓无", type: "danger" as const }] 
+  : IS_LIGHT_MODE
+    ? [{ text: "Light 模式不可用", type: "danger" as const }]
+    : [];
 
 export type TipCategoryId =
   | "gallery"
@@ -101,7 +103,7 @@ export const TIP_CATEGORIES: TipCategory[] = [
         id: "import-drag-drop",
         title: "拖入本地文件快速导入",
         summary:
-          "把图片/文件夹/压缩包直接拖到窗口里，一键导入到画廊（可选同时创建画册）。",
+          "拖入窗口或画廊右上角「开始收集」→ 本地，将图片/文件夹导入到画廊（可选同时创建画册）。桌面支持拖入与选择文件，安卓通过媒体选择器导入。",
         component: TipImportDragDrop,
       },
       {
@@ -153,7 +155,7 @@ export const TIP_CATEGORIES: TipCategory[] = [
       },
       {
         id: "wallpaper-mode",
-        title: "原生模式 vs 窗口模式",
+        title: "原生模式 vs 窗口模式（Windows 可用）",
         summary: "两种壁纸显示模式的区别：原生模式性能好，窗口模式功能更丰富。",
         component: TipWallpaperMode,
       },

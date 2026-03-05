@@ -1,6 +1,21 @@
 <template>
-  <el-select v-model="localValue" placeholder="请选择显示方式" style="min-width: 180px"
-    :disabled="props.disabled || disabled || wallpaperModeSwitching" @change="handleChange">
+  <AndroidPickerSelect
+    v-if="IS_ANDROID"
+    :model-value="localValue"
+    :options="pickerOptions"
+    title="壁纸显示方式"
+    placeholder="请选择显示方式"
+    :disabled="props.disabled || disabled || wallpaperModeSwitching"
+    @update:model-value="onPickerChange"
+  />
+  <el-select
+    v-else
+    v-model="localValue"
+    placeholder="请选择显示方式"
+    style="min-width: 180px"
+    :disabled="props.disabled || disabled || wallpaperModeSwitching"
+    @change="handleChange"
+  >
     <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value">
       <span>{{ opt.desc }}</span>
     </el-option>
@@ -13,6 +28,7 @@ import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyStat
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_PLASMA, IS_WINDOWS } from "@kabegame/core/env";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 
 const props = defineProps<{
   disabled?: boolean;
@@ -61,6 +77,10 @@ const options = computed(() => {
   return [SYSTEM_OPT, ...list];
 });
 
+const pickerOptions = computed(() =>
+  options.value.map((o) => ({ label: o.label, value: o.value }))
+);
+
 const localValue = ref<string>("system");
 watch(
   () => settingValue.value,
@@ -77,5 +97,9 @@ const handleChange = async (style: string) => {
   };
 
   await set(style, onAfterSave);
+};
+
+const onPickerChange = async (v: string | null) => {
+  await handleChange(v ?? "system");
 };
 </script>
