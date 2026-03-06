@@ -88,9 +88,16 @@ interface Props {
     visible: boolean;
     position: { x: number; y: number };
     items?: MenuItem[]; // 可选的菜单项列表，如果提供则渲染 items，否则使用 slot
+    /** z-index for overlay and menu. Default 9999. */
+    zIndex?: number;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), {
+    zIndex: 9999,
+});
+
+/** Exposed for style v-bind (overlay z-index). */
+const zIndex = computed(() => props.zIndex);
 
 /** Resolve icon for <component :is>; avoid reactive proxy when items come from reactive props. */
 function getIcon(item: MenuItem): Component | undefined {
@@ -121,7 +128,7 @@ const menuStyle = computed<CSSProperties>(() => ({
     position: "fixed",
     left: `${adjustedPosition.value.x}px`,
     top: `${adjustedPosition.value.y}px`,
-    zIndex: 9999,
+    zIndex: props.zIndex,
 }));
 
 const calculateMenuPosition = (

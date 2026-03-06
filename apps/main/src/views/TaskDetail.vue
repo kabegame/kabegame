@@ -18,6 +18,7 @@
                   @refresh="handleRefresh"
                   @stop-task="handleStopTask"
                   @delete-task="handleDeleteTask"
+                  @add-to-album="handleHeaderAddToAlbum"
                   @help="openHelpDrawer"
                   @quick-settings="openQuickSettings"
                   @back="goBack"
@@ -28,7 +29,8 @@
             </template>
         </ImageGrid>
 
-        <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
+        <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds"
+            :task-id="addToAlbumTaskId" @added="handleAddedToAlbum" />
 
         <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
             :message="removeDialogMessage" title="确认删除" :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
@@ -160,7 +162,7 @@ const imageActions = computed(() => createImageActions({
     multiHide: ["favorite", "addToAlbum"]
 }));
 
-const { load: loadImageTypes, getMimeType } = useImageTypes();
+const { load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
 const { handleCopyImage } = useImageOperations(
     images,
     currentWallpaperImageId,
@@ -533,11 +535,20 @@ const clearSelection = () => {
     taskViewRef.value?.clearSelection?.();
 };
 
-// 加入画册对话框
+// 加入画册对话框（右键菜单用 imageIds，header 一键加入用 taskId）
 const showAddToAlbumDialog = ref(false);
 const addToAlbumImageIds = ref<string[]>([]);
+const addToAlbumTaskId = ref<string | undefined>(undefined);
 const handleAddedToAlbum = () => {
     clearSelection();
+    addToAlbumTaskId.value = undefined;
+};
+
+// 一键加入画册（header 按钮）：只弹选择画册，由后端把该任务全部图片加入
+const handleHeaderAddToAlbum = () => {
+    addToAlbumTaskId.value = taskId.value;
+    addToAlbumImageIds.value = [];
+    showAddToAlbumDialog.value = true;
 };
 
 // 切换收藏（仅更新本页 images + 收藏画册缓存/计数；不触碰 Gallery 的 crawlerStore.images）
@@ -725,6 +736,7 @@ const handleImageMenuCommand = async (
             break;
         case "addToAlbum":
             if (imagesToProcess.length === 0) return null;
+            addToAlbumTaskId.value = undefined;
             addToAlbumImageIds.value = imagesToProcess.map((img) => img.id);
             showAddToAlbumDialog.value = true;
             break;
@@ -745,7 +757,7 @@ const handleImageMenuCommand = async (
                     
                     const ext = filePath.split('.').pop()?.toLowerCase() || '';
                     await loadImageTypes();
-                    const mimeType = getMimeType(ext);
+                    const mimeType = getMimeTypeForImage(image, ext);
                     await invoke("share_file", { filePath, mimeType });
                 } catch (error) {
                     console.error("分享失败:", error);

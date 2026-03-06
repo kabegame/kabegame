@@ -44,11 +44,6 @@ pub async fn get_active_downloads() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn confirm_task_rhai_dump(task_id: String) -> Result<(), String> {
-    Storage::global().confirm_task_rhai_dump(&task_id)
-}
-
-#[tauri::command]
 pub async fn clear_finished_tasks() -> Result<usize, String> {
     Storage::global().clear_finished_tasks()
 }
@@ -150,9 +145,6 @@ pub async fn start_task(task: serde_json::Value) -> Result<(), String> {
                 start_time: Some(now_ms),
                 end_time: None,
                 error: None,
-                rhai_dump_present: false,
-                rhai_dump_confirmed: false,
-                rhai_dump_created_at: None,
             };
             let _ = Storage::global().add_task(t);
         }

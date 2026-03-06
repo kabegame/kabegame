@@ -3,7 +3,7 @@
     <!-- 空闲：显示整理按钮 -->
     <el-button v-if="!loading" circle title="整理" @click="showDialog = true">
       <el-icon>
-        <Filter />
+        <FolderOpened />
       </el-icon>
     </el-button>
     <!-- 进行中：进度 + 取消 -->
@@ -19,13 +19,15 @@
       </el-button>
     </div>
 
-    <OrganizeDialog v-model="showDialog" :loading="loading" @confirm="handleConfirm" />
+    <Teleport to="body">
+      <OrganizeDialog v-model="showDialog" :loading="loading" @confirm="handleConfirm" />
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
-import { Filter } from "@element-plus/icons-vue";
+import { FolderOpened } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";

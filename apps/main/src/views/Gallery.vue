@@ -2,16 +2,17 @@
   <div class="gallery-page">
     <div class="gallery-container" v-pull-to-refresh="pullToRefreshOpts">
       <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
-        :enable-ctrl-key-adjust-columns="!IS_ANDROID" :enable-virtual-scroll="!IS_WINDOWS && !IS_ANDROID"
+        hide-scrollbar :enable-ctrl-key-adjust-columns="!IS_ANDROID" :enable-virtual-scroll="!IS_WINDOWS && !IS_ANDROID"
         :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
         :on-context-command="handleGridContextCommand">
         <template #before-grid>
           <!-- 顶部工具栏 -->
-          <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled" :current-position="currentPosition"
-            :month-options="monthOptions" :month-loading="monthOptionsLoading" v-model:selectedRange="selectedRange"
-            @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
-            @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
-            @open-collect-menu="showCollectSourcePicker = true" />
+          <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
+            :current-position="currentPosition" :month-options="monthOptions" :month-loading="monthOptionsLoading"
+            :provider-root-path="providerRootPath"
+            v-model:selectedRange="selectedRange" @refresh="handleManualRefresh" @show-help="openHelpDrawer"
+            @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="handleShowCrawlerDialog"
+            @show-local-import="showLocalImportDialog = true" @open-collect-menu="showCollectSourcePicker = true" />
 
           <!-- 大页分页器 -->
           <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentBigPageOffset"
@@ -141,7 +142,7 @@ const pluginStore = usePluginStore();
 const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
 const selectionStore = useSelectionStore();
-const { extensions: imageExtensions, load: loadImageTypes, getMimeType } = useImageTypes();
+const { extensions: imageExtensions, load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
 // leaf 分页：安卓与桌面统一每页 100 张，无虚拟滚动
@@ -915,7 +916,7 @@ const handleGridContextCommand = async (
 
           const ext = filePath.split('.').pop()?.toLowerCase() || '';
           await loadImageTypes();
-          const mimeType = getMimeType(ext);
+          const mimeType = getMimeTypeForImage(image, ext);
           await invoke("share_file", { filePath, mimeType });
         } catch (error) {
           console.error("分享失败:", error);

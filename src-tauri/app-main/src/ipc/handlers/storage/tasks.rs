@@ -1,4 +1,4 @@
-﻿//! Tasks 表相关操作
+//! Tasks 表相关操作
 
 use kabegame_core::ipc::ipc::CliIpcResponse;
 use kabegame_core::storage::Storage;
@@ -104,14 +104,6 @@ pub async fn get_task_failed_images(task_id: &str) -> CliIpcResponse {
         Ok(images) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(images).unwrap_or_default())
         }
-        Err(e) => CliIpcResponse::err(e),
-    }
-}
-
-pub async fn confirm_task_rhai_dump(task_id: &str) -> CliIpcResponse {
-    let storage = Storage::global();
-    match storage.confirm_task_rhai_dump(task_id) {
-        Ok(()) => CliIpcResponse::ok("ok"),
         Err(e) => CliIpcResponse::err(e),
     }
 }

@@ -3,7 +3,8 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "android")]
@@ -33,6 +34,9 @@ pub struct ImageInfo {
     pub local_exists: bool,
     #[serde(default)]
     pub hash: String,
+    #[serde(rename = "mimeType")]
+    #[serde(default)]
+    pub mime_type: Option<String>,
     #[serde(default)]
     pub width: Option<u32>,
     #[serde(default)]
@@ -89,6 +93,7 @@ impl Storage {
             "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
+             images.mime_type,
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
              images.width,
              images.height,
@@ -118,11 +123,12 @@ impl Storage {
                         .and_then(|s| serde_json::from_str(&s).ok()),
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
-                    favorite: row.get::<_, i64>(9)? != 0,
+                    mime_type: row.get::<_, Option<String>>(9)?,
+                    favorite: row.get::<_, i64>(10)? != 0,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    display_name: row.get(12)?,
+                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    display_name: row.get(13)?,
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
@@ -168,6 +174,7 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
+                 images.mime_type,
                  images.width,
                  images.height,
                  images.display_name
@@ -189,11 +196,12 @@ impl Storage {
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
+                        mime_type: row.get::<_, Option<String>>(9)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(9)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        display_name: row.get(11)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
                     })
                 },
             )
@@ -222,6 +230,7 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
+                 images.mime_type,
                  images.width,
                  images.height,
                  images.display_name
@@ -242,15 +251,109 @@ impl Storage {
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
+                        mime_type: row.get::<_, Option<String>>(9)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(9)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        display_name: row.get(11)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
                     })
                 },
             )
             .ok();
+
+        if let Some(ref mut image_info) = result {
+            let image_id = image_info.id.clone();
+            let is_favorite = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM album_images WHERE album_id = ?1 AND image_id = ?2",
+                    params![FAVORITE_ALBUM_ID, image_id],
+                    |row| Ok(row.get::<_, i64>(0)? != 0),
+                )
+                .unwrap_or(false);
+            image_info.favorite = is_favorite;
+        }
+
+        Ok(result)
+    }
+
+    /// 按缩略图路径查找：path 可为 thumbnail_path 或（当 thumbnail_path 为空时）local_path。
+    /// 查询时规范化路径（统一斜杠），与写入时 canonicalize 后的形式兼容。
+    pub fn find_image_by_thumbnail_path(&self, path: &str) -> Result<Option<ImageInfo>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let path_norm = path.trim().replace('/', std::path::MAIN_SEPARATOR_STR);
+
+        let mut result = conn
+            .query_row(
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
+                 images.hash,
+                 images.mime_type,
+                 images.width,
+                 images.height,
+                 images.display_name
+                 FROM images
+                 WHERE REPLACE(TRIM(COALESCE(images.thumbnail_path, '')), '/', ?2) = ?1
+                    OR (TRIM(COALESCE(images.thumbnail_path, '')) = '' AND REPLACE(TRIM(images.local_path), '/', ?2) = ?1)",
+                params![path_norm, std::path::MAIN_SEPARATOR_STR],
+                |row| {
+                    let local_path: String = row.get(2)?;
+                    let local_exists = PathBuf::from(&local_path).exists();
+                    Ok(ImageInfo {
+                        id: row.get(0)?,
+                        url: row.get::<_, Option<String>>(1)?,
+                        local_path,
+                        plugin_id: row.get(3)?,
+                        task_id: row.get(4)?,
+                        crawled_at: row.get(5)?,
+                        metadata: row.get::<_, Option<String>>(6)?
+                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        thumbnail_path: row.get(7)?,
+                        hash: row.get(8)?,
+                        mime_type: row.get::<_, Option<String>>(9)?,
+                        favorite: false,
+                        local_exists,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
+                    })
+                },
+            )
+            .ok();
+
+        // #region agent log
+        if result.is_none() {
+            let sample: Option<String> = conn
+                .query_row(
+                    "SELECT thumbnail_path FROM images WHERE thumbnail_path != '' AND thumbnail_path IS NOT NULL LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .ok();
+            let sample_len: Option<usize> = sample.as_ref().map(|s| s.len());
+            let path_esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ").replace('\r', " ");
+            let data_part = match &sample {
+                Some(s) => format!(
+                    r#""query_path":"{}","sample_thumbnail_path":"{}","sample_len":{}"#,
+                    path_esc(path),
+                    path_esc(s),
+                    sample_len.unwrap_or(0)
+                ),
+                None => format!(r#""query_path":"{}","sample_thumbnail_path":"(none)""#, path_esc(path)),
+            };
+            let line = format!(
+                r#"{{"sessionId":"3057c8","location":"images.rs:find_image_by_thumbnail_path","message":"find None, DB sample","data":{{{}}},"timestamp":{},"hypothesisId":"E"}}"#,
+                data_part,
+                SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+            );
+            let log_path = std::env::temp_dir().join("debug-3057c8.log");
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, (line + "\n").as_bytes()));
+        }
+        // #endregion
 
         if let Some(ref mut image_info) = result {
             let image_id = image_info.id.clone();
@@ -275,6 +378,7 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
+                 images.mime_type,
                  images.width,
                  images.height,
                  images.display_name
@@ -295,11 +399,12 @@ impl Storage {
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
+                        mime_type: row.get::<_, Option<String>>(9)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(9)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        display_name: row.get(11)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
                     })
                 },
             )
@@ -331,6 +436,7 @@ impl Storage {
                 "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
+                 images.mime_type,
                  images.width,
                  images.height,
                  images.display_name
@@ -351,11 +457,12 @@ impl Storage {
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
+                        mime_type: row.get::<_, Option<String>>(9)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(9)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        display_name: row.get(11)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
                     })
                 },
             )
@@ -398,8 +505,8 @@ impl Storage {
 
         let crawled_at_i64 = image.crawled_at as i64;
         conn.execute(
-            "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, width, height, display_name)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, mime_type, width, height, display_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 &image.url,
                 image.local_path,
@@ -409,6 +516,7 @@ impl Storage {
                 metadata_json,
                 thumbnail_path,
                 image.hash,
+                image.mime_type,
                 image.width.map(|v| v as i64),
                 image.height.map(|v| v as i64),
                 image.display_name,
@@ -475,6 +583,50 @@ impl Storage {
             println!("Filled dimensions for {} images ({} failed)", updated_count, failed_count);
         }
 
+        Ok(())
+    }
+
+    /// 批量回填缺失的 MIME 类型（启动时调用）。
+    /// 仅针对本地文件路径；content:// 等非文件路径跳过。
+    pub fn backfill_missing_mime_types(&self) -> Result<(), String> {
+        let to_fill: Vec<(i64, String)> = {
+            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, local_path FROM images
+                     WHERE mime_type IS NULL
+                       AND local_path IS NOT NULL
+                       AND TRIM(local_path) != ''",
+                )
+                .map_err(|e| format!("Failed to prepare query: {}", e))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| format!("Failed to query images: {}", e))?;
+            rows.filter_map(Result::ok).collect()
+        };
+
+        let mut updated_count = 0usize;
+        for (id, local_path) in to_fill {
+            if local_path.starts_with("content://") {
+                continue;
+            }
+            let Some(mime) = crate::image_type::mime_type_from_path(Path::new(&local_path)) else {
+                continue;
+            };
+            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            conn.execute(
+                "UPDATE images SET mime_type = ?1 WHERE id = ?2",
+                params![mime, id],
+            )
+            .map_err(|e| format!("Failed to update mime_type: {}", e))?;
+            updated_count += 1;
+        }
+
+        if updated_count > 0 {
+            println!("Backfilled mime_type for {} images", updated_count);
+        }
         Ok(())
     }
 

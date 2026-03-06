@@ -1249,6 +1249,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                     &hash,
                                     None,
                                     "", // Android 不生成缩略图，thumbnail_path 留空，前端用 local_path（原图）
+                                    None,
                                     &plugin_id_clone,
                                     &task_id_clone,
                                     download_start_time,
@@ -1282,8 +1283,13 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                 let display_name = derive_display_name_from_url(
                                                     url_clone.as_str(),
                                                 );
-                                                let mime_type =
-                                                    mime_type_from_filename(&display_name);
+                                                let inferred_mime =
+                                                    crate::image_type::mime_type_from_path(
+                                                        &path_for_post,
+                                                    );
+                                                let mime_type = inferred_mime.clone().unwrap_or_else(
+                                                    || mime_type_from_filename(&source_path),
+                                                );
                                                 match get_content_io_provider()
                                                     .copy_image_to_pictures(
                                                         &source_path,
@@ -1301,6 +1307,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                             &hash,
                                                             None,
                                                             "",
+                                                            inferred_mime,
                                                             &plugin_id_clone,
                                                             &task_id_clone,
                                                             download_start_time,
@@ -1416,8 +1423,15 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                     let display_name = derive_display_name_from_url(
                                                         url_clone.as_str(),
                                                     );
-                                                    let mime_type =
-                                                        mime_type_from_filename(&display_name);
+                                                    let inferred_mime =
+                                                        crate::image_type::mime_type_from_path(
+                                                            &path_for_post,
+                                                        );
+                                                    let mime_type = inferred_mime.clone().unwrap_or_else(
+                                                        || mime_type_from_filename(
+                                                            path_for_post.to_string_lossy().as_ref(),
+                                                        ),
+                                                    );
                                                     match get_content_io_provider()
                                                         .copy_image_to_pictures(
                                                             &source_path,
@@ -1436,6 +1450,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                 &hash,
                                                                 None,
                                                                 "",
+                                                                inferred_mime,
                                                                 &plugin_id_clone,
                                                                 &task_id_clone,
                                                                 download_start_time,
@@ -1717,6 +1732,7 @@ async fn process_downloaded_content_image_to_storage(
     hash: &str,
     thumbnail_path: Option<&PathBuf>,
     thumbnail_path_str: &str,
+    inferred_mime_type: Option<String>,
     plugin_id: &str,
     task_id: &str,
     download_start_time: u64,
@@ -1732,6 +1748,8 @@ async fn process_downloaded_content_image_to_storage(
         .get_display_name(content_uri)
         .await
         .unwrap_or_else(|_| "image".to_string());
+    let mime_type = inferred_mime_type
+        .or_else(|| Some(mime_type_from_filename(&display_name)));
 
     let image_info = ImageInfo {
         id: "".to_string(),
@@ -1744,6 +1762,7 @@ async fn process_downloaded_content_image_to_storage(
         thumbnail_path: thumbnail_path_str.to_string(),
         favorite: false,
         hash: hash.to_string(),
+        mime_type,
         local_exists: true,
         width,
         height,
@@ -1891,6 +1910,8 @@ async fn process_downloaded_image_to_storage(
         .and_then(|n| n.to_str())
         .unwrap_or("image")
         .to_string();
+    let mime_type = crate::image_type::mime_type_from_path(path)
+        .or_else(|| Some(mime_type_from_filename(&display_name)));
     let image_info = ImageInfo {
         // id 由数据库生成，这里占位
         id: "".to_string(),
@@ -1907,6 +1928,7 @@ async fn process_downloaded_image_to_storage(
         thumbnail_path: thumbnail_path_str,
         favorite: false,
         hash: hash.to_string(),
+        mime_type,
         local_exists: true,
         width: None,
         height: None,

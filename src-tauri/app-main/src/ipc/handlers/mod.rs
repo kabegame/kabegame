@@ -255,9 +255,6 @@ async fn handle_plugin_run(
                 start_time: None,
                 end_time: None,
                 error: None,
-                rhai_dump_present: false,
-                rhai_dump_confirmed: false,
-                rhai_dump_created_at: None,
             };
             if let Err(e) = Storage::global().add_task(t) {
                 return CliIpcResponse::err(e);

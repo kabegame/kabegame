@@ -2,9 +2,9 @@ import {
   QuestionFilled,
   Setting,
   Refresh,
-  Filter,
   Plus,
   FolderOpened,
+  FolderAdd,
   Picture,
   Delete,
   Upload,
@@ -58,7 +58,7 @@ export function registerHeaderFeatures() {
     {
       id: HeaderFeatureId.Organize,
       label: "整理",
-      icon: Filter,
+      icon: FolderOpened,
       comp: OrganizeHeaderControl,
     },
     // 收集（使用自定义组件）
@@ -74,17 +74,17 @@ export function registerHeaderFeatures() {
       label: "新建画册",
       icon: Plus,
     },
-    // 去VD查看（Albums）
+    // 去VD查看（画册列表 / 画册详情共用）
     {
       id: HeaderFeatureId.OpenVirtualDrive,
       label: "去VD查看",
       icon: FolderOpened,
     },
-    // 去VD查看（AlbumDetail）
+    // 一键加入画册（任务详情等）
     {
-      id: HeaderFeatureId.OpenVirtualDriveAlbumFolder,
-      label: "去VD查看",
-      icon: FolderOpened,
+      id: HeaderFeatureId.AddToAlbum,
+      label: "加入画册",
+      icon: FolderAdd,
     },
     // 设为轮播壁纸
     {

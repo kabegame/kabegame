@@ -72,6 +72,39 @@ pub async fn add_images_to_album(
     Ok(serde_json::to_value(r).map_err(|e| e.to_string())?)
 }
 
+/// 将任务的全部图片加入画册（后端根据 task_id 取图，前端只负责选画册）
+#[tauri::command]
+pub async fn add_task_images_to_album(
+    _app: AppHandle,
+    task_id: String,
+    album_id: String,
+) -> Result<serde_json::Value, String> {
+    let image_ids = Storage::global().get_task_image_ids(&task_id)?;
+    if image_ids.is_empty() {
+        return Ok(serde_json::to_value(serde_json::json!({
+            "added": 0,
+            "attempted": 0,
+            "canAdd": 0,
+            "currentCount": 0
+        }))
+        .map_err(|e| e.to_string())?);
+    }
+    let r = Storage::global().add_images_to_album(&album_id, &image_ids)?;
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    VirtualDriveService::global().notify_album_dir_changed(&album_id);
+
+    GlobalEmitter::global().emit(
+        "images-change",
+        json!({
+            "reason": "add",
+            "albumId": album_id,
+            "imageIds": image_ids
+        }),
+    );
+
+    Ok(serde_json::to_value(r).map_err(|e| e.to_string())?)
+}
+
 #[tauri::command]
 pub async fn remove_images_from_album(
     _app: AppHandle,

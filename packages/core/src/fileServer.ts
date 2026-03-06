@@ -21,3 +21,12 @@ export function fileToUrl(localPath: string): string {
   if (!fileServerBaseUrl) return "";
   return `${fileServerBaseUrl}/file?path=${encodeURIComponent(path)}`;
 }
+
+/** 缩略图 URL：走 /thumbnail，后端按 thumbnail_path 查表校验 */
+export function thumbnailToUrl(thumbnailPath: string): string {
+  const path = (thumbnailPath || "").trim();
+  if (!path) return "";
+  if (IS_ANDROID) return "";
+  if (!fileServerBaseUrl) return "";
+  return `${fileServerBaseUrl}/thumbnail?path=${encodeURIComponent(path)}`;
+}

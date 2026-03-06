@@ -339,6 +339,7 @@ impl Storage {
                 "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
+                 i.mime_type,
                  ai.\"order\",
                  i.width,
                  i.height,
@@ -364,11 +365,12 @@ impl Storage {
                         .and_then(|s| serde_json::from_str(&s).ok()),
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
+                    mime_type: row.get::<_, Option<String>>(9)?,
                     favorite: album_id == FAVORITE_ALBUM_ID,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    display_name: row.get(12)?,
+                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    display_name: row.get(13)?,
                 })
             })
             .map_err(|e| format!("Failed to query album images: {}", e))?;
@@ -404,6 +406,7 @@ impl Storage {
                 "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
+                 i.mime_type,
                  ai.\"order\",
                  i.width,
                  i.height,
@@ -430,11 +433,12 @@ impl Storage {
                         .and_then(|s| serde_json::from_str(&s).ok()),
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
+                    mime_type: row.get::<_, Option<String>>(9)?,
                     favorite: album_id == FAVORITE_ALBUM_ID,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    display_name: row.get(12)?,
+                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    display_name: row.get(13)?,
                 })
             })
             .map_err(|e| format!("Failed to query album preview: {}", e))?;

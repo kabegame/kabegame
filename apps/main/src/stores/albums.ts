@@ -79,11 +79,13 @@ export const useAlbumStore = defineStore("albums", () => {
     loading.value = true;
     try {
       const res = await invoke<Album[]>("get_albums");
-      // 后端字段为 camelCase
-      albums.value = res.map((a) => ({
-        ...a,
-        createdAt: (a as any).created_at ?? (a as any).createdAt ?? a.createdAt,
-      }));
+      // 后端字段为 camelCase，按创建时间倒序（新→旧）
+      albums.value = res
+        .map((a) => ({
+          ...a,
+          createdAt: (a as any).created_at ?? (a as any).createdAt ?? a.createdAt,
+        }))
+        .sort((a, b) => b.createdAt - a.createdAt);
       // 同步加载数量（非阻塞）
       try {
         const counts = await invoke<Record<string, number>>("get_album_counts");
@@ -193,28 +195,23 @@ export const useAlbumStore = defineStore("albums", () => {
         }
       }
     } catch (error: any) {
-      // 如果后端返回错误，尝试解析错误信息
-      const errorMessage = error?.message || String(error);
-
-      // 如果错误信息包含上限提示，需要获取详细信息
-      if (errorMessage.includes("上限")) {
-        const currentCount = albumCounts.value[albumId] || 0;
-        const MAX_ALBUM_IMAGES = 10000;
-        const canAdd = Math.max(0, MAX_ALBUM_IMAGES - currentCount);
-        const attempted = imageIds.length;
-
-        if (canAdd === 0) {
-          throw new Error(`画册已满（${MAX_ALBUM_IMAGES} 张），无法继续添加`);
-        } else {
-          throw new Error(
-            `画册空间不足：最多可放入 ${canAdd} 张，尝试放入 ${attempted} 张`
-          );
-        }
-      }
-
-      // 其他错误直接抛出
       throw error;
     }
+  };
+
+  /** 将任务的全部图片加入画册（后端根据 taskId 取图） */
+  const addTaskImagesToAlbum = async (taskId: string, albumId: string) => {
+    await initEventListeners();
+    const result = await invoke<{
+      added: number;
+      attempted: number;
+      canAdd: number;
+      currentCount: number;
+    }>("add_task_images_to_album", { taskId, albumId });
+    delete albumImages.value[albumId];
+    delete albumPreviews.value[albumId];
+    albumCounts.value[albumId] = result.currentCount;
+    return result;
   };
 
   const removeImagesFromAlbum = async (albumId: string, imageIds: string[]) => {
@@ -277,6 +274,7 @@ export const useAlbumStore = defineStore("albums", () => {
     deleteAlbum,
     renameAlbum,
     addImagesToAlbum,
+    addTaskImagesToAlbum,
     removeImagesFromAlbum,
     loadAlbumImages,
     loadAlbumPreview,

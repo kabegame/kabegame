@@ -1,41 +1,17 @@
 <template>
   <div class="album-detail" v-pull-to-refresh="pullToRefreshOpts">
-    <ImageGrid ref="albumViewRef" class="detail-body" :images="images"
-      :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
-      :enable-ctrl-key-adjust-columns="!IS_ANDROID"
-      :enable-virtual-scroll="!IS_ANDROID"
-      :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing"
-      :actions="imageActions"
-      :on-context-command="handleImageMenuCommand"
-      @added-to-album="handleAddedToAlbum">
+    <ImageGrid ref="albumViewRef" class="detail-body" :images="images" :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
+      :enable-ctrl-key-adjust-columns="!IS_ANDROID" :enable-virtual-scroll="!IS_ANDROID"
+      :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing" :actions="imageActions"
+      :on-context-command="handleImageMenuCommand" hide-scrollbar @added-to-album="handleAddedToAlbum">
 
       <template #before-grid>
-        <AlbumDetailPageHeader
-          :album-name="albumName"
-          :total-images-count="totalImagesCount"
-          :is-renaming="isRenaming"
-          v-model:editing-name="editingName"
-          :album-drive-enabled="albumDriveEnabled"
-          @view-vd="openVirtualDriveAlbumFolder"
-          @refresh="handleRefresh"
-          @set-wallpaper-rotate="handleSetAsWallpaperCarousel"
-          @delete-album="handleDeleteAlbum"
-          @help="openHelpDrawer"
-          @quick-settings="openQuickSettings"
-          @back="goBack"
-          @start-rename="handleStartRename"
-          @confirm-rename="handleRenameConfirm"
-          @cancel-rename="handleRenameCancel"
-        />
-
-        <!-- 画册图片数量上限警告 -->
-        <div v-if="showAlbumLimitWarning" :class="['album-limit-warning', { 'is-danger': isAtLimit }]">
-          <el-icon>
-            <Warning v-if="!isAtLimit" />
-            <CircleClose v-else />
-          </el-icon>
-          <span>{{ warningMessage }}</span>
-        </div>
+        <AlbumDetailPageHeader :album-name="albumName" :total-images-count="totalImagesCount" :is-renaming="isRenaming"
+          v-model:editing-name="editingName" :album-drive-enabled="albumDriveEnabled"
+          @view-vd="openVirtualDriveAlbumFolder" @refresh="handleRefresh"
+          @set-wallpaper-rotate="handleSetAsWallpaperCarousel" @delete-album="handleDeleteAlbum" @help="openHelpDrawer"
+          @quick-settings="openQuickSettings" @back="goBack" @start-rename="handleStartRename"
+          @confirm-rename="handleRenameConfirm" @cancel-rename="handleRenameCancel" />
 
         <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
           :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToPage" />
@@ -60,7 +36,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Picture, Delete, Setting, Refresh, QuestionFilled, Star, StarFilled, FolderAdd, InfoFilled, DocumentCopy } from "@element-plus/icons-vue";
-import { Warning, CircleClose } from "@element-plus/icons-vue";
 import { createImageActions } from "@/actions/imageActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
@@ -109,7 +84,7 @@ const settingsStore = useSettingsStore();
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 const uiStore = useUiStore();
-const { load: loadImageTypes, getMimeType } = useImageTypes();
+const { load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
 const { imageGridColumns } = storeToRefs(uiStore);
 const desktopSelectionStore = useSelectionStore();
 const isAlbumDetailActive = ref(true);
@@ -235,7 +210,7 @@ function onDragScrollOverspeed(_ev: Event) {
 
 useImageGridAutoLoad({
   containerRef: albumContainerRef,
-  onLoad: () => {},
+  onLoad: () => { },
 });
 
 // Image actions for context menu / action sheet
@@ -249,39 +224,6 @@ watch(
   },
   { immediate: true }
 );
-
-// 计算当前画册的图片数量（优先使用 albumCounts，否则使用 images.length）
-const currentAlbumImageCount = computed(() => {
-  if (!albumId.value) return undefined;
-  // 优先使用 store 中的计数（更准确，包括可能未加载的图片）
-  const countFromStore = albumStore.albumCounts[albumId.value];
-  if (countFromStore !== undefined) {
-    return countFromStore;
-  }
-  // 如果没有计数，使用当前加载的图片数量
-  return images.value.length;
-});
-
-const MAX_ALBUM_IMAGES = 10000;
-const WARNING_THRESHOLD = 9000; // 超过 9000 时显示警告
-
-const showAlbumLimitWarning = computed(() => {
-  return (currentAlbumImageCount.value ?? 0) >= WARNING_THRESHOLD;
-});
-
-const isAtLimit = computed(() => {
-  return (currentAlbumImageCount.value ?? 0) >= MAX_ALBUM_IMAGES;
-});
-
-const warningMessage = computed(() => {
-  const count = currentAlbumImageCount.value ?? 0;
-  if (count >= MAX_ALBUM_IMAGES) {
-    return `画册图片数量已达到上限（${MAX_ALBUM_IMAGES} 张），将无法继续添加到画册`;
-  }
-  const remaining = MAX_ALBUM_IMAGES - count;
-  return `画册图片数量即将到达上限（当前 ${count} / ${MAX_ALBUM_IMAGES}，剩余 ${remaining} 张）`;
-});
-
 
 const clearSelection = () => {
   albumViewRef.value?.clearSelection?.();
@@ -481,7 +423,7 @@ const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<s
   const countText = selectedCount > 1 ? `(${selectedCount})` : "";
   const firstSelectedImage = images.value.find(img => selectedIds.has(img.id));
   const isFavorite = firstSelectedImage?.favorite ?? false;
-  
+
   if (selectedCount === 1) {
     return [
       { key: "favorite", label: isFavorite ? "取消收藏" : "收藏", icon: isFavorite ? StarFilled : Star, command: "favorite" },
@@ -628,10 +570,10 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
             ElMessage.error("图片路径不存在");
             break;
           }
-          
+
           const ext = filePath.split('.').pop()?.toLowerCase() || '';
           await loadImageTypes();
-          const mimeType = getMimeType(ext);
+          const mimeType = getMimeTypeForImage(image, ext);
           await invoke("share_file", { filePath, mimeType });
         } catch (error) {
           console.error("分享失败:", error);
@@ -730,15 +672,15 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
         try {
           const idsArr = imagesToProcess.map((i) => i.id);
           const isFavoriteAlbum = albumId.value === FAVORITE_ALBUM_ID.value;
-          
+
           // 只从当前画册移除，不删除文件
           await albumStore.removeImagesFromAlbum(albumId.value, idsArr);
-          
+
           const ids = new Set(idsArr);
           const includesCurrentWallpaper =
             !!currentWallpaperImageId.value &&
             imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
-          
+
           // 如果是从收藏画册移除，更新本地图片的 favorite 字段为 false
           if (isFavoriteAlbum) {
             images.value = images.value.map((img) => {
@@ -748,11 +690,11 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
               return img;
             });
           }
-          
+
           // 从列表中移除
           images.value = images.value.filter((img) => !ids.has(img.id));
           leafAllImages = leafAllImages.filter((img) => !ids.has(img.id));
-          
+
           // 如果包含当前壁纸，清除壁纸 ID
           if (includesCurrentWallpaper) {
             currentWallpaperImageId.value = null;
@@ -947,12 +889,12 @@ const handleDeleteAlbum = async () => {
   }
 
   try {
-   
+
 
     const deletedAlbumId = albumId.value;
     const wasEnabled = wallpaperRotationEnabled.value;
     const wasCurrentRotation = currentRotationAlbumId.value === deletedAlbumId;
-  
+
     await ElMessageBox.confirm(
       `确定要删除画册"${albumName.value}"吗？此操作仅删除画册及其关联，不会删除图片文件。`,
       "确认删除",

@@ -80,12 +80,25 @@ impl ImageQuery {
         }
     }
 
-    /// 全部图片（按时间排序，用于 CommonProvider）
+    /// 全部图片（按时间正序，用于 CommonProvider「全部」）
     pub fn all_recent() -> Self {
         Self {
             decorator: "ORDER BY images.crawled_at ASC".to_string(),
             params: vec![],
         }
+    }
+
+    /// 全部图片（按时间倒序，用于 CommonProvider「全部/倒序」）
+    pub fn all_recent_desc() -> Self {
+        Self {
+            decorator: "ORDER BY images.crawled_at DESC".to_string(),
+            params: vec![],
+        }
+    }
+
+    /// 是否为「全部、按时间正序」查询（用于仅在正序「全部」下展示「倒序」子目录）
+    pub fn is_all_recent_asc(&self) -> bool {
+        self.params.is_empty() && self.decorator == Self::all_recent().decorator
     }
 }
 
@@ -418,6 +431,7 @@ impl Storage {
                 images.metadata,
                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                 images.hash,
+                images.mime_type,
                 CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                 images.width,
                 images.height,
@@ -447,11 +461,12 @@ impl Storage {
                     .and_then(|s| serde_json::from_str(&s).ok()),
                 thumbnail_path: row.get(7)?,
                 hash: row.get(8)?,
-                favorite: row.get::<_, i64>(9)? != 0,
+                mime_type: row.get::<_, Option<String>>(9)?,
+                favorite: row.get::<_, i64>(10)? != 0,
                 local_exists: true,
-                width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                display_name: row.get(12)?,
+                width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                display_name: row.get(13)?,
             })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
