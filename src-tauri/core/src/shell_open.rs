@@ -217,10 +217,10 @@ pub fn reveal_in_folder(file_path: &str) -> Result<(), String> {
             return Err("Invalid file path".to_string());
         }
 
-        // /select, 和路径必须合并为一个参数，例如: /select,C:\path\to\file.txt
-        let select_arg = format!("/select,{}", file_path);
+        // 使用两段参数：/select, 与路径分开传递，避免路径含空格时被命令行解析截断。
         Command::new("explorer.exe")
-            .arg(&select_arg)
+            .arg("/select,")
+            .arg(&file_path)
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| format!("Failed to reveal in folder: {}", e))?;

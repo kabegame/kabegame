@@ -978,21 +978,23 @@ impl IpcClient {
         self.request_data(CliIpcRequest::GetActiveDownloads).await
     }
 
-    pub async fn dedupe_start_gallery_by_hash_batched(
+    pub async fn organize_start(
         &self,
-        delete_files: bool,
-        batch_size: Option<usize>,
+        dedupe: bool,
+        remove_missing: bool,
+        regen_thumbnails: bool,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::DedupeStartGalleryByHashBatched {
-            delete_files,
-            batch_size,
+        self.request_ok(CliIpcRequest::OrganizeStart {
+            dedupe,
+            remove_missing,
+            regen_thumbnails,
         })
         .await
     }
 
-    pub async fn dedupe_cancel_gallery_by_hash_batched(&self) -> Result<bool, String> {
+    pub async fn organize_cancel(&self) -> Result<bool, String> {
         let v = self
-            .request_data(CliIpcRequest::DedupeCancelGalleryByHashBatched)
+            .request_data(CliIpcRequest::OrganizeCancel)
             .await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }

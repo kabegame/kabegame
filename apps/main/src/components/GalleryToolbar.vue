@@ -1,117 +1,18 @@
 <template>
-  <PageHeader title="画廊" sticky>
+  <PageHeader title="画廊" :show="showIds" :fold="foldIds" @action="handleAction" sticky>
     <template #subtitle>
       <span>{{ totalCountText }}</span>
-    </template>
-    <template #left>
-      <el-button v-if="!IS_ANDROID && hasRefreshFeature" @click="$emit('refresh')" circle>
-        <el-icon>
-          <Refresh />
-        </el-icon>
-      </el-button>
-      <!-- <el-date-picker class="date-range-filter" :model-value="dateRangeProxy" type="daterange" unlink-panels
-        range-separator="~" start-placeholder="开始日期" end-placeholder="结束日期" format="YYYY-MM-DD"
-        value-format="YYYY-MM-DD" :clearable="true" :disabled="monthLoading"
-        @update:model-value="(v: [string, string] | null) => (dateRangeProxy = v)" /> -->
-      <!-- 去重按钮：Android 下折叠到 overflow，非 Android 直显 -->
-      <div v-if="!IS_ANDROID" class="dedupe-stack">
-        <el-tooltip :content="dedupeTooltipText" placement="bottom" :disabled="!dedupeLoading">
-          <!-- Tooltip 对 disabled button 不生效，需要包一层 -->
-          <span class="dedupe-btn-wrapper">
-            <el-button @click="$emit('dedupeByHash')" :loading="dedupeLoading" :disabled="dedupeLoading">
-              <el-icon>
-                <Filter />
-              </el-icon>
-              去重
-            </el-button>
-          </span>
-        </el-tooltip>
-        <div v-if="dedupeLoading" class="dedupe-progress-row">
-          <div class="dedupe-progress-wrapper">
-            <el-progress class="dedupe-progress" :percentage="dedupeProgress" :stroke-width="5" :show-text="false" />
-          </div>
-          <el-button class="dedupe-cancel-btn" circle size="small" type="danger" text @click="$emit('cancelDedupe')"
-            title="取消去重">
-            <el-icon>
-              <Close />
-            </el-icon>
-          </el-button>
-        </div>
-      </div>
-    </template>
-    <!-- 非 Android：保持原有布局，开始收集为下拉（本地/网络） -->
-    <template v-if="!IS_ANDROID">
-      <el-button @click="$emit('showHelp')" circle title="帮助">
-        <el-icon>
-          <QuestionFilled />
-        </el-icon>
-      </el-button>
-      <el-button @click="$emit('showQuickSettings')" circle title="快捷设置">
-        <el-icon>
-          <Setting />
-        </el-icon>
-      </el-button>
-      <TaskDrawerButton />
-      <el-dropdown trigger="click" @command="handleDesktopCollectCommand">
-        <el-button type="primary" class="add-task-btn">
-          <el-icon>
-            <Plus />
-          </el-icon>
-          开始收集
-          <el-icon class="el-icon--right">
-            <ArrowDown />
-          </el-icon>
-        </el-button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item command="local">
-              <el-icon><FolderOpened /></el-icon>
-              本地
-            </el-dropdown-item>
-            <el-dropdown-item command="network">
-              <el-icon><Connection /></el-icon>
-              网络
-            </el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
-    </template>
-    <!-- Android：单按钮「开始收集」→ 打开收集方式选择器（本地/远程） -->
-    <template v-else>
-      <el-button type="primary" @click="handleOpenCollectMenu" class="add-task-btn">
-        <el-icon>
-          <Plus />
-        </el-icon>
-        开始收集
-      </el-button>
-      <!-- 任务按钮：保持直显 -->
-      <TaskDrawerButton />
-      <!-- 溢出菜单：去重/帮助/设置 -->
-      <AndroidHeaderOverflow
-        v-if="foldedFeatures.length > 0"
-        :features="foldedFeatures"
-        @select="handleOverflowSelect"
-      />
     </template>
   </PageHeader>
 </template>
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Refresh, Plus, Filter, Setting, Close, QuestionFilled, FolderOpened, ArrowDown, Connection } from "@element-plus/icons-vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
-import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
+import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_ANDROID } from "@kabegame/core/env";
-import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
-import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
 
 interface Props {
-  dedupeLoading?: boolean;
-  dedupeProgress?: number;
-  dedupeProcessed?: number;
-  dedupeTotal?: number;
-  dedupeRemoved?: number;
   isLoadingAll?: boolean;
   totalCount?: number;
   bigPageEnabled?: boolean;
@@ -122,11 +23,6 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  dedupeLoading: false,
-  dedupeProgress: 0,
-  dedupeProcessed: 0,
-  dedupeTotal: 0,
-  dedupeRemoved: 0,
   isLoadingAll: false,
   totalCount: 0,
   bigPageEnabled: false,
@@ -150,8 +46,6 @@ const totalCountText = computed(() => {
 
 const emit = defineEmits<{
   refresh: [];
-  dedupeByHash: [];
-  cancelDedupe: [];
   showHelp: [];
   showQuickSettings: [];
   showCrawlerDialog: [];
@@ -160,55 +54,37 @@ const emit = defineEmits<{
   "update:selectedRange": [value: [string, string] | null];
 }>();
 
-const crawlerDrawerStore = useCrawlerDrawerStore();
-
-/** 桌面：下拉选择「本地」或「网络」后打开对应对话框 */
-const handleDesktopCollectCommand = (command: string) => {
-  if (command === "local") {
-    emit("showLocalImport");
-  } else if (command === "network") {
-    emit("showCrawlerDialog");
+const showIds = computed(() => {
+  if (IS_ANDROID) {
+    return [HeaderFeatureId.Collect, HeaderFeatureId.TaskDrawer];
   }
-};
-
-/** Android：打开收集方式选择器（本地/远程），由 Gallery 展示 CollectSourcePicker */
-const handleOpenCollectMenu = () => {
-  emit("openCollectMenu");
-};
-
-const dateRangeProxy = computed<[string, string] | null>({
-  get: () => props.selectedRange ?? null,
-  set: (v) => emit("update:selectedRange", v ?? null),
+  return [HeaderFeatureId.Refresh, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings, HeaderFeatureId.Organize, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Collect];
 });
 
-const dedupeTooltipText = computed(() => {
-  if (!props.dedupeLoading) return "";
-  const processed = props.dedupeProcessed ?? 0;
-  const total = props.dedupeTotal ?? 0;
-  const removed = props.dedupeRemoved ?? 0;
-  if (!total) return `已处理 ${processed}/? · 已移除 ${removed}`;
-  return `已处理 ${processed}/${total} · 已移除 ${removed}`;
+const foldIds = computed(() => {
+  return IS_ANDROID ? [HeaderFeatureId.Help, HeaderFeatureId.QuickSettings] : [];
 });
 
-// Android 下折叠的功能
-const foldedFeatures = computed(() => {
-  return getFoldedFeaturesForPage("gallery");
-});
-
-// 根据 pages 列表判断刷新功能是否存在
-const hasRefreshFeature = computed(() => hasFeatureInPage("gallery", "refresh"));
-
-// 处理溢出菜单选择
-const handleOverflowSelect = (featureId: HeaderFeatureId) => {
-  switch (featureId) {
-    case "help":
+// 处理action事件
+const handleAction = (payload: { id: string; data: { type: string; value?: string } }) => {
+  switch (payload.id) {
+    case HeaderFeatureId.Collect:
+      if (payload.data.type === "select") {
+        if (payload.data.value === "local") {
+          emit("showLocalImport");
+        } else if (payload.data.value === "network") {
+          emit("showCrawlerDialog");
+        }
+      }
+      break;
+    case HeaderFeatureId.Help:
       emit("showHelp");
       break;
-    case "quickSettings":
+    case HeaderFeatureId.QuickSettings:
       emit("showQuickSettings");
       break;
-    case "dedupe":
-      emit("dedupeByHash");
+    case HeaderFeatureId.Organize:
+      // 整理由 header 的 OrganizeHeaderControl 处理，此处不会触发（Organize 在 show 中）
       break;
   }
 };
@@ -227,49 +103,5 @@ const handleOverflowSelect = (featureId: HeaderFeatureId) => {
     transform: translateY(-2px);
     box-shadow: var(--anime-shadow-hover);
   }
-}
-
-.dedupe-stack {
-  display: inline-flex;
-  position: relative;
-  align-items: center;
-}
-
-.dedupe-progress-row {
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 0;
-  z-index: 10;
-}
-
-.dedupe-btn-wrapper {
-  display: inline-flex;
-}
-
-.dedupe-progress-wrapper {
-  width: 72px;
-}
-
-.dedupe-progress {
-  width: 100%;
-  opacity: 0.9;
-}
-
-.dedupe-cancel-btn {
-  padding: 0;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  min-height: 16px;
-  line-height: 16px;
-}
-
-.dedupe-cancel-btn :deep(.el-icon) {
-  font-size: 12px;
 }
 </style>

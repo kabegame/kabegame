@@ -7,14 +7,11 @@
         :on-context-command="handleGridContextCommand">
         <template #before-grid>
           <!-- 顶部工具栏 -->
-          <GalleryToolbar :dedupe-loading="dedupeLoading" :dedupe-progress="dedupeProgress"
-            :dedupe-processed="dedupeProcessed" :dedupe-total="dedupeTotal" :dedupe-removed="dedupeRemoved"
-            :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled" :current-position="currentPosition"
+          <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled" :current-position="currentPosition"
             :month-options="monthOptions" :month-loading="monthOptionsLoading" v-model:selectedRange="selectedRange"
-            @refresh="handleManualRefresh" @dedupe-by-hash="handleDedupeByHash" @show-help="openHelpDrawer"
-            @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="handleShowCrawlerDialog"
-            @show-local-import="showLocalImportDialog = true" @open-collect-menu="showCollectSourcePicker = true"
-            @cancel-dedupe="cancelDedupe" />
+            @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
+            @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
+            @open-collect-menu="showCollectSourcePicker = true" />
 
           <!-- 大页分页器 -->
           <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentBigPageOffset"
@@ -42,21 +39,6 @@
       :initial-config="crawlerDialogInitialConfig" />
     <LocalImportDialog v-if="!IS_ANDROID" v-model="showLocalImportDialog" />
 
-
-    <!-- 去重确认对话框（无需放在 ImageGrid 插槽里） -->
-    <el-dialog v-model="showDedupeDialog" title="确认去重" width="420px" destroy-on-close>
-      <div style="margin-bottom: 16px;">
-        <p style="margin-bottom: 8px;">去掉所有重复图片</p>
-        <el-checkbox v-model="dedupeDeleteFiles" label="同时从电脑删除源文件（慎用）" />
-        <p class="var-description" :style="{ color: dedupeDeleteFiles ? 'var(--el-color-danger)' : '' }">
-          {{ dedupeDeleteFiles ? '警告：该操作将永久删除重复的电脑文件，不可恢复！' : '不勾选仅从画廊移除记录，保留电脑文件。' }}
-        </p>
-      </div>
-      <template #footer>
-        <el-button @click="showDedupeDialog = false">取消</el-button>
-        <el-button type="primary" @click="confirmDedupeByHash" :loading="dedupeLoading">确定</el-button>
-      </template>
-    </el-dialog>
 
     <!-- 移除/删除确认对话框 -->
     <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
@@ -124,7 +106,6 @@ import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
-import { hasFeatureInPage } from "@/header/headerFeatures";
 import { useSelectionStore } from "@kabegame/core/stores/selection";
 import type { Component } from "vue";
 import { useAlbumStore } from "@/stores/albums";
@@ -305,20 +286,7 @@ const currentPosition = computed(() => {
   return currentOffset.value + 1;
 });
 
-const dedupeLoading = ref(false); // 正在执行"按哈希去重"本体
-const { startLoading: startDedupeDelay, finishLoading: finishDedupeDelay } = useLoadingDelay();
-const dedupeProcessed = ref(0);
-const dedupeTotal = ref(0);
-const dedupeRemoved = ref(0);
-
-// 标记监听器是否已经创建，避免 keep-alive 时重复创建
 const listenersCreated = ref(false);
-const dedupeProgress = computed(() => {
-  if (!dedupeLoading.value) return 0;
-  if (!dedupeTotal.value) return 0;
-  const pct = Math.round((dedupeProcessed.value / dedupeTotal.value) * 100);
-  return Math.max(0, Math.min(100, pct));
-});
 const showCrawlerDialog = ref(false);
 const showLocalImportDialog = ref(false);
 const showMediaPicker = ref(false);
@@ -473,9 +441,6 @@ const handleAndroidMediaSelection = async (
     }
   }
 };
-const showDedupeDialog = ref(false); // 去重确认对话框
-useModalBack(showDedupeDialog);
-const dedupeDeleteFiles = ref(false); // 是否删除本地文件
 // 移除/删除对话框相关
 const showRemoveDialog = ref(false);
 const removeDeleteFiles = ref(false);
@@ -520,13 +485,8 @@ const addToAlbumImageIds = ref<string[]>([]);
 const isRefreshing = ref(false); // 刷新中状态，用于阻止刷新时 EmptyState 闪烁
 // 刷新计数器，用于强制空占位符重新挂载以触发动画
 const refreshKey = ref(0);
-// 根据 pages 列表判断刷新功能是否存在
-const hasRefreshFeature = computed(() => hasFeatureInPage("gallery", "refresh"));
-const pullToRefreshOpts = computed(() =>
-  IS_ANDROID && hasRefreshFeature.value
-    ? { onRefresh: handleManualRefresh, refreshing: isRefreshing.value }
-    : undefined
-);
+// 画廊页 Android 下不显示刷新，下拉刷新也不启用
+const pullToRefreshOpts = computed(() => undefined);
 
 // Image actions for context menu / action sheet
 const imageActions = computed(() => createImageActions({ removeText: "删除" }));
@@ -986,52 +946,6 @@ const handleGridContextCommand = async (
 
 // removeFromUiCacheByIds 已移至 useGalleryImages composable
 
-// 画廊按 hash 去重（打开对话框）
-const handleDedupeByHash = () => {
-  if (dedupeLoading.value) return;
-  dedupeDeleteFiles.value = false; // 默认不删除文件
-  showDedupeDialog.value = true;
-};
-
-// 确认去重（调用 composable 中的函数）
-const confirmDedupeByHash = async () => {
-  showDedupeDialog.value = false;
-  if (dedupeLoading.value) return;
-  try {
-    dedupeLoading.value = true;
-    dedupeProcessed.value = 0;
-    dedupeTotal.value = 0;
-    dedupeRemoved.value = 0;
-    startDedupeDelay();
-
-    // 启动后端分批去重任务：立即返回，进度/移除/完成通过事件回传
-    await invoke("start_dedupe_gallery_by_hash_batched", {
-      deleteFiles: dedupeDeleteFiles.value,
-    });
-
-    ElMessage.success("已开始去重（后台执行，可随时取消）");
-  } catch (error) {
-    console.error("启动去重失败:", error);
-    ElMessage.error("启动去重失败");
-    dedupeLoading.value = false;
-    finishDedupeDelay();
-  }
-};
-
-const cancelDedupe = async () => {
-  try {
-    const canceled = await invoke<boolean>("cancel_dedupe_gallery_by_hash_batched");
-    if (canceled) {
-      ElMessage.info("已发送取消请求，稍后停止");
-    } else {
-      ElMessage.info("当前没有进行中的去重任务");
-    }
-  } catch (error) {
-    console.error("取消去重失败:", error);
-    ElMessage.error("取消失败");
-  }
-};
-
 // 确认移除图片（合并了原来的 remove 和 delete 逻辑）
 const confirmRemoveImages = async () => {
   const imagesToRemove = pendingRemoveImages.value;
@@ -1194,53 +1108,6 @@ onMounted(async () => {
     return;
   }
   listenersCreated.value = true;
-
-  // 去重进度 / 完成
-  await listen<{
-    processed: number;
-    total: number;
-    removed: number;
-    batchIndex: number;
-  }>("dedupe-progress", (event) => {
-    const p = event.payload;
-    if (!p) return;
-    dedupeProcessed.value = p.processed ?? 0;
-    dedupeTotal.value = p.total ?? 0;
-    dedupeRemoved.value = p.removed ?? 0;
-  });
-
-  await listen<{
-    processed: number;
-    total: number;
-    removed: number;
-    canceled: boolean;
-  }>("dedupe-finished", async (event) => {
-    const p = event.payload;
-    dedupeProcessed.value = p?.processed ?? dedupeProcessed.value;
-    dedupeTotal.value = p?.total ?? dedupeTotal.value;
-    dedupeRemoved.value = p?.removed ?? dedupeRemoved.value;
-
-    dedupeLoading.value = false;
-    finishDedupeDelay();
-
-    await loadTotalImagesCount();
-
-    if (p?.canceled) {
-      ElMessage.info("去重已取消");
-      return;
-    }
-
-    ElMessage.success(`去重完成：已移除 ${p?.removed ?? 0} 个重复项`);
-
-    // 若为了避免卡顿没有实时移除（displayedImages 很大），则这里强制刷新一次
-    if (displayedImages.value.length > 200_000) {
-      await loadImages(true, { forceReload: true });
-    }
-    // 去重结束：如果当前页刚好被清空（例如当前大页全部是重复项），自动回到可用页
-    if (displayedImages.value.length === 0 && totalImagesCount.value > 0) {
-      await ensureValidGalleryPageAfterMassRemoval();
-    }
-  });
 
   // 监听 App.vue 发送的文件拖拽事件（仅非安卓平台）
   if (!IS_ANDROID) {

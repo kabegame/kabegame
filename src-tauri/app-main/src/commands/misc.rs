@@ -122,14 +122,20 @@ pub async fn get_linux_desktop_env() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn update_image_dimensions(image_id: String, width: u32, height: u32) -> Result<(), String> {
+pub async fn update_image_dimensions(
+    image_id: String,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
     Storage::global().update_image_dimensions(&image_id, width, height)
 }
 
 #[tauri::command]
 #[cfg(not(target_os = "android"))]
 pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
-    let app_data_dir = kabegame_core::app_paths::AppPaths::global().data_dir.clone();
+    let app_data_dir = kabegame_core::app_paths::AppPaths::global()
+        .data_dir
+        .clone();
 
     if !app_data_dir.exists() {
         return Ok(()); // 目录不存在，无需清理
@@ -152,21 +158,29 @@ pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub async fn start_dedupe_gallery_by_hash_batched(delete_files: bool) -> Result<(), String> {
-    crate::ipc::DedupeService::global()
+pub async fn start_organize(
+    dedupe: bool,
+    remove_missing: bool,
+    regen_thumbnails: bool,
+) -> Result<(), String> {
+    use kabegame_core::storage::organize::{OrganizeOptions, OrganizeService};
+    OrganizeService::global()
         .clone()
-        .start_batched(
+        .start(
             std::sync::Arc::new(kabegame_core::storage::Storage::global().clone()),
-            delete_files,
-            10_000,
+            OrganizeOptions {
+                dedupe,
+                remove_missing,
+                regen_thumbnails,
+            },
         )
         .await
 }
 
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub async fn cancel_dedupe_gallery_by_hash_batched() -> Result<bool, String> {
-    crate::ipc::DedupeService::global().cancel()
+pub async fn cancel_organize() -> Result<bool, String> {
+    kabegame_core::storage::organize::OrganizeService::global().cancel()
 }
 
 #[tauri::command]
@@ -183,10 +197,7 @@ pub async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
 
 /// 复制图片到系统剪贴板。支持 Windows、macOS、Linux、Android。
 #[tauri::command]
-pub async fn copy_image_to_clipboard(
-    app: AppHandle,
-    image_path: String,
-) -> Result<(), String> {
+pub async fn copy_image_to_clipboard(app: AppHandle, image_path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let image_path = image_path.clone();
@@ -343,9 +354,9 @@ pub async fn copy_image_to_clipboard(
 
     #[cfg(target_os = "macos")]
     {
-        use std::path::Path;
         use objc2_app_kit::NSPasteboard;
         use objc2_foundation::{NSData, NSString};
+        use std::path::Path;
 
         let path = Path::new(&image_path);
         if !path.exists() {
@@ -415,8 +426,8 @@ pub async fn copy_image_to_clipboard(
         .await
         .map_err(|e| format!("copy_image_to_clipboard join error: {e}"))??;
 
-        let mut clipboard = arboard::Clipboard::new()
-            .map_err(|e| format!("Failed to open clipboard: {}", e))?;
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|e| format!("Failed to open clipboard: {}", e))?;
         let image_data = arboard::ImageData {
             width,
             height,
@@ -487,7 +498,10 @@ pub async fn copy_image_to_clipboard(
     )))]
     {
         let _ = image_path;
-        Err("copy_image_to_clipboard is only supported on Windows, macOS, Linux and Android".to_string())
+        Err(
+            "copy_image_to_clipboard is only supported on Windows, macOS, Linux and Android"
+                .to_string(),
+        )
     }
 }
 
@@ -496,7 +510,10 @@ pub async fn copy_image_to_clipboard(
 pub async fn read_file(path: String) -> tauri::ipc::Response {
     #[cfg(target_os = "android")]
     if path.starts_with("content://") {
-        if let Ok(data) = kabegame_core::crawler::content_io::get_content_io_provider().read_file_bytes(&path).await {
+        if let Ok(data) = kabegame_core::crawler::content_io::get_content_io_provider()
+            .read_file_bytes(&path)
+            .await
+        {
             return tauri::ipc::Response::new(data);
         }
     }
@@ -506,7 +523,11 @@ pub async fn read_file(path: String) -> tauri::ipc::Response {
 
 #[tauri::command]
 #[cfg(target_os = "android")]
-pub async fn share_file(app: AppHandle, file_path: String, mime_type: String) -> Result<(), String> {
+pub async fn share_file(
+    app: AppHandle,
+    file_path: String,
+    mime_type: String,
+) -> Result<(), String> {
     use serde::{Deserialize, Serialize};
     use tauri_plugin_share::ShareExt;
 

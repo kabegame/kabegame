@@ -71,8 +71,8 @@ daemon_event_kinds! {
     DownloadProgress,
     Generic,
     ConnectionStatus,
-    DedupeProgress,
-    DedupeFinished,
+    OrganizeProgress,
+    OrganizeFinished,
     WallpaperUpdateImage,
     ImagesChange,
     WallpaperUpdateStyle,
@@ -99,8 +99,8 @@ impl DaemonEventKind {
             DaemonEventKind::DownloadProgress => "download-progress",
             DaemonEventKind::Generic => "generic",
             DaemonEventKind::ConnectionStatus => "connection-status",
-            DaemonEventKind::DedupeProgress => "dedupe-progress",
-            DaemonEventKind::DedupeFinished => "dedupe-finished",
+            DaemonEventKind::OrganizeProgress => "organize-progress",
+            DaemonEventKind::OrganizeFinished => "organize-finished",
             DaemonEventKind::WallpaperUpdateImage => "wallpaper-update-image",
             DaemonEventKind::ImagesChange => "images-change",
             DaemonEventKind::WallpaperUpdateStyle => "wallpaper-update-style",
@@ -122,8 +122,8 @@ impl DaemonEventKind {
             "download-progress" => Some(DaemonEventKind::DownloadProgress),
             "generic" => Some(DaemonEventKind::Generic),
             "connection-status" => Some(DaemonEventKind::ConnectionStatus),
-            "dedupe-progress" => Some(DaemonEventKind::DedupeProgress),
-            "dedupe-finished" => Some(DaemonEventKind::DedupeFinished),
+            "organize-progress" => Some(DaemonEventKind::OrganizeProgress),
+            "organize-finished" => Some(DaemonEventKind::OrganizeFinished),
             "wallpaper-update-image" => Some(DaemonEventKind::WallpaperUpdateImage),
             "images-change" => Some(DaemonEventKind::ImagesChange),
             "wallpaper-update-style" => Some(DaemonEventKind::WallpaperUpdateStyle),
@@ -202,19 +202,18 @@ pub enum DaemonEvent {
     /// 连接状态变化
     ConnectionStatus { connected: bool, message: String },
 
-    /// 去重进度事件
-    DedupeProgress {
+    /// 整理进度事件
+    OrganizeProgress {
         processed: usize,
         total: usize,
         removed: usize,
-        batch_index: usize,
+        regenerated: usize,
     },
 
-    /// 去重完成事件
-    DedupeFinished {
-        processed: usize,
-        total: usize,
+    /// 整理完成事件
+    OrganizeFinished {
         removed: usize,
+        regenerated: usize,
         canceled: bool,
     },
 
@@ -268,8 +267,8 @@ impl DaemonEvent {
             DaemonEvent::DownloadProgress { .. } => DaemonEventKind::DownloadProgress,
             DaemonEvent::Generic { .. } => DaemonEventKind::Generic,
             DaemonEvent::ConnectionStatus { .. } => DaemonEventKind::ConnectionStatus,
-            DaemonEvent::DedupeProgress { .. } => DaemonEventKind::DedupeProgress,
-            DaemonEvent::DedupeFinished { .. } => DaemonEventKind::DedupeFinished,
+            DaemonEvent::OrganizeProgress { .. } => DaemonEventKind::OrganizeProgress,
+            DaemonEvent::OrganizeFinished { .. } => DaemonEventKind::OrganizeFinished,
             DaemonEvent::ImagesChange { .. } => DaemonEventKind::ImagesChange,
             DaemonEvent::WallpaperUpdateImage { .. } => DaemonEventKind::WallpaperUpdateImage,
             DaemonEvent::WallpaperUpdateStyle { .. } => DaemonEventKind::WallpaperUpdateStyle,

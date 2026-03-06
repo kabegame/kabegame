@@ -11,68 +11,17 @@
             :on-context-command="handleImageMenuCommand"
             @retry-download="handleRetryDownload">
             <template #before-grid>
-                <PageHeader :title="taskName || '任务'" :subtitle="taskSubtitle" show-back @back="goBack">
-                    <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !taskId">
-                        <el-icon>
-                            <Refresh />
-                        </el-icon>
-                        <span style="margin-left: 4px;">刷新</span>
-                    </el-button>
-                    <el-button v-if="showStopButtonDirect" type="warning" @click="handleStopTask">
-                        <el-icon>
-                            <VideoPause />
-                        </el-icon>
-                        <span style="margin-left: 4px;">停止任务</span>
-                    </el-button>
-                    <el-button v-if="!IS_ANDROID" type="danger" @click="handleDeleteTask">
-                        <el-icon>
-                            <Delete />
-                        </el-icon>
-                        <span style="margin-left: 4px;">删除任务</span>
-                    </el-button>
-                    <TaskDrawerButton />
-                    <template v-if="IS_ANDROID">
-                        <el-dropdown trigger="click" placement="bottom-end" @command="handleTaskDetailMoreCommand">
-                            <el-button circle title="更多">
-                                <el-icon>
-                                    <MoreFilled />
-                                </el-icon>
-                            </el-button>
-                            <template #dropdown>
-                                <el-dropdown-menu>
-                                    <el-dropdown-item v-if="showStopTaskInFoldedMenu" command="stopTask">
-                                        <el-icon><VideoPause /></el-icon>
-                                        <span style="margin-left: 6px;">停止任务</span>
-                                    </el-dropdown-item>
-                                    <el-dropdown-item command="deleteTask">
-                                        <el-icon><Delete /></el-icon>
-                                        <span style="margin-left: 6px;">删除任务</span>
-                                    </el-dropdown-item>
-                                    <el-dropdown-item command="help">
-                                        <el-icon><QuestionFilled /></el-icon>
-                                        <span style="margin-left: 6px;">帮助</span>
-                                    </el-dropdown-item>
-                                    <el-dropdown-item command="settings">
-                                        <el-icon><Setting /></el-icon>
-                                        <span style="margin-left: 6px;">设置</span>
-                                    </el-dropdown-item>
-                                </el-dropdown-menu>
-                            </template>
-                        </el-dropdown>
-                    </template>
-                    <template v-else>
-                        <el-button @click="openHelpDrawer" circle title="帮助">
-                            <el-icon>
-                                <QuestionFilled />
-                            </el-icon>
-                        </el-button>
-                        <el-button @click="openQuickSettings" circle>
-                            <el-icon>
-                                <Setting />
-                            </el-icon>
-                        </el-button>
-                    </template>
-                </PageHeader>
+                <TaskDetailPageHeader
+                  :task-name="taskName"
+                  :task-subtitle="taskSubtitle"
+                  :show-stop-task="shouldShowStopButton"
+                  @refresh="handleRefresh"
+                  @stop-task="handleStopTask"
+                  @delete-task="handleDeleteTask"
+                  @help="openHelpDrawer"
+                  @quick-settings="openQuickSettings"
+                  @back="goBack"
+                />
 
                 <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
                     :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToPage" />
@@ -104,7 +53,7 @@ import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore } from "@/stores/albums";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { storeToRefs } from "pinia";
-import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
+import TaskDetailPageHeader from "@/components/header/TaskDetailPageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useSelectionStore } from "@kabegame/core/stores/selection";
@@ -129,7 +78,6 @@ import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
-import { hasFeatureInPage, getDirectFeaturesForPage, getFoldedFeaturesForPage } from "@/header/headerFeatures";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
 
@@ -168,14 +116,6 @@ const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("taskdetail");
 
-function handleTaskDetailMoreCommand(cmd: string) {
-    if (cmd === "stopTask") handleStopTask();
-    else if (cmd === "deleteTask") handleDeleteTask();
-    else if (cmd === "help") openHelpDrawer();
-    else if (cmd === "settings") openQuickSettings();
-}
-
-
 const taskId = ref<string>("");
 const taskName = ref<string>("");
 const taskStatus = ref<string>("");
@@ -193,20 +133,10 @@ const taskStatusFromStore = computed(() => {
 const shouldShowStopButton = computed(() => {
     return taskStatusFromStore.value === "running";
 });
-// 直显停止按钮：仅在“未折叠”时显示（桌面直显，Android 折叠到更多菜单）
-const showStopButtonDirect = computed(
-    () => shouldShowStopButton.value && getDirectFeaturesForPage("taskdetail").some((f) => f.id === "stopTask")
-);
-// 更多菜单中显示停止任务：Android 下折叠时在此显示
-const showStopTaskInFoldedMenu = computed(
-    () => shouldShowStopButton.value && getFoldedFeaturesForPage("taskdetail").some((f) => f.id === "stopTask")
-);
 const loading = ref(false);
 const isRefreshing = ref(false);
-// 根据 pages 列表判断刷新功能是否存在；安卓下隐藏刷新（含下拉刷新）
-const hasRefreshFeature = computed(() => !IS_ANDROID && hasFeatureInPage("taskdetail", "refresh"));
 const pullToRefreshOpts = computed(() =>
-  hasRefreshFeature.value
+  !IS_ANDROID
     ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
     : undefined
 );

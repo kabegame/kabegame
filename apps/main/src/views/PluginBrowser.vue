@@ -1,49 +1,13 @@
 <template>
   <div class="plugin-browser-container" v-pull-to-refresh="pullToRefreshOpts">
     <div class="plugin-browser-content">
-        <PageHeader title="源管理">
-          <!-- 非 Android：保持原有布局 -->
-          <template v-if="!IS_ANDROID">
-            <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing">
-              <el-icon>
-                <Refresh />
-              </el-icon>
-              刷新
-            </el-button>
-            <el-button type="primary" @click="showImportDialog = true">
-              <el-icon>
-                <Upload />
-              </el-icon>
-              导入源
-            </el-button>
-            <el-button @click="openHelpDrawer" circle title="帮助">
-              <el-icon>
-                <QuestionFilled />
-              </el-icon>
-            </el-button>
-            <el-button @click="openQuickSettings" circle>
-              <el-icon>
-                <Setting />
-              </el-icon>
-            </el-button>
-          </template>
-          <!-- Android：使用 headerFeatures 驱动 -->
-          <template v-else>
-            <!-- 直显功能：导入源（主操作）；Android 直接打开文件选择器，无需弹窗 -->
-            <el-button type="primary" @click="IS_ANDROID ? triggerImportDirect() : (showImportDialog = true)">
-              <el-icon>
-                <Upload />
-              </el-icon>
-              导入源
-            </el-button>
-            <!-- 溢出菜单：设置/管理 -->
-            <AndroidHeaderOverflow
-              v-if="foldedFeatures.length > 0"
-              :features="foldedFeatures"
-              @select="handleOverflowSelect"
-            />
-          </template>
-        </PageHeader>
+        <PluginBrowserPageHeader
+          @refresh="handleRefresh"
+          @import-source="handleImportSource"
+          @help="openHelpDrawer"
+          @quick-settings="openQuickSettings"
+          @manage-sources="openManageSources"
+        />
 
         <!-- Tab 切换 -->
         <StyledTabs v-model="activeTab" :before-leave="beforeLeaveTab">
@@ -279,15 +243,13 @@ import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { pickKgpgFile } from "tauri-plugin-picker-api";
-import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
+import PluginBrowserPageHeader from "@/components/header/PluginBrowserPageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
-import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
 import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { IS_LIGHT_MODE, IS_LOCAL_MODE, IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
-import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
 
 interface PluginSource {
   id: string;
@@ -336,31 +298,22 @@ const openQuickSettings = () => quickSettingsDrawer.open("pluginbrowser");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("pluginbrowser");
 
-const foldedFeatures = computed(() => {
-  return getFoldedFeaturesForPage("pluginbrowser");
-});
-
-// 根据 pages 列表判断刷新功能是否存在
-const hasRefreshFeature = computed(() => hasFeatureInPage("pluginbrowser", "refresh"));
 const pullToRefreshOpts = computed(() =>
-  IS_ANDROID && hasRefreshFeature.value
+  IS_ANDROID
     ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
     : undefined
 );
 
-// 处理溢出菜单选择
-const handleOverflowSelect = (featureId: HeaderFeatureId) => {
-  switch (featureId) {
-    case "help":
-      openHelpDrawer();
-      break;
-    case "quickSettings":
-      openQuickSettings();
-      break;
-    case "manageSources":
-      showSourcesDialog.value = true;
-      break;
+const handleImportSource = () => {
+  if (IS_ANDROID) {
+    triggerImportDirect();
+  } else {
+    showImportDialog.value = true;
   }
+};
+
+const openManageSources = () => {
+  showSourcesDialog.value = true;
 };
 
 const isLocalMode = computed(() => IS_LOCAL_MODE);

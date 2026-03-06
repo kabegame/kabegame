@@ -33,20 +33,28 @@
   ; - $INSTDIR\resources\bin\dokan-installer.exe
   ; NOTE:
   ; - 仅检查 dokan2.dll 不可靠；驱动关键文件是 dokan2.sys。
-  ; - 32-bit installer 进程可能存在 System32 重定向，这里只做 best-effort 检查；若不确定直接尝试安装。
-  IfFileExists "$SYSDIR\drivers\dokan2.sys" +12 0
-    IfFileExists "$INSTDIR\resources\bin\dokan-installer.exe" 0 +11
-      DetailPrint "Dokan driver not found; installing (via runas)..."
-      ; Marker: record that we attempted to launch installer (for debugging)
-      FileOpen $2 "$INSTDIR\dokan-install-attempt.txt" w
-      FileWrite $2 "attempted\r\n"
-      FileClose $2
-      ; Always use runas to guarantee elevation (GetAccountType may be Admin but not elevated).
-      ExecShell "runas" '"$INSTDIR\resources\bin\dokan-installer.exe"' "/S"
-      DetailPrint "Dokan installer launched (runas, silent)."
-      ; Re-check (best-effort)
-      IfFileExists "$SYSDIR\drivers\dokan2.sys" 0 +2
-        DetailPrint "Dokan driver installed."
+  ; - 32-bit NSIS 在 64-bit Windows 上访问 $SYSDIR 会被重定向到 SysWOW64，而 dokan2.sys 在真实
+  ;   System32\drivers 下，导致“已安装仍重复安装”。先用 $WINDIR\SysNative\drivers 检测（仅 32 位进程
+  ;   在 64 位系统上可见，指向真实 System32），否则用 $SYSDIR\drivers（64 位进程或 32 位系统）。
+  ; 检测路径：优先 $WINDIR\SysNative\drivers\dokan2.sys，否则 $SYSDIR\drivers\dokan2.sys
+  IfFileExists "$WINDIR\SysNative\drivers\dokan2.sys" dokan_driver_ok
+  IfFileExists "$SYSDIR\drivers\dokan2.sys" dokan_driver_ok
+  ; 两处都不存在，需要安装
+  IfFileExists "$INSTDIR\resources\bin\dokan-installer.exe" +1 dokan_driver_ok
+  DetailPrint "Dokan driver not found; installing (via runas)..."
+  ; Marker: record that we attempted to launch installer (for debugging)
+  FileOpen $2 "$INSTDIR\dokan-install-attempt.txt" w
+  FileWrite $2 "attempted\r\n"
+  FileClose $2
+  ; Always use runas to guarantee elevation (GetAccountType may be Admin but not elevated).
+  ExecShell "runas" '"$INSTDIR\resources\bin\dokan-installer.exe"' "/S"
+  DetailPrint "Dokan installer launched (runas, silent)."
+  ; Re-check (best-effort)
+  IfFileExists "$WINDIR\SysNative\drivers\dokan2.sys" 0 +2
+  DetailPrint "Dokan driver installed."
+  IfFileExists "$SYSDIR\drivers\dokan2.sys" 0 +2
+  DetailPrint "Dokan driver installed."
+  dokan_driver_ok:
 
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\kabegame-cli.exe$\" move /Y $\"$INSTDIR\resources\bin\kabegame-cli.exe$\" $\"$INSTDIR$\"' $0
   DetailPrint "Move kabegame-cli.exe -> $INSTDIR (exit code: $0)"

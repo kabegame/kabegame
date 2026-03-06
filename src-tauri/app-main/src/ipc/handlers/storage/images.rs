@@ -1,7 +1,7 @@
 //! Images 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
 use kabegame_core::ipc::events::DaemonEvent;
 use kabegame_core::ipc::ipc::CliIpcResponse;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::storage::gallery::ImageQuery;
 use kabegame_core::storage::Storage;

@@ -153,35 +153,33 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送去重进度事件
-    pub fn emit_dedupe_progress(
+    /// 发送整理进度事件
+    pub fn emit_organize_progress(
         &self,
         processed: usize,
         total: usize,
         removed: usize,
-        batch_index: usize,
+        regenerated: usize,
     ) {
-        let event = std::sync::Arc::new(DaemonEvent::DedupeProgress {
+        let event = std::sync::Arc::new(DaemonEvent::OrganizeProgress {
             processed,
             total,
             removed,
-            batch_index,
+            regenerated,
         });
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送去重完成事件
-    pub fn emit_dedupe_finished(
+    /// 发送整理完成事件
+    pub fn emit_organize_finished(
         &self,
-        processed: usize,
-        total: usize,
         removed: usize,
+        regenerated: usize,
         canceled: bool,
     ) {
-        let event = std::sync::Arc::new(DaemonEvent::DedupeFinished {
-            processed,
-            total,
+        let event = std::sync::Arc::new(DaemonEvent::OrganizeFinished {
             removed,
+            regenerated,
             canceled,
         });
         EventBroadcaster::global().broadcast(event);
@@ -303,20 +301,19 @@ impl GlobalEmitter {
     ) {
     }
 
-    pub fn emit_dedupe_progress(
+    pub fn emit_organize_progress(
         &self,
         _processed: usize,
         _total: usize,
         _removed: usize,
-        _batch_index: usize,
+        _regenerated: usize,
     ) {
     }
 
-    pub fn emit_dedupe_finished(
+    pub fn emit_organize_finished(
         &self,
-        _processed: usize,
-        _total: usize,
         _removed: usize,
+        _regenerated: usize,
         _canceled: bool,
     ) {
     }

@@ -2,8 +2,8 @@
 
 pub mod app_paths;
 pub mod bin_finder;
-pub mod ipc;
 pub mod image_type;
+pub mod ipc;
 
 pub mod crawler;
 

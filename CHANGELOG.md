@@ -4,6 +4,12 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.0.5]
+### Fixed
+- 修复多次启动应用singleton检测bug
+- 修复F11响应，应用处于焦点时才全屏
+- 修复路径上带空格的图片无法正常打开所在文件夹
+
 ## [3.0.4]
 ### Fixed
 - 随着预览图切换，所选择的图片项也跟着切换

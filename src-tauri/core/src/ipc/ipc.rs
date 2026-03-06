@@ -302,16 +302,16 @@ pub enum CliIpcRequest {
     /// 获取正在下载的任务列表
     GetActiveDownloads,
 
-    // ======== Dedupe（daemon 侧）========
-    /// 启动“分批按 hash 去重”
-    DedupeStartGalleryByHashBatched {
-        delete_files: bool,
-        #[serde(default)]
-        batch_size: Option<usize>,
+    // ======== Organize（daemon 侧）========
+    /// 启动整理任务
+    OrganizeStart {
+        dedupe: bool,
+        remove_missing: bool,
+        regen_thumbnails: bool,
     },
 
-    /// 取消“分批按 hash 去重”
-    DedupeCancelGalleryByHashBatched,
+    /// 取消整理任务
+    OrganizeCancel,
 
     // ======== Plugin 相关 ========
     /// 获取已安装插件列表

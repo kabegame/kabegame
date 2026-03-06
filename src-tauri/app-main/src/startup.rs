@@ -351,6 +351,14 @@ pub fn init_shortcut(app: &tauri::App) -> Result<(), String> {
                 {
                     let app_handle = app_handle_clone.clone();
                     tauri::async_runtime::spawn(async move {
+                        // 仅当主窗口处于前台（获得焦点）时才响应 F11，避免抢用其他应用的快捷键
+                        let main_window = match app_handle.get_webview_window("main") {
+                            Some(w) => w,
+                            None => return,
+                        };
+                        if !main_window.is_focused().unwrap_or(false) {
+                            return;
+                        }
                         if let Err(e) = crate::commands::window::toggle_fullscreen(app_handle).await {
                             eprintln!("Failed to toggle fullscreen: {}", e);
                         }
