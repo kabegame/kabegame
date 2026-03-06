@@ -1,19 +1,13 @@
 <template>
   <div class="settings-container" v-pull-to-refresh="pullToRefreshOpts">
     <div class="settings-content">
-      <PageHeader title="设置" sticky>
-        <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing">
-            <el-icon>
-              <Refresh />
-            </el-icon>
-            刷新
-          </el-button>
-          <el-button @click="openHelpDrawer" circle title="帮助">
-            <el-icon>
-              <QuestionFilled />
-            </el-icon>
-          </el-button>
-        </PageHeader>
+      <PageHeader
+        title="设置"
+        :show="settingsShowIds"
+        :fold="[]"
+        @action="handleSettingsAction"
+        sticky
+      />
 
         <StyledTabs v-model="activeTab" sticky>
 
@@ -143,6 +137,7 @@ import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
@@ -161,7 +156,6 @@ import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue
 import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV } from "@kabegame/core/env";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { invoke } from "@tauri-apps/api/core";
-import { hasFeatureInPage } from "@/header/headerFeatures";
 
 // 使用 300ms 防闪屏加载延迟
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
@@ -176,13 +170,17 @@ const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("settings");
 const isLightMode = IS_LIGHT_MODE;
 
-// 根据 pages 列表判断刷新功能是否存在
-const hasRefreshFeature = computed(() => hasFeatureInPage("settings", "refresh"));
+const settingsShowIds = computed(() => (IS_ANDROID ? [] : [HeaderFeatureId.Refresh, HeaderFeatureId.Help]));
 const pullToRefreshOpts = computed(() =>
-  IS_ANDROID && hasRefreshFeature.value
+  IS_ANDROID
     ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
     : undefined
 );
+
+function handleSettingsAction(payload: { id: string; data: { type: string } }) {
+  if (payload.id === HeaderFeatureId.Refresh) handleRefresh();
+  else if (payload.id === HeaderFeatureId.Help) openHelpDrawer();
+}
 
 
 const loadSettings = async () => {

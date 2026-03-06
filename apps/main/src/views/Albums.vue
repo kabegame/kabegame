@@ -1,43 +1,14 @@
 <template>
   <div class="albums-page" v-pull-to-refresh="pullToRefreshOpts">
     <div class="albums-scroll-container">
-      <PageHeader title="画册">
-        <!-- 非 Android：保持原有布局 -->
-        <template v-if="!IS_ANDROID">
-          <el-button v-if="albumDriveEnabled" type="primary" plain @click="openVirtualDrive">
-            去VD查看
-          </el-button>
-          <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing">
-            <el-icon>
-              <Refresh />
-            </el-icon>
-            刷新
-          </el-button>
-          <el-button type="primary" @click="showCreateDialog = true">新建画册</el-button>
-          <TaskDrawerButton />
-          <el-button @click="openHelpDrawer" circle title="帮助">
-            <el-icon>
-              <QuestionFilled />
-            </el-icon>
-          </el-button>
-          <el-button @click="openQuickSettings" circle>
-            <el-icon>
-              <Setting />
-            </el-icon>
-          </el-button>
-        </template>
-        <!-- Android：使用 headerFeatures 驱动 -->
-        <template v-else>
-          <!-- 任务按钮：保持直显 -->
-          <TaskDrawerButton />
-          <!-- 溢出菜单：除任务外的所有功能 -->
-          <AndroidHeaderOverflow
-            v-if="foldedFeatures.length > 0"
-            :features="foldedFeatures"
-            @select="handleOverflowSelect"
-          />
-        </template>
-      </PageHeader>
+      <AlbumsPageHeader
+        :album-drive-enabled="albumDriveEnabled"
+        @view-vd="openVirtualDrive"
+        @refresh="handleRefresh"
+        @create-album="showCreateDialog = true"
+        @help="openHelpDrawer"
+        @quick-settings="openQuickSettings"
+      />
 
       <div v-loading="showLoading" style="min-height: 200px;">
         <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div" class="albums-grid">
@@ -87,14 +58,12 @@ import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { storeToRefs } from "pinia";
 import { useRouter } from "vue-router";
-import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
-import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
+import AlbumsPageHeader from "@/components/header/AlbumsPageHeader.vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
-import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { fileToUrl } from "@kabegame/core/fileServer";
 
@@ -106,42 +75,12 @@ const openQuickSettings = () => quickSettingsDrawer.open("albums");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("albums");
 
-const foldedFeatures = computed(() => {
-  const features = getFoldedFeaturesForPage("albums");
-  // 过滤掉 VD 未启用时的 openVirtualDrive 功能
-  return features.filter((f) => {
-    if (f.id === "openVirtualDrive") {
-      return albumDriveEnabled.value;
-    }
-    return true;
-  });
-});
-
-// 根据 pages 列表判断刷新功能是否存在
-const hasRefreshFeature = computed(() => hasFeatureInPage("albums", "refresh"));
 const pullToRefreshOpts = computed(() =>
-  IS_ANDROID && hasRefreshFeature.value
+  IS_ANDROID
     ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
     : undefined
 );
 
-// 处理溢出菜单选择
-const handleOverflowSelect = (featureId: HeaderFeatureId) => {
-  switch (featureId) {
-    case "help":
-      openHelpDrawer();
-      break;
-    case "quickSettings":
-      openQuickSettings();
-      break;
-    case "createAlbum":
-      showCreateDialog.value = true;
-      break;
-    case "openVirtualDrive":
-      openVirtualDrive();
-      break;
-  }
-};
 
 // 虚拟磁盘
 const settingsStore = useSettingsStore();

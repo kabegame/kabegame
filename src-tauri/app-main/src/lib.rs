@@ -26,18 +26,18 @@ use startup::*;
 use std::process;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 // Daemon Imports
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::ipc::dedupe_service::DedupeService;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 use crate::ipc::handlers::dispatch_request;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 use kabegame_core::ipc::events::{DaemonEvent, DaemonEventKind};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
+#[cfg(not(target_os = "android"))]
+use kabegame_core::storage::organize::OrganizeService;
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
     plugin::PluginManager,
@@ -101,10 +101,10 @@ fn init_globals() -> Result<(), String> {
     }
     println!("  ✓ ProviderRuntime initialized");
 
-    // 桌面端：DedupeService、VD 等全局单例
+    // 桌面端：OrganizeService、VD 等全局单例
     #[cfg(not(target_os = "android"))]
     {
-        DedupeService::init_global(Arc::new(DedupeService::new()))?;
+        OrganizeService::init_global(Arc::new(OrganizeService::new()))?;
 
         #[cfg(not(kabegame_mode = "light"))]
         {
@@ -439,9 +439,9 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             get_file_server_base_url,
             #[cfg(not(target_os = "android"))]
-            start_dedupe_gallery_by_hash_batched,
+            start_organize,
             #[cfg(not(target_os = "android"))]
-            cancel_dedupe_gallery_by_hash_batched,
+            cancel_organize,
             // --- Share (Android) ---
             #[cfg(target_os = "android")]
             share_file,

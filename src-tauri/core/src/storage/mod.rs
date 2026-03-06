@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 // Storage 不再依赖 Tauri AppHandle
 
 pub mod albums;
-pub mod dedupe;
 pub mod gallery;
 pub mod images;
+pub mod organize;
 pub mod run_configs;
 pub mod tasks;
 pub mod temp_files;
@@ -481,7 +481,13 @@ fn compute_file_hash(path: &PathBuf) -> Result<String, String> {
 }
 
 fn perform_complex_migrations(conn: &mut Connection) {
-    let (images_id_is_text, images_has_favorite_col, images_thumb_notnull, images_url_notnull, images_has_order_col) = {
+    let (
+        images_id_is_text,
+        images_has_favorite_col,
+        images_thumb_notnull,
+        images_url_notnull,
+        images_has_order_col,
+    ) = {
         let mut stmt = conn
             .prepare("PRAGMA table_info(images)")
             .expect("Failed to prepare table_info(images)");

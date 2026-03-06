@@ -1,7 +1,19 @@
+use crate::crawler::downloader::generate_thumbnail;
 use crate::emitter::GlobalEmitter;
+#[cfg(not(target_os = "android"))]
+use crate::ipc::server::EventBroadcaster;
+use crate::ipc::DaemonEvent;
+use crate::settings::Settings;
 use crate::storage::{Storage, FAVORITE_ALBUM_ID};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::path::Path;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
+};
+use tokio::sync::Notify;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +75,16 @@ pub(crate) struct BaseImageRow {
     pub(crate) metadata_json: Option<String>,
     pub(crate) thumbnail_path: String,
     pub(crate) hash: String,
+}
+
+// ========== 整理相关方法 ==========
+
+#[derive(Debug, Clone)]
+pub struct OrganizeScanRow {
+    pub id: i64,
+    pub hash: String,
+    pub local_path: String,
+    pub thumbnail_path: String,
 }
 
 impl Storage {
@@ -194,7 +216,8 @@ impl Storage {
             .map_err(|e| format!("Failed to start transaction: {}", e))?;
 
         // 在删除前，查询所有图片所属的任务，并统计每个任务需要增加的 deleted_count
-        let mut task_deleted_counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        let mut task_deleted_counts: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
         for id in &to_remove_ids {
             let task_ids: Vec<String> = tx
                 .prepare("SELECT DISTINCT task_id FROM task_images WHERE image_id = ?1")
@@ -211,7 +234,7 @@ impl Storage {
                         })
                 })
                 .unwrap_or_default();
-            
+
             for task_id in task_ids {
                 *task_deleted_counts.entry(task_id).or_insert(0) += 1;
             }
@@ -390,4 +413,306 @@ impl Storage {
 
         Ok(DebugCloneImagesResult { inserted })
     }
+
+    /// 获取整理用的分批图片数据（单遍扫描）
+    /// SELECT CAST(id AS TEXT), hash, local_path, thumbnail_path FROM images WHERE id > ?cursor_id ORDER BY id ASC LIMIT ?limit
+    pub fn get_organize_batch(
+        &self,
+        cursor_id: i64,
+        limit: usize,
+    ) -> Result<Vec<OrganizeScanRow>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let query = "SELECT CAST(id AS TEXT), hash, local_path, thumbnail_path FROM images WHERE id > ? ORDER BY id ASC LIMIT ?";
+        let mut stmt = conn
+            .prepare(query)
+            .map_err(|e| format!("Failed to prepare organize batch query: {}", e))?;
+
+        let rows = stmt
+            .query_map(params![cursor_id, limit as i64], |row| {
+                Ok(OrganizeScanRow {
+                    id: row.get::<_, String>(0)?.parse().unwrap_or(0),
+                    hash: row.get(1)?,
+                    local_path: row.get(2)?,
+                    thumbnail_path: row.get(3)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query organize batch: {}", e))?;
+
+        let mut results: Vec<OrganizeScanRow> = Vec::new();
+        for r in rows {
+            results.push(r.map_err(|e| format!("Failed to read organize row: {}", e))?);
+        }
+        Ok(results)
+    }
+
+    /// 获取总图片数（用于进度计算）
+    pub fn get_images_total_count(&self) -> Result<usize, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let count: usize = conn
+            .query_row("SELECT COUNT(*) FROM images", [], |row| row.get(0))
+            .map_err(|e| format!("Failed to query images total count: {}", e))?;
+        Ok(count)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OrganizeOptions {
+    pub dedupe: bool,
+    pub remove_missing: bool,
+    pub regen_thumbnails: bool,
+}
+
+static GLOBAL_ORGANIZE: OnceLock<Arc<OrganizeService>> = OnceLock::new();
+
+// 整理期间阻塞下载的全局状态
+static ORGANIZE_BARRIER: OnceLock<Arc<Notify>> = OnceLock::new();
+static ORGANIZE_RUNNING: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+
+#[derive(Default)]
+pub struct OrganizeService {
+    cancel_flag: Mutex<Option<Arc<AtomicBool>>>,
+}
+
+impl OrganizeService {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn init_global(svc: Arc<OrganizeService>) -> Result<(), String> {
+        GLOBAL_ORGANIZE
+            .set(svc)
+            .map_err(|_| "OrganizeService already initialized".to_string())
+    }
+
+    pub fn global() -> Arc<OrganizeService> {
+        GLOBAL_ORGANIZE
+            .get()
+            .expect("OrganizeService not initialized")
+            .clone()
+    }
+
+    // 初始化整理阻塞机制的全局状态
+    pub fn init_organize_barrier() {
+        ORGANIZE_BARRIER.get_or_init(|| Arc::new(Notify::new()));
+        ORGANIZE_RUNNING.get_or_init(|| Arc::new(AtomicBool::new(false)));
+    }
+
+    pub fn get_organize_barrier() -> Arc<Notify> {
+        ORGANIZE_BARRIER
+            .get_or_init(|| Arc::new(Notify::new()))
+            .clone()
+    }
+
+    pub fn get_organize_running() -> Arc<AtomicBool> {
+        ORGANIZE_RUNNING
+            .get_or_init(|| Arc::new(AtomicBool::new(false)))
+            .clone()
+    }
+
+    pub async fn start(
+        self: Arc<Self>,
+        storage: Arc<Storage>,
+        options: OrganizeOptions,
+    ) -> Result<(), String> {
+        // Ensure organize barrier state is ready no matter which call path starts organize.
+        Self::init_organize_barrier();
+
+        let mut guard = self
+            .cancel_flag
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        if guard.is_some() {
+            return Err("整理正在进行中".to_string());
+        }
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        *guard = Some(cancel.clone());
+        drop(guard);
+
+        // 设置整理阻塞状态
+        Self::get_organize_running().store(true, Ordering::Relaxed);
+
+        let handle = tokio::runtime::Handle::current();
+        let svc = Arc::clone(&self);
+
+        tokio::task::spawn_blocking(move || {
+            let res = run_organize(&handle, storage, options, cancel);
+            if let Err(e) = res {
+                eprintln!("[organize] 任务失败: {}", e);
+            }
+
+            // 清理运行状态和唤醒等待的下载任务
+            svc.clear_running();
+            Self::get_organize_running().store(false, Ordering::Relaxed);
+            Self::get_organize_barrier().notify_waiters();
+        });
+
+        Ok(())
+    }
+
+    pub fn cancel(&self) -> Result<bool, String> {
+        let guard = self
+            .cancel_flag
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        if let Some(flag) = guard.as_ref() {
+            flag.store(true, Ordering::Relaxed);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn clear_running(&self) {
+        if let Ok(mut g) = self.cancel_flag.lock() {
+            *g = None;
+        }
+    }
+}
+
+fn emit_organize_finished(
+    handle: &tokio::runtime::Handle,
+    removed: usize,
+    regenerated: usize,
+    canceled: bool,
+) {
+    handle.block_on(async move {
+        EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::OrganizeFinished {
+            removed,
+            regenerated,
+            canceled,
+        }));
+    });
+}
+
+fn run_organize(
+    handle: &tokio::runtime::Handle,
+    storage: Arc<Storage>,
+    options: OrganizeOptions,
+    cancel: Arc<AtomicBool>,
+) -> Result<(), String> {
+    let total = storage.get_images_total_count()?; // 总图片数
+
+    let mut seen_hashes: HashSet<String> = HashSet::new();
+    let mut processed: usize = 0;
+    let mut removed_total: usize = 0;
+    let mut regenerated_total: usize = 0;
+    let mut cursor_id: i64 = 0;
+
+    // 当前壁纸 id：若被移除则清空（与历史行为保持一致）
+    let mut current_wallpaper_id = handle.block_on(async {
+        Settings::global()
+            .get_current_wallpaper_image_id()
+            .await
+            .ok()
+            .flatten()
+    });
+
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            emit_organize_finished(handle, removed_total, regenerated_total, true);
+            return Ok(());
+        }
+
+        // 分批扫描: SELECT id, hash, local_path, thumbnail_path FROM images WHERE id > ? ORDER BY id ASC LIMIT 1000
+        let batch = storage.get_organize_batch(cursor_id, 1000)?;
+        if batch.is_empty() {
+            break;
+        }
+
+        // 游标推进
+        cursor_id = batch.last().unwrap().id;
+        processed += batch.len();
+
+        let mut remove_ids: Vec<String> = Vec::new();
+        let mut regen_list: Vec<(i64, String)> = Vec::new();
+        let mut should_remove: HashSet<i64> = HashSet::new();
+
+        // 1. 去重判断
+        if options.dedupe {
+            for row in &batch {
+                if !row.hash.is_empty() {
+                    if seen_hashes.contains(&row.hash) {
+                        remove_ids.push(row.id.to_string());
+                        should_remove.insert(row.id);
+                    } else {
+                        seen_hashes.insert(row.hash.clone());
+                    }
+                }
+            }
+        }
+
+        // 2. 清除失效图片判断
+        if options.remove_missing {
+            for row in &batch {
+                if !should_remove.contains(&row.id) && !Path::new(&row.local_path).exists() {
+                    remove_ids.push(row.id.to_string());
+                    should_remove.insert(row.id);
+                }
+            }
+        }
+
+        // 3. 补充缩略图判断
+        if options.regen_thumbnails {
+            for row in &batch {
+                if !should_remove.contains(&row.id) {
+                    let needs_regen = row.thumbnail_path.is_empty()
+                        || row.thumbnail_path == row.local_path
+                        || !Path::new(&row.thumbnail_path).exists();
+                    if needs_regen {
+                        regen_list.push((row.id, row.local_path.clone()));
+                    }
+                }
+            }
+        }
+
+        // 执行删除
+        if !remove_ids.is_empty() {
+            storage.batch_remove_images(&remove_ids)?;
+
+            // 发送 ImagesChange 事件，前端刷新视图
+            EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::ImagesChange {
+                reason: "remove".to_string(),
+                image_ids: remove_ids.clone(),
+            }));
+
+            // 检查壁纸是否被移除
+            if let Some(cur) = current_wallpaper_id.as_deref() {
+                if remove_ids.iter().any(|id| id == cur) {
+                    let _ = handle.block_on(async {
+                        Settings::global()
+                            .set_current_wallpaper_image_id(None)
+                            .await
+                    });
+                    current_wallpaper_id = None;
+                }
+            }
+
+            removed_total += remove_ids.len();
+        }
+
+        // 执行缩略图补充
+        for (id, path) in regen_list {
+            let thumbnail_result =
+                handle.block_on(async { generate_thumbnail(Path::new(&path)).await });
+
+            if let Ok(Some(thumb_path)) = thumbnail_result {
+                let thumb_str = thumb_path.to_string_lossy().to_string();
+                storage.update_image_thumbnail_path(&id.to_string(), &thumb_str)?;
+                regenerated_total += 1;
+            }
+        }
+
+        // 发送每批进度事件
+        EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::OrganizeProgress {
+            processed,
+            total,
+            removed: removed_total,
+            regenerated: regenerated_total,
+        }));
+    }
+
+    emit_organize_finished(handle, removed_total, regenerated_total, false);
+    Ok(())
 }

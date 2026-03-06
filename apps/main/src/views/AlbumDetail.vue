@@ -10,63 +10,23 @@
       @added-to-album="handleAddedToAlbum">
 
       <template #before-grid>
-        <PageHeader :title="albumName || '画册'"
-          :subtitle="totalImagesCount ? `共 ${totalImagesCount} 张` : (images.length ? `共 ${images.length} 张` : '')"
-          show-back @back="goBack">
-          <template #title>
-            <div class="album-title-wrapper">
-              <input v-if="isRenaming" v-model="editingName" ref="renameInputRef" class="album-name-input"
-                @blur="handleRenameConfirm" @keyup.enter="handleRenameConfirm" @keyup.esc="handleRenameCancel" />
-              <span v-else class="album-name" @dblclick.stop="handleStartRename" @click.stop :title="'双击改名'">{{
-                albumName ||
-                '画册' }}</span>
-            </div>
-          </template>
-          <!-- 非 Android：保持原有布局 -->
-          <template v-if="!IS_ANDROID">
-            <el-button v-if="albumDriveEnabled" type="primary" plain @click="openVirtualDriveAlbumFolder">
-              去VD查看
-            </el-button>
-            <el-button v-if="hasRefreshFeature" @click="handleRefresh" :loading="isRefreshing" :disabled="loading || !albumId">
-              <el-icon>
-                <Refresh />
-              </el-icon>
-              刷新
-            </el-button>
-            <el-button type="primary" @click="handleSetAsWallpaperCarousel">
-              <el-icon>
-                <Picture />
-              </el-icon>
-              <span style="margin-left: 4px;">设为轮播壁纸</span>
-            </el-button>
-            <el-button type="danger" @click="handleDeleteAlbum">
-              <el-icon>
-                <Delete />
-              </el-icon>
-              <span style="margin-left: 4px;">删除画册</span>
-            </el-button>
-            <TaskDrawerButton />
-            <el-button @click="openHelpDrawer" circle title="帮助">
-              <el-icon>
-                <QuestionFilled />
-              </el-icon>
-            </el-button>
-            <el-button @click="openQuickSettings" circle>
-              <el-icon>
-                <Setting />
-              </el-icon>
-            </el-button>
-          </template>
-          <!-- Android：使用 headerFeatures 驱动 -->
-          <template v-else>
-            <TaskDrawerButton />
-            <AndroidHeaderOverflow
-              v-if="foldedFeatures.length > 0"
-              :features="foldedFeatures"
-              @select="handleOverflowSelect"
-            />
-          </template>
-        </PageHeader>
+        <AlbumDetailPageHeader
+          :album-name="albumName"
+          :total-images-count="totalImagesCount"
+          :is-renaming="isRenaming"
+          v-model:editing-name="editingName"
+          :album-drive-enabled="albumDriveEnabled"
+          @view-vd="openVirtualDriveAlbumFolder"
+          @refresh="handleRefresh"
+          @set-wallpaper-rotate="handleSetAsWallpaperCarousel"
+          @delete-album="handleDeleteAlbum"
+          @help="openHelpDrawer"
+          @quick-settings="openQuickSettings"
+          @back="goBack"
+          @start-rename="handleStartRename"
+          @confirm-rename="handleRenameConfirm"
+          @cancel-rename="handleRenameCancel"
+        />
 
         <!-- 画册图片数量上限警告 -->
         <div v-if="showAlbumLimitWarning" :class="['album-limit-warning', { 'is-danger': isAtLimit }]">
@@ -111,6 +71,7 @@ import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
+import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue";
 import { IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
@@ -127,8 +88,6 @@ export interface SelectionAction {
 }
 import { useImageOperations } from "@/composables/useImageOperations";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
-import AndroidHeaderOverflow from "@/components/header/AndroidHeaderOverflow.vue";
-import { getFoldedFeaturesForPage, type HeaderFeatureId, hasFeatureInPage } from "@/header/headerFeatures";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { useBigPageRoute } from "@/composables/useBigPageRoute";
@@ -160,45 +119,12 @@ const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("albumdetail");
 
-const foldedFeatures = computed(() => {
-  const features = getFoldedFeaturesForPage("albumdetail");
-  // 过滤掉 VD 未启用时的 openVirtualDriveAlbumFolder 功能
-  return features.filter((f) => {
-    if (f.id === "openVirtualDriveAlbumFolder") {
-      return albumDriveEnabled.value;
-    }
-    return true;
-  });
-});
-
-// 根据 pages 列表判断刷新功能是否存在
-const hasRefreshFeature = computed(() => hasFeatureInPage("albumdetail", "refresh"));
 const pullToRefreshOpts = computed(() =>
-  IS_ANDROID && hasRefreshFeature.value
+  IS_ANDROID
     ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
     : undefined
 );
 
-// 处理溢出菜单选择
-const handleOverflowSelect = (featureId: HeaderFeatureId) => {
-  switch (featureId) {
-    case "help":
-      openHelpDrawer();
-      break;
-    case "quickSettings":
-      openQuickSettings();
-      break;
-    case "openVirtualDriveAlbumFolder":
-      openVirtualDriveAlbumFolder();
-      break;
-    case "setAsWallpaperCarousel":
-      handleSetAsWallpaperCarousel();
-      break;
-    case "deleteAlbum":
-      handleDeleteAlbum();
-      break;
-  }
-};
 
 // 虚拟磁盘
 const isLightMode = IS_LIGHT_MODE;
@@ -364,7 +290,6 @@ const clearSelection = () => {
 // 重命名相关
 const isRenaming = ref(false);
 const editingName = ref("");
-const renameInputRef = ref<HTMLInputElement | null>(null);
 
 // 轮播壁纸相关
 const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
@@ -949,9 +874,6 @@ const handleStartRename = async (event?: MouseEvent) => {
   console.log("开始重命名画册:", albumName.value);
   editingName.value = albumName.value;
   isRenaming.value = true;
-  await nextTick();
-  renameInputRef.value?.focus();
-  renameInputRef.value?.select();
 };
 
 // 确认重命名

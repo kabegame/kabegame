@@ -25,17 +25,17 @@
         </section>
 
         <section class="section">
-            <h3>去重功能</h3>
-            <p>画廊工具栏中有一个 <strong>"去重"</strong> 按钮（带过滤图标），可以帮你快速清理重复的图片。</p>
-            <p>去重功能基于文件的哈希值（SHA256）来判断图片是否重复，即使文件名不同，只要文件内容相同就会被识别为重复。</p>
-            <p>点击"去重"按钮后，会弹出确认对话框，你可以选择：</p>
+            <h3>整理功能</h3>
+            <p>画廊工具栏中有一个 <strong>"整理"</strong> 按钮（带过滤图标），可以帮你对画廊进行综合整理。</p>
+            <p>整理功能包含三个可选操作：</p>
             <ul>
-                <li><strong>仅从画廊移除</strong>：只删除画廊中的记录，保留电脑上的源文件（推荐）</li>
-                <li><strong>同时删除源文件</strong>：从画廊移除记录，并永久删除电脑上的重复文件（<strong>慎用，不可恢复</strong>）</li>
+                <li><strong>去重</strong>：基于文件的哈希值（SHA256）清理重复图片，即使文件名不同，只要文件内容相同就会被移除</li>
+                <li><strong>清除失效图片</strong>：移除画廊中本地文件已不存在的图片记录</li>
+                <li><strong>补充缩略图</strong>：为缺失缩略图的图片生成缩略图</li>
             </ul>
-            <p>去重过程中会显示进度条，你可以随时点击取消按钮中断操作。</p>
-            <el-alert class="note" type="warning" show-icon :closable="false">
-                如果选择"同时删除源文件"，该操作不可恢复，请谨慎使用。建议先选择"仅从画廊移除"测试效果。
+            <p>点击"整理"按钮后，会弹出整理选项对话框，你可以选择需要执行的操作。整理过程会在后台执行，支持取消操作。</p>
+            <el-alert class="note" type="info" show-icon :closable="false">
+                整理操作会立即生效，建议根据需要选择合适的整理选项。
             </el-alert>
             <TipImageCarousel v-if="dedupeImages.length > 0" :images="dedupeImages" />
         </section>

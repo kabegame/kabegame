@@ -26,26 +26,94 @@
       </div>
     </div>
     <div class="right">
-      <slot />
+      <!-- 自定义 slot 优先 -->
+      <slot v-if="$slots.default" />
+      <!-- 自动渲染 show features -->
+      <template v-else>
+        <template v-for="featureId in show" :key="featureId">
+          <component v-if="getShowComponent(featureId)" :is="getShowComponent(featureId)"
+            v-bind="getShowProps(featureId)" @action="(data: any) => $emit('action', { id: featureId, data })" />
+        </template>
+        <!-- fold overflow dropdown -->
+        <el-dropdown v-if="fold && fold.length > 0" trigger="click" placement="bottom-end"
+          @command="(id: string) => $emit('action', { id, data: { type: 'click' } })">
+          <el-button circle>
+            <el-icon>
+              <MoreFilled />
+            </el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="featureId in fold" :key="featureId" :command="featureId">
+                <el-icon v-if="getFoldIcon(featureId)" style="margin-right: 8px; vertical-align: middle;">
+                  <component :is="getFoldIcon(featureId)" />
+                </el-icon>
+                <span>{{ getFoldLabel(featureId) }}</span>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </template>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ArrowLeft } from "@element-plus/icons-vue";
+import { ArrowLeft, MoreFilled } from "@element-plus/icons-vue";
+import { useHeaderStore } from "../../stores/header";
+import HeaderActionButton from "./HeaderActionButton.vue";
 
 const props = withDefaults(defineProps<{
   title: string;
   subtitle?: string;
   showBack?: boolean;
   sticky?: boolean;
+  show?: string[];
+  fold?: string[];
 }>(), {
   sticky: true,
+  show: () => [],
+  fold: () => [],
 });
 
 defineEmits<{
   back: [];
+  action: [payload: { id: string; data: { type: string;[key: string]: any } }];
 }>();
+
+const headerStore = useHeaderStore();
+
+const getShowComponent = (featureId: string) => {
+  const feature = headerStore.get(featureId);
+  if (feature?.comp) {
+    return feature.comp;
+  }
+  if (feature?.icon && feature?.label) {
+    return HeaderActionButton;
+  }
+  return null;
+};
+
+const getShowProps = (featureId: string) => {
+  const feature = headerStore.get(featureId);
+  if (feature?.comp) {
+    return {};
+  }
+  if (feature?.icon && feature?.label) {
+    return { icon: feature.icon, label: feature.label };
+  }
+  return {};
+};
+
+const getFoldIcon = (featureId: string) => {
+  const feature = headerStore.get(featureId);
+  return feature?.icon;
+};
+
+const getFoldLabel = (featureId: string) => {
+  const feature = headerStore.get(featureId);
+  return feature?.label || featureId;
+};
 </script>
 
 <style scoped lang="scss">
@@ -83,7 +151,7 @@ defineEmits<{
     gap: 8px;
     margin-left: auto;
 
-    & > * {
+    &>* {
       margin: 0;
     }
   }
@@ -93,7 +161,7 @@ defineEmits<{
     align-items: center;
     gap: 8px;
 
-    & > * {
+    &>* {
       margin: 0;
     }
   }
@@ -112,7 +180,7 @@ defineEmits<{
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    
+
     // 默认渐变文字效果（仅应用于默认的 title-text）
     .title-text {
       background: linear-gradient(135deg, var(--anime-primary) 0%, var(--anime-secondary) 100%);
@@ -120,7 +188,7 @@ defineEmits<{
       -webkit-text-fill-color: transparent;
       background-clip: text;
     }
-    
+
     // 当使用插槽时，重置样式，让插槽内容自己控制
     &.has-slot {
       background: none;
@@ -147,6 +215,23 @@ defineEmits<{
     justify-content: center;
     background: var(--anime-bg-secondary);
     border: 2px solid var(--anime-border);
+  }
+
+  // fold dropdown 样式
+  :deep(.el-dropdown-menu__item) {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    font-size: 14px;
+    color: var(--anime-text-primary);
+
+    &:hover {
+      background-color: var(--el-fill-color-light);
+    }
+
+    .el-icon {
+      font-size: 16px;
+    }
   }
 }
 </style>

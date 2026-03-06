@@ -8,14 +8,14 @@ pub mod plugin;
 pub mod settings;
 pub mod storage;
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::ipc::dedupe_service::DedupeService;
 use kabegame_core::crawler::{CrawlTaskRequest, TaskScheduler};
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "android"))]
 use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
+#[cfg(not(target_os = "android"))]
+use kabegame_core::storage::organize::OrganizeService;
 use kabegame_core::storage::tasks::TaskInfo;
 use kabegame_core::storage::Storage;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
@@ -72,15 +72,16 @@ pub async fn dispatch_request(req: CliIpcRequest, app_handle: AppHandle) -> CliI
     if matches!(req, CliIpcRequest::GetActiveDownloads) {
         return handle_get_active_downloads().await;
     }
-    if let CliIpcRequest::DedupeStartGalleryByHashBatched {
-        delete_files,
-        batch_size,
+    if let CliIpcRequest::OrganizeStart {
+        dedupe,
+        remove_missing,
+        regen_thumbnails,
     } = req
     {
-        return handle_dedupe_start(delete_files, batch_size).await;
+        return handle_organize_start(dedupe, remove_missing, regen_thumbnails).await;
     }
-    if matches!(req, CliIpcRequest::DedupeCancelGalleryByHashBatched) {
-        return handle_dedupe_cancel().await;
+    if matches!(req, CliIpcRequest::OrganizeCancel) {
+        return handle_organize_cancel().await;
     }
 
     // 尝试各个处理器
@@ -177,14 +178,22 @@ async fn handle_get_active_downloads() -> CliIpcResponse {
     }
 }
 
-async fn handle_dedupe_start(
-    delete_files: bool,
-    batch_size: Option<usize>,
+async fn handle_organize_start(
+    dedupe: bool,
+    remove_missing: bool,
+    regen_thumbnails: bool,
 ) -> CliIpcResponse {
-    let bs = batch_size.unwrap_or(10_000).max(1);
-    match DedupeService::global()
+    use kabegame_core::storage::organize::OrganizeOptions;
+    match OrganizeService::global()
         .clone()
-        .start_batched(Arc::new(Storage::global().clone()), delete_files, bs)
+        .start(
+            Arc::new(Storage::global().clone()),
+            OrganizeOptions {
+                dedupe,
+                remove_missing,
+                regen_thumbnails,
+            },
+        )
         .await
     {
         Ok(()) => CliIpcResponse::ok("ok"),
@@ -192,8 +201,8 @@ async fn handle_dedupe_start(
     }
 }
 
-async fn handle_dedupe_cancel() -> CliIpcResponse {
-    match DedupeService::global().cancel() {
+async fn handle_organize_cancel() -> CliIpcResponse {
+    match OrganizeService::global().cancel() {
         Ok(v) => CliIpcResponse::ok_with_data("ok", serde_json::Value::Bool(v)),
         Err(e) => CliIpcResponse::err(e),
     }
