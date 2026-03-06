@@ -15,9 +15,6 @@ export interface CrawlTask {
   startTime?: number;
   endTime?: number;
   error?: string;
-  rhaiDumpPresent?: boolean;
-  rhaiDumpConfirmed?: boolean;
-  rhaiDumpCreatedAt?: number;
 }
 
 export interface ImageInfo {
@@ -32,6 +29,8 @@ export interface ImageInfo {
   thumbnailPath: string;
   favorite?: boolean;
   hash: string;
+  /** 图片 MIME 类型（来自表 mime_type） */
+  mimeType?: string | null;
   order?: number;
   isTaskFailed?: boolean;
   taskFailedId?: number;
@@ -105,12 +104,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
           startTime: raw.startTime ?? raw.start_time ?? undefined,
           endTime: raw.endTime ?? raw.end_time ?? undefined,
           error: raw.error ?? undefined,
-          rhaiDumpPresent:
-            raw.rhaiDumpPresent ?? raw.rhai_dump_present ?? undefined,
-          rhaiDumpConfirmed:
-            raw.rhaiDumpConfirmed ?? raw.rhai_dump_confirmed ?? undefined,
-          rhaiDumpCreatedAt:
-            raw.rhaiDumpCreatedAt ?? raw.rhai_dump_created_at ?? undefined,
         };
 
         if (!task.id || !task.pluginId) return;
@@ -706,9 +699,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
           startTime?: number;
           endTime?: number;
           error?: string;
-          rhaiDumpPresent?: boolean;
-          rhaiDumpConfirmed?: boolean;
-          rhaiDumpCreatedAt?: number;
         }>
       >("get_all_tasks");
 
@@ -729,23 +719,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
         startTime: t.startTime,
         endTime: t.endTime,
         error: t.error,
-        rhaiDumpPresent: t.rhaiDumpPresent,
-        rhaiDumpConfirmed: t.rhaiDumpConfirmed,
-        rhaiDumpCreatedAt: t.rhaiDumpCreatedAt,
       }));
     } catch (error) {
       console.error("加载任务失败:", error);
-    }
-  }
-
-  async function confirmTaskRhaiDump(taskId: string) {
-    await invoke("confirm_task_rhai_dump", { taskId });
-    const idx = tasks.value.findIndex((t) => t.id === taskId);
-    if (idx !== -1) {
-      tasks.value[idx] = {
-        ...tasks.value[idx],
-        rhaiDumpConfirmed: true,
-      };
     }
   }
 
@@ -812,7 +788,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
     deleteRunConfig,
     runConfig,
     loadTasks,
-    confirmTaskRhaiDump,
     getTaskImages,
     getTaskImagesPaginated,
   };

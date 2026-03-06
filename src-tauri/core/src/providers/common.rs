@@ -64,20 +64,31 @@ impl Provider for CommonProvider {
             return Ok(Vec::new());
         }
 
-        if total <= LEAF_SIZE {
+        let mut entries: Vec<FsEntry> = if total <= LEAF_SIZE {
             // 直接显示图片
-            let entries = Storage::global().get_images_fs_entries_by_query(&self.query, 0, total)?;
-            return Ok(entries
+            let files = Storage::global().get_images_fs_entries_by_query(&self.query, 0, total)?;
+            files
                 .into_iter()
                 .map(|e| FsEntry::file(e.file_name, e.image_id, PathBuf::from(e.resolved_path)))
-                .collect());
-        }
+                .collect()
+        } else {
+            // 使用贪心分解策略列出子目录 + 剩余文件
+            list_greedy_subdirs_with_remainder(&self.query, 0, total)?
+        };
 
-        // 使用贪心分解策略列出子目录 + 剩余文件
-        list_greedy_subdirs_with_remainder(&self.query, 0, total)
+        // 仅「全部」正序时展示「倒序」子目录入口，避免 全部/倒序 下再出现 倒序
+        if self.query.is_all_recent_asc() {
+            entries.insert(0, FsEntry::dir("倒序"));
+        }
+        Ok(entries)
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        // 「全部」正序下提供「倒序」子节点；倒序 provider 不再有「倒序」子节点
+        if name == "倒序" && self.query.is_all_recent_asc() {
+            return Some(Arc::new(CommonProvider::with_query(ImageQuery::all_recent_desc())));
+        }
+
         let total = Storage::global().get_images_count_by_query(&self.query).ok()?;
         if total == 0 || total <= LEAF_SIZE {
             return None;

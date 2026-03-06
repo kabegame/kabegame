@@ -6,14 +6,14 @@
     </template>
     <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
-      @cancel-task="handleCancelTaskById" @confirm-task-dump="handleConfirmTaskDumpById"
+      @cancel-task="handleCancelTaskById"
       @task-contextmenu="openTaskContextMenu" />
   </AndroidDrawer>
   <el-drawer v-else v-model="visible" title="任务列表" :size="drawerSize" direction="rtl" :with-header="true"
     :append-to-body="true" :modal-class="'task-drawer-modal'" class="task-drawer drawer-max-width">
     <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
-      @cancel-task="handleCancelTaskById" @confirm-task-dump="handleConfirmTaskDumpById"
+      @cancel-task="handleCancelTaskById"
       @task-contextmenu="openTaskContextMenu" />
   </el-drawer>
 
@@ -203,16 +203,6 @@ const handleCancelTaskById = async (taskId: string) => {
       // 静默处理错误，不显示弹窗，任务状态会通过后端事件自动更新
       console.error("停止任务失败:", error);
     }
-  }
-};
-
-const handleConfirmTaskDumpById = async (taskId: string) => {
-  try {
-    await crawlerStore.confirmTaskRhaiDump(taskId);
-    ElMessage.success("已确认");
-  } catch (e) {
-    console.error("确认 dump 失败:", e);
-    ElMessage.error("确认失败");
   }
 };
 

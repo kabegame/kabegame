@@ -60,6 +60,7 @@ model Image {
     metadata      String? // JSON string
     thumbnailPath String  @default("") @map("thumbnail_path")
     hash          String  @default("")
+    mimeType      String? @map("mime_type")
     width         Int?    // 图片宽度（像素）
     height        Int?    // 图片高度（像素）
     displayName   String  @default("") @map("display_name")

@@ -68,10 +68,7 @@ PRAGMA mmap_size = 268435456;
                 progress REAL NOT NULL DEFAULT 0,
                 start_time INTEGER,
                 end_time INTEGER,
-                error TEXT,
-                rhai_dump_json TEXT,
-                rhai_dump_created_at INTEGER,
-                rhai_dump_confirmed INTEGER NOT NULL DEFAULT 0
+                error TEXT
             )",
             [],
         )
@@ -84,15 +81,6 @@ PRAGMA mmap_size = 268435456;
             [],
         );
         let _ = migrate_rebuild_tasks_table(&mut conn);
-        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN rhai_dump_json TEXT", []);
-        let _ = conn.execute(
-            "ALTER TABLE tasks ADD COLUMN rhai_dump_created_at INTEGER",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE tasks ADD COLUMN rhai_dump_confirmed INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN http_headers TEXT", []);
 
         // 创建运行配置表
@@ -125,6 +113,7 @@ PRAGMA mmap_size = 268435456;
                 metadata TEXT,
                 thumbnail_path TEXT NOT NULL DEFAULT '',
                 hash TEXT NOT NULL DEFAULT '',
+                mime_type TEXT,
                 width INTEGER,
                 height INTEGER
             )",
@@ -146,6 +135,10 @@ PRAGMA mmap_size = 268435456;
             )
             .expect("Failed to add images.display_name column");
         }
+        if !table_has_column(&conn, "images", "mime_type") {
+            conn.execute("ALTER TABLE images ADD COLUMN mime_type TEXT", [])
+                .expect("Failed to add images.mime_type column");
+        }
 
         // 创建索引（新库的 CREATE 已含 width/height，上述 ALTER 用于旧库升级）
         let _ = conn.execute(
@@ -166,6 +159,14 @@ PRAGMA mmap_size = 268435456;
         );
         let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_images_hash ON images(hash)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_images_local_path ON images(local_path)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_images_thumbnail_path ON images(thumbnail_path)",
             [],
         );
 
@@ -238,6 +239,11 @@ PRAGMA mmap_size = 268435456;
 
         // 执行复杂的结构性迁移
         perform_complex_migrations(&mut conn);
+        // 复杂迁移可能重建 images 表，迁移后再次确保 mime_type 列存在。
+        if !table_has_column(&conn, "images", "mime_type") {
+            conn.execute("ALTER TABLE images ADD COLUMN mime_type TEXT", [])
+                .expect("Failed to add images.mime_type column after migrations");
+        }
 
         // 创建临时文件表
         conn.execute(
@@ -264,6 +270,8 @@ PRAGMA mmap_size = 268435456;
             .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
 
         self.ensure_favorite_album()?;
+        // 新增字段后回填旧数据 MIME（仅本地文件路径，content:// 跳过）
+        self.backfill_missing_mime_types()?;
 
         Ok(())
     }
@@ -437,20 +445,15 @@ CREATE TABLE tasks_new (
   deleted_count INTEGER NOT NULL DEFAULT 0,
   start_time INTEGER,
   end_time INTEGER,
-  error TEXT,
-  rhai_dump_json TEXT,
-  rhai_dump_created_at INTEGER,
-  rhai_dump_confirmed INTEGER NOT NULL DEFAULT 0
+  error TEXT
 );
 INSERT INTO tasks_new (
   id, plugin_id, output_dir, user_config, http_headers, output_album_id,
-  status, progress, deleted_count, start_time, end_time, error,
-  rhai_dump_json, rhai_dump_created_at, rhai_dump_confirmed
+  status, progress, deleted_count, start_time, end_time, error
 )
 SELECT
   id, plugin_id, output_dir, user_config, NULL, output_album_id,
-  status, progress, COALESCE(deleted_count, 0), start_time, end_time, error,
-  NULL, NULL, 0
+  status, progress, COALESCE(deleted_count, 0), start_time, end_time, error
 FROM tasks;
 DROP TABLE tasks;
 ALTER TABLE tasks_new RENAME TO tasks;

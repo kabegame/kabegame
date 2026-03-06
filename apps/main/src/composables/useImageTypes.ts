@@ -45,15 +45,27 @@ export function useImageTypes() {
     await loadPromise;
   };
 
+  /** 按扩展名查 MIME，用作表字段 mimeType 缺失时的回退；默认 image/png */
   const getMimeType = (ext: string | undefined): string => {
     const key = ext?.trim().toLowerCase().replace(/^\./, "") ?? "";
-    return mimeByExt.value[key] ?? "image/jpeg";
+    return mimeByExt.value[key] ?? "image/png";
+  };
+
+  /** 分享/剪贴板用：优先使用图片记录的 mimeType，否则按扩展名推断，最后回退 image/png */
+  const getMimeTypeForImage = (
+    image: { mimeType?: string | null } | undefined,
+    ext: string | undefined
+  ): string => {
+    const fromRecord = image?.mimeType?.trim();
+    if (fromRecord) return fromRecord;
+    return getMimeType(ext);
   };
 
   return {
     extensions,
     mimeByExt,
     getMimeType,
+    getMimeTypeForImage,
     load,
   };
 }

@@ -196,8 +196,21 @@ pub async fn get_gallery_image(image_path: String) -> Result<Vec<u8>, String> {
 }
 
 /// 复制图片到系统剪贴板。支持 Windows、macOS、Linux、Android。
+/// 通过 image_id 查表得到 local_path 后按路径读取并写入剪贴板。
 #[tauri::command]
-pub async fn copy_image_to_clipboard(app: AppHandle, image_path: String) -> Result<(), String> {
+pub async fn copy_image_to_clipboard(app: AppHandle, image_id: String) -> Result<(), String> {
+    let image_path = {
+        let info = Storage::global()
+            .find_image_by_id(&image_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Image not found".to_string())?;
+        let path = info.local_path;
+        if path.is_empty() {
+            return Err("Image has no local path".to_string());
+        }
+        path
+    };
+
     #[cfg(target_os = "windows")]
     {
         let image_path = image_path.clone();
@@ -444,6 +457,7 @@ pub async fn copy_image_to_clipboard(app: AppHandle, image_path: String) -> Resu
         use serde::Serialize;
         use tauri_plugin_share::ShareExt;
 
+        // TODO: 添加 mime_type 到 image 表之后优先用 image 表 mime_type 字段，否则回落到 png
         fn mime_from_path(path: &str) -> String {
             let ext = Path::new(path)
                 .extension()

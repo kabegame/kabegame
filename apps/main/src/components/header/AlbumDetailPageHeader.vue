@@ -71,20 +71,20 @@ const subtitle = computed(() =>
 );
 
 const withVd = (ids: string[]) =>
-  props.albumDriveEnabled ? ids : ids.filter((id) => id !== HeaderFeatureId.OpenVirtualDriveAlbumFolder);
+  props.albumDriveEnabled ? ids : ids.filter((id) => id !== HeaderFeatureId.OpenVirtualDrive);
 
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
   if (IS_ANDROID) {
     return [HeaderFeatureId.TaskDrawer];
   } else {
-    return withVd([HeaderFeatureId.OpenVirtualDriveAlbumFolder, HeaderFeatureId.Refresh, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]);
+    return withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]);
   }
 });
 
 const foldIds = computed(() => {
   if (IS_ANDROID) {
-    return withVd([HeaderFeatureId.OpenVirtualDriveAlbumFolder, HeaderFeatureId.Refresh, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]);
+    return withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]);
   } else {
     return [];
   }
@@ -93,7 +93,7 @@ const foldIds = computed(() => {
 // 处理action事件
 const handleAction = (payload: { id: string; data: { type: string } }) => {
   switch (payload.id) {
-    case HeaderFeatureId.OpenVirtualDriveAlbumFolder:
+    case HeaderFeatureId.OpenVirtualDrive:
       emit("view-vd");
       break;
     case HeaderFeatureId.Refresh:

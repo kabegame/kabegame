@@ -28,6 +28,7 @@
       :position="albumMenu.position.value"
       :actions="(albumActions as import('@kabegame/core/actions/types').ActionItem<unknown>[])"
       :context="albumMenuContext"
+      :z-index="3500"
       @close="albumMenu.hide"
       @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename')" />
 
@@ -65,7 +66,7 @@ import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from 
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { fileToUrl } from "@kabegame/core/fileServer";
+import { fileToUrl, thumbnailToUrl } from "@kabegame/core/fileServer";
 
 const albumStore = useAlbumStore();
 const { albums, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
@@ -149,7 +150,7 @@ const toPreviewUrl = (img: ImageInfo): string => {
       ? thumbPath.replace("content://", CONTENT_URI_PROXY_PREFIX)
       : "";
   }
-  return fileToUrl(thumbPath);
+  return thumbnailToUrl(thumbPath);
 };
 
 const hasPreviewUrl = (img: ImageInfo) => !!toPreviewUrl(img);

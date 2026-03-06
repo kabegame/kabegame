@@ -26,12 +26,6 @@ pub struct TaskInfo {
     #[serde(rename = "endTime")]
     pub end_time: Option<u64>,
     pub error: Option<String>,
-    #[serde(rename = "rhaiDumpPresent", default)]
-    pub rhai_dump_present: bool,
-    #[serde(rename = "rhaiDumpConfirmed", default)]
-    pub rhai_dump_confirmed: bool,
-    #[serde(rename = "rhaiDumpCreatedAt", default)]
-    pub rhai_dump_created_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,8 +93,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let task: Option<TaskInfo> = conn
             .query_row(
-                "SELECT id, plugin_id, output_dir, user_config, http_headers, status, progress, start_time, end_time, error, output_album_id, deleted_count,
-                 rhai_dump_json IS NOT NULL as dump_present, rhai_dump_confirmed, rhai_dump_created_at
+                "SELECT id, plugin_id, output_dir, user_config, http_headers, status, progress, start_time, end_time, error, output_album_id, deleted_count
                  FROM tasks WHERE id = ?1",
                 params![task_id],
                 |row| {
@@ -123,9 +116,6 @@ impl Storage {
                         error: row.get(9)?,
                         output_album_id: row.get(10)?,
                         deleted_count: row.get(11)?,
-                        rhai_dump_present: row.get(12)?,
-                        rhai_dump_confirmed: row.get::<_, i64>(13)? != 0,
-                        rhai_dump_created_at: row.get::<_, Option<i64>>(14)?.map(|t| t as u64),
                     })
                 },
             )
@@ -137,8 +127,7 @@ impl Storage {
     pub fn get_all_tasks(&self) -> Result<Vec<TaskInfo>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id, plugin_id, output_dir, user_config, http_headers, status, progress, start_time, end_time, error, output_album_id, deleted_count,
-                      rhai_dump_json IS NOT NULL as dump_present, rhai_dump_confirmed, rhai_dump_created_at
+            .prepare("SELECT id, plugin_id, output_dir, user_config, http_headers, status, progress, start_time, end_time, error, output_album_id, deleted_count
                       FROM tasks ORDER BY start_time DESC")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
@@ -161,9 +150,6 @@ impl Storage {
                     error: row.get(9)?,
                     output_album_id: row.get(10)?,
                     deleted_count: row.get(11)?,
-                    rhai_dump_present: row.get(12)?,
-                    rhai_dump_confirmed: row.get::<_, i64>(13)? != 0,
-                    rhai_dump_created_at: row.get::<_, Option<i64>>(14)?.map(|t| t as u64),
                 })
             })
             .map_err(|e| format!("Failed to query tasks: {}", e))?;
@@ -384,6 +370,7 @@ impl Storage {
                 "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
+                 i.mime_type,
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                  ti.\"order\",
                  i.width,
@@ -411,11 +398,12 @@ impl Storage {
                         .and_then(|s| serde_json::from_str(&s).ok()),
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
-                    favorite: row.get::<_, i64>(9)? != 0,
+                    mime_type: row.get::<_, Option<String>>(9)?,
+                    favorite: row.get::<_, i64>(10)? != 0,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                    display_name: row.get(13)?,
+                    width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
+                    display_name: row.get(14)?,
                 })
             })
             .map_err(|e| format!("Failed to query task images: {}", e))?;
@@ -439,6 +427,7 @@ impl Storage {
                 "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
+                 i.mime_type,
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                  ti.\"order\",
                  i.width,
@@ -469,11 +458,12 @@ impl Storage {
                             .and_then(|s| serde_json::from_str(&s).ok()),
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
-                        favorite: row.get::<_, i64>(9)? != 0,
+                        mime_type: row.get::<_, Option<String>>(9)?,
+                        favorite: row.get::<_, i64>(10)? != 0,
                         local_exists: true,
-                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        display_name: row.get(13)?,
+                        width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
+                        display_name: row.get(14)?,
                     })
                 },
             )
@@ -486,40 +476,4 @@ impl Storage {
         Ok(images)
     }
 
-    pub fn set_task_rhai_dump(&self, task_id: &str, dump_json: &str) -> Result<(), String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        conn.execute(
-            "UPDATE tasks SET rhai_dump_json = ?1, rhai_dump_created_at = ?2, rhai_dump_confirmed = 0 WHERE id = ?3",
-            params![dump_json, now, task_id],
-        )
-        .map_err(|e| format!("Failed to set rhai dump: {}", e))?;
-        Ok(())
-    }
-
-    pub fn confirm_task_rhai_dump(&self, task_id: &str) -> Result<(), String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.execute(
-            "UPDATE tasks SET rhai_dump_confirmed = 1 WHERE id = ?1",
-            params![task_id],
-        )
-        .map_err(|e| format!("Failed to confirm rhai dump: {}", e))?;
-        Ok(())
-    }
-
-    pub fn get_task_rhai_dump(&self, task_id: &str) -> Result<Option<String>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let dump: Option<String> = conn
-            .query_row(
-                "SELECT rhai_dump_json FROM tasks WHERE id = ?1",
-                params![task_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| format!("Failed to query rhai dump: {}", e))?;
-        Ok(dump)
-    }
 }

@@ -97,6 +97,18 @@ pub fn is_image_by_path(path: &Path) -> bool {
     false
 }
 
+/// 根据本地文件路径用 infer 推断 MIME 类型；仅当推断结果在支持列表中时返回 `Some(mime)`。
+/// 用于下载入库、迁移回填等需要“按内容推断”的场景。
+pub fn mime_type_from_path(path: &Path) -> Option<String> {
+    let kind = infer::get_from_path(path).ok().flatten()?;
+    let mime = kind.mime_type().to_lowercase();
+    if supported_mime_types().contains(&mime) {
+        Some(mime)
+    } else {
+        None
+    }
+}
+
 /// 判断 URL 是否以支持的图片扩展名结尾（用于 Rhai `is_image_url` 等）。
 pub fn url_has_image_extension(url: &str) -> bool {
     let url_lower = url.to_lowercase();

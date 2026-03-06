@@ -1,5 +1,4 @@
 import { defineStore } from "pinia";
-import { reactive } from "vue";
 import type { Component } from "vue";
 
 export enum HeaderFeatureId {
@@ -12,12 +11,12 @@ export enum HeaderFeatureId {
   Collect = "collect",
   CreateAlbum = "createAlbum",
   OpenVirtualDrive = "openVirtualDrive",
-  OpenVirtualDriveAlbumFolder = "openVirtualDriveAlbumFolder",
   SetAsWallpaperCarousel = "setAsWallpaperCarousel",
   DeleteAlbum = "deleteAlbum",
   ImportSource = "importSource",
   ManageSources = "manageSources",
   TaskDrawer = "taskDrawer",
+  AddToAlbum = "addToAlbum",
 }
 
 export interface HeaderFeatureDef {
@@ -28,7 +27,7 @@ export interface HeaderFeatureDef {
 }
 
 export const useHeaderStore = defineStore('header', () => {
-  const features = reactive(new Map<string, HeaderFeatureDef>());
+  const features = new Map<string, HeaderFeatureDef>();
 
   function register(defs: HeaderFeatureDef[]) {
     for (const def of defs) {
@@ -45,7 +44,6 @@ export const useHeaderStore = defineStore('header', () => {
   }
 
   return {
-    features,
     register,
     get,
     has,

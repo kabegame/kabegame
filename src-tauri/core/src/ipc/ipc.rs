@@ -235,11 +235,6 @@ pub enum CliIpcRequest {
         task_id: String,
     },
 
-    /// 确认（已读）任务 Rhai dump
-    StorageConfirmTaskRhaiDump {
-        task_id: String,
-    },
-
     /// 清除所有已完成/失败/取消的任务
     StorageClearFinishedTasks,
 

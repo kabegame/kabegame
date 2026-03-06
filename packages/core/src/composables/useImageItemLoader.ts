@@ -1,7 +1,7 @@
 import { computed, ref, watch, type Ref } from "vue";
 import type { ImageInfo } from "../types/image";
 import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID } from "../env";
-import { fileToUrl } from "../fileServer";
+import { fileToUrl, thumbnailToUrl } from "../fileServer";
 import {
   getImageStateCache,
   setImageStateCache,
@@ -23,6 +23,12 @@ function toDesktopUrl(path: string | undefined): string {
   const normalized = normalizeDesktopPath(path);
   if (!normalized) return "";
   return fileToUrl(normalized);
+}
+
+function toDesktopThumbnailUrl(path: string | undefined): string {
+  const normalized = normalizeDesktopPath(path);
+  if (!normalized) return "";
+  return thumbnailToUrl(normalized);
 }
 
 function toAndroidProxyUrl(path: string | undefined): string {
@@ -58,7 +64,7 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
       };
     }
 
-    const thumbnailUrl = toDesktopUrl(image.thumbnailPath || image.localPath);
+    const thumbnailUrl = toDesktopThumbnailUrl(image.thumbnailPath || image.localPath);
     const originalUrl = toDesktopUrl(image.localPath);
     const cols = options.gridColumns.value ?? 0;
     // 列数 >= 3：只显示缩略图（失败回退原图）；列数 1、2：双图策略（先缩略图再原图淡入）

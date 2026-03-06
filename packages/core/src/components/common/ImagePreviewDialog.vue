@@ -95,7 +95,7 @@
         </div>
       </div>
     </el-dialog>
-    <!-- 桌面端预览内右键：与单张图片相同的上下文菜单 -->
+    <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（z-index 高于 el-dialog 以免被遮） -->
     <ActionRenderer
       v-if="actions.length > 0"
       :visible="previewContextMenuVisible"
@@ -103,6 +103,7 @@
       :actions="actions"
       :context="previewActionContext"
       mode="contextmenu"
+      :z-index="5000"
       @close="closePreviewContextMenu"
       @command="handlePreviewActionCommand" />
   </template>
@@ -124,7 +125,7 @@ import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
 import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 import { useModalBack } from "../../composables/useModalBack";
-import { fileToUrl } from "../../fileServer";
+import { fileToUrl, thumbnailToUrl } from "../../fileServer";
 
 const props = withDefaults(defineProps<{
   images: ImageInfo[];
@@ -214,7 +215,9 @@ const getOriginalPreviewUrl = (image: ImageInfo) =>
 
 const getThumbnailPreviewUrl = (image: ImageInfo) => {
   const thumbPath = image.thumbnailPath || image.localPath;
-  return IS_ANDROID ? toAndroidProxyUrl(thumbPath) : toDesktopUrl(thumbPath);
+  if (IS_ANDROID) return toAndroidProxyUrl(thumbPath);
+  const normalized = normalizeDesktopPath(thumbPath);
+  return normalized ? thumbnailToUrl(normalized) : "";
 };
 
 // 计算 cover scale（填满屏幕的缩放比例）

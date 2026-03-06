@@ -61,14 +61,6 @@
             <div class="task-name">{{ getPluginName(task.pluginId) }}</div>
           </div>
           <div class="task-header-right">
-            <el-badge v-if="task.rhaiDumpPresent && !task.rhaiDumpConfirmed" is-dot class="task-dump-badge">
-              <el-button text circle size="small" class="task-dump-confirm-btn" title="该任务已保存 Rhai 变量 dump，点击确认已查看"
-                @click.stop="emit('confirm-task-dump', task.id)">
-                <el-icon>
-                  <Document />
-                </el-icon>
-              </el-button>
-            </el-badge>
             <el-button text circle size="small" class="task-detail-btn" title="查看任务图片"
               @click.stop="$emit('open-task-images', task.id)">
               <el-icon>
@@ -180,7 +172,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import { ArrowDown, Clock, Close, CopyDocument, Document, Picture, WarningFilled } from "@element-plus/icons-vue";
+import { ArrowDown, Clock, Close, CopyDocument, Picture, WarningFilled } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 
 type VarOption = string | { name: string; variable: string };
@@ -202,9 +194,6 @@ type ScriptTask = {
   startTime?: number | null;
   endTime?: number | null;
   error?: string | null;
-  rhaiDumpPresent?: boolean;
-  rhaiDumpConfirmed?: boolean;
-  rhaiDumpCreatedAt?: number | null;
 };
 
 type ActiveDownloadInfo = {
@@ -255,7 +244,6 @@ const emit = defineEmits<{
   (e: "delete-task", taskId: string): void;
   (e: "cancel-task", taskId: string): void;
   (e: "open-task-images", taskId: string): void;
-  (e: "confirm-task-dump", taskId: string): void;
   (e: "clear-finished-tasks"): void;
   (e: "task-contextmenu", payload: { x: number; y: number; task: ScriptTask }): void;
 }>();

@@ -345,11 +345,6 @@ impl IpcClient {
             .await
     }
 
-    pub async fn storage_confirm_task_rhai_dump(&self, task_id: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::StorageConfirmTaskRhaiDump { task_id })
-            .await
-    }
-
     pub async fn storage_clear_finished_tasks(&self) -> Result<usize, String> {
         let v = self
             .request_data(CliIpcRequest::StorageClearFinishedTasks)

@@ -32,7 +32,12 @@ import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 interface Props {
   modelValue: boolean;
+  /** 要加入画册的图片 id；在任务一键加入时可不传，改传 taskId 由后端取任务全部图片 */
   imageIds: string[];
+  /**
+   * 可选：任务 id。传入时为“一键加入画册”模式，只弹选择画册，由后端把该任务全部图片加入
+   */
+  taskId?: string;
   /**
    * 可选：排除一些画册（例如在画册详情页里，不要让用户选“当前画册”，避免无意义操作）
    */
@@ -110,7 +115,8 @@ watch(selectedAlbumId, (newValue) => {
 
 // 处理新建画册并加入图片
 const handleCreateAndAddAlbum = async () => {
-  if (props.imageIds.length === 0) {
+  const isTaskMode = !!props.taskId;
+  if (!isTaskMode && props.imageIds.length === 0) {
     visible.value = false;
     return;
   }
@@ -121,30 +127,30 @@ const handleCreateAndAddAlbum = async () => {
   }
 
   try {
-    // 创建新画册
     const created = await albumStore.createAlbum(newAlbumName.value.trim());
 
-    // 添加图片到新画册（新画册为空，无需过滤）
-    await albumStore.addImagesToAlbum(created.id, props.imageIds);
+    if (isTaskMode) {
+      const result = await albumStore.addTaskImagesToAlbum(props.taskId!, created.id);
+      ElMessage.success(`已创建画册「${created.name}」并加入任务全部图片（${result.added} 张）`);
+    } else {
+      await albumStore.addImagesToAlbum(created.id, props.imageIds);
+      ElMessage.success(`已创建画册「${created.name}」并加入 ${props.imageIds.length} 张图片`);
+    }
 
-    // 成功后弹窗提示
-    ElMessage.success(`已创建画册「${created.name}」并加入 ${props.imageIds.length} 张图片`);
-
-    // 关闭对话框并重置状态
     visible.value = false;
     emit("added");
   } catch (error: any) {
     console.error("创建画册并加入图片失败:", error);
-    // 提取友好的错误信息
-    const errorMessage = typeof error === "string" 
-      ? error 
+    const errorMessage = typeof error === "string"
+      ? error
       : error?.message || String(error) || "操作失败";
     ElMessage.error(errorMessage);
   }
 };
 
 const confirmAddToAlbum = async () => {
-  if (props.imageIds.length === 0) {
+  const isTaskMode = !!props.taskId;
+  if (!isTaskMode && props.imageIds.length === 0) {
     visible.value = false;
     return;
   }
@@ -155,30 +161,41 @@ const confirmAddToAlbum = async () => {
     return;
   }
 
-  // 过滤掉已经在画册中的图片
-  let idsToAdd = props.imageIds;
   try {
-    const existingIds = await albumStore.getAlbumImageIds(albumId);
-    const existingSet = new Set(existingIds);
-    idsToAdd = props.imageIds.filter(id => !existingSet.has(id));
-
-    if (idsToAdd.length === 0) {
-      ElMessage.info("所选图片已全部在画册中");
+    if (isTaskMode) {
+      const result = await albumStore.addTaskImagesToAlbum(props.taskId!, albumId);
+      if (result.added === 0) {
+        ElMessage.info("任务图片已全部在该画册中");
+      } else {
+        ElMessage.success(`已加入画册（${result.added} 张）`);
+      }
       visible.value = false;
       emit("added");
       return;
     }
 
-    if (idsToAdd.length < props.imageIds.length) {
-      const skippedCount = props.imageIds.length - idsToAdd.length;
-      ElMessage.warning(`已跳过 ${skippedCount} 张已在画册中的图片`);
-    }
-  } catch (error) {
-    console.error("获取画册图片列表失败:", error);
-    // 如果获取失败，仍然尝试添加（后端有 INSERT OR IGNORE 保护）
-  }
+    // 非任务模式：过滤掉已经在画册中的图片
+    let idsToAdd = props.imageIds;
+    try {
+      const existingIds = await albumStore.getAlbumImageIds(albumId);
+      const existingSet = new Set(existingIds);
+      idsToAdd = props.imageIds.filter(id => !existingSet.has(id));
 
-  try {
+      if (idsToAdd.length === 0) {
+        ElMessage.info("所选图片已全部在画册中");
+        visible.value = false;
+        emit("added");
+        return;
+      }
+
+      if (idsToAdd.length < props.imageIds.length) {
+        const skippedCount = props.imageIds.length - idsToAdd.length;
+        ElMessage.warning(`已跳过 ${skippedCount} 张已在画册中的图片`);
+      }
+    } catch (error) {
+      console.error("获取画册图片列表失败:", error);
+    }
+
     await albumStore.addImagesToAlbum(albumId, idsToAdd);
     ElMessage.success(`已加入画册（${idsToAdd.length} 张）`);
     visible.value = false;

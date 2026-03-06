@@ -45,15 +45,6 @@ export function useImageOperations(
     if (ext === "bmp") return "image/bmp";
     return "";
   };
-  const toArrayBuffer = (u8: Uint8Array): ArrayBuffer => {
-    if (u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength) {
-      return u8.buffer as unknown as ArrayBuffer;
-    }
-    return u8.buffer.slice(
-      u8.byteOffset,
-      u8.byteOffset + u8.byteLength,
-    ) as unknown as ArrayBuffer;
-  };
 
   // 打开文件路径（Android 用系统图片查看器 openImage，桌面用 open_file_path）
   const handleOpenImagePath = async (localPath: string) => {
@@ -162,9 +153,9 @@ export function useImageOperations(
       const thumbnailPath = (image.thumbnailPath || "").trim();
       const imageUrl = fileToUrl(localPath) || fileToUrl(thumbnailPath);
 
-      if (isTauri() && localPath) {
+      if (localPath) {
         try {
-          await invoke("copy_image_to_clipboard", { imagePath: localPath });
+          await invoke("copy_image_to_clipboard", { imageId: image.id });
           ElMessage.success("图片已复制到剪贴板");
           return;
         } catch (error) {

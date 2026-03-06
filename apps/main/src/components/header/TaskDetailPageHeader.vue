@@ -33,6 +33,7 @@ const emit = defineEmits<{
   refresh: [];
   'stop-task': [];
   'delete-task': [];
+  'add-to-album': [];
   help: [];
   'quick-settings': [];
   back: [];
@@ -43,7 +44,7 @@ const showIds = computed(() => {
   if (IS_ANDROID) {
     return [HeaderFeatureId.Refresh, HeaderFeatureId.TaskDrawer];
   } else {
-    const ids = [HeaderFeatureId.Refresh, HeaderFeatureId.DeleteTask, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings];
+    const ids = [HeaderFeatureId.Refresh, HeaderFeatureId.DeleteTask, HeaderFeatureId.AddToAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings];
     if (props.showStopTask) ids.splice(1, 0, HeaderFeatureId.StopTask);
     return ids;
   }
@@ -51,7 +52,7 @@ const showIds = computed(() => {
 
 const foldIds = computed(() => {
   if (!IS_ANDROID) return [];
-  const ids = [HeaderFeatureId.DeleteTask, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings];
+  const ids = [HeaderFeatureId.DeleteTask, HeaderFeatureId.AddToAlbum, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings];
   if (props.showStopTask) ids.unshift(HeaderFeatureId.StopTask);
   return ids;
 });
@@ -67,6 +68,9 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.DeleteTask:
       emit("delete-task");
+      break;
+    case HeaderFeatureId.AddToAlbum:
+      emit("add-to-album");
       break;
     case HeaderFeatureId.Help:
       emit("help");

@@ -5,10 +5,18 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ## [3.0.5]
+### Added
+- 一键加入所有任务图片到画册功能
+
 ### Fixed
 - 修复多次启动应用singleton检测bug
 - 修复F11响应，应用处于焦点时才全屏
 - 修复路径上带空格的图片无法正常打开所在文件夹
+- 若干右键上下文菜单被预览框遮住的bug
+- 增加本地图片文件的安全性，并为后来本地同步图片服务做准备
+
+### Removed
+- 去掉任务失败时dump.json的生成
 
 ## [3.0.4]
 ### Fixed

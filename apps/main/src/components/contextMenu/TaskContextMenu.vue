@@ -1,6 +1,6 @@
 <template>
-  <ContextMenu :visible="visible" :position="position" :items="menuItems" @close="$emit('close')"
-    @command="$emit('command', $event)" />
+  <ContextMenu :visible="visible" :position="position" :items="menuItems" :z-index="3000"
+    @close="$emit('close')" @command="$emit('command', $event)" />
 </template>
 
 <script setup lang="ts">

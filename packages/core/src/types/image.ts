@@ -25,6 +25,9 @@ export interface ImageInfo {
   // 显示名称（从数据库 display_name 列读取）
   displayName?: string;
 
+  /** 图片 MIME 类型（来自表 mime_type，分享/剪贴板优先使用） */
+  mimeType?: string | null;
+
   // 任务失败占位（TaskDetail）：用于在网格中渲染“下载重试”按钮
   isTaskFailed?: boolean;
   taskFailedId?: number;

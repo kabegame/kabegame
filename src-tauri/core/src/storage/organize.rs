@@ -75,6 +75,7 @@ pub(crate) struct BaseImageRow {
     pub(crate) metadata_json: Option<String>,
     pub(crate) thumbnail_path: String,
     pub(crate) hash: String,
+    pub(crate) mime_type: Option<String>,
 }
 
 // ========== 整理相关方法 ==========
@@ -298,7 +299,7 @@ impl Storage {
             let mut pool_stmt = conn
                 .prepare(
                     "SELECT url, local_path, plugin_id, task_id, crawled_at, metadata,
-                            COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, '')
+                            COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), mime_type
                      FROM images
                      ORDER BY RANDOM()
                      LIMIT ?1",
@@ -316,6 +317,7 @@ impl Storage {
                         metadata_json: row.get(5)?,
                         thumbnail_path: row.get(6)?,
                         hash: row.get(7)?,
+                        mime_type: row.get(8)?,
                     })
                 })
                 .map_err(|e| format!("Failed to query pool: {}", e))?;
@@ -349,8 +351,8 @@ impl Storage {
             {
                 let mut insert_img = tx
                     .prepare(
-                        "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                        "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, mime_type)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     )
                     .map_err(|e| format!("Failed to prepare insert image: {}", e))?;
 
@@ -383,6 +385,7 @@ impl Storage {
                             &base.metadata_json,
                             thumbnail_path,
                             &base.hash,
+                            &base.mime_type,
                         ])
                         .map_err(|e| format!("Failed to insert image (debug clone): {}", e))?;
                     let new_id = tx.last_insert_rowid();

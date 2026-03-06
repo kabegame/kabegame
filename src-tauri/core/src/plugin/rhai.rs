@@ -26,99 +26,6 @@ fn safe_filename_component(input: &str) -> String {
     }
 }
 
-fn is_sensitive_var_name(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    n.contains("token")
-        || n.contains("cookie")
-        || n.contains("auth")
-        || n.contains("password")
-        || n.contains("secret")
-        || n.contains("apikey")
-        || n.contains("api_key")
-}
-
-fn build_rhai_scope_dump_json(
-    plugin_id: &str,
-    task_id: &str,
-    scope: &Scope,
-    err: &rhai::EvalAltResult,
-) -> serde_json::Value {
-    // 注意：Scope 仅包含脚本中的“全局变量”（以及我们注入的常量）。
-    // 函数内部的局部变量/临时值不会出现在这里。
-    const MAX_VALUE_CHARS: usize = 4096;
-    const MAX_VARS: usize = 256;
-
-    let pos = err.position();
-    let line = pos.line().unwrap_or(0);
-    let col = pos.position().unwrap_or(0);
-
-    let mut vars: Vec<serde_json::Value> = Vec::new();
-    let mut total = 0usize;
-    for (name, is_const, value) in scope.iter_raw() {
-        total += 1;
-        if vars.len() >= MAX_VARS {
-            break;
-        }
-
-        let sensitive = is_sensitive_var_name(name);
-        let raw_value = if sensitive {
-            "<redacted>".to_string()
-        } else {
-            value.to_string()
-        };
-        let raw_len = raw_value.chars().count();
-        let (value_out, truncated) = if raw_len > MAX_VALUE_CHARS {
-            let mut s = raw_value.chars().take(MAX_VALUE_CHARS).collect::<String>();
-            s.push_str(&format!(" ... (truncated, original_len={raw_len})"));
-            (s, true)
-        } else {
-            (raw_value, false)
-        };
-
-        vars.push(serde_json::json!({
-            "name": name,
-            "typeId": format!("{:?}", value.type_id()),
-            "isConstant": is_const,
-            "isSensitive": sensitive,
-            "value": value_out,
-            "valueTruncated": truncated,
-            "valueLen": raw_len,
-        }));
-    }
-
-    serde_json::json!({
-        "pluginId": plugin_id,
-        "taskId": task_id,
-        "error": err.to_string(),
-        "position": {
-            "line": line,
-            "col": col,
-        },
-        "notes": "仅包含 Scope（全局变量/注入常量）。函数内部局部变量无法从 Scope 提取。",
-        "vars": vars,
-        "varsTotal": total,
-        "varsCapped": total > vars.len(),
-    })
-}
-
-fn try_write_rhai_scope_dump_file(
-    images_dir: &Path,
-    plugin_id: &str,
-    task_id: &str,
-    dump_text: &str,
-) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(images_dir)
-        .map_err(|e| format!("Failed to create images_dir for dump: {e}"))?;
-
-    let safe_task = safe_filename_component(task_id);
-    let safe_plugin = safe_filename_component(plugin_id);
-    let filename = format!("{safe_task}_{safe_plugin}.rhai-scope-dump.json");
-    let path = images_dir.join(filename);
-
-    std::fs::write(&path, dump_text).map_err(|e| format!("Failed to write dump file: {e}"))?;
-    Ok(path)
-}
-
 fn lock_or_inner<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match m.lock() {
         Ok(g) => g,
@@ -1649,55 +1556,16 @@ pub fn execute_crawler_script_with_runtime(
         .engine
         .eval_with_scope(&mut scope, &script_content)
         .map_err(|e| {
-            // 失败时输出一个 scope dump，便于定位脚本运行到哪一步/变量是否如预期。
-            // 注意：只包含全局变量/注入常量；函数局部变量无法获取。
-            let dump_text = build_rhai_scope_dump_json(plugin_id, task_id, &scope, e.as_ref());
-            let dump_text = serde_json::to_string_pretty(&dump_text).ok();
-
-            // 1) 保存到任务表（供 UI "确认"）
-            if let Some(ref text) = dump_text {
-                let storage = Storage::global();
-                if let Err(err) = storage.set_task_rhai_dump(task_id, text) {
-                    GlobalEmitter::global().emit_task_log(
-                        task_id,
-                        "warn",
-                        &format!("Rhai dump 保存到任务表失败：{err}"),
-                    );
-                }
-            }
-
-            // 2) 额外写一个文件（便于用户直接打开）
-            let dump_path = match dump_text.as_deref() {
-                Some(text) => {
-                    match try_write_rhai_scope_dump_file(images_dir, plugin_id, task_id, text) {
-                        Ok(p) => Some(p),
-                        Err(dump_err) => {
-                            let msg = format!("Rhai 脚本失败：生成变量 dump 文件失败：{dump_err}");
-                            GlobalEmitter::global().emit_task_log(task_id, "warn", &msg);
-                            None
-                        }
-                    }
-                }
-                None => None,
-            };
-
-            // 尽可能把行列号带上，方便前端定位（某些错误的 Display 不包含 position）
             let pos = e.position();
             let (line, col) = (pos.line().unwrap_or(0), pos.position().unwrap_or(0));
             if line > 0 && col > 0 {
                 eprintln!("Script execution error at {}:{}: {}", line, col, e);
-                let mut msg = format!("Script execution error at {}:{}: {}", line, col, e);
-                if let Some(p) = dump_path {
-                    msg.push_str(&format!("\nScope dump: {}", p.display()));
-                }
+                let msg = format!("Script execution error at {}:{}: {}", line, col, e);
                 GlobalEmitter::global().emit_task_log(task_id, "error", &msg);
                 msg
             } else {
                 eprintln!("Script execution error: {}", e);
-                let mut msg = format!("Script execution error: {}", e);
-                if let Some(p) = dump_path {
-                    msg.push_str(&format!("\nScope dump: {}", p.display()));
-                }
+                let msg = format!("Script execution error: {}", e);
                 GlobalEmitter::global().emit_task_log(task_id, "error", &msg);
                 msg
             }
