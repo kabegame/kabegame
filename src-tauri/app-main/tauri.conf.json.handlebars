@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kabegame",
-  "version": "3.0.4",
-  "identifier": {{#if isAndroid}}"app.kabegame"{{else}}"Kabegame"{{/if}},
+  "version": "3.0.5",
+  "identifier": {{#if isAndroid}}{{#if isDev}}"app.kabegame.debug"{{else}}"app.kabegame"{{/if}}{{else}}"Kabegame"{{/if}},
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
     "devUrl": "http://{{devServerHost}}:1420",
