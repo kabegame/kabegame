@@ -618,36 +618,34 @@ watch(
   () => {
     if (!previewVisible.value) return;
 
-    if (IS_ANDROID) {
-      // 安卓端：PhotoSwipe 内部处理 ID 追踪，仅处理空列表关闭
-      if (props.images.length === 0) {
-        closePreview();
-      }
-      return;
-    }
-
-    // 桌面端：使用 currentImageId 实现 ID-based 导航
     if (!currentImageId.value) return;
 
     const foundIndex = props.images.findIndex((img) => img.id === currentImageId.value);
 
     if (foundIndex !== -1) {
-      // 找到且 index 变化 --> 导航到新 index
       if (foundIndex !== previewIndex.value) {
-        setPreviewByIndex(foundIndex);
+        previewIndex.value = foundIndex;
+        if (!IS_ANDROID) {
+          setPreviewByIndex(foundIndex);
+        }
       }
-      // 找到且 index 不变 --> 不做操作（images 内容可能变了，但 previewImage 是 computed 会自动更新）
     } else {
-      // 没找到
       if (props.images.length === 0) {
-        // 列表为空 --> 关闭预览
         closePreview();
       } else if (props.images.length <= previewIndex.value) {
-        // 超出边界 --> 导航到最后一张
-        setPreviewByIndex(props.images.length - 1);
+        const newIndex = props.images.length - 1;
+        previewIndex.value = newIndex;
+        if (!IS_ANDROID) {
+          setPreviewByIndex(newIndex);
+        } else {
+          currentImageId.value = props.images[newIndex]?.id ?? null;
+        }
       } else {
-        // 在边界内 --> 保持 index，刷新显示内容
-        setPreviewByIndex(previewIndex.value);
+        if (!IS_ANDROID) {
+          setPreviewByIndex(previewIndex.value);
+        } else {
+          currentImageId.value = props.images[previewIndex.value]?.id ?? null;
+        }
       }
     }
   }

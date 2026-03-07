@@ -51,16 +51,12 @@ function releaseAssetFileName(params: {
   if (OSPlugin.isMacOS) {
     return `Kabegame-${mode}_${version}_${archForMacOS()}${ext}`;
   } else {
-    return `Kabegame_${version}_android-${ext}`;
+    return `Kabegame_${version}_android-preview${ext}`;
   }
 }
 
 function findBundleDir(root: string): string | null {
-  const candidates = [
-    path.join(root, "target", "release", "bundle"),
-    ...(OSPlugin.isAndroid ? [path.join(root, "src-tauri", "app-main", "gen", "android", "app", "build", "outputs", "apk")] : []),
-  ];
-  const p = OSPlugin.isAndroid ? path.join(root, "src-tauri", "app-main", "gen", "android", "app", "build", "outputs", "apk") 
+  const p = OSPlugin.isAndroid ? path.join(root, "src-tauri", "app-main", "gen", "android", "app", "build", "outputs", "apk", "universal", "release") 
     : OSPlugin.isMacOS ? path.join(root, "target", "release", "bundle", "dmg")
     : OSPlugin.isWindows ? path.join(root, "target", "release", "bundle", "nsis")
     : OSPlugin.isLinux ? path.join(root, "target", "release", "bundle", "deb")
