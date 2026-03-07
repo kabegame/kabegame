@@ -99,7 +99,7 @@
 
 ### Linux（Debian 分发，如 Ubuntu）
 
-1. **安装依赖（仅 Normal / Local 模式）**：
+1. **安装依赖（仅 Standard 模式）**：
    - 虚拟磁盘功能需要 `fuse3` 依赖，如果系统未安装，请先安装：
    ```bash
    sudo apt update
@@ -113,7 +113,7 @@
    ```
    - 如果遇到依赖问题，可以运行：`sudo apt-get install -f` 自动修复
 
-3. **CLI 工具（仅 Normal / Local 模式）**：
+3. **CLI 工具（仅 Standard 模式）**：
    - CLI 会自动安装到 `/usr/bin/kabegame-cli`，可直接在终端使用：`kabegame-cli --help`
    - Light 模式不提供 CLI 工具
 
