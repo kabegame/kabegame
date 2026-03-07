@@ -32,11 +32,10 @@
 
 - 🖼️ **壁纸管理**: 收集、管理、轮播二次元壁纸，让桌面充满二次元气息
 - 🔌 **插件系统**: 支持通过 `.kgpg` 插件文件从不同网站爬取壁纸资源
-- 📸 **画册浏览**: 查看已爬取的壁纸，支持按插件和画册筛选
+- 📸 **画册整理**: 将爬取的图片整理到画册里面，这样就不用担心找不到啦
 - 🎨 **壁纸轮播**: 自动从指定画册中轮播更换桌面壁纸，支持随机和顺序模式
-- 📦 **本地存储**: 壁纸和元数据存储在本地应用数据目录
 - 💾 **虚拟磁盘**: 在 Windows 上将画册挂载为虚拟磁盘（MacOS和Linux为虚拟文件夹），在资源管理器中像文件夹一样浏览图片
-- 🌐 **源管理**: 浏览、安装、收藏和管理壁纸源插件
+- 🌐 **插件管理**: 从内置商店（GitHub仓库）浏览、安装、收藏和管理壁纸插件
 - 📋 **任务管理**: 实时查看收集任务进度、状态和已收集图片，支持停止、删除等操作
 - ⌨️ **命令行工具**: 提供精巧的 CLI 工具，支持通过命令行运行插件、导入图片等操作
 - 🖱️ **拖拽导入**: 支持拖入本地图片、文件夹或压缩包（zip、rar）快速导入到画廊，也可以拖入kgpg插件文件导入插件
@@ -48,22 +47,21 @@
 
 | 功能 | Standard 模式 | Light 模式 |
 |------|--------------|-----------|
-| **插件商店** | ✅ 支持 | ✅ 支持 |
 | **虚拟磁盘** | ✅ 支持 | ❌ 不支持 |
 | **cli** | ✅ 支持 | ❌ 不支持|
-| **预置插件** | 发布时预打包 | 发布时预打包 |
 | **适用场景** | 日常使用，需 CLI/虚拟盘 | 轻量使用，仅需基本功能 |
 | **文件大小** | 较大 | 较小 |
+| **优缺点**| 功能完成，但不同操作系统需要安装依赖(见[安装方法](#安装方法)) | 立即安装，但没有虚拟盘和cli功能 |
 
 **根据你的操作系统和需求，选择合适的安装包**
 
 | 操作系统 | Standard 模式 | Light 模式 |
 |---------|--------------|-----------|
-| Windows | [setup.exe](release/Kabegame-standard_3.0.4_x64-setup.exe) | [setup.exe](release/Kabegame-light_3.0.4_x64-setup.exe) |
-| MacOS | [dmg映像](release/Kabegame-standard_3.0.4_aarch64.dmg) | [dmg映像](release/Kabegame-light_3.0.4_aarch64.dmg) |
-| Linux | [deb包](release/Kabegame-standard_3.0.4_amd64.deb) | [deb包](release/Kabegame-light_3.0.4_amd64.deb) |
+| Windows | [setup.exe](release/Kabegame-standard_3.0.5_x64-setup.exe) | [setup.exe](release/Kabegame-light_3.0.5_x64-setup.exe) |
+| MacOS | [dmg映像](release/Kabegame-standard_3.0.5_aarch64.dmg) | [dmg映像](release/Kabegame-light_3.0.5_aarch64.dmg) |
+| Linux | [deb包](release/Kabegame-standard_3.0.5_amd64.deb) | [deb包](release/Kabegame-light_3.0.5_amd64.deb) |
 
-- **安卓预览版**（仅支持 Light 模式）：[kabegame_3.0.4_android-preview.apk](release/Kabegame_3.0.4_android-preview.apk) 
+- **安卓预览版**（仅支持 Light 模式）：[kabegame_3.0.5_android-preview.apk](release/Kabegame_3.0.5_android-preview.apk) 
 
 ## 安装方法
 

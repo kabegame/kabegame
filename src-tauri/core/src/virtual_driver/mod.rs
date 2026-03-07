@@ -5,7 +5,6 @@
 pub mod driver_service;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android"), target_os = "windows"))]
 mod fs;
-pub mod ipc;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 mod semantics;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
