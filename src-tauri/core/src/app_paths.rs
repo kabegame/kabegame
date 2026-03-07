@@ -166,12 +166,6 @@ impl AppPaths {
 
     // ========== IPC Socket（仅桌面非 Windows） ==========
 
-    /// daemon IPC socket 路径
-    #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
-    pub fn daemon_socket(&self) -> PathBuf {
-        self.temp_dir.join("kabegame-daemon.sock")
-    }
-
     /// virtual driver IPC socket 路径
     #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
     pub fn vd_socket(&self) -> PathBuf {

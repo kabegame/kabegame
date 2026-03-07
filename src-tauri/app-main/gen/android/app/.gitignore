@@ -4,4 +4,5 @@
 /tauri.build.gradle.kts
 /proguard-tauri.pro
 /tauri.properties
+/kabegame-appid.properties
 /src/main/assets/

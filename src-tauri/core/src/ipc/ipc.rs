@@ -743,9 +743,13 @@ pub fn windows_pipe_name() -> &'static str {
     r"\\.\pipe\kabegame-daemon"
 }
 
+/// daemon IPC 使用的 Unix socket 文件名（路径在桌面为 temp_dir/Kabegame，此处仅文件名）
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const DAEMON_SOCKET_NAME: &str = "kabegame.sock";
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn unix_socket_path() -> std::path::PathBuf {
-    crate::app_paths::AppPaths::global().daemon_socket()
+    std::env::temp_dir().join("Kabegame").join(DAEMON_SOCKET_NAME)
 }
 
 #[cfg(feature = "ipc-client")]
@@ -779,4 +783,6 @@ pub async fn request(req: CliIpcRequest) -> Result<CliIpcResponse, String> {
         let resp: CliIpcResponse = decode_frame(&payload)?;
         return Ok(resp);
     }
+
+    return Err("ipc request failed: not supported platform".to_string());
 }
