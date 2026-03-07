@@ -1,5 +1,4 @@
 import {
-  scanBuiltinPlugins,
   ensureDokan2DllResource,
   ensureDokanInstallerResourceIfPresent,
 } from "../utils";
@@ -11,11 +10,10 @@ import { BuildSystem } from "../build-system";
 import { OSPlugin } from "./os-plugin";
 
 export class Mode {
-  static readonly NORMAL = "normal";
-  static readonly LOCAL = "local";
+  static readonly STANDARD = "standard";
   static readonly LIGHT = "light";
 
-  static readonly modes = [this.NORMAL, this.LOCAL, this.LIGHT];
+  static readonly modes = [this.STANDARD, this.LIGHT];
 
   constructor(private readonly _mode: string) {}
 
@@ -23,12 +21,8 @@ export class Mode {
     return this._mode;
   }
 
-  get isNormal(): boolean {
-    return this.mode === Mode.NORMAL;
-  }
-
-  get isLocal(): boolean {
-    return this.mode === Mode.LOCAL;
+  get isStandard(): boolean {
+    return this.mode === Mode.STANDARD;
   }
 
   get isLight(): boolean {
@@ -51,7 +45,7 @@ export class ModePlugin extends BasePlugin {
 
   apply(bs: BuildSystem): void {
     bs.hooks.parseParams.tap(this.name, () => {
-      let mode = bs.options.mode || Mode.NORMAL;
+      let mode = bs.options.mode || Mode.STANDARD;
       if (!Mode.modes.includes(mode)) {
         throw new Error(`未知的模式，允许的列表：${Mode.modes}`);
       }
@@ -76,8 +70,6 @@ export class ModePlugin extends BasePlugin {
       }
       this.packagePlugins(bs);
       this.prepareResources(bs);
-      // 这一步一定要到 packagePlugin 之后，否则会扫描不到插件
-      this.setBuiltinPluginsEnvIfNeeded(!bs.context.cmd.isBuild);
     });
 
     bs.hooks.prepareCompileArgs.tap(
@@ -146,10 +138,6 @@ export class ModePlugin extends BasePlugin {
     const mode = bs.context.mode!;
     const comp = bs.context.component!;
     if (comp.isMain && (cmd.isDev || cmd.isBuild)) {
-      // 目前 normal模式不打包插件
-      if (!bs.context.isAndroid && mode.isNormal) {
-        return;
-      }
       // 开发和生产都打包到 resources 目录
       const packageTarget = "crawler-plugins:package-to-resources"
       this.log(chalk.blue(`打包插件到资源: ${packageTarget}`));
@@ -160,23 +148,4 @@ export class ModePlugin extends BasePlugin {
     // start 命令不打包插件
   }
 
-  setBuiltinPluginsEnvIfNeeded(isDev: boolean = false): void {
-    if (!this.mode) {
-      return;
-    }
-
-    let builtinPlugins: string[];
-    if (this.mode.isNormal) {
-      // Normal 模式只包含 local-import 插件
-      builtinPlugins = ["local-import"];
-    } else {
-      // Local 和 Light 模式包含所有预打包插件（始终从 resources 目录扫描）
-      builtinPlugins = scanBuiltinPlugins();
-    }
-
-    const csv = builtinPlugins.join(",");
-    if (csv) {
-      this.setEnv("KABEGAME_BUILTIN_PLUGINS", csv);
-    }
-  }
 }

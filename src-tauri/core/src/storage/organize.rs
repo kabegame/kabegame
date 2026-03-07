@@ -1,8 +1,5 @@
 use crate::crawler::downloader::generate_thumbnail;
 use crate::emitter::GlobalEmitter;
-#[cfg(not(target_os = "android"))]
-use crate::ipc::server::EventBroadcaster;
-use crate::ipc::DaemonEvent;
 use crate::settings::Settings;
 use crate::storage::{Storage, FAVORITE_ALBUM_ID};
 use rusqlite::params;
@@ -574,19 +571,8 @@ impl OrganizeService {
     }
 }
 
-fn emit_organize_finished(
-    handle: &tokio::runtime::Handle,
-    removed: usize,
-    regenerated: usize,
-    canceled: bool,
-) {
-    handle.block_on(async move {
-        EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::OrganizeFinished {
-            removed,
-            regenerated,
-            canceled,
-        }));
-    });
+fn emit_organize_finished(removed: usize, regenerated: usize, canceled: bool) {
+    GlobalEmitter::global().emit_organize_finished(removed, regenerated, canceled);
 }
 
 fn run_organize(
@@ -614,7 +600,7 @@ fn run_organize(
 
     loop {
         if cancel.load(Ordering::Relaxed) {
-            emit_organize_finished(handle, removed_total, regenerated_total, true);
+            emit_organize_finished(removed_total, regenerated_total, true);
             return Ok(());
         }
 
@@ -675,10 +661,7 @@ fn run_organize(
             storage.batch_remove_images(&remove_ids)?;
 
             // 发送 ImagesChange 事件，前端刷新视图
-            EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::ImagesChange {
-                reason: "remove".to_string(),
-                image_ids: remove_ids.clone(),
-            }));
+            GlobalEmitter::global().emit_images_change("remove", &remove_ids);
 
             // 检查壁纸是否被移除
             if let Some(cur) = current_wallpaper_id.as_deref() {
@@ -708,14 +691,14 @@ fn run_organize(
         }
 
         // 发送每批进度事件
-        EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::OrganizeProgress {
+        GlobalEmitter::global().emit_organize_progress(
             processed,
             total,
-            removed: removed_total,
-            regenerated: regenerated_total,
-        }));
+            removed_total,
+            regenerated_total,
+        );
     }
 
-    emit_organize_finished(handle, removed_total, regenerated_total, false);
+    emit_organize_finished(removed_total, regenerated_total, false);
     Ok(())
 }

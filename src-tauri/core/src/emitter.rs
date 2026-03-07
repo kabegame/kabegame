@@ -215,6 +215,14 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
+    /// 发送图片变更事件（如整理删除、批量操作等导致图库变化）
+    pub fn emit_images_change(&self, reason: &str, image_ids: &[String]) {
+        let event = std::sync::Arc::new(DaemonEvent::ImagesChange {
+            reason: reason.to_string(),
+            image_ids: image_ids.to_vec(),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
 
     /// 从存储读取任务并发送 task-status，用于下载失败等场景下刷新任务列表（避免一直显示“处理中”）。
     pub fn emit_task_status_from_storage(&self, task_id: &str) {
@@ -325,6 +333,8 @@ impl GlobalEmitter {
     pub fn emit_wallpaper_update_transition(&self, _transition: &str) {}
 
     pub fn emit_setting_change(&self, _changes: serde_json::Value) {}
+
+    pub fn emit_images_change(&self, _reason: &str, _image_ids: &[String]) {}
 
     pub fn emit_pending_queue_change(&self, _pending_count: usize) {}
 

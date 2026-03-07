@@ -7,7 +7,6 @@ export const IS_DEV = __DEV__;
 export const IS_PLASMA = __DESKTOP__ === "plasma";
 export const IS_GNOME = __DESKTOP__ === "gnome";
 export const IS_LIGHT_MODE = __LIGHT_MODE__;
-export const IS_LOCAL_MODE = __LOCAL_MODE__;
 
 /**
  * Android content:// URI 代理前缀。

@@ -3,7 +3,6 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -320,40 +319,6 @@ impl Storage {
                 },
             )
             .ok();
-
-        // #region agent log
-        if result.is_none() {
-            let sample: Option<String> = conn
-                .query_row(
-                    "SELECT thumbnail_path FROM images WHERE thumbnail_path != '' AND thumbnail_path IS NOT NULL LIMIT 1",
-                    [],
-                    |row| row.get(0),
-                )
-                .ok();
-            let sample_len: Option<usize> = sample.as_ref().map(|s| s.len());
-            let path_esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ").replace('\r', " ");
-            let data_part = match &sample {
-                Some(s) => format!(
-                    r#""query_path":"{}","sample_thumbnail_path":"{}","sample_len":{}"#,
-                    path_esc(path),
-                    path_esc(s),
-                    sample_len.unwrap_or(0)
-                ),
-                None => format!(r#""query_path":"{}","sample_thumbnail_path":"(none)""#, path_esc(path)),
-            };
-            let line = format!(
-                r#"{{"sessionId":"3057c8","location":"images.rs:find_image_by_thumbnail_path","message":"find None, DB sample","data":{{{}}},"timestamp":{},"hypothesisId":"E"}}"#,
-                data_part,
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
-            );
-            let log_path = std::env::temp_dir().join("debug-3057c8.log");
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-                .and_then(|mut f| std::io::Write::write_all(&mut f, (line + "\n").as_bytes()));
-        }
-        // #endregion
 
         if let Some(ref mut image_info) = result {
             let image_id = image_info.id.clone();

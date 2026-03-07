@@ -1,32 +1,6 @@
 #[cfg(not(target_os = "android"))]
 use std::{path::Path, str::FromStr, sync::OnceLock};
 
-// #region agent log
-#[cfg(not(target_os = "android"))]
-fn debug_log(location: &str, message: &str, data: &std::collections::HashMap<&str, String>, hypothesis_id: &str) {
-    let path_esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', " ").replace('\r', " ");
-    let data_str = data
-        .iter()
-        .map(|(k, v)| format!("\"{}\":\"{}\"", k, path_esc(v)))
-        .collect::<Vec<_>>()
-        .join(",");
-    let line = format!(
-        r#"{{"sessionId":"3057c8","location":"{}","message":"{}","data":{{{}}},"timestamp":{},"hypothesisId":"{}"}}"#,
-        path_esc(location),
-        path_esc(message),
-        data_str,
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis(),
-        hypothesis_id
-    );
-    let log_path = std::env::temp_dir().join("debug-3057c8.log");
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .and_then(|mut f| std::io::Write::write_all(&mut f, (line + "\n").as_bytes()));
-}
-// #endregion
-
 #[cfg(not(target_os = "android"))]
 use axum::{
     body::Body,
@@ -126,12 +100,6 @@ async fn handle_file_query(Query(query): Query<FileQuery>) -> Response {
 #[cfg(not(target_os = "android"))]
 async fn handle_thumbnail_query(Query(query): Query<FileQuery>) -> Response {
     let path = query.path.trim();
-    // #region agent log
-    let mut data = std::collections::HashMap::new();
-    data.insert("path", path.to_string());
-    data.insert("path_len", path.len().to_string());
-    debug_log("file_server.rs:handle_thumbnail_query", "thumbnail request", &data, "A");
-    // #endregion
     if path.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing path").into_response();
     }
@@ -139,31 +107,11 @@ async fn handle_thumbnail_query(Query(query): Query<FileQuery>) -> Response {
         return (StatusCode::FORBIDDEN, "file extension not allowed").into_response();
     }
 
-    let metadata_ok = tokio::fs::metadata(path).await.is_ok();
-    // #region agent log
-    let mut data2 = std::collections::HashMap::new();
-    data2.insert("metadata_ok", metadata_ok.to_string());
-    debug_log("file_server.rs:handle_thumbnail_query", "after metadata", &data2, "B");
-    // #endregion
-    if !metadata_ok {
+    if tokio::fs::metadata(path).await.is_err() {
         return (StatusCode::NOT_FOUND, "file not found").into_response();
     }
 
-    let find_result = kabegame_core::storage::Storage::global().find_image_by_thumbnail_path(path);
-    let result_label = match &find_result {
-        Ok(Some(_)) => "Some",
-        Ok(None) => "None",
-        Err(_) => "Err",
-    };
-    // #region agent log
-    let mut data3 = std::collections::HashMap::new();
-    data3.insert("find_result", result_label.to_string());
-    if let Err(e) = &find_result {
-        data3.insert("find_err", e.to_string());
-    }
-    debug_log("file_server.rs:handle_thumbnail_query", "after find_image_by_thumbnail_path", &data3, "C");
-    // #endregion
-    let img = match find_result {
+    let img = match kabegame_core::storage::Storage::global().find_image_by_thumbnail_path(path) {
         Ok(Some(img)) => img,
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
     };

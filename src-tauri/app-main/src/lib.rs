@@ -239,11 +239,13 @@ pub fn run() {
                         });
                         startup::start_ipc_server(app.app_handle().clone());
                     }
-
+                    // 将预置插件提取到用户目录
                     #[cfg(target_os = "android")]
                     {
-                        // 将内置插件提取到用户目录
                         init_bundled_plugins(app.app_handle().clone());
+
+                        // 将预置插件复制到用户目录
+
                         let provider = content_io_provider::PickerContentIoProvider::new(
                             app.app_handle().clone(),
                         );
@@ -263,6 +265,9 @@ pub fn run() {
                             archiver_proxy,
                         ));
                     }
+
+                    #[cfg(not(target_os = "android"))]
+                    init_resource_plugins();
 
                     // 初始化插件
                     init_kgpg_plugin();
@@ -338,7 +343,9 @@ pub fn run() {
             refresh_installed_plugins_cache,
             refresh_installed_plugin_cache,
             get_plugin_sources,
-            save_plugin_sources,
+            add_plugin_source,
+            update_plugin_source,
+            delete_plugin_source,
             validate_plugin_source,
             get_store_plugins,
             preview_import_plugin,

@@ -1,13 +1,16 @@
 import { BasePlugin } from "./base-plugin";
 import { BuildSystem, SRC_FE_DIR, SRC_TAURI_DIR } from "../build-system";
 import * as path from "path";
-import {
-  RESOURCES_DIR,
-  stageResourceBinary,
-  getDevServerHost,
-} from "../utils";
+import { RESOURCES_DIR, stageResourceBinary, getDevServerHost } from "../utils";
 import { OSPlugin } from "./os-plugin";
-import { readdirSync, statSync, unlinkSync, existsSync, readFileSync, writeFileSync } from "fs";
+import {
+  readdirSync,
+  statSync,
+  unlinkSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+} from "fs";
 import Handlebars from "handlebars";
 
 // 组件对象
@@ -112,48 +115,60 @@ export class ComponentPlugin extends BasePlugin {
       if (bs.context.cmd!.isDev && this.component && !this.component.isCli) {
         this.setEnv(
           "TAURI_CLI_WATCHER_IGNORE_FILENAME",
-          `${this.component.comp}.taurignore`,
+          `src-tauri/${this.component.comp}.taurignore`,
         );
       }
     });
 
     bs.hooks.beforeBuild.tap(this.name, (comp?: string) => {
       const component = comp ? new Component(comp) : this.component!;
-        // 编译可能存在的handlebars覆盖 tauri.config.json
-        const tauriConfigHandlebars = path.resolve(component.appDir, 'tauri.conf.json.handlebars');
-        this.log(`tauriConfigHandlebars: ${tauriConfigHandlebars}`);
-        if (existsSync(tauriConfigHandlebars)) {
-          const tauriConfig = path.resolve(component.appDir, "tauri.conf.json");
-          Handlebars.registerHelper("devServerHost", () => getDevServerHost());
-          const template = Handlebars.compile(
-            readFileSync(tauriConfigHandlebars, {
-              encoding: "utf-8",
-            }).toString(),
+      // 编译可能存在的handlebars覆盖 tauri.config.json
+      const tauriConfigHandlebars = path.resolve(
+        component.appDir,
+        "tauri.conf.json.handlebars",
+      );
+      this.log(`tauriConfigHandlebars: ${tauriConfigHandlebars}`);
+      if (existsSync(tauriConfigHandlebars)) {
+        const tauriConfig = path.resolve(component.appDir, "tauri.conf.json");
+        Handlebars.registerHelper("devServerHost", () => getDevServerHost());
+        const template = Handlebars.compile(
+          readFileSync(tauriConfigHandlebars, {
+            encoding: "utf-8",
+          }).toString(),
+        );
+        const isAndroid = !!bs.context.isAndroid;
+        const templateCtx = {
+          isWindows: !isAndroid && OSPlugin.isWindows,
+          isMacOS: !isAndroid && OSPlugin.isMacOS,
+          isLinux: !isAndroid && OSPlugin.isLinux,
+          isLight: isAndroid || bs.context.mode!.isLight,
+          isDev: bs.context.cmd!.isDev,
+          isAndroid: isAndroid,
+          isWindowEffect:
+            !isAndroid && (OSPlugin.isWindows || OSPlugin.isMacOS),
+          noResources: false,
+        };
+        writeFileSync(tauriConfig, template(templateCtx));
+        // 仅 main 组件：用 handlebars 生成 capabilities/main.json（桌面不含 picker 权限，移动端含）
+        if (component.isMain) {
+          const capHandlebars = path.resolve(
+            component.appDir,
+            "capabilities",
+            "main.json.handlebars",
           );
-          const isAndroid = !!bs.context.isAndroid;
-          const templateCtx = {
-            isWindows: !isAndroid && OSPlugin.isWindows,
-            isMacOS: !isAndroid && OSPlugin.isMacOS,
-            isLinux: !isAndroid && OSPlugin.isLinux,
-            isLight: isAndroid || bs.context.mode!.isLight,
-            isDev: bs.context.cmd!.isDev,
-            isAndroid: isAndroid,
-            isWindowEffect: !isAndroid && (OSPlugin.isWindows || OSPlugin.isMacOS),
-            noResources: bs.context.mode!.isNormal
-          };
-          writeFileSync(tauriConfig, template(templateCtx));
-          // 仅 main 组件：用 handlebars 生成 capabilities/main.json（桌面不含 picker 权限，移动端含）
-          if (component.isMain) {
-            const capHandlebars = path.resolve(component.appDir, "capabilities", "main.json.handlebars");
-            if (existsSync(capHandlebars)) {
-              const capOut = path.resolve(component.appDir, "capabilities", "main.json");
-              const capTemplate = Handlebars.compile(
-                readFileSync(capHandlebars, { encoding: "utf-8" }).toString(),
-              );
-              writeFileSync(capOut, capTemplate(templateCtx));
-            }
+          if (existsSync(capHandlebars)) {
+            const capOut = path.resolve(
+              component.appDir,
+              "capabilities",
+              "main.json",
+            );
+            const capTemplate = Handlebars.compile(
+              readFileSync(capHandlebars, { encoding: "utf-8" }).toString(),
+            );
+            writeFileSync(capOut, capTemplate(templateCtx));
           }
         }
+      }
     });
 
     if (bs.context.cmd!.isBuild) {
@@ -179,7 +194,8 @@ export class ComponentPlugin extends BasePlugin {
         if (
           component.isMain &&
           !bs.context.mode!.isLight &&
-          (!OSPlugin.isLinux && !bs.context.isAndroid)
+          !OSPlugin.isLinux &&
+          !bs.context.isAndroid
         ) {
           stageResourceBinary(Component.cargoComp(Component.CLI));
         }

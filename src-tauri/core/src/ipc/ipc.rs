@@ -343,9 +343,23 @@ pub enum CliIpcRequest {
         index_url: String,
     },
 
-    /// 保存插件源列表
-    PluginSavePluginSources {
-        sources: serde_json::Value,
+    /// 添加插件源
+    PluginAddSource {
+        id: Option<String>,
+        name: String,
+        index_url: String,
+    },
+
+    /// 更新插件源
+    PluginUpdateSource {
+        id: String,
+        name: String,
+        index_url: String,
+    },
+
+    /// 删除插件源
+    PluginDeleteSource {
+        id: String,
     },
 
     /// 安装浏览器插件（从商店下载并安装）
@@ -370,6 +384,10 @@ pub enum CliIpcRequest {
         sha256: Option<String>,
         #[serde(default)]
         size_bytes: Option<u64>,
+        #[serde(default)]
+        source_id: Option<String>,
+        #[serde(default)]
+        version: Option<String>,
     },
 
     /// 预览导入插件（读取 .kgpg）
@@ -384,6 +402,10 @@ pub enum CliIpcRequest {
         sha256: Option<String>,
         #[serde(default)]
         size_bytes: Option<u64>,
+        #[serde(default)]
+        source_id: Option<String>,
+        #[serde(default)]
+        version: Option<String>,
     },
 
     /// 获取已安装插件 icon（base64）
@@ -394,6 +416,10 @@ pub enum CliIpcRequest {
     /// KGPG v2：远程获取 icon（base64）
     PluginGetRemoteIconV2 {
         download_url: String,
+        #[serde(default)]
+        source_id: Option<String>,
+        #[serde(default)]
+        plugin_id: Option<String>,
     },
 
     /// 详情页文档图片：本地已安装/远程商店源统一入口（base64）
@@ -406,6 +432,10 @@ pub enum CliIpcRequest {
         sha256: Option<String>,
         #[serde(default)]
         size_bytes: Option<u64>,
+        #[serde(default)]
+        source_id: Option<String>,
+        #[serde(default)]
+        version: Option<String>,
     },
 
     // ======== Settings 相关 ========

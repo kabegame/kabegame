@@ -1,7 +1,7 @@
 //! Plugin 相关请求
 
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
-use kabegame_core::plugin::PluginManager;
+use kabegame_core::plugin::{PluginManager, extract_kgpg_filename_from_url};
 
 pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse> {
     match req {
@@ -23,8 +23,16 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
             Some(validate_plugin_source(index_url).await)
         }
 
-        CliIpcRequest::PluginSavePluginSources { sources } => {
-            Some(save_plugin_sources(sources).await)
+        CliIpcRequest::PluginAddSource { id, name, index_url } => {
+            Some(add_plugin_source(id.clone(), name.clone(), index_url.clone()).await)
+        }
+
+        CliIpcRequest::PluginUpdateSource { id, name, index_url } => {
+            Some(update_plugin_source(id.clone(), name.clone(), index_url.clone()).await)
+        }
+
+        CliIpcRequest::PluginDeleteSource { id } => {
+            Some(delete_plugin_source(id.clone()).await)
         }
 
         CliIpcRequest::PluginInstallBrowserPlugin { plugin_id } => {
@@ -41,12 +49,16 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
             download_url,
             sha256,
             size_bytes,
+            source_id,
+            version,
         } => Some(
             get_plugin_detail_for_ui(
                 plugin_id,
                 download_url.as_deref(),
                 sha256.as_deref(),
                 *size_bytes,
+                source_id.as_deref(),
+                version.as_deref(),
             )
             .await,
         ),
@@ -59,12 +71,14 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
             download_url,
             sha256,
             size_bytes,
-        } => Some(preview_store_install(download_url, sha256.as_deref(), *size_bytes).await),
+            source_id,
+            version,
+        } => Some(preview_store_install(download_url, sha256.as_deref(), *size_bytes, source_id.as_deref(), version.as_deref()).await),
 
         CliIpcRequest::PluginGetIcon { plugin_id } => Some(get_plugin_icon(plugin_id).await),
 
-        CliIpcRequest::PluginGetRemoteIconV2 { download_url } => {
-            Some(get_remote_plugin_icon_v2(download_url).await)
+        CliIpcRequest::PluginGetRemoteIconV2 { download_url, source_id, plugin_id } => {
+            Some(get_remote_plugin_icon_v2(download_url, source_id.as_deref(), plugin_id.as_deref()).await)
         }
 
         CliIpcRequest::PluginGetImageForDetail {
@@ -73,6 +87,8 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
             download_url,
             sha256,
             size_bytes,
+            source_id,
+            version,
         } => Some(
             get_plugin_image_for_detail(
                 plugin_id,
@@ -80,6 +96,8 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
                 download_url.as_deref(),
                 sha256.as_deref(),
                 *size_bytes,
+                source_id.as_deref(),
+                version.as_deref(),
             )
             .await,
         ),
@@ -174,14 +192,27 @@ async fn validate_plugin_source(index_url: &str) -> CliIpcResponse {
     }
 }
 
-async fn save_plugin_sources(sources: &serde_json::Value) -> CliIpcResponse {
+async fn add_plugin_source(id: Option<String>, name: String, index_url: String) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    let parsed: Vec<kabegame_core::plugin::PluginSource> =
-        match serde_json::from_value(sources.clone()) {
-            Ok(v) => v,
-            Err(e) => return CliIpcResponse::err(format!("Invalid sources data: {e}")),
-        };
-    match plugin_manager.save_plugin_sources(&parsed) {
+    match plugin_manager.add_plugin_source(id, name, index_url) {
+        Ok(source) => {
+            CliIpcResponse::ok_with_data("ok", serde_json::to_value(source).unwrap_or_default())
+        }
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
+async fn update_plugin_source(id: String, name: String, index_url: String) -> CliIpcResponse {
+    let plugin_manager = PluginManager::global();
+    match plugin_manager.update_plugin_source(id, name, index_url) {
+        Ok(()) => CliIpcResponse::ok("ok"),
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
+async fn delete_plugin_source(id: String) -> CliIpcResponse {
+    let plugin_manager = PluginManager::global();
+    match plugin_manager.delete_plugin_source(id) {
         Ok(()) => CliIpcResponse::ok("ok"),
         Err(e) => CliIpcResponse::err(e),
     }
@@ -218,12 +249,14 @@ async fn get_plugin_detail_for_ui(
     download_url: Option<&str>,
     sha256: Option<&str>,
     size_bytes: Option<u64>,
+    source_id: Option<&str>,
+    version: Option<&str>,
 ) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
     let res = match download_url {
         Some(url) => {
             plugin_manager
-                .load_remote_plugin_detail(plugin_id, url, sha256, size_bytes)
+                .load_remote_plugin_detail(plugin_id, url, sha256, size_bytes, source_id, version)
                 .await
         }
         None => plugin_manager.load_installed_plugin_detail(plugin_id).await,
@@ -251,23 +284,41 @@ async fn preview_store_install(
     download_url: &str,
     sha256: Option<&str>,
     size_bytes: Option<u64>,
+    source_id: Option<&str>,
+    version: Option<&str>,
 ) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
-    let tmp = match plugin_manager
-        .download_plugin_to_temp(download_url, sha256, size_bytes)
-        .await
-    {
-        Ok(t) => t,
-        Err(e) => return CliIpcResponse::err(e),
+    let cached_path = match (source_id, version) {
+        (Some(source_id), Some(version)) => {
+            let plugin_id = extract_kgpg_filename_from_url(download_url)
+                .unwrap_or_else(|| "unknown".to_string());
+            match plugin_manager
+                .ensure_plugin_cached(source_id, &plugin_id, download_url, sha256, size_bytes, version)
+                .await
+            {
+                Ok(p) => p,
+                Err(e) => return CliIpcResponse::err(e),
+            }
+        }
+        _ => {
+            // 兼容模式：下载到临时文件
+            match plugin_manager
+                .download_plugin_to_temp(download_url, sha256, size_bytes)
+                .await
+            {
+                Ok(t) => t,
+                Err(e) => return CliIpcResponse::err(e),
+            }
+        }
     };
-    let preview = match plugin_manager.preview_import_from_zip(&tmp).await {
+    let preview = match plugin_manager.preview_import_from_zip(&cached_path).await {
         Ok(p) => p,
         Err(e) => return CliIpcResponse::err(e),
     };
     CliIpcResponse::ok_with_data(
         "ok",
         serde_json::json!({
-            "tmpPath": tmp.to_string_lossy().to_string(),
+            "tmpPath": cached_path.to_string_lossy().to_string(),
             "preview": preview,
         }),
     )
@@ -285,10 +336,10 @@ async fn get_plugin_icon(plugin_id: &str) -> CliIpcResponse {
     }
 }
 
-async fn get_remote_plugin_icon_v2(download_url: &str) -> CliIpcResponse {
+async fn get_remote_plugin_icon_v2(download_url: &str, source_id: Option<&str>, plugin_id: Option<&str>) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
     let bytes = match plugin_manager
-        .fetch_remote_plugin_icon_v2(download_url)
+        .fetch_remote_plugin_icon_v2(download_url, source_id, plugin_id)
         .await
     {
         Ok(b) => b,
@@ -306,10 +357,12 @@ async fn get_plugin_image_for_detail(
     download_url: Option<&str>,
     sha256: Option<&str>,
     size_bytes: Option<u64>,
+    source_id: Option<&str>,
+    version: Option<&str>,
 ) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
     let bytes = match plugin_manager
-        .load_plugin_image_for_detail(plugin_id, download_url, sha256, size_bytes, image_path)
+        .load_plugin_image_for_detail(plugin_id, download_url, sha256, size_bytes, image_path, source_id, version)
         .await
     {
         Ok(b) => b,

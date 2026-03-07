@@ -5,21 +5,20 @@ fn main() {
     // We inject `--cfg desktop="plasma"` or `--cfg desktop="gnome"` at compile-time (via scripts/run.js --desktop),
     // so silence `unexpected_cfgs` warnings by declaring the allowed values here.
     println!("cargo:rustc-check-cfg=cfg(desktop, values(\"plasma\", \"gnome\"))");
-    println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"normal\", \"local\", \"light\"))");
+    println!("cargo:rustc-check-cfg=cfg(kabegame_mode, values(\"standard\", \"light\"))");
     println!(
         "cargo:rustc-check-cfg=cfg(kabegame_component, values(\"main\", \"cli\", \"unknown\"))"
     );
 
     // Keep consistent with kabegame-core build.rs:
-    // expose KABEGAME_BUILD_MODE (= normal|local|light) to this crate as well,
+    // expose KABEGAME_BUILD_MODE (= standard|light) to this crate as well,
     // so app-main can answer `get_build_mode` without depending on kabegame-core::plugin.
     println!("cargo:rerun-if-env-changed=KABEGAME_MODE");
     println!("cargo:rerun-if-env-changed=KABEGAME_COMPONENT");
-    let mode = std::env::var("KABEGAME_MODE").unwrap_or_else(|_| "normal".to_string());
+    let mode = std::env::var("KABEGAME_MODE").unwrap_or_else(|_| "standard".to_string());
     let normalized = match mode.as_str() {
-        "local" => "local",
         "light" => "light",
-        _ => "normal",
+        _ => "standard",
     };
     println!("cargo:rustc-env=KABEGAME_BUILD_MODE={}", normalized);
     println!("cargo:rustc-cfg=kabegame_mode=\"{}\"", normalized);

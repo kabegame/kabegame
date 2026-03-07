@@ -1,54 +1,29 @@
 <template>
   <!-- Android 全屏预览：使用 photoswipe-vue 组件，关闭按钮用组件自带的 -->
-  <PhotoSwipe
-    v-if="IS_ANDROID"
-    ref="pswpRef"
-    v-model:open="previewVisible"
-    v-model:index="previewIndex"
-    :data-source="pswpDataSource"
-    :loop="true"
-    :zIndex="2000"
-    :close-on-vertical-drag="true"
-    :on-vertical-drag="handlePswpVerticalDrag"
-    :on-before-close="handlePswpBeforeClose"
-    @change="handlePswpChange"
-    @close="handlePswpClose"
-    @ui-visible-change="handlePswpUiVisibleChange"
-  >
+  <PhotoSwipe v-if="IS_ANDROID" ref="pswpRef" v-model:open="previewVisible" v-model:index="previewIndex"
+    :data-source="pswpDataSource" :loop="true" :zIndex="2000" :close-on-vertical-drag="true"
+    :on-vertical-drag="handlePswpVerticalDrag" :on-before-close="handlePswpBeforeClose" @change="handlePswpChange"
+    @close="handlePswpClose" @ui-visible-change="handlePswpUiVisibleChange">
     <!-- 安卓：显示名称用 fixed 定位，与叉号同 top/高度，限制宽度并换行 -->
-    <div
-      v-if="previewImage?.displayName"
-      class="fixed left-0 right-0 top-0 flex min-h-[60px] items-center z-[-1] justify-center px-4 pt-[env(safe-area-inset-top,0px)]"
-    >
-      <span
-        class="max-w-[85vw] break-words text-center text-sm font-medium text-white/90"
-        style="text-shadow: 0 1px 2px rgba(0,0,0,0.3)"
-      >
+    <div v-if="previewImage?.displayName"
+      class="fixed left-0 right-0 top-0 flex min-h-[60px] items-center z-[-1] justify-center px-4 pt-[env(safe-area-inset-top,0px)]">
+      <span class="max-w-[85vw] break-words text-center text-sm font-medium text-white/90"
+        style="text-shadow: 0 1px 2px rgba(0,0,0,0.3)">
         {{ previewImage.displayName }}
       </span>
     </div>
     <!-- ActionSheet 通过 default slot 放入 PswpUI 的 .pswp__hide-on-close 中 -->
     <!-- visible 为true，与ui一起显隐，ui显隐由 photoswipe-vue 组件自动管理 -->
-    <ActionRenderer
-      v-if="actions.length > 0"
-      visible
-      :position="previewContextMenuPosition"
-      :actions="actions"
-      :context="previewActionContext"
-      mode="actionsheet"
-      :teleport="false"
-      :no-transition="true"
-      @close="handlePswpActionClose"
-      @command="handlePreviewActionCommand"
-      :zIndex="2100"
-      :modal-back="false"
-    />
+    <ActionRenderer v-if="actions.length > 0" visible :position="previewContextMenuPosition" :actions="actions"
+      :context="previewActionContext" mode="actionsheet" :teleport="false" :no-transition="true"
+      @close="handlePswpActionClose" @command="handlePreviewActionCommand" :zIndex="2100" :modal-back="false" />
     <!-- 上划删除区域通过 overlay slot 放入 .pswp 根级 -->
     <template #overlay>
       <Transition name="swipe-delete-zone">
         <div v-show="swipeDeleteActive" class="swipe-delete-zone" :class="{ ready: swipeDeleteReady }">
           <div class="swipe-delete-zone-content">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
               <line x1="10" y1="11" x2="10" y2="17" />
               <line x1="14" y1="11" x2="14" y2="17" />
@@ -96,16 +71,9 @@
       </div>
     </el-dialog>
     <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（z-index 高于 el-dialog 以免被遮） -->
-    <ActionRenderer
-      v-if="actions.length > 0"
-      :visible="previewContextMenuVisible"
-      :position="previewContextMenuPosition"
-      :actions="actions"
-      :context="previewActionContext"
-      mode="contextmenu"
-      :z-index="5000"
-      @close="closePreviewContextMenu"
-      @command="handlePreviewActionCommand" />
+    <ActionRenderer v-if="actions.length > 0" :visible="previewContextMenuVisible"
+      :position="previewContextMenuPosition" :actions="actions" :context="previewActionContext" mode="contextmenu"
+      :z-index="5000" @close="closePreviewContextMenu" @command="handlePreviewActionCommand" />
   </template>
 
 </template>
@@ -135,10 +103,6 @@ const props = withDefaults(defineProps<{
   actions: () => [],
 });
 
-watch(() => props.images.length, () => {
-  console.log("images.length changed", props.images);
-});
-
 const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
 }>();
@@ -147,6 +111,7 @@ const previewVisible = ref(false);
 const previewImageUrl = ref("");
 const previewImagePath = ref("");
 const previewIndex = ref<number>(-1);
+const currentImageId = ref<string | null>(null);
 // previewImage 改为 computed，确保始终反映 props.images 的最新数据（如收藏状态变化）
 const previewImage = computed<ImageInfo | null>(() => {
   const idx = previewIndex.value;
@@ -352,6 +317,7 @@ const pswpDataSource = computed(() => {
       src: url,
       width: img.width || fallbackW,
       height: img.height || fallbackH,
+      id: img.id,
     };
   });
 });
@@ -361,6 +327,7 @@ const setPreviewByIndex = (index: number) => {
   if (!img) return;
 
   previewIndex.value = index;
+  currentImageId.value = img.id;
   previewImagePath.value = img.localPath;
   // previewImage 现在是 computed，无需手动赋值
   previewNotFound.value = false;
@@ -399,7 +366,7 @@ const getAdjacentImageUrl = (offset: number): string => {
   if (targetIdx < 0 || targetIdx >= props.images.length) return "";
   const img = props.images[targetIdx];
   if (!img) return "";
-  
+
   // 优先使用 original，否则使用 thumbnail
   const originalUrl = getOriginalPreviewUrl(img);
   if (originalUrl) return originalUrl;
@@ -644,39 +611,43 @@ const performSwipeDelete = () => {
   emit("contextCommand", { command: "swipe-remove", image: previewImage.value });
 };
 
-const handlePreviewImageDeleted = () => {
-  if (!previewVisible.value) return;
-  if (props.images.length === 0) {
-    closePreview();
-    return;
-  }
-  let newIndex: number;
-  if (previewIndex.value >= 0 && previewIndex.value < props.images.length) {
-    newIndex = previewIndex.value;
-  } else if (previewIndex.value >= props.images.length) {
-    newIndex = props.images.length - 1;
-  } else {
-    newIndex = 0;
-  }
-  
-  // Android: 响应式更新，只需同步 index（previewImage 是 computed）
-  if (IS_ANDROID) {
-    previewIndex.value = newIndex;
-  } else {
-    setPreviewByIndex(newIndex);
-  }
-};
+// handlePreviewImageDeleted 已被删除，逻辑合并到下方的 props.images watcher 中
 
 watch(
-  () => props.images.length,
-  (_nextLen, _prevLen) => {
+  () => props.images,
+  () => {
     if (!previewVisible.value) return;
-    if (previewImage.value) {
-      const idx = props.images.findIndex((i) => i.id === previewImage.value?.id);
-      if (idx !== -1) {
-        previewIndex.value = idx;
+
+    if (IS_ANDROID) {
+      // 安卓端：PhotoSwipe 内部处理 ID 追踪，仅处理空列表关闭
+      if (props.images.length === 0) {
+        closePreview();
+      }
+      return;
+    }
+
+    // 桌面端：使用 currentImageId 实现 ID-based 导航
+    if (!currentImageId.value) return;
+
+    const foundIndex = props.images.findIndex((img) => img.id === currentImageId.value);
+
+    if (foundIndex !== -1) {
+      // 找到且 index 变化 --> 导航到新 index
+      if (foundIndex !== previewIndex.value) {
+        setPreviewByIndex(foundIndex);
+      }
+      // 找到且 index 不变 --> 不做操作（images 内容可能变了，但 previewImage 是 computed 会自动更新）
+    } else {
+      // 没找到
+      if (props.images.length === 0) {
+        // 列表为空 --> 关闭预览
+        closePreview();
+      } else if (props.images.length <= previewIndex.value) {
+        // 超出边界 --> 导航到最后一张
+        setPreviewByIndex(props.images.length - 1);
       } else {
-        handlePreviewImageDeleted();
+        // 在边界内 --> 保持 index，刷新显示内容
+        setPreviewByIndex(previewIndex.value);
       }
     }
   }
@@ -785,18 +756,18 @@ const handlePswpVerticalDrag = ({ panY, preventDefault }: { panY: number; preven
   if (initialPanY === null) {
     initialPanY = panY;
   }
-  
+
   // 计算相对于初始位置的偏移（简化：假设初始 panY 就是 centerY）
   const offset = panY - initialPanY;
   const viewportHeight = window.innerHeight;
   const ratio = offset / (viewportHeight / 3);
-  
+
   // 清除之前的重置定时器
   if (verticalDragResetTimer) {
     clearTimeout(verticalDragResetTimer);
     verticalDragResetTimer = null;
   }
-  
+
   if (ratio > 0) {
     // 下划：阻止默认行为（视觉效果和关闭）
     preventDefault();
@@ -809,7 +780,7 @@ const handlePswpVerticalDrag = ({ panY, preventDefault }: { panY: number; preven
     const absRatio = Math.abs(ratio);
     swipeDeleteReady.value = absRatio >= 0.4; // PhotoSwipe 的 MIN_RATIO_TO_CLOSE 阈值
     isFromVerticalDrag = true;
-    
+
     // 设置延时重置标志（确保 drag end → close 调用链中标志有效）
     verticalDragResetTimer = setTimeout(() => {
       isFromVerticalDrag = false;
@@ -837,7 +808,7 @@ const handlePswpBeforeClose = (source?: string): boolean => {
         clearTimeout(verticalDragResetTimer);
         verticalDragResetTimer = null;
       }
-      
+
       if (wasDeleteReady) {
         // 上划删除：触发删除操作，不关闭预览
         performSwipeDelete();
@@ -853,6 +824,10 @@ const handlePswpBeforeClose = (source?: string): boolean => {
 const handlePswpChange = ({ index }: { index: number }) => {
   if (index >= 0 && index < props.images.length) {
     previewIndex.value = index;
+    const img = props.images[index];
+    if (img) {
+      currentImageId.value = img.id;
+    }
     // previewImage 现在是 computed，无需手动赋值
   }
 };
@@ -919,6 +894,10 @@ if (!IS_ANDROID) {
 const open = (index: number) => {
   if (IS_ANDROID) {
     previewIndex.value = index;
+    const img = props.images[index];
+    if (img) {
+      currentImageId.value = img.id;
+    }
     // previewImage 现在是 computed，无需手动赋值
     previewVisible.value = true;
     pswpUiVisible.value = false;

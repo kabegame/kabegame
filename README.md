@@ -44,24 +44,24 @@
 ## 安装方法
 
 
-**桌面端 Kabegame** 提供三种模式供下载，满足不同使用场景：
+**桌面端 Kabegame** 提供两种模式供下载，满足不同使用场景：
 
-| 功能 | Normal 模式 | Local 模式 | Light 模式 |
-|------|------------|-----------|-----------|
-| **插件商店** | ✅ 支持 | 🟡 预置插件 | 🟡 预置插件 |
-| **虚拟磁盘** | ✅ 支持 | ✅ 支持 | ❌ 不支持 |
-| **cli** | ✅ 支持 | ✅ 支持 | ❌ 不支持|
-| **内置插件** | 无内置插件 | 发布时的全部插件 | 发布时的全部插件 |
-| **适用场景** | 日常使用，需要从商店安装插件 | 离线使用，需要所有插件内置 | 轻量使用，仅需基本功能 |
-| **文件大小** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐ |
+| 功能 | Standard 模式 | Light 模式 |
+|------|--------------|-----------|
+| **插件商店** | ✅ 支持 | ✅ 支持 |
+| **虚拟磁盘** | ✅ 支持 | ❌ 不支持 |
+| **cli** | ✅ 支持 | ❌ 不支持|
+| **预置插件** | 发布时预打包 | 发布时预打包 |
+| **适用场景** | 日常使用，需 CLI/虚拟盘 | 轻量使用，仅需基本功能 |
+| **文件大小** | 较大 | 较小 |
 
 **根据你的操作系统和需求，选择合适的安装包**
 
-| 操作系统 | Normal 模式 | Local 模式 | Light 模式 |
-|---------|------------|-----------|-----------|
-| Windows | [setup.exe](release/Kabegame-normal_3.0.4_x64-setup.exe) | [setup.exe](release/Kabegame-local_3.0.4_x64-setup.exe) | [setup.exe](release/Kabegame-light_3.0.4_x64-setup.exe) |
-| MacOS | [dmg映像](release/Kabegame-normal_3.0.4_aarch64.dmg) | [dmg映像](release/Kabegame-local_3.0.4_aarch64.dmg) | [dmg映像](release/Kabegame-light_3.0.4_aarch64.dmg) |
-| Linux | [deb包](release/Kabegame-normal_3.0.4_amd64.deb) | [deb包](release/Kabegame-local_3.0.4_amd64.deb) | [deb包](release/Kabegame-light_3.0.4_amd64.deb) |
+| 操作系统 | Standard 模式 | Light 模式 |
+|---------|--------------|-----------|
+| Windows | [setup.exe](release/Kabegame-standard_3.0.4_x64-setup.exe) | [setup.exe](release/Kabegame-light_3.0.4_x64-setup.exe) |
+| MacOS | [dmg映像](release/Kabegame-standard_3.0.4_aarch64.dmg) | [dmg映像](release/Kabegame-light_3.0.4_aarch64.dmg) |
+| Linux | [deb包](release/Kabegame-standard_3.0.4_amd64.deb) | [deb包](release/Kabegame-light_3.0.4_amd64.deb) |
 
 - **安卓预览版**（仅支持 Light 模式）：[kabegame_3.0.4_android-preview.apk](release/Kabegame_3.0.4_android-preview.apk) 
 
@@ -69,13 +69,13 @@
 
 ### Windows
 
-1. **下载安装包**：根据你的需求选择 Normal、Local 或 Light 模式的 `setup.exe` 文件
+1. **下载安装包**：根据你的需求选择 Standard 或 Light 模式的 `setup.exe` 文件
 2. **运行安装程序**：双击 `setup.exe` 文件，按照向导完成安装
-3. **虚拟磁盘驱动（仅 Normal / Local 模式）**：
+3. **虚拟磁盘驱动（仅 Standard 模式）**：
    - 安装过程中，如果检测到未安装 Dokan 虚拟磁盘驱动，安装程序会**自动弹出管理员权限请求**
    - 点击「是」允许安装 Dokan 驱动（虚拟磁盘功能需要）
    - Light 模式不包含虚拟磁盘功能，因此不会安装 Dokan 驱动
-4. **CLI 工具（仅 Normal / Local 模式）**：
+4. **CLI 工具（仅 Standard 模式）**：
    - CLI 可执行文件 `kabegame-cli.exe` 会被安装到应用安装目录
    - 如需在命令行中使用，请将安装目录添加到系统 PATH 环境变量，或直接使用完整路径
 
@@ -83,14 +83,14 @@
 
 ### MacOS
 
-1. **下载 DMG 文件**：根据你的需求选择 Normal、Local 或 Light 模式的 `.dmg` 文件
+1. **下载 DMG 文件**：根据你的需求选择 Standard 或 Light 模式的 `.dmg` 文件
 2. **安装应用**：
    - 打开下载的 `.dmg` 文件
    - 将 `Kabegame.app` 拖拽到「应用程序」文件夹
-3. **虚拟磁盘fuse依赖（仅 Normal / Local 模式）**：
+3. **虚拟磁盘fuse依赖（仅 Standard 模式）**：
    - MacOS的虚拟磁盘功能依赖macfuse，通过 `brew install macfuse`安装
    - 首次挂载会弹窗请求权限
-4. **CLI 工具（仅 Normal / Local 模式）**：
+4. **CLI 工具（仅 Standard 模式）**：
    - CLI 可执行文件已随应用一起打包，位于：`/Applications/Kabegame.app/Contents/Resources/resources/bin/kabegame-cli`
    - 如需在终端中全局使用，可以手动创建软链接（需要管理员权限）：
    ```bash
@@ -277,9 +277,8 @@ bun check -c main --skip cargo   # 仅检查 vue
 - `-c, --component`：指定要开发/启动/构建的组件（`main` | `cli`）
 - `bun check` 必须用 `-c, --component` 指定组件
 - `--mode`：构建模式
-  - `normal`（默认）：一般版本，带商店源，仅打包本地插件到 resources
-  - `local`：无商店，预打包全部插件到 resources
-  - `light`：轻量模式，无商店，没有虚拟盘功能、没有cli工具
+  - `standard`（默认）：标准版本，支持插件商店、虚拟磁盘和 CLI
+  - `light`：轻量版本，仅支持插件商店
 - `--skip <skip>`：跳过某个流程（只能一个值：`vue` | `cargo`）
   - 在 `check` 中始终生效：`--skip vue` 跳过 `vue-tsc`，`--skip cargo` 跳过 `cargo check`
   - 在 `build` 中：

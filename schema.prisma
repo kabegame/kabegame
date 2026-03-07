@@ -124,3 +124,26 @@ model TempFile {
 
     @@map("temp_files")
 }
+
+// 插件源表（商店源）
+model PluginSource {
+    id        String   @id
+    name      String
+    indexUrl  String   @map("index_url")
+    createdAt Int      @map("created_at")
+
+    cache PluginSourceCache?
+
+    @@map("plugin_sources")
+}
+
+// 插件源缓存表（存储 index.json 原始内容）
+model PluginSourceCache {
+    sourceId    String @id @map("source_id")
+    jsonContent String @map("json_content")
+    updatedAt   Int    @map("updated_at")
+
+    source PluginSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+    @@map("plugin_source_cache")
+}

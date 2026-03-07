@@ -33,14 +33,10 @@ pub mod virtual_driver;
 
 const BUILD_MODE: &str = env!("KABEGAME_BUILD_MODE"); // injected by build.rs
 
-pub fn is_local_mode() -> bool {
-    BUILD_MODE == "local"
+pub fn is_standard_mode() -> bool {
+    BUILD_MODE == "standard"
 }
 
 pub fn is_light_mode() -> bool {
     BUILD_MODE == "light"
-}
-
-pub fn is_normal_mode() -> bool {
-    BUILD_MODE == "normal"
 }

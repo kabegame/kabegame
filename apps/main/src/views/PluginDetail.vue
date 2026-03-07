@@ -12,9 +12,8 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { usePluginStore } from "@/stores/plugins";
-import { pluginCache } from "@/utils/pluginCache";
 import PluginDetailPage from "@kabegame/core/components/plugin/PluginDetailPage.vue";
-import { BrowserPlugin } from "@/utils/pluginCache";
+import type { BrowserPlugin } from "@kabegame/core/stores/plugins";
 
 interface PluginDetailDto {
     id: string;
@@ -22,7 +21,7 @@ interface PluginDetailDto {
     desp: string;
     doc?: string | null;
     iconData?: number[] | null;
-    origin: "installed" | "remote" | "builtin" | string;
+    origin: "installed" | "remote" | string;
     baseUrl?: string | null;
 }
 
@@ -67,6 +66,8 @@ const sizeBytes = computed(() => {
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
 });
+const sourceId = computed(() => (typeof route.query.sourceId === "string" ? route.query.sourceId : null));
+const version = computed(() => (typeof route.query.version === "string" ? route.query.version : null));
 
 const isInstalled = computed(() => {
     if (!plugin.value) return false;
@@ -91,11 +92,11 @@ const loadPlugin = async () => {
     const cacheKey = downloadUrl.value ? `${pluginId}::${downloadUrl.value}` : pluginId;
 
     // 先检查缓存
-    const cached = pluginCache.get(cacheKey);
+    const cached = pluginStore.getCachedPluginDetail(cacheKey);
     if (cached) {
         // 缓存命中，直接使用，不需要 loading
         console.log(`[缓存命中] 插件 key: ${cacheKey}`);
-        plugin.value = cached.plugin;
+        plugin.value = cached;
         loading.value = false;
         showSkeleton.value = false;
         return;
@@ -122,6 +123,8 @@ const loadPlugin = async () => {
             downloadUrl: downloadUrl.value ?? undefined,
             sha256: sha256.value ?? undefined,
             sizeBytes: sizeBytes.value ?? undefined,
+            sourceId: sourceId.value ?? undefined,
+            version: version.value ?? undefined,
         });
 
         const icon =
@@ -136,16 +139,13 @@ const loadPlugin = async () => {
             icon,
             doc: detail.doc ?? undefined,
             baseUrl: detail.baseUrl ?? undefined,
-            isBuiltIn: detail.origin === "builtin",
         };
 
         plugin.value = found;
 
         // 存入缓存（按“来源”区分）
-        pluginCache.set(cacheKey, {
-            plugin: found,
-        });
-        console.log(`[缓存已保存] 插件 key: ${cacheKey}，缓存大小: ${pluginCache.size()}`);
+        pluginStore.setCachedPluginDetail(cacheKey, found);
+        console.log(`[缓存已保存] 插件 key: ${cacheKey}`);
     } catch (error) {
         console.error("加载源失败:", error);
         // 如果用户已经离开“源详情”页：不要再弹窗/跳转（避免打断其他页面的正常导航）
@@ -176,6 +176,8 @@ const loadDocImageBytes = async (imagePath: string): Promise<number[]> => {
         downloadUrl: downloadUrl.value ?? undefined,
         sha256: sha256.value ?? undefined,
         sizeBytes: sizeBytes.value ?? undefined,
+        sourceId: sourceId.value ?? undefined,
+        version: version.value ?? undefined,
     });
 };
 
@@ -204,6 +206,8 @@ const handleInstall = async () => {
                 downloadUrl: downloadUrl.value,
                 sha256: sha256.value ?? null,
                 sizeBytes: sizeBytes.value ?? null,
+                sourceId: sourceId.value ?? null,
+                version: version.value ?? null,
             });
             
             // 检查是否允许安装
@@ -246,7 +250,7 @@ const handleUninstall = async () => {
             await pluginStore.deletePlugin(installed.id);
             ElMessage.success("卸载成功");
             // 清除缓存，强制重新加载
-            pluginCache.clear();
+            pluginStore.clearPluginDetailCache();
             await loadPlugin(); // 重新加载以更新状态
         }
     } catch (error) {

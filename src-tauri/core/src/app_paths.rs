@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::OnceLock};
 
 /// 应用路径集中管理结构体
-/// 
+///
 /// 所有路径在应用启动时由 tauri-plugin-pathes 一次性计算并初始化。
 /// 各模块通过 `AppPaths::global()` 获取路径，只做 `.join()` 操作，不做 IO。
 pub struct AppPaths {
@@ -48,7 +48,7 @@ impl AppPaths {
     }
 
     /// images.db 数据库文件路径
-    /// 
+    ///
     /// - 桌面：`data_dir/images.db`
     /// - Android：`data_dir/databases/images.db`（Android 数据库约定）
     pub fn images_db(&self) -> PathBuf {
@@ -62,10 +62,6 @@ impl AppPaths {
         }
     }
 
-    /// plugin_sources.json 文件路径
-    pub fn plugin_sources_json(&self) -> PathBuf {
-        self.data_dir.join("plugin_sources.json")
-    }
 
     /// plugins-directory 目录（用户安装的插件）
     pub fn plugins_dir(&self) -> PathBuf {
@@ -81,7 +77,7 @@ impl AppPaths {
     // ========== 图片相关目录 ==========
 
     /// 图片存储目录
-    /// 
+    ///
     /// - 桌面：优先 `pictures_dir/Kabegame`，回退到 `data_dir/images`
     /// - Android：`external_data_dir/images`
     pub fn images_dir(&self) -> PathBuf {
@@ -102,7 +98,7 @@ impl AppPaths {
     }
 
     /// 缩略图目录
-    /// 
+    ///
     /// - 桌面：`data_dir/thumbnails`
     /// - Android：`external_data_dir/thumbnails`
     pub fn thumbnails_dir(&self) -> PathBuf {
@@ -136,6 +132,16 @@ impl AppPaths {
     /// store-cache 目录（插件商店 index.json 缓存）
     pub fn store_cache_dir(&self) -> PathBuf {
         self.cache_dir.join("store-cache")
+    }
+
+    /// 特定商店源的插件缓存目录
+    pub fn store_plugin_cache_dir(&self, source_id: &str) -> PathBuf {
+        self.store_cache_dir().join(source_id)
+    }
+
+    /// 特定商店源特定插件的缓存文件路径
+    pub fn store_plugin_cache_file(&self, source_id: &str, plugin_id: &str) -> PathBuf {
+        self.store_plugin_cache_dir(source_id).join(format!("{}.kgpg", plugin_id))
     }
 
     // ========== 临时目录 ==========

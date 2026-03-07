@@ -14,10 +14,10 @@
             <ul>
                 <li>从商店安装的插件</li>
                 <li>手动导入的插件（.kgpg 文件）</li>
-                <li>内置插件（如 <code>local-import</code>）</li>
+                <li>预置插件（如 <code>local-import</code>）</li>
             </ul>
             <el-alert class="note" type="info" show-icon :closable="false">
-                如果下拉菜单为空，说明还没有安装任何插件。请先到"源管理"页面安装插件。
+                如果下拉菜单为空，说明还没有安装任何插件。请先到插件商店安装插件。
             </el-alert>
             <TipImageCarousel v-if="selectPluginImages.length > 0" :images="selectPluginImages" />
         </section>
