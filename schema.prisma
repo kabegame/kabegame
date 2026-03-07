@@ -137,7 +137,7 @@ model PluginSource {
     @@map("plugin_sources")
 }
 
-// 插件源缓存表（存储 index.json 原始内容）
+// 插件源缓存表（存储前 index.json 原始内容）
 model PluginSourceCache {
     sourceId    String @id @map("source_id")
     jsonContent String @map("json_content")
