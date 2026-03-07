@@ -14,20 +14,12 @@ val tauriProperties = Properties().apply {
     }
 }
 
-val kabegameAppIdProperties = Properties().apply {
-    val propFile = file("kabegame-appid.properties")
-    if (propFile.exists()) {
-        propFile.inputStream().use { load(it) }
-    }
-}
-val applicationIdValue = kabegameAppIdProperties.getProperty("applicationId", "app.kabegame")
-
 android {
     compileSdk = 36
-    namespace = applicationIdValue
+    namespace = "app.kabegame"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
-        applicationId = applicationIdValue
+        applicationId = "app.kabegame"
         minSdk = 26  // Android 8.0+ (API 26+)
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()

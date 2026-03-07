@@ -111,6 +111,7 @@ function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)
 .android-picker-number {
     display: flex;
     align-items: center;
+    width: 100%;
     justify-content: space-between;
     min-height: 32px;
     padding: 6px 12px;

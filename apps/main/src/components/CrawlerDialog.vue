@@ -636,6 +636,10 @@ watch(selectedRunConfigId, async (cfgId) => {
 </script>
 
 <style lang="scss" scoped>
+:deep(.el-form-item) {
+    align-items: center;
+}
+
 .crawl-drawer-header {
     h3 {
         margin: 0;

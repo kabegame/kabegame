@@ -1,5 +1,12 @@
 <template>
-  <el-dropdown trigger="click" @command="handleCommand">
+  <!-- 安卓：单按钮打开「本地/远程」选择 picker，无下拉箭头 -->
+  <el-button v-if="IS_ANDROID" type="primary" class="collect-btn" @click="emit('action', { type: 'openMenu' })">
+    <el-icon>
+      <Plus />
+    </el-icon>
+    开始收集
+  </el-button>
+  <el-dropdown v-else trigger="click" @command="handleCommand">
     <el-button type="primary" class="collect-btn">
       <el-icon>
         <Plus />
@@ -26,6 +33,7 @@
 
 <script setup lang="ts">
 import { Plus, ArrowDown, FolderOpened, Connection } from "@element-plus/icons-vue";
+import { IS_ANDROID } from "@kabegame/core/env";
 
 const emit = defineEmits<{
   action: [data: { type: string; value?: string }];

@@ -59,7 +59,7 @@
         </div>
       </el-tab-pane>
       <!-- 商店源：按"源名称"动态生成 tab；每个 tab 只显示该源的数据 -->
-      <el-tab-pane v-if="!IS_LIGHT_MODE" v-for="s in storeSourcesToRender" :key="s.id"
+      <el-tab-pane v-for="s in storeSourcesToRender" :key="s.id"
         :name="storeTabName(s.id)">
         <template #label>
           <span>{{ s.name }}</span>
@@ -145,7 +145,7 @@
       </el-tab-pane>
 
       <!-- 添加源 tab -->
-      <el-tab-pane v-if="!IS_LIGHT_MODE" name="add-source">
+      <el-tab-pane name="add-source">
         <template #label>
           <el-icon style="margin-right: 4px;">
             <Plus />
@@ -634,12 +634,6 @@ const beforeLeaveTab = (newName: string | number, _oldName: string | number) => 
 const editSource = (idx: number) => {
   const s = sources.value[idx];
   if (!s) return;
-
-  // 官方源不允许编辑
-  if (s.builtIn) {
-    ElMessage.warning("官方源不能编辑");
-    return;
-  }
 
   editingSourceIndex.value = idx;
   editSourceForm.id = s.id;

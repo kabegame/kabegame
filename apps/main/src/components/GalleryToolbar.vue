@@ -2,29 +2,30 @@
   <PageHeader title="画廊" :show="showIds" :fold="foldIds" @action="handleAction" sticky>
     <template #subtitle>
       <span>{{ totalCountText }}</span>
-      <template v-if="sortToggleVisible">
-        <span class="subtitle-sep">·</span>
-        <el-select
-          :model-value="sortOrder"
-          size="small"
-          class="sort-select"
-          placeholder="排序方式"
-          @change="onSortOrderChange"
-        >
-          <el-option label="按时间正序" value="asc" />
-          <el-option label="按时间倒序" value="desc" />
-        </el-select>
-      </template>
     </template>
   </PageHeader>
+
+  <!-- Android：fold 中点击「按时间排序」后弹出的 van-picker -->
+  <Teleport v-if="IS_ANDROID" to="body">
+    <van-popup v-model:show="showSortPicker" position="bottom" round>
+      <van-picker
+        v-model="sortPickerSelected"
+        title="按时间排序"
+        :columns="sortPickerColumns"
+        @confirm="onSortPickerConfirm"
+        @cancel="showSortPicker = false"
+      />
+    </van-popup>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import { HeaderFeatureId } from "@kabegame/core/stores/header";
+import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_ANDROID } from "@kabegame/core/env";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 interface Props {
   isLoadingAll?: boolean;
@@ -52,16 +53,31 @@ const props = withDefaults(defineProps<Props>(), {
 const router = useRouter();
 const isAllAsc = computed(() => props.providerRootPath === "全部");
 const isAllDesc = computed(() => props.providerRootPath === "全部/倒序");
-const sortToggleVisible = computed(() => isAllAsc.value || isAllDesc.value);
 const sortOrder = computed(() =>
   props.providerRootPath === "全部/倒序" ? "desc" : "asc"
 );
+const sortOptionLabelAsc = "按时间正序";
+const sortOptionLabelDesc = "按时间倒序";
 function onSortOrderChange(value: string) {
   if (value === "desc") {
     router.push({ name: "Gallery", params: { providerPath: ["全部", "倒序"] } });
   } else {
     router.push({ name: "Gallery", params: { providerPath: ["全部"] } });
   }
+}
+
+// Android：fold 中「按时间排序」点击后弹出的 picker
+const showSortPicker = ref(false);
+useModalBack(showSortPicker);
+const sortPickerColumns = [{ text: "按时间正序", value: "asc" }, { text: "按时间倒序", value: "desc" }];
+const sortPickerSelected = ref<string[]>(["asc"]);
+watch(showSortPicker, (open) => {
+  if (open) sortPickerSelected.value = [sortOrder.value];
+});
+function onSortPickerConfirm() {
+  showSortPicker.value = false;
+  const v = sortPickerSelected.value[0];
+  if (v === "asc" || v === "desc") onSortOrderChange(v);
 }
 
 const totalCountText = computed(() => {
@@ -90,11 +106,28 @@ const showIds = computed(() => {
   if (IS_ANDROID) {
     return [HeaderFeatureId.Collect, HeaderFeatureId.TaskDrawer];
   }
-  return [HeaderFeatureId.Refresh, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings, HeaderFeatureId.Organize, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Collect];
+  return [HeaderFeatureId.GallerySort, HeaderFeatureId.Refresh, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings, HeaderFeatureId.Organize, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Collect];
 });
 
 const foldIds = computed(() => {
-  return IS_ANDROID ? [HeaderFeatureId.Help, HeaderFeatureId.QuickSettings] : [];
+  if (!IS_ANDROID) return [];
+  return [HeaderFeatureId.GallerySort];
+});
+
+const headerStore = useHeaderStore();
+watch(
+  [sortOrder],
+  () => {
+    if (!IS_ANDROID) return;
+    headerStore.setFoldLabel(
+      HeaderFeatureId.GallerySort,
+      sortOrder.value === "desc" ? sortOptionLabelDesc : sortOptionLabelAsc
+    );
+  },
+  { immediate: true }
+);
+onUnmounted(() => {
+  if (IS_ANDROID) headerStore.setFoldLabel(HeaderFeatureId.GallerySort, undefined);
 });
 
 // 处理action事件
@@ -104,7 +137,9 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
       emit("refresh");
       break;
     case HeaderFeatureId.Collect:
-      if (payload.data.type === "select") {
+      if (payload.data.type === "openMenu") {
+        emit("openCollectMenu");
+      } else if (payload.data.type === "select") {
         if (payload.data.value === "local") {
           emit("showLocalImport");
         } else if (payload.data.value === "network") {
@@ -118,6 +153,9 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
     case HeaderFeatureId.QuickSettings:
       emit("showQuickSettings");
       break;
+    case HeaderFeatureId.GallerySort:
+      showSortPicker.value = true;
+      break;
     case HeaderFeatureId.Organize:
       // 整理由 header 的 OrganizeHeaderControl 处理，此处不会触发（Organize 在 show 中）
       break;
@@ -126,18 +164,6 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
 </script>
 
 <style scoped lang="scss">
-.subtitle-sep {
-  margin: 0 6px;
-  color: var(--el-text-color-secondary);
-}
-.sort-select {
-  width: 120px;
-  margin-left: 4px;
-  :deep(.el-input__wrapper) {
-    padding: 0 8px;
-  }
-}
-
 .date-range-filter {
   width: 260px;
   margin-left: 8px;

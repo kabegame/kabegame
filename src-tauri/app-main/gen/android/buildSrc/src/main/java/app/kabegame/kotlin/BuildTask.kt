@@ -16,7 +16,15 @@ open class BuildTask : DefaultTask() {
 
     @TaskAction
     fun assemble() {
-        val executable = """cargo""";
+        // Prefer full path so Gradle subprocess can find cargo when PATH doesn't include ~/.cargo/bin
+        val cargoHome = System.getenv("CARGO_HOME") ?: System.getenv("HOME")?.let { "$it/.cargo" }
+        val executable = when {
+            cargoHome != null -> {
+                val cargoPath = File(cargoHome, "bin/cargo")
+                if (cargoPath.exists()) cargoPath.absolutePath else "cargo"
+            }
+            else -> "cargo"
+        }
         try {
             runTauriCli(executable)
         } catch (e: Exception) {

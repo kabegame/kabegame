@@ -305,7 +305,7 @@ const handleShowCrawlerDialog = () => {
   showCrawlerDialog.value = true;
 };
 
-// 空状态按钮：桌面打开选择对话框，Android 打开收集方式选择器
+// 空状态按钮：与工具栏一致，安卓打开「本地/远程」选择 picker，桌面打开选择对话框
 const handleEmptyStateCollect = () => {
   if (IS_ANDROID) {
     showCollectSourcePicker.value = true;
