@@ -43,6 +43,11 @@ where
     Fut: std::future::Future<Output = CliIpcResponse> + Send,
 {
     let path = unix_socket_path();
+    // 确保父目录存在（Unix bind 不会创建目录，否则会报 ENOENT）
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("ipc mkdir failed ({}): {}", parent.display(), e))?;
+    }
     let _ = std::fs::remove_file(&path);
     let listener = match UnixListener::bind(&path) {
         Ok(l) => l,
