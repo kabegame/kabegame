@@ -91,10 +91,20 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             .join("Kabegame")
         };
 
-        let cache_dir = dirs::cache_dir()
-          .expect("Failed to get cache dir")
-          .join("Kabegame");
-        
+        let cache_dir = if is_dev() {
+          if let Some(repo_root) = repo_root_dir() {
+            repo_root.join("cache")
+          } else {
+            dirs::cache_dir()
+              .expect("Failed to get cache dir")
+              .join("Kabegame")
+          }
+        } else {
+          dirs::cache_dir()
+            .expect("Failed to get cache dir")
+            .join("Kabegame")
+        };
+
         let temp_dir = std::env::temp_dir().join("Kabegame");
         
         let resource_dir = app

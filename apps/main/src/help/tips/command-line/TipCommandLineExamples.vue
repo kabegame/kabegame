@@ -64,13 +64,13 @@
         <section class="section">
             <h3>注意事项</h3>
             <ul>
-                <li>确保 <code>local-import</code> 插件已安装（这是内置插件，通常已自动安装）</li>
+                <li>确保 <code>local-import</code> 插件已安装（这是预置插件，通常已自动安装）</li>
                 <li>路径中的空格需要用引号包裹</li>
                 <li>Windows 路径可以使用正斜杠 <code>/</code> 或双反斜杠 <code>\\</code></li>
                 <li>导入大量文件时可能需要一些时间，请耐心等待</li>
             </ul>
             <el-alert class="note" type="info" show-icon :closable="false">
-                如果遇到"插件不存在"错误，请先到"源管理"页面确认 <code>local-import</code> 插件已安装。
+                如果遇到"插件不存在"错误，请先到插件商店确认 <code>local-import</code> 插件已安装。
             </el-alert>
         </section>
     </div>

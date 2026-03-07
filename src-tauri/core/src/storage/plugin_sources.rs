@@ -1,0 +1,122 @@
+use crate::plugin::PluginSource;
+use rusqlite::{params, Connection, Result as SqliteResult};
+use std::sync::{Arc, Mutex};
+
+/// 插件源相关的数据库操作
+pub struct PluginSourcesStorage {
+    conn: Arc<Mutex<Connection>>,
+}
+
+impl PluginSourcesStorage {
+    pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
+        Self { conn }
+    }
+
+    /// 获取所有插件源
+    pub fn get_all_sources(&self) -> SqliteResult<Vec<PluginSource>> {
+        let conn = self.conn.lock().expect("plugin_sources db lock");
+        let mut stmt = conn.prepare(
+            "SELECT id, name, index_url FROM plugin_sources ORDER BY created_at ASC"
+        )?;
+
+        let sources = stmt.query_map([], |row| {
+            Ok(PluginSource {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                index_url: row.get(2)?,
+            })
+        })?;
+
+        sources.collect()
+    }
+
+    /// 添加插件源
+    /// id 为 None 时自动生成 UUID
+    pub fn add_source(&self, id: Option<String>, name: String, index_url: String) -> SqliteResult<PluginSource> {
+        use uuid::Uuid;
+
+        let conn = self.conn.lock().expect("plugin_sources db lock");
+        let source_id = id.unwrap_or_else(|| Uuid::new_v4().to_string());
+
+        // 检查 ID 是否已存在
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM plugin_sources WHERE id = ?",
+            params![&source_id],
+            |row| row.get(0),
+        )?;
+
+        if exists > 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(2067), // SQLITE_CONSTRAINT_UNIQUE
+                Some(format!("Plugin source with id '{}' already exists", source_id)),
+            ));
+        }
+
+        // 插入新记录
+        conn.execute(
+            "INSERT INTO plugin_sources (id, name, index_url) VALUES (?, ?, ?)",
+            params![source_id, name, index_url],
+        )?;
+
+        Ok(PluginSource {
+            id: source_id,
+            name,
+            index_url,
+        })
+    }
+
+    /// 更新插件源
+    pub fn update_source(&self, id: String, name: String, index_url: String) -> SqliteResult<()> {
+        let conn = self.conn.lock().expect("plugin_sources db lock");
+        let rows_affected = conn.execute(
+            "UPDATE plugin_sources SET name = ?, index_url = ? WHERE id = ?",
+            params![name, index_url, id],
+        )?;
+
+        if rows_affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+
+        Ok(())
+    }
+
+    /// 删除插件源（缓存会通过 FOREIGN KEY CASCADE 自动删除）
+    pub fn delete_source(&self, id: String) -> SqliteResult<()> {
+        let conn = self.conn.lock().expect("plugin_sources db lock");
+        let rows_affected = conn.execute(
+            "DELETE FROM plugin_sources WHERE id = ?",
+            params![id],
+        )?;
+
+        if rows_affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+
+        Ok(())
+    }
+
+    /// 获取插件源缓存
+    pub fn get_source_cache(&self, source_id: &str) -> SqliteResult<Option<String>> {
+        let conn = self.conn.lock().expect("plugin_sources db lock");
+        let mut stmt = conn.prepare(
+            "SELECT json_content FROM plugin_source_cache WHERE source_id = ?"
+        )?;
+
+        let mut rows = stmt.query_map(params![source_id], |row| row.get(0))?;
+        match rows.next() {
+            Some(result) => result.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// 保存插件源缓存（INSERT OR REPLACE）
+    pub fn save_source_cache(&self, source_id: String, json_content: String) -> SqliteResult<()> {
+        let conn = self.conn.lock().expect("plugin_sources db lock");
+        conn.execute(
+            "INSERT OR REPLACE INTO plugin_source_cache (source_id, json_content, updated_at) VALUES (?, ?, strftime('%s','now'))",
+            params![source_id, json_content],
+        )?;
+
+        Ok(())
+    }
+}

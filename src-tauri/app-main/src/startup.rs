@@ -417,6 +417,8 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     Ok(())
 }
 
+/// 初始化预置插件（Android 平台）
+/// 将打包的预置插件解压到用户目录（与「内置」概念解耦，仅作为预置资源处理）
 #[cfg(target_os = "android")]
 pub fn init_bundled_plugins<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     use tauri_plugin_picker::PickerExt;
@@ -431,6 +433,80 @@ pub fn init_bundled_plugins<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         match picker.extract_bundled_plugins(target_dir).await {
             Ok(r) => println!("Extracted {} bundled plugins to {}", r.count, builtin_dir.display()),
             Err(e) => eprintln!("Failed to extract bundled plugins: {}", e),
+        }
+    });
+}
+
+/// 初始化预置插件（桌面平台）
+/// 如果用户插件目录缺少资源目录中的插件，则复制过去（与「内置」概念解耦，仅作为预置资源处理）
+#[cfg(not(target_os = "android"))]
+pub fn init_resource_plugins() {
+    tauri::async_runtime::spawn(async move {
+        let app_paths = kabegame_core::app_paths::AppPaths::global();
+
+        // 资源插件目录（resources/plugins）
+        let resource_plugins_dir = app_paths.builtin_plugins_dir();
+        // 用户插件目录
+        let user_plugins_dir = app_paths.plugins_dir();
+
+        // 确保用户插件目录存在
+        if let Err(e) = std::fs::create_dir_all(&user_plugins_dir) {
+            eprintln!("Failed to create user plugins directory: {}", e);
+            return;
+        }
+
+        // 检查资源目录是否存在
+        if !resource_plugins_dir.exists() {
+            return;
+        }
+
+        // 读取资源目录中的所有 .kgpg 文件
+        let entries = match std::fs::read_dir(&resource_plugins_dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("Failed to read resource plugins directory: {}", e);
+                return;
+            }
+        };
+
+        let mut copied_count = 0;
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    eprintln!("Failed to read directory entry: {}", e);
+                    continue;
+                }
+            };
+
+            let path = entry.path();
+            if !path.extension().map_or(false, |ext| ext == "kgpg") {
+                continue;
+            }
+
+            let file_name = match path.file_name() {
+                Some(name) => name,
+                None => continue,
+            };
+
+            let target_path = user_plugins_dir.join(file_name);
+
+            // 如果目标文件不存在，则复制
+            if !target_path.exists() {
+                match std::fs::copy(&path, &target_path) {
+                    Ok(_) => {
+                        copied_count += 1;
+                        println!("Copied resource plugin: {}", file_name.to_string_lossy());
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to copy resource plugin {}: {}", file_name.to_string_lossy(), e);
+                    }
+                }
+            }
+        }
+
+        if copied_count > 0 {
+            println!("Initialized {} resource plugins to user directory", copied_count);
         }
     });
 }

@@ -489,12 +489,36 @@ impl IpcClient {
             .await
     }
 
-    pub async fn plugin_save_plugin_sources(
+    pub async fn plugin_add_source(
         &self,
-        sources: serde_json::Value,
+        id: Option<String>,
+        name: String,
+        index_url: String,
+    ) -> Result<serde_json::Value, String> {
+        self.request_data(CliIpcRequest::PluginAddSource {
+            id,
+            name,
+            index_url,
+        })
+        .await
+    }
+
+    pub async fn plugin_update_source(
+        &self,
+        id: String,
+        name: String,
+        index_url: String,
     ) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::PluginSavePluginSources { sources })
-            .await
+        self.request_ok(CliIpcRequest::PluginUpdateSource {
+            id,
+            name,
+            index_url,
+        })
+        .await
+    }
+
+    pub async fn plugin_delete_source(&self, id: String) -> Result<(), String> {
+        self.request_ok(CliIpcRequest::PluginDeleteSource { id }).await
     }
 
     pub async fn plugin_install_browser_plugin(
@@ -529,6 +553,8 @@ impl IpcClient {
             download_url,
             sha256,
             size_bytes,
+            source_id: None,
+            version: None,
         })
         .await
     }
@@ -551,6 +577,8 @@ impl IpcClient {
             download_url,
             sha256,
             size_bytes,
+            source_id: None,
+            version: None,
         })
         .await
     }
@@ -564,7 +592,11 @@ impl IpcClient {
         &self,
         download_url: String,
     ) -> Result<Option<Vec<u8>>, String> {
-        self.request_bytes(CliIpcRequest::PluginGetRemoteIconV2 { download_url })
+        self.request_bytes(CliIpcRequest::PluginGetRemoteIconV2 {
+            download_url,
+            source_id: None,
+            plugin_id: None,
+        })
             .await
     }
 
@@ -582,6 +614,8 @@ impl IpcClient {
             download_url,
             sha256,
             size_bytes,
+            source_id: None,
+            version: None,
         })
         .await?
         .ok_or_else(|| "No image data in response".to_string())

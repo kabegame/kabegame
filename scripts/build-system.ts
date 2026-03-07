@@ -221,7 +221,7 @@ export class BuildSystem {
 
     this.commonUse(Cmd.BUILD);
     this.commonBefore();
-    if (this.context.component!.isCli && !this.context.mode!.isLight) {
+    if (this.context.component!.isCli && this.context.mode!.isStandard) {
       this.hooks.beforeBuild.call(Component.CLI);
       const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.CLI);
       const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];

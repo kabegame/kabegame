@@ -12,7 +12,7 @@
     </template>
 
     <template #actions>
-      <div v-if="plugin && !plugin.isBuiltIn" class="header-actions">
+      <div v-if="plugin" class="header-actions">
         <el-tooltip content="卸载" placement="bottom" v-if="showUninstall && installed">
           <el-button :icon="Delete" circle type="danger" @click="$emit('uninstall')" />
         </el-tooltip>
@@ -70,7 +70,6 @@ type PluginVm = {
   icon?: string;
   doc?: string;
   baseUrl?: string;
-  isBuiltIn?: boolean;
 };
 
 type LoadImageBytes = (imagePath: string) => Promise<Uint8Array | number[]>;

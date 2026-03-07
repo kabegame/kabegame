@@ -1,4 +1,5 @@
 use rusqlite::{params, Connection};
+use serde_json;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Read;
@@ -10,6 +11,7 @@ pub mod albums;
 pub mod gallery;
 pub mod images;
 pub mod organize;
+pub mod plugin_sources;
 pub mod run_configs;
 pub mod tasks;
 pub mod temp_files;
@@ -245,6 +247,44 @@ PRAGMA mmap_size = 268435456;
                 .expect("Failed to add images.mime_type column after migrations");
         }
 
+        // 检测 plugin_sources 表是否已存在（用于判断是否首次迁移）
+        let plugin_sources_is_new = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='plugin_sources'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0) == 0;
+
+        // 创建插件源表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS plugin_sources (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                index_url TEXT NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            )",
+            [],
+        )
+        .expect("Failed to create plugin_sources table");
+
+        // 创建插件源缓存表（存储 index.json 原始内容）
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS plugin_source_cache (
+                source_id TEXT PRIMARY KEY,
+                json_content TEXT NOT NULL,
+                updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                FOREIGN KEY (source_id) REFERENCES plugin_sources(id) ON DELETE CASCADE
+            )",
+            [],
+        )
+        .expect("Failed to create plugin_source_cache table");
+
+        // 仅首次建表时执行初始数据迁移（避免用户删空源后被重新填充）
+        if plugin_sources_is_new {
+            let _ = migrate_plugin_sources_initial_data(&mut conn);
+        }
+
         // 创建临时文件表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS temp_files (
@@ -346,6 +386,11 @@ PRAGMA mmap_size = 268435456;
 
     pub fn get_thumbnails_dir(&self) -> PathBuf {
         crate::app_paths::AppPaths::global().thumbnails_dir()
+    }
+
+    /// 获取插件源存储接口
+    pub fn plugin_sources(&self) -> plugin_sources::PluginSourcesStorage {
+        plugin_sources::PluginSourcesStorage::new(Arc::clone(&self.db))
     }
 
     /// 初始化全局 Storage（必须在首次使用前调用）
@@ -895,4 +940,74 @@ fn perform_complex_migrations(conn: &mut Connection) {
         "CREATE INDEX IF NOT EXISTS idx_task_images_image ON task_images(image_id)",
         [],
     );
+}
+
+/// 迁移插件源初始数据（仅在首次建表时执行）
+fn migrate_plugin_sources_initial_data(conn: &mut Connection) -> Result<(), rusqlite::Error> {
+    // 1. 插入默认官方源
+    let owner = option_env!("CRAWLER_PLUGINS_REPO_OWNER").unwrap_or("kabegame");
+    let repo = option_env!("CRAWLER_PLUGINS_REPO_NAME").unwrap_or("crawler-plugins");
+    let index_url = format!(
+        "https://github.com/{}/{}/releases/latest/download/index.json",
+        owner, repo
+    );
+
+    conn.execute(
+        "INSERT INTO plugin_sources (id, name, index_url) VALUES (?, ?, ?)",
+        params!["official_github_release", "官方 GitHub Releases 源", index_url],
+    )?;
+
+    // 2. 尝试迁移旧的 plugin_sources.json（用户自定义源）
+    let old_sources_file = std::path::Path::new("data/plugin_sources.json");
+    if old_sources_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(old_sources_file) {
+            if let Ok(old_sources) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+                for old_source in old_sources {
+                    if let (Some(id), Some(name), Some(index_url)) = (
+                        old_source.get("id").and_then(|v| v.as_str()),
+                        old_source.get("name").and_then(|v| v.as_str()),
+                        old_source.get("indexUrl").and_then(|v| v.as_str()),
+                    ) {
+                        // 跳过官方源（避免重复）
+                        if id != "official_github_release" {
+                            let _ = conn.execute(
+                                "INSERT OR IGNORE INTO plugin_sources (id, name, index_url) VALUES (?, ?, ?)",
+                                params![id, name, index_url],
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // 迁移完成后删除旧文件
+        let _ = std::fs::remove_file(old_sources_file);
+    }
+
+    // 3. 尝试迁移旧的 store-cache/*.json
+    let store_cache_dir = std::path::Path::new("data/store-cache");
+    if store_cache_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(store_cache_dir) {
+            for entry in entries.flatten() {
+                if let Ok(file_type) = entry.file_type() {
+                    if file_type.is_file() {
+                        if let Some(file_name) = entry.file_name().to_str() {
+                            if file_name.ends_with(".json") {
+                                let source_id = file_name.trim_end_matches(".json");
+                                if let Ok(json_content) = std::fs::read_to_string(entry.path()) {
+                                    let _ = conn.execute(
+                                        "INSERT OR IGNORE INTO plugin_source_cache (source_id, json_content, updated_at) VALUES (?, ?, strftime('%s','now'))",
+                                        params![source_id, json_content],
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 迁移完成后删除旧目录
+        let _ = std::fs::remove_dir_all(store_cache_dir);
+    }
+
+    Ok(())
 }

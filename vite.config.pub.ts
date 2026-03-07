@@ -18,8 +18,6 @@ export const desktop = process.env.VITE_DESKTOP || "";
 
 export const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
 
-export const isLocalMode = process.env.VITE_KABEGAME_MODE === "local";
-
 export default {
   plugins: [
     vue(),
@@ -34,7 +32,6 @@ export default {
     __ANDROID__: isAndroid,
     __DESKTOP__: JSON.stringify(desktop),
     __LIGHT_MODE__: isAndroid || isLightMode,
-    __LOCAL_MODE__: !isAndroid &&isLocalMode,
     // 切换此开关来强制重启vite服务器
     __REBOOT__: false,
   },

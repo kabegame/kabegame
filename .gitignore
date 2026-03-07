@@ -31,6 +31,7 @@ src-tauri/app-main/resources/bin/*
 
 # development data
 /data
+/cache
 
 # Nx
 .nx/cache

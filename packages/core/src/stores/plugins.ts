@@ -19,6 +19,7 @@ export interface BrowserPlugin {
   icon?: string | null;
   filePath?: string | null;
   doc?: string | null;
+  baseUrl?: string | null;
 }
 
 /**
@@ -38,7 +39,7 @@ export const useInstalledPluginsStore = defineStore("installedPlugins", () => {
    * @param commandName 后端命令名称（默认 "plugin_editor_list_installed_plugins"）
    */
   async function loadPlugins(
-    commandName = "plugin_editor_list_installed_plugins"
+    commandName = "plugin_editor_list_installed_plugins",
   ) {
     isLoading.value = true;
     try {
@@ -132,6 +133,7 @@ export interface Plugin {
 export const usePluginStore = defineStore("plugins", () => {
   const plugins = ref<Plugin[]>([]);
   const activePlugin = ref<Plugin | null>(null);
+  const pluginDetailCache = ref<Record<string, BrowserPlugin>>({});
 
   async function loadPlugins() {
     try {
@@ -160,11 +162,27 @@ export const usePluginStore = defineStore("plugins", () => {
     activePlugin.value = plugin;
   }
 
+  function getCachedPluginDetail(key: string): BrowserPlugin | undefined {
+    return pluginDetailCache.value[key];
+  }
+
+  function setCachedPluginDetail(key: string, plugin: BrowserPlugin) {
+    pluginDetailCache.value[key] = plugin;
+  }
+
+  function clearPluginDetailCache() {
+    pluginDetailCache.value = {};
+  }
+
   return {
     plugins,
     activePlugin,
+    pluginDetailCache,
     loadPlugins,
     deletePlugin,
     setActivePlugin,
+    getCachedPluginDetail,
+    setCachedPluginDetail,
+    clearPluginDetailCache,
   };
 });

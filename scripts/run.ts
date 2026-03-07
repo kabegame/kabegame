@@ -73,8 +73,8 @@ program
   )
   .option(
     "--mode <mode>",
-    "构建模式：normal（一般版本，带商店源）或 local（无商店版本，仅本地源 + 预打包全部插件）",
-    Mode.NORMAL,
+    "构建模式：standard | light",
+    Mode.STANDARD,
   )
   .option("--android", "开发 Android 目标（仅 main，使用底部 Tab 布局等）")
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", true)
@@ -95,8 +95,8 @@ program
   )
   .option(
     "--mode <mode>",
-    "构建模式：normal、local（仅影响插件预打包与内置列表）或 light（轻量模式，不使用 virtual-driver feature）",
-    Mode.NORMAL,
+    "构建模式：standard | light",
+    Mode.STANDARD,
   )
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
   .argument("[args...]", "剩余参数（放在 -- 之后）")
@@ -121,8 +121,8 @@ program
   )
   .option(
     "--mode <mode>",
-    "构建模式：normal（一般版本，带商店源）、local（无商店版本，无商店安装包）或 light（轻量模式，不使用 virtual-driver feature）",
-    Mode.NORMAL,
+    "构建模式：standard | light",
+    Mode.STANDARD,
   )
   .option("--android", "构建 Android 目标（仅 main，产出 APK/AAB）")
   .option(
@@ -147,8 +147,8 @@ program
   .option("--skip <skip>", "跳过检查项：vue/cargo（只能一个值）", "")
   .option(
     "--mode <mode>",
-    "构建模式：normal、local 或 light（影响 cfg 与前端环境变量）",
-    Mode.NORMAL,
+    "构建模式：standard | light",
+    Mode.STANDARD,
   )
   .action(async (options: BuildOptions) => {
     await check(options);

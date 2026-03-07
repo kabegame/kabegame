@@ -290,8 +290,8 @@ export function resourceBinaryExists(binName: string): boolean {
   return fs.existsSync(p);
 }
 
-export function scanBuiltinPlugins(): string[] {
-  // 始终扫描 RESOURCES_PLUGINS_DIR（内置插件始终在 resources 目录）
+export function scanResourcePlugins(): string[] {
+  // 始终扫描 RESOURCES_PLUGINS_DIR（预置插件始终在 resources 目录）
   const pluginDir = RESOURCES_PLUGINS_DIR;
   if (!fs.existsSync(pluginDir)) {
     return [];

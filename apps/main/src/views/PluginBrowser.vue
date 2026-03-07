@@ -50,7 +50,7 @@
               </div>
 
               <div class="plugin-footer">
-                <el-button type="danger" size="small" v-if="!plugin.builtIn" @click.stop="handleDelete(plugin)">
+                <el-button type="danger" size="small" @click.stop="handleDelete(plugin)">
                   卸载
                 </el-button>
               </div>
@@ -59,8 +59,14 @@
         </div>
       </el-tab-pane>
       <!-- 商店源：按"源名称"动态生成 tab；每个 tab 只显示该源的数据 -->
-      <el-tab-pane v-if="!IS_LOCAL_MODE && !IS_LIGHT_MODE" v-for="s in storeSourcesToRender" :key="s.id" :label="s.name"
+      <el-tab-pane v-if="!IS_LIGHT_MODE" v-for="s in storeSourcesToRender" :key="s.id"
         :name="storeTabName(s.id)">
+        <template #label>
+          <span>{{ s.name }}</span>
+          <el-icon class="tab-close-icon" @click.stop="handleDeleteSource(s)">
+            <Close />
+          </el-icon>
+        </template>
         <!-- 插件列表（300ms 延迟显示骨架屏，避免快速刷新时闪屏） -->
         <div v-if="showSkeletonBySource[s.id]" class="loading-skeleton">
           <div class="skeleton-grid">
@@ -139,7 +145,7 @@
       </el-tab-pane>
 
       <!-- 添加源 tab -->
-      <el-tab-pane v-if="!IS_LOCAL_MODE && !IS_LIGHT_MODE" name="add-source">
+      <el-tab-pane v-if="!IS_LIGHT_MODE" name="add-source">
         <template #label>
           <el-icon style="margin-right: 4px;">
             <Plus />
@@ -154,22 +160,17 @@
     </div>
 
     <!-- 商店源管理 -->
-    <el-dialog v-if="!IS_LOCAL_MODE && !IS_LIGHT_MODE" v-model="showSourcesDialog" title="商店源" width="720px">
+    <el-dialog v-if="!IS_LIGHT_MODE" v-model="showSourcesDialog" title="商店源" width="720px">
       <div class="sources-hint">
         商店源是一个可访问的 <code>index.json</code> 地址（推荐指向 GitHub Releases 资产直链）。
       </div>
       <el-table :data="sources" style="width: 100%" empty-text="暂无商店源">
-        <el-table-column prop="name" label="名称" width="180">
-          <template #default="{ row }">
-            <span>{{ row.name }}</span>
-            <el-tag v-if="row.builtIn" type="info" size="small" style="margin-left: 8px;">官方</el-tag>
-          </template>
-        </el-table-column>
+        <el-table-column prop="name" label="名称" width="180" />
         <el-table-column prop="indexUrl" label="index.json 地址" show-overflow-tooltip />
         <el-table-column label="操作" width="140">
           <template #default="{ row, $index }">
-            <el-button size="small" @click="editSource($index)" :disabled="row.builtIn">编辑</el-button>
-            <el-button size="small" type="danger" @click="removeSource($index)" :disabled="row.builtIn">删除</el-button>
+            <el-button size="small" @click="editSource($index)">编辑</el-button>
+            <el-button size="small" type="danger" @click="removeSource($index)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -177,14 +178,16 @@
       <template #footer>
         <el-button @click="showSourcesDialog = false">关闭</el-button>
         <el-button @click="addSource">新增源</el-button>
-        <el-button type="primary" @click="saveSources">保存</el-button>
       </template>
     </el-dialog>
 
     <!-- 新增/编辑源 -->
-    <el-dialog v-if="!IS_LOCAL_MODE && !IS_LIGHT_MODE" v-model="showEditSourceDialog"
+    <el-dialog v-if="!IS_LIGHT_MODE" v-model="showEditSourceDialog"
       :title="editingSourceIndex === null ? '新增源' : '编辑源'" width="620px">
       <el-form label-width="110px">
+        <el-form-item label="ID">
+          <el-input v-model="editSourceForm.id" placeholder="留空则自动生成" />
+        </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="editSourceForm.name" placeholder="例如：官方源" />
         </el-form-item>
@@ -237,6 +240,7 @@ import {
   Setting,
   QuestionFilled,
   Loading,
+  Close,
 } from "@element-plus/icons-vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import { useRouter } from "vue-router";
@@ -248,15 +252,13 @@ import StyledTabs from "@/components/common/StyledTabs.vue";
 import { isUpdateAvailable } from "@/utils/version";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { IS_LIGHT_MODE, IS_LOCAL_MODE, IS_ANDROID } from "@kabegame/core/env";
+import { IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 interface PluginSource {
   id: string;
   name: string;
   indexUrl: string;
-  enabled: boolean;
-  builtIn?: boolean; // 是否为内置官方源（不可删除）
 }
 
 interface StorePluginResolved {
@@ -316,7 +318,6 @@ const openManageSources = () => {
   showSourcesDialog.value = true;
 };
 
-const isLocalMode = computed(() => IS_LOCAL_MODE);
 
 const loadingBySource = ref<Record<string, boolean>>({}); // 按源区分的loading状态
 const showSkeletonBySource = ref<Record<string, boolean>>({}); // 按源区分的骨架屏状态
@@ -345,7 +346,7 @@ const storePluginsBySource = ref<Record<string, StorePluginResolved[]>>({});
 const storeLoadedBySource = ref<Record<string, boolean>>({});
 
 const sources = ref<PluginSource[]>([]);
-const storeSourcesToRender = computed(() => (isLocalMode.value ? [] : sources.value));
+const storeSourcesToRender = computed(() => sources.value);
 const sourcesLoadedOnce = ref(false); // 是否已加载过商店源（仅用于避免重复拉取）
 const showSourcesDialog = ref(false);
 useModalBack(showSourcesDialog);
@@ -477,6 +478,8 @@ const loadRemotePluginIcon = async (plugin: {
   try {
     const iconData = await invoke<number[] | null>("get_remote_plugin_icon", {
       downloadUrl: plugin.downloadUrl,
+      sourceId: plugin.sourceId,
+      pluginId: plugin.id,
     });
     if (!iconData || iconData.length === 0) return;
     const bytes = new Uint8Array(iconData);
@@ -687,40 +690,46 @@ const confirmEditSource = async () => {
     isValidatingSource.value = false;
   }
 
-  const payload: PluginSource = {
-    id: editSourceForm.id,
-    name: editSourceForm.name.trim(),
-    indexUrl,
-    enabled: true,
-    builtIn: false,
-  };
-  if (editingSourceIndex.value === null) {
-    sources.value.push(payload);
-  } else {
-    sources.value.splice(editingSourceIndex.value, 1, payload);
-  }
-
   // 确认添加/编辑即持久化（避免用户以为已添加但重启后丢失）
   try {
-    await invoke("save_plugin_sources", { sources: sources.value });
+    const id = editSourceForm.id.trim() || null;
+    const name = editSourceForm.name.trim();
+
+    if (editingSourceIndex.value === null) {
+      // 添加新源
+      const result = await invoke<PluginSource>("add_plugin_source", { id, name, indexUrl });
+      sources.value.push(result);
+    } else {
+      // 编辑现有源
+      const originalId = sources.value[editingSourceIndex.value].id;
+      await invoke("update_plugin_source", { id: originalId, name, indexUrl });
+      sources.value[editingSourceIndex.value] = {
+        id: originalId,
+        name,
+        indexUrl,
+      };
+    }
+
     await loadSources();
     ElMessage.success(editingSourceIndex.value === null ? "源已添加" : "源已更新");
     showEditSourceDialog.value = false;
   } catch (e) {
     console.error("保存商店源失败:", e);
-    ElMessage.error("保存商店源失败");
+    let errorMessage = "保存商店源失败";
+    if (typeof e === 'string') {
+      errorMessage = e;
+    } else if (e instanceof Error) {
+      errorMessage = e.message || e.toString();
+    } else if (e && typeof e === 'object' && 'message' in e) {
+      errorMessage = String((e as any).message);
+    }
+    ElMessage.error(errorMessage);
   }
 };
 
 const removeSource = async (idx: number) => {
   const source = sources.value[idx];
   if (!source) return;
-
-  // 官方源不允许删除
-  if (source.builtIn) {
-    ElMessage.warning("官方源不能删除");
-    return;
-  }
 
   try {
     await ElMessageBox.confirm("确定要删除这个商店源吗？", "删除商店源", { type: "warning" });
@@ -730,44 +739,41 @@ const removeSource = async (idx: number) => {
   }
 };
 
-const saveSources = async () => {
+const handleDeleteSource = async (source: PluginSource) => {
   try {
-    await invoke("save_plugin_sources", { sources: sources.value });
-    ElMessage.success("商店源已保存");
-    showSourcesDialog.value = false;
-    // 保存后刷新源列表（本地配置）
-    await loadSources();
+    await ElMessageBox.confirm(
+      `确定要删除商店源 "${source.name}" 吗？\n\n这将同时删除该源的所有缓存数据。`,
+      "删除商店源",
+      { type: "warning" }
+    );
 
-    // 清理已移除源的缓存
-    const sourceIds = new Set(sources.value.map((s) => s.id));
-    const nextPlugins: Record<string, StorePluginResolved[]> = {};
-    const nextLoaded: Record<string, boolean> = {};
-    for (const [k, v] of Object.entries(storePluginsBySource.value)) {
-      if (sourceIds.has(k)) {
-        nextPlugins[k] = v;
-        nextLoaded[k] = !!storeLoadedBySource.value[k];
-      }
+    // 调用后端删除
+    await invoke("delete_plugin_source", { id: source.id });
+
+    // 从前端列表移除
+    const idx = sources.value.findIndex(s => s.id === source.id);
+    if (idx !== -1) {
+      sources.value.splice(idx, 1);
     }
-    storePluginsBySource.value = nextPlugins;
-    storeLoadedBySource.value = nextLoaded;
 
-    // 若当前停留在某个商店源 tab，但该源不见了，则切换到已安装源
-    if (activeStoreSourceId.value && !sourceIds.has(activeStoreSourceId.value)) {
+    // 清理前端缓存
+    delete storePluginsBySource.value[source.id];
+    delete storeLoadedBySource.value[source.id];
+
+    // 如果当前 tab 是被删的源，切换到已安装源
+    if (activeStoreSourceId.value === source.id) {
       activeTab.value = "installed";
-      return;
     }
 
-    // 若当前就是某个商店源 tab：保存后刷新当前源（不刷新其他源）
-    // 用户修改了源配置（可能改了 URL），强制从远程刷新
-    if (activeStoreSourceId.value) {
-      await loadStorePlugins(activeStoreSourceId.value, { showMessage: false, forceRefresh: true });
-      await refreshPluginIcons();
-    }
+    ElMessage.success("商店源已删除");
   } catch (e) {
-    console.error("保存商店源失败:", e);
-    ElMessage.error("保存商店源失败");
+    if (e !== 'cancel') {
+      console.error("删除商店源失败:", e);
+      ElMessage.error("删除商店源失败");
+    }
   }
 };
+
 
 /**
  * 加载商店插件列表
@@ -1007,6 +1013,8 @@ const viewPluginDetails = (plugin: { id: string } & Partial<StorePluginResolved>
         sha256: plugin.sha256 ?? undefined,
         sizeBytes: plugin.sizeBytes != null ? String(plugin.sizeBytes) : undefined,
         iconUrl: plugin.iconUrl ?? undefined,
+        sourceId: plugin.sourceId ?? undefined,
+        version: plugin.version ?? undefined,
       },
     });
     return;
@@ -1015,10 +1023,6 @@ const viewPluginDetails = (plugin: { id: string } & Partial<StorePluginResolved>
 };
 
 const handleDelete = async (plugin: Plugin) => {
-  if (plugin.builtIn) {
-    ElMessage.warning("该插件为内置核心插件，禁止卸载");
-    return;
-  }
   try {
     await ElMessageBox.confirm(`确定要删除插件 "${plugin.name}" 吗？`, "确认删除", {
       type: "warning",
@@ -1124,12 +1128,8 @@ onMounted(async () => {
   try {
     // 首次进入：默认 tab=已安装源，不需要拉取商店列表；仅加载本地已安装源即可
     await pluginStore.loadPlugins();
-    // normal 模式才加载商店源列表（本地配置），用于渲染动态 tab
-    if (!isLocalMode.value) {
-      await loadSources();
-    } else {
-      sources.value = [];
-    }
+    // 加载商店源列表（本地配置），用于渲染动态 tab
+    await loadSources();
     await refreshPluginIcons();
   } finally {
     // 无论成功失败，都清理骨架屏定时器与显示状态
@@ -1146,7 +1146,6 @@ onMounted(async () => {
 
 // 首次切到“某个商店源 tab”时，才拉取该源的商店列表（懒加载）
 watch(activeTab, async (tab) => {
-  if (isLocalMode.value) return;
   if (!isStoreTab(tab)) return;
   const sourceId = tab.slice("store:".length);
   if (!sourceId) return;
@@ -1353,6 +1352,20 @@ watch(activeTab, async (tab) => {
     gap: 8px;
     justify-content: flex-end;
     align-items: center;
+  }
+
+  /* Tab 关闭按钮样式 */
+  :deep(.tab-close-icon) {
+    margin-left: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+
+    &:hover {
+      opacity: 1;
+      color: #f56c6c;
+    }
   }
 
   /* 禁用插件卡片上标签和按钮的初始展开动画 */
