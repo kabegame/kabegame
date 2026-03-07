@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+import { shallowReactive } from "vue";
 import type { Component } from "vue";
 
 export enum HeaderFeatureId {
@@ -17,6 +18,8 @@ export enum HeaderFeatureId {
   ManageSources = "manageSources",
   TaskDrawer = "taskDrawer",
   AddToAlbum = "addToAlbum",
+  /** 画廊「全部」下按时间排序（仅 Android 放入 fold，点击后打开 van-picker） */
+  GallerySort = "gallerySort",
 }
 
 export interface HeaderFeatureDef {
@@ -28,6 +31,8 @@ export interface HeaderFeatureDef {
 
 export const useHeaderStore = defineStore('header', () => {
   const features = new Map<string, HeaderFeatureDef>();
+  /** fold 项 label 覆盖，浅响应式；未覆盖时用 register 的 feature.label */
+  const foldLabels = shallowReactive<Record<string, string>>({});
 
   function register(defs: HeaderFeatureDef[]) {
     for (const def of defs) {
@@ -43,9 +48,26 @@ export const useHeaderStore = defineStore('header', () => {
     return features.has(id);
   }
 
+  /** 设置或清除某 feature 的 fold 文案覆盖；label 为 undefined 时恢复为 register 时的 label */
+  function setFoldLabel(id: HeaderFeatureId | string, label: string | undefined) {
+    if (label === undefined) {
+      delete foldLabels[id];
+    } else {
+      foldLabels[id] = label;
+    }
+  }
+
+  function getFoldLabel(id: HeaderFeatureId | string): string {
+    if (id in foldLabels) return foldLabels[id];
+    const feature = features.get(id);
+    return feature?.label ?? id;
+  }
+
   return {
     register,
     get,
     has,
+    setFoldLabel,
+    getFoldLabel,
   };
 });

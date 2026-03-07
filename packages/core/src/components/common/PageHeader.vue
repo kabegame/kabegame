@@ -110,10 +110,7 @@ const getFoldIcon = (featureId: string) => {
   return feature?.icon;
 };
 
-const getFoldLabel = (featureId: string) => {
-  const feature = headerStore.get(featureId);
-  return feature?.label || featureId;
-};
+const getFoldLabel = (featureId: string) => headerStore.getFoldLabel(featureId);
 </script>
 
 <style scoped lang="scss">

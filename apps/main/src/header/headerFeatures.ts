@@ -9,13 +9,15 @@ import {
   Delete,
   Upload,
   Grid,
-  VideoPause
+  VideoPause,
+  Sort
 } from "@element-plus/icons-vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 
 import CollectAction from "./comps/CollectAction.vue";
 import OrganizeHeaderControl from "./comps/OrganizeHeaderControl.vue";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
+import GallerySortControl from "./comps/GallerySortControl.vue";
 
 /**
  * 注册所有 header features 到 store
@@ -114,6 +116,13 @@ export function registerHeaderFeatures() {
     {
       id: HeaderFeatureId.TaskDrawer,
       comp: TaskDrawerButton,
+    },
+    // 画廊按时间排序（桌面：右侧下拉按钮；Android 放入 fold，点击打开 van-picker）
+    {
+      id: HeaderFeatureId.GallerySort,
+      label: "按时间排序",
+      icon: Sort,
+      comp: GallerySortControl,
     },
   ]);
 }
