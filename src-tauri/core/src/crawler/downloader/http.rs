@@ -203,7 +203,7 @@ async fn download_http(
     progress: &DownloadProgressContext<'_>,
 ) -> Result<String, String> {
     let client = create_client()?;
-    let header_map = build_reqwest_header_map_for_emitter(task_id, headers);
+    let mut header_map = build_reqwest_header_map_for_emitter(task_id, headers);
     let max_attempts = retry_count.saturating_add(1).max(1);
 
     let mut attempt: u32 = 0;
@@ -232,6 +232,28 @@ async fn download_http(
                 if redirect_count >= 10 {
                     break Err("Too many redirects".to_string());
                 }
+
+                // Collect Set-Cookie from redirect responses and merge into Cookie header
+                for set_cookie_val in r.headers().get_all(reqwest::header::SET_COOKIE) {
+                    if let Ok(sc) = set_cookie_val.to_str() {
+                        if let Some(name_value) = sc.split(';').next() {
+                            let existing = header_map
+                                .get(reqwest::header::COOKIE)
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("")
+                                .to_string();
+                            let merged = if existing.is_empty() {
+                                name_value.to_string()
+                            } else {
+                                format!("{existing}; {name_value}")
+                            };
+                            if let Ok(val) = HeaderValue::from_str(&merged) {
+                                header_map.insert(reqwest::header::COOKIE, val);
+                            }
+                        }
+                    }
+                }
+
                 if let Some(loc) = r.headers().get(reqwest::header::LOCATION) {
                     if let Ok(loc_str) = loc.to_str() {
                         if let Ok(new_url) = current_url.join(loc_str) {
