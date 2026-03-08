@@ -10,8 +10,6 @@ use kabegame_core::settings::Settings;
 use std::fs;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Listener, Manager};
-#[cfg(not(target_os = "android"))]
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
 use kabegame_core::storage::Storage;
@@ -422,54 +420,10 @@ pub fn start_task_scheduler() {
 }
 
 #[cfg(not(target_os = "android"))]
-pub fn init_shortcut(app: &tauri::App) -> Result<(), String> {
-    // macOS 使用系统自带的 Control + Command + F 全屏快捷键，无需手动注册
-    // 其他平台（Windows/Linux）注册 F11 快捷键切换全屏
-    #[cfg(not(target_os = "macos"))]
-    {
-        use tauri_plugin_global_shortcut::Shortcut;
-
-        let app_handle = app.app_handle().clone();
-        let shortcuts = app.global_shortcut();
-
-        // 注册并监听 F11 快捷键切换全屏
-        let f11_shortcut = Shortcut::new(
-            Some(tauri_plugin_global_shortcut::Modifiers::empty()),
-            tauri_plugin_global_shortcut::Code::F11,
-        );
-
-        let app_handle_clone = app_handle.clone();
-        shortcuts
-            .on_shortcuts([f11_shortcut], move |_app_handle, shortcut, event| {
-                // 检查是否是 F11 快捷键（无修饰键 + F11）且是按下事件
-                if shortcut.mods.is_empty()
-                    && shortcut.key.eq(&tauri_plugin_global_shortcut::Code::F11)
-                    && matches!(
-                        event.state,
-                        tauri_plugin_global_shortcut::ShortcutState::Pressed
-                    )
-                {
-                    let app_handle = app_handle_clone.clone();
-                    tauri::async_runtime::spawn(async move {
-                        // 仅当主窗口处于前台（获得焦点）时才响应 F11，避免抢用其他应用的快捷键
-                        let main_window = match app_handle.get_webview_window("main") {
-                            Some(w) => w,
-                            None => return,
-                        };
-                        if !main_window.is_focused().unwrap_or(false) {
-                            return;
-                        }
-                        if let Err(e) = crate::commands::window::toggle_fullscreen(app_handle).await {
-                            eprintln!("Failed to toggle fullscreen: {}", e);
-                        }
-                    });
-                }
-            })
-            .map_err(|e| format!("初始化快捷键失败"))?;
-
-        println!("✓ F11 shortcut registered for fullscreen toggle");
-    }
-
+pub fn init_shortcut(_app: &tauri::App) -> Result<(), String> {
+    // F11 全屏不再使用全局快捷键，避免占用用户在其他应用（如浏览器）中按 F11。
+    // 桌面端在应用窗口获得焦点时由前端监听 keydown F11 并调用 toggle_fullscreen。
+    // macOS 使用系统自带的 Control + Command + F 全屏快捷键。
     Ok(())
 }
 

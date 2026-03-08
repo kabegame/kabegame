@@ -195,6 +195,9 @@ const { isCollapsed, toggleCollapse } = useSidebar();
 // 设置变更事件监听器
 let unlistenSettingChange: UnlistenFn | null = null;
 
+// F11 全屏：仅在本窗口获得焦点时响应，不占用其他应用（如浏览器）的 F11
+let removeF11Listener: (() => void) | null = null;
+
 onMounted(async () => {
   if (!IS_ANDROID) {
     await initHttpServerBaseUrl();
@@ -261,6 +264,18 @@ onMounted(async () => {
     await initFileDrop();
   }
 
+  // 桌面端（非 macOS）：在窗口内监听 F11 切换全屏，仅当本窗口有焦点时触发，不占用系统/浏览器的 F11
+  if (!IS_ANDROID && !IS_MACOS) {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "F11") {
+        e.preventDefault();
+        invoke("toggle_fullscreen").catch((err) => console.warn("toggle_fullscreen failed:", err));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    removeF11Listener = () => window.removeEventListener("keydown", onKeyDown);
+  }
+
   // Android：右滑手势已移除，避免与手机左右滑动导航冲突
   // 现在只能通过点击导入按钮打开 drawer
 
@@ -323,6 +338,10 @@ onUnmounted(() => {
   if (unlistenSettingChange) {
     unlistenSettingChange();
     unlistenSettingChange = null;
+  }
+  if (removeF11Listener) {
+    removeF11Listener();
+    removeF11Listener = null;
   }
 });
 
