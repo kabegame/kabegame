@@ -2,6 +2,8 @@ use crate::emitter::GlobalEmitter;
 use crate::plugin::Plugin;
 use crate::settings::Settings;
 use crate::storage::Storage;
+use crate::crawler::scheduler::PageStackEntry;
+use crate::crawler::TaskScheduler;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rhai::{Dynamic, Engine, Map, Position, Scope};
 use scraper::{Html, Selector};
@@ -35,6 +37,16 @@ fn lock_or_inner<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 fn get_task_id(task_id_holder: &Shared<String>) -> String {
     lock_or_inner(task_id_holder).clone()
+}
+
+fn get_page_stack(
+    task_id_holder: &Shared<String>,
+) -> Result<crate::crawler::scheduler::PageStack, Box<rhai::EvalAltResult>> {
+    let task_id = get_task_id(task_id_holder);
+    TaskScheduler::global()
+        .page_stacks()
+        .get_stack(&task_id)
+        .ok_or_else(|| format!("Page stack not found for task {task_id}").into())
 }
 
 async fn get_network_retry_count_async(_dq: &crate::crawler::DownloadQueue) -> u32 {
@@ -321,7 +333,6 @@ pub struct RhaiCrawlerRuntime {
     pub(crate) engine: Engine,
     download_queue: Arc<crate::crawler::DownloadQueue>,
     // emitter 现在是全局单例，不需要存储
-    page_stack: Shared<Arc<Mutex<Vec<(String, String)>>>>,
     images_dir: Shared<PathBuf>,
     plugin_id: Shared<String>,
     task_id: Shared<String>,
@@ -333,8 +344,6 @@ pub struct RhaiCrawlerRuntime {
 impl RhaiCrawlerRuntime {
     pub fn new(download_queue: Arc<crate::crawler::DownloadQueue>) -> Self {
         let mut engine = Engine::new();
-        let page_stack: Shared<Arc<Mutex<Vec<(String, String)>>>> =
-            Arc::new(Mutex::new(Arc::new(Mutex::new(Vec::new()))));
         let images_dir: Shared<PathBuf> = Arc::new(Mutex::new(PathBuf::new()));
         let plugin_id: Shared<String> = Arc::new(Mutex::new(String::new()));
         let task_id: Shared<String> = Arc::new(Mutex::new(String::new()));
@@ -372,7 +381,6 @@ impl RhaiCrawlerRuntime {
 
         register_crawler_functions(
             &mut engine,
-            Arc::clone(&page_stack),
             Arc::clone(&images_dir),
             Arc::clone(&download_queue),
             Arc::clone(&plugin_id),
@@ -385,7 +393,6 @@ impl RhaiCrawlerRuntime {
         Self {
             engine,
             download_queue,
-            page_stack,
             images_dir,
             plugin_id,
             task_id,
@@ -403,14 +410,7 @@ impl RhaiCrawlerRuntime {
         output_album_id: Option<String>,
         http_headers: HashMap<String, String>,
     ) {
-        // 每个任务都重置 page_stack 和 progress，避免跨任务污染
-        {
-            let mut guard = match self.page_stack.lock() {
-                Ok(g) => g,
-                Err(e) => e.into_inner(),
-            };
-            *guard = Arc::new(Mutex::new(Vec::new()));
-        }
+        // 每个任务都重置 progress，避免跨任务污染
         {
             let mut guard = match self.current_progress.lock() {
                 Ok(g) => g,
@@ -459,7 +459,6 @@ impl RhaiCrawlerRuntime {
 /// 注册爬虫相关的 Rhai 函数
 pub fn register_crawler_functions(
     engine: &mut Engine,
-    page_stack: Shared<Arc<Mutex<Vec<(String, String)>>>>,
     images_dir: Shared<PathBuf>,
     download_queue: Arc<crate::crawler::DownloadQueue>,
     plugin_id: Shared<String>,
@@ -468,8 +467,6 @@ pub fn register_crawler_functions(
     output_album_id: Shared<Option<String>>,
     http_headers: Shared<HashMap<String, String>>,
 ) {
-    let stack_holder = Arc::clone(&page_stack);
-
     // re_is_match(pattern, text) - 正则匹配判断（pattern 使用 Rust regex 语法）
     // 注意：pattern 编译失败时返回 false
     engine.register_fn("re_is_match", |pattern: &str, text: &str| -> bool {
@@ -525,23 +522,19 @@ pub fn register_crawler_functions(
 
     // to(url) - 访问一个网页，将当前页面入栈
     engine.register_fn("to", {
-        let stack_holder = Arc::clone(&stack_holder);
         let dq_holder = Arc::clone(&download_queue);
         let task_id_holder = Arc::clone(&task_id);
         let headers_holder = Arc::clone(&http_headers);
         // 注意：返回 Result<T, Box<EvalAltResult>> 时，脚本侧拿到的是 T（失败会直接抛出运行时错误）
         // 这样 print(to(...)) / print(current_html()) 不会出现 "Result<...>" 字样。
         move |url: &str| -> Result<(), Box<rhai::EvalAltResult>> {
-            let stack = {
-                let guard = lock_or_inner(&stack_holder);
-                Arc::clone(&*guard)
-            };
+            let stack = get_page_stack(&task_id_holder)?;
             // 获取当前栈顶的 URL（用于解析相对 URL）
             let base_url = {
                 let stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
                 stack_guard
                     .last()
-                    .map(|(url, _)| url.clone())
+                    .map(|entry| entry.url.clone())
                     .unwrap_or_else(|| url.to_string())
             };
 
@@ -580,28 +573,29 @@ pub fn register_crawler_functions(
 
             // 将当前页面推入栈（如果栈不为空，先保存当前页面）
             let mut stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
-            stack_guard.push((final_url, html));
+            stack_guard.push(PageStackEntry {
+                url: final_url,
+                html,
+                page_label: String::new(),
+                page_state: serde_json::Value::Null,
+            });
             Ok(())
         }
     });
 
     // to_json(url) - 访问一个 JSON API，返回 JSON 对象
     engine.register_fn("to_json", {
-        let stack_holder = Arc::clone(&stack_holder);
         let dq_holder = Arc::clone(&download_queue);
         let task_id_holder = Arc::clone(&task_id);
         let headers_holder = Arc::clone(&http_headers);
         move |url: &str| -> Result<Map, Box<rhai::EvalAltResult>> {
-            let stack = {
-                let guard = lock_or_inner(&stack_holder);
-                Arc::clone(&*guard)
-            };
+            let stack = get_page_stack(&task_id_holder)?;
             // 获取当前栈顶的 URL（用于解析相对 URL）
             let base_url = {
                 let stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
                 stack_guard
                     .last()
-                    .map(|(url, _)| url.clone())
+                    .map(|entry| entry.url.clone())
                     .unwrap_or_else(|| url.to_string())
             };
 
@@ -656,7 +650,12 @@ pub fn register_crawler_functions(
             let json_string = serde_json::to_string(&json_value)
                 .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
             let mut stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
-            stack_guard.push((final_url, json_string));
+            stack_guard.push(PageStackEntry {
+                url: final_url,
+                html: json_string,
+                page_label: String::new(),
+                page_state: serde_json::Value::Null,
+            });
 
             // 将 JSON 值转换为 Rhai 类型
             match &json_value {
@@ -709,15 +708,9 @@ pub fn register_crawler_functions(
 
     // back() - 返回上一页，出栈
     engine.register_fn("back", {
-        let stack_holder = Arc::clone(&stack_holder);
+        let task_id_holder = Arc::clone(&task_id);
         move || -> Result<(), Box<rhai::EvalAltResult>> {
-            let stack = {
-                let guard = match stack_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                Arc::clone(&*guard)
-            };
+            let stack = get_page_stack(&task_id_holder)?;
             let mut stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
             if stack_guard.is_empty() {
                 return Err("Page stack is empty, cannot go back".into());
@@ -729,38 +722,26 @@ pub fn register_crawler_functions(
 
     // current_url() - 获取当前栈顶的 URL
     engine.register_fn("current_url", {
-        let stack_holder = Arc::clone(&stack_holder);
+        let task_id_holder = Arc::clone(&task_id);
         move || -> Result<String, Box<rhai::EvalAltResult>> {
-            let stack = {
-                let guard = match stack_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                Arc::clone(&*guard)
-            };
+            let stack = get_page_stack(&task_id_holder)?;
             let stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
             stack_guard
                 .last()
-                .map(|(url, _)| url.clone())
+                .map(|entry| entry.url.clone())
                 .ok_or_else(|| "Page stack is empty".into())
         }
     });
 
     // current_html() - 获取当前栈顶的 HTML
     engine.register_fn("current_html", {
-        let stack_holder = Arc::clone(&stack_holder);
+        let task_id_holder = Arc::clone(&task_id);
         move || -> Result<String, Box<rhai::EvalAltResult>> {
-            let stack = {
-                let guard = match stack_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                Arc::clone(&*guard)
-            };
+            let stack = get_page_stack(&task_id_holder)?;
             let stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
             stack_guard
                 .last()
-                .map(|(_, html)| html.clone())
+                .map(|entry| entry.html.clone())
                 .ok_or_else(|| "Page stack is empty".into())
         }
     });
@@ -768,20 +749,14 @@ pub fn register_crawler_functions(
     // query(selector) - 在当前栈顶页面查询元素文本
     // 支持 CSS 选择器和 XPath（以 / 或 // 开头）
     engine.register_fn("query", {
-        let stack_holder = Arc::clone(&stack_holder);
+        let task_id_holder = Arc::clone(&task_id);
         move |selector: &str| -> Result<rhai::Array, Box<rhai::EvalAltResult>> {
-            let stack = {
-                let guard = match stack_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                Arc::clone(&*guard)
-            };
+            let stack = get_page_stack(&task_id_holder)?;
             let html = {
                 let stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
                 stack_guard
                     .last()
-                    .map(|(_, html)| html.clone())
+                    .map(|entry| entry.html.clone())
                     .ok_or_else(|| "Page stack is empty, call to(url) first".to_string())?
             };
 
@@ -852,18 +827,15 @@ pub fn register_crawler_functions(
     // query_by_text(text) - 通过文本内容查找包含该文本的元素，返回元素的文本和属性
     // 直接返回数组，出错时返回空数组
     engine.register_fn("query_by_text", {
-        let stack_holder = Arc::clone(&stack_holder);
+        let task_id_holder = Arc::clone(&task_id);
         move |text: &str| -> rhai::Array {
-            let stack = {
-                let guard = match stack_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                Arc::clone(&*guard)
+            let stack = match get_page_stack(&task_id_holder) {
+                Ok(s) => s,
+                Err(_) => return rhai::Array::new(),
             };
             let html = match stack.lock() {
                 Ok(guard) => match guard.last() {
-                    Some((_, html)) => html.clone(),
+                    Some(entry) => entry.html.clone(),
                     None => return rhai::Array::new(),
                 },
                 Err(_) => return rhai::Array::new(),
@@ -920,20 +892,14 @@ pub fn register_crawler_functions(
 
     // find_by_text(text, tag) - 在指定标签中查找包含该文本的元素，返回元素的文本
     engine.register_fn("find_by_text", {
-        let stack_holder = Arc::clone(&stack_holder);
+        let task_id_holder = Arc::clone(&task_id);
         move |text: &str, tag: &str| -> Result<rhai::Array, Box<rhai::EvalAltResult>> {
-            let stack = {
-                let guard = match stack_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                Arc::clone(&*guard)
-            };
+            let stack = get_page_stack(&task_id_holder)?;
             let html = {
                 let stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
                 stack_guard
                     .last()
-                    .map(|(_, html)| html.clone())
+                    .map(|entry| entry.html.clone())
                     .ok_or_else(|| "Page stack is empty, call to(url) first".to_string())?
             };
 
@@ -960,18 +926,15 @@ pub fn register_crawler_functions(
     // 支持 CSS 选择器和 XPath（以 / 或 // 开头）
     // 直接返回数组，出错时返回空数组
     engine.register_fn("get_attr", {
-        let stack_holder = Arc::clone(&stack_holder);
+        let task_id_holder = Arc::clone(&task_id);
         move |selector: &str, attr: &str| -> rhai::Array {
-            let stack = {
-                let guard = match stack_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                Arc::clone(&*guard)
+            let stack = match get_page_stack(&task_id_holder) {
+                Ok(s) => s,
+                Err(_) => return rhai::Array::new(),
             };
             let html = match stack.lock() {
                 Ok(guard) => match guard.last() {
-                    Some((_, html)) => html.clone(),
+                    Some(entry) => entry.html.clone(),
                     None => return rhai::Array::new(),
                 },
                 Err(_) => return rhai::Array::new(),
@@ -1052,18 +1015,15 @@ pub fn register_crawler_functions(
     // resolve_url(relative) - 解析相对 URL 为绝对 URL（基于当前栈顶 URL）
     // 直接返回 String，出错时返回原始 URL
     engine.register_fn("resolve_url", {
-        let stack_holder = Arc::clone(&stack_holder);
+        let task_id_holder = Arc::clone(&task_id);
         move |relative: &str| -> String {
-            let stack = {
-                let guard = match stack_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                Arc::clone(&*guard)
+            let stack = match get_page_stack(&task_id_holder) {
+                Ok(s) => s,
+                Err(_) => return relative.to_string(),
             };
             let base_url = match stack.lock() {
                 Ok(guard) => match guard.last() {
-                    Some((url, _)) => url.clone(),
+                    Some(entry) => entry.url.clone(),
                     None => return relative.to_string(),
                 },
                 Err(_) => return relative.to_string(),

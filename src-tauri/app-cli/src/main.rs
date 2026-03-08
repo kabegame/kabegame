@@ -7,14 +7,20 @@
 //! - `plugin pack`：打包单个插件目录为 `.kgpg`（KGPG v2：固定头部 + ZIP，ZIP 内不含 icon.png）
 //! - `plugin import`：导入本地 `.kgpg` 插件文件（复制到 plugins_directory）
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use include_dir::{include_dir, Dir};
 use kabegame_core::ipc::client::daemon_startup::*;
 use kabegame_core::{
     kgpg,
     plugin::{ImportPreview, Plugin, PluginDetail, PluginManager, PluginManifest},
 };
+use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const TEMPLATE_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/template");
 
 #[derive(Parser, Debug)]
 #[command(name = "kabegame-cli")]
@@ -41,6 +47,8 @@ enum Commands {
 
 #[derive(Subcommand, Debug)]
 enum PluginCommands {
+    /// 创建插件模板目录
+    New(NewPluginArgs),
     /// 运行爬虫插件（Rhai）
     Run(RunPluginArgs),
     /// 打包单个插件目录为 `.kgpg`（KGPG v2：固定头部 + ZIP，ZIP 内不含 icon.png）
@@ -87,6 +95,30 @@ struct PackPluginArgs {
     output: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum PluginBackend {
+    Rhai,
+    Webview,
+}
+
+impl PluginBackend {
+    fn script_file_name(self) -> &'static str {
+        match self {
+            Self::Rhai => "crawl.rhai",
+            Self::Webview => "crawl.js",
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct NewPluginArgs {
+    /// 插件名（目录名）：仅允许 kebab-case（全小写）
+    name: String,
+    /// 插件后端（默认 rhai）
+    #[arg(long, value_enum, default_value_t = PluginBackend::Rhai)]
+    backend: PluginBackend,
+}
+
 #[derive(Args, Debug)]
 struct ImportPluginArgs {
     /// 本地插件文件路径（.kgpg）
@@ -126,6 +158,7 @@ async fn main() {
     let res = match cli.command {
         Commands::IpcStatus => ipc_status().await,
         Commands::Plugin(cmd) => match cmd {
+            PluginCommands::New(args) => new_plugin(args),
             PluginCommands::Run(args) => run_plugin(args),
             PluginCommands::Pack(args) => pack_plugin(args),
             PluginCommands::Import(args) => import_plugin(args).await,
@@ -142,6 +175,91 @@ async fn main() {
         eprintln!("{e}");
         std::process::exit(1);
     }
+}
+
+fn new_plugin(args: NewPluginArgs) -> Result<(), String> {
+    if !is_valid_plugin_name(&args.name) {
+        return Err(format!(
+            "非法插件名 `{}`：只允许 kebab-case（如 `my-plugin`）",
+            args.name
+        ));
+    }
+
+    let cwd = std::env::current_dir().map_err(|e| format!("读取当前目录失败: {e}"))?;
+    let plugin_dir = cwd.join(&args.name);
+    if plugin_dir.exists() {
+        return Err(format!(
+            "目标目录已存在，请先移除或更换名称: {}",
+            plugin_dir.display()
+        ));
+    }
+
+    std::fs::create_dir_all(&plugin_dir).map_err(|e| format!("创建插件目录失败: {e}"))?;
+
+    // 公共模板文件
+    write_template_text_to("manifest.json", &plugin_dir.join("manifest.json"), &args.name)?;
+    write_template_binary_to("icon.png", &plugin_dir.join("icon.png"))?;
+    write_template_text_to("doc_root/doc.md", &plugin_dir.join("doc_root/doc.md"), &args.name)?;
+
+    // 按后端写入脚本模板
+    match args.backend {
+        PluginBackend::Rhai => {
+            write_template_text_to("rhai/crawl.rhai", &plugin_dir.join("crawl.rhai"), &args.name)?
+        }
+        PluginBackend::Webview => {
+            write_template_text_to("webview/crawl.js", &plugin_dir.join("crawl.js"), &args.name)?;
+            write_template_text_to(
+                "webview/package.json",
+                &plugin_dir.join("package.json"),
+                &args.name,
+            )?;
+            write_template_text_to(
+                "webview/.gitignore",
+                &plugin_dir.join(".gitignore"),
+                &args.name,
+            )?;
+        }
+    }
+
+    println!(
+        "插件模板创建成功：{}（backend={:?}）",
+        plugin_dir.display(),
+        args.backend
+    );
+    Ok(())
+}
+
+fn is_valid_plugin_name(name: &str) -> bool {
+    Regex::new(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+        .map(|re| re.is_match(name))
+        .unwrap_or(false)
+}
+
+fn write_template_text_to(template_rel_path: &str, out_path: &Path, plugin_name: &str) -> Result<(), String> {
+    let file = TEMPLATE_DIR
+        .get_file(template_rel_path)
+        .ok_or_else(|| format!("缺少模板文件: {template_rel_path}"))?;
+    let content = file
+        .contents_utf8()
+        .ok_or_else(|| format!("模板文件不是 UTF-8 文本: {template_rel_path}"))?
+        .replace("{{plugin_name}}", plugin_name);
+
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败 {}: {e}", parent.display()))?;
+    }
+    std::fs::write(out_path, content).map_err(|e| format!("写入文件失败 {}: {e}", out_path.display()))
+}
+
+fn write_template_binary_to(template_rel_path: &str, out_path: &Path) -> Result<(), String> {
+    let file = TEMPLATE_DIR
+        .get_file(template_rel_path)
+        .ok_or_else(|| format!("缺少模板文件: {template_rel_path}"))?;
+
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败 {}: {e}", parent.display()))?;
+    }
+    std::fs::write(out_path, file.contents())
+        .map_err(|e| format!("写入文件失败 {}: {e}", out_path.display()))
 }
 
 // NOTE: build_minimal_app / run_plugin 等"后台能力"已迁移到独立的 `kabegame-daemon` 中。
@@ -366,10 +484,12 @@ fn validate_kgpg_structure(pm: &PluginManager, zip_path: &std::path::Path) -> Re
     // 1) manifest 必须可读/可解析
     let _ = pm.read_plugin_manifest(zip_path)?;
 
-    // 2) crawl.rhai 必须存在（插件包的核心）
+    // 2) 至少存在一个后端脚本：crawl.rhai 或 crawl.js
     let script = pm.read_plugin_script(zip_path)?;
-    if script.as_deref().unwrap_or("").trim().is_empty() {
-        return Err("插件包缺少 crawl.rhai（或内容为空）".to_string());
+    let has_rhai = !script.as_deref().unwrap_or("").trim().is_empty();
+    let has_webview = has_non_empty_zip_entry(zip_path, "crawl.js")?;
+    if !has_rhai && !has_webview {
+        return Err("插件包缺少 crawl.rhai / crawl.js（或内容为空）".to_string());
     }
 
     // 3) config.json 若存在必须可解析（避免"安装后才炸"）
@@ -402,25 +522,104 @@ fn pack_plugin(args: PackPluginArgs) -> Result<(), String> {
     let mini_bytes =
         serde_json::to_vec(&mini).map_err(|e| format!("序列化头部 manifest 失败: {}", e))?;
 
+    maybe_run_webview_build(&plugin_dir)?;
+    let backend = detect_plugin_backend(&plugin_dir)?;
+
     // icon（头部）：优先读取 icon.png；ZIP 内不再包含 icon.png
     let icon_path = plugin_dir.join("icon.png");
     let icon_rgb = if icon_path.is_file() {
-        Some(kgpg::icon_png_to_rgb24_fixed(&icon_path)?)
+        match kgpg::icon_png_to_rgb24_fixed(&icon_path) {
+            Ok(rgb) => Some(rgb),
+            Err(e) => {
+                eprintln!("[WARN] 读取 icon.png 失败，将忽略图标: {e}");
+                None
+            }
+        }
     } else {
         None
     };
     let header = kgpg::build_kgpg2_header(icon_rgb.as_deref(), &mini_bytes)?;
 
     // 生成 ZIP bytes
-    let zip_bytes = build_plugin_zip_bytes(&plugin_dir)?;
+    let zip_bytes = build_plugin_zip_bytes(&plugin_dir, backend)?;
     kgpg::write_kgpg2_from_zip_bytes(&args.output, &header, &zip_bytes)?;
     Ok(())
 }
 
-fn build_plugin_zip_bytes(plugin_dir: &PathBuf) -> Result<Vec<u8>, String> {
+fn maybe_run_webview_build(plugin_dir: &Path) -> Result<(), String> {
+    let package_json_path = plugin_dir.join("package.json");
+    if !package_json_path.is_file() {
+        return Ok(());
+    }
+
+    let package_raw = std::fs::read_to_string(&package_json_path)
+        .map_err(|e| format!("读取 package.json 失败: {e}"))?;
+    let package_val: serde_json::Value = serde_json::from_str(&package_raw)
+        .map_err(|e| format!("解析 package.json 失败: {e}"))?;
+    let has_build_script = package_val
+        .get("scripts")
+        .and_then(|s| s.get("build"))
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    if !has_build_script {
+        return Ok(());
+    }
+
+    let has_bun_lock = plugin_dir.join("bun.lockb").is_file() || plugin_dir.join("bun.lock").is_file();
+    let use_bun = if has_bun_lock {
+        command_exists("bun")
+    } else {
+        false
+    };
+
+    let (runner, args) = if use_bun {
+        ("bun", vec!["run", "build"])
+    } else if command_exists("npm") {
+        ("npm", vec!["run", "build"])
+    } else if command_exists("bun") {
+        ("bun", vec!["run", "build"])
+    } else {
+        return Err("未找到可用的包管理器（npm/bun），无法执行 webview 构建".to_string());
+    };
+
+    let status = Command::new(runner)
+        .current_dir(plugin_dir)
+        .args(args)
+        .status()
+        .map_err(|e| format!("执行 `{runner} run build` 失败: {e}"))?;
+    if !status.success() {
+        return Err(format!("webview 构建失败（`{runner} run build` 退出码: {status}）"));
+    }
+    Ok(())
+}
+
+fn command_exists(bin: &str) -> bool {
+    Command::new(bin)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn detect_plugin_backend(plugin_dir: &Path) -> Result<PluginBackend, String> {
+    let has_webview_script = plugin_dir.join("crawl.js").is_file();
+    let has_rhai_script = plugin_dir.join("crawl.rhai").is_file();
+    match (has_webview_script, has_rhai_script) {
+        (true, _) => Ok(PluginBackend::Webview),
+        (false, true) => Ok(PluginBackend::Rhai),
+        (false, false) => Err(format!(
+            "缺少必需脚本：{} 或 {}",
+            plugin_dir.join("crawl.js").display(),
+            plugin_dir.join("crawl.rhai").display()
+        )),
+    }
+}
+
+fn build_plugin_zip_bytes(plugin_dir: &PathBuf, backend: PluginBackend) -> Result<Vec<u8>, String> {
     use std::io::Write;
 
-    let required = plugin_dir.join("crawl.rhai");
+    let required = plugin_dir.join(backend.script_file_name());
     if !required.is_file() {
         return Err(format!("缺少必需文件: {}", required.display()));
     }
@@ -431,7 +630,10 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf) -> Result<Vec<u8>, String> {
         "manifest.json".to_string(),
         plugin_dir.join("manifest.json"),
     ));
-    entries.push(("crawl.rhai".to_string(), plugin_dir.join("crawl.rhai")));
+    entries.push((
+        backend.script_file_name().to_string(),
+        plugin_dir.join(backend.script_file_name()),
+    ));
 
     let config = plugin_dir.join("config.json");
     if config.is_file() {
@@ -511,4 +713,26 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf) -> Result<Vec<u8>, String> {
         zip.finish().map_err(|e| format!("完成 ZIP 失败: {}", e))?;
     }
     Ok(buf)
+}
+
+fn has_non_empty_zip_entry(zip_path: &Path, entry_name: &str) -> Result<bool, String> {
+    let bytes = std::fs::read(zip_path)
+        .map_err(|e| format!("读取插件包失败 {}: {e}", zip_path.display()))?;
+    let zip_offset = bytes
+        .windows(4)
+        .position(|w| w == [0x50, 0x4B, 0x03, 0x04])
+        .ok_or_else(|| format!("插件包不是有效 ZIP/KGPG 格式: {}", zip_path.display()))?;
+
+    let cursor = std::io::Cursor::new(&bytes[zip_offset..]);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| format!("解析插件 ZIP 失败: {e}"))?;
+    let mut file = match archive.by_name(entry_name) {
+        Ok(f) => f,
+        Err(_) => return Ok(false),
+    };
+
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|e| format!("读取 `{entry_name}` 失败: {e}"))?;
+    Ok(!content.trim().is_empty())
 }

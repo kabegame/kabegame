@@ -1,6 +1,7 @@
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
 use crate::emitter::GlobalEmitter;
+use crate::crawler::webview::crawler_window_state;
 use crate::settings::Settings;
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
 use async_trait::async_trait;
@@ -10,8 +11,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::io::AsyncReadExt;
+use tokio::sync::{oneshot, Mutex, Notify, RwLock};
 use tokio::time::{sleep, Duration};
 use url::Url;
 use walkdir::WalkDir;
@@ -19,8 +20,10 @@ use walkdir::WalkDir;
 mod content;
 mod file;
 mod http;
+mod browser_download;
 
 pub use crate::crawler::archiver::{ArchiveProcessor, ArchiveType};
+pub use browser_download::{BrowserDownloadResult, BrowserDownloadState};
 pub use http::{build_reqwest_header_map_for_emitter, create_client};
 
 /// 下载执行类型：按 scheme 选择 http / file / content 的具体实现。
@@ -50,7 +53,7 @@ pub trait SchemeDownloader: Send + Sync {
     fn compute_destination_path(&self, url: &Url, base_dir: &Path) -> Result<PathBuf, String>;
     /// 用于实际执行下载的分发类型。
     fn download_kind(&self) -> UrlDownloaderKind;
-    /// 执行下载：将 `url` 下载到 `dest`，`task_id` 用于查表获取任务的 http_headers、重试次数等。
+    /// 执行下载：将 `url` 下载到 `dest`，`headers` 为本次下载使用的 HTTP 请求头（由调用方从 DownloadRequest 传入）。
     /// `progress` 必传，用于上报进度（前端始终预期有进度事件）。
     /// 返回成功时的最终 URL 或本地路径字符串。
     async fn download(
@@ -59,6 +62,7 @@ pub trait SchemeDownloader: Send + Sync {
         url: &Url,
         dest: &Path,
         task_id: &str,
+        headers: &HashMap<String, String>,
         progress: &DownloadProgressContext<'_>,
     ) -> Result<String, String>;
     /// 根据最终本地路径计算显示名称。
@@ -99,10 +103,11 @@ macro_rules! define_scheme_downloader_registry {
                 url: &Url,
                 dest: &Path,
                 task_id: &str,
+                headers: &HashMap<String, String>,
                 progress: &DownloadProgressContext<'_>,
             ) -> Result<String, String> {
                 match self {
-                    $(SchemeDownloaderEnum::$variant(d) => d.download(dq, url, dest, task_id, progress).await,)*
+                    $(SchemeDownloaderEnum::$variant(d) => d.download(dq, url, dest, task_id, headers, progress).await,)*
                 }
             }
 
@@ -156,13 +161,14 @@ pub(crate) fn emit_task_log(task_id: &str, level: &str, message: impl Into<Strin
     GlobalEmitter::global().emit_task_log(task_id, level, &message.into());
 }
 
-/// 根据 URL scheme 选择下载器并执行下载，委托给 [SchemeDownloader::download]（headers、重试等由 task_id 查表获取）。
+/// 根据 URL scheme 选择下载器并执行下载，`headers` 为本次下载使用的 HTTP 请求头。
 /// `progress` 必传，前端始终预期有进度事件。
 pub async fn download_file_to_path_with_retry(
     dq: &DownloadQueue,
     task_id: &str,
     url: &str,
     dest: &Path,
+    headers: &HashMap<String, String>,
     progress: &DownloadProgressContext<'_>,
 ) -> Result<String, String> {
     let parsed = Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
@@ -175,7 +181,7 @@ pub async fn download_file_to_path_with_retry(
         )
     })?;
     downloader
-        .download(dq, &parsed, dest, task_id, progress)
+        .download(dq, &parsed, dest, task_id, headers, progress)
         .await
 }
 
@@ -521,6 +527,9 @@ pub struct DownloadRequest {
     pub output_album_id: Option<String>,
     pub http_headers: HashMap<String, String>,
     pub archive_type: Option<ArchiveType>,
+    pub browser_download: bool,
+    /// 仅 browser_download 时有效：fetch 是否带 credentials（默认 true）
+    pub with_credentials: bool,
 }
 
 #[derive(Debug)]
@@ -632,7 +641,7 @@ impl DownloadQueue {
         output_album_id: Option<String>,
         http_headers: HashMap<String, String>,
     ) -> Result<(), String> {
-        self.download(
+        self.download_with_mode(
             url,
             images_dir,
             plugin_id,
@@ -641,6 +650,62 @@ impl DownloadQueue {
             output_album_id,
             http_headers,
             None,
+            false,
+            true,
+        )
+        .await
+    }
+
+    pub async fn download_image_via_browser(
+        &self,
+        url: Url,
+        images_dir: PathBuf,
+        plugin_id: String,
+        task_id: String,
+        download_start_time: u64,
+        output_album_id: Option<String>,
+        http_headers: HashMap<String, String>,
+        with_credentials: bool,
+    ) -> Result<(), String> {
+        self.download_with_mode(
+            url,
+            images_dir,
+            plugin_id,
+            task_id,
+            download_start_time,
+            output_album_id,
+            http_headers,
+            None,
+            true,
+            with_credentials,
+        )
+        .await
+    }
+
+    async fn download_with_mode(
+        &self,
+        url: Url,
+        images_dir: PathBuf,
+        plugin_id: String,
+        task_id: String,
+        download_start_time: u64,
+        output_album_id: Option<String>,
+        http_headers: HashMap<String, String>,
+        archive_type: Option<ArchiveType>,
+        browser_download: bool,
+        with_credentials: bool,
+    ) -> Result<(), String> {
+        self.download(
+            url,
+            images_dir,
+            plugin_id,
+            task_id,
+            download_start_time,
+            output_album_id,
+            http_headers,
+            archive_type,
+            browser_download,
+            with_credentials,
         )
         .await
     }
@@ -687,6 +752,8 @@ impl DownloadQueue {
             output_album_id,
             http_headers,
             Some(t),
+            false,
+            true,
         )
         .await
     }
@@ -701,6 +768,8 @@ impl DownloadQueue {
         output_album_id: Option<String>,
         http_headers: HashMap<String, String>,
         archive_type: Option<ArchiveType>,
+        browser_download: bool,
+        with_credentials: bool,
     ) -> Result<(), String> {
         // 检查任务是否取消
         if self.is_task_canceled(&task_id).await {
@@ -716,6 +785,8 @@ impl DownloadQueue {
             output_album_id,
             http_headers,
             archive_type,
+            browser_download,
+            with_credentials,
         };
 
         loop {
@@ -969,18 +1040,90 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
         };
 
         if let Some(download_path) = dest {
-            let progress_ctx = DownloadProgressContext {
-                plugin_id: &job.plugin_id,
-                start_time: download_start_time,
+            let download_result = if job.browser_download {
+                let download_id = uuid::Uuid::new_v4().to_string();
+                let (completion_tx, completion_rx) = oneshot::channel::<BrowserDownloadResult>();
+                let state = BrowserDownloadState::global();
+                let registered = state.register(
+                    download_id.clone(),
+                    download_path.clone(),
+                    task_id_clone.clone(),
+                    completion_tx,
+                );
+                if let Err(e) = registered {
+                    Err(e)
+                } else {
+                    if let Err(e) = crawler_window_state().wait_page_ready().await {
+                        let _ = state.signal_failure(&download_id, e.clone());
+                        Err(e)
+                    } else {
+                    GlobalEmitter::global().emit(
+                        "crawl-browser-download",
+                        serde_json::json!({
+                            "url": url_clone.as_str(),
+                            "downloadId": download_id,
+                            "withCredentials": job.with_credentials,
+                        }),
+                    );
+                    // worker 发出下载事件后，立即告知前端进入 downloading 状态
+                    GlobalEmitter::global().emit_download_state(
+                        &task_id_clone,
+                        url_clone.as_str(),
+                        download_start_time,
+                        &plugin_id_clone,
+                        "downloading",
+                        None,
+                    );
+
+                    let wait_started = Instant::now();
+                    let mut completion_rx = completion_rx;
+                    let wait_result = loop {
+                        tokio::select! {
+                            res = &mut completion_rx => {
+                                break res.map_err(|_| "Browser download channel closed".to_string());
+                            }
+                            _ = sleep(Duration::from_millis(200)) => {
+                                if dq.is_task_canceled(&task_id_clone).await {
+                                    let _ = state.signal_failure(&download_id, "Task canceled".to_string());
+                                    break Err("Task canceled".to_string());
+                                }
+                                if wait_started.elapsed() > Duration::from_secs(300) {
+                                    let _ = state.signal_failure(&download_id, "Browser download timed out".to_string());
+                                    break Err("Browser download timed out".to_string());
+                                }
+                            }
+                        }
+                    };
+                    wait_result.and_then(|result| {
+                        if result.success {
+                            Ok(result
+                                .path
+                                .unwrap_or_else(|| download_path.clone())
+                                .to_string_lossy()
+                                .to_string())
+                        } else {
+                            Err(result
+                                .error
+                                .unwrap_or_else(|| "Browser download failed".to_string()))
+                        }
+                    })
+                    }
+                }
+            } else {
+                let progress_ctx = DownloadProgressContext {
+                    plugin_id: &job.plugin_id,
+                    start_time: download_start_time,
+                };
+                download_file_to_path_with_retry(
+                    &dq,
+                    &job.task_id,
+                    job.url.as_str(),
+                    &download_path,
+                    &job.http_headers,
+                    &progress_ctx,
+                )
+                .await
             };
-            let download_result = download_file_to_path_with_retry(
-                &dq,
-                &job.task_id,
-                job.url.as_str(),
-                &download_path,
-                &progress_ctx,
-            )
-            .await;
 
             match download_result {
                 Ok(final_path) => {
@@ -1044,6 +1187,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                     job.output_album_id.clone(),
                                                                     job.http_headers.clone(),
                                                                     None,
+                                                                    false,
+                                                                    true,
                                                                 )
                                                                 .await;
                                                         }
@@ -1839,7 +1984,7 @@ async fn process_downloaded_content_image_to_storage(
 /// 对新下载的图片做完整入库流程：生成缩略图、入库、入画册、发事件。失败时已做清理并发送 failed。
 /// Android 不生成缩略图，thumbnail_path 存为 local_path（前端永远用原图）。
 /// `postprocess_timing_hash_ms`: 当为 Some 时表示来自「未去重」分支，在成功结束时 print 各步骤耗时（含传入的算哈希耗时）。
-async fn process_downloaded_image_to_storage(
+pub async fn process_downloaded_image_to_storage(
     path: &Path,
     hash: &str,
     url: &str,
@@ -2159,6 +2304,8 @@ pub(crate) async fn copy_extracted_images_and_enqueue(
                         output_album_id.clone(),
                         http_headers.clone(),
                         None,
+                        false,
+                        true,
                     )
                     .await;
             }

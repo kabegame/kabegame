@@ -66,7 +66,7 @@ import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from 
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { fileToUrl, thumbnailToUrl } from "@kabegame/core/fileServer";
+import { fileToUrl, thumbnailToUrl } from "@kabegame/core/httpServer";
 
 const albumStore = useAlbumStore();
 const { albums, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);

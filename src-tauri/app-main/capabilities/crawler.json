@@ -1,0 +1,15 @@
+{
+  "identifier": "crawler-capability",
+  "description": "Crawler webview capability for JavaScript backend",
+  "windows": ["crawler"],
+  "webviews": ["crawler"],
+  "remote": {
+    "urls": ["https://*.*", "http://*.*"]
+  },
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "core:event:allow-emit-to",
+    "core:window:allow-hide"
+  ]
+}

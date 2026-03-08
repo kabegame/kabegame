@@ -47,6 +47,12 @@
             </el-icon>
             <span>收集源</span>
           </el-menu-item>
+          <el-menu-item v-if="!IS_ANDROID" index="/crawler">
+            <el-icon>
+              <Connection />
+            </el-icon>
+            <span>爬虫</span>
+          </el-menu-item>
           <el-menu-item index="/settings">
             <el-icon>
               <Setting />
@@ -89,7 +95,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
-import { Picture, Grid, Setting, Collection, QuestionFilled } from "@element-plus/icons-vue";
+import { Picture, Grid, Setting, Collection, QuestionFilled, Connection } from "@element-plus/icons-vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import HelpDrawer from "./components/help/HelpDrawer.vue";
@@ -109,7 +115,7 @@ import { listen, emit, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from "@tauri-apps/api/core";
 import { IS_WINDOWS, IS_MACOS, IS_ANDROID } from "@kabegame/core/env";
-import { initFileServerBaseUrl } from "@kabegame/core/fileServer";
+import { initHttpServerBaseUrl } from "@kabegame/core/httpServer";
 import { usePluginStore } from "./stores/plugins";
 import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
@@ -119,14 +125,17 @@ import { useThrottleFn } from "@vueuse/core";
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
 
-// Android 底部 Tab 配置（均匀分布，与侧边栏菜单项一致）
-const bottomTabs = computed(() => [
-  { index: galleryMenuRoute.value, icon: Picture, label: "画廊" },
-  { index: "/albums", icon: Collection, label: "画册" },
-  { index: "/plugin-browser", icon: Grid, label: "收集源" },
-  { index: "/settings", icon: Setting, label: "设置" },
-  { index: "/help", icon: QuestionFilled, label: "帮助" },
-]);
+// Android 底部 Tab 配置（均匀分布；爬虫仅桌面端有代理，故仅侧栏展示）
+const bottomTabs = computed(() => {
+  const tabs = [
+    { index: galleryMenuRoute.value, icon: Picture, label: "画廊" },
+    { index: "/albums", icon: Collection, label: "画册" },
+    { index: "/plugin-browser", icon: Grid, label: "收集源" },
+    { index: "/settings", icon: Setting, label: "设置" },
+    { index: "/help", icon: QuestionFilled, label: "帮助" },
+  ];
+  return tabs;
+});
 
 // 任务抽屉 store
 const taskDrawerStore = useTaskDrawerStore();
@@ -194,7 +203,7 @@ let unlistenSettingChange: UnlistenFn | null = null;
 
 onMounted(async () => {
   if (!IS_ANDROID) {
-    await initFileServerBaseUrl();
+    await initHttpServerBaseUrl();
   }
 
   // Android Back Button Handling

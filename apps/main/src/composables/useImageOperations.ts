@@ -7,7 +7,7 @@ import { storeToRefs } from "pinia";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_MACOS } from "@kabegame/core/env";
-import { fileToUrl } from "@kabegame/core/fileServer";
+import { fileToUrl } from "@kabegame/core/httpServer";
 import { openLocalImage } from "@/utils/openLocalImage";
 
 export type FavoriteStatusChangedDetail = {

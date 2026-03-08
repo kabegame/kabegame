@@ -14,7 +14,6 @@ use url::Url;
 
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
-use crate::storage::Storage;
 use super::{build_safe_filename, emit_task_log, unique_path, DownloadProgressContext, DownloadQueue, SchemeDownloader, UrlDownloaderKind};
 
 /// http(s) scheme：目标路径由 URL 路径段与扩展名决定。
@@ -49,17 +48,14 @@ impl SchemeDownloader for HttpSchemeDownloader {
         url: &Url,
         dest: &Path,
         task_id: &str,
+        headers: &HashMap<String, String>,
         progress: &DownloadProgressContext<'_>,
     ) -> Result<String, String> {
-        let task = Storage::global()
-            .get_task(task_id)?
-            .ok_or_else(|| "Task not found".to_string())?;
-        let headers = task.http_headers.unwrap_or_default();
         let retry = Settings::global()
             .get_network_retry_count()
             .await
             .unwrap_or(2);
-        download_http(dq, task_id, url, dest, &headers, retry, progress).await
+        download_http(dq, task_id, url, dest, headers, retry, progress).await
     }
 
     async fn display_name(&self, _url: &Url, final_local_path: &str) -> String {

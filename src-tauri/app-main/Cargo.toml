@@ -17,7 +17,7 @@ memmap2 = {version = "0.9", optional = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
-tauri = { version = "2.10", features = [ "tray-icon", "devtools", "protocol-asset", "image-png"] }
+tauri = { version = "2.10", features = ["macos-private-api", "tray-icon", "devtools", "protocol-asset", "image-png"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-fs = "=2.4.4"
@@ -25,6 +25,7 @@ tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-pathes = { workspace = true }
 tauri-plugin-shell = "=2.3.3"
 tokio = {workspace = true}
+url = "2"
 uuid = {workspace = true}
 
 # 桌面端启用 IPC 功能，移动端禁用
@@ -32,6 +33,7 @@ uuid = {workspace = true}
 kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "ipc-client"] }
 governor = "0.7"
 axum = "0.8"
+reqwest = { version = "0.11", features = ["stream", "native-tls"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs"] }
 

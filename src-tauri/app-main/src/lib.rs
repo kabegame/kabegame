@@ -4,7 +4,7 @@ mod commands;
 #[cfg(target_os = "android")]
 mod content_io_provider;
 #[cfg(not(target_os = "android"))]
-mod file_server;
+mod http_server;
 #[cfg(target_os = "linux")]
 mod linux_desktop;
 pub mod startup;
@@ -21,7 +21,7 @@ mod vd_listener;
 use commands::*;
 use core::fmt;
 #[cfg(not(target_os = "android"))]
-use file_server::get_file_server_base_url;
+use http_server::get_http_server_base_url;
 use startup::*;
 use std::process;
 use std::sync::Arc;
@@ -204,6 +204,14 @@ pub fn run() {
                     // 恢复窗口状态（当前实现仅将窗口居屏幕中央）
                     #[cfg(not(target_os = "android"))]
                     restore_main_window_state(app.app_handle());
+                    #[cfg(not(target_os = "android"))]
+                    if let Err(e) = create_crawler_window(app) {
+                        return Err(Box::new(std::io::Error::other(e)));
+                    }
+                    #[cfg(not(target_os = "android"))]
+                    if let Err(e) = init_crawler_webview_handler(app.app_handle().clone()) {
+                        return Err(Box::new(std::io::Error::other(e)));
+                    }
                     // 初始化壁纸控制器
                     init_wallpaper_controller(app);
                     // 启动 TaskScheduler（启动 DownloadQueue 的 worker）
@@ -218,7 +226,7 @@ pub fn run() {
                     #[cfg(not(target_os = "android"))]
                     {
                         tauri::async_runtime::spawn(async {
-                            if let Err(e) = file_server::start_file_server().await {
+                            if let Err(e) = http_server::start_http_server().await {
                                 eprintln!("Failed to start file server: {}", e);
                             }
                         });
@@ -438,13 +446,43 @@ pub fn run() {
             open_file_folder,
             // --- Misc ---
             exit_app,
+            #[cfg(not(target_os = "android"))]
+            open_dev_webview,
+            #[cfg(not(target_os = "android"))]
+            crawl_get_context,
+            #[cfg(not(target_os = "android"))]
+            crawl_run_script,
+            #[cfg(not(target_os = "android"))]
+            crawl_exit,
+            #[cfg(not(target_os = "android"))]
+            crawl_error,
+            #[cfg(not(target_os = "android"))]
+            crawl_task_log,
+            #[cfg(not(target_os = "android"))]
+            crawl_add_progress,
+            #[cfg(not(target_os = "android"))]
+            crawl_download_image,
+            #[cfg(not(target_os = "android"))]
+            crawl_register_blob_download,
+            #[cfg(not(target_os = "android"))]
+            crawl_browser_download_failed,
+            #[cfg(not(target_os = "android"))]
+            crawl_to,
+            #[cfg(not(target_os = "android"))]
+            crawl_back,
+            #[cfg(not(target_os = "android"))]
+            crawl_update_page_state,
+            #[cfg(not(target_os = "android"))]
+            crawl_page_ready,
+            #[cfg(not(target_os = "android"))]
+            show_crawler_window,
             get_file_drop_supported_types,
             get_file_drop_kinds,
             get_supported_image_types,
             set_supported_image_formats,
             get_linux_desktop_env,
             #[cfg(not(target_os = "android"))]
-            get_file_server_base_url,
+            get_http_server_base_url,
             #[cfg(not(target_os = "android"))]
             start_organize,
             #[cfg(not(target_os = "android"))]

@@ -1,6 +1,7 @@
 //! content://（Android）协议：请求持久化权限后直接引用 content URI，不复制文件。
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use url::Url;
 
@@ -33,6 +34,7 @@ impl SchemeDownloader for ContentSchemeDownloader {
         url: &Url,
         _dest: &Path,
         task_id: &str,
+        _headers: &HashMap<String, String>,
         progress: &DownloadProgressContext<'_>,
     ) -> Result<String, String> {
         handle_content(dq, task_id, url.as_str(), progress).await

@@ -93,7 +93,7 @@ import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
 import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 import { useModalBack } from "../../composables/useModalBack";
-import { fileToUrl, thumbnailToUrl } from "../../fileServer";
+import { fileToUrl, thumbnailToUrl } from "../../httpServer";
 
 const props = withDefaults(defineProps<{
   images: ImageInfo[];

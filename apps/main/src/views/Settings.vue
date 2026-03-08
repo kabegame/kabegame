@@ -119,6 +119,21 @@
               <SettingRow v-if="IS_DEV" label="生成测试图片（调试）" description="基于现有图片数据批量克隆插入，用于性能/分页测试（仅开发模式可见）">
                 <DebugGenerateImagesSetting />
               </SettingRow>
+
+              <SettingRow v-if="!IS_ANDROID && IS_DEV" label="桌面端开发：WebView 窗口" description="配置远程 URL，在独立 WebView 窗口中打开（用于爬虫 WebView 后端原型等，参见 CRAWLER_BACKENDS.md）">
+                <div class="dev-webview-row">
+                  <el-input
+                    v-model="devWebviewUrl"
+                    placeholder="https://example.com"
+                    clearable
+                    class="dev-webview-input"
+                    @keyup.enter="openDevWebview"
+                  />
+                  <el-button type="primary" :loading="devWebviewOpening" @click="openDevWebview">
+                    打开 WebView 窗口
+                  </el-button>
+                </div>
+              </SettingRow>
             </div>
           </div>
         </el-card>
@@ -132,7 +147,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from "vue";
 import { ElMessage } from "element-plus";
-import { Refresh, QuestionFilled, Setting } from "@element-plus/icons-vue";
+import { invoke } from "@tauri-apps/api/core";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
@@ -154,8 +169,25 @@ import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetti
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV } from "@kabegame/core/env";
+const devWebviewUrl = ref("https://www.example.com");
+const devWebviewOpening = ref(false);
+async function openDevWebview() {
+  const url = devWebviewUrl.value?.trim() || "";
+  if (!url) {
+    ElMessage.warning("请输入要打开的 URL");
+    return;
+  }
+  devWebviewOpening.value = true;
+  try {
+    await invoke("open_dev_webview", { url });
+    ElMessage.success("已打开 WebView 窗口");
+  } catch (e) {
+    ElMessage.error(String(e));
+  } finally {
+    devWebviewOpening.value = false;
+  }
+}
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { invoke } from "@tauri-apps/api/core";
 
 // 使用 300ms 防闪屏加载延迟
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
@@ -276,6 +308,18 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.dev-webview-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dev-webview-input {
+  flex: 1;
+  min-width: 200px;
 }
 
 .settings-list {

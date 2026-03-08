@@ -1,7 +1,7 @@
 import { computed, ref, watch, type Ref } from "vue";
 import type { ImageInfo } from "../types/image";
 import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID } from "../env";
-import { fileToUrl, thumbnailToUrl } from "../fileServer";
+import { fileToUrl, thumbnailToUrl } from "../httpServer";
 import {
   getImageStateCache,
   setImageStateCache,

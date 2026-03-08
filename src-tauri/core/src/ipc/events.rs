@@ -164,6 +164,8 @@ pub enum DaemonEvent {
         plugin_id: String,
         state: String,
         error: Option<String>,
+        #[serde(default)]
+        native: bool,
     },
 
     /// 任务状态事件
