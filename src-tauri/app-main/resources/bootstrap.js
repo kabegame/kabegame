@@ -64,6 +64,10 @@
       error(message) {
         return invoke("crawl_error", { message: String(message ?? "") });
       },
+      // 请求显示爬虫 WebView 窗口（例如在挑战页让用户手动通过验证）
+      requestShowWebview() {
+        return invoke("show_crawler_window");
+      },
     };
   }
 
@@ -75,6 +79,8 @@
   }
 
   async function start() {
+    if (window.__crawl_starting__) return;
+    window.__crawl_starting__ = true;
     let ctx;
     try {
       ctx = await invoke("crawl_get_context");

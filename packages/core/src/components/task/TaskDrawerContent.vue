@@ -1424,6 +1424,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .task-log-empty {
@@ -1440,6 +1442,8 @@ onUnmounted(() => {
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .log-time {

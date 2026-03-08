@@ -157,6 +157,9 @@ pub async fn crawl_get_context() -> Result<Option<CrawlContextPayload>, String> 
 #[tauri::command]
 pub async fn crawl_run_script(app: AppHandle) -> Result<(), String> {
     let state = crawler_window_state();
+    if !state.try_dispatch_script() {
+        return Ok(());
+    }
     let Some(ctx) = state.get_context().await else {
         return Err("Crawler context not found".to_string());
     };
@@ -197,18 +200,24 @@ pub async fn crawl_run_script(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub async fn crawl_exit() -> Result<(), String> {
+/// 内部：按给定状态结束当前 webview 任务并释放。若 only_for_task_id 为 Some，
+/// 仅当当前上下文为该任务时执行，否则直接返回（用于取消时只释放对应任务）。
+pub async fn crawl_exit_with_status(status: &str, only_for_task_id: Option<&str>) {
     let state = crawler_window_state();
     let Some(ctx) = state.get_context().await else {
-        return Ok(());
+        return;
     };
+    if let Some(id) = only_for_task_id {
+        if ctx.task_id != id {
+            return;
+        }
+    }
 
     let end = now_ms();
-    update_task_status(&ctx.task_id, "completed", Some(end), None);
+    update_task_status(&ctx.task_id, status, Some(end), None);
     GlobalEmitter::global().emit_task_status(
         &ctx.task_id,
-        "completed",
+        status,
         None,
         None,
         Some(end),
@@ -217,6 +226,11 @@ pub async fn crawl_exit() -> Result<(), String> {
     );
     TaskScheduler::global().page_stacks().remove_stack(&ctx.task_id);
     let _ = state.release_task(&ctx.task_id).await;
+}
+
+#[tauri::command]
+pub async fn crawl_exit() -> Result<(), String> {
+    crawl_exit_with_status("completed", None).await;
     Ok(())
 }
 
@@ -420,6 +434,7 @@ pub async fn crawl_page_ready() -> Result<(), String> {
     let Some(_) = state.get_context().await else {
         return Err("Crawler context not found".to_string());
     };
+    state.set_page_ready(false);
     state.set_page_ready(true);
     Ok(())
 }
