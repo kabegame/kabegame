@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 use std::time::SystemTime;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::Mutex;
 use url::Url;
 use uuid::Uuid;
@@ -442,6 +442,25 @@ impl PluginManager {
         script_file
             .read_to_string(&mut content)
             .map_err(|e| format!("Failed to read crawl.rhai: {}", e))?;
+        Ok(Some(content))
+    }
+
+    /// 从 ZIP 格式的插件文件中读取 crawl.js 脚本
+    pub fn read_plugin_js_script(&self, zip_path: &Path) -> Result<Option<String>, String> {
+        let file =
+            fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
+        let mut archive =
+            ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
+
+        let mut script_file = match archive.by_name("crawl.js") {
+            Ok(f) => f,
+            Err(_) => return Ok(None),
+        };
+
+        let mut content = String::new();
+        script_file
+            .read_to_string(&mut content)
+            .map_err(|e| format!("Failed to read crawl.js: {}", e))?;
         Ok(Some(content))
     }
 

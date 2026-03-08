@@ -71,6 +71,19 @@ impl GlobalEmitter {
         state: &str,
         error: Option<&str>,
     ) {
+        self.emit_download_state_with_native(task_id, url, start_time, plugin_id, state, error, false);
+    }
+
+    pub fn emit_download_state_with_native(
+        &self,
+        task_id: &str,
+        url: &str,
+        start_time: u64,
+        plugin_id: &str,
+        state: &str,
+        error: Option<&str>,
+        native: bool,
+    ) {
         let event = std::sync::Arc::new(DaemonEvent::DownloadState {
             task_id: task_id.to_string(),
             url: url.to_string(),
@@ -78,6 +91,7 @@ impl GlobalEmitter {
             plugin_id: plugin_id.to_string(),
             state: state.to_string(),
             error: error.map(|e| e.to_string()),
+            native,
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -277,6 +291,18 @@ impl GlobalEmitter {
         _plugin_id: &str,
         _state: &str,
         _error: Option<&str>,
+    ) {
+    }
+
+    pub fn emit_download_state_with_native(
+        &self,
+        _task_id: &str,
+        _url: &str,
+        _start_time: u64,
+        _plugin_id: &str,
+        _state: &str,
+        _error: Option<&str>,
+        _native: bool,
     ) {
     }
 

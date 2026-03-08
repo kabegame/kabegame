@@ -8,6 +8,7 @@ import TaskDetail from "@/views/TaskDetail.vue";
 import PluginDetail from "@/views/PluginDetail.vue";
 import Settings from "@/views/Settings.vue";
 import Help from "@/views/Help.vue";
+import Crawler from "@/views/Crawler.vue";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -78,6 +79,12 @@ const routes: RouteRecordRaw[] = [
     name: "Settings",
     component: Settings,
     meta: { title: "设置" },
+  },
+  {
+    path: "/crawler",
+    name: "Crawler",
+    component: Crawler,
+    meta: { title: "爬虫" },
   },
   {
     path: "/help",

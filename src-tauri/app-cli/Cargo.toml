@@ -7,7 +7,9 @@ default-run = "kabegame-cli"
 [dependencies]
 base64 = {workspace = true}
 clap = {version = "4.5", features = ["derive"]}
+include_dir = "0.7"
 kabegame-core = {workspace = true, features = ["ipc-client"]}
+regex = "1"
 serde = {workspace = true}
 serde_json = {workspace = true}
 tokio = {workspace = true}

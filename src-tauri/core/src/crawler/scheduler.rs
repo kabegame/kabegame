@@ -4,13 +4,23 @@ use crate::plugin::{PluginManager, VarDefinition, VarOption};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
-use url::Url;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, RwLock};
+use tokio::sync::{mpsc, Mutex};
 use tokio::runtime::Handle;
+use url::Url;
+
+/// 首次进入 WebView 爬虫时的 page_label（ctx.pageLabel 的初始值）。
+#[cfg(not(target_os = "android"))]
+const INITIAL_PAGE_LABEL: &str = "initial";
+
+#[cfg(not(target_os = "android"))]
+use crate::crawler::webview::{
+    crawler_window_state, get_webview_handler, pathbuf_to_string, JsTaskContext,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,8 +41,49 @@ pub struct CrawlTaskRequest {
 pub struct TaskScheduler {
     // PluginManager 现在是全局单例，不需要存储
     download_queue: Arc<DownloadQueue>,
-    queue: Arc<(Mutex<VecDeque<CrawlTaskRequest>>, Condvar)>,
+    queue_tx: mpsc::UnboundedSender<CrawlTaskRequest>,
+    queue_rx: Arc<Mutex<mpsc::UnboundedReceiver<CrawlTaskRequest>>>,
     running_workers: Arc<AtomicUsize>,
+    page_stacks: Arc<PageStackStore>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PageStackEntry {
+    pub url: String,
+    pub html: String,
+    pub page_label: String,
+    pub page_state: serde_json::Value,
+}
+
+pub type PageStack = Arc<StdMutex<Vec<PageStackEntry>>>;
+
+pub struct PageStackStore {
+    stacks: RwLock<HashMap<String, PageStack>>,
+}
+
+impl PageStackStore {
+    pub fn new() -> Self {
+        Self {
+            stacks: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn create_stack(&self, task_id: &str) -> PageStack {
+        let stack = Arc::new(StdMutex::new(Vec::new()));
+        let mut guard = self.stacks.write().unwrap_or_else(|e| e.into_inner());
+        guard.insert(task_id.to_string(), Arc::clone(&stack));
+        stack
+    }
+
+    pub fn get_stack(&self, task_id: &str) -> Option<PageStack> {
+        let guard = self.stacks.read().unwrap_or_else(|e| e.into_inner());
+        guard.get(task_id).cloned()
+    }
+
+    pub fn remove_stack(&self, task_id: &str) {
+        let mut guard = self.stacks.write().unwrap_or_else(|e| e.into_inner());
+        guard.remove(task_id);
+    }
 }
 
 // 全局 TaskScheduler 单例
@@ -40,25 +91,25 @@ static TASK_SCHEDULER: OnceLock<TaskScheduler> = OnceLock::new();
 
 impl TaskScheduler {
     pub fn new(download_queue: Arc<DownloadQueue>) -> Self {
+        let (queue_tx, queue_rx) = mpsc::unbounded_channel();
         let s = Self {
             download_queue,
-            queue: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
+            queue_tx,
+            queue_rx: Arc::new(Mutex::new(queue_rx)),
             running_workers: Arc::new(AtomicUsize::new(0)),
+            page_stacks: Arc::new(PageStackStore::new()),
         };
-        // 写死创建10个worker
         s
     }
 
     pub async fn start_workers(&self, count: usize) {
         for _ in 0..count {
             let download_queue = Arc::clone(&self.download_queue);
-            let queue = Arc::clone(&self.queue);
+            let queue_rx = Arc::clone(&self.queue_rx);
             let running = Arc::clone(&self.running_workers);
-            // worker_loop 是阻塞函数（使用 Condvar::wait），必须在 blocking 线程池中运行
-            // 因为 rhai 是同步，不能在主线程的tokio上下文中运行
-            tokio::task::spawn_blocking(move || {
-                tokio::runtime::Runtime::new().unwrap(); 
-                worker_loop(download_queue, queue, running)
+            let scheduler = self.clone();
+            tokio::spawn(async move {
+                worker_loop(scheduler, download_queue, queue_rx, running).await;
             });
         }
     }
@@ -81,11 +132,9 @@ impl TaskScheduler {
             None,
         );
 
-        let (m, cv) = &*self.queue;
-        let mut guard = m.lock().map_err(|e| format!("Lock error: {}", e))?;
-        guard.push_back(req);
-        cv.notify_one();
-        Ok(())
+        self.queue_tx
+            .send(req)
+            .map_err(|e| format!("Failed to enqueue task: {}", e))
     }
 
     /// 获取当前正在下载的任务列表
@@ -176,6 +225,11 @@ impl TaskScheduler {
         Arc::clone(&self.download_queue)
     }
 
+    /// 获取页面栈存储（task_id -> 页面栈）
+    pub fn page_stacks(&self) -> Arc<PageStackStore> {
+        Arc::clone(&self.page_stacks)
+    }
+
     /// 启动下载 worker（先根据设置设置并发数并 spawn 对应数量，避免 total_workers 仍为 0 时 spawn 0 个 worker）
     pub async fn start_download_workers_async(&self) {
         let dq = self.download_queue();
@@ -217,39 +271,26 @@ fn persist_task_status(
     Ok(())
 }
 
-fn worker_loop(
+async fn worker_loop(
+    scheduler: TaskScheduler,
     download_queue: Arc<DownloadQueue>,
-    queue: Arc<(Mutex<VecDeque<CrawlTaskRequest>>, Condvar)>,
+    queue_rx: Arc<Mutex<mpsc::UnboundedReceiver<CrawlTaskRequest>>>,
     running: Arc<AtomicUsize>,
 ) {
-    // 每个 task worker 线程初始化一次 Rhai Engine，并在多任务之间复用
-    let mut rhai_runtime =
-        crate::plugin::rhai::RhaiCrawlerRuntime::new(Arc::clone(&download_queue));
-
     let storage = Storage::global();
 
     loop {
         let req = {
-            let (m, cv) = &*queue;
-            let mut guard = match m.lock() {
-                Ok(g) => g,
-                Err(e) => e.into_inner(),
-            };
-            while guard.is_empty() {
-                guard = match cv.wait(guard) {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-            }
-            if let Some(req) = guard.pop_front() {
-                req
-            } else {
-                continue;
-            }
+            let mut rx = queue_rx.lock().await;
+            rx.recv().await
+        };
+
+        let Some(req) = req else {
+            continue;
         };
 
         // 若任务已取消（排队期间），直接 canceled
-        if download_queue.is_task_canceled_blocking(&req.task_id) {
+        if download_queue.is_task_canceled(&req.task_id).await {
             let end = now_ms();
             let e = "Task canceled".to_string();
             GlobalEmitter::global().emit_task_error(&req.task_id, &e);
@@ -288,15 +329,13 @@ fn worker_loop(
             None,
         );
 
-        let res = run_task(
-            &storage,
-            Arc::clone(&download_queue),
-            &req,
-            &mut rhai_runtime,
-        );
+        let page_stacks = scheduler.page_stacks();
+        page_stacks.create_stack(&req.task_id);
+        let res = run_task(&storage, Arc::clone(&download_queue), &req).await;
+        let mut keep_page_stack = false;
 
         match res {
-            Ok(_) => {
+            Ok(TaskOutcome::Completed) => {
                 let end = now_ms();
                 if download_queue.is_task_canceled_blocking(&req.task_id) {
                     let e = "Task canceled".to_string();
@@ -339,6 +378,14 @@ fn worker_loop(
                     );
                 }
             }
+            Ok(TaskOutcome::HandedOffToWebView) => {
+                keep_page_stack = true;
+                GlobalEmitter::global().emit_task_log(
+                    &req.task_id,
+                    "info",
+                    "TaskScheduler: JS 任务已交给 crawler WebView 执行",
+                );
+            }
             Err(e) => {
                 let is_canceled = e.contains("Task canceled");
                 let end = now_ms();
@@ -365,20 +412,28 @@ fn worker_loop(
                 );
             }
         }
+        if !keep_page_stack {
+            page_stacks.remove_stack(&req.task_id);
+        }
 
         running.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
-fn run_task(
+#[derive(Debug, Clone, Copy)]
+enum TaskOutcome {
+    Completed,
+    HandedOffToWebView,
+}
+
+async fn run_task(
     storage: &Storage,
     // PluginManager 现在是全局单例，不需要传递
     // Settings 现在是全局单例，不需要传递
     download_queue: Arc<DownloadQueue>,
     // emitter 现在是全局单例，不需要传递
     req: &CrawlTaskRequest,
-    rhai_runtime: &mut crate::plugin::rhai::RhaiCrawlerRuntime,
-) -> Result<(), String> {
+) -> Result<TaskOutcome, String> {
     let plugin_manager = PluginManager::global();
     GlobalEmitter::global().emit_task_log(
         &req.task_id,
@@ -391,75 +446,118 @@ fn run_task(
 
     // 内置本地导入：不运行 Rhai，直接执行内置例程
     if req.plugin_id == "本地导入" {
-        return Handle::current().block_on(crate::crawler::local_import::run_builtin_local_import(
+        crate::crawler::local_import::run_builtin_local_import(
             &req.task_id,
             req.user_config.clone(),
             req.output_album_id.clone(),
             &*download_queue,
-        ));
+        )
+        .await?;
+        return Ok(TaskOutcome::Completed);
     }
 
     // 两种运行模式：
     // 1) 已安装插件：通过 plugin_id 查找并运行
     // 2) 临时插件文件：通过 plugin_file_path 读取 manifest/config 并运行（不要求安装）
-    let (plugin, plugin_file_path) =Handle::current().block_on(
-  plugin_manager
+    let (plugin, plugin_file_path) = plugin_manager
         .resolve_plugin_for_task_request(&req.plugin_id, req.plugin_file_path.as_deref())
-    )?;
+        .await?;
     // 如果指定了输出目录，使用指定目录；否则使用默认下载目录（若配置）或回退到 Storage 的 images_dir
-    // 注意：run_task 是同步函数，但需要调用 async getter，这里使用 block_on
     let images_dir = if let Some(ref dir) = req.output_dir {
         PathBuf::from(dir)
     } else {
-        let handle = tokio::runtime::Handle::try_current();
-        match handle {
-            Ok(handle) => match handle.block_on(Settings::global().get_default_download_dir()) {
-                Ok(Some(dir)) => PathBuf::from(dir),
-                _ => storage.get_images_dir(),
-            },
-            Err(_) => storage.get_images_dir(),
+        match Settings::global().get_default_download_dir().await {
+            Ok(Some(dir)) => PathBuf::from(dir),
+            _ => storage.get_images_dir(),
         }
     };
 
-    // 读取脚本
-    let script_content = if let Some(path) = plugin_file_path.as_ref() {
-        plugin_manager
-            .read_plugin_script(path)?
-            .ok_or_else(|| format!("插件 {} 没有提供 crawl.rhai 脚本文件，无法执行", plugin.id))?
+    let plugin_file = if let Some(path) = plugin_file_path.as_ref() {
+        path.clone()
     } else {
-        // 使用 find_plugin_kgpg_path 查找插件文件（支持双目录查找）
-        let plugin_file = crate::plugin::find_plugin_kgpg_path(&plugin.id)
-            .ok_or_else(|| format!("插件 {} 未找到", plugin.id))?;
-        plugin_manager
-            .read_plugin_script(&plugin_file)?
-            .ok_or_else(|| format!("插件 {} 没有提供 crawl.rhai 脚本文件，无法执行", plugin.id))?
+        crate::plugin::find_plugin_kgpg_path(&plugin.id)
+            .ok_or_else(|| format!("插件 {} 未找到", plugin.id))?
     };
+    let rhai_script = plugin_manager.read_plugin_script(&plugin_file)?;
+    #[cfg(not(target_os = "android"))]
+    let js_script = plugin_manager.read_plugin_js_script(&plugin_file)?;
 
     // merged_config：默认值 -> 用户覆盖 -> checkbox 规范化（与 crawl_images 保持一致）
     let user_cfg = req.user_config.clone().unwrap_or_default();
     let var_defs = if let Some(path) = plugin_file_path.as_ref() {
         plugin_manager.get_plugin_vars_from_file(path)?
     } else {
-        Handle::current().block_on(plugin_manager
-            .get_plugin_vars(&plugin.id))?
+        plugin_manager
+            .get_plugin_vars(&plugin.id)
+            .await?
             .unwrap_or_default()
     };
     let merged_config = build_effective_user_config_from_var_defs(&var_defs, user_cfg);
 
-    // 确保 Rhai runtime 绑定的是当前 daemon 的 DownloadQueue
-    *rhai_runtime = crate::plugin::rhai::RhaiCrawlerRuntime::new(download_queue);
+    #[cfg(not(target_os = "android"))]
+    if let Some(crawl_js) = js_script {
+        let state = crawler_window_state();
+        let context = JsTaskContext {
+            task_id: req.task_id.clone(),
+            plugin_id: plugin.id.clone(),
+            crawl_js,
+            merged_config,
+            base_url: plugin.base_url.clone(),
+            current_url: None,
+            page_label: INITIAL_PAGE_LABEL.to_string(),
+            page_state: Some(serde_json::Value::Object(serde_json::Map::new())),
+            resume_mode: INITIAL_PAGE_LABEL.to_string(),
+            images_dir: pathbuf_to_string(&images_dir),
+            output_album_id: req.output_album_id.clone(),
+            http_headers: req.http_headers.clone().unwrap_or_default(),
+        };
 
-    crate::plugin::rhai::execute_crawler_script_with_runtime(
-        rhai_runtime,
-        &plugin,
-        &images_dir,
-        &plugin.id,
-        &req.task_id,
-        &script_content,
-        merged_config,
-        req.output_album_id.clone(),
-        req.http_headers.clone(),
-    )
+        state.assign_task(context).await?;
+        let Some(handler) = get_webview_handler() else {
+            let _ = state.release_task(&req.task_id).await;
+            return Err("Crawler webview handler is not initialized".to_string());
+        };
+
+        let base_url = if plugin.base_url.trim().is_empty() {
+            "about:blank".to_string()
+        } else {
+            plugin.base_url.clone()
+        };
+
+        if let Err(e) = handler.setup_js_task(&req.task_id, &base_url).await {
+            let _ = state.release_task(&req.task_id).await;
+            return Err(e);
+        }
+
+        return Ok(TaskOutcome::HandedOffToWebView);
+    }
+
+    let rhai_script = rhai_script
+        .ok_or_else(|| format!("插件 {} 没有提供 crawl.rhai 脚本文件，无法执行", plugin.id))?;
+    let plugin_for_exec = plugin.clone();
+    let task_id = req.task_id.clone();
+    let merged_config_for_exec = merged_config;
+    let output_album_id = req.output_album_id.clone();
+    let http_headers = req.http_headers.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let mut rhai_runtime = crate::plugin::rhai::RhaiCrawlerRuntime::new(download_queue);
+        crate::plugin::rhai::execute_crawler_script_with_runtime(
+            &mut rhai_runtime,
+            &plugin_for_exec,
+            &images_dir,
+            &plugin_for_exec.id,
+            &task_id,
+            &rhai_script,
+            merged_config_for_exec,
+            output_album_id,
+            http_headers,
+        )
+    })
+    .await
+    .map_err(|e| format!("Task worker join error: {}", e))??;
+
+    Ok(TaskOutcome::Completed)
 }
 
 #[derive(Debug, Serialize, Deserialize)]

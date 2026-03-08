@@ -1,6 +1,7 @@
 //! file:// 协议：什么都不做，只返回本地路径（去掉 file 前缀）；以及计算目标路径。
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use url::Url;
 
@@ -31,6 +32,7 @@ impl SchemeDownloader for FileSchemeDownloader {
         url: &Url,
         _dest: &Path,
         task_id: &str,
+        _headers: &HashMap<String, String>,
         progress: &DownloadProgressContext<'_>,
     ) -> Result<String, String> {
         eprintln!("handle_file: {}", url.as_str());

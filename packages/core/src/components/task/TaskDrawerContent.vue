@@ -5,7 +5,8 @@
       <div class="downloads-header">
         <span class="downloads-title">正在下载</span>
         <div class="downloads-stats">
-          <el-tag type="warning" size="small">进行中: {{ activeDownloadsRunningCount }}</el-tag>
+          <el-tag type="warning" size="small">Worker: {{ activeDownloadsRunningCount }}</el-tag>
+          <el-tag type="info" size="small">Native: {{ nativeDownloadsRunningCount }}</el-tag>
         </div>
       </div>
       <div v-if="activeDownloads.length === 0" class="downloads-empty">
@@ -13,9 +14,27 @@
       </div>
       <div v-else class="downloads-content">
         <!-- 正在下载的图片列表 -->
-        <div v-if="activeDownloads.length > 0" class="downloads-list">
+        <div v-if="nativeActiveDownloads.length > 0" class="downloads-list">
+          <div class="download-list-title">原生下载</div>
           <transition-group name="download-fade" tag="div" class="downloads-list-inner">
-            <div v-for="download in activeDownloads" :key="downloadKey(download)" class="download-item">
+            <div v-for="download in nativeActiveDownloads" :key="downloadKey(download)" class="download-item">
+              <div class="download-info">
+                <div class="download-url" :title="download.url">{{ download.url }}</div>
+                <div class="download-meta">
+                  <el-tag size="small" type="info">{{ download.plugin_id }}</el-tag>
+                  <el-tag size="small" type="warning">native</el-tag>
+                  <el-tag size="small" :type="downloadStateTagType(download)">
+                    {{ downloadStateText(download) }}
+                  </el-tag>
+                </div>
+              </div>
+            </div>
+          </transition-group>
+        </div>
+        <div v-if="workerActiveDownloads.length > 0" class="downloads-list">
+          <div class="download-list-title">Worker 下载</div>
+          <transition-group name="download-fade" tag="div" class="downloads-list-inner">
+            <div v-for="download in workerActiveDownloads" :key="downloadKey(download)" class="download-item">
               <div class="download-info">
                 <div class="download-url" :title="download.url">{{ download.url }}</div>
                 <div class="download-meta">
@@ -202,6 +221,7 @@ type ActiveDownloadInfo = {
   start_time: number;
   task_id: string;
   state?: string;
+  native?: boolean;
 };
 
 type DownloadProgressPayload = {
@@ -226,6 +246,7 @@ type DownloadStatePayload = {
   pluginId: string;
   state: string;
   error?: string;
+  native?: boolean;
 };
 
 const props = withDefaults(
@@ -260,8 +281,17 @@ const activeDownloads = ref<ActiveDownloadInfo[]>([]);
 let activeDownloadKeysSnapshot = new Set<string>();
 const activeDownloadsRunningCount = computed(() => {
   // completed 为“短暂展示态”，不计入运行中
-  return activeDownloads.value.filter((d) => getEffectiveDownloadState(d) !== "completed").length;
+  return activeDownloads.value.filter(
+    (d) => !d.native && getEffectiveDownloadState(d) !== "completed"
+  ).length;
 });
+const nativeDownloadsRunningCount = computed(() => {
+  return activeDownloads.value.filter(
+    (d) => !!d.native && getEffectiveDownloadState(d) !== "completed"
+  ).length;
+});
+const nativeActiveDownloads = computed(() => activeDownloads.value.filter((d) => !!d.native));
+const workerActiveDownloads = computed(() => activeDownloads.value.filter((d) => !d.native));
 
 const downloadProgressByKey = ref<Record<string, DownloadProgressState>>({});
 let unlistenDownloadProgress: null | (() => void) = null;
@@ -341,6 +371,7 @@ const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
         url: p.url,
         plugin_id: p.pluginId,
         state: p.state || "completed",
+        native: !!p.native,
       };
       if (idx === -1) activeDownloads.value.push(nextItem);
       else activeDownloads.value[idx] = { ...activeDownloads.value[idx], ...nextItem };
@@ -368,6 +399,7 @@ const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
     url: p.url,
     plugin_id: p.pluginId,
     state: p.state || "downloading",
+    native: !!p.native,
   };
   if (idx === -1) activeDownloads.value.push(nextItem);
   else activeDownloads.value[idx] = { ...activeDownloads.value[idx], ...nextItem };
@@ -505,7 +537,7 @@ const initAllEventListeners = async () => {
     const state = String(raw?.state ?? "").trim();
     if (!taskId || !url || !Number.isFinite(startTime) || !pluginId || !state) return null;
     const error = raw?.error != null ? String(raw.error) : undefined;
-    return { taskId, url, startTime, pluginId, state, error };
+    return { taskId, url, startTime, pluginId, state, error, native: !!raw?.native };
   };
   try {
     const { listen } = await import("@tauri-apps/api/event");
@@ -818,6 +850,11 @@ onUnmounted(() => {
         height: 240px;
         overflow-y: auto;
         margin-bottom: 12px;
+
+        .download-list-title {
+          font-size: 12px;
+          color: var(--anime-text-muted);
+        }
 
         .downloads-list-inner {
           display: flex;

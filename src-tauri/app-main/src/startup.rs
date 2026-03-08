@@ -1,5 +1,6 @@
 // 启动步骤函数
 
+use async_trait::async_trait;
 use kabegame_core::crawler::TaskScheduler;
 // 事件转发到前端（桌面与 Android 均需要，用于 task-status 等）
 use kabegame_core::ipc::events::DaemonEventKind;
@@ -14,6 +15,45 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
 use kabegame_core::storage::Storage;
+
+#[cfg(not(target_os = "android"))]
+use kabegame_core::crawler::downloader::{
+    BrowserDownloadState,
+};
+#[cfg(not(target_os = "android"))]
+use kabegame_core::crawler::webview::{set_webview_handler, CrawlerWebViewHandler};
+#[cfg(not(target_os = "android"))]
+use tauri::webview::DownloadEvent;
+
+#[cfg(not(target_os = "android"))]
+struct AppCrawlerWebViewHandler {
+    app: AppHandle,
+}
+
+#[cfg(not(target_os = "android"))]
+#[async_trait]
+impl CrawlerWebViewHandler for AppCrawlerWebViewHandler {
+    async fn setup_js_task(&self, _task_id: &str, base_url: &str) -> Result<(), String> {
+        let crawler_window = self
+            .app
+            .get_webview_window("crawler")
+            .ok_or_else(|| "Crawler window not found".to_string())?;
+        let target = if base_url.trim().is_empty() {
+            "about:blank"
+        } else {
+            base_url
+        };
+        let parsed = url::Url::parse(target)
+            .map_err(|e| format!("Invalid crawler URL '{}': {}", target, e))?;
+        crawler_window
+            .navigate(parsed)
+            .map_err(|e| format!("Failed to navigate crawler window: {}", e))?;
+        // DEV: auto-show webview for debugging
+        let _ = crawler_window.show();
+        let _ = crawler_window.set_focus();
+        Ok(())
+    }
+}
 
 pub fn init_kgpg_plugin() {
     tauri::async_runtime::spawn(async {
@@ -312,6 +352,60 @@ pub fn start_download_workers() {
     tauri::async_runtime::spawn(async {
         TaskScheduler::global().start_workers(2).await;
     });
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn create_crawler_window(app: &mut tauri::App) -> Result<(), String> {
+    if app.get_webview_window("crawler").is_some() {
+        return Ok(());
+    }
+
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    let bootstrap_path = kabegame_core::app_paths::AppPaths::global()
+        .resource_dir
+        .join("bootstrap.js");
+    let script = fs::read_to_string(&bootstrap_path).map_err(|e| {
+        format!(
+            "无法读取 crawler bootstrap 脚本 {}: {}",
+            bootstrap_path.display(),
+            e
+        )
+    })?;
+    let about_blank = url::Url::parse("about:blank").map_err(|e| e.to_string())?;
+    WebviewWindowBuilder::new(app, "crawler", WebviewUrl::External(about_blank))
+        .title("Kabegame Crawler")
+        .visible(false)
+        .skip_taskbar(true)
+        .resizable(false)
+        .inner_size(1920.0, 1080.0)
+        .initialization_script(script.as_str())
+        .on_page_load(move |_webview, _payload| {})
+        .on_download(|_webview, event| {
+            match event {
+            DownloadEvent::Requested { url, destination } => {
+                if let Some(dest) = BrowserDownloadState::global().resolve_destination_by_blob_url(url.as_str()) {
+                    *destination = dest;
+                    true
+                } else {
+                    false
+                }
+            }
+            DownloadEvent::Finished { url, path, success } => {
+                let _ = BrowserDownloadState::global()
+                    .signal_completion_by_blob_url(url.as_str(), path.clone(), success);
+                true
+            }
+            _ => true,
+        }})
+        .build()
+        .map_err(|e| format!("创建 crawler 窗口失败: {}", e))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn init_crawler_webview_handler(app_handle: AppHandle) -> Result<(), String> {
+    let handler = Arc::new(AppCrawlerWebViewHandler { app: app_handle });
+    set_webview_handler(handler)
 }
 
 /// 启动 TaskScheduler（启动 DownloadQueue 的 worker）

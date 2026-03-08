@@ -4,7 +4,41 @@ use kabegame_core::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
+
+/// 桌面端开发：打开一个加载远程 URL 的 WebView 窗口（CRAWLER_BACKENDS 快速原型）。
+/// 仅桌面端可用；安卓不支持。
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub fn open_dev_webview(app: AppHandle, url: String) -> Result<(), String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("请输入 URL".to_string());
+    }
+    let parsed = url::Url::parse(url).map_err(|e| format!("无效 URL: {}", e))?;
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err("仅支持 http 或 https URL".to_string());
+    }
+    let label = format!(
+        "dev-webview-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let _ = tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::External(parsed),
+    )
+    .title("Kabegame 开发 WebView")
+    .inner_size(1000.0, 700.0)
+    .build()
+    .map_err(|e| format!("创建窗口失败: {}", e))?;
+    Ok(())
+}
 
 /// 退出应用。用于 Android 返回键确认退出及桌面/托盘等场景。
 /// 使用 AppHandle::exit 确保进程正确退出（win.close() 在 Android 上可能只关窗口不退出进程）。
