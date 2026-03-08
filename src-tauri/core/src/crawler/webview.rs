@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{timeout, Duration};
@@ -42,6 +43,7 @@ pub struct CrawlerWindowState {
     current_task: Mutex<Option<JsTaskSlot>>,
     page_ready_tx: watch::Sender<bool>,
     page_ready_rx: watch::Receiver<bool>,
+    script_dispatched: AtomicBool,
 }
 
 impl CrawlerWindowState {
@@ -52,6 +54,7 @@ impl CrawlerWindowState {
             current_task: Mutex::new(None),
             page_ready_tx,
             page_ready_rx,
+            script_dispatched: AtomicBool::new(false),
         }
     }
 
@@ -121,6 +124,13 @@ impl CrawlerWindowState {
 
     pub fn set_page_ready(&self, ready: bool) {
         let _ = self.page_ready_tx.send(ready);
+        if !ready {
+            self.script_dispatched.store(false, Ordering::Release);
+        }
+    }
+
+    pub fn try_dispatch_script(&self) -> bool {
+        !self.script_dispatched.swap(true, Ordering::AcqRel)
     }
 
     pub async fn wait_page_ready(&self) -> Result<(), String> {

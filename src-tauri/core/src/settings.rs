@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::Instant;
+use std::process::Command;
 
 use crate::emitter::GlobalEmitter;
 

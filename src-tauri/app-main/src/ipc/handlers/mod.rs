@@ -159,6 +159,8 @@ async fn handle_task_start(task: serde_json::Value) -> CliIpcResponse {
 
 async fn handle_task_cancel(task_id: String) -> CliIpcResponse {
     TaskScheduler::global().cancel_task(&task_id).await;
+    #[cfg(not(target_os = "android"))]
+    crate::commands::crawl_exit_with_status("canceled", Some(&task_id)).await;
     CliIpcResponse::ok("ok")
 }
 

@@ -9,19 +9,17 @@
     "frontendDist": "../../dist-main"
   },
   "app": {
-    "macOSPrivateApi": true,
     "windows": [
       {
         "fullscreen": false,
         "resizable": true,
         "title": "Kabegame",
         "devtools": true,
-        "transparent": true,
-        "width": 1200,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
-        "windowEffects": { "effects": ["sidebar", "acrylic"], "state": "followsWindowActiveState" }
+        "transparent": false,
+        "width": 1600,
+        "height": 1200,
+        "minWidth": 1200,
+        "minHeight": 800
       }
     ],
     "security": {
@@ -36,18 +34,9 @@
   "bundle": {
     "active": true,
     "targets": [
-      "dmg"
+      "deb"
     ],
     "icon": ["../icons/32x32.png", "../icons/128x128.png", "../icons/128x128@2x.png", "../icons/icon.icns", "../icons/icon.ico"],
-    "fileAssociations": [
-      {
-        "ext": ["kgpg"],
-        "name": "Kabegame Plugin Package",
-        "description": "Kabegame Plugin Package",
-        "role": "Viewer",
-        "mimeType": "application/x-kabegame-kgpg"
-      }
-    ],
     "resources": ["resources/**/*"],
     "windows": {
       "nsis": {

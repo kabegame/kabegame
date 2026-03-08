@@ -307,66 +307,6 @@
           "markdownDescription": "Denies the copyImageToClipboard command without any pre-configured scope."
         },
         {
-          "description": "Enables the extractBundledPlugins command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-extractBundledPlugins",
-          "markdownDescription": "Enables the extractBundledPlugins command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the extractBundledPlugins command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-extractBundledPlugins",
-          "markdownDescription": "Denies the extractBundledPlugins command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the openImage command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-openImage",
-          "markdownDescription": "Enables the openImage command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the openImage command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-openImage",
-          "markdownDescription": "Denies the openImage command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the pickFolder command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-pickFolder",
-          "markdownDescription": "Enables the pickFolder command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the pickFolder command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-pickFolder",
-          "markdownDescription": "Denies the pickFolder command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the pickImages command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-pickImages",
-          "markdownDescription": "Enables the pickImages command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the pickImages command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-pickImages",
-          "markdownDescription": "Denies the pickImages command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the pickKgpgFile command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-pickKgpgFile",
-          "markdownDescription": "Enables the pickKgpgFile command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the pickKgpgFile command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-pickKgpgFile",
-          "markdownDescription": "Denies the pickKgpgFile command without any pre-configured scope."
-        },
-        {
           "description": "Enables the shareFile command without any pre-configured scope.",
           "type": "string",
           "const": "allow-shareFile",
