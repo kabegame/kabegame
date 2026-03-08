@@ -52,6 +52,14 @@
   />
 
   <VarTextField
+    v-else-if="type === 'string'"
+    :model-value="modelValue"
+    :placeholder="placeholder"
+    :allow-unset="allowUnset"
+    @update:model-value="$emit('update:modelValue', $event)"
+  />
+
+  <VarTextField
     v-else
     :model-value="modelValue"
     :placeholder="placeholder"

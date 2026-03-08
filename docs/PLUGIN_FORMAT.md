@@ -15,7 +15,7 @@ plugin-name.kgpg
     - config.json            # 插件配置（可选）
     - crawl.rhai             # 爬取脚本（Rhai 脚本格式，必需）
     - doc_root/              # 文档目录（可选）
-        └── doc.md           # 插件文档，给用户查看，文档中的根目录为 doc_root。文档中的路径解析只允许在 doc_root 之下
+        └── doc.md           # 插件文档，给用户查看。使用标准 Markdown 渲染（GFM），文档中的根目录为 doc_root，路径解析只允许在 doc_root 之下
 ```
 
 ### manifest.json 格式
@@ -69,7 +69,19 @@ plugin-name.kgpg
 - `crawl.rhai` - 必需，爬取脚本（Rhai 脚本格式）
 - `icon.png` - 可选，插件图标（仅支持 PNG）
 - `config.json` - 可选，插件配置
-- `doc_root/doc.md` - 可选，用户文档
+- `doc_root/doc.md` - 可选，用户文档（基于标准 Markdown/GFM 渲染，图片路径仅允许 doc_root 内相对路径）
+
+### config.json 与变量在脚本中的访问
+
+- **Rhai 脚本（crawl.rhai）**：`config.json` 的 `var` 中定义的变量会直接注入为脚本内的同名变量，详见 [RHAI_API.md](./RHAI_API.md)。
+- **JS 脚本（crawl.js，WebView 后端）**：变量通过全局上下文 **`ctx.vars`** 访问。`ctx` 由运行时注入（`window.__crawl_ctx__`），`ctx.vars` 是一个只读对象，键为 `config.json` 里每条 `var` 的 `key`。例如：
+
+  ```js
+  // config.json 中有 key 为 startPage、endPage、tag 的 var 时：
+  const startPage = ctx.vars?.startPage ?? 0;
+  const endPage   = ctx.vars?.endPage ?? 0;
+  const tag       = ctx.vars?.tag ?? "";
+  ```
 
 ### 快速展开策略
 1. **读取阶段**：只读取 `manifest.json` 获取基本信息（用于列表展示）

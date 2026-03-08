@@ -294,6 +294,21 @@ PRAGMA mmap_size = 268435456;
             [],
         )
         .expect("Failed to create temp_files table");
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS task_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                level TEXT NOT NULL,
+                content TEXT NOT NULL,
+                time INTEGER NOT NULL
+            )",
+            [],
+        )
+        .expect("Failed to create task_logs table");
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id)",
+            [],
+        );
 
         Self {
             db: Arc::new(Mutex::new(conn)),

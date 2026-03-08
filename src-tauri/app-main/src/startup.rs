@@ -48,9 +48,15 @@ impl CrawlerWebViewHandler for AppCrawlerWebViewHandler {
         crawler_window
             .navigate(parsed)
             .map_err(|e| format!("Failed to navigate crawler window: {}", e))?;
-        // DEV: auto-show webview for debugging
-        let _ = crawler_window.show();
-        let _ = crawler_window.set_focus();
+        // 由设置控制启动 WebView 插件任务时是否自动显示窗口
+        let auto_open = Settings::global()
+            .get_auto_open_crawler_webview()
+            .await
+            .unwrap_or(false);
+        if auto_open {
+            let _ = crawler_window.show();
+            let _ = crawler_window.set_focus();
+        }
         Ok(())
     }
 }

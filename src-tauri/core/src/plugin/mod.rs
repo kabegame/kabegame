@@ -2186,7 +2186,7 @@ pub enum VarOption {
 pub struct VarDefinition {
     pub key: String, // 变量名（用于在脚本中引用）
     #[serde(rename = "type")]
-    pub var_type: String, // "int", "float", "options", "boolean", "list"
+    pub var_type: String, // "int", "float", "string", "options", "boolean", "list"
     pub name: String, // 展示给用户的名称
     #[serde(default)]
     pub descripts: Option<String>, // 描述（注意：用户写的是 descripts，不是 description）

@@ -664,6 +664,8 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
         ? `\n\n注意：其中包含当前壁纸。移除/删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。`
         : "";
       removeDialogMessage.value = `将从当前画册移除${count > 1 ? `这 ${count} 张图片` : "这张图片"}。${currentHint}`;
+      removeDeleteFiles.value = false;
+      showRemoveDialog.value = true;
       break;
     case "swipe-remove" as any:
       // 上划删除：直接从画册移除，不删除文件，不显示确认对话框
@@ -704,9 +706,6 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
           ElMessage.error("移除图片失败");
         }
       })();
-      break;
-      removeDeleteFiles.value = false; // 默认不删除文件
-      showRemoveDialog.value = true;
       break;
   }
   return null;

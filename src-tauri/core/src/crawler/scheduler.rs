@@ -337,7 +337,7 @@ async fn worker_loop(
         match res {
             Ok(TaskOutcome::Completed) => {
                 let end = now_ms();
-                if download_queue.is_task_canceled_blocking(&req.task_id) {
+                if download_queue.is_task_canceled(&req.task_id).await {
                     let e = "Task canceled".to_string();
                     #[cfg(feature = "ipc-server")]
                     GlobalEmitter::global().emit_task_error(&req.task_id, &e);
@@ -709,9 +709,14 @@ fn normalize_var_value(def: &VarDefinition, value: Option<serde_json::Value>) ->
             Some(serde_json::Value::String(s)) => serde_json::Value::Bool(s == "true" || s == "1"),
             _ => serde_json::Value::Bool(false),
         },
-        // options/list/其它：保持原样；若无值则给一个可用的空值，避免变量缺失
+        // options/list/string/其它：保持原样；若无值则给一个可用的空值，避免变量缺失
         "options" => match value {
             Some(v) => v,
+            None => serde_json::Value::String(String::new()),
+        },
+        "string" => match value {
+            Some(serde_json::Value::String(s)) => serde_json::Value::String(s),
+            Some(v) => serde_json::Value::String(v.to_string()),
             None => serde_json::Value::String(String::new()),
         },
         "list" => match value {

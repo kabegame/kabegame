@@ -9,6 +9,8 @@
 use crate::ipc::events::DaemonEvent;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::server::EventBroadcaster;
+#[cfg(feature = "ipc-server")]
+use crate::storage::Storage;
 use std::sync::OnceLock;
 
 // ==================== IPC 实现 ====================
@@ -51,8 +53,8 @@ impl GlobalEmitter {
     }
 
     /// 发送任务日志事件
-    /// TODO: 将最后一条log显示到任务项，并提供全部log的查看入口
     pub fn emit_task_log(&self, task_id: &str, level: &str, message: &str) {
+        let _ = Storage::global().add_task_log(task_id, level, message);
         let event = std::sync::Arc::new(DaemonEvent::TaskLog {
             task_id: task_id.to_string(),
             level: level.to_string(),

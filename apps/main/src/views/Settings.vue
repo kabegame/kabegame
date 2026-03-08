@@ -86,7 +86,7 @@
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="应用设置" name="app">
+      <el-tab-pane v-if="!IS_ANDROID" label="应用设置" name="app">
         <el-card class="settings-card">
           <template #header>
             <span>应用设置</span>
@@ -114,6 +114,16 @@
 
               <SettingRow v-if="!IS_ANDROID" label="清理应用数据" description="将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启">
                 <ClearUserDataSetting />
+              </SettingRow>
+
+              <SettingRow v-if="!IS_ANDROID" label="爬虫 WebView 窗口" description="打开用于 WebView 插件运行的 crawler 窗口">
+                <el-button type="primary" :loading="crawlerWebviewOpening" @click="openCrawlerWindow">
+                  打开 WebView 窗口
+                </el-button>
+              </SettingRow>
+
+              <SettingRow v-if="!IS_ANDROID" label="自动打开 WebView" description="启动 WebView 插件时自动显示并聚焦 WebView 窗口">
+                <SettingSwitchControl :setting-key="autoOpenCrawlerWebviewKey" />
               </SettingRow>
 
               <SettingRow v-if="IS_DEV" label="生成测试图片（调试）" description="基于现有图片数据批量克隆插入，用于性能/分页测试（仅开发模式可见）">
@@ -152,6 +162,7 @@ import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import type { AppSettingKey } from "@kabegame/core/stores/settings";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
@@ -169,8 +180,22 @@ import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetti
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV } from "@kabegame/core/env";
+const autoOpenCrawlerWebviewKey: AppSettingKey = "autoOpenCrawlerWebview";
 const devWebviewUrl = ref("https://www.example.com");
 const devWebviewOpening = ref(false);
+const crawlerWebviewOpening = ref(false);
+async function openCrawlerWindow() {
+  crawlerWebviewOpening.value = true;
+  try {
+    await invoke("show_crawler_window");
+    ElMessage.success("已打开 crawler WebView 窗口");
+  } catch (e) {
+    ElMessage.error(String(e));
+  } finally {
+    crawlerWebviewOpening.value = false;
+  }
+}
+
 async function openDevWebview() {
   const url = devWebviewUrl.value?.trim() || "";
   if (!url) {

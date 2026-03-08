@@ -4,6 +4,15 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 【3.1.0】
+（这是一次大改动，因此将版本升级）
+### Added
+- 添加webview插件，可以编写js插件啦！例子是 anime-pictures 插件
+- 添加任务日志查看功能
+
+### Fixed
+- 修复画册细节页面右键移除画册没有反应的bug
+
 ## [3.0.5]
 ### Added
 - 一键加入所有任务图片到画册功能

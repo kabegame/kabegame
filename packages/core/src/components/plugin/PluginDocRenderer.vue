@@ -9,6 +9,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watchEffect } from "vue";
+import DOMPurify from "dompurify";
+import { marked } from "marked";
 
 type LoadImageBytes = (imagePath: string) => Promise<Uint8Array | number[]>;
 
@@ -82,13 +84,19 @@ const normalizeDocPath = (imgPath: string): string => {
   return p;
 };
 
+const sanitizeHtml = (rawHtml: string): string =>
+  DOMPurify.sanitize(rawHtml, {
+    USE_PROFILES: { html: true },
+    ADD_DATA_URI_TAGS: ["img"],
+  });
+
 const renderMarkdown = async (
   markdown: string,
   loadImageBytes?: LoadImageBytes
 ): Promise<string> => {
   if (!markdown) return "";
 
-  // 1) 解析图片引用：![alt](path)，支持路径中包含括号
+  // 1) 解析图片引用：![alt](path)，路径中可含括号，用括号计数找闭合 ) 避免正文如「胡桃(原神)」干扰
   const imageMatches: Array<{ match: string; alt: string; path: string }> = [];
   let searchIndex = 0;
   while (searchIndex < markdown.length) {
@@ -102,23 +110,20 @@ const renderMarkdown = async (
     const pathStart = markdown.indexOf("(", altEnd);
     if (pathStart === -1 || pathStart !== altEnd + 1) break;
 
-    let pathEnd = markdown.indexOf(")", pathStart + 1);
-    if (pathEnd === -1) break;
-
-    let nextBrace = markdown.indexOf(")", pathEnd + 1);
-    while (nextBrace !== -1 && nextBrace < markdown.length) {
-      const nextChar = markdown[nextBrace + 1];
-      if (
-        nextChar === " " ||
-        nextChar === "\n" ||
-        nextChar === "!" ||
-        nextChar === undefined
-      ) {
-        pathEnd = nextBrace;
-        break;
+    let depth = 1;
+    let pathEnd = -1;
+    for (let i = pathStart + 1; i < markdown.length; i++) {
+      const c = markdown[i];
+      if (c === "(") depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0) {
+          pathEnd = i;
+          break;
+        }
       }
-      nextBrace = markdown.indexOf(")", nextBrace + 1);
     }
+    if (pathEnd === -1) break;
 
     const altText = markdown.substring(altStart, altEnd);
     const imagePath = markdown.substring(pathStart + 1, pathEnd);
@@ -157,38 +162,15 @@ const renderMarkdown = async (
     }
   }
 
-  // 3) 简易 Markdown -> HTML（保持与 main 旧实现一致）
-  let out = processed
-    .replace(/^### (.*$)/gim, "<h3>$1</h3>")
-    .replace(/^## (.*$)/gim, "<h2>$1</h2>")
-    .replace(/^# (.*$)/gim, "<h1>$1</h1>")
-    .replace(/\*\*(.*?)\*\*/gim, "<strong>$1</strong>")
-    .replace(/\*(.*?)\*/gim, "<em>$1</em>")
-    .replace(/```([\s\S]*?)```/gim, "<pre><code>$1</code></pre>")
-    .replace(/`(.*?)`/gim, "<code>$1</code>")
-    .replace(
-      /\[([^\]]+)\]\(([^)]+)\)/gim,
-      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
-    )
-    .replace(/^\s*[-*+]\s+(.*)$/gim, "<li>$1</li>")
-    .replace(/^\s*\d+\.\s+(.*)$/gim, "<li>$1</li>")
-    .replace(/\n\n/gim, "</p><p>")
-    .replace(/\n/gim, "<br>");
-
-  out = out.replace(/(<li>.*<\/li>)/gim, "<ul>$1</ul>");
-  if (
-    !out.startsWith("<h") &&
-    !out.startsWith("<ul") &&
-    !out.startsWith("<pre") &&
-    !out.startsWith("<img")
-  ) {
-    out = "<p>" + out + "</p>";
-  }
-  return out;
+  // 3) 使用 marked 做标准 Markdown 渲染，再进行 HTML 清洗
+  const rawHtml = marked.parse(processed, {
+    gfm: true,
+    breaks: true,
+  }) as string;
+  return sanitizeHtml(rawHtml);
 };
 
 watchEffect(() => {
-  // 使用 async IIFE，避免 watchEffect 返回 Promise
   void (async () => {
     const text = md.value;
     if (!text) {
@@ -234,6 +216,36 @@ watchEffect(() => {
 .doc :deep(h2),
 .doc :deep(h3) {
   color: var(--anime-text-primary);
+}
+
+.doc :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+
+.doc :deep(th),
+.doc :deep(td) {
+  border: 1px solid var(--anime-border);
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.doc :deep(blockquote) {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border-left: 4px solid var(--anime-border);
+  background: rgba(255, 255, 255, 0.45);
+  border-radius: 8px;
+}
+
+.doc :deep(ul),
+.doc :deep(ol) {
+  margin: 10px 0 10px 18px;
+}
+
+.doc :deep(li) {
+  margin: 4px 0;
 }
 </style>
 

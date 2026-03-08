@@ -80,7 +80,7 @@ pub enum CliIpcRequest {
         #[serde(default)]
         plugin_args: Vec<String>,
 
-        /// 运行时 HTTP 头（用于 to/to_json/download_image 等请求）
+        /// 运行时 HTTP 头（用于 to/fetch_json/download_image 等请求）
         #[serde(default)]
         http_headers: Option<HashMap<String, String>>,
     },

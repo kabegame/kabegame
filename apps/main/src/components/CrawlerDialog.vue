@@ -87,7 +87,7 @@
                         </el-button>
                     </div>
                     <div class="config-hint">
-                        提示：这里的 HTTP 头会用于爬虫请求（to/to_json）与图片下载（download_image），不会注入到脚本变量里。
+                        提示：这里的 HTTP 头会用于爬虫请求（to/fetch_json）与图片下载（download_image），不会注入到脚本变量里。
                     </div>
                 </div>
             </el-form-item>
@@ -221,7 +221,7 @@
                         </el-button>
                     </div>
                     <div class="config-hint">
-                        提示：这里的 HTTP 头会用于爬虫请求（to/to_json）与图片下载（download_image），不会注入到脚本变量里。
+                        提示：这里的 HTTP 头会用于爬虫请求（to/fetch_json）与图片下载（download_image），不会注入到脚本变量里。
                     </div>
                 </div>
             </el-form-item>

@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::Mutex as TokioMutex;
@@ -75,6 +74,8 @@ pub struct WindowState {
 pub enum SettingKey {
     /// 开机启动
     AutoLaunch,
+    /// 启动 WebView 插件任务时自动打开 crawler 窗口
+    AutoOpenCrawlerWebview,
     /// 最大并发下载数
     MaxConcurrentDownloads,
     /// 网络重试次数
@@ -256,6 +257,7 @@ impl Settings {
     fn default_value(key: SettingKey) -> SettingValue {
         match key {
             SettingKey::AutoLaunch => SettingValue::Bool(false),
+            SettingKey::AutoOpenCrawlerWebview => SettingValue::Bool(false),
             SettingKey::MaxConcurrentDownloads => SettingValue::U32(3),
             SettingKey::NetworkRetryCount => SettingValue::U32(2),
             SettingKey::ImageClickAction => SettingValue::String("preview".to_string()),
@@ -468,6 +470,7 @@ Write-Output "$style,$tile"
         // 初始化所有键的默认值
         let all_keys = vec![
             SettingKey::AutoLaunch,
+            SettingKey::AutoOpenCrawlerWebview,
             SettingKey::MaxConcurrentDownloads,
             SettingKey::NetworkRetryCount,
             SettingKey::ImageClickAction,
@@ -572,6 +575,7 @@ Write-Output "$style,$tile"
         // json 参数已经是值了，不需要再次查找
         match key {
             SettingKey::AutoLaunch
+            | SettingKey::AutoOpenCrawlerWebview
             | SettingKey::AutoDeduplicate
             | SettingKey::WallpaperRotationEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
@@ -657,6 +661,7 @@ Write-Output "$style,$tile"
     fn key_to_json_string(key: SettingKey) -> String {
         match key {
             SettingKey::AutoLaunch => "autoLaunch".to_string(),
+            SettingKey::AutoOpenCrawlerWebview => "autoOpenCrawlerWebview".to_string(),
             SettingKey::MaxConcurrentDownloads => "maxConcurrentDownloads".to_string(),
             SettingKey::NetworkRetryCount => "networkRetryCount".to_string(),
             SettingKey::ImageClickAction => "imageClickAction".to_string(),
@@ -804,6 +809,16 @@ Write-Output "$style,$tile"
     pub async fn get_auto_launch(&self) -> Result<bool, String> {
         let cells = Self::cells();
         if let Some(cell) = cells.get(&SettingKey::AutoLaunch) {
+            let val = cell.lock().await;
+            Ok(val.as_bool().unwrap_or(false))
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub async fn get_auto_open_crawler_webview(&self) -> Result<bool, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::AutoOpenCrawlerWebview) {
             let val = cell.lock().await;
             Ok(val.as_bool().unwrap_or(false))
         } else {
@@ -1065,6 +1080,18 @@ Write-Output "$style,$tile"
             }
         }
 
+        Ok(())
+    }
+
+    pub async fn set_auto_open_crawler_webview(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::AutoOpenCrawlerWebview) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::AutoOpenCrawlerWebview, &new_value).await;
+        Self::trigger_debounce_save().await?;
         Ok(())
     }
 

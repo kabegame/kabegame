@@ -9,6 +9,7 @@ Rhai 脚本里可以直接使用插件在 `config.json` 中声明的变量（由
 ### 变量类型与在脚本中的形态
 
 - `int` / `float`: 数字
+- `string`: **字符串**，单行文本
 - `boolean`: 布尔
 - `options`（单选）: **字符串（variable）**
 - `list`（字符串列表）: **字符串数组**，例如 `["jpg","png"]`
@@ -51,6 +52,7 @@ Rhai 脚本里可以直接使用插件在 `config.json` 中声明的变量（由
 
 - `list.options`（如果提供）应保持为 `string[]`，用于“建议项/可选项”
 - 不要把 `list.options` 写成 `{ "name": "...", "variable": "..." }`，否则会误导成固定枚举
+- **前端表现**：`list` 会渲染为**可扩展的 tag 列表**。已选中的项以标签形式展示，可点击标签的关闭按钮移除；通过下方下拉框选择建议项或输入自定义值并确认即可新增一项（与「输出画册」里添加画册的交互类似：添加后多一个 tag）。
 
 ### `checkbox` 在脚本中的用法示例
 
@@ -123,9 +125,9 @@ to("../other-page");
 
 ---
 
-### `to_json(url)`
+### `fetch_json(url)`
 
-访问一个 JSON API，返回 JSON 对象。
+请求一个 JSON API，解析响应并返回 Rhai 值。**不入页面栈**（与 `to()` 不同，仅拉取数据，不参与 back 导航）。
 
 **参数：**
 - `url` (string): JSON API 的 URL，支持绝对 URL 和相对 URL
@@ -136,8 +138,8 @@ to("../other-page");
 
 **示例：**
 ```rhai
-// 访问 JSON API
-let json_data = to_json("https://api.example.com/data");
+// 请求 JSON API
+let json_data = fetch_json("https://api.example.com/data");
 
 // 如果是对象，直接访问属性
 let name = json_data["name"];
@@ -157,6 +159,7 @@ for item in array_data {
 - 如果 JSON 响应是对象，直接返回对应的 Map
 - 如果 JSON 响应是数组、字符串、数字等，会被包装在一个 Map 中，键为 "data"
 - 支持嵌套对象和数组
+- 不入页面栈，调用 `back()` 不会“退回”到 fetch_json 的请求
 
 ---
 
@@ -447,7 +450,7 @@ print(re_is_match("(", url));              // false（非法正则，返回 fals
 - `()`
 
 **说明：**
-- 仅影响当前任务中由 Rhai 发起的 HTTP 请求（如 `to()`、`to_json()`、`download_image()`、`download_archive()`）
+- 仅影响当前任务中由 Rhai 发起的 HTTP 请求（如 `to()`、`fetch_json()`、`download_image()`、`download_archive()`）
 - `key` / `value` 会做合法性校验；不合法会被忽略，并在任务日志中提示
 
 **示例：**
@@ -557,8 +560,8 @@ image_list
 ## 注意事项
 
 1. **页面栈管理**：
-   - 使用 `to()` 或 `to_json()` 访问页面时，页面会被推入栈
-   - 使用 `back()` 可以返回到上一页
+   - 使用 `to()` 访问页面时，页面会被推入栈；`fetch_json()` 仅拉取 JSON 数据，不入栈
+   - 使用 `back()` 可以返回到上一页（仅对 `to()` 打开的页面有效）
    - 页面栈为空时，某些函数会返回错误
 
 2. **URL 解析**：
@@ -623,7 +626,7 @@ if types.contains("zip") {
 ```
 
 5. **JSON 处理**：
-   - `to_json()` 返回的 Map 可以直接访问属性
+   - `fetch_json()` 返回的 Map 可以直接访问属性
    - 嵌套对象和数组都被正确转换
 
 ---
