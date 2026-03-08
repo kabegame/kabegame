@@ -20,9 +20,6 @@
             class="crawler-url-input"
             @keyup.enter="openInIframe"
           />
-          <el-button :loading="openingCrawlerWindow" @click="openCrawlerWindow">
-            打开 WebView 窗口
-          </el-button>
           <el-button type="primary" :loading="loading" @click="openInIframe">
             打开
           </el-button>
@@ -63,7 +60,6 @@ const iframeSrc = ref("");
 const proxyBase = ref("");
 const loadError = ref("");
 const loading = ref(false);
-const openingCrawlerWindow = ref(false);
 const iframeEl = ref<HTMLIFrameElement | null>(null);
 
 function debugLog(hypothesisId: string, location: string, message: string, data: Record<string, unknown>) {
@@ -130,15 +126,6 @@ function openInIframe() {
       });
     }
   });
-}
-
-async function openCrawlerWindow() {
-  openingCrawlerWindow.value = true;
-  try {
-    await invoke("show_crawler_window");
-  } finally {
-    openingCrawlerWindow.value = false;
-  }
 }
 
 function handleIframeLoad() {

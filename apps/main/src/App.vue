@@ -47,12 +47,6 @@
             </el-icon>
             <span>收集源</span>
           </el-menu-item>
-          <el-menu-item v-if="!IS_ANDROID" index="/crawler">
-            <el-icon>
-              <Connection />
-            </el-icon>
-            <span>爬虫</span>
-          </el-menu-item>
           <el-menu-item index="/settings">
             <el-icon>
               <Setting />
@@ -95,7 +89,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
-import { Picture, Grid, Setting, Collection, QuestionFilled, Connection } from "@element-plus/icons-vue";
+import { Picture, Grid, Setting, Collection, QuestionFilled } from "@element-plus/icons-vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import HelpDrawer from "./components/help/HelpDrawer.vue";

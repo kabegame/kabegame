@@ -405,9 +405,10 @@ The source code is licensed under GPL v3. License is available [here](./LICENSE)
 - [**Axios**](https://github.com/axios/axios) - 基于 Promise 的 HTTP 客户端
 - [**UnoCSS**](https://github.com/unocss/unocss) - 原子动态CSS框架
 - [**panzoom**](https://github.com/timmywil/panzoom) - 预览图拖拽放缩库
+- [**PhotoSwipe**](https://github.com/dimsemenov/PhotoSwipe) - 移动端图片浏览库，本项目基于其重写了vue版本
 
 ### 后端与工具
-- [**Rhai**](https://github.com/rhaiscript/rhai) - 嵌入式脚本语言引擎（本项目插件脚本的核心支持）
+- [**Rhai**](https://github.com/rhaiscript/rhai) - 嵌入式脚本语言引擎（本项目插件脚本Rhai后端的核心支持）
 - [**Serde**](https://github.com/serde-rs/serde) - Rust 序列化框架
 - [**Tokio**](https://github.com/tokio-rs/tokio) - Rust 异步运行时
 - [**Reqwest**](https://github.com/seanmonstar/reqwest) - Rust HTTP 客户端
@@ -425,5 +426,6 @@ The source code is licensed under GPL v3. License is available [here](./LICENSE)
 ### 参考项目
 - [**Lively**](https://github.com/rocksdanister/lively) - 动态壁纸应用（本项目参考了其桌面挂载实现）
 - [**Clash Verge**](https://github.com/clash-verge-rev/clash-verge-rev) - Clash 代理客户端（本项目参考了其托盘代码、tauri config写法以及linux workaround 写法）
+- [**Pake**](https://github.com/tw93/pake) - 将任意网站打包为app的项目，本项目参考了其实现
 
 如果这些项目对你有帮助，请考虑给它们一个 ⭐ Star，这是对开源社区最好的支持！

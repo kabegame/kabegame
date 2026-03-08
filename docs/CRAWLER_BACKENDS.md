@@ -156,7 +156,7 @@ await crawl.to(nextUrl, "detail");
 |------------------|-----------|
 | **导航与页面栈** | |
 | `to(url)` | 访问 URL（支持相对路径），将 (url, html) 入栈；使用当前任务 HTTP 头，带重试。 |
-| `to_json(url)` | 请求 URL 得到 JSON，返回 Rhai Map（对象）或 `{ data: array }`（数组）。 |
+| `fetch_json(url)` | 请求 URL 得到 JSON，返回 Rhai Map（对象）或 `{ data: array }`（数组）；不入页面栈。 |
 | `back()` | 栈顶出栈，相当于返回上一页。 |
 | `current_url()` | 返回当前栈顶 URL。 |
 | `current_html()` | 返回当前栈顶 HTML 字符串。 |
@@ -170,7 +170,7 @@ await crawl.to(nextUrl, "detail");
 | `is_image_url(url)` | 判断 URL 是否为支持的图片扩展名（与 core/image_type 一致）。 |
 | `re_is_match(pattern, text)` | 正则匹配（Rust regex 语法），失败或编译失败返回 false。 |
 | **HTTP 头** | |
-| `set_header(key, value)` | 为当前任务设置请求头（后续 to/to_json/download 等会携带）。 |
+| `set_header(key, value)` | 为当前任务设置请求头（后续 to/fetch_json/download 等会携带）。 |
 | `del_header(key)` | 删除已设置的请求头。 |
 | **进度与下载** | |
 | `add_progress(percentage)` | 累加任务进度（%，0–99.9），并上报前端。 |
@@ -189,7 +189,7 @@ WebView 运行时（如 `crawler-runtime.js`）应暴露 `window.crawl`，与 Rh
 | Rhai API | JS 对等 API | 说明 |
 |----------|-------------|------|
 | `to(url)` | `crawl.to(url)` 或 `crawl.to({ url, pageLabel, pageState })` | 顶层 WebView 导航到新的url，建议同时传入下一步页面语义与参数，便于 Rust 在导航后恢复执行。 |
-| `to_json(url)` | `crawl.to_json(url)` | 不返回 |
+| `fetch_json(url)` | `crawl.fetch_json(url)` | 不返回 |
 | `back()` | `crawl.back()` | 页面栈出栈，显示上一帧。 |
 | `current_url()` | `crawl.currentUrl()` | 返回当前栈顶 URL 字符串。 |
 | `current_html()` | — | JS 下“当前页”的 document；可用 `crawl.$(selector)` 操作。若需原始 HTML，可提供 `crawl.currentHtml()` 返回 `document.documentElement.outerHTML`（当前 iframe）。 |

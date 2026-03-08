@@ -583,8 +583,8 @@ pub fn register_crawler_functions(
         }
     });
 
-    // to_json(url) - 访问一个 JSON API，返回 JSON 对象
-    engine.register_fn("to_json", {
+    // fetch_json(url) - 请求 JSON API 并解析为 Rhai 值，不入页面栈
+    engine.register_fn("fetch_json", {
         let dq_holder = Arc::clone(&download_queue);
         let task_id_holder = Arc::clone(&task_id);
         let headers_holder = Arc::clone(&http_headers);
@@ -609,34 +609,22 @@ pub fn register_crawler_functions(
                     .to_string()
             };
 
-            // 获取 JSON 响应
-            // 在单独的线程中执行阻塞的 HTTP 请求，避免在 Tokio runtime 中创建新的 runtime
-            // 并增加失败重试 + 日志输出（风格与 download_image 一致）
-            let url_clone = resolved_url.clone();
+            // 获取 JSON 响应（不入栈）
             let dq_for_http = Arc::clone(&dq_holder);
             let task_id_for_http = get_task_id(&task_id_holder);
-            let task_id_for_http_thread = task_id_for_http.clone();
             let headers_for_http = {
                 let guard = lock_or_inner(&headers_holder);
                 guard.clone()
             };
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let result = http_get_text_with_retry(
-                    &dq_for_http,
-                    &task_id_for_http_thread,
-                    &url_clone,
-                    "to_json",
-                    &headers_for_http,
-                );
-                let _ = tx.send(result);
-            });
-            let (final_url, text) = rx
-                .recv()
-                .map_err(|e| format!("Thread communication error: {}", e))?
-                .map_err(|e| e)?;
+            let (final_url, text) = http_get_text_with_retry(
+                &dq_for_http,
+                &task_id_for_http,
+                &resolved_url,
+                "fetch_json",
+                &headers_for_http,
+            )?;
             let json_value = serde_json::from_str::<serde_json::Value>(&text).map_err(|e| {
-                let msg = format!("[to_json] JSON 解析失败：{e}");
+                let msg = format!("[fetch_json] JSON 解析失败：{e}");
                 eprintln!("{msg} URL: {final_url}");
                 emit_http_error(
                     &dq_holder,
@@ -645,17 +633,6 @@ pub fn register_crawler_functions(
                 );
                 format!("Failed to parse JSON: {}", e)
             })?;
-
-            // 将当前页面推入栈（保存 URL 和 JSON 字符串表示）
-            let json_string = serde_json::to_string(&json_value)
-                .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
-            let mut stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
-            stack_guard.push(PageStackEntry {
-                url: final_url,
-                html: json_string,
-                page_label: String::new(),
-                page_state: serde_json::Value::Null,
-            });
 
             // 将 JSON 值转换为 Rhai 类型
             match &json_value {

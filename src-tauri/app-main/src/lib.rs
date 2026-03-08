@@ -179,6 +179,15 @@ pub fn run() {
     #[cfg(not(target_os = "android"))]
     {
         builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+        // 爬虫窗口关闭时仅隐藏不销毁，便于设置中再次打开
+        builder = builder.on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "crawler" {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            }
+        });
     }
 
     let app = builder
@@ -335,6 +344,7 @@ pub fn run() {
             get_task_images_paginated,
             get_task_image_ids,
             get_task_failed_images,
+            get_task_logs,
             retry_task_failed_image,
             get_active_downloads,
             // --- Run Configs ---
@@ -371,6 +381,8 @@ pub fn run() {
             // --- Settings ---
             get_auto_launch,
             set_auto_launch,
+            get_auto_open_crawler_webview,
+            set_auto_open_crawler_webview,
             get_max_concurrent_downloads,
             set_max_concurrent_downloads,
             get_network_retry_count,

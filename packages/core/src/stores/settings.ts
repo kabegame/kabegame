@@ -35,6 +35,7 @@ export interface AppSettings {
   // Windows：画册虚拟盘（Dokan）
   albumDriveEnabled: boolean;
   albumDriveMountPoint: string;
+  autoOpenCrawlerWebview: boolean;
 }
 
 export type AppSettingKey = keyof AppSettings;
@@ -75,6 +76,11 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
     map.imageClickAction = { getter: "get_image_click_action", setter: "set_image_click_action", param: "action" };
     map.galleryImageAspectRatio = { getter: "get_gallery_image_aspect_ratio", setter: "set_gallery_image_aspect_ratio", param: "aspectRatio" };
     map.defaultDownloadDir = { getter: "get_default_download_dir", setter: "set_default_download_dir", param: "dir" };
+    map.autoOpenCrawlerWebview = {
+      getter: "get_auto_open_crawler_webview",
+      setter: "set_auto_open_crawler_webview",
+      param: "enabled",
+    };
   }
 
   // 仅 Windows

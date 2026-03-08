@@ -50,7 +50,7 @@
         return document.querySelector(selector);
       },
       $$(selector) {
-        return document.querySelectorAll(selector);
+        return Array.from(document.querySelectorAll(selector));
       },
       waitForDom() {
         if (document.readyState !== "loading") return Promise.resolve();

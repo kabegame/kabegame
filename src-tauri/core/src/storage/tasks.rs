@@ -41,6 +41,16 @@ pub struct TaskFailedImage {
     pub last_attempted_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskLogEntry {
+    pub id: i64,
+    pub task_id: String,
+    pub level: String,
+    pub content: String,
+    pub time: i64,
+}
+
 impl Storage {
     pub fn add_task(&self, task: TaskInfo) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -188,6 +198,7 @@ impl Storage {
             "DELETE FROM task_failed_images WHERE task_id = ?1",
             params![task_id],
         );
+        let _ = conn.execute("DELETE FROM task_logs WHERE task_id = ?1", params![task_id]);
         Ok(())
     }
 
@@ -242,6 +253,12 @@ impl Storage {
 
     pub fn clear_finished_tasks(&self) -> Result<usize, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let _ = conn.execute(
+            "DELETE FROM task_logs WHERE task_id IN (
+                SELECT id FROM tasks WHERE status IN ('completed', 'failed', 'canceled', 'cancelled')
+            )",
+            [],
+        );
         let count = conn
             .execute(
                 "DELETE FROM tasks WHERE status IN ('completed', 'failed', 'canceled', 'cancelled')",
@@ -249,6 +266,50 @@ impl Storage {
             )
             .map_err(|e| format!("Failed to clear finished tasks: {}", e))?;
         Ok(count)
+    }
+
+    pub fn add_task_log(&self, task_id: &str, level: &str, content: &str) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        conn.execute(
+            "INSERT INTO task_logs (task_id, level, content, time) VALUES (?1, ?2, ?3, ?4)",
+            params![task_id, level, content, now],
+        )
+        .map_err(|e| format!("Failed to add task log: {}", e))?;
+        Ok(())
+    }
+
+    pub fn get_task_logs(&self, task_id: &str) -> Result<Vec<TaskLogEntry>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, level, content, time
+                 FROM task_logs
+                 WHERE task_id = ?1
+                 ORDER BY time ASC, id ASC",
+            )
+            .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+        let rows = stmt
+            .query_map(params![task_id], |row| {
+                Ok(TaskLogEntry {
+                    id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    level: row.get(2)?,
+                    content: row.get(3)?,
+                    time: row.get(4)?,
+                })
+            })
+            .map_err(|e| format!("Failed to query task logs: {}", e))?;
+
+        let mut logs = Vec::new();
+        for r in rows {
+            logs.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
+        }
+        Ok(logs)
     }
 
     pub fn add_task_failed_image(

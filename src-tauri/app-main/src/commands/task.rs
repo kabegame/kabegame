@@ -78,6 +78,12 @@ pub async fn get_task_failed_images(task_id: String) -> Result<serde_json::Value
 }
 
 #[tauri::command]
+pub async fn get_task_logs(task_id: String) -> Result<serde_json::Value, String> {
+    let logs = Storage::global().get_task_logs(&task_id)?;
+    Ok(serde_json::to_value(logs).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
 pub async fn retry_task_failed_image(failed_id: i64) -> Result<(), String> {
     // 重试逻辑通常涉及 Scheduler
     use kabegame_core::crawler::TaskScheduler;

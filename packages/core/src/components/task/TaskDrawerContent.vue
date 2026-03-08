@@ -80,6 +80,12 @@
             <div class="task-name">{{ getPluginName(task.pluginId) }}</div>
           </div>
           <div class="task-header-right">
+            <el-button text circle size="small" class="task-detail-btn" title="查看任务日志"
+              @click.stop="openTaskLog(task.id)">
+              <el-icon>
+                <Document />
+              </el-icon>
+            </el-button>
             <el-button text circle size="small" class="task-detail-btn" title="查看任务图片"
               @click.stop="$emit('open-task-images', task.id)">
               <el-icon>
@@ -185,14 +191,26 @@
         </div>
       </div>
     </transition-group>
+
+    <el-dialog v-model="taskLogVisible" title="任务日志" width="640px" :append-to-body="true" class="task-log-dialog">
+      <div ref="taskLogListRef" class="task-log-list">
+        <div v-if="currentTaskLogs.length === 0" class="task-log-empty">暂无日志</div>
+        <div v-for="log in currentTaskLogs" :key="log.id" class="task-log-entry" :class="`log-level-${log.level}`">
+          <span class="log-time">{{ formatLogTime(log.time) }}</span>
+          <el-tag :type="logLevelTagType(log.level)" size="small">{{ log.level }}</el-tag>
+          <span class="log-content">{{ log.content }}</span>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
-import { ArrowDown, Clock, Close, CopyDocument, Picture, WarningFilled } from "@element-plus/icons-vue";
+import { ArrowDown, Clock, Close, CopyDocument, Document, Picture, WarningFilled } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
+import { useModalBack } from "../../composables/useModalBack";
 
 type VarOption = string | { name: string; variable: string };
 type PluginVarMeta = {
@@ -249,6 +267,20 @@ type DownloadStatePayload = {
   native?: boolean;
 };
 
+type TaskLogEntry = {
+  id: number;
+  taskId: string;
+  level: string;
+  content: string;
+  time: number;
+};
+
+type TaskLogEventPayload = {
+  task_id?: string;
+  level?: string;
+  message?: string;
+};
+
 const props = withDefaults(
   defineProps<{
     tasks: ScriptTask[];
@@ -301,6 +333,14 @@ let unlistenDownloadState: null | (() => void) = null;
 
 const archiverLogText = ref("");
 let unlistenArchiverLog: null | (() => void) = null;
+let unlistenTaskLog: null | (() => void) = null;
+
+const taskLogVisible = ref(false);
+const currentTaskId = ref("");
+const currentTaskLogs = ref<TaskLogEntry[]>([]);
+const taskLogListRef = ref<HTMLDivElement | null>(null);
+const taskLogSeed = ref(0);
+useModalBack(taskLogVisible);
 
 const downloadKey = (d: ActiveDownloadInfo) => `${d.task_id}::${d.start_time}::${d.url}`;
 const downloadKeyFromPayload = (p: DownloadProgressPayload) => `${p.taskId}::${p.startTime}::${p.url}`;
@@ -595,6 +635,27 @@ const initAllEventListeners = async () => {
   } catch (error) {
     console.error("监听 archiver-log 失败:", error);
   }
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    unlistenTaskLog = await listen<TaskLogEventPayload>("task-log", (event) => {
+      const raw = (event.payload as TaskLogEventPayload) || {};
+      const taskId = String(raw.task_id ?? "").trim();
+      if (!taskId) return;
+      if (taskId !== currentTaskId.value) return;
+      const level = String(raw.level ?? "info").trim() || "info";
+      const content = String(raw.message ?? "").trim();
+      const nextId = Date.now() * 1000 + (taskLogSeed.value++ % 1000);
+      currentTaskLogs.value.push({
+        id: nextId,
+        taskId,
+        level,
+        content,
+        time: Date.now(),
+      });
+    });
+  } catch (error) {
+    console.error("监听 task-log 失败:", error);
+  }
 };
 
 const stopAllEventListeners = () => {
@@ -618,6 +679,13 @@ const stopAllEventListeners = () => {
     // ignore
   } finally {
     unlistenArchiverLog = null;
+  }
+  try {
+    unlistenTaskLog?.();
+  } catch {
+    // ignore
+  } finally {
+    unlistenTaskLog = null;
   }
   eventListenersInitialized = false;
 
@@ -656,6 +724,39 @@ const formatDuration = (startTime: number, endTime?: number) => {
   if (h > 0) return `${h}小时${m}分${s}秒`;
   if (m > 0) return `${m}分${s}秒`;
   return `${s}秒`;
+};
+
+const formatLogTime = (timestamp: number) => {
+  return new Date(Number(timestamp || 0)).toLocaleString("zh-CN");
+};
+
+const logLevelTagType = (level: string): "info" | "warning" | "danger" | "success" => {
+  const val = String(level || "").toLowerCase();
+  if (val === "error") return "danger";
+  if (val === "warn" || val === "warning") return "warning";
+  if (val === "debug" || val === "trace") return "info";
+  return "success";
+};
+
+const openTaskLog = async (taskId: string) => {
+  const id = String(taskId || "").trim();
+  if (!id) return;
+  currentTaskId.value = id;
+  taskLogVisible.value = true;
+  try {
+    const logs = await invoke<any[]>("get_task_logs", { taskId: id });
+    currentTaskLogs.value = (Array.isArray(logs) ? logs : []).map((log, idx) => ({
+      id: Number(log?.id ?? idx + 1),
+      taskId: String(log?.taskId ?? log?.task_id ?? id),
+      level: String(log?.level ?? "info"),
+      content: String(log?.content ?? log?.message ?? ""),
+      time: Number(log?.time ?? Date.now()),
+    }));
+  } catch (error) {
+    console.error("加载任务日志失败:", error);
+    currentTaskLogs.value = [];
+    ElMessage.error("加载任务日志失败");
+  }
 };
 
 const getStatusType = (status: string) => {
@@ -803,6 +904,15 @@ watch(
   { immediate: true }
 );
 
+watch(
+  () => currentTaskLogs.value.length,
+  async () => {
+    if (!taskLogVisible.value) return;
+    await nextTick();
+    if (!taskLogListRef.value) return;
+    taskLogListRef.value.scrollTop = taskLogListRef.value.scrollHeight;
+  }
+);
 
 onUnmounted(() => {
   stopAllEventListeners();
@@ -1306,5 +1416,49 @@ onUnmounted(() => {
 .task-move-leave-to {
   opacity: 0;
   transform: translateY(-6px);
+}
+
+.task-log-list {
+  max-height: 420px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-log-empty {
+  text-align: center;
+  color: var(--anime-text-secondary);
+  padding: 24px 0;
+}
+
+.task-log-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--anime-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.log-time {
+  min-width: 150px;
+  color: var(--anime-text-secondary);
+}
+
+.log-content {
+  flex: 1;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.log-level-warn,
+.log-level-warning {
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.log-level-error {
+  background: rgba(239, 68, 68, 0.08);
 }
 </style>
