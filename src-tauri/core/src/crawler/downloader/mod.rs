@@ -1023,6 +1023,11 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
         let dest = match prepare_download_destination(&job, is_archive, processor_ext).await {
             Ok(path) => Some(path),
             Err(e) => {
+                emit_task_log(
+                    &task_id_clone,
+                    "error",
+                    format!("图片下载失败（准备路径）: {} - {}", url_clone.as_str(), e),
+                );
                 GlobalEmitter::global().emit_download_state(
                     &task_id_clone,
                     url_clone.as_str(),
@@ -1826,6 +1831,13 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         eprintln!(
                             "[Archive Error] Task: {}, URL: {}, Error: {}",
                             task_id_clone, url_clone, e
+                        );
+                    }
+                    if !e.contains("Task canceled") {
+                        emit_task_log(
+                            &task_id_clone,
+                            "error",
+                            format!("图片下载失败: {} - {}", url_clone.as_str(), e),
                         );
                     }
                     if !is_archive && !e.contains("Task canceled") {
