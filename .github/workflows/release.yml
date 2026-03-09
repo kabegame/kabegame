@@ -40,7 +40,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Tauri dependencies
+      - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt update && sudo apt install -y \
@@ -61,8 +61,17 @@ jobs:
             libfuse3-dev \
             pkg-config
 
+      - name: macOS FUSE (for fuser crate)
+        if: runner.os == 'macOS'
+        run: |
+          brew install macfuse
+          echo "PKG_CONFIG_PATH=$(brew --prefix macfuse)/lib/pkgconfig" >> $GITHUB_ENV
+
       - name: Install JavaScript dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
+
+      - name: Install tauri-cli 2.10.0
+        run: cargo install tauri-cli --version 2.10.0
 
       - name: Build CLI (required before main packaging)
         run: bun b -c cli
