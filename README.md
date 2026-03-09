@@ -57,9 +57,9 @@
 
 | 操作系统 | Standard 模式 | Light 模式 |
 |---------|--------------|-----------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/tag/v3.0.5/Kabegame-standard_3.0.5_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/tag/v3.0.5/Kabegame-light_3.0.5_x64-setup.exe) |
-| MacOS | [dmg映像](https://github.com/kabegame/kabegame/releases/tag/v3.0.5/Kabegame-standard_3.0.5_aarch64.dmg) | [dmg映像](https://github.com/kabegame/kabegame/releases/tag/v3.0.5/Kabegame-light_3.0.5_aarch64.dmg) |
-| Linux | [deb包](https://github.com/kabegame/kabegame/releases/tag/v3.0.5/Kabegame-standard_3.0.5_amd64.deb) | [deb包](https://github.com/kabegame/kabegame/releases/tag/v3.0.5/Kabegame-light_3.0.5_amd64.deb) |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/tag/v3.1.0/Kabegame-standard_3.1.0_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/tag/v3.1.0/Kabegame-light_3.1.0_x64-setup.exe) |
+| MacOS | [dmg映像](https://github.com/kabegame/kabegame/releases/tag/v3.1.0/Kabegame-standard_3.1.0_aarch64.dmg) | [dmg映像](https://github.com/kabegame/kabegame/releases/tag/v3.1.0/Kabegame-light_3.1.0_aarch64.dmg) |
+| Linux | [deb包](https://github.com/kabegame/kabegame/releases/tag/v3.1.0/Kabegame-standard_3.1.0_amd64.deb) | [deb包](https://github.com/kabegame/kabegame/releases/tag/v3.1.0/Kabegame-light_3.1.0_amd64.deb) |
 
 - **安卓预览版**（仅支持 Light 模式）：[kabegame_3.0.5_android-preview.apk](https://github.com/kabegame/kabegame/releases/tag/v3.0.5/Kabegame_3.0.5_android-preview.apk) 
 
