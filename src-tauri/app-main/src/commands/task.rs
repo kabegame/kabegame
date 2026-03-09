@@ -30,10 +30,11 @@ pub async fn delete_run_config(config_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn cancel_task(task_id: String) {
-    // 任务取消通常需要通知 Scheduler 或 Runtime
-    // 这里我们直接调用 TaskScheduler 的 cancel
     use kabegame_core::crawler::TaskScheduler;
     TaskScheduler::global().cancel_task(&task_id).await;
+    // WebView 任务：立即以“已取消”结束并更新 DB，避免脚本后续调用 ctx.error 时被写成 failed
+    #[cfg(not(target_os = "android"))]
+    super::crawler::crawl_exit_with_status("canceled", Some(&task_id)).await;
 }
 
 #[tauri::command]

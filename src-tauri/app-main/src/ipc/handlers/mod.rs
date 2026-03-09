@@ -391,8 +391,13 @@ fn parse_plugin_args_to_user_config(
 }
 
 async fn handle_app_show_window(app_handle: AppHandle) -> CliIpcResponse {
-    let _ = app_handle.emit("app-show-window", ());
-    CliIpcResponse::ok("window-shown")
+    match crate::startup::ensure_main_window(app_handle.clone()) {
+        Ok(()) => {
+            let _ = app_handle.emit("app-show-window", ());
+            CliIpcResponse::ok("window-shown")
+        }
+        Err(e) => CliIpcResponse::err(format!("显示窗口失败: {}", e)),
+    }
 }
 
 async fn handle_app_import_plugin(kgpg_path: String, app_handle: AppHandle) -> CliIpcResponse {

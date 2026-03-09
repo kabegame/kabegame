@@ -233,23 +233,15 @@ impl PluginManager {
         Ok((plugin, None))
     }
 
-    /// 删除插件（删除对应的 .kgpg 文件）
+    /// 删除插件（仅删除用户插件目录中的 .kgpg 文件；资源插件已在启动时迁移或清理，此处只操作用户目录）
     pub async fn delete(&self, id: &str) -> Result<(), String> {
-        // 只能删除用户目录中的插件，不能删除资源目录中的插件
-        let plugins_dir = self.get_plugins_directory();
-        let path = self.find_plugin_file(&plugins_dir, id).await?;
-
-        // 检查是否是内置插件路径（防止删除内置插件）
-        let builtin_dir = self.get_builtin_plugins_directory().ok();
-        if let Some(ref builtin) = builtin_dir {
-            if path.starts_with(builtin) {
-                return Err("该插件为内置插件，禁止卸载。请切换应用程序版本。".to_string());
-            }
+        let user_plugins_dir = self.get_plugins_directory();
+        let path = user_plugins_dir.join(format!("{}.kgpg", id));
+        if !path.is_file() {
+            return Err(format!("插件 {} 不在用户插件目录中或不存在", id));
         }
-
         fs::remove_file(&path).map_err(|e| format!("Failed to delete plugin file: {}", e))?;
         // 删除后局部刷新缓存（避免前端仍看到旧列表/旧图标）
-        // 注意：必须 await 以避免死锁（refresh_installed_plugin_cache 内部需要获取 installed_cache 锁）
         let _ = self.refresh_installed_plugin_cache(id).await;
         Ok(())
     }

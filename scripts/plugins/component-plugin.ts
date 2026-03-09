@@ -115,7 +115,7 @@ export class ComponentPlugin extends BasePlugin {
       if (bs.context.cmd!.isDev && this.component && !this.component.isCli) {
         this.setEnv(
           "TAURI_CLI_WATCHER_IGNORE_FILENAME",
-          `${this.component.appDir}/.taurignore`,
+          path.join(this.component.appDir, ".taurignore"),
         );
       }
     });
@@ -176,18 +176,21 @@ export class ComponentPlugin extends BasePlugin {
         this.setEnv("KABEGAME_COMPONENT", this.component?.comp || comp || "");
         const component = comp ? new Component(comp) : this.component!;
         if (component.isMain) {
-          // 先清空 resources 下所有非.gitkeep（保留文件夹）
-          // TODO: 直接清除所有文件
+          // 先清空 resources 下所有插件和二进制文件
           const resourcesDir = path.join(RESOURCES_DIR);
-          const files = readdirSync(resourcesDir, {
-            recursive: true,
-          }) as string[];
-          for (const file of files) {
-            const stat = statSync(path.join(resourcesDir, file));
-            if (!file.endsWith(".gitkeep") && stat.isFile()) {
-              unlinkSync(path.join(resourcesDir, file));
+          const pluginDir = path.join(resourcesDir, "plugins");
+          const binDir = path.join(resourcesDir, "bin");
+          if (existsSync(pluginDir)) {
+            readdirSync(pluginDir, { recursive: true }).forEach((file) => {
+              unlinkSync(path.join(pluginDir, file.toString()));
               this.log(`删除文件 ${file}`);
-            }
+            });
+          }
+          if (existsSync(binDir)) {
+            readdirSync(binDir, { recursive: true }).forEach((file) => {
+              unlinkSync(path.join(binDir, file.toString()));
+              this.log(`删除文件 ${file}`);
+            });
           }
         }
         // 安卓、linux 不需要

@@ -35,6 +35,10 @@
                     {{ name }}
                 </el-descriptions-item>
 
+                <el-descriptions-item v-if="version" label="版本">
+                    {{ version }}
+                </el-descriptions-item>
+
                 <el-descriptions-item label="描述">
                     {{ description || "无描述" }}
                 </el-descriptions-item>
@@ -70,6 +74,7 @@ defineProps<{
     pluginId: string;
     name: string;
     description?: string | null;
+    version?: string | null;
     baseUrl?: string | null;
     iconUrl?: string | null;
     installed: boolean;

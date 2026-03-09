@@ -17,6 +17,7 @@ pub mod root;
 pub mod albums;
 pub mod common;
 pub mod date_group;
+pub mod main_root;
 
 pub mod plugin_group;
 pub mod task_group;

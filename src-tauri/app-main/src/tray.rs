@@ -10,6 +10,8 @@ use tauri::{
     AppHandle, Manager,
 };
 
+use crate::startup;
+
 type DefaultDirectRateLimiter = RateLimiter<
     governor::state::NotKeyed,
     governor::state::InMemoryState,
@@ -139,21 +141,12 @@ pub fn setup_tray(app: AppHandle) {
     });
 }
 
-/// 不保存/恢复 window_state：每次显示主窗口时居中弹出
-fn restore_window_state(_app: &AppHandle, window: &tauri::WebviewWindow) {
-    let _ = window.center();
-}
-
 /// 处理菜单事件
 fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     match event.id.as_ref() {
         "show" => {
-            // 只显示主窗口（label 为 "main"），排除壁纸窗口
-            if let Some(main_window) = app.get_webview_window("main") {
-                // 恢复窗口状态
-                restore_window_state(app, &main_window);
-                let _ = main_window.show();
-                let _ = main_window.set_focus();
+            if let Err(e) = startup::ensure_main_window(app.clone()) {
+                eprintln!("[托盘] 显示窗口失败: {}", e);
             }
         }
         "hide" => {
@@ -203,14 +196,13 @@ fn handle_tray_icon_event(
         // 切换主窗口显示/隐藏
         if let Some(main_window) = app.get_webview_window("main") {
             let is_visible = main_window.is_visible().unwrap_or(false);
-
             if is_visible {
                 let _ = main_window.hide();
-            } else {
-                restore_window_state(app, &main_window);
-                let _ = main_window.show();
-                let _ = main_window.set_focus();
+            } else if startup::ensure_main_window(app.clone()).is_err() {
+                eprintln!("[托盘] 显示窗口失败");
             }
+        } else if startup::ensure_main_window(app.clone()).is_err() {
+            eprintln!("[托盘] 创建并显示窗口失败");
         }
     }
     // 右键点击会自动显示菜单（通过 set_menu 设置）

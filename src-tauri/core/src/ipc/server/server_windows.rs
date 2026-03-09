@@ -96,22 +96,36 @@ where
     F: Fn(CliIpcRequest) -> Fut + Send + Sync + Clone + 'static,
     Fut: std::future::Future<Output = CliIpcResponse> + Send,
 {
-    // 绑定命名管道
-    let mut server = match create_secure_server() {
-        Ok(s) => s,
-        Err(e) => {
-            // 绑定失败，检查是否有其他 daemon 正在运行
-            if check_other_daemon_running().await {
-                eprintln!(
-                    "错误: 无法绑定命名管道 {}，因为已有其他 daemon 正在运行。",
-                    windows_pipe_name()
-                );
-                eprintln!("请先停止正在运行的 daemon，或确保只有一个 daemon 实例。");
-                return Err(format!("另一个 daemon 实例正在运行: {}", e));
+    // 绑定命名管道（带重试，应对清理重启时旧进程尚未完全退出的竞态）
+    let mut server = 'bind: {
+        const MAX_RETRIES: u32 = 5;
+        const RETRY_INTERVAL_MS: u64 = 300;
+
+        for attempt in 0..=MAX_RETRIES {
+            match create_secure_server() {
+                Ok(s) => break 'bind s,
+                Err(e) => {
+                    if attempt < MAX_RETRIES {
+                        eprintln!(
+                            "[IPC] 命名管道绑定失败 (尝试 {}/{}): {}，{}ms 后重试...",
+                            attempt + 1, MAX_RETRIES + 1, e, RETRY_INTERVAL_MS
+                        );
+                        tokio::time::sleep(Duration::from_millis(RETRY_INTERVAL_MS)).await;
+                        continue;
+                    }
+                    if check_other_daemon_running().await {
+                        eprintln!(
+                            "错误: 无法绑定命名管道 {}，因为已有其他 daemon 正在运行。",
+                            windows_pipe_name()
+                        );
+                        eprintln!("请先停止正在运行的 daemon，或确保只有一个 daemon 实例。");
+                        return Err(format!("另一个 daemon 实例正在运行: {}", e));
+                    }
+                    return Err(format!("无法创建命名管道: {}", e));
+                }
             }
-            // 如果没有其他 daemon 运行，可能是其他原因导致的绑定失败
-            return Err(format!("无法创建命名管道: {}", e));
         }
+        unreachable!()
     };
 
     loop {

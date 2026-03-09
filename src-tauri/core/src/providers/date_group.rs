@@ -109,7 +109,7 @@ impl Provider for DateRangeRootProvider {
     }
 }
 
-fn parse_range_name(s: &str) -> Option<(String, String)> {
+pub(crate) fn parse_range_name(s: &str) -> Option<(String, String)> {
     let raw = s.trim();
     if raw.is_empty() {
         return None;

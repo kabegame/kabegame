@@ -8,26 +8,14 @@ import TaskDetail from "@/views/TaskDetail.vue";
 import PluginDetail from "@/views/PluginDetail.vue";
 import Settings from "@/views/Settings.vue";
 import Help from "@/views/Help.vue";
-import Crawler from "@/views/Crawler.vue";
 
 const routes: RouteRecordRaw[] = [
   {
     path: "/",
-    redirect: "/gallery/全部",
+    redirect: { path: "/gallery", query: { path: "all/1" } },
   },
   {
     path: "/gallery",
-    redirect: "/gallery/全部",
-  },
-  {
-    // 纯 path 驱动：providerPath 为可重复参数（可包含多个路径段）
-    path: "/gallery/:providerPath(.*)*/page/:page(\\d+)",
-    name: "GalleryPaged",
-    component: Gallery,
-    meta: { title: "画廊" },
-  },
-  {
-    path: "/gallery/:providerPath(.*)*",
     name: "Gallery",
     component: Gallery,
     meta: { title: "画廊" },
@@ -51,20 +39,8 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "画册" },
   },
   {
-    path: "/albums/:id/page/:page(\\d+)",
-    name: "AlbumDetailPaged",
-    component: AlbumDetail,
-    meta: { title: "画册" },
-  },
-  {
     path: "/tasks/:id",
     name: "TaskDetail",
-    component: TaskDetail,
-    meta: { title: "任务详情" },
-  },
-  {
-    path: "/tasks/:id/page/:page(\\d+)",
-    name: "TaskDetailPaged",
     component: TaskDetail,
     meta: { title: "任务详情" },
   },
@@ -79,12 +55,6 @@ const routes: RouteRecordRaw[] = [
     name: "Settings",
     component: Settings,
     meta: { title: "设置" },
-  },
-  {
-    path: "/crawler",
-    name: "Crawler",
-    component: Crawler,
-    meta: { title: "爬虫" },
   },
   {
     path: "/help",

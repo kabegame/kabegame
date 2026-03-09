@@ -31,7 +31,7 @@
       <!-- 基本信息 -->
       <div class="plugin-info-section">
         <PluginDetail v-if="plugin" :show-header="false" :plugin-id="plugin.id" :name="plugin.name"
-          :description="plugin.desp" :base-url="plugin.baseUrl" :installed="installed" :show-copy-id="true"
+          :description="plugin.desp" :version="plugin.version" :base-url="plugin.baseUrl" :installed="installed" :show-copy-id="true"
           :show-primary-action="true" :primary-action-loading="installing" :primary-action-disabled="installing"
           :primary-action-text="installing ? installingText : installText" @primary-action="$emit('install')"
           @copy-id="$emit('copy-id', $event)">
@@ -67,9 +67,10 @@ type PluginVm = {
   id: string;
   name: string;
   desp: string;
-  icon?: string;
-  doc?: string;
-  baseUrl?: string;
+  version?: string;
+  icon?: string | null;
+  doc?: string | null;
+  baseUrl?: string | null;
 };
 
 type LoadImageBytes = (imagePath: string) => Promise<Uint8Array | number[]>;

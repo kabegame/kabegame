@@ -24,6 +24,7 @@ tauri-plugin-fs = "=2.4.4"
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-pathes = { workspace = true }
 tauri-plugin-shell = "=2.3.3"
+dirs = "5.0"
 tokio = {workspace = true}
 url = "2"
 uuid = {workspace = true}
@@ -87,6 +88,11 @@ default = ["custom-protocol"]
 [[bin]]
 name = "kabegame"
 path = "src/main.rs"
+
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
 
 [profile.release]
 panic = "abort"

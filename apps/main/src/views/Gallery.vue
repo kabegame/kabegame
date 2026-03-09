@@ -2,17 +2,17 @@
   <div class="gallery-page">
     <div class="gallery-container" v-pull-to-refresh="pullToRefreshOpts">
       <ImageGrid ref="galleryViewRef" :images="displayedImages" :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
-        hide-scrollbar :enable-ctrl-key-adjust-columns="!IS_ANDROID" :enable-virtual-scroll="!IS_WINDOWS && !IS_ANDROID"
+        hide-scrollbar :enable-ctrl-key-adjust-columns="!IS_ANDROID" :enable-virtual-scroll="!IS_ANDROID"
         :loading="loading || isRefreshing" :loading-overlay="showLoading || isRefreshing" :actions="imageActions"
         :on-context-command="handleGridContextCommand">
         <template #before-grid>
           <!-- 顶部工具栏 -->
           <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
             :current-position="currentPosition" :month-options="monthOptions" :month-loading="monthOptionsLoading"
-            :provider-root-path="providerRootPath"
-            v-model:selectedRange="selectedRange" @refresh="handleManualRefresh" @show-help="openHelpDrawer"
-            @show-quick-settings="openQuickSettingsDrawer" @show-crawler-dialog="handleShowCrawlerDialog"
-            @show-local-import="showLocalImportDialog = true" @open-collect-menu="showCollectSourcePicker = true" />
+            :provider-root-path="providerRootPath" v-model:selectedRange="selectedRange" @refresh="handleManualRefresh"
+            @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
+            @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
+            @open-collect-menu="showCollectSourcePicker = true" />
 
           <!-- 大页分页器 -->
           <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentBigPageOffset"
@@ -100,7 +100,7 @@ import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
-import { useBigPageRoute } from "@/composables/useBigPageRoute";
+import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
@@ -159,38 +159,20 @@ const currentBigPageOffset = computed(() => currentOffset.value);
 const route = useRoute();
 const router = useRouter();
 
-// 纯 path 驱动：
-// - /gallery/<providerPath>[/page/<n>]
-// - providerPath 与 VD 一致，例如：全部 / 按插件/konachan / 按时间/2024-01
-const providerRootPath = computed(() => {
-  const p = route.params.providerPath;
-  const segs =
-    typeof p === "string"
-      ? [p]
-      : Array.isArray(p)
-        ? (p as string[])
-        : [];
-  const s = segs.map((x) => String(x || "").trim()).filter(Boolean).join("/");
-  return s || "全部";
-});
+// Query param 驱动：
+// - /gallery?path=<providerPath>
+// - providerPath 格式：all/1, all/desc/1, date/2024-01/1, plugin/konachan/1 等
 const {
+  currentPath,
+  providerRootPath,
   currentPage,
   currentOffset,
-  jumpToPage,
-  replaceRouteForPage,
-} = useBigPageRoute({
+  setRootAndPage,
+  navigateToPage,
+} = useProviderPathRoute({
   route,
   router,
-  baseRouteName: "Gallery",
-  pagedRouteName: "GalleryPaged",
-  bigPageSize: BIG_PAGE_SIZE,
-  getBaseParams: () => ({
-    providerPath: providerRootPath.value.split("/").filter(Boolean),
-  }),
-  getPagedParams: (page) => ({
-    providerPath: providerRootPath.value.split("/").filter(Boolean),
-    page: String(page),
-  }),
+  defaultPath: "all/1",
 });
 
 type GalleryBrowseEntry =
@@ -243,23 +225,14 @@ watch(
 );
 
 const replaceRouteForProviderRootAndPage = async (root: string, page: number) => {
-  const safePage = Math.max(1, Math.floor(page || 1));
-  const segs = (root || "全部").split("/").filter(Boolean);
-  if (safePage === 1) {
-    await router.replace({ name: "Gallery", params: { providerPath: segs } });
-  } else {
-    await router.replace({
-      name: "GalleryPaged",
-      params: { providerPath: segs, page: String(safePage) },
-    });
-  }
+  await setRootAndPage(root || "all", Math.max(1, Math.floor(page || 1)));
 };
 
 const loadMonthOptions = async () => {
   monthOptionsLoading.value = true;
   try {
     const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
-      path: "按时间",
+      path: "date",
     });
     const months = (res?.entries ?? [])
       .filter((e) => e.kind === "dir")
@@ -511,6 +484,7 @@ const tasks = computed(() => crawlerStore.tasks);
 // 使用画廊图片 composable
 const {
   displayedImages,
+  fetchByPath,
   refreshImagesPreserveCache,
   loadMoreImages: loadMoreImagesFromComposable,
   jumpToBigPage,
@@ -518,9 +492,7 @@ const {
   loadedKey,
 } = useGalleryImages(
   galleryContainerRef,
-  isLoadingMore,
-  providerRootPath,
-  currentPage
+  isLoadingMore
 );
 
 watch(
@@ -555,11 +527,10 @@ const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => 
     isRefreshing.value = true; // 标记为刷新中，阻止 EmptyState 闪烁
   }
   try {
-    await refreshImagesPreserveCache(reset, opts);
-    // reset 时回到第 1 页，并同步到路由
+    await refreshImagesPreserveCache(currentPath.value, opts);
+    // reset 时导航到根路径的第 1 页
     if (reset) {
-      currentPage.value = 1;
-      void replaceRouteForPage(1);
+      await setRootAndPage(providerRootPath.value, 1);
     }
   } finally {
     finishLoading();
@@ -577,14 +548,13 @@ watch(
     const end = (r[1] || "").trim();
     if (!start || !end) return;
 
-    const nextRoot = `按时间/范围/${start}~${end}`;
+    const nextRoot = `date-range/${start}~${end}`;
     if (nextRoot === providerRootPath.value) return;
 
     // 切换 provider：回到第 1 页，并重载
-    await replaceRouteForProviderRootAndPage(nextRoot, 1);
-    currentPage.value = 1;
+    await setRootAndPage(nextRoot, 1);
     await loadTotalImagesCount();
-    await loadImages(true);
+    await loadImages(false);
   }
 );
 
@@ -592,7 +562,7 @@ const handleManualRefresh = async () => {
   // 手动刷新：刷新画廊数据 + 同步刷新月份下拉框选项
   clearImageStateCache();
   await Promise.allSettled([
-    loadImages(true, { forceReload: true }),
+    loadImages(false, { forceReload: true }),
     loadMonthOptions(),
   ]);
   await loadTotalImagesCount();
@@ -603,29 +573,36 @@ const handleManualRefresh = async () => {
 const handleJumpToBigPage = async (bigPage: number) => {
   startLoading();
   try {
-    await jumpToBigPage(bigPage, BIG_PAGE_SIZE);
-    await jumpToPage(bigPage);
+    await navigateToPage(bigPage);
   } finally {
     finishLoading();
   }
 };
 
+// 监听路径变化，自动加载图片
 watch(
-  () => route.fullPath,
-  async () => {
+  () => currentPath.value,
+  async (newPath) => {
     if (!isGalleryActive.value) return;
-    if (!route.path.startsWith("/gallery")) return;
-    const root = (providerRootPath.value || "全部").trim() || "全部";
-    const page = Math.max(1, Math.floor(currentPage.value || 1));
-    const targetKey = `${root}::${page}`;
-    if (loadedKey.value === targetKey) return;
+    if (!newPath) return;
+
+    // 如果路径已加载过，跳过
+    if (loadedKey.value === newPath) return;
+
     startLoading();
     try {
-      await jumpToBigPage(page, BIG_PAGE_SIZE);
+      const result = await fetchByPath(newPath, {
+        loadKey: newPath,
+      });
+      // 同步 total 到本地
+      totalImagesCount.value = result.total ?? 0;
+    } catch (error) {
+      console.error("加载路径失败:", error);
     } finally {
       finishLoading();
     }
-  }
+  },
+  { immediate: true }
 );
 
 
@@ -704,10 +681,12 @@ const ensureValidGalleryPageAfterMassRemoval = async () => {
     // 当前页仍有图：不处理
     if (displayedImages.value.length > 0) return;
 
-    // 全部没图：回到第一页
+    // 全部没图：回到根路径
     if (totalImagesCount.value <= 0) {
-      currentPage.value = 1;
-      void replaceRouteForPage(1);
+      await router.replace({
+        path: "/gallery",
+        query: { path: providerRootPath.value },
+      });
       return;
     }
 
@@ -1030,7 +1009,7 @@ useImagesChangeRefresh({
     await loadTotalImagesCount();
 
     // 刷新"当前页"数据：不 reset，不卸载组件，只替换 images 数组引用
-    await refreshImagesPreserveCache(false, { preserveScroll: true });
+    await refreshImagesPreserveCache(currentPath.value, { preserveScroll: true });
 
     const { addedIds, removedIds } = diffById(prevList, displayedImages.value);
 
@@ -1063,11 +1042,6 @@ onMounted(async () => {
   crawlerStore.loadRunConfigs();
   loadTotalImagesCount(); // 加载总图片数
   loadMonthOptions(); // 加载月份下拉框选项
-
-  startLoading();
-  loadImages(true).then(() => {
-    finishLoading();
-  });
 
   // 记录已经显示过弹窗的任务ID，避免重复弹窗
   const shownErrorTasks = new Set<string>();
@@ -1125,7 +1099,7 @@ onMounted(async () => {
         // 确保在画廊页面（App.vue 已经处理了路由跳转，这里只是双重保险）
         const currentPath = router.currentRoute.value.path;
         if (currentPath !== '/gallery') {
-          await router.push("/gallery/全部");
+          await router.push({ path: "/gallery", query: { path: "全部" } });
           await nextTick();
           // 再等待一下确保组件已激活
           await new Promise(resolve => setTimeout(resolve, 200));
@@ -1158,14 +1132,14 @@ onActivated(async () => {
   // 如果图片列表为空，需要重新加载
   if (displayedImages.value.length === 0) {
     try {
-      await loadImages(true);
+      await loadImages(false);
     } catch (e) {
       const msg = e != null && typeof e === "object" && "message" in e ? String((e as Error).message) : String(e);
       console.error("[Gallery] onActivated loadImages 失败:", msg);
       // 「路径不存在」：清空 provider 缓存后重试一次，仍失败则抛出
       if (msg.includes("路径不存在")) {
         await invoke("clear_provider_cache").catch(() => { });
-        await loadImages(true);
+        await loadImages(false);
       } else {
         throw e;
       }

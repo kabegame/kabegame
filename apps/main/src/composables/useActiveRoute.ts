@@ -1,7 +1,7 @@
 import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
-const lastGalleryRoute = ref("/gallery/全部");
+const lastGalleryRoute = ref("/gallery?path=all/1");
 
 /**
  * 路由高亮 composable
@@ -21,16 +21,16 @@ export function useActiveRoute() {
   );
 
   // 根据当前路由路径计算应该高亮的菜单项
-  // 需要匹配基础路径，忽略分页等参数
+  // 需要匹配基础路径，忽略 query 参数
   const activeRoute = computed(() => {
     const path = route.path;
 
-    // 画廊：匹配 /gallery 开头的所有路径（包括分页）
+    // 画廊：匹配 /gallery 开头的所有路径（包括 query 参数）
     if (path.startsWith("/gallery")) {
-      return lastGalleryRoute.value || "/gallery/全部";
+      return lastGalleryRoute.value || "/gallery?path=all/1";
     }
 
-    // 画册：匹配 /albums 开头的所有路径（包括详情和分页）
+    // 画册：匹配 /albums 开头的所有路径（包括详情和 query 参数）
     if (path.startsWith("/albums")) {
       return "/albums";
     }
@@ -59,6 +59,6 @@ export function useActiveRoute() {
 
   return {
     activeRoute,
-    galleryMenuRoute: computed(() => lastGalleryRoute.value || "/gallery/全部"),
+    galleryMenuRoute: computed(() => lastGalleryRoute.value || "/gallery?path=all/1"),
   };
 }

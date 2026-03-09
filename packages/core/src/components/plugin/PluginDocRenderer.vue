@@ -84,11 +84,25 @@ const normalizeDocPath = (imgPath: string): string => {
   return p;
 };
 
-const sanitizeHtml = (rawHtml: string): string =>
-  DOMPurify.sanitize(rawHtml, {
+const sanitizeHtml = (rawHtml: string): string => {
+  const sanitized = DOMPurify.sanitize(rawHtml, {
     USE_PROFILES: { html: true },
     ADD_DATA_URI_TAGS: ["img"],
   });
+
+  // 后处理：让所有链接在新窗口打开
+  return sanitized.replace(
+    /<a\s+([^>]*?)href\s*=\s*["']([^"']*)["']([^>]*?)>/gi,
+    (match, beforeHref, href, afterHref) => {
+      // 如果已经有target="_blank"，则不修改
+      if (afterHref.includes('target="_blank"') || afterHref.includes("target='_blank'")) {
+        return match;
+      }
+      // 添加target="_blank"和rel属性
+      return `<a ${beforeHref}href="${href}"${afterHref} target="_blank" rel="noopener noreferrer">`;
+    }
+  );
+};
 
 const renderMarkdown = async (
   markdown: string,
@@ -162,10 +176,21 @@ const renderMarkdown = async (
     }
   }
 
-  // 3) 使用 marked 做标准 Markdown 渲染，再进行 HTML 清洗
+  // 3) 配置 marked 渲染器，让链接在新窗口打开
+  const renderer = new marked.Renderer();
+  renderer.link = function(token) {
+    const href = token.href;
+    const title = token.title;
+    const text = this.parser.parseInline(token.tokens || []);
+    const titleAttr = title ? ` title="${title.replace(/"/g, '&quot;')}"` : '';
+    return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
+  };
+
+  // 使用 marked 做标准 Markdown 渲染，再进行 HTML 清洗
   const rawHtml = marked.parse(processed, {
     gfm: true,
     breaks: true,
+    renderer,
   }) as string;
   return sanitizeHtml(rawHtml);
 };

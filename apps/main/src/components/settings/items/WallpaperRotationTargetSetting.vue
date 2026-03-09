@@ -139,7 +139,7 @@ const handleAlbumChange = async (value: string) => {
 };
 
 const handleNavigatePickWallpaper = () => {
-  router.push("/gallery");
+  router.push({ path: "/gallery", query: { path: "all/1" } });
 };
 
 const handleRevealCurrentWallpaper = async () => {

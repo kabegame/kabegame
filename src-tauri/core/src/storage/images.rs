@@ -539,13 +539,19 @@ impl Storage {
                     }
                 }
             } else {
-                eprintln!("Failed to resolve dimensions for image {}: {}", id, local_path);
+                eprintln!(
+                    "Failed to resolve dimensions for image {}: {}",
+                    id, local_path
+                );
                 failed_count += 1;
             }
         }
 
         if updated_count > 0 {
-            println!("Filled dimensions for {} images ({} failed)", updated_count, failed_count);
+            println!(
+                "Filled dimensions for {} images ({} failed)",
+                updated_count, failed_count
+            );
         }
 
         Ok(())
@@ -726,7 +732,7 @@ impl Storage {
                         })
                 })
                 .unwrap_or_default();
-            
+
             for task_id in task_ids {
                 *task_deleted_counts.entry(task_id).or_insert(0) += 1;
             }
@@ -797,7 +803,7 @@ impl Storage {
                         })
                 })
                 .unwrap_or_default();
-            
+
             for task_id in task_ids {
                 *task_deleted_counts.entry(task_id).or_insert(0) += 1;
             }
@@ -850,7 +856,12 @@ impl Storage {
         Ok(())
     }
 
-    pub fn update_image_dimensions(&self, image_id: &str, width: u32, height: u32) -> Result<(), String> {
+    pub fn update_image_dimensions(
+        &self,
+        image_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         conn.execute(
             "UPDATE images SET width = ?1, height = ?2 WHERE id = ?3",

@@ -6,7 +6,7 @@ use axum::{
     body::Body,
     extract::Query,
     http::{
-        header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue},
+        header::{HeaderValue, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE},
         Request, StatusCode, Uri,
     },
     response::{IntoResponse, Response},
@@ -84,10 +84,7 @@ fn build_serve_dir_request(path: &str) -> Option<Request<Body>> {
 
 #[cfg(not(target_os = "android"))]
 fn mime_from_image_or_path(img: &kabegame_core::storage::ImageInfo, path: &str) -> Option<String> {
-    let from_db = img
-        .mime_type
-        .as_deref()
-        .filter(|m| !m.trim().is_empty());
+    let from_db = img.mime_type.as_deref().filter(|m| !m.trim().is_empty());
     if from_db.is_some() {
         return from_db.map(String::from);
     }
@@ -202,17 +199,6 @@ async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
         return (StatusCode::BAD_REQUEST, "only http and https are allowed").into_response();
     }
 
-    debug_log(
-        "H4",
-        "src-tauri/app-main/src/http_server.rs:191",
-        "proxy request accepted",
-        json!({
-            "url": url,
-            "scheme": scheme,
-            "host": target_uri.host().map(str::to_string),
-        }),
-    );
-
     let client = match reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::default())
         .build()
@@ -227,31 +213,9 @@ async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
         }
     };
 
-    debug_log(
-        "H1,H2,H3",
-        "src-tauri/app-main/src/http_server.rs:213",
-        "proxy request headers configuration",
-        json!({
-            "userAgentConfigured": false,
-            "refererConfigured": false,
-            "originConfigured": false,
-            "cookieStoreEnabled": false,
-        }),
-    );
-
     let upstream = match client.get(url).send().await {
         Ok(r) => r,
         Err(e) => {
-            debug_log(
-                "H4",
-                "src-tauri/app-main/src/http_server.rs:226",
-                "proxy upstream request failed",
-                json!({
-                    "url": url,
-                    "error": e.to_string(),
-                    "status": e.status().map(|s| s.as_u16()),
-                }),
-            );
             let code = e
                 .status()
                 .map(|s| s.as_u16())
@@ -261,22 +225,8 @@ async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
         }
     };
 
-    debug_log(
-        "H1,H2,H3,H4",
-        "src-tauri/app-main/src/http_server.rs:245",
-        "proxy upstream responded",
-        json!({
-            "requestedUrl": url,
-            "finalUrl": upstream.url().as_str(),
-            "status": upstream.status().as_u16(),
-            "contentType": upstream.headers().get("content-type").and_then(|v| v.to_str().ok()),
-            "server": upstream.headers().get("server").and_then(|v| v.to_str().ok()),
-            "cfRayPresent": upstream.headers().contains_key("cf-ray"),
-            "setCookiePresent": upstream.headers().contains_key("set-cookie"),
-        }),
-    );
-
-    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = StatusCode::from_u16(upstream.status().as_u16())
+        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let mut response_builder = Response::builder().status(status);
 
     // 复制部分响应头（按字符串从 reqwest 取，避免 http 版本不一致）
@@ -296,20 +246,13 @@ async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
 
     response_builder
         .body(Body::from_stream(upstream.bytes_stream()))
-        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "body build failed").into_response())
+        .unwrap_or_else(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, "body build failed").into_response()
+        })
 }
 
 #[cfg(not(target_os = "android"))]
 async fn handle_unmatched(uri: Uri) -> Response {
-    debug_log(
-        "H6,H7",
-        "src-tauri/app-main/src/http_server.rs:303",
-        "unmatched local proxy route requested",
-        json!({
-            "path": uri.path(),
-            "query": uri.query(),
-        }),
-    );
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
