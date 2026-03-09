@@ -12,6 +12,8 @@ dist-*
 !dist-main/.gitkeep
 *.local
 
+/release
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
