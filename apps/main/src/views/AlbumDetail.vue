@@ -35,7 +35,7 @@ import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Picture, Delete, Setting, Refresh, QuestionFilled, Star, StarFilled, FolderAdd, InfoFilled, DocumentCopy } from "@element-plus/icons-vue";
+import { Delete, Star, StarFilled, FolderAdd } from "@element-plus/icons-vue";
 import { createImageActions } from "@/actions/imageActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
@@ -48,7 +48,6 @@ import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyStat
 import { useUiStore } from "@kabegame/core/stores/ui";
 import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue";
 import { IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
-import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useSelectionStore } from "@kabegame/core/stores/selection";
@@ -62,13 +61,11 @@ export interface SelectionAction {
   command: string;
 }
 import { useImageOperations } from "@/composables/useImageOperations";
-import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
-import { useBigPageRoute } from "@/composables/useBigPageRoute";
+import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
-import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { useImageTypes } from "@/composables/useImageTypes";
@@ -135,36 +132,41 @@ const totalImagesCount = ref<number>(0);
 const albumViewRef = ref<any>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
 
+// 本地计算的 provider root path，用于初始化
+const localProviderRootPath = computed(() => {
+  if (!albumId.value) return "";
+  // 新格式：album/<albumId>
+  return `album/${albumId.value}`;
+});
+
 // leaf 分页：安卓与桌面统一每页 100 张，无虚拟滚动
 const BIG_PAGE_SIZE = 100;
-const { currentPage, currentOffset, jumpToPage } = useBigPageRoute({
+const {
+  currentPath,
+  currentPage,
+  currentOffset,
+  setRootAndPage,
+  navigateToPage,
+} = useProviderPathRoute({
   route,
   router,
-  baseRouteName: "AlbumDetail",
-  pagedRouteName: "AlbumDetailPaged",
-  bigPageSize: BIG_PAGE_SIZE,
-  getBaseParams: () => ({ id: albumId.value }),
-  getPagedParams: (page) => ({ id: albumId.value, page: String(page) }),
-});
-const providerRootPath = computed(() => {
-  if (!albumName.value) return "";
-  // 与 VD 路径一致：画册/<albumName>
-  return `画册/${albumName.value}`;
+  defaultPath: computed(() => `album/${albumId.value}/1`),
 });
 
 const handleJumpToPage = async (page: number) => {
-  await jumpToPage(page);
+  await navigateToPage(page);
 };
 
-// 跟随 page 变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
+// 跟随路径变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
 watch(
-  () => currentPage.value,
-  (p, prev) => {
+  () => currentPath.value,
+  async (newPath) => {
     if (!albumId.value) return;
     if (!albumName.value) return;
-    if (p === prev) return;
-    void loadAlbum({ reset: true });
-  }
+    if (!newPath) return;
+    await loadAlbum({ reset: true });
+  },
+  { immediate: true }
 );
 
 // dragScroll “太快且仍在加速”时的俏皮提示（画册开启）
@@ -301,28 +303,23 @@ const loadAlbum = async (opts?: { reset?: boolean }) => {
       leafAllImages = [];
       await nextTick();
     }
-    // 通过 provider 浏览获取 total + 当前页 leaf（<=BIG_PAGE_SIZE）
-    const root = providerRootPath.value;
-    if (!root) return;
-    const rootRes = await invoke<{ total: number }>("browse_gallery_provider", { path: root });
-    totalImagesCount.value = rootRes?.total ?? 0;
 
-    if (totalImagesCount.value <= 0) {
-      leafAllImages = [];
-      images.value = [];
+    // 直接加载当前路径（新路径格式总是包含页码）
+    const pathToLoad = currentPath.value || localProviderRootPath.value || `album/${albumId.value}/1`;
+    if (!pathToLoad.startsWith("album/") || pathToLoad.startsWith("album//")) {
       return;
     }
-
-    const leaf = buildLeafProviderPathForPage(root, totalImagesCount.value, currentPage.value);
-    const leafRes = await invoke<any>("browse_gallery_provider", { path: leaf.path });
-    const list: ImageInfo[] = (leafRes?.entries ?? [])
+    const res = await invoke<{ total?: number; baseOffset?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
+      "browse_gallery_provider",
+      { path: pathToLoad }
+    );
+    totalImagesCount.value = res?.total ?? 0;
+    const list: ImageInfo[] = (res?.entries ?? [])
       .filter((e: any) => e?.kind === "image")
       .map((e: any) => e.image as ImageInfo);
-
     leafAllImages = list;
     images.value = list;
   } finally {
-    // 获取到列表后立即结束加载状态
     loading.value = false;
   }
 };

@@ -3,21 +3,19 @@
 use async_trait::async_trait;
 use kabegame_core::crawler::TaskScheduler;
 // 事件转发到前端（桌面与 Android 均需要，用于 task-status 等）
+use crate::wallpaper::manager::WallpaperController;
+use crate::wallpaper::WallpaperRotator;
 use kabegame_core::ipc::events::DaemonEventKind;
 use kabegame_core::ipc::{DaemonEvent, EventBroadcaster};
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
+use kabegame_core::storage::Storage;
 use std::fs;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Listener, Manager};
-use crate::wallpaper::manager::WallpaperController;
-use crate::wallpaper::WallpaperRotator;
-use kabegame_core::storage::Storage;
 
 #[cfg(not(target_os = "android"))]
-use kabegame_core::crawler::downloader::{
-    BrowserDownloadState,
-};
+use kabegame_core::crawler::downloader::BrowserDownloadState;
 #[cfg(not(target_os = "android"))]
 use kabegame_core::crawler::webview::{set_webview_handler, CrawlerWebViewHandler};
 #[cfg(not(target_os = "android"))]
@@ -71,71 +69,115 @@ pub fn init_kgpg_plugin() {
     });
 }
 
-// 清理用户数据（清理后重启处理真正的清理操作）
+// 清理用户数据（清理后重启时在 init_globals 之前执行，避免 DB 已打开导致删除失败）
 #[cfg(not(target_os = "android"))]
 pub fn cleanup_user_data_if_marked() -> bool {
-    // 检查清理标记，如果存在则先清理旧数据目录
-    let cleanup_marker = kabegame_core::app_paths::AppPaths::global().cleanup_marker();
-    let app_data_dir = kabegame_core::app_paths::AppPaths::global().data_dir.clone();
+    let paths = kabegame_core::app_paths::AppPaths::global();
+    let cleanup_marker = paths.cleanup_marker();
+    let app_data_dir = paths.data_dir.clone();
+    let cache_dir = paths.cache_dir.clone();
     let is_cleaning_data = cleanup_marker.exists();
     if is_cleaning_data {
-        // 删除标记文件
+        // 先删除标记文件（在 data_dir 内，后面会一起删掉，但先删可避免重复进入）
         let _ = fs::remove_file(&cleanup_marker);
-        // 尝试删除整个数据目录
+        // 删除 data 目录（此时尚未 init_globals，无文件占用）
         if app_data_dir.exists() {
-            // 使用多次重试，因为文件可能还在被其他进程使用
-            let mut retries = 5;
-            while retries > 0 {
-                match fs::remove_dir_all(&app_data_dir) {
-                    Ok(_) => {
-                        println!("成功清理应用数据目录");
-                        break;
-                    }
-                    Err(e) => {
-                        retries -= 1;
-                        if retries == 0 {
-                            eprintln!("警告：无法完全清理数据目录，部分文件可能仍在使用中: {}", e);
-                            // 尝试删除单个文件而不是整个目录
-                            // 至少删除数据库和设置文件
-                            let _ = fs::remove_file(kabegame_core::app_paths::AppPaths::global().images_db());
-                            let _ = fs::remove_file(kabegame_core::app_paths::AppPaths::global().settings_json());
-                        } else {
-                            // 等待一段时间后重试
-                            std::thread::sleep(std::time::Duration::from_millis(200));
-                        }
-                    }
-                }
+            if let Err(e) = fs::remove_dir_all(&app_data_dir) {
+                eprintln!("警告：清理数据目录失败: {}", e);
+            } else {
+                println!("成功清理应用数据目录");
+            }
+        }
+        // 删除缓存目录（provider-cache、store-cache 等）
+        if cache_dir.exists() {
+            if let Err(e) = fs::remove_dir_all(&cache_dir) {
+                eprintln!("警告：清理缓存目录失败: {}", e);
+            } else {
+                println!("成功清理缓存目录");
             }
         }
     }
     is_cleaning_data
 }
 
-// 恢复窗口位置
-pub fn restore_main_window_state(app: &tauri::AppHandle) {
-    // 检查是否是开机启动（没有额外命令行参数，且开启了开机启动）
-    let is_auto_startup = is_auto_startup();
+#[cfg(not(target_os = "android"))]
+pub fn create_main_window(app_handle: &AppHandle) -> Result<(), String> {
+    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
-    if let Some(main_window) = app.get_webview_window("main") {
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        {
-            let _ = main_window.center();
-            if is_auto_startup {
-                // 开机启动时隐藏窗口
-                let _ = main_window.hide();
-            } else {
-                // 正常启动时显示窗口
-                let _ = main_window.show();
-            }
+    let (width, height) = if cfg!(target_os = "linux") {
+        (1600.0, 1200.0)
+    } else {
+        (1200.0, 800.0)
+    };
+    let (min_w, min_h) = if cfg!(target_os = "linux") {
+        (1200.0, 800.0)
+    } else {
+        (800.0, 600.0)
+    };
+
+    let (x, y) = match app_handle.primary_monitor() {
+        Ok(Some(monitor)) => {
+            let size = monitor.size();
+            let scale = monitor.scale_factor();
+            let mon_w = size.width as f64 / scale;
+            let mon_h = size.height as f64 / scale;
+            ((mon_w - width) / 2.0, (mon_h - height) / 2.0)
         }
-    }
+        _ => (0.0, 0.0),
+    };
+
+    let builder =
+        WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::App("index.html".into()))
+            .title("Kabegame")
+            .inner_size(width, height)
+            .min_inner_size(min_w, min_h)
+            .position(x, y)
+            .resizable(true)
+            .fullscreen(false)
+            .visible(true)
+            .transparent(!cfg!(target_os = "linux"));
+
+    // Windows/macOS: 添加窗口效果
+    #[cfg(not(target_os = "linux"))]
+    let builder = {
+        use tauri::window::{Effect, EffectState, EffectsBuilder};
+        builder.effects(
+            EffectsBuilder::new()
+                .effect(Effect::Sidebar)
+                .effect(Effect::Acrylic)
+                .state(EffectState::FollowsWindowActiveState)
+                .build(),
+        )
+    };
+
+    builder
+        .build()
+        .map_err(|e| format!("创建 main 窗口失败: {}", e))?;
+    Ok(())
+}
+/// 检测是否是开机启动（带 --minimized 时不创建/不显示主窗口）
+/// 判断逻辑：检查命令行参数中是否有 --minimized 参数
+#[cfg(not(target_os = "android"))]
+pub fn is_auto_startup() -> bool {
+    std::env::args().any(|arg| arg == "--minimized")
 }
 
-/// 检测是否是开机启动
-/// 判断逻辑：检查命令行参数中是否有 --minimized 参数
-fn is_auto_startup() -> bool {
-    // 检查命令行参数中是否有 --minimized 参数
-    std::env::args().any(|arg| arg == "--minimized")
+/// 若主窗口不存在则创建，然后显示并聚焦。用于托盘点击、IPC AppShowWindow 等“显示窗口”场景。
+#[cfg(not(target_os = "android"))]
+pub fn ensure_main_window(app_handle: AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(w) = app_handle.get_webview_window("main") {
+        let _ = w.center();
+        w.show().map_err(|e| format!("显示主窗口失败: {}", e))?;
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    create_main_window(&app_handle)?;
+    if let Some(w) = app_handle.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    Ok(())
 }
 
 // 壁纸组件，壁纸设置、轮播等功能
@@ -274,9 +316,38 @@ pub fn start_local_event_loop(app: AppHandle) {
     });
 }
 
+/// 在 AppPaths 尚未初始化时独立计算 data_dir 并检查 `.cleanup_marker` 是否存在。
+/// 用于 `try_forward_to_existing_instance_and_exit` 跳过清理重启时的单例检测。
+#[cfg(not(target_os = "android"))]
+fn is_cleanup_restart() -> bool {
+    use kabegame_core::app_paths::{is_dev, repo_root_dir};
+
+    let data_dir = if is_dev() {
+        if let Some(repo_root) = repo_root_dir() {
+            repo_root.join("data")
+        } else {
+            match dirs::data_local_dir().or_else(dirs::data_dir) {
+                Some(d) => d.join("Kabegame"),
+                None => return false,
+            }
+        }
+    } else {
+        match dirs::data_local_dir().or_else(dirs::data_dir) {
+            Some(d) => d.join("Kabegame"),
+            None => return false,
+        }
+    };
+    data_dir.join(".cleanup_marker").exists()
+}
+
 /// 单例检测：若已有实例在运行则通过 IPC 转发请求并退出，仅在桌面端、在 setup 最早阶段调用（早于 init_shortcut）。
 #[cfg(not(target_os = "android"))]
 pub fn try_forward_to_existing_instance_and_exit() {
+    if is_cleanup_restart() {
+        println!("[IPC] 检测到清理重启标记，跳过单例检测");
+        return;
+    }
+
     use kabegame_core::ipc::ipc::{request, CliIpcRequest};
 
     let rt = match tokio::runtime::Runtime::new() {
@@ -290,9 +361,7 @@ pub fn try_forward_to_existing_instance_and_exit() {
     println!("[IPC] 检测到已有实例在运行，转发请求并退出...");
     let _ = rt.block_on(request(CliIpcRequest::AppShowWindow));
     if let Some(path) = extract_kgpg_file_from_args() {
-        let _ = rt.block_on(request(CliIpcRequest::AppImportPlugin {
-            kgpg_path: path,
-        }));
+        let _ = rt.block_on(request(CliIpcRequest::AppImportPlugin { kgpg_path: path }));
     }
     std::process::exit(0);
 }
@@ -359,35 +428,31 @@ pub fn start_download_workers() {
 }
 
 #[cfg(not(target_os = "android"))]
-pub fn create_crawler_window(app: &mut tauri::App) -> Result<(), String> {
-    if app.get_webview_window("crawler").is_some() {
+pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
+    if app_handle.get_webview_window("crawler").is_some() {
         return Ok(());
     }
 
     use tauri::{WebviewUrl, WebviewWindowBuilder};
-    let bootstrap_path = kabegame_core::app_paths::AppPaths::global()
-        .resource_dir
-        .join("bootstrap.js");
-    let script = fs::read_to_string(&bootstrap_path).map_err(|e| {
-        format!(
-            "无法读取 crawler bootstrap 脚本 {}: {}",
-            bootstrap_path.display(),
-            e
-        )
-    })?;
+    // 编译时嵌入 bootstrap.js（从 resources 目录读取）
+    let script = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/resources/bootstrap.js"
+    ));
     let about_blank = url::Url::parse("about:blank").map_err(|e| e.to_string())?;
-    WebviewWindowBuilder::new(app, "crawler", WebviewUrl::External(about_blank))
+    WebviewWindowBuilder::new(&app_handle, "crawler", WebviewUrl::External(about_blank))
         .title("Kabegame Crawler")
         .visible(false)
         .skip_taskbar(true)
         .resizable(false)
         .inner_size(1920.0, 1080.0)
-        .initialization_script(script.as_str())
+        .initialization_script(script)
         .on_page_load(move |_webview, _payload| {})
-        .on_download(|_webview, event| {
-            match event {
+        .on_download(|_webview, event| match event {
             DownloadEvent::Requested { url, destination } => {
-                if let Some(dest) = BrowserDownloadState::global().resolve_destination_by_blob_url(url.as_str()) {
+                if let Some(dest) =
+                    BrowserDownloadState::global().resolve_destination_by_blob_url(url.as_str())
+                {
                     *destination = dest;
                     true
                 } else {
@@ -395,12 +460,15 @@ pub fn create_crawler_window(app: &mut tauri::App) -> Result<(), String> {
                 }
             }
             DownloadEvent::Finished { url, path, success } => {
-                let _ = BrowserDownloadState::global()
-                    .signal_completion_by_blob_url(url.as_str(), path.clone(), success);
+                let _ = BrowserDownloadState::global().signal_completion_by_blob_url(
+                    url.as_str(),
+                    path.clone(),
+                    success,
+                );
                 true
             }
             _ => true,
-        }})
+        })
         .build()
         .map_err(|e| format!("创建 crawler 窗口失败: {}", e))?;
     Ok(())
@@ -412,19 +480,23 @@ pub fn init_crawler_webview_handler(app_handle: AppHandle) -> Result<(), String>
     set_webview_handler(handler)
 }
 
+#[cfg(not(target_os = "android"))]
+pub fn init_crawler_window(app_handle: AppHandle) {
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(e) = create_crawler_window(app_handle.clone()) {
+            eprintln!("Failed to create crawler window: {}", e);
+        }
+        if let Err(e) = init_crawler_webview_handler(app_handle) {
+            eprintln!("Failed to init crawler webview handler: {}", e);
+        }
+    });
+}
+
 /// 启动 TaskScheduler（启动 DownloadQueue 的 worker）
 pub fn start_task_scheduler() {
     tauri::async_runtime::spawn(async {
         TaskScheduler::global().start_download_workers_async().await;
     });
-}
-
-#[cfg(not(target_os = "android"))]
-pub fn init_shortcut(_app: &tauri::App) -> Result<(), String> {
-    // F11 全屏不再使用全局快捷键，避免占用用户在其他应用（如浏览器）中按 F11。
-    // 桌面端在应用窗口获得焦点时由前端监听 keydown F11 并调用 toggle_fullscreen。
-    // macOS 使用系统自带的 Control + Command + F 全屏快捷键。
-    Ok(())
 }
 
 /// 启动时初始化"当前壁纸"并按规则回退/降级
@@ -485,14 +557,19 @@ pub fn init_bundled_plugins<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         let target_dir = builtin_dir.to_string_lossy().to_string();
         let picker = app.picker();
         match picker.extract_bundled_plugins(target_dir).await {
-            Ok(r) => println!("Extracted {} bundled plugins to {}", r.count, builtin_dir.display()),
+            Ok(r) => println!(
+                "Extracted {} bundled plugins to {}",
+                r.count,
+                builtin_dir.display()
+            ),
             Err(e) => eprintln!("Failed to extract bundled plugins: {}", e),
         }
     });
 }
 
 /// 初始化预置插件（桌面平台）
-/// 如果用户插件目录缺少资源目录中的插件，则复制过去（与「内置」概念解耦，仅作为预置资源处理）
+/// 将资源目录中的 .kgpg 迁移到用户插件目录：若用户目录没有该插件则移动过去，若已有则直接删除资源文件。不复制、无覆盖，之后仅从用户目录加载插件。
+/// 开发模式下不执行迁移/移除，保留资源目录中的 .kgpg 便于调试。
 #[cfg(not(target_os = "android"))]
 pub fn init_resource_plugins() {
     tauri::async_runtime::spawn(async move {
@@ -514,7 +591,7 @@ pub fn init_resource_plugins() {
             return;
         }
 
-        // 读取资源目录中的所有 .kgpg 文件
+        // 读取资源目录中的所有 .kgpg 文件（先收集再处理，避免边遍历边删）
         let entries = match std::fs::read_dir(&resource_plugins_dir) {
             Ok(entries) => entries,
             Err(e) => {
@@ -523,7 +600,7 @@ pub fn init_resource_plugins() {
             }
         };
 
-        let mut copied_count = 0;
+        let mut kgpg_paths: Vec<std::path::PathBuf> = Vec::new();
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
@@ -532,35 +609,67 @@ pub fn init_resource_plugins() {
                     continue;
                 }
             };
-
             let path = entry.path();
-            if !path.extension().map_or(false, |ext| ext == "kgpg") {
-                continue;
+            if path.extension().map_or(false, |ext| ext == "kgpg") {
+                if path.file_name().is_some() {
+                    kgpg_paths.push(path);
+                }
             }
+        }
 
+        let mut moved_count = 0;
+        let mut removed_count = 0;
+        for path in kgpg_paths {
             let file_name = match path.file_name() {
-                Some(name) => name,
+                Some(name) => name.to_owned(),
                 None => continue,
             };
+            let target_path = user_plugins_dir.join(&file_name);
 
-            let target_path = user_plugins_dir.join(file_name);
-
-            // 如果目标文件不存在，则复制
             if !target_path.exists() {
-                match std::fs::copy(&path, &target_path) {
+                // 用户目录没有：移动过去
+                match std::fs::rename(&path, &target_path) {
                     Ok(_) => {
-                        copied_count += 1;
-                        println!("Copied resource plugin: {}", file_name.to_string_lossy());
+                        moved_count += 1;
+                        println!("Moved resource plugin: {}", file_name.to_string_lossy());
                     }
                     Err(e) => {
-                        eprintln!("Failed to copy resource plugin {}: {}", file_name.to_string_lossy(), e);
+                        eprintln!(
+                            "Failed to move resource plugin {}: {}",
+                            file_name.to_string_lossy(),
+                            e
+                        );
+                    }
+                }
+            } else {
+                if kabegame_core::app_paths::is_dev() {
+                    continue;
+                }
+                // 用户目录已有：直接删除资源文件
+                match std::fs::remove_file(&path) {
+                    Ok(_) => {
+                        removed_count += 1;
+                        println!(
+                            "Removed duplicate resource plugin (user has): {}",
+                            file_name.to_string_lossy()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Failed to remove resource plugin {}: {}",
+                            file_name.to_string_lossy(),
+                            e
+                        );
                     }
                 }
             }
         }
 
-        if copied_count > 0 {
-            println!("Initialized {} resource plugins to user directory", copied_count);
+        if moved_count > 0 || removed_count > 0 {
+            println!(
+                "Resource plugins: {} moved to user dir, {} removed (user already had)",
+                moved_count, removed_count
+            );
         }
     });
 }

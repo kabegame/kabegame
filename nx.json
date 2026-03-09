@@ -23,17 +23,9 @@
       { "env": "TAURI_PLATFORM" },
       { "env": "TAURI_DEBUG" }
     ],
-    "frontendCli": [
-      "{workspaceRoot}/apps/cli/**/*",
-      "{workspaceRoot}/packages/core/**/*",
-      "{workspaceRoot}/package.json",
-      "{workspaceRoot}/bun.lock",
-      "frontendEnv",
-      "default"
-    ],
     "frontendMain": [
       "{workspaceRoot}/apps/main/**/*",
-      "{workspaceRoot}/packages/core/**/*",
+      "{workspaceRoot}/packages/*/src/**/*",
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",
       "frontendEnv",

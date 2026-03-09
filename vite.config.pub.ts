@@ -1,17 +1,19 @@
 import { UserConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import path from "path";
-import UnoCSS from 'unocss/vite';
+import UnoCSS from "unocss/vite";
 import { getDevServerHost } from "./scripts/utils";
 
 export const root = __dirname;
 
 // 判断是否为 Windows 平台（窗口模式仅在 Windows 可用）
 export const isWindows = process.platform === "win32";
-export const isLinux = process.platform === 'linux';
-export const isMacOS = process.platform === 'darwin';
+export const isLinux = process.platform === "linux";
+export const isMacOS = process.platform === "darwin";
 // 是否为 Android 构建（Tauri 构建时设置 TAURI_PLATFORM，或通过 VITE_ANDROID 显式指定）
-export const isAndroid = process.env.TAURI_PLATFORM === 'android' || process.env.VITE_ANDROID === 'true';
+export const isAndroid =
+  process.env.TAURI_PLATFORM === "android" ||
+  process.env.VITE_ANDROID === "true";
 
 // 判断桌面环境（从 VITE_DESKTOP 环境变量读取）
 export const desktop = process.env.VITE_DESKTOP || "";
@@ -19,10 +21,7 @@ export const desktop = process.env.VITE_DESKTOP || "";
 export const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
 
 export default {
-  plugins: [
-    vue(),
-    UnoCSS(),
-  ],
+  plugins: [vue(), UnoCSS()],
 
   define: {
     __DEV__: process.env.NODE_ENV === "development",
@@ -33,7 +32,7 @@ export default {
     __DESKTOP__: JSON.stringify(desktop),
     __LIGHT_MODE__: isAndroid || isLightMode,
     // 切换此开关来强制重启vite服务器
-    __REBOOT__: false,
+    __REBOOT__: true,
   },
 
   // 使用 apps/main/public 作为 public 目录（main app 专用）
@@ -79,9 +78,7 @@ export default {
 
   envPrefix: ["VITE_", "TAURI_"],
   optimizeDeps: {
-    entries: [
-      path.resolve(process.cwd(), "index.html"),
-    ],
+    entries: [path.resolve(process.cwd(), "index.html")],
     // 不预构建本地 photoswipe-reactive，始终从源码编译，改包内代码立即生效
     exclude: ["photoswipe", "photoswipe/lightbox"],
   },
@@ -100,7 +97,7 @@ export default {
       output: {
         inlineDynamicImports: true,
         manualChunks: undefined,
-      }
+      },
     },
   },
 } satisfies UserConfig;

@@ -192,9 +192,9 @@ pub fn run() {
 
     let app = builder
         .setup(|app| {
-            // 设置全局快捷键
+            // 若有清理标记，必须在 init_globals 之前清理 data/cache，否则 DB 等已打开无法删除
             #[cfg(not(target_os = "android"))]
-            init_shortcut(app).unwrap();
+            let _ = cleanup_user_data_if_marked();
 
             // 启动内置 Backend（安卓与桌面共用 init_globals，用编译开关区分平台差异）
             match init_globals() {
@@ -207,20 +207,15 @@ pub fn run() {
 
                     // 公共步骤
                     start_local_event_loop(app.app_handle().clone());
-                    // 清理用户数据
+                    // 命令行带 --minimized 时不创建主窗口，避免窗口闪现；托盘/IPC 显示时由 ensure_main_window 再创建
                     #[cfg(not(target_os = "android"))]
-                    cleanup_user_data_if_marked();
-                    // 恢复窗口状态（当前实现仅将窗口居屏幕中央）
-                    #[cfg(not(target_os = "android"))]
-                    restore_main_window_state(app.app_handle());
-                    #[cfg(not(target_os = "android"))]
-                    if let Err(e) = create_crawler_window(app) {
-                        return Err(Box::new(std::io::Error::other(e)));
+                    if !startup::is_auto_startup() {
+                        if let Err(e) = create_main_window(&app.app_handle()) {
+                            return Err(Box::new(std::io::Error::other(e)));
+                        }
                     }
                     #[cfg(not(target_os = "android"))]
-                    if let Err(e) = init_crawler_webview_handler(app.app_handle().clone()) {
-                        return Err(Box::new(std::io::Error::other(e)));
-                    }
+                    init_crawler_window(app.app_handle().clone());
                     // 初始化壁纸控制器
                     init_wallpaper_controller(app);
                     // 启动 TaskScheduler（启动 DownloadQueue 的 worker）

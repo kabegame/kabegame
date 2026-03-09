@@ -26,22 +26,41 @@ const LEAF_SIZE: usize = 100;
 /// 每个分组目录最多包含的子目录数量
 const GROUP_SIZE: usize = 10;
 
+/// 分页模式枚举
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PaginationMode {
+    /// 贪心分解模式（原有 VD 方式）
+    Greedy,
+    /// 简单页码模式（新 MainProvider 方式）
+    SimplePage,
+}
+
 /// 全部图片 Provider - 支持自定义查询条件
 #[derive(Clone)]
 pub struct CommonProvider {
     query: ImageQuery,
+    mode: PaginationMode,
 }
 
 impl CommonProvider {
     pub fn new() -> Self {
         Self {
             query: ImageQuery::all_recent(),
+            mode: PaginationMode::Greedy,
         }
     }
 
-    /// 使用自定义查询条件创建 Provider
+    /// 使用自定义查询条件创建 Provider（贪心模式，默认）
     pub fn with_query(query: ImageQuery) -> Self {
-        Self { query }
+        Self {
+            query,
+            mode: PaginationMode::Greedy,
+        }
+    }
+
+    /// 使用自定义查询条件和分页模式创建 Provider
+    pub fn with_query_and_mode(query: ImageQuery, mode: PaginationMode) -> Self {
+        Self { query, mode }
     }
 }
 
@@ -52,65 +71,112 @@ impl Default for CommonProvider {
 }
 
 impl Provider for CommonProvider {
+    fn resolve_child(&self, name: &str) -> crate::providers::provider::ResolveChild {
+        if let PaginationMode::SimplePage = self.mode {
+            // SimplePage 模式：解析页码字符串
+            if let Ok(page) = name.parse::<usize>() {
+                if page > 0 {
+                    return crate::providers::provider::ResolveChild::Dynamic(
+                        Arc::new(SimplePageProvider::new(self.query.clone(), page)) as Arc<dyn Provider>
+                    );
+                }
+            }
+        }
+        // 其他情况使用默认实现
+        crate::providers::provider::ResolveChild::NotFound
+    }
     fn descriptor(&self) -> ProviderDescriptor {
-        ProviderDescriptor::All {
-            query: self.query.clone(),
+        match self.mode {
+            PaginationMode::Greedy => ProviderDescriptor::All {
+                query: self.query.clone(),
+            },
+            PaginationMode::SimplePage => ProviderDescriptor::SimpleAll {
+                query: self.query.clone(),
+            },
         }
     }
 
     fn list(&self) -> Result<Vec<FsEntry>, String> {
-        let total = Storage::global().get_images_count_by_query(&self.query)?;
-        if total == 0 {
-            return Ok(Vec::new());
-        }
+        match self.mode {
+            PaginationMode::Greedy => {
+                let total = Storage::global().get_images_count_by_query(&self.query)?;
+                if total == 0 {
+                    return Ok(Vec::new());
+                }
 
-        let mut entries: Vec<FsEntry> = if total <= LEAF_SIZE {
-            // 直接显示图片
-            let files = Storage::global().get_images_fs_entries_by_query(&self.query, 0, total)?;
-            files
-                .into_iter()
-                .map(|e| FsEntry::file(e.file_name, e.image_id, PathBuf::from(e.resolved_path)))
-                .collect()
-        } else {
-            // 使用贪心分解策略列出子目录 + 剩余文件
-            list_greedy_subdirs_with_remainder(&self.query, 0, total)?
-        };
+                let mut entries: Vec<FsEntry> = if total <= LEAF_SIZE {
+                    // 直接显示图片
+                    let files = Storage::global().get_images_fs_entries_by_query(&self.query, 0, total)?;
+                    files
+                        .into_iter()
+                        .map(|e| FsEntry::file(e.file_name, e.image_id, PathBuf::from(e.resolved_path)))
+                        .collect()
+                } else {
+                    // 使用贪心分解策略列出子目录 + 剩余文件
+                    list_greedy_subdirs_with_remainder(&self.query, 0, total)?
+                };
 
-        // 仅「全部」正序时展示「倒序」子目录入口，避免 全部/倒序 下再出现 倒序
-        if self.query.is_all_recent_asc() {
-            entries.insert(0, FsEntry::dir("倒序"));
+                // 仅「全部」正序时展示「倒序」子目录入口，避免 全部/倒序 下再出现 倒序
+                if self.query.is_all_recent_asc() {
+                    entries.insert(0, FsEntry::dir("倒序"));
+                }
+                Ok(entries)
+            }
+            PaginationMode::SimplePage => {
+                let mut entries = Vec::new();
+
+                // SimplePage 模式：只显示 "desc" 目录（如果适用），页码通过 resolve_child 动态处理
+                if self.query.is_all_recent_asc() {
+                    entries.push(FsEntry::dir("desc"));
+                }
+
+                Ok(entries)
+            }
         }
-        Ok(entries)
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
-        // 「全部」正序下提供「倒序」子节点；倒序 provider 不再有「倒序」子节点
-        if name == "倒序" && self.query.is_all_recent_asc() {
-            return Some(Arc::new(CommonProvider::with_query(ImageQuery::all_recent_desc())));
+        match self.mode {
+            PaginationMode::Greedy => {
+                // 「全部」正序下提供「倒序」子节点；倒序 provider 不再有「倒序」子节点
+                if name == "倒序" && self.query.is_all_recent_asc() {
+                    return Some(Arc::new(CommonProvider::with_query(ImageQuery::all_recent_desc())));
+                }
+
+                let total = Storage::global().get_images_count_by_query(&self.query).ok()?;
+                if total == 0 || total <= LEAF_SIZE {
+                    return None;
+                }
+
+                // 解析范围名称
+                let (offset, count) = parse_range(name)?;
+
+                // 验证范围是否在贪心分解的结果中
+                if !validate_greedy_range(offset, count, total) {
+                    return None;
+                }
+
+                // 计算该范围的深度
+                let depth = calc_depth_for_size(count);
+
+                Some(Arc::new(RangeProvider::new(
+                    self.query.clone(),
+                    offset,
+                    count,
+                    depth,
+                )))
+            }
+            PaginationMode::SimplePage => {
+                // SimplePage 模式：只支持 "desc" 子目录
+                if name == "desc" && self.query.is_all_recent_asc() {
+                    return Some(Arc::new(CommonProvider::with_query_and_mode(
+                        ImageQuery::all_recent_desc(),
+                        PaginationMode::SimplePage,
+                    )));
+                }
+                None
+            }
         }
-
-        let total = Storage::global().get_images_count_by_query(&self.query).ok()?;
-        if total == 0 || total <= LEAF_SIZE {
-            return None;
-        }
-
-        // 解析范围名称
-        let (offset, count) = parse_range(name)?;
-
-        // 验证范围是否在贪心分解的结果中
-        if !validate_greedy_range(offset, count, total) {
-            return None;
-        }
-
-        // 计算该范围的深度
-        let depth = calc_depth_for_size(count);
-
-        Some(Arc::new(RangeProvider::new(
-            self.query.clone(),
-            offset,
-            count,
-            depth,
-        )))
     }
 
     fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
@@ -384,4 +450,41 @@ fn list_greedy_subdirs_with_remainder(
     }
 
     Ok(entries)
+}
+
+/// SimplePageProvider - 简单页码模式的叶子 provider
+/// 直接返回 offset=(page-1)*100, count=100 的图片
+pub struct SimplePageProvider {
+    query: ImageQuery,
+    page: usize,
+}
+
+impl SimplePageProvider {
+    pub fn new(query: ImageQuery, page: usize) -> Self {
+        Self { query, page }
+    }
+}
+
+impl Provider for SimplePageProvider {
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor::SimplePage {
+            query: self.query.clone(),
+            page: self.page,
+        }
+    }
+
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        // 计算 offset 和 count
+        let offset = (self.page - 1) * LEAF_SIZE;
+        let count = LEAF_SIZE;
+
+        // 获取图片文件条目
+        let files = Storage::global().get_images_fs_entries_by_query(&self.query, offset, count)?;
+        let entries = files
+            .into_iter()
+            .map(|e| FsEntry::file(e.file_name, e.image_id, PathBuf::from(e.resolved_path)))
+            .collect();
+
+        Ok(entries)
+    }
 }

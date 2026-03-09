@@ -4,33 +4,22 @@
             <el-skeleton :rows="8" animated />
         </div>
         <ImageGrid v-else ref="taskViewRef" class="detail-body" :images="images"
-            :enable-ctrl-wheel-adjust-columns="!IS_ANDROID"
-            :enable-ctrl-key-adjust-columns="!IS_ANDROID"
-            :enable-virtual-scroll="!IS_ANDROID"
-            :actions="imageActions"
-            :on-context-command="handleImageMenuCommand"
+            :enable-ctrl-wheel-adjust-columns="!IS_ANDROID" :enable-ctrl-key-adjust-columns="!IS_ANDROID"
+            :enable-virtual-scroll="!IS_ANDROID" :actions="imageActions" :on-context-command="handleImageMenuCommand"
             @retry-download="handleRetryDownload">
             <template #before-grid>
-                <TaskDetailPageHeader
-                  :task-name="taskName"
-                  :task-subtitle="taskSubtitle"
-                  :show-stop-task="shouldShowStopButton"
-                  @refresh="handleRefresh"
-                  @stop-task="handleStopTask"
-                  @delete-task="handleDeleteTask"
-                  @add-to-album="handleHeaderAddToAlbum"
-                  @help="openHelpDrawer"
-                  @quick-settings="openQuickSettings"
-                  @back="goBack"
-                />
+                <TaskDetailPageHeader :task-name="taskName" :task-subtitle="taskSubtitle"
+                    :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
+                    @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
+                    @quick-settings="openQuickSettings" @back="goBack" />
 
                 <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
                     :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToPage" />
             </template>
         </ImageGrid>
 
-        <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds"
-            :task-id="addToAlbumTaskId" @added="handleAddedToAlbum" />
+        <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" :task-id="addToAlbumTaskId"
+            @added="handleAddedToAlbum" />
 
         <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
             :message="removeDialogMessage" title="确认删除" :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
@@ -63,19 +52,18 @@ import type { Component } from "vue";
 
 // 选择操作项类型（用于本页选择栏）
 export interface SelectionAction {
-  key: string;
-  label: string;
-  icon: Component;
-  command: string;
+    key: string;
+    label: string;
+    icon: Component;
+    command: string;
 }
 import { useImageOperations } from "@/composables/useImageOperations";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { buildLeafProviderPathForPage } from "@/utils/gallery-provider-path";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
-import { useBigPageRoute } from "@/composables/useBigPageRoute";
+import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID } from "@kabegame/core/env";
@@ -110,7 +98,7 @@ const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotati
 
 const isOnTaskRoute = computed(() => {
     const n = String(route.name ?? "");
-    return n === "TaskDetail" || n === "TaskDetailPaged";
+    return n === "TaskDetail";
 });
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
@@ -138,9 +126,9 @@ const shouldShowStopButton = computed(() => {
 const loading = ref(false);
 const isRefreshing = ref(false);
 const pullToRefreshOpts = computed(() =>
-  !IS_ANDROID
-    ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
-    : undefined
+    !IS_ANDROID
+        ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
+        : undefined
 );
 const images = ref<ImageInfo[]>([]);
 const failedImages = ref<TaskFailedImage[]>([]);
@@ -153,11 +141,11 @@ const retryingFailedIds = ref(new Map<number, string>()); // failedId -> url
 
 useImageGridAutoLoad({
     containerRef: taskContainerRef,
-    onLoad: () => {},
+    onLoad: () => { },
 });
 
 // Image actions for context menu / action sheet
-const imageActions = computed(() => createImageActions({ 
+const imageActions = computed(() => createImageActions({
     removeText: "删除",
     multiHide: ["favorite", "addToAlbum"]
 }));
@@ -185,6 +173,7 @@ const currentTime = ref<number>(Date.now());
 let timeUpdateInterval: number | null = null;
 let unlistenTaskProgress: (() => void) | null = null;
 let unlistenDownloadState: (() => void) | null = null;
+let unlistenTaskStatus: (() => void) | null = null;
 
 const taskSubtitle = computed(() => {
     const parts: string[] = [];
@@ -198,8 +187,13 @@ const taskSubtitle = computed(() => {
         parts.push(`已删除 ${taskInfo.value.deletedCount} 张`);
     }
     if (taskInfo.value?.startTime) {
-        // 如果任务正在运行且没有结束时间，使用 currentTime 来实时更新
-        const duration = formatDuration(taskInfo.value.startTime, taskInfo.value.endTime, currentTime.value);
+        // 仅当任务仍在运行时才用 currentTime 实时更新；结束后用 endTime 固定显示
+        const isRunning = taskStatusFromStore.value === "running";
+        const duration = formatDuration(
+            taskInfo.value.startTime,
+            taskInfo.value.endTime,
+            isRunning ? currentTime.value : undefined
+        );
         parts.push(duration);
     }
     return parts.join(" · ") || "";
@@ -263,64 +257,57 @@ const handleRefresh = async () => {
     }
 };
 
+// 本地计算的 provider root path，用于初始化
+const localProviderRootPath = computed(() => {
+    if (!taskId.value) return "";
+    return `task/${taskId.value}`;
+});
+
 // leaf 分页：安卓与桌面统一每页 100 张，无虚拟滚动
 const BIG_PAGE_SIZE = 100;
-const { currentPage, currentOffset, jumpToPage } = useBigPageRoute({
+const {
+    currentPath,
+    currentPage,
+    currentOffset,
+    setRootAndPage,
+    navigateToPage,
+} = useProviderPathRoute({
     route,
     router,
-    baseRouteName: "TaskDetail",
-    pagedRouteName: "TaskDetailPaged",
-    bigPageSize: BIG_PAGE_SIZE,
-    getBaseParams: () => ({ id: taskId.value }),
-    getPagedParams: (page) => ({ id: taskId.value, page: String(page) }),
+    defaultPath: computed(() => `task/${taskId.value}/1`),
 });
 
 const handleJumpToPage = async (page: number) => {
-    await jumpToPage(page);
+    await navigateToPage(page);
 };
 
-// 跟随 page 变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
+// 跟随路径变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
 watch(
-    () => currentPage.value,
-    (p, prev) => {
+    () => currentPath.value,
+    async (newPath) => {
         if (!isOnTaskRoute.value) return;
         if (!taskId.value) return;
-        if (p === prev) return;
-        void loadTaskImages({ showSkeleton: false });
-    }
+        if (!newPath) return;
+        await loadTaskImages({ showSkeleton: false });
+    },
+    { immediate: true }
 );
-
-const providerRootPath = computed(() => {
-    if (!taskId.value) return "";
-    return `按任务/${taskId.value}`;
-});
 
 const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
     if (!taskId.value) return;
     const showSkeleton = options?.showSkeleton ?? true;
     if (showSkeleton) loading.value = true;
-    let imgs: ImageInfo[] = [];
     try {
-        // 统一走 provider-path 浏览（与 VD 一致）：按任务/<taskId>[/range...]
-        const root = providerRootPath.value;
-        if (root) {
-            const probe = await invoke<any>("browse_gallery_provider", { path: root });
-            const total = (probe?.total ?? 0) as number;
-            totalImagesCount.value = total;
-            if (total <= 0) {
-                imgs = [];
-            } else if (total <= BIG_PAGE_SIZE) {
-                imgs = (probe?.entries ?? [])
-                    .filter((e: any) => e?.kind === "image")
-                    .map((e: any) => e.image as ImageInfo);
-            } else {
-                const leaf = buildLeafProviderPathForPage(root, total, currentPage.value);
-                const leafRes = await invoke<any>("browse_gallery_provider", { path: leaf.path });
-                imgs = (leafRes?.entries ?? [])
-                    .filter((e: any) => e?.kind === "image")
-                    .map((e: any) => e.image as ImageInfo);
-            }
-        }
+        // 直接加载当前路径（新路径格式总是包含页码）
+        const pathToLoad = currentPath.value || localProviderRootPath.value || `task/${taskId.value}/1`;
+        const res = await invoke<{ total?: number; baseOffset?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
+            "browse_gallery_provider",
+            { path: pathToLoad }
+        );
+        totalImagesCount.value = res?.total ?? 0;
+        const imgs: ImageInfo[] = (res?.entries ?? [])
+            .filter((e: any) => e?.kind === "image")
+            .map((e: any) => e.image as ImageInfo);
         // 同步拉取失败图片并合并到同一网格：
         // - 初始显示顺序：按 order 升序（任务开始下载的顺序）
         // - 之后成功下载：由 images-change 触发刷新
@@ -676,20 +663,20 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
 
 // Android 选择模式：构建操作栏 actions
 const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<string>): SelectionAction[] => {
-  const countText = selectedCount > 1 ? `(${selectedCount})` : "";
-  const firstSelectedImage = images.value.find(img => selectedIds.has(img.id));
-  const isFavorite = firstSelectedImage?.favorite ?? false;
-  
-  if (selectedCount === 1) {
-    return [
-      { key: "favorite", label: isFavorite ? "取消收藏" : "收藏", icon: isFavorite ? StarFilled : Star, command: "favorite" },
-      { key: "remove", label: "删除", icon: Delete, command: "remove" },
-    ];
-  } else {
-    return [
-      { key: "remove", label: `删除${countText}`, icon: Delete, command: "remove" },
-    ];
-  }
+    const countText = selectedCount > 1 ? `(${selectedCount})` : "";
+    const firstSelectedImage = images.value.find(img => selectedIds.has(img.id));
+    const isFavorite = firstSelectedImage?.favorite ?? false;
+
+    if (selectedCount === 1) {
+        return [
+            { key: "favorite", label: isFavorite ? "取消收藏" : "收藏", icon: isFavorite ? StarFilled : Star, command: "favorite" },
+            { key: "remove", label: "删除", icon: Delete, command: "remove" },
+        ];
+    } else {
+        return [
+            { key: "remove", label: `删除${countText}`, icon: Delete, command: "remove" },
+        ];
+    }
 };
 
 
@@ -754,7 +741,7 @@ const handleImageMenuCommand = async (
                         ElMessage.error("图片路径不存在");
                         break;
                     }
-                    
+
                     const ext = filePath.split('.').pop()?.toLowerCase() || '';
                     await loadImageTypes();
                     const mimeType = getMimeTypeForImage(image, ext);
@@ -790,15 +777,15 @@ const handleImageMenuCommand = async (
             void (async () => {
                 try {
                     const imageIds = imagesToProcess.map(img => img.id);
-                    
+
                     // 不删除文件，只从任务中移除
                     await crawlerStore.batchRemoveImages(imageIds);
-                    
+
                     // 更新本地状态
                     const ids = new Set(imageIds);
                     images.value = images.value.filter((img) => !ids.has(img.id));
                     clearSelection();
-                    
+
                     // 重新加载任务信息以获取最新的 deletedCount
                     await loadTaskInfo();
                 } catch (error) {
@@ -906,6 +893,19 @@ const startTimersAndListeners = async () => {
             await syncFailedPlaceholdersIncremental();
         });
     }
+
+    // 监听任务状态：当任务结束（取消/完成/失败）时停止计时并刷新 taskInfo，使 header 显示固定运行时间
+    if (!unlistenTaskStatus) {
+        unlistenTaskStatus = await listen("task-status", async (event) => {
+            const payload: any = event.payload as any;
+            const tid = String(payload?.task_id ?? "").trim();
+            if (!tid || tid !== taskId.value) return;
+            const status = String(payload?.status ?? "").trim();
+            if (status === "running") return;
+            stopTimers();
+            await loadTaskInfo();
+        });
+    }
 };
 
 // 清理定时器的函数（页面失活时调用，节省资源）
@@ -930,6 +930,10 @@ const stopTimersAndListeners = () => {
     if (unlistenDownloadState) {
         unlistenDownloadState();
         unlistenDownloadState = null;
+    }
+    if (unlistenTaskStatus) {
+        unlistenTaskStatus();
+        unlistenTaskStatus = null;
     }
 };
 
@@ -992,7 +996,7 @@ onDeactivated(() => {
     stopTimersAndListeners();
     // 页面失活时清空选择
     desktopSelectionStore.selectedIds = new Set();
-  });
+});
 
 </script>
 

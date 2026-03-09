@@ -5,6 +5,16 @@ use serde::{Deserialize, Serialize};
 use crate::storage::gallery::ImageQuery;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MainGroupKind {
+    Plugin,
+    Date,
+    DateRange,
+    Album,
+    Task,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ProviderDescriptor {
     Root,
@@ -31,5 +41,20 @@ pub enum ProviderDescriptor {
         offset: usize,
         count: usize,
         depth: usize,
+    },
+
+    /// 新增：MainProvider 体系（简单分页）
+    MainRoot,
+    MainGroup {
+        kind: MainGroupKind,
+    },
+    /// SimplePage 模式的 CommonProvider（直接分页，无贪心分解）
+    SimpleAll {
+        query: ImageQuery,
+    },
+    /// 叶子页：直接返回 offset=(page-1)*100, count=100 的图片
+    SimplePage {
+        query: ImageQuery,
+        page: usize,
     },
 }

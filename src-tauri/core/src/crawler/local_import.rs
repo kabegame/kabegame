@@ -6,9 +6,9 @@
 //! On Android, content:// URIs are processed via ContentIoProvider (listContentChildren,
 //! isDirectory, getMimeType).
 
+use crate::crawler::archiver::ArchiveProcessor;
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
-use crate::crawler::archiver::ArchiveProcessor;
 use crate::crawler::downloader::DownloadQueue;
 use crate::emitter::GlobalEmitter;
 use crate::image_type;
@@ -24,23 +24,18 @@ use url::Url;
 
 const PLUGIN_ID: &'static str = "本地导入";
 
-/// 按已入队数量计算并上报本地导入进度（0..99），避免结束前一直为 0。完成后由调用方发 100。
-fn emit_local_import_progress(task_id: &str, image_count: usize, archive_count: usize) {
-    let n = image_count + archive_count;
-    let pct = if n == 0 {
-        0.0
-    } else {
-        (n as f64 * 2.0).min(99.0) // 每项约 2%，上限 99
-    };
-    GlobalEmitter::global().emit_task_progress(task_id, pct);
+/// 将当前路径/文件对应的进度份额累加并上报。每个子文件夹和子文件在递归中均分父级份额，完成一项即增加相应百分比。
+fn add_progress_and_emit(ctx: &mut LocalImportContext<'_>, share: f64) {
+    *ctx.progress = (*ctx.progress + share).min(99.9);
+    GlobalEmitter::global().emit_task_progress(ctx.task_id, *ctx.progress);
 }
 
 /// On macOS, map permission-denied (EPERM) to a user-friendly message with drag-drop hint and System Settings instructions.
 fn map_io_error_for_user(e: io::Error, context: &str) -> String {
     #[cfg(target_os = "macos")]
     {
-        let is_permission_denied = e.kind() == io::ErrorKind::PermissionDenied
-            || e.raw_os_error() == Some(1); // EPERM
+        let is_permission_denied =
+            e.kind() == io::ErrorKind::PermissionDenied || e.raw_os_error() == Some(1); // EPERM
         if is_permission_denied {
             return format!(
                 "无法访问该路径（权限不足）。\n\n\
@@ -56,9 +51,11 @@ fn map_io_error_for_user(e: io::Error, context: &str) -> String {
 }
 
 /// 流式遍历并处理 URL：content:// 用 ContentIoProvider，file:// 转 Path 用 fs。
+/// `share` 为本路径在本次任务中应占的总进度百分比（0..100），完成本路径后累加该份额。
 async fn process_url(
     url: &Url,
-    ctx: &LocalImportContext<'_>,
+    ctx: &mut LocalImportContext<'_>,
+    share: f64,
     image_count: &mut usize,
     archive_count: &mut usize,
 ) -> Result<(), String> {
@@ -68,20 +65,21 @@ async fn process_url(
 
     #[cfg(target_os = "android")]
     if url.scheme() == "content" {
-        return process_content_url(url, ctx, image_count, archive_count).await;
+        return process_content_url(url, ctx, share, image_count, archive_count).await;
     }
 
     // file:// 或桌面：转 Path 处理
     let path = url
         .to_file_path()
         .map_err(|_| format!("Invalid file URL: {}", url))?;
-    process_path(path.as_path(), ctx, image_count, archive_count).await
+    process_path(path.as_path(), ctx, share, image_count, archive_count).await
 }
 
 #[cfg(target_os = "android")]
 async fn process_content_url(
     url: &Url,
-    ctx: &LocalImportContext<'_>,
+    ctx: &mut LocalImportContext<'_>,
+    share: f64,
     image_count: &mut usize,
     archive_count: &mut usize,
 ) -> Result<(), String> {
@@ -91,29 +89,49 @@ async fn process_content_url(
     let is_dir = io.is_directory(uri).await?;
     if is_dir {
         let children = io.list_children(uri).await?;
+        let n = children.len();
+        if n == 0 {
+            add_progress_and_emit(ctx, share);
+            return Ok(());
+        }
+        let per_child = share / n as f64;
         for child in children {
             if ctx.download_queue.is_task_canceled(ctx.task_id).await {
                 return Err("Task canceled".to_string());
             }
-            let child_url = Url::parse(&child.uri).map_err(|e| format!("Invalid child URI: {}", e))?;
+            let child_url =
+                Url::parse(&child.uri).map_err(|e| format!("Invalid child URI: {}", e))?;
             if child.is_directory {
                 if ctx.recursive {
-                    Box::pin(process_url(&child_url, ctx, image_count, archive_count)).await?;
+                    Box::pin(process_url(
+                        &child_url,
+                        ctx,
+                        per_child,
+                        image_count,
+                        archive_count,
+                    ))
+                    .await?;
+                } else {
+                    add_progress_and_emit(ctx, per_child);
                 }
             } else {
                 process_file_url(&child_url, ctx, image_count, archive_count).await?;
+                add_progress_and_emit(ctx, per_child);
             }
         }
     } else {
         process_file_url(url, ctx, image_count, archive_count).await?;
+        add_progress_and_emit(ctx, share);
     }
     Ok(())
 }
 
 /// 桌面：流式遍历 Path，遇到图片入队下载，遇到压缩包入队解压。
+/// `share` 为本路径在本次任务中应占的总进度百分比，完成本路径（或本目录下所有子项）后累加该份额。
 async fn process_path(
     path: &Path,
-    ctx: &LocalImportContext<'_>,
+    ctx: &mut LocalImportContext<'_>,
+    share: f64,
     image_count: &mut usize,
     archive_count: &mut usize,
 ) -> Result<(), String> {
@@ -127,6 +145,7 @@ async fn process_path(
         let mut entries = fs::read_dir(path)
             .await
             .map_err(|e| map_io_error_for_user(e, "Failed to read directory"))?;
+        let mut children: Vec<(PathBuf, bool)> = Vec::new();
         while let Some(entry) = entries
             .next_entry()
             .await
@@ -137,22 +156,38 @@ async fn process_path(
                 .metadata()
                 .await
                 .map_err(|e| map_io_error_for_user(e, "Failed to read entry metadata"))?;
-            if entry_meta.is_dir() {
+            children.push((p, entry_meta.is_dir()));
+        }
+        let n = children.len();
+        if n == 0 {
+            add_progress_and_emit(ctx, share);
+            return Ok(());
+        }
+        let per_child = share / n as f64;
+        for (p, is_dir) in children {
+            if ctx.download_queue.is_task_canceled(ctx.task_id).await {
+                return Err("Task canceled".to_string());
+            }
+            if is_dir {
                 if ctx.recursive {
-                    Box::pin(process_path(&p, ctx, image_count, archive_count)).await?;
+                    Box::pin(process_path(&p, ctx, per_child, image_count, archive_count)).await?;
+                } else {
+                    add_progress_and_emit(ctx, per_child);
                 }
-            } else if entry_meta.is_file() {
+            } else {
                 let url = Url::from_file_path(&p)
                     .map_err(|_| format!("Invalid path: {}", p.display()))?;
                 process_file_url(&url, ctx, image_count, archive_count).await?;
+                add_progress_and_emit(ctx, per_child);
             }
         }
         return Ok(());
     }
     if meta.is_file() {
-        let url = Url::from_file_path(path)
-            .map_err(|_| format!("Invalid path: {}", path.display()))?;
+        let url =
+            Url::from_file_path(path).map_err(|_| format!("Invalid path: {}", path.display()))?;
         process_file_url(&url, ctx, image_count, archive_count).await?;
+        add_progress_and_emit(ctx, share);
     }
     Ok(())
 }
@@ -160,7 +195,7 @@ async fn process_path(
 /// 处理单个文件 URL：图片入队下载，压缩包入队解压。
 async fn process_file_url(
     url: &Url,
-    ctx: &LocalImportContext<'_>,
+    ctx: &mut LocalImportContext<'_>,
     image_count: &mut usize,
     archive_count: &mut usize,
 ) -> Result<(), String> {
@@ -174,14 +209,14 @@ async fn process_file_url(
         .to_file_path()
         .map_err(|_| format!("Invalid file URL: {}", url))?;
     if image_type::is_image_by_path(&path) {
-        enqueue_image(url.clone(), ctx, image_count, archive_count).await?;
+        enqueue_image(url.clone(), ctx, image_count).await?;
         return Ok(());
     }
     if crate::archive::is_archive_by_path(&path) && ctx.include_archive {
         if crate::archive::get_processor_by_path(&path).is_none() {
             return Err(format!("不支持的压缩格式: {}", path.display()));
         }
-        enqueue_archive(url.clone(), ctx, image_count, archive_count, None).await?;
+        enqueue_archive(url.clone(), ctx, archive_count, None).await?;
     }
     Ok(())
 }
@@ -189,7 +224,7 @@ async fn process_file_url(
 #[cfg(target_os = "android")]
 async fn process_content_file_url(
     url: &Url,
-    ctx: &LocalImportContext<'_>,
+    ctx: &mut LocalImportContext<'_>,
     image_count: &mut usize,
     archive_count: &mut usize,
 ) -> Result<(), String> {
@@ -198,21 +233,21 @@ async fn process_content_file_url(
 
     let mime = io.get_mime_type(uri).await?;
     if image_type::is_image_mime(&mime) {
-        enqueue_image(url.clone(), ctx, image_count, archive_count).await?;
+        enqueue_image(url.clone(), ctx, image_count).await?;
         return Ok(());
     }
     if image_type::is_archive_mime(&mime) && ctx.include_archive {
-        enqueue_archive(url.clone(), ctx, image_count, archive_count, mime.as_deref()).await?;
+        enqueue_archive(url.clone(), ctx, archive_count, mime.as_deref()).await?;
     }
     Ok(())
 }
 
 async fn enqueue_image(
     url: Url,
-    ctx: &LocalImportContext<'_>,
+    ctx: &mut LocalImportContext<'_>,
     image_count: &mut usize,
-    archive_count: &usize,
 ) -> Result<(), String> {
+    let download_start_time = ctx.next_download_start_time();
     match ctx
         .download_queue
         .download_image(
@@ -220,7 +255,7 @@ async fn enqueue_image(
             ctx.images_dir.clone(),
             PLUGIN_ID.to_string(),
             ctx.task_id.to_string(),
-            ctx.download_start_time,
+            download_start_time,
             ctx.output_album_id.clone(),
             HashMap::new(),
         )
@@ -228,7 +263,6 @@ async fn enqueue_image(
     {
         Ok(()) => {
             *image_count += 1;
-            emit_local_import_progress(ctx.task_id, *image_count, *archive_count);
         }
         Err(e) => {
             GlobalEmitter::global().emit_task_log(
@@ -243,14 +277,15 @@ async fn enqueue_image(
 
 async fn enqueue_archive(
     url: Url,
-    ctx: &LocalImportContext<'_>,
-    image_count: &usize,
+    ctx: &mut LocalImportContext<'_>,
     archive_count: &mut usize,
     mime: Option<&str>,
 ) -> Result<(), String> {
     // 获取对应的 processor，解压到固定目录（Android 内部私有目录 / 桌面临时目录）
     let processor = crate::crawler::archiver::get_processor_by_url(&url, mime);
-    let extract_base = crate::app_paths::AppPaths::global().temp_dir.join("archive_extract");
+    let extract_base = crate::app_paths::AppPaths::global()
+        .temp_dir
+        .join("archive_extract");
     if let Err(e) = tokio::fs::create_dir_all(&extract_base).await {
         return Err(format!("Failed to create archive extract dir: {}", e));
     }
@@ -268,8 +303,9 @@ async fn enqueue_archive(
                         .await;
                     let _ = tokio::fs::remove_dir_all(&extract_dir).await;
 
-                    let entries = copy_result
-                        .map_err(|e| format!("Failed to copy extracted images to Pictures: {}", e))?;
+                    let entries = copy_result.map_err(|e| {
+                        format!("Failed to copy extracted images to Pictures: {}", e)
+                    })?;
                     for (idx, entry) in entries.into_iter().enumerate() {
                         if ctx.download_queue.is_task_canceled(ctx.task_id).await {
                             return Err("Task canceled".to_string());
@@ -284,7 +320,7 @@ async fn enqueue_archive(
                                 ctx.images_dir.clone(),
                                 PLUGIN_ID.to_string(),
                                 ctx.task_id.to_string(),
-                                ctx.download_start_time,
+                                ctx.next_download_start_time(),
                                 ctx.output_album_id.clone(),
                                 HashMap::new(),
                             )
@@ -306,6 +342,7 @@ async fn enqueue_archive(
                 {
                     // 扁平复制图片到 images_dir 子文件夹并逐个入队
                     use crate::crawler::downloader::copy_extracted_images_and_enqueue;
+                    let archive_download_start_time = ctx.next_download_start_time();
                     if let Err(e) = copy_extracted_images_and_enqueue(
                         &extract_dir,
                         &ctx.images_dir,
@@ -313,17 +350,19 @@ async fn enqueue_archive(
                         ctx.download_queue,
                         ctx.task_id,
                         PLUGIN_ID,
-                        ctx.download_start_time,
+                        archive_download_start_time,
                         &ctx.output_album_id,
                         &HashMap::new(),
                     )
                     .await
                     {
-                        return Err(format!("Failed to copy and enqueue extracted images: {}", e));
+                        return Err(format!(
+                            "Failed to copy and enqueue extracted images: {}",
+                            e
+                        ));
                     }
                 }
                 *archive_count += 1;
-                emit_local_import_progress(ctx.task_id, *image_count, *archive_count);
             }
             Err(e) => {
                 return Err(format!("Decompression failed: {}", e));
@@ -332,18 +371,35 @@ async fn enqueue_archive(
     } else {
         return Err(format!("No processor found for archive: {}", url));
     }
-    
+
     Ok(())
 }
 
 struct LocalImportContext<'a> {
     task_id: &'a str,
+    progress: &'a mut f64,
     images_dir: PathBuf,
-    download_start_time: u64,
+    last_download_start_time: &'a mut u64,
     output_album_id: Option<String>,
     download_queue: &'a DownloadQueue,
     recursive: bool,
     include_archive: bool,
+}
+
+impl LocalImportContext<'_> {
+    fn next_download_start_time(&mut self) -> u64 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let next = if now <= *self.last_download_start_time {
+            self.last_download_start_time.saturating_add(1)
+        } else {
+            now
+        };
+        *self.last_download_start_time = next;
+        next
+    }
 }
 
 pub async fn run_builtin_local_import(
@@ -386,10 +442,15 @@ pub async fn run_builtin_local_import(
         .unwrap_or_default()
         .as_millis() as u64;
 
-    let ctx = LocalImportContext {
+    let mut progress = 0.0_f64;
+    let share_per_path = 100.0 / paths.len() as f64;
+
+    let mut last_download_start_time = download_start_time;
+    let mut ctx = LocalImportContext {
         task_id,
+        progress: &mut progress,
         images_dir,
-        download_start_time,
+        last_download_start_time: &mut last_download_start_time,
         output_album_id: output_album_id.clone(),
         download_queue,
         recursive,
@@ -399,7 +460,10 @@ pub async fn run_builtin_local_import(
     GlobalEmitter::global().emit_task_log(
         task_id,
         "info",
-        &format!("本地导入: 开始流式遍历 {} 个路径...", paths.len()),
+        &format!(
+            "本地导入: 开始流式遍历 {} 个路径（每项等权进度）...",
+            paths.len()
+        ),
     );
     GlobalEmitter::global().emit_task_progress(task_id, 0.0);
 
@@ -421,13 +485,20 @@ pub async fn run_builtin_local_import(
             {
                 return Err(format!("路径不存在: {}", path_str));
             }
-            let path = fs::canonicalize(&path).await.map_err(|e| {
-                map_io_error_for_user(e, &format!("无法解析路径 {}", path_str))
-            })?;
+            let path = fs::canonicalize(&path)
+                .await
+                .map_err(|e| map_io_error_for_user(e, &format!("无法解析路径 {}", path_str)))?;
             Url::from_file_path(&path).map_err(|_| format!("Invalid path: {}", path_str))?
         };
 
-        process_url(&url, &ctx, &mut image_count, &mut archive_count).await?;
+        process_url(
+            &url,
+            &mut ctx,
+            share_per_path,
+            &mut image_count,
+            &mut archive_count,
+        )
+        .await?;
     }
 
     GlobalEmitter::global().emit_task_progress(task_id, 100.0);

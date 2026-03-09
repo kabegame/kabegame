@@ -30,25 +30,39 @@ import { ArrowDown, Sort } from "@element-plus/icons-vue";
 const route = useRoute();
 const router = useRouter();
 
-const providerRootPath = computed(() => {
-  const p = route.params.providerPath;
-  const segs = typeof p === "string" ? [p] : Array.isArray(p) ? (p as string[]) : [];
-  return segs.map((x) => String(x || "").trim()).filter(Boolean).join("/") || "全部";
-});
+const currentPath = computed(() => (route.query.path as string) || "all/1");
 
 const sortOrder = computed<"asc" | "desc">(() =>
-  providerRootPath.value === "全部/倒序" ? "desc" : "asc"
+  currentPath.value.includes("/desc/") ? "desc" : "asc"
 );
 
 const sortLabel = computed(() =>
   sortOrder.value === "desc" ? "按时间倒序" : "按时间正序"
 );
 
+/** 从 path 得到不含页码、不含 desc 的根路径，如 all/desc/1 → all，date/2024-01/2 → date/2024-01 */
+function getRootPath(path: string): string {
+  const segs = path.split("/").filter(Boolean);
+  let i = segs.length - 1;
+  while (i >= 0) {
+    const seg = segs[i];
+    if (/^\d+$/.test(seg)) {
+      i--;
+    } else if (seg === "desc") {
+      i--;
+    } else {
+      break;
+    }
+  }
+  return segs.slice(0, i + 1).join("/") || "all";
+}
+
 function handleCommand(command: string) {
+  const rootPath = getRootPath(currentPath.value);
   if (command === "desc") {
-    router.push({ name: "Gallery", params: { providerPath: ["全部", "倒序"] } });
+    router.push({ path: "/gallery", query: { path: `${rootPath}/desc/1` } });
   } else {
-    router.push({ name: "Gallery", params: { providerPath: ["全部"] } });
+    router.push({ path: "/gallery", query: { path: `${rootPath}/1` } });
   }
 }
 </script>

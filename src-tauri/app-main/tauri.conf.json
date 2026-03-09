@@ -9,23 +9,10 @@
     "frontendDist": "../../dist-main"
   },
   "app": {
-    "windows": [
-      {
-        "fullscreen": false,
-        "resizable": true,
-        "title": "Kabegame",
-        "devtools": false,
-        "transparent": true,
-        "width": 1200,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
-        "windowEffects": { "effects": ["sidebar", "acrylic"], "state": "followsWindowActiveState" }
-      }
-    ],
+    "windows": [],
     "security": {
       "capabilities": ["main-capability", "crawler-capability"],
-      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src *; media-src 'self' asset: http://asset.localhost http://kbg-content.localhost data: blob: http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost ws: wss: http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src * data:; media-src 'self' asset: http://asset.localhost http://kbg-content.localhost data: blob: http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost ws: wss: http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]
@@ -62,9 +49,8 @@
     },
     "linux": {
       "deb": {
-        "depends": ["fuse3", "libayatana-appindicator3-1"],
+        "depends": ["libayatana-appindicator3-1"],
         "files": {
-          "/usr/bin/kabegame-cli": "../../target/release/kabegame-cli",
           "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "../icons/icon.png"
         },

@@ -37,11 +37,9 @@ app.use(createPinia());
 registerHeaderFeatures();
 app.use(router);
 app.use(ElementPlus);
-if (IS_ANDROID) {
-  app.use(Toast);
-  app.use(Picker);
-  app.use(Popup);
-}
+app.use(Toast);
+app.use(Picker);
+app.use(Popup);
 
 app.mount("#app");
 

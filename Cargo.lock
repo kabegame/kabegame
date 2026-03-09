@@ -2654,6 +2654,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "dirs 5.0.1",
  "dokan",
  "governor",
  "image 0.24.9",

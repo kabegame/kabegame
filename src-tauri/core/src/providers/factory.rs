@@ -1,12 +1,13 @@
-﻿//! Provider 工厂：根据描述符重建 Provider（避免用 id 引用导致内存膨胀）。
+//! Provider 工厂：根据描述符重建 Provider（避免用 id 引用导致内存膨胀）。
 
 use std::sync::Arc;
 
-use crate::providers::descriptor::ProviderDescriptor;
+use crate::providers::descriptor::{MainGroupKind, ProviderDescriptor};
 use crate::providers::provider::Provider;
 use crate::providers::{
-    AlbumsProvider, CommonProvider, DateGroupProvider, DateRangeRootProvider, PluginGroupProvider,
-    RootProvider, TaskGroupProvider,
+    AlbumsProvider, CommonProvider, DateGroupProvider, DateRangeRootProvider,
+    main_root::{MainAlbumsProvider, MainDateGroupProvider, MainDateRangeRootProvider, MainPluginGroupProvider, MainRootProvider, MainTaskGroupProvider},
+    PluginGroupProvider, RootProvider, TaskGroupProvider,
 };
 
 pub struct ProviderFactory;
@@ -40,6 +41,26 @@ impl ProviderFactory {
                 *offset,
                 *count,
                 *depth,
+            )),
+
+            // 新增：MainProvider 体系
+            ProviderDescriptor::MainRoot => Arc::new(MainRootProvider::new()),
+            ProviderDescriptor::MainGroup { kind } => {
+                match kind {
+                    MainGroupKind::Plugin => Arc::new(MainPluginGroupProvider::new()),
+                    MainGroupKind::Date => Arc::new(MainDateGroupProvider::new()),
+                    MainGroupKind::DateRange => Arc::new(MainDateRangeRootProvider::new()),
+                    MainGroupKind::Album => Arc::new(MainAlbumsProvider::new()),
+                    MainGroupKind::Task => Arc::new(MainTaskGroupProvider::new()),
+                }
+            }
+            ProviderDescriptor::SimpleAll { query } => Arc::new(CommonProvider::with_query_and_mode(
+                query.clone(),
+                crate::providers::common::PaginationMode::SimplePage,
+            )),
+            ProviderDescriptor::SimplePage { query, page } => Arc::new(crate::providers::common::SimplePageProvider::new(
+                query.clone(),
+                *page,
             )),
         }
     }

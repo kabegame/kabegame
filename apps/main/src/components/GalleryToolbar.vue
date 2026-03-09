@@ -52,17 +52,18 @@ const props = withDefaults(defineProps<Props>(), {
 
 const router = useRouter();
 const isAllAsc = computed(() => props.providerRootPath === "全部");
-const isAllDesc = computed(() => props.providerRootPath === "全部/倒序");
+const isAllDesc = computed(() => props.providerRootPath.includes("/desc"));
 const sortOrder = computed(() =>
-  props.providerRootPath === "全部/倒序" ? "desc" : "asc"
+  props.providerRootPath.includes("/desc") ? "desc" : "asc"
 );
 const sortOptionLabelAsc = "按时间正序";
 const sortOptionLabelDesc = "按时间倒序";
 function onSortOrderChange(value: string) {
+  const basePath = props.providerRootPath.replace("/desc", "") || "all";
   if (value === "desc") {
-    router.push({ name: "Gallery", params: { providerPath: ["全部", "倒序"] } });
+    router.push({ path: "/gallery", query: { path: `${basePath}/desc/1` } });
   } else {
-    router.push({ name: "Gallery", params: { providerPath: ["全部"] } });
+    router.push({ path: "/gallery", query: { path: `${basePath}/1` } });
   }
 }
 

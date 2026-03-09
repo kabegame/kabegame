@@ -47,6 +47,7 @@
 
               <div class="plugin-info">
                 <el-tag type="success" size="small">已安装</el-tag>
+                <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
               </div>
 
               <div class="plugin-footer">
@@ -117,8 +118,7 @@
 
             <div class="plugin-info">
               <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
-              <el-tag v-if="plugin.installedVersion" type="success" size="small">已安装：v{{ plugin.installedVersion
-                }}</el-tag>
+              <el-tag v-if="plugin.installedVersion" type="success" size="small">已安装：v{{ plugin.installedVersion }}</el-tag>
               <el-tag v-else type="warning" size="small">未安装</el-tag>
               <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
                 size="small">可更新</el-tag>

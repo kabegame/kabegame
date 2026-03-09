@@ -8,8 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::providers::descriptor::ProviderDescriptor;
-use crate::providers::root::{DIR_ALBUMS, DIR_ALL, DIR_BY_DATE, DIR_BY_PLUGIN, DIR_BY_TASK};
-use crate::providers::{ProviderRuntime, RootProvider};
+use crate::providers::{ProviderRuntime, main_root::MainRootProvider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::{ImageInfo, Storage};
 
@@ -35,12 +34,15 @@ pub struct GalleryBrowseResult {
 
 /// provider 路径入口
 ///
-/// 允许的路径：
-/// - `all[/<range>[/<range>...]]`
-/// - `by-plugin/<pluginId>[/<range>[/<range>...]]`
-/// - `by-date/<yyyy-mm>[/<range>[/<range>...]]`
-/// - `by-task/<taskId>[/<range>[/<range>...]]`
-/// - `by-album/<albumId>[/<range>[/<range>...]]`
+/// MainProvider 路径格式：
+/// - `all[/desc]/<page>` - 全部图片（可选 desc 排序）
+/// - `plugin/<pluginId>/<page>` - 按插件分组
+/// - `date/<yyyy-mm>/<page>` - 按月份分组
+/// - `date-range/<start~end>/<page>` - 按日期范围分组
+/// - `album/<albumId>/<page>` - 画册
+/// - `task/<taskId>/<page>` - 按任务分组
+///
+/// 保留旧 VD 路径兼容性（all/by-plugin/by-date/by-task/by-album）
 pub fn browse_gallery_provider(
     storage: &Storage,
     provider_rt: &ProviderRuntime,
@@ -56,57 +58,58 @@ pub fn browse_gallery_provider(
         return Err("path 不能为空".to_string());
     }
 
-    // 兼容旧路径：all/by-plugin/by-date/by-task/by-album 映射到 VD 风格路径
-    let mapped: Vec<&str> = match raw_segs[0] {
-        "all" => std::iter::once(DIR_ALL)
-            .chain(raw_segs[1..].iter().copied())
-            .collect(),
-        "by-plugin" => {
-            if raw_segs.len() < 2 {
-                return Err("by-plugin 需要 pluginId".to_string());
-            }
-            std::iter::once(DIR_BY_PLUGIN)
-                .chain(raw_segs[1..].iter().copied())
-                .collect()
-        }
-        "by-date" => {
-            if raw_segs.len() < 2 {
-                return Err("by-date 需要 yyyy-mm".to_string());
-            }
-            std::iter::once(DIR_BY_DATE)
-                .chain(raw_segs[1..].iter().copied())
-                .collect()
-        }
-        "by-task" => {
-            if raw_segs.len() < 2 {
-                return Err("by-task 需要 taskId".to_string());
-            }
-            std::iter::once(DIR_BY_TASK)
-                .chain(raw_segs[1..].iter().copied())
-                .collect()
-        }
-        "by-album" => {
-            if raw_segs.len() < 2 {
-                return Err("by-album 需要 albumName".to_string());
-            }
-            std::iter::once(DIR_ALBUMS)
-                .chain(raw_segs[1..].iter().copied())
-                .collect()
-        }
-        _ => raw_segs.clone(),
-    };
-
-    let root = std::sync::Arc::new(RootProvider::default())
+    let root = std::sync::Arc::new(MainRootProvider::new())
         as std::sync::Arc<dyn crate::providers::provider::Provider>;
 
     // 解析到 provider
     let provider = provider_rt
-        .resolve_provider_for_root(root, &mapped)?
+        .resolve_provider_for_root(root, &raw_segs)?
         .ok_or_else(|| "路径不存在".to_string())?;
 
     let desc = provider.descriptor();
 
     match desc {
+        // 新增：SimplePage 直接返回图片（叶子节点）
+        ProviderDescriptor::SimplePage { query, page } => {
+            let total = storage.get_images_count_by_query(&query)?;
+            if total == 0 {
+                return Ok(GalleryBrowseResult {
+                    total: 0,
+                    base_offset: 0,
+                    range_total: 0,
+                    entries: vec![],
+                });
+            }
+            let offset = (page - 1) * LEAF_SIZE;
+            let count = LEAF_SIZE;
+            list_node(storage, &query, total, offset, count)
+        }
+        // 新增：SimpleAll 返回 total + 目录列表（根节点）
+        ProviderDescriptor::SimpleAll { query } => {
+            let total = storage.get_images_count_by_query(&query)?;
+            if total == 0 {
+                return Ok(GalleryBrowseResult {
+                    total: 0,
+                    base_offset: 0,
+                    range_total: 0,
+                    entries: vec![],
+                });
+            }
+            // 返回目录列表（desc 子目录 + 页码目录）
+            let mut entries = Vec::new();
+            if query.is_all_recent_asc() {
+                entries.push(GalleryBrowseEntry::Dir { name: "desc".to_string() });
+            }
+            // 页码目录通过 resolve_child 动态提供，这里只返回 total
+            Ok(GalleryBrowseResult {
+                total,
+                base_offset: 0,
+                range_total: total,
+                entries,
+            })
+        }
+
+        // 保留旧兼容性：DiskProvider 体系
         ProviderDescriptor::All { query } => {
             let total = storage.get_images_count_by_query(&query)?;
             if total == 0 {

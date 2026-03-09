@@ -247,11 +247,17 @@ pub async fn crawl_error(message: String) -> Result<(), String> {
     } else {
         message
     };
-    update_task_status(&ctx.task_id, "failed", Some(end), Some(err.clone()));
+    // 用户取消时脚本可能调用 ctx.error("Task canceled")，应显示为“已取消”而非“失败”
+    let status = if err.contains("Task canceled") {
+        "canceled"
+    } else {
+        "failed"
+    };
+    update_task_status(&ctx.task_id, status, Some(end), Some(err.clone()));
     GlobalEmitter::global().emit_task_error(&ctx.task_id, &err);
     GlobalEmitter::global().emit_task_status(
         &ctx.task_id,
-        "failed",
+        status,
         None,
         None,
         Some(end),

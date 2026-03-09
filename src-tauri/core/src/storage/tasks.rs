@@ -188,8 +188,9 @@ impl Storage {
 
     pub fn delete_task(&self, task_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
-            .map_err(|e| format!("Failed to delete task: {}", e))?;
+        // 先删除关联数据（日志、图片、失败记录），再删除任务主表
+        conn.execute("DELETE FROM task_logs WHERE task_id = ?1", params![task_id])
+            .map_err(|e| format!("Failed to delete task logs: {}", e))?;
         let _ = conn.execute(
             "DELETE FROM task_images WHERE task_id = ?1",
             params![task_id],
@@ -198,7 +199,8 @@ impl Storage {
             "DELETE FROM task_failed_images WHERE task_id = ?1",
             params![task_id],
         );
-        let _ = conn.execute("DELETE FROM task_logs WHERE task_id = ?1", params![task_id]);
+        conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
+            .map_err(|e| format!("Failed to delete task: {}", e))?;
         Ok(())
     }
 
