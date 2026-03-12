@@ -134,7 +134,7 @@
                 <div class="dev-webview-row">
                   <el-input
                     v-model="devWebviewUrl"
-                    placeholder="https://example.com"
+                    placeholder="https://pixiv.net"
                     clearable
                     class="dev-webview-input"
                     @keyup.enter="openDevWebview"

@@ -208,7 +208,7 @@ async fn process_file_url(
     let path = url
         .to_file_path()
         .map_err(|_| format!("Invalid file URL: {}", url))?;
-    if image_type::is_image_by_path(&path) {
+    if image_type::is_media_by_path(&path) {
         enqueue_image(url.clone(), ctx, image_count).await?;
         return Ok(());
     }
@@ -232,7 +232,7 @@ async fn process_content_file_url(
     let io = get_content_io_provider();
 
     let mime = io.get_mime_type(uri).await?;
-    if image_type::is_image_mime(&mime) {
+    if image_type::is_image_mime(&mime) || image_type::is_video_mime(&mime) {
         enqueue_image(url.clone(), ctx, image_count).await?;
         return Ok(());
     }

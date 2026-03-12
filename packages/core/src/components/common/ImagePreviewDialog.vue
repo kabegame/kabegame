@@ -41,7 +41,7 @@
       class="image-preview-dialog" :show-close="true" :lock-scroll="true" @close="closePreview">
       <div v-if="previewVisible" ref="previewContainerRef" class="preview-container"
         @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
-        @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePanzoomWheel">
+        @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePreviewWheel">
         <div v-if="props.images.length > 1" class="preview-nav-zone left"
           :class="{ visible: previewHoverSide === 'left' }" @click.stop="goPrev">
           <button class="preview-nav-btn" type="button" :class="{ disabled: isAtFirst }" aria-label="上一张">
@@ -58,9 +58,13 @@
             </el-icon>
           </button>
         </div>
-        <div v-if="previewImageUrl" ref="panzoomWrapperRef" class="panzoom-wrapper">
+        <div v-if="previewImageUrl && !isPreviewVideo" ref="panzoomWrapperRef" class="panzoom-wrapper">
           <img ref="previewImageRef" :src="previewImageUrl" class="preview-image" alt="预览图片"
             @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
+        </div>
+        <div v-else-if="previewImageUrl && isPreviewVideo" class="preview-video-wrapper">
+          <video :src="previewImageUrl" class="preview-video" controls loop autoplay poster="" preload="auto" playsinline
+            webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback="" @dragstart.prevent />
         </div>
         <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
           <ImageNotFound />
@@ -118,6 +122,7 @@ const previewImage = computed<ImageInfo | null>(() => {
   if (idx < 0 || idx >= props.images.length) return null;
   return props.images[idx] ?? null;
 });
+const isPreviewVideo = computed(() => previewImage.value?.type === "video");
 const previewHoverSide = ref<"left" | "right" | null>(null);
 const previewNotFound = ref(false);
 
@@ -313,6 +318,16 @@ const pswpDataSource = computed(() => {
   const fallbackH = 1080;
   return props.images.map((img) => {
     const url = getOriginalPreviewUrl(img) || getThumbnailPreviewUrl(img) || "";
+    if (img.type === "video") {
+      const escapedUrl = url.replace(/"/g, "&quot;");
+      return {
+        html: `<div class="pswp-video-wrap"><video src="${escapedUrl}" loop controls poster="" preload="auto" playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback="" style="max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;"></video></div>`,
+        type: "html",
+        width: img.width || fallbackW,
+        height: img.height || fallbackH,
+        id: img.id,
+      };
+    }
     return {
       src: url,
       width: img.width || fallbackW,
@@ -340,7 +355,9 @@ const setPreviewByIndex = (index: number) => {
   previewImageUrl.value = (originalUrl || thumb || "").trim();
 
   // 尺寸/缩放状态重置：立即触发一次（仅桌面端）
-  panzoomReset();
+  if (!isPreviewVideo.value) {
+    panzoomReset();
+  }
 };
 
 // 仅用于 UI：首尾循环时，位于边界的方向箭头置灰（但仍可点击触发循环）
@@ -491,6 +508,11 @@ const handlePreviewMouseMove = (event: MouseEvent) => {
 
 const handlePreviewMouseLeave = () => {
   previewHoverSide.value = null;
+};
+
+const handlePreviewWheel = (event: WheelEvent) => {
+  if (isPreviewVideo.value) return;
+  handlePanzoomWheel(event);
 };
 
 // stopPreviewDrag 已删除，由 Panzoom 自动处理（仅桌面端）
@@ -670,6 +692,7 @@ watch(
   () => previewImageUrl.value,
   (url) => {
     if (url && !IS_ANDROID) {
+      if (isPreviewVideo.value) return;
       setPreviewTransform(1, 0, 0);
     }
   }
@@ -990,6 +1013,23 @@ defineExpose({
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .preview-video-wrapper {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .preview-video {
+    max-width: calc(90vw - 40px) !important;
+    max-height: calc(90vh - 70px) !important;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
   }
 
   .preview-image {

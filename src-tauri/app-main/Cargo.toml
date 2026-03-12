@@ -43,6 +43,7 @@ kabegame-core = {workspace = true, default-features = false, features = ["ipc-se
 tauri-plugin-picker = { workspace = true }
 tauri-plugin-archiver = { workspace = true }
 tauri-plugin-share = { workspace = true }
+tauri-plugin-compress = { workspace = true }
 tauri-plugin-wallpaper = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]

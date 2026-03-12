@@ -1017,6 +1017,10 @@ pub fn register_crawler_functions(
 
     // is_image_url(url) - 检查是否是图片 URL（与 image_type 一致）
     engine.register_fn("is_image_url", crate::image_type::url_has_image_extension);
+    // is_video_url(url) - 检查是否是视频 URL（与 image_type 一致）
+    engine.register_fn("is_video_url", crate::image_type::url_has_video_extension);
+    // is_media_url(url) - 检查是否是图片或视频 URL
+    engine.register_fn("is_media_url", crate::image_type::url_has_media_extension);
 
     // 辅助函数：递归扫描目录
     fn scan_directory_recursive(

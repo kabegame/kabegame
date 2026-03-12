@@ -348,7 +348,8 @@ impl Storage {
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
              images.width,
              images.height,
-             images.display_name
+             images.display_name,
+             COALESCE(images.type, 'image') as media_type
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
              WHERE images.surf_record_id = ?1
@@ -383,6 +384,7 @@ impl Storage {
                         width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
+                        media_type: row.get::<_, Option<String>>(14)?,
                     })
                 },
             )
@@ -413,7 +415,8 @@ impl Storage {
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
              images.width,
              images.height,
-             images.display_name
+             images.display_name,
+             COALESCE(images.type, 'image') as media_type
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
              WHERE images.surf_record_id = ?1
@@ -443,6 +446,7 @@ impl Storage {
                     width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                     height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                     display_name: row.get(13)?,
+                    media_type: row.get::<_, Option<String>>(14)?,
                 })
             })
             .optional()

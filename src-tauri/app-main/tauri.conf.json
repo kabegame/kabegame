@@ -35,7 +35,10 @@
         "mimeType": "application/x-kabegame-kgpg"
       }
     ],
-    "resources": ["resources/**/*"],
+    "resources": [
+      "resources/**/*"
+    ],
+    "externalBin": ["./sidecar/ffmpeg"],
     "windows": {
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh",

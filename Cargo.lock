@@ -2671,6 +2671,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-archiver",
  "tauri-plugin-clipboard-manager",
+ "tauri-plugin-compress",
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-global-shortcut",
@@ -5463,6 +5464,16 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tauri-plugin-compress"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",

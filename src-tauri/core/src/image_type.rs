@@ -9,6 +9,11 @@ use std::sync::{LazyLock, OnceLock, RwLock};
 const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "bmp",
 ];
+/// 后端内置支持的视频扩展名（小写，不含点号）。
+#[cfg(not(kabegame_mode = "light"))]
+const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov"];
+#[cfg(kabegame_mode = "light")]
+const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &[];
 
 /// 扩展名到 MIME 的映射（含前端可能上报的 avif、heic）。
 const EXT_MIME: &[(&str, &str)] = &[
@@ -20,6 +25,8 @@ const EXT_MIME: &[(&str, &str)] = &[
     ("bmp", "image/bmp"),
     ("avif", "image/avif"),
     ("heic", "image/heic"),
+    ("mp4", "video/mp4"),
+    ("mov", "video/quicktime"),
 ];
 
 static MIME_BY_EXT: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -70,12 +77,28 @@ pub fn is_supported_image_ext(ext: &str) -> bool {
 }
 
 /// 当前支持的图片 MIME 类型集合（与支持扩展名一致，infer 推断时仅接受该集合内类型）。
-fn supported_mime_types() -> HashSet<String> {
+fn supported_image_mime_types() -> HashSet<String> {
     let map = mime_by_ext_map();
     supported_image_extensions()
         .into_iter()
         .filter_map(|ext| map.get(&ext).map(|m| m.to_lowercase()))
         .collect()
+}
+
+/// 当前支持的视频 MIME 类型集合。
+fn supported_video_mime_types() -> HashSet<String> {
+    let map = mime_by_ext_map();
+    supported_video_extensions()
+        .into_iter()
+        .filter_map(|ext| map.get(&ext).map(|m| m.to_lowercase()))
+        .collect()
+}
+
+/// 当前支持的媒体 MIME 类型集合（图片 + 视频）。
+fn supported_media_mime_types() -> HashSet<String> {
+    let mut out = supported_image_mime_types();
+    out.extend(supported_video_mime_types());
+    out
 }
 
 /// 根据本地路径判断是否为支持的图片：先看扩展名，再按文件内容用 infer 推断。
@@ -90,7 +113,7 @@ pub fn is_image_by_path(path: &Path) -> bool {
     }
     if let Ok(Some(kind)) = infer::get_from_path(path) {
         let mime = kind.mime_type().to_lowercase();
-        if supported_mime_types().contains(&mime) {
+        if supported_image_mime_types().contains(&mime) {
             return true;
         }
     }
@@ -102,7 +125,7 @@ pub fn is_image_by_path(path: &Path) -> bool {
 pub fn mime_type_from_path(path: &Path) -> Option<String> {
     let kind = infer::get_from_path(path).ok().flatten()?;
     let mime = kind.mime_type().to_lowercase();
-    if supported_mime_types().contains(&mime) {
+    if supported_media_mime_types().contains(&mime) {
         Some(mime)
     } else {
         None
@@ -134,10 +157,30 @@ pub fn supported_image_extensions() -> Vec<String> {
     out
 }
 
+/// 返回支持的视频扩展名列表（内置，去重）。
+pub fn supported_video_extensions() -> Vec<String> {
+    let mut out: Vec<String> = BUILTIN_VIDEO_EXTENSIONS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// 返回支持的媒体扩展名（图片 + 视频）。
+pub fn supported_media_extensions() -> Vec<String> {
+    let mut out = supported_image_extensions();
+    out.extend(supported_video_extensions());
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// 返回扩展名 -> MIME 映射（仅包含当前支持的扩展名，供前端分享等使用）。
 pub fn mime_by_ext() -> HashMap<String, String> {
     let map = mime_by_ext_map();
-    supported_image_extensions()
+    supported_media_extensions()
         .into_iter()
         .filter_map(|ext| map.get(&ext).map(|mime| (ext, mime.clone())))
         .collect()
@@ -157,6 +200,8 @@ const MIME_TO_EXT: &[(&str, &str)] = &[
     ("image/bmp", "bmp"),
     ("image/avif", "avif"),
     ("image/heic", "heic"),
+    ("video/mp4", "mp4"),
+    ("video/quicktime", "mov"),
 ];
 
 static EXT_BY_MIME: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -173,7 +218,7 @@ fn ext_by_mime_map() -> &'static HashMap<String, String> {
 /// 根据支持的图片 MIME 返回规范扩展名（小写，不含点）。仅当 mime 在支持列表中时返回。用于 infer 推断后为无扩展名或错误扩展名的文件补全/修正。
 pub fn ext_from_mime(mime: &str) -> Option<String> {
     let m = mime.trim().to_lowercase();
-    if supported_mime_types().contains(&m) {
+    if supported_media_mime_types().contains(&m) {
         ext_by_mime_map().get(&m).cloned()
     } else {
         None
@@ -187,7 +232,72 @@ pub fn is_image_mime(mime: &Option<String>) -> bool {
     if m.is_empty() {
         return false;
     }
-    supported_mime_types().contains(&m)
+    supported_image_mime_types().contains(&m)
+}
+
+/// 根据 MIME 类型判断是否为支持的视频（用于 Android content:// URI）。
+pub fn is_video_mime(mime: &Option<String>) -> bool {
+    let Some(m) = mime else { return false };
+    let m = m.trim().to_lowercase();
+    if m.is_empty() {
+        return false;
+    }
+    supported_video_mime_types().contains(&m)
+}
+
+/// 判断扩展名是否为支持的视频类型。
+#[inline]
+pub fn is_supported_video_ext(ext: &str) -> bool {
+    let e = ext.trim().trim_start_matches('.').to_lowercase();
+    if e.is_empty() {
+        return false;
+    }
+    BUILTIN_VIDEO_EXTENSIONS.contains(&e.as_str())
+}
+
+/// 判断扩展名是否为支持的媒体类型（图片 + 视频）。
+#[inline]
+pub fn is_supported_media_ext(ext: &str) -> bool {
+    is_supported_image_ext(ext) || is_supported_video_ext(ext)
+}
+
+/// 根据本地路径判断是否为支持的视频：先看扩展名，再按文件内容 infer 推断。
+pub fn is_video_by_path(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    if is_supported_video_ext(ext) {
+        return true;
+    }
+    if let Ok(Some(kind)) = infer::get_from_path(path) {
+        let mime = kind.mime_type().to_lowercase();
+        if supported_video_mime_types().contains(&mime) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 根据本地路径判断是否为支持的媒体（图片 + 视频）。
+pub fn is_media_by_path(path: &Path) -> bool {
+    is_image_by_path(path) || is_video_by_path(path)
+}
+
+/// 判断 URL 是否以支持的视频扩展名结尾。
+pub fn url_has_video_extension(url: &str) -> bool {
+    let url_lower = url.to_lowercase();
+    if let Some(dot) = url_lower.rfind('.') {
+        let ext = url_lower[dot + 1..].trim();
+        is_supported_video_ext(ext)
+    } else {
+        false
+    }
+}
+
+/// 判断 URL 是否以支持的媒体扩展名结尾。
+pub fn url_has_media_extension(url: &str) -> bool {
+    url_has_image_extension(url) || url_has_video_extension(url)
 }
 
 /// 根据 MIME 类型判断是否为支持的压缩包（用于 Android content:// URI）。

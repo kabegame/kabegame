@@ -33,7 +33,7 @@
           </el-select>
           <el-input
             v-model="inputUrl"
-            placeholder="输入 URL 开始畅游，例如 https://example.com"
+            placeholder="输入 URL 开始畅游，例如 https://pixiv.net"
             :disabled="surfStore.sessionActive"
             size="large"
             @keyup.enter="handleStart"

@@ -6,13 +6,20 @@ use axum::{
     body::Body,
     extract::Query,
     http::{
-        header::{HeaderValue, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE},
+        header::{
+            HeaderValue, ACCEPT_RANGES, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE,
+            CONTENT_TYPE, RANGE,
+        },
         Request, StatusCode, Uri,
     },
     response::{IntoResponse, Response},
     routing::get,
     Router,
 };
+#[cfg(not(target_os = "android"))]
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+#[cfg(not(target_os = "android"))]
+use tokio::io::SeekFrom;
 #[cfg(not(target_os = "android"))]
 use serde::Deserialize;
 #[cfg(not(target_os = "android"))]
@@ -68,12 +75,12 @@ struct ProxyQuery {
 }
 
 #[cfg(not(target_os = "android"))]
-fn is_allowed_image_ext(path: &str) -> bool {
+fn is_allowed_media_ext(path: &str) -> bool {
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or_default();
-    kabegame_core::image_type::is_supported_image_ext(ext)
+    kabegame_core::image_type::is_supported_media_ext(ext)
 }
 
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
@@ -109,12 +116,12 @@ fn set_content_type_if_present(resp: &mut Response, mime_type: Option<&str>) {
 }
 
 #[cfg(not(target_os = "android"))]
-async fn handle_file_query(Query(query): Query<FileQuery>) -> Response {
+async fn handle_file_query(Query(query): Query<FileQuery>, headers: axum::http::HeaderMap) -> Response {
     let path = query.path.trim();
     if path.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing path").into_response();
     }
-    if !is_allowed_image_ext(path) {
+    if !is_allowed_media_ext(path) {
         return (StatusCode::FORBIDDEN, "file extension not allowed").into_response();
     }
 
@@ -129,16 +136,20 @@ async fn handle_file_query(Query(query): Query<FileQuery>) -> Response {
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
     };
 
-    serve_file_with_mime(path, mime_from_image_or_path(&img, path)).await
+    let range = headers
+        .get(RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    serve_file_with_mime(path, mime_from_image_or_path(&img, path), range).await
 }
 
 #[cfg(not(target_os = "android"))]
-async fn handle_thumbnail_query(Query(query): Query<FileQuery>) -> Response {
+async fn handle_thumbnail_query(Query(query): Query<FileQuery>, headers: axum::http::HeaderMap) -> Response {
     let path = query.path.trim();
     if path.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing path").into_response();
     }
-    if !is_allowed_image_ext(path) {
+    if !is_allowed_media_ext(path) {
         return (StatusCode::FORBIDDEN, "file extension not allowed").into_response();
     }
 
@@ -151,11 +162,15 @@ async fn handle_thumbnail_query(Query(query): Query<FileQuery>) -> Response {
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
     };
 
-    serve_file_with_mime(path, mime_from_image_or_path(&img, path)).await
+    let range = headers
+        .get(RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    serve_file_with_mime(path, mime_from_image_or_path(&img, path), range).await
 }
 
 #[cfg(not(target_os = "android"))]
-async fn serve_file_with_mime(path: &str, mime_type: Option<String>) -> Response {
+async fn serve_file_with_mime(path: &str, mime_type: Option<String>, range_header: Option<String>) -> Response {
     // 优先尝试 ServeDir（桌面统一走 HTTP 文件服务）
     #[cfg(not(target_os = "windows"))]
     {
@@ -173,10 +188,80 @@ async fn serve_file_with_mime(path: &str, mime_type: Option<String>) -> Response
         }
     }
 
+    if let Some(range_header) = range_header {
+        match tokio::fs::metadata(path).await {
+            Ok(meta) => {
+                let file_size = meta.len();
+                if file_size == 0 {
+                    let mut out = (StatusCode::OK, Vec::<u8>::new()).into_response();
+                    out.headers_mut()
+                        .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+                    set_content_type_if_present(&mut out, mime_type.as_deref());
+                    return out;
+                }
+                if let Some(range_part) = range_header.strip_prefix("bytes=") {
+                    let mut split = range_part.splitn(2, '-');
+                    let start_str = split.next().unwrap_or("").trim();
+                    let end_str = split.next().unwrap_or("").trim();
+                    let start = start_str.parse::<u64>().ok();
+                    let end = if end_str.is_empty() {
+                        None
+                    } else {
+                        end_str.parse::<u64>().ok()
+                    };
+                    if let Some(start) = start {
+                        let end = end.unwrap_or(file_size.saturating_sub(1));
+                        if start <= end && end < file_size {
+                            let chunk_len = (end - start + 1) as usize;
+                            let mut file = match tokio::fs::File::open(path).await {
+                                Ok(f) => f,
+                                Err(_) => {
+                                    return (StatusCode::NOT_FOUND, "file not found").into_response()
+                                }
+                            };
+                            if file.seek(SeekFrom::Start(start)).await.is_err() {
+                                return (StatusCode::RANGE_NOT_SATISFIABLE, "invalid range")
+                                    .into_response();
+                            }
+                            let mut buf = vec![0u8; chunk_len];
+                            if file.read_exact(&mut buf).await.is_err() {
+                                return (StatusCode::RANGE_NOT_SATISFIABLE, "invalid range")
+                                    .into_response();
+                            }
+                            let mut out = (StatusCode::PARTIAL_CONTENT, buf).into_response();
+                            if let Ok(v) = HeaderValue::from_str(&format!(
+                                "bytes {}-{}/{}",
+                                start, end, file_size
+                            )) {
+                                out.headers_mut().insert(CONTENT_RANGE, v);
+                            }
+                            if let Ok(v) = HeaderValue::from_str(&(end - start + 1).to_string()) {
+                                out.headers_mut().insert(CONTENT_LENGTH, v);
+                            }
+                            out.headers_mut()
+                                .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+                            set_content_type_if_present(&mut out, mime_type.as_deref());
+                            return out;
+                        }
+                    }
+                }
+                let mut out =
+                    (StatusCode::RANGE_NOT_SATISFIABLE, "range not satisfiable").into_response();
+                if let Ok(v) = HeaderValue::from_str(&format!("bytes */{}", file_size)) {
+                    out.headers_mut().insert(CONTENT_RANGE, v);
+                }
+                return out;
+            }
+            Err(_) => return (StatusCode::NOT_FOUND, "file not found").into_response(),
+        }
+    }
+
     // ServeDir 不可用/失败时回落到直接读文件
     match tokio::fs::read(path).await {
         Ok(bytes) => {
             let mut out = (StatusCode::OK, bytes).into_response();
+            out.headers_mut()
+                .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
             set_content_type_if_present(&mut out, mime_type.as_deref());
             out
         }

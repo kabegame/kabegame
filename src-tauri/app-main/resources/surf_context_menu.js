@@ -1,7 +1,17 @@
 (function () {
   "use strict";
 
-  function getImageUrl(target) {
+  function getMediaInfo(target) {
+    if (target.tagName === "VIDEO" && target.currentSrc) {
+      return { url: target.currentSrc, kind: "video" };
+    }
+    if (target.tagName === "VIDEO" && target.src) {
+      return { url: target.src, kind: "video" };
+    }
+    if (target.tagName === "SOURCE" && target.src) {
+      const parentTag = target.parentElement && target.parentElement.tagName;
+      return { url: target.src, kind: parentTag === "VIDEO" ? "video" : "image" };
+    }
     if (target.tagName === "IMG" && target.src) return target.src;
     const bg = target.style && target.style.backgroundImage;
     if (bg) {
@@ -46,7 +56,7 @@
     }
   }
 
-  function show(x, y, imageUrl) {
+  function show(x, y, mediaUrl, mediaKind) {
     if (!menu) {
       menu = document.createElement("div");
       menu.style.cssText =
@@ -66,7 +76,7 @@
     menu.innerHTML = "";
 
     const item = document.createElement("div");
-    item.textContent = "下载图片";
+    item.textContent = mediaKind === "video" ? "下载视频" : "下载图片";
     item.style.cssText =
       "padding:8px 16px;cursor:pointer;border-radius:3px;margin:2px 4px;white-space:nowrap";
     const hoverBg = isDark ? "#3a3a3a" : "#f0f0f0";
@@ -75,7 +85,7 @@
     item.onclick = (e) => {
       e.stopPropagation();
       hide();
-      triggerDownload(imageUrl);
+      triggerDownload(mediaUrl);
     };
     menu.appendChild(item);
 
@@ -91,11 +101,13 @@
   document.addEventListener(
     "contextmenu",
     (e) => {
-      const url = getImageUrl(e.target);
-      if (!url) return;
+      const media = getMediaInfo(e.target);
+      if (!media) return;
+      const url = typeof media === "string" ? media : media.url;
+      const kind = typeof media === "string" ? "image" : media.kind || "image";
       e.preventDefault();
       e.stopPropagation();
-      show(e.clientX, e.clientY, toAbsolute(url));
+      show(e.clientX, e.clientY, toAbsolute(url), kind);
     },
     true,
   );

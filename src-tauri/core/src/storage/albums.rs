@@ -343,7 +343,8 @@ impl Storage {
                  ai.\"order\",
                  i.width,
                  i.height,
-                 i.display_name
+                 i.display_name,
+                 COALESCE(i.type, 'image') as media_type
                  FROM images i
                  INNER JOIN album_images ai ON i.id = ai.image_id
                  WHERE ai.album_id = ?1
@@ -372,6 +373,7 @@ impl Storage {
                     width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                     height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                     display_name: row.get(13)?,
+                    media_type: row.get::<_, Option<String>>(14)?,
                 })
             })
             .map_err(|e| format!("Failed to query album images: {}", e))?;
@@ -411,7 +413,8 @@ impl Storage {
                  ai.\"order\",
                  i.width,
                  i.height,
-                 i.display_name
+                 i.display_name,
+                 COALESCE(i.type, 'image') as media_type
                  FROM images i
                  INNER JOIN album_images ai ON i.id = ai.image_id
                  WHERE ai.album_id = ?1
@@ -441,6 +444,7 @@ impl Storage {
                     width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                     height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                     display_name: row.get(13)?,
+                    media_type: row.get::<_, Option<String>>(14)?,
                 })
             })
             .map_err(|e| format!("Failed to query album preview: {}", e))?;

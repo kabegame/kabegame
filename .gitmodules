@@ -4,3 +4,6 @@
 [submodule "packages/photoswipe-vue"]
 	path = packages/photoswipe-vue
 	url = git@github.com:cmtheit/PhotoSwipe-vue.git
+[submodule "third/FFmpeg"]
+	path = third/FFmpeg
+	url = https://github.com/FFmpeg/FFmpeg.git
