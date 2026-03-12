@@ -49,12 +49,12 @@ model RunConfig {
     @@map("run_configs")
 }
 
-// 图片表
+// 图片表（同时支持视频壁纸）
 model Image {
     id            Int     @id @default(autoincrement())
     url           String?  // 本地导入的时候没有url
     localPath     String  @map("local_path")
-    pluginId      String  @map("plugin_id")
+    pluginId      String? @map("plugin_id")
     taskId        String? @map("task_id")
     surfRecordId  String? @map("surf_record_id")
     crawledAt     Int     @map("crawled_at")

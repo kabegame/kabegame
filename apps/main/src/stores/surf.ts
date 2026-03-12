@@ -136,8 +136,26 @@ export const useSurfStore = defineStore("surf", () => {
     activeHost.value = status.host ?? null;
   };
 
+  const getRecord = async (id: string) => {
+    return invoke<SurfRecord | null>("surf_get_record", { id });
+  };
+
   const getRecordImages = async (id: string, localOffset: number, limit: number) => {
     return invoke<RangedImages>("surf_get_record_images", { id, offset: localOffset, limit });
+  };
+
+  const deleteRecord = async (id: string) => {
+    await invoke("surf_delete_record", { id });
+    const loaded = records.value.length;
+    if (loaded > 0) {
+      const result = await invoke<SurfRecordsResult>("surf_list_records", { offset: 0, limit: loaded });
+      records.value = result.records;
+      total.value = result.total;
+      hasMore.value = loaded < result.total;
+      offset.value = records.value.length;
+    } else {
+      await loadRecords();
+    }
   };
 
   return {
@@ -153,6 +171,8 @@ export const useSurfStore = defineStore("surf", () => {
     startSession,
     closeSession,
     checkSession,
+    getRecord,
     getRecordImages,
+    deleteRecord,
   };
 });

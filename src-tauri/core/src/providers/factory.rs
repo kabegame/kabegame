@@ -6,8 +6,11 @@ use crate::providers::descriptor::{MainGroupKind, ProviderDescriptor};
 use crate::providers::provider::Provider;
 use crate::providers::{
     AlbumsProvider, CommonProvider, DateGroupProvider, DateRangeRootProvider,
-    main_root::{MainAlbumsProvider, MainDateGroupProvider, MainDateRangeRootProvider, MainPluginGroupProvider, MainRootProvider, MainTaskGroupProvider},
-    PluginGroupProvider, RootProvider, TaskGroupProvider,
+    main_root::{
+        MainAlbumsProvider, MainDateGroupProvider, MainDateRangeRootProvider,
+        MainPluginGroupProvider, MainRootProvider, MainSurfGroupProvider, MainTaskGroupProvider,
+    },
+    PluginGroupProvider, RootProvider, SurfGroupProvider, TaskGroupProvider,
 };
 
 pub struct ProviderFactory;
@@ -26,6 +29,7 @@ impl ProviderFactory {
             ProviderDescriptor::DateGroup => Arc::new(DateGroupProvider::new()),
             ProviderDescriptor::DateRangeRoot => Arc::new(DateRangeRootProvider::new()),
             ProviderDescriptor::TaskGroup => Arc::new(TaskGroupProvider::new()),
+            ProviderDescriptor::SurfGroup => Arc::new(SurfGroupProvider::new()),
 
             ProviderDescriptor::All { query } => {
                 Arc::new(CommonProvider::with_query(query.clone()))
@@ -52,6 +56,7 @@ impl ProviderFactory {
                     MainGroupKind::DateRange => Arc::new(MainDateRangeRootProvider::new()),
                     MainGroupKind::Album => Arc::new(MainAlbumsProvider::new()),
                     MainGroupKind::Task => Arc::new(MainTaskGroupProvider::new()),
+                    MainGroupKind::Surf => Arc::new(MainSurfGroupProvider::new()),
                 }
             }
             ProviderDescriptor::SimpleAll { query } => Arc::new(CommonProvider::with_query_and_mode(

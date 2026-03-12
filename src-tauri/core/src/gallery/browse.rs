@@ -41,6 +41,7 @@ pub struct GalleryBrowseResult {
 /// - `date-range/<start~end>/<page>` - 按日期范围分组
 /// - `album/<albumId>/<page>` - 画册
 /// - `task/<taskId>/<page>` - 按任务分组
+/// - `surf/<surfRecordId>[/desc]/<page>` - 按畅游记录分组（默认升序，支持 desc）
 ///
 /// 保留旧 VD 路径兼容性（all/by-plugin/by-date/by-task/by-album）
 pub fn browse_gallery_provider(

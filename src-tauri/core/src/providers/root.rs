@@ -4,13 +4,14 @@ use std::sync::Arc;
 
 use crate::providers::provider::{FsEntry, Provider};
 use crate::providers::{
-    AlbumsProvider, CommonProvider, DateGroupProvider, PluginGroupProvider, TaskGroupProvider,
+    AlbumsProvider, CommonProvider, DateGroupProvider, PluginGroupProvider, SurfGroupProvider,
+    TaskGroupProvider,
 };
-use crate::storage::Storage;
 
 pub const DIR_BY_DATE: &str = "按时间";
 pub const DIR_BY_PLUGIN: &str = "按插件";
 pub const DIR_BY_TASK: &str = "按任务";
+pub const DIR_BY_SURF: &str = "按畅游";
 pub const DIR_ALBUMS: &str = "画册";
 pub const DIR_ALL: &str = "全部";
 
@@ -29,6 +30,7 @@ impl Provider for RootProvider {
             FsEntry::dir(DIR_BY_DATE),
             FsEntry::dir(DIR_BY_PLUGIN),
             FsEntry::dir(DIR_BY_TASK),
+            FsEntry::dir(DIR_BY_SURF),
             FsEntry::dir(DIR_ALBUMS),
             FsEntry::dir(DIR_ALL),
         ];
@@ -56,6 +58,9 @@ impl Provider for RootProvider {
             }
             n if n.eq_ignore_ascii_case(DIR_BY_TASK) => {
                 Some(Arc::new(TaskGroupProvider::new()) as Arc<dyn Provider>)
+            }
+            n if n.eq_ignore_ascii_case(DIR_BY_SURF) => {
+                Some(Arc::new(SurfGroupProvider::new()) as Arc<dyn Provider>)
             }
             n if n.eq_ignore_ascii_case(DIR_ALBUMS) => {
                 Some(Arc::new(AlbumsProvider::new()) as Arc<dyn Provider>)

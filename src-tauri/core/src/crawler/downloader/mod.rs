@@ -318,6 +318,19 @@ pub fn build_safe_filename(hint_filename: &str, fallback_ext: &str, hash_source:
     format!("{}{}.{}", stem_final, suffix, ext)
 }
 
+/// 生成无扩展名的安全文件名（stem + 短哈希）。仅桌面端在 URL 无扩展名时使用，不添加默认扩展名。
+pub fn build_safe_filename_no_ext(hint_filename: &str, hash_source: &str) -> String {
+    let path = Path::new(hint_filename);
+    let raw_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+    let stem = sanitize_stem_for_filename(raw_stem);
+    let h = short_hash8(hash_source);
+    let suffix = format!("-{}", h);
+    let reserve = suffix.len();
+    let stem_max = MAX_SAFE_FILENAME_LEN.saturating_sub(reserve).max(1);
+    let stem_final = clamp_ascii_len(&stem, stem_max);
+    format!("{}{}", stem_final, suffix)
+}
+
 pub fn unique_path(dir: &Path, filename: &str) -> PathBuf {
     let mut candidate = dir.join(filename);
     if !candidate.exists() {
@@ -2113,6 +2126,35 @@ pub async fn postprocess_downloaded_image(
     Ok(inserted)
 }
 
+/// 桌面端：若 infer 得到支持的图片类型且当前路径无扩展名或扩展名不正确，则重命名为带正确扩展名的文件并返回新路径；否则返回原路径。
+#[cfg(not(target_os = "android"))]
+async fn ensure_image_extension_by_infer(path: &Path) -> PathBuf {
+    let inferred = match crate::image_type::mime_type_from_path(path) {
+        Some(m) => m,
+        None => return path.to_path_buf(),
+    };
+    let want_ext = match crate::image_type::ext_from_mime(&inferred) {
+        Some(e) => e,
+        None => return path.to_path_buf(),
+    };
+    let current_ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    if crate::image_type::is_supported_image_ext(current_ext) && current_ext == want_ext {
+        return path.to_path_buf();
+    }
+    let new_path = path.with_extension(&want_ext);
+    if new_path == *path {
+        return path.to_path_buf();
+    }
+    if tokio::fs::rename(path, &new_path).await.is_ok() {
+        new_path
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// 对新下载的图片做完整入库流程：生成缩略图、入库、入画册、发事件。失败时已做清理并发送 failed。
 /// Android 不生成缩略图，thumbnail_path 存为 local_path（前端永远用原图）。
 /// `postprocess_timing_hash_ms`: 当为 Some 时表示来自「未去重」分支，在成功结束时 print 各步骤耗时（含传入的算哈希耗时）。
@@ -2129,6 +2171,10 @@ pub async fn process_downloaded_image_to_storage(
     native: bool,
 ) -> Result<bool, String> {
     let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
+    #[cfg(not(target_os = "android"))]
+    let path_used = ensure_image_extension_by_infer(path).await;
+    #[cfg(not(target_os = "android"))]
+    let path = path_used.as_path();
     let local_path_str = path
         .canonicalize()
         .unwrap_or_else(|_| path.to_path_buf())

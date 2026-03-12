@@ -12,6 +12,7 @@ pub enum MainGroupKind {
     DateRange,
     Album,
     Task,
+    Surf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +30,7 @@ pub enum ProviderDescriptor {
     /// “按时间/范围” 根目录（子目录为动态范围：YYYY-MM-DD~YYYY-MM-DD）
     DateRangeRoot,
     TaskGroup,
+    SurfGroup,
 
     /// 统一的“图片集合” provider：由 ImageQuery 定义
     All {

@@ -14,7 +14,12 @@ use url::Url;
 
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
-use super::{build_safe_filename, emit_task_log, unique_path, DownloadProgressContext, DownloadQueue, SchemeDownloader, UrlDownloaderKind};
+use super::{
+    build_safe_filename, emit_task_log, unique_path, DownloadProgressContext, DownloadQueue,
+    SchemeDownloader, UrlDownloaderKind,
+};
+#[cfg(not(target_os = "android"))]
+use super::build_safe_filename_no_ext;
 
 /// http(s) scheme：目标路径由 URL 路径段与扩展名决定。
 pub struct HttpSchemeDownloader;
@@ -30,11 +35,18 @@ impl SchemeDownloader for HttpSchemeDownloader {
             .path_segments()
             .and_then(|segments| segments.last())
             .unwrap_or("image");
-        let extension = Path::new(url_path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or(crate::image_type::default_image_extension());
-        let filename = build_safe_filename(url_path, extension, url.as_str());
+        let extension = Path::new(url_path).extension().and_then(|e| e.to_str());
+        #[cfg(target_os = "android")]
+        let filename = build_safe_filename(
+            url_path,
+            extension.unwrap_or(crate::image_type::default_image_extension()),
+            url.as_str(),
+        );
+        #[cfg(not(target_os = "android"))]
+        let filename = match extension {
+            Some(ext) => build_safe_filename(url_path, ext, url.as_str()),
+            None => build_safe_filename_no_ext(url_path, url.as_str()),
+        };
         Ok(unique_path(base_dir, &filename))
     }
 

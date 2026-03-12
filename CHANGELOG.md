@@ -4,6 +4,12 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.2.0]
+（这是一次很大的改动，带仍不增加大版本号）
+### Added
+- 添加畅游页面，用户可以通过该页面自由下载图片到kabegame
+- （pending）支持视频壁纸
+
 ## 【3.1.0】
 （这是一次大改动，因此将版本升级）
 ### Added
