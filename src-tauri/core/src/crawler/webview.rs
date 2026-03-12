@@ -80,6 +80,14 @@ impl CrawlerWindowState {
             .map(|slot| slot.context.clone())
     }
 
+    pub fn try_get_context(&self) -> Option<JsTaskContext> {
+        self.current_task
+            .try_lock()
+            .ok()?
+            .as_ref()
+            .map(|slot| slot.context.clone())
+    }
+
     pub async fn patch_context_for_task(
         &self,
         task_id: &str,

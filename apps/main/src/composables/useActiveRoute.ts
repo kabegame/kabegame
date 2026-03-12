@@ -53,6 +53,10 @@ export function useActiveRoute() {
       return "/help";
     }
 
+    if (path.startsWith("/surf")) {
+      return "/surf";
+    }
+
     // 默认返回当前路径（用于其他未匹配的路由）
     return path;
   });

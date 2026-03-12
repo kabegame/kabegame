@@ -79,6 +79,7 @@ daemon_event_kinds! {
     WallpaperUpdateTransition,
     SettingChange,
     AlbumAdded,
+    SurfRecordsChange,
 }
 
 impl DaemonEventKind {
@@ -107,6 +108,7 @@ impl DaemonEventKind {
             DaemonEventKind::WallpaperUpdateTransition => "wallpaper-update-transition",
             DaemonEventKind::SettingChange => "setting-change",
             DaemonEventKind::AlbumAdded => "album-added",
+            DaemonEventKind::SurfRecordsChange => "surf-records-change",
         }
         .to_string()
     }
@@ -130,6 +132,7 @@ impl DaemonEventKind {
             "wallpaper-update-transition" => Some(DaemonEventKind::WallpaperUpdateTransition),
             "setting-change" => Some(DaemonEventKind::SettingChange),
             "album-added" => Some(DaemonEventKind::AlbumAdded),
+            "surf-records-change" => Some(DaemonEventKind::SurfRecordsChange),
             _ => None,
         }
     }
@@ -250,6 +253,12 @@ pub enum DaemonEvent {
         #[serde(rename = "createdAt")]
         created_at: u64,
     },
+    /// 畅游记录列表变化
+    SurfRecordsChange {
+        reason: String,
+        #[serde(rename = "surfRecordId")]
+        surf_record_id: String,
+    },
 }
 
 /// 包装在 Arc 中的 Daemon 事件，用于零拷贝传递
@@ -279,6 +288,7 @@ impl DaemonEvent {
             }
             DaemonEvent::SettingChange { .. } => DaemonEventKind::SettingChange,
             DaemonEvent::AlbumAdded { .. } => DaemonEventKind::AlbumAdded,
+            DaemonEvent::SurfRecordsChange { .. } => DaemonEventKind::SurfRecordsChange,
         }
     }
 }

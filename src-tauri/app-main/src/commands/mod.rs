@@ -7,6 +7,8 @@ pub mod image;
 pub mod misc;
 pub mod plugin;
 pub mod settings;
+#[cfg(not(target_os = "android"))]
+pub mod surf;
 pub mod task;
 pub mod wallpaper;
 #[cfg(target_os = "windows")]
@@ -21,6 +23,8 @@ pub use image::*;
 pub use misc::*;
 pub use plugin::*;
 pub use settings::*;
+#[cfg(not(target_os = "android"))]
+pub use surf::*;
 pub use task::*;
 pub use wallpaper::*;
 #[cfg(target_os = "windows")]

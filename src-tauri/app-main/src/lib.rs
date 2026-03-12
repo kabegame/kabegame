@@ -342,6 +342,20 @@ pub fn run() {
             get_task_logs,
             retry_task_failed_image,
             get_active_downloads,
+            #[cfg(not(target_os = "android"))]
+            surf_start_session,
+            #[cfg(not(target_os = "android"))]
+            surf_close_session,
+            #[cfg(not(target_os = "android"))]
+            surf_get_session_status,
+            #[cfg(not(target_os = "android"))]
+            surf_list_records,
+            #[cfg(not(target_os = "android"))]
+            surf_get_record,
+            #[cfg(not(target_os = "android"))]
+            surf_get_record_images,
+            #[cfg(not(target_os = "android"))]
+            surf_update_root_url,
             // --- Run Configs ---
             get_run_configs,
             add_run_config,

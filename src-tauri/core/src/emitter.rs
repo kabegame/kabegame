@@ -240,6 +240,15 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
+    /// 发送畅游记录变更事件（用于前端刷新畅游列表）
+    pub fn emit_surf_records_change(&self, reason: &str, surf_record_id: &str) {
+        let event = std::sync::Arc::new(DaemonEvent::SurfRecordsChange {
+            reason: reason.to_string(),
+            surf_record_id: surf_record_id.to_string(),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
     /// 从存储读取任务并发送 task-status，用于下载失败等场景下刷新任务列表（避免一直显示“处理中”）。
     pub fn emit_task_status_from_storage(&self, task_id: &str) {
         let storage = crate::storage::Storage::global();
@@ -363,6 +372,8 @@ impl GlobalEmitter {
     pub fn emit_setting_change(&self, _changes: serde_json::Value) {}
 
     pub fn emit_images_change(&self, _reason: &str, _image_ids: &[String]) {}
+
+    pub fn emit_surf_records_change(&self, _reason: &str, _surf_record_id: &str) {}
 
     pub fn emit_pending_queue_change(&self, _pending_count: usize) {}
 

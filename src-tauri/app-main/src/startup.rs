@@ -15,9 +15,14 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Listener, Manager};
 
 #[cfg(not(target_os = "android"))]
-use kabegame_core::crawler::downloader::BrowserDownloadState;
+use kabegame_core::crawler::downloader::{
+    compute_native_download_destination, postprocess_downloaded_image, BrowserDownloadState,
+    NativeDownloadEntry, NativeDownloadState,
+};
 #[cfg(not(target_os = "android"))]
-use kabegame_core::crawler::webview::{set_webview_handler, CrawlerWebViewHandler};
+use kabegame_core::crawler::webview::{crawler_window_state, set_webview_handler, CrawlerWebViewHandler};
+#[cfg(not(target_os = "android"))]
+use kabegame_core::emitter::GlobalEmitter;
 #[cfg(not(target_os = "android"))]
 use tauri::webview::DownloadEvent;
 
@@ -456,15 +461,93 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
                     *destination = dest;
                     true
                 } else {
-                    false
+                    let Some(ctx) = crawler_window_state().try_get_context() else {
+                        return false;
+                    };
+                    let images_dir = std::path::PathBuf::from(&ctx.images_dir);
+                    if let Err(e) = std::fs::create_dir_all(&images_dir) {
+                        eprintln!("Failed to create native download dir: {}", e);
+                        return false;
+                    }
+                    let native_dest =
+                        match compute_native_download_destination(url.as_str(), &images_dir) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("Failed to compute native download destination: {}", e);
+                                return false;
+                            }
+                        };
+                    let download_start_time = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let entry = NativeDownloadEntry {
+                        destination: native_dest.clone(),
+                        task_id: Some(ctx.task_id.clone()),
+                        surf_record_id: None,
+                        plugin_id: ctx.plugin_id.clone(),
+                        output_album_id: ctx.output_album_id.clone(),
+                        download_start_time,
+                    };
+                    if let Err(e) = NativeDownloadState::global().register(url.as_str(), entry) {
+                        eprintln!("Failed to register native download: {}", e);
+                        return false;
+                    }
+                    GlobalEmitter::global().emit_download_state_with_native(
+                        &ctx.task_id,
+                        url.as_str(),
+                        download_start_time,
+                        &ctx.plugin_id,
+                        "downloading",
+                        None,
+                        true,
+                    );
+                    *destination = native_dest;
+                    true
                 }
             }
             DownloadEvent::Finished { url, path, success } => {
-                let _ = BrowserDownloadState::global().signal_completion_by_blob_url(
-                    url.as_str(),
-                    path.clone(),
-                    success,
-                );
+                if BrowserDownloadState::global()
+                    .signal_completion_by_blob_url(url.as_str(), path.clone(), success)
+                    .is_ok()
+                {
+                    return true;
+                }
+                let Some(entry) = NativeDownloadState::global().take(url.as_str()) else {
+                    return true;
+                };
+                if success {
+                    let final_path = path.unwrap_or_else(|| entry.destination.clone());
+                    let url_str = url.to_string();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = postprocess_downloaded_image(
+                            &final_path,
+                            &url_str,
+                            &entry.plugin_id,
+                            entry.task_id.as_deref(),
+                            entry.surf_record_id.as_deref(),
+                            entry.download_start_time,
+                            entry.output_album_id.as_deref(),
+                            true,
+                        )
+                        .await;
+                    });
+                } else {
+                    let event_task_id = entry
+                        .task_id
+                        .as_deref()
+                        .or(entry.surf_record_id.as_deref())
+                        .unwrap_or_default();
+                    GlobalEmitter::global().emit_download_state_with_native(
+                        event_task_id,
+                        url.as_str(),
+                        entry.download_start_time,
+                        &entry.plugin_id,
+                        "failed",
+                        Some("Native download finished with failure"),
+                        true,
+                    );
+                }
                 true
             }
             _ => true,
