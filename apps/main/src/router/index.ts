@@ -8,6 +8,8 @@ import TaskDetail from "@/views/TaskDetail.vue";
 import PluginDetail from "@/views/PluginDetail.vue";
 import Settings from "@/views/Settings.vue";
 import Help from "@/views/Help.vue";
+import Surf from "@/views/Surf.vue";
+import SurfImages from "@/views/SurfImages.vue";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -67,6 +69,18 @@ const routes: RouteRecordRaw[] = [
     name: "HelpTip",
     component: Help,
     meta: { title: "帮助" },
+  },
+  {
+    path: "/surf",
+    name: "Surf",
+    component: Surf,
+    meta: { title: "畅游" },
+  },
+  {
+    path: "/surf/:id/images",
+    name: "SurfImages",
+    component: SurfImages,
+    meta: { title: "畅游图片" },
   },
   {
     path: "/plugins",

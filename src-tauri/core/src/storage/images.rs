@@ -22,6 +22,9 @@ pub struct ImageInfo {
     pub plugin_id: String,
     #[serde(rename = "taskId")]
     pub task_id: Option<String>,
+    #[serde(rename = "surfRecordId")]
+    #[serde(default)]
+    pub surf_record_id: Option<String>,
     pub crawled_at: u64,
     pub metadata: Option<HashMap<String, String>>,
     #[serde(rename = "thumbnailPath")]
@@ -89,7 +92,7 @@ impl Storage {
         let total = self.get_images_total_cached(&conn)?;
 
         let query = format!(
-            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
              images.mime_type,
@@ -116,18 +119,19 @@ impl Storage {
                     local_path: row.get(2)?,
                     plugin_id: row.get(3)?,
                     task_id: row.get(4)?,
-                    crawled_at: row.get(5)?,
+                    surf_record_id: row.get(5)?,
+                    crawled_at: row.get(6)?,
                     metadata: row
-                        .get::<_, Option<String>>(6)?
+                        .get::<_, Option<String>>(7)?
                         .and_then(|s| serde_json::from_str(&s).ok()),
-                    thumbnail_path: row.get(7)?,
-                    hash: row.get(8)?,
-                    mime_type: row.get::<_, Option<String>>(9)?,
-                    favorite: row.get::<_, i64>(10)? != 0,
+                    thumbnail_path: row.get(8)?,
+                    hash: row.get(9)?,
+                    mime_type: row.get::<_, Option<String>>(10)?,
+                    favorite: row.get::<_, i64>(11)? != 0,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                    display_name: row.get(13)?,
+                    width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
+                    display_name: row.get(14)?,
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
@@ -170,7 +174,7 @@ impl Storage {
 
         let mut result = conn
             .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
                  images.mime_type,
@@ -189,18 +193,19 @@ impl Storage {
                         local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
-                        crawled_at: row.get(5)?,
+                        surf_record_id: row.get(5)?,
+                        crawled_at: row.get(6)?,
                         metadata: row
-                            .get::<_, Option<String>>(6)?
+                            .get::<_, Option<String>>(7)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
-                        thumbnail_path: row.get(7)?,
-                        hash: row.get(8)?,
-                        mime_type: row.get::<_, Option<String>>(9)?,
+                        thumbnail_path: row.get(8)?,
+                        hash: row.get(9)?,
+                        mime_type: row.get::<_, Option<String>>(10)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
+                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        display_name: row.get(13)?,
                     })
                 },
             )
@@ -226,7 +231,7 @@ impl Storage {
 
         let mut result = conn
             .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
                  images.mime_type,
@@ -245,17 +250,18 @@ impl Storage {
                         local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
-                        crawled_at: row.get(5)?,
-                        metadata: row.get::<_, Option<String>>(6)?
+                        surf_record_id: row.get(5)?,
+                        crawled_at: row.get(6)?,
+                        metadata: row.get::<_, Option<String>>(7)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
-                        thumbnail_path: row.get(7)?,
-                        hash: row.get(8)?,
-                        mime_type: row.get::<_, Option<String>>(9)?,
+                        thumbnail_path: row.get(8)?,
+                        hash: row.get(9)?,
+                        mime_type: row.get::<_, Option<String>>(10)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
+                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        display_name: row.get(13)?,
                     })
                 },
             )
@@ -284,7 +290,7 @@ impl Storage {
 
         let mut result = conn
             .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
                  images.mime_type,
@@ -304,17 +310,18 @@ impl Storage {
                         local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
-                        crawled_at: row.get(5)?,
-                        metadata: row.get::<_, Option<String>>(6)?
+                        surf_record_id: row.get(5)?,
+                        crawled_at: row.get(6)?,
+                        metadata: row.get::<_, Option<String>>(7)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
-                        thumbnail_path: row.get(7)?,
-                        hash: row.get(8)?,
-                        mime_type: row.get::<_, Option<String>>(9)?,
+                        thumbnail_path: row.get(8)?,
+                        hash: row.get(9)?,
+                        mime_type: row.get::<_, Option<String>>(10)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
+                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        display_name: row.get(13)?,
                     })
                 },
             )
@@ -340,7 +347,7 @@ impl Storage {
 
         let mut result = conn
             .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
                  images.mime_type,
@@ -359,17 +366,18 @@ impl Storage {
                         local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
-                        crawled_at: row.get(5)?,
-                        metadata: row.get::<_, Option<String>>(6)?
+                        surf_record_id: row.get(5)?,
+                        crawled_at: row.get(6)?,
+                        metadata: row.get::<_, Option<String>>(7)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
-                        thumbnail_path: row.get(7)?,
-                        hash: row.get(8)?,
-                        mime_type: row.get::<_, Option<String>>(9)?,
+                        thumbnail_path: row.get(8)?,
+                        hash: row.get(9)?,
+                        mime_type: row.get::<_, Option<String>>(10)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
+                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        display_name: row.get(13)?,
                     })
                 },
             )
@@ -398,7 +406,7 @@ impl Storage {
 
         let mut result = conn
             .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
                  images.mime_type,
@@ -417,17 +425,18 @@ impl Storage {
                         local_path,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
-                        crawled_at: row.get(5)?,
-                        metadata: row.get::<_, Option<String>>(6)?
+                        surf_record_id: row.get(5)?,
+                        crawled_at: row.get(6)?,
+                        metadata: row.get::<_, Option<String>>(7)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
-                        thumbnail_path: row.get(7)?,
-                        hash: row.get(8)?,
-                        mime_type: row.get::<_, Option<String>>(9)?,
+                        thumbnail_path: row.get(8)?,
+                        hash: row.get(9)?,
+                        mime_type: row.get::<_, Option<String>>(10)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        display_name: row.get(12)?,
+                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        display_name: row.get(13)?,
                     })
                 },
             )
@@ -446,6 +455,80 @@ impl Storage {
         }
 
         Ok(result)
+    }
+
+    pub fn find_images_by_surf_record(
+        &self,
+        surf_record_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<RangedImages, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let total: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM images WHERE surf_record_id = ?1",
+                params![surf_record_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to query surf record image total: {}", e))?;
+
+        let query = format!(
+            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
+             COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
+             images.hash,
+             images.mime_type,
+             CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
+             images.width,
+             images.height,
+             images.display_name
+             FROM images
+             LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
+             WHERE images.surf_record_id = ?1
+             ORDER BY images.crawled_at DESC
+             LIMIT ?2 OFFSET ?3",
+            FAVORITE_ALBUM_ID
+        );
+        let mut stmt = conn
+            .prepare(&query)
+            .map_err(|e| format!("Failed to prepare query: {}", e))?;
+        let image_rows = stmt
+            .query_map(
+                params![surf_record_id, limit as i64, offset as i64],
+                |row| {
+                    let local_path: String = row.get(2)?;
+                    Ok(ImageInfo {
+                        id: row.get(0)?,
+                        url: row.get::<_, Option<String>>(1)?,
+                        local_path: local_path.clone(),
+                        plugin_id: row.get(3)?,
+                        task_id: row.get(4)?,
+                        surf_record_id: row.get(5)?,
+                        crawled_at: row.get(6)?,
+                        metadata: row
+                            .get::<_, Option<String>>(7)?
+                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        thumbnail_path: row.get(8)?,
+                        hash: row.get(9)?,
+                        mime_type: row.get::<_, Option<String>>(10)?,
+                        favorite: row.get::<_, i64>(11)? != 0,
+                        local_exists: PathBuf::from(&local_path).exists(),
+                        width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
+                        display_name: row.get(14)?,
+                    })
+                },
+            )
+            .map_err(|e| format!("Failed to query surf record images: {}", e))?;
+        let mut images = Vec::new();
+        for row_result in image_rows {
+            images.push(row_result.map_err(|e| format!("Failed to read row: {}", e))?);
+        }
+        Ok(RangedImages {
+            images,
+            total,
+            offset,
+            limit,
+        })
     }
 
     pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {
@@ -470,13 +553,14 @@ impl Storage {
 
         let crawled_at_i64 = image.crawled_at as i64;
         conn.execute(
-            "INSERT INTO images (url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, mime_type, width, height, display_name)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata, thumbnail_path, hash, mime_type, width, height, display_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 &image.url,
                 image.local_path,
                 image.plugin_id,
                 image.task_id,
+                image.surf_record_id,
                 crawled_at_i64,
                 metadata_json,
                 thumbnail_path,

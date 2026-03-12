@@ -13,12 +13,14 @@ pub mod images;
 pub mod organize;
 pub mod plugin_sources;
 pub mod run_configs;
+pub mod surf_records;
 pub mod tasks;
 pub mod temp_files;
 
 pub use albums::Album;
 pub use images::ImageInfo;
 pub use run_configs::RunConfig;
+pub use surf_records::{RangedSurfRecords, SurfRecord};
 pub use tasks::TaskInfo;
 
 // 收藏画册的固定ID
@@ -111,6 +113,7 @@ PRAGMA mmap_size = 268435456;
                 local_path TEXT NOT NULL,
                 plugin_id TEXT NOT NULL,
                 task_id TEXT,
+                surf_record_id TEXT,
                 crawled_at INTEGER NOT NULL,
                 metadata TEXT,
                 thumbnail_path TEXT NOT NULL DEFAULT '',
@@ -124,6 +127,7 @@ PRAGMA mmap_size = 268435456;
         .expect("Failed to create images table");
 
         let _ = conn.execute("ALTER TABLE images ADD COLUMN task_id TEXT", []);
+        let _ = conn.execute("ALTER TABLE images ADD COLUMN surf_record_id TEXT", []);
         let _ = conn.execute(
             "ALTER TABLE images ADD COLUMN hash TEXT NOT NULL DEFAULT ''",
             [],
@@ -153,6 +157,10 @@ PRAGMA mmap_size = 268435456;
         );
         let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_task_id ON images(task_id)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_images_surf_record_id ON images(surf_record_id)",
             [],
         );
         let _ = conn.execute(
@@ -246,6 +254,35 @@ PRAGMA mmap_size = 268435456;
             conn.execute("ALTER TABLE images ADD COLUMN mime_type TEXT", [])
                 .expect("Failed to add images.mime_type column after migrations");
         }
+        // 复杂迁移可能重建 images 表，迁移后再次确保 surf_record_id 列存在。
+        let _ = conn.execute("ALTER TABLE images ADD COLUMN surf_record_id TEXT", []);
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_images_surf_record_id ON images(surf_record_id)",
+            [],
+        );
+
+        // 创建畅游记录表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS surf_records (
+                id TEXT PRIMARY KEY,
+                host TEXT NOT NULL UNIQUE,
+                root_url TEXT NOT NULL,
+                icon BLOB,
+                last_visit_at INTEGER NOT NULL,
+                download_count INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            )",
+            [],
+        )
+        .expect("Failed to create surf_records table");
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_surf_records_host ON surf_records(host)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_surf_records_last_visit ON surf_records(last_visit_at DESC)",
+            [],
+        );
 
         // 检测 plugin_sources 表是否已存在（用于判断是否首次迁移）
         let plugin_sources_is_new = conn

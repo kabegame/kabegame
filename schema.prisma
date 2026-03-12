@@ -56,6 +56,7 @@ model Image {
     localPath     String  @map("local_path")
     pluginId      String  @map("plugin_id")
     taskId        String? @map("task_id")
+    surfRecordId  String? @map("surf_record_id")
     crawledAt     Int     @map("crawled_at")
     metadata      String? // JSON string
     thumbnailPath String  @default("") @map("thumbnail_path")
@@ -66,14 +67,33 @@ model Image {
     displayName   String  @default("") @map("display_name")
 
     task          Task?        @relation("TaskToImage", fields: [taskId], references: [id], onDelete: SetNull)
+    surfRecord    SurfRecord?  @relation("SurfRecordToImage", fields: [surfRecordId], references: [id], onDelete: SetNull)
     albumImages   AlbumImage[]
     taskImages    TaskImage[]
 
     @@index([crawledAt(sort: Desc)], name: "idx_crawled_at")
     @@index([pluginId], name: "idx_plugin_id")
     @@index([taskId], name: "idx_task_id")
+    @@index([surfRecordId], name: "idx_images_surf_record_id")
     @@index([hash], name: "idx_images_hash")
     @@map("images")
+}
+
+// 畅游记录表
+model SurfRecord {
+    id            String  @id
+    host          String  @unique
+    rootUrl       String  @map("root_url")
+    icon          Bytes?
+    lastVisitAt   Int     @map("last_visit_at")
+    downloadCount Int     @default(0) @map("download_count")
+    createdAt     Int     @map("created_at")
+
+    images        Image[] @relation("SurfRecordToImage")
+
+    @@index([host], name: "idx_surf_records_host")
+    @@index([lastVisitAt(sort: Desc)], name: "idx_surf_records_last_visit")
+    @@map("surf_records")
 }
 
 // 画册表

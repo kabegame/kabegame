@@ -455,6 +455,7 @@ impl Storage {
                     local_path: row.get(2)?,
                     plugin_id: row.get(3)?,
                     task_id: row.get(4)?,
+                    surf_record_id: None,
                     crawled_at: row.get(5)?,
                     metadata: row
                         .get::<_, Option<String>>(6)?
@@ -515,6 +516,7 @@ impl Storage {
                         local_path: row.get(2)?,
                         plugin_id: row.get(3)?,
                         task_id: row.get(4)?,
+                        surf_record_id: None,
                         crawled_at: row.get(5)?,
                         metadata: row
                             .get::<_, Option<String>>(6)?

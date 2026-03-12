@@ -21,10 +21,14 @@ mod content;
 mod file;
 mod http;
 mod browser_download;
+pub mod native_download;
 
 pub use crate::crawler::archiver::{ArchiveProcessor, ArchiveType};
 pub use browser_download::{BrowserDownloadResult, BrowserDownloadState};
 pub use http::{build_reqwest_header_map_for_emitter, create_client};
+pub use native_download::{
+    compute_native_download_destination, NativeDownloadEntry, NativeDownloadState,
+};
 
 /// 下载执行类型：按 scheme 选择 http / file / content 的具体实现。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -350,6 +354,7 @@ pub fn unique_path(dir: &Path, filename: &str) -> PathBuf {
     }
 }
 
+#[cfg(target_os = "android")]
 fn derive_display_name_from_url(url: &str) -> String {
     let fallback_ext = crate::image_type::default_image_extension();
     let parsed = match Url::parse(url) {
@@ -387,7 +392,7 @@ fn mime_type_from_filename(filename: &str) -> String {
 }
 
 /// 根据 URL 计算图片的下载目标路径（仅路径，不创建文件）；按 scheme 委托给对应 [SchemeDownloader]。
-fn compute_image_download_path(url: &str, base_dir: &Path) -> Result<PathBuf, String> {
+pub(crate) fn compute_image_download_path(url: &str, base_dir: &Path) -> Result<PathBuf, String> {
     let parsed = Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
     let downloader = get_downloader_for_url(&parsed).ok_or_else(|| {
         let supported = supported_url_schemes().join(", ");
@@ -500,6 +505,8 @@ pub struct ActiveDownloadInfo {
     pub task_id: String,
     #[serde(default)]
     pub state: String,
+    #[serde(default)]
+    pub native: bool,
 }
 
 pub fn emit_download_state(
@@ -628,7 +635,10 @@ impl DownloadQueue {
 
     pub async fn get_active_downloads(&self) -> Result<Vec<ActiveDownloadInfo>, String> {
         let tasks = self.active_tasks.lock().await;
-        Ok(tasks.clone())
+        let mut all = tasks.clone();
+        drop(tasks);
+        all.extend(NativeDownloadState::global().get_active_downloads());
+        Ok(all)
     }
 
     pub async fn download_image(
@@ -885,6 +895,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                 start_time: job.download_start_time,
                 task_id: job.task_id.clone(),
                 state: "preparing".to_string(),
+                native: false,
             };
             let mut tasks = active_tasks.lock().await;
             tasks.push(download_info);
@@ -1132,6 +1143,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
 
             match download_result {
                 Ok(final_path) => {
+                    #[cfg(not(target_os = "android"))]
+                    let _ = &final_path;
                     // 归档：解压到固定目录（Android 内部私有目录 / 桌面临时目录），再遍历入队图片
                     if is_archive {
                         let archive_url = Url::from_file_path(&download_path)
@@ -1290,6 +1303,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     } else {
                         // 非归档：后处理。content:// 用 readFileBytes；file:// 用 path。
                         let is_content = job.url.scheme() == "content";
+                        #[cfg(not(target_os = "android"))]
+                        let _ = is_content;
 
                         // 检查整理是否正在进行，如果是则等待
                         #[cfg(not(target_os = "android"))]
@@ -1307,6 +1322,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                         start_time: job.download_start_time,
                                         task_id: job.task_id.clone(),
                                         state: "等待整理".to_string(),
+                                        native: false,
                                     };
                                     let mut tasks = active_tasks.lock().await;
                                     tasks.push(download_info);
@@ -1357,6 +1373,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                 .get_auto_deduplicate()
                                 .await
                                 .unwrap_or(false);
+                            #[cfg(not(target_os = "android"))]
+                            let _ = auto_deduplicate;
 
                             #[cfg(target_os = "android")]
                             let use_path_flow = !is_content;
@@ -1666,157 +1684,17 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
 
                                 #[cfg(not(target_os = "android"))]
                                 {
-                                    if !auto_deduplicate {
-                                        // 去重关闭：完整流程，并统计后处理各步骤耗时
-                                        let post_start = Instant::now();
-                                        match compute_file_hash(&path_for_post).await {
-                                            Ok(hash) => {
-                                                let hash_ms =
-                                                    post_start.elapsed().as_millis() as u64;
-                                                let _ = process_downloaded_image_to_storage(
-                                                    &path_for_post,
-                                                    &hash,
-                                                    url_clone.as_str(),
-                                                    &plugin_id_clone,
-                                                    &task_id_clone,
-                                                    download_start_time,
-                                                    job.output_album_id.as_deref(),
-                                                    Some(hash_ms),
-                                                )
-                                                .await;
-                                            }
-                                            Err(e) => {
-                                                let _ =
-                                                    tokio::fs::remove_file(&path_for_post).await;
-                                                let _ = Storage::global().add_task_failed_image(
-                                                    &task_id_clone,
-                                                    &plugin_id_clone,
-                                                    url_clone.as_str(),
-                                                    download_start_time as i64,
-                                                    Some(e.as_str()),
-                                                );
-                                                GlobalEmitter::global().emit_download_state(
-                                                    &task_id_clone,
-                                                    url_clone.as_str(),
-                                                    download_start_time,
-                                                    &plugin_id_clone,
-                                                    "failed",
-                                                    Some(e.as_str()),
-                                                );
-                                                GlobalEmitter::global()
-                                                    .emit_task_status_from_storage(&task_id_clone);
-                                            }
-                                        }
-                                    } else {
-                                        // 去重开启，URL 不在库中（已下载）：算哈希后分支
-                                        match compute_file_hash(&path_for_post).await {
-                                            Ok(hash) => {
-                                                let existing_by_hash = Storage::global()
-                                                    .find_image_by_hash(&hash)
-                                                    .ok()
-                                                    .flatten();
-                                                if let Some(ref existing) = existing_by_hash {
-                                                    // 哈希已存在：删除刚下载的文件（若无任何图片使用该路径），入画册，发事件
-                                                    let local_path_str = path_for_post
-                                                        .canonicalize()
-                                                        .unwrap_or_else(|_| path_for_post.clone())
-                                                        .to_string_lossy()
-                                                        .to_string()
-                                                        .trim_start_matches("\\\\?\\")
-                                                        .to_string();
-                                                    let no_image_uses_path = Storage::global()
-                                                        .find_image_by_path(&local_path_str)
-                                                        .ok()
-                                                        .flatten()
-                                                        .is_none();
-                                                    if no_image_uses_path {
-                                                        let _ =
-                                                            tokio::fs::remove_file(&path_for_post)
-                                                                .await;
-                                                    }
-                                                    if let Some(ref album_id) = job.output_album_id
-                                                    {
-                                                        if !album_id.trim().is_empty() {
-                                                            let added = Storage::global()
-                                                                .add_images_to_album_silent(
-                                                                    album_id,
-                                                                    &[existing.id.clone()],
-                                                                );
-                                                            if added > 0 {
-                                                                let reason = if album_id.as_str()
-                                                                    == FAVORITE_ALBUM_ID
-                                                                {
-                                                                    "favorite-add"
-                                                                } else {
-                                                                    "album-add"
-                                                                };
-                                                                GlobalEmitter::global().emit(
-                                                            "images-change",
-                                                            serde_json::json!({
-                                                                "reason": reason,
-                                                                "albumId": album_id,
-                                                                "taskId": &task_id_clone,
-                                                                "imageIds": [existing.id.clone()],
-                                                            }),
-                                                        );
-                                                            }
-                                                        }
-                                                    }
-                                                    GlobalEmitter::global().emit(
-                                                        "images-change",
-                                                        serde_json::json!({
-                                                            "reason": "add",
-                                                            "taskId": &task_id_clone,
-                                                            "imageIds": [existing.id.clone()],
-                                                        }),
-                                                    );
-                                                    GlobalEmitter::global().emit_download_state(
-                                                        &task_id_clone,
-                                                        url_clone.as_str(),
-                                                        download_start_time,
-                                                        &plugin_id_clone,
-                                                        "completed",
-                                                        None,
-                                                    );
-                                                } else {
-                                                    // 哈希不存在：与不去重相同流程（不统计耗时）
-                                                    let _ = process_downloaded_image_to_storage(
-                                                        &path_for_post,
-                                                        &hash,
-                                                        url_clone.as_str(),
-                                                        &plugin_id_clone,
-                                                        &task_id_clone,
-                                                        download_start_time,
-                                                        job.output_album_id.as_deref(),
-                                                        None,
-                                                    )
-                                                    .await;
-                                                }
-                                            }
-                                            Err(e) => {
-                                                let _ =
-                                                    tokio::fs::remove_file(&path_for_post).await;
-                                                let _ = Storage::global().add_task_failed_image(
-                                                    &task_id_clone,
-                                                    &plugin_id_clone,
-                                                    url_clone.as_str(),
-                                                    download_start_time as i64,
-                                                    Some(e.as_str()),
-                                                );
-                                                GlobalEmitter::global().emit_download_state(
-                                                    &task_id_clone,
-                                                    url_clone.as_str(),
-                                                    download_start_time,
-                                                    &plugin_id_clone,
-                                                    "failed",
-                                                    Some(e.as_str()),
-                                                );
-                                                GlobalEmitter::global()
-                                                    .emit_task_status_from_storage(&task_id_clone);
-                                            }
-                                        }
-                                    }
-                                    ensure_minimum_duration(download_start_time, 500).await;
+                                    let _ = postprocess_downloaded_image(
+                                        &path_for_post,
+                                        url_clone.as_str(),
+                                        &plugin_id_clone,
+                                        Some(&task_id_clone),
+                                        None,
+                                        download_start_time,
+                                        job.output_album_id.as_deref(),
+                                        false,
+                                    )
+                                    .await;
                                 }
                             }
                         }
@@ -1914,6 +1792,7 @@ async fn process_downloaded_content_image_to_storage(
         local_path: content_uri.to_string(),
         plugin_id: plugin_id.to_string(),
         task_id: Some(task_id.to_string()),
+        surf_record_id: None,
         crawled_at: download_start_time,
         metadata: None,
         thumbnail_path: thumbnail_path_str.to_string(),
@@ -1993,6 +1872,247 @@ async fn process_downloaded_content_image_to_storage(
     }
 }
 
+#[cfg(not(target_os = "android"))]
+pub async fn postprocess_downloaded_image(
+    path: &Path,
+    url: &str,
+    plugin_id: &str,
+    task_id: Option<&str>,
+    surf_record_id: Option<&str>,
+    download_start_time: u64,
+    output_album_id: Option<&str>,
+    native: bool,
+) -> Result<bool, String> {
+    use crate::storage::organize::OrganizeService;
+    use std::sync::atomic::Ordering;
+
+    OrganizeService::init_organize_barrier();
+    let organize_running = OrganizeService::get_organize_running();
+    if organize_running.load(Ordering::Relaxed) {
+        let barrier = OrganizeService::get_organize_barrier();
+        barrier.notified().await;
+    }
+
+    let inferred_mime = crate::image_type::mime_type_from_path(path);
+    let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
+    let is_surf_mode = surf_record_id.is_some();
+    if inferred_mime.is_none() {
+        let err = format!(
+            "下载文件格式不受支持（infer）：{}",
+            path.to_string_lossy()
+        );
+        if let Some(task_id) = task_id {
+            GlobalEmitter::global().emit_task_log(
+                task_id,
+                "error",
+                &format!("图片后处理失败: {err}"),
+            );
+            let _ = Storage::global().add_task_failed_image(
+                task_id,
+                plugin_id,
+                url,
+                download_start_time as i64,
+                Some(err.as_str()),
+            );
+        }
+        GlobalEmitter::global().emit_download_state_with_native(
+            event_task_id,
+            url,
+            download_start_time,
+            plugin_id,
+            "failed",
+            Some(err.as_str()),
+            native,
+        );
+        if let Some(task_id) = task_id {
+            GlobalEmitter::global().emit_task_status_from_storage(task_id);
+        }
+        return Err(err);
+    }
+
+    let auto_deduplicate = Settings::global()
+        .get_auto_deduplicate()
+        .await
+        .unwrap_or(false);
+
+    if !auto_deduplicate {
+        let post_start = Instant::now();
+        let hash = match compute_file_hash(path).await {
+            Ok(hash) => hash,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(path).await;
+                if let Some(task_id) = task_id {
+                    let _ = Storage::global().add_task_failed_image(
+                        task_id,
+                        plugin_id,
+                        url,
+                        download_start_time as i64,
+                        Some(e.as_str()),
+                    );
+                }
+                GlobalEmitter::global().emit_download_state_with_native(
+                    event_task_id,
+                    url,
+                    download_start_time,
+                    plugin_id,
+                    "failed",
+                    Some(e.as_str()),
+                    native,
+                );
+                if let Some(task_id) = task_id {
+                    GlobalEmitter::global().emit_task_status_from_storage(task_id);
+                }
+                return Err(e);
+            }
+        };
+        let hash_ms = post_start.elapsed().as_millis() as u64;
+        let inserted = process_downloaded_image_to_storage(
+            path,
+            &hash,
+            url,
+            plugin_id,
+            task_id,
+            surf_record_id,
+            download_start_time,
+            output_album_id,
+            Some(hash_ms),
+            native,
+        )
+        .await?;
+        ensure_minimum_duration(download_start_time, 500).await;
+        return Ok(inserted);
+    }
+
+    let hash = match compute_file_hash(path).await {
+        Ok(hash) => hash,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(path).await;
+            if let Some(task_id) = task_id {
+                let _ = Storage::global().add_task_failed_image(
+                    task_id,
+                    plugin_id,
+                    url,
+                    download_start_time as i64,
+                    Some(e.as_str()),
+                );
+            }
+            GlobalEmitter::global().emit_download_state_with_native(
+                event_task_id,
+                url,
+                download_start_time,
+                plugin_id,
+                "failed",
+                Some(e.as_str()),
+                native,
+            );
+            if let Some(task_id) = task_id {
+                GlobalEmitter::global().emit_task_status_from_storage(task_id);
+            }
+            return Err(e);
+        }
+    };
+
+    let existing_by_hash = Storage::global().find_image_by_hash(&hash).ok().flatten();
+    if let Some(ref existing) = existing_by_hash {
+        let local_path_str = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string()
+            .trim_start_matches("\\\\?\\")
+            .to_string();
+        let no_image_uses_path = Storage::global()
+            .find_image_by_path(&local_path_str)
+            .ok()
+            .flatten()
+            .is_none();
+        if no_image_uses_path {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+        if let Some(album_id) = output_album_id {
+            if !album_id.trim().is_empty() {
+                let added = Storage::global().add_images_to_album_silent(album_id, &[existing.id.clone()]);
+                if added > 0 {
+                    let reason = if album_id == FAVORITE_ALBUM_ID {
+                        "favorite-add"
+                    } else {
+                        "album-add"
+                    };
+                    GlobalEmitter::global().emit(
+                        "images-change",
+                        serde_json::json!({
+                            "reason": reason,
+                            "albumId": album_id,
+                            "taskId": task_id,
+                            "imageIds": [existing.id.clone()],
+                        }),
+                    );
+                }
+            }
+        }
+        if let Some(task_id) = task_id {
+            GlobalEmitter::global().emit(
+                "images-change",
+                serde_json::json!({
+                    "reason": "add",
+                    "taskId": task_id,
+                    "imageIds": [existing.id.clone()],
+                }),
+            );
+        } else if let Some(surf_record_id) = surf_record_id {
+            GlobalEmitter::global().emit(
+                "images-change",
+                serde_json::json!({
+                    "reason": "add",
+                    "surfRecordId": surf_record_id,
+                    "imageIds": [existing.id.clone()],
+                }),
+            );
+            GlobalEmitter::global().emit_download_state_with_native(
+                event_task_id,
+                url,
+                download_start_time,
+                plugin_id,
+                "failed",
+                Some("duplicate filtered"),
+                native,
+            );
+            ensure_minimum_duration(download_start_time, 500).await;
+            return Ok(false);
+        }
+        GlobalEmitter::global().emit_download_state_with_native(
+            event_task_id,
+            url,
+            download_start_time,
+            plugin_id,
+            "completed",
+            None,
+            native,
+        );
+        ensure_minimum_duration(download_start_time, 500).await;
+        return Ok(true);
+    }
+
+    let inserted = process_downloaded_image_to_storage(
+        path,
+        &hash,
+        url,
+        plugin_id,
+        task_id,
+        surf_record_id,
+        download_start_time,
+        output_album_id,
+        None,
+        native,
+    )
+    .await?;
+    ensure_minimum_duration(download_start_time, 500).await;
+    if is_surf_mode && !inserted {
+        return Ok(false);
+    }
+    Ok(inserted)
+}
+
 /// 对新下载的图片做完整入库流程：生成缩略图、入库、入画册、发事件。失败时已做清理并发送 failed。
 /// Android 不生成缩略图，thumbnail_path 存为 local_path（前端永远用原图）。
 /// `postprocess_timing_hash_ms`: 当为 Some 时表示来自「未去重」分支，在成功结束时 print 各步骤耗时（含传入的算哈希耗时）。
@@ -2001,11 +2121,14 @@ pub async fn process_downloaded_image_to_storage(
     hash: &str,
     url: &str,
     plugin_id: &str,
-    task_id: &str,
+    task_id: Option<&str>,
+    surf_record_id: Option<&str>,
     download_start_time: u64,
     output_album_id: Option<&str>,
     postprocess_timing_hash_ms: Option<u64>,
-) -> Result<(), String> {
+    native: bool,
+) -> Result<bool, String> {
+    let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
     let local_path_str = path
         .canonicalize()
         .unwrap_or_else(|_| path.to_path_buf())
@@ -2029,22 +2152,27 @@ pub async fn process_downloaded_image_to_storage(
             Ok(t) => t,
             Err(e) => {
                 let _ = tokio::fs::remove_file(path).await;
-                let _ = Storage::global().add_task_failed_image(
-                    task_id,
-                    plugin_id,
-                    url,
-                    download_start_time as i64,
-                    Some(e.as_str()),
-                );
-                GlobalEmitter::global().emit_download_state(
-                    task_id,
+                if let Some(task_id) = task_id {
+                    let _ = Storage::global().add_task_failed_image(
+                        task_id,
+                        plugin_id,
+                        url,
+                        download_start_time as i64,
+                        Some(e.as_str()),
+                    );
+                }
+                GlobalEmitter::global().emit_download_state_with_native(
+                    event_task_id,
                     url,
                     download_start_time,
                     plugin_id,
                     "failed",
                     Some(e.as_str()),
+                    native,
                 );
-                GlobalEmitter::global().emit_task_status_from_storage(task_id);
+                if let Some(task_id) = task_id {
+                    GlobalEmitter::global().emit_task_status_from_storage(task_id);
+                }
                 return Err(e);
             }
         };
@@ -2079,7 +2207,8 @@ pub async fn process_downloaded_image_to_storage(
         },
         local_path: local_path_str,
         plugin_id: plugin_id.to_string(),
-        task_id: Some(task_id.to_string()),
+        task_id: task_id.map(|v| v.to_string()),
+        surf_record_id: surf_record_id.map(|v| v.to_string()),
         crawled_at: download_start_time,
         metadata: None,
         thumbnail_path: thumbnail_path_str,
@@ -2102,6 +2231,7 @@ pub async fn process_downloaded_image_to_storage(
                 serde_json::json!({
                     "reason": "add",
                     "taskId": task_id,
+                    "surfRecordId": surf_record_id,
                     "imageIds": [image_id.clone()],
                 }),
             );
@@ -2121,6 +2251,7 @@ pub async fn process_downloaded_image_to_storage(
                                 "reason": reason,
                                 "albumId": album_id,
                                 "taskId": task_id,
+                                "surfRecordId": surf_record_id,
                                 "imageIds": [image_id.clone()],
                             }),
                         );
@@ -2135,7 +2266,7 @@ pub async fn process_downloaded_image_to_storage(
                 let al = album_ms.unwrap_or(0);
                 eprintln!(
                     "[Postprocess] task_id={} url={} | hash={}ms thumbnail={}ms add_image={}ms add_album={}ms total={}ms",
-                    task_id,
+                    task_id.unwrap_or_default(),
                     if url.len() > 60 { format!("{}...", &url[..60]) } else { url.to_string() },
                     h,
                     th,
@@ -2144,15 +2275,16 @@ pub async fn process_downloaded_image_to_storage(
                     h + th + ad + al
                 );
             }
-            GlobalEmitter::global().emit_download_state(
-                task_id,
+            GlobalEmitter::global().emit_download_state_with_native(
+                event_task_id,
                 url,
                 download_start_time,
                 plugin_id,
                 "completed",
                 None,
+                native,
             );
-            Ok(())
+            Ok(true)
         }
         Err(e) => {
             let _ = tokio::fs::remove_file(path).await;
@@ -2161,22 +2293,27 @@ pub async fn process_downloaded_image_to_storage(
                     let _ = tokio::fs::remove_file(thumb).await;
                 }
             }
-            let _ = Storage::global().add_task_failed_image(
-                task_id,
-                plugin_id,
-                url,
-                download_start_time as i64,
-                Some(e.as_str()),
-            );
-            GlobalEmitter::global().emit_download_state(
-                task_id,
+            if let Some(task_id) = task_id {
+                let _ = Storage::global().add_task_failed_image(
+                    task_id,
+                    plugin_id,
+                    url,
+                    download_start_time as i64,
+                    Some(e.as_str()),
+                );
+            }
+            GlobalEmitter::global().emit_download_state_with_native(
+                event_task_id,
                 url,
                 download_start_time,
                 plugin_id,
                 "failed",
                 Some(e.as_str()),
+                native,
             );
-            GlobalEmitter::global().emit_task_status_from_storage(task_id);
+            if let Some(task_id) = task_id {
+                GlobalEmitter::global().emit_task_status_from_storage(task_id);
+            }
             Err(e)
         }
     }
