@@ -148,6 +148,38 @@ pub fn default_image_extension() -> &'static str {
     "jpg"
 }
 
+/// 支持的 MIME 到规范扩展名的映射（用于 infer 后为文件补全/修正扩展名）。
+const MIME_TO_EXT: &[(&str, &str)] = &[
+    ("image/jpeg", "jpg"),
+    ("image/png", "png"),
+    ("image/gif", "gif"),
+    ("image/webp", "webp"),
+    ("image/bmp", "bmp"),
+    ("image/avif", "avif"),
+    ("image/heic", "heic"),
+];
+
+static EXT_BY_MIME: OnceLock<HashMap<String, String>> = OnceLock::new();
+
+fn ext_by_mime_map() -> &'static HashMap<String, String> {
+    EXT_BY_MIME.get_or_init(|| {
+        MIME_TO_EXT
+            .iter()
+            .map(|(mime, ext)| ((*mime).to_string(), (*ext).to_string()))
+            .collect()
+    })
+}
+
+/// 根据支持的图片 MIME 返回规范扩展名（小写，不含点）。仅当 mime 在支持列表中时返回。用于 infer 推断后为无扩展名或错误扩展名的文件补全/修正。
+pub fn ext_from_mime(mime: &str) -> Option<String> {
+    let m = mime.trim().to_lowercase();
+    if supported_mime_types().contains(&m) {
+        ext_by_mime_map().get(&m).cloned()
+    } else {
+        None
+    }
+}
+
 /// 根据 MIME 类型判断是否为支持的图片（用于 Android content:// URI）。
 pub fn is_image_mime(mime: &Option<String>) -> bool {
     let Some(m) = mime else { return false };

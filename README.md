@@ -1,6 +1,6 @@
-# Kabegame 壁纸管理器
+# Kabegame 图片管理器
 
-一个基于 Tauri 的二次元壁纸管理器！收集、管理、轮播，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元壁纸资源~
+一个基于 Tauri 的二次元图片管理器！收集、管理、设置/轮播壁纸，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元图片资源~
 
 <div align="center">
   <img src="docs/images/image2.png" alt="Kabegame 形象图 1" width="256"/>
@@ -14,9 +14,9 @@
   <img src="docs/images/main-screenshot-linux.png" alt="Kabegame linux 截图" width="800" />
   <div>
     <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame android 截图" width="400" />
-    <img src="docs/images/main-screenshot-android-preview.jpg" alt="Kabegame android 截图" width="400" />
+    <img src="docs/images/main-screenshot-android-pßreview.jpg" alt="Kabegame android 截图" width="400" />
   </div>
-</div>
+</div>ß
 
 ## 名称由来 🐢
 

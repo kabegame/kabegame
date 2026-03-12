@@ -179,12 +179,14 @@ pub fn run() {
     #[cfg(not(target_os = "android"))]
     {
         builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
-        // 爬虫窗口关闭时仅隐藏不销毁，便于设置中再次打开
+        // 爬虫窗口关闭时仅隐藏不销毁，便于设置中再次打开；遨游窗口关闭时清除会话状态并通知前端
         builder = builder.on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "crawler" {
                     let _ = window.hide();
                     api.prevent_close();
+                } else if window.label() == "surf" {
+                    commands::surf::notify_surf_session_closed(&window.app_handle());
                 }
             }
         });
@@ -356,6 +358,8 @@ pub fn run() {
             surf_get_record_images,
             #[cfg(not(target_os = "android"))]
             surf_update_root_url,
+            #[cfg(not(target_os = "android"))]
+            surf_delete_record,
             // --- Run Configs ---
             get_run_configs,
             add_run_config,

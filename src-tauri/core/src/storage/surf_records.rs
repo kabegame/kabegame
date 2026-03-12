@@ -208,6 +208,61 @@ impl Storage {
         })
     }
 
+    pub fn get_surf_records_with_images(&self) -> Result<Vec<(String, String)>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT sr.id, sr.host
+                 FROM surf_records sr
+                 WHERE EXISTS (
+                   SELECT 1
+                   FROM images i
+                   WHERE i.surf_record_id = sr.id
+                 )
+                 ORDER BY sr.last_visit_at DESC",
+            )
+            .map_err(|e| format!("Failed to prepare surf records with images query: {}", e))?;
+
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| format!("Failed to query surf records with images: {}", e))?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row.map_err(|e| format!("Failed to read surf record row: {}", e))?);
+        }
+        Ok(records)
+    }
+
+    pub fn get_surf_record_id_by_host(&self, host: &str) -> Result<Option<String>, String> {
+        let host = host.trim().to_lowercase();
+        if host.is_empty() {
+            return Ok(None);
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let id = conn
+            .query_row(
+                "SELECT id FROM surf_records WHERE host = ?1 LIMIT 1",
+                params![host],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query surf record id by host: {}", e))?;
+        Ok(id)
+    }
+
+    pub fn surf_record_exists(&self, id: &str) -> Result<bool, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM surf_records WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to query surf record exists: {}", e))?;
+        Ok(count > 0)
+    }
+
     pub fn update_surf_record_visit(&self, id: &str) -> Result<(), String> {
         let ts = now_secs() as i64;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -256,6 +311,18 @@ impl Storage {
             params![root_url, id],
         )
         .map_err(|e| format!("Failed to update surf_record root_url: {}", e))?;
+        Ok(())
+    }
+
+    /// 删除遨游记录：将关联图片的 surf_record_id 置空后删除记录。
+    pub fn delete_surf_record(&self, id: &str) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.execute("UPDATE images SET surf_record_id = NULL WHERE surf_record_id = ?1", params![id])
+            .map_err(|e| format!("Failed to clear images surf_record_id: {}", e))?;
+        conn.execute("DELETE FROM surf_records WHERE id = ?1", params![id])
+            .map_err(|e| format!("Failed to delete surf_record: {}", e))?;
+        drop(conn);
+        GlobalEmitter::global().emit_surf_records_change("deleted", id);
         Ok(())
     }
 

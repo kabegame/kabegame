@@ -23,7 +23,9 @@
       toast.style.zIndex = "2147483647";
       toast.style.opacity = "0";
       toast.style.transition = "opacity .2s ease";
-      toast.style.background = type === "success" ? "#16a34a" : "#dc2626";
+      if (type === "success") toast.style.background = "#16a34a";
+      else if (type === "start") toast.style.background = "#2563eb";
+      else toast.style.background = "#dc2626";
 
       document.body.appendChild(toast);
       requestAnimationFrame(function () {

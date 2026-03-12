@@ -20,6 +20,7 @@ pub mod date_group;
 pub mod main_root;
 
 pub mod plugin_group;
+pub mod surf_group;
 pub mod task_group;
 
 // VD 专属的 providers 行为（mkdir/delete/说明文件等）放在 core 的 providers 内部，
@@ -45,4 +46,5 @@ pub use descriptor::ProviderDescriptor;
 pub use factory::ProviderFactory;
 pub use plugin_group::PluginGroupProvider;
 pub use root::RootProvider;
+pub use surf_group::SurfGroupProvider;
 pub use task_group::TaskGroupProvider;

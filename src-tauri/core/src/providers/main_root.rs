@@ -34,6 +34,7 @@ impl Provider for MainRootProvider {
             FsEntry::dir("date-range"),
             FsEntry::dir("album"),
             FsEntry::dir("task"),
+            FsEntry::dir("surf"),
         ])
     }
 
@@ -45,6 +46,7 @@ impl Provider for MainRootProvider {
             "date-range" => Some(Arc::new(MainDateRangeRootProvider::new()) as Arc<dyn Provider>),
             "album" => Some(Arc::new(MainAlbumsProvider::new()) as Arc<dyn Provider>),
             "task" => Some(Arc::new(MainTaskGroupProvider::new()) as Arc<dyn Provider>),
+            "surf" => Some(Arc::new(MainSurfGroupProvider::new()) as Arc<dyn Provider>),
             _ => None,
         }
     }
@@ -334,5 +336,120 @@ impl Provider for MainTaskGroupProvider {
             PaginationMode::SimplePage,
         );
         ResolveChild::Dynamic(Arc::new(provider) as Arc<dyn Provider>)
+    }
+}
+
+/// MainSurfGroupProvider：按畅游记录分组
+pub struct MainSurfGroupProvider;
+
+impl MainSurfGroupProvider {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for MainSurfGroupProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Provider for MainSurfGroupProvider {
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor::MainGroup {
+            kind: MainGroupKind::Surf,
+        }
+    }
+
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        Ok(Vec::new()) // 畅游列表通过 resolve_child 动态提供
+    }
+
+    fn resolve_child(&self, name: &str) -> ResolveChild {
+        let id = name.trim();
+        if id.is_empty() {
+            return ResolveChild::NotFound;
+        }
+        if !Storage::global().surf_record_exists(id).unwrap_or(false) {
+            return ResolveChild::NotFound;
+        }
+        ResolveChild::Dynamic(Arc::new(MainSurfRecordProvider::new(id.to_string())) as Arc<dyn Provider>)
+    }
+}
+
+/// MainSurfRecordProvider：单个畅游记录，支持 desc 子目录与 page 动态子路径
+pub struct MainSurfRecordProvider {
+    surf_record_id: String,
+    inner: CommonProvider,
+}
+
+impl MainSurfRecordProvider {
+    pub fn new(surf_record_id: String) -> Self {
+        Self {
+            inner: CommonProvider::with_query_and_mode(
+                ImageQuery::by_surf_record(surf_record_id.clone()),
+                PaginationMode::SimplePage,
+            ),
+            surf_record_id,
+        }
+    }
+}
+
+impl Provider for MainSurfRecordProvider {
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor::SimpleAll {
+            query: ImageQuery::by_surf_record(self.surf_record_id.clone()),
+        }
+    }
+
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        Ok(vec![FsEntry::dir("desc")])
+    }
+
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        if name != "desc" {
+            return None;
+        }
+        Some(Arc::new(MainSurfRecordDescProvider::new(
+            self.surf_record_id.clone(),
+        )) as Arc<dyn Provider>)
+    }
+
+    fn resolve_child(&self, name: &str) -> ResolveChild {
+        self.inner.resolve_child(name)
+    }
+}
+
+/// MainSurfRecordDescProvider：单个畅游记录的倒序视图
+pub struct MainSurfRecordDescProvider {
+    inner: CommonProvider,
+}
+
+impl MainSurfRecordDescProvider {
+    pub fn new(surf_record_id: String) -> Self {
+        Self {
+            inner: CommonProvider::with_query_and_mode(
+                ImageQuery::by_surf_record_desc(surf_record_id),
+                PaginationMode::SimplePage,
+            ),
+        }
+    }
+}
+
+impl Provider for MainSurfRecordDescProvider {
+    fn descriptor(&self) -> ProviderDescriptor {
+        self.inner.descriptor()
+    }
+
+    fn list(&self) -> Result<Vec<FsEntry>, String> {
+        self.inner.list()
+    }
+
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        self.inner.get_child(name)
+    }
+
+    fn resolve_child(&self, name: &str) -> ResolveChild {
+        self.inner.resolve_child(name)
     }
 }

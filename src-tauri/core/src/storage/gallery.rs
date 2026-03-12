@@ -80,6 +80,22 @@ impl ImageQuery {
         }
     }
 
+    /// 按畅游记录过滤（默认升序，和其它 provider 一致）
+    pub fn by_surf_record(surf_record_id: String) -> Self {
+        Self {
+            decorator: "WHERE images.surf_record_id = ? ORDER BY images.crawled_at ASC".to_string(),
+            params: vec![surf_record_id],
+        }
+    }
+
+    /// 按畅游记录过滤（倒序）
+    pub fn by_surf_record_desc(surf_record_id: String) -> Self {
+        Self {
+            decorator: "WHERE images.surf_record_id = ? ORDER BY images.crawled_at DESC".to_string(),
+            params: vec![surf_record_id],
+        }
+    }
+
     /// 全部图片（按时间正序，用于 CommonProvider「全部」）
     pub fn all_recent() -> Self {
         Self {

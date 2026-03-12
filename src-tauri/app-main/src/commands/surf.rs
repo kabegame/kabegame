@@ -85,6 +85,7 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
             .title(format!("畅游 - {}", host))
             .inner_size(1200.0, 800.0)
             .initialization_script(include_str!("../../resources/surf_toast.js"))
+            .initialization_script(include_str!("../../resources/surf_context_menu.js"))
             .on_download({
                 let app = app.clone();
                 move |_webview, event| match event {
@@ -100,8 +101,13 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                         if std::fs::create_dir_all(&images_dir).is_err() {
                             return false;
                         }
+                        let effective_url = if url.scheme() == "blob" {
+                            url.as_str().strip_prefix("blob:").unwrap_or(url.as_str()).to_string()
+                        } else {
+                            url.as_str().to_string()
+                        };
                         let native_dest =
-                            match compute_native_download_destination(url.as_str(), &images_dir) {
+                            match compute_native_download_destination(&effective_url, &images_dir) {
                                 Ok(p) => p,
                                 Err(_) => return false,
                             };
@@ -132,6 +138,7 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             None,
                             true,
                         );
+                        eval_surf_toast(&app, "开始下载", "start");
                         *destination = native_dest;
                         true
                     }
@@ -232,12 +239,9 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
     serde_json::to_value(record).map_err(|e| e.to_string())
 }
 
+/// 在会话窗口被关闭时由 lib 的 on_window_event 调用，清除状态并通知前端。
 #[cfg(not(target_os = "android"))]
-#[tauri::command]
-pub async fn surf_close_session(app: AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("surf") {
-        let _ = win.close();
-    }
+pub fn notify_surf_session_closed(app: &AppHandle) {
     if let Ok(mut guard) = SurfSessionState::global().lock() {
         guard.current_record_id = None;
         guard.current_host = None;
@@ -246,6 +250,15 @@ pub async fn surf_close_session(app: AppHandle) -> Result<(), String> {
         "surf-session-changed",
         serde_json::json!({ "active": false, "surfRecordId": null }),
     );
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_close_session(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("surf") {
+        let _ = win.close();
+    }
+    notify_surf_session_closed(&app);
     Ok(())
 }
 
@@ -298,4 +311,10 @@ pub async fn surf_get_record_images(
 #[tauri::command]
 pub async fn surf_update_root_url(id: String, root_url: String) -> Result<(), String> {
     Storage::global().update_surf_record_root_url(&id, &root_url)
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_delete_record(id: String) -> Result<(), String> {
+    Storage::global().delete_surf_record(&id)
 }
