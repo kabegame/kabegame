@@ -65,6 +65,7 @@ model Image {
     width         Int?    // 图片宽度（像素）
     height        Int?    // 图片高度（像素）
     displayName   String  @default("") @map("display_name")
+    type          String? @default("image")
 
     task          Task?        @relation("TaskToImage", fields: [taskId], references: [id], onDelete: SetNull)
     surfRecord    SurfRecord?  @relation("SurfRecordToImage", fields: [surfRecordId], references: [id], onDelete: SetNull)

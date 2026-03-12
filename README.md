@@ -237,6 +237,11 @@ sudo dpkg -r kabegame
 bun install
 ```
 
+FFmpeg 以 **Git 子模块**形式引用于 `third/FFmpeg`（用于桌面端视频预览压缩）。若需执行 `bun run build:ffmpeg`：
+
+- **已有子模块提交时**（克隆后）：`git submodule update --init --recursive`，或克隆时使用 `git clone --recurse-submodules <repo-url>`。
+- **首次将 FFmpeg 加入为子模块时**（仅需一次，克隆体积较大）：`git submodule add https://github.com/FFmpeg/FFmpeg.git third/FFmpeg`。若此前在 `third/FFmpeg-master` 放过完整拷贝，可在此后删除该目录。
+
 ### Git 钩子：push 前自动尝试打 tag（可选）
 
 本仓库使用 Husky 提供 git hooks：在 `git push` 之前会读取 `src-crawler-plugins/package.json` 的 `version`，
@@ -269,6 +274,9 @@ bun b -c cli             # 构建 CLI 工具
 # 检查（不产出构建产物）
 bun check -c main                # 依次检查 vue 与 cargo
 bun check -c main --skip cargo   # 仅检查 vue
+
+# 编译 FFmpeg 侧载可执行文件（仅桌面端视频预览压缩用，在目标系统上直接编译）
+bun run build:ffmpeg             # 需 libx264（macOS: brew install x264，Ubuntu: libx264-dev）
 ```
 
 说明：

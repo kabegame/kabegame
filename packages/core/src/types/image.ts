@@ -27,6 +27,8 @@ export interface ImageInfo {
 
   /** 图片 MIME 类型（来自表 mime_type，分享/剪贴板优先使用） */
   mimeType?: string | null;
+  /** 媒体类型：默认 image，video 表示视频壁纸。 */
+  type?: "image" | "video";
 
   // 任务失败占位（TaskDetail）：用于在网格中渲染“下载重试”按钮
   isTaskFailed?: boolean;

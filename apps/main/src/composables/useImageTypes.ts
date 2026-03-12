@@ -1,5 +1,5 @@
 /**
- * 图片扩展名与 MIME 类型，运行时从后端获取，集中使用。
+ * 媒体扩展名与 MIME 类型，运行时从后端获取，集中使用。
  */
 import { ref, type Ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
@@ -23,7 +23,7 @@ export function useImageTypes() {
           mimeByExt.value = r.mimeByExt ?? {};
         })
         .catch((e) => {
-          console.warn("[useImageTypes] 获取支持的图片类型失败，使用默认值:", e);
+          console.warn("[useImageTypes] 获取支持的媒体类型失败，使用默认值:", e);
           extensions.value = [
             "jpg",
             "jpeg",
@@ -31,6 +31,8 @@ export function useImageTypes() {
             "gif",
             "webp",
             "bmp",
+            "mp4",
+            "mov",
           ];
           mimeByExt.value = {
             jpg: "image/jpeg",
@@ -39,19 +41,21 @@ export function useImageTypes() {
             gif: "image/gif",
             webp: "image/webp",
             bmp: "image/bmp",
+            mp4: "video/mp4",
+            mov: "video/quicktime",
           };
         });
     }
     await loadPromise;
   };
 
-  /** 按扩展名查 MIME，用作表字段 mimeType 缺失时的回退；默认 image/png */
+  /** 按扩展名查 MIME，用作表字段 mimeType 缺失时的回退；默认 application/octet-stream */
   const getMimeType = (ext: string | undefined): string => {
     const key = ext?.trim().toLowerCase().replace(/^\./, "") ?? "";
-    return mimeByExt.value[key] ?? "image/png";
+    return mimeByExt.value[key] ?? "application/octet-stream";
   };
 
-  /** 分享/剪贴板用：优先使用图片记录的 mimeType，否则按扩展名推断，最后回退 image/png */
+  /** 分享/剪贴板用：优先使用记录的 mimeType，否则按扩展名推断，最后回退 application/octet-stream */
   const getMimeTypeForImage = (
     image: { mimeType?: string | null } | undefined,
     ext: string | undefined

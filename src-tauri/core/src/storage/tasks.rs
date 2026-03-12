@@ -438,7 +438,8 @@ impl Storage {
                  ti.\"order\",
                  i.width,
                  i.height,
-                 i.display_name
+                 i.display_name,
+                 COALESCE(i.type, 'image') as media_type
                  FROM images i
                  INNER JOIN task_images ti ON i.id = ti.image_id
                  LEFT JOIN album_images ON i.id = album_images.image_id AND album_images.album_id = ?2
@@ -468,6 +469,7 @@ impl Storage {
                     width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                     height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
                     display_name: row.get(14)?,
+                    media_type: row.get::<_, Option<String>>(15)?,
                 })
             })
             .map_err(|e| format!("Failed to query task images: {}", e))?;
@@ -496,7 +498,8 @@ impl Storage {
                  ti.\"order\",
                  i.width,
                  i.height,
-                 i.display_name
+                 i.display_name,
+                 COALESCE(i.type, 'image') as media_type
                  FROM images i
                  INNER JOIN task_images ti ON i.id = ti.image_id
                  LEFT JOIN album_images ON i.id = album_images.image_id AND album_images.album_id = ?2
@@ -529,6 +532,7 @@ impl Storage {
                         width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
                         display_name: row.get(14)?,
+                        media_type: row.get::<_, Option<String>>(15)?,
                     })
                 },
             )

@@ -46,6 +46,9 @@ pub struct ImageInfo {
     #[serde(rename = "displayName")]
     #[serde(default)]
     pub display_name: String,
+    #[serde(rename = "type")]
+    #[serde(default)]
+    pub media_type: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -86,6 +89,13 @@ fn resolve_image_dimensions(local_path: &str) -> Option<(u32, u32)> {
     }
 }
 
+fn normalize_media_type(media_type: Option<String>) -> Option<String> {
+    match media_type.as_deref() {
+        Some("video") => Some("video".to_string()),
+        _ => Some("image".to_string()),
+    }
+}
+
 impl Storage {
     pub fn get_images_range(&self, offset: usize, limit: usize) -> Result<RangedImages, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -99,7 +109,8 @@ impl Storage {
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
              images.width,
              images.height,
-             images.display_name
+             images.display_name,
+             COALESCE(images.type, 'image') as media_type
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
              ORDER BY images.crawled_at ASC
@@ -132,6 +143,7 @@ impl Storage {
                     width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                     height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
                     display_name: row.get(14)?,
+                    media_type: normalize_media_type(row.get::<_, Option<String>>(15)?),
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
@@ -180,7 +192,8 @@ impl Storage {
                  images.mime_type,
                  images.width,
                  images.height,
-                 images.display_name
+                 images.display_name,
+                 COALESCE(images.type, 'image') as media_type
                  FROM images
                  WHERE images.id = ?1",
                 params![image_id],
@@ -206,6 +219,7 @@ impl Storage {
                         width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
                     })
                 },
             )
@@ -237,7 +251,8 @@ impl Storage {
                  images.mime_type,
                  images.width,
                  images.height,
-                 images.display_name
+                 images.display_name,
+                 COALESCE(images.type, 'image') as media_type
                  FROM images
                  WHERE images.local_path = ?1",
                 params![local_path],
@@ -262,6 +277,7 @@ impl Storage {
                         width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
                     })
                 },
             )
@@ -296,7 +312,8 @@ impl Storage {
                  images.mime_type,
                  images.width,
                  images.height,
-                 images.display_name
+                 images.display_name,
+                 COALESCE(images.type, 'image') as media_type
                  FROM images
                  WHERE REPLACE(TRIM(COALESCE(images.thumbnail_path, '')), '/', ?2) = ?1
                     OR (TRIM(COALESCE(images.thumbnail_path, '')) = '' AND REPLACE(TRIM(images.local_path), '/', ?2) = ?1)",
@@ -322,6 +339,7 @@ impl Storage {
                         width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
                     })
                 },
             )
@@ -353,7 +371,8 @@ impl Storage {
                  images.mime_type,
                  images.width,
                  images.height,
-                 images.display_name
+                 images.display_name,
+                 COALESCE(images.type, 'image') as media_type
                  FROM images
                  WHERE images.url = ?1",
                 params![url],
@@ -378,6 +397,7 @@ impl Storage {
                         width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
                     })
                 },
             )
@@ -412,7 +432,8 @@ impl Storage {
                  images.mime_type,
                  images.width,
                  images.height,
-                 images.display_name
+                 images.display_name,
+                 COALESCE(images.type, 'image') as media_type
                  FROM images
                  WHERE images.hash = ?1",
                 params![hash],
@@ -437,6 +458,7 @@ impl Storage {
                         width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
                     })
                 },
             )
@@ -480,7 +502,8 @@ impl Storage {
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
              images.width,
              images.height,
-             images.display_name
+             images.display_name,
+             COALESCE(images.type, 'image') as media_type
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
              WHERE images.surf_record_id = ?1
@@ -515,6 +538,7 @@ impl Storage {
                         width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
                         display_name: row.get(14)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(15)?),
                     })
                 },
             )
@@ -553,8 +577,8 @@ impl Storage {
 
         let crawled_at_i64 = image.crawled_at as i64;
         conn.execute(
-            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata, thumbnail_path, hash, mime_type, width, height, display_name)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata, thumbnail_path, hash, mime_type, type, width, height, display_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 &image.url,
                 image.local_path,
@@ -566,6 +590,7 @@ impl Storage {
                 thumbnail_path,
                 image.hash,
                 image.mime_type,
+                image.media_type,
                 image.width.map(|v| v as i64),
                 image.height.map(|v| v as i64),
                 image.display_name,
@@ -973,8 +998,8 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let sql = match mode {
-            "random" => "SELECT CAST(id AS TEXT) FROM images ORDER BY RANDOM() LIMIT 1",
-            _ => "SELECT CAST(id AS TEXT) FROM images ORDER BY crawled_at ASC LIMIT 1",
+            "random" => "SELECT CAST(id AS TEXT) FROM images WHERE COALESCE(type, 'image') != 'video' ORDER BY RANDOM() LIMIT 1",
+            _ => "SELECT CAST(id AS TEXT) FROM images WHERE COALESCE(type, 'image') != 'video' ORDER BY crawled_at ASC LIMIT 1",
         };
 
         let id: Option<String> = conn

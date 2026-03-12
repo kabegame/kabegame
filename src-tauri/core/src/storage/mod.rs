@@ -119,6 +119,7 @@ PRAGMA mmap_size = 268435456;
                 thumbnail_path TEXT NOT NULL DEFAULT '',
                 hash TEXT NOT NULL DEFAULT '',
                 mime_type TEXT,
+                type TEXT DEFAULT 'image',
                 width INTEGER,
                 height INTEGER
             )",
@@ -144,6 +145,10 @@ PRAGMA mmap_size = 268435456;
         if !table_has_column(&conn, "images", "mime_type") {
             conn.execute("ALTER TABLE images ADD COLUMN mime_type TEXT", [])
                 .expect("Failed to add images.mime_type column");
+        }
+        if !table_has_column(&conn, "images", "type") {
+            conn.execute("ALTER TABLE images ADD COLUMN type TEXT DEFAULT 'image'", [])
+                .expect("Failed to add images.type column");
         }
 
         // 创建索引（新库的 CREATE 已含 width/height，上述 ALTER 用于旧库升级）
@@ -253,6 +258,10 @@ PRAGMA mmap_size = 268435456;
         if !table_has_column(&conn, "images", "mime_type") {
             conn.execute("ALTER TABLE images ADD COLUMN mime_type TEXT", [])
                 .expect("Failed to add images.mime_type column after migrations");
+        }
+        if !table_has_column(&conn, "images", "type") {
+            conn.execute("ALTER TABLE images ADD COLUMN type TEXT DEFAULT 'image'", [])
+                .expect("Failed to add images.type column after migrations");
         }
         // 复杂迁移可能重建 images 表，迁移后再次确保 surf_record_id 列存在。
         let _ = conn.execute("ALTER TABLE images ADD COLUMN surf_record_id TEXT", []);
@@ -793,6 +802,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
                     metadata TEXT,
                     thumbnail_path TEXT NOT NULL DEFAULT '',
                     hash TEXT NOT NULL DEFAULT '',
+                    type TEXT DEFAULT 'image',
                     width INTEGER,
                     height INTEGER,
                     display_name TEXT NOT NULL DEFAULT ''
@@ -803,13 +813,13 @@ fn perform_complex_migrations(conn: &mut Connection) {
 
             let (insert_cols, select_cols) = if has_display_name {
                 (
-                    "id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, width, height, display_name",
-                    "new_id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), width, height, COALESCE(display_name, '')",
+                    "id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, type, width, height, display_name",
+                    "new_id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), COALESCE(type, 'image'), width, height, COALESCE(display_name, '')",
                 )
             } else {
                 (
-                    "id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, width, height, display_name",
-                    "new_id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), width, height, ''",
+                    "id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, type, width, height, display_name",
+                    "new_id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), COALESCE(type, 'image'), width, height, ''",
                 )
             };
             tx.execute(

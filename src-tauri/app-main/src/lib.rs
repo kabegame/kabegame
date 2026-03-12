@@ -1,5 +1,7 @@
 #[cfg(target_os = "android")]
 mod archiver_provider;
+#[cfg(target_os = "android")]
+mod compress_provider;
 mod commands;
 #[cfg(target_os = "android")]
 mod content_io_provider;
@@ -173,6 +175,7 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_picker::init());
         builder = builder.plugin(tauri_plugin_archiver::init());
         builder = builder.plugin(tauri_plugin_share::init());
+        builder = builder.plugin(tauri_plugin_compress::init());
         builder = builder.plugin(tauri_plugin_wallpaper::init());
     }
 
@@ -278,6 +281,17 @@ pub fn run() {
                         kabegame_core::crawler::archiver::set_archive_extract_provider(Box::new(
                             archiver_proxy,
                         ));
+
+                        let compress_provider =
+                            compress_provider::PluginVideoCompressProvider::new(
+                                app.app_handle().clone(),
+                            );
+                        let compress_proxy =
+                            compress_provider::ChannelVideoCompressProvider::new(compress_provider);
+                        if let Err(e) = kabegame_core::crawler::downloader::video_compress::set_android_video_compress_provider(Arc::new(compress_proxy))
+                        {
+                            eprintln!("[VideoCompress] Failed to set android compress provider: {e}");
+                        }
                     }
 
                     #[cfg(not(target_os = "android"))]

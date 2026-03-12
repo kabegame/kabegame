@@ -451,7 +451,8 @@ impl Storage {
                 CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                 images.width,
                 images.height,
-                images.display_name
+                images.display_name,
+                COALESCE(images.type, 'image') as media_type
              FROM images
              LEFT JOIN album_images fav_ai
                ON images.id = fav_ai.image_id AND fav_ai.album_id = '{}'
@@ -484,6 +485,7 @@ impl Storage {
                 width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
                 height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                 display_name: row.get(13)?,
+                media_type: row.get::<_, Option<String>>(14)?,
             })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;

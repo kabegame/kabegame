@@ -66,7 +66,7 @@
 
       <el-form-item label="递归子文件夹">
         <el-checkbox v-model="recursive">
-          递归扫描子文件夹中的图片
+          递归扫描子文件夹中的图片/视频
         </el-checkbox>
       </el-form-item>
       <el-form-item label="包含压缩包">
@@ -148,12 +148,12 @@ async function loadAlbums() {
 async function handleAddFiles() {
   try {
     await loadImageTypes();
-    const exts = imageExtensions.value.length ? imageExtensions.value : ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
+    const exts = imageExtensions.value.length ? imageExtensions.value : ["jpg", "jpeg", "png", "gif", "webp", "bmp", "mp4", "mov"];
     const selected = await open({
       directory: false,
       multiple: true,
       filters: [
-        { name: "图片", extensions: exts },
+        { name: "媒体", extensions: exts },
         { name: "压缩包", extensions: ["zip", "rar"] },
       ],
     });

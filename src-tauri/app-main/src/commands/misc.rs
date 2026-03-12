@@ -121,7 +121,7 @@ struct SupportedImageTypes {
 #[tauri::command]
 pub async fn get_supported_image_types() -> Result<serde_json::Value, String> {
     let payload = SupportedImageTypes {
-        extensions: kabegame_core::image_type::supported_image_extensions(),
+        extensions: kabegame_core::image_type::supported_media_extensions(),
         mime_by_ext: kabegame_core::image_type::mime_by_ext(),
     };
     Ok(serde_json::to_value(payload).map_err(|e| e.to_string())?)

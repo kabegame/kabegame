@@ -21,6 +21,7 @@ mod content;
 mod file;
 mod http;
 mod browser_download;
+pub mod video_compress;
 pub mod native_download;
 
 pub use crate::crawler::archiver::{ArchiveProcessor, ArchiveType};
@@ -401,7 +402,7 @@ fn mime_type_from_filename(filename: &str) -> String {
     crate::image_type::mime_by_ext()
         .get(&ext)
         .cloned()
-        .unwrap_or_else(|| "image/jpeg".to_string())
+        .unwrap_or_else(|| "application/octet-stream".to_string())
 }
 
 /// 根据 URL 计算图片的下载目标路径（仅路径，不创建文件）；按 scheme 委托给对应 [SchemeDownloader]。
@@ -1798,6 +1799,15 @@ async fn process_downloaded_content_image_to_storage(
         .unwrap_or_else(|_| "image".to_string());
     let mime_type = inferred_mime_type
         .or_else(|| Some(mime_type_from_filename(&display_name)));
+    let media_type = if mime_type
+        .as_deref()
+        .map(|m| m.starts_with("video/"))
+        .unwrap_or(false)
+    {
+        Some("video".to_string())
+    } else {
+        Some("image".to_string())
+    };
 
     let image_info = ImageInfo {
         id: "".to_string(),
@@ -1816,6 +1826,7 @@ async fn process_downloaded_content_image_to_storage(
         width,
         height,
         display_name,
+        media_type,
     };
     match Storage::global().add_image(image_info) {
         Ok(inserted) => {
@@ -2171,8 +2182,16 @@ pub async fn process_downloaded_image_to_storage(
     native: bool,
 ) -> Result<bool, String> {
     let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
+    #[cfg(target_os = "android")]
+    let is_video = false;
     #[cfg(not(target_os = "android"))]
-    let path_used = ensure_image_extension_by_infer(path).await;
+    let is_video = crate::image_type::is_video_by_path(path);
+    #[cfg(not(target_os = "android"))]
+    let path_used = if is_video {
+        path.to_path_buf()
+    } else {
+        ensure_image_extension_by_infer(path).await
+    };
     #[cfg(not(target_os = "android"))]
     let path = path_used.as_path();
     let local_path_str = path
@@ -2194,7 +2213,13 @@ pub async fn process_downloaded_image_to_storage(
         } else {
             None
         };
-        let thumbnail_path = match generate_thumbnail(path).await {
+        let thumbnail_path = match if is_video {
+            video_compress::compress_video_for_preview(path)
+                .await
+                .map(|r| Some(r.preview_path))
+        } else {
+            generate_thumbnail(path).await
+        } {
             Ok(t) => t,
             Err(e) => {
                 let _ = tokio::fs::remove_file(path).await;
@@ -2265,6 +2290,7 @@ pub async fn process_downloaded_image_to_storage(
         width: None,
         height: None,
         display_name,
+        media_type: Some(if is_video { "video" } else { "image" }.to_string()),
     };
     let t_add = postprocess_timing_hash_ms.map(|_| Instant::now());
     match Storage::global().add_image(image_info) {
@@ -2471,7 +2497,7 @@ pub(crate) async fn copy_extracted_images_and_enqueue(
 
         let source_path = entry.path();
         if let Some(ext) = source_path.extension().and_then(|e| e.to_str()) {
-            if crate::archive::is_supported_image_ext(ext) {
+            if crate::image_type::is_supported_media_ext(ext) {
                 // 3. 扁平复制（只取文件名，unique_path 防重名）
                 let file_name = source_path
                     .file_name()

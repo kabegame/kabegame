@@ -7,6 +7,7 @@ members = [
   "src-tauri-plugins/tauri-plugin-archiver",
   "src-tauri-plugins/tauri-plugin-pathes",
   "src-tauri-plugins/tauri-plugin-share",
+  "src-tauri-plugins/tauri-plugin-compress",
   "src-tauri-plugins/tauri-plugin-wallpaper",
 ]
 resolver = "2"
@@ -23,6 +24,7 @@ kabegame-core = {path = "./src-tauri/core", default-features = false}
 tauri-plugin-picker = { path = "./src-tauri-plugins/tauri-plugin-picker" }
 tauri-plugin-pathes = { path = "./src-tauri-plugins/tauri-plugin-pathes" }
 tauri-plugin-share = { path = "./src-tauri-plugins/tauri-plugin-share" }
+tauri-plugin-compress = { path = "./src-tauri-plugins/tauri-plugin-compress" }
 tauri-plugin-archiver = { path = "./src-tauri-plugins/tauri-plugin-archiver" }
 tauri-plugin-wallpaper = { path = "./src-tauri-plugins/tauri-plugin-wallpaper" }
 rhai = {version = "1.19", features = ["sync"]}

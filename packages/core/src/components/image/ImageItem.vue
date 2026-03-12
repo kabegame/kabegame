@@ -51,7 +51,7 @@
           </el-skeleton>
         </div>
         <!-- 桌面双图：先缩略图，原图加载后淡入 -->
-        <template v-if="useDesktopLayers">
+        <template v-if="useDesktopLayers && !isVideo">
           <img v-if="!thumbnailLoadFailed" :src="thumbnailUrl" loading="lazy" decoding="async"
             class="thumbnail thumbnail-layer" :alt="image.id" draggable="false"
             @load="handleThumbnailLoad" @error="handleThumbnailError" />
@@ -60,6 +60,9 @@
             :alt="image.id" draggable="false"
             @load="handleOriginalLoad" @error="handleOriginalError" />
         </template>
+        <video v-else-if="isVideo" :src="displayUrl" class="thumbnail" :class="{ 'thumbnail-android': IS_ANDROID }"
+          draggable="false" muted autoplay loop poster="" preload="auto" playsinline webkit-playsinline="true"
+          disablepictureinpicture="true" disableremoteplayback="" @dragstart.prevent @mousedown.prevent />
         <!-- 单图（Android 或桌面无独立缩略图） -->
         <img v-else :src="displayUrl" loading="lazy" decoding="async"
           :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': IS_ANDROID }]"
@@ -220,6 +223,7 @@ const aspectRatioStyle = computed(() => {
     ? { aspectRatio: `${r}` }
     : { aspectRatio: "16 / 9" };
 });
+const isVideo = computed(() => props.image.type === "video");
 
 const handleWrapperClick = (event?: MouseEvent) => {
   // Android 下，如果刚触发了长按，跳过本次 click
