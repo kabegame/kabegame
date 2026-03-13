@@ -120,7 +120,8 @@ impl WallpaperWindow {
         }
     }
 
-    /// 更新壁纸图片
+    /// 更新壁纸图片（已废弃：壁纸页面通过 setting-change 自驱动）
+    #[allow(dead_code)]
     pub fn update_image(&self, image_path: &str) -> Result<(), String> {
         // 事件改为广播，不依赖任何窗口引用（方便用 wallpaper-debug 验证事件是否到达）
         let _ = self.window.as_ref();
@@ -134,17 +135,9 @@ impl WallpaperWindow {
 
     /// 重新挂载窗口到桌面（用于从原生模式切换回窗口模式时）
     pub fn remount(&self) -> Result<(), String> {
-        // #region agent log
-        { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/cmtheit/code/kabegame/.cursor/debug-23122f.log") { let _ = writeln!(f, r#"{{"sessionId":"23122f","hypothesisId":"C","location":"window.rs:remount:entry","message":"remount called","data":{{"thread":"{:?}"}},"timestamp":{}}}"#, std::thread::current().name().unwrap_or("unnamed"), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()); } }
-        // #endregion
-
         // 先挂载窗口到桌面
         self.set_window_as_wallpaper()
             .map_err(|e| format!("重新挂载窗口到桌面失败: {}", e))?;
-
-        // #region agent log
-        { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/cmtheit/code/kabegame/.cursor/debug-23122f.log") { let _ = writeln!(f, r#"{{"sessionId":"23122f","hypothesisId":"D","location":"window.rs:remount:before_show","message":"about to show window","timestamp":{}}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()); } }
-        // #endregion
 
         // 显示窗口
         self.window
@@ -247,20 +240,14 @@ impl WallpaperWindow {
 
         #[cfg(target_os = "macos")]
         {
-            // #region agent log
-            { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/cmtheit/code/kabegame/.cursor/debug-23122f.log") { let _ = writeln!(f, r#"{{"sessionId":"23122f","hypothesisId":"C","location":"window.rs:remount:second_mount","message":"about to call mount_to_desktop SECOND time (after show)","timestamp":{}}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()); } }
-            // #endregion
             crate::wallpaper::window_mount_macos::mount_to_desktop(&self.window)?;
         }
-
-        // #region agent log
-        { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/cmtheit/code/kabegame/.cursor/debug-23122f.log") { let _ = writeln!(f, r#"{{"sessionId":"23122f","hypothesisId":"C","location":"window.rs:remount:done","message":"remount completed","timestamp":{}}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()); } }
-        // #endregion
 
         Ok(())
     }
 
-    /// 更新壁纸样式
+    /// 更新壁纸样式（已废弃：壁纸页面通过 setting-change 自驱动）
+    #[allow(dead_code)]
     pub fn update_style(&self, style: &str) -> Result<(), String> {
         let _ = self.window.as_ref();
         let _ = self.app.get_webview_window("wallpaper");
@@ -270,7 +257,8 @@ impl WallpaperWindow {
         Ok(())
     }
 
-    /// 更新壁纸过渡效果
+    /// 更新壁纸过渡效果（已废弃：壁纸页面通过 setting-change 自驱动）
+    #[allow(dead_code)]
     pub fn update_transition(&self, transition: &str) -> Result<(), String> {
         let _ = self.window.as_ref();
         let _ = self.app.get_webview_window("wallpaper");

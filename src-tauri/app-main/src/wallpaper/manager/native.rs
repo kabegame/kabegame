@@ -611,12 +611,11 @@ impl WallpaperManager for NativeWallpaperManager {
             .map_err(|e| format!("Settings error: {}", e))
     }
 
-    async fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String> {
+    async fn set_wallpaper_path(&self, file_path: &str) -> Result<(), String> {
         use std::path::Path;
 
         println!("[DEBUG] NativeWallpaperManager::set_wallpaper_path 被调用");
         println!("[DEBUG] file_path: {}", file_path);
-        println!("[DEBUG] immediate: {}", immediate);
 
         // Android 上为 content:// URI，不能按文件路径检查存在
         let path = Path::new(file_path);
@@ -650,7 +649,7 @@ impl WallpaperManager for NativeWallpaperManager {
             // 参考 wallpaper_rotator.rs 的实现：使用模拟方式实现淡入淡出
             // wallpaper_rotator.rs 中的实现能工作，它使用延迟 + SPIF_SENDWININICHANGE 来触发系统动画
             // 当 transition == "fade" 时，先延迟 100ms，然后使用 fuWinIni=3 设置壁纸
-            if transition == "fade" && immediate {
+            if transition == "fade" {
                 // 确保系统启用壁纸淡入淡出效果
                 let _ = self.ensure_fade_enabled();
 
@@ -721,15 +720,11 @@ impl WallpaperManager for NativeWallpaperManager {
             //
             // 实测/经验：在一些系统上，使用 3（带广播）会触发 Explorer 的桌面淡入动画；
             // 而使用 1（仅更新用户配置文件）仍然会立即切换壁纸，但更少触发系统动画。
-            // 因此：当用户选择 transition=none 时，即使 immediate=true 也优先用 1。
-            let fu_win_ini = if immediate {
-                if transition == "none" {
-                    1u32 // SPIF_UPDATEINIFILE
-                } else {
-                    3u32 // SPIF_UPDATEINIFILE | SPIF_SENDWININICHANGE
-                }
-            } else {
+            // 因此：当用户选择 transition=none 时优先用 1。
+            let fu_win_ini = if transition == "none" {
                 1u32 // SPIF_UPDATEINIFILE
+            } else {
+                3u32 // SPIF_UPDATEINIFILE | SPIF_SENDWININICHANGE
             };
 
             println!(
@@ -776,7 +771,6 @@ impl WallpaperManager for NativeWallpaperManager {
         {
             use crate::linux_desktop::{linux_desktop, LinuxDesktop};
 
-            let _ = immediate;
             let style = Settings::global()
                 .get_wallpaper_rotation_style()
                 .await
@@ -836,14 +830,12 @@ impl WallpaperManager for NativeWallpaperManager {
 
         #[cfg(target_os = "macos")]
         {
-            let _ = immediate;
             // macOS 不设置样式，只设置壁纸路径，样式由系统决定
             return self.set_wallpaper_macos(file_path);
         }
 
         #[cfg(target_os = "android")]
         {
-            let _ = immediate;
             let style = Settings::global()
                 .get_wallpaper_rotation_style()
                 .await
@@ -871,7 +863,7 @@ impl WallpaperManager for NativeWallpaperManager {
     }
 
     #[cfg(target_os = "windows")]
-    async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
+    async fn set_style(&self, style: &str) -> Result<(), String> {
         if style == "system" {
             return Ok(());
         }
@@ -908,51 +900,45 @@ impl WallpaperManager for NativeWallpaperManager {
             .set_value("TileWallpaper", &tile_value.to_string())
             .map_err(|e| format!("设置 TileWallpaper 失败: {}", e))?;
 
-        // 如果 immediate=true，发送 WM_SETTINGCHANGE 消息刷新桌面
-        if immediate {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
-            };
+        // 发送 WM_SETTINGCHANGE 消息刷新桌面
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+        };
 
-            unsafe {
-                let mut result: usize = 0;
-                let _ = SendMessageTimeoutW(
-                    HWND_BROADCAST,
-                    WM_SETTINGCHANGE,
-                    0,
-                    0,
-                    SMTO_ABORTIFHUNG,
-                    5000,
-                    &mut result,
-                );
-            }
+        unsafe {
+            let mut result: usize = 0;
+            let _ = SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                0,
+                0,
+                SMTO_ABORTIFHUNG,
+                5000,
+                &mut result,
+            );
+        }
 
-            // 仅刷新 WM_SETTINGCHANGE 在某些系统上仍可能不触发壁纸重新布局，
-            // 这里强制"重载一次当前壁纸路径"，确保新 style 立刻反映到桌面。
-            if let Some(path) = self.current_wallpaper_path_from_settings().await {
-                if std::path::Path::new(&path).exists() {
-                    let _ = self.set_wallpaper_path(&path, true).await;
-                }
+        // 仅刷新 WM_SETTINGCHANGE 在某些系统上仍可能不触发壁纸重新布局，
+        // 这里强制"重载一次当前壁纸路径"，确保新 style 立刻反映到桌面。
+        if let Some(path) = self.current_wallpaper_path_from_settings().await {
+            if std::path::Path::new(&path).exists() {
+                let _ = self.set_wallpaper_path(&path).await;
             }
         }
 
-        println!(
-            "[DEBUG] 壁纸样式设置完成（使用 winreg，快速），style={}, immediate={}",
-            style, immediate
-        );
+        println!("[DEBUG] 壁纸样式设置完成（使用 winreg，快速），style={}", style);
         Ok(())
     }
 
     /// Linux：根据运行时桌面环境设置样式，失败回退
     #[cfg(target_os = "linux")]
-    async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String> {
+    async fn set_style(&self, style: &str) -> Result<(), String> {
         if style == "system" {
             return Ok(());
         }
 
         use crate::linux_desktop::{linux_desktop, LinuxDesktop};
 
-        let _ = immediate;
         let desktop = linux_desktop();
 
         async fn set_style_plasma(manager: &NativeWallpaperManager, style: &str) -> Result<(), String> {
@@ -1054,7 +1040,7 @@ impl WallpaperManager for NativeWallpaperManager {
 
     /// macOS 原生壁纸：样式跟随系统，不设置样式
     #[cfg(target_os = "macos")]
-    async fn set_style(&self, _style: &str, _immediate: bool) -> Result<(), String> {
+    async fn set_style(&self, _style: &str) -> Result<(), String> {
         // macOS 样式跟随系统，不进行任何设置操作
         println!("[DEBUG] macOS 壁纸样式跟随系统，不设置样式");
         Ok(())
@@ -1062,14 +1048,14 @@ impl WallpaperManager for NativeWallpaperManager {
 
     /// Android/iOS 原生壁纸：仅保存设置，不进行系统级设置
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    async fn set_style(&self, _style: &str, _immediate: bool) -> Result<(), String> {
+    async fn set_style(&self, _style: &str) -> Result<(), String> {
         // Android/iOS 平台：仅保存设置到配置，不进行系统级设置
         println!("[DEBUG] Android/iOS 壁纸样式仅保存设置");
         Ok(())
     }
 
     #[cfg(target_os = "windows")]
-    async fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String> {
+    async fn set_transition(&self, transition: &str) -> Result<(), String> {
         use std::thread;
         use std::time::Duration;
 
@@ -1084,50 +1070,33 @@ impl WallpaperManager for NativeWallpaperManager {
         // 原生模式的"无过渡"仅表示：应用不会额外触发/预览过渡；
         // Windows 自身在切换壁纸时可能仍有系统级淡入动画，这属于系统行为，应用不强控。
 
-        // 如果 immediate 为 true，需要立即重新加载当前壁纸以应用过渡效果
-        if immediate {
-            // "none" 表示无过渡，不应该重新设置壁纸（避免触发系统默认的淡入效果）
-            if transition == "none" {
-                println!(
-                    "[DEBUG] 壁纸过渡效果设置为无过渡，仅保存设置，不重新设置壁纸，transition={}, immediate={}",
-                    transition, immediate
-                );
-                return Ok(());
-            }
-
-            // 从全局设置读取当前壁纸路径（由应用维护）
-            let Some(current_wallpaper) = self.current_wallpaper_path_from_settings().await else {
-                return Ok(());
-            };
-
-            // 对于 fade 效果，先短暂延迟，然后重新设置壁纸
-            // 这样可以模拟淡入效果（Windows 原生 API 不支持真正的 fade，但可以通过延迟来实现平滑过渡）
-            if transition == "fade" {
-                // 短暂延迟以模拟淡入效果
-                thread::sleep(Duration::from_millis(100));
-            }
-
-            // 重新设置壁纸路径，immediate = true 会立即生效并刷新桌面
-            // 这样可以让用户看到过渡效果
-            self.set_wallpaper_path(&current_wallpaper, true).await?;
-
+        // "none" 表示无过渡，不应该重新设置壁纸（避免触发系统默认的淡入效果）
+        if transition == "none" {
             println!(
-                "[DEBUG] 壁纸过渡效果设置完成，transition={}, immediate={}",
-                transition, immediate
+                "[DEBUG] 壁纸过渡效果设置为无过渡，仅保存设置，不重新设置壁纸，transition={}",
+                transition
             );
-        } else {
-            // immediate = false 时，仅保存设置，不立即应用
-            // 过渡效果会在下次设置壁纸时生效
-            println!(
-                "[DEBUG] 壁纸过渡效果设置已保存到用户配置，transition={}, immediate={}",
-                transition, immediate
-            );
+            return Ok(());
         }
+
+        // 从全局设置读取当前壁纸路径（由应用维护）
+        let Some(current_wallpaper) = self.current_wallpaper_path_from_settings().await else {
+            return Ok(());
+        };
+
+        // 对于 fade 效果，先短暂延迟，然后重新设置壁纸
+        if transition == "fade" {
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        self.set_wallpaper_path(&current_wallpaper).await?;
+
+        println!("[DEBUG] 壁纸过渡效果设置完成，transition={}", transition);
         Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
-    async fn set_transition(&self, transition: &str, _immediate: bool) -> Result<(), String> {
+    async fn set_transition(&self, transition: &str) -> Result<(), String> {
         // 非 Windows 平台：仅保存设置，不做系统级预览
         Settings::global()
             .set_wallpaper_rotation_transition(transition.to_string())
