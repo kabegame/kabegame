@@ -1,9 +1,14 @@
 // Wallpaper Engine 导出功能（在 app-main 中执行）
 
+use include_dir::{include_dir, Dir};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// WE Web 工程模板（编译时嵌入）
+static WE_TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/template");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,335 +100,29 @@ fn write_file(path: &Path, content: &str) -> Result<(), String> {
     fs::write(path, content).map_err(|e| format!("写入文件失败 {}: {}", path.display(), e))
 }
 
-fn build_index_html(title: &str) -> String {
-    format!(
-        r#"<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{}</title>
-    <link rel="stylesheet" href="style.css" />
-  </head>
-  <body>
-    <div class="wallpaper-root">
-      <div class="wallpaper-stage">
-        <img id="baseImg" class="wallpaper-img base" alt="" />
-        <img id="topImg" class="wallpaper-img top" alt="" />
-        <div id="baseTile" class="wallpaper-tile base"></div>
-        <div id="topTile" class="wallpaper-tile top"></div>
-      </div>
-    </div>
-    <script src="main.js"></script>
-  </body>
-</html>
-"#,
-        title
-    )
+fn get_template(path: &str) -> Result<String, String> {
+    let file = WE_TEMPLATES
+        .get_file(path)
+        .ok_or_else(|| format!("模板文件不存在: {}", path))?;
+    str::from_utf8(file.contents())
+        .map(String::from)
+        .map_err(|e| format!("模板 {} 编码错误: {}", path, e))
 }
 
-fn build_style_css() -> String {
-    // 基于 `src/components/WallpaperLayer.vue` 的样式裁剪而来（保持过渡体验一致）
-    r#"
-html, body {
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  background: transparent;
+fn build_index_html(title: &str) -> Result<String, String> {
+    let tpl = get_template("we/index.html")?;
+    Ok(tpl.replace("__TITLE__", title))
 }
 
-.wallpaper-root {
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-  background: transparent;
+fn build_style_css() -> Result<String, String> {
+    get_template("we/style.css")
 }
 
-.wallpaper-stage {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-}
-
-.wallpaper-img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-  pointer-events: none;
-}
-
-.wallpaper-img.base { opacity: 1; }
-.wallpaper-img.top {
-  opacity: 0;
-  transform: none;
-  transition: none;
-  will-change: opacity, transform;
-}
-
-.wallpaper-tile {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  background-color: transparent;
-  pointer-events: none;
-}
-
-.wallpaper-tile.base { opacity: 1; }
-.wallpaper-tile.top {
-  opacity: 0;
-  transform: none;
-  transition: none;
-  will-change: opacity, transform;
-}
-
-/* transitions (对齐 WallpaperLayer.vue) */
-.top.fade.enter {
-  opacity: 1;
-  transition: opacity var(--kabegame-fade-ms, 800ms) ease-in-out;
-}
-
-.top.slide.prep {
-  opacity: 0;
-  transform: translateX(32px);
-}
-.top.slide.enter {
-  opacity: 1;
-  transform: translateX(0);
-  transition: opacity var(--kabegame-slide-ms, 800ms) ease, transform var(--kabegame-slide-ms, 800ms) ease;
-}
-
-.top.zoom.prep {
-  opacity: 0;
-  transform: scale(1.06);
-}
-.top.zoom.enter {
-  opacity: 1;
-  transform: scale(1);
-  transition: opacity var(--kabegame-zoom-ms, 900ms) ease, transform var(--kabegame-zoom-ms, 900ms) ease;
-}
-"#
-    .to_string()
-}
-
-fn build_main_js(config_json: &str, images_json: &str) -> String {
-    format!(
-        r#"
-// 由 Kabegame 导出生成
-(function() {{
-  'use strict';
-  
-  const CONFIG = {config_json};
-  const IMAGES = {images_json};
-
-  function clampPositiveInt(v, fallback) {{
-    const n = Number(v);
-    if (!Number.isFinite(n) || n <= 0) return fallback;
-    return Math.floor(n);
-  }}
-
-  // 把过渡时长也导出成 CSS 变量，方便用户在 WE 里二次调（在 DOM 加载前就可以设置）
-  if (document.documentElement) {{
-    document.documentElement.style.setProperty("--kabegame-fade-ms", `${{clampPositiveInt(CONFIG.fadeMs || 800, 800)}}ms`);
-    document.documentElement.style.setProperty("--kabegame-slide-ms", `${{clampPositiveInt(CONFIG.slideMs || 800, 800)}}ms`);
-    document.documentElement.style.setProperty("--kabegame-zoom-ms", `${{clampPositiveInt(CONFIG.zoomMs || 900, 900)}}ms`);
-  }}
-
-  function init() {{
-    // 确保 DOM 已加载
-    const baseImg = document.getElementById("baseImg");
-    const topImg = document.getElementById("topImg");
-    const baseTile = document.getElementById("baseTile");
-    const topTile = document.getElementById("topTile");
-    
-    // 安全检查：如果元素不存在，直接返回（避免崩溃）
-    if (!baseImg || !topImg || !baseTile || !topTile) {{
-      console.error("Wallpaper: Required DOM elements not found");
-      return;
-    }}
-    
-    const intervalMs = clampPositiveInt(CONFIG.intervalMs, 60000);
-    const transition = (CONFIG.transition || "fade").toLowerCase();
-    const style = (CONFIG.style || "fill").toLowerCase();
-    const order = (CONFIG.order || "random").toLowerCase();
-
-    function applyStyle() {{
-      // tile 模式：使用 background-repeat
-      const isTile = style === "tile";
-      baseImg.style.display = isTile ? "none" : "block";
-      topImg.style.display = isTile ? "none" : "block";
-      baseTile.style.display = isTile ? "block" : "none";
-      topTile.style.display = isTile ? "block" : "none";
-
-      // img 模式：使用 object-fit
-      const fit = style === "fit" ? "contain"
-        : style === "stretch" ? "fill"
-        : "cover"; // fill/center 默认 cover
-
-      baseImg.style.objectFit = fit;
-      topImg.style.objectFit = fit;
-      baseImg.style.objectPosition = "center center";
-      topImg.style.objectPosition = "center center";
-
-      // center：不拉伸，保持原比例，但居中展示（object-fit: none）
-      if (style === "center") {{
-        baseImg.style.objectFit = "none";
-        topImg.style.objectFit = "none";
-      }}
-    }}
-
-    function setBase(url) {{
-      if (style === "tile") {{
-        baseTile.style.backgroundImage = `url("${{url}}")`;
-        baseTile.style.backgroundRepeat = "repeat";
-        baseTile.style.backgroundPosition = "0 0";
-        baseTile.style.backgroundSize = "auto";
-      }} else {{
-        baseImg.src = url;
-      }}
-    }}
-
-    function setTop(url) {{
-      if (style === "tile") {{
-        topTile.style.backgroundImage = `url("${{url}}")`;
-        topTile.style.backgroundRepeat = "repeat";
-        topTile.style.backgroundPosition = "0 0";
-        topTile.style.backgroundSize = "auto";
-      }} else {{
-        topImg.src = url;
-      }}
-    }}
-
-    function resetTopClasses() {{
-      topImg.className = "wallpaper-img top";
-      topTile.className = "wallpaper-tile top";
-    }}
-
-    function applyTransitionPrep() {{
-      resetTopClasses();
-      if (transition === "none") return;
-      if (style === "tile") {{
-        topTile.classList.add("top", transition, "prep");
-      }} else {{
-        topImg.classList.add("top", transition, "prep");
-      }}
-    }}
-
-    function applyTransitionEnter() {{
-      if (transition === "none") return;
-      if (style === "tile") {{
-        topTile.classList.remove("prep");
-        topTile.classList.add("enter");
-      }} else {{
-        topImg.classList.remove("prep");
-        topImg.classList.add("enter");
-      }}
-    }}
-
-    function commitTopToBase() {{
-      // 把 top 变成 base
-      if (style === "tile") {{
-        baseTile.style.backgroundImage = topTile.style.backgroundImage;
-        topTile.style.backgroundImage = "";
-      }} else {{
-        baseImg.src = topImg.src;
-        topImg.src = "";
-      }}
-      resetTopClasses();
-    }}
-
-    function buildSequence(images) {{
-      if (order === "sequential") return images.slice();
-      // random：简单洗牌，循环用
-      const arr = images.slice();
-      for (let i = arr.length - 1; i > 0; i--) {{
-        const j = Math.floor(Math.random() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-      }}
-      return arr;
-    }}
-
-    let seq = buildSequence(IMAGES);
-    let idx = 0;
-    let started = false;
-
-    function nextUrl() {{
-      if (seq.length === 0) return "";
-      const url = seq[idx % seq.length];
-      idx++;
-      if (order !== "sequential" && idx % seq.length === 0) {{
-        // random 每轮重新洗牌一次
-        seq = buildSequence(IMAGES);
-        idx = 0;
-      }}
-      return url;
-    }}
-
-    function tick() {{
-      if (IMAGES.length === 0) return;
-      if (!started) {{
-        applyStyle();
-        setBase(nextUrl());
-        started = true;
-        setTimeout(tick, intervalMs);
-        return;
-      }}
-
-      const url = nextUrl();
-      if (!url) return;
-
-      // prepare
-      applyTransitionPrep();
-      setTop(url);
-
-      // force reflow
-      void (style === "tile" ? topTile.offsetHeight : topImg.offsetHeight);
-
-      // enter
-      applyTransitionEnter();
-
-      const target = style === "tile" ? topTile : topImg;
-      if (transition === "none") {{
-        commitTopToBase();
-      }} else {{
-        const onEnd = (e) => {{
-          if (e.target !== e.currentTarget) return;
-          if (e.propertyName !== "opacity") return;
-          target.removeEventListener("transitionend", onEnd);
-          commitTopToBase();
-        }};
-        target.addEventListener("transitionend", onEnd);
-        // guard：避免某些情况下 transitionend 丢失
-        setTimeout(() => {{
-          target.removeEventListener("transitionend", onEnd);
-          commitTopToBase();
-        }}, Math.max(1400, intervalMs / 3));
-      }}
-
-      setTimeout(tick, intervalMs);
-    }}
-    
-    tick();
-  }}
-  
-  // 等待 DOM 加载完成
-  if (document.readyState === "loading") {{
-    document.addEventListener("DOMContentLoaded", init);
-  }} else {{
-    // DOM 已加载，直接执行
-    init();
-  }}
-}})();
-"#,
-        config_json = config_json,
-        images_json = images_json
-    )
+fn build_main_js(config_json: &str, images_json: &str) -> Result<String, String> {
+    let tpl = get_template("we/main.js")?;
+    Ok(tpl
+        .replace("__CONFIG_JSON__", config_json)
+        .replace("__IMAGES_JSON__", images_json))
 }
 
 fn write_we_web_project(
@@ -484,9 +183,9 @@ fn write_we_web_project(
     let preview_abs = project_dir.join(&preview_name);
     let _ = fs::copy(&first_dst_abs, &preview_abs);
 
-    // 构建工程文件
-    let index_html = build_index_html(project_title);
-    let style_css = build_style_css();
+    // 构建工程文件（从嵌入模板读取并替换占位符）
+    let index_html = build_index_html(project_title)?;
+    let style_css = build_style_css()?;
 
     let config = serde_json::json!({
         "title": project_title,
@@ -504,7 +203,7 @@ fn write_we_web_project(
     let main_js = build_main_js(
         &serde_json::to_string(&config).map_err(|e| format!("序列化配置失败: {}", e))?,
         &images,
-    );
+    )?;
 
     // 生成更简化的 project.json（仅保留 WE Web 必需字段，避免读取异常）
     let project_json = serde_json::json!({

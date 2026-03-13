@@ -10,7 +10,7 @@ require 'tmpdir'
 
 # 默认配置
 DEFAULT_PATH = '.'
-DEFAULT_EXCLUDE = 'node_modules,dist,build,.git,target,.nx,public,data,release,photoswipe-vue/src/js'
+DEFAULT_EXCLUDE = 'node_modules,dist,build,.git,target,.nx,public,data,release,photoswipe-vue/src/js,third'
 DEFAULT_INCLUDE_EXT = 'ts,tsx,js,mjs,vue,rs,py,java,kt,swift,cs,cpp,c,h,cc,hpp,rb,html,css,scss,rhai,kt,kts,handlebars,prisma'
 
 def usage
@@ -179,10 +179,21 @@ def scan_directory(dir_path, exclude_dirs, include_exts, stats, counters)
   end
 end
 
+def template_path
+  File.join(File.dirname(File.expand_path(__FILE__)), 'cloc_report.html')
+end
+
+def load_html_template
+  path = template_path
+  raise "模板文件不存在: #{path}" unless File.file?(path)
+
+  File.read(path, encoding: 'UTF-8')
+end
+
 def generate_html(stats, counters, path)
   sorted_stats = stats.sort_by { |_, v| -v[:lines] }
   total_lines = counters[:lines]
-  
+
   # 生成饼图数据（按总行数）
   chart_data = sorted_stats.map do |lang, data|
     percentage = total_lines > 0 ? (data[:lines].to_f / total_lines * 100).round(2) : 0
@@ -197,7 +208,7 @@ def generate_html(stats, counters, path)
       blank: data[:blank]
     }
   end
-  
+
   # 使用 GitHub Linguist 定义的语言官方颜色
   colors = []
   sorted_stats.each_with_index do |(lang_name, _), i|
@@ -212,318 +223,15 @@ def generate_html(stats, counters, path)
       colors << "hsl(#{hue}, 70%, 60%)"
     end
   end
-  
-  html = <<~HTML
-    <!DOCTYPE html>
-    <html lang="zh-CN">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>代码统计 - CLOC</title>
-      <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-      <style>
-        * {
-          margin: 0;
-          padding: 0;
-          box-sizing: border-box;
-        }
-        
-        body {
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          min-height: 100vh;
-          padding: 20px;
-        }
-        
-        .container {
-          max-width: 1400px;
-          margin: 0 auto;
-          background: white;
-          border-radius: 16px;
-          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-          padding: 30px;
-        }
-        
-        h1 {
-          color: #333;
-          margin-bottom: 10px;
-          font-size: 28px;
-        }
-        
-        .path-info {
-          color: #666;
-          margin-bottom: 30px;
-          font-size: 14px;
-        }
-        
-        .stats-grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 30px;
-          margin-bottom: 30px;
-        }
-        
-        @media (max-width: 768px) {
-          .stats-grid {
-            grid-template-columns: 1fr;
-          }
-        }
-        
-        .chart-container {
-          position: relative;
-          height: 500px;
-          background: #f8f9fa;
-          border-radius: 12px;
-          padding: 20px;
-        }
-        
-        .table-container {
-          background: #f8f9fa;
-          border-radius: 12px;
-          padding: 20px;
-          overflow-x: auto;
-        }
-        
-        table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 14px;
-        }
-        
-        thead {
-          background: #667eea;
-          color: white;
-        }
-        
-        th, td {
-          padding: 12px;
-          text-align: left;
-          border-bottom: 1px solid #e0e0e0;
-        }
-        
-        th {
-          font-weight: 600;
-          position: sticky;
-          top: 0;
-        }
-        
-        tbody tr:hover {
-          background: #f0f0f0;
-        }
-        
-        .summary {
-          margin-top: 20px;
-          padding: 15px;
-          background: #667eea;
-          color: white;
-          border-radius: 8px;
-          font-weight: 600;
-        }
-        
-        .tooltip {
-          position: absolute;
-          background: rgba(0, 0, 0, 0.9);
-          color: white;
-          padding: 12px 16px;
-          border-radius: 8px;
-          font-size: 13px;
-          pointer-events: none;
-          z-index: 1000;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-          display: none;
-          max-width: 300px;
-        }
-        
-        .tooltip.show {
-          display: block;
-        }
-        
-        .tooltip-title {
-          font-weight: 600;
-          margin-bottom: 8px;
-          font-size: 14px;
-        }
-        
-        .tooltip-item {
-          margin: 4px 0;
-          display: flex;
-          justify-content: space-between;
-        }
-        
-        .legend {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 15px;
-          margin-top: 20px;
-          padding: 15px;
-          background: #f8f9fa;
-          border-radius: 8px;
-        }
-        
-        .legend-item {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          font-size: 13px;
-        }
-        
-        .legend-color {
-          width: 16px;
-          height: 16px;
-          border-radius: 4px;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <h1>📊 代码统计报告</h1>
-        <div class="path-info">统计路径: #{path}</div>
-        
-        <div class="stats-grid">
-          <div class="chart-container">
-            <canvas id="pieChart"></canvas>
-            <div id="tooltip" class="tooltip"></div>
-          </div>
-          
-          <div class="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>语言</th>
-                  <th>文件数</th>
-                  <th>总行数</th>
-                  <th>代码行</th>
-                  <th>注释行</th>
-                  <th>空行</th>
-                </tr>
-              </thead>
-              <tbody id="tableBody">
-              </tbody>
-            </table>
-            <div class="summary">
-              总计: #{counters[:files]} 个文件, #{counters[:lines]} 行 (代码: #{counters[:code]}, 注释: #{counters[:comment]}, 空行: #{counters[:blank]})
-            </div>
-          </div>
-        </div>
-      </div>
-      
-      <script>
-        const chartData = #{chart_data.to_json};
-        const colors = #{colors.to_json};
-        
-        const ctx = document.getElementById('pieChart').getContext('2d');
-        const tooltip = document.getElementById('tooltip');
-        
-        const chart = new Chart(ctx, {
-          type: 'pie',
-          data: {
-            labels: chartData.map(d => d.label),
-            datasets: [{
-              data: chartData.map(d => d.value),
-              backgroundColor: colors,
-              borderColor: '#fff',
-              borderWidth: 2,
-              hoverBorderWidth: 3
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: {
-                position: 'bottom',
-                labels: {
-                  padding: 15,
-                  font: {
-                    size: 12
-                  },
-                  generateLabels: function(chart) {
-                    const data = chart.data;
-                    if (data.labels.length && data.datasets.length) {
-                      return data.labels.map((label, i) => {
-                        const dataset = data.datasets[0];
-                        const value = dataset.data[i];
-                        const total = dataset.data.reduce((a, b) => a + b, 0);
-                        const percentage = ((value / total) * 100).toFixed(2);
-                        return {
-                          text: label + ' (' + percentage + '%)',
-                          fillStyle: dataset.backgroundColor[i],
-                          strokeStyle: dataset.borderColor,
-                          lineWidth: dataset.borderWidth,
-                          hidden: false,
-                          index: i
-                        };
-                      });
-                    }
-                    return [];
-                  }
-                }
-              },
-              tooltip: {
-                enabled: false,
-                external: function(context) {
-                  const tooltipModel = context.tooltip;
-                  if (tooltipModel.opacity === 0) {
-                    tooltip.style.display = 'none';
-                    return;
-                  }
-                  
-                  const dataIndex = tooltipModel.dataPoints[0].dataIndex;
-                  const data = chartData[dataIndex];
-                  
-                  tooltip.innerHTML = 
-                    '<div class="tooltip-title">' + data.label + '</div>' +
-                    '<div class="tooltip-item"><span>代码行数:</span><span>' + data.code.toLocaleString() + '</span></div>' +
-                    '<div class="tooltip-item"><span>占比:</span><span>' + data.percentage + '%</span></div>' +
-                    '<div class="tooltip-item"><span>文件数:</span><span>' + data.files.toLocaleString() + '</span></div>' +
-                    '<div class="tooltip-item"><span>总行数:</span><span>' + data.lines.toLocaleString() + '</span></div>' +
-                    '<div class="tooltip-item"><span>注释行:</span><span>' + data.comment.toLocaleString() + '</span></div>' +
-                    '<div class="tooltip-item"><span>空行:</span><span>' + data.blank.toLocaleString() + '</span></div>';
-                  
-                  const position = context.chart.canvas.getBoundingClientRect();
-                  tooltip.style.left = position.left + tooltipModel.caretX + 'px';
-                  tooltip.style.top = position.top + tooltipModel.caretY + 'px';
-                  tooltip.style.display = 'block';
-                  tooltip.classList.add('show');
-                }
-              }
-            },
-            onHover: function(event, activeElements) {
-              event.native.target.style.cursor = activeElements.length > 0 ? 'pointer' : 'default';
-            }
-          }
-        });
-        
-        // 填充表格
-        const tableBody = document.getElementById('tableBody');
-        chartData.forEach((data, index) => {
-          const row = document.createElement('tr');
-          row.style.cursor = 'pointer';
-          row.onmouseenter = function() {
-            this.style.background = '#e3f2fd';
-          };
-          row.onmouseleave = function() {
-            this.style.background = '';
-          };
-          row.onclick = function() {
-            chart.setActiveElements([{datasetIndex: 0, index: index}]);
-            chart.update();
-          };
-          row.innerHTML = 
-            '<td><span style="display: inline-block; width: 12px; height: 12px; background: ' + colors[index] + '; border-radius: 2px; margin-right: 8px;"></span>' + data.label + '</td>' +
-            '<td>' + data.files.toLocaleString() + '</td>' +
-            '<td>' + data.lines.toLocaleString() + '</td>' +
-            '<td><strong>' + data.code.toLocaleString() + '</strong></td>' +
-            '<td>' + data.comment.toLocaleString() + '</td>' +
-            '<td>' + data.blank.toLocaleString() + '</td>';
-          tableBody.appendChild(row);
-        });
-      </script>
-    </body>
-    </html>
-  HTML
-  
+
+  summary = "总计: #{counters[:files]} 个文件, #{counters[:lines]} 行 (代码: #{counters[:code]}, 注释: #{counters[:comment]}, 空行: #{counters[:blank]})"
+
+  html = load_html_template
   html
+    .gsub('__PATH__', path)
+    .gsub('__SUMMARY__', summary)
+    .gsub('__CHART_DATA_JSON__', chart_data.to_json)
+    .gsub('__COLORS_JSON__', colors.to_json)
 end
 
 def open_browser(file_path)

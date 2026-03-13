@@ -47,6 +47,7 @@ tauri-plugin-compress = { workspace = true }
 tauri-plugin-wallpaper = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+include_dir = "0.7"
 dokan = {version = "0.3.1", optional = true}
 widestring = {version = "0.4.3", optional = true}
 winapi = {version = "0.3.9", features = ["ntstatus", "winnt", "winbase"], optional = true}

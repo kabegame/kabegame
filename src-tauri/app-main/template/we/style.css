@@ -1,0 +1,83 @@
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.wallpaper-root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+}
+
+.wallpaper-stage {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.wallpaper-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
+.wallpaper-img.base { opacity: 1; }
+.wallpaper-img.top {
+  opacity: 0;
+  transform: none;
+  transition: none;
+  will-change: opacity, transform;
+}
+
+.wallpaper-tile {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+  pointer-events: none;
+}
+
+.wallpaper-tile.base { opacity: 1; }
+.wallpaper-tile.top {
+  opacity: 0;
+  transform: none;
+  transition: none;
+  will-change: opacity, transform;
+}
+
+/* transitions (对齐 WallpaperLayer.vue) */
+.top.fade.enter {
+  opacity: 1;
+  transition: opacity var(--kabegame-fade-ms, 800ms) ease-in-out;
+}
+
+.top.slide.prep {
+  opacity: 0;
+  transform: translateX(32px);
+}
+.top.slide.enter {
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity var(--kabegame-slide-ms, 800ms) ease, transform var(--kabegame-slide-ms, 800ms) ease;
+}
+
+.top.zoom.prep {
+  opacity: 0;
+  transform: scale(1.06);
+}
+.top.zoom.enter {
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity var(--kabegame-zoom-ms, 900ms) ease, transform var(--kabegame-zoom-ms, 900ms) ease;
+}

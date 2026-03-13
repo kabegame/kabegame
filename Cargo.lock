@@ -2659,6 +2659,7 @@ dependencies = [
  "dokan",
  "governor",
  "image 0.24.9",
+ "include_dir",
  "kabegame-core",
  "lru",
  "memmap2",
