@@ -302,10 +302,10 @@ pub async fn set_wallpaper_style(style: String, app: AppHandle) -> Result<(), St
     let style_clone = style.clone();
     let controller = WallpaperController::global();
     let manager = controller.active_manager().await?;
-    manager.set_style(&style_clone, true).await?;
+    manager.set_style(&style_clone).await?;
     if let Ok(Some(path)) = get_current_wallpaper_path_from_settings(&app_clone).await {
         if Path::new(&path).exists() {
-            let _ = manager.set_wallpaper_path(&path, true).await;
+            let _ = manager.set_wallpaper_path(&path).await;
         }
     }
     Ok(())
@@ -328,7 +328,7 @@ pub async fn set_wallpaper_rotation_transition(transition: String) -> Result<(),
     let rotator = WallpaperRotator::global();
 
     let manager = controller.active_manager().await?;
-    manager.set_transition(&transition_clone, enabled).await?;
+    manager.set_transition(&transition_clone).await?;
     if enabled && transition_clone != "none" {
         rotator.rotate().await?;
     }
@@ -492,20 +492,20 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
                 };
                 return Err(error_msg);
             }
-            target.set_wallpaper_path(&resolved_wallpaper, true).await?;
+            target.set_wallpaper_path(&resolved_wallpaper).await?;
             eprintln!("[DEBUG] set_wallpaper_mode: target.set_wallpaper_path 完成");
             eprintln!(
                 "[DEBUG] set_wallpaper_mode: 调用 target.set_style: {}",
                 style_to_apply
             );
-            target.set_style(&style_to_apply, true).await?;
+            target.set_style(&style_to_apply).await?;
             eprintln!("[DEBUG] set_wallpaper_mode: target.set_style 完成");
             if rotation_enabled {
                 eprintln!(
                     "[DEBUG] set_wallpaper_mode: 调用 target.set_transition: {}",
                     transition_to_apply
                 );
-                target.set_transition(&transition_to_apply, true).await?;
+                target.set_transition(&transition_to_apply).await?;
                 eprintln!("[DEBUG] set_wallpaper_mode: target.set_transition 完成");
             }
             eprintln!("[DEBUG] set_wallpaper_mode: 应用模式完成");

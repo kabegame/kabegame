@@ -298,7 +298,7 @@ pub fn start_local_event_loop(app: AppHandle) {
                         let controller = crate::wallpaper::manager::WallpaperController::global();
                         tokio::spawn(async move {
                             if let Ok(manager) = controller.active_manager().await {
-                                let _ = manager.set_style(&style, true).await;
+                                let _ = manager.set_style(&style).await;
                             }
                         });
                     }
@@ -310,7 +310,7 @@ pub fn start_local_event_loop(app: AppHandle) {
                         let controller = crate::wallpaper::manager::WallpaperController::global();
                         tokio::spawn(async move {
                             if let Ok(manager) = controller.active_manager().await {
-                                let _ = manager.set_transition(&transition, true).await;
+                                let _ = manager.set_transition(&transition).await;
                             }
                         });
                     }

@@ -49,7 +49,7 @@
                 </li>
                 <li><strong>窗口模式</strong>：
                     <ul>
-                        <li>支持<strong>所有过渡效果</strong>：无过渡、淡入淡出、滑动、缩放等</li>
+                        <li>支持<strong>所有过渡效果</strong>：无过渡、淡入淡出、滑动、缩放等（图片与视频均支持）</li>
                         <li>过渡效果仅在<strong>轮播模式</strong>下生效（单张壁纸切换时）</li>
                     </ul>
                 </li>

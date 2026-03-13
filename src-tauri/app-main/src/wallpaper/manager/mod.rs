@@ -118,7 +118,6 @@ impl WallpaperController {
 use async_trait::async_trait;
 
 /// 壁纸管理器 trait，定义壁纸设置的通用接口
-/// TODO: 这里的 immediate 是糟糕的设计
 #[async_trait]
 pub trait WallpaperManager: Send + Sync {
     ///
@@ -139,23 +138,23 @@ pub trait WallpaperManager: Send + Sync {
     #[allow(dead_code)]
     async fn get_transition(&self) -> Result<String, String>;
 
-    /// 更新壁纸样式，如果immediate为true，则立即生效
+    /// 更新壁纸样式，立即生效
     ///
     /// # Arguments
     /// * `style` - 显示样式（fill/fit/stretch/center/tile）
-    async fn set_style(&self, style: &str, immediate: bool) -> Result<(), String>;
+    async fn set_style(&self, style: &str) -> Result<(), String>;
 
-    /// 更新壁纸过渡效果，立即生效预览
+    /// 更新壁纸过渡效果，立即生效
     ///
     /// # Arguments
     /// * `transition` - 过渡效果（none/fade/slide/zoom）
-    async fn set_transition(&self, transition: &str, immediate: bool) -> Result<(), String>;
+    async fn set_transition(&self, transition: &str) -> Result<(), String>;
 
-    /// 设置壁纸路径，立即生效预览
+    /// 设置壁纸路径，立即生效
     ///
     /// # Arguments
     /// * `file_path` - 壁纸文件路径
-    async fn set_wallpaper_path(&self, file_path: &str, immediate: bool) -> Result<(), String>;
+    async fn set_wallpaper_path(&self, file_path: &str) -> Result<(), String>;
 
     /// 设置壁纸，按照style和transition设置壁纸
     ///
@@ -169,13 +168,9 @@ pub trait WallpaperManager: Send + Sync {
         style: &str,
         transition: &str,
     ) -> Result<(), String> {
-        self.set_style(style, false).await?;
-        self.set_transition(transition, false).await?;
-        // 重要：历史实现只会"设置一次壁纸路径"。
-        // 之前这里会连续调用两次 set_wallpaper_path（先 immediate=false 再 immediate=true），
-        // 等于触发两次 SPI_SETDESKWALLPAPER，在一些系统上肉眼会像"淡入/过渡"。
-        // 改为：只调用一次 immediate=true（需要立即生效的 set_wallpaper 语义本就如此）。
-        self.set_wallpaper_path(file_path, true).await?;
+        self.set_style(style).await?;
+        self.set_transition(transition).await?;
+        self.set_wallpaper_path(file_path).await?;
         Ok(())
     }
 
@@ -185,7 +180,7 @@ pub trait WallpaperManager: Send + Sync {
 
     /// 手动刷新桌面以同步壁纸设置
     ///
-    /// 当使用 set_wallpaper_path 设置壁纸但不刷新桌面时，
+    /// 当 set_wallpaper_path 未刷新桌面时，
     /// 可以调用此方法来手动触发桌面刷新，使壁纸设置生效
     #[allow(dead_code)]
     fn refresh_desktop(&self) -> Result<(), String>;

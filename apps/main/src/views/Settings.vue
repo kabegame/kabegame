@@ -42,7 +42,7 @@
                 <WallpaperStyleSetting />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="过渡效果" description="窗口模式支持图片过渡；原生模式跟随系统能力">
+              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="过渡效果" description="窗口模式支持壁纸过渡（图片与视频）；原生模式跟随系统能力">
                 <WallpaperTransitionSetting />
               </SettingRow>
 

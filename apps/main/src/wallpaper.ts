@@ -11,6 +11,8 @@ type MediaType = "image" | "video";
 // 状态管理
 let baseSrc = "";
 let topSrc = "";
+let baseVideoSrc = "";
+let topVideoSrc = "";
 let phase: Phase = "idle";
 let lastRawPath = "";
 let currentPath = "";
@@ -40,10 +42,8 @@ let baseTileEl: HTMLElement | null = null;
 let topTileEl: HTMLElement | null = null;
 let debugPanelEl: HTMLElement | null = null;
 
-// 事件监听器
-let unlistenImage: UnlistenFn | null = null;
-let unlistenStyle: UnlistenFn | null = null;
-let unlistenTransition: UnlistenFn | null = null;
+// 事件监听器（setting-change）
+let unlistenSettingChange: UnlistenFn | null = null;
 
 // 防止并发请求同一路径的 Map（仅用于 prefetch 去重）
 const inflight = new Set<string>();
@@ -179,7 +179,7 @@ function applyStyles() {
         Object.assign(topTileEl.style, topTileStyle);
     }
 
-    // 应用 top 层类名和样式
+    // 应用 top 层类名和样式（图片/ tile）
     if (topImgEl || topTileEl) {
         const topClasses = getTopClasses();
         const el = topImgEl || topTileEl;
@@ -187,12 +187,44 @@ function applyStyles() {
             el.className = `wallpaper-${topImgEl ? "img" : "tile"} top ${topClasses.join(" ")}`.trim();
         }
     }
+    // 视频 top 层使用同一套过渡类名
+    if (topVideoEl && topVideoSrc) {
+        const topClasses = transition === "none" ? [] : [transition, phase];
+        topVideoEl.className = `wallpaper-img top ${topClasses.join(" ")}`.trim();
+    }
 }
 
 function commitTopToBase() {
     if (transitionGuardTimer) {
         window.clearTimeout(transitionGuardTimer);
         transitionGuardTimer = null;
+    }
+    // 视频 top → base：与图片同一套流程
+    if (topVideoSrc) {
+        const nextSrc = topVideoSrc;
+        baseVideoSrc = nextSrc;
+        topVideoSrc = "";
+        phase = "idle";
+        currentPath = pendingPath || currentPath;
+        pendingPath = "";
+        busy = false;
+        if (baseVideoEl) {
+            baseVideoEl.src = nextSrc;
+            void baseVideoEl.play().catch(() => {});
+        }
+        resetVideoElement(topVideoEl);
+        updateModeDisplay();
+        applyStyles();
+        if (queuedPath && queuedPath !== currentPath) {
+            const next = queuedPath;
+            queuedPath = "";
+            prefetchPath(next);
+            setTimeout(() => void setImagePath(next), 0);
+        } else {
+            queuedPath = "";
+        }
+        updateDebugPanel();
+        return;
     }
     if (!topSrc) return;
     baseSrc = topSrc;
@@ -329,31 +361,57 @@ async function setImagePath(path: string) {
         if (isVideoMedia) {
             const videoUrl = await getVideoUrl(normalizedPath);
             lastError = "";
-            phase = "idle";
-            pendingPath = "";
-            queuedPath = "";
-            currentPath = normalizedPath;
             currentMediaType = "video";
-            topSrc = "";
-            baseSrc = "";
             if (topImgEl) {
                 topImgEl.src = "";
                 topImgEl.style.opacity = "0";
             }
-            if (baseImgEl) {
-                baseImgEl.src = "";
-            }
+            if (baseImgEl) baseImgEl.src = "";
             if (topTileEl) {
                 topTileEl.style.backgroundImage = "";
                 topTileEl.style.opacity = "0";
             }
-            if (baseTileEl) {
-                baseTileEl.style.backgroundImage = "";
+            if (baseTileEl) baseTileEl.style.backgroundImage = "";
+
+            // 无过渡或首帧：直接设 base
+            if (transition === "none" || !baseVideoSrc) {
+                baseVideoSrc = videoUrl;
+                topVideoSrc = "";
+                phase = "idle";
+                currentPath = normalizedPath;
+                pendingPath = "";
+                queuedPath = "";
+                resetVideoElement(topVideoEl);
+                await playVideo(baseVideoEl, videoUrl);
+                updateModeDisplay();
+                applyStyles();
+                busy = false;
+                updateDebugPanel();
+                return;
             }
+
+            // 有过渡：新视频进 top 层，与图片同一套 prep → enter
+            topVideoSrc = videoUrl;
+            phase = "prep";
+            pendingPath = normalizedPath;
+            queuedPath = "";
             resetVideoElement(topVideoEl);
-            await playVideo(baseVideoEl, videoUrl);
+            if (topVideoEl) {
+                topVideoEl.src = videoUrl;
+                topVideoEl.style.opacity = "0";
+            }
             updateModeDisplay();
             applyStyles();
+            await new Promise<void>((r) => requestAnimationFrame(() => r()));
+            await new Promise<void>((r) => requestAnimationFrame(() => r()));
+            if (topVideoEl) topVideoEl.style.opacity = "";
+            phase = "enter";
+            applyStyles();
+            if (topVideoEl) void topVideoEl.play().catch(() => {});
+            if (transitionGuardTimer) window.clearTimeout(transitionGuardTimer);
+            transitionGuardTimer = window.setTimeout(() => {
+                if (phase === "enter" && topVideoSrc) commitTopToBase();
+            }, 1400);
             busy = false;
             updateDebugPanel();
             return;
@@ -363,6 +421,8 @@ async function setImagePath(path: string) {
 
         lastError = "";
         currentMediaType = "image";
+        baseVideoSrc = "";
+        topVideoSrc = "";
         resetVideoElement(baseVideoEl);
         resetVideoElement(topVideoEl);
         updateModeDisplay();
@@ -424,6 +484,14 @@ async function setImagePath(path: string) {
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         
+        // 清除内联 opacity，让 CSS 类控制过渡动画
+        // 内联 style.opacity 优先级高于类选择器，若不清除会阻止 .top.fade.enter { opacity:1 } 生效
+        if (mode !== "tile") {
+            if (topImgEl) topImgEl.style.opacity = "";
+        } else {
+            if (topTileEl) topTileEl.style.opacity = "";
+        }
+
         phase = "enter";
         applyStyles();
 
@@ -509,8 +577,19 @@ function initDOM() {
         });
     }
     if (topVideoEl) {
+        topVideoEl.addEventListener("transitionend", handleTopTransitionEnd);
         topVideoEl.addEventListener("error", () => {
             lastError = "top 层视频加载失败";
+            if (transitionGuardTimer) {
+                window.clearTimeout(transitionGuardTimer);
+                transitionGuardTimer = null;
+            }
+            topVideoSrc = "";
+            phase = "idle";
+            pendingPath = "";
+            busy = false;
+            resetVideoElement(topVideoEl);
+            updateModeDisplay();
             updateDebugPanel();
         });
     }
@@ -532,7 +611,7 @@ function updateModeDisplay() {
         if (baseTileEl) baseTileEl.style.display = "none";
         if (topTileEl) topTileEl.style.display = "none";
         if (baseVideoEl) baseVideoEl.style.display = "block";
-        if (topVideoEl) topVideoEl.style.display = "none";
+        if (topVideoEl) topVideoEl.style.display = topVideoSrc ? "block" : "none";
         return;
     }
 
@@ -556,6 +635,36 @@ function updateModeDisplay() {
     }
 }
 
+function applyStyleFromMode() {
+    if (currentMediaType === "video") {
+        applyStyles();
+        updateDebugPanel();
+        return;
+    }
+    if (baseSrc) {
+        if (mode !== "tile") {
+            if (baseImgEl) baseImgEl.src = baseSrc;
+        } else {
+            if (baseTileEl) {
+                const baseTileStyle = getBaseTileStyle();
+                Object.assign(baseTileEl.style, baseTileStyle);
+            }
+        }
+    }
+    if (topSrc) {
+        if (mode !== "tile") {
+            if (topImgEl) topImgEl.src = topSrc;
+        } else {
+            if (topTileEl) {
+                const topTileStyle = getTopTileStyle();
+                Object.assign(topTileEl.style, topTileStyle);
+            }
+        }
+    }
+    applyStyles();
+    updateDebugPanel();
+}
+
 async function init() {
     initDOM();
     updateModeDisplay();
@@ -567,53 +676,61 @@ async function init() {
         lastError = `getCurrentWebviewWindow failed: ${String(e)}`;
     }
 
-    unlistenImage = await listen<string>("wallpaper-update-image", (e) => {
-        lastImageTs = new Date().toLocaleTimeString();
-        setImagePath(e.payload);
-    });
-    unlistenStyle = await listen<string>("wallpaper-update-style", (e) => {
-        lastStyleTs = new Date().toLocaleTimeString();
-        const v = e.payload as Mode;
-        mode = v;
-        updateModeDisplay();
-        if (currentMediaType === "video") {
+    // 监听 setting-change 事件（payload 为 { key: value } 形式的变更对象）
+    unlistenSettingChange = await listen<Record<string, unknown>>("setting-change", async (event) => {
+        const raw = event.payload;
+        const changes =
+            raw && typeof raw === "object" && "changes" in raw && typeof (raw as { changes?: unknown }).changes === "object"
+                ? ((raw as { changes: Record<string, unknown> }).changes as Record<string, unknown>)
+                : (raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {});
+        if ("wallpaperStyle" in changes && typeof changes.wallpaperStyle === "string") {
+            lastStyleTs = new Date().toLocaleTimeString();
+            mode = changes.wallpaperStyle as Mode;
+            updateModeDisplay();
+            applyStyleFromMode();
+        }
+        if ("wallpaperRotationTransition" in changes && typeof changes.wallpaperRotationTransition === "string") {
+            lastTransitionTs = new Date().toLocaleTimeString();
+            transition = changes.wallpaperRotationTransition as Transition;
             applyStyles();
             updateDebugPanel();
-            return;
         }
-        // 恢复当前图片状态
-        if (baseSrc) {
-            if (mode !== "tile") {
-                if (baseImgEl) baseImgEl.src = baseSrc;
-            } else {
-                if (baseTileEl) {
-                    const baseTileStyle = getBaseTileStyle();
-                    Object.assign(baseTileEl.style, baseTileStyle);
+        if ("currentWallpaperImageId" in changes) {
+            lastImageTs = new Date().toLocaleTimeString();
+            try {
+                const path = await invoke<unknown>("get_current_wallpaper_path");
+                if (path && typeof path === "string") {
+                    setImagePath(path);
                 }
+            } catch {
+                // 忽略，可能是无壁纸
             }
         }
-        if (topSrc) {
-            if (mode !== "tile") {
-                if (topImgEl) topImgEl.src = topSrc;
-            } else {
-                if (topTileEl) {
-                    const topTileStyle = getTopTileStyle();
-                    Object.assign(topTileEl.style, topTileStyle);
-                }
-            }
-        }
-        applyStyles();
-        updateDebugPanel();
-    });
-    unlistenTransition = await listen<string>("wallpaper-update-transition", (e) => {
-        lastTransitionTs = new Date().toLocaleTimeString();
-        const v = e.payload as Transition;
-        transition = v;
-        applyStyles();
-        updateDebugPanel();
     });
 
-    // 壁纸窗口 ready 握手
+    // 初始化时从 settings 拉取当前状态
+    try {
+        const [styleRes, transitionRes, pathRes] = await Promise.all([
+            invoke<string>("get_wallpaper_rotation_style"),
+            invoke<string>("get_wallpaper_rotation_transition"),
+            invoke<string | null>("get_current_wallpaper_path"),
+        ]);
+        if (styleRes && typeof styleRes === "string") {
+            mode = styleRes as Mode;
+        }
+        if (transitionRes && typeof transitionRes === "string") {
+            transition = transitionRes as Transition;
+        }
+        updateModeDisplay();
+        applyStyles();
+        if (pathRes && typeof pathRes === "string") {
+            setImagePath(pathRes);
+        }
+    } catch (e) {
+        lastError = `init settings fetch failed: ${String(e)}`;
+    }
+
+    // 壁纸窗口 ready 握手（初始加载完成后通知后端，用于 remount/show）
     try {
         readyInvoked = true;
         await invoke("wallpaper_window_ready");
@@ -625,12 +742,8 @@ async function init() {
 }
 
 function cleanup() {
-    unlistenImage?.();
-    unlistenStyle?.();
-    unlistenTransition?.();
-    unlistenImage = null;
-    unlistenStyle = null;
-    unlistenTransition = null;
+    unlistenSettingChange?.();
+    unlistenSettingChange = null;
 
     inflight.clear();
     queuedPath = "";
@@ -639,6 +752,8 @@ function cleanup() {
         window.clearTimeout(transitionGuardTimer);
         transitionGuardTimer = null;
     }
+    baseVideoSrc = "";
+    topVideoSrc = "";
     resetVideoElement(baseVideoEl);
     resetVideoElement(topVideoEl);
 }

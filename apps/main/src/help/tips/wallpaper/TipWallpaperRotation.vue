@@ -46,7 +46,7 @@
             <li><strong>顺序模式</strong>：按画册中的顺序依次更换</li>
           </ul>
         </li>
-        <li><strong>过渡效果</strong>：轮播切换时的动画效果（仅轮播模式支持）</li>
+        <li><strong>过渡效果</strong>：轮播切换时的动画效果（仅轮播模式支持；图片与视频均支持同一套过渡）</li>
       </ul>
       <TipImageCarousel v-if="rotationOptionsImages.length > 0" :images="rotationOptionsImages" />
     </section>
