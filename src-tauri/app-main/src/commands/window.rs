@@ -139,15 +139,24 @@ pub fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
 
 /// 修复壁纸窗口 Z-order（供前端在最小化等事件时调用）
 #[tauri::command]
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub async fn fix_wallpaper_zorder(app: tauri::AppHandle) {
+    #[cfg(target_os = "windows")]
     fix_wallpaper_window_zorder(app).await;
+
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::Manager;
+        if let Some(window) = app.get_webview_window("wallpaper") {
+            let _ = crate::wallpaper::window_mount_macos::mount_to_desktop(&window);
+        }
+    }
 }
 
 /// 壁纸窗口前端 ready 后调用，用于触发一次"推送当前壁纸到壁纸窗口"。
 /// 解决壁纸窗口尚未注册事件监听时，后端先 emit 导致事件丢失的问题。
 #[tauri::command]
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub fn wallpaper_window_ready(_app: tauri::AppHandle) -> Result<(), String> {
     // 标记窗口已完全初始化
     println!("壁纸窗口已就绪");

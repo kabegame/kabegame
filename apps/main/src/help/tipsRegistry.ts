@@ -16,6 +16,7 @@ import TipAlbumsIntroduction from "@/help/tips/albums/TipAlbumsIntroduction.vue"
 import TipWallpaperBasic from "@/help/tips/wallpaper/TipWallpaperBasic.vue";
 import TipWallpaperRotation from "@/help/tips/wallpaper/TipWallpaperRotation.vue";
 import TipWallpaperMode from "@/help/tips/wallpaper/TipWallpaperMode.vue";
+import TipWallpaperWindowVideo from "@/help/tips/wallpaper/TipWallpaperWindowVideo.vue";
 import TipTaskViewing from "@/help/tips/tasks/TipTaskViewing.vue";
 import TipTaskManagement from "@/help/tips/tasks/TipTaskManagement.vue";
 import TipTaskIntroduction from "@/help/tips/tasks/TipTaskIntroduction.vue";
@@ -57,6 +58,7 @@ export type TipId =
   | "wallpaper-basic"
   | "wallpaper-rotation"
   | "wallpaper-mode"
+  | "wallpaper-window-video"
   | "task-introduction"
   | "task-viewing"
   | "task-management";
@@ -155,9 +157,15 @@ export const TIP_CATEGORIES: TipCategory[] = [
       },
       {
         id: "wallpaper-mode",
-        title: "原生模式 vs 窗口模式（Windows 可用）",
-        summary: "两种壁纸显示模式的区别：原生模式性能好，窗口模式功能更丰富。",
+        title: "原生模式 vs 窗口模式",
+        summary: "两种壁纸显示模式的区别：原生模式性能好，窗口模式功能更丰富；Windows / macOS 支持窗口模式。",
         component: TipWallpaperMode,
+      },
+      {
+        id: "wallpaper-window-video",
+        title: "窗口模式与视频壁纸、应用关闭说明",
+        summary: "窗口模式下可设置视频/GIF 壁纸；应用完全退出后壁纸会消失，保持运行即可持续显示。",
+        component: TipWallpaperWindowVideo,
       },
     ],
   },

@@ -5,6 +5,7 @@
             <div class="summary-stats">
                 <span v-if="folderCount > 0">📁 文件夹: <strong>{{ folderCount }}</strong> 个</span>
                 <span v-if="imageCount > 0">🖼️ 图片: <strong>{{ imageCount }}</strong> 个</span>
+                <span v-if="videoCount > 0">🎬 视频: <strong>{{ videoCount }}</strong> 个</span>
                 <span v-if="archiveCount > 0">📦 压缩包: <strong>{{ archiveCount }}</strong> 个</span>
                 <span v-if="pluginCount > 0">🔌 插件: <strong>{{ pluginCount }}</strong> 个</span>
             </div>
@@ -36,6 +37,7 @@ type ImportItem = {
     isDirectory: boolean;
     isArchive?: boolean;
     isKgpg?: boolean;
+    isVideo?: boolean;
 };
 
 const props = defineProps<{
@@ -51,8 +53,9 @@ const itemCount = computed(() => props.items.length);
 const folderCount = computed(() => props.items.filter(i => i.isDirectory).length);
 const archiveCount = computed(() => props.items.filter(i => !i.isDirectory && i.isArchive).length);
 const pluginCount = computed(() => props.items.filter(i => !i.isDirectory && i.isKgpg).length);
+const videoCount = computed(() => props.items.filter(i => !i.isDirectory && i.isVideo).length);
 const imageCount = computed(
-    () => props.items.filter(i => !i.isDirectory && !i.isArchive && !i.isKgpg).length
+    () => props.items.filter(i => !i.isDirectory && !i.isArchive && !i.isKgpg && !i.isVideo).length
 );
 const showOptions = computed(() => folderCount.value + archiveCount.value > 0);
 
@@ -72,11 +75,11 @@ const createAlbumPerSourceModel = computed<boolean>({
 });
 
 function getItemIcon(item: ImportItem) {
-    return item.isDirectory ? "📁" : item.isArchive ? "📦" : item.isKgpg ? "🔌" : "🖼️";
+    return item.isDirectory ? "📁" : item.isArchive ? "📦" : item.isKgpg ? "🔌" : item.isVideo ? "🎬" : "🖼️";
 }
 
 function getItemType(item: ImportItem) {
-    return item.isDirectory ? "文件夹" : item.isArchive ? "压缩包" : item.isKgpg ? "源插件" : "图片";
+    return item.isDirectory ? "文件夹" : item.isArchive ? "压缩包" : item.isKgpg ? "源插件" : item.isVideo ? "视频" : "图片";
 }
 </script>
 

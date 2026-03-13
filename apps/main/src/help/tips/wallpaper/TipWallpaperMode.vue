@@ -20,7 +20,7 @@
                     <ul>
                         <li><strong>功能更灵活</strong>：类似 Wallpaper Engine，支持所有过渡效果</li>
                         <li><strong>性能稍差</strong>：需要创建一个透明窗口覆盖桌面，资源占用稍高</li>
-                        <li><strong>仅 Windows</strong>：目前仅 Windows 系统支持</li>
+                        <li><strong>Windows / macOS</strong>：桌面端支持窗口模式；Android 使用系统壁纸 API</li>
                         <li><strong>壁纸显示方式</strong>：支持所有显示方式（填充、适应、拉伸、居中、平铺等）</li>
                     </ul>
                 </div>

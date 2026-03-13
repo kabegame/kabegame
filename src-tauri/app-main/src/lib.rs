@@ -312,8 +312,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            #[cfg(any(target_os = "linux", target_os = "android"))]
-            read_file,
             // --- Albums ---
             get_albums,
             get_album_counts,
@@ -418,6 +416,8 @@ pub fn run() {
             set_image_click_action,
             get_gallery_image_aspect_ratio,
             set_gallery_image_aspect_ratio,
+            get_gallery_grid_columns,
+            set_gallery_grid_columns,
             get_auto_deduplicate,
             set_auto_deduplicate,
             get_default_download_dir,
@@ -450,7 +450,7 @@ pub fn run() {
             get_wallpaper_transition_by_mode,
             get_wallpaper_mode,
             get_wallpaper_rotator_status,
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             fix_wallpaper_zorder,
             // --- Wallpaper Engine (Windows) ---
             #[cfg(target_os = "windows")]
@@ -463,6 +463,8 @@ pub fn run() {
             export_album_to_we_project,
             #[cfg(target_os = "windows")]
             export_images_to_we_project,
+            #[cfg(target_os = "windows")]
+            export_video_to_we_project,
             // --- Virtual Drive ---
             #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             get_album_drive_enabled,
@@ -477,7 +479,7 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             toggle_fullscreen,
             get_window_state,
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             wallpaper_window_ready,
             // --- Filesystem ---
             open_explorer,

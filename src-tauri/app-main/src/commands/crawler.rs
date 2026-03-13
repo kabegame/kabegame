@@ -562,6 +562,9 @@ pub async fn crawl_back(app: AppHandle, count: Option<usize>) -> Result<(), Stri
 
 #[tauri::command]
 pub fn show_crawler_window(app: AppHandle) -> Result<(), String> {
+    if crawler_window_state().try_get_context().is_none() {
+        return Err("爬虫 WebView 窗口当前为空，没有爬虫插件在占用，先运行一个爬虫插件吧".to_string());
+    }
     let crawler_window = app
         .get_webview_window("crawler")
         .ok_or_else(|| "Crawler window not found".to_string())?;

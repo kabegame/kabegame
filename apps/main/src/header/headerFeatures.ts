@@ -10,7 +10,8 @@ import {
   Upload,
   Grid,
   VideoPause,
-  Sort
+  Sort,
+  Monitor,
 } from "@element-plus/icons-vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 
@@ -123,6 +124,12 @@ export function registerHeaderFeatures() {
       label: "按时间排序",
       icon: Sort,
       comp: GallerySortControl,
+    },
+    // 畅游页：打开爬虫 WebView 窗口（仅桌面显示）
+    {
+      id: HeaderFeatureId.OpenCrawlerWebview,
+      label: "爬虫 WebView 窗口",
+      icon: Monitor,
     },
   ]);
 }

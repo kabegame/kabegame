@@ -2137,9 +2137,9 @@ pub async fn postprocess_downloaded_image(
     Ok(inserted)
 }
 
-/// 桌面端：若 infer 得到支持的图片类型且当前路径无扩展名或扩展名不正确，则重命名为带正确扩展名的文件并返回新路径；否则返回原路径。
+/// 桌面端：若 infer 得到支持的媒体类型（图片/视频）且当前路径无扩展名或扩展名不正确，则重命名为带正确扩展名的文件并返回新路径；否则返回原路径。
 #[cfg(not(target_os = "android"))]
-async fn ensure_image_extension_by_infer(path: &Path) -> PathBuf {
+async fn ensure_media_extension_by_infer(path: &Path) -> PathBuf {
     let inferred = match crate::image_type::mime_type_from_path(path) {
         Some(m) => m,
         None => return path.to_path_buf(),
@@ -2152,7 +2152,7 @@ async fn ensure_image_extension_by_infer(path: &Path) -> PathBuf {
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
-    if crate::image_type::is_supported_image_ext(current_ext) && current_ext == want_ext {
+    if crate::image_type::is_supported_media_ext(current_ext) && current_ext == want_ext {
         return path.to_path_buf();
     }
     let new_path = path.with_extension(&want_ext);
@@ -2187,11 +2187,7 @@ pub async fn process_downloaded_image_to_storage(
     #[cfg(not(target_os = "android"))]
     let is_video = crate::image_type::is_video_by_path(path);
     #[cfg(not(target_os = "android"))]
-    let path_used = if is_video {
-        path.to_path_buf()
-    } else {
-        ensure_image_extension_by_infer(path).await
-    };
+    let path_used = ensure_media_extension_by_infer(path).await;
     #[cfg(not(target_os = "android"))]
     let path = path_used.as_path();
     let local_path_str = path

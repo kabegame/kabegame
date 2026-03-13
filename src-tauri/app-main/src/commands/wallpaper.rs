@@ -77,6 +77,17 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     };
     let local_path = info.local_path;
 
+    let requires_window_mode = kabegame_core::image_type::requires_window_mode(Path::new(&local_path));
+    if requires_window_mode {
+        let current_mode = settings
+            .get_wallpaper_mode()
+            .await
+            .unwrap_or_else(|_| "native".to_string());
+        if current_mode != "window" {
+            return Err("REQUIRES_WINDOW_MODE".to_string());
+        }
+    }
+
     // Android 上为 content:// URI，不能用 Path::exists 判断
     if !local_path.starts_with("content://") && !Path::new(&local_path).exists() {
         let _ = settings.set_current_wallpaper_image_id(None).await;

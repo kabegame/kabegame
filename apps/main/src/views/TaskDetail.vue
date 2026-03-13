@@ -30,6 +30,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, watch, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
+import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
 import { listen } from "@tauri-apps/api/event";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { VideoPause, Delete, Setting, Refresh, QuestionFilled, Star, StarFilled, InfoFilled, DocumentCopy, Picture, FolderAdd, MoreFilled } from "@element-plus/icons-vue";
@@ -644,9 +645,7 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
             );
         } else {
             // 单选：直接设置壁纸
-            await invoke("set_wallpaper_by_image_id", {
-                imageId: imagesToProcess[0].id,
-            });
+            await setWallpaperByImageIdWithModeFallback(imagesToProcess[0].id);
             ElMessage.success("壁纸设置成功");
         }
 

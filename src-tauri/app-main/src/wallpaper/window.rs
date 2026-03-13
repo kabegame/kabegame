@@ -134,80 +134,71 @@ impl WallpaperWindow {
 
     /// 重新挂载窗口到桌面（用于从原生模式切换回窗口模式时）
     pub fn remount(&self) -> Result<(), String> {
+        // #region agent log
+        { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/cmtheit/code/kabegame/.cursor/debug-23122f.log") { let _ = writeln!(f, r#"{{"sessionId":"23122f","hypothesisId":"C","location":"window.rs:remount:entry","message":"remount called","data":{{"thread":"{:?}"}},"timestamp":{}}}"#, std::thread::current().name().unwrap_or("unnamed"), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()); } }
+        // #endregion
+
         // 先挂载窗口到桌面
         self.set_window_as_wallpaper()
             .map_err(|e| format!("重新挂载窗口到桌面失败: {}", e))?;
+
+        // #region agent log
+        { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/cmtheit/code/kabegame/.cursor/debug-23122f.log") { let _ = writeln!(f, r#"{{"sessionId":"23122f","hypothesisId":"D","location":"window.rs:remount:before_show","message":"about to show window","timestamp":{}}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()); } }
+        // #endregion
 
         // 显示窗口
         self.window
             .show()
             .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
 
-        // 关键：show() 后可能会改变 Z-order，需要再次确保 DefView 在顶部
-        // 特别是在从原生模式切换到窗口模式时
-        use windows_sys::Win32::Foundation::HWND;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            FindWindowExW, FindWindowW, GetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE,
-            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW,
-        };
+        #[cfg(target_os = "windows")]
+        {
+            // 关键：show() 后可能会改变 Z-order，需要再次确保 DefView 在顶部
+            // 特别是在从原生模式切换到窗口模式时
+            use windows_sys::Win32::Foundation::HWND;
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                FindWindowExW, FindWindowW, GetWindowLongPtrW, SetWindowPos, ShowWindow,
+                GWL_EXSTYLE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_SHOW,
+            };
 
-        let tauri_hwnd = self
-            .window
-            .hwnd()
-            .map_err(|e| format!("无法获取壁纸窗口句柄(hwnd): {}", e))?;
-        let tauri_hwnd: HWND = tauri_hwnd.0 as isize;
+            let tauri_hwnd = self
+                .window
+                .hwnd()
+                .map_err(|e| format!("无法获取壁纸窗口句柄(hwnd): {}", e))?;
+            let tauri_hwnd: HWND = tauri_hwnd.0 as isize;
 
-        // 检查是否是 Windows 11 raised desktop
-        unsafe {
-            fn wide(s: &str) -> Vec<u16> {
-                use std::ffi::OsStr;
-                use std::os::windows::ffi::OsStrExt;
-                OsStr::new(s).encode_wide().chain(Some(0)).collect()
-            }
+            // 检查是否是 Windows 11 raised desktop
+            unsafe {
+                fn wide(s: &str) -> Vec<u16> {
+                    use std::ffi::OsStr;
+                    use std::os::windows::ffi::OsStrExt;
+                    OsStr::new(s).encode_wide().chain(Some(0)).collect()
+                }
 
-            const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x00200000;
-            const HWND_TOP: HWND = 0;
+                const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x00200000;
+                const HWND_TOP: HWND = 0;
 
-            let progman = FindWindowW(wide("Progman").as_ptr(), std::ptr::null());
-            if progman != 0 {
-                let ex_style = GetWindowLongPtrW(progman, GWL_EXSTYLE) as u32;
-                let is_raised_desktop = (ex_style & WS_EX_NOREDIRECTIONBITMAP) != 0;
+                let progman = FindWindowW(wide("Progman").as_ptr(), std::ptr::null());
+                if progman != 0 {
+                    let ex_style = GetWindowLongPtrW(progman, GWL_EXSTYLE) as u32;
+                    let is_raised_desktop = (ex_style & WS_EX_NOREDIRECTIONBITMAP) != 0;
 
-                if is_raised_desktop {
-                    eprintln!("[DEBUG-SAIKYO] remount: 检测到 Windows 11 raised desktop，确保 DefView 在顶部");
+                    if is_raised_desktop {
+                        eprintln!("[DEBUG-SAIKYO] remount: 检测到 Windows 11 raised desktop，确保 DefView 在顶部");
 
-                    // 查找 DefView
-                    let shell_dll_defview = FindWindowExW(
-                        progman,
-                        0,
-                        wide("SHELLDLL_DefView").as_ptr(),
-                        std::ptr::null(),
-                    );
-
-                    if shell_dll_defview != 0 {
-                        // 确保 DefView 在顶部
-                        ShowWindow(shell_dll_defview, SW_SHOW);
-                        SetWindowPos(
-                            shell_dll_defview,
-                            HWND_TOP,
+                        // 查找 DefView
+                        let shell_dll_defview = FindWindowExW(
+                            progman,
                             0,
-                            0,
-                            0,
-                            0,
-                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                        );
-
-                        // 查找并提升 SysListView32
-                        let folder_view = FindWindowExW(
-                            shell_dll_defview,
-                            0,
-                            wide("SysListView32").as_ptr(),
+                            wide("SHELLDLL_DefView").as_ptr(),
                             std::ptr::null(),
                         );
-                        if folder_view != 0 {
-                            ShowWindow(folder_view, SW_SHOW);
+
+                        if shell_dll_defview != 0 {
+                            // 确保 DefView 在顶部
+                            ShowWindow(shell_dll_defview, SW_SHOW);
                             SetWindowPos(
-                                folder_view,
+                                shell_dll_defview,
                                 HWND_TOP,
                                 0,
                                 0,
@@ -215,24 +206,56 @@ impl WallpaperWindow {
                                 0,
                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                             );
+
+                            // 查找并提升 SysListView32
+                            let folder_view = FindWindowExW(
+                                shell_dll_defview,
+                                0,
+                                wide("SysListView32").as_ptr(),
+                                std::ptr::null(),
+                            );
+                            if folder_view != 0 {
+                                ShowWindow(folder_view, SW_SHOW);
+                                SetWindowPos(
+                                    folder_view,
+                                    HWND_TOP,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                                );
+                            }
+
+                            // 确保壁纸窗口在 DefView 之下
+                            SetWindowPos(
+                                tauri_hwnd,
+                                shell_dll_defview as HWND,
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                            );
+
+                            eprintln!("[DEBUG-SAIKYO] remount: ✓ 已重新调整 Z-order");
                         }
-
-                        // 确保壁纸窗口在 DefView 之下
-                        SetWindowPos(
-                            tauri_hwnd,
-                            shell_dll_defview as HWND,
-                            0,
-                            0,
-                            0,
-                            0,
-                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                        );
-
-                        eprintln!("[DEBUG-SAIKYO] remount: ✓ 已重新调整 Z-order");
                     }
                 }
             }
         }
+
+        #[cfg(target_os = "macos")]
+        {
+            // #region agent log
+            { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/cmtheit/code/kabegame/.cursor/debug-23122f.log") { let _ = writeln!(f, r#"{{"sessionId":"23122f","hypothesisId":"C","location":"window.rs:remount:second_mount","message":"about to call mount_to_desktop SECOND time (after show)","timestamp":{}}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()); } }
+            // #endregion
+            crate::wallpaper::window_mount_macos::mount_to_desktop(&self.window)?;
+        }
+
+        // #region agent log
+        { use std::io::Write; if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/cmtheit/code/kabegame/.cursor/debug-23122f.log") { let _ = writeln!(f, r#"{{"sessionId":"23122f","hypothesisId":"C","location":"window.rs:remount:done","message":"remount completed","timestamp":{}}}"#, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()); } }
+        // #endregion
 
         Ok(())
     }
@@ -264,17 +287,25 @@ impl WallpaperWindow {
         // 避免靠固定 sleep 猜测窗口/DOM 初始化时机
         Self::wait_ready(Duration::from_secs(100))?;
 
-        use crate::wallpaper::window_mount;
-        use windows_sys::Win32::Foundation::HWND;
+        #[cfg(target_os = "windows")]
+        {
+            use crate::wallpaper::window_mount;
+            use windows_sys::Win32::Foundation::HWND;
 
-        let tauri_hwnd = self
-            .window
-            .hwnd()
-            .map_err(|e| format!("无法获取壁纸窗口句柄(hwnd): {}", e))?;
-        let tauri_hwnd: HWND = tauri_hwnd.0 as isize;
+            let tauri_hwnd = self
+                .window
+                .hwnd()
+                .map_err(|e| format!("无法获取壁纸窗口句柄(hwnd): {}", e))?;
+            let tauri_hwnd: HWND = tauri_hwnd.0 as isize;
 
-        // 使用高级版挂载函数（来自 Window.rs 的完整实现）
-        window_mount::mount_to_desktop_saikyo(tauri_hwnd)?;
+            // 使用高级版挂载函数（来自 Window.rs 的完整实现）
+            window_mount::mount_to_desktop_saikyo(tauri_hwnd)?;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            crate::wallpaper::window_mount_macos::mount_to_desktop(&self.window)?;
+        }
 
         Ok(())
     }

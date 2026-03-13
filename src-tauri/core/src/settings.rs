@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::time::Instant;
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use std::process::Command;
 
 use crate::emitter::GlobalEmitter;
@@ -85,6 +86,8 @@ pub enum SettingKey {
     ImageClickAction,
     /// 画廊图片宽高比
     GalleryImageAspectRatio,
+    /// 画廊列数（0=动态，1-4=固定）
+    GalleryGridColumns,
     /// 自动去重
     AutoDeduplicate,
     /// 默认下载目录
@@ -263,6 +266,7 @@ impl Settings {
             SettingKey::NetworkRetryCount => SettingValue::U32(2),
             SettingKey::ImageClickAction => SettingValue::String("preview".to_string()),
             SettingKey::GalleryImageAspectRatio => SettingValue::OptionString(None),
+            SettingKey::GalleryGridColumns => SettingValue::U32(0),
             SettingKey::AutoDeduplicate => SettingValue::Bool(false),
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
             SettingKey::WallpaperEngineDir => SettingValue::OptionString(None),
@@ -297,11 +301,11 @@ impl Settings {
     }
 
     fn default_wallpaper_rotation_transition() -> String {
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
             "fade".to_string()
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {
             "none".to_string()
         }
@@ -476,6 +480,7 @@ Write-Output "$style,$tile"
             SettingKey::NetworkRetryCount,
             SettingKey::ImageClickAction,
             SettingKey::GalleryImageAspectRatio,
+            SettingKey::GalleryGridColumns,
             SettingKey::AutoDeduplicate,
             SettingKey::DefaultDownloadDir,
             SettingKey::WallpaperEngineDir,
@@ -587,7 +592,8 @@ Write-Output "$style,$tile"
             }
             SettingKey::MaxConcurrentDownloads
             | SettingKey::NetworkRetryCount
-            | SettingKey::WallpaperRotationIntervalMinutes => {
+            | SettingKey::WallpaperRotationIntervalMinutes
+            | SettingKey::GalleryGridColumns => {
                 Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32))
             }
             SettingKey::ImageClickAction
@@ -667,6 +673,7 @@ Write-Output "$style,$tile"
             SettingKey::NetworkRetryCount => "networkRetryCount".to_string(),
             SettingKey::ImageClickAction => "imageClickAction".to_string(),
             SettingKey::GalleryImageAspectRatio => "galleryImageAspectRatio".to_string(),
+            SettingKey::GalleryGridColumns => "galleryGridColumns".to_string(),
             SettingKey::AutoDeduplicate => "autoDeduplicate".to_string(),
             SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
             SettingKey::WallpaperEngineDir => "wallpaperEngineDir".to_string(),
@@ -864,6 +871,17 @@ Write-Output "$style,$tile"
             Ok(val.as_option_string().unwrap_or(None))
         } else {
             Ok(None)
+        }
+    }
+
+    pub async fn get_gallery_grid_columns(&self) -> Result<u32, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::GalleryGridColumns) {
+            let val = cell.lock().await;
+            let n = val.as_u32().unwrap_or(0);
+            Ok(if n <= 4 { n } else { 0 })
+        } else {
+            Ok(0)
         }
     }
 
@@ -1143,6 +1161,21 @@ Write-Output "$style,$tile"
             *val = new_value.clone();
         }
         Self::emit_setting_change(SettingKey::GalleryImageAspectRatio, &new_value).await;
+        Self::trigger_debounce_save().await?;
+        Ok(())
+    }
+
+    pub async fn set_gallery_grid_columns(&self, columns: u32) -> Result<(), String> {
+        if columns > 4 {
+            return Err("画廊列数必须在 0-4 之间".to_string());
+        }
+        let cells = Self::cells();
+        let new_value = SettingValue::U32(columns);
+        if let Some(cell) = cells.get(&SettingKey::GalleryGridColumns) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::GalleryGridColumns, &new_value).await;
         Self::trigger_debounce_save().await?;
         Ok(())
     }

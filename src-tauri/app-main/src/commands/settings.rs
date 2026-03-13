@@ -58,6 +58,14 @@ pub async fn get_gallery_image_aspect_ratio() -> Result<Option<String>, String> 
 }
 
 #[tauri::command]
+pub async fn get_gallery_grid_columns() -> Result<u32, String> {
+    Settings::global()
+        .get_gallery_grid_columns()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_auto_deduplicate() -> Result<bool, String> {
     Settings::global()
         .get_auto_deduplicate()
@@ -288,6 +296,14 @@ pub async fn set_image_click_action(action: String) -> Result<(), String> {
 pub async fn set_gallery_image_aspect_ratio(aspect_ratio: Option<String>) -> Result<(), String> {
     Settings::global()
         .set_gallery_image_aspect_ratio(aspect_ratio)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_gallery_grid_columns(columns: u32) -> Result<(), String> {
+    Settings::global()
+        .set_gallery_grid_columns(columns)
         .await
         .map_err(|e| e.to_string())
 }

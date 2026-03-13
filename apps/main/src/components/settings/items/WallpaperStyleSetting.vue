@@ -71,7 +71,7 @@ const styleOptions: Opt[] = [
 ];
 
 const options = computed(() => {
-  const list = mode.value === "window" && IS_WINDOWS
+  const list = mode.value === "window" && (IS_WINDOWS || IS_MACOS)
     ? styleOptions
     : styleOptions.filter((o) => nativeWallpaperStyles.value.includes(o.value as Style));
   return [SYSTEM_OPT, ...list];

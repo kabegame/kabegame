@@ -81,10 +81,17 @@
 
 ### MacOS
 
+> **最低系统版本要求**：macOS **10.13 (High Sierra)** 及以上。
+
 1. **下载 DMG 文件**：根据你的需求选择 Standard 或 Light 模式的 `.dmg` 文件
 2. **安装应用**：
    - 打开下载的 `.dmg` 文件
    - 将 `Kabegame.app` 拖拽到「应用程序」文件夹
+> [!IMPORTANT]
+> ## 修复 “Kabegame.app” 已损坏，无法打开。建议你将该对象移到废纸篓。
+> 将应用安装到 Applications 文件夹后，你需要绕过 Gatekeeper 才能运行（因为我不想为开源应用给 Apple 付费）。
+>
+> `xattr -d com.apple.quarantine /Applications/Kabegame.app`
 3. **虚拟磁盘fuse依赖（仅 Standard 模式）**：
    - MacOS的虚拟磁盘功能依赖macfuse，通过 `brew install macfuse`安装
    - 首次挂载会弹窗请求权限
@@ -423,6 +430,7 @@ The source code is licensed under GPL v3. License is available [here](./LICENSE)
 - [**Scraper**](https://github.com/causal-agent/scraper) - Rust HTML 解析和选择器库
 - [**Rusqlite**](https://github.com/rusqlite/rusqlite) - SQLite 的 Rust 绑定
 - [**Image**](https://github.com/image-rs/image) - Rust 图像处理库
+- [**FFmpeg**](https://ffmpeg.org/) - 音视频处理工具（本项目桌面端用于视频壁纸预览压缩，以 sidecar 形式 bundled）
 - [**Prisma**](https://github.com/prisma/prisma) - 下一代 ORM（用来文档数据库结构）
 
 ### 构建与开发工具
@@ -434,6 +442,7 @@ The source code is licensed under GPL v3. License is available [here](./LICENSE)
 ### 参考项目
 - [**Lively**](https://github.com/rocksdanister/lively) - 动态壁纸应用（本项目参考了其桌面挂载实现）
 - [**Clash Verge**](https://github.com/clash-verge-rev/clash-verge-rev) - Clash 代理客户端（本项目参考了其托盘代码、tauri config写法以及linux workaround 写法）
-- [**Pake**](https://github.com/tw93/pake) - 将任意网站打包为app的项目，本项目参考了其实现
+- [**Pake**](https://github.com/tw93/pake) - 将任意网站打包为app的项目（本项目参考了其实现）
+- [**LiveWallpaperMacOS**](https://github.com/thusvill/LiveWallpaperMacOS.git) - MacOS动态壁纸方案（本项目参考了其桌面壁纸挂载实现）
 
 如果这些项目对你有帮助，请考虑给它们一个 ⭐ Star，这是对开源社区最好的支持！

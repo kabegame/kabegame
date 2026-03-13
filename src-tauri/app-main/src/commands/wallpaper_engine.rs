@@ -46,3 +46,19 @@ pub async fn export_images_to_we_project(
     .await?;
     serde_json::to_value(result).map_err(|e| format!("序列化结果失败: {}", e))
 }
+
+#[tauri::command]
+#[cfg(target_os = "windows")]
+pub async fn export_video_to_we_project(
+    video_path: String,
+    title: Option<String>,
+    output_parent_dir: String,
+) -> Result<serde_json::Value, String> {
+    let result = crate::wallpaper::engine_export::export_video_to_we_project(
+        video_path,
+        title,
+        output_parent_dir,
+    )
+    .await?;
+    serde_json::to_value(result).map_err(|e| format!("序列化结果失败: {}", e))
+}
