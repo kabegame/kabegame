@@ -2,7 +2,7 @@
     <el-radio-group v-model="localValue" :disabled="switching" class="wallpaper-mode-radio-group"
         @change="handleChange">
         <el-radio value="native">原生模式</el-radio>
-        <el-radio v-if="IS_WINDOWS" value="window">窗口模式</el-radio>
+        <el-radio v-if="IS_WINDOWS || IS_MACOS" value="window">窗口模式</el-radio>
     </el-radio-group>
 </template>
 
@@ -12,7 +12,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { listen } from "@tauri-apps/api/event";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
-import { IS_WINDOWS } from "@kabegame/core/env";
+import { IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperMode");
 const uiStore = useUiStore();

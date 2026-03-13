@@ -998,8 +998,8 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let sql = match mode {
-            "random" => "SELECT CAST(id AS TEXT) FROM images WHERE COALESCE(type, 'image') != 'video' ORDER BY RANDOM() LIMIT 1",
-            _ => "SELECT CAST(id AS TEXT) FROM images WHERE COALESCE(type, 'image') != 'video' ORDER BY crawled_at ASC LIMIT 1",
+            "random" => "SELECT CAST(id AS TEXT) FROM images ORDER BY RANDOM() LIMIT 1",
+            _ => "SELECT CAST(id AS TEXT) FROM images ORDER BY crawled_at ASC LIMIT 1",
         };
 
         let id: Option<String> = conn

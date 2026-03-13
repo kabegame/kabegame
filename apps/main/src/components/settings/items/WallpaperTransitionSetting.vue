@@ -27,7 +27,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
+import { IS_ANDROID, IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 
 const props = defineProps<{
@@ -49,12 +49,12 @@ const options = computed<Opt[]>(() => {
     return [
       { label: "跟随系统", value: "none" },
     ];
-  } else if (mode.value === "window" && IS_WINDOWS) {
+  } else if (mode.value === "window" && (IS_WINDOWS || IS_MACOS)) {
     return [
       { label: "无过渡", value: "none" },
       { label: "淡入淡出", value: "fade" },
-      { label: "滑动切换", value: "slide" },
-      { label: "缩放淡入", value: "zoom" },
+      { label: "滑动", value: "slide" },
+      { label: "缩放", value: "zoom" },
     ];
   } else {
     // 其他系统的非原生，暂未实现

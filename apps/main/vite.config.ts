@@ -1,7 +1,7 @@
 import { defineConfig, UserConfig } from "vite";
 import path from "path";
 
-import pubConfig, { root, isWindows } from "../../vite.config.pub";
+import pubConfig, { root, isMacOS, isWindows } from "../../vite.config.pub";
 import { merge } from "lodash-es";
 
 const config = merge<UserConfig, UserConfig>(pubConfig, {
@@ -11,9 +11,9 @@ const config = merge<UserConfig, UserConfig>(pubConfig, {
   build: {
     outDir: path.resolve(root, "dist-main"),
     rollupOptions: {
-      input: isWindows ? { wallpaper: "./wallpaper.html" } : {},
+      input: isWindows || isMacOS ? { wallpaper: "./wallpaper.html" } : {},
       output: {
-        inlineDynamicImports: !isWindows,
+        inlineDynamicImports: !(isWindows || isMacOS),
       },
     },
   },

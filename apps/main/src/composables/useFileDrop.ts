@@ -18,6 +18,7 @@ interface FileDropKindItem {
   path: string;
   isDirectory: boolean;
   isImage: boolean;
+  isVideo: boolean;
   isArchive: boolean;
   isKgpg: boolean;
 }
@@ -33,6 +34,7 @@ export interface ImportItem {
   isDirectory: boolean;
   isArchive?: boolean;
   isKgpg?: boolean;
+  isVideo?: boolean;
 }
 
 /**
@@ -117,9 +119,12 @@ export function useFileDrop(
                 } else if (first.isImage) {
                   isImportable = true;
                   text = "拖入图片以导入";
+                } else if (first.isVideo) {
+                  isImportable = true;
+                  text = "拖入视频以导入";
                 } else {
                   const archiveExts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
-                  text = `支持拖入文件夹、插件(.kgpg)、图片或压缩包(${archiveExts})`;
+                  text = `支持拖入文件夹、插件(.kgpg)、图片、视频或压缩包(${archiveExts})`;
                 }
               }
 
@@ -131,7 +136,7 @@ export function useFileDrop(
             } catch (error) {
               const archiveExts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
               fileDropOverlayRef.value?.show(
-                `拖入文件夹、插件(.kgpg)、图片或压缩包(${archiveExts})`,
+                `拖入文件夹、插件(.kgpg)、图片、视频或压缩包(${archiveExts})`,
               );
               isOverlayVisible = true;
             }
@@ -167,13 +172,14 @@ export function useFileDrop(
                     isArchive: false,
                     isKgpg: false,
                   });
-                } else if (k.isImage || k.isArchive || k.isKgpg) {
+                } else if (k.isImage || k.isVideo || k.isArchive || k.isKgpg) {
                   items.push({
                     path: k.path,
                     name: k.isKgpg ? `${name}（插件包）` : name,
                     isDirectory: false,
                     isArchive: k.isArchive,
                     isKgpg: k.isKgpg,
+                    isVideo: k.isVideo,
                   });
                 } else {
                   console.log("[App] 跳过不支持的文件:", k.path);

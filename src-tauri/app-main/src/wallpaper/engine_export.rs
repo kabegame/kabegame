@@ -23,6 +23,9 @@ pub struct WeExportOptions {
 pub struct WeExportResult {
     pub project_dir: String,
     pub image_count: usize,
+    /// 导出为视频壁纸时为 Some(1)，图片轮播时为 None 或 Some(0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_count: Option<usize>,
 }
 
 fn normalize_windows_path(p: &str) -> String {
@@ -525,7 +528,94 @@ fn write_we_web_project(
     Ok(WeExportResult {
         project_dir: project_dir.to_string_lossy().to_string(),
         image_count: rel_images.len(),
+        video_count: None,
     })
+}
+
+/// 视频扩展名（与 image_type 一致）：仅允许安全扩展名
+fn video_ext_from_path(p: &Path) -> String {
+    let ext = p
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("mp4")
+        .to_lowercase();
+    if ext.chars().all(|c| c.is_ascii_alphanumeric()) && !ext.is_empty() {
+        if kabegame_core::image_type::is_supported_video_ext(&ext) {
+            return ext;
+        }
+    }
+    "mp4".to_string()
+}
+
+/// 导出单个视频为 Wallpaper Engine 视频壁纸工程（仅 Windows）
+pub fn write_we_video_project(
+    output_parent_dir: &str,
+    project_title: &str,
+    video_path: &str,
+) -> Result<WeExportResult, String> {
+    let parent = PathBuf::from(normalize_windows_path(output_parent_dir));
+    if parent.as_os_str().is_empty() {
+        return Err("导出目录为空".to_string());
+    }
+    fs::create_dir_all(&parent)
+        .map_err(|e| format!("创建导出目录失败 {}: {}", parent.display(), e))?;
+
+    let base_name = sanitize_project_name(project_title);
+    let project_dir = ensure_unique_dir(&parent, &base_name);
+    fs::create_dir_all(&project_dir)
+        .map_err(|e| format!("创建工程目录失败 {}: {}", project_dir.display(), e))?;
+
+    let normalized = normalize_windows_path(video_path);
+    if normalized.is_empty() {
+        return Err("视频路径为空".to_string());
+    }
+    let src = PathBuf::from(&normalized);
+    if !src.exists() {
+        return Err(format!("视频文件不存在: {}", src.display()));
+    }
+    if !kabegame_core::image_type::is_video_by_path(&src) {
+        return Err("文件不是支持的视频格式（支持 mp4、mov）".to_string());
+    }
+
+    let ext = video_ext_from_path(&src);
+    let file_name = format!("video.{}", ext);
+    let dst = project_dir.join(&file_name);
+    fs::copy(&src, &dst)
+        .map_err(|e| format!("复制视频失败 {} -> {}: {}", src.display(), dst.display(), e))?;
+
+    let project_json = serde_json::json!({
+        "title": project_title,
+        "type": "video",
+        "file": file_name,
+        "preview": file_name,
+        "description": "Exported from Kabegame",
+        "tags": []
+    });
+    write_file(
+        &project_dir.join("project.json"),
+        &serde_json::to_string_pretty(&project_json)
+            .map_err(|e| format!("序列化 project.json 失败: {}", e))?,
+    )?;
+
+    Ok(WeExportResult {
+        project_dir: project_dir.to_string_lossy().to_string(),
+        image_count: 0,
+        video_count: Some(1),
+    })
+}
+
+/// 导出单个视频到 Wallpaper Engine 项目（仅 Windows）
+pub async fn export_video_to_we_project(
+    video_path: String,
+    title: Option<String>,
+    output_parent_dir: String,
+) -> Result<WeExportResult, String> {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let t = title.unwrap_or_else(|| format!("Kabegame_Video_{}", ts));
+    write_we_video_project(&output_parent_dir, &t, &video_path)
 }
 
 /// 通过 daemon 获取设置并解析选项

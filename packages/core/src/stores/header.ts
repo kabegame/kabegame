@@ -20,6 +20,8 @@ export enum HeaderFeatureId {
   AddToAlbum = "addToAlbum",
   /** 画廊「全部」下按时间排序（仅 Android 放入 fold，点击后打开 van-picker） */
   GallerySort = "gallerySort",
+  /** 畅游页：打开爬虫 WebView 窗口（仅桌面） */
+  OpenCrawlerWebview = "openCrawlerWebview",
 }
 
 export interface HeaderFeatureDef {

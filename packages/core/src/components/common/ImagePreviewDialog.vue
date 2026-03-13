@@ -63,8 +63,10 @@
             @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
         </div>
         <div v-else-if="previewImageUrl && isPreviewVideo" class="preview-video-wrapper">
-          <video :src="previewImageUrl" class="preview-video" controls loop autoplay poster="" preload="auto" playsinline
-            webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback="" @dragstart.prevent />
+          <video ref="previewVideoRef" :src="previewImageUrl" class="preview-video" loop autoplay poster="" preload="auto"
+            playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
+            @dragstart.prevent />
+          <VideoControls :video="previewVideoRef" />
         </div>
         <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
           <ImageNotFound />
@@ -89,6 +91,7 @@ import { ElMessage } from "element-plus";
 import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
 import type { ImageInfo } from "../../types/image";
 import ImageNotFound from "./ImageNotFound.vue";
+import VideoControls from "./VideoControls.vue";
 import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "../../env";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
@@ -128,6 +131,7 @@ const previewNotFound = ref(false);
 
 const previewContainerRef = ref<HTMLElement | null>(null);
 const previewImageRef = ref<HTMLImageElement | null>(null);
+const previewVideoRef = ref<HTMLVideoElement | null>(null);
 const pswpRef = ref<InstanceType<typeof PhotoSwipe> | null>(null);
 // Panzoom 由 usePanzoomPreview 提供，在 notifyPreviewInteracting / markPreviewInteracting 定义后初始化
 let panzoomWrapperRef!: Ref<HTMLElement | null>;
@@ -615,6 +619,7 @@ const closePreview = () => {
   previewImageUrl.value = "";
   previewImagePath.value = "";
   previewIndex.value = -1;
+  previewVideoRef.value = null;
   // previewImage 现在是 computed，设置 previewIndex = -1 即可
   previewHoverSide.value = null;
   closePreviewContextMenu();
@@ -1021,13 +1026,15 @@ defineExpose({
     display: flex;
     align-items: center;
     justify-content: center;
+    position: relative;
+    overflow: hidden;
   }
 
   .preview-video {
-    max-width: calc(90vw - 40px) !important;
-    max-height: calc(90vh - 70px) !important;
-    width: auto;
-    height: auto;
+    width: 100%;
+    height: 100%;
+    max-width: 100% !important;
+    max-height: 100% !important;
     object-fit: contain;
     display: block;
   }

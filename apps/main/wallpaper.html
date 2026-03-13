@@ -148,6 +148,25 @@
           <!-- 图片模式元素 -->
           <img id="base-img" class="wallpaper-img base" alt="wallpaper-base" />
           <img id="top-img" class="wallpaper-img top" alt="wallpaper-top" />
+          <!-- 视频模式元素（默认隐藏，由 JS 控制显示） -->
+          <video
+            id="base-video"
+            class="wallpaper-img base"
+            style="display: none"
+            autoplay
+            muted
+            loop
+            playsinline
+          ></video>
+          <video
+            id="top-video"
+            class="wallpaper-img top"
+            style="display: none"
+            autoplay
+            muted
+            loop
+            playsinline
+          ></video>
           <!-- Tile 模式元素（默认隐藏，由 JS 控制显示） -->
           <div id="base-tile" class="wallpaper-tile base" style="display: none;"></div>
           <div id="top-tile" class="wallpaper-tile top" style="display: none;"></div>

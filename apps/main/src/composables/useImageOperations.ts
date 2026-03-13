@@ -9,6 +9,7 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_MACOS } from "@kabegame/core/env";
 import { fileToUrl } from "@kabegame/core/httpServer";
 import { openLocalImage } from "@/utils/openLocalImage";
+import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
 
 export type FavoriteStatusChangedDetail = {
   imageIds: string[];
@@ -334,9 +335,7 @@ export function useImageOperations(
         );
       } else {
         // 单选：直接设置壁纸
-        await invoke("set_wallpaper_by_image_id", {
-          imageId: imagesToProcess[0].id,
-        });
+        await setWallpaperByImageIdWithModeFallback(imagesToProcess[0].id);
         currentWallpaperImageId.value = imagesToProcess[0].id;
         ElMessage.success("壁纸设置成功");
       }
@@ -353,10 +352,15 @@ export function useImageOperations(
     }
   };
 
-  // 导出到 Wallpaper Engine
+  // 判断是否为支持的视频路径（与 wallpaper 及后端 image_type 一致）
+  const isVideoPath = (path: string) => {
+    const ext = (path.split(".").pop() || "").toLowerCase();
+    return ext === "mp4" || ext === "mov";
+  };
+
+  // 导出到 Wallpaper Engine（图片轮播或单视频）
   const exportToWallpaperEngine = async (image: ImageInfo) => {
     try {
-      // 让用户输入工程名称
       const defaultName = `Kabegame_${image.id}`;
 
       const { value: projectName } = await ElMessageBox.prompt(
@@ -373,9 +377,9 @@ export function useImageOperations(
             return true;
           },
         },
-      ).catch(() => ({ value: null })); // 用户取消时返回 null
+      ).catch(() => ({ value: null }));
 
-      if (projectName === null) return; // 用户取消
+      if (projectName === null) return;
 
       const mp = await invoke<string | null>(
         "get_wallpaper_engine_myprojects_dir",
@@ -387,21 +391,32 @@ export function useImageOperations(
         return;
       }
 
-      // 使用用户输入的名称，如果为空则使用默认名称
       const finalName = projectName?.trim() || defaultName;
+      const isVideo = isVideoPath(image.localPath);
 
-      const res = await invoke<{ projectDir: string; imageCount: number }>(
-        "export_images_to_we_project",
-        {
-          imagePaths: [image.localPath],
-          title: finalName,
-          outputParentDir: mp,
-          options: null,
-        },
+      const res = await invoke<{
+        projectDir: string;
+        imageCount: number;
+        videoCount?: number;
+      }>(
+        isVideo ? "export_video_to_we_project" : "export_images_to_we_project",
+        isVideo
+          ? {
+              videoPath: image.localPath,
+              title: finalName,
+              outputParentDir: mp,
+            }
+          : {
+              imagePaths: [image.localPath],
+              title: finalName,
+              outputParentDir: mp,
+              options: null,
+            },
       );
-      ElMessage.success(
-        `已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`,
-      );
+      const msg = res.videoCount
+        ? `已导出 WE 视频工程：${res.projectDir}`
+        : `已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`;
+      ElMessage.success(msg);
       await invoke("open_file_path", { filePath: res.projectDir });
     } catch (error) {
       if (error !== "cancel") {

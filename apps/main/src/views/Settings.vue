@@ -38,15 +38,15 @@
                 ]" />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS || IS_LINUX" label="壁纸显示方式" description="原生模式：根据系统支持显示可用样式">
+              <SettingRow v-if="IS_WINDOWS || IS_LINUX || IS_MACOS" label="壁纸显示方式" description="原生模式：根据系统支持显示可用样式">
                 <WallpaperStyleSetting />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS" label="过渡效果" description="仅轮播支持过渡预览">
+              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="过渡效果" description="窗口模式支持图片过渡；原生模式跟随系统能力">
                 <WallpaperTransitionSetting />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS" label="壁纸模式">
+              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="壁纸模式">
                 <WallpaperModeSetting />
               </SettingRow>
 
@@ -112,14 +112,12 @@
                 <GalleryImageAspectRatioSetting />
               </SettingRow>
 
-              <SettingRow v-if="!IS_ANDROID" label="清理应用数据" description="将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启">
-                <ClearUserDataSetting />
+              <SettingRow v-if="!IS_ANDROID" label="画廊列数" description="动态列数支持快捷键调整；固定列数时快捷键不生效">
+                <GalleryGridColumnsSetting />
               </SettingRow>
 
-              <SettingRow v-if="!IS_ANDROID" label="爬虫 WebView 窗口" description="打开用于 WebView 插件运行的 crawler 窗口">
-                <el-button type="primary" :loading="crawlerWebviewOpening" @click="openCrawlerWindow">
-                  打开 WebView 窗口
-                </el-button>
+              <SettingRow v-if="!IS_ANDROID" label="清理应用数据" description="将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启">
+                <ClearUserDataSetting />
               </SettingRow>
 
               <SettingRow v-if="!IS_ANDROID" label="自动打开 WebView" description="启动 WebView 插件时自动显示并聚焦 WebView 窗口">
@@ -170,6 +168,7 @@ import SettingNumberControl from "@kabegame/core/components/settings/controls/Se
 import SettingRadioControl from "@kabegame/core/components/settings/controls/SettingRadioControl.vue";
 import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
 import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
+import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
 import WallpaperRotationTargetSetting from "@/components/settings/items/WallpaperRotationTargetSetting.vue";
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
@@ -179,23 +178,10 @@ import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngi
 import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetting.vue";
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
-import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV } from "@kabegame/core/env";
+import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV, IS_MACOS } from "@kabegame/core/env";
 const autoOpenCrawlerWebviewKey: AppSettingKey = "autoOpenCrawlerWebview";
 const devWebviewUrl = ref("https://www.example.com");
 const devWebviewOpening = ref(false);
-const crawlerWebviewOpening = ref(false);
-async function openCrawlerWindow() {
-  crawlerWebviewOpening.value = true;
-  try {
-    await invoke("show_crawler_window");
-    ElMessage.success("已打开 crawler WebView 窗口");
-  } catch (e) {
-    ElMessage.error(String(e));
-  } finally {
-    crawlerWebviewOpening.value = false;
-  }
-}
-
 async function openDevWebview() {
   const url = devWebviewUrl.value?.trim() || "";
   if (!url) {

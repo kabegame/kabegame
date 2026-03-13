@@ -70,14 +70,20 @@ winver = "1"
 arboard = "3.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "0.3"
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "std",
+  "NSColor",
+  "NSWindow",
+  "NSApplication",
+  "NSScreen",
   "NSPasteboard",
 ] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
   "std",
   "NSData",
 ] }
+objc2 = { version = "0.6", default-features = false }
 
 [build-dependencies]
 tauri-build = {workspace = true}

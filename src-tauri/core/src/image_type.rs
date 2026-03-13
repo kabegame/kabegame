@@ -10,10 +10,7 @@ const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "bmp",
 ];
 /// 后端内置支持的视频扩展名（小写，不含点号）。
-#[cfg(not(kabegame_mode = "light"))]
 const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov"];
-#[cfg(kabegame_mode = "light")]
-const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &[];
 
 /// 扩展名到 MIME 的映射（含前端可能上报的 avif、heic）。
 const EXT_MIME: &[(&str, &str)] = &[
@@ -259,6 +256,36 @@ pub fn is_supported_video_ext(ext: &str) -> bool {
 #[inline]
 pub fn is_supported_media_ext(ext: &str) -> bool {
     is_supported_image_ext(ext) || is_supported_video_ext(ext)
+}
+
+/// 指定平台下该媒体是否必须走窗口模式设置壁纸。
+///
+/// - macOS: GIF + 所有支持的视频类型（mp4/mov）
+/// - Windows: 仅 mp4
+/// - 其他平台: false
+pub fn requires_window_mode(path: &Path) -> bool {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .trim_start_matches('.')
+        .to_lowercase();
+
+    #[cfg(target_os = "macos")]
+    {
+        return ext == "gif" || is_supported_video_ext(&ext);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return ext == "mp4";
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
 }
 
 /// 根据本地路径判断是否为支持的视频：先看扩展名，再按文件内容 infer 推断。

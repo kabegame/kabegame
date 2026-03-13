@@ -88,6 +88,13 @@ impl WallpaperRotator {
         out
     }
 
+    fn media_allowed_in_mode(path: &str, wallpaper_mode: &str) -> bool {
+        if wallpaper_mode == "window" {
+            return true;
+        }
+        !kabegame_core::image_type::requires_window_mode(Path::new(path))
+    }
+
     async fn load_images_for_source(source: &RotationSource) -> Result<Vec<ImageLite>, String> {
         match source {
             RotationSource::Album(id) => {
@@ -192,6 +199,7 @@ impl WallpaperRotator {
                         continue;
                     }
                 };
+                let wallpaper_mode = mode_result.unwrap_or_else(|_| "native".to_string());
 
                 // 未启用轮播：仅保持线程等待（便于后续快速启用），不做任何切换
                 if !enabled {
@@ -201,7 +209,7 @@ impl WallpaperRotator {
 
                 // Plasma 插件模式：不执行实际切换（避免干扰 Plasma 插件的壁纸管理）
                 // 但保持线程运行，以便后续切换模式时能快速恢复
-                if mode_result.unwrap_or_default() == "plasma-plugin" {
+                if wallpaper_mode == "plasma-plugin" {
                     continue;
                 }
 
@@ -308,7 +316,9 @@ impl WallpaperRotator {
                         for i in 0..images.len() {
                             let current_idx = (start_idx + i) % images.len();
                             let image = &images[current_idx];
-                            if Path::new(&image.local_path).exists() {
+                            if Path::new(&image.local_path).exists()
+                                && Self::media_allowed_in_mode(&image.local_path, &wallpaper_mode)
+                            {
                                 selected = Some(image.clone());
                                 *idx = (current_idx + 1) % images.len();
                                 break;
@@ -332,6 +342,9 @@ impl WallpaperRotator {
                                 if !Path::new(&img.local_path).exists() {
                                     return None;
                                 }
+                                if !Self::media_allowed_in_mode(&img.local_path, &wallpaper_mode) {
+                                    return None;
+                                }
                                 if let Some(ref cur) = current_norm {
                                     if Self::normalize_path(&img.local_path) == *cur {
                                         return None;
@@ -347,7 +360,9 @@ impl WallpaperRotator {
                                 .iter()
                                 .enumerate()
                                 .filter_map(|(idx, img)| {
-                                    if Path::new(&img.local_path).exists() {
+                                    if Path::new(&img.local_path).exists()
+                                        && Self::media_allowed_in_mode(&img.local_path, &wallpaper_mode)
+                                    {
                                         Some(idx)
                                     } else {
                                         None
@@ -643,6 +658,10 @@ impl WallpaperRotator {
             .get_wallpaper_rotation_mode()
             .await
             .unwrap_or_else(|_| "random".to_string());
+        let wallpaper_mode = settings
+            .get_wallpaper_mode()
+            .await
+            .unwrap_or_else(|_| "native".to_string());
         let selected_image = match rotation_mode.as_str() {
             "sequential" => {
                 // 顺序模式：从当前索引开始，顺序找到第一张存在的图片
@@ -658,7 +677,9 @@ impl WallpaperRotator {
                 for i in 0..images.len() {
                     let current_idx = (start_idx + i) % images.len();
                     let image = &images[current_idx];
-                    if Path::new(&image.local_path).exists() {
+                    if Path::new(&image.local_path).exists()
+                        && Self::media_allowed_in_mode(&image.local_path, &wallpaper_mode)
+                    {
                         selected = Some(image.clone());
                         *idx = (current_idx + 1) % images.len();
                         found = true;
@@ -676,7 +697,10 @@ impl WallpaperRotator {
                 // 随机模式：找到所有存在的图片，然后随机抽取一张
                 let existing_images: Vec<&ImageLite> = images
                     .iter()
-                    .filter(|img| Path::new(&img.local_path).exists())
+                    .filter(|img| {
+                        Path::new(&img.local_path).exists()
+                            && Self::media_allowed_in_mode(&img.local_path, &wallpaper_mode)
+                    })
                     .collect();
 
                 if existing_images.is_empty() {

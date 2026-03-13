@@ -202,7 +202,7 @@ pub fn init_wallpaper_controller(app: &mut tauri::App) {
     }
 
     // 创建壁纸窗口（用于窗口模式）
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         use tauri::{WebviewUrl, WebviewWindowBuilder};
         let _ = WebviewWindowBuilder::new(
@@ -220,6 +220,11 @@ pub fn init_wallpaper_controller(app: &mut tauri::App) {
         .visible(false)
         .skip_taskbar(true)
         .build();
+
+        #[cfg(target_os = "macos")]
+        if let Some(wallpaper_window) = app.get_webview_window("wallpaper") {
+            let _ = crate::wallpaper::window_mount_macos::mount_to_desktop(&wallpaper_window);
+        }
     }
 
     // 创建系统托盘（使用 Tauri 2.0 内置 API）

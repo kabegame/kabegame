@@ -1,11 +1,12 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { readFile } from "@kabegame/core/fs/readFile";
+import { fileToUrl, initHttpServerBaseUrl } from "@kabegame/core/httpServer";
 import { IS_DEV } from "@kabegame/core/env";
 
 type Mode = "fill" | "fit" | "stretch" | "center" | "tile";
 type Transition = "none" | "fade" | "slide" | "zoom";
 type Phase = "idle" | "prep" | "enter";
+type MediaType = "image" | "video";
 
 // 状态管理
 let baseSrc = "";
@@ -18,6 +19,7 @@ let queuedPath = "";
 let busy = false;
 let mode: Mode = "fill";
 let transition: Transition = "fade";
+let currentMediaType: MediaType = "image";
 
 // 调试状态
 let windowLabel = "";
@@ -32,6 +34,8 @@ let transitionGuardTimer: number | null = null;
 let rootEl: HTMLElement | null = null;
 let baseImgEl: HTMLImageElement | null = null;
 let topImgEl: HTMLImageElement | null = null;
+let baseVideoEl: HTMLVideoElement | null = null;
+let topVideoEl: HTMLVideoElement | null = null;
 let baseTileEl: HTMLElement | null = null;
 let topTileEl: HTMLElement | null = null;
 let debugPanelEl: HTMLElement | null = null;
@@ -41,8 +45,8 @@ let unlistenImage: UnlistenFn | null = null;
 let unlistenStyle: UnlistenFn | null = null;
 let unlistenTransition: UnlistenFn | null = null;
 
-// 防止并发读取同一文件的 Map
-const inflight = new Map<string, Promise<string>>(); // path -> promise(dataURL)
+// 防止并发请求同一路径的 Map（仅用于 prefetch 去重）
+const inflight = new Set<string>();
 
 // Z-order 修复节流
 let lastZOrderFixAt = 0;
@@ -53,113 +57,40 @@ function handleWallpaperPointerDown() {
     invoke("fix_wallpaper_zorder");
 }
 
-// 验证图片文件头
-function validateImageHeader(bytes: Uint8Array): { valid: boolean; mime?: string; reason?: string } {
-    if (!bytes || bytes.length < 4) {
-        return { valid: false, reason: "文件太小" };
-    }
-
-    // JPEG: FF D8 FF
-    if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
-        return { valid: true, mime: "image/jpeg" };
-    }
-    // PNG: 89 50 4E 47
-    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
-        return { valid: true, mime: "image/png" };
-    }
-    // GIF: 47 49 46 38
-    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
-        return { valid: true, mime: "image/gif" };
-    }
-    // WebP: RIFF...WEBP
-    if (bytes.length >= 12 &&
-        bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-        bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
-        return { valid: true, mime: "image/webp" };
-    }
-    // BMP: 42 4D
-    if (bytes[0] === 0x42 && bytes[1] === 0x4D) {
-        return { valid: true, mime: "image/bmp" };
-    }
-
-    return { valid: false, reason: "无法识别的图片格式" };
+function getPathExt(path: string): string {
+    return (path.split(".").pop() || "").toLowerCase();
 }
 
-async function createObjectUrlFromFile(path: string): Promise<string> {
-    try {
-        const normalizedPath = path.trimStart().replace(/^\\\\\?\\/, "").trim();
-
-        if (!normalizedPath) {
-            throw new Error("路径为空");
-        }
-
-        const uint8Array = await readFile(normalizedPath);
-
-        if (uint8Array.length === 0) {
-            throw new Error("文件数据为空");
-        }
-
-        const isValidImage = validateImageHeader(uint8Array);
-        if (!isValidImage.valid) {
-            throw new Error(`文件不是有效的图片格式: ${isValidImage.reason || "未知格式"}`);
-        }
-
-        const ext = (normalizedPath.split(".").pop() || "").toLowerCase();
-        let mime = isValidImage.mime || (
-            ext === "png"
-                ? "image/png"
-                : ext === "webp"
-                    ? "image/webp"
-                    : ext === "gif"
-                        ? "image/gif"
-                        : "image/jpeg"
-        );
-
-        const chunkSize = 8192;
-        let binaryString = '';
-        for (let i = 0; i < uint8Array.length; i += chunkSize) {
-            const chunk = uint8Array.subarray(i, i + chunkSize);
-            binaryString += String.fromCharCode.apply(null, Array.from(chunk));
-        }
-
-        const base64 = btoa(binaryString);
-        const dataUrl = `data:${mime};base64,${base64}`;
-
-        if (!dataUrl || !dataUrl.startsWith("data:")) {
-            throw new Error("创建 base64 data URL 失败");
-        }
-
-        return dataUrl;
-    } catch (e) {
-        const errorMsg = String(e);
-        if (errorMsg.includes("NotFound") || errorMsg.includes("ENOENT") || errorMsg.includes("ERR_FILE_NOT_FOUND")) {
-            throw new Error(`文件不存在: ${path}`);
-        } else if (errorMsg.includes("Permission") || errorMsg.includes("EACCES")) {
-            throw new Error(`文件访问权限不足: ${path}`);
-        } else if (errorMsg.includes("EISDIR")) {
-            throw new Error(`路径是目录而非文件: ${path}`);
-        } else {
-            throw new Error(`readFile failed: ${errorMsg} (path=${path})`);
-        }
-    }
+function isVideoPath(path: string): boolean {
+    const ext = getPathExt(path);
+    return ext === "mp4" || ext === "mov";
 }
 
-async function getOrCreateCachedUrl(path: string): Promise<string> {
-    const existing = inflight.get(path);
-    if (existing) return await existing;
+async function getVideoUrl(path: string): Promise<string> {
+    await initHttpServerBaseUrl();
+    const url = fileToUrl(path);
+    if (!url) {
+        throw new Error(`无法获取视频 URL: ${path}`);
+    }
+    return url;
+}
 
-    const p = createObjectUrlFromFile(path).finally(() => {
-        inflight.delete(path);
-    });
-
-    inflight.set(path, p);
-    return await p;
+/** 通过项目 HTTP 文件服务获取图片 URL（壁纸仅桌面端，无 Android） */
+async function getImageUrl(path: string): Promise<string> {
+    await initHttpServerBaseUrl();
+    const url = fileToUrl(path);
+    if (!url) {
+        throw new Error(`无法获取图片 URL: ${path}`);
+    }
+    return url;
 }
 
 function prefetchPath(path: string) {
     if (!path) return;
+    if (isVideoPath(path)) return;
     if (inflight.has(path)) return;
-    void getOrCreateCachedUrl(path).catch(() => { });
+    inflight.add(path);
+    void getImageUrl(path).finally(() => inflight.delete(path)).catch(() => {});
 }
 
 function getImgStyle(): Record<string, string> {
@@ -223,6 +154,18 @@ function applyStyles() {
         Object.assign(topImgEl.style, {
             objectFit: imgStyle.objectFit || "",
             objectPosition: imgStyle.objectPosition || "",
+        });
+    }
+    if (baseVideoEl) {
+        Object.assign(baseVideoEl.style, {
+            objectFit: imgStyle.objectFit || "cover",
+            objectPosition: imgStyle.objectPosition || "center",
+        });
+    }
+    if (topVideoEl) {
+        Object.assign(topVideoEl.style, {
+            objectFit: imgStyle.objectFit || "cover",
+            objectPosition: imgStyle.objectPosition || "center",
         });
     }
 
@@ -324,6 +267,29 @@ function handleImageError(type: "base" | "top") {
     updateDebugPanel();
 }
 
+function resetVideoElement(el: HTMLVideoElement | null) {
+    if (!el) return;
+    try {
+        el.pause();
+        el.removeAttribute("src");
+        el.load();
+    } catch {
+        // ignore
+    }
+}
+
+async function playVideo(el: HTMLVideoElement | null, src: string) {
+    if (!el) return;
+    if (el.src !== src) {
+        el.src = src;
+    }
+    try {
+        await el.play();
+    } catch {
+        // 自动播放被阻止时保持静默，后续事件会重试
+    }
+}
+
 async function setImagePath(path: string) {
     if (!path) return;
     lastRawPath = path;
@@ -337,7 +303,13 @@ async function setImagePath(path: string) {
     }
 
     // 去重 1
-    if (normalizedPath === currentPath && !!baseSrc) {
+    if (
+        normalizedPath === currentPath &&
+        (
+            (currentMediaType === "image" && !!baseSrc) ||
+            (currentMediaType === "video" && !!baseVideoEl?.src)
+        )
+    ) {
         return;
     }
     // 去重 2
@@ -353,9 +325,47 @@ async function setImagePath(path: string) {
     }
     busy = true;
     try {
-        const url = await getOrCreateCachedUrl(normalizedPath);
+        const isVideoMedia = isVideoPath(normalizedPath);
+        if (isVideoMedia) {
+            const videoUrl = await getVideoUrl(normalizedPath);
+            lastError = "";
+            phase = "idle";
+            pendingPath = "";
+            queuedPath = "";
+            currentPath = normalizedPath;
+            currentMediaType = "video";
+            topSrc = "";
+            baseSrc = "";
+            if (topImgEl) {
+                topImgEl.src = "";
+                topImgEl.style.opacity = "0";
+            }
+            if (baseImgEl) {
+                baseImgEl.src = "";
+            }
+            if (topTileEl) {
+                topTileEl.style.backgroundImage = "";
+                topTileEl.style.opacity = "0";
+            }
+            if (baseTileEl) {
+                baseTileEl.style.backgroundImage = "";
+            }
+            resetVideoElement(topVideoEl);
+            await playVideo(baseVideoEl, videoUrl);
+            updateModeDisplay();
+            applyStyles();
+            busy = false;
+            updateDebugPanel();
+            return;
+        }
+
+        const url = await getImageUrl(normalizedPath);
 
         lastError = "";
+        currentMediaType = "image";
+        resetVideoElement(baseVideoEl);
+        resetVideoElement(topVideoEl);
+        updateModeDisplay();
 
         // 首次/无过渡：直接替换
         if (!baseSrc || transition === "none") {
@@ -456,6 +466,7 @@ function updateDebugPanel() {
         <div>last style ts: ${lastStyleTs || "-"}</div>
         <div>last transition ts: ${lastTransitionTs || "-"}</div>
         <div>mode: ${mode}</div>
+        <div>media: ${currentMediaType}</div>
         <div>transition: ${transition}</div>
         <div class="debug-path">rawPath: ${lastRawPath || "-"}</div>
         ${lastError ? `<div class="debug-error">error: ${lastError}</div>` : ""}
@@ -476,6 +487,8 @@ function initDOM() {
     // 获取图片元素
     baseImgEl = document.getElementById("base-img") as HTMLImageElement;
     topImgEl = document.getElementById("top-img") as HTMLImageElement;
+    baseVideoEl = document.getElementById("base-video") as HTMLVideoElement;
+    topVideoEl = document.getElementById("top-video") as HTMLVideoElement;
     
     // 获取 tile 元素
     baseTileEl = document.getElementById("base-tile") as HTMLElement;
@@ -489,6 +502,18 @@ function initDOM() {
         topImgEl.addEventListener("transitionend", handleTopTransitionEnd);
         topImgEl.addEventListener("error", () => handleImageError("top"));
     }
+    if (baseVideoEl) {
+        baseVideoEl.addEventListener("error", () => {
+            lastError = "base 层视频加载失败";
+            updateDebugPanel();
+        });
+    }
+    if (topVideoEl) {
+        topVideoEl.addEventListener("error", () => {
+            lastError = "top 层视频加载失败";
+            updateDebugPanel();
+        });
+    }
     if (topTileEl) {
         topTileEl.addEventListener("transitionend", handleTopTransitionEnd);
     }
@@ -501,6 +526,16 @@ function initDOM() {
 }
 
 function updateModeDisplay() {
+    if (currentMediaType === "video") {
+        if (baseImgEl) baseImgEl.style.display = "none";
+        if (topImgEl) topImgEl.style.display = "none";
+        if (baseTileEl) baseTileEl.style.display = "none";
+        if (topTileEl) topTileEl.style.display = "none";
+        if (baseVideoEl) baseVideoEl.style.display = "block";
+        if (topVideoEl) topVideoEl.style.display = "none";
+        return;
+    }
+
     // 根据模式显示/隐藏对应的元素
     if (mode !== "tile") {
         // 图片模式：显示图片，隐藏 tile
@@ -508,12 +543,16 @@ function updateModeDisplay() {
         if (topImgEl) topImgEl.style.display = "block";
         if (baseTileEl) baseTileEl.style.display = "none";
         if (topTileEl) topTileEl.style.display = "none";
+        if (baseVideoEl) baseVideoEl.style.display = "none";
+        if (topVideoEl) topVideoEl.style.display = "none";
     } else {
         // Tile 模式：显示 tile，隐藏图片
         if (baseImgEl) baseImgEl.style.display = "none";
         if (topImgEl) topImgEl.style.display = "none";
         if (baseTileEl) baseTileEl.style.display = "block";
         if (topTileEl) topTileEl.style.display = "block";
+        if (baseVideoEl) baseVideoEl.style.display = "none";
+        if (topVideoEl) topVideoEl.style.display = "none";
     }
 }
 
@@ -537,6 +576,11 @@ async function init() {
         const v = e.payload as Mode;
         mode = v;
         updateModeDisplay();
+        if (currentMediaType === "video") {
+            applyStyles();
+            updateDebugPanel();
+            return;
+        }
         // 恢复当前图片状态
         if (baseSrc) {
             if (mode !== "tile") {
@@ -595,6 +639,8 @@ function cleanup() {
         window.clearTimeout(transitionGuardTimer);
         transitionGuardTimer = null;
     }
+    resetVideoElement(baseVideoEl);
+    resetVideoElement(topVideoEl);
 }
 
 // 启动应用

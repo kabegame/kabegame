@@ -1,7 +1,12 @@
 <template>
   <div class="surf-page">
     <div class="surf-scroll-container" :class="{ 'has-records': hasRecords }">
-      <PageHeader title="畅游" :show="[]" sticky />
+      <PageHeader
+        title="畅游"
+        :show="surfHeaderShowIds"
+        sticky
+        @action="handleSurfHeaderAction"
+      />
 
       <div class="surf-content" :class="{ 'has-records': hasRecords }">
         <!-- Logo：搜索栏上方 -->
@@ -91,14 +96,36 @@
       @close="recordMenu.hide"
       @command="(cmd) => handleRecordMenuCommand(cmd as 'viewImages' | 'delete')"
     />
+
+    <ElDialog
+      v-model="surfHelpVisible"
+      title="畅游说明"
+      width="420px"
+      class="surf-help-dialog"
+    >
+      <p class="surf-help-p">
+        <strong>畅游</strong>是 Kabegame 的内置浏览与收集功能。输入目标网站 URL（如 https://pixiv.net）并点击「开始畅游」后，会在应用内打开该页面；你可以在该窗口中右键下载图片或者视频，成功下载的图片和视频会加入你的画廊！
+      </p>
+      <p class="surf-help-p">
+        每次畅游会生成一条记录，可在此页快速再次进入该站点，或通过「查看最近图片」进入该站点的画廊视图。
+      </p>
+      <template #footer>
+        <el-button type="primary" @click="surfHelpVisible = false">知道了</el-button>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref, computed } from "vue";
 import { useRouter } from "vue-router";
+import { invoke } from "@tauri-apps/api/core";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { ElDialog } from "element-plus";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { HeaderFeatureId } from "@kabegame/core/stores/header";
+import { IS_ANDROID } from "@kabegame/core/env";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { usePluginStore } from "@/stores/plugins";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
@@ -108,8 +135,33 @@ import { createSurfRecordActions } from "@/actions/surfRecordActions";
 const router = useRouter();
 const surfStore = useSurfStore();
 const pluginStore = usePluginStore();
+const surfHeaderShowIds = computed(() =>
+  IS_ANDROID ? [HeaderFeatureId.Help] : [HeaderFeatureId.Help, HeaderFeatureId.OpenCrawlerWebview]
+);
+
+const surfHelpVisible = ref(false);
+useModalBack(surfHelpVisible);
+
 const inputUrl = ref("");
 const pluginQuickSelect = ref("");
+const crawlerWebviewOpening = ref(false);
+
+async function openCrawlerWindow() {
+  crawlerWebviewOpening.value = true;
+  try {
+    await invoke("show_crawler_window");
+    ElMessage.success("已打开爬虫 WebView 窗口");
+  } catch (e) {
+    ElMessage.error(String(e));
+  } finally {
+    crawlerWebviewOpening.value = false;
+  }
+}
+
+function handleSurfHeaderAction(payload: { id: string; data: { type: string } }) {
+  if (payload.id === HeaderFeatureId.Help) surfHelpVisible.value = true;
+  else if (payload.id === HeaderFeatureId.OpenCrawlerWebview) openCrawlerWindow();
+}
 
 const surfRecordActions = createSurfRecordActions();
 const recordMenu = useActionMenu<SurfRecord>();
@@ -464,5 +516,14 @@ onMounted(async () => {
 
 .surf-list-move {
   transition: transform 0.3s ease;
+}
+
+.surf-help-dialog .surf-help-p {
+  margin: 0 0 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-regular);
+}
+.surf-help-dialog .surf-help-p:last-of-type {
+  margin-bottom: 0;
 }
 </style>

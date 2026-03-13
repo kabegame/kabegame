@@ -1,18 +1,18 @@
-﻿pub mod native;
-#[cfg(target_os = "windows")]
+pub mod native;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod window;
 
 // 导出管理器类型
 pub use native::NativeWallpaperManager;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub use window::WindowWallpaperManager;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
 use tauri::AppHandle;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::wallpaper::window::WallpaperWindow;
 use kabegame_core::settings::Settings;
 
@@ -22,7 +22,7 @@ use kabegame_core::settings::Settings;
 pub struct WallpaperController {
     app: AppHandle,
     native: Arc<NativeWallpaperManager>,
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     window: Arc<WindowWallpaperManager>,
 }
 
@@ -49,10 +49,10 @@ impl WallpaperController {
     pub fn new(app: AppHandle) -> Self {
         let native = Arc::new(NativeWallpaperManager::new(app.clone()));
 
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         let wallpaper_window: Arc<Mutex<Option<WallpaperWindow>>> = Arc::new(Mutex::new(None));
 
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         let window = Arc::new(WindowWallpaperManager::new(
             app.clone(),
             Arc::clone(&wallpaper_window),
@@ -61,7 +61,7 @@ impl WallpaperController {
         Self {
             app,
             native,
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             window,
         }
     }
@@ -73,7 +73,7 @@ impl WallpaperController {
             .await
             .unwrap_or_else(|_| "native".to_string());
         Ok(match mode.as_str() {
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
         })
@@ -82,7 +82,7 @@ impl WallpaperController {
     /// 按指定模式选择后端（不依赖 settings 中的 wallpaper_mode）。
     pub fn manager_for_mode(&self, mode: &str) -> Arc<dyn WallpaperManager + Send + Sync> {
         match mode {
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
         }
@@ -107,7 +107,7 @@ impl WallpaperController {
         // - window: 只确保 wallpaper 窗口存在且保持隐藏，不做挂载/显示
         self.native.init(self.app.clone())?;
 
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
             self.window.init(self.app.clone())?;
         }

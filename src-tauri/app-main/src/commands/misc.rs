@@ -69,11 +69,12 @@ pub struct FileDropKindItem {
     path: String,
     is_directory: bool,
     is_image: bool,
+    is_video: bool,
     is_archive: bool,
     is_kgpg: bool,
 }
 
-/// 根据本地路径推断文件类型（图片/压缩包/kgpg），用于前端拖入文件分类。使用扩展名 + infer 内容推断。
+/// 根据本地路径推断文件类型（图片/视频/压缩包/kgpg），用于前端拖入文件分类。使用扩展名 + infer 内容推断。
 #[tauri::command]
 pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindItem>, String> {
     let mut out = Vec::with_capacity(paths.len());
@@ -86,6 +87,7 @@ pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindI
                     path: path_str,
                     is_directory: false,
                     is_image: false,
+                    is_video: false,
                     is_archive: false,
                     is_kgpg: false,
                 });
@@ -94,6 +96,7 @@ pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindI
         };
         let is_directory = meta.is_dir();
         let is_image = !is_directory && kabegame_core::image_type::is_image_by_path(path);
+        let is_video = !is_directory && kabegame_core::image_type::is_video_by_path(path);
         let is_archive = !is_directory && kabegame_core::archive::is_archive_by_path(path);
         let is_kgpg = !is_directory
             && path_str
@@ -104,6 +107,7 @@ pub async fn get_file_drop_kinds(paths: Vec<String>) -> Result<Vec<FileDropKindI
             path: path_str,
             is_directory,
             is_image,
+            is_video,
             is_archive,
             is_kgpg,
         });

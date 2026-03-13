@@ -10,6 +10,8 @@ export interface AppSettings {
   networkRetryCount: number;
   imageClickAction: "preview" | "open" | "none";
   galleryImageAspectRatio: string | null;
+  // 画廊列数（0=动态；1-4=固定列数）
+  galleryGridColumns: number;
   autoDeduplicate: boolean;
   defaultDownloadDir: string | null;
   wallpaperEngineDir: string | null;
@@ -75,6 +77,7 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
     map.autoLaunch = { getter: "get_auto_launch", setter: "set_auto_launch", param: "enabled" };
     map.imageClickAction = { getter: "get_image_click_action", setter: "set_image_click_action", param: "action" };
     map.galleryImageAspectRatio = { getter: "get_gallery_image_aspect_ratio", setter: "set_gallery_image_aspect_ratio", param: "aspectRatio" };
+    map.galleryGridColumns = { getter: "get_gallery_grid_columns", setter: "set_gallery_grid_columns", param: "columns" };
     map.defaultDownloadDir = { getter: "get_default_download_dir", setter: "set_default_download_dir", param: "dir" };
     map.autoOpenCrawlerWebview = {
       getter: "get_auto_open_crawler_webview",

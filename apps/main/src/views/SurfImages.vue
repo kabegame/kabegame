@@ -53,6 +53,7 @@
 import { onMounted, onActivated, onDeactivated, onBeforeUnmount, ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
+import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
 import { listen } from "@tauri-apps/api/event";
 import { ElMessage } from "element-plus";
 import { storeToRefs } from "pinia";
@@ -202,9 +203,7 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
       await setWallpaperRotationAlbumId(createdAlbum.id);
       ElMessage.success(`已开启轮播：画册「${albumName}」（${imageIds.length} 张）`);
     } else {
-      await invoke("set_wallpaper_by_image_id", {
-        imageId: imagesToProcess[0].id,
-      });
+      await setWallpaperByImageIdWithModeFallback(imagesToProcess[0].id);
       currentWallpaperImageId.value = imagesToProcess[0].id;
       ElMessage.success("壁纸设置成功");
     }
@@ -439,9 +438,18 @@ watch(
   }
 );
 
-// 监听 surf-records-change 事件，实时更新图片
+// 监听 surf-records-change 与 images-change，实时更新图片（含 webview 内下载视频后的响应式更新）
 let unlistenRecordsChange: (() => void) | null = null;
+let unlistenImagesChange: (() => void) | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+const scheduleRefreshImages = () => {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    void reloadAllImages();
+  }, 500);
+};
 
 const startListening = async () => {
   if (unlistenRecordsChange) return;
@@ -451,15 +459,20 @@ const startListening = async () => {
       const payload = event.payload ?? {};
       if (payload.surfRecordId !== recordId.value) return;
       if (payload.reason === "downloaded") {
-        // trailing 节流：合并短时间内的多次下载事件
-        if (refreshTimer) clearTimeout(refreshTimer);
-        refreshTimer = setTimeout(() => {
-          refreshTimer = null;
-          void reloadAllImages();
-        }, 500);
+        scheduleRefreshImages();
       } else if (payload.reason === "deleted") {
         goBack();
       }
+    }
+  );
+
+  // 下载完成（含视频）会发 images-change 且带 surfRecordId，与 surf-records-change 互补
+  unlistenImagesChange = await listen<{ reason?: string; surfRecordId?: string }>(
+    "images-change",
+    (event) => {
+      const payload = event.payload ?? {};
+      if (payload.surfRecordId !== recordId.value) return;
+      scheduleRefreshImages();
     }
   );
 };
@@ -472,6 +485,10 @@ const stopListening = () => {
   if (unlistenRecordsChange) {
     unlistenRecordsChange();
     unlistenRecordsChange = null;
+  }
+  if (unlistenImagesChange) {
+    unlistenImagesChange();
+    unlistenImagesChange = null;
   }
 };
 

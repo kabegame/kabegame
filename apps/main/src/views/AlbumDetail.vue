@@ -33,6 +33,7 @@ import { ref, computed, onMounted, onBeforeUnmount, onActivated, onDeactivated, 
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
+import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Delete, Star, StarFilled, FolderAdd } from "@element-plus/icons-vue";
@@ -555,7 +556,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       break;
     case "wallpaper":
       if (!isMultiSelect) {
-        await invoke("set_wallpaper_by_image_id", { imageId: image.id });
+        await setWallpaperByImageIdWithModeFallback(image.id);
         currentWallpaperImageId.value = image.id;
       }
       break;
@@ -623,19 +624,39 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
           outputParentDir = selected;
         }
 
-        // 使用用户输入的名称，如果为空则使用默认名称
         const finalName = projectName?.trim() || defaultName;
 
-        const res = await invoke<{ projectDir: string; imageCount: number }>(
-          "export_images_to_we_project",
-          {
-            imagePaths: imagesToProcess.map((img) => img.localPath),
-            title: finalName,
-            outputParentDir,
-            options: null,
-          }
+        const isVideoPath = (path: string) => {
+          const ext = (path.split(".").pop() || "").toLowerCase();
+          return ext === "mp4" || ext === "mov";
+        };
+        const isSingleVideo =
+          imagesToProcess.length === 1 &&
+          isVideoPath(imagesToProcess[0].localPath);
+
+        const res = await invoke<{
+          projectDir: string;
+          imageCount: number;
+          videoCount?: number;
+        }>(
+          isSingleVideo ? "export_video_to_we_project" : "export_images_to_we_project",
+          isSingleVideo
+            ? {
+                videoPath: imagesToProcess[0].localPath,
+                title: finalName,
+                outputParentDir,
+              }
+            : {
+                imagePaths: imagesToProcess.map((img) => img.localPath),
+                title: finalName,
+                outputParentDir,
+                options: null,
+              }
         );
-        ElMessage.success(`已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`);
+        const msg = res.videoCount
+          ? `已导出 WE 视频工程：${res.projectDir}`
+          : `已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`;
+        ElMessage.success(msg);
         await invoke("open_file_path", { filePath: res.projectDir });
       } catch (e) {
         if (e !== "cancel") {

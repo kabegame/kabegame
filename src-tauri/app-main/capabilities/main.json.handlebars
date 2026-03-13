@@ -2,7 +2,7 @@
   "identifier": "main-capability",
   "description": "Main capability for Kabegame (workspace app-main)",
   "local": true,
-  "windows": [{{#if isWindows}}"wallpaper", {{/if}}"main"],
+  "windows": [{{#if isWindows}}"wallpaper", {{else if isMacOS}}"wallpaper", {{/if}}"main"],
   "permissions": [
     "core:default",
     "core:window:allow-show",

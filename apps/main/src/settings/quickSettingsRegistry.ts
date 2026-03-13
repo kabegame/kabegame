@@ -1,6 +1,6 @@
 import type { QuickSettingsPageId } from "@/stores/quickSettingsDrawer";
 import type { QuickSettingGroup, QuickSettingItem } from "@kabegame/core/components/settings/quick-settings-registry-types";
-import { IS_ANDROID, IS_LINUX, IS_WINDOWS } from "@kabegame/core/env";
+import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
 
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
@@ -149,7 +149,7 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         },
         pages: ["gallery", "albumdetail", "albums"],
       },
-      ...(IS_WINDOWS || IS_LINUX ? [{
+      ...(IS_WINDOWS || IS_LINUX || IS_MACOS ? [{
         key: "wallpaperStyle",
         label: "壁纸显示方式",
         description:
@@ -157,14 +157,14 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         comp: WallpaperStyleSetting,
         pages: ["gallery", "albumdetail", "albums"],
       } as QuickSettingItem<QuickSettingsPageId>] : []),
-      ...(IS_WINDOWS ? [{
+      ...(IS_WINDOWS || IS_MACOS ? [{
         key: "wallpaperRotationTransition",
         label: "过渡效果",
-        description: "仅轮播支持过渡预览；原生模式下仅支持无过渡和淡入淡出",
+        description: "窗口模式支持图片过渡；原生模式跟随系统能力",
         comp: WallpaperTransitionSetting,
         pages: ["gallery", "albumdetail", "albums"],
       } as QuickSettingItem<QuickSettingsPageId>] : []),
-      ...(IS_WINDOWS ? [{
+      ...(IS_WINDOWS || IS_MACOS ? [{
         key: "wallpaperMode",
         label: "壁纸模式",
         description:

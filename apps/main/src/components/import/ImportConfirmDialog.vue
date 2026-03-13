@@ -14,6 +14,7 @@ export type ImportItem = {
     isDirectory: boolean;
     isArchive?: boolean;
     isKgpg?: boolean;
+    isVideo?: boolean;
 };
 
 async function open(items: ImportItem[]): Promise<boolean | null> {
