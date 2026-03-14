@@ -30,11 +30,15 @@ enum Request {
         input_path: String,
         output_path: String,
     },
+    GenerateGifThumbnail {
+        input_path: String,
+        output_path: String,
+    },
 }
 
-#[derive(Debug)]
 enum Response {
     Compress(Result<VideoCompressResult, String>),
+    GenerateGifThumbnail(Result<VideoCompressResult, String>),
 }
 
 fn run_worker_loop<R: Runtime + 'static>(
@@ -70,6 +74,38 @@ fn run_worker_loop<R: Runtime + 'static>(
                     })
                 }))
             }
+            Request::GenerateGifThumbnail {
+                input_path,
+                output_path,
+            } => {
+                let p = &provider;
+                Response::GenerateGifThumbnail(rt.block_on(async move {
+                    let frame_dir = kabegame_core::app_paths::AppPaths::global()
+                        .temp_dir.clone()
+                        .join(format!("gif_frames_{}", uuid::Uuid::new_v4()));
+                    tokio::fs::create_dir_all(&frame_dir)
+                        .await
+                        .map_err(|e| format!("创建帧目录失败: {e}"))?;
+                    let extract_result = p
+                        .app_handle
+                        .compress()
+                        .extract_video_frames(input_path.clone(), frame_dir.to_string_lossy().to_string())
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let frame_dir_path = std::path::Path::new(&extract_result.frame_dir);
+                    let out_path = std::path::PathBuf::from(&output_path);
+                    kabegame_core::crawler::downloader::video_compress::encode_frames_dir_to_gif(
+                        frame_dir_path,
+                        &out_path,
+                    )?;
+                    let _ = tokio::fs::remove_dir_all(frame_dir_path).await;
+                    Ok(VideoCompressResult {
+                        preview_path: out_path,
+                        width: None,
+                        height: None,
+                    })
+                }))
+            }
         };
         let _ = resp_tx.send(response);
     }
@@ -95,17 +131,25 @@ impl AndroidVideoCompressProvider for ChannelVideoCompressProvider {
         output_path: &Path,
     ) -> Result<VideoCompressResult, String> {
         let (resp_tx, resp_rx) = oneshot::channel();
-        self.tx
-            .send((
-                Request::Compress {
-                    input_path: input_path.to_string_lossy().to_string(),
-                    output_path: output_path.to_string_lossy().to_string(),
-                },
-                resp_tx,
-            ))
-            .map_err(|e| e.to_string())?;
+        let is_gif = output_path
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("gif"))
+            .unwrap_or(false);
+        let req = if is_gif {
+            Request::GenerateGifThumbnail {
+                input_path: input_path.to_string_lossy().to_string(),
+                output_path: output_path.to_string_lossy().to_string(),
+            }
+        } else {
+            Request::Compress {
+                input_path: input_path.to_string_lossy().to_string(),
+                output_path: output_path.to_string_lossy().to_string(),
+            }
+        };
+        self.tx.send((req, resp_tx)).map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
             Response::Compress(r) => r,
+            Response::GenerateGifThumbnail(r) => r,
         }
     }
 }

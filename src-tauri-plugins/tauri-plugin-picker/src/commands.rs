@@ -26,6 +26,17 @@ pub(crate) async fn pick_images<R: Runtime>(app: AppHandle<R>) -> Result<PickIma
 }
 
 #[tauri::command]
+pub(crate) async fn pick_videos<R: Runtime>(app: AppHandle<R>) -> Result<PickVideosResponse, String> {
+  let result: PickVideosResponse = app
+    .picker()
+    .0
+    .run_mobile_plugin_async("pickVideos", ())
+    .await
+    .map_err(|e| e.to_string())?;
+  Ok(result)
+}
+
+#[tauri::command]
 pub(crate) async fn pick_kgpg_file<R: Runtime>(app: AppHandle<R>) -> Result<PickKgpgFileResponse, String> {
   let result: PickKgpgFileResponse = app
     .picker()
@@ -42,6 +53,17 @@ pub(crate) async fn open_image<R: Runtime>(app: AppHandle<R>, uri: String) -> Re
     .picker()
     .0
     .run_mobile_plugin_async::<()>("openImage", crate::models::OpenImageArgs { uri })
+    .await
+    .map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn open_video<R: Runtime>(app: AppHandle<R>, uri: String) -> Result<(), String> {
+  app
+    .picker()
+    .0
+    .run_mobile_plugin_async::<()>("openVideo", crate::models::OpenVideoArgs { uri })
     .await
     .map_err(|e| e.to_string())?;
   Ok(())

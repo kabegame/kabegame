@@ -319,6 +319,18 @@
           "markdownDescription": "Denies the openImage command without any pre-configured scope."
         },
         {
+          "description": "Enables the openVideo command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-openVideo",
+          "markdownDescription": "Enables the openVideo command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the openVideo command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-openVideo",
+          "markdownDescription": "Denies the openVideo command without any pre-configured scope."
+        },
+        {
           "description": "Enables the pickFolder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-pickFolder",
@@ -355,10 +367,22 @@
           "markdownDescription": "Denies the pickKgpgFile command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the picker plugin (folder, images, kgpg file).\n#### This default permission set includes:\n\n- `allow-pickFolder`\n- `allow-pickImages`\n- `allow-pickKgpgFile`\n- `allow-openImage`",
+          "description": "Enables the pickVideos command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pickVideos",
+          "markdownDescription": "Enables the pickVideos command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pickVideos command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pickVideos",
+          "markdownDescription": "Denies the pickVideos command without any pre-configured scope."
+        },
+        {
+          "description": "Default permissions for the picker plugin (folder, images, videos, kgpg file).\n#### This default permission set includes:\n\n- `allow-pickFolder`\n- `allow-pickImages`\n- `allow-pickVideos`\n- `allow-pickKgpgFile`\n- `allow-openImage`\n- `allow-openVideo`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for the picker plugin (folder, images, kgpg file).\n#### This default permission set includes:\n\n- `allow-pickFolder`\n- `allow-pickImages`\n- `allow-pickKgpgFile`\n- `allow-openImage`"
+          "markdownDescription": "Default permissions for the picker plugin (folder, images, videos, kgpg file).\n#### This default permission set includes:\n\n- `allow-pickFolder`\n- `allow-pickImages`\n- `allow-pickVideos`\n- `allow-pickKgpgFile`\n- `allow-openImage`\n- `allow-openVideo`"
         }
       ]
     }

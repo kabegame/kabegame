@@ -11,7 +11,8 @@
       />
 
       <div v-loading="showLoading" style="min-height: 200px;">
-        <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div" class="albums-grid">
+        <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div"
+          class="albums-grid" :class="{ 'albums-grid-android': IS_ANDROID }">
           <AlbumCard v-for="album in albums" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
             :count="albumCounts[album.id] || 0" :preview-urls="albumPreviewUrls[album.id] || []"
             :loading-states="albumLoadingStates[album.id] || []" :is-loading="albumIsLoadingMap[album.id] || false"
@@ -155,6 +156,9 @@ const toPreviewUrl = (img: ImageInfo): string => {
 
 const hasPreviewUrl = (img: ImageInfo) => !!toPreviewUrl(img);
 
+// 画册预览图数量：桌面 3 张，安卓 1 张
+const albumPreviewLimit = IS_ANDROID ? 1 : 3;
+
 // 保存每个画册的预览 ImageInfo 列表
 const albumPreviewImages = ref<Record<string, ImageInfo[]>>({});
 
@@ -191,7 +195,7 @@ useImagesChangeRefresh({
 
     // 检查该画册的预览图列表是否已满
     const images = albumPreviewImages.value[targetAlbumId];
-    if (images && images.length >= 6) {
+    if (images && images.length >= albumPreviewLimit) {
       const allLoaded = images.every((img) => hasPreviewUrl(img));
       if (allLoaded) return;
     }
@@ -309,7 +313,7 @@ const handleCreateAlbum = async () => {
   if (!newAlbumName.value.trim()) return;
   try {
     const created = await albumStore.createAlbum(newAlbumName.value.trim());
-    await albumStore.loadAlbumPreview(created.id, 6);
+    await albumStore.loadAlbumPreview(created.id, albumPreviewLimit);
     await prefetchPreview(created);
     newAlbumName.value = "";
     showCreateDialog.value = false;
@@ -412,8 +416,8 @@ const prefetchPreview = async (album: { id: string }) => {
   albumIsLoading.value.add(album.id);
 
   try {
-    // 加载预览图片列表
-    const previewImages = await albumStore.loadAlbumPreview(album.id, 6);
+    // 加载预览图片列表（桌面 3 张，安卓 1 张）
+    const previewImages = await albumStore.loadAlbumPreview(album.id, albumPreviewLimit);
     albumPreviewImages.value[album.id] = previewImages;
   } catch (error) {
     console.error("加载画册预览失败:", error);
@@ -521,6 +525,17 @@ const handleAlbumMenuCommand = async (
   display: grid;
   gap: 16px;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+/* 安卓：2 列网格，卡片正方形 */
+.albums-grid-android {
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+
+  :deep(.album-card) {
+    height: auto;
+    aspect-ratio: 1;
+  }
 }
 
 /* 列表淡入动画 */

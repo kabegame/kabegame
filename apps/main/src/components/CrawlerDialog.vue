@@ -56,7 +56,7 @@
 
             <template v-if="pluginVars.length > 0">
                 <el-divider content-position="left">插件配置</el-divider>
-                <el-form-item v-for="varDef in pluginVars" :key="varDef.key" :label="varDef.name"
+                <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDef.name"
                     :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
                     <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="varDef.options"
                         :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
@@ -190,7 +190,7 @@
             <!-- 插件变量配置 -->
             <template v-if="pluginVars.length > 0">
                 <el-divider content-position="left">插件配置</el-divider>
-                <el-form-item v-for="varDef in pluginVars" :key="varDef.key" :label="varDef.name"
+                <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDef.name"
                     :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
                     <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="varDef.options"
                         :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
@@ -389,6 +389,17 @@ function setOutputAlbumId(v: string | null) {
     selectedOutputAlbumId.value = v ?? null;
 }
 
+// 根据 when 条件过滤出当前应显示的插件变量
+const visiblePluginVars = computed(() =>
+    pluginVars.value.filter((varDef) => {
+        if (!varDef.when) return true;
+        return Object.entries(varDef.when).every(
+            ([depKey, acceptedValues]) =>
+                acceptedValues.includes(String(form.value.vars[depKey] ?? ""))
+        );
+    })
+);
+
 // file_or_folder 类型：将 varDef.options 作为可选择文件扩展名列表（不带点号）
 const getFileExtensions = (varDef: any): string[] | undefined => {
     const opts = varDef?.options;
@@ -484,8 +495,8 @@ const handleStartCrawl = async () => {
             }
         }
 
-        // 手动验证必填的插件配置项
-        for (const varDef of pluginVars.value) {
+        // 手动验证必填的插件配置项（仅验证当前可见的）
+        for (const varDef of visiblePluginVars.value) {
             if (isRequired(varDef)) {
                 const value = form.value.vars[varDef.key];
                 if (value === undefined || value === null || value === '' ||

@@ -6,7 +6,7 @@
     @close="handlePswpClose" @ui-visible-change="handlePswpUiVisibleChange">
     <!-- 安卓：显示名称用 fixed 定位，与叉号同 top/高度，限制宽度并换行 -->
     <div v-if="previewImage?.displayName"
-      class="fixed left-0 right-0 top-0 flex min-h-[60px] items-center z-[-1] justify-center px-4 pt-[env(safe-area-inset-top,0px)]">
+      class="fixed left-0 right-0 top-0 flex min-h-[60px] items-center z-[-1] justify-center px-4 pt-[var(--sat,env(safe-area-inset-top,0px))]">
       <span class="max-w-[85vw] break-words text-center text-sm font-medium text-white/90"
         style="text-shadow: 0 1px 2px rgba(0,0,0,0.3)">
         {{ previewImage.displayName }}
@@ -66,7 +66,7 @@
           <video ref="previewVideoRef" :src="previewImageUrl" class="preview-video" loop autoplay poster="" preload="auto"
             playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
             @dragstart.prevent />
-          <VideoControls :video="previewVideoRef" />
+          <VideoControls :video="previewVideoRef" :show-play-pause="false" />
         </div>
         <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
           <ImageNotFound />
@@ -119,10 +119,21 @@ const previewImageUrl = ref("");
 const previewImagePath = ref("");
 const previewIndex = ref<number>(-1);
 const currentImageId = ref<string | null>(null);
+/** Android：仅图片的索引列表（用于过滤 PhotoSwipe 中的视频，视频改用系统播放器打开） */
+const androidFilteredIndices = computed(() =>
+  props.images.map((img, i) => (img.type !== "video" ? i : -1)).filter((i) => i >= 0)
+);
+
 // previewImage 改为 computed，确保始终反映 props.images 的最新数据（如收藏状态变化）
 const previewImage = computed<ImageInfo | null>(() => {
   const idx = previewIndex.value;
-  if (idx < 0 || idx >= props.images.length) return null;
+  if (idx < 0) return null;
+  if (IS_ANDROID) {
+    const origIdx = androidFilteredIndices.value[idx];
+    if (origIdx == null || origIdx >= props.images.length) return null;
+    return props.images[origIdx] ?? null;
+  }
+  if (idx >= props.images.length) return null;
   return props.images[idx] ?? null;
 });
 const isPreviewVideo = computed(() => previewImage.value?.type === "video");
@@ -154,6 +165,7 @@ const previewContainerRect = ref({ left: 0, top: 0, width: 0, height: 0 });
 // previewDragging、previewDragStart、previewDragStartTranslate 已删除，由 Panzoom 替代（仅桌面端）
 const previewImageLoading = ref(false);
 // 导航请求序号：用于“阻止切换直到 original ready”时的竞态保护
+let currentPreviewVideoDebugEl: HTMLVideoElement | null = null;
 
 const previewContextMenuVisible = ref(false);
 const previewContextMenuPosition = ref({ x: 0, y: 0 });
@@ -166,6 +178,27 @@ let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Android: 使用 useModalBack 管理预览的返回键行为（不使用 close-on-back prop）
 useModalBack(previewVisible);
+
+// #region agent log
+const debugPreviewLog = (message: string, data: Record<string, unknown>, hypothesisId: string) => {
+  fetch("http://127.0.0.1:7584/ingest/c0bebee6-485b-4fa2-aa0e-0bbc81e4acc7", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "a16946",
+    },
+    body: JSON.stringify({
+      sessionId: "a16946",
+      runId: "pre-fix",
+      hypothesisId,
+      location: "packages/core/src/components/common/ImagePreviewDialog.vue",
+      message,
+      data,
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+};
+// #endregion
 
 const clamp = (val: number, min: number, max: number) => Math.min(max, Math.max(min, val));
 
@@ -294,6 +327,63 @@ const measureSizesAfterRender = async () => {
   measureBaseSize();
 };
 
+const debugPreviewVideoSnapshot = (message: string, hypothesisId: string) => {
+  const video = previewVideoRef.value;
+  const wrapper = video?.closest(".preview-video-wrapper") as HTMLElement | null;
+  const videoRect = video?.getBoundingClientRect();
+  const wrapperRect = wrapper?.getBoundingClientRect();
+  const centerX = videoRect ? videoRect.left + videoRect.width / 2 : null;
+  const centerY = videoRect ? videoRect.top + videoRect.height / 2 : null;
+  const centerEl = centerX != null && centerY != null
+    ? document.elementFromPoint(centerX, centerY) as HTMLElement | null
+    : null;
+  const videoStyle = video ? window.getComputedStyle(video) : null;
+  const wrapperStyle = wrapper ? window.getComputedStyle(wrapper) : null;
+  // #region agent log
+  debugPreviewLog(message, {
+    hasVideo: !!video,
+    currentTime: video?.currentTime ?? null,
+    duration: video && Number.isFinite(video.duration) ? video.duration : null,
+    paused: video?.paused ?? null,
+    ended: video?.ended ?? null,
+    readyState: video?.readyState ?? null,
+    networkState: video?.networkState ?? null,
+    currentSrc: video?.currentSrc || video?.src || null,
+    videoWidth: video?.videoWidth ?? null,
+    videoHeight: video?.videoHeight ?? null,
+    clientWidth: video?.clientWidth ?? null,
+    clientHeight: video?.clientHeight ?? null,
+    videoBg: videoStyle?.backgroundColor ?? null,
+    videoDisplay: videoStyle?.display ?? null,
+    videoVisibility: videoStyle?.visibility ?? null,
+    videoOpacity: videoStyle?.opacity ?? null,
+    wrapperBg: wrapperStyle?.backgroundColor ?? null,
+    wrapperDisplay: wrapperStyle?.display ?? null,
+    wrapperVisibility: wrapperStyle?.visibility ?? null,
+    wrapperOpacity: wrapperStyle?.opacity ?? null,
+    centerElementTag: centerEl?.tagName ?? null,
+    centerElementClass: centerEl?.className ?? null,
+    wrapperRect: wrapperRect ? {
+      width: wrapperRect.width,
+      height: wrapperRect.height,
+    } : null,
+    videoRect: videoRect ? {
+      width: videoRect.width,
+      height: videoRect.height,
+    } : null,
+  }, hypothesisId);
+  // #endregion
+};
+
+const handlePreviewVideoDebugEvent = (event: Event) => {
+  debugPreviewVideoSnapshot(`video event:${event.type}`, "H1/H2/H4/H5");
+  if (event.type === "pause") {
+    requestAnimationFrame(() => {
+      debugPreviewVideoSnapshot("video post-pause frame", "H2/H4");
+    });
+  }
+};
+
 // resetPreviewTransform 已删除，由 panzoomReset()（usePanzoomPreview）替代（仅桌面端）
 
 // previewImageStyle 已删除，由 Panzoom 自动管理 transform（仅桌面端）
@@ -316,22 +406,13 @@ const isTextInputLike = (target: EventTarget | null) => {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
 };
 
-/** Android PhotoSwipe：根据当前 images 构建 dataSource 数组（只读 URL） */
+/** Android PhotoSwipe：根据当前 images 构建 dataSource 数组（只读 URL）。Android 下过滤掉视频，视频改用系统播放器打开。 */
 const pswpDataSource = computed(() => {
   const fallbackW = 1920;
   const fallbackH = 1080;
-  return props.images.map((img) => {
+  const source = IS_ANDROID ? props.images.filter((img) => img.type !== "video") : props.images;
+  return source.map((img) => {
     const url = getOriginalPreviewUrl(img) || getThumbnailPreviewUrl(img) || "";
-    if (img.type === "video") {
-      const escapedUrl = url.replace(/"/g, "&quot;");
-      return {
-        html: `<div class="pswp-video-wrap"><video src="${escapedUrl}" loop controls poster="" preload="auto" playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback="" style="max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;"></video></div>`,
-        type: "html",
-        width: img.width || fallbackW,
-        height: img.height || fallbackH,
-        id: img.id,
-      };
-    }
     return {
       src: url,
       width: img.width || fallbackW,
@@ -344,6 +425,15 @@ const pswpDataSource = computed(() => {
 const setPreviewByIndex = (index: number) => {
   const img = props.images[index];
   if (!img) return;
+
+  // #region agent log
+  debugPreviewLog("setPreviewByIndex", {
+    index,
+    imageId: img.id,
+    type: img.type ?? null,
+    localPath: img.localPath,
+  }, "H3");
+  // #endregion
 
   previewIndex.value = index;
   currentImageId.value = img.id;
@@ -644,34 +734,43 @@ watch(
   () => props.images,
   () => {
     if (!previewVisible.value) return;
-
     if (!currentImageId.value) return;
 
     const foundIndex = props.images.findIndex((img) => img.id === currentImageId.value);
 
     if (foundIndex !== -1) {
-      if (foundIndex !== previewIndex.value) {
-        previewIndex.value = foundIndex;
-        if (!IS_ANDROID) {
+      if (IS_ANDROID) {
+        const pswpIdx = androidFilteredIndices.value.indexOf(foundIndex);
+        if (pswpIdx >= 0 && pswpIdx !== previewIndex.value) {
+          previewIndex.value = pswpIdx;
+        }
+      } else {
+        if (foundIndex !== previewIndex.value) {
+          previewIndex.value = foundIndex;
           setPreviewByIndex(foundIndex);
         }
       }
     } else {
       if (props.images.length === 0) {
         closePreview();
-      } else if (props.images.length <= previewIndex.value) {
-        const newIndex = props.images.length - 1;
-        previewIndex.value = newIndex;
-        if (!IS_ANDROID) {
-          setPreviewByIndex(newIndex);
+      } else if (IS_ANDROID) {
+        const filteredLen = androidFilteredIndices.value.length;
+        if (filteredLen <= previewIndex.value) {
+          const newPswpIdx = Math.max(0, filteredLen - 1);
+          previewIndex.value = newPswpIdx;
+          const origIdx = androidFilteredIndices.value[newPswpIdx];
+          currentImageId.value = origIdx != null ? props.images[origIdx]?.id ?? null : null;
         } else {
-          currentImageId.value = props.images[newIndex]?.id ?? null;
+          const origIdx = androidFilteredIndices.value[previewIndex.value];
+          currentImageId.value = origIdx != null ? props.images[origIdx]?.id ?? null : null;
         }
       } else {
-        if (!IS_ANDROID) {
-          setPreviewByIndex(previewIndex.value);
+        if (props.images.length <= previewIndex.value) {
+          const newIndex = props.images.length - 1;
+          previewIndex.value = newIndex;
+          setPreviewByIndex(newIndex);
         } else {
-          currentImageId.value = props.images[previewIndex.value]?.id ?? null;
+          setPreviewByIndex(previewIndex.value);
         }
       }
     }
@@ -700,6 +799,43 @@ watch(
       if (isPreviewVideo.value) return;
       setPreviewTransform(1, 0, 0);
     }
+  }
+);
+
+watch(
+  () => ({
+    visible: previewVisible.value,
+    index: previewIndex.value,
+    imageId: currentImageId.value,
+    url: previewImageUrl.value,
+    computedType: previewImage.value?.type ?? null,
+    isPreviewVideo: isPreviewVideo.value,
+    hasVideoRef: !!previewVideoRef.value,
+  }),
+  (state) => {
+    if (IS_ANDROID) return;
+    // #region agent log
+    debugPreviewLog("preview state changed", state, "H1/H3/H5");
+    // #endregion
+  },
+  { deep: true }
+);
+
+watch(
+  () => previewVideoRef.value,
+  (video, oldVideo) => {
+    if (oldVideo && currentPreviewVideoDebugEl === oldVideo) {
+      ["loadstart", "loadeddata", "canplay", "play", "pause", "emptied"].forEach((eventName) => {
+        oldVideo.removeEventListener(eventName, handlePreviewVideoDebugEvent);
+      });
+      currentPreviewVideoDebugEl = null;
+    }
+    if (!video || IS_ANDROID) return;
+    currentPreviewVideoDebugEl = video;
+    ["loadstart", "loadeddata", "canplay", "play", "pause", "emptied"].forEach((eventName) => {
+      video.addEventListener(eventName, handlePreviewVideoDebugEvent);
+    });
+    debugPreviewVideoSnapshot("video ref attached", "H1/H2/H4/H5");
   }
 );
 
@@ -848,13 +984,18 @@ const handlePswpBeforeClose = (source?: string): boolean => {
 };
 
 const handlePswpChange = ({ index }: { index: number }) => {
-  if (index >= 0 && index < props.images.length) {
+  if (index < 0) return;
+  if (IS_ANDROID) {
+    const origIdx = androidFilteredIndices.value[index];
+    if (origIdx == null || origIdx >= props.images.length) return;
+    previewIndex.value = index;
+    const img = props.images[origIdx];
+    if (img) currentImageId.value = img.id;
+  } else {
+    if (index >= props.images.length) return;
     previewIndex.value = index;
     const img = props.images[index];
-    if (img) {
-      currentImageId.value = img.id;
-    }
-    // previewImage 现在是 computed，无需手动赋值
+    if (img) currentImageId.value = img.id;
   }
 };
 
@@ -884,6 +1025,12 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", handlePreviewKeyDown, true);
+  if (currentPreviewVideoDebugEl) {
+    ["loadstart", "loadeddata", "canplay", "play", "pause", "emptied"].forEach((eventName) => {
+      currentPreviewVideoDebugEl?.removeEventListener(eventName, handlePreviewVideoDebugEvent);
+    });
+    currentPreviewVideoDebugEl = null;
+  }
   panzoomDestroy();
   if (previewInteractTimer) {
     clearTimeout(previewInteractTimer);
@@ -919,12 +1066,14 @@ if (!IS_ANDROID) {
 
 const open = (index: number) => {
   if (IS_ANDROID) {
-    previewIndex.value = index;
     const img = props.images[index];
+    if (img?.type === "video") return; // 视频由 ImageGrid 调用 openVideo，不应进入预览
+    const pswpIndex = androidFilteredIndices.value.indexOf(index);
+    if (pswpIndex < 0) return;
+    previewIndex.value = pswpIndex;
     if (img) {
       currentImageId.value = img.id;
     }
-    // previewImage 现在是 computed，无需手动赋值
     previewVisible.value = true;
     pswpUiVisible.value = false;
     return;
@@ -1028,6 +1177,7 @@ defineExpose({
     justify-content: center;
     position: relative;
     overflow: hidden;
+    background: #000;
   }
 
   .preview-video {
@@ -1037,6 +1187,7 @@ defineExpose({
     max-height: 100% !important;
     object-fit: contain;
     display: block;
+    background: #000;
   }
 
   .preview-image {

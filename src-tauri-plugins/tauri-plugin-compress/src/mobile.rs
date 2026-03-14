@@ -4,7 +4,10 @@ use tauri::{
     AppHandle, Runtime,
 };
 
-use crate::models::{CompressVideoForPreviewArgs, CompressVideoForPreviewResponse};
+use crate::models::{
+    CompressVideoForPreviewArgs, CompressVideoForPreviewResponse,
+    ExtractVideoFramesArgs, ExtractVideoFramesResponse,
+};
 
 pub fn init<R: Runtime, C: DeserializeOwned>(
     _app: &AppHandle<R>,
@@ -29,6 +32,25 @@ impl<R: Runtime> Compress<R> {
                 CompressVideoForPreviewArgs {
                     input_path,
                     output_path,
+                },
+            )
+            .await
+            .map_err(crate::Error::from)?;
+        Ok(result)
+    }
+
+    pub async fn extract_video_frames(
+        &self,
+        input_path: String,
+        output_dir: String,
+    ) -> crate::Result<ExtractVideoFramesResponse> {
+        let result: ExtractVideoFramesResponse = self
+            .0
+            .run_mobile_plugin_async(
+                "extractVideoFrames",
+                ExtractVideoFramesArgs {
+                    input_path,
+                    output_dir,
                 },
             )
             .await

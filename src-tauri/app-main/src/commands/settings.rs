@@ -131,6 +131,38 @@ pub async fn get_wallpaper_rotation_style() -> Result<String, String> {
 }
 
 #[tauri::command]
+pub async fn get_wallpaper_volume() -> Result<f64, String> {
+    Settings::global()
+        .get_wallpaper_volume()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_wallpaper_volume(volume: f64) -> Result<(), String> {
+    Settings::global()
+        .set_wallpaper_volume(volume)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_wallpaper_video_playback_rate() -> Result<f64, String> {
+    Settings::global()
+        .get_wallpaper_video_playback_rate()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_wallpaper_video_playback_rate(rate: f64) -> Result<(), String> {
+    Settings::global()
+        .set_wallpaper_video_playback_rate(rate)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_wallpaper_rotation_transition() -> Result<String, String> {
     Settings::global()
         .get_wallpaper_rotation_transition()

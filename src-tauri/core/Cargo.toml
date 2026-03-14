@@ -29,6 +29,7 @@ sha2 = { workspace = true }
 sled = "0.34"
 tokio = { workspace = true }
 url = { workspace = true }
+urlencoding = "2.1"
 uuid = { workspace = true }
 walkdir = "2"
 zip = { workspace = true }

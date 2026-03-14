@@ -1,6 +1,6 @@
 <template>
   <div ref="cardRef" class="album-card" :data-album-id="album.id" @click="handleCardClick">
-    <div class="hero" @touchstart.passive="handleSwipeStart" @touchend="handleSwipeEnd">
+    <div class="hero">
       <div v-for="(url, idx) in heroAll" :key="idx" class="hero-img" :class="heroClass(idx, url)"
         :style="heroStyle(url)">
         <div v-if="!url && loadingStates[idx]" class="hero-loading">
@@ -18,16 +18,6 @@
       <div v-if="isLoading && actualImageCount === 0" class="hero-loading-full">
         <el-icon class="loading-icon">
           <Loading />
-        </el-icon>
-      </div>
-      <div class="hero-btn left" v-if="actualImageCount >= 3" @click.stop="prevHero">
-        <el-icon>
-          <ArrowLeft />
-        </el-icon>
-      </div>
-      <div class="hero-btn right" v-if="actualImageCount >= 3" @click.stop="nextHero">
-        <el-icon>
-          <ArrowRight />
         </el-icon>
       </div>
     </div>
@@ -49,8 +39,9 @@
 import { computed, ref, nextTick, onMounted, onUnmounted } from "vue";
 import { ElMessage } from "element-plus";
 import type { Album } from "@/stores/albums";
-import { ArrowLeft, ArrowRight, Loading } from "@element-plus/icons-vue";
+import { Loading } from "@element-plus/icons-vue";
 import { useAlbumStore } from "@/stores/albums";
+import { IS_ANDROID } from "@kabegame/core/env";
 
 interface Props {
   album: Album;
@@ -114,38 +105,8 @@ defineExpose({
   },
 });
 
-// 滑动手势检测
-const SWIPE_THRESHOLD = 30;
-let swipeStartX = 0;
-let swipeStartY = 0;
-let swiped = false;
-
-const handleSwipeStart = (e: TouchEvent) => {
-  if (e.touches.length !== 1) return;
-  swipeStartX = e.touches[0].clientX;
-  swipeStartY = e.touches[0].clientY;
-  swiped = false;
-};
-
-const handleSwipeEnd = (e: TouchEvent) => {
-  if (e.changedTouches.length !== 1) return;
-  const dx = e.changedTouches[0].clientX - swipeStartX;
-  const dy = e.changedTouches[0].clientY - swipeStartY;
-  if (Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
-    swiped = true;
-    e.preventDefault();
-    e.stopPropagation();
-    if (dx < 0) nextHero();
-    else prevHero();
-  }
-};
-
 const handleCardClick = () => {
-  // 如果正在重命名或刚完成滑动，不触发点击
-  if (isRenaming.value || swiped) {
-    swiped = false;
-    return;
-  }
+  if (isRenaming.value) return;
   emit('click');
 };
 
@@ -198,10 +159,11 @@ const handleRenameCancel = () => {
 };
 
 const heroIndex = ref(0);
+// 桌面最多 3 张，安卓 1 张（与 Albums 页加载数量一致，无左右箭头）
+const heroMaxSlots = IS_ANDROID ? 1 : 3;
 const heroAll = computed(() => {
-  // 确保至少有6个位置，即使URL为空也保留位置用于显示加载状态
-  const urls = props.previewUrls.slice(0, 6);
-  while (urls.length < 6) {
+  const urls = props.previewUrls.slice(0, heroMaxSlots);
+  while (urls.length < heroMaxSlots) {
     urls.push("");
   }
   return urls;
@@ -209,16 +171,14 @@ const heroAll = computed(() => {
 
 // 计算实际有效图片数量（非空 URL）
 const actualImageCount = computed(() => {
-  return props.previewUrls.slice(0, 6).filter(url => url).length;
+  return props.previewUrls.slice(0, heroMaxSlots).filter(url => url).length;
 });
 
-// 轮播展示数量：
-// - 有有效预览时，用实际预览数
-// - 预览还在加载但还没 URL 时：用 3，让占位/转圈可见（体验对齐画廊的“加载中”）
+// 展示数量：有有效预览用实际数量，加载中用 heroMaxSlots 占位
 const heroDisplayCount = computed(() => {
   const actualCount = actualImageCount.value;
   if (actualCount > 0) return actualCount;
-  if (props.isLoading) return 3;
+  if (props.isLoading) return heroMaxSlots;
   return 0;
 });
 
@@ -262,18 +222,6 @@ const heroStyle = (url: string) => ({
   backgroundImage: `url(${url})`,
 });
 
-const nextHero = () => {
-  const actualCount = actualImageCount.value;
-  if (actualCount < 3) return; // 少于3张不轮转
-  heroIndex.value = (heroIndex.value + 1) % actualCount;
-};
-
-const prevHero = () => {
-  const actualCount = actualImageCount.value;
-  if (actualCount < 3) return; // 少于3张不轮转
-  heroIndex.value = (heroIndex.value - 1 + actualCount) % actualCount;
-};
-
 const formatDate = (ts?: number) => {
   if (!ts) return "";
   const d = new Date(ts * 1000);
@@ -300,10 +248,6 @@ const formatDate = (ts?: number) => {
   &:hover {
     box-shadow: 0 14px 30px rgba(80, 90, 120, 0.28), 0 0 18px rgba(255, 170, 200, 0.35);
     border-color: rgba(255, 170, 200, 0.35);
-
-    .hero-btn {
-      opacity: 1;
-    }
   }
 
   .hero {
@@ -466,36 +410,6 @@ const formatDate = (ts?: number) => {
 
     100% {
       background-position: 200% 0%;
-    }
-  }
-
-  .hero-btn {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.14);
-    color: #fff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.2s ease, background 0.2s ease;
-    pointer-events: auto;
-
-    &.left {
-      left: 8px;
-    }
-
-    &.right {
-      right: 8px;
-    }
-
-    &:hover {
-      background: rgba(0, 0, 0, 0.25);
     }
   }
 

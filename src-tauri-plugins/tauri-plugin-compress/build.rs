@@ -1,4 +1,4 @@
-const COMMANDS: &[&str] = &["compressVideoForPreview"];
+const COMMANDS: &[&str] = &["compressVideoForPreview", "extractVideoFrames"];
 
 fn main() {
     tauri_plugin::Builder::new(COMMANDS)

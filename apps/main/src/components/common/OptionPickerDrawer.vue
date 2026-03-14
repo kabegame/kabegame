@@ -89,7 +89,7 @@ const handleSelect = (id: string) => {
 
   &:deep(.el-drawer.btt) {
     .el-drawer__body {
-      padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+      padding-bottom: calc(20px + var(--sab, env(safe-area-inset-bottom, 0px)));
     }
   }
 }

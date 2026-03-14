@@ -506,6 +506,7 @@ async fn run_task(
             current_url: None,
             page_label: INITIAL_PAGE_LABEL.to_string(),
             page_state: Some(serde_json::Value::Object(serde_json::Map::new())),
+            state: Some(serde_json::Value::Object(serde_json::Map::new())),
             resume_mode: INITIAL_PAGE_LABEL.to_string(),
             images_dir: pathbuf_to_string(&images_dir),
             output_album_id: req.output_album_id.clone(),

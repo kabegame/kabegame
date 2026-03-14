@@ -76,6 +76,7 @@ import { useModalStackStore } from "../../stores/modalStack";
 import { useUiStore } from "../../stores/ui";
 import { useDragScroll } from "../../composables/useDragScroll";
 import { IS_ANDROID } from "../../env";
+import { openVideo } from "tauri-plugin-picker-api";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 
@@ -200,6 +201,9 @@ const hasImages = computed(() => (props.images ?? []).length > 0);
 const imageGridColumns = computed(() => uiStore.imageGridColumns);
 // 只有在不处于加载状态且确实没有图片时才显示空状态，避免加载过程中闪现空占位符
 const showEmptyOverlay = computed(() => !hasImages.value && !isLoading.value);
+
+// keep-alive 激活状态：deactivated 时不应操作共享 selection store
+const isComponentActive = ref(true);
 
 // 入场/退场动画跟踪（仅虚拟滚动模式下使用）
 const enteringIds = ref<Set<string>>(new Set());
@@ -607,6 +611,10 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
   if (IS_ANDROID && !androidSelectionMode.value) {
     const action = settingsStore.values.imageClickAction || "none";
     if (action === "preview") {
+      if (image.type === "video" && image.localPath) {
+        void openVideo(image.localPath);
+        return;
+      }
       previewRef.value?.open(index);
       return;
     }
@@ -635,6 +643,10 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
 const handleItemDblClick = (image: ImageInfo, index: number) => {
   const action = settingsStore.values.imageClickAction || "none";
   if (action === "preview") {
+    if (IS_ANDROID && image.type === "video" && image.localPath) {
+      void openVideo(image.localPath);
+      return;
+    }
     previewRef.value?.open(index);
     return;
   }
@@ -646,6 +658,10 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
 const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
   if (!enableContextMenu.value) return;
   if (IS_ANDROID && androidSelectionMode.value) {
+    if (image.type === "video" && image.localPath) {
+      void openVideo(image.localPath);
+      return;
+    }
     previewRef.value?.open(index);
     return;
   }
@@ -853,6 +869,7 @@ onUnmounted(async () => {
 });
 
 onActivated(() => {
+  isComponentActive.value = true;
   // keep-alive 激活后恢复滚动位置；并刷新虚拟滚动范围，避免显示错位
   const el = containerEl.value;
   if (!el) return;
@@ -872,7 +889,7 @@ onActivated(() => {
 });
 
 onDeactivated(() => {
-  // deactivated 时不主动重置 measuredItemHeight（保留上一次可见时的正确值）
+  isComponentActive.value = false;
 });
 
 // 检测图片列表变化，标记新增/删除的图片（仅虚拟滚动模式）
@@ -888,19 +905,21 @@ watch(
     // 判断是否是刷新/换页（新旧列表完全没有交集）还是图片增减
     const hasIntersection = oldIds.size > 0 && [...oldIds].some((id) => newIds.has(id));
 
-    if (oldIds.size > 0 && !hasIntersection) {
-      // 刷新/换页：新旧列表完全不同，清空选择
-      clearSelection();
-    } else if (selectedIds.value.size > 0) {
-      // 图片增减：从选择中移除被删除的图片
-      const newSelected = new Set([...selectedIds.value].filter((id) => newIds.has(id)));
-      if (newSelected.size !== selectedIds.value.size) {
-        selectedIds.value = newSelected;
-        // 如果 lastSelectedIndex 对应的图片被删除了，重置索引
-        if (lastSelectedIndex.value >= 0) {
-          const lastImg = (newImages ?? [])[lastSelectedIndex.value];
-          if (!lastImg || !newSelected.has(lastImg.id)) {
-            lastSelectedIndex.value = newSelected.size > 0 ? -1 : -1;
+    if (isComponentActive.value) {
+      if (oldIds.size > 0 && !hasIntersection) {
+        // 刷新/换页：新旧列表完全不同，清空选择
+        clearSelection();
+      } else if (selectedIds.value.size > 0) {
+        // 图片增减：从选择中移除被删除的图片
+        const newSelected = new Set([...selectedIds.value].filter((id) => newIds.has(id)));
+        if (newSelected.size !== selectedIds.value.size) {
+          selectedIds.value = newSelected;
+          // 如果 lastSelectedIndex 对应的图片被删除了，重置索引
+          if (lastSelectedIndex.value >= 0) {
+            const lastImg = (newImages ?? [])[lastSelectedIndex.value];
+            if (!lastImg || !newSelected.has(lastImg.id)) {
+              lastSelectedIndex.value = newSelected.size > 0 ? -1 : -1;
+            }
           }
         }
       }

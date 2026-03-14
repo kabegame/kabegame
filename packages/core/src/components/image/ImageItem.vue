@@ -21,6 +21,12 @@
         </el-icon>
       </div>
     </el-tooltip>
+    <!-- 视频标识：右上角播放三角 -->
+    <div v-if="isVideo" class="video-play-badge" aria-hidden="true">
+      <el-icon :size="14">
+        <VideoPlay />
+      </el-icon>
+    </div>
     <transition name="fade-in" mode="out-in">
       <div v-if="!displayUrl" key="loading" class="image-wrapper" :style="aspectRatioStyle"
         @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)"
@@ -60,10 +66,15 @@
             :alt="image.id" draggable="false"
             @load="handleOriginalLoad" @error="handleOriginalError" />
         </template>
-        <video v-else-if="isVideo" :src="displayUrl" class="thumbnail" :class="{ 'thumbnail-android': IS_ANDROID }"
+        <!-- Android 视频：用 GIF 缩略图（img）；桌面视频：用 video 元素 -->
+        <img v-else-if="isVideo && IS_ANDROID" :src="displayUrl" loading="lazy" decoding="async"
+          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': true }]"
+          :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
+          @load="handleImageLoad" @error="handleImageError" />
+        <video v-else-if="isVideo" :src="displayUrl" class="thumbnail"
           draggable="false" muted autoplay loop poster="" preload="auto" playsinline webkit-playsinline="true"
           disablepictureinpicture="true" disableremoteplayback="" @dragstart.prevent @mousedown.prevent />
-        <!-- 单图（Android 或桌面无独立缩略图） -->
+        <!-- 单图（桌面无独立缩略图） -->
         <img v-else :src="displayUrl" loading="lazy" decoding="async"
           :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': IS_ANDROID }]"
           :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
@@ -76,7 +87,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
-import { WarningFilled, Download } from "@element-plus/icons-vue";
+import { WarningFilled, Download, VideoPlay } from "@element-plus/icons-vue";
 import type { ImageInfo } from "../../types/image";
 import type { ImageClickAction } from "../../stores/settings";
 import ImageNotFound from "../common/ImageNotFound.vue";
@@ -472,6 +483,24 @@ const handleAnimationEnd = (event: AnimationEvent) => {
 
 .retry-download-badge:hover {
   background: rgba(103, 194, 58, 1);
+}
+
+.video-play-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
 }
 
 .fade-in-enter-active {

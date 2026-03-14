@@ -1,22 +1,43 @@
 # Kabegame 图片管理器
 
-一个基于 Tauri 的二次元图片管理器！收集、管理、设置/轮播壁纸，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元图片资源~
+一个基于 Tauri 的二次元图片管理器！爬取、管理、设置/轮播壁纸，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元图片资源~
 
 <div align="center">
   <img src="docs/images/image2.png" alt="Kabegame 形象图 1" width="256"/>
   <img src="docs/images/image1.png" alt="Kabegame 形象图 2" width="256"/>
 </div>
 
-<div align="center">
-  <img src="docs/images/main-screenshot-windows-gallery.png" alt="Kabegame windows 截图 1" width="800"/>
-  <img src="docs/images/main-screenshot-windows-preview.png" alt="Kabegame windows 截图 2" width="800"/>
-  <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame macos 截图" width="800"/>
-  <img src="docs/images/main-screenshot-linux.png" alt="Kabegame linux 截图" width="800" />
-  <div>
-    <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame android 截图" width="400" />
-    <img src="docs/images/main-screenshot-android-pßreview.jpg" alt="Kabegame android 截图" width="400" />
-  </div>
-</div>ß
+## 画廊截图
+
+<!--一行两张桌面图片并排右边一张安卓图片，两行-->
+<table>
+  <tr>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/main-screenshot-windows-gallery.png" alt="Kabegame windows 截图 1"/><br/>
+      <small>Windows</small>
+    </td>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/main-screenshot-windows-preview.png" alt="Kabegame windows 截图 2"/><br/>
+      <small>Windows</small>
+    </td>
+    <td align="center" rowspan="2" style="vertical-align: top; text-align: right; width: 200px;">
+      <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame android 截图"><br/>
+      <small>Android</small>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame macos 截图"/><br/>
+      <small>macOS</small>
+    </td>
+    <td align="center" style="width: 300px;">
+      <img src="docs/images/main-screenshot-linux.png" alt="Kabegame linux 截图"/><br/>
+      <small>Linux</small>
+    </td>
+  </tr>
+</table>
+
+## 各网站爬取截图
 
 ## 名称由来 🐢
 
@@ -30,15 +51,9 @@
 
 ## 功能特性
 
-- 🖼️ **壁纸管理**: 收集、管理、轮播二次元壁纸，让桌面充满二次元气息
-- 🔌 **插件系统**: 支持通过 `.kgpg` 插件文件从不同网站爬取壁纸资源
-- 📸 **画册整理**: 将爬取的图片整理到画册里面，这样就不用担心找不到啦
-- 🎨 **壁纸轮播**: 自动从指定画册中轮播更换桌面壁纸，支持随机和顺序模式
-- 💾 **虚拟磁盘**: 在 Windows 上将画册挂载为虚拟磁盘（MacOS和Linux为虚拟文件夹），在资源管理器中像文件夹一样浏览图片
-- 🌐 **插件管理**: 从内置商店（GitHub仓库）浏览、安装、收藏和管理壁纸插件
-- 📋 **任务管理**: 实时查看收集任务进度、状态和已收集图片，支持停止、删除等操作
-- ⌨️ **命令行工具**: 提供精巧的 CLI 工具，支持通过命令行运行插件、导入图片等操作
-- 🖱️ **拖拽导入**: 支持拖入本地图片、文件夹或压缩包（zip、rar）快速导入到画廊，也可以拖入kgpg插件文件导入插件
+- 🔌 **爬虫客户端**：通过 `.kgpg` 插件从各站爬取壁纸；内置插件商店浏览/安装/管理；任务进度与停止/删除；CLI 运行插件、导入图片等
+- 🎨 **壁纸设置器**：收集、管理、轮播二次元壁纸，自动从指定画册更换桌面壁纸（随机/顺序），让桌面充满二次元气息
+- 🖼️ **图片管理者**：画廊浏览、画册整理、虚拟磁盘（Windows 挂载为盘符，macOS/Linux 为虚拟文件夹）、拖拽导入本地图片/文件夹/压缩包或 kgpg 插件
 
 ## 安装方法
 
@@ -51,7 +66,7 @@
 | **cli** | ✅ 支持 | ❌ 不支持|
 | **适用场景** | 日常使用，需 CLI/虚拟盘 | 轻量使用，仅需基本功能 |
 | **文件大小** | 较大 | 较小 |
-| **优缺点**| 功能完成，但不同操作系统需要安装依赖(见[安装方法](#安装方法)) | 立即安装，但没有虚拟盘和cli功能 |
+| **优缺点**| 功能完成，但不同操作系统需要安装依赖(见[安装方法](#安装方法-1)) | 立即安装，但没有虚拟盘和cli功能 |
 
 **根据你的操作系统和需求，选择合适的安装包**
 
@@ -89,7 +104,7 @@
    - 将 `Kabegame.app` 拖拽到「应用程序」文件夹
 > [!IMPORTANT]
 > ## 修复 “Kabegame.app” 已损坏，无法打开。建议你将该对象移到废纸篓。
-> 将应用安装到 Applications 文件夹后，你需要绕过 Gatekeeper 才能运行（因为我不想为开源应用给 Apple 付费）。
+> 将应用安装到 Applications 文件夹后，你需要绕过 Gatekeeper 才能运行（因为这是开源应用，而且我是穷学生（现在还没offer），所以没钱给apple付费）。
 >
 > `xattr -d com.apple.quarantine /Applications/Kabegame.app`
 3. **虚拟磁盘fuse依赖（仅 Standard 模式）**：
@@ -444,5 +459,6 @@ The source code is licensed under GPL v3. License is available [here](./LICENSE)
 - [**Clash Verge**](https://github.com/clash-verge-rev/clash-verge-rev) - Clash 代理客户端（本项目参考了其托盘代码、tauri config写法以及linux workaround 写法）
 - [**Pake**](https://github.com/tw93/pake) - 将任意网站打包为app的项目（本项目参考了其实现）
 - [**LiveWallpaperMacOS**](https://github.com/thusvill/LiveWallpaperMacOS.git) - MacOS动态壁纸方案（本项目参考了其桌面壁纸挂载实现）
+- [**PixivCrawler**](https://github.com/CWHer/PixivCrawler) - Pixiv 爬虫python3实现（本项目参考其实现了Rhai版本）
 
 如果这些项目对你有帮助，请考虑给它们一个 ⭐ Star，这是对开源社区最好的支持！

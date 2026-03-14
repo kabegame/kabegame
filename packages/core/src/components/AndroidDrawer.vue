@@ -271,12 +271,12 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px));
 }
 
 .android-drawer-header {
   flex-shrink: 0;
-  padding-top: calc(16px + env(safe-area-inset-top));
+  padding-top: calc(16px + var(--sat, env(safe-area-inset-top, 0px)));
   padding-right: 12px;
   padding-bottom: 16px;
   padding-left: 20px;

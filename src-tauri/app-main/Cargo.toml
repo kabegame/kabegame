@@ -45,6 +45,7 @@ tauri-plugin-archiver = { workspace = true }
 tauri-plugin-share = { workspace = true }
 tauri-plugin-compress = { workspace = true }
 tauri-plugin-wallpaper = { workspace = true }
+tauri-plugin-task-notification = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 include_dir = "0.7"

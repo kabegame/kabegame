@@ -1395,7 +1395,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             #[cfg(not(target_os = "android"))]
                             let use_path_flow = true;
 
-                            // Android content://：读字节 → 哈希 → 入库（不生成缩略图，永远用原图）
+                            // Android content://：读字节 → 哈希 → 入库；视频则生成 GIF 缩略图（与下载视频一致，前端用 kbg-local 引用）
                             #[cfg(target_os = "android")]
                             if !use_path_flow {
                                 let bytes = match get_content_io_provider()
@@ -1426,12 +1426,59 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                 };
                                 ensure_minimum_duration(download_start_time, 500).await;
                                 let hash = compute_bytes_hash(&bytes);
+
+                                // 判断类型：仅视频生成 GIF 缩略图，供列表 kbg-local 引用
+                                let mime = get_content_io_provider()
+                                    .get_mime_type(url_clone.as_str())
+                                    .await
+                                    .ok()
+                                    .flatten();
+                                let (video_thumb_path, video_thumb_str) =
+                                    if crate::image_type::is_video_mime(&mime) {
+                                        let ext = mime
+                                            .as_deref()
+                                            .and_then(|m| crate::image_type::ext_from_mime(m))
+                                            .unwrap_or_else(|| "mp4".to_string());
+                                        let temp_dir =
+                                            crate::app_paths::AppPaths::global().temp_dir.clone();
+                                        let _ = tokio::fs::create_dir_all(&temp_dir).await;
+                                        let temp_path =
+                                            temp_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext));
+                                        if let Err(e) = tokio::fs::write(&temp_path, &bytes).await {
+                                            eprintln!(
+                                                "[Download Worker] Android content video temp write failed: {}",
+                                                e
+                                            );
+                                            (None, String::new())
+                                        } else {
+                                            match video_compress::compress_video_for_preview(&temp_path)
+                                                .await
+                                            {
+                                                Ok(r) => {
+                                                    let p = r.preview_path;
+                                                    let _ = tokio::fs::remove_file(&temp_path).await;
+                                                    (Some(p.clone()), p.to_string_lossy().to_string())
+                                                }
+                                                Err(e) => {
+                                                    eprintln!(
+                                                        "[Download Worker] Android content video GIF failed: {}",
+                                                        e
+                                                    );
+                                                    let _ = tokio::fs::remove_file(&temp_path).await;
+                                                    (None, String::new())
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        (None, String::new())
+                                    };
+
                                 let _ = process_downloaded_content_image_to_storage(
                                     url_clone.as_str(),
                                     &hash,
-                                    None,
-                                    "", // Android 不生成缩略图，thumbnail_path 留空，前端用 local_path（原图）
-                                    None,
+                                    video_thumb_path.as_ref(),
+                                    video_thumb_str.as_str(),
+                                    mime,
                                     &plugin_id_clone,
                                     &task_id_clone,
                                     download_start_time,
@@ -1456,6 +1503,22 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                 #[cfg(target_os = "android")]
                                 {
                                     let source_path = path_for_post.to_string_lossy().to_string();
+                                    // 视频：走插件压缩生成预览，供列表/预览用
+                                    let (video_thumb_path, video_thumb_str) =
+                                        if crate::image_type::is_video_by_path(&path_for_post) {
+                                            match video_compress::compress_video_for_preview(&path_for_post).await {
+                                                Ok(r) => {
+                                                    let p = r.preview_path;
+                                                    (Some(p.clone()), p.to_string_lossy().to_string())
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("[Download Worker] Android video compress failed: {}", e);
+                                                    (None, String::new())
+                                                }
+                                            }
+                                        } else {
+                                            (None, String::new())
+                                        };
                                     if !auto_deduplicate {
                                         let post_start = Instant::now();
                                         match compute_file_hash(&path_for_post).await {
@@ -1487,8 +1550,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                         let _ = process_downloaded_content_image_to_storage(
                                                             &content_uri,
                                                             &hash,
-                                                            None,
-                                                            "",
+                                                            video_thumb_path.as_ref(),
+                                                            video_thumb_str.as_str(),
                                                             inferred_mime,
                                                             &plugin_id_clone,
                                                             &task_id_clone,
@@ -1630,8 +1693,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                             let _ = process_downloaded_content_image_to_storage(
                                                                 &content_uri,
                                                                 &hash,
-                                                                None,
-                                                                "",
+                                                                video_thumb_path.as_ref(),
+                                                                video_thumb_str.as_str(),
                                                                 inferred_mime,
                                                                 &plugin_id_clone,
                                                                 &task_id_clone,

@@ -17,11 +17,11 @@
       sleep(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));
       },
-      add_progress(percentage) {
+      addProgress(percentage) {
         return invoke("crawl_add_progress", { percentage });
       },
       // 统一下载 API：走 Rust download_worker，可选附加 cookie/header。
-      download_image(url, opts) {
+      downloadImage(url, opts) {
         const o = typeof opts === "object" && opts !== null ? opts : {};
         return invoke("crawl_download_image", {
           url,
@@ -46,6 +46,13 @@
         await invoke("crawl_update_page_state", { patch: p });
         Object.assign(ctx.pageState, p);
       },
+      // 更新整个任务上下文状态：同步更新 Rust 内存与当前 ctx.state（Object.assign 式合并），ctx.state 获取
+      async updateState(patch) {
+        const p = JSON.parse(JSON.stringify(patch ?? {}));
+        await invoke("crawl_update_state", { patch: p });
+        if (!ctx.state) ctx.state = {};
+        Object.assign(ctx.state, p);
+      },
       $(selector) {
         return document.querySelector(selector);
       },
@@ -58,6 +65,37 @@
           document.addEventListener("DOMContentLoaded", r, { once: true })
         );
       },
+      /**
+       * 轮询查询 DOM，直到选择器匹配到元素后 resolve 返回该元素。
+       * @param {string} selector - CSS 选择器
+       * @param {{ timeout?: number, interval?: number }} [opts] - timeout: 超时 ms，超时后 reject；interval: 轮询间隔 ms，默认 200
+       * @returns {Promise<Element>} 匹配到的元素
+       */
+      waitForSelector(selector, opts = {}) {
+        const intervalMs = opts.interval ?? 200;
+        const timeoutMs = opts.timeout;
+        return new Promise((resolve, reject) => {
+          const el = document.querySelector(selector);
+          if (el) {
+            resolve(el);
+            return;
+          }
+          let elapsed = 0;
+          const t = setInterval(() => {
+            const node = document.querySelector(selector);
+            if (node) {
+              clearInterval(t);
+              resolve(node);
+              return;
+            }
+            elapsed += intervalMs;
+            if (timeoutMs != null && elapsed >= timeoutMs) {
+              clearInterval(t);
+              reject(new Error(`waitForSelector("${selector}") 超时 ${timeoutMs}ms`));
+            }
+          }, intervalMs);
+        });
+      },
       exit() {
         return invoke("crawl_exit");
       },
@@ -68,6 +106,14 @@
       requestShowWebview() {
         return invoke("show_crawler_window");
       },
+      // 清空当前站点数据：localStorage、sessionStorage，以及该站点的 Cookie（由 Rust 按当前页 URL 清除）
+      async clearData() {
+        localStorage.clear();
+        sessionStorage.clear();
+        return invoke("crawl_clear_site_data", {
+          url: window.location.href,
+        });
+      }
     };
   }
 
@@ -88,6 +134,7 @@
       return;
     }
     if (!ctx || !ctx.crawlJs) return;
+    if (!ctx.state) ctx.state = {};
     await invoke("crawl_page_ready");
 
     bindApiToContext(ctx, createApi(ctx));

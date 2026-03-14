@@ -13,7 +13,7 @@
     "windows": [],
     "security": {
       "capabilities": ["main-capability", "crawler-capability"],
-      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src * data:; media-src 'self' asset: http://asset.localhost http://kbg-content.localhost data: blob: http://127.0.0.1:*; connect-src 'self' ipc: http://ipc.localhost ws: wss: http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src * data:; media-src * data: blob: ; connect-src 'self' ipc: http://ipc.localhost ws: wss: http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]

@@ -315,6 +315,24 @@ pub fn start_local_event_loop(app: AppHandle) {
                         });
                     }
                 }
+                DaemonEvent::TaskStatus { status, .. } => {
+                    let event_name = kind.as_event_name();
+                    let payload =
+                        serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null);
+                    let _ = app.emit(event_name.as_str(), payload);
+
+                    #[cfg(target_os = "android")]
+                    {
+                        use tauri_plugin_task_notification::TaskNotificationExt;
+                        let running = TaskScheduler::global().running_worker_count() as u32;
+                        let tn = app.task_notification();
+                        if running > 0 {
+                            let _ = tn.update_task_notification(running).await;
+                        } else if status == "completed" || status == "failed" || status == "canceled" {
+                            let _ = tn.clear_task_notification().await;
+                        }
+                    }
+                }
                 _ => {
                     let event_name = kind.as_event_name();
                     let payload =
@@ -474,8 +492,13 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
                         eprintln!("Failed to create native download dir: {}", e);
                         return false;
                     }
+                    let effective_url = if url.scheme() == "blob" {
+                        url.as_str().strip_prefix("blob:").unwrap_or(url.as_str()).to_string()
+                    } else {
+                        url.as_str().to_string()
+                    };
                     let native_dest =
-                        match compute_native_download_destination(url.as_str(), &images_dir) {
+                        match compute_native_download_destination(&effective_url, &images_dir) {
                             Ok(p) => p,
                             Err(e) => {
                                 eprintln!("Failed to compute native download destination: {}", e);

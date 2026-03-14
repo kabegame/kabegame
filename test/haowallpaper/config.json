@@ -1,0 +1,65 @@
+{
+    "baseUrl": "https://haowallpaper.com/",
+    "var": [
+        {
+            "key": "startPage",
+            "type": "int",
+            "name": "起始页面",
+            "descripts": "要拉取的起始页面",
+            "default": 1,
+            "min": 1,
+            "max": null
+        },
+        {
+            "key": "endPage",
+            "type": "int",
+            "name": "结束页数",
+            "descripts": "要拉取的结束页面",
+            "default": 5,
+            "min": 1,
+            "max": null
+        },
+        {
+            "key": "wallpaperType",
+            "type": "options",
+            "name": "壁纸类型",
+            "descripts": "选择要爬取的壁纸类型：桌面壁纸或手机壁纸",
+            "default": "homeView",
+            "options": [
+                {
+                    "name": "桌面壁纸",
+                    "variable": "homeView"
+                },
+                {
+                    "name": "手机壁纸",
+                    "variable": "mobileView"
+                }
+            ]
+        },
+        {
+            "key": "formats",
+            "type": "checkbox",
+            "name": "壁纸格式",
+            "descripts": "勾选要爬取的壁纸格式",
+            "default": ["image", "video"],
+            "options": [
+                {
+                    "name": "图片",
+                    "variable": "image"
+                },
+                {
+                    "name": "视频",
+                    "variable": "video"
+                }
+            ]
+        },
+        {
+            "key": "tags",
+            "type": "list",
+            "name": "标签集合",
+            "descripts": "只要图片标签列表中包含任意一个标签（包括子字符串）就下载该图片",
+            "default": [],
+            "options": ["二次元", "少女", "动漫"]
+        }
+    ]
+}

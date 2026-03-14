@@ -115,6 +115,13 @@ pub struct PickImagesResponse {
   pub uris: Vec<String>,
 }
 
+/// 选视频结果：返回 content:// URI 列表。需 Serialize 供 command 返回前端。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickVideosResponse {
+  pub uris: Vec<String>,
+}
+
 /// 选 .kgpg 文件结果。需 Serialize 供 command 返回前端。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,6 +132,12 @@ pub struct PickKgpgFileResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenImageArgs {
+  pub uri: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenVideoArgs {
   pub uri: String,
 }
 

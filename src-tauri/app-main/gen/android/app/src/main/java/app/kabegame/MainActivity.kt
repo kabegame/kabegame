@@ -16,12 +16,19 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResult
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.activity.result.ActivityResultCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.webkit.WebViewCompat
 import app.kabegame.plugin.PickerLauncherHost
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.net.URLDecoder
+import android.content.res.AssetFileDescriptor
 
 class MainActivity : TauriActivity(), PickerLauncherHost {
   private var folderPickerCallback: ActivityResultCallback<ActivityResult>? = null
@@ -49,6 +56,14 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
   ) { uris ->
     pickImagesCallback?.invoke(uris)
     pickImagesCallback = null
+  }
+
+  private var pickVideosCallback: ((List<Uri>) -> Unit)? = null
+  private val pickVideosLauncher = registerForActivityResult(
+    ActivityResultContracts.PickMultipleVisualMedia()
+  ) { uris ->
+    pickVideosCallback?.invoke(uris)
+    pickVideosCallback = null
   }
 
   private var pickKgpgCallback: ((ActivityResult) -> Unit)? = null
@@ -103,6 +118,30 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
       webView.post {
           wrapWebViewClientForContentUriStreaming(webView)
       }
+
+      // 注入系统安全区到 WebView CSS 变量，供 env(safe-area-inset-*) 在 Android 上使用
+      var lastSystemInsets: Insets? = null
+      fun injectSafeAreaInsets(w: WebView, v: android.view.View, insets: Insets? = null) {
+          val i = insets ?: lastSystemInsets ?: ViewCompat.getRootWindowInsets(v)?.getInsets(WindowInsetsCompat.Type.systemBars()) ?: return
+          lastSystemInsets = i
+          val density = v.resources.displayMetrics.density
+          val top = i.top / density
+          val bottom = i.bottom / density
+          val left = i.left / density
+          val right = i.right / density
+          val js = """
+              (function(){var d=document.documentElement;if(d){d.style.setProperty('--sat','${top}px');d.style.setProperty('--sab','${bottom}px');d.style.setProperty('--sal','${left}px');d.style.setProperty('--sar','${right}px');}})();
+          """.trimIndent()
+          w.evaluateJavascript(js, null)
+      }
+      ViewCompat.setOnApplyWindowInsetsListener(webView) { v, windowInsets ->
+          val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+          injectSafeAreaInsets(webView, v, insets)
+          windowInsets
+      }
+      ViewCompat.requestApplyInsets(webView)
+      // 页面加载后再次注入（insets 可能早于 document 就绪）
+      webView.postDelayed({ injectSafeAreaInsets(webView, webView) }, 500)
   }
 
   /**
@@ -117,7 +156,7 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
                       android.util.Log.w("Kabegame", "Failed to get original WebViewClient, skipping content:// streaming wrapper")
                       return
                   }
-              val wrappedClient = ContentUriStreamClient(applicationContext.contentResolver, originalClient)
+              val wrappedClient = ContentUriStreamClient(applicationContext, originalClient)
               webView.webViewClient = wrappedClient
               android.util.Log.d("Kabegame", "ContentUriStreamClient wrapper installed")
           } catch (e: Exception) {
@@ -148,6 +187,14 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
       .setMediaType(ActivityResultContracts.PickVisualMedia.ImageOnly)
       .build()
     pickImagesLauncher.launch(request)
+  }
+
+  override fun launchPickVideos(onResult: (List<Uri>) -> Unit) {
+    pickVideosCallback = onResult
+    val request = androidx.activity.result.PickVisualMediaRequest.Builder()
+      .setMediaType(ActivityResultContracts.PickVisualMedia.VideoOnly)
+      .build()
+    pickVideosLauncher.launch(request)
   }
 
   override fun launchPickKgpgFile(intent: Intent, onResult: (ActivityResult) -> Unit) {
@@ -255,22 +302,29 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
 }
 
 /**
- * WebViewClient 包装类：拦截 content:// URI 请求并返回流式 WebResourceResponse
+ * WebViewClient 包装类：拦截 content:// 与本地文件请求并返回流式 WebResourceResponse
  * 
- * 对于 content:// 请求：
+ * 对于 content:// 请求（kbg-content.localhost）：
  * - 使用 ContentResolver.openInputStream() 打开流
  * - 返回 WebResourceResponse，WebView 会流式读取并解码渲染
+ * 
+ * 对于本地文件请求（kbg-local.localhost）：
+ * - 将 URL path 解码为本地文件路径，仅允许应用私有目录（filesDir/cacheDir/externalFilesDir）
+ * - 使用 FileInputStream 返回
  * 
  * 对于其他请求：
  * - 委托给原始 WebViewClient（通常是 wry 的 RustWebViewClient）
  */
 private class ContentUriStreamClient(
-    private val contentResolver: ContentResolver,
+    private val context: android.content.Context,
     private val delegate: WebViewClient
 ) : WebViewClient() {
 
+    private val contentResolver: ContentResolver get() = context.contentResolver
+
     companion object {
-        private const val PROXY_HOST = "kbg-content.localhost"
+        private const val PROXY_HOST_CONTENT = "kbg-content.localhost"
+        private const val PROXY_HOST_LOCAL = "kbg-local.localhost"
     }
 
     override fun shouldInterceptRequest(
@@ -279,13 +333,56 @@ private class ContentUriStreamClient(
     ): WebResourceResponse? {
         val uri = request?.url ?: return delegate.shouldInterceptRequest(view, request)
 
-        // 拦截代理 URL：http://kbg-content.localhost/... → content://...
-        if (uri.host == PROXY_HOST) {
+        // 拦截本地文件代理 URL：http://kbg-local.localhost/<path> → 应用私有目录文件
+        if (uri.host == PROXY_HOST_LOCAL) {
             try {
-                val contentUriStr = uri.toString().replace("http://$PROXY_HOST/", "content://")
+                val pathRaw = uri.path ?: return delegate.shouldInterceptRequest(view, request)
+                val pathDecoded = URLDecoder.decode(pathRaw, "UTF-8")
+                if (pathDecoded.isBlank()) return delegate.shouldInterceptRequest(view, request)
+                val file = File(pathDecoded.trim())
+                if (!file.exists() || !file.isFile) {
+                    android.util.Log.w("Kabegame", "Local file not found: $pathDecoded")
+                    return delegate.shouldInterceptRequest(view, request)
+                }
+                val canonicalPath = file.canonicalPath
+                val allowedDirs = listOfNotNull(
+                    context.filesDir?.canonicalPath,
+                    context.cacheDir?.canonicalPath,
+                    context.getExternalFilesDir(null)?.canonicalPath
+                )
+                val allowed = allowedDirs.any { dir -> canonicalPath.startsWith(dir) }
+                if (!allowed) {
+                    android.util.Log.w("Kabegame", "Local file path not in allowed dirs: $canonicalPath")
+                    return delegate.shouldInterceptRequest(view, request)
+                }
+                val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+                    file.extension.lowercase()
+                ) ?: "application/octet-stream"
+                val inputStream = FileInputStream(file)
+                return WebResourceResponse(mimeType, null, inputStream)
+            } catch (e: Exception) {
+                android.util.Log.e("Kabegame", "Error serving local file: $uri", e)
+                return delegate.shouldInterceptRequest(view, request)
+            }
+        }
+
+        // 拦截代理 URL：http://kbg-content.localhost/... → content://...
+        if (uri.host == PROXY_HOST_CONTENT) {
+            try {
+                val contentUriStr = uri.toString().replace("http://$PROXY_HOST_CONTENT/", "content://")
                 val contentUri = Uri.parse(contentUriStr)
 
                 val mimeType = contentResolver.getType(contentUri) ?: guessMimeTypeFromUri(contentUri)
+
+                // 视频等媒体需要 Range 支持，否则 WebView 会一直加载不播放
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    val rangeHeader = request.requestHeaders?.get("Range")
+                    if (!rangeHeader.isNullOrBlank()) {
+                        val rangeResponse = tryOpenRangeResponse(contentUri, mimeType, rangeHeader)
+                        if (rangeResponse != null) return rangeResponse
+                        // Range 解析或打开失败则回退到整段流
+                    }
+                }
 
                 val inputStream = contentResolver.openInputStream(contentUri)
                     ?: run {
@@ -301,6 +398,120 @@ private class ContentUriStreamClient(
         }
 
         return delegate.shouldInterceptRequest(view, request)
+    }
+
+    /**
+     * 解析 Range 头并返回 206 响应；失败返回 null，调用方回退到整段流。
+     * 格式：bytes=start-end 或 bytes=start-
+     */
+    private fun tryOpenRangeResponse(contentUri: Uri, mimeType: String, rangeHeader: String): WebResourceResponse? {
+        val range = parseRangeHeader(rangeHeader) ?: return null
+        val afd = try {
+            contentResolver.openAssetFileDescriptor(contentUri, "r") ?: return null
+        } catch (e: Exception) {
+            return null
+        }
+        return try {
+            val total = afd.length
+            if (total < 0) {
+                afd.close()
+                return null // 长度未知时不支持 range
+            }
+            val totalSize = total.toLong()
+            var start = range.first
+            var end = range.second
+            if (end < 0) end = totalSize - 1
+            end = minOf(end, totalSize - 1)
+            if (start > end) {
+                afd.close()
+                return null
+            }
+            start = maxOf(0, start)
+
+            val inputStream = afd.createInputStream() ?: run {
+                afd.close()
+                return null
+            }
+            val skipped = inputStream.skip(start)
+            if (skipped != start) {
+                inputStream.close()
+                afd.close()
+                return null
+            }
+            val contentLength = (end - start + 1).toInt()
+            val boundedStream = BoundedInputStream(inputStream, contentLength)
+            val streamWithAfd = StreamWithAfd(boundedStream, afd)
+
+            val responseHeaders = mutableMapOf<String, String>(
+                "Content-Range" to "bytes $start-$end/$totalSize",
+                "Content-Length" to contentLength.toString(),
+                "Accept-Ranges" to "bytes",
+            )
+            WebResourceResponse(mimeType, null, 206, "Partial Content", responseHeaders, streamWithAfd)
+        } catch (e: Exception) {
+            android.util.Log.w("Kabegame", "Range response failed for $contentUri", e)
+            afd.close()
+            null
+        }
+    }
+
+    /** 关闭流时同时关闭 AssetFileDescriptor，避免泄漏 */
+    private class StreamWithAfd(
+        private val inner: InputStream,
+        private val afd: AssetFileDescriptor
+    ) : InputStream() {
+        override fun read(): Int = inner.read()
+        override fun read(b: ByteArray, off: Int, len: Int): Int = inner.read(b, off, len)
+        override fun close() {
+            try {
+                inner.close()
+            } finally {
+                afd.close()
+            }
+        }
+    }
+
+    /** 解析 "bytes=start-end" 或 "bytes=start-"；返回 Pair(start, end)，end 为 -1 表示到末尾 */
+    private fun parseRangeHeader(rangeHeader: String): Pair<Long, Long>? {
+        val value = rangeHeader.trim().lowercase()
+        if (!value.startsWith("bytes=")) return null
+        val part = value.removePrefix("bytes=").trim()
+        val dash = part.indexOf('-')
+        if (dash < 0) return null
+        val startStr = part.substring(0, dash).trim()
+        val endStr = part.substring(dash + 1).trim()
+        val start = startStr.toLongOrNull() ?: return null
+        if (start < 0) return null
+        val end = if (endStr.isEmpty()) -1L else endStr.toLongOrNull() ?: return null
+        if (end >= 0 && end < start) return null
+        return Pair(start, end)
+    }
+
+    /**
+     * 只读取最多 maxBytes 的输入流，之后返回 -1
+     */
+    private class BoundedInputStream(
+        private val inner: InputStream,
+        private var remaining: Int
+    ) : InputStream() {
+        override fun read(): Int {
+            if (remaining <= 0) return -1
+            val b = inner.read()
+            if (b >= 0) remaining--
+            return b
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (remaining <= 0) return -1
+            val toRead = minOf(len, remaining)
+            val n = inner.read(b, off, toRead)
+            if (n > 0) remaining -= n
+            return n
+        }
+
+        override fun close() {
+            inner.close()
+        }
     }
 
     /**

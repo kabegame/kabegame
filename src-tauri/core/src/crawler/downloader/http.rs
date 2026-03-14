@@ -360,6 +360,7 @@ async fn download_http(
         file.write_all(&buffer)
             .await
             .map_err(|e| format!("Failed to write file: {e}"))?;
+        file.flush().await.map_err(|e| format!("Failed to flush file: {e}"))?;
 
         return Ok(current_url.to_string());
     }

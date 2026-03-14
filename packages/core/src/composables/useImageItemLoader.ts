@@ -1,6 +1,6 @@
 import { computed, ref, watch, type Ref } from "vue";
 import type { ImageInfo } from "../types/image";
-import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID } from "../env";
+import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID, LOCAL_FILE_PROXY_PREFIX } from "../env";
 import { fileToUrl, thumbnailToUrl } from "../httpServer";
 import {
   getImageStateCache,
@@ -37,6 +37,13 @@ function toAndroidProxyUrl(path: string | undefined): string {
   return raw.replace("content://", CONTENT_URI_PROXY_PREFIX);
 }
 
+/** Android 本地文件路径 → kbg-local.localhost 代理 URL（用于 GIF 缩略图等） */
+function toAndroidLocalFileUrl(path: string | undefined): string {
+  const raw = (path || "").trim();
+  if (!raw || raw.startsWith("content://")) return "";
+  return LOCAL_FILE_PROXY_PREFIX + raw;
+}
+
 export function useImageItemLoader(options: UseImageItemLoaderOptions) {
   const displayUrl = ref("");
   const isImageLoading = ref(true);
@@ -54,12 +61,26 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
   const urlPlan = computed(() => {
     const image = options.image.value;
     if (IS_ANDROID) {
+      const isVideo = image.type === "video";
+      const thumbPath = image.thumbnailPath || image.localPath;
+      const localFileUrl = toAndroidLocalFileUrl(thumbPath);
+      const contentUrl = toAndroidProxyUrl(image.localPath);
+      if (isVideo && localFileUrl) {
+        return {
+          primaryUrl: localFileUrl,
+          fallbackUrl: contentUrl,
+          primaryKind: "thumbnail" as UrlKind,
+          thumbnailUrl: localFileUrl,
+          originalUrl: contentUrl,
+          useDesktopLayers: false,
+        };
+      }
       return {
-        primaryUrl: toAndroidProxyUrl(image.localPath),
+        primaryUrl: contentUrl,
         fallbackUrl: "",
         primaryKind: "original" as UrlKind,
         thumbnailUrl: "",
-        originalUrl: toAndroidProxyUrl(image.localPath),
+        originalUrl: contentUrl,
         useDesktopLayers: false,
       };
     }

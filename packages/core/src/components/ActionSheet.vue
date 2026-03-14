@@ -272,7 +272,7 @@ const closeSubmenu = () => {
   align-items: center;
   justify-content: space-around;
   padding: 12px 8px;
-  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  padding-bottom: calc(12px + var(--sab, env(safe-area-inset-bottom, 0px)));
   background: var(--anime-bg-card);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -352,7 +352,7 @@ const closeSubmenu = () => {
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
   padding: 8px 0;
-  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  padding-bottom: calc(8px + var(--sab, env(safe-area-inset-bottom, 0px)));
   max-height: 60vh;
   overflow-y: auto;
   border-top: 1px solid var(--anime-border);
