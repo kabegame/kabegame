@@ -158,6 +158,7 @@ const confirmSaveTaskAsConfig = async () => {
       url: "",
       outputDir: task.outputDir,
       userConfig: task.userConfig ?? {},
+      httpHeaders: task.httpHeaders ?? {},
     });
     ElMessage.success("已保存为配置");
     saveConfigVisible.value = false;

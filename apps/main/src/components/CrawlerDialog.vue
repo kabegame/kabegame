@@ -8,23 +8,43 @@
         </template>
         <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
             <el-form-item label="运行配置">
-                <AndroidPickerSelect
-                    :model-value="selectedRunConfigId ?? null"
-                    :options="runConfigPickerOptions"
-                    title="运行配置"
-                    placeholder="选择配置（可选）"
-                    clearable
-                    @update:model-value="setRunConfigId"
-                />
+                <div class="run-config-row">
+                    <AndroidPickerSelect
+                        :model-value="selectedRunConfigId ?? null"
+                        :options="runConfigPickerOptions"
+                        title="运行配置"
+                        placeholder="选择配置（可选）"
+                        clearable
+                        @update:model-value="setRunConfigId"
+                    />
+                    <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="showAddConfigDialog = true">
+                        新增配置
+                    </el-button>
+                    <el-button v-else class="run-config-btn" @click="updateCurrentConfig">
+                        更新到当前配置
+                    </el-button>
+                </div>
             </el-form-item>
             <el-form-item label="选择源">
-                <AndroidPickerSelect
-                    :model-value="form.pluginId ?? null"
-                    :options="pluginPickerOptions"
-                    title="选择源"
-                    placeholder="请选择源"
-                    @update:model-value="(v) => (form.pluginId = v ?? '')"
-                />
+                <div class="plugin-select-with-warning">
+                    <AndroidPickerSelect
+                        :model-value="form.pluginId ?? null"
+                        :options="pluginPickerOptions"
+                        title="选择源"
+                        placeholder="请选择源"
+                        @update:model-value="onPluginChange"
+                    >
+                        <template #option="{ option }">
+                            <span class="plugin-picker-option-label">{{ option.label }}</span>
+                            <el-icon v-if="option.warning" class="plugin-picker-option-warning" title="安卓不支持">
+                                <WarningFilled />
+                            </el-icon>
+                        </template>
+                    </AndroidPickerSelect>
+                    <el-icon v-if="isSelectedPluginJs" class="plugin-js-warning-icon" title="安卓不支持 JS 插件">
+                        <WarningFilled />
+                    </el-icon>
+                </div>
             </el-form-item>
             <el-form-item v-if="!IS_ANDROID" label="输出目录">
                 <el-input v-model="form.outputDir" placeholder="留空使用默认位置" clearable>
@@ -81,10 +101,6 @@
                     </div>
                     <div class="header-actions">
                         <el-button size="small" @click="addHeaderRow">添加 Header</el-button>
-                        <el-button v-if="selectedRunConfigId" size="small" type="primary"
-                            @click="saveHeadersToSelectedConfig">
-                            保存到当前配置
-                        </el-button>
                     </div>
                     <div class="config-hint">
                         提示：这里的 HTTP 头会用于爬虫请求（to/fetch_json）与图片下载（download_image），不会注入到脚本变量里。
@@ -92,16 +108,6 @@
                 </div>
             </el-form-item>
 
-            <el-divider content-position="left">保存为配置（可选）</el-divider>
-            <el-form-item>
-                <el-checkbox v-model="saveAsConfig">保存为配置（下次再使用啦）</el-checkbox>
-            </el-form-item>
-            <el-form-item label="配置名称" v-if="saveAsConfig">
-                <el-input v-model="configName" placeholder="请输入配置名称" />
-            </el-form-item>
-            <el-form-item label="配置描述" v-if="saveAsConfig">
-                <el-input v-model="configDescription" placeholder="可选：配置说明" />
-            </el-form-item>
         </el-form>
         <div class="crawl-dialog-footer crawl-dialog-footer--android">
             <el-button type="primary" @click="handleStartCrawl" :disabled="!selectedRunConfigId && !form.pluginId">
@@ -119,36 +125,45 @@
         :show-close="true">
         <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
             <el-form-item label="运行配置">
-                <el-select v-model="selectedRunConfigId" placeholder="选择配置（可选）" style="width: 100%" clearable
-                    popper-class="run-config-select-dropdown">
-                    <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="cfg.name" :value="cfg.id">
-                        <div class="run-config-option">
-                            <div class="run-config-info">
-                                <div class="name">
-                                    <el-tag v-if="configCompatibilityStatus[cfg.id]?.versionCompatible === false"
-                                        type="danger" size="small" style="margin-right: 6px;">
-                                        不兼容
-                                    </el-tag>
-                                    <el-tag v-else-if="configCompatibilityStatus[cfg.id]?.contentCompatible === false"
-                                        type="warning" size="small" style="margin-right: 6px;">
-                                        不兼容
-                                    </el-tag>
-                                    {{ cfg.name }}
-                                    <span v-if="cfg.description" class="desc"> - {{ cfg.description }}</span>
+                <div class="run-config-row">
+                    <el-select v-model="selectedRunConfigId" placeholder="选择配置（可选）" clearable
+                        popper-class="run-config-select-dropdown" class="run-config-select"
+                        @change="(v: string | null) => void setRunConfigId(v)">
+                        <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="cfg.name" :value="cfg.id">
+                            <div class="run-config-option">
+                                <div class="run-config-info">
+                                    <div class="name">
+                                        <el-tag v-if="configCompatibilityStatus[cfg.id]?.versionCompatible === false"
+                                            type="danger" size="small" style="margin-right: 6px;">
+                                            不兼容
+                                        </el-tag>
+                                        <el-tag v-else-if="configCompatibilityStatus[cfg.id]?.contentCompatible === false"
+                                            type="warning" size="small" style="margin-right: 6px;">
+                                            不兼容
+                                        </el-tag>
+                                        {{ cfg.name }}
+                                        <span v-if="cfg.description" class="desc"> - {{ cfg.description }}</span>
+                                    </div>
+                                </div>
+                                <div class="run-config-actions">
+                                    <el-button type="danger" link size="small" @click.stop="handleDeleteConfig(cfg.id)">
+                                        删除
+                                    </el-button>
                                 </div>
                             </div>
-                            <div class="run-config-actions">
-                                <el-button type="danger" link size="small" @click.stop="handleDeleteConfig(cfg.id)">
-                                    删除
-                                </el-button>
-                            </div>
-                        </div>
-                    </el-option>
-                </el-select>
+                        </el-option>
+                    </el-select>
+                    <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="showAddConfigDialog = true">
+                        保存到配置
+                    </el-button>
+                    <el-button v-else class="run-config-btn" @click="updateCurrentConfig">
+                        更新到配置
+                    </el-button>
+                </div>
             </el-form-item>
             <el-form-item label="选择源">
                 <el-select v-model="form.pluginId" placeholder="请选择源" style="width: 100%"
-                    popper-class="crawl-plugin-select-dropdown">
+                    popper-class="crawl-plugin-select-dropdown" @change="onPluginChange">
                     <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
                         <div class="plugin-option">
                             <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]"
@@ -215,10 +230,6 @@
                     </div>
                     <div class="header-actions">
                         <el-button size="small" @click="addHeaderRow">添加 Header</el-button>
-                        <el-button v-if="selectedRunConfigId" size="small" type="primary"
-                            @click="saveHeadersToSelectedConfig">
-                            保存到当前配置
-                        </el-button>
                     </div>
                     <div class="config-hint">
                         提示：这里的 HTTP 头会用于爬虫请求（to/fetch_json）与图片下载（download_image），不会注入到脚本变量里。
@@ -226,16 +237,6 @@
                 </div>
             </el-form-item>
 
-            <el-divider content-position="left">保存为配置（可选）</el-divider>
-            <el-form-item>
-                <el-checkbox v-model="saveAsConfig">保存为配置（下次再使用啦）</el-checkbox>
-            </el-form-item>
-            <el-form-item label="配置名称" v-if="saveAsConfig">
-                <el-input v-model="configName" placeholder="请输入配置名称" />
-            </el-form-item>
-            <el-form-item label="配置描述" v-if="saveAsConfig">
-                <el-input v-model="configDescription" placeholder="可选：配置说明" />
-            </el-form-item>
         </el-form>
 
         <template #footer>
@@ -245,21 +246,43 @@
             </el-button>
         </template>
     </ElDialog>
+
+    <!-- 新增配置弹窗 -->
+    <ElDialog
+        v-model="showAddConfigDialog"
+        title="新增配置"
+        width="400px"
+        :close-on-click-modal="false"
+        @closed="newConfigName = ''; newConfigDescription = '';">
+        <el-form label-width="80px">
+            <el-form-item label="名称" required>
+                <el-input v-model="newConfigName" placeholder="请输入配置名称" maxlength="80" show-word-limit />
+            </el-form-item>
+            <el-form-item label="描述">
+                <el-input v-model="newConfigDescription" type="textarea" placeholder="可选：配置说明" :rows="2" />
+            </el-form-item>
+        </el-form>
+        <template #footer>
+            <el-button @click="showAddConfigDialog = false">取消</el-button>
+            <el-button type="primary" @click="handleAddConfig">保存</el-button>
+        </template>
+    </ElDialog>
 </template>
 
 <script setup lang="ts">
 import { computed, watch, ref, nextTick } from "vue";
-import { FolderOpened, Grid } from "@element-plus/icons-vue";
+import { FolderOpened, Grid, WarningFilled } from "@element-plus/icons-vue";
 import { ElDialog } from "element-plus";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
 import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore } from "@/stores/crawler";
+import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
@@ -270,6 +293,8 @@ interface Props {
         pluginId?: string;
         outputDir?: string;
         vars?: Record<string, any>;
+        httpHeaders?: Record<string, string>;
+        outputAlbumId?: string | null;
     };
 }
 
@@ -280,6 +305,7 @@ const emit = defineEmits<{
 }>();
 
 const crawlerStore = useCrawlerStore();
+const crawlerDrawerStore = useCrawlerDrawerStore();
 const pluginStore = usePluginStore();
 const albumStore = useAlbumStore();
 
@@ -305,7 +331,47 @@ const loadHeadersFromConfig = (cfgId: string | null) => {
     const headers = cfg?.httpHeaders || {};
     httpHeaderRows.value = Object.entries(headers).map(([k, v]) => ({ key: k, value: v }));
 };
-const saveHeadersToSelectedConfig = async () => {
+
+const showAddConfigDialog = ref(false);
+const newConfigName = ref("");
+const newConfigDescription = ref("");
+useModalBack(showAddConfigDialog);
+
+async function handleAddConfig() {
+    const name = newConfigName.value.trim();
+    if (!name) {
+        ElMessage.warning("请输入配置名称");
+        return;
+    }
+    if (!form.value.pluginId) {
+        ElMessage.warning("请先选择源");
+        return;
+    }
+    const backendVars =
+        pluginVars.value.length > 0
+            ? expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[])
+            : {};
+    const httpHeaders = toHttpHeadersMap();
+    try {
+        const cfg = await crawlerStore.addRunConfig({
+            name,
+            description: newConfigDescription.value?.trim() || undefined,
+            pluginId: form.value.pluginId,
+            url: "",
+            outputDir: form.value.outputDir || undefined,
+            userConfig: backendVars,
+            httpHeaders,
+        });
+        showAddConfigDialog.value = false;
+        // 仅设置选中项，由 watch(selectedRunConfigId) 统一载入并弹一次「配置已载入」提示
+        selectedRunConfigId.value = cfg.id;
+    } catch (e) {
+        console.error("新增配置失败:", e);
+        ElMessage.error("保存失败");
+    }
+}
+
+async function updateCurrentConfig() {
     const cfgId = selectedRunConfigId.value;
     if (!cfgId) return;
     const cfg = crawlerStore.runConfigs.find((c) => c.id === cfgId);
@@ -313,17 +379,29 @@ const saveHeadersToSelectedConfig = async () => {
         ElMessage.error("配置不存在");
         return;
     }
+    if (!form.value.pluginId) {
+        ElMessage.warning("请先选择源");
+        return;
+    }
+    const backendVars =
+        pluginVars.value.length > 0
+            ? expandVarsForBackend(form.value.vars, pluginVars.value as PluginVarDef[])
+            : {};
+    const httpHeaders = toHttpHeadersMap();
     try {
         await crawlerStore.updateRunConfig({
             ...cfg,
-            httpHeaders: toHttpHeadersMap(),
+            pluginId: form.value.pluginId,
+            outputDir: form.value.outputDir || undefined,
+            userConfig: backendVars,
+            httpHeaders,
         });
-        ElMessage.success("已保存到当前配置");
+        ElMessage.success("已更新到当前配置");
     } catch (e) {
         console.error("更新配置失败:", e);
         ElMessage.error("保存失败");
     }
-};
+}
 
 const visible = computed({
     get: () => props.modelValue,
@@ -343,8 +421,18 @@ const runConfigPickerOptions = computed(() =>
     }))
 );
 const pluginPickerOptions = computed(() =>
-    plugins.value.map((p) => ({ label: p.name, value: p.id }))
+    plugins.value.map((p) => ({
+        label: p.name,
+        value: p.id,
+        warning: p.scriptType === "js",
+    }))
 );
+
+const selectedPlugin = computed(() => {
+    const id = form.value.pluginId;
+    return id ? plugins.value.find((p) => p.id === id) : null;
+});
+const isSelectedPluginJs = computed(() => selectedPlugin.value?.scriptType === "js");
 const outputAlbumPickerOptions = computed(() => [
     ...albums.value.map((a) => ({ label: a.name, value: a.id })),
     { label: "+ 新建画册", value: "__create_new__" },
@@ -363,9 +451,6 @@ const pluginConfig = usePluginConfig();
 const {
     form,
     selectedRunConfigId,
-    saveAsConfig,
-    configName,
-    configDescription,
     formRef,
     pluginVars,
     isRequired,
@@ -375,6 +460,8 @@ const {
     normalizeVarsForUI,
     getValidationRules,
     loadPluginVars,
+    loadPluginVarDefs,
+    resetFormVarsToDefaults,
     selectOutputDir,
     selectFolder,
     selectFile,
@@ -382,8 +469,23 @@ const {
     resetForm,
 } = pluginConfig;
 
-function setRunConfigId(v: string | null) {
+async function setRunConfigId(v: string | null) {
     selectedRunConfigId.value = v ?? null;
+    if (v) {
+        await loadConfigToForm(v);
+        loadHeadersFromConfig(v);
+    }
+}
+
+function onPluginChange(v: string | null | undefined) {
+    const id = v ?? "";
+    form.value.pluginId = id;
+    if (id) {
+        loadPluginVars(id);
+    } else {
+        pluginVars.value = [];
+        form.value.vars = {};
+    }
 }
 function setOutputAlbumId(v: string | null) {
     selectedOutputAlbumId.value = v ?? null;
@@ -422,6 +524,7 @@ const {
     form,
     selectedRunConfigId,
     loadPluginVars,
+    loadPluginVarDefs,
     normalizeVarsForUI,
     isRequired,
     visible
@@ -462,6 +565,15 @@ const handleStartCrawl = async () => {
     try {
         if (!form.value.pluginId) {
             ElMessage.warning("请选择源");
+            return;
+        }
+
+        if (IS_ANDROID && isSelectedPluginJs.value) {
+            await ElMessageBox.alert(
+                "当前选择的是 JS 插件，安卓端暂不支持运行。请选择 Rhai 插件，或在桌面端使用 JS 插件。",
+                "安卓不支持 JS 插件",
+                { confirmButtonText: "好叭", type: "warning" as const }
+            );
             return;
         }
 
@@ -514,23 +626,6 @@ const handleStartCrawl = async () => {
                 : {};
         const httpHeaders = toHttpHeadersMap();
 
-        // 可选：保存为运行配置（不影响本次直接运行）
-        if (saveAsConfig.value) {
-            if (!configName.value.trim()) {
-                ElMessage.warning("请输入配置名称");
-                return;
-            }
-            await crawlerStore.addRunConfig({
-                name: configName.value.trim(),
-                description: configDescription.value?.trim() || undefined,
-                pluginId: form.value.pluginId,
-                url: "",
-                outputDir: form.value.outputDir || undefined,
-                userConfig: backendVars,
-                httpHeaders,
-            });
-        }
-
         // 添加任务（异步执行，不等待完成）
         // outputAlbumId 单独传递，不作为 userConfig 的一部分
         crawlerStore.addTask(
@@ -542,6 +637,15 @@ const handleStartCrawl = async () => {
         ).catch(error => {
             // 这里的错误是任务初始化失败，由 watch 监听来处理任务状态变化时的错误显示
             console.error("任务执行失败:", error);
+        });
+
+        // 保存为「上次运行配置」，下次打开对话框时恢复
+        crawlerDrawerStore.setLastRunConfig({
+            pluginId: form.value.pluginId,
+            outputDir: form.value.outputDir || "",
+            vars: { ...form.value.vars },
+            httpHeaders: { ...httpHeaders },
+            outputAlbumId: selectedOutputAlbumId.value ?? null,
         });
 
         // 重置表单
@@ -581,35 +685,48 @@ watch(visible, async (open) => {
         console.debug("导入弹窗打开时刷新画册列表失败（忽略）：", e);
     }
 
-    // 如果传入了初始配置，应用它
+    // 如果传入了初始配置，应用它（命令式：仅加载定义，再手动赋值）
     if (props.initialConfig) {
         if (props.initialConfig.pluginId) {
             form.value.pluginId = props.initialConfig.pluginId;
-            await loadPluginVars(props.initialConfig.pluginId);
+            await loadPluginVarDefs(props.initialConfig.pluginId);
+            if (props.initialConfig.vars) {
+                form.value.vars = normalizeVarsForUI(
+                    props.initialConfig.vars,
+                    pluginVars.value as PluginVarDef[]
+                );
+            } else {
+                resetFormVarsToDefaults();
+            }
         }
-        if (props.initialConfig.outputDir) {
-            form.value.outputDir = props.initialConfig.outputDir;
+        if (props.initialConfig.outputDir !== undefined) {
+            form.value.outputDir = props.initialConfig.outputDir ?? "";
         }
-        if (props.initialConfig.vars) {
-            // 等待插件变量加载完成后再设置变量值
-            await nextTick();
-            Object.assign(form.value.vars, props.initialConfig.vars);
+        if (props.initialConfig.httpHeaders && Object.keys(props.initialConfig.httpHeaders).length > 0) {
+            httpHeaderRows.value = Object.entries(props.initialConfig.httpHeaders).map(([k, v]) => ({ key: k, value: v }));
         }
+        if (props.initialConfig.outputAlbumId !== undefined) {
+            selectedOutputAlbumId.value = props.initialConfig.outputAlbumId ?? null;
+        }
+    } else if (crawlerDrawerStore.lastRunConfig) {
+        // 无 initialConfig 时恢复上次运行的配置（命令式）
+        const last = crawlerDrawerStore.lastRunConfig;
+        form.value.pluginId = last.pluginId;
+        form.value.outputDir = last.outputDir;
+        await loadPluginVarDefs(last.pluginId);
+        form.value.vars = normalizeVarsForUI(
+            last.vars || {},
+            pluginVars.value as PluginVarDef[]
+        );
+        httpHeaderRows.value = Object.keys(last.httpHeaders).length > 0
+            ? Object.entries(last.httpHeaders).map(([k, v]) => ({ key: k, value: v }))
+            : [];
+        selectedOutputAlbumId.value = last.outputAlbumId;
     } else if (form.value.pluginId) {
-        await loadPluginVars(form.value.pluginId);
+        await loadPluginVarDefs(form.value.pluginId);
     }
 
     await checkAllConfigsCompatibility();
-});
-
-// 监听插件选择变化
-watch(() => form.value.pluginId, (newPluginId) => {
-    if (newPluginId) {
-        loadPluginVars(newPluginId);
-    } else {
-        pluginVars.value = [];
-        form.value.vars = {};
-    }
 });
 
 // 监听对话框关闭，重置输出画册选择
@@ -635,15 +752,6 @@ watch(selectedOutputAlbumId, (newValue) => {
     }
 });
 
-// 监听运行配置选择变化，选择时直接载入配置
-watch(selectedRunConfigId, async (cfgId) => {
-    if (!cfgId) {
-        return;
-    }
-
-    await loadConfigToForm(cfgId);
-    loadHeadersFromConfig(cfgId);
-});
 </script>
 
 <style lang="scss" scoped>
@@ -680,6 +788,30 @@ watch(selectedRunConfigId, async (cfgId) => {
         color: var(--anime-text-primary);
         font-weight: 500;
     }
+}
+
+.run-config-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+}
+
+.run-config-row .run-config-select,
+.run-config-row > *:first-child {
+    flex: 1;
+    min-width: 0;
+}
+
+.run-config-btn {
+    flex-shrink: 0;
+    background-color: #fff !important;
+    color: var(--el-text-color-primary);
+}
+
+.run-config-btn:hover {
+    background-color: var(--el-fill-color-light) !important;
+    color: var(--el-text-color-primary);
 }
 
 .config-hint {
@@ -726,6 +858,33 @@ watch(selectedRunConfigId, async (cfgId) => {
     height: 20px;
     flex-shrink: 0;
     color: var(--anime-text-secondary);
+}
+
+.plugin-select-with-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.plugin-js-warning-icon {
+    color: var(--el-color-danger);
+    font-size: 20px;
+    flex-shrink: 0;
+}
+
+.plugin-picker-option-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.plugin-picker-option-warning {
+    flex-shrink: 0;
+    margin-left: 8px;
+    color: var(--el-color-danger);
+    font-size: 18px;
 }
 
 .run-config-option {

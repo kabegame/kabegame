@@ -318,3 +318,49 @@ pub async fn surf_update_root_url(id: String, root_url: String) -> Result<(), St
 pub async fn surf_delete_record(id: String) -> Result<(), String> {
     Storage::global().delete_surf_record(&id)
 }
+
+/// 返回当前畅游会话对应站点的 Cookie（与浏览器请求头中发送的一致，含 HttpOnly）。
+#[cfg(not(target_os = "android"))]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfCookiesResult {
+    pub cookie_string: String,
+    pub host: Option<String>,
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_get_cookies(app: AppHandle) -> Result<SurfCookiesResult, String> {
+    let surf_window = app
+        .get_webview_window("surf")
+        .ok_or_else(|| "畅游窗口未打开".to_string())?;
+    let (record_id, host) = {
+        let guard = SurfSessionState::global()
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        let record_id = guard
+            .current_record_id
+            .clone()
+            .ok_or_else(|| "当前无畅游会话".to_string())?;
+        let host = guard.current_host.clone();
+        (record_id, host)
+    };
+
+    let record = Storage::global()
+        .get_surf_record(&record_id)?
+        .ok_or_else(|| "畅游记录不存在".to_string())?;
+    let parsed = url::Url::parse(&record.root_url).map_err(|e| format!("无效 root_url: {}", e))?;
+
+    let cookies = surf_window
+        .cookies_for_url(parsed)
+        .map_err(|e| format!("获取 Cookie 失败: {}", e))?;
+    let mut pairs: Vec<String> = Vec::new();
+    for c in cookies {
+        pairs.push(format!("{}={}", c.name(), c.value()));
+    }
+    let cookie_string = pairs.join("; ");
+    Ok(SurfCookiesResult {
+        cookie_string,
+        host,
+    })
+}

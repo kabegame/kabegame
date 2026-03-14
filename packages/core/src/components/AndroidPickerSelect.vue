@@ -10,7 +10,26 @@
 
     <Teleport to="body">
         <van-popup v-model:show="showPicker" position="bottom" round>
+            <!-- 有 option 插槽时用自定义列表，可渲染叹号等 -->
+            <template v-if="useOptionSlot">
+                <div class="android-picker-select__header">
+                    <span class="android-picker-select__title">{{ title }}</span>
+                    <van-button type="default" size="small" @click="showPicker = false">取消</van-button>
+                </div>
+                <div class="android-picker-select__list">
+                    <div
+                        v-for="opt in optionsWithClear"
+                        :key="String(opt.value)"
+                        class="android-picker-select__list-item"
+                        :class="{ 'is-selected': opt.value === modelValue }"
+                        @click="onSelectOption(opt)"
+                    >
+                        <slot name="option" :option="opt" />
+                    </div>
+                </div>
+            </template>
             <van-picker
+                v-else
                 v-model="pickerSelectedValues"
                 :title="title"
                 :columns="pickerColumns"
@@ -22,13 +41,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, useSlots, watch } from "vue";
 import { ArrowDown } from "@element-plus/icons-vue";
 import { useModalBack } from "../composables/useModalBack";
 
 export interface AndroidPickerSelectOption {
     label: string;
     value: string;
+    /** 可选：供 option 插槽使用，如标记为 JS 插件在安卓不支持 */
+    warning?: boolean;
 }
 
 const props = withDefaults(
@@ -46,6 +67,9 @@ const props = withDefaults(
 const emit = defineEmits<{
     "update:modelValue": [value: string | null];
 }>();
+
+const slots = useSlots();
+const useOptionSlot = computed(() => !!slots.option);
 
 const showPicker = ref(false);
 useModalBack(showPicker);
@@ -102,6 +126,12 @@ function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)
     const value = raw === "" || raw === null || raw === undefined ? null : String(raw);
     emit("update:modelValue", value);
 }
+
+function onSelectOption(opt: AndroidPickerSelectOption) {
+    showPicker.value = false;
+    const value = opt.value === "" || opt.value === null || opt.value === undefined ? null : opt.value;
+    emit("update:modelValue", value);
+}
 </script>
 
 <style scoped lang="scss">
@@ -143,5 +173,38 @@ function onPickerConfirm({ selectedValues }: { selectedValues: (string | number)
     margin-left: 8px;
     font-size: 14px;
     color: var(--anime-text-secondary);
+}
+
+.android-picker-select__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.android-picker-select__title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--anime-text-primary);
+}
+
+.android-picker-select__list {
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+.android-picker-select__list-item {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 10px 16px;
+    cursor: pointer;
+    color: var(--anime-text-primary);
+
+    &.is-selected {
+        color: var(--el-color-primary);
+    }
 }
 </style>

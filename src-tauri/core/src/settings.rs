@@ -80,6 +80,8 @@ pub enum SettingKey {
     AutoOpenCrawlerWebview,
     /// 最大并发下载数
     MaxConcurrentDownloads,
+    /// 每次下载完成后进入下一轮前等待（ms，100-10000）
+    DownloadIntervalMs,
     /// 网络重试次数
     NetworkRetryCount,
     /// 图片双击动作
@@ -88,6 +90,8 @@ pub enum SettingKey {
     GalleryImageAspectRatio,
     /// 画廊列数（0=动态，1-4=固定）
     GalleryGridColumns,
+    /// 画廊图片在方框内溢出时的垂直对齐（center/top/bottom），仅桌面端使用
+    GalleryImageObjectPosition,
     /// 自动去重
     AutoDeduplicate,
     /// 默认下载目录
@@ -275,10 +279,12 @@ impl Settings {
             SettingKey::AutoLaunch => SettingValue::Bool(false),
             SettingKey::AutoOpenCrawlerWebview => SettingValue::Bool(false),
             SettingKey::MaxConcurrentDownloads => SettingValue::U32(3),
+            SettingKey::DownloadIntervalMs => SettingValue::U32(500),
             SettingKey::NetworkRetryCount => SettingValue::U32(2),
             SettingKey::ImageClickAction => SettingValue::String("preview".to_string()),
             SettingKey::GalleryImageAspectRatio => SettingValue::OptionString(None),
             SettingKey::GalleryGridColumns => SettingValue::U32(0),
+            SettingKey::GalleryImageObjectPosition => SettingValue::String("center".to_string()),
             SettingKey::AutoDeduplicate => SettingValue::Bool(false),
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
             SettingKey::WallpaperEngineDir => SettingValue::OptionString(None),
@@ -491,10 +497,12 @@ Write-Output "$style,$tile"
             SettingKey::AutoLaunch,
             SettingKey::AutoOpenCrawlerWebview,
             SettingKey::MaxConcurrentDownloads,
+            SettingKey::DownloadIntervalMs,
             SettingKey::NetworkRetryCount,
             SettingKey::ImageClickAction,
             SettingKey::GalleryImageAspectRatio,
             SettingKey::GalleryGridColumns,
+            SettingKey::GalleryImageObjectPosition,
             SettingKey::AutoDeduplicate,
             SettingKey::DefaultDownloadDir,
             SettingKey::WallpaperEngineDir,
@@ -608,9 +616,14 @@ Write-Output "$style,$tile"
             }
             SettingKey::MaxConcurrentDownloads
             | SettingKey::NetworkRetryCount
-            |             SettingKey::WallpaperRotationIntervalMinutes
+            | SettingKey::WallpaperRotationIntervalMinutes
             | SettingKey::GalleryGridColumns => {
                 Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32))
+            }
+            SettingKey::DownloadIntervalMs => {
+                let v = json.as_u64().unwrap_or(500) as u32;
+                let v = v.clamp(100, 10000);
+                Ok(SettingValue::U32(v))
             }
             SettingKey::WallpaperVolume => {
                 let v = json.as_f64().unwrap_or(1.0);
@@ -623,6 +636,7 @@ Write-Output "$style,$tile"
                 Ok(SettingValue::F64(v))
             }
             SettingKey::ImageClickAction
+            | SettingKey::GalleryImageObjectPosition
             | SettingKey::WallpaperRotationMode
             | SettingKey::WallpaperStyle
             | SettingKey::WallpaperRotationTransition
@@ -696,10 +710,12 @@ Write-Output "$style,$tile"
             SettingKey::AutoLaunch => "autoLaunch".to_string(),
             SettingKey::AutoOpenCrawlerWebview => "autoOpenCrawlerWebview".to_string(),
             SettingKey::MaxConcurrentDownloads => "maxConcurrentDownloads".to_string(),
+            SettingKey::DownloadIntervalMs => "downloadIntervalMs".to_string(),
             SettingKey::NetworkRetryCount => "networkRetryCount".to_string(),
             SettingKey::ImageClickAction => "imageClickAction".to_string(),
             SettingKey::GalleryImageAspectRatio => "galleryImageAspectRatio".to_string(),
             SettingKey::GalleryGridColumns => "galleryGridColumns".to_string(),
+            SettingKey::GalleryImageObjectPosition => "galleryImageObjectPosition".to_string(),
             SettingKey::AutoDeduplicate => "autoDeduplicate".to_string(),
             SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
             SettingKey::WallpaperEngineDir => "wallpaperEngineDir".to_string(),
@@ -885,6 +901,16 @@ Write-Output "$style,$tile"
         }
     }
 
+    pub async fn get_download_interval_ms(&self) -> Result<u32, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::DownloadIntervalMs) {
+            let val = cell.lock().await;
+            Ok(val.as_u32().unwrap_or(500).clamp(100, 10000))
+        } else {
+            Ok(500)
+        }
+    }
+
     pub async fn get_image_click_action(&self) -> Result<String, String> {
         let cells = Self::cells();
         if let Some(cell) = cells.get(&SettingKey::ImageClickAction) {
@@ -902,6 +928,16 @@ Write-Output "$style,$tile"
             Ok(val.as_option_string().unwrap_or(None))
         } else {
             Ok(None)
+        }
+    }
+
+    pub async fn get_gallery_image_object_position(&self) -> Result<String, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::GalleryImageObjectPosition) {
+            let val = cell.lock().await;
+            Ok(val.as_string().unwrap_or_else(|| "center".to_string()))
+        } else {
+            Ok("center".to_string())
         }
     }
 
@@ -1189,6 +1225,19 @@ Write-Output "$style,$tile"
         Ok(())
     }
 
+    pub async fn set_download_interval_ms(&self, interval_ms: u32) -> Result<(), String> {
+        let clamped = interval_ms.clamp(100, 10000);
+        let cells = Self::cells();
+        let new_value = SettingValue::U32(clamped);
+        if let Some(cell) = cells.get(&SettingKey::DownloadIntervalMs) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::DownloadIntervalMs, &new_value).await;
+        Self::trigger_debounce_save().await?;
+        Ok(())
+    }
+
     pub async fn set_image_click_action(&self, action: String) -> Result<(), String> {
         let cells = Self::cells();
         let new_value = SettingValue::String(action);
@@ -1212,6 +1261,18 @@ Write-Output "$style,$tile"
             *val = new_value.clone();
         }
         Self::emit_setting_change(SettingKey::GalleryImageAspectRatio, &new_value).await;
+        Self::trigger_debounce_save().await?;
+        Ok(())
+    }
+
+    pub async fn set_gallery_image_object_position(&self, position: String) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::String(position.clone());
+        if let Some(cell) = cells.get(&SettingKey::GalleryImageObjectPosition) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::GalleryImageObjectPosition, &new_value).await;
         Self::trigger_debounce_save().await?;
         Ok(())
     }

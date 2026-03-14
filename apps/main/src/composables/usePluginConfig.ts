@@ -189,8 +189,8 @@ export function usePluginConfig() {
     }
   };
 
-  // 加载插件变量定义
-  const loadPluginVars = async (pluginId: string) => {
+  // 仅加载插件变量定义到 pluginVars，不修改 form.vars（用于载入配置等场景）
+  const loadPluginVarDefs = async (pluginId: string) => {
     try {
       const vars = await invoke<Array<{
         key: string;
@@ -203,22 +203,28 @@ export function usePluginConfig() {
         pluginId,
       });
       pluginVars.value = vars || [];
-
-      // DEV 调试：确认后端实际返回的 var 定义是否已更新（排查"插件已更新但导入仍旧配置"）
-      console.debug("[loadPluginVars] get_plugin_vars result:", {
+      console.debug("[loadPluginVarDefs] get_plugin_vars result:", {
         pluginId,
         vars: pluginVars.value,
       });
-
-      // 使用默认值初始化表单
-      form.value.vars = normalizeVarsForUI(
-        {},
-        pluginVars.value as PluginVarDef[]
-      );
     } catch (error) {
       console.error("加载插件变量失败:", error);
       pluginVars.value = [];
     }
+  };
+
+  // 根据当前 pluginVars 用默认值重置 form.vars
+  const resetFormVarsToDefaults = () => {
+    form.value.vars = normalizeVarsForUI(
+      {},
+      pluginVars.value as PluginVarDef[]
+    );
+  };
+
+  // 加载定义 + 重置表单为默认值（用户手动切换插件时使用）
+  const loadPluginVars = async (pluginId: string) => {
+    await loadPluginVarDefs(pluginId);
+    resetFormVarsToDefaults();
   };
 
   // 选择输出目录
@@ -320,6 +326,8 @@ export function usePluginConfig() {
     normalizeVarsForUI,
     getValidationRules,
     loadPluginVars,
+    loadPluginVarDefs,
+    resetFormVarsToDefaults,
     selectOutputDir,
     selectFolder,
     selectFile,

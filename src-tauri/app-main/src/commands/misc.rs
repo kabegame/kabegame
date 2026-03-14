@@ -558,22 +558,6 @@ pub async fn copy_image_to_clipboard(app: AppHandle, image_id: String) -> Result
 }
 
 #[tauri::command]
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub async fn read_file(path: String) -> tauri::ipc::Response {
-    #[cfg(target_os = "android")]
-    if path.starts_with("content://") {
-        if let Ok(data) = kabegame_core::crawler::content_io::get_content_io_provider()
-            .read_file_bytes(&path)
-            .await
-        {
-            return tauri::ipc::Response::new(data);
-        }
-    }
-    let data = tokio::fs::read(path).await.unwrap();
-    tauri::ipc::Response::new(data)
-}
-
-#[tauri::command]
 #[cfg(target_os = "android")]
 pub async fn share_file(
     app: AppHandle,

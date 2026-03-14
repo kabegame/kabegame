@@ -1,10 +1,13 @@
 <template>
-  <div ref="rootEl" class="image-item" :class="{
-    'image-item-selected': selected,
-    'item-entering': enteringClassActive,
-    'item-leaving': isLeaving,
-    'image-item-android': IS_ANDROID,
-  }" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
+  <div ref="rootEl" class="image-item" :class="[
+    {
+      'image-item-selected': selected,
+      'item-entering': enteringClassActive,
+      'item-leaving': isLeaving,
+      'image-item-android': IS_ANDROID,
+    },
+    thumbnailObjectPositionClass,
+  ]" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
     <!-- 任务失败图片：下载重试（不阻挡点击/选择/右键） -->
     <el-tooltip v-if="image.isTaskFailed" content="重新下载" placement="top" :show-after="300">
       <div class="retry-download-badge" @click.stop="$emit('retryDownload')">
@@ -92,6 +95,7 @@ import type { ImageInfo } from "../../types/image";
 import type { ImageClickAction } from "../../stores/settings";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import { useImageItemLoader } from "../../composables/useImageItemLoader";
+import { useSettingsStore } from "../../stores/settings";
 import { IS_ANDROID } from "../../env";
 
 interface Props {
@@ -121,6 +125,15 @@ const imageRef = toRef(props, "image");
 const gridColumnsRef = toRef(props, "gridColumns");
 
 const rootEl = ref<HTMLElement | null>(null);
+const settingsStore = useSettingsStore();
+// 仅桌面端：图片溢出方框时的垂直对齐（center/top/bottom），通过 class 控制 .thumbnail 的 object-position
+const thumbnailObjectPositionClass = computed(() => {
+  if (IS_ANDROID) return "";
+  const pos = settingsStore.values.galleryImageObjectPosition;
+  if (pos === "top") return "image-item--object-top";
+  if (pos === "bottom") return "image-item--object-bottom";
+  return "image-item--object-center";
+});
 
 // 虚拟滚动下挂载时已有 isEntering，若直接绑 class 浏览器可能不触发 CSS 动画；延迟一帧再加 class 以触发入场动画
 const enteringClassActive = ref(false);
@@ -348,7 +361,22 @@ const handleAnimationEnd = (event: AnimationEvent) => {
     object-fit: cover;
     will-change: contents, opacity;
     -webkit-tap-highlight-color: transparent;
+  }
 
+  /* 仅桌面端：图片溢出方框时的垂直对齐（Android 使用 contain，不适用） */
+  &.image-item--object-top .thumbnail:not(.thumbnail-android) {
+    object-position: center top;
+  }
+
+  &.image-item--object-bottom .thumbnail:not(.thumbnail-android) {
+    object-position: center bottom;
+  }
+
+  &.image-item--object-center .thumbnail:not(.thumbnail-android) {
+    object-position: center center;
+  }
+
+  .thumbnail {
     &.thumbnail-loading {
       animation: fadeInImage 0.4s ease-in;
     }

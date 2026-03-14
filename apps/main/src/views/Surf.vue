@@ -49,6 +49,14 @@
           <el-button v-if="surfStore.sessionActive" size="large" @click="handleCloseSession">
             结束会话
           </el-button>
+          <el-button
+            v-if="surfStore.sessionActive"
+            size="large"
+            :loading="cookieLoading"
+            @click="handleViewCookies"
+          >
+            查看网站 Cookie
+          </el-button>
         </div>
 
         <!-- 畅游记录列表 -->
@@ -98,6 +106,31 @@
     />
 
     <ElDialog
+      v-model="cookieDialogVisible"
+      title="当前站点 Cookie"
+      width="560px"
+      class="surf-cookie-dialog"
+      @closed="cookieString = ''"
+    >
+      <p v-if="cookieHost" class="surf-cookie-host">站点：{{ cookieHost }}</p>
+      <p class="surf-cookie-tip">以下为畅游窗口对该站点实际发送的 Cookie（含 HttpOnly），可用于脚本等场景。</p>
+      <el-input
+        v-model="cookieString"
+        type="textarea"
+        :rows="8"
+        readonly
+        placeholder="暂无 Cookie"
+        class="surf-cookie-textarea"
+      />
+      <template #footer>
+        <el-button @click="cookieDialogVisible = false">关闭</el-button>
+        <el-button type="primary" :disabled="!cookieString" @click="copyCookie">
+          {{ copyDone ? "已复制" : "复制" }}
+        </el-button>
+      </template>
+    </ElDialog>
+
+    <ElDialog
       v-model="surfHelpVisible"
       title="畅游说明"
       width="420px"
@@ -141,6 +174,13 @@ const surfHeaderShowIds = computed(() =>
 
 const surfHelpVisible = ref(false);
 useModalBack(surfHelpVisible);
+
+const cookieDialogVisible = ref(false);
+useModalBack(cookieDialogVisible);
+const cookieString = ref("");
+const cookieHost = ref<string | null>(null);
+const cookieLoading = ref(false);
+const copyDone = ref(false);
 
 const inputUrl = ref("");
 const pluginQuickSelect = ref("");
@@ -256,6 +296,32 @@ const handleCloseSession = async () => {
     ElMessage.error(e?.message || String(e) || "结束会话失败");
   }
 };
+
+async function handleViewCookies() {
+  cookieLoading.value = true;
+  try {
+    const result = await invoke<{ cookieString: string; host?: string | null }>("surf_get_cookies");
+    cookieString.value = result.cookieString || "";
+    cookieHost.value = result.host ?? null;
+    cookieDialogVisible.value = true;
+    copyDone.value = false;
+  } catch (e: any) {
+    ElMessage.error(e?.message || String(e) || "获取 Cookie 失败");
+  } finally {
+    cookieLoading.value = false;
+  }
+}
+
+async function copyCookie() {
+  if (!cookieString.value) return;
+  try {
+    await navigator.clipboard.writeText(cookieString.value);
+    copyDone.value = true;
+    ElMessage.success("已复制到剪贴板");
+  } catch {
+    ElMessage.error("复制失败");
+  }
+}
 
 const handleRecordClick = async (record: SurfRecord) => {
   if (surfStore.sessionActive) return;
@@ -525,5 +591,21 @@ onMounted(async () => {
 }
 .surf-help-dialog .surf-help-p:last-of-type {
   margin-bottom: 0;
+}
+
+.surf-cookie-dialog .surf-cookie-host {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+.surf-cookie-dialog .surf-cookie-tip {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
+}
+.surf-cookie-dialog .surf-cookie-textarea {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
 }
 </style>

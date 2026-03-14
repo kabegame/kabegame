@@ -128,6 +128,8 @@ export interface Plugin {
     nextPageSelector?: string;
     titleSelector?: string;
   };
+  /** 脚本类型：rhai | js。安卓仅支持 rhai。 */
+  scriptType?: string;
 }
 
 export const usePluginStore = defineStore("plugins", () => {
