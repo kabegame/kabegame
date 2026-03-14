@@ -36,6 +36,9 @@ pub struct Plugin {
     pub built_in: bool,
     pub config: HashMap<String, serde_json::Value>,
     pub selector: Option<PluginSelector>,
+    /// 脚本类型：rhai（crawl.rhai）或 js（crawl.js）。安卓仅支持 rhai。
+    #[serde(rename = "scriptType")]
+    pub script_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +101,8 @@ struct ParsedKgpgForCache {
     config: Option<PluginConfig>,
     doc: Option<String>,
     icon_present: bool,
+    /// "rhai" | "js"，由包内是否存在 crawl.js 决定
+    script_type: String,
 }
 
 impl PluginManager {
@@ -170,6 +175,7 @@ impl PluginManager {
             .map_err(|e| format!("读取插件文件大小失败: {}", e))?
             .len();
 
+        let script_type = self.detect_script_type_from_kgpg(kgpg_path)?;
         Ok(Plugin {
             id: plugin_id,
             name: manifest.name,
@@ -183,6 +189,7 @@ impl PluginManager {
             built_in: false,
             config: HashMap::new(),
             selector: config.and_then(|c| c.selector),
+            script_type,
         })
     }
 
@@ -456,6 +463,24 @@ impl PluginManager {
         Ok(Some(content))
     }
 
+    /// 从 .kgpg 文件检测脚本类型：存在 crawl.js 返回 "js"，否则 "rhai"（用于 build_runtime_plugin_from_kgpg_path 等）
+    fn detect_script_type_from_kgpg(&self, zip_path: &Path) -> Result<String, String> {
+        let mut file =
+            fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
+        if crate::kgpg::read_kgpg2_meta(&mut file).ok().flatten().is_some() {
+            let _ = file.seek(SeekFrom::Start(crate::kgpg::KGPG2_TOTAL_HEADER_SIZE as u64));
+        } else {
+            let _ = file.seek(SeekFrom::Start(0));
+        }
+        let mut archive =
+            ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
+        Ok(if archive.by_name("crawl.js").is_ok() {
+            "js".to_string()
+        } else {
+            "rhai".to_string()
+        })
+    }
+
     /// 从 ZIP 格式的插件文件中读取 config.json（供 CLI/外部调用复用）
     pub fn read_plugin_config_public(
         &self,
@@ -607,6 +632,7 @@ impl PluginManager {
             .map_err(|e| format!("Failed to get plugin file metadata: {}", e))?
             .len();
 
+        let script_type = self.detect_script_type_from_kgpg(&target_path)?;
         let plugin = Plugin {
             id: plugin_id.clone(),
             name: manifest.name.clone(),
@@ -620,6 +646,7 @@ impl PluginManager {
             built_in: false,
             config: HashMap::new(),
             selector: config.and_then(|c| c.selector),
+            script_type,
         };
 
         // 安装/覆盖后：局部刷新缓存，避免后续命令重复扫目录/读盘
@@ -1735,6 +1762,7 @@ impl PluginManager {
                     built_in,
                     config: HashMap::new(),
                     selector: parsed.config.clone().and_then(|c| c.selector),
+                    script_type: parsed.script_type.clone(),
                 };
                 by_id.insert(plugin_id.clone(), path.clone());
                 plugins.insert(plugin_id, plugin);
@@ -1789,6 +1817,7 @@ impl PluginManager {
                     built_in,
                     config: HashMap::new(),
                     selector: parsed.config.clone().and_then(|c| c.selector),
+                    script_type: parsed.script_type.clone(),
                 };
 
                 // 如果已存在（用户目录），先移除旧条目
@@ -1923,6 +1952,7 @@ impl PluginManager {
                 built_in,
                 config: HashMap::new(),
                 selector: parsed.config.clone().and_then(|c| c.selector),
+                script_type: parsed.script_type.clone(),
             };
 
             let mut guard = self.installed_cache.lock().await;
@@ -2061,11 +2091,19 @@ impl PluginManager {
         let icon_present =
             icon_present_from_meta.unwrap_or_else(|| archive.by_name("icon.png").is_ok());
 
+        // 脚本类型：存在 crawl.js 为 js，否则为 rhai（安卓仅支持 rhai）
+        let script_type = if archive.by_name("crawl.js").is_ok() {
+            "js".to_string()
+        } else {
+            "rhai".to_string()
+        };
+
         Ok(ParsedKgpgForCache {
             manifest,
             config,
             doc,
             icon_present,
+            script_type,
         })
     }
 }

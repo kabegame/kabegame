@@ -202,6 +202,24 @@ pub async fn ensure_minimum_duration(download_start_time: u64, min_duration_ms: 
     }
 }
 
+/// 每次下载完成后，按设置等待一段时间再进入下一轮；等待期间可被 exit_notify 中断。
+async fn wait_after_download_if_needed(pool: &DownloadPool) {
+    let interval_ms = Settings::global()
+        .get_download_interval_ms()
+        .await
+        .unwrap_or(500)
+        .clamp(100, 10000);
+    if interval_ms == 0 {
+        return;
+    }
+    let exit_notify = &pool.exit_notify;
+    let interval_ms_u64 = interval_ms as u64;
+    tokio::select! {
+        _ = sleep(Duration::from_millis(interval_ms_u64)) => {}
+        _ = exit_notify.notified() => {}
+    }
+}
+
 /// 在阻塞线程中计算文件 SHA256，使用大缓冲区顺序读，避免 tokio 小缓冲 + 多次 await 的开销。
 pub async fn compute_file_hash(path: &Path) -> Result<String, String> {
     let mut file = tokio::fs::File::open(path)
@@ -1040,6 +1058,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                     drop(st);
                     pool.capacity_notify.notify_waiters(); // 唤醒所有等待入队的 download() 调用
                     pool.job_notify.notify_one();
+                    wait_after_download_if_needed(&pool).await;
                     continue;
                 }
             }
@@ -1834,6 +1853,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
         drop(st);
         pool.capacity_notify.notify_waiters(); // 唤醒所有等待入队的 download() 调用
         pool.job_notify.notify_one();
+        wait_after_download_if_needed(&pool).await;
     }
 }
 

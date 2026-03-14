@@ -373,6 +373,8 @@ pub fn run() {
             surf_update_root_url,
             #[cfg(not(target_os = "android"))]
             surf_delete_record,
+            #[cfg(not(target_os = "android"))]
+            surf_get_cookies,
             // --- Run Configs ---
             get_run_configs,
             add_run_config,
@@ -411,12 +413,16 @@ pub fn run() {
             set_auto_open_crawler_webview,
             get_max_concurrent_downloads,
             set_max_concurrent_downloads,
+            get_download_interval_ms,
+            set_download_interval_ms,
             get_network_retry_count,
             set_network_retry_count,
             get_image_click_action,
             set_image_click_action,
             get_gallery_image_aspect_ratio,
             set_gallery_image_aspect_ratio,
+            get_gallery_image_object_position,
+            set_gallery_image_object_position,
             get_gallery_grid_columns,
             set_gallery_grid_columns,
             get_auto_deduplicate,

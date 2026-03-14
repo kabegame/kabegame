@@ -22,6 +22,7 @@ export function useConfigCompatibility(
   form: Ref<{ pluginId: string; outputDir: string; vars: Record<string, any> }>,
   selectedRunConfigId: Ref<string | null>,
   loadPluginVars: (pluginId: string) => Promise<void>,
+  loadPluginVarDefs: (pluginId: string) => Promise<void>,
   normalizeVarsForUI: (
     rawVars: Record<string, any>,
     defs: PluginVarDef[]
@@ -90,19 +91,24 @@ export function useConfigCompatibility(
         }
         break;
       case "checkbox":
-        if (!Array.isArray(value)) {
-          return { valid: false, error: "值必须是数组" };
-        }
-        if (varDef.options && Array.isArray(varDef.options)) {
-          const validValues = varDef.options.map((opt) =>
-            typeof opt === "string"
-              ? opt
-              : (opt as any).variable || (opt as any).value
-          );
-          const invalidValues = value.filter((v) => !validValues.includes(v));
-          if (invalidValues.length > 0) {
-            return { valid: false, error: `包含无效选项` };
+        // 保存的配置可能是对象 { a: true, b: false }（后端格式）或数组（旧格式）
+        if (Array.isArray(value)) {
+          if (varDef.options && Array.isArray(varDef.options)) {
+            const validValues = varDef.options.map((opt) =>
+              typeof opt === "string"
+                ? opt
+                : (opt as any).variable || (opt as any).value
+            );
+            const invalidValues = value.filter((v) => !validValues.includes(v));
+            if (invalidValues.length > 0) {
+              return { valid: false, error: `包含无效选项` };
+            }
           }
+        } else if (value && typeof value === "object" && !Array.isArray(value)) {
+          // 后端存储格式，视为有效，由 normalizeVarsForUI 转为 UI 数组
+          break;
+        } else {
+          return { valid: false, error: "值必须是数组或对象" };
         }
         break;
       case "list":
@@ -198,8 +204,8 @@ export function useConfigCompatibility(
       return { success: false, message: "插件不存在，无法载入配置" };
     }
 
-    // 加载插件变量定义
-    await loadPluginVars(config.pluginId);
+    // 仅加载变量定义，不重置 form.vars
+    await loadPluginVarDefs(config.pluginId);
 
     const userConfig = config.userConfig || {};
     const matchedVars: Record<string, any> = {};
@@ -332,7 +338,6 @@ export function useConfigCompatibility(
       ElMessage.error("配置不存在");
       return;
     }
-
     // 检查兼容性
     const compatibility = await getConfigCompatibility(configId);
 
@@ -406,7 +411,7 @@ export function useConfigCompatibility(
         // `watch(form.pluginId)` 不会触发，导致导入弹窗仍展示旧 vars。
         // 因此：当导入弹窗打开时，插件列表变更也要强制 reload 一次当前 plugin 的 vars + 保存配置。
         if (showCrawlerDialog.value && form.value.pluginId) {
-          await loadPluginVars(form.value.pluginId);
+          await loadPluginVarDefs(form.value.pluginId);
         }
         clearCompatibilityCache();
         await checkAllConfigsCompatibility();
@@ -417,21 +422,15 @@ export function useConfigCompatibility(
     // 打开导入对话框时，兜底刷新一次（保证下拉打开时就能看到兼容性提示）
     watch(showCrawlerDialog, async (open) => {
       if (!open) return;
-      // 关键：用户可能刚在"源/插件"页刷新或更新了已安装源（.kgpg 内的 config.json/var 定义变更）
-      // 但这里若 pluginId 没变，`watch(form.pluginId)` 不会触发，导致导入弹窗仍展示旧的变量/配置。
-      // 因此弹窗打开时做一次"兜底同步"：
-      // - 刷新已安装源列表（从文件系统重新读取 .kgpg）
-      // - 重新加载当前选中源的变量定义 + 已保存用户配置
-      // - 重新计算兼容性提示
+      // 用户可能刚在"源/插件"页刷新或更新了已安装源，弹窗打开时兜底刷新变量定义（不重置 form.vars）
       try {
         await pluginStore.loadPlugins();
       } catch (e) {
-        // 刷新失败不应阻塞弹窗打开；兼容性/变量加载会按现有状态继续
         console.debug("导入弹窗打开时刷新已安装源失败（忽略）：", e);
       }
 
       if (form.value.pluginId) {
-        await loadPluginVars(form.value.pluginId);
+        await loadPluginVarDefs(form.value.pluginId);
       }
 
       clearCompatibilityCache();

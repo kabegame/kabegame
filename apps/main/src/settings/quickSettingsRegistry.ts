@@ -7,6 +7,7 @@ import SettingNumberControl from "@kabegame/core/components/settings/controls/Se
 import SettingRadioControl from "@kabegame/core/components/settings/controls/SettingRadioControl.vue";
 
 import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
+import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
 import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngineDirSetting.vue";
 import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
@@ -57,6 +58,23 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
         comp: GalleryGridColumnsSetting,
         pages: ["gallery", "albumdetail"],
       } as QuickSettingItem<QuickSettingsPageId>] : []),
+      ...(!IS_ANDROID ? [{
+        key: "galleryImageObjectPosition",
+        label: "图片对齐方式",
+        description: "图片溢出方框时显示为居中、靠上或靠下",
+        comp: SettingRadioControl,
+        props: {
+          settingKey: "galleryImageObjectPosition",
+          command: "set_gallery_image_object_position",
+          buildArgs: (value: string) => ({ position: value }),
+          options: [
+            { label: "居中", value: "center" },
+            { label: "靠上", value: "top" },
+            { label: "靠下", value: "bottom" },
+          ],
+        },
+        pages: ["gallery", "albumdetail"],
+      } as QuickSettingItem<QuickSettingsPageId>] : []),
     ],
   },
   {
@@ -76,6 +94,13 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
           max: 10,
           step: 1,
         },
+        pages: ["gallery", "albumdetail"],
+      },
+      {
+        key: "downloadIntervalMs",
+        label: "下载间隔时间",
+        description: "每次下载完成后进入下一轮前等待（ms，100-10000）",
+        comp: DownloadIntervalSetting,
         pages: ["gallery", "albumdetail"],
       },
       {

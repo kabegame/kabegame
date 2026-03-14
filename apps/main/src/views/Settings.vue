@@ -87,6 +87,10 @@
                 <SettingNumberControl setting-key="maxConcurrentDownloads" :min="1" :max="10" :step="1" />
               </SettingRow>
 
+              <SettingRow label="下载间隔时间" description="每次下载完成后进入下一轮前等待（ms，100-10000）">
+                <DownloadIntervalSetting />
+              </SettingRow>
+
               <SettingRow label="网络失效重试次数" description="下载图片遇到网络错误/超时等情况时，额外重试的次数（0-10）">
                 <SettingNumberControl setting-key="networkRetryCount" :min="0" :max="10" :step="1" />
               </SettingRow>
@@ -131,6 +135,14 @@
 
               <SettingRow v-if="!IS_ANDROID" label="画廊列数" description="动态列数支持快捷键调整；固定列数时快捷键不生效">
                 <GalleryGridColumnsSetting />
+              </SettingRow>
+
+              <SettingRow v-if="!IS_ANDROID" label="图片对齐方式" description="图片溢出方框时显示为居中、靠上或靠下（仅桌面端）">
+                <SettingRadioControl setting-key="galleryImageObjectPosition" :options="[
+                  { label: '居中', value: 'center' },
+                  { label: '靠上', value: 'top' },
+                  { label: '靠下', value: 'bottom' },
+                ]" />
               </SettingRow>
 
               <SettingRow v-if="!IS_ANDROID" label="清理应用数据" description="将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启">
@@ -185,6 +197,7 @@ import SettingNumberControl from "@kabegame/core/components/settings/controls/Se
 import SettingSliderControl from "@kabegame/core/components/settings/controls/SettingSliderControl.vue";
 import SettingRadioControl from "@kabegame/core/components/settings/controls/SettingRadioControl.vue";
 import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
+import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
 import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";

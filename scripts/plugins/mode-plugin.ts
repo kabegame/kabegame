@@ -109,8 +109,6 @@ export class ModePlugin extends BasePlugin {
         };
       },
     );
-
-    // TODO: 对不同的mode执行不同的tap
   }
 
   // 准备资源文件（仅在需要时包含 dokan 相关文件）

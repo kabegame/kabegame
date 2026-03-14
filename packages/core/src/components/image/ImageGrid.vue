@@ -811,7 +811,7 @@ onMounted(async () => {
   window.addEventListener("resize", updateWindowAspectRatio);
 
   try {
-    !IS_ANDROID && await settingsStore.loadMany(["imageClickAction", "galleryImageAspectRatio"]);
+    !IS_ANDROID && await settingsStore.loadMany(["imageClickAction", "galleryImageAspectRatio", "galleryImageObjectPosition"]);
   } catch { }
 
   await nextTick();
@@ -909,6 +909,11 @@ watch(
       if (oldIds.size > 0 && !hasIntersection) {
         // 刷新/换页：新旧列表完全不同，清空选择
         clearSelection();
+        // 换页时平滑滚动到顶部，避免保留上一页的滚动位置
+        nextTick(() => {
+          const el = containerEl.value;
+          if (el) el.scrollTo({ top: 0, behavior: "smooth" });
+        });
       } else if (selectedIds.value.size > 0) {
         // 图片增减：从选择中移除被删除的图片
         const newSelected = new Set([...selectedIds.value].filter((id) => newIds.has(id)));

@@ -42,6 +42,14 @@ pub async fn get_network_retry_count() -> Result<u32, String> {
 }
 
 #[tauri::command]
+pub async fn get_download_interval_ms() -> Result<u32, String> {
+    Settings::global()
+        .get_download_interval_ms()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_image_click_action() -> Result<String, String> {
     Settings::global()
         .get_image_click_action()
@@ -53,6 +61,14 @@ pub async fn get_image_click_action() -> Result<String, String> {
 pub async fn get_gallery_image_aspect_ratio() -> Result<Option<String>, String> {
     Settings::global()
         .get_gallery_image_aspect_ratio()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_gallery_image_object_position() -> Result<String, String> {
+    Settings::global()
+        .get_gallery_image_object_position()
         .await
         .map_err(|e| e.to_string())
 }
@@ -317,6 +333,14 @@ pub async fn set_network_retry_count(count: u32) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn set_download_interval_ms(interval_ms: u32) -> Result<(), String> {
+    Settings::global()
+        .set_download_interval_ms(interval_ms)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn set_image_click_action(action: String) -> Result<(), String> {
     Settings::global()
         .set_image_click_action(action)
@@ -328,6 +352,14 @@ pub async fn set_image_click_action(action: String) -> Result<(), String> {
 pub async fn set_gallery_image_aspect_ratio(aspect_ratio: Option<String>) -> Result<(), String> {
     Settings::global()
         .set_gallery_image_aspect_ratio(aspect_ratio)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_gallery_image_object_position(position: String) -> Result<(), String> {
+    Settings::global()
+        .set_gallery_image_object_position(position)
         .await
         .map_err(|e| e.to_string())
 }
