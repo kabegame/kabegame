@@ -177,6 +177,7 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_share::init());
         builder = builder.plugin(tauri_plugin_compress::init());
         builder = builder.plugin(tauri_plugin_wallpaper::init());
+        builder = builder.plugin(tauri_plugin_task_notification::init());
     }
 
     #[cfg(not(target_os = "android"))]
@@ -449,6 +450,10 @@ pub fn run() {
             get_wallpaper_rotation_transition,
             get_wallpaper_transition_by_mode,
             get_wallpaper_mode,
+            get_wallpaper_volume,
+            set_wallpaper_volume,
+            get_wallpaper_video_playback_rate,
+            set_wallpaper_video_playback_rate,
             get_wallpaper_rotator_status,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             fix_wallpaper_zorder,
@@ -514,7 +519,11 @@ pub fn run() {
             #[cfg(not(target_os = "android"))]
             crawl_update_page_state,
             #[cfg(not(target_os = "android"))]
+            crawl_update_state,
+            #[cfg(not(target_os = "android"))]
             crawl_page_ready,
+            #[cfg(not(target_os = "android"))]
+            crawl_clear_site_data,
             #[cfg(not(target_os = "android"))]
             show_crawler_window,
             get_file_drop_supported_types,

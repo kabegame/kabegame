@@ -19,6 +19,8 @@ pub struct JsTaskContext {
     pub current_url: Option<String>,
     pub page_label: String,
     pub page_state: Option<Value>,
+    /// 整个任务上下文状态，由爬虫脚本通过 updateState 持久化，ctx.state 读取
+    pub state: Option<Value>,
     pub resume_mode: String,
     pub images_dir: String,
     pub output_album_id: Option<String>,
@@ -35,6 +37,7 @@ pub struct JsTaskPatch {
     pub current_url: Option<String>,
     pub page_label: Option<String>,
     pub page_state: Option<Value>,
+    pub state: Option<Value>,
     pub resume_mode: Option<String>,
 }
 
@@ -109,6 +112,9 @@ impl CrawlerWindowState {
         }
         if let Some(state) = patch.page_state {
             slot.context.page_state = Some(state);
+        }
+        if let Some(state) = patch.state {
+            slot.context.state = Some(state);
         }
         if let Some(mode) = patch.resume_mode {
             slot.context.resume_mode = mode;

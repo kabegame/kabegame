@@ -27,6 +27,15 @@ export async function pickImages(): Promise<string[] | null> {
 }
 
 /**
+ * 打开系统视频选择器（多选）。
+ * 仅 Android：使用 PickMultipleVisualMedia VideoOnly，返回 content:// URI 列表。
+ */
+export async function pickVideos(): Promise<string[] | null> {
+  const result = await invoke<{ uris: string[] }>('plugin:picker|pickVideos')
+  return result?.uris?.length ? result.uris : null
+}
+
+/**
  * 打开文件选择器选择 .kgpg 插件文件。
  * 仅 Android：将 content:// URI 复制到应用私有目录后返回可读路径。
  */
@@ -41,4 +50,12 @@ export async function pickKgpgFile(): Promise<string | null> {
  */
 export async function openImage(uri: string): Promise<void> {
   await invoke('plugin:picker|openImage', { uri })
+}
+
+/**
+ * 使用系统默认视频播放器打开指定 URI 的视频。
+ * 仅 Android：传入 content:// 或 file:// URI，会带上 FLAG_GRANT_READ_URI_PERMISSION。
+ */
+export async function openVideo(uri: string): Promise<void> {
+  await invoke('plugin:picker|openVideo', { uri })
 }

@@ -22,6 +22,10 @@ let busy = false;
 let mode: Mode = "fill";
 let transition: Transition = "fade";
 let currentMediaType: MediaType = "image";
+/** 视频壁纸音量 0~1，与设置页、预览内逻辑一致 */
+let wallpaperVolume = 1;
+/** 视频播放速率 0.25～3 */
+let wallpaperPlaybackRate = 1;
 
 // 调试状态
 let windowLabel = "";
@@ -194,24 +198,29 @@ function applyStyles() {
     }
 }
 
+/** 安全清除 img 元素的 src：使用 removeAttribute 避免触发 error 事件 */
+function clearImgSrc(el: HTMLImageElement | null) {
+    if (!el) return;
+    el.removeAttribute("src");
+}
+
 function commitTopToBase() {
     if (transitionGuardTimer) {
         window.clearTimeout(transitionGuardTimer);
         transitionGuardTimer = null;
     }
-    // 视频 top → base：与图片同一套流程
+    // 视频 top → base：交换 base/top 元素引用，避免重新加载视频导致闪烁
     if (topVideoSrc) {
-        const nextSrc = topVideoSrc;
-        baseVideoSrc = nextSrc;
+        baseVideoSrc = topVideoSrc;
         topVideoSrc = "";
         phase = "idle";
         currentPath = pendingPath || currentPath;
         pendingPath = "";
         busy = false;
-        if (baseVideoEl) {
-            baseVideoEl.src = nextSrc;
-            void baseVideoEl.play().catch(() => {});
-        }
+        // top 已在播放新内容，直接提升为 base；旧 base 降为 top 待复用
+        if (topVideoEl) topVideoEl.className = "wallpaper-img base";
+        if (baseVideoEl) baseVideoEl.className = "wallpaper-img top";
+        [baseVideoEl, topVideoEl] = [topVideoEl, baseVideoEl];
         resetVideoElement(topVideoEl);
         updateModeDisplay();
         applyStyles();
@@ -238,7 +247,7 @@ function commitTopToBase() {
     if (mode !== "tile") {
         if (baseImgEl) baseImgEl.src = baseSrc;
         if (topImgEl) {
-            topImgEl.src = "";
+            clearImgSrc(topImgEl);
             topImgEl.style.opacity = "0";
         }
     } else {
@@ -276,6 +285,7 @@ function handleTopTransitionEnd(e: TransitionEvent) {
 
 function handleImageError(type: "base" | "top") {
     if (type === "top") {
+        if (currentMediaType === "video") return;
         lastError = "top 层图片加载失败";
         if (transitionGuardTimer) {
             window.clearTimeout(transitionGuardTimer);
@@ -286,7 +296,7 @@ function handleImageError(type: "base" | "top") {
         pendingPath = "";
         busy = false;
         if (topImgEl) {
-            topImgEl.src = "";
+            clearImgSrc(topImgEl);
             topImgEl.style.opacity = "0";
         }
         if (topTileEl) {
@@ -310,13 +320,63 @@ function resetVideoElement(el: HTMLVideoElement | null) {
     }
 }
 
+/** 播放成功后取消静音并应用当前音量设置 */
+function unmuteVideo(el: HTMLVideoElement | null) {
+    if (!el) return;
+    const v = Math.min(1, Math.max(0, Number.isFinite(wallpaperVolume) ? wallpaperVolume : 1));
+    el.volume = v;
+    el.muted = v === 0;
+}
+
+/** 将当前 wallpaperVolume 应用到所有视频元素 */
+function applyWallpaperVolume() {
+    const v = Math.min(1, Math.max(0, Number.isFinite(wallpaperVolume) ? wallpaperVolume : 1));
+    if (baseVideoEl) {
+        baseVideoEl.volume = v;
+        baseVideoEl.muted = v === 0;
+    }
+    if (topVideoEl) {
+        topVideoEl.volume = v;
+        topVideoEl.muted = v === 0;
+    }
+}
+
+/** 当前生效的播放速率（0.25～3） */
+function getPlaybackRateMagnitude(): number {
+    return Math.min(3, Math.max(0.25, Number.isFinite(wallpaperPlaybackRate) ? wallpaperPlaybackRate : 1));
+}
+
+/** 将 loop 与 playbackRate 应用到单个视频元素 */
+function applyVideoLoopToElement(el: HTMLVideoElement | null) {
+    if (!el) return;
+    el.setAttribute("loop", "");
+    el.playbackRate = getPlaybackRateMagnitude();
+}
+
+/** 将 loop 与 playbackRate 应用到所有视频元素 */
+function applyVideoLoopMode() {
+    applyVideoLoopToElement(baseVideoEl);
+    applyVideoLoopToElement(topVideoEl);
+}
+
+/** 将当前播放速率应用到所有视频元素 */
+function applyWallpaperPlaybackRate() {
+    const rate = getPlaybackRateMagnitude();
+    for (const el of [baseVideoEl, topVideoEl]) {
+        if (!el?.src) continue;
+        el.playbackRate = rate;
+    }
+}
+
 async function playVideo(el: HTMLVideoElement | null, src: string) {
     if (!el) return;
     if (el.src !== src) {
         el.src = src;
     }
+    applyVideoLoopToElement(el);
     try {
         await el.play();
+        unmuteVideo(el);
     } catch {
         // 自动播放被阻止时保持静默，后续事件会重试
     }
@@ -362,11 +422,9 @@ async function setImagePath(path: string) {
             const videoUrl = await getVideoUrl(normalizedPath);
             lastError = "";
             currentMediaType = "video";
-            if (topImgEl) {
-                topImgEl.src = "";
-                topImgEl.style.opacity = "0";
-            }
-            if (baseImgEl) baseImgEl.src = "";
+            clearImgSrc(topImgEl);
+            if (topImgEl) topImgEl.style.opacity = "0";
+            clearImgSrc(baseImgEl);
             if (topTileEl) {
                 topTileEl.style.backgroundImage = "";
                 topTileEl.style.opacity = "0";
@@ -399,6 +457,7 @@ async function setImagePath(path: string) {
             if (topVideoEl) {
                 topVideoEl.src = videoUrl;
                 topVideoEl.style.opacity = "0";
+                applyVideoLoopToElement(topVideoEl);
             }
             updateModeDisplay();
             applyStyles();
@@ -407,7 +466,7 @@ async function setImagePath(path: string) {
             if (topVideoEl) topVideoEl.style.opacity = "";
             phase = "enter";
             applyStyles();
-            if (topVideoEl) void topVideoEl.play().catch(() => {});
+            if (topVideoEl) void topVideoEl.play().then(() => unmuteVideo(topVideoEl)).catch(() => {});
             if (transitionGuardTimer) window.clearTimeout(transitionGuardTimer);
             transitionGuardTimer = window.setTimeout(() => {
                 if (phase === "enter" && topVideoSrc) commitTopToBase();
@@ -441,7 +500,7 @@ async function setImagePath(path: string) {
             if (mode !== "tile") {
                 if (baseImgEl) baseImgEl.src = baseSrc;
                 if (topImgEl) {
-                    topImgEl.src = "";
+                    clearImgSrc(topImgEl);
                     topImgEl.style.opacity = "0";
                 }
             } else {
@@ -512,7 +571,7 @@ async function setImagePath(path: string) {
         phase = "idle";
         pendingPath = "";
         if (topImgEl) {
-            topImgEl.src = "";
+            clearImgSrc(topImgEl);
             topImgEl.style.opacity = "0";
         }
         if (topTileEl) {
@@ -563,22 +622,25 @@ function initDOM() {
     topTileEl = document.getElementById("top-tile") as HTMLElement;
 
     // 绑定事件监听器
+    // 空 src / 无 src 属性不视为加载错误，仅当有实际 src 加载失败时才触发错误处理
     if (baseImgEl) {
-        baseImgEl.addEventListener("error", () => handleImageError("base"));
+        baseImgEl.addEventListener("error", () => {
+            if (!baseImgEl?.getAttribute("src")) return;
+            handleImageError("base");
+        });
     }
     if (topImgEl) {
         topImgEl.addEventListener("transitionend", handleTopTransitionEnd);
-        topImgEl.addEventListener("error", () => handleImageError("top"));
-    }
-    if (baseVideoEl) {
-        baseVideoEl.addEventListener("error", () => {
-            lastError = "base 层视频加载失败";
-            updateDebugPanel();
+        topImgEl.addEventListener("error", () => {
+            if (!topImgEl?.getAttribute("src")) return;
+            handleImageError("top");
         });
     }
-    if (topVideoEl) {
-        topVideoEl.addEventListener("transitionend", handleTopTransitionEnd);
-        topVideoEl.addEventListener("error", () => {
+    // 视频元素：两个元素绑定相同的 transitionend 和角色感知的 error handler，
+    // 以支持 commitTopToBase 中 base/top 引用交换后仍能正确工作
+    const handleVideoError = (e: Event) => {
+        const el = e.currentTarget as HTMLVideoElement;
+        if (el === topVideoEl) {
             lastError = "top 层视频加载失败";
             if (transitionGuardTimer) {
                 window.clearTimeout(transitionGuardTimer);
@@ -590,8 +652,18 @@ function initDOM() {
             busy = false;
             resetVideoElement(topVideoEl);
             updateModeDisplay();
-            updateDebugPanel();
-        });
+        } else {
+            lastError = "base 层视频加载失败";
+        }
+        updateDebugPanel();
+    };
+    if (baseVideoEl) {
+        baseVideoEl.addEventListener("transitionend", handleTopTransitionEnd);
+        baseVideoEl.addEventListener("error", handleVideoError);
+    }
+    if (topVideoEl) {
+        topVideoEl.addEventListener("transitionend", handleTopTransitionEnd);
+        topVideoEl.addEventListener("error", handleVideoError);
     }
     if (topTileEl) {
         topTileEl.addEventListener("transitionend", handleTopTransitionEnd);
@@ -706,13 +778,24 @@ async function init() {
                 // 忽略，可能是无壁纸
             }
         }
+        if ("wallpaperVolume" in changes && typeof changes.wallpaperVolume === "number") {
+            const v = changes.wallpaperVolume;
+            wallpaperVolume = Math.min(1, Math.max(0, Number.isFinite(v) ? v : 1));
+            applyWallpaperVolume();
+        }
+        if ("wallpaperVideoPlaybackRate" in changes && typeof changes.wallpaperVideoPlaybackRate === "number") {
+            wallpaperPlaybackRate = Math.min(3, Math.max(0.25, changes.wallpaperVideoPlaybackRate));
+            applyWallpaperPlaybackRate();
+        }
     });
 
     // 初始化时从 settings 拉取当前状态
     try {
-        const [styleRes, transitionRes, pathRes] = await Promise.all([
+        const [styleRes, transitionRes, volumeRes, playbackRateRes, pathRes] = await Promise.all([
             invoke<string>("get_wallpaper_rotation_style"),
             invoke<string>("get_wallpaper_rotation_transition"),
+            invoke<number>("get_wallpaper_volume"),
+            invoke<number>("get_wallpaper_video_playback_rate"),
             invoke<string | null>("get_current_wallpaper_path"),
         ]);
         if (styleRes && typeof styleRes === "string") {
@@ -721,8 +804,16 @@ async function init() {
         if (transitionRes && typeof transitionRes === "string") {
             transition = transitionRes as Transition;
         }
+        if (typeof volumeRes === "number" && Number.isFinite(volumeRes)) {
+            wallpaperVolume = Math.min(1, Math.max(0, volumeRes));
+        }
+        if (typeof playbackRateRes === "number" && Number.isFinite(playbackRateRes)) {
+            wallpaperPlaybackRate = Math.min(3, Math.max(0.25, playbackRateRes));
+        }
         updateModeDisplay();
         applyStyles();
+        applyWallpaperVolume();
+        applyVideoLoopMode();
         if (pathRes && typeof pathRes === "string") {
             setImagePath(pathRes);
         }

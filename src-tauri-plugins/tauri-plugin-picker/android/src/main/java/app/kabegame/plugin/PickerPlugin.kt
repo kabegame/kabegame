@@ -45,6 +45,7 @@ import kotlinx.coroutines.withContext
 interface PickerLauncherHost {
     fun launchFolderPicker(intent: Intent, onResult: (ActivityResult) -> Unit)
     fun launchPickImages(onResult: (List<Uri>) -> Unit)
+    fun launchPickVideos(onResult: (List<Uri>) -> Unit)
     fun launchPickKgpgFile(intent: Intent, onResult: (ActivityResult) -> Unit)
 }
 
@@ -54,10 +55,12 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     companion object {
         private const val TAG = "PickerPlugin"
         private const val PICTURES_RELATIVE_PATH = "Pictures/Kabegame/"
+        private const val VIDEO_RELATIVE_PATH = "Movies/Kabegame/"
     }
 
     private var pendingInvoke: Invoke? = null
     private var pendingImagesInvoke: Invoke? = null
+    private var pendingVideosInvoke: Invoke? = null
     private var pendingKgpgInvoke: Invoke? = null
 
     /** Launcher 由 Activity 在 onCreate 前注册并通过 PickerLauncherHost 提供，避免 RESUMED 后 register 崩溃 */
@@ -525,6 +528,38 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
         var uri: String = ""
     }
 
+    @InvokeArg
+    class OpenVideoArgs {
+        var uri: String = ""
+    }
+
+    /**
+     * 使用系统默认视频播放器打开指定 content:// 或 file URI 的视频。
+     */
+    @Command
+    fun openVideo(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenVideoArgs::class.java)
+        val uriStr = args.uri
+        if (uriStr.isBlank()) {
+            invoke.reject("uri 不能为空")
+            return
+        }
+        try {
+            val uri = Uri.parse(uriStr)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "video/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            activity.startActivity(intent)
+            invoke.resolve(JSObject())
+        } catch (e: android.content.ActivityNotFoundException) {
+            invoke.reject("没有可打开视频的应用")
+        } catch (e: Exception) {
+            Log.e("PickerPlugin", "openVideo failed", e)
+            invoke.reject("打开视频失败: ${e.message}", e)
+        }
+    }
+
     /**
      * 使用系统默认图片查看器打开指定 content:// 或 file URI 的图片。
      */
@@ -663,6 +698,34 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @Command
+    fun pickVideos(invoke: Invoke) {
+        pendingVideosInvoke = invoke
+        val host = launcherHost
+        if (host != null) {
+            host.launchPickVideos { uris -> handleVideosSelection(uris) }
+        } else {
+            invoke.reject("Activity 未实现 PickerLauncherHost")
+            pendingVideosInvoke = null
+        }
+    }
+
+    private fun handleVideosSelection(uris: List<Uri>) {
+        val invoke = pendingVideosInvoke ?: return
+        pendingVideosInvoke = null
+        try {
+            val arr = JSONArray()
+            for (u in uris) {
+                arr.put(u.toString())
+            }
+            val result = JSObject()
+            result.put("uris", arr)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            invoke.reject("处理视频选择失败: ${e.message}", e)
+        }
+    }
+
+    @Command
     fun pickFolder(invoke: Invoke) {
         pendingInvoke = invoke
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
@@ -797,10 +860,14 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     private fun copyFileToPicturesMediaStore(sourceFile: File, displayName: String, mimeType: String): String {
+        val isVideo = mimeType.startsWith("video/")
+        if (isVideo) {
+            return copyFileToPicturesMediaStoreVideo(sourceFile, displayName, mimeType)
+        }
         val resolver = activity.contentResolver
         var candidate = displayName
         var index = 1
-        while (mediaStoreNameExists(candidate)) {
+        while (mediaStoreNameExists(candidate, forVideo = false)) {
             candidate = appendIndex(displayName, index)
             index += 1
         }
@@ -823,6 +890,43 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
 
             val completeValues = ContentValues().apply {
                 put(MediaStore.Images.Media.IS_PENDING, 0)
+            }
+            resolver.update(uri, completeValues, null, null)
+            return uri.toString()
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            throw e
+        }
+    }
+
+    /** 视频写入 MediaStore.Video，避免插入 Images 集合导致 MIME 校验失败 */
+    private fun copyFileToPicturesMediaStoreVideo(sourceFile: File, displayName: String, mimeType: String): String {
+        val resolver = activity.contentResolver
+        var candidate = displayName
+        var index = 1
+        while (mediaStoreNameExists(candidate, forVideo = true)) {
+            candidate = appendIndex(displayName, index)
+            index += 1
+        }
+
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, candidate)
+            put(MediaStore.Video.Media.MIME_TYPE, mimeType)
+            put(MediaStore.Video.Media.RELATIVE_PATH, VIDEO_RELATIVE_PATH)
+            put(MediaStore.Video.Media.IS_PENDING, 1)
+        }
+
+        val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("MediaStore video insert 返回空")
+        try {
+            resolver.openOutputStream(uri)?.use { output ->
+                FileInputStream(sourceFile).use { input ->
+                    input.copyTo(output)
+                }
+            } ?: throw IOException("无法打开 MediaStore 输出流")
+
+            val completeValues = ContentValues().apply {
+                put(MediaStore.Video.Media.IS_PENDING, 0)
             }
             resolver.update(uri, completeValues, null, null)
             return uri.toString()
@@ -873,7 +977,21 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
         return scannedUri?.toString() ?: Uri.fromFile(candidate).toString()
     }
 
-    private fun mediaStoreNameExists(displayName: String): Boolean {
+    private fun mediaStoreNameExists(displayName: String, forVideo: Boolean = false): Boolean {
+        if (forVideo) {
+            val projection = arrayOf(MediaStore.Video.Media._ID)
+            val selection = "${MediaStore.Video.Media.RELATIVE_PATH}=? AND ${MediaStore.Video.Media.DISPLAY_NAME}=?"
+            activity.contentResolver.query(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                arrayOf(VIDEO_RELATIVE_PATH, displayName),
+                null,
+            )?.use { cursor ->
+                return cursor.moveToFirst()
+            }
+            return false
+        }
         val projection = arrayOf(MediaStore.Images.Media._ID)
         val selection = "${MediaStore.Images.Media.RELATIVE_PATH}=? AND ${MediaStore.Images.Media.DISPLAY_NAME}=?"
         activity.contentResolver.query(

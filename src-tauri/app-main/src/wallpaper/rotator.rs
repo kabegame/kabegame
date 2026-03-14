@@ -88,10 +88,14 @@ impl WallpaperRotator {
         out
     }
 
-    /// 轮播候选是否允许：不再按媒体类型跳过，图片与视频均可参与轮播；
-    /// 若当前为原生模式而选中视频，由 set_wallpaper 层（如 requires_window_mode）处理。
-    fn media_allowed_in_mode(_path: &str, _wallpaper_mode: &str) -> bool {
-        true
+    /// 轮播候选是否允许：根据壁纸模式筛选。
+    /// - 窗口模式（window）：图片与视频均可参与轮播。
+    /// - 非窗口模式（native、plasma-plugin 等）：仅图片参与轮播，视频壁纸过滤掉。
+    fn media_allowed_in_mode(path: &str, wallpaper_mode: &str) -> bool {
+        if wallpaper_mode == "window" {
+            return true;
+        }
+        !kabegame_core::image_type::is_video_by_path(Path::new(path))
     }
 
     async fn load_images_for_source(source: &RotationSource) -> Result<Vec<ImageLite>, String> {

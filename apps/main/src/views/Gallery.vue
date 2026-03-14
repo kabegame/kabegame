@@ -125,7 +125,7 @@ import { stat } from "@tauri-apps/plugin-fs";
 import MediaPicker from "@/components/MediaPicker.vue";
 import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
 import { useImageTypes } from "@/composables/useImageTypes";
-import { pickImages, type PickFolderResult } from "tauri-plugin-picker-api";
+import { pickImages, pickVideos, type PickFolderResult } from "tauri-plugin-picker-api";
 
 // 定义组件名称，确保 keep-alive 能正确识别
 defineOptions({
@@ -311,7 +311,7 @@ const handleCollectSourceSelect = (source: "local" | "remote") => {
 
 // 处理媒体选择器的选择事件（先关闭抽屉，再处理）
 const handleMediaPickerSelect = async (
-  type: "image" | "folder" | "archive",
+  type: "image" | "folder" | "video" | "archive",
   payload?: PickFolderResult
 ) => {
   showMediaPicker.value = false;
@@ -320,7 +320,7 @@ const handleMediaPickerSelect = async (
 
 // 安卓下的媒体选择处理函数；选文件夹时由 MediaPicker 调 pickFolder，结果通过 payload 传入
 const handleAndroidMediaSelection = async (
-  type: "image" | "folder" | "archive",
+  type: "image" | "folder" | "video" | "archive",
   folderResult?: PickFolderResult
 ) => {
   try {
@@ -328,6 +328,17 @@ const handleAndroidMediaSelection = async (
       const uris = await pickImages();
       if (!uris || uris.length === 0) {
         return; // 用户取消或无选择
+      }
+      crawlerStore.addTask("本地导入", undefined, {
+        paths: uris,
+        recursive: false,
+        include_archive: false,
+      });
+      ElMessage.success("已添加本地导入任务");
+    } else if (type === 'video') {
+      const uris = await pickVideos();
+      if (!uris || uris.length === 0) {
+        return;
       }
       crawlerStore.addTask("本地导入", undefined, {
         paths: uris,
@@ -579,10 +590,11 @@ const handleJumpToBigPage = async (bigPage: number) => {
   }
 };
 
-// 监听路径变化，自动加载图片
+// 监听路径变化，自动加载图片。以路由为唯一真理：仅在画廊页且当前路径变化时加载，避免在任务页等误用 defaultPath 导致正序覆盖倒序。
 watch(
   () => currentPath.value,
   async (newPath) => {
+    if (route.path !== "/gallery") return;
     if (!isGalleryActive.value) return;
     if (!newPath) return;
 
@@ -1123,28 +1135,29 @@ onMounted(async () => {
 // 在开发环境中监控组件更新，帮助调试重新渲染问题
 // 开发期调试日志已移除，保持生产干净输出
 
-// 组件激活时（keep-alive 缓存后重新显示）
+// 组件激活时（keep-alive 缓存后重新显示）：以路由为唯一真理，始终按当前路由 path 刷新列表，保证从任务页返回后顺序与路由、header 一致。
 onActivated(async () => {
   isGalleryActive.value = true;
-  // 重新加载设置
   await settingsStore.loadAll();
 
-  // 如果图片列表为空，需要重新加载
-  if (displayedImages.value.length === 0) {
+  const pathToLoad = currentPath.value;
+  if (!pathToLoad) return;
+
+  // 列表为空时必加载；有数据时也按路由强制刷新一次，避免从任务页返回后仍显示错误顺序（路由/header 倒序但数据曾以正序加载）
+  if (displayedImages.value.length === 0 || loadedKey.value !== pathToLoad) {
     try {
-      await loadImages(false);
+      await refreshImagesPreserveCache(pathToLoad);
+      await loadTotalImagesCount();
     } catch (e) {
       const msg = e != null && typeof e === "object" && "message" in e ? String((e as Error).message) : String(e);
       console.error("[Gallery] onActivated loadImages 失败:", msg);
-      // 「路径不存在」：清空 provider 缓存后重试一次，仍失败则抛出
       if (msg.includes("路径不存在")) {
-        await invoke("clear_provider_cache").catch(() => { });
-        await loadImages(false);
+        await invoke("clear_provider_cache").catch(() => {});
+        await refreshImagesPreserveCache(pathToLoad);
       } else {
         throw e;
       }
     }
-    return;
   }
 });
 

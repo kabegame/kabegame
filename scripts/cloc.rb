@@ -13,6 +13,9 @@ DEFAULT_PATH = '.'
 DEFAULT_EXCLUDE = 'node_modules,dist,build,.git,target,.nx,public,data,release,photoswipe-vue/src/js,third'
 DEFAULT_INCLUDE_EXT = 'ts,tsx,js,mjs,vue,rs,py,java,kt,swift,cs,cpp,c,h,cc,hpp,rb,html,css,scss,rhai,kt,kts,handlebars,prisma'
 
+# Linguist 未支持的语言在此指定颜色（hex，如 #F67702）
+CUSTOM_LANG_COLORS = { 'Rhai' => '#F67702' }.freeze
+
 def usage
   puts <<~USAGE
     用法:
@@ -155,9 +158,13 @@ def scan_directory(dir_path, exclude_dirs, include_exts, stats, counters)
       abs_file_path = File.expand_path(file_path)
       blob = Linguist::FileBlob.new(abs_file_path, abs_dir_path)
       language = Linguist.detect(blob)
-      next unless language
-
-      lang_name = language.name
+      ext = File.extname(file_path).downcase.delete('.')
+      if ext == 'rhai' && (language.nil? || language.name != 'Rhai')
+        lang_name = 'Rhai'
+      else
+        next unless language
+        lang_name = language.name
+      end
       stats[lang_name] ||= { files: 0, lines: 0, code: 0, comment: 0, blank: 0 }
 
       line_counts = count_lines(file_path, language)
@@ -209,11 +216,14 @@ def generate_html(stats, counters, path)
     }
   end
 
-  # 使用 GitHub Linguist 定义的语言官方颜色
+  # 使用 GitHub Linguist 定义的语言官方颜色，未支持的语言使用 CUSTOM_LANG_COLORS
   colors = []
   sorted_stats.each_with_index do |(lang_name, _), i|
-    lang_obj = Linguist::Language[lang_name] || Linguist::Language.find_by_name(lang_name)
-    color = lang_obj&.color
+    color = CUSTOM_LANG_COLORS[lang_name]
+    unless color
+      lang_obj = Linguist::Language[lang_name] || Linguist::Language.find_by_name(lang_name)
+      color = lang_obj&.color
+    end
     if color
       # Linguist 返回 hex 如 #3178c6，确保有 # 前缀
       colors << (color.start_with?('#') ? color : "##{color}")

@@ -25,6 +25,10 @@ export interface AppSettings {
   wallpaperStyleByMode: Record<string, string>;
   wallpaperTransitionByMode: Record<string, string>;
   wallpaperMode: "native" | "window" | string;
+  /** 视频壁纸音量 0~1 */
+  wallpaperVolume: number;
+  /** 视频壁纸播放速率 0.25～3 */
+  wallpaperVideoPlaybackRate: number;
   windowState: {
     x: number | null;
     y: number | null;
@@ -68,6 +72,8 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
     wallpaperStyleByMode: { getter: "get_wallpaper_style_by_mode", setter: "set_wallpaper_style_by_mode" },
     wallpaperTransitionByMode: { getter: "get_wallpaper_transition_by_mode", setter: "set_wallpaper_transition_by_mode" },
     wallpaperMode: { getter: "get_wallpaper_mode", setter: "set_wallpaper_mode", param: "mode" },
+    wallpaperVolume: { getter: "get_wallpaper_volume", setter: "set_wallpaper_volume", param: "volume" },
+    wallpaperVideoPlaybackRate: { getter: "get_wallpaper_video_playback_rate", setter: "set_wallpaper_video_playback_rate", param: "rate" },
     windowState: { getter: "get_window_state", setter: "set_window_state" },
     currentWallpaperImageId: { getter: "get_current_wallpaper_image_id", setter: "set_current_wallpaper_image_id" },
   };

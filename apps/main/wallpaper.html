@@ -48,10 +48,12 @@
 
       .wallpaper-img.base {
         opacity: 1;
+        z-index: 0;
       }
 
       .wallpaper-img.top {
         opacity: 0;
+        z-index: 1;
         transform: none;
         transition: none;
         will-change: opacity, transform;
@@ -68,10 +70,12 @@
 
       .wallpaper-tile.base {
         opacity: 1;
+        z-index: 0;
       }
 
       .wallpaper-tile.top {
         opacity: 0;
+        z-index: 1;
         transform: none;
         transition: none;
         will-change: opacity, transform;
@@ -149,6 +153,7 @@
           <img id="base-img" class="wallpaper-img base" alt="wallpaper-base" />
           <img id="top-img" class="wallpaper-img top" alt="wallpaper-top" />
           <!-- 视频模式元素（默认隐藏，由 JS 控制显示） -->
+          <!-- muted 用于满足浏览器自动播放策略，播放成功后由 JS 取消静音以恢复声音 -->
           <video
             id="base-video"
             class="wallpaper-img base"

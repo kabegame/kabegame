@@ -14,3 +14,17 @@ pub struct CompressVideoForPreviewResponse {
     pub width: Option<u32>,
     pub height: Option<u32>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractVideoFramesArgs {
+    pub input_path: String,
+    pub output_dir: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractVideoFramesResponse {
+    pub frame_dir: String,
+    pub count: u32,
+}

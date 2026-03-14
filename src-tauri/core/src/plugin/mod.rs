@@ -2190,6 +2190,8 @@ pub struct VarDefinition {
     pub min: Option<serde_json::Value>, // 最小值（int/float 类型使用）
     #[serde(default)]
     pub max: Option<serde_json::Value>, // 最大值（int/float 类型使用）
+    #[serde(default)]
+    pub when: Option<HashMap<String, Vec<String>>>, // 条件显示：key 为 options 变量 key，value 为匹配值数组；多 key 为 AND
 }
 
 // 插件配置（config.json）

@@ -1,5 +1,6 @@
 package com.example.testapp
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -7,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.DocumentsContract
+import android.app.WallpaperManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.filled.AccountBox
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -48,6 +51,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewScreenSizes
 import androidx.compose.ui.unit.dp
+import com.example.testapp.service.VideoWallpaperService
 import com.example.testapp.ui.theme.TestAppTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -99,6 +103,7 @@ fun TestAppApp() {
                 AppDestinations.FAVORITES -> Greeting(name = "Favorites", modifier = Modifier.padding(innerPadding))
                 AppDestinations.PROFILE -> Greeting(name = "Profile", modifier = Modifier.padding(innerPadding))
                 AppDestinations.URI_TEST -> UriTestScreen(modifier = Modifier.padding(innerPadding))
+                AppDestinations.VIDEO_WALLPAPER -> VideoWallpaperDemoScreen(modifier = Modifier.padding(innerPadding))
             }
         }
     }
@@ -112,6 +117,96 @@ enum class AppDestinations(
     FAVORITES("Favorites", Icons.Default.Favorite),
     PROFILE("Profile", Icons.Default.AccountBox),
     URI_TEST("URI 测试", Icons.Default.List),
+    VIDEO_WALLPAPER("视频壁纸", Icons.Default.PlayArrow),
+}
+
+@Composable
+fun VideoWallpaperDemoScreen(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var videoUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    var message by rememberSaveable { mutableStateOf<String?>(null) }
+
+    val pickVideo = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        videoUri = uri
+        message = null
+        uri?.let { u ->
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    u,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: SecurityException) {
+                // 部分提供方不支持持久化权限，壁纸进程内仍可能可用
+            }
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("视频壁纸 Demo", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "选择视频后点击「设为壁纸」，在系统动态壁纸预览中确认即可。壁纸将循环静音播放。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+
+        Button(onClick = { pickVideo.launch("video/*") }, modifier = Modifier.fillMaxWidth()) {
+            Text("选择视频")
+        }
+
+        videoUri?.let { uri ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("已选视频:", style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        uri.toString(),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+
+            Button(
+                onClick = {
+                    try {
+                        context.getSharedPreferences(VideoWallpaperService.PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit()
+                            .putString(VideoWallpaperService.KEY_VIDEO_URI, uri.toString())
+                            .apply()
+                        val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
+                            putExtra(
+                                WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
+                                ComponentName(context, VideoWallpaperService::class.java)
+                            )
+                        }
+                        context.startActivity(intent)
+                        message = "已打开系统壁纸设置，请点击「设置壁纸」确认"
+                    } catch (e: Exception) {
+                        message = "失败: ${e.message}"
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("设为壁纸")
+            }
+        }
+
+        message?.let { msg ->
+            Card(Modifier.fillMaxWidth()) {
+                Text(
+                    msg,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
+        }
+    }
 }
 
 @Composable

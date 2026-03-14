@@ -22,6 +22,7 @@ pub struct CrawlContextPayload {
     pub current_url: Option<String>,
     pub page_label: String,
     pub page_state: Option<Value>,
+    pub state: Option<Value>,
     pub resume_mode: String,
 }
 
@@ -77,6 +78,27 @@ fn page_state_plain_object(value: Option<&Value>) -> Value {
 
 /// 将 patch 浅合并到当前 page_state（类似 JS 的 Object.assign）。
 fn merge_page_state(current: Option<&Value>, patch: &Value) -> Value {
+    let mut base = current
+        .and_then(|v| v.as_object())
+        .map(|m| m.clone())
+        .unwrap_or_default();
+    if let Some(patch_obj) = patch.as_object() {
+        for (k, v) in patch_obj {
+            base.insert(k.clone(), v.clone());
+        }
+    }
+    Value::Object(base)
+}
+
+/// 与 page_state 同理：仅接受 plain object，合并到当前 state。
+fn state_plain_object(value: Option<&Value>) -> Value {
+    value
+        .and_then(|v| v.as_object())
+        .map(|m| Value::Object(m.clone()))
+        .unwrap_or_else(|| Value::Object(Map::new()))
+}
+
+fn merge_state(current: Option<&Value>, patch: &Value) -> Value {
     let mut base = current
         .and_then(|v| v.as_object())
         .map(|m| m.clone())
@@ -150,6 +172,7 @@ pub async fn crawl_get_context() -> Result<Option<CrawlContextPayload>, String> 
         current_url: ctx.current_url,
         page_label: ctx.page_label,
         page_state: ctx.page_state,
+        state: ctx.state,
         resume_mode: ctx.resume_mode,
     }))
 }
@@ -427,6 +450,32 @@ pub async fn crawl_update_page_state(patch: Value) -> Result<(), String> {
                 current_url: None,
                 page_label: None,
                 page_state: Some(merged),
+                state: None,
+                resume_mode: None,
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// 更新整个任务上下文状态：同步到 Rust 内存并会反映到 ctx.state（与 updatePageState 同理）。
+#[tauri::command]
+pub async fn crawl_update_state(patch: Value) -> Result<(), String> {
+    let state = crawler_window_state();
+    let Some(ctx) = state.get_context().await else {
+        return Err("Crawler context not found".to_string());
+    };
+    let task_id = ctx.task_id.clone();
+    let patch_obj = state_plain_object(Some(&patch));
+    let merged = merge_state(ctx.state.as_ref(), &patch_obj);
+    state
+        .patch_context_for_task(
+            &task_id,
+            JsTaskPatch {
+                current_url: None,
+                page_label: None,
+                page_state: None,
+                state: Some(merged),
                 resume_mode: None,
             },
         )
@@ -442,6 +491,23 @@ pub async fn crawl_page_ready() -> Result<(), String> {
     };
     state.set_page_ready(false);
     state.set_page_ready(true);
+    Ok(())
+}
+
+/// 清空「当前站点」数据：删除该 URL 对应 origin 下的所有 Cookie（localStorage/sessionStorage 由前端 clear() 内清除）。
+#[tauri::command]
+pub async fn crawl_clear_site_data(app: AppHandle, url: String) -> Result<(), String> {
+    let parsed =
+        Url::parse(url.trim()).map_err(|e| format!("Invalid URL for clear_site_data: {}", e))?;
+    let crawler_window = app
+        .get_webview_window("crawler")
+        .ok_or_else(|| "Crawler window not found".to_string())?;
+    let cookies = crawler_window
+        .cookies_for_url(parsed)
+        .map_err(|e| format!("Failed to get cookies: {}", e))?;
+    for cookie in cookies {
+        let _ = crawler_window.delete_cookie(cookie);
+    }
     Ok(())
 }
 
@@ -488,6 +554,7 @@ pub async fn crawl_to(app: AppHandle, payload: CrawlToPayload) -> Result<(), Str
                 current_url: Some(target_url.clone()),
                 page_label: Some(new_page_label),
                 page_state: Some(new_page_state),
+                state: None,
                 resume_mode: Some("after_navigation".to_string()),
             },
         )
@@ -544,6 +611,7 @@ pub async fn crawl_back(app: AppHandle, count: Option<usize>) -> Result<(), Stri
                 current_url: Some(previous_url.clone()),
                 page_label: Some(restored_page_label),
                 page_state: Some(restored_page_state),
+                state: None,
                 resume_mode: Some("after_navigation".to_string()),
             },
         )

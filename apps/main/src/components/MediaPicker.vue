@@ -11,7 +11,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { Picture, FolderOpened, Box } from "@element-plus/icons-vue";
+import { Picture, FolderOpened, Box, VideoPlay } from "@element-plus/icons-vue";
 import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
 import { pickFolder, type PickFolderResult } from "tauri-plugin-picker-api";
@@ -27,7 +27,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
-  (e: "select", type: "image" | "folder" | "archive", payload?: PickFolderResult): void;
+  (e: "select", type: "image" | "folder" | "video" | "archive", payload?: PickFolderResult): void;
 }>();
 
 const mediaOptions = computed<OptionItem[]>(() => [
@@ -36,6 +36,12 @@ const mediaOptions = computed<OptionItem[]>(() => [
     title: "选择图片",
     desc: "从手机相册选择一张或多张图片",
     icon: Picture,
+  },
+  {
+    id: "video",
+    title: "选择本地视频",
+    desc: "从手机相册选择一个或多个视频",
+    icon: VideoPlay,
   },
   {
     id: "folder",
@@ -54,7 +60,7 @@ const mediaOptions = computed<OptionItem[]>(() => [
 // 受控：仅通过 modelValue 控制显示；选择时发 select，由父组件关闭
 // 移动端选文件夹时在此调用 picker 插件并带上结果
 const handleSelect = async (id: string) => {
-  const type = id as "image" | "folder" | "archive";
+  const type = id as "image" | "folder" | "video" | "archive";
   if (type === "folder") {
     const result = await pickFolder();
     if (result?.uri ?? result?.path) {
@@ -79,7 +85,7 @@ const handleSelect = async (id: string) => {
 
   &:deep(.el-drawer.btt) {
     .el-drawer__body {
-      padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+      padding-bottom: calc(20px + var(--sab, env(safe-area-inset-bottom, 0px)));
     }
   }
 }

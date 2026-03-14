@@ -380,7 +380,7 @@ body,
 
 // Android：主内容区顶部留出状态栏高度，避免与系统状态栏重叠
 .app-container.app-container-android .app-main {
-  padding-top: env(safe-area-inset-top, 24px);
+  padding-top: var(--sat, env(safe-area-inset-top, 24px));
 }
 
 // Android：全局去除触摸时的浅蓝色高亮（与画廊图片等一致）
@@ -398,7 +398,7 @@ body,
   width: 100%;
   border-top: 2px solid var(--anime-border);
   background: var(--anime-bg-card);
-  padding-bottom: env(safe-area-inset-bottom, 0);
+  padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px));
   box-shadow: 0 -4px 20px rgba(255, 107, 157, 0.08);
 
   .bottom-tab-item {

@@ -14,6 +14,7 @@ export type PluginVarDef = {
   options?: VarOption[];
   min?: number;
   max?: number;
+  when?: Record<string, string[]>;
 };
 
 /**

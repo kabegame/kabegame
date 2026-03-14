@@ -34,8 +34,10 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
     .invoke_handler(tauri::generate_handler![
       commands::pick_folder,
       commands::pick_images,
+      commands::pick_videos,
       commands::pick_kgpg_file,
       commands::open_image,
+      commands::open_video,
     ])
     .setup(|app, api| {
       let picker = mobile::init(app, api)?;

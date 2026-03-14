@@ -9,6 +9,7 @@ import SettingRadioControl from "@kabegame/core/components/settings/controls/Set
 import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
 import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngineDirSetting.vue";
 import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
+import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
@@ -47,6 +48,13 @@ export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
             { label: "系统默认打开", value: "open" },
           ],
         },
+        pages: ["gallery", "albumdetail"],
+      } as QuickSettingItem<QuickSettingsPageId>] : []),
+      ...(!IS_ANDROID ? [{
+        key: "galleryGridColumns",
+        label: "列数",
+        description: "固定列数时生效；关闭后为动态列数（可用 Ctrl+滚轮调整）",
+        comp: GalleryGridColumnsSetting,
         pages: ["gallery", "albumdetail"],
       } as QuickSettingItem<QuickSettingsPageId>] : []),
     ],

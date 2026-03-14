@@ -196,9 +196,13 @@
       <div ref="taskLogListRef" class="task-log-list">
         <div v-if="currentTaskLogs.length === 0" class="task-log-empty">暂无日志</div>
         <div v-for="log in currentTaskLogs" :key="log.id" class="task-log-entry" :class="`log-level-${log.level}`">
-          <span class="log-time">{{ formatLogTime(log.time) }}</span>
-          <el-tag :type="logLevelTagType(log.level)" size="small">{{ log.level }}</el-tag>
-          <span class="log-content">{{ log.content }}</span>
+          <div class="task-log-main">
+            <el-tag :type="logLevelTagType(log.level)" size="small">{{ log.level }}</el-tag>
+            <span class="log-content">{{ log.content }}</span>
+          </div>
+          <div class="task-log-time-row">
+            <span class="log-time">{{ formatLogTime(log.time) }}</span>
+          </div>
         </div>
       </div>
     </el-dialog>
@@ -1436,8 +1440,8 @@ onUnmounted(() => {
 
 .task-log-entry {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   border: 1px solid var(--anime-border);
   border-radius: 8px;
   padding: 8px 10px;
@@ -1446,15 +1450,28 @@ onUnmounted(() => {
   -webkit-user-select: text;
 }
 
-.log-time {
-  min-width: 150px;
-  color: var(--anime-text-secondary);
+.task-log-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
 }
 
 .log-content {
   flex: 1;
+  min-width: 0;
   word-break: break-word;
   line-height: 1.5;
+}
+
+.task-log-time-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.log-time {
+  color: var(--anime-text-secondary);
+  font-size: 11px;
 }
 
 .log-level-warn,

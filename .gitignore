@@ -40,7 +40,7 @@ src-tauri/app-main/resources/bin/*
 .nx/workspace-data
 .cursor/
 
-/test/
+# /test/
 
 # FFmpeg 外树构建目录（bun run build:ffmpeg 产出）
 third/FFmpeg-build

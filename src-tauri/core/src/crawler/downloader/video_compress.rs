@@ -5,6 +5,15 @@ use async_trait::async_trait;
 #[cfg(target_os = "android")]
 use std::sync::{Arc, OnceLock};
 
+#[cfg(target_os = "android")]
+use image::codecs::gif::{GifEncoder, Repeat};
+#[cfg(target_os = "android")]
+use image::{Delay, Frame as ImageFrame};
+#[cfg(target_os = "android")]
+use std::fs::File;
+#[cfg(target_os = "android")]
+use std::io::BufWriter;
+
 /// 视频预览压缩结果。
 pub struct VideoCompressResult {
     pub preview_path: PathBuf,
@@ -47,6 +56,9 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
         .await
         .map_err(|e| format!("Failed to create thumbnails directory: {e}"))?;
 
+    #[cfg(target_os = "android")]
+    let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
+    #[cfg(not(target_os = "android"))]
     let out_path = thumbnails_dir.join(format!("{}.mp4", uuid::Uuid::new_v4()));
 
     #[cfg(target_os = "android")]
@@ -159,4 +171,47 @@ fn resolve_ffmpeg_sidecar_path() -> Result<PathBuf, String> {
     Err(format!(
         "ffmpeg sidecar not found. Run `bun run build:ffmpeg` and ensure `externalBin` is set in tauri.conf (non-light mode)."
     ))
+}
+
+/// 将目录下 frame_000.png, frame_001.png, ... 编码为动图 GIF（4fps），仅 Android 使用。
+#[cfg(target_os = "android")]
+pub fn encode_frames_dir_to_gif(frame_dir: &Path, output_path: &Path) -> Result<(), String> {
+    let mut entries: Vec<_> = std::fs::read_dir(frame_dir)
+        .map_err(|e| format!("读取帧目录失败: {e}"))?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|x| x.eq_ignore_ascii_case("png"))
+                .unwrap_or(false)
+                && e.file_name()
+                    .to_string_lossy()
+                    .starts_with("frame_")
+        })
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    if entries.is_empty() {
+        return Err("帧目录下没有 frame_*.png".to_string());
+    }
+
+    // 4fps = 250ms 每帧
+    let delay = Delay::from_numer_denom_ms(250, 1);
+
+    let out_file = File::create(output_path).map_err(|e| format!("创建 GIF 文件失败: {e}"))?;
+    let mut encoder = GifEncoder::new_with_speed(BufWriter::new(out_file), 10);
+    encoder
+        .set_repeat(Repeat::Infinite)
+        .map_err(|e| format!("set_repeat 失败: {e}"))?;
+
+    for entry in entries {
+        let path = entry.path();
+        let img = image::open(&path).map_err(|e| format!("加载帧 {} 失败: {e}", path.display()))?;
+        let rgba = img.to_rgba8();
+        let frame = ImageFrame::from_parts(rgba, 0, 0, delay);
+        encoder
+            .encode_frame(frame)
+            .map_err(|e| format!("编码帧 {} 失败: {e}", path.display()))?;
+    }
+
+    Ok(())
 }

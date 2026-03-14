@@ -35,5 +35,6 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.0")
     implementation("androidx.activity:activity-ktx:1.9.0")
     implementation("com.google.android.material:material:1.7.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation(project(":tauri-android"))
 }

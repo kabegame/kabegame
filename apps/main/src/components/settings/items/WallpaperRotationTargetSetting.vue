@@ -1,68 +1,40 @@
 <template>
   <div class="rotation-target-setting">
-    <template v-if="rotationEnabled">
-      <div class="select-row">
-        <AndroidPickerSelect
-          v-if="IS_ANDROID"
-          :model-value="albumPickerValue"
-          :options="albumPickerOptions"
-          title="选择用于轮播的画册"
-          placeholder="选择用于轮播的画册"
-          :disabled="disabled || keyDisabled || wallpaperModeSwitching"
-          @update:model-value="(v) => handleAlbumChange(v ?? '')"
-        />
-        <el-select
-          v-else
-          :modelValue="settingValue"
-          class="album-select"
-          :loading="albumStore.loading || showDisabled"
-          :disabled="disabled || keyDisabled || wallpaperModeSwitching"
-          placeholder="选择用于轮播的画册"
-          style="min-width: 180px"
-          @change="handleAlbumChange"
-        >
-          <el-option value="">
-            <div class="gallery-option">
-              <div class="gallery-option__title">全画廊</div>
-              <div class="gallery-option__desc">从画廊图片中轮播（从当前壁纸开始）</div>
-            </div>
-          </el-option>
-          <el-option v-for="a in albumStore.albums" :key="a.id" :label="a.name" :value="a.id" />
-        </el-select>
-      </div>
-    </template>
-
-    <template v-else>
-      <el-button type="primary" :disabled="disabled" @click="handleNavigatePickWallpaper">前往画廊选择壁纸</el-button>
-    </template>
-
-    <div class="hint">
-      <template v-if="!rotationEnabled">
-        <div>
-          点击按钮前往画廊页面选择单张壁纸
-          <template v-if="currentWallpaperName">
-            <br />
-            当前壁纸：{{ currentWallpaperName }}
-            <el-button text size="small" class="path-button" @click="handleRevealCurrentWallpaper">
-              <el-icon>
-                <FolderOpened />
-              </el-icon>
-              定位
-            </el-button>
-          </template>
-        </div>
-      </template>
+    <div class="select-row">
+      <AndroidPickerSelect
+        v-if="IS_ANDROID"
+        :model-value="albumPickerValue"
+        :options="albumPickerOptions"
+        title="选择用于轮播的画册"
+        placeholder="选择用于轮播的画册"
+        :disabled="disabled || keyDisabled || wallpaperModeSwitching"
+        @update:model-value="(v) => handleAlbumChange(v ?? '')"
+      />
+      <el-select
+        v-else
+        :modelValue="settingValue"
+        class="album-select"
+        :loading="albumStore.loading || showDisabled"
+        :disabled="disabled || keyDisabled || wallpaperModeSwitching"
+        placeholder="选择用于轮播的画册"
+        style="min-width: 180px"
+        @change="handleAlbumChange"
+      >
+        <el-option value="">
+          <div class="gallery-option">
+            <div class="gallery-option__title">全画廊</div>
+            <div class="gallery-option__desc">从画廊图片中轮播（从当前壁纸开始）</div>
+          </div>
+        </el-option>
+        <el-option v-for="a in albumStore.albums" :key="a.id" :label="a.name" :value="a.id" />
+      </el-select>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onMounted } from "vue";
 import { ElMessage } from "element-plus";
-import { FolderOpened } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
-import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_ANDROID } from "@kabegame/core/env";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
@@ -73,8 +45,6 @@ const props = defineProps<{
   disabled?: boolean;
 }>();
 
-const router = useRouter();
-const settingsStore = useSettingsStore();
 const albumStore = useAlbumStore();
 const { wallpaperModeSwitching } = useUiStore();
 
@@ -85,71 +55,22 @@ const {
   showDisabled
 } = useSettingKeyState("wallpaperRotationAlbumId");
 
-const currentWallpaperPath = ref<string | null>(null);
-const localAlbumId = ref<string>("");
-
-const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
-
 const albumPickerValue = computed(() => (settingValue.value as string) ?? "");
 const albumPickerOptions = computed(() => [
   { label: "全画廊", value: "" },
   ...albumStore.albums.map((a) => ({ label: a.name, value: a.id })),
 ]);
 
-const currentWallpaperName = computed(() => {
-  if (!currentWallpaperPath.value) return null;
-  const p = currentWallpaperPath.value.replace(/\\/g, "/");
-  return p.split("/").pop() || currentWallpaperPath.value;
+onMounted(() => {
+  albumStore.loadAlbums();
 });
-
-const refreshCurrentWallpaperPath = async () => {
-  try {
-    const id = settingsStore.values.currentWallpaperImageId as any as string | null | undefined;
-    if (!id) {
-      currentWallpaperPath.value = null;
-      return;
-    }
-    currentWallpaperPath.value = await invoke<string | null>("get_image_local_path_by_id", { imageId: id });
-  } catch {
-    currentWallpaperPath.value = null;
-  }
-};
-
-onMounted(async () => {
-  await albumStore.loadAlbums();
-  await refreshCurrentWallpaperPath();
-});
-
-watch(
-  () => settingsStore.values.currentWallpaperImageId,
-  async () => {
-    await refreshCurrentWallpaperPath();
-  }
-);
 
 const handleAlbumChange = async (value: string) => {
   if (props.disabled || keyDisabled.value) return;
   try {
-    // value: "" 表示全画廊；非空表示指定画册
     await set(value);
   } catch (e: any) {
-    // 错误时 watcher 会自动回滚 localAlbumId (如果 store 值被 revert)
     ElMessage.error(`设置失败：${e?.message || String(e)}`);
-  }
-};
-
-const handleNavigatePickWallpaper = () => {
-  router.push({ path: "/gallery", query: { path: "all/1" } });
-};
-
-const handleRevealCurrentWallpaper = async () => {
-  try {
-    if (!currentWallpaperPath.value) return;
-    await invoke("open_file_path", { filePath: currentWallpaperPath.value });
-  } catch (e) {
-    // eslint-disable-next-line no-console
-    console.error("定位当前壁纸失败:", e);
-    ElMessage.error("定位当前壁纸失败");
   }
 };
 </script>
@@ -186,16 +107,5 @@ const handleRevealCurrentWallpaper = async () => {
   font-size: 12px;
   color: var(--anime-text-muted);
   margin-top: 2px;
-}
-
-.hint {
-  font-size: 12px;
-  color: var(--anime-text-muted);
-  line-height: 1.4;
-}
-
-.path-button {
-  padding: 0;
-  margin-left: 6px;
 }
 </style>

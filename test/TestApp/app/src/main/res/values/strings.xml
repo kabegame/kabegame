@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">TestApp</string>
+    <string name="video_wallpaper_description">视频壁纸 Demo：循环播放所选视频（静音）</string>
 </resources>

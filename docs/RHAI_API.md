@@ -85,6 +85,36 @@ if wallpaper_type.mobile {
 }
 ```
 
+### `when` 条件显示
+
+在 `config.json` 的 var 定义中，可添加可选字段 `when`，用于**根据其他 options 变量的当前值**控制该字段在表单中的显示与否。格式为：
+
+```json
+{
+  "key": "artist_id",
+  "type": "string",
+  "name": "画师 UID",
+  "when": { "source": ["user"] }
+}
+```
+
+- `when` 的 key 为某个 **options 类型变量**的 key
+- `when` 的 value 为**匹配值数组**；当该 options 变量的当前值在数组中时，该字段才显示
+- 多个 key 时为 **AND** 关系，即所有条件都满足时才显示
+
+**示例**：仅当 `source` 为 `"user"` 或 `"bookmark"` 时显示 `user_id`：
+
+```json
+{
+  "key": "user_id",
+  "type": "string",
+  "name": "用户 UID",
+  "when": { "source": ["bookmark", "user"] }
+}
+```
+
+- `when` 仅影响前端表单 UI；Rust 侧仍会注入所有变量（含隐藏字段的默认值），脚本可正常使用。
+
 ## 目录
 
 - [页面导航](#页面导航)
@@ -93,6 +123,7 @@ if wallpaper_type.mobile {
 - [URL 处理](#url-处理)
 - [HTTP 头](#http-头)
 - [图片处理](#图片处理)
+- [WebView 爬虫 API（crawl.js）](#webview-爬虫-apicrawljs)
 
 ---
 
@@ -361,6 +392,24 @@ for url in image_urls {
 
 ## URL 处理
 
+### `url_encode(s)`
+
+对字符串进行 URL 百分号编码，用于 query 或 path 中需要编码的片段。
+
+**参数：**
+- `s` (string): 要编码的字符串
+
+**返回值：**
+- `String`: 编码后的字符串
+
+**示例：**
+```rhai
+let kw = url_encode("关键词 测试");
+let url = "https://example.com/search?q=" + kw;
+```
+
+---
+
 ### `resolve_url(relative)`
 
 将相对 URL 解析为绝对 URL（基于当前栈顶的 URL）。
@@ -484,10 +533,10 @@ del_header("Authorization");
 
 ### `download_image(url)`
 
-下载图片并添加到下载队列（异步下载）。
+下载图片或文件并添加到下载队列（异步下载）。
 
 **参数：**
-- `url` (string): 图片的 URL
+- `url` (string): 资源 URL（图片或视频等）
 
 **返回值：**
 - `bool`: 成功加入队列返回 `true`
@@ -504,12 +553,66 @@ for url in image_urls {
         download_image(full_url);
     }
 }
+
+// 也可下载视频
+download_image("https://example.com/video.mp4");
 ```
 
 **说明：**
-- 图片会被添加到下载队列，由后台线程异步下载
-- 下载的图片会自动保存到插件对应的目录
-- 下载完成后会自动添加到图库中
+- 支持下载**图片**与**视频**：按 URL 扩展名保存到插件对应目录，图片与视频会加入图库。
+- 资源会被添加到下载队列，由后台线程异步下载。
+- 下载的图片与视频会自动保存到插件目录并加入图库。
+
+---
+
+## WebView 爬虫 API（crawl.js）
+
+当插件提供 **crawl.js** 且在**桌面端**运行时，会使用 WebView 后端；脚本运行在浏览器环境中，通过注入的 **`ctx`**（即 `window.__crawl_ctx__`）访问与 Rhai 对等的 API。以下为当前实现的 WebView 爬虫 API，与 [CRAWLER_BACKENDS.md](./CRAWLER_BACKENDS.md) 第 6.2 节对应。
+
+**变量与上下文**
+
+- **`ctx.vars`**：只读，来自 `config.json` 的 `baseUrl` 及任务变量（如 `start_page`、`quality` 等），与 Rhai 注入一致。
+- **`ctx.currentContext()`**：返回当前上下文对象（含 `pageLabel`、`pageState`、`state`、`currentUrl`、`resumeMode` 等），用于根据当前步骤分支逻辑。
+
+### 导航与页面
+
+| 方法 | 说明 |
+|------|------|
+| `ctx.to(payload, opts?)` | 导航到新 URL。`payload` 可为字符串 URL，或对象 `{ url, pageLabel?, pageState? }`；导航后新页面会重新注入脚本，需依赖 `pageLabel`/`pageState` 恢复分支。 |
+| `ctx.back(count?)` | 返回上一页，`count` 默认为 1。 |
+| `ctx.updatePageState(patch)` | 合并更新当前页状态到 Rust 与本地 `ctx.pageState`，需传 plain object。 |
+| `ctx.updateState(patch)` | 合并更新整个任务状态到 Rust 与本地 `ctx.state`，需传 plain object。 |
+
+### DOM 与工具
+
+| 方法 | 说明 |
+|------|------|
+| `ctx.$(selector)` | 返回 `document.querySelector(selector)` 的单个元素。 |
+| `ctx.$$(selector)` | 返回 `document.querySelectorAll(selector)` 的数组。 |
+| `ctx.waitForDom()` | 返回 Promise，在 `DOMContentLoaded` 后 resolve，用于等待 DOM 就绪。 |
+
+### 进度与下载
+
+| 方法 | 说明 |
+|------|------|
+| `ctx.addProgress(percentage)` | 累加任务进度（0–99.9），并上报前端。 |
+| `ctx.downloadImage(url, opts?)` | 将 URL 加入下载队列。`opts` 可选：`{ cookie: true }` 表示使用浏览器 Cookie（经代理/门控由 Rust 处理）；`{ headers: { "Key": "Value" } }` 可附加请求头。支持图片与视频，行为与 Rhai 的 `download_image` 一致。 |
+
+### 日志与生命周期
+
+| 方法 | 说明 |
+|------|------|
+| `ctx.log(message, level?)` | 向任务日志输出一条记录，`level` 可选。 |
+| `ctx.sleep(ms)` | 返回 Promise，延迟指定毫秒。 |
+| `ctx.exit()` | 结束当前爬虫任务，避免空转。应在逻辑完成或未知分支时调用。 |
+| `ctx.error(message)` | 以错误信息结束任务。 |
+| `ctx.requestShowWebview()` | 请求显示爬虫 WebView 窗口（例如在验证码页让用户手动通过）。 |
+
+### 使用约定
+
+- 脚本入口由 Rust 在每次文档加载后注入并执行，**不要**依赖跨页面的 JS 内存状态；跨页状态用 `ctx.updatePageState` / `ctx.updateState` 持久化，下一页通过 `ctx.currentContext()` 恢复。
+- 在 `switch (ctx.currentContext().pageLabel)` 等分支中，**default** 分支建议调用 `ctx.exit()`，表示无法识别当前页面时结束任务。
+- 更多实现细节与 Rhai/JS 对等表见 [CRAWLER_BACKENDS.md](./CRAWLER_BACKENDS.md)。
 
 ---
 
@@ -573,7 +676,7 @@ image_list
    - XPath 支持简单的路径表达式（`//tag`, `/tag`）
 
 4. **异步下载**：
-   - `download_image()` 是异步的，图片会在后台下载
+   - `download_image()` 是异步的，图片或视频会在后台下载
    - 不需要等待下载完成即可继续执行脚本
 
 ### `download_archive(url, type)`
@@ -649,5 +752,5 @@ if type_of(result) == "string" {
 
 ---
 
-最后更新：2024年
+最后更新：2026年3月13日
 

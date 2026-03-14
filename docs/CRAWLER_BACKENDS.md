@@ -61,6 +61,7 @@
 - `windowLabel`：Tauri/WebView 实例标识，如 `crawler-{taskId}`；用于定位当前窗口与 capability 绑定，不承担业务语义。
 - `pageLabel`：当前页面/步骤语义标识，如 `home`、`list`、`detail`、`download`。
 - `pageState`：当前步骤附带参数，如 `{ postId, page, keyword }`。
+- `state`：整个任务上下文状态，由脚本通过 `updateState` 持久化，与 `pageState` 类似可立即反映到 JS 内存（`ctx.state` 获取）。
 - `currentUrl`：当前实际 URL，用于辅助校验当前所处页面。
 - `resumeMode`：恢复原因，如 `initial`、`after_navigation`、`after_redirect`、`retry`。
 
@@ -214,7 +215,8 @@ WebView 运行时（如 `crawler-runtime.js`）应暴露 `window.crawl`，与 Rh
 
 **页面上下文**：若采用顶层 WebView 导航模式，建议额外提供只读上下文接口，例如：
 
-- `crawl.currentContext()`：返回 `{ windowLabel, pageLabel, pageState, currentUrl, resumeMode, vars }`
+- `crawl.currentContext()`：返回 `{ windowLabel, pageLabel, pageState, state, currentUrl, resumeMode, vars }`
+- `crawl.updateState(patch)`：更新整个任务上下文状态（plain object 合并），同步到 Rust 并立即反映到 `ctx.state`，与 `updatePageState` 同理。
 - `crawl.currentPageLabel()`：返回当前步骤语义
 - `crawl.currentWindowLabel()`：返回当前 WebView 实例标识
 

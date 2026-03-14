@@ -11,7 +11,7 @@
 
         <StyledTabs v-model="activeTab" sticky>
 
-      <el-tab-pane label="壁纸轮播" name="wallpaper">
+      <el-tab-pane label="壁纸设置" name="wallpaper">
         <el-card class="settings-card">
           <template #header>
             <span>壁纸轮播设置</span>
@@ -23,15 +23,24 @@
                 <WallpaperRotationEnabledSetting />
               </SettingRow>
 
-              <SettingRow :label="rotationEnabled ? '选择画册' : '选择壁纸'" description="轮播启用时选择画册；关闭时前往画廊选择单张壁纸">
+              <SettingRow label="选择画册" description="轮播时从此画册（或全画廊）更换壁纸；单张壁纸请在画廊页选择">
                 <WallpaperRotationTargetSetting />
               </SettingRow>
+              <div v-if="currentWallpaperPath" class="settings-list-current-wallpaper setting-row-desc">
+                <div class="setting-row-desc__spacer"></div>
+                <div class="setting-row-desc__content setting-description">
+                  <span class="setting-row-desc__label">当前壁纸：</span>
+                  <button type="button" class="setting-row-desc__path" @click="openCurrentWallpaperPath">
+                    {{ currentWallpaperPath }}
+                  </button>
+                </div>
+              </div>
 
-              <SettingRow v-if="rotationEnabled" label="轮播间隔" :description="`壁纸更换间隔（分钟，${rotationIntervalMin}-1440）`">
+              <SettingRow label="轮播间隔" :description="`壁纸更换间隔（分钟，${rotationIntervalMin}-1440）`">
                 <SettingNumberControl setting-key="wallpaperRotationIntervalMinutes" :min="rotationIntervalMin" :max="1440" :step="10" />
               </SettingRow>
 
-              <SettingRow v-if="rotationEnabled" label="轮播模式" description="随机模式：每次随机选择；顺序模式：按顺序依次更换">
+              <SettingRow label="轮播模式" description="随机模式：每次随机选择；顺序模式：按顺序依次更换">
                 <SettingRadioControl setting-key="wallpaperRotationMode" :options="[
                   { label: '随机', value: 'random' },
                   { label: '顺序', value: 'sequential' },
@@ -46,7 +55,15 @@
                 <WallpaperTransitionSetting />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="壁纸模式">
+              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="视频壁纸音量" description="视频壁纸播放时的音量（0～1），与预览内音量逻辑一致">
+                <SettingSliderControl setting-key="wallpaperVolume" :min="0" :max="1" :step="0.1" :precision="1" />
+              </SettingRow>
+
+              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="视频播放速率" description="0.25～3">
+                <SettingSliderControl setting-key="wallpaperVideoPlaybackRate" :min="0.25" :max="3" :step="0.25" :precision="2" />
+              </SettingRow>
+
+              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="壁纸模式" description="原生模式使用系统壁纸接口；窗口模式以独立窗口显示壁纸（支持过渡效果、视频壁纸等）">
                 <WallpaperModeSetting />
               </SettingRow>
 
@@ -153,7 +170,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted, computed, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
@@ -165,6 +182,7 @@ import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import SettingSwitchControl from "@kabegame/core/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@kabegame/core/components/settings/controls/SettingNumberControl.vue";
+import SettingSliderControl from "@kabegame/core/components/settings/controls/SettingSliderControl.vue";
 import SettingRadioControl from "@kabegame/core/components/settings/controls/SettingRadioControl.vue";
 import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/DefaultDownloadDirSetting.vue";
 import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
@@ -208,6 +226,29 @@ const activeTab = ref<string>("wallpaper");
 const isRefreshing = ref(false);
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 const rotationIntervalMin = computed(() => (IS_ANDROID ? 15 : 1));
+const currentWallpaperPath = ref<string | null>(null);
+async function refreshCurrentWallpaperPath() {
+  try {
+    const path = await invoke<string | null>("get_current_wallpaper_path");
+    currentWallpaperPath.value = path && path.trim() ? path : null;
+  } catch {
+    currentWallpaperPath.value = null;
+  }
+}
+async function openCurrentWallpaperPath() {
+  if (!currentWallpaperPath.value) return;
+  try {
+    await invoke("open_file_path", { filePath: currentWallpaperPath.value });
+  } catch (e) {
+    ElMessage.error("打开失败");
+  }
+}
+watch(
+  () => settingsStore.values.currentWallpaperImageId,
+  () => {
+    void refreshCurrentWallpaperPath();
+  }
+);
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("settings");
@@ -250,8 +291,9 @@ const handleRefresh = async () => {
 };
 
 // 首次进入时加载设置
-onMounted(() => {
-  loadSettings();
+onMounted(async () => {
+  await loadSettings();
+  await refreshCurrentWallpaperPath();
 });
 
 </script>
@@ -336,6 +378,46 @@ onMounted(() => {
 .settings-list {
   display: flex;
   flex-direction: column;
+}
+
+/* 与 SettingRow 同宽两列网格，小字显示在下方控件列 */
+.setting-row-desc {
+  display: grid;
+  grid-template-columns: 3fr 7fr;
+  gap: 16px;
+  align-items: start;
+  padding: 0 0 10px 0;
+}
+
+.setting-row-desc__spacer {
+  min-width: 0;
+}
+
+.setting-row-desc__content {
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.setting-row-desc__label {
+  color: var(--anime-text-muted);
+}
+
+.setting-row-desc__path {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--anime-primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-align: left;
+
+  &:hover {
+    color: var(--anime-primary-hover, var(--anime-primary));
+  }
 }
 
 .setting-description {

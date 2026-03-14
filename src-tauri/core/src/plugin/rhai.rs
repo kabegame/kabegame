@@ -344,6 +344,8 @@ pub struct RhaiCrawlerRuntime {
 impl RhaiCrawlerRuntime {
     pub fn new(download_queue: Arc<crate::crawler::DownloadQueue>) -> Self {
         let mut engine = Engine::new();
+        // 提高表达式嵌套深度上限，避免爬虫脚本中嵌套 for/while、模板字符串等触发 "Expression exceeds maximum complexity"
+        engine.set_max_expr_depths(128, 64);
         let images_dir: Shared<PathBuf> = Arc::new(Mutex::new(PathBuf::new()));
         let plugin_id: Shared<String> = Arc::new(Mutex::new(String::new()));
         let task_id: Shared<String> = Arc::new(Mutex::new(String::new()));
@@ -467,6 +469,11 @@ pub fn register_crawler_functions(
     output_album_id: Shared<Option<String>>,
     http_headers: Shared<HashMap<String, String>>,
 ) {
+    // url_encode(s) - 对字符串进行 URL 百分号编码（用于 query/path）
+    engine.register_fn("url_encode", |s: &str| -> String {
+        urlencoding::encode(s).into_owned()
+    });
+
     // re_is_match(pattern, text) - 正则匹配判断（pattern 使用 Rust regex 语法）
     // 注意：pattern 编译失败时返回 false
     engine.register_fn("re_is_match", |pattern: &str, text: &str| -> bool {

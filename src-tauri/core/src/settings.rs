@@ -112,6 +112,10 @@ pub enum SettingKey {
     WallpaperTransitionByMode,
     /// 壁纸模式（原生等）
     WallpaperMode,
+    /// 视频壁纸音量（0~1）
+    WallpaperVolume,
+    /// 视频壁纸播放速率（0.25～3）
+    WallpaperVideoPlaybackRate,
     /// 窗口状态（窗口位置、大小、是否最大化）
     WindowState,
     /// 当前壁纸图片ID
@@ -130,6 +134,7 @@ pub enum SettingKey {
 pub enum SettingValue {
     Bool(bool),
     U32(u32),
+    F64(f64),
     String(String),
     OptionString(Option<String>),
     WindowState(WindowState),
@@ -148,6 +153,13 @@ impl SettingValue {
     fn as_u32(&self) -> Option<u32> {
         match self {
             SettingValue::U32(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    fn as_f64(&self) -> Option<f64> {
+        match self {
+            SettingValue::F64(n) => Some(*n),
             _ => None,
         }
     }
@@ -285,6 +297,8 @@ impl Settings {
                 SettingValue::HashMapStringString(HashMap::new())
             }
             SettingKey::WallpaperMode => SettingValue::String(Self::default_wallpaper_mode()),
+            SettingKey::WallpaperVolume => SettingValue::F64(1.0),
+            SettingKey::WallpaperVideoPlaybackRate => SettingValue::F64(1.0),
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
             SettingKey::CurrentWallpaperImageId => SettingValue::OptionString(None),
             #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
@@ -493,6 +507,8 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperStyleByMode,
             SettingKey::WallpaperTransitionByMode,
             SettingKey::WallpaperMode,
+            SettingKey::WallpaperVolume,
+            SettingKey::WallpaperVideoPlaybackRate,
             SettingKey::WindowState,
             SettingKey::CurrentWallpaperImageId,
             #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
@@ -592,9 +608,19 @@ Write-Output "$style,$tile"
             }
             SettingKey::MaxConcurrentDownloads
             | SettingKey::NetworkRetryCount
-            | SettingKey::WallpaperRotationIntervalMinutes
+            |             SettingKey::WallpaperRotationIntervalMinutes
             | SettingKey::GalleryGridColumns => {
                 Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32))
+            }
+            SettingKey::WallpaperVolume => {
+                let v = json.as_f64().unwrap_or(1.0);
+                let v = v.clamp(0.0, 1.0);
+                Ok(SettingValue::F64(v))
+            }
+            SettingKey::WallpaperVideoPlaybackRate => {
+                let v = json.as_f64().unwrap_or(1.0);
+                let v = v.clamp(0.25, 3.0);
+                Ok(SettingValue::F64(v))
             }
             SettingKey::ImageClickAction
             | SettingKey::WallpaperRotationMode
@@ -688,6 +714,8 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperStyleByMode => "wallpaperStyleByMode".to_string(),
             SettingKey::WallpaperTransitionByMode => "wallpaperTransitionByMode".to_string(),
             SettingKey::WallpaperMode => "wallpaperMode".to_string(),
+            SettingKey::WallpaperVolume => "wallpaperVolume".to_string(),
+            SettingKey::WallpaperVideoPlaybackRate => "wallpaperVideoPlaybackRate".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             SettingKey::CurrentWallpaperImageId => "currentWallpaperImageId".to_string(),
             #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
@@ -704,6 +732,9 @@ Write-Output "$style,$tile"
         match val {
             SettingValue::Bool(b) => Ok(serde_json::Value::Bool(*b)),
             SettingValue::U32(n) => Ok(serde_json::Value::Number((*n).into())),
+            SettingValue::F64(n) => serde_json::Number::from_f64(*n)
+                .map(serde_json::Value::Number)
+                .ok_or_else(|| "Invalid F64 for JSON".to_string()),
             SettingValue::String(s) => Ok(serde_json::Value::String(s.clone())),
             SettingValue::OptionString(opt) => match opt {
                 Some(s) => Ok(serde_json::Value::String(s.clone())),
@@ -1008,6 +1039,26 @@ Write-Output "$style,$tile"
                 .unwrap_or_else(|| Self::default_wallpaper_mode()))
         } else {
             Ok(Self::default_wallpaper_mode())
+        }
+    }
+
+    pub async fn get_wallpaper_volume(&self) -> Result<f64, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperVolume) {
+            let val = cell.lock().await;
+            Ok(val.as_f64().unwrap_or(1.0))
+        } else {
+            Ok(1.0)
+        }
+    }
+
+    pub async fn get_wallpaper_video_playback_rate(&self) -> Result<f64, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperVideoPlaybackRate) {
+            let val = cell.lock().await;
+            Ok(val.as_f64().unwrap_or(1.0).clamp(0.25, 3.0))
+        } else {
+            Ok(1.0)
         }
     }
 
@@ -1435,6 +1486,32 @@ Write-Output "$style,$tile"
             *val = new_value.clone();
         }
         Self::emit_setting_change(SettingKey::WallpaperMode, &new_value).await;
+        Self::trigger_debounce_save().await?;
+        Ok(())
+    }
+
+    pub async fn set_wallpaper_volume(&self, volume: f64) -> Result<(), String> {
+        let v = volume.clamp(0.0, 1.0);
+        let cells = Self::cells();
+        let new_value = SettingValue::F64(v);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperVolume) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::WallpaperVolume, &new_value).await;
+        Self::trigger_debounce_save().await?;
+        Ok(())
+    }
+
+    pub async fn set_wallpaper_video_playback_rate(&self, rate: f64) -> Result<(), String> {
+        let r = rate.clamp(0.25, 3.0);
+        let cells = Self::cells();
+        let new_value = SettingValue::F64(r);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperVideoPlaybackRate) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::WallpaperVideoPlaybackRate, &new_value).await;
         Self::trigger_debounce_save().await?;
         Ok(())
     }
