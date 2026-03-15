@@ -90,7 +90,7 @@
 | MacOS | [dmg映像](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame-standard_3.2.0_aarch64.dmg) | [dmg映像](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame-light_3.2.0_aarch64.dmg) |
 | Linux | [deb包](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame-standard_3.2.0_amd64.deb) | [deb包](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame-light_3.2.0_amd64.deb) |
 
-- **安卓预览版**（仅支持 Light 模式）：[kabegame_3.0.5_android-preview.apk](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame_3.2.0_android-preview.apk) 
+- **安卓预览版**（仅支持 Light 模式）：[kabegame_3.2.0_android-preview.apk](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame_3.2.0_android-preview.apk) 
 
 ## 安装方法
 
