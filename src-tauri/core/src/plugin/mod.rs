@@ -11,8 +11,8 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::SystemTime;
 use std::time::Duration;
+use std::time::SystemTime;
 use tokio::sync::Mutex;
 use url::Url;
 use uuid::Uuid;
@@ -467,7 +467,11 @@ impl PluginManager {
     fn detect_script_type_from_kgpg(&self, zip_path: &Path) -> Result<String, String> {
         let mut file =
             fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
-        if crate::kgpg::read_kgpg2_meta(&mut file).ok().flatten().is_some() {
+        if crate::kgpg::read_kgpg2_meta(&mut file)
+            .ok()
+            .flatten()
+            .is_some()
+        {
             let _ = file.seek(SeekFrom::Start(crate::kgpg::KGPG2_TOTAL_HEADER_SIZE as u64));
         } else {
             let _ = file.seek(SeekFrom::Start(0));
@@ -731,7 +735,12 @@ impl PluginManager {
     }
 
     /// 添加插件源
-    pub fn add_plugin_source(&self, id: Option<String>, name: String, index_url: String) -> Result<PluginSource, String> {
+    pub fn add_plugin_source(
+        &self,
+        id: Option<String>,
+        name: String,
+        index_url: String,
+    ) -> Result<PluginSource, String> {
         crate::storage::Storage::global()
             .plugin_sources()
             .add_source(id, name, index_url)
@@ -739,7 +748,12 @@ impl PluginManager {
     }
 
     /// 更新插件源
-    pub fn update_plugin_source(&self, id: String, name: String, index_url: String) -> Result<(), String> {
+    pub fn update_plugin_source(
+        &self,
+        id: String,
+        name: String,
+        index_url: String,
+    ) -> Result<(), String> {
         crate::storage::Storage::global()
             .plugin_sources()
             .update_source(id, name, index_url)
@@ -763,8 +777,6 @@ impl PluginManager {
 
         Ok(())
     }
-
-
 
     /// 从启用的源获取商店插件列表
     ///
@@ -852,9 +864,12 @@ impl PluginManager {
                 .plugin_sources()
                 .get_source_cache(&source.id)
             {
-                if let Ok(cached_json) = serde_json::from_str::<serde_json::Value>(&cached_json_str) {
+                if let Ok(cached_json) = serde_json::from_str::<serde_json::Value>(&cached_json_str)
+                {
                     // 解析缓存的 JSON
-                    if let Some(plugins_array) = cached_json.get("plugins").and_then(|v| v.as_array()) {
+                    if let Some(plugins_array) =
+                        cached_json.get("plugins").and_then(|v| v.as_array())
+                    {
                         let mut resolved_plugins = Vec::new();
                         for plugin_json in plugins_array {
                             if let Ok(plugin) =
