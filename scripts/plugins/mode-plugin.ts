@@ -1,6 +1,8 @@
 import {
-  ensureDokan2DllResource,
-  ensureDokanInstallerResourceIfPresent,
+  copyDokan2DllToResources,
+  copyDokanInstallerToResources,
+  copyFFmpegDllsToResources,
+  BIN_DIR,
 } from "../utils";
 import { BasePlugin } from "./base-plugin";
 import { run } from "../utils";
@@ -8,6 +10,8 @@ import { Component, ComponentPlugin } from "./component-plugin";
 import chalk from "chalk";
 import { BuildSystem } from "../build-system";
 import { OSPlugin } from "./os-plugin";
+import path from "path";
+import fs from "fs";
 
 export class Mode {
   static readonly STANDARD = "standard";
@@ -61,6 +65,18 @@ export class ModePlugin extends BasePlugin {
       this.setEnv("KABEGAME_MODE", this.mode!.mode);
       this.setEnv("VITE_KABEGAME_MODE", this.mode!.mode);
       this.addRustFlags(`--cfg kabegame_mode="${this.mode!.mode}"`);
+      // 开发/start 时通过 PATH 让主进程及 sidecar（如 ffmpeg）找到 kabegame/bin 下的 DLL，无需复制
+      if (
+        OSPlugin.isWindows &&
+        (bs.context.cmd?.isDev || bs.context.cmd?.isStart) &&
+        fs.existsSync(BIN_DIR) &&
+        fs.statSync(BIN_DIR).isDirectory()
+      ) {
+        const binAbs = path.resolve(BIN_DIR);
+        const prev = process.env.PATH || "";
+        process.env.PATH = binAbs + path.delimiter + prev;
+        this.log(chalk.cyan(`PATH prepended with KABEGAME bin: ${binAbs}`));
+      }
     });
 
     bs.hooks.beforeBuild.tap(this.name, (comp) => {
@@ -69,7 +85,7 @@ export class ModePlugin extends BasePlugin {
         return;
       }
       this.packagePlugins(bs);
-      this.prepareResources(bs);
+      this.copyBin(bs);
     });
 
     bs.hooks.prepareCompileArgs.tap(
@@ -112,21 +128,19 @@ export class ModePlugin extends BasePlugin {
   }
 
   // 准备资源文件（仅在需要时包含 dokan 相关文件）
-  prepareResources(bs: BuildSystem): void {
+  copyBin(bs: BuildSystem): void {
     if (!bs.context.cmd.isBuild) {
       return;
     }
-    // Light mode 不需要虚拟驱动功能，跳过 dokan 资源处理
-    if (this.mode!.isLight) {
-      this.log(chalk.yellow("Light mode: skipping Dokan resource preparation"));
-      return;
-    }
 
-    // 仅在 main 组件构建时才需要处理 dokan 资源
+    // 仅在 main 组件构建时才需要处理 dokan 与 bin 下 DLL 资源
     if (bs.context.component!.isMain && OSPlugin.isWindows) {
-      this.log("Ensuring Dokan resources...");
-      ensureDokan2DllResource();
-      ensureDokanInstallerResourceIfPresent();
+      this.log("Copy Dokan and FFmpeg DLLs resources...");
+      if (!this.mode!.isLight) {
+        copyDokan2DllToResources();
+        copyDokanInstallerToResources();
+      }
+      copyFFmpegDllsToResources();
     }
   }
 
@@ -137,9 +151,10 @@ export class ModePlugin extends BasePlugin {
     const comp = bs.context.component!;
     if (comp.isMain && (cmd.isDev || cmd.isBuild)) {
       // 开发和生产都打包到 resources 目录
-      const packageTarget = (cmd.isBuild || OSPlugin.isAndroid) 
-        ? "crawler-plugins:package-to-resources"
-        : "crawler-plugins:package-to-dev-data";
+      const packageTarget =
+        cmd.isBuild || OSPlugin.isAndroid
+          ? "crawler-plugins:package-to-resources"
+          : "crawler-plugins:package-to-dev-data";
       this.log(chalk.blue(`打包插件到资源: ${packageTarget}`));
       run("nx", ["run", packageTarget], {
         bin: "bun",
@@ -147,5 +162,4 @@ export class ModePlugin extends BasePlugin {
     }
     // start 命令不打包插件
   }
-
 }
