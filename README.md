@@ -41,28 +41,28 @@
 
 <!-- 各网站爬取插件截图，两列栅格，推荐宽高400px，移动端会自动流式换行 -->
 
-<div style="display: flex; flex-wrap: wrap; gap: 16px; justify-content: center;">
-  <div style="flex: 0 0 400px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
+<div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;">
+  <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
     <img src="docs/images/crawler/pixiv.png" alt="Pixiv 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
     <small><a href="https://pixiv.net">Pixiv</a>（画师：<a href="https://www.pixiv.net/users/16365055">somna</a>）</small>
   </div>
-  <div style="flex: 0 0 400px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
+  <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
     <img src="docs/images/crawler/anihonet.png" alt="anihonet 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
     <small><a href="https://anihonetwallpaper.com" >anihonet</a>(年榜)</small>
   </div>
-  <div style="flex: 0 0 400px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
+  <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
     <img src="docs/images/crawler/anime-pictures.png" alt="anime-picture 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
     <small><a href="https://anime-pictures.net">anime-pictures</a>(关键字：崩壊:スターレイル)</small>
   </div>
-  <div style="flex: 0 0 400px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
+  <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
     <img src="docs/images/crawler/konachan.png" alt="konachan 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
     <small><a href="https://konachan.net">konachan</a>壁纸</small>
   </div>
-  <div style="flex: 0 0 400px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
+  <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
     <img src="docs/images/crawler/2dwallpaper.png" alt="Artstation 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
     <small><a href="https://2dwallpapers.com">2dwallpaper</a>壁纸(游戏壁纸->Genshin->最多查看)</small>
   </div>
-  <div style="flex: 0 0 400px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
+  <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
     <img src="docs/images/crawler/ziworld.png" alt="花瓣网 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
     <small><a href="https://t.ziworld.top">ziworld</a>壁纸</small>
   </div>
@@ -182,8 +182,8 @@
 画廊是 Kabegame 的核心，所有收集到的壁纸都会在这里展示。支持分页浏览、快速预览、多选操作、去重清理等功能。你可以直接拖入本地文件快速导入。双击图片即可在应用内预览大图，支持缩放、拖拽、切换等操作，也可以设置系统看图软件打开。
 
 <div align="center">
-  <img src="docs/images/main-screenshot-macos-gallery1.png" alt="MacOS画廊截图1" width="800"/><br/>
-  <img src="docs/images/main-screenshot-macos-gallery2.png" alt="MacOS画廊截图2" />
+  <img src="docs/images/main-screenshot-macos-gallery1.png" alt="MacOS画廊截图1" width="400"/>
+  <img src="docs/images/main-screenshot-macos-gallery2.png" alt="MacOS画廊截图2" width="400"/>
 </div>
 
 ### 📸 画册整理
@@ -201,35 +201,42 @@
 Kabegame 的核心竞争力在于其插件化的爬虫系统（本地导入文件功能本质上是一个爬虫插件）。通过 `.kgpg` 插件文件，你可以轻松从各种二次元壁纸网站收集资源。插件使用 Rhai 脚本语言编写，支持复杂的爬取逻辑。应用内置插件商店（[插件仓库](./src-crawler-plugins)），可以一键安装热门插件，也可以导入别人开发的插件，甚至可以编写你自己的插件。每个插件都可以配置参数，在运行脚本的时候由用户输入。你也可以在运行的时候配置http头，分かるな。
 
 <div align="center">
-  <img src="docs/images/shop.png" alt="插件商店" width="400"/>
-  <img src="docs/images/shop-detail-1.png" alt="插件细节1" width="400"/>
-  <img src="docs/images/shop-detail-2.png" alt="插件细节2" width="400"/>
+  <img src="docs/images/plugins.png" alt="插件" width="400"/>
+  <img src="docs/images/plugin-detail.png" alt="插件细节1" width="400"/>
 </div>
 
 ### 🎨 壁纸设置与轮播
 
 一键设置桌面壁纸（图片右键抱到桌面上），支持原生模式和窗口模式。原生模式性能优秀，窗口模式功能更丰富。开启壁纸轮播后，可以自动从指定画册中更换壁纸，支持随机和顺序两种模式，可自定义轮播间隔。让桌面每天都有新惊喜！
 
+<div align="center"><small>设置图片壁纸</small></div>
+
 ![设置壁纸](./docs/images/set-wallpaper.gif)
-<small>设置图片壁纸</small>
+
+<div align="center"><small>设置视频壁纸（Windows、MacOS）</small></div>
 
 ![设置视频壁纸](./docs/images/set-v-wallpaper.gif)
-<small>设置视频壁纸（Windows、MacOS）</small>
 ### 📋 爬虫任务管理
 
 所有收集任务都在这里统一管理。实时查看任务进度、状态、已收集图片数量等信息。支持查看任务详情、停止运行中的任务、删除已完成的任务。任务详情页以网格形式展示已收集的图片，可以预览、选择、添加到画册或删除。
 
-<div align="center">
-  <img src="docs/images/start-crawl.png" alt="开始任务" width="400"/>
-  <br/><small>开始任务</small>
-  <img src="docs/images/crawling.png" alt="任务进行中" width="400"/>
-  <br/><small>任务进行中</small>
-  <br/>
-  <img src="docs/images/task-log.png" alt="任务日志" width="400"/>
-  <br/><small>任务日志</small>
-  <br/>
-  <img src="docs/images/task-images.png" alt="任务图片" width="400" />
-  <br/><small>任务图片</small>
+<div align="center" style="display: flex; flex-wrap: wrap; gap: 10px">
+  <div>
+    <img src="docs/images/start-crawl.png" alt="开始任务" width="380"/>
+    <br/><small>开始任务</small>  
+  </div>
+  <div>
+    <img src="docs/images/crawling.png" alt="任务进行中" width="380"/>
+    <br/><small>任务进行中</small>
+  </div>
+  <div>
+    <img src="docs/images/task-log.png" alt="任务日志" width="380"/>
+    <br/><small>任务日志</small>
+  </div>
+  <div>
+    <img src="docs/images/task-images.png" alt="任务图片" width="380" />
+    <br/><small>任务图片</small>
+  </div>
 </div>
 
 ### 💾 虚拟磁盘
