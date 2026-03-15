@@ -36,6 +36,29 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
   private var webView: WebView? = null
   private var pendingImportPath: String? = null
 
+  /** 用于在 onPageFinished 时再次注入安全区（主文档加载完成后 document 才稳定） */
+  private var lastSystemInsets: Insets? = null
+  internal fun injectSafeAreaInsetsForPageFinished(w: WebView) = injectSafeAreaInsets(w, w)
+  private fun injectSafeAreaInsets(w: WebView, v: android.view.View, insets: Insets? = null) {
+      val root = ViewCompat.getRootWindowInsets(v)
+      val i = insets ?: lastSystemInsets ?: root?.getInsets(WindowInsetsCompat.Type.systemBars())
+      if (i == null) {
+          android.util.Log.w("Kabegame", "[SafeArea] injectSafeAreaInsets early return: insets=null, last=$lastSystemInsets, rootInsets=${root != null}")
+          return
+      }
+      lastSystemInsets = i
+      val density = v.resources.displayMetrics.density
+      val top = i.top / density
+      val bottom = i.bottom / density
+      val left = i.left / density
+      val right = i.right / density
+      android.util.Log.i("Kabegame", "[SafeArea] inject dp: top=$top bottom=$bottom left=$left right=$right (px: top=${i.top} bottom=${i.bottom})")
+      val js = """
+          (function(){var d=document.documentElement;if(d){d.style.setProperty('--sat','${top}px');d.style.setProperty('--sab','${bottom}px');d.style.setProperty('--sal','${left}px');d.style.setProperty('--sar','${right}px');}})();
+      """.trimIndent()
+      w.evaluateJavascript(js, null)
+  }
+
   private val folderPickerLauncher = registerForActivityResult(
     ActivityResultContracts.StartActivityForResult()
   ) { result ->
@@ -120,28 +143,20 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
       }
 
       // 注入系统安全区到 WebView CSS 变量，供 env(safe-area-inset-*) 在 Android 上使用
-      var lastSystemInsets: Insets? = null
-      fun injectSafeAreaInsets(w: WebView, v: android.view.View, insets: Insets? = null) {
-          val i = insets ?: lastSystemInsets ?: ViewCompat.getRootWindowInsets(v)?.getInsets(WindowInsetsCompat.Type.systemBars()) ?: return
-          lastSystemInsets = i
-          val density = v.resources.displayMetrics.density
-          val top = i.top / density
-          val bottom = i.bottom / density
-          val left = i.left / density
-          val right = i.right / density
-          val js = """
-              (function(){var d=document.documentElement;if(d){d.style.setProperty('--sat','${top}px');d.style.setProperty('--sab','${bottom}px');d.style.setProperty('--sal','${left}px');d.style.setProperty('--sar','${right}px');}})();
-          """.trimIndent()
-          w.evaluateJavascript(js, null)
-      }
+      // #region agent log
       ViewCompat.setOnApplyWindowInsetsListener(webView) { v, windowInsets ->
           val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+          android.util.Log.i("Kabegame", "[SafeArea] OnApplyWindowInsetsListener called: top=${insets.top} bottom=${insets.bottom} left=${insets.left} right=${insets.right}")
           injectSafeAreaInsets(webView, v, insets)
           windowInsets
       }
       ViewCompat.requestApplyInsets(webView)
-      // 页面加载后再次注入（insets 可能早于 document 就绪）
-      webView.postDelayed({ injectSafeAreaInsets(webView, webView) }, 500)
+      android.util.Log.i("Kabegame", "[SafeArea] requestApplyInsets done, scheduling delayed inject 500ms")
+      webView.postDelayed({
+          android.util.Log.i("Kabegame", "[SafeArea] delayed inject running, lastSystemInsets=$lastSystemInsets")
+          injectSafeAreaInsets(webView, webView)
+      }, 500)
+      // #endregion agent log
   }
 
   /**
@@ -156,7 +171,12 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
                       android.util.Log.w("Kabegame", "Failed to get original WebViewClient, skipping content:// streaming wrapper")
                       return
                   }
-              val wrappedClient = ContentUriStreamClient(applicationContext, originalClient)
+              val wrappedClient = ContentUriStreamClient(applicationContext, originalClient) { v, _ ->
+                  v?.let {
+                      this@MainActivity.injectSafeAreaInsetsForPageFinished(it)
+                      android.util.Log.i("Kabegame", "[SafeArea] onPageFinished inject")
+                  }
+              }
               webView.webViewClient = wrappedClient
               android.util.Log.d("Kabegame", "ContentUriStreamClient wrapper installed")
           } catch (e: Exception) {
@@ -317,7 +337,8 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
  */
 private class ContentUriStreamClient(
     private val context: android.content.Context,
-    private val delegate: WebViewClient
+    private val delegate: WebViewClient,
+    private val onPageFinishedCallback: ((WebView?, String?) -> Unit)? = null
 ) : WebViewClient() {
 
     private val contentResolver: ContentResolver get() = context.contentResolver
@@ -542,6 +563,7 @@ private class ContentUriStreamClient(
 
     override fun onPageFinished(view: WebView?, url: String?) {
         delegate.onPageFinished(view, url)
+        onPageFinishedCallback?.invoke(view, url)
     }
 
     override fun onReceivedError(

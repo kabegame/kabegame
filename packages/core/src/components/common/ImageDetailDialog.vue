@@ -33,7 +33,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { ElMessage } from "element-plus";
 import { IS_ANDROID } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
@@ -93,7 +93,7 @@ const isFileUrl = (url?: string) => {
 const handleOpenUrl = async (url?: string) => {
   if (!url) return;
   try {
-    await open(url);
+    await openUrl(url);
   } catch (error) {
     console.error("打开 URL 失败:", error);
     ElMessage.error("打开 URL 失败");

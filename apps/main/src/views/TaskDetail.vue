@@ -120,6 +120,12 @@ const taskStatusFromStore = computed(() => {
     return task?.status || taskStatus.value || "";
 });
 
+// 安卓下优先用 store 中的任务数据（与 1s 轮询同步），用于副标题等展示
+const taskFromStoreForDisplay = computed(() => {
+    if (!IS_ANDROID || !taskId.value) return null;
+    return crawlerStore.tasks.find((t) => t.id === taskId.value) ?? null;
+});
+
 // 是否应该显示停止按钮（只在 running 状态显示）
 const shouldShowStopButton = computed(() => {
     return taskStatusFromStore.value === "running";
@@ -183,16 +189,17 @@ const taskSubtitle = computed(() => {
     const okTotal = totalImagesCount.value;
     parts.push(`共 ${okTotal} 张`);
     if (failedTotal > 0) parts.push(`失败 ${failedTotal} 张`);
-    // 如果已删除数量 > 0，显示已删除数量
-    if (taskInfo.value?.deletedCount && taskInfo.value.deletedCount > 0) {
-        parts.push(`已删除 ${taskInfo.value.deletedCount} 张`);
+    // 安卓优先用 store 数据（与 1s 轮询一致），否则用 taskInfo
+    const src = IS_ANDROID && taskFromStoreForDisplay.value ? taskFromStoreForDisplay.value : taskInfo.value;
+    if (src?.deletedCount && src.deletedCount > 0) {
+        parts.push(`已删除 ${src.deletedCount} 张`);
     }
-    if (taskInfo.value?.startTime) {
+    if (src?.startTime) {
         // 仅当任务仍在运行时才用 currentTime 实时更新；结束后用 endTime 固定显示
         const isRunning = taskStatusFromStore.value === "running";
         const duration = formatDuration(
-            taskInfo.value.startTime,
-            taskInfo.value.endTime,
+            src.startTime,
+            src.endTime,
             isRunning ? currentTime.value : undefined
         );
         parts.push(duration);

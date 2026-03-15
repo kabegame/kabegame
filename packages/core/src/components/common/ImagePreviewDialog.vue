@@ -913,39 +913,34 @@ const setupResizeObserver = () => {
 // 跟踪初始 panY 值（slide 中心位置），用于判断方向
 let initialPanY: number | null = null;
 const handlePswpVerticalDrag = ({ panY, preventDefault }: { panY: number; preventDefault: () => void }) => {
-  // panY 是 slide 的 pan.y 值，需要相对于 centerY 计算比例
-  // 由于无法直接访问 centerY，我们使用第一次调用时的 panY 作为基准（假设初始时 panY ≈ centerY）
   if (initialPanY === null) {
     initialPanY = panY;
   }
 
-  // 计算相对于初始位置的偏移（简化：假设初始 panY 就是 centerY）
   const offset = panY - initialPanY;
   const viewportHeight = window.innerHeight;
   const ratio = offset / (viewportHeight / 3);
 
-  // 清除之前的重置定时器
   if (verticalDragResetTimer) {
     clearTimeout(verticalDragResetTimer);
     verticalDragResetTimer = null;
   }
 
   if (ratio > 0) {
-    // 下划：阻止默认行为（视觉效果和关闭）
     preventDefault();
     swipeDeleteActive.value = false;
     swipeDeleteReady.value = false;
     isFromVerticalDrag = false;
   } else {
-    // 上划：允许默认视觉效果，追踪删除状态
     swipeDeleteActive.value = true;
     const absRatio = Math.abs(ratio);
-    swipeDeleteReady.value = absRatio >= 0.4; // PhotoSwipe 的 MIN_RATIO_TO_CLOSE 阈值
+    swipeDeleteReady.value = absRatio >= 0.4;
     isFromVerticalDrag = true;
 
-    // 设置延时重置标志（确保 drag end → close 调用链中标志有效）
     verticalDragResetTimer = setTimeout(() => {
       isFromVerticalDrag = false;
+      swipeDeleteActive.value = false;
+      swipeDeleteReady.value = false;
       verticalDragResetTimer = null;
     }, 300);
   }
@@ -959,7 +954,6 @@ watch(() => previewVisible.value, (visible) => {
 });
 
 const handlePswpBeforeClose = (source?: string): boolean => {
-  // 当 source === 'verticalDrag' 时拦截（上划删除或回弹）
   if (source === 'verticalDrag') {
     if (isFromVerticalDrag) {
       const wasDeleteReady = swipeDeleteReady.value;
@@ -972,14 +966,12 @@ const handlePswpBeforeClose = (source?: string): boolean => {
       }
 
       if (wasDeleteReady) {
-        // 上划删除：触发删除操作，不关闭预览
         performSwipeDelete();
+        pswpRef.value?.recoverFromVerticalDrag?.();
       }
-      // 无论是否删除，都拦截关闭（删除时由响应式更新处理，未达阈值时回弹）
       return false;
     }
   }
-  // 其他情况允许关闭
   return true;
 };
 
@@ -1009,7 +1001,6 @@ const handlePswpUiVisibleChange = ({ visible }: { visible: boolean }) => {
 const handlePswpClose = () => {
   doAndroidPreviewCleanup();
   previewIndex.value = -1;
-  // previewImage 现在是 computed，设置 previewIndex = -1 即可
   swipeDeleteActive.value = false;
   swipeDeleteReady.value = false;
   isFromVerticalDrag = false;

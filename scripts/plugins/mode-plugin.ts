@@ -137,7 +137,9 @@ export class ModePlugin extends BasePlugin {
     const comp = bs.context.component!;
     if (comp.isMain && (cmd.isDev || cmd.isBuild)) {
       // 开发和生产都打包到 resources 目录
-      const packageTarget = "crawler-plugins:package-to-resources"
+      const packageTarget = (cmd.isBuild || OSPlugin.isAndroid) 
+        ? "crawler-plugins:package-to-resources"
+        : "crawler-plugins:package-to-dev-data";
       this.log(chalk.blue(`打包插件到资源: ${packageTarget}`));
       run("nx", ["run", packageTarget], {
         bin: "bun",

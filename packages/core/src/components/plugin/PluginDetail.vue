@@ -49,9 +49,9 @@
                 </el-descriptions-item>
 
                 <el-descriptions-item v-if="baseUrl" label="爬取地址">
-                    <a :href="baseUrl" target="_blank" rel="noopener noreferrer" class="source-url-link">
+                    <span class="source-url-link" role="button" @click="handleOpenBaseUrl(baseUrl)">
                         {{ baseUrl }}
-                    </a>
+                    </span>
                 </el-descriptions-item>
 
                 <slot name="extra-items" />
@@ -70,6 +70,18 @@
 </template>
 
 <script setup lang="ts">
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { ElMessage } from "element-plus";
+
+const handleOpenBaseUrl = async (url: string) => {
+  try {
+    await openUrl(url);
+  } catch (error) {
+    console.error("打开链接失败:", error);
+    ElMessage.error("打开链接失败");
+  }
+};
+
 defineProps<{
     pluginId: string;
     name: string;
@@ -171,6 +183,7 @@ defineEmits<{
     color: inherit;
     text-decoration: underline;
     word-break: break-all;
+    cursor: pointer;
 }
 
 .actions {

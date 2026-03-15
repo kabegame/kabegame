@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { IS_ANDROID } from "../env";
 
 export interface CrawlTask {
   id: string;
@@ -121,6 +122,33 @@ export const useCrawlerStore = defineStore("crawler", () => {
     await p;
   };
 
+  /** 从后端拉取单个任务并更新 store（用于安卓轮询，避免丢失 task_status 事件） */
+  const syncTaskFromBackend = async (id: string) => {
+    try {
+      const raw = await invoke<any>("get_task", { taskId: id });
+      if (!raw || typeof raw !== "object") return;
+      const idx = tasks.value.findIndex((t) => t.id === id);
+      if (idx === -1) return;
+      const task: CrawlTask = {
+        id: String(raw.id ?? raw.taskId ?? raw.task_id ?? id),
+        pluginId: String(raw.pluginId ?? raw.plugin_id ?? ""),
+        outputDir: raw.outputDir ?? raw.output_dir ?? undefined,
+        userConfig: raw.userConfig ?? raw.user_config ?? undefined,
+        httpHeaders: raw.httpHeaders ?? raw.http_headers ?? undefined,
+        outputAlbumId: raw.outputAlbumId ?? raw.output_album_id ?? undefined,
+        status: (raw.status || "pending") as CrawlTask["status"],
+        progress: Number(raw.progress ?? 0),
+        deletedCount: Number(raw.deletedCount ?? raw.deleted_count ?? 0),
+        startTime: raw.startTime ?? raw.start_time ?? undefined,
+        endTime: raw.endTime ?? raw.end_time ?? undefined,
+        error: raw.error ?? undefined,
+      };
+      if (task.id && task.pluginId) tasks.value[idx] = task;
+    } catch {
+      // ignore
+    }
+  };
+
   (async () => {
     try {
       const { listen } = await import("@tauri-apps/api/event");
@@ -225,6 +253,18 @@ export const useCrawlerStore = defineStore("crawler", () => {
           }
         }
       });
+
+      if (IS_ANDROID) {
+        setInterval(() => {
+          const list = tasks.value;
+          for (let i = 0; i < list.length; i++) {
+            const t = list[i];
+            if (t.status === "running" || t.status === "pending") {
+              void syncTaskFromBackend(t.id);
+            }
+          }
+        }, 1000);
+      }
     } catch (error) {
       console.error("设置全局事件监听器失败:", error);
     }
@@ -723,6 +763,13 @@ export const useCrawlerStore = defineStore("crawler", () => {
     } catch (error) {
       console.error("加载任务失败:", error);
     }
+  }
+
+  // Android：每隔 1s 轮询一次任务列表，避免 task_status / task_progress 事件丢失导致界面不同步
+  if (IS_ANDROID) {
+    setInterval(() => {
+      void loadTasks();
+    }, 1000);
   }
 
   async function getTaskImages(taskId: string): Promise<ImageInfo[]> {
