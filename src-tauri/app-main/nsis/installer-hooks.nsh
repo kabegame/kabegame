@@ -12,17 +12,23 @@
   ; Mark desktop.ini as hidden + system
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib +h +s $\"$INSTDIR\desktop.ini$\"'
 
-  ; Move extra executables from resources/bin to install root ($INSTDIR).
+  ; Move extra executables/DLLs from resources/bin to install root ($INSTDIR).
   ; We intentionally avoid Tauri sidecar/externalBin and instead ship exe as resources.
-  ; Check if dokan2.dll is bundled (not present in light mode)
-  IfFileExists "$INSTDIR\resources\bin\dokan2.dll" +4 0
-    DetailPrint "dokan2.dll not bundled (light mode), skipping Dokan setup."
-    ; is light mode, skip copy binary
-    Goto no_light_done
+  ; Move each *.dll with FindFirst/FindNext to avoid cmd for-loop quoting issues when $INSTDIR has spaces.
+  FindFirst $0 $1 "$INSTDIR\resources\bin\*.dll"
+  dll_move_loop:
+    StrCmp $1 "" dll_move_done
+    ExecWait '$\"$SYSDIR\cmd.exe$\" /C move /Y $\"$INSTDIR\resources\bin\$1$\" $\"$INSTDIR$\"' $2
+    DetailPrint "Move $1 -> $INSTDIR (exit $2)"
+    FindNext $0 $1
+    Goto dll_move_loop
+  dll_move_done:
+  FindClose $0
 
-  ; Move dokan2.dll next to main exe so Windows loader can resolve it at process start.
-  ExecWait '$\"$SYSDIR\cmd.exe$\" /C if exist $\"$INSTDIR\resources\bin\dokan2.dll$\" move /Y $\"$INSTDIR\resources\bin\dokan2.dll$\" $\"$INSTDIR$\"' $0
-  DetailPrint "Move dokan2.dll -> $INSTDIR (exit code: $0)"
+  ; Check if dokan2.dll was bundled (not present in light mode) for driver setup
+  IfFileExists "$INSTDIR\dokan2.dll" +3 0
+    DetailPrint "dokan2.dll not bundled (light mode), skipping Dokan driver setup."
+    Goto no_light_done
 
   ; Ensure Dokan driver is installed (dokan2.sys). Bundled installer is optional.
   ; Notes:
@@ -79,8 +85,15 @@
   IfFileExists "$INSTDIR\kabegame-cliw.exe" 0 +2
     Delete "$INSTDIR\kabegame-cliw.exe"
 
-  IfFileExists "$INSTDIR\dokan2.dll" 0 +2
-    Delete "$INSTDIR\dokan2.dll"
+  ; Delete all DLLs we moved from resources/bin (dokan2.dll and other bin/*.dll)
+  FindFirst $0 $1 "$INSTDIR\*.dll"
+  dll_del_loop:
+    StrCmp $1 "" dll_del_done
+    Delete "$INSTDIR\$1"
+    FindNext $0 $1
+    Goto dll_del_loop
+  dll_del_done:
+  FindClose $0
 
   ; Remove folder attributes (best-effort).
   ExecWait '$\"$SYSDIR\cmd.exe$\" /C attrib -s -r $\"$INSTDIR$\"'

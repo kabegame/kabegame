@@ -23,6 +23,15 @@ export const RESOURCES_DIR = path.join(
   "resources",
 );
 
+export const ffmpegDlls = [
+  "libbz2-1.dll",
+  "libgcc_s_seh-1.dll",
+  "libva_win32.dll",
+  "libva.dll",
+  "libwinpthread-1.dll",
+  "libx264-165.dll",
+];
+
 export const RESOURCES_PLUGINS_DIR = path.join(RESOURCES_DIR, "plugins");
 export const RESOURCES_BIN_DIR = path.join(RESOURCES_DIR, "bin");
 export const SRC_TAURI_DIR = path.join(ROOT, "src-tauri");
@@ -30,7 +39,7 @@ export const TAURI_APP_MAIN_DIR = path.join(SRC_TAURI_DIR, "app-main");
 
 /** 开发服务器 host：供 tauri.conf 的 devUrl / CSP 等使用；可被 TAURI_DEV_HOST / VITE_DEV_SERVER_HOST 覆盖 */
 export function getDevServerHost(): string {
-  const isAndroid = process.env.VITE_ANDROID === 'true';
+  const isAndroid = process.env.VITE_ANDROID === "true";
   if (!isAndroid) return "localhost";
   const envHost =
     process.env.TAURI_DEV_HOST || process.env.VITE_DEV_SERVER_HOST;
@@ -174,7 +183,7 @@ export function findDokan2DllOnWindows(): string | null {
   return null;
 }
 
-export function ensureDokan2DllResource(): void {
+export function copyDokan2DllToResources(): void {
   if (process.platform !== "win32") return;
 
   const dst = path.join(RESOURCES_BIN_DIR, "dokan2.dll");
@@ -206,7 +215,7 @@ export function ensureDokan2DllResource(): void {
   );
 }
 
-export function ensureDokanInstallerResourceIfPresent(): void {
+export function copyDokanInstallerToResources(): void {
   if (process.platform !== "win32") return;
 
   const fromEnv = (process.env.DOKAN_INSTALLER ?? "").trim();
@@ -243,6 +252,28 @@ export function ensureDokanInstallerResourceIfPresent(): void {
     return;
   }
   stageResourceFile(src, "dokan-installer.exe");
+}
+
+/** 项目根目录下的 bin 目录（Windows 下放置 DLL 等，供开发时 PATH 或构建时复制到 resources） */
+export const BIN_DIR = path.join(ROOT, "bin");
+
+/**
+ * 将 kabegame/bin 下所有 *.dll 复制到 resources/bin（仅 Windows）。
+ * 与 ensureDokan2DllResource 等一起使用，先执行 Dokan 逻辑再执行本函数即可。
+ */
+export function copyFFmpegDllsToResources(): void {
+  if (process.platform !== "win32") return;
+  if (!fs.existsSync(BIN_DIR) || !fs.statSync(BIN_DIR).isDirectory()) return;
+  const entries = fs.readdirSync(BIN_DIR, { withFileTypes: true });
+  const dlls = entries.filter(
+    (e) => e.isFile() && e.name.toLowerCase().endsWith(".dll"),
+  );
+  if (dlls.length === 0) return;
+  ensureDir(RESOURCES_BIN_DIR);
+  for (const e of ffmpegDlls) {
+    const src = path.join(BIN_DIR, e);
+    stageResourceFile(src, e);
+  }
 }
 
 export function copyDokan2DllToTauriReleaseDirBestEffort(): void {

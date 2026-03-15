@@ -22,9 +22,18 @@
   "bundle": {
     "active": true,
     "targets": [
-      "deb"
+      "nsis"
     ],
     "icon": ["../icons/32x32.png", "../icons/128x128.png", "../icons/128x128@2x.png", "../icons/icon.icns", "../icons/icon.ico"],
+    "fileAssociations": [
+      {
+        "ext": ["kgpg"],
+        "name": "Kabegame Plugin Package",
+        "description": "Kabegame Plugin Package",
+        "role": "Viewer",
+        "mimeType": "application/x-kabegame-kgpg"
+      }
+    ],
     "resources": [
       "resources/**/*"
     ],

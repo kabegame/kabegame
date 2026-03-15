@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 #[cfg(target_os = "android")]
 use async_trait::async_trait;
 #[cfg(target_os = "android")]
@@ -102,7 +105,10 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
 #[cfg(not(target_os = "android"))]
 fn run_ffmpeg_sidecar(input_path: &Path, output_path: &Path) -> Result<(), String> {
     let ffmpeg_path = resolve_ffmpeg_sidecar_path()?;
-    let status = std::process::Command::new(&ffmpeg_path)
+    let mut cmd = std::process::Command::new(&ffmpeg_path);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: 不弹出黑色控制台窗口
+    let status = cmd
         .arg("-y")
         .arg("-i")
         .arg(input_path)

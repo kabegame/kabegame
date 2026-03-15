@@ -5,7 +5,11 @@
 # 文件名须符合 Tauri 约定：ffmpeg-{target_triple}[.exe]（如 ffmpeg-x86_64-apple-darwin）。
 # 在目标系统上直接执行即可（Windows/Linux/macOS 各在真实环境编译）。
 #
-# 依赖: libx264（macOS: brew install x264，Ubuntu: libx264-dev，Windows: 自行安装）
+# 依赖: libx264
+#   macOS:   brew install x264
+#   Ubuntu:  apt install libx264-dev
+#   Windows: 必须在 MSYS2 MinGW 64-bit 中安装：pacman -S mingw-w64-x86_64-x264
+#             （Git Bash 无 pacman，无法直接安装 x264，请改用 MSYS2 终端再执行本脚本）
 set -e
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
@@ -13,6 +17,14 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FFMPEG_SRC="${REPO_ROOT}/third/FFmpeg"
 SIDECAR_DIR="${REPO_ROOT}/src-tauri/app-main/sidecar"
 BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build"
+DEBUG_LOG="${REPO_ROOT}/debug-327f2d.log"
+
+# #region agent log
+_debug_log() {
+  local hyp="$1" msg="$2" extra="${3:-{}}"
+  echo "{\"sessionId\":\"327f2d\",\"runId\":\"run1\",\"hypothesisId\":\"$hyp\",\"location\":\"build-ffmpeg.sh\",\"message\":\"$msg\",\"data\":$extra,\"timestamp\":$(date +%s)000}" >> "$DEBUG_LOG"
+}
+# #endregion
 
 # Tauri externalBin 约定：二进制名为 binary-{target_triple}[.exe]
 TARGET_TRIPLE="${CARGO_BUILD_TARGET:-$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')}"
@@ -33,7 +45,43 @@ if [[ ! -d "$FFMPEG_SRC" ]]; then
   exit 1
 fi
 
+# Windows (MINGW/MSYS)：若未安装 x264，configure 会报错；提前检查并提示
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    # #region agent log
+    _debug_log "H1" "before x264 check" "{\"PATH\":\"$PATH\",\"which_pkgconfig\":\"$(which pkg-config 2>/dev/null || echo '')\",\"pkgconfig_exists_x264\":$(pkg-config --exists x264 2>/dev/null && echo true || echo false),\"pkgconfig_static_exists_x264\":$(pkg-config --static --exists x264 2>/dev/null && echo true || echo false),\"uname\":\"$(uname -s)\"}"
+    # #endregion
+    if ! pkg-config --exists x264 2>/dev/null; then
+      echo "错误: 未找到 libx264（pkg-config x264 失败）" >&2
+      echo "请在 MSYS2 MinGW 64-bit 终端中执行: pacman -S mingw-w64-x86_64-x264" >&2
+      echo "然后在该 MSYS2 终端中重新运行本脚本（不要用 Git Bash）。" >&2
+      exit 1
+    fi
+    ;;
+esac
+
 mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
+# #region agent log
+_static_exists_out=$(pkg-config --static --exists --print-errors x264 2>&1); _se=$?
+_static_libs_out=$(pkg-config --static --libs x264 2>&1); _sl=$?
+_serr=$(echo "$_static_exists_out" | tr '\n' ' ' | head -c 150)
+_slib=$(echo "$_static_libs_out" | tr '\n' ' ' | head -c 150)
+_debug_log "H2" "before configure" "{\"pkgconfig_static_exists_exit\":$_se,\"pkgconfig_static_exists_err\":\"$_serr\",\"pkgconfig_static_libs_exit\":$_sl,\"pkgconfig_static_libs\":\"$_slib\"}"
+# #endregion
+
+# Windows：显式指定 pkg-config 与 .pc 搜索路径，确保 configure 子进程能找到 x264
+CONFIGURE_EXTRA=()
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    _pkgconfig_exe=$(which pkg-config 2>/dev/null || true)
+    if [[ -n "$_pkgconfig_exe" ]]; then
+      CONFIGURE_EXTRA+=(--pkg-config="$_pkgconfig_exe")
+    fi
+    if [[ -d /mingw64/lib/pkgconfig ]]; then
+      export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    fi
+    ;;
+esac
 
 # 最小化编译：仅启用 mov→mp4 压缩链路（scale + libx264 + mov）
 "$FFMPEG_SRC/configure" \
@@ -65,7 +113,20 @@ mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
   --enable-small \
   --disable-runtime-cpudetect \
   --extra-cflags="-O2" \
+  "${CONFIGURE_EXTRA[@]}" \
   "$@"
+
+# Windows：make 无法解析 /d/... 绝对路径，将 Makefile 与 config.mak 中的源码路径改为相对路径
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if [[ -f Makefile ]]; then
+      sed -i '1s|include .*Makefile|include ../FFmpeg/Makefile|' Makefile
+    fi
+    if [[ -f ffbuild/config.mak ]]; then
+      sed -i 's|^SRC_PATH=.*|SRC_PATH=../FFmpeg|' ffbuild/config.mak
+    fi
+    ;;
+esac
 
 if command -v nproc &>/dev/null; then
   NPROC=$(nproc)
@@ -74,14 +135,28 @@ elif command -v sysctl &>/dev/null; then
 else
   NPROC=4
 fi
-make -j"${NPROC}"
-make install
+MAKE_CMD="make"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    command -v make &>/dev/null || MAKE_CMD="mingw32-make"
+    NPROC=1
+    ;;
+esac
+$MAKE_CMD -j"${NPROC}"
+$MAKE_CMD install
 
 mkdir -p "$SIDECAR_DIR"
 FFMPEG_BIN="${BUILD_DIR}/install/bin/ffmpeg${EXE_SUF}"
 if [[ -f "$FFMPEG_BIN" ]]; then
   cp -f "$FFMPEG_BIN" "${SIDECAR_DIR}/${SIDECAR_NAME}"
   echo "已输出: ${SIDECAR_DIR}/${SIDECAR_NAME}"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      for _dll in /mingw64/bin/libx264*.dll; do
+        [[ -f "$_dll" ]] && cp -f "$_dll" "$SIDECAR_DIR" && echo "已复制 x264 DLL: $(basename "$_dll")"
+      done
+      ;;
+  esac
 else
   echo "未找到编译产物: $FFMPEG_BIN" >&2
   exit 1
