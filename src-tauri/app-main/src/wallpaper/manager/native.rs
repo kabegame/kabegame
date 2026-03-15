@@ -412,7 +412,6 @@ stderr: {}",
 
         // 通过 org.kde.plasmashell 的 evaluateScript 设置所有桌面的壁纸
         // 参考常见脚本：desktops() / wallpaperPlugin / currentConfigGroup / writeConfig
-        println!("mode: {}", fill_mode);
 
         let script = format!(
             "var allDesktops = desktops();\n\
@@ -791,10 +790,8 @@ impl WallpaperManager for NativeWallpaperManager {
                 path: &str,
                 style: &str,
             ) -> Result<(), String> {
-                eprintln!("call plasma then gnome");
                 match manager.set_wallpaper_plasma(path, style) {
                     Ok(()) => {
-                        eprintln!("set ok");
                         Ok(())
                     },
                     Err(e) => {
