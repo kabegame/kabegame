@@ -13,25 +13,25 @@
 <table>
   <tr>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-windows-gallery.png" alt="Kabegame windows 截图 1"/><br/>
+      <img src="docs/images/main-screenshot-windows-gallery.png" alt="Kabegame windows 截图 1" width="300"/><br/>
       <small>Windows</small>
     </td>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-windows-preview.png" alt="Kabegame windows 截图 2"/><br/>
+      <img src="docs/images/main-screenshot-windows-preview.png" alt="Kabegame windows 截图 2" width="300"/><br/>
       <small>Windows</small>
     </td>
     <td align="center" rowspan="2" style="vertical-align: top; text-align: right; width: 200px;">
-      <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame android 截图"><br/>
+      <img src="docs/images/main-screenshot-android-gallery.jpg" alt="Kabegame android 截图" width="200"><br/>
       <small>Android</small>
     </td>
   </tr>
   <tr>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame macos 截图"/><br/>
+      <img src="docs/images/main-screenshot3-macos.png" alt="Kabegame macos 截图" width="300"/><br/>
       <small>macOS</small>
     </td>
     <td align="center" style="width: 300px;">
-      <img src="docs/images/main-screenshot-linux.png" alt="Kabegame linux 截图"/><br/>
+      <img src="docs/images/main-screenshot-linux.png" alt="Kabegame linux 截图" width="300"/><br/>
       <small>Linux</small>
     </td>
   </tr>
@@ -43,27 +43,27 @@
 
 <div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;">
   <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
-    <img src="docs/images/crawler/pixiv.png" alt="Pixiv 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
+    <img src="docs/images/crawler/pixiv.png" alt="Pixiv 爬取截图" style="width: 380px; max-width: 100%;"/><br/>
     <small><a href="https://pixiv.net">Pixiv</a>（画师：<a href="https://www.pixiv.net/users/16365055">somna</a>）</small>
   </div>
   <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
-    <img src="docs/images/crawler/anihonet.png" alt="anihonet 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
+    <img src="docs/images/crawler/anihonet.png" alt="anihonet 爬取截图" style="width: 380px; max-width: 100%;"/><br/>
     <small><a href="https://anihonetwallpaper.com" >anihonet</a>(年榜)</small>
   </div>
   <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
-    <img src="docs/images/crawler/anime-pictures.png" alt="anime-picture 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
+    <img src="docs/images/crawler/anime-pictures.png" alt="anime-picture 爬取截图" style="width: 380px; max-width: 100%;"/><br/>
     <small><a href="https://anime-pictures.net">anime-pictures</a>(关键字：崩壊:スターレイル)</small>
   </div>
   <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
-    <img src="docs/images/crawler/konachan.png" alt="konachan 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
+    <img src="docs/images/crawler/konachan.png" alt="konachan 爬取截图" style="width: 380px; max-width: 100%;"/><br/>
     <small><a href="https://konachan.net">konachan</a>壁纸</small>
   </div>
   <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
-    <img src="docs/images/crawler/2dwallpaper.png" alt="Artstation 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
+    <img src="docs/images/crawler/2dwallpaper.png" alt="Artstation 爬取截图" style="width: 380px; max-width: 100%;"/><br/>
     <small><a href="https://2dwallpapers.com">2dwallpaper</a>壁纸(游戏壁纸->Genshin->最多查看)</small>
   </div>
   <div style="flex: 0 0 380px; display: flex; flex-direction: column; align-items: center; margin-bottom: 16px;">
-    <img src="docs/images/crawler/ziworld.png" alt="花瓣网 爬取截图" style="width: 400px; max-width: 100%;"/><br/>
+    <img src="docs/images/crawler/ziworld.png" alt="花瓣网 爬取截图" style="width: 380px; max-width: 100%;"/><br/>
     <small><a href="https://t.ziworld.top">ziworld</a>壁纸</small>
   </div>
 </div>
