@@ -1,5 +1,5 @@
 <template>
-  <div class="doc-root">
+  <div ref="docRootRef" class="doc-root">
     <div v-if="!markdown" class="empty">
       <el-empty :description="emptyDescription" :image-size="100" />
     </div>
@@ -8,7 +8,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watchEffect } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
@@ -26,6 +27,23 @@ const props = withDefaults(
 );
 
 const html = ref("");
+const docRootRef = ref<HTMLElement | null>(null);
+
+const handleDocClick = (e: MouseEvent) => {
+  const a = (e.target as HTMLElement).closest("a");
+  if (!a || !a.href) return;
+  const href = a.getAttribute("href");
+  if (!href || (!href.startsWith("http:") && !href.startsWith("https:"))) return;
+  e.preventDefault();
+  void openUrl(href);
+};
+
+onMounted(() => {
+  docRootRef.value?.addEventListener("click", handleDocClick);
+});
+onBeforeUnmount(() => {
+  docRootRef.value?.removeEventListener("click", handleDocClick);
+});
 
 const md = computed(() => (props.markdown || "").trim());
 
