@@ -59,6 +59,16 @@
           </el-button>
         </div>
 
+        <el-alert
+          v-if="IS_LINUX"
+          type="info"
+          :closable="false"
+          show-icon
+          class="surf-linux-tip"
+        >
+          Linux 下因 WebKit 限制，畅游无法下载图片/视频，仅可浏览页面。
+        </el-alert>
+
         <!-- 畅游记录列表 -->
         <div class="surf-list-wrap" @wheel="onListWheel">
           <transition-group name="surf-list" tag="div" class="surf-list">
@@ -142,6 +152,9 @@
       <p class="surf-help-p">
         每次畅游会生成一条记录，可在此页快速再次进入该站点，或通过「查看最近图片」进入该站点的画廊视图。
       </p>
+      <p v-if="IS_LINUX" class="surf-help-p surf-help-linux">
+        Linux 下因 WebKit 限制，畅游窗口内无法下载内容，仅支持浏览。
+      </p>
       <template #footer>
         <el-button type="primary" @click="surfHelpVisible = false">知道了</el-button>
       </template>
@@ -158,7 +171,7 @@ import { ElDialog } from "element-plus";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { IS_ANDROID, IS_LINUX } from "@kabegame/core/env";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { usePluginStore } from "@/stores/plugins";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
@@ -479,6 +492,16 @@ onMounted(async () => {
   }
 }
 
+.surf-linux-tip {
+  width: 100%;
+  margin-top: 12px;
+  margin-bottom: 4px;
+
+  .surf-content.has-records & {
+    margin-bottom: 12px;
+  }
+}
+
 /* 列表区：有记录时占据剩余空间、独立滚动 */
 .surf-list-wrap {
   width: 100%;
@@ -591,6 +614,10 @@ onMounted(async () => {
 }
 .surf-help-dialog .surf-help-p:last-of-type {
   margin-bottom: 0;
+}
+.surf-help-dialog .surf-help-linux {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 
 .surf-cookie-dialog .surf-cookie-host {

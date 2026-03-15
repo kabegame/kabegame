@@ -4,6 +4,10 @@
 //! These helpers are not fixes and may stop working as environments change.
 use std::{fs, path::Path};
 
+/// WebKit2GTK on Linux + NVIDIA uses a DMA-BUF renderer that can cause blank window
+/// or EGL_BAD_PARAMETER. Disable it when an NVIDIA GPU is detected.
+/// Upstream: https://bugs.webkit.org/show_bug.cgi?id=202362
+///           https://bugs.webkit.org/show_bug.cgi?id=259644
 #[cfg(target_os = "linux")]
 pub fn apply_nvidia_dmabuf_renderer_workaround() {
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {

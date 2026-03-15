@@ -2,26 +2,17 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kabegame",
   "version": "3.2.0",
-  "identifier": "app.kabegame",
+  "identifier": "Kabegame",
   "build": {
     "beforeDevCommand": "bun run dev:frontend-main",
-    "devUrl": "http://192.168.10.6:1420",
+    "devUrl": "http://localhost:1420",
     "frontendDist": "../../dist-main"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "visible": true,
-        "fullscreen": false,
-        "resizable": true,
-        "title": "Kabegame",
-        "devtools": false
-      }
-    ],
+    "windows": [],
     "security": {
-      "capabilities": ["main-capability"],
-      "csp": "default-src 'self' ipc: http://ipc.localhost http://192.168.10.6:1420 http://10.0.2.2:1420 http://localhost:1420; img-src * data:; media-src * data: blob: ; connect-src 'self' ipc: http://ipc.localhost ws: wss: http://192.168.10.6:1420 http://10.0.2.2:1420 http://localhost:1420 http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
+      "capabilities": ["main-capability", "crawler-capability"],
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src * data:; media-src * data: blob: ; connect-src 'self' ipc: http://ipc.localhost ws: wss: http://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:;",
       "assetProtocol": {
         "enable": true,
         "scope": ["**"]
@@ -30,19 +21,14 @@
   },
   "bundle": {
     "active": true,
-    "icon": ["../icons/32x32.png", "../icons/128x128.png", "../icons/128x128@2x.png", "../icons/icon.icns", "../icons/icon.ico"],
-    "fileAssociations": [
-      {
-        "ext": ["kgpg"],
-        "name": "Kabegame Plugin Package",
-        "description": "Kabegame Plugin Package",
-        "role": "Viewer",
-        "mimeType": "application/x-kabegame-kgpg"
-      }
+    "targets": [
+      "deb"
     ],
+    "icon": ["../icons/32x32.png", "../icons/128x128.png", "../icons/128x128@2x.png", "../icons/icon.icns", "../icons/icon.ico"],
     "resources": [
       "resources/**/*"
     ],
+    "externalBin": ["./sidecar/ffmpeg"],
     "windows": {
       "nsis": {
         "installerHooks": "nsis/installer-hooks.nsh",
