@@ -119,7 +119,7 @@ pub fn create_client() -> Result<reqwest::Client, String> {
     }
 
     client_builder = client_builder
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
         .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .user_agent("Kabegame/1.0");
@@ -203,6 +203,21 @@ pub fn build_reqwest_header_map_for_emitter(
 /// 进度上报节流间隔（毫秒）
 const PROGRESS_EMIT_INTERVAL_MS: u64 = 200;
 
+/// 整体请求+响应体读取超时（秒），大图或慢速站点需较长时间
+const HTTP_REQUEST_TIMEOUT_SECS: u64 = 90;
+
+/// 判断响应体读取错误是否可重试（超时、连接中断、body error 等）
+fn is_retryable_stream_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("body error")
+        || lower.contains("connection reset")
+        || lower.contains("connection refused")
+        || lower.contains("eof")
+        || lower.contains("broken pipe")
+}
+
 /// HTTP/HTTPS 下载实现（由 [super::SchemeDownloader] Http scheme 分发调用）。
 /// 流式读入内存缓冲，按间隔上报进度，最后一次性写入 dest，不落盘临时文件；失败重试时重新请求全量。
 async fn download_http(
@@ -219,7 +234,7 @@ async fn download_http(
     let max_attempts = retry_count.saturating_add(1).max(1);
 
     let mut attempt: u32 = 0;
-    loop {
+    'retry: loop {
         attempt += 1;
 
         let mut current_url = url.clone();
@@ -286,8 +301,13 @@ async fn download_http(
                     let backoff_ms = (500u64)
                         .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
                         .min(5000);
+                    emit_task_log(
+                        task_id,
+                        "warn",
+                        format!("请求失败，重试 ({}/{}): {e}", attempt, max_attempts),
+                    );
                     sleep(Duration::from_millis(backoff_ms)).await;
-                    continue;
+                    continue 'retry;
                 }
                 return Err(e);
             }
@@ -301,8 +321,13 @@ async fn download_http(
                 let backoff_ms = (500u64)
                     .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
                     .min(5000);
+                emit_task_log(
+                    task_id,
+                    "warn",
+                    format!("HTTP {status}，重试 ({}/{})", attempt, max_attempts),
+                );
                 sleep(Duration::from_millis(backoff_ms)).await;
-                continue;
+                continue 'retry;
             }
             return Err(format!("HTTP error: {status}"));
         }
@@ -322,7 +347,26 @@ async fn download_http(
             if dq.is_task_canceled(task_id).await {
                 return Err("Task canceled".to_string());
             }
-            let chunk = chunk_result.map_err(|e| format!("Failed to read response stream: {e}"))?;
+            let chunk = match chunk_result {
+                Ok(c) => c,
+                Err(e) => {
+                    let msg = format!("Failed to read response stream: {e}");
+                    let retryable = is_retryable_stream_error(&msg);
+                    if retryable && attempt < max_attempts {
+                        let backoff_ms = (500u64)
+                            .saturating_mul(2u64.saturating_pow((attempt - 1) as u32))
+                            .min(5000);
+                        emit_task_log(
+                            task_id,
+                            "warn",
+                            format!("读取响应体失败，重试 ({}/{}): {msg}", attempt, max_attempts),
+                        );
+                        sleep(Duration::from_millis(backoff_ms)).await;
+                        continue 'retry;
+                    }
+                    return Err(msg);
+                }
+            };
             let n = chunk.len() as u64;
             received += n;
             buffer.extend_from_slice(&chunk);
