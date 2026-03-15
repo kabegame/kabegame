@@ -679,30 +679,30 @@ pub fn init_bundled_plugins<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
 }
 
 /// 初始化预置插件（桌面平台）
-/// 将资源目录中的 .kgpg 迁移到用户插件目录：若用户目录没有该插件则移动过去，若已有则直接删除资源文件。不复制、无覆盖，之后仅从用户目录加载插件。
-/// 开发模式下不执行迁移/移除，保留资源目录中的 .kgpg 便于调试。
+///
+/// - **生产模式**：扫描 resources 下的 .kgpg；若 data 已有同名则删除 resources 里的文件，否则移动到 data。
+///   最终 resources 下不保留任何插件文件。
+/// - **开发模式**：不删除 resources 里的文件；若 data 没有该插件则复制到 data，保留 resources 便于调试。
 #[cfg(not(target_os = "android"))]
 pub fn init_resource_plugins() {
     tauri::async_runtime::spawn(async move {
         let app_paths = kabegame_core::app_paths::AppPaths::global();
+        let is_dev = kabegame_core::app_paths::is_dev();
 
         // 资源插件目录（resources/plugins）
         let resource_plugins_dir = app_paths.builtin_plugins_dir();
-        // 用户插件目录
+        // 用户插件目录（data）
         let user_plugins_dir = app_paths.plugins_dir();
 
-        // 确保用户插件目录存在
         if let Err(e) = std::fs::create_dir_all(&user_plugins_dir) {
             eprintln!("Failed to create user plugins directory: {}", e);
             return;
         }
 
-        // 检查资源目录是否存在
         if !resource_plugins_dir.exists() {
             return;
         }
 
-        // 读取资源目录中的所有 .kgpg 文件（先收集再处理，避免边遍历边删）
         let entries = match std::fs::read_dir(&resource_plugins_dir) {
             Ok(entries) => entries,
             Err(e) => {
@@ -721,14 +721,13 @@ pub fn init_resource_plugins() {
                 }
             };
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "kgpg") {
-                if path.file_name().is_some() {
-                    kgpg_paths.push(path);
-                }
+            if path.extension().map_or(false, |ext| ext == "kgpg") && path.file_name().is_some() {
+                kgpg_paths.push(path);
             }
         }
 
         let mut moved_count = 0;
+        let mut copied_count = 0;
         let mut removed_count = 0;
         for path in kgpg_paths {
             let file_name = match path.file_name() {
@@ -738,30 +737,46 @@ pub fn init_resource_plugins() {
             let target_path = user_plugins_dir.join(&file_name);
 
             if !target_path.exists() {
-                // 用户目录没有：移动过去
-                match std::fs::rename(&path, &target_path) {
-                    Ok(_) => {
-                        moved_count += 1;
-                        println!("Moved resource plugin: {}", file_name.to_string_lossy());
+                // 用户目录没有：生产模式移动，开发模式复制（保留 resources）
+                if is_dev {
+                    match std::fs::copy(&path, &target_path) {
+                        Ok(_) => {
+                            copied_count += 1;
+                            println!("Copied resource plugin to user dir: {}", file_name.to_string_lossy());
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Failed to copy resource plugin {}: {}",
+                                file_name.to_string_lossy(),
+                                e
+                            );
+                        }
                     }
-                    Err(e) => {
-                        eprintln!(
-                            "Failed to move resource plugin {}: {}",
-                            file_name.to_string_lossy(),
-                            e
-                        );
+                } else {
+                    match std::fs::rename(&path, &target_path) {
+                        Ok(_) => {
+                            moved_count += 1;
+                            println!("Moved resource plugin to user dir: {}", file_name.to_string_lossy());
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Failed to move resource plugin {}: {}",
+                                file_name.to_string_lossy(),
+                                e
+                            );
+                        }
                     }
                 }
             } else {
-                if kabegame_core::app_paths::is_dev() {
+                // 用户目录已有：仅生产模式删除 resources 里的文件
+                if is_dev {
                     continue;
                 }
-                // 用户目录已有：直接删除资源文件
                 match std::fs::remove_file(&path) {
                     Ok(_) => {
                         removed_count += 1;
                         println!(
-                            "Removed duplicate resource plugin (user has): {}",
+                            "Removed duplicate resource plugin (user already has): {}",
                             file_name.to_string_lossy()
                         );
                     }
@@ -776,10 +791,10 @@ pub fn init_resource_plugins() {
             }
         }
 
-        if moved_count > 0 || removed_count > 0 {
+        if moved_count > 0 || copied_count > 0 || removed_count > 0 {
             println!(
-                "Resource plugins: {} moved to user dir, {} removed (user already had)",
-                moved_count, removed_count
+                "Resource plugins: {} moved, {} copied, {} removed (user already had)",
+                moved_count, copied_count, removed_count
             );
         }
     });
