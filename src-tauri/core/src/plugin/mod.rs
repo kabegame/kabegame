@@ -712,15 +712,7 @@ impl PluginManager {
             return Ok(p.clone());
         }
 
-        // 最终兜底：直接查找两个目录
-        let builtin_dir = self.get_builtin_plugins_directory().ok();
-        if let Some(ref builtin) = builtin_dir {
-            let builtin_path = builtin.join(format!("{}.kgpg", plugin_id));
-            if builtin_path.is_file() {
-                return Ok(builtin_path);
-            }
-        }
-
+        // 最终兜底：仅从用户目录（data）查找
         let user_dir = self.get_plugins_directory();
         let user_path = user_dir.join(format!("{}.kgpg", plugin_id));
         if user_path.is_file() {
@@ -1717,16 +1709,16 @@ impl PluginManager {
     }
 
     /// 前端手动"刷新已安装源"：重扫插件目录并重建缓存（全量刷新）
-    /// 合并读取用户目录和内置目录，内置目录的插件优先（ID相同时覆盖用户目录）
+    /// 仅读取用户目录（data），不读取 resources 内置目录
     pub async fn refresh_installed_plugins_cache(&self) -> Result<(), String> {
         let user_plugins_dir = self.get_plugins_directory();
-        let builtin_plugins_dir = self.get_builtin_plugins_directory()?;
+        let builtin_plugins_dir = self.get_builtin_plugins_directory().unwrap_or_default();
 
         let mut by_id: HashMap<String, PathBuf> = HashMap::new();
         let mut plugins: HashMap<String, Plugin> = HashMap::new();
         let mut files: HashMap<PathBuf, KgpgFileCacheEntry> = HashMap::new();
 
-        // 先扫描用户目录
+        // 仅扫描用户目录（data）
         if user_plugins_dir.exists() {
             let entries = fs::read_dir(&user_plugins_dir)
                 .map_err(|e| format!("Failed to read plugins directory: {}", e))?;
@@ -1780,67 +1772,6 @@ impl PluginManager {
             }
         }
 
-        // 再扫描内置目录，覆盖相同ID的插件（内置优先）
-        if builtin_plugins_dir.exists() {
-            let entries = fs::read_dir(&builtin_plugins_dir)
-                .map_err(|e| format!("Failed to read builtin plugins directory: {}", e))?;
-            for entry in entries {
-                let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-                let path = entry.path();
-                if !(path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg")) {
-                    continue;
-                }
-                let plugin_id = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                if plugin_id.trim().is_empty() {
-                    continue;
-                }
-
-                let stamp = FileStamp::from_path(&path)?;
-                let parsed = self.parse_kgpg_for_cache(&path)?;
-                // 内置插件始终标记为 built_in
-                let built_in = true;
-                let plugin = Plugin {
-                    id: plugin_id.clone(),
-                    name: parsed.manifest.name.clone(),
-                    description: parsed.manifest.description.clone(),
-                    version: parsed.manifest.version.clone(),
-                    base_url: parsed
-                        .config
-                        .as_ref()
-                        .and_then(|c| c.base_url.clone())
-                        .unwrap_or_default(),
-                    size_bytes: stamp.len,
-                    built_in,
-                    config: HashMap::new(),
-                    selector: parsed.config.clone().and_then(|c| c.selector),
-                    script_type: parsed.script_type.clone(),
-                };
-
-                // 如果已存在（用户目录），先移除旧条目
-                if let Some(old_path) = by_id.remove(&plugin_id) {
-                    files.remove(&old_path);
-                }
-
-                by_id.insert(plugin_id.clone(), path.clone());
-                plugins.insert(plugin_id, plugin);
-                files.insert(
-                    path.clone(),
-                    KgpgFileCacheEntry {
-                        stamp,
-                        manifest: parsed.manifest,
-                        config: parsed.config,
-                        doc: parsed.doc,
-                        icon_present: parsed.icon_present,
-                        icon_png_bytes: None,
-                    },
-                );
-            }
-        }
-
         let mut guard = self.installed_cache.lock().await;
         guard.initialized = true;
         guard.user_plugins_dir = user_plugins_dir;
@@ -1852,10 +1783,10 @@ impl PluginManager {
     }
 
     /// 安装/更新/删除后：按 pluginId 局部刷新（部分刷新）
-    /// 在两个目录中查找指定 plugin_id，内置目录优先
+    /// 仅从用户目录（data）查找指定 plugin_id
     pub async fn refresh_installed_plugin_cache(&self, plugin_id: &str) -> Result<(), String> {
         let user_plugins_dir = self.get_plugins_directory();
-        let builtin_plugins_dir = self.get_builtin_plugins_directory()?;
+        let builtin_plugins_dir = self.get_builtin_plugins_directory().unwrap_or_default();
 
         // 先处理目录切换
         {
@@ -1869,42 +1800,9 @@ impl PluginManager {
             }
         } // guard 在此处 drop，避免下方重新获取锁时死锁
 
-        // 优先查内置目录，再查用户目录
+        // 仅从用户目录查找
         let mut found_path = None;
-        let mut is_builtin = false;
-
-        // 先查内置目录
-        if builtin_plugins_dir.exists() {
-            let expected = builtin_plugins_dir.join(format!("{}.kgpg", plugin_id));
-            if expected.is_file() {
-                found_path = Some(expected);
-                is_builtin = true;
-            } else {
-                // 兜底：扫目录找 stem=plugin_id
-                let entries = fs::read_dir(&builtin_plugins_dir)
-                    .map_err(|e| format!("Failed to read builtin plugins directory: {}", e))?;
-                for entry in entries {
-                    let entry =
-                        entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-                    let path = entry.path();
-                    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("kgpg") {
-                        let stem = path
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("")
-                            .to_string();
-                        if stem == plugin_id {
-                            found_path = Some(path);
-                            is_builtin = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 如果内置目录没找到，再查用户目录
-        if found_path.is_none() && user_plugins_dir.exists() {
+        if user_plugins_dir.exists() {
             let expected = user_plugins_dir.join(format!("{}.kgpg", plugin_id));
             if expected.is_file() {
                 found_path = Some(expected);
@@ -1935,8 +1833,7 @@ impl PluginManager {
         if let Some(path) = found_path {
             let stamp = FileStamp::from_path(&path)?;
             let parsed = self.parse_kgpg_for_cache(&path)?;
-            // 内置插件始终标记为 built_in
-            let built_in = is_builtin;
+            let built_in = false;
 
             let plugin = Plugin {
                 id: plugin_id.to_string(),
@@ -2118,24 +2015,15 @@ pub fn plugins_directory_for_readonly() -> PathBuf {
     crate::app_paths::AppPaths::global().plugins_dir()
 }
 
-/// 查找插件文件路径（同步函数，优先查内置目录，再查用户目录）
+/// 查找插件文件路径（同步函数，仅查用户目录 data）
 ///
 /// 用于不方便使用 async PluginManager 的场景（如 vd_ops.rs）
 pub fn find_plugin_kgpg_path(plugin_id: &str) -> Option<PathBuf> {
-    // 先查内置目录
-    let builtin_dir = builtin_plugins_directory_for_readonly().ok()?;
-    let builtin_path = builtin_dir.join(format!("{}.kgpg", plugin_id));
-    if builtin_path.is_file() {
-        return Some(builtin_path);
-    }
-
-    // 再查用户目录
     let user_dir = plugins_directory_for_readonly();
     let user_path = user_dir.join(format!("{}.kgpg", plugin_id));
     if user_path.is_file() {
         return Some(user_path);
     }
-
     None
 }
 

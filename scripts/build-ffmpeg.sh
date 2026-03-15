@@ -17,14 +17,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FFMPEG_SRC="${REPO_ROOT}/third/FFmpeg"
 SIDECAR_DIR="${REPO_ROOT}/src-tauri/app-main/sidecar"
 BUILD_DIR="${REPO_ROOT}/third/FFmpeg-build"
-DEBUG_LOG="${REPO_ROOT}/debug-327f2d.log"
-
-# #region agent log
-_debug_log() {
-  local hyp="$1" msg="$2" extra="${3:-{}}"
-  echo "{\"sessionId\":\"327f2d\",\"runId\":\"run1\",\"hypothesisId\":\"$hyp\",\"location\":\"build-ffmpeg.sh\",\"message\":\"$msg\",\"data\":$extra,\"timestamp\":$(date +%s)000}" >> "$DEBUG_LOG"
-}
-# #endregion
 
 # Tauri externalBin 约定：二进制名为 binary-{target_triple}[.exe]
 TARGET_TRIPLE="${CARGO_BUILD_TARGET:-$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')}"
@@ -48,9 +40,6 @@ fi
 # Windows (MINGW/MSYS)：若未安装 x264，configure 会报错；提前检查并提示
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
-    # #region agent log
-    _debug_log "H1" "before x264 check" "{\"PATH\":\"$PATH\",\"which_pkgconfig\":\"$(which pkg-config 2>/dev/null || echo '')\",\"pkgconfig_exists_x264\":$(pkg-config --exists x264 2>/dev/null && echo true || echo false),\"pkgconfig_static_exists_x264\":$(pkg-config --static --exists x264 2>/dev/null && echo true || echo false),\"uname\":\"$(uname -s)\"}"
-    # #endregion
     if ! pkg-config --exists x264 2>/dev/null; then
       echo "错误: 未找到 libx264（pkg-config x264 失败）" >&2
       echo "请在 MSYS2 MinGW 64-bit 终端中执行: pacman -S mingw-w64-x86_64-x264" >&2
@@ -61,13 +50,6 @@ case "$(uname -s)" in
 esac
 
 mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
-# #region agent log
-_static_exists_out=$(pkg-config --static --exists --print-errors x264 2>&1); _se=$?
-_static_libs_out=$(pkg-config --static --libs x264 2>&1); _sl=$?
-_serr=$(echo "$_static_exists_out" | tr '\n' ' ' | head -c 150)
-_slib=$(echo "$_static_libs_out" | tr '\n' ' ' | head -c 150)
-_debug_log "H2" "before configure" "{\"pkgconfig_static_exists_exit\":$_se,\"pkgconfig_static_exists_err\":\"$_serr\",\"pkgconfig_static_libs_exit\":$_sl,\"pkgconfig_static_libs\":\"$_slib\"}"
-# #endregion
 
 # Windows：显式指定 pkg-config 与 .pc 搜索路径，确保 configure 子进程能找到 x264
 CONFIGURE_EXTRA=()
