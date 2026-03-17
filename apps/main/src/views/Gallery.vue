@@ -75,6 +75,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick } from "vue";
+import { useLocalStorage } from "@vueuse/core";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -159,6 +160,11 @@ const currentBigPageOffset = computed(() => currentOffset.value);
 const route = useRoute();
 const router = useRouter();
 
+// 持久化用户上次访问的 path（含排序、页码），用于进入画廊时恢复
+const GALLERY_PATH_STORAGE_KEY = "kabegame-gallery-last-path";
+const defaultGalleryPath = "all/1";
+const lastGalleryPath = useLocalStorage(GALLERY_PATH_STORAGE_KEY, defaultGalleryPath);
+
 // Query param 驱动：
 // - /gallery?path=<providerPath>
 // - providerPath 格式：all/1, all/desc/1, date/2024-01/1, plugin/konachan/1 等
@@ -172,8 +178,30 @@ const {
 } = useProviderPathRoute({
   route,
   router,
-  defaultPath: "all/1",
+  defaultPath: defaultGalleryPath,
 });
+
+// 进入画廊且 URL 无 path 时，恢复上次访问的 path
+watch(
+  () => route.path === "/gallery" && !route.query.path,
+  (shouldRestore) => {
+    if (shouldRestore && lastGalleryPath.value && lastGalleryPath.value !== defaultGalleryPath) {
+      void router.replace({ path: "/gallery", query: { path: lastGalleryPath.value } });
+    }
+  },
+  { immediate: true }
+);
+
+// 路径变化时写入 localStorage
+watch(
+  currentPath,
+  (path) => {
+    if (path && route.path === "/gallery") {
+      lastGalleryPath.value = path;
+    }
+  },
+  { immediate: true }
+);
 
 type GalleryBrowseEntry =
   | { kind: "dir"; name: string }

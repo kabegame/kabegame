@@ -19,6 +19,7 @@ import "vant/lib/popup/style";
 import { getImageSupport, getSupportedFormats } from "@kabegame/image-type";
 import { invoke } from "@tauri-apps/api/core";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
+import { i18n } from "@/i18n";
 
 if (IS_ANDROID) {
   document.documentElement.classList.add("platform-android");
@@ -34,6 +35,7 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
 }
 
 app.use(createPinia());
+app.use(i18n);
 registerHeaderFeatures();
 app.use(router);
 app.use(ElementPlus);

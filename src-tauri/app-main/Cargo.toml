@@ -17,12 +17,13 @@ memmap2 = {version = "0.9", optional = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
-tauri = { version = "2.10", features = [ "tray-icon", "devtools", "protocol-asset", "image-png"] }
+tauri = { version = "2.10", features = ["macos-private-api", "tray-icon", "devtools", "protocol-asset", "image-png"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-fs = "=2.4.4"
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-pathes = { workspace = true }
+kabegame-i18n = { workspace = true }
 tauri-plugin-shell = "=2.3.3"
 tauri-plugin-opener = "2"
 dirs = "5.0"

@@ -98,6 +98,14 @@ pub async fn get_default_download_dir() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+pub async fn get_language() -> Result<Option<String>, String> {
+    Settings::global()
+        .get_language()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 #[cfg(target_os = "windows")]
 pub async fn get_wallpaper_engine_dir() -> Result<Option<String>, String> {
     Settings::global()
@@ -292,6 +300,16 @@ pub async fn set_album_drive_mount_point(mount_point: String) -> Result<(), Stri
         .set_album_drive_mount_point(mount_point)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_language(language: Option<String>) -> Result<(), String> {
+    Settings::global()
+        .set_language(language.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    kabegame_i18n::sync_locale(language.as_deref());
+    Ok(())
 }
 
 #[tauri::command]

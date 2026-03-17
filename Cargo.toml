@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "src-tauri/core",
+  "src-tauri/kabegame-i18n",
   "src-tauri/app-main",
   "src-tauri/app-cli",
   "src-tauri-plugins/tauri-plugin-picker",
@@ -22,6 +23,7 @@ async-trait = "0.1"
 base64 = "0.22"
 image = "0.24"
 kabegame-core = {path = "./src-tauri/core", default-features = false}
+kabegame-i18n = {path = "./src-tauri/kabegame-i18n"}
 tauri-plugin-picker = { path = "./src-tauri-plugins/tauri-plugin-picker" }
 tauri-plugin-pathes = { path = "./src-tauri-plugins/tauri-plugin-pathes" }
 tauri-plugin-share = { path = "./src-tauri-plugins/tauri-plugin-share" }

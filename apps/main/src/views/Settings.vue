@@ -9,9 +9,72 @@
         sticky
       />
 
-        <StyledTabs v-model="activeTab" sticky>
+      <StyledTabs v-model="activeTab" sticky>
 
-      <el-tab-pane label="壁纸设置" name="wallpaper">
+      <el-tab-pane :label="$t('settings.appSettings')" :name="SETTINGS_TAB_NAMES[0]">
+        <el-card class="settings-card">
+          <template #header>
+            <span>{{ $t('settings.appSettings') }}</span>
+          </template>
+          <div v-loading="showLoading" element-loading-text="" style="min-height: 120px;">
+            <div v-if="!loading" class="settings-list">
+              <SettingRow :label="$t('settings.language')" :description="$t('settings.languageDesc')">
+                <LanguageSetting />
+              </SettingRow>
+              <SettingRow v-if="!IS_ANDROID" label="开机启动" description="应用启动时自动运行">
+                <SettingSwitchControl setting-key="autoLaunch" />
+              </SettingRow>
+              <SettingRow v-if="!IS_ANDROID && !isLightMode" label="画册盘" description="在资源管理器中以虚拟盘方式浏览画册（只支持有限的操作）">
+                <AlbumDriveSetting />
+              </SettingRow>
+              <SettingRow v-if="!IS_ANDROID" label="图片点击行为" description="左键点击图片时的行为">
+                <SettingRadioControl setting-key="imageClickAction" :options="[
+                  { label: '应用内预览', value: 'preview' },
+                  { label: '系统默认打开', value: 'open' },
+                ]" />
+              </SettingRow>
+              <SettingRow v-if="!IS_ANDROID" label="图片宽高比" description="影响画廊/画册中图片卡片的展示宽高比">
+                <GalleryImageAspectRatioSetting />
+              </SettingRow>
+              <SettingRow v-if="!IS_ANDROID" label="画廊列数" description="动态列数支持快捷键调整；固定列数时快捷键不生效">
+                <GalleryGridColumnsSetting />
+              </SettingRow>
+              <SettingRow v-if="!IS_ANDROID" label="图片对齐方式" description="图片溢出方框时显示为居中、靠上或靠下（仅桌面端）">
+                <SettingRadioControl setting-key="galleryImageObjectPosition" :options="[
+                  { label: '居中', value: 'center' },
+                  { label: '靠上', value: 'top' },
+                  { label: '靠下', value: 'bottom' },
+                ]" />
+              </SettingRow>
+              <SettingRow v-if="!IS_ANDROID" label="清理应用数据" description="将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启">
+                <ClearUserDataSetting />
+              </SettingRow>
+              <SettingRow v-if="!IS_ANDROID" label="自动打开 WebView" description="启动 WebView 插件时自动显示并聚焦 WebView 窗口">
+                <SettingSwitchControl :setting-key="autoOpenCrawlerWebviewKey" />
+              </SettingRow>
+              <SettingRow v-if="!IS_ANDROID && IS_DEV" label="生成测试图片（调试）" description="基于现有图片数据批量克隆插入，用于性能/分页测试（仅开发模式可见）">
+                <DebugGenerateImagesSetting />
+              </SettingRow>
+              <SettingRow v-if="!IS_ANDROID && IS_DEV" label="桌面端开发：WebView 窗口" description="配置远程 URL，在独立 WebView 窗口中打开（用于爬虫 WebView 后端原型等，参见 CRAWLER_BACKENDS.md）">
+                <div class="dev-webview-row">
+                  <el-input
+                    v-model="devWebviewUrl"
+                    placeholder="https://pixiv.net"
+                    clearable
+                    class="dev-webview-input"
+                    @keyup.enter="openDevWebview"
+                  />
+                  <el-button type="primary" :loading="devWebviewOpening" @click="openDevWebview">
+                    打开 WebView 窗口
+                  </el-button>
+                </div>
+              </SettingRow>
+            </div>
+          </div>
+        </el-card>
+      </el-tab-pane>
+
+      <el-tab-pane label="壁纸设置" :name="SETTINGS_TAB_NAMES[1]">
         <el-card class="settings-card">
           <template #header>
             <span>壁纸轮播设置</span>
@@ -75,7 +138,7 @@
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="下载设置" name="download">
+      <el-tab-pane label="下载设置" :name="SETTINGS_TAB_NAMES[2]">
         <el-card class="settings-card">
           <template #header>
             <span>下载设置</span>
@@ -107,75 +170,6 @@
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane v-if="!IS_ANDROID" label="应用设置" name="app">
-        <el-card class="settings-card">
-          <template #header>
-            <span>应用设置</span>
-          </template>
-
-          <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
-            <div v-if="!loading" class="settings-list">
-              <SettingRow v-if="!IS_ANDROID" label="开机启动" description="应用启动时自动运行">
-                <SettingSwitchControl setting-key="autoLaunch" />
-              </SettingRow>
-
-              <SettingRow v-if="!isLightMode" label="画册盘" description="在资源管理器中以虚拟盘方式浏览画册（只支持有限的操作）">
-                <AlbumDriveSetting />
-              </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" label="图片点击行为" description="左键点击图片时的行为">
-                <SettingRadioControl setting-key="imageClickAction" :options="[
-                  { label: '应用内预览', value: 'preview' },
-                  { label: '系统默认打开', value: 'open' },
-                ]" />
-              </SettingRow>
-
-              <SettingRow v-if="!IS_ANDROID" label="图片宽高比" description="影响画廊/画册中图片卡片的展示宽高比">
-                <GalleryImageAspectRatioSetting />
-              </SettingRow>
-
-              <SettingRow v-if="!IS_ANDROID" label="画廊列数" description="动态列数支持快捷键调整；固定列数时快捷键不生效">
-                <GalleryGridColumnsSetting />
-              </SettingRow>
-
-              <SettingRow v-if="!IS_ANDROID" label="图片对齐方式" description="图片溢出方框时显示为居中、靠上或靠下（仅桌面端）">
-                <SettingRadioControl setting-key="galleryImageObjectPosition" :options="[
-                  { label: '居中', value: 'center' },
-                  { label: '靠上', value: 'top' },
-                  { label: '靠下', value: 'bottom' },
-                ]" />
-              </SettingRow>
-
-              <SettingRow v-if="!IS_ANDROID" label="清理应用数据" description="将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启">
-                <ClearUserDataSetting />
-              </SettingRow>
-
-              <SettingRow v-if="!IS_ANDROID" label="自动打开 WebView" description="启动 WebView 插件时自动显示并聚焦 WebView 窗口">
-                <SettingSwitchControl :setting-key="autoOpenCrawlerWebviewKey" />
-              </SettingRow>
-
-              <SettingRow v-if="IS_DEV" label="生成测试图片（调试）" description="基于现有图片数据批量克隆插入，用于性能/分页测试（仅开发模式可见）">
-                <DebugGenerateImagesSetting />
-              </SettingRow>
-
-              <SettingRow v-if="!IS_ANDROID && IS_DEV" label="桌面端开发：WebView 窗口" description="配置远程 URL，在独立 WebView 窗口中打开（用于爬虫 WebView 后端原型等，参见 CRAWLER_BACKENDS.md）">
-                <div class="dev-webview-row">
-                  <el-input
-                    v-model="devWebviewUrl"
-                    placeholder="https://pixiv.net"
-                    clearable
-                    class="dev-webview-input"
-                    @keyup.enter="openDevWebview"
-                  />
-                  <el-button type="primary" :loading="devWebviewOpening" @click="openDevWebview">
-                    打开 WebView 窗口
-                  </el-button>
-                </div>
-              </SettingRow>
-            </div>
-          </div>
-        </el-card>
-        </el-tab-pane>
-
         </StyledTabs>
     </div>
   </div>
@@ -183,6 +177,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from "vue";
+import { useLocalStorage } from "@vueuse/core";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
@@ -209,6 +204,7 @@ import WallpaperEngineDirSetting from "@/components/settings/items/WallpaperEngi
 import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetting.vue";
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
+import LanguageSetting from "@/components/settings/items/LanguageSetting.vue";
 import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV, IS_MACOS } from "@kabegame/core/env";
 const autoOpenCrawlerWebviewKey: AppSettingKey = "autoOpenCrawlerWebview";
 const devWebviewUrl = ref("https://www.example.com");
@@ -235,7 +231,19 @@ import { useHelpDrawerStore } from "@/stores/helpDrawer";
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 
 const settingsStore = useSettingsStore();
-const activeTab = ref<string>("wallpaper");
+
+// 持久化用户最后访问的设置 tab
+const SETTINGS_TAB_NAMES = ["app", "wallpaper", "download"] as const;
+const storedSettingsTab = useLocalStorage("kabegame-settings-last-tab", "app");
+const activeTab = computed({
+  get: () =>
+    SETTINGS_TAB_NAMES.includes(storedSettingsTab.value as (typeof SETTINGS_TAB_NAMES)[number])
+      ? storedSettingsTab.value
+      : "app",
+  set: (v: string) => {
+    storedSettingsTab.value = v;
+  },
+});
 const isRefreshing = ref(false);
 const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
 const rotationIntervalMin = computed(() => (IS_ANDROID ? 15 : 1));

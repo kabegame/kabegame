@@ -4,6 +4,14 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+### Added
+- i18n, including README document and application frontend.
+
+### Optimized
+- restore last path at gallery when bootstrap.
+- restore last tab of setting page when bootstrap.
+
 ## [3.2.0]
 （这是一次更大的改动，带仍不增加大版本号）
 ### Added

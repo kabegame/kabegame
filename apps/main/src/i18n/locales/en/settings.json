@@ -1,0 +1,6 @@
+{
+  "title": "Settings",
+  "appSettings": "App Settings",
+  "language": "Language",
+  "languageDesc": "Interface language, empty means follow system"
+}
