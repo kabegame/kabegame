@@ -1,21 +1,21 @@
 <template>
   <div class="we-dir-setting">
-    <el-input v-model="localDir" placeholder="导入到 WE（建议选择 WE 安装目录或 projects/myprojects）" clearable :disabled="disabled" :loading="showDisabled"
+    <el-input v-model="localDir" :placeholder="$t('settings.weDirPlaceholder')" clearable :disabled="disabled" :loading="showDisabled"
       @clear="handleClear">
       <template #append>
         <el-button :disabled="disabled" :loading="showDisabled" @click="handleChoose">
           <el-icon>
             <FolderOpened />
           </el-icon>
-          选择
+          {{ $t('settings.weDirChoose') }}
         </el-button>
       </template>
     </el-input>
 
     <div class="hint">
-      自动导入会写入：<b>projects\myprojects</b>
+      {{ $t('settings.weDirHint') }}<b>{{ $t('settings.weDirHintBold') }}</b>
       <span v-if="myprojectsDir">
-        ，当前识别为：
+        {{ $t('settings.weDirHintCurrent') }}
         <el-button text size="small" class="path-button" @click="handleOpenMyprojects">
           <el-icon>
             <FolderOpened />

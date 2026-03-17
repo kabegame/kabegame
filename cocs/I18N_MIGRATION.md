@@ -146,3 +146,171 @@
 | 默认 language 从系统读取 | `src-tauri/src/config/verge.rs`（如 default 中 language: system_language()） |
 
 迁移时以「框架搭建 → 后端 crate 与配置 → 前端初始化与配置联动 → 逐屏替换文案 → 工具脚本」为顺序，可减少返工。
+
+---
+
+## 7. 最后一步：待迁移清单
+
+框架与配置联动已完成，以下为**尚未替换为 i18n key 的硬编码文案**清单，按模块逐项迁移即可收尾。
+
+### 7.1 前端待迁移清单
+
+**当前已有**：`apps/main/src/i18n/locales/<lang>/` 下 `common`、`settings`、`gallery` 三个命名空间，且 `Settings.vue` 中语言设置、部分 tab 已用 `$t('settings.xxx')`；Gallery 等少量组件已用 `$t('gallery.xxx')` / `$t('common.xxx')`。
+
+**需扩展的 locales**（在 `locales/<lang>/` 下新增或扩展现有 JSON，并在各语言 `index.ts` 中聚合）：
+
+| 命名空间 | 说明 |
+|----------|------|
+| `settings` | 扩展 key：应用设置内所有表单项 label/description、壁纸/下载 tab 标签与文案、清理数据等按钮与确认语 |
+| `wallpaper` | 壁纸相关：轮播设置、当前壁纸、过渡/样式/模式/周期等选项文案（或并入 settings） |
+| `download` | 下载间隔等（或并入 settings） |
+| `albums` | 画册列表、画册详情、新建/重命名/删除等 |
+| `tasks` | 任务详情、状态、操作按钮 |
+| `plugins` | 插件浏览、插件详情、安装/启用/配置等 |
+| `help` | 帮助页标题、侧栏、所有 Tip 正文 |
+| `surf` | 畅游、畅游图片等 |
+| `common` | 扩展：确定/取消/关闭/保存等已有，可补「加载中」「无数据」等通用语 |
+
+以下按**文件/模块**列出待迁移项（凡用户可见的中文或固定英文均需改为 `$t('namespace.key')` 或 `useI18n().t(...)`）。
+
+#### 7.1.1 路由与全局
+
+| 文件 | 待迁移内容 |
+|------|------------|
+| `apps/main/src/router/index.ts` | 各路由 `meta.title`：画廊、源、画册、任务详情、源详情、设置、帮助、畅游、畅游图片 |
+
+#### 7.1.2 设置页与设置项组件
+
+| 文件 | 待迁移内容 |
+|------|------------|
+| `apps/main/src/views/Settings.vue` | `StyledTabs` 的 `title="设置"`；应用设置内所有 `SettingRow` 的 `label` / `description`（开机启动、画册盘、图片点击行为、应用内预览/系统默认打开、图片宽高比、画廊列数、图片对齐方式、居中/靠上/靠下、清理应用数据、自动打开 WebView、生成测试图片、桌面端开发 WebView 窗口、打开 WebView 窗口）；tab 标签「壁纸设置」「下载设置」；壁纸区块「壁纸轮播设置」「启用壁纸轮播」「选择画册」「当前壁纸：」；下载区块所有 label/description；清理数据等按钮与确认对话框文案 |
+| `apps/main/src/components/settings/items/WallpaperTransitionSetting.vue` | 过渡方式选项 label/文案 |
+| `apps/main/src/components/settings/items/WallpaperStyleSetting.vue` | 壁纸样式选项 |
+| `apps/main/src/components/settings/items/WallpaperRotationTargetSetting.vue` | 轮播目标选项 |
+| `apps/main/src/components/settings/items/WallpaperModeSetting.vue` | 壁纸模式选项 |
+| `apps/main/src/components/settings/items/GalleryGridColumnsSetting.vue` | 列数选项 label/描述 |
+| `apps/main/src/components/settings/items/DownloadIntervalSetting.vue` | 下载间隔选项 |
+| `apps/main/src/components/settings/items/GalleryImageAspectRatioSetting.vue` | 宽高比选项 |
+| `apps/main/src/components/settings/items/DebugGenerateImagesSetting.vue` | 调试用 label/描述 |
+| `apps/main/src/components/settings/QuickSettingsDrawer.vue` | 抽屉内标题、快捷项文案 |
+| `apps/main/src/components/settings/items/LanguageSetting.vue` | 已用 i18n 的可仅核对 key 是否与 settings 一致 |
+
+#### 7.1.3 视图页（已完成）
+
+已完成：新增命名空间 `surf`、`tasks`、`albums`、`plugins`、`help`，扩展 `gallery`、`common`；各视图用户可见文案已替换为 `$t()` / `useI18n().t()`。
+
+| 文件 | 迁移内容 |
+|------|------------|
+| `apps/main/src/views/Gallery.vue` | 开始收集、确认删除、选择收集方式、本地/网络、本地导入提示、滚动过快提示、删除等 |
+| `apps/main/src/views/Surf.vue` | 标题、占位符、按钮、Cookie 对话框、畅游说明、会话与错误提示等 |
+| `apps/main/src/views/SurfImages.vue` | 确认删除、收藏/轮播/壁纸/文件夹/分享/打开/移除等提示与副标题 |
+| `apps/main/src/views/TaskDetail.vue` | 确认删除、任务状态文案、刷新/加载失败、停止与删除任务确认及提示等 |
+| `apps/main/src/views/Albums.vue` | 空状态、新建画册对话框、刷新/创建/轮播/删除画册等提示与确认 |
+| `apps/main/src/views/AlbumDetail.vue` | （待补：从画册移除、收藏/加入画册等操作文案与对话框） |
+| `apps/main/src/views/PluginBrowser.vue` | （待补：已安装源、商店源、安装/更新/导入等 tab 与对话框） |
+| `apps/main/src/views/PluginDetail.vue` | （待补：源详情、确认安装/卸载等） |
+| `apps/main/src/views/Help.vue` | （待补：帮助标题、使用技巧、快捷键等） |
+| `apps/main/src/App.vue` | 侧栏与 Android 底部 Tab：画廊、画册、收集源、畅游、设置、帮助；退出确认对话框 |
+
+#### 7.1.4 通用组件与弹窗（已完成）
+
+已完成：扩展 `common`、`tasks`、`albums`、`plugins`、`gallery`、`help`，新增 `import` 命名空间；各组件用户可见文案已替换为 `$t()` / `useI18n().t()`。
+
+| 文件 | 待迁移内容 |
+|------|------------|
+| `apps/main/src/components/TaskDrawer.vue` | 抽屉标题、状态、操作按钮 |
+| `apps/main/src/components/MediaPicker.vue` | 标题、按钮、提示 |
+| `apps/main/src/components/LocalImportDialog.vue` | 标题、说明、按钮 |
+| `apps/main/src/components/CrawlerDialog.vue` | 爬虫/采集相关文案 |
+| `apps/main/src/components/OrganizeDialog.vue` | 整理相关 label/按钮 |
+| `apps/main/src/components/AddToAlbumDialog.vue` | 加入画册相关文案 |
+| `apps/main/src/components/import/PluginImportDialog.vue` | 插件导入说明与按钮 |
+| `apps/main/src/components/import/ImportConfirmContent.vue` | 导入确认说明 |
+| `apps/main/src/components/import/ImportConfirmDialog.vue` | 若有标题/按钮 |
+| `apps/main/src/components/CollectSourcePicker.vue` | 收藏来源选择文案 |
+| `apps/main/src/components/help/HelpDrawer.vue` | 帮助抽屉标题、分类 |
+| `apps/main/src/components/help/CodeBlock.vue` | 若有「复制」等按钮 |
+| `apps/main/src/components/common/EmptyState.vue` | 空状态标题/描述 |
+| `apps/main/src/components/common/OptionPickerDrawer.vue` | 选项标题、确认等 |
+| `apps/main/src/components/FileDropOverlay.vue` | 拖拽提示文案 |
+| `apps/main/src/components/ImageGrid.vue` | 加载中、错误提示等 |
+| `apps/main/src/components/GalleryBigPaginator.vue` | 上一页/下一页等 |
+| `apps/main/src/components/GalleryToolbar.vue` | 工具栏按钮、筛选文案 |
+| `apps/main/src/components/LoadMoreButton.vue` | 「加载更多」等 |
+| `apps/main/src/components/albums/AlbumCard.vue` | 画册卡标题、数量等 |
+
+#### 7.1.5 页头与操作区（已完成）
+
+| 文件 | 待迁移内容 |
+|------|------------|
+| `apps/main/src/components/header/TaskDetailPageHeader.vue` | 返回、标题、操作按钮 |
+| `apps/main/src/components/header/PluginBrowserPageHeader.vue` | 同上 |
+| `apps/main/src/components/header/AlbumsPageHeader.vue` | 同上 |
+| `apps/main/src/components/header/AlbumDetailPageHeader.vue` | 同上 |
+| `apps/main/src/header/comps/GallerySortControl.vue` | 排序选项 |
+| `apps/main/src/header/comps/CollectAction.vue` | 收藏相关文案 |
+| `apps/main/src/header/comps/OrganizeHeaderControl.vue` | 整理相关文案 |
+
+新增命名空间 `header`（`locales/<lang>/header.json`），用于页头功能按钮 label；`headerFeatures.ts` 使用 i18n，语言切换时调用 `registerHeaderFeatures()` 重新注册。
+
+#### 7.1.6 右键菜单（已完成）
+
+| 文件 | 待迁移内容 |
+|------|------------|
+| `apps/main/src/components/contextMenu/TaskContextMenu.vue` | 菜单项文案 |
+| `apps/main/src/components/contextMenu/TaskImageContextMenu.vue` | 同上 |
+| `apps/main/src/components/contextMenu/SingleImageContextMenu.vue` | 同上 |
+| `apps/main/src/components/contextMenu/MultiImageContextMenu.vue` | 同上 |
+| `apps/main/src/components/contextMenu/GalleryContextMenu.vue` | 同上 |
+| `apps/main/src/components/contextMenu/AlbumImageContextMenu.vue` | 同上 |
+| `apps/main/src/components/contextMenu/AlbumContextMenu.vue` | 同上 |
+
+#### 7.1.7 帮助与 Tip 文案 ✅ 已完成
+
+| 文件/目录 | 待迁移内容 | 状态 |
+|-----------|------------|------|
+| `apps/main/src/help/tipsRegistry.ts` | Tip 的 title/分类名 | ✅ 已迁移：getTipCategories(t) |
+| `apps/main/src/help/helpRegistry.ts` | 帮助侧栏分类、标题 | ✅ 已迁移：titleKey/labelKey/descriptionKey |
+| `apps/main/src/views/Help.vue` | 页面标题、tab、快捷键列表 | ✅ 已迁移 |
+| `apps/main/src/components/help/HelpDrawer.vue` | 抽屉内分组与项 | ✅ 已迁移 |
+| `apps/main/src/help/tips/**/*.vue` | 各 Tip 组件内全部说明正文 | ✅ 已迁移：21 个 Tip 组件均已使用 `$t('help.tipsContent.<tip-id>.<key>')`，zh/help.json 含完整 tipsContent |
+
+#### 7.1.8 TS/Composables/Stores/Actions（已完成）
+
+| 文件 | 待迁移内容 |
+|------|------------|
+| `apps/main/src/composables/useImageOperations.ts` | 消息提示、确认框文案（如删除成功、是否删除等） |
+| `apps/main/src/composables/useProviderPathRoute.ts` | 面包屑或路由展示用中文（若有） |
+| `apps/main/src/wallpaper.ts` | 壁纸相关 toast/错误提示 |
+| `apps/main/src/stores/albums.ts` | 默认画册名等用户可见字符串 |
+| `apps/main/src/stores/taskDrawer.ts` | 若有展示用文案 |
+| `apps/main/src/settings/quickSettingsRegistry.ts` | 快捷设置项 label/描述 |
+| `apps/main/src/header/headerFeatures.ts` | 页头功能名称（若硬编码） |
+| `apps/main/src/actions/imageActions.ts` | 操作结果提示文案 |
+| `apps/main/src/actions/albumActions.ts` | 同上 |
+| `apps/main/src/actions/surfRecordActions.ts` | 同上 |
+| `apps/main/src/utils/dragScroll.ts` | 若有用户可见提示 |
+| `apps/main/src/composables/useImagesChangeRefresh.ts` | 若有提示 |
+| `apps/main/src/composables/useFileDrop.ts` | 拖拽提示文案 |
+
+**说明**：TS 中需在调用处注入 `i18n`（如 `useI18n().t`）或通过 `import { i18n } from '@/i18n'` 使用 `i18n.global.t`，再替换硬编码字符串。
+
+#### 7.1.9 前端迁移顺序建议
+
+1. 扩展 `settings`、`common`、`gallery` 的 key，并补全 `locales/zh`、`en`、`zhtw`。
+2. 路由 `meta.title` 改为从 i18n 读取（需在路由或布局里用 `t()` 设 document title）。
+3. `Settings.vue` 及所有 `settings/items/*` 组件。
+4. 各视图页（Gallery、Albums、TaskDetail、PluginBrowser、Help、Surf 等）。
+5. 通用组件与弹窗、页头、右键菜单。
+6. Help/Tips 正文（可单列命名空间 `help`，按 tipId 或模块分子 key）。
+7. TS/Composables/Stores/Actions 中的 toast、确认框、默认名称等。
+
+---
+
+### 7.2 后端待迁移清单（待补充）
+
+- 托盘菜单文案（`tray.*`）
+- 系统通知、原生对话框文案
+- 其他 app-main 内面向用户的字符串
+
+（后端清单可根据 `kabegame-i18n/locales/*.yml` 与调用点逐项补齐。）

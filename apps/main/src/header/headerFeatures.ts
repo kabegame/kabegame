@@ -14,11 +14,14 @@ import {
   Monitor,
 } from "@element-plus/icons-vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
+import { i18n } from "@/i18n";
 
 import CollectAction from "./comps/CollectAction.vue";
 import OrganizeHeaderControl from "./comps/OrganizeHeaderControl.vue";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
 import GallerySortControl from "./comps/GallerySortControl.vue";
+
+const t = (key: string) => i18n.global.t(key);
 
 /**
  * 注册所有 header features 到 store
@@ -27,108 +30,91 @@ export function registerHeaderFeatures() {
   const store = useHeaderStore();
 
   store.register([
-    // 帮助
     {
       id: HeaderFeatureId.Help,
-      label: "帮助",
+      label: t("header.help"),
       icon: QuestionFilled,
     },
-    // 快捷设置
     {
       id: HeaderFeatureId.QuickSettings,
-      label: "快捷设置",
+      label: t("header.quickSettings"),
       icon: Setting,
     },
-    // 刷新
     {
       id: HeaderFeatureId.Refresh,
-      label: "刷新",
+      label: t("header.refresh"),
       icon: Refresh,
     },
-    // 停止任务
     {
       id: HeaderFeatureId.StopTask,
-      label: "停止任务",
+      label: t("header.stopTask"),
       icon: VideoPause,
     },
-    // 删除任务（TaskDetail 专用）
     {
       id: HeaderFeatureId.DeleteTask,
-      label: "删除任务",
+      label: t("header.deleteTask"),
       icon: Delete,
     },
-    // 整理（自定义组件：内部维护进度与取消）
     {
       id: HeaderFeatureId.Organize,
-      label: "整理",
+      label: t("header.organize"),
       icon: FolderOpened,
       comp: OrganizeHeaderControl,
     },
-    // 收集（使用自定义组件）
     {
       id: HeaderFeatureId.Collect,
-      label: "收集",
+      label: t("header.collect"),
       icon: Plus,
       comp: CollectAction,
     },
-    // 新建画册
     {
       id: HeaderFeatureId.CreateAlbum,
-      label: "新建画册",
+      label: t("header.createAlbum"),
       icon: Plus,
     },
-    // 去VD查看（画册列表 / 画册详情共用）
     {
       id: HeaderFeatureId.OpenVirtualDrive,
-      label: "去VD查看",
+      label: t("header.openVirtualDrive"),
       icon: FolderOpened,
     },
-    // 一键加入画册（任务详情等）
     {
       id: HeaderFeatureId.AddToAlbum,
-      label: "加入画册",
+      label: t("header.addToAlbum"),
       icon: FolderAdd,
     },
-    // 设为轮播壁纸
     {
       id: HeaderFeatureId.SetAsWallpaperCarousel,
-      label: "设为轮播壁纸",
+      label: t("header.setAsWallpaperCarousel"),
       icon: Picture,
     },
-    // 删除画册
     {
       id: HeaderFeatureId.DeleteAlbum,
-      label: "删除画册",
+      label: t("header.deleteAlbum"),
       icon: Delete,
     },
-    // 导入源
     {
       id: HeaderFeatureId.ImportSource,
-      label: "导入源",
+      label: t("header.importSource"),
       icon: Upload,
     },
-    // 管理源
     {
       id: HeaderFeatureId.ManageSources,
-      label: "管理源",
+      label: t("header.manageSources"),
       icon: Grid,
     },
-    // 任务抽屉按钮（使用自定义组件）
     {
       id: HeaderFeatureId.TaskDrawer,
       comp: TaskDrawerButton,
     },
-    // 画廊按时间排序（桌面：右侧下拉按钮；Android 放入 fold，点击打开 van-picker）
     {
       id: HeaderFeatureId.GallerySort,
-      label: "按时间排序",
+      label: t("header.gallerySort"),
       icon: Sort,
       comp: GallerySortControl,
     },
-    // 畅游页：打开爬虫 WebView 窗口（仅桌面显示）
     {
       id: HeaderFeatureId.OpenCrawlerWebview,
-      label: "爬虫 WebView 窗口",
+      label: t("header.openCrawlerWebview"),
       icon: Monitor,
     },
   ]);

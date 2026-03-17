@@ -5,6 +5,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { FolderOpened, Collection, Delete, VideoPause } from "@element-plus/icons-vue";
 import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
 
@@ -15,6 +16,7 @@ interface Props {
 }
 
 const props = defineProps<Props>();
+const { t } = useI18n();
 
 const menuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = [];
@@ -24,7 +26,7 @@ const menuItems = computed<MenuItem[]>(() => {
     items.push({
       key: "stop",
       type: "item",
-      label: "停止任务",
+      label: t("contextMenu.stopTask"),
       icon: VideoPause,
       command: "stop",
       className: "warning",
@@ -35,7 +37,7 @@ const menuItems = computed<MenuItem[]>(() => {
   items.push({
     key: "view",
     type: "item",
-    label: "查看文件",
+    label: t("contextMenu.viewFiles"),
     icon: FolderOpened,
     command: "view",
   });
@@ -44,7 +46,7 @@ const menuItems = computed<MenuItem[]>(() => {
   items.push({
     key: "save-config",
     type: "item",
-    label: "保存为配置",
+    label: t("contextMenu.saveAsConfig"),
     icon: Collection,
     command: "save-config",
   });
@@ -56,7 +58,7 @@ const menuItems = computed<MenuItem[]>(() => {
   items.push({
     key: "delete",
     type: "item",
-    label: "删除任务",
+    label: t("contextMenu.deleteTask"),
     icon: Delete,
     command: "delete",
     className: "danger",

@@ -1,7 +1,7 @@
 <template>
   <div class="organize-header-control">
     <!-- 空闲：显示整理按钮 -->
-    <el-button v-if="!loading" circle title="整理" @click="showDialog = true">
+    <el-button v-if="!loading" circle :title="t('header.organize')" @click="showDialog = true">
       <el-icon>
         <FolderOpened />
       </el-icon>
@@ -9,13 +9,13 @@
     <!-- 进行中：进度 + 取消 -->
     <div v-else class="organize-progress-row">
       <span class="progress-text">
-        {{ progress.total > 0 ? `整理中 ${progress.processed}/${progress.total}` : "整理中…" }}
+        {{ progress.total > 0 ? t('gallery.organizingProgress', { processed: progress.processed, total: progress.total }) : t('gallery.organizingEllipsis') }}
         <span v-if="progress.removed > 0 || progress.regenerated > 0" class="progress-detail">
-          （已移除 {{ progress.removed }}，已补充 {{ progress.regenerated }}）
+          {{ t('gallery.organizingDetail', { removed: progress.removed, regenerated: progress.regenerated }) }}
         </span>
       </span>
       <el-button type="danger" link size="small" @click="handleCancel">
-        取消
+        {{ t('common.cancel') }}
       </el-button>
     </div>
 
@@ -27,12 +27,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { FolderOpened } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import OrganizeDialog from "@/components/OrganizeDialog.vue";
 
+const { t } = useI18n();
 const loading = ref(false);
 const showDialog = ref(false);
 const progress = ref({ processed: 0, total: 0, removed: 0, regenerated: 0 });
@@ -65,10 +67,10 @@ onMounted(async () => {
     const p = event.payload;
     loading.value = false;
     if (p?.canceled) {
-      ElMessage.info("整理已取消");
+      ElMessage.info(t("gallery.organizeCanceled"));
       return;
     }
-    ElMessage.success(`整理完成：已移除 ${p?.removed ?? 0} 张图片，已补充 ${p?.regenerated ?? 0} 张缩略图`);
+    ElMessage.success(t("gallery.organizeDone", { removed: p?.removed ?? 0, regenerated: p?.regenerated ?? 0 }));
   });
 });
 
@@ -90,7 +92,7 @@ async function handleConfirm(options: { dedupe: boolean; removeMissing: boolean;
     });
   } catch (e) {
     console.error("启动整理失败:", e);
-    ElMessage.error("启动整理失败");
+    ElMessage.error(t("gallery.startOrganizeFailed"));
     loading.value = false;
   }
 }
@@ -99,10 +101,10 @@ async function handleCancel() {
   if (!loading.value) return;
   try {
     const ok = await invoke<boolean>("cancel_organize");
-    if (ok) ElMessage.info("已请求取消整理");
+    if (ok) ElMessage.info(t("gallery.cancelOrganizeRequested"));
   } catch (e) {
     console.error("取消整理失败:", e);
-    ElMessage.error("取消整理失败");
+    ElMessage.error(t("gallery.cancelOrganizeFailed"));
   }
 }
 </script>

@@ -1,7 +1,7 @@
 <template>
   <OptionPickerDrawer
     :model-value="modelValue"
-    :title="title"
+    :title="resolvedTitle"
     :options="sourceOptions"
     @update:model-value="$emit('update:modelValue', $event)"
     @select="handleSelect"
@@ -10,6 +10,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { FolderOpened, Connection } from "@element-plus/icons-vue";
 import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
@@ -20,8 +21,10 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  title: "选择收集方式",
+  title: undefined,
 });
+const { t } = useI18n();
+const resolvedTitle = computed(() => props.title ?? t('gallery.chooseCollectMethod'));
 
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
@@ -31,14 +34,14 @@ const emit = defineEmits<{
 const sourceOptions = computed<OptionItem[]>(() => [
   {
     id: "local",
-    title: "本地",
-    desc: "从本机选择图片、文件夹或压缩文件导入",
+    title: t('gallery.local'),
+    desc: t('gallery.localDesc'),
     icon: FolderOpened,
   },
   {
     id: "remote",
-    title: "远程",
-    desc: "使用插件从网络收集图片",
+    title: t('gallery.network'),
+    desc: t('gallery.remoteDesc'),
     icon: Connection,
   },
 ]);

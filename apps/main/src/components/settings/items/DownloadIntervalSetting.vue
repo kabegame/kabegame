@@ -3,7 +3,7 @@
     <AndroidPickerDuration
       v-if="IS_ANDROID"
       :model-value="localValue"
-      title="下载间隔时间"
+      :title="$t('settings.downloadIntervalTitle')"
       :disabled="disabled"
       @update:model-value="onChange"
     />

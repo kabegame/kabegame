@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import type { RouteRecordRaw } from "vue-router";
+import { i18n } from "@/i18n";
 import Gallery from "@/views/Gallery.vue";
 import PluginBrowser from "@/views/PluginBrowser.vue";
 import Albums from "@/views/Albums.vue";
@@ -20,67 +21,67 @@ const routes: RouteRecordRaw[] = [
     path: "/gallery",
     name: "Gallery",
     component: Gallery,
-    meta: { title: "画廊" },
+    meta: { title: "route.gallery" },
   },
   {
     path: "/plugin-browser",
     name: "PluginBrowser",
     component: PluginBrowser,
-    meta: { title: "源" },
+    meta: { title: "route.pluginBrowser" },
   },
   {
     path: "/albums",
     name: "Albums",
     component: Albums,
-    meta: { title: "画册" },
+    meta: { title: "route.albums" },
   },
   {
     path: "/albums/:id",
     name: "AlbumDetail",
     component: AlbumDetail,
-    meta: { title: "画册" },
+    meta: { title: "route.albumDetail" },
   },
   {
     path: "/tasks/:id",
     name: "TaskDetail",
     component: TaskDetail,
-    meta: { title: "任务详情" },
+    meta: { title: "route.taskDetail" },
   },
   {
     path: "/plugin-detail/:id",
     name: "PluginDetail",
     component: PluginDetail,
-    meta: { title: "源详情" },
+    meta: { title: "route.pluginDetail" },
   },
   {
     path: "/settings",
     name: "Settings",
     component: Settings,
-    meta: { title: "设置" },
+    meta: { title: "route.settings" },
   },
   {
     path: "/help",
     name: "Help",
     component: Help,
-    meta: { title: "帮助" },
+    meta: { title: "route.help" },
   },
   {
     path: "/help/tips/:tipId",
     name: "HelpTip",
     component: Help,
-    meta: { title: "帮助" },
+    meta: { title: "route.help" },
   },
   {
     path: "/surf",
     name: "Surf",
     component: Surf,
-    meta: { title: "畅游" },
+    meta: { title: "route.surf" },
   },
   {
     path: "/surf/:id/images",
     name: "SurfImages",
     component: SurfImages,
-    meta: { title: "畅游图片" },
+    meta: { title: "route.surfImages" },
   },
   {
     path: "/plugins",
@@ -94,7 +95,10 @@ const router = createRouter({
 });
 
 router.beforeEach((to, from, next) => {
-  console.log("beforeEach", to, from);
+  const titleKey = to.meta.title as string | undefined;
+  if (titleKey && typeof titleKey === "string") {
+    document.title = i18n.global.t(titleKey) as string;
+  }
   next();
 });
 

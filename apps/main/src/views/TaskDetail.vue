@@ -22,7 +22,7 @@
             @added="handleAddedToAlbum" />
 
         <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-            :message="removeDialogMessage" title="确认删除" :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
+            :message="removeDialogMessage" :title="$t('tasks.confirmDelete')" :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
     </div>
 </template>
 
@@ -71,6 +71,9 @@ import { IS_ANDROID } from "@kabegame/core/env";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 type TaskFailedImage = {
     id: number;
@@ -153,7 +156,7 @@ useImageGridAutoLoad({
 
 // Image actions for context menu / action sheet
 const imageActions = computed(() => createImageActions({
-    removeText: "删除",
+    removeText: t("tasks.removeText"),
     multiHide: ["favorite", "addToAlbum"]
 }));
 
@@ -187,12 +190,12 @@ const taskSubtitle = computed(() => {
     // 总数：以 provider.total 为准（避免被分页/leaf 限制）
     const failedTotal = failedImages.value.length;
     const okTotal = totalImagesCount.value;
-    parts.push(`共 ${okTotal} 张`);
-    if (failedTotal > 0) parts.push(`失败 ${failedTotal} 张`);
+    parts.push(t("tasks.totalCount", { n: okTotal }));
+    if (failedTotal > 0) parts.push(t("tasks.failedCount", { n: failedTotal }));
     // 安卓优先用 store 数据（与 1s 轮询一致），否则用 taskInfo
     const src = IS_ANDROID && taskFromStoreForDisplay.value ? taskFromStoreForDisplay.value : taskInfo.value;
     if (src?.deletedCount && src.deletedCount > 0) {
-        parts.push(`已删除 ${src.deletedCount} 张`);
+        parts.push(t("tasks.deletedCount", { n: src.deletedCount }));
     }
     if (src?.startTime) {
         // 仅当任务仍在运行时才用 currentTime 实时更新；结束后用 endTime 固定显示
@@ -218,11 +221,11 @@ const formatDuration = (startTime: number, endTime?: number, currentTimeMs?: num
     const minutes = Math.floor(seconds / 60);
     const hours = Math.floor(minutes / 60);
     if (hours > 0) {
-        return `运行 ${hours} 小时 ${minutes % 60} 分钟`;
+        return t("tasks.runTimeHours", { hours, minutes: minutes % 60 });
     } else if (minutes > 0) {
-        return `运行 ${minutes} 分钟`;
+        return t("tasks.runTimeMinutes", { minutes });
     } else {
-        return `运行 ${seconds} 秒`;
+        return t("tasks.runTimeSeconds", { seconds });
     }
 };
 
@@ -256,10 +259,10 @@ const handleRefresh = async () => {
         clearImageStateCache();
         await loadTaskInfo();
         await loadTaskImages({ showSkeleton: false });
-        ElMessage.success("刷新成功");
+        ElMessage.success(t("tasks.refreshSuccess"));
     } catch (error) {
         console.error("刷新失败:", error);
-        ElMessage.error("刷新失败");
+        ElMessage.error(t("tasks.refreshFailed"));
     } finally {
         isRefreshing.value = false;
     }
@@ -358,7 +361,7 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
     } catch (e) {
         console.error("加载任务图片失败:", e);
         // 兜底：避免“静默 0 张”让用户误判，提示可能是 provider-path 解析/缓存导致的问题
-        ElMessage.error("加载任务图片失败，请稍后重试或点击右上角“刷新”");
+        ElMessage.error(t("tasks.loadImagesFailed"));
     } finally {
         if (showSkeleton) loading.value = false;
     }
@@ -434,10 +437,10 @@ const handleRetryDownloadInner = async (payload: { image: any }) => {
     // 直接走后端 download_image 重试
     try {
         await invoke("retry_task_failed_image", { failedId });
-        ElMessage.info("已发起重试下载");
+        ElMessage.info(t("tasks.retryDownloadSent"));
     } catch (err) {
         console.error("重试下载失败:", err);
-        ElMessage.error("重试下载失败");
+        ElMessage.error(t("tasks.retryDownloadFailed"));
         retryingFailedIds.value.delete(failedId);
     }
 };
@@ -456,7 +459,7 @@ const loadTaskInfo = async () => {
             taskStatus.value = task.status || "";
             // 获取插件名称
             const plugin = pluginStore.plugins.find((p) => p.id === task.pluginId);
-            taskName.value = plugin?.name || task.pluginId || "任务";
+            taskName.value = plugin?.name || task.pluginId || t("tasks.task");
             // 同步更新 store 中的任务信息（确保 deletedCount 等字段同步）
             // 运行中任务不覆盖 progress，避免用 DB 的旧值覆盖事件驱动的实时进度
             const taskIndex = crawlerStore.tasks.findIndex((t) => t.id === taskId.value);
@@ -477,13 +480,13 @@ const handleStopTask = async () => {
     if (!taskId.value) return;
     try {
         await ElMessageBox.confirm(
-            "确定要停止这个任务吗？已下载的图片将保留，未开始的任务将取消。",
-            "停止任务",
+            t("tasks.stopTaskConfirm"),
+            t("tasks.stopTaskTitle"),
             { type: "warning" }
         );
         await crawlerStore.stopTask(taskId.value);
         // 不写入本地“stopped”伪状态：任务最终状态由后端 task-status / task-error 事件与 DB 同步驱动
-        ElMessage.info("任务已请求停止");
+        ElMessage.info(t("tasks.taskStopRequested"));
     } catch (error) {
         if (error !== "cancel") {
             console.error("停止任务失败:", error);
@@ -496,26 +499,26 @@ const handleDeleteTask = async () => {
     try {
         const needStop = taskStatusFromStore.value === "running";
         const msg = needStop
-            ? "当前任务正在运行，删除前将先终止任务。确定继续吗？"
-            : "确定要删除这个任务吗？";
-        await ElMessageBox.confirm(msg, "确认删除", { type: "warning" });
+            ? t("tasks.deleteTaskConfirmRunning")
+            : t("tasks.deleteTaskConfirm");
+        await ElMessageBox.confirm(msg, t("tasks.confirmDelete"), { type: "warning" });
 
         if (needStop) {
             try {
                 await crawlerStore.stopTask(taskId.value);
             } catch (err) {
                 console.error("终止任务失败，已取消删除", err);
-                ElMessage.error("终止任务失败，删除已取消");
+                ElMessage.error(t("tasks.stopFailedCancel"));
                 return;
             }
         }
 
         await crawlerStore.deleteTask(taskId.value);
-        ElMessage.success("任务已删除");
+        ElMessage.success(t("tasks.taskDeleted"));
         router.back();
     } catch (error) {
         if (error !== "cancel") {
-            ElMessage.error("删除失败");
+            ElMessage.error(t("tasks.deleteFailed"));
         }
     }
 };

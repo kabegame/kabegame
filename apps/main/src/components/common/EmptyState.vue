@@ -1,8 +1,8 @@
 <template>
     <div class="empty-state">
         <img src="/album-empty.png" alt="空状態" class="empty-image" />
-        <p class="empty-tip">まだ空っぽだけど、これから色々お友達を作っていくのだ！</p>
-        <p v-if="!IS_ANDROID" class="empty-tip">提示：把图片文件夹拖进来有惊喜</p>
+        <p class="empty-tip">{{ $t('common.emptyStateTip') }}</p>
+        <p v-if="!IS_ANDROID" class="empty-tip">{{ $t('common.emptyStateHint') }}</p>
     </div>
 </template>
 

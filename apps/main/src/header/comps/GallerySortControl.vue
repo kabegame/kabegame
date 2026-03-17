@@ -12,10 +12,10 @@
     <template #dropdown>
       <el-dropdown-menu>
         <el-dropdown-item command="asc" :class="{ 'is-active': sortOrder === 'asc' }">
-          按时间正序
+          {{ t('gallery.byTimeAsc') }}
         </el-dropdown-item>
         <el-dropdown-item command="desc" :class="{ 'is-active': sortOrder === 'desc' }">
-          按时间倒序
+          {{ t('gallery.byTimeDesc') }}
         </el-dropdown-item>
       </el-dropdown-menu>
     </template>
@@ -24,6 +24,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { ArrowDown, Sort } from "@element-plus/icons-vue";
 
@@ -36,8 +37,9 @@ const sortOrder = computed<"asc" | "desc">(() =>
   currentPath.value.includes("/desc/") ? "desc" : "asc"
 );
 
+const { t } = useI18n();
 const sortLabel = computed(() =>
-  sortOrder.value === "desc" ? "按时间倒序" : "按时间正序"
+  sortOrder.value === "desc" ? t("gallery.byTimeDesc") : t("gallery.byTimeAsc")
 );
 
 /** 从 path 得到不含页码、不含 desc 的根路径，如 all/desc/1 → all，date/2024-01/2 → date/2024-01 */

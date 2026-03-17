@@ -1,17 +1,17 @@
 <template>
   <ElDialog
     v-model="visible"
-    title="本地导入"
+    :title="$t('albums.localImport')"
     width="560px"
     class="local-import-dialog"
     :show-close="true"
     @open="handleOpen"
     @closed="handleClosed">
     <el-form label-width="110px" class="local-import-form">
-      <el-form-item label="输出画册">
+      <el-form-item :label="$t('albums.outputAlbum')">
         <el-select
           v-model="selectedOutputAlbumId"
-          placeholder="不指定（仅添加到画廊）"
+          :placeholder="$t('albums.notSpecifiedAddToGallery')"
           clearable
           style="width: 100%"
         >
@@ -21,35 +21,35 @@
             :label="album.name"
             :value="album.id"
           />
-          <el-option value="__create_new__" label="+ 新建画册">
-            <span style="color: var(--el-color-primary); font-weight: 500">+ 新建画册</span>
+          <el-option value="__create_new__" :label="$t('albums.createNewAlbum')">
+            <span style="color: var(--el-color-primary); font-weight: 500">{{ $t('albums.createNewAlbum') }}</span>
           </el-option>
         </el-select>
       </el-form-item>
-      <el-form-item v-if="isCreatingNewOutputAlbum" label="画册名称" required>
+      <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
         <el-input
           v-model="newOutputAlbumName"
-          placeholder="请输入画册名称"
+          :placeholder="$t('albums.placeholderName')"
           maxlength="50"
           show-word-limit
           @keyup.enter="handleCreateOutputAlbum"
         />
       </el-form-item>
 
-      <el-form-item label="选择路径">
+      <el-form-item :label="$t('albums.selectPath')">
         <div class="path-picker-actions">
           <el-button @click="handleAddFiles">
             <el-icon><Document /></el-icon>
-            添加文件
+            {{ $t('common.addFiles') }}
           </el-button>
           <el-button @click="handleAddFolder">
             <el-icon><FolderOpened /></el-icon>
-            添加文件夹
+            {{ $t('common.addFolder') }}
           </el-button>
         </div>
       </el-form-item>
 
-      <el-form-item v-if="paths.length > 0" label="已选路径">
+      <el-form-item v-if="paths.length > 0" :label="$t('common.selectedPaths')">
         <div class="paths-list">
           <div
             v-for="(p, idx) in paths"
@@ -58,29 +58,29 @@
           >
             <span class="path-text">{{ p }}</span>
             <el-button type="danger" link size="small" @click="removePath(idx)">
-              移除
+              {{ $t('common.remove') }}
             </el-button>
           </div>
         </div>
       </el-form-item>
 
-      <el-form-item label="递归子文件夹">
+      <el-form-item :label="$t('albums.recursiveSubdirsLabel')">
         <el-checkbox v-model="recursive">
-          递归扫描子文件夹中的图片/视频
+          {{ $t('albums.recursiveSubdirs') }}
         </el-checkbox>
       </el-form-item>
-      <el-form-item label="包含压缩包">
+      <el-form-item :label="$t('albums.includeArchiveLabel')">
         <el-checkbox v-model="includeArchive">
-          扫描时包含支持的压缩文件（zip、rar），加入解压队列
+          {{ $t('albums.includeArchiveScan') }}
         </el-checkbox>
       </el-form-item>
     </el-form>
 
     <template #footer>
       <div class="dialog-footer">
-        <el-button @click="visible = false">取消</el-button>
+        <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" :disabled="paths.length === 0" @click="handleSubmit">
-          开始导入
+          {{ $t('albums.startImport') }}
         </el-button>
       </div>
     </template>
@@ -89,6 +89,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { Document, FolderOpened } from "@element-plus/icons-vue";
 import { ElDialog, ElMessage } from "element-plus";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -103,6 +104,7 @@ interface Album {
   name: string;
 }
 
+const { t } = useI18n();
 const props = defineProps<{
   modelValue: boolean;
 }>();
@@ -153,8 +155,8 @@ async function handleAddFiles() {
       directory: false,
       multiple: true,
       filters: [
-        { name: "媒体", extensions: exts },
-        { name: "压缩包", extensions: ["zip", "rar"] },
+        { name: t('common.media'), extensions: exts },
+        { name: t('common.archive'), extensions: ["zip", "rar"] },
       ],
     });
 
@@ -169,7 +171,7 @@ async function handleAddFiles() {
   } catch (e) {
     if (e !== "cancel" && e !== "close") {
       console.error("选择文件失败:", e);
-      ElMessage.error("选择文件失败");
+      ElMessage.error(t('albums.selectFileFailed'));
     }
   }
 }
@@ -188,7 +190,7 @@ async function handleAddFolder() {
       try {
         const meta = await stat(pathStr);
         if (!meta.isDirectory) {
-          ElMessage.warning("请选择文件夹");
+          ElMessage.warning(t('albums.pleaseSelectFolder'));
           return;
         }
       } catch {
@@ -199,7 +201,7 @@ async function handleAddFolder() {
   } catch (e) {
     if (e !== "cancel" && e !== "close") {
       console.error("选择文件夹失败:", e);
-      ElMessage.error("选择文件夹失败");
+      ElMessage.error(t('albums.selectFolderFailed'));
     }
   }
 }
@@ -211,7 +213,7 @@ function removePath(idx: number) {
 async function handleCreateOutputAlbum() {
   const name = newOutputAlbumName.value.trim();
   if (!name) {
-    ElMessage.warning("请输入画册名称");
+          ElMessage.warning(t('albums.enterAlbumNameFirst'));
     return;
   }
   try {
@@ -223,13 +225,13 @@ async function handleCreateOutputAlbum() {
     }
   } catch (e) {
     console.error("创建画册失败:", e);
-    ElMessage.error("创建画册失败");
+    ElMessage.error(t('albums.createAlbumFailed'));
   }
 }
 
 async function handleSubmit() {
   if (paths.value.length === 0) {
-    ElMessage.warning("请至少添加一个路径");
+    ElMessage.warning(t('albums.addPathFirst'));
     return;
   }
 
@@ -237,7 +239,7 @@ async function handleSubmit() {
   if (selectedOutputAlbumId.value === "__create_new__") {
     const name = newOutputAlbumName.value.trim();
     if (!name) {
-      ElMessage.warning("请先输入画册名称");
+      ElMessage.warning(t('albums.enterAlbumNameFirst'));
       return;
     }
     try {
@@ -245,7 +247,7 @@ async function handleSubmit() {
       outputAlbumId = album?.id;
     } catch (e) {
       console.error("创建画册失败:", e);
-      ElMessage.error("创建画册失败");
+      ElMessage.error(t('albums.createAlbumFailed'));
       return;
     }
   } else if (selectedOutputAlbumId.value) {
@@ -263,7 +265,7 @@ async function handleSubmit() {
 
   visible.value = false;
   paths.value = [];
-  ElMessage.success("已添加本地导入任务");
+  ElMessage.success(t('gallery.localImportTaskAdded'));
 }
 
 function handleOpen() {

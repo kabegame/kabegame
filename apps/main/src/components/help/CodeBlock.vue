@@ -8,9 +8,11 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { DocumentCopy, Check } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 
+const { t } = useI18n();
 const props = defineProps<{
     code: string;
 }>();
@@ -27,13 +29,13 @@ const handleCopy = async () => {
             await navigator.clipboard.writeText(props.code);
         }
         copied.value = true;
-        ElMessage.success("已复制到剪贴板");
+        ElMessage.success(t('common.copySuccess'));
         setTimeout(() => {
             copied.value = false;
         }, 2000);
     } catch (error) {
         console.error("复制失败:", error);
-        ElMessage.error("复制失败");
+        ElMessage.error(t('common.copyFailed'));
     }
 };
 </script>

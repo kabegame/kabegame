@@ -11,7 +11,7 @@
           {{ dropText }}
         </div>
         <div class="drop-hint">
-          松开鼠标以导入
+          {{ $t('common.releaseToImport') }}
         </div>
       </div>
     </div>
@@ -20,6 +20,7 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { Upload } from "@element-plus/icons-vue";
 
 const emit = defineEmits<{
@@ -27,7 +28,8 @@ const emit = defineEmits<{
 }>();
 
 const isDragging = ref(false);
-const dropText = ref("拖入文件或文件夹");
+const { t } = useI18n();
+const dropText = ref(t('common.dragDropText'));
 
 // 处理遮罩层点击事件
 const handleOverlayClick = () => {
@@ -36,9 +38,7 @@ const handleOverlayClick = () => {
 
 // 暴露给外部使用的方法
 const show = (text?: string) => {
-  if (text) {
-    dropText.value = text;
-  }
+  dropText.value = text ?? t('common.dragDropText');
   isDragging.value = true;
 };
 

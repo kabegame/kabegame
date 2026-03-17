@@ -4,14 +4,14 @@
     <el-icon>
       <Plus />
     </el-icon>
-    开始收集
+    {{ t('gallery.startCollect') }}
   </el-button>
   <el-dropdown v-else trigger="click" @command="handleCommand">
     <el-button type="primary" class="collect-btn">
       <el-icon>
         <Plus />
       </el-icon>
-      开始收集
+      {{ t('gallery.startCollect') }}
       <el-icon class="el-icon--right">
         <ArrowDown />
       </el-icon>
@@ -20,11 +20,11 @@
       <el-dropdown-menu>
         <el-dropdown-item command="local">
           <el-icon><FolderOpened /></el-icon>
-          本地
+          {{ t('gallery.local') }}
         </el-dropdown-item>
         <el-dropdown-item command="network">
           <el-icon><Connection /></el-icon>
-          网络
+          {{ t('gallery.network') }}
         </el-dropdown-item>
       </el-dropdown-menu>
     </template>
@@ -32,8 +32,11 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
 import { Plus, ArrowDown, FolderOpened, Connection } from "@element-plus/icons-vue";
 import { IS_ANDROID } from "@kabegame/core/env";
+
+const { t } = useI18n();
 
 const emit = defineEmits<{
   action: [data: { type: string; value?: string }];

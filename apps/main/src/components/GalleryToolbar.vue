@@ -1,5 +1,5 @@
 <template>
-  <PageHeader title="画廊" :show="showIds" :fold="foldIds" @action="handleAction" sticky>
+  <PageHeader :title="$t('gallery.gallery')" :show="showIds" :fold="foldIds" @action="handleAction" sticky>
     <template #subtitle>
       <span>{{ totalCountText }}</span>
     </template>
@@ -10,7 +10,7 @@
     <van-popup v-model:show="showSortPicker" position="bottom" round>
       <van-picker
         v-model="sortPickerSelected"
-        title="按时间排序"
+        :title="$t('gallery.byTime')"
         :columns="sortPickerColumns"
         @confirm="onSortPickerConfirm"
         @cancel="showSortPicker = false"
@@ -21,6 +21,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, onUnmounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
@@ -56,8 +57,9 @@ const isAllDesc = computed(() => props.providerRootPath.includes("/desc"));
 const sortOrder = computed(() =>
   props.providerRootPath.includes("/desc") ? "desc" : "asc"
 );
-const sortOptionLabelAsc = "按时间正序";
-const sortOptionLabelDesc = "按时间倒序";
+const { t } = useI18n();
+const sortOptionLabelAsc = computed(() => t('gallery.byTimeAsc'));
+const sortOptionLabelDesc = computed(() => t('gallery.byTimeDesc'));
 function onSortOrderChange(value: string) {
   const basePath = props.providerRootPath.replace("/desc", "") || "all";
   if (value === "desc") {
@@ -70,7 +72,10 @@ function onSortOrderChange(value: string) {
 // Android：fold 中「按时间排序」点击后弹出的 picker
 const showSortPicker = ref(false);
 useModalBack(showSortPicker);
-const sortPickerColumns = [{ text: "按时间正序", value: "asc" }, { text: "按时间倒序", value: "desc" }];
+const sortPickerColumns = computed(() => [
+  { text: t('gallery.byTimeAsc'), value: "asc" },
+  { text: t('gallery.byTimeDesc'), value: "desc" },
+]);
 const sortPickerSelected = ref<string[]>(["asc"]);
 watch(showSortPicker, (open) => {
   if (open) sortPickerSelected.value = [sortOrder.value];
@@ -83,14 +88,12 @@ function onSortPickerConfirm() {
 
 const totalCountText = computed(() => {
   if (props.totalCount === 0) {
-    return "暂无图片";
+    return t('gallery.noImages');
   }
-  // 如果启用了分页，显示当前位置
   if (props.bigPageEnabled && props.currentPosition !== undefined) {
-    return `第 ${props.currentPosition} / ${props.totalCount}`;
+    return t('gallery.positionOfTotal', { pos: props.currentPosition, total: props.totalCount });
   }
-  // 否则显示原来的格式
-  return `共 ${props.totalCount} 张图片`;
+  return t('gallery.totalImages', { count: props.totalCount });
 });
 
 const emit = defineEmits<{
@@ -122,7 +125,7 @@ watch(
     if (!IS_ANDROID) return;
     headerStore.setFoldLabel(
       HeaderFeatureId.GallerySort,
-      sortOrder.value === "desc" ? sortOptionLabelDesc : sortOptionLabelAsc
+      sortOrder.value === "desc" ? sortOptionLabelDesc.value : sortOptionLabelAsc.value
     );
   },
   { immediate: true }

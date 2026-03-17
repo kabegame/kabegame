@@ -2,7 +2,7 @@
   <div class="surf-page">
     <div class="surf-scroll-container" :class="{ 'has-records': hasRecords }">
       <PageHeader
-        title="畅游"
+        :title="$t('surf.title')"
         :show="surfHeaderShowIds"
         sticky
         @action="handleSurfHeaderAction"
@@ -13,7 +13,7 @@
         <div class="surf-logo">
           <img
             src="/swim.jpeg"
-            alt="畅游"
+            :alt="$t('surf.title')"
             class="surf-logo-img"
             :style="hasRecords ? { height: logoHeight + 'px' } : undefined"
           />
@@ -22,7 +22,7 @@
         <div class="surf-search-row">
           <el-select
             v-model="pluginQuickSelect"
-            placeholder="从插件快速进入"
+            :placeholder="$t('surf.placeholderPlugin')"
             size="large"
             filterable
             :disabled="surfStore.sessionActive"
@@ -38,16 +38,16 @@
           </el-select>
           <el-input
             v-model="inputUrl"
-            placeholder="输入 URL 开始畅游，例如 https://pixiv.net"
+            :placeholder="$t('surf.placeholderUrl')"
             :disabled="surfStore.sessionActive"
             size="large"
             @keyup.enter="handleStart"
           />
           <el-button type="primary" size="large" @click="handleStart">
-            {{ surfStore.sessionActive ? "打开已有会话" : "开始畅游" }}
+            {{ surfStore.sessionActive ? $t('surf.openSession') : $t('surf.startSurf') }}
           </el-button>
           <el-button v-if="surfStore.sessionActive" size="large" @click="handleCloseSession">
-            结束会话
+            {{ $t('surf.endSession') }}
           </el-button>
           <el-button
             v-if="surfStore.sessionActive"
@@ -55,7 +55,7 @@
             :loading="cookieLoading"
             @click="handleViewCookies"
           >
-            查看网站 Cookie
+            {{ $t('surf.viewCookie') }}
           </el-button>
         </div>
 
@@ -66,7 +66,7 @@
           show-icon
           class="surf-linux-tip"
         >
-          Linux 下因 WebKit 限制，畅游无法下载图片/视频，仅可浏览页面。
+          {{ $t('surf.linuxHint') }}
         </el-alert>
 
         <!-- 畅游记录列表 -->
@@ -86,19 +86,19 @@
                   <div class="host">{{ record.host }}</div>
                   <div class="root-url">{{ record.rootUrl }}</div>
                 </div>
-                <el-tag size="small" type="info">下载 {{ record.downloadCount }}</el-tag>
+                <el-tag size="small" type="info">{{ $t('surf.downloadCount') }} {{ record.downloadCount }}</el-tag>
               </div>
               <div class="card-foot">
-                <span>最近访问：{{ formatTime(record.lastVisitAt) }}</span>
+                <span>{{ $t('surf.lastVisit') }}{{ formatTime(record.lastVisitAt) }}</span>
                 <span v-if="record.lastImage" class="last-image" @click.stop="goImages(record.id)">
-                  查看最近图片
+                  {{ $t('surf.viewRecentImages') }}
                 </span>
               </div>
             </el-card>
           </transition-group>
           <div class="load-more">
             <el-button v-if="surfStore.hasMore" :loading="surfStore.loading" @click="surfStore.loadMore()">
-              加载更多
+              {{ $t('surf.loadMore') }}
             </el-button>
           </div>
         </div>
@@ -117,46 +117,46 @@
 
     <ElDialog
       v-model="cookieDialogVisible"
-      title="当前站点 Cookie"
+      :title="$t('surf.cookieDialogTitle')"
       width="560px"
       class="surf-cookie-dialog"
       @closed="cookieString = ''"
     >
-      <p v-if="cookieHost" class="surf-cookie-host">站点：{{ cookieHost }}</p>
-      <p class="surf-cookie-tip">以下为畅游窗口对该站点实际发送的 Cookie（含 HttpOnly），可用于脚本等场景。</p>
+      <p v-if="cookieHost" class="surf-cookie-host">{{ $t('surf.site') }}{{ cookieHost }}</p>
+      <p class="surf-cookie-tip">{{ $t('surf.cookieTip') }}</p>
       <el-input
         v-model="cookieString"
         type="textarea"
         :rows="8"
         readonly
-        placeholder="暂无 Cookie"
+        :placeholder="$t('surf.noCookie')"
         class="surf-cookie-textarea"
       />
       <template #footer>
-        <el-button @click="cookieDialogVisible = false">关闭</el-button>
+        <el-button @click="cookieDialogVisible = false">{{ $t('common.close') }}</el-button>
         <el-button type="primary" :disabled="!cookieString" @click="copyCookie">
-          {{ copyDone ? "已复制" : "复制" }}
+          {{ copyDone ? $t('surf.copied') : $t('surf.copy') }}
         </el-button>
       </template>
     </ElDialog>
 
     <ElDialog
       v-model="surfHelpVisible"
-      title="畅游说明"
+      :title="$t('surf.surfHelpTitle')"
       width="420px"
       class="surf-help-dialog"
     >
       <p class="surf-help-p">
-        <strong>畅游</strong>是 Kabegame 的内置浏览与收集功能。输入目标网站 URL（如 https://pixiv.net）并点击「开始畅游」后，会在应用内打开该页面；你可以在该窗口中右键下载图片或者视频，成功下载的图片和视频会加入你的画廊！
+        {{ $t('surf.surfHelpIntro') }}
       </p>
       <p class="surf-help-p">
-        每次畅游会生成一条记录，可在此页快速再次进入该站点，或通过「查看最近图片」进入该站点的画廊视图。
+        {{ $t('surf.surfHelpRecord') }}
       </p>
       <p v-if="IS_LINUX" class="surf-help-p surf-help-linux">
-        Linux 下因 WebKit 限制，畅游窗口内无法下载内容，仅支持浏览。
+        {{ $t('surf.linuxHintHelp') }}
       </p>
       <template #footer>
-        <el-button type="primary" @click="surfHelpVisible = false">知道了</el-button>
+        <el-button type="primary" @click="surfHelpVisible = false">{{ $t('surf.gotIt') }}</el-button>
       </template>
     </ElDialog>
   </div>
@@ -177,7 +177,9 @@ import { usePluginStore } from "@/stores/plugins";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
 import { createSurfRecordActions } from "@/actions/surfRecordActions";
+import { useI18n } from "vue-i18n";
 
+const { t } = useI18n();
 const router = useRouter();
 const surfStore = useSurfStore();
 const pluginStore = usePluginStore();
@@ -203,7 +205,7 @@ async function openCrawlerWindow() {
   crawlerWebviewOpening.value = true;
   try {
     await invoke("show_crawler_window");
-    ElMessage.success("已打开爬虫 WebView 窗口");
+    ElMessage.success(t("surf.openWebViewSuccess"));
   } catch (e) {
     ElMessage.error(String(e));
   } finally {
@@ -273,11 +275,11 @@ const formatTime = (ts: number) => {
 /** 规范化并校验 URL：仅允许 https；域名字符串自动补 https；http 提示需用 https；其他协议提示不支持 */
 function normalizeAndValidateUrl(input: string): { url: string } | { error: string } {
   const v = input.trim();
-  if (!v) return { error: "请输入 URL" };
+  if (!v) return { error: t("surf.pleaseEnterUrl") };
   const lower = v.toLowerCase();
   if (lower.startsWith("https://")) return { url: v };
-  if (lower.startsWith("http://")) return { error: "请使用 https 协议" };
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) return { error: "不支持的协议，仅支持 https" };
+  if (lower.startsWith("http://")) return { error: t("surf.useHttps") };
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) return { error: t("surf.unsupportedProtocol") };
   return { url: `https://${v}` };
 }
 
@@ -295,18 +297,18 @@ const handleStart = async () => {
       return;
     }
     await surfStore.startSession(normalized);
-    ElMessage.success("已启动畅游会话");
+    ElMessage.success(t("surf.sessionStartSuccess"));
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || "启动会话失败");
+    ElMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
   }
 };
 
 const handleCloseSession = async () => {
   try {
     await surfStore.closeSession();
-    ElMessage.success("畅游会话已结束");
+    ElMessage.success(t("surf.sessionEndSuccess"));
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || "结束会话失败");
+    ElMessage.error(e?.message || String(e) || t("surf.sessionEndFailed"));
   }
 };
 
@@ -319,7 +321,7 @@ async function handleViewCookies() {
     cookieDialogVisible.value = true;
     copyDone.value = false;
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || "获取 Cookie 失败");
+    ElMessage.error(e?.message || String(e) || t("surf.getCookieFailed"));
   } finally {
     cookieLoading.value = false;
   }
@@ -330,9 +332,9 @@ async function copyCookie() {
   try {
     await navigator.clipboard.writeText(cookieString.value);
     copyDone.value = true;
-    ElMessage.success("已复制到剪贴板");
+    ElMessage.success(t("surf.copySuccess"));
   } catch {
-    ElMessage.error("复制失败");
+    ElMessage.error(t("common.copyFailed"));
   }
 }
 
@@ -342,7 +344,7 @@ const handleRecordClick = async (record: SurfRecord) => {
     inputUrl.value = record.rootUrl;
     await surfStore.startSession(record.rootUrl);
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || "启动会话失败");
+    ElMessage.error(e?.message || String(e) || t("surf.sessionStartFailed"));
   }
 };
 
@@ -365,15 +367,15 @@ const handleRecordMenuCommand = async (command: "viewImages" | "delete") => {
   if (command === "delete") {
     try {
       await ElMessageBox.confirm(
-        `确定要删除畅游记录「${record.host}」吗？关联的图片将保留在画廊中。`,
-        "删除畅游记录",
-        { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" }
+        t("surf.deleteRecordConfirm", { host: record.host }),
+        t("surf.deleteRecordTitle"),
+        { confirmButtonText: t("surf.deleteButton"), cancelButtonText: t("common.cancel"), type: "warning" }
       );
       await surfStore.deleteRecord(record.id);
-      ElMessage.success("已删除");
+      ElMessage.success(t("surf.deleteSuccess"));
     } catch (e: any) {
       if (e !== "cancel") {
-        ElMessage.error(e?.message || String(e) || "删除失败");
+        ElMessage.error(e?.message || String(e) || t("surf.deleteFailed"));
       }
     }
   }

@@ -1,9 +1,9 @@
 <template>
     <SingleImageContextMenu v-if="selectedCount === 1" :visible="visible" :position="position" :image="image"
-        remove-text="删除" @close="$emit('close')" @command="$emit('command', $event)" />
+        :remove-text="$t('common.delete')" @close="$emit('close')" @command="$emit('command', $event)" />
     <MultiImageContextMenu v-else :visible="visible" :position="position" :image="image" :selected-count="selectedCount"
-        :is-image-selected="isImageSelected" :hide="['favorite', 'addToAlbum']" remove-text="删除" @close="$emit('close')"
-        @command="$emit('command', $event)" />
+        :is-image-selected="isImageSelected" :hide="['favorite', 'addToAlbum']" :remove-text="$t('common.delete')"
+        @close="$emit('close')" @command="$emit('command', $event)" />
 </template>
 
 <script setup lang="ts">

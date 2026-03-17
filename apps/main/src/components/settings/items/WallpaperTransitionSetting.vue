@@ -3,15 +3,15 @@
     v-if="IS_ANDROID"
     :model-value="localValue"
     :options="options"
-    title="过渡效果"
-    placeholder="请选择过渡效果"
+    :title="t('settings.transitionTitle')"
+    :placeholder="t('settings.transitionPlaceholder')"
     :disabled="props.disabled || wallpaperModeSwitching || disabled"
     @update:model-value="(v) => handleChange(v ?? 'none')"
   />
   <el-select
     v-else
     v-model="localValue"
-    placeholder="请选择过渡效果"
+    :placeholder="t('settings.transitionPlaceholder')"
     style="min-width: 180px"
     :disabled="props.disabled || wallpaperModeSwitching || disabled"
     @change="handleChange"
@@ -22,6 +22,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
@@ -33,6 +34,8 @@ import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.v
 const props = defineProps<{
   disabled?: boolean;
 }>();
+
+const { t } = useI18n();
 
 type Transition = "none" | "fade" | "slide" | "zoom";
 type Opt = { label: string; value: Transition };
@@ -47,20 +50,19 @@ const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationE
 const options = computed<Opt[]>(() => {
   if (mode.value === "native") {
     return [
-      { label: "跟随系统", value: "none" },
+      { label: t("settings.transitionFollowSystem"), value: "none" },
     ];
   } else if (mode.value === "window" && (IS_WINDOWS || IS_MACOS)) {
     return [
-      { label: "无过渡", value: "none" },
-      { label: "淡入淡出", value: "fade" },
-      { label: "滑动", value: "slide" },
-      { label: "缩放", value: "zoom" },
+      { label: t("settings.transitionNone"), value: "none" },
+      { label: t("settings.transitionFade"), value: "fade" },
+      { label: t("settings.transitionSlide"), value: "slide" },
+      { label: t("settings.transitionZoom"), value: "zoom" },
     ];
   } else {
-    // 其他系统的非原生，暂未实现
     return [
-      { label: "（未实现）", value: "none" }
-    ]
+      { label: t("settings.transitionNotImplemented"), value: "none" }
+    ];
   }
 });
 
@@ -91,11 +93,9 @@ onMounted(async () => {
 });
 
 const handleChange = async (transition: string) => {
-  // 如果轮播未启用，给出提示但不阻止设置
   if (!rotationEnabled.value) {
-    ElMessage.info("未启用轮播：过渡效果将在启用轮播后生效");
+    ElMessage.info(t("settings.transitionRotationRequired"));
   }
-
   await set(transition);
 };
 </script>

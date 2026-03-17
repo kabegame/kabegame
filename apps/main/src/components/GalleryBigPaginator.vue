@@ -5,7 +5,7 @@
                 <el-icon>
                     <ArrowLeft />
                 </el-icon>
-                <span v-if="!IS_ANDROID">上一页</span>
+                <span v-if="!IS_ANDROID">{{ $t('gallery.prevPage') }}</span>
             </button>
 
             <div class="paginator-info">
@@ -35,7 +35,7 @@
             </div>
 
             <button class="nav-button next" :disabled="currentBigPage === totalBigPages" @click="handleNextPage">
-                <span v-if="!IS_ANDROID">下一页</span>
+                <span v-if="!IS_ANDROID">{{ $t('gallery.nextPage') }}</span>
                 <el-icon>
                     <ArrowRight />
                 </el-icon>
@@ -47,7 +47,7 @@
             <van-popup v-model:show="showPagePicker" position="bottom" round>
                 <van-picker
                     v-model="pickerSelectedValues"
-                    title="跳转到页"
+                    :title="$t('gallery.jumpToPage')"
                     :columns="pickerColumns"
                     @confirm="onPickerConfirm"
                     @cancel="showPagePicker = false"

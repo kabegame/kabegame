@@ -1,18 +1,21 @@
 <template>
     <el-radio-group v-model="localValue" :disabled="switching" class="wallpaper-mode-radio-group"
         @change="handleChange">
-        <el-radio value="native">原生模式</el-radio>
-        <el-radio v-if="IS_WINDOWS || IS_MACOS" value="window">窗口模式</el-radio>
+        <el-radio value="native">{{ t('settings.modeNative') }}</el-radio>
+        <el-radio v-if="IS_WINDOWS || IS_MACOS" value="window">{{ t('settings.modeWindow') }}</el-radio>
     </el-radio-group>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { listen } from "@tauri-apps/api/event";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
+
+const { t } = useI18n();
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperMode");
 const uiStore = useUiStore();
@@ -31,15 +34,14 @@ watch(
 const handleChange = async (mode: string) => {
     if (switching.value) return;
 
-    // 如果切换到原生模式，提示用户会覆盖原来壁纸
     if (mode === "native") {
         try {
             await ElMessageBox.confirm(
-                "切换到原生模式会覆盖系统当前壁纸设置，是否继续？",
-                "提示",
+                t("settings.wallpaperModeConfirmMessage"),
+                t("settings.wallpaperModeConfirmTitle"),
                 {
-                    confirmButtonText: "继续",
-                    cancelButtonText: "取消",
+                    confirmButtonText: t("settings.wallpaperModeConfirmOk"),
+                    cancelButtonText: t("common.cancel"),
                     type: "warning",
                 }
             );
@@ -59,7 +61,7 @@ const handleChange = async (mode: string) => {
             const waitForSwitchComplete = async () => {
                 try {
                     const timeoutId = setTimeout(() => {
-                        reject(new Error("切换模式超时：后端未在 30 秒内响应"));
+                        reject(new Error(t("settings.wallpaperModeSwitchTimeout")));
                     }, 30000);
 
                     const unlistenFn = await listen<{ success: boolean; mode: string; error?: string }>(
@@ -69,11 +71,11 @@ const handleChange = async (mode: string) => {
                                 clearTimeout(timeoutId);
                                 unlistenFn();
                                 if (event.payload.success) {
-                                    ElMessage.success("壁纸模式已切换");
+                                    ElMessage.success(t("settings.wallpaperModeSwitchSuccess"));
                                     resolve();
                                 } else {
-                                    const errorMsg = event.payload.error || "切换模式失败";
-                                    ElMessage.error(`切换模式失败: ${errorMsg}`);
+                                    const errorMsg = event.payload.error || t("settings.wallpaperModeSwitchFailed");
+                                    ElMessage.error(`${t("settings.wallpaperModeSwitchFailed")}: ${errorMsg}`);
                                     reject(new Error(errorMsg));
                                 }
                             }
@@ -92,7 +94,7 @@ const handleChange = async (mode: string) => {
         await set(mode, onAfterSave);
     } catch (e: any) {
         const msg = e?.message || String(e);
-        ElMessage.error(`切换模式失败: ${msg}`);
+        ElMessage.error(`${t("settings.wallpaperModeSwitchFailed")}: ${msg}`);
         // 回滚
         localValue.value = prevMode;
         // eslint-disable-next-line no-console

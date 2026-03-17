@@ -1,6 +1,6 @@
 <template>
   <PageHeader
-    :title="taskName || '任务'"
+    :title="taskName || t('tasks.task')"
     :subtitle="taskSubtitle"
     :show="showIds"
     :fold="foldIds"
@@ -12,6 +12,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_ANDROID } from "@kabegame/core/env";
@@ -22,6 +23,8 @@ interface Props {
   /** 是否显示停止任务（仅当任务 running 时为 true，用于控制 Android fold 中是否显示停止） */
   showStopTask?: boolean;
 }
+
+const { t } = useI18n();
 
 const props = withDefaults(defineProps<Props>(), {
   taskName: undefined,

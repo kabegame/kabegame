@@ -2,7 +2,7 @@
   <div class="settings-container" v-pull-to-refresh="pullToRefreshOpts">
     <div class="settings-content">
       <PageHeader
-        title="设置"
+        :title="$t('settings.title')"
         :show="settingsShowIds"
         :fold="[]"
         @action="handleSettingsAction"
@@ -21,51 +21,44 @@
               <SettingRow :label="$t('settings.language')" :description="$t('settings.languageDesc')">
                 <LanguageSetting />
               </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" label="开机启动" description="应用启动时自动运行">
+              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.autoLaunch')" :description="$t('settings.autoLaunchDesc')">
                 <SettingSwitchControl setting-key="autoLaunch" />
               </SettingRow>
-              <SettingRow v-if="!IS_ANDROID && !isLightMode" label="画册盘" description="在资源管理器中以虚拟盘方式浏览画册（只支持有限的操作）">
+              <SettingRow v-if="!IS_ANDROID && !isLightMode" :label="$t('settings.albumDrive')" :description="$t('settings.albumDriveDesc')">
                 <AlbumDriveSetting />
               </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" label="图片点击行为" description="左键点击图片时的行为">
-                <SettingRadioControl setting-key="imageClickAction" :options="[
-                  { label: '应用内预览', value: 'preview' },
-                  { label: '系统默认打开', value: 'open' },
-                ]" />
+              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageClickAction')" :description="$t('settings.imageClickActionDesc')">
+                <SettingRadioControl setting-key="imageClickAction" :options="imageClickActionOptions" />
               </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" label="图片宽高比" description="影响画廊/画册中图片卡片的展示宽高比">
+              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageAspectRatio')" :description="$t('settings.imageAspectRatioDesc')">
                 <GalleryImageAspectRatioSetting />
               </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" label="画廊列数" description="动态列数支持快捷键调整；固定列数时快捷键不生效">
+              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.galleryColumns')" :description="$t('settings.galleryColumnsDesc')">
                 <GalleryGridColumnsSetting />
               </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" label="图片对齐方式" description="图片溢出方框时显示为居中、靠上或靠下（仅桌面端）">
-                <SettingRadioControl setting-key="galleryImageObjectPosition" :options="[
-                  { label: '居中', value: 'center' },
-                  { label: '靠上', value: 'top' },
-                  { label: '靠下', value: 'bottom' },
-                ]" />
+              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageObjectPosition')" :description="$t('settings.imageObjectPositionDesc')">
+                <SettingRadioControl setting-key="galleryImageObjectPosition" :options="objectPositionOptions" />
               </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" label="清理应用数据" description="将删除所有图片、画册、任务、设置、插件配置等用户数据，应用将自动重启">
+              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.clearUserData')" :description="$t('settings.clearUserDataDesc')">
                 <ClearUserDataSetting />
               </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" label="自动打开 WebView" description="启动 WebView 插件时自动显示并聚焦 WebView 窗口">
+              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.autoOpenWebView')" :description="$t('settings.autoOpenWebViewDesc')">
                 <SettingSwitchControl :setting-key="autoOpenCrawlerWebviewKey" />
               </SettingRow>
-              <SettingRow v-if="!IS_ANDROID && IS_DEV" label="生成测试图片（调试）" description="基于现有图片数据批量克隆插入，用于性能/分页测试（仅开发模式可见）">
+              <SettingRow v-if="!IS_ANDROID && IS_DEV" :label="$t('settings.debugGenerateImages')" :description="$t('settings.debugGenerateImagesDesc')">
                 <DebugGenerateImagesSetting />
               </SettingRow>
-              <SettingRow v-if="!IS_ANDROID && IS_DEV" label="桌面端开发：WebView 窗口" description="配置远程 URL，在独立 WebView 窗口中打开（用于爬虫 WebView 后端原型等，参见 CRAWLER_BACKENDS.md）">
+              <SettingRow v-if="!IS_ANDROID && IS_DEV" :label="$t('settings.devWebView')" :description="$t('settings.devWebViewDesc')">
                 <div class="dev-webview-row">
                   <el-input
                     v-model="devWebviewUrl"
-                    placeholder="https://pixiv.net"
+                    :placeholder="$t('settings.devWebviewPlaceholder')"
                     clearable
                     class="dev-webview-input"
                     @keyup.enter="openDevWebview"
                   />
                   <el-button type="primary" :loading="devWebviewOpening" @click="openDevWebview">
-                    打开 WebView 窗口
+                    {{ $t('settings.openWebViewButton') }}
                   </el-button>
                 </div>
               </SettingRow>
@@ -74,63 +67,60 @@
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="壁纸设置" :name="SETTINGS_TAB_NAMES[1]">
+      <el-tab-pane :label="$t('settings.tabWallpaper')" :name="SETTINGS_TAB_NAMES[1]">
         <el-card class="settings-card">
           <template #header>
-            <span>壁纸轮播设置</span>
+            <span>{{ $t('settings.wallpaperSectionTitle') }}</span>
           </template>
 
           <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
             <div v-if="!loading" class="settings-list">
-              <SettingRow label="启用壁纸轮播" description="自动从指定画册中轮播更换桌面壁纸">
+              <SettingRow :label="$t('settings.wallpaperRotationEnabled')" :description="$t('settings.wallpaperRotationEnabledDesc')">
                 <WallpaperRotationEnabledSetting />
               </SettingRow>
 
-              <SettingRow label="选择画册" description="轮播时从此画册（或全画廊）更换壁纸；单张壁纸请在画廊页选择">
+              <SettingRow :label="$t('settings.wallpaperSelectAlbum')" :description="$t('settings.wallpaperSelectAlbumDesc')">
                 <WallpaperRotationTargetSetting />
               </SettingRow>
               <div v-if="currentWallpaperPath" class="settings-list-current-wallpaper setting-row-desc">
                 <div class="setting-row-desc__spacer"></div>
                 <div class="setting-row-desc__content setting-description">
-                  <span class="setting-row-desc__label">当前壁纸：</span>
+                  <span class="setting-row-desc__label">{{ $t('settings.wallpaperCurrent') }}</span>
                   <button type="button" class="setting-row-desc__path" @click="openCurrentWallpaperPath">
                     {{ currentWallpaperPath }}
                   </button>
                 </div>
               </div>
 
-              <SettingRow label="轮播间隔" :description="`壁纸更换间隔（分钟，${rotationIntervalMin}-1440）`">
+              <SettingRow :label="$t('settings.wallpaperRotationInterval')" :description="$t('settings.wallpaperRotationIntervalDesc', { min: rotationIntervalMin })">
                 <SettingNumberControl setting-key="wallpaperRotationIntervalMinutes" :min="rotationIntervalMin" :max="1440" :step="10" />
               </SettingRow>
 
-              <SettingRow label="轮播模式" description="随机模式：每次随机选择；顺序模式：按顺序依次更换">
-                <SettingRadioControl setting-key="wallpaperRotationMode" :options="[
-                  { label: '随机', value: 'random' },
-                  { label: '顺序', value: 'sequential' },
-                ]" />
+              <SettingRow :label="$t('settings.wallpaperRotationMode')" :description="$t('settings.wallpaperRotationModeDesc')">
+                <SettingRadioControl setting-key="wallpaperRotationMode" :options="wallpaperModeOptions" />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS || IS_LINUX || IS_MACOS" label="壁纸显示方式" description="原生模式：根据系统支持显示可用样式">
+              <SettingRow v-if="IS_WINDOWS || IS_LINUX || IS_MACOS" :label="$t('settings.wallpaperStyle')" :description="$t('settings.wallpaperStyleDesc')">
                 <WallpaperStyleSetting />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="过渡效果" description="窗口模式支持壁纸过渡（图片与视频）；原生模式跟随系统能力">
+              <SettingRow v-if="IS_WINDOWS || IS_MACOS" :label="$t('settings.wallpaperTransition')" :description="$t('settings.wallpaperTransitionDesc')">
                 <WallpaperTransitionSetting />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="视频壁纸音量" description="视频壁纸播放时的音量（0～1），与预览内音量逻辑一致">
+              <SettingRow v-if="IS_WINDOWS || IS_MACOS" :label="$t('settings.wallpaperVolume')" :description="$t('settings.wallpaperVolumeDesc')">
                 <SettingSliderControl setting-key="wallpaperVolume" :min="0" :max="1" :step="0.1" :precision="1" />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="视频播放速率" description="0.25～3">
+              <SettingRow v-if="IS_WINDOWS || IS_MACOS" :label="$t('settings.wallpaperVideoPlaybackRate')" :description="$t('settings.wallpaperVideoPlaybackRateDesc')">
                 <SettingSliderControl setting-key="wallpaperVideoPlaybackRate" :min="0.25" :max="3" :step="0.25" :precision="2" />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS || IS_MACOS" label="壁纸模式" description="原生模式使用系统壁纸接口；窗口模式以独立窗口显示壁纸（支持过渡效果、视频壁纸等）">
+              <SettingRow v-if="IS_WINDOWS || IS_MACOS" :label="$t('settings.wallpaperModeLabel')" :description="$t('settings.wallpaperModeDesc')">
                 <WallpaperModeSetting />
               </SettingRow>
 
-              <SettingRow v-if="IS_WINDOWS" label="Wallpaper Engine 目录" description="用于“导出并自动导入到 WE”">
+              <SettingRow v-if="IS_WINDOWS" :label="$t('settings.wallpaperEngineDir')" :description="$t('settings.wallpaperEngineDirDesc')">
                 <WallpaperEngineDirSetting />
               </SettingRow>
             </div>
@@ -138,31 +128,31 @@
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="下载设置" :name="SETTINGS_TAB_NAMES[2]">
+      <el-tab-pane :label="$t('settings.tabDownload')" :name="SETTINGS_TAB_NAMES[2]">
         <el-card class="settings-card">
           <template #header>
-            <span>下载设置</span>
+            <span>{{ $t('settings.downloadSectionTitle') }}</span>
           </template>
 
           <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
             <div v-if="!loading" class="settings-list">
-              <SettingRow label="最大并发下载量" description="同时下载的图片数量（1-10）">
+              <SettingRow :label="$t('settings.maxConcurrentDownloads')" :description="$t('settings.maxConcurrentDownloadsDesc')">
                 <SettingNumberControl setting-key="maxConcurrentDownloads" :min="1" :max="10" :step="1" />
               </SettingRow>
 
-              <SettingRow label="下载间隔时间" description="每次下载完成后进入下一轮前等待（ms，100-10000）">
+              <SettingRow :label="$t('settings.downloadInterval')" :description="$t('settings.downloadIntervalDesc')">
                 <DownloadIntervalSetting />
               </SettingRow>
 
-              <SettingRow label="网络失效重试次数" description="下载图片遇到网络错误/超时等情况时，额外重试的次数（0-10）">
+              <SettingRow :label="$t('settings.networkRetryCount')" :description="$t('settings.networkRetryCountDesc')">
                 <SettingNumberControl setting-key="networkRetryCount" :min="0" :max="10" :step="1" />
               </SettingRow>
 
-              <SettingRow label="自动去重" description="根据文件哈希值自动跳过重复图片，避免在画廊中重复添加相同文件">
+              <SettingRow :label="$t('settings.autoDeduplicate')" :description="$t('settings.autoDeduplicateDesc')">
                 <SettingSwitchControl setting-key="autoDeduplicate" />
               </SettingRow>
 
-              <SettingRow v-if="!IS_ANDROID" label="默认下载目录" description="未在任务里指定输出目录时，将下载到该目录（按插件分文件夹保存）">
+              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.defaultDownloadDir')" :description="$t('settings.defaultDownloadDirDesc')">
                 <DefaultDownloadDirSetting />
               </SettingRow>
             </div>
@@ -177,6 +167,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useLocalStorage } from "@vueuse/core";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
@@ -206,19 +197,36 @@ import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerat
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import LanguageSetting from "@/components/settings/items/LanguageSetting.vue";
 import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV, IS_MACOS } from "@kabegame/core/env";
+
+const { t } = useI18n();
+
+const imageClickActionOptions = computed(() => [
+  { label: t("settings.imageClickPreview"), value: "preview" },
+  { label: t("settings.imageClickOpen"), value: "open" },
+]);
+const objectPositionOptions = computed(() => [
+  { label: t("settings.objectPositionCenter"), value: "center" },
+  { label: t("settings.objectPositionTop"), value: "top" },
+  { label: t("settings.objectPositionBottom"), value: "bottom" },
+]);
+const wallpaperModeOptions = computed(() => [
+  { label: t("settings.wallpaperModeRandom"), value: "random" },
+  { label: t("settings.wallpaperModeSequential"), value: "sequential" },
+]);
+
 const autoOpenCrawlerWebviewKey: AppSettingKey = "autoOpenCrawlerWebview";
 const devWebviewUrl = ref("https://www.example.com");
 const devWebviewOpening = ref(false);
 async function openDevWebview() {
   const url = devWebviewUrl.value?.trim() || "";
   if (!url) {
-    ElMessage.warning("请输入要打开的 URL");
+    ElMessage.warning(t("settings.messageInputUrl"));
     return;
   }
   devWebviewOpening.value = true;
   try {
     await invoke("open_dev_webview", { url });
-    ElMessage.success("已打开 WebView 窗口");
+    ElMessage.success(t("settings.messageWebViewOpened"));
   } catch (e) {
     ElMessage.error(String(e));
   } finally {
@@ -261,7 +269,7 @@ async function openCurrentWallpaperPath() {
   try {
     await invoke("open_file_path", { filePath: currentWallpaperPath.value });
   } catch (e) {
-    ElMessage.error("打开失败");
+    ElMessage.error(t("settings.messageOpenFailed"));
   }
 }
 watch(
@@ -302,10 +310,10 @@ const handleRefresh = async () => {
   isRefreshing.value = true;
   try {
     await loadSettings();
-    ElMessage.success("刷新成功");
+    ElMessage.success(t("settings.messageRefreshSuccess"));
   } catch (error) {
     console.error("刷新失败:", error);
-    ElMessage.error("刷新失败");
+    ElMessage.error(t("settings.messageRefreshFailed"));
   } finally {
     isRefreshing.value = false;
   }

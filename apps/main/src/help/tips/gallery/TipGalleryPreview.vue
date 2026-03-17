@@ -1,70 +1,68 @@
 <template>
   <div class="tip-article">
     <section class="section">
-      <h3>功能说明</h3>
-      <p>
-        <strong>双击应用内预览</strong>是画廊和画册中的一个便捷功能，让你可以在应用内快速查看图片大图，无需打开系统默认的图片查看器。
-      </p>
-      <p>启用后，双击任意图片即可打开预览对话框，支持以下功能：</p>
+      <h3>{{ $t('help.tipsContent.gallery-preview.featureTitle') }}</h3>
+      <p>{{ $t('help.tipsContent.gallery-preview.featurePara1') }}</p>
+      <p>{{ $t('help.tipsContent.gallery-preview.featurePara2') }}</p>
       <ul>
-        <li><strong>查看大图</strong>：以原始尺寸或适配窗口的方式查看图片</li>
-        <li><strong>缩放</strong>：使用鼠标滚轮或触摸板手势进行缩放</li>
-        <li><strong>拖拽</strong>：放大后可以拖拽查看图片的不同区域</li>
-        <li><strong>切换图片</strong>：使用左右箭头键或点击左右按钮切换上一张/下一张</li>
-        <li><strong>快速操作</strong>：在预览中可以直接删除图片、添加到画册等</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.featureItem1') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.featureItem2') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.featureItem3') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.featureItem4') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.featureItem5') }}</li>
       </ul>
       <TipImageCarousel v-if="previewImages.length > 0" :images="previewImages" />
     </section>
 
     <section class="section">
-      <h3>开启方法</h3>
-      <p>要启用双击应用内预览功能，需要前往<strong>设置</strong>页面进行配置：</p>
+      <h3>{{ $t('help.tipsContent.gallery-preview.enableTitle') }}</h3>
+      <p>{{ $t('help.tipsContent.gallery-preview.enablePara1') }}</p>
       <ol>
-        <li>点击左侧菜单栏的<strong>"设置"</strong>按钮，进入设置页面</li>
-        <li>在设置页面中，切换到<strong>"应用设置"</strong>标签页</li>
-        <li>找到<strong>"图片点击行为"</strong>设置项</li>
-        <li>选择<strong>"应用内预览"</strong>选项</li>
-        <li>设置会立即生效，无需重启应用</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.enableStep1') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.enableStep2') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.enableStep3') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.enableStep4') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.enableStep5') }}</li>
       </ol>
       <el-alert class="note" type="info" show-icon :closable="false">
-        如果你选择<strong>"系统默认打开"</strong>，双击图片会用系统默认的图片查看器打开，而不是应用内预览。
+        {{ $t('help.tipsContent.gallery-preview.enableNote') }}
       </el-alert>
       <TipImageCarousel v-if="settingsImages.length > 0" :images="settingsImages" />
     </section>
 
     <section class="section">
-      <h3>使用方法</h3>
-      <p>启用后，在画廊或画册中<strong>双击任意图片</strong>即可打开应用内预览对话框。</p>
-      <p>预览对话框支持以下操作：</p>
+      <h3>{{ $t('help.tipsContent.gallery-preview.usageTitle') }}</h3>
+      <p>{{ $t('help.tipsContent.gallery-preview.usagePara1') }}</p>
+      <p>{{ $t('help.tipsContent.gallery-preview.usagePara2') }}</p>
       <ul>
-        <li><strong>关闭预览</strong>：点击对话框外的遮罩区域，或按 <code>Esc</code> 键</li>
-        <li><strong>切换图片</strong>：
+        <li>{{ $t('help.tipsContent.gallery-preview.usageClose') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.usageSwitch') }}
           <ul>
-            <li>使用键盘<strong>左右箭头键</strong>（← →）</li>
-            <li>点击预览对话框左右两侧的导航按钮</li>
-            <li>在图片左右边缘悬停，会出现半透明的导航按钮</li>
+            <li>{{ $t('help.tipsContent.gallery-preview.usageSwitchItem1') }}</li>
+            <li>{{ $t('help.tipsContent.gallery-preview.usageSwitchItem2') }}</li>
+            <li>{{ $t('help.tipsContent.gallery-preview.usageSwitchItem3') }}</li>
           </ul>
         </li>
-        <li><strong>缩放图片</strong>：
+        <li>{{ $t('help.tipsContent.gallery-preview.usageZoom') }}
           <ul>
-            <li>使用<strong>鼠标滚轮</strong>向上/向下滚动</li>
-            <li>使用<strong>触摸板手势</strong>（双指捏合）</li>
+            <li>{{ $t('help.tipsContent.gallery-preview.usageZoomItem1') }}</li>
+            <li>{{ $t('help.tipsContent.gallery-preview.usageZoomItem2') }}</li>
           </ul>
         </li>
-        <li><strong>拖拽图片</strong>：放大后，按住鼠标左键并拖拽可以移动图片查看不同区域</li>
-        <li><strong>删除图片</strong>：在预览中按 <code>Delete</code> 或 <code>Backspace</code> 键可以快速删除当前图片</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.usageDrag') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.usageDelete') }}</li>
       </ul>
       <TipImageCarousel v-if="usageImages.length > 0" :images="usageImages" />
     </section>
 
     <section class="section">
-      <h3>适用场景</h3>
-      <p>应用内预览特别适合以下场景：</p>
+      <h3>{{ $t('help.tipsContent.gallery-preview.scenariosTitle') }}</h3>
+      <p>{{ $t('help.tipsContent.gallery-preview.scenariosPara') }}</p>
       <ul>
-        <li><strong>快速浏览</strong>：在画廊中快速查看多张图片，无需频繁打开和关闭系统图片查看器</li>
-        <li><strong>批量查看</strong>：使用键盘快捷键连续切换图片，提高浏览效率</li>
-        <li><strong>细节查看</strong>：放大图片查看细节，支持平滑缩放和拖拽</li>
-        <li><strong>快速操作</strong>：在预览中直接执行删除、添加到画册等操作，无需返回列表</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.scenariosItem1') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.scenariosItem2') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.scenariosItem3') }}</li>
+        <li>{{ $t('help.tipsContent.gallery-preview.scenariosItem4') }}</li>
       </ul>
     </section>
   </div>

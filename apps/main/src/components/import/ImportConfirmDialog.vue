@@ -5,6 +5,7 @@
 
 <script setup lang="ts">
 import { h, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { ElMessageBox } from "element-plus";
 import ImportConfirmContent from "./ImportConfirmContent.vue";
 
@@ -17,6 +18,7 @@ export type ImportItem = {
     isVideo?: boolean;
 };
 
+const { t } = useI18n();
 async function open(items: ImportItem[]): Promise<boolean | null> {
     // 注意：ElMessageBox 关闭时会卸载内容组件；如果依赖子组件 ref 来读取 checkbox，
     // 很容易读到 null（导致永远返回 false）。因此把状态保存在外部 ref 并传入内容组件。
@@ -28,10 +30,10 @@ async function open(items: ImportItem[]): Promise<boolean | null> {
                 items,
                 createAlbumPerSourceRef: createAlbumPerSource,
             }),
-            "确认导入",
+            t('import.confirmImportTitle'),
             {
-                confirmButtonText: "确认导入",
-                cancelButtonText: "取消",
+                confirmButtonText: t('import.confirmImportButton'),
+                cancelButtonText: t('common.cancel'),
                 type: "info",
                 customClass: "file-drop-confirm-dialog",
             }

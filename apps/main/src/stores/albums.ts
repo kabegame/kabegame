@@ -5,7 +5,8 @@ import { useCrawlerStore, type ImageInfo } from "./crawler";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
-import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
+import { ElMessageBox } from "element-plus";
+import { i18n } from "@/i18n";
 
 export interface Album {
   id: string;
@@ -135,12 +136,16 @@ export const useAlbumStore = defineStore("albums", () => {
   const deleteAlbum = async (albumId: string) => {
     await initEventListeners();
     if (settingsStore.values.wallpaperRotationAlbumId == albumId) {
-       await ElMessageBox.confirm('你删除的画册正在用于轮播，如果删除将回退到画廊', '确定删除该画册吗', {
-        type: "warning",
-        dangerouslyUseHTMLString: true,
-        confirmButtonText: '确定',
-        cancelButtonText: "取消",
-      });
+      await ElMessageBox.confirm(
+        i18n.global.t("albums.deleteAlbumRotationConfirm"),
+        i18n.global.t("albums.deleteAlbumRotationTitle"),
+        {
+          type: "warning",
+          dangerouslyUseHTMLString: true,
+          confirmButtonText: i18n.global.t("common.ok"),
+          cancelButtonText: i18n.global.t("common.cancel"),
+        },
+      );
     }
     await invoke("delete_album", { albumId });
     albums.value = albums.value.filter((a) => a.id !== albumId);

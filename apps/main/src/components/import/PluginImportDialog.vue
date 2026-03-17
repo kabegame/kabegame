@@ -14,7 +14,7 @@
     <PluginDetailPage
       v-if="preview"
       :title="pageTitle"
-      :subtitle="props.kgpgPath || '（未提供文件路径）'"
+      :subtitle="props.kgpgPath || t('common.noFilePath')"
       :show-back="IS_ANDROID"
       :loading="false"
       :show-skeleton="false"
@@ -23,9 +23,9 @@
       :installing="installing"
       :show-uninstall="false"
       :install-text="installText"
-      :installing-text="'安装中...'"
-      :empty-description="'插件不存在'"
-      :doc-empty-description="'该插件暂无文档'"
+      :installing-text="t('plugins.installing')"
+      :empty-description="t('common.pluginNotExist')"
+      :doc-empty-description="t('common.pluginNoDoc')"
       :load-doc-image-bytes="loadDocImageBytes"
       @install="doInstall"
       @copy-id="copyText"
@@ -55,15 +55,16 @@
         </el-button>
       </template>
     </PluginDetailPage>
-    <el-alert v-else-if="errorMsg" type="error" :closable="false" show-icon title="解析失败" :description="errorMsg" />
+    <el-alert v-else-if="errorMsg" type="error" :closable="false" show-icon :title="t('common.parseFailed')" :description="errorMsg" />
     <div v-else v-loading="loading" class="loading-container">
-      加载中...
+      {{ t('common.loading') }}
     </div>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { ElMessage } from 'element-plus';
 import PluginDetailPage from '@kabegame/core/components/plugin/PluginDetailPage.vue';
@@ -203,7 +204,8 @@ const pluginVm = computed(() => {
   };
 });
 
-const pageTitle = computed(() => pluginVm.value?.name || "导入插件");
+const { t } = useI18n();
+const pageTitle = computed(() => pluginVm.value?.name || t('common.importPlugin'));
 
 const canInstall = computed(() => {
   const p = preview.value?.preview;
@@ -212,11 +214,10 @@ const canInstall = computed(() => {
 
 const installText = computed(() => {
   const p = preview.value?.preview;
-  if (!p) return "安装";
-  if (!p.alreadyExists) return "安装";
+  if (!p) return t('plugins.install');
+  if (!p.alreadyExists) return t('plugins.install');
   const existing = p.existingVersion ?? null;
-  // 已安装版本不比要安装的版本旧 => 重新安装，否则更新
-  return isUpdateAvailable(existing, p.version) ? "更新" : "重新安装";
+  return isUpdateAvailable(existing, p.version) ? t('plugins.update') : t('plugins.reinstall');
 });
 
 const loadDocImageBytes = async (imagePath: string): Promise<number[]> => {
@@ -232,7 +233,7 @@ const doInstall = async () => {
   installing.value = true;
   try {
     await invoke('import_plugin_from_zip', { zipPath: props.kgpgPath });
-    ElMessage.success("导入成功");
+    ElMessage.success(t('common.importSuccess'));
     await pluginStore.loadPlugins();
     emit('success');
     visible.value = false;
@@ -252,9 +253,9 @@ const copyText = async (text: string) => {
     } else {
       await navigator.clipboard.writeText(text);
     }
-    ElMessage.success("已复制");
+    ElMessage.success(t('common.copied'));
   } catch {
-    ElMessage.error("复制失败");
+    ElMessage.error(t('common.copyFailed'));
   }
 };
 </script>
