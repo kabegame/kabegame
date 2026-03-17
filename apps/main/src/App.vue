@@ -97,6 +97,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { Picture, Grid, Setting, Collection, QuestionFilled, Compass } from "@element-plus/icons-vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { setLocale, resolveLanguage } from "@/i18n";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import HelpDrawer from "./components/help/HelpDrawer.vue";
 import TaskDrawer from "./components/TaskDrawer.vue";
@@ -263,6 +264,9 @@ onMounted(async () => {
   // 加载全部设置
   await settingsStore.loadAll();
 
+  // 从配置恢复语言设置
+  setLocale(resolveLanguage(settingsStore.values.language ?? undefined));
+
   // 初始化各个 composables
   await initWindowEvents();
   // 安卓下不支持拖拽导入，跳过初始化
@@ -292,6 +296,9 @@ onMounted(async () => {
     // 只更新变化的部分（后端只广播变化的部分）
     if (changes && typeof changes === "object") {
       Object.assign(settingsStore.values, changes);
+      if ("language" in changes) {
+        setLocale(resolveLanguage(changes.language ?? undefined));
+      }
       console.log("[Settings] 收到设置变更事件，已更新:", Object.keys(changes));
     }
   });

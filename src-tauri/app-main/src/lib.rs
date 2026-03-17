@@ -59,6 +59,14 @@ fn init_globals() -> Result<(), String> {
     Settings::init_global().map_err(|e| format!("Failed to initialize settings: {}", e))?;
     println!("  ✓ Settings initialized");
 
+    // 同步后端 i18n 语言（从配置恢复）
+    {
+        let lang = tauri::async_runtime::block_on(Settings::global().get_language())
+            .ok()
+            .flatten();
+        kabegame_i18n::sync_locale(lang.as_deref());
+    }
+
     PluginManager::init_global()
         .map_err(|e| format!("Failed to initialize plugin manager: {}", e))?;
     println!("  ✓ Plugin manager initialized");
@@ -408,6 +416,8 @@ pub fn run() {
             get_plugin_vars,
             get_build_mode,
             // --- Settings ---
+            get_language,
+            set_language,
             get_auto_launch,
             set_auto_launch,
             get_auto_open_crawler_webview,

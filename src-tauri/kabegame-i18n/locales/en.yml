@@ -1,0 +1,25 @@
+common:
+  ok: OK
+  cancel: Cancel
+  confirm: Confirm
+  close: Close
+  save: Save
+  refresh: Refresh
+  exit: Exit
+
+settings:
+  title: Settings
+  language: Language
+
+tray:
+  show: Show
+  hide: Hide
+  exit: Exit
+
+notifications:
+  refreshSuccess: Refresh successful
+  refreshFailed: Refresh failed
+
+dialog:
+  exitConfirm: Are you sure you want to exit? We'll miss you!
+  exitTitle: Exit

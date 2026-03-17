@@ -130,6 +130,8 @@ pub enum SettingKey {
     /// 画册盘挂载点
     #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     AlbumDriveMountPoint,
+    /// 界面语言（空/None 表示跟随系统）
+    Language,
 }
 
 // 用于序列化的值类型
@@ -313,6 +315,7 @@ impl Settings {
             SettingKey::AlbumDriveMountPoint => {
                 SettingValue::String(Self::default_album_drive_mount_point())
             }
+            SettingKey::Language => SettingValue::OptionString(None),
         }
     }
 
@@ -523,6 +526,7 @@ Write-Output "$style,$tile"
             SettingKey::AlbumDriveEnabled,
             #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveMountPoint,
+            SettingKey::Language,
         ];
 
         // 先读取 JSON（如果存在）
@@ -665,6 +669,12 @@ Write-Output "$style,$tile"
                     _ => Ok(SettingValue::OptionString(None)),
                 }
             }
+            SettingKey::Language => match json {
+                serde_json::Value::String(s) if !s.trim().is_empty() => {
+                    Ok(SettingValue::OptionString(Some(s.clone())))
+                }
+                _ => Ok(SettingValue::OptionString(None)),
+            },
             SettingKey::WallpaperStyleByMode | SettingKey::WallpaperTransitionByMode => {
                 let mut map = HashMap::new();
                 if let Some(obj) = json.as_object() {
@@ -738,6 +748,7 @@ Write-Output "$style,$tile"
             SettingKey::AlbumDriveEnabled => "albumDriveEnabled".to_string(),
             #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveMountPoint => "albumDriveMountPoint".to_string(),
+            SettingKey::Language => "language".to_string(),
         }
     }
 
@@ -1139,6 +1150,16 @@ Write-Output "$style,$tile"
                 .unwrap_or_else(|| Self::default_album_drive_mount_point()))
         } else {
             Ok(Self::default_album_drive_mount_point())
+        }
+    }
+
+    pub async fn get_language(&self) -> Result<Option<String>, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::Language) {
+            let val = cell.lock().await;
+            Ok(val.as_option_string().unwrap_or(None))
+        } else {
+            Ok(None)
         }
     }
 
@@ -1627,6 +1648,26 @@ Write-Output "$style,$tile"
             *val = new_value.clone();
         }
         Self::emit_setting_change(SettingKey::AlbumDriveMountPoint, &new_value).await;
+        Self::trigger_debounce_save().await?;
+        Ok(())
+    }
+
+    pub async fn set_language(&self, language: Option<String>) -> Result<(), String> {
+        let opt = language.and_then(|s| {
+            let t = s.trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
+        let cells = Self::cells();
+        let new_value = SettingValue::OptionString(opt.clone());
+        if let Some(cell) = cells.get(&SettingKey::Language) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::Language, &new_value).await;
         Self::trigger_debounce_save().await?;
         Ok(())
     }

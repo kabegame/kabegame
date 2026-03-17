@@ -1,0 +1,6 @@
+{
+  "title": "設定",
+  "appSettings": "應用程式設定",
+  "language": "語言",
+  "languageDesc": "介面顯示語言，空表示跟隨系統"
+}

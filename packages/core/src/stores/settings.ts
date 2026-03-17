@@ -46,6 +46,8 @@ export interface AppSettings {
   albumDriveEnabled: boolean;
   albumDriveMountPoint: string;
   autoOpenCrawlerWebview: boolean;
+  /** 界面语言（空/null 表示跟随系统） */
+  language: string | null;
 }
 
 export type AppSettingKey = keyof AppSettings;
@@ -64,6 +66,7 @@ type SettingKeyMeta = {
 function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
   const map: Partial<Record<AppSettingKey, SettingKeyMeta>> = {
     // --- 基础通用键（所有平台） ---
+    language: { getter: "get_language", setter: "set_language", param: "language" },
     maxConcurrentDownloads: { getter: "get_max_concurrent_downloads", setter: "set_max_concurrent_downloads", param: "count" },
     downloadIntervalMs: { getter: "get_download_interval_ms", setter: "set_download_interval_ms", param: "intervalMs" },
     networkRetryCount: { getter: "get_network_retry_count", setter: "set_network_retry_count", param: "count" },
