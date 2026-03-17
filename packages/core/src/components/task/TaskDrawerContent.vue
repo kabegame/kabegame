@@ -3,19 +3,19 @@
     <!-- 下载信息区域 -->
     <div class="downloads-section">
       <div class="downloads-header">
-        <span class="downloads-title">正在下载</span>
+        <span class="downloads-title">{{ t('tasks.drawerDownloading') }}</span>
         <div class="downloads-stats">
           <el-tag type="warning" size="small">Worker: {{ activeDownloadsRunningCount }}</el-tag>
           <el-tag type="info" size="small">Native: {{ nativeDownloadsRunningCount }}</el-tag>
         </div>
       </div>
       <div v-if="activeDownloads.length === 0" class="downloads-empty">
-        <el-empty description="暂无下载任务" :image-size="60" />
+        <el-empty :description="t('tasks.drawerNoDownloads')" :image-size="60" />
       </div>
       <div v-else class="downloads-content">
         <!-- 正在下载的图片列表 -->
         <div v-if="nativeActiveDownloads.length > 0" class="downloads-list">
-          <div class="download-list-title">原生下载</div>
+          <div class="download-list-title">{{ t('tasks.drawerNativeDownload') }}</div>
           <transition-group name="download-fade" tag="div" class="downloads-list-inner">
             <div v-for="download in nativeActiveDownloads" :key="downloadKey(download)" class="download-item">
               <div class="download-info">
@@ -32,7 +32,7 @@
           </transition-group>
         </div>
         <div v-if="workerActiveDownloads.length > 0" class="downloads-list">
-          <div class="download-list-title">Worker 下载</div>
+          <div class="download-list-title">{{ t('tasks.drawerWorkerDownload') }}</div>
           <transition-group name="download-fade" tag="div" class="downloads-list-inner">
             <div v-for="download in workerActiveDownloads" :key="downloadKey(download)" class="download-item">
               <div class="download-info">
@@ -59,17 +59,17 @@
     </div>
 
     <div class="tasks-summary">
-      <span>共 {{ tasks.length }} 个任务</span>
+      <span>{{ t('tasks.drawerTaskCount', { n: tasks.length }) }}</span>
       <el-button text size="small" class="clear-completed-btn" :disabled="nonRunningTasksCount === 0"
         @click="$emit('clear-finished-tasks')">
-        清除所有任务 ({{ nonRunningTasksCount }})
+        {{ t('tasks.drawerClearAll', { n: nonRunningTasksCount }) }}
       </el-button>
     </div>
     <transition-group name="task-move" tag="div" class="tasks-list">
       <div v-for="task in tasks" :key="task.id" class="task-item"
         :class="{ 'task-item-failed': task.status === 'failed' }" @contextmenu="(e) => handleTaskContextMenu(e, task)">
         <div class="task-close">
-          <el-button text circle size="small" class="close-btn" title="删除任务" @click="$emit('delete-task', task.id)">
+          <el-button text circle size="small" class="close-btn" :title="t('tasks.drawerDeleteTask')" @click="$emit('delete-task', task.id)">
             <el-icon>
               <Close />
             </el-icon>
@@ -80,13 +80,13 @@
             <div class="task-name">{{ getPluginName(task.pluginId) }}</div>
           </div>
           <div class="task-header-right">
-            <el-button text circle size="small" class="task-detail-btn" title="查看任务日志"
+            <el-button text circle size="small" class="task-detail-btn" :title="t('tasks.drawerViewLog')"
               @click.stop="openTaskLog(task.id)">
               <el-icon>
                 <Document />
               </el-icon>
             </el-button>
-            <el-button text circle size="small" class="task-detail-btn" title="查看任务图片"
+            <el-button text circle size="small" class="task-detail-btn" :title="t('tasks.drawerViewImages')"
               @click.stop="$emit('open-task-images', task.id)">
               <el-icon>
                 <Picture />
@@ -104,11 +104,11 @@
         <div class="task-params-wrap" :class="{ 'is-open': expandedTasks.has(task.id) }">
           <div class="task-params">
             <div class="param-item">
-              <span class="param-label">源：</span>
+              <span class="param-label">{{ t('tasks.drawerParamSource') }}</span>
               <span class="param-value">{{ getPluginName(task.pluginId) }}</span>
             </div>
             <div v-if="task.startTime" class="param-item">
-              <span class="param-label">开始时间：</span>
+              <span class="param-label">{{ t('tasks.drawerParamStartTime') }}</span>
               <span class="param-value">
                 <el-icon style="margin-right: 6px;">
                   <Clock />
@@ -117,7 +117,7 @@
               </span>
             </div>
             <div v-if="task.endTime" class="param-item">
-              <span class="param-label">结束时间：</span>
+              <span class="param-label">{{ t('tasks.drawerParamEndTime') }}</span>
               <span class="param-value">
                 <el-icon style="margin-right: 6px;">
                   <Clock />
@@ -126,24 +126,24 @@
               </span>
             </div>
             <div v-else-if="task.startTime" class="param-item">
-              <span class="param-label">结束时间：</span>
-              <span class="param-value">进行中</span>
+              <span class="param-label">{{ t('tasks.drawerParamEndTime') }}</span>
+              <span class="param-value">{{ t('tasks.drawerParamInProgress') }}</span>
             </div>
             <div v-if="task.startTime" class="param-item">
-              <span class="param-label">耗时：</span>
+              <span class="param-label">{{ t('tasks.drawerParamDuration') }}</span>
               <span class="param-value">{{ formatDuration(task.startTime, task.endTime != null ? task.endTime :
                 undefined) }}</span>
             </div>
             <div v-if="(task.deletedCount ?? 0) > 0" class="param-item">
-              <span class="param-label">已删除：</span>
-              <span class="param-value">{{ task.deletedCount }} 张</span>
+              <span class="param-label">{{ t('tasks.drawerParamDeleted') }}</span>
+              <span class="param-value">{{ t('tasks.drawerDeletedCount', { n: task.deletedCount ?? 0 }) }}</span>
             </div>
             <div v-if="task.outputDir" class="param-item">
-              <span class="param-label">输出目录：</span>
+              <span class="param-label">{{ t('tasks.drawerParamOutputDir') }}</span>
               <span class="param-value">{{ task.outputDir }}</span>
             </div>
             <div v-if="task.userConfig && Object.keys(task.userConfig).length > 0" class="param-item">
-              <span class="param-label">配置参数：</span>
+              <span class="param-label">{{ t('tasks.drawerParamConfig') }}</span>
               <div class="param-config">
                 <div v-for="(value, key) in task.userConfig" :key="key" class="config-item">
                   <span class="config-key">{{ getVarDisplayName(task.pluginId, String(key)) }}：</span>
@@ -161,8 +161,8 @@
                 <el-icon class="error-icon">
                   <WarningFilled />
                 </el-icon>
-                <span class="error-text">{{ task.error || "执行失败" }}</span>
-                <el-button text size="small" class="copy-error-btn" title="复制错误信息和运行参数" @click="handleCopyError(task)">
+                <span class="error-text">{{ task.error || t('tasks.drawerExecFailed') }}</span>
+                <el-button text size="small" class="copy-error-btn" :title="t('tasks.drawerCopyErrorTooltip')" @click="handleCopyError(task)">
                   <el-icon>
                     <CopyDocument />
                   </el-icon>
@@ -177,7 +177,7 @@
             :status="task.status === 'running' ? undefined : 'success'" />
           <div class="progress-footer">
             <el-button text size="small" type="warning" class="stop-btn" @click.stop="$emit('cancel-task', task.id)">
-              停止
+              {{ t('tasks.drawerStop') }}
             </el-button>
           </div>
         </div>
@@ -192,9 +192,9 @@
       </div>
     </transition-group>
 
-    <el-dialog v-model="taskLogVisible" title="任务日志" width="640px" :append-to-body="true" class="task-log-dialog">
+    <el-dialog v-model="taskLogVisible" :title="t('tasks.drawerTaskLogTitle')" width="640px" :append-to-body="true" class="task-log-dialog">
       <div ref="taskLogListRef" class="task-log-list">
-        <div v-if="currentTaskLogs.length === 0" class="task-log-empty">暂无日志</div>
+        <div v-if="currentTaskLogs.length === 0" class="task-log-empty">{{ t('tasks.drawerNoLogs') }}</div>
         <div v-for="log in currentTaskLogs" :key="log.id" class="task-log-entry" :class="`log-level-${log.level}`">
           <div class="task-log-main">
             <el-tag :type="logLevelTagType(log.level)" size="small">{{ log.level }}</el-tag>
@@ -210,17 +210,31 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { ArrowDown, Clock, Close, CopyDocument, Document, Picture, WarningFilled } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useModalBack } from "../../composables/useModalBack";
+import type { PluginManifestText, PluginConfigText } from "../../stores/plugins";
 
-type VarOption = string | { name: string; variable: string };
+type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
+const t = inject<TranslateFn>("i18n-t") ?? ((k: string) => k);
+const localeRef = inject<{ value: string }>("i18n-locale");
+const resolveManifestText = inject<
+  (value: PluginManifestText | null | undefined) => string
+>("resolveManifestText");
+const resolveConfigText = inject<
+  (value: PluginConfigText | string | null | undefined) => string
+>("resolveConfigText") ?? ((v: PluginConfigText | string | null | undefined) =>
+  (typeof v === "string" ? v : (v && typeof v === "object" ? (v as Record<string, string>).default ?? "" : "")));
+
+type VarOption = string | { name: PluginConfigText | string; variable: string };
 type PluginVarMeta = {
-  name: string;
+  /** 变量展示名：后端下发的 record（default/zh/en）或兼容旧版 string */
+  name: PluginConfigText | string;
   type?: string;
-  optionNameByVariable?: Record<string, string>;
+  /** 选项 variable -> 展示名 record 或 string */
+  optionNameByVariable?: Record<string, PluginConfigText | string>;
 };
 
 type TaskStatus = "pending" | "running" | "completed" | "failed" | "canceled";
@@ -454,16 +468,17 @@ const upsertActiveDownloadFromPayload = (p: DownloadStatePayload) => {
 
 const downloadStateText = (d: ActiveDownloadInfo) => {
   const st = getEffectiveDownloadState(d);
-  const map: Record<string, string> = {
-    preparing: "准备中",
-    downloading: "下载中",
-    extracting: "解压中",
-    processing: "处理中",
-    completed: "已完成",
-    failed: "失败",
-    canceled: "已取消",
+  const keyMap: Record<string, string> = {
+    preparing: "tasks.drawerStatusPreparing",
+    downloading: "tasks.drawerStatusDownloading",
+    extracting: "tasks.drawerStatusExtracting",
+    processing: "tasks.drawerStatusProcessing",
+    completed: "tasks.drawerStatusCompleted",
+    failed: "tasks.drawerStatusFailed",
+    canceled: "tasks.drawerStatusCanceled",
   };
-  return map[st] || st;
+  const key = keyMap[st];
+  return key ? t(key) : st;
 };
 
 const downloadStateTagType = (d: ActiveDownloadInfo) => {
@@ -710,12 +725,21 @@ const syncDownloadsOnDrawerOpen = async () => {
 
 const getPluginName = (pluginId: string) => {
   const plugin = (props.plugins || []).find((p) => p.id === pluginId);
-  return plugin?.name || pluginId;
+  if (!plugin) return pluginId;
+  const raw = plugin.name;
+  if (!raw || typeof raw !== "object") return pluginId;
+  return resolveManifestText ? resolveManifestText(raw) : (raw["default"] ?? pluginId) || pluginId;
+};
+
+const toLocaleTag = (loc: string) => {
+  if (loc.startsWith("zh")) return loc === "zhtw" ? "zh-TW" : "zh-CN";
+  return loc === "en" ? "en-US" : loc;
 };
 
 const formatDate = (timestamp: number) => {
   const ms = timestamp > 1e12 ? timestamp : timestamp * 1000;
-  return new Date(ms).toLocaleString("zh-CN");
+  const loc = localeRef?.value ?? "zh";
+  return new Date(ms).toLocaleString(toLocaleTag(loc));
 };
 
 const formatDuration = (startTime: number, endTime?: number) => {
@@ -725,13 +749,14 @@ const formatDuration = (startTime: number, endTime?: number) => {
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
-  if (h > 0) return `${h}小时${m}分${s}秒`;
-  if (m > 0) return `${m}分${s}秒`;
-  return `${s}秒`;
+  if (h > 0) return t("tasks.drawerDurationHours", { h, m, s });
+  if (m > 0) return t("tasks.drawerDurationMinutes", { m, s });
+  return t("tasks.drawerDurationSeconds", { s });
 };
 
 const formatLogTime = (timestamp: number) => {
-  return new Date(Number(timestamp || 0)).toLocaleString("zh-CN");
+  const loc = localeRef?.value ?? "zh";
+  return new Date(Number(timestamp || 0)).toLocaleString(toLocaleTag(loc));
 };
 
 const logLevelTagType = (level: string): "info" | "warning" | "danger" | "success" => {
@@ -759,7 +784,7 @@ const openTaskLog = async (taskId: string) => {
   } catch (error) {
     console.error("加载任务日志失败:", error);
     currentTaskLogs.value = [];
-    ElMessage.error("加载任务日志失败");
+    ElMessage.error(t("tasks.drawerLoadLogFailed"));
   }
 };
 
@@ -775,42 +800,44 @@ const getStatusType = (status: string) => {
 };
 
 const getStatusText = (status: string) => {
-  const map: Record<string, string> = {
-    pending: "等待中",
-    running: "运行中",
-    completed: "完成",
-    failed: "失败",
-    canceled: "已取消",
+  const keyMap: Record<string, string> = {
+    pending: "tasks.drawerTaskStatusPending",
+    running: "tasks.drawerTaskStatusRunning",
+    completed: "tasks.drawerTaskStatusCompleted",
+    failed: "tasks.drawerTaskStatusFailed",
+    canceled: "tasks.drawerTaskStatusCanceled",
   };
-  return map[status] || status;
+  const key = keyMap[status];
+  return key ? t(key) : status;
 };
 
-const BUILTIN_LOCAL_IMPORT_META: Record<string, PluginVarMeta> = {
-  paths: { name: "路径列表", type: "text" },
-  recursive: { name: "递归子文件夹", type: "boolean" },
-};
+const getBuiltinLocalImportMeta = (): Record<string, PluginVarMeta> => ({
+  paths: { name: t("tasks.drawerPathsMeta"), type: "text" },
+  recursive: { name: t("tasks.drawerRecursiveMeta"), type: "boolean" },
+});
 
 const ensurePluginVars = async (pluginId: string) => {
   if (pluginVarMetaMap.value[pluginId]) return;
   if (pluginId === "本地导入") {
-    pluginVarMetaMap.value = { ...pluginVarMetaMap.value, [pluginId]: BUILTIN_LOCAL_IMPORT_META };
+    pluginVarMetaMap.value = { ...pluginVarMetaMap.value, [pluginId]: getBuiltinLocalImportMeta() };
     return;
   }
   try {
-    const vars = await invoke<Array<{ key: string; name: string; type?: string; options?: VarOption[] }> | null>(
-      "get_plugin_vars",
-      { pluginId }
-    );
+    const vars = await invoke<Array<{
+      key: string;
+      name: PluginConfigText | string;
+      type?: string;
+      options?: VarOption[];
+    }> | null>("get_plugin_vars", { pluginId });
     const metaMap: Record<string, PluginVarMeta> = {};
     (vars || []).forEach((v) => {
-      const display = v.name || v.key;
-      const optionNameByVariable: Record<string, string> = {};
+      const optionNameByVariable: Record<string, PluginConfigText | string> = {};
       (v.options || []).forEach((opt) => {
         if (typeof opt === "string") optionNameByVariable[opt] = opt;
         else optionNameByVariable[opt.variable] = opt.name;
       });
       metaMap[v.key] = {
-        name: display,
+        name: v.name ?? v.key,
         type: v.type,
         optionNameByVariable: Object.keys(optionNameByVariable).length ? optionNameByVariable : undefined,
       };
@@ -823,32 +850,34 @@ const ensurePluginVars = async (pluginId: string) => {
 };
 
 const getVarDisplayName = (pluginId: string, key: string) =>
-  (pluginId === "本地导入" && BUILTIN_LOCAL_IMPORT_META[key]?.name) ||
-  pluginVarMetaMap.value[pluginId]?.[key]?.name ||
+  (pluginId === "本地导入" && getBuiltinLocalImportMeta()[key]?.name) ||
+  resolveConfigText(pluginVarMetaMap.value[pluginId]?.[key]?.name) ||
   key;
 
-const formatConfigValue = (pluginId: string, key: string, value: any): string => {
+const formatConfigValue = (pluginId: string, key: string, value: any, raw = false): string => {
   const meta = pluginVarMetaMap.value[pluginId]?.[key];
   const map = meta?.optionNameByVariable || {};
-  if (value === null || value === undefined) return "未设置";
-  if (typeof value === "boolean") return value ? "是" : "否";
+  if (value === null || value === undefined) return raw ? "null" : t("tasks.drawerUnset");
+  if (typeof value === "boolean") return raw ? String(value) : (value ? t("tasks.drawerYes") : t("tasks.drawerNo"));
   if (Array.isArray(value)) {
-    if (pluginId === "本地导入" && key === "paths" && value.length > 3) {
-      return `${value.length} 个路径`;
+    if (pluginId === "本地导入" && key === "paths" && value.length > 3 && !raw) {
+      return t("tasks.drawerPathsCount", { n: value.length });
     }
-    return value.map((v) => (typeof v === "string" ? map[v] || v : String(v))).join(", ");
+    return value
+      .map((v) => (raw ? String(v) : (typeof v === "string" ? resolveConfigText(map[v]) || v : String(v))))
+      .join(", ");
   }
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, any>);
     if (entries.length > 0 && entries.every(([, v]) => typeof v === "boolean")) {
       const selected = entries.filter(([, v]) => v === true).map(([k]) => k);
-      const named = selected.map((v) => map[v] || v);
-      return named.length > 0 ? named.join(", ") : "未选择";
+      const out = raw ? selected : selected.map((v) => resolveConfigText(map[v]) || v);
+      return out.length > 0 ? out.join(", ") : (raw ? "" : t("tasks.drawerUnselected"));
     }
     return JSON.stringify(value, null, 2);
   }
   const s = String(value);
-  return map[s] || s;
+  return raw ? s : (resolveConfigText(map[s]) || s);
 };
 
 async function toggleTaskExpand(taskId: string, pluginId: string) {
@@ -867,20 +896,20 @@ function handleTaskContextMenu(event: MouseEvent, task: ScriptTask) {
 }
 
 async function handleCopyError(task: ScriptTask) {
-  let text = "=== 任务错误信息 ===\n";
-  text += `错误：${task.error || "执行失败"}\n\n`;
-  text += "=== 运行参数 ===\n";
-  text += `源：${getPluginName(task.pluginId)}\n`;
-  if (task.outputDir) text += `输出目录：${task.outputDir}\n`;
+  let text = "=== Task Error ===\n";
+  text += `Error: ${task.error || "Execution failed"}\n\n`;
+  text += "=== Run Params ===\n";
+  text += `Source: ${getPluginName(task.pluginId)}\n`;
+  if (task.outputDir) text += `Output dir: ${task.outputDir}\n`;
   if (task.userConfig && Object.keys(task.userConfig).length > 0) {
-    text += "配置参数：\n";
+    text += "Config:\n";
     for (const [key, value] of Object.entries(task.userConfig)) {
-      text += `  ${key}：${formatConfigValue(task.pluginId, String(key), value)}\n`;
+      text += `  ${key}: ${formatConfigValue(task.pluginId, String(key), value, true)}\n`;
     }
   }
-  if (task.startTime) text += `开始时间：${formatDate(task.startTime)}\n`;
-  if (task.endTime) text += `结束时间：${formatDate(task.endTime)}\n`;
-  text += `进度：${Math.round(Number(task.progress || 0))}%\n`;
+  if (task.startTime) text += `Start time: ${formatDate(task.startTime)}\n`;
+  if (task.endTime) text += `End time: ${formatDate(task.endTime)}\n`;
+  text += `Progress: ${Math.round(Number(task.progress || 0))}%\n`;
   try {
     const { isTauri } = await import("@tauri-apps/api/core");
     if (isTauri()) {
@@ -889,10 +918,10 @@ async function handleCopyError(task: ScriptTask) {
     } else {
       await navigator.clipboard.writeText(text);
     }
-    ElMessage.success("已复制到剪贴板");
+    ElMessage.success(t("common.copySuccess"));
   } catch (error) {
     console.error("复制失败:", error);
-    ElMessage.error("复制失败");
+    ElMessage.error(t("common.copyFailed"));
   }
 }
 
@@ -906,16 +935,6 @@ watch(
     if (val) await syncDownloadsOnDrawerOpen();
   },
   { immediate: true }
-);
-
-watch(
-  () => currentTaskLogs.value.length,
-  async () => {
-    if (!taskLogVisible.value) return;
-    await nextTick();
-    if (!taskLogListRef.value) return;
-    taskLogListRef.value.scrollTop = taskLogListRef.value.scrollHeight;
-  }
 );
 
 onUnmounted(() => {

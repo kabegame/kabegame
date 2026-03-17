@@ -346,6 +346,7 @@ private class ContentUriStreamClient(
     companion object {
         private const val PROXY_HOST_CONTENT = "kbg-content.localhost"
         private const val PROXY_HOST_LOCAL = "kbg-local.localhost"
+        private const val PROXY_HOST_PLUGIN_DOC = "kbg-plugin-doc.localhost"
     }
 
     override fun shouldInterceptRequest(
@@ -385,6 +386,21 @@ private class ContentUriStreamClient(
                 android.util.Log.e("Kabegame", "Error serving local file: $uri", e)
                 return delegate.shouldInterceptRequest(view, request)
             }
+        }
+
+        // 拦截插件文档图片：http://kbg-plugin-doc.localhost/<pluginId>/<path> → KgpgDocImage 从 .kgpg 内 doc_root 流式读取
+        if (uri.host == PROXY_HOST_PLUGIN_DOC) {
+            val pathSegments = uri.pathSegments ?: return delegate.shouldInterceptRequest(view, request)
+            if (pathSegments.size < 2) return delegate.shouldInterceptRequest(view, request)
+            val pluginId = pathSegments[0]
+            val encodedPath = pathSegments.subList(1, pathSegments.size).joinToString("/")
+            val docPath = try {
+                URLDecoder.decode(encodedPath, "UTF-8")
+            } catch (_: Exception) {
+                return delegate.shouldInterceptRequest(view, request)
+            }
+            return KgpgDocImage.openDocRootImage(context, pluginId, docPath)
+                ?: delegate.shouldInterceptRequest(view, request)
         }
 
         // 拦截代理 URL：http://kbg-content.localhost/... → content://...

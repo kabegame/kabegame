@@ -6,6 +6,7 @@ common:
   save: 保存
   refresh: 刷新
   exit: 退出
+  appName: Kabegame
 
 settings:
   title: 设置
@@ -15,6 +16,10 @@ tray:
   show: 显示
   hide: 隐藏
   exit: 退出
+  showWindow: 显示窗口
+  hideWindow: 隐藏窗口
+  nextWallpaper: 下一张壁纸
+  quit: 退出
 
 notifications:
   refreshSuccess: 刷新成功
@@ -23,3 +28,16 @@ notifications:
 dialog:
   exitConfirm: 确定要退出应用吗？龟龟会想你滴~お疲れ様！
   exitTitle: 退出提示
+  errorTitle: 出错啦 😿
+  initFatalError: "初始化过程中出现了致命错误！: {detail}"
+
+window:
+  wallpaperTitle: Kabegame 壁纸
+  crawlerTitle: Kabegame 爬虫
+  devWebViewTitle: Kabegame 开发 WebView
+
+albums:
+  favorite: 收藏
+
+surf:
+  windowTitle: "畅游 - {host}"

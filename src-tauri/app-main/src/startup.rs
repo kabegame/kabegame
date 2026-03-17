@@ -1,6 +1,7 @@
 // 启动步骤函数
 
 use async_trait::async_trait;
+use kabegame_i18n::t;
 use kabegame_core::crawler::TaskScheduler;
 // 事件转发到前端（桌面与 Android 均需要，用于 task-status 等）
 use crate::wallpaper::manager::WallpaperController;
@@ -133,7 +134,7 @@ pub fn create_main_window(app_handle: &AppHandle) -> Result<(), String> {
 
     let builder =
         WebviewWindowBuilder::new(app_handle, "main", WebviewUrl::App("index.html".into()))
-            .title("Kabegame")
+            .title(t!("common.appName"))
             .inner_size(width, height)
             .min_inner_size(min_w, min_h)
             .position(x, y)
@@ -212,7 +213,7 @@ pub fn init_wallpaper_controller(app: &mut tauri::App) {
             WebviewUrl::App("wallpaper.html".into()),
         )
         // 给壁纸窗口一个固定标题，便于脚本/调试定位到正确窗口
-        .title("Kabegame Wallpaper")
+        .title(t!("window.wallpaperTitle"))
         .fullscreen(true)
         .decorations(false)
         // 设置窗口为透明，背景为透明
@@ -274,6 +275,19 @@ pub fn start_local_event_loop(app: AppHandle) {
                 }
                 DaemonEvent::SettingChange { changes } => {
                     let _ = app.emit("setting-change", changes.clone());
+                    // 语言变更时刷新托盘菜单、收藏画册 i18n 名称（与磁盘挂载等实现方式一致，在 setting 回调处处理）
+                    if changes.get("language").is_some() {
+                        let raw = t!("albums.favorite");
+                        let i18n_name = if raw == "albums.favorite" { "收藏".to_string() } else { raw };
+                        #[cfg(not(target_os = "android"))]
+                        if let Err(e) = crate::tray::update_tray_menu(&app) {
+                            eprintln!("[托盘] 语言切换后刷新菜单失败: {}", e);
+                        }
+                        let _ = Storage::global().ensure_favorite_album();
+                        if let Err(e) = Storage::global().set_favorite_album_name(&i18n_name) {
+                            eprintln!("[收藏画册] 语言切换后设置 i18n 名称失败: {}", e);
+                        }
+                    }
                 }
                 DaemonEvent::WallpaperUpdateImage { image_path } => {
                     #[cfg(not(target_os = "android"))]
@@ -469,7 +483,7 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
     ));
     let about_blank = url::Url::parse("about:blank").map_err(|e| e.to_string())?;
     WebviewWindowBuilder::new(&app_handle, "crawler", WebviewUrl::External(about_blank))
-        .title("Kabegame Crawler")
+        .title(t!("window.crawlerTitle"))
         .visible(false)
         .skip_taskbar(true)
         .resizable(false)

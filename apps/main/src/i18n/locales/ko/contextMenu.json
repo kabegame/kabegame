@@ -1,0 +1,21 @@
+{
+  "detail": "상세",
+  "favorite": "즐겨찾기",
+  "unfavorite": "즐겨찾기 해제",
+  "copyImage": "이미지 복사",
+  "open": "상세 보기",
+  "openFolder": "더 보기",
+  "wallpaper": "배경화면으로 설정",
+  "addToAlbum": "앨범에 추가",
+  "more": "더보기",
+  "exportToWE": "Wallpaper Engine로 내보내기",
+  "stopTask": "작업 중지",
+  "viewFiles": "파일 보기",
+  "saveAsConfig": "설정으로 저장",
+  "deleteTask": "작업 삭제",
+  "browse": "탐색",
+  "setWallpaperRotation": "데스크톱 순환으로 설정",
+  "setWallpaperRotationActive": "(활성)",
+  "rename": "이름 변경",
+  "share": "공유"
+}

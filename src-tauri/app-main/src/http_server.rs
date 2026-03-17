@@ -74,6 +74,14 @@ struct ProxyQuery {
     url: String,
 }
 
+/// 插件文档图片：?pluginId=xxx&path=yyy（path 为 doc_root 内相对路径，如 screenshot.png）
+#[cfg(not(target_os = "android"))]
+#[derive(Debug, Deserialize)]
+struct PluginDocImageQuery {
+    plugin_id: String,
+    path: String,
+}
+
 #[cfg(not(target_os = "android"))]
 fn is_allowed_media_ext(path: &str) -> bool {
     let ext = Path::new(path)
@@ -81,6 +89,19 @@ fn is_allowed_media_ext(path: &str) -> bool {
         .and_then(|e| e.to_str())
         .unwrap_or_default();
     kabegame_core::image_type::is_supported_media_ext(ext)
+}
+
+#[cfg(not(target_os = "android"))]
+fn mime_for_doc_image_path(path: &str) -> String {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    kabegame_core::image_type::mime_by_ext()
+        .get(&ext)
+        .cloned()
+        .unwrap_or_else(|| "application/octet-stream".to_string())
 }
 
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
@@ -336,6 +357,43 @@ async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
         })
 }
 
+/// 插件文档图片：从已安装插件的 .kgpg 中读取 doc_root 下图片，供桌面端 HTTP 复用
+#[cfg(not(target_os = "android"))]
+async fn handle_plugin_doc_image(Query(query): Query<PluginDocImageQuery>) -> Response {
+    let plugin_id = query.plugin_id.trim();
+    let path = query.path.trim();
+    if plugin_id.is_empty() || path.is_empty() {
+        return (StatusCode::BAD_REQUEST, "missing plugin_id or path").into_response();
+    }
+    if !is_allowed_media_ext(path) {
+        return (StatusCode::FORBIDDEN, "path extension not allowed").into_response();
+    }
+
+    let manager = kabegame_core::plugin::PluginManager::global();
+    let bytes = match manager
+        .load_plugin_image_for_detail(
+            plugin_id,
+            None,
+            None,
+            None,
+            path,
+            None,
+            None,
+        )
+        .await
+    {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::NOT_FOUND, "plugin or image not found").into_response(),
+    };
+
+    let mime = mime_for_doc_image_path(path);
+    let mut out = (StatusCode::OK, bytes).into_response();
+    out.headers_mut()
+        .insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    set_content_type_if_present(&mut out, Some(&mime));
+    out
+}
+
 #[cfg(not(target_os = "android"))]
 async fn handle_unmatched(uri: Uri) -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
@@ -358,6 +416,7 @@ pub async fn start_http_server() -> Result<u16, String> {
     let app = Router::new()
         .route("/file", get(handle_file_query))
         .route("/thumbnail", get(handle_thumbnail_query))
+        .route("/plugin-doc-image", get(handle_plugin_doc_image))
         .route("/proxy", get(handle_proxy_query))
         .fallback(handle_unmatched);
     tauri::async_runtime::spawn(async move {

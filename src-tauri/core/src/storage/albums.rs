@@ -1,3 +1,4 @@
+use crate::emitter::GlobalEmitter;
 use crate::{settings::Settings, storage::{FAVORITE_ALBUM_ID, ImageInfo, Storage}};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -133,11 +134,15 @@ impl Storage {
         )
         .map_err(|e| format!("Failed to add album: {}", e))?;
 
-        Ok(Album {
-            id,
+        let album = Album {
+            id: id.clone(),
             name: name_trimmed.to_string(),
             created_at,
-        })
+        };
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            emitter.emit_album_added(&album.id, &album.name, album.created_at);
+        }
+        Ok(album)
     }
 
     pub fn get_albums(&self) -> Result<Vec<Album>, String> {
@@ -176,6 +181,9 @@ impl Storage {
             "DELETE FROM album_images WHERE album_id = ?1",
             params![album_id],
         );
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            emitter.emit_album_deleted(album_id);
+        }
         Ok(())
     }
 
@@ -198,6 +206,31 @@ impl Storage {
             params![new_name_trimmed, album_id],
         )
         .map_err(|e| format!("Failed to rename album: {}", e))?;
+
+        if let Some(emitter) = GlobalEmitter::try_global() {
+            emitter.emit_album_name_changed(album_id, new_name_trimmed);
+        }
+        Ok(())
+    }
+
+    /// 仅用于收藏画册的 i18n 名称同步（由 app-main 在语言变更时调用）。仅更新名称并发送 album_name_changed，不校验“系统画册不可重命名”。
+    pub fn set_favorite_album_name(&self, name: &str) -> Result<(), String> {
+        let name_trimmed = name.trim();
+        if name_trimmed.is_empty() {
+            return Ok(());
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let updated = conn
+            .execute(
+                "UPDATE albums SET name = ?1 WHERE id = ?2",
+                params![name_trimmed, FAVORITE_ALBUM_ID],
+            )
+            .map_err(|e| format!("Failed to set favorite album name: {}", e))?;
+        if updated > 0 {
+            if let Some(emitter) = GlobalEmitter::try_global() {
+                emitter.emit_album_name_changed(FAVORITE_ALBUM_ID, name_trimmed);
+            }
+        }
         Ok(())
     }
 

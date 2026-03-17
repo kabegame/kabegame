@@ -1,4 +1,5 @@
 {
+  "pluginPackageSuffix": "（插件包）",
   "confirmImportTitle": "確認匯入",
   "confirmImportButton": "確認匯入",
   "confirmImportQuestion": "是否匯入以下 {count} 個項目？",

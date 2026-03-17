@@ -1,10 +1,12 @@
 import { ref, watch, computed, type Ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useCrawlerStore, type RunConfig } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { isNil } from "lodash-es";
 import type { PluginVarDef } from "./usePluginConfig";
+import { resolveConfigText } from "./usePluginConfigI18n";
 
 export interface ConfigCompatibility {
   versionCompatible: boolean; // 第一步：插件是否存在
@@ -30,6 +32,7 @@ export function useConfigCompatibility(
   isRequired: (varDef: { default?: any }) => boolean,
   showCrawlerDialog?: Ref<boolean>
 ) {
+  const { locale } = useI18n();
   const crawlerStore = useCrawlerStore();
   const pluginStore = usePluginStore();
   const runConfigs = computed(() => crawlerStore.runConfigs);
@@ -167,10 +170,10 @@ export function useConfigCompatibility(
         // 验证字段值
         const validation = validateVarValue(value, varDef);
         if (!validation.valid) {
-          result.contentCompatible = false;
-          result.contentErrors.push(
-            `${varDef.name} (${key}): ${validation.error}`
-          );
+        result.contentCompatible = false;
+        result.contentErrors.push(
+          `${resolveConfigText(varDef.name, locale.value)} (${key}): ${validation.error}`
+        );
         }
       }
 
@@ -180,7 +183,7 @@ export function useConfigCompatibility(
           if (isRequired(varDef) && varDef.default === undefined) {
             result.contentCompatible = false;
             result.contentErrors.push(
-              `缺少必填字段: ${varDef.name} (${varDef.key})`
+              `缺少必填字段: ${resolveConfigText(varDef.name, locale.value)} (${varDef.key})`
             );
           }
         }
@@ -311,7 +314,7 @@ export function useConfigCompatibility(
       const cfg = runConfigs.value.find((c) => c.id === configId);
       await ElMessageBox.confirm(
         `删除后无法通过该配置再次运行。已创建的任务不会受影响。确定删除${
-          cfg ? `「${cfg.name}」` : "该配置"
+          cfg ? `「${resolveConfigText(cfg.name as any, locale.value)}」` : "该配置"
         }吗？`,
         "删除配置",
         { type: "warning" }

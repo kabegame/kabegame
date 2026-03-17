@@ -3,6 +3,7 @@
   "appSettings": "應用程式設定",
   "language": "語言",
   "languageDesc": "介面顯示語言，空表示跟隨系統",
+  "languageFollowSystem": "跟隨系統",
 
   "autoLaunch": "開機啟動",
   "autoLaunchDesc": "應用啟動時自動執行",
@@ -160,5 +161,13 @@
   "quickDoubleClickImageDesc": "雙擊圖片時的行為",
   "quickColumns": "列數",
   "quickColumnsDesc": "固定列數時生效；關閉後為動態列數（可用 Ctrl+滾輪調整）",
-  "quickRotationDependent": "（需先啟用壁紙輪播）"
+  "quickRotationDependent": "（需先啟用壁紙輪播）",
+
+  "quickDrawerTitleGallery": "畫廊設定",
+  "quickDrawerTitleAlbumDetail": "畫冊設定",
+  "quickDrawerTitleAlbums": "畫冊列表設定",
+  "quickDrawerTitlePluginBrowser": "源管理設定",
+  "quickDrawerTitleSettings": "設定",
+  "quickDrawerTitleDefault": "設定",
+  "quickEmpty": "此頁面暫無可快捷調整的設定"
 }

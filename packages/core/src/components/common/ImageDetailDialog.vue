@@ -1,24 +1,24 @@
 <template>
-  <el-dialog v-model="visible" title="图片详情" width="600px">
+  <el-dialog v-model="visible" :title="t('gallery.imageDetailTitle')" width="600px">
     <div v-if="image" class="image-detail-content">
       <div class="detail-item">
-        <span class="detail-label">源：</span>
+        <span class="detail-label">{{ t('gallery.imageDetailSource') }}</span>
         <span class="detail-value">{{ getPluginName(image.pluginId) }}</span>
       </div>
       <div v-if="image.url && !isFileUrl(image.url)" class="detail-item">
-        <span class="detail-label">URL：</span>
+        <span class="detail-label">{{ t('gallery.imageDetailUrl') }}</span>
         <span class="detail-value clickable-link" @click="handleOpenUrl(image.url)">{{ image.url }}</span>
       </div>
       <div class="detail-item">
-        <span class="detail-label">本地路径：</span>
+        <span class="detail-label">{{ t('gallery.imageDetailLocalPath') }}</span>
         <span class="detail-value clickable-link" @click="handleOpenPath(image.localPath)">{{ image.localPath }}</span>
       </div>
       <div class="detail-item">
-        <span class="detail-label">收藏时间：</span>
+        <span class="detail-label">{{ t('gallery.imageDetailCrawledAt') }}</span>
         <span class="detail-value">{{ formatDate(image.crawledAt) }}</span>
       </div>
       <div v-if="image.metadata && Object.keys(image.metadata).length > 0" class="detail-item">
-        <span class="detail-label">元数据：</span>
+        <span class="detail-label">{{ t('gallery.imageDetailMetadata') }}</span>
         <div class="detail-metadata">
           <div v-for="(value, key) in image.metadata" :key="key" class="metadata-item">
             <span class="metadata-key">{{ key }}：</span>
@@ -31,13 +31,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, inject } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ElMessage } from "element-plus";
 import { IS_ANDROID } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { useModalBack } from "../../composables/useModalBack";
+
+type TranslateFn = (key: string) => string;
+const t = inject<TranslateFn>("i18n-t") ?? ((k: string) => k);
+const localeRef = inject<{ value: string }>("i18n-locale");
+
+const toLocaleTag = (loc: string) => {
+  if (loc.startsWith("zh")) return loc === "zhtw" ? "zh-TW" : "zh-CN";
+  return loc === "en" ? "en-US" : loc;
+};
 
 type ImageLike = {
   url?: string;
@@ -76,14 +85,13 @@ const getPluginName = (pluginId?: string) => {
 const formatDate = (timestamp?: number) => {
   // 后端 crawledAt 实际为“下载/导入时间”，单位可能是秒或毫秒（历史数据混用）
   // - 0/无效：按需求显示“银河系末日”
-  if (!Number.isFinite(timestamp) || (timestamp as number) <= 0) return "银河系末日";
-
-  // 经验阈值：毫秒级时间戳通常 >= 1e12；秒级通常 ~ 1e9
-  const t = timestamp as number;
-  const ms = t > 1e11 ? t : t * 1000;
+  if (!Number.isFinite(timestamp) || (timestamp as number) <= 0) return t("gallery.imageDetailInvalidDate");
+  const ts = timestamp as number;
+  const ms = ts > 1e11 ? ts : ts * 1000;
   const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return "银河系末日";
-  return d.toLocaleString("zh-CN");
+  if (Number.isNaN(d.getTime())) return t("gallery.imageDetailInvalidDate");
+  const loc = localeRef?.value ?? "zh";
+  return d.toLocaleString(toLocaleTag(loc));
 };
 
 const isFileUrl = (url?: string) => {
@@ -96,7 +104,7 @@ const handleOpenUrl = async (url?: string) => {
     await openUrl(url);
   } catch (error) {
     console.error("打开 URL 失败:", error);
-    ElMessage.error("打开 URL 失败");
+    ElMessage.error(t("common.openUrlFailed"));
   }
 };
 
@@ -115,7 +123,7 @@ const handleOpenPath = async (path?: string) => {
     }
   } catch (error) {
     console.error("打开文件失败:", error);
-    ElMessage.error("打开文件失败");
+    ElMessage.error(t("common.openFileFailed"));
   }
 };
 </script>

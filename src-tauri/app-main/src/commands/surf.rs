@@ -1,3 +1,4 @@
+use kabegame_i18n::t;
 use kabegame_core::crawler::downloader::{
     compute_native_download_destination, get_default_images_dir, postprocess_downloaded_image,
     NativeDownloadEntry, NativeDownloadState,
@@ -82,7 +83,7 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
 
     if app.get_webview_window("surf").is_none() {
         let builder = WebviewWindowBuilder::new(&app, "surf", WebviewUrl::External(parsed))
-            .title(format!("畅游 - {}", host))
+            .title(t!("surf.windowTitle", host = host.as_str()))
             .inner_size(1200.0, 800.0)
             .initialization_script(include_str!("../../resources/surf_toast.js"))
             .initialization_script(include_str!("../../resources/surf_context_menu.js"))

@@ -22,8 +22,10 @@ use zip::ZipArchive;
 #[serde(rename_all = "camelCase")]
 pub struct Plugin {
     pub id: String,
-    pub name: String,
-    pub description: String,
+    /// 插件名称：string 或按语言 key 的对象（如 name、ja、ko），前端按 locale 解析，name 为回退
+    pub name: serde_json::Value,
+    /// 插件描述：同上
+    pub description: serde_json::Value,
     /// manifest.json 里的版本号
     pub version: String,
     #[serde(rename = "baseUrl")]
@@ -31,9 +33,6 @@ pub struct Plugin {
     /// 插件包体大小（.kgpg 文件大小）
     #[serde(rename = "sizeBytes")]
     pub size_bytes: u64,
-    /// 是否内置插件（已废弃，始终为 false）
-    #[serde(rename = "builtIn")]
-    pub built_in: bool,
     pub config: HashMap<String, serde_json::Value>,
     pub selector: Option<PluginSelector>,
     /// 脚本类型：rhai（crawl.rhai）或 js（crawl.js）。安卓仅支持 rhai。
@@ -80,7 +79,7 @@ struct KgpgFileCacheEntry {
     stamp: FileStamp,
     manifest: PluginManifest,
     config: Option<PluginConfig>,
-    doc: Option<String>,
+    doc: Option<PluginDoc>,
     icon_present: bool,
     /// 懒加载：只有真正请求 icon bytes 时才读取并缓存（避免刷新/初始化时读大量二进制）
     icon_png_bytes: Option<Option<Vec<u8>>>,
@@ -99,7 +98,7 @@ struct InstalledPluginsCache {
 struct ParsedKgpgForCache {
     manifest: PluginManifest,
     config: Option<PluginConfig>,
-    doc: Option<String>,
+    doc: Option<PluginDoc>,
     icon_present: bool,
     /// "rhai" | "js"，由包内是否存在 crawl.js 决定
     script_type: String,
@@ -154,7 +153,7 @@ impl PluginManager {
     /// 从指定 `.kgpg` 文件解析出运行时需要的 `Plugin` 信息（用于 CLI/调度器/插件编辑器临时运行）。
     ///
     /// 注意：
-    /// - `built_in/config` 等运行时字段由调用方策略决定；这里按“可运行”默认值填充。
+    /// - `config` 等运行时字段由调用方策略决定；这里按“可运行”默认值填充。
     /// - `plugin_id` 允许由调用方指定（例如调度器的 task request 里传入的 id），
     ///   CLI 场景一般会用文件名 stem 作为 id。
     pub fn build_runtime_plugin_from_kgpg_path(
@@ -178,15 +177,14 @@ impl PluginManager {
         let script_type = self.detect_script_type_from_kgpg(kgpg_path)?;
         Ok(Plugin {
             id: plugin_id,
-            name: manifest.name,
-            description: manifest.description,
+            name: manifest.name_to_value(),
+            description: manifest.description_to_value(),
             version: manifest.version,
             base_url: config
                 .as_ref()
                 .and_then(|c| c.base_url.clone())
                 .unwrap_or_default(),
             size_bytes,
-            built_in: false,
             config: HashMap::new(),
             selector: config.and_then(|c| c.selector),
             script_type,
@@ -285,8 +283,8 @@ impl PluginManager {
 
             browser_plugins.push(BrowserPlugin {
                 id: id.clone(),
-                name: file.manifest.name.clone(),
-                desp: file.manifest.description.clone(),
+                name: file.manifest.name_to_value(),
+                desp: file.manifest.description_to_value(),
                 icon: icon_path,
                 file_path: Some(path.to_string_lossy().to_string()),
                 doc: file.doc.clone(),
@@ -301,41 +299,17 @@ impl PluginManager {
         read_plugin_manifest_from_kgpg_file(zip_path)
     }
 
-    /// 从 ZIP 格式的插件文件中读取 doc_root/doc.md
-    fn read_plugin_doc(&self, zip_path: &Path) -> Result<Option<String>, String> {
+    /// 从 ZIP 格式的插件文件中读取 doc：doc_root/doc.md（default）、doc_root/doc.<lang>.md、或兼容 doc.md
+    fn read_plugin_doc(&self, zip_path: &Path) -> Result<Option<PluginDoc>, String> {
         let file =
             fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
         let mut archive =
             ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
-
-        // 优先从 doc_root/doc.md 读取，如果没有则尝试 doc.md（向后兼容）
-        let doc_paths = ["doc_root/doc.md", "doc.md"];
-        let mut doc_path_found = None;
-
-        for doc_path in &doc_paths {
-            if archive.by_name(doc_path).is_ok() {
-                doc_path_found = Some(*doc_path);
-                break;
-            }
-        }
-
-        let doc_path = match doc_path_found {
-            Some(p) => p,
-            None => return Ok(None), // doc.md 是可选的
-        };
-
-        let mut doc_file = archive.by_name(doc_path).map_err(|_| "doc.md not found")?;
-
-        let mut content = String::new();
-        doc_file
-            .read_to_string(&mut content)
-            .map_err(|e| format!("Failed to read doc.md: {}", e))?;
-
-        Ok(Some(content))
+        collect_doc_from_zip(&mut archive)
     }
 
-    /// 从 ZIP 格式的插件文件中读取 doc_root/doc.md（供 app-cli/外部调用复用）
-    pub fn read_plugin_doc_public(&self, zip_path: &Path) -> Result<Option<String>, String> {
+    /// 从 ZIP 格式的插件文件中读取 doc（供 app-cli/外部调用复用）
+    pub fn read_plugin_doc_public(&self, zip_path: &Path) -> Result<Option<PluginDoc>, String> {
         self.read_plugin_doc(zip_path)
     }
 
@@ -639,15 +613,14 @@ impl PluginManager {
         let script_type = self.detect_script_type_from_kgpg(&target_path)?;
         let plugin = Plugin {
             id: plugin_id.clone(),
-            name: manifest.name.clone(),
-            description: manifest.description,
+            name: manifest.name_to_value(),
+            description: manifest.description_to_value(),
             version: manifest.version,
             base_url: config
                 .as_ref()
                 .and_then(|c| c.base_url.clone())
                 .unwrap_or_default(),
             size_bytes,
-            built_in: false,
             config: HashMap::new(),
             selector: config.and_then(|c| c.selector),
             script_type,
@@ -672,11 +645,7 @@ impl PluginManager {
         let Some(p) = guard.plugins.get(&plugin_id) else {
             return Err(format!("Plugin {} not found", plugin_id));
         };
-
-        // 保持旧行为：built_in=false（浏览器安装不参与"内置不可卸载"逻辑）
-        let mut out = p.clone();
-        out.built_in = false;
-        Ok(out)
+        Ok(p.clone())
     }
 
     /// 获取插件的变量定义（从 config.json 中读取）
@@ -1057,7 +1026,7 @@ impl PluginManager {
         })
     }
 
-    /// 解析单个商店插件 JSON
+    /// 解析单个商店插件 JSON。index.json 中 name/description 为扁平键（name, name.zh, description, description.zh 等），此处解析为前端 i18n 对象。
     fn parse_store_plugin(
         &self,
         plugin_json: &serde_json::Value,
@@ -1070,11 +1039,14 @@ impl PluginManager {
             .ok_or_else(|| "Missing 'id' field".to_string())?
             .to_string();
 
-        let name = plugin_json
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| "Missing 'name' field".to_string())?
-            .to_string();
+        let map = plugin_json
+            .as_object()
+            .ok_or_else(|| "Plugin entry must be an object".to_string())?;
+        let name_flat = extract_manifest_text_from_flat(map, "name");
+        if name_flat.is_empty() {
+            return Err("Missing 'name' field".to_string());
+        }
+        let name = manifest_i18n_to_frontend_value(&name_flat, "name");
 
         let version = plugin_json
             .get("version")
@@ -1082,11 +1054,8 @@ impl PluginManager {
             .ok_or_else(|| "Missing 'version' field".to_string())?
             .to_string();
 
-        let description = plugin_json
-            .get("description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let description_flat = extract_manifest_text_from_flat(map, "description");
+        let description = manifest_i18n_to_frontend_value(&description_flat, "description");
 
         let download_url = plugin_json
             .get("downloadUrl")
@@ -1400,8 +1369,8 @@ impl PluginManager {
         let icon_data = self.get_plugin_icon_by_id(plugin_id).await.ok().flatten();
         Ok(PluginDetail {
             id: plugin_id.to_string(),
-            name: manifest.name,
-            desp: manifest.description,
+            name: manifest.name_to_value(),
+            desp: manifest.description_to_value(),
             doc,
             icon_data,
             origin: "installed".to_string(),
@@ -1505,28 +1474,8 @@ impl PluginManager {
                 .map_err(|e| format!("Failed to parse manifest.json: {}", e))?
         };
 
-        // 读取 doc.md（可选）
-        let doc_paths = ["doc_root/doc.md", "doc.md"];
-        let mut doc_path_found = None;
-        for doc_path in &doc_paths {
-            if archive.by_name(doc_path).is_ok() {
-                doc_path_found = Some(*doc_path);
-                break;
-            }
-        }
-        let doc = match doc_path_found {
-            Some(p) => {
-                let mut doc_file = archive
-                    .by_name(p)
-                    .map_err(|_| "doc.md not found".to_string())?;
-                let mut content = String::new();
-                doc_file
-                    .read_to_string(&mut content)
-                    .map_err(|e| format!("Failed to read doc.md: {}", e))?;
-                Some(content)
-            }
-            None => None,
-        };
+        // 读取 doc（doc_root/doc.md、doc_root/doc.<lang>.md、或兼容 doc.md）
+        let doc = collect_doc_from_zip(&mut archive)?;
 
         // 读取 icon：优先使用 kgpgv2 头部的 icon，回退到 ZIP 内的 icon.png
         let icon_data = if v2_icon_data.is_some() {
@@ -1562,8 +1511,8 @@ impl PluginManager {
 
         Ok(PluginDetail {
             id: plugin_id.to_string(),
-            name: manifest.name,
-            desp: manifest.description,
+            name: manifest.name_to_value(),
+            desp: manifest.description_to_value(),
             doc,
             icon_data,
             origin: "remote".to_string(),
@@ -1712,7 +1661,7 @@ impl PluginManager {
 
         Ok(ImportPreview {
             id: plugin_id,
-            name: manifest.name,
+            name: manifest.name_to_value(),
             version: manifest.version,
             size_bytes,
             already_exists,
@@ -1754,11 +1703,10 @@ impl PluginManager {
 
                 let stamp = FileStamp::from_path(&path)?;
                 let parsed = self.parse_kgpg_for_cache(&path)?;
-                let built_in = false;
                 let plugin = Plugin {
                     id: plugin_id.clone(),
-                    name: parsed.manifest.name.clone(),
-                    description: parsed.manifest.description.clone(),
+                    name: parsed.manifest.name_to_value(),
+                    description: parsed.manifest.description_to_value(),
                     version: parsed.manifest.version.clone(),
                     base_url: parsed
                         .config
@@ -1766,7 +1714,6 @@ impl PluginManager {
                         .and_then(|c| c.base_url.clone())
                         .unwrap_or_default(),
                     size_bytes: stamp.len,
-                    built_in,
                     config: HashMap::new(),
                     selector: parsed.config.clone().and_then(|c| c.selector),
                     script_type: parsed.script_type.clone(),
@@ -1848,12 +1795,11 @@ impl PluginManager {
         if let Some(path) = found_path {
             let stamp = FileStamp::from_path(&path)?;
             let parsed = self.parse_kgpg_for_cache(&path)?;
-            let built_in = false;
 
             let plugin = Plugin {
                 id: plugin_id.to_string(),
-                name: parsed.manifest.name.clone(),
-                description: parsed.manifest.description.clone(),
+                name: parsed.manifest.name_to_value(),
+                description: parsed.manifest.description_to_value(),
                 version: parsed.manifest.version.clone(),
                 base_url: parsed
                     .config
@@ -1861,7 +1807,6 @@ impl PluginManager {
                     .and_then(|c| c.base_url.clone())
                     .unwrap_or_default(),
                 size_bytes: stamp.len,
-                built_in,
                 config: HashMap::new(),
                 selector: parsed.config.clone().and_then(|c| c.selector),
                 script_type: parsed.script_type.clone(),
@@ -1964,27 +1909,8 @@ impl PluginManager {
                 .map_err(|e| format!("Failed to parse manifest.json: {}", e))?
         };
 
-        // doc（优先 doc_root/doc.md，其次 doc.md）
-        let doc_paths = ["doc_root/doc.md", "doc.md"];
-        let mut doc_path_found = None;
-        for p in &doc_paths {
-            if archive.by_name(p).is_ok() {
-                doc_path_found = Some(*p);
-                break;
-            }
-        }
-        let doc = match doc_path_found {
-            Some(p) => {
-                let mut f = archive
-                    .by_name(p)
-                    .map_err(|_| "doc.md not found".to_string())?;
-                let mut s = String::new();
-                f.read_to_string(&mut s)
-                    .map_err(|e| format!("Failed to read doc.md: {}", e))?;
-                Some(s)
-            }
-            None => None,
-        };
+        // doc（doc_root/doc.md、doc_root/doc.<lang>.md、或兼容 doc.md）
+        let doc = collect_doc_from_zip(&mut archive)?;
 
         // config.json（可选）
         let config = match archive.by_name("config.json") {
@@ -2084,55 +2010,376 @@ pub fn read_plugin_manifest_from_kgpg_file(zip_path: &Path) -> Result<PluginMani
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowserPlugin {
     pub id: String,
-    pub name: String,
-    pub desp: String,
+    /// 同 Plugin.name，string 或 { name?, ja?, ko?, ... }
+    pub name: serde_json::Value,
+    /// 同 Plugin.description
+    pub desp: serde_json::Value,
     pub icon: Option<String>,
     pub file_path: Option<String>,
+    /// 文档多语言：{ "default": "...", "zh": "...", "en": ... }
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub doc: Option<String>,
+    pub doc: Option<PluginDoc>,
 }
 
-// 插件清单（manifest.json）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// 插件清单（manifest.json）中 name/description 的国际化：仅 Record，扁平键 "name"（默认）、"name.zh"、"name.ja" 等
+pub type ManifestI18nText = HashMap<String, String>;
+
+/// 插件文档多语言：键 "default"（doc.md / doc_root/doc.md）及 "zh"、"en"、"ja"、"ko" 等（doc_root/doc.<lang>.md）
+pub type PluginDoc = HashMap<String, String>;
+
+/// 从已打开的 ZIP 中收集所有 doc 条目，返回键为 "default" 及语言码的 HashMap。
+fn collect_doc_from_zip<R: std::io::Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Result<Option<PluginDoc>, String> {
+    use std::io::Read;
+    let mut map = PluginDoc::new();
+    for i in 0..archive.len() {
+        let mut f = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to get zip entry {}: {}", i, e))?;
+        let name = f.name().to_string();
+        let key: Option<String> = if name == "doc_root/doc.md" {
+            Some("default".to_string())
+        } else if name == "doc.md" {
+            Some("default".to_string())
+        } else if name.starts_with("doc_root/doc.") && name.ends_with(".md") {
+            let lang = name
+                .trim_start_matches("doc_root/doc.")
+                .trim_end_matches(".md");
+            if lang.is_empty() {
+                None
+            } else {
+                Some(lang.to_string())
+            }
+        } else {
+            None
+        };
+        if let Some(k) = key {
+            if k == "default" && name == "doc.md" && map.contains_key("default") {
+                continue;
+            }
+            let mut content = String::new();
+            f.read_to_string(&mut content)
+                .map_err(|e| format!("Failed to read doc {}: {}", name, e))?;
+            map.insert(k, content);
+        }
+    }
+    if map.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(map))
+    }
+}
+
+fn extract_manifest_text_from_flat(obj: &serde_json::Map<String, serde_json::Value>, base_key: &str) -> ManifestI18nText {
+    let mut out = HashMap::new();
+    if let Some(v) = obj.get(base_key).and_then(|v| v.as_str()) {
+        out.insert(base_key.to_string(), v.to_string());
+    }
+    let prefix = format!("{}.", base_key);
+    for (k, v) in obj {
+        if let Some(s) = v.as_str() {
+            if k == base_key {
+                out.insert(k.clone(), s.to_string());
+            } else if k.starts_with(&prefix) {
+                out.insert(k.clone(), s.to_string());
+            }
+        }
+    }
+    out
+}
+
+impl PluginManifest {
+    /// 取默认字符串：键 "name" 或 "description"（无点后缀）
+    pub fn name_fallback(&self) -> String {
+        self.name.get("name").cloned().unwrap_or_default()
+    }
+    pub fn description_fallback(&self) -> String {
+        self.description.get("description").cloned().unwrap_or_default()
+    }
+}
+
+// 插件清单（manifest.json），扁平键 name / name.zh / name.ja，description / description.zh ...
+#[derive(Debug, Clone, Serialize)]
 pub struct PluginManifest {
-    pub name: String,
+    pub name: ManifestI18nText,
     pub version: String,
-    pub description: String,
+    pub description: ManifestI18nText,
     #[serde(default)]
     pub author: String,
 }
 
-// 变量定义（config.json 中的 var 字段，现在是数组格式）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(untagged)]
-pub enum VarOption {
-    /// 兼容旧格式：["high","medium"]
-    String(String),
-    /// 推荐格式：[{ "name": "...", "variable": "..." }]
-    Item { name: String, variable: String },
+impl<'de> Deserialize<'de> for PluginManifest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let obj = serde_json::Value::deserialize(deserializer)?;
+        let map = obj.as_object().ok_or_else(|| serde::de::Error::custom("manifest must be an object"))?;
+        let version = map
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("1.0.0")
+            .to_string();
+        let author = map.get("author").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let name = extract_manifest_text_from_flat(map, "name");
+        let description = extract_manifest_text_from_flat(map, "description");
+        Ok(PluginManifest {
+            name,
+            version,
+            description,
+            author,
+        })
+    }
+}
+
+/// 将 index.json 中的 description（或 name）字段（字符串或对象）归一化为前端 i18n 结构：{ "default": string, "zh"?: string, ... }。
+/// 前端用 resolveManifestText(value, locale) 解析。
+pub fn index_manifest_text_to_frontend_value(v: Option<&serde_json::Value>) -> serde_json::Value {
+    let v = match v {
+        Some(x) => x,
+        None => return serde_json::json!({ "default": "" }),
+    };
+    if let Some(s) = v.as_str() {
+        return serde_json::json!({ "default": s });
+    }
+    if let Some(obj) = v.as_object() {
+        let mut out = serde_json::Map::new();
+        for (k, val) in obj {
+            if let Some(s) = val.as_str() {
+                let key = if k == "default" { "default" } else { k.as_str() };
+                out.insert(key.to_string(), serde_json::Value::String(s.to_string()));
+            }
+        }
+        if !out.contains_key("default") {
+            let fallback = obj
+                .get("en")
+                .and_then(|x| x.as_str())
+                .or_else(|| obj.values().find_map(|x| x.as_str()))
+                .unwrap_or("");
+            out.insert("default".to_string(), serde_json::Value::String(fallback.to_string()));
+        }
+        return serde_json::Value::Object(out);
+    }
+    serde_json::json!({ "default": "" })
+}
+
+/// 将内部扁平键（"name"/"name.zh"/"name.ja"）转为前端结构：{ "default": ..., "zh": ..., "ja": ... }
+fn manifest_i18n_to_frontend_value(map: &ManifestI18nText, base_key: &str) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    let prefix = format!("{}.", base_key);
+    for (k, v) in map {
+        let key = if k == base_key {
+            "default".to_string()
+        } else if k.starts_with(&prefix) {
+            k[prefix.len()..].to_string()
+        } else {
+            continue;
+        };
+        out.insert(key, serde_json::Value::String(v.clone()));
+    }
+    serde_json::Value::Object(out)
+}
+
+impl PluginManifest {
+    pub fn name_to_value(&self) -> serde_json::Value {
+        manifest_i18n_to_frontend_value(&self.name, "name")
+    }
+    pub fn description_to_value(&self) -> serde_json::Value {
+        manifest_i18n_to_frontend_value(&self.description, "description")
+    }
+}
+
+/// 从已序列化的 name/description Value 取回退展示字符串（用于 CLI/日志等无 locale 场景）。
+/// Value 为前端结构：{ "default": ..., "zh": ..., "ja": ... }，默认键为 "default"。
+pub fn manifest_value_to_display_string(v: &serde_json::Value) -> String {
+    let m = match v.as_object() {
+        Some(m) => m,
+        None => return String::new(),
+    };
+    m.get("default")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_default()
 }
 
 // 变量定义（config.json 中的 var 字段，现在是数组格式）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// 选项：兼容 ["high","medium"] 或 [{ "name": "...", "variable": "..." }]；name 支持扁平多语言 name / name.zh / name.en
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(untagged)]
+pub enum VarOption {
+    String(String),
+    Item {
+        name: ManifestI18nText,
+        variable: String,
+    },
+}
+
+impl<'de> Deserialize<'de> for VarOption {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v = serde_json::Value::deserialize(deserializer)?;
+        if let Some(s) = v.as_str() {
+            return Ok(VarOption::String(s.to_string()));
+        }
+        let map = v.as_object().ok_or_else(|| serde::de::Error::custom("VarOption: object or string"))?;
+        let variable = map
+            .get("variable")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| serde::de::Error::custom("VarOption Item: missing variable"))?
+            .to_string();
+        let name = extract_manifest_text_from_flat(map, "name");
+        if name.is_empty() {
+            return Err(serde::de::Error::custom("VarOption Item: missing name"));
+        }
+        Ok(VarOption::Item { name, variable })
+    }
+}
+
+// 变量定义（config.json 中的 var 字段）；name/descripts 支持扁平多语言 name / name.zh / name.en
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VarDefinition {
-    pub key: String, // 变量名（用于在脚本中引用）
+    pub key: String,
     #[serde(rename = "type")]
-    pub var_type: String, // "int", "float", "string", "options", "boolean", "list"
-    pub name: String, // 展示给用户的名称
+    pub var_type: String,
+    pub name: ManifestI18nText,
     #[serde(default)]
-    pub descripts: Option<String>, // 描述（注意：用户写的是 descripts，不是 description）
+    pub descripts: Option<ManifestI18nText>,
     #[serde(default)]
-    pub default: Option<serde_json::Value>, // 默认值
+    pub default: Option<serde_json::Value>,
     #[serde(default)]
-    pub options: Option<Vec<VarOption>>, // options/checkbox: 支持 string[] 或 {name,variable}[]
+    pub options: Option<Vec<VarOption>>,
     #[serde(default)]
-    pub min: Option<serde_json::Value>, // 最小值（int/float 类型使用）
+    pub min: Option<serde_json::Value>,
     #[serde(default)]
-    pub max: Option<serde_json::Value>, // 最大值（int/float 类型使用）
+    pub max: Option<serde_json::Value>,
     #[serde(default)]
-    pub when: Option<HashMap<String, Vec<String>>>, // 条件显示：key 为 options 变量 key，value 为匹配值数组；多 key 为 AND
+    pub when: Option<HashMap<String, Vec<String>>>,
+}
+
+impl<'de> Deserialize<'de> for VarDefinition {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let obj = serde_json::Value::deserialize(deserializer)?;
+        let map = obj.as_object().ok_or_else(|| serde::de::Error::custom("VarDefinition: must be object"))?;
+        let key = map
+            .get("key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| serde::de::Error::custom("VarDefinition: missing key"))?
+            .to_string();
+        let var_type = map
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("string")
+            .to_string();
+        let name = extract_manifest_text_from_flat(map, "name");
+        if name.is_empty() {
+            return Err(serde::de::Error::custom("VarDefinition: missing name"));
+        }
+        let descripts = {
+            let d = extract_manifest_text_from_flat(map, "descripts");
+            if d.is_empty() {
+                None
+            } else {
+                Some(d)
+            }
+        };
+        let default = map.get("default").cloned();
+        let options: Option<Vec<VarOption>> = map.get("options").and_then(|v| {
+            let arr = v.as_array()?;
+            let mut out = Vec::with_capacity(arr.len());
+            for item in arr {
+                if let Some(s) = item.as_str() {
+                    out.push(VarOption::String(s.to_string()));
+                } else if let Some(m) = item.as_object() {
+                    let variable = m.get("variable").and_then(|x| x.as_str())?.to_string();
+                    let name = extract_manifest_text_from_flat(m, "name");
+                    if !name.is_empty() {
+                        out.push(VarOption::Item { name, variable });
+                    }
+                }
+            }
+            Some(out)
+        });
+        let min = map.get("min").cloned();
+        let max = map.get("max").cloned();
+        let when: Option<HashMap<String, Vec<String>>> = map
+            .get("when")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        Ok(VarDefinition {
+            key,
+            var_type,
+            name,
+            descripts,
+            default,
+            options,
+            min,
+            max,
+            when,
+        })
+    }
+}
+
+/// 将变量定义转为前端 i18n 结构：name/descripts/options[].name 为 Record (default, zh, en...)，便于前端按 locale 解析。
+pub fn var_definition_to_frontend_value(v: &VarDefinition) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("key".to_string(), serde_json::Value::String(v.key.clone()));
+    obj.insert(
+        "type".to_string(),
+        serde_json::Value::String(v.var_type.clone()),
+    );
+    obj.insert(
+        "name".to_string(),
+        manifest_i18n_to_frontend_value(&v.name, "name"),
+    );
+    if let Some(ref d) = v.descripts {
+        obj.insert(
+            "descripts".to_string(),
+            manifest_i18n_to_frontend_value(d, "descripts"),
+        );
+    }
+    if let Some(ref default) = v.default {
+        obj.insert("default".to_string(), default.clone());
+    }
+    if let Some(ref opts) = v.options {
+        let arr: Vec<serde_json::Value> = opts
+            .iter()
+            .map(|o| match o {
+                VarOption::String(s) => {
+                    let mut m = serde_json::Map::new();
+                    m.insert("variable".to_string(), serde_json::Value::String(s.clone()));
+                    let mut name_m = serde_json::Map::new();
+                    name_m.insert("default".to_string(), serde_json::Value::String(s.clone()));
+                    m.insert("name".to_string(), serde_json::Value::Object(name_m));
+                    serde_json::Value::Object(m)
+                }
+                VarOption::Item { name, variable } => {
+                    let mut m = serde_json::Map::new();
+                    m.insert("variable".to_string(), serde_json::Value::String(variable.clone()));
+                    m.insert("name".to_string(), manifest_i18n_to_frontend_value(name, "name"));
+                    serde_json::Value::Object(m)
+                }
+            })
+            .collect();
+        obj.insert("options".to_string(), serde_json::Value::Array(arr));
+    }
+    if let Some(ref min) = v.min {
+        obj.insert("min".to_string(), min.clone());
+    }
+    if let Some(ref max) = v.max {
+        obj.insert("max".to_string(), max.clone());
+    }
+    if let Some(ref when) = v.when {
+        let when_val = serde_json::to_value(when).unwrap_or(serde_json::Value::Null);
+        obj.insert("when".to_string(), when_val);
+    }
+    serde_json::Value::Object(obj)
 }
 
 // 插件配置（config.json）
@@ -2160,13 +2407,16 @@ pub struct PluginSource {
 }
 
 // 商店插件（从源解析后的插件信息）
+/// name/description 与已安装插件一致：前端 i18n 对象 { "default": string, "zh"?: string, ... }，由 index.json 对应字段（字符串或对象）归一化而来。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorePluginResolved {
     pub id: String,
-    pub name: String,
+    /// 前端按 locale 解析：resolveManifestText(name, locale)
+    pub name: serde_json::Value,
     pub version: String,
-    pub description: String,
+    /// 前端按 locale 解析：resolveManifestText(description, locale)
+    pub description: serde_json::Value,
     /// KGPG 包格式版本（来自 index.json 的 packageVersion）
     /// 版本协商：过高按最高支持版本解析，过低按低版本解析。
     #[serde(rename = "packageVersion", default)]
@@ -2199,7 +2449,8 @@ pub struct StoreSourceValidationResult {
 #[serde(rename_all = "camelCase")]
 pub struct ImportPreview {
     pub id: String,
-    pub name: String,
+    /// string 或 { name?, ja?, ko?, ... }，前端按 locale 解析
+    pub name: serde_json::Value,
     pub version: String,
     #[serde(rename = "sizeBytes")]
     pub size_bytes: u64,
@@ -2225,10 +2476,12 @@ fn default_true() -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct PluginDetail {
     pub id: String,
-    pub name: String,
-    pub desp: String,
+    /// string 或 { name?, ja?, ko?, ... }，前端按 locale 解析
+    pub name: serde_json::Value,
+    pub desp: serde_json::Value,
+    /// 文档多语言：{ "default": "...", "zh": "...", "en": ... }
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub doc: Option<String>,
+    pub doc: Option<PluginDoc>,
     #[serde(rename = "iconData", skip_serializing_if = "Option::is_none")]
     pub icon_data: Option<Vec<u8>>,
     /// installed | remote

@@ -177,7 +177,7 @@ export function useFileDrop(
                 } else if (k.isImage || k.isVideo || k.isArchive || k.isKgpg) {
                   items.push({
                     path: k.path,
-                    name: k.isKgpg ? `${name}（插件包）` : name,
+                    name: k.isKgpg ? `${name}${i18n.global.t("import.pluginPackageSuffix")}` : name,
                     isDirectory: false,
                     isArchive: k.isArchive,
                     isKgpg: k.isKgpg,

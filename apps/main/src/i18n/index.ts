@@ -2,11 +2,15 @@ import { createI18n } from "vue-i18n";
 import zh from "./locales/zh";
 import en from "./locales/en";
 import zhtw from "./locales/zhtw";
+import ja from "./locales/ja";
+import ko from "./locales/ko";
 
 export const SUPPORTED_LANGUAGES = [
   { value: "zh", label: "简体中文" },
   { value: "en", label: "English" },
   { value: "zhtw", label: "繁體中文" },
+  { value: "ja", label: "日本語" },
+  { value: "ko", label: "한국어" },
 ] as const;
 
 export type SupportedLocale = (typeof SUPPORTED_LANGUAGES)[number]["value"];
@@ -15,6 +19,8 @@ const messages: Record<string, object> = {
   zh,
   en,
   zhtw,
+  ja,
+  ko,
 };
 
 function localeAlias(locale: string): string | null {
@@ -28,6 +34,10 @@ function localeAlias(locale: string): string | null {
     "zh-hk": "zhtw",
     "zh-hant": "zhtw",
     "zh-mo": "zhtw",
+    "ja": "ja",
+    "ja-jp": "ja",
+    "ko-kr": "ko",
+    "ko-kp": "ko",
   };
   return map[normalized] ?? null;
 }

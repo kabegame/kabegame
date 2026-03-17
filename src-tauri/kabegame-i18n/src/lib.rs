@@ -7,6 +7,8 @@ fn locale_alias(locale: &str) -> Option<&'static str> {
     match locale {
         "zh" | "zh-cn" | "zh-hans" | "zh-sg" | "zh-my" | "zh-chs" => Some("zh"),
         "zh-tw" | "zh-hk" | "zh-hant" | "zh-mo" | "zh-cht" => Some("zhtw"),
+        "ja" | "ja-jp" => Some("ja"),
+        "ko" | "ko-kr" | "ko-kp" => Some("ko"),
         _ => None,
     }
 }

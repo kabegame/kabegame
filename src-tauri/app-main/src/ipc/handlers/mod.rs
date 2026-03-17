@@ -338,7 +338,8 @@ fn parse_plugin_args_to_user_config(
                                 }
                             }
                             VarOption::Item { name, variable } => {
-                                if name == raw_trim || variable == raw_trim {
+                                let name_matches = name.values().any(|v| v.as_str() == raw_trim);
+                                if name_matches || variable == raw_trim {
                                     return Ok(serde_json::Value::String(variable.clone()));
                                 }
                             }

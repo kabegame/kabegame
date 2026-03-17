@@ -54,6 +54,7 @@
   "exitTitle": "Quit",
   "bye": "Bye",
   "openFileFailed": "Failed to open file",
+  "openUrlFailed": "Failed to open URL",
   "copyImageSuccess": "Image copied to clipboard",
   "copyImageFailed": "Failed to copy image",
   "imageNotLoadedYet": "Image not loaded yet, please try again later",

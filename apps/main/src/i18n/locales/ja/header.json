@@ -1,0 +1,18 @@
+{
+  "help": "ヘルプ",
+  "quickSettings": "クイック設定",
+  "refresh": "更新",
+  "stopTask": "タスクを停止",
+  "deleteTask": "タスクを削除",
+  "organize": "整理",
+  "collect": "収集",
+  "createAlbum": "新規アルバム",
+  "openVirtualDrive": "VDで表示",
+  "addToAlbum": "アルバムに追加",
+  "setAsWallpaperCarousel": "壁紙スライドショーに設定",
+  "deleteAlbum": "アルバムを削除",
+  "importSource": "ソースをインポート",
+  "manageSources": "ソースを管理",
+  "gallerySort": "日時で並び替え",
+  "openCrawlerWebview": "クローラーWebViewウィンドウ"
+}

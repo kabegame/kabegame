@@ -10,8 +10,8 @@
       v-model:visible="showImportDialog" 
       :kgpg-path="importKgpgPath"
     />
-    <!-- 全局唯一的快捷设置抽屉（仅非安卓；安卓上不使用） -->
-    <QuickSettingsDrawer v-if="!IS_ANDROID" />
+    <!-- 全局唯一的快捷设置抽屉（桌面与安卓均挂载，安卓用 useModalBack 处理返回键） -->
+    <QuickSettingsDrawer />
     <!-- 全局唯一的帮助抽屉（按页面展示帮助内容） -->
     <HelpDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
@@ -94,7 +94,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch, provide } from "vue";
 import { Picture, Grid, Setting, Collection, QuestionFilled, Compass } from "@element-plus/icons-vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useI18n } from "vue-i18n";
@@ -113,6 +113,9 @@ import CrawlerDialog from "./components/CrawlerDialog.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
+import { resolveManifestText } from "./composables/usePluginManifestI18n";
+import { resolveConfigText } from "./composables/usePluginConfigI18n";
+import type { PluginManifestText } from "@kabegame/core/stores/plugins";
 import { useSidebar } from "./composables/useSidebar";
 import { listen, emit, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -127,7 +130,22 @@ import { useThrottleFn } from "@vueuse/core";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
-const { locale } = useI18n();
+const { t, locale } = useI18n();
+// 为 packages/core 内组件提供 i18n（core 无 vue-i18n 依赖，通过 inject 获取）
+provide("i18n-t", t);
+provide("i18n-locale", locale);
+// 插件 manifest name/description 解析（后端下发 { default, zh, ja, ... }，按 locale 优先再 default）
+provide(
+  "resolveManifestText",
+  (value: PluginManifestText | null | undefined) =>
+    resolveManifestText(value, locale.value),
+);
+// 插件 config 变量 name/descripts/options[].name 解析（同构，供 TaskDrawerContent 等 core 组件 inject）
+provide(
+  "resolveConfigText",
+  (value: import("@kabegame/core/stores/plugins").PluginConfigText | string | null | undefined) =>
+    resolveConfigText(value, locale.value),
+);
 
 // Android 底部 Tab 配置（均匀分布；爬虫仅桌面端有代理，故仅侧栏展示）
 // 依赖 locale 以便语言切换时标签立即更新

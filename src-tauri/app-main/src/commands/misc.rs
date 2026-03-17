@@ -1,5 +1,6 @@
 // 杂项命令
 
+use kabegame_i18n::t;
 use kabegame_core::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -33,7 +34,7 @@ pub fn open_dev_webview(app: AppHandle, url: String) -> Result<(), String> {
         &label,
         tauri::WebviewUrl::External(parsed),
     )
-    .title("Kabegame 开发 WebView")
+    .title(t!("window.devWebViewTitle"))
     .inner_size(1000.0, 700.0)
     .build()
     .map_err(|e| format!("创建窗口失败: {}", e))?;

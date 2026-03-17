@@ -79,6 +79,10 @@ fn init_globals() -> Result<(), String> {
         println!("  ✓ Marked {failed_count} pending/running task(s) as failed");
     }
     println!("  ✓ Storage initialized");
+    // 收藏画册使用当前 locale 的 i18n 名称（与语言切换时 set_favorite_album_name 一致）
+    let raw = kabegame_i18n::t!("albums.favorite");
+    let name = if raw == "albums.favorite" { "收藏" } else { raw.as_str() };
+    let _ = Storage::global().set_favorite_album_name(name);
 
     kabegame_core::ipc::server::EventBroadcaster::init_global(1000)
         .map_err(|e| format!("EventBroadcaster: {}", e))?;
@@ -313,7 +317,7 @@ pub fn run() {
                 Err(e) => {
                     utils::show_error(
                         app.app_handle(),
-                        format!("初始化过程中出现了致命错误！: {}", e),
+                        kabegame_i18n::t!("dialog.initFatalError", detail = e.to_string()),
                     );
                     eprintln!("初始化过程中出现了致命错误！:{}", e);
                     process::exit(1);

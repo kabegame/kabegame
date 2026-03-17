@@ -1,10 +1,6 @@
-﻿//! Albums 相关代码
-use kabegame_core::ipc::events::DaemonEvent;
+//! Albums 相关代码
 use kabegame_core::ipc::ipc::CliIpcResponse;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use kabegame_core::ipc::server::EventBroadcaster;
 use kabegame_core::storage::Storage;
-use std::sync::Arc;
 
 pub async fn get_albums() -> CliIpcResponse {
     let storage = Storage::global();
@@ -19,21 +15,10 @@ pub async fn get_albums() -> CliIpcResponse {
 pub async fn add_album(name: &str) -> CliIpcResponse {
     let storage = Storage::global();
     match storage.add_album(name) {
-        Ok(album) => {
-            let id = album.id.clone();
-            let name = album.name.clone();
-            let created_at = album.created_at.clone();
-            CliIpcResponse::ok_with_data(
-                "created",
-                serde_json::to_value(album).unwrap_or_default(),
-            );
-            EventBroadcaster::global().broadcast(Arc::new(DaemonEvent::AlbumAdded {
-                id: id,
-                name: name,
-                created_at: created_at,
-            }));
-            CliIpcResponse::ok("created")
-        }
+        Ok(album) => CliIpcResponse::ok_with_data(
+            "created",
+            serde_json::to_value(album).unwrap_or_default(),
+        ),
         Err(e) => CliIpcResponse::err(e),
     }
 }

@@ -1,4 +1,11 @@
 {
+  "imageDetailTitle": "圖片詳情",
+  "imageDetailSource": "源：",
+  "imageDetailUrl": "URL：",
+  "imageDetailLocalPath": "本機路徑：",
+  "imageDetailCrawledAt": "收藏時間：",
+  "imageDetailMetadata": "元資料：",
+  "imageDetailInvalidDate": "銀河系末日",
   "emptyHint": "暫無圖片",
   "startCollect": "開始收集",
   "confirmDelete": "確認刪除",
@@ -46,7 +53,6 @@
   "selectFolderDesc": "選擇一個包含圖片的資料夾",
   "selectArchive": "選擇壓縮檔",
   "selectArchiveDesc": "支援 .zip 格式",
-  "chooseCollectMethod": "選擇收集方式",
   "localDesc": "從本機選擇圖片、資料夾或壓縮檔匯入",
   "remoteDesc": "使用插件從網路收集圖片",
   "organizingProgress": "整理中 {processed}/{total}",
@@ -65,5 +71,17 @@
   "weNameTooLong": "名稱不能超過 64 個字元",
   "weDirNotConfigured": "未設定 Wallpaper Engine 目錄：請至 設定 -> 桌布輪播 -> Wallpaper Engine 目錄 先選擇",
   "weExportSuccess": "已匯出 WE 工程（{count} 張）：{path}",
-  "weExportVideoSuccess": "已匯出 WE 影片工程：{path}"
+  "weExportVideoSuccess": "已匯出 WE 影片工程：{path}",
+  "removeFromAlbum": "從畫冊移除",
+  "removeDialogCheckboxLabel": "同時刪除圖片（慎用）",
+  "removeDialogDangerText": "警告：將永久刪除電腦檔案，並從所有畫冊和畫廊中移除，不可恢復！",
+  "removeDialogSafeText": "不勾選僅從目前畫冊移除，圖片檔案和其他畫冊中的記錄將保留。",
+  "removeDialogMessageSingle": "將從目前畫冊移除這張圖片。",
+  "removeDialogMessageMulti": "將從目前畫冊移除這 {count} 張圖片。",
+  "removeDialogWallpaperHint": "注意：其中包含目前桌布。移除/刪除不會立刻改變桌面桌布，但下次啟動將無法復現該桌布。",
+  "removedFromAlbumSuccess": "已從畫冊移除圖片",
+  "removedFromAlbumCountSuccess": "已從畫冊移除 {count} 張圖片",
+  "deletedAndRemovedSuccess": "已刪除圖片（已從所有畫冊和畫廊中移除）",
+  "deletedAndRemovedCountSuccess": "已刪除 {count} 張圖片（已從所有畫冊和畫廊中移除）",
+  "removeImageFailed": "移除圖片失敗"
 }

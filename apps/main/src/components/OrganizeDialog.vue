@@ -38,20 +38,20 @@
     </AndroidDrawer>
 
     <!-- 桌面端：标准对话框 -->
-    <el-dialog v-else v-model="visible" :title="$t('gallery.organizeGallery')" width="480px" :close-on-click-modal="false" destroy-on-close>
+    <el-dialog v-else v-model="visible" :title="$t('gallery.organizeGallery')" width="480px" destroy-on-close>
         <div class="organize-form">
             <div class="organize-options">
                 <div class="option-item">
                     <el-checkbox v-model="options.dedupe" />
                     <div class="option-content">
-                        <div class="option-title">去重</div>
+                        <div class="option-title">{{ $t('gallery.dedupe') }}</div>
                         <div class="option-desc">{{ $t('gallery.dedupeDescDesktop') }}</div>
                     </div>
                 </div>
                 <div class="option-item">
                     <el-checkbox v-model="options.removeMissing" />
                     <div class="option-content">
-                        <div class="option-title">清除失效图片</div>
+                        <div class="option-title">{{ $t('gallery.removeMissing') }}</div>
                         <div class="option-desc">{{ $t('gallery.removeMissingDescDesktop') }}</div>
                     </div>
                 </div>

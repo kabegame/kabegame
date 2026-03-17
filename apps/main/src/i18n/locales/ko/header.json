@@ -1,0 +1,18 @@
+{
+  "help": "도움말",
+  "quickSettings": "빠른 설정",
+  "refresh": "새로고침",
+  "stopTask": "작업 중지",
+  "deleteTask": "작업 삭제",
+  "organize": "정리",
+  "collect": "수집",
+  "createAlbum": "새 앨범",
+  "openVirtualDrive": "VD에서 보기",
+  "addToAlbum": "앨범에 추가",
+  "setAsWallpaperCarousel": "배경화면 순환으로 설정",
+  "deleteAlbum": "앨범 삭제",
+  "importSource": "가져오기 소스",
+  "manageSources": "소스 관리",
+  "gallerySort": "시간순 정렬",
+  "openCrawlerWebview": "크롤러 WebView 창"
+}

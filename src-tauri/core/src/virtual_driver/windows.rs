@@ -1,4 +1,4 @@
-﻿//! Windows 虚拟盘（Dokan）：使用 Provider 系统将 Kabegame 的画册和画廊映射为虚拟文件系统。
+//! Windows 虚拟盘（Dokan）：使用 Provider 系统将 Kabegame 的画册和画廊映射为虚拟文件系统。
 //!
 //! 设计原则：
 //! - Provider 对路径完全无感知
@@ -148,28 +148,15 @@ impl WindowsVdOpsContext {
 }
 
 impl VdOpsContext for WindowsVdOpsContext {
-    fn albums_created(&self, album_name: &str) {
-        GlobalEmitter::global().emit(
-            "albums-changed",
-            serde_json::json!({
-                "reason": "create",
-                "albumName": album_name
-            }),
-        );
-
+    fn albums_created(&self, _album_name: &str) {
+        // 事件由 storage add_album 底层发出 AlbumAdded，此处仅刷新 Explorer
         let mount_point = get_mount_point();
         notify_explorer_dir_changed_path(&join_mount_subdir(&mount_point, DIR_ALBUMS));
         notify_explorer_dir_changed_path(&mount_point);
     }
 
-    fn albums_deleted(&self, album_name: &str) {
-        GlobalEmitter::global().emit(
-            "albums-changed",
-            serde_json::json!({
-                "reason": "delete",
-                "albumName": album_name
-            }),
-        );
+    fn albums_deleted(&self, _album_name: &str) {
+        // 事件由 storage delete_album 底层发出 AlbumDeleted，此处仅刷新 Explorer
         let mount_point = get_mount_point();
         notify_explorer_dir_changed_path(&mount_point);
     }
@@ -639,15 +626,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         let sem = VfsSemantics::new(&self.root, &*rt);
         sem.rename_dir(path, new_name)
             .map_err(Self::map_vfs_error)?;
-
-        GlobalEmitter::global().emit(
-            "albums-changed",
-            serde_json::json!({
-                "reason": "rename",
-                "oldName": path[1],
-                "newName": new_name
-            }),
-        );
+        // 事件由 storage rename_album 底层发出 AlbumNameChanged，此处仅刷新 Explorer
         let mount_point = get_mount_point();
         notify_explorer_dir_changed_path(&mount_point);
         Ok(())

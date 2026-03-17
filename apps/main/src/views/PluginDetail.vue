@@ -1,8 +1,8 @@
 <template>
     <!-- TODO: 这里AI写的代码太乱，不能细看 -->
-    <PluginDetailPage :title="plugin?.name || '源详情'" :show-back="true" :loading="loading" :show-skeleton="showSkeleton"
+    <PluginDetailPage :title="(plugin ? pluginName(plugin) : '') || t('plugins.pluginDetailTitle')" :show-back="true" :loading="loading" :show-skeleton="showSkeleton"
         :plugin="plugin" :installed="isInstalled" :installing="installing" :show-uninstall="true"
-        :load-doc-image-bytes="loadDocImageBytes" @back="goBack" @install="handleInstall" @uninstall="handleUninstall"
+        :load-doc-image-bytes="loadDocImageBytes" :doc-image-base-url="docImageBaseUrl" @back="goBack" @install="handleInstall" @uninstall="handleUninstall"
         @copy-id="handleCopyPluginId" />
 </template>
 
@@ -10,8 +10,11 @@
 import { ref, computed, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
+import { IS_ANDROID } from "@kabegame/core/env";
 import { usePluginStore } from "@/stores/plugins";
+import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
 import PluginDetailPage from "@kabegame/core/components/plugin/PluginDetailPage.vue";
 import type { BrowserPlugin } from "@kabegame/core/stores/plugins";
 
@@ -19,7 +22,8 @@ interface PluginDetailDto {
     id: string;
     name: string;
     desp: string;
-    doc?: string | null;
+    /** 文档多语言：{ default, zh?, en?, ... } */
+    doc?: Record<string, string> | null;
     iconData?: number[] | null;
     origin: "installed" | "remote" | string;
     baseUrl?: string | null;
@@ -44,6 +48,8 @@ interface StoreInstallPreview {
 
 const route = useRoute();
 const router = useRouter();
+const { t } = useI18n();
+const { pluginName } = usePluginManifestI18n();
 const pluginStore = usePluginStore();
 
 // 关键：本组件会被 keep-alive 缓存，route 会随着全局路由变化而变化。
@@ -167,7 +173,31 @@ const goBack = () => {
     router.push("/plugin-browser");
 };
 
-// 供 core 的 PluginDocRenderer 加载 doc_root 图片
+// 插件文档图片 URL 前缀：桌面走 HTTP 服务，安卓走 Kotlin 拦截的 kbg-plugin-doc.localhost
+const docImageBaseUrl = ref<string | null>(null);
+watch(
+    plugin,
+    async (p) => {
+        if (!p) {
+            docImageBaseUrl.value = null;
+            return;
+        }
+        const pluginId = p.id;
+        if (IS_ANDROID) {
+            docImageBaseUrl.value = `http://kbg-plugin-doc.localhost/${encodeURIComponent(pluginId)}/`;
+        } else {
+            try {
+                const base = await invoke<string>("get_http_server_base_url");
+                docImageBaseUrl.value = `${base}/plugin-doc-image?pluginId=${encodeURIComponent(pluginId)}&path=`;
+            } catch {
+                docImageBaseUrl.value = null;
+            }
+        }
+    },
+    { immediate: true }
+);
+
+// 供 core 的 PluginDocRenderer 加载 doc_root 图片（无 docImageBaseUrl 时回退，如导入预览）
 const loadDocImageBytes = async (imagePath: string): Promise<number[]> => {
     const pluginId = decodeURIComponent(route.params.id as string);
     return await invoke<number[]>("get_plugin_image_for_detail", {
