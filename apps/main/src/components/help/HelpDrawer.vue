@@ -1,23 +1,23 @@
 <template>
   <el-drawer v-model="drawer.isOpen" :title="drawer.title" :size="drawerSize" append-to-body class="help-drawer drawer-max-width">
     <div v-if="filteredGroups.length === 0" class="empty">
-      <el-empty description="此页面暂无帮助内容" :image-size="100" />
+      <el-empty :description="$t('help.noHelpContent')" :image-size="100" />
     </div>
 
     <div v-else class="list">
       <el-alert class="tip" type="info" show-icon :closable="false">
-        说明：部分快捷键仅在图片网格获得焦点时生效（先在网格空白处/图片上点一下）。
+        {{ $t('help.shortcutNote') }}
       </el-alert>
 
       <div v-for="g in filteredGroups" :key="g.id" class="group">
         <div class="group-header">
-          <div class="group-title">{{ g.title }}</div>
+          <div class="group-title">{{ g.titleKey ? $t(g.titleKey) : g.title }}</div>
           <div v-if="g.description" class="group-desc">{{ g.description }}</div>
         </div>
 
         <div class="group-items">
           <div v-for="it in g.items" :key="it.id" class="item">
-            <SettingRow :label="it.label" :description="it.description">
+            <SettingRow :label="it.labelKey ? $t(it.labelKey) : it.label" :description="it.descriptionKey ? $t(it.descriptionKey) : it.description">
               <div v-if="it.kind === 'shortcut'" class="shortcut-keys">
                 <span v-for="(k, idx) in it.keys" :key="idx" class="kbd">{{ k }}</span>
               </div>

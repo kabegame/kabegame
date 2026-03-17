@@ -1,0 +1,21 @@
+{
+  "detail": "详情",
+  "favorite": "收藏",
+  "unfavorite": "取消收藏",
+  "copyImage": "复制图片",
+  "open": "仔细欣赏",
+  "openFolder": "欣赏更多",
+  "wallpaper": "抱到桌面上",
+  "addToAlbum": "加入画册",
+  "more": "更多",
+  "exportToWE": "导出到 Wallpaper Engine",
+  "stopTask": "停止任务",
+  "viewFiles": "查看文件",
+  "saveAsConfig": "保存为配置",
+  "deleteTask": "删除任务",
+  "browse": "浏览",
+  "setWallpaperRotation": "设为桌面轮播",
+  "setWallpaperRotationActive": "（已设置）",
+  "rename": "重命名",
+  "share": "分享"
+}

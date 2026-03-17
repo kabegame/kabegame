@@ -5,6 +5,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   Picture,
   Star,
@@ -28,9 +29,10 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   hide: () => [],
-  removeText: "删除",
+  removeText: "",
   simplified: false,
 });
+const { t } = useI18n();
 
 // 简化模式菜单项模板（多选时不显示复制选项，因为浏览器限制一次只能复制一张图片）
 const getSimplifiedMenuItemsTemplate = (countText: string, removeText: string): MenuItem[] => [
@@ -49,7 +51,7 @@ const getFullMenuItemsTemplate = (countText: string, removeText: string, image: 
   {
     key: "favorite",
     type: "item",
-    label: image?.favorite ? "取消收藏" : "收藏",
+    label: image?.favorite ? t("contextMenu.unfavorite") : t("contextMenu.favorite"),
     icon: image?.favorite ? StarFilled : Star,
     command: "favorite",
     suffix: countText,
@@ -57,7 +59,7 @@ const getFullMenuItemsTemplate = (countText: string, removeText: string, image: 
   {
     key: "addToAlbum",
     type: "item",
-    label: "加入画册",
+    label: t("contextMenu.addToAlbum"),
     icon: FolderAdd,
     command: "addToAlbum",
     suffix: countText,
@@ -65,7 +67,7 @@ const getFullMenuItemsTemplate = (countText: string, removeText: string, image: 
   {
     key: "wallpaper",
     type: "item",
-    label: "抱到桌面上",
+    label: t("contextMenu.wallpaper"),
     icon: Picture,
     command: "wallpaper",
   },
@@ -83,10 +85,11 @@ const getFullMenuItemsTemplate = (countText: string, removeText: string, image: 
 const menuItems = computed<MenuItem[]>(() => {
   const hideSet = new Set(props.hide);
   const countText = `(${props.selectedCount})`;
+  const resolvedRemoveText = props.removeText || t("common.delete");
 
   // 简化模式：只显示复制和删除
   if (props.simplified) {
-    const items = getSimplifiedMenuItemsTemplate(countText, props.removeText);
+    const items = getSimplifiedMenuItemsTemplate(countText, resolvedRemoveText);
     return items.filter((item) => !item.key || !hideSet.has(item.key));
   }
 
@@ -95,7 +98,7 @@ const menuItems = computed<MenuItem[]>(() => {
     return [];
   }
 
-  const items = getFullMenuItemsTemplate(countText, props.removeText, props.image);
+  const items = getFullMenuItemsTemplate(countText, resolvedRemoveText, props.image);
   // 根据 hide 列表过滤菜单项
   return items.filter((item) => !item.key || !hideSet.has(item.key));
 });

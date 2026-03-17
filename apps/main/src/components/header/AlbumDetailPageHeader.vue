@@ -1,6 +1,6 @@
 <template>
   <PageHeader
-    :title="albumName || '画册'"
+    :title="albumName || t('albums.title')"
     :subtitle="subtitle"
     :show="showIds"
     :fold="foldIds"
@@ -20,8 +20,8 @@
           @keyup.enter="handleRenameConfirm"
           @keyup.esc="handleRenameCancel"
         />
-        <span v-else class="album-name" @dblclick.stop="handleStartRename" @click.stop :title="'双击改名'">
-          {{ albumName || '画册' }}
+        <span v-else class="album-name" @dblclick.stop="handleStartRename" @click.stop :title="t('albums.doubleClickToRename')">
+          {{ albumName || t('albums.title') }}
         </span>
       </div>
     </template>
@@ -30,6 +30,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from "vue";
+import { useI18n } from "vue-i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_ANDROID } from "@kabegame/core/env";
@@ -64,10 +65,11 @@ const emit = defineEmits<{
   'update:editingName': [value: string];
 }>();
 
+const { t } = useI18n();
 const renameInputRef = ref<HTMLInputElement>();
 
 const subtitle = computed(() =>
-  props.totalImagesCount ? `共 ${props.totalImagesCount} 张` : ""
+  props.totalImagesCount ? t("albums.totalCountSubtitle", { count: props.totalImagesCount }) : ""
 );
 
 const withVd = (ids: string[]) =>

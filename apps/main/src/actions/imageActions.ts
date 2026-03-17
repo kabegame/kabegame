@@ -15,6 +15,7 @@ import {
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { ImageInfo } from "@/stores/crawler";
 import { IS_WINDOWS, IS_ANDROID } from "@kabegame/core/env";
+import { i18n } from "@/i18n";
 
 export interface CreateImageActionsOptions {
   /** Custom text for remove action (e.g., "删除" | "从画册移除") */
@@ -35,8 +36,9 @@ export interface CreateImageActionsOptions {
 export function createImageActions(
   options: CreateImageActionsOptions = {}
 ): ActionItem<ImageInfo>[] {
+  const t = (key: string) => i18n.global.t(key);
   const {
-    removeText = "删除",
+    removeText = t("common.delete"),
     hide = [],
     multiHide = [],
     simplified = false,
@@ -49,7 +51,7 @@ export function createImageActions(
   const singleActions: ActionItem<ImageInfo>[] = [
     {
       key: "detail",
-      label: "详情",
+      label: t("contextMenu.detail"),
       icon: InfoFilled,
       command: "detail",
       // On Android: only in "更多" submenu
@@ -57,14 +59,15 @@ export function createImageActions(
     },
     {
       key: "favorite",
-      label: (ctx: ActionContext<ImageInfo>) => ctx.target?.favorite ? "取消收藏" : "收藏",
+      label: (ctx: ActionContext<ImageInfo>) =>
+        ctx.target?.favorite ? t("contextMenu.unfavorite") : t("contextMenu.favorite"),
       icon: (ctx: ActionContext<ImageInfo>) => ctx.target?.favorite ? StarFilled : Star,
       command: "favorite",
       visible: (ctx) => !hideSet.has("favorite"),
     },
     {
       key: "share",
-      label: "分享",
+      label: t("contextMenu.share"),
       icon: Share,
       command: "share",
       // 仅 Android 且单选时在「更多」子菜单中显示，顶层不展示
@@ -72,7 +75,7 @@ export function createImageActions(
     },
     {
       key: "copy",
-      label: "复制图片",
+      label: t("contextMenu.copyImage"),
       icon: DocumentCopy,
       command: "copy",
       // On Android, only in more submenu (single-select) or top level (multi-select)
@@ -80,14 +83,14 @@ export function createImageActions(
     },
     {
       key: "open",
-      label: "仔细欣赏",
+      label: t("contextMenu.open"),
       icon: FolderOpened,
       command: "open",
       visible: (ctx) => !hideSet.has("open") && (!ctx.selectedCount || ctx.selectedCount === 1),
     },
     {
       key: "openFolder",
-      label: "欣赏更多",
+      label: t("contextMenu.openFolder"),
       icon: Folder,
       command: "openFolder",
       // Hide on Android
@@ -95,14 +98,14 @@ export function createImageActions(
     },
     {
       key: "wallpaper",
-      label: "抱到桌面上",
+      label: t("contextMenu.wallpaper"),
       icon: Picture,
       command: "wallpaper",
       visible: (ctx) => !hideSet.has("wallpaper"),
     },
     {
       key: "addToAlbum",
-      label: "加入画册",
+      label: t("contextMenu.addToAlbum"),
       icon: FolderAdd,
       command: "addToAlbum",
       // On Android single-select: only in more submenu
@@ -110,7 +113,7 @@ export function createImageActions(
     },
     {
       key: "more",
-      label: "更多",
+      label: t("contextMenu.more"),
       icon: More,
       command: "more",
       visible: (ctx) => {
@@ -122,28 +125,28 @@ export function createImageActions(
         ? [
             {
               key: "detail",
-              label: "详情",
+              label: t("contextMenu.detail"),
               icon: InfoFilled,
               command: "detail",
               visible: () => !hideSet.has("detail"),
             },
             {
               key: "share",
-              label: "分享",
+              label: t("contextMenu.share"),
               icon: Share,
               command: "share",
               visible: () => !hideSet.has("share"),
             },
             {
               key: "copy",
-              label: "复制图片",
+              label: t("contextMenu.copyImage"),
               icon: DocumentCopy,
               command: "copy",
               visible: () => !hideSet.has("copy"),
             },
             {
               key: "addToAlbum",
-              label: "加入画册",
+              label: t("contextMenu.addToAlbum"),
               icon: FolderAdd,
               command: "addToAlbum",
               visible: () => !hideSet.has("addToAlbum"),
@@ -161,7 +164,7 @@ export function createImageActions(
         ? [
             {
               key: "exportToWEAuto",
-              label: "导出到wallpaper engine",
+              label: t("contextMenu.exportToWE"),
               icon: Download,
               command: "exportToWEAuto",
               visible: () => !hideSet.has("exportToWEAuto"),
@@ -189,9 +192,8 @@ export function createImageActions(
     {
       key: "favorite",
       label: (ctx) => {
-        // Check if any selected images are not favorited
         const target = ctx.target as ImageInfo | null;
-        return target?.favorite ? "取消收藏" : "收藏";
+        return target?.favorite ? t("contextMenu.unfavorite") : t("contextMenu.favorite");
       },
       icon: (ctx: ActionContext<ImageInfo>) => {
         const target = ctx.target as ImageInfo | null;
@@ -206,7 +208,7 @@ export function createImageActions(
     },
     {
       key: "addToAlbum",
-      label: "加入画册",
+      label: t("contextMenu.addToAlbum"),
       icon: FolderAdd,
       command: "addToAlbum",
       visible: (ctx) => {
@@ -217,7 +219,7 @@ export function createImageActions(
     },
     {
       key: "wallpaper",
-      label: "抱到桌面上",
+      label: t("contextMenu.wallpaper"),
       icon: Picture,
       command: "wallpaper",
       visible: (ctx) => {

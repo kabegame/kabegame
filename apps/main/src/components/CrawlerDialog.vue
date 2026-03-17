@@ -3,79 +3,79 @@
     <AndroidDrawer v-if="IS_ANDROID" v-model="visible" show-close-button class="crawl-dialog">
         <template #header>
             <div class="crawl-drawer-header">
-                <h3>开始收集图片</h3>
+                <h3>{{ $t('plugins.startCollect') }}</h3>
             </div>
         </template>
         <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
-            <el-form-item label="运行配置">
+            <el-form-item :label="$t('plugins.runConfig')">
                 <div class="run-config-row">
                     <AndroidPickerSelect
                         :model-value="selectedRunConfigId ?? null"
                         :options="runConfigPickerOptions"
-                        title="运行配置"
-                        placeholder="选择配置（可选）"
+                        :title="$t('plugins.runConfig')"
+                        :placeholder="$t('plugins.selectConfigOptional')"
                         clearable
                         @update:model-value="setRunConfigId"
                     />
                     <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="showAddConfigDialog = true">
-                        新增配置
+                        {{ $t('plugins.addConfig') }}
                     </el-button>
                     <el-button v-else class="run-config-btn" @click="updateCurrentConfig">
-                        更新到当前配置
+                        {{ $t('plugins.updateToConfig') }}
                     </el-button>
                 </div>
             </el-form-item>
-            <el-form-item label="选择源">
+            <el-form-item :label="$t('plugins.selectSource')">
                 <div class="plugin-select-with-warning">
                     <AndroidPickerSelect
                         :model-value="form.pluginId ?? null"
                         :options="pluginPickerOptions"
-                        title="选择源"
-                        placeholder="请选择源"
+                        :title="$t('plugins.selectSource')"
+                        :placeholder="$t('plugins.selectSourcePlaceholder')"
                         @update:model-value="onPluginChange"
                     >
                         <template #option="{ option }">
                             <span class="plugin-picker-option-label">{{ option.label }}</span>
-                            <el-icon v-if="option.warning" class="plugin-picker-option-warning" title="安卓不支持">
+                            <el-icon v-if="option.warning" class="plugin-picker-option-warning" :title="$t('plugins.androidNotSupported')">
                                 <WarningFilled />
                             </el-icon>
                         </template>
                     </AndroidPickerSelect>
-                    <el-icon v-if="isSelectedPluginJs" class="plugin-js-warning-icon" title="安卓不支持 JS 插件">
+                    <el-icon v-if="isSelectedPluginJs" class="plugin-js-warning-icon" :title="$t('plugins.jsPluginAndroidNotSupportedTitle')">
                         <WarningFilled />
                     </el-icon>
                 </div>
             </el-form-item>
-            <el-form-item v-if="!IS_ANDROID" label="输出目录">
-                <el-input v-model="form.outputDir" placeholder="留空使用默认位置" clearable>
+            <el-form-item v-if="!IS_ANDROID" :label="$t('plugins.outputDir')">
+                <el-input v-model="form.outputDir" :placeholder="$t('plugins.outputDirPlaceholder')" clearable>
                     <template #append>
                         <el-button @click="selectOutputDir">
                             <el-icon>
                                 <FolderOpened />
                             </el-icon>
-                            选择
+                            {{ $t('common.chooseFolder') }}
                         </el-button>
                     </template>
                 </el-input>
             </el-form-item>
 
-            <el-form-item label="输出画册">
+            <el-form-item :label="$t('albums.outputAlbum')">
                 <AndroidPickerSelect
                     :model-value="selectedOutputAlbumId"
                     :options="outputAlbumPickerOptions"
-                    title="输出画册"
-                    placeholder="默认仅添加到画廊"
+                    :title="$t('albums.outputAlbum')"
+                    :placeholder="$t('plugins.defaultGalleryOnly')"
                     clearable
                     @update:model-value="setOutputAlbumId"
                 />
             </el-form-item>
-            <el-form-item v-if="isCreatingNewOutputAlbum" label="画册名称" required>
-                <el-input v-model="newOutputAlbumName" placeholder="请输入画册名称" maxlength="50" show-word-limit
+            <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
+                <el-input v-model="newOutputAlbumName" :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
                     @keyup.enter="handleCreateOutputAlbum" ref="newOutputAlbumNameInputRef" />
             </el-form-item>
 
             <template v-if="pluginVars.length > 0">
-                <el-divider content-position="left">插件配置</el-divider>
+                <el-divider content-position="left">{{ $t('plugins.pluginConfig') }}</el-divider>
                 <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDef.name"
                     :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
                     <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="varDef.options"
@@ -91,19 +91,19 @@
                 </el-form-item>
             </template>
 
-            <el-divider content-position="left">高级设置</el-divider>
-            <el-form-item label="HTTP 头">
+            <el-divider content-position="left">{{ $t('plugins.advancedSettings') }}</el-divider>
+            <el-form-item :label="$t('plugins.httpHeaders')">
                 <div class="headers-editor">
                     <div v-for="(row, idx) in httpHeaderRows" :key="idx" class="header-row">
-                        <el-input v-model="row.key" placeholder="Header 名（如 Authorization）" />
-                        <el-input v-model="row.value" placeholder="Header 值（如 Bearer xxx）" />
-                        <el-button type="danger" link @click="removeHeaderRow(idx)">删除</el-button>
+                        <el-input v-model="row.key" :placeholder="$t('plugins.headerNamePlaceholder')" />
+                        <el-input v-model="row.value" :placeholder="$t('plugins.headerValuePlaceholder')" />
+                        <el-button type="danger" link @click="removeHeaderRow(idx)">{{ $t('plugins.delete') }}</el-button>
                     </div>
                     <div class="header-actions">
-                        <el-button size="small" @click="addHeaderRow">添加 Header</el-button>
+                        <el-button size="small" @click="addHeaderRow">{{ $t('plugins.addHeader') }}</el-button>
                     </div>
                     <div class="config-hint">
-                        提示：这里的 HTTP 头会用于爬虫请求（to/fetch_json）与图片下载（download_image），不会注入到脚本变量里。
+                        {{ $t('plugins.httpHeadersHint') }}
                     </div>
                 </div>
             </el-form-item>
@@ -111,7 +111,7 @@
         </el-form>
         <div class="crawl-dialog-footer crawl-dialog-footer--android">
             <el-button type="primary" @click="handleStartCrawl" :disabled="!selectedRunConfigId && !form.pluginId">
-                开始收集
+                {{ $t('plugins.startCollect') }}
             </el-button>
         </div>
     </AndroidDrawer>
@@ -119,14 +119,14 @@
     <ElDialog
         v-else
         v-model="visible"
-        title="开始收集图片"
+        :title="$t('plugins.startCollect')"
         width="600px"
         class="crawl-dialog"
         :show-close="true">
         <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
-            <el-form-item label="运行配置">
+            <el-form-item :label="$t('plugins.runConfig')">
                 <div class="run-config-row">
-                    <el-select v-model="selectedRunConfigId" placeholder="选择配置（可选）" clearable
+                    <el-select v-model="selectedRunConfigId" :placeholder="$t('plugins.selectConfigOptional')" clearable
                         popper-class="run-config-select-dropdown" class="run-config-select"
                         @change="(v: string | null) => void setRunConfigId(v)">
                         <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="cfg.name" :value="cfg.id">
@@ -135,11 +135,11 @@
                                     <div class="name">
                                         <el-tag v-if="configCompatibilityStatus[cfg.id]?.versionCompatible === false"
                                             type="danger" size="small" style="margin-right: 6px;">
-                                            不兼容
+                                            {{ $t('plugins.incompatible') }}
                                         </el-tag>
                                         <el-tag v-else-if="configCompatibilityStatus[cfg.id]?.contentCompatible === false"
                                             type="warning" size="small" style="margin-right: 6px;">
-                                            不兼容
+                                            {{ $t('plugins.incompatible') }}
                                         </el-tag>
                                         {{ cfg.name }}
                                         <span v-if="cfg.description" class="desc"> - {{ cfg.description }}</span>
@@ -147,22 +147,22 @@
                                 </div>
                                 <div class="run-config-actions">
                                     <el-button type="danger" link size="small" @click.stop="handleDeleteConfig(cfg.id)">
-                                        删除
+                                        {{ $t('plugins.delete') }}
                                     </el-button>
                                 </div>
                             </div>
                         </el-option>
                     </el-select>
                     <el-button v-if="!selectedRunConfigId" class="run-config-btn" @click="showAddConfigDialog = true">
-                        保存到配置
+                        {{ $t('plugins.saveToConfig') }}
                     </el-button>
                     <el-button v-else class="run-config-btn" @click="updateCurrentConfig">
-                        更新到配置
+                        {{ $t('plugins.updateToConfig') }}
                     </el-button>
                 </div>
             </el-form-item>
-            <el-form-item label="选择源">
-                <el-select v-model="form.pluginId" placeholder="请选择源" style="width: 100%"
+            <el-form-item :label="$t('plugins.selectSource')">
+                <el-select v-model="form.pluginId" :placeholder="$t('plugins.selectSourcePlaceholder')" style="width: 100%"
                     popper-class="crawl-plugin-select-dropdown" @change="onPluginChange">
                     <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
                         <div class="plugin-option">
@@ -176,35 +176,35 @@
                     </el-option>
                 </el-select>
             </el-form-item>
-            <el-form-item v-if="!IS_ANDROID" label="输出目录">
-                <el-input v-model="form.outputDir" placeholder="留空使用默认位置" clearable>
+            <el-form-item v-if="!IS_ANDROID" :label="$t('plugins.outputDir')">
+                <el-input v-model="form.outputDir" :placeholder="$t('plugins.outputDirPlaceholder')" clearable>
                     <template #append>
                         <el-button @click="selectOutputDir">
                             <el-icon>
                                 <FolderOpened />
                             </el-icon>
-                            选择
+                            {{ $t('common.chooseFolder') }}
                         </el-button>
                     </template>
                 </el-input>
             </el-form-item>
 
-            <el-form-item label="输出画册">
-                <el-select v-model="selectedOutputAlbumId" placeholder="默认仅添加到画廊" clearable style="width: 100%">
+            <el-form-item :label="$t('albums.outputAlbum')">
+                <el-select v-model="selectedOutputAlbumId" :placeholder="$t('plugins.defaultGalleryOnly')" clearable style="width: 100%">
                     <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
-                    <el-option value="__create_new__" label="+ 新建画册">
-                        <span style="color: var(--el-color-primary); font-weight: 500;">+ 新建画册</span>
+                    <el-option value="__create_new__" :label="$t('albums.createNewAlbum')">
+                        <span style="color: var(--el-color-primary); font-weight: 500;">{{ $t('albums.createNewAlbum') }}</span>
                     </el-option>
                 </el-select>
             </el-form-item>
-            <el-form-item v-if="isCreatingNewOutputAlbum" label="画册名称" required>
-                <el-input v-model="newOutputAlbumName" placeholder="请输入画册名称" maxlength="50" show-word-limit
+            <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
+                <el-input v-model="newOutputAlbumName" :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
                     @keyup.enter="handleCreateOutputAlbum" ref="newOutputAlbumNameInputRef" />
             </el-form-item>
 
             <!-- 插件变量配置 -->
             <template v-if="pluginVars.length > 0">
-                <el-divider content-position="left">插件配置</el-divider>
+                <el-divider content-position="left">{{ $t('plugins.pluginConfig') }}</el-divider>
                 <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDef.name"
                     :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
                     <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="varDef.options"
@@ -220,19 +220,19 @@
                 </el-form-item>
             </template>
 
-            <el-divider content-position="left">高级设置</el-divider>
-            <el-form-item label="HTTP 头">
+            <el-divider content-position="left">{{ $t('plugins.advancedSettings') }}</el-divider>
+            <el-form-item :label="$t('plugins.httpHeaders')">
                 <div class="headers-editor">
                     <div v-for="(row, idx) in httpHeaderRows" :key="idx" class="header-row">
-                        <el-input v-model="row.key" placeholder="Header 名（如 Authorization）" />
-                        <el-input v-model="row.value" placeholder="Header 值（如 Bearer xxx）" />
-                        <el-button type="danger" link @click="removeHeaderRow(idx)">删除</el-button>
+                        <el-input v-model="row.key" :placeholder="$t('plugins.headerNamePlaceholder')" />
+                        <el-input v-model="row.value" :placeholder="$t('plugins.headerValuePlaceholder')" />
+                        <el-button type="danger" link @click="removeHeaderRow(idx)">{{ $t('plugins.delete') }}</el-button>
                     </div>
                     <div class="header-actions">
-                        <el-button size="small" @click="addHeaderRow">添加 Header</el-button>
+                        <el-button size="small" @click="addHeaderRow">{{ $t('plugins.addHeader') }}</el-button>
                     </div>
                     <div class="config-hint">
-                        提示：这里的 HTTP 头会用于爬虫请求（to/fetch_json）与图片下载（download_image），不会注入到脚本变量里。
+                        {{ $t('plugins.httpHeadersHint') }}
                     </div>
                 </div>
             </el-form-item>
@@ -240,9 +240,9 @@
         </el-form>
 
         <template #footer>
-            <el-button @click="visible = false">关闭</el-button>
+            <el-button @click="visible = false">{{ $t('common.close') }}</el-button>
             <el-button type="primary" @click="handleStartCrawl" :disabled="!selectedRunConfigId && !form.pluginId">
-                开始收集
+                {{ $t('plugins.startCollect') }}
             </el-button>
         </template>
     </ElDialog>
@@ -250,27 +250,28 @@
     <!-- 新增配置弹窗 -->
     <ElDialog
         v-model="showAddConfigDialog"
-        title="新增配置"
+        :title="$t('plugins.newConfig')"
         width="400px"
         :close-on-click-modal="false"
         @closed="newConfigName = ''; newConfigDescription = '';">
         <el-form label-width="80px">
-            <el-form-item label="名称" required>
-                <el-input v-model="newConfigName" placeholder="请输入配置名称" maxlength="80" show-word-limit />
+            <el-form-item :label="$t('common.name')" required>
+                <el-input v-model="newConfigName" :placeholder="$t('common.configNamePlaceholder')" maxlength="80" show-word-limit />
             </el-form-item>
-            <el-form-item label="描述">
-                <el-input v-model="newConfigDescription" type="textarea" placeholder="可选：配置说明" :rows="2" />
+            <el-form-item :label="$t('common.description')">
+                <el-input v-model="newConfigDescription" type="textarea" :placeholder="$t('common.configDescPlaceholder')" :rows="2" />
             </el-form-item>
         </el-form>
         <template #footer>
-            <el-button @click="showAddConfigDialog = false">取消</el-button>
-            <el-button type="primary" @click="handleAddConfig">保存</el-button>
+            <el-button @click="showAddConfigDialog = false">{{ $t('common.cancel') }}</el-button>
+            <el-button type="primary" @click="handleAddConfig">{{ $t('common.save') }}</el-button>
         </template>
     </ElDialog>
 </template>
 
 <script setup lang="ts">
 import { computed, watch, ref, nextTick } from "vue";
+import { useI18n } from "vue-i18n";
 import { FolderOpened, Grid, WarningFilled } from "@element-plus/icons-vue";
 import { ElDialog } from "element-plus";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
@@ -298,6 +299,7 @@ interface Props {
     };
 }
 
+const { t } = useI18n();
 const props = defineProps<Props>();
 const emit = defineEmits<{
     (e: "update:modelValue", v: boolean): void;
@@ -340,11 +342,11 @@ useModalBack(showAddConfigDialog);
 async function handleAddConfig() {
     const name = newConfigName.value.trim();
     if (!name) {
-        ElMessage.warning("请输入配置名称");
+        ElMessage.warning(t('common.configNamePlaceholder'));
         return;
     }
     if (!form.value.pluginId) {
-        ElMessage.warning("请先选择源");
+        ElMessage.warning(t('plugins.selectSourceBeforeSave'));
         return;
     }
     const backendVars =
@@ -367,7 +369,7 @@ async function handleAddConfig() {
         selectedRunConfigId.value = cfg.id;
     } catch (e) {
         console.error("新增配置失败:", e);
-        ElMessage.error("保存失败");
+        ElMessage.error(t('plugins.saveFailed'));
     }
 }
 
@@ -376,11 +378,11 @@ async function updateCurrentConfig() {
     if (!cfgId) return;
     const cfg = crawlerStore.runConfigs.find((c) => c.id === cfgId);
     if (!cfg) {
-        ElMessage.error("配置不存在");
+        ElMessage.error(t('plugins.configNotExist'));
         return;
     }
     if (!form.value.pluginId) {
-        ElMessage.warning("请先选择源");
+        ElMessage.warning(t('plugins.selectSourceBeforeSave'));
         return;
     }
     const backendVars =
@@ -396,10 +398,10 @@ async function updateCurrentConfig() {
             userConfig: backendVars,
             httpHeaders,
         });
-        ElMessage.success("已更新到当前配置");
+        ElMessage.success(t('plugins.updatedToConfig'));
     } catch (e) {
         console.error("更新配置失败:", e);
-        ElMessage.error("保存失败");
+        ElMessage.error(t('plugins.saveFailed'));
     }
 }
 
@@ -435,7 +437,7 @@ const selectedPlugin = computed(() => {
 const isSelectedPluginJs = computed(() => selectedPlugin.value?.scriptType === "js");
 const outputAlbumPickerOptions = computed(() => [
     ...albums.value.map((a) => ({ label: a.name, value: a.id })),
-    { label: "+ 新建画册", value: "__create_new__" },
+    { label: t('albums.createNewAlbum'), value: "__create_new__" },
 ]);
 
 // 选择的输出画册ID
@@ -538,7 +540,7 @@ const handleDeleteConfig = async (configId: string) => {
 // 处理创建新输出画册
 const handleCreateOutputAlbum = async () => {
     if (!newOutputAlbumName.value.trim()) {
-        ElMessage.warning("请输入画册名称");
+        ElMessage.warning(t('albums.enterAlbumNameFirst'));
         return;
     }
 
@@ -549,7 +551,7 @@ const handleCreateOutputAlbum = async () => {
         selectedOutputAlbumId.value = created.id;
         // 清空输入框
         newOutputAlbumName.value = "";
-        ElMessage.success(`已创建画册「${created.name}」`);
+        ElMessage.success(t('albums.albumCreated'));
     } catch (error: any) {
         console.error("创建画册失败:", error);
         // 提取友好的错误信息
@@ -564,15 +566,15 @@ const handleCreateOutputAlbum = async () => {
 const handleStartCrawl = async () => {
     try {
         if (!form.value.pluginId) {
-            ElMessage.warning("请选择源");
+            ElMessage.warning(t('plugins.selectSourcePlaceholder'));
             return;
         }
 
         if (IS_ANDROID && isSelectedPluginJs.value) {
             await ElMessageBox.alert(
-                "当前选择的是 JS 插件，安卓端暂不支持运行。请选择 Rhai 插件，或在桌面端使用 JS 插件。",
-                "安卓不支持 JS 插件",
-                { confirmButtonText: "好叭", type: "warning" as const }
+                t('plugins.jsPluginAndroidNotSupported'),
+                t('plugins.jsPluginAndroidNotSupportedTitle'),
+                { confirmButtonText: t('common.ok'), type: "warning" as const }
             );
             return;
         }
@@ -580,7 +582,7 @@ const handleStartCrawl = async () => {
         // 如果选择了"新建画册"，先创建画册
         if (selectedOutputAlbumId.value === "__create_new__") {
             if (!newOutputAlbumName.value.trim()) {
-                ElMessage.warning("请输入画册名称");
+                ElMessage.warning(t('albums.enterAlbumNameFirst'));
                 return;
             }
             try {
@@ -602,7 +604,7 @@ const handleStartCrawl = async () => {
             try {
                 await formRef.value.validate();
             } catch (error) {
-                ElMessage.warning("请填写所有必填项");
+                ElMessage.warning(t('plugins.fillRequired'));
                 return;
             }
         }
@@ -613,7 +615,7 @@ const handleStartCrawl = async () => {
                 const value = form.value.vars[varDef.key];
                 if (value === undefined || value === null || value === '' ||
                     ((varDef.type === 'list' || varDef.type === 'checkbox') && Array.isArray(value) && value.length === 0)) {
-                    ElMessage.warning(`请填写必填项：${varDef.name}`);
+                    ElMessage.warning(t('plugins.fillRequiredField', { name: varDef.name }));
                     return;
                 }
             }

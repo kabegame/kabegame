@@ -28,7 +28,7 @@
               <el-icon>
                 <Plus />
               </el-icon>
-              开始收集
+              {{ $t('gallery.startCollect') }}
             </el-button>
           </div>
         </template>
@@ -43,25 +43,25 @@
 
     <!-- 移除/删除确认对话框 -->
     <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-      :message="removeDialogMessage" title="确认删除" :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
+      :message="removeDialogMessage" :title="$t('gallery.confirmDelete')" :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
 
     <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
 
     <!-- 桌面：空状态/无下拉时用对话框选择 本地/网络 -->
-    <el-dialog v-model="showCollectMenuDialog" title="选择收集方式" width="360px" destroy-on-close
+    <el-dialog v-model="showCollectMenuDialog" :title="$t('gallery.chooseCollectMethod')" width="360px" destroy-on-close
       class="collect-menu-dialog">
       <div class="collect-menu-options">
         <div class="collect-menu-option" @click="onDesktopCollectLocal">
           <el-icon>
             <FolderOpened />
           </el-icon>
-          <span>本地</span>
+          <span>{{ $t('gallery.local') }}</span>
         </div>
         <div class="collect-menu-option" @click="onDesktopCollectNetwork">
           <el-icon>
             <Connection />
           </el-icon>
-          <span>网络</span>
+          <span>{{ $t('gallery.network') }}</span>
         </div>
       </div>
     </el-dialog>
@@ -113,6 +113,9 @@ import type { Component } from "vue";
 import { useAlbumStore } from "@/stores/albums";
 import { type ContextCommand } from "@/components/ImageGrid.vue";
 import { listen } from "@tauri-apps/api/event";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 // 选择操作项类型（用于本页选择栏）
 export interface SelectionAction {
@@ -223,6 +226,7 @@ const extractRangeFromProviderRoot = (
 ): [string, string] | null => {
   const segs = (root || "").split("/").map((s) => s.trim()).filter(Boolean);
   // 按时间/范围/YYYY-MM-DD~YYYY-MM-DD
+  // 后端固定返回中文目录名，与 UI 语言无关
   if (segs.length >= 3 && segs[0] === "按时间" && segs[1] === "范围") {
     const raw = segs[2] ?? "";
     const parts = raw.split("~").map((s) => s.trim()).filter(Boolean);
@@ -362,7 +366,7 @@ const handleAndroidMediaSelection = async (
         recursive: false,
         include_archive: false,
       });
-      ElMessage.success("已添加本地导入任务");
+      ElMessage.success(t("gallery.localImportTaskAdded"));
     } else if (type === 'video') {
       const uris = await pickVideos();
       if (!uris || uris.length === 0) {
@@ -373,7 +377,7 @@ const handleAndroidMediaSelection = async (
         recursive: false,
         include_archive: false,
       });
-      ElMessage.success("已添加本地导入任务");
+      ElMessage.success(t("gallery.localImportTaskAdded"));
     } else if (type === 'archive') {
       console.log('选择压缩文件');
       // 选择压缩文件（支持 .zip、.rar、.7z、.tar、.gz、.bz2、.xz）
@@ -382,7 +386,7 @@ const handleAndroidMediaSelection = async (
         multiple: false,
         filters: [
           {
-            name: '压缩文件',
+            name: t("gallery.compressFile"),
             extensions: ['zip'],
           },
         ],
@@ -412,7 +416,7 @@ const handleAndroidMediaSelection = async (
         ).filter((p): p is string => p != null);
 
       if (pathsToImport.length === 0) {
-        ElMessage.warning('没有找到可导入的压缩文件');
+        ElMessage.warning(t("gallery.noArchiveFound"));
         return;
       }
 
@@ -421,7 +425,7 @@ const handleAndroidMediaSelection = async (
         recursive: false,
         include_archive: true,
       });
-      ElMessage.success("已添加本地导入任务");
+      ElMessage.success(t("gallery.localImportTaskAdded"));
     } else if (type === 'folder' && folderResult) {
       const folderPath = folderResult.uri ?? folderResult.path;
       if (!folderPath) return;
@@ -431,7 +435,7 @@ const handleAndroidMediaSelection = async (
         try {
           const metadata = await stat(folderPath);
           if (!metadata.isDirectory) {
-            ElMessage.warning('请选择文件夹');
+            ElMessage.warning(t("gallery.pleaseSelectFolder"));
             return;
           }
         } catch (error) {
@@ -445,12 +449,12 @@ const handleAndroidMediaSelection = async (
         recursive: true,
         include_archive: false,
       });
-      ElMessage.success("已添加本地导入任务");
+      ElMessage.success(t("gallery.localImportTaskAdded"));
     }
   } catch (error) {
     console.error('[Gallery] 安卓媒体选择失败:', error);
     if (error !== 'cancel' && error !== 'close') {
-      ElMessage.error('选择失败: ' + (error instanceof Error ? error.message : String(error)));
+      ElMessage.error(t("gallery.selectFailed") + ": " + (error instanceof Error ? error.message : String(error)));
     }
   }
 };
@@ -468,13 +472,13 @@ const totalImagesCount = ref<number>(0); // 总图片数（不受过滤器影响
 
 // 滚动"太快"时的俏皮提示（画廊开启）
 const scrollTooFastMessages = [
-  "慢慢滑嘛，人家要追不上啦 (；´д｀)ゞ",
-  "你这手速开挂了吧？龟龟跟不上啦 (╥﹏╥)",
-  "别飙车！龟龟晕滚动条了~ (＠_＠;)",
-  "给人家留点帧率呀，慢一点点嘛 (´-﹏-`；)",
-  "这速度像火箭！先等等我！ε=ε=ε=┏(゜ロ゜;)┛",
+  () => t("gallery.scrollTooFast1"),
+  () => t("gallery.scrollTooFast2"),
+  () => t("gallery.scrollTooFast3"),
+  () => t("gallery.scrollTooFast4"),
+  () => t("gallery.scrollTooFast5"),
 ];
-const pickOne = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)] || arr[0] || "";
+const pickOne = (arr: (() => string)[]) => (arr[Math.floor(Math.random() * arr.length)]?.() ?? arr[0]?.() ?? "");
 // 滚动超速回调（由 useImageGridAutoLoad 触发）
 const onScrollOverspeed = () => {
   ElMessage({
@@ -502,7 +506,7 @@ const refreshKey = ref(0);
 const pullToRefreshOpts = computed(() => undefined);
 
 // Image actions for context menu / action sheet
-const imageActions = computed(() => createImageActions({ removeText: "删除" }));
+const imageActions = computed(() => createImageActions({ removeText: t("gallery.delete") }));
 
 // dragScroll 拖拽滚动期间：暂停实时 loadImageUrls，优先保证滚动帧率
 const isInteracting = ref(false);

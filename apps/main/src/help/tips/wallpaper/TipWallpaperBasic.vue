@@ -1,27 +1,27 @@
 <template>
   <div class="tip-article">
     <section class="section">
-      <h3>右键图片设置壁纸</h3>
-      <p>在画廊、画册或任务详情中，<strong>右键点击任意图片</strong>，选择 <strong>"抱到桌面上"</strong>，即可将该图片设置为桌面壁纸。</p>
-      <p>这是设置单张壁纸最快捷的方式，无需进入设置页面。</p>
+      <h3>{{ $t('help.tipsContent.wallpaper-basic.contextTitle') }}</h3>
+      <p>{{ $t('help.tipsContent.wallpaper-basic.contextPara1') }}</p>
+      <p>{{ $t('help.tipsContent.wallpaper-basic.contextPara2') }}</p>
       <TipImageCarousel v-if="contextMenuImages.length > 0" :images="contextMenuImages" />
     </section>
 
     <section class="section">
-      <h3>设置壁纸的其他方式</h3>
+      <h3>{{ $t('help.tipsContent.wallpaper-basic.otherTitle') }}</h3>
       <ul>
-        <li><strong>在设置页选择</strong>：进入"设置" → "壁纸轮播"标签，在"选择壁纸"中选择单张图片（轮播关闭时）</li>
-        <li><strong>在画册详情页设置</strong>：打开画册详情页，点击右上角的"设为轮播壁纸"按钮（会开启轮播模式）</li>
+        <li>{{ $t('help.tipsContent.wallpaper-basic.otherItem1') }}</li>
+        <li>{{ $t('help.tipsContent.wallpaper-basic.otherItem2') }}</li>
       </ul>
       <TipImageCarousel v-if="settingsImages.length > 0" :images="settingsImages" />
     </section>
 
     <section class="section">
-      <h3>注意事项</h3>
+      <h3>{{ $t('help.tipsContent.wallpaper-basic.noteTitle') }}</h3>
       <ul>
-        <li>设置壁纸后，图片会立即应用到桌面</li>
-        <li>如果当前启用了壁纸轮播，设置单张壁纸会<strong>自动关闭轮播</strong>，切换到单张壁纸模式</li>
-        <li>壁纸设置会立即生效，无需重启应用</li>
+        <li>{{ $t('help.tipsContent.wallpaper-basic.noteItem1') }}</li>
+        <li>{{ $t('help.tipsContent.wallpaper-basic.noteItem2') }}</li>
+        <li>{{ $t('help.tipsContent.wallpaper-basic.noteItem3') }}</li>
       </ul>
     </section>
   </div>

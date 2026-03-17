@@ -5,6 +5,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { storeToRefs } from "pinia";
 import { Delete, FolderOpened, Picture, Edit } from "@element-plus/icons-vue";
 import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
@@ -24,6 +25,7 @@ const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 
 const props = defineProps<Props>();
+const { t } = useI18n();
 
 const isCurrentRotationAlbum = computed(() => {
   // 只有在轮播已开启且画册ID匹配时才显示"已设置"
@@ -40,7 +42,7 @@ const menuItems = computed<MenuItem[]>(() => {
     items.push({
       key: "browse",
       type: "item",
-      label: "浏览",
+      label: t("contextMenu.browse"),
       icon: FolderOpened,
       command: "browse",
     });
@@ -51,10 +53,10 @@ const menuItems = computed<MenuItem[]>(() => {
     items.push({
       key: "setWallpaperRotation",
       type: "item",
-      label: "设为桌面轮播",
+      label: t("contextMenu.setWallpaperRotation"),
       icon: Picture,
       command: "setWallpaperRotation",
-      suffix: isCurrentRotationAlbum.value ? "(已设置)" : undefined,
+      suffix: isCurrentRotationAlbum.value ? t("contextMenu.setWallpaperRotationActive") : undefined,
     });
   }
 
@@ -67,7 +69,7 @@ const menuItems = computed<MenuItem[]>(() => {
   items.push({
     key: "rename",
     type: "item",
-    label: "重命名",
+    label: t("contextMenu.rename"),
     icon: Edit,
     command: "rename",
   });
@@ -77,7 +79,7 @@ const menuItems = computed<MenuItem[]>(() => {
     items.push({
       key: "delete",
       type: "item",
-      label: "删除",
+      label: t("common.delete"),
       icon: Delete,
       command: "delete",
     });

@@ -1,13 +1,13 @@
 <template>
     <div class="import-confirm-content">
         <div class="import-summary">
-            <p>是否导入以下 <strong>{{ itemCount }}</strong> 个项目？</p>
+            <p>{{ $t('import.confirmImportQuestion', { count: itemCount }) }}</p>
             <div class="summary-stats">
-                <span v-if="folderCount > 0">📁 文件夹: <strong>{{ folderCount }}</strong> 个</span>
-                <span v-if="imageCount > 0">🖼️ 图片: <strong>{{ imageCount }}</strong> 个</span>
-                <span v-if="videoCount > 0">🎬 视频: <strong>{{ videoCount }}</strong> 个</span>
-                <span v-if="archiveCount > 0">📦 压缩包: <strong>{{ archiveCount }}</strong> 个</span>
-                <span v-if="pluginCount > 0">🔌 插件: <strong>{{ pluginCount }}</strong> 个</span>
+                <span v-if="folderCount > 0">{{ $t('import.folderCount', { count: folderCount }) }}</span>
+                <span v-if="imageCount > 0">{{ $t('import.imageCount', { count: imageCount }) }}</span>
+                <span v-if="videoCount > 0">{{ $t('import.videoCount', { count: videoCount }) }}</span>
+                <span v-if="archiveCount > 0">{{ $t('import.archiveCount', { count: archiveCount }) }}</span>
+                <span v-if="pluginCount > 0">{{ $t('import.pluginCount', { count: pluginCount }) }}</span>
             </div>
         </div>
 
@@ -21,7 +21,7 @@
 
         <div v-if="showOptions" class="import-options">
             <el-checkbox v-model="createAlbumPerSourceModel" class="import-option">
-                为每个文件夹/压缩包创建画册
+                {{ $t('import.createAlbumPerSource') }}
             </el-checkbox>
         </div>
     </div>
@@ -29,6 +29,7 @@
 
 <script setup lang="ts">
 import { computed, type Ref, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { ElCheckbox } from "element-plus";
 
 type ImportItem = {
@@ -49,6 +50,7 @@ const props = defineProps<{
     createAlbumPerSourceRef?: Ref<boolean>;
 }>();
 
+const { t } = useI18n();
 const itemCount = computed(() => props.items.length);
 const folderCount = computed(() => props.items.filter(i => i.isDirectory).length);
 const archiveCount = computed(() => props.items.filter(i => !i.isDirectory && i.isArchive).length);

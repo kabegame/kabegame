@@ -3,7 +3,7 @@
     <AndroidDrawer v-if="IS_ANDROID" v-model="visible" show-close-button class="organize-dialog">
         <template #header>
             <div class="organize-drawer-header">
-                <h3>整理画廊</h3>
+                <h3>{{ $t('gallery.organizeGallery') }}</h3>
             </div>
         </template>
         <div class="organize-form">
@@ -11,62 +11,62 @@
                 <div class="option-item">
                     <el-checkbox v-model="options.dedupe" />
                     <div class="option-content">
-                        <div class="option-title">去重</div>
-                        <div class="option-desc">去掉完全相同的两张图片（不删除文件）</div>
+                        <div class="option-title">{{ $t('gallery.dedupe') }}</div>
+                        <div class="option-desc">{{ $t('gallery.dedupeDesc') }}</div>
                     </div>
                 </div>
                 <div class="option-item">
                     <el-checkbox v-model="options.removeMissing" />
                     <div class="option-content">
-                        <div class="option-title">清除失效图片</div>
-                        <div class="option-desc">去掉原图不存在的图片（图片找不到了，淋しいな）</div>
+                        <div class="option-title">{{ $t('gallery.removeMissing') }}</div>
+                        <div class="option-desc">{{ $t('gallery.removeMissingDesc') }}</div>
                     </div>
                 </div>
                 <div class="option-item">
                     <el-checkbox v-model="options.regenThumbnails" />
                     <div class="option-content">
-                        <div class="option-title">补充缩略图</div>
-                        <div class="option-desc">补充生成丢失的缩略图</div>
+                        <div class="option-title">{{ $t('gallery.regenThumbnails') }}</div>
+                        <div class="option-desc">{{ $t('gallery.regenThumbnailsDesc') }}</div>
                     </div>
                 </div>
             </div>
             <div class="organize-dialog-footer">
-                <el-button @click="visible = false">取消</el-button>
-                <el-button type="primary" @click="handleConfirm" :loading="loading">开始整理</el-button>
+                <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
+                <el-button type="primary" @click="handleConfirm" :loading="loading">{{ $t('gallery.startOrganize') }}</el-button>
             </div>
         </div>
     </AndroidDrawer>
 
     <!-- 桌面端：标准对话框 -->
-    <el-dialog v-else v-model="visible" title="整理画廊" width="480px" :close-on-click-modal="false" destroy-on-close>
+    <el-dialog v-else v-model="visible" :title="$t('gallery.organizeGallery')" width="480px" :close-on-click-modal="false" destroy-on-close>
         <div class="organize-form">
             <div class="organize-options">
                 <div class="option-item">
                     <el-checkbox v-model="options.dedupe" />
                     <div class="option-content">
                         <div class="option-title">去重</div>
-                        <div class="option-desc">去掉数据库中哈希相同的图片</div>
+                        <div class="option-desc">{{ $t('gallery.dedupeDescDesktop') }}</div>
                     </div>
                 </div>
                 <div class="option-item">
                     <el-checkbox v-model="options.removeMissing" />
                     <div class="option-content">
                         <div class="option-title">清除失效图片</div>
-                        <div class="option-desc">去掉数据库中原图不存在的图片</div>
+                        <div class="option-desc">{{ $t('gallery.removeMissingDescDesktop') }}</div>
                     </div>
                 </div>
                 <div class="option-item">
                     <el-checkbox v-model="options.regenThumbnails" />
                     <div class="option-content">
-                        <div class="option-title">补充缩略图</div>
-                        <div class="option-desc">补充生成丢失的缩略图</div>
+                        <div class="option-title">{{ $t('gallery.regenThumbnails') }}</div>
+                        <div class="option-desc">{{ $t('gallery.regenThumbnailsDesc') }}</div>
                     </div>
                 </div>
             </div>
         </div>
         <template #footer>
-            <el-button @click="visible = false">取消</el-button>
-            <el-button type="primary" @click="handleConfirm" :loading="loading">开始整理</el-button>
+            <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
+            <el-button type="primary" @click="handleConfirm" :loading="loading">{{ $t('gallery.startOrganize') }}</el-button>
         </template>
     </el-dialog>
 </template>

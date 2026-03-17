@@ -1,7 +1,7 @@
 <template>
   <el-drawer
     :model-value="modelValue"
-    :title="title"
+    :title="resolvedTitle"
     :size="IS_ANDROID ? 'auto' : '400px'"
     :direction="IS_ANDROID ? 'btt' : 'rtl'"
     :close-on-click-modal="true"
@@ -41,6 +41,7 @@ import { ArrowRight } from "@element-plus/icons-vue";
 import { ElDrawer, ElIcon } from "element-plus";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 export interface OptionItem {
@@ -57,8 +58,10 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  title: "请选择",
+  title: undefined,
 });
+const { t } = useI18n();
+const resolvedTitle = computed(() => props.title ?? t('common.selectPlaceholder'));
 
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;

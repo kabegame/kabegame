@@ -1,8 +1,8 @@
 <template>
   <SingleImageContextMenu v-if="selectedCount === 1" :visible="visible" :position="position" :image="image"
-    remove-text="从画册移除" @close="$emit('close')" @command="$emit('command', $event)" />
+    :remove-text="$t('albums.removeFromAlbumShort')" @close="$emit('close')" @command="$emit('command', $event)" />
   <MultiImageContextMenu v-else :visible="visible" :position="position" :image="image" :selected-count="selectedCount"
-    :is-image-selected="isImageSelected" remove-text="从画册移除" @close="$emit('close')"
+    :is-image-selected="isImageSelected" :remove-text="$t('albums.removeFromAlbumShort')" @close="$emit('close')"
     @command="$emit('command', $event)" />
 </template>
 

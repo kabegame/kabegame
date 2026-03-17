@@ -1,7 +1,7 @@
 <template>
   <OptionPickerDrawer
     :model-value="modelValue"
-    :title="title"
+    :title="resolvedTitle"
     :options="mediaOptions"
     class="media-picker-drawer"
     @update:model-value="$emit('update:modelValue', $event)"
@@ -11,6 +11,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { Picture, FolderOpened, Box, VideoPlay } from "@element-plus/icons-vue";
 import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
@@ -22,8 +23,10 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  title: "选择导入方式",
+  title: undefined,
 });
+const { t } = useI18n();
+const resolvedTitle = computed(() => props.title ?? t('gallery.chooseImportMethod'));
 
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
@@ -33,26 +36,26 @@ const emit = defineEmits<{
 const mediaOptions = computed<OptionItem[]>(() => [
   {
     id: "image",
-    title: "选择图片",
-    desc: "从手机相册选择一张或多张图片",
+    title: t('gallery.selectImage'),
+    desc: t('gallery.selectImageDesc'),
     icon: Picture,
   },
   {
     id: "video",
-    title: "选择本地视频",
-    desc: "从手机相册选择一个或多个视频",
+    title: t('gallery.selectVideo'),
+    desc: t('gallery.selectVideoDesc'),
     icon: VideoPlay,
   },
   {
     id: "folder",
-    title: "选择文件夹",
-    desc: "选择一个包含图片的文件夹",
+    title: t('gallery.selectFolder'),
+    desc: t('gallery.selectFolderDesc'),
     icon: FolderOpened,
   },
   {
     id: "archive",
-    title: "选择压缩文件",
-    desc: "支持 .zip 格式",
+    title: t('gallery.selectArchive'),
+    desc: t('gallery.selectArchiveDesc'),
     icon: Box,
   },
 ]);

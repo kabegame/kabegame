@@ -8,6 +8,7 @@ import { useTaskDrawerStore } from "@/stores/taskDrawer";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { IS_ANDROID } from "@kabegame/core/env";
+import { i18n } from "@/i18n";
 
 // 支持的扩展名列表（用于默认提示文案），运行时由 updateSupportedTypes 从后端覆盖
 let SUPPORTED_ARCHIVE_EXTENSIONS = ["zip", "rar"];
@@ -102,29 +103,30 @@ export function useFileDrop(
             try {
               const kinds = await getFileDropKinds(paths.slice(0, 1));
               const first = kinds[0];
-              let text = "拖入文件以导入";
+              const t = (key: string, params?: Record<string, string>) =>
+                i18n.global.t(key, params);
+              const exts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
+              let text = t("import.dropFileToImport");
               let isImportable = false;
 
               if (first) {
                 if (first.isDirectory) {
-                  text = "拖入文件夹以导入";
+                  text = t("import.dropFolderToImport");
                   isImportable = true;
                 } else if (first.isKgpg) {
-                  text = "拖入插件包（.kgpg）以导入";
+                  text = t("import.dropPluginToImport");
                   isImportable = true;
                 } else if (first.isArchive) {
-                  const exts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
-                  text = `拖入压缩包（${exts}）以导入`;
+                  text = t("import.dropArchiveToImport", { exts });
                   isImportable = true;
                 } else if (first.isImage) {
                   isImportable = true;
-                  text = "拖入图片以导入";
+                  text = t("import.dropImageToImport");
                 } else if (first.isVideo) {
                   isImportable = true;
-                  text = "拖入视频以导入";
+                  text = t("import.dropVideoToImport");
                 } else {
-                  const archiveExts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
-                  text = `支持拖入文件夹、插件(.kgpg)、图片、视频或压缩包(${archiveExts})`;
+                  text = t("import.dropSupportedTypes", { exts });
                 }
               }
 
@@ -134,9 +136,9 @@ export function useFileDrop(
                 await bringWindowToFront();
               }
             } catch (error) {
-              const archiveExts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
+              const exts = SUPPORTED_ARCHIVE_EXTENSIONS.join("、");
               fileDropOverlayRef.value?.show(
-                `拖入文件夹、插件(.kgpg)、图片、视频或压缩包(${archiveExts})`,
+                i18n.global.t("import.dropSupportedTypes", { exts }),
               );
               isOverlayVisible = true;
             }
@@ -187,7 +189,7 @@ export function useFileDrop(
               }
 
               if (items.length === 0) {
-                ElMessage.warning("没有找到可导入的文件或文件夹");
+                ElMessage.warning(i18n.global.t("import.noImportableFound"));
                 return;
               }
 
@@ -227,7 +229,9 @@ export function useFileDrop(
                     console.log("[App] 已导入插件包:", item.path);
                   } catch (error) {
                     console.error("[App] 导入插件失败:", item.path, error);
-                    ElMessage.error(`导入插件失败: ${item.name}`);
+                    ElMessage.error(
+                      `${i18n.global.t("import.importPluginFailed")}: ${item.name}`,
+                    );
                   }
                 }
 
@@ -235,11 +239,15 @@ export function useFileDrop(
                 if (localImportItems.length > 0) {
                   const allPaths = localImportItems.map((it) => it.path);
                   const hasArchiveFiles = localImportItems.some((it) => it.isArchive);
-                  crawlerStore.addTask("本地导入", undefined, {
-                    paths: allPaths,
-                    recursive: true,
-                    include_archive: hasArchiveFiles,
-                  });
+                  crawlerStore.addTask(
+                    i18n.global.t("albums.localImport"),
+                    undefined,
+                    {
+                      paths: allPaths,
+                      recursive: true,
+                      include_archive: hasArchiveFiles,
+                    },
+                  );
                   console.log("[App] 已添加本地导入任务:", allPaths.length, "个路径");
                 }
 
@@ -250,21 +258,28 @@ export function useFileDrop(
 
                 if (localImportItems.length > 0 && importedPluginCount > 0) {
                   ElMessage.success(
-                    `已添加 1 个本地导入任务，已导入 ${importedPluginCount} 个源插件`,
+                    i18n.global.t("import.addedLocalImportAndPlugins", {
+                      count: String(importedPluginCount),
+                    }),
                   );
                 } else if (localImportItems.length > 0) {
-                  ElMessage.success("已添加本地导入任务");
+                  ElMessage.success(i18n.global.t("import.addedLocalImport"));
                 } else if (importedPluginCount > 0) {
-                  ElMessage.success(`已导入 ${importedPluginCount} 个源插件`);
+                  ElMessage.success(
+                    i18n.global.t("import.importedPluginsCount", {
+                      count: String(importedPluginCount),
+                    }),
+                  );
                 } else {
-                  ElMessage.info("没有可导入的内容");
+                  ElMessage.info(i18n.global.t("import.nothingToImport"));
                 }
               })();
             } catch (error) {
               console.error("[App] 处理文件拖入失败:", error);
               ElMessage.error(
-                "处理文件拖入失败: " +
-                  (error instanceof Error ? error.message : String(error)),
+                `${i18n.global.t("import.fileDropFailed")}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
               );
             }
           }

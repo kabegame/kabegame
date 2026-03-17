@@ -1,7 +1,7 @@
 <template>
   <div class="gallery-grid-columns-setting">
     <div class="controls-row">
-      <span class="label">固定列数</span>
+      <span class="label">{{ $t('settings.fixedColumns') }}</span>
       <el-switch
         :model-value="fixedModeEnabled"
         :disabled="disabled"
@@ -20,7 +20,7 @@
       />
     </div>
     <div class="hint">
-      关闭时为动态列数（可用快捷键调整）；开启后固定为 1-4 列并禁用快捷键调整。
+      {{ $t('settings.fixedColumnsHint') }}
     </div>
   </div>
 </template>

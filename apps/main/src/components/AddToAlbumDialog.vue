@@ -1,30 +1,31 @@
 <template>
-  <el-dialog v-model="visible" title="加入画册" width="420px">
+  <el-dialog v-model="visible" :title="$t('albums.addToAlbumTitle')" width="420px">
     <el-form label-width="80px">
-      <el-form-item label="选择画册">
-        <el-select v-model="selectedAlbumId" placeholder="选择一个心仪的画册吧" style="width: 100%">
+      <el-form-item :label="$t('albums.selectAlbum')">
+        <el-select v-model="selectedAlbumId" :placeholder="$t('albums.chooseAlbumPlaceholder')" style="width: 100%">
           <el-option v-for="album in filteredAlbums" :key="album.id" :label="album.name" :value="album.id" />
-          <el-option value="__create_new__" label="+ 新建画册">
-            <span style="color: var(--el-color-primary); font-weight: 500;">+ 新建画册</span>
+          <el-option value="__create_new__" :label="$t('albums.createNewAlbum')">
+            <span style="color: var(--el-color-primary); font-weight: 500;">{{ $t('albums.createNewAlbum') }}</span>
           </el-option>
         </el-select>
       </el-form-item>
-      <el-form-item v-if="isCreatingNewAlbum" label="画册名称" required>
-        <el-input v-model="newAlbumName" placeholder="请输入画册名称" maxlength="50" show-word-limit
+      <el-form-item v-if="isCreatingNewAlbum" :label="$t('albums.placeholderName')" required>
+        <el-input v-model="newAlbumName" :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
           @keyup.enter="handleCreateAndAddAlbum" ref="newAlbumNameInputRef" />
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="visible = false">取消</el-button>
+      <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
       <el-button v-if="isCreatingNewAlbum" type="primary" :disabled="!newAlbumName.trim()"
-        @click="handleCreateAndAddAlbum">确定</el-button>
-      <el-button v-else type="primary" :disabled="!selectedAlbumId" @click="confirmAddToAlbum">确定</el-button>
+        @click="handleCreateAndAddAlbum">{{ $t('common.confirm') }}</el-button>
+      <el-button v-else type="primary" :disabled="!selectedAlbumId" @click="confirmAddToAlbum">{{ $t('common.confirm') }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from "vue";
+import { useI18n } from "vue-i18n";
 import { ElMessage } from "element-plus";
 import { storeToRefs } from "pinia";
 import { useAlbumStore } from "@/stores/albums";
@@ -50,6 +51,7 @@ const emit = defineEmits<{
   (e: "added"): void;
 }>();
 
+const { t } = useI18n();
 const albumStore = useAlbumStore();
 const { albums } = storeToRefs(albumStore);
 
@@ -122,7 +124,7 @@ const handleCreateAndAddAlbum = async () => {
   }
 
   if (!newAlbumName.value.trim()) {
-    ElMessage.warning("请输入画册名称");
+    ElMessage.warning(t('albums.enterAlbumNameFirst'));
     return;
   }
 
@@ -131,10 +133,10 @@ const handleCreateAndAddAlbum = async () => {
 
     if (isTaskMode) {
       const result = await albumStore.addTaskImagesToAlbum(props.taskId!, created.id);
-      ElMessage.success(`已创建画册「${created.name}」并加入任务全部图片（${result.added} 张）`);
+      ElMessage.success(t('albums.createAlbumAndAddTask', { name: created.name, count: result.added }));
     } else {
       await albumStore.addImagesToAlbum(created.id, props.imageIds);
-      ElMessage.success(`已创建画册「${created.name}」并加入 ${props.imageIds.length} 张图片`);
+      ElMessage.success(t('albums.createAlbumAndAdd', { name: created.name, count: props.imageIds.length }));
     }
 
     visible.value = false;
@@ -157,7 +159,7 @@ const confirmAddToAlbum = async () => {
 
   const albumId = selectedAlbumId.value;
   if (!albumId) {
-    ElMessage.warning("请选择画册");
+    ElMessage.warning(t('albums.selectAlbumFirst'));
     return;
   }
 
@@ -165,9 +167,9 @@ const confirmAddToAlbum = async () => {
     if (isTaskMode) {
       const result = await albumStore.addTaskImagesToAlbum(props.taskId!, albumId);
       if (result.added === 0) {
-        ElMessage.info("任务图片已全部在该画册中");
+        ElMessage.info(t('albums.allInAlbum'));
       } else {
-        ElMessage.success(`已加入画册（${result.added} 张）`);
+        ElMessage.success(t('albums.addedToAlbum', { count: result.added }));
       }
       visible.value = false;
       emit("added");
@@ -182,7 +184,7 @@ const confirmAddToAlbum = async () => {
       idsToAdd = props.imageIds.filter(id => !existingSet.has(id));
 
       if (idsToAdd.length === 0) {
-        ElMessage.info("所选图片已全部在画册中");
+        ElMessage.info(t('albums.allInAlbum'));
         visible.value = false;
         emit("added");
         return;
@@ -190,14 +192,14 @@ const confirmAddToAlbum = async () => {
 
       if (idsToAdd.length < props.imageIds.length) {
         const skippedCount = props.imageIds.length - idsToAdd.length;
-        ElMessage.warning(`已跳过 ${skippedCount} 张已在画册中的图片`);
+        ElMessage.warning(t('albums.skippedInAlbum', { count: skippedCount }));
       }
     } catch (error) {
       console.error("获取画册图片列表失败:", error);
     }
 
     await albumStore.addImagesToAlbum(albumId, idsToAdd);
-    ElMessage.success(`已加入画册（${idsToAdd.length} 张）`);
+    ElMessage.success(t('albums.addedToAlbum', { count: idsToAdd.length }));
     visible.value = false;
     emit("added");
   } catch (error: any) {

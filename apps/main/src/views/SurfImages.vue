@@ -36,7 +36,7 @@
       v-model="showRemoveDialog"
       v-model:delete-files="removeDeleteFiles"
       :message="removeDialogMessage"
-      title="确认删除"
+      :title="$t('surf.confirmDelete')"
       :hide-checkbox="IS_ANDROID"
       @confirm="confirmRemoveImages"
     />
@@ -76,7 +76,9 @@ import { useImageTypes } from "@/composables/useImageTypes";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { IS_ANDROID } from "@kabegame/core/env";
+import { useI18n } from "vue-i18n";
 
+const { t } = useI18n();
 const BIG_PAGE_SIZE = 100;
 const route = useRoute();
 const router = useRouter();
@@ -106,7 +108,7 @@ const addToAlbumImageIds = ref<string[]>([]);
 
 const imageActions = computed(() =>
   createImageActions({
-    removeText: "删除",
+    removeText: t("surf.removeText"),
     multiHide: ["favorite", "addToAlbum"],
   })
 );
@@ -145,7 +147,7 @@ const toggleFavoriteForImages = async (imgs: ImageInfo[]) => {
     if (r.status === "fulfilled") succeededIds.push(toChange[idx]!.id);
   });
   if (succeededIds.length === 0) {
-    ElMessage.error("操作失败");
+    ElMessage.error(t("surf.operationFailed"));
     return;
   }
 
@@ -178,7 +180,7 @@ const toggleFavoriteForImages = async (imgs: ImageInfo[]) => {
     }
   }
 
-  ElMessage.success(desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`);
+  ElMessage.success(desiredFavorite ? t("surf.favoritedCount", { count: succeededIds.length }) : t("surf.unfavoritedCount", { count: succeededIds.length }));
   clearSelection();
 };
 
@@ -187,11 +189,11 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
     if (imagesToProcess.length > 1) {
       await settingsStore.loadAll();
       await albumStore.loadAlbums();
-      let albumName = "桌面画册1";
+      let albumName = t("surf.desktopAlbumName", { n: 1 });
       let counter = 1;
       while (albumStore.albums.some((a) => a.name === albumName)) {
         counter++;
-        albumName = `桌面画册${counter}`;
+        albumName = t("surf.desktopAlbumName", { n: counter });
       }
       const createdAlbum = await albumStore.createAlbum(albumName);
       const imageIds = imagesToProcess.map((img) => img.id);
@@ -201,16 +203,16 @@ const setWallpaper = async (imagesToProcess: ImageInfo[]) => {
         await setWallpaperRotationEnabled(true);
       }
       await setWallpaperRotationAlbumId(createdAlbum.id);
-      ElMessage.success(`已开启轮播：画册「${albumName}」（${imageIds.length} 张）`);
+      ElMessage.success(t("surf.rotationStarted", { name: albumName, count: imageIds.length }));
     } else {
       await setWallpaperByImageIdWithModeFallback(imagesToProcess[0].id);
       currentWallpaperImageId.value = imagesToProcess[0].id;
-      ElMessage.success("壁纸设置成功");
+      ElMessage.success(t("surf.wallpaperSetSuccess"));
     }
     clearSelection();
   } catch (error: any) {
     console.error("设置壁纸失败:", error);
-    ElMessage.error(error?.message || String(error) || "设置壁纸失败");
+    ElMessage.error(error?.message || String(error) || t("surf.wallpaperSetFailed"));
   }
 };
 
@@ -251,7 +253,7 @@ const handleImageMenuCommand = async (
           await invoke("open_file_folder", { filePath: imagesToProcess[0].localPath });
         } catch (e) {
           console.error("打开文件夹失败:", e);
-          ElMessage.error("打开文件夹失败");
+          ElMessage.error(t("surf.openFolderFailed"));
         }
       }
       break;
@@ -270,7 +272,7 @@ const handleImageMenuCommand = async (
           const img = imagesToProcess[0];
           const filePath = img.localPath;
           if (!filePath) {
-            ElMessage.error("图片路径不存在");
+            ElMessage.error(t("surf.pathNotExist"));
             break;
           }
           const ext = filePath.split(".").pop()?.toLowerCase() || "";
@@ -279,7 +281,7 @@ const handleImageMenuCommand = async (
           await invoke("share_file", { filePath, mimeType });
         } catch (e) {
           console.error("分享失败:", e);
-          ElMessage.error("分享失败");
+          ElMessage.error(t("surf.shareFailed"));
         }
       }
       break;
@@ -289,7 +291,7 @@ const handleImageMenuCommand = async (
           await openLocalImage(imagesToProcess[0].localPath);
         } catch (e) {
           console.error("打开文件失败:", e);
-          ElMessage.error("打开文件失败");
+          ElMessage.error(t("surf.openFileFailed"));
         }
       }
       break;
@@ -297,7 +299,7 @@ const handleImageMenuCommand = async (
       if (imagesToProcess.length === 0) return null;
       pendingRemoveImages.value = imagesToProcess;
       const count = imagesToProcess.length;
-      removeDialogMessage.value = `将删除${count > 1 ? `这 ${count} 张图片` : "这张图片"}。`;
+      removeDialogMessage.value = count > 1 ? t("surf.removeMessageMulti", { count }) : t("surf.removeMessageSingle");
       removeDeleteFiles.value = false;
       showRemoveDialog.value = true;
       break;
@@ -329,12 +331,13 @@ const confirmRemoveImages = async () => {
     clearSelection();
     await reloadAllImages();
 
-    const action = shouldDeleteFiles ? "删除" : "移除";
-    ElMessage.success(`${count > 1 ? `已${action} ${count} 张图片` : `已${action}图片`}`);
+    const actionKey = shouldDeleteFiles ? "common.delete" : "common.remove";
+    const actionLabel = t(actionKey);
+    ElMessage.success(count > 1 ? t("surf.removedCount", { action: actionLabel, count }) : t("surf.removedSingle", { action: actionLabel }));
   } catch (e) {
     console.error("删除图片失败:", e);
-    const action = shouldDeleteFiles ? "删除" : "移除";
-    ElMessage.error(`${action}失败`);
+    const actionLabel = t(shouldDeleteFiles ? "common.delete" : "common.remove");
+    ElMessage.error(t("surf.actionFailed", { action: actionLabel }));
   }
 };
 
@@ -350,12 +353,12 @@ const { currentPath, providerRootPath, currentOffset, setRootAndPage, navigateTo
   }),
 });
 
-const recordTitle = computed(() => record.value?.host ?? "遨游图片");
+const recordTitle = computed(() => record.value?.host ?? t("surf.surfImagesTitle"));
 const lastVisitSubtitle = computed(() => {
   const r = record.value;
   if (!r?.lastVisitAt) return "";
   const date = new Date(r.lastVisitAt * 1000);
-  return `最后一次畅游：${date.toLocaleString()}`;
+  return t("surf.lastSurfTime") + date.toLocaleString();
 });
 
 const fetchPageImages = async (path: string) => {
@@ -382,7 +385,7 @@ const loadCurrentPage = async () => {
     images.value = result.images;
     totalImagesCount.value = result.total;
   } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || "加载图片失败");
+    ElMessage.error(e?.message || String(e) || t("surf.loadImagesFailed"));
   } finally {
     loading.value = false;
   }

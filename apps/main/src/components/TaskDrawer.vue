@@ -2,14 +2,14 @@
   <!-- Android：自研全宽抽屉，支持划入动画与拖拽滑出、背景透明度随拖拽变化 -->
   <AndroidDrawer v-if="IS_ANDROID" v-model="visible">
     <template #header>
-      <h3 class="task-drawer-android-title">任务列表</h3>
+      <h3 class="task-drawer-android-title">{{ $t('tasks.taskList') }}</h3>
     </template>
     <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
       @cancel-task="handleCancelTaskById"
       @task-contextmenu="openTaskContextMenu" />
   </AndroidDrawer>
-  <el-drawer v-else v-model="visible" title="任务列表" :size="drawerSize" direction="rtl" :with-header="true"
+  <el-drawer v-else v-model="visible" :title="$t('tasks.taskList')" :size="drawerSize" direction="rtl" :with-header="true"
     :append-to-body="true" :modal-class="'task-drawer-modal'" class="task-drawer drawer-max-width">
     <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
@@ -17,19 +17,19 @@
       @task-contextmenu="openTaskContextMenu" />
   </el-drawer>
 
-  <el-dialog v-model="saveConfigVisible" title="保存为运行配置" width="520px" :close-on-click-modal="false"
+  <el-dialog v-model="saveConfigVisible" :title="$t('tasks.saveAsConfig')" width="520px" :close-on-click-modal="false"
     class="save-config-dialog" @close="resetSaveConfigForm">
     <el-form label-width="80px">
-      <el-form-item label="名称" required>
-        <el-input v-model="saveConfigName" placeholder="请输入配置名称" />
+      <el-form-item :label="$t('common.name')" required>
+        <el-input v-model="saveConfigName" :placeholder="$t('common.configNamePlaceholder')" />
       </el-form-item>
-      <el-form-item label="描述">
-        <el-input v-model="saveConfigDescription" placeholder="可选：配置说明" />
+      <el-form-item :label="$t('common.description')">
+        <el-input v-model="saveConfigDescription" :placeholder="$t('common.configDescPlaceholder')" />
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="saveConfigVisible = false">取消</el-button>
-      <el-button type="primary" :loading="savingConfig" @click="confirmSaveTaskAsConfig">保存</el-button>
+      <el-button @click="saveConfigVisible = false">{{ $t('common.cancel') }}</el-button>
+      <el-button type="primary" :loading="savingConfig" @click="confirmSaveTaskAsConfig">{{ $t('common.save') }}</el-button>
     </template>
   </el-dialog>
 
@@ -39,6 +39,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
@@ -61,6 +62,7 @@ interface Emits {
 
 const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
+const { t } = useI18n();
 
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
@@ -146,7 +148,7 @@ const confirmSaveTaskAsConfig = async () => {
   if (!task) return;
   const name = saveConfigName.value.trim();
   if (!name) {
-    ElMessage.warning("请输入配置名称");
+    ElMessage.warning(t('tasks.enterConfigName'));
     return;
   }
   savingConfig.value = true;
@@ -160,12 +162,12 @@ const confirmSaveTaskAsConfig = async () => {
       userConfig: task.userConfig ?? {},
       httpHeaders: task.httpHeaders ?? {},
     });
-    ElMessage.success("已保存为配置");
+    ElMessage.success(t('tasks.saveConfigSuccess'));
     saveConfigVisible.value = false;
     resetSaveConfigForm();
   } catch (error) {
     console.error("保存为配置失败:", error);
-    ElMessage.error("保存失败");
+    ElMessage.error(t('tasks.saveFailed'));
   } finally {
     savingConfig.value = false;
   }
@@ -193,12 +195,12 @@ const handleCancelTaskById = async (taskId: string) => {
   if (!task) return;
   try {
     await ElMessageBox.confirm(
-      "确定要停止这个任务吗？已下载的图片将保留，未开始的任务将取消。",
-      "停止任务",
+      t('tasks.stopTaskConfirm'),
+      t('tasks.stopTaskTitle'),
       { type: "warning" }
     );
     await crawlerStore.stopTask(task.id);
-    ElMessage.info("任务已请求停止");
+    ElMessage.info(t('tasks.taskStopRequested'));
   } catch (error) {
     if (error !== "cancel") {
       // 静默处理错误，不显示弹窗，任务状态会通过后端事件自动更新
@@ -213,25 +215,25 @@ const handleDeleteTaskById = async (taskId: string) => {
   try {
     const needStop = task.status === "running";
     const msg = needStop
-      ? "当前任务正在运行，删除前将先终止任务。确定继续吗？"
-      : "确定要删除这个任务吗？";
-    await ElMessageBox.confirm(msg, "确认删除", { type: "warning" });
+      ? t('tasks.deleteTaskConfirmRunning')
+      : t('tasks.deleteTaskConfirm');
+    await ElMessageBox.confirm(msg, t('tasks.confirmDelete'), { type: "warning" });
 
     if (needStop) {
       try {
         await crawlerStore.stopTask(task.id);
       } catch (err) {
         console.error("终止任务失败，已取消删除", err);
-        ElMessage.error("终止任务失败，删除已取消");
+        ElMessage.error(t('tasks.stopFailedCancel'));
         return;
       }
     }
 
     await crawlerStore.deleteTask(task.id);
-    ElMessage.success("任务已删除");
+    ElMessage.success(t('tasks.taskDeleted'));
   } catch (error) {
     if (error !== "cancel") {
-      ElMessage.error("删除失败");
+      ElMessage.error(t('tasks.deleteFailed'));
     }
   }
 };
@@ -247,7 +249,7 @@ const handleOpenTaskImagesById = (taskId: string) => {
 
 const handleDeleteAllTasks = async () => {
   if (nonRunningTasksCount.value === 0) {
-    ElMessage.warning("没有可清除的任务（所有任务都是等待中或运行中）");
+    ElMessage.warning(t('tasks.noTasksToClear'));
     return;
   }
   try {
@@ -256,19 +258,19 @@ const handleDeleteAllTasks = async () => {
     const preservedCount = pendingCount + runningCount;
     const deletableCount = nonRunningTasksCount.value;
     const msg = preservedCount > 0
-      ? `确定要删除所有已完成/失败/已取消的任务吗？共 ${deletableCount} 个（${pendingCount} 个等待中的任务和 ${runningCount} 个运行中的任务将被保留）。`
-      : `确定要删除所有任务吗？共 ${deletableCount} 个。`;
-    await ElMessageBox.confirm(msg, "清除所有任务", { type: "warning" });
+      ? t('tasks.clearAllTasksConfirmPreserved', { count: deletableCount, pending: pendingCount, running: runningCount })
+      : t('tasks.clearAllTasksConfirm', { count: deletableCount });
+    await ElMessageBox.confirm(msg, t('tasks.clearAllTasksTitle'), { type: "warning" });
 
     // 调用后端命令批量清除
     const clearedCount = await invoke<number>("clear_finished_tasks");
     // 重新获取任务列表
     await crawlerStore.loadTasks();
-    ElMessage.success(`已清除 ${clearedCount} 个任务`);
+    ElMessage.success(t('tasks.tasksCleared', { count: clearedCount }));
   } catch (error) {
     if (error !== "cancel") {
       console.error("清除任务失败:", error);
-      ElMessage.error("清除失败");
+      ElMessage.error(t('tasks.clearFailed'));
     }
   }
 };

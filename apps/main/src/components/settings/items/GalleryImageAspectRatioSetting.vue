@@ -1,20 +1,22 @@
 <template>
   <div class="aspect-ratio-setting">
-    <el-select v-model="localValue" placeholder="选择宽高比" style="width: 180px" clearable :disabled="disabled" :loading="showDisabled"
+    <el-select v-model="localValue" :placeholder="$t('settings.aspectRatioPlaceholder')" style="width: 180px" clearable :disabled="disabled" :loading="showDisabled"
       @change="onChange">
       <el-option v-for="opt in options" :key="opt.value" :label="opt.label" :value="opt.value" />
     </el-select>
     <div class="hint">
-      选择画廊图片的宽高比。
+      {{ $t('settings.aspectRatioHint') }}
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 
+const { t } = useI18n();
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("galleryImageAspectRatio");
 
 const desktopResolution = ref<{ width: number; height: number } | null>(null);
@@ -30,22 +32,22 @@ const commonAspectRatios = [
 ];
 
 const options = computed(() => {
+  const yourDesktop = t("settings.aspectRatioYourDesktop");
   if (!desktopResolution.value) {
     return commonAspectRatios.map((ar) => ({ label: ar.label, value: ar.value }));
   }
 
   const desktopRatio = desktopResolution.value.width / desktopResolution.value.height;
-  // 使用相对误差来匹配宽高比，更准确（允许 0.5% 的相对误差）
   const matched = commonAspectRatios.find((ar) => {
     const relativeError = Math.abs(ar.ratio - desktopRatio) / Math.max(ar.ratio, desktopRatio);
-    return relativeError < 0.005; // 0.5% 相对误差
+    return relativeError < 0.005;
   });
 
   const opts = commonAspectRatios.map((ar) => {
     const relativeError = Math.abs(ar.ratio - desktopRatio) / Math.max(ar.ratio, desktopRatio);
-    const isDesktopMatch = relativeError < 0.005; // 0.5% 相对误差
+    const isDesktopMatch = relativeError < 0.005;
     return {
-      label: isDesktopMatch ? `${ar.label} (您的桌面)` : ar.label,
+      label: isDesktopMatch ? `${ar.label} ${yourDesktop}` : ar.label,
       value: ar.value,
     };
   });
@@ -53,7 +55,10 @@ const options = computed(() => {
   if (!matched) {
     const customValue = `custom:${desktopResolution.value.width}:${desktopResolution.value.height}`;
     opts.push({
-      label: `自定义 ${desktopResolution.value.width}:${desktopResolution.value.height} (您的桌面)`,
+      label: t("settings.aspectRatioCustom", {
+        width: desktopResolution.value.width,
+        height: desktopResolution.value.height,
+      }),
       value: customValue,
     });
   }

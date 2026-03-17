@@ -1,56 +1,54 @@
 <template>
     <div class="tip-article">
         <section class="section">
-            <h3>原生模式 vs 窗口模式</h3>
-            <p>Kabegame 提供两种壁纸显示模式：<strong>原生模式</strong>和<strong>窗口模式</strong>，各有优缺点。</p>
+            <h3>{{ $t('help.tipsContent.wallpaper-mode.compareTitle') }}</h3>
+            <p>{{ $t('help.tipsContent.wallpaper-mode.comparePara') }}</p>
 
             <div class="mode-comparison">
                 <div class="mode-card">
-                    <h4>原生模式</h4>
+                    <h4>{{ $t('help.tipsContent.wallpaper-mode.nativeTitle') }}</h4>
                     <ul>
-                        <li><strong>性能更好</strong>：直接使用系统 API 设置壁纸，资源占用低</li>
-                        <li><strong>功能有限</strong>：受系统限制，过渡效果较少（仅支持无过渡和淡入淡出）</li>
-                        <li><strong>兼容性好</strong>：所有系统都支持</li>
-                        <li><strong>壁纸显示方式</strong>：根据系统支持显示可用样式（填充、适应、拉伸等）</li>
+                        <li>{{ $t('help.tipsContent.wallpaper-mode.nativeItem1') }}</li>
+                        <li>{{ $t('help.tipsContent.wallpaper-mode.nativeItem2') }}</li>
+                        <li>{{ $t('help.tipsContent.wallpaper-mode.nativeItem3') }}</li>
+                        <li>{{ $t('help.tipsContent.wallpaper-mode.nativeItem4') }}</li>
                     </ul>
                 </div>
 
                 <div class="mode-card">
-                    <h4>窗口模式</h4>
+                    <h4>{{ $t('help.tipsContent.wallpaper-mode.windowTitle') }}</h4>
                     <ul>
-                        <li><strong>功能更灵活</strong>：类似 Wallpaper Engine，支持所有过渡效果</li>
-                        <li><strong>性能稍差</strong>：需要创建一个透明窗口覆盖桌面，资源占用稍高</li>
-                        <li><strong>Windows / macOS</strong>：桌面端支持窗口模式；Android 使用系统壁纸 API</li>
-                        <li><strong>壁纸显示方式</strong>：支持所有显示方式（填充、适应、拉伸、居中、平铺等）</li>
+                        <li>{{ $t('help.tipsContent.wallpaper-mode.windowItem1') }}</li>
+                        <li>{{ $t('help.tipsContent.wallpaper-mode.windowItem2') }}</li>
+                        <li>{{ $t('help.tipsContent.wallpaper-mode.windowItem3') }}</li>
+                        <li>{{ $t('help.tipsContent.wallpaper-mode.windowItem4') }}</li>
                     </ul>
                 </div>
             </div>
         </section>
 
         <section class="section">
-            <h3>如何切换模式</h3>
-            <p>进入<strong>"设置" → "壁纸轮播"标签</strong>，找到<strong>"壁纸模式"</strong>选项：</p>
+            <h3>{{ $t('help.tipsContent.wallpaper-mode.switchTitle') }}</h3>
+            <p>{{ $t('help.tipsContent.wallpaper-mode.switchPara1') }}</p>
             <ul>
-                <li>选择<strong>"原生模式"</strong>：使用系统 API 设置壁纸（推荐：性能好）</li>
-                <li>选择<strong>"窗口模式"</strong>：使用透明窗口显示壁纸（推荐：功能更丰富）</li>
+                <li>{{ $t('help.tipsContent.wallpaper-mode.switchItem1') }}</li>
+                <li>{{ $t('help.tipsContent.wallpaper-mode.switchItem2') }}</li>
             </ul>
-            <p>切换模式后，当前壁纸会立即重新应用，无需重启应用。</p>
+            <p>{{ $t('help.tipsContent.wallpaper-mode.switchPara2') }}</p>
             <TipImageCarousel v-if="modeSettingsImages.length > 0" :images="modeSettingsImages" />
         </section>
 
         <section class="section">
-            <h3>过渡效果的区别</h3>
+            <h3>{{ $t('help.tipsContent.wallpaper-mode.transitionTitle') }}</h3>
             <ul>
-                <li><strong>原生模式</strong>：
+                <li>{{ $t('help.tipsContent.wallpaper-mode.transitionNative1') }}
                     <ul>
-                        <li>仅支持<strong>无过渡</strong>和<strong>淡入淡出</strong></li>
-                        <li>其他过渡效果（滑动、缩放等）在原生模式下不可用</li>
+                        <li>{{ $t('help.tipsContent.wallpaper-mode.transitionNative2') }}</li>
                     </ul>
                 </li>
-                <li><strong>窗口模式</strong>：
+                <li>{{ $t('help.tipsContent.wallpaper-mode.transitionWindow1') }}
                     <ul>
-                        <li>支持<strong>所有过渡效果</strong>：无过渡、淡入淡出、滑动、缩放等（图片与视频均支持）</li>
-                        <li>过渡效果仅在<strong>轮播模式</strong>下生效（单张壁纸切换时）</li>
+                        <li>{{ $t('help.tipsContent.wallpaper-mode.transitionWindow2') }}</li>
                     </ul>
                 </li>
             </ul>
@@ -58,12 +56,12 @@
         </section>
 
         <section class="section">
-            <h3>选择建议</h3>
+            <h3>{{ $t('help.tipsContent.wallpaper-mode.suggestTitle') }}</h3>
             <ul>
-                <li><strong>追求性能</strong>：选择原生模式，资源占用低，适合大部分电脑</li>
-                <li><strong>追求效果</strong>：选择窗口模式，支持更多过渡效果，体验更丰富</li>
-                <li><strong>仅使用单张壁纸</strong>：两种模式差异不大，原生模式更省资源</li>
-                <li><strong>使用轮播</strong>：窗口模式可以体验更多过渡效果</li>
+                <li>{{ $t('help.tipsContent.wallpaper-mode.suggestItem1') }}</li>
+                <li>{{ $t('help.tipsContent.wallpaper-mode.suggestItem2') }}</li>
+                <li>{{ $t('help.tipsContent.wallpaper-mode.suggestItem3') }}</li>
+                <li>{{ $t('help.tipsContent.wallpaper-mode.suggestItem4') }}</li>
             </ul>
         </section>
     </div>

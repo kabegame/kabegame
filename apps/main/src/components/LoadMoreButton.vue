@@ -5,7 +5,7 @@
         <el-icon v-if="!loading">
           <Plus />
         </el-icon>
-        加载更多
+        {{ $t('common.loadMore') }}
       </el-button>
     </template>
     <template v-else-if="showNextPage">
@@ -13,17 +13,18 @@
         <el-icon>
           <ArrowRight />
         </el-icon>
-        进入下一页
+        {{ $t('common.enterNextPage') }}
       </el-button>
     </template>
     <template v-else>
-      <div class="load-more-placeholder">没有更多了</div>
+      <div class="load-more-placeholder">{{ $t('common.noMore') }}</div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { Plus, ArrowRight } from "@element-plus/icons-vue";
+import { useI18n } from "vue-i18n";
 
 interface Props {
   hasMore: boolean;

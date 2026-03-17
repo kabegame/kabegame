@@ -1,25 +1,25 @@
 <template>
   <div class="tip-article">
     <section class="section">
-      <h3>是什么</h3>
-      <p>当你在图片列表里滑得太快时，应用会弹出一条俏皮提示，比如：</p>
+      <h3>{{ $t('help.tipsContent.easter-egg-turtle-complaint.whatTitle') }}</h3>
+      <p>{{ $t('help.tipsContent.easter-egg-turtle-complaint.whatPara') }}</p>
       <ul>
-        <li>“你这手速开挂了吧？龟龟跟不上啦 (╥﹏╥)”</li>
-        <li>“别飙车！龟龟晕滚动条了~ (＠_＠;)”</li>
+        <li>{{ $t('help.tipsContent.easter-egg-turtle-complaint.whatItem1') }}</li>
+        <li>{{ $t('help.tipsContent.easter-egg-turtle-complaint.whatItem2') }}</li>
       </ul>
     </section>
 
     <section class="section">
-      <h3>怎么触发</h3>
+      <h3>{{ $t('help.tipsContent.easter-egg-turtle-complaint.triggerTitle') }}</h3>
       <ul>
-        <li><strong>画廊</strong>：用鼠标滚轮快速连续滚动（速度太快时会随机弹一句）。</li>
-        <li><strong>画册详情</strong>：拖拽滚动时如果“速度很快且仍在加速”，会弹一句更短的提示。</li>
+        <li>{{ $t('help.tipsContent.easter-egg-turtle-complaint.triggerItem1') }}</li>
+        <li>{{ $t('help.tipsContent.easter-egg-turtle-complaint.triggerItem2') }}</li>
       </ul>
     </section>
 
     <section class="section">
-      <h3>说明</h3>
-      <p>这是一个纯彩蛋，不影响实际加载与功能。“每张图片都值得慢慢欣赏”。</p>
+      <h3>{{ $t('help.tipsContent.easter-egg-turtle-complaint.descTitle') }}</h3>
+      <p>{{ $t('help.tipsContent.easter-egg-turtle-complaint.descPara') }}</p>
     </section>
   </div>
 </template>

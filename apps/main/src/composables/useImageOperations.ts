@@ -1,15 +1,15 @@
 import { computed, type Ref } from "vue";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { useAlbumStore } from "@/stores/albums";
 import { storeToRefs } from "pinia";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_MACOS } from "@kabegame/core/env";
 import { fileToUrl } from "@kabegame/core/httpServer";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
+import { i18n } from "@/i18n";
 
 export type FavoriteStatusChangedDetail = {
   imageIds: string[];
@@ -53,7 +53,7 @@ export function useImageOperations(
       await openLocalImage(localPath);
     } catch (error) {
       console.error("打开文件失败:", error);
-      ElMessage.error("打开文件失败");
+      ElMessage.error(i18n.global.t("common.openFileFailed"));
     }
   };
 
@@ -157,25 +157,25 @@ export function useImageOperations(
       if (localPath) {
         try {
           await invoke("copy_image_to_clipboard", { imageId: image.id });
-          ElMessage.success("图片已复制到剪贴板");
+          ElMessage.success(i18n.global.t("common.copyImageSuccess"));
           return;
         } catch (error) {
           console.error("复制图片失败:", error);
-          ElMessage.error("复制图片失败");
+          ElMessage.error(i18n.global.t("common.copyImageFailed"));
           return;
         }
       }
 
       if (!imageUrl) {
-        ElMessage.warning("图片尚未加载完成，请稍后再试");
+        ElMessage.warning(i18n.global.t("common.imageNotLoadedYet"));
         return;
       }
 
       await tryCopyByLoadedUrl(imageUrl);
-      ElMessage.success("图片已复制到剪贴板");
+      ElMessage.success(i18n.global.t("common.copyImageSuccess"));
     } catch (error) {
       console.error("复制图片失败:", error);
-      ElMessage.error("复制图片失败");
+      ElMessage.error(i18n.global.t("common.copyImageFailed"));
     }
   };
 
@@ -236,13 +236,19 @@ export function useImageOperations(
         (img) => !idSet.has(img.id),
       );
 
-      const action = deleteFiles ? "删除" : "移除";
-      ElMessage.success(`已${action} ${count} 张图片`);
+      ElMessage.success(
+        deleteFiles
+          ? i18n.global.t("common.deletedCountSuccess", { count })
+          : i18n.global.t("common.removedCountSuccess", { count }),
+      );
       galleryViewRef.value?.clearSelection?.();
     } catch (error) {
-      const action = deleteFiles ? "删除" : "移除";
-      console.error(`${action}失败:`, error);
-      ElMessage.error(`${action}失败`);
+      console.error(deleteFiles ? "删除失败:" : "移除失败:", error);
+      ElMessage.error(
+        deleteFiles
+          ? i18n.global.t("common.deleteFail")
+          : i18n.global.t("common.removeFail"),
+      );
     }
   };
 
@@ -257,7 +263,11 @@ export function useImageOperations(
         favorite: newFavorite,
       });
 
-      ElMessage.success(newFavorite ? "已收藏" : "已取消收藏");
+      ElMessage.success(
+        newFavorite
+          ? i18n.global.t("common.favorited")
+          : i18n.global.t("common.unfavorited"),
+      );
 
       // 新策略：收藏状态以 store 为准，不再通过全局事件/清缓存同步
       // 1) 更新画廊缓存（就地更新，避免全量刷新导致“加载更多”图片丢失）
@@ -282,7 +292,7 @@ export function useImageOperations(
       galleryViewRef.value?.clearSelection?.();
     } catch (error) {
       console.error("切换收藏状态失败:", error);
-      ElMessage.error("操作失败");
+      ElMessage.error(i18n.global.t("common.operationFailed"));
     }
   };
 
@@ -293,11 +303,11 @@ export function useImageOperations(
         // 多选：创建"桌面画册x"，添加到画册，开启轮播
         // 1. 找到下一个可用的"桌面画册x"名称
         await albumStore.loadAlbums();
-        let albumName = "桌面画册1";
         let counter = 1;
+        let albumName = i18n.global.t("gallery.desktopAlbumName", { n: counter });
         while (albums.value.some((a) => a.name === albumName)) {
           counter++;
-          albumName = `桌面画册${counter}`;
+          albumName = i18n.global.t("gallery.desktopAlbumName", { n: counter });
         }
 
         // 2. 创建画册
@@ -312,7 +322,9 @@ export function useImageOperations(
           const errorMessage =
             typeof error === "string"
               ? error
-              : error?.message || String(error) || "添加图片到画册失败";
+              : error?.message ||
+                String(error) ||
+                i18n.global.t("common.addToAlbumFailed");
           ElMessage.error(errorMessage);
           throw error;
         }
@@ -331,13 +343,16 @@ export function useImageOperations(
         await setWallpaperRotationAlbumId(createdAlbum.id);
 
         ElMessage.success(
-          `已开启轮播：画册「${albumName}」（${imageIds.length} 张）`,
+          i18n.global.t("gallery.rotationStartedWithCount", {
+            name: albumName,
+            count: imageIds.length,
+          }),
         );
       } else {
         // 单选：直接设置壁纸
         await setWallpaperByImageIdWithModeFallback(imagesToProcess[0].id);
         currentWallpaperImageId.value = imagesToProcess[0].id;
-        ElMessage.success("壁纸设置成功");
+        ElMessage.success(i18n.global.t("common.wallpaperSetSuccess"));
       }
 
       galleryViewRef.value?.clearSelection?.();
@@ -348,7 +363,7 @@ export function useImageOperations(
         typeof error === "string"
           ? error
           : error?.message || String(error) || "未知错误";
-      ElMessage.error(`设置壁纸失败: ${errorMessage}`);
+      ElMessage.error(`${i18n.global.t("common.wallpaperSetFailed")}: ${errorMessage}`);
     }
   };
 
@@ -364,15 +379,15 @@ export function useImageOperations(
       const defaultName = `Kabegame_${image.id}`;
 
       const { value: projectName } = await ElMessageBox.prompt(
-        `请输入 WE 工程名称（留空使用默认名称）`,
-        "导出到 Wallpaper Engine",
+        i18n.global.t("gallery.weProjectNamePrompt"),
+        i18n.global.t("gallery.exportToWE"),
         {
-          confirmButtonText: "导出",
-          cancelButtonText: "取消",
+          confirmButtonText: i18n.global.t("gallery.export"),
+          cancelButtonText: i18n.global.t("common.cancel"),
           inputPlaceholder: defaultName,
           inputValidator: (value) => {
             if (value && value.trim().length > 64) {
-              return "名称不能超过 64 个字符";
+              return i18n.global.t("gallery.weNameTooLong");
             }
             return true;
           },
@@ -385,9 +400,7 @@ export function useImageOperations(
         "get_wallpaper_engine_myprojects_dir",
       );
       if (!mp) {
-        ElMessage.warning(
-          "未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择",
-        );
+        ElMessage.warning(i18n.global.t("gallery.weDirNotConfigured"));
         return;
       }
 
@@ -414,14 +427,17 @@ export function useImageOperations(
             },
       );
       const msg = res.videoCount
-        ? `已导出 WE 视频工程：${res.projectDir}`
-        : `已导出 WE 工程（${res.imageCount} 张）：${res.projectDir}`;
+        ? i18n.global.t("gallery.weExportVideoSuccess", { path: res.projectDir })
+        : i18n.global.t("gallery.weExportSuccess", {
+            count: res.imageCount,
+            path: res.projectDir,
+          });
       ElMessage.success(msg);
       await invoke("open_file_path", { filePath: res.projectDir });
     } catch (error) {
       if (error !== "cancel") {
         console.error("导出 Wallpaper Engine 工程失败:", error);
-        ElMessage.error("导出失败");
+        ElMessage.error(i18n.global.t("common.exportFailed"));
       }
     }
   };

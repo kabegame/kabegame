@@ -12,7 +12,7 @@
       <div v-if="actualImageCount === 0 && !isLoading" class="hero-empty">
         <div class="empty-preview">
           <img src="/album-empty.png" alt="空画册" class="empty-image" />
-          <p class="empty-text">まだ空っぽだけど、これから色々お友達を作っていくのだ！</p>
+          <p class="empty-text">{{ $t('common.emptyStateTip') }}</p>
         </div>
       </div>
       <div v-if="isLoading && actualImageCount === 0" class="hero-loading-full">
@@ -28,8 +28,8 @@
         <div v-else class="title" @click.stop @dblclick="handleStartRename">{{ album.name }}</div>
       </div>
       <div class="meta">
-        <span>{{ count }} 张</span>
-        <span v-if="album.createdAt">· 创建 {{ formatDate(album.createdAt) }}</span>
+        <span>{{ $t('albums.albumCount', { count }) }}</span>
+        <span v-if="album.createdAt">{{ $t('albums.createdAtPrefix', { date: formatDate(album.createdAt) }) }}</span>
       </div>
     </div>
   </div>
@@ -37,6 +37,7 @@
 
 <script setup lang="ts">
 import { computed, ref, nextTick, onMounted, onUnmounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { ElMessage } from "element-plus";
 import type { Album } from "@/stores/albums";
 import { Loading } from "@element-plus/icons-vue";
@@ -56,6 +57,7 @@ const props = withDefaults(defineProps<Props>(), {
   isLoading: false,
 });
 
+const { t } = useI18n();
 const albumStore = useAlbumStore();
 const isRenaming = ref(false);
 const renameValue = ref("");
@@ -127,7 +129,7 @@ const handleStartRename = (event?: MouseEvent) => {
 
 const handleRenameConfirm = async () => {
   if (!renameValue.value.trim()) {
-    ElMessage.warning("画册名称不能为空");
+    ElMessage.warning(t('albums.albumNameCannotBeEmpty'));
     return;
   }
   if (renameValue.value.trim() === props.album.name) {
@@ -137,7 +139,7 @@ const handleRenameConfirm = async () => {
   try {
     await albumStore.renameAlbum(props.album.id, renameValue.value.trim());
     isRenaming.value = false;
-    ElMessage.success("重命名成功");
+    ElMessage.success(t('albums.renameSuccess'));
   } catch (error: any) {
     console.error("重命名失败:", error);
     // 提取友好的错误信息

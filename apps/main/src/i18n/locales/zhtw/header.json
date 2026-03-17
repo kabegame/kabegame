@@ -1,0 +1,18 @@
+{
+  "help": "說明",
+  "quickSettings": "快速設定",
+  "refresh": "重新整理",
+  "stopTask": "停止任務",
+  "deleteTask": "刪除任務",
+  "organize": "整理",
+  "collect": "收集",
+  "createAlbum": "新增畫冊",
+  "openVirtualDrive": "前往 VD 檢視",
+  "addToAlbum": "加入畫冊",
+  "setAsWallpaperCarousel": "設為輪播桌布",
+  "deleteAlbum": "刪除畫冊",
+  "importSource": "匯入源",
+  "manageSources": "管理源",
+  "gallerySort": "依時間排序",
+  "openCrawlerWebview": "爬蟲 WebView 視窗"
+}

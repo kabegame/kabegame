@@ -1,0 +1,18 @@
+{
+  "help": "Help",
+  "quickSettings": "Quick settings",
+  "refresh": "Refresh",
+  "stopTask": "Stop task",
+  "deleteTask": "Delete task",
+  "organize": "Organize",
+  "collect": "Collect",
+  "createAlbum": "New album",
+  "openVirtualDrive": "View in VD",
+  "addToAlbum": "Add to album",
+  "setAsWallpaperCarousel": "Set as wallpaper carousel",
+  "deleteAlbum": "Delete album",
+  "importSource": "Import source",
+  "manageSources": "Manage sources",
+  "gallerySort": "Sort by time",
+  "openCrawlerWebview": "Crawler WebView window"
+}

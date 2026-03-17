@@ -5,6 +5,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import {
     InfoFilled,
     DocumentCopy,
@@ -32,71 +33,72 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
     hide: () => [],
-    removeText: "删除",
+    removeText: "",
 });
+const { t } = useI18n();
 
 // 静态菜单项列表模板
 const getMenuItemsTemplate = (image: ImageInfo | null, removeText: string): MenuItem[] => [
     {
         key: "detail",
         type: "item",
-        label: "详情",
+        label: t("contextMenu.detail"),
         icon: InfoFilled,
         command: "detail",
     },
     {
         key: "favorite",
         type: "item",
-        label: image?.favorite ? "取消收藏" : "收藏",
+        label: image?.favorite ? t("contextMenu.unfavorite") : t("contextMenu.favorite"),
         icon: image?.favorite ? StarFilled : Star,
         command: "favorite",
     },
     {
         key: "copy",
         type: "item",
-        label: "复制图片",
+        label: t("contextMenu.copyImage"),
         icon: DocumentCopy,
         command: "copy",
     },
     {
         key: "open",
         type: "item",
-        label: "仔细欣赏",
+        label: t("contextMenu.open"),
         icon: FolderOpened,
         command: "open",
     },
     {
         key: "openFolder",
         type: "item",
-        label: "欣赏更多",
+        label: t("contextMenu.openFolder"),
         icon: Folder,
         command: "openFolder",
     },
     {
         key: "wallpaper",
         type: "item",
-        label: "抱到桌面上",
+        label: t("contextMenu.wallpaper"),
         icon: Picture,
         command: "wallpaper",
     },
     {
         key: "addToAlbum",
         type: "item",
-        label: "加入画册",
+        label: t("contextMenu.addToAlbum"),
         icon: FolderAdd,
         command: "addToAlbum",
     },
     {
         key: "more",
         type: "item",
-        label: "更多",
+        label: t("contextMenu.more"),
         icon: More,
         children: IS_WINDOWS
             ? [
                 {
                     key: "exportToWEAuto",
                     type: "item",
-                    label: "导出到wallpaper engine",
+                    label: t("contextMenu.exportToWE"),
                     // 注意：仅 Windows 构建才会保留这一分支（配合 __WINDOWS__ 的 define 做 DCE）
                     icon: Download,
                     command: "exportToWEAuto",
@@ -116,7 +118,7 @@ const getMenuItemsTemplate = (image: ImageInfo | null, removeText: string): Menu
 
 const menuItems = computed<MenuItem[]>(() => {
     const hideSet = new Set(props.hide);
-    const items = getMenuItemsTemplate(props.image, props.removeText);
+    const items = getMenuItemsTemplate(props.image, props.removeText || t("common.delete"));
 
     // 根据 hide 列表过滤菜单项
     return items.filter((item) => {

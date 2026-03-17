@@ -5,8 +5,8 @@
         v-if="IS_ANDROID"
         :model-value="albumPickerValue"
         :options="albumPickerOptions"
-        title="选择用于轮播的画册"
-        placeholder="选择用于轮播的画册"
+        :title="t('settings.rotationTargetTitle')"
+        :placeholder="t('settings.rotationTargetPlaceholder')"
         :disabled="disabled || keyDisabled || wallpaperModeSwitching"
         @update:model-value="(v) => handleAlbumChange(v ?? '')"
       />
@@ -16,14 +16,14 @@
         class="album-select"
         :loading="albumStore.loading || showDisabled"
         :disabled="disabled || keyDisabled || wallpaperModeSwitching"
-        placeholder="选择用于轮播的画册"
+        :placeholder="t('settings.rotationTargetPlaceholder')"
         style="min-width: 180px"
         @change="handleAlbumChange"
       >
         <el-option value="">
           <div class="gallery-option">
-            <div class="gallery-option__title">全画廊</div>
-            <div class="gallery-option__desc">从画廊图片中轮播（从当前壁纸开始）</div>
+            <div class="gallery-option__title">{{ t('settings.rotationTargetAllGallery') }}</div>
+            <div class="gallery-option__desc">{{ t('settings.rotationTargetAllGalleryDesc') }}</div>
           </div>
         </el-option>
         <el-option v-for="a in albumStore.albums" :key="a.id" :label="a.name" :value="a.id" />
@@ -34,12 +34,15 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { ElMessage } from "element-plus";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_ANDROID } from "@kabegame/core/env";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 import { useAlbumStore } from "@/stores/albums";
 import { useUiStore } from "@kabegame/core/stores/ui";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   disabled?: boolean;
@@ -57,7 +60,7 @@ const {
 
 const albumPickerValue = computed(() => (settingValue.value as string) ?? "");
 const albumPickerOptions = computed(() => [
-  { label: "全画廊", value: "" },
+  { label: t("settings.rotationTargetAllGallery"), value: "" },
   ...albumStore.albums.map((a) => ({ label: a.name, value: a.id })),
 ]);
 
@@ -70,7 +73,7 @@ const handleAlbumChange = async (value: string) => {
   try {
     await set(value);
   } catch (e: any) {
-    ElMessage.error(`设置失败：${e?.message || String(e)}`);
+    ElMessage.error(t("settings.messageSetFailed", { msg: e?.message || String(e) }));
   }
 };
 </script>

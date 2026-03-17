@@ -1,21 +1,21 @@
 <template>
     <div class="help-container">
-        <PageHeader title="도움말" subtitle="お互いに理解を深めましょう" sticky />
+        <PageHeader :title="$t('help.pageTitle')" :subtitle="$t('help.pageSubtitle')" sticky />
 
         <StyledTabs v-model="activeTab" sticky>
-            <el-tab-pane label="使用技巧" name="tips">
+            <el-tab-pane :label="$t('help.tipsTab')" name="tips">
                 <el-card class="help-card">
                     <template #header>
                         <div class="tips-header">
-                            <span>使用技巧</span>
-                            <el-button v-if="selectedTip" @click="closeTipDetail" plain size="small">返回列表</el-button>
+                            <span>{{ $t('help.tipsTitle') }}</span>
+                            <el-button v-if="selectedTip" @click="closeTipDetail" plain size="small">{{ $t('help.backToList') }}</el-button>
                         </div>
                     </template>
 
                     <!-- 列表：目录分类 + 下拉折叠 -->
                     <div v-if="!selectedTip" class="tips-list">
                         <el-alert class="help-alert" type="info" show-icon :closable="false">
-                            点击任意表项进入详情。
+                            {{ $t('help.clickToDetail') }}
                         </el-alert>
 
                         <el-collapse v-model="expandedCategoryIds">
@@ -31,7 +31,7 @@
                                     </div>
                                 </template>
 
-                                <el-table :data="c.tips" size="small" style="width: 100%" empty-text="暂无技巧"
+                                <el-table :data="c.tips" size="small" style="width: 100%" :empty-text="$t('help.noTips')"
                                     :show-header="false" @row-click="handleTipRowClick" row-class-name="tip-row">
                                     <el-table-column min-width="460">
                                         <template #default="{ row }">
@@ -88,19 +88,19 @@
                     </div>
                 </el-card>
             </el-tab-pane>
-            <el-tab-pane label="快捷键" name="shortcuts">
+            <el-tab-pane :label="$t('help.shortcutsTab')" name="shortcuts">
                 <el-card class="help-card">
                     <template #header>
-                        <span>快捷键帮助</span>
+                        <span>{{ $t('help.shortcutHelpTitle') }}</span>
                     </template>
 
                     <el-alert class="help-alert" type="info" show-icon :closable="false">
-                        说明：部分快捷键仅在图片网格获得焦点时生效（先在网格空白处/图片上点一下）。
+                        {{ $t('help.shortcutNote') }}
                     </el-alert>
 
                     <div class="help-list">
-                        <SettingRow v-for="item in shortcutItems" :key="item.id" :label="item.label"
-                            :description="item.description">
+                        <SettingRow v-for="item in shortcutItems" :key="item.id" :label="$t(item.labelKey)"
+                            :description="$t(item.descriptionKey)">
                             <div class="shortcut-keys">
                                 <span v-for="(k, idx) in item.keys" :key="idx" class="kbd">{{ k }}</span>
                             </div>
@@ -119,23 +119,21 @@ import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import StyledTabs from "@/components/common/StyledTabs.vue";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import { ArrowRight } from "@element-plus/icons-vue";
-import { TIP_CATEGORIES, type Tip, type TipCategoryId, type TipId } from "@/help/tipsRegistry";
-import { IS_MACOS } from "@kabegame/core/env";
-
-type ShortcutItem = {
-    id: string;
-    label: string;
-    description: string;
-    keys: string[];
-};
+import { getTipCategories, type Tip, type TipCategoryId, type TipId } from "@/help/tipsRegistry";
+import { getHelpGroups } from "@/help/helpRegistry";
+import { useI18n } from "vue-i18n";
 
 const route = useRoute();
 const router = useRouter();
 
 const activeTab = ref<string>("tips");
+const { t, locale } = useI18n();
 
-// 使用技巧：目录分类 + 点击进入详情
-const tipCategories = TIP_CATEGORIES;
+// 使用技巧：目录分类 + 点击进入详情（随语言切换更新）
+const tipCategories = computed(() => {
+  void locale.value;
+  return getTipCategories(t);
+});
 const selectedTipId = ref<string | null>(null);
 const expandedCategoryIds = ref<TipCategoryId[]>(["gallery"]);
 
@@ -154,7 +152,7 @@ watch(
             activeTab.value = "tips";
             selectedTipId.value = tipId;
             // 自动展开包含该 tip 的分类
-            for (const category of tipCategories) {
+            for (const category of tipCategories.value) {
                 if (category.tips.some((t) => t.id === tipId)) {
                     if (!expandedCategoryIds.value.includes(category.id)) {
                         expandedCategoryIds.value = [...expandedCategoryIds.value, category.id];
@@ -172,7 +170,7 @@ watch(
 
 const selectedTip = computed<Tip | null>(() => {
     if (!selectedTipId.value) return null;
-    for (const category of tipCategories) {
+    for (const category of tipCategories.value) {
         const tip = category.tips.find((t) => t.id === selectedTipId.value);
         if (tip) return tip;
     }
@@ -189,78 +187,10 @@ const closeTipDetail = () => {
     router.push("/help");
 };
 
-// 仅收录"代码中确实绑定并生效"的快捷键，避免误导用户：
-// - 图片网格（packages/core/src/components/image/ImageGrid.vue）
-// - 图片预览（packages/core/src/components/common/ImagePreviewDialog.vue）
-const shortcutItems = computed<ShortcutItem[]>(() => {
-    return [
-        {
-            id: "global-fullscreen",
-            label: "切换全屏",
-            description: "切换应用的全屏显示模式",
-            keys: IS_MACOS ? ["Control", "Command", "F"] : ["F11"],
-        },
-        {
-            id: "grid-zoom-wheel",
-        label: "调整网格列数",
-        description: "按住 Ctrl（macOS 为 Cmd）并滚动鼠标滚轮，可快速调整图片网格的列数",
-            keys: ["Ctrl/Cmd", "滚轮"],
-        },
-        {
-            id: "grid-zoom-plus-minus",
-            label: "调整网格列数",
-            description: "按住 Ctrl（macOS 为 Cmd）并按 +/-（或 =），可调整图片网格的列数",
-            keys: ["Ctrl/Cmd", "+ / -（或 =）"],
-        },
-        {
-            id: "grid-select-all",
-            label: "全选",
-            description: "在图片网格中快速全选当前页面的所有图片",
-            keys: ["Ctrl/Cmd", "A"],
-        },
-        {
-            id: "grid-clear-selection",
-            label: "清空选择",
-            description: "清空已选择的图片，并关闭可能打开的右键菜单",
-            keys: ["Esc"],
-        },
-        {
-            id: "grid-delete",
-            label: "删除选中图片",
-            description: "在图片网格中删除当前选中的图片（会进入应用的删除流程/确认）",
-            keys: ["Delete / Backspace"],
-        },
-        {
-            id: "grid-select-range",
-            label: "范围选择",
-            description: "在网格中按住 Shift 点击图片，可按上次选择位置进行范围选择",
-            keys: ["Shift", "点击"],
-        },
-        {
-            id: "grid-toggle-select",
-            label: "多选/取消选择",
-            description: "在网格中按住 Ctrl（macOS 为 Cmd）点击图片，可切换该图片的选择状态",
-            keys: ["Ctrl/Cmd", "点击"],
-        },
-        {
-            id: "preview-prev-next",
-            label: "预览上一张/下一张",
-            description: "在图片预览对话框中切换上一张/下一张",
-            keys: ["←", "→"],
-        },
-        {
-            id: "copy-image",
-            label: "复制图片",
-            description: "在图片预览对话框中，或图片网格单选时，复制当前图片到剪贴板",
-            keys: ["Ctrl/Cmd", "C"],
-        },
-        {
-            id: "preview-delete",
-            label: "预览中删除",
-            description: "在图片预览对话框中快速删除当前图片（会进入应用的删除流程/确认）",
-            keys: ["Delete / Backspace"],
-        },
-    ];
+// 从 helpRegistry 获取快捷键列表（含 i18n key），展平为单列表
+const shortcutItems = computed(() => {
+    const groups = getHelpGroups();
+    return groups.flatMap((g) => g.items).filter((it) => it.labelKey && it.descriptionKey);
 });
 </script>
 

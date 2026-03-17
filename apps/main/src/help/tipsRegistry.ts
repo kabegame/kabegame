@@ -1,4 +1,5 @@
 import type { Component } from "vue";
+import { i18n } from "@/i18n";
 import TipImportDragDrop from "@/help/tips/gallery/TipImportDragDrop.vue";
 import TipGalleryBrowsing from "@/help/tips/gallery/TipGalleryBrowsing.vue";
 import TipGalleryPreview from "@/help/tips/gallery/TipGalleryPreview.vue";
@@ -23,11 +24,17 @@ import TipTaskIntroduction from "@/help/tips/tasks/TipTaskIntroduction.vue";
 
 import { IS_ANDROID, IS_LIGHT_MODE } from "@kabegame/core/env";
 
-const lightModeTags = IS_ANDROID 
-  ? [{ text: "安卓无", type: "danger" as const }] 
-  : IS_LIGHT_MODE
-    ? [{ text: "Light 模式不可用", type: "danger" as const }]
-    : [];
+type TranslateFn = (key: string) => string;
+
+function getLightModeTags(t: TranslateFn) {
+  if (IS_ANDROID) {
+    return [{ text: t("help.tips.tag.androidUnavailable"), type: "danger" as const }];
+  }
+  if (IS_LIGHT_MODE) {
+    return [{ text: t("help.tips.tag.lightModeUnavailable"), type: "danger" as const }];
+  }
+  return [];
+}
 
 export type TipCategoryId =
   | "gallery"
@@ -95,215 +102,206 @@ export type TipCategory = {
   tips: Tip[]; // 该分类下的所有技巧
 };
 
-export const TIP_CATEGORIES: TipCategory[] = [
-  {
-    id: "gallery",
-    title: "画廊",
-    description: "查看和管理收集到的图片",
+export function getTipCategories(t: TranslateFn): TipCategory[] {
+  const lightTags = getLightModeTags(t);
+  return [
+    {
+      id: "gallery",
+      title: t("help.tips.category.gallery.title"),
+      description: t("help.tips.category.gallery.description"),
     tips: [
       {
         id: "import-drag-drop",
-        title: "拖入本地文件快速导入",
-        summary:
-          "拖入窗口或画廊右上角「开始收集」→ 本地，将图片/文件夹导入到画廊（可选同时创建画册）。桌面支持拖入与选择文件，安卓通过媒体选择器导入。",
+        title: t("help.tips.item.import-drag-drop.title"),
+        summary: t("help.tips.item.import-drag-drop.summary"),
         component: TipImportDragDrop,
       },
       {
         id: "gallery-browsing",
-        title: "画廊浏览方法",
-        summary:
-          "了解如何查看图片总数、使用分页浏览大量图片，以及使用去重功能清理重复图片。",
+        title: t("help.tips.item.gallery-browsing.title"),
+        summary: t("help.tips.item.gallery-browsing.summary"),
         component: TipGalleryBrowsing,
       },
       {
         id: "gallery-preview",
-        title: "双击应用内预览",
-        summary:
-          "启用后双击图片即可在应用内查看大图，支持缩放、拖拽、切换图片等操作，无需打开系统图片查看器。",
+        title: t("help.tips.item.gallery-preview.title"),
+        summary: t("help.tips.item.gallery-preview.summary"),
         component: TipGalleryPreview,
       },
     ],
   },
   {
     id: "albums",
-    title: "画册",
-    description: "创建和管理画册，整理和分类图片",
+    title: t("help.tips.category.albums.title"),
+    description: t("help.tips.category.albums.description"),
     tips: [
       {
         id: "albums-introduction",
-        title: "画册说明",
-        summary:
-          "画册用于整理和分类图片，可以创建画册、添加图片、设为壁纸轮播等。",
+        title: t("help.tips.item.albums-introduction.title"),
+        summary: t("help.tips.item.albums-introduction.summary"),
         component: TipAlbumsIntroduction,
       },
     ],
   },
   {
     id: "wallpaper",
-    title: "壁纸",
-    description: "设置桌面壁纸、轮播和显示模式",
+    title: t("help.tips.category.wallpaper.title"),
+    description: t("help.tips.category.wallpaper.description"),
     tips: [
       {
         id: "wallpaper-basic",
-        title: "基本壁纸设置方法",
-        summary: "右键图片选择「抱到桌面上」，快速设置单张壁纸。",
+        title: t("help.tips.item.wallpaper-basic.title"),
+        summary: t("help.tips.item.wallpaper-basic.summary"),
         component: TipWallpaperBasic,
       },
       {
         id: "wallpaper-rotation",
-        title: "轮播 vs 非轮播",
-        summary: "了解轮播模式和非轮播模式的区别，以及如何开启/关闭轮播。",
+        title: t("help.tips.item.wallpaper-rotation.title"),
+        summary: t("help.tips.item.wallpaper-rotation.summary"),
         component: TipWallpaperRotation,
       },
       {
         id: "wallpaper-mode",
-        title: "原生模式 vs 窗口模式",
-        summary: "两种壁纸显示模式的区别：原生模式性能好，窗口模式功能更丰富；Windows / macOS 支持窗口模式。",
+        title: t("help.tips.item.wallpaper-mode.title"),
+        summary: t("help.tips.item.wallpaper-mode.summary"),
         component: TipWallpaperMode,
       },
       {
         id: "wallpaper-window-video",
-        title: "窗口模式与视频壁纸、应用关闭说明",
-        summary: "窗口模式下可设置视频/GIF 壁纸；应用完全退出后壁纸会消失，保持运行即可持续显示。",
+        title: t("help.tips.item.wallpaper-window-video.title"),
+        summary: t("help.tips.item.wallpaper-window-video.summary"),
         component: TipWallpaperWindowVideo,
       },
     ],
   },
   {
     id: "plugins",
-    title: "插件",
-    description: "源插件的安装、商店源与插件编辑器",
+    title: t("help.tips.category.plugins.title"),
+    description: t("help.tips.category.plugins.description"),
     tips: [
       {
         id: "plugin-introduction",
-        title: "什么是插件？",
-        summary:
-          "插件是 Kabegame 的核心功能，用于从各种网站收集图片资源。了解插件的基本概念、文件格式、类型和作用。",
+        title: t("help.tips.item.plugin-introduction.title"),
+        summary: t("help.tips.item.plugin-introduction.summary"),
         component: TipPluginIntroduction,
       },
       {
         id: "plugin-store-basics",
-        title: "插件商店与商店源怎么用",
-        summary:
-          '在"源管理"里安装/更新源插件，并通过添加商店源获得可安装列表。',
+        title: t("help.tips.item.plugin-store-basics.title"),
+        summary: t("help.tips.item.plugin-store-basics.summary"),
         component: TipPluginStoreBasics,
       },
       {
         id: "plugin-import",
-        title: "插件导入方法",
-        summary:
-          "四种方式导入 .kgpg 插件文件：双击文件、拖入窗口、从源管理页面导入、通过插件编辑器编写并导入。",
+        title: t("help.tips.item.plugin-import.title"),
+        summary: t("help.tips.item.plugin-import.summary"),
         component: TipPluginImport,
       },
       {
         id: "plugin-usage",
-        title: "如何使用插件收集图片",
-        summary:
-          "在画廊页面打开收集对话框，选择插件、配置参数、设置输出目录和画册，然后开始收集任务。",
+        title: t("help.tips.item.plugin-usage.title"),
+        summary: t("help.tips.item.plugin-usage.summary"),
         component: TipPluginUsage,
       },
     ],
   },
   {
     id: "tasks",
-    title: "任务",
-    description: "查看和管理收集任务",
+    title: t("help.tips.category.tasks.title"),
+    description: t("help.tips.category.tasks.description"),
     tips: [
       {
         id: "task-introduction",
-        title: "任务说明",
-        summary:
-          "了解任务是什么、任务做了什么，以及最大运行任务数量和并发下载限制。",
+        title: t("help.tips.item.task-introduction.title"),
+        summary: t("help.tips.item.task-introduction.summary"),
         component: TipTaskIntroduction,
       },
       {
         id: "task-viewing",
-        title: "查看任务信息、状态以及图片",
-        summary:
-          "了解如何通过任务抽屉和任务详情页查看任务信息、状态以及已收集的图片。",
+        title: t("help.tips.item.task-viewing.title"),
+        summary: t("help.tips.item.task-viewing.summary"),
         component: TipTaskViewing,
       },
       {
         id: "task-management",
-        title: "任务的创建、删除和终止方法",
-        summary:
-          "了解如何创建收集任务、终止正在运行的任务，以及删除任务（包括批量删除）。",
+        title: t("help.tips.item.task-management.title"),
+        summary: t("help.tips.item.task-management.summary"),
         component: TipTaskManagement,
       },
     ],
   },
   {
     id: "tray",
-    title: "托盘",
-    description: "系统托盘图标的位置和功能说明",
+    title: t("help.tips.category.tray.title"),
+    description: t("help.tips.category.tray.description"),
     tips: [
       {
         id: "tray-introduction",
-        title: "托盘位置及功能",
-        summary:
-          "了解系统托盘图标的位置、左键/右键功能，以及托盘菜单的各项功能。",
+        title: t("help.tips.item.tray-introduction.title"),
+        summary: t("help.tips.item.tray-introduction.summary"),
         component: TipTrayIntroduction,
       },
     ],
   },
   {
     id: "virtual-driver",
-    title: "虚拟盘（VD）",
-    description: "在资源管理器里像磁盘一样浏览画册（Windows）",
-    tags: lightModeTags,
+    title: t("help.tips.category.virtual-driver.title"),
+    description: t("help.tips.category.virtual-driver.description"),
+    tags: lightTags,
     tips: [
       {
         id: "virtual-driver-basics",
-        title: "用虚拟盘在资源管理器里浏览图片",
-        summary: "开启“画册盘”后，可在资源管理器中文件方式浏览画册与图片文件。",
+        title: t("help.tips.item.virtual-driver-basics.title"),
+        summary: t("help.tips.item.virtual-driver-basics.summary"),
         component: TipVirtualDriveBasics,
-        tags: lightModeTags,
+        tags: lightTags,
       },
       {
         id: "virtual-driver-directories",
-        title: "虚拟盘各目录说明",
-        summary:
-          "了解虚拟盘根目录下的各个目录（全部、按插件、按时间、按任务、画册）的用途和使用场景。",
+        title: t("help.tips.item.virtual-driver-directories.title"),
+        summary: t("help.tips.item.virtual-driver-directories.summary"),
         component: TipVirtualDriveDirectories,
-        tags: lightModeTags,
+        tags: lightTags,
       },
     ],
   },
   {
     id: "command-line",
-    title: "命令行",
-    description: "使用命令行工具运行插件、打包和导入插件",
-    tags: lightModeTags,
+    title: t("help.tips.category.command-line.title"),
+    description: t("help.tips.category.command-line.description"),
+    tags: lightTags,
     tips: [
       {
         id: "command-line-basics",
-        title: "命令行基本说明",
-        summary:
-          "了解 Kabegame CLI 工具的基本用法，包括如何运行插件、打包插件和导入插件。",
+        title: t("help.tips.item.command-line-basics.title"),
+        summary: t("help.tips.item.command-line-basics.summary"),
         component: TipCommandLineBasics,
-        tags: lightModeTags,
+        tags: lightTags,
       },
       {
         id: "command-line-examples",
-        title: "常用命令示例",
-        summary:
-          "实用的命令行操作示例：导入单张图片、导入文件夹到画廊等常用场景。",
+        title: t("help.tips.item.command-line-examples.title"),
+        summary: t("help.tips.item.command-line-examples.summary"),
         component: TipCommandLineExamples,
-        tags: lightModeTags,
+        tags: lightTags,
       },
     ],
   },
   {
     id: "easter-egg",
-    title: "彩蛋",
-    description: "一些不影响功能的小惊喜",
+    title: t("help.tips.category.easter-egg.title"),
+    description: t("help.tips.category.easter-egg.description"),
     tips: [
       {
         id: "easter-egg-turtle-complaint",
-        title: "快速滑动会触发龟龟的埋怨",
-        summary: "在画廊/画册里滑得太快，会出现「龟龟跟不上」的俏皮提示。",
+        title: t("help.tips.item.easter-egg-turtle-complaint.title"),
+        summary: t("help.tips.item.easter-egg-turtle-complaint.summary"),
         component: TipEasterEggTurtleComplaint,
       },
     ],
   },
-];
+  ];
+}
+
+/** @deprecated Use getTipCategories(t) for locale-aware categories */
+export const TIP_CATEGORIES = getTipCategories(i18n.global.t);

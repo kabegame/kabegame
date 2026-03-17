@@ -8,7 +8,7 @@
         :step="10000"
         controls-position="right"
       />
-      <span class="hint">张</span>
+      <span class="hint">{{ $t('settings.debugCountUnit') }}</span>
 
       <el-input-number
         v-model="poolSize"
@@ -17,7 +17,7 @@
         :step="100"
         controls-position="right"
       />
-      <span class="hint">池大小</span>
+      <span class="hint">{{ $t('settings.debugPoolSize') }}</span>
 
       <el-input-number
         v-model="seed"
@@ -25,12 +25,12 @@
         :max="9007199254740991"
         :step="1"
         controls-position="right"
-        placeholder="seed(可选)"
+        :placeholder="$t('settings.debugSeedPlaceholder')"
       />
       <span class="hint">seed</span>
 
       <el-button type="warning" :loading="loading" @click="run">
-        生成测试图片
+        {{ $t('settings.debugRunButton') }}
       </el-button>
     </div>
 
@@ -48,17 +48,20 @@
     </div>
 
     <div class="tips">
-      <div>说明：</div>
-      <div>- 仅开发模式可见；会在 SQLite 里批量插入图片记录（id 唯一）。</div>
-      <div>- 大数量可能需要较长时间，完成后请到画廊刷新/重新进入查看效果。</div>
+      <div>{{ $t('settings.debugTipsTitle') }}</div>
+      <div>- {{ $t('settings.debugTipsLine1') }}</div>
+      <div>- {{ $t('settings.debugTipsLine2') }}</div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
+
+const { t } = useI18n();
 
 const count = ref<number>(200000);
 const poolSize = ref<number>(2000);
@@ -107,15 +110,15 @@ const run = async () => {
   const s = seed.value === null ? null : Math.floor(seed.value || 0);
 
   if (c <= 0) {
-    ElMessage.warning("请输入要生成的数量");
+    ElMessage.warning(t("settings.debugMessageInputCount"));
     return;
   }
 
   try {
     await ElMessageBox.confirm(
-      `将生成 ${c.toLocaleString()} 条图片记录用于测试（仅写入数据库，不会复制文件）。\n\n继续？`,
-      "确认生成测试数据",
-      { type: "warning", confirmButtonText: "开始生成", cancelButtonText: "取消" }
+      t("settings.debugConfirmMessage", { count: c.toLocaleString() }),
+      t("settings.debugConfirmTitle"),
+      { type: "warning", confirmButtonText: t("settings.debugConfirmOk"), cancelButtonText: t("common.cancel") }
     );
   } catch (e) {
     if (e !== "cancel") {
@@ -133,11 +136,11 @@ const run = async () => {
       poolSize: p,
       seed: s === null ? undefined : s,
     });
-    ElMessage.success(`已生成 ${res.inserted.toLocaleString()} 条测试图片记录`);
+    ElMessage.success(t("settings.debugSuccess", { count: res.inserted.toLocaleString() }));
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("生成测试图片失败:", e);
-    ElMessage.error("生成测试图片失败（请看控制台/后端日志）");
+    ElMessage.error(t("settings.debugFailed"));
   } finally {
     loading.value = false;
   }

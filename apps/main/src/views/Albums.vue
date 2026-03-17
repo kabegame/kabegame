@@ -20,7 +20,7 @@
             @contextmenu.prevent="openAlbumContextMenu($event, album)" />
         </transition-group>
 
-        <div v-if="!loading && albums.length === 0" class="empty-tip">暂无画册，点击右上角创建</div>
+        <div v-if="!loading && albums.length === 0" class="empty-tip">{{ $t('albums.emptyTip') }}</div>
       </div>
     </div>
 
@@ -33,11 +33,11 @@
       @close="albumMenu.hide"
       @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename')" />
 
-    <el-dialog v-model="showCreateDialog" title="新建画册" width="360px">
-      <el-input v-model="newAlbumName" placeholder="输入画册名称" />
+    <el-dialog v-model="showCreateDialog" :title="$t('albums.newAlbum')" width="360px">
+      <el-input v-model="newAlbumName" :placeholder="$t('albums.placeholderName')" />
       <template #footer>
-        <el-button @click="showCreateDialog = false">取消</el-button>
-        <el-button type="primary" :disabled="!newAlbumName.trim()" @click="handleCreateAlbum">创建</el-button>
+        <el-button @click="showCreateDialog = false">{{ $t('common.cancel') }}</el-button>
+        <el-button type="primary" :disabled="!newAlbumName.trim()" @click="handleCreateAlbum">{{ $t('albums.create') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -66,9 +66,11 @@ import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyStat
 import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { useI18n } from "vue-i18n";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { fileToUrl, thumbnailToUrl } from "@kabegame/core/httpServer";
 
+const { t } = useI18n();
 const albumStore = useAlbumStore();
 const { albums, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const router = useRouter();
@@ -299,10 +301,10 @@ const handleRefresh = async () => {
     for (const album of albumsToPreload) {
       prefetchPreview(album);
     }
-    ElMessage.success("刷新成功");
+    ElMessage.success(t("albums.refreshSuccess"));
   } catch (error) {
     console.error("刷新失败:", error);
-    ElMessage.error("刷新失败");
+    ElMessage.error(t("albums.refreshFailed"));
   } finally {
     isRefreshing.value = false;
   }
@@ -323,7 +325,7 @@ const handleCreateAlbum = async () => {
     // 提取友好的错误信息
     const errorMessage = typeof error === "string"
       ? error
-      : error?.message || String(error) || "创建画册失败";
+      : error?.message || String(error) || t("albums.createAlbumFailed");
     ElMessage.error(errorMessage);
   }
 };
@@ -459,10 +461,10 @@ const handleAlbumMenuCommand = async (
       if (!wallpaperRotationEnabled.value) await setWallpaperRotationEnabled(true);
       // 设置轮播画册
       await setWallpaperRotationAlbumId(id);
-      ElMessage.success(`已开启轮播：画册「${name}」`);
+      ElMessage.success(t("albums.rotationStarted", { name }));
     } catch (error) {
       console.error("设置轮播画册失败:", error);
-      ElMessage.error("设置失败");
+      ElMessage.error(t("albums.setFailed"));
     }
     return;
   }
@@ -478,14 +480,14 @@ const handleAlbumMenuCommand = async (
 
   // 检查是否为"收藏"画册（使用固定ID）
   if (id === FAVORITE_ALBUM_ID.value) {
-    ElMessage.warning("不能删除'收藏'画册");
+    ElMessage.warning(t("albums.cannotDeleteFavorite"));
     return;
   }
 
   try {
     await ElMessageBox.confirm(
-      `确定要删除画册"${name}"吗？此操作仅删除画册及其关联，不会删除图片文件。`,
-      "确认删除",
+      t("albums.deleteAlbumConfirm", { name }),
+      t("albums.confirmDelete"),
       { type: "warning" }
     );
     await albumStore.deleteAlbum(id);
@@ -493,11 +495,11 @@ const handleAlbumMenuCommand = async (
     await handleDeletedRotationAlbum(id);
     clearAlbumPreviewCache(id);
     await albumStore.loadAlbums();
-    ElMessage.success("画册已删除");
+    ElMessage.success(t("albums.albumDeleted"));
   } catch (error) {
     if (error !== "cancel") {
       console.error("删除画册失败:", error);
-      ElMessage.error("删除失败");
+      ElMessage.error(t("albums.deleteFailed"));
     }
   }
 };

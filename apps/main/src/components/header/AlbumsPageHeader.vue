@@ -1,6 +1,6 @@
 <template>
   <PageHeader
-    title="画册"
+    :title="t('albums.title')"
     :show="showIds"
     :fold="foldIds"
     @action="handleAction"
@@ -9,9 +9,12 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_ANDROID } from "@kabegame/core/env";
+
+const { t } = useI18n();
 
 const props = withDefaults(
   defineProps<{ albumDriveEnabled?: boolean }>(),

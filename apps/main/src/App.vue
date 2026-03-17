@@ -33,37 +33,37 @@
             <el-icon>
               <Picture />
             </el-icon>
-            <span>画廊</span>
+            <span>{{ $t('route.gallery') }}</span>
           </el-menu-item>
           <el-menu-item index="/albums">
             <el-icon>
               <Collection />
             </el-icon>
-            <span>画册</span>
+            <span>{{ $t('route.albums') }}</span>
           </el-menu-item>
           <el-menu-item index="/plugin-browser">
             <el-icon>
               <Grid />
             </el-icon>
-            <span>收集源</span>
+            <span>{{ $t('route.pluginBrowser') }}</span>
           </el-menu-item>
           <el-menu-item index="/surf">
             <el-icon>
               <Compass />
             </el-icon>
-            <span>畅游</span>
+            <span>{{ $t('route.surf') }}</span>
           </el-menu-item>
           <el-menu-item index="/settings">
             <el-icon>
               <Setting />
             </el-icon>
-            <span>设置</span>
+            <span>{{ $t('route.settings') }}</span>
           </el-menu-item>
           <el-menu-item index="/help">
             <el-icon>
               <QuestionFilled />
             </el-icon>
-            <span>帮助</span>
+            <span>{{ $t('route.help') }}</span>
           </el-menu-item>
         </el-menu>
       </el-aside>
@@ -97,7 +97,9 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { Picture, Grid, Setting, Collection, QuestionFilled, Compass } from "@element-plus/icons-vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { setLocale, resolveLanguage } from "@/i18n";
+import { useI18n } from "vue-i18n";
+import { setLocale, resolveLanguage, i18n } from "@/i18n";
+import { registerHeaderFeatures } from "@/header/headerFeatures";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import HelpDrawer from "./components/help/HelpDrawer.vue";
 import TaskDrawer from "./components/TaskDrawer.vue";
@@ -125,17 +127,19 @@ import { useThrottleFn } from "@vueuse/core";
 
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
+const { locale } = useI18n();
 
 // Android 底部 Tab 配置（均匀分布；爬虫仅桌面端有代理，故仅侧栏展示）
+// 依赖 locale 以便语言切换时标签立即更新
 const bottomTabs = computed(() => {
-  const tabs = [
-    { index: galleryMenuRoute.value, icon: Picture, label: "画廊" },
-    { index: "/albums", icon: Collection, label: "画册" },
-    { index: "/plugin-browser", icon: Grid, label: "收集源" },
-    { index: "/settings", icon: Setting, label: "设置" },
-    { index: "/help", icon: QuestionFilled, label: "帮助" },
+  void locale.value;
+  return [
+    { index: galleryMenuRoute.value, icon: Picture, label: i18n.global.t("route.gallery") },
+    { index: "/albums", icon: Collection, label: i18n.global.t("route.albums") },
+    { index: "/plugin-browser", icon: Grid, label: i18n.global.t("route.pluginBrowser") },
+    { index: "/settings", icon: Setting, label: i18n.global.t("route.settings") },
+    { index: "/help", icon: QuestionFilled, label: i18n.global.t("route.help") },
   ];
-  return tabs;
 });
 
 // 任务抽屉 store
@@ -239,9 +243,9 @@ onMounted(async () => {
         // 3. Exit Confirm
         try {
           confirmingExit = true;
-          await ElMessageBox.confirm("确定要退出应用吗？龟龟会想你滴~お疲れ様！", "退出提示", {
-            confirmButtonText: "拜拜",
-            cancelButtonText: "取消",
+          await ElMessageBox.confirm(i18n.global.t("common.exitConfirm"), i18n.global.t("common.exitTitle"), {
+            confirmButtonText: i18n.global.t("common.bye"),
+            cancelButtonText: i18n.global.t("common.cancel"),
             type: "warning",
             center: true,
             customClass: "exit-confirm-dialog",
@@ -266,6 +270,7 @@ onMounted(async () => {
 
   // 从配置恢复语言设置
   setLocale(resolveLanguage(settingsStore.values.language ?? undefined));
+  registerHeaderFeatures();
 
   // 初始化各个 composables
   await initWindowEvents();
@@ -291,13 +296,14 @@ onMounted(async () => {
 
   // 监听设置变更事件（事件驱动更新设置）
   // 当后端设置变化时，自动更新本地设置 store
-  unlistenSettingChange = await listen<{ changes: Record<string, any> }>("setting-change", async (event) => {
-    const changes = event.payload.changes;
-    // 只更新变化的部分（后端只广播变化的部分）
+  unlistenSettingChange = await listen<{ changes?: Record<string, any> } & Record<string, unknown>>("setting-change", async (event) => {
+    const raw = event.payload as Record<string, unknown> | undefined;
+    const changes = raw && typeof raw === "object" ? (raw.changes as Record<string, unknown> | undefined) ?? raw : undefined;
     if (changes && typeof changes === "object") {
       Object.assign(settingsStore.values, changes);
       if ("language" in changes) {
-        setLocale(resolveLanguage(changes.language ?? undefined));
+        setLocale(resolveLanguage((changes.language as string | null) ?? undefined));
+        registerHeaderFeatures();
       }
       console.log("[Settings] 收到设置变更事件，已更新:", Object.keys(changes));
     }
