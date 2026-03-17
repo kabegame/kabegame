@@ -12,7 +12,7 @@ use include_dir::{include_dir, Dir};
 use kabegame_core::ipc::client::daemon_startup::*;
 use kabegame_core::{
     kgpg,
-    plugin::{ImportPreview, Plugin, PluginDetail, PluginManager, PluginManifest},
+    plugin::{manifest_value_to_display_string, ImportPreview, Plugin, PluginDetail, PluginManager, PluginManifest},
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -473,7 +473,7 @@ async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
     println!(
         "导入成功：id={}; name={}; version={}; 目标目录={}",
         plugin.id,
-        plugin.name,
+        manifest_value_to_display_string(&plugin.name),
         plugin.version,
         plugins_dir.display()
     );
@@ -504,7 +504,7 @@ fn pack_plugin(args: PackPluginArgs) -> Result<(), String> {
         return Err(format!("插件目录不存在: {}", plugin_dir.display()));
     }
 
-    // 读取并解析 manifest.json（完整 manifest 仍会写入 ZIP；头部只写 mini 字段）
+    // 读取并解析 manifest.json；头部写入完整 manifest（含 name/name.zh/name.en 等 i18n），以便运行时无需解压 zip 即可做多语言展示
     let manifest_path = plugin_dir.join("manifest.json");
     if !manifest_path.is_file() {
         return Err(format!("缺少必需文件: {}", manifest_path.display()));
@@ -514,13 +514,8 @@ fn pack_plugin(args: PackPluginArgs) -> Result<(), String> {
     let manifest_val: serde_json::Value = serde_json::from_str(&manifest_raw)
         .map_err(|e| format!("解析 manifest.json 失败: {}", e))?;
 
-    let mini = serde_json::json!({
-        "name": manifest_val.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        "version": manifest_val.get("version").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        "description": manifest_val.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-    });
-    let mini_bytes =
-        serde_json::to_vec(&mini).map_err(|e| format!("序列化头部 manifest 失败: {}", e))?;
+    let header_manifest_bytes =
+        serde_json::to_vec(&manifest_val).map_err(|e| format!("序列化头部 manifest 失败: {}", e))?;
 
     maybe_run_webview_build(&plugin_dir)?;
     let backend = detect_plugin_backend(&plugin_dir)?;
@@ -538,7 +533,7 @@ fn pack_plugin(args: PackPluginArgs) -> Result<(), String> {
     } else {
         None
     };
-    let header = kgpg::build_kgpg2_header(icon_rgb.as_deref(), &mini_bytes)?;
+    let header = kgpg::build_kgpg2_header(icon_rgb.as_deref(), &header_manifest_bytes)?;
 
     // 生成 ZIP bytes
     let zip_bytes = build_plugin_zip_bytes(&plugin_dir, backend)?;
@@ -640,15 +635,9 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf, backend: PluginBackend) -> Resul
         entries.push(("config.json".to_string(), config));
     }
 
-    // doc_root（仅允许 doc.md + 常见图片）
+    // doc_root（doc.md、doc.<lang>.md + 常见图片，图片可递归子目录）
     let doc_root = plugin_dir.join("doc_root");
     if doc_root.is_dir() {
-        let doc_md = doc_root.join("doc.md");
-        if doc_md.is_file() {
-            entries.push(("doc_root/doc.md".to_string(), doc_md));
-        }
-
-        // 图片资源（递归）
         let mut stack = vec![doc_root.clone()];
         while let Some(dir) = stack.pop() {
             let rd = std::fs::read_dir(&dir).map_err(|e| format!("读取 doc_root 失败: {}", e))?;
@@ -662,32 +651,38 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf, backend: PluginBackend) -> Resul
                 if !p.is_file() {
                     continue;
                 }
-                let ext = p
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                let ok = matches!(
-                    ext.as_str(),
-                    "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
-                );
-                if !ok {
-                    continue;
-                }
                 let rel = p
                     .strip_prefix(plugin_dir)
                     .map_err(|_| "doc_root 路径异常".to_string())?
                     .to_string_lossy()
                     .replace('\\', "/");
-                // 只允许 doc_root 内
                 if !rel.starts_with("doc_root/") {
                     continue;
                 }
-                // 避免重复添加 doc.md
-                if rel == "doc_root/doc.md" {
+                let name = p
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                let ext = p
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                // doc.md、doc.<lang>.md（仅 doc_root 根目录的 .md 作为文档，子目录 .md 不打包）
+                if ext == "md" {
+                    if dir == doc_root && (name == "doc.md" || (name.starts_with("doc.") && name.ends_with(".md"))) {
+                        entries.push((rel, p));
+                    }
                     continue;
                 }
-                entries.push((rel, p));
+                // 常见图片
+                let ok = matches!(
+                    ext.as_str(),
+                    "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp"
+                );
+                if ok {
+                    entries.push((rel, p));
+                }
             }
         }
     }

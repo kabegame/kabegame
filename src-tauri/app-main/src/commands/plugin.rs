@@ -1,6 +1,6 @@
 // 謠剃ｻｶ逶ｸ蜈ｳ蜻ｽ莉､
 
-use kabegame_core::plugin::{PluginManager, PluginSource, extract_kgpg_filename_from_url};
+use kabegame_core::plugin::{PluginManager, PluginSource, extract_kgpg_filename_from_url, var_definition_to_frontend_value};
 
 #[tauri::command]
 pub async fn get_plugins() -> Result<serde_json::Value, String> {
@@ -40,7 +40,10 @@ pub async fn delete_plugin(plugin_id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn get_plugin_vars(plugin_id: String) -> Result<serde_json::Value, String> {
     let vars = PluginManager::global().get_plugin_vars(&plugin_id).await?;
-    Ok(serde_json::to_value(vars).map_err(|e| e.to_string())?)
+    let frontend: Vec<serde_json::Value> = vars
+        .map(|v| v.iter().map(var_definition_to_frontend_value).collect())
+        .unwrap_or_default();
+    Ok(serde_json::to_value(frontend).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
@@ -257,7 +260,9 @@ pub async fn get_remote_plugin_icon(
 }
 
 #[tauri::command]
-pub async fn get_plugin_doc_from_zip(zip_path: String) -> Result<Option<String>, String> {
+pub async fn get_plugin_doc_from_zip(
+    zip_path: String,
+) -> Result<Option<kabegame_core::plugin::PluginDoc>, String> {
     let path = std::path::PathBuf::from(&zip_path);
     PluginManager::global().read_plugin_doc_public(&path)
 }

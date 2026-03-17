@@ -10,6 +10,14 @@
   "shortcutHelpTitle": "Shortcut help",
   "shortcutNote": "Some shortcuts only work when the image grid has focus (click on the grid or an image first).",
 
+  "drawerTitleGallery": "Gallery help",
+  "drawerTitleAlbumDetail": "Album help",
+  "drawerTitleAlbums": "Album list help",
+  "drawerTitleTaskDetail": "Task help",
+  "drawerTitlePluginBrowser": "Source management help",
+  "drawerTitleSettings": "Settings help",
+  "drawerTitleDefault": "Help",
+
   "tips": {
     "tag": {
       "androidUnavailable": "N/A on Android",

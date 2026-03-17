@@ -68,6 +68,8 @@ import { useI18n } from 'vue-i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { ElMessage } from 'element-plus';
 import PluginDetailPage from '@kabegame/core/components/plugin/PluginDetailPage.vue';
+import type { PluginManifestText } from '@kabegame/core/stores/plugins';
+import { usePluginManifestI18n } from '@/composables/usePluginManifestI18n';
 import { usePluginStore } from '@/stores/plugins';
 import { isUpdateAvailable } from '@kabegame/core/utils/version';
 import { IS_ANDROID } from '@kabegame/core/env';
@@ -75,7 +77,7 @@ import { useModalBack } from '@kabegame/core/composables/useModalBack';
 
 type ImportPreview = {
   id: string;
-  name: string;
+  name: PluginManifestText;
   version: string;
   sizeBytes: number;
   alreadyExists: boolean;
@@ -86,9 +88,9 @@ type ImportPreview = {
 };
 
 type PluginManifest = {
-  name: string;
+  name: PluginManifestText;
   version: string;
-  description: string;
+  description: PluginManifestText;
   author?: string;
 };
 
@@ -165,11 +167,11 @@ const loadPreview = async (path: string) => {
     preview.value = res;
     installed.value = !!res.preview.alreadyExists;
     
-    // Load plugin detail (doc, baseUrl, etc.)
+    // Load plugin detail (doc map, baseUrl, etc.)
     try {
-      const doc = await invoke<string | null>('get_plugin_doc_from_zip', { zipPath: path });
+      const doc = await invoke<Record<string, string> | null>('get_plugin_doc_from_zip', { zipPath: path });
       detail.value = {
-        doc: doc || null,
+        doc: doc ?? null,
         baseUrl: res.baseUrl || null,
       };
     } catch (e) {
@@ -197,15 +199,16 @@ const pluginVm = computed(() => {
   return {
     id: preview.value.preview.id,
     name: preview.value.preview.name,
-    desp: preview.value.manifest.description,
+    desp: preview.value.manifest?.description ?? preview.value.preview.name,
     icon: iconDataUrl.value ?? undefined,
-    doc: (detail.value?.doc as string | undefined) ?? undefined,
+    doc: detail.value?.doc ?? undefined,
     baseUrl: (detail.value?.baseUrl as string | undefined) ?? undefined,
   };
 });
 
 const { t } = useI18n();
-const pageTitle = computed(() => pluginVm.value?.name || t('common.importPlugin'));
+const { pluginName } = usePluginManifestI18n();
+const pageTitle = computed(() => (pluginVm.value ? pluginName(pluginVm.value) : "") || t("common.importPlugin"));
 
 const canInstall = computed(() => {
   const p = preview.value?.preview;

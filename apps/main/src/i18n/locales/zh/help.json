@@ -10,6 +10,14 @@
   "shortcutHelpTitle": "快捷键帮助",
   "shortcutNote": "说明：部分快捷键仅在图片网格获得焦点时生效（先在网格空白处/图片上点一下）。",
 
+  "drawerTitleGallery": "画廊帮助",
+  "drawerTitleAlbumDetail": "画册帮助",
+  "drawerTitleAlbums": "画册列表帮助",
+  "drawerTitleTaskDetail": "任务帮助",
+  "drawerTitlePluginBrowser": "源管理帮助",
+  "drawerTitleSettings": "设置帮助",
+  "drawerTitleDefault": "帮助",
+
   "tips": {
     "tag": {
       "androidUnavailable": "安卓无",

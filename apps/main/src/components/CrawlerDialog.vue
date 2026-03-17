@@ -76,17 +76,17 @@
 
             <template v-if="pluginVars.length > 0">
                 <el-divider content-position="left">{{ $t('plugins.pluginConfig') }}</el-divider>
-                <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDef.name"
-                    :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
-                    <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="varDef.options"
+                <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDisplayName(varDef)"
+                    :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef, varDisplayName(varDef))">
+                    <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="optionsForVar(varDef)"
                         :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
                         :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
                         :file-extensions="getFileExtensions(varDef)"
-                        :placeholder="varDef.descripts || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' ? `请选择${varDef.name}` : `请输入${varDef.name}`)"
+                        :placeholder="varDescripts(varDef) || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' ? `请选择${varDisplayName(varDef)}` : `请输入${varDisplayName(varDef)}`)"
                         :allow-unset="!isRequired(varDef)"
                         @update:model-value="(val) => (form.vars[varDef.key] = val)" />
-                    <div v-if="varDef.descripts">
-                        {{ varDef.descripts }}
+                    <div v-if="varDescripts(varDef)">
+                        {{ varDescripts(varDef) }}
                     </div>
                 </el-form-item>
             </template>
@@ -129,7 +129,7 @@
                     <el-select v-model="selectedRunConfigId" :placeholder="$t('plugins.selectConfigOptional')" clearable
                         popper-class="run-config-select-dropdown" class="run-config-select"
                         @change="(v: string | null) => void setRunConfigId(v)">
-                        <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="cfg.name" :value="cfg.id">
+                        <el-option v-for="cfg in runConfigs" :key="cfg.id" :label="runConfigName(cfg)" :value="cfg.id">
                             <div class="run-config-option">
                                 <div class="run-config-info">
                                     <div class="name">
@@ -141,8 +141,8 @@
                                             type="warning" size="small" style="margin-right: 6px;">
                                             {{ $t('plugins.incompatible') }}
                                         </el-tag>
-                                        {{ cfg.name }}
-                                        <span v-if="cfg.description" class="desc"> - {{ cfg.description }}</span>
+                                        {{ runConfigName(cfg) }}
+                                        <span v-if="runConfigDescription(cfg)" class="desc"> - {{ runConfigDescription(cfg) }}</span>
                                     </div>
                                 </div>
                                 <div class="run-config-actions">
@@ -164,14 +164,14 @@
             <el-form-item :label="$t('plugins.selectSource')">
                 <el-select v-model="form.pluginId" :placeholder="$t('plugins.selectSourcePlaceholder')" style="width: 100%"
                     popper-class="crawl-plugin-select-dropdown" @change="onPluginChange">
-                    <el-option v-for="plugin in plugins" :key="plugin.id" :label="plugin.name" :value="plugin.id">
+                    <el-option v-for="plugin in plugins" :key="plugin.id" :label="pluginName(plugin)" :value="plugin.id">
                         <div class="plugin-option">
                             <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]"
                                 class="plugin-option-icon" />
                             <el-icon v-else class="plugin-option-icon-placeholder">
                                 <Grid />
                             </el-icon>
-                            <span>{{ plugin.name }}</span>
+                            <span>{{ pluginName(plugin) }}</span>
                         </div>
                     </el-option>
                 </el-select>
@@ -205,17 +205,17 @@
             <!-- 插件变量配置 -->
             <template v-if="pluginVars.length > 0">
                 <el-divider content-position="left">{{ $t('plugins.pluginConfig') }}</el-divider>
-                <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDef.name"
-                    :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef)">
-                    <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="varDef.options"
+                <el-form-item v-for="varDef in visiblePluginVars" :key="varDef.key" :label="varDisplayName(varDef)"
+                    :prop="`vars.${varDef.key}`" :required="isRequired(varDef)" :rules="getValidationRules(varDef, varDisplayName(varDef))">
+                    <PluginVarField :type="varDef.type" :model-value="form.vars[varDef.key]" :options="optionsForVar(varDef)"
                         :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
                         :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
                         :file-extensions="getFileExtensions(varDef)"
-                        :placeholder="varDef.descripts || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' ? `请选择${varDef.name}` : `请输入${varDef.name}`)"
+                        :placeholder="varDescripts(varDef) || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' ? `请选择${varDisplayName(varDef)}` : `请输入${varDisplayName(varDef)}`)"
                         :allow-unset="!isRequired(varDef)"
                         @update:model-value="(val) => (form.vars[varDef.key] = val)" />
-                    <div v-if="varDef.descripts">
-                        {{ varDef.descripts }}
+                    <div v-if="varDescripts(varDef)">
+                        {{ varDescripts(varDef) }}
                     </div>
                 </el-form-item>
             </template>
@@ -277,6 +277,8 @@ import { ElDialog } from "element-plus";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
+import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
+import { usePluginConfigI18n } from "@/composables/usePluginConfigI18n";
 import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
@@ -309,6 +311,21 @@ const emit = defineEmits<{
 const crawlerStore = useCrawlerStore();
 const crawlerDrawerStore = useCrawlerDrawerStore();
 const pluginStore = usePluginStore();
+const { pluginName } = usePluginManifestI18n();
+const { varDisplayName, varDescripts, optionDisplayName, resolveConfigText, locale } = usePluginConfigI18n();
+/** runConfig 的 name/description 可能为 i18n 对象，统一解析为字符串供 ElOption label 等使用 */
+function runConfigName(cfg: { name?: unknown }): string {
+  return resolveConfigText(cfg.name as any, locale.value);
+}
+function runConfigDescription(cfg: { description?: unknown }): string {
+  return resolveConfigText(cfg.description as any, locale.value);
+}
+/** 将 varDef.options 中 i18n 的 name 解析为字符串，供 ElOption/AndroidPickerSelect 的 label 使用 */
+function optionsForVar(varDef: PluginVarDef): (string | { name: string; variable: string })[] {
+  return (varDef.options ?? []).map((opt) =>
+    typeof opt === "string" ? opt : { name: optionDisplayName(opt), variable: opt.variable }
+  );
+}
 const albumStore = useAlbumStore();
 
 type HttpHeaderRow = { key: string; value: string };
@@ -417,14 +434,18 @@ const runConfigs = computed(() => crawlerStore.runConfigs);
 const albums = computed(() => albumStore.albums);
 
 const runConfigPickerOptions = computed(() =>
-    runConfigs.value.map((cfg) => ({
-        label: cfg.description ? `${cfg.name} - ${cfg.description}` : cfg.name,
-        value: cfg.id,
-    }))
+    runConfigs.value.map((cfg) => {
+        const name = runConfigName(cfg);
+        const desc = runConfigDescription(cfg);
+        return {
+            label: desc ? `${name} - ${desc}` : name,
+            value: cfg.id,
+        };
+    })
 );
 const pluginPickerOptions = computed(() =>
     plugins.value.map((p) => ({
-        label: p.name,
+        label: pluginName(p),
         value: p.id,
         warning: p.scriptType === "js",
     }))
@@ -493,16 +514,24 @@ function setOutputAlbumId(v: string | null) {
     selectedOutputAlbumId.value = v ?? null;
 }
 
-// 根据 when 条件过滤出当前应显示的插件变量
-const visiblePluginVars = computed(() =>
-    pluginVars.value.filter((varDef) => {
+// 根据 when 条件过滤，并按当前 locale 解析 name/descripts/options 为展示用字符串
+const visiblePluginVars = computed(() => {
+    const filtered = pluginVars.value.filter((varDef) => {
         if (!varDef.when) return true;
         return Object.entries(varDef.when).every(
             ([depKey, acceptedValues]) =>
                 acceptedValues.includes(String(form.value.vars[depKey] ?? ""))
         );
-    })
-);
+    });
+    return filtered.map((varDef) => ({
+        ...varDef,
+        name: varDisplayName(varDef),
+        descripts: varDescripts(varDef),
+        options: varDef.options?.map((opt) =>
+            typeof opt === "string" ? opt : { variable: opt.variable, name: optionDisplayName(opt) }
+        ),
+    }));
+});
 
 // file_or_folder 类型：将 varDef.options 作为可选择文件扩展名列表（不带点号）
 const getFileExtensions = (varDef: any): string[] | undefined => {
@@ -615,7 +644,7 @@ const handleStartCrawl = async () => {
                 const value = form.value.vars[varDef.key];
                 if (value === undefined || value === null || value === '' ||
                     ((varDef.type === 'list' || varDef.type === 'checkbox') && Array.isArray(value) && value.length === 0)) {
-                    ElMessage.warning(t('plugins.fillRequiredField', { name: varDef.name }));
+                    ElMessage.warning(t('plugins.fillRequiredField', { name: varDisplayName(varDef) }));
                     return;
                 }
             }

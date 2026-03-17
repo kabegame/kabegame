@@ -1,3 +1,5 @@
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import type { QuickSettingsPageId } from "@/stores/quickSettingsDrawer";
 import type { QuickSettingGroup, QuickSettingItem } from "@kabegame/core/components/settings/quick-settings-registry-types";
 import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
@@ -17,219 +19,219 @@ import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSet
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
 
 /**
- * 快捷设置分组表（key 与后端 AppSettings 的 camelCase 字段完全一致）
- *
- * 注意：
- * - comp 既可以是 “纯控件”（Switch/Select/Number/Radio），也可以是复杂设置项（如目录选择）
- * - pages 决定哪些页面的设置抽屉会展示该项
+ * 使用快捷设置分组：返回已按当前语言翻译的 groups，供 CoreQuickSettingsDrawer 使用。
+ * 直接在 computed 内用 t(key) 产出最终结构。
  */
-export const QUICK_SETTINGS_GROUPS: QuickSettingGroup<QuickSettingsPageId>[] = [
-  {
-    id: "display",
-    title: "显示",
-    items: [
-      ...(!IS_ANDROID ? [{
-        key: "galleryImageAspectRatio",
-        label: "图片宽高比",
-        description: "影响画廊/画册中图片卡片的展示宽高比",
-        comp: GalleryImageAspectRatioSetting,
-        pages: ["gallery", "albumdetail"],
-      } as QuickSettingItem<QuickSettingsPageId>] : []),
-      ...(!IS_ANDROID ? [{
-        key: "imageClickAction",
-        label: "双击图片",
-        description: "双击图片时的行为",
-        comp: SettingRadioControl,
-        props: {
-          settingKey: "imageClickAction",
-          command: "set_image_click_action",
-          buildArgs: (value: string) => ({ action: value }),
-          options: [
-            { label: "应用内预览", value: "preview" },
-            { label: "系统默认打开", value: "open" },
-          ],
+export function useQuickSettingsGroups() {
+  const { t } = useI18n();
+
+  const translatedGroups = computed((): QuickSettingGroup<QuickSettingsPageId>[] => [
+    {
+      id: "display",
+      title: t("settings.quickDisplay"),
+      items: [
+        ...(!IS_ANDROID ? [{
+          key: "galleryImageAspectRatio",
+          label: t("settings.imageAspectRatio"),
+          description: t("settings.imageAspectRatioDesc"),
+          comp: GalleryImageAspectRatioSetting,
+          pages: ["gallery", "albumdetail"],
+        } as QuickSettingItem<QuickSettingsPageId>] : []),
+        ...(!IS_ANDROID ? [{
+          key: "imageClickAction",
+          label: t("settings.quickDoubleClickImage"),
+          description: t("settings.quickDoubleClickImageDesc"),
+          comp: SettingRadioControl,
+          props: {
+            settingKey: "imageClickAction",
+            command: "set_image_click_action",
+            buildArgs: (value: string) => ({ action: value }),
+            options: [
+              { label: t("settings.imageClickPreview"), value: "preview" },
+              { label: t("settings.imageClickOpen"), value: "open" },
+            ],
+          },
+          pages: ["gallery", "albumdetail"],
+        } as QuickSettingItem<QuickSettingsPageId>] : []),
+        ...(!IS_ANDROID ? [{
+          key: "galleryGridColumns",
+          label: t("settings.quickColumns"),
+          description: t("settings.quickColumnsDesc"),
+          comp: GalleryGridColumnsSetting,
+          pages: ["gallery", "albumdetail"],
+        } as QuickSettingItem<QuickSettingsPageId>] : []),
+        ...(!IS_ANDROID ? [{
+          key: "galleryImageObjectPosition",
+          label: t("settings.imageObjectPosition"),
+          description: t("settings.imageObjectPositionDesc"),
+          comp: SettingRadioControl,
+          props: {
+            settingKey: "galleryImageObjectPosition",
+            command: "set_gallery_image_object_position",
+            buildArgs: (value: string) => ({ position: value }),
+            options: [
+              { label: t("settings.objectPositionCenter"), value: "center" },
+              { label: t("settings.objectPositionTop"), value: "top" },
+              { label: t("settings.objectPositionBottom"), value: "bottom" },
+            ],
+          },
+          pages: ["gallery", "albumdetail"],
+        } as QuickSettingItem<QuickSettingsPageId>] : []),
+      ],
+    },
+    {
+      id: "download",
+      title: t("settings.quickDownload"),
+      items: [
+        {
+          key: "maxConcurrentDownloads",
+          label: t("settings.maxConcurrentDownloads"),
+          description: t("settings.maxConcurrentDownloadsDesc"),
+          comp: SettingNumberControl,
+          props: {
+            settingKey: "maxConcurrentDownloads",
+            command: "set_max_concurrent_downloads",
+            buildArgs: (value: number) => ({ count: value }),
+            min: 1,
+            max: 10,
+            step: 1,
+          },
+          pages: ["gallery", "albumdetail"],
         },
-        pages: ["gallery", "albumdetail"],
-      } as QuickSettingItem<QuickSettingsPageId>] : []),
-      ...(!IS_ANDROID ? [{
-        key: "galleryGridColumns",
-        label: "列数",
-        description: "固定列数时生效；关闭后为动态列数（可用 Ctrl+滚轮调整）",
-        comp: GalleryGridColumnsSetting,
-        pages: ["gallery", "albumdetail"],
-      } as QuickSettingItem<QuickSettingsPageId>] : []),
-      ...(!IS_ANDROID ? [{
-        key: "galleryImageObjectPosition",
-        label: "图片对齐方式",
-        description: "图片溢出方框时显示为居中、靠上或靠下",
-        comp: SettingRadioControl,
-        props: {
-          settingKey: "galleryImageObjectPosition",
-          command: "set_gallery_image_object_position",
-          buildArgs: (value: string) => ({ position: value }),
-          options: [
-            { label: "居中", value: "center" },
-            { label: "靠上", value: "top" },
-            { label: "靠下", value: "bottom" },
-          ],
+        {
+          key: "downloadIntervalMs",
+          label: t("settings.downloadInterval"),
+          description: t("settings.downloadIntervalDesc"),
+          comp: DownloadIntervalSetting,
+          pages: ["gallery", "albumdetail"],
         },
-        pages: ["gallery", "albumdetail"],
-      } as QuickSettingItem<QuickSettingsPageId>] : []),
-    ],
-  },
-  {
-    id: "download",
-    title: "下载",
-    items: [
-      {
-        key: "maxConcurrentDownloads",
-        label: "最大并发下载量",
-        description: "同时下载的图片数量（1-10）",
-        comp: SettingNumberControl,
-        props: {
-          settingKey: "maxConcurrentDownloads",
-          command: "set_max_concurrent_downloads",
-          buildArgs: (value: number) => ({ count: value }),
-          min: 1,
-          max: 10,
-          step: 1,
+        {
+          key: "networkRetryCount",
+          label: t("settings.networkRetryCount"),
+          description: t("settings.networkRetryCountDesc"),
+          comp: SettingNumberControl,
+          props: {
+            settingKey: "networkRetryCount",
+            command: "set_network_retry_count",
+            buildArgs: (value: number) => ({ count: value }),
+            min: 0,
+            max: 10,
+            step: 1,
+          },
+          pages: ["gallery", "albumdetail"],
         },
-        pages: ["gallery", "albumdetail"],
-      },
-      {
-        key: "downloadIntervalMs",
-        label: "下载间隔时间",
-        description: "每次下载完成后进入下一轮前等待（ms，100-10000）",
-        comp: DownloadIntervalSetting,
-        pages: ["gallery", "albumdetail"],
-      },
-      {
-        key: "networkRetryCount",
-        label: "网络失效重试次数",
-        description: "下载图片遇到网络错误/超时等情况时，额外重试次数（0-10）",
-        comp: SettingNumberControl,
-        props: {
-          settingKey: "networkRetryCount",
-          command: "set_network_retry_count",
-          buildArgs: (value: number) => ({ count: value }),
-          min: 0,
-          max: 10,
-          step: 1,
+        {
+          key: "autoDeduplicate",
+          label: t("settings.autoDeduplicate"),
+          description: t("settings.autoDeduplicateDesc"),
+          comp: SettingSwitchControl,
+          props: {
+            settingKey: "autoDeduplicate",
+            command: "set_auto_deduplicate",
+            buildArgs: (value: boolean) => ({ enabled: value }),
+          },
+          pages: ["gallery", "albumdetail"],
         },
-        pages: ["gallery", "albumdetail"],
-      },
-      {
-        key: "autoDeduplicate",
-        label: "自动去重",
-        description: "根据文件哈希值自动跳过重复图片",
-        comp: SettingSwitchControl,
-        props: {
-          settingKey: "autoDeduplicate",
-          command: "set_auto_deduplicate",
-          buildArgs: (value: boolean) => ({ enabled: value }),
+        ...(!IS_ANDROID ? [{
+          key: "defaultDownloadDir",
+          label: t("settings.defaultDownloadDir"),
+          description: t("settings.defaultDownloadDirDesc"),
+          comp: DefaultDownloadDirSetting,
+          pages: ["gallery", "albumdetail"],
+        } as QuickSettingItem<QuickSettingsPageId>] : []),
+      ],
+    },
+    {
+      id: "wallpaper",
+      title: t("settings.quickWallpaper"),
+      items: [
+        {
+          key: "wallpaperRotationEnabled",
+          label: t("settings.wallpaperRotationEnabled"),
+          description: t("settings.wallpaperRotationEnabledDesc"),
+          comp: WallpaperRotationEnabledSetting,
+          pages: ["gallery", "albumdetail", "albums"],
         },
-        pages: ["gallery", "albumdetail"],
-      },
-      ...(!IS_ANDROID ? [{
-        key: "defaultDownloadDir",
-        label: "默认下载目录",
-        description:
-          "未在任务里指定输出目录时，将下载到该目录（按插件分文件夹保存）",
-        comp: DefaultDownloadDirSetting,
-        pages: ["gallery", "albumdetail"],
-      } as QuickSettingItem<QuickSettingsPageId>] : []),
-    ],
-  },
-  {
-    id: "wallpaper",
-    title: "壁纸",
-    items: [
-      {
-        key: "wallpaperRotationEnabled",
-        label: "启用壁纸轮播",
-        description: "自动从指定画册中轮播更换桌面壁纸",
-        comp: WallpaperRotationEnabledSetting,
-        pages: ["gallery", "albumdetail", "albums"],
-      },
-      {
-        key: "wallpaperRotationIntervalMinutes",
-        label: "轮播间隔",
-        description: "壁纸更换间隔（分钟，1-1440）",
-        comp: SettingNumberControl,
-        props: {
-          settingKey: "wallpaperRotationIntervalMinutes",
-          command: "set_wallpaper_rotation_interval_minutes",
-          buildArgs: (value: number) => ({ minutes: value }),
-          min: 1,
-          max: 1440,
-          step: 10,
+        {
+          key: "wallpaperRotationIntervalMinutes",
+          label: t("settings.wallpaperRotationInterval"),
+          description: t("settings.wallpaperRotationIntervalDesc"),
+          comp: SettingNumberControl,
+          props: {
+            settingKey: "wallpaperRotationIntervalMinutes",
+            command: "set_wallpaper_rotation_interval_minutes",
+            buildArgs: (value: number) => ({ minutes: value }),
+            min: 1,
+            max: 1440,
+            step: 10,
+          },
+          pages: ["gallery", "albumdetail", "albums"],
         },
-        pages: ["gallery", "albumdetail", "albums"],
-      },
-      {
-        key: "wallpaperRotationMode",
-        label: "轮播模式",
-        description: "随机：每次随机选择；顺序：按顺序依次更换",
-        comp: SettingRadioControl,
-        props: {
-          settingKey: "wallpaperRotationMode",
-          command: "set_wallpaper_rotation_mode",
-          buildArgs: (value: string) => ({ mode: value }),
-          options: [
-            { label: "随机", value: "random" },
-            { label: "顺序", value: "sequential" },
-          ],
+        {
+          key: "wallpaperRotationMode",
+          label: t("settings.wallpaperRotationMode"),
+          description: t("settings.wallpaperRotationModeDesc"),
+          comp: SettingRadioControl,
+          props: {
+            settingKey: "wallpaperRotationMode",
+            command: "set_wallpaper_rotation_mode",
+            buildArgs: (value: string) => ({ mode: value }),
+            options: [
+              { label: t("settings.wallpaperModeRandom"), value: "random" },
+              { label: t("settings.wallpaperModeSequential"), value: "sequential" },
+            ],
+          },
+          pages: ["gallery", "albumdetail", "albums"],
         },
-        pages: ["gallery", "albumdetail", "albums"],
-      },
-      ...(IS_WINDOWS || IS_LINUX || IS_MACOS ? [{
-        key: "wallpaperStyle",
-        label: "壁纸显示方式",
-        description:
-          "原生模式：根据系统支持显示可用样式；窗口模式：支持所有显示方式",
-        comp: WallpaperStyleSetting,
-        pages: ["gallery", "albumdetail", "albums"],
-      } as QuickSettingItem<QuickSettingsPageId>] : []),
-      ...(IS_WINDOWS || IS_MACOS ? [{
-        key: "wallpaperRotationTransition",
-        label: "过渡效果",
-        description: "窗口模式支持图片过渡；原生模式跟随系统能力",
-        comp: WallpaperTransitionSetting,
-        pages: ["gallery", "albumdetail", "albums"],
-      } as QuickSettingItem<QuickSettingsPageId>] : []),
-      ...(IS_WINDOWS || IS_MACOS ? [{
-        key: "wallpaperMode",
-        label: "壁纸模式",
-        description:
-          "原生模式性能更好；窗口模式更灵活（类似 Wallpaper Engine）",
-        comp: WallpaperModeSetting,
-        pages: ["gallery", "albumdetail", "albums"],
-      } as QuickSettingItem<QuickSettingsPageId>] : []),
-      ...(IS_WINDOWS ? [{
-        key: "wallpaperEngineDir",
-        label: "Wallpaper Engine 目录",
-        description: "用于\"导出并自动导入到 WE\"",
-        comp: WallpaperEngineDirSetting,
-        pages: [],
-      } as QuickSettingItem<QuickSettingsPageId>] : []),
-    ],
-  },
-  {
-    id: "app",
-    title: "应用",
-    items: [
-      ...(!IS_ANDROID ? [{
-        key: "autoLaunch",
-        label: "开机启动",
-        description: "应用启动时自动运行",
-        comp: SettingSwitchControl,
-        props: {
-          settingKey: "autoLaunch",
-          command: "set_auto_launch",
-          buildArgs: (value: boolean) => ({ enabled: value }),
-        },
-        pages: ["settings"],
-      } as QuickSettingItem<QuickSettingsPageId>] : []),
-    ],
-  },
-];
+        ...(IS_WINDOWS || IS_LINUX || IS_MACOS ? [{
+          key: "wallpaperStyle",
+          label: t("settings.wallpaperStyle"),
+          description: t("settings.wallpaperStyleDesc"),
+          comp: WallpaperStyleSetting,
+          pages: ["gallery", "albumdetail", "albums"],
+        } as QuickSettingItem<QuickSettingsPageId>] : []),
+        ...(IS_WINDOWS || IS_MACOS ? [{
+          key: "wallpaperRotationTransition",
+          label: t("settings.wallpaperTransition"),
+          description: t("settings.wallpaperTransitionDesc"),
+          comp: WallpaperTransitionSetting,
+          pages: ["gallery", "albumdetail", "albums"],
+        } as QuickSettingItem<QuickSettingsPageId>] : []),
+        ...(IS_WINDOWS || IS_MACOS ? [{
+          key: "wallpaperMode",
+          label: t("settings.wallpaperModeLabel"),
+          description: t("settings.wallpaperModeDesc"),
+          comp: WallpaperModeSetting,
+          pages: ["gallery", "albumdetail", "albums"],
+        } as QuickSettingItem<QuickSettingsPageId>] : []),
+        ...(IS_WINDOWS ? [{
+          key: "wallpaperEngineDir",
+          label: t("settings.wallpaperEngineDir"),
+          description: t("settings.wallpaperEngineDirDesc"),
+          comp: WallpaperEngineDirSetting,
+          pages: [],
+        } as QuickSettingItem<QuickSettingsPageId>] : []),
+      ],
+    },
+    {
+      id: "app",
+      title: t("settings.quickApp"),
+      items: [
+        ...(!IS_ANDROID ? [{
+          key: "autoLaunch",
+          label: t("settings.autoLaunch"),
+          description: t("settings.autoLaunchDesc"),
+          comp: SettingSwitchControl,
+          props: {
+            settingKey: "autoLaunch",
+            command: "set_auto_launch",
+            buildArgs: (value: boolean) => ({ enabled: value }),
+          },
+          pages: ["settings"],
+        } as QuickSettingItem<QuickSettingsPageId>] : []),
+      ],
+    },
+  ]);
+
+  return { translatedGroups };
+}

@@ -13,7 +13,7 @@
 
     <template #actions>
       <div v-if="plugin" class="header-actions">
-        <el-tooltip content="卸载" placement="bottom" v-if="showUninstall && installed">
+        <el-tooltip :content="t('plugins.uninstall')" placement="bottom" v-if="showUninstall && installed">
           <el-button :icon="Delete" circle type="danger" @click="$emit('uninstall')" />
         </el-tooltip>
       </div>
@@ -24,19 +24,19 @@
     </div>
 
     <div v-else-if="!loading && !plugin" class="empty">
-      <el-empty :description="emptyDescription" />
+      <el-empty :description="effectiveEmptyDescription" />
     </div>
 
     <div v-else class="plugin-detail-content">
       <!-- 基本信息 -->
       <div class="plugin-info-section">
-        <PluginDetail v-if="plugin" :show-header="false" :plugin-id="plugin.id" :name="plugin.name"
-          :description="plugin.desp" :version="plugin.version" :base-url="plugin.baseUrl" :installed="installed" :show-copy-id="true"
+        <PluginDetail v-if="plugin" :show-header="false" :plugin-id="plugin.id" :name="displayName"
+          :description="displayDesc" :version="plugin.version" :base-url="plugin.baseUrl" :installed="installed" :show-copy-id="true"
           :show-primary-action="true" :primary-action-loading="installing" :primary-action-disabled="installing"
-          :primary-action-text="installing ? installingText : installText" @primary-action="$emit('install')"
+          :primary-action-text="installing ? effectiveInstallingText : effectiveInstallText" @primary-action="$emit('install')"
           @copy-id="$emit('copy-id', $event)">
           <template #copy-id-button="{ pluginId }">
-            <el-button :icon="DocumentCopy" circle size="small" title="复制插件ID" @click="$emit('copy-id', pluginId)" />
+            <el-button :icon="DocumentCopy" circle size="small" :title="t('plugins.detailCopyId')" @click="$emit('copy-id', pluginId)" />
           </template>
           <template v-if="$slots['detail-extra-items']" #extra-items>
             <slot name="detail-extra-items" />
@@ -47,36 +47,47 @@
         </PluginDetail>
       </div>
 
-      <!-- 文档 -->
+      <!-- 文档（按当前语言解析 doc record） -->
       <div class="plugin-doc-section">
-        <PluginDocRenderer v-if="plugin?.doc" :markdown="plugin.doc" :load-image-bytes="loadDocImageBytes"
-          :empty-description="docEmptyDescription" />
-        <el-empty v-else :description="docEmptyDescription" :image-size="100" />
+        <PluginDocRenderer v-if="displayDoc" :markdown="displayDoc" :load-image-bytes="loadDocImageBytes"
+          :doc-image-base-url="docImageBaseUrl" :empty-description="effectiveDocEmptyDescription" />
+        <el-empty v-else :description="effectiveDocEmptyDescription" :image-size="100" />
       </div>
     </div>
   </TabLayout>
 </template>
 
 <script setup lang="ts">
+import { computed, inject } from "vue";
 import { Delete, DocumentCopy, Grid } from "@element-plus/icons-vue";
 import TabLayout from "../../layouts/TabLayout.vue";
 import PluginDetail from "./PluginDetail.vue";
 import PluginDocRenderer from "./PluginDocRenderer.vue";
+import type { PluginManifestDoc, PluginManifestText } from "../../stores/plugins";
+
+type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
+const t = inject<TranslateFn>("i18n-t") ?? ((k: string) => k);
+const localeRef = inject<{ value: string }>("i18n-locale");
 
 type PluginVm = {
   id: string;
-  name: string;
-  desp: string;
+  name: PluginManifestText;
+  desp: PluginManifestText;
   version?: string;
   icon?: string | null;
-  doc?: string | null;
+  doc?: PluginManifestDoc | null;
   baseUrl?: string | null;
 };
+
+function resolveDoc(doc: PluginManifestDoc | null | undefined, locale: string): string {
+  if (doc == null || typeof doc !== "object") return "";
+  return doc[locale] ?? doc["default"] ?? "";
+}
 
 type LoadImageBytes = (imagePath: string) => Promise<Uint8Array | number[]>;
 
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     title: string;
     subtitle?: string;
@@ -96,15 +107,36 @@ withDefaults(
     docEmptyDescription?: string;
 
     loadDocImageBytes?: LoadImageBytes;
+    /** 插件文档图片 URL 前缀（桌面 HTTP / 安卓 kbg-plugin-doc.localhost），有值时优先用 URL 加载图片 */
+    docImageBaseUrl?: string | null;
   }>(),
   {
     showBack: false,
     showUninstall: true,
-    installText: "安装",
-    installingText: "安装中...",
-    emptyDescription: "源不存在",
-    docEmptyDescription: "该源暂无文档",
   }
+);
+
+const effectiveInstallText = computed(() => props.installText ?? t("plugins.install"));
+const effectiveInstallingText = computed(() => props.installingText ?? t("plugins.installing"));
+const effectiveEmptyDescription = computed(() => props.emptyDescription ?? t("common.pluginNotExist"));
+const effectiveDocEmptyDescription = computed(() => props.docEmptyDescription ?? t("common.pluginNoDoc"));
+
+const displayDoc = computed(() =>
+  resolveDoc(props.plugin?.doc ?? null, localeRef?.value ?? "zh")
+);
+
+const resolveManifestText = inject<
+  (value: PluginManifestText | null | undefined) => string
+>("resolveManifestText");
+const displayName = computed(() =>
+  resolveManifestText && props.plugin
+    ? resolveManifestText(props.plugin.name)
+    : (props.plugin?.name && typeof props.plugin.name === "object" && props.plugin.name["default"]) || ""
+);
+const displayDesc = computed(() =>
+  resolveManifestText && props.plugin
+    ? resolveManifestText(props.plugin.desp)
+    : (props.plugin?.desp && typeof props.plugin.desp === "object" && props.plugin.desp["default"]) || ""
 );
 
 defineEmits<{

@@ -43,9 +43,9 @@
                     {{ description || "无描述" }}
                 </el-descriptions-item>
 
-                <el-descriptions-item label="状态">
-                    <el-tag v-if="installed" type="success">已安装</el-tag>
-                    <el-tag v-else type="info">未安装</el-tag>
+                <el-descriptions-item :label="t('plugins.detailStatusLabel')">
+                    <el-tag v-if="installed" type="success">{{ t('plugins.installed') }}</el-tag>
+                    <el-tag v-else type="info">{{ t('plugins.notInstalled') }}</el-tag>
                 </el-descriptions-item>
 
                 <el-descriptions-item v-if="baseUrl" label="爬取地址">
@@ -70,8 +70,12 @@
 </template>
 
 <script setup lang="ts">
+import { inject } from "vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ElMessage } from "element-plus";
+
+type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
+const t = inject<TranslateFn>("i18n-t") ?? ((k: string) => k);
 
 const handleOpenBaseUrl = async (url: string) => {
   try {

@@ -2,14 +2,17 @@ import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useImageTypes } from "@/composables/useImageTypes";
+import { usePluginConfigI18n } from "@/composables/usePluginConfigI18n";
+import type { PluginConfigText } from "@kabegame/core/stores/plugins";
 
-export type VarOption = string | { name: string; variable: string };
+export type VarOption = string | { name: PluginConfigText | string; variable: string };
 
+/** 插件变量定义：name/descripts/options[].name 为后端下发的 record（default/zh/en）或兼容 string */
 export type PluginVarDef = {
   key: string;
   type: string;
-  name: string;
-  descripts?: string;
+  name: PluginConfigText | string;
+  descripts?: PluginConfigText | string;
   default?: any;
   options?: VarOption[];
   min?: number;
@@ -22,6 +25,7 @@ export type PluginVarDef = {
  */
 export function usePluginConfig() {
   const { extensions: imageExtensions, load: loadImageTypes } = useImageTypes();
+  const { resolveConfigText, locale } = usePluginConfigI18n();
   const form = ref({
     pluginId: "",
     outputDir: "",
@@ -41,8 +45,9 @@ export function usePluginConfig() {
     return varDef.default === undefined || varDef.default === null;
   };
 
+  /** 取选项展示名（按当前 locale 解析 i18n 对象） */
   const optionLabel = (opt: VarOption) =>
-    typeof opt === "string" ? opt : opt.name;
+    typeof opt === "string" ? opt : resolveConfigText(opt.name, locale.value);
   const optionValue = (opt: VarOption) =>
     typeof opt === "string" ? opt : opt.variable;
 
@@ -121,22 +126,26 @@ export function usePluginConfig() {
     return normalized;
   };
 
-  // 获取验证规则
-  const getValidationRules = (varDef: PluginVarDef) => {
+  /** 从 varDef.name（可能为 i18n 对象）取当前 locale 的展示字符串 */
+  const varDefNameString = (v: { name?: PluginConfigText | string }) =>
+    resolveConfigText(v?.name, locale.value);
+
+  /** 获取验证规则。displayName 可选：传入时用于错误文案（已按 locale 解析），否则用 varDefNameString(varDef) */
+  const getValidationRules = (varDef: PluginVarDef, displayName?: string) => {
     if (!isRequired(varDef)) {
       return [];
     }
+    const label = displayName ?? varDefNameString(varDef);
 
-    // 根据类型返回不同的验证规则
     if (varDef.type === "list" || varDef.type === "checkbox") {
       return [
         {
           required: true,
-          message: `请选择${varDef.name}`,
+          message: `请选择${label}`,
           trigger: "change",
           validator: (_rule: any, value: any, callback: any) => {
             if (!value || (Array.isArray(value) && value.length === 0)) {
-              callback(new Error(`请选择${varDef.name}`));
+              callback(new Error(`请选择${label}`));
             } else {
               callback();
             }
@@ -144,20 +153,18 @@ export function usePluginConfig() {
         },
       ];
     } else if (varDef.type === "boolean") {
-      // boolean 类型总是有值（true/false），不需要验证
       return [];
     } else {
       return [
         {
           required: true,
-          message: `请输入${varDef.name}`,
+          message: `请输入${label}`,
           trigger: varDef.type === "options" ? "change" : "blur",
           validator: (_rule: any, value: any, callback: any) => {
             if (value === undefined || value === null || value === "") {
-              callback(new Error(`请输入${varDef.name}`));
+              callback(new Error(`请输入${label}`));
               return;
             }
-            // 对于 int 和 float 类型，验证 min/max
             if (
               (varDef.type === "int" || varDef.type === "float") &&
               typeof value === "number"
@@ -167,18 +174,14 @@ export function usePluginConfig() {
                 varDefWithMinMax.min !== undefined &&
                 value < varDefWithMinMax.min
               ) {
-                callback(
-                  new Error(`${varDef.name}不能小于 ${varDefWithMinMax.min}`)
-                );
+                callback(new Error(`${label}不能小于 ${varDefWithMinMax.min}`));
                 return;
               }
               if (
                 varDefWithMinMax.max !== undefined &&
                 value > varDefWithMinMax.max
               ) {
-                callback(
-                  new Error(`${varDef.name}不能大于 ${varDefWithMinMax.max}`)
-                );
+                callback(new Error(`${label}不能大于 ${varDefWithMinMax.max}`));
                 return;
               }
             }
@@ -192,14 +195,7 @@ export function usePluginConfig() {
   // 仅加载插件变量定义到 pluginVars，不修改 form.vars（用于载入配置等场景）
   const loadPluginVarDefs = async (pluginId: string) => {
     try {
-      const vars = await invoke<Array<{
-        key: string;
-        type: string;
-        name: string;
-        descripts?: string;
-        default?: any;
-        options?: VarOption[];
-      }> | null>("get_plugin_vars", {
+      const vars = await invoke<Array<PluginVarDef> | null>("get_plugin_vars", {
         pluginId,
       });
       pluginVars.value = vars || [];

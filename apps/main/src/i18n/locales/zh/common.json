@@ -54,6 +54,7 @@
   "exitTitle": "退出提示",
   "bye": "拜拜",
   "openFileFailed": "打开文件失败",
+  "openUrlFailed": "打开 URL 失败",
   "copyImageSuccess": "图片已复制到剪贴板",
   "copyImageFailed": "复制图片失败",
   "imageNotLoadedYet": "图片尚未加载完成，请稍后再试",

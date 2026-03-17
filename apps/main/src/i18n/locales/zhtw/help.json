@@ -10,6 +10,14 @@
   "shortcutHelpTitle": "快捷鍵說明",
   "shortcutNote": "說明：部分快捷鍵僅在圖片網格取得焦點時生效（請先在網格空白處或圖片上點一下）。",
 
+  "drawerTitleGallery": "畫廊說明",
+  "drawerTitleAlbumDetail": "畫冊說明",
+  "drawerTitleAlbums": "畫冊列表說明",
+  "drawerTitleTaskDetail": "任務說明",
+  "drawerTitlePluginBrowser": "源管理說明",
+  "drawerTitleSettings": "設定說明",
+  "drawerTitleDefault": "說明",
+
   "tips": {
     "tag": {
       "androidUnavailable": "安卓無",

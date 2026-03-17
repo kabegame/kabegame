@@ -4,6 +4,7 @@
 use governor::{Quota, RateLimiter};
 use std::num::NonZeroU32;
 use std::time::Duration;
+use kabegame_i18n::t;
 use tauri::{
     menu::{Menu, MenuEvent, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -19,7 +20,51 @@ type DefaultDirectRateLimiter = RateLimiter<
     governor::middleware::NoOpMiddleware,
 >;
 
+const TRAY_ID: &str = "main";
 const TRAY_CLICK_DEBOUNCE_MS: u64 = 500; // 500ms 防抖
+
+/// 使用当前 locale 构建托盘菜单（供首次创建与语言切换后刷新共用）
+fn build_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
+    let show_item =
+        MenuItem::with_id(app, "show", t!("tray.showWindow"), true, None::<&str>)
+            .map_err(|e| format!("创建菜单项失败: {}", e))?;
+    let hide_item =
+        MenuItem::with_id(app, "hide", t!("tray.hideWindow"), true, None::<&str>)
+            .map_err(|e| format!("创建菜单项失败: {}", e))?;
+    let next_wallpaper_item =
+        MenuItem::with_id(app, "next_wallpaper", t!("tray.nextWallpaper"), true, None::<&str>)
+            .map_err(|e| format!("创建菜单项失败: {}", e))?;
+    let quit_item =
+        MenuItem::with_id(app, "quit", t!("tray.quit"), true, None::<&str>)
+            .map_err(|e| format!("创建菜单项失败: {}", e))?;
+
+    #[cfg(debug_assertions)]
+    let menu = Menu::with_items(
+        app,
+        &[&show_item, &hide_item, &next_wallpaper_item, &quit_item],
+    )
+    .map_err(|e| format!("创建菜单失败: {}", e))?;
+
+    #[cfg(not(debug_assertions))]
+    let menu = Menu::with_items(
+        app,
+        &[&show_item, &hide_item, &next_wallpaper_item, &quit_item],
+    )
+    .map_err(|e| format!("创建菜单失败: {}", e))?;
+
+    Ok(menu)
+}
+
+/// 刷新托盘菜单与 tooltip（语言切换后由 setting-change 回调调用，与磁盘挂载等实现方式一致）
+pub fn update_tray_menu(app: &AppHandle) -> Result<(), String> {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return Ok(());
+    };
+    let menu = build_tray_menu(app)?;
+    tray.set_menu(Some(menu)).map_err(|e| format!("设置托盘菜单失败: {}", e))?;
+    tray.set_tooltip(Some(t!("common.appName")));
+    Ok(())
+}
 
 /// 初始化系统托盘
 /// 延迟初始化，确保窗口已经创建
@@ -34,66 +79,10 @@ pub fn setup_tray(app: AppHandle) {
                 .allow_burst(NonZeroU32::new(1).unwrap()),
         );
 
-        // 创建菜单项
-        let show_item = match MenuItem::with_id(&app, "show", "显示窗口", true, None::<&str>) {
-            Ok(item) => item,
+        let menu = match build_tray_menu(&app) {
+            Ok(m) => m,
             Err(e) => {
-                eprintln!("创建菜单项失败: {}", e);
-                return;
-            }
-        };
-
-        let hide_item = match MenuItem::with_id(&app, "hide", "隐藏窗口", true, None::<&str>) {
-            Ok(item) => item,
-            Err(e) => {
-                eprintln!("创建菜单项失败: {}", e);
-                return;
-            }
-        };
-
-        let next_wallpaper_item =
-            match MenuItem::with_id(&app, "next_wallpaper", "下一张壁纸", true, None::<&str>) {
-                Ok(item) => item,
-                Err(e) => {
-                    eprintln!("创建菜单项失败: {}", e);
-                    return;
-                }
-            };
-
-        let quit_item = match MenuItem::with_id(&app, "quit", "退出", true, None::<&str>) {
-            Ok(item) => item,
-            Err(e) => {
-                eprintln!("创建菜单项失败: {}", e);
-                return;
-            }
-        };
-
-        // 创建菜单
-        #[cfg(debug_assertions)]
-        let menu = match Menu::with_items(
-            &app,
-            &[
-                &show_item,
-                &hide_item,
-                &next_wallpaper_item,
-                &quit_item,
-            ],
-        ) {
-            Ok(menu) => menu,
-            Err(e) => {
-                eprintln!("创建菜单失败: {}", e);
-                return;
-            }
-        };
-
-        #[cfg(not(debug_assertions))]
-        let menu = match Menu::with_items(
-            &app,
-            &[&show_item, &hide_item, &next_wallpaper_item, &quit_item],
-        ) {
-            Ok(menu) => menu,
-            Err(e) => {
-                eprintln!("创建菜单失败: {}", e);
+                eprintln!("{}", e);
                 return;
             }
         };
@@ -110,10 +99,10 @@ pub fn setup_tray(app: AppHandle) {
         let handle_clone1 = app.clone();
         let handle_clone2 = app.clone();
 
-        // 创建托盘，明确禁止左键点击显示菜单
-        let tray = match TrayIconBuilder::new()
+        // 创建托盘（带 id 以便语言切换后 tray_by_id 刷新菜单），明确禁止左键点击显示菜单
+        let tray = match TrayIconBuilder::with_id(TRAY_ID)
             .icon(icon)
-            .tooltip("Kabegame")
+            .tooltip(t!("common.appName"))
             .show_menu_on_left_click(false) // 关键：禁止左键显示菜单
             .build(&app)
         {

@@ -27,6 +27,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_ANDROID } from "@kabegame/core/env";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
@@ -36,12 +37,13 @@ const props = defineProps<{
   disabled?: boolean;
 }>();
 
+const { t } = useI18n();
 const { settingValue, disabled, set } = useSettingKeyState("language");
 
 const SYSTEM_VALUE = "";
 
 const options = computed(() => [
-  { label: "跟随系统", value: SYSTEM_VALUE },
+  { label: t("settings.languageFollowSystem"), value: SYSTEM_VALUE },
   ...SUPPORTED_LANGUAGES.map((l) => ({ label: l.label, value: l.value })),
 ]);
 

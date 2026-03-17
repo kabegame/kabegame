@@ -1,5 +1,5 @@
 <template>
-  <el-drawer v-model="drawer.isOpen" :title="drawer.title" :size="drawerSize" append-to-body class="help-drawer drawer-max-width">
+  <el-drawer v-model="drawer.isOpen" :title="$t(helpDrawerTitleKey)" :size="drawerSize" append-to-body class="help-drawer drawer-max-width">
     <div v-if="filteredGroups.length === 0" class="empty">
       <el-empty :description="$t('help.noHelpContent')" :image-size="100" />
     </div>
@@ -32,7 +32,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
-import { useHelpDrawerStore } from "@/stores/helpDrawer";
+import { useHelpDrawerStore, getHelpDrawerTitleKey } from "@/stores/helpDrawer";
 import { HELP_GROUPS } from "@/help/helpRegistry";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
@@ -46,6 +46,8 @@ const helpDrawerOpen = computed({
 useModalBack(helpDrawerOpen);
 
 const drawerSize = computed(() => IS_ANDROID ? "70%" : "420px");
+
+const helpDrawerTitleKey = computed(() => getHelpDrawerTitleKey(drawer.pageId));
 
 const filteredGroups = computed(() => {
   const pid = drawer.pageId;

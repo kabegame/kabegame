@@ -26,19 +26,24 @@ export const useAlbumStore = defineStore("albums", () => {
   const loading = ref(false);
 
   let eventListenersInitialized = false;
-  let unlistenAlbumsChanged: UnlistenFn | null = null;
+  let unlistenAlbumAdded: UnlistenFn | null = null;
+  let unlistenAlbumDeleted: UnlistenFn | null = null;
+  let unlistenAlbumNameChanged: UnlistenFn | null = null;
   let unlistenImagesChange: UnlistenFn | null = null;
   let reloadCountsTimer: number | null = null;
+
+  const onAlbumsListChanged = async () => {
+    await loadAlbums();
+  };
 
   const initEventListeners = async () => {
     if (eventListenersInitialized) return;
     eventListenersInitialized = true;
     try {
       const { listen } = await import("@tauri-apps/api/event");
-      unlistenAlbumsChanged = await listen("albums-changed", async () => {
-        // 画册列表变化：直接 reload（包含 counts）
-        await loadAlbums();
-      });
+      unlistenAlbumAdded = await listen("album-added", onAlbumsListChanged);
+      unlistenAlbumDeleted = await listen("album-deleted", onAlbumsListChanged);
+      unlistenAlbumNameChanged = await listen("album-name-changed", onAlbumsListChanged);
       // 统一图片变更事件：作为“数据可能变化”的失效信号，只做缓存失效 + 计数刷新
       unlistenImagesChange = await listen<ImagesChangePayload>(
         "images-change",

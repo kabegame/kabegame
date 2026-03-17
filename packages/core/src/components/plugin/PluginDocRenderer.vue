@@ -19,7 +19,10 @@ const props = withDefaults(
   defineProps<{
     markdown?: string | null;
     emptyDescription?: string;
+    /** 按路径加载图片字节（用于 data URL 或无 HTTP/自定义 URL 时） */
     loadImageBytes?: LoadImageBytes;
+    /** 插件文档图片 URL 前缀：桌面为 http 服务器路径，安卓为 kbg-plugin-doc.localhost。有值时图片用 src=baseUrl+encodeURIComponent(path)，不调 loadImageBytes */
+    docImageBaseUrl?: string | null;
   }>(),
   {
     emptyDescription: "该源暂无文档",
@@ -124,7 +127,8 @@ const sanitizeHtml = (rawHtml: string): string => {
 
 const renderMarkdown = async (
   markdown: string,
-  loadImageBytes?: LoadImageBytes
+  loadImageBytes?: LoadImageBytes,
+  docImageBaseUrl?: string | null
 ): Promise<string> => {
   if (!markdown) return "";
 
@@ -165,31 +169,53 @@ const renderMarkdown = async (
     searchIndex = pathEnd + 1;
   }
 
-  // 2) 替换图片：按倒序替换，避免索引偏移
+  // 2) 替换图片：有 docImageBaseUrl 时用 URL（桌面 HTTP / 安卓自定义 host），否则用 loadImageBytes 转 data URL
   let processed = markdown;
-  if (imageMatches.length > 0 && loadImageBytes) {
-    for (const img of imageMatches.slice().reverse()) {
-      try {
-        const normalizedPath = normalizeDocPath(img.path);
-        const bytesAny = await loadImageBytes(normalizedPath);
-        const bytes =
-          bytesAny instanceof Uint8Array ? bytesAny : new Uint8Array(bytesAny);
-        const base64 = bytesToBase64(bytes);
-        const mime = guessMime(img.path);
-        const url = `data:${mime};base64,${base64}`;
-        const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        processed = processed.replace(
-          new RegExp(escapedMatch, "g"),
-          `<img src="${url}" alt="${escapeHtml(
-            img.alt
-          )}" style="max-width: 100%; height: auto;" />`
-        );
-      } catch {
-        const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        processed = processed.replace(
-          new RegExp(escapedMatch, "g"),
-          `[图片加载失败: ${escapeHtml(img.path)}]`
-        );
+  if (imageMatches.length > 0) {
+    if (docImageBaseUrl) {
+      for (const img of imageMatches.slice().reverse()) {
+        try {
+          const normalizedPath = normalizeDocPath(img.path);
+          const url = docImageBaseUrl + encodeURIComponent(normalizedPath);
+          const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          processed = processed.replace(
+            new RegExp(escapedMatch, "g"),
+            `<img src="${url}" alt="${escapeHtml(
+              img.alt
+            )}" style="max-width: 100%; height: auto;" />`
+          );
+        } catch {
+          const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          processed = processed.replace(
+            new RegExp(escapedMatch, "g"),
+            `[图片加载失败: ${escapeHtml(img.path)}]`
+          );
+        }
+      }
+    } else if (loadImageBytes) {
+      for (const img of imageMatches.slice().reverse()) {
+        try {
+          const normalizedPath = normalizeDocPath(img.path);
+          const bytesAny = await loadImageBytes(normalizedPath);
+          const bytes =
+            bytesAny instanceof Uint8Array ? bytesAny : new Uint8Array(bytesAny);
+          const base64 = bytesToBase64(bytes);
+          const mime = guessMime(img.path);
+          const url = `data:${mime};base64,${base64}`;
+          const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          processed = processed.replace(
+            new RegExp(escapedMatch, "g"),
+            `<img src="${url}" alt="${escapeHtml(
+              img.alt
+            )}" style="max-width: 100%; height: auto;" />`
+          );
+        } catch {
+          const escapedMatch = img.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          processed = processed.replace(
+            new RegExp(escapedMatch, "g"),
+            `[图片加载失败: ${escapeHtml(img.path)}]`
+          );
+        }
       }
     }
   }
@@ -220,7 +246,11 @@ watchEffect(() => {
       html.value = "";
       return;
     }
-    html.value = await renderMarkdown(text, props.loadImageBytes);
+    html.value = await renderMarkdown(
+      text,
+      props.loadImageBytes,
+      props.docImageBaseUrl
+    );
   })();
 });
 </script>

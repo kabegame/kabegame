@@ -249,6 +249,33 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
+    /// 发送画册名称变更事件（底层 DB 重命名后由 storage 调用，前端与 VD 据此更新）
+    pub fn emit_album_name_changed(&self, album_id: &str, new_name: &str) {
+        let event = std::sync::Arc::new(DaemonEvent::AlbumNameChanged {
+            album_id: album_id.to_string(),
+            new_name: new_name.to_string(),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 发送画册添加事件（底层 DB 插入后由 storage 调用）
+    pub fn emit_album_added(&self, id: &str, name: &str, created_at: u64) {
+        let event = std::sync::Arc::new(DaemonEvent::AlbumAdded {
+            id: id.to_string(),
+            name: name.to_string(),
+            created_at,
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 发送画册删除事件（底层 DB 删除后由 storage 调用）
+    pub fn emit_album_deleted(&self, album_id: &str) {
+        let event = std::sync::Arc::new(DaemonEvent::AlbumDeleted {
+            album_id: album_id.to_string(),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
     /// 从存储读取任务并发送 task-status，用于下载失败等场景下刷新任务列表（避免一直显示“处理中”）。
     pub fn emit_task_status_from_storage(&self, task_id: &str) {
         let storage = crate::storage::Storage::global();
@@ -374,6 +401,12 @@ impl GlobalEmitter {
     pub fn emit_images_change(&self, _reason: &str, _image_ids: &[String]) {}
 
     pub fn emit_surf_records_change(&self, _reason: &str, _surf_record_id: &str) {}
+
+    pub fn emit_album_name_changed(&self, _album_id: &str, _new_name: &str) {}
+
+    pub fn emit_album_added(&self, _id: &str, _name: &str, _created_at: u64) {}
+
+    pub fn emit_album_deleted(&self, _album_id: &str) {}
 
     pub fn emit_pending_queue_change(&self, _pending_count: usize) {}
 

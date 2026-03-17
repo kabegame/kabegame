@@ -586,25 +586,13 @@ impl Filesystem for KabegameFuseFs {
 struct LinuxVdOpsContext;
 
 impl VdOpsContext for LinuxVdOpsContext {
-    fn albums_created(&self, album_name: &str) {
-        GlobalEmitter::global().emit(
-            "albums-changed",
-            serde_json::json!({
-                "reason": "create",
-                "albumName": album_name
-            }),
-        );
+    fn albums_created(&self, _album_name: &str) {
+        // 事件由 storage add_album 底层发出 AlbumAdded
         // Linux 不需要刷新文件系统
     }
 
-    fn albums_deleted(&self, album_name: &str) {
-        GlobalEmitter::global().emit(
-            "albums-changed",
-            serde_json::json!({
-                "reason": "delete",
-                "albumName": album_name
-            }),
-        );
+    fn albums_deleted(&self, _album_name: &str) {
+        // 事件由 storage delete_album 底层发出 AlbumDeleted
         // Linux 不需要刷新文件系统
     }
 

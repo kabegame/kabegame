@@ -1,4 +1,11 @@
 {
+  "imageDetailTitle": "图片详情",
+  "imageDetailSource": "源：",
+  "imageDetailUrl": "URL：",
+  "imageDetailLocalPath": "本地路径：",
+  "imageDetailCrawledAt": "收藏时间：",
+  "imageDetailMetadata": "元数据：",
+  "imageDetailInvalidDate": "银河系末日",
   "emptyHint": "暂无图片",
   "startCollect": "开始收集",
   "confirmDelete": "确认删除",
@@ -46,7 +53,6 @@
   "selectFolderDesc": "选择一个包含图片的文件夹",
   "selectArchive": "选择压缩文件",
   "selectArchiveDesc": "支持 .zip 格式",
-  "chooseCollectMethod": "选择收集方式",
   "localDesc": "从本机选择图片、文件夹或压缩文件导入",
   "remoteDesc": "使用插件从网络收集图片",
   "organizingProgress": "整理中 {processed}/{total}",
@@ -65,5 +71,17 @@
   "weNameTooLong": "名称不能超过 64 个字符",
   "weDirNotConfigured": "未配置 Wallpaper Engine 目录：请到 设置 -> 壁纸轮播 -> Wallpaper Engine 目录 先选择",
   "weExportSuccess": "已导出 WE 工程（{count} 张）：{path}",
-  "weExportVideoSuccess": "已导出 WE 视频工程：{path}"
+  "weExportVideoSuccess": "已导出 WE 视频工程：{path}",
+  "removeFromAlbum": "从画册移除",
+  "removeDialogCheckboxLabel": "同时删除图片（慎用）",
+  "removeDialogDangerText": "警告：将永久删除电脑文件，并从所有画册和画廊中移除，不可恢复！",
+  "removeDialogSafeText": "不勾选仅从当前画册移除，图片文件和其他画册中的记录将保留。",
+  "removeDialogMessageSingle": "将从当前画册移除这张图片。",
+  "removeDialogMessageMulti": "将从当前画册移除这 {count} 张图片。",
+  "removeDialogWallpaperHint": "注意：其中包含当前壁纸。移除/删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。",
+  "removedFromAlbumSuccess": "已从画册移除图片",
+  "removedFromAlbumCountSuccess": "已从画册移除 {count} 张图片",
+  "deletedAndRemovedSuccess": "已删除图片（已从所有画册和画廊中移除）",
+  "deletedAndRemovedCountSuccess": "已删除 {count} 张图片（已从所有画册和画廊中移除）",
+  "removeImageFailed": "移除图片失败"
 }

@@ -3,6 +3,7 @@
   "appSettings": "App Settings",
   "language": "Language",
   "languageDesc": "Interface language, empty means follow system",
+  "languageFollowSystem": "Follow system",
 
   "autoLaunch": "Launch at startup",
   "autoLaunchDesc": "Run automatically when system starts",
@@ -160,5 +161,13 @@
   "quickDoubleClickImageDesc": "Action on double-click",
   "quickColumns": "Columns",
   "quickColumnsDesc": "When fixed columns; off = dynamic (Ctrl+wheel)",
-  "quickRotationDependent": " (enable wallpaper rotation first)"
+  "quickRotationDependent": " (enable wallpaper rotation first)",
+
+  "quickDrawerTitleGallery": "Gallery settings",
+  "quickDrawerTitleAlbumDetail": "Album settings",
+  "quickDrawerTitleAlbums": "Album list settings",
+  "quickDrawerTitlePluginBrowser": "Source management settings",
+  "quickDrawerTitleSettings": "Settings",
+  "quickDrawerTitleDefault": "Settings",
+  "quickEmpty": "No quick settings on this page"
 }

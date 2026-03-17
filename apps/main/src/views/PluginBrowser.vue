@@ -11,13 +11,13 @@
 
         <!-- Tab 切换 -->
         <StyledTabs v-model="activeTab" :before-leave="beforeLeaveTab">
-      <el-tab-pane label="已安装源" name="installed">
+      <el-tab-pane :label="$t('plugins.installedTab')" name="installed">
         <!-- 已安装插件配置表格 -->
         <div v-if="showSkeletonBySource['installed'] && activeTab === 'installed'" class="loading-skeleton">
           <el-skeleton :rows="8" animated />
         </div>
         <div v-else-if="installedPlugins.length === 0" class="empty">
-          <el-empty description="暂无已安装源" />
+          <el-empty :description="$t('plugins.noInstalled')" />
         </div>
 
         <!-- 已安装：布局与商店一致 -->
@@ -40,19 +40,19 @@
                   </el-icon>
                 </div>
                 <div class="plugin-title">
-                  <h3>{{ plugin.name }}</h3>
-                  <p class="plugin-desp">{{ plugin.description || "无描述" }}</p>
+                  <h3>{{ pluginName(plugin) }}</h3>
+                  <p class="plugin-desp">{{ pluginDescription(plugin) || $t('plugins.noDescription') }}</p>
                 </div>
               </div>
 
               <div class="plugin-info">
-                <el-tag type="success" size="small">已安装</el-tag>
+                <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
                 <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
               </div>
 
               <div class="plugin-footer">
                 <el-button type="danger" size="small" @click.stop="handleDelete(plugin)">
-                  卸载
+                  {{ $t('plugins.uninstall') }}
                 </el-button>
               </div>
             </el-card>
@@ -90,7 +90,7 @@
         </div>
 
         <div v-else-if="!loadingBySource[s.id] && getStorePlugins(s.id).length === 0" class="empty">
-          <el-empty :description="`该商店源暂无插件：${s.name}`" />
+          <el-empty :description="$t('plugins.noPluginsInSource', { name: s.name })" />
         </div>
 
         <transition-group v-else name="fade-in-list" tag="div" class="plugin-grid">
@@ -111,33 +111,33 @@
                 </el-icon>
               </div>
               <div class="plugin-title">
-                <h3>{{ plugin.name }}</h3>
-                <p class="plugin-desp">{{ plugin.description || "无描述" }}</p>
+                <h3>{{ pluginName(plugin) }}</h3>
+                <p class="plugin-desp">{{ pluginDescription(plugin) || $t('plugins.noDescription') }}</p>
               </div>
             </div>
 
             <div class="plugin-info">
               <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
-              <el-tag v-if="plugin.installedVersion" type="success" size="small">已安装：v{{ plugin.installedVersion }}</el-tag>
-              <el-tag v-else type="warning" size="small">未安装</el-tag>
+              <el-tag v-if="plugin.installedVersion" type="success" size="small">{{ $t('plugins.installedVersion', { version: plugin.installedVersion }) }}</el-tag>
+              <el-tag v-else type="warning" size="small">{{ $t('plugins.notInstalled') }}</el-tag>
               <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
-                size="small">可更新</el-tag>
+                size="small">{{ $t('plugins.canUpdate') }}</el-tag>
               <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
             </div>
 
             <div class="plugin-footer">
               <el-button v-if="!plugin.installedVersion" type="primary" size="small" :loading="isInstalling(plugin.id)"
                 :disabled="isInstalling(plugin.id)" @click.stop="handleStoreInstall(plugin)">
-                {{ isInstalling(plugin.id) ? "安装中..." : "安装" }}
+                {{ isInstalling(plugin.id) ? $t('plugins.installing') : $t('plugins.install') }}
               </el-button>
               <el-button v-else-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="warning"
                 size="small" :loading="isInstalling(plugin.id)" :disabled="isInstalling(plugin.id)"
                 @click.stop="handleStoreInstall(plugin)">
-                {{ isInstalling(plugin.id) ? "更新中..." : "更新" }}
+                {{ isInstalling(plugin.id) ? $t('plugins.updating') : $t('plugins.update') }}
               </el-button>
               <el-button v-else size="small" :loading="isInstalling(plugin.id)" :disabled="isInstalling(plugin.id)"
                 @click.stop="handleStoreInstall(plugin, true)">
-                {{ isInstalling(plugin.id) ? "安装中..." : "重新安装" }}
+                {{ isInstalling(plugin.id) ? $t('plugins.installing') : $t('plugins.reinstall') }}
               </el-button>
             </div>
           </el-card>
@@ -150,78 +150,78 @@
           <el-icon style="margin-right: 4px;">
             <Plus />
           </el-icon>
-          添加源
+          {{ $t('plugins.addSourceTab') }}
         </template>
         <div class="add-source-content">
-          <el-empty description="点击上方“添加源”标签页可添加新的商店源" />
+          <el-empty :description="$t('plugins.addSourceHint')" />
         </div>
       </el-tab-pane>
         </StyledTabs>
     </div>
 
     <!-- 商店源管理 -->
-    <el-dialog v-if="!IS_LIGHT_MODE" v-model="showSourcesDialog" title="商店源" width="720px">
+    <el-dialog v-if="!IS_LIGHT_MODE" v-model="showSourcesDialog" :title="$t('plugins.sourcesDialogTitle')" width="720px">
       <div class="sources-hint">
-        商店源是一个可访问的 <code>index.json</code> 地址（推荐指向 GitHub Releases 资产直链）。
+        {{ $t('plugins.sourcesIntro') }}
       </div>
-      <el-table :data="sources" style="width: 100%" empty-text="暂无商店源">
-        <el-table-column prop="name" label="名称" width="180" />
-        <el-table-column prop="indexUrl" label="index.json 地址" show-overflow-tooltip />
-        <el-table-column label="操作" width="140">
+      <el-table :data="sources" style="width: 100%" :empty-text="$t('plugins.noSources')">
+        <el-table-column prop="name" :label="$t('plugins.name')" width="180" />
+        <el-table-column prop="indexUrl" :label="$t('plugins.indexUrl')" show-overflow-tooltip />
+        <el-table-column :label="$t('plugins.action')" width="140">
           <template #default="{ row, $index }">
-            <el-button size="small" @click="editSource($index)">编辑</el-button>
-            <el-button size="small" type="danger" @click="removeSource($index)">删除</el-button>
+            <el-button size="small" @click="editSource($index)">{{ $t('plugins.edit') }}</el-button>
+            <el-button size="small" type="danger" @click="removeSource($index)">{{ $t('plugins.delete') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
 
       <template #footer>
-        <el-button @click="showSourcesDialog = false">关闭</el-button>
-        <el-button @click="addSource">新增源</el-button>
+        <el-button @click="showSourcesDialog = false">{{ $t('common.close') }}</el-button>
+        <el-button @click="addSource">{{ $t('plugins.newSource') }}</el-button>
       </template>
     </el-dialog>
 
     <!-- 新增/编辑源 -->
     <el-dialog v-if="!IS_LIGHT_MODE" v-model="showEditSourceDialog"
-      :title="editingSourceIndex === null ? '新增源' : '编辑源'" width="620px">
+      :title="editingSourceIndex === null ? $t('plugins.newSource') : $t('plugins.editSource')" width="620px">
       <el-form label-width="110px">
         <el-form-item label="ID">
-          <el-input v-model="editSourceForm.id" placeholder="留空则自动生成" />
+          <el-input v-model="editSourceForm.id" :placeholder="$t('plugins.idPlaceholder')" />
         </el-form-item>
-        <el-form-item label="名称">
-          <el-input v-model="editSourceForm.name" placeholder="例如：官方源" />
+        <el-form-item :label="$t('plugins.name')">
+          <el-input v-model="editSourceForm.name" :placeholder="$t('plugins.namePlaceholder')" />
         </el-form-item>
         <el-form-item label="index.json">
           <el-input v-model="editSourceForm.indexUrl" placeholder="https://.../index.json" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="showEditSourceDialog = false">取消</el-button>
+        <el-button @click="showEditSourceDialog = false">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="isValidatingSource" :disabled="isValidatingSource"
           @click="confirmEditSource">
-          确定
+          {{ $t('common.confirm') }}
         </el-button>
       </template>
     </el-dialog>
 
     <!-- 导入源对话框 -->
-    <el-dialog v-model="showImportDialog" title="导入源" width="500px">
+    <el-dialog v-model="showImportDialog" :title="$t('plugins.importDialogTitle')" width="500px">
       <div class="import-instructions">
-        <p>请选择要导入的源文件（.kgpg 格式）</p>
+        <p>{{ $t('plugins.selectFileHint') }}</p>
         <el-button type="primary" @click="selectPluginFile">
           <el-icon>
             <Upload />
           </el-icon>
-          选择文件
+          {{ $t('plugins.selectFile') }}
         </el-button>
         <p v-if="selectedFilePath" class="selected-file">
-          已选择: {{ selectedFilePath }}
+          {{ $t('plugins.selected') }} {{ selectedFilePath }}
         </p>
       </div>
       <template #footer>
-        <el-button @click="showImportDialog = false">取消</el-button>
+        <el-button @click="showImportDialog = false">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" @click="handleImport" :disabled="!selectedFilePath">
-          导入
+          {{ $t('plugins.importButton') }}
         </el-button>
       </template>
     </el-dialog>
@@ -243,6 +243,9 @@ import {
   Close,
 } from "@element-plus/icons-vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
+import type { PluginManifestText } from "@kabegame/core/stores/plugins";
+import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
+import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -263,9 +266,11 @@ interface PluginSource {
 
 interface StorePluginResolved {
   id: string;
-  name: string;
+  /** 与已安装插件一致：i18n 对象 { default, zh?, ja?, ... }，由后端从 index.json 归一化 */
+  name: PluginManifestText;
   version: string;
-  description: string;
+  /** 与已安装插件一致：i18n 对象 { default, zh?, ja?, ... }，由后端从 index.json 归一化 */
+  description: PluginManifestText;
   downloadUrl: string;
   iconUrl?: string | null;
   packageVersion?: number | null;
@@ -275,6 +280,9 @@ interface StorePluginResolved {
   sourceName: string;
   installedVersion?: string | null;
 }
+
+/** 已安装插件或商店插件，用于列表卡片、详情跳转等统一入参 */
+type PluginListItem = Plugin | StorePluginResolved;
 
 interface ImportPreview {
   id: string;
@@ -294,6 +302,8 @@ interface StoreInstallPreview {
 }
 
 const pluginStore = usePluginStore();
+const { t } = useI18n();
+const { pluginName, pluginDescription } = usePluginManifestI18n();
 const router = useRouter();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("pluginbrowser");
@@ -400,12 +410,12 @@ const pluginIconLoading = ref<Record<string, boolean>>({});
 
 const localIconKey = (pluginId: string) => `local:${pluginId}`;
 const storeIconKey = (sourceId: string, pluginId: string) => `store:${sourceId}:${pluginId}`;
-const getIconKey = (p: { id: string } & Partial<StorePluginResolved>) => {
+const getIconKey = (p: PluginListItem) => {
   // StorePluginResolved 一定有 sourceId；本地 Plugin 没有该字段
-  const sid = typeof (p as any).sourceId === "string" ? String((p as any).sourceId) : null;
+  const sid = "sourceId" in p && typeof p.sourceId === "string" ? p.sourceId : null;
   return sid ? storeIconKey(sid, p.id) : localIconKey(p.id);
 };
-const isIconLoading = (p: { id: string } & Partial<StorePluginResolved>) => {
+const isIconLoading = (p: PluginListItem) => {
   const k = getIconKey(p);
   return !!pluginIconLoading.value[k];
 };
@@ -421,12 +431,11 @@ const setPluginIconLoading = (key: string, loading: boolean) => {
   pluginIconLoading.value = next;
 };
 
-const getPluginIconSrc = (p: { id: string } & Partial<StorePluginResolved>) => {
-  const isStore = typeof (p as any).sourceId === "string";
+const getPluginIconSrc = (p: PluginListItem) => {
+  const isStore = "sourceId" in p && typeof p.sourceId === "string";
   if (isStore) {
-    // 商店/官方源：优先用 index.json 里的 iconUrl（通常是 https://.../<id>.icon.png）
-    // 若 iconUrl 不存在，再用远端 Range 读取的 bytes（data URL）
-    if (p.iconUrl) return p.iconUrl;
+    const store = p as StorePluginResolved;
+    if (store.iconUrl) return store.iconUrl;
     const key = getIconKey(p);
     return pluginIcons.value[key] || null;
   }
@@ -644,7 +653,7 @@ const editSource = (idx: number) => {
 
 const confirmEditSource = async () => {
   if (!editSourceForm.name.trim() || !editSourceForm.indexUrl.trim()) {
-    ElMessage.warning("请填写名称和 index.json 地址");
+    ElMessage.warning(t("plugins.fillNameAndIndexUrl"));
     return;
   }
 
@@ -666,12 +675,12 @@ const confirmEditSource = async () => {
 
     try {
       await ElMessageBox.confirm(
-        `验证该源失败：\n\n${msg}\n\n仍然要添加这个源吗？`,
-        "源验证失败",
+        t("plugins.sourceValidateFailedStillAdd", { msg }),
+        t("plugins.sourceValidateFailed"),
         {
           type: "warning",
-          confirmButtonText: "仍然添加",
-          cancelButtonText: "返回修改",
+          confirmButtonText: t("plugins.stillAdd"),
+          cancelButtonText: t("plugins.backToEdit"),
           distinguishCancelAndClose: true,
         }
       );
@@ -705,11 +714,11 @@ const confirmEditSource = async () => {
     }
 
     await loadSources();
-    ElMessage.success(editingSourceIndex.value === null ? "源已添加" : "源已更新");
+    ElMessage.success(editingSourceIndex.value === null ? t("plugins.sourceAdded") : t("plugins.sourceUpdated"));
     showEditSourceDialog.value = false;
   } catch (e) {
     console.error("保存商店源失败:", e);
-    let errorMessage = "保存商店源失败";
+    let errorMessage = t("plugins.saveSourceFailed");
     if (typeof e === 'string') {
       errorMessage = e;
     } else if (e instanceof Error) {
@@ -726,7 +735,7 @@ const removeSource = async (idx: number) => {
   if (!source) return;
 
   try {
-    await ElMessageBox.confirm("确定要删除这个商店源吗？", "删除商店源", { type: "warning" });
+    await ElMessageBox.confirm(t("plugins.confirmDeleteStoreSource"), t("plugins.deleteStoreSourceTitle"), { type: "warning" });
     sources.value.splice(idx, 1);
   } catch {
     // cancel
@@ -736,8 +745,8 @@ const removeSource = async (idx: number) => {
 const handleDeleteSource = async (source: PluginSource) => {
   try {
     await ElMessageBox.confirm(
-      `确定要删除商店源 "${source.name}" 吗？\n\n这将同时删除该源的所有缓存数据。`,
-      "删除商店源",
+      t("plugins.confirmDeleteStoreSourceWithName", { name: source.name }),
+      t("plugins.deleteStoreSourceTitle"),
       { type: "warning" }
     );
 
@@ -759,11 +768,11 @@ const handleDeleteSource = async (source: PluginSource) => {
       activeTab.value = "installed";
     }
 
-    ElMessage.success("商店源已删除");
+    ElMessage.success(t("plugins.sourceDeleted"));
   } catch (e) {
     if (e !== 'cancel') {
       console.error("删除商店源失败:", e);
-      ElMessage.error("删除商店源失败");
+      ElMessage.error(t("plugins.deleteSourceFailed"));
     }
   }
 };
@@ -809,7 +818,7 @@ const loadStorePlugins = async (
     loadingBySource.value = { ...loadingBySource.value, [sourceId]: false };
 
     if (showMessage) {
-      ElMessage.success(forceRefresh ? "商店列表已刷新" : "商店列表已加载");
+      ElMessage.success(forceRefresh ? t("plugins.storeListRefreshed") : t("plugins.storeListLoaded"));
     }
 
     // 新格式：iconUrl 可能为空，尝试通过 KGPG v2 Range 预取 icon（不阻塞 UI）
@@ -817,7 +826,7 @@ const loadStorePlugins = async (
   } catch (error) {
     console.error("加载商店失败:", error);
     // 提取错误消息 - Tauri invoke 可能返回字符串或 Error 对象
-    let errorMessage = "加载商店失败（请检查商店源配置）";
+    let errorMessage = t("plugins.loadStoreFailed");
     if (typeof error === 'string') {
       errorMessage = error;
     } else if (error instanceof Error) {
@@ -854,7 +863,7 @@ const selectPluginFile = async () => {
     }
   } catch (error) {
     console.error("选择文件失败:", error);
-    ElMessage.error("选择文件失败");
+    ElMessage.error(t("plugins.selectFileFailed"));
   }
 };
 
@@ -869,7 +878,7 @@ const triggerImportDirect = async () => {
     await handleImport();
   } catch (error) {
     console.error("选择文件失败:", error);
-    ElMessage.error("选择文件失败");
+    ElMessage.error(t("plugins.selectFileFailed"));
   }
 };
 
@@ -904,20 +913,20 @@ const handleImport = async () => {
         ? `检测到同 ID 插件，版本将从 <b>v${preview.existingVersion || "?"}</b> 变更为 <b>v${preview.version}</b>，是否继续导入？${changeLogHtml}`
         : `将导入插件：<b>${escapeHtml(preview.name)}</b>（v${preview.version}，${formatBytes(preview.sizeBytes)}），是否继续？${changeLogHtml}`;
 
-      await ElMessageBox.confirm(msg, "确认导入", {
+      await ElMessageBox.confirm(msg, t("plugins.confirmImport"), {
         type: "warning",
         dangerouslyUseHTMLString: true,
-        confirmButtonText: "导入",
-        cancelButtonText: "取消",
+        confirmButtonText: t("plugins.importButton"),
+        cancelButtonText: t("common.cancel"),
       });
 
       await invoke("import_plugin_from_zip", { zipPath: filePath });
     } else {
-      ElMessage.error("不支持的文件格式，请选择 .kgpg 文件");
+      ElMessage.error(t("plugins.invalidFormatSelectKgpg"));
       return;
     }
 
-    ElMessage.success("源导入成功");
+    ElMessage.success(t("plugins.importSuccess"));
     showImportDialog.value = false;
     selectedFilePath.value = null;
     await pluginStore.loadPlugins();
@@ -929,7 +938,7 @@ const handleImport = async () => {
   } catch (error) {
     console.error("导入源失败:", error);
     ElMessage.error(
-      error instanceof Error ? error.message : "导入源失败"
+      error instanceof Error ? error.message : t("plugins.importFailed")
     );
   }
 };
@@ -939,17 +948,18 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
     // 之所以先下载，是为了避免实际版本不一致
     const willUpdate = isUpdateAvailable(plugin.installedVersion, plugin.version);
     const isReinstall = forceReinstall && plugin.installedVersion === plugin.version;
-    const title = isReinstall ? "确认重新安装" : willUpdate ? "确认更新" : "确认安装";
-    const confirmButtonText = isReinstall ? "重新安装" : willUpdate ? "更新" : "安装";
+    const title = isReinstall ? t("plugins.confirmReinstall") : willUpdate ? t("plugins.confirmUpdate") : t("plugins.confirmInstall");
+    const confirmButtonText = isReinstall ? t("plugins.reinstall") : willUpdate ? t("plugins.update") : t("plugins.install");
+    const displayName = pluginName(plugin);
     const msg = isReinstall
-      ? `将重新安装 <b>${escapeHtml(plugin.name)}</b>（v${escapeHtml(plugin.version)}，${formatBytes(
+      ? `将重新安装 <b>${escapeHtml(displayName)}</b>（v${escapeHtml(plugin.version)}，${formatBytes(
         plugin.sizeBytes
       )}），是否继续？`
       : willUpdate
         ? `将从 <b>v${escapeHtml(plugin.installedVersion || "?")}</b> 更新为 <b>v${escapeHtml(
           plugin.version
         )}</b>（${formatBytes(plugin.sizeBytes)}），是否继续？`
-        : `将安装 <b>${escapeHtml(plugin.name)}</b>（v${escapeHtml(plugin.version)}，${formatBytes(
+        : `将安装 <b>${escapeHtml(displayName)}</b>（v${escapeHtml(plugin.version)}，${formatBytes(
           plugin.sizeBytes
         )}），是否继续？`;
 
@@ -957,7 +967,7 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
       type: "warning",
       dangerouslyUseHTMLString: true,
       confirmButtonText,
-      cancelButtonText: "取消",
+      cancelButtonText: t("common.cancel"),
     });
 
     setInstalling(plugin.id, true);
@@ -972,7 +982,7 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
     // 刷新后端该插件的缓存，确保后续 get_plugins 返回最新数据
     await invoke("refresh_installed_plugin_cache", { pluginId: plugin.id });
 
-    ElMessage.success(isReinstall ? "重新安装成功" : willUpdate ? "更新成功" : "安装成功");
+    ElMessage.success(isReinstall ? t("plugins.reinstallSuccess") : willUpdate ? t("plugins.updateSuccess") : t("plugins.installSuccess"));
     await pluginStore.loadPlugins();
 
     // 只更新本地 UI 状态：不触发整页/整 tab 列表刷新
@@ -995,20 +1005,21 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
   }
 };
 
-const viewPluginDetails = (plugin: { id: string } & Partial<StorePluginResolved>) => {
+const viewPluginDetails = (plugin: PluginListItem) => {
   // 跳转到插件详情页面，对 ID 进行 URL 编码以支持中文字符
   // 商店/官方源条目：通过 query 携带 downloadUrl 等信息，详情页才能走“远程下载到内存解析”的路径
   const path = `/plugin-detail/${encodeURIComponent(plugin.id)}`;
-  if (plugin.downloadUrl) {
+  if ("downloadUrl" in plugin && plugin.downloadUrl) {
+    const store = plugin as StorePluginResolved;
     router.push({
       path,
       query: {
-        downloadUrl: plugin.downloadUrl,
-        sha256: plugin.sha256 ?? undefined,
-        sizeBytes: plugin.sizeBytes != null ? String(plugin.sizeBytes) : undefined,
-        iconUrl: plugin.iconUrl ?? undefined,
-        sourceId: plugin.sourceId ?? undefined,
-        version: plugin.version ?? undefined,
+        downloadUrl: store.downloadUrl,
+        sha256: store.sha256 ?? undefined,
+        sizeBytes: store.sizeBytes != null ? String(store.sizeBytes) : undefined,
+        iconUrl: store.iconUrl ?? undefined,
+        sourceId: store.sourceId ?? undefined,
+        version: store.version ?? undefined,
       },
     });
     return;
@@ -1018,11 +1029,11 @@ const viewPluginDetails = (plugin: { id: string } & Partial<StorePluginResolved>
 
 const handleDelete = async (plugin: Plugin) => {
   try {
-    await ElMessageBox.confirm(`确定要删除插件 "${plugin.name}" 吗？`, "确认删除", {
+    await ElMessageBox.confirm(t("plugins.confirmUninstall", { name: pluginName(plugin) }), t("plugins.confirmDelete"), {
       type: "warning",
     });
     await pluginStore.deletePlugin(plugin.id);
-    ElMessage.success("插件已删除");
+    ElMessage.success(t("plugins.pluginDeleted"));
   } catch (error) {
     // 用户取消
   }
@@ -1050,11 +1061,11 @@ const handleRefresh = async () => {
         await invoke("refresh_installed_plugins_cache");
         await pluginStore.loadPlugins();
         await refreshPluginIcons();
-        ElMessage.success("已安装源已刷新");
+        ElMessage.success(t("plugins.installedRefreshSuccess"));
       } catch (error) {
         console.error("刷新已安装源失败:", error);
         // 提取错误消息 - Tauri invoke 可能返回字符串或 Error 对象
-        let errorMessage = "刷新已安装源失败";
+        let errorMessage = t("plugins.installedRefreshFailed");
         if (typeof error === 'string') {
           errorMessage = error;
         } else if (error instanceof Error) {
@@ -1084,7 +1095,7 @@ const handleRefresh = async () => {
       }
       const sourceIds = new Set(sources.value.map((s) => s.id));
       if (!sourceIds.has(sourceId)) {
-        ElMessage.warning("当前商店源已不存在，已切回已安装源");
+        ElMessage.warning(t("plugins.storeSourceGoneSwitchToInstalled"));
         activeTab.value = "installed";
         return;
       }
@@ -1103,7 +1114,7 @@ const handleRefresh = async () => {
     // 否则显示通用错误消息
     if (isStoreTab(activeTab.value)) {
       // 提取错误消息 - Tauri invoke 可能返回字符串或 Error 对象
-      let errorMessage = "刷新失败";
+      let errorMessage = t("plugins.refreshFailed");
       if (typeof error === 'string') {
         errorMessage = error;
       } else if (error instanceof Error) {

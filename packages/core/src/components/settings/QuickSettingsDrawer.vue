@@ -1,5 +1,5 @@
 <template>
-    <el-drawer v-model="drawer.isOpen" :title="drawer.title" :size="drawerSize" :append-to-body="appendToBody" class="quick-settings-drawer drawer-max-width">
+    <el-drawer :model-value="isOpen" @update:model-value="onDrawerModelValue" :title="title" :size="drawerSize" :append-to-body="appendToBody" class="quick-settings-drawer drawer-max-width">
         <div v-loading="loading" style="min-height: 120px;">
             <div v-if="filteredGroups.length === 0" class="empty">
                 <el-empty :description="emptyDescription" :image-size="100" />
@@ -26,7 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, type PropType } from "vue";
+import { computed, ref, watch } from "vue";
 import { useSettingsStore } from "../../stores/settings";
 import SettingRow from "./SettingRow.vue";
 import type {
@@ -34,67 +34,44 @@ import type {
     QuickSettingItem,
 } from "./quick-settings-registry-types";
 
-type DrawerLike<PageId extends string> = {
+interface Props {
     isOpen: boolean;
     title: string;
-    pageId: PageId;
-};
+    pageId: string;
+    groups: Array<QuickSettingGroup<string>>;
+    drawerSize?: string;
+    appendToBody?: boolean;
+    emptyDescription?: string;
+    loadOnOpen?: boolean;
+    getItemDisabled?: (item: QuickSettingItem<string>) => boolean;
+    getItemProps?: (
+        item: QuickSettingItem<string>,
+        baseProps: Record<string, any>
+    ) => Record<string, any>;
+    getItemDescription?: (
+        item: QuickSettingItem<string>,
+        baseDescription: string | undefined
+    ) => string | undefined;
+}
 
-const props = defineProps({
-    drawer: {
-        type: Object as PropType<DrawerLike<string>>,
-        required: true,
-    },
-    groups: {
-        type: Array as PropType<Array<QuickSettingGroup<string>>>,
-        required: true,
-    },
-    drawerSize: {
-        type: String,
-        default: "420px",
-    },
-    appendToBody: {
-        type: Boolean,
-        default: true,
-    },
-    emptyDescription: {
-        type: String,
-        default: "此页面暂无可快捷调整的设置",
-    },
-    loadOnOpen: {
-        type: Boolean,
-        default: true,
-    },
-    getItemDisabled: {
-        type: Function as PropType<(item: QuickSettingItem<string>) => boolean>,
-        default: undefined,
-    },
-    getItemProps: {
-        type: Function as PropType<
-            (
-                item: QuickSettingItem<string>,
-                baseProps: Record<string, any>
-            ) => Record<string, any>
-        >,
-        default: undefined,
-    },
-    getItemDescription: {
-        type: Function as PropType<
-            (
-                item: QuickSettingItem<string>,
-                baseDescription: string | undefined
-            ) => string | undefined
-        >,
-        default: undefined,
-    },
+const props = withDefaults(defineProps<Props>(), {
+    drawerSize: "420px",
+    appendToBody: true,
+    emptyDescription: "此页面暂无可快捷调整的设置",
+    loadOnOpen: true,
 });
 
-const drawer = props.drawer;
+const emit = defineEmits<{ (e: "onClose"): void }>();
+
+function onDrawerModelValue(v: boolean) {
+    if (!v) emit("onClose");
+}
+
 const settingsStore = useSettingsStore();
 const loading = ref(false);
 
 const filteredGroups = computed(() => {
-    const pid = drawer.pageId;
+    const pid = props.pageId;
     return props.groups
         .map((g) => ({
             ...g,
@@ -118,7 +95,7 @@ const getEffectiveDescription = (
 };
 
 watch(
-    () => [drawer.isOpen, drawer.pageId] as const,
+    () => [props.isOpen, props.pageId] as const,
     async ([open]) => {
         if (!open) return;
         if (!props.loadOnOpen) return;

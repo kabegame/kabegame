@@ -79,6 +79,8 @@ daemon_event_kinds! {
     WallpaperUpdateTransition,
     SettingChange,
     AlbumAdded,
+    AlbumNameChanged,
+    AlbumDeleted,
     SurfRecordsChange,
 }
 
@@ -108,6 +110,8 @@ impl DaemonEventKind {
             DaemonEventKind::WallpaperUpdateTransition => "wallpaper-update-transition",
             DaemonEventKind::SettingChange => "setting-change",
             DaemonEventKind::AlbumAdded => "album-added",
+            DaemonEventKind::AlbumNameChanged => "album-name-changed",
+            DaemonEventKind::AlbumDeleted => "album-deleted",
             DaemonEventKind::SurfRecordsChange => "surf-records-change",
         }
         .to_string()
@@ -132,6 +136,8 @@ impl DaemonEventKind {
             "wallpaper-update-transition" => Some(DaemonEventKind::WallpaperUpdateTransition),
             "setting-change" => Some(DaemonEventKind::SettingChange),
             "album-added" => Some(DaemonEventKind::AlbumAdded),
+            "album-name-changed" => Some(DaemonEventKind::AlbumNameChanged),
+            "album-deleted" => Some(DaemonEventKind::AlbumDeleted),
             "surf-records-change" => Some(DaemonEventKind::SurfRecordsChange),
             _ => None,
         }
@@ -253,6 +259,18 @@ pub enum DaemonEvent {
         #[serde(rename = "createdAt")]
         created_at: u64,
     },
+    /// 画册名称变更（底层 DB 重命名后发出）
+    AlbumNameChanged {
+        #[serde(rename = "albumId")]
+        album_id: String,
+        #[serde(rename = "newName")]
+        new_name: String,
+    },
+    /// 画册删除（底层 DB 删除后发出）
+    AlbumDeleted {
+        #[serde(rename = "albumId")]
+        album_id: String,
+    },
     /// 畅游记录列表变化
     SurfRecordsChange {
         reason: String,
@@ -288,6 +306,8 @@ impl DaemonEvent {
             }
             DaemonEvent::SettingChange { .. } => DaemonEventKind::SettingChange,
             DaemonEvent::AlbumAdded { .. } => DaemonEventKind::AlbumAdded,
+            DaemonEvent::AlbumNameChanged { .. } => DaemonEventKind::AlbumNameChanged,
+            DaemonEvent::AlbumDeleted { .. } => DaemonEventKind::AlbumDeleted,
             DaemonEvent::SurfRecordsChange { .. } => DaemonEventKind::SurfRecordsChange,
         }
     }

@@ -11,9 +11,8 @@ use std::sync::Arc;
 /// 启动虚拟磁盘事件监听器
 ///
 /// 监听以下事件并触发对应操作：
-/// - `AlbumAdded` → `vd_service.bump_albums()`
+/// - `AlbumAdded` / `AlbumNameChanged` / `AlbumDeleted` → `vd_service.bump_albums()`
 /// - `ImagesChange` → 根据 payload 调用 `notify_album_dir_changed` 或 `notify_gallery_tree_changed`
-/// - `Generic` 事件中的 `albums-changed` → `bump_albums()`
 /// - `Generic` 事件中的 `tasks-changed` → `bump_tasks()`
 /// - `Generic` 事件中的 `images-change` → 根据 payload 处理
 #[cfg(all(
@@ -27,6 +26,8 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
     // 订阅我们关心的事件类型
     let event_kinds = vec![
         DaemonEventKind::AlbumAdded,
+        DaemonEventKind::AlbumNameChanged,
+        DaemonEventKind::AlbumDeleted,
         DaemonEventKind::ImagesChange,
         DaemonEventKind::Generic,
     ];
@@ -45,11 +46,15 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
                         // ImagesChange 事件通常需要刷新整个 gallery 树
                         vd_service.notify_gallery_tree_changed();
                     }
+                    DaemonEvent::AlbumNameChanged { .. } => {
+                        vd_service.bump_albums();
+                    }
+                    DaemonEvent::AlbumDeleted { .. } => {
+                        vd_service.bump_albums();
+                    }
+                    // TODO: 逐步去掉 Generic 事件，改用更明确的事件类型
                     DaemonEvent::Generic { event, payload } => {
                         match event.as_str() {
-                            "albums-changed" => {
-                                vd_service.bump_albums();
-                            }
                             "tasks-changed" => {
                                 vd_service.bump_tasks();
                             }

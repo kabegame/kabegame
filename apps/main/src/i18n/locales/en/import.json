@@ -1,4 +1,5 @@
 {
+  "pluginPackageSuffix": " (plugin package)",
   "confirmImportTitle": "Confirm import",
   "confirmImportButton": "Confirm import",
   "confirmImportQuestion": "Import the following {count} items?",

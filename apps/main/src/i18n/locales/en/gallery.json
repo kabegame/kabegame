@@ -1,4 +1,11 @@
 {
+  "imageDetailTitle": "Image Details",
+  "imageDetailSource": "Source: ",
+  "imageDetailUrl": "URL: ",
+  "imageDetailLocalPath": "Local path: ",
+  "imageDetailCrawledAt": "Collected at: ",
+  "imageDetailMetadata": "Metadata: ",
+  "imageDetailInvalidDate": "End of the galaxy",
   "emptyHint": "No images yet",
   "startCollect": "Start collecting",
   "confirmDelete": "Confirm delete",
@@ -46,7 +53,6 @@
   "selectFolderDesc": "Select a folder containing images",
   "selectArchive": "Select archive",
   "selectArchiveDesc": "Supports .zip format",
-  "chooseCollectMethod": "Choose collection method",
   "localDesc": "Import from local: images, folders or archives",
   "remoteDesc": "Use plugins to collect images from network",
   "organizingProgress": "Organizing {processed}/{total}",
@@ -65,5 +71,17 @@
   "weNameTooLong": "Name cannot exceed 64 characters",
   "weDirNotConfigured": "Wallpaper Engine directory not configured. Go to Settings -> Wallpaper rotation -> Wallpaper Engine directory",
   "weExportSuccess": "Exported WE project ({count} images): {path}",
-  "weExportVideoSuccess": "Exported WE video project: {path}"
+  "weExportVideoSuccess": "Exported WE video project: {path}",
+  "removeFromAlbum": "Remove from album",
+  "removeDialogCheckboxLabel": "Also delete image files (use with caution)",
+  "removeDialogDangerText": "Warning: Files will be permanently deleted and removed from all albums and gallery. This cannot be undone!",
+  "removeDialogSafeText": "If unchecked, images are only removed from this album; files and entries in other albums are kept.",
+  "removeDialogMessageSingle": "This image will be removed from the current album.",
+  "removeDialogMessageMulti": "These {count} images will be removed from the current album.",
+  "removeDialogWallpaperHint": "Note: Selection includes the current wallpaper. Remove/delete will not change the desktop wallpaper immediately, but it will not be available after next launch.",
+  "removedFromAlbumSuccess": "Removed from album",
+  "removedFromAlbumCountSuccess": "Removed {count} images from album",
+  "deletedAndRemovedSuccess": "Deleted (removed from all albums and gallery)",
+  "deletedAndRemovedCountSuccess": "Deleted {count} images (removed from all albums and gallery)",
+  "removeImageFailed": "Failed to remove from album"
 }

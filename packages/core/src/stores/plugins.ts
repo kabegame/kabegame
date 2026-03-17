@@ -11,14 +11,23 @@ function toPngDataUrl(iconData: number[]): string {
   return `data:image/png;base64,${base64}`;
 }
 
+/** manifest name/description：后端下发的 Record，键为 "default"（默认）及语言码 "zh"、"ja"、"ko" 等 */
+export type PluginManifestText = Record<string, string>;
+
+/** 插件文档多语言：键 "default" 及 "zh"、"en"、"ja"、"ko" 等，与 name/desp 同构 */
+export type PluginManifestDoc = Record<string, string>;
+
+/** 插件 config 变量 name/descripts/options[].name：后端下发的 Record，键为 "default" 及语言码 "zh"、"en" 等，与 manifest 同构 */
+export type PluginConfigText = Record<string, string>;
+
 /** 插件（已安装）的基本信息 */
 export interface BrowserPlugin {
   id: string;
-  name: string;
-  desp: string;
+  name: PluginManifestText;
+  desp: PluginManifestText;
   icon?: string | null;
   filePath?: string | null;
-  doc?: string | null;
+  doc?: PluginManifestDoc | null;
   baseUrl?: string | null;
 }
 
@@ -116,12 +125,12 @@ export const useInstalledPluginsStore = defineStore("installedPlugins", () => {
  */
 export interface Plugin {
   id: string;
-  name: string;
-  description: string;
+  /** string 或 { name?, ja?, ko?, ... }，用 usePluginManifestI18n 解析后展示 */
+  name: PluginManifestText;
+  description: PluginManifestText;
   version: string;
   baseUrl: string;
   sizeBytes: number;
-  builtIn: boolean;
   config: Record<string, any>;
   selector?: {
     imageSelector: string;

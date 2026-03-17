@@ -19,8 +19,8 @@
     </ImageGrid>
 
     <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-      :message="removeDialogMessage" title="从画册移除" checkbox-label="同时删除图片（慎用）" :hide-checkbox="IS_ANDROID"
-      danger-text="警告：将永久删除电脑文件，并从所有画册和画廊中移除，不可恢复！" safe-text="不勾选仅从当前画册移除，图片文件和其他画册中的记录将保留。"
+      :message="removeDialogMessage" :title="t('gallery.removeFromAlbum')" :checkbox-label="t('gallery.removeDialogCheckboxLabel')" :hide-checkbox="IS_ANDROID"
+      :danger-text="t('gallery.removeDialogDangerText')" :safe-text="t('gallery.removeDialogSafeText')"
       @confirm="confirmRemoveImages" />
 
     <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds"
@@ -72,8 +72,10 @@ import { diffById } from "@/utils/listDiff";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
+import { useI18n } from "vue-i18n";
 
 const route = useRoute();
+const { t } = useI18n();
 const router = useRouter();
 const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
@@ -217,7 +219,7 @@ useImageGridAutoLoad({
 });
 
 // Image actions for context menu / action sheet
-const imageActions = computed(() => createImageActions({ removeText: "从画册移除" }));
+const imageActions = computed(() => createImageActions({ removeText: t("gallery.removeFromAlbum") }));
 
 watch(
   () => albumViewRef.value,
@@ -403,16 +405,16 @@ const confirmRemoveImages = async () => {
     // 根据操作类型显示不同的成功消息
     if (shouldDeleteFiles) {
       ElMessage.success(
-        `${count > 1 ? `已删除 ${count} 张图片` : "已删除图片"}（已从所有画册和画廊中移除）`
+        count > 1 ? t("gallery.deletedAndRemovedCountSuccess", { count }) : t("gallery.deletedAndRemovedSuccess")
       );
     } else {
       ElMessage.success(
-        `${count > 1 ? `已从画册移除 ${count} 张图片` : "已从画册移除图片"}`
+        count > 1 ? t("gallery.removedFromAlbumCountSuccess", { count }) : t("gallery.removedFromAlbumSuccess")
       );
     }
   } catch (error) {
     console.error("操作失败:", error);
-    ElMessage.error(shouldDeleteFiles ? "删除失败" : "移除失败");
+    ElMessage.error(shouldDeleteFiles ? t("common.deleteFail") : t("common.removeFail"));
   }
 };
 
@@ -424,15 +426,15 @@ const buildSelectionActions = (selectedCount: number, selectedIds: ReadonlySet<s
 
   if (selectedCount === 1) {
     return [
-      { key: "favorite", label: isFavorite ? "取消收藏" : "收藏", icon: isFavorite ? StarFilled : Star, command: "favorite" },
-      { key: "addToAlbum", label: "加入画册", icon: FolderAdd, command: "addToAlbum" },
-      { key: "remove", label: "从画册移除", icon: Delete, command: "remove" },
+      { key: "favorite", label: isFavorite ? t("contextMenu.unfavorite") : t("contextMenu.favorite"), icon: isFavorite ? StarFilled : Star, command: "favorite" },
+      { key: "addToAlbum", label: t("contextMenu.addToAlbum"), icon: FolderAdd, command: "addToAlbum" },
+      { key: "remove", label: t("gallery.removeFromAlbum"), icon: Delete, command: "remove" },
     ];
   } else {
     return [
-      { key: "favorite", label: `收藏${countText}`, icon: Star, command: "favorite" },
-      { key: "addToAlbum", label: `加入画册${countText}`, icon: FolderAdd, command: "addToAlbum" },
-      { key: "remove", label: `从画册移除${countText}`, icon: Delete, command: "remove" },
+      { key: "favorite", label: `${t("contextMenu.favorite")}${countText}`, icon: Star, command: "favorite" },
+      { key: "addToAlbum", label: `${t("contextMenu.addToAlbum")}${countText}`, icon: FolderAdd, command: "addToAlbum" },
+      { key: "remove", label: `${t("gallery.removeFromAlbum")}${countText}`, icon: Delete, command: "remove" },
     ];
   }
 };
@@ -678,10 +680,8 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       const includesCurrent =
         !!currentWallpaperImageId.value &&
         imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
-      const currentHint = includesCurrent
-        ? `\n\n注意：其中包含当前壁纸。移除/删除不会立刻改变桌面壁纸，但下次启动将无法复现该壁纸。`
-        : "";
-      removeDialogMessage.value = `将从当前画册移除${count > 1 ? `这 ${count} 张图片` : "这张图片"}。${currentHint}`;
+      const currentHint = includesCurrent ? `\n\n${t("gallery.removeDialogWallpaperHint")}` : "";
+      removeDialogMessage.value = (count > 1 ? t("gallery.removeDialogMessageMulti", { count }) : t("gallery.removeDialogMessageSingle")) + currentHint;
       removeDeleteFiles.value = false;
       showRemoveDialog.value = true;
       break;
@@ -721,7 +721,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
           }
         } catch (error) {
           console.error("移除图片失败:", error);
-          ElMessage.error("移除图片失败");
+          ElMessage.error(t("gallery.removeImageFailed"));
         }
       })();
       break;

@@ -54,6 +54,7 @@
   "exitTitle": "結束提示",
   "bye": "拜拜",
   "openFileFailed": "開啟檔案失敗",
+  "openUrlFailed": "開啟 URL 失敗",
   "copyImageSuccess": "圖片已複製到剪貼簿",
   "copyImageFailed": "複製圖片失敗",
   "imageNotLoadedYet": "圖片尚未載入完成，請稍後再試",

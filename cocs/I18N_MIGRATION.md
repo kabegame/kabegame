@@ -219,6 +219,7 @@
 | 文件 | 待迁移内容 |
 |------|------------|
 | `apps/main/src/components/TaskDrawer.vue` | 抽屉标题、状态、操作按钮 |
+| **`packages/core/.../TaskDrawerContent.vue`** | 任务抽屉内全部文案（**见 7.1.10**，位于 core 未迁移） |
 | `apps/main/src/components/MediaPicker.vue` | 标题、按钮、提示 |
 | `apps/main/src/components/LocalImportDialog.vue` | 标题、说明、按钮 |
 | `apps/main/src/components/CrawlerDialog.vue` | 爬虫/采集相关文案 |
@@ -234,6 +235,7 @@
 | `apps/main/src/components/common/OptionPickerDrawer.vue` | 选项标题、确认等 |
 | `apps/main/src/components/FileDropOverlay.vue` | 拖拽提示文案 |
 | `apps/main/src/components/ImageGrid.vue` | 加载中、错误提示等 |
+| **`packages/core/.../ImageDetailDialog.vue`** | 图片详情弹窗标题与字段标签（**见 7.1.10**，位于 core 未迁移） |
 | `apps/main/src/components/GalleryBigPaginator.vue` | 上一页/下一页等 |
 | `apps/main/src/components/GalleryToolbar.vue` | 工具栏按钮、筛选文案 |
 | `apps/main/src/components/LoadMoreButton.vue` | 「加载更多」等 |
@@ -305,12 +307,248 @@
 6. Help/Tips 正文（可单列命名空间 `help`，按 tipId 或模块分子 key）。
 7. TS/Composables/Stores/Actions 中的 toast、确认框、默认名称等。
 
+#### 7.1.10 前端遗漏补充（packages/core 及零散）✅ 已完成
+
+以下为**尚未接入 i18n 的硬编码文案**，多位于 **packages/core**。core 包当前无 vue-i18n 依赖，需由 **apps/main** 通过 `provide('i18n-t', t)` 与 `provide('i18n-locale', locale)` 注入。
+
+| 文件 | 待迁移内容 | 状态 |
+|------|------------|------|
+| **`packages/core/.../ImageDetailDialog.vue`** | 弹窗标题、字段标签、无效时间占位、日期格式、错误提示 | ✅ 已迁移：inject i18n-t/locale，gallery.* + common.* |
+| **`packages/core/.../TaskDrawerContent.vue`** | 下载区、任务列表、参数标签、状态文案、时长格式、配置值等 | ✅ 已迁移：inject i18n-t/locale，tasks.drawer* |
+| `apps/main/.../useFileDrop.ts` | 拖拽确认列表中「（插件包）」后缀 | ✅ 已迁移：import.pluginPackageSuffix |
+
+**实现方式**：`App.vue` 中 `provide('i18n-t', useI18n().t)` 与 `provide('i18n-locale', locale)`；core 组件内 `inject('i18n-t')`、`inject('i18n-locale')`，无注入时回退为 key 或默认 locale。
+
 ---
 
-### 7.2 后端待迁移清单（待补充）
+### 7.2 后端待迁移清单
 
-- 托盘菜单文案（`tray.*`）
-- 系统通知、原生对话框文案
-- 其他 app-main 内面向用户的字符串
+**当前已有**：`kabegame-i18n` crate 已存在（`src-tauri/kabegame-i18n/`），`lib.rs` 提供 `t!()`、`sync_locale`、`set_locale`、`system_language`；`locales/zh.yml`、`en.yml`、`zhtw.yml` 已有 `common`、`settings`、`tray`（show/hide/exit）、`notifications`、`dialog`（exitConfirm/exitTitle）；启动时 `lib.rs` 已 `sync_locale`，`set_language` 命令已调用 `sync_locale`。
 
-（后端清单可根据 `kabegame-i18n/locales/*.yml` 与调用点逐项补齐。）
+以下按**模块与文件**列出尚未改为 `kabegame_i18n::t!(...)` 的**用户可见字符串**及所需 YAML key（需在 `kabegame-i18n/locales/*.yml` 中补全并统一 key）。
+
+---
+
+#### 7.2.1 托盘菜单（`src-tauri/app-main/src/tray.rs`）✅ 已完成
+
+| 当前硬编码文案 | 建议 key | 说明 |
+|----------------|----------|------|
+| `"显示窗口"`   | `tray.showWindow`  | 托盘菜单项 |
+| `"隐藏窗口"`   | `tray.hideWindow`  | 托盘菜单项 |
+| `"下一张壁纸"` | `tray.nextWallpaper` | 托盘菜单项 |
+| `"退出"`       | `tray.quit` 或沿用 `tray.exit` | 托盘菜单项 |
+| `"Kabegame"`   | `common.appName` 或保持固定 | 托盘 tooltip |
+
+**实现要点**：在 `setup_tray` 内、创建各 `MenuItem::with_id` 时，将上述字符串改为 `kabegame_i18n::t!("tray.xxx")`。因托盘在 `init_wallpaper_controller` 中延迟 500ms 后创建，此时 `sync_locale` 已在 setup 中执行，首屏语言正确；**语言切换后**若需托盘菜单随当前语言更新，需在 `set_language` 命令中增加「刷新托盘菜单」逻辑（若 Tauri 支持动态更新菜单项文案），否则仅下次启动生效。
+
+**YAML 扩展**：在 `tray:` 下新增 `showWindow`、`hideWindow`、`nextWallpaper`，`quit` 可与现有 `exit` 二选一统一（如统一为 `quit`）。
+
+---
+
+#### 7.2.2 原生错误对话框（`src-tauri/app-main/src/utils/dialog.rs`）✅ 已完成
+
+| 当前硬编码文案 | 建议 key | 说明 |
+|----------------|----------|------|
+| `"出错啦 😿"`   | `dialog.errorTitle` | `show_error` 的对话框标题 |
+
+**实现要点**：`show_error(app, msg)` 中 `.title("出错啦 😿")` 改为 `.title(kabegame_i18n::t!("dialog.errorTitle"))`。`msg` 为调用方传入的错误详情，若将来有「后端构造的固定错误提示」也应改为 `t!(...)`。
+
+**YAML 扩展**：在 `dialog:` 下新增 `errorTitle`（zh: 出错啦 😿，en: Oops 😿，zhtw: 出錯啦 😿）。
+
+---
+
+#### 7.2.3 启动致命错误（`src-tauri/app-main/src/lib.rs`）✅ 已完成
+
+| 当前硬编码文案 | 建议 key | 说明 |
+|----------------|----------|------|
+| `"初始化过程中出现了致命错误！: {}"` | `dialog.initFatalError`（占位符 `{detail}`） | `show_error` 调用处，用户可见 |
+
+**实现要点**：`utils::show_error(app, format!("初始化过程中出现了致命错误！: {}", e))` 改为使用 `kabegame_i18n::t!("dialog.initFatalError", detail = e.to_string())`，YAML 中 `initFatalError: "初始化过程中出现了致命错误！: {detail}"`。
+
+---
+
+#### 7.2.4 窗口标题（用户可见）✅ 已完成
+
+| 文件 | 当前硬编码文案 | 建议 key | 说明 | 状态 |
+|------|----------------|----------|------|------|
+| `startup.rs` | `.title("Kabegame")` | `common.appName` | 主窗口标题 | ✅ |
+| `startup.rs` | `.title("Kabegame Wallpaper")` | `window.wallpaperTitle` | 壁纸窗口 | ✅ |
+| `startup.rs` | `.title("Kabegame Crawler")` | `window.crawlerTitle` | 爬虫/采集窗口 | ✅ |
+| `commands/surf.rs` | `format!("畅游 - {}", host)` | `surf.windowTitle`（占位 `{host}`） | 畅游窗口 | ✅ |
+| `commands/misc.rs` | `"Kabegame 开发 WebView"` | `window.devWebViewTitle` | 开发用 WebView 窗口 | ✅ |
+
+**实现要点**：在创建各窗口时，将 `.title(...)` 改为 `kabegame_i18n::t!("...")` 或带占位符的 `t!("surf.windowTitle", host = host.as_str())`。主窗口标题使用 `common.appName`。
+
+**YAML 扩展**：已新增 `window:` 块（`wallpaperTitle`、`crawlerTitle`、`devWebViewTitle`）；`surf:` 下 `windowTitle: "畅游 - {host}"` / "Surf - {host}"。
+
+---
+
+#### 7.2.5 系统通知（若后端发送带文案的通知）✅ 已确认
+
+当前 `startup.rs` 中仅使用 `tauri_plugin_task_notification` 的「任务数量」等，未见后端发送带自定义标题/正文的系统通知。若后续在 app-main 或 core 中调用 `send_notification` 等并传入用户可见标题/正文，应改为 `t!("notifications.xxx")`，并在 `notifications:` 中补全 key。
+
+---
+
+#### 7.2.6 后端迁移顺序建议
+
+1. **YAML 扩展**：在 `kabegame-i18n/locales/zh.yml`、`en.yml`、`zhtw.yml` 中补全上述 key（`tray.showWindow`/`hideWindow`/`nextWallpaper`/`quit`、`dialog.errorTitle`、`dialog.initFatalError` 或等价、`window.*`、`surf.windowTitle`）。
+2. **托盘**：修改 `tray.rs`，所有菜单项文案与 tooltip 改为 `kabegame_i18n::t!(...)`。
+3. **对话框**：修改 `utils/dialog.rs` 的 `show_error` 标题；修改 `lib.rs` 中初始化失败时的 `show_error` 文案为 i18n。
+4. **窗口标题**：按 `startup.rs`、`commands/surf.rs`、`commands/misc.rs` 顺序替换 `.title(...)`。
+5. **（可选）语言切换后刷新托盘**：在 `commands/settings.rs` 的 `set_language` 中，在 `sync_locale` 之后调用托盘更新逻辑（若 Tauri 提供更新菜单项文本的 API）。
+
+---
+
+#### 7.2.7 涉及代码文件一览（后端）✅ 已完成
+
+| 文件 | 作用 | 状态 |
+|------|------|------|
+| `src-tauri/kabegame-i18n/locales/{zh,en,zhtw}.yml` | 后端翻译源，tray/dialog/window/surf key | ✅ |
+| `src-tauri/app-main/src/tray.rs` | 托盘菜单项与 tooltip 改为 `t!(...)` | ✅ |
+| `src-tauri/app-main/src/utils/dialog.rs` | 错误对话框标题改为 `t!("dialog.errorTitle")` | ✅ |
+| `src-tauri/app-main/src/lib.rs` | 初始化致命错误 `show_error` 文案改为 i18n | ✅ |
+| `src-tauri/app-main/src/startup.rs` | 主窗口/壁纸窗口/爬虫窗口标题改为 `t!(...)` | ✅ |
+| `src-tauri/app-main/src/commands/surf.rs` | 畅游窗口标题改为 `t!("surf.windowTitle", host = host)` | ✅ |
+| `src-tauri/app-main/src/commands/misc.rs` | 开发 WebView 窗口标题改为 `t!("window.devWebViewTitle")` | ✅ |
+| `src-tauri/app-main/src/commands/settings.rs` | `set_language` 仅 `sync_locale`；刷新由 setting-change 回调触发 | ✅（在 startup 事件循环中监听 language 变更后调用 `tray::update_tray_menu`） |
+
+---
+
+## 8. 插件国际化（.kgpg 爬虫插件）
+
+以下为 **src-crawler-plugins** 及打包后的 .kgpg 内可能存在的**界面文本**清单，供后续设计插件 i18n 方案时使用。插件运行在独立上下文，多语言需单独设计与实现（见 4.4）。
+
+### 8.1 插件界面文本来源分类
+
+| 类型 | 位置 | 展示位置 | 说明 |
+|------|------|----------|------|
+| **manifest** | 各插件 `manifest.json` | 插件列表、插件详情、任务抽屉「源」名称、商店 index | `name`、`description`、`author` 直接展示 |
+| **config 变量** | 各插件 `config.json` 的 `var[]` | 任务表单（TaskDrawerContent：参数 label、说明、选项名） | `name`（表单项 label）、`descripts`（说明）、`options[].name`（下拉/多选选项文案） |
+| **插件文档** | 各插件 `doc_root/doc.md` | 插件详情页内嵌文档 / 帮助 | 整篇 Markdown 为用户可见说明 |
+| **脚本错误/日志** | `crawl.js` / `crawl.rhai` | 任务失败时的错误提示、可选的任务日志 | `throw "..."` 会作为任务错误信息展示；`ctx.log()`、Rhai `print()` 可能出现在日志 |
+
+### 8.2 各插件 manifest 与 config 内界面文本
+
+#### 8.2.1 Pixiv（`plugins/pixiv/`）
+
+| 文件 | 字段/位置 | 界面文本示例 |
+|------|------------|--------------|
+| `manifest.json` | `name` | Pixiv |
+| `manifest.json` | `description` | Pixiv 插画爬虫：排行榜、收藏、画师、关键词 |
+| `config.json` | `var[].name` | 爬取类型、用户 UID、排行榜类型、内容类型、起始日期、日期范围（天）、画师 UID、搜索关键词、搜索模式、排序方式、最大下载数 |
+| `config.json` | `var[].descripts` | 各变量说明（如「Pixiv 用户 ID，不清楚请点击插件查看文档」「格式 YYYYMMDD，如 20240501」等） |
+| `config.json` | `options[].name` | 排行榜、个人收藏、画师作品、关键词搜索；日榜、周榜、月榜、男性向、女性向、AI 日榜、日榜 R18…；全部、插画、漫画、动图；安全、R18、全部；按日期、按人气 |
+
+#### 8.2.2 konachan（`plugins/konachan/`）
+
+| 文件 | 字段/位置 | 界面文本示例 |
+|------|------------|--------------|
+| `manifest.json` | `name` | konachan动漫壁纸 |
+| `manifest.json` | `description` | konachan动漫壁纸收集源插件 |
+| `config.json` | `var[].name` | 起始页面、结束页数、质量 |
+| `config.json` | `var[].descripts` | 要拉取的起始页面；要拉取的结束页面。请保持最多爬取100页…；图片质量，这个网站质量都挺高的 |
+| `config.json` | `options[].name` | 高、中 |
+
+#### 8.2.3 twodwallpapers（`plugins/twodwallpapers/`）
+
+| 文件 | 字段/位置 | 界面文本示例 |
+|------|------------|--------------|
+| `manifest.json` | `name` | 2dwallpapers二次元壁纸 |
+| `manifest.json` | `description` | 2dwallpapers 壁纸网站爬虫 |
+| `config.json` | `var[].name` | 目录、子目录关键字、爬取总数、排序方式 |
+| `config.json` | `var[].descripts` | 爬取某一种壁纸；按名称过滤包含的子目录；最大爬取的总图片张数 |
+| `config.json` | `options[].name` | 动漫壁纸、游戏壁纸、未分类；最新、最多查看、最多喜欢、最多收藏、最近更新、随机 |
+
+#### 8.2.4 anime-pictures（`plugins/anime-pictures/`）
+
+| 文件 | 字段/位置 | 界面文本示例 |
+|------|------------|--------------|
+| `manifest.json` | `name` | anime-pictures动漫图库 |
+| `manifest.json` | `description` | anime-pictures动漫图库收集源插件（可按标签检索） |
+| `config.json` | `var[].name` | 起始页面、结束页数、标签 |
+| `config.json` | `var[].descripts` | 要拉取的起始页面；要拉取的结束页面；要拉取的标签（默认无标签爬全站） |
+
+#### 8.2.5 anihonet-wallpaper（`plugins/anihonet-wallpaper/`）
+
+| 文件 | 字段/位置 | 界面文本示例 |
+|------|------------|--------------|
+| `manifest.json` | `name` | anihonet动漫壁纸 |
+| `manifest.json` | `description` | anihonet动漫壁纸收集源插件 |
+| `config.json` | `var[].name` | 起始页面、结束页数、壁纸类型、排行榜周期 |
+| `config.json` | `var[].descripts` | 要拉取的起始页面；要拉取的结束页面；选择要爬取的壁纸类型：桌面壁纸（imgpc）或手机壁纸（sp）；选择要爬取的排行榜周期：日榜、周榜、月榜或年榜 |
+| `config.json` | `options[].name` | 桌面壁纸、手机壁纸；日榜、周榜、月榜、年榜 |
+
+#### 8.2.6 ziworld（`plugins/ziworld/`）
+
+| 文件 | 字段/位置 | 界面文本示例 |
+|------|------------|--------------|
+| `manifest.json` | `name` | ziworld高质量壁纸 |
+| `manifest.json` | `description` | ziworld高质量壁纸收集源插件 |
+| `config.json` | `var[].name` | 目录 |
+| `config.json` | `var[].descripts` | 勾选要拉取的目录（可多选） |
+| `config.json` | `options`（checkbox 选项名） | PC、背景、二次元、移动端、手机壁纸、横版壁纸、头像、萌图MP、萌图PC、原神、崩坏、鸣潮、video、七濑胡桃、未归类 |
+
+### 8.3 插件文档（doc_root/doc.md / doc_root/doc.\<lang>.md）
+
+以下为**整篇用户可见**的 Markdown 说明。支持多语言：`doc_root/doc.md` 为默认，`doc_root/doc.zh.md`、`doc_root/doc.en.md` 等按语言码分文件；后端下发为 record 类型 `{ "default": "...", "zh": "...", "en": ... }`，前端按当前 locale 解析展示。
+
+| 插件 | 路径 | 说明 |
+|------|------|------|
+| Pixiv | `plugins/pixiv/doc_root/doc.md` | Pixiv 爬虫说明、Cookie 获取、配置项、注意事项等 |
+| konachan | `plugins/konachan/doc_root/doc.md` | Konachan 动漫壁纸说明、配置项、使用说明、注意事项 |
+| twodwallpapers | `plugins/twodwallpapers/doc_root/doc.md` | 2dwallpaper 插件说明、大目录/小目录/排序、使用示例 |
+| anime-pictures | `plugins/anime-pictures/doc_root/doc.md` | anime-pictures 按标签下载说明、参数表、获取标签名、示例、注意事项 |
+| anihonet-wallpaper | `plugins/anihonet-wallpaper/doc_root/doc.md` | anihonet 关键规则、配置项、使用建议 |
+| ziworld | `plugins/ziworld/doc_root/doc.md` | ziworld 抓取说明 |
+
+### 8.4 脚本内用户可见字符串（throw / print / ctx.log）
+
+任务失败时 **throw** 的字符串会作为错误信息展示给用户；**ctx.log** / Rhai **print** 可能出现在任务日志中。
+
+#### 8.4.1 crawl.rhai
+
+| 插件 | 文件 | 类型 | 文案 |
+|------|------|------|------|
+| pixiv | `plugins/pixiv/crawl.rhai` | throw | 排行榜模式请填写起始日期（格式 YYYYMMDD） |
+| pixiv | `plugins/pixiv/crawl.rhai` | throw | 收藏模式请填写用户 UID |
+| pixiv | `plugins/pixiv/crawl.rhai` | throw | 画师模式请填写画师 UID |
+| pixiv | `plugins/pixiv/crawl.rhai` | throw | 无法获取画师作品列表 |
+| pixiv | `plugins/pixiv/crawl.rhai` | throw | 关键词模式请填写搜索关键词 |
+| pixiv | `plugins/pixiv/crawl.rhai` | throw | 未知的爬取类型: …（含变量） |
+| konachan | `plugins/konachan/crawl.rhai` | throw | 在一次之内不允许爬取超过100页，咱二次元人要保持文明礼仪 |
+| konachan | `plugins/konachan/crawl.rhai` | throw | 结束页面需要比开始页面大 |
+| anime-pictures | `plugins/anime-pictures/crawl.rhai` | throw | 此插件不支持安卓版本！如果您是桌面版本，请下载最新版kabegame来运行本插件！ |
+| anihonet-wallpaper | `plugins/anihonet-wallpaper/crawl.rhai` | print | 错误：wallpaper_type 必须是 'imgpc' 或 'sp' |
+
+#### 8.4.2 crawl.js
+
+| 插件 | 文件 | 类型 | 文案 |
+|------|------|------|------|
+| anime-pictures | `plugins/anime-pictures/crawl.js` | throw | 在一次之内不允许爬取超过100页，咱二次元人要保持文明礼仪 |
+| anime-pictures | `plugins/anime-pictures/crawl.js` | throw | 结束页面需要比开始页面大 |
+| anime-pictures | `plugins/anime-pictures/crawl.js` | ctx.log | [anime-pictures] 检测到挑战页（如 Cloudflare 验证），请求打开 WebView 窗口并等待 20 秒 |
+| anime-pictures | `plugins/anime-pictures/crawl.js` | ctx.log | [anime-pictures] 等待结束，重新查询页面元素 |
+
+### 8.5 其他与插件相关的界面文本
+
+- **packed/index.json**：商店索引中的 `name`、`description`、`author` 与各插件 manifest 一致，随 .kgpg 发布生成，若插件支持 i18n 则索引生成逻辑可能需按语言输出或仅保留一种语言。
+- **应用内「本地导入」**：`packages/core/.../TaskDrawerContent.vue` 中 `pluginId === "本地导入"` 与 `getBuiltinLocalImportMeta()[key]?.name` 为内置任务参数 label，属于主应用 i18n 范围，非插件包内文案。
+
+### 8.6 实现思路与已实现部分
+
+#### 8.6.1 config 变量 i18n（已实现，与 manifest 同构）
+
+- **后端**：`get_plugin_vars` 返回的每条变量定义中，`name`、`descripts`、`options[].name` 均为 **Record** 结构：`{ "default": "单语言或默认文案", "zh": "可选", "en": "可选", ... }`。当前 config.json 仍为单语言（`name`/`descripts` 为 string），后端在序列化给前端时通过 `var_definition_to_frontend_value` 包装为 `{ default: value }`，以便前端统一按 locale 解析。
+- **前端**：
+  - **类型**：`PluginConfigText`（与 `PluginManifestText` 同构，`Record<string, string>`）在 `@kabegame/core/stores/plugins` 导出；`PluginVarDef` 的 `name`/`descripts` 及 `options[].name` 类型为 `PluginConfigText | string`（兼容旧数据）。
+  - **解析**：`resolveConfigText(value, locale)` 与 manifest 的 `resolveManifestText` 同构，优先 `value[locale]`，否则 `value["default"]`；兼容 `value` 为 string。
+  - **Composable**：`usePluginConfigI18n()` 提供 `varDisplayName(varDef)`、`varDescripts(varDef)`、`optionDisplayName(opt)`、`resolveConfigText`、`locale`，用于按当前语言解析并得到响应式展示文案。
+  - **Record 存储与使用**：任务抽屉（TaskDrawerContent）中 `pluginVarMetaMap` 按插件存储原始变量定义（`name`/`optionNameByVariable` 为 record），展示时通过 inject 的 `resolveConfigText` 按当前 locale 计算 `getVarDisplayName`/`formatConfigValue`；CrawlerDialog 中 `visiblePluginVars` 为 computed，在过滤 when 后对每条变量用 `varDisplayName`/`varDescripts`/`optionDisplayName` 解析为展示用字符串。
+- **涉及文件**：`src-tauri/core/src/plugin/mod.rs`（`var_definition_to_frontend_value`）、`src-tauri/app-main/src/commands/plugin.rs`（`get_plugin_vars` 返回前端结构）；`packages/core`（`PluginConfigText`、TaskDrawerContent 的 metaMap + resolveConfigText）；`apps/main`（`usePluginConfigI18n.ts`、App.vue provide `resolveConfigText`、usePluginConfig 类型、CrawlerDialog 的 visiblePluginVars）。
+
+#### 8.6.2 config.json 扁平多语言键（已实现）
+
+- **约定**：与 manifest 一致，config 内 `var[].name`、`var[].descripts`、`options[].name` 支持扁平键：`name` / `name.zh` / `name.en` 等，后端反序列化时用 `extract_manifest_text_from_flat` 转为 `ManifestI18nText`，再经 `var_definition_to_frontend_value` 输出为前端 record。
+- **已更新插件**：anihonet-wallpaper、konachan、anime-pictures、ziworld、twodwallpapers、pixiv 的 `config.json` 已补充 `name.en`、`descripts.en` 及选项的 `name.en`（ziworld 的 options 为 string 数组，仅变量 name/descripts 有多语言）。
+- **doc**：可按语言分文件（如 `doc.zh.md`、`doc.en.md`）或单文件内按 frontmatter/段落标记切分，展示时按当前语言选取。
+- **脚本 throw/log**：Rhai/JS 无内置 i18n，可约定插件包内提供 `locales/<lang>.json`，脚本通过 ctx 注入的 `locale` 与 `t(key)` 取文案；或暂时保持中文，后续统一方案再替换。

@@ -1,4 +1,5 @@
 {
+  "pluginPackageSuffix": "（插件包）",
   "confirmImportTitle": "确认导入",
   "confirmImportButton": "确认导入",
   "confirmImportQuestion": "是否导入以下 {count} 个项目？",

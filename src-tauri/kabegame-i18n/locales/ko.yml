@@ -1,0 +1,43 @@
+common:
+  ok: 확인
+  cancel: 취소
+  confirm: 확인
+  close: 닫기
+  save: 저장
+  refresh: 새로고침
+  exit: 종료
+  appName: Kabegame
+
+settings:
+  title: 설정
+  language: 언어
+
+tray:
+  show: 표시
+  hide: 숨기기
+  exit: 종료
+  showWindow: 창 표시
+  hideWindow: 창 숨기기
+  nextWallpaper: 다음 배경화면
+  quit: 종료
+
+notifications:
+  refreshSuccess: 새로고침 성공
+  refreshFailed: 새로고침 실패
+
+dialog:
+  exitConfirm: "종료할까요? 보고 싶을 거예요!"
+  exitTitle: 종료
+  errorTitle: 오류 😿
+  initFatalError: "초기화 중 치명적 오류가 발생했습니다!: {detail}"
+
+window:
+  wallpaperTitle: Kabegame 배경화면
+  crawlerTitle: Kabegame 크롤러
+  devWebViewTitle: Kabegame 개발용 WebView
+
+albums:
+  favorite: 즐겨찾기
+
+surf:
+  windowTitle: "서핑 - {host}"

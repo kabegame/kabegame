@@ -12,7 +12,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-type VarOption = string | { name: string; variable: string };
+type VarOption = string | { name: string | Record<string, string>; variable: string };
 
 const props = withDefaults(
   defineProps<{
@@ -27,12 +27,19 @@ defineEmits<{
   "update:modelValue": [value: string[]];
 }>();
 
+function optionLabel(o: VarOption): string {
+  if (typeof o === "string") return o;
+  if (typeof o.name === "string") return o.name;
+  if (o.name && typeof o.name === "object") return (o.name as Record<string, string>).default ?? "";
+  return "";
+}
+
 const normalizedOptions = computed(() => {
   const opts = props.options || [];
   return opts
     .map((o) => {
       if (typeof o === "string") return { label: o, value: o };
-      return { label: o.name, value: o.variable };
+      return { label: optionLabel(o), value: o.variable };
     })
     .filter((o) => typeof o.value === "string" && o.value.trim() !== "");
 });
