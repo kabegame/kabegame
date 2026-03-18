@@ -3,7 +3,7 @@ name: Release (cross-platform build and publish)
 on:
   push:
     tags:
-      - "v*.*.*"
+      - "v*.*.*-ci"
 
 jobs:
   build:
