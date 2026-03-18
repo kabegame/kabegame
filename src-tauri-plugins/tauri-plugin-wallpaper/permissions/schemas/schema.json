@@ -295,18 +295,6 @@
       "type": "string",
       "oneOf": [
         {
-          "description": "Enables the setVideoWallpaper command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-setVideoWallpaper",
-          "markdownDescription": "Enables the setVideoWallpaper command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the setVideoWallpaper command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-setVideoWallpaper",
-          "markdownDescription": "Denies the setVideoWallpaper command without any pre-configured scope."
-        },
-        {
           "description": "Enables the setWallpaper command without any pre-configured scope.",
           "type": "string",
           "const": "allow-setWallpaper",

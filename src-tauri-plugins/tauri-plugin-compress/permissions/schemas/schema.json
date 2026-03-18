@@ -317,18 +317,6 @@
           "type": "string",
           "const": "deny-extractVideoFrames",
           "markdownDescription": "Denies the extractVideoFrames command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the generateVideoGifThumbnail command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-generateVideoGifThumbnail",
-          "markdownDescription": "Enables the generateVideoGifThumbnail command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the generateVideoGifThumbnail command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-generateVideoGifThumbnail",
-          "markdownDescription": "Denies the generateVideoGifThumbnail command without any pre-configured scope."
         }
       ]
     }
