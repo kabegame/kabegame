@@ -75,3 +75,19 @@ stderr: {}",
 
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
+
+/// 获取当前 Plasma 第一个桌面的壁纸插件 ID（如 org.kde.image、org.kabegame.wallpaper）。
+/// 用于启动时判断是否需要自动切到 Kabegame 插件。
+#[cfg(target_os = "linux")]
+pub fn get_current_plasma_wallpaper_plugin() -> Result<String, String> {
+    let script = r#"
+        var allDesktops = desktops();
+        if (allDesktops.length > 0) {
+            print(allDesktops[0].wallpaperPlugin);
+        } else {
+            print('');
+        }
+    "#;
+    let out = run_qdbus_evaluate_script_with_output(script)?;
+    Ok(out.trim().to_string())
+}

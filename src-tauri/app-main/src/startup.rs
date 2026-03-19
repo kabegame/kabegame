@@ -608,6 +608,22 @@ pub fn start_task_scheduler() {
 pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     use std::path::Path;
 
+    // Linux Plasma + 插件模式：若当前系统壁纸插件不是 Kabegame，自动切到 Kabegame（与 Windows/macOS 窗口模式启动时对齐）
+    #[cfg(target_os = "linux")]
+    {
+        use crate::linux_desktop::{linux_desktop, LinuxDesktop};
+        use crate::wallpaper::manager::PlasmaPluginWallpaperManager;
+        let mode = Settings::global()
+            .get_wallpaper_mode()
+            .await
+            .unwrap_or_else(|_| "native".to_string());
+        if linux_desktop() == LinuxDesktop::Plasma && mode == "plasma-plugin" {
+            if let Err(e) = PlasmaPluginWallpaperManager::ensure_plasma_plugin_aligned() {
+                eprintln!("[WARN] ensure_plasma_plugin_aligned failed: {}", e);
+            }
+        }
+    }
+
     let controller = WallpaperController::global();
     // 启动时只"尝试还原 currentWallpaperImageId"，不在客户端做大规模选图/回退，
     // 回退与轮播逻辑由 rotator 负责（避免客户端依赖 Storage/Settings）。

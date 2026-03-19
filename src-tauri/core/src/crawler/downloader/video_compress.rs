@@ -114,7 +114,7 @@ fn run_ffmpeg_sidecar(input_path: &Path, output_path: &Path) -> Result<(), Strin
 
     #[cfg(target_os = "linux")]
     {
-        cmd.arg("-t").arg("3")
+        cmd.arg("-t").arg("2.5")
             .arg("-vf")
             .arg("fps=4,scale=320:-1")
             .arg("-loop").arg("0")
@@ -123,7 +123,8 @@ fn run_ffmpeg_sidecar(input_path: &Path, output_path: &Path) -> Result<(), Strin
 
     #[cfg(not(target_os = "linux"))]
     {
-        cmd.arg("-vf")
+        cmd.arg("-t").arg("2.5")
+            .arg("-vf")
             .arg("scale='min(1280,iw)':-2")
             .arg("-c:v").arg("libx264")
             .arg("-preset").arg("veryfast")
@@ -207,6 +208,11 @@ pub fn encode_frames_dir_to_gif(frame_dir: &Path, output_path: &Path) -> Result<
     entries.sort_by_key(|e| e.file_name());
     if entries.is_empty() {
         return Err("帧目录下没有 frame_*.png".to_string());
+    }
+    // 与 ffmpeg 一致：预览最多 2.5s，4fps => 最多 10 帧
+    const MAX_FRAMES_2_5S: usize = 10;
+    if entries.len() > MAX_FRAMES_2_5S {
+        entries.truncate(MAX_FRAMES_2_5S);
     }
 
     // 4fps = 250ms 每帧

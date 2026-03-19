@@ -459,6 +459,8 @@ pub enum CliIpcRequest {
     SettingsGetWallpaperStyleByMode,
     SettingsGetWallpaperTransitionByMode,
     SettingsGetWallpaperMode,
+    SettingsGetWallpaperVolume,
+    SettingsGetWallpaperVideoPlaybackRate,
     SettingsGetWindowState,
     SettingsGetCurrentWallpaperImageId,
     SettingsGetDefaultImagesDir,

@@ -461,9 +461,13 @@ const loadTaskInfo = async () => {
         if (task) {
             taskInfo.value = task;
             taskStatus.value = task.status || "";
-            // 获取插件名称（plugin.name 为 i18n 对象，需解析）
-            const plugin = pluginStore.plugins.find((p) => p.id === task.pluginId);
-            taskName.value = plugin ? (resolvePluginName(plugin) || task.pluginId) : (task.pluginId || t("tasks.task"));
+            // 获取插件名称（plugin.name 为 i18n 对象，需解析）；builtin local-import 用 i18n
+            if (task.pluginId === "local-import") {
+                taskName.value = t("tasks.drawerLocalImport");
+            } else {
+                const plugin = pluginStore.plugins.find((p) => p.id === task.pluginId);
+                taskName.value = plugin ? (resolvePluginName(plugin) || task.pluginId) : (task.pluginId || t("tasks.task"));
+            }
             // 同步更新 store 中的任务信息（确保 deletedCount 等字段同步）
             // 运行中任务不覆盖 progress，避免用 DB 的旧值覆盖事件驱动的实时进度
             const taskIndex = crawlerStore.tasks.findIndex((t) => t.id === taskId.value);

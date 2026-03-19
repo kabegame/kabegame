@@ -11,7 +11,7 @@ require 'tmpdir'
 # 默认配置
 DEFAULT_PATH = '.'
 DEFAULT_EXCLUDE = 'node_modules,dist,build,.git,target,.nx,public,data,release,photoswipe-vue/src/js,third'
-DEFAULT_INCLUDE_EXT = 'ts,tsx,js,mjs,vue,rs,py,java,kt,swift,cs,cpp,c,h,cc,hpp,rb,html,css,scss,rhai,kt,kts,handlebars,prisma'
+DEFAULT_INCLUDE_EXT = 'ts,tsx,js,mjs,vue,rs,py,java,kt,swift,cs,cpp,c,cmake,h,cc,hpp,rb,html,css,scss,rhai,kt,kts,handlebars,prisma'
 
 # Linguist 未支持的语言在此指定颜色（hex，如 #F67702）
 CUSTOM_LANG_COLORS = { 'Rhai' => '#F67702' }.freeze
@@ -100,6 +100,9 @@ end
 
 def should_include?(file_path, include_exts)
   return true if include_exts.empty?
+
+  # 始终包含 CMakeLists.txt（扩展名为 .txt 会漏掉）
+  return true if File.basename(file_path) == 'CMakeLists.txt'
 
   ext = File.extname(file_path).sub(/^\./, '')
   include_exts.include?(ext)
