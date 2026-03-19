@@ -209,22 +209,6 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送壁纸样式更新事件
-    pub fn emit_wallpaper_update_style(&self, style: &str) {
-        let event = std::sync::Arc::new(DaemonEvent::WallpaperUpdateStyle {
-            style: style.to_string(),
-        });
-        EventBroadcaster::global().broadcast(event);
-    }
-
-    /// 发送壁纸过渡效果更新事件
-    pub fn emit_wallpaper_update_transition(&self, transition: &str) {
-        let event = std::sync::Arc::new(DaemonEvent::WallpaperUpdateTransition {
-            transition: transition.to_string(),
-        });
-        EventBroadcaster::global().broadcast(event);
-    }
-
     /// 发送设置变更事件
     pub fn emit_setting_change(&self, changes: serde_json::Value) {
         let event = std::sync::Arc::new(DaemonEvent::SettingChange { changes });
@@ -245,6 +229,14 @@ impl GlobalEmitter {
         let event = std::sync::Arc::new(DaemonEvent::SurfRecordsChange {
             reason: reason.to_string(),
             surf_record_id: surf_record_id.to_string(),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 发送 Daemon 关闭事件（退出前通知 IPC 客户端）
+    pub fn emit_daemon_shutdown(&self, reason: &str) {
+        let event = std::sync::Arc::new(DaemonEvent::DaemonShutdown {
+            reason: reason.to_string(),
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -392,15 +384,13 @@ impl GlobalEmitter {
 
     pub fn emit_wallpaper_update_image(&self, _image_path: &str) {}
 
-    pub fn emit_wallpaper_update_style(&self, _style: &str) {}
-
-    pub fn emit_wallpaper_update_transition(&self, _transition: &str) {}
-
     pub fn emit_setting_change(&self, _changes: serde_json::Value) {}
 
     pub fn emit_images_change(&self, _reason: &str, _image_ids: &[String]) {}
 
     pub fn emit_surf_records_change(&self, _reason: &str, _surf_record_id: &str) {}
+
+    pub fn emit_daemon_shutdown(&self, _reason: &str) {}
 
     pub fn emit_album_name_changed(&self, _album_id: &str, _new_name: &str) {}
 

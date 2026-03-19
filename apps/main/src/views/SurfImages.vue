@@ -37,6 +37,9 @@
       v-model:delete-files="removeDeleteFiles"
       :message="removeDialogMessage"
       :title="$t('surf.confirmDelete')"
+      :checkbox-label="$t('gallery.deleteSourceFilesCheckboxLabel')"
+      :danger-text="$t('gallery.deleteSourceFilesDangerText')"
+      :safe-text="$t('gallery.deleteSourceFilesSafeText')"
       :hide-checkbox="IS_ANDROID"
       @confirm="confirmRemoveImages"
     />

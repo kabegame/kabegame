@@ -16,7 +16,6 @@
   "namedInputs": {
     "default": ["{workspaceRoot}/*.pub.ts"],
     "frontendEnv": [
-      { "env": "VITE_DESKTOP" },
       { "env": "VITE_KABEGAME_MODE" },
       { "env": "KABEGAME_MODE" },
       { "env": "TAURI_ENV_PLATFORM" },

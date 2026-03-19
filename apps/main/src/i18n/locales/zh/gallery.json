@@ -83,5 +83,10 @@
   "removedFromAlbumCountSuccess": "已从画册移除 {count} 张图片",
   "deletedAndRemovedSuccess": "已删除图片（已从所有画册和画廊中移除）",
   "deletedAndRemovedCountSuccess": "已删除 {count} 张图片（已从所有画册和画廊中移除）",
-  "removeImageFailed": "移除图片失败"
+  "removeImageFailed": "移除图片失败",
+  "removeFromGalleryMessageSingle": "将从画廊移除这张图片。",
+  "removeFromGalleryMessageMulti": "将从画廊移除这 {count} 张图片。",
+  "deleteSourceFilesCheckboxLabel": "同时从电脑删除源文件（慎用）",
+  "deleteSourceFilesDangerText": "警告：该操作将永久删除电脑文件，不可恢复！",
+  "deleteSourceFilesSafeText": "不勾选仅从列表移除记录，保留电脑文件。"
 }

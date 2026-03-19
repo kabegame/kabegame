@@ -87,6 +87,12 @@ PRAGMA mmap_size = 268435456;
         let _ = migrate_rebuild_tasks_table(&mut conn);
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN http_headers TEXT", []);
 
+        // 迁移：本地导入 plugin_id 从 "本地导入" 改为 "local-import"（i18n 适配）
+        let _ = conn.execute("UPDATE tasks SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
+        let _ = conn.execute("UPDATE images SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
+        let _ = conn.execute("UPDATE task_failed_images SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
+        let _ = conn.execute("UPDATE run_configs SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
+
         // 创建运行配置表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS run_configs (

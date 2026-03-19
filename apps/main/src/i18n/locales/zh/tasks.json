@@ -79,5 +79,13 @@
   "clearAllTasksConfirmPreserved": "确定要删除所有已完成/失败/已取消的任务吗？共 {count} 个（{pending} 个等待中的任务和 {running} 个运行中的任务将被保留）。",
   "clearAllTasksTitle": "清除所有任务",
   "tasksCleared": "已清除 {count} 个任务",
-  "clearFailed": "清除失败"
+  "clearFailed": "清除失败",
+  "removeDialogMessageSingle": "将删除这张图片。",
+  "removeDialogMessageMulti": "将删除这 {count} 张图片。",
+  "deleteImagesFailed": "删除图片失败",
+  "removeSuccess": "已移除图片",
+  "removeSuccessCount": "已移除 {count} 张图片",
+  "deleteSuccess": "已删除图片",
+  "deleteSuccessCount": "已删除 {count} 张图片",
+  "removeFailed": "移除失败"
 }

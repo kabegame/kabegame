@@ -113,56 +113,12 @@ let hideTimer: ReturnType<typeof setTimeout> | null = null;
 let volumePanelTimer: ReturnType<typeof setTimeout> | null = null;
 let progressRaf: number | null = null;
 let currentVideo: HTMLVideoElement | null = null;
-let debugVideoSeq = 0;
-
-// #region agent log
-const debugVideoLog = (message: string, data: Record<string, unknown>, hypothesisId: string) => {
-  fetch("http://127.0.0.1:7584/ingest/c0bebee6-485b-4fa2-aa0e-0bbc81e4acc7", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "a16946",
-    },
-    body: JSON.stringify({
-      sessionId: "a16946",
-      runId: "pre-fix",
-      hypothesisId,
-      location: "packages/core/src/components/common/VideoControls.vue",
-      message,
-      data,
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-};
-// #endregion
-
-const ensureDebugVideoId = (video: HTMLVideoElement | null) => {
-  if (!video) return null;
-  if (!video.dataset.kgPreviewDebugId) {
-    debugVideoSeq += 1;
-    video.dataset.kgPreviewDebugId = String(debugVideoSeq);
-  }
-  return video.dataset.kgPreviewDebugId;
-};
 
 const trackedMediaEvents = ["loadstart", "loadeddata", "canplay", "play", "pause", "emptied", "seeking", "seeked"] as const;
 
 const handleDebugMediaEvent = (event: Event) => {
   const video = event.currentTarget as HTMLVideoElement | null;
   if (!video) return;
-  // #region agent log
-  debugVideoLog("media event", {
-    event: event.type,
-    videoId: ensureDebugVideoId(video),
-    src: video.currentSrc || video.src,
-    currentTime: video.currentTime,
-    duration: Number.isFinite(video.duration) ? video.duration : null,
-    paused: video.paused,
-    ended: video.ended,
-    readyState: video.readyState,
-    networkState: video.networkState,
-  }, "H1/H2/H4/H5");
-  // #endregion
 };
 
 const formatTime = (seconds: number): string => {
@@ -306,17 +262,6 @@ const attachVideo = (video: HTMLVideoElement | null) => {
     currentVideo.removeEventListener("dblclick", handleVideoDblClick);
   }
 
-  // #region agent log
-  debugVideoLog("attachVideo", {
-    prevVideoId: ensureDebugVideoId(currentVideo),
-    nextVideoId: ensureDebugVideoId(video),
-    prevSrc: currentVideo?.currentSrc || currentVideo?.src || null,
-    nextSrc: video?.currentSrc || video?.src || null,
-    prevCurrentTime: currentVideo?.currentTime ?? null,
-    nextCurrentTime: video?.currentTime ?? null,
-  }, "H5");
-  // #endregion
-
   currentVideo = video;
   stopProgressRaf();
   clearHideTimer();
@@ -391,17 +336,6 @@ watch(
 
 const togglePlay = async () => {
   if (!currentVideo) return;
-  // #region agent log
-  debugVideoLog("togglePlay before", {
-    videoId: ensureDebugVideoId(currentVideo),
-    paused: currentVideo.paused,
-    ended: currentVideo.ended,
-    currentTime: currentVideo.currentTime,
-    duration: Number.isFinite(currentVideo.duration) ? currentVideo.duration : null,
-    readyState: currentVideo.readyState,
-    networkState: currentVideo.networkState,
-  }, "H2/H4/H5");
-  // #endregion
   if (currentVideo.paused || currentVideo.ended) {
     try {
       await currentVideo.play();

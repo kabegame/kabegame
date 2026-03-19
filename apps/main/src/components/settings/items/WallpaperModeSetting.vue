@@ -2,6 +2,7 @@
     <el-radio-group v-model="localValue" :disabled="switching" class="wallpaper-mode-radio-group"
         @change="handleChange">
         <el-radio value="native">{{ t('settings.modeNative') }}</el-radio>
+        <el-radio v-if="isPlasma" value="plasma-plugin">{{ t('settings.modePlugin') }}</el-radio>
         <el-radio v-if="IS_WINDOWS || IS_MACOS" value="window">{{ t('settings.modeWindow') }}</el-radio>
     </el-radio-group>
 </template>
@@ -10,12 +11,13 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { listen } from "@tauri-apps/api/event";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
+import { useDesktop } from "@/composables/useDesktop";
 
 const { t } = useI18n();
+const { isPlasma } = useDesktop();
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperMode");
 const uiStore = useUiStore();
@@ -51,47 +53,29 @@ const handleChange = async (mode: string) => {
             return;
         }
     }
+    if (mode === "plasma-plugin") {
+        try {
+            await ElMessageBox.confirm(
+                t("settings.wallpaperModePluginConfirmMessage"),
+                t("settings.wallpaperModeConfirmTitle"),
+                {
+                    confirmButtonText: t("settings.wallpaperModeConfirmOk"),
+                    cancelButtonText: t("common.cancel"),
+                    type: "warning",
+                }
+            );
+        } catch {
+            localValue.value = (settingValue.value as any as string) || "native";
+            return;
+        }
+    }
 
     const prevMode = (settingValue.value as any as string) || "native";
     uiStore.wallpaperModeSwitching = true as any;
 
-    // 特殊逻辑：等待模式切换完成
-    const onAfterSave = async () => {
-        return new Promise<void>((resolve, reject) => {
-            const waitForSwitchComplete = async () => {
-                try {
-                    const timeoutId = setTimeout(() => {
-                        reject(new Error(t("settings.wallpaperModeSwitchTimeout")));
-                    }, 30000);
-
-                    const unlistenFn = await listen<{ success: boolean; mode: string; error?: string }>(
-                        "wallpaper-mode-switch-complete",
-                        (event) => {
-                            if (event.payload.mode === mode) {
-                                clearTimeout(timeoutId);
-                                unlistenFn();
-                                if (event.payload.success) {
-                                    ElMessage.success(t("settings.wallpaperModeSwitchSuccess"));
-                                    resolve();
-                                } else {
-                                    const errorMsg = event.payload.error || t("settings.wallpaperModeSwitchFailed");
-                                    ElMessage.error(`${t("settings.wallpaperModeSwitchFailed")}: ${errorMsg}`);
-                                    reject(new Error(errorMsg));
-                                }
-                            }
-                        }
-                    );
-                } catch (listenError) {
-                    reject(new Error(`监听切换完成事件失败: ${listenError}`));
-                }
-            };
-
-            waitForSwitchComplete();
-        });
-    };
-
     try {
-        await set(mode, onAfterSave);
+        await set(mode);
+        ElMessage.success(t("settings.wallpaperModeSwitchSuccess"));
     } catch (e: any) {
         const msg = e?.message || String(e);
         ElMessage.error(`${t("settings.wallpaperModeSwitchFailed")}: ${msg}`);

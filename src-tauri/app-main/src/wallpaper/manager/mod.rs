@@ -1,9 +1,15 @@
+#[cfg(target_os = "linux")]
+pub mod plasma_plugin;
+#[cfg(target_os = "linux")]
+pub mod plasma_qdbus;
 pub mod native;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod window;
 
 // 导出管理器类型
 pub use native::NativeWallpaperManager;
+#[cfg(target_os = "linux")]
+pub use plasma_plugin::PlasmaPluginWallpaperManager;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub use window::WindowWallpaperManager;
 
@@ -16,12 +22,14 @@ use tauri::AppHandle;
 use crate::wallpaper::window::WallpaperWindow;
 use kabegame_core::settings::Settings;
 
-/// 全局壁纸控制器（基础 manager）：负责根据当前 `wallpaper_mode` 选择后端（native/window），并保留 window 模式的运行状态。
+/// 全局壁纸控制器（基础 manager）：负责根据当前 `wallpaper_mode` 选择后端（native/window/plasma-plugin），并保留 window 模式的运行状态。
 ///
 /// 注意：此控制器不承诺"过渡效果可用"，过渡效果应由更上层的轮播 manager 控制（并受"是否启用轮播"约束）。
 pub struct WallpaperController {
     app: AppHandle,
     native: Arc<NativeWallpaperManager>,
+    #[cfg(target_os = "linux")]
+    plasma_plugin: Arc<PlasmaPluginWallpaperManager>,
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     window: Arc<WindowWallpaperManager>,
 }
@@ -49,6 +57,9 @@ impl WallpaperController {
     pub fn new(app: AppHandle) -> Self {
         let native = Arc::new(NativeWallpaperManager::new(app.clone()));
 
+        #[cfg(target_os = "linux")]
+        let plasma_plugin = Arc::new(PlasmaPluginWallpaperManager::new(app.clone()));
+
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         let wallpaper_window: Arc<Mutex<Option<WallpaperWindow>>> = Arc::new(Mutex::new(None));
 
@@ -61,18 +72,22 @@ impl WallpaperController {
         Self {
             app,
             native,
+            #[cfg(target_os = "linux")]
+            plasma_plugin,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             window,
         }
     }
 
-    /// 根据当前设置选择活动后端（native等）。
+    /// 根据当前设置选择活动后端（native/plasma-plugin/window等）。
     pub async fn active_manager(&self) -> Result<Arc<dyn WallpaperManager + Send + Sync>, String> {
         let mode = Settings::global()
             .get_wallpaper_mode()
             .await
             .unwrap_or_else(|_| "native".to_string());
         Ok(match mode.as_str() {
+            #[cfg(target_os = "linux")]
+            "plasma-plugin" => self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
@@ -82,6 +97,8 @@ impl WallpaperController {
     /// 按指定模式选择后端（不依赖 settings 中的 wallpaper_mode）。
     pub fn manager_for_mode(&self, mode: &str) -> Arc<dyn WallpaperManager + Send + Sync> {
         match mode {
+            #[cfg(target_os = "linux")]
+            "plasma-plugin" => self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
             _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
@@ -105,6 +122,7 @@ impl WallpaperController {
         // 我们在 Windows 上同时初始化两个后端：
         // - native: no-op
         // - window: 只确保 wallpaper 窗口存在且保持隐藏，不做挂载/显示
+        // Linux plasma-plugin: 不在此处切换系统壁纸插件，仅在用户切换到插件模式时由 set_wallpaper_mode 调用 init
         self.native.init(self.app.clone())?;
 
         #[cfg(any(target_os = "windows", target_os = "macos"))]

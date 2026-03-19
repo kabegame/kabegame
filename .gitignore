@@ -13,6 +13,7 @@ dist-*
 *.local
 
 /release
+/build
 
 # Editor directories and files
 .vscode/*

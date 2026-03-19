@@ -38,10 +38,14 @@ import { ElMessage } from "element-plus";
 import { IS_ANDROID } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { useModalBack } from "../../composables/useModalBack";
+import type { PluginManifestText } from "../../stores/plugins";
 
 type TranslateFn = (key: string) => string;
 const t = inject<TranslateFn>("i18n-t") ?? ((k: string) => k);
 const localeRef = inject<{ value: string }>("i18n-locale");
+const resolveManifestText = inject<
+  (value: PluginManifestText | null | undefined) => string
+>("resolveManifestText");
 
 const toLocaleTag = (loc: string) => {
   if (loc.startsWith("zh")) return loc === "zhtw" ? "zh-TW" : "zh-CN";
@@ -79,7 +83,10 @@ useModalBack(visible);
 const getPluginName = (pluginId?: string) => {
   if (!pluginId) return "unknown";
   const plugin = (props.plugins || []).find((p) => p.id === pluginId);
-  return plugin?.name || pluginId;
+  if (!plugin) return pluginId;
+  const raw = plugin.name;
+  if (!raw || typeof raw !== "object") return (raw as string) || pluginId;
+  return resolveManifestText ? resolveManifestText(raw) : (raw["default"] ?? pluginId) || pluginId;
 };
 
 const formatDate = (timestamp?: number) => {

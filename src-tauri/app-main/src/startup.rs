@@ -305,30 +305,6 @@ pub fn start_local_event_loop(app: AppHandle) {
                         });
                     }
                 }
-                DaemonEvent::WallpaperUpdateStyle { style } => {
-                    #[cfg(not(target_os = "android"))]
-                    {
-                        let style = style.clone();
-                        let controller = crate::wallpaper::manager::WallpaperController::global();
-                        tokio::spawn(async move {
-                            if let Ok(manager) = controller.active_manager().await {
-                                let _ = manager.set_style(&style).await;
-                            }
-                        });
-                    }
-                }
-                DaemonEvent::WallpaperUpdateTransition { transition } => {
-                    #[cfg(not(target_os = "android"))]
-                    {
-                        let transition = transition.clone();
-                        let controller = crate::wallpaper::manager::WallpaperController::global();
-                        tokio::spawn(async move {
-                            if let Ok(manager) = controller.active_manager().await {
-                                let _ = manager.set_transition(&transition).await;
-                            }
-                        });
-                    }
-                }
                 DaemonEvent::TaskStatus { status, .. } => {
                     let event_name = kind.as_event_name();
                     let payload =

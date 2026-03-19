@@ -61,7 +61,9 @@ pub async fn compress_video_for_preview(input_path: &Path) -> Result<VideoCompre
 
     #[cfg(target_os = "android")]
     let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "linux")]
+    let out_path = thumbnails_dir.join(format!("{}.gif", uuid::Uuid::new_v4()));
+    #[cfg(not(any(target_os = "android", target_os = "linux")))]
     let out_path = thumbnails_dir.join(format!("{}.mp4", uuid::Uuid::new_v4()));
 
     #[cfg(target_os = "android")]
@@ -107,25 +109,32 @@ fn run_ffmpeg_sidecar(input_path: &Path, output_path: &Path) -> Result<(), Strin
     let ffmpeg_path = resolve_ffmpeg_sidecar_path()?;
     let mut cmd = std::process::Command::new(&ffmpeg_path);
     #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: 不弹出黑色控制台窗口
+    cmd.creation_flags(0x0800_0000);
+    cmd.arg("-y").arg("-i").arg(input_path);
+
+    #[cfg(target_os = "linux")]
+    {
+        cmd.arg("-t").arg("3")
+            .arg("-vf")
+            .arg("fps=4,scale=320:-1")
+            .arg("-loop").arg("0")
+            .arg(output_path);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        cmd.arg("-vf")
+            .arg("scale='min(1280,iw)':-2")
+            .arg("-c:v").arg("libx264")
+            .arg("-preset").arg("veryfast")
+            .arg("-crf").arg("30")
+            .arg("-movflags").arg("+faststart")
+            .arg("-an")
+            .arg("-f").arg("mov")
+            .arg(output_path);
+    }
+
     let status = cmd
-        .arg("-y")
-        .arg("-i")
-        .arg(input_path)
-        .arg("-vf")
-        .arg("scale='min(1280,iw)':-2")
-        .arg("-c:v")
-        .arg("libx264")
-        .arg("-preset")
-        .arg("veryfast")
-        .arg("-crf")
-        .arg("30")
-        .arg("-movflags")
-        .arg("+faststart")
-        .arg("-an")
-        .arg("-f")
-        .arg("mov")
-        .arg(output_path)
         .status()
         .map_err(|e| format!("Failed to run ffmpeg sidecar: {e}"))?;
     if !status.success() {
@@ -136,14 +145,14 @@ fn run_ffmpeg_sidecar(input_path: &Path, output_path: &Path) -> Result<(), Strin
     Ok(())
 }
 
-/// 解析 ffmpeg sidecar 路径。Tauri externalBin 会将二进制复制到与主程序同目录，且去掉 target triple 后缀，故运行时名为 `ffmpeg` 或 `ffmpeg.exe`。
+/// 解析 ffmpeg sidecar 路径。Tauri externalBin 会将二进制复制到与主程序同目录，且去掉 target triple 后缀，故运行时名为 `ffmpeg-kb` 或 `ffmpeg-kb.exe`（避免与系统 /usr/bin/ffmpeg 冲突）。
 #[cfg(not(target_os = "android"))]
 fn resolve_ffmpeg_sidecar_path() -> Result<PathBuf, String> {
     let app_paths = crate::app_paths::AppPaths::global();
     let exe_name = if cfg!(target_os = "windows") {
-        "ffmpeg.exe"
+        "ffmpeg-kb.exe"
     } else {
-        "ffmpeg"
+        "ffmpeg-kb"
     };
 
     // 1. 与主程序同目录（Tauri externalBin 复制目标）
@@ -154,7 +163,7 @@ fn resolve_ffmpeg_sidecar_path() -> Result<PathBuf, String> {
         }
     }
 
-    // 2. 开发时：仅执行过 build-ffmpeg.sh、未 cargo build 时，二进制在 sidecar/ 下且带 target triple 名
+    // 2. 开发时：仅执行过 build-ffmpeg.sh、未 cargo build 时，二进制在 sidecar/ 下且带 target triple 名（ffmpeg-kb-{target}）
     if let Some(repo_root) = crate::app_paths::repo_root_dir() {
         let sidecar_dir = repo_root
             .join("src-tauri")
@@ -164,7 +173,7 @@ fn resolve_ffmpeg_sidecar_path() -> Result<PathBuf, String> {
             for e in rd.flatten() {
                 let name = e.file_name();
                 let name_str = name.to_string_lossy();
-                if name_str.starts_with("ffmpeg-") && (name_str.ends_with(".exe") || !name_str.contains('.')) {
+                if name_str.starts_with("ffmpeg-kb-") && (name_str.ends_with(".exe") || !name_str.contains('.')) {
                     let path = e.path();
                     if path.is_file() {
                         return Ok(path);
@@ -175,7 +184,7 @@ fn resolve_ffmpeg_sidecar_path() -> Result<PathBuf, String> {
     }
 
     Err(format!(
-        "ffmpeg sidecar not found. Run `bun run build:ffmpeg` and ensure `externalBin` is set in tauri.conf (non-light mode)."
+        "ffmpeg-kb sidecar not found. Run `bun run build:ffmpeg` and ensure `externalBin` is set in tauri.conf (non-light mode)."
     ))
 }
 

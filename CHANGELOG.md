@@ -4,6 +4,17 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.2.2]
+### Added
+- linux plasma plugin for plasma video wallpaper
+
+### Fixed
+- linux install fail because of ffmpeg name conflict
+- some plugin name i18n object bug
+- local import fail bug
+- linux video wallpaper cause kabegame crash bug
+- **Thumbnail MIME for video:** Server was sending `Content-Type: video/mp4` when serving video thumbnails (GIF/JPG), so the browser could not render them in `<img>`. Thumbnail endpoint now infers MIME from the thumbnail file path. On Linux, video thumbnail load failure no longer falls back to the original MP4 URL in the image loader.
+
 ## [3.2.1]
 ### Added
 - i18n, including README document and application frontend.

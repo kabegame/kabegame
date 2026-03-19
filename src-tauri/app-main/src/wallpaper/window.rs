@@ -1,6 +1,5 @@
 // 窗口壁纸模块 - 类似 Wallpaper Engine 的实现
 
-use kabegame_core::settings::Settings;
 use std::sync::{Condvar, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
@@ -43,18 +42,6 @@ impl WallpaperWindow {
         self.app
             .emit("wallpaper-update-image", image_path)
             .map_err(|e| format!("推送壁纸图片事件失败: {}", e))?;
-
-        // 推送样式和过渡效果事件
-        let app_for_style = self.app.clone();
-        tauri::async_runtime::spawn(async move {
-            let settings = Settings::global();
-            if let Ok(style) = settings.get_wallpaper_rotation_style().await {
-                let _ = app_for_style.emit("wallpaper-update-style", style);
-            }
-            if let Ok(tr) = settings.get_wallpaper_rotation_transition().await {
-                let _ = app_for_style.emit("wallpaper-update-transition", tr);
-            }
-        });
 
         // 在 Windows 上设置窗口为壁纸层
         self.set_window_as_wallpaper()
@@ -243,28 +230,6 @@ impl WallpaperWindow {
             crate::wallpaper::window_mount_macos::mount_to_desktop(&self.window)?;
         }
 
-        Ok(())
-    }
-
-    /// 更新壁纸样式（已废弃：壁纸页面通过 setting-change 自驱动）
-    #[allow(dead_code)]
-    pub fn update_style(&self, style: &str) -> Result<(), String> {
-        let _ = self.window.as_ref();
-        let _ = self.app.get_webview_window("wallpaper");
-        self.app
-            .emit("wallpaper-update-style", style)
-            .map_err(|e| format!("广播壁纸样式事件失败: {}", e))?;
-        Ok(())
-    }
-
-    /// 更新壁纸过渡效果（已废弃：壁纸页面通过 setting-change 自驱动）
-    #[allow(dead_code)]
-    pub fn update_transition(&self, transition: &str) -> Result<(), String> {
-        let _ = self.window.as_ref();
-        let _ = self.app.get_webview_window("wallpaper");
-        self.app
-            .emit("wallpaper-update-transition", transition)
-            .map_err(|e| format!("广播壁纸过渡事件失败: {}", e))?;
         Ok(())
     }
 

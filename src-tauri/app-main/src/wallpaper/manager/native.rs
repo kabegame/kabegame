@@ -287,82 +287,12 @@ end tell"#,
 
     #[cfg(target_os = "linux")]
     fn run_qdbus_evaluate_script_with_output(script: &str) -> Result<String, String> {
-        use std::process::{Command, Stdio};
-        use std::sync::OnceLock;
-
-        static QDBUS_PROGRAM: OnceLock<Result<String, String>> = OnceLock::new();
-
-        fn detect_qdbus_program() -> Result<String, String> {
-            // 说明：Plasma 6 上可能是 qdbus6，Plasma 5 通常是 qdbus。
-            // 我们只做"存在性"探测，不依赖特定输出格式。
-            for program in ["qdbus6", "qdbus"] {
-                match Command::new(program)
-                    .arg("--help")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                {
-                    Ok(_) => return Ok(program.to_string()),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(e) => {
-                        return Err(format!(
-                            "检测 `{}` 是否可用时失败：{}（请确认命令可执行且在 PATH 中）",
-                            program, e
-                        ))
-                    }
-                }
-            }
-
-            Err(
-                "Plasma 原生壁纸模式需要 `qdbus`（Plasma 5）或 `qdbus6`（Plasma 6），但当前系统未找到该命令。\n\
-请安装 Qt tools 并确保命令在 PATH 中后重试。\n\
-示例：\n\
-- Debian/Ubuntu: `sudo apt install qttools5-dev-tools` 或 `sudo apt install qt6-tools-dev-tools`\n\
-- Arch: `sudo pacman -S qt5-tools` 或 `sudo pacman -S qt6-tools`\n\
-- Fedora: `sudo dnf install qt5-qttools` 或 `sudo dnf install qt6-qttools`"
-                    .to_string(),
-            )
-        }
-
-        let program = QDBUS_PROGRAM
-            .get_or_init(detect_qdbus_program)
-            .as_ref()
-            .map_err(|e| e.clone())?;
-
-        let out = Command::new(program)
-            .args([
-                "org.kde.plasmashell",
-                "/PlasmaShell",
-                "org.kde.PlasmaShell.evaluateScript",
-                script,
-            ])
-            .output()
-            .map_err(|e| format!("执行 `{}` 失败：{}", program, e))?;
-
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            return Err(format!(
-                "`{}` evaluateScript 失败 (code={:?})。\n\
-这通常表示 PlasmaShell 未运行、DBus 会话不可用、或脚本执行出错。\n\
-stdout: {}\n\
-stderr: {}",
-                program,
-                out.status.code(),
-                stdout.trim(),
-                stderr.trim()
-            ));
-        }
-
-        // 返回 stdout（可能包含脚本的 print 输出）
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        super::plasma_qdbus::run_qdbus_evaluate_script_with_output(script)
     }
 
     #[cfg(target_os = "linux")]
     fn run_qdbus_evaluate_script(script: &str) -> Result<(), String> {
-        // 复用 run_qdbus_evaluate_script_with_output，忽略输出
-        Self::run_qdbus_evaluate_script_with_output(script)?;
-        Ok(())
+        super::plasma_qdbus::run_qdbus_evaluate_script(script)
     }
 
     #[cfg(target_os = "linux")]

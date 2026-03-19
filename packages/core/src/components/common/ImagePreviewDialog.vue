@@ -63,10 +63,10 @@
             @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
         </div>
         <div v-else-if="previewImageUrl && isPreviewVideo" class="preview-video-wrapper">
-          <video ref="previewVideoRef" :src="previewImageUrl" class="preview-video" loop autoplay poster="" preload="auto"
+          <video ref="previewVideoRef" :src="previewImageUrl" class="preview-video" :loop="!IS_LINUX" :autoplay="!IS_LINUX" poster="" preload="auto"
             playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
             @dragstart.prevent />
-          <VideoControls :video="previewVideoRef" :show-play-pause="false" />
+          <VideoControls :video="previewVideoRef" :show-play-pause="IS_LINUX" />
         </div>
         <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
           <ImageNotFound />
@@ -92,7 +92,7 @@ import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
 import type { ImageInfo } from "../../types/image";
 import ImageNotFound from "./ImageNotFound.vue";
 import VideoControls from "./VideoControls.vue";
-import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "../../env";
+import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX, IS_LINUX } from "../../env";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
@@ -164,9 +164,6 @@ const previewAvailableSize = ref({ width: 0, height: 0 });
 const previewContainerRect = ref({ left: 0, top: 0, width: 0, height: 0 });
 // previewDragging、previewDragStart、previewDragStartTranslate 已删除，由 Panzoom 替代（仅桌面端）
 const previewImageLoading = ref(false);
-// 导航请求序号：用于“阻止切换直到 original ready”时的竞态保护
-let currentPreviewVideoDebugEl: HTMLVideoElement | null = null;
-
 const previewContextMenuVisible = ref(false);
 const previewContextMenuPosition = ref({ x: 0, y: 0 });
 
@@ -178,27 +175,6 @@ let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Android: 使用 useModalBack 管理预览的返回键行为（不使用 close-on-back prop）
 useModalBack(previewVisible);
-
-// #region agent log
-const debugPreviewLog = (message: string, data: Record<string, unknown>, hypothesisId: string) => {
-  fetch("http://127.0.0.1:7584/ingest/c0bebee6-485b-4fa2-aa0e-0bbc81e4acc7", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "a16946",
-    },
-    body: JSON.stringify({
-      sessionId: "a16946",
-      runId: "pre-fix",
-      hypothesisId,
-      location: "packages/core/src/components/common/ImagePreviewDialog.vue",
-      message,
-      data,
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-};
-// #endregion
 
 const clamp = (val: number, min: number, max: number) => Math.min(max, Math.max(min, val));
 
@@ -327,63 +303,6 @@ const measureSizesAfterRender = async () => {
   measureBaseSize();
 };
 
-const debugPreviewVideoSnapshot = (message: string, hypothesisId: string) => {
-  const video = previewVideoRef.value;
-  const wrapper = video?.closest(".preview-video-wrapper") as HTMLElement | null;
-  const videoRect = video?.getBoundingClientRect();
-  const wrapperRect = wrapper?.getBoundingClientRect();
-  const centerX = videoRect ? videoRect.left + videoRect.width / 2 : null;
-  const centerY = videoRect ? videoRect.top + videoRect.height / 2 : null;
-  const centerEl = centerX != null && centerY != null
-    ? document.elementFromPoint(centerX, centerY) as HTMLElement | null
-    : null;
-  const videoStyle = video ? window.getComputedStyle(video) : null;
-  const wrapperStyle = wrapper ? window.getComputedStyle(wrapper) : null;
-  // #region agent log
-  debugPreviewLog(message, {
-    hasVideo: !!video,
-    currentTime: video?.currentTime ?? null,
-    duration: video && Number.isFinite(video.duration) ? video.duration : null,
-    paused: video?.paused ?? null,
-    ended: video?.ended ?? null,
-    readyState: video?.readyState ?? null,
-    networkState: video?.networkState ?? null,
-    currentSrc: video?.currentSrc || video?.src || null,
-    videoWidth: video?.videoWidth ?? null,
-    videoHeight: video?.videoHeight ?? null,
-    clientWidth: video?.clientWidth ?? null,
-    clientHeight: video?.clientHeight ?? null,
-    videoBg: videoStyle?.backgroundColor ?? null,
-    videoDisplay: videoStyle?.display ?? null,
-    videoVisibility: videoStyle?.visibility ?? null,
-    videoOpacity: videoStyle?.opacity ?? null,
-    wrapperBg: wrapperStyle?.backgroundColor ?? null,
-    wrapperDisplay: wrapperStyle?.display ?? null,
-    wrapperVisibility: wrapperStyle?.visibility ?? null,
-    wrapperOpacity: wrapperStyle?.opacity ?? null,
-    centerElementTag: centerEl?.tagName ?? null,
-    centerElementClass: centerEl?.className ?? null,
-    wrapperRect: wrapperRect ? {
-      width: wrapperRect.width,
-      height: wrapperRect.height,
-    } : null,
-    videoRect: videoRect ? {
-      width: videoRect.width,
-      height: videoRect.height,
-    } : null,
-  }, hypothesisId);
-  // #endregion
-};
-
-const handlePreviewVideoDebugEvent = (event: Event) => {
-  debugPreviewVideoSnapshot(`video event:${event.type}`, "H1/H2/H4/H5");
-  if (event.type === "pause") {
-    requestAnimationFrame(() => {
-      debugPreviewVideoSnapshot("video post-pause frame", "H2/H4");
-    });
-  }
-};
-
 // resetPreviewTransform 已删除，由 panzoomReset()（usePanzoomPreview）替代（仅桌面端）
 
 // previewImageStyle 已删除，由 Panzoom 自动管理 transform（仅桌面端）
@@ -425,15 +344,6 @@ const pswpDataSource = computed(() => {
 const setPreviewByIndex = (index: number) => {
   const img = props.images[index];
   if (!img) return;
-
-  // #region agent log
-  debugPreviewLog("setPreviewByIndex", {
-    index,
-    imageId: img.id,
-    type: img.type ?? null,
-    localPath: img.localPath,
-  }, "H3");
-  // #endregion
 
   previewIndex.value = index;
   currentImageId.value = img.id;
@@ -802,43 +712,6 @@ watch(
   }
 );
 
-watch(
-  () => ({
-    visible: previewVisible.value,
-    index: previewIndex.value,
-    imageId: currentImageId.value,
-    url: previewImageUrl.value,
-    computedType: previewImage.value?.type ?? null,
-    isPreviewVideo: isPreviewVideo.value,
-    hasVideoRef: !!previewVideoRef.value,
-  }),
-  (state) => {
-    if (IS_ANDROID) return;
-    // #region agent log
-    debugPreviewLog("preview state changed", state, "H1/H3/H5");
-    // #endregion
-  },
-  { deep: true }
-);
-
-watch(
-  () => previewVideoRef.value,
-  (video, oldVideo) => {
-    if (oldVideo && currentPreviewVideoDebugEl === oldVideo) {
-      ["loadstart", "loadeddata", "canplay", "play", "pause", "emptied"].forEach((eventName) => {
-        oldVideo.removeEventListener(eventName, handlePreviewVideoDebugEvent);
-      });
-      currentPreviewVideoDebugEl = null;
-    }
-    if (!video || IS_ANDROID) return;
-    currentPreviewVideoDebugEl = video;
-    ["loadstart", "loadeddata", "canplay", "play", "pause", "emptied"].forEach((eventName) => {
-      video.addEventListener(eventName, handlePreviewVideoDebugEvent);
-    });
-    debugPreviewVideoSnapshot("video ref attached", "H1/H2/H4/H5");
-  }
-);
-
 // 桌面端：当 urlCache 中原图 URL 就绪时自动更新 previewImageUrl
 let resizeObserver: ResizeObserver | null = null;
 const prevAvailableSize = ref({ width: 0, height: 0 });
@@ -1016,12 +889,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", handlePreviewKeyDown, true);
-  if (currentPreviewVideoDebugEl) {
-    ["loadstart", "loadeddata", "canplay", "play", "pause", "emptied"].forEach((eventName) => {
-      currentPreviewVideoDebugEl?.removeEventListener(eventName, handlePreviewVideoDebugEvent);
-    });
-    currentPreviewVideoDebugEl = null;
-  }
   panzoomDestroy();
   if (previewInteractTimer) {
     clearTimeout(previewInteractTimer);
@@ -1168,7 +1035,6 @@ defineExpose({
     justify-content: center;
     position: relative;
     overflow: hidden;
-    background: #000;
   }
 
   .preview-video {
@@ -1178,7 +1044,6 @@ defineExpose({
     max-height: 100% !important;
     object-fit: contain;
     display: block;
-    background: #000;
   }
 
   .preview-image {

@@ -1,5 +1,5 @@
 #[cfg(not(target_os = "android"))]
-use std::{io::Write, path::Path, str::FromStr, sync::OnceLock};
+use std::{path::Path, str::FromStr, sync::OnceLock};
 
 #[cfg(not(target_os = "android"))]
 use axum::{
@@ -22,8 +22,6 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::io::SeekFrom;
 #[cfg(not(target_os = "android"))]
 use serde::Deserialize;
-#[cfg(not(target_os = "android"))]
-use serde_json::json;
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
 use tower::ServiceExt;
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
@@ -31,36 +29,6 @@ use tower_http::services::ServeDir;
 
 #[cfg(not(target_os = "android"))]
 pub static HTTP_SERVER_PORT: OnceLock<u16> = OnceLock::new();
-
-#[cfg(not(target_os = "android"))]
-fn debug_log(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
-    // #region agent log
-    let payload = json!({
-        "sessionId": "be562c",
-        "runId": "initial",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": chrono_like_now_ms(),
-    });
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/Users/cmtheit/code/kabegame/.cursor/debug-be562c.log")
-    {
-        let _ = writeln!(file, "{payload}");
-    }
-    // #endregion
-}
-
-#[cfg(not(target_os = "android"))]
-fn chrono_like_now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 #[cfg(not(target_os = "android"))]
 #[derive(Debug, Deserialize)]
@@ -183,11 +151,15 @@ async fn handle_thumbnail_query(Query(query): Query<FileQuery>, headers: axum::h
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
     };
 
+    // 缩略图 MIME 优先根据缩略图文件路径推断（缩略图可能是 jpg 而原始文件是 mp4）
+    let thumb_mime = kabegame_core::image_type::mime_type_from_path(Path::new(path))
+        .or_else(|| mime_from_image_or_path(&img, path));
+
     let range = headers
         .get(RANGE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    serve_file_with_mime(path, mime_from_image_or_path(&img, path), range).await
+    serve_file_with_mime(path, thumb_mime, range).await
 }
 
 #[cfg(not(target_os = "android"))]

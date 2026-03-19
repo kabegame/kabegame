@@ -3,6 +3,5 @@ declare const __LINUX__: boolean;
 declare const __MACOS__: boolean;
 declare const __ANDROID__: boolean;
 declare const __DEV__: boolean;
-declare const __DESKTOP__: string;
 declare const __LIGHT_MODE__: boolean;
 

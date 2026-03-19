@@ -52,7 +52,7 @@ const options = computed<Opt[]>(() => {
     return [
       { label: t("settings.transitionFollowSystem"), value: "none" },
     ];
-  } else if (mode.value === "window" && (IS_WINDOWS || IS_MACOS)) {
+  } else if ((mode.value === "window" && (IS_WINDOWS || IS_MACOS)) || mode.value === "plasma-plugin") {
     return [
       { label: t("settings.transitionNone"), value: "none" },
       { label: t("settings.transitionFade"), value: "fade" },

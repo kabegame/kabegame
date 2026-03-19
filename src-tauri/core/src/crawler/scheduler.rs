@@ -445,7 +445,7 @@ async fn run_task(
     );
 
     // 内置本地导入：不运行 Rhai，直接执行内置例程
-    if req.plugin_id == "本地导入" {
+    if req.plugin_id == "local-import" {
         crate::crawler::local_import::run_builtin_local_import(
             &req.task_id,
             req.user_config.clone(),

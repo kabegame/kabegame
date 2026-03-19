@@ -89,10 +89,10 @@ impl WallpaperRotator {
     }
 
     /// 轮播候选是否允许：根据壁纸模式筛选。
-    /// - 窗口模式（window）：图片与视频均可参与轮播。
-    /// - 非窗口模式（native、plasma-plugin 等）：仅图片参与轮播，视频壁纸过滤掉。
+    /// - 窗口模式（window）、插件模式（plasma-plugin）：图片与视频均可参与轮播。
+    /// - 原生模式（native）等：仅图片参与轮播，视频壁纸过滤掉。
     fn media_allowed_in_mode(path: &str, wallpaper_mode: &str) -> bool {
-        if wallpaper_mode == "window" {
+        if wallpaper_mode == "window" || wallpaper_mode == "plasma-plugin" {
             return true;
         }
         !kabegame_core::image_type::is_video_by_path(Path::new(path))
@@ -207,12 +207,6 @@ impl WallpaperRotator {
                 // 未启用轮播：仅保持线程等待（便于后续快速启用），不做任何切换
                 if !enabled {
                     eprintln!("未启用轮播，跳过");
-                    continue;
-                }
-
-                // Plasma 插件模式：不执行实际切换（避免干扰 Plasma 插件的壁纸管理）
-                // 但保持线程运行，以便后续切换模式时能快速恢复
-                if wallpaper_mode == "plasma-plugin" {
                     continue;
                 }
 

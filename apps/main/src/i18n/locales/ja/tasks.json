@@ -79,5 +79,13 @@
   "clearAllTasksConfirmPreserved": "完了/失敗/キャンセルのタスクをすべて削除しますか？{count} 件（{pending} 件の待機中と {running} 件の実行中は保持されます）。",
   "clearAllTasksTitle": "すべてのタスクをクリア",
   "tasksCleared": "{count} 件のタスクをクリアしました",
-  "clearFailed": "クリアに失敗しました"
+  "clearFailed": "クリアに失敗しました",
+  "removeDialogMessageSingle": "この画像をタスクから削除します。",
+  "removeDialogMessageMulti": "これら {count} 枚の画像をタスクから削除します。",
+  "deleteImagesFailed": "画像の削除に失敗しました",
+  "removeSuccess": "タスクから削除しました",
+  "removeSuccessCount": "{count} 枚をタスクから削除しました",
+  "deleteSuccess": "削除しました",
+  "deleteSuccessCount": "{count} 枚を削除しました",
+  "removeFailed": "削除に失敗しました"
 }

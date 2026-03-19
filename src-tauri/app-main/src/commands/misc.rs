@@ -1,6 +1,7 @@
 // 杂项命令
 
 use kabegame_i18n::t;
+use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::storage::Storage;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -45,6 +46,9 @@ pub fn open_dev_webview(app: AppHandle, url: String) -> Result<(), String> {
 /// 使用 AppHandle::exit 确保进程正确退出（win.close() 在 Android 上可能只关窗口不退出进程）。
 #[tauri::command]
 pub fn exit_app(app: AppHandle) {
+    if let Some(emitter) = GlobalEmitter::try_global() {
+        emitter.emit_daemon_shutdown("exit");
+    }
     app.exit(0);
 }
 

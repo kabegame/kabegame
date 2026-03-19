@@ -258,6 +258,28 @@ pub fn is_supported_media_ext(ext: &str) -> bool {
     is_supported_image_ext(ext) || is_supported_video_ext(ext)
 }
 
+/// 指定平台下该媒体是否必须走插件模式设置壁纸（Linux Plasma）。
+///
+/// - Linux: GIF + 所有支持的视频类型（mp4/mov）需要插件模式
+/// - 其他平台: false
+pub fn requires_plugin_mode(path: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .trim_start_matches('.')
+            .to_lowercase();
+        ext == "gif" || is_supported_video_ext(&ext)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
 /// 指定平台下该媒体是否必须走窗口模式设置壁纸。
 ///
 /// - macOS: GIF + 所有支持的视频类型（mp4/mov）
