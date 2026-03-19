@@ -116,12 +116,12 @@ class CompressPlugin(private val activity: Activity) : Plugin(activity) {
                     retriever.setDataSource(inputFile.absolutePath)
                     val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
                     var durationUs = durationMs * 1000
-                    if (durationUs <= 0L) durationUs = 4_000_000L
+                    if (durationUs <= 0L) durationUs = 2_500_000L
 
-                    // 4fps = 250ms 一帧，约 3–4 秒，最多 16 帧
-                    val targetDurationUs = minOf(durationUs, 4_000_000L)
+                    // 4fps = 250ms 一帧，与 ffmpeg 一致：预览最多 2.5s，最多 10 帧
+                    val targetDurationUs = minOf(durationUs, 2_500_000L)
                     val frameIntervalUs = 250_000L // 250ms = 4fps
-                    val numFrames = (targetDurationUs / frameIntervalUs).toInt().coerceIn(1, 16)
+                    val numFrames = (targetDurationUs / frameIntervalUs).toInt().coerceIn(1, 10)
 
                     val frameOption = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                         MediaMetadataRetriever.OPTION_CLOSEST

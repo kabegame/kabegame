@@ -44,6 +44,10 @@ pub async fn handle_settings_request(req: &CliIpcRequest) -> Option<CliIpcRespon
             Some(get_wallpaper_transition_by_mode().await)
         }
         CliIpcRequest::SettingsGetWallpaperMode => Some(get_wallpaper_mode().await),
+        CliIpcRequest::SettingsGetWallpaperVolume => Some(get_wallpaper_volume().await),
+        CliIpcRequest::SettingsGetWallpaperVideoPlaybackRate => {
+            Some(get_wallpaper_video_playback_rate().await)
+        }
         CliIpcRequest::SettingsGetWindowState => Some(get_window_state().await),
         CliIpcRequest::SettingsGetCurrentWallpaperImageId => {
             Some(get_current_wallpaper_image_id().await)
@@ -530,6 +534,22 @@ async fn get_wallpaper_transition_by_mode() -> CliIpcResponse {
 async fn get_wallpaper_mode() -> CliIpcResponse {
     let settings = Settings::global();
     match settings.get_wallpaper_mode().await {
+        Ok(v) => CliIpcResponse::ok_with_data("ok", serde_json::json!(v)),
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
+async fn get_wallpaper_volume() -> CliIpcResponse {
+    let settings = Settings::global();
+    match settings.get_wallpaper_volume().await {
+        Ok(v) => CliIpcResponse::ok_with_data("ok", serde_json::json!(v)),
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
+async fn get_wallpaper_video_playback_rate() -> CliIpcResponse {
+    let settings = Settings::global();
+    match settings.get_wallpaper_video_playback_rate().await {
         Ok(v) => CliIpcResponse::ok_with_data("ok", serde_json::json!(v)),
         Err(e) => CliIpcResponse::err(e),
     }
