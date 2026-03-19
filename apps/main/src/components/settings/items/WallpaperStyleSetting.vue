@@ -27,7 +27,8 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_PLASMA, IS_WINDOWS } from "@kabegame/core/env";
+import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
+import { useDesktop } from "@/composables/useDesktop";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 
@@ -42,19 +43,18 @@ type Opt = { label: string; value: Style; desc: string };
 
 const ALL_STYLES: Style[] = ["fill", "fit", "stretch", "center", "tile"];
 
-function getNativeWallpaperStyles(): Style[] {
-  if (IS_WINDOWS) return [...ALL_STYLES];
-  if (IS_MACOS) return [];
-  if (IS_LINUX) return IS_PLASMA ? ["fill", "fit", "center", "tile"] : [...ALL_STYLES];
-  if (IS_ANDROID) return ["fill"];
-  return ["fill"];
-}
-
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperStyle");
 const settingsStore = useSettingsStore();
 const { wallpaperModeSwitching } = useUiStore();
+const { isPlasma } = useDesktop();
 
-const nativeWallpaperStyles = computed<Style[]>(() => getNativeWallpaperStyles());
+const nativeWallpaperStyles = computed<Style[]>(() => {
+  if (IS_WINDOWS) return [...ALL_STYLES];
+  if (IS_MACOS) return [];
+  if (IS_LINUX) return isPlasma.value ? ["fill", "fit", "center", "tile"] : [...ALL_STYLES];
+  if (IS_ANDROID) return ["fill"];
+  return ["fill"];
+});
 
 const mode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 
@@ -73,9 +73,10 @@ const systemOpt = computed<Opt>(() => ({
 }));
 
 const options = computed(() => {
-  const list = mode.value === "window" && (IS_WINDOWS || IS_MACOS)
-    ? styleOptions.value
-    : styleOptions.value.filter((o) => nativeWallpaperStyles.value.includes(o.value as Style));
+  const list =
+    (mode.value === "window" && (IS_WINDOWS || IS_MACOS)) || mode.value === "plasma-plugin"
+      ? styleOptions.value
+      : styleOptions.value.filter((o) => nativeWallpaperStyles.value.includes(o.value as Style));
   return [systemOpt.value, ...list];
 });
 

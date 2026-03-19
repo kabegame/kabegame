@@ -40,6 +40,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
+import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
@@ -63,6 +64,7 @@ interface Emits {
 const props = defineProps<Props>();
 const emit = defineEmits<Emits>();
 const { t } = useI18n();
+const { pluginName: resolvePluginName } = usePluginManifestI18n();
 
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
@@ -96,7 +98,7 @@ const nonRunningTasksCount = computed(() => props.tasks.filter((t) => t.status !
 
 const getPluginName = (pluginId: string) => {
   const plugin = plugins.value.find((p) => p.id === pluginId);
-  return plugin?.name || pluginId;
+  return plugin ? (resolvePluginName(plugin) || pluginId) : pluginId;
 };
 
 // 右键菜单（由 TaskDrawerContent 转发）

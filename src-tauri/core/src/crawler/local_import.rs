@@ -1,4 +1,4 @@
-//! Built-in local import routine. Runs when plugin_id == "本地导入".
+//! Built-in local import routine. Runs when plugin_id == "local-import".
 //! Streams over URLs (file:// on desktop, content:// on Android): each image is enqueued
 //! to the download queue immediately; archives are enqueued as decompression jobs.
 //!
@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use url::Url;
 
-const PLUGIN_ID: &'static str = "本地导入";
+const PLUGIN_ID: &'static str = "local-import";
 
 /// 将当前路径/文件对应的进度份额累加并上报。每个子文件夹和子文件在递归中均分父级份额，完成一项即增加相应百分比。
 fn add_progress_and_emit(ctx: &mut LocalImportContext<'_>, share: f64) {
@@ -461,7 +461,7 @@ pub async fn run_builtin_local_import(
         task_id,
         "info",
         &format!(
-            "本地导入: 开始流式遍历 {} 个路径（每项等权进度）...",
+            "local-import: streaming over {} path(s)...",
             paths.len()
         ),
     );
@@ -506,7 +506,7 @@ pub async fn run_builtin_local_import(
         task_id,
         "info",
         &format!(
-            "本地导入: 已添加 {} 个下载任务、{} 个压缩包到队列",
+            "local-import: enqueued {} download(s), {} archive(s)",
             image_count, archive_count
         ),
     );

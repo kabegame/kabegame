@@ -724,6 +724,7 @@ const syncDownloadsOnDrawerOpen = async () => {
 };
 
 const getPluginName = (pluginId: string) => {
+  if (pluginId === "local-import") return t("tasks.drawerLocalImport");
   const plugin = (props.plugins || []).find((p) => p.id === pluginId);
   if (!plugin) return pluginId;
   const raw = plugin.name;
@@ -818,7 +819,7 @@ const getBuiltinLocalImportMeta = (): Record<string, PluginVarMeta> => ({
 
 const ensurePluginVars = async (pluginId: string) => {
   if (pluginVarMetaMap.value[pluginId]) return;
-  if (pluginId === "本地导入") {
+  if (pluginId === "local-import") {
     pluginVarMetaMap.value = { ...pluginVarMetaMap.value, [pluginId]: getBuiltinLocalImportMeta() };
     return;
   }
@@ -850,7 +851,7 @@ const ensurePluginVars = async (pluginId: string) => {
 };
 
 const getVarDisplayName = (pluginId: string, key: string) =>
-  (pluginId === "本地导入" && getBuiltinLocalImportMeta()[key]?.name) ||
+  (pluginId === "local-import" && getBuiltinLocalImportMeta()[key]?.name) ||
   resolveConfigText(pluginVarMetaMap.value[pluginId]?.[key]?.name) ||
   key;
 
@@ -860,7 +861,7 @@ const formatConfigValue = (pluginId: string, key: string, value: any, raw = fals
   if (value === null || value === undefined) return raw ? "null" : t("tasks.drawerUnset");
   if (typeof value === "boolean") return raw ? String(value) : (value ? t("tasks.drawerYes") : t("tasks.drawerNo"));
   if (Array.isArray(value)) {
-    if (pluginId === "本地导入" && key === "paths" && value.length > 3 && !raw) {
+    if (pluginId === "local-import" && key === "paths" && value.length > 3 && !raw) {
       return t("tasks.drawerPathsCount", { n: value.length });
     }
     return value

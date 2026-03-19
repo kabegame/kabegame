@@ -43,7 +43,9 @@
 
     <!-- 移除/删除确认对话框 -->
     <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-      :message="removeDialogMessage" :title="$t('gallery.confirmDelete')" :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
+      :message="removeDialogMessage" :title="$t('gallery.confirmDelete')" :checkbox-label="t('gallery.deleteSourceFilesCheckboxLabel')"
+      :danger-text="t('gallery.deleteSourceFilesDangerText')" :safe-text="t('gallery.deleteSourceFilesSafeText')"
+      :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
 
     <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds" @added="handleAddedToAlbum" />
 
@@ -114,8 +116,10 @@ import { useAlbumStore } from "@/stores/albums";
 import { type ContextCommand } from "@/components/ImageGrid.vue";
 import { listen } from "@tauri-apps/api/event";
 import { useI18n } from "vue-i18n";
+import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
 
 const { t } = useI18n();
+const { pluginName: resolvePluginName } = usePluginManifestI18n();
 
 // 选择操作项类型（用于本页选择栏）
 export interface SelectionAction {
@@ -361,7 +365,7 @@ const handleAndroidMediaSelection = async (
       if (!uris || uris.length === 0) {
         return; // 用户取消或无选择
       }
-      crawlerStore.addTask("本地导入", undefined, {
+      crawlerStore.addTask("local-import", undefined, {
         paths: uris,
         recursive: false,
         include_archive: false,
@@ -372,7 +376,7 @@ const handleAndroidMediaSelection = async (
       if (!uris || uris.length === 0) {
         return;
       }
-      crawlerStore.addTask("本地导入", undefined, {
+      crawlerStore.addTask("local-import", undefined, {
         paths: uris,
         recursive: false,
         include_archive: false,
@@ -420,7 +424,7 @@ const handleAndroidMediaSelection = async (
         return;
       }
 
-      crawlerStore.addTask("本地导入", undefined, {
+      crawlerStore.addTask("local-import", undefined, {
         paths: pathsToImport,
         recursive: false,
         include_archive: true,
@@ -444,7 +448,7 @@ const handleAndroidMediaSelection = async (
         }
       }
 
-      crawlerStore.addTask("本地导入", undefined, {
+      crawlerStore.addTask("local-import", undefined, {
         paths: [folderPath],
         recursive: true,
         include_archive: false,
@@ -679,7 +683,7 @@ const pluginIcons = ref<Record<string, string>>({});
 
 const getPluginName = (pluginId: string) => {
   const plugin = plugins.value.find((p) => p.id === pluginId);
-  return plugin?.name || pluginId;
+  return plugin ? (resolvePluginName(plugin) || pluginId) : pluginId;
 };
 
 // 获取总图片数（随 providerRootPath 变化）
@@ -953,7 +957,7 @@ const handleGridContextCommand = async (
       // 显示删除对话框，让用户选择是否删除文件
       pendingRemoveImages.value = imagesToProcess;
       const count = imagesToProcess.length;
-      removeDialogMessage.value = `将从画廊${count > 1 ? `移除这 ${count} 张图片` : "移除这张图片"}。`;
+      removeDialogMessage.value = count > 1 ? t("gallery.removeFromGalleryMessageMulti", { count }) : t("gallery.removeFromGalleryMessageSingle");
       removeDeleteFiles.value = false; // 默认不删除文件
       showRemoveDialog.value = true;
       return null;
@@ -1149,12 +1153,12 @@ onMounted(async () => {
           await new Promise(resolve => setTimeout(resolve, 200));
         }
 
-        crawlerStore.addTask("本地导入", undefined, {
+        crawlerStore.addTask("local-import", undefined, {
           paths: [path],
           recursive: true,
           include_archive: false,
         });
-        ElMessage.success("已添加本地导入任务");
+        ElMessage.success(t("gallery.localImportTaskAdded"));
       } catch (error) {
         console.error('[Gallery] 处理文件拖拽事件失败:', error);
         ElMessage.error('处理文件拖拽失败: ' + (error instanceof Error ? error.message : String(error)));

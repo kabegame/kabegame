@@ -72,6 +72,7 @@ winver = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = "3.6"
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "0.3"

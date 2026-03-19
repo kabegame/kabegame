@@ -2,7 +2,7 @@
 # 一键编译 FFmpeg：仅生成「视频缩放 + mov/mp4 压缩」所需组件（最小化编译）。
 # 功能：读 mov/mp4/mkv 等 → scale 缩放 → libx264 编码 → 输出 mp4。
 # 输出到 src-tauri/app-main/sidecar/，供 Tauri externalBin（sidecar）使用。
-# 文件名须符合 Tauri 约定：ffmpeg-{target_triple}[.exe]（如 ffmpeg-x86_64-apple-darwin）。
+# 文件名须符合 Tauri 约定：ffmpeg-kb-{target_triple}[.exe]（如 ffmpeg-kb-x86_64-apple-darwin），避免与系统 /usr/bin/ffmpeg 冲突。
 # 在目标系统上直接执行即可（Windows/Linux/macOS 各在真实环境编译）。
 #
 # 依赖: libx264
@@ -30,7 +30,7 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) EXE_SUF=".exe" ;;
   *)        echo "Unsupported OS: $(uname -s)" >&2; exit 1 ;;
 esac
-SIDECAR_NAME="ffmpeg-${TARGET_TRIPLE}${EXE_SUF}"
+SIDECAR_NAME="ffmpeg-kb-${TARGET_TRIPLE}${EXE_SUF}"
 
 if [[ ! -d "$FFMPEG_SRC" ]]; then
   echo "FFmpeg 源码目录不存在: $FFMPEG_SRC（请先执行 git submodule update --init third/FFmpeg）" >&2
@@ -63,40 +63,77 @@ case "$(uname -s)" in
       export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
     fi
     ;;
+  Linux)
+    # Linux：GIF 多帧输出（输入解码与 Windows/macOS 一致，不启用 libx264/mov）
+    CONFIGURE_LINUX_ONLY=1
+    ;;
 esac
 
-# 最小化编译：仅启用 mov→mp4 压缩链路（scale + libx264 + mov）
-"$FFMPEG_SRC/configure" \
-  --prefix="$BUILD_DIR/install" \
-  --disable-everything \
-  --enable-gpl \
-  --enable-libx264 \
-  --enable-protocol=file \
-  --enable-demuxer=mov \
-  --enable-demuxer=matroska \
-  --enable-decoder=h264 \
-  --enable-decoder=hevc \
-  --enable-decoder=mpeg4 \
-  --enable-decoder=vp8 \
-  --enable-decoder=vp9 \
-  --enable-parser=h264 \
-  --enable-parser=hevc \
-  --enable-parser=mpeg4video \
-  --enable-parser=vp8 \
-  --enable-parser=vp9 \
-  --enable-encoder=libx264 \
-  --enable-muxer=mov \
-  --enable-filter=scale \
-  --enable-swscale \
-  --disable-ffplay \
-  --disable-ffprobe \
-  --disable-doc \
-  --disable-avdevice \
-  --enable-small \
-  --disable-runtime-cpudetect \
-  --extra-cflags="-O2" \
-  "${CONFIGURE_EXTRA[@]}" \
-  "$@"
+# 最小化编译：输入一致（mov/mkv 解码 + scale）；输出 Linux 为 GIF，其它平台 mov+libx264。
+if [[ -n "${CONFIGURE_LINUX_ONLY:-}" ]]; then
+  "$FFMPEG_SRC/configure" \
+    --prefix="$BUILD_DIR/install" \
+    --disable-everything \
+    --enable-protocol=file \
+    --enable-demuxer=mov \
+    --enable-demuxer=matroska \
+    --enable-decoder=h264 \
+    --enable-decoder=hevc \
+    --enable-decoder=mpeg4 \
+    --enable-decoder=vp8 \
+    --enable-decoder=vp9 \
+    --enable-parser=h264 \
+    --enable-parser=hevc \
+    --enable-parser=mpeg4video \
+    --enable-parser=vp8 \
+    --enable-parser=vp9 \
+    --enable-encoder=gif \
+    --enable-muxer=gif \
+    --enable-filter=fps \
+    --enable-filter=scale \
+    --enable-swscale \
+    --disable-ffplay \
+    --disable-ffprobe \
+    --disable-doc \
+    --disable-avdevice \
+    --enable-small \
+    --disable-runtime-cpudetect \
+    --extra-cflags="-O2" \
+    "${CONFIGURE_EXTRA[@]}" \
+    "$@"
+else
+  "$FFMPEG_SRC/configure" \
+    --prefix="$BUILD_DIR/install" \
+    --disable-everything \
+    --enable-gpl \
+    --enable-libx264 \
+    --enable-protocol=file \
+    --enable-demuxer=mov \
+    --enable-demuxer=matroska \
+    --enable-decoder=h264 \
+    --enable-decoder=hevc \
+    --enable-decoder=mpeg4 \
+    --enable-decoder=vp8 \
+    --enable-decoder=vp9 \
+    --enable-parser=h264 \
+    --enable-parser=hevc \
+    --enable-parser=mpeg4video \
+    --enable-parser=vp8 \
+    --enable-parser=vp9 \
+    --enable-encoder=libx264 \
+    --enable-muxer=mov \
+    --enable-filter=scale \
+    --enable-swscale \
+    --disable-ffplay \
+    --disable-ffprobe \
+    --disable-doc \
+    --disable-avdevice \
+    --enable-small \
+    --disable-runtime-cpudetect \
+    --extra-cflags="-O2" \
+    "${CONFIGURE_EXTRA[@]}" \
+    "$@"
+fi
 
 # Windows：make 无法解析 /d/... 绝对路径，将 Makefile 与 config.mak 中的源码路径改为相对路径
 case "$(uname -s)" in

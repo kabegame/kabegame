@@ -69,16 +69,16 @@
             :alt="image.id" draggable="false"
             @load="handleOriginalLoad" @error="handleOriginalError" />
         </template>
-        <!-- Android 视频：用 GIF 缩略图（img）；桌面视频：用 video 元素 -->
-        <img v-else-if="isVideo && IS_ANDROID" :src="displayUrl" loading="lazy" decoding="async"
-          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': true }]"
+        <!-- Android/Linux 视频：用 GIF 或者 jpg 缩略图（img）；Windows/macOS 视频：用 video 元素 -->
+        <img v-else-if="isVideo && (IS_ANDROID || IS_LINUX)" :src="displayUrl" loading="lazy" decoding="async"
+          :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': IS_ANDROID }]"
           :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
           @load="handleImageLoad" @error="handleImageError" />
         <video v-else-if="isVideo" :src="displayUrl" class="thumbnail"
           draggable="false" muted autoplay loop poster="" preload="auto" playsinline webkit-playsinline="true"
           disablepictureinpicture="true" disableremoteplayback="" @dragstart.prevent @mousedown.prevent />
         <!-- 单图（桌面无独立缩略图） -->
-        <img v-else :src="displayUrl" loading="lazy" decoding="async"
+        <img v-else-if="true" :src="displayUrl" loading="lazy" decoding="async"
           :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': IS_ANDROID }]"
           :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
           @load="handleImageLoad" @error="handleImageError" />
@@ -96,7 +96,7 @@ import type { ImageClickAction } from "../../stores/settings";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import { useImageItemLoader } from "../../composables/useImageItemLoader";
 import { useSettingsStore } from "../../stores/settings";
-import { IS_ANDROID } from "../../env";
+import { IS_ANDROID, IS_LINUX } from "../../env";
 
 interface Props {
   image: ImageInfo;

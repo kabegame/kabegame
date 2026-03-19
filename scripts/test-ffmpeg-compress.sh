@@ -20,7 +20,7 @@ choose_ffmpeg() {
     return 1
   fi
 
-  # 优先使用与当前 host 一致的 ffmpeg-{target_triple}
+  # 优先使用与当前 host 一致的 ffmpeg-kb-{target_triple}
   TARGET_TRIPLE="${CARGO_BUILD_TARGET:-$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')}"
   case "$(uname -s)" in
     Darwin)   EXE_SUF="" ;;
@@ -30,22 +30,22 @@ choose_ffmpeg() {
   esac
 
   if [[ -n "$TARGET_TRIPLE" ]]; then
-    PREFERRED="${SIDECAR_DIR}/ffmpeg-${TARGET_TRIPLE}${EXE_SUF}"
+    PREFERRED="${SIDECAR_DIR}/ffmpeg-kb-${TARGET_TRIPLE}${EXE_SUF}"
     if [[ -f "$PREFERRED" && -x "$PREFERRED" ]]; then
       echo "$PREFERRED"
       return 0
     fi
   fi
 
-  # 否则取 sidecar 下任意一个 ffmpeg-* 可执行文件（例如只编了当前平台）
-  for f in "$SIDECAR_DIR"/ffmpeg-*; do
+  # 否则取 sidecar 下任意一个 ffmpeg-kb-* 可执行文件（例如只编了当前平台）
+  for f in "$SIDECAR_DIR"/ffmpeg-kb-*; do
     if [[ -f "$f" && -x "$f" ]]; then
       echo "$f"
       return 0
     fi
   done
 
-  echo "未在 $SIDECAR_DIR 找到可执行的 ffmpeg sidecar（请先执行 scripts/build-ffmpeg.sh）" >&2
+  echo "未在 $SIDECAR_DIR 找到可执行的 ffmpeg-kb sidecar（请先执行 scripts/build-ffmpeg.sh）" >&2
   return 1
 }
 

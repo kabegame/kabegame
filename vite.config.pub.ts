@@ -15,9 +15,6 @@ export const isAndroid =
   process.env.TAURI_PLATFORM === "android" ||
   process.env.VITE_ANDROID === "true";
 
-// 判断桌面环境（从 VITE_DESKTOP 环境变量读取）
-export const desktop = process.env.VITE_DESKTOP || "";
-
 export const isLightMode = process.env.VITE_KABEGAME_MODE === "light";
 
 export default {
@@ -29,7 +26,6 @@ export default {
     __LINUX__: !isAndroid && isLinux,
     __MACOS__: !isAndroid && isMacOS,
     __ANDROID__: isAndroid,
-    __DESKTOP__: JSON.stringify(desktop),
     __LIGHT_MODE__: isAndroid || isLightMode,
     // 切换此开关来强制重启vite服务器
     __REBOOT__: true,

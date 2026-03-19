@@ -22,7 +22,9 @@
             @added="handleAddedToAlbum" />
 
         <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-            :message="removeDialogMessage" :title="$t('tasks.confirmDelete')" :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
+            :message="removeDialogMessage" :title="$t('tasks.confirmDelete')" :checkbox-label="t('gallery.deleteSourceFilesCheckboxLabel')"
+            :danger-text="t('gallery.deleteSourceFilesDangerText')" :safe-text="t('gallery.deleteSourceFilesSafeText')"
+            :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
     </div>
 </template>
 
@@ -72,8 +74,10 @@ import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCa
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { useI18n } from "vue-i18n";
+import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
 
 const { t } = useI18n();
+const { pluginName: resolvePluginName } = usePluginManifestI18n();
 
 type TaskFailedImage = {
     id: number;
@@ -457,9 +461,9 @@ const loadTaskInfo = async () => {
         if (task) {
             taskInfo.value = task;
             taskStatus.value = task.status || "";
-            // 获取插件名称
+            // 获取插件名称（plugin.name 为 i18n 对象，需解析）
             const plugin = pluginStore.plugins.find((p) => p.id === task.pluginId);
-            taskName.value = plugin?.name || task.pluginId || t("tasks.task");
+            taskName.value = plugin ? (resolvePluginName(plugin) || task.pluginId) : (task.pluginId || t("tasks.task"));
             // 同步更新 store 中的任务信息（确保 deletedCount 等字段同步）
             // 运行中任务不覆盖 progress，避免用 DB 的旧值覆盖事件驱动的实时进度
             const taskIndex = crawlerStore.tasks.findIndex((t) => t.id === taskId.value);
@@ -776,7 +780,7 @@ const handleImageMenuCommand = async (
             // 显示移除对话框，让用户选择是否删除文件
             pendingRemoveImages.value = imagesToProcess;
             const count = imagesToProcess.length;
-            removeDialogMessage.value = `将删除${count > 1 ? `这 ${count} 张图片` : "这张图片"}。`;
+            removeDialogMessage.value = count > 1 ? t("tasks.removeDialogMessageMulti", { count }) : t("tasks.removeDialogMessageSingle");
             removeDeleteFiles.value = false; // 默认不删除文件
             showRemoveDialog.value = true;
             break;
@@ -799,7 +803,7 @@ const handleImageMenuCommand = async (
                     await loadTaskInfo();
                 } catch (error) {
                     console.error("删除图片失败:", error);
-                    ElMessage.error("删除图片失败");
+                    ElMessage.error(t("tasks.deleteImagesFailed"));
                 }
             })();
             break;
@@ -838,14 +842,14 @@ const confirmRemoveImages = async () => {
         // 重新加载任务信息以获取最新的 deletedCount
         await loadTaskInfo();
 
-        const action = shouldDeleteFiles ? "删除" : "移除";
-        ElMessage.success(
-            `${count > 1 ? `已${action} ${count} 张图片` : `已${action}图片`}`
-        );
+        if (shouldDeleteFiles) {
+            ElMessage.success(count > 1 ? t("tasks.deleteSuccessCount", { count }) : t("tasks.deleteSuccess"));
+        } else {
+            ElMessage.success(count > 1 ? t("tasks.removeSuccessCount", { count }) : t("tasks.removeSuccess"));
+        }
     } catch (error) {
         console.error("删除图片失败:", error);
-        const action = shouldDeleteFiles ? "删除" : "移除";
-        ElMessage.error(`${action}失败`);
+        ElMessage.error(shouldDeleteFiles ? t("tasks.deleteFailed") : t("tasks.removeFailed"));
     }
 };
 

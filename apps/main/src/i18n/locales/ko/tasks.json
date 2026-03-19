@@ -79,5 +79,13 @@
   "clearAllTasksConfirmPreserved": "완료/실패/취소된 작업을 모두 삭제할까요? {count}개 작업 ({pending}개 대기, {running}개 실행 중 유지).",
   "clearAllTasksTitle": "모든 작업 지우기",
   "tasksCleared": "{count}개 작업 지워짐",
-  "clearFailed": "지우기 실패"
+  "clearFailed": "지우기 실패",
+  "removeDialogMessageSingle": "이 이미지를 작업에서 삭제합니다.",
+  "removeDialogMessageMulti": "이 {count}개 이미지를 작업에서 삭제합니다.",
+  "deleteImagesFailed": "이미지 삭제 실패",
+  "removeSuccess": "이미지 제거됨",
+  "removeSuccessCount": "{count}개 이미지 제거됨",
+  "deleteSuccess": "이미지 삭제됨",
+  "deleteSuccessCount": "{count}개 이미지 삭제됨",
+  "removeFailed": "제거 실패"
 }

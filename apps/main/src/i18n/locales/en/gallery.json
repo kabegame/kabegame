@@ -83,5 +83,10 @@
   "removedFromAlbumCountSuccess": "Removed {count} images from album",
   "deletedAndRemovedSuccess": "Deleted (removed from all albums and gallery)",
   "deletedAndRemovedCountSuccess": "Deleted {count} images (removed from all albums and gallery)",
-  "removeImageFailed": "Failed to remove from album"
+  "removeImageFailed": "Failed to remove from album",
+  "removeFromGalleryMessageSingle": "This image will be removed from the gallery.",
+  "removeFromGalleryMessageMulti": "These {count} images will be removed from the gallery.",
+  "deleteSourceFilesCheckboxLabel": "Also delete source files from computer (use with caution)",
+  "deleteSourceFilesDangerText": "Warning: Files will be permanently deleted. This cannot be undone!",
+  "deleteSourceFilesSafeText": "If unchecked, only the record will be removed from the list; files on disk are kept."
 }

@@ -240,7 +240,7 @@ export function useFileDrop(
                   const allPaths = localImportItems.map((it) => it.path);
                   const hasArchiveFiles = localImportItems.some((it) => it.isArchive);
                   crawlerStore.addTask(
-                    i18n.global.t("albums.localImport"),
+                    "local-import",
                     undefined,
                     {
                       paths: allPaths,

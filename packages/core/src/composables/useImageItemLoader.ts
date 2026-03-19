@@ -1,6 +1,6 @@
 import { computed, ref, watch, type Ref } from "vue";
 import type { ImageInfo } from "../types/image";
-import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID, LOCAL_FILE_PROXY_PREFIX } from "../env";
+import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID, IS_LINUX, LOCAL_FILE_PROXY_PREFIX } from "../env";
 import { fileToUrl, thumbnailToUrl } from "../httpServer";
 import {
   getImageStateCache,
@@ -106,7 +106,7 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
         useDesktopLayers: false,
       };
     }
-    return {
+    const plan = {
       primaryUrl: originalUrl,
       fallbackUrl: thumbnailUrl !== originalUrl ? thumbnailUrl : "",
       primaryKind: "original" as UrlKind,
@@ -114,6 +114,7 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
       originalUrl,
       useDesktopLayers,
     };
+    return plan;
   });
 
   const persistStableStateToCache = () => {
@@ -145,23 +146,24 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
       () => options.image.value.localExists,
     ],
     () => {
+      const image = options.image.value;
       const { primaryUrl, primaryKind, fallbackUrl, thumbnailUrl, originalUrl, useDesktopLayers } =
         urlPlan.value;
-      const cached = getImageStateCache(options.image.value.id);
-      if (
-        cached &&
-        cached.primaryUrl === primaryUrl &&
-        cached.fallbackUrl === fallbackUrl &&
-        cached.primaryKind === primaryKind
-      ) {
-        currentStage.value = cached.stage;
-        isLost.value = cached.isLost;
-        originalMissing.value = cached.originalMissing;
-        displayUrl.value = cached.displayUrl;
+      const cached = getImageStateCache(image.id);
+      const fromCache =
+        !!(cached &&
+          cached.primaryUrl === primaryUrl &&
+          cached.fallbackUrl === fallbackUrl &&
+          cached.primaryKind === primaryKind);
+      if (fromCache) {
+        currentStage.value = cached!.stage;
+        isLost.value = cached!.isLost;
+        originalMissing.value = cached!.originalMissing;
+        displayUrl.value = cached!.displayUrl;
         isImageLoading.value = false;
         if (useDesktopLayers) {
           thumbnailLoaded.value = true;
-          originalLoaded.value = cached.originalLoaded === true;
+          originalLoaded.value = cached!.originalLoaded === true;
         } else {
           originalLoaded.value = true;
         }
@@ -176,7 +178,8 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
       isImageLoading.value = true;
 
       // 桌面双图：用缩略图 URL 作为“有内容”依据，以便先显示缩略图层
-      displayUrl.value = useDesktopLayers ? thumbnailUrl : primaryUrl;
+      const displayUrlSet = useDesktopLayers ? thumbnailUrl : primaryUrl;
+      displayUrl.value = displayUrlSet;
 
       // localExists=false 表示原图缺失，若当前能展示缩略图则显示红色感叹号
       originalMissing.value =
@@ -249,7 +252,16 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
       return;
     }
 
+    const image = options.image.value;
     const { fallbackUrl, primaryKind } = urlPlan.value;
+    // Linux 视频用 <img> 显示首帧 JPG；缩略图加载失败时不可回退到 fallbackUrl（mp4），否则会变成用 img 加载视频
+    if (IS_LINUX && image.type === "video" && currentStage.value === "primary") {
+      displayUrl.value = "";
+      isImageLoading.value = false;
+      isLost.value = true;
+      persistStableStateToCache();
+      return;
+    }
     if (currentStage.value === "primary" && fallbackUrl) {
       currentStage.value = "fallback";
       displayUrl.value = fallbackUrl;

@@ -79,5 +79,13 @@
   "clearAllTasksConfirmPreserved": "Delete all completed/failed/cancelled tasks? {count} tasks ({pending} pending and {running} running will be kept).",
   "clearAllTasksTitle": "Clear all tasks",
   "tasksCleared": "Cleared {count} tasks",
-  "clearFailed": "Clear failed"
+  "clearFailed": "Clear failed",
+  "removeDialogMessageSingle": "This image will be removed from the task.",
+  "removeDialogMessageMulti": "These {count} images will be removed from the task.",
+  "deleteImagesFailed": "Failed to delete images",
+  "removeSuccess": "Removed image",
+  "removeSuccessCount": "Removed {count} images",
+  "deleteSuccess": "Deleted image",
+  "deleteSuccessCount": "Deleted {count} images",
+  "removeFailed": "Remove failed"
 }

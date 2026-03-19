@@ -83,5 +83,10 @@
   "removedFromAlbumCountSuccess": "已從畫冊移除 {count} 張圖片",
   "deletedAndRemovedSuccess": "已刪除圖片（已從所有畫冊和畫廊中移除）",
   "deletedAndRemovedCountSuccess": "已刪除 {count} 張圖片（已從所有畫冊和畫廊中移除）",
-  "removeImageFailed": "移除圖片失敗"
+  "removeImageFailed": "移除圖片失敗",
+  "removeFromGalleryMessageSingle": "將從畫廊移除此張圖片。",
+  "removeFromGalleryMessageMulti": "將從畫廊移除此 {count} 張圖片。",
+  "deleteSourceFilesCheckboxLabel": "同時從電腦刪除來源檔案（慎用）",
+  "deleteSourceFilesDangerText": "警告：此操作將永久刪除電腦上的檔案，無法復原！",
+  "deleteSourceFilesSafeText": "不勾選則僅從列表移除記錄，保留電腦上的檔案。"
 }

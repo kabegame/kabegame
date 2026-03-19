@@ -1,166 +1,182 @@
 <template>
   <div class="settings-container" v-pull-to-refresh="pullToRefreshOpts">
     <div class="settings-content">
-      <PageHeader
-        :title="$t('settings.title')"
-        :show="settingsShowIds"
-        :fold="[]"
-        @action="handleSettingsAction"
-        sticky
-      />
+      <PageHeader :title="$t('settings.title')" :show="settingsShowIds" :fold="[]" @action="handleSettingsAction"
+        sticky />
 
       <StyledTabs v-model="activeTab" sticky>
 
-      <el-tab-pane :label="$t('settings.appSettings')" :name="SETTINGS_TAB_NAMES[0]">
-        <el-card class="settings-card">
-          <template #header>
-            <span>{{ $t('settings.appSettings') }}</span>
-          </template>
-          <div v-loading="showLoading" element-loading-text="" style="min-height: 120px;">
-            <div v-if="!loading" class="settings-list">
-              <SettingRow :label="$t('settings.language')" :description="$t('settings.languageDesc')">
-                <LanguageSetting />
-              </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.autoLaunch')" :description="$t('settings.autoLaunchDesc')">
-                <SettingSwitchControl setting-key="autoLaunch" />
-              </SettingRow>
-              <SettingRow v-if="!IS_ANDROID && !isLightMode" :label="$t('settings.albumDrive')" :description="$t('settings.albumDriveDesc')">
-                <AlbumDriveSetting />
-              </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageClickAction')" :description="$t('settings.imageClickActionDesc')">
-                <SettingRadioControl setting-key="imageClickAction" :options="imageClickActionOptions" />
-              </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageAspectRatio')" :description="$t('settings.imageAspectRatioDesc')">
-                <GalleryImageAspectRatioSetting />
-              </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.galleryColumns')" :description="$t('settings.galleryColumnsDesc')">
-                <GalleryGridColumnsSetting />
-              </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageObjectPosition')" :description="$t('settings.imageObjectPositionDesc')">
-                <SettingRadioControl setting-key="galleryImageObjectPosition" :options="objectPositionOptions" />
-              </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.clearUserData')" :description="$t('settings.clearUserDataDesc')">
-                <ClearUserDataSetting />
-              </SettingRow>
-              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.autoOpenWebView')" :description="$t('settings.autoOpenWebViewDesc')">
-                <SettingSwitchControl :setting-key="autoOpenCrawlerWebviewKey" />
-              </SettingRow>
-              <SettingRow v-if="!IS_ANDROID && IS_DEV" :label="$t('settings.debugGenerateImages')" :description="$t('settings.debugGenerateImagesDesc')">
-                <DebugGenerateImagesSetting />
-              </SettingRow>
-              <SettingRow v-if="!IS_ANDROID && IS_DEV" :label="$t('settings.devWebView')" :description="$t('settings.devWebViewDesc')">
-                <div class="dev-webview-row">
-                  <el-input
-                    v-model="devWebviewUrl"
-                    :placeholder="$t('settings.devWebviewPlaceholder')"
-                    clearable
-                    class="dev-webview-input"
-                    @keyup.enter="openDevWebview"
-                  />
-                  <el-button type="primary" :loading="devWebviewOpening" @click="openDevWebview">
-                    {{ $t('settings.openWebViewButton') }}
-                  </el-button>
-                </div>
-              </SettingRow>
-            </div>
-          </div>
-        </el-card>
-      </el-tab-pane>
-
-      <el-tab-pane :label="$t('settings.tabWallpaper')" :name="SETTINGS_TAB_NAMES[1]">
-        <el-card class="settings-card">
-          <template #header>
-            <span>{{ $t('settings.wallpaperSectionTitle') }}</span>
-          </template>
-
-          <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
-            <div v-if="!loading" class="settings-list">
-              <SettingRow :label="$t('settings.wallpaperRotationEnabled')" :description="$t('settings.wallpaperRotationEnabledDesc')">
-                <WallpaperRotationEnabledSetting />
-              </SettingRow>
-
-              <SettingRow :label="$t('settings.wallpaperSelectAlbum')" :description="$t('settings.wallpaperSelectAlbumDesc')">
-                <WallpaperRotationTargetSetting />
-              </SettingRow>
-              <div v-if="currentWallpaperPath" class="settings-list-current-wallpaper setting-row-desc">
-                <div class="setting-row-desc__spacer"></div>
-                <div class="setting-row-desc__content setting-description">
-                  <span class="setting-row-desc__label">{{ $t('settings.wallpaperCurrent') }}</span>
-                  <button type="button" class="setting-row-desc__path" @click="openCurrentWallpaperPath">
-                    {{ currentWallpaperPath }}
-                  </button>
-                </div>
+        <el-tab-pane :label="$t('settings.appSettings')" :name="SETTINGS_TAB_NAMES[0]">
+          <el-card class="settings-card">
+            <template #header>
+              <span>{{ $t('settings.appSettings') }}</span>
+            </template>
+            <div v-loading="showLoading" element-loading-text="" style="min-height: 120px;">
+              <div v-if="!loading" class="settings-list">
+                <SettingRow :label="$t('settings.language')" :description="$t('settings.languageDesc')">
+                  <LanguageSetting />
+                </SettingRow>
+                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.autoLaunch')"
+                  :description="$t('settings.autoLaunchDesc')">
+                  <SettingSwitchControl setting-key="autoLaunch" />
+                </SettingRow>
+                <SettingRow v-if="!IS_ANDROID && !isLightMode" :label="$t('settings.albumDrive')"
+                  :description="$t('settings.albumDriveDesc')">
+                  <AlbumDriveSetting />
+                </SettingRow>
+                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageClickAction')"
+                  :description="$t('settings.imageClickActionDesc')">
+                  <SettingRadioControl setting-key="imageClickAction" :options="imageClickActionOptions" />
+                </SettingRow>
+                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageAspectRatio')"
+                  :description="$t('settings.imageAspectRatioDesc')">
+                  <GalleryImageAspectRatioSetting />
+                </SettingRow>
+                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.galleryColumns')"
+                  :description="$t('settings.galleryColumnsDesc')">
+                  <GalleryGridColumnsSetting />
+                </SettingRow>
+                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageObjectPosition')"
+                  :description="$t('settings.imageObjectPositionDesc')">
+                  <SettingRadioControl setting-key="galleryImageObjectPosition" :options="objectPositionOptions" />
+                </SettingRow>
+                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.clearUserData')"
+                  :description="$t('settings.clearUserDataDesc')">
+                  <ClearUserDataSetting />
+                </SettingRow>
+                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.autoOpenWebView')"
+                  :description="$t('settings.autoOpenWebViewDesc')">
+                  <SettingSwitchControl :setting-key="autoOpenCrawlerWebviewKey" />
+                </SettingRow>
+                <SettingRow v-if="!IS_ANDROID && IS_DEV" :label="$t('settings.debugGenerateImages')"
+                  :description="$t('settings.debugGenerateImagesDesc')">
+                  <DebugGenerateImagesSetting />
+                </SettingRow>
+                <SettingRow v-if="!IS_ANDROID && IS_DEV" :label="$t('settings.devWebView')"
+                  :description="$t('settings.devWebViewDesc')">
+                  <div class="dev-webview-row">
+                    <el-input v-model="devWebviewUrl" :placeholder="$t('settings.devWebviewPlaceholder')" clearable
+                      class="dev-webview-input" @keyup.enter="openDevWebview" />
+                    <el-button type="primary" :loading="devWebviewOpening" @click="openDevWebview">
+                      {{ $t('settings.openWebViewButton') }}
+                    </el-button>
+                  </div>
+                </SettingRow>
               </div>
-
-              <SettingRow :label="$t('settings.wallpaperRotationInterval')" :description="$t('settings.wallpaperRotationIntervalDesc', { min: rotationIntervalMin })">
-                <SettingNumberControl setting-key="wallpaperRotationIntervalMinutes" :min="rotationIntervalMin" :max="1440" :step="10" />
-              </SettingRow>
-
-              <SettingRow :label="$t('settings.wallpaperRotationMode')" :description="$t('settings.wallpaperRotationModeDesc')">
-                <SettingRadioControl setting-key="wallpaperRotationMode" :options="wallpaperModeOptions" />
-              </SettingRow>
-
-              <SettingRow v-if="IS_WINDOWS || IS_LINUX || IS_MACOS" :label="$t('settings.wallpaperStyle')" :description="$t('settings.wallpaperStyleDesc')">
-                <WallpaperStyleSetting />
-              </SettingRow>
-
-              <SettingRow v-if="IS_WINDOWS || IS_MACOS" :label="$t('settings.wallpaperTransition')" :description="$t('settings.wallpaperTransitionDesc')">
-                <WallpaperTransitionSetting />
-              </SettingRow>
-
-              <SettingRow v-if="IS_WINDOWS || IS_MACOS" :label="$t('settings.wallpaperVolume')" :description="$t('settings.wallpaperVolumeDesc')">
-                <SettingSliderControl setting-key="wallpaperVolume" :min="0" :max="1" :step="0.1" :precision="1" />
-              </SettingRow>
-
-              <SettingRow v-if="IS_WINDOWS || IS_MACOS" :label="$t('settings.wallpaperVideoPlaybackRate')" :description="$t('settings.wallpaperVideoPlaybackRateDesc')">
-                <SettingSliderControl setting-key="wallpaperVideoPlaybackRate" :min="0.25" :max="3" :step="0.25" :precision="2" />
-              </SettingRow>
-
-              <SettingRow v-if="IS_WINDOWS || IS_MACOS" :label="$t('settings.wallpaperModeLabel')" :description="$t('settings.wallpaperModeDesc')">
-                <WallpaperModeSetting />
-              </SettingRow>
-
-              <SettingRow v-if="IS_WINDOWS" :label="$t('settings.wallpaperEngineDir')" :description="$t('settings.wallpaperEngineDirDesc')">
-                <WallpaperEngineDirSetting />
-              </SettingRow>
             </div>
-          </div>
-        </el-card>
-      </el-tab-pane>
+          </el-card>
+        </el-tab-pane>
 
-      <el-tab-pane :label="$t('settings.tabDownload')" :name="SETTINGS_TAB_NAMES[2]">
-        <el-card class="settings-card">
-          <template #header>
-            <span>{{ $t('settings.downloadSectionTitle') }}</span>
-          </template>
+        <el-tab-pane :label="$t('settings.tabWallpaper')" :name="SETTINGS_TAB_NAMES[1]">
+          <el-card class="settings-card">
+            <template #header>
+              <span>{{ $t('settings.wallpaperSectionTitle') }}</span>
+            </template>
 
-          <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
-            <div v-if="!loading" class="settings-list">
-              <SettingRow :label="$t('settings.maxConcurrentDownloads')" :description="$t('settings.maxConcurrentDownloadsDesc')">
-                <SettingNumberControl setting-key="maxConcurrentDownloads" :min="1" :max="10" :step="1" />
-              </SettingRow>
+            <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
+              <div v-if="!loading" class="settings-list">
+                <SettingRow :label="$t('settings.wallpaperRotationEnabled')"
+                  :description="$t('settings.wallpaperRotationEnabledDesc')">
+                  <WallpaperRotationEnabledSetting />
+                </SettingRow>
 
-              <SettingRow :label="$t('settings.downloadInterval')" :description="$t('settings.downloadIntervalDesc')">
-                <DownloadIntervalSetting />
-              </SettingRow>
+                <SettingRow :label="$t('settings.wallpaperSelectAlbum')"
+                  :description="$t('settings.wallpaperSelectAlbumDesc')">
+                  <WallpaperRotationTargetSetting />
+                </SettingRow>
+                <div v-if="currentWallpaperPath" class="settings-list-current-wallpaper setting-row-desc">
+                  <div class="setting-row-desc__spacer"></div>
+                  <div class="setting-row-desc__content setting-description">
+                    <span class="setting-row-desc__label">{{ $t('settings.wallpaperCurrent') }}</span>
+                    <button type="button" class="setting-row-desc__path" @click="openCurrentWallpaperPath">
+                      {{ currentWallpaperPath }}
+                    </button>
+                  </div>
+                </div>
 
-              <SettingRow :label="$t('settings.networkRetryCount')" :description="$t('settings.networkRetryCountDesc')">
-                <SettingNumberControl setting-key="networkRetryCount" :min="0" :max="10" :step="1" />
-              </SettingRow>
+                <SettingRow :label="$t('settings.wallpaperRotationInterval')"
+                  :description="$t('settings.wallpaperRotationIntervalDesc', { min: rotationIntervalMin })">
+                  <SettingNumberControl setting-key="wallpaperRotationIntervalMinutes" :min="rotationIntervalMin"
+                    :max="1440" :step="10" />
+                </SettingRow>
 
-              <SettingRow :label="$t('settings.autoDeduplicate')" :description="$t('settings.autoDeduplicateDesc')">
-                <SettingSwitchControl setting-key="autoDeduplicate" />
-              </SettingRow>
+                <SettingRow :label="$t('settings.wallpaperRotationMode')"
+                  :description="$t('settings.wallpaperRotationModeDesc')">
+                  <SettingRadioControl setting-key="wallpaperRotationMode" :options="wallpaperModeOptions" />
+                </SettingRow>
 
-              <SettingRow v-if="!IS_ANDROID" :label="$t('settings.defaultDownloadDir')" :description="$t('settings.defaultDownloadDirDesc')">
-                <DefaultDownloadDirSetting />
-              </SettingRow>
+                <SettingRow v-if="IS_WINDOWS || IS_LINUX || IS_MACOS" :label="$t('settings.wallpaperStyle')"
+                  :description="$t('settings.wallpaperStyleDesc')">
+                  <WallpaperStyleSetting />
+                </SettingRow>
+
+                <SettingRow v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)" :label="$t('settings.wallpaperTransition')"
+                  :description="$t('settings.wallpaperTransitionDesc')">
+                  <WallpaperTransitionSetting />
+                </SettingRow>
+
+                <SettingRow v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)" :label="$t('settings.wallpaperVolume')"
+                  :description="$t('settings.wallpaperVolumeDesc')">
+                  <SettingSliderControl setting-key="wallpaperVolume" :min="0" :max="1" :step="0.1" :precision="1" />
+                </SettingRow>
+
+                <SettingRow v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)"
+                  :label="$t('settings.wallpaperVideoPlaybackRate')"
+                  :description="$t('settings.wallpaperVideoPlaybackRateDesc')">
+                  <SettingSliderControl setting-key="wallpaperVideoPlaybackRate" :min="0.25" :max="3" :step="0.25"
+                    :precision="2" />
+                </SettingRow>
+
+                <SettingRow v-if="IS_WINDOWS || IS_MACOS || IS_LINUX" :label="$t('settings.wallpaperModeLabel')"
+                  :description="$t('settings.wallpaperModeDesc')">
+                  <WallpaperModeSetting />
+                </SettingRow>
+
+                <SettingRow v-if="IS_WINDOWS" :label="$t('settings.wallpaperEngineDir')"
+                  :description="$t('settings.wallpaperEngineDirDesc')">
+                  <WallpaperEngineDirSetting />
+                </SettingRow>
+              </div>
             </div>
-          </div>
-        </el-card>
-      </el-tab-pane>
+          </el-card>
+        </el-tab-pane>
 
-        </StyledTabs>
+        <el-tab-pane :label="$t('settings.tabDownload')" :name="SETTINGS_TAB_NAMES[2]">
+          <el-card class="settings-card">
+            <template #header>
+              <span>{{ $t('settings.downloadSectionTitle') }}</span>
+            </template>
+
+            <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
+              <div v-if="!loading" class="settings-list">
+                <SettingRow :label="$t('settings.maxConcurrentDownloads')"
+                  :description="$t('settings.maxConcurrentDownloadsDesc')">
+                  <SettingNumberControl setting-key="maxConcurrentDownloads" :min="1" :max="10" :step="1" />
+                </SettingRow>
+
+                <SettingRow :label="$t('settings.downloadInterval')" :description="$t('settings.downloadIntervalDesc')">
+                  <DownloadIntervalSetting />
+                </SettingRow>
+
+                <SettingRow :label="$t('settings.networkRetryCount')"
+                  :description="$t('settings.networkRetryCountDesc')">
+                  <SettingNumberControl setting-key="networkRetryCount" :min="0" :max="10" :step="1" />
+                </SettingRow>
+
+                <SettingRow :label="$t('settings.autoDeduplicate')" :description="$t('settings.autoDeduplicateDesc')">
+                  <SettingSwitchControl setting-key="autoDeduplicate" />
+                </SettingRow>
+
+                <SettingRow v-if="!IS_ANDROID" :label="$t('settings.defaultDownloadDir')"
+                  :description="$t('settings.defaultDownloadDirDesc')">
+                  <DefaultDownloadDirSetting />
+                </SettingRow>
+              </div>
+            </div>
+          </el-card>
+        </el-tab-pane>
+
+      </StyledTabs>
     </div>
   </div>
 </template>
@@ -200,6 +216,8 @@ import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV, IS_MACOS } fro
 
 const { t } = useI18n();
 
+const { isPlasma } = useDesktop();
+
 const imageClickActionOptions = computed(() => [
   { label: t("settings.imageClickPreview"), value: "preview" },
   { label: t("settings.imageClickOpen"), value: "open" },
@@ -234,6 +252,7 @@ async function openDevWebview() {
   }
 }
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
+import { useDesktop } from "@/composables/useDesktop";
 
 // 使用 300ms 防闪屏加载延迟
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);

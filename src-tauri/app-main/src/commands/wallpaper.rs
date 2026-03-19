@@ -5,7 +5,7 @@ use crate::wallpaper::WallpaperRotator;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
 use std::path::Path;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 pub async fn get_current_wallpaper_path_from_settings(
     _app: &tauri::AppHandle,
@@ -85,6 +85,17 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
             .unwrap_or_else(|_| "native".to_string());
         if current_mode != "window" {
             return Err("REQUIRES_WINDOW_MODE".to_string());
+        }
+    }
+
+    let requires_plugin_mode = kabegame_core::image_type::requires_plugin_mode(Path::new(&local_path));
+    if requires_plugin_mode {
+        let current_mode = settings
+            .get_wallpaper_mode()
+            .await
+            .unwrap_or_else(|_| "native".to_string());
+        if current_mode != "plasma-plugin" {
+            return Err("REQUIRES_PLUGIN_MODE".to_string());
         }
     }
 
@@ -347,236 +358,162 @@ pub async fn set_wallpaper_mode(mode: String, app: AppHandle) -> Result<(), Stri
         return Ok(());
     }
 
-    let mode_clone = mode.clone();
-    let old_mode_clone = old_mode.clone();
-    let app_clone = app.clone();
+    let rotator = WallpaperRotator::global();
+    let controller = WallpaperController::global();
 
-    tauri::async_runtime::spawn(async move {
-        let rotator = WallpaperRotator::global();
-        let controller = WallpaperController::global();
+    let was_running = rotator.is_running();
+    if was_running {
+        rotator.stop();
+    }
 
-        let was_running = rotator.is_running();
-        if was_running {
-            rotator.stop();
+    let settings = Settings::global();
+    let (
+        rotation_enabled_result,
+        rotation_mode_result,
+        cur_style_result,
+        cur_transition_result,
+    ) = tokio::join!(
+        settings.get_wallpaper_rotation_enabled(),
+        settings.get_wallpaper_rotation_mode(),
+        settings.get_wallpaper_rotation_style(),
+        settings.get_wallpaper_rotation_transition()
+    );
+
+    let rotation_enabled = rotation_enabled_result.unwrap_or(false);
+    let rotation_mode = rotation_mode_result.unwrap_or_else(|_| "random".to_string());
+    let cur_style = cur_style_result.unwrap_or_else(|_| "fill".to_string());
+    let cur_transition = cur_transition_result.unwrap_or_else(|_| "none".to_string());
+
+    let current_wallpaper = match get_current_wallpaper_path_from_settings(&app).await {
+        Ok(Some(p)) => p,
+        _ => {
+            // 无当前壁纸时，对于 plasma-plugin 仍需调用 init 切换系统壁纸插件
+            #[cfg(target_os = "linux")]
+            if mode == "plasma-plugin" {
+                let target = controller.manager_for_mode(&mode);
+                target.init(app.clone()).map_err(|e| format!("切换系统壁纸插件失败: {}", e))?;
+            }
+            settings.set_wallpaper_mode(mode.clone()).await?;
+            return Ok(());
         }
+    };
 
-        let settings = Settings::global();
-        let (
-            rotation_enabled_result,
-            rotation_mode_result,
-            cur_style_result,
-            cur_transition_result,
-        ) = tokio::join!(
-            settings.get_wallpaper_rotation_enabled(),
-            settings.get_wallpaper_rotation_mode(),
-            settings.get_wallpaper_rotation_style(),
-            settings.get_wallpaper_rotation_transition()
-        );
+    let target = controller.manager_for_mode(&mode);
+    let current_cleaned = current_wallpaper
+        .trim()
+        .trim_start_matches(r"\\?\")
+        .to_string();
 
-        let rotation_enabled = rotation_enabled_result.unwrap_or(false);
-        let rotation_mode = rotation_mode_result.unwrap_or_else(|_| "random".to_string());
-        let cur_style = cur_style_result.unwrap_or_else(|_| "fill".to_string());
-        let cur_transition = cur_transition_result.unwrap_or_else(|_| "none".to_string());
-
-        let current_wallpaper = match get_current_wallpaper_path_from_settings(&app_clone).await {
-            Ok(Some(p)) => p,
-            _ => {
-                match settings.set_wallpaper_mode(mode_clone.clone()).await {
-                    Ok(_) => {
-                        let _ = app_clone.emit(
-                            "wallpaper-mode-switch-complete",
-                            serde_json::json!({
-                                "success": true,
-                                "mode": mode_clone
-                            }),
-                        );
-                    }
-                    Err(e2) => {
-                        let _ = app_clone.emit(
-                            "wallpaper-mode-switch-complete",
-                            serde_json::json!({
-                                "success": false,
-                                "mode": mode_clone,
-                                "error": format!("保存模式失败: {}", e2)
-                            }),
-                        );
-                    }
-                }
-                return;
-            }
-        };
-
-        let target = controller.manager_for_mode(&mode_clone);
-        let current_cleaned = current_wallpaper
-            .trim()
-            .trim_start_matches(r"\\?\")
-            .to_string();
-
-        let resolved_wallpaper = if Path::new(&current_cleaned).exists() {
-            current_cleaned.clone()
-        } else {
-            let picked_from_gallery: Option<String> = async {
-                let images_v = match Storage::global().get_all_images() {
-                    Ok(v) => v,
-                    Err(_) => return None,
-                };
-                // images_v is Vec<ImageInfo>
-                let mut existing: Vec<String> = Vec::new();
-                for it in images_v {
-                    if Path::new(&it.local_path).exists() {
-                        existing.push(it.local_path.clone());
-                    }
-                }
-                if existing.is_empty() {
-                    None
-                } else {
-                    match rotation_mode.as_str() {
-                        "sequential" => Some(existing[0].clone()),
-                        _ => {
-                            let idx = (std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_nanos() as usize)
-                                % existing.len();
-                            Some(existing[idx].clone())
-                        }
-                    }
+    let resolved_wallpaper = if Path::new(&current_cleaned).exists() {
+        current_cleaned.clone()
+    } else {
+        let picked_from_gallery: Option<String> = async {
+            let images_v = match Storage::global().get_all_images() {
+                Ok(v) => v,
+                Err(_) => return None,
+            };
+            let mut existing: Vec<String> = Vec::new();
+            for it in images_v {
+                if Path::new(&it.local_path).exists() {
+                    existing.push(it.local_path.clone());
                 }
             }
-            .await;
-
-            if let Some(p) = picked_from_gallery {
-                eprintln!(
-                    "[WARN] set_wallpaper_mode: 当前壁纸文件不存在，将从画廊选择兜底图片: {} (原路径: {})",
-                    p, current_wallpaper
-                );
-                p
+            if existing.is_empty() {
+                None
             } else {
-                current_cleaned.clone()
-            }
-        };
-        let (style_to_apply, transition_to_apply) = match settings
-            .swap_style_transition_for_mode_switch(&old_mode_clone, &mode_clone)
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!(
-                    "[WARN] set_wallpaper_mode: swap_style_transition_for_mode_switch 失败: {}",
-                    e
-                );
-                (cur_style.clone(), cur_transition.clone())
-            }
-        };
-
-        let apply_res = async {
-            eprintln!("[DEBUG] set_wallpaper_mode: 开始应用模式 {}", mode_clone);
-            eprintln!("[DEBUG] set_wallpaper_mode: 调用 target.init");
-            target.init(app_clone.clone())?;
-            eprintln!("[DEBUG] set_wallpaper_mode: target.init 完成");
-            eprintln!(
-                "[DEBUG] set_wallpaper_mode: 调用 target.set_wallpaper_path: {}",
-                resolved_wallpaper
-            );
-            if !Path::new(&resolved_wallpaper).exists() {
-                let error_msg = if old_mode_clone == "native" {
-                    format!(
-                        "无法切换到窗口模式：当前系统壁纸文件不存在（可能是主题缓存或临时文件），且画廊中没有可用图片。请先在画廊中添加图片，或手动设置一张壁纸后再切换。\n原路径: {}",
-                        resolved_wallpaper
-                    )
-                } else {
-                    format!(
-                        "无法切换到窗口模式：壁纸文件不存在，且画廊中没有可用图片作为兜底。请先在画廊中添加图片。\n路径: {}",
-                        resolved_wallpaper
-                    )
-                };
-                return Err(error_msg);
-            }
-            target.set_wallpaper_path(&resolved_wallpaper).await?;
-            eprintln!("[DEBUG] set_wallpaper_mode: target.set_wallpaper_path 完成");
-            eprintln!(
-                "[DEBUG] set_wallpaper_mode: 调用 target.set_style: {}",
-                style_to_apply
-            );
-            target.set_style(&style_to_apply).await?;
-            eprintln!("[DEBUG] set_wallpaper_mode: target.set_style 完成");
-            if rotation_enabled {
-                eprintln!(
-                    "[DEBUG] set_wallpaper_mode: 调用 target.set_transition: {}",
-                    transition_to_apply
-                );
-                target.set_transition(&transition_to_apply).await?;
-                eprintln!("[DEBUG] set_wallpaper_mode: target.set_transition 完成");
-            }
-            eprintln!("[DEBUG] set_wallpaper_mode: 应用模式完成");
-            Ok::<(), String>(())
-        }.await;
-
-        match apply_res {
-            Ok(_) => {
-                eprintln!("[DEBUG] set_wallpaper_mode: apply_res 成功");
-                if old_mode_clone == "window" && mode_clone != "window" {
-                    eprintln!("[DEBUG] set_wallpaper_mode: 清理 window 资源");
-                    controller
-                        .manager_for_mode("window")
-                        .cleanup()
-                        .unwrap_or_else(|e| eprintln!("清理 window 资源失败: {}", e));
-                }
-                if old_mode_clone == "gdi" && mode_clone != "gdi" {
-                    eprintln!("[DEBUG] set_wallpaper_mode: 开始清理 gdi 资源（从 gdi 模式切换到其他模式）");
-                    match controller.manager_for_mode("gdi").cleanup() {
-                        Ok(_) => eprintln!("[DEBUG] set_wallpaper_mode: gdi 资源清理成功"),
-                        Err(e) => eprintln!("[ERROR] 清理 gdi 资源失败: {}", e),
+                match rotation_mode.as_str() {
+                    "sequential" => Some(existing[0].clone()),
+                    _ => {
+                        let idx = (std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_nanos() as usize)
+                            % existing.len();
+                        Some(existing[idx].clone())
                     }
                 }
-                eprintln!("[DEBUG] set_wallpaper_mode: 保存模式设置");
-                if let Err(e) = settings.set_wallpaper_mode(mode_clone.clone()).await {
-                    eprintln!("[ERROR] set_wallpaper_mode: 保存模式失败: {}", e);
-                    let _ = app_clone.emit(
-                        "wallpaper-mode-switch-complete",
-                        serde_json::json!({
-                            "success": false,
-                            "mode": mode_clone,
-                            "error": format!("保存模式失败: {}", e)
-                        }),
-                    );
-                    return;
-                }
-                eprintln!("[DEBUG] set_wallpaper_mode: 模式设置已保存");
-
-                if rotation_enabled {
-                    eprintln!("[DEBUG] set_wallpaper_mode: 恢复轮播");
-                    let _ = rotator.start().await;
-                }
-
-                eprintln!("[DEBUG] set_wallpaper_mode: 发送成功事件");
-                let _ = app_clone.emit(
-                    "wallpaper-mode-switch-complete",
-                    serde_json::json!({
-                        "success": true,
-                        "mode": mode_clone
-                    }),
-                );
-                eprintln!("[DEBUG] set_wallpaper_mode: 成功事件已发送");
             }
-            Err(e) => {
-                eprintln!("[ERROR] 切换到 {} 模式失败: {}", mode_clone, e);
-                if was_running {
-                    let _ = rotator.start().await;
-                }
-                eprintln!("[DEBUG] set_wallpaper_mode: 发送失败事件");
-                let _ = app_clone.emit(
-                    "wallpaper-mode-switch-complete",
-                    serde_json::json!({
-                        "success": false,
-                        "mode": mode_clone,
-                        "error": format!("切换模式失败: {}", e)
-                    }),
-                );
-                eprintln!("[DEBUG] set_wallpaper_mode: 失败事件已发送");
-            }
+        }
+        .await;
+
+        if let Some(p) = picked_from_gallery {
+            eprintln!(
+                "[WARN] set_wallpaper_mode: 当前壁纸文件不存在，将从画廊选择兜底图片: {} (原路径: {})",
+                p, current_wallpaper
+            );
+            p
+        } else {
+            current_cleaned.clone()
+        }
+    };
+    let (style_to_apply, transition_to_apply) = match settings
+        .swap_style_transition_for_mode_switch(&old_mode, &mode)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!(
+                "[WARN] set_wallpaper_mode: swap_style_transition_for_mode_switch 失败: {}",
+                e
+            );
+            (cur_style.clone(), cur_transition.clone())
+        }
+    };
+
+    eprintln!("[DEBUG] set_wallpaper_mode: 开始应用模式 {}", mode);
+    target.init(app.clone()).map_err(|e| format!("init 失败: {}", e))?;
+    #[cfg(not(target_os = "linux"))]
+    let is_plugin_mode = false;
+    #[cfg(target_os = "linux")]
+    let is_plugin_mode = mode == "plasma-plugin";
+    if !is_plugin_mode && !Path::new(&resolved_wallpaper).exists() {
+        let error_msg = if old_mode == "native" {
+            format!(
+                "无法切换到窗口模式：当前系统壁纸文件不存在（可能是主题缓存或临时文件），且画廊中没有可用图片。请先在画廊中添加图片，或手动设置一张壁纸后再切换。\n原路径: {}",
+                resolved_wallpaper
+            )
+        } else {
+            format!(
+                "无法切换到窗口模式：壁纸文件不存在，且画廊中没有可用图片作为兜底。请先在画廊中添加图片。\n路径: {}",
+                resolved_wallpaper
+            )
         };
-    });
+        if was_running {
+            let _ = rotator.start().await;
+        }
+        return Err(error_msg);
+    }
+    target.set_wallpaper_path(&resolved_wallpaper).await?;
+    target.set_style(&style_to_apply).await?;
+    if rotation_enabled {
+        target.set_transition(&transition_to_apply).await?;
+    }
+
+    if old_mode == "window" && mode != "window" {
+        controller
+            .manager_for_mode("window")
+            .cleanup()
+            .unwrap_or_else(|e| eprintln!("清理 window 资源失败: {}", e));
+    }
+    #[cfg(target_os = "linux")]
+    if old_mode == "plasma-plugin" && mode != "plasma-plugin" {
+        controller
+            .manager_for_mode("plasma-plugin")
+            .cleanup()
+            .unwrap_or_else(|e| eprintln!("清理 plasma-plugin 资源失败: {}", e));
+    }
+    if old_mode == "gdi" && mode != "gdi" {
+        if let Err(e) = controller.manager_for_mode("gdi").cleanup() {
+            eprintln!("[ERROR] 清理 gdi 资源失败: {}", e);
+        }
+    }
+
+    settings.set_wallpaper_mode(mode.clone()).await?;
+
+    if rotation_enabled {
+        let _ = rotator.start().await;
+    }
+
     Ok(())
 }
 

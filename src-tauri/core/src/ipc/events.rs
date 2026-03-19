@@ -75,13 +75,12 @@ daemon_event_kinds! {
     OrganizeFinished,
     WallpaperUpdateImage,
     ImagesChange,
-    WallpaperUpdateStyle,
-    WallpaperUpdateTransition,
     SettingChange,
     AlbumAdded,
     AlbumNameChanged,
     AlbumDeleted,
     SurfRecordsChange,
+    DaemonShutdown,
 }
 
 impl DaemonEventKind {
@@ -106,13 +105,12 @@ impl DaemonEventKind {
             DaemonEventKind::OrganizeFinished => "organize-finished",
             DaemonEventKind::WallpaperUpdateImage => "wallpaper-update-image",
             DaemonEventKind::ImagesChange => "images-change",
-            DaemonEventKind::WallpaperUpdateStyle => "wallpaper-update-style",
-            DaemonEventKind::WallpaperUpdateTransition => "wallpaper-update-transition",
             DaemonEventKind::SettingChange => "setting-change",
             DaemonEventKind::AlbumAdded => "album-added",
             DaemonEventKind::AlbumNameChanged => "album-name-changed",
             DaemonEventKind::AlbumDeleted => "album-deleted",
             DaemonEventKind::SurfRecordsChange => "surf-records-change",
+            DaemonEventKind::DaemonShutdown => "daemon-shutdown",
         }
         .to_string()
     }
@@ -132,13 +130,12 @@ impl DaemonEventKind {
             "organize-finished" => Some(DaemonEventKind::OrganizeFinished),
             "wallpaper-update-image" => Some(DaemonEventKind::WallpaperUpdateImage),
             "images-change" => Some(DaemonEventKind::ImagesChange),
-            "wallpaper-update-style" => Some(DaemonEventKind::WallpaperUpdateStyle),
-            "wallpaper-update-transition" => Some(DaemonEventKind::WallpaperUpdateTransition),
             "setting-change" => Some(DaemonEventKind::SettingChange),
             "album-added" => Some(DaemonEventKind::AlbumAdded),
             "album-name-changed" => Some(DaemonEventKind::AlbumNameChanged),
             "album-deleted" => Some(DaemonEventKind::AlbumDeleted),
             "surf-records-change" => Some(DaemonEventKind::SurfRecordsChange),
+            "daemon-shutdown" => Some(DaemonEventKind::DaemonShutdown),
             _ => None,
         }
     }
@@ -240,12 +237,6 @@ pub enum DaemonEvent {
         image_path: String,
     },
 
-    /// 壁纸样式更新事件
-    WallpaperUpdateStyle { style: String },
-
-    /// 壁纸过渡效果更新事件
-    WallpaperUpdateTransition { transition: String },
-
     /// 设置变更事件（只包含变化的部分）
     SettingChange {
         /// 变更的设置项，键值对形式
@@ -277,6 +268,8 @@ pub enum DaemonEvent {
         #[serde(rename = "surfRecordId")]
         surf_record_id: String,
     },
+    /// Daemon 关闭事件（进程退出前发出）
+    DaemonShutdown { reason: String },
 }
 
 /// 包装在 Arc 中的 Daemon 事件，用于零拷贝传递
@@ -300,15 +293,12 @@ impl DaemonEvent {
             DaemonEvent::OrganizeFinished { .. } => DaemonEventKind::OrganizeFinished,
             DaemonEvent::ImagesChange { .. } => DaemonEventKind::ImagesChange,
             DaemonEvent::WallpaperUpdateImage { .. } => DaemonEventKind::WallpaperUpdateImage,
-            DaemonEvent::WallpaperUpdateStyle { .. } => DaemonEventKind::WallpaperUpdateStyle,
-            DaemonEvent::WallpaperUpdateTransition { .. } => {
-                DaemonEventKind::WallpaperUpdateTransition
-            }
             DaemonEvent::SettingChange { .. } => DaemonEventKind::SettingChange,
             DaemonEvent::AlbumAdded { .. } => DaemonEventKind::AlbumAdded,
             DaemonEvent::AlbumNameChanged { .. } => DaemonEventKind::AlbumNameChanged,
             DaemonEvent::AlbumDeleted { .. } => DaemonEventKind::AlbumDeleted,
             DaemonEvent::SurfRecordsChange { .. } => DaemonEventKind::SurfRecordsChange,
+            DaemonEvent::DaemonShutdown { .. } => DaemonEventKind::DaemonShutdown,
         }
     }
 }

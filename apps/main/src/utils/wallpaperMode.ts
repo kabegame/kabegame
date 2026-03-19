@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { ElMessageBox } from "element-plus";
+import { i18n } from "@/i18n";
 
 function isRequiresWindowModeError(error: unknown): boolean {
   const msg =
@@ -10,49 +10,40 @@ function isRequiresWindowModeError(error: unknown): boolean {
   return msg.includes("REQUIRES_WINDOW_MODE");
 }
 
-async function waitWallpaperModeSwitchComplete(
-  mode: string,
-  timeoutMs = 30000,
-): Promise<void> {
-  await new Promise<void>(async (resolve, reject) => {
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const unlisten = await listen<{
-      success: boolean;
-      mode: string;
-      error?: string;
-    }>("wallpaper-mode-switch-complete", (event) => {
-      if (event.payload.mode !== mode) return;
-      if (timeoutId) clearTimeout(timeoutId);
-      unlisten();
-      if (event.payload.success) {
-        resolve();
-      } else {
-        reject(
-          new Error(event.payload.error || "切换窗口模式失败"),
-        );
-      }
-    });
-
-    timeoutId = setTimeout(() => {
-      unlisten();
-      reject(new Error("切换窗口模式超时"));
-    }, timeoutMs);
-  });
+function isRequiresPluginModeError(error: unknown): boolean {
+  const msg =
+    typeof error === "string"
+      ? error
+      : (error as any)?.message || String(error);
+  return msg.includes("REQUIRES_PLUGIN_MODE");
 }
 
 async function ensureWindowModeByUserConfirm(): Promise<void> {
   await ElMessageBox.confirm(
-    "该媒体需要窗口模式才能设置为壁纸。是否切换到窗口模式？",
-    "提示",
+    i18n.global.t("settings.wallpaperModeWindowConfirmMessage"),
+    i18n.global.t("settings.wallpaperModeConfirmTitle"),
     {
-      confirmButtonText: "切换",
-      cancelButtonText: "取消",
+      confirmButtonText: i18n.global.t("settings.wallpaperModeConfirmOk"),
+      cancelButtonText: i18n.global.t("common.cancel"),
       type: "warning",
     },
   );
 
   await invoke("set_wallpaper_mode", { mode: "window" });
-  await waitWallpaperModeSwitchComplete("window");
+}
+
+async function ensurePluginModeByUserConfirm(): Promise<void> {
+  await ElMessageBox.confirm(
+    i18n.global.t("settings.wallpaperModePluginConfirmMessage"),
+    i18n.global.t("settings.wallpaperModeConfirmTitle"),
+    {
+      confirmButtonText: i18n.global.t("settings.wallpaperModeConfirmOk"),
+      cancelButtonText: i18n.global.t("common.cancel"),
+      type: "warning",
+    },
+  );
+
+  await invoke("set_wallpaper_mode", { mode: "plasma-plugin" });
 }
 
 export async function setWallpaperByImageIdWithModeFallback(
@@ -61,9 +52,17 @@ export async function setWallpaperByImageIdWithModeFallback(
   try {
     await invoke("set_wallpaper_by_image_id", { imageId });
   } catch (error) {
-    if (!isRequiresWindowModeError(error)) throw error;
-    await ensureWindowModeByUserConfirm();
-    await invoke("set_wallpaper_by_image_id", { imageId });
+    if (isRequiresPluginModeError(error)) {
+      await ensurePluginModeByUserConfirm();
+      await invoke("set_wallpaper_by_image_id", { imageId });
+      return;
+    }
+    if (isRequiresWindowModeError(error)) {
+      await ensureWindowModeByUserConfirm();
+      await invoke("set_wallpaper_by_image_id", { imageId });
+      return;
+    }
+    throw error;
   }
 }
 

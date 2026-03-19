@@ -2843,6 +2843,7 @@ dependencies = [
  "include_dir",
  "kabegame-core",
  "kabegame-i18n",
+ "libc",
  "lru",
  "memmap2",
  "objc2",

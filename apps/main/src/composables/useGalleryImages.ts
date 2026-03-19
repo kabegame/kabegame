@@ -57,25 +57,28 @@ export function useGalleryImages(
     opts?: { loadKey?: string },
   ) => {
     const safePath = (path || "all/1").trim() || "all/1";
+    try {
+      const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
+        path: safePath,
+      });
+      totalImages.value = res.total ?? 0;
+      crawlerStore.totalImages = totalImages.value;
 
-    const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
-      path: safePath,
-    });
-    totalImages.value = res.total ?? 0;
-    crawlerStore.totalImages = totalImages.value;
+      // 直接处理图片条目（新路径格式总是返回图片）
+      const images = (res.entries || [])
+        .filter((e) => e.kind === "image")
+        .map((e) => (e as any).image as ImageInfo);
 
-    // 直接处理图片条目（新路径格式总是返回图片）
-    const images = (res.entries || [])
-      .filter((e) => e.kind === "image")
-      .map((e) => (e as any).image as ImageInfo);
+      await setLeafAndResetDisplay(images);
+      loadedKey.value = opts?.loadKey ?? safePath;
 
-    await setLeafAndResetDisplay(images);
-    loadedKey.value = opts?.loadKey ?? safePath;
-
-    return {
-      total: totalImages.value,
-      baseOffset: res.baseOffset ?? 0,
-    };
+      return {
+        total: totalImages.value,
+        baseOffset: res.baseOffset ?? 0,
+      };
+    } catch (e) {
+      throw e;
+    }
   };
 
   /**

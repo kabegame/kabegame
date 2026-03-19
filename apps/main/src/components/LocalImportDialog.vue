@@ -257,7 +257,7 @@ async function handleSubmit() {
   const hasArchiveFiles = paths.value.some(hasExplicitArchivePath);
   const effectiveIncludeArchive = includeArchive.value || hasArchiveFiles;
 
-  crawlerStore.addTask("本地导入", undefined, {
+  crawlerStore.addTask("local-import", undefined, {
     paths: paths.value,
     recursive: recursive.value,
     include_archive: effectiveIncludeArchive,
