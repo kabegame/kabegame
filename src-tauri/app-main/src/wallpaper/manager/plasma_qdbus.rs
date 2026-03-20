@@ -76,6 +76,35 @@ stderr: {}",
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Kabegame Plasma 壁纸插件 ID（与 plasma_plugin.rs 中 switch_to_kabegame_plugin 一致）。
+pub const KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID: &str = "org.kabegame.wallpaper";
+
+/// 检测 Kabegame Plasma 壁纸插件是否已安装（在系统或用户 wallpaper 插件目录下存在对应目录）。
+/// 用于前端仅在有插件时展示「插件模式」选项。
+#[cfg(target_os = "linux")]
+pub fn is_kabegame_plasma_plugin_installed() -> bool {
+    use std::path::Path;
+
+    let system_path = Path::new("/usr/share/plasma/wallpapers").join(KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID);
+    if system_path.is_dir() {
+        return true;
+    }
+
+    if let Some(data) = dirs::data_dir() {
+        let user_path = data.join("plasma/wallpapers").join(KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID);
+        if user_path.is_dir() {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn is_kabegame_plasma_plugin_installed() -> bool {
+    false
+}
+
 /// 获取当前 Plasma 第一个桌面的壁纸插件 ID（如 org.kde.image、org.kabegame.wallpaper）。
 /// 用于启动时判断是否需要自动切到 Kabegame 插件。
 #[cfg(target_os = "linux")]

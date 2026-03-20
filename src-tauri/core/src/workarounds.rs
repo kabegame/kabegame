@@ -4,6 +4,17 @@
 //! These helpers are not fixes and may stop working as environments change.
 use std::{fs, path::Path};
 
+/// WebKit2GTK on Wayland can be laggy (vsync/framerate issues). Forcing GTK to use X11
+/// typically improves responsiveness. Only applied when running under Wayland and when
+/// GDK_BACKEND is not already set (so users can override with GDK_BACKEND=wayland).
+/// Must be called before any GTK/WebKit initialization.
+#[cfg(target_os = "linux")]
+pub fn apply_wayland_webkit_workaround() {
+    unsafe {
+        std::env::set_var("GDK_BACKEND", "x11");
+    }
+}
+
 /// WebKit2GTK on Linux + NVIDIA uses a DMA-BUF renderer that can cause blank window
 /// or EGL_BAD_PARAMETER. Disable it when an NVIDIA GPU is detected.
 /// Upstream: https://bugs.webkit.org/show_bug.cgi?id=202362

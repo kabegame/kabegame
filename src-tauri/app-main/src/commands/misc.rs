@@ -164,6 +164,13 @@ pub async fn get_linux_desktop_env() -> Result<String, String> {
     }
 }
 
+/// 检测 Kabegame Plasma 壁纸插件是否已安装（仅 Linux 有效，其他平台恒为 false）。
+/// 用于前端仅在有插件时展示「插件模式」选项。
+#[tauri::command]
+pub async fn is_plasma_wallpaper_plugin_installed() -> Result<bool, String> {
+    Ok(crate::wallpaper::manager::plasma_qdbus::is_kabegame_plasma_plugin_installed())
+}
+
 #[tauri::command]
 pub async fn update_image_dimensions(
     image_id: String,

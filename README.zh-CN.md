@@ -151,6 +151,23 @@
    - CLI 会自动安装到 `/usr/bin/kabegame-cli`，可直接在终端使用：`kabegame-cli --help`
    - Light 模式不提供 CLI 工具
 
+4. **KDE Plasma 壁纸插件（可选）**：
+   - **要求**：需 KDE Plasma 6；必须先安装 Kabegame 主程序（硬依赖）。主程序安装见 [Kabegame 安装说明](https://github.com/kabegame/kabegame#installation)。
+   - 在 Plasma 6 下可将 Kabegame 设为系统壁纸。安装插件 deb 后，前往 系统设置 → 外观 → 壁纸，选择「Kabegame Wallpaper」。
+   - **安装**：从 [Releases](https://github.com/kabegame/plasma-wallpaper-plugin2/releases) 下载 `.deb`（选择带 `plasma-v*` tag 的 Release），然后：
+     ```bash
+     sudo dpkg -i kabegame-plasma-wallpaper_*_amd64.deb
+     ```
+     若依赖报错：`sudo apt-get install -f`
+   - **重启 Plasma Shell**（安装或更新后需执行一次）：
+     ```bash
+     kquitapp6 plasmashell 2>/dev/null; kstart6 plasmashell &
+     ```
+     或注销后重新登录。
+   - **源码**：[Plasma 壁纸插件](https://github.com/kabegame/plasma-wallpaper-plugin2)
+
+5. **Workaround（Linux）**：
+   - **Wayland**：在 Wayland 下 WebKit2GTK 可能卡顿。应用在检测到 Wayland 时会自动设置 `GDK_BACKEND=x11`，使界面通过 X11 渲染以提升流畅度。
 
 ## 主要功能
 
