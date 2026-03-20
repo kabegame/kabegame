@@ -552,6 +552,7 @@ pub fn run() {
             get_supported_image_types,
             set_supported_image_formats,
             get_linux_desktop_env,
+            is_plasma_wallpaper_plugin_installed,
             #[cfg(not(target_os = "android"))]
             get_http_server_base_url,
             #[cfg(not(target_os = "android"))]

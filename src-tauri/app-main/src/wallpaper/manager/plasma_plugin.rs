@@ -20,14 +20,18 @@ impl PlasmaPluginWallpaperManager {
 
     /// 将所有桌面的 wallpaperPlugin 切换为 kabegame 插件
     fn switch_to_kabegame_plugin() -> Result<(), String> {
-        let script = r#"
+        let id = plasma_qdbus::KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID;
+        let script = format!(
+            r#"
             var allDesktops = desktops();
-            for (var i = 0; i < allDesktops.length; i++) {
+            for (var i = 0; i < allDesktops.length; i++) {{
                 var d = allDesktops[i];
-                d.wallpaperPlugin = 'org.kabegame.wallpaper';
-            }
-        "#;
-        plasma_qdbus::run_qdbus_evaluate_script(script)
+                d.wallpaperPlugin = '{}';
+            }}
+            "#,
+            id
+        );
+        plasma_qdbus::run_qdbus_evaluate_script(&script)
     }
 
     /// 将所有桌面的 wallpaperPlugin 恢复为 org.kde.image
@@ -47,7 +51,7 @@ impl PlasmaPluginWallpaperManager {
     pub fn ensure_plasma_plugin_aligned() -> Result<(), String> {
         let current = plasma_qdbus::get_current_plasma_wallpaper_plugin()
             .unwrap_or_else(|_| String::new());
-        if current.trim() == "org.kabegame.wallpaper" {
+        if current.trim() == plasma_qdbus::KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID {
             return Ok(());
         }
         Self::switch_to_kabegame_plugin()

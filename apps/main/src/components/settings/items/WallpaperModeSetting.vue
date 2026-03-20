@@ -2,7 +2,7 @@
     <el-radio-group v-model="localValue" :disabled="switching" class="wallpaper-mode-radio-group"
         @change="handleChange">
         <el-radio value="native">{{ t('settings.modeNative') }}</el-radio>
-        <el-radio v-if="isPlasma" value="plasma-plugin">{{ t('settings.modePlugin') }}</el-radio>
+        <el-radio v-if="isPlasmaPluginAvailable" value="plasma-plugin">{{ t('settings.modePlugin') }}</el-radio>
         <el-radio v-if="IS_WINDOWS || IS_MACOS" value="window">{{ t('settings.modeWindow') }}</el-radio>
     </el-radio-group>
 </template>
@@ -17,7 +17,7 @@ import { IS_MACOS, IS_WINDOWS } from "@kabegame/core/env";
 import { useDesktop } from "@/composables/useDesktop";
 
 const { t } = useI18n();
-const { isPlasma } = useDesktop();
+const { isPlasmaPluginAvailable } = useDesktop();
 
 const { settingValue, disabled, showDisabled, set } = useSettingKeyState("wallpaperMode");
 const uiStore = useUiStore();

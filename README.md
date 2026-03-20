@@ -147,6 +147,24 @@ A Tauri-based anime image manager! Crawl, organize, and set/rotate wallpapers—
    - Installed to `/usr/bin/kabegame-cli`: `kabegame-cli --help`
    - Light build has no CLI.
 
+4. **KDE Plasma Wallpaper Plugin (optional)**:
+   - **Requires**: KDE Plasma 6; Kabegame must be installed first (hard dependency). See [Kabegame installation](https://github.com/kabegame/kabegame#installation).
+   - Use Kabegame as the system wallpaper in Plasma 6. After installing the plugin deb, go to System Settings → Appearance → Wallpaper and select "Kabegame Wallpaper".
+   - **Install**: Download the `.deb` from [Releases](https://github.com/kabegame/plasma-wallpaper-plugin2/releases) (choose a release with `plasma-v*` tag), then:
+     ```bash
+     sudo dpkg -i kabegame-plasma-wallpaper_*_amd64.deb
+     ```
+     If dependencies fail: `sudo apt-get install -f`
+   - **Restart Plasma Shell** (required after install or update):
+     ```bash
+     kquitapp6 plasmashell 2>/dev/null; kstart6 plasmashell &
+     ```
+     Or log out and log back in.
+   - **Source**: [Plasma Wallpaper Plugin](https://github.com/kabegame/plasma-wallpaper-plugin2)
+
+5. **Workarounds** (Linux):
+   - **Wayland**: WebKit2GTK can feel laggy on Wayland. The app automatically forces `GDK_BACKEND=x11` when running under Wayland (so the UI uses X11 and is smoother).
+
 ## Main Features
 
 ### 🖼️ Gallery & Image Management
