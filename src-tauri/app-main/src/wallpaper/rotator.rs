@@ -88,6 +88,23 @@ impl WallpaperRotator {
         out
     }
 
+    /// 从当前时间戳生成均匀分布的随机索引（splitmix64 位混合）。
+    /// 避免直接 `nanos % len`：Windows 上 nanos 精度为 100ns（始终是 100 的倍数），
+    /// 当 len 整除 100 时取模结果恒为 0。
+    fn random_index(len: usize) -> usize {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let mut x = nanos as u64;
+        x ^= x >> 30;
+        x = x.wrapping_mul(0xbf58476d1ce4e5b9);
+        x ^= x >> 27;
+        x = x.wrapping_mul(0x94d049bb133111eb);
+        x ^= x >> 31;
+        (x as usize) % len
+    }
+
     /// 轮播候选是否允许：根据壁纸模式筛选。
     /// - 窗口模式（window）、插件模式（plasma-plugin）：图片与视频均可参与轮播。
     /// - 原生模式（native）等：仅图片参与轮播，视频壁纸过滤掉。
@@ -372,11 +389,7 @@ impl WallpaperRotator {
                         if candidates.is_empty() {
                             continue;
                         }
-                        let random_idx = (std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_nanos() as usize)
-                            % candidates.len();
+                        let random_idx = Self::random_index(candidates.len());
                         images[candidates[random_idx]].clone()
                     }
                 };
@@ -704,12 +717,7 @@ impl WallpaperRotator {
                     return Err("随机模式下没有找到存在的图片".to_string());
                 }
 
-                // 随机选择一张
-                let random_idx = (std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos() as usize)
-                    % existing_images.len();
+                let random_idx = Self::random_index(existing_images.len());
                 existing_images[random_idx].clone()
             }
         };
