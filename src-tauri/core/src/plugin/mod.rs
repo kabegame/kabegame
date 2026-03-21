@@ -3,8 +3,8 @@
 // Rhai 爬虫运行时/脚本执行
 pub mod rhai;
 
-use reqwest;
 use futures_util::StreamExt;
+use reqwest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -1184,9 +1184,9 @@ impl PluginManager {
         expected_size: Option<u64>,
         progress: Option<StorePluginDownloadProgressContext>,
     ) -> Result<Vec<u8>, String> {
-        let progress_key = progress.as_ref().map(|p| {
-            store_download_progress_key(p.source_id.as_str(), p.plugin_id.as_str())
-        });
+        let progress_key = progress
+            .as_ref()
+            .map(|p| store_download_progress_key(p.source_id.as_str(), p.plugin_id.as_str()));
         // 首次 + 失败重试 2 次
         const MAX_DOWNLOAD_ATTEMPTS: u32 = 3;
 
@@ -1344,7 +1344,8 @@ impl PluginManager {
                     }
                 }
                 if total_hint.is_none() {
-                    total_hint = expected_size.or(response.content_length().map(|len| len + received));
+                    total_hint =
+                        expected_size.or(response.content_length().map(|len| len + received));
                 }
             } else {
                 if received > 0 {
@@ -2354,7 +2355,10 @@ fn collect_doc_from_zip<R: std::io::Read + std::io::Seek>(
     }
 }
 
-fn extract_manifest_text_from_flat(obj: &serde_json::Map<String, serde_json::Value>, base_key: &str) -> ManifestI18nText {
+fn extract_manifest_text_from_flat(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    base_key: &str,
+) -> ManifestI18nText {
     let mut out = HashMap::new();
     if let Some(v) = obj.get(base_key).and_then(|v| v.as_str()) {
         out.insert(base_key.to_string(), v.to_string());
@@ -2378,7 +2382,10 @@ impl PluginManifest {
         self.name.get("name").cloned().unwrap_or_default()
     }
     pub fn description_fallback(&self) -> String {
-        self.description.get("description").cloned().unwrap_or_default()
+        self.description
+            .get("description")
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -2398,13 +2405,19 @@ impl<'de> Deserialize<'de> for PluginManifest {
         D: serde::Deserializer<'de>,
     {
         let obj = serde_json::Value::deserialize(deserializer)?;
-        let map = obj.as_object().ok_or_else(|| serde::de::Error::custom("manifest must be an object"))?;
+        let map = obj
+            .as_object()
+            .ok_or_else(|| serde::de::Error::custom("manifest must be an object"))?;
         let version = map
             .get("version")
             .and_then(|v| v.as_str())
             .unwrap_or("1.0.0")
             .to_string();
-        let author = map.get("author").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let author = map
+            .get("author")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let name = extract_manifest_text_from_flat(map, "name");
         let description = extract_manifest_text_from_flat(map, "description");
         Ok(PluginManifest {
@@ -2430,7 +2443,11 @@ pub fn index_manifest_text_to_frontend_value(v: Option<&serde_json::Value>) -> s
         let mut out = serde_json::Map::new();
         for (k, val) in obj {
             if let Some(s) = val.as_str() {
-                let key = if k == "default" { "default" } else { k.as_str() };
+                let key = if k == "default" {
+                    "default"
+                } else {
+                    k.as_str()
+                };
                 out.insert(key.to_string(), serde_json::Value::String(s.to_string()));
             }
         }
@@ -2440,7 +2457,10 @@ pub fn index_manifest_text_to_frontend_value(v: Option<&serde_json::Value>) -> s
                 .and_then(|x| x.as_str())
                 .or_else(|| obj.values().find_map(|x| x.as_str()))
                 .unwrap_or("");
-            out.insert("default".to_string(), serde_json::Value::String(fallback.to_string()));
+            out.insert(
+                "default".to_string(),
+                serde_json::Value::String(fallback.to_string()),
+            );
         }
         return serde_json::Value::Object(out);
     }
@@ -2508,7 +2528,9 @@ impl<'de> Deserialize<'de> for VarOption {
         if let Some(s) = v.as_str() {
             return Ok(VarOption::String(s.to_string()));
         }
-        let map = v.as_object().ok_or_else(|| serde::de::Error::custom("VarOption: object or string"))?;
+        let map = v
+            .as_object()
+            .ok_or_else(|| serde::de::Error::custom("VarOption: object or string"))?;
         let variable = map
             .get("variable")
             .and_then(|x| x.as_str())
@@ -2550,7 +2572,9 @@ impl<'de> Deserialize<'de> for VarDefinition {
         D: serde::Deserializer<'de>,
     {
         let obj = serde_json::Value::deserialize(deserializer)?;
-        let map = obj.as_object().ok_or_else(|| serde::de::Error::custom("VarDefinition: must be object"))?;
+        let map = obj
+            .as_object()
+            .ok_or_else(|| serde::de::Error::custom("VarDefinition: must be object"))?;
         let key = map
             .get("key")
             .and_then(|v| v.as_str())
@@ -2644,8 +2668,14 @@ pub fn var_definition_to_frontend_value(v: &VarDefinition) -> serde_json::Value 
                 }
                 VarOption::Item { name, variable } => {
                     let mut m = serde_json::Map::new();
-                    m.insert("variable".to_string(), serde_json::Value::String(variable.clone()));
-                    m.insert("name".to_string(), manifest_i18n_to_frontend_value(name, "name"));
+                    m.insert(
+                        "variable".to_string(),
+                        serde_json::Value::String(variable.clone()),
+                    );
+                    m.insert(
+                        "name".to_string(),
+                        manifest_i18n_to_frontend_value(name, "name"),
+                    );
                     serde_json::Value::Object(m)
                 }
             })
