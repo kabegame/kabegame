@@ -1,6 +1,8 @@
 // 謠剃ｻｶ逶ｸ蜈ｳ蜻ｽ莉､
 
-use kabegame_core::plugin::{PluginManager, PluginSource, extract_kgpg_filename_from_url, var_definition_to_frontend_value};
+use kabegame_core::plugin::{
+    extract_kgpg_filename_from_url, var_definition_to_frontend_value, PluginManager,
+};
 
 #[tauri::command]
 pub async fn get_plugins() -> Result<serde_json::Value, String> {

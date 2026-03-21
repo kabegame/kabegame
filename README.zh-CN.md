@@ -65,7 +65,7 @@
 - 🎨 **壁纸设置器（图片/视频）**：收集、管理、轮播二次元壁纸，自动从指定画册更换桌面壁纸（随机/顺序），让桌面充满二次元气息
 - 🖼️ **图片管理者（图片/视频）**：画廊浏览、画册整理、虚拟磁盘（Windows 挂载为盘符，macOS/Linux 为虚拟文件夹）、拖拽导入本地图片/视频/文件夹/压缩包或 kgpg 插件
 
-(视频目前(v3.2.0)只支持mp4和mov格式)
+（视频截至 v3.2.2 仅支持 mp4 与 mov 格式）
 
 ## 安装方法
 
@@ -80,15 +80,17 @@
 | **文件大小** | 较大 | 较小 |
 | **优缺点**| 功能完成，但不同操作系统需要安装依赖(见[安装方法](#安装方法-1)) | 立即安装，但没有虚拟盘和cli功能 |
 
-**根据你的操作系统和需求，选择合适的安装包**
+**根据你的操作系统和需求，选择合适的安装包。**
+
+**[前往 GitHub Releases 下载（最新版）](https://github.com/kabegame/kabegame/releases/latest)**
 
 | 操作系统 | Standard 模式 | Light 模式 |
 |---------|--------------|-----------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame-standard_3.2.0_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame-light_3.2.0_x64-setup.exe) |
-| MacOS | [dmg映像](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame-standard_3.2.0_aarch64.dmg) | [dmg映像](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame-light_3.2.0_aarch64.dmg) |
-| Linux | [deb包](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame-standard_3.2.0_amd64.deb) | [deb包](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame-light_3.2.0_amd64.deb) |
+| Windows | setup.exe | setup.exe |
+| macOS | dmg 映像 | dmg 映像 |
+| Linux | deb 包 | deb 包 |
 
-- **安卓预览版**（仅支持 Light 模式）：[kabegame_3.2.0_android-preview.apk](https://github.com/kabegame/kabegame/releases/tag/v3.2.0/Kabegame_3.2.0_android-preview.apk) 
+- **安卓预览版**（仅支持 Light 模式）：同一发布页中的 `Kabegame_*_android-preview.apk`
 
 ## 安装方法
 
@@ -341,7 +343,7 @@ bun run build:ffmpeg             # 需 libx264（macOS: brew install x264，Ubun
   - 在 `build` 中：
     - `cli`：`--skip vue` 跳过前端构建，`--skip cargo` 跳过后端构建
     - `main`：仅支持 `--skip vue` 跳过前端构建（仍会执行 `cargo tauri build`）
-- 主应用的开发会自动先打包插件到 `src-tauri/app-main/resources/plugins`，确保资源存在，而这个操作依赖cli的存在，因此需要先运行 `bun b -c cli` 来构建cli，否则无法开发主应用
+- 主应用 `bun dev -c main` 会通过 nx 执行 `crawler-plugins:package-to-dev-data`，将打包好的 `.kgpg` 输出到仓库根目录的 `data/plugins-directory` 供本地调试；正式安装包不再内置商店插件，用户从 GitHub 商店源下载安装
 - `dev` 的前端由各自的 `tauri.conf.json` 的 `beforeDevCommand` 启动；`build` 时前端由构建脚本显式构建（`nx run .:build-*`）
 
 ### Android 开发

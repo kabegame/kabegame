@@ -9,6 +9,17 @@
           @manage-sources="openManageSources"
         />
 
+        <div v-if="sourcesLoadedOnce && sources.length === 0" class="plugin-sources-empty-hint">
+          <el-alert type="info" :closable="false" show-icon>
+            <template #title>
+              {{ $t('plugins.noStoreSourcesHint') }}
+            </template>
+            <el-button type="primary" size="small" style="margin-top: 8px" @click="goToOfficialGitHubStoreTab">
+              {{ $t('plugins.goToOfficialGitHubStore') }}
+            </el-button>
+          </el-alert>
+        </div>
+
         <!-- Tab 切换 -->
         <StyledTabs v-model="activeTab" :before-leave="beforeLeaveTab">
       <el-tab-pane :label="$t('plugins.installedTab')" name="installed">
@@ -17,7 +28,11 @@
           <el-skeleton :rows="8" animated />
         </div>
         <div v-else-if="installedPlugins.length === 0" class="empty">
-          <el-empty :description="$t('plugins.noInstalled')" />
+          <el-empty :description="$t('plugins.noInstalled')">
+            <el-button type="primary" @click="goToOfficialGitHubStoreTab">
+              {{ $t('plugins.goToOfficialGitHubStore') }}
+            </el-button>
+          </el-empty>
         </div>
 
         <!-- 已安装：布局与商店一致 -->
@@ -64,7 +79,11 @@
         :name="storeTabName(s.id)">
         <template #label>
           <span>{{ s.name }}</span>
-          <el-icon class="tab-close-icon" @click.stop="handleDeleteSource(s)">
+          <el-icon
+            v-if="s.id !== OFFICIAL_PLUGIN_SOURCE_ID"
+            class="tab-close-icon"
+            @click.stop="handleDeleteSource(s)"
+          >
             <Close />
           </el-icon>
         </template>
@@ -170,7 +189,12 @@
         <el-table-column :label="$t('plugins.action')" width="140">
           <template #default="{ row, $index }">
             <el-button size="small" @click="editSource($index)">{{ $t('plugins.edit') }}</el-button>
-            <el-button size="small" type="danger" @click="removeSource($index)">{{ $t('plugins.delete') }}</el-button>
+            <el-button
+              v-if="row.id !== OFFICIAL_PLUGIN_SOURCE_ID"
+              size="small"
+              type="danger"
+              @click="removeSource($index)"
+            >{{ $t('plugins.delete') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -192,7 +216,11 @@
           <el-input v-model="editSourceForm.name" :placeholder="$t('plugins.namePlaceholder')" />
         </el-form-item>
         <el-form-item label="index.json">
-          <el-input v-model="editSourceForm.indexUrl" placeholder="https://.../index.json" />
+          <el-input
+            v-model="editSourceForm.indexUrl"
+            placeholder="https://.../index.json"
+            :disabled="editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -309,6 +337,9 @@ const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("pluginbrowser");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("pluginbrowser");
+
+/** 与后端 `plugin_sources::OFFICIAL_PLUGIN_SOURCE_ID` 一致 */
+const OFFICIAL_PLUGIN_SOURCE_ID = "official_github_release";
 
 const pullToRefreshOpts = computed(() =>
   IS_ANDROID
@@ -600,6 +631,21 @@ const formatBytes = (bytes: number) => {
   return `${Math.round((bytes / 1024 / 1024) * 100) / 100} MB`;
 };
 
+const goToOfficialGitHubStoreTab = async () => {
+  const r = await loadSources();
+  if (!r.success) {
+    ElMessage.error(r.error ?? t("plugins.loadSourcesFailed"));
+    return;
+  }
+  const hasOfficial = sources.value.some((s) => s.id === OFFICIAL_PLUGIN_SOURCE_ID);
+  if (!hasOfficial) {
+    ElMessage.warning(t("plugins.officialSourceMissing"));
+    return;
+  }
+  activeTab.value = storeTabName(OFFICIAL_PLUGIN_SOURCE_ID);
+  await loadStorePlugins(OFFICIAL_PLUGIN_SOURCE_ID, { showMessage: false, forceRefresh: false });
+};
+
 const loadSources = async (): Promise<{ success: boolean; error?: string }> => {
   try {
     const res = await invoke<PluginSource[]>("get_plugin_sources");
@@ -662,7 +708,11 @@ const confirmEditSource = async () => {
   const indexUrl = editSourceForm.indexUrl.trim();
   isValidatingSource.value = true;
   try {
-    await invoke("validate_plugin_source", { indexUrl });
+    const skipValidate =
+      editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID && editingSourceIndex.value !== null;
+    if (!skipValidate) {
+      await invoke("validate_plugin_source", { indexUrl });
+    }
   } catch (e) {
     const msg =
       typeof e === "string"
@@ -733,6 +783,10 @@ const confirmEditSource = async () => {
 const removeSource = async (idx: number) => {
   const source = sources.value[idx];
   if (!source) return;
+  if (source.id === OFFICIAL_PLUGIN_SOURCE_ID) {
+    ElMessage.warning(t("plugins.cannotDeleteOfficialSource"));
+    return;
+  }
 
   try {
     await ElMessageBox.confirm(t("plugins.confirmDeleteStoreSource"), t("plugins.deleteStoreSourceTitle"), { type: "warning" });
@@ -743,6 +797,10 @@ const removeSource = async (idx: number) => {
 };
 
 const handleDeleteSource = async (source: PluginSource) => {
+  if (source.id === OFFICIAL_PLUGIN_SOURCE_ID) {
+    ElMessage.warning(t("plugins.cannotDeleteOfficialSource"));
+    return;
+  }
   try {
     await ElMessageBox.confirm(
       t("plugins.confirmDeleteStoreSourceWithName", { name: source.name }),
@@ -975,6 +1033,8 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
       downloadUrl: plugin.downloadUrl,
       sha256: plugin.sha256 ?? null,
       sizeBytes: plugin.sizeBytes || null,
+      sourceId: plugin.sourceId ?? null,
+      version: plugin.version ?? null,
     });
 
     await invoke("import_plugin_from_zip", { zipPath: res.tmpPath });

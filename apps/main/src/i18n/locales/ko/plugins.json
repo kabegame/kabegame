@@ -112,5 +112,10 @@
   "installedRefreshSuccess": "설치된 소스가 새로고침되었습니다",
   "installedRefreshFailed": "설치된 소스 새로고침 실패",
   "storeSourceGoneSwitchToInstalled": "현재 스토어 소스가 없어 설치된 소스로 전환했습니다",
-  "refreshFailed": "새로고침 실패"
+  "refreshFailed": "새로고침 실패",
+  "noStoreSourcesHint": "등록된 스토어 소스가 없습니다. 아래 버튼으로 GitHub 공식 플러그인 스토어 탭으로 이동할 수 있습니다.",
+  "goToOfficialGitHubStore": "GitHub 공식 스토어 열기",
+  "loadSourcesFailed": "스토어 소스 목록을 불러오지 못했습니다",
+  "officialSourceMissing": "공식 소스를 찾을 수 없습니다. 앱을 다시 시작해 보세요.",
+  "cannotDeleteOfficialSource": "공식 GitHub Releases 소스는 삭제할 수 없습니다"
 }

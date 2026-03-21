@@ -112,5 +112,10 @@
   "installedRefreshSuccess": "已安装源已刷新",
   "installedRefreshFailed": "刷新已安装源失败",
   "storeSourceGoneSwitchToInstalled": "当前商店源已不存在，已切回已安装源",
-  "refreshFailed": "刷新失败"
+  "refreshFailed": "刷新失败",
+  "noStoreSourcesHint": "当前没有任何商店源，可点击下方按钮切换到 GitHub 官方插件目录。",
+  "goToOfficialGitHubStore": "打开 GitHub 官方插件商店",
+  "loadSourcesFailed": "加载商店源列表失败",
+  "officialSourceMissing": "未找到官方源，请重启应用后重试",
+  "cannotDeleteOfficialSource": "官方 GitHub Releases 源不可删除"
 }

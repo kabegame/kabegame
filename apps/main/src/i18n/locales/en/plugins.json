@@ -112,5 +112,10 @@
   "installedRefreshSuccess": "Installed sources refreshed",
   "installedRefreshFailed": "Failed to refresh installed sources",
   "storeSourceGoneSwitchToInstalled": "Current store source no longer exists, switched to installed sources",
-  "refreshFailed": "Refresh failed"
+  "refreshFailed": "Refresh failed",
+  "noStoreSourcesHint": "No store sources configured. Use the button below to open the official GitHub plugin store tab.",
+  "goToOfficialGitHubStore": "Open GitHub official store",
+  "loadSourcesFailed": "Failed to load store sources",
+  "officialSourceMissing": "Official source is missing. Restart the app and try again.",
+  "cannotDeleteOfficialSource": "The official GitHub Releases source cannot be deleted"
 }

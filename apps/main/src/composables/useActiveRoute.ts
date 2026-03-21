@@ -1,7 +1,7 @@
 import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
-const lastGalleryRoute = ref("/gallery?path=all/1");
+const lastGalleryRoute = ref("/gallery");
 
 /**
  * 路由高亮 composable
@@ -27,7 +27,7 @@ export function useActiveRoute() {
 
     // 画廊：匹配 /gallery 开头的所有路径（包括 query 参数）
     if (path.startsWith("/gallery")) {
-      return lastGalleryRoute.value || "/gallery?path=all/1";
+      return lastGalleryRoute.value || "/gallery";
     }
 
     // 画册：匹配 /albums 开头的所有路径（包括详情和 query 参数）
@@ -63,6 +63,6 @@ export function useActiveRoute() {
 
   return {
     activeRoute,
-    galleryMenuRoute: computed(() => lastGalleryRoute.value || "/gallery?path=all/1"),
+    galleryMenuRoute: computed(() => lastGalleryRoute.value || "/gallery"),
   };
 }

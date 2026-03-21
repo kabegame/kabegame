@@ -82,16 +82,6 @@ impl<R: Runtime> Picker<R> {
     Ok(result)
   }
 
-  /// 从 APK assets 的 resources/plugins 解压 .kgpg 到指定目录（仅 Android）。
-  pub async fn extract_bundled_plugins(&self, target_dir: String) -> crate::Result<ExtractBundledPluginsResponse> {
-    let result: ExtractBundledPluginsResponse = self
-      .0
-      .run_mobile_plugin_async("extractBundledPlugins", ExtractBundledPluginsArgs { target_dir })
-      .await
-      .map_err(crate::Error::from)?;
-    Ok(result)
-  }
-
   pub async fn copy_image_to_pictures(
     &self,
     source_path: String,

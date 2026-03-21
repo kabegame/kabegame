@@ -107,65 +107,6 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @InvokeArg
-    class ExtractBundledPluginsArgs {
-        var targetDir: String = ""
-    }
-
-    @Command
-    fun extractBundledPlugins(invoke: Invoke) {
-        val args = invoke.parseArgs(ExtractBundledPluginsArgs::class.java)
-        Log.i("PickerPlugin", "extractBundledPlugins: ${args.targetDir}")
-        try {
-            val targetDirectory = File(args.targetDir)
-            if (!targetDirectory.exists()) {
-                targetDirectory.mkdirs()
-            }
-            if (!targetDirectory.isDirectory) {
-                invoke.reject("目标路径不是目录: ${args.targetDir}")
-                return
-            }
-            val assetManager = activity.assets
-            val assetPath = "resources/plugins"
-            val extractedFiles = mutableListOf<String>()
-            try {
-                val files = assetManager.list(assetPath)
-                if (files == null || files.isEmpty()) {
-                    invoke.resolve(JSObject().apply {
-                        put("files", JSONArray())
-                        put("count", 0)
-                    })
-                    return
-                }
-                for (fileName in files) {
-                    if (!fileName.endsWith(".kgpg")) continue
-                    val assetFilePath = "$assetPath/$fileName"
-                    val targetFile = File(targetDirectory, fileName)
-                    try {
-                        assetManager.open(assetFilePath).use { inputStream ->
-                            FileOutputStream(targetFile).use { outputStream ->
-                                inputStream.copyTo(outputStream)
-                            }
-                        }
-                        extractedFiles.add(fileName)
-                    } catch (e: IOException) {
-                        Log.e("PickerPlugin", "Failed to extract $fileName: ${e.message}")
-                    }
-                }
-                val filesArray = JSONArray()
-                extractedFiles.forEach { filesArray.put(it) }
-                invoke.resolve(JSObject().apply {
-                    put("files", filesArray)
-                    put("count", extractedFiles.size)
-                })
-            } catch (e: IOException) {
-                invoke.reject("无法访问资源目录 $assetPath: ${e.message}")
-            }
-        } catch (e: Exception) {
-            invoke.reject("提取插件失败: ${e.message}", e)
-        }
-    }
-
-    @InvokeArg
     class CopyImageToPicturesArgs {
         var sourcePath: String = ""
         var mimeType: String = ""

@@ -10,7 +10,7 @@
  * - bun b -c main|cli
  *
  * 说明：
- * - dev/start 会先打包插件到 src-tauri/resources/plugins（确保资源存在）
+ * - bun dev -c main 时由构建链打包爬虫插件到 data/plugins-directory（package-to-dev-data），不写入 app resources
  * - main 的前端由各自 tauri.conf.json 的 beforeDev/BuildCommand 触发
  */
 
