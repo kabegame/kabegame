@@ -717,53 +717,35 @@ fn perform_complex_migrations(conn: &mut Connection) {
 
     let mut mapped_current_wallpaper_id: Option<i64> = None;
     let has_display_name = table_has_column(conn, "images", "display_name");
+    let has_type_col = table_has_column(conn, "images", "type");
+    let has_mime_type = table_has_column(conn, "images", "mime_type");
+    let has_surf_record_id = table_has_column(conn, "images", "surf_record_id");
     if needs_rebuild_images || needs_rebuild_relations {
         let tx = conn
             .transaction()
             .expect("Failed to start transaction for images pk migration");
 
         tx.execute("DROP TABLE IF EXISTS images_ordered", []).ok();
-        if images_id_is_text {
-            let display_col = if has_display_name {
-                "COALESCE(display_name, '') AS display_name,"
-            } else {
-                ""
-            };
-            tx.execute(
-                &format!(
-                    "CREATE TEMP TABLE images_ordered AS
-                 SELECT
-                   id AS old_id,
-                   url,
-                   local_path,
-                   plugin_id,
-                   task_id,
-                   crawled_at,
-                   metadata,
-                   COALESCE(NULLIF(thumbnail_path, ''), local_path) AS thumbnail_path,
-                   COALESCE(hash, '') AS hash,
-                   width,
-                   height,
-                   {} ROW_NUMBER() OVER (
-                     ORDER BY crawled_at ASC, id ASC
-                   ) AS new_id
-                 FROM images",
-                    display_col
-                ),
-                [],
-            )
-            .expect("Failed to create images_ordered (TEXT id)");
+        let type_col = if has_type_col { "COALESCE(type, 'image') AS type," } else { "" };
+        let mime_col = if has_mime_type { "mime_type," } else { "" };
+        let surf_col = if has_surf_record_id { "surf_record_id," } else { "" };
+        let display_col = if has_display_name { "COALESCE(display_name, '') AS display_name," } else { "" };
+
+        let id_expr = if images_id_is_text {
+            "id AS old_id"
         } else {
-            let display_col = if has_display_name {
-                "COALESCE(display_name, '') AS display_name,"
-            } else {
-                ""
-            };
-            tx.execute(
-                &format!(
-                    "CREATE TEMP TABLE images_ordered AS
+            "CAST(id AS TEXT) AS old_id"
+        };
+        let new_id_expr = if images_id_is_text {
+            "ROW_NUMBER() OVER (ORDER BY crawled_at ASC, id ASC) AS new_id"
+        } else {
+            "CAST(id AS INTEGER) AS new_id"
+        };
+        tx.execute(
+            &format!(
+                "CREATE TEMP TABLE images_ordered AS
                  SELECT
-                   CAST(id AS TEXT) AS old_id,
+                   {id_expr},
                    url,
                    local_path,
                    plugin_id,
@@ -774,14 +756,12 @@ fn perform_complex_migrations(conn: &mut Connection) {
                    COALESCE(hash, '') AS hash,
                    width,
                    height,
-                   {} CAST(id AS INTEGER) AS new_id
-                 FROM images",
-                    display_col
-                ),
-                [],
-            )
-            .expect("Failed to create images_ordered (INTEGER id)");
-        }
+                   {type_col} {mime_col} {surf_col} {display_col} {new_id_expr}
+                 FROM images"
+            ),
+            [],
+        )
+        .expect("Failed to create images_ordered");
 
         if images_id_is_text {
             if let Some(ref old_id) = old_current_wallpaper_id {
@@ -804,10 +784,12 @@ fn perform_complex_migrations(conn: &mut Connection) {
                     local_path TEXT NOT NULL,
                     plugin_id TEXT NOT NULL,
                     task_id TEXT,
+                    surf_record_id TEXT,
                     crawled_at INTEGER NOT NULL,
                     metadata TEXT,
                     thumbnail_path TEXT NOT NULL DEFAULT '',
                     hash TEXT NOT NULL DEFAULT '',
+                    mime_type TEXT,
                     type TEXT DEFAULT 'image',
                     width INTEGER,
                     height INTEGER,
@@ -817,17 +799,20 @@ fn perform_complex_migrations(conn: &mut Connection) {
             )
             .expect("Failed to create images_new (INTEGER pk)");
 
-            let (insert_cols, select_cols) = if has_display_name {
-                (
-                    "id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, type, width, height, display_name",
-                    "new_id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), COALESCE(type, 'image'), width, height, COALESCE(display_name, '')",
-                )
+            let type_s = if has_type_col { "COALESCE(type, 'image')" } else { "'image'" };
+            let mime_s = if has_mime_type { "mime_type," } else { "" };
+            let surf_s = if has_surf_record_id { "surf_record_id," } else { "" };
+            let (display_ins, display_sel) = if has_display_name {
+                ("display_name", "COALESCE(display_name, '')")
             } else {
-                (
-                    "id, url, local_path, plugin_id, task_id, crawled_at, metadata, thumbnail_path, hash, type, width, height, display_name",
-                    "new_id, url, local_path, plugin_id, task_id, crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), COALESCE(type, 'image'), width, height, ''",
-                )
+                ("display_name", "''")
             };
+            let insert_cols = format!(
+                "id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, thumbnail_path, hash, {mime_s} type, width, height, {display_ins}"
+            );
+            let select_cols = format!(
+                "new_id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), {mime_s} {type_s}, width, height, {display_sel}"
+            );
             tx.execute(
                 &format!(
                     "INSERT INTO images_new ({})
