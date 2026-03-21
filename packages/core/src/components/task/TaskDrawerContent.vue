@@ -142,10 +142,10 @@
               <span class="param-label">{{ t('tasks.drawerParamOutputDir') }}</span>
               <span class="param-value">{{ task.outputDir }}</span>
             </div>
-            <div v-if="task.userConfig && Object.keys(task.userConfig).length > 0" class="param-item">
+            <div v-if="getVisibleUserConfigEntries(task).length > 0" class="param-item">
               <span class="param-label">{{ t('tasks.drawerParamConfig') }}</span>
               <div class="param-config">
-                <div v-for="(value, key) in task.userConfig" :key="key" class="config-item">
+                <div v-for="[key, value] in getVisibleUserConfigEntries(task)" :key="key" class="config-item">
                   <span class="config-key">{{ getVarDisplayName(task.pluginId, String(key)) }}：</span>
                   <span class="config-value">{{ formatConfigValue(task.pluginId, String(key), value) }}</span>
                 </div>
@@ -216,6 +216,7 @@ import { ArrowDown, Clock, Close, CopyDocument, Document, Picture, WarningFilled
 import { invoke } from "@tauri-apps/api/core";
 import { useModalBack } from "../../composables/useModalBack";
 import type { PluginManifestText, PluginConfigText } from "../../stores/plugins";
+import { matchesPluginVarWhen } from "../../utils/pluginVarWhen";
 
 type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
 const t = inject<TranslateFn>("i18n-t") ?? ((k: string) => k);
@@ -235,6 +236,8 @@ type PluginVarMeta = {
   type?: string;
   /** 选项 variable -> 展示名 record 或 string */
   optionNameByVariable?: Record<string, PluginConfigText | string>;
+  /** 与 CrawlerDialog / config.json 一致，用于与 userConfig 联合判断是否展示该键 */
+  when?: Record<string, string[]>;
 };
 
 type TaskStatus = "pending" | "running" | "completed" | "failed" | "canceled";
@@ -829,6 +832,7 @@ const ensurePluginVars = async (pluginId: string) => {
       name: PluginConfigText | string;
       type?: string;
       options?: VarOption[];
+      when?: Record<string, string[]>;
     }> | null>("get_plugin_vars", { pluginId });
     const metaMap: Record<string, PluginVarMeta> = {};
     (vars || []).forEach((v) => {
@@ -841,6 +845,7 @@ const ensurePluginVars = async (pluginId: string) => {
         name: v.name ?? v.key,
         type: v.type,
         optionNameByVariable: Object.keys(optionNameByVariable).length ? optionNameByVariable : undefined,
+        when: v.when,
       };
     });
     pluginVarMetaMap.value = { ...pluginVarMetaMap.value, [pluginId]: metaMap };
@@ -854,6 +859,18 @@ const getVarDisplayName = (pluginId: string, key: string) =>
   (pluginId === "local-import" && getBuiltinLocalImportMeta()[key]?.name) ||
   resolveConfigText(pluginVarMetaMap.value[pluginId]?.[key]?.name) ||
   key;
+
+/** 与运行表单一致：按 when 过滤；无定义或未知键仍展示（便于排查）。 */
+const getVisibleUserConfigEntries = (task: ScriptTask): [string, any][] => {
+  const cfg = task.userConfig;
+  if (!cfg || typeof cfg !== "object") return [];
+  const metaForPlugin = pluginVarMetaMap.value[task.pluginId];
+  return Object.entries(cfg).filter(([key]) => {
+    const meta = metaForPlugin?.[key];
+    if (!meta) return true;
+    return matchesPluginVarWhen(meta.when, cfg);
+  });
+};
 
 const formatConfigValue = (pluginId: string, key: string, value: any, raw = false): string => {
   const meta = pluginVarMetaMap.value[pluginId]?.[key];
@@ -897,14 +914,16 @@ function handleTaskContextMenu(event: MouseEvent, task: ScriptTask) {
 }
 
 async function handleCopyError(task: ScriptTask) {
+  await ensurePluginVars(task.pluginId);
   let text = "=== Task Error ===\n";
   text += `Error: ${task.error || "Execution failed"}\n\n`;
   text += "=== Run Params ===\n";
   text += `Source: ${getPluginName(task.pluginId)}\n`;
   if (task.outputDir) text += `Output dir: ${task.outputDir}\n`;
-  if (task.userConfig && Object.keys(task.userConfig).length > 0) {
+  const visibleCfg = getVisibleUserConfigEntries(task);
+  if (visibleCfg.length > 0) {
     text += "Config:\n";
-    for (const [key, value] of Object.entries(task.userConfig)) {
+    for (const [key, value] of visibleCfg) {
       text += `  ${key}: ${formatConfigValue(task.pluginId, String(key), value, true)}\n`;
     }
   }
@@ -929,6 +948,16 @@ async function handleCopyError(task: ScriptTask) {
 onMounted(() => {
   initAllEventListeners();
 });
+
+/** 预加载变量定义（含 when），避免抽屉内配置列表在展开前缺少过滤信息 */
+watch(
+  () => props.tasks.map((x) => x.pluginId).join("\0"),
+  () => {
+    const ids = [...new Set(props.tasks.map((t) => t.pluginId))];
+    void Promise.all(ids.map((id) => ensurePluginVars(id)));
+  },
+  { immediate: true }
+);
 
 watch(
   () => !!props.active,

@@ -2,7 +2,10 @@
 
 use kabegame_core::plugin::{
     extract_kgpg_filename_from_url, var_definition_to_frontend_value, PluginManager,
+    StorePluginDownloadProgressContext, StorePluginDownloadProgressEvent,
 };
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
 
 #[tauri::command]
 pub async fn get_plugins() -> Result<serde_json::Value, String> {
@@ -169,6 +172,7 @@ pub async fn preview_import_plugin(zip_path: String) -> Result<serde_json::Value
 
 #[tauri::command]
 pub async fn preview_store_install(
+    app: AppHandle,
     download_url: String,
     sha256: Option<String>,
     size_bytes: Option<u64>,
@@ -176,17 +180,35 @@ pub async fn preview_store_install(
     version: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let plugin_manager = PluginManager::global();
+    let plugin_id = extract_kgpg_filename_from_url(&download_url)
+        .unwrap_or_else(|| "unknown".to_string());
+    let source_for_key = source_id.clone().unwrap_or_else(|| "_".to_string());
+    let app_emit = app.clone();
+    let cb = Arc::new(move |ev: StorePluginDownloadProgressEvent| {
+        let _ = app_emit.emit("plugin-store-download-progress", &ev);
+    });
+    let progress = Some(StorePluginDownloadProgressContext {
+        source_id: source_for_key,
+        plugin_id: plugin_id.clone(),
+        on_emit: Some(cb),
+    });
     let cached_path = if let (Some(source_id), Some(expected_version)) = (source_id, version) {
         // 使用缓存：确保插件已缓存且版本匹配
-        let plugin_id = extract_kgpg_filename_from_url(&download_url)
-            .unwrap_or_else(|| "unknown".to_string());
         plugin_manager
-            .ensure_plugin_cached(&source_id, &plugin_id, &download_url, sha256.as_deref(), size_bytes, &expected_version)
+            .ensure_plugin_cached(
+                &source_id,
+                &plugin_id,
+                &download_url,
+                sha256.as_deref(),
+                size_bytes,
+                &expected_version,
+                progress,
+            )
             .await?
     } else {
         // 兼容模式：下载到临时文件（用于非商店场景）
         plugin_manager
-            .download_plugin_to_temp(&download_url, sha256.as_deref(), size_bytes)
+            .download_plugin_to_temp(&download_url, sha256.as_deref(), size_bytes, progress)
             .await?
     };
     let preview = plugin_manager.preview_import_from_zip(&cached_path).await?;

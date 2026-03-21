@@ -293,7 +293,7 @@ async fn preview_store_install(
             let plugin_id = extract_kgpg_filename_from_url(download_url)
                 .unwrap_or_else(|| "unknown".to_string());
             match plugin_manager
-                .ensure_plugin_cached(source_id, &plugin_id, download_url, sha256, size_bytes, version)
+                .ensure_plugin_cached(source_id, &plugin_id, download_url, sha256, size_bytes, version, None)
                 .await
             {
                 Ok(p) => p,
@@ -303,7 +303,7 @@ async fn preview_store_install(
         _ => {
             // 兼容模式：下载到临时文件
             match plugin_manager
-                .download_plugin_to_temp(download_url, sha256, size_bytes)
+                .download_plugin_to_temp(download_url, sha256, size_bytes, None)
                 .await
             {
                 Ok(t) => t,

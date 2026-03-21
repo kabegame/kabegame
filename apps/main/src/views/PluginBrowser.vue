@@ -1,44 +1,110 @@
 <template>
   <div class="plugin-browser-container" v-pull-to-refresh="pullToRefreshOpts">
     <div class="plugin-browser-content">
-        <PluginBrowserPageHeader
-          @refresh="handleRefresh"
-          @import-source="handleImportSource"
-          @help="openHelpDrawer"
-          @quick-settings="openQuickSettings"
-          @manage-sources="openManageSources"
-        />
+      <PluginBrowserPageHeader @refresh="handleRefresh" @import-source="handleImportSource" @help="openHelpDrawer"
+        @quick-settings="openQuickSettings" @manage-sources="openManageSources" />
 
-        <div v-if="sourcesLoadedOnce && sources.length === 0" class="plugin-sources-empty-hint">
-          <el-alert type="info" :closable="false" show-icon>
-            <template #title>
-              {{ $t('plugins.noStoreSourcesHint') }}
-            </template>
-            <el-button type="primary" size="small" style="margin-top: 8px" @click="goToOfficialGitHubStoreTab">
-              {{ $t('plugins.goToOfficialGitHubStore') }}
-            </el-button>
-          </el-alert>
-        </div>
+      <div v-if="sourcesLoadedOnce && sources.length === 0" class="plugin-sources-empty-hint">
+        <el-alert type="info" :closable="false" show-icon>
+          <template #title>
+            {{ $t('plugins.noStoreSourcesHint') }}
+          </template>
+          <el-button type="primary" size="small" style="margin-top: 8px" @click="goToOfficialGitHubStoreTab">
+            {{ $t('plugins.goToOfficialGitHubStore') }}
+          </el-button>
+        </el-alert>
+      </div>
 
-        <!-- Tab 切换 -->
-        <StyledTabs v-model="activeTab" :before-leave="beforeLeaveTab">
-      <el-tab-pane :label="$t('plugins.installedTab')" name="installed">
-        <!-- 已安装插件配置表格 -->
-        <div v-if="showSkeletonBySource['installed'] && activeTab === 'installed'" class="loading-skeleton">
-          <el-skeleton :rows="8" animated />
-        </div>
-        <div v-else-if="installedPlugins.length === 0" class="empty">
-          <el-empty :description="$t('plugins.noInstalled')">
-            <el-button type="primary" @click="goToOfficialGitHubStoreTab">
-              {{ $t('plugins.goToOfficialGitHubStore') }}
-            </el-button>
-          </el-empty>
-        </div>
+      <!-- Tab 切换 -->
+      <StyledTabs v-model="activeTab" :before-leave="beforeLeaveTab">
+        <el-tab-pane :label="$t('plugins.installedTab')" name="installed">
+          <!-- 已安装插件配置表格 -->
+          <div v-if="showSkeletonBySource['installed'] && activeTab === 'installed'" class="loading-skeleton">
+            <el-skeleton :rows="8" animated />
+          </div>
+          <div v-else-if="installedPlugins.length === 0" class="empty">
+            <el-empty :description="$t('plugins.noInstalled')">
+              <el-button type="primary" @click="goToOfficialGitHubStoreTab">
+                {{ $t('plugins.goToOfficialGitHubStore') }}
+              </el-button>
+            </el-empty>
+          </div>
 
-        <!-- 已安装：布局与商店一致 -->
-        <div v-else>
-          <transition-group name="fade-in-list" tag="div" class="plugin-grid">
-            <el-card v-for="plugin in installedPlugins" :key="plugin.id" class="plugin-card" shadow="hover"
+          <!-- 已安装：布局与商店一致 -->
+          <div v-else>
+            <transition-group name="fade-in-list" tag="div" class="plugin-grid">
+              <el-card v-for="plugin in installedPlugins" :key="plugin.id" class="plugin-card" shadow="hover"
+                @click="viewPluginDetails(plugin)">
+                <div class="plugin-header">
+                  <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
+                    <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
+                  </div>
+                  <div v-else-if="isIconLoading(plugin)" class="plugin-icon-placeholder plugin-icon-loading">
+                    <el-icon class="spin">
+                      <Loading />
+                    </el-icon>
+                  </div>
+                  <div v-else class="plugin-icon-placeholder">
+                    <el-icon>
+                      <Grid />
+                    </el-icon>
+                  </div>
+                  <div class="plugin-title">
+                    <h3>{{ pluginName(plugin) }}</h3>
+                    <p class="plugin-desp">{{ pluginDescription(plugin) || $t('plugins.noDescription') }}</p>
+                  </div>
+                </div>
+
+                <div class="plugin-info">
+                  <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
+                  <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
+                </div>
+
+                <div class="plugin-footer">
+                  <el-button type="danger" size="small" @click.stop="handleDelete(plugin)">
+                    {{ $t('plugins.uninstall') }}
+                  </el-button>
+                </div>
+              </el-card>
+            </transition-group>
+          </div>
+        </el-tab-pane>
+        <!-- 商店源：按"源名称"动态生成 tab；每个 tab 只显示该源的数据 -->
+        <el-tab-pane v-for="s in storeSourcesToRender" :key="s.id" :name="storeTabName(s.id)">
+          <template #label>
+            <span>{{ s.name }}</span>
+            <el-icon v-if="s.id !== OFFICIAL_PLUGIN_SOURCE_ID" class="tab-close-icon"
+              @click.stop="handleDeleteSource(s)">
+              <Close />
+            </el-icon>
+          </template>
+          <!-- 插件列表（300ms 延迟显示骨架屏，避免快速刷新时闪屏） -->
+          <div v-if="showSkeletonBySource[s.id]" class="loading-skeleton">
+            <div class="skeleton-grid">
+              <div v-for="i in 12" :key="i" class="skeleton-card">
+                <el-skeleton :rows="0" animated>
+                  <template #template>
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+                      <el-skeleton-item variant="image" style="width: 48px; height: 48px; border-radius: 8px;" />
+                      <div style="flex: 1;">
+                        <el-skeleton-item variant="h3" style="width: 60%; margin-bottom: 8px;" />
+                        <el-skeleton-item variant="text" style="width: 80%;" />
+                      </div>
+                    </div>
+                    <el-skeleton-item variant="text" style="width: 40%; margin-bottom: 12px;" />
+                    <el-skeleton-item variant="button" style="width: 100%;" />
+                  </template>
+                </el-skeleton>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="!loadingBySource[s.id] && getStorePlugins(s.id).length === 0" class="empty">
+            <el-empty :description="$t('plugins.noPluginsInSource', { name: s.name })" />
+          </div>
+
+          <transition-group v-else name="fade-in-list" tag="div" class="plugin-grid">
+            <el-card v-for="plugin in getStorePlugins(s.id)" :key="plugin.id" class="plugin-card" shadow="hover"
               @click="viewPluginDetails(plugin)">
               <div class="plugin-header">
                 <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
@@ -61,125 +127,80 @@
               </div>
 
               <div class="plugin-info">
-                <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
                 <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
+                <el-tag v-if="plugin.installedVersion" type="success" size="small">{{ $t('plugins.installedVersion', {
+                  version: plugin.installedVersion }) }}</el-tag>
+                <el-tag v-else type="warning" size="small">{{ $t('plugins.notInstalled') }}</el-tag>
+                <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger" size="small">{{
+                  $t('plugins.canUpdate') }}</el-tag>
+                <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
               </div>
 
               <div class="plugin-footer">
-                <el-button type="danger" size="small" @click.stop="handleDelete(plugin)">
-                  {{ $t('plugins.uninstall') }}
+                <el-button v-if="!plugin.installedVersion" type="primary" size="small" class="plugin-store-install-btn"
+                  :class="{ 'plugin-store-install-btn--progress': isInstalling(plugin.id) }"
+                  :disabled="isInstalling(plugin.id)" @click.stop="handleStoreInstall(plugin)">
+                  <span v-if="isInstalling(plugin.id)" class="plugin-store-install-btn__fill-wrap">
+                    <span class="plugin-store-install-btn__fill"
+                      :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
+                    <span class="plugin-store-install-btn__label">{{
+                      t('plugins.installingWithPercent', { percent: storeInstallPercentClamped(plugin) })
+                      }}</span>
+                  </span>
+                  <span v-else>{{ $t('plugins.install') }}</span>
+                </el-button>
+                <el-button v-else-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="warning"
+                  size="small" class="plugin-store-install-btn"
+                  :class="{ 'plugin-store-install-btn--progress': isInstalling(plugin.id) }"
+                  :disabled="isInstalling(plugin.id)" @click.stop="handleStoreInstall(plugin)">
+                  <span v-if="isInstalling(plugin.id)" class="plugin-store-install-btn__fill-wrap">
+                    <span class="plugin-store-install-btn__fill"
+                      :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
+                    <span class="plugin-store-install-btn__label">{{
+                      t('plugins.updatingWithPercent', { percent: storeInstallPercentClamped(plugin) })
+                      }}</span>
+                  </span>
+                  <span v-else>{{ $t('plugins.update') }}</span>
+                </el-button>
+                <el-button v-else-if="plugin.installedVersion === plugin.version" type="info" plain disabled
+                  size="small" class="plugin-store-install-btn plugin-store-install-btn--installed-only" tabindex="-1">
+                  {{ $t('plugins.installed') }}
+                </el-button>
+                <el-button v-else size="small" class="plugin-store-install-btn"
+                  :class="{ 'plugin-store-install-btn--progress': isInstalling(plugin.id) }"
+                  :disabled="isInstalling(plugin.id)" @click.stop="handleStoreInstall(plugin, true)">
+                  <span v-if="isInstalling(plugin.id)" class="plugin-store-install-btn__fill-wrap">
+                    <span class="plugin-store-install-btn__fill"
+                      :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
+                    <span class="plugin-store-install-btn__label">{{
+                      t('plugins.reinstallingWithPercent', { percent: storeInstallPercentClamped(plugin) })
+                      }}</span>
+                  </span>
+                  <span v-else>{{ $t('plugins.reinstall') }}</span>
                 </el-button>
               </div>
             </el-card>
           </transition-group>
-        </div>
-      </el-tab-pane>
-      <!-- 商店源：按"源名称"动态生成 tab；每个 tab 只显示该源的数据 -->
-      <el-tab-pane v-for="s in storeSourcesToRender" :key="s.id"
-        :name="storeTabName(s.id)">
-        <template #label>
-          <span>{{ s.name }}</span>
-          <el-icon
-            v-if="s.id !== OFFICIAL_PLUGIN_SOURCE_ID"
-            class="tab-close-icon"
-            @click.stop="handleDeleteSource(s)"
-          >
-            <Close />
-          </el-icon>
-        </template>
-        <!-- 插件列表（300ms 延迟显示骨架屏，避免快速刷新时闪屏） -->
-        <div v-if="showSkeletonBySource[s.id]" class="loading-skeleton">
-          <div class="skeleton-grid">
-            <div v-for="i in 12" :key="i" class="skeleton-card">
-              <el-skeleton :rows="0" animated>
-                <template #template>
-                  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-                    <el-skeleton-item variant="image" style="width: 48px; height: 48px; border-radius: 8px;" />
-                    <div style="flex: 1;">
-                      <el-skeleton-item variant="h3" style="width: 60%; margin-bottom: 8px;" />
-                      <el-skeleton-item variant="text" style="width: 80%;" />
-                    </div>
-                  </div>
-                  <el-skeleton-item variant="text" style="width: 40%; margin-bottom: 12px;" />
-                  <el-skeleton-item variant="button" style="width: 100%;" />
-                </template>
-              </el-skeleton>
-            </div>
+        </el-tab-pane>
+
+        <!-- 添加源 tab -->
+        <el-tab-pane name="add-source">
+          <template #label>
+            <el-icon style="margin-right: 4px;">
+              <Plus />
+            </el-icon>
+            {{ $t('plugins.addSourceTab') }}
+          </template>
+          <div class="add-source-content">
+            <el-empty :description="$t('plugins.addSourceHint')" />
           </div>
-        </div>
-
-        <div v-else-if="!loadingBySource[s.id] && getStorePlugins(s.id).length === 0" class="empty">
-          <el-empty :description="$t('plugins.noPluginsInSource', { name: s.name })" />
-        </div>
-
-        <transition-group v-else name="fade-in-list" tag="div" class="plugin-grid">
-          <el-card v-for="plugin in getStorePlugins(s.id)" :key="plugin.id" class="plugin-card" shadow="hover"
-            @click="viewPluginDetails(plugin)">
-            <div class="plugin-header">
-              <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
-                <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
-              </div>
-              <div v-else-if="isIconLoading(plugin)" class="plugin-icon-placeholder plugin-icon-loading">
-                <el-icon class="spin">
-                  <Loading />
-                </el-icon>
-              </div>
-              <div v-else class="plugin-icon-placeholder">
-                <el-icon>
-                  <Grid />
-                </el-icon>
-              </div>
-              <div class="plugin-title">
-                <h3>{{ pluginName(plugin) }}</h3>
-                <p class="plugin-desp">{{ pluginDescription(plugin) || $t('plugins.noDescription') }}</p>
-              </div>
-            </div>
-
-            <div class="plugin-info">
-              <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
-              <el-tag v-if="plugin.installedVersion" type="success" size="small">{{ $t('plugins.installedVersion', { version: plugin.installedVersion }) }}</el-tag>
-              <el-tag v-else type="warning" size="small">{{ $t('plugins.notInstalled') }}</el-tag>
-              <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
-                size="small">{{ $t('plugins.canUpdate') }}</el-tag>
-              <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
-            </div>
-
-            <div class="plugin-footer">
-              <el-button v-if="!plugin.installedVersion" type="primary" size="small" :loading="isInstalling(plugin.id)"
-                :disabled="isInstalling(plugin.id)" @click.stop="handleStoreInstall(plugin)">
-                {{ isInstalling(plugin.id) ? $t('plugins.installing') : $t('plugins.install') }}
-              </el-button>
-              <el-button v-else-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="warning"
-                size="small" :loading="isInstalling(plugin.id)" :disabled="isInstalling(plugin.id)"
-                @click.stop="handleStoreInstall(plugin)">
-                {{ isInstalling(plugin.id) ? $t('plugins.updating') : $t('plugins.update') }}
-              </el-button>
-              <el-button v-else size="small" :loading="isInstalling(plugin.id)" :disabled="isInstalling(plugin.id)"
-                @click.stop="handleStoreInstall(plugin, true)">
-                {{ isInstalling(plugin.id) ? $t('plugins.installing') : $t('plugins.reinstall') }}
-              </el-button>
-            </div>
-          </el-card>
-        </transition-group>
-      </el-tab-pane>
-
-      <!-- 添加源 tab -->
-      <el-tab-pane name="add-source">
-        <template #label>
-          <el-icon style="margin-right: 4px;">
-            <Plus />
-          </el-icon>
-          {{ $t('plugins.addSourceTab') }}
-        </template>
-        <div class="add-source-content">
-          <el-empty :description="$t('plugins.addSourceHint')" />
-        </div>
-      </el-tab-pane>
-        </StyledTabs>
+        </el-tab-pane>
+      </StyledTabs>
     </div>
 
     <!-- 商店源管理 -->
-    <el-dialog v-if="!IS_LIGHT_MODE" v-model="showSourcesDialog" :title="$t('plugins.sourcesDialogTitle')" width="720px">
+    <el-dialog v-if="!IS_LIGHT_MODE" v-model="showSourcesDialog" :title="$t('plugins.sourcesDialogTitle')"
+      width="720px">
       <div class="sources-hint">
         {{ $t('plugins.sourcesIntro') }}
       </div>
@@ -189,12 +210,8 @@
         <el-table-column :label="$t('plugins.action')" width="140">
           <template #default="{ row, $index }">
             <el-button size="small" @click="editSource($index)">{{ $t('plugins.edit') }}</el-button>
-            <el-button
-              v-if="row.id !== OFFICIAL_PLUGIN_SOURCE_ID"
-              size="small"
-              type="danger"
-              @click="removeSource($index)"
-            >{{ $t('plugins.delete') }}</el-button>
+            <el-button v-if="row.id !== OFFICIAL_PLUGIN_SOURCE_ID" size="small" type="danger"
+              @click="removeSource($index)">{{ $t('plugins.delete') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -216,11 +233,8 @@
           <el-input v-model="editSourceForm.name" :placeholder="$t('plugins.namePlaceholder')" />
         </el-form-item>
         <el-form-item label="index.json">
-          <el-input
-            v-model="editSourceForm.indexUrl"
-            placeholder="https://.../index.json"
-            :disabled="editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID"
-          />
+          <el-input v-model="editSourceForm.indexUrl" placeholder="https://.../index.json"
+            :disabled="editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -258,7 +272,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, reactive, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   Refresh,
@@ -307,6 +321,17 @@ interface StorePluginResolved {
   sourceId: string;
   sourceName: string;
   installedVersion?: string | null;
+  /** 后端 get_store_plugins 合并的当前下载进度 0–100 */
+  storeDownloadProgress?: number | null;
+  storeDownloadError?: string | null;
+}
+
+/** 与 Rust `StorePluginDownloadProgressEvent`（camelCase）一致 */
+interface StoreDownloadProgressPayload {
+  sourceId: string;
+  pluginId: string;
+  percent: number;
+  error?: string | null;
 }
 
 /** 已安装插件或商店插件，用于列表卡片、详情跳转等统一入参 */
@@ -381,6 +406,25 @@ const setInstalling = (pluginId: string, installing: boolean) => {
   delete next[pluginId];
   installingById.value = next;
 };
+
+/** 与后端 `source_id::plugin_id` 一致，用于下载进度事件与列表合并 */
+const storePluginProgressKey = (p: StorePluginResolved) => `${p.sourceId}::${p.id}`;
+
+/** 按源+插件维度的下载进度（事件优先，其次列表接口合并字段） */
+const installProgressByKey = ref<Record<string, number>>({});
+
+const storeInstallPercent = (p: StorePluginResolved): number => {
+  const k = storePluginProgressKey(p);
+  const fromEvent = installProgressByKey.value[k];
+  if (fromEvent != null) return fromEvent;
+  if (p.storeDownloadProgress != null) return p.storeDownloadProgress;
+  return 0;
+};
+
+const storeInstallPercentClamped = (p: StorePluginResolved) =>
+  Math.min(storeInstallPercent(p), 100);
+
+let unlistenStoreDownloadProgress: (() => void) | undefined;
 
 // 商店插件：按商店源分组缓存（每个 tab 独立显示/刷新）
 const storePluginsBySource = ref<Record<string, StorePluginResolved[]>>({});
@@ -949,13 +993,13 @@ const handleImport = async () => {
 
     if (fileExt === "kgpg") {
       const preview = await invoke<ImportPreview>("preview_import_plugin", { zipPath: filePath });
-      
+
       // 检查是否允许安装
       if (preview.canInstall === false) {
         ElMessage.warning(preview.installError || "该插件不允许导入");
         return;
       }
-      
+
       if (preview.alreadyExists && preview.existingVersion && preview.existingVersion === preview.version) {
         ElMessage.info(`插件已存在（v${preview.version}），无需重复导入`);
         return;
@@ -1029,6 +1073,10 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
     });
 
     setInstalling(plugin.id, true);
+    installProgressByKey.value = {
+      ...installProgressByKey.value,
+      [storePluginProgressKey(plugin)]: 0,
+    };
     const res = await invoke<StoreInstallPreview>("preview_store_install", {
       downloadUrl: plugin.downloadUrl,
       sha256: plugin.sha256 ?? null,
@@ -1062,6 +1110,12 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
     }
   } finally {
     setInstalling(plugin.id, false);
+    const pk = storePluginProgressKey(plugin);
+    if (installProgressByKey.value[pk] !== undefined) {
+      const next = { ...installProgressByKey.value };
+      delete next[pk];
+      installProgressByKey.value = next;
+    }
   }
 };
 
@@ -1071,6 +1125,11 @@ const viewPluginDetails = (plugin: PluginListItem) => {
   const path = `/plugin-detail/${encodeURIComponent(plugin.id)}`;
   if ("downloadUrl" in plugin && plugin.downloadUrl) {
     const store = plugin as StorePluginResolved;
+    // 已安装且与商店版本一致：走本地已安装详情与文档，不拉远程包
+    if (store.installedVersion && store.installedVersion === store.version) {
+      router.push(path);
+      return;
+    }
     router.push({
       path,
       query: {
@@ -1196,6 +1255,29 @@ onMounted(async () => {
     // 加载商店源列表（本地配置），用于渲染动态 tab
     await loadSources();
     await refreshPluginIcons();
+
+    try {
+      const { isTauri } = await import("@tauri-apps/api/core");
+      if (isTauri()) {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlistenStoreDownloadProgress = await listen<StoreDownloadProgressPayload>(
+          "plugin-store-download-progress",
+          (event) => {
+            const { sourceId, pluginId, percent, error } = event.payload;
+            const k = `${sourceId}::${pluginId}`;
+            if (error) {
+              const next = { ...installProgressByKey.value };
+              delete next[k];
+              installProgressByKey.value = next;
+              return;
+            }
+            installProgressByKey.value = { ...installProgressByKey.value, [k]: percent };
+          }
+        );
+      }
+    } catch {
+      /* 无事件环境 */
+    }
   } finally {
     // 无论成功失败，都清理骨架屏定时器与显示状态
     loadingBySource.value = {};
@@ -1234,6 +1316,10 @@ watch(activeTab, async (tab) => {
   // 首次加载：优先使用本地缓存（类似 apt，只有用户手动刷新时才 update）
   await loadStorePlugins(sourceId, { showMessage: false, forceRefresh: false });
   await refreshPluginIcons();
+});
+
+onUnmounted(() => {
+  unlistenStoreDownloadProgress?.();
 });
 </script>
 
@@ -1417,6 +1503,86 @@ watch(activeTab, async (tab) => {
     gap: 8px;
     justify-content: flex-end;
     align-items: center;
+  }
+
+  .plugin-store-install-btn {
+    min-width: 132px;
+
+    &--progress {
+      position: relative;
+      overflow: hidden;
+      padding: 5px 14px;
+    }
+
+    &__fill-wrap {
+      position: relative;
+      display: block;
+      width: 100%;
+      min-width: 104px;
+      min-height: 22px;
+      border-radius: 4px;
+      overflow: hidden;
+      /* 未装填区域：略压暗，装填层从左盖上 */
+      background: rgba(0, 0, 0, 0.14);
+    }
+
+    /* 从左向右装填（“水”） */
+    &__fill {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 0;
+      border-radius: 0 3px 3px 0;
+      pointer-events: none;
+      transition: width 0.22s ease-out;
+      z-index: 0;
+      background: linear-gradient(90deg,
+          rgba(255, 255, 255, 0.52) 0%,
+          rgba(255, 255, 255, 0.22) 100%);
+    }
+
+    &__label {
+      position: relative;
+      z-index: 1;
+      display: block;
+      font-size: 12px;
+      line-height: 22px;
+      text-align: center;
+      white-space: nowrap;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    }
+
+    &.el-button--warning {
+      .plugin-store-install-btn__fill {
+        background: linear-gradient(90deg,
+            rgba(255, 255, 255, 0.5) 0%,
+            rgba(255, 255, 255, 0.2) 100%);
+      }
+    }
+
+    /* 默认/浅色按钮：用主题色半透明作为装填 */
+    &.el-button--default {
+      .plugin-store-install-btn__fill-wrap {
+        background: rgba(0, 0, 0, 0.06);
+      }
+
+      .plugin-store-install-btn__fill {
+        background: linear-gradient(90deg,
+            var(--el-color-primary-light-5) 0%,
+            var(--el-color-primary-light-7) 100%);
+      }
+
+      .plugin-store-install-btn__label {
+        color: var(--el-text-color-primary);
+        text-shadow: none;
+      }
+    }
+
+    &--installed-only {
+      cursor: default;
+      pointer-events: none;
+    }
   }
 
   /* Tab 关闭按钮样式 */

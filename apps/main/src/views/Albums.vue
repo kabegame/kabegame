@@ -14,8 +14,9 @@
         <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div"
           class="albums-grid" :class="{ 'albums-grid-android': IS_ANDROID }">
           <AlbumCard v-for="album in albums" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
-            :count="albumCounts[album.id] || 0" :preview-urls="albumPreviewUrls[album.id] || []"
-            :loading-states="albumLoadingStates[album.id] || []" :is-loading="albumIsLoadingMap[album.id] || false"
+            :count="albumCounts[album.id] || 0" :preview-images="albumPreviewImages[album.id] || []"
+            :video-preview-remount-key="albumVideoPreviewRemountKey"
+            :is-loading="albumIsLoadingMap[album.id] || false"
             @click="openAlbum(album)" @visible="prefetchPreview(album)"
             @contextmenu.prevent="openAlbumContextMenu($event, album)" />
         </transition-group>
@@ -68,7 +69,7 @@ import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "vue-i18n";
 import type { ImageInfo } from "@kabegame/core/types/image";
-import { fileToUrl, thumbnailToUrl } from "@kabegame/core/httpServer";
+import { thumbnailToUrl } from "@kabegame/core/httpServer";
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
@@ -120,6 +121,9 @@ const albumCardRefs = ref<Record<string, any>>({});
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 // 用于强制重新挂载列表（让“刷新”能触发完整 enter 动画 + 重置卡片内部状态）
 const albumsListKey = ref(0);
+/** keep-alive 再次进入画册页时递增，作为视频预览 ImageItem 的 :key 后缀，强制重建以恢复桌面 <video> autoplay */
+const albumVideoPreviewRemountKey = ref(0);
+const albumsSkipFirstActivateForVideoRemount = ref(true);
 
 // 如果删除的画册正在被“壁纸轮播”引用：自动关闭轮播，切回单张壁纸，并尽量保持当前壁纸不变
 const handleDeletedRotationAlbum = async (deletedAlbumId: string) => {
@@ -271,6 +275,13 @@ onActivated(async () => {
       prefetchPreview(album);
     }
   }
+
+  // 首次 onActivated 不递增，避免刚进页就多挂一次视频；从其它页返回时再递增以重建 ImageItem
+  if (albumsSkipFirstActivateForVideoRemount.value) {
+    albumsSkipFirstActivateForVideoRemount.value = false;
+  } else {
+    albumVideoPreviewRemountKey.value++;
+  }
 });
 
 
@@ -329,24 +340,6 @@ const handleCreateAlbum = async () => {
     ElMessage.error(errorMessage);
   }
 };
-
-// 从 ImageInfo 直接计算预览 URL 列表
-const albumPreviewUrls = computed(() => {
-  const result: Record<string, string[]> = {};
-  for (const [albumId, images] of Object.entries(albumPreviewImages.value)) {
-    result[albumId] = images.map((img) => toPreviewUrl(img));
-  }
-  return result;
-});
-
-// 简化后不追踪预览图加载态，统一由卡片级 loading 控制
-const albumLoadingStates = computed(() => {
-  const result: Record<string, boolean[]> = {};
-  for (const [albumId, images] of Object.entries(albumPreviewImages.value)) {
-    result[albumId] = images.map(() => false);
-  }
-  return result;
-});
 
 // 计算每个画册是否正在加载（用于响应式更新）
 const albumIsLoadingMap = computed(() => {

@@ -3,7 +3,7 @@
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -12,14 +12,14 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::{sleep, Duration};
 use url::Url;
 
-use crate::emitter::GlobalEmitter;
-use crate::settings::Settings;
+#[cfg(not(target_os = "android"))]
+use super::build_safe_filename_no_ext;
 use super::{
     build_safe_filename, emit_task_log, unique_path, DownloadProgressContext, DownloadQueue,
     SchemeDownloader, UrlDownloaderKind,
 };
-#[cfg(not(target_os = "android"))]
-use super::build_safe_filename_no_ext;
+use crate::emitter::GlobalEmitter;
+use crate::settings::Settings;
 
 /// http(s) scheme：目标路径由 URL 路径段与扩展名决定。
 pub struct HttpSchemeDownloader;
@@ -204,7 +204,7 @@ pub fn build_reqwest_header_map_for_emitter(
 const PROGRESS_EMIT_INTERVAL_MS: u64 = 200;
 
 /// 整体请求+响应体读取超时（秒），大图或慢速站点需较长时间
-const HTTP_REQUEST_TIMEOUT_SECS: u64 = 90;
+const HTTP_REQUEST_TIMEOUT_SECS: u64 = 600;
 
 /// 判断响应体读取错误是否可重试（超时、连接中断、body error 等）
 fn is_retryable_stream_error(msg: &str) -> bool {
@@ -218,8 +218,24 @@ fn is_retryable_stream_error(msg: &str) -> bool {
         || lower.contains("broken pipe")
 }
 
+fn parse_content_range_start_and_total(header: &str) -> Option<(u64, Option<u64>)> {
+    // 形如: "bytes 123-456/789" 或 "bytes 123-456/*"
+    let raw = header.trim();
+    let bytes_part = raw.strip_prefix("bytes ")?;
+    let (range_part, total_part) = bytes_part.split_once('/')?;
+    let (start_part, _end_part) = range_part.split_once('-')?;
+    let start = start_part.trim().parse::<u64>().ok()?;
+    let total = if total_part.trim() == "*" {
+        None
+    } else {
+        total_part.trim().parse::<u64>().ok()
+    };
+    Some((start, total))
+}
+
 /// HTTP/HTTPS 下载实现（由 [super::SchemeDownloader] Http scheme 分发调用）。
-/// 流式读入内存缓冲，按间隔上报进度，最后一次性写入 dest，不落盘临时文件；失败重试时重新请求全量。
+/// 流式读入内存缓冲，按间隔上报进度，最后一次性写入 dest，不落盘临时文件；
+/// 读流失败时优先使用 Range 从已接收字节继续下载，服务端不支持时回退整包重下。
 async fn download_http(
     dq: &DownloadQueue,
     task_id: &str,
@@ -232,6 +248,9 @@ async fn download_http(
     let client = create_client()?;
     let mut header_map = build_reqwest_header_map_for_emitter(task_id, headers);
     let max_attempts = retry_count.saturating_add(1).max(1);
+    let mut buffer = Vec::new();
+    let mut received: u64 = 0;
+    let mut last_emit = Instant::now();
 
     let mut attempt: u32 = 0;
     'retry: loop {
@@ -248,6 +267,9 @@ async fn download_http(
             let mut req = client.get(current_url.as_str());
             if !header_map.is_empty() {
                 req = req.headers(header_map.clone());
+            }
+            if received > 0 {
+                req = req.header(RANGE, format!("bytes={}-", received));
             }
 
             let r = match req.send().await {
@@ -332,15 +354,50 @@ async fn download_http(
             return Err(format!("HTTP error: {status}"));
         }
 
-        let total_bytes = resp
+        let mut total_bytes = resp
             .headers()
             .get(CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok());
-
-        let mut buffer = Vec::new();
-        let mut received: u64 = 0;
-        let mut last_emit = Instant::now();
+        if received > 0 {
+            if status == reqwest::StatusCode::PARTIAL_CONTENT {
+                if let Some(v) = resp.headers().get(CONTENT_RANGE) {
+                    if let Ok(s) = v.to_str() {
+                        if let Some((start, total)) = parse_content_range_start_and_total(s) {
+                            if start != received {
+                                return Err(format!(
+                                    "Invalid Content-Range start: expected {}, got {}",
+                                    received, start
+                                ));
+                            }
+                            total_bytes = total.or_else(|| total_bytes.map(|len| len + received));
+                        } else {
+                            total_bytes = total_bytes.map(|len| len + received);
+                        }
+                    } else {
+                        total_bytes = total_bytes.map(|len| len + received);
+                    }
+                } else {
+                    total_bytes = total_bytes.map(|len| len + received);
+                }
+            } else {
+                emit_task_log(
+                    task_id,
+                    "warn",
+                    format!(
+                        "服务端未返回 206（{}），回退为整包重下，已下载内存缓冲将重置",
+                        status
+                    ),
+                );
+                buffer.clear();
+                received = 0;
+                total_bytes = resp
+                    .headers()
+                    .get(CONTENT_LENGTH)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.parse::<u64>().ok());
+            }
+        }
         let mut stream = resp.bytes_stream();
 
         while let Some(chunk_result) = stream.next().await {
@@ -404,7 +461,9 @@ async fn download_http(
         file.write_all(&buffer)
             .await
             .map_err(|e| format!("Failed to write file: {e}"))?;
-        file.flush().await.map_err(|e| format!("Failed to flush file: {e}"))?;
+        file.flush()
+            .await
+            .map_err(|e| format!("Failed to flush file: {e}"))?;
 
         return Ok(current_url.to_string());
     }

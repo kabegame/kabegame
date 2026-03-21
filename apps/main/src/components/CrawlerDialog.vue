@@ -288,6 +288,7 @@ import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVa
 import { ElMessage, ElMessageBox } from "element-plus";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { matchesPluginVarWhen } from "@kabegame/core/utils/pluginVarWhen";
 
 interface Props {
     modelValue: boolean;
@@ -516,13 +517,9 @@ function setOutputAlbumId(v: string | null) {
 
 // 根据 when 条件过滤，并按当前 locale 解析 name/descripts/options 为展示用字符串
 const visiblePluginVars = computed(() => {
-    const filtered = pluginVars.value.filter((varDef) => {
-        if (!varDef.when) return true;
-        return Object.entries(varDef.when).every(
-            ([depKey, acceptedValues]) =>
-                acceptedValues.includes(String(form.value.vars[depKey] ?? ""))
-        );
-    });
+    const filtered = pluginVars.value.filter((varDef) =>
+        matchesPluginVarWhen(varDef.when, form.value.vars)
+    );
     return filtered.map((varDef) => ({
         ...varDef,
         name: varDisplayName(varDef),
