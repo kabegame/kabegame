@@ -27,6 +27,7 @@ import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { galleryPathWithSortOnly } from "@/utils/galleryPath";
 
 interface Props {
   isLoadingAll?: boolean;
@@ -38,6 +39,8 @@ interface Props {
   selectedRange?: [string, string] | null; // YYYY-MM-DD
   /** 当前画廊 provider 路径，如 全部、全部/倒序、按时间/2024-01 */
   providerRootPath?: string;
+  /** 当前完整 query.path（如 all/desc/3），切换排序时保留页码 */
+  currentProviderPath?: string;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -49,6 +52,7 @@ const props = withDefaults(defineProps<Props>(), {
   monthLoading: false,
   selectedRange: null,
   providerRootPath: "",
+  currentProviderPath: "",
 });
 
 const router = useRouter();
@@ -61,12 +65,10 @@ const { t } = useI18n();
 const sortOptionLabelAsc = computed(() => t('gallery.byTimeAsc'));
 const sortOptionLabelDesc = computed(() => t('gallery.byTimeDesc'));
 function onSortOrderChange(value: string) {
-  const basePath = props.providerRootPath.replace("/desc", "") || "all";
-  if (value === "desc") {
-    router.push({ path: "/gallery", query: { path: `${basePath}/desc/1` } });
-  } else {
-    router.push({ path: "/gallery", query: { path: `${basePath}/1` } });
-  }
+  const path = props.currentProviderPath?.trim() || "all/1";
+  const sort = value === "desc" ? "desc" : "asc";
+  const next = galleryPathWithSortOnly(path, sort);
+  void router.push({ path: "/gallery", query: { path: next } });
 }
 
 // Android：fold 中「按时间排序」点击后弹出的 picker

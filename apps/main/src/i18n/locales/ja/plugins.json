@@ -112,5 +112,10 @@
   "installedRefreshSuccess": "インストール済みソースを更新しました",
   "installedRefreshFailed": "インストール済みソースの更新に失敗しました",
   "storeSourceGoneSwitchToInstalled": "現在のストアソースが存在しないため、インストール済みソースに切り替えました",
-  "refreshFailed": "更新に失敗しました"
+  "refreshFailed": "更新に失敗しました",
+  "noStoreSourcesHint": "ストアソースがまだありません。下のボタンで GitHub 公式のプラグイン一覧タブに切り替えられます。",
+  "goToOfficialGitHubStore": "GitHub 公式ストアを開く",
+  "loadSourcesFailed": "ストアソース一覧の読み込みに失敗しました",
+  "officialSourceMissing": "公式ソースが見つかりません。アプリを再起動してください。",
+  "cannotDeleteOfficialSource": "公式 GitHub Releases ソースは削除できません"
 }

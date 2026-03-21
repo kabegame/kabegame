@@ -377,6 +377,9 @@ PRAGMA mmap_size = 268435456;
             .map_err(|e| format!("Failed to create thumbnails directory: {}", e))?;
 
         self.ensure_favorite_album()?;
+        self.plugin_sources()
+            .ensure_official_github_release()
+            .map_err(|e| format!("Failed to ensure official plugin source: {}", e))?;
         // 新增字段后回填旧数据 MIME（仅本地文件路径，content:// 跳过）
         self.backfill_missing_mime_types()?;
 
@@ -998,16 +1001,15 @@ fn perform_complex_migrations(conn: &mut Connection) {
 /// 迁移插件源初始数据（仅在首次建表时执行）
 fn migrate_plugin_sources_initial_data(conn: &mut Connection) -> Result<(), rusqlite::Error> {
     // 1. 插入默认官方源
-    let owner = option_env!("CRAWLER_PLUGINS_REPO_OWNER").unwrap_or("kabegame");
-    let repo = option_env!("CRAWLER_PLUGINS_REPO_NAME").unwrap_or("crawler-plugins");
-    let index_url = format!(
-        "https://github.com/{}/{}/releases/latest/download/index.json",
-        owner, repo
-    );
+    let index_url = plugin_sources::default_official_index_url();
 
     conn.execute(
         "INSERT INTO plugin_sources (id, name, index_url) VALUES (?, ?, ?)",
-        params!["official_github_release", "官方 GitHub Releases 源", index_url],
+        params![
+            plugin_sources::OFFICIAL_PLUGIN_SOURCE_ID,
+            "官方 GitHub Releases 源",
+            index_url
+        ],
     )?;
 
     // 2. 尝试迁移旧的 plugin_sources.json（用户自定义源）
@@ -1022,7 +1024,7 @@ fn migrate_plugin_sources_initial_data(conn: &mut Connection) -> Result<(), rusq
                         old_source.get("indexUrl").and_then(|v| v.as_str()),
                     ) {
                         // 跳过官方源（避免重复）
-                        if id != "official_github_release" {
+                        if id != plugin_sources::OFFICIAL_PLUGIN_SOURCE_ID {
                             let _ = conn.execute(
                                 "INSERT OR IGNORE INTO plugin_sources (id, name, index_url) VALUES (?, ?, ?)",
                                 params![id, name, index_url],

@@ -4,6 +4,16 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.2.3]
+### Fixed
+- Gallery: your last browse location (root, sort, page) persists across restarts, the sort menu matches what you see, and changing sort no longer resets the page.
+- migrate crash for some version of kabegame
+- Plugin browser store installs now reuse downloaded packages from cache instead of always re-downloading.
+
+### Changed
+- Builtin plugin removed, must download from remote.
+- Github release remote source cannot be deleted.
+
 ## [3.2.2]
 ### Added
 - linux plasma plugin for plasma video wallpaper

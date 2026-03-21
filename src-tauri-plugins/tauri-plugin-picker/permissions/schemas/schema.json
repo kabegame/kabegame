@@ -295,18 +295,6 @@
       "type": "string",
       "oneOf": [
         {
-          "description": "Enables the extractBundledPlugins command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-extractBundledPlugins",
-          "markdownDescription": "Enables the extractBundledPlugins command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the extractBundledPlugins command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-extractBundledPlugins",
-          "markdownDescription": "Denies the extractBundledPlugins command without any pre-configured scope."
-        },
-        {
           "description": "Enables the openImage command without any pre-configured scope.",
           "type": "string",
           "const": "allow-openImage",

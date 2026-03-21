@@ -62,7 +62,7 @@ A Tauri-based anime image manager! Crawl, organize, and set/rotate wallpapers—
 - 🎨 **Wallpaper setter (image/video)**: Collect, manage, and rotate anime wallpapers; auto-switch desktop wallpaper from albums (random or sequential)
 - 🖼️ **Image manager (image/video)**: Gallery browsing, album organization, virtual disk (drive letter on Windows, virtual folder on macOS/Linux), drag-and-drop import for local images/videos/folders/archives or kgpg plugins
 
-(Video support: mp4 and mov only as of v3.2.0)
+(Video support: mp4 and mov only as of v3.2.2)
 
 ## Installation
 
@@ -76,15 +76,17 @@ A Tauri-based anime image manager! Crawl, organize, and set/rotate wallpapers—
 | **Size** | Larger | Smaller |
 | **Trade-off** | Full features, but OS-specific deps (see [Installation](#installation-1)) | Install and go, no virtual disk or CLI |
 
-**Pick the right package for your OS and needs:**
+**Pick the right package for your OS and needs.**
+
+**[Download on GitHub Releases (latest)](https://github.com/kabegame/kabegame/releases/latest)**
 
 | OS | Standard | Light |
 |----|----------|-------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.2.0/Kabegame-standard_3.2.0_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.2.0/Kabegame-light_3.2.0_x64-setup.exe) |
-| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.2.0/Kabegame-standard_3.2.0_aarch64.dmg) | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.2.0/Kabegame-light_3.2.0_aarch64.dmg) |
-| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v3.2.0/Kabegame-standard_3.2.0_amd64.deb) | [deb](https://github.com/kabegame/kabegame/releases/download/v3.2.0/Kabegame-light_3.2.0_amd64.deb) |
+| Windows | setup.exe | setup.exe |
+| macOS | dmg | dmg |
+| Linux | deb | deb |
 
-- **Android preview** (Light only): [kabegame_3.2.0_android-preview.apk](https://github.com/kabegame/kabegame/releases/download/v3.2.0/Kabegame_3.2.0_android-preview.apk)
+- **Android preview** (Light only): `Kabegame_*_android-preview.apk` on the same releases page.
 
 ## Installation
 
@@ -325,7 +327,7 @@ bun run build:ffmpeg             # Needs libx264 (macOS: brew install x264, Ubun
 - `bun check` requires `-c`
 - `--mode`: `standard` (default, store + virtual disk + CLI) | `light` (store only)
 - `--skip`: `vue` | `cargo`
-- Main app dev packs plugins to `src-tauri/app-main/resources/plugins`; this needs CLI built first: `bun b -c cli`
+- Main app `bun dev -c main` runs `crawler-plugins:package-to-dev-data` (NX) so packed `.kgpg` files land in `data/plugins-directory` for local testing; release builds do not bundle store plugins (users install from the GitHub store).
 
 ### Android development
 

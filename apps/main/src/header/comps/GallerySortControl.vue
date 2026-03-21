@@ -27,11 +27,27 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { ArrowDown, Sort } from "@element-plus/icons-vue";
+import { useGalleryPathState } from "@/composables/useGalleryPathState";
+import { DEFAULT_GALLERY_PATH, galleryPathWithSortOnly } from "@/utils/galleryPath";
 
 const route = useRoute();
 const router = useRouter();
 
-const currentPath = computed(() => (route.query.path as string) || "all/1");
+const { providerPath: galleryProviderPath } = useGalleryPathState();
+
+/** 与 useProviderPathRoute 一致：无 query.path 时用 root/sort/page 算出的 providerPath */
+const effectiveGalleryPath = computed(() => {
+  const raw = route.query.path;
+  const qp = Array.isArray(raw) ? raw[0] : raw;
+  const qpStr = qp != null && qp !== "" ? String(qp) : "";
+  if (route.path !== "/gallery") {
+    return qpStr || DEFAULT_GALLERY_PATH;
+  }
+  if (qpStr) return qpStr;
+  return galleryProviderPath.value;
+});
+
+const currentPath = effectiveGalleryPath;
 
 const sortOrder = computed<"asc" | "desc">(() =>
   currentPath.value.includes("/desc/") ? "desc" : "asc"
@@ -42,30 +58,10 @@ const sortLabel = computed(() =>
   sortOrder.value === "desc" ? t("gallery.byTimeDesc") : t("gallery.byTimeAsc")
 );
 
-/** 从 path 得到不含页码、不含 desc 的根路径，如 all/desc/1 → all，date/2024-01/2 → date/2024-01 */
-function getRootPath(path: string): string {
-  const segs = path.split("/").filter(Boolean);
-  let i = segs.length - 1;
-  while (i >= 0) {
-    const seg = segs[i];
-    if (/^\d+$/.test(seg)) {
-      i--;
-    } else if (seg === "desc") {
-      i--;
-    } else {
-      break;
-    }
-  }
-  return segs.slice(0, i + 1).join("/") || "all";
-}
-
 function handleCommand(command: string) {
-  const rootPath = getRootPath(currentPath.value);
-  if (command === "desc") {
-    router.push({ path: "/gallery", query: { path: `${rootPath}/desc/1` } });
-  } else {
-    router.push({ path: "/gallery", query: { path: `${rootPath}/1` } });
-  }
+  const sort = command === "desc" ? "desc" : "asc";
+  const next = galleryPathWithSortOnly(currentPath.value, sort);
+  void router.push({ path: "/gallery", query: { path: next } });
 }
 </script>
 

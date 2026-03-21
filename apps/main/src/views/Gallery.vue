@@ -9,7 +9,8 @@
           <!-- 顶部工具栏 -->
           <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
             :current-position="currentPosition" :month-options="monthOptions" :month-loading="monthOptionsLoading"
-            :provider-root-path="providerRootPath" v-model:selectedRange="selectedRange" @refresh="handleManualRefresh"
+            :provider-root-path="providerRootPath" :current-provider-path="currentPath"
+            v-model:selectedRange="selectedRange" @refresh="handleManualRefresh"
             @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
             @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
             @open-collect-menu="showCollectSourcePicker = true" />
@@ -77,7 +78,6 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick } from "vue";
-import { useLocalStorage } from "@vueuse/core";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -104,6 +104,7 @@ import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
+import { useGalleryPathState } from "@/composables/useGalleryPathState";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
@@ -167,14 +168,14 @@ const currentBigPageOffset = computed(() => currentOffset.value);
 const route = useRoute();
 const router = useRouter();
 
-// 持久化用户上次访问的 path（含排序、页码），用于进入画廊时恢复
-const GALLERY_PATH_STORAGE_KEY = "kabegame-gallery-last-path";
-const defaultGalleryPath = "all/1";
-const lastGalleryPath = useLocalStorage(GALLERY_PATH_STORAGE_KEY, defaultGalleryPath);
+// 持久化：root / sort / page 三个 ref（useGalleryPathState）；无 query.path 时默认 path 为 providerPath
+const { providerPath: galleryProviderDefaultPath, applyFromPath } =
+  useGalleryPathState();
 
 // Query param 驱动：
 // - /gallery?path=<providerPath>
 // - providerPath 格式：all/1, all/desc/1, date/2024-01/1, plugin/konachan/1 等
+// - 无 query.path 时 currentPath 由 root/sort/page 经 buildGalleryPath 得到
 const {
   currentPath,
   providerRootPath,
@@ -185,26 +186,14 @@ const {
 } = useProviderPathRoute({
   route,
   router,
-  defaultPath: defaultGalleryPath,
+  defaultPath: galleryProviderDefaultPath,
 });
 
-// 进入画廊且 URL 无 path 时，恢复上次访问的 path
-watch(
-  () => route.path === "/gallery" && !route.query.path,
-  (shouldRestore) => {
-    if (shouldRestore && lastGalleryPath.value && lastGalleryPath.value !== defaultGalleryPath) {
-      void router.replace({ path: "/gallery", query: { path: lastGalleryPath.value } });
-    }
-  },
-  { immediate: true }
-);
-
-// 路径变化时写入 localStorage
 watch(
   currentPath,
   (path) => {
     if (path && route.path === "/gallery") {
-      lastGalleryPath.value = path;
+      applyFromPath(path.trim());
     }
   },
   { immediate: true }

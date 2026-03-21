@@ -51,9 +51,6 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
         let exe_dir = None;
         let external_data_dir = Some(PathBuf::from(external_data_dir.dir));
         let pictures_dir = None;
-        
-        // Android: builtin plugins are extracted to data_dir/builtin-plugins
-        let builtin_plugins_dir = data_dir.join("builtin-plugins");
 
         let app_paths = AppPaths {
           data_dir,
@@ -63,7 +60,6 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
           exe_dir,
           external_data_dir,
           pictures_dir,
-          builtin_plugins_dir,
         };
 
         AppPaths::init(app_paths)
@@ -118,28 +114,6 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
         
         let external_data_dir = None;
         let pictures_dir = dirs::picture_dir();
-        
-        // Desktop: builtin plugins location depends on dev/prod
-        let builtin_plugins_dir = if is_dev() {
-          // Dev: try repo/src-tauri/app-main/resources/plugins first
-          if let Some(repo_root) = repo_root_dir() {
-            let dev_path = repo_root
-              .join("src-tauri")
-              .join("app-main")
-              .join("resources")
-              .join("plugins");
-            if dev_path.exists() {
-              dev_path
-            } else {
-              resource_dir.join("plugins")
-            }
-          } else {
-            resource_dir.join("plugins")
-          }
-        } else {
-          // Prod: use resource_dir/plugins
-          resource_dir.join("plugins")
-        };
 
         let app_paths = AppPaths {
           data_dir,
@@ -149,7 +123,6 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
           exe_dir,
           external_data_dir,
           pictures_dir,
-          builtin_plugins_dir,
         };
 
         AppPaths::init(app_paths)

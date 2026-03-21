@@ -143,19 +143,6 @@ pub struct OpenVideoArgs {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ExtractBundledPluginsArgs {
-  pub target_dir: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExtractBundledPluginsResponse {
-  pub files: Vec<String>,
-  pub count: usize,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CopyImageToPicturesArgs {
   pub source_path: String,
   pub mime_type: String,

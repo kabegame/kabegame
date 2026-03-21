@@ -89,7 +89,6 @@ struct KgpgFileCacheEntry {
 struct InstalledPluginsCache {
     initialized: bool,
     user_plugins_dir: PathBuf,
-    builtin_plugins_dir: PathBuf,
     by_id: HashMap<String, PathBuf>,
     plugins: HashMap<String, Plugin>,
     files: HashMap<PathBuf, KgpgFileCacheEntry>,
@@ -125,16 +124,6 @@ impl PluginManager {
         PLUGIN_MANAGER
             .get()
             .expect("PluginManager not initialized. Call PluginManager::init_global() first.")
-    }
-
-    fn prepackaged_plugins_dir(&self) -> Result<PathBuf, String> {
-        // Use AppPaths which already computed the correct builtin plugins dir
-        Ok(crate::app_paths::AppPaths::global().builtin_plugins_dir())
-    }
-
-    /// 获取内置插件目录（公开方法）
-    pub fn get_builtin_plugins_directory(&self) -> Result<PathBuf, String> {
-        self.prepackaged_plugins_dir()
     }
 
     /// 从插件目录中的 .kgpg 文件加载所有已安装的插件
@@ -238,7 +227,7 @@ impl PluginManager {
         Ok((plugin, None))
     }
 
-    /// 删除插件（仅删除用户插件目录中的 .kgpg 文件；资源插件已在启动时迁移或清理，此处只操作用户目录）
+    /// 删除插件（仅删除用户插件目录 data/plugins-directory 中的 .kgpg 文件）
     pub async fn delete(&self, id: &str) -> Result<(), String> {
         let user_plugins_dir = self.get_plugins_directory();
         let path = user_plugins_dir.join(format!("{}.kgpg", id));
@@ -662,7 +651,7 @@ impl PluginManager {
         Ok(file.config.clone().and_then(|c| c.var))
     }
 
-    /// 查找插件文件（优先查内置目录，再查用户目录）
+    /// 查找插件文件（用户 data 目录下的 .kgpg，经已安装缓存索引）
     async fn find_plugin_file(
         &self,
         _plugins_dir: &Path,
@@ -710,6 +699,12 @@ impl PluginManager {
         name: String,
         index_url: String,
     ) -> Result<PluginSource, String> {
+        if id
+            .as_deref()
+            .is_some_and(|i| i == crate::storage::plugin_sources::OFFICIAL_PLUGIN_SOURCE_ID)
+        {
+            return Err("不能使用保留的官方源 ID".to_string());
+        }
         crate::storage::Storage::global()
             .plugin_sources()
             .add_source(id, name, index_url)
@@ -731,6 +726,9 @@ impl PluginManager {
 
     /// 删除插件源（同时清理 .kgpg 缓存目录）
     pub fn delete_plugin_source(&self, id: String) -> Result<(), String> {
+        if id == crate::storage::plugin_sources::OFFICIAL_PLUGIN_SOURCE_ID {
+            return Err("官方 GitHub Releases 源不可删除".to_string());
+        }
         // 删除数据库记录（缓存会通过 CASCADE 自动删除）
         crate::storage::Storage::global()
             .plugin_sources()
@@ -1200,9 +1198,10 @@ impl PluginManager {
             .download_plugin_raw(download_url, expected_sha256, expected_size)
             .await?;
 
-        // 创建临时文件：优先从 URL 提取文件名（保持插件 ID），回退到 UUID
+        // 创建临时文件：优先从 URL 提取 stem（与 store 缓存 plugin_id 一致），回退到 UUID
         let temp_dir = std::env::temp_dir();
         let file_name = extract_kgpg_filename_from_url(download_url)
+            .map(|stem| format!("{}.kgpg", stem))
             .unwrap_or_else(|| format!("plugin_{}.kgpg", Uuid::new_v4()));
         let temp_file = temp_dir.join(&file_name);
 
@@ -1673,10 +1672,9 @@ impl PluginManager {
     }
 
     /// 前端手动"刷新已安装源"：重扫插件目录并重建缓存（全量刷新）
-    /// 仅读取用户目录（data），不读取 resources 内置目录
+    /// 仅读取用户目录（data）下的 .kgpg
     pub async fn refresh_installed_plugins_cache(&self) -> Result<(), String> {
         let user_plugins_dir = self.get_plugins_directory();
-        let builtin_plugins_dir = self.get_builtin_plugins_directory().unwrap_or_default();
 
         let mut by_id: HashMap<String, PathBuf> = HashMap::new();
         let mut plugins: HashMap<String, Plugin> = HashMap::new();
@@ -1737,7 +1735,6 @@ impl PluginManager {
         let mut guard = self.installed_cache.lock().await;
         guard.initialized = true;
         guard.user_plugins_dir = user_plugins_dir;
-        guard.builtin_plugins_dir = builtin_plugins_dir;
         guard.by_id = by_id;
         guard.plugins = plugins;
         guard.files = files;
@@ -1748,15 +1745,11 @@ impl PluginManager {
     /// 仅从用户目录（data）查找指定 plugin_id
     pub async fn refresh_installed_plugin_cache(&self, plugin_id: &str) -> Result<(), String> {
         let user_plugins_dir = self.get_plugins_directory();
-        let builtin_plugins_dir = self.get_builtin_plugins_directory().unwrap_or_default();
 
         // 先处理目录切换
         {
             let guard = self.installed_cache.lock().await;
-            if guard.initialized
-                && (guard.user_plugins_dir != user_plugins_dir
-                    || guard.builtin_plugins_dir != builtin_plugins_dir)
-            {
+            if guard.initialized && guard.user_plugins_dir != user_plugins_dir {
                 drop(guard);
                 return self.refresh_installed_plugins_cache().await;
             }
@@ -1815,7 +1808,6 @@ impl PluginManager {
             let mut guard = self.installed_cache.lock().await;
             guard.initialized = true;
             guard.user_plugins_dir = user_plugins_dir;
-            guard.builtin_plugins_dir = builtin_plugins_dir;
 
             // 如果已存在（可能是用户目录的），先移除旧条目
             if let Some(old_path) = guard.by_id.remove(plugin_id) {
@@ -1842,7 +1834,6 @@ impl PluginManager {
         let mut guard = self.installed_cache.lock().await;
         guard.initialized = true;
         guard.user_plugins_dir = user_plugins_dir;
-        guard.builtin_plugins_dir = builtin_plugins_dir;
         if let Some(old_path) = guard.by_id.remove(plugin_id) {
             guard.files.remove(&old_path);
         }
@@ -1853,15 +1844,9 @@ impl PluginManager {
     /// 确保已安装插件缓存已初始化（公开函数，用于启动时初始化）
     pub async fn ensure_installed_cache_initialized(&self) -> Result<(), String> {
         let user_plugins_dir = self.get_plugins_directory();
-        let builtin_plugins_dir = self.get_builtin_plugins_directory()?;
-        eprintln!("user_plugins_dir: {}", user_plugins_dir.display());
-        eprintln!("builtin_plugins_dir: {}", builtin_plugins_dir.display());
         {
             let guard = self.installed_cache.lock().await;
-            if guard.initialized
-                && guard.user_plugins_dir == user_plugins_dir
-                && guard.builtin_plugins_dir == builtin_plugins_dir
-            {
+            if guard.initialized && guard.user_plugins_dir == user_plugins_dir {
                 return Ok(());
             }
         }
@@ -1966,11 +1951,6 @@ pub fn find_plugin_kgpg_path(plugin_id: &str) -> Option<PathBuf> {
         return Some(user_path);
     }
     None
-}
-
-/// 获取内置插件目录（不依赖 AppHandle / PluginManager 实例）
-fn builtin_plugins_directory_for_readonly() -> Result<PathBuf, String> {
-    Ok(crate::app_paths::AppPaths::global().builtin_plugins_dir())
 }
 
 /// 从任意 `.kgpg` 文件读取 manifest.json（优先 KGPG v2 头部）。
@@ -2491,14 +2471,18 @@ pub struct PluginDetail {
     pub base_url: Option<String>,
 }
 
-/// 从 URL 中提取 .kgpg 文件名（用于保持插件 ID 正确）
-/// 例如：https://github.com/.../local-import.kgpg -> local-import.kgpg
+/// 从 URL 路径最后一段解析出插件 ID（**不含** `.kgpg` 后缀）。
+/// `store_plugin_cache_file` 会再拼接 `.kgpg`，故此处必须返回 stem，避免出现 `foo.kgpg.kgpg`。
+/// 例如：`.../anime-pictures.kgpg` -> `Some("anime-pictures")`
 pub fn extract_kgpg_filename_from_url(url_str: &str) -> Option<String> {
     let url = Url::parse(url_str).ok()?;
     let file_name = url.path_segments().and_then(|segments| segments.last())?;
-    if file_name.ends_with(".kgpg") && file_name.len() > 5 {
-        Some(file_name.to_string())
-    } else {
-        None
+    if !file_name.ends_with(".kgpg") || file_name.len() <= 5 {
+        return None;
     }
+    let stem = file_name.trim_end_matches(".kgpg");
+    if stem.is_empty() {
+        return None;
+    }
+    Some(stem.to_string())
 }

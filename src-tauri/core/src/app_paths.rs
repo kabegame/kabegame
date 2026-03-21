@@ -19,8 +19,6 @@ pub struct AppPaths {
     pub external_data_dir: Option<PathBuf>,
     /// 桌面端图片目录（dirs::picture_dir()，Android 为 None）
     pub pictures_dir: Option<PathBuf>,
-    /// 内置插件目录（在构造时已计算好，避免运行时判断）
-    pub builtin_plugins_dir: PathBuf,
 }
 
 static APP_PATHS: OnceLock<AppPaths> = OnceLock::new();
@@ -113,13 +111,6 @@ impl AppPaths {
         {
             self.data_dir.join("thumbnails")
         }
-    }
-
-    // ========== 插件相关目录 ==========
-
-    /// 内置插件目录（已计算好，直接返回）
-    pub fn builtin_plugins_dir(&self) -> PathBuf {
-        self.builtin_plugins_dir.clone()
     }
 
     // ========== 缓存目录 ==========

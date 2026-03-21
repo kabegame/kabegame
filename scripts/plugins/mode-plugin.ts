@@ -144,22 +144,16 @@ export class ModePlugin extends BasePlugin {
     }
   }
 
-  // 打包rhai插件
+  // 打包爬虫插件：仅本地开发写入 data/plugins-directory（不将 .kgpg 打入安装包 resources）
   packagePlugins(bs: BuildSystem): void {
     const cmd = bs.context.cmd;
-    const mode = bs.context.mode!;
     const comp = bs.context.component!;
-    if (comp.isMain && (cmd.isDev || cmd.isBuild)) {
-      // 开发和生产都打包到 resources 目录
-      const packageTarget =
-        cmd.isBuild || OSPlugin.isAndroid
-          ? "crawler-plugins:package-to-resources"
-          : "crawler-plugins:package-to-dev-data";
-      this.log(chalk.blue(`打包插件到资源: ${packageTarget}`));
-      run("nx", ["run", packageTarget], {
+    if (comp.isMain && cmd.isDev) {
+      this.log(chalk.blue("打包插件到开发 data 目录: crawler-plugins:package-to-dev-data"));
+      run("nx", ["run", "crawler-plugins:package-to-dev-data"], {
         bin: "bun",
       });
     }
-    // start 命令不打包插件
+    // build / start 不打包插件；正式环境插件从 GitHub Releases 下载
   }
 }

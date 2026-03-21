@@ -112,5 +112,10 @@
   "installedRefreshSuccess": "已安裝源已重新整理",
   "installedRefreshFailed": "重新整理已安裝源失敗",
   "storeSourceGoneSwitchToInstalled": "目前商店源已不存在，已切回已安裝源",
-  "refreshFailed": "重新整理失敗"
+  "refreshFailed": "重新整理失敗",
+  "noStoreSourcesHint": "目前沒有任何商店源，可點下方按鈕切換到 GitHub 官方外掛目錄。",
+  "goToOfficialGitHubStore": "開啟 GitHub 官方外掛商店",
+  "loadSourcesFailed": "載入商店源清單失敗",
+  "officialSourceMissing": "找不到官方源，請重新啟動應用程式後再試",
+  "cannotDeleteOfficialSource": "官方 GitHub Releases 源不可刪除"
 }

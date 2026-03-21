@@ -15,7 +15,7 @@ import SurfImages from "@/views/SurfImages.vue";
 const routes: RouteRecordRaw[] = [
   {
     path: "/",
-    redirect: { path: "/gallery", query: { path: "all/1" } },
+    redirect: { path: "/gallery" },
   },
   {
     path: "/gallery",
