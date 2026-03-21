@@ -6,6 +6,7 @@
 
 ## [3.2.3]
 ### Fixed
+- **ImageItem (video):** Stopped showing the Element Plus image-variant loading skeleton on top of video (`isVideo` excluded via `v-if`), which had appeared as a small centered picture placeholder while the video played underneath (e.g. gallery grid, album cards).
 - Gallery: your last browse location (root, sort, page) persists across restarts, the sort menu matches what you see, and changing sort no longer resets the page.
 - migrate crash for some version of kabegame
 - Plugin browser store installs now reuse downloaded packages from cache instead of always re-downloading.
@@ -13,6 +14,13 @@
 ### Changed
 - Builtin plugin removed, must download from remote.
 - Github release remote source cannot be deleted.
+
+### Optimized
+- Task drawer and “copy error” details now only list plugin run options that apply to the current configuration (same `when` rules as the run form), not hidden/irrelevant fields.
+- HTTP downloads (crawler images and plugin store `.kgpg`) now resume in memory when the stream fails: retry requests use `Range` from bytes already received; if the server ignores Range (non-206), the client falls back to a full re-download to avoid corrupt concatenation.
+- Crawler Rhai: `to()` and `fetch_json()` emit task-log `info` lines (request start, success with resolved URL / stack depth / JSON type) for easier script debugging.
+- **Plugin browser (store):** `.kgpg` download streams into memory then writes once (no partial cache files); `get_store_plugins` merges active download progress; progress callbacks are throttled to 1s; up to two retries after a failed attempt. `preview_store_install` emits `plugin-store-download-progress` for the UI.
+- **Plugin browser (store):** install button shows download progress as a left-to-right fill with percentage; when the installed version equals the store version, the control is a disabled “Installed” state (no reinstall), and plugin detail opens from the local install (no remote query) so docs load offline.
 
 ## [3.2.2]
 ### Added
@@ -62,7 +70,7 @@
 ### Optimized
 - 提高爬虫网络重试的健壮性
 
-## 【3.1.0】
+## [3.1.0]
 （这是一次大改动，因此将版本升级）
 ### Added
 - 添加webview插件，可以编写js插件啦！第一个例子是 anime-pictures 插件

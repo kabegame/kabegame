@@ -89,6 +89,10 @@ fn emit_http_warn(_dq: &crate::crawler::DownloadQueue, task_id: &str, message: i
     GlobalEmitter::global().emit_task_log(task_id, "warn", &message.into());
 }
 
+fn emit_http_info(_dq: &crate::crawler::DownloadQueue, task_id: &str, message: impl Into<String>) {
+    GlobalEmitter::global().emit_task_log(task_id, "info", &message.into());
+}
+
 fn emit_http_error(_dq: &crate::crawler::DownloadQueue, task_id: &str, message: impl Into<String>) {
     GlobalEmitter::global().emit_task_log(task_id, "error", &message.into());
 }
@@ -564,6 +568,11 @@ pub fn register_crawler_functions(
                 let guard = lock_or_inner(&headers_holder);
                 guard.clone()
             };
+            emit_http_info(
+                dq_holder.as_ref(),
+                &task_id_for_http,
+                format!("[to] 打开页面：{resolved_url}"),
+            );
             let (tx, rx) = std::sync::mpsc::channel();
             let result = http_get_text_with_retry(
                 &dq_for_http,
@@ -586,6 +595,17 @@ pub fn register_crawler_functions(
                 page_label: String::new(),
                 page_state: serde_json::Value::Null,
             });
+            if let Some(entry) = stack_guard.last() {
+                emit_http_info(
+                    dq_holder.as_ref(),
+                    &task_id_for_http,
+                    format!(
+                        "[to] 页面已入栈：{}（stack_depth={}）",
+                        entry.url,
+                        stack_guard.len()
+                    ),
+                );
+            }
             Ok(())
         }
     });
@@ -623,6 +643,11 @@ pub fn register_crawler_functions(
                 let guard = lock_or_inner(&headers_holder);
                 guard.clone()
             };
+            emit_http_info(
+                dq_holder.as_ref(),
+                &task_id_for_http,
+                format!("[fetch_json] 请求 JSON：{resolved_url}"),
+            );
             let (final_url, text) = http_get_text_with_retry(
                 &dq_for_http,
                 &task_id_for_http,
@@ -640,6 +665,19 @@ pub fn register_crawler_functions(
                 );
                 format!("Failed to parse JSON: {}", e)
             })?;
+            let json_kind = match &json_value {
+                serde_json::Value::Object(_) => "object",
+                serde_json::Value::Array(_) => "array",
+                serde_json::Value::String(_) => "string",
+                serde_json::Value::Number(_) => "number",
+                serde_json::Value::Bool(_) => "boolean",
+                serde_json::Value::Null => "null",
+            };
+            emit_http_info(
+                dq_holder.as_ref(),
+                &task_id_for_http,
+                format!("[fetch_json] JSON 请求成功：{final_url}（type={json_kind}）"),
+            );
 
             // 将 JSON 值转换为 Rhai 类型
             match &json_value {

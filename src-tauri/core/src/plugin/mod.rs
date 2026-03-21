@@ -4,14 +4,17 @@
 pub mod rhai;
 
 use reqwest;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use tokio::sync::Mutex;
 use url::Url;
@@ -53,6 +56,42 @@ pub struct PluginSelector {
 
 pub struct PluginManager {
     installed_cache: Mutex<InstalledPluginsCache>,
+    /// 商店插件下载进度（内存态，供 `get_store_plugins` 合并）；key = `source_id::plugin_id`
+    store_download_states: std::sync::Mutex<HashMap<String, StoreDownloadState>>,
+}
+
+/// 商店列表合并用：某插件当前下载进度（仅下载中；完成后从 map 移除）
+#[derive(Debug, Clone)]
+pub enum StoreDownloadState {
+    Downloading {
+        percent: u8,
+        received: u64,
+        total: Option<u64>,
+    },
+}
+
+/// 供 Tauri 等向前端派发（1s 节流由下载循环内控制）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorePluginDownloadProgressEvent {
+    pub source_id: String,
+    pub plugin_id: String,
+    pub percent: u8,
+    pub received: u64,
+    pub total: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// 下载进度回调上下文（可选；无回调时仍更新 `store_download_states` 供列表合并）
+pub struct StorePluginDownloadProgressContext {
+    pub source_id: String,
+    pub plugin_id: String,
+    pub on_emit: Option<Arc<dyn Fn(StorePluginDownloadProgressEvent) + Send + Sync>>,
+}
+
+fn store_download_progress_key(source_id: &str, plugin_id: &str) -> String {
+    format!("{}::{}", source_id, plugin_id)
 }
 
 // 全局 PluginManager 单例
@@ -107,6 +146,7 @@ impl PluginManager {
     pub fn new() -> Self {
         Self {
             installed_cache: Mutex::new(InstalledPluginsCache::default()),
+            store_download_states: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -805,6 +845,8 @@ impl PluginManager {
             }
         }
 
+        self.merge_store_download_into_plugins(&mut all_plugins);
+
         // 如果有部分源失败，但仍然有成功的源，返回成功但记录错误（通过日志）
         if !errors.is_empty() {
             eprintln!(
@@ -1105,15 +1147,107 @@ impl PluginManager {
             source_id: source_id.to_string(),
             source_name: source_name.to_string(),
             installed_version: None,
+            store_download_progress: None,
+            store_download_error: None,
         })
     }
 
-    /// 下载插件字节数据（公用例程）
+    fn merge_store_download_into_plugins(&self, plugins: &mut [StorePluginResolved]) {
+        let guard = match self.store_download_states.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        for p in plugins.iter_mut() {
+            let k = store_download_progress_key(&p.source_id, &p.id);
+            if let Some(state) = guard.get(&k) {
+                match state {
+                    StoreDownloadState::Downloading {
+                        percent,
+                        received: _,
+                        total: _,
+                    } => {
+                        p.store_download_progress = Some(*percent);
+                        p.store_download_error = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// 下载插件：全程在内存中组装字节，校验通过后一次性落盘；流式读取避免部分文件缓存。
+    /// `progress` 非空时更新 `store_download_states`，并对 `on_emit` 做至多 1 秒一次的节流（完成 100% 与错误立即派发）。
+    /// 网络/读流等失败时自动重试 2 次（共最多 3 次）；校验类错误也会重试（可能偶发损坏）。
     async fn download_plugin_raw(
         &self,
         download_url: &str,
         expected_sha256: Option<&str>,
         expected_size: Option<u64>,
+        progress: Option<StorePluginDownloadProgressContext>,
+    ) -> Result<Vec<u8>, String> {
+        let progress_key = progress.as_ref().map(|p| {
+            store_download_progress_key(p.source_id.as_str(), p.plugin_id.as_str())
+        });
+        // 首次 + 失败重试 2 次
+        const MAX_DOWNLOAD_ATTEMPTS: u32 = 3;
+
+        let mut last_err = String::new();
+        for attempt in 0..MAX_DOWNLOAD_ATTEMPTS {
+            match self
+                .download_plugin_raw_single_attempt(
+                    download_url,
+                    expected_sha256,
+                    expected_size,
+                    progress.as_ref(),
+                    &progress_key,
+                )
+                .await
+            {
+                Ok(buf) => return Ok(buf),
+                Err(e) => {
+                    last_err = e;
+                    if attempt + 1 < MAX_DOWNLOAD_ATTEMPTS {
+                        eprintln!(
+                            "插件下载失败（第 {} 次），400ms 后重试: {}",
+                            attempt + 1,
+                            last_err
+                        );
+                        tokio::time::sleep(Duration::from_millis(400)).await;
+                    }
+                }
+            }
+        }
+
+        if let Some(ref ctx) = progress {
+            self.emit_download_failed(ctx, last_err.clone());
+        }
+        Err(last_err)
+    }
+
+    fn parse_content_range_start_and_total(header: &str) -> Option<(u64, Option<u64>)> {
+        // 形如: "bytes 123-456/789" 或 "bytes 123-456/*"
+        let raw = header.trim();
+        let bytes_part = raw.strip_prefix("bytes ")?;
+        let (range_part, total_part) = bytes_part.split_once('/')?;
+        let (start_part, _end_part) = range_part.split_once('-')?;
+        let start = start_part.trim().parse::<u64>().ok()?;
+        let total = if total_part.trim() == "*" {
+            None
+        } else {
+            total_part.trim().parse::<u64>().ok()
+        };
+        Some((start, total))
+    }
+
+    /// 单次下载尝试（失败不向前端派发 error，由外层重试或最终统一派发）。
+    /// 读流失败时优先在本次尝试内使用 HTTP Range 从已接收字节继续下载；
+    /// 若服务端忽略 Range（返回 200 全量），自动回退为整包重下，避免拼接损坏。
+    async fn download_plugin_raw_single_attempt(
+        &self,
+        download_url: &str,
+        expected_sha256: Option<&str>,
+        expected_size: Option<u64>,
+        progress: Option<&StorePluginDownloadProgressContext>,
+        progress_key: &Option<String>,
     ) -> Result<Vec<u8>, String> {
         let mut client_builder = reqwest::Client::builder();
 
@@ -1142,40 +1276,169 @@ impl PluginManager {
             .user_agent("Kabegame/1.0")
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-        let response = client
-            .get(download_url)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to download plugin: {}", e))?;
 
-        if !response.status().is_success() {
-            return Err(format!(
-                "Failed to download plugin: HTTP {}",
-                response.status()
-            ));
-        }
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut received: u64 = 0;
+        let mut total_hint = expected_size;
+        let mut last_emit = Instant::now()
+            .checked_sub(Duration::from_secs(2))
+            .unwrap_or_else(Instant::now);
+        const MAX_RESUME_ATTEMPTS: u32 = 2;
+        let mut resume_attempts: u32 = 0;
 
-        // 检查大小（如果提供）
-        if let Some(expected) = expected_size {
-            if let Some(content_length) = response.content_length() {
-                if content_length != expected {
-                    return Err(format!(
-                        "Size mismatch: expected {}, got {}",
-                        expected, content_length
-                    ));
-                }
+        if let Some(ref k) = progress_key {
+            if let Ok(mut g) = self.store_download_states.lock() {
+                g.insert(
+                    k.clone(),
+                    StoreDownloadState::Downloading {
+                        percent: 0,
+                        received: 0,
+                        total: total_hint,
+                    },
+                );
             }
         }
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read plugin data: {}", e))?;
+        'resume: loop {
+            let mut req = client.get(download_url);
+            if received > 0 {
+                req = req.header(reqwest::header::RANGE, format!("bytes={}-", received));
+            }
+            let response = match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if received > 0 && resume_attempts < MAX_RESUME_ATTEMPTS {
+                        resume_attempts += 1;
+                        eprintln!(
+                            "插件下载续传请求失败（第 {} 次），400ms 后重试: {}",
+                            resume_attempts, e
+                        );
+                        tokio::time::sleep(Duration::from_millis(400)).await;
+                        continue 'resume;
+                    }
+                    return Err(format!("Failed to download plugin: {}", e));
+                }
+            };
+
+            if !response.status().is_success() {
+                return Err(format!(
+                    "Failed to download plugin: HTTP {}",
+                    response.status()
+                ));
+            }
+
+            if received > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                if let Some(v) = response.headers().get(reqwest::header::CONTENT_RANGE) {
+                    if let Ok(s) = v.to_str() {
+                        if let Some((start, total)) = Self::parse_content_range_start_and_total(s) {
+                            if start != received {
+                                return Err(format!(
+                                    "Invalid Content-Range start: expected {}, got {}",
+                                    received, start
+                                ));
+                            }
+                            if total_hint.is_none() {
+                                total_hint = expected_size.or(total);
+                            }
+                        }
+                    }
+                }
+                if total_hint.is_none() {
+                    total_hint = expected_size.or(response.content_length().map(|len| len + received));
+                }
+            } else {
+                if received > 0 {
+                    eprintln!("服务端未返回 206，回退为整包重下: {}", response.status());
+                    buffer.clear();
+                    received = 0;
+                }
+                // 仅在整包请求时做 content-length 与 expected_size 的快速校验。
+                if let Some(expected) = expected_size {
+                    if let Some(content_length) = response.content_length() {
+                        if content_length != expected {
+                            return Err(format!(
+                                "Size mismatch: expected {}, got {}",
+                                expected, content_length
+                            ));
+                        }
+                    }
+                }
+                total_hint = expected_size.or(response.content_length());
+            }
+
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = match chunk {
+                    Ok(c) => c,
+                    Err(e) => {
+                        if resume_attempts < MAX_RESUME_ATTEMPTS {
+                            resume_attempts += 1;
+                            eprintln!(
+                                "插件下载读流失败，基于已下载字节续传（第 {} 次）: {}",
+                                resume_attempts, e
+                            );
+                            tokio::time::sleep(Duration::from_millis(400)).await;
+                            continue 'resume;
+                        }
+                        return Err(format!("Failed to read plugin data: {}", e));
+                    }
+                };
+                buffer.extend_from_slice(&chunk);
+                received = buffer.len() as u64;
+
+                let percent: u8 = if let Some(t) = total_hint.filter(|t| *t > 0) {
+                    ((received.min(t) * 100) / t) as u8
+                } else {
+                    0
+                };
+
+                if let Some(ref k) = progress_key {
+                    if let Ok(mut g) = self.store_download_states.lock() {
+                        g.insert(
+                            k.clone(),
+                            StoreDownloadState::Downloading {
+                                percent,
+                                received,
+                                total: total_hint,
+                            },
+                        );
+                    }
+                }
+
+                if let Some(ctx) = progress {
+                    let should_emit = last_emit.elapsed() >= Duration::from_secs(1);
+                    if should_emit {
+                        if let Some(ref cb) = ctx.on_emit {
+                            cb(StorePluginDownloadProgressEvent {
+                                source_id: ctx.source_id.clone(),
+                                plugin_id: ctx.plugin_id.clone(),
+                                percent,
+                                received,
+                                total: total_hint,
+                                error: None,
+                            });
+                        }
+                        last_emit = Instant::now();
+                    }
+                }
+            }
+            break;
+        }
+
+        if let Some(expected) = expected_size {
+            if buffer.len() as u64 != expected {
+                return Err(format!(
+                    "Downloaded size mismatch: expected {}, got {}",
+                    expected,
+                    buffer.len()
+                ));
+            }
+        }
 
         // 验证 SHA256（如果提供）
         if let Some(expected) = expected_sha256 {
             let mut hasher = Sha256::new();
-            hasher.update(&bytes);
+            hasher.update(&buffer);
             let hash = format!("{:x}", hasher.finalize());
             if hash != expected {
                 return Err(format!(
@@ -1185,7 +1448,43 @@ impl PluginManager {
             }
         }
 
-        Ok(bytes.to_vec())
+        if let Some(ref k) = progress_key {
+            if let Ok(mut g) = self.store_download_states.lock() {
+                g.remove(k);
+            }
+        }
+
+        if let Some(ctx) = progress {
+            if let Some(ref cb) = ctx.on_emit {
+                cb(StorePluginDownloadProgressEvent {
+                    source_id: ctx.source_id.clone(),
+                    plugin_id: ctx.plugin_id.clone(),
+                    percent: 100,
+                    received: buffer.len() as u64,
+                    total: total_hint,
+                    error: None,
+                });
+            }
+        }
+
+        Ok(buffer)
+    }
+
+    fn emit_download_failed(&self, ctx: &StorePluginDownloadProgressContext, msg: String) {
+        let k = store_download_progress_key(ctx.source_id.as_str(), ctx.plugin_id.as_str());
+        if let Ok(mut g) = self.store_download_states.lock() {
+            g.remove(&k);
+        }
+        if let Some(ref cb) = ctx.on_emit {
+            cb(StorePluginDownloadProgressEvent {
+                source_id: ctx.source_id.clone(),
+                plugin_id: ctx.plugin_id.clone(),
+                percent: 0,
+                received: 0,
+                total: None,
+                error: Some(msg),
+            });
+        }
     }
 
     pub async fn download_plugin_to_temp(
@@ -1193,9 +1492,10 @@ impl PluginManager {
         download_url: &str,
         expected_sha256: Option<&str>,
         expected_size: Option<u64>,
+        progress: Option<StorePluginDownloadProgressContext>,
     ) -> Result<PathBuf, String> {
         let bytes = self
-            .download_plugin_raw(download_url, expected_sha256, expected_size)
+            .download_plugin_raw(download_url, expected_sha256, expected_size, progress)
             .await?;
 
         // 创建临时文件：优先从 URL 提取 stem（与 store 缓存 plugin_id 一致），回退到 UUID
@@ -1220,7 +1520,7 @@ impl PluginManager {
         expected_sha256: Option<&str>,
         expected_size: Option<u64>,
     ) -> Result<Vec<u8>, String> {
-        self.download_plugin_raw(download_url, expected_sha256, expected_size)
+        self.download_plugin_raw(download_url, expected_sha256, expected_size, None)
             .await
     }
 
@@ -1234,6 +1534,7 @@ impl PluginManager {
         expected_sha256: Option<&str>,
         expected_size: Option<u64>,
         expected_version: &str,
+        progress: Option<StorePluginDownloadProgressContext>,
     ) -> Result<PathBuf, String> {
         let cache_file =
             crate::app_paths::AppPaths::global().store_plugin_cache_file(source_id, plugin_id);
@@ -1262,9 +1563,9 @@ impl PluginManager {
                 .map_err(|e| format!("Failed to create cache directory: {}", e))?;
         }
 
-        // 下载插件
+        // 下载插件（内存组装完成后一次性写入，无部分文件）
         let bytes = self
-            .download_plugin_raw(download_url, expected_sha256, expected_size)
+            .download_plugin_raw(download_url, expected_sha256, expected_size, progress)
             .await?;
 
         // 写入缓存文件
@@ -1396,11 +1697,12 @@ impl PluginManager {
                     expected_sha256,
                     expected_size,
                     expected_version,
+                    None,
                 )
                 .await?
             } else {
                 // 兼容模式：下载到临时文件（用于非商店场景）
-                self.download_plugin_to_temp(download_url, expected_sha256, expected_size)
+                self.download_plugin_to_temp(download_url, expected_sha256, expected_size, None)
                     .await?
             };
 
@@ -1542,11 +1844,12 @@ impl PluginManager {
                         expected_sha256,
                         expected_size,
                         expected_version,
+                        None,
                     )
                     .await?
                 } else {
                     // 兼容模式：下载到临时文件（用于非商店场景）
-                    self.download_plugin_to_temp(url, expected_sha256, expected_size)
+                    self.download_plugin_to_temp(url, expected_sha256, expected_size, None)
                         .await?
                 };
 
@@ -2415,6 +2718,12 @@ pub struct StorePluginResolved {
     pub source_name: String,
     #[serde(rename = "installedVersion")]
     pub installed_version: Option<String>,
+    /// 当前商店下载进度 0–100（仅当该插件包正在下载时由后端合并）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_download_progress: Option<u8>,
+    /// 最近一次下载错误（通常已随事件推送，列表侧可为空）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_download_error: Option<String>,
 }
 
 /// 商店源可用性验证结果

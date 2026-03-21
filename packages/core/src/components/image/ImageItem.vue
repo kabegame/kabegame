@@ -38,9 +38,9 @@
         <div v-if="isLost" class="thumbnail-lost">
           <ImageNotFound :show-image="false" />
         </div>
-        <!-- 与 content 分支一致：loading 骨架使用 overlay 绝对铺满，避免父容器高度塌陷导致"纯空白" -->
+        <!-- 与 content 分支一致：loading 骨架使用 overlay 绝对铺满；视频不用 image 形骨架，避免中央出现图片占位 -->
         <div v-else class="thumbnail-loading thumbnail-loading-overlay">
-          <el-skeleton :rows="0" animated>
+          <el-skeleton v-if="!isVideo" :rows="0" animated>
             <template #template>
               <el-skeleton-item variant="image" :style="{ width: '100%', height: '100%' }" />
             </template>
@@ -51,8 +51,8 @@
         @dblclick.stop="$emit('dblclick', $event)" @contextmenu.prevent.stop="$emit('contextmenu', $event)"
         @click.stop="handleWrapperClick" @touchstart="handleTouchStart" @touchmove="handleTouchMove"
         @touchend="handleTouchEnd">
-        <!-- 加载期间始终显示骨架覆盖层，避免出现“破裂图”闪现 -->
-        <div v-if="isImageLoading" class="thumbnail-loading thumbnail-loading-overlay">
+        <!-- 加载期间显示骨架覆盖层；视频不叠 image 形骨架（与预览弹窗一致，避免中央图片占位） -->
+        <div v-if="isImageLoading && !isVideo" class="thumbnail-loading thumbnail-loading-overlay">
           <el-skeleton :rows="0" animated>
             <template #template>
               <el-skeleton-item variant="image" :style="{ width: '100%', height: '100%' }" />
@@ -62,21 +62,20 @@
         <!-- 桌面双图：先缩略图，原图加载后淡入 -->
         <template v-if="useDesktopLayers && !isVideo">
           <img v-if="!thumbnailLoadFailed" :src="thumbnailUrl" loading="lazy" decoding="async"
-            class="thumbnail thumbnail-layer" :alt="image.id" draggable="false"
-            @load="handleThumbnailLoad" @error="handleThumbnailError" />
+            class="thumbnail thumbnail-layer" :alt="image.id" draggable="false" @load="handleThumbnailLoad"
+            @error="handleThumbnailError" />
           <img :src="originalUrl" loading="lazy" decoding="async"
-            :class="['thumbnail', 'original-layer', { 'original-layer-visible': originalLoaded }]"
-            :alt="image.id" draggable="false"
-            @load="handleOriginalLoad" @error="handleOriginalError" />
+            :class="['thumbnail', 'original-layer', { 'original-layer-visible': originalLoaded }]" :alt="image.id"
+            draggable="false" @load="handleOriginalLoad" @error="handleOriginalError" />
         </template>
         <!-- Android/Linux 视频：用 GIF 或者 jpg 缩略图（img）；Windows/macOS 视频：用 video 元素 -->
         <img v-else-if="isVideo && (IS_ANDROID || IS_LINUX)" :src="displayUrl" loading="lazy" decoding="async"
           :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': IS_ANDROID }]"
           :style="{ visibility: isImageLoading ? 'hidden' : 'visible' }" :alt="image.id" draggable="false"
           @load="handleImageLoad" @error="handleImageError" />
-        <video v-else-if="isVideo" :src="displayUrl" class="thumbnail"
-          draggable="false" muted autoplay loop poster="" preload="auto" playsinline webkit-playsinline="true"
-          disablepictureinpicture="true" disableremoteplayback="" @dragstart.prevent @mousedown.prevent />
+        <video v-else-if="isVideo" :src="displayUrl" class="thumbnail" draggable="false" muted autoplay loop poster=""
+          preload="auto" playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
+          @dragstart.prevent @mousedown.prevent />
         <!-- 单图（桌面无独立缩略图） -->
         <img v-else-if="true" :src="displayUrl" loading="lazy" decoding="async"
           :class="['thumbnail', { 'thumbnail-loading': isImageLoading, 'thumbnail-hidden': isImageLoading, 'thumbnail-android': IS_ANDROID }]"
@@ -391,6 +390,7 @@ const handleAnimationEnd = (event: AnimationEvent) => {
       z-index: 2;
       opacity: 0;
       transition: opacity 0.35s ease-in;
+
       &.original-layer-visible {
         opacity: 1;
       }

@@ -1,13 +1,18 @@
 <template>
   <div ref="cardRef" class="album-card" :data-album-id="album.id" @click="handleCardClick">
     <div class="hero">
-      <div v-for="(url, idx) in heroAll" :key="idx" class="hero-img" :class="heroClass(idx, url)"
-        :style="heroStyle(url)">
-        <div v-if="!url && loadingStates[idx]" class="hero-loading">
-          <el-icon class="loading-icon">
-            <Loading />
-          </el-icon>
-        </div>
+      <div v-for="(slot, idx) in heroSlots" :key="slot.key" class="hero-img" :class="heroClass(idx, slot.hasContent)">
+        <ImageItem
+          v-if="slot.image"
+          :key="previewImageItemKey(slot.image)"
+          :image="slot.image"
+          :image-click-action="imageClickAction"
+          :window-aspect-ratio="1"
+          :grid-columns="3"
+          :grid-index="idx"
+          class="album-hero-image-item"
+          @click="handleHeroImageClick"
+        />
       </div>
       <div v-if="actualImageCount === 0 && !isLoading" class="hero-empty">
         <div class="empty-preview">
@@ -42,23 +47,32 @@ import { ElMessage } from "element-plus";
 import type { Album } from "@/stores/albums";
 import { Loading } from "@element-plus/icons-vue";
 import { useAlbumStore } from "@/stores/albums";
-import { IS_ANDROID } from "@kabegame/core/env";
+import { CONTENT_URI_PROXY_PREFIX, IS_ANDROID } from "@kabegame/core/env";
+import ImageItem from "@kabegame/core/components/image/ImageItem.vue";
+import type { ImageInfo } from "@kabegame/core/types/image";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
+import { thumbnailToUrl } from "@kabegame/core/httpServer";
 
 interface Props {
   album: Album;
-  previewUrls: string[];
+  previewImages: ImageInfo[];
   count: number;
-  loadingStates?: boolean[];
+  /** 画册页从 keep-alive 返回时递增，仅用于视频预览 ImageItem 的 key 后缀以强制重建 */
+  videoPreviewRemountKey?: number;
   isLoading?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  loadingStates: () => [],
+  previewImages: () => [],
+  videoPreviewRemountKey: 0,
   isLoading: false,
 });
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
+const settingsStore = useSettingsStore();
+const imageClickAction = computed(() => settingsStore.values.imageClickAction || "none");
+
 const isRenaming = ref(false);
 const renameValue = ref("");
 const renameInputRef = ref<any>(null);
@@ -69,6 +83,24 @@ const emit = defineEmits<{
   click: [];
   visible: [];
 }>();
+
+/** 与 Albums.vue 中 toPreviewUrl 一致，用于判断是否有可展示的预览 */
+const toPreviewUrl = (img: ImageInfo): string => {
+  const thumbPath = (img.thumbnailPath || img.localPath || "").trim();
+  if (!thumbPath) return "";
+  if (IS_ANDROID) {
+    return thumbPath.startsWith("content://")
+      ? thumbPath.replace("content://", CONTENT_URI_PROXY_PREFIX)
+      : "";
+  }
+  return thumbnailToUrl(thumbPath);
+};
+
+const hasRenderablePreview = (img: ImageInfo) => !!toPreviewUrl(img);
+
+/** 视频在返回画册页后需换 key 重建，否则桌面 WebView 内 <video> 常不再 autoplay */
+const previewImageItemKey = (img: ImageInfo) =>
+  img.type === "video" ? `${img.id}-${props.videoPreviewRemountKey}` : img.id;
 
 // Intersection Observer：卡片进入视口时触发 visible 事件
 let observer: IntersectionObserver | null = null;
@@ -82,13 +114,12 @@ onMounted(() => {
         if (entry.isIntersecting && !hasBeenVisible.value) {
           hasBeenVisible.value = true;
           emit("visible");
-          // 触发一次后就不再需要观察了
           observer?.disconnect();
         }
       }
     },
     {
-      rootMargin: "100px", // 提前100px开始加载
+      rootMargin: "100px",
       threshold: 0,
     }
   );
@@ -100,7 +131,6 @@ onUnmounted(() => {
   observer?.disconnect();
 });
 
-// 暴露方法供外部调用
 defineExpose({
   startRename: () => {
     handleStartRename();
@@ -109,17 +139,23 @@ defineExpose({
 
 const handleCardClick = () => {
   if (isRenaming.value) return;
-  emit('click');
+  emit("click");
+};
+
+/** ImageItem 内部 @click.stop，需单独转发以打开画册 */
+const handleHeroImageClick = () => {
+  if (isRenaming.value) return;
+  emit("click");
 };
 
 const handleStartRename = (event?: MouseEvent) => {
   if (event) {
-    event.stopPropagation(); // 阻止事件冒泡
+    event.stopPropagation();
   }
   isRenaming.value = true;
   renameValue.value = props.album.name;
   nextTick(() => {
-    const inputEl = renameInputRef.value?.$el?.querySelector('input') as HTMLInputElement | null;
+    const inputEl = renameInputRef.value?.$el?.querySelector("input") as HTMLInputElement | null;
     if (inputEl) {
       inputEl.focus();
       inputEl.select();
@@ -129,7 +165,7 @@ const handleStartRename = (event?: MouseEvent) => {
 
 const handleRenameConfirm = async () => {
   if (!renameValue.value.trim()) {
-    ElMessage.warning(t('albums.albumNameCannotBeEmpty'));
+    ElMessage.warning(t("albums.albumNameCannotBeEmpty"));
     return;
   }
   if (renameValue.value.trim() === props.album.name) {
@@ -139,13 +175,11 @@ const handleRenameConfirm = async () => {
   try {
     await albumStore.renameAlbum(props.album.id, renameValue.value.trim());
     isRenaming.value = false;
-    ElMessage.success(t('albums.renameSuccess'));
+    ElMessage.success(t("albums.renameSuccess"));
   } catch (error: any) {
     console.error("重命名失败:", error);
-    // 提取友好的错误信息
-    const errorMessage = typeof error === "string" 
-      ? error 
-      : error?.message || String(error) || "未知错误";
+    const errorMessage =
+      typeof error === "string" ? error : error?.message || String(error) || "未知错误";
     ElMessage.error(errorMessage);
     renameValue.value = props.album.name;
   }
@@ -161,22 +195,24 @@ const handleRenameCancel = () => {
 };
 
 const heroIndex = ref(0);
-// 桌面最多 3 张，安卓 1 张（与 Albums 页加载数量一致，无左右箭头）
 const heroMaxSlots = IS_ANDROID ? 1 : 3;
-const heroAll = computed(() => {
-  const urls = props.previewUrls.slice(0, heroMaxSlots);
-  while (urls.length < heroMaxSlots) {
-    urls.push("");
+
+const heroSlots = computed(() => {
+  const out: { key: string; image: ImageInfo | null; hasContent: boolean }[] = [];
+  for (let idx = 0; idx < heroMaxSlots; idx++) {
+    const img = props.previewImages[idx];
+    const hasContent = !!(img && hasRenderablePreview(img));
+    out.push({
+      key: img?.id ?? `empty-${idx}`,
+      image: hasContent && img ? img : null,
+      hasContent,
+    });
   }
-  return urls;
+  return out;
 });
 
-// 计算实际有效图片数量（非空 URL）
-const actualImageCount = computed(() => {
-  return props.previewUrls.slice(0, heroMaxSlots).filter(url => url).length;
-});
+const actualImageCount = computed(() => heroSlots.value.filter((s) => s.hasContent).length);
 
-// 展示数量：有有效预览用实际数量，加载中用 heroMaxSlots 占位
 const heroDisplayCount = computed(() => {
   const actualCount = actualImageCount.value;
   if (actualCount > 0) return actualCount;
@@ -184,24 +220,21 @@ const heroDisplayCount = computed(() => {
   return 0;
 });
 
-const heroClass = (idx: number, url: string) => {
+const heroClass = (idx: number, hasContent: boolean) => {
   const displayCount = heroDisplayCount.value;
 
-  // 如果只有1张图，只显示第一张居中
   if (displayCount === 1) {
     const pos = idx === 0 ? "is-center" : "is-hidden";
-    const state = url ? "has-url" : (props.loadingStates?.[idx] ? "is-placeholder" : "is-empty-url");
+    const state = hasContent ? "has-url" : "is-empty-url";
     return `${pos} ${state}`;
   }
 
-  // 如果只有2张图，显示第一张居中，第二张在右边，不轮转
   if (displayCount === 2) {
     const pos = idx === 0 ? "is-center" : idx === 1 ? "is-right" : "is-hidden";
-    const state = url ? "has-url" : (props.loadingStates?.[idx] ? "is-placeholder" : "is-empty-url");
+    const state = hasContent ? "has-url" : "is-empty-url";
     return `${pos} ${state}`;
   }
 
-  // 3张及以上，正常轮转，但只在有效图片范围内轮转
   if (displayCount <= 0) {
     return "is-hidden is-empty-url";
   }
@@ -216,13 +249,9 @@ const heroClass = (idx: number, url: string) => {
   else if (idx === left) pos = "is-left";
   else if (idx === right) pos = "is-right";
 
-  const state = url ? "has-url" : (props.loadingStates?.[idx] ? "is-placeholder" : "is-empty-url");
+  const state = hasContent ? "has-url" : "is-empty-url";
   return `${pos} ${state}`;
 };
-
-const heroStyle = (url: string) => ({
-  backgroundImage: `url(${url})`,
-});
 
 const formatDate = (ts?: number) => {
   if (!ts) return "";
@@ -264,36 +293,41 @@ const formatDate = (ts?: number) => {
     position: absolute;
     width: 70%;
     height: 70%;
-    background-size: cover;
-    background-position: center;
     border-radius: 14px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
     overflow: hidden;
     isolation: isolate;
-    transition: transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.45s ease, filter 0.35s ease;
+    transition: transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.45s ease, filter 0.45s ease;
     opacity: 0;
+    display: flex;
+    align-items: stretch;
+    justify-content: stretch;
 
-    /* 加载占位（体验对齐画廊图片骨架屏）：先盖一层 shimmer，URL 到了再淡出 */
-    &::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(90deg,
-          rgba(255, 255, 255, 0.08),
-          rgba(255, 255, 255, 0.45),
-          rgba(255, 255, 255, 0.08));
-      background-size: 200% 100%;
-      opacity: 0;
-      transition: opacity 0.25s ease;
-      z-index: 1;
+    /* ImageItem 填满 hero 格，并弱化画廊默认边框/阴影 */
+    :deep(.album-hero-image-item.image-item) {
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      border: none;
+      box-shadow: none;
+      outline: none;
+      background: transparent;
+      border-radius: 14px;
     }
 
-    &.is-placeholder::before {
-      opacity: 1;
-      animation: heroShimmer 1.1s ease-in-out infinite;
+    html:not(.platform-android) &:deep(.album-hero-image-item.image-item:hover) {
+      outline: none;
     }
 
-    /* 没有 URL 且也不是加载中的占位：直接隐藏，避免空白块闪一下 */
+    :deep(.image-wrapper) {
+      border-radius: 14px;
+    }
+
+    :deep(.thumbnail) {
+      object-fit: cover;
+    }
+
     &.is-empty-url {
       opacity: 0 !important;
       filter: blur(2px);
@@ -367,17 +401,6 @@ const formatDate = (ts?: number) => {
     }
   }
 
-  .hero-loading {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.5);
-    border-radius: 14px;
-    z-index: 2;
-  }
-
   .hero-loading-full {
     position: absolute;
     inset: 0;
@@ -402,16 +425,6 @@ const formatDate = (ts?: number) => {
 
     to {
       transform: rotate(360deg);
-    }
-  }
-
-  @keyframes heroShimmer {
-    0% {
-      background-position: 0% 0%;
-    }
-
-    100% {
-      background-position: 200% 0%;
     }
   }
 
