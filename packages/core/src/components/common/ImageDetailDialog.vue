@@ -31,21 +31,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject } from "vue";
+import { computed } from "vue";
+import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ElMessage } from "element-plus";
 import { IS_ANDROID } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { useModalBack } from "../../composables/useModalBack";
-import type { PluginManifestText } from "../../stores/plugins";
 
-type TranslateFn = (key: string) => string;
-const t = inject<TranslateFn>("i18n-t") ?? ((k: string) => k);
-const localeRef = inject<{ value: string }>("i18n-locale");
-const resolveManifestText = inject<
-  (value: PluginManifestText | null | undefined) => string
->("resolveManifestText");
+const { t, locale } = useI18n();
 
 const toLocaleTag = (loc: string) => {
   if (loc.startsWith("zh")) return loc === "zhtw" ? "zh-TW" : "zh-CN";
@@ -86,7 +81,7 @@ const getPluginName = (pluginId?: string) => {
   if (!plugin) return pluginId;
   const raw = plugin.name;
   if (!raw || typeof raw !== "object") return (raw as string) || pluginId;
-  return resolveManifestText ? resolveManifestText(raw) : (raw["default"] ?? pluginId) || pluginId;
+  return resolveManifestText(raw, locale.value) || (raw["default"] ?? pluginId) || pluginId;
 };
 
 const formatDate = (timestamp?: number) => {
@@ -97,7 +92,7 @@ const formatDate = (timestamp?: number) => {
   const ms = ts > 1e11 ? ts : ts * 1000;
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return t("gallery.imageDetailInvalidDate");
-  const loc = localeRef?.value ?? "zh";
+  const loc = locale.value ?? "zh";
   return d.toLocaleString(toLocaleTag(loc));
 };
 

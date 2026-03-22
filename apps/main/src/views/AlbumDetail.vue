@@ -5,13 +5,35 @@
       :loading="loading || isRefreshing" :loading-overlay="loading || isRefreshing" :actions="imageActions"
       :on-context-command="handleImageMenuCommand" hide-scrollbar @added-to-album="handleAddedToAlbum">
 
+      <template #empty>
+        <div class="album-empty fade-in">
+          <template v-if="isAlbumWallpaperFilterEmpty">
+            <EmptyState :primary-tip="t('gallery.wallpaperOrderEmptyTip')" />
+            <el-button type="primary" class="empty-action-btn" @click="handleAlbumWallpaperEmptyViewAll">
+              <el-icon>
+                <Picture />
+              </el-icon>
+              {{ t("gallery.viewAllImages") }}
+            </el-button>
+          </template>
+          <template v-else>
+            <EmptyState />
+          </template>
+        </div>
+      </template>
+
       <template #before-grid>
         <AlbumDetailPageHeader :album-name="albumName" :total-images-count="totalImagesCount" :is-renaming="isRenaming"
           v-model:editing-name="editingName" :album-drive-enabled="albumDriveEnabled"
+          include-browse-controls
           @view-vd="openVirtualDriveAlbumFolder" @refresh="handleRefresh"
           @set-wallpaper-rotate="handleSetAsWallpaperCarousel" @delete-album="handleDeleteAlbum" @help="openHelpDrawer"
           @quick-settings="openQuickSettings" @back="goBack" @start-rename="handleStartRename"
-          @confirm-rename="handleRenameConfirm" @cancel-rename="handleRenameCancel" />
+          @confirm-rename="handleRenameConfirm" @cancel-rename="handleRenameCancel"
+          @open-browse-filter="albumBrowseToolbarRef?.openFilterPicker()"
+          @open-browse-sort="albumBrowseToolbarRef?.openSortPicker()" />
+
+        <AlbumDetailBrowseToolbar ref="albumBrowseToolbarRef" :current-provider-path="currentPath" />
 
         <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
           :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToPage" />
@@ -36,7 +58,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Delete, Star, StarFilled, FolderAdd } from "@element-plus/icons-vue";
+import { Delete, Star, StarFilled, FolderAdd, Picture } from "@element-plus/icons-vue";
 import { createImageActions } from "@/actions/imageActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
@@ -48,6 +70,8 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import AlbumDetailPageHeader from "@/components/header/AlbumDetailPageHeader.vue";
+import AlbumDetailBrowseToolbar from "@/components/AlbumDetailBrowseToolbar.vue";
+import EmptyState from "@/components/common/EmptyState.vue";
 import { IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
@@ -65,6 +89,13 @@ import { useImageOperations } from "@/composables/useImageOperations";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
+import {
+  buildAlbumBrowsePath,
+  parseAlbumBrowsePath,
+  isAlbumWallpaperFilterPath,
+  type AlbumBrowseFilter,
+  type AlbumBrowseSort,
+} from "@/utils/albumPath";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
@@ -72,7 +103,7 @@ import { diffById } from "@/utils/listDiff";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 
 const route = useRoute();
 const { t } = useI18n();
@@ -133,7 +164,13 @@ const images = ref<ImageInfo[]>([]);
 let leafAllImages: ImageInfo[] = [];
 const totalImagesCount = ref<number>(0);
 const albumViewRef = ref<any>(null);
+const albumBrowseToolbarRef = ref<{ openFilterPicker: () => void; openSortPicker: () => void } | null>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
+
+/** 画册详情 browse path 三元状态（不持久化），与 query.path 双向同步 */
+const albumBrowsePage = ref(1);
+const albumBrowseFilter = ref<AlbumBrowseFilter>("all");
+const albumBrowseSort = ref<AlbumBrowseSort>("time-asc");
 
 // 本地计算的 provider root path，用于初始化
 const localProviderRootPath = computed(() => {
@@ -144,6 +181,17 @@ const localProviderRootPath = computed(() => {
 
 // leaf 分页：安卓与桌面统一每页 100 张，无虚拟滚动
 const BIG_PAGE_SIZE = 100;
+
+const albumDetailDefaultPath = computed(() => {
+  if (!albumId.value) return "album//1";
+  return buildAlbumBrowsePath(
+    albumId.value,
+    albumBrowseFilter.value,
+    albumBrowseSort.value,
+    albumBrowsePage.value
+  );
+});
+
 const {
   currentPath,
   currentPage,
@@ -153,8 +201,25 @@ const {
 } = useProviderPathRoute({
   route,
   router,
-  defaultPath: computed(() => `album/${albumId.value}/1`),
+  defaultPath: albumDetailDefaultPath,
 });
+
+const isAlbumWallpaperFilterEmpty = computed(() =>
+  isAlbumWallpaperFilterPath(currentPath.value)
+);
+
+const handleAlbumWallpaperEmptyViewAll = async () => {
+  const next = buildAlbumBrowsePath(
+    albumId.value,
+    "all",
+    albumBrowseSort.value,
+    1
+  );
+  await router.replace({
+    path: route.path,
+    query: { ...route.query, path: next },
+  });
+};
 
 const handleJumpToPage = async (page: number) => {
   await navigateToPage(page);
@@ -167,6 +232,12 @@ watch(
     if (!albumId.value) return;
     if (!albumName.value) return;
     if (!newPath) return;
+    const p = parseAlbumBrowsePath(newPath);
+    if (p && p.albumId === albumId.value) {
+      albumBrowsePage.value = p.page;
+      albumBrowseFilter.value = p.filter;
+      albumBrowseSort.value = p.sort;
+    }
     await loadAlbum({ reset: true });
   },
   { immediate: true }
@@ -746,6 +817,9 @@ const initAlbum = async (newAlbumId: string) => {
   clearSelection();
 
   albumId.value = newAlbumId;
+  albumBrowsePage.value = 1;
+  albumBrowseFilter.value = "all";
+  albumBrowseSort.value = "time-asc";
   await albumStore.loadAlbums();
   const found = albumStore.albums.find((a) => a.id === newAlbumId);
   albumName.value = found?.name || "画册";
@@ -1017,6 +1091,18 @@ onBeforeUnmount(() => {
   flex-direction: column;
   padding: 16px;
   overflow: hidden;
+
+  .album-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 24px 16px;
+
+    .empty-action-btn {
+      margin-top: 4px;
+    }
+  }
 
   .count {
     color: var(--anime-text-muted);

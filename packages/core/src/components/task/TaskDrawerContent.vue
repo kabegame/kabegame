@@ -21,7 +21,7 @@
               <div class="download-info">
                 <div class="download-url" :title="download.url">{{ download.url }}</div>
                 <div class="download-meta">
-                  <el-tag size="small" type="info">{{ download.plugin_id }}</el-tag>
+                  <el-tag size="small" type="info">{{ getPluginName(download.plugin_id) }}</el-tag>
                   <el-tag size="small" type="warning">native</el-tag>
                   <el-tag size="small" :type="downloadStateTagType(download)">
                     {{ downloadStateText(download) }}
@@ -38,7 +38,7 @@
               <div class="download-info">
                 <div class="download-url" :title="download.url">{{ download.url }}</div>
                 <div class="download-meta">
-                  <el-tag size="small" type="info">{{ download.plugin_id }}</el-tag>
+                  <el-tag size="small" type="info">{{ getPluginName(download.plugin_id) }}</el-tag>
                   <el-tag size="small" :type="downloadStateTagType(download)">
                     {{ downloadStateText(download) }}
                   </el-tag>
@@ -198,7 +198,7 @@
         <div v-for="log in currentTaskLogs" :key="log.id" class="task-log-entry" :class="`log-level-${log.level}`">
           <div class="task-log-main">
             <el-tag :type="logLevelTagType(log.level)" size="small">{{ log.level }}</el-tag>
-            <span class="log-content">{{ log.content }}</span>
+            <span class="log-content">{{ formatTaskLogLine(log.content) }}</span>
           </div>
           <div class="task-log-time-row">
             <span class="log-time">{{ formatLogTime(log.time) }}</span>
@@ -210,24 +210,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { ElMessage } from "element-plus";
 import { ArrowDown, Clock, Close, CopyDocument, Document, Picture, WarningFilled } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useModalBack } from "../../composables/useModalBack";
-import type { PluginManifestText, PluginConfigText } from "../../stores/plugins";
+import { usePluginStore } from "../../stores/plugins";
+import type { PluginConfigText, PluginManifestText } from "../../stores/plugins";
 import { matchesPluginVarWhen } from "../../utils/pluginVarWhen";
 
-type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
-const t = inject<TranslateFn>("i18n-t") ?? ((k: string) => k);
-const localeRef = inject<{ value: string }>("i18n-locale");
-const resolveManifestText = inject<
-  (value: PluginManifestText | null | undefined) => string
->("resolveManifestText");
-const resolveConfigText = inject<
-  (value: PluginConfigText | string | null | undefined) => string
->("resolveConfigText") ?? ((v: PluginConfigText | string | null | undefined) =>
-  (typeof v === "string" ? v : (v && typeof v === "object" ? (v as Record<string, string>).default ?? "" : "")));
+const { t, locale } = useI18n();
+const pluginStore = usePluginStore();
 
 type VarOption = string | { name: PluginConfigText | string; variable: string };
 type PluginVarMeta = {
@@ -305,7 +299,7 @@ type TaskLogEventPayload = {
 const props = withDefaults(
   defineProps<{
     tasks: ScriptTask[];
-    plugins?: Array<{ id: string; name?: string }>;
+    plugins?: Array<{ id: string; name?: PluginManifestText }>;
     /** active=false 时停止下载轮询与事件监听（main drawer 关闭时用） */
     active?: boolean;
     /** 可关闭右键菜单 */
@@ -726,14 +720,7 @@ const syncDownloadsOnDrawerOpen = async () => {
   await loadDownloads();
 };
 
-const getPluginName = (pluginId: string) => {
-  if (pluginId === "local-import") return t("tasks.drawerLocalImport");
-  const plugin = (props.plugins || []).find((p) => p.id === pluginId);
-  if (!plugin) return pluginId;
-  const raw = plugin.name;
-  if (!raw || typeof raw !== "object") return pluginId;
-  return resolveManifestText ? resolveManifestText(raw) : (raw["default"] ?? pluginId) || pluginId;
-};
+const getPluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
 
 const toLocaleTag = (loc: string) => {
   if (loc.startsWith("zh")) return loc === "zhtw" ? "zh-TW" : "zh-CN";
@@ -742,7 +729,7 @@ const toLocaleTag = (loc: string) => {
 
 const formatDate = (timestamp: number) => {
   const ms = timestamp > 1e12 ? timestamp : timestamp * 1000;
-  const loc = localeRef?.value ?? "zh";
+  const loc = locale.value ?? "zh";
   return new Date(ms).toLocaleString(toLocaleTag(loc));
 };
 
@@ -759,8 +746,31 @@ const formatDuration = (startTime: number, endTime?: number) => {
 };
 
 const formatLogTime = (timestamp: number) => {
-  const loc = localeRef?.value ?? "zh";
+  const loc = locale.value ?? "zh";
   return new Date(Number(timestamp || 0)).toLocaleString(toLocaleTag(loc));
+};
+
+/** 后端写入的 JSON i18n 载荷或非插件明文日志；插件日志为普通字符串原样显示 */
+const formatTaskLogLine = (raw: string) => {
+  void locale.value;
+  const s = String(raw ?? "").trim();
+  if (!s.startsWith("{")) return s;
+  try {
+    const o = JSON.parse(s) as { _i18n?: { k?: string; p?: Record<string, unknown> } };
+    const k = o?._i18n?.k;
+    if (!k || typeof k !== "string") return s;
+    const p = o._i18n?.p;
+    const params: Record<string, string | number> = {};
+    if (p && typeof p === "object" && !Array.isArray(p)) {
+      for (const [key, val] of Object.entries(p)) {
+        if (typeof val === "string" || typeof val === "number") params[key] = val;
+        else if (val != null) params[key] = String(val);
+      }
+    }
+    return t(`tasks.${k}`, params);
+  } catch {
+    return s;
+  }
 };
 
 const logLevelTagType = (level: string): "info" | "warning" | "danger" | "success" => {
@@ -857,7 +867,7 @@ const ensurePluginVars = async (pluginId: string) => {
 
 const getVarDisplayName = (pluginId: string, key: string) =>
   (pluginId === "local-import" && getBuiltinLocalImportMeta()[key]?.name) ||
-  resolveConfigText(pluginVarMetaMap.value[pluginId]?.[key]?.name) ||
+  resolveConfigText(pluginVarMetaMap.value[pluginId]?.[key]?.name, locale.value) ||
   key;
 
 /** 与运行表单一致：按 when 过滤；无定义或未知键仍展示（便于排查）。 */
@@ -882,20 +892,20 @@ const formatConfigValue = (pluginId: string, key: string, value: any, raw = fals
       return t("tasks.drawerPathsCount", { n: value.length });
     }
     return value
-      .map((v) => (raw ? String(v) : (typeof v === "string" ? resolveConfigText(map[v]) || v : String(v))))
+      .map((v) => (raw ? String(v) : (typeof v === "string" ? resolveConfigText(map[v], locale.value) || v : String(v))))
       .join(", ");
   }
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, any>);
     if (entries.length > 0 && entries.every(([, v]) => typeof v === "boolean")) {
       const selected = entries.filter(([, v]) => v === true).map(([k]) => k);
-      const out = raw ? selected : selected.map((v) => resolveConfigText(map[v]) || v);
+      const out = raw ? selected : selected.map((v) => resolveConfigText(map[v], locale.value) || v);
       return out.length > 0 ? out.join(", ") : (raw ? "" : t("tasks.drawerUnselected"));
     }
     return JSON.stringify(value, null, 2);
   }
   const s = String(value);
-  return raw ? s : (resolveConfigText(map[s]) || s);
+  return raw ? s : (resolveConfigText(map[s], locale.value) || s);
 };
 
 async function toggleTaskExpand(taskId: string, pluginId: string) {

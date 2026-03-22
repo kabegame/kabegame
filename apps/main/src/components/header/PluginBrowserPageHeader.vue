@@ -9,7 +9,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_ANDROID } from "@kabegame/core/env";
@@ -27,14 +27,14 @@ const emit = defineEmits<{
 // 计算显示和折叠的feature ID
 const showIds = computed(() => {
   if (IS_ANDROID) {
-    return [HeaderFeatureId.ImportSource];
+    return [];
   } else {
     return [HeaderFeatureId.Refresh, HeaderFeatureId.ImportSource, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings];
   }
 });
 
 const foldIds = computed(() => {
-  return IS_ANDROID ? [HeaderFeatureId.Refresh, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings, HeaderFeatureId.ManageSources] : [];
+  return IS_ANDROID ? [HeaderFeatureId.Refresh, HeaderFeatureId.ImportSource, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings, HeaderFeatureId.ManageSources] : [];
 });
 
 // 处理action事件

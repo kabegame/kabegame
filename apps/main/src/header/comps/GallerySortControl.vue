@@ -11,11 +11,17 @@
     </el-button>
     <template #dropdown>
       <el-dropdown-menu>
-        <el-dropdown-item command="asc" :class="{ 'is-active': sortOrder === 'asc' }">
-          {{ t('gallery.byTimeAsc') }}
+        <el-dropdown-item
+          command="asc"
+          :class="{ 'is-active': sortOrder === 'asc' }"
+        >
+          {{ sortAscLabel }}
         </el-dropdown-item>
-        <el-dropdown-item command="desc" :class="{ 'is-active': sortOrder === 'desc' }">
-          {{ t('gallery.byTimeDesc') }}
+        <el-dropdown-item
+          command="desc"
+          :class="{ 'is-active': sortOrder === 'desc' }"
+        >
+          {{ sortDescLabel }}
         </el-dropdown-item>
       </el-dropdown-menu>
     </template>
@@ -24,16 +30,21 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 import { useRoute, useRouter } from "vue-router";
 import { ArrowDown, Sort } from "@element-plus/icons-vue";
 import { useGalleryPathState } from "@/composables/useGalleryPathState";
-import { DEFAULT_GALLERY_PATH, galleryPathWithSortOnly } from "@/utils/galleryPath";
+import {
+  DEFAULT_GALLERY_PATH,
+  galleryPathWithSortOnly,
+  parseGalleryPath,
+} from "@/utils/galleryPath";
 
 const route = useRoute();
 const router = useRouter();
 
-const { providerPath: galleryProviderPath } = useGalleryPathState();
+const { providerPath: galleryProviderPath, sort: gallerySortPref } =
+  useGalleryPathState();
 
 /** 与 useProviderPathRoute 一致：无 query.path 时用 root/sort/page 算出的 providerPath */
 const effectiveGalleryPath = computed(() => {
@@ -53,13 +64,43 @@ const sortOrder = computed<"asc" | "desc">(() =>
   currentPath.value.includes("/desc/") ? "desc" : "asc"
 );
 
-const { t } = useI18n();
-const sortLabel = computed(() =>
-  sortOrder.value === "desc" ? t("gallery.byTimeDesc") : t("gallery.byTimeAsc")
+const parsedRoot = computed(() => parseGalleryPath(currentPath.value).root);
+
+const isWallpaperOrderRoot = computed(
+  () => parsedRoot.value === "wallpaper-order"
 );
+
+const { t } = useI18n();
+
+const sortAscLabel = computed(() =>
+  isWallpaperOrderRoot.value
+    ? t("gallery.bySetTimeAsc")
+    : t("gallery.byTimeAsc")
+);
+
+const sortDescLabel = computed(() =>
+  isWallpaperOrderRoot.value
+    ? t("gallery.bySetTimeDesc")
+    : t("gallery.byTimeDesc")
+);
+
+const sortLabel = computed(() => {
+  if (gallerySortPref.value === "" && parsedRoot.value === "all") {
+    return t("common.selectPlaceholder");
+  }
+  if (isWallpaperOrderRoot.value) {
+    return sortOrder.value === "desc"
+      ? t("gallery.bySetTimeDesc")
+      : t("gallery.bySetTimeAsc");
+  }
+  return sortOrder.value === "desc"
+    ? t("gallery.byTimeDesc")
+    : t("gallery.byTimeAsc");
+});
 
 function handleCommand(command: string) {
   const sort = command === "desc" ? "desc" : "asc";
+  gallerySortPref.value = sort;
   const next = galleryPathWithSortOnly(currentPath.value, sort);
   void router.push({ path: "/gallery", query: { path: next } });
 }

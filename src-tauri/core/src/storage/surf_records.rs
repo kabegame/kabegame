@@ -349,7 +349,8 @@ impl Storage {
              images.width,
              images.height,
              images.display_name,
-             COALESCE(images.type, 'image') as media_type
+             COALESCE(images.type, 'image') as media_type,
+             images.last_set_wallpaper_at
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
              WHERE images.surf_record_id = ?1
@@ -385,6 +386,7 @@ impl Storage {
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
                         media_type: row.get::<_, Option<String>>(14)?,
+                        last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
                     })
                 },
             )
@@ -416,7 +418,8 @@ impl Storage {
              images.width,
              images.height,
              images.display_name,
-             COALESCE(images.type, 'image') as media_type
+             COALESCE(images.type, 'image') as media_type,
+             images.last_set_wallpaper_at
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
              WHERE images.surf_record_id = ?1
@@ -447,6 +450,7 @@ impl Storage {
                     height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                     display_name: row.get(13)?,
                     media_type: row.get::<_, Option<String>>(14)?,
+                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
                 })
             })
             .optional()

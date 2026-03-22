@@ -18,29 +18,29 @@
 
         <div class="body">
             <el-descriptions :column="1" border>
-                <el-descriptions-item label="插件ID">
+                <el-descriptions-item :label="t('plugins.detailPluginIdLabel')">
                     <div class="plugin-id-container">
                         <span class="plugin-id-text">{{ pluginId }}</span>
                         <template v-if="showCopyId">
                             <slot name="copy-id-button" :plugin-id="pluginId">
-                                <el-button circle size="small" title="复制插件ID" @click="$emit('copy-id', pluginId)">
-                                    复制
+                                <el-button circle size="small" :title="t('plugins.detailCopyId')" @click="$emit('copy-id', pluginId)">
+                                    {{ t('plugins.detailCopyAction') }}
                                 </el-button>
                             </slot>
                         </template>
                     </div>
                 </el-descriptions-item>
 
-                <el-descriptions-item label="名称">
+                <el-descriptions-item :label="t('plugins.detailNameLabel')">
                     {{ name }}
                 </el-descriptions-item>
 
-                <el-descriptions-item v-if="version" label="版本">
+                <el-descriptions-item v-if="version" :label="t('plugins.detailVersionLabel')">
                     {{ version }}
                 </el-descriptions-item>
 
-                <el-descriptions-item label="描述">
-                    {{ description || "无描述" }}
+                <el-descriptions-item :label="t('plugins.detailDescriptionLabel')">
+                    {{ description || t('plugins.noDescription') }}
                 </el-descriptions-item>
 
                 <el-descriptions-item :label="t('plugins.detailStatusLabel')">
@@ -48,7 +48,7 @@
                     <el-tag v-else type="info">{{ t('plugins.notInstalled') }}</el-tag>
                 </el-descriptions-item>
 
-                <el-descriptions-item v-if="baseUrl" label="爬取地址">
+                <el-descriptions-item v-if="baseUrl" :label="t('plugins.detailCrawlUrlLabel')">
                     <span class="source-url-link" role="button" @click="handleOpenBaseUrl(baseUrl)">
                         {{ baseUrl }}
                     </span>
@@ -59,9 +59,17 @@
 
             <div class="actions">
                 <slot name="actions">
-                    <el-button v-if="showPrimaryAction && !installed" type="primary" :loading="primaryActionLoading"
+                    <el-button v-if="showPrimaryAction && !installed" type="primary"
+                        :class="{ 'plugin-detail-install-btn--progress': primaryActionProgressPercent != null }"
+                        :loading="primaryActionLoading && primaryActionProgressPercent == null"
                         :disabled="primaryActionLoading || primaryActionDisabled" @click="$emit('primary-action')">
-                        {{ primaryActionText || "安装" }}
+                        <span v-if="primaryActionProgressPercent != null" class="plugin-detail-install-btn__fill-wrap">
+                            <span class="plugin-detail-install-btn__fill"
+                                :style="{ width: `${Math.min(100, Math.max(0, primaryActionProgressPercent))}%` }" />
+                            <span class="plugin-detail-install-btn__label">{{ primaryActionText || t('plugins.install')
+                            }}</span>
+                        </span>
+                        <span v-else>{{ primaryActionText || t('plugins.install') }}</span>
                     </el-button>
                 </slot>
             </div>
@@ -70,19 +78,18 @@
 </template>
 
 <script setup lang="ts">
-import { inject } from "vue";
+import { useI18n } from "@kabegame/i18n";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ElMessage } from "element-plus";
 
-type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
-const t = inject<TranslateFn>("i18n-t") ?? ((k: string) => k);
+const { t } = useI18n();
 
 const handleOpenBaseUrl = async (url: string) => {
   try {
     await openUrl(url);
   } catch (error) {
     console.error("打开链接失败:", error);
-    ElMessage.error("打开链接失败");
+    ElMessage.error(t("common.openUrlFailed"));
   }
 };
 
@@ -100,6 +107,8 @@ defineProps<{
     primaryActionText?: string;
     primaryActionLoading?: boolean;
     primaryActionDisabled?: boolean;
+    /** 商店下载进度 0–100，有值时主按钮显示流式进度条 */
+    primaryActionProgressPercent?: number | null;
 }>();
 
 defineEmits<{
@@ -194,5 +203,49 @@ defineEmits<{
     display: flex;
     align-items: center;
     gap: 10px;
+
+    .plugin-detail-install-btn--progress {
+        position: relative;
+        overflow: hidden;
+        padding: 5px 14px;
+        min-width: 132px;
+    }
+
+    .plugin-detail-install-btn__fill-wrap {
+        position: relative;
+        display: block;
+        width: 100%;
+        min-width: 104px;
+        min-height: 22px;
+        border-radius: 4px;
+        overflow: hidden;
+        background: rgba(0, 0, 0, 0.14);
+    }
+
+    .plugin-detail-install-btn__fill {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 0;
+        border-radius: 0 3px 3px 0;
+        pointer-events: none;
+        transition: width 0.22s ease-out;
+        z-index: 0;
+        background: linear-gradient(90deg,
+                rgba(255, 255, 255, 0.52) 0%,
+                rgba(255, 255, 255, 0.22) 100%);
+    }
+
+    .plugin-detail-install-btn__label {
+        position: relative;
+        z-index: 1;
+        display: block;
+        font-size: 12px;
+        line-height: 22px;
+        text-align: center;
+        white-space: nowrap;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    }
 }
 </style>

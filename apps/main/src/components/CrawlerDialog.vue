@@ -35,10 +35,16 @@
                         @update:model-value="onPluginChange"
                     >
                         <template #option="{ option }">
-                            <span class="plugin-picker-option-label">{{ option.label }}</span>
-                            <el-icon v-if="option.warning" class="plugin-picker-option-warning" :title="$t('plugins.androidNotSupported')">
-                                <WarningFilled />
-                            </el-icon>
+                            <div class="plugin-option">
+                                <img v-if="option.iconSrc" :src="option.iconSrc" class="plugin-option-icon" alt="" />
+                                <el-icon v-else class="plugin-option-icon-placeholder">
+                                    <Grid />
+                                </el-icon>
+                                <span class="plugin-picker-option-label">{{ option.label }}</span>
+                                <el-icon v-if="option.warning" class="plugin-picker-option-warning" :title="$t('plugins.androidNotSupported')">
+                                    <WarningFilled />
+                                </el-icon>
+                            </div>
                         </template>
                     </AndroidPickerSelect>
                     <el-icon v-if="isSelectedPluginJs" class="plugin-js-warning-icon" :title="$t('plugins.jsPluginAndroidNotSupportedTitle')">
@@ -271,14 +277,12 @@
 
 <script setup lang="ts">
 import { computed, watch, ref, nextTick } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n, usePluginManifestI18n, usePluginConfigI18n } from "@kabegame/i18n";
 import { FolderOpened, Grid, WarningFilled } from "@element-plus/icons-vue";
 import { ElDialog } from "element-plus";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
-import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
-import { usePluginConfigI18n } from "@/composables/usePluginConfigI18n";
 import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
 import { useCrawlerStore } from "@/stores/crawler";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
@@ -449,6 +453,7 @@ const pluginPickerOptions = computed(() =>
         label: pluginName(p),
         value: p.id,
         warning: p.scriptType === "js",
+        iconSrc: props.pluginIcons[p.id],
     }))
 );
 
@@ -872,6 +877,11 @@ watch(selectedOutputAlbumId, (newValue) => {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+:deep(.android-picker-select__list-item) .plugin-option {
+    width: 100%;
+    min-width: 0;
 }
 
 .plugin-option-icon {

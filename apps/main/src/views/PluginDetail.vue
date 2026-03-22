@@ -2,31 +2,40 @@
     <!-- TODO: 这里AI写的代码太乱，不能细看 -->
     <PluginDetailPage :title="(plugin ? pluginName(plugin) : '') || t('plugins.pluginDetailTitle')" :show-back="true" :loading="loading" :show-skeleton="showSkeleton"
         :plugin="plugin" :installed="isInstalled" :installing="installing" :show-uninstall="true"
+        :install-progress-percent="storeInstallProgressPercent"
+        :installing-text="installingButtonText"
         :load-doc-image-bytes="loadDocImageBytes" :doc-image-base-url="docImageBaseUrl" @back="goBack" @install="handleInstall" @uninstall="handleUninstall"
         @copy-id="handleCopyPluginId" />
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { useI18n } from "vue-i18n";
+import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { usePluginStore } from "@/stores/plugins";
-import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
 import PluginDetailPage from "@kabegame/core/components/plugin/PluginDetailPage.vue";
-import type { BrowserPlugin } from "@kabegame/core/stores/plugins";
+import type { BrowserPlugin, PluginManifestText } from "@kabegame/core/stores/plugins";
 
 interface PluginDetailDto {
     id: string;
-    name: string;
-    desp: string;
+    name: PluginManifestText;
+    desp: PluginManifestText;
+    version?: string | null;
     /** 文档多语言：{ default, zh?, en?, ... } */
     doc?: Record<string, string> | null;
     iconData?: number[] | null;
     origin: "installed" | "remote" | string;
     baseUrl?: string | null;
+}
+
+interface StoreDownloadProgressPayload {
+    sourceId: string;
+    pluginId: string;
+    percent: number;
+    error?: string | null;
 }
 
 interface ImportPreview {
@@ -62,6 +71,26 @@ const showSkeleton = ref(false); // 控制是否显示骨架屏（延迟300ms显
 const skeletonTimer = ref<ReturnType<typeof setTimeout> | null>(null);
 const plugin = ref<BrowserPlugin | null>(null);
 const installing = ref(false);
+/** 与商店列表一致：sourceId::pluginId，用于 plugin-store-download-progress */
+const storeInstallProgressPercent = ref<number | null>(null);
+let unlistenStoreDownloadProgress: (() => void) | undefined;
+
+const pluginIdDecoded = computed(() => decodeURIComponent(route.params.id as string));
+
+const installingButtonText = computed(() => {
+    if (installing.value && storeInstallProgressPercent.value != null) {
+        const p = Math.min(100, Math.max(0, Math.round(storeInstallProgressPercent.value)));
+        return t("plugins.installingWithPercent", { percent: p });
+    }
+    return t("plugins.installing");
+});
+
+const formatBytes = (bytes: number) => {
+    if (!bytes || bytes <= 0) return "0 B";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round((bytes / 1024) * 10) / 10} KB`;
+    return `${Math.round((bytes / 1024 / 1024) * 100) / 100} MB`;
+};
 
 const downloadUrl = computed(() => (typeof route.query.downloadUrl === "string" ? route.query.downloadUrl : null));
 const sha256 = computed(() => (typeof route.query.sha256 === "string" ? route.query.sha256 : null));
@@ -74,6 +103,11 @@ const sizeBytes = computed(() => {
 });
 const sourceId = computed(() => (typeof route.query.sourceId === "string" ? route.query.sourceId : null));
 const version = computed(() => (typeof route.query.version === "string" ? route.query.version : null));
+
+/** 与 Rust preview_store_install 中 source_for_key 一致（无 sourceId 时为 "_"） */
+const storeProgressKey = computed(
+    () => `${sourceId.value ?? "_"}::${pluginIdDecoded.value}`,
+);
 
 const isInstalled = computed(() => {
     if (!plugin.value) return false;
@@ -100,9 +134,12 @@ const loadPlugin = async () => {
     // 先检查缓存
     const cached = pluginStore.getCachedPluginDetail(cacheKey);
     if (cached) {
-        // 缓存命中，直接使用，不需要 loading
+        // 缓存命中，直接使用，不需要 loading（路由上的版本号仍可补全旧缓存）
         console.log(`[缓存命中] 插件 key: ${cacheKey}`);
-        plugin.value = cached;
+        plugin.value = {
+            ...cached,
+            version: cached.version ?? version.value ?? undefined,
+        };
         loading.value = false;
         showSkeleton.value = false;
         return;
@@ -142,6 +179,7 @@ const loadPlugin = async () => {
             id: detail.id,
             name: detail.name,
             desp: detail.desp,
+            version: detail.version ?? version.value ?? undefined,
             icon,
             doc: detail.doc ?? undefined,
             baseUrl: detail.baseUrl ?? undefined,
@@ -156,7 +194,7 @@ const loadPlugin = async () => {
         console.error("加载源失败:", error);
         // 如果用户已经离开“源详情”页：不要再弹窗/跳转（避免打断其他页面的正常导航）
         if (isOnPluginDetailRoute.value) {
-            ElMessage.error("加载源失败");
+            ElMessage.error(t("plugins.loadPluginFailed"));
             goBack();
         }
     } finally {
@@ -215,23 +253,26 @@ const handleInstall = async () => {
     if (!plugin.value) return;
 
     try {
-        // 先弹确认（不要先下载/预览，否则确认会延迟）
-        const title = "确认安装";
-        const prettySize = sizeBytes.value != null ? `${sizeBytes.value} bytes` : "未知大小";
+        const sizeLabel = sizeBytes.value != null ? formatBytes(sizeBytes.value) : t("plugins.unknownSize");
         const msg = downloadUrl.value
-            ? `将从商店下载并安装「${plugin.value.name}」（${prettySize}），是否继续？`
-            : `将安装本地源「${plugin.value.name}」，是否继续？`;
+            ? t("plugins.installFromStoreConfirm", {
+                  name: pluginName(plugin.value),
+                  size: sizeLabel,
+              })
+            : t("plugins.installLocalConfirm", { name: pluginName(plugin.value) });
 
-        await ElMessageBox.confirm(msg, title, {
+        await ElMessageBox.confirm(msg, t("plugins.confirmInstall"), {
             type: "warning",
-            confirmButtonText: "安装",
-            cancelButtonText: "取消",
+            confirmButtonText: t("plugins.installButton"),
+            cancelButtonText: t("common.cancel"),
         });
 
         installing.value = true;
+        if (downloadUrl.value) {
+            storeInstallProgressPercent.value = 0;
+        }
 
         if (downloadUrl.value) {
-            // 商店/官方源：确认后再下载到临时文件并安装
             const res = await invoke<StoreInstallPreview>("preview_store_install", {
                 downloadUrl: downloadUrl.value,
                 sha256: sha256.value ?? null,
@@ -239,30 +280,29 @@ const handleInstall = async () => {
                 sourceId: sourceId.value ?? null,
                 version: version.value ?? null,
             });
-            
-            // 检查是否允许安装
+
             if (res.preview.canInstall === false) {
-                ElMessage.warning(res.preview.installError || "该插件不允许安装");
+                ElMessage.warning(res.preview.installError || t("plugins.pluginNotAllowed"));
                 return;
             }
-            
+
             await invoke("import_plugin_from_zip", { zipPath: res.tmpPath });
-            ElMessage.success("安装成功");
+            await invoke("refresh_installed_plugin_cache", { pluginId: plugin.value.id });
+            ElMessage.success(t("plugins.installSuccess"));
         } else {
-            // 兼容：本地已存在但未“标记安装”的情况
             await invoke("install_browser_plugin", { pluginId: plugin.value.id });
-            ElMessage.success("安装成功");
+            ElMessage.success(t("plugins.installSuccess"));
         }
 
-        // 只刷新 store，让“已安装”状态即时更新；不重载详情页，避免“刷新感”
         await pluginStore.loadPlugins();
     } catch (error) {
         if (error !== "cancel") {
             console.error("安装失败:", error);
-            ElMessage.error("安装失败");
+            ElMessage.error(t("plugins.installFailed"));
         }
     } finally {
         installing.value = false;
+        storeInstallProgressPercent.value = null;
     }
 };
 
@@ -304,27 +344,67 @@ const handleCopyPluginId = async (id?: string) => {
         } else {
             await navigator.clipboard.writeText(pluginId);
         }
-        ElMessage.success("插件ID已复制到剪贴板");
+        ElMessage.success(t("plugins.pluginIdCopied"));
     } catch (error) {
         console.error("复制失败:", error);
-        ElMessage.error("复制失败");
+        ElMessage.error(t("plugins.copyFailed"));
     }
 };
 
 onMounted(async () => {
+    try {
+        const { isTauri } = await import("@tauri-apps/api/core");
+        if (isTauri()) {
+            const { listen } = await import("@tauri-apps/api/event");
+            unlistenStoreDownloadProgress = await listen<StoreDownloadProgressPayload>(
+                "plugin-store-download-progress",
+                (event) => {
+                    const { sourceId: sid, pluginId: pid, percent, error: evErr } = event.payload;
+                    const k = `${sid}::${pid}`;
+                    if (k !== storeProgressKey.value) return;
+                    if (evErr) {
+                        storeInstallProgressPercent.value = null;
+                        return;
+                    }
+                    storeInstallProgressPercent.value = percent;
+                },
+            );
+        }
+    } catch {
+        /* 无事件环境 */
+    }
     await loadPlugin();
+});
+
+onUnmounted(() => {
+    unlistenStoreDownloadProgress?.();
 });
 
 // 监听路由参数变化，当切换插件时重新加载
 watch(
-    () => [route.params.id, route.query.downloadUrl, route.query.sha256, route.query.sizeBytes],
-    async ([newId, newDownloadUrl, newSha256, newSizeBytes], [oldId, oldDownloadUrl, oldSha256, oldSizeBytes]) => {
+    () => [
+        route.params.id,
+        route.query.downloadUrl,
+        route.query.sha256,
+        route.query.sizeBytes,
+        route.query.sourceId,
+        route.query.version,
+    ],
+    async (
+        [newId, newDownloadUrl, newSha256, newSizeBytes, newSourceId, newVersion],
+        [oldId, oldDownloadUrl, oldSha256, oldSizeBytes, oldSourceId, oldVersion],
+    ) => {
         // keep-alive 下，route 变化会在后台触发；只在“源详情”页激活时才响应
         if (!isOnPluginDetailRoute.value) return;
 
         // 只有当 ID 或 query 参数真正变化时才重新加载（避免首次加载时重复调用）
         const idChanged = newId !== oldId;
-        const queryChanged = newDownloadUrl !== oldDownloadUrl || newSha256 !== oldSha256 || newSizeBytes !== oldSizeBytes;
+        const queryChanged =
+            newDownloadUrl !== oldDownloadUrl ||
+            newSha256 !== oldSha256 ||
+            newSizeBytes !== oldSizeBytes ||
+            newSourceId !== oldSourceId ||
+            newVersion !== oldVersion;
 
         if ((idChanged || queryChanged) && newId) {
             // 立即清空旧数据，避免显示上一个源的详情

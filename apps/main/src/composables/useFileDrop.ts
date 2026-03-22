@@ -8,7 +8,7 @@ import { useTaskDrawerStore } from "@/stores/taskDrawer";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { IS_ANDROID } from "@kabegame/core/env";
-import { i18n } from "@/i18n";
+import { i18n } from "@kabegame/i18n";
 
 // 支持的扩展名列表（用于默认提示文案），运行时由 updateSupportedTypes 从后端覆盖
 let SUPPORTED_ARCHIVE_EXTENSIONS = ["zip", "rar"];

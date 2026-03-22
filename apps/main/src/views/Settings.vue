@@ -183,7 +183,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 import { useLocalStorage } from "@vueuse/core";
 import { ElMessage } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";

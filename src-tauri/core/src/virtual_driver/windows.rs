@@ -9,8 +9,8 @@
 //! 目录结构：
 //! ```text
 //! K:\
-//! ├── 按时间\                  <- DateGroupProvider
-//! │   └── 2024-01\             <- DateImagesProvider (-> AllProvider)
+//! ├── 按时间\                  <- VdByDateProvider（根为年份，与 Main `date/` 同源）
+//! │   └── 2024\                <- MainDateScopedProvider（年→月→日）
 //! ├── 按插件\                  <- PluginGroupProvider
 //! │   └── konachan\            <- PluginImagesProvider (-> AllProvider)
 //! ├── 画册\                    <- AlbumsProvider

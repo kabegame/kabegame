@@ -41,7 +41,7 @@ import { ArrowRight } from "@element-plus/icons-vue";
 import { ElDrawer, ElIcon } from "element-plus";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { computed } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 export interface OptionItem {

@@ -15,7 +15,7 @@ import {
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { ImageInfo } from "@/stores/crawler";
 import { IS_WINDOWS, IS_ANDROID } from "@kabegame/core/env";
-import { i18n } from "@/i18n";
+import { i18n } from "@kabegame/i18n";
 
 export interface CreateImageActionsOptions {
   /** Custom text for remove action (e.g., "删除" | "从画册移除") */

@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import type { RouteRecordRaw } from "vue-router";
-import { i18n } from "@/i18n";
+import { i18n } from "@kabegame/i18n";
 import Gallery from "@/views/Gallery.vue";
 import PluginBrowser from "@/views/PluginBrowser.vue";
 import Albums from "@/views/Albums.vue";

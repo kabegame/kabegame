@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { ref, unref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { i18n, resolveManifestText } from "@kabegame/i18n";
 
 function toPngDataUrl(iconData: number[]): string {
   const bytes = new Uint8Array(iconData);
@@ -14,6 +15,46 @@ function toPngDataUrl(iconData: number[]): string {
 /** manifest name/description：后端下发的 Record，键为 "default"（默认）及语言码 "zh"、"ja"、"ko" 等 */
 export type PluginManifestText = Record<string, string>;
 
+/** 内置本地导入插件 id（爬虫任务、画廊、任务抽屉一致） */
+export const LOCAL_IMPORT_PLUGIN_ID = "local-import" as const;
+
+/**
+ * 单条插件记录的展示名（当前全局 locale + manifest；内置 local-import 用 tasks.drawerLocalImport）。
+ */
+export function resolvePluginRecordDisplayName(
+  plugin: { id: string; name?: PluginManifestText },
+): string {
+  if (plugin.id === LOCAL_IMPORT_PLUGIN_ID) {
+    const s = String(i18n.global.t("tasks.drawerLocalImport")).trim();
+    return s || plugin.id;
+  }
+  const locale = String(unref(i18n.global.locale) ?? "en");
+  const raw = plugin.name;
+  if (!raw || typeof raw !== "object") return plugin.id;
+  const n =
+    resolveManifestText(raw, locale) ||
+    ((raw as Record<string, string>)["default"] ?? plugin.id) ||
+    plugin.id;
+  if (String(n).trim()) return String(n);
+  return plugin.id;
+}
+
+/**
+ * 按 pluginId 在已安装列表中解析展示名（找不到则回退为 id）。
+ */
+export function resolvePluginIdDisplayName(
+  pluginId: string,
+  installed: ReadonlyArray<{ id: string; name?: PluginManifestText }>,
+): string {
+  if (pluginId === LOCAL_IMPORT_PLUGIN_ID) {
+    const s = String(i18n.global.t("tasks.drawerLocalImport")).trim();
+    return s || pluginId;
+  }
+  const plugin = installed.find((p) => p.id === pluginId);
+  if (!plugin) return pluginId;
+  return resolvePluginRecordDisplayName(plugin);
+}
+
 /** 插件文档多语言：键 "default" 及 "zh"、"en"、"ja"、"ko" 等，与 name/desp 同构 */
 export type PluginManifestDoc = Record<string, string>;
 
@@ -25,6 +66,8 @@ export interface BrowserPlugin {
   id: string;
   name: PluginManifestText;
   desp: PluginManifestText;
+  /** manifest 版本（详情接口或路由 query 可提供） */
+  version?: string | null;
   icon?: string | null;
   filePath?: string | null;
   doc?: PluginManifestDoc | null;
@@ -108,6 +151,10 @@ export const useInstalledPluginsStore = defineStore("installedPlugins", () => {
     icons.value = {};
   }
 
+  function pluginLabel(pluginId: string): string {
+    return resolvePluginIdDisplayName(pluginId, plugins.value);
+  }
+
   return {
     plugins,
     icons,
@@ -117,6 +164,7 @@ export const useInstalledPluginsStore = defineStore("installedPlugins", () => {
     loadIcon,
     getIcon,
     clearCache,
+    pluginLabel,
   };
 });
 
@@ -125,7 +173,7 @@ export const useInstalledPluginsStore = defineStore("installedPlugins", () => {
  */
 export interface Plugin {
   id: string;
-  /** string 或 { name?, ja?, ko?, ... }，用 usePluginManifestI18n 解析后展示 */
+  /** string 或 { name?, ja?, ko?, ... }，用 @kabegame/i18n 的 usePluginManifestI18n / resolveManifestText 解析后展示 */
   name: PluginManifestText;
   description: PluginManifestText;
   version: string;
@@ -185,6 +233,10 @@ export const usePluginStore = defineStore("plugins", () => {
     pluginDetailCache.value = {};
   }
 
+  function pluginLabel(pluginId: string): string {
+    return resolvePluginIdDisplayName(pluginId, plugins.value);
+  }
+
   return {
     plugins,
     activePlugin,
@@ -195,5 +247,6 @@ export const usePluginStore = defineStore("plugins", () => {
     getCachedPluginDetail,
     setCachedPluginDetail,
     clearPluginDetailCache,
+    pluginLabel,
   };
 });

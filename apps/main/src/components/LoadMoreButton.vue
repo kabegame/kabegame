@@ -24,7 +24,7 @@
 
 <script setup lang="ts">
 import { Plus, ArrowRight } from "@element-plus/icons-vue";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 
 interface Props {
   hasMore: boolean;

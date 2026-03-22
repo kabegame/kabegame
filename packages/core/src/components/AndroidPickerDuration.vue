@@ -1,7 +1,7 @@
 <template>
     <div class="android-picker-duration" :class="{ 'is-disabled': disabled }" @click="onTriggerClick">
         <span class="android-picker-duration__value" :class="{ 'is-placeholder': displayValue === undefined }">
-            {{ displayValue !== undefined ? displayValue : (placeholder ?? "请选择") }}
+            {{ displayValue !== undefined ? displayValue : resolvedPlaceholder }}
         </span>
         <el-icon class="android-picker-duration__arrow">
             <ArrowDown />
@@ -12,8 +12,10 @@
         <van-popup v-model:show="showPicker" position="bottom" round>
             <van-picker
                 v-model="pickerSelectedValues"
-                :title="title"
+                :title="resolvedTitle"
                 :columns="pickerColumns"
+                :confirm-button-text="t('common.confirm')"
+                :cancel-button-text="t('common.cancel')"
                 @confirm="onPickerConfirm"
                 @cancel="showPicker = false"
             />
@@ -23,6 +25,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "@kabegame/i18n";
 import { ArrowDown } from "@element-plus/icons-vue";
 import { useModalBack } from "../composables/useModalBack";
 
@@ -37,8 +40,12 @@ const props = withDefaults(
         placeholder?: string;
         disabled?: boolean;
     }>(),
-    { title: "请选择", placeholder: "请选择", disabled: false }
+    { title: undefined, placeholder: undefined, disabled: false }
 );
+
+const { t } = useI18n();
+const resolvedTitle = computed(() => props.title ?? t("common.selectPlaceholder"));
+const resolvedPlaceholder = computed(() => props.placeholder ?? t("common.selectPlaceholder"));
 
 const emit = defineEmits<{
     "update:modelValue": [value: number | undefined];
@@ -66,19 +73,21 @@ const displayValue = computed(() => {
     if (clamped >= 1000) {
         const sec = Math.floor(clamped / 1000);
         const ms = clamped % 1000;
-        return ms > 0 ? `${sec}秒${ms}毫秒` : `${sec}秒`;
+        return ms > 0
+            ? t("common.durationFormatSecMs", { sec, ms })
+            : t("common.durationFormatSec", { sec });
     }
-    return `${clamped}毫秒`;
+    return t("common.durationFormatMs", { ms: clamped });
 });
 
 const pickerColumns = computed(() => {
     const secCol: { text: string; value: number }[] = [];
     for (let s = 0; s <= 10; s++) {
-        secCol.push({ text: `${s}秒`, value: s });
+        secCol.push({ text: t("common.pickerColumnSeconds", { n: s }), value: s });
     }
     const msCol: { text: string; value: number }[] = [];
     for (let m = 0; m <= 900; m += MS_STEP) {
-        msCol.push({ text: `${m}毫秒`, value: m });
+        msCol.push({ text: t("common.pickerColumnMilliseconds", { n: m }), value: m });
     }
     return [secCol, msCol];
 });

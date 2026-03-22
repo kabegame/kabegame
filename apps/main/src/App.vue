@@ -94,11 +94,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, provide } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { Picture, Grid, Setting, Collection, QuestionFilled, Compass } from "@element-plus/icons-vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
-import { useI18n } from "vue-i18n";
-import { setLocale, resolveLanguage, i18n } from "@/i18n";
+import { useI18n, setLocale, resolveLanguage, i18n } from "@kabegame/i18n";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
 import QuickSettingsDrawer from "./components/settings/QuickSettingsDrawer.vue";
 import HelpDrawer from "./components/help/HelpDrawer.vue";
@@ -113,9 +112,6 @@ import CrawlerDialog from "./components/CrawlerDialog.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
-import { resolveManifestText } from "./composables/usePluginManifestI18n";
-import { resolveConfigText } from "./composables/usePluginConfigI18n";
-import type { PluginManifestText } from "@kabegame/core/stores/plugins";
 import { useSidebar } from "./composables/useSidebar";
 import { listen, emit, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -131,21 +127,6 @@ import { useThrottleFn } from "@vueuse/core";
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
 const { t, locale } = useI18n();
-// 为 packages/core 内组件提供 i18n（core 无 vue-i18n 依赖，通过 inject 获取）
-provide("i18n-t", t);
-provide("i18n-locale", locale);
-// 插件 manifest name/description 解析（后端下发 { default, zh, ja, ... }，按 locale 优先再 default）
-provide(
-  "resolveManifestText",
-  (value: PluginManifestText | null | undefined) =>
-    resolveManifestText(value, locale.value),
-);
-// 插件 config 变量 name/descripts/options[].name 解析（同构，供 TaskDrawerContent 等 core 组件 inject）
-provide(
-  "resolveConfigText",
-  (value: import("@kabegame/core/stores/plugins").PluginConfigText | string | null | undefined) =>
-    resolveConfigText(value, locale.value),
-);
 
 // Android 底部 Tab 配置（均匀分布；爬虫仅桌面端有代理，故仅侧栏展示）
 // 依赖 locale 以便语言切换时标签立即更新
@@ -286,8 +267,15 @@ onMounted(async () => {
   // 加载全部设置
   await settingsStore.loadAll();
 
-  // 从配置恢复语言设置
-  setLocale(resolveLanguage(settingsStore.values.language ?? undefined));
+  // 从配置恢复语言：解析链生效后若与存储不一致则写回 canonical，避免长期为 null/别名/非法值
+  {
+    const raw = settingsStore.values.language;
+    const canonical = resolveLanguage(raw ?? undefined);
+    setLocale(canonical);
+    if ((raw ?? "").trim() !== canonical) {
+      await settingsStore.save("language", canonical);
+    }
+  }
   registerHeaderFeatures();
 
   // 初始化各个 composables
@@ -320,7 +308,12 @@ onMounted(async () => {
     if (changes && typeof changes === "object") {
       Object.assign(settingsStore.values, changes);
       if ("language" in changes) {
-        setLocale(resolveLanguage((changes.language as string | null) ?? undefined));
+        const raw = settingsStore.values.language;
+        const canonical = resolveLanguage(raw ?? undefined);
+        setLocale(canonical);
+        if ((raw ?? "").trim() !== canonical) {
+          await settingsStore.save("language", canonical);
+        }
         registerHeaderFeatures();
       }
       console.log("[Settings] 收到设置变更事件，已更新:", Object.keys(changes));

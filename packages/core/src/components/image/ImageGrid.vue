@@ -641,6 +641,10 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
 };
 
 const handleItemDblClick = (image: ImageInfo, index: number) => {
+  // 安卓选择模式：快速连点会触发 dblclick，避免误开预览（单击已由 handleItemClick 处理）
+  if (IS_ANDROID && androidSelectionMode.value) {
+    return;
+  }
   const action = settingsStore.values.imageClickAction || "none";
   if (action === "preview") {
     if (IS_ANDROID && image.type === "video" && image.localPath) {

@@ -1,11 +1,13 @@
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
+use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::crawler::webview::crawler_window_state;
 use crate::settings::Settings;
 use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -1070,7 +1072,13 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                 emit_task_log(
                     &task_id_clone,
                     "error",
-                    format!("图片下载失败（准备路径）: {} - {}", url_clone.as_str(), e),
+                    task_log_i18n(
+                        "taskLogDownloadPrepareFailed",
+                        json!({
+                            "url": url_clone.as_str(),
+                            "detail": e.to_string(),
+                        }),
+                    ),
                 );
                 GlobalEmitter::global().emit_download_state(
                     &task_id_clone,
@@ -1811,7 +1819,13 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         emit_task_log(
                             &task_id_clone,
                             "error",
-                            format!("图片下载失败: {} - {}", url_clone.as_str(), e),
+                            task_log_i18n(
+                                "taskLogDownloadFailed",
+                                json!({
+                                    "url": url_clone.as_str(),
+                                    "detail": e.to_string(),
+                                }),
+                            ),
                         );
                     }
                     if !is_archive && !e.contains("Task canceled") {
@@ -1910,6 +1924,7 @@ async fn process_downloaded_content_image_to_storage(
         height,
         display_name,
         media_type,
+        last_set_wallpaper_at: None,
     };
     match Storage::global().add_image(image_info) {
         Ok(inserted) => {
@@ -2012,7 +2027,7 @@ pub async fn postprocess_downloaded_image(
             GlobalEmitter::global().emit_task_log(
                 task_id,
                 "error",
-                &format!("图片后处理失败: {err}"),
+                &task_log_i18n("taskLogPostprocessFailed", json!({ "detail": err })),
             );
             let _ = Storage::global().add_task_failed_image(
                 task_id,
@@ -2370,6 +2385,7 @@ pub async fn process_downloaded_image_to_storage(
         height: None,
         display_name,
         media_type: Some(if is_video { "video" } else { "image" }.to_string()),
+        last_set_wallpaper_at: None,
     };
     let t_add = postprocess_timing_hash_ms.map(|_| Instant::now());
     match Storage::global().add_image(image_info) {

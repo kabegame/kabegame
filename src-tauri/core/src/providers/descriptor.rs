@@ -15,6 +15,14 @@ pub enum MainGroupKind {
     Surf,
 }
 
+/// Main 日期「大目录」scoped 层级（年 / 月）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "camelCase")]
+pub enum DateScopedTier {
+    Year { year: String },
+    YearMonth { year_month: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ProviderDescriptor {
@@ -50,6 +58,12 @@ pub enum ProviderDescriptor {
     MainGroup {
         kind: MainGroupKind,
     },
+    /// Main `date/YYYY`、`date/YYYY-MM`：贪心分解 + 子时间目录 + `desc`（与 CommonProvider 贪心语义一致）
+    DateScoped {
+        query: ImageQuery,
+        tier: DateScopedTier,
+    },
+
     /// SimplePage 模式的 CommonProvider（直接分页，无贪心分解）
     SimpleAll {
         query: ImageQuery,

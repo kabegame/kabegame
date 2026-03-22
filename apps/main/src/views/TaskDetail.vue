@@ -73,8 +73,7 @@ import { IS_ANDROID } from "@kabegame/core/env";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
-import { useI18n } from "vue-i18n";
-import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
+import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 
 const { t } = useI18n();
 const { pluginName: resolvePluginName } = usePluginManifestI18n();

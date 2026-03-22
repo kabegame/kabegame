@@ -18,7 +18,9 @@ use super::{
     build_safe_filename, emit_task_log, unique_path, DownloadProgressContext, DownloadQueue,
     SchemeDownloader, UrlDownloaderKind,
 };
+use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
+use serde_json::json;
 use crate::settings::Settings;
 
 /// http(s) scheme：目标路径由 URL 路径段与扩展名决定。
@@ -142,7 +144,10 @@ pub fn build_reqwest_header_map(task_id: &str, headers: &HashMap<String, String>
                 emit_task_log(
                     task_id,
                     "warn",
-                    format!("[headers] 跳过无效 header 名：{key} ({e})"),
+                    task_log_i18n(
+                        "taskLogHttpHeaderInvalidName",
+                        json!({ "key": key, "detail": e.to_string() }),
+                    ),
                 );
                 continue;
             }
@@ -153,7 +158,10 @@ pub fn build_reqwest_header_map(task_id: &str, headers: &HashMap<String, String>
                 emit_task_log(
                     task_id,
                     "warn",
-                    format!("[headers] 跳过无效 header 值：{key} ({e})"),
+                    task_log_i18n(
+                        "taskLogHttpHeaderInvalidValue",
+                        json!({ "key": key, "detail": e.to_string() }),
+                    ),
                 );
                 continue;
             }
@@ -179,7 +187,10 @@ pub fn build_reqwest_header_map_for_emitter(
                 GlobalEmitter::global().emit_task_log(
                     task_id,
                     "warn",
-                    &format!("[headers] 跳过无效 header 名：{key} ({e})"),
+                    &task_log_i18n(
+                        "taskLogHttpHeaderInvalidName",
+                        json!({ "key": key, "detail": e.to_string() }),
+                    ),
                 );
                 continue;
             }
@@ -190,7 +201,10 @@ pub fn build_reqwest_header_map_for_emitter(
                 GlobalEmitter::global().emit_task_log(
                     task_id,
                     "warn",
-                    &format!("[headers] 跳过无效 header 值：{key} ({e})"),
+                    &task_log_i18n(
+                        "taskLogHttpHeaderInvalidValue",
+                        json!({ "key": key, "detail": e.to_string() }),
+                    ),
                 );
                 continue;
             }
@@ -326,7 +340,14 @@ async fn download_http(
                     emit_task_log(
                         task_id,
                         "warn",
-                        format!("请求失败，重试 ({}/{}): {e}", attempt, max_attempts),
+                        task_log_i18n(
+                            "taskLogHttpRetryRequest",
+                            json!({
+                                "attempt": attempt,
+                                "max": max_attempts,
+                                "detail": e.to_string(),
+                            }),
+                        ),
                     );
                     sleep(Duration::from_millis(backoff_ms)).await;
                     continue 'retry;
@@ -346,7 +367,14 @@ async fn download_http(
                 emit_task_log(
                     task_id,
                     "warn",
-                    format!("HTTP {status}，重试 ({}/{})", attempt, max_attempts),
+                    task_log_i18n(
+                        "taskLogHttpRetryStatus",
+                        json!({
+                            "status": status.to_string(),
+                            "attempt": attempt,
+                            "max": max_attempts,
+                        }),
+                    ),
                 );
                 sleep(Duration::from_millis(backoff_ms)).await;
                 continue 'retry;
@@ -384,9 +412,9 @@ async fn download_http(
                 emit_task_log(
                     task_id,
                     "warn",
-                    format!(
-                        "服务端未返回 206（{}），回退为整包重下，已下载内存缓冲将重置",
-                        status
+                    task_log_i18n(
+                        "taskLogHttpNoPartialContent",
+                        json!({ "status": status.to_string() }),
                     ),
                 );
                 buffer.clear();
@@ -416,7 +444,14 @@ async fn download_http(
                         emit_task_log(
                             task_id,
                             "warn",
-                            format!("读取响应体失败，重试 ({}/{}): {msg}", attempt, max_attempts),
+                            task_log_i18n(
+                                "taskLogHttpRetryReadBody",
+                                json!({
+                                    "attempt": attempt,
+                                    "max": max_attempts,
+                                    "detail": msg,
+                                }),
+                            ),
                         );
                         sleep(Duration::from_millis(backoff_ms)).await;
                         continue 'retry;

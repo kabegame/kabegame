@@ -19,7 +19,7 @@ import "vant/lib/popup/style";
 import { getImageSupport, getSupportedFormats } from "@kabegame/image-type";
 import { invoke } from "@tauri-apps/api/core";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
-import { i18n } from "@/i18n";
+import { i18n } from "@kabegame/i18n";
 
 if (IS_ANDROID) {
   document.documentElement.classList.add("platform-android");

@@ -1,5 +1,5 @@
 import type { Component } from "vue";
-import { i18n } from "@/i18n";
+import { i18n } from "@kabegame/i18n";
 import TipImportDragDrop from "@/help/tips/gallery/TipImportDragDrop.vue";
 import TipGalleryBrowsing from "@/help/tips/gallery/TipGalleryBrowsing.vue";
 import TipGalleryPreview from "@/help/tips/gallery/TipGalleryPreview.vue";

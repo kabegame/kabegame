@@ -1,7 +1,7 @@
 <template>
     <div class="android-picker-select" :class="{ 'is-disabled': disabled }" @click="onTriggerClick">
         <span class="android-picker-select__value" :class="{ 'is-placeholder': !displayLabel }">
-            {{ displayLabel || placeholder || "请选择" }}
+            {{ displayLabel || resolvedPlaceholder }}
         </span>
         <el-icon class="android-picker-select__arrow">
             <ArrowDown />
@@ -13,8 +13,8 @@
             <!-- 有 option 插槽时用自定义列表，可渲染叹号等 -->
             <template v-if="useOptionSlot">
                 <div class="android-picker-select__header">
-                    <span class="android-picker-select__title">{{ title }}</span>
-                    <van-button type="default" size="small" @click="showPicker = false">取消</van-button>
+                    <span class="android-picker-select__title">{{ resolvedTitle }}</span>
+                    <van-button type="default" size="small" @click="showPicker = false">{{ t('common.cancel') }}</van-button>
                 </div>
                 <div class="android-picker-select__list">
                     <div
@@ -31,8 +31,10 @@
             <van-picker
                 v-else
                 v-model="pickerSelectedValues"
-                :title="title"
+                :title="resolvedTitle"
                 :columns="pickerColumns"
+                :confirm-button-text="t('common.confirm')"
+                :cancel-button-text="t('common.cancel')"
                 @confirm="onPickerConfirm"
                 @cancel="showPicker = false"
             />
@@ -42,6 +44,7 @@
 
 <script setup lang="ts">
 import { computed, ref, useSlots, watch } from "vue";
+import { useI18n } from "@kabegame/i18n";
 import { ArrowDown } from "@element-plus/icons-vue";
 import { useModalBack } from "../composables/useModalBack";
 
@@ -50,6 +53,8 @@ export interface AndroidPickerSelectOption {
     value: string;
     /** 可选：供 option 插槽使用，如标记为 JS 插件在安卓不支持 */
     warning?: boolean;
+    /** 可选：列表左侧图标 URL（如插件图标），由业务传入 */
+    iconSrc?: string;
 }
 
 const props = withDefaults(
@@ -61,8 +66,12 @@ const props = withDefaults(
         clearable?: boolean;
         disabled?: boolean;
     }>(),
-    { title: "请选择", placeholder: "请选择", clearable: false, disabled: false }
+    { title: undefined, placeholder: undefined, clearable: false, disabled: false }
 );
+
+const { t } = useI18n();
+const resolvedTitle = computed(() => props.title ?? t("common.selectPlaceholder"));
+const resolvedPlaceholder = computed(() => props.placeholder ?? t("common.selectPlaceholder"));
 
 const emit = defineEmits<{
     "update:modelValue": [value: string | null];
@@ -83,7 +92,7 @@ const displayLabel = computed(() => {
 
 const optionsWithClear = computed(() => {
     if (props.clearable) {
-        return [{ label: "不选择", value: "" }, ...props.options];
+        return [{ label: t("common.selectNone"), value: "" }, ...props.options];
     }
     return props.options;
 });

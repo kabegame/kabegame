@@ -9,7 +9,7 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { fileToUrl } from "@kabegame/core/httpServer";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
-import { i18n } from "@/i18n";
+import { i18n } from "@kabegame/i18n";
 
 export type FavoriteStatusChangedDetail = {
   imageIds: string[];

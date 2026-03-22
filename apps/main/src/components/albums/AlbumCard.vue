@@ -42,7 +42,7 @@
 
 <script setup lang="ts">
 import { computed, ref, nextTick, onMounted, onUnmounted } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 import { ElMessage } from "element-plus";
 import type { Album } from "@/stores/albums";
 import { Loading } from "@element-plus/icons-vue";
@@ -369,6 +369,7 @@ const formatDate = (ts?: number) => {
     background: rgba(255, 255, 255, 0.35);
     border-radius: 14px;
     padding: 16px;
+    overflow: hidden;
 
     .empty-preview {
       display: flex;
@@ -397,6 +398,27 @@ const formatDate = (ts?: number) => {
         padding: 8px 0;
         flex-shrink: 0;
         letter-spacing: 0.1em;
+      }
+    }
+
+    html.platform-android & {
+      padding: 8px;
+
+      .empty-preview {
+        gap: 8px;
+
+        .empty-image {
+          width: 80px;
+          max-width: 40%;
+        }
+
+        .empty-text {
+          font-size: 11px;
+          line-height: 1.5;
+          padding: 4px 0;
+          flex-shrink: 1;
+          overflow: hidden;
+        }
       }
     }
   }

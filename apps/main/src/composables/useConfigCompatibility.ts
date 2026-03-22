@@ -1,12 +1,11 @@
 import { ref, watch, computed, type Ref } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useCrawlerStore, type RunConfig } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { isNil } from "lodash-es";
 import type { PluginVarDef } from "./usePluginConfig";
-import { resolveConfigText } from "./usePluginConfigI18n";
 
 export interface ConfigCompatibility {
   versionCompatible: boolean; // 第一步：插件是否存在

@@ -25,16 +25,7 @@ pub(crate) fn image_id_from_filename(name: &str) -> Option<&str> {
 
 /// 从 ImageQuery 中提取 album_id
 pub(crate) fn album_id_from_query(query: &ImageQuery) -> Option<&str> {
-    // 约定：ImageQuery::by_album 生成的 decorator 包含 album_images ai + ai.album_id = ?
-    if query.params.is_empty() {
-        return None;
-    }
-    let d = query.decorator.as_str();
-    if d.contains("album_images ai") && d.contains("ai.album_id") {
-        Some(query.params[0].as_str())
-    } else {
-        None
-    }
+    query.album_id()
 }
 
 pub(crate) fn query_can_delete_child_file(query: &ImageQuery) -> bool {

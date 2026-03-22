@@ -32,7 +32,7 @@
 </template>
 
 <script setup lang="ts">
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 import { Plus, ArrowDown, FolderOpened, Connection } from "@element-plus/icons-vue";
 import { IS_ANDROID } from "@kabegame/core/env";
 

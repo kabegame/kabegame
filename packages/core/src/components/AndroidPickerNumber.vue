@@ -1,7 +1,7 @@
 <template>
     <div class="android-picker-number" :class="{ 'is-disabled': disabled }" @click="onTriggerClick">
         <span class="android-picker-number__value" :class="{ 'is-placeholder': numberValue === undefined }">
-            {{ numberValue !== undefined ? numberValue : (placeholder ?? "请选择") }}
+            {{ numberValue !== undefined ? numberValue : resolvedPlaceholder }}
         </span>
         <el-icon class="android-picker-number__arrow">
             <ArrowDown />
@@ -12,8 +12,10 @@
         <van-popup v-model:show="showPicker" position="bottom" round>
             <van-picker
                 v-model="pickerSelectedValues"
-                :title="title"
+                :title="resolvedTitle"
                 :columns="pickerColumns"
+                :confirm-button-text="t('common.confirm')"
+                :cancel-button-text="t('common.cancel')"
                 @confirm="onPickerConfirm"
                 @cancel="showPicker = false"
             />
@@ -23,6 +25,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "@kabegame/i18n";
 import { ArrowDown } from "@element-plus/icons-vue";
 import { useModalBack } from "../composables/useModalBack";
 
@@ -36,8 +39,12 @@ const props = withDefaults(
         placeholder?: string;
         disabled?: boolean;
     }>(),
-    { min: 0, max: 100, step: 1, title: "请选择", placeholder: "请选择", disabled: false }
+    { min: 0, max: 100, step: 1, title: undefined, placeholder: undefined, disabled: false }
 );
+
+const { t } = useI18n();
+const resolvedTitle = computed(() => props.title ?? t("common.selectPlaceholder"));
+const resolvedPlaceholder = computed(() => props.placeholder ?? t("common.selectPlaceholder"));
 
 const emit = defineEmits<{
     "update:modelValue": [value: number | undefined];

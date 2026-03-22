@@ -30,7 +30,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_ANDROID } from "@kabegame/core/env";
@@ -41,6 +41,8 @@ interface Props {
   isRenaming?: boolean;
   editingName?: string;
   albumDriveEnabled?: boolean;
+  /** 是否显示画册内「过滤 / 排序」（安卓上放入 fold） */
+  includeBrowseControls?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -49,6 +51,7 @@ const props = withDefaults(defineProps<Props>(), {
   isRenaming: false,
   editingName: "",
   albumDriveEnabled: false,
+  includeBrowseControls: false,
 });
 
 const emit = defineEmits<{
@@ -63,6 +66,8 @@ const emit = defineEmits<{
   'confirm-rename': [name: string];
   'cancel-rename': [];
   'update:editingName': [value: string];
+  'open-browse-filter': [];
+  'open-browse-sort': [];
 }>();
 
 const { t } = useI18n();
@@ -86,10 +91,24 @@ const showIds = computed(() => {
 
 const foldIds = computed(() => {
   if (IS_ANDROID) {
-    return withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]);
-  } else {
-    return [];
+    const base = withVd([
+      HeaderFeatureId.OpenVirtualDrive,
+      HeaderFeatureId.Refresh,
+      HeaderFeatureId.SetAsWallpaperCarousel,
+      HeaderFeatureId.DeleteAlbum,
+      HeaderFeatureId.Help,
+      HeaderFeatureId.QuickSettings,
+    ]);
+    if (props.includeBrowseControls) {
+      return [
+        HeaderFeatureId.AlbumBrowseFilter,
+        HeaderFeatureId.AlbumBrowseSort,
+        ...base,
+      ];
+    }
+    return base;
   }
+  return [];
 });
 
 // 处理action事件
@@ -112,6 +131,12 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.QuickSettings:
       emit("quick-settings");
+      break;
+    case HeaderFeatureId.AlbumBrowseFilter:
+      emit("open-browse-filter");
+      break;
+    case HeaderFeatureId.AlbumBrowseSort:
+      emit("open-browse-sort");
       break;
   }
 };

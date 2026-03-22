@@ -439,7 +439,8 @@ impl Storage {
                  i.width,
                  i.height,
                  i.display_name,
-                 COALESCE(i.type, 'image') as media_type
+                 COALESCE(i.type, 'image') as media_type,
+                 i.last_set_wallpaper_at
                  FROM images i
                  INNER JOIN task_images ti ON i.id = ti.image_id
                  LEFT JOIN album_images ON i.id = album_images.image_id AND album_images.album_id = ?2
@@ -470,6 +471,7 @@ impl Storage {
                     height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
                     display_name: row.get(14)?,
                     media_type: row.get::<_, Option<String>>(15)?,
+                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 16)?,
                 })
             })
             .map_err(|e| format!("Failed to query task images: {}", e))?;
@@ -499,7 +501,8 @@ impl Storage {
                  i.width,
                  i.height,
                  i.display_name,
-                 COALESCE(i.type, 'image') as media_type
+                 COALESCE(i.type, 'image') as media_type,
+                 i.last_set_wallpaper_at
                  FROM images i
                  INNER JOIN task_images ti ON i.id = ti.image_id
                  LEFT JOIN album_images ON i.id = album_images.image_id AND album_images.album_id = ?2
@@ -533,6 +536,7 @@ impl Storage {
                         height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
                         display_name: row.get(14)?,
                         media_type: row.get::<_, Option<String>>(15)?,
+                        last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 16)?,
                     })
                 },
             )

@@ -29,6 +29,8 @@ target
 # app-main capability 由 handlebars 生成
 src-tauri/app-main/capabilities/main.json
 src-tauri/*/gen/schemas/*
+# 插件 permissions 下的 schema.json 由 tauri_plugin::Builder 在 cargo build 时生成
+src-tauri-plugins/**/permissions/schemas/schema.json
 src-tauri/app-main/resources/bin/*
 
 # development data

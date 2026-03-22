@@ -17,7 +17,6 @@ use sled::Db;
 use crate::providers::descriptor::ProviderDescriptor;
 use crate::providers::factory::ProviderFactory;
 use crate::providers::provider::{FsEntry, Provider, ResolveChild};
-use crate::storage::Storage;
 
 #[derive(Debug, Clone)]
 pub struct ProviderCacheConfig {
@@ -25,7 +24,7 @@ pub struct ProviderCacheConfig {
     pub warm_max_nodes: usize,
     /// sled 目录（持久化）
     pub db_dir: std::path::PathBuf,
-    /// key 前缀（v2：引入 MainProvider 体系）
+    /// key 前缀（版本号变更会使旧缓存键失效）
     pub key_prefix: String,
     /// LRU 容量（条目数）
     pub lru_capacity: usize,
@@ -36,7 +35,7 @@ impl Default for ProviderCacheConfig {
         Self {
             warm_max_nodes: 20_000,
             db_dir: crate::app_paths::AppPaths::global().provider_cache_dir(),
-            key_prefix: "kabegame:provider:v2".to_string(),
+            key_prefix: "kabegame:provider:v3".to_string(),
             lru_capacity: 1024,
         }
     }

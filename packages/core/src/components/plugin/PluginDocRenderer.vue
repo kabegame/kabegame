@@ -4,14 +4,40 @@
       <el-empty :description="emptyDescription" :image-size="100" />
     </div>
     <div v-else class="doc" v-html="html"></div>
+
+    <!-- Android：photoswipe-vue 底层组件，不循环 -->
+    <PhotoSwipe
+      v-if="IS_ANDROID"
+      v-model:open="docPswpOpen"
+      v-model:index="docPswpIndex"
+      :data-source="docPswpDataSource"
+      :loop="false"
+      :zIndex="2000"
+    />
+
+    <!-- 桌面：Element Plus 图片查看器，不循环 -->
+    <ElImageViewer
+      v-if="!IS_ANDROID && docDesktopViewerVisible"
+      :url-list="docDesktopUrlList"
+      :initial-index="docDesktopInitialIndex"
+      :infinite="false"
+      teleported
+      @close="docDesktopViewerVisible = false"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ElImageViewer } from "element-plus";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+// @ts-expect-error - Vue SFC component import, types resolved via package.json exports
+import PhotoSwipe from "photoswipe-vue/vue";
+import "photoswipe-vue/photoswipe.css";
+import { IS_ANDROID } from "../../env";
+import { useModalBack } from "../../composables/useModalBack";
 
 type LoadImageBytes = (imagePath: string) => Promise<Uint8Array | number[]>;
 
@@ -32,7 +58,78 @@ const props = withDefaults(
 const html = ref("");
 const docRootRef = ref<HTMLElement | null>(null);
 
+/** Android PhotoSwipe */
+const docPswpOpen = ref(false);
+const docPswpIndex = ref(0);
+const docPswpDataSource = ref<Array<{ src: string; width: number; height: number }>>([]);
+
+/** 桌面 ElImageViewer */
+const docDesktopViewerVisible = ref(false);
+const docDesktopUrlList = ref<string[]>([]);
+const docDesktopInitialIndex = ref(0);
+
+useModalBack(docPswpOpen);
+
+const PSWP_FALLBACK_W = 1920;
+const PSWP_FALLBACK_H = 1080;
+
+/** 解析文档内图片的自然尺寸，供 Android PhotoSwipe dataSource 使用（避免错误宽高比）。 */
+async function naturalSizeForDocImage(el: HTMLImageElement, src: string): Promise<{ width: number; height: number }> {
+  if (el.complete && el.naturalWidth > 0 && el.naturalHeight > 0) {
+    return { width: el.naturalWidth, height: el.naturalHeight };
+  }
+  return new Promise((resolve) => {
+    const im = new Image();
+    im.onload = () => {
+      resolve({
+        width: im.naturalWidth > 0 ? im.naturalWidth : PSWP_FALLBACK_W,
+        height: im.naturalHeight > 0 ? im.naturalHeight : PSWP_FALLBACK_H,
+      });
+    };
+    im.onerror = () => resolve({ width: PSWP_FALLBACK_W, height: PSWP_FALLBACK_H });
+    im.src = src;
+  });
+}
+
+async function buildDocPreviewMeta(imgs: HTMLImageElement[]) {
+  const items: Array<{ src: string; width: number; height: number }> = [];
+  const urls: string[] = [];
+  for (let i = 0; i < imgs.length; i++) {
+    const el = imgs[i];
+    const src = el.getAttribute("src")?.trim() || "";
+    const { width, height } = await naturalSizeForDocImage(el, src);
+    items.push({ src, width, height });
+    urls.push(src);
+  }
+  return { items, urls };
+}
+
 const handleDocClick = (e: MouseEvent) => {
+  const img = (e.target as HTMLElement).closest(".doc img");
+  if (img) {
+    const docEl = docRootRef.value?.querySelector(".doc");
+    if (!docEl || !docEl.contains(img)) return;
+    const imgs = Array.from(docEl.querySelectorAll("img")) as HTMLImageElement[];
+    const index = imgs.indexOf(img as HTMLImageElement);
+    if (index < 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void (async () => {
+      const { items, urls } = await buildDocPreviewMeta(imgs);
+      if (IS_ANDROID) {
+        docPswpDataSource.value = items;
+        docPswpIndex.value = index;
+        await nextTick();
+        docPswpOpen.value = true;
+      } else {
+        docDesktopUrlList.value = urls;
+        docDesktopInitialIndex.value = index;
+        docDesktopViewerVisible.value = true;
+      }
+    })();
+    return;
+  }
+
   const a = (e.target as HTMLElement).closest("a");
   if (!a || !a.href) return;
   const href = a.getAttribute("href");
@@ -319,6 +416,10 @@ watchEffect(() => {
 
 .doc :deep(li) {
   margin: 4px 0;
+}
+
+.doc :deep(img) {
+  cursor: zoom-in;
 }
 </style>
 

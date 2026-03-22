@@ -51,6 +51,19 @@ pub async fn get_images_count() -> Result<usize, String> {
 }
 
 #[tauri::command]
+pub async fn get_gallery_plugin_groups() -> Result<serde_json::Value, String> {
+    let groups = Storage::global().get_gallery_plugin_groups()?;
+    serde_json::to_value(groups).map_err(|e| e.to_string())
+}
+
+/// 抓取时间过滤：月（由日聚合）+ 日（原始），与 `storage::gallery_time` 一致。
+#[tauri::command]
+pub async fn get_gallery_time_filter_data() -> Result<serde_json::Value, String> {
+    let p = Storage::global().get_gallery_time_filter_payload()?;
+    serde_json::to_value(p).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn delete_image(image_id: String) -> Result<(), String> {
     Storage::global().delete_image(&image_id)?;
 

@@ -88,7 +88,7 @@
                     </div>
                 </el-card>
             </el-tab-pane>
-            <el-tab-pane :label="$t('help.shortcutsTab')" name="shortcuts">
+            <el-tab-pane :label="$t('help.shortcutsTab')" name="shortcuts" v-if="!IS_ANDROID">
                 <el-card class="help-card">
                     <template #header>
                         <span>{{ $t('help.shortcutHelpTitle') }}</span>
@@ -121,7 +121,8 @@ import SettingRow from "@kabegame/core/components/settings/SettingRow.vue";
 import { ArrowRight } from "@element-plus/icons-vue";
 import { getTipCategories, type Tip, type TipCategoryId, type TipId } from "@/help/tipsRegistry";
 import { getHelpGroups } from "@/help/helpRegistry";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
+import { IS_ANDROID } from "@kabegame/core/env";
 
 const route = useRoute();
 const router = useRouter();
@@ -265,20 +266,32 @@ const shortcutItems = computed(() => {
     gap: 12px;
 }
 
+/* 分类目录：标题 / 标签 / 描述 分行与间距，避免描述贴住标题且换行行距过大 */
 .category-title {
     display: flex;
-    align-items: center;
-    gap: 2px;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 12px;
+    width: 100%;
+    padding-right: 8px;
+    line-height: 1.35;
 }
 
 .category-name {
     font-weight: 700;
     color: var(--anime-text-primary);
+    line-height: 1.28;
 }
 
 .category-desc {
     font-size: 12px;
     color: var(--anime-text-muted);
+    line-height: 1.38;
+    min-width: 0;
+}
+
+.tips-list :deep(.el-collapse-item__header) {
+    line-height: 1.35;
 }
 
 .tip-detail {

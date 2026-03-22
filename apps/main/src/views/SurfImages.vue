@@ -79,7 +79,7 @@ import { useImageTypes } from "@/composables/useImageTypes";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { IS_ANDROID } from "@kabegame/core/env";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 
 const { t } = useI18n();
 const BIG_PAGE_SIZE = 100;

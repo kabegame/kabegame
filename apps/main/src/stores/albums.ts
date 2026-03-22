@@ -6,7 +6,7 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import { ElMessageBox } from "element-plus";
-import { i18n } from "@/i18n";
+import { i18n } from "@kabegame/i18n";
 
 export interface Album {
   id: string;
