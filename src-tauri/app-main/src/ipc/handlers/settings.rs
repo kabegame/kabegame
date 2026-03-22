@@ -15,6 +15,7 @@ pub async fn handle_settings_request(req: &CliIpcRequest) -> Option<CliIpcRespon
         CliIpcRequest::SettingsGetMaxConcurrentDownloads => {
             Some(get_max_concurrent_downloads().await)
         }
+        CliIpcRequest::SettingsGetMaxConcurrentTasks => Some(get_max_concurrent_tasks().await),
         CliIpcRequest::SettingsGetNetworkRetryCount => Some(get_network_retry_count().await),
         CliIpcRequest::SettingsGetImageClickAction => Some(get_image_click_action().await),
         CliIpcRequest::SettingsGetGalleryImageAspectRatio => {
@@ -94,6 +95,9 @@ pub async fn handle_settings_request(req: &CliIpcRequest) -> Option<CliIpcRespon
         CliIpcRequest::SettingsSetAutoLaunch { enabled } => Some(set_auto_launch(*enabled).await),
         CliIpcRequest::SettingsSetMaxConcurrentDownloads { count } => {
             Some(set_max_concurrent_downloads(*count).await)
+        }
+        CliIpcRequest::SettingsSetMaxConcurrentTasks { count } => {
+            Some(set_max_concurrent_tasks(*count).await)
         }
         CliIpcRequest::SettingsSetNetworkRetryCount { count } => {
             Some(set_network_retry_count(*count).await)
@@ -307,6 +311,17 @@ async fn set_max_concurrent_downloads(count: u32) -> CliIpcResponse {
     }
 }
 
+async fn set_max_concurrent_tasks(count: u32) -> CliIpcResponse {
+    let settings = Settings::global();
+    match settings.set_max_concurrent_tasks(count).await {
+        Ok(()) => {
+            TaskScheduler::global().set_task_concurrency();
+            CliIpcResponse::ok("updated")
+        }
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
 async fn set_network_retry_count(count: u32) -> CliIpcResponse {
     let settings = Settings::global();
     match settings.set_network_retry_count(count).await {
@@ -396,6 +411,14 @@ async fn get_auto_launch() -> CliIpcResponse {
 async fn get_max_concurrent_downloads() -> CliIpcResponse {
     let settings = Settings::global();
     match settings.get_max_concurrent_downloads().await {
+        Ok(v) => CliIpcResponse::ok_with_data("ok", serde_json::json!(v)),
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
+async fn get_max_concurrent_tasks() -> CliIpcResponse {
+    let settings = Settings::global();
+    match settings.get_max_concurrent_tasks().await {
         Ok(v) => CliIpcResponse::ok_with_data("ok", serde_json::json!(v)),
         Err(e) => CliIpcResponse::err(e),
     }

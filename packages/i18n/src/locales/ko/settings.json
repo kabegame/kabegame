@@ -65,6 +65,8 @@
   "wallpaperEngineDirDesc": "\"WE로 내보내기 및 자동 가져오기\"용",
 
   "downloadSectionTitle": "다운로드 설정",
+  "maxConcurrentTasks": "동시 실행 작업 수",
+  "maxConcurrentTasksDesc": "동시에 실행할 크롤러 작업 수(1–10). 끊김이 있으면 줄이세요",
   "maxConcurrentDownloads": "최대 동시 다운로드",
   "maxConcurrentDownloadsDesc": "동시 다운로드 수 (1–10)",
   "downloadInterval": "다운로드 간격",

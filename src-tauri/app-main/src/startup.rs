@@ -442,7 +442,9 @@ pub fn init_download_workers() {
 
 pub fn start_download_workers() {
     tauri::async_runtime::spawn(async {
-        TaskScheduler::global().start_workers(2).await;
+        TaskScheduler::global()
+            .start_workers(kabegame_core::crawler::MAX_TASK_WORKER_LOOPS)
+            .await;
     });
 }
 
@@ -598,6 +600,7 @@ pub fn init_crawler_window(app_handle: AppHandle) {
 pub fn start_task_scheduler() {
     tauri::async_runtime::spawn(async {
         TaskScheduler::global().start_download_workers_async().await;
+        TaskScheduler::global().set_task_concurrency();
     });
 }
 

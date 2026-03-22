@@ -34,6 +34,14 @@ pub async fn get_max_concurrent_downloads() -> Result<u32, String> {
 }
 
 #[tauri::command]
+pub async fn get_max_concurrent_tasks() -> Result<u32, String> {
+    Settings::global()
+        .get_max_concurrent_tasks()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_network_retry_count() -> Result<u32, String> {
     Settings::global()
         .get_network_retry_count()
@@ -339,6 +347,17 @@ pub async fn set_max_concurrent_downloads(count: u32) -> Result<(), String> {
     kabegame_core::crawler::TaskScheduler::global()
         .set_download_concurrency()
         .await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_max_concurrent_tasks(count: u32) -> Result<(), String> {
+    Settings::global()
+        .set_max_concurrent_tasks(count)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    kabegame_core::crawler::TaskScheduler::global().set_task_concurrency();
     Ok(())
 }
 

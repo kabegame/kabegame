@@ -444,6 +444,7 @@ pub enum CliIpcRequest {
     // ======== Settings Getter（细粒度）========
     SettingsGetAutoLaunch,
     SettingsGetMaxConcurrentDownloads,
+    SettingsGetMaxConcurrentTasks,
     SettingsGetNetworkRetryCount,
     SettingsGetImageClickAction,
     SettingsGetGalleryImageAspectRatio,
@@ -504,6 +505,9 @@ pub enum CliIpcRequest {
         enabled: bool,
     },
     SettingsSetMaxConcurrentDownloads {
+        count: u32,
+    },
+    SettingsSetMaxConcurrentTasks {
         count: u32,
     },
     SettingsSetNetworkRetryCount {

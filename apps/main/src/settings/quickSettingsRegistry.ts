@@ -84,6 +84,21 @@ export function useQuickSettingsGroups() {
       title: t("settings.quickDownload"),
       items: [
         {
+          key: "maxConcurrentTasks",
+          label: t("settings.maxConcurrentTasks"),
+          description: t("settings.maxConcurrentTasksDesc"),
+          comp: SettingNumberControl,
+          props: {
+            settingKey: "maxConcurrentTasks",
+            command: "set_max_concurrent_tasks",
+            buildArgs: (value: number) => ({ count: value }),
+            min: 1,
+            max: 10,
+            step: 1,
+          },
+          pages: ["gallery", "albumdetail"],
+        },
+        {
           key: "maxConcurrentDownloads",
           label: t("settings.maxConcurrentDownloads"),
           description: t("settings.maxConcurrentDownloadsDesc"),
