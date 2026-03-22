@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::providers::descriptor::ProviderDescriptor;
+use crate::providers::provider::FsEntry;
 use crate::providers::{ProviderRuntime, main_root::MainRootProvider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::{ImageInfo, Storage};
@@ -36,10 +37,15 @@ pub struct GalleryBrowseResult {
 ///
 /// MainProvider 路径格式：
 /// - `all[/desc]/<page>` - 全部图片（可选 desc 排序）
+/// - `wallpaper-order[/desc]/<page>` - 按「最后一次设为壁纸」时间排序（曾设为壁纸的图片）
 /// - `plugin/<pluginId>/<page>` - 按插件分组
+/// - `date/<yyyy>/<page>` - 按公历年分组
 /// - `date/<yyyy-mm>/<page>` - 按月份分组
+/// - `date/<yyyy-mm-dd>/<page>` - 按自然日分组
 /// - `date-range/<start~end>/<page>` - 按日期范围分组
-/// - `album/<albumId>/<page>` - 画册
+/// - `album/<albumId>/<page>` - 画册（按抓取时间升序）；`album/<albumId>/desc/<page>` 降序；
+///   `album/<albumId>/album-order/[desc/]<page>` 按画册内加入顺序（`order` 列）；
+///   `album/<albumId>/wallpaper-order/[desc/]<page>` 仅曾设为壁纸，按设壁纸时间排序
 /// - `task/<taskId>/<page>` - 按任务分组
 /// - `surf/<surfRecordId>[/desc]/<page>` - 按畅游记录分组（默认升序，支持 desc）
 ///
@@ -65,7 +71,7 @@ pub fn browse_gallery_provider(
     // 解析到 provider
     let provider = provider_rt
         .resolve_provider_for_root(root, &raw_segs)?
-        .ok_or_else(|| "路径不存在".to_string())?;
+        .ok_or_else(|| format!("路径不存在: {}", path.trim()))?;
 
     let desc = provider.descriptor();
 
@@ -98,7 +104,7 @@ pub fn browse_gallery_provider(
             }
             // 返回目录列表（desc 子目录 + 页码目录）
             let mut entries = Vec::new();
-            if query.is_all_recent_asc() {
+            if query.is_ascending() {
                 entries.push(GalleryBrowseEntry::Dir { name: "desc".to_string() });
             }
             // 页码目录通过 resolve_child 动态提供，这里只返回 total
@@ -154,6 +160,25 @@ pub fn browse_gallery_provider(
             }
             list_node(storage, &query, total, offset, count)
         }
+        ProviderDescriptor::DateScoped { query, .. } => {
+            let total = storage.get_images_count_by_query(&query)?;
+            if total == 0 {
+                return Ok(GalleryBrowseResult {
+                    total: 0,
+                    base_offset: 0,
+                    range_total: 0,
+                    entries: vec![],
+                });
+            }
+            let raw = provider.list()?;
+            let entries = fs_entries_to_gallery_browse(storage, raw)?;
+            Ok(GalleryBrowseResult {
+                total,
+                base_offset: 0,
+                range_total: total,
+                entries,
+            })
+        }
         _ => {
             // 非图片集合 provider：只返回目录列表
             let entries = provider.list()?;
@@ -173,6 +198,27 @@ pub fn browse_gallery_provider(
             })
         }
     }
+}
+
+fn fs_entries_to_gallery_browse(
+    storage: &Storage,
+    entries: Vec<FsEntry>,
+) -> Result<Vec<GalleryBrowseEntry>, String> {
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries {
+        match e {
+            FsEntry::Directory { name } => {
+                out.push(GalleryBrowseEntry::Dir { name });
+            }
+            FsEntry::File { image_id, .. } => {
+                let image = storage
+                    .find_image_by_id(&image_id)?
+                    .ok_or_else(|| format!("图片不存在: {}", image_id))?;
+                out.push(GalleryBrowseEntry::Image { image });
+            }
+        }
+    }
+    Ok(out)
 }
 
 // === 与 AllProvider 同步的贪心分解逻辑 ===

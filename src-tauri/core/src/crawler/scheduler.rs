@@ -1,9 +1,11 @@
 use crate::crawler::downloader::{get_default_images_dir, ActiveDownloadInfo, DownloadQueue};
+use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::plugin::{PluginManager, VarDefinition, VarOption};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -383,7 +385,7 @@ async fn worker_loop(
                 GlobalEmitter::global().emit_task_log(
                     &req.task_id,
                     "info",
-                    "TaskScheduler: JS 任务已交给 crawler WebView 执行",
+                    &task_log_i18n("taskLogSchedulerJsHandoff", json!({})),
                 );
             }
             Err(e) => {
@@ -438,9 +440,9 @@ async fn run_task(
     GlobalEmitter::global().emit_task_log(
         &req.task_id,
         "info",
-        &format!(
-            "TaskScheduler: 开始执行任务（pluginId={}, taskId={}）",
-            req.plugin_id, req.task_id
+        &task_log_i18n(
+            "taskLogSchedulerStart",
+            json!({ "pluginId": req.plugin_id, "taskId": req.task_id }),
         ),
     );
 

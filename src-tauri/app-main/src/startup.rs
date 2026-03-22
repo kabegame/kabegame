@@ -141,6 +141,7 @@ pub fn create_main_window(app_handle: &AppHandle) -> Result<(), String> {
             .resizable(true)
             .fullscreen(false)
             .visible(true)
+            .devtools(cfg!(debug_assertions))
             .transparent(!cfg!(target_os = "linux"));
 
     // Windows/macOS: 添加窗口效果

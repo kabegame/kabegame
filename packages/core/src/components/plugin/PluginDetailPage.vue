@@ -33,7 +33,8 @@
         <PluginDetail v-if="plugin" :show-header="false" :plugin-id="plugin.id" :name="displayName"
           :description="displayDesc" :version="plugin.version" :base-url="plugin.baseUrl" :installed="installed" :show-copy-id="true"
           :show-primary-action="true" :primary-action-loading="installing" :primary-action-disabled="installing"
-          :primary-action-text="installing ? effectiveInstallingText : effectiveInstallText" @primary-action="$emit('install')"
+          :primary-action-text="installing ? effectiveInstallingText : effectiveInstallText"
+          :primary-action-progress-percent="installProgressPercent" @primary-action="$emit('install')"
           @copy-id="$emit('copy-id', $event)">
           <template #copy-id-button="{ pluginId }">
             <el-button :icon="DocumentCopy" circle size="small" :title="t('plugins.detailCopyId')" @click="$emit('copy-id', pluginId)" />
@@ -58,31 +59,25 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject } from "vue";
+import { computed } from "vue";
+import { useI18n, resolveManifestText, resolveManifestDoc } from "@kabegame/i18n";
 import { Delete, DocumentCopy, Grid } from "@element-plus/icons-vue";
 import TabLayout from "../../layouts/TabLayout.vue";
 import PluginDetail from "./PluginDetail.vue";
 import PluginDocRenderer from "./PluginDocRenderer.vue";
 import type { PluginManifestDoc, PluginManifestText } from "../../stores/plugins";
 
-type TranslateFn = (key: string, params?: Record<string, string | number>) => string;
-const t = inject<TranslateFn>("i18n-t") ?? ((k: string) => k);
-const localeRef = inject<{ value: string }>("i18n-locale");
+const { t, locale } = useI18n();
 
 type PluginVm = {
   id: string;
   name: PluginManifestText;
   desp: PluginManifestText;
-  version?: string;
+  version?: string | null;
   icon?: string | null;
   doc?: PluginManifestDoc | null;
   baseUrl?: string | null;
 };
-
-function resolveDoc(doc: PluginManifestDoc | null | undefined, locale: string): string {
-  if (doc == null || typeof doc !== "object") return "";
-  return doc[locale] ?? doc["default"] ?? "";
-}
 
 type LoadImageBytes = (imagePath: string) => Promise<Uint8Array | number[]>;
 
@@ -109,6 +104,8 @@ const props = withDefaults(
     loadDocImageBytes?: LoadImageBytes;
     /** 插件文档图片 URL 前缀（桌面 HTTP / 安卓 kbg-plugin-doc.localhost），有值时优先用 URL 加载图片 */
     docImageBaseUrl?: string | null;
+    /** 商店安装/更新下载进度 0–100 */
+    installProgressPercent?: number | null;
   }>(),
   {
     showBack: false,
@@ -122,21 +119,22 @@ const effectiveEmptyDescription = computed(() => props.emptyDescription ?? t("co
 const effectiveDocEmptyDescription = computed(() => props.docEmptyDescription ?? t("common.pluginNoDoc"));
 
 const displayDoc = computed(() =>
-  resolveDoc(props.plugin?.doc ?? null, localeRef?.value ?? "zh")
+  resolveManifestDoc(props.plugin?.doc ?? null, locale.value ?? "zh"),
 );
 
-const resolveManifestText = inject<
-  (value: PluginManifestText | null | undefined) => string
->("resolveManifestText");
 const displayName = computed(() =>
-  resolveManifestText && props.plugin
-    ? resolveManifestText(props.plugin.name)
-    : (props.plugin?.name && typeof props.plugin.name === "object" && props.plugin.name["default"]) || ""
+  props.plugin
+    ? resolveManifestText(props.plugin.name, locale.value) ||
+      (typeof props.plugin.name === "object" && props.plugin.name["default"]) ||
+      ""
+    : "",
 );
 const displayDesc = computed(() =>
-  resolveManifestText && props.plugin
-    ? resolveManifestText(props.plugin.desp)
-    : (props.plugin?.desp && typeof props.plugin.desp === "object" && props.plugin.desp["default"]) || ""
+  props.plugin
+    ? resolveManifestText(props.plugin.desp, locale.value) ||
+      (typeof props.plugin.desp === "object" && props.plugin.desp["default"]) ||
+      ""
+    : "",
 );
 
 defineEmits<{

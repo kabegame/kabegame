@@ -11,14 +11,16 @@ import {
   Grid,
   VideoPause,
   Sort,
+  Filter,
   Monitor,
 } from "@element-plus/icons-vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
-import { i18n } from "@/i18n";
+import { i18n } from "@kabegame/i18n";
 
 import CollectAction from "./comps/CollectAction.vue";
 import OrganizeHeaderControl from "./comps/OrganizeHeaderControl.vue";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
+import GalleryFilterControl from "./comps/GalleryFilterControl.vue";
 import GallerySortControl from "./comps/GallerySortControl.vue";
 
 const t = (key: string) => i18n.global.t(key);
@@ -107,10 +109,26 @@ export function registerHeaderFeatures() {
       comp: TaskDrawerButton,
     },
     {
+      id: HeaderFeatureId.GalleryFilter,
+      label: t("gallery.filter"),
+      icon: Filter,
+      comp: GalleryFilterControl,
+    },
+    {
       id: HeaderFeatureId.GallerySort,
       label: t("header.gallerySort"),
       icon: Sort,
       comp: GallerySortControl,
+    },
+    {
+      id: HeaderFeatureId.AlbumBrowseFilter,
+      label: t("gallery.filter"),
+      icon: Filter,
+    },
+    {
+      id: HeaderFeatureId.AlbumBrowseSort,
+      label: t("header.gallerySort"),
+      icon: Sort,
     },
     {
       id: HeaderFeatureId.OpenCrawlerWebview,

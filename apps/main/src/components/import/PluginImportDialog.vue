@@ -64,12 +64,11 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import { useI18n } from 'vue-i18n';
+import { useI18n, usePluginManifestI18n } from '@kabegame/i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { ElMessage } from 'element-plus';
 import PluginDetailPage from '@kabegame/core/components/plugin/PluginDetailPage.vue';
 import type { PluginManifestText } from '@kabegame/core/stores/plugins';
-import { usePluginManifestI18n } from '@/composables/usePluginManifestI18n';
 import { usePluginStore } from '@/stores/plugins';
 import { isUpdateAvailable } from '@kabegame/core/utils/version';
 import { IS_ANDROID } from '@kabegame/core/env';

@@ -7,7 +7,7 @@
     <!-- 安卓：显示名称用 fixed 定位，与叉号同 top/高度，限制宽度并换行 -->
     <div v-if="previewImage?.displayName"
       class="fixed left-0 right-0 top-0 flex min-h-[60px] items-center z-[-1] justify-center px-4 pt-[var(--sat,env(safe-area-inset-top,0px))]">
-      <span class="max-w-[85vw] break-words text-center text-sm font-medium text-white/90"
+      <span class="max-w-[70vw] break-all text-center text-sm font-medium text-white/90"
         style="text-shadow: 0 1px 2px rgba(0,0,0,0.3)">
         {{ previewImage.displayName }}
       </span>
@@ -800,6 +800,7 @@ const handlePswpVerticalDrag = ({ panY, preventDefault }: { panY: number; preven
   }
 
   if (ratio > 0) {
+    // 下划：阻止默认行为（视觉效果和关闭）
     preventDefault();
     swipeDeleteActive.value = false;
     swipeDeleteReady.value = false;
@@ -819,7 +820,7 @@ const handlePswpVerticalDrag = ({ panY, preventDefault }: { panY: number; preven
   }
 };
 
-// 重置初始 panY（当预览关闭或切换图片时）
+// 重置初始 panY：关闭预览时见下方 watch；左右切换时见 handlePswpChange；上划删除成功后见 handlePswpBeforeClose
 watch(() => previewVisible.value, (visible) => {
   if (!visible) {
     initialPanY = null;
@@ -841,6 +842,7 @@ const handlePswpBeforeClose = (source?: string): boolean => {
       if (wasDeleteReady) {
         performSwipeDelete();
         pswpRef.value?.recoverFromVerticalDrag?.();
+        initialPanY = null;
       }
       return false;
     }
@@ -853,6 +855,14 @@ const handlePswpChange = ({ index }: { index: number }) => {
   if (IS_ANDROID) {
     const origIdx = androidFilteredIndices.value[index];
     if (origIdx == null || origIdx >= props.images.length) return;
+    initialPanY = null;
+    if (verticalDragResetTimer) {
+      clearTimeout(verticalDragResetTimer);
+      verticalDragResetTimer = null;
+    }
+    swipeDeleteActive.value = false;
+    swipeDeleteReady.value = false;
+    isFromVerticalDrag = false;
     previewIndex.value = index;
     const img = props.images[origIdx];
     if (img) currentImageId.value = img.id;

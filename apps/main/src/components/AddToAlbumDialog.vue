@@ -25,7 +25,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 import { ElMessage } from "element-plus";
 import { storeToRefs } from "pinia";
 import { useAlbumStore } from "@/stores/albums";

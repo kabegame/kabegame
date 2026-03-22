@@ -9,6 +9,7 @@
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
     "tauri-plugin-picker-api": "workspace:*",
+    "@kabegame/i18n": "workspace:*",
     "@kabegame/core": "workspace:*",
     "@kabegame/image-type": "workspace:*",
     "@tauri-apps/api": "^2.10",
@@ -21,7 +22,6 @@
     "element-plus": "^2.5.14",
     "pinia": "^2.1.7",
     "vue": "^3.4.21",
-    "vue-i18n": "^10",
     "vue-router": "^4.3.0"
   },
   "devDependencies": {

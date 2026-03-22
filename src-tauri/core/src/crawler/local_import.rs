@@ -10,11 +10,12 @@ use crate::crawler::archiver::ArchiveProcessor;
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
 use crate::crawler::downloader::DownloadQueue;
+use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::image_type;
 use crate::settings::Settings;
 use crate::storage::Storage;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -268,7 +269,10 @@ async fn enqueue_image(
             GlobalEmitter::global().emit_task_log(
                 ctx.task_id,
                 "warn",
-                &format!("入队失败 {}: {}", url, e),
+                &task_log_i18n(
+                    "taskLogEnqueueFailed",
+                    json!({ "url": url.as_str(), "detail": e.to_string() }),
+                ),
             );
         }
     }
@@ -331,7 +335,13 @@ async fn enqueue_archive(
                                 GlobalEmitter::global().emit_task_log(
                                     ctx.task_id,
                                     "warn",
-                                    &format!("入队失败 {}: {}", img_url, e),
+                                    &task_log_i18n(
+                                        "taskLogEnqueueFailed",
+                                        json!({
+                                            "url": img_url.as_str(),
+                                            "detail": e.to_string(),
+                                        }),
+                                    ),
                                 );
                             }
                         }
@@ -460,9 +470,9 @@ pub async fn run_builtin_local_import(
     GlobalEmitter::global().emit_task_log(
         task_id,
         "info",
-        &format!(
-            "local-import: streaming over {} path(s)...",
-            paths.len()
+        &task_log_i18n(
+            "taskLogLocalImportStreaming",
+            json!({ "count": paths.len() }),
         ),
     );
     GlobalEmitter::global().emit_task_progress(task_id, 0.0);
@@ -505,9 +515,12 @@ pub async fn run_builtin_local_import(
     GlobalEmitter::global().emit_task_log(
         task_id,
         "info",
-        &format!(
-            "local-import: enqueued {} download(s), {} archive(s)",
-            image_count, archive_count
+        &task_log_i18n(
+            "taskLogLocalImportEnqueuedSummary",
+            json!({
+                "downloads": image_count,
+                "archives": archive_count,
+            }),
         ),
     );
 

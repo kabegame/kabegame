@@ -46,7 +46,7 @@ export interface AppSettings {
   albumDriveEnabled: boolean;
   albumDriveMountPoint: string;
   autoOpenCrawlerWebview: boolean;
-  /** 界面语言（空/null 表示跟随系统） */
+  /** 界面语言（持久化为 canonical 语种码；缺失或非法时由前端解析链写回） */
   language: string | null;
 }
 

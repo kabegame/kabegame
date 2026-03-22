@@ -5,13 +5,24 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ## [3.2.3]
+### Added
+- **Gallery:** More filter options (e.g. by time range, by source plugin, and wallpaper history), with plugin labels shown in your language where applicable.
+- **Gallery / virtual disk:** Sort and browse images by **last time they were set as wallpaper** (ascending or descending); virtual disk includes a matching root folder and reverse-order subfolder where applicable.
+- **Gallery:** Lists using this sort refresh when the current wallpaper changes (including rotation), so order stays consistent without manual reload.
+
 ### Fixed
+- **Android image preview:** Pinch-to-zoom no longer accidentally toggles UI controls (close button, counter bar) visibility.
+- **Gallery (Android):** In multi-select mode, fast taps that the browser treats as a double-click no longer open the image preview; selection toggling stays the only action.
+- **Android image preview:** Swipe-up delete stays reliable after horizontal swipes; deleting the last image on a page keeps the full-screen carousel on the correct slide (no off-by-one preview or erroneous wrap to the first image).
 - **ImageItem (video):** Stopped showing the Element Plus image-variant loading skeleton on top of video (`isVideo` excluded via `v-if`), which had appeared as a small centered picture placeholder while the video played underneath (e.g. gallery grid, album cards).
 - Gallery: your last browse location (root, sort, page) persists across restarts, the sort menu matches what you see, and changing sort no longer resets the page.
 - migrate crash for some version of kabegame
 - Plugin browser store installs now reuse downloaded packages from cache instead of always re-downloading.
+- **Plugin detail page (i18n):** Labels for plugin ID, name, version, description, crawl URL, empty-description text, copy, and link-open errors follow your selected app language instead of hard-coded Chinese.
+- **Plugin browser (official source display name i18n):** When the built-in official GitHub Releases source still uses the default DB name (`官方 GitHub Releases 源`), the UI (store tab label, empty state `noPluginsInSource`, sources table, edit-source form initial value, delete-confirm name) uses `plugins.officialGithubReleaseSourceName` per locale so it updates with the app language. Custom names are unchanged. On save, the localized default string is normalized back to the canonical DB default so a translated label is not persisted as the stored name.
 
 ### Changed
+- **Gallery (desktop):** Filter and sort moved from the page header to the row below the title (above the big paginator), matching album detail; on Android they stay in the header overflow menu with bottom pickers.
 - Builtin plugin removed, must download from remote.
 - Github release remote source cannot be deleted.
 
@@ -21,6 +32,9 @@
 - Crawler Rhai: `to()` and `fetch_json()` emit task-log `info` lines (request start, success with resolved URL / stack depth / JSON type) for easier script debugging.
 - **Plugin browser (store):** `.kgpg` download streams into memory then writes once (no partial cache files); `get_store_plugins` merges active download progress; progress callbacks are throttled to 1s; up to two retries after a failed attempt. `preview_store_install` emits `plugin-store-download-progress` for the UI.
 - **Plugin browser (store):** install button shows download progress as a left-to-right fill with percentage; when the installed version equals the store version, the control is a disabled “Installed” state (no reinstall), and plugin detail opens from the local install (no remote query) so docs load offline.
+- **Plugin detail page:** When you install from the store on the source detail / doc page, the install button shows the same live download progress (fill + percentage) as on the plugin store grid. The summary at the top now includes a **Version** row so you can see the package version at a glance.
+- **Plugin browser （Android）** Store and installed lists use a two-column square card layout
+- **Plugin doc:** Images in plugin Markdown docs open in a full-screen preview on tap or click: Android uses PhotoSwipe (no looping); desktop uses the Element Plus image viewer (no infinite wrap). Natural size is resolved after load so PhotoSwipe gets correct dimensions.
 
 ## [3.2.2]
 ### Added

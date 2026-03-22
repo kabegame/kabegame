@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessageBox } from "element-plus";
-import { i18n } from "@/i18n";
+import { i18n } from "@kabegame/i18n";
 
 function isRequiresWindowModeError(error: unknown): boolean {
   const msg =

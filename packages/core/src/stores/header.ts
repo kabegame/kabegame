@@ -18,8 +18,14 @@ export enum HeaderFeatureId {
   ManageSources = "manageSources",
   TaskDrawer = "taskDrawer",
   AddToAlbum = "addToAlbum",
+  /** 画廊：过滤（全部 / 设置过壁纸等，仅 Android 放入 fold） */
+  GalleryFilter = "galleryFilter",
   /** 画廊「全部」下按时间排序（仅 Android 放入 fold，点击后打开 van-picker） */
   GallerySort = "gallerySort",
+  /** 画册详情：过滤（全部 / 设过壁纸），Android 放入 fold */
+  AlbumBrowseFilter = "albumBrowseFilter",
+  /** 画册详情：排序，Android 放入 fold */
+  AlbumBrowseSort = "albumBrowseSort",
   /** 畅游页：打开爬虫 WebView 窗口（仅桌面） */
   OpenCrawlerWebview = "openCrawlerWebview",
 }

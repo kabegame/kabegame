@@ -2,8 +2,10 @@
 
 use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
+use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
+use serde_json::json;
 use std::path::Path;
 use tauri::AppHandle;
 
@@ -57,6 +59,21 @@ pub async fn set_wallpaper(file_path: String) -> Result<(), String> {
     let found = Storage::global().find_image_by_path(&abs).ok().flatten();
     let image_id = found.as_ref().map(|v| v.id.clone());
     let _ = settings.set_current_wallpaper_image_id(image_id).await;
+
+    if let Some(ref img) = found {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = Storage::global().update_image_last_set_wallpaper_at(&img.id, now);
+        GlobalEmitter::global().emit(
+            "images-change",
+            json!({
+                "reason": "wallpaper-set",
+                "imageIds": [img.id.clone()]
+            }),
+        );
+    }
     Ok(())
 }
 
@@ -109,9 +126,22 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
     controller.set_wallpaper(&local_path, &style).await?;
 
     settings
-        .set_current_wallpaper_image_id(Some(image_id))
+        .set_current_wallpaper_image_id(Some(image_id.clone()))
         .await
         .map_err(|e| format!("Settings error: {}", e))?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let _ = Storage::global().update_image_last_set_wallpaper_at(&image_id, now);
+    GlobalEmitter::global().emit(
+        "images-change",
+        json!({
+            "reason": "wallpaper-set",
+            "imageIds": [image_id]
+        }),
+    );
     Ok(())
 }
 

@@ -174,11 +174,10 @@ import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_ANDROID, IS_LINUX } from "@kabegame/core/env";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { usePluginStore } from "@/stores/plugins";
-import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
+import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
 import { createSurfRecordActions } from "@/actions/surfRecordActions";
-import { useI18n } from "vue-i18n";
 
 const { t } = useI18n();
 const router = useRouter();

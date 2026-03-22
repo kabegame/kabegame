@@ -32,10 +32,31 @@
 
           <!-- 已安装：布局与商店一致 -->
           <div v-else>
-            <transition-group name="fade-in-list" tag="div" class="plugin-grid">
+            <transition-group name="fade-in-list" tag="div" class="plugin-grid"
+              :class="{ 'plugin-grid-android': IS_ANDROID }">
               <el-card v-for="plugin in installedPlugins" :key="plugin.id" class="plugin-card" shadow="hover"
                 @click="viewPluginDetails(plugin)">
-                <div class="plugin-header">
+                <template v-if="IS_ANDROID">
+                  <div class="plugin-android-icon">
+                    <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
+                      <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
+                    </div>
+                    <div v-else-if="isIconLoading(plugin)" class="plugin-icon-placeholder plugin-icon-loading">
+                      <el-icon class="spin">
+                        <Loading />
+                      </el-icon>
+                    </div>
+                    <div v-else class="plugin-icon-placeholder">
+                      <el-icon>
+                        <Grid />
+                      </el-icon>
+                    </div>
+                  </div>
+                  <div class="plugin-android-title">
+                    <h3>{{ pluginName(plugin) }}</h3>
+                  </div>
+                </template>
+                <div v-else class="plugin-header">
                   <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
                     <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
                   </div>
@@ -55,7 +76,19 @@
                   </div>
                 </div>
 
-                <div class="plugin-info">
+                <div v-if="IS_ANDROID" class="plugin-info plugin-info--marquee">
+                  <div class="plugin-info-track">
+                    <div class="plugin-info-group">
+                      <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
+                      <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
+                    </div>
+                    <div class="plugin-info-group" aria-hidden="true">
+                      <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
+                      <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="plugin-info">
                   <el-tag type="success" size="small">{{ $t('plugins.installed') }}</el-tag>
                   <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
                 </div>
@@ -72,7 +105,7 @@
         <!-- 商店源：按"源名称"动态生成 tab；每个 tab 只显示该源的数据 -->
         <el-tab-pane v-for="s in storeSourcesToRender" :key="s.id" :name="storeTabName(s.id)">
           <template #label>
-            <span>{{ s.name }}</span>
+            <span>{{ pluginSourceDisplayName(s) }}</span>
             <el-icon v-if="s.id !== OFFICIAL_PLUGIN_SOURCE_ID" class="tab-close-icon"
               @click.stop="handleDeleteSource(s)">
               <Close />
@@ -80,7 +113,32 @@
           </template>
           <!-- 插件列表（300ms 延迟显示骨架屏，避免快速刷新时闪屏） -->
           <div v-if="showSkeletonBySource[s.id]" class="loading-skeleton">
-            <div class="skeleton-grid">
+            <div v-if="IS_ANDROID" class="skeleton-grid skeleton-grid-android">
+              <div v-for="i in 8" :key="i" class="skeleton-card">
+                <el-skeleton :rows="0" animated>
+                  <template #template>
+                    <div
+                      style="display: flex; flex-direction: column; align-items: center; width: 100%; height: 100%; min-height: 0; gap: 0; box-sizing: border-box;">
+                      <div
+                        style="flex: 0 0 40%; min-height: 0; width: 100%; display: flex; align-items: center; justify-content: center;">
+                        <el-skeleton-item variant="image"
+                          style="width: 48px; height: 48px; border-radius: 8px; flex-shrink: 0;" />
+                      </div>
+                      <el-skeleton-item variant="h3" style="width: 92%; height: 15px; margin: 2px 0 0; flex-shrink: 0;" />
+                      <div
+                        style="flex: 0 0 auto; width: 100%; height: 14px; display: flex; flex-flow: row nowrap; gap: 3px; align-items: center; overflow: hidden;">
+                        <el-skeleton-item variant="text" style="width: 28%; height: 12px; margin: 0; flex-shrink: 0;" />
+                        <el-skeleton-item variant="text" style="width: 32%; height: 12px; margin: 0; flex-shrink: 0;" />
+                        <el-skeleton-item variant="text" style="width: 24%; height: 12px; margin: 0; flex-shrink: 0;" />
+                      </div>
+                      <div style="flex: 1 1 auto; min-height: 0; width: 100%;" />
+                      <el-skeleton-item variant="button" style="width: 100%; height: 26px; margin: 0; flex-shrink: 0;" />
+                    </div>
+                  </template>
+                </el-skeleton>
+              </div>
+            </div>
+            <div v-else class="skeleton-grid">
               <div v-for="i in 12" :key="i" class="skeleton-card">
                 <el-skeleton :rows="0" animated>
                   <template #template>
@@ -100,13 +158,34 @@
           </div>
 
           <div v-else-if="!loadingBySource[s.id] && getStorePlugins(s.id).length === 0" class="empty">
-            <el-empty :description="$t('plugins.noPluginsInSource', { name: s.name })" />
+            <el-empty :description="$t('plugins.noPluginsInSource', { name: pluginSourceDisplayName(s) })" />
           </div>
 
-          <transition-group v-else name="fade-in-list" tag="div" class="plugin-grid">
+          <transition-group v-else name="fade-in-list" tag="div" class="plugin-grid"
+            :class="{ 'plugin-grid-android': IS_ANDROID }">
             <el-card v-for="plugin in getStorePlugins(s.id)" :key="plugin.id" class="plugin-card" shadow="hover"
               @click="viewPluginDetails(plugin)">
-              <div class="plugin-header">
+              <template v-if="IS_ANDROID">
+                <div class="plugin-android-icon">
+                  <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
+                    <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
+                  </div>
+                  <div v-else-if="isIconLoading(plugin)" class="plugin-icon-placeholder plugin-icon-loading">
+                    <el-icon class="spin">
+                      <Loading />
+                    </el-icon>
+                  </div>
+                  <div v-else class="plugin-icon-placeholder">
+                    <el-icon>
+                      <Grid />
+                    </el-icon>
+                  </div>
+                </div>
+                <div class="plugin-android-title">
+                  <h3>{{ pluginName(plugin) }}</h3>
+                </div>
+              </template>
+              <div v-else class="plugin-header">
                 <div v-if="getPluginIconSrc(plugin)" class="plugin-icon">
                   <el-image :src="getPluginIconSrc(plugin) || ''" fit="contain" />
                 </div>
@@ -126,7 +205,29 @@
                 </div>
               </div>
 
-              <div class="plugin-info">
+              <div v-if="IS_ANDROID" class="plugin-info plugin-info--marquee">
+                <div class="plugin-info-track">
+                  <div class="plugin-info-group">
+                    <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
+                    <el-tag v-if="plugin.installedVersion" type="success" size="small">{{
+                      $t('plugins.installedVersion', { version: plugin.installedVersion }) }}</el-tag>
+                    <el-tag v-else type="warning" size="small">{{ $t('plugins.notInstalled') }}</el-tag>
+                    <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
+                      size="small">{{ $t('plugins.canUpdate') }}</el-tag>
+                    <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
+                  </div>
+                  <div class="plugin-info-group" aria-hidden="true">
+                    <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
+                    <el-tag v-if="plugin.installedVersion" type="success" size="small">{{
+                      $t('plugins.installedVersion', { version: plugin.installedVersion }) }}</el-tag>
+                    <el-tag v-else type="warning" size="small">{{ $t('plugins.notInstalled') }}</el-tag>
+                    <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
+                      size="small">{{ $t('plugins.canUpdate') }}</el-tag>
+                    <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="plugin-info">
                 <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
                 <el-tag v-if="plugin.installedVersion" type="success" size="small">{{ $t('plugins.installedVersion', {
                   version: plugin.installedVersion }) }}</el-tag>
@@ -205,7 +306,11 @@
         {{ $t('plugins.sourcesIntro') }}
       </div>
       <el-table :data="sources" style="width: 100%" :empty-text="$t('plugins.noSources')">
-        <el-table-column prop="name" :label="$t('plugins.name')" width="180" />
+        <el-table-column :label="$t('plugins.name')" width="180">
+          <template #default="{ row }">
+            {{ pluginSourceDisplayName(row) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="indexUrl" :label="$t('plugins.indexUrl')" show-overflow-tooltip />
         <el-table-column :label="$t('plugins.action')" width="140">
           <template #default="{ row, $index }">
@@ -286,8 +391,7 @@ import {
 } from "@element-plus/icons-vue";
 import { usePluginStore, type Plugin } from "@/stores/plugins";
 import type { PluginManifestText } from "@kabegame/core/stores/plugins";
-import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
-import { useI18n } from "vue-i18n";
+import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -365,6 +469,15 @@ const openHelpDrawer = () => helpDrawer.open("pluginbrowser");
 
 /** 与后端 `plugin_sources::OFFICIAL_PLUGIN_SOURCE_ID` 一致 */
 const OFFICIAL_PLUGIN_SOURCE_ID = "official_github_release";
+/** 与 `kabegame_core::storage::plugin_sources` 插入官方源时的默认 `name` 一致（用于识别「未自定义」以走 i18n） */
+const OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME = "官方 GitHub Releases 源";
+
+const pluginSourceDisplayName = (s: PluginSource) => {
+  if (s.id === OFFICIAL_PLUGIN_SOURCE_ID && s.name === OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME) {
+    return t("plugins.officialGithubReleaseSourceName");
+  }
+  return s.name;
+};
 
 const pullToRefreshOpts = computed(() =>
   IS_ANDROID
@@ -736,7 +849,7 @@ const editSource = (idx: number) => {
 
   editingSourceIndex.value = idx;
   editSourceForm.id = s.id;
-  editSourceForm.name = s.name;
+  editSourceForm.name = pluginSourceDisplayName(s);
   editSourceForm.indexUrl = s.indexUrl;
   showEditSourceDialog.value = true;
 };
@@ -790,7 +903,17 @@ const confirmEditSource = async () => {
   // 确认添加/编辑即持久化（避免用户以为已添加但重启后丢失）
   try {
     const id = editSourceForm.id.trim() || null;
-    const name = editSourceForm.name.trim();
+    let name = editSourceForm.name.trim();
+    const isOfficial =
+      editSourceForm.id === OFFICIAL_PLUGIN_SOURCE_ID ||
+      (editingSourceIndex.value !== null &&
+        sources.value[editingSourceIndex.value]?.id === OFFICIAL_PLUGIN_SOURCE_ID);
+    if (isOfficial) {
+      const localizedDefault = t("plugins.officialGithubReleaseSourceName");
+      if (name === localizedDefault || name === OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME) {
+        name = OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME;
+      }
+    }
 
     if (editingSourceIndex.value === null) {
       // 添加新源
@@ -847,7 +970,7 @@ const handleDeleteSource = async (source: PluginSource) => {
   }
   try {
     await ElMessageBox.confirm(
-      t("plugins.confirmDeleteStoreSourceWithName", { name: source.name }),
+      t("plugins.confirmDeleteStoreSourceWithName", { name: pluginSourceDisplayName(source) }),
       t("plugins.deleteStoreSourceTitle"),
       { type: "warning" }
     );
@@ -1323,7 +1446,7 @@ onUnmounted(() => {
 });
 </script>
 
-<style scoped lang="scss">
+<style lang="scss">
 .plugin-browser-container {
   width: 100%;
   height: 100%;
@@ -1368,6 +1491,171 @@ onUnmounted(() => {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 20px;
+  }
+
+  /* 安卓：2 列正方形；上/中/下固定比例，仅名称可省略，标签区可滚动（隐藏滚动条） */
+  .plugin-grid-android {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+
+    .plugin-card {
+      height: auto;
+      aspect-ratio: 1;
+      min-height: 0;
+      overflow: hidden;
+      --el-card-padding: 10px;
+
+      .el-card__body {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 5px 6px;
+        box-sizing: border-box;
+        gap: 0;
+        overflow: hidden;
+      }
+
+      /* 图标区与标题区分开：图标占卡片内容区高度 40%，标题单独一行、字号 15px */
+      .plugin-android-icon {
+        flex: 0 0 40%;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+
+        .plugin-icon,
+        .plugin-icon-placeholder {
+          width: clamp(40px, 52%, 56px);
+          height: clamp(40px, 52%, 56px);
+          border-radius: 8px;
+        }
+
+        .plugin-icon-placeholder {
+          font-size: 22px;
+        }
+      }
+
+      .plugin-android-title {
+        flex: 0 0 auto;
+        width: 100%;
+        min-width: 0;
+        text-align: center;
+        padding: 2px 4px 0;
+        box-sizing: border-box;
+
+        h3 {
+          margin: 0 !important;
+          font-size: 15px;
+          font-weight: 600;
+          line-height: 1.2;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          width: 100%;
+          max-width: 100%;
+        }
+      }
+
+      /* 单行标签：横向自动循环（双列无缝），不可手动滑动 */
+      .plugin-info {
+        flex: 0 0 auto;
+        width: 100%;
+        margin-bottom: 0 !important;
+        margin-top: 1px;
+        padding: 0;
+
+        .el-tag {
+          flex-shrink: 0;
+          margin: 0;
+          height: 13px;
+          padding: 0 3px;
+          font-size: 8px;
+          line-height: 11px;
+          border-radius: 3px;
+          box-sizing: border-box;
+          white-space: nowrap;
+        }
+
+        .el-tag .el-tag__content {
+          line-height: 11px;
+        }
+      }
+
+      .plugin-info--marquee {
+        overflow: hidden;
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+
+      .plugin-info-track {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: nowrap;
+        width: max-content;
+        will-change: transform;
+        animation: plugin-info-marquee-android 16s linear infinite;
+
+        @media (prefers-reduced-motion: reduce) {
+          animation: none;
+        }
+      }
+
+      .plugin-info-group {
+        display: flex;
+        flex-flow: row nowrap;
+        align-items: center;
+        gap: 3px;
+        padding-right: 14px;
+        flex-shrink: 0;
+      }
+
+      @keyframes plugin-info-marquee-android {
+        0% {
+          transform: translateX(0);
+        }
+
+        100% {
+          transform: translateX(-50%);
+        }
+      }
+
+      .plugin-footer {
+        flex: 0 0 auto;
+        flex-shrink: 0;
+        flex-direction: column;
+        gap: 3px;
+        margin-top: auto;
+        padding-top: 3px;
+        border-top: 1px solid var(--anime-border, rgba(128, 128, 128, 0.2));
+
+        .el-button {
+          width: 100%;
+          margin: 0;
+          padding: 4px 6px;
+          font-size: 11px;
+        }
+      }
+
+      .plugin-store-install-btn {
+        min-width: 0;
+
+        &--progress {
+          padding: 3px 8px;
+        }
+
+        &__fill-wrap {
+          min-height: 18px;
+        }
+
+        &__label {
+          font-size: 10px;
+          line-height: 18px;
+        }
+      }
+    }
   }
 }
 
@@ -1425,13 +1713,13 @@ onUnmounted(() => {
     justify-content: center;
     background: var(--anime-bg-secondary);
 
-    :deep(.el-image) {
+    .el-image {
       width: 100%;
       height: 100%;
       object-fit: contain;
     }
 
-    :deep(.el-image__inner) {
+    .el-image__inner {
       width: 100%;
       height: 100%;
       object-fit: contain;
@@ -1586,7 +1874,7 @@ onUnmounted(() => {
   }
 
   /* Tab 关闭按钮样式 */
-  :deep(.tab-close-icon) {
+  .tab-close-icon {
     margin-left: 8px;
     font-size: 14px;
     cursor: pointer;
@@ -1600,7 +1888,7 @@ onUnmounted(() => {
   }
 
   /* 禁用插件卡片上标签和按钮的初始展开动画 */
-  :deep(.el-tag) {
+  .el-tag {
     animation: none !important;
     transition: none !important;
   }
@@ -1614,6 +1902,21 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 20px;
+}
+
+.skeleton-grid-android {
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+
+  .skeleton-card {
+    height: auto;
+    aspect-ratio: 1;
+    padding: 10px;
+    overflow: hidden;
+    display: flex;
+    align-items: flex-start;
+    box-sizing: border-box;
+  }
 }
 
 .skeleton-card {

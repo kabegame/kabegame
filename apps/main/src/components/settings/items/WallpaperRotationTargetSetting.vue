@@ -34,7 +34,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 import { ElMessage } from "element-plus";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_ANDROID } from "@kabegame/core/env";

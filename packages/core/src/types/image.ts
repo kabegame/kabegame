@@ -30,6 +30,9 @@ export interface ImageInfo {
   /** 媒体类型：默认 image，video 表示视频壁纸。 */
   type?: "image" | "video";
 
+  /** 最后一次被设为壁纸的 Unix 时间戳（秒） */
+  lastSetWallpaperAt?: number;
+
   // 任务失败占位（TaskDetail）：用于在网格中渲染“下载重试”按钮
   isTaskFailed?: boolean;
   taskFailedId?: number;

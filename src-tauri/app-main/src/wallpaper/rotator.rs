@@ -1,6 +1,8 @@
 use super::manager::WallpaperController;
+use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::{ImageInfo, Storage};
+use serde_json::json;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -435,6 +437,19 @@ impl WallpaperRotator {
                     .set_current_wallpaper_image_id(Some(selected_image.id.clone()))
                     .await;
 
+                let now_ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let _ = Storage::global().update_image_last_set_wallpaper_at(&selected_image.id, now_ts);
+                GlobalEmitter::global().emit(
+                    "images-change",
+                    json!({
+                        "reason": "wallpaper-set",
+                        "imageIds": [selected_image.id.clone()]
+                    }),
+                );
+
                 // 本轮执行完后，让下一次从“现在”开始计时，确保手动切换/模式切换会重置计时器
                 ticker.reset();
             }
@@ -745,6 +760,19 @@ impl WallpaperRotator {
         let _ = settings
             .set_current_wallpaper_image_id(Some(selected_image.id.clone()))
             .await;
+
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = Storage::global().update_image_last_set_wallpaper_at(&selected_image.id, now_ts);
+        GlobalEmitter::global().emit(
+            "images-change",
+            json!({
+                "reason": "wallpaper-set",
+                "imageIds": [selected_image.id.clone()]
+            }),
+        );
 
         // 如果轮播已启用但未运行，启动轮播器
         let enabled = settings

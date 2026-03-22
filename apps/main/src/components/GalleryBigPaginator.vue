@@ -49,6 +49,8 @@
                     v-model="pickerSelectedValues"
                     :title="$t('gallery.jumpToPage')"
                     :columns="pickerColumns"
+                    :confirm-button-text="t('common.confirm')"
+                    :cancel-button-text="t('common.cancel')"
                     @confirm="onPickerConfirm"
                     @cancel="showPagePicker = false"
                 />
@@ -59,6 +61,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "@kabegame/i18n";
 import { ArrowLeft, ArrowRight } from "@element-plus/icons-vue";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
@@ -78,6 +81,8 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
     jumpToPage: [page: number];
 }>();
+
+const { t } = useI18n();
 
 const BIG_PAGE_SIZE = computed(() => props.bigPageSize);
 
@@ -117,8 +122,8 @@ useModalBack(showPagePicker);
 
 /** 总页数的位数，即 Picker 列数（1–9→1 列，10–99→2 列，100–999→3 列…） */
 const pickerDigitCount = computed(() => {
-    const t = totalBigPages.value;
-    return t < 10 ? 1 : Math.floor(Math.log10(t)) + 1;
+    const total = totalBigPages.value;
+    return total < 10 ? 1 : Math.floor(Math.log10(total)) + 1;
 });
 
 /** Picker 级联选项类型（保证选中值在 1～totalBigPages） */

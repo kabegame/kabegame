@@ -22,16 +22,16 @@ use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
 /// 每个叶子目录最多包含的图片数量（安卓与桌面统一：每页 100 张）
-const LEAF_SIZE: usize = 100;
+pub(crate) const LEAF_SIZE: usize = 100;
 /// 每个分组目录最多包含的子目录数量
 const GROUP_SIZE: usize = 10;
 
-/// 分页模式枚举
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// 分页模式：决定 `CommonProvider` 的列目录、`resolve_child` 与 `ProviderDescriptor`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaginationMode {
-    /// 贪心分解模式（原有 VD 方式）
+    /// 贪心分解（虚拟盘 / 与 VD 一致的子目录区间）
     Greedy,
-    /// 简单页码模式（新 MainProvider 方式）
+    /// Main 路径：`.../<page>`、`.../desc/<page>` 由 `SimplePageProvider` 承载
     SimplePage,
 }
 
@@ -39,6 +39,7 @@ pub enum PaginationMode {
 #[derive(Clone)]
 pub struct CommonProvider {
     query: ImageQuery,
+    /// 分页语义：见 [`PaginationMode`]；构造时须明确，决定 `list` / `resolve_child` / `descriptor` 行为。
     mode: PaginationMode,
 }
 
@@ -62,6 +63,12 @@ impl CommonProvider {
     pub fn with_query_and_mode(query: ImageQuery, mode: PaginationMode) -> Self {
         Self { query, mode }
     }
+
+    /// 当前分页模式（Main 的 `.../desc/<page>` 须为 [`PaginationMode::SimplePage`]）
+    #[inline]
+    pub fn pagination_mode(&self) -> PaginationMode {
+        self.mode
+    }
 }
 
 impl Default for CommonProvider {
@@ -72,18 +79,20 @@ impl Default for CommonProvider {
 
 impl Provider for CommonProvider {
     fn resolve_child(&self, name: &str) -> crate::providers::provider::ResolveChild {
-        if let PaginationMode::SimplePage = self.mode {
-            // SimplePage 模式：解析页码字符串
-            if let Ok(page) = name.parse::<usize>() {
-                if page > 0 {
-                    return crate::providers::provider::ResolveChild::Dynamic(
-                        Arc::new(SimplePageProvider::new(self.query.clone(), page)) as Arc<dyn Provider>
-                    );
+        match self.mode {
+            PaginationMode::SimplePage => {
+                if let Ok(page) = name.parse::<usize>() {
+                    if page > 0 {
+                        return crate::providers::provider::ResolveChild::Dynamic(
+                            Arc::new(SimplePageProvider::new(self.query.clone(), page))
+                                as Arc<dyn Provider>,
+                        );
+                    }
                 }
+                crate::providers::provider::ResolveChild::NotFound
             }
+            PaginationMode::Greedy => crate::providers::provider::ResolveChild::NotFound,
         }
-        // 其他情况使用默认实现
-        crate::providers::provider::ResolveChild::NotFound
     }
     fn descriptor(&self) -> ProviderDescriptor {
         match self.mode {
@@ -116,8 +125,8 @@ impl Provider for CommonProvider {
                     list_greedy_subdirs_with_remainder(&self.query, 0, total)?
                 };
 
-                // 仅「全部」正序时展示「倒序」子目录入口，避免 全部/倒序 下再出现 倒序
-                if self.query.is_all_recent_asc() {
+                // 仅升序查询展示「倒序」子目录入口
+                if self.query.is_ascending() {
                     entries.insert(0, FsEntry::dir("倒序"));
                 }
                 Ok(entries)
@@ -126,7 +135,7 @@ impl Provider for CommonProvider {
                 let mut entries = Vec::new();
 
                 // SimplePage 模式：只显示 "desc" 目录（如果适用），页码通过 resolve_child 动态处理
-                if self.query.is_all_recent_asc() {
+                if self.query.is_ascending() {
                     entries.push(FsEntry::dir("desc"));
                 }
 
@@ -138,9 +147,9 @@ impl Provider for CommonProvider {
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         match self.mode {
             PaginationMode::Greedy => {
-                // 「全部」正序下提供「倒序」子节点；倒序 provider 不再有「倒序」子节点
-                if name == "倒序" && self.query.is_all_recent_asc() {
-                    return Some(Arc::new(CommonProvider::with_query(ImageQuery::all_recent_desc())));
+                // 升序下提供「倒序」子节点
+                if name == "倒序" && self.query.is_ascending() {
+                    return Some(Arc::new(CommonProvider::with_query(self.query.to_desc())));
                 }
 
                 let total = Storage::global().get_images_count_by_query(&self.query).ok()?;
@@ -168,9 +177,9 @@ impl Provider for CommonProvider {
             }
             PaginationMode::SimplePage => {
                 // SimplePage 模式：只支持 "desc" 子目录
-                if name == "desc" && self.query.is_all_recent_asc() {
+                if name == "desc" && self.query.is_ascending() {
                     return Some(Arc::new(CommonProvider::with_query_and_mode(
-                        ImageQuery::all_recent_desc(),
+                        self.query.to_desc(),
                         PaginationMode::SimplePage,
                     )));
                 }
@@ -339,7 +348,7 @@ impl Provider for RangeProvider {
 
 /// 计算给定大小对应的深度（用于 RangeProvider）
 /// 例如：1000 -> 0, 10000 -> 1, 100000 -> 2
-fn calc_depth_for_size(size: usize) -> usize {
+pub(crate) fn calc_depth_for_size(size: usize) -> usize {
     if size <= LEAF_SIZE {
         return 0;
     }
@@ -371,7 +380,7 @@ fn range_name(start_1based: usize, end_1based: usize) -> String {
 }
 
 /// 解析范围名称，返回 (offset, count)
-fn parse_range(range: &str) -> Option<(usize, usize)> {
+pub(crate) fn parse_range(range: &str) -> Option<(usize, usize)> {
     let parts: Vec<&str> = range.split('-').collect();
     if parts.len() != 2 {
         return None;
@@ -412,13 +421,13 @@ fn greedy_decompose(total: usize) -> Vec<(usize, usize)> {
 }
 
 /// 验证范围是否在贪心分解的结果中
-fn validate_greedy_range(offset: usize, count: usize, total: usize) -> bool {
+pub(crate) fn validate_greedy_range(offset: usize, count: usize, total: usize) -> bool {
     let ranges = greedy_decompose(total);
     ranges.contains(&(offset, count))
 }
 
 /// 使用贪心分解策略列出子目录 + 剩余文件
-fn list_greedy_subdirs_with_remainder(
+pub(crate) fn list_greedy_subdirs_with_remainder(
     query: &ImageQuery,
     base_offset: usize,
     total: usize,

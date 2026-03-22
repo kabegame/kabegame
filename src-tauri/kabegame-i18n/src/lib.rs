@@ -1,6 +1,6 @@
-rust_i18n::i18n!("locales", fallback = "zh");
+rust_i18n::i18n!("locales", fallback = "en");
 
-const DEFAULT_LANGUAGE: &str = "zh";
+const DEFAULT_LANGUAGE: &str = "en";
 
 #[inline]
 fn locale_alias(locale: &str) -> Option<&'static str> {

@@ -24,13 +24,24 @@
         <template #empty>
           <div v-if="displayedImages.length === 0 && !loading && !isRefreshing" :key="'empty-' + refreshKey"
             class="empty fade-in">
-            <EmptyState />
-            <el-button type="primary" class="empty-action-btn" @click="handleEmptyStateCollect">
-              <el-icon>
-                <Plus />
-              </el-icon>
-              {{ $t('gallery.startCollect') }}
-            </el-button>
+            <template v-if="isWallpaperOrderEmpty">
+              <EmptyState :primary-tip="$t('gallery.wallpaperOrderEmptyTip')" />
+              <el-button type="primary" class="empty-action-btn" @click="handleWallpaperEmptyViewAll">
+                <el-icon>
+                  <Picture />
+                </el-icon>
+                {{ $t('gallery.viewAllImages') }}
+              </el-button>
+            </template>
+            <template v-else>
+              <EmptyState />
+              <el-button type="primary" class="empty-action-btn" @click="handleEmptyStateCollect">
+                <el-icon>
+                  <Plus />
+                </el-icon>
+                {{ $t('gallery.startCollect') }}
+              </el-button>
+            </template>
           </div>
         </template>
       </ImageGrid>
@@ -81,7 +92,7 @@ import { ref, computed, onMounted, onActivated, onDeactivated, watch, nextTick }
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Plus, Star, StarFilled, FolderAdd, Delete, FolderOpened, Connection } from "@element-plus/icons-vue";
+import { Plus, Picture, Star, StarFilled, FolderAdd, Delete, FolderOpened, Connection } from "@element-plus/icons-vue";
 import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -105,6 +116,7 @@ import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
 import { useGalleryPathState } from "@/composables/useGalleryPathState";
+import { buildGalleryPath, parseGalleryPath } from "@/utils/galleryPath";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
@@ -116,8 +128,7 @@ import type { Component } from "vue";
 import { useAlbumStore } from "@/stores/albums";
 import { type ContextCommand } from "@/components/ImageGrid.vue";
 import { listen } from "@tauri-apps/api/event";
-import { useI18n } from "vue-i18n";
-import { usePluginManifestI18n } from "@/composables/usePluginManifestI18n";
+import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 
 const { t } = useI18n();
 const { pluginName: resolvePluginName } = usePluginManifestI18n();
@@ -169,7 +180,7 @@ const route = useRoute();
 const router = useRouter();
 
 // 持久化：root / sort / page 三个 ref（useGalleryPathState）；无 query.path 时默认 path 为 providerPath
-const { providerPath: galleryProviderDefaultPath, applyFromPath } =
+const { providerPath: galleryProviderDefaultPath, applyFromPath, sort: gallerySortPref } =
   useGalleryPathState();
 
 // Query param 驱动：
@@ -188,6 +199,10 @@ const {
   router,
   defaultPath: galleryProviderDefaultPath,
 });
+
+const isWallpaperOrderEmpty = computed(
+  () => parseGalleryPath(currentPath.value).root === "wallpaper-order"
+);
 
 watch(
   currentPath,
@@ -310,6 +325,14 @@ const handleEmptyStateCollect = () => {
   } else {
     showCollectMenuDialog.value = true;
   }
+};
+
+const handleWallpaperEmptyViewAll = () => {
+  const s = gallerySortPref.value === "desc" ? "desc" : "asc";
+  void router.push({
+    path: "/gallery",
+    query: { path: buildGalleryPath("all", s, 1) },
+  });
 };
 
 // 桌面：选择收集方式对话框 → 本地
@@ -634,7 +657,7 @@ watch(
       // 同步 total 到本地
       totalImagesCount.value = result.total ?? 0;
     } catch (error) {
-      console.error("加载路径失败:", error);
+      console.error("加载路径失败:", newPath, error);
     } finally {
       finishLoading();
     }
@@ -1175,7 +1198,7 @@ onActivated(async () => {
       await loadTotalImagesCount();
     } catch (e) {
       const msg = e != null && typeof e === "object" && "message" in e ? String((e as Error).message) : String(e);
-      console.error("[Gallery] onActivated loadImages 失败:", msg);
+      console.error("[Gallery] onActivated loadImages 失败:", pathToLoad, msg);
       if (msg.includes("路径不存在")) {
         await invoke("clear_provider_cache").catch(() => {});
         await refreshImagesPreserveCache(pathToLoad);

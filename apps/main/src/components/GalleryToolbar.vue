@@ -5,13 +5,165 @@
     </template>
   </PageHeader>
 
-  <!-- Android：fold 中点击「按时间排序」后弹出的 van-picker -->
+  <!-- 桌面：过滤（全部 / 壁纸 / 按时间嵌套 / 按插件）+ 排序（任意根路径），置于标题与分页器之间 -->
+  <div v-if="!IS_ANDROID" class="gallery-browse-toolbar">
+    <el-dropdown v-if="showGalleryFilterFold" trigger="click" @command="onDesktopFilterCommand">
+      <el-button class="gallery-browse-btn">
+        <el-icon class="gallery-browse-icon">
+          <Filter />
+        </el-icon>
+        <span>{{ filterFoldLabel }}</span>
+        <el-icon class="el-icon--right">
+          <ArrowDown />
+        </el-icon>
+      </el-button>
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item command="all" :class="{ 'is-active': isAllFilterBrowse }">
+            {{ t("gallery.filterAll") }}
+          </el-dropdown-item>
+          <el-dropdown-item
+            command="wallpaper-order"
+            :class="{ 'is-active': isWallpaperOrderBrowse }"
+          >
+            {{ t("gallery.filterWallpaperSet") }}
+          </el-dropdown-item>
+          <el-dropdown-item divided class="plugin-submenu-wrap" @click.stop>
+            <el-dropdown
+              trigger="hover"
+              placement="right-start"
+              @command="onDesktopTimeFilterCommand"
+            >
+              <span
+                class="plugin-submenu-trigger"
+                :class="{ 'is-active': isTimeFilterBrowse }"
+              >
+                {{ t("gallery.filterByTime") }}
+                <el-icon class="plugin-submenu-chevron">
+                  <ArrowRight />
+                </el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu class="plugin-submenu-menu">
+                  <template v-if="timeMenuRoots.length">
+                    <GalleryTimeFilterSubmenu
+                      :nodes="timeMenuRoots"
+                      :date-tail="dateTail"
+                      @command="onDesktopTimeFilterCommand"
+                    />
+                  </template>
+                  <el-dropdown-item v-else disabled>
+                    {{ t("gallery.filterByTimeEmpty") }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </el-dropdown-item>
+          <el-dropdown-item class="plugin-submenu-wrap" @click.stop>
+            <el-dropdown
+              trigger="hover"
+              placement="right-start"
+              @command="onDesktopPluginFilterCommand"
+            >
+              <span
+                class="plugin-submenu-trigger"
+                :class="{ 'is-active': isPluginFilterBrowse }"
+              >
+                {{ t("gallery.filterByPlugin") }}
+                <el-icon class="plugin-submenu-chevron">
+                  <ArrowRight />
+                </el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu class="plugin-submenu-menu">
+                  <template v-if="pluginGroups.length">
+                    <el-dropdown-item
+                      v-for="g in pluginGroups"
+                      :key="g.plugin_id"
+                      :command="g.plugin_id"
+                      :class="{ 'is-active': currentPluginId === g.plugin_id }"
+                    >
+                      {{ pluginStore.pluginLabel(g.plugin_id) }}
+                      <span class="plugin-count">({{ g.count }})</span>
+                    </el-dropdown-item>
+                  </template>
+                  <el-dropdown-item v-else disabled>
+                    {{ t("gallery.filterByPluginEmpty") }}
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
+
+    <el-dropdown trigger="click" @command="onDesktopSortCommand">
+      <el-button class="gallery-browse-btn">
+        <el-icon class="gallery-browse-icon">
+          <Sort />
+        </el-icon>
+        <span>{{ sortToolbarButtonLabel }}</span>
+        <el-icon class="el-icon--right">
+          <ArrowDown />
+        </el-icon>
+      </el-button>
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item command="asc" :class="{ 'is-active': sortOrder === 'asc' }">
+            {{ sortOptionLabelAsc }}
+          </el-dropdown-item>
+          <el-dropdown-item command="desc" :class="{ 'is-active': sortOrder === 'desc' }">
+            {{ sortOptionLabelDesc }}
+          </el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
+  </div>
+
+  <!-- Android：fold 中「过滤」「排序」弹出的 van-picker -->
   <Teleport v-if="IS_ANDROID" to="body">
+    <van-popup v-model:show="showFilterPicker" position="bottom" round>
+      <van-picker
+        v-model="filterPickerSelected"
+        :title="$t('gallery.filter')"
+        :columns="filterPickerColumns"
+        :confirm-button-text="t('common.confirm')"
+        :cancel-button-text="t('common.cancel')"
+        @confirm="onFilterPickerConfirm"
+        @cancel="showFilterPicker = false"
+      />
+    </van-popup>
+    <van-popup v-model:show="showTimeFilterPicker" position="bottom" round>
+      <van-picker
+        v-model="timeFilterPickerSelected"
+        :title="timeFilterPickerTitle"
+        :columns="timeFilterPickerColumns"
+        :confirm-button-text="t('common.confirm')"
+        :cancel-button-text="t('common.cancel')"
+        @confirm="onTimeFilterPickerConfirm"
+        @change="onTimeFilterPickerChange"
+        @cancel="showTimeFilterPicker = false"
+      />
+    </van-popup>
+    <van-popup v-model:show="showPluginFilterPicker" position="bottom" round>
+      <van-picker
+        v-model="pluginFilterPickerSelected"
+        :title="t('gallery.filterByPlugin')"
+        :columns="pluginFilterPickerColumns"
+        :confirm-button-text="t('common.confirm')"
+        :cancel-button-text="t('common.cancel')"
+        @confirm="onPluginFilterPickerConfirm"
+        @cancel="showPluginFilterPicker = false"
+      />
+    </van-popup>
     <van-popup v-model:show="showSortPicker" position="bottom" round>
       <van-picker
         v-model="sortPickerSelected"
         :title="$t('gallery.byTime')"
         :columns="sortPickerColumns"
+        :confirm-button-text="t('common.confirm')"
+        :cancel-button-text="t('common.cancel')"
         @confirm="onSortPickerConfirm"
         @cancel="showSortPicker = false"
       />
@@ -20,14 +172,36 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onUnmounted } from "vue";
-import { useI18n } from "vue-i18n";
+import { computed, ref, watch, onUnmounted, onMounted } from "vue";
+import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
+import { ArrowDown, ArrowRight, Filter, Sort } from "@element-plus/icons-vue";
+import { invoke } from "@tauri-apps/api/core";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
-import { galleryPathWithSortOnly } from "@/utils/galleryPath";
+import {
+  galleryDateTailFromRoot,
+  galleryPathWithRootOnly,
+  galleryPathWithSortOnly,
+  galleryPluginIdFromRoot,
+  parseGalleryPath,
+} from "@/utils/galleryPath";
+import {
+  buildGalleryTimeMenuTree,
+  buildTimeMenuScopeLabels,
+  getTimeMenuMaxDepth,
+  resolveInitialTimePickPath,
+  resolveTimeMenuPickToDateTail,
+  syncTimeMenuPickerState,
+  type DateGroupRow,
+  type DayGroupRow,
+  type GalleryTimeFilterPayload,
+  type TimeMenuNode,
+} from "@/utils/galleryTimeFilterMenu";
+import GalleryTimeFilterSubmenu from "@/header/comps/GalleryTimeFilterSubmenu.vue";
+import { usePluginStore } from "@/stores/plugins";
 
 interface Props {
   isLoadingAll?: boolean;
@@ -56,14 +230,100 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const router = useRouter();
-const isAllAsc = computed(() => props.providerRootPath === "全部");
-const isAllDesc = computed(() => props.providerRootPath.includes("/desc"));
 const sortOrder = computed(() =>
   props.providerRootPath.includes("/desc") ? "desc" : "asc"
 );
-const { t } = useI18n();
-const sortOptionLabelAsc = computed(() => t('gallery.byTimeAsc'));
-const sortOptionLabelDesc = computed(() => t('gallery.byTimeDesc'));
+const { t, locale } = useI18n();
+const pluginStore = usePluginStore();
+
+const isWallpaperOrderBrowse = computed(() =>
+  props.providerRootPath.startsWith("wallpaper-order")
+);
+
+const filterPathRoot = computed(() => {
+  const path = props.currentProviderPath?.trim() || "all/1";
+  return parseGalleryPath(path).root;
+});
+
+const currentPluginId = computed(() =>
+  galleryPluginIdFromRoot(filterPathRoot.value)
+);
+
+const dateTail = computed(() => galleryDateTailFromRoot(filterPathRoot.value));
+
+const isPluginFilterBrowse = computed(() => currentPluginId.value != null);
+
+const isTimeFilterBrowse = computed(() => dateTail.value != null);
+
+const isAllFilterBrowse = computed(
+  () => filterPathRoot.value === "all"
+);
+
+const showGalleryFilterFold = computed(() => {
+  const root = filterPathRoot.value;
+  return (
+    root === "all" ||
+    root === "wallpaper-order" ||
+    /^plugin\//i.test(root) ||
+    /^date\//i.test(root)
+  );
+});
+
+interface PluginGroupRow {
+  plugin_id: string;
+  count: number;
+}
+
+const pluginGroups = ref<PluginGroupRow[]>([]);
+const monthGroups = ref<DateGroupRow[]>([]);
+const dayGroups = ref<DayGroupRow[]>([]);
+
+const timeMenuRoots = computed<TimeMenuNode[]>(() =>
+  buildGalleryTimeMenuTree(
+    monthGroups.value,
+    dayGroups.value,
+    buildTimeMenuScopeLabels(t, String(locale.value))
+  )
+);
+
+onMounted(async () => {
+  try {
+    const [pg, timePayload] = await Promise.all([
+      invoke<PluginGroupRow[]>("get_gallery_plugin_groups"),
+      invoke<GalleryTimeFilterPayload>("get_gallery_time_filter_data"),
+      pluginStore.loadPlugins(),
+    ]);
+    pluginGroups.value = Array.isArray(pg) ? pg : [];
+    monthGroups.value = Array.isArray(timePayload?.months) ? timePayload.months : [];
+    dayGroups.value = Array.isArray(timePayload?.days) ? timePayload.days : [];
+  } catch {
+    pluginGroups.value = [];
+    monthGroups.value = [];
+    dayGroups.value = [];
+  }
+});
+
+const sortOptionLabelAsc = computed(() =>
+  isWallpaperOrderBrowse.value
+    ? t("gallery.bySetTimeAsc")
+    : t("gallery.byTimeAsc")
+);
+const sortOptionLabelDesc = computed(() =>
+  isWallpaperOrderBrowse.value
+    ? t("gallery.bySetTimeDesc")
+    : t("gallery.byTimeDesc")
+);
+
+const filterFoldLabel = computed(() => {
+  void locale.value;
+  if (isWallpaperOrderBrowse.value) return t("gallery.filterWallpaperSet");
+  const dt = dateTail.value;
+  if (dt) return t("gallery.filterByTimeWithDetail", { detail: dt });
+  const pid = currentPluginId.value;
+  if (pid) return t("gallery.filterByPluginWithName", { name: pluginStore.pluginLabel(pid) });
+  return t("gallery.filterAll");
+});
+
 function onSortOrderChange(value: string) {
   const path = props.currentProviderPath?.trim() || "all/1";
   const sort = value === "desc" ? "desc" : "asc";
@@ -71,12 +331,161 @@ function onSortOrderChange(value: string) {
   void router.push({ path: "/gallery", query: { path: next } });
 }
 
-// Android：fold 中「按时间排序」点击后弹出的 picker
+const sortToolbarButtonLabel = computed(() =>
+  sortOrder.value === "desc" ? sortOptionLabelDesc.value : sortOptionLabelAsc.value
+);
+
+function onDesktopFilterCommand(cmd: string) {
+  if (cmd !== "all" && cmd !== "wallpaper-order") return;
+  const path = props.currentProviderPath?.trim() || "all/1";
+  const next = galleryPathWithRootOnly(path, cmd);
+  void router.push({ path: "/gallery", query: { path: next } });
+}
+
+function onDesktopPluginFilterCommand(pluginId: string) {
+  const id = (pluginId || "").trim();
+  if (!id) return;
+  const path = props.currentProviderPath?.trim() || "all/1";
+  const next = galleryPathWithRootOnly(path, `plugin/${id}`);
+  void router.push({ path: "/gallery", query: { path: next } });
+}
+
+function onDesktopTimeFilterCommand(seg: string) {
+  const s = (seg || "").trim();
+  if (!s) return;
+  const path = props.currentProviderPath?.trim() || "all/1";
+  const next = galleryPathWithRootOnly(path, `date/${s}`);
+  void router.push({ path: "/gallery", query: { path: next } });
+}
+
+function onDesktopSortCommand(cmd: string) {
+  if (cmd !== "asc" && cmd !== "desc") return;
+  onSortOrderChange(cmd);
+}
+
+// Android：fold 中过滤 / 排序弹出的 picker
+const showFilterPicker = ref(false);
+const showTimeFilterPicker = ref(false);
+const showPluginFilterPicker = ref(false);
 const showSortPicker = ref(false);
+useModalBack(showFilterPicker);
+useModalBack(showTimeFilterPicker);
+useModalBack(showPluginFilterPicker);
 useModalBack(showSortPicker);
+
+const filterPickerColumns = computed(() => [
+  { text: t("gallery.filterAll"), value: "all" },
+  { text: t("gallery.filterWallpaperSet"), value: "wallpaper-order" },
+  { text: t("gallery.filterByTime"), value: "time" },
+  { text: t("gallery.filterByPlugin"), value: "plugin" },
+]);
+const filterPickerSelected = ref<string[]>(["all"]);
+watch(showFilterPicker, (open) => {
+  if (open) {
+    if (isWallpaperOrderBrowse.value) {
+      filterPickerSelected.value = ["wallpaper-order"];
+    } else if (isTimeFilterBrowse.value) {
+      filterPickerSelected.value = ["time"];
+    } else if (isPluginFilterBrowse.value) {
+      filterPickerSelected.value = ["plugin"];
+    } else {
+      filterPickerSelected.value = ["all"];
+    }
+  }
+});
+function onFilterPickerConfirm() {
+  showFilterPicker.value = false;
+  const v = filterPickerSelected.value[0];
+  if (v === "time") {
+    if (!timeMenuRoots.value.length) return;
+    showTimeFilterPicker.value = true;
+    return;
+  }
+  if (v === "plugin") {
+    if (!pluginGroups.value.length) return;
+    showPluginFilterPicker.value = true;
+    return;
+  }
+  if (v === "all" || v === "wallpaper-order") {
+    const path = props.currentProviderPath?.trim() || "all/1";
+    const next = galleryPathWithRootOnly(path, v);
+    void router.push({ path: "/gallery", query: { path: next } });
+  }
+}
+
+const timeFilterPickerTitle = computed(() => t("gallery.filterByTime"));
+
+const timeFilterPickerColumns = ref<{ text: string; value: string }[][]>([]);
+const timeFilterPickerSelected = ref<string[]>([]);
+
+function applyTimeMenuPickerState(raw: readonly string[]) {
+  const roots = timeMenuRoots.value;
+  const { columns, values } = syncTimeMenuPickerState(roots, raw);
+  timeFilterPickerColumns.value = columns;
+  timeFilterPickerSelected.value = values;
+}
+
+watch(showTimeFilterPicker, (open) => {
+  if (!open) return;
+  const roots = timeMenuRoots.value;
+  const initial = resolveInitialTimePickPath(roots, dateTail.value);
+  applyTimeMenuPickerState(initial);
+});
+
+function onTimeFilterPickerChange(payload: {
+  selectedValues: (string | number)[];
+  columnIndex: number;
+}) {
+  const { columnIndex, selectedValues } = payload;
+  const maxD = getTimeMenuMaxDepth(timeMenuRoots.value);
+  if (columnIndex >= maxD - 1) return;
+  applyTimeMenuPickerState(selectedValues.map(String));
+}
+
+function onTimeFilterPickerConfirm(payload: {
+  selectedValues: (string | number)[];
+}) {
+  showTimeFilterPicker.value = false;
+  const roots = timeMenuRoots.value;
+  const tail = resolveTimeMenuPickToDateTail(
+    roots,
+    payload.selectedValues.map(String)
+  );
+  if (!tail) return;
+  const path = props.currentProviderPath?.trim() || "all/1";
+  const next = galleryPathWithRootOnly(path, `date/${tail}`);
+  void router.push({ path: "/gallery", query: { path: next } });
+}
+
+const pluginFilterPickerColumns = computed(() => {
+  void locale.value;
+  return pluginGroups.value.map((g) => ({
+    text: `${pluginStore.pluginLabel(g.plugin_id)} (${g.count})`,
+    value: g.plugin_id,
+  }));
+});
+const pluginFilterPickerSelected = ref<string[]>([]);
+watch(showPluginFilterPicker, (open) => {
+  if (open) {
+    const id =
+      currentPluginId.value ||
+      pluginGroups.value[0]?.plugin_id ||
+      "";
+    pluginFilterPickerSelected.value = id ? [id] : [];
+  }
+});
+function onPluginFilterPickerConfirm() {
+  showPluginFilterPicker.value = false;
+  const id = pluginFilterPickerSelected.value[0];
+  if (!id) return;
+  const path = props.currentProviderPath?.trim() || "all/1";
+  const next = galleryPathWithRootOnly(path, `plugin/${id}`);
+  void router.push({ path: "/gallery", query: { path: next } });
+}
+
 const sortPickerColumns = computed(() => [
-  { text: t('gallery.byTimeAsc'), value: "asc" },
-  { text: t('gallery.byTimeDesc'), value: "desc" },
+  { text: sortOptionLabelAsc.value, value: "asc" },
+  { text: sortOptionLabelDesc.value, value: "desc" },
 ]);
 const sortPickerSelected = ref<string[]>(["asc"]);
 watch(showSortPicker, (open) => {
@@ -112,19 +521,36 @@ const showIds = computed(() => {
   if (IS_ANDROID) {
     return [HeaderFeatureId.Collect, HeaderFeatureId.TaskDrawer];
   }
-  return [HeaderFeatureId.GallerySort, HeaderFeatureId.Refresh, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings, HeaderFeatureId.Organize, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Collect];
+  return [
+    HeaderFeatureId.Refresh,
+    HeaderFeatureId.Help,
+    HeaderFeatureId.QuickSettings,
+    HeaderFeatureId.Organize,
+    HeaderFeatureId.TaskDrawer,
+    HeaderFeatureId.Collect,
+  ];
 });
 
 const foldIds = computed(() => {
   if (!IS_ANDROID) return [];
-  return [HeaderFeatureId.GallerySort];
+  const ids: HeaderFeatureId[] = [];
+  if (showGalleryFilterFold.value) {
+    ids.push(HeaderFeatureId.GalleryFilter);
+  }
+  ids.push(HeaderFeatureId.GallerySort);
+  return ids;
 });
 
 const headerStore = useHeaderStore();
 watch(
-  [sortOrder],
+  [sortOrder, sortOptionLabelAsc, sortOptionLabelDesc, filterFoldLabel, showGalleryFilterFold],
   () => {
     if (!IS_ANDROID) return;
+    if (showGalleryFilterFold.value) {
+      headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, filterFoldLabel.value);
+    } else {
+      headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, undefined);
+    }
     headerStore.setFoldLabel(
       HeaderFeatureId.GallerySort,
       sortOrder.value === "desc" ? sortOptionLabelDesc.value : sortOptionLabelAsc.value
@@ -133,7 +559,9 @@ watch(
   { immediate: true }
 );
 onUnmounted(() => {
-  if (IS_ANDROID) headerStore.setFoldLabel(HeaderFeatureId.GallerySort, undefined);
+  if (!IS_ANDROID) return;
+  headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, undefined);
+  headerStore.setFoldLabel(HeaderFeatureId.GallerySort, undefined);
 });
 
 // 处理action事件
@@ -159,6 +587,9 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
     case HeaderFeatureId.QuickSettings:
       emit("showQuickSettings");
       break;
+    case HeaderFeatureId.GalleryFilter:
+      showFilterPicker.value = true;
+      break;
     case HeaderFeatureId.GallerySort:
       showSortPicker.value = true;
       break;
@@ -170,6 +601,21 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
 </script>
 
 <style scoped lang="scss">
+.gallery-browse-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.gallery-browse-btn {
+  .gallery-browse-icon {
+    margin-right: 6px;
+    font-size: 14px;
+  }
+}
+
 .date-range-filter {
   width: 260px;
   margin-left: 8px;
@@ -182,5 +628,37 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
     transform: translateY(-2px);
     box-shadow: var(--anime-shadow-hover);
   }
+}
+
+.plugin-submenu-wrap {
+  padding: 0 !important;
+}
+
+.plugin-submenu-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 16px;
+  font-size: 14px;
+  line-height: 22px;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.plugin-submenu-chevron {
+  margin-left: 12px;
+  font-size: 12px;
+}
+
+.plugin-submenu-menu {
+  max-height: min(60vh, 360px);
+  overflow-y: auto;
+}
+
+.plugin-count {
+  margin-left: 4px;
+  opacity: 0.75;
+  font-size: 12px;
 }
 </style>

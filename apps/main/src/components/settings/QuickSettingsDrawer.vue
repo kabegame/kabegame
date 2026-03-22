@@ -6,7 +6,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 import { useQuickSettingsDrawerStore, getQuickSettingsDrawerTitleKey } from "@/stores/quickSettingsDrawer";
 import { useSettingsStore, type AppSettingKey } from "@kabegame/core/stores/settings";
 import CoreQuickSettingsDrawer from "@kabegame/core/components/settings/QuickSettingsDrawer.vue";

@@ -2,7 +2,7 @@ import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useImageTypes } from "@/composables/useImageTypes";
-import { usePluginConfigI18n } from "@/composables/usePluginConfigI18n";
+import { usePluginConfigI18n } from "@kabegame/i18n";
 import type { PluginConfigText } from "@kabegame/core/stores/plugins";
 
 export type VarOption = string | { name: PluginConfigText | string; variable: string };

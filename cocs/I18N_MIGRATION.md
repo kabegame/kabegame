@@ -64,8 +64,8 @@
 1. 在 `apps/main` 安装 `vue-i18n`，在入口中创建并挂载 i18n 实例；设定 `fallbackLocale`（如 `zh`）、`legacy: false`（Composition API 风格）。
 2. 建立目录结构 `apps/main/src/i18n/locales/<lang>/`，每个语言下按命名空间拆分为多个 JSON（如 `common.json`、`settings.json`），再通过 `index.ts` 聚合为 `messages`。
 3. 实现「当前语言」与后端配置同步：
-   - 应用启动时：在 `App.vue` 中 `settingsStore.loadAll()` 后，从 `settingsStore.values.language` 读取，调用 `setLocale(resolveLanguage(...))` 恢复前端 locale。
-   - 用户切换语言时：通过 `LanguageSetting` 组件调用 `settingsStore.save('language', value)`，保存后后端 `set_language` 会调用 `sync_locale`；同时 `setting-change` 事件会触发 `setLocale` 更新前端。
+   - 应用启动时：在 `App.vue` 中 `settingsStore.loadAll()` 后，用 `resolveLanguage`（已保存且合法 → 系统 → `en`）得到 canonical 语种，调用 `setLocale`；若存储值与 canonical 不一致（含 `null`、别名、非法串），再 `save('language', canonical)` 写回持久化。
+   - 用户切换语言时：通过 `LanguageSetting` 组件仅选择具体语种，调用 `settingsStore.save('language', value)`；保存后后端 `set_language` 会调用 `sync_locale`；`setting-change` 事件中同样会做 canonical 收敛。
 4. 将现有界面中的硬编码中文（或英文）替换为 `$t('namespace.key')` 或 `useI18n().t('namespace.key')`，优先从 CVR 前端 `src/locales/` 中对照命名空间与 key 迁移。
 
 ### 3.3 后端需翻译的调用点
@@ -295,7 +295,7 @@
 | `apps/main/src/composables/useImagesChangeRefresh.ts` | 若有提示 |
 | `apps/main/src/composables/useFileDrop.ts` | 拖拽提示文案 |
 
-**说明**：TS 中需在调用处注入 `i18n`（如 `useI18n().t`）或通过 `import { i18n } from '@/i18n'` 使用 `i18n.global.t`，再替换硬编码字符串。
+**说明**：TS 中需在调用处注入 `i18n`（如 `useI18n().t`）或通过 `import { i18n } from '@kabegame/i18n'` 使用 `i18n.global.t`，再替换硬编码字符串。
 
 #### 7.1.9 前端迁移顺序建议
 
@@ -309,15 +309,15 @@
 
 #### 7.1.10 前端遗漏补充（packages/core 及零散）✅ 已完成
 
-以下为**尚未接入 i18n 的硬编码文案**，多位于 **packages/core**。core 包当前无 vue-i18n 依赖，需由 **apps/main** 通过 `provide('i18n-t', t)` 与 `provide('i18n-locale', locale)` 注入。
+以下为**尚未接入 i18n 的硬编码文案**，多位于 **packages/core**。文案与语言包已抽到 **`@kabegame/i18n`**；core 依赖该包，组件内使用 `useI18n()` 与 `resolveManifestText` / `resolveConfigText`（见包内 `resolve.ts`），不再通过 `provide`/`inject`。
 
 | 文件 | 待迁移内容 | 状态 |
 |------|------------|------|
-| **`packages/core/.../ImageDetailDialog.vue`** | 弹窗标题、字段标签、无效时间占位、日期格式、错误提示 | ✅ 已迁移：inject i18n-t/locale，gallery.* + common.* |
-| **`packages/core/.../TaskDrawerContent.vue`** | 下载区、任务列表、参数标签、状态文案、时长格式、配置值等 | ✅ 已迁移：inject i18n-t/locale，tasks.drawer* |
+| **`packages/core/.../ImageDetailDialog.vue`** | 弹窗标题、字段标签、无效时间占位、日期格式、错误提示 | ✅ 已迁移：`useI18n` + `@kabegame/i18n`，gallery.* + common.* |
+| **`packages/core/.../TaskDrawerContent.vue`** | 下载区、任务列表、参数标签、状态文案、时长格式、配置值等 | ✅ 已迁移：`useI18n` + resolve 函数，tasks.drawer* |
 | `apps/main/.../useFileDrop.ts` | 拖拽确认列表中「（插件包）」后缀 | ✅ 已迁移：import.pluginPackageSuffix |
 
-**实现方式**：`App.vue` 中 `provide('i18n-t', useI18n().t)` 与 `provide('i18n-locale', locale)`；core 组件内 `inject('i18n-t')`、`inject('i18n-locale')`，无注入时回退为 key 或默认 locale。
+**实现方式**：主应用在 `main.ts` 中 `app.use(i18n)`（`i18n` 来自 `@kabegame/i18n`）；core 组件与 main 共用同一 `vue-i18n` 实例，直接 `useI18n()` 即可。
 
 ---
 
@@ -542,9 +542,9 @@
 - **前端**：
   - **类型**：`PluginConfigText`（与 `PluginManifestText` 同构，`Record<string, string>`）在 `@kabegame/core/stores/plugins` 导出；`PluginVarDef` 的 `name`/`descripts` 及 `options[].name` 类型为 `PluginConfigText | string`（兼容旧数据）。
   - **解析**：`resolveConfigText(value, locale)` 与 manifest 的 `resolveManifestText` 同构，优先 `value[locale]`，否则 `value["default"]`；兼容 `value` 为 string。
-  - **Composable**：`usePluginConfigI18n()` 提供 `varDisplayName(varDef)`、`varDescripts(varDef)`、`optionDisplayName(opt)`、`resolveConfigText`、`locale`，用于按当前语言解析并得到响应式展示文案。
-  - **Record 存储与使用**：任务抽屉（TaskDrawerContent）中 `pluginVarMetaMap` 按插件存储原始变量定义（`name`/`optionNameByVariable` 为 record），展示时通过 inject 的 `resolveConfigText` 按当前 locale 计算 `getVarDisplayName`/`formatConfigValue`；CrawlerDialog 中 `visiblePluginVars` 为 computed，在过滤 when 后对每条变量用 `varDisplayName`/`varDescripts`/`optionDisplayName` 解析为展示用字符串。
-- **涉及文件**：`src-tauri/core/src/plugin/mod.rs`（`var_definition_to_frontend_value`）、`src-tauri/app-main/src/commands/plugin.rs`（`get_plugin_vars` 返回前端结构）；`packages/core`（`PluginConfigText`、TaskDrawerContent 的 metaMap + resolveConfigText）；`apps/main`（`usePluginConfigI18n.ts`、App.vue provide `resolveConfigText`、usePluginConfig 类型、CrawlerDialog 的 visiblePluginVars）。
+  - **Composable**：`usePluginConfigI18n()`（`@kabegame/i18n`）提供 `varDisplayName(varDef)`、`varDescripts(varDef)`、`optionDisplayName(opt)`、`resolveConfigText`、`locale`，用于按当前语言解析并得到响应式展示文案。
+  - **Record 存储与使用**：任务抽屉（TaskDrawerContent）中 `pluginVarMetaMap` 按插件存储原始变量定义（`name`/`optionNameByVariable` 为 record），展示时用 `resolveConfigText(..., locale.value)` 计算 `getVarDisplayName`/`formatConfigValue`；CrawlerDialog 中 `visiblePluginVars` 为 computed，在过滤 when 后对每条变量用 `varDisplayName`/`varDescripts`/`optionDisplayName` 解析为展示用字符串。
+- **涉及文件**：`src-tauri/core/src/plugin/mod.rs`（`var_definition_to_frontend_value`）、`src-tauri/app-main/src/commands/plugin.rs`（`get_plugin_vars` 返回前端结构）；`packages/core`（`PluginConfigText`、TaskDrawerContent 的 metaMap）；`@kabegame/i18n`（`resolve.ts`、`usePluginConfigI18n`）；`apps/main`（usePluginConfig 类型、CrawlerDialog 的 visiblePluginVars）。
 
 #### 8.6.2 config.json 扁平多语言键（已实现）
 

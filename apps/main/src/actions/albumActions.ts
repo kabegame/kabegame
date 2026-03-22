@@ -1,7 +1,7 @@
 import { FolderOpened, Picture, Edit, Delete } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { Album } from "@/stores/albums";
-import { i18n } from "@/i18n";
+import { i18n } from "@kabegame/i18n";
 
 /**
  * Extended context for album actions (context menu / action sheet on Albums page).

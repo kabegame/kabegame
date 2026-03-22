@@ -342,6 +342,8 @@ pub fn run() {
             batch_delete_images,
             batch_remove_images,
             get_images_count,
+            get_gallery_plugin_groups,
+            get_gallery_time_filter_data,
             browse_gallery_provider,
             clear_provider_cache,
             toggle_image_favorite,

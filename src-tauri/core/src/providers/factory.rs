@@ -5,7 +5,8 @@ use std::sync::Arc;
 use crate::providers::descriptor::{MainGroupKind, ProviderDescriptor};
 use crate::providers::provider::Provider;
 use crate::providers::{
-    AlbumsProvider, CommonProvider, DateGroupProvider, DateRangeRootProvider,
+    AlbumsProvider, CommonProvider, DateRangeRootProvider, VdByDateProvider,
+    main_date_scoped::MainDateScopedProvider,
     main_root::{
         MainAlbumsProvider, MainDateGroupProvider, MainDateRangeRootProvider,
         MainPluginGroupProvider, MainRootProvider, MainSurfGroupProvider, MainTaskGroupProvider,
@@ -26,7 +27,7 @@ impl ProviderFactory {
             ),
 
             ProviderDescriptor::PluginGroup => Arc::new(PluginGroupProvider::new()),
-            ProviderDescriptor::DateGroup => Arc::new(DateGroupProvider::new()),
+            ProviderDescriptor::DateGroup => Arc::new(VdByDateProvider::new()),
             ProviderDescriptor::DateRangeRoot => Arc::new(DateRangeRootProvider::new()),
             ProviderDescriptor::TaskGroup => Arc::new(TaskGroupProvider::new()),
             ProviderDescriptor::SurfGroup => Arc::new(SurfGroupProvider::new()),
@@ -59,6 +60,9 @@ impl ProviderFactory {
                     MainGroupKind::Surf => Arc::new(MainSurfGroupProvider::new()),
                 }
             }
+            ProviderDescriptor::DateScoped { query, tier } => Arc::new(
+                MainDateScopedProvider::from_query_and_tier(query.clone(), tier.clone()),
+            ),
             ProviderDescriptor::SimpleAll { query } => Arc::new(CommonProvider::with_query_and_mode(
                 query.clone(),
                 crate::providers::common::PaginationMode::SimplePage,

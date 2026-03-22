@@ -6,11 +6,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(target_os = "android")]
-use crate::crawler::content_io::get_content_io_provider;
-#[cfg(target_os = "android")]
-use std::sync::mpsc;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageInfo {
@@ -49,6 +44,10 @@ pub struct ImageInfo {
     #[serde(rename = "type")]
     #[serde(default)]
     pub media_type: Option<String>,
+    /// 最后一次被设为壁纸的 Unix 时间戳（秒）；从未设为壁纸则为 None。
+    #[serde(rename = "lastSetWallpaperAt")]
+    #[serde(default)]
+    pub last_set_wallpaper_at: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -96,6 +95,11 @@ fn normalize_media_type(media_type: Option<String>) -> Option<String> {
     }
 }
 
+pub(crate) fn row_optional_u64_ts(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<u64>> {
+    let v: Option<i64> = row.get(idx)?;
+    Ok(v.filter(|&t| t >= 0).map(|t| t as u64))
+}
+
 impl Storage {
     pub fn get_images_range(&self, offset: usize, limit: usize) -> Result<RangedImages, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -110,7 +114,8 @@ impl Storage {
              images.width,
              images.height,
              images.display_name,
-             COALESCE(images.type, 'image') as media_type
+             COALESCE(images.type, 'image') as media_type,
+             images.last_set_wallpaper_at
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
              ORDER BY images.crawled_at ASC
@@ -144,6 +149,7 @@ impl Storage {
                     height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
                     display_name: row.get(14)?,
                     media_type: normalize_media_type(row.get::<_, Option<String>>(15)?),
+                    last_set_wallpaper_at: row_optional_u64_ts(row, 16)?,
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
@@ -193,7 +199,8 @@ impl Storage {
                  images.width,
                  images.height,
                  images.display_name,
-                 COALESCE(images.type, 'image') as media_type
+                 COALESCE(images.type, 'image') as media_type,
+                 images.last_set_wallpaper_at
                  FROM images
                  WHERE images.id = ?1",
                 params![image_id],
@@ -220,6 +227,7 @@ impl Storage {
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
                     })
                 },
             )
@@ -252,7 +260,8 @@ impl Storage {
                  images.width,
                  images.height,
                  images.display_name,
-                 COALESCE(images.type, 'image') as media_type
+                 COALESCE(images.type, 'image') as media_type,
+                 images.last_set_wallpaper_at
                  FROM images
                  WHERE images.local_path = ?1",
                 params![local_path],
@@ -278,6 +287,7 @@ impl Storage {
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
                     })
                 },
             )
@@ -313,7 +323,8 @@ impl Storage {
                  images.width,
                  images.height,
                  images.display_name,
-                 COALESCE(images.type, 'image') as media_type
+                 COALESCE(images.type, 'image') as media_type,
+                 images.last_set_wallpaper_at
                  FROM images
                  WHERE REPLACE(TRIM(COALESCE(images.thumbnail_path, '')), '/', ?2) = ?1
                     OR (TRIM(COALESCE(images.thumbnail_path, '')) = '' AND REPLACE(TRIM(images.local_path), '/', ?2) = ?1)",
@@ -340,6 +351,7 @@ impl Storage {
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
                     })
                 },
             )
@@ -372,7 +384,8 @@ impl Storage {
                  images.width,
                  images.height,
                  images.display_name,
-                 COALESCE(images.type, 'image') as media_type
+                 COALESCE(images.type, 'image') as media_type,
+                 images.last_set_wallpaper_at
                  FROM images
                  WHERE images.url = ?1",
                 params![url],
@@ -398,6 +411,7 @@ impl Storage {
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
                     })
                 },
             )
@@ -433,7 +447,8 @@ impl Storage {
                  images.width,
                  images.height,
                  images.display_name,
-                 COALESCE(images.type, 'image') as media_type
+                 COALESCE(images.type, 'image') as media_type,
+                 images.last_set_wallpaper_at
                  FROM images
                  WHERE images.hash = ?1",
                 params![hash],
@@ -459,6 +474,7 @@ impl Storage {
                         height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
                         display_name: row.get(13)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
                     })
                 },
             )
@@ -503,7 +519,8 @@ impl Storage {
              images.width,
              images.height,
              images.display_name,
-             COALESCE(images.type, 'image') as media_type
+             COALESCE(images.type, 'image') as media_type,
+             images.last_set_wallpaper_at
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
              WHERE images.surf_record_id = ?1
@@ -539,6 +556,7 @@ impl Storage {
                         height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
                         display_name: row.get(14)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(15)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 16)?,
                     })
                 },
             )
@@ -991,6 +1009,16 @@ impl Storage {
             params![thumbnail_path, image_id],
         )
         .map_err(|e| format!("Failed to update thumbnail path: {}", e))?;
+        Ok(())
+    }
+
+    pub fn update_image_last_set_wallpaper_at(&self, image_id: &str, ts: u64) -> Result<(), String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.execute(
+            "UPDATE images SET last_set_wallpaper_at = ?1 WHERE id = ?2",
+            params![ts as i64, image_id],
+        )
+        .map_err(|e| format!("Failed to update last_set_wallpaper_at: {}", e))?;
         Ok(())
     }
 

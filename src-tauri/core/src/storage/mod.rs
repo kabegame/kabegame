@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub mod albums;
 pub mod gallery;
+pub mod gallery_time;
 pub mod images;
 pub mod organize;
 pub mod plugin_sources;
@@ -17,6 +18,9 @@ pub mod surf_records;
 pub mod tasks;
 pub mod temp_files;
 
+pub use gallery_time::{
+    gallery_month_groups_from_days, GalleryTimeFilterPayload, GalleryTimeGroupIndex,
+};
 pub use albums::Album;
 pub use images::ImageInfo;
 pub use run_configs::RunConfig;
@@ -156,6 +160,10 @@ PRAGMA mmap_size = 268435456;
             conn.execute("ALTER TABLE images ADD COLUMN type TEXT DEFAULT 'image'", [])
                 .expect("Failed to add images.type column");
         }
+        if !table_has_column(&conn, "images", "last_set_wallpaper_at") {
+            conn.execute("ALTER TABLE images ADD COLUMN last_set_wallpaper_at INTEGER", [])
+                .expect("Failed to add images.last_set_wallpaper_at column");
+        }
 
         // 创建索引（新库的 CREATE 已含 width/height，上述 ALTER 用于旧库升级）
         let _ = conn.execute(
@@ -188,6 +196,10 @@ PRAGMA mmap_size = 268435456;
         );
         let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_images_thumbnail_path ON images(thumbnail_path)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_images_last_set_wallpaper_at ON images(last_set_wallpaper_at DESC)",
             [],
         );
 
@@ -273,6 +285,14 @@ PRAGMA mmap_size = 268435456;
         let _ = conn.execute("ALTER TABLE images ADD COLUMN surf_record_id TEXT", []);
         let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_images_surf_record_id ON images(surf_record_id)",
+            [],
+        );
+        if !table_has_column(&conn, "images", "last_set_wallpaper_at") {
+            conn.execute("ALTER TABLE images ADD COLUMN last_set_wallpaper_at INTEGER", [])
+                .expect("Failed to add images.last_set_wallpaper_at column after migrations");
+        }
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_images_last_set_wallpaper_at ON images(last_set_wallpaper_at DESC)",
             [],
         );
 
@@ -723,6 +743,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
     let has_type_col = table_has_column(conn, "images", "type");
     let has_mime_type = table_has_column(conn, "images", "mime_type");
     let has_surf_record_id = table_has_column(conn, "images", "surf_record_id");
+    let has_last_set_wallpaper_at = table_has_column(conn, "images", "last_set_wallpaper_at");
     if needs_rebuild_images || needs_rebuild_relations {
         let tx = conn
             .transaction()
@@ -733,6 +754,11 @@ fn perform_complex_migrations(conn: &mut Connection) {
         let mime_col = if has_mime_type { "mime_type," } else { "" };
         let surf_col = if has_surf_record_id { "surf_record_id," } else { "" };
         let display_col = if has_display_name { "COALESCE(display_name, '') AS display_name," } else { "" };
+        let last_wall_col = if has_last_set_wallpaper_at {
+            "last_set_wallpaper_at,"
+        } else {
+            "NULL AS last_set_wallpaper_at,"
+        };
 
         let id_expr = if images_id_is_text {
             "id AS old_id"
@@ -759,7 +785,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
                    COALESCE(hash, '') AS hash,
                    width,
                    height,
-                   {type_col} {mime_col} {surf_col} {display_col} {new_id_expr}
+                   {type_col} {mime_col} {surf_col} {display_col} {last_wall_col} {new_id_expr}
                  FROM images"
             ),
             [],
@@ -796,7 +822,8 @@ fn perform_complex_migrations(conn: &mut Connection) {
                     type TEXT DEFAULT 'image',
                     width INTEGER,
                     height INTEGER,
-                    display_name TEXT NOT NULL DEFAULT ''
+                    display_name TEXT NOT NULL DEFAULT '',
+                    last_set_wallpaper_at INTEGER
                 )",
                 [],
             )
@@ -811,10 +838,10 @@ fn perform_complex_migrations(conn: &mut Connection) {
                 ("display_name", "''")
             };
             let insert_cols = format!(
-                "id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, thumbnail_path, hash, {mime_s} type, width, height, {display_ins}"
+                "id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, thumbnail_path, hash, {mime_s} type, width, height, {display_ins}, last_set_wallpaper_at"
             );
             let select_cols = format!(
-                "new_id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), {mime_s} {type_s}, width, height, {display_sel}"
+                "new_id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), {mime_s} {type_s}, width, height, {display_sel}, last_set_wallpaper_at"
             );
             tx.execute(
                 &format!(
@@ -994,6 +1021,10 @@ fn perform_complex_migrations(conn: &mut Connection) {
     );
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_images_image ON task_images(image_id)",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_images_last_set_wallpaper_at ON images(last_set_wallpaper_at DESC)",
         [],
     );
 }

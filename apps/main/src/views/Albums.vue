@@ -67,7 +67,7 @@ import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyStat
 import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
-import { useI18n } from "vue-i18n";
+import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { thumbnailToUrl } from "@kabegame/core/httpServer";
 

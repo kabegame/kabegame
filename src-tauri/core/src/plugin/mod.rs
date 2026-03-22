@@ -1672,6 +1672,7 @@ impl PluginManager {
             id: plugin_id.to_string(),
             name: manifest.name_to_value(),
             desp: manifest.description_to_value(),
+            version: Some(manifest.version.clone()),
             doc,
             icon_data,
             origin: "installed".to_string(),
@@ -1815,6 +1816,7 @@ impl PluginManager {
             id: plugin_id.to_string(),
             name: manifest.name_to_value(),
             desp: manifest.description_to_value(),
+            version: Some(manifest.version.clone()),
             doc,
             icon_data,
             origin: "remote".to_string(),
@@ -2798,6 +2800,9 @@ pub struct PluginDetail {
     /// string 或 { name?, ja?, ko?, ... }，前端按 locale 解析
     pub name: serde_json::Value,
     pub desp: serde_json::Value,
+    /// manifest.json 中的版本号
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// 文档多语言：{ "default": "...", "zh": "...", "en": ... }
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<PluginDoc>,

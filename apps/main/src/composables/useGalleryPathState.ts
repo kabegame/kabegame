@@ -1,7 +1,7 @@
 import { computed } from "vue";
 import { useLocalStorage } from "@vueuse/core";
 import {
-  type GalleryTimeSort,
+  type GalleryStoredSort,
   buildGalleryPath,
   parseGalleryPath,
   GALLERY_STORAGE_KEY_PAGE,
@@ -13,7 +13,7 @@ let singleton: ReturnType<typeof createGalleryPathState> | null = null;
 
 function createGalleryPathState() {
   const root = useLocalStorage<string>(GALLERY_STORAGE_KEY_ROOT, "all");
-  const sort = useLocalStorage<GalleryTimeSort>(GALLERY_STORAGE_KEY_SORT, "asc");
+  const sort = useLocalStorage<GalleryStoredSort>(GALLERY_STORAGE_KEY_SORT, "");
   const page = useLocalStorage<number>(GALLERY_STORAGE_KEY_PAGE, 1);
 
   /** 交给 useProviderPathRoute 的默认 path（无 query.path 时） */
@@ -25,7 +25,13 @@ function createGalleryPathState() {
   function applyFromPath(path: string) {
     const p = parseGalleryPath(path);
     root.value = p.root;
-    sort.value = p.sort;
+    if (p.sort === "desc") {
+      sort.value = "desc";
+    } else if (p.root === "all" && sort.value === "") {
+      sort.value = "";
+    } else {
+      sort.value = "asc";
+    }
     page.value = p.page;
   }
 
