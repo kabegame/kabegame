@@ -149,6 +149,11 @@
 
             <div v-loading="showLoading" element-loading-text="" style="min-height: 200px;">
               <div v-if="!loading" class="settings-list">
+                <SettingRow :label="$t('settings.maxConcurrentTasks')"
+                  :description="$t('settings.maxConcurrentTasksDesc')">
+                  <SettingNumberControl setting-key="maxConcurrentTasks" :min="1" :max="10" :step="1" />
+                </SettingRow>
+
                 <SettingRow :label="$t('settings.maxConcurrentDownloads')"
                   :description="$t('settings.maxConcurrentDownloadsDesc')">
                   <SettingNumberControl setting-key="maxConcurrentDownloads" :min="1" :max="10" :step="1" />

@@ -65,6 +65,8 @@
   "wallpaperEngineDirDesc": "用于“导出并自动导入到 WE”",
 
   "downloadSectionTitle": "下载设置",
+  "maxConcurrentTasks": "同时运行任务数",
+  "maxConcurrentTasksDesc": "同时执行的爬虫任务数量（1-10）。如遇到卡顿，可减少此数值",
   "maxConcurrentDownloads": "最大并发下载量",
   "maxConcurrentDownloadsDesc": "同时下载的图片数量（1-10）",
   "downloadInterval": "下载间隔时间",

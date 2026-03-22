@@ -80,6 +80,8 @@ pub enum SettingKey {
     AutoOpenCrawlerWebview,
     /// 最大并发下载数
     MaxConcurrentDownloads,
+    /// 同时运行的爬虫任务数（1-10）
+    MaxConcurrentTasks,
     /// 每次下载完成后进入下一轮前等待（ms，100-10000）
     DownloadIntervalMs,
     /// 网络重试次数
@@ -281,6 +283,7 @@ impl Settings {
             SettingKey::AutoLaunch => SettingValue::Bool(false),
             SettingKey::AutoOpenCrawlerWebview => SettingValue::Bool(false),
             SettingKey::MaxConcurrentDownloads => SettingValue::U32(3),
+            SettingKey::MaxConcurrentTasks => SettingValue::U32(2),
             SettingKey::DownloadIntervalMs => SettingValue::U32(500),
             SettingKey::NetworkRetryCount => SettingValue::U32(2),
             SettingKey::ImageClickAction => SettingValue::String("preview".to_string()),
@@ -500,6 +503,7 @@ Write-Output "$style,$tile"
             SettingKey::AutoLaunch,
             SettingKey::AutoOpenCrawlerWebview,
             SettingKey::MaxConcurrentDownloads,
+            SettingKey::MaxConcurrentTasks,
             SettingKey::DownloadIntervalMs,
             SettingKey::NetworkRetryCount,
             SettingKey::ImageClickAction,
@@ -619,6 +623,7 @@ Write-Output "$style,$tile"
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
             SettingKey::MaxConcurrentDownloads
+            | SettingKey::MaxConcurrentTasks
             | SettingKey::NetworkRetryCount
             | SettingKey::WallpaperRotationIntervalMinutes
             | SettingKey::GalleryGridColumns => {
@@ -720,6 +725,7 @@ Write-Output "$style,$tile"
             SettingKey::AutoLaunch => "autoLaunch".to_string(),
             SettingKey::AutoOpenCrawlerWebview => "autoOpenCrawlerWebview".to_string(),
             SettingKey::MaxConcurrentDownloads => "maxConcurrentDownloads".to_string(),
+            SettingKey::MaxConcurrentTasks => "maxConcurrentTasks".to_string(),
             SettingKey::DownloadIntervalMs => "downloadIntervalMs".to_string(),
             SettingKey::NetworkRetryCount => "networkRetryCount".to_string(),
             SettingKey::ImageClickAction => "imageClickAction".to_string(),
@@ -899,6 +905,16 @@ Write-Output "$style,$tile"
             Ok(val.as_u32().unwrap_or(3))
         } else {
             Ok(3)
+        }
+    }
+
+    pub async fn get_max_concurrent_tasks(&self) -> Result<u32, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::MaxConcurrentTasks) {
+            let val = cell.lock().await;
+            Ok(val.as_u32().unwrap_or(2).clamp(1, 10))
+        } else {
+            Ok(2)
         }
     }
 
@@ -1230,6 +1246,19 @@ Write-Output "$style,$tile"
             *val = new_value.clone();
         }
         Self::emit_setting_change(SettingKey::MaxConcurrentDownloads, &new_value).await;
+        Self::trigger_debounce_save().await?;
+        Ok(())
+    }
+
+    pub async fn set_max_concurrent_tasks(&self, count: u32) -> Result<(), String> {
+        let clamped = count.clamp(1, 10);
+        let cells = Self::cells();
+        let new_value = SettingValue::U32(clamped);
+        if let Some(cell) = cells.get(&SettingKey::MaxConcurrentTasks) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::MaxConcurrentTasks, &new_value).await;
         Self::trigger_debounce_save().await?;
         Ok(())
     }

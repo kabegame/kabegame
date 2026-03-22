@@ -65,6 +65,8 @@
   "wallpaperEngineDirDesc": "「WEにエクスポートして自動インポート」用",
 
   "downloadSectionTitle": "ダウンロード設定",
+  "maxConcurrentTasks": "同時実行タスク数",
+  "maxConcurrentTasksDesc": "同時に実行するクローラタスク数（1～10）。動作が重い場合は下げてください",
   "maxConcurrentDownloads": "最大同時ダウンロード数",
   "maxConcurrentDownloadsDesc": "同時ダウンロード数（1～10）",
   "downloadInterval": "ダウンロード間隔",

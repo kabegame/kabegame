@@ -662,6 +662,13 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
+    pub async fn settings_get_max_concurrent_tasks(&self) -> Result<u32, String> {
+        let v = self
+            .request_data(CliIpcRequest::SettingsGetMaxConcurrentTasks)
+            .await?;
+        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
+    }
+
     pub async fn settings_get_network_retry_count(&self) -> Result<u32, String> {
         let v = self
             .request_data(CliIpcRequest::SettingsGetNetworkRetryCount)
@@ -913,6 +920,11 @@ impl IpcClient {
 
     pub async fn settings_set_max_concurrent_downloads(&self, count: u32) -> Result<(), String> {
         self.request_ok(CliIpcRequest::SettingsSetMaxConcurrentDownloads { count })
+            .await
+    }
+
+    pub async fn settings_set_max_concurrent_tasks(&self, count: u32) -> Result<(), String> {
+        self.request_ok(CliIpcRequest::SettingsSetMaxConcurrentTasks { count })
             .await
     }
 

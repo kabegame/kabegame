@@ -65,6 +65,8 @@
   "wallpaperEngineDirDesc": "For \"Export and auto-import to WE\"",
 
   "downloadSectionTitle": "Download settings",
+  "maxConcurrentTasks": "Max concurrent tasks",
+  "maxConcurrentTasksDesc": "Number of crawler tasks to run simultaneously (1–10). Reduce if you experience lag",
   "maxConcurrentDownloads": "Max concurrent downloads",
   "maxConcurrentDownloadsDesc": "Number of simultaneous downloads (1–10)",
   "downloadInterval": "Download interval",

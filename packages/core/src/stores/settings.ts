@@ -7,6 +7,8 @@ import { IS_DEV, IS_LIGHT_MODE, IS_ANDROID, IS_WINDOWS } from "../env";
 export interface AppSettings {
   autoLaunch: boolean;
   maxConcurrentDownloads: number;
+  /** 同时运行的爬虫任务数（1-10） */
+  maxConcurrentTasks: number;
   /** 每次下载完成后进入下一轮前等待（ms，100-10000） */
   downloadIntervalMs: number;
   networkRetryCount: number;
@@ -68,6 +70,7 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
     // --- 基础通用键（所有平台） ---
     language: { getter: "get_language", setter: "set_language", param: "language" },
     maxConcurrentDownloads: { getter: "get_max_concurrent_downloads", setter: "set_max_concurrent_downloads", param: "count" },
+    maxConcurrentTasks: { getter: "get_max_concurrent_tasks", setter: "set_max_concurrent_tasks", param: "count" },
     downloadIntervalMs: { getter: "get_download_interval_ms", setter: "set_download_interval_ms", param: "intervalMs" },
     networkRetryCount: { getter: "get_network_retry_count", setter: "set_network_retry_count", param: "count" },
     autoDeduplicate: { getter: "get_auto_deduplicate", setter: "set_auto_deduplicate", param: "enabled" },

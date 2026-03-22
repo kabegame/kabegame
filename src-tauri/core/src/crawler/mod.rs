@@ -10,4 +10,6 @@ pub mod webview;
 pub use downloader::{
     create_client, ActiveDownloadInfo, DownloadPool, DownloadQueue,
 };
-pub use scheduler::{CrawlResult, CrawlTaskRequest, ImageData, TaskScheduler};
+pub use scheduler::{
+    CrawlResult, CrawlTaskRequest, ImageData, TaskScheduler, MAX_TASK_WORKER_LOOPS,
+};

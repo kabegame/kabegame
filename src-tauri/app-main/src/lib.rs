@@ -422,6 +422,8 @@ pub fn run() {
             set_auto_open_crawler_webview,
             get_max_concurrent_downloads,
             set_max_concurrent_downloads,
+            get_max_concurrent_tasks,
+            set_max_concurrent_tasks,
             get_download_interval_ms,
             set_download_interval_ms,
             get_network_retry_count,

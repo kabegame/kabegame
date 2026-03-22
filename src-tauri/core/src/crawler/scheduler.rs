@@ -11,9 +11,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, RwLock};
-use tokio::sync::{mpsc, Mutex};
+use std::time::Duration;
+use tokio::sync::{mpsc, Mutex, Notify};
 use tokio::runtime::Handle;
 use url::Url;
+
+/// 任务 worker 协程数量上限（与设置「同时运行任务数」1~10 一致；实际并发由 `wait_for_task_slot` 与设置共同限制）。
+pub const MAX_TASK_WORKER_LOOPS: usize = 10;
 
 /// 首次进入 WebView 爬虫时的 page_label（ctx.pageLabel 的初始值）。
 #[cfg(not(target_os = "android"))]
@@ -47,6 +51,8 @@ pub struct TaskScheduler {
     queue_rx: Arc<Mutex<mpsc::UnboundedReceiver<CrawlTaskRequest>>>,
     running_workers: Arc<AtomicUsize>,
     page_stacks: Arc<PageStackStore>,
+    /// 有任务结束或「同时运行任务数」设置变更时唤醒，避免等待槽位时忙等。
+    task_slot_notify: Arc<Notify>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +106,7 @@ impl TaskScheduler {
             queue_rx: Arc::new(Mutex::new(queue_rx)),
             running_workers: Arc::new(AtomicUsize::new(0)),
             page_stacks: Arc::new(PageStackStore::new()),
+            task_slot_notify: Arc::new(Notify::new()),
         };
         s
     }
@@ -206,6 +213,11 @@ impl TaskScheduler {
         self.download_queue.notify_all_waiting();
     }
 
+    /// 写入「同时运行任务数」设置后调用即可（不阻塞）。缩容由运行中任务结束自然释放槽位；增大会唤醒等待中的 worker。
+    pub fn set_task_concurrency(&self) {
+        self.task_slot_notify.notify_waiters();
+    }
+
     /// 初始化全局 TaskScheduler（必须在首次使用前调用）
     pub fn init_global(download_queue: Arc<DownloadQueue>) -> Result<(), String> {
         let scheduler = Self::new(download_queue);
@@ -273,6 +285,33 @@ fn persist_task_status(
     Ok(())
 }
 
+/// 按当前「同时运行任务数」设置占用槽位（`running` +1）；若已满则等待直至有任务结束或设置增大。
+async fn wait_for_task_slot(running: &Arc<AtomicUsize>, notify: &Arc<Notify>) {
+    loop {
+        let max = Settings::global()
+            .get_max_concurrent_tasks()
+            .await
+            .unwrap_or(2)
+            .clamp(1, 10) as usize;
+        let r = running.load(Ordering::Acquire);
+        if r < max {
+            if running
+                .compare_exchange_weak(r, r + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return;
+            }
+            continue;
+        }
+        let notified = notify.notified();
+        tokio::pin!(notified);
+        tokio::select! {
+            _ = notified => {}
+            _ = tokio::time::sleep(Duration::from_millis(1000)) => {}
+        }
+    }
+}
+
 async fn worker_loop(
     scheduler: TaskScheduler,
     download_queue: Arc<DownloadQueue>,
@@ -316,7 +355,7 @@ async fn worker_loop(
             continue;
         }
 
-        running.fetch_add(1, Ordering::Relaxed);
+        wait_for_task_slot(&running, &scheduler.task_slot_notify).await;
 
         // running
         let start = now_ms();
@@ -419,6 +458,7 @@ async fn worker_loop(
         }
 
         running.fetch_sub(1, Ordering::Relaxed);
+        scheduler.task_slot_notify.notify_one();
     }
 }
 
