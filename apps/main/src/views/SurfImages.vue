@@ -21,10 +21,18 @@
             @back="goBack"
           />
 
+          <div class="surf-page-size-toolbar">
+            <GalleryPageSizeControl
+              :page-size="pageSize"
+              variant="gallery"
+              android-ui="inline"
+            />
+          </div>
+
           <GalleryBigPaginator
             :total-count="totalImagesCount"
             :current-offset="currentOffset"
-            :big-page-size="BIG_PAGE_SIZE"
+            :big-page-size="pageSize"
             :is-sticky="true"
             @jump-to-page="handleJumpToPage"
           />
@@ -63,14 +71,13 @@ import { storeToRefs } from "pinia";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import ImageGrid from "@/components/ImageGrid.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
+import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import { createImageActions } from "@/actions/imageActions";
-import type { ImageInfo } from "@/stores/crawler";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import { useSurfStore, type SurfRecord } from "@/stores/surf";
-import { useCrawlerStore } from "@/stores/crawler";
 import { useAlbumStore } from "@/stores/albums";
-import { useSelectionStore } from "@kabegame/core/stores/selection";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
@@ -82,15 +89,16 @@ import { IS_ANDROID } from "@kabegame/core/env";
 import { useI18n } from "@kabegame/i18n";
 
 const { t } = useI18n();
-const BIG_PAGE_SIZE = 100;
 const route = useRoute();
 const router = useRouter();
 const surfStore = useSurfStore();
-const crawlerStore = useCrawlerStore();
 const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const settingsStore = useSettingsStore();
-const desktopSelectionStore = useSelectionStore();
+const pageSize = computed(() => {
+  const n = Number(settingsStore.values.galleryPageSize);
+  return n === 100 || n === 500 || n === 1000 ? n : 100;
+});
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 
@@ -324,9 +332,9 @@ const confirmRemoveImages = async () => {
   try {
     const imageIds = imagesToRemove.map((img) => img.id);
     if (shouldDeleteFiles) {
-      await crawlerStore.batchDeleteImages(imageIds);
+      await invoke("batch_delete_images", { imageIds });
     } else {
-      await crawlerStore.batchRemoveImages(imageIds);
+      await invoke("batch_remove_images", { imageIds });
     }
 
     const ids = new Set(imageIds);
@@ -354,6 +362,7 @@ const { currentPath, providerRootPath, currentOffset, setRootAndPage, navigateTo
     if (!localProviderRootPath.value) return "surf/invalid/1";
     return `${localProviderRootPath.value}/1`;
   }),
+  pageSize,
 });
 
 const recordTitle = computed(() => record.value?.host ?? t("surf.surfImagesTitle"));
@@ -368,7 +377,7 @@ const fetchPageImages = async (path: string) => {
   const res = await invoke<{
     total?: number;
     entries?: Array<{ kind: string; image?: ImageInfo }>;
-  }>("browse_gallery_provider", { path });
+  }>("browse_gallery_provider", { path, pageSize: pageSize.value });
   const list: ImageInfo[] = (res?.entries ?? [])
     .filter((e: any) => e?.kind === "image")
     .map((e: any) => e.image as ImageInfo);
@@ -397,6 +406,15 @@ const loadCurrentPage = async () => {
 const handleJumpToPage = async (page: number) => {
   await navigateToPage(page);
 };
+
+watch(
+  pageSize,
+  async (_v, prev) => {
+    if (prev === undefined) return;
+    await navigateToPage(1);
+    await loadCurrentPage();
+  },
+);
 
 const reloadAllImages = async () => {
   await loadCurrentPage();
@@ -518,7 +536,7 @@ onActivated(async () => {
 
 onDeactivated(() => {
   stopListening();
-  desktopSelectionStore.selectedIds = new Set();
+  surfViewRef.value?.clearSelection?.();
 });
 </script>
 
@@ -540,5 +558,13 @@ onDeactivated(() => {
 .surf-grid {
   flex: 1;
   min-height: 0;
+}
+
+.surf-page-size-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 </style>

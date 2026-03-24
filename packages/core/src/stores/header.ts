@@ -22,6 +22,8 @@ export enum HeaderFeatureId {
   GalleryFilter = "galleryFilter",
   /** 画廊「全部」下按时间排序（仅 Android 放入 fold，点击后打开 van-picker） */
   GallerySort = "gallerySort",
+  /** 画廊每页条数（仅 Android 放入 fold） */
+  GalleryPageSize = "galleryPageSize",
   /** 画册详情：过滤（全部 / 设过壁纸），Android 放入 fold */
   AlbumBrowseFilter = "albumBrowseFilter",
   /** 画册详情：排序，Android 放入 fold */

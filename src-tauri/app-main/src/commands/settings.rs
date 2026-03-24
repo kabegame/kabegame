@@ -90,6 +90,14 @@ pub async fn get_gallery_grid_columns() -> Result<u32, String> {
 }
 
 #[tauri::command]
+pub async fn get_gallery_page_size() -> Result<u32, String> {
+    Settings::global()
+        .get_gallery_page_size()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_auto_deduplicate() -> Result<bool, String> {
     Settings::global()
         .get_auto_deduplicate()
@@ -405,6 +413,14 @@ pub async fn set_gallery_image_object_position(position: String) -> Result<(), S
 pub async fn set_gallery_grid_columns(columns: u32) -> Result<(), String> {
     Settings::global()
         .set_gallery_grid_columns(columns)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_gallery_page_size(size: u32) -> Result<(), String> {
+    Settings::global()
+        .set_gallery_page_size(size)
         .await
         .map_err(|e| e.to_string())
 }

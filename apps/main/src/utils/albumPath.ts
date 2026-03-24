@@ -2,9 +2,14 @@
  * 画册详情 provider path：`album/<albumId>/…`
  * - 全部：按时间 `…/[desc/]<page>`；按加入顺序 `…/album-order/[desc/]<page>`
  * - 仅设过壁纸：`…/wallpaper-order/[desc/]<page>`
+ * - 仅图片 / 仅视频：`…/image-only/…`、`…/video-only/…`（子路径与「全部」一致）
  */
 
-export type AlbumBrowseFilter = "all" | "wallpaper-order";
+export type AlbumBrowseFilter =
+  | "all"
+  | "wallpaper-order"
+  | "image-only"
+  | "video-only";
 
 /** 与 filter 组合使用：全部下为 time-* / join-*；壁纸过滤下为 set-* */
 export type AlbumBrowseSort =
@@ -24,6 +29,18 @@ function normalizeSortForFilter(
   if (filter === "wallpaper-order") {
     if (sort === "set-asc" || sort === "set-desc") return sort;
     return sort === "time-desc" || sort === "join-desc" ? "set-desc" : "set-asc";
+  }
+  if (filter === "image-only" || filter === "video-only") {
+    if (sort === "set-asc" || sort === "set-desc") return sort;
+    if (
+      sort === "time-asc" ||
+      sort === "time-desc" ||
+      sort === "join-asc" ||
+      sort === "join-desc"
+    ) {
+      return sort;
+    }
+    return sort === "set-desc" ? "time-desc" : "time-asc";
   }
   if (
     sort === "time-asc" ||
@@ -50,6 +67,19 @@ export function buildAlbumBrowsePath(
   if (filter === "wallpaper-order") {
     if (s === "set-desc") return `album/${id}/wallpaper-order/desc/${p}`;
     return `album/${id}/wallpaper-order/${p}`;
+  }
+
+  if (filter === "image-only" || filter === "video-only") {
+    const prefix =
+      filter === "image-only"
+        ? `album/${id}/image-only`
+        : `album/${id}/video-only`;
+    if (s === "set-desc") return `${prefix}/wallpaper-order/desc/${p}`;
+    if (s === "set-asc") return `${prefix}/wallpaper-order/${p}`;
+    if (s === "join-desc") return `${prefix}/album-order/desc/${p}`;
+    if (s === "join-asc") return `${prefix}/album-order/${p}`;
+    if (s === "time-desc") return `${prefix}/desc/${p}`;
+    return `${prefix}/${p}`;
   }
 
   if (s === "join-desc") return `album/${id}/album-order/desc/${p}`;
@@ -91,14 +121,56 @@ export function parseAlbumBrowsePath(path: string): ParsedAlbumBrowsePath | null
     if (mid === "album-order") {
       return { albumId, filter: "all", sort: "join-asc", page: pageNum };
     }
+    if (mid === "image-only") {
+      return { albumId, filter: "image-only", sort: "time-asc", page: pageNum };
+    }
+    if (mid === "video-only") {
+      return { albumId, filter: "video-only", sort: "time-asc", page: pageNum };
+    }
     return null;
   }
-  if (segs.length === 5 && segs[3] === "desc") {
-    if (segs[2] === "wallpaper-order") {
-      return { albumId, filter: "wallpaper-order", sort: "set-desc", page: pageNum };
+  if (segs.length === 5) {
+    if (segs[3] === "desc") {
+      if (segs[2] === "wallpaper-order") {
+        return { albumId, filter: "wallpaper-order", sort: "set-desc", page: pageNum };
+      }
+      if (segs[2] === "album-order") {
+        return { albumId, filter: "all", sort: "join-desc", page: pageNum };
+      }
+      if (segs[2] === "image-only") {
+        return { albumId, filter: "image-only", sort: "time-desc", page: pageNum };
+      }
+      if (segs[2] === "video-only") {
+        return { albumId, filter: "video-only", sort: "time-desc", page: pageNum };
+      }
+      return null;
     }
-    if (segs[2] === "album-order") {
-      return { albumId, filter: "all", sort: "join-desc", page: pageNum };
+    if (segs[2] === "image-only" && segs[3] === "wallpaper-order") {
+      return { albumId, filter: "image-only", sort: "set-asc", page: pageNum };
+    }
+    if (segs[2] === "video-only" && segs[3] === "wallpaper-order") {
+      return { albumId, filter: "video-only", sort: "set-asc", page: pageNum };
+    }
+    if (segs[2] === "image-only" && segs[3] === "album-order") {
+      return { albumId, filter: "image-only", sort: "join-asc", page: pageNum };
+    }
+    if (segs[2] === "video-only" && segs[3] === "album-order") {
+      return { albumId, filter: "video-only", sort: "join-asc", page: pageNum };
+    }
+    return null;
+  }
+  if (segs.length === 6 && segs[4] === "desc") {
+    if (segs[2] === "image-only" && segs[3] === "album-order") {
+      return { albumId, filter: "image-only", sort: "join-desc", page: pageNum };
+    }
+    if (segs[2] === "video-only" && segs[3] === "album-order") {
+      return { albumId, filter: "video-only", sort: "join-desc", page: pageNum };
+    }
+    if (segs[2] === "image-only" && segs[3] === "wallpaper-order") {
+      return { albumId, filter: "image-only", sort: "set-desc", page: pageNum };
+    }
+    if (segs[2] === "video-only" && segs[3] === "wallpaper-order") {
+      return { albumId, filter: "video-only", sort: "set-desc", page: pageNum };
     }
   }
   return null;
@@ -122,7 +194,19 @@ function mapSortWhenChangingFilter(
     }
     return "set-desc";
   }
-  return sort === "set-desc" ? "time-desc" : "time-asc";
+  if (to === "image-only" || to === "video-only") {
+    if (from === "wallpaper-order") {
+      return sort === "set-desc" ? "time-desc" : "time-asc";
+    }
+    return sort;
+  }
+  if (to === "all") {
+    if (from === "wallpaper-order") {
+      return sort === "set-desc" ? "time-desc" : "time-asc";
+    }
+    return sort;
+  }
+  return sort;
 }
 
 /** 切换过滤时回到第 1 页，并按语义映射排序 */

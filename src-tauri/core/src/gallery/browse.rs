@@ -45,16 +45,25 @@ pub struct GalleryBrowseResult {
 /// - `date-range/<start~end>/<page>` - 按日期范围分组
 /// - `album/<albumId>/<page>` - 画册（按抓取时间升序）；`album/<albumId>/desc/<page>` 降序；
 ///   `album/<albumId>/album-order/[desc/]<page>` 按画册内加入顺序（`order` 列）；
-///   `album/<albumId>/wallpaper-order/[desc/]<page>` 仅曾设为壁纸，按设壁纸时间排序
+///   `album/<albumId>/wallpaper-order/[desc/]<page>` 仅曾设为壁纸，按设壁纸时间排序；
+///   `album/<albumId>/image-only/...`、`album/<albumId>/video-only/...` 仅图片或仅视频（子路径与上同）
+/// - `media-type/image[/desc]/<page>`、`media-type/video[/desc]/<page>` - 按媒体类型（画廊根）
 /// - `task/<taskId>/<page>` - 按任务分组
 /// - `surf/<surfRecordId>[/desc]/<page>` - 按畅游记录分组（默认升序，支持 desc）
 ///
 /// 保留旧 VD 路径兼容性（all/by-plugin/by-date/by-task/by-album）
+///
+/// `page_size`：SimplePage 叶子每页条数（前端与设置一致，通常为 100 / 500 / 1000）
 pub fn browse_gallery_provider(
     storage: &Storage,
     provider_rt: &ProviderRuntime,
     path: &str,
+    page_size: usize,
 ) -> Result<GalleryBrowseResult, String> {
+    let page_size = match page_size {
+        100 | 500 | 1000 => page_size,
+        _ => 100,
+    };
     let raw_segs: Vec<&str> = path
         .split('/')
         .map(|s| s.trim())
@@ -87,9 +96,27 @@ pub fn browse_gallery_provider(
                     entries: vec![],
                 });
             }
-            let offset = (page - 1) * LEAF_SIZE;
-            let count = LEAF_SIZE;
-            list_node(storage, &query, total, offset, count)
+            let offset = (page - 1).saturating_mul(page_size);
+            if offset >= total {
+                return Ok(GalleryBrowseResult {
+                    total,
+                    base_offset: offset,
+                    range_total: 0,
+                    entries: vec![],
+                });
+            }
+            let remaining = total - offset;
+            let count = page_size.min(remaining);
+            let imgs = storage.get_images_info_range_by_query(&query, offset, count)?;
+            Ok(GalleryBrowseResult {
+                total,
+                base_offset: offset,
+                range_total: imgs.len(),
+                entries: imgs
+                    .into_iter()
+                    .map(|image| GalleryBrowseEntry::Image { image })
+                    .collect(),
+            })
         }
         // 新增：SimpleAll 返回 total + 目录列表（根节点）
         ProviderDescriptor::SimpleAll { query } => {

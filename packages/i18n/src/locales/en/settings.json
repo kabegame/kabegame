@@ -16,6 +16,8 @@
   "imageAspectRatioDesc": "Aspect ratio of image cards in gallery/albums",
   "galleryColumns": "Gallery columns",
   "galleryColumnsDesc": "Dynamic columns support shortcut adjustment; fixed columns disable shortcut",
+  "galleryPageSize": "Images per page",
+  "galleryPageSizeDesc": "How many images to load per page in the gallery list (100, 500, or 1000)",
   "imageObjectPosition": "Image alignment",
   "imageObjectPositionDesc": "When image overflows: center, top, or bottom (desktop only)",
   "objectPositionCenter": "Center",

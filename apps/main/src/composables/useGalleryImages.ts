@@ -1,6 +1,6 @@
-import { nextTick, ref, shallowRef, type Ref } from "vue";
+import { nextTick, ref, shallowRef, unref, type Ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
+import type { ImageInfo } from "@kabegame/core/types/image";
 
 type GalleryBrowseEntry =
   | { kind: "dir"; name: string }
@@ -13,19 +13,16 @@ type GalleryBrowseResult = {
   entries: GalleryBrowseEntry[];
 };
 
-/** 安卓与桌面统一：每页 100 张，无虚拟滚动 */
-const LEAF_SIZE = 100;
-
 /**
  * 画廊图片列表管理（基于路径的查询）。
+ * @param pageSize SimplePage 每页条数（与设置一致）
  */
 export function useGalleryImages(
   galleryContainerRef: Ref<HTMLElement | null>,
   isLoadingMore: Ref<boolean>,
+  pageSize: Ref<number>,
 ) {
-  const crawlerStore = useCrawlerStore();
-
-  // 本地图片列表：避免直接修改 store 的 images 导致额外渲染
+  // 本地图片列表：由视图直接消费，避免引入额外全局同步开销
   const displayedImages = shallowRef<ImageInfo[]>([]);
   let displayedImageIds = new Set<string>();
   const setDisplayedImages = (next: ImageInfo[]) => {
@@ -33,7 +30,7 @@ export function useGalleryImages(
     displayedImageIds = new Set(next.map((i) => i.id));
   };
 
-  // 当前 leaf 的完整图片列表（最多 LEAF_SIZE；最后一页可能 <LEAF_SIZE）
+  // 当前 leaf 的完整图片列表（最多 pageSize；最后一页可能更少）
   let leafAllImages: ImageInfo[] = [];
 
   const totalImages = ref(0);
@@ -41,10 +38,8 @@ export function useGalleryImages(
 
   const setLeafAndResetDisplay = async (images: ImageInfo[]) => {
     leafAllImages = images;
-    // 直接显示整个 leaf（最多 LEAF_SIZE 张）
+    // 直接显示整个 leaf
     setDisplayedImages(images);
-    crawlerStore.images = images.slice();
-    crawlerStore.hasMore = false;
     await nextTick();
   };
 
@@ -60,9 +55,9 @@ export function useGalleryImages(
     try {
       const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
         path: safePath,
+        pageSize: unref(pageSize),
       });
       totalImages.value = res.total ?? 0;
-      crawlerStore.totalImages = totalImages.value;
 
       // 直接处理图片条目（新路径格式总是返回图片）
       const images = (res.entries || [])
@@ -193,7 +188,7 @@ export function useGalleryImages(
 
   const jumpToBigPage = async (
     page: number,
-    _bigPageSize = LEAF_SIZE,
+    _bigPageSize = unref(pageSize),
     _currentRootPath?: string,
     _total?: number,
   ) => {
@@ -212,8 +207,6 @@ export function useGalleryImages(
     setDisplayedImages(
       displayedImages.value.filter((img) => !idSet.has(img.id)),
     );
-    crawlerStore.images = displayedImages.value.slice();
-    crawlerStore.hasMore = false;
   };
 
   const cleanup = () => {};

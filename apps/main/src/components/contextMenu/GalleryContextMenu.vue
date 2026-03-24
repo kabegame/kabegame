@@ -8,7 +8,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import type { ImageInfo } from "@/stores/crawler";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import SingleImageContextMenu from "./SingleImageContextMenu.vue";
 import MultiImageContextMenu from "./MultiImageContextMenu.vue";
 

@@ -14,5 +14,6 @@
   "importSource": "가져오기 소스",
   "manageSources": "소스 관리",
   "gallerySort": "시간순 정렬",
+  "galleryPageSize": "페이지당",
   "openCrawlerWebview": "크롤러 WebView 창"
 }

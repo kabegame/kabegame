@@ -21,6 +21,7 @@ pub mod temp_files;
 pub use gallery_time::{
     gallery_month_groups_from_days, GalleryTimeFilterPayload, GalleryTimeGroupIndex,
 };
+pub use gallery::GalleryMediaTypeCounts;
 pub use albums::Album;
 pub use images::ImageInfo;
 pub use run_configs::RunConfig;

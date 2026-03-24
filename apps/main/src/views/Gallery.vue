@@ -9,7 +9,7 @@
           <!-- 顶部工具栏 -->
           <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
             :current-position="currentPosition" :month-options="monthOptions" :month-loading="monthOptionsLoading"
-            :provider-root-path="providerRootPath" :current-provider-path="currentPath"
+            :provider-root-path="providerRootPath" :current-provider-path="currentPath" :page-size="pageSize"
             v-model:selectedRange="selectedRange" @refresh="handleManualRefresh"
             @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
             @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
@@ -17,7 +17,7 @@
 
           <!-- 大页分页器 -->
           <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentBigPageOffset"
-            :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToBigPage" />
+            :big-page-size="pageSize" :is-sticky="true" @jump-to-page="handleJumpToBigPage" />
         </template>
 
         <!-- 无图片空状态：使用 ImageGrid 的 empty 插槽（只隐藏 ImageItem，不影响 header/插槽挂载） -->
@@ -93,7 +93,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useRouter, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Plus, Picture, Star, StarFilled, FolderAdd, Delete, FolderOpened, Connection } from "@element-plus/icons-vue";
-import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
+import { useCrawlerStore } from "@/stores/crawler";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import { usePluginStore } from "@/stores/plugins";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import GalleryToolbar from "@/components/GalleryToolbar.vue";
@@ -123,7 +124,6 @@ import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
-import { useSelectionStore } from "@kabegame/core/stores/selection";
 import type { Component } from "vue";
 import { useAlbumStore } from "@/stores/albums";
 import { type ContextCommand } from "@/components/ImageGrid.vue";
@@ -161,16 +161,18 @@ const openHelpDrawer = () => helpDrawer.open("gallery");
 const pluginStore = usePluginStore();
 const uiStore = useUiStore();
 const { imageGridColumns } = storeToRefs(uiStore);
-const selectionStore = useSelectionStore();
 const { extensions: imageExtensions, load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
 const preferOriginalInGrid = computed(() => imageGridColumns.value <= 2);
 
-// leaf 分页：安卓与桌面统一每页 100 张，无虚拟滚动
-const BIG_PAGE_SIZE = 100;
+const settingsStore = useSettingsStore();
+const pageSize = computed(() => {
+  const n = Number(settingsStore.values.galleryPageSize);
+  return n === 100 || n === 500 || n === 1000 ? n : 100;
+});
 
-// 是否启用分页（总数超过 100）
+// 是否启用分页（总数超过一页）
 const bigPageEnabled = computed(() => {
-  return totalImagesCount.value > BIG_PAGE_SIZE;
+  return totalImagesCount.value > pageSize.value;
 });
 
 // 当前页的起始偏移量（用于分页器显示）
@@ -198,6 +200,7 @@ const {
   route,
   router,
   defaultPath: galleryProviderDefaultPath,
+  pageSize,
 });
 
 const isWallpaperOrderEmpty = computed(
@@ -273,6 +276,7 @@ const loadMonthOptions = async () => {
   try {
     const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
       path: "date",
+      pageSize: pageSize.value,
     });
     const months = (res?.entries ?? [])
       .filter((e) => e.kind === "dir")
@@ -290,7 +294,7 @@ const loadMonthOptions = async () => {
   }
 };
 
-// 跟踪当前的实际偏移量（用于 paginator：offset = (page-1)*BIG_PAGE_SIZE）
+// 跟踪当前的实际偏移量（用于 paginator：offset = (page-1)*pageSize）
 
 // 计算当前位置（用于 header subtitle 显示）
 const currentPosition = computed(() => {
@@ -531,9 +535,6 @@ const isGalleryActive = ref(true);
 // const pendingAlbumImages = ref<ImageInfo[]>([]);
 // const pendingAlbumImageIds = computed(() => pendingAlbumImages.value.map(img => img.id));
 // const selectedImage = ref<ImageInfo | null>(null);
-// 设置 store
-const settingsStore = useSettingsStore();
-
 // effectiveAspectRatio 已移除，ImageGrid 现在始终使用窗口宽高比
 const plugins = computed(() => pluginStore.plugins);
 const tasks = computed(() => crawlerStore.tasks);
@@ -551,7 +552,8 @@ const {
   loadedKey,
 } = useGalleryImages(
   galleryContainerRef,
-  isLoadingMore
+  isLoadingMore,
+  pageSize,
 );
 
 watch(
@@ -596,6 +598,16 @@ const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => 
     isRefreshing.value = false;
   }
 };
+
+watch(
+  pageSize,
+  async (_v, prev) => {
+    if (prev === undefined) return;
+    await navigateToPage(1);
+    await loadTotalImagesCount();
+    await loadImages(false);
+  },
+);
 
 watch(
   () => selectedRange.value,
@@ -704,6 +716,7 @@ const loadTotalImagesCount = async () => {
     // 通过 provider 浏览接口获取 total（避免另起一套 count API）
     const res = await invoke<{ total: number }>("browse_gallery_provider", {
       path: providerRootPath.value,
+      pageSize: pageSize.value,
     });
     totalImagesCount.value = res?.total ?? 0;
   } catch (error) {
@@ -716,13 +729,13 @@ watch(
   () => totalImagesCount.value,
   async (total) => {
     if (!bigPageEnabled.value) {
-      // total <= BIG_PAGE_SIZE 时只允许 page=1
+      // total <= pageSize 时只允许 page=1
       if (currentPage.value !== 1) {
         await handleJumpToBigPage(1);
       }
       return;
     }
-    const totalPages = Math.max(1, Math.ceil((total || 0) / BIG_PAGE_SIZE));
+    const totalPages = Math.max(1, Math.ceil((total || 0) / pageSize.value));
     if (currentPage.value > totalPages) {
       await handleJumpToBigPage(totalPages);
     }
@@ -753,7 +766,7 @@ const ensureValidGalleryPageAfterMassRemoval = async () => {
     const currentBigPage = currentPage.value;
     const totalBigPages = Math.max(
       1,
-      Math.ceil(totalImagesCount.value / BIG_PAGE_SIZE)
+      Math.ceil(totalImagesCount.value / pageSize.value)
     );
     const targetBigPage = Math.min(currentBigPage, totalBigPages);
 
@@ -905,7 +918,6 @@ const handleGridContextCommand = async (
             idSet.has(img.id) ? ({ ...img, favorite: desiredFavorite } as ImageInfo) : img
           );
           displayedImages.value = next;
-          crawlerStore.images = next.slice();
           ElMessage.success(
             desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`
           );

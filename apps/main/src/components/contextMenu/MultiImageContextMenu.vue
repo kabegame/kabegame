@@ -13,7 +13,7 @@ import {
   FolderAdd,
   Delete,
 } from "@element-plus/icons-vue";
-import type { ImageInfo } from "@/stores/crawler";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
 
 interface Props {

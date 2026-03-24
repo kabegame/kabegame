@@ -13,7 +13,7 @@ import {
   Share,
 } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
-import type { ImageInfo } from "@/stores/crawler";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import { IS_WINDOWS, IS_ANDROID } from "@kabegame/core/env";
 import { i18n } from "@kabegame/i18n";
 

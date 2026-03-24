@@ -1,7 +1,7 @@
 import { computed, type Ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import { useAlbumStore } from "@/stores/albums";
 import { storeToRefs } from "pinia";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
@@ -26,7 +26,6 @@ export function useImageOperations(
   _removeFromUiCacheByIds: (imageIds: string[]) => void,
   _loadImages: (reset?: boolean, opts?: any) => Promise<void>,
 ) {
-  const crawlerStore = useCrawlerStore();
   const albumStore = useAlbumStore();
   const settingsStore = useSettingsStore();
   const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
@@ -197,7 +196,6 @@ export function useImageOperations(
     });
     if (changed) {
       displayedImages.value = next;
-      crawlerStore.images = [...next];
     }
   };
   // 统一的删除操作：根据是否删除文件决定调用 removeImage 还是 deleteImage
@@ -221,10 +219,9 @@ export function useImageOperations(
 
       // 使用批量 API 一次性处理所有图片
       if (deleteFiles) {
-        // Gallery 内部会手动更新列表；这里禁用 store 的全局事件，避免监听器抢先 refresh 导致滚动回顶
-        await crawlerStore.batchDeleteImages(imageIds, { emitEvent: false });
+        await invoke("batch_delete_images", { imageIds });
       } else {
-        await crawlerStore.batchRemoveImages(imageIds, { emitEvent: false });
+        await invoke("batch_remove_images", { imageIds });
       }
 
       if (includesCurrent) {

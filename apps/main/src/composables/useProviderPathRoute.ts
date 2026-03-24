@@ -41,6 +41,8 @@ type UseProviderPathRouteOptions = {
   route: RouteLocationNormalizedLoaded;
   router: Router;
   defaultPath?: Ref<string> | ComputedRef<string> | string;
+  /** SimplePage 每页条数；缺省为 100 */
+  pageSize?: Ref<number> | ComputedRef<number> | number;
 };
 
 /**
@@ -62,7 +64,12 @@ export function useProviderPathRoute(options: UseProviderPathRouteOptions) {
     return extractPageFromPath(currentPath.value);
   });
 
-  const currentOffset = computed(() => (currentPage.value - 1) * 100);
+  const currentOffset = computed(() => {
+    const ps =
+      options.pageSize != null ? unref(options.pageSize) : 100;
+    const n = typeof ps === "number" && ps > 0 ? ps : 100;
+    return (currentPage.value - 1) * n;
+  });
 
   /**
    * 设置根路径和页码

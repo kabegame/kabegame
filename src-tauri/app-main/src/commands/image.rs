@@ -18,12 +18,20 @@ pub async fn get_images_range(offset: usize, limit: usize) -> Result<serde_json:
 }
 
 #[tauri::command]
-pub async fn browse_gallery_provider(path: String) -> Result<serde_json::Value, String> {
+pub async fn browse_gallery_provider(
+    path: String,
+    page_size: usize,
+) -> Result<serde_json::Value, String> {
     let storage = Storage::global();
     let provider_rt = ProviderRuntime::global();
     let path_clone = path.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        kabegame_core::gallery::browse_gallery_provider(storage, provider_rt, &path_clone)
+        kabegame_core::gallery::browse_gallery_provider(
+            storage,
+            provider_rt,
+            &path_clone,
+            page_size,
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -54,6 +62,18 @@ pub async fn get_images_count() -> Result<usize, String> {
 pub async fn get_gallery_plugin_groups() -> Result<serde_json::Value, String> {
     let groups = Storage::global().get_gallery_plugin_groups()?;
     serde_json::to_value(groups).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_gallery_media_type_counts() -> Result<serde_json::Value, String> {
+    let c = Storage::global().get_gallery_media_type_counts()?;
+    serde_json::to_value(c).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_album_media_type_counts(album_id: String) -> Result<serde_json::Value, String> {
+    let c = Storage::global().get_album_media_type_counts(&album_id)?;
+    serde_json::to_value(c).map_err(|e| e.to_string())
 }
 
 /// 抓取时间过滤：月（由日聚合）+ 日（原始），与 `storage::gallery_time` 一致。

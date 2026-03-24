@@ -14,5 +14,6 @@
   "importSource": "匯入源",
   "manageSources": "管理源",
   "gallerySort": "依時間排序",
+  "galleryPageSize": "每頁數量",
   "openCrawlerWebview": "爬蟲 WebView 視窗"
 }

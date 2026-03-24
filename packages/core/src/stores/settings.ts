@@ -18,6 +18,8 @@ export interface AppSettings {
   galleryImageObjectPosition: "center" | "top" | "bottom";
   // 画廊列数（0=动态；1-4=固定列数）
   galleryGridColumns: number;
+  /** 画廊 SimplePage 每页条数（100 / 500 / 1000） */
+  galleryPageSize: number;
   autoDeduplicate: boolean;
   defaultDownloadDir: string | null;
   wallpaperEngineDir: string | null;
@@ -74,6 +76,7 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
     downloadIntervalMs: { getter: "get_download_interval_ms", setter: "set_download_interval_ms", param: "intervalMs" },
     networkRetryCount: { getter: "get_network_retry_count", setter: "set_network_retry_count", param: "count" },
     autoDeduplicate: { getter: "get_auto_deduplicate", setter: "set_auto_deduplicate", param: "enabled" },
+    galleryPageSize: { getter: "get_gallery_page_size", setter: "set_gallery_page_size", param: "size" },
     wallpaperRotationEnabled: { getter: "get_wallpaper_rotation_enabled", setter: "set_wallpaper_rotation_enabled", param: "enabled" },
     wallpaperRotationAlbumId: { getter: "get_wallpaper_rotation_album_id", setter: "set_wallpaper_rotation_album_id", param: "albumId" },
     wallpaperRotationIntervalMinutes: { getter: "get_wallpaper_rotation_interval_minutes", setter: "set_wallpaper_rotation_interval_minutes", param: "minutes" },

@@ -1,4 +1,4 @@
-﻿//! Gallery / Provider 命令处理器
+//! Gallery / Provider 命令处理器
 
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 use kabegame_core::providers::ProviderRuntime;
@@ -14,7 +14,7 @@ pub async fn handle_gallery_request(req: &CliIpcRequest) -> Option<CliIpcRespons
 async fn browse_provider(path: &str) -> CliIpcResponse {
     let storage = Storage::global();
     let provider_rt = ProviderRuntime::global();
-    match kabegame_core::gallery::browse_gallery_provider(storage, provider_rt, path) {
+    match kabegame_core::gallery::browse_gallery_provider(storage, provider_rt, path, 100) {
         Ok(res) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(res).unwrap_or_default())
         }

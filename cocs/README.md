@@ -15,6 +15,10 @@
   - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统。
   - 适用场景：新增过滤、排序、数据源；理解 `JOIN/WHERE/ORDER` 组合方式；排查 provider 查询路径问题。
 
+- `GALLERY_PAGINATION_AND_IMAGE_LOAD.md`
+  - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流、设置持久化、`browse_gallery_provider` 与 `invoke` 参数约定。
+  - 适用场景：排查翻页/offset、每页条数切换不刷新、列表加载失败；区分 SimplePage 与 VD Greedy 的 `LEAF_SIZE` 行为。
+
 - `CRAWLER_JS_FLOW.md`
   - 主题：Crawler JS 执行链路与相关模块关系。
   - 适用场景：调度、注入、抓取流程排查与扩展。

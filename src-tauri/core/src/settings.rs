@@ -92,6 +92,8 @@ pub enum SettingKey {
     GalleryImageAspectRatio,
     /// 画廊列数（0=动态，1-4=固定）
     GalleryGridColumns,
+    /// 画廊 SimplePage 每页条数（100 / 500 / 1000）
+    GalleryPageSize,
     /// 画廊图片在方框内溢出时的垂直对齐（center/top/bottom），仅桌面端使用
     GalleryImageObjectPosition,
     /// 自动去重
@@ -278,6 +280,14 @@ impl Settings {
         crate::app_paths::AppPaths::global().settings_json()
     }
 
+    /// 画廊每页条数：仅允许 100 / 500 / 1000
+    fn normalize_gallery_page_size(n: u32) -> u32 {
+        match n {
+            100 | 500 | 1000 => n,
+            _ => 100,
+        }
+    }
+
     fn default_value(key: SettingKey) -> SettingValue {
         match key {
             SettingKey::AutoLaunch => SettingValue::Bool(false),
@@ -289,6 +299,7 @@ impl Settings {
             SettingKey::ImageClickAction => SettingValue::String("preview".to_string()),
             SettingKey::GalleryImageAspectRatio => SettingValue::OptionString(None),
             SettingKey::GalleryGridColumns => SettingValue::U32(0),
+            SettingKey::GalleryPageSize => SettingValue::U32(100),
             SettingKey::GalleryImageObjectPosition => SettingValue::String("center".to_string()),
             SettingKey::AutoDeduplicate => SettingValue::Bool(false),
             SettingKey::DefaultDownloadDir => SettingValue::OptionString(None),
@@ -509,6 +520,7 @@ Write-Output "$style,$tile"
             SettingKey::ImageClickAction,
             SettingKey::GalleryImageAspectRatio,
             SettingKey::GalleryGridColumns,
+            SettingKey::GalleryPageSize,
             SettingKey::GalleryImageObjectPosition,
             SettingKey::AutoDeduplicate,
             SettingKey::DefaultDownloadDir,
@@ -629,6 +641,10 @@ Write-Output "$style,$tile"
             | SettingKey::GalleryGridColumns => {
                 Ok(SettingValue::U32(json.as_u64().unwrap_or(0) as u32))
             }
+            SettingKey::GalleryPageSize => {
+                let n = json.as_u64().unwrap_or(100) as u32;
+                Ok(SettingValue::U32(Self::normalize_gallery_page_size(n)))
+            }
             SettingKey::DownloadIntervalMs => {
                 let v = json.as_u64().unwrap_or(500) as u32;
                 let v = v.clamp(100, 10000);
@@ -731,6 +747,7 @@ Write-Output "$style,$tile"
             SettingKey::ImageClickAction => "imageClickAction".to_string(),
             SettingKey::GalleryImageAspectRatio => "galleryImageAspectRatio".to_string(),
             SettingKey::GalleryGridColumns => "galleryGridColumns".to_string(),
+            SettingKey::GalleryPageSize => "galleryPageSize".to_string(),
             SettingKey::GalleryImageObjectPosition => "galleryImageObjectPosition".to_string(),
             SettingKey::AutoDeduplicate => "autoDeduplicate".to_string(),
             SettingKey::DefaultDownloadDir => "defaultDownloadDir".to_string(),
@@ -976,6 +993,17 @@ Write-Output "$style,$tile"
             Ok(if n <= 4 { n } else { 0 })
         } else {
             Ok(0)
+        }
+    }
+
+    pub async fn get_gallery_page_size(&self) -> Result<u32, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::GalleryPageSize) {
+            let val = cell.lock().await;
+            let n = val.as_u32().unwrap_or(100);
+            Ok(Self::normalize_gallery_page_size(n))
+        } else {
+            Ok(100)
         }
     }
 
@@ -1338,6 +1366,19 @@ Write-Output "$style,$tile"
             *val = new_value.clone();
         }
         Self::emit_setting_change(SettingKey::GalleryGridColumns, &new_value).await;
+        Self::trigger_debounce_save().await?;
+        Ok(())
+    }
+
+    pub async fn set_gallery_page_size(&self, size: u32) -> Result<(), String> {
+        let clamped = Self::normalize_gallery_page_size(size);
+        let cells = Self::cells();
+        let new_value = SettingValue::U32(clamped);
+        if let Some(cell) = cells.get(&SettingKey::GalleryPageSize) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::GalleryPageSize, &new_value).await;
         Self::trigger_debounce_save().await?;
         Ok(())
     }

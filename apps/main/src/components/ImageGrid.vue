@@ -23,7 +23,6 @@
 <script setup lang="ts">
 import { computed, ref, useAttrs } from "vue";
 import CoreImageGrid from "@kabegame/core/components/image/ImageGrid.vue";
-import type { ImageInfo } from "@/stores/crawler";
 import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import ImageDetailDialog from "@kabegame/core/components/common/ImageDetailDialog.vue";
 import { usePluginStore } from "@/stores/plugins";
@@ -37,6 +36,7 @@ import type { ActionItem } from "@kabegame/core/actions/types";
 
 // 扩展 ContextCommand 类型，添加 app-main 特有的命令
 export type ContextCommand = CoreContextCommand | "favorite" | "addToAlbum" | "share";
+type ImageInfo = CoreImageInfo;
 
 // 扩展 ContextCommandPayload 类型
 // 对于扩展命令，payload 结构与 core 一致，只是 command 字段不同
@@ -82,8 +82,7 @@ defineEmits<{
 }>();
 
 const attrs = useAttrs();
-// 传 core 时需将 actions 断言为 ActionItem<CoreImageInfo>[]：crawler ImageInfo 的 url 必填，
-// core ImageInfo 的 url 可选，协变不兼容；运行时 actions 收到的 target 多为 crawler 数据（含 url）
+// 传 core 时需将 actions 断言为 ActionItem<CoreImageInfo>[]，避免泛型不兼容
 const coreGridBind = computed(() => {
   const { actions, ...rest } = props;
   return {

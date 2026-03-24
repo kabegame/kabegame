@@ -91,6 +91,45 @@
             </template>
           </el-dropdown>
         </el-dropdown-item>
+        <el-dropdown-item divided class="plugin-submenu-wrap" @click.stop>
+          <el-dropdown
+            trigger="hover"
+            placement="right-start"
+            @command="handleMediaTypeCommand"
+          >
+            <span
+              class="plugin-submenu-trigger"
+              :class="{ 'is-active': isMediaTypeFilterActive }"
+            >
+              {{ t("gallery.filterByMediaType") }}
+              <el-icon class="plugin-submenu-chevron">
+                <ArrowRight />
+              </el-icon>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu class="plugin-submenu-menu">
+                <el-dropdown-item
+                  command="image"
+                  :class="{
+                    'is-active': galleryMediaKindFromRoot(parsedRoot) === 'image',
+                  }"
+                >
+                  {{ t("gallery.filterImageOnly") }}
+                  <span class="plugin-count">({{ mediaTypeCounts.imageCount }})</span>
+                </el-dropdown-item>
+                <el-dropdown-item
+                  command="video"
+                  :class="{
+                    'is-active': galleryMediaKindFromRoot(parsedRoot) === 'video',
+                  }"
+                >
+                  {{ t("gallery.filterVideoOnly") }}
+                  <span class="plugin-count">({{ mediaTypeCounts.videoCount }})</span>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </el-dropdown-item>
       </el-dropdown-menu>
     </template>
   </el-dropdown>
@@ -106,6 +145,7 @@ import { useGalleryPathState } from "@/composables/useGalleryPathState";
 import {
   DEFAULT_GALLERY_PATH,
   galleryDateTailFromRoot,
+  galleryMediaKindFromRoot,
   galleryPathWithRootOnly,
   galleryPluginIdFromRoot,
   isGallerySimpleFilterRoot,
@@ -125,6 +165,11 @@ import { usePluginStore } from "@/stores/plugins";
 interface PluginGroupRow {
   plugin_id: string;
   count: number;
+}
+
+interface GalleryMediaTypeCountsPayload {
+  imageCount: number;
+  videoCount: number;
 }
 
 const route = useRoute();
@@ -159,7 +204,15 @@ const isPluginFilterActive = computed(() => currentPluginId.value != null);
 
 const isTimeFilterActive = computed(() => dateTail.value != null);
 
+const isMediaTypeFilterActive = computed(
+  () => galleryMediaKindFromRoot(parsedRoot.value) != null
+);
+
 const pluginGroups = ref<PluginGroupRow[]>([]);
+const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
+  imageCount: 0,
+  videoCount: 0,
+});
 const monthGroups = ref<DateGroupRow[]>([]);
 const dayGroups = ref<DayGroupRow[]>([]);
 
@@ -173,14 +226,21 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
 
 onMounted(async () => {
   try {
-    const [pg, timePayload] = await Promise.all([
+    const [pg, timePayload, mt] = await Promise.all([
       invoke<PluginGroupRow[]>("get_gallery_plugin_groups"),
       invoke<GalleryTimeFilterPayload>("get_gallery_time_filter_data"),
+      invoke<GalleryMediaTypeCountsPayload>("get_gallery_media_type_counts"),
       pluginStore.loadPlugins(),
     ]);
     pluginGroups.value = Array.isArray(pg) ? pg : [];
     monthGroups.value = Array.isArray(timePayload?.months) ? timePayload.months : [];
     dayGroups.value = Array.isArray(timePayload?.days) ? timePayload.days : [];
+    if (mt && typeof mt.imageCount === "number" && typeof mt.videoCount === "number") {
+      mediaTypeCounts.value = {
+        imageCount: mt.imageCount,
+        videoCount: mt.videoCount,
+      };
+    }
   } catch {
     pluginGroups.value = [];
     monthGroups.value = [];
@@ -200,6 +260,13 @@ const filterLabel = computed(() => {
   const pid = currentPluginId.value;
   if (pid) {
     return t("gallery.filterByPluginWithName", { name: pluginStore.pluginLabel(pid) });
+  }
+  const mk = galleryMediaKindFromRoot(parsedRoot.value);
+  if (mk === "image") {
+    return `${t("gallery.filterImageOnlyLabel")} (${mediaTypeCounts.value.imageCount})`;
+  }
+  if (mk === "video") {
+    return `${t("gallery.filterVideoOnlyLabel")} (${mediaTypeCounts.value.videoCount})`;
   }
   return t("gallery.filterAll");
 });
@@ -226,6 +293,15 @@ function handleTimeCommand(name: string) {
   const next = galleryPathWithRootOnly(
     effectiveGalleryPath.value,
     `date/${seg}`
+  );
+  void router.push({ path: "/gallery", query: { path: next } });
+}
+
+function handleMediaTypeCommand(kind: string) {
+  if (kind !== "image" && kind !== "video") return;
+  const next = galleryPathWithRootOnly(
+    effectiveGalleryPath.value,
+    `media-type/${kind}`
   );
   void router.push({ path: "/gallery", query: { path: next } });
 }

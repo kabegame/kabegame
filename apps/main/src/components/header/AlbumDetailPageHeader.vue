@@ -68,6 +68,7 @@ const emit = defineEmits<{
   'update:editingName': [value: string];
   'open-browse-filter': [];
   'open-browse-sort': [];
+  'open-browse-page-size': [];
 }>();
 
 const { t } = useI18n();
@@ -103,6 +104,7 @@ const foldIds = computed(() => {
       return [
         HeaderFeatureId.AlbumBrowseFilter,
         HeaderFeatureId.AlbumBrowseSort,
+        HeaderFeatureId.GalleryPageSize,
         ...base,
       ];
     }
@@ -137,6 +139,9 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.AlbumBrowseSort:
       emit("open-browse-sort");
+      break;
+    case HeaderFeatureId.GalleryPageSize:
+      emit("open-browse-page-size");
       break;
   }
 };

@@ -36,6 +36,10 @@
                   :description="$t('settings.galleryColumnsDesc')">
                   <GalleryGridColumnsSetting />
                 </SettingRow>
+                <SettingRow :label="$t('settings.galleryPageSize')"
+                  :description="$t('settings.galleryPageSizeDesc')">
+                  <GalleryPageSizeSetting />
+                </SettingRow>
                 <SettingRow v-if="!IS_ANDROID" :label="$t('settings.imageObjectPosition')"
                   :description="$t('settings.imageObjectPositionDesc')">
                   <SettingRadioControl setting-key="galleryImageObjectPosition" :options="objectPositionOptions" />
@@ -207,6 +211,7 @@ import DefaultDownloadDirSetting from "@kabegame/core/components/settings/items/
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
 import GalleryImageAspectRatioSetting from "@/components/settings/items/GalleryImageAspectRatioSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
+import GalleryPageSizeSetting from "@/components/settings/items/GalleryPageSizeSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
 import WallpaperRotationTargetSetting from "@/components/settings/items/WallpaperRotationTargetSetting.vue";
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";

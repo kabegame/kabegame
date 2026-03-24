@@ -14,5 +14,6 @@
   "importSource": "Import source",
   "manageSources": "Manage sources",
   "gallerySort": "Sort by time",
+  "galleryPageSize": "Per page",
   "openCrawlerWebview": "Crawler WebView window"
 }
