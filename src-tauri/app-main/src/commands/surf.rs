@@ -9,7 +9,7 @@ use kabegame_core::storage::{RangedSurfRecords, Storage, SurfRecord};
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri::Emitter;
-use tauri::webview::DownloadEvent;
+use tauri::webview::{DownloadEvent, PageLoadEvent};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,6 +59,34 @@ fn eval_surf_toast(app: &AppHandle, message: &str, kind: &str) {
     }
 }
 
+fn save_surf_session_cookies(app: &AppHandle) {
+    let record_id = SurfSessionState::global()
+        .lock()
+        .ok()
+        .and_then(|g| g.current_record_id.clone());
+    let Some(record_id) = record_id else {
+        return;
+    };
+    let Some(surf_window) = app.get_webview_window("surf") else {
+        return;
+    };
+    let Ok(Some(record)) = Storage::global().get_surf_record(&record_id) else {
+        return;
+    };
+    let Ok(parsed) = url::Url::parse(&record.root_url) else {
+        return;
+    };
+    let Ok(cookies) = surf_window.cookies_for_url(parsed) else {
+        return;
+    };
+    let mut pairs: Vec<String> = Vec::new();
+    for c in cookies {
+        pairs.push(format!("{}={}", c.name(), c.value()));
+    }
+    let cookie_string = pairs.join("; ");
+    let _ = Storage::global().update_surf_record_cookie(&record_id, &cookie_string);
+}
+
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_json::Value, String> {
@@ -87,6 +115,14 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
             .inner_size(1200.0, 800.0)
             .initialization_script(include_str!("../../resources/surf_toast.js"))
             .initialization_script(include_str!("../../resources/surf_context_menu.js"))
+            .on_page_load({
+                let app = app.clone();
+                move |_surf_window, payload| {
+                    if payload.event() == PageLoadEvent::Finished {
+                        save_surf_session_cookies(&app);
+                    }
+                }
+            })
             .on_download({
                 let app = app.clone();
                 move |_webview, event| match event {
@@ -153,14 +189,17 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             let url_str = url.to_string();
                             tauri::async_runtime::spawn(async move {
                                 let surf_record_id = entry.surf_record_id.clone();
+                                let empty_headers = std::collections::HashMap::new();
                                 match postprocess_downloaded_image(
                                     &final_path,
                                     &url_str,
                                     &entry.plugin_id,
                                     entry.task_id.as_deref(),
+                                    None,
                                     surf_record_id.as_deref(),
                                     entry.download_start_time,
                                     None,
+                                    &empty_headers,
                                     true,
                                 )
                                 .await
@@ -312,6 +351,12 @@ pub async fn surf_get_record_images(
 #[tauri::command]
 pub async fn surf_update_root_url(id: String, root_url: String) -> Result<(), String> {
     Storage::global().update_surf_record_root_url(&id, &root_url)
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_update_name(id: String, name: String) -> Result<(), String> {
+    Storage::global().update_surf_record_name(&id, &name)
 }
 
 #[cfg(not(target_os = "android"))]

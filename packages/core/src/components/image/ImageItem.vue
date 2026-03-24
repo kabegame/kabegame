@@ -8,14 +8,6 @@
     },
     thumbnailObjectPositionClass,
   ]" :data-id="image.id" @contextmenu.prevent="$emit('contextmenu', $event)" @animationend="handleAnimationEnd">
-    <!-- 任务失败图片：下载重试（不阻挡点击/选择/右键） -->
-    <el-tooltip v-if="image.isTaskFailed" content="重新下载" placement="top" :show-after="300">
-      <div class="retry-download-badge" @click.stop="$emit('retryDownload')">
-        <el-icon :size="14">
-          <Download />
-        </el-icon>
-      </div>
-    </el-tooltip>
     <!-- 本地文件缺失标识：不阻挡点击/选择/右键 -->
     <el-tooltip v-if="originalMissing && !isLost" content="这张图片找不到了" placement="top" :show-after="300">
       <div class="missing-file-badge">
@@ -89,7 +81,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
-import { WarningFilled, Download, VideoPlay } from "@element-plus/icons-vue";
+import { WarningFilled, VideoPlay } from "@element-plus/icons-vue";
 import type { ImageInfo } from "../../types/image";
 import type { ImageClickAction } from "../../stores/settings";
 import ImageNotFound from "../common/ImageNotFound.vue";
@@ -115,7 +107,6 @@ const emit = defineEmits<{
   dblclick: [event?: MouseEvent];
   contextmenu: [event: MouseEvent];
   longpress: []; // Android 长按事件
-  retryDownload: []; // 任务失败图片：重试下载
   enterAnimationEnd: []; // 入场动画结束
   leaveAnimationEnd: []; // 退场动画结束
 }>();
@@ -487,30 +478,6 @@ const handleAnimationEnd = (event: AnimationEvent) => {
   &:hover {
     background: rgba(245, 108, 108, 1);
   }
-}
-
-.retry-download-badge {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 3;
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: auto;
-  cursor: pointer;
-  color: #fff;
-  background: rgba(103, 194, 58, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.7);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-  transition: background 0.2s ease;
-}
-
-.retry-download-badge:hover {
-  background: rgba(103, 194, 58, 1);
 }
 
 .video-play-badge {

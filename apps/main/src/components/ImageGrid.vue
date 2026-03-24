@@ -1,7 +1,6 @@
 <template>
   <CoreImageGrid ref="coreRef" v-bind="coreGridBind" :window-aspect-ratio="props.windowAspectRatio"
     :on-context-command="handleContextCommand" @scroll-stable="$emit('scroll-stable')"
-    @retry-download="(p) => $emit('retry-download', p)"
   >
     <template #before-grid>
       <slot name="before-grid" />
@@ -77,8 +76,6 @@ defineEmits<{
   "scroll-stable": [];
   // 兼容旧 API：右键已移除加入画册，但保留事件名不破坏上层模板
   addedToAlbum: [];
-  // 注意：事件来自 core ImageGrid，因此 image 类型应与 core 对齐（url 在 core 为可选）
-  "retry-download": [payload: { image: CoreImageInfo }];
 }>();
 
 const attrs = useAttrs();

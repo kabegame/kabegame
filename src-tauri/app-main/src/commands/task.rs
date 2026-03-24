@@ -1,5 +1,6 @@
 // 任务相关命令
 
+use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::storage::{Storage, TaskInfo};
 
 #[tauri::command]
@@ -79,6 +80,12 @@ pub async fn get_task_failed_images(task_id: String) -> Result<serde_json::Value
 }
 
 #[tauri::command]
+pub async fn get_all_failed_images() -> Result<serde_json::Value, String> {
+    let images = Storage::global().get_all_failed_images()?;
+    Ok(serde_json::to_value(images).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
 pub async fn get_task_logs(task_id: String) -> Result<serde_json::Value, String> {
     let logs = Storage::global().get_task_logs(&task_id)?;
     Ok(serde_json::to_value(logs).map_err(|e| e.to_string())?)
@@ -86,9 +93,77 @@ pub async fn get_task_logs(task_id: String) -> Result<serde_json::Value, String>
 
 #[tauri::command]
 pub async fn retry_task_failed_image(failed_id: i64) -> Result<(), String> {
-    // 重试逻辑通常涉及 Scheduler
     use kabegame_core::crawler::TaskScheduler;
-    TaskScheduler::global().retry_failed_image(failed_id)
+    TaskScheduler::global().retry_failed_image(failed_id).await
+}
+
+#[tauri::command]
+pub async fn retry_failed_images(ids: Vec<i64>) -> Result<Vec<i64>, String> {
+    use kabegame_core::crawler::TaskScheduler;
+    TaskScheduler::global().retry_failed_images(&ids).await
+}
+
+#[tauri::command]
+pub async fn cancel_retry_failed_image(failed_id: i64) -> Result<(), String> {
+    use kabegame_core::crawler::TaskScheduler;
+    TaskScheduler::global()
+        .cancel_retry_failed_image(failed_id)
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cancel_retry_failed_images(ids: Vec<i64>) -> Result<(), String> {
+    use kabegame_core::crawler::TaskScheduler;
+    TaskScheduler::global()
+        .cancel_retry_failed_images(&ids)
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_failed_images(ids: Vec<i64>) -> Result<(), String> {
+    use kabegame_core::crawler::TaskScheduler;
+    TaskScheduler::global()
+        .cancel_retry_failed_images(&ids)
+        .await;
+    let storage = Storage::global();
+    let groups = storage.delete_failed_images(&ids)?;
+    for (task_id, del_ids) in &groups {
+        GlobalEmitter::global().emit_failed_images_removed(task_id, del_ids);
+        if let Ok(Some(t)) = storage.get_task(task_id) {
+            GlobalEmitter::global().emit_task_image_counts(
+                task_id,
+                Some(t.success_count),
+                Some(t.deleted_count),
+                Some(t.failed_count),
+                Some(t.dedup_count),
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_task_failed_image(failed_id: i64) -> Result<(), String> {
+    let storage = Storage::global();
+    let task_id = storage
+        .get_task_failed_image_by_id(failed_id)?
+        .map(|item| item.task_id);
+    storage.delete_task_failed_image(failed_id)?;
+    if let Some(ref tid) = task_id {
+        GlobalEmitter::global().emit_failed_images_removed(tid, &[failed_id]);
+        if let Ok(Some(t)) = storage.get_task(tid) {
+            GlobalEmitter::global().emit_task_image_counts(
+                tid,
+                Some(t.success_count),
+                Some(t.deleted_count),
+                Some(t.failed_count),
+                Some(t.dedup_count),
+            );
+        }
+    }
+    Ok(())
 }
 
 // 补充：add_task, update_task, delete_task, start_task (之前在 daemon.rs 里的)
@@ -96,6 +171,13 @@ pub async fn retry_task_failed_image(failed_id: i64) -> Result<(), String> {
 pub async fn get_all_tasks() -> Result<serde_json::Value, String> {
     let tasks = Storage::global().get_all_tasks()?;
     Ok(serde_json::to_value(tasks).map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
+pub async fn get_tasks_page(limit: u32, offset: u32) -> Result<serde_json::Value, String> {
+    let (tasks, total) = Storage::global().get_tasks_page(limit, offset)?;
+    serde_json::to_value(serde_json::json!({ "tasks": tasks, "total": total }))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -149,6 +231,9 @@ pub async fn start_task(task: serde_json::Value) -> Result<(), String> {
                 status: "pending".to_string(),
                 progress: 0.0,
                 deleted_count: 0,
+                dedup_count: 0,
+                success_count: 0,
+                failed_count: 0,
                 start_time: Some(now_ms),
                 end_time: None,
                 error: None,

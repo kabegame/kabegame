@@ -13,7 +13,12 @@
   "deleteAlbum": "アルバムを削除",
   "importSource": "ソースをインポート",
   "manageSources": "ソースを管理",
+  "failedImages": "失敗画像",
   "gallerySort": "日時で並び替え",
   "galleryPageSize": "1ページあたり",
-  "openCrawlerWebview": "クローラーWebViewウィンドウ"
+  "openCrawlerWebview": "クローラーWebViewウィンドウ",
+  "failedImagesCancelWaiting": "待機をキャンセル",
+  "failedImagesRetryAll": "すべて再試行",
+  "failedImagesDeleteAll": "すべて削除",
+  "failedImagesFilter": "プラグインでフィルター"
 }

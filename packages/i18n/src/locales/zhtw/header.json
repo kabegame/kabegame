@@ -13,7 +13,12 @@
   "deleteAlbum": "刪除畫冊",
   "importSource": "匯入源",
   "manageSources": "管理源",
+  "failedImages": "失敗圖片",
   "gallerySort": "依時間排序",
   "galleryPageSize": "每頁數量",
-  "openCrawlerWebview": "爬蟲 WebView 視窗"
+  "openCrawlerWebview": "爬蟲 WebView 視窗",
+  "failedImagesCancelWaiting": "取消等待",
+  "failedImagesRetryAll": "全部重試",
+  "failedImagesDeleteAll": "全部刪除",
+  "failedImagesFilter": "依插件篩選"
 }

@@ -179,8 +179,8 @@ const handleGlobalClick = () => {
 onMounted(async () => {
   window.addEventListener("click", handleGlobalClick);
 
-  // 仅在应用启动时加载任务列表（TaskDrawer 是单例，onMounted 只会执行一次）
-  await crawlerStore.loadTasks();
+  // 分页加载：首次只加载 20 条，减轻打开抽屉时的卡顿
+  await crawlerStore.loadTasksPage(20, 0);
 });
 
 onUnmounted(() => {
@@ -261,8 +261,8 @@ const handleDeleteAllTasks = async () => {
 
     // 调用后端命令批量清除
     const clearedCount = await invoke<number>("clear_finished_tasks");
-    // 重新获取任务列表
-    await crawlerStore.loadTasks();
+    // 重新加载第一页
+    await crawlerStore.loadTasksPage(20, 0);
     ElMessage.success(t('tasks.tasksCleared', { count: clearedCount }));
   } catch (error) {
     if (error !== "cancel") {

@@ -23,12 +23,15 @@ model Task {
     status           String
     progress         Float   @default(0)
     deletedCount     Int     @default(0) @map("deleted_count")
+    dedupCount       Int     @default(0) @map("dedup_count")
+    successCount     Int     @default(0) @map("success_count")
+    failedCount      Int     @default(0) @map("failed_count")
     startTime        Int?    @map("start_time")
     endTime          Int?    @map("end_time")
     error            String?
 
-    images           Image[]        @relation("TaskToImage")
-    taskImages       TaskImage[]
+    images           Image[]             @relation("TaskToImage")
+    taskFailedImages TaskFailedImage[]
 
     @@index([startTime(sort: Desc)], name: "idx_tasks_start_time")
     @@map("tasks")
@@ -70,7 +73,6 @@ model Image {
     task          Task?        @relation("TaskToImage", fields: [taskId], references: [id], onDelete: SetNull)
     surfRecord    SurfRecord?  @relation("SurfRecordToImage", fields: [surfRecordId], references: [id], onDelete: SetNull)
     albumImages   AlbumImage[]
-    taskImages    TaskImage[]
 
     @@index([crawledAt(sort: Desc)], name: "idx_crawled_at")
     @@index([pluginId], name: "idx_plugin_id")
@@ -122,28 +124,22 @@ model AlbumImage {
     @@map("album_images")
 }
 
-// 任务-图片关联表
-model TaskImage {
-    taskId  String @map("task_id")
-    imageId Int    @map("image_id")
-    addedAt Int    @map("added_at")
-    order   Int?   @map("order")
+// 任务下载失败图片表
+model TaskFailedImage {
+    id               Int     @id @default(autoincrement())
+    taskId           String  @map("task_id")
+    pluginId         String  @map("plugin_id")
+    url              String
+    order            Int     @map("order")
+    createdAt        Int     @map("created_at")
+    lastError        String? @map("last_error")
+    lastAttemptedAt Int?    @map("last_attempted_at")
+    headerSnapshot   String? @map("header_snapshot") // JSON string: Record<string,string>
 
     task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
-    image Image @relation(fields: [imageId], references: [id], onDelete: Cascade)
 
-    @@id([taskId, imageId])
-    @@index([taskId], name: "idx_task_images_task")
-    @@index([imageId], name: "idx_task_images_image")
-    @@map("task_images")
-}
-
-// 临时文件表
-model TempFile {
-    path      String @id
-    createdAt Int    @map("created_at")
-
-    @@map("temp_files")
+    @@index([taskId], name: "idx_task_failed_images_task")
+    @@map("task_failed_images")
 }
 
 // 插件源表（商店源）

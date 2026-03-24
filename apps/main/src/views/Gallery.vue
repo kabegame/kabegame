@@ -8,7 +8,7 @@
         <template #before-grid>
           <!-- 顶部工具栏 -->
           <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
-            :current-position="currentPosition" :month-options="monthOptions" :month-loading="monthOptionsLoading"
+            :month-options="monthOptions" :month-loading="monthOptionsLoading"
             :provider-root-path="providerRootPath" :current-provider-path="currentPath" :page-size="pageSize"
             v-model:selectedRange="selectedRange" @refresh="handleManualRefresh"
             @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
@@ -16,7 +16,7 @@
             @open-collect-menu="showCollectSourcePicker = true" />
 
           <!-- 大页分页器 -->
-          <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentBigPageOffset"
+          <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage"
             :big-page-size="pageSize" :is-sticky="true" @jump-to-page="handleJumpToBigPage" />
         </template>
 
@@ -175,9 +175,6 @@ const bigPageEnabled = computed(() => {
   return totalImagesCount.value > pageSize.value;
 });
 
-// 当前页的起始偏移量（用于分页器显示）
-const currentBigPageOffset = computed(() => currentOffset.value);
-
 const route = useRoute();
 const router = useRouter();
 
@@ -193,14 +190,12 @@ const {
   currentPath,
   providerRootPath,
   currentPage,
-  currentOffset,
   setRootAndPage,
   navigateToPage,
 } = useProviderPathRoute({
   route,
   router,
   defaultPath: galleryProviderDefaultPath,
-  pageSize,
 });
 
 const isWallpaperOrderEmpty = computed(
@@ -293,16 +288,6 @@ const loadMonthOptions = async () => {
     monthOptionsLoading.value = false;
   }
 };
-
-// 跟踪当前的实际偏移量（用于 paginator：offset = (page-1)*pageSize）
-
-// 计算当前位置（用于 header subtitle 显示）
-const currentPosition = computed(() => {
-  if (!bigPageEnabled.value || totalImagesCount.value === 0) {
-    return 1; // 分页未启用时返回默认值，不会显示
-  }
-  return currentOffset.value + 1;
-});
 
 const listenersCreated = ref(false);
 const showCrawlerDialog = ref(false);

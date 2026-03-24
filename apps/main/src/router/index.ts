@@ -6,6 +6,7 @@ import PluginBrowser from "@/views/PluginBrowser.vue";
 import Albums from "@/views/Albums.vue";
 import AlbumDetail from "@/views/AlbumDetail.vue";
 import TaskDetail from "@/views/TaskDetail.vue";
+import FailedImages from "@/views/FailedImages.vue";
 import PluginDetail from "@/views/PluginDetail.vue";
 import Settings from "@/views/Settings.vue";
 import Help from "@/views/Help.vue";
@@ -46,6 +47,12 @@ const routes: RouteRecordRaw[] = [
     name: "TaskDetail",
     component: TaskDetail,
     meta: { title: "route.taskDetail" },
+  },
+  {
+    path: "/failed-images",
+    name: "FailedImages",
+    component: FailedImages,
+    meta: { title: "route.failedImages" },
   },
   {
     path: "/plugin-detail/:id",

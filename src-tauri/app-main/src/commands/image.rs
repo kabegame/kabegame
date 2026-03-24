@@ -11,6 +11,18 @@ use kabegame_core::virtual_driver::VirtualDriveService;
 use serde_json::json;
 use tauri::AppHandle;
 
+fn emit_task_image_counts_full(task_id: &str) {
+    if let Ok(Some(t)) = Storage::global().get_task(task_id) {
+        GlobalEmitter::global().emit_task_image_counts(
+            task_id,
+            Some(t.success_count),
+            Some(t.deleted_count),
+            Some(t.failed_count),
+            Some(t.dedup_count),
+        );
+    }
+}
+
 #[tauri::command]
 pub async fn get_images_range(offset: usize, limit: usize) -> Result<serde_json::Value, String> {
     let result = Storage::global().get_images_range(offset, limit)?;
@@ -85,7 +97,11 @@ pub async fn get_gallery_time_filter_data() -> Result<serde_json::Value, String>
 
 #[tauri::command]
 pub async fn delete_image(image_id: String) -> Result<(), String> {
+    let task_ids = Storage::global().get_task_ids_for_image(&image_id)?;
     Storage::global().delete_image(&image_id)?;
+    for tid in task_ids {
+        emit_task_image_counts_full(&tid);
+    }
 
     let current_id = Settings::global()
         .get_current_wallpaper_image_id()
@@ -111,7 +127,11 @@ pub async fn delete_image(image_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn remove_image(image_id: String) -> Result<(), String> {
+    let task_ids = Storage::global().get_task_ids_for_image(&image_id)?;
     Storage::global().remove_image(&image_id)?;
+    for tid in task_ids {
+        emit_task_image_counts_full(&tid);
+    }
 
     let current_id = Settings::global()
         .get_current_wallpaper_image_id()
@@ -137,7 +157,11 @@ pub async fn remove_image(image_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<(), String> {
+    let task_ids = Storage::global().collect_task_ids_for_images(&image_ids)?;
     Storage::global().batch_delete_images(&image_ids)?;
+    for tid in task_ids {
+        emit_task_image_counts_full(&tid);
+    }
 
     let current_id = Settings::global()
         .get_current_wallpaper_image_id()
@@ -165,7 +189,11 @@ pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
+    let task_ids = Storage::global().collect_task_ids_for_images(&image_ids)?;
     Storage::global().batch_remove_images(&image_ids)?;
+    for tid in task_ids {
+        emit_task_image_counts_full(&tid);
+    }
 
     let current_id = Settings::global()
         .get_current_wallpaper_image_id()

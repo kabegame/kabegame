@@ -72,7 +72,6 @@
   "viewAllImages": "查看全部图片",
   "noImages": "暂无图片",
   "totalImages": "共 {count} 张图片",
-  "positionOfTotal": "第 {pos} / {total}",
   "gallery": "画廊",
   "chooseImportMethod": "选择导入方式",
   "selectImage": "选择图片",

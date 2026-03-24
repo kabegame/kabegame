@@ -24,8 +24,12 @@
   - 适用场景：调度、注入、抓取流程排查与扩展。
 
 - `DOWNLOADER_FLOW.md`
-  - 主题：下载器流程与关键调用路径。
-  - 适用场景：下载任务生命周期、失败重试、状态流转问题。
+  - 主题：下载器流程与关键调用路径；含 `task-image-counts` 任务图片计数事件说明。
+  - 适用场景：下载任务生命周期、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步。
+
+- `TASK_DRAWER_LOAD.md`
+  - 主题：任务抽屉分页加载、触底加载与相关数据流。
+  - 适用场景：任务数量多时打开抽屉卡顿、loadTasksPage 与 get_tasks_page 行为。
 
 - `PLUGIN_STORE_CACHE.md`
   - 主题：插件商店缓存机制与更新策略。

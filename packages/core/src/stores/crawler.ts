@@ -13,6 +13,11 @@ export interface CrawlTask {
   status: "pending" | "running" | "completed" | "failed" | "canceled";
   progress: number;
   deletedCount: number;
+  dedupCount: number;
+  /** 成功下载数量 */
+  successCount?: number;
+  /** 失败数量（task_failed_images 计数） */
+  failedCount?: number;
   startTime?: number;
   endTime?: number;
   error?: string;
@@ -32,6 +37,8 @@ export interface RunConfig {
 
 export const useCrawlerStore = defineStore("crawler", () => {
   const tasks = ref<CrawlTask[]>([]);
+  /** 分页加载时的总任务数（用于判断是否还有更多） */
+  const tasksTotal = ref(0);
   const isCrawling = ref(false);
   const runConfigs = ref<RunConfig[]>([]);
 
@@ -64,6 +71,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
           status: (raw.status || "pending") as CrawlTask["status"],
           progress: Number(raw.progress ?? 0),
           deletedCount: Number(raw.deletedCount ?? raw.deleted_count ?? 0),
+          dedupCount: Number(raw.dedupCount ?? raw.dedup_count ?? 0),
+          successCount: Number(raw.successCount ?? raw.success_count ?? 0),
+          failedCount: Number(raw.failedCount ?? raw.failed_count ?? 0),
           startTime: raw.startTime ?? raw.start_time ?? undefined,
           endTime: raw.endTime ?? raw.end_time ?? undefined,
           error: raw.error ?? undefined,
@@ -101,6 +111,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
         status: (raw.status || "pending") as CrawlTask["status"],
         progress: Number(raw.progress ?? 0),
         deletedCount: Number(raw.deletedCount ?? raw.deleted_count ?? 0),
+        dedupCount: Number(raw.dedupCount ?? raw.dedup_count ?? 0),
+        successCount: Number(raw.successCount ?? raw.success_count ?? 0),
+        failedCount: Number(raw.failedCount ?? raw.failed_count ?? 0),
         startTime: raw.startTime ?? raw.start_time ?? undefined,
         endTime: raw.endTime ?? raw.end_time ?? undefined,
         error: raw.error ?? undefined,
@@ -209,6 +222,38 @@ export const useCrawlerStore = defineStore("crawler", () => {
         }
       });
 
+      await listen("task-image-counts", async (event) => {
+        const payload: any = event.payload as any;
+        const taskId = String(payload?.task_id ?? payload?.taskId ?? "").trim();
+        if (!taskId) return;
+
+        if (!tasks.value.some((t) => t.id === taskId)) {
+          await ensureTaskLoaded(taskId);
+        }
+
+        const idx = tasks.value.findIndex((t) => t.id === taskId);
+        if (idx === -1) return;
+        const cur = tasks.value[idx];
+        const next: CrawlTask = { ...cur };
+        const sc = payload?.success_count ?? payload?.successCount;
+        if (sc != null && Number.isFinite(Number(sc))) {
+          next.successCount = Number(sc);
+        }
+        const delc = payload?.deleted_count ?? payload?.deletedCount;
+        if (delc != null && Number.isFinite(Number(delc))) {
+          next.deletedCount = Number(delc);
+        }
+        const fc = payload?.failed_count ?? payload?.failedCount;
+        if (fc != null && Number.isFinite(Number(fc))) {
+          next.failedCount = Number(fc);
+        }
+        const ddc = payload?.dedup_count ?? payload?.dedupCount;
+        if (ddc != null && Number.isFinite(Number(ddc))) {
+          next.dedupCount = Number(ddc);
+        }
+        tasks.value[idx] = next;
+      });
+
       if (IS_ANDROID) {
         setInterval(() => {
           const list = tasks.value;
@@ -242,6 +287,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
       status: "pending",
       progress: 0,
       deletedCount: 0,
+      dedupCount: 0,
+      successCount: 0,
+      failedCount: 0,
       startTime: Date.now(),
     };
 
@@ -273,6 +321,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
               status: tasks.value[taskIndex].status,
               progress: tasks.value[taskIndex].progress,
               deletedCount: tasks.value[taskIndex].deletedCount || 0,
+              dedupCount: tasks.value[taskIndex].dedupCount || 0,
               startTime: tasks.value[taskIndex].startTime,
               endTime: tasks.value[taskIndex].endTime,
               error: tasks.value[taskIndex].error,
@@ -288,6 +337,11 @@ export const useCrawlerStore = defineStore("crawler", () => {
 
   async function startCrawl(task: CrawlTask) {
     if (task.status === "failed" || task.status === "canceled") {
+      console.log(
+        `任务 ${task.id} 已经是${
+          task.status === "canceled" ? "取消" : "失败"
+        }状态，不重新启动`,
+      );
       return;
     }
 
@@ -303,6 +357,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
           status: task.status,
           progress: task.progress,
           deletedCount: task.deletedCount || 0,
+          dedupCount: task.dedupCount || 0,
           startTime: task.startTime,
           endTime: task.endTime,
           error: task.error,
@@ -394,6 +449,38 @@ export const useCrawlerStore = defineStore("crawler", () => {
     }
   }
 
+  const mapTaskRaw = (t: {
+    id: string;
+    pluginId: string;
+    outputDir?: string;
+    userConfig?: Record<string, any>;
+    outputAlbumId?: string;
+    status: string;
+    progress: number;
+    deletedCount: number;
+    dedupCount?: number;
+    successCount?: number;
+    failedCount?: number;
+    startTime?: number;
+    endTime?: number;
+    error?: string;
+  }): CrawlTask => ({
+    id: t.id,
+    pluginId: t.pluginId,
+    outputDir: t.outputDir,
+    userConfig: t.userConfig,
+    outputAlbumId: t.outputAlbumId,
+    status: t.status as CrawlTask["status"],
+    progress: t.progress ?? 0,
+    deletedCount: t.deletedCount || 0,
+    dedupCount: t.dedupCount ?? 0,
+    successCount: t.successCount ?? 0,
+    failedCount: t.failedCount ?? 0,
+    startTime: t.startTime,
+    endTime: t.endTime,
+    error: t.error,
+  });
+
   async function loadTasks() {
     try {
       const finalTasks = await invoke<
@@ -406,27 +493,56 @@ export const useCrawlerStore = defineStore("crawler", () => {
           status: string;
           progress: number;
           deletedCount: number;
+          dedupCount?: number;
+          successCount?: number;
+          failedCount?: number;
           startTime?: number;
           endTime?: number;
           error?: string;
         }>
       >("get_all_tasks");
 
-      tasks.value = finalTasks.map((t) => ({
-        id: t.id,
-        pluginId: t.pluginId,
-        outputDir: t.outputDir,
-        userConfig: t.userConfig,
-        outputAlbumId: t.outputAlbumId,
-        status: t.status as CrawlTask["status"],
-        progress: t.progress ?? 0,
-        deletedCount: t.deletedCount || 0,
-        startTime: t.startTime,
-        endTime: t.endTime,
-        error: t.error,
-      }));
+      tasks.value = finalTasks.map(mapTaskRaw);
+      tasksTotal.value = tasks.value.length;
     } catch (error) {
       console.error("加载任务失败:", error);
+    }
+  }
+
+  /** 分页加载任务（用于任务抽屉触底加载，减轻首次打开卡顿） */
+  async function loadTasksPage(limit: number, offset: number): Promise<{ total: number } | null> {
+    try {
+      const res = await invoke<{
+        tasks: Array<{
+          id: string;
+          pluginId: string;
+          outputDir?: string;
+          userConfig?: Record<string, any>;
+          outputAlbumId?: string;
+          status: string;
+          progress: number;
+          deletedCount: number;
+          dedupCount?: number;
+          successCount?: number;
+          failedCount?: number;
+          startTime?: number;
+          endTime?: number;
+          error?: string;
+        }>;
+        total: number;
+      }>("get_tasks_page", { limit, offset });
+
+      const mapped = (res.tasks || []).map(mapTaskRaw);
+      if (offset === 0) {
+        tasks.value = mapped;
+      } else {
+        tasks.value = [...tasks.value, ...mapped];
+      }
+      tasksTotal.value = res.total ?? 0;
+      return { total: res.total ?? 0 };
+    } catch (error) {
+      console.error("分页加载任务失败:", error);
+      return null;
     }
   }
 
@@ -449,6 +565,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
 
   return {
     tasks,
+    tasksTotal,
     isCrawling,
     addTask,
     deleteTask,
@@ -461,5 +578,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     deleteRunConfig,
     runConfig,
     loadTasks,
+    loadTasksPage,
   };
 });
+

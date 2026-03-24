@@ -58,5 +58,15 @@
   "actionFailed": "{action} failed",
   "lastSurfTime": "Last surf:",
   "loadImagesFailed": "Failed to load images",
-  "viewDownloadedImages": "View downloaded images"
+  "viewDownloadedImages": "View downloaded images",
+  "recordDetails": "Details",
+  "recordName": "Name",
+  "recordNamePlaceholder": "Enter a custom name (optional)",
+  "entryPath": "Entry path",
+  "entryPathPlaceholder": "e.g. /artworks or /users?id=1",
+  "fullUrlPreview": "Full URL: ",
+  "cookieLabel": "Cookie",
+  "cookieEmpty": "No saved Cookie yet",
+  "deleteRecordDanger": "Delete this surf record",
+  "savedSuccess": "Saved"
 }

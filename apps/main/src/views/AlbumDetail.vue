@@ -40,7 +40,7 @@
           :page-size="pageSize"
         />
 
-        <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
+        <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage"
           :big-page-size="pageSize" :is-sticky="true" @jump-to-page="handleJumpToPage" />
       </template>
     </ImageGrid>
@@ -201,14 +201,12 @@ const albumDetailDefaultPath = computed(() => {
 const {
   currentPath,
   currentPage,
-  currentOffset,
   setRootAndPage,
   navigateToPage,
 } = useProviderPathRoute({
   route,
   router,
   defaultPath: albumDetailDefaultPath,
-  pageSize,
 });
 
 const isAlbumWallpaperFilterEmpty = computed(() =>

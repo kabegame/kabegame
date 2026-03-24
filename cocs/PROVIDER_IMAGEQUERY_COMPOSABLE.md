@@ -30,7 +30,7 @@
 ### 1) 数据源组件（JOIN + 可选 WHERE）
 
 - `album_source(album_id)`：`album_images ai` 关联 + `ai.album_id = ?`
-- `task_source(task_id)`：`task_images ti` 关联 + `ti.task_id = ?`
+- `task_source(task_id)`：`images.task_id = ?`（单图单任务，无需 JOIN）
 
 这类组件定义“从哪张关系表取图”，通常由“分组 Provider”贡献。
 
@@ -50,7 +50,7 @@
 - `sort_by_crawled_at(asc)`
 - `sort_by_wallpaper_set_at(asc)`
 - `sort_by_album_order(asc)`
-- `sort_by_task_order()`
+- `sort_by_task_order()`（当前等价于 `images.crawled_at ASC`）
 
 这类组件定义“输出顺序”，可与任意数据源/过滤自由组合。
 

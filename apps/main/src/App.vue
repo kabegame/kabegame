@@ -119,6 +119,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { IS_WINDOWS, IS_MACOS, IS_ANDROID } from "@kabegame/core/env";
 import { initHttpServerBaseUrl } from "@kabegame/core/httpServer";
 import { usePluginStore } from "./stores/plugins";
+import { useFailedImagesStore } from "./stores/failedImages";
 import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
 import { ElMessageBox } from "element-plus";
@@ -151,6 +152,7 @@ const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig
 
 // 插件图标（用于全局抽屉，Android 上 CrawlerDialog 使用）
 const pluginStore = usePluginStore();
+const failedImagesStore = useFailedImagesStore();
 const pluginIcons = ref<Record<string, string>>({});
 
 const loadPluginIcons = async () => {
@@ -277,6 +279,7 @@ onMounted(async () => {
     }
   }
   registerHeaderFeatures();
+  await failedImagesStore.initListeners();
 
   // 初始化各个 composables
   await initWindowEvents();

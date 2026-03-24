@@ -24,6 +24,8 @@ function createGalleryPathState() {
   /** 用完整 path 回写三个持久化字段（如 URL 变化后） */
   function applyFromPath(path: string) {
     const p = parseGalleryPath(path);
+    // task/* 路径为任务页专用，不应持久化到画廊状态（避免刷新后画廊误显示任务图片）
+    if (p.root.startsWith("task/")) return;
     root.value = p.root;
     if (p.sort === "desc") {
       sort.value = "desc";

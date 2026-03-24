@@ -31,7 +31,7 @@
 
           <GalleryBigPaginator
             :total-count="totalImagesCount"
-            :current-offset="currentOffset"
+            :current-page="currentPage"
             :big-page-size="pageSize"
             :is-sticky="true"
             @jump-to-page="handleJumpToPage"
@@ -355,14 +355,13 @@ const confirmRemoveImages = async () => {
 const isOnSurfImagesRoute = computed(() => String(route.name ?? "") === "SurfImages");
 const localProviderRootPath = computed(() => (recordId.value ? `surf/${recordId.value}` : ""));
 
-const { currentPath, providerRootPath, currentOffset, setRootAndPage, navigateToPage } = useProviderPathRoute({
+const { currentPath, currentPage, providerRootPath, setRootAndPage, navigateToPage } = useProviderPathRoute({
   route,
   router,
   defaultPath: computed(() => {
     if (!localProviderRootPath.value) return "surf/invalid/1";
     return `${localProviderRootPath.value}/1`;
   }),
-  pageSize,
 });
 
 const recordTitle = computed(() => record.value?.host ?? t("surf.surfImagesTitle"));

@@ -16,7 +16,6 @@ pub mod plugin_sources;
 pub mod run_configs;
 pub mod surf_records;
 pub mod tasks;
-pub mod temp_files;
 
 pub use gallery_time::{
     gallery_month_groups_from_days, GalleryTimeFilterPayload, GalleryTimeGroupIndex,
@@ -91,12 +90,38 @@ PRAGMA mmap_size = 268435456;
         );
         let _ = migrate_rebuild_tasks_table(&mut conn);
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN http_headers TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE tasks ADD COLUMN dedup_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE tasks ADD COLUMN success_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE tasks ADD COLUMN failed_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE tasks SET success_count = (SELECT COUNT(*) FROM images i WHERE i.task_id = tasks.id)",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE tasks SET failed_count = (SELECT COUNT(*) FROM task_failed_images tfi WHERE tfi.task_id = tasks.id)",
+            [],
+        );
 
         // 迁移：本地导入 plugin_id 从 "本地导入" 改为 "local-import"（i18n 适配）
         let _ = conn.execute("UPDATE tasks SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
         let _ = conn.execute("UPDATE images SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
         let _ = conn.execute("UPDATE task_failed_images SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
         let _ = conn.execute("UPDATE run_configs SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
+
+        // 迁移：删除所有任务已不存在的失败图片（孤儿记录）
+        let _ = conn.execute(
+            "DELETE FROM task_failed_images WHERE task_id NOT IN (SELECT id FROM tasks)",
+            [],
+        );
 
         // 创建运行配置表
         conn.execute(
@@ -237,20 +262,6 @@ PRAGMA mmap_size = 268435456;
             [],
         );
 
-        // 创建任务-图片关联表
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS task_images (
-                task_id TEXT NOT NULL,
-                image_id INTEGER NOT NULL,
-                added_at INTEGER NOT NULL,
-                \"order\" INTEGER,
-                PRIMARY KEY (task_id, image_id)
-            )",
-            [],
-        )
-        .expect("Failed to create task_images table");
-        let _ = conn.execute("ALTER TABLE task_images ADD COLUMN \"order\" INTEGER", []);
-
         // 任务下载失败图片表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS task_failed_images (
@@ -267,9 +278,40 @@ PRAGMA mmap_size = 268435456;
         )
         .expect("Failed to create task_failed_images table");
         let _ = conn.execute(
+            "ALTER TABLE task_failed_images ADD COLUMN header_snapshot TEXT",
+            [],
+        );
+        let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_task_failed_images_task ON task_failed_images(task_id)",
             [],
         );
+
+        // 迁移：移除 task_images 表，将 task_id 回填到 images.task_id
+        let task_images_exists = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='task_images'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
+        if task_images_exists {
+            let _ = conn.execute(
+                "UPDATE images
+                 SET task_id = (
+                    SELECT ti.task_id
+                    FROM task_images ti
+                    WHERE ti.image_id = images.id
+                    ORDER BY COALESCE(ti.\"order\", ti.added_at) DESC, ti.rowid DESC
+                    LIMIT 1
+                 )
+                 WHERE EXISTS (
+                    SELECT 1 FROM task_images ti WHERE ti.image_id = images.id
+                 )",
+                [],
+            );
+            let _ = conn.execute("DROP TABLE task_images", []);
+        }
 
         // 执行复杂的结构性迁移
         perform_complex_migrations(&mut conn);
@@ -319,6 +361,14 @@ PRAGMA mmap_size = 268435456;
             "CREATE INDEX IF NOT EXISTS idx_surf_records_last_visit ON surf_records(last_visit_at DESC)",
             [],
         );
+        let _ = conn.execute(
+            "ALTER TABLE surf_records ADD COLUMN name TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE surf_records ADD COLUMN cookie TEXT NOT NULL DEFAULT ''",
+            [],
+        );
 
         // 检测 plugin_sources 表是否已存在（用于判断是否首次迁移）
         let plugin_sources_is_new = conn
@@ -358,15 +408,6 @@ PRAGMA mmap_size = 268435456;
             let _ = migrate_plugin_sources_initial_data(&mut conn);
         }
 
-        // 创建临时文件表
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS temp_files (
-                path TEXT PRIMARY KEY,
-                created_at INTEGER NOT NULL
-            )",
-            [],
-        )
-        .expect("Failed to create temp_files table");
         conn.execute(
             "CREATE TABLE IF NOT EXISTS task_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -579,17 +620,18 @@ CREATE TABLE tasks_new (
   status TEXT NOT NULL,
   progress REAL NOT NULL DEFAULT 0,
   deleted_count INTEGER NOT NULL DEFAULT 0,
+  dedup_count INTEGER NOT NULL DEFAULT 0,
   start_time INTEGER,
   end_time INTEGER,
   error TEXT
 );
 INSERT INTO tasks_new (
   id, plugin_id, output_dir, user_config, http_headers, output_album_id,
-  status, progress, deleted_count, start_time, end_time, error
+  status, progress, deleted_count, dedup_count, start_time, end_time, error
 )
 SELECT
   id, plugin_id, output_dir, user_config, NULL, output_album_id,
-  status, progress, COALESCE(deleted_count, 0), start_time, end_time, error
+  status, progress, COALESCE(deleted_count, 0), 0, start_time, end_time, error
 FROM tasks;
 DROP TABLE tasks;
 ALTER TABLE tasks_new RENAME TO tasks;
@@ -673,7 +715,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
         )
     };
 
-    let (album_image_id_is_text, task_image_id_is_text) = {
+    let album_image_id_is_text = {
         fn is_image_id_text(conn: &Connection, table: &str) -> bool {
             let pragma = format!("PRAGMA table_info({})", table);
             let mut stmt = match conn.prepare(&pragma) {
@@ -695,10 +737,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
             }
             false
         }
-        (
-            is_image_id_text(conn, "album_images"),
-            is_image_id_text(conn, "task_images"),
-        )
+        is_image_id_text(conn, "album_images")
     };
 
     let needs_rebuild_images = images_id_is_text
@@ -706,8 +745,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
         || !images_thumb_notnull
         || images_url_notnull
         || images_has_order_col;
-    let needs_rebuild_relations =
-        images_id_is_text || album_image_id_is_text || task_image_id_is_text;
+    let needs_rebuild_relations = images_id_is_text || album_image_id_is_text;
 
     let albums_has_order = {
         let mut stmt = conn
@@ -887,32 +925,6 @@ fn perform_complex_migrations(conn: &mut Connection) {
             let _ = tx.execute("DROP TABLE album_images", []);
             let _ = tx.execute("ALTER TABLE album_images_new RENAME TO album_images", []);
 
-            tx.execute("DROP TABLE IF EXISTS task_images_new", []).ok();
-            tx.execute(
-                "CREATE TABLE task_images_new (
-                    task_id TEXT NOT NULL,
-                    image_id INTEGER NOT NULL,
-                    added_at INTEGER NOT NULL,
-                    \"order\" INTEGER,
-                    PRIMARY KEY (task_id, image_id)
-                )",
-                [],
-            )
-            .expect("Failed to create task_images_new");
-            let _ = tx.execute(
-                "INSERT OR REPLACE INTO task_images_new (task_id, image_id, added_at, \"order\")
-                 SELECT
-                   t.task_id,
-                   o.new_id,
-                   t.added_at,
-                   t.\"order\"
-                 FROM task_images t
-                 INNER JOIN images_ordered o
-                   ON CAST(t.image_id AS TEXT) = o.old_id",
-                [],
-            );
-            let _ = tx.execute("DROP TABLE task_images", []);
-            let _ = tx.execute("ALTER TABLE task_images_new RENAME TO task_images", []);
         }
 
         tx.execute("DROP TABLE IF EXISTS images_ordered", []).ok();
@@ -1014,14 +1026,6 @@ fn perform_complex_migrations(conn: &mut Connection) {
     );
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_album_images_album ON album_images(album_id)",
-        [],
-    );
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_task_images_task ON task_images(task_id)",
-        [],
-    );
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_task_images_image ON task_images(image_id)",
         [],
     );
     let _ = conn.execute(

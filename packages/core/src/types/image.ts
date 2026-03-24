@@ -33,8 +33,16 @@ export interface ImageInfo {
   /** 最后一次被设为壁纸的 Unix 时间戳（秒） */
   lastSetWallpaperAt?: number;
 
-  // 任务失败占位（TaskDetail）：用于在网格中渲染“下载重试”按钮
-  isTaskFailed?: boolean;
-  taskFailedId?: number;
-  taskFailedError?: string;
+}
+
+export interface TaskFailedImage {
+  id: number;
+  taskId: string;
+  pluginId: string;
+  url: string;
+  order: number;
+  createdAt: number;
+  lastError?: string | null;
+  lastAttemptedAt?: number | null;
+  headerSnapshot?: Record<string, string> | null;
 }

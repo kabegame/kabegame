@@ -59,13 +59,14 @@
     </div>
 
     <div class="tasks-summary">
-      <span>{{ t('tasks.drawerTaskCount', { n: tasks.length }) }}</span>
+      <span>{{ t('tasks.drawerTaskCount', { n: displayTaskCount }) }}</span>
       <el-button text size="small" class="clear-completed-btn" :disabled="nonRunningTasksCount === 0"
         @click="$emit('clear-finished-tasks')">
         {{ t('tasks.drawerClearAll', { n: nonRunningTasksCount }) }}
       </el-button>
     </div>
-    <transition-group name="task-move" tag="div" class="tasks-list">
+    <div ref="tasksListRef" class="tasks-list" @scroll="handleTasksListScroll">
+    <transition-group name="task-move" tag="div" class="tasks-list-inner">
       <div v-for="task in tasks" :key="task.id" class="task-item"
         :class="{ 'task-item-failed': task.status === 'failed' }" @contextmenu="(e) => handleTaskContextMenu(e, task)">
         <div class="task-close">
@@ -78,6 +79,24 @@
         <div class="task-header">
           <div class="task-info">
             <div class="task-name">{{ getPluginName(task.pluginId) }}</div>
+            <div v-if="hasTaskCounts(task)" class="task-counts">
+              <span v-if="(task.successCount ?? 0) > 0" class="count-item count-success" :title="t('tasks.totalCount', { n: task.successCount })">
+                <el-icon><CircleCheck /></el-icon>
+                <span>{{ task.successCount }}</span>
+              </span>
+              <span v-if="(task.failedCount ?? 0) > 0" class="count-item count-failed" :title="t('tasks.failedCount', { n: task.failedCount })">
+                <el-icon><WarningFilled /></el-icon>
+                <span>{{ task.failedCount }}</span>
+              </span>
+              <span v-if="(task.deletedCount ?? 0) > 0" class="count-item count-deleted" :title="t('tasks.deletedCount', { n: task.deletedCount })">
+                <el-icon><Delete /></el-icon>
+                <span>{{ task.deletedCount }}</span>
+              </span>
+              <span v-if="(task.dedupCount ?? 0) > 0" class="count-item count-dedup" :title="t('tasks.dedupCount', { n: task.dedupCount })">
+                <el-icon><CopyDocument /></el-icon>
+                <span>{{ task.dedupCount }}</span>
+              </span>
+            </div>
           </div>
           <div class="task-header-right">
             <el-button text circle size="small" class="task-detail-btn" :title="t('tasks.drawerViewLog')"
@@ -138,6 +157,10 @@
               <span class="param-label">{{ t('tasks.drawerParamDeleted') }}</span>
               <span class="param-value">{{ t('tasks.drawerDeletedCount', { n: task.deletedCount ?? 0 }) }}</span>
             </div>
+            <div v-if="(task.dedupCount ?? 0) > 0" class="param-item">
+              <span class="param-label">{{ t('tasks.drawerParamDedup') }}</span>
+              <span class="param-value">{{ t('tasks.drawerDedupCount', { n: task.dedupCount ?? 0 }) }}</span>
+            </div>
             <div v-if="task.outputDir" class="param-item">
               <span class="param-label">{{ t('tasks.drawerParamOutputDir') }}</span>
               <span class="param-value">{{ task.outputDir }}</span>
@@ -191,6 +214,11 @@
         </div>
       </div>
     </transition-group>
+    <div v-if="hasMore && loadingMore" class="load-more-indicator">
+      <el-icon class="is-loading"><Loading /></el-icon>
+      <span>{{ t('common.loading') }}</span>
+    </div>
+    </div>
 
     <el-dialog v-model="taskLogVisible" :title="t('tasks.drawerTaskLogTitle')" width="640px" :append-to-body="true" class="task-log-dialog">
       <div ref="taskLogListRef" class="task-log-list">
@@ -213,15 +241,19 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { ElMessage } from "element-plus";
-import { ArrowDown, Clock, Close, CopyDocument, Document, Picture, WarningFilled } from "@element-plus/icons-vue";
+import { ArrowDown, CircleCheck, Clock, Close, CopyDocument, Delete, Document, Loading, Picture, WarningFilled } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useModalBack } from "../../composables/useModalBack";
+import { useCrawlerStore } from "../../stores/crawler";
 import { usePluginStore } from "../../stores/plugins";
 import type { PluginConfigText, PluginManifestText } from "../../stores/plugins";
 import { matchesPluginVarWhen } from "../../utils/pluginVarWhen";
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
+const crawlerStore = useCrawlerStore();
+
+const TASK_PAGE_SIZE = 20;
 
 type VarOption = string | { name: PluginConfigText | string; variable: string };
 type PluginVarMeta = {
@@ -241,6 +273,9 @@ type ScriptTask = {
   status: TaskStatus | string;
   progress: number;
   deletedCount?: number;
+  dedupCount?: number;
+  successCount?: number;
+  failedCount?: number;
   outputDir?: string | null;
   userConfig?: Record<string, any> | null;
   startTime?: number | null;
@@ -320,6 +355,38 @@ const nonRunningTasksCount = computed(
   () => props.tasks.filter((t) => t.status !== "running" && t.status !== "pending").length
 );
 
+/** 分页：已加载数 < 总数 则有更多 */
+const hasMore = computed(
+  () => crawlerStore.tasksTotal > 0 && crawlerStore.tasks.length < crawlerStore.tasksTotal
+);
+/** 任务数量展示：有总分页时显示总数，否则显示当前条数 */
+const displayTaskCount = computed(() =>
+  crawlerStore.tasksTotal > 0 ? crawlerStore.tasksTotal : props.tasks.length
+);
+
+const tasksListRef = ref<HTMLElement | null>(null);
+const loadingMore = ref(false);
+
+async function loadMoreTasks() {
+  if (loadingMore.value || !hasMore.value) return;
+  loadingMore.value = true;
+  try {
+    await crawlerStore.loadTasksPage(TASK_PAGE_SIZE, crawlerStore.tasks.length);
+  } finally {
+    loadingMore.value = false;
+  }
+}
+
+function handleTasksListScroll() {
+  const el = tasksListRef.value;
+  if (!el || loadingMore.value || !hasMore.value) return;
+  const { scrollTop, clientHeight, scrollHeight } = el;
+  const threshold = 60;
+  if (scrollTop + clientHeight >= scrollHeight - threshold) {
+    void loadMoreTasks();
+  }
+}
+
 const expandedTasks = ref(new Set<string>());
 const pluginVarMetaMap = ref<Record<string, Record<string, PluginVarMeta>>>({});
 
@@ -349,7 +416,6 @@ let unlistenDownloadState: null | (() => void) = null;
 const archiverLogText = ref("");
 let unlistenArchiverLog: null | (() => void) = null;
 let unlistenTaskLog: null | (() => void) = null;
-
 const taskLogVisible = ref(false);
 const currentTaskId = ref("");
 const currentTaskLogs = ref<TaskLogEntry[]>([]);
@@ -721,6 +787,12 @@ const syncDownloadsOnDrawerOpen = async () => {
 };
 
 const getPluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
+
+const hasTaskCounts = (task: ScriptTask) =>
+  (task.successCount ?? 0) > 0 ||
+  (task.failedCount ?? 0) > 0 ||
+  (task.deletedCount ?? 0) > 0 ||
+  (task.dedupCount ?? 0) > 0;
 
 const toLocaleTag = (loc: string) => {
   if (loc.startsWith("zh")) return loc === "zhtw" ? "zh-TW" : "zh-CN";
@@ -1118,12 +1190,27 @@ onUnmounted(() => {
   .tasks-list {
     display: flex;
     flex-direction: column;
-    gap: 12px;
     padding: 16px;
     flex: 1;
     overflow-y: auto;
     position: relative;
     min-height: 0;
+  }
+
+  .tasks-list-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .load-more-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px;
+    font-size: 13px;
+    color: var(--anime-text-secondary);
   }
 
   .task-item {
@@ -1167,6 +1254,41 @@ onUnmounted(() => {
       font-weight: 500;
       color: var(--anime-text-primary);
       font-size: 15px;
+    }
+
+    .task-counts {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--anime-text-secondary);
+
+      .count-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+
+        .el-icon {
+          font-size: 14px;
+        }
+      }
+
+      .count-success {
+        color: #67c23a;
+      }
+
+      .count-failed {
+        color: #f56c6c;
+      }
+
+      .count-deleted {
+        color: var(--anime-text-muted);
+      }
+
+      .count-dedup {
+        color: var(--anime-text-muted);
+      }
     }
 
     .task-time {

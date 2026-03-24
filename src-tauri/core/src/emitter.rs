@@ -5,6 +5,7 @@
 //!
 //! 注意：此模块需要 `ipc-server` feature，因为它依赖于 EventBroadcaster。
 
+use crate::storage::tasks::TaskFailedImage;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::DaemonEvent;
 #[cfg(feature = "ipc-server")]
@@ -233,6 +234,66 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
+    /// 发送失败图片新增事件
+    pub fn emit_failed_image_added(&self, task_id: &str, failed_image: &TaskFailedImage) {
+        let event = std::sync::Arc::new(DaemonEvent::FailedImagesChange {
+            reason: "added".to_string(),
+            task_id: task_id.to_string(),
+            failed_image_ids: Some(vec![failed_image.id]),
+            failed_images: Some(vec![failed_image.clone()]),
+            failed_image: Some(failed_image.clone()),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 发送失败图片移除事件
+    pub fn emit_failed_image_removed(&self, task_id: &str, failed_image_id: i64) {
+        self.emit_failed_images_removed(task_id, &[failed_image_id]);
+    }
+
+    /// 发送失败图片批量移除事件
+    pub fn emit_failed_images_removed(&self, task_id: &str, failed_image_ids: &[i64]) {
+        let event = std::sync::Arc::new(DaemonEvent::FailedImagesChange {
+            reason: "removed".to_string(),
+            task_id: task_id.to_string(),
+            failed_image_ids: Some(failed_image_ids.to_vec()),
+            failed_images: None,
+            failed_image: None,
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 发送失败图片更新事件
+    pub fn emit_failed_image_updated(&self, task_id: &str, failed_image: &TaskFailedImage) {
+        let event = std::sync::Arc::new(DaemonEvent::FailedImagesChange {
+            reason: "updated".to_string(),
+            task_id: task_id.to_string(),
+            failed_image_ids: Some(vec![failed_image.id]),
+            failed_images: None,
+            failed_image: Some(failed_image.clone()),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 发送任务图片数量更新事件（success / deleted / failed / dedup 按需携带）
+    pub fn emit_task_image_counts(
+        &self,
+        task_id: &str,
+        success_count: Option<i64>,
+        deleted_count: Option<i64>,
+        failed_count: Option<i64>,
+        dedup_count: Option<i64>,
+    ) {
+        let event = std::sync::Arc::new(DaemonEvent::TaskImageCounts {
+            task_id: task_id.to_string(),
+            success_count,
+            deleted_count,
+            failed_count,
+            dedup_count,
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
     /// 发送 Daemon 关闭事件（退出前通知 IPC 客户端）
     pub fn emit_daemon_shutdown(&self, reason: &str) {
         let event = std::sync::Arc::new(DaemonEvent::DaemonShutdown {
@@ -389,6 +450,24 @@ impl GlobalEmitter {
     pub fn emit_images_change(&self, _reason: &str, _image_ids: &[String]) {}
 
     pub fn emit_surf_records_change(&self, _reason: &str, _surf_record_id: &str) {}
+
+    pub fn emit_failed_image_added(&self, _task_id: &str, _failed_image: &TaskFailedImage) {}
+
+    pub fn emit_failed_image_removed(&self, _task_id: &str, _failed_image_id: i64) {}
+
+    pub fn emit_failed_images_removed(&self, _task_id: &str, _failed_image_ids: &[i64]) {}
+
+    pub fn emit_failed_image_updated(&self, _task_id: &str, _failed_image: &TaskFailedImage) {}
+
+    pub fn emit_task_image_counts(
+        &self,
+        _task_id: &str,
+        _success_count: Option<i64>,
+        _deleted_count: Option<i64>,
+        _failed_count: Option<i64>,
+        _dedup_count: Option<i64>,
+    ) {
+    }
 
     pub fn emit_daemon_shutdown(&self, _reason: &str) {}
 

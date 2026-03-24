@@ -58,5 +58,15 @@
   "actionFailed": "{action}失败",
   "lastSurfTime": "最后一次畅游：",
   "loadImagesFailed": "加载图片失败",
-  "viewDownloadedImages": "查看下载图片"
+  "viewDownloadedImages": "查看下载图片",
+  "recordDetails": "详情",
+  "recordName": "名称",
+  "recordNamePlaceholder": "输入自定义名称（可选）",
+  "entryPath": "入口路径",
+  "entryPathPlaceholder": "例如 /artworks 或 /users?id=1",
+  "fullUrlPreview": "完整 URL：",
+  "cookieLabel": "Cookie",
+  "cookieEmpty": "暂无保存的 Cookie",
+  "deleteRecordDanger": "删除此畅游记录",
+  "savedSuccess": "已保存"
 }

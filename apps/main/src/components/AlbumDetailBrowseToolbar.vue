@@ -144,6 +144,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, onUnmounted } from "vue";
+import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
@@ -186,29 +187,38 @@ const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
   videoCount: 0,
 });
 
+async function loadMediaTypeCounts(id: string) {
+  if (!id) {
+    mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
+    return;
+  }
+  try {
+    const mt = await invoke<GalleryMediaTypeCountsPayload>("get_album_media_type_counts", {
+      albumId: id,
+    });
+    if (mt && typeof mt.imageCount === "number" && typeof mt.videoCount === "number") {
+      mediaTypeCounts.value = {
+        imageCount: mt.imageCount,
+        videoCount: mt.videoCount,
+      };
+    }
+  } catch {
+    mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
+  }
+}
+
 watch(
   albumId,
-  async (id) => {
-    if (!id) {
-      mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
-      return;
-    }
-    try {
-      const mt = await invoke<GalleryMediaTypeCountsPayload>("get_album_media_type_counts", {
-        albumId: id,
-      });
-      if (mt && typeof mt.imageCount === "number" && typeof mt.videoCount === "number") {
-        mediaTypeCounts.value = {
-          imageCount: mt.imageCount,
-          videoCount: mt.videoCount,
-        };
-      }
-    } catch {
-      mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
-    }
-  },
+  (id) => void loadMediaTypeCounts(id || ""),
   { immediate: true }
 );
+
+useImagesChangeRefresh({
+  enabled: computed(() => !!albumId.value),
+  waitMs: 500,
+  filter: (p) => !p.albumId || p.albumId === albumId.value,
+  onRefresh: () => void loadMediaTypeCounts(albumId.value || ""),
+});
 
 const filterMode = computed<AlbumBrowseFilter>(() => {
   const f = parsed.value?.filter;

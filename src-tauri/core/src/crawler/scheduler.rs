@@ -7,6 +7,7 @@ use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+use tokio::task::JoinHandle;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -53,6 +54,8 @@ pub struct TaskScheduler {
     page_stacks: Arc<PageStackStore>,
     /// 有任务结束或「同时运行任务数」设置变更时唤醒，避免等待槽位时忙等。
     task_slot_notify: Arc<Notify>,
+    /// 失败图片重试：每条记录一个 tokio 任务，可在入队等待期间 abort。
+    download_handles: Arc<Mutex<HashMap<i64, JoinHandle<()>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +110,7 @@ impl TaskScheduler {
             running_workers: Arc::new(AtomicUsize::new(0)),
             page_stacks: Arc::new(PageStackStore::new()),
             task_slot_notify: Arc::new(Notify::new()),
+            download_handles: Arc::new(Mutex::new(HashMap::new())),
         };
         s
     }
@@ -167,15 +171,12 @@ impl TaskScheduler {
         self.download_queue.cancel_task(task_id).await;
     }
 
-    /// 失败图片重试：在 daemon 侧直接复用 DownloadQueue
-    pub fn retry_failed_image(&self, failed_id: i64) -> Result<(), String> {
+    /// 失败图片重试：spawn 异步任务入队，立即返回；可在等待容量期间 `cancel_retry_failed_image` abort。
+    pub async fn retry_failed_image(&self, failed_id: i64) -> Result<(), String> {
         let storage = Storage::global();
         let item = storage
             .get_task_failed_image_by_id(failed_id)?
             .ok_or_else(|| "失败图片记录不存在".to_string())?;
-
-        // 标记一次尝试（清空 last_error）
-        let _ = storage.update_task_failed_image_attempt(failed_id, "");
 
         let task = storage
             .get_task(&item.task_id)?
@@ -197,15 +198,72 @@ impl TaskScheduler {
         };
 
         let url = Url::parse(&item.url).map_err(|e| format!("Invalid URL: {}", e))?;
-        tokio::runtime::Handle::current().block_on(self.download_queue.download_image(
-            url,
-            images_dir,
-            item.plugin_id,
-            item.task_id,
-            start_time,
-            task.output_album_id,
-            task.http_headers.unwrap_or_default(),
-        ))
+        let retry_headers = item
+            .header_snapshot
+            .filter(|headers| !headers.is_empty())
+            .unwrap_or_else(|| task.http_headers.unwrap_or_default());
+
+        let plugin_id = item.plugin_id.clone();
+        let task_id = item.task_id.clone();
+        let output_album_id = task.output_album_id.clone();
+
+        let mut handles = self.download_handles.lock().await;
+        if handles.contains_key(&failed_id) {
+            return Err("该失败记录已在重试队列中".to_string());
+        }
+
+        let dq = Arc::clone(&self.download_queue);
+        let dh = Arc::clone(&self.download_handles);
+        let join = tokio::spawn(async move {
+            let res = dq
+                .download_image_retry(
+                    failed_id,
+                    url,
+                    images_dir,
+                    plugin_id,
+                    task_id,
+                    start_time,
+                    output_album_id,
+                    retry_headers,
+                )
+                .await;
+            let mut g = dh.lock().await;
+            g.remove(&failed_id);
+            if let Err(e) = res {
+                eprintln!("[retry_failed_image] {}", e);
+            }
+        });
+        handles.insert(failed_id, join);
+        Ok(())
+    }
+
+    /// 批量重试（前端已按插件筛选）；跳过已有 handle 的 id。
+    pub async fn retry_failed_images(&self, failed_ids: &[i64]) -> Result<Vec<i64>, String> {
+        let mut retried = Vec::new();
+        for &id in failed_ids {
+            if self.download_handles.lock().await.contains_key(&id) {
+                continue;
+            }
+            if self.retry_failed_image(id).await.is_ok() {
+                retried.push(id);
+            }
+        }
+        Ok(retried)
+    }
+
+    pub async fn cancel_retry_failed_image(&self, failed_id: i64) {
+        if let Some(h) = self.download_handles.lock().await.remove(&failed_id) {
+            h.abort();
+        }
+    }
+
+    pub async fn cancel_retry_failed_images(&self, failed_ids: &[i64]) {
+        let mut map = self.download_handles.lock().await;
+        for &id in failed_ids {
+            if let Some(h) = map.remove(&id) {
+                h.abort();
+            }
+        }
     }
 
     pub async fn set_download_concurrency(&self) {

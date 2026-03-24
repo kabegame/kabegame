@@ -541,14 +541,17 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
                     let final_path = path.unwrap_or_else(|| entry.destination.clone());
                     let url_str = url.to_string();
                     tauri::async_runtime::spawn(async move {
+                        let empty_headers = std::collections::HashMap::new();
                         let _ = postprocess_downloaded_image(
                             &final_path,
                             &url_str,
                             &entry.plugin_id,
                             entry.task_id.as_deref(),
+                            None,
                             entry.surf_record_id.as_deref(),
                             entry.download_start_time,
                             entry.output_album_id.as_deref(),
+                            &empty_headers,
                             true,
                         )
                         .await;

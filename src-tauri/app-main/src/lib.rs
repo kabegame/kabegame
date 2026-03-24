@@ -352,6 +352,7 @@ pub fn run() {
             update_image_dimensions,
             // --- Tasks ---
             get_all_tasks,
+            get_tasks_page,
             get_task,
             add_task,
             update_task,
@@ -363,8 +364,14 @@ pub fn run() {
             get_task_images_paginated,
             get_task_image_ids,
             get_task_failed_images,
+            get_all_failed_images,
             get_task_logs,
             retry_task_failed_image,
+            retry_failed_images,
+            cancel_retry_failed_image,
+            cancel_retry_failed_images,
+            delete_failed_images,
+            delete_task_failed_image,
             get_active_downloads,
             #[cfg(not(target_os = "android"))]
             surf_start_session,
@@ -380,6 +387,8 @@ pub fn run() {
             surf_get_record_images,
             #[cfg(not(target_os = "android"))]
             surf_update_root_url,
+            #[cfg(not(target_os = "android"))]
+            surf_update_name,
             #[cfg(not(target_os = "android"))]
             surf_delete_record,
             #[cfg(not(target_os = "android"))]
