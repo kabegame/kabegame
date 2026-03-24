@@ -17,6 +17,7 @@ export enum HeaderFeatureId {
   ImportSource = "importSource",
   ManageSources = "manageSources",
   TaskDrawer = "taskDrawer",
+  FailedImages = "failedImages",
   AddToAlbum = "addToAlbum",
   /** 画廊：过滤（全部 / 设置过壁纸等，仅 Android 放入 fold） */
   GalleryFilter = "galleryFilter",
@@ -30,6 +31,14 @@ export enum HeaderFeatureId {
   AlbumBrowseSort = "albumBrowseSort",
   /** 畅游页：打开爬虫 WebView 窗口（仅桌面） */
   OpenCrawlerWebview = "openCrawlerWebview",
+  /** 失败图片页：取消等待；Android 放入 fold */
+  FailedImagesCancelWaiting = "failedImagesCancelWaiting",
+  /** 失败图片页：全部重试；Android 放入 fold */
+  FailedImagesRetryAll = "failedImagesRetryAll",
+  /** 失败图片页：全部删除；Android 放入 fold */
+  FailedImagesDeleteAll = "failedImagesDeleteAll",
+  /** 失败图片页：按插件筛选；Android 放入 fold */
+  FailedImagesFilter = "failedImagesFilter",
 }
 
 export interface HeaderFeatureDef {

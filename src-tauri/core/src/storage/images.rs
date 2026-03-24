@@ -1,7 +1,7 @@
 use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -620,12 +620,13 @@ impl Storage {
         image.id = id.to_string();
         image.thumbnail_path = thumbnail_path;
 
-        if let Some(task_id) = image.task_id.as_ref() {
-            let added_at = image.crawled_at;
-            let _ = conn.execute(
-                "INSERT OR REPLACE INTO task_images (task_id, image_id, added_at, \"order\") VALUES (?1, ?2, ?3, ?4)",
-                params![task_id, id, added_at as i64, crawled_at_i64],
-            );
+        if let Some(ref tid) = image.task_id {
+            if !tid.trim().is_empty() {
+                let _ = conn.execute(
+                    "UPDATE tasks SET success_count = success_count + 1 WHERE id = ?1",
+                    params![tid],
+                );
+            }
         }
 
         self.invalidate_images_total_cache();
@@ -728,6 +729,37 @@ impl Storage {
         Ok(())
     }
 
+    /// 删除前查询图片所属任务 id（用于事件广播）
+    pub fn get_task_ids_for_image(&self, image_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn
+            .prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
+            .and_then(|mut stmt| {
+                stmt.query_map(params![image_id], |row| row.get::<_, String>(0))
+                    .and_then(|rows| {
+                        let mut ids = Vec::new();
+                        for row_result in rows {
+                            if let Ok(id) = row_result {
+                                ids.push(id);
+                            }
+                        }
+                        Ok(ids)
+                    })
+            })
+            .map_err(|e| format!("Failed to query task IDs: {}", e))
+    }
+
+    /// 批量图片在删除前涉及的任务 id（去重）
+    pub fn collect_task_ids_for_images(&self, image_ids: &[String]) -> Result<Vec<String>, String> {
+        let mut set = HashSet::new();
+        for id in image_ids {
+            for tid in self.get_task_ids_for_image(id)? {
+                set.insert(tid);
+            }
+        }
+        Ok(set.into_iter().collect())
+    }
+
     pub fn delete_image(&self, image_id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
@@ -742,7 +774,7 @@ impl Storage {
 
         // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
         let task_ids: Vec<String> = conn
-            .prepare("SELECT DISTINCT task_id FROM task_images WHERE image_id = ?1")
+            .prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
             .and_then(|mut stmt| {
                 stmt.query_map(params![image_id], |row| row.get::<_, String>(0))
                     .and_then(|rows| {
@@ -768,15 +800,11 @@ impl Storage {
             "DELETE FROM album_images WHERE image_id = ?1",
             params![image_id],
         );
-        let _ = conn.execute(
-            "DELETE FROM task_images WHERE image_id = ?1",
-            params![image_id],
-        );
 
-        // 更新所有相关任务的 deleted_count
+        // 更新所有相关任务的 deleted_count 与 success_count（当前存活图片数）
         for task_id in task_ids {
             let _ = conn.execute(
-                "UPDATE tasks SET deleted_count = deleted_count + 1 WHERE id = ?1",
+                "UPDATE tasks SET deleted_count = deleted_count + 1, success_count = MAX(0, success_count - 1) WHERE id = ?1",
                 params![task_id],
             );
         }
@@ -791,7 +819,7 @@ impl Storage {
 
         // 在删除前，查询该图片所属的所有任务，并更新任务的 deleted_count
         let task_ids: Vec<String> = conn
-            .prepare("SELECT DISTINCT task_id FROM task_images WHERE image_id = ?1")
+            .prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
             .and_then(|mut stmt| {
                 stmt.query_map(params![image_id], |row| row.get::<_, String>(0))
                     .and_then(|rows| {
@@ -813,15 +841,11 @@ impl Storage {
             "DELETE FROM album_images WHERE image_id = ?1",
             params![image_id],
         );
-        let _ = conn.execute(
-            "DELETE FROM task_images WHERE image_id = ?1",
-            params![image_id],
-        );
 
-        // 更新所有相关任务的 deleted_count
+        // 更新所有相关任务的 deleted_count 与 success_count
         for task_id in task_ids {
             let _ = conn.execute(
-                "UPDATE tasks SET deleted_count = deleted_count + 1 WHERE id = ?1",
+                "UPDATE tasks SET deleted_count = deleted_count + 1, success_count = MAX(0, success_count - 1) WHERE id = ?1",
                 params![task_id],
             );
         }
@@ -845,7 +869,7 @@ impl Storage {
         let mut task_deleted_counts: HashMap<String, i64> = HashMap::new();
         for id in image_ids {
             let task_ids: Vec<String> = tx
-                .prepare("SELECT DISTINCT task_id FROM task_images WHERE image_id = ?1")
+                .prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
                 .and_then(|mut stmt| {
                     stmt.query_map(params![id], |row| row.get::<_, String>(0))
                         .and_then(|rows| {
@@ -883,14 +907,13 @@ impl Storage {
                 .map_err(|e| format!("Failed to delete image: {}", e))?;
 
             let _ = tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id]);
-            let _ = tx.execute("DELETE FROM task_images WHERE image_id = ?1", params![id]);
         }
 
-        // 更新所有相关任务的 deleted_count
+        // 更新所有相关任务的 deleted_count 与 success_count
         for (task_id, count) in task_deleted_counts {
             let _ = tx.execute(
-                "UPDATE tasks SET deleted_count = deleted_count + ?1 WHERE id = ?2",
-                params![count, task_id],
+                "UPDATE tasks SET deleted_count = deleted_count + ?1, success_count = MAX(0, success_count - ?2) WHERE id = ?3",
+                params![count, count, task_id],
             );
         }
 
@@ -916,7 +939,7 @@ impl Storage {
         let mut task_deleted_counts: HashMap<String, i64> = HashMap::new();
         for id in image_ids {
             let task_ids: Vec<String> = tx
-                .prepare("SELECT DISTINCT task_id FROM task_images WHERE image_id = ?1")
+                .prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
                 .and_then(|mut stmt| {
                     stmt.query_map(params![id], |row| row.get::<_, String>(0))
                         .and_then(|rows| {
@@ -941,14 +964,13 @@ impl Storage {
                 .map_err(|e| format!("Failed to remove image: {}", e))?;
 
             let _ = tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id]);
-            let _ = tx.execute("DELETE FROM task_images WHERE image_id = ?1", params![id]);
         }
 
-        // 更新所有相关任务的 deleted_count
+        // 更新所有相关任务的 deleted_count 与 success_count
         for (task_id, count) in task_deleted_counts {
             let _ = tx.execute(
-                "UPDATE tasks SET deleted_count = deleted_count + ?1 WHERE id = ?2",
-                params![count, task_id],
+                "UPDATE tasks SET deleted_count = deleted_count + ?1, success_count = MAX(0, success_count - ?2) WHERE id = ?3",
+                params![count, count, task_id],
             );
         }
 

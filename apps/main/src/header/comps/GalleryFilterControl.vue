@@ -137,6 +137,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRoute, useRouter } from "vue-router";
 import { ArrowDown, ArrowRight, Filter } from "@element-plus/icons-vue";
@@ -224,7 +225,7 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
   )
 );
 
-onMounted(async () => {
+async function loadFilterCounts() {
   try {
     const [pg, timePayload, mt] = await Promise.all([
       invoke<PluginGroupRow[]>("get_gallery_plugin_groups"),
@@ -246,6 +247,17 @@ onMounted(async () => {
     monthGroups.value = [];
     dayGroups.value = [];
   }
+}
+
+const isOnGalleryPage = computed(() => route.path === "/gallery");
+
+onMounted(() => void loadFilterCounts());
+
+useImagesChangeRefresh({
+  enabled: isOnGalleryPage,
+  waitMs: 500,
+  filter: (p) => !p.albumId,
+  onRefresh: () => void loadFilterCounts(),
 });
 
 const filterLabel = computed(() => {

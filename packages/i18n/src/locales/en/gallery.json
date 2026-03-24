@@ -70,7 +70,6 @@
   "viewAllImages": "View all images",
   "noImages": "No images",
   "totalImages": "{count} images total",
-  "positionOfTotal": "{pos} / {total}",
   "gallery": "Gallery",
   "chooseImportMethod": "Choose import method",
   "selectImage": "Select image",

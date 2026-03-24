@@ -68,12 +68,13 @@ import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 interface Props {
     totalCount: number;
-    currentOffset: number;
+    currentPage: number;
     bigPageSize?: number;
     isSticky?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
+    currentPage: 1,
     bigPageSize: 10000,
     isSticky: false,
 });
@@ -93,7 +94,7 @@ const totalBigPages = computed(() => {
 
 // 当前在第几大页（从1开始）
 const currentBigPage = computed(() => {
-    return Math.floor(props.currentOffset / BIG_PAGE_SIZE.value) + 1;
+    return Math.max(1, props.currentPage || 1);
 });
 
 // 是否显示分页器（总数超过一页才显示）

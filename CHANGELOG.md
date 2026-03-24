@@ -4,14 +4,22 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-## [3.2.3]
+## [3.3.0]
 ### Added
+- **Failed images page:** Bulk retry, cancel waiting retries, and delete all for the current plugin filter; header actions refresh and task drawer; per-item download phase labels and cancel while queued; retries run asynchronously with optional abort on capacity wait.
+- **Task:** Dedup count per task: when an image is skipped as duplicate (URL or hash match), the task’s dedup count increments and a dedicated event updates the UI in real time; shown in the task detail subtitle and in the task drawer (count badge and expanded params).
+- **Task:** Task drawer shows success, failed, and deleted counts under each task name (with icons); counts are loaded alongside the task list without extra requests.
+- **Task:** Retry download for failed images: on the task detail page, when viewing the failed list, each failed item has a retry button to re-attempt the download; supports deleting failed records and copying error details (plugin, time, URL, error message).
+- **Surf:** Record detail dialog: click a record card to open it; edit name, entry path (with full-URL preview), view/copy saved cookie, or delete the record; structure aligned with image detail dialog.
+- **Surf:** Right-click context menu on records: view downloaded images, open detail dialog, or delete record.
+- **Surf:** Cookie saved to database automatically when each page finishes loading in the surf window; available in the detail dialog without an active session.
 - **Gallery / Album / Task / Surf:** Configurable **images per page** (100, 500, or 1000), saved in app settings; change it from the gallery toolbar, album browse bar (desktop) or header overflow (Android), task/surf tool row above the paginator, or **Settings → App**; switching value reloads the current list from page 1.
 - **Gallery:** More filter options (e.g. by time range, by source plugin, and wallpaper history), with plugin labels shown in your language where applicable.
 - **Gallery / virtual disk:** Sort and browse images by **last time they were set as wallpaper** (ascending or descending); virtual disk includes a matching root folder and reverse-order subfolder where applicable.
 - **Gallery:** Lists using this sort refresh when the current wallpaper changes (including rotation), so order stays consistent without manual reload.
 
 ### Fixed
+- **Task:** Migration cleans up orphaned failed images (those whose task no longer exists); deleting a task or clearing finished tasks now removes all related failed images.
 - **Android image preview:** Pinch-to-zoom no longer accidentally toggles UI controls (close button, counter bar) visibility.
 - **Gallery (Android):** In multi-select mode, fast taps that the browser treats as a double-click no longer open the image preview; selection toggling stays the only action.
 - **Android image preview:** Swipe-up delete stays reliable after horizontal swipes; deleting the last image on a page keeps the full-screen carousel on the correct slide (no off-by-one preview or erroneous wrap to the first image).
@@ -23,6 +31,9 @@
 - **Plugin browser (official source display name i18n):** When the built-in official GitHub Releases source still uses the default DB name (`官方 GitHub Releases 源`), the UI (store tab label, empty state `noPluginsInSource`, sources table, edit-source form initial value, delete-confirm name) uses `plugins.officialGithubReleaseSourceName` per locale so it updates with the app language. Custom names are unchanged. On save, the localized default string is normalized back to the canonical DB default so a translated label is not persisted as the stored name.
 
 ### Changed
+- **Surf:** Clicking a record card opens the detail dialog instead of starting a session; a dedicated “Start surfing” button on each card starts the session (disabled while a session is active).
+- **Surf:** “View recent images” replaced with a “View downloaded images” button on record cards.
+- **Surf:** Removed top-bar “View Cookie” and “End session” buttons; cookies are accessed in the record detail dialog; session is ended by closing the surf window.
 - **Gallery (desktop):** Filter and sort moved from the page header to the row below the title (above the big paginator), matching album detail; on Android they stay in the header overflow menu with bottom pickers.
 - Builtin plugin removed, must download from remote.
 - Github release remote source cannot be deleted.

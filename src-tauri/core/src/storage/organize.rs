@@ -218,7 +218,7 @@ impl Storage {
             std::collections::HashMap::new();
         for id in &to_remove_ids {
             let task_ids: Vec<String> = tx
-                .prepare("SELECT DISTINCT task_id FROM task_images WHERE image_id = ?1")
+                .prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
                 .and_then(|mut stmt| {
                     stmt.query_map(params![id], |row| row.get::<_, String>(0))
                         .and_then(|rows| {
@@ -242,19 +242,32 @@ impl Storage {
             tx.execute("DELETE FROM images WHERE id = ?1", params![id])
                 .map_err(|e| format!("Failed to delete image: {}", e))?;
             let _ = tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id]);
-            let _ = tx.execute("DELETE FROM task_images WHERE image_id = ?1", params![id]);
         }
 
-        // 更新所有相关任务的 deleted_count
+        let task_ids_emit: Vec<String> = task_deleted_counts.keys().cloned().collect();
+
+        // 更新所有相关任务的 deleted_count 与 success_count
         for (task_id, count) in task_deleted_counts {
             let _ = tx.execute(
-                "UPDATE tasks SET deleted_count = deleted_count + ?1 WHERE id = ?2",
-                params![count, task_id],
+                "UPDATE tasks SET deleted_count = deleted_count + ?1, success_count = MAX(0, success_count - ?2) WHERE id = ?3",
+                params![count, count, task_id],
             );
         }
 
         tx.commit()
             .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+
+        for task_id in task_ids_emit {
+            if let Ok(Some(t)) = self.get_task(&task_id) {
+                GlobalEmitter::global().emit_task_image_counts(
+                    &task_id,
+                    Some(t.success_count),
+                    Some(t.deleted_count),
+                    Some(t.failed_count),
+                    Some(t.dedup_count),
+                );
+            }
+        }
 
         if delete_files {
             for path in to_remove_paths {
@@ -353,13 +366,6 @@ impl Storage {
                     )
                     .map_err(|e| format!("Failed to prepare insert image: {}", e))?;
 
-                let mut insert_task_img = tx
-                    .prepare(
-                        "INSERT OR REPLACE INTO task_images (task_id, image_id, added_at, \"order\")
-                         VALUES (?1, ?2, ?3, ?4)",
-                    )
-                    .map_err(|e| format!("Failed to prepare insert task_images: {}", e))?;
-
                 for _ in 0..cur {
                     let base = &pool[rng.gen_usize(pool.len())];
 
@@ -385,16 +391,6 @@ impl Storage {
                             &base.mime_type,
                         ])
                         .map_err(|e| format!("Failed to insert image (debug clone): {}", e))?;
-                    let new_id = tx.last_insert_rowid();
-
-                    if let Some(task_id) = base.task_id.as_ref() {
-                        let added_at = crawled_at;
-                        insert_task_img
-                            .execute(params![task_id, new_id, added_at, crawled_at])
-                            .map_err(|e| {
-                                format!("Failed to insert task-image relation (debug clone): {}", e)
-                            })?;
-                    }
                 }
             }
 
@@ -658,10 +654,25 @@ fn run_organize(
 
         // 执行删除
         if !remove_ids.is_empty() {
+            let task_ids_for_emit = storage
+                .collect_task_ids_for_images(&remove_ids)
+                .unwrap_or_default();
             storage.batch_remove_images(&remove_ids)?;
 
             // 发送 ImagesChange 事件，前端刷新视图
             GlobalEmitter::global().emit_images_change("remove", &remove_ids);
+
+            for tid in task_ids_for_emit {
+                if let Ok(Some(t)) = storage.get_task(&tid) {
+                    GlobalEmitter::global().emit_task_image_counts(
+                        &tid,
+                        Some(t.success_count),
+                        Some(t.deleted_count),
+                        Some(t.failed_count),
+                        Some(t.dedup_count),
+                    );
+                }
+            }
 
             // 检查壁纸是否被移除
             if let Some(cur) = current_wallpaper_id.as_deref() {

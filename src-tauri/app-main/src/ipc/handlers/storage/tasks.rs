@@ -108,6 +108,16 @@ pub async fn get_task_failed_images(task_id: &str) -> CliIpcResponse {
     }
 }
 
+pub async fn get_all_failed_images() -> CliIpcResponse {
+    let storage = Storage::global();
+    match storage.get_all_failed_images() {
+        Ok(images) => {
+            CliIpcResponse::ok_with_data("ok", serde_json::to_value(images).unwrap_or_default())
+        }
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
 pub async fn clear_finished_tasks() -> CliIpcResponse {
     let storage = Storage::global();
     match storage.clear_finished_tasks() {

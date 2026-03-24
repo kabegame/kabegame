@@ -554,6 +554,63 @@ pub fn emit_download_state(
     GlobalEmitter::global().emit_download_state(task_id, url, start_time, plugin_id, state, error);
 }
 
+fn emit_task_image_counts_snapshot(task_id: &str) {
+    if let Ok(Some(t)) = Storage::global().get_task(task_id) {
+        GlobalEmitter::global().emit_task_image_counts(
+            task_id,
+            Some(t.success_count),
+            Some(t.deleted_count),
+            Some(t.failed_count),
+            Some(t.dedup_count),
+        );
+    }
+}
+
+fn clear_failed_image_after_success(failed_image_id: Option<i64>) {
+    if let Some(fid) = failed_image_id {
+        let task_id = Storage::global()
+            .get_task_failed_image_by_id(fid)
+            .ok()
+            .flatten()
+            .map(|item| item.task_id);
+        let _ = Storage::global().delete_task_failed_image(fid);
+        if let Some(ref tid) = task_id {
+            GlobalEmitter::global().emit_failed_image_removed(tid, fid);
+            emit_task_image_counts_snapshot(tid);
+        }
+    }
+}
+
+fn upsert_failed_image_on_failure(
+    failed_image_id: Option<i64>,
+    task_id: &str,
+    plugin_id: &str,
+    url: &str,
+    order: i64,
+    error: &str,
+    http_headers: &HashMap<String, String>,
+) {
+    if let Some(fid) = failed_image_id {
+        let _ = Storage::global().update_task_failed_image_attempt(fid, error);
+        let _ = Storage::global().update_task_failed_image_header_snapshot(fid, http_headers);
+        if let Ok(Some(failed_image)) = Storage::global().get_task_failed_image_by_id(fid) {
+            GlobalEmitter::global().emit_failed_image_updated(task_id, &failed_image);
+        }
+        return;
+    }
+    if let Ok(failed_image) = Storage::global().add_task_failed_image(
+        task_id,
+        plugin_id,
+        url,
+        order,
+        Some(error),
+        Some(http_headers),
+    ) {
+        GlobalEmitter::global().emit_failed_image_added(task_id, &failed_image);
+        emit_task_image_counts_snapshot(task_id);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DownloadRequest {
     // 请求url，由schema+path
@@ -571,6 +628,7 @@ pub struct DownloadRequest {
     pub browser_download: bool,
     /// 仅 browser_download 时有效：fetch 是否带 credentials（默认 true）
     pub with_credentials: bool,
+    pub failed_image_id: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -696,6 +754,34 @@ impl DownloadQueue {
             None,
             false,
             true,
+            None,
+        )
+        .await
+    }
+
+    pub async fn download_image_retry(
+        &self,
+        failed_image_id: i64,
+        url: Url,
+        images_dir: PathBuf,
+        plugin_id: String,
+        task_id: String,
+        download_start_time: u64,
+        output_album_id: Option<String>,
+        http_headers: HashMap<String, String>,
+    ) -> Result<(), String> {
+        self.download_with_mode(
+            url,
+            images_dir,
+            plugin_id,
+            task_id,
+            download_start_time,
+            output_album_id,
+            http_headers,
+            None,
+            false,
+            true,
+            Some(failed_image_id),
         )
         .await
     }
@@ -722,6 +808,7 @@ impl DownloadQueue {
             None,
             true,
             with_credentials,
+            None,
         )
         .await
     }
@@ -738,6 +825,7 @@ impl DownloadQueue {
         archive_type: Option<ArchiveType>,
         browser_download: bool,
         with_credentials: bool,
+        failed_image_id: Option<i64>,
     ) -> Result<(), String> {
         self.download(
             url,
@@ -750,6 +838,7 @@ impl DownloadQueue {
             archive_type,
             browser_download,
             with_credentials,
+            failed_image_id,
         )
         .await
     }
@@ -798,6 +887,7 @@ impl DownloadQueue {
             Some(t),
             false,
             true,
+            None,
         )
         .await
     }
@@ -814,6 +904,7 @@ impl DownloadQueue {
         archive_type: Option<ArchiveType>,
         browser_download: bool,
         with_credentials: bool,
+        failed_image_id: Option<i64>,
     ) -> Result<(), String> {
         // 检查任务是否取消
         if self.is_task_canceled(&task_id).await {
@@ -831,6 +922,7 @@ impl DownloadQueue {
             archive_type,
             browser_download,
             with_credentials,
+            failed_image_id,
         };
 
         loop {
@@ -1030,6 +1122,17 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                 }
                             }
                         }
+                        if let Ok(new_count) =
+                            Storage::global().increment_task_dedup_count(&task_id_clone)
+                        {
+                            GlobalEmitter::global().emit_task_image_counts(
+                                &task_id_clone,
+                                None,
+                                None,
+                                None,
+                                Some(new_count),
+                            );
+                        }
                         GlobalEmitter::global().emit_download_state(
                             &task_id_clone,
                             url_clone.as_str(),
@@ -1038,6 +1141,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             "completed",
                             None,
                         );
+                        clear_failed_image_after_success(job.failed_image_id);
                     } else {
                         GlobalEmitter::global().emit_download_state(
                             &task_id_clone,
@@ -1248,6 +1352,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                     None,
                                                                     false,
                                                                     true,
+                                                                    None,
                                                                 )
                                                                 .await;
                                                         }
@@ -1431,12 +1536,14 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                 {
                                     Ok(b) => b,
                                     Err(e) => {
-                                        let _ = Storage::global().add_task_failed_image(
+                                        upsert_failed_image_on_failure(
+                                            job.failed_image_id,
                                             &task_id_clone,
                                             &plugin_id_clone,
                                             url_clone.as_str(),
                                             download_start_time as i64,
-                                            Some(e.as_str()),
+                                            e.as_str(),
+                                            &job.http_headers,
                                         );
                                         GlobalEmitter::global().emit_download_state(
                                             &task_id_clone,
@@ -1510,6 +1617,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                     &task_id_clone,
                                     download_start_time,
                                     job.output_album_id.as_deref(),
+                                    job.failed_image_id,
+                                    &job.http_headers,
                                 )
                                 .await;
                                 ensure_minimum_duration(download_start_time, 500).await;
@@ -1584,6 +1693,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                             &task_id_clone,
                                                             download_start_time,
                                                             job.output_album_id.as_deref(),
+                                                            job.failed_image_id,
+                                                            &job.http_headers,
                                                         )
                                                         .await;
                                                     }
@@ -1591,14 +1702,15 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                         let _ =
                                                             tokio::fs::remove_file(&path_for_post)
                                                                 .await;
-                                                        let _ = Storage::global()
-                                                            .add_task_failed_image(
-                                                                &task_id_clone,
-                                                                &plugin_id_clone,
-                                                                url_clone.as_str(),
-                                                                download_start_time as i64,
-                                                                Some(e.as_str()),
-                                                            );
+                                                        upsert_failed_image_on_failure(
+                                                            job.failed_image_id,
+                                                            &task_id_clone,
+                                                            &plugin_id_clone,
+                                                            url_clone.as_str(),
+                                                            download_start_time as i64,
+                                                            e.as_str(),
+                                                            &job.http_headers,
+                                                        );
                                                         GlobalEmitter::global()
                                                             .emit_download_state(
                                                                 &task_id_clone,
@@ -1618,12 +1730,14 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                             Err(e) => {
                                                 let _ =
                                                     tokio::fs::remove_file(&path_for_post).await;
-                                                let _ = Storage::global().add_task_failed_image(
+                                                upsert_failed_image_on_failure(
+                                                    job.failed_image_id,
                                                     &task_id_clone,
                                                     &plugin_id_clone,
                                                     url_clone.as_str(),
                                                     download_start_time as i64,
-                                                    Some(e.as_str()),
+                                                    e.as_str(),
+                                                    &job.http_headers,
                                                 );
                                                 GlobalEmitter::global().emit_download_state(
                                                     &task_id_clone,
@@ -1683,6 +1797,19 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                             "imageIds": [existing.id.clone()],
                                                         }),
                                                     );
+                                                    if let Ok(new_count) =
+                                                        Storage::global().increment_task_dedup_count(
+                                                            &task_id_clone,
+                                                        )
+                                                    {
+                                                        GlobalEmitter::global().emit_task_image_counts(
+                                                            &task_id_clone,
+                                                            None,
+                                                            None,
+                                                            None,
+                                                            Some(new_count),
+                                                        );
+                                                    }
                                                     GlobalEmitter::global().emit_download_state(
                                                         &task_id_clone,
                                                         url_clone.as_str(),
@@ -1691,6 +1818,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                         "completed",
                                                         None,
                                                     );
+                                                    clear_failed_image_after_success(job.failed_image_id);
                                                 } else {
                                                     let display_name = derive_display_name_from_url(
                                                         url_clone.as_str(),
@@ -1727,6 +1855,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                 &task_id_clone,
                                                                 download_start_time,
                                                                 job.output_album_id.as_deref(),
+                                                                job.failed_image_id,
+                                                                &job.http_headers,
                                                             )
                                                             .await;
                                                         }
@@ -1735,14 +1865,15 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                 &path_for_post,
                                                             )
                                                             .await;
-                                                            let _ = Storage::global()
-                                                                .add_task_failed_image(
-                                                                    &task_id_clone,
-                                                                    &plugin_id_clone,
-                                                                    url_clone.as_str(),
-                                                                    download_start_time as i64,
-                                                                    Some(e.as_str()),
-                                                                );
+                                                            upsert_failed_image_on_failure(
+                                                                job.failed_image_id,
+                                                                &task_id_clone,
+                                                                &plugin_id_clone,
+                                                                url_clone.as_str(),
+                                                                download_start_time as i64,
+                                                                e.as_str(),
+                                                                &job.http_headers,
+                                                            );
                                                             GlobalEmitter::global()
                                                                 .emit_download_state(
                                                                     &task_id_clone,
@@ -1763,12 +1894,14 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                             Err(e) => {
                                                 let _ =
                                                     tokio::fs::remove_file(&path_for_post).await;
-                                                let _ = Storage::global().add_task_failed_image(
+                                                upsert_failed_image_on_failure(
+                                                    job.failed_image_id,
                                                     &task_id_clone,
                                                     &plugin_id_clone,
                                                     url_clone.as_str(),
                                                     download_start_time as i64,
-                                                    Some(e.as_str()),
+                                                    e.as_str(),
+                                                    &job.http_headers,
                                                 );
                                                 GlobalEmitter::global().emit_download_state(
                                                     &task_id_clone,
@@ -1793,9 +1926,11 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                         url_clone.as_str(),
                                         &plugin_id_clone,
                                         Some(&task_id_clone),
+                                        job.failed_image_id,
                                         None,
                                         download_start_time,
                                         job.output_album_id.as_deref(),
+                                        &job.http_headers,
                                         false,
                                     )
                                     .await;
@@ -1829,12 +1964,14 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         );
                     }
                     if !is_archive && !e.contains("Task canceled") {
-                        let _ = Storage::global().add_task_failed_image(
+                        upsert_failed_image_on_failure(
+                            job.failed_image_id,
                             &task_id_clone,
                             &plugin_id_clone,
                             url_clone.as_str(),
                             download_start_time as i64,
-                            Some(e.as_str()),
+                            e.as_str(),
+                            &job.http_headers,
                         );
                     }
                     GlobalEmitter::global().emit_download_state(
@@ -1883,6 +2020,8 @@ async fn process_downloaded_content_image_to_storage(
     task_id: &str,
     download_start_time: u64,
     output_album_id: Option<&str>,
+    failed_image_id: Option<i64>,
+    http_headers: &HashMap<String, String>,
 ) -> Result<(), String> {
     let (width, height) = get_content_io_provider()
         .get_image_dimensions(content_uri)
@@ -1967,18 +2106,22 @@ async fn process_downloaded_content_image_to_storage(
                 "completed",
                 None,
             );
+            emit_task_image_counts_snapshot(task_id);
+            clear_failed_image_after_success(failed_image_id);
             Ok(())
         }
         Err(e) => {
             if let Some(thumb) = thumbnail_path {
                 let _ = tokio::fs::remove_file(thumb).await;
             }
-            let _ = Storage::global().add_task_failed_image(
+            upsert_failed_image_on_failure(
+                failed_image_id,
                 task_id,
                 plugin_id,
                 content_uri,
                 download_start_time as i64,
-                Some(e.as_str()),
+                e.as_str(),
+                http_headers,
             );
             GlobalEmitter::global().emit_download_state(
                 task_id,
@@ -2000,9 +2143,11 @@ pub async fn postprocess_downloaded_image(
     url: &str,
     plugin_id: &str,
     task_id: Option<&str>,
+    failed_image_id: Option<i64>,
     surf_record_id: Option<&str>,
     download_start_time: u64,
     output_album_id: Option<&str>,
+    http_headers: &HashMap<String, String>,
     native: bool,
 ) -> Result<bool, String> {
     use crate::storage::organize::OrganizeService;
@@ -2029,12 +2174,14 @@ pub async fn postprocess_downloaded_image(
                 "error",
                 &task_log_i18n("taskLogPostprocessFailed", json!({ "detail": err })),
             );
-            let _ = Storage::global().add_task_failed_image(
+            upsert_failed_image_on_failure(
+                failed_image_id,
                 task_id,
                 plugin_id,
                 url,
                 download_start_time as i64,
-                Some(err.as_str()),
+                err.as_str(),
+                http_headers,
             );
         }
         GlobalEmitter::global().emit_download_state_with_native(
@@ -2064,12 +2211,14 @@ pub async fn postprocess_downloaded_image(
             Err(e) => {
                 let _ = tokio::fs::remove_file(path).await;
                 if let Some(task_id) = task_id {
-                    let _ = Storage::global().add_task_failed_image(
+                    upsert_failed_image_on_failure(
+                        failed_image_id,
                         task_id,
                         plugin_id,
                         url,
                         download_start_time as i64,
-                        Some(e.as_str()),
+                        e.as_str(),
+                        http_headers,
                     );
                 }
                 GlobalEmitter::global().emit_download_state_with_native(
@@ -2094,10 +2243,12 @@ pub async fn postprocess_downloaded_image(
             url,
             plugin_id,
             task_id,
+            failed_image_id,
             surf_record_id,
             download_start_time,
             output_album_id,
             Some(hash_ms),
+            http_headers,
             native,
         )
         .await?;
@@ -2110,12 +2261,14 @@ pub async fn postprocess_downloaded_image(
         Err(e) => {
             let _ = tokio::fs::remove_file(path).await;
             if let Some(task_id) = task_id {
-                let _ = Storage::global().add_task_failed_image(
+                upsert_failed_image_on_failure(
+                    failed_image_id,
                     task_id,
                     plugin_id,
                     url,
                     download_start_time as i64,
-                    Some(e.as_str()),
+                    e.as_str(),
+                    http_headers,
                 );
             }
             GlobalEmitter::global().emit_download_state_with_native(
@@ -2211,6 +2364,7 @@ pub async fn postprocess_downloaded_image(
             None,
             native,
         );
+        clear_failed_image_after_success(failed_image_id);
         ensure_minimum_duration(download_start_time, 500).await;
         return Ok(true);
     }
@@ -2221,13 +2375,16 @@ pub async fn postprocess_downloaded_image(
         url,
         plugin_id,
         task_id,
+        failed_image_id,
         surf_record_id,
         download_start_time,
         output_album_id,
         None,
+        http_headers,
         native,
     )
     .await?;
+    clear_failed_image_after_success(failed_image_id);
     ensure_minimum_duration(download_start_time, 500).await;
     if is_surf_mode && !inserted {
         return Ok(false);
@@ -2273,10 +2430,12 @@ pub async fn process_downloaded_image_to_storage(
     url: &str,
     plugin_id: &str,
     task_id: Option<&str>,
+    failed_image_id: Option<i64>,
     surf_record_id: Option<&str>,
     download_start_time: u64,
     output_album_id: Option<&str>,
     postprocess_timing_hash_ms: Option<u64>,
+    http_headers: &HashMap<String, String>,
     native: bool,
 ) -> Result<bool, String> {
     let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
@@ -2318,12 +2477,14 @@ pub async fn process_downloaded_image_to_storage(
             Err(e) => {
                 let _ = tokio::fs::remove_file(path).await;
                 if let Some(task_id) = task_id {
-                    let _ = Storage::global().add_task_failed_image(
+                    upsert_failed_image_on_failure(
+                        failed_image_id,
                         task_id,
                         plugin_id,
                         url,
                         download_start_time as i64,
-                        Some(e.as_str()),
+                        e.as_str(),
+                        http_headers,
                     );
                 }
                 GlobalEmitter::global().emit_download_state_with_native(
@@ -2451,6 +2612,10 @@ pub async fn process_downloaded_image_to_storage(
                 None,
                 native,
             );
+            if let Some(tid) = task_id {
+                emit_task_image_counts_snapshot(tid);
+            }
+            clear_failed_image_after_success(failed_image_id);
             Ok(true)
         }
         Err(e) => {
@@ -2461,12 +2626,14 @@ pub async fn process_downloaded_image_to_storage(
                 }
             }
             if let Some(task_id) = task_id {
-                let _ = Storage::global().add_task_failed_image(
+                upsert_failed_image_on_failure(
+                    failed_image_id,
                     task_id,
                     plugin_id,
                     url,
                     download_start_time as i64,
-                    Some(e.as_str()),
+                    e.as_str(),
+                    http_headers,
                 );
             }
             GlobalEmitter::global().emit_download_state_with_native(
@@ -2622,6 +2789,7 @@ pub(crate) async fn copy_extracted_images_and_enqueue(
                         None,
                         false,
                         true,
+                        None,
                     )
                     .await;
             }

@@ -13,7 +13,12 @@
   "deleteAlbum": "Delete album",
   "importSource": "Import source",
   "manageSources": "Manage sources",
+  "failedImages": "Failed images",
   "gallerySort": "Sort by time",
   "galleryPageSize": "Per page",
-  "openCrawlerWebview": "Crawler WebView window"
+  "openCrawlerWebview": "Crawler WebView window",
+  "failedImagesCancelWaiting": "Cancel waiting",
+  "failedImagesRetryAll": "Retry all",
+  "failedImagesDeleteAll": "Delete all",
+  "failedImagesFilter": "Filter by plugin"
 }

@@ -15,7 +15,6 @@
             @click="(e) => handleItemClick(item.image, item.index, e)"
             @dblclick="() => handleItemDblClick(item.image, item.index)"
             @contextmenu="(e) => handleItemContextMenu(item.image, item.index, e)"
-            @retry-download="() => emit('retry-download', { image: item.image })"
             @enter-animation-end="() => handleEnterAnimationEnd(item.image.id)" />
         </div>
 
@@ -25,8 +24,7 @@
             :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="selectedIds.has(image.id)"
             :grid-columns="gridColumnsCount" :grid-index="index" @click="(e) => handleItemClick(image, index, e)"
             @dblclick="() => handleItemDblClick(image, index)"
-            @contextmenu="(e) => handleItemContextMenu(image, index, e)"
-            @retry-download="() => emit('retry-download', { image })" />
+            @contextmenu="(e) => handleItemContextMenu(image, index, e)" />
         </transition-group>
       </div>
 
@@ -149,7 +147,6 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   "scroll-stable": [];
-  "retry-download": [payload: { image: ImageInfo }];
   // 兼容旧 API（不再由 core 触发，但保留事件名避免上层 TS/模板报错）
   addedToAlbum: [];
 }>();

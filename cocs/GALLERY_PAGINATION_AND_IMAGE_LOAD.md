@@ -51,11 +51,11 @@
   - `AppSettings.galleryPageSize`  
   - `buildSettingKeyMap` 中 `get_gallery_page_size` / `set_gallery_page_size`，参数名 `size`（全平台通用键）。
 
-### 路由与 offset
+### 路由与页码
 
 - **Composable**：[`apps/main/src/composables/useProviderPathRoute.ts`](/apps/main/src/composables/useProviderPathRoute.ts)  
-  - `currentOffset = (currentPage - 1) * unref(pageSize ?? 100)`  
-  - `pageSize` 来自 `settingsStore.values.galleryPageSize` 的 computed（各视图内）。
+  - 仅维护 `currentPath / providerRootPath / currentPage`，不再额外暴露 `currentOffset`。  
+  - 大页分页器直接使用 `currentPage`，`pageSize` 只用于后端查询条数与翻页重载。
 
 ### 拉取当前页图片
 
@@ -89,7 +89,7 @@
 
 ## 排查清单
 
-1. **翻页后 offset 不对**：确认 `useProviderPathRoute` 传入了与 `useGalleryImages` 相同的 `pageSize` ref/computed。
+1. **翻页页码不对**：确认 `query.path` 末尾页码与 `useProviderPathRoute.currentPage` 一致，且切页后有触发 `navigateToPage`。
 2. **改每页条数后仍显示旧页**：确认对应视图对 `pageSize` 有 `watch`，并 `navigateToPage(1)` 或重新 `loadCurrentPage`。
 3. **VD 下列表仍是 100 一段**：符合设计；Greedy 路径不使用 `galleryPageSize`。
 

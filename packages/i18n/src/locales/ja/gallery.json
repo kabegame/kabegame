@@ -72,7 +72,6 @@
   "viewAllImages": "すべての画像を見る",
   "noImages": "画像なし",
   "totalImages": "合計 {count} 枚",
-  "positionOfTotal": "{pos} / {total} 枚目",
   "gallery": "画集",
   "chooseImportMethod": "インポート方法を選択",
   "selectImage": "画像を選択",

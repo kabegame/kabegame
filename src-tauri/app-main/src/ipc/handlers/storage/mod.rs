@@ -91,6 +91,7 @@ pub async fn handle_storage_request(req: &CliIpcRequest) -> Option<CliIpcRespons
         CliIpcRequest::StorageGetTaskFailedImages { task_id } => {
             Some(tasks::get_task_failed_images(task_id).await)
         }
+        CliIpcRequest::StorageGetAllFailedImages => Some(tasks::get_all_failed_images().await),
         CliIpcRequest::StorageClearFinishedTasks => Some(tasks::clear_finished_tasks().await),
 
         // Run Configs

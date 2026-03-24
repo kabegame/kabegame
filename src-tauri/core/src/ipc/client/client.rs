@@ -345,6 +345,12 @@ impl IpcClient {
             .await
     }
 
+    /// 获取所有任务失败图片
+    pub async fn storage_get_all_failed_images(&self) -> Result<serde_json::Value, String> {
+        self.request_data(CliIpcRequest::StorageGetAllFailedImages)
+            .await
+    }
+
     pub async fn storage_clear_finished_tasks(&self) -> Result<usize, String> {
         let v = self
             .request_data(CliIpcRequest::StorageClearFinishedTasks)

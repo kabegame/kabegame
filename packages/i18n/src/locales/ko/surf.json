@@ -31,6 +31,7 @@
   "sessionEndSuccess": "서핑 세션 종료됨",
   "sessionEndFailed": "세션 종료 실패",
   "getCookieFailed": "쿠키 가져오기 실패",
+  "copySuccess": "클립보드에 복사됨",
   "deleteRecordConfirm": "서핑 기록 \"{host}\"를 삭제할까요? 연결된 이미지는 갤러리에 남습니다.",
   "deleteRecordTitle": "서핑 기록 삭제",
   "deleteButton": "삭제",
@@ -57,5 +58,15 @@
   "actionFailed": "{action} 실패",
   "lastSurfTime": "마지막 서핑:",
   "loadImagesFailed": "이미지 로드 실패",
-  "viewDownloadedImages": "다운로드한 이미지 보기"
+  "viewDownloadedImages": "다운로드한 이미지 보기",
+  "recordDetails": "상세",
+  "recordName": "이름",
+  "recordNamePlaceholder": "사용자 지정 이름 입력 (선택)",
+  "entryPath": "진입 경로",
+  "entryPathPlaceholder": "예: /artworks 또는 /users?id=1",
+  "fullUrlPreview": "전체 URL: ",
+  "cookieLabel": "Cookie",
+  "cookieEmpty": "저장된 Cookie가 없습니다",
+  "deleteRecordDanger": "이 서핑 기록 삭제",
+  "savedSuccess": "저장됨"
 }

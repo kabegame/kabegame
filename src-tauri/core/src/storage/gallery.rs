@@ -252,11 +252,10 @@ impl ImageQuery {
             .with_where("ai.album_id = ?", vec![album_id])
     }
 
-    /// 查询组件：以任务关联表作为数据源
+    /// 查询组件：按任务过滤（单图单任务）
     pub fn task_source(task_id: String) -> Self {
         Self::new()
-            .with_join("INNER JOIN task_images ti ON images.id = ti.image_id", vec![])
-            .with_where("ti.task_id = ?", vec![task_id])
+            .with_where("images.task_id = ?", vec![task_id])
     }
 
     /// 查询组件：按抓取时间排序
@@ -286,9 +285,9 @@ impl ImageQuery {
         })
     }
 
-    /// 查询组件：按任务内顺序排序
+    /// 查询组件：按任务内顺序排序（与抓取时间一致）
     pub fn sort_by_task_order() -> Self {
-        Self::new().with_order("COALESCE(ti.\"order\", ti.rowid) ASC")
+        Self::new().with_order("images.crawled_at ASC")
     }
 
     /// 按插件 ID 过滤
@@ -324,7 +323,7 @@ impl ImageQuery {
         Self::album_source(album_id).merge(&Self::sort_by_album_order(true))
     }
 
-    /// 按任务过滤（使用 JOIN 获取正确排序）
+    /// 按任务过滤（直接使用 images.task_id）
     pub fn by_task(task_id: String) -> Self {
         Self::task_source(task_id).merge(&Self::sort_by_task_order())
     }

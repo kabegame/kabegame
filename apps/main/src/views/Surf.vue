@@ -46,17 +46,6 @@
           <el-button type="primary" size="large" @click="handleStart">
             {{ surfStore.sessionActive ? $t('surf.openSession') : $t('surf.startSurf') }}
           </el-button>
-          <el-button v-if="surfStore.sessionActive" size="large" @click="handleCloseSession">
-            {{ $t('surf.endSession') }}
-          </el-button>
-          <el-button
-            v-if="surfStore.sessionActive"
-            size="large"
-            :loading="cookieLoading"
-            @click="handleViewCookies"
-          >
-            {{ $t('surf.viewCookie') }}
-          </el-button>
         </div>
 
         <el-alert
@@ -76,23 +65,33 @@
               v-for="record in surfStore.records"
               :key="record.id"
               class="surf-card"
-              @click="handleRecordClick(record)"
+              @click="openDetailDialog(record)"
               @contextmenu.prevent="openRecordContextMenu($event, record)"
             >
               <div class="card-head">
                 <img v-if="iconDataUrl(record.icon)" class="site-icon" :src="iconDataUrl(record.icon)" alt="icon" />
                 <div v-else class="site-icon fallback">{{ record.host[0]?.toUpperCase() }}</div>
                 <div class="site-meta">
-                  <div class="host">{{ record.host }}</div>
+                  <div class="host">{{ record.name || record.host }}</div>
                   <div class="root-url">{{ record.rootUrl }}</div>
                 </div>
                 <el-tag size="small" type="info">{{ $t('surf.downloadCount') }} {{ record.downloadCount }}</el-tag>
               </div>
               <div class="card-foot">
                 <span>{{ $t('surf.lastVisit') }}{{ formatTime(record.lastVisitAt) }}</span>
-                <span v-if="record.lastImage" class="last-image" @click.stop="goImages(record.id)">
-                  {{ $t('surf.viewRecentImages') }}
-                </span>
+                <div class="card-actions">
+                  <el-button
+                    size="small"
+                    type="primary"
+                    :disabled="surfStore.sessionActive"
+                    @click.stop="handleRecordClick(record)"
+                  >
+                    {{ $t('surf.startSurf') }}
+                  </el-button>
+                  <el-button v-if="record.lastImage" size="small" @click.stop="goImages(record.id)">
+                    {{ $t('surf.viewDownloadedImages') }}
+                  </el-button>
+                </div>
               </div>
             </el-card>
           </transition-group>
@@ -112,31 +111,65 @@
       :context="recordMenuContext"
       :z-index="3500"
       @close="recordMenu.hide"
-      @command="(cmd) => handleRecordMenuCommand(cmd as 'viewImages' | 'delete')"
+      @command="(cmd) => handleRecordMenuCommand(cmd as 'viewImages' | 'details' | 'delete')"
     />
 
     <ElDialog
-      v-model="cookieDialogVisible"
-      :title="$t('surf.cookieDialogTitle')"
-      width="560px"
-      class="surf-cookie-dialog"
-      @closed="cookieString = ''"
+      v-model="detailDialogVisible"
+      :title="detailRecord?.name || detailRecord?.host || $t('surf.recordDetails')"
+      width="600px"
+      class="surf-detail-dialog"
+      @closed="resetDetailDialog"
     >
-      <p v-if="cookieHost" class="surf-cookie-host">{{ $t('surf.site') }}{{ cookieHost }}</p>
-      <p class="surf-cookie-tip">{{ $t('surf.cookieTip') }}</p>
-      <el-input
-        v-model="cookieString"
-        type="textarea"
-        :rows="8"
-        readonly
-        :placeholder="$t('surf.noCookie')"
-        class="surf-cookie-textarea"
-      />
+      <div v-if="detailRecord" class="surf-detail-content">
+        <div class="detail-item">
+          <span class="detail-label">{{ $t("surf.recordName") }}</span>
+          <el-input
+            v-model="detailName"
+            :placeholder="$t('surf.recordNamePlaceholder')"
+            size="default"
+            class="detail-input"
+            @blur="saveDetailName"
+          />
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">{{ $t("surf.entryPath") }}</span>
+          <div class="detail-value-wrap">
+            <el-input
+              v-model="detailEntryPath"
+              :placeholder="$t('surf.entryPathPlaceholder')"
+              size="default"
+              class="detail-input"
+              @blur="saveDetailEntryPath"
+            />
+            <div class="detail-url-preview">{{ detailFullUrlPreview }}</div>
+          </div>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">{{ $t("surf.cookieLabel") }}</span>
+          <el-input
+            :model-value="detailRecord?.cookie || ''"
+            type="textarea"
+            :rows="5"
+            readonly
+            :placeholder="$t('surf.cookieEmpty')"
+            class="detail-textarea"
+          />
+        </div>
+      </div>
+
       <template #footer>
-        <el-button @click="cookieDialogVisible = false">{{ $t('common.close') }}</el-button>
-        <el-button type="primary" :disabled="!cookieString" @click="copyCookie">
-          {{ copyDone ? $t('surf.copied') : $t('surf.copy') }}
-        </el-button>
+        <div class="surf-detail-footer">
+          <el-button type="danger" @click="deleteRecordFromDetail">
+            {{ $t("surf.deleteRecordDanger") }}
+          </el-button>
+          <div class="surf-detail-footer-right">
+            <el-button @click="detailDialogVisible = false">{{ $t("common.close") }}</el-button>
+            <el-button type="primary" :disabled="!(detailRecord?.cookie || '').trim()" @click="copyDetailCookie">
+              {{ detailCopyDone ? $t("surf.copied") : $t("surf.copy") }}
+            </el-button>
+          </div>
+        </div>
       </template>
     </ElDialog>
 
@@ -191,12 +224,12 @@ const surfHeaderShowIds = computed(() =>
 const surfHelpVisible = ref(false);
 useModalBack(surfHelpVisible);
 
-const cookieDialogVisible = ref(false);
-useModalBack(cookieDialogVisible);
-const cookieString = ref("");
-const cookieHost = ref<string | null>(null);
-const cookieLoading = ref(false);
-const copyDone = ref(false);
+const detailDialogVisible = ref(false);
+useModalBack(detailDialogVisible);
+const detailRecord = ref<SurfRecord | null>(null);
+const detailName = ref("");
+const detailEntryPath = ref("/");
+const detailCopyDone = ref(false);
 
 const inputUrl = ref("");
 const pluginQuickSelect = ref("");
@@ -243,7 +276,6 @@ const hasRecords = computed(() => surfStore.records.length > 0);
 const LOGO_MAX = 180;
 const LOGO_MIN = 80;
 const logoHeight = ref(LOGO_MAX);
-const logoCollapsed = computed(() => logoHeight.value <= LOGO_MIN);
 
 const onListWheel = (e: WheelEvent) => {
   if (!hasRecords.value) return;
@@ -272,6 +304,35 @@ const formatTime = (ts: number) => {
   const date = new Date(ts * 1000);
   return date.toLocaleString();
 };
+
+function fallbackRootUrl(host: string) {
+  return `https://${host}/`;
+}
+
+function parseRecordUrl(record: SurfRecord) {
+  try {
+    return new URL(record.rootUrl);
+  } catch {
+    return new URL(fallbackRootUrl(record.host));
+  }
+}
+
+function extractEntryPath(record: SurfRecord) {
+  const parsed = parseRecordUrl(record);
+  const path = `${parsed.pathname || "/"}${parsed.search || ""}${parsed.hash || ""}`;
+  return path || "/";
+}
+
+function buildRootUrl(host: string, rawPath: string) {
+  const trimmed = rawPath.trim();
+  const normalizedPath = !trimmed ? "/" : trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return `https://${host}${normalizedPath}`;
+}
+
+const detailFullUrlPreview = computed(() => {
+  if (!detailRecord.value) return "";
+  return buildRootUrl(detailRecord.value.host, detailEntryPath.value);
+});
 
 /** 规范化并校验 URL：仅允许 https；域名字符串自动补 https；http 提示需用 https；其他协议提示不支持 */
 function normalizeAndValidateUrl(input: string): { url: string } | { error: string } {
@@ -304,38 +365,96 @@ const handleStart = async () => {
   }
 };
 
-const handleCloseSession = async () => {
-  try {
-    await surfStore.closeSession();
-    ElMessage.success(t("surf.sessionEndSuccess"));
-  } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || t("surf.sessionEndFailed"));
-  }
-};
-
-async function handleViewCookies() {
-  cookieLoading.value = true;
-  try {
-    const result = await invoke<{ cookieString: string; host?: string | null }>("surf_get_cookies");
-    cookieString.value = result.cookieString || "";
-    cookieHost.value = result.host ?? null;
-    cookieDialogVisible.value = true;
-    copyDone.value = false;
-  } catch (e: any) {
-    ElMessage.error(e?.message || String(e) || t("surf.getCookieFailed"));
-  } finally {
-    cookieLoading.value = false;
+function syncRecordInList(id: string, patch: Partial<SurfRecord>) {
+  const target = surfStore.records.find((item) => item.id === id);
+  if (target) {
+    Object.assign(target, patch);
   }
 }
 
-async function copyCookie() {
-  if (!cookieString.value) return;
+async function openDetailDialog(record: SurfRecord) {
   try {
-    await navigator.clipboard.writeText(cookieString.value);
-    copyDone.value = true;
+    const latest = await surfStore.getRecord(record.id);
+    const target = latest ?? record;
+    detailRecord.value = target;
+    detailName.value = target.name || "";
+    detailEntryPath.value = extractEntryPath(target);
+    detailCopyDone.value = false;
+    detailDialogVisible.value = true;
+  } catch (e: any) {
+    ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
+  }
+}
+
+function resetDetailDialog() {
+  detailRecord.value = null;
+  detailName.value = "";
+  detailEntryPath.value = "/";
+  detailCopyDone.value = false;
+}
+
+async function saveDetailName() {
+  const record = detailRecord.value;
+  if (!record) return;
+  const nextName = detailName.value.trim();
+  if (nextName === (record.name || "")) return;
+  try {
+    await surfStore.updateName(record.id, nextName);
+    detailRecord.value = { ...record, name: nextName };
+    syncRecordInList(record.id, { name: nextName });
+    ElMessage.success(t("surf.savedSuccess"));
+  } catch (e: any) {
+    ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
+  }
+}
+
+async function saveDetailEntryPath() {
+  const record = detailRecord.value;
+  if (!record) return;
+  const nextRootUrl = buildRootUrl(record.host, detailEntryPath.value);
+  if (nextRootUrl === record.rootUrl) return;
+  try {
+    await surfStore.updateRootUrl(record.id, nextRootUrl);
+    detailRecord.value = { ...record, rootUrl: nextRootUrl };
+    syncRecordInList(record.id, { rootUrl: nextRootUrl });
+    ElMessage.success(t("surf.savedSuccess"));
+  } catch (e: any) {
+    ElMessage.error(e?.message || String(e) || t("surf.operationFailed"));
+  }
+}
+
+async function copyDetailCookie() {
+  const cookie = (detailRecord.value?.cookie || "").trim();
+  if (!cookie) return;
+  try {
+    await navigator.clipboard.writeText(cookie);
+    detailCopyDone.value = true;
     ElMessage.success(t("surf.copySuccess"));
   } catch {
     ElMessage.error(t("common.copyFailed"));
+  }
+}
+
+async function confirmAndDeleteRecord(record: SurfRecord) {
+  await ElMessageBox.confirm(
+    t("surf.deleteRecordConfirm", { host: record.host }),
+    t("surf.deleteRecordTitle"),
+    { confirmButtonText: t("surf.deleteButton"), cancelButtonText: t("common.cancel"), type: "warning" }
+  );
+  await surfStore.deleteRecord(record.id);
+  ElMessage.success(t("surf.deleteSuccess"));
+}
+
+async function deleteRecordFromDetail() {
+  const record = detailRecord.value;
+  if (!record) return;
+  try {
+    await confirmAndDeleteRecord(record);
+    detailDialogVisible.value = false;
+  } catch (e: any) {
+    if (e !== "cancel") {
+      ElMessage.error(e?.message || String(e) || t("surf.deleteFailed"));
+    }
   }
 }
 
@@ -357,7 +476,7 @@ const openRecordContextMenu = (e: MouseEvent, record: SurfRecord) => {
   recordMenu.show(record, e);
 };
 
-const handleRecordMenuCommand = async (command: "viewImages" | "delete") => {
+const handleRecordMenuCommand = async (command: "viewImages" | "details" | "delete") => {
   const record = recordMenu.context.value.target;
   recordMenu.hide();
   if (!record) return;
@@ -365,15 +484,13 @@ const handleRecordMenuCommand = async (command: "viewImages" | "delete") => {
     goImages(record.id);
     return;
   }
+  if (command === "details") {
+    await openDetailDialog(record);
+    return;
+  }
   if (command === "delete") {
     try {
-      await ElMessageBox.confirm(
-        t("surf.deleteRecordConfirm", { host: record.host }),
-        t("surf.deleteRecordTitle"),
-        { confirmButtonText: t("surf.deleteButton"), cancelButtonText: t("common.cancel"), type: "warning" }
-      );
-      await surfStore.deleteRecord(record.id);
-      ElMessage.success(t("surf.deleteSuccess"));
+      await confirmAndDeleteRecord(record);
     } catch (e: any) {
       if (e !== "cancel") {
         ElMessage.error(e?.message || String(e) || t("surf.deleteFailed"));
@@ -574,14 +691,18 @@ onMounted(async () => {
 .card-foot {
   margin-top: 8px;
   display: flex;
+  align-items: center;
   justify-content: space-between;
   color: #888;
   font-size: 12px;
+  gap: 8px;
 }
 
-.last-image {
-  color: var(--el-color-primary);
-  cursor: pointer;
+.card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .load-more {
@@ -637,5 +758,60 @@ onMounted(async () => {
 .surf-cookie-dialog .surf-cookie-textarea {
   font-family: ui-monospace, monospace;
   font-size: 12px;
+}
+
+.surf-detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  .detail-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .detail-label {
+    font-weight: 500;
+    color: var(--anime-text-secondary);
+    min-width: 80px;
+    flex-shrink: 0;
+  }
+
+  .detail-value-wrap {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .detail-input {
+    width: 100%;
+  }
+
+  .detail-url-preview {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--anime-text-secondary);
+    word-break: break-all;
+  }
+
+  .detail-textarea {
+    flex: 1;
+    min-width: 0;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+  }
+}
+
+.surf-detail-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.surf-detail-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

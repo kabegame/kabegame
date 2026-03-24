@@ -14,6 +14,8 @@ import {
   Filter,
   Monitor,
   Histogram,
+  CircleClose,
+  WarningFilled,
 } from "@element-plus/icons-vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { i18n } from "@kabegame/i18n";
@@ -21,6 +23,7 @@ import { i18n } from "@kabegame/i18n";
 import CollectAction from "./comps/CollectAction.vue";
 import OrganizeHeaderControl from "./comps/OrganizeHeaderControl.vue";
 import TaskDrawerButton from "@/components/common/TaskDrawerButton.vue";
+import FailedImagesHeaderButton from "@/components/common/FailedImagesHeaderButton.vue";
 import GalleryFilterControl from "./comps/GalleryFilterControl.vue";
 import GallerySortControl from "./comps/GallerySortControl.vue";
 
@@ -110,6 +113,12 @@ export function registerHeaderFeatures() {
       comp: TaskDrawerButton,
     },
     {
+      id: HeaderFeatureId.FailedImages,
+      label: t("header.failedImages"),
+      icon: WarningFilled,
+      comp: FailedImagesHeaderButton,
+    },
+    {
       id: HeaderFeatureId.GalleryFilter,
       label: t("gallery.filter"),
       icon: Filter,
@@ -140,6 +149,26 @@ export function registerHeaderFeatures() {
       id: HeaderFeatureId.OpenCrawlerWebview,
       label: t("header.openCrawlerWebview"),
       icon: Monitor,
+    },
+    {
+      id: HeaderFeatureId.FailedImagesCancelWaiting,
+      label: t("header.failedImagesCancelWaiting"),
+      icon: CircleClose,
+    },
+    {
+      id: HeaderFeatureId.FailedImagesRetryAll,
+      label: t("header.failedImagesRetryAll"),
+      icon: Refresh,
+    },
+    {
+      id: HeaderFeatureId.FailedImagesDeleteAll,
+      label: t("header.failedImagesDeleteAll"),
+      icon: Delete,
+    },
+    {
+      id: HeaderFeatureId.FailedImagesFilter,
+      label: t("header.failedImagesFilter"),
+      icon: Filter,
     },
   ]);
 }

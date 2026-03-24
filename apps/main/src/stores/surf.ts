@@ -7,7 +7,9 @@ import type { ImageInfo } from "@kabegame/core/types/image";
 export interface SurfRecord {
   id: string;
   host: string;
+  name: string;
   rootUrl: string;
+  cookie: string;
   icon?: number[] | null;
   lastVisitAt: number;
   downloadCount: number;
@@ -158,6 +160,14 @@ export const useSurfStore = defineStore("surf", () => {
     }
   };
 
+  const updateName = async (id: string, name: string) => {
+    await invoke("surf_update_name", { id, name });
+  };
+
+  const updateRootUrl = async (id: string, rootUrl: string) => {
+    await invoke("surf_update_root_url", { id, rootUrl });
+  };
+
   return {
     records,
     hasMore,
@@ -174,5 +184,7 @@ export const useSurfStore = defineStore("surf", () => {
     getRecord,
     getRecordImages,
     deleteRecord,
+    updateName,
+    updateRootUrl,
   };
 });

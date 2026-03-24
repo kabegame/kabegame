@@ -58,5 +58,15 @@
   "actionFailed": "{action} に失敗しました",
   "lastSurfTime": "最終サーフ:",
   "loadImagesFailed": "画像の読み込みに失敗しました",
-  "viewDownloadedImages": "ダウンロードした画像を表示"
+  "viewDownloadedImages": "ダウンロードした画像を表示",
+  "recordDetails": "詳細",
+  "recordName": "名称",
+  "recordNamePlaceholder": "カスタム名を入力（任意）",
+  "entryPath": "入口パス",
+  "entryPathPlaceholder": "例: /artworks または /users?id=1",
+  "fullUrlPreview": "完全な URL: ",
+  "cookieLabel": "Cookie",
+  "cookieEmpty": "保存済み Cookie はありません",
+  "deleteRecordDanger": "このサーフ記録を削除",
+  "savedSuccess": "保存しました"
 }

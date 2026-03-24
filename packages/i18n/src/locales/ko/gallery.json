@@ -72,7 +72,6 @@
   "viewAllImages": "전체 이미지 보기",
   "noImages": "이미지 없음",
   "totalImages": "총 {count}개 이미지",
-  "positionOfTotal": "{pos} / {total}",
   "gallery": "갤러리",
   "chooseImportMethod": "가져오기 방법 선택",
   "selectImage": "이미지 선택",

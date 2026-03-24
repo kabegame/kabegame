@@ -9,6 +9,7 @@ pub mod settings;
 pub mod storage;
 
 use kabegame_core::crawler::{CrawlTaskRequest, TaskScheduler};
+use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::ipc::ipc::{CliIpcRequest, CliIpcResponse};
 #[cfg(not(target_os = "android"))]
 use kabegame_core::ipc::server::EventBroadcaster;
@@ -68,6 +69,9 @@ pub async fn dispatch_request(req: CliIpcRequest, app_handle: AppHandle) -> CliI
     }
     if let CliIpcRequest::TaskRetryFailedImage { failed_id } = req {
         return handle_task_retry_failed_image(failed_id).await;
+    }
+    if let CliIpcRequest::TaskDeleteFailedImage { failed_id } = req {
+        return handle_task_delete_failed_image(failed_id).await;
     }
     if matches!(req, CliIpcRequest::GetActiveDownloads) {
         return handle_get_active_downloads().await;
@@ -165,8 +169,25 @@ async fn handle_task_cancel(task_id: String) -> CliIpcResponse {
 }
 
 async fn handle_task_retry_failed_image(failed_id: i64) -> CliIpcResponse {
-    match TaskScheduler::global().retry_failed_image(failed_id) {
+    match TaskScheduler::global().retry_failed_image(failed_id).await {
         Ok(()) => CliIpcResponse::ok("ok"),
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
+async fn handle_task_delete_failed_image(failed_id: i64) -> CliIpcResponse {
+    let storage = Storage::global();
+    let task_id = match storage.get_task_failed_image_by_id(failed_id) {
+        Ok(item) => item.map(|item| item.task_id),
+        Err(e) => return CliIpcResponse::err(e),
+    };
+    match storage.delete_task_failed_image(failed_id) {
+        Ok(()) => {
+            if let Some(task_id) = task_id {
+                GlobalEmitter::global().emit_failed_image_removed(&task_id, failed_id);
+            }
+            CliIpcResponse::ok("ok")
+        }
         Err(e) => CliIpcResponse::err(e),
     }
 }
@@ -254,6 +275,9 @@ async fn handle_plugin_run(
                 status: "pending".to_string(),
                 progress: 0.0,
                 deleted_count: 0,
+                dedup_count: 0,
+                success_count: 0,
+                failed_count: 0,
                 start_time: None,
                 end_time: None,
                 error: None,

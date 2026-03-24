@@ -13,7 +13,12 @@
   "deleteAlbum": "앨범 삭제",
   "importSource": "가져오기 소스",
   "manageSources": "소스 관리",
+  "failedImages": "실패 이미지",
   "gallerySort": "시간순 정렬",
   "galleryPageSize": "페이지당",
-  "openCrawlerWebview": "크롤러 WebView 창"
+  "openCrawlerWebview": "크롤러 WebView 창",
+  "failedImagesCancelWaiting": "대기 취소",
+  "failedImagesRetryAll": "모두 재시도",
+  "failedImagesDeleteAll": "모두 삭제",
+  "failedImagesFilter": "플러그인별 필터"
 }

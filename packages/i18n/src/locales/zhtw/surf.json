@@ -58,5 +58,15 @@
   "actionFailed": "{action}失敗",
   "lastSurfTime": "最後一次暢遊：",
   "loadImagesFailed": "載入圖片失敗",
-  "viewDownloadedImages": "檢視下載圖片"
+  "viewDownloadedImages": "檢視下載圖片",
+  "recordDetails": "詳情",
+  "recordName": "名稱",
+  "recordNamePlaceholder": "輸入自訂名稱（可選）",
+  "entryPath": "入口路徑",
+  "entryPathPlaceholder": "例如 /artworks 或 /users?id=1",
+  "fullUrlPreview": "完整 URL：",
+  "cookieLabel": "Cookie",
+  "cookieEmpty": "暫無已儲存的 Cookie",
+  "deleteRecordDanger": "刪除此暢遊記錄",
+  "savedSuccess": "已儲存"
 }

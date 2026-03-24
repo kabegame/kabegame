@@ -258,6 +258,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, onUnmounted, onMounted } from "vue";
+import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
 import { ArrowDown, ArrowRight, Filter, Histogram, Sort } from "@element-plus/icons-vue";
@@ -289,12 +290,12 @@ import {
 } from "@/utils/galleryTimeFilterMenu";
 import GalleryTimeFilterSubmenu from "@/header/comps/GalleryTimeFilterSubmenu.vue";
 import { usePluginStore } from "@/stores/plugins";
+import { useFailedImagesStore } from "@/stores/failedImages";
 
 interface Props {
   isLoadingAll?: boolean;
   totalCount?: number;
   bigPageEnabled?: boolean;
-  currentPosition?: number; // 当前位置（分页启用时使用）
   monthOptions?: string[];
   monthLoading?: boolean;
   selectedRange?: [string, string] | null; // YYYY-MM-DD
@@ -310,7 +311,6 @@ const props = withDefaults(defineProps<Props>(), {
   isLoadingAll: false,
   totalCount: 0,
   bigPageEnabled: false,
-  currentPosition: 1,
   monthOptions: () => [],
   monthLoading: false,
   selectedRange: null,
@@ -320,6 +320,12 @@ const props = withDefaults(defineProps<Props>(), {
 });
 
 const router = useRouter();
+const failedImagesStore = useFailedImagesStore();
+const failedCountFoldLabel = computed(() => {
+  const n = failedImagesStore.allFailed.length;
+  const suffix = n >= 99 ? "99+" : String(n);
+  return `${t("header.failedImages")} (${suffix})`;
+});
 const sortOrder = computed(() =>
   props.providerRootPath.includes("/desc") ? "desc" : "asc"
 );
@@ -390,7 +396,7 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
   )
 );
 
-onMounted(async () => {
+async function loadFilterCounts() {
   try {
     const [pg, timePayload, mt] = await Promise.all([
       invoke<PluginGroupRow[]>("get_gallery_plugin_groups"),
@@ -412,6 +418,15 @@ onMounted(async () => {
     monthGroups.value = [];
     dayGroups.value = [];
   }
+}
+
+onMounted(() => void loadFilterCounts());
+
+useImagesChangeRefresh({
+  enabled: ref(true),
+  waitMs: 500,
+  filter: (p) => !p.albumId,
+  onRefresh: () => void loadFilterCounts(),
 });
 
 const sortOptionLabelAsc = computed(() =>
@@ -692,9 +707,6 @@ const totalCountText = computed(() => {
   if (props.totalCount === 0) {
     return t('gallery.noImages');
   }
-  if (props.bigPageEnabled && props.currentPosition !== undefined) {
-    return t('gallery.positionOfTotal', { pos: props.currentPosition, total: props.totalCount });
-  }
   return t('gallery.totalImages', { count: props.totalCount });
 });
 
@@ -717,6 +729,7 @@ const showIds = computed(() => {
     HeaderFeatureId.Help,
     HeaderFeatureId.QuickSettings,
     HeaderFeatureId.Organize,
+    HeaderFeatureId.FailedImages,
     HeaderFeatureId.TaskDrawer,
     HeaderFeatureId.Collect,
   ];
@@ -724,7 +737,7 @@ const showIds = computed(() => {
 
 const foldIds = computed(() => {
   if (!IS_ANDROID) return [];
-  const ids: HeaderFeatureId[] = [];
+  const ids: HeaderFeatureId[] = [HeaderFeatureId.FailedImages];
   if (showGalleryFilterFold.value) {
     ids.push(HeaderFeatureId.GalleryFilter);
   }
@@ -742,9 +755,11 @@ watch(
     filterFoldLabel,
     showGalleryFilterFold,
     () => props.pageSize,
+    () => failedImagesStore.allFailed.length,
   ],
   () => {
     if (!IS_ANDROID) return;
+    headerStore.setFoldLabel(HeaderFeatureId.FailedImages, failedCountFoldLabel.value);
     if (showGalleryFilterFold.value) {
       headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, filterFoldLabel.value);
     } else {
@@ -760,6 +775,7 @@ watch(
 );
 onUnmounted(() => {
   if (!IS_ANDROID) return;
+  headerStore.setFoldLabel(HeaderFeatureId.FailedImages, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.GallerySort, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, undefined);
@@ -800,6 +816,9 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
       break;
     case HeaderFeatureId.Organize:
       // 整理由 header 的 OrganizeHeaderControl 处理，此处不会触发（Organize 在 show 中）
+      break;
+    case HeaderFeatureId.FailedImages:
+      void router.push({ path: "/failed-images" });
       break;
   }
 };

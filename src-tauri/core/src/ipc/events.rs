@@ -25,6 +25,7 @@
 
 #[cfg(feature = "ipc-client")]
 use crate::ipc::client::daemon_startup;
+use crate::storage::tasks::TaskFailedImage;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -80,6 +81,8 @@ daemon_event_kinds! {
     AlbumNameChanged,
     AlbumDeleted,
     SurfRecordsChange,
+    FailedImagesChange,
+    TaskImageCounts,
     DaemonShutdown,
 }
 
@@ -110,6 +113,8 @@ impl DaemonEventKind {
             DaemonEventKind::AlbumNameChanged => "album-name-changed",
             DaemonEventKind::AlbumDeleted => "album-deleted",
             DaemonEventKind::SurfRecordsChange => "surf-records-change",
+            DaemonEventKind::FailedImagesChange => "failed-images-change",
+            DaemonEventKind::TaskImageCounts => "task-image-counts",
             DaemonEventKind::DaemonShutdown => "daemon-shutdown",
         }
         .to_string()
@@ -135,6 +140,8 @@ impl DaemonEventKind {
             "album-name-changed" => Some(DaemonEventKind::AlbumNameChanged),
             "album-deleted" => Some(DaemonEventKind::AlbumDeleted),
             "surf-records-change" => Some(DaemonEventKind::SurfRecordsChange),
+            "failed-images-change" => Some(DaemonEventKind::FailedImagesChange),
+            "task-image-counts" => Some(DaemonEventKind::TaskImageCounts),
             "daemon-shutdown" => Some(DaemonEventKind::DaemonShutdown),
             _ => None,
         }
@@ -268,6 +275,31 @@ pub enum DaemonEvent {
         #[serde(rename = "surfRecordId")]
         surf_record_id: String,
     },
+    /// 任务失败图片列表变化
+    FailedImagesChange {
+        reason: String,
+        #[serde(rename = "taskId")]
+        task_id: String,
+        #[serde(rename = "failedImageIds")]
+        failed_image_ids: Option<Vec<i64>>,
+        #[serde(rename = "failedImages")]
+        failed_images: Option<Vec<TaskFailedImage>>,
+        #[serde(rename = "failedImage")]
+        failed_image: Option<TaskFailedImage>,
+    },
+    /// 任务图片数量变更（成功/删除/失败/去重），字段按需出现
+    TaskImageCounts {
+        #[serde(rename = "taskId")]
+        task_id: String,
+        #[serde(rename = "successCount")]
+        success_count: Option<i64>,
+        #[serde(rename = "deletedCount")]
+        deleted_count: Option<i64>,
+        #[serde(rename = "failedCount")]
+        failed_count: Option<i64>,
+        #[serde(rename = "dedupCount")]
+        dedup_count: Option<i64>,
+    },
     /// Daemon 关闭事件（进程退出前发出）
     DaemonShutdown { reason: String },
 }
@@ -298,6 +330,8 @@ impl DaemonEvent {
             DaemonEvent::AlbumNameChanged { .. } => DaemonEventKind::AlbumNameChanged,
             DaemonEvent::AlbumDeleted { .. } => DaemonEventKind::AlbumDeleted,
             DaemonEvent::SurfRecordsChange { .. } => DaemonEventKind::SurfRecordsChange,
+            DaemonEvent::FailedImagesChange { .. } => DaemonEventKind::FailedImagesChange,
+            DaemonEvent::TaskImageCounts { .. } => DaemonEventKind::TaskImageCounts,
             DaemonEvent::DaemonShutdown { .. } => DaemonEventKind::DaemonShutdown,
         }
     }

@@ -14,7 +14,13 @@ export function useActiveRoute() {
     () => route.fullPath,
     () => {
       if (route.path.startsWith("/gallery")) {
-        lastGalleryRoute.value = route.fullPath || route.path;
+        const queryPath = route.query?.path as string | undefined;
+        // task/* 路径为任务页专用，Gallery Tab 应指向主画廊而非任务视图
+        if (queryPath?.startsWith("task/")) {
+          lastGalleryRoute.value = route.path;
+        } else {
+          lastGalleryRoute.value = route.fullPath || route.path;
+        }
       }
     },
     { immediate: true },

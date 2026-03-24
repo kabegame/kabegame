@@ -235,6 +235,9 @@ pub enum CliIpcRequest {
         task_id: String,
     },
 
+    /// 获取所有任务失败图片
+    StorageGetAllFailedImages,
+
     /// 清除所有已完成/失败/取消的任务
     StorageClearFinishedTasks,
 
@@ -291,6 +294,11 @@ pub enum CliIpcRequest {
 
     /// 重试一条失败图片下载（task_failed_images.id）
     TaskRetryFailedImage {
+        failed_id: i64,
+    },
+
+    /// 删除一条失败图片记录（task_failed_images.id）
+    TaskDeleteFailedImage {
         failed_id: i64,
     },
 
