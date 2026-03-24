@@ -277,9 +277,14 @@ async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
         return (StatusCode::BAD_REQUEST, "only http and https are allowed").into_response();
     }
 
-    let client = match reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::default())
-        .build()
+    let mut client_builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::default());
+    if let Some(ref proxy_url) = kabegame_core::crawler::proxy::get_proxy_config().proxy_url {
+        if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
+            client_builder = client_builder.proxy(proxy);
+        }
+    }
+    let client = match client_builder.build()
     {
         Ok(c) => c,
         Err(e) => {

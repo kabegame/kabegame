@@ -39,5 +39,8 @@ window:
 albums:
   favorite: 즐겨찾기
 
+plugins:
+  officialGithubReleaseSourceName: 공식 GitHub Releases 소스
+
 surf:
   windowTitle: "서핑 - {host}"

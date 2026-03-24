@@ -39,5 +39,8 @@ window:
 albums:
   favorite: お気に入り
 
+plugins:
+  officialGithubReleaseSourceName: 公式 GitHub Releases ソース
+
 surf:
   windowTitle: "サーフ - {host}"

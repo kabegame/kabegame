@@ -19,6 +19,7 @@
 - **Gallery:** Lists using this sort refresh when the current wallpaper changes (including rotation), so order stays consistent without manual reload.
 
 ### Fixed
+- **Windows:** Image downloads, plugin store, favicon fetching, and proxy requests now respect system proxy when set in Windows (Settings → Network → Proxy); reads registry when HTTP_PROXY/HTTPS_PROXY env vars are unset.
 - **Task:** Migration cleans up orphaned failed images (those whose task no longer exists); deleting a task or clearing finished tasks now removes all related failed images.
 - **Android image preview:** Pinch-to-zoom no longer accidentally toggles UI controls (close button, counter bar) visibility.
 - **Gallery (Android):** In multi-select mode, fast taps that the browser treats as a double-click no longer open the image preview; selection toggling stays the only action.
@@ -27,8 +28,7 @@
 - Gallery: your last browse location (root, sort, page) persists across restarts, the sort menu matches what you see, and changing sort no longer resets the page.
 - migrate crash for some version of kabegame
 - Plugin browser store installs now reuse downloaded packages from cache instead of always re-downloading.
-- **Plugin detail page (i18n):** Labels for plugin ID, name, version, description, crawl URL, empty-description text, copy, and link-open errors follow your selected app language instead of hard-coded Chinese.
-- **Plugin browser (official source display name i18n):** When the built-in official GitHub Releases source still uses the default DB name (`官方 GitHub Releases 源`), the UI (store tab label, empty state `noPluginsInSource`, sources table, edit-source form initial value, delete-confirm name) uses `plugins.officialGithubReleaseSourceName` per locale so it updates with the app language. Custom names are unchanged. On save, the localized default string is normalized back to the canonical DB default so a translated label is not persisted as the stored name.
+- **Plugin detail page (i18n):** Labels for plugin ID, name, version, description, crawl URL, empty-description text, copy, and link-open errors follow your selected app language instead of hard-coded Chinese.- **Plugin browser (official source name i18n):** The built-in official GitHub Releases source name is written to the database on startup and when the app language changes (same pattern as the favorite album name sync via `kabegame_i18n`). Storage emits `plugin-sources-changed` so the plugin browser reloads the source list.
 
 ### Changed
 - **Surf:** Clicking a record card opens the detail dialog instead of starting a session; a dedicated “Start surfing” button on each card starts the session (disabled while a session is active).
