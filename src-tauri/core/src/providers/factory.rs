@@ -9,9 +9,11 @@ use crate::providers::{
     main_date_scoped::MainDateScopedProvider,
     main_root::{
         MainAlbumsProvider, MainDateGroupProvider, MainDateRangeRootProvider,
-        MainPluginGroupProvider, MainRootProvider, MainSurfGroupProvider, MainTaskGroupProvider,
+        MainMediaTypeGroupProvider, MainPluginGroupProvider, MainRootProvider,
+        MainSurfGroupProvider, MainTaskGroupProvider,
     },
-    PluginGroupProvider, RootProvider, SurfGroupProvider, TaskGroupProvider,
+    MediaTypeGroupProvider, PluginGroupProvider, RootProvider, SurfGroupProvider,
+    TaskGroupProvider,
 };
 
 pub struct ProviderFactory;
@@ -27,6 +29,7 @@ impl ProviderFactory {
             ),
 
             ProviderDescriptor::PluginGroup => Arc::new(PluginGroupProvider::new()),
+            ProviderDescriptor::MediaTypeGroup => Arc::new(MediaTypeGroupProvider::new()),
             ProviderDescriptor::DateGroup => Arc::new(VdByDateProvider::new()),
             ProviderDescriptor::DateRangeRoot => Arc::new(DateRangeRootProvider::new()),
             ProviderDescriptor::TaskGroup => Arc::new(TaskGroupProvider::new()),
@@ -58,6 +61,7 @@ impl ProviderFactory {
                     MainGroupKind::Album => Arc::new(MainAlbumsProvider::new()),
                     MainGroupKind::Task => Arc::new(MainTaskGroupProvider::new()),
                     MainGroupKind::Surf => Arc::new(MainSurfGroupProvider::new()),
+                    MainGroupKind::MediaType => Arc::new(MainMediaTypeGroupProvider::new()),
                 }
             }
             ProviderDescriptor::DateScoped { query, tier } => Arc::new(

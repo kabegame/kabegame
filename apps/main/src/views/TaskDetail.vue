@@ -13,8 +13,16 @@
                     @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
                     @quick-settings="openQuickSettings" @back="goBack" />
 
-                <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
-                    :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToPage" />
+                    <div class="task-detail-page-size-toolbar">
+                        <GalleryPageSizeControl
+                            :page-size="pageSize"
+                            variant="gallery"
+                            android-ui="inline"
+                        />
+                    </div>
+
+                    <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
+                    :big-page-size="pageSize" :is-sticky="true" @jump-to-page="handleJumpToPage" />
             </template>
         </ImageGrid>
 
@@ -38,10 +46,11 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { VideoPause, Delete, Setting, Refresh, QuestionFilled, Star, StarFilled, InfoFilled, DocumentCopy, Picture, FolderAdd, MoreFilled } from "@element-plus/icons-vue";
 import { createImageActions } from "@/actions/imageActions";
 import ImageGrid from "@/components/ImageGrid.vue";
-import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
+import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
-import { useCrawlerStore, type ImageInfo } from "@/stores/crawler";
+import { useCrawlerStore } from "@/stores/crawler";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore } from "@/stores/albums";
@@ -50,7 +59,6 @@ import { storeToRefs } from "pinia";
 import TaskDetailPageHeader from "@/components/header/TaskDetailPageHeader.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { useSelectionStore } from "@kabegame/core/stores/selection";
 import type { Component } from "vue";
 
 // 选择操作项类型（用于本页选择栏）
@@ -93,7 +101,6 @@ const route = useRoute();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const settingsStore = useSettingsStore();
-const desktopSelectionStore = useSelectionStore();
 const pluginStore = usePluginStore();
 const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
@@ -277,8 +284,10 @@ const localProviderRootPath = computed(() => {
     return `task/${taskId.value}`;
 });
 
-// leaf 分页：安卓与桌面统一每页 100 张，无虚拟滚动
-const BIG_PAGE_SIZE = 100;
+const pageSize = computed(() => {
+    const n = Number(settingsStore.values.galleryPageSize);
+    return n === 100 || n === 500 || n === 1000 ? n : 100;
+});
 const {
     currentPath,
     currentPage,
@@ -289,6 +298,7 @@ const {
     route,
     router,
     defaultPath: computed(() => `task/${taskId.value}/1`),
+    pageSize,
 });
 
 const handleJumpToPage = async (page: number) => {
@@ -316,7 +326,7 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
         const pathToLoad = currentPath.value || localProviderRootPath.value || `task/${taskId.value}/1`;
         const res = await invoke<{ total?: number; baseOffset?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
             "browse_gallery_provider",
-            { path: pathToLoad }
+            { path: pathToLoad, pageSize: pageSize.value }
         );
         totalImagesCount.value = res?.total ?? 0;
         const imgs: ImageInfo[] = (res?.entries ?? [])
@@ -333,7 +343,7 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
         const minOrder = orders.length > 0 ? Math.min(...orders) : 0;
         const base = minOrder === 1 ? 1 : 0; // 兼容 order 1-based/0-based
         const startOrder = currentOffset.value + base;
-        const endOrder = currentOffset.value + BIG_PAGE_SIZE + base;
+        const endOrder = currentOffset.value + pageSize.value + base;
         const failedInPage = failedImages.value.filter((f) => {
             const o = f.order ?? 0;
             return o >= startOrder && o < endOrder;
@@ -351,14 +361,13 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
             thumbnailPath: "",
             favorite: false,
             hash: "",
-            order: f.order,
             isTaskFailed: true,
             taskFailedId: f.id,
             taskFailedError: f.lastError || undefined,
         }));
 
         const merged = [...imgs, ...failedAsImages];
-        merged.sort((a, b) => (a.order ?? a.crawledAt ?? 0) - (b.order ?? b.crawledAt ?? 0));
+        merged.sort((a, b) => (a.crawledAt ?? 0) - (b.crawledAt ?? 0));
         images.value = merged;
 
     } catch (e) {
@@ -370,6 +379,15 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
     }
 };
 
+watch(
+    pageSize,
+    async (_v, prev) => {
+        if (prev === undefined) return;
+        await navigateToPage(1);
+        await loadTaskImages({ showSkeleton: false });
+    },
+);
+
 const syncFailedPlaceholdersIncremental = async () => {
     if (!taskId.value) return;
     try {
@@ -380,7 +398,7 @@ const syncFailedPlaceholdersIncremental = async () => {
         const minOrder = orders.length > 0 ? Math.min(...orders) : 0;
         const base = minOrder === 1 ? 1 : 0;
         const startOrder = currentOffset.value + base;
-        const endOrder = currentOffset.value + BIG_PAGE_SIZE + base;
+        const endOrder = currentOffset.value + pageSize.value + base;
         const failedInPage = failedImages.value.filter((f) => {
             const o = f.order ?? 0;
             return o >= startOrder && o < endOrder;
@@ -556,7 +574,7 @@ const handleHeaderAddToAlbum = () => {
     showAddToAlbumDialog.value = true;
 };
 
-// 切换收藏（仅更新本页 images + 收藏画册缓存/计数；不触碰 Gallery 的 crawlerStore.images）
+// 切换收藏（仅更新本页 images + 收藏画册缓存/计数）
 const toggleFavoriteForImages = async (imgs: ImageInfo[]) => {
     if (imgs.length === 0) return;
     const desiredFavorite = imgs.some((img) => !(img.favorite ?? false));
@@ -795,7 +813,7 @@ const handleImageMenuCommand = async (
                     const imageIds = imagesToProcess.map(img => img.id);
 
                     // 不删除文件，只从任务中移除
-                    await crawlerStore.batchRemoveImages(imageIds);
+                    await invoke("batch_remove_images", { imageIds });
 
                     // 更新本地状态
                     const ids = new Set(imageIds);
@@ -832,9 +850,9 @@ const confirmRemoveImages = async () => {
 
         // 使用批量 API
         if (shouldDeleteFiles) {
-            await crawlerStore.batchDeleteImages(imageIds);
+            await invoke("batch_delete_images", { imageIds });
         } else {
-            await crawlerStore.batchRemoveImages(imageIds);
+            await invoke("batch_remove_images", { imageIds });
         }
 
         // 更新本地状态（因为批量 API 已经在 store 中更新了全局状态，但这里需要更新局部状态）
@@ -1010,8 +1028,7 @@ onActivated(async () => {
 
 onDeactivated(() => {
     stopTimersAndListeners();
-    // 页面失活时清空选择
-    desktopSelectionStore.selectedIds = new Set();
+    taskViewRef.value?.clearSelection?.();
 });
 
 </script>
@@ -1036,6 +1053,14 @@ onDeactivated(() => {
 
     .detail-body-loading {
         padding: 20px;
+    }
+
+    .task-detail-page-size-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
     }
 }
 </style>

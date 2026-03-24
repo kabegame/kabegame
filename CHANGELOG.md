@@ -6,6 +6,7 @@
 
 ## [3.2.3]
 ### Added
+- **Gallery / Album / Task / Surf:** Configurable **images per page** (100, 500, or 1000), saved in app settings; change it from the gallery toolbar, album browse bar (desktop) or header overflow (Android), task/surf tool row above the paginator, or **Settings → App**; switching value reloads the current list from page 1.
 - **Gallery:** More filter options (e.g. by time range, by source plugin, and wallpaper history), with plugin labels shown in your language where applicable.
 - **Gallery / virtual disk:** Sort and browse images by **last time they were set as wallpaper** (ascending or descending); virtual disk includes a matching root folder and reverse-order subfolder where applicable.
 - **Gallery:** Lists using this sort refresh when the current wallpaper changes (including rotation), so order stays consistent without manual reload.

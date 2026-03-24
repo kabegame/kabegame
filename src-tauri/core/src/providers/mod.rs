@@ -21,6 +21,7 @@ pub mod date_group;
 pub mod main_date_scoped;
 pub mod main_root;
 
+pub mod media_type_group;
 pub mod plugin_group;
 pub mod surf_group;
 pub mod task_group;
@@ -45,6 +46,7 @@ pub use date_group::DateRangeRootProvider;
 pub use date_group::VdByDateProvider;
 pub use descriptor::ProviderDescriptor;
 pub use factory::ProviderFactory;
+pub use media_type_group::MediaTypeGroupProvider;
 pub use plugin_group::PluginGroupProvider;
 pub use root::RootProvider;
 pub use surf_group::SurfGroupProvider;

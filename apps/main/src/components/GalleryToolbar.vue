@@ -94,6 +94,45 @@
               </template>
             </el-dropdown>
           </el-dropdown-item>
+          <el-dropdown-item divided class="plugin-submenu-wrap" @click.stop>
+            <el-dropdown
+              trigger="hover"
+              placement="right-start"
+              @command="onDesktopMediaTypeFilterCommand"
+            >
+              <span
+                class="plugin-submenu-trigger"
+                :class="{ 'is-active': isMediaTypeFilterBrowse }"
+              >
+                {{ t("gallery.filterByMediaType") }}
+                <el-icon class="plugin-submenu-chevron">
+                  <ArrowRight />
+                </el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu class="plugin-submenu-menu">
+                  <el-dropdown-item
+                    command="image"
+                    :class="{
+                      'is-active': galleryMediaKindFromRoot(filterPathRoot) === 'image',
+                    }"
+                  >
+                    {{ t("gallery.filterImageOnly") }}
+                    <span class="plugin-count">({{ mediaTypeCounts.imageCount }})</span>
+                  </el-dropdown-item>
+                  <el-dropdown-item
+                    command="video"
+                    :class="{
+                      'is-active': galleryMediaKindFromRoot(filterPathRoot) === 'video',
+                    }"
+                  >
+                    {{ t("gallery.filterVideoOnly") }}
+                    <span class="plugin-count">({{ mediaTypeCounts.videoCount }})</span>
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </el-dropdown-item>
         </el-dropdown-menu>
       </template>
     </el-dropdown>
@@ -115,6 +154,30 @@
           </el-dropdown-item>
           <el-dropdown-item command="desc" :class="{ 'is-active': sortOrder === 'desc' }">
             {{ sortOptionLabelDesc }}
+          </el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
+
+    <el-dropdown trigger="click" @command="onDesktopPageSizeCommand">
+      <el-button class="gallery-browse-btn">
+        <el-icon class="gallery-browse-icon">
+          <Histogram />
+        </el-icon>
+        <span>{{ pageSizeLabel }}</span>
+        <el-icon class="el-icon--right">
+          <ArrowDown />
+        </el-icon>
+      </el-button>
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item
+            v-for="n in pageSizeOptions"
+            :key="n"
+            :command="String(n)"
+            :class="{ 'is-active': pageSize === n }"
+          >
+            {{ n }}
           </el-dropdown-item>
         </el-dropdown-menu>
       </template>
@@ -157,6 +220,17 @@
         @cancel="showPluginFilterPicker = false"
       />
     </van-popup>
+    <van-popup v-model:show="showMediaTypeFilterPicker" position="bottom" round>
+      <van-picker
+        v-model="mediaTypeFilterPickerSelected"
+        :title="t('gallery.filterByMediaType')"
+        :columns="mediaTypeFilterPickerColumns"
+        :confirm-button-text="t('common.confirm')"
+        :cancel-button-text="t('common.cancel')"
+        @confirm="onMediaTypeFilterPickerConfirm"
+        @cancel="showMediaTypeFilterPicker = false"
+      />
+    </van-popup>
     <van-popup v-model:show="showSortPicker" position="bottom" round>
       <van-picker
         v-model="sortPickerSelected"
@@ -168,6 +242,17 @@
         @cancel="showSortPicker = false"
       />
     </van-popup>
+    <van-popup v-model:show="showPageSizePicker" position="bottom" round>
+      <van-picker
+        v-model="pageSizePickerSelected"
+        :title="$t('gallery.pageSize')"
+        :columns="pageSizePickerColumns"
+        :confirm-button-text="t('common.confirm')"
+        :cancel-button-text="t('common.cancel')"
+        @confirm="onPageSizePickerConfirm"
+        @cancel="showPageSizePicker = false"
+      />
+    </van-popup>
   </Teleport>
 </template>
 
@@ -175,14 +260,16 @@
 import { computed, ref, watch, onUnmounted, onMounted } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useRouter } from "vue-router";
-import { ArrowDown, ArrowRight, Filter, Sort } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowRight, Filter, Histogram, Sort } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
+import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
   galleryDateTailFromRoot,
+  galleryMediaKindFromRoot,
   galleryPathWithRootOnly,
   galleryPathWithSortOnly,
   galleryPluginIdFromRoot,
@@ -215,6 +302,8 @@ interface Props {
   providerRootPath?: string;
   /** 当前完整 query.path（如 all/desc/3），切换排序时保留页码 */
   currentProviderPath?: string;
+  /** 每页条数（与设置同步，用于工具栏展示） */
+  pageSize?: number;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -227,6 +316,7 @@ const props = withDefaults(defineProps<Props>(), {
   selectedRange: null,
   providerRootPath: "",
   currentProviderPath: "",
+  pageSize: 100,
 });
 
 const router = useRouter();
@@ -255,6 +345,10 @@ const isPluginFilterBrowse = computed(() => currentPluginId.value != null);
 
 const isTimeFilterBrowse = computed(() => dateTail.value != null);
 
+const isMediaTypeFilterBrowse = computed(
+  () => galleryMediaKindFromRoot(filterPathRoot.value) != null
+);
+
 const isAllFilterBrowse = computed(
   () => filterPathRoot.value === "all"
 );
@@ -265,7 +359,8 @@ const showGalleryFilterFold = computed(() => {
     root === "all" ||
     root === "wallpaper-order" ||
     /^plugin\//i.test(root) ||
-    /^date\//i.test(root)
+    /^date\//i.test(root) ||
+    /^media-type\//i.test(root)
   );
 });
 
@@ -274,7 +369,16 @@ interface PluginGroupRow {
   count: number;
 }
 
+interface GalleryMediaTypeCountsPayload {
+  imageCount: number;
+  videoCount: number;
+}
+
 const pluginGroups = ref<PluginGroupRow[]>([]);
+const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
+  imageCount: 0,
+  videoCount: 0,
+});
 const monthGroups = ref<DateGroupRow[]>([]);
 const dayGroups = ref<DayGroupRow[]>([]);
 
@@ -288,14 +392,21 @@ const timeMenuRoots = computed<TimeMenuNode[]>(() =>
 
 onMounted(async () => {
   try {
-    const [pg, timePayload] = await Promise.all([
+    const [pg, timePayload, mt] = await Promise.all([
       invoke<PluginGroupRow[]>("get_gallery_plugin_groups"),
       invoke<GalleryTimeFilterPayload>("get_gallery_time_filter_data"),
+      invoke<GalleryMediaTypeCountsPayload>("get_gallery_media_type_counts"),
       pluginStore.loadPlugins(),
     ]);
     pluginGroups.value = Array.isArray(pg) ? pg : [];
     monthGroups.value = Array.isArray(timePayload?.months) ? timePayload.months : [];
     dayGroups.value = Array.isArray(timePayload?.days) ? timePayload.days : [];
+    if (mt && typeof mt.imageCount === "number" && typeof mt.videoCount === "number") {
+      mediaTypeCounts.value = {
+        imageCount: mt.imageCount,
+        videoCount: mt.videoCount,
+      };
+    }
   } catch {
     pluginGroups.value = [];
     monthGroups.value = [];
@@ -321,6 +432,13 @@ const filterFoldLabel = computed(() => {
   if (dt) return t("gallery.filterByTimeWithDetail", { detail: dt });
   const pid = currentPluginId.value;
   if (pid) return t("gallery.filterByPluginWithName", { name: pluginStore.pluginLabel(pid) });
+  const mk = galleryMediaKindFromRoot(filterPathRoot.value);
+  if (mk === "image") {
+    return `${t("gallery.filterImageOnlyLabel")} (${mediaTypeCounts.value.imageCount})`;
+  }
+  if (mk === "video") {
+    return `${t("gallery.filterVideoOnlyLabel")} (${mediaTypeCounts.value.videoCount})`;
+  }
   return t("gallery.filterAll");
 });
 
@@ -358,26 +476,48 @@ function onDesktopTimeFilterCommand(seg: string) {
   void router.push({ path: "/gallery", query: { path: next } });
 }
 
+function onDesktopMediaTypeFilterCommand(kind: string) {
+  if (kind !== "image" && kind !== "video") return;
+  const path = props.currentProviderPath?.trim() || "all/1";
+  const next = galleryPathWithRootOnly(path, `media-type/${kind}`);
+  void router.push({ path: "/gallery", query: { path: next } });
+}
+
 function onDesktopSortCommand(cmd: string) {
   if (cmd !== "asc" && cmd !== "desc") return;
   onSortOrderChange(cmd);
+}
+
+const settingsStore = useSettingsStore();
+const pageSizeOptions = [100, 500, 1000] as const;
+const pageSizeLabel = computed(() => String(props.pageSize));
+
+async function onDesktopPageSizeCommand(cmd: string) {
+  const n = Number(cmd);
+  if (n !== 100 && n !== 500 && n !== 1000) return;
+  await settingsStore.save("galleryPageSize", n);
 }
 
 // Android：fold 中过滤 / 排序弹出的 picker
 const showFilterPicker = ref(false);
 const showTimeFilterPicker = ref(false);
 const showPluginFilterPicker = ref(false);
+const showMediaTypeFilterPicker = ref(false);
 const showSortPicker = ref(false);
+const showPageSizePicker = ref(false);
 useModalBack(showFilterPicker);
 useModalBack(showTimeFilterPicker);
 useModalBack(showPluginFilterPicker);
+useModalBack(showMediaTypeFilterPicker);
 useModalBack(showSortPicker);
+useModalBack(showPageSizePicker);
 
 const filterPickerColumns = computed(() => [
   { text: t("gallery.filterAll"), value: "all" },
   { text: t("gallery.filterWallpaperSet"), value: "wallpaper-order" },
   { text: t("gallery.filterByTime"), value: "time" },
   { text: t("gallery.filterByPlugin"), value: "plugin" },
+  { text: t("gallery.filterByMediaType"), value: "media-type" },
 ]);
 const filterPickerSelected = ref<string[]>(["all"]);
 watch(showFilterPicker, (open) => {
@@ -388,6 +528,8 @@ watch(showFilterPicker, (open) => {
       filterPickerSelected.value = ["time"];
     } else if (isPluginFilterBrowse.value) {
       filterPickerSelected.value = ["plugin"];
+    } else if (isMediaTypeFilterBrowse.value) {
+      filterPickerSelected.value = ["media-type"];
     } else {
       filterPickerSelected.value = ["all"];
     }
@@ -404,6 +546,10 @@ function onFilterPickerConfirm() {
   if (v === "plugin") {
     if (!pluginGroups.value.length) return;
     showPluginFilterPicker.value = true;
+    return;
+  }
+  if (v === "media-type") {
+    showMediaTypeFilterPicker.value = true;
     return;
   }
   if (v === "all" || v === "wallpaper-order") {
@@ -483,6 +629,36 @@ function onPluginFilterPickerConfirm() {
   void router.push({ path: "/gallery", query: { path: next } });
 }
 
+const mediaTypeFilterPickerColumns = computed(() => {
+  void locale.value;
+  const { imageCount, videoCount } = mediaTypeCounts.value;
+  return [
+    {
+      text: `${t("gallery.filterImageOnly")} (${imageCount})`,
+      value: "image",
+    },
+    {
+      text: `${t("gallery.filterVideoOnly")} (${videoCount})`,
+      value: "video",
+    },
+  ];
+});
+const mediaTypeFilterPickerSelected = ref<string[]>(["image"]);
+watch(showMediaTypeFilterPicker, (open) => {
+  if (open) {
+    const k = galleryMediaKindFromRoot(filterPathRoot.value);
+    mediaTypeFilterPickerSelected.value = [k === "video" ? "video" : "image"];
+  }
+});
+function onMediaTypeFilterPickerConfirm() {
+  showMediaTypeFilterPicker.value = false;
+  const kind = mediaTypeFilterPickerSelected.value[0];
+  if (kind !== "image" && kind !== "video") return;
+  const path = props.currentProviderPath?.trim() || "all/1";
+  const next = galleryPathWithRootOnly(path, `media-type/${kind}`);
+  void router.push({ path: "/gallery", query: { path: next } });
+}
+
 const sortPickerColumns = computed(() => [
   { text: sortOptionLabelAsc.value, value: "asc" },
   { text: sortOptionLabelDesc.value, value: "desc" },
@@ -495,6 +671,21 @@ function onSortPickerConfirm() {
   showSortPicker.value = false;
   const v = sortPickerSelected.value[0];
   if (v === "asc" || v === "desc") onSortOrderChange(v);
+}
+
+const pageSizePickerColumns = computed(() =>
+  pageSizeOptions.map((n) => ({ text: String(n), value: String(n) })),
+);
+const pageSizePickerSelected = ref<string[]>(["100"]);
+watch(showPageSizePicker, (open) => {
+  if (open) pageSizePickerSelected.value = [String(props.pageSize)];
+});
+async function onPageSizePickerConfirm() {
+  showPageSizePicker.value = false;
+  const v = pageSizePickerSelected.value[0];
+  const n = Number(v);
+  if (n !== 100 && n !== 500 && n !== 1000) return;
+  await settingsStore.save("galleryPageSize", n);
 }
 
 const totalCountText = computed(() => {
@@ -538,12 +729,20 @@ const foldIds = computed(() => {
     ids.push(HeaderFeatureId.GalleryFilter);
   }
   ids.push(HeaderFeatureId.GallerySort);
+  ids.push(HeaderFeatureId.GalleryPageSize);
   return ids;
 });
 
 const headerStore = useHeaderStore();
 watch(
-  [sortOrder, sortOptionLabelAsc, sortOptionLabelDesc, filterFoldLabel, showGalleryFilterFold],
+  [
+    sortOrder,
+    sortOptionLabelAsc,
+    sortOptionLabelDesc,
+    filterFoldLabel,
+    showGalleryFilterFold,
+    () => props.pageSize,
+  ],
   () => {
     if (!IS_ANDROID) return;
     if (showGalleryFilterFold.value) {
@@ -555,6 +754,7 @@ watch(
       HeaderFeatureId.GallerySort,
       sortOrder.value === "desc" ? sortOptionLabelDesc.value : sortOptionLabelAsc.value
     );
+    headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, String(props.pageSize));
   },
   { immediate: true }
 );
@@ -562,6 +762,7 @@ onUnmounted(() => {
   if (!IS_ANDROID) return;
   headerStore.setFoldLabel(HeaderFeatureId.GalleryFilter, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.GallerySort, undefined);
+  headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, undefined);
 });
 
 // 处理action事件
@@ -592,6 +793,10 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
       break;
     case HeaderFeatureId.GallerySort:
       showSortPicker.value = true;
+      break;
+    case HeaderFeatureId.GalleryPageSize:
+      pageSizePickerSelected.value = [String(props.pageSize)];
+      showPageSizePicker.value = true;
       break;
     case HeaderFeatureId.Organize:
       // 整理由 header 的 OrganizeHeaderControl 处理，此处不会触发（Organize 在 show 中）

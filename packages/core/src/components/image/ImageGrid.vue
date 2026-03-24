@@ -10,7 +10,7 @@
         <div v-if="enableVirtualScroll" class="image-grid" :style="gridStyle">
           <ImageItem v-for="item in renderedItems" :key="item.image.id" :image="item.image"
             :image-click-action="settingsStore.values.imageClickAction || 'none'"
-            :window-aspect-ratio="getEffectiveAspectRatioForItem(item.image)" :selected="effectiveSelectedIds.has(item.image.id)"
+            :window-aspect-ratio="getEffectiveAspectRatioForItem(item.image)" :selected="selectedIds.has(item.image.id)"
             :grid-columns="gridColumnsCount" :grid-index="item.index" :is-entering="item.isEntering"
             @click="(e) => handleItemClick(item.image, item.index, e)"
             @dblclick="() => handleItemDblClick(item.image, item.index)"
@@ -22,7 +22,7 @@
         <transition-group v-else name="fade-in-list" tag="div" class="image-grid" :style="gridStyle">
           <ImageItem v-for="(image, index) in images" :key="image.id" :image="image"
             :image-click-action="settingsStore.values.imageClickAction || 'none'"
-            :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="effectiveSelectedIds.has(image.id)"
+            :window-aspect-ratio="getEffectiveAspectRatioForItem(image)" :selected="selectedIds.has(image.id)"
             :grid-columns="gridColumnsCount" :grid-index="index" @click="(e) => handleItemClick(image, index, e)"
             @dblclick="() => handleItemDblClick(image, index)"
             @contextmenu="(e) => handleItemContextMenu(image, index, e)"
@@ -63,14 +63,12 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch, type Ref } from "vue";
-import { storeToRefs } from "pinia";
 import ImageItem from "./ImageItem.vue";
 import type { ImageInfo } from "../../types/image";
 import EmptyState from "../common/EmptyState.vue";
 import ImagePreviewDialog from "../common/ImagePreviewDialog.vue";
 import ScrollButtons from "../common/ScrollButtons.vue";
 import { useSettingsStore } from "../../stores/settings";
-import { useSelectionStore } from "../../stores/selection";
 import { useModalBack } from "../../composables/useModalBack";
 import { useModalStackStore } from "../../stores/modalStack";
 import { useUiStore } from "../../stores/ui";
@@ -157,8 +155,8 @@ const emit = defineEmits<{
 }>();
 
 const settingsStore = useSettingsStore();
-const selectionStore = useSelectionStore();
-const { selectedIds } = storeToRefs(selectionStore);
+/** 本栅格实例内的选择集，不跨页面/路由共享 */
+const selectedIds = ref<Set<string>>(new Set());
 const modalStackStore = useModalStackStore();
 const uiStore = useUiStore();
 
@@ -202,7 +200,7 @@ const imageGridColumns = computed(() => uiStore.imageGridColumns);
 // 只有在不处于加载状态且确实没有图片时才显示空状态，避免加载过程中闪现空占位符
 const showEmptyOverlay = computed(() => !hasImages.value && !isLoading.value);
 
-// keep-alive 激活状态：deactivated 时不应操作共享 selection store
+// keep-alive 激活状态：deactivated 时不应改写本实例选择
 const isComponentActive = ref(true);
 
 // 入场/退场动画跟踪（仅虚拟滚动模式下使用）
@@ -277,12 +275,10 @@ const saveScrollPosition = () => {
   });
 };
 
-// 选择状态：使用全局 selectionStore（storeToRefs 保证 selectedIds 为 Ref）
 const lastSelectedIndex = ref<number>(-1);
-const effectiveSelectedIds = computed<Set<string>>(() => selectedIds.value ?? new Set());
 
-// Android 选择模式：基于 selectedIds 的 computed
-const androidSelectionMode = computed(() => (selectedIds.value ?? new Set()).size > 0);
+// Android 选择模式
+const androidSelectionMode = computed(() => selectedIds.value.size > 0);
 
 // 预览与 context menu
 const previewRef = ref<InstanceType<typeof ImagePreviewDialog> | null>(null);
@@ -292,8 +288,8 @@ const contextMenuPosition = ref({ x: 0, y: 0 });
 
 const contextMenuActionContext = computed<ActionContext<ImageInfo>>(() => ({
   target: contextMenuImage.value,
-  selectedIds: effectiveSelectedIds.value,
-  selectedCount: effectiveSelectedIds.value.size,
+  selectedIds: selectedIds.value,
+  selectedCount: selectedIds.value.size,
   totalCount: (props.images ?? []).length,
 }));
 
@@ -674,7 +670,7 @@ const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEven
 };
 
 const buildContextPayload = (command: ContextCommand, image: ImageInfo): ContextCommandPayload => {
-  const selected = new Set(effectiveSelectedIds.value);
+  const selected = new Set(selectedIds.value);
   switch (command) {
     case "open":
     case "openFolder":

@@ -14,5 +14,6 @@
   "importSource": "ソースをインポート",
   "manageSources": "ソースを管理",
   "gallerySort": "日時で並び替え",
+  "galleryPageSize": "1ページあたり",
   "openCrawlerWebview": "クローラーWebViewウィンドウ"
 }

@@ -13,6 +13,7 @@ pub enum MainGroupKind {
     Album,
     Task,
     Surf,
+    MediaType,
 }
 
 /// Main 日期「大目录」scoped 层级（年 / 月）
@@ -34,6 +35,8 @@ pub enum ProviderDescriptor {
     },
 
     PluginGroup,
+    /// 按种类（图片 / 视频）分组根目录（虚拟盘）
+    MediaTypeGroup,
     DateGroup,
     /// “按时间/范围” 根目录（子目录为动态范围：YYYY-MM-DD~YYYY-MM-DD）
     DateRangeRoot,

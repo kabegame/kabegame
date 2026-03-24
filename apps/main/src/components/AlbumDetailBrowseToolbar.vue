@@ -22,6 +22,20 @@
           >
             {{ t("gallery.filterWallpaperSet") }}
           </el-dropdown-item>
+          <el-dropdown-item
+            command="image-only"
+            :class="{ 'is-active': filterMode === 'image-only' }"
+          >
+            {{ t("gallery.filterImageOnly") }}
+            <span class="album-filter-count">({{ mediaTypeCounts.imageCount }})</span>
+          </el-dropdown-item>
+          <el-dropdown-item
+            command="video-only"
+            :class="{ 'is-active': filterMode === 'video-only' }"
+          >
+            {{ t("gallery.filterVideoOnly") }}
+            <span class="album-filter-count">({{ mediaTypeCounts.videoCount }})</span>
+          </el-dropdown-item>
         </el-dropdown-menu>
       </template>
     </el-dropdown>
@@ -37,7 +51,13 @@
         </el-icon>
       </el-button>
       <template #dropdown>
-        <el-dropdown-menu v-if="filterMode === 'all'">
+        <el-dropdown-menu
+          v-if="
+            filterMode === 'all' ||
+            filterMode === 'image-only' ||
+            filterMode === 'video-only'
+          "
+        >
           <el-dropdown-item
             command="time-asc"
             :class="{ 'is-active': currentSortKey === 'time-asc' }"
@@ -79,7 +99,21 @@
         </el-dropdown-menu>
       </template>
     </el-dropdown>
+
+    <GalleryPageSizeControl
+      :page-size="pageSize"
+      variant="album"
+      android-ui="header"
+    />
   </div>
+
+  <GalleryPageSizeControl
+    v-else
+    ref="pageSizeControlRef"
+    :page-size="pageSize"
+    variant="album"
+    android-ui="header"
+  />
 
   <!-- Android：fold 内点选后弹出 van-picker -->
   <Teleport v-if="IS_ANDROID" to="body">
@@ -112,7 +146,9 @@
 import { computed, ref, watch, onUnmounted } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useRoute, useRouter } from "vue-router";
+import { invoke } from "@tauri-apps/api/core";
 import { ArrowDown, Filter, Sort } from "@element-plus/icons-vue";
+import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
@@ -127,18 +163,65 @@ import {
 const props = defineProps<{
   /** 当前完整 provider path，如 album/xxx/1 */
   currentProviderPath: string;
+  /** 每页条数（与设置同步） */
+  pageSize: number;
 }>();
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const headerStore = useHeaderStore();
 
+interface GalleryMediaTypeCountsPayload {
+  imageCount: number;
+  videoCount: number;
+}
+
 const parsed = computed(() => parseAlbumBrowsePath(props.currentProviderPath.trim()));
 
-const filterMode = computed<AlbumBrowseFilter>(() =>
-  parsed.value?.filter === "wallpaper-order" ? "wallpaper-order" : "all"
+const albumId = computed(() => (parsed.value?.albumId ?? "").trim());
+
+const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
+  imageCount: 0,
+  videoCount: 0,
+});
+
+watch(
+  albumId,
+  async (id) => {
+    if (!id) {
+      mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
+      return;
+    }
+    try {
+      const mt = await invoke<GalleryMediaTypeCountsPayload>("get_album_media_type_counts", {
+        albumId: id,
+      });
+      if (mt && typeof mt.imageCount === "number" && typeof mt.videoCount === "number") {
+        mediaTypeCounts.value = {
+          imageCount: mt.imageCount,
+          videoCount: mt.videoCount,
+        };
+      }
+    } catch {
+      mediaTypeCounts.value = { imageCount: 0, videoCount: 0 };
+    }
+  },
+  { immediate: true }
 );
+
+const filterMode = computed<AlbumBrowseFilter>(() => {
+  const f = parsed.value?.filter;
+  if (
+    f === "wallpaper-order" ||
+    f === "image-only" ||
+    f === "video-only" ||
+    f === "all"
+  ) {
+    return f;
+  }
+  return "all";
+});
 
 const currentSortKey = computed<AlbumBrowseSort>(() => {
   const s = parsed.value?.sort;
@@ -148,9 +231,18 @@ const currentSortKey = computed<AlbumBrowseSort>(() => {
 
 const isWallpaperFilter = computed(() => filterMode.value === "wallpaper-order");
 
-const filterLabel = computed(() =>
-  isWallpaperFilter.value ? t("gallery.filterWallpaperSet") : t("gallery.filterAll")
-);
+const filterLabel = computed(() => {
+  void locale.value;
+  void mediaTypeCounts.value;
+  if (filterMode.value === "wallpaper-order") return t("gallery.filterWallpaperSet");
+  if (filterMode.value === "image-only") {
+    return `${t("gallery.filterImageOnly")} (${mediaTypeCounts.value.imageCount})`;
+  }
+  if (filterMode.value === "video-only") {
+    return `${t("gallery.filterVideoOnly")} (${mediaTypeCounts.value.videoCount})`;
+  }
+  return t("gallery.filterAll");
+});
 
 const sortButtonLabel = computed(() => {
   const k = currentSortKey.value;
@@ -173,7 +265,11 @@ const sortButtonLabel = computed(() => {
 });
 
 const sortPickerTitle = computed(() =>
-  isWallpaperFilter.value ? t("gallery.wallpaperSortTitle") : t("gallery.sort")
+  isWallpaperFilter.value ||
+  ((filterMode.value === "image-only" || filterMode.value === "video-only") &&
+    (currentSortKey.value === "set-asc" || currentSortKey.value === "set-desc"))
+    ? t("gallery.wallpaperSortTitle")
+    : t("gallery.sort")
 );
 
 async function pushPath(nextPath: string) {
@@ -185,8 +281,15 @@ async function pushPath(nextPath: string) {
 
 function onFilterCommand(cmd: string) {
   const path = props.currentProviderPath.trim();
-  if (cmd !== "all" && cmd !== "wallpaper-order") return;
-  void pushPath(albumBrowsePathWithFilterOnly(path, cmd));
+  if (
+    cmd !== "all" &&
+    cmd !== "wallpaper-order" &&
+    cmd !== "image-only" &&
+    cmd !== "video-only"
+  ) {
+    return;
+  }
+  void pushPath(albumBrowsePathWithFilterOnly(path, cmd as AlbumBrowseFilter));
 }
 
 const SORT_CMDS_ALL = new Set<AlbumBrowseSort>([
@@ -200,8 +303,12 @@ const SORT_CMDS_WALLPAPER = new Set<AlbumBrowseSort>(["set-asc", "set-desc"]);
 function onSortCommand(cmd: string) {
   const path = props.currentProviderPath.trim();
   const sort = cmd as AlbumBrowseSort;
-  if (filterMode.value === "all") {
-    if (!SORT_CMDS_ALL.has(sort)) return;
+  if (
+    filterMode.value === "all" ||
+    filterMode.value === "image-only" ||
+    filterMode.value === "video-only"
+  ) {
+    if (!SORT_CMDS_ALL.has(sort) && !SORT_CMDS_WALLPAPER.has(sort)) return;
   } else if (!SORT_CMDS_WALLPAPER.has(sort)) {
     return;
   }
@@ -214,10 +321,17 @@ const showSortPicker = ref(false);
 useModalBack(showFilterPicker);
 useModalBack(showSortPicker);
 
-const filterPickerColumns = computed(() => [
-  { text: t("gallery.filterAll"), value: "all" },
-  { text: t("gallery.filterWallpaperSet"), value: "wallpaper-order" },
-]);
+const filterPickerColumns = computed(() => {
+  void locale.value;
+  const ic = mediaTypeCounts.value.imageCount;
+  const vc = mediaTypeCounts.value.videoCount;
+  return [
+    { text: t("gallery.filterAll"), value: "all" },
+    { text: t("gallery.filterWallpaperSet"), value: "wallpaper-order" },
+    { text: `${t("gallery.filterImageOnly")} (${ic})`, value: "image-only" },
+    { text: `${t("gallery.filterVideoOnly")} (${vc})`, value: "video-only" },
+  ];
+});
 const filterPickerSelected = ref<string[]>(["all"]);
 watch(showFilterPicker, (open) => {
   if (open) {
@@ -228,14 +342,31 @@ watch(showFilterPicker, (open) => {
 function onFilterPickerConfirm() {
   showFilterPicker.value = false;
   const v = filterPickerSelected.value[0];
-  if (v === "all" || v === "wallpaper-order") {
-    void pushPath(albumBrowsePathWithFilterOnly(props.currentProviderPath.trim(), v));
+  if (
+    v === "all" ||
+    v === "wallpaper-order" ||
+    v === "image-only" ||
+    v === "video-only"
+  ) {
+    void pushPath(
+      albumBrowsePathWithFilterOnly(props.currentProviderPath.trim(), v as AlbumBrowseFilter)
+    );
   }
 }
 
 const sortPickerColumns = computed(() => {
   if (filterMode.value === "wallpaper-order") {
     return [
+      { text: t("gallery.bySetTimeAsc"), value: "set-asc" },
+      { text: t("gallery.bySetTimeDesc"), value: "set-desc" },
+    ];
+  }
+  if (filterMode.value === "image-only" || filterMode.value === "video-only") {
+    return [
+      { text: t("gallery.byTimeAsc"), value: "time-asc" },
+      { text: t("gallery.byTimeDesc"), value: "time-desc" },
+      { text: t("gallery.byAlbumJoinAsc"), value: "join-asc" },
+      { text: t("gallery.byAlbumJoinDesc"), value: "join-desc" },
       { text: t("gallery.bySetTimeAsc"), value: "set-asc" },
       { text: t("gallery.bySetTimeDesc"), value: "set-desc" },
     ];
@@ -265,14 +396,20 @@ function openSortPicker() {
   showSortPicker.value = true;
 }
 
-defineExpose({ openFilterPicker, openSortPicker });
+const pageSizeControlRef = ref<{ openPicker: () => void } | null>(null);
+function openPageSizePicker() {
+  pageSizeControlRef.value?.openPicker();
+}
+
+defineExpose({ openFilterPicker, openSortPicker, openPageSizePicker });
 
 watch(
-  [filterLabel, sortButtonLabel],
+  [filterLabel, sortButtonLabel, () => props.pageSize],
   () => {
     if (!IS_ANDROID) return;
     headerStore.setFoldLabel(HeaderFeatureId.AlbumBrowseFilter, filterLabel.value);
     headerStore.setFoldLabel(HeaderFeatureId.AlbumBrowseSort, sortButtonLabel.value);
+    headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, String(props.pageSize));
   },
   { immediate: true }
 );
@@ -281,6 +418,7 @@ onUnmounted(() => {
   if (!IS_ANDROID) return;
   headerStore.setFoldLabel(HeaderFeatureId.AlbumBrowseFilter, undefined);
   headerStore.setFoldLabel(HeaderFeatureId.AlbumBrowseSort, undefined);
+  headerStore.setFoldLabel(HeaderFeatureId.GalleryPageSize, undefined);
 });
 </script>
 
@@ -298,5 +436,11 @@ onUnmounted(() => {
     margin-right: 6px;
     font-size: 14px;
   }
+}
+
+.album-filter-count {
+  margin-left: 4px;
+  opacity: 0.75;
+  font-size: 12px;
 }
 </style>

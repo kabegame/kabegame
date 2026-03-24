@@ -16,6 +16,8 @@
   "imageAspectRatioDesc": "ギャラリー/アルバムの画像カードのアスペクト比",
   "galleryColumns": "ギャラリー列数",
   "galleryColumnsDesc": "動的列はショートカットで調整可能；固定列はショートカット無効",
+  "galleryPageSize": "1ページあたりの表示数",
+  "galleryPageSizeDesc": "ギャラリー一覧で1ページに読み込む画像数（100、500、1000）",
   "imageObjectPosition": "画像の配置",
   "imageObjectPositionDesc": "画像がはみ出す場合：中央、上、下（デスクトップのみ）",
   "objectPositionCenter": "中央",

@@ -13,6 +13,7 @@ import {
   Sort,
   Filter,
   Monitor,
+  Histogram,
 } from "@element-plus/icons-vue";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { i18n } from "@kabegame/i18n";
@@ -119,6 +120,11 @@ export function registerHeaderFeatures() {
       label: t("header.gallerySort"),
       icon: Sort,
       comp: GallerySortControl,
+    },
+    {
+      id: HeaderFeatureId.GalleryPageSize,
+      label: t("header.galleryPageSize"),
+      icon: Histogram,
     },
     {
       id: HeaderFeatureId.AlbumBrowseFilter,

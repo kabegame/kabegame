@@ -31,12 +31,17 @@
           @quick-settings="openQuickSettings" @back="goBack" @start-rename="handleStartRename"
           @confirm-rename="handleRenameConfirm" @cancel-rename="handleRenameCancel"
           @open-browse-filter="albumBrowseToolbarRef?.openFilterPicker()"
-          @open-browse-sort="albumBrowseToolbarRef?.openSortPicker()" />
+          @open-browse-sort="albumBrowseToolbarRef?.openSortPicker()"
+          @open-browse-page-size="albumBrowseToolbarRef?.openPageSizePicker()" />
 
-        <AlbumDetailBrowseToolbar ref="albumBrowseToolbarRef" :current-provider-path="currentPath" />
+        <AlbumDetailBrowseToolbar
+          ref="albumBrowseToolbarRef"
+          :current-provider-path="currentPath"
+          :page-size="pageSize"
+        />
 
         <GalleryBigPaginator :total-count="totalImagesCount" :current-offset="currentOffset"
-          :big-page-size="BIG_PAGE_SIZE" :is-sticky="true" @jump-to-page="handleJumpToPage" />
+          :big-page-size="pageSize" :is-sticky="true" @jump-to-page="handleJumpToPage" />
       </template>
     </ImageGrid>
 
@@ -63,9 +68,7 @@ import { createImageActions } from "@/actions/imageActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 import { useAlbumStore } from "@/stores/albums";
-import { useCrawlerStore } from "@/stores/crawler";
-import type { ImageInfo } from "@/stores/crawler";
-import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useUiStore } from "@kabegame/core/stores/ui";
@@ -75,7 +78,6 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import { IS_LIGHT_MODE, IS_ANDROID } from "@kabegame/core/env";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
-import { useSelectionStore } from "@kabegame/core/stores/selection";
 import type { Component } from "vue";
 
 // 选择操作项类型（用于本页选择栏）
@@ -110,14 +112,12 @@ const { t } = useI18n();
 const router = useRouter();
 const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
-const crawlerStore = useCrawlerStore();
 const settingsStore = useSettingsStore();
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
 const { set: setWallpaperRotationAlbumId } = useSettingKeyState("wallpaperRotationAlbumId");
 const uiStore = useUiStore();
 const { load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
 const { imageGridColumns } = storeToRefs(uiStore);
-const desktopSelectionStore = useSelectionStore();
 const isAlbumDetailActive = ref(true);
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
@@ -164,7 +164,11 @@ const images = ref<ImageInfo[]>([]);
 let leafAllImages: ImageInfo[] = [];
 const totalImagesCount = ref<number>(0);
 const albumViewRef = ref<any>(null);
-const albumBrowseToolbarRef = ref<{ openFilterPicker: () => void; openSortPicker: () => void } | null>(null);
+const albumBrowseToolbarRef = ref<{
+  openFilterPicker: () => void;
+  openSortPicker: () => void;
+  openPageSizePicker: () => void;
+} | null>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
 
 /** 画册详情 browse path 三元状态（不持久化），与 query.path 双向同步 */
@@ -179,8 +183,10 @@ const localProviderRootPath = computed(() => {
   return `album/${albumId.value}`;
 });
 
-// leaf 分页：安卓与桌面统一每页 100 张，无虚拟滚动
-const BIG_PAGE_SIZE = 100;
+const pageSize = computed(() => {
+  const n = Number(settingsStore.values.galleryPageSize);
+  return n === 100 || n === 500 || n === 1000 ? n : 100;
+});
 
 const albumDetailDefaultPath = computed(() => {
   if (!albumId.value) return "album//1";
@@ -202,6 +208,7 @@ const {
   route,
   router,
   defaultPath: albumDetailDefaultPath,
+  pageSize,
 });
 
 const isAlbumWallpaperFilterEmpty = computed(() =>
@@ -324,7 +331,7 @@ const favoriteAlbumDirty = ref(false);
 const showRemoveDialog = ref(false);
 const removeDeleteFiles = ref(false);
 const removeDialogMessage = ref("");
-const pendingRemoveImages = ref<CoreImageInfo[]>([]);
+const pendingRemoveImages = ref<ImageInfo[]>([]);
 const showAddToAlbumDialog = ref(false);
 const addToAlbumImageIds = ref<string[]>([]);
 
@@ -385,7 +392,7 @@ const loadAlbum = async (opts?: { reset?: boolean }) => {
     }
     const res = await invoke<{ total?: number; baseOffset?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
       "browse_gallery_provider",
-      { path: pathToLoad }
+      { path: pathToLoad, pageSize: pageSize.value }
     );
     totalImagesCount.value = res?.total ?? 0;
     const list: ImageInfo[] = (res?.entries ?? [])
@@ -398,6 +405,14 @@ const loadAlbum = async (opts?: { reset?: boolean }) => {
   }
 };
 
+watch(
+  pageSize,
+  async (_v, prev) => {
+    if (prev === undefined) return;
+    await navigateToPage(1);
+    await loadAlbum();
+  },
+);
 
 const handleAddedToAlbum = async () => {
   await albumStore.loadAlbums();
@@ -442,7 +457,7 @@ const confirmRemoveImages = async () => {
     if (shouldDeleteFiles) {
       // 删除图片：deleteImage 会从所有画册中移除并删除文件
       for (const img of imagesToRemove) {
-        await crawlerStore.deleteImage(img.id);
+        await invoke("delete_image", { imageId: img.id });
       }
       // 注意：deleteImage 已经会从所有画册中移除图片，不需要再调用 removeImagesFromAlbum
     } else {
@@ -890,8 +905,7 @@ onActivated(async () => {
 
 onDeactivated(() => {
   isAlbumDetailActive.value = false;
-  // 页面失活时清空选择
-  desktopSelectionStore.selectedIds = new Set();
+  clearSelection();
 });
 
 // 开始重命名

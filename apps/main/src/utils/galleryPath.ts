@@ -59,6 +59,32 @@ function tryParseDateGalleryPath(segs: string[]): ParsedGalleryPath | null {
   return { root, sort: "asc", page };
 }
 
+/**
+ * 解析 `media-type/image|video/[/desc/]<page>`，与 date 路径同理保留两段 root。
+ */
+function tryParseMediaTypeGalleryPath(segs: string[]): ParsedGalleryPath | null {
+  if (segs.length < 2 || segs[0]!.toLowerCase() !== "media-type") {
+    return null;
+  }
+  const kind = segs[1]!.trim().toLowerCase();
+  if (kind !== "image" && kind !== "video") {
+    return null;
+  }
+  const root = `media-type/${kind}`;
+  const tail = segs.slice(2);
+  if (tail.length === 0) {
+    return { root, sort: "asc", page: DEFAULT_PAGE };
+  }
+  if (tail[0] === "desc") {
+    const p = parseInt(tail[1] ?? "", 10);
+    const page = Number.isNaN(p) || p < 1 ? DEFAULT_PAGE : p;
+    return { root, sort: "desc", page };
+  }
+  const p = parseInt(tail[0] ?? "", 10);
+  const page = Number.isNaN(p) || p < 1 ? DEFAULT_PAGE : p;
+  return { root, sort: "asc", page };
+}
+
 export function buildGalleryPath(
   root: string,
   sort: GalleryStoredSort,
@@ -86,6 +112,11 @@ export function parseGalleryPath(path: string): ParsedGalleryPath {
   const dateParsed = tryParseDateGalleryPath(segs);
   if (dateParsed) {
     return dateParsed;
+  }
+
+  const mediaParsed = tryParseMediaTypeGalleryPath(segs);
+  if (mediaParsed) {
+    return mediaParsed;
   }
 
   const last = segs[segs.length - 1]!;
@@ -137,7 +168,8 @@ export function isGallerySimpleFilterRoot(root: string): boolean {
     root === "all" ||
     root === "wallpaper-order" ||
     /^plugin\//i.test(root) ||
-    /^date\//i.test(root)
+    /^date\//i.test(root) ||
+    /^media-type\//i.test(root)
   );
 }
 
@@ -155,6 +187,15 @@ export function galleryDateTailFromRoot(root: string): string | null {
   if (!/^date\//i.test(r)) return null;
   const tail = r.slice("date/".length).trim();
   return tail || null;
+}
+
+/** 从 root 解析 `media-type/image|video`；非该根返回 null */
+export function galleryMediaKindFromRoot(root: string): "image" | "video" | null {
+  const r = (root || "").trim();
+  if (!/^media-type\//i.test(r)) return null;
+  const tail = r.slice("media-type/".length).trim().toLowerCase();
+  if (tail === "image" || tail === "video") return tail;
+  return null;
 }
 
 export const DEFAULT_GALLERY_PATH = buildGalleryPath(

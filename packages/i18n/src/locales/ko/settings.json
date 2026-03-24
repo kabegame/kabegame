@@ -16,6 +16,8 @@
   "imageAspectRatioDesc": "갤러리/앨범의 이미지 카드 비율",
   "galleryColumns": "갤러리 열 수",
   "galleryColumnsDesc": "동적 열은 단축키 조정 지원; 고정 열은 단축키 비활성화",
+  "galleryPageSize": "페이지당 표시 수",
+  "galleryPageSizeDesc": "갤러리 목록에서 한 페이지에 불러올 이미지 수(100, 500 또는 1000)",
   "imageObjectPosition": "이미지 정렬",
   "imageObjectPositionDesc": "이미지가 넘칠 때: 중앙, 상단 또는 하단 (데스크톱만)",
   "objectPositionCenter": "중앙",

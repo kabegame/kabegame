@@ -19,7 +19,7 @@ import {
     Delete,
     More,
 } from "@element-plus/icons-vue";
-import type { ImageInfo } from "@/stores/crawler";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import ContextMenu, { type MenuItem } from "@kabegame/core/components/ContextMenu.vue";
 import { IS_WINDOWS } from "@kabegame/core/env";
 

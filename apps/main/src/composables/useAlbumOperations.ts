@@ -1,7 +1,7 @@
 import { ref, computed } from "vue";
 import { ElMessage } from "element-plus";
 import { useAlbumStore } from "@/stores/albums";
-import type { ImageInfo } from "@/stores/crawler";
+import type { ImageInfo } from "@kabegame/core/types/image";
 
 /**
  * 画册操作 composable

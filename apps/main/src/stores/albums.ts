@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { useCrawlerStore, type ImageInfo } from "./crawler";
+import type { ImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
@@ -16,7 +16,6 @@ export interface Album {
 
 export const useAlbumStore = defineStore("albums", () => {
   const settingsStore = useSettingsStore();
-  const crawlerStore = useCrawlerStore();
   const FAVORITE_ALBUM_ID = computed(() => settingsStore.favoriteAlbumId);
 
   const albums = ref<Album[]>([]);
@@ -192,18 +191,6 @@ export const useAlbumStore = defineStore("albums", () => {
       // 更新计数（使用后端返回的实际数量）
       albumCounts.value[albumId] = result.currentCount;
 
-      // 如果是收藏画册，通知画廊等页面更新收藏状态
-      if (albumId === FAVORITE_ALBUM_ID.value) {
-        // 只更新实际添加的图片到 crawlerStore（不再使用全局事件）
-        const addedImageIds = imageIds.slice(0, result.added);
-        if (addedImageIds.length > 0) {
-          crawlerStore.images = crawlerStore.images.map((img) =>
-            addedImageIds.includes(img.id)
-              ? ({ ...img, favorite: true } as ImageInfo)
-              : img
-          );
-        }
-      }
     } catch (error: any) {
       throw error;
     }
@@ -238,14 +225,6 @@ export const useAlbumStore = defineStore("albums", () => {
     const prev = albumCounts.value[albumId] || 0;
     albumCounts.value[albumId] = Math.max(0, prev - removed);
 
-    // 如果是收藏画册，通知画廊等页面更新收藏状态
-    if (albumId === FAVORITE_ALBUM_ID.value) {
-      crawlerStore.images = crawlerStore.images.map((img) =>
-        imageIds.includes(img.id)
-          ? ({ ...img, favorite: false } as ImageInfo)
-          : img
-      );
-    }
     return removed;
   };
 

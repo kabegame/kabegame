@@ -16,6 +16,8 @@
   "imageAspectRatioDesc": "影響畫廊/畫冊中圖片卡片的展示寬高比",
   "galleryColumns": "畫廊列數",
   "galleryColumnsDesc": "動態列數支援快捷鍵調整；固定列數時快捷鍵不生效",
+  "galleryPageSize": "每頁顯示數量",
+  "galleryPageSizeDesc": "畫廊清單每頁載入的圖片數量（100、500 或 1000）",
   "imageObjectPosition": "圖片對齊方式",
   "imageObjectPositionDesc": "圖片溢位時顯示為置中、靠上或靠下（僅桌面端）",
   "objectPositionCenter": "置中",

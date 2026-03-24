@@ -237,6 +237,14 @@ impl ImageQuery {
         Self::new().with_where("images.surf_record_id = ?", vec![surf_record_id])
     }
 
+    /// 查询组件：按媒体类型过滤（`media_type` 为 `image` 或 `video`）
+    pub fn media_type_filter(media_type: &str) -> Self {
+        Self::new().with_where(
+            "COALESCE(images.type, 'image') = ?",
+            vec![media_type.to_string()],
+        )
+    }
+
     /// 查询组件：以画册关联表作为数据源
     pub fn album_source(album_id: String) -> Self {
         Self::new()
@@ -331,6 +339,11 @@ impl ImageQuery {
         Self::surf_record_filter(surf_record_id).merge(&Self::sort_by_crawled_at(false))
     }
 
+    /// 按媒体类型过滤（`image` / `video`），按抓取时间正序
+    pub fn by_media_type(media_type: &str) -> Self {
+        Self::media_type_filter(media_type).merge(&Self::sort_by_crawled_at(true))
+    }
+
     /// 全部图片（按时间正序，用于 CommonProvider「全部」）
     pub fn all_recent() -> Self {
         Self::sort_by_crawled_at(true)
@@ -369,6 +382,14 @@ impl ImageQuery {
 pub struct PluginGroup {
     pub plugin_id: String,
     pub count: usize,
+}
+
+/// 按媒体类型（图片 / 视频）的数量（`images.type` 为 `NULL` 或非 `video` 时计入图片）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GalleryMediaTypeCounts {
+    pub image_count: usize,
+    pub video_count: usize,
 }
 
 /// 日期分组信息（年-月）
@@ -471,6 +492,85 @@ impl Storage {
             groups.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
         }
         Ok(groups)
+    }
+
+    /// 画廊全局：按 `images.type` 统计图片与视频条数
+    pub fn get_gallery_media_type_counts(&self) -> Result<GalleryMediaTypeCounts, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT COALESCE(type, 'image') AS t, COUNT(*) AS cnt
+                 FROM images
+                 GROUP BY 1",
+            )
+            .map_err(|e| format!("Failed to prepare media type counts: {}", e))?;
+
+        let mut image_count = 0usize;
+        let mut video_count = 0usize;
+        let rows = stmt
+            .query_map([], |row| {
+                let t: String = row.get(0)?;
+                let cnt: i64 = row.get(1)?;
+                Ok((t, cnt as usize))
+            })
+            .map_err(|e| format!("Failed to query media type counts: {}", e))?;
+
+        for r in rows {
+            let (t, c) = r.map_err(|e| format!("Failed to read row: {}", e))?;
+            if t == "video" {
+                video_count = c;
+            } else {
+                image_count += c;
+            }
+        }
+        Ok(GalleryMediaTypeCounts {
+            image_count,
+            video_count,
+        })
+    }
+
+    /// 指定画册内：按媒体类型统计条数
+    pub fn get_album_media_type_counts(&self, album_id: &str) -> Result<GalleryMediaTypeCounts, String> {
+        let id = album_id.trim();
+        if id.is_empty() {
+            return Ok(GalleryMediaTypeCounts {
+                image_count: 0,
+                video_count: 0,
+            });
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT COALESCE(images.type, 'image') AS t, COUNT(*) AS cnt
+                 FROM images
+                 INNER JOIN album_images ai ON images.id = ai.image_id
+                 WHERE ai.album_id = ?
+                 GROUP BY 1",
+            )
+            .map_err(|e| format!("Failed to prepare album media type counts: {}", e))?;
+
+        let mut image_count = 0usize;
+        let mut video_count = 0usize;
+        let rows = stmt
+            .query_map([id], |row| {
+                let t: String = row.get(0)?;
+                let cnt: i64 = row.get(1)?;
+                Ok((t, cnt as usize))
+            })
+            .map_err(|e| format!("Failed to query album media type counts: {}", e))?;
+
+        for r in rows {
+            let (t, c) = r.map_err(|e| format!("Failed to read row: {}", e))?;
+            if t == "video" {
+                video_count = c;
+            } else {
+                image_count += c;
+            }
+        }
+        Ok(GalleryMediaTypeCounts {
+            image_count,
+            video_count,
+        })
     }
 
     /// 获取所有日期分组（年-月）及其图片数量（由日粒度聚合派生，见 `gallery_time`）。
