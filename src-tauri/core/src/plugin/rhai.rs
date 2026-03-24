@@ -244,36 +244,33 @@ fn http_get_text_with_retry(
 fn create_blocking_client() -> Result<reqwest::blocking::Client, String> {
     let mut client_builder = reqwest::blocking::Client::builder();
 
-    if let Ok(proxy_url) = std::env::var("HTTP_PROXY")
-        .or_else(|_| std::env::var("http_proxy"))
-        .or_else(|_| std::env::var("HTTPS_PROXY"))
-        .or_else(|_| std::env::var("https_proxy"))
-    {
-        if !proxy_url.trim().is_empty() {
-            match reqwest::Proxy::all(&proxy_url) {
-                Ok(proxy) => {
-                    client_builder = client_builder.proxy(proxy);
-                    eprintln!("网络代理已配置 (blocking): {}", proxy_url);
-                }
-                Err(e) => {
-                    eprintln!("代理配置无效 ({}), 将使用直连 (blocking): {}", proxy_url, e);
-                }
+    let config = crate::crawler::proxy::get_proxy_config();
+
+    if let Some(ref proxy_url) = config.proxy_url {
+        match reqwest::Proxy::all(proxy_url) {
+            Ok(proxy) => {
+                client_builder = client_builder.proxy(proxy);
+                eprintln!("网络代理已配置 (blocking): {}", proxy_url);
+            }
+            Err(e) => {
+                eprintln!(
+                    "代理配置无效 ({}), 将使用直连 (blocking): {}",
+                    proxy_url, e
+                );
             }
         }
     }
 
-    if let Ok(no_proxy) = std::env::var("NO_PROXY").or_else(|_| std::env::var("no_proxy")) {
-        if !no_proxy.trim().is_empty() {
-            let no_proxy_list: Vec<&str> = no_proxy.split(',').map(|s| s.trim()).collect();
-            for domain in no_proxy_list {
-                if !domain.is_empty() {
-                    match reqwest::Proxy::all(&format!("direct://{}", domain)) {
-                        Ok(proxy) => {
-                            client_builder = client_builder.proxy(proxy);
-                        }
-                        Err(e) => {
-                            eprintln!("跳过无效的 NO_PROXY 配置 {}: {}", domain, e);
-                        }
+    if let Some(ref no_proxy) = config.no_proxy {
+        let no_proxy_list: Vec<&str> = no_proxy.split(',').map(|s| s.trim()).collect();
+        for domain in no_proxy_list {
+            if !domain.is_empty() {
+                match reqwest::Proxy::all(&format!("direct://{}", domain)) {
+                    Ok(proxy) => {
+                        client_builder = client_builder.proxy(proxy);
+                    }
+                    Err(e) => {
+                        eprintln!("跳过无效的 NO_PROXY 配置 {}: {}", domain, e);
                     }
                 }
             }

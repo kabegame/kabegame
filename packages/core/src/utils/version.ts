@@ -46,9 +46,8 @@ export const compareVersions = (a: string, b: string): number => {
 
 export const isUpdateAvailable = (
   installedVersion: string | null | undefined,
-  newVersion: string
+  newVersion: string,
 ): boolean => {
   if (!installedVersion) return false;
   return compareVersions(newVersion, installedVersion) > 0;
 };
-

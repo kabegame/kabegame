@@ -124,7 +124,8 @@
                         <el-skeleton-item variant="image"
                           style="width: 48px; height: 48px; border-radius: 8px; flex-shrink: 0;" />
                       </div>
-                      <el-skeleton-item variant="h3" style="width: 92%; height: 15px; margin: 2px 0 0; flex-shrink: 0;" />
+                      <el-skeleton-item variant="h3"
+                        style="width: 92%; height: 15px; margin: 2px 0 0; flex-shrink: 0;" />
                       <div
                         style="flex: 0 0 auto; width: 100%; height: 14px; display: flex; flex-flow: row nowrap; gap: 3px; align-items: center; overflow: hidden;">
                         <el-skeleton-item variant="text" style="width: 28%; height: 12px; margin: 0; flex-shrink: 0;" />
@@ -132,7 +133,8 @@
                         <el-skeleton-item variant="text" style="width: 24%; height: 12px; margin: 0; flex-shrink: 0;" />
                       </div>
                       <div style="flex: 1 1 auto; min-height: 0; width: 100%;" />
-                      <el-skeleton-item variant="button" style="width: 100%; height: 26px; margin: 0; flex-shrink: 0;" />
+                      <el-skeleton-item variant="button"
+                        style="width: 100%; height: 26px; margin: 0; flex-shrink: 0;" />
                     </div>
                   </template>
                 </el-skeleton>
@@ -213,7 +215,8 @@
                       $t('plugins.installedVersion', { version: plugin.installedVersion }) }}</el-tag>
                     <el-tag v-else type="warning" size="small">{{ $t('plugins.notInstalled') }}</el-tag>
                     <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
-                      size="small">{{ $t('plugins.canUpdate') }}</el-tag>
+                      size="small">{{
+                        $t('plugins.canUpdate') }}</el-tag>
                     <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
                   </div>
                   <div class="plugin-info-group" aria-hidden="true">
@@ -222,7 +225,8 @@
                       $t('plugins.installedVersion', { version: plugin.installedVersion }) }}</el-tag>
                     <el-tag v-else type="warning" size="small">{{ $t('plugins.notInstalled') }}</el-tag>
                     <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger"
-                      size="small">{{ $t('plugins.canUpdate') }}</el-tag>
+                      size="small">{{
+                        $t('plugins.canUpdate') }}</el-tag>
                     <el-tag type="info" size="small">{{ formatBytes(plugin.sizeBytes) }}</el-tag>
                   </div>
                 </div>
@@ -230,7 +234,8 @@
               <div v-else class="plugin-info">
                 <el-tag type="info" size="small">v{{ plugin.version }}</el-tag>
                 <el-tag v-if="plugin.installedVersion" type="success" size="small">{{ $t('plugins.installedVersion', {
-                  version: plugin.installedVersion }) }}</el-tag>
+                  version: plugin.installedVersion
+                }) }}</el-tag>
                 <el-tag v-else type="warning" size="small">{{ $t('plugins.notInstalled') }}</el-tag>
                 <el-tag v-if="isUpdateAvailable(plugin.installedVersion, plugin.version)" type="danger" size="small">{{
                   $t('plugins.canUpdate') }}</el-tag>
@@ -246,7 +251,7 @@
                       :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
                     <span class="plugin-store-install-btn__label">{{
                       t('plugins.installingWithPercent', { percent: storeInstallPercentClamped(plugin) })
-                      }}</span>
+                    }}</span>
                   </span>
                   <span v-else>{{ $t('plugins.install') }}</span>
                 </el-button>
@@ -259,7 +264,7 @@
                       :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
                     <span class="plugin-store-install-btn__label">{{
                       t('plugins.updatingWithPercent', { percent: storeInstallPercentClamped(plugin) })
-                      }}</span>
+                    }}</span>
                   </span>
                   <span v-else>{{ $t('plugins.update') }}</span>
                 </el-button>
@@ -275,7 +280,7 @@
                       :style="{ width: `${storeInstallPercentClamped(plugin)}%` }" />
                     <span class="plugin-store-install-btn__label">{{
                       t('plugins.reinstallingWithPercent', { percent: storeInstallPercentClamped(plugin) })
-                      }}</span>
+                    }}</span>
                   </span>
                   <span v-else>{{ $t('plugins.reinstall') }}</span>
                 </el-button>
@@ -538,6 +543,7 @@ const storeInstallPercentClamped = (p: StorePluginResolved) =>
   Math.min(storeInstallPercent(p), 100);
 
 let unlistenStoreDownloadProgress: (() => void) | undefined;
+let unlistenPluginSourcesChanged: (() => void) | undefined;
 
 // 商店插件：按商店源分组缓存（每个 tab 独立显示/刷新）
 const storePluginsBySource = ref<Record<string, StorePluginResolved[]>>({});
@@ -1397,6 +1403,12 @@ onMounted(async () => {
             installProgressByKey.value = { ...installProgressByKey.value, [k]: percent };
           }
         );
+        unlistenPluginSourcesChanged = await listen<{ sourceId?: string; name?: string }>(
+          "plugin-sources-changed",
+          () => {
+            void loadSources();
+          }
+        );
       }
     } catch {
       /* 无事件环境 */
@@ -1443,6 +1455,7 @@ watch(activeTab, async (tab) => {
 
 onUnmounted(() => {
   unlistenStoreDownloadProgress?.();
+  unlistenPluginSourcesChanged?.();
 });
 </script>
 

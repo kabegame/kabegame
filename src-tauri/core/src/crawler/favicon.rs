@@ -10,11 +10,15 @@ pub async fn fetch_favicon(host: &str) -> Option<Vec<u8>> {
         format!("https://logo.clearbit.com/{host}?size=128"),
     ];
 
-    let client = reqwest::Client::builder()
+    let mut client_builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
-        .user_agent("kabegame/favicon-fetcher")
-        .build()
-        .ok()?;
+        .user_agent("kabegame/favicon-fetcher");
+    if let Some(ref proxy_url) = crate::crawler::proxy::get_proxy_config().proxy_url {
+        if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
+            client_builder = client_builder.proxy(proxy);
+        }
+    }
+    let client = client_builder.build().ok()?;
 
     for url in urls {
         let Ok(resp) = client.get(&url).send().await else {

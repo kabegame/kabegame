@@ -39,5 +39,8 @@ window:
 albums:
   favorite: 收藏
 
+plugins:
+  officialGithubReleaseSourceName: 官方 GitHub Releases 源
+
 surf:
   windowTitle: "畅游 - {host}"

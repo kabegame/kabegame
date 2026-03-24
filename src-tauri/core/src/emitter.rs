@@ -5,11 +5,11 @@
 //!
 //! 注意：此模块需要 `ipc-server` feature，因为它依赖于 EventBroadcaster。
 
-use crate::storage::tasks::TaskFailedImage;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::DaemonEvent;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::server::EventBroadcaster;
+use crate::storage::tasks::TaskFailedImage;
 #[cfg(feature = "ipc-server")]
 use crate::storage::Storage;
 use std::sync::OnceLock;
@@ -74,7 +74,9 @@ impl GlobalEmitter {
         state: &str,
         error: Option<&str>,
     ) {
-        self.emit_download_state_with_native(task_id, url, start_time, plugin_id, state, error, false);
+        self.emit_download_state_with_native(
+            task_id, url, start_time, plugin_id, state, error, false,
+        );
     }
 
     pub fn emit_download_state_with_native(
@@ -188,12 +190,7 @@ impl GlobalEmitter {
     }
 
     /// 发送整理完成事件
-    pub fn emit_organize_finished(
-        &self,
-        removed: usize,
-        regenerated: usize,
-        canceled: bool,
-    ) {
+    pub fn emit_organize_finished(&self, removed: usize, regenerated: usize, canceled: bool) {
         let event = std::sync::Arc::new(DaemonEvent::OrganizeFinished {
             removed,
             regenerated,
@@ -435,13 +432,7 @@ impl GlobalEmitter {
     ) {
     }
 
-    pub fn emit_organize_finished(
-        &self,
-        _removed: usize,
-        _regenerated: usize,
-        _canceled: bool,
-    ) {
-    }
+    pub fn emit_organize_finished(&self, _removed: usize, _regenerated: usize, _canceled: bool) {}
 
     pub fn emit_wallpaper_update_image(&self, _image_path: &str) {}
 

@@ -1,6 +1,7 @@
 pub mod archiver;
 pub mod content_io;
 pub mod downloader;
+pub mod proxy;
 pub mod task_log_i18n;
 pub mod favicon;
 pub mod local_import;

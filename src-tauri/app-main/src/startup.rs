@@ -1,8 +1,8 @@
 // 启动步骤函数
 
 use async_trait::async_trait;
-use kabegame_i18n::t;
 use kabegame_core::crawler::TaskScheduler;
+use kabegame_i18n::t;
 // 事件转发到前端（桌面与 Android 均需要，用于 task-status 等）
 use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
@@ -21,7 +21,9 @@ use kabegame_core::crawler::downloader::{
     NativeDownloadEntry, NativeDownloadState,
 };
 #[cfg(not(target_os = "android"))]
-use kabegame_core::crawler::webview::{crawler_window_state, set_webview_handler, CrawlerWebViewHandler};
+use kabegame_core::crawler::webview::{
+    crawler_window_state, set_webview_handler, CrawlerWebViewHandler,
+};
 #[cfg(not(target_os = "android"))]
 use kabegame_core::emitter::GlobalEmitter;
 #[cfg(not(target_os = "android"))]
@@ -276,10 +278,22 @@ pub fn start_local_event_loop(app: AppHandle) {
                 }
                 DaemonEvent::SettingChange { changes } => {
                     let _ = app.emit("setting-change", changes.clone());
-                    // 语言变更时刷新托盘菜单、收藏画册 i18n 名称（与磁盘挂载等实现方式一致，在 setting 回调处处理）
+                    // 语言变更时刷新托盘菜单、收藏画册/官方插件源 i18n 名称（与磁盘挂载等实现方式一致，在 setting 回调处处理）
                     if changes.get("language").is_some() {
                         let raw = t!("albums.favorite");
-                        let i18n_name = if raw == "albums.favorite" { "收藏".to_string() } else { raw };
+                        let i18n_name = if raw == "albums.favorite" {
+                            "收藏".to_string()
+                        } else {
+                            raw
+                        };
+                        let raw_source_name = t!("plugins.officialGithubReleaseSourceName");
+                        let i18n_source_name =
+                            if raw_source_name == "plugins.officialGithubReleaseSourceName" {
+                                kabegame_core::storage::plugin_sources::OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME
+                                    .to_string()
+                            } else {
+                                raw_source_name
+                            };
                         #[cfg(not(target_os = "android"))]
                         if let Err(e) = crate::tray::update_tray_menu(&app) {
                             eprintln!("[托盘] 语言切换后刷新菜单失败: {}", e);
@@ -287,6 +301,12 @@ pub fn start_local_event_loop(app: AppHandle) {
                         let _ = Storage::global().ensure_favorite_album();
                         if let Err(e) = Storage::global().set_favorite_album_name(&i18n_name) {
                             eprintln!("[收藏画册] 语言切换后设置 i18n 名称失败: {}", e);
+                        }
+                        if let Err(e) = Storage::global()
+                            .plugin_sources()
+                            .set_official_source_name(&i18n_source_name)
+                        {
+                            eprintln!("[插件官方源] 语言切换后设置 i18n 名称失败: {}", e);
                         }
                     }
                 }
@@ -319,7 +339,10 @@ pub fn start_local_event_loop(app: AppHandle) {
                         let tn = app.task_notification();
                         if running > 0 {
                             let _ = tn.update_task_notification(running).await;
-                        } else if status == "completed" || status == "failed" || status == "canceled" {
+                        } else if status == "completed"
+                            || status == "failed"
+                            || status == "canceled"
+                        {
                             let _ = tn.clear_task_notification().await;
                         }
                     }
@@ -486,7 +509,10 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
                         return false;
                     }
                     let effective_url = if url.scheme() == "blob" {
-                        url.as_str().strip_prefix("blob:").unwrap_or(url.as_str()).to_string()
+                        url.as_str()
+                            .strip_prefix("blob:")
+                            .unwrap_or(url.as_str())
+                            .to_string()
                     } else {
                         url.as_str().to_string()
                     };

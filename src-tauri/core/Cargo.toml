@@ -70,6 +70,7 @@ dokan = "0.3.1"
 memmap2 = "0.9"
 widestring = "0.4.3"
 winapi = { version = "0.3.9", features = ["ntstatus", "winnt", "winbase"] }
+winreg = "0.52"
 windows-sys = { version = "0.52", features = [
   "Win32_Foundation",
   "Win32_Security",

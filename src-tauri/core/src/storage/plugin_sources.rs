@@ -1,9 +1,12 @@
+use crate::emitter::GlobalEmitter;
 use crate::plugin::PluginSource;
 use rusqlite::{params, Connection, Result as SqliteResult};
 use std::sync::{Arc, Mutex};
 
 /// 内置的 GitHub Releases 插件商店源 ID（不可删除；index_url 不可修改）
 pub const OFFICIAL_PLUGIN_SOURCE_ID: &str = "official_github_release";
+/// 官方源在数据库中的规范默认名称（用于 i18n 名称同步）
+pub const OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME: &str = "官方 GitHub Releases 源";
 
 /// 默认官方 index.json（与首次迁移一致，可由编译期 env 覆盖仓库 owner/name）
 pub fn default_official_index_url() -> String {
@@ -47,19 +50,46 @@ impl PluginSourcesStorage {
             "INSERT INTO plugin_sources (id, name, index_url) VALUES (?, ?, ?)",
             params![
                 OFFICIAL_PLUGIN_SOURCE_ID,
-                "官方 GitHub Releases 源",
+                OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME,
                 default_official_index_url(),
             ],
         )?;
         Ok(())
     }
 
+    /// 仅用于官方源名称 i18n 同步（由 app-main 在语言变更时调用）。
+    /// 更新官方源名称并广播 `plugin-sources-changed` 事件，提醒前端刷新源列表。
+    pub fn set_official_source_name(&self, name: &str) -> SqliteResult<()> {
+        let name_trimmed = name.trim();
+        if name_trimmed.is_empty() {
+            return Ok(());
+        }
+
+        let conn = self.conn.lock().expect("plugin_sources db lock");
+        let updated = conn.execute(
+            "UPDATE plugin_sources SET name = ? WHERE id = ?",
+            params![name_trimmed, OFFICIAL_PLUGIN_SOURCE_ID],
+        )?;
+        if updated > 0 {
+            if let Some(emitter) = GlobalEmitter::try_global() {
+                emitter.emit(
+                    "plugin-sources-changed",
+                    serde_json::json!({
+                        "reason": "official-source-name-i18n-sync",
+                        "sourceId": OFFICIAL_PLUGIN_SOURCE_ID,
+                        "name": name_trimmed,
+                    }),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// 获取所有插件源
     pub fn get_all_sources(&self) -> SqliteResult<Vec<PluginSource>> {
         let conn = self.conn.lock().expect("plugin_sources db lock");
-        let mut stmt = conn.prepare(
-            "SELECT id, name, index_url FROM plugin_sources ORDER BY created_at ASC",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id, name, index_url FROM plugin_sources ORDER BY created_at ASC")?;
 
         let sources = stmt.query_map([], |row| {
             Ok(PluginSource {
@@ -99,7 +129,10 @@ impl PluginSourcesStorage {
         if exists > 0 {
             return Err(rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error::new(2067), // SQLITE_CONSTRAINT_UNIQUE
-                Some(format!("Plugin source with id '{}' already exists", source_id)),
+                Some(format!(
+                    "Plugin source with id '{}' already exists",
+                    source_id
+                )),
             ));
         }
 
@@ -127,7 +160,9 @@ impl PluginSourcesStorage {
                 |row| row.get(0),
             )?;
             if index_url != current_url {
-                return Err(constraint_err("官方 GitHub Releases 源的 index.json 地址不可修改"));
+                return Err(constraint_err(
+                    "官方 GitHub Releases 源的 index.json 地址不可修改",
+                ));
             }
             let rows_affected = conn.execute(
                 "UPDATE plugin_sources SET name = ? WHERE id = ?",
@@ -158,10 +193,7 @@ impl PluginSourcesStorage {
         }
 
         let conn = self.conn.lock().expect("plugin_sources db lock");
-        let rows_affected = conn.execute(
-            "DELETE FROM plugin_sources WHERE id = ?",
-            params![id],
-        )?;
+        let rows_affected = conn.execute("DELETE FROM plugin_sources WHERE id = ?", params![id])?;
 
         if rows_affected == 0 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
@@ -173,8 +205,8 @@ impl PluginSourcesStorage {
     /// 获取插件源缓存
     pub fn get_source_cache(&self, source_id: &str) -> SqliteResult<Option<String>> {
         let conn = self.conn.lock().expect("plugin_sources db lock");
-        let mut stmt = conn
-            .prepare("SELECT json_content FROM plugin_source_cache WHERE source_id = ?")?;
+        let mut stmt =
+            conn.prepare("SELECT json_content FROM plugin_source_cache WHERE source_id = ?")?;
 
         let mut rows = stmt.query_map(params![source_id], |row| row.get(0))?;
         match rows.next() {

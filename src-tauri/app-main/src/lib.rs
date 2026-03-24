@@ -1,8 +1,8 @@
 #[cfg(target_os = "android")]
 mod archiver_provider;
+mod commands;
 #[cfg(target_os = "android")]
 mod compress_provider;
-mod commands;
 #[cfg(target_os = "android")]
 mod content_io_provider;
 #[cfg(not(target_os = "android"))]
@@ -81,8 +81,22 @@ fn init_globals() -> Result<(), String> {
     println!("  ✓ Storage initialized");
     // 收藏画册使用当前 locale 的 i18n 名称（与语言切换时 set_favorite_album_name 一致）
     let raw = kabegame_i18n::t!("albums.favorite");
-    let name = if raw == "albums.favorite" { "收藏" } else { raw.as_str() };
+    let name = if raw == "albums.favorite" {
+        "收藏"
+    } else {
+        raw.as_str()
+    };
     let _ = Storage::global().set_favorite_album_name(name);
+    // 官方插件源使用当前 locale 的 i18n 名称（与语言切换时 set_official_source_name 一致）
+    let raw_source_name = kabegame_i18n::t!("plugins.officialGithubReleaseSourceName");
+    let source_name = if raw_source_name == "plugins.officialGithubReleaseSourceName" {
+        kabegame_core::storage::plugin_sources::OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME
+    } else {
+        raw_source_name.as_str()
+    };
+    let _ = Storage::global()
+        .plugin_sources()
+        .set_official_source_name(source_name);
 
     kabegame_core::ipc::server::EventBroadcaster::init_global(1000)
         .map_err(|e| format!("EventBroadcaster: {}", e))?;
