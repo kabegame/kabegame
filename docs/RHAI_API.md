@@ -153,6 +153,7 @@ to("../other-page");
 **说明：**
 - 如果 URL 是相对路径，会基于当前栈顶的 URL 进行解析
 - 访问成功后，页面会被推入页面栈
+- 若响应使用 **gzip** 压缩（常见 `Content-Encoding: gzip`），底层 HTTP 客户端会自动解压后再写入页面栈；`current_html()` 得到的是解压后的 HTML 文本
 
 ---
 
@@ -191,6 +192,44 @@ for item in array_data {
 - 如果 JSON 响应是数组、字符串、数字等，会被包装在一个 Map 中，键为 "data"
 - 支持嵌套对象和数组
 - 不入页面栈，调用 `back()` 不会“退回”到 fetch_json 的请求
+
+---
+
+### `parse_json(text)`
+
+解析 JSON 字符串并返回 Rhai 值。适合处理页面里内嵌的 JSON（例如 `script[type="application/ld+json"]`）。
+
+**参数：**
+- `text` (string): JSON 文本
+
+**返回值：**
+- `Map`: JSON 对象（如果是对象类型）
+- `Map`: 包装在 Map 中的其他类型（键为 "data"）
+
+**示例：**
+```rhai
+to("https://wallspic.com/tag/cyberpunk_2077");
+let scripts = query("script[type=\"application/ld+json\"]");
+
+for s in scripts {
+    let parsed = parse_json(s);
+
+    // 顶层数组会包装在 data 字段
+    let arr = parsed["data"];
+    if arr != () {
+        for item in arr {
+            let url = item["contentUrl"];
+            if url != () {
+                download_image(url);
+            }
+        }
+    }
+}
+```
+
+**说明：**
+- 转换规则与 `fetch_json()` 一致：对象直接返回 Map，数组/字符串/数字/布尔/空值包装在 `"data"` 键里
+- `parse_json()` 仅做字符串解析，不会发起网络请求，也不会修改页面栈
 
 ---
 
@@ -485,6 +524,35 @@ print(re_is_match("(", url));              // false（非法正则，返回 fals
 
 ---
 
+### `re_replace_all(pattern, replacement, text)`
+
+对 `text` 做**全局**正则替换：将 `pattern` 匹配到的所有子串替换为 `replacement`，返回新字符串（**不修改**传入的 `text` 变量）。
+
+**参数：**
+- `pattern` (string): 正则表达式（Rust [`regex`](https://docs.rs/regex) 语法）
+- `replacement` (string): 替换内容；支持正则替换占位符，例如 `$0`（整段匹配）、`$1`（第一个捕获组）等，规则与 Rust `regex::Regex::replace_all` 一致
+- `text` (string): 待处理的字符串
+
+**返回值：**
+- `String`: 替换后的字符串
+- 若 `pattern` **不是合法正则**，返回**原始的 `text`**（不抛异常，与 `re_is_match` 对非法 pattern 的处理思路一致）
+
+**示例：**
+```rhai
+// 将缩略图 URL 中任意 _宽x高 尺寸段改为目标分辨率（如站点使用 _300x168、_400x225 等均可）
+let thumb = "https://cdn.example.com/img/foo_300x168.jpg";
+let full = re_replace_all("_\\d+x\\d+", "_1920x1080", thumb);
+
+// 使用捕获组：把 "id=123" 换成 "id=456"
+let s = re_replace_all("id=(\\d+)", "id=456", "https://x.com/view?id=123");
+```
+
+**说明：**
+- 与 Rhai 内置字符串方法 `replace` / `trim` 等不同：内置的 `str.replace(...)` 多为**原地修改**且返回 `()`，链式调用容易出错；需要**按模式替换并拿到新字符串**时请优先使用本函数
+- 仅替换**所有**匹配项；若将来需要“只替换第一处”等能力，可再扩展 API
+
+---
+
 ## HTTP 头
 
 ### `set_header(key, value)`
@@ -730,6 +798,7 @@ if types.contains("zip") {
 
 5. **JSON 处理**：
    - `fetch_json()` 返回的 Map 可以直接访问属性
+   - `parse_json()` 可将页面内嵌 JSON 字符串直接转换为 Map/Array（数组在 `"data"` 中）
    - 嵌套对象和数组都被正确转换
 
 ---
@@ -752,5 +821,5 @@ if type_of(result) == "string" {
 
 ---
 
-最后更新：2026年3月13日
+最后更新：2026年3月25日
 

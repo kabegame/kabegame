@@ -4,6 +4,16 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.3.1]
+### Added
+- **Crawler Rhai:** `re_replace_all(pattern, replacement, text)` — global regex replace using Rust `regex` (invalid pattern returns the original string); see `docs/RHAI_API.md` and `docs/CRAWLER_BACKENDS.md`.
+
+### Fixed
+- **Crawler Rhai:** Reqwest enables **gzip** decompression for plugin HTTP fetches so `to()` / `fetch_json()` store decoded HTML/CSS bodies instead of raw compressed bytes (fixes empty `query` / `get_attr` on gzip-only responses).
+
+### Changed
+- **Plugins:** Crawler plugins that rely on gzip-correct `to()` parsing or `re_replace_all` (e.g. wallpapers-craft) require **Kabegame 3.3.1+**.
+
 ## [3.3.0]
 ### Added
 - **Failed images page:** Bulk retry, cancel waiting retries, and delete all for the current plugin filter; header actions refresh and task drawer; per-item download phase labels and cancel while queued; retries run asynchronously with optional abort on capacity wait.

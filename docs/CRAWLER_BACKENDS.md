@@ -170,6 +170,7 @@ await crawl.to(nextUrl, "detail");
 | `resolve_url(relative)` | 基于当前栈顶 URL 解析相对路径为绝对 URL。 |
 | `is_image_url(url)` | 判断 URL 是否为支持的图片扩展名（与 core/image_type 一致）。 |
 | `re_is_match(pattern, text)` | 正则匹配（Rust regex 语法），失败或编译失败返回 false。 |
+| `re_replace_all(pattern, replacement, text)` | 全局正则替换，返回新字符串；`pattern` 非法时返回原文 `text`；`replacement` 支持 `$0`/`$1` 等。 |
 | **HTTP 头** | |
 | `set_header(key, value)` | 为当前任务设置请求头（后续 to/fetch_json/download 等会携带）。 |
 | `del_header(key)` | 删除已设置的请求头。 |
@@ -201,6 +202,7 @@ WebView 运行时（如 `crawler-runtime.js`）应暴露 `window.crawl`，与 Rh
 | `resolve_url(relative)` | `crawl.resolve_url(relative)` | 基于 `currentUrl()` 解析相对 URL（如 `new URL(relative, base).href`）。 |
 | `is_image_url(url)` | `crawl.is_image_url(url)` | 与后端/前端一致：根据 URL 扩展名判断是否图片；可 invoke 后端或前端实现。 |
 | `re_is_match(pattern, text)` | `crawl.re_is_match(pattern, text)` 或脚本内 `new RegExp(pattern).test(text)` | 可选：提供与 Rhai 一致的正则 API，或由脚本自行用 RegExp。 |
+| `re_replace_all(pattern, replacement, text)` | `crawl.re_replace_all(...)` 或脚本内 `text.replace(new RegExp(pattern, "g"), replacement)` | 可选：与 Rhai 语义对齐；注意 JS 与 Rust regex 语法差异。 |
 | `set_header` / `del_header` | `crawl.set_header(key, value)` / `crawl.del_header(key)` | 设置/删除当前任务的 HTTP 头；代理请求时由 Rust 侧按任务合并这些头（见 CRAWLER_WEBVIEW_DESIGN 5.2）。需通过 invoke 写入任务上下文。 |
 | `add_progress(percentage)` | `crawl.add_progress(pct)` | 累加进度并上报；invoke `crawl_add_progress`。 |
 | `download_image(url)` | `crawl.download_image(url, filename)` | 门控由 Rust `crawl_prepare_download` 负责；若返回 useBrowser 则用 `<a download>` 经代理触发，否则 Rust 直接下载。见 CRAWLER_WEBVIEW_DESIGN 6.2。 |

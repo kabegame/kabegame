@@ -483,6 +483,14 @@ pub fn register_crawler_functions(
             .unwrap_or(false)
     });
 
+    // re_replace_all(pattern, replacement, text)：全局正则替换（Rust regex；replacement 可用 $0/$1 等）
+    // pattern 无效时返回原文本
+    engine.register_fn("re_replace_all", |pattern: &str, replacement: &str, text: &str| -> String {
+        regex::Regex::new(pattern)
+            .map(|re| re.replace_all(text, replacement).into_owned())
+            .unwrap_or_else(|_| text.to_string())
+    });
+
     engine.register_fn("set_header", {
         let headers_holder = Arc::clone(&http_headers);
         let dq_holder = Arc::clone(&download_queue);
@@ -724,6 +732,59 @@ pub fn register_crawler_functions(
             }
         }
     });
+
+    // parse_json(text) - 解析 JSON 字符串并转换为 Rhai 值
+    engine.register_fn(
+        "parse_json",
+        move |text: &str| -> Result<Map, Box<rhai::EvalAltResult>> {
+            let json_value = serde_json::from_str::<serde_json::Value>(text)
+                .map_err(|e| format!("Failed to parse JSON: {e}"))?;
+
+            match &json_value {
+                serde_json::Value::Object(_) => {
+                    let mut map = Map::new();
+                    convert_json_to_rhai_map(&json_value, &mut map);
+                    Ok(map)
+                }
+                serde_json::Value::Array(_) => {
+                    let mut array = rhai::Array::new();
+                    convert_json_to_rhai_array(&json_value, &mut array);
+                    let mut map = Map::new();
+                    map.insert("data".into(), Dynamic::from(array));
+                    Ok(map)
+                }
+                serde_json::Value::String(s) => {
+                    let mut map = Map::new();
+                    map.insert("data".into(), Dynamic::from(s.clone()));
+                    Ok(map)
+                }
+                serde_json::Value::Number(n) => {
+                    let mut map = Map::new();
+                    let value = if n.is_i64() {
+                        Dynamic::from(n.as_i64().unwrap_or(0))
+                    } else if n.is_u64() {
+                        Dynamic::from(n.as_u64().unwrap_or(0) as i64)
+                    } else if n.is_f64() {
+                        Dynamic::from(n.as_f64().unwrap_or(0.0))
+                    } else {
+                        Dynamic::UNIT
+                    };
+                    map.insert("data".into(), value);
+                    Ok(map)
+                }
+                serde_json::Value::Bool(b) => {
+                    let mut map = Map::new();
+                    map.insert("data".into(), Dynamic::from(*b));
+                    Ok(map)
+                }
+                serde_json::Value::Null => {
+                    let mut map = Map::new();
+                    map.insert("data".into(), Dynamic::UNIT);
+                    Ok(map)
+                }
+            }
+        },
+    );
 
     // back() - 返回上一页，出栈
     engine.register_fn("back", {
