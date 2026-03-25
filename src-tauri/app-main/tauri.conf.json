@@ -22,18 +22,9 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis"
+      "deb"
     ],
     "icon": ["../icons/32x32.png", "../icons/128x128.png", "../icons/128x128@2x.png", "../icons/icon.icns", "../icons/icon.ico"],
-    "fileAssociations": [
-      {
-        "ext": ["kgpg"],
-        "name": "Kabegame Plugin Package",
-        "description": "Kabegame Plugin Package",
-        "role": "Viewer",
-        "mimeType": "application/x-kabegame-kgpg"
-      }
-    ],
     "resources": [
       "resources/**/*"
     ],
@@ -52,8 +43,9 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libayatana-appindicator3-1"],
+        "depends": ["fuse3", "libayatana-appindicator3-1"],
         "files": {
+          "/usr/bin/kabegame-cli": "../../target/release/kabegame-cli",
           "/usr/share/mime/packages/kabegame-kgpg.xml": "./deb/kabegame-kgpg.xml",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-kabegame-kgpg.png": "../icons/icon.png"
         },

@@ -86,11 +86,11 @@
 
 | 操作系统 | Standard 模式 | Light 模式 |
 |---------|--------------|-----------|
-| Windows | setup.exe | setup.exe |
-| macOS | dmg 映像 | dmg 映像 |
-| Linux | deb 包 | deb 包 |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-standard_3.3.0_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-light_3.3.0_x64-setup.exe) |
+| macOS | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-standard_3.3.0_aarch64.dmg) | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-light_3.3.0_aarch64.dmg) |
+| Linux | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-standard_3.3.0_amd64.deb) | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-light_3.3.0_amd64.deb) |
 
-- **安卓预览版**（仅支持 Light 模式）：同一发布页中的 `Kabegame_*_android-preview.apk`
+- **安卓预览版**：[apk](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame_3.3.0_android-preview.apk)（同一发布页）。
 
 ## 安装方法
 

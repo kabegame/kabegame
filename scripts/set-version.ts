@@ -7,6 +7,8 @@
  * 用法:
  *   1. 设置新版本并同步: bun run set-version 3.0.1
  *   2. 从 Cargo.toml 同步: bun run set-version --sync
+ *
+ * 会同步 README.md / README.zh-CN.md / README.ja.md / README.ko.md 中 GitHub Release 直链里的版本号。
  */
 
 import fs from "fs";
@@ -92,6 +94,70 @@ function updateAllTauriConfs(newVersion: string): void {
   });
 }
 
+const README_RELEASE_FILES = [
+  "README.md",
+  "README.zh-CN.md",
+  "README.ja.md",
+  "README.ko.md",
+] as const;
+
+/** 仅处理含 kabegame 主仓库 release 下载 URL 的行，避免误改其它 semver */
+function patchKabegameReleaseDownloadLine(
+  line: string,
+  oldVersion: string,
+  newVersion: string,
+): string {
+  if (!line.includes("github.com/kabegame/kabegame/releases/download")) {
+    return line;
+  }
+  let s = line.replaceAll(`v${oldVersion}/`, `v${newVersion}/`);
+  s = s.replaceAll(`_${oldVersion}_`, `_${newVersion}_`);
+  s = s.replaceAll(
+    `Kabegame_${oldVersion}_android`,
+    `Kabegame_${newVersion}_android`,
+  );
+  return s;
+}
+
+function updateReadmeKabegameReleaseLinks(
+  oldVersion: string,
+  newVersion: string,
+): void {
+  if (oldVersion === newVersion) {
+    return;
+  }
+  for (const rel of README_RELEASE_FILES) {
+    const fullPath = path.join(ROOT, rel);
+    if (!fs.existsSync(fullPath)) {
+      continue;
+    }
+    const content = fs.readFileSync(fullPath, "utf8");
+    const next = content
+      .split("\n")
+      .map((line) =>
+        patchKabegameReleaseDownloadLine(line, oldVersion, newVersion),
+      )
+      .join("\n");
+    if (next !== content) {
+      fs.writeFileSync(fullPath, next);
+      console.log(`✓ Updated ${rel} release download links to v${newVersion}`);
+    }
+  }
+}
+
+/** 从 README.md 解析当前发布链接中的版本（与 Cargo 比对用于 sync） */
+function readReadmeKabegameReleaseVersion(): string | null {
+  const readmePath = path.join(ROOT, "README.md");
+  if (!fs.existsSync(readmePath)) {
+    return null;
+  }
+  const content = fs.readFileSync(readmePath, "utf8");
+  const m = content.match(
+    /github\.com\/kabegame\/kabegame\/releases\/download\/v(\d+\.\d+\.\d+)\//,
+  );
+  return m?.[1] ?? null;
+}
+
 // 验证版本号格式
 function validateVersion(version: string): boolean {
   return /^\d+\.\d+\.\d+/.test(version);
@@ -107,9 +173,11 @@ function setVersion(newVersion: string): void {
   }
 
   try {
+    const previousVersion = readCargoTomlVersion();
     updateCargoTomlVersion(newVersion);
     updateCorePackageJson(newVersion);
     updateAllTauriConfs(newVersion);
+    updateReadmeKabegameReleaseLinks(previousVersion, newVersion);
     console.log(`\n🎉 Version successfully set to ${newVersion}!`);
   } catch (error) {
     console.error("✗ Error:", (error as Error).message);
@@ -127,6 +195,10 @@ function syncVersion(): void {
 
     updateCorePackageJson(version);
     updateAllTauriConfs(version);
+    const readmeReleaseVer = readReadmeKabegameReleaseVersion();
+    if (readmeReleaseVer) {
+      updateReadmeKabegameReleaseLinks(readmeReleaseVer, version);
+    }
     console.log(`\n🎉 Version successfully synced to ${version}!`);
   } catch (error) {
     console.error("✗ Error:", (error as Error).message);
