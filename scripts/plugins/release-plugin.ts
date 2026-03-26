@@ -117,6 +117,7 @@ export class ReleasePlugin extends BasePlugin {
 
     bs.hooks.afterBuild.tapPromise(this.name, async (comp: string) => {
       if (comp !== Component.MAIN) return;
+      if (bs.context.skip?.isCargo) return;
 
       const mode = bs.context.mode!.mode;
       const version = readCargoTomlVersion();

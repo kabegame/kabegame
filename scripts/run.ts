@@ -30,6 +30,8 @@ interface BuildOptions {
   skip?: string;
   args?: string[];
   release?: boolean;
+  /** false 表示传入 --no-nx，不经 nx 构建 main 前端 */
+  nx?: boolean;
 }
 
 /**
@@ -99,6 +101,10 @@ program
     Mode.STANDARD,
   )
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
+  .option(
+    "--no-nx",
+    "构建 main 前端时不经 nx（不读写 .nx 缓存，适合 Docker）",
+  )
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {
     options.args = args || [];
@@ -116,7 +122,7 @@ program
   )
   .option(
     "--skip <skip>",
-    "跳过流程：vue/cargo（只能一个值；main 仅支持跳过 vue）",
+    "跳过流程：vue | cargo（只能一个值）。main：--skip vue 不跑前端构建；--skip cargo 不跑 tauri/cargo（流水线可只验前端）",
     "",
   )
   .option(
@@ -129,6 +135,10 @@ program
     "--release",
     "构建完成后复制安装包到 release/ 目录，只有构建main获取全量的情况下才可用",
     false,
+  )
+  .option(
+    "--no-nx",
+    "构建 main 前端时不经 nx（不读写 .nx 缓存，适合 Docker）",
   )
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {

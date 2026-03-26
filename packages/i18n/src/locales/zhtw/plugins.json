@@ -60,6 +60,7 @@
   "copyFailed": "複製失敗",
   "loadPluginFailed": "載入源失敗",
   "startCollect": "開始收集",
+  "pluginVarSelectAll": "全選",
   "runConfig": "執行配置",
   "selectConfigOptional": "選擇配置（可選）",
   "addConfig": "新增配置",

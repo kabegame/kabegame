@@ -180,6 +180,7 @@
   "quickDrawerTitleGallery": "갤러리 설정",
   "quickDrawerTitleAlbumDetail": "앨범 설정",
   "quickDrawerTitleAlbums": "앨범 목록 설정",
+  "quickDrawerTitleFailedImages": "실패 이미지 · 다운로드 설정",
   "quickDrawerTitlePluginBrowser": "소스 관리 설정",
   "quickDrawerTitleSettings": "설정",
   "quickDrawerTitleDefault": "설정",

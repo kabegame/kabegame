@@ -10,6 +10,7 @@ Rhai 脚本里可以直接使用插件在 `config.json` 中声明的变量（由
 
 - `int` / `float`: 数字
 - `string`: **字符串**，单行文本
+- `date`: **字符串**，`YYYY-MM-DD`（由前端日期选择器收集，脚本侧与 `string` 相同）
 - `boolean`: 布尔
 - `options`（单选）: **字符串（variable）**
 - `list`（字符串列表）: **字符串数组**，例如 `["jpg","png"]`

@@ -348,7 +348,7 @@ fn parse_plugin_args_to_user_config(
                     .collect();
                 Ok(serde_json::Value::Array(items))
             }
-            "string" => Ok(serde_json::Value::String(raw.trim().to_string())),
+            "string" | "date" => Ok(serde_json::Value::String(raw.trim().to_string())),
             "options" => {
                 // 直接接受 raw（variable/name 都行；normalize_var_value 会做进一步规范化）
                 // 若提供了 options 列表，优先把 name 映射到 variable

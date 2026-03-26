@@ -51,6 +51,8 @@ interface BuildOptions {
   skip?: string;
   release?: boolean;
   args?: string[];
+  /** false 表示 --no-nx：不经 nx 构建 main 前端 */
+  nx?: boolean;
 }
 
 interface BuildContext {
@@ -208,10 +210,15 @@ export class BuildSystem {
       args.push(...this.options.args);
     }
     // 先构建前端资源
-    if (this.context.component?.isMain)
-      run("nx", ["run", `.:build-${this.context.component!.comp}`], {
-        bin: "bun",
-      });
+    if (this.context.component?.isMain) {
+      if (this.options.nx === false) {
+        run("bun", ["-b", "--cwd", this.context.component!.appFeDir, "build"], {});
+      } else {
+        run("nx", ["run", `.:build-${this.context.component!.comp}`], {
+          bin: "bun",
+        });
+      }
+    }
     run("cargo", args);
   }
 
@@ -242,20 +249,26 @@ export class BuildSystem {
       const { features, args: compileArgs } = this.hooks.prepareCompileArgs.call(Component.MAIN);
       const cwd = Component.appDir(Component.MAIN);
       if (!this.context.skip?.isVue) {
-        run("nx", ["run", ".:build-main"], {
-          bin: "bun",
-        });
+        if (this.options.nx === false) {
+          run("bun", ["-b", "--cwd", "apps/main", "build"], {});
+        } else {
+          run("nx", ["run", ".:build-main"], {
+            bin: "bun",
+          });
+        }
       }
-      if (this.context.isAndroid) {
-        const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
-        const args = ["android", "build"]
-          .concat(features.length ? ["-f", features.join(",")] : [])
-          .concat(mergedArgs);
-        run("tauri", args, { cwd, bin: "cargo" });
-      } else {
-        const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
-        const args = this.buildCargoArgs(["build"], features, mergedArgs.length > 0 ? mergedArgs : undefined);
-        run("tauri", args, { cwd, bin: "cargo" });
+      if (!this.context.skip?.isCargo) {
+        if (this.context.isAndroid) {
+          const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
+          const args = ["android", "build"]
+            .concat(features.length ? ["-f", features.join(",")] : [])
+            .concat(mergedArgs);
+          run("tauri", args, { cwd, bin: "cargo" });
+        } else {
+          const mergedArgs = [...(compileArgs || []), ...(this.options.args || [])];
+          const args = this.buildCargoArgs(["build"], features, mergedArgs.length > 0 ? mergedArgs : undefined);
+          run("tauri", args, { cwd, bin: "cargo" });
+        }
       }
       await this.hooks.afterBuild.promise(Component.MAIN);
     }

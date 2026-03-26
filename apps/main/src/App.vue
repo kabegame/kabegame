@@ -1,4 +1,5 @@
 <template>
+  <el-config-provider :locale="elementPlusLocale">
   <!-- 主窗口 -->
   <el-container class="app-container" :class="{ 'app-container-android': IS_ANDROID }">
     <!-- 全局文件拖拽提示层（仅非安卓平台） -->
@@ -91,10 +92,16 @@
       </router-link>
     </nav>
   </el-container>
+  </el-config-provider>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import zhCn from "element-plus/dist/locale/zh-cn.mjs";
+import en from "element-plus/dist/locale/en.mjs";
+import zhTw from "element-plus/dist/locale/zh-tw.mjs";
+import ja from "element-plus/dist/locale/ja.mjs";
+import ko from "element-plus/dist/locale/ko.mjs";
 import { Picture, Grid, Setting, Collection, QuestionFilled, Compass } from "@element-plus/icons-vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useI18n, setLocale, resolveLanguage, i18n } from "@kabegame/i18n";
@@ -128,6 +135,22 @@ import { useThrottleFn } from "@vueuse/core";
 // 路由高亮
 const { activeRoute, galleryMenuRoute } = useActiveRoute();
 const { t, locale } = useI18n();
+
+/** Element Plus 组件（含 DatePicker 面板文案）与 vue-i18n 语言对齐 */
+const elementPlusLocale = computed(() => {
+  switch (locale.value) {
+    case "zh":
+      return zhCn;
+    case "zhtw":
+      return zhTw;
+    case "ja":
+      return ja;
+    case "ko":
+      return ko;
+    default:
+      return en;
+  }
+});
 
 // Android 底部 Tab 配置（均匀分布；爬虫仅桌面端有代理，故仅侧栏展示）
 // 依赖 locale 以便语言切换时标签立即更新

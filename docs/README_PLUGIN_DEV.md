@@ -109,13 +109,17 @@ node package-plugin.js --outDir ../data/plugins-directory
 - `var` 字段是数组格式，可以保持变量定义的顺序
 - 每个变量定义包含：
   - `key`: 变量名（在脚本中使用）
-  - `type`: 变量类型（`int`、`float`、`options`、`boolean`、`list`、`checkbox`）
+  - `type`: 变量类型（`int`、`float`、`string`、`date`、`options`、`boolean`、`list`、`checkbox`，以及路径类 `path` / `file` / `folder` / `file_or_folder`）
   - `name`: 展示给用户的名称
   - `descripts`: 描述（可选）
   - `default`: 默认值（可选）
   - `options`: 选项列表（不同类型规则不同，见下）
   - `min`: 最小值（可选，仅用于 `int` 和 `float` 类型）
   - `max`: 最大值（可选，仅用于 `int` 和 `float` 类型）
+
+**date（日期）说明：**
+- 收集表单使用日期选择器；写入运行配置并传入脚本的值为 **`YYYY-MM-DD` 字符串**（例如 `"2025-03-26"`）
+- 在 Rhai 中与 `string` 一样使用（拼接 URL、作为查询参数等）
 
 **options（单选）说明：**
 - `options` 推荐使用：`[{ "name": "...", "variable": "..." }]`

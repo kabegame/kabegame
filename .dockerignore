@@ -1,4 +1,4 @@
-# 减小 docker build 上下文（本镜像主要用挂载卷构建；若以后 Dockerfile 增加 COPY 可受益）
+# 减小 docker build 上下文（COPY 进镜像时排除生成物与大目录）
 **/target
 **/node_modules
 release

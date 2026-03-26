@@ -16,6 +16,7 @@
         @retry-all="handleRetryAll"
         @delete-all="handleDeleteAll"
         @filter-command="onPluginFilterCommand"
+        @quick-settings="openQuickSettings"
       />
 
       <el-skeleton v-if="loading" :rows="8" animated />
@@ -148,6 +149,7 @@ import { usePluginStore } from "@/stores/plugins";
 import { useFailedImagesStore } from "@/stores/failedImages";
 import type { TaskFailedImage } from "@kabegame/core/types/image";
 import FailedImagesToolbar from "@/components/FailedImagesToolbar.vue";
+import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { IS_ANDROID } from "@kabegame/core/env";
 
 const { t } = useI18n();
@@ -155,6 +157,8 @@ const { pluginName: resolvePluginName } = usePluginManifestI18n();
 const router = useRouter();
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
+const quickSettingsDrawer = useQuickSettingsDrawerStore();
+const openQuickSettings = () => quickSettingsDrawer.open("failedimages");
 
 const filterPluginId = ref<string | null>(null);
 const pendingRetryIds = ref(new Set<number>());
