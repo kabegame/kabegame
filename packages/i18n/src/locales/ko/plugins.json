@@ -60,6 +60,7 @@
   "copyFailed": "복사 실패",
   "loadPluginFailed": "소스 로드 실패",
   "startCollect": "수집 시작",
+  "pluginVarSelectAll": "모두 선택",
   "runConfig": "실행 설정",
   "selectConfigOptional": "설정 선택 (선택)",
   "addConfig": "설정 추가",

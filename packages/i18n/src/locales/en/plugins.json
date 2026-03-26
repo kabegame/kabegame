@@ -60,6 +60,7 @@
   "copyFailed": "Copy failed",
   "loadPluginFailed": "Failed to load source",
   "startCollect": "Start collecting",
+  "pluginVarSelectAll": "Select all",
   "runConfig": "Run config",
   "selectConfigOptional": "Select config (optional)",
   "addConfig": "Add config",

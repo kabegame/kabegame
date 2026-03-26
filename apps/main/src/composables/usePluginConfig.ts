@@ -159,7 +159,10 @@ export function usePluginConfig() {
         {
           required: true,
           message: `请输入${label}`,
-          trigger: varDef.type === "options" ? "change" : "blur",
+          trigger:
+            varDef.type === "options" || varDef.type === "date"
+              ? "change"
+              : "blur",
           validator: (_rule: any, value: any, callback: any) => {
             if (value === undefined || value === null || value === "") {
               callback(new Error(`请输入${label}`));

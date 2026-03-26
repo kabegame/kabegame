@@ -6,7 +6,7 @@
                 <h3>{{ $t('plugins.startCollect') }}</h3>
             </div>
         </template>
-        <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
+        <el-form :model="form" ref="formRef" label-position="top" class="crawl-form">
             <el-form-item :label="$t('plugins.runConfig')">
                 <div class="run-config-row">
                     <AndroidPickerSelect
@@ -88,7 +88,7 @@
                         :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
                         :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
                         :file-extensions="getFileExtensions(varDef)"
-                        :placeholder="varDescripts(varDef) || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' ? `请选择${varDisplayName(varDef)}` : `请输入${varDisplayName(varDef)}`)"
+                        :placeholder="varDescripts(varDef) || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' || varDef.type === 'date' ? `请选择${varDisplayName(varDef)}` : `请输入${varDisplayName(varDef)}`)"
                         :allow-unset="!isRequired(varDef)"
                         @update:model-value="(val) => (form.vars[varDef.key] = val)" />
                     <div v-if="varDescripts(varDef)">
@@ -129,7 +129,7 @@
         width="600px"
         class="crawl-dialog"
         :show-close="true">
-        <el-form :model="form" ref="formRef" label-width="100px" class="crawl-form">
+        <el-form :model="form" ref="formRef" label-position="top" class="crawl-form">
             <el-form-item :label="$t('plugins.runConfig')">
                 <div class="run-config-row">
                     <el-select v-model="selectedRunConfigId" :placeholder="$t('plugins.selectConfigOptional')" clearable
@@ -217,7 +217,7 @@
                         :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
                         :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
                         :file-extensions="getFileExtensions(varDef)"
-                        :placeholder="varDescripts(varDef) || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' ? `请选择${varDisplayName(varDef)}` : `请输入${varDisplayName(varDef)}`)"
+                        :placeholder="varDescripts(varDef) || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' || varDef.type === 'date' ? `请选择${varDisplayName(varDef)}` : `请输入${varDisplayName(varDef)}`)"
                         :allow-unset="!isRequired(varDef)"
                         @update:model-value="(val) => (form.vars[varDef.key] = val)" />
                     <div v-if="varDescripts(varDef)">
@@ -788,10 +788,6 @@ watch(selectedOutputAlbumId, (newValue) => {
 </script>
 
 <style lang="scss" scoped>
-:deep(.el-form-item) {
-    align-items: center;
-}
-
 .crawl-drawer-header {
     h3 {
         margin: 0;
@@ -820,6 +816,10 @@ watch(selectedOutputAlbumId, (newValue) => {
     :deep(.el-form-item__label) {
         color: var(--anime-text-primary);
         font-weight: 500;
+    }
+
+    :deep(.el-form-item__content) {
+        width: 100%;
     }
 }
 

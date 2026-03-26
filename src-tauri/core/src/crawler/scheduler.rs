@@ -1,7 +1,7 @@
 use crate::crawler::downloader::{get_default_images_dir, ActiveDownloadInfo, DownloadQueue};
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
-use crate::plugin::{PluginManager, VarDefinition, VarOption};
+use crate::plugin::{check_min_app_version, PluginManager, VarDefinition, VarOption};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -562,6 +562,9 @@ async fn run_task(
     let (plugin, plugin_file_path) = plugin_manager
         .resolve_plugin_for_task_request(&req.plugin_id, req.plugin_file_path.as_deref())
         .await?;
+    if let Some(ref min_ver) = plugin.min_app_version {
+        check_min_app_version(env!("CARGO_PKG_VERSION"), min_ver)?;
+    }
     // 如果指定了输出目录，使用指定目录；否则使用默认下载目录（若配置）或回退到 Storage 的 images_dir
     let images_dir = if let Some(ref dir) = req.output_dir {
         PathBuf::from(dir)
@@ -815,7 +818,7 @@ fn normalize_var_value(def: &VarDefinition, value: Option<serde_json::Value>) ->
             Some(v) => v,
             None => serde_json::Value::String(String::new()),
         },
-        "string" => match value {
+        "string" | "date" => match value {
             Some(serde_json::Value::String(s)) => serde_json::Value::String(s),
             Some(v) => serde_json::Value::String(v.to_string()),
             None => serde_json::Value::String(String::new()),

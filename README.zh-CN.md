@@ -86,11 +86,11 @@
 
 | 操作系统 | Standard 模式 | Light 模式 |
 |---------|--------------|-----------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-standard_3.3.0_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-light_3.3.0_x64-setup.exe) |
-| macOS | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-standard_3.3.0_aarch64.dmg) | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-light_3.3.0_aarch64.dmg) |
-| Linux | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-standard_3.3.0_amd64.deb) | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame-light_3.3.0_amd64.deb) |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.3.1/Kabegame-standard_3.3.1_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.3.1/Kabegame-light_3.3.1_x64-setup.exe) |
+| macOS | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.3.1/Kabegame-standard_3.3.1_aarch64.dmg) | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.3.1/Kabegame-light_3.3.1_aarch64.dmg) |
+| Linux | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.3.1/Kabegame-standard_3.3.1_amd64.deb) | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.3.1/Kabegame-light_3.3.1_amd64.deb) |
 
-- **安卓预览版**：[apk](https://github.com/kabegame/kabegame/releases/download/v3.3.0/Kabegame_3.3.0_android-preview.apk)（同一发布页）。
+- **安卓预览版**：[apk](https://github.com/kabegame/kabegame/releases/download/v3.3.1/Kabegame_3.3.1_android-preview.apk)（同一发布页）。
 
 ## 安装方法
 
@@ -134,6 +134,8 @@
    - Light 模式不提供 CLI 工具
 
 ### Linux（Debian 分发，如 Ubuntu）
+
+> **最低系统版本要求（Ubuntu）**：**Ubuntu 24.04** 及以上。
 
 1. **安装依赖（仅 Standard 模式）**：
    - 虚拟磁盘功能需要 `fuse3` 依赖，如果系统未安装，请先安装：

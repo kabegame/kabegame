@@ -5,6 +5,7 @@ export type QuickSettingsPageId =
   | "gallery"
   | "albums"
   | "albumdetail"
+  | "failedimages"
   | "pluginbrowser"
   | "settings";
 
@@ -12,6 +13,7 @@ const QUICK_SETTINGS_TITLE_KEYS: Record<QuickSettingsPageId, string> = {
   gallery: "settings.quickDrawerTitleGallery",
   albumdetail: "settings.quickDrawerTitleAlbumDetail",
   albums: "settings.quickDrawerTitleAlbums",
+  failedimages: "settings.quickDrawerTitleFailedImages",
   pluginbrowser: "settings.quickDrawerTitlePluginBrowser",
   settings: "settings.quickDrawerTitleSettings",
 };

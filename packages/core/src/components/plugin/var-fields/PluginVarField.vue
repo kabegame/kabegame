@@ -59,6 +59,14 @@
     @update:model-value="$emit('update:modelValue', $event)"
   />
 
+  <VarDateField
+    v-else-if="type === 'date'"
+    :model-value="modelValue"
+    :placeholder="placeholder"
+    :allow-unset="allowUnset"
+    @update:model-value="$emit('update:modelValue', $event)"
+  />
+
   <VarTextField
     v-else
     :model-value="modelValue"
@@ -71,6 +79,7 @@
 <script setup lang="ts">
 import VarBooleanField from "./VarBooleanField.vue";
 import VarCheckboxGroupField from "./VarCheckboxGroupField.vue";
+import VarDateField from "./VarDateField.vue";
 import VarMultiSelectField from "./VarMultiSelectField.vue";
 import VarNumberField from "./VarNumberField.vue";
 import VarPathField from "./VarPathField.vue";

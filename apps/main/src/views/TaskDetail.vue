@@ -10,7 +10,7 @@
                 <TaskDetailPageHeader :task-name="taskName" :task-subtitle="taskSubtitle"
                     :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
                     @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
-                    @quick-settings="openQuickSettings" @back="goBack" />
+                    @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @back="goBack" />
 
                     <div class="task-detail-page-size-toolbar">
                         <TaskFilterControl
@@ -34,7 +34,7 @@
             <TaskDetailPageHeader :task-name="taskName" :task-subtitle="taskSubtitle"
                 :show-stop-task="shouldShowStopButton" @refresh="handleRefresh" @stop-task="handleStopTask"
                 @delete-task="handleDeleteTask" @add-to-album="handleHeaderAddToAlbum" @help="openHelpDrawer"
-                @quick-settings="openQuickSettings" @back="goBack" />
+                @quick-settings="openQuickSettings" @view-task-log="handleViewTaskLog" @back="goBack" />
 
             <div class="task-detail-page-size-toolbar">
                 <TaskFilterControl
@@ -103,6 +103,8 @@
             :message="removeDialogMessage" :title="$t('tasks.confirmDelete')" :checkbox-label="t('gallery.deleteSourceFilesCheckboxLabel')"
             :danger-text="t('gallery.deleteSourceFilesDangerText')" :safe-text="t('gallery.deleteSourceFilesSafeText')"
             :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
+
+        <TaskLogDialog ref="taskLogDialogRef" />
     </div>
 </template>
 
@@ -128,6 +130,7 @@ import { useAlbumStore } from "@/stores/albums";
 import { useUiStore } from "@kabegame/core/stores/ui";
 import { storeToRefs } from "pinia";
 import TaskDetailPageHeader from "@/components/header/TaskDetailPageHeader.vue";
+import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import type { Component } from "vue";
@@ -182,6 +185,13 @@ const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
 const helpDrawer = useHelpDrawerStore();
 const openHelpDrawer = () => helpDrawer.open("taskdetail");
+
+const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
+const handleViewTaskLog = () => {
+    const id = String(taskId.value || "").trim();
+    if (!id) return;
+    taskLogDialogRef.value?.openTaskLog(id);
+};
 
 const taskId = ref<string>("");
 const totalImagesCount = ref<number>(0); // provider.total（用于分页器）

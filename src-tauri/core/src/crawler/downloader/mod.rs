@@ -2694,6 +2694,7 @@ pub async fn generate_thumbnail_from_bytes(bytes: &[u8]) -> Result<Option<PathBu
     );
     let thumbnail_path = thumbnails_dir.join(&thumbnail_filename);
     thumbnail
+        .to_rgb8()
         .save(&thumbnail_path)
         .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
     Ok(Some(thumbnail_path))
@@ -2724,6 +2725,7 @@ pub async fn generate_thumbnail(image_path: &Path) -> Result<Option<PathBuf>, St
     let thumbnail_path = thumbnails_dir.join(&thumbnail_filename);
 
     thumbnail
+        .to_rgb8()
         .save(&thumbnail_path)
         .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
 

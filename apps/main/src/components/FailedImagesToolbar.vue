@@ -97,6 +97,7 @@ const emit = defineEmits<{
   retryAll: [];
   deleteAll: [];
   filterCommand: [pluginId: string];
+  "quick-settings": [];
 }>();
 
 const { t } = useI18n();
@@ -108,6 +109,7 @@ const filterPickerSelected = ref<string[]>([""]);
 const showIds = computed(() => {
   const ids: HeaderFeatureId[] = [HeaderFeatureId.TaskDrawer];
   if (IS_ANDROID) return ids;
+  ids.push(HeaderFeatureId.QuickSettings);
   if (props.hasPendingInFilter) {
     ids.push(HeaderFeatureId.FailedImagesCancelWaiting);
   }
@@ -131,6 +133,7 @@ const foldIds = computed(() => {
   if (props.pluginGroups.length > 0) {
     ids.push(HeaderFeatureId.FailedImagesFilter);
   }
+  ids.push(HeaderFeatureId.QuickSettings);
   return ids;
 });
 
@@ -199,6 +202,9 @@ function handleAction(payload: { id: string; data: { type: string } }) {
       break;
     case HeaderFeatureId.TaskDrawer:
       // TaskDrawer 由 header 内组件自身处理，此处不 emit
+      break;
+    case HeaderFeatureId.QuickSettings:
+      emit("quick-settings");
       break;
     default:
       break;

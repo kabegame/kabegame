@@ -118,6 +118,17 @@ export function useConfigCompatibility(
           return { valid: false, error: "值必须是数组" };
         }
         break;
+      case "date":
+        if (typeof value !== "string") {
+          return { valid: false, error: "值必须是字符串" };
+        }
+        if (
+          value !== "" &&
+          !/^\d{4}-\d{2}-\d{2}$/.test(value)
+        ) {
+          return { valid: false, error: "日期格式应为 YYYY-MM-DD" };
+        }
+        break;
     }
     return { valid: true };
   };

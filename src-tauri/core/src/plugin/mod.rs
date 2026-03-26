@@ -41,6 +41,9 @@ pub struct Plugin {
     /// 脚本类型：rhai（crawl.rhai）或 js（crawl.js）。安卓仅支持 rhai。
     #[serde(rename = "scriptType")]
     pub script_type: String,
+    /// manifest.json 可选字段：运行本插件所需的最低 Kabegame 应用版本（semver 主.次.补丁）
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "minAppVersion")]
+    pub min_app_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +211,7 @@ impl PluginManager {
             id: plugin_id,
             name: manifest.name_to_value(),
             description: manifest.description_to_value(),
+            min_app_version: manifest.min_app_version.clone(),
             version: manifest.version,
             base_url: config
                 .as_ref()
@@ -644,6 +648,7 @@ impl PluginManager {
             id: plugin_id.clone(),
             name: manifest.name_to_value(),
             description: manifest.description_to_value(),
+            min_app_version: manifest.min_app_version.clone(),
             version: manifest.version,
             base_url: config
                 .as_ref()
@@ -1122,6 +1127,12 @@ impl PluginManager {
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
+        let min_app_version = plugin_json
+            .get("minAppVersion")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string());
+
         Ok(StorePluginResolved {
             id,
             name,
@@ -1137,6 +1148,7 @@ impl PluginManager {
             installed_version: None,
             store_download_progress: None,
             store_download_error: None,
+            min_app_version,
         })
     }
 
@@ -2009,6 +2021,7 @@ impl PluginManager {
                     config: HashMap::new(),
                     selector: parsed.config.clone().and_then(|c| c.selector),
                     script_type: parsed.script_type.clone(),
+                    min_app_version: parsed.manifest.min_app_version.clone(),
                 };
                 by_id.insert(plugin_id.clone(), path.clone());
                 plugins.insert(plugin_id, plugin);
@@ -2097,6 +2110,7 @@ impl PluginManager {
                 config: HashMap::new(),
                 selector: parsed.config.clone().and_then(|c| c.selector),
                 script_type: parsed.script_type.clone(),
+                min_app_version: parsed.manifest.min_app_version.clone(),
             };
 
             let mut guard = self.installed_cache.lock().await;
@@ -2366,16 +2380,32 @@ fn extract_manifest_text_from_flat(
     out
 }
 
-impl PluginManifest {
-    /// 取默认字符串：键 "name" 或 "description"（无点后缀）
-    pub fn name_fallback(&self) -> String {
-        self.name.get("name").cloned().unwrap_or_default()
+/// 解析 `major.minor.patch` 形式的 semver 片段，用于与插件 `minAppVersion` 比较。
+fn parse_semver_triple(s: &str) -> Option<(u32, u32, u32)> {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() != 3 {
+        return None;
     }
-    pub fn description_fallback(&self) -> String {
-        self.description
-            .get("description")
-            .cloned()
-            .unwrap_or_default()
+    Some((
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+    ))
+}
+
+/// 当前应用版本 `current` 是否满足插件要求的最低版本 `required`（`>=`）。
+pub fn check_min_app_version(current: &str, required: &str) -> Result<(), String> {
+    let cur = parse_semver_triple(current)
+        .ok_or_else(|| format!("无法解析应用版本: {}", current))?;
+    let req = parse_semver_triple(required)
+        .ok_or_else(|| format!("无法解析插件要求的最低版本: {}", required))?;
+    if cur >= req {
+        Ok(())
+    } else {
+        Err(format!(
+            "此插件要求 Kabegame >= {}，当前版本为 {}",
+            required, current
+        ))
     }
 }
 
@@ -2387,6 +2417,8 @@ pub struct PluginManifest {
     pub description: ManifestI18nText,
     #[serde(default)]
     pub author: String,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "minAppVersion")]
+    pub min_app_version: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for PluginManifest {
@@ -2408,6 +2440,11 @@ impl<'de> Deserialize<'de> for PluginManifest {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let min_app_version = map
+            .get("minAppVersion")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string());
         let name = extract_manifest_text_from_flat(map, "name");
         let description = extract_manifest_text_from_flat(map, "description");
         Ok(PluginManifest {
@@ -2415,6 +2452,7 @@ impl<'de> Deserialize<'de> for PluginManifest {
             version,
             description,
             author,
+            min_app_version,
         })
     }
 }
@@ -2475,6 +2513,17 @@ fn manifest_i18n_to_frontend_value(map: &ManifestI18nText, base_key: &str) -> se
 }
 
 impl PluginManifest {
+    /// 取默认字符串：键 "name" 或 "description"（无点后缀）
+    pub fn name_fallback(&self) -> String {
+        self.name.get("name").cloned().unwrap_or_default()
+    }
+    pub fn description_fallback(&self) -> String {
+        self.description
+            .get("description")
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub fn name_to_value(&self) -> serde_json::Value {
         manifest_i18n_to_frontend_value(&self.name, "name")
     }
@@ -2744,6 +2793,9 @@ pub struct StorePluginResolved {
     /// 最近一次下载错误（通常已随事件推送，列表侧可为空）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store_download_error: Option<String>,
+    /// 可选：index.json 中与 manifest 一致的最低 Kabegame 版本要求
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_app_version: Option<String>,
 }
 
 /// 商店源可用性验证结果

@@ -4,14 +4,14 @@
 # 用途：在较新桌面系统（例如 Ubuntu 25.10 + libfuse3 SONAME .4）上本机构建时，可在此镜像内构建，
 # 使产物链接的 libfuse3 与 CI 及更多仍带 libfuse3.so.3 的发行版一致。
 #
-# 构建镜像：
+# 构建时将仓库上下文复制到 /src（需已 git clone；子模块请在宿主机 checkout 后再 docker build）。
+# 默认 CMD：在镜像内 /src 上跑完整 Linux 发布构建（见文末 CMD）；运行时不挂载宿主机。
+#
+# 构建镜像并执行默认 CMD（或覆盖命令）：
+#   ./docker/build-linux-release.sh
+#   ./docker/build-linux-release.sh bash -l
 #   docker build -f docker/linux-release.Dockerfile -t kabegame-linux-release:latest .
-#
-# 在仓库根目录产出 release/（挂载当前源码，需已 git clone --recursive）：
-#   docker run --rm -it -v "$PWD:/src:rw" -w /src kabegame-linux-release:latest
-#
-# 仅进入 shell 自行执行 bun/cargo：
-#   docker run --rm -it -v "$PWD:/src:rw" -w /src kabegame-linux-release:latest bash -l
+#   LINUX_RELEASE_DOCKER_IT=0 ./docker/build-linux-release.sh
 
 FROM ubuntu:24.04
 
@@ -60,5 +60,6 @@ RUN git config --global --add safe.directory '*'
 
 WORKDIR /src
 
-# 与 release workflow：`bun b -c cli` → standard → light
-CMD ["bash", "-lc", "bun install --frozen-lockfile && bun b -c cli && bun b -c main --mode standard --release && bun b -c main --mode light --release"]
+COPY . /src
+
+CMD ["bash", "-l"]
