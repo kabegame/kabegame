@@ -26,6 +26,7 @@
                 </div>
             </el-form-item>
             <el-form-item :label="$t('plugins.selectSource')">
+                <div class="plugin-source-field">
                 <div class="plugin-select-with-warning">
                     <AndroidPickerSelect
                         :model-value="form.pluginId ?? null"
@@ -50,6 +51,10 @@
                     <el-icon v-if="isSelectedPluginJs" class="plugin-js-warning-icon" :title="$t('plugins.jsPluginAndroidNotSupportedTitle')">
                         <WarningFilled />
                     </el-icon>
+                </div>
+                <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
+                    {{ crawlDialogMinAppErrorText }}
+                </div>
                 </div>
             </el-form-item>
             <el-form-item v-if="!IS_ANDROID" :label="$t('plugins.outputDir')">
@@ -88,6 +93,9 @@
                         :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
                         :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
                         :file-extensions="getFileExtensions(varDef)"
+                        :date-format="typeof varDef.format === 'string' && varDef.format.trim() !== '' ? varDef.format : undefined"
+                        :date-min="typeof varDef.dateMin === 'string' && varDef.dateMin.trim() !== '' ? varDef.dateMin : undefined"
+                        :date-max="typeof varDef.dateMax === 'string' && varDef.dateMax.trim() !== '' ? varDef.dateMax : undefined"
                         :placeholder="varDescripts(varDef) || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' || varDef.type === 'date' ? `请选择${varDisplayName(varDef)}` : `请输入${varDisplayName(varDef)}`)"
                         :allow-unset="!isRequired(varDef)"
                         @update:model-value="(val) => (form.vars[varDef.key] = val)" />
@@ -168,6 +176,7 @@
                 </div>
             </el-form-item>
             <el-form-item :label="$t('plugins.selectSource')">
+                <div class="plugin-source-field">
                 <el-select v-model="form.pluginId" :placeholder="$t('plugins.selectSourcePlaceholder')" style="width: 100%"
                     popper-class="crawl-plugin-select-dropdown" @change="onPluginChange">
                     <el-option v-for="plugin in plugins" :key="plugin.id" :label="pluginName(plugin)" :value="plugin.id">
@@ -181,6 +190,10 @@
                         </div>
                     </el-option>
                 </el-select>
+                <div v-if="selectedPluginMinAppIncompatible" class="plugin-min-app-error" role="alert">
+                    {{ crawlDialogMinAppErrorText }}
+                </div>
+                </div>
             </el-form-item>
             <el-form-item v-if="!IS_ANDROID" :label="$t('plugins.outputDir')">
                 <el-input v-model="form.outputDir" :placeholder="$t('plugins.outputDirPlaceholder')" clearable>
@@ -217,6 +230,9 @@
                         :min="typeof varDef.min === 'number' && !isNaN(varDef.min) ? varDef.min : undefined"
                         :max="typeof varDef.max === 'number' && !isNaN(varDef.max) ? varDef.max : undefined"
                         :file-extensions="getFileExtensions(varDef)"
+                        :date-format="typeof varDef.format === 'string' && varDef.format.trim() !== '' ? varDef.format : undefined"
+                        :date-min="typeof varDef.dateMin === 'string' && varDef.dateMin.trim() !== '' ? varDef.dateMin : undefined"
+                        :date-max="typeof varDef.dateMax === 'string' && varDef.dateMax.trim() !== '' ? varDef.dateMax : undefined"
                         :placeholder="varDescripts(varDef) || (varDef.type === 'options' || varDef.type === 'list' || varDef.type === 'checkbox' || varDef.type === 'date' ? `请选择${varDisplayName(varDef)}` : `请输入${varDisplayName(varDef)}`)"
                         :allow-unset="!isRequired(varDef)"
                         @update:model-value="(val) => (form.vars[varDef.key] = val)" />
@@ -277,6 +293,7 @@
 
 <script setup lang="ts">
 import { computed, watch, ref, nextTick } from "vue";
+import { storeToRefs } from "pinia";
 import { useI18n, usePluginManifestI18n, usePluginConfigI18n } from "@kabegame/i18n";
 import { FolderOpened, Grid, WarningFilled } from "@element-plus/icons-vue";
 import { ElDialog } from "element-plus";
@@ -293,6 +310,8 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { matchesPluginVarWhen } from "@kabegame/core/utils/pluginVarWhen";
+import { isPluginMinAppNotSatisfied } from "@/composables/pluginMinAppVersionGate";
+import { useApp } from "@/stores/app";
 
 interface Props {
     modelValue: boolean;
@@ -316,6 +335,7 @@ const emit = defineEmits<{
 const crawlerStore = useCrawlerStore();
 const crawlerDrawerStore = useCrawlerDrawerStore();
 const pluginStore = usePluginStore();
+const { version: crawlDialogAppVersion } = storeToRefs(useApp());
 const { pluginName } = usePluginManifestI18n();
 const { varDisplayName, varDescripts, optionDisplayName, resolveConfigText, locale } = usePluginConfigI18n();
 /** runConfig 的 name/description 可能为 i18n 对象，统一解析为字符串供 ElOption label 等使用 */
@@ -462,6 +482,17 @@ const selectedPlugin = computed(() => {
     return id ? plugins.value.find((p) => p.id === id) : null;
 });
 const isSelectedPluginJs = computed(() => selectedPlugin.value?.scriptType === "js");
+
+const selectedPluginMinAppIncompatible = computed(() =>
+    isPluginMinAppNotSatisfied(selectedPlugin.value, crawlDialogAppVersion.value),
+);
+
+const crawlDialogMinAppErrorText = computed(() => {
+    if (!selectedPluginMinAppIncompatible.value) return "";
+    const minV = (selectedPlugin.value?.minAppVersion ?? "").trim();
+    const cur = (crawlDialogAppVersion.value ?? "").trim();
+    return t("plugins.crawlDialogMinAppError", { required: minV, current: cur });
+});
 const outputAlbumPickerOptions = computed(() => [
     ...albums.value.map((a) => ({ label: a.name, value: a.id })),
     { label: t('albums.createNewAlbum'), value: "__create_new__" },
@@ -659,18 +690,16 @@ const handleStartCrawl = async () => {
                 : {};
         const httpHeaders = toHttpHeadersMap();
 
-        // 添加任务（异步执行，不等待完成）
+        // 添加任务（异步执行，不等待完成）；前置守卫拒绝时不创建任务且不关闭弹窗
         // outputAlbumId 单独传递，不作为 userConfig 的一部分
-        crawlerStore.addTask(
+        const taskAdded = await crawlerStore.addTask(
             form.value.pluginId,
             form.value.outputDir || undefined,
             backendVars,
             selectedOutputAlbumId.value || undefined,
             httpHeaders
-        ).catch(error => {
-            // 这里的错误是任务初始化失败，由 watch 监听来处理任务状态变化时的错误显示
-            console.error("任务执行失败:", error);
-        });
+        );
+        if (!taskAdded) return;
 
         // 保存为「上次运行配置」，下次打开对话框时恢复
         crawlerDrawerStore.setLastRunConfig({
@@ -896,6 +925,17 @@ watch(selectedOutputAlbumId, (newValue) => {
     height: 20px;
     flex-shrink: 0;
     color: var(--anime-text-secondary);
+}
+
+.plugin-source-field {
+    width: 100%;
+}
+
+.plugin-min-app-error {
+    color: var(--el-color-danger);
+    font-size: 12px;
+    line-height: 1.45;
+    margin-top: 6px;
 }
 
 .plugin-select-with-warning {

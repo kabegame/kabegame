@@ -35,8 +35,37 @@
                     {{ name }}
                 </el-descriptions-item>
 
-                <el-descriptions-item v-if="version" :label="t('plugins.detailVersionLabel')">
-                    {{ version }}
+                <el-descriptions-item v-if="versionTrimmed" :label="t('plugins.detailVersionLabel')">
+                    <el-tooltip placement="top" :show-after="200">
+                        <template #content>
+                            <div class="detail-version-tooltip">{{ appVersionTooltipLine }}</div>
+                        </template>
+                        <el-tag type="primary" size="small" class="version-tag">{{ versionTrimmed }}</el-tag>
+                    </el-tooltip>
+                </el-descriptions-item>
+
+                <el-descriptions-item v-if="minAppVersionTrimmed" :label="t('plugins.detailMinAppVersionLabel')">
+                    <el-tooltip placement="top" :show-after="200">
+                        <template #content>
+                            <div class="detail-version-tooltip">
+                                <div>{{ appVersionTooltipLine }}</div>
+                                <a
+                                    v-if="minAppBelowRequired"
+                                    href="#"
+                                    class="detail-release-link"
+                                    @click.prevent="openLatestRelease"
+                                >{{ t("plugins.docReleaseLinkText") }}</a>
+                            </div>
+                        </template>
+                        <el-tag :type="minAppTagType" size="small" class="version-tag version-tag--min-app">
+                            <span class="version-tag-inner">
+                                <el-icon v-if="minAppTagType === 'danger'" class="version-tag-warn-icon">
+                                    <WarningFilled />
+                                </el-icon>
+                                {{ minAppVersionTrimmed }}
+                            </span>
+                        </el-tag>
+                    </el-tooltip>
                 </el-descriptions-item>
 
                 <el-descriptions-item :label="t('plugins.detailDescriptionLabel')">
@@ -78,26 +107,24 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ElMessage } from "element-plus";
+import { WarningFilled } from "@element-plus/icons-vue";
+import { compareVersions } from "../../utils/version";
+
+const KABEGAME_RELEASES_LATEST = "https://github.com/kabegame/kabegame/releases/latest";
 
 const { t } = useI18n();
 
-const handleOpenBaseUrl = async (url: string) => {
-  try {
-    await openUrl(url);
-  } catch (error) {
-    console.error("打开链接失败:", error);
-    ElMessage.error(t("common.openUrlFailed"));
-  }
-};
-
-defineProps<{
+const props = defineProps<{
     pluginId: string;
     name: string;
     description?: string | null;
     version?: string | null;
+    minAppVersion?: string | null;
+    appVersion?: string | null;
     baseUrl?: string | null;
     iconUrl?: string | null;
     installed: boolean;
@@ -110,6 +137,44 @@ defineProps<{
     /** 商店下载进度 0–100，有值时主按钮显示流式进度条 */
     primaryActionProgressPercent?: number | null;
 }>();
+
+const versionTrimmed = computed(() => (props.version || "").trim());
+const minAppVersionTrimmed = computed(() => (props.minAppVersion || "").trim());
+const appVersionTrimmed = computed(() => (props.appVersion || "").trim());
+
+const appVersionTooltipLine = computed(() =>
+    appVersionTrimmed.value
+        ? t("plugins.docTooltipCurrentApp", { version: appVersionTrimmed.value })
+        : t("plugins.docTooltipUnknownApp"),
+);
+
+const minAppBelowRequired = computed(() => {
+    const minV = minAppVersionTrimmed.value;
+    const appV = appVersionTrimmed.value;
+    if (!minV || !appV) return false;
+    return compareVersions(appV, minV) < 0;
+});
+
+const minAppTagType = computed<"success" | "danger" | "info">(() => {
+    const minV = minAppVersionTrimmed.value;
+    const appV = appVersionTrimmed.value;
+    if (!minV) return "info";
+    if (!appV) return "info";
+    return compareVersions(appV, minV) >= 0 ? "success" : "danger";
+});
+
+function openLatestRelease() {
+    void openUrl(KABEGAME_RELEASES_LATEST);
+}
+
+const handleOpenBaseUrl = async (url: string) => {
+  try {
+    await openUrl(url);
+  } catch (error) {
+    console.error("打开链接失败:", error);
+    ElMessage.error(t("common.openUrlFailed"));
+  }
+};
 
 defineEmits<{
     (e: "primary-action"): void;
@@ -196,6 +261,34 @@ defineEmits<{
     color: inherit;
     text-decoration: underline;
     word-break: break-all;
+    cursor: pointer;
+}
+
+.version-tag {
+    cursor: default;
+}
+
+.version-tag--min-app .version-tag-inner {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.version-tag-warn-icon {
+    font-size: 14px;
+    color: var(--el-color-danger);
+}
+
+.detail-version-tooltip {
+    max-width: 280px;
+    line-height: 1.5;
+}
+
+.detail-release-link {
+    display: inline-block;
+    margin-top: 8px;
+    color: var(--el-color-primary);
+    text-decoration: underline;
     cursor: pointer;
 }
 

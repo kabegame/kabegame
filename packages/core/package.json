@@ -12,6 +12,8 @@
     "@kabegame/i18n": "workspace:*",
     "@panzoom/panzoom": "^4.6.1",
     "@tauri-apps/plugin-opener": "^2.0",
+    "@vueuse/core": "^14.2.1",
+    "dayjs": "^1.11.20",
     "dompurify": "^3.3.2",
     "marked": "^17.0.4",
     "photoswipe-vue": "workspace:*",

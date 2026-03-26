@@ -341,9 +341,14 @@ const pswpDataSource = computed(() => {
   });
 });
 
-const setPreviewByIndex = (index: number) => {
+const setPreviewByIndex = (
+  index: number,
+  opts?: { resetPanzoom?: boolean }
+) => {
   const img = props.images[index];
   if (!img) return;
+
+  const resetPanzoom = opts?.resetPanzoom !== false;
 
   previewIndex.value = index;
   currentImageId.value = img.id;
@@ -358,8 +363,8 @@ const setPreviewByIndex = (index: number) => {
   previewImageLoading.value = false;
   previewImageUrl.value = (originalUrl || thumb || "").trim();
 
-  // 尺寸/缩放状态重置：立即触发一次（仅桌面端）
-  if (!isPreviewVideo.value) {
+  // 尺寸/缩放状态重置：切换图片时重置；仅列表重排（如同 id 的索引变化）时可保留 Panzoom
+  if (!isPreviewVideo.value && resetPanzoom) {
     panzoomReset();
   }
 };
@@ -656,8 +661,8 @@ watch(
         }
       } else {
         if (foundIndex !== previewIndex.value) {
-          previewIndex.value = foundIndex;
-          setPreviewByIndex(foundIndex);
+          // 前面插入项等导致索引右移：仍是同一张图，勿重置桌面端放缩/平移
+          setPreviewByIndex(foundIndex, { resetPanzoom: false });
         }
       }
     } else {

@@ -19,6 +19,7 @@
       :loading="false"
       :show-skeleton="false"
       :plugin="pluginVm"
+      :app-version="appVersion"
       :installed="installed"
       :installing="installing"
       :show-uninstall="false"
@@ -64,12 +65,14 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+import { storeToRefs } from 'pinia';
 import { useI18n, usePluginManifestI18n } from '@kabegame/i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { ElMessage } from 'element-plus';
 import PluginDetailPage from '@kabegame/core/components/plugin/PluginDetailPage.vue';
 import type { PluginManifestText } from '@kabegame/core/stores/plugins';
 import { usePluginStore } from '@/stores/plugins';
+import { useApp } from '@/stores/app';
 import { isUpdateAvailable } from '@kabegame/core/utils/version';
 import { IS_ANDROID } from '@kabegame/core/env';
 import { useModalBack } from '@kabegame/core/composables/useModalBack';
@@ -78,6 +81,7 @@ type ImportPreview = {
   id: string;
   name: PluginManifestText;
   version: string;
+  minAppVersion?: string | null;
   sizeBytes: number;
   alreadyExists: boolean;
   existingVersion?: string | null;
@@ -128,6 +132,7 @@ const visible = computed({
 
 const loading = ref(false);
 const errorMsg = ref<string | null>(null);
+const { version: appVersion } = storeToRefs(useApp());
 const preview = ref<ImportPreviewWithIcon | null>(null);
 const installed = ref(false);
 const installing = ref(false);
@@ -199,6 +204,8 @@ const pluginVm = computed(() => {
     id: preview.value.preview.id,
     name: preview.value.preview.name,
     desp: preview.value.manifest?.description ?? preview.value.preview.name,
+    version: preview.value.preview.version,
+    minAppVersion: preview.value.preview.minAppVersion ?? undefined,
     icon: iconDataUrl.value ?? undefined,
     doc: detail.value?.doc ?? undefined,
     baseUrl: (detail.value?.baseUrl as string | undefined) ?? undefined,
