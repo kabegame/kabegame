@@ -64,6 +64,9 @@
     :model-value="modelValue"
     :placeholder="placeholder"
     :allow-unset="allowUnset"
+    :date-storage-format="dateFormat"
+    :date-min="dateMin"
+    :date-max="dateMax"
     @update:model-value="$emit('update:modelValue', $event)"
   />
 
@@ -97,6 +100,11 @@ defineProps<{
   placeholder?: string;
   fileExtensions?: string[];
   allowUnset?: boolean;
+  /** date 类型：dayjs 格式，写入 vars 的字符串形态 */
+  dateFormat?: string;
+  /** date 类型：可选最早/最晚日（YYYY-MM-DD） */
+  dateMin?: string;
+  dateMax?: string;
 }>();
 
 defineEmits<{

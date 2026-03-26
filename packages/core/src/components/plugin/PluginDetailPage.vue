@@ -31,7 +31,8 @@
       <!-- 基本信息 -->
       <div class="plugin-info-section">
         <PluginDetail v-if="plugin" :show-header="false" :plugin-id="plugin.id" :name="displayName"
-          :description="displayDesc" :version="plugin.version" :base-url="plugin.baseUrl" :installed="installed" :show-copy-id="true"
+          :description="displayDesc" :version="plugin.version" :min-app-version="plugin.minAppVersion ?? null"
+          :app-version="appVersion ?? null" :base-url="plugin.baseUrl" :installed="installed" :show-copy-id="true"
           :show-primary-action="true" :primary-action-loading="installing" :primary-action-disabled="installing"
           :primary-action-text="installing ? effectiveInstallingText : effectiveInstallText"
           :primary-action-progress-percent="installProgressPercent" @primary-action="$emit('install')"
@@ -74,6 +75,7 @@ type PluginVm = {
   name: PluginManifestText;
   desp: PluginManifestText;
   version?: string | null;
+  minAppVersion?: string | null;
   icon?: string | null;
   doc?: PluginManifestDoc | null;
   baseUrl?: string | null;
@@ -106,6 +108,8 @@ const props = withDefaults(
     docImageBaseUrl?: string | null;
     /** 商店安装/更新下载进度 0–100 */
     installProgressPercent?: number | null;
+    /** 当前 Kabegame 应用版本（用于描述列表内最低版本对比） */
+    appVersion?: string | null;
   }>(),
   {
     showBack: false,

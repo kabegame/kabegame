@@ -4,6 +4,7 @@
         :plugin="plugin" :installed="isInstalled" :installing="installing" :show-uninstall="true"
         :install-progress-percent="storeInstallProgressPercent"
         :installing-text="installingButtonText"
+        :app-version="appVersion"
         :load-doc-image-bytes="loadDocImageBytes" :doc-image-base-url="docImageBaseUrl" @back="goBack" @install="handleInstall" @uninstall="handleUninstall"
         @copy-id="handleCopyPluginId" />
 </template>
@@ -16,6 +17,8 @@ import { useI18n, usePluginManifestI18n } from "@kabegame/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { usePluginStore } from "@/stores/plugins";
+import { useApp } from "@/stores/app";
+import { storeToRefs } from "pinia";
 import PluginDetailPage from "@kabegame/core/components/plugin/PluginDetailPage.vue";
 import type { BrowserPlugin, PluginManifestText } from "@kabegame/core/stores/plugins";
 
@@ -24,6 +27,7 @@ interface PluginDetailDto {
     name: PluginManifestText;
     desp: PluginManifestText;
     version?: string | null;
+    minAppVersion?: string | null;
     /** 文档多语言：{ default, zh?, en?, ... } */
     doc?: Record<string, string> | null;
     iconData?: number[] | null;
@@ -60,6 +64,7 @@ const router = useRouter();
 const { t } = useI18n();
 const { pluginName } = usePluginManifestI18n();
 const pluginStore = usePluginStore();
+const { version: appVersion } = storeToRefs(useApp());
 
 // 关键：本组件会被 keep-alive 缓存，route 会随着全局路由变化而变化。
 // 若不做守卫：当用户从“源详情”切到“画册详情(/albums/:id)”时，
@@ -139,6 +144,7 @@ const loadPlugin = async () => {
         plugin.value = {
             ...cached,
             version: cached.version ?? version.value ?? undefined,
+            minAppVersion: cached.minAppVersion ?? undefined,
         };
         loading.value = false;
         showSkeleton.value = false;
@@ -180,6 +186,7 @@ const loadPlugin = async () => {
             name: detail.name,
             desp: detail.desp,
             version: detail.version ?? version.value ?? undefined,
+            minAppVersion: detail.minAppVersion ?? undefined,
             icon,
             doc: detail.doc ?? undefined,
             baseUrl: detail.baseUrl ?? undefined,

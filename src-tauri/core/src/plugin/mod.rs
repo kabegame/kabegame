@@ -1673,6 +1673,7 @@ impl PluginManager {
             name: manifest.name_to_value(),
             desp: manifest.description_to_value(),
             version: Some(manifest.version.clone()),
+            min_app_version: manifest.min_app_version.clone(),
             doc,
             icon_data,
             origin: "installed".to_string(),
@@ -1817,6 +1818,7 @@ impl PluginManager {
             name: manifest.name_to_value(),
             desp: manifest.description_to_value(),
             version: Some(manifest.version.clone()),
+            min_app_version: manifest.min_app_version.clone(),
             doc,
             icon_data,
             origin: "remote".to_string(),
@@ -1968,6 +1970,7 @@ impl PluginManager {
             id: plugin_id,
             name: manifest.name_to_value(),
             version: manifest.version,
+            min_app_version: manifest.min_app_version.clone(),
             size_bytes,
             already_exists,
             existing_version,
@@ -2603,6 +2606,13 @@ pub struct VarDefinition {
     pub max: Option<serde_json::Value>,
     #[serde(default)]
     pub when: Option<HashMap<String, Vec<String>>>,
+    /// date 类型：dayjs 格式，提交给脚本的日期字符串（如 YYYYMMDD）
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default, rename = "dateMin")]
+    pub date_min: Option<String>,
+    #[serde(default, rename = "dateMax")]
+    pub date_max: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for VarDefinition {
@@ -2658,6 +2668,18 @@ impl<'de> Deserialize<'de> for VarDefinition {
         let when: Option<HashMap<String, Vec<String>>> = map
             .get("when")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let format = map
+            .get("format")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let date_min = map
+            .get("dateMin")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let date_max = map
+            .get("dateMax")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         Ok(VarDefinition {
             key,
             var_type,
@@ -2668,6 +2690,9 @@ impl<'de> Deserialize<'de> for VarDefinition {
             min,
             max,
             when,
+            format,
+            date_min,
+            date_max,
         })
     }
 }
@@ -2730,6 +2755,15 @@ pub fn var_definition_to_frontend_value(v: &VarDefinition) -> serde_json::Value 
     if let Some(ref when) = v.when {
         let when_val = serde_json::to_value(when).unwrap_or(serde_json::Value::Null);
         obj.insert("when".to_string(), when_val);
+    }
+    if let Some(ref f) = v.format {
+        obj.insert("format".to_string(), serde_json::Value::String(f.clone()));
+    }
+    if let Some(ref d) = v.date_min {
+        obj.insert("dateMin".to_string(), serde_json::Value::String(d.clone()));
+    }
+    if let Some(ref d) = v.date_max {
+        obj.insert("dateMax".to_string(), serde_json::Value::String(d.clone()));
     }
     serde_json::Value::Object(obj)
 }
@@ -2813,6 +2847,8 @@ pub struct ImportPreview {
     /// string 或 { name?, ja?, ko?, ... }，前端按 locale 解析
     pub name: serde_json::Value,
     pub version: String,
+    #[serde(rename = "minAppVersion", skip_serializing_if = "Option::is_none")]
+    pub min_app_version: Option<String>,
     #[serde(rename = "sizeBytes")]
     pub size_bytes: u64,
     #[serde(rename = "alreadyExists")]
@@ -2843,6 +2879,9 @@ pub struct PluginDetail {
     /// manifest.json 中的版本号
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// manifest.json 中的 minAppVersion
+    #[serde(rename = "minAppVersion", skip_serializing_if = "Option::is_none")]
+    pub min_app_version: Option<String>,
     /// 文档多语言：{ "default": "...", "zh": "...", "en": ... }
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<PluginDoc>,

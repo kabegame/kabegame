@@ -10,11 +10,20 @@ Rhai 脚本里可以直接使用插件在 `config.json` 中声明的变量（由
 
 - `int` / `float`: 数字
 - `string`: **字符串**，单行文本
-- `date`: **字符串**，`YYYY-MM-DD`（由前端日期选择器收集，脚本侧与 `string` 相同）
+- `date`: **字符串**，由应用在启动任务前按插件声明的 **`format`**（[dayjs 格式](https://day.js.org/docs/en/display/format)）规范化后传入 Rhai；省略 `format` 时为 `YYYY-MM-DD`。脚本侧与 `string` 相同，按业务自行解析（例如 Pixiv 排行榜 `date=` 需无分隔符 `YYYYMMDD` 时，在 `config.json` 写 `"format": "YYYYMMDD"` 即可，**无需在 Rhai 里再改格式**）。
 - `boolean`: 布尔
 - `options`（单选）: **字符串（variable）**
 - `list`（字符串列表）: **字符串数组**，例如 `["jpg","png"]`
 - `checkbox`（多选）: **对象（bool map）**，key 为 `variable`，value 为 `true/false`
+
+#### `date` 在 `config.json` 中的可选字段
+
+| 字段 | 说明 |
+|------|------|
+| `format` | dayjs 格式串，决定写入任务变量、交给脚本的字符串形态（如 `YYYYMMDD`、`YYYY-MM-DD`） |
+| `dateMin` / `dateMax` | 可选；日历可选范围边界。可为固定 **`YYYY-MM-DD`**，或关键字 **`today`** / **`yesterday`**（不区分大小写，按用户本机本地日历日解析）。含关键字时前端用 VueUse **`useNow`**（约每分钟）推进「当前日」，并在自然日切换后刷新日期面板，避免跨午夜仍按旧「今天」禁用。仅影响日期选择器与校验，与 `format` 无关 |
+
+应用在**开始爬取、保存运行配置**时会对每个 `date` 变量调用与前端相同的规范化逻辑：即使界面里仍是旧版 `YYYY-MM-DD` 或未触发过 `change`，也会按 `format` 转成目标字符串再交给后端与 Rhai。
 
 ### `options` / `checkbox` 的 `options` 定义格式
 

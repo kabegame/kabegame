@@ -4,6 +4,12 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { usePluginConfigI18n } from "@kabegame/i18n";
 import type { PluginConfigText } from "@kabegame/core/stores/plugins";
+import {
+  formatPluginDateForBackend,
+  parsePluginDateBound,
+  parsePluginDateStored,
+  shiftPluginDateByDays,
+} from "@kabegame/core/utils/pluginDateVar";
 
 export type VarOption = string | { name: PluginConfigText | string; variable: string };
 
@@ -18,6 +24,11 @@ export type PluginVarDef = {
   min?: number;
   max?: number;
   when?: Record<string, string[]>;
+  /** type 为 date 时可选：dayjs 格式，提交给后端的日期字符串（默认 YYYY-MM-DD） */
+  format?: string;
+  /** type 为 date 时可选：最早/最晚可选日，`YYYY-MM-DD` 或 `today` / `yesterday` */
+  dateMin?: string;
+  dateMax?: string;
 };
 
 /**
@@ -59,15 +70,24 @@ export function usePluginConfig() {
   ) => {
     const expanded: Record<string, any> = { ...uiVars };
     for (const def of defs) {
-      if (def.type !== "checkbox") continue;
-      const options = def.options || [];
-      const optionVars = options.map(optionValue);
-      const selected = Array.isArray(uiVars[def.key])
-        ? (uiVars[def.key] as string[])
-        : [];
-      const obj: Record<string, boolean> = {};
-      for (const v of optionVars) obj[v] = selected.includes(v);
-      expanded[def.key] = obj;
+      if (def.type === "checkbox") {
+        const options = def.options || [];
+        const optionVars = options.map(optionValue);
+        const selected = Array.isArray(uiVars[def.key])
+          ? (uiVars[def.key] as string[])
+          : [];
+        const obj: Record<string, boolean> = {};
+        for (const v of optionVars) obj[v] = selected.includes(v);
+        expanded[def.key] = obj;
+      } else if (def.type === "date") {
+        const raw = expanded[def.key];
+        if (typeof raw !== "string") continue;
+        const fmt =
+          def.format && def.format.trim() !== ""
+            ? def.format.trim()
+            : "YYYY-MM-DD";
+        expanded[def.key] = formatPluginDateForBackend(raw, fmt);
+      }
     }
     return expanded;
   };
@@ -91,6 +111,34 @@ export function usePluginConfig() {
         if (typeof legacyFolder === "string" && legacyFolder.trim() !== "") {
           normalized[def.key] = legacyFolder;
           continue;
+        }
+      }
+
+      // 兼容：Pixiv 等旧配置 date_range（天）+ start_date -> end_date
+      if (
+        def.type === "date" &&
+        def.key === "end_date" &&
+        (rawVars[def.key] === undefined ||
+          rawVars[def.key] === "" ||
+          rawVars[def.key] === null)
+      ) {
+        const legacyRange = rawVars["date_range"];
+        const start = rawVars["start_date"];
+        if (
+          typeof legacyRange === "number" &&
+          legacyRange >= 1 &&
+          typeof start === "string" &&
+          start.trim() !== ""
+        ) {
+          const fmt =
+            def.format && def.format.trim() !== ""
+              ? def.format.trim()
+              : "YYYY-MM-DD";
+          const endStr = shiftPluginDateByDays(start, fmt, legacyRange - 1);
+          if (endStr) {
+            normalized[def.key] = endStr;
+            continue;
+          }
         }
       }
 
@@ -186,6 +234,32 @@ export function usePluginConfig() {
               ) {
                 callback(new Error(`${label}不能大于 ${varDefWithMinMax.max}`));
                 return;
+              }
+            }
+            if (varDef.type === "date" && typeof value === "string") {
+              const vd = varDef as PluginVarDef;
+              const fmt =
+                vd.format && vd.format.trim() !== ""
+                  ? vd.format.trim()
+                  : "YYYY-MM-DD";
+              const d = parsePluginDateStored(value, fmt);
+              if (!d) {
+                callback(new Error(`请输入有效的${label}`));
+                return;
+              }
+              if (vd.dateMin?.trim()) {
+                const minD = parsePluginDateBound(vd.dateMin);
+                if (minD && d.startOf("day").isBefore(minD, "day")) {
+                  callback(new Error(`${label}不能早于 ${vd.dateMin}`));
+                  return;
+                }
+              }
+              if (vd.dateMax?.trim()) {
+                const maxD = parsePluginDateBound(vd.dateMax);
+                if (maxD && d.startOf("day").isAfter(maxD, "day")) {
+                  callback(new Error(`${label}不能晚于 ${vd.dateMax}`));
+                  return;
+                }
               }
             }
             callback();

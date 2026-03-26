@@ -19,6 +19,10 @@ import "vant/lib/popup/style";
 import { getImageSupport, getSupportedFormats } from "@kabegame/image-type";
 import { invoke } from "@tauri-apps/api/core";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
+import { createMinAppVersionBeforeAddTaskGuard } from "@/composables/pluginMinAppVersionGate";
+import { useApp } from "@/stores/app";
+import { usePluginStore } from "@/stores/plugins";
+import { setCrawlerBeforeAddTaskGuard } from "@kabegame/core/stores/crawler";
 import { i18n } from "@kabegame/i18n";
 
 if (IS_ANDROID) {
@@ -34,8 +38,12 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component);
 }
 
-app.use(createPinia());
+const pinia = createPinia();
+app.use(pinia);
 app.use(i18n);
+
+useApp();
+setCrawlerBeforeAddTaskGuard(createMinAppVersionBeforeAddTaskGuard(usePluginStore()));
 registerHeaderFeatures();
 app.use(router);
 app.use(ElementPlus);

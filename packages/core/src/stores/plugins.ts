@@ -68,6 +68,8 @@ export interface BrowserPlugin {
   desp: PluginManifestText;
   /** manifest 版本（详情接口或路由 query 可提供） */
   version?: string | null;
+  /** manifest minAppVersion */
+  minAppVersion?: string | null;
   icon?: string | null;
   filePath?: string | null;
   doc?: PluginManifestDoc | null;
@@ -187,6 +189,8 @@ export interface Plugin {
   };
   /** 脚本类型：rhai | js。安卓仅支持 rhai。 */
   scriptType?: string;
+  /** manifest minAppVersion，运行前由前端校验 */
+  minAppVersion?: string | null;
 }
 
 export const usePluginStore = defineStore("plugins", () => {

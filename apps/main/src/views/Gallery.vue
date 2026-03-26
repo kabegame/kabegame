@@ -8,16 +8,15 @@
         <template #before-grid>
           <!-- 顶部工具栏 -->
           <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
-            :month-options="monthOptions" :month-loading="monthOptionsLoading"
-            :provider-root-path="providerRootPath" :current-provider-path="currentPath" :page-size="pageSize"
-            v-model:selectedRange="selectedRange" @refresh="handleManualRefresh"
-            @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
+            :month-options="monthOptions" :month-loading="monthOptionsLoading" :provider-root-path="providerRootPath"
+            :current-provider-path="currentPath" :page-size="pageSize" v-model:selectedRange="selectedRange"
+            @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
             @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
             @open-collect-menu="showCollectSourcePicker = true" />
 
           <!-- 大页分页器 -->
-          <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage"
-            :big-page-size="pageSize" :is-sticky="true" @jump-to-page="handleJumpToBigPage" />
+          <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage" :big-page-size="pageSize"
+            :is-sticky="true" @jump-to-page="handleJumpToBigPage" />
         </template>
 
         <!-- 无图片空状态：使用 ImageGrid 的 empty 插槽（只隐藏 ImageItem，不影响 header/插槽挂载） -->
@@ -55,7 +54,8 @@
 
     <!-- 移除/删除确认对话框 -->
     <RemoveImagesConfirmDialog v-model="showRemoveDialog" v-model:delete-files="removeDeleteFiles"
-      :message="removeDialogMessage" :title="$t('gallery.confirmDelete')" :checkbox-label="t('gallery.deleteSourceFilesCheckboxLabel')"
+      :message="removeDialogMessage" :title="$t('gallery.confirmDelete')"
+      :checkbox-label="t('gallery.deleteSourceFilesCheckboxLabel')"
       :danger-text="t('gallery.deleteSourceFilesDangerText')" :safe-text="t('gallery.deleteSourceFilesSafeText')"
       :hide-checkbox="IS_ANDROID" @confirm="confirmRemoveImages" />
 
@@ -1197,7 +1197,7 @@ onActivated(async () => {
       const msg = e != null && typeof e === "object" && "message" in e ? String((e as Error).message) : String(e);
       console.error("[Gallery] onActivated loadImages 失败:", pathToLoad, msg);
       if (msg.includes("路径不存在")) {
-        await invoke("clear_provider_cache").catch(() => {});
+        await invoke("clear_provider_cache").catch(() => { });
         await refreshImagesPreserveCache(pathToLoad);
       } else {
         throw e;

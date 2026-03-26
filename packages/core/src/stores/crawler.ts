@@ -3,6 +3,15 @@ import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { IS_ANDROID } from "../env";
 
+/** 创建爬虫任务前的异步守卫；返回 `false` 时不创建任务（如最低应用版本不满足） */
+export type CrawlerBeforeAddTaskGuard = (pluginId: string) => Promise<boolean>;
+
+let beforeAddTaskGuard: CrawlerBeforeAddTaskGuard | null = null;
+
+export function setCrawlerBeforeAddTaskGuard(guard: CrawlerBeforeAddTaskGuard | null) {
+  beforeAddTaskGuard = guard;
+}
+
 export interface CrawlTask {
   id: string;
   pluginId: string;
@@ -270,13 +279,24 @@ export const useCrawlerStore = defineStore("crawler", () => {
     }
   })();
 
+  /** @returns 是否已创建任务（前置守卫拒绝时为 `false`） */
   async function addTask(
     pluginId: string,
     outputDir?: string,
     userConfig?: Record<string, any>,
     outputAlbumId?: string,
     httpHeaders?: Record<string, string>,
-  ) {
+  ): Promise<boolean> {
+    if (beforeAddTaskGuard) {
+      try {
+        const allowed = await beforeAddTaskGuard(pluginId);
+        if (!allowed) return false;
+      } catch (e) {
+        console.error("addTask 前置守卫异常:", e);
+        return false;
+      }
+    }
+
     const task: CrawlTask = {
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       pluginId,
@@ -333,6 +353,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       }
       console.error("任务执行失败:", error);
     });
+    return true;
   }
 
   async function startCrawl(task: CrawlTask) {
@@ -422,12 +443,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
     runConfigs.value = runConfigs.value.filter((c) => c.id !== configId);
   }
 
-  async function runConfig(configId: string) {
+  async function runConfig(configId: string): Promise<boolean> {
     const cfg = runConfigs.value.find((c) => c.id === configId);
     if (!cfg) {
       throw new Error("运行配置不存在");
     }
-    await addTask(
+    return await addTask(
       cfg.pluginId,
       cfg.outputDir,
       cfg.userConfig ?? {},
@@ -553,7 +574,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     }, 1000);
   }
 
-  async function retryTask(task: CrawlTask) {
+  async function retryTask(task: CrawlTask): Promise<boolean> {
     return await addTask(
       task.pluginId,
       task.outputDir,
