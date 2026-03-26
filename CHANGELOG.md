@@ -14,6 +14,7 @@
 
 ### Changed
 - **Plugins:** Crawler plugins that rely on gzip-correct `to()` parsing or `re_replace_all` (e.g. wallpapers-craft) require **Kabegame 3.3.1+**.
+- **Plugins:** Min version restriction for plugin.
 
 ## [3.3.0]
 ### Added
