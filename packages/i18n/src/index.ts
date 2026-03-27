@@ -7,7 +7,11 @@ export {
   i18n,
   setLocale,
 } from "./setup";
-export { resolveManifestText, resolveManifestDoc, resolveConfigText } from "./resolve";
+export {
+  resolveManifestText,
+  resolveManifestDoc,
+  resolveConfigText,
+} from "./resolve";
 export { usePluginManifestI18n } from "./composables/usePluginManifestI18n";
 export {
   usePluginConfigI18n,

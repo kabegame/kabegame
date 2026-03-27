@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::SeekFrom;
 use std::path::Path;
-use std::{fs, io};
+use std::io;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 /// KGPG v2：固定头部 + ZIP（SFX 兼容）
 ///
@@ -46,92 +47,135 @@ fn read_u16_le(buf: &[u8], off: usize) -> Option<u16> {
     Some(u16::from_le_bytes([buf[off], buf[off + 1]]))
 }
 
-/// 读取 KGPG v2 meta（不会移动到 zip 区域）
-pub fn read_kgpg2_meta<R: Read + Seek>(r: &mut R) -> io::Result<Option<Kgpg2Meta>> {
-    r.seek(SeekFrom::Start(0))?;
-    let mut meta = [0u8; KGPG2_META_SIZE];
-    if let Err(e) = r.read_exact(&mut meta) {
-        // 文件过小/读失败：视为非 v2
-        if e.kind() == io::ErrorKind::UnexpectedEof {
-            return Ok(None);
-        }
-        return Err(e);
+fn parse_kgpg2_meta_bytes(meta: &[u8]) -> Option<Kgpg2Meta> {
+    if meta.len() < KGPG2_META_SIZE {
+        return None;
     }
-
     if &meta[0..4] != MAGIC {
-        return Ok(None);
+        return None;
     }
     let ver = read_u16_le(&meta, 4).unwrap_or(0);
     // 版本协商：
     // - ver < 2：视为旧格式（回退 zip v1）
     // - ver >= 2：尽量按当前最高支持版本(v2)解析（如果头部布局不匹配，仍会回退）
     if ver < VERSION {
-        return Ok(None);
+        return None;
     }
     let meta_size = read_u16_le(&meta, 6).unwrap_or(0) as usize;
     if meta_size != KGPG2_META_SIZE {
-        return Ok(None);
+        return None;
     }
 
     // 固定布局字段
     let w = read_u16_le(&meta, 8).unwrap_or(0);
     let h = read_u16_le(&meta, 10).unwrap_or(0);
     if w as u32 != KGPG2_ICON_W || h as u32 != KGPG2_ICON_H {
-        return Ok(None);
+        return None;
     }
     let pixel_format = meta[12]; // 1=RGB24
     if pixel_format != 1 {
-        return Ok(None);
+        return None;
     }
     let flags = meta[13];
     let manifest_len = read_u16_le(&meta, 14).unwrap_or(0);
     if manifest_len as usize > KGPG2_MANIFEST_SLOT_SIZE {
-        return Ok(None);
+        return None;
     }
 
-    Ok(Some(Kgpg2Meta {
+    Some(Kgpg2Meta {
         flags,
         manifest_len,
-    }))
+    })
 }
 
-pub fn read_kgpg2_icon_rgb<R: Read + Seek>(r: &mut R) -> io::Result<Option<Vec<u8>>> {
-    let Some(meta) = read_kgpg2_meta(r)? else {
-        return Ok(None);
-    };
+/// 解析 KGPG v2 meta（纯字节版，无 IO）。
+pub fn read_kgpg2_meta_from_bytes(bytes: &[u8]) -> Option<Kgpg2Meta> {
+    parse_kgpg2_meta_bytes(bytes)
+}
+
+/// 异步读取 KGPG v2 meta（不会移动到 zip 区域）。
+pub async fn read_kgpg2_meta(path: &Path) -> io::Result<Option<Kgpg2Meta>> {
+    let mut f = tokio::fs::File::open(path).await?;
+    f.seek(SeekFrom::Start(0)).await?;
+    let mut meta = [0u8; KGPG2_META_SIZE];
+    if let Err(e) = f.read_exact(&mut meta).await {
+        if e.kind() == io::ErrorKind::UnexpectedEof {
+            return Ok(None);
+        }
+        return Err(e);
+    }
+    Ok(parse_kgpg2_meta_bytes(&meta))
+}
+
+/// 纯字节读取 KGPG v2 icon（RGB24）。
+pub fn read_kgpg2_icon_rgb_from_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let meta = parse_kgpg2_meta_bytes(bytes)?;
     if !meta.icon_present() {
-        return Ok(Some(vec![]));
+        return Some(vec![]);
     }
-    r.seek(SeekFrom::Start(KGPG2_META_SIZE as u64))?;
-    let mut buf = vec![0u8; KGPG2_ICON_SIZE];
-    r.read_exact(&mut buf)?;
-    Ok(Some(buf))
+    let start = KGPG2_META_SIZE;
+    let end = start + KGPG2_ICON_SIZE;
+    if bytes.len() < end {
+        return None;
+    }
+    Some(bytes[start..end].to_vec())
 }
 
-pub fn read_kgpg2_manifest_json<R: Read + Seek>(r: &mut R) -> io::Result<Option<String>> {
-    let Some(meta) = read_kgpg2_meta(r)? else {
-        return Ok(None);
-    };
+/// 异步读取 KGPG v2 icon（RGB24）。
+pub async fn read_kgpg2_icon_rgb(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    let mut f = tokio::fs::File::open(path).await?;
+    f.seek(SeekFrom::Start(0)).await?;
+    let mut bytes = vec![0u8; KGPG2_META_SIZE + KGPG2_ICON_SIZE];
+    if let Err(e) = f.read_exact(&mut bytes).await {
+        if e.kind() == io::ErrorKind::UnexpectedEof {
+            return Ok(None);
+        }
+        return Err(e);
+    }
+    Ok(read_kgpg2_icon_rgb_from_bytes(&bytes))
+}
+
+/// 纯字节读取 KGPG v2 manifest JSON。
+pub fn read_kgpg2_manifest_json_from_bytes(bytes: &[u8]) -> Option<String> {
+    let meta = parse_kgpg2_meta_bytes(bytes)?;
     if !meta.manifest_present() || meta.manifest_len == 0 {
-        return Ok(Some(String::new()));
+        return Some(String::new());
     }
-    let start = (KGPG2_META_SIZE + KGPG2_ICON_SIZE) as u64;
-    r.seek(SeekFrom::Start(start))?;
-    let mut slot = vec![0u8; KGPG2_MANIFEST_SLOT_SIZE];
-    r.read_exact(&mut slot)?;
+    let start = KGPG2_META_SIZE + KGPG2_ICON_SIZE;
+    let end = start + KGPG2_MANIFEST_SLOT_SIZE;
+    if bytes.len() < end {
+        return None;
+    }
+    let slot = &bytes[start..end];
     let len = meta.manifest_len as usize;
-    let s = String::from_utf8_lossy(&slot[..len]).to_string();
-    Ok(Some(s))
+    if len > slot.len() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&slot[..len]).to_string())
 }
 
-pub fn read_kgpg2_icon_rgb_from_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    let mut f = fs::File::open(path)?;
-    read_kgpg2_icon_rgb(&mut f)
+/// 异步读取 KGPG v2 manifest JSON。
+pub async fn read_kgpg2_manifest_json(path: &Path) -> io::Result<Option<String>> {
+    let mut f = tokio::fs::File::open(path).await?;
+    f.seek(SeekFrom::Start(0)).await?;
+    let mut bytes = vec![0u8; KGPG2_TOTAL_HEADER_SIZE];
+    if let Err(e) = f.read_exact(&mut bytes).await {
+        if e.kind() == io::ErrorKind::UnexpectedEof {
+            return Ok(None);
+        }
+        return Err(e);
+    }
+    Ok(read_kgpg2_manifest_json_from_bytes(&bytes))
 }
 
-pub fn read_kgpg2_manifest_json_from_file(path: &Path) -> io::Result<Option<String>> {
-    let mut f = fs::File::open(path)?;
-    read_kgpg2_manifest_json(&mut f)
+/// 兼容别名：异步文件版。
+pub async fn read_kgpg2_icon_rgb_from_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    read_kgpg2_icon_rgb(path).await
+}
+
+/// 兼容别名：异步文件版。
+pub async fn read_kgpg2_manifest_json_from_file(path: &Path) -> io::Result<Option<String>> {
+    read_kgpg2_manifest_json(path).await
 }
 
 // -------------------------

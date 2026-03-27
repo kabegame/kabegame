@@ -81,9 +81,8 @@ pub(crate) fn plugin_display_name_from_manifest(plugin_id: &str) -> Option<Strin
         }
     }
 
-    let plugin_file = crate::plugin::find_plugin_kgpg_path(pid)?;
-    let manifest = crate::plugin::read_plugin_manifest_from_kgpg_file(&plugin_file).ok()?;
-    let name = manifest.name_fallback().trim().to_string();
+    let pm = crate::plugin::PluginManager::global_opt()?;
+    let name = pm.get_cached_plugin_display_name_sync(pid)?;
 
     if let Ok(mut guard) = cache.lock() {
         guard.insert(pid.to_string(), name.clone());

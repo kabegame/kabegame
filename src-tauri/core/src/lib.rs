@@ -18,6 +18,8 @@ pub mod providers;
 pub mod emitter;
 pub mod settings;
 pub mod shell_open;
+pub mod schedule_sync;
+pub mod scheduler;
 pub mod storage;
 pub mod workarounds;
 

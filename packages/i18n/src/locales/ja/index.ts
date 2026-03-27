@@ -10,6 +10,7 @@ import plugins from "./plugins.json";
 import help from "./help.json";
 import import_ from "./import.json";
 import contextMenu from "./contextMenu.json";
+import autoConfig from "./autoConfig.json";
 
 export default {
   common,
@@ -24,4 +25,5 @@ export default {
   help,
   import: import_,
   contextMenu,
+  autoConfig,
 };

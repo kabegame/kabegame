@@ -9,5 +9,7 @@
   "settings": "設定",
   "help": "說明",
   "surf": "暢遊",
-  "surfImages": "暢遊圖片"
+  "surfImages": "暢遊圖片",
+  "autoConfigs": "執行配置",
+  "autoConfigEdit": "編輯執行配置"
 }

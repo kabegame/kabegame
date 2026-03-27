@@ -326,6 +326,15 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
+    /// 运行配置变更（`reason`: `configadd` | `configdelete` | `configchange`）
+    pub fn emit_auto_config_change(&self, reason: &str, config_id: &str) {
+        let event = std::sync::Arc::new(DaemonEvent::AutoConfigChange {
+            reason: reason.to_string(),
+            config_id: config_id.to_string(),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
     /// 从存储读取任务并发送 task-status，用于下载失败等场景下刷新任务列表（避免一直显示“处理中”）。
     pub fn emit_task_status_from_storage(&self, task_id: &str) {
         let storage = crate::storage::Storage::global();
@@ -467,6 +476,8 @@ impl GlobalEmitter {
     pub fn emit_album_added(&self, _id: &str, _name: &str, _created_at: u64) {}
 
     pub fn emit_album_deleted(&self, _album_id: &str) {}
+
+    pub fn emit_auto_config_change(&self, _reason: &str, _config_id: &str) {}
 
     pub fn emit_pending_queue_change(&self, _pending_count: usize) {}
 

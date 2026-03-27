@@ -2,6 +2,7 @@ use crate::crawler::downloader::{get_default_images_dir, ActiveDownloadInfo, Dow
 use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::plugin::{check_min_app_version, PluginManager, VarDefinition, VarOption};
+use crate::schedule_sync::on_crawl_task_reached_terminal;
 use crate::settings::Settings;
 use crate::storage::Storage;
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,14 @@ pub struct CrawlTaskRequest {
     /// 可选：直接从指定 .kgpg 文件运行（用于插件编辑器/临时插件）
     #[serde(default)]
     pub plugin_file_path: Option<String>,
+    #[serde(default)]
+    pub run_config_id: Option<String>,
+    #[serde(default = "default_trigger_source")]
+    pub trigger_source: String,
+}
+
+fn default_trigger_source() -> String {
+    "manual".to_string()
 }
 
 #[derive(Clone)]
@@ -340,6 +349,12 @@ fn persist_task_status(
         task.error = error;
     }
     storage.update_task(task)?;
+    if matches!(
+        status,
+        "completed" | "failed" | "canceled" | "cancelled"
+    ) {
+        on_crawl_task_reached_terminal(task_id);
+    }
     Ok(())
 }
 

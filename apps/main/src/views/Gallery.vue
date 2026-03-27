@@ -1092,11 +1092,7 @@ onMounted(async () => {
   }).catch(() => {
     currentWallpaperImageId.value = null;
   });
-  // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
-  pluginStore.loadPlugins().then(() => {
-    loadPluginIcons();
-  });
-  crawlerStore.loadRunConfigs();
+  // 注意：任务列表与运行配置在 crawler store 初始化时加载；已安装插件在 App.vue onMounted 中 loadPlugins
   loadTotalImagesCount(); // 加载总图片数
   loadMonthOptions(); // 加载月份下拉框选项
 

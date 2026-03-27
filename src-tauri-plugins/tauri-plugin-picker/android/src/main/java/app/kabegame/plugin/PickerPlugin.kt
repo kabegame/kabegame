@@ -192,6 +192,8 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     /**
      * 列出 content:// URI 下一层的直接子项（不递归、不过滤）。
      * 返回 [{ uri, name, isDirectory }, ...]，由 Rust 端做递归与过滤。
+     *
+     * DocumentFile.listFiles() 在条目多时可能长时间阻塞，必须在后台线程执行，避免主线程 ANR。
      */
     @Command
     fun listContentChildren(invoke: Invoke) {
@@ -201,45 +203,49 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
             invoke.reject("uri 不能为空")
             return
         }
-        try {
-            val treeUri = Uri.parse(uriStr)
-            if (treeUri.scheme != "content") {
-                invoke.reject("仅支持 content:// URI")
-                return
-            }
-            val isTreeUri = uriStr.contains("/tree/")
-            val doc = if (isTreeUri) {
-                DocumentFile.fromTreeUri(activity, treeUri)
-            } else {
-                DocumentFile.fromSingleUri(activity, treeUri)
-            } ?: run {
-                invoke.reject("无法解析 content URI")
-                return
-            }
-            val arr = JSONArray()
-            if (!isTreeUri && !doc.isDirectory) {
-                val name = doc.name ?: ""
-                val obj = JSONObject()
-                obj.put("uri", treeUri.toString())
-                obj.put("name", name)
-                obj.put("isDirectory", false)
-                arr.put(obj)
-            } else {
-                val files = doc.listFiles() ?: emptyArray()
-                for (file in files) {
+        val treeUri = Uri.parse(uriStr)
+        if (treeUri.scheme != "content") {
+            invoke.reject("仅支持 content:// URI")
+            return
+        }
+        val isTreeUri = uriStr.contains("/tree/")
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val doc = if (isTreeUri) {
+                    DocumentFile.fromTreeUri(activity, treeUri)
+                } else {
+                    DocumentFile.fromSingleUri(activity, treeUri)
+                } ?: run {
+                    withContext(Dispatchers.Main) { invoke.reject("无法解析 content URI") }
+                    return@launch
+                }
+                val arr = JSONArray()
+                if (!isTreeUri && !doc.isDirectory) {
+                    val name = doc.name ?: ""
                     val obj = JSONObject()
-                    obj.put("uri", file.uri.toString())
-                    obj.put("name", file.name ?: "")
-                    obj.put("isDirectory", file.isDirectory)
+                    obj.put("uri", treeUri.toString())
+                    obj.put("name", name)
+                    obj.put("isDirectory", false)
                     arr.put(obj)
+                } else {
+                    val files = doc.listFiles() ?: emptyArray()
+                    for (file in files) {
+                        val obj = JSONObject()
+                        obj.put("uri", file.uri.toString())
+                        obj.put("name", file.name ?: "")
+                        obj.put("isDirectory", file.isDirectory)
+                        arr.put(obj)
+                    }
+                }
+                val result = JSObject()
+                result.put("entries", arr)
+                withContext(Dispatchers.Main) { invoke.resolve(result) }
+            } catch (e: Exception) {
+                Log.e(TAG, "listContentChildren failed", e)
+                withContext(Dispatchers.Main) {
+                    invoke.reject("列出 content URI 子项失败: ${e.message}", e)
                 }
             }
-            val result = JSObject()
-            result.put("entries", arr)
-            invoke.resolve(result)
-        } catch (e: Exception) {
-            Log.e("PickerPlugin", "listContentChildren failed", e)
-            invoke.reject("列出 content URI 子项失败: ${e.message}", e)
         }
     }
 
@@ -292,27 +298,32 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
             invoke.reject("uri 不能为空")
             return
         }
-        try {
-            val uri = Uri.parse(uriStr)
-            if (uri.scheme != "content") {
-                invoke.reject("仅支持 content:// URI")
-                return
+        val uri = Uri.parse(uriStr)
+        if (uri.scheme != "content") {
+            invoke.reject("仅支持 content:// URI")
+            return
+        }
+        val isTreeUri = uriStr.contains("/tree/")
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val doc = if (isTreeUri) {
+                    DocumentFile.fromTreeUri(activity, uri)
+                } else {
+                    DocumentFile.fromSingleUri(activity, uri)
+                } ?: run {
+                    withContext(Dispatchers.Main) { invoke.reject("无法解析 content URI") }
+                    return@launch
+                }
+                val isDir = doc.isDirectory
+                val result = JSObject()
+                result.put("isDirectory", isDir)
+                withContext(Dispatchers.Main) { invoke.resolve(result) }
+            } catch (e: Exception) {
+                Log.e(TAG, "isDirectory failed", e)
+                withContext(Dispatchers.Main) {
+                    invoke.reject("判断目录失败: ${e.message}", e)
+                }
             }
-            val isTreeUri = uriStr.contains("/tree/")
-            val doc = if (isTreeUri) {
-                DocumentFile.fromTreeUri(activity, uri)
-            } else {
-                DocumentFile.fromSingleUri(activity, uri)
-            } ?: run {
-                invoke.reject("无法解析 content URI")
-                return
-            }
-            val result = JSObject()
-            result.put("isDirectory", doc.isDirectory)
-            invoke.resolve(result)
-        } catch (e: Exception) {
-            Log.e("PickerPlugin", "isDirectory failed", e)
-            invoke.reject("判断目录失败: ${e.message}", e)
         }
     }
 

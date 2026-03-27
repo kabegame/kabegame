@@ -1,5 +1,6 @@
-﻿//! Run Configs 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
+//! Run Configs 陦ｨ逶ｸ蜈ｳ謫堺ｽ・
 use kabegame_core::ipc::ipc::CliIpcResponse;
+use kabegame_core::scheduler::Scheduler;
 use kabegame_core::storage::Storage;
 
 pub async fn get_run_configs() -> CliIpcResponse {
@@ -16,10 +17,10 @@ pub async fn add_run_config(config: &serde_json::Value) -> CliIpcResponse {
     let storage = Storage::global();
     match serde_json::from_value::<kabegame_core::storage::RunConfig>(config.clone()) {
         Ok(config) => match storage.add_run_config(config.clone()) {
-            Ok(()) => CliIpcResponse::ok_with_data(
-                "added",
-                serde_json::to_value(config).unwrap_or_default(),
-            ),
+            Ok(()) => {
+                let _ = Scheduler::global().reload_config(&config.id).await;
+                CliIpcResponse::ok_with_data("added", serde_json::to_value(config).unwrap_or_default())
+            }
             Err(e) => CliIpcResponse::err(e),
         },
         Err(e) => CliIpcResponse::err(format!("Invalid config data: {}", e)),
@@ -29,8 +30,11 @@ pub async fn add_run_config(config: &serde_json::Value) -> CliIpcResponse {
 pub async fn update_run_config(config: &serde_json::Value) -> CliIpcResponse {
     let storage = Storage::global();
     match serde_json::from_value::<kabegame_core::storage::RunConfig>(config.clone()) {
-        Ok(config) => match storage.update_run_config(config) {
-            Ok(()) => CliIpcResponse::ok("updated"),
+        Ok(config) => match storage.update_run_config(config.clone()) {
+            Ok(()) => {
+                let _ = Scheduler::global().reload_config(&config.id).await;
+                CliIpcResponse::ok("updated")
+            }
             Err(e) => CliIpcResponse::err(e),
         },
         Err(e) => CliIpcResponse::err(format!("Invalid config data: {}", e)),
@@ -39,6 +43,7 @@ pub async fn update_run_config(config: &serde_json::Value) -> CliIpcResponse {
 
 pub async fn delete_run_config(config_id: &str) -> CliIpcResponse {
     let storage = Storage::global();
+    let _ = Scheduler::global().remove_config(config_id).await;
     match storage.delete_run_config(config_id) {
         Ok(()) => CliIpcResponse::ok("deleted"),
         Err(e) => CliIpcResponse::err(e),

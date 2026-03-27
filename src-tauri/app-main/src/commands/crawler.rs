@@ -3,6 +3,7 @@ use kabegame_core::crawler::downloader::BrowserDownloadState;
 use kabegame_core::crawler::webview::{crawler_window_state, JsTaskPatch};
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
+use kabegame_core::schedule_sync::on_crawl_task_reached_terminal;
 use kabegame_core::storage::Storage;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -65,6 +66,12 @@ fn update_task_status(task_id: &str, status: &str, end_time: Option<u64>, error:
             task.error = Some(err);
         }
         let _ = Storage::global().update_task(task);
+        if matches!(
+            status,
+            "completed" | "failed" | "canceled" | "cancelled"
+        ) {
+            on_crawl_task_reached_terminal(task_id);
+        }
     }
 }
 

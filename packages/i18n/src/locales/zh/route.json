@@ -9,5 +9,7 @@
   "settings": "设置",
   "help": "帮助",
   "surf": "畅游",
-  "surfImages": "畅游图片"
+  "surfImages": "畅游图片",
+  "autoConfigs": "运行配置",
+  "autoConfigEdit": "编辑运行配置"
 }

@@ -16,21 +16,23 @@ datasource db {
 
 // 任务表
 model Task {
-    id               String  @id
-    pluginId         String  @map("plugin_id")
-    outputDir        String? @map("output_dir")
-    userConfig       String? @map("user_config") // JSON string
-    status           String
-    progress         Float   @default(0)
-    deletedCount     Int     @default(0) @map("deleted_count")
-    dedupCount       Int     @default(0) @map("dedup_count")
-    successCount     Int     @default(0) @map("success_count")
-    failedCount      Int     @default(0) @map("failed_count")
-    startTime        Int?    @map("start_time")
-    endTime          Int?    @map("end_time")
-    error            String?
+    id            String  @id
+    pluginId      String  @map("plugin_id")
+    outputDir     String? @map("output_dir")
+    userConfig    String? @map("user_config") // JSON string
+    runConfigId   String? @map("run_config_id")
+    triggerSource String  @default("manual") @map("trigger_source") // manual | scheduled
+    status        String
+    progress      Float   @default(0)
+    deletedCount  Int     @default(0) @map("deleted_count")
+    dedupCount    Int     @default(0) @map("dedup_count")
+    successCount  Int     @default(0) @map("success_count")
+    failedCount   Int     @default(0) @map("failed_count")
+    startTime     Int?    @map("start_time")
+    endTime       Int?    @map("end_time")
+    error         String?
 
-    images           Image[]             @relation("TaskToImage")
+    images           Image[]           @relation("TaskToImage")
     taskFailedImages TaskFailedImage[]
 
     @@index([startTime(sort: Desc)], name: "idx_tasks_start_time")
@@ -39,15 +41,23 @@ model Task {
 
 // 运行配置表
 model RunConfig {
-    id          String  @id
-    name        String
-    description String?
-    pluginId    String  @map("plugin_id")
-    url         String
-    outputDir   String? @map("output_dir")
-    userConfig  String? @map("user_config") // JSON string
-    httpHeaders String? @map("http_headers") // JSON string: Record<string,string>
-    createdAt   Int     @map("created_at")
+    id                   String  @id
+    name                 String
+    description          String?
+    pluginId             String  @map("plugin_id")
+    url                  String
+    outputDir            String? @map("output_dir")
+    userConfig           String? @map("user_config") // JSON string
+    httpHeaders          String? @map("http_headers") // JSON string: Record<string,string>
+    createdAt            Int     @map("created_at")
+    scheduleEnabled      Int     @default(0) @map("schedule_enabled") // 0/1
+    scheduleMode         String? @map("schedule_mode") // interval | daily
+    scheduleIntervalSecs Int?    @map("schedule_interval_secs")
+    scheduleDailyHour    Int?    @map("schedule_daily_hour")
+    scheduleDailyMinute  Int?    @map("schedule_daily_minute")
+    scheduleDelaySecs    Int?    @map("schedule_delay_secs") // 已废弃
+    schedulePlannedAt    Int?    @map("schedule_planned_at")
+    scheduleLastRunAt    Int?    @map("schedule_last_run_at")
 
     @@map("run_configs")
 }
@@ -55,7 +65,7 @@ model RunConfig {
 // 图片表（同时支持视频壁纸）
 model Image {
     id            Int     @id @default(autoincrement())
-    url           String?  // 本地导入的时候没有url
+    url           String? // 本地导入的时候没有url
     localPath     String  @map("local_path")
     pluginId      String? @map("plugin_id")
     taskId        String? @map("task_id")
@@ -65,14 +75,14 @@ model Image {
     thumbnailPath String  @default("") @map("thumbnail_path")
     hash          String  @default("")
     mimeType      String? @map("mime_type")
-    width         Int?    // 图片宽度（像素）
-    height        Int?    // 图片高度（像素）
+    width         Int? // 图片宽度（像素）
+    height        Int? // 图片高度（像素）
     displayName   String  @default("") @map("display_name")
     type          String? @default("image")
 
-    task          Task?        @relation("TaskToImage", fields: [taskId], references: [id], onDelete: SetNull)
-    surfRecord    SurfRecord?  @relation("SurfRecordToImage", fields: [surfRecordId], references: [id], onDelete: SetNull)
-    albumImages   AlbumImage[]
+    task        Task?        @relation("TaskToImage", fields: [taskId], references: [id], onDelete: SetNull)
+    surfRecord  SurfRecord?  @relation("SurfRecordToImage", fields: [surfRecordId], references: [id], onDelete: SetNull)
+    albumImages AlbumImage[]
 
     @@index([crawledAt(sort: Desc)], name: "idx_crawled_at")
     @@index([pluginId], name: "idx_plugin_id")
@@ -84,15 +94,15 @@ model Image {
 
 // 畅游记录表
 model SurfRecord {
-    id            String  @id
-    host          String  @unique
-    rootUrl       String  @map("root_url")
+    id            String @id
+    host          String @unique
+    rootUrl       String @map("root_url")
     icon          Bytes?
-    lastVisitAt   Int     @map("last_visit_at")
-    downloadCount Int     @default(0) @map("download_count")
-    createdAt     Int     @map("created_at")
+    lastVisitAt   Int    @map("last_visit_at")
+    downloadCount Int    @default(0) @map("download_count")
+    createdAt     Int    @map("created_at")
 
-    images        Image[] @relation("SurfRecordToImage")
+    images Image[] @relation("SurfRecordToImage")
 
     @@index([host], name: "idx_surf_records_host")
     @@index([lastVisitAt(sort: Desc)], name: "idx_surf_records_last_visit")
@@ -126,15 +136,15 @@ model AlbumImage {
 
 // 任务下载失败图片表
 model TaskFailedImage {
-    id               Int     @id @default(autoincrement())
-    taskId           String  @map("task_id")
-    pluginId         String  @map("plugin_id")
-    url              String
-    order            Int     @map("order")
-    createdAt        Int     @map("created_at")
-    lastError        String? @map("last_error")
+    id              Int     @id @default(autoincrement())
+    taskId          String  @map("task_id")
+    pluginId        String  @map("plugin_id")
+    url             String
+    order           Int     @map("order")
+    createdAt       Int     @map("created_at")
+    lastError       String? @map("last_error")
     lastAttemptedAt Int?    @map("last_attempted_at")
-    headerSnapshot   String? @map("header_snapshot") // JSON string: Record<string,string>
+    headerSnapshot  String? @map("header_snapshot") // JSON string: Record<string,string>
 
     task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
@@ -144,10 +154,10 @@ model TaskFailedImage {
 
 // 插件源表（商店源）
 model PluginSource {
-    id        String   @id
+    id        String @id
     name      String
-    indexUrl  String   @map("index_url")
-    createdAt Int      @map("created_at")
+    indexUrl  String @map("index_url")
+    createdAt Int    @map("created_at")
 
     cache PluginSourceCache?
 

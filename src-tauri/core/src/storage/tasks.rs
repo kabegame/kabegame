@@ -18,6 +18,12 @@ pub struct TaskInfo {
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(rename = "outputAlbumId")]
     pub output_album_id: Option<String>,
+    #[serde(rename = "runConfigId")]
+    #[serde(default)]
+    pub run_config_id: Option<String>,
+    #[serde(rename = "triggerSource")]
+    #[serde(default = "default_trigger_source")]
+    pub trigger_source: String,
     pub status: String,
     pub progress: f64,
     #[serde(rename = "deletedCount")]
@@ -34,6 +40,10 @@ pub struct TaskInfo {
     #[serde(rename = "endTime")]
     pub end_time: Option<u64>,
     pub error: Option<String>,
+}
+
+fn default_trigger_source() -> String {
+    "manual".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,8 +79,11 @@ impl Storage {
             .map_err(|e| format!("Failed to serialize http headers: {}", e))?;
 
         conn.execute(
-            "INSERT INTO tasks (id, plugin_id, output_dir, user_config, http_headers, output_album_id, status, progress, deleted_count, dedup_count, success_count, failed_count, start_time, end_time, error)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            "INSERT INTO tasks (
+                id, plugin_id, output_dir, user_config, http_headers, output_album_id, run_config_id, trigger_source,
+                status, progress, deleted_count, dedup_count, success_count, failed_count, start_time, end_time, error
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 task.id,
                 task.plugin_id,
@@ -78,6 +91,12 @@ impl Storage {
                 user_config_json,
                 http_headers_json,
                 task.output_album_id,
+                task.run_config_id,
+                if task.trigger_source.is_empty() {
+                    "manual".to_string()
+                } else {
+                    task.trigger_source.clone()
+                },
                 task.status,
                 task.progress,
                 task.deleted_count,
@@ -96,7 +115,11 @@ impl Storage {
     pub fn update_task(&self, task: TaskInfo) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         conn.execute(
-            "UPDATE tasks SET status = ?1, progress = ?2, start_time = ?3, end_time = ?4, error = ?5, deleted_count = ?6, dedup_count = ?7, success_count = ?8, failed_count = ?9, output_album_id = ?10 WHERE id = ?11",
+            "UPDATE tasks
+             SET status = ?1, progress = ?2, start_time = ?3, end_time = ?4, error = ?5,
+                 deleted_count = ?6, dedup_count = ?7, success_count = ?8, failed_count = ?9,
+                 output_album_id = ?10, run_config_id = ?11, trigger_source = ?12
+             WHERE id = ?13",
             params![
                 task.status,
                 task.progress,
@@ -108,6 +131,12 @@ impl Storage {
                 task.success_count,
                 task.failed_count,
                 task.output_album_id,
+                task.run_config_id,
+                if task.trigger_source.is_empty() {
+                    "manual".to_string()
+                } else {
+                    task.trigger_source.clone()
+                },
                 task.id,
             ],
         )
@@ -119,7 +148,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let task: Option<TaskInfo> = conn
             .query_row(
-                "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count
+                "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count, t.run_config_id, t.trigger_source
                  FROM tasks t WHERE t.id = ?1",
                 params![task_id],
                 |row| {
@@ -145,6 +174,10 @@ impl Storage {
                         dedup_count: row.get(12)?,
                         success_count: row.get(13)?,
                         failed_count: row.get(14)?,
+                        run_config_id: row.get(15)?,
+                        trigger_source: row
+                            .get::<_, Option<String>>(16)?
+                            .unwrap_or_else(default_trigger_source),
                     })
                 },
             )
@@ -158,6 +191,7 @@ impl Storage {
         let mut stmt = conn
             .prepare(
                 "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count
+                 , t.run_config_id, t.trigger_source
                  FROM tasks t ORDER BY t.start_time DESC",
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -184,6 +218,10 @@ impl Storage {
                     dedup_count: row.get(12)?,
                     success_count: row.get(13)?,
                     failed_count: row.get(14)?,
+                    run_config_id: row.get(15)?,
+                    trigger_source: row
+                        .get::<_, Option<String>>(16)?
+                        .unwrap_or_else(default_trigger_source),
                 })
             })
             .map_err(|e| format!("Failed to query tasks: {}", e))?;
@@ -211,6 +249,7 @@ impl Storage {
         let mut stmt = conn
             .prepare(
                 "SELECT t.id, t.plugin_id, t.output_dir, t.user_config, t.http_headers, t.status, t.progress, t.start_time, t.end_time, t.error, t.output_album_id, t.deleted_count, t.dedup_count, t.success_count, t.failed_count
+                 , t.run_config_id, t.trigger_source
                  FROM tasks t ORDER BY t.start_time DESC LIMIT ?1 OFFSET ?2",
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -240,6 +279,10 @@ impl Storage {
                     dedup_count: row.get(12)?,
                     success_count: row.get(13)?,
                     failed_count: row.get(14)?,
+                    run_config_id: row.get(15)?,
+                    trigger_source: row
+                        .get::<_, Option<String>>(16)?
+                        .unwrap_or_else(default_trigger_source),
                 })
             },
         ).map_err(|e| format!("Failed to query tasks: {}", e))?;

@@ -9,5 +9,7 @@
   "settings": "Settings",
   "help": "Help",
   "surf": "Surf",
-  "surfImages": "Surf Images"
+  "surfImages": "Surf Images",
+  "autoConfigs": "Run Configs",
+  "autoConfigEdit": "Edit Run Config"
 }
