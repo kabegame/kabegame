@@ -17,9 +17,16 @@
     <HelpDrawer />
     <!-- 全局唯一的任务抽屉（避免多页面实例冲突） -->
     <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
+    <AutoConfigDialog />
     <!-- Android：全局导入抽屉 -->
     <CrawlerDialog v-if="IS_ANDROID" v-model="crawlerDrawerVisible" :plugin-icons="pluginIcons"
       :initial-config="crawlerDrawerInitialConfig" />
+    <MissedRunsDialog
+      v-model="missedRunsVisible"
+      :items="missedRunItems"
+      @run-now="handleRunMissedNow"
+      @dismiss="handleDismissMissed"
+    />
     <!-- 非 Android：侧边栏 + 主内容 -->
     <template v-if="!IS_ANDROID">
       <el-aside class="app-sidebar" :class="{ 'sidebar-collapsed': isCollapsed, 'bg-transparent': IS_WINDOWS || IS_MACOS, 'bg-white': !IS_WINDOWS && !IS_MACOS }" :width="isCollapsed ? '64px' : '200px'">
@@ -53,6 +60,12 @@
               <Compass />
             </el-icon>
             <span>{{ $t('route.surf') }}</span>
+          </el-menu-item>
+          <el-menu-item index="/auto-configs">
+            <el-icon>
+              <AlarmClock />
+            </el-icon>
+            <span>{{ $t('route.autoConfigs') }}</span>
           </el-menu-item>
           <el-menu-item index="/settings">
             <el-icon>
@@ -102,7 +115,7 @@ import en from "element-plus/dist/locale/en.mjs";
 import zhTw from "element-plus/dist/locale/zh-tw.mjs";
 import ja from "element-plus/dist/locale/ja.mjs";
 import ko from "element-plus/dist/locale/ko.mjs";
-import { Picture, Grid, Setting, Collection, QuestionFilled, Compass } from "@element-plus/icons-vue";
+import { Picture, Grid, Setting, Collection, QuestionFilled, Compass, AlarmClock } from "@element-plus/icons-vue";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useI18n, setLocale, resolveLanguage, i18n } from "@kabegame/i18n";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
@@ -116,6 +129,8 @@ import FileDropOverlay from "./components/FileDropOverlay.vue";
 import ImportConfirmDialog from "./components/import/ImportConfirmDialog.vue";
 import PluginImportDialog from "./components/import/PluginImportDialog.vue";
 import CrawlerDialog from "./components/CrawlerDialog.vue";
+import MissedRunsDialog from "./components/scheduler/MissedRunsDialog.vue";
+import AutoConfigDialog from "./components/scheduler/AutoConfigDialog.vue";
 import { useActiveRoute } from "./composables/useActiveRoute";
 import { useWindowEvents } from "./composables/useWindowEvents";
 import { useFileDrop } from "./composables/useFileDrop";
@@ -127,9 +142,10 @@ import { IS_WINDOWS, IS_MACOS, IS_ANDROID } from "@kabegame/core/env";
 import { initHttpServerBaseUrl } from "@kabegame/core/httpServer";
 import { usePluginStore } from "./stores/plugins";
 import { useFailedImagesStore } from "./stores/failedImages";
+import { useCrawlerStore } from "./stores/crawler";
 import { useRouter } from "vue-router";
 import { useModalStackStore } from "@kabegame/core/stores/modalStack";
-import { ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { useThrottleFn } from "@vueuse/core";
 
 // 路由高亮
@@ -160,6 +176,7 @@ const bottomTabs = computed(() => {
     { index: galleryMenuRoute.value, icon: Picture, label: i18n.global.t("route.gallery") },
     { index: "/albums", icon: Collection, label: i18n.global.t("route.albums") },
     { index: "/plugin-browser", icon: Grid, label: i18n.global.t("route.pluginBrowser") },
+    { index: "/auto-configs", icon: AlarmClock, label: i18n.global.t("route.autoConfigs") },
     { index: "/settings", icon: Setting, label: i18n.global.t("route.settings") },
     { index: "/help", icon: QuestionFilled, label: i18n.global.t("route.help") },
   ];
@@ -176,6 +193,7 @@ const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig
 // 插件图标（用于全局抽屉，Android 上 CrawlerDialog 使用）
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
+const crawlerStore = useCrawlerStore();
 const pluginIcons = ref<Record<string, string>>({});
 
 const loadPluginIcons = async () => {
@@ -217,6 +235,8 @@ const importKgpgPath = ref<string | null>(null);
 
 // 路由视图 key，用于强制刷新组件
 const routerViewKey = ref(0);
+const missedRunsVisible = ref(false);
+const missedRunItems = ref<import("@kabegame/core/stores/crawler").MissedRunItem[]>([]);
 
 // 窗口事件监听
 const { init: initWindowEvents } = useWindowEvents();
@@ -302,7 +322,13 @@ onMounted(async () => {
     }
   }
   registerHeaderFeatures();
+  try {
+    await pluginStore.loadPlugins();
+  } catch (e) {
+    console.error("加载已安装插件列表失败:", e);
+  }
   await failedImagesStore.initListeners();
+  await checkMissedRunsAtStartup();
 
   // 初始化各个 composables
   await initWindowEvents();
@@ -388,6 +414,40 @@ onMounted(async () => {
   // 通知后端已准备好接收事件
   emit('app-ready');
 });
+
+const checkMissedRunsAtStartup = async () => {
+  try {
+    await crawlerStore.runConfigsReady;
+    const items = await crawlerStore.getMissedRuns();
+    if (!items.length) return;
+    missedRunItems.value = items;
+    missedRunsVisible.value = true;
+  } catch (error) {
+    console.warn("检查漏跑任务失败:", error);
+  }
+};
+
+const handleRunMissedNow = async () => {
+  const ids = missedRunItems.value.map((item) => item.configId);
+  if (!ids.length) {
+    missedRunsVisible.value = false;
+    return;
+  }
+  await Promise.allSettled(ids.map((id) => crawlerStore.runFromConfig(id)));
+  missedRunsVisible.value = false;
+  missedRunItems.value = [];
+  ElMessage.success(t("autoConfig.missedRuns.runNowSuccess"));
+};
+
+const handleDismissMissed = async () => {
+  if (!missedRunItems.value.length) {
+    missedRunsVisible.value = false;
+    return;
+  }
+  missedRunsVisible.value = false;
+  missedRunItems.value = [];
+  ElMessage.info(t("autoConfig.missedRuns.dismissed"));
+};
 
 onUnmounted(() => {
   // 清理设置变更事件监听器

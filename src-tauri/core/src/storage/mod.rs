@@ -17,11 +17,11 @@ pub mod run_configs;
 pub mod surf_records;
 pub mod tasks;
 
+pub use albums::Album;
+pub use gallery::GalleryMediaTypeCounts;
 pub use gallery_time::{
     gallery_month_groups_from_days, GalleryTimeFilterPayload, GalleryTimeGroupIndex,
 };
-pub use gallery::GalleryMediaTypeCounts;
-pub use albums::Album;
 pub use images::ImageInfo;
 pub use run_configs::RunConfig;
 pub use surf_records::{RangedSurfRecords, SurfRecord};
@@ -72,6 +72,8 @@ PRAGMA mmap_size = 268435456;
                 user_config TEXT,
                 http_headers TEXT,
                 output_album_id TEXT,
+                run_config_id TEXT,
+                trigger_source TEXT NOT NULL DEFAULT 'manual',
                 status TEXT NOT NULL,
                 progress REAL NOT NULL DEFAULT 0,
                 start_time INTEGER,
@@ -102,6 +104,11 @@ PRAGMA mmap_size = 268435456;
             "ALTER TABLE tasks ADD COLUMN failed_count INTEGER NOT NULL DEFAULT 0",
             [],
         );
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN run_config_id TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE tasks ADD COLUMN trigger_source TEXT NOT NULL DEFAULT 'manual'",
+            [],
+        );
         let _ = conn.execute(
             "UPDATE tasks SET success_count = (SELECT COUNT(*) FROM images i WHERE i.task_id = tasks.id)",
             [],
@@ -112,10 +119,22 @@ PRAGMA mmap_size = 268435456;
         );
 
         // 迁移：本地导入 plugin_id 从 "本地导入" 改为 "local-import"（i18n 适配）
-        let _ = conn.execute("UPDATE tasks SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
-        let _ = conn.execute("UPDATE images SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
-        let _ = conn.execute("UPDATE task_failed_images SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
-        let _ = conn.execute("UPDATE run_configs SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'", []);
+        let _ = conn.execute(
+            "UPDATE tasks SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE images SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE task_failed_images SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE run_configs SET plugin_id = 'local-import' WHERE plugin_id = '本地导入'",
+            [],
+        );
 
         // 迁移：删除所有任务已不存在的失败图片（孤儿记录）
         let _ = conn.execute(
@@ -134,12 +153,54 @@ PRAGMA mmap_size = 268435456;
                 output_dir TEXT,
                 user_config TEXT,
                 http_headers TEXT,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                schedule_enabled INTEGER NOT NULL DEFAULT 0,
+                schedule_mode TEXT,
+                schedule_interval_secs INTEGER,
+                schedule_daily_hour INTEGER,
+                schedule_daily_minute INTEGER,
+                schedule_delay_secs INTEGER,
+                schedule_planned_at INTEGER,
+                schedule_last_run_at INTEGER
             )",
             [],
         )
         .expect("Failed to create run_configs table");
         let _ = conn.execute("ALTER TABLE run_configs ADD COLUMN http_headers TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE run_configs ADD COLUMN schedule_enabled INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE run_configs ADD COLUMN schedule_mode TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE run_configs ADD COLUMN schedule_interval_secs INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE run_configs ADD COLUMN schedule_daily_hour INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE run_configs ADD COLUMN schedule_daily_minute INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE run_configs ADD COLUMN schedule_delay_secs INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE run_configs ADD COLUMN schedule_planned_at INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE run_configs ADD COLUMN schedule_last_run_at INTEGER",
+            [],
+        );
+        // 已移除「延迟运行一次」模式：关闭并清空遗留配置
+        let _ = conn.execute(
+            "UPDATE run_configs SET schedule_enabled = 0, schedule_mode = NULL, schedule_delay_secs = NULL, schedule_planned_at = NULL WHERE schedule_mode = 'delay_once'",
+            [],
+        );
 
         // 创建图片表（url 可选，本地导入时无 URL）
         conn.execute(
@@ -183,12 +244,18 @@ PRAGMA mmap_size = 268435456;
                 .expect("Failed to add images.mime_type column");
         }
         if !table_has_column(&conn, "images", "type") {
-            conn.execute("ALTER TABLE images ADD COLUMN type TEXT DEFAULT 'image'", [])
-                .expect("Failed to add images.type column");
+            conn.execute(
+                "ALTER TABLE images ADD COLUMN type TEXT DEFAULT 'image'",
+                [],
+            )
+            .expect("Failed to add images.type column");
         }
         if !table_has_column(&conn, "images", "last_set_wallpaper_at") {
-            conn.execute("ALTER TABLE images ADD COLUMN last_set_wallpaper_at INTEGER", [])
-                .expect("Failed to add images.last_set_wallpaper_at column");
+            conn.execute(
+                "ALTER TABLE images ADD COLUMN last_set_wallpaper_at INTEGER",
+                [],
+            )
+            .expect("Failed to add images.last_set_wallpaper_at column");
         }
 
         // 创建索引（新库的 CREATE 已含 width/height，上述 ALTER 用于旧库升级）
@@ -321,8 +388,11 @@ PRAGMA mmap_size = 268435456;
                 .expect("Failed to add images.mime_type column after migrations");
         }
         if !table_has_column(&conn, "images", "type") {
-            conn.execute("ALTER TABLE images ADD COLUMN type TEXT DEFAULT 'image'", [])
-                .expect("Failed to add images.type column after migrations");
+            conn.execute(
+                "ALTER TABLE images ADD COLUMN type TEXT DEFAULT 'image'",
+                [],
+            )
+            .expect("Failed to add images.type column after migrations");
         }
         // 复杂迁移可能重建 images 表，迁移后再次确保 surf_record_id 列存在。
         let _ = conn.execute("ALTER TABLE images ADD COLUMN surf_record_id TEXT", []);
@@ -331,8 +401,11 @@ PRAGMA mmap_size = 268435456;
             [],
         );
         if !table_has_column(&conn, "images", "last_set_wallpaper_at") {
-            conn.execute("ALTER TABLE images ADD COLUMN last_set_wallpaper_at INTEGER", [])
-                .expect("Failed to add images.last_set_wallpaper_at column after migrations");
+            conn.execute(
+                "ALTER TABLE images ADD COLUMN last_set_wallpaper_at INTEGER",
+                [],
+            )
+            .expect("Failed to add images.last_set_wallpaper_at column after migrations");
         }
         let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_images_last_set_wallpaper_at ON images(last_set_wallpaper_at DESC)",
@@ -377,7 +450,8 @@ PRAGMA mmap_size = 268435456;
                 [],
                 |row| row.get::<_, i64>(0),
             )
-            .unwrap_or(0) == 0;
+            .unwrap_or(0)
+            == 0;
 
         // 创建插件源表
         conn.execute(
@@ -617,6 +691,8 @@ CREATE TABLE tasks_new (
   user_config TEXT,
   http_headers TEXT,
   output_album_id TEXT,
+  run_config_id TEXT,
+  trigger_source TEXT NOT NULL DEFAULT 'manual',
   status TEXT NOT NULL,
   progress REAL NOT NULL DEFAULT 0,
   deleted_count INTEGER NOT NULL DEFAULT 0,
@@ -626,11 +702,11 @@ CREATE TABLE tasks_new (
   error TEXT
 );
 INSERT INTO tasks_new (
-  id, plugin_id, output_dir, user_config, http_headers, output_album_id,
+  id, plugin_id, output_dir, user_config, http_headers, output_album_id, run_config_id, trigger_source,
   status, progress, deleted_count, dedup_count, start_time, end_time, error
 )
 SELECT
-  id, plugin_id, output_dir, user_config, NULL, output_album_id,
+  id, plugin_id, output_dir, user_config, NULL, output_album_id, NULL, 'manual',
   status, progress, COALESCE(deleted_count, 0), 0, start_time, end_time, error
 FROM tasks;
 DROP TABLE tasks;
@@ -789,10 +865,22 @@ fn perform_complex_migrations(conn: &mut Connection) {
             .expect("Failed to start transaction for images pk migration");
 
         tx.execute("DROP TABLE IF EXISTS images_ordered", []).ok();
-        let type_col = if has_type_col { "COALESCE(type, 'image') AS type," } else { "" };
+        let type_col = if has_type_col {
+            "COALESCE(type, 'image') AS type,"
+        } else {
+            ""
+        };
         let mime_col = if has_mime_type { "mime_type," } else { "" };
-        let surf_col = if has_surf_record_id { "surf_record_id," } else { "" };
-        let display_col = if has_display_name { "COALESCE(display_name, '') AS display_name," } else { "" };
+        let surf_col = if has_surf_record_id {
+            "surf_record_id,"
+        } else {
+            ""
+        };
+        let display_col = if has_display_name {
+            "COALESCE(display_name, '') AS display_name,"
+        } else {
+            ""
+        };
         let last_wall_col = if has_last_set_wallpaper_at {
             "last_set_wallpaper_at,"
         } else {
@@ -868,9 +956,17 @@ fn perform_complex_migrations(conn: &mut Connection) {
             )
             .expect("Failed to create images_new (INTEGER pk)");
 
-            let type_s = if has_type_col { "COALESCE(type, 'image')" } else { "'image'" };
+            let type_s = if has_type_col {
+                "COALESCE(type, 'image')"
+            } else {
+                "'image'"
+            };
             let mime_s = if has_mime_type { "mime_type," } else { "" };
-            let surf_s = if has_surf_record_id { "surf_record_id," } else { "" };
+            let surf_s = if has_surf_record_id {
+                "surf_record_id,"
+            } else {
+                ""
+            };
             let (display_ins, display_sel) = if has_display_name {
                 ("display_name", "COALESCE(display_name, '')")
             } else {
@@ -924,7 +1020,6 @@ fn perform_complex_migrations(conn: &mut Connection) {
             );
             let _ = tx.execute("DROP TABLE album_images", []);
             let _ = tx.execute("ALTER TABLE album_images_new RENAME TO album_images", []);
-
         }
 
         tx.execute("DROP TABLE IF EXISTS images_ordered", []).ok();

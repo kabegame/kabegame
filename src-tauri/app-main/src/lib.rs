@@ -44,6 +44,7 @@ use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
     plugin::PluginManager,
     providers::{ProviderCacheConfig, ProviderRuntime},
+    scheduler::Scheduler,
     settings::Settings,
     storage::Storage,
 };
@@ -114,6 +115,13 @@ fn init_globals() -> Result<(), String> {
     TaskScheduler::init_global(download_queue.clone())
         .map_err(|e| format!("Failed to initialize task scheduler: {}", e))?;
     println!("  ✓ TaskScheduler initialized");
+    Scheduler::init_global().map_err(|e| format!("Failed to initialize scheduler: {}", e))?;
+    tauri::async_runtime::spawn(async {
+        if let Err(e) = Scheduler::global().start().await {
+            eprintln!("Failed to start scheduler: {}", e);
+        }
+    });
+    println!("  ✓ Auto scheduler initialized");
 
     {
         let mut cfg = ProviderCacheConfig::default();
@@ -409,9 +417,13 @@ pub fn run() {
             surf_get_cookies,
             // --- Run Configs ---
             get_run_configs,
+            get_run_config,
             add_run_config,
             update_run_config,
             delete_run_config,
+            copy_run_config,
+            get_missed_runs,
+            resolve_missed_runs,
             // --- Plugins ---
             get_plugins,
             get_plugin_detail,

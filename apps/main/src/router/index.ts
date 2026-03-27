@@ -12,6 +12,7 @@ import Settings from "@/views/Settings.vue";
 import Help from "@/views/Help.vue";
 import Surf from "@/views/Surf.vue";
 import SurfImages from "@/views/SurfImages.vue";
+import AutoConfigs from "@/views/AutoConfigs.vue";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -89,6 +90,12 @@ const routes: RouteRecordRaw[] = [
     name: "SurfImages",
     component: SurfImages,
     meta: { title: "route.surfImages" },
+  },
+  {
+    path: "/auto-configs",
+    name: "AutoConfigs",
+    component: AutoConfigs,
+    meta: { title: "route.autoConfigs" },
   },
   {
     path: "/plugins",

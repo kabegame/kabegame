@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { IS_ANDROID } from "../env";
 
@@ -8,7 +8,9 @@ export type CrawlerBeforeAddTaskGuard = (pluginId: string) => Promise<boolean>;
 
 let beforeAddTaskGuard: CrawlerBeforeAddTaskGuard | null = null;
 
-export function setCrawlerBeforeAddTaskGuard(guard: CrawlerBeforeAddTaskGuard | null) {
+export function setCrawlerBeforeAddTaskGuard(
+  guard: CrawlerBeforeAddTaskGuard | null,
+) {
   beforeAddTaskGuard = guard;
 }
 
@@ -19,6 +21,8 @@ export interface CrawlTask {
   userConfig?: Record<string, any>;
   httpHeaders?: Record<string, string>;
   outputAlbumId?: string;
+  runConfigId?: string;
+  triggerSource: "manual" | "scheduled";
   status: "pending" | "running" | "completed" | "failed" | "canceled";
   progress: number;
   deletedCount: number;
@@ -42,6 +46,79 @@ export interface RunConfig {
   userConfig?: Record<string, any>;
   httpHeaders?: Record<string, string>;
   createdAt: number;
+  scheduleEnabled: boolean;
+  scheduleMode?: "interval" | "daily";
+  scheduleIntervalSecs?: number;
+  scheduleDailyHour?: number;
+  scheduleDailyMinute?: number;
+  scheduleDelaySecs?: number;
+  schedulePlannedAt?: number;
+  scheduleLastRunAt?: number;
+}
+
+export interface MissedRunItem {
+  configId: string;
+  configName: string;
+  scheduleMode: "interval" | "daily";
+  missedCount: number;
+  lastDueAt: number;
+}
+
+/** 与后端 `AutoConfigChange.reason` 一致 */
+export type AutoConfigChangeReason =
+  | "configadd"
+  | "configdelete"
+  | "configchange";
+
+function numOpt(v: unknown): number | undefined {
+  if (v == null || v === "") return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** 将 `get_run_config` / `get_run_configs` 单条 JSON 规范为 `RunConfig` */
+export function parseRunConfigRaw(raw: unknown): RunConfig | null {
+  if (raw == null || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const id = String(o.id ?? "").trim();
+  const pluginId = String(o.pluginId ?? o.plugin_id ?? "").trim();
+  if (!id || !pluginId) return null;
+  const scheduleModeRaw = o.scheduleMode ?? o.schedule_mode;
+  const scheduleMode =
+    typeof scheduleModeRaw === "string" &&
+    (scheduleModeRaw === "interval" || scheduleModeRaw === "daily")
+      ? scheduleModeRaw
+      : undefined;
+  return {
+    id,
+    name: String(o.name ?? ""),
+    description:
+      o.description != null && o.description !== ""
+        ? String(o.description)
+        : undefined,
+    pluginId,
+    url: String(o.url ?? ""),
+    outputDir: (o.outputDir ?? o.output_dir) as string | undefined,
+    userConfig: (o.userConfig ?? o.user_config) as
+      | Record<string, any>
+      | undefined,
+    httpHeaders: (o.httpHeaders ?? o.http_headers) as
+      | Record<string, string>
+      | undefined,
+    createdAt: Number(o.createdAt ?? o.created_at ?? 0),
+    scheduleEnabled: Boolean(o.scheduleEnabled ?? o.schedule_enabled),
+    scheduleMode,
+    scheduleIntervalSecs: numOpt(
+      o.scheduleIntervalSecs ?? o.schedule_interval_secs,
+    ),
+    scheduleDailyHour: numOpt(o.scheduleDailyHour ?? o.schedule_daily_hour),
+    scheduleDailyMinute: numOpt(
+      o.scheduleDailyMinute ?? o.schedule_daily_minute,
+    ),
+    scheduleDelaySecs: numOpt(o.scheduleDelaySecs ?? o.schedule_delay_secs),
+    schedulePlannedAt: numOpt(o.schedulePlannedAt ?? o.schedule_planned_at),
+    scheduleLastRunAt: numOpt(o.scheduleLastRunAt ?? o.schedule_last_run_at),
+  };
 }
 
 export const useCrawlerStore = defineStore("crawler", () => {
@@ -77,6 +154,10 @@ export const useCrawlerStore = defineStore("crawler", () => {
           userConfig: raw.userConfig ?? raw.user_config ?? undefined,
           httpHeaders: raw.httpHeaders ?? raw.http_headers ?? undefined,
           outputAlbumId: raw.outputAlbumId ?? raw.output_album_id ?? undefined,
+          runConfigId: raw.runConfigId ?? raw.run_config_id ?? undefined,
+          triggerSource: (raw.triggerSource ??
+            raw.trigger_source ??
+            "manual") as CrawlTask["triggerSource"],
           status: (raw.status || "pending") as CrawlTask["status"],
           progress: Number(raw.progress ?? 0),
           deletedCount: Number(raw.deletedCount ?? raw.deleted_count ?? 0),
@@ -117,6 +198,10 @@ export const useCrawlerStore = defineStore("crawler", () => {
         userConfig: raw.userConfig ?? raw.user_config ?? undefined,
         httpHeaders: raw.httpHeaders ?? raw.http_headers ?? undefined,
         outputAlbumId: raw.outputAlbumId ?? raw.output_album_id ?? undefined,
+        runConfigId: raw.runConfigId ?? raw.run_config_id ?? undefined,
+        triggerSource: (raw.triggerSource ??
+          raw.trigger_source ??
+          "manual") as CrawlTask["triggerSource"],
         status: (raw.status || "pending") as CrawlTask["status"],
         progress: Number(raw.progress ?? 0),
         deletedCount: Number(raw.deletedCount ?? raw.deleted_count ?? 0),
@@ -132,6 +217,33 @@ export const useCrawlerStore = defineStore("crawler", () => {
       // ignore
     }
   };
+
+  /** 单条拉取并合并进 runConfigs，避免 auto-config 事件触发全表刷新 */
+  async function patchRunConfigById(configId: string) {
+    const id = String(configId || "").trim();
+    if (!id) return;
+    try {
+      const raw = await invoke<unknown>("get_run_config", { configId: id });
+      const cfg = parseRunConfigRaw(raw);
+      if (!cfg) {
+        await loadRunConfigs();
+        return;
+      }
+      const idx = runConfigs.value.findIndex((c) => c.id === id);
+      if (idx === -1) {
+        runConfigs.value = [
+          ...runConfigs.value.filter((c) => c.id !== id),
+          cfg,
+        ].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+      } else {
+        const next = runConfigs.value.slice();
+        next[idx] = cfg;
+        runConfigs.value = next;
+      }
+    } catch {
+      await loadRunConfigs();
+    }
+  }
 
   (async () => {
     try {
@@ -150,7 +262,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
         if (idx === -1) return;
 
         const cur = tasks.value[idx];
-        const newStatus = String(payload?.status ?? cur.status) as CrawlTask["status"];
+        const newStatus = String(
+          payload?.status ?? cur.status,
+        ) as CrawlTask["status"];
         const startTime = payload?.start_time;
         const endTime = payload?.end_time;
         const error = payload?.error;
@@ -263,6 +377,27 @@ export const useCrawlerStore = defineStore("crawler", () => {
         tasks.value[idx] = next;
       });
 
+      await listen("auto-config-change", async (event) => {
+        const payload: any = event.payload as any;
+        const reason = String(payload?.reason ?? "");
+        const configId = String(
+          payload?.configId ?? payload?.config_id ?? "",
+        ).trim();
+        if (!configId) {
+          await loadRunConfigs();
+          return;
+        }
+        if (reason === "configdelete") {
+          runConfigs.value = runConfigs.value.filter((c) => c.id !== configId);
+          return;
+        }
+        if (reason === "configadd" || reason === "configchange") {
+          await patchRunConfigById(configId);
+          return;
+        }
+        await loadRunConfigs();
+      });
+
       if (IS_ANDROID) {
         setInterval(() => {
           const list = tasks.value;
@@ -286,6 +421,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
     userConfig?: Record<string, any>,
     outputAlbumId?: string,
     httpHeaders?: Record<string, string>,
+    runConfigId?: string,
+    triggerSource: CrawlTask["triggerSource"] = "manual",
   ): Promise<boolean> {
     if (beforeAddTaskGuard) {
       try {
@@ -304,6 +441,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
       userConfig,
       httpHeaders,
       outputAlbumId,
+      runConfigId,
+      triggerSource,
       status: "pending",
       progress: 0,
       deletedCount: 0,
@@ -338,6 +477,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
               outputDir: tasks.value[taskIndex].outputDir,
               userConfig: tasks.value[taskIndex].userConfig,
               outputAlbumId: tasks.value[taskIndex].outputAlbumId,
+              runConfigId: tasks.value[taskIndex].runConfigId,
+              triggerSource: tasks.value[taskIndex].triggerSource,
               status: tasks.value[taskIndex].status,
               progress: tasks.value[taskIndex].progress,
               deletedCount: tasks.value[taskIndex].deletedCount || 0,
@@ -375,6 +516,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
           userConfig: task.userConfig,
           httpHeaders: task.httpHeaders,
           outputAlbumId: task.outputAlbumId,
+          runConfigId: task.runConfigId,
+          triggerSource: task.triggerSource,
           status: task.status,
           progress: task.progress,
           deletedCount: task.deletedCount || 0,
@@ -427,15 +570,31 @@ export const useCrawlerStore = defineStore("crawler", () => {
       outputDir: config.outputDir,
       userConfig: config.userConfig ?? {},
       httpHeaders: config.httpHeaders ?? {},
+      scheduleEnabled: config.scheduleEnabled ?? false,
+      scheduleMode: config.scheduleMode,
+      scheduleIntervalSecs: config.scheduleIntervalSecs,
+      scheduleDailyHour: config.scheduleDailyHour,
+      scheduleDailyMinute: config.scheduleDailyMinute,
+      scheduleDelaySecs: config.scheduleDelaySecs,
+      schedulePlannedAt: config.schedulePlannedAt,
+      scheduleLastRunAt: config.scheduleLastRunAt,
     };
     await invoke("add_run_config", { config: cfg });
-    await loadRunConfigs();
+    runConfigs.value = [
+      cfg,
+      ...runConfigs.value.filter((c) => c.id !== cfg.id),
+    ].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
     return cfg;
   }
 
   async function updateRunConfig(config: RunConfig) {
     await invoke("update_run_config", { config });
-    await loadRunConfigs();
+    const idx = runConfigs.value.findIndex((c) => c.id === config.id);
+    if (idx !== -1) {
+      const next = runConfigs.value.slice();
+      next[idx] = config;
+      runConfigs.value = next;
+    }
   }
 
   async function deleteRunConfig(configId: string) {
@@ -443,8 +602,25 @@ export const useCrawlerStore = defineStore("crawler", () => {
     runConfigs.value = runConfigs.value.filter((c) => c.id !== configId);
   }
 
-  async function runConfig(configId: string): Promise<boolean> {
-    const cfg = runConfigs.value.find((c) => c.id === configId);
+  async function copyRunConfig(configId: string) {
+    const copied = await invoke<RunConfig>("copy_run_config", { configId });
+    runConfigs.value = [
+      copied,
+      ...runConfigs.value.filter((c) => c.id !== copied.id),
+    ].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+    return copied;
+  }
+
+  const runConfigById = computed(() => {
+    const map = new Map<string, RunConfig>();
+    for (const item of runConfigs.value) {
+      map.set(item.id, item);
+    }
+    return (id: string): RunConfig | undefined => map.get(id);
+  });
+
+  async function runFromConfig(configId: string): Promise<boolean> {
+    const cfg = runConfigById.value(configId);
     if (!cfg) {
       throw new Error("运行配置不存在");
     }
@@ -454,7 +630,31 @@ export const useCrawlerStore = defineStore("crawler", () => {
       cfg.userConfig ?? {},
       undefined,
       cfg.httpHeaders ?? {},
+      cfg.id,
+      "manual",
     );
+  }
+
+  async function getMissedRuns(): Promise<MissedRunItem[]> {
+    try {
+      const items = await invoke<MissedRunItem[]>("get_missed_runs");
+      return Array.isArray(items) ? items : [];
+    } catch (error) {
+      console.error("加载漏跑配置失败:", error);
+      return [];
+    }
+  }
+
+  async function resolveMissedRuns(
+    configIds: string[],
+    action: "run_now" | "dismiss",
+  ): Promise<void> {
+    await invoke("resolve_missed_runs", { configIds, action });
+  }
+
+  // 兼容旧调用名
+  async function runConfig(configId: string): Promise<boolean> {
+    return runFromConfig(configId);
   }
 
   async function deleteTask(taskId: string) {
@@ -476,6 +676,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
     outputDir?: string;
     userConfig?: Record<string, any>;
     outputAlbumId?: string;
+    runConfigId?: string;
+    triggerSource?: CrawlTask["triggerSource"];
     status: string;
     progress: number;
     deletedCount: number;
@@ -491,6 +693,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
     outputDir: t.outputDir,
     userConfig: t.userConfig,
     outputAlbumId: t.outputAlbumId,
+    runConfigId: t.runConfigId,
+    triggerSource: t.triggerSource ?? "manual",
     status: t.status as CrawlTask["status"],
     progress: t.progress ?? 0,
     deletedCount: t.deletedCount || 0,
@@ -511,6 +715,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
           outputDir?: string;
           userConfig?: Record<string, any>;
           outputAlbumId?: string;
+          runConfigId?: string;
+          triggerSource?: CrawlTask["triggerSource"];
           status: string;
           progress: number;
           deletedCount: number;
@@ -531,7 +737,10 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   /** 分页加载任务（用于任务抽屉触底加载，减轻首次打开卡顿） */
-  async function loadTasksPage(limit: number, offset: number): Promise<{ total: number } | null> {
+  async function loadTasksPage(
+    limit: number,
+    offset: number,
+  ): Promise<{ total: number } | null> {
     try {
       const res = await invoke<{
         tasks: Array<{
@@ -540,6 +749,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
           outputDir?: string;
           userConfig?: Record<string, any>;
           outputAlbumId?: string;
+          runConfigId?: string;
+          triggerSource?: CrawlTask["triggerSource"];
           status: string;
           progress: number;
           deletedCount: number;
@@ -567,11 +778,11 @@ export const useCrawlerStore = defineStore("crawler", () => {
     }
   }
 
-  // Android：每隔 1s 轮询一次任务列表，避免 task_status / task_progress 事件丢失导致界面不同步
+  // Android：每隔 60s 轮询一次任务列表，避免 task_status / task_progress 事件丢失导致界面不同步
   if (IS_ANDROID) {
     setInterval(() => {
       void loadTasks();
-    }, 1000);
+    }, 60000);
   }
 
   async function retryTask(task: CrawlTask): Promise<boolean> {
@@ -581,8 +792,21 @@ export const useCrawlerStore = defineStore("crawler", () => {
       task.userConfig,
       task.outputAlbumId,
       task.httpHeaders,
+      task.runConfigId,
+      "manual",
     );
   }
+
+  /** 与后端 clear_finished_tasks 一致：本地只保留 pending / running */
+  function applyKeepOnlyPendingAndRunningTasks() {
+    tasks.value = tasks.value.filter(
+      (t) => t.status === "pending" || t.status === "running",
+    );
+    tasksTotal.value = tasks.value.length;
+  }
+
+  const runConfigsReady = loadRunConfigs();
+  const tasksReady = loadTasks();
 
   return {
     tasks,
@@ -597,9 +821,16 @@ export const useCrawlerStore = defineStore("crawler", () => {
     addRunConfig,
     updateRunConfig,
     deleteRunConfig,
+    copyRunConfig,
+    runConfigById,
+    runFromConfig,
     runConfig,
+    getMissedRuns,
+    resolveMissedRuns,
     loadTasks,
     loadTasksPage,
+    runConfigsReady,
+    tasksReady,
+    applyKeepOnlyPendingAndRunningTasks,
   };
 });
-

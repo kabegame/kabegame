@@ -435,12 +435,6 @@ export function useConfigCompatibility(
     // 打开导入对话框时，兜底刷新一次（保证下拉打开时就能看到兼容性提示）
     watch(showCrawlerDialog, async (open) => {
       if (!open) return;
-      // 用户可能刚在"源/插件"页刷新或更新了已安装源，弹窗打开时兜底刷新变量定义（不重置 form.vars）
-      try {
-        await pluginStore.loadPlugins();
-      } catch (e) {
-        console.debug("导入弹窗打开时刷新已安装源失败（忽略）：", e);
-      }
 
       if (form.value.pluginId) {
         await loadPluginVarDefs(form.value.pluginId);

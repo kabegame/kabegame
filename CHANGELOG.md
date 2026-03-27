@@ -4,6 +4,15 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.4.0]
+### Added
+- (doing) **RunConfig**: Auto run schedule feature.
+
+### Optimized
+- **TaskDrawer**: optimize the performance of switching visiablity.
+- **Crawler store:** Load tasks and run configs once inside `defineStore`, expose `runConfigsReady` / `tasksReady`, drop redundant view-level loads, and patch run configs locally after writes instead of full-table reloads.
+- **Plugin store:** `loadPlugins` applies `get_plugins` results in a `.then` handler with an empty default list; narrowed call sites to the plugin browser (manual refresh / store install) plus post-install paths, removing gallery and related prefetch.
+
 ## [3.3.1]
 ### Added
 - **Plugins / collect form:** `config.json` 变量类型 **`date`**：桌面与安卓收集对话框使用 Element Plus 日期选择器，值为 `YYYY-MM-DD` 字符串；应用语言与 Element Plus 组件语言通过根级 `el-config-provider` 对齐。见 `docs/README_PLUGIN_DEV.md`、`docs/RHAI_API.md`。

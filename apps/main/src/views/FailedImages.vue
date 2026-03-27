@@ -409,7 +409,6 @@ watch(
 
 onMounted(async () => {
   await failedImagesStore.initListeners();
-  await pluginStore.loadPlugins();
   await failedImagesStore.loadAll();
 
   unlistenDownloadState = await listen("download-state", (event) => {

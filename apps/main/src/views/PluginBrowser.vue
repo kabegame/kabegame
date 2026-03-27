@@ -1379,8 +1379,7 @@ const handleRefresh = async () => {
 
 onMounted(async () => {
   try {
-    // 首次进入：默认 tab=已安装源，不需要拉取商店列表；仅加载本地已安装源即可
-    await pluginStore.loadPlugins();
+    // 首次进入：已安装列表由用户在「已安装」Tab 手动刷新拉取；此处只加载商店源配置
     // 加载商店源列表（本地配置），用于渲染动态 tab
     await loadSources();
     await refreshPluginIcons();

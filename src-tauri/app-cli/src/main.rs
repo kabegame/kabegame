@@ -465,7 +465,7 @@ async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
     }
 
     // 结构检查（尽量给出更友好的错误）
-    validate_kgpg_structure(pm, &p)?;
+    validate_kgpg_structure(pm, &p).await?;
 
     let plugin = pm.install_plugin_from_zip(&p).await?;
     let plugins_dir = pm.get_plugins_directory();
@@ -480,9 +480,12 @@ async fn import_plugin_no_ui(p: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_kgpg_structure(pm: &PluginManager, zip_path: &std::path::Path) -> Result<(), String> {
+async fn validate_kgpg_structure(
+    pm: &PluginManager,
+    zip_path: &std::path::Path,
+) -> Result<(), String> {
     // 1) manifest 必须可读/可解析
-    let _ = pm.read_plugin_manifest(zip_path)?;
+    let _ = pm.read_plugin_manifest(zip_path).await?;
 
     // 2) 至少存在一个后端脚本：crawl.rhai 或 crawl.js
     let script = pm.read_plugin_script(zip_path)?;

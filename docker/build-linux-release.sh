@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE="${ROOT}/docker/docker-compose.linux-release.yml"
 PROJECT="${COMPOSE_PROJECT_NAME:-kabegame-linux-release}"
-OUT="${KABEGAME_LINUX_RELEASE_OUT:-${ROOT}/release-linux-docker}"
+OUT="${KABEGAME_LINUX_RELEASE_OUT:-${ROOT}/release}"
 
 export KABEGAME_LINUX_BUILD_IMAGE="${KABEGAME_LINUX_BUILD_IMAGE:-kabegame-linux-release:latest}"
 

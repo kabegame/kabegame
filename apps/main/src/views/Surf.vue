@@ -502,9 +502,6 @@ const handleRecordMenuCommand = async (command: "viewImages" | "details" | "dele
 onMounted(async () => {
   await surfStore.checkSession();
   await surfStore.loadRecords();
-  if (pluginStore.plugins.length === 0) {
-    await pluginStore.loadPlugins();
-  }
 });
 </script>
 

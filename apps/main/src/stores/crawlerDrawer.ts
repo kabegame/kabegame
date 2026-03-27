@@ -11,11 +11,14 @@ export interface CrawlerDrawerInitialConfig {
 
 /** 上次运行时的表单快照，用于关闭对话框再打开时恢复 */
 export interface LastRunConfig {
-  pluginId: string;
-  outputDir: string;
-  vars: Record<string, any>;
-  httpHeaders: Record<string, string>;
-  outputAlbumId: string | null;
+  /** Phase 4: 仅记忆上次选择的运行配置 ID */
+  runConfigId: string | null;
+  /** 兼容历史字段，避免旧缓存结构报错 */
+  pluginId?: string;
+  outputDir?: string;
+  vars?: Record<string, any>;
+  httpHeaders?: Record<string, string>;
+  outputAlbumId?: string | null;
 }
 
 export const useCrawlerDrawerStore = defineStore("crawlerDrawer", () => {

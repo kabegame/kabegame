@@ -138,10 +138,10 @@ pub async fn preview_import_plugin_with_icon(
     let path = std::path::PathBuf::from(&zip_path);
     let pm = PluginManager::global();
     let preview = pm.preview_import_from_zip(&path).await?;
-    let manifest = pm.read_plugin_manifest(&path)?;
+    let manifest = pm.read_plugin_manifest(&path).await?;
 
     // Icon
-    let icon_base64 = match pm.read_plugin_icon(&path) {
+    let icon_base64 = match pm.read_plugin_icon(&path).await {
         Ok(Some(bytes)) if !bytes.is_empty() => {
             use base64::{engine::general_purpose::STANDARD, Engine as _};
             Some(STANDARD.encode(bytes))

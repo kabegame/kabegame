@@ -402,7 +402,6 @@ async function loadFilterCounts() {
       invoke<PluginGroupRow[]>("get_gallery_plugin_groups"),
       invoke<GalleryTimeFilterPayload>("get_gallery_time_filter_data"),
       invoke<GalleryMediaTypeCountsPayload>("get_gallery_media_type_counts"),
-      pluginStore.loadPlugins(),
     ]);
     pluginGroups.value = Array.isArray(pg) ? pg : [];
     monthGroups.value = Array.isArray(timePayload?.months) ? timePayload.months : [];

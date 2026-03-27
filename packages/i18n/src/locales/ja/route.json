@@ -9,5 +9,7 @@
   "settings": "設定",
   "help": "ヘルプ",
   "surf": "サーフ",
-  "surfImages": "サーフ画像"
+  "surfImages": "サーフ画像",
+  "autoConfigs": "実行設定",
+  "autoConfigEdit": "実行設定の編集"
 }

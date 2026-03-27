@@ -6,14 +6,14 @@
     </template>
     <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
-      @cancel-task="handleCancelTaskById"
+      @cancel-task="handleCancelTaskById" @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu" />
   </AndroidDrawer>
-  <el-drawer v-else v-model="visible" :title="$t('tasks.taskList')" :size="drawerSize" direction="rtl" :with-header="true"
+  <el-drawer v-else v-model="visible" :title="$t('tasks.taskList')" size="460px" direction="rtl" :with-header="true"
     :append-to-body="true" :modal-class="'task-drawer-modal'" class="task-drawer drawer-max-width">
     <TaskDrawerContent :tasks="tasks" :plugins="plugins" :active="visible" @clear-finished-tasks="handleDeleteAllTasks"
       @open-task-images="handleOpenTaskImagesById" @delete-task="handleDeleteTaskById"
-      @cancel-task="handleCancelTaskById"
+      @cancel-task="handleCancelTaskById" @open-task-schedule-config="handleOpenTaskScheduleConfig"
       @task-contextmenu="openTaskContextMenu" />
   </el-drawer>
 
@@ -29,7 +29,8 @@
     </el-form>
     <template #footer>
       <el-button @click="saveConfigVisible = false">{{ $t('common.cancel') }}</el-button>
-      <el-button type="primary" :loading="savingConfig" @click="confirmSaveTaskAsConfig">{{ $t('common.save') }}</el-button>
+      <el-button type="primary" :loading="savingConfig" @click="confirmSaveTaskAsConfig">{{ $t('common.save')
+        }}</el-button>
     </template>
   </el-dialog>
 
@@ -43,6 +44,7 @@ import { useI18n } from "@kabegame/i18n";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "vue-router";
+import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { IS_ANDROID } from "@kabegame/core/env";
@@ -66,6 +68,7 @@ const { t } = useI18n();
 
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
+const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
 
 const visible = computed({
@@ -74,8 +77,6 @@ const visible = computed({
 });
 
 useModalBack(visible);
-
-const drawerSize = computed(() => IS_ANDROID ? "70%" : "420px");
 
 // 任务右键菜单
 const contextMenuVisible = ref(false);
@@ -176,11 +177,8 @@ const handleGlobalClick = () => {
   }
 };
 
-onMounted(async () => {
+onMounted(() => {
   window.addEventListener("click", handleGlobalClick);
-
-  // 分页加载：首次只加载 20 条，减轻打开抽屉时的卡顿
-  await crawlerStore.loadTasksPage(20, 0);
 });
 
 onUnmounted(() => {
@@ -244,6 +242,20 @@ const handleOpenTaskImagesById = (taskId: string) => {
   });
 };
 
+const handleOpenTaskScheduleConfig = (task: any) => {
+  const runConfigId = String(task?.runConfigId ?? "").trim();
+  if (!runConfigId) {
+    ElMessage.warning(t("autoConfig.configDeleted"));
+    return;
+  }
+  const runConfig = crawlerStore.runConfigById(runConfigId);
+  if (!runConfig) {
+    ElMessage.warning(t("autoConfig.configDeleted"));
+    return;
+  }
+  autoConfigDialog.openExisting(runConfigId, "view", { scrollSchedule: true });
+};
+
 const handleDeleteAllTasks = async () => {
   if (nonRunningTasksCount.value === 0) {
     ElMessage.warning(t('tasks.noTasksToClear'));
@@ -261,8 +273,7 @@ const handleDeleteAllTasks = async () => {
 
     // 调用后端命令批量清除
     const clearedCount = await invoke<number>("clear_finished_tasks");
-    // 重新加载第一页
-    await crawlerStore.loadTasksPage(20, 0);
+    crawlerStore.applyKeepOnlyPendingAndRunningTasks();
     ElMessage.success(t('tasks.tasksCleared', { count: clearedCount }));
   } catch (error) {
     if (error !== "cancel") {

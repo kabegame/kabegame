@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, unref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { i18n, resolveManifestText } from "@kabegame/i18n";
+import { i18n, resolveConfigText, resolveManifestText } from "@kabegame/i18n";
 
 function toPngDataUrl(iconData: number[]): string {
   const bytes = new Uint8Array(iconData);
@@ -21,9 +21,10 @@ export const LOCAL_IMPORT_PLUGIN_ID = "local-import" as const;
 /**
  * 单条插件记录的展示名（当前全局 locale + manifest；内置 local-import 用 tasks.drawerLocalImport）。
  */
-export function resolvePluginRecordDisplayName(
-  plugin: { id: string; name?: PluginManifestText },
-): string {
+export function resolvePluginRecordDisplayName(plugin: {
+  id: string;
+  name?: PluginManifestText;
+}): string {
   if (plugin.id === LOCAL_IMPORT_PLUGIN_ID) {
     const s = String(i18n.global.t("tasks.drawerLocalImport")).trim();
     return s || plugin.id;
@@ -182,15 +183,101 @@ export interface Plugin {
   baseUrl: string;
   sizeBytes: number;
   config: Record<string, any>;
-  selector?: {
-    imageSelector: string;
-    nextPageSelector?: string;
-    titleSelector?: string;
-  };
   /** 脚本类型：rhai | js。安卓仅支持 rhai。 */
   scriptType?: string;
   /** manifest minAppVersion，运行前由前端校验 */
   minAppVersion?: string | null;
+}
+
+/**
+ * 单条爬虫变量元数据：来自 `Plugin.config.vars`（与 `get_plugin_vars` 返回项同构）。
+ */
+export type PluginVarMeta = {
+  name: PluginConfigText | string;
+  type?: string;
+  optionNameByVariable?: Record<string, PluginConfigText | string>;
+  when?: Record<string, string[]>;
+};
+
+/**
+ * 从已安装插件的 `config`（含后端下发的 `vars` 数组）构建 key → 元数据映射。
+ */
+export function buildVarMetaMapFromPluginConfig(
+  config: Record<string, any> | undefined | null,
+): Record<string, PluginVarMeta> {
+  const vars = config?.vars;
+  if (!Array.isArray(vars)) return {};
+  const metaMap: Record<string, PluginVarMeta> = {};
+  for (const raw of vars) {
+    if (!raw || typeof raw !== "object") continue;
+    const key = String((raw as Record<string, unknown>).key ?? "").trim();
+    if (!key) continue;
+    const optionNameByVariable: Record<string, PluginConfigText | string> = {};
+    const opts = (raw as Record<string, unknown>).options;
+    if (Array.isArray(opts)) {
+      for (const opt of opts) {
+        if (typeof opt === "string") {
+          optionNameByVariable[opt] = opt;
+        } else if (opt && typeof opt === "object") {
+          const o = opt as Record<string, unknown>;
+          const variable = String(o.variable ?? "").trim();
+          if (!variable) continue;
+          const name = o.name;
+          optionNameByVariable[variable] =
+            name !== undefined && name !== null ? (name as PluginConfigText | string) : variable;
+        }
+      }
+    }
+    const whenRaw = (raw as Record<string, unknown>).when;
+    const when =
+      whenRaw && typeof whenRaw === "object" && !Array.isArray(whenRaw)
+        ? (whenRaw as Record<string, string[]>)
+        : undefined;
+    metaMap[key] = {
+      name: ((raw as Record<string, unknown>).name as PluginConfigText | string) ?? key,
+      type: typeof (raw as Record<string, unknown>).type === "string"
+        ? String((raw as Record<string, unknown>).type)
+        : undefined,
+      optionNameByVariable:
+        Object.keys(optionNameByVariable).length > 0 ? optionNameByVariable : undefined,
+      when,
+    };
+  }
+  return metaMap;
+}
+
+/** 内置本地导入插件的变量展示名（需传入 `t` 以随语言切换）。 */
+export function localImportVarMetaMap(t: (key: string) => string): Record<string, PluginVarMeta> {
+  return {
+    paths: { name: t("tasks.drawerPathsMeta"), type: "text" },
+    recursive: { name: t("tasks.drawerRecursiveMeta"), type: "boolean" },
+  };
+}
+
+/**
+ * 解析某插件下某变量的展示名（已安装列表 + 内置 local-import）。
+ */
+export function resolvePluginVarDisplayName(
+  pluginId: string,
+  varKey: string,
+  localeCode: string,
+  installed: ReadonlyArray<Plugin>,
+  t: (key: string) => string,
+): string {
+  const meta =
+    pluginId === LOCAL_IMPORT_PLUGIN_ID
+      ? localImportVarMetaMap(t)[varKey]
+      : buildVarMetaMapFromPluginConfig(
+          installed.find((p) => p.id === pluginId)?.config,
+        )[varKey];
+  const rawName = meta?.name;
+  if (rawName == null) return varKey;
+  if (typeof rawName === "string") return rawName;
+  return (
+    resolveConfigText(rawName as PluginConfigText, localeCode) ||
+    (rawName as Record<string, string>)["default"] ||
+    varKey
+  );
 }
 
 export const usePluginStore = defineStore("plugins", () => {
@@ -198,14 +285,15 @@ export const usePluginStore = defineStore("plugins", () => {
   const activePlugin = ref<Plugin | null>(null);
   const pluginDetailCache = ref<Record<string, BrowserPlugin>>({});
 
-  async function loadPlugins() {
-    try {
-      const result = await invoke<Plugin[]>("get_plugins");
-      plugins.value = result;
-    } catch (error) {
-      console.error("加载插件失败:", error);
-      throw error;
-    }
+  function loadPlugins(): Promise<void> {
+    return invoke<Plugin[]>("get_plugins")
+      .then((result) => {
+        plugins.value = result;
+      })
+      .catch((error) => {
+        console.error("加载插件失败:", error);
+        throw error;
+      });
   }
 
   async function deletePlugin(pluginId: string) {
@@ -241,6 +329,16 @@ export const usePluginStore = defineStore("plugins", () => {
     return resolvePluginIdDisplayName(pluginId, plugins.value);
   }
 
+  /** 使用当前 store 中的已安装列表解析变量展示名（不含内置 local-import，需自行处理）。 */
+  function resolveVarDisplayName(
+    pluginId: string,
+    varKey: string,
+    localeCode: string,
+    t: (key: string) => string,
+  ): string {
+    return resolvePluginVarDisplayName(pluginId, varKey, localeCode, plugins.value, t);
+  }
+
   return {
     plugins,
     activePlugin,
@@ -252,5 +350,8 @@ export const usePluginStore = defineStore("plugins", () => {
     setCachedPluginDetail,
     clearPluginDetailCache,
     pluginLabel,
+    buildVarMetaMapFromPluginConfig,
+    localImportVarMetaMap,
+    resolveVarDisplayName,
   };
 });

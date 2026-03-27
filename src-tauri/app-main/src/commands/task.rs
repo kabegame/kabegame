@@ -1,13 +1,17 @@
 // 任务相关命令
 
 use kabegame_core::emitter::GlobalEmitter;
+use kabegame_core::scheduler::{MissedRunResolveAction, Scheduler};
 use kabegame_core::storage::{Storage, TaskInfo};
 
 #[tauri::command]
 pub async fn add_run_config(config: serde_json::Value) -> Result<serde_json::Value, String> {
     use kabegame_core::storage::RunConfig;
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
+    let config_id = run_config.id.clone();
     let result = Storage::global().add_run_config(run_config)?;
+    let _ = Scheduler::global().reload_config(&config_id).await;
+    GlobalEmitter::global().emit_auto_config_change("configadd", &config_id);
     Ok(serde_json::to_value(result).map_err(|e| e.to_string())?)
 }
 
@@ -15,7 +19,11 @@ pub async fn add_run_config(config: serde_json::Value) -> Result<serde_json::Val
 pub async fn update_run_config(config: serde_json::Value) -> Result<(), String> {
     use kabegame_core::storage::RunConfig;
     let run_config: RunConfig = serde_json::from_value(config).map_err(|e| e.to_string())?;
-    Storage::global().update_run_config(run_config)
+    let config_id = run_config.id.clone();
+    Storage::global().update_run_config(run_config)?;
+    let _ = Scheduler::global().reload_config(&config_id).await;
+    GlobalEmitter::global().emit_auto_config_change("configchange", &config_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -25,8 +33,41 @@ pub async fn get_run_configs() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+pub async fn get_run_config(config_id: String) -> Result<serde_json::Value, String> {
+    match Storage::global().get_run_config(&config_id)? {
+        Some(cfg) => serde_json::to_value(cfg).map_err(|e| e.to_string()),
+        None => Ok(serde_json::Value::Null),
+    }
+}
+
+#[tauri::command]
 pub async fn delete_run_config(config_id: String) -> Result<(), String> {
-    Storage::global().delete_run_config(&config_id)
+    let _ = Scheduler::global().remove_config(&config_id).await;
+    Storage::global().delete_run_config(&config_id)?;
+    GlobalEmitter::global().emit_auto_config_change("configdelete", &config_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn copy_run_config(config_id: String) -> Result<serde_json::Value, String> {
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let copied = Storage::global().copy_run_config(&config_id, &new_id)?;
+    let _ = Scheduler::global().reload_config(&new_id).await;
+    GlobalEmitter::global().emit_auto_config_change("configadd", &copied.id);
+    serde_json::to_value(copied).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_missed_runs() -> Result<serde_json::Value, String> {
+    let items = kabegame_core::scheduler::collect_missed_runs_now()?;
+    let _ = Scheduler::global().reload_config("").await;
+    serde_json::to_value(items).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn resolve_missed_runs(config_ids: Vec<String>, action: String) -> Result<(), String> {
+    let action = MissedRunResolveAction::from_str(action.as_str())?;
+    kabegame_core::scheduler::resolve_missed_runs_now(&config_ids, action)
 }
 
 #[tauri::command]
@@ -228,6 +269,12 @@ pub async fn start_task(task: serde_json::Value) -> Result<(), String> {
                 user_config: req.user_config.clone(),
                 http_headers: req.http_headers.clone(),
                 output_album_id: req.output_album_id.clone(),
+                run_config_id: req.run_config_id.clone(),
+                trigger_source: if req.trigger_source.is_empty() {
+                    "manual".to_string()
+                } else {
+                    req.trigger_source.clone()
+                },
                 status: "pending".to_string(),
                 progress: 0.0,
                 deleted_count: 0,

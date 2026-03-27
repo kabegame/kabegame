@@ -150,6 +150,8 @@ async fn handle_task_start(task: serde_json::Value) -> CliIpcResponse {
         http_headers: t.http_headers.clone(),
         output_album_id: t.output_album_id.clone(),
         plugin_file_path: None,
+        run_config_id: t.run_config_id.clone(),
+        trigger_source: t.trigger_source.clone(),
     };
 
     if let Err(e) = TaskScheduler::global().enqueue(req) {
@@ -272,6 +274,8 @@ async fn handle_plugin_run(
                 user_config: user_config.clone(),
                 http_headers: http_headers.clone(),
                 output_album_id: output_album_id.clone(),
+                run_config_id: None,
+                trigger_source: "manual".to_string(),
                 status: "pending".to_string(),
                 progress: 0.0,
                 deleted_count: 0,
@@ -298,6 +302,8 @@ async fn handle_plugin_run(
         http_headers,
         output_album_id,
         plugin_file_path: plugin_file_path.map(|p| p.to_string_lossy().to_string()),
+        run_config_id: None,
+        trigger_source: "manual".to_string(),
     };
 
     if let Err(e) = TaskScheduler::global().enqueue(req) {

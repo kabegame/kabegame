@@ -16,6 +16,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
 use url::Url;
 use uuid::Uuid;
@@ -42,7 +43,11 @@ pub struct Plugin {
     #[serde(rename = "scriptType")]
     pub script_type: String,
     /// manifest.json 可选字段：运行本插件所需的最低 Kabegame 应用版本（semver 主.次.补丁）
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "minAppVersion")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "minAppVersion"
+    )]
     pub min_app_version: Option<String>,
 }
 
@@ -169,6 +174,11 @@ impl PluginManager {
             .expect("PluginManager not initialized. Call PluginManager::init_global() first.")
     }
 
+    /// 尝试获取全局 PluginManager（未初始化时返回 None）
+    pub fn global_opt() -> Option<&'static PluginManager> {
+        PLUGIN_MANAGER.get()
+    }
+
     /// 从插件目录中的 .kgpg 文件加载所有已安装的插件
     pub async fn get_all(&self) -> Result<Vec<Plugin>, String> {
         let guard = self.installed_cache.lock().await;
@@ -182,13 +192,26 @@ impl PluginManager {
         guard.plugins.get(id).cloned()
     }
 
+    /// 同步读取已安装缓存中的插件展示名（不做磁盘 IO）。
+    /// - 仅使用内存缓存；缓存未初始化或锁竞争时返回 None。
+    pub fn get_cached_plugin_display_name_sync(&self, plugin_id: &str) -> Option<String> {
+        let guard = self.installed_cache.try_lock().ok()?;
+        let plugin = guard.plugins.get(plugin_id)?;
+        let name = manifest_value_to_display_string(&plugin.name).trim().to_string();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
+    }
+
     /// 从指定 `.kgpg` 文件解析出运行时需要的 `Plugin` 信息（用于 CLI/调度器/插件编辑器临时运行）。
     ///
     /// 注意：
     /// - `config` 等运行时字段由调用方策略决定；这里按“可运行”默认值填充。
     /// - `plugin_id` 允许由调用方指定（例如调度器的 task request 里传入的 id），
     ///   CLI 场景一般会用文件名 stem 作为 id。
-    pub fn build_runtime_plugin_from_kgpg_path(
+    pub async fn build_runtime_plugin_from_kgpg_path(
         &self,
         plugin_id: String,
         kgpg_path: &Path,
@@ -200,13 +223,13 @@ impl PluginManager {
             return Err(format!("不是 .kgpg 文件: {}", kgpg_path.display()));
         }
 
-        let manifest = self.read_plugin_manifest(kgpg_path)?;
+        let manifest = self.read_plugin_manifest(kgpg_path).await?;
         let config = self.read_plugin_config_public(kgpg_path).ok().flatten();
         let size_bytes = fs::metadata(kgpg_path)
             .map_err(|e| format!("读取插件文件大小失败: {}", e))?
             .len();
 
-        let script_type = self.detect_script_type_from_kgpg(kgpg_path)?;
+        let script_type = self.detect_script_type_from_kgpg(kgpg_path).await?;
         Ok(Plugin {
             id: plugin_id,
             name: manifest.name_to_value(),
@@ -218,7 +241,7 @@ impl PluginManager {
                 .and_then(|c| c.base_url.clone())
                 .unwrap_or_default(),
             size_bytes,
-            config: HashMap::new(),
+            config: plugin_config_to_frontend_config_map(&config),
             selector: config.and_then(|c| c.selector),
             script_type,
         })
@@ -241,7 +264,7 @@ impl PluginManager {
                 .and_then(|s| s.to_str())
                 .unwrap_or("plugin")
                 .to_string();
-            let plugin = self.build_runtime_plugin_from_kgpg_path(id, &p)?;
+            let plugin = self.build_runtime_plugin_from_kgpg_path(id, &p).await?;
             let var_defs = self.get_plugin_vars_from_file(&p)?;
             return Ok((plugin, Some(p), var_defs));
         }
@@ -264,7 +287,9 @@ impl PluginManager {
     ) -> Result<(Plugin, Option<PathBuf>), String> {
         if let Some(p) = plugin_file_path {
             let path = PathBuf::from(p);
-            let plugin = self.build_runtime_plugin_from_kgpg_path(plugin_id.to_string(), &path)?;
+            let plugin = self
+                .build_runtime_plugin_from_kgpg_path(plugin_id.to_string(), &path)
+                .await?;
             return Ok((plugin, Some(path)));
         }
         let plugin = self.get(plugin_id).await.ok_or("找不到插件")?;
@@ -328,8 +353,8 @@ impl PluginManager {
     }
 
     /// 从 ZIP 格式的插件文件中读取 manifest.json
-    pub fn read_plugin_manifest(&self, zip_path: &Path) -> Result<PluginManifest, String> {
-        read_plugin_manifest_from_kgpg_file(zip_path)
+    pub async fn read_plugin_manifest(&self, zip_path: &Path) -> Result<PluginManifest, String> {
+        read_plugin_manifest_from_kgpg_file(zip_path).await
     }
 
     /// 从 ZIP 格式的插件文件中读取 doc：doc_root/doc.md（default）、doc_root/doc.<lang>.md、或兼容 doc.md
@@ -471,10 +496,11 @@ impl PluginManager {
     }
 
     /// 从 .kgpg 文件检测脚本类型：存在 crawl.js 返回 "js"，否则 "rhai"（用于 build_runtime_plugin_from_kgpg_path 等）
-    fn detect_script_type_from_kgpg(&self, zip_path: &Path) -> Result<String, String> {
+    async fn detect_script_type_from_kgpg(&self, zip_path: &Path) -> Result<String, String> {
         let mut file =
             fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
-        if crate::kgpg::read_kgpg2_meta(&mut file)
+        if crate::kgpg::read_kgpg2_meta(zip_path)
+            .await
             .ok()
             .flatten()
             .is_some()
@@ -509,9 +535,9 @@ impl PluginManager {
     }
 
     /// 从 ZIP 格式的插件文件中读取 icon.png
-    pub fn read_plugin_icon(&self, zip_path: &Path) -> Result<Option<Vec<u8>>, String> {
+    pub async fn read_plugin_icon(&self, zip_path: &Path) -> Result<Option<Vec<u8>>, String> {
         // v2：优先读取头部固定 icon（RGB24 raw），并转换为 PNG bytes（前端保持不变）
-        if let Ok(Some(rgb)) = crate::kgpg::read_kgpg2_icon_rgb_from_file(zip_path) {
+        if let Ok(Some(rgb)) = crate::kgpg::read_kgpg2_icon_rgb_from_file(zip_path).await {
             if rgb.len() == crate::kgpg::KGPG2_ICON_SIZE {
                 use image::{ImageOutputFormat, RgbImage};
                 let img =
@@ -563,7 +589,7 @@ impl PluginManager {
         } // guard 在此处 drop，避免持锁做文件 IO
 
         // 缓存未命中或文件变化：不持锁读取图标（可能涉及 ZIP 解压）
-        let icon = self.read_plugin_icon(&path).ok().flatten();
+        let icon = self.read_plugin_icon(&path).await.ok().flatten();
 
         // 读取完成后再获取锁，写回缓存
         let mut guard = self.installed_cache.lock().await;
@@ -600,7 +626,7 @@ impl PluginManager {
     /// 安装 .kgpg 插件（复制文件到插件目录）
     pub async fn install_plugin_from_zip(&self, zip_path: &Path) -> Result<Plugin, String> {
         // 读取 manifest 以获取插件信息
-        let manifest = self.read_plugin_manifest(zip_path)?;
+        let manifest = self.read_plugin_manifest(zip_path).await?;
 
         // 读取 config（如果存在）
         let config = self.read_plugin_config(zip_path)?;
@@ -643,7 +669,7 @@ impl PluginManager {
             .map_err(|e| format!("Failed to get plugin file metadata: {}", e))?
             .len();
 
-        let script_type = self.detect_script_type_from_kgpg(&target_path)?;
+        let script_type = self.detect_script_type_from_kgpg(&target_path).await?;
         let plugin = Plugin {
             id: plugin_id.clone(),
             name: manifest.name_to_value(),
@@ -655,7 +681,7 @@ impl PluginManager {
                 .and_then(|c| c.base_url.clone())
                 .unwrap_or_default(),
             size_bytes,
-            config: HashMap::new(),
+            config: plugin_config_to_frontend_config_map(&config),
             selector: config.and_then(|c| c.selector),
             script_type,
         };
@@ -1536,7 +1562,7 @@ impl PluginManager {
 
         // 如果缓存文件存在，检查版本
         if cache_file.exists() {
-            match self.read_plugin_manifest(&cache_file) {
+            match self.read_plugin_manifest(&cache_file).await {
                 Ok(manifest) => {
                     if manifest.version == expected_version {
                         // 版本匹配，使用缓存
@@ -1583,7 +1609,7 @@ impl PluginManager {
                 crate::app_paths::AppPaths::global().store_plugin_cache_file(source_id, plugin_id);
             if cache_file.exists() {
                 // 从缓存文件读取 icon
-                return self.read_plugin_icon(&cache_file);
+                return self.read_plugin_icon(&cache_file).await;
             }
         }
 
@@ -1628,10 +1654,7 @@ impl PluginManager {
             ));
         }
 
-        let mut cursor = std::io::Cursor::new(bytes);
-        let Some(rgb) = crate::kgpg::read_kgpg2_icon_rgb(&mut cursor)
-            .map_err(|e| format!("Failed to parse kgpg v2 header: {}", e))?
-        else {
+        let Some(rgb) = crate::kgpg::read_kgpg2_icon_rgb_from_bytes(&bytes) else {
             // 非 v2：不在这里回退（商店列表不强依赖 icon）
             return Ok(None);
         };
@@ -1715,15 +1738,17 @@ impl PluginManager {
 
         // 检查是否是 kgpgv2 格式，并提取头部 icon（如果存在）
         let mut cursor = std::io::Cursor::new(&bytes);
-        let (is_v2, v2_icon_data) = match crate::kgpg::read_kgpg2_meta(&mut cursor) {
-            Ok(Some(meta)) => {
+        let (is_v2, v2_icon_data) = match crate::kgpg::read_kgpg2_meta_from_bytes(&bytes) {
+            Some(meta) => {
                 // kgpgv2 格式：尝试读取头部 icon
                 let icon = if meta.icon_present() {
-                    cursor
-                        .seek(SeekFrom::Start(crate::kgpg::KGPG2_META_SIZE as u64))
-                        .ok();
+                    std::io::Seek::seek(
+                        &mut cursor,
+                        SeekFrom::Start(crate::kgpg::KGPG2_META_SIZE as u64),
+                    )
+                    .ok();
                     let mut rgb = vec![0u8; crate::kgpg::KGPG2_ICON_SIZE];
-                    if cursor.read_exact(&mut rgb).is_ok() {
+                    if std::io::Read::read_exact(&mut cursor, &mut rgb).is_ok() {
                         // RGB24 -> PNG
                         use image::{ImageOutputFormat, RgbImage};
                         if let Some(img) = RgbImage::from_raw(
@@ -1752,7 +1777,7 @@ impl PluginManager {
                 };
                 (true, icon)
             }
-            _ => (false, None),
+            None => (false, None),
         };
 
         // 打开 ZIP archive：kgpgv2 需要跳过头部
@@ -1863,11 +1888,7 @@ impl PluginManager {
                     .map_err(|e| format!("Failed to read cached file: {}", e))?;
 
                 // 检查是否是 kgpgv2 格式，需要跳过头部打开 ZIP
-                let mut cursor = std::io::Cursor::new(&bytes);
-                let is_v2 = crate::kgpg::read_kgpg2_meta(&mut cursor)
-                    .ok()
-                    .flatten()
-                    .is_some();
+                let is_v2 = crate::kgpg::read_kgpg2_meta_from_bytes(&bytes).is_some();
                 let zip_cursor = if is_v2 {
                     let zip_start = crate::kgpg::KGPG2_TOTAL_HEADER_SIZE;
                     std::io::Cursor::new(&bytes[zip_start..])
@@ -1941,7 +1962,7 @@ impl PluginManager {
     /// 预览导入插件（从 ZIP 文件读取信息）
     /// 即使插件为内置插件不允许覆盖导入，也会返回预览信息，但标记为不可安装
     pub async fn preview_import_from_zip(&self, zip_path: &Path) -> Result<ImportPreview, String> {
-        let manifest = self.read_plugin_manifest(zip_path)?;
+        let manifest = self.read_plugin_manifest(zip_path).await?;
         // 获取文件大小
         let size_bytes = fs::metadata(zip_path)
             .map_err(|e| format!("Failed to get file metadata: {}", e))?
@@ -2009,7 +2030,7 @@ impl PluginManager {
                 }
 
                 let stamp = FileStamp::from_path(&path)?;
-                let parsed = self.parse_kgpg_for_cache(&path)?;
+                let parsed = self.parse_kgpg_for_cache(&path).await?;
                 let plugin = Plugin {
                     id: plugin_id.clone(),
                     name: parsed.manifest.name_to_value(),
@@ -2021,7 +2042,7 @@ impl PluginManager {
                         .and_then(|c| c.base_url.clone())
                         .unwrap_or_default(),
                     size_bytes: stamp.len,
-                    config: HashMap::new(),
+                    config: plugin_config_to_frontend_config_map(&parsed.config),
                     selector: parsed.config.clone().and_then(|c| c.selector),
                     script_type: parsed.script_type.clone(),
                     min_app_version: parsed.manifest.min_app_version.clone(),
@@ -2097,7 +2118,7 @@ impl PluginManager {
         // 找到文件：重新解析并更新（不持锁做 IO）
         if let Some(path) = found_path {
             let stamp = FileStamp::from_path(&path)?;
-            let parsed = self.parse_kgpg_for_cache(&path)?;
+            let parsed = self.parse_kgpg_for_cache(&path).await?;
 
             let plugin = Plugin {
                 id: plugin_id.to_string(),
@@ -2110,7 +2131,7 @@ impl PluginManager {
                     .and_then(|c| c.base_url.clone())
                     .unwrap_or_default(),
                 size_bytes: stamp.len,
-                config: HashMap::new(),
+                config: plugin_config_to_frontend_config_map(&parsed.config),
                 selector: parsed.config.clone().and_then(|c| c.selector),
                 script_type: parsed.script_type.clone(),
                 min_app_version: parsed.manifest.min_app_version.clone(),
@@ -2164,82 +2185,106 @@ impl PluginManager {
         self.refresh_installed_plugins_cache().await
     }
 
-    fn parse_kgpg_for_cache(&self, zip_path: &Path) -> Result<ParsedKgpgForCache, String> {
-        // 打开一次文件：同时支持 v2 头部读取 + SFX zip 解析
-        let mut file =
-            fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
-
-        // v2：可从固定头部读 icon_present + manifest（无需 zip）
+    async fn parse_kgpg_for_cache(&self, zip_path: &Path) -> Result<ParsedKgpgForCache, String> {
+        // v2：异步读取固定头部，优先获取 icon_present + manifest（无需 zip）
         let mut icon_present_from_meta: Option<bool> = None;
         let mut manifest_from_meta: Option<PluginManifest> = None;
-        if let Ok(Some(meta)) = crate::kgpg::read_kgpg2_meta(&mut file) {
-            icon_present_from_meta = Some(meta.icon_present());
-            if meta.manifest_present() {
-                if let Ok(Some(s)) = crate::kgpg::read_kgpg2_manifest_json(&mut file) {
-                    if !s.trim().is_empty() {
-                        if let Ok(m) = serde_json::from_str::<PluginManifest>(&s) {
-                            manifest_from_meta = Some(m);
+        if let Ok(mut file) = tokio::fs::File::open(zip_path).await {
+            if let Ok(Some(meta)) = crate::kgpg::read_kgpg2_meta(zip_path).await {
+                icon_present_from_meta = Some(meta.icon_present());
+                if meta.manifest_present() && meta.manifest_len > 0 {
+                    let manifest_off =
+                        (crate::kgpg::KGPG2_META_SIZE + crate::kgpg::KGPG2_ICON_SIZE) as u64;
+                    let mut slot = vec![0u8; crate::kgpg::KGPG2_MANIFEST_SLOT_SIZE];
+                    if file.seek(SeekFrom::Start(manifest_off)).await.is_ok()
+                        && file.read_exact(&mut slot).await.is_ok()
+                    {
+                        let s = String::from_utf8_lossy(&slot[..meta.manifest_len as usize])
+                            .to_string();
+                        if !s.trim().is_empty() {
+                            if let Ok(m) = serde_json::from_str::<PluginManifest>(&s) {
+                                manifest_from_meta = Some(m);
+                            }
                         }
                     }
                 }
             }
         }
 
-        // 交给 zip crate（支持 SFX：前置固定头部 + zip）
-        let _ = file.seek(SeekFrom::Start(0));
-        let mut archive =
-            ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
+        // ZIP 解析/解压相关逻辑放到 blocking 线程池
+        let zip_path = zip_path.to_path_buf();
+        let zip_parsed = tokio::task::spawn_blocking(move || parse_kgpg_for_cache_from_zip(&zip_path))
+            .await
+            .map_err(|e| format!("Failed to join ZIP parser task: {}", e))??;
 
         // manifest：若 v2 头部拿到了就用，否则从 zip 的 manifest.json 读
-        let manifest = if let Some(m) = manifest_from_meta {
-            m
-        } else {
-            let mut manifest_file = archive
-                .by_name("manifest.json")
-                .map_err(|_| "manifest.json not found in plugin archive".to_string())?;
-            let mut content = String::new();
-            manifest_file
-                .read_to_string(&mut content)
-                .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
-            serde_json::from_str::<PluginManifest>(&content)
-                .map_err(|e| format!("Failed to parse manifest.json: {}", e))?
-        };
-
-        // doc（doc_root/doc.md、doc_root/doc.<lang>.md、或兼容 doc.md）
-        let doc = collect_doc_from_zip(&mut archive)?;
-
-        // config.json（可选）
-        let config = match archive.by_name("config.json") {
-            Ok(mut f) => {
-                let mut s = String::new();
-                f.read_to_string(&mut s)
-                    .map_err(|e| format!("Failed to read config.json: {}", e))?;
-                let c: PluginConfig = serde_json::from_str(&s)
-                    .map_err(|e| format!("Failed to parse config.json: {}", e))?;
-                Some(c)
-            }
-            Err(_) => None,
-        };
+        let manifest = manifest_from_meta.unwrap_or(zip_parsed.manifest);
 
         // icon_present：v2 优先读头部 flags；否则检查 zip entry
-        let icon_present =
-            icon_present_from_meta.unwrap_or_else(|| archive.by_name("icon.png").is_ok());
-
-        // 脚本类型：存在 crawl.js 为 js，否则为 rhai（安卓仅支持 rhai）
-        let script_type = if archive.by_name("crawl.js").is_ok() {
-            "js".to_string()
-        } else {
-            "rhai".to_string()
-        };
+        let icon_present = icon_present_from_meta.unwrap_or(zip_parsed.icon_present);
 
         Ok(ParsedKgpgForCache {
             manifest,
-            config,
-            doc,
+            config: zip_parsed.config,
+            doc: zip_parsed.doc,
             icon_present,
-            script_type,
+            script_type: zip_parsed.script_type,
         })
     }
+}
+
+struct ParsedKgpgForCacheFromZip {
+    manifest: PluginManifest,
+    config: Option<PluginConfig>,
+    doc: Option<PluginDoc>,
+    icon_present: bool,
+    script_type: String,
+}
+
+fn parse_kgpg_for_cache_from_zip(zip_path: &Path) -> Result<ParsedKgpgForCacheFromZip, String> {
+    let file = fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
+
+    let mut content = String::new();
+    {
+        let mut manifest_file = archive
+            .by_name("manifest.json")
+            .map_err(|_| "manifest.json not found in plugin archive".to_string())?;
+        manifest_file
+            .read_to_string(&mut content)
+            .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
+    }
+    let manifest = serde_json::from_str::<PluginManifest>(&content)
+        .map_err(|e| format!("Failed to parse manifest.json: {}", e))?;
+
+    let doc = collect_doc_from_zip(&mut archive)?;
+
+    let config = match archive.by_name("config.json") {
+        Ok(mut f) => {
+            let mut s = String::new();
+            f.read_to_string(&mut s)
+                .map_err(|e| format!("Failed to read config.json: {}", e))?;
+            let c: PluginConfig =
+                serde_json::from_str(&s).map_err(|e| format!("Failed to parse config.json: {}", e))?;
+            Some(c)
+        }
+        Err(_) => None,
+    };
+
+    let icon_present = archive.by_name("icon.png").is_ok();
+    let script_type = if archive.by_name("crawl.js").is_ok() {
+        "js".to_string()
+    } else {
+        "rhai".to_string()
+    };
+
+    Ok(ParsedKgpgForCacheFromZip {
+        manifest,
+        config,
+        doc,
+        icon_present,
+        script_type,
+    })
 }
 
 /// 获取用户插件目录（不依赖 AppHandle / PluginManager 实例）。
@@ -2268,9 +2313,9 @@ pub fn find_plugin_kgpg_path(plugin_id: &str) -> Option<PathBuf> {
 ///
 /// 说明：
 /// - 这是 `PluginManager::read_plugin_manifest()` 的可复用实现。
-pub fn read_plugin_manifest_from_kgpg_file(zip_path: &Path) -> Result<PluginManifest, String> {
+pub async fn read_plugin_manifest_from_kgpg_file(zip_path: &Path) -> Result<PluginManifest, String> {
     // 优先尝试：KGPG v2 固定头部（无需解析 zip）
-    if let Ok(Some(s)) = crate::kgpg::read_kgpg2_manifest_json_from_file(zip_path) {
+    if let Ok(Some(s)) = crate::kgpg::read_kgpg2_manifest_json_from_file(zip_path).await {
         if !s.trim().is_empty() {
             if let Ok(m) = serde_json::from_str::<PluginManifest>(&s) {
                 return Ok(m);
@@ -2278,8 +2323,44 @@ pub fn read_plugin_manifest_from_kgpg_file(zip_path: &Path) -> Result<PluginMani
         }
     }
 
-    let file =
-        fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
+    let zip_path = zip_path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let file =
+            fs::File::open(&zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
+        let mut archive =
+            ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
+
+        // 只读取 manifest.json，不解压整个文件
+        let mut manifest_file = archive
+            .by_name("manifest.json")
+            .map_err(|_| "manifest.json not found in plugin archive")?;
+
+        let mut content = String::new();
+        manifest_file
+            .read_to_string(&mut content)
+            .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
+
+        let manifest: PluginManifest = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse manifest.json: {}", e))?;
+        Ok(manifest)
+    })
+    .await
+    .map_err(|e| format!("Failed to join manifest parser task: {}", e))?
+}
+
+pub fn read_plugin_manifest_from_kgpg_file_sync(zip_path: &Path) -> Result<PluginManifest, String> {
+    // 同步兼容入口：用于非 async 场景（如 VD provider）。
+    if let Ok(bytes) = fs::read(zip_path) {
+        if let Some(s) = crate::kgpg::read_kgpg2_manifest_json_from_bytes(&bytes) {
+            if !s.trim().is_empty() {
+                if let Ok(m) = serde_json::from_str::<PluginManifest>(&s) {
+                    return Ok(m);
+                }
+            }
+        }
+    }
+
+    let file = fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
     let mut archive =
         ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
 
@@ -2293,8 +2374,8 @@ pub fn read_plugin_manifest_from_kgpg_file(zip_path: &Path) -> Result<PluginMani
         .read_to_string(&mut content)
         .map_err(|e| format!("Failed to read manifest.json: {}", e))?;
 
-    let manifest: PluginManifest = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse manifest.json: {}", e))?;
+    let manifest: PluginManifest =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse manifest.json: {}", e))?;
     Ok(manifest)
 }
 
@@ -2398,8 +2479,8 @@ fn parse_semver_triple(s: &str) -> Option<(u32, u32, u32)> {
 
 /// 当前应用版本 `current` 是否满足插件要求的最低版本 `required`（`>=`）。
 pub fn check_min_app_version(current: &str, required: &str) -> Result<(), String> {
-    let cur = parse_semver_triple(current)
-        .ok_or_else(|| format!("无法解析应用版本: {}", current))?;
+    let cur =
+        parse_semver_triple(current).ok_or_else(|| format!("无法解析应用版本: {}", current))?;
     let req = parse_semver_triple(required)
         .ok_or_else(|| format!("无法解析插件要求的最低版本: {}", required))?;
     if cur >= req {
@@ -2420,7 +2501,11 @@ pub struct PluginManifest {
     pub description: ManifestI18nText,
     #[serde(default)]
     pub author: String,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "minAppVersion")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "minAppVersion"
+    )]
     pub min_app_version: Option<String>,
 }
 
@@ -2766,6 +2851,23 @@ pub fn var_definition_to_frontend_value(v: &VarDefinition) -> serde_json::Value 
         obj.insert("dateMax".to_string(), serde_json::Value::String(d.clone()));
     }
     serde_json::Value::Object(obj)
+}
+
+/// 将 config.json 中的变量定义写入 `Plugin.config["vars"]`，与 `get_plugin_vars` 返回数组同构。
+fn plugin_config_to_frontend_config_map(config: &Option<PluginConfig>) -> HashMap<String, serde_json::Value> {
+    let mut m = HashMap::new();
+    let Some(c) = config.as_ref() else {
+        return m;
+    };
+    let Some(vars) = c.var.as_ref() else {
+        return m;
+    };
+    if vars.is_empty() {
+        return m;
+    }
+    let arr: Vec<serde_json::Value> = vars.iter().map(var_definition_to_frontend_value).collect();
+    m.insert("vars".to_string(), serde_json::Value::Array(arr));
+    m
 }
 
 // 插件配置（config.json）

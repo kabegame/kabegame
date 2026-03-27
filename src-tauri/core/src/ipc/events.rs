@@ -84,6 +84,7 @@ daemon_event_kinds! {
     FailedImagesChange,
     TaskImageCounts,
     DaemonShutdown,
+    AutoConfigChange,
 }
 
 impl DaemonEventKind {
@@ -116,6 +117,7 @@ impl DaemonEventKind {
             DaemonEventKind::FailedImagesChange => "failed-images-change",
             DaemonEventKind::TaskImageCounts => "task-image-counts",
             DaemonEventKind::DaemonShutdown => "daemon-shutdown",
+            DaemonEventKind::AutoConfigChange => "auto-config-change",
         }
         .to_string()
     }
@@ -143,6 +145,7 @@ impl DaemonEventKind {
             "failed-images-change" => Some(DaemonEventKind::FailedImagesChange),
             "task-image-counts" => Some(DaemonEventKind::TaskImageCounts),
             "daemon-shutdown" => Some(DaemonEventKind::DaemonShutdown),
+            "auto-config-change" => Some(DaemonEventKind::AutoConfigChange),
             _ => None,
         }
     }
@@ -302,6 +305,13 @@ pub enum DaemonEvent {
     },
     /// Daemon 关闭事件（进程退出前发出）
     DaemonShutdown { reason: String },
+
+    /// 运行配置变更（`reason`: `configadd` | `configdelete` | `configchange`）
+    AutoConfigChange {
+        reason: String,
+        #[serde(rename = "configId")]
+        config_id: String,
+    },
 }
 
 /// 包装在 Arc 中的 Daemon 事件，用于零拷贝传递
@@ -333,6 +343,7 @@ impl DaemonEvent {
             DaemonEvent::FailedImagesChange { .. } => DaemonEventKind::FailedImagesChange,
             DaemonEvent::TaskImageCounts { .. } => DaemonEventKind::TaskImageCounts,
             DaemonEvent::DaemonShutdown { .. } => DaemonEventKind::DaemonShutdown,
+            DaemonEvent::AutoConfigChange { .. } => DaemonEventKind::AutoConfigChange,
         }
     }
 }
