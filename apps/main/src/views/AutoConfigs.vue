@@ -1,288 +1,459 @@
 <template>
   <div class="auto-configs-container">
     <TaskLogDialog ref="taskLogDialogRef" />
-    <PageHeader
-      :title="$t('autoConfig.tabTitle')"
-      :show="[HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help]"
-      :fold="[]"
-      sticky
-      @action="handleHeaderAction"
-    />
-
-    <div class="auto-configs-toolbar" role="toolbar">
-      <div class="toolbar-left">
-        <el-switch v-model="onlyEnabled" />
-        <span class="toolbar-label">{{ $t("autoConfig.onlyEnabled") }}</span>
-      </div>
-      <div class="toolbar-right">
-        <span v-if="configs.length > 0" class="toolbar-count">{{ toolbarCountText }}</span>
+    <PageHeader :title="$t('autoConfig.tabTitle')" :show="[HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help]" :fold="[]"
+      sticky @action="handleHeaderAction">
+      <template #subtitle>
+        <span>{{ headerSubtitle }}</span>
+      </template>
+      <template #extra>
         <el-button type="primary" @click="goCreate">
           {{ $t("autoConfig.create") }}
         </el-button>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
-    <div v-if="filteredConfigs.length === 0" class="auto-configs-empty">
-      <el-empty :description="$t('autoConfig.noConfigs')">
-        <p class="empty-hint">{{ $t("autoConfig.emptyHint") }}</p>
-        <el-button type="primary" @click="goCreate">{{ $t("autoConfig.create") }}</el-button>
-      </el-empty>
-    </div>
-
-    <div v-else class="auto-configs-list">
-      <el-card
-        v-for="cfg in filteredConfigs"
-        :key="cfg.id"
-        class="config-card"
-        role="button"
-        tabindex="0"
-        @click="onConfigCardClick(cfg, $event)"
-        @keydown.enter.prevent="autoConfigDialog.openExisting(cfg.id, 'view')"
-        @keydown.space.prevent="autoConfigDialog.openExisting(cfg.id, 'view')"
-      >
-        <div class="config-card-grid">
-          <div class="cg-icon" @click.stop>
-            <div
-              class="plugin-icon-frame"
-              :class="{ 'plugin-icon-frame--placeholder': !pluginIconUrl(cfg.pluginId) }"
-            >
-              <img
-                v-if="pluginIconUrl(cfg.pluginId)"
-                class="plugin-icon-img"
-                :src="pluginIconUrl(cfg.pluginId)"
-                alt=""
-              />
-              <el-icon v-else :size="26" class="plugin-icon-fallback">
-                <AlarmClock />
-              </el-icon>
-            </div>
-            <el-switch
-              class="schedule-enable-switch"
-              size="small"
-              :model-value="cfg.scheduleEnabled"
-              :disabled="scheduleTogglingId === cfg.id"
-              @update:model-value="(v: string | number | boolean) => handleScheduleEnabled(cfg, Boolean(v))"
-            />
-          </div>
-
-          <div class="cg-main">
-            <div class="config-title-line">
-              <h3 class="config-name">{{ resolveText(cfg.name) }}</h3>
-              <el-tag
-                v-if="cfg.scheduleMode"
-                class="config-mode-tag"
-                type="primary"
-                size="small"
-                effect="plain"
-              >
-                {{ scheduleModeTitle(cfg) }}
-              </el-tag>
-              <el-tag
-                v-else
-                class="config-mode-tag"
-                type="info"
-                size="small"
-                effect="plain"
-              >
-                {{ $t("autoConfig.scheduleTypeUnset") }}
-              </el-tag>
-            </div>
-            <p class="config-meta-line">
-              <span class="config-plugin">{{ pluginName(cfg.pluginId) }}</span>
-              <span class="config-meta-sep" aria-hidden="true">·</span>
-              <span class="config-last-run">
-                {{ $t("autoConfig.lastRunAt") }} {{ formatTs(cfg.scheduleLastRunAt) }}
-              </span>
-            </p>
-            <p
-              class="config-summary"
-              :class="{ 'config-summary--muted': !cfg.scheduleEnabled }"
-            >
-              {{ scheduleSummary(cfg) }}
-            </p>
-            <ScheduleProgressBar :config="cfg" />
-            <AutoConfigCardScheduleEditor v-if="cfg.scheduleEnabled" :config="cfg" />
-          </div>
-
-          <div class="cg-tasks" @click.stop>
-            <div class="config-tasks-head">{{ $t("autoConfig.relatedTasks") }}</div>
-            <AutoConfigRelatedTasks
-              :config-id="cfg.id"
-              @open-task-images="openTaskImages"
-              @open-task-log="openTaskLog"
-            />
-          </div>
-
-          <div class="cg-actions" @click.stop>
-            <el-button type="primary" size="small" @click="handleRunNow(cfg.id)">
-              {{ $t("autoConfig.runNow") }}
-            </el-button>
-            <el-dropdown trigger="click" @command="(cmd: string) => handleMoreCommand(cmd, cfg)">
-              <el-button size="small">
-                {{ $t("autoConfig.moreActions") }}
-                <el-icon class="cg-actions-caret"><ArrowDown /></el-icon>
+    <el-tabs v-model="listTab" class="auto-configs-list-tabs" @tab-change="onTabChange">
+      <el-tab-pane name="mine" :label="$t('autoConfig.tabMine')">
+        <div class="auto-configs-mine-pane">
+          <div class="auto-configs-browse-toolbar" role="toolbar">
+            <el-dropdown trigger="click" @command="onScheduleFilterCommand">
+              <el-button class="auto-configs-browse-btn">
+                <el-icon class="auto-configs-browse-icon">
+                  <Timer />
+                </el-icon>
+                <span>{{ scheduleFilterButtonLabel }}</span>
+                <el-icon class="el-icon--right">
+                  <ArrowDown />
+                </el-icon>
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="edit">{{ $t("autoConfig.edit") }}</el-dropdown-item>
-                  <el-dropdown-item command="copy">{{ $t("autoConfig.copy") }}</el-dropdown-item>
-                  <el-dropdown-item command="delete" divided>
-                    {{ $t("autoConfig.delete") }}
+                  <el-dropdown-item command="all" :class="{ 'is-active': !onlyEnabled }">
+                    {{ $t("gallery.filterAll") }}
+                    <span class="plugin-count">({{ scheduleMenuAllCount }})</span>
+                  </el-dropdown-item>
+                  <el-dropdown-item command="enabled" :class="{ 'is-active': onlyEnabled }">
+                    {{ $t("autoConfig.onlyEnabled") }}
+                    <span class="plugin-count">({{ scheduleMenuEnabledCount }})</span>
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+
+            <el-dropdown trigger="click" @command="onPluginFilterCommand">
+              <el-button class="auto-configs-browse-btn">
+                <el-icon class="auto-configs-browse-icon">
+                  <Filter />
+                </el-icon>
+                <span>{{ pluginFilterButtonLabel }}</span>
+                <el-icon class="el-icon--right">
+                  <ArrowDown />
+                </el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="" :class="{ 'is-active': !filterPluginId }">
+                    {{ $t("autoConfig.filterPluginAll") }}
+                    <span class="plugin-count">({{ pluginMenuAllCount }})</span>
+                  </el-dropdown-item>
+                  <el-dropdown-item v-for="row in pluginFilterRows" :key="row.pluginId" :command="row.pluginId"
+                    :class="{ 'is-active': filterPluginId === row.pluginId }">
+                    {{ pluginName(row.pluginId) }}
+                    <span class="plugin-count">({{ row.count }})</span>
                   </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
           </div>
+
+          <div v-if="filteredConfigs.length === 0" class="auto-configs-empty">
+            <el-empty :description="$t('autoConfig.noConfigs')">
+              <p class="empty-hint">{{ $t("autoConfig.emptyHint") }}</p>
+              <el-button type="primary" @click="goCreate">{{ $t("autoConfig.create") }}</el-button>
+            </el-empty>
+          </div>
+
+          <div v-else class="auto-configs-vlist-wrap">
+            <div v-bind="configListContainerProps" class="auto-configs-vlist-scroll">
+              <div v-bind="configListWrapperProps">
+                <div v-for="item in virtualConfigRows" :key="item.data.id" class="auto-configs-vrow"
+                  :style="{ height: `${configListItemHeightPx}px` }">
+                  <AutoConfigListCard class="auto-configs-vrow-card" :config="item.data" :variant="configCardVariant"
+                    :schedule-toggling-id="scheduleTogglingId"
+                    @card-click="(cfg) => autoConfigDialog.openExisting(cfg.id, 'view')"
+                    @open-view="(id: string) => autoConfigDialog.openExisting(id, 'view')"
+                    @schedule-enabled="handleScheduleEnabled" @run-now="handleRunNow" @more-command="handleMoreCommand"
+                    @open-task-images="openTaskImages" @open-task-log="openTaskLog" />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-      </el-card>
-    </div>
+      </el-tab-pane>
+
+      <el-tab-pane name="recommended" :label="recommendedTabLabel">
+        <div class="auto-configs-recommended-pane">
+          <div v-if="recommendedGrouped.length === 0" class="auto-configs-empty auto-configs-empty--recommended">
+            <el-empty :description="$t('autoConfig.noRecommendedConfigs')">
+              <el-button type="primary" @click="goPluginBrowser">{{ $t("autoConfig.goToPluginStore") }}</el-button>
+            </el-empty>
+          </div>
+          <div v-else class="auto-configs-recommended">
+            <el-collapse v-model="activeRecommendedPluginId" accordion class="recommended-plugin-collapse">
+              <el-collapse-item v-for="group in recommendedGrouped" :key="group.pluginId" :name="group.pluginId"
+                class="recommended-plugin-block">
+                <template #title>
+                  <div class="recommended-plugin-title">
+                    <div class="plugin-icon-frame recommended-plugin-icon-frame"
+                      :class="{ 'plugin-icon-frame--placeholder': !pluginIconUrl(group.pluginId) }">
+                      <img v-if="pluginIconUrl(group.pluginId)" class="plugin-icon-img"
+                        :src="pluginIconUrl(group.pluginId)" alt="" />
+                      <el-icon v-else :size="18" class="plugin-icon-fallback">
+                        <AlarmClock />
+                      </el-icon>
+                    </div>
+                    <span class="recommended-plugin-name">{{ pluginName(group.pluginId) }}</span>
+                    <span class="recommended-plugin-count">({{ group.presets.length }})</span>
+                  </div>
+                </template>
+                <div class="recommended-presets">
+                  <el-card v-for="preset in group.presets" :key="preset.filename" class="recommended-preset-card"
+                    shadow="hover">
+                    <div class="recommended-preset-head">
+                      <span class="recommended-preset-name">{{ resolvePresetTitle(preset) }}</span>
+                      <div class="recommended-preset-actions">
+                        <el-button size="small" @click="openPresetPreview(preset)">
+                          {{ $t("autoConfig.viewRecommendedDetail") }}
+                        </el-button>
+                        <el-button type="primary" size="small" @click="importPreset(preset)">
+                          {{ $t("autoConfig.importRecommended") }}
+                        </el-button>
+                      </div>
+                    </div>
+                    <p v-if="resolvePresetDesc(preset)" class="recommended-preset-desc">
+                      {{ resolvePresetDesc(preset) }}
+                    </p>
+                  </el-card>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
+        </div>
+      </el-tab-pane>
+    </el-tabs>
+
+    <el-dialog v-model="presetPreviewVisible" :title="$t('autoConfig.recommendedPreviewTitle')"
+      class="auto-config-dialog task-params-dialog auto-config-preset-preview-dialog" width="min(560px, 92vw)"
+      destroy-on-close append-to-body>
+      <AutoConfigDetailContent v-if="presetPreviewRunConfig" :config="presetPreviewRunConfig"
+        :show-schedule-last-run="false" />
+      <template #footer>
+        <el-button @click="presetPreviewVisible = false">{{ $t("common.cancel") }}</el-button>
+        <el-button v-if="presetPreviewTarget" type="primary"
+          @click="importPreset(presetPreviewTarget); presetPreviewVisible = false">
+          {{ $t("autoConfig.importRecommended") }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="scheduleHelpVisible" :title="$t('autoConfig.scheduleHelpTitle')"
+      class="auto-config-dialog task-params-dialog auto-config-schedule-help-dialog" width="min(480px, 92vw)"
+      destroy-on-close append-to-body>
+      <p class="acd-schedule-help-p">{{ $t("autoConfig.scheduleHelpP1") }}</p>
+      <p class="acd-schedule-help-p">{{ $t("autoConfig.scheduleHelpP2") }}</p>
+      <p class="acd-schedule-help-p">{{ $t("autoConfig.scheduleHelpP3") }}</p>
+      <template #footer>
+        <el-button type="primary" @click="scheduleHelpVisible = false">{{ $t("common.ok") }}</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="recommendedHelpVisible" :title="$t('autoConfig.recommendedHelpTitle')"
+      class="auto-config-dialog task-params-dialog auto-config-recommended-help-dialog" width="min(480px, 92vw)"
+      destroy-on-close append-to-body>
+      <p class="acd-schedule-help-p">{{ $t("autoConfig.recommendedHelpP1") }}</p>
+      <p class="acd-schedule-help-p">{{ $t("autoConfig.recommendedHelpP2") }}</p>
+      <template #footer>
+        <el-button type="primary" @click="recommendedHelpVisible = false">{{ $t("common.ok") }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { useVirtualList } from "@vueuse/core";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { AlarmClock, ArrowDown } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
+import { AlarmClock, ArrowDown, Filter, Timer } from "@element-plus/icons-vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
-import ScheduleProgressBar from "@kabegame/core/components/scheduler/ScheduleProgressBar.vue";
+import AutoConfigDetailContent from "@kabegame/core/components/scheduler/AutoConfigDetailContent.vue";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { IS_ANDROID } from "@kabegame/core/env";
 import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
-import AutoConfigRelatedTasks from "@/components/scheduler/AutoConfigRelatedTasks.vue";
-import AutoConfigCardScheduleEditor from "@/components/scheduler/AutoConfigCardScheduleEditor.vue";
+import AutoConfigListCard from "@/components/scheduler/AutoConfigListCard.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
-import { useHelpDrawerStore } from "@/stores/helpDrawer";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
-import type { RunConfig } from "@kabegame/core/stores/crawler";
+import { checkRecommendedPresetCompatibility } from "@/composables/useConfigCompatibility";
+import type { PluginRecommendedPreset, RunConfig } from "@kabegame/core/stores/crawler";
 
 const { t, locale } = useI18n();
+const route = useRoute();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
-const helpDrawer = useHelpDrawerStore();
 
 const onlyEnabled = ref(false);
+const filterPluginId = ref<string | null>(null);
 /** 正在切换 scheduleEnabled 的配置 id，避免重复点击 */
 const scheduleTogglingId = ref<string | null>(null);
-/** pluginId -> data URL，与 App / 插件浏览器同源接口 */
-const pluginIconById = ref<Record<string, string>>({});
 const taskLogDialogRef = ref<InstanceType<typeof TaskLogDialog> | null>(null);
 
-const configs = computed(() => crawlerStore.runConfigs);
-const filteredConfigs = computed(() =>
-  configs.value.filter((item) => (onlyEnabled.value ? item.scheduleEnabled : true)),
+const listTab = ref<"mine" | "recommended">("mine");
+const activeRecommendedPluginId = ref("");
+const presetPreviewVisible = ref(false);
+const presetPreviewTarget = ref<PluginRecommendedPreset | null>(null);
+const scheduleHelpVisible = ref(false);
+const recommendedHelpVisible = ref(false);
+
+if (IS_ANDROID) {
+  useModalBack(presetPreviewVisible);
+  useModalBack(scheduleHelpVisible);
+  useModalBack(recommendedHelpVisible);
+}
+
+const presetPreviewRunConfig = computed((): RunConfig | null => {
+  const preset = presetPreviewTarget.value;
+  if (!preset) return null;
+  const descRaw = preset.description;
+  const descStr =
+    descRaw != null && descRaw !== ""
+      ? resolveConfigText(descRaw as any, locale.value).trim() || undefined
+      : undefined;
+  return {
+    id: `preset:${preset.pluginId}:${preset.filename}`,
+    name: preset.name as any,
+    description: descStr,
+    pluginId: preset.pluginId,
+    url: preset.baseUrl || "",
+    userConfig: preset.userConfig,
+    httpHeaders: preset.httpHeaders,
+    createdAt: 0,
+    scheduleEnabled: !!preset.scheduleSpec,
+    scheduleSpec: preset.scheduleSpec,
+    schedulePlannedAt: undefined,
+    scheduleLastRunAt: undefined,
+    outputDir: undefined,
+  };
+});
+
+const recommendedTabLabel = computed(() =>
+  t("autoConfig.tabRecommendedWithCount", {
+    n: crawlerStore.pluginRecommendedConfigs.length,
+  }),
 );
 
-const toolbarCountText = computed(() => {
+const recommendedGrouped = computed(() => {
+  const map = new Map<string, PluginRecommendedPreset[]>();
+  for (const p of crawlerStore.pluginRecommendedConfigs) {
+    const arr = map.get(p.pluginId) ?? [];
+    arr.push(p);
+    map.set(p.pluginId, arr);
+  }
+  return [...map.entries()]
+    .map(([pluginId, presets]) => ({
+      pluginId,
+      presets: presets.sort((a, b) => a.filename.localeCompare(b.filename)),
+    }))
+    .sort((a, b) =>
+      pluginStore.pluginLabel(a.pluginId).localeCompare(pluginStore.pluginLabel(b.pluginId)),
+    );
+});
+
+function resolvePresetTitle(preset: PluginRecommendedPreset) {
+  const s = resolveConfigText(preset.name as any, locale.value).trim();
+  return s || preset.filename;
+}
+
+function resolvePresetDesc(preset: PluginRecommendedPreset) {
+  if (preset.description == null || preset.description === "") return "";
+  return resolveConfigText(preset.description as any, locale.value).trim();
+}
+
+function openPresetPreview(preset: PluginRecommendedPreset) {
+  presetPreviewTarget.value = preset;
+  presetPreviewVisible.value = true;
+}
+
+async function importPreset(preset: PluginRecommendedPreset) {
+  const compat = await checkRecommendedPresetCompatibility(preset.pluginId, preset.userConfig);
+  if (!compat.versionCompatible) {
+    ElMessage.error(compat.versionReason ?? t("common.pluginNotExist"));
+    return;
+  }
+  if (!compat.contentCompatible) {
+    try {
+      await ElMessageBox.confirm(
+        [...compat.contentErrors, ...compat.warnings].join("\n"),
+        t("autoConfig.importCompatibilityWarningTitle"),
+        {
+          type: "warning",
+          confirmButtonText: t("autoConfig.importContinue"),
+          cancelButtonText: t("common.cancel"),
+        },
+      );
+    } catch {
+      return;
+    }
+  }
+  try {
+    await crawlerStore.importRecommendedPreset(preset);
+    ElMessage.success(t("autoConfig.importRecommendedSuccess"));
+    listTab.value = "mine";
+  } catch (e) {
+    console.error(e);
+    ElMessage.error(t("common.operationFailed"));
+  }
+}
+
+watch(
+  recommendedGrouped,
+  (groups) => {
+    if (groups.length === 0) {
+      activeRecommendedPluginId.value = "";
+      return;
+    }
+    const exists = groups.some((group) => group.pluginId === activeRecommendedPluginId.value);
+    if (!exists) {
+      activeRecommendedPluginId.value = groups[0]?.pluginId ?? "";
+    }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => route.query.tab,
+  (tab) => {
+    listTab.value = tab === "recommended" ? "recommended" : "mine";
+  },
+  { immediate: true },
+);
+
+function onTabChange(name: string | number) {
+  const tab = String(name);
+  const q = { ...route.query } as Record<string, string | string[]>;
+  if (tab === "recommended") q.tab = "recommended";
+  else delete q.tab;
+  void router.replace({ path: route.path, query: q });
+}
+
+onMounted(async () => {
+  await crawlerStore.runConfigsReady;
+});
+
+function goPluginBrowser() {
+  void router.push({ name: "PluginBrowser" });
+}
+
+const configs = computed(() => crawlerStore.runConfigs);
+
+const filteredConfigs = computed(() => {
+  let list = configs.value;
+  if (filterPluginId.value) {
+    list = list.filter((c) => c.pluginId === filterPluginId.value);
+  }
+  if (onlyEnabled.value) {
+    list = list.filter((c) => c.scheduleEnabled);
+  }
+  return list;
+});
+
+const configListItemHeightPx = IS_ANDROID
+  ? 640
+  : 312;
+
+const configCardVariant = IS_ANDROID ? "android" : "desktop";
+
+const {
+  list: virtualConfigRows,
+  containerProps: configListContainerProps,
+  wrapperProps: configListWrapperProps,
+} = useVirtualList(filteredConfigs, {
+  itemHeight: configListItemHeightPx,
+  overscan: 3,
+});
+
+/** 仅按插件过滤（用于「定时」下拉中的数量） */
+const configsForScheduleMenu = computed(() => {
+  if (!filterPluginId.value) return configs.value;
+  return configs.value.filter((c) => c.pluginId === filterPluginId.value);
+});
+
+const scheduleMenuAllCount = computed(() => configsForScheduleMenu.value.length);
+const scheduleMenuEnabledCount = computed(
+  () => configsForScheduleMenu.value.filter((c) => c.scheduleEnabled).length,
+);
+
+/** 仅按定时开关过滤（用于「插件」下拉中的数量） */
+const configsForPluginMenu = computed(() =>
+  onlyEnabled.value ? configs.value.filter((c) => c.scheduleEnabled) : configs.value,
+);
+
+const pluginMenuAllCount = computed(() => configsForPluginMenu.value.length);
+
+const pluginFilterRows = computed(() => {
+  const map = new Map<string, number>();
+  for (const c of configsForPluginMenu.value) {
+    if (!c.pluginId) continue;
+    map.set(c.pluginId, (map.get(c.pluginId) ?? 0) + 1);
+  }
+  return [...map.entries()]
+    .map(([pluginId, count]) => ({ pluginId, count }))
+    .sort((a, b) =>
+      pluginStore.pluginLabel(a.pluginId).localeCompare(pluginStore.pluginLabel(b.pluginId)),
+    );
+});
+
+const headerSubtitle = computed(() => {
   const total = configs.value.length;
   const shown = filteredConfigs.value.length;
-  if (onlyEnabled.value) {
+  if (onlyEnabled.value || filterPluginId.value) {
     return t("autoConfig.listFiltered", { shown, total });
   }
   return t("autoConfig.listCount", { total });
 });
 
-function toPngDataUrl(iconData: number[]): string {
-  const bytes = new Uint8Array(iconData);
-  const binaryString = Array.from(bytes)
-    .map((byte) => String.fromCharCode(byte))
-    .join("");
-  return `data:image/png;base64,${btoa(binaryString)}`;
-}
-
-async function ensurePluginIcon(pluginId: string) {
-  if (!pluginId || pluginIconById.value[pluginId]) return;
-  try {
-    const iconData = await invoke<number[] | null>("get_plugin_icon", { pluginId });
-    if (iconData && iconData.length > 0) {
-      pluginIconById.value = { ...pluginIconById.value, [pluginId]: toPngDataUrl(iconData) };
-    }
-  } catch {
-    // 无图标或失败时保持空
-  }
-}
-
-watch(
-  () => [...new Set(configs.value.map((c) => c.pluginId).filter(Boolean))],
-  (ids) => {
-    void Promise.all(ids.map((id) => ensurePluginIcon(id)));
-  },
-  { immediate: true },
+const scheduleFilterButtonLabel = computed(() =>
+  onlyEnabled.value ? t("autoConfig.onlyEnabled") : t("gallery.filterAll"),
 );
 
-const pluginIconUrl = (pluginId: string) => pluginIconById.value[pluginId];
+const pluginFilterButtonLabel = computed(() =>
+  filterPluginId.value ? pluginName(filterPluginId.value) : t("autoConfig.filterPluginAll"),
+);
+
+function onScheduleFilterCommand(cmd: string) {
+  onlyEnabled.value = cmd === "enabled";
+}
+
+function onPluginFilterCommand(cmd: string) {
+  filterPluginId.value = cmd ? cmd : null;
+}
+
+const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconUrl(pluginId);
 
 const openTaskImages = (taskId: string) => {
   void router.push({ name: "TaskDetail", params: { id: taskId } });
-};
-
-const onConfigCardClick = (cfg: RunConfig, e: MouseEvent) => {
-  const t = e.target as HTMLElement | null;
-  if (!t) return;
-  if (t.closest(".cg-icon, .cg-tasks, .cg-actions, .cg-schedule, .el-switch, .el-button, .el-dropdown")) {
-    return;
-  }
-  autoConfigDialog.openExisting(cfg.id, "view");
 };
 
 const openTaskLog = async (taskId: string) => {
   await taskLogDialogRef.value?.openTaskLog(taskId);
 };
 
-const resolveText = (value: unknown) => resolveConfigText(value as any, locale.value);
-
 const pluginName = (pluginId: string) => pluginStore.pluginLabel(pluginId);
-
-const formatTs = (ts?: number) => {
-  if (!ts) return t("autoConfig.never");
-  const ms = ts > 9_999_999_999 ? ts : ts * 1000;
-  return new Date(ms).toLocaleString();
-};
-
-const formatInterval = (secs?: number) => {
-  const n = Number(secs ?? 0);
-  if (!Number.isFinite(n) || n <= 0) return t("autoConfig.unset");
-  if (n % 86400 === 0) return t("autoConfig.everyDays", { n: n / 86400 });
-  if (n % 3600 === 0) return t("autoConfig.everyHours", { n: n / 3600 });
-  if (n % 60 === 0) return t("autoConfig.everyMinutes", { n: n / 60 });
-  return t("autoConfig.everySeconds", { n });
-};
-
-const scheduleModeTitle = (cfg: RunConfig) => {
-  switch (cfg.scheduleMode) {
-    case "interval":
-      return t("autoConfig.modeInterval");
-    case "daily":
-      return t("autoConfig.modeDaily");
-    default:
-      return t("autoConfig.unset");
-  }
-};
-
-const scheduleSummary = (cfg: RunConfig) => {
-  if (!cfg.scheduleEnabled) return t("autoConfig.scheduleDisabled");
-  switch (cfg.scheduleMode) {
-    case "interval":
-      return formatInterval(cfg.scheduleIntervalSecs);
-    case "daily": {
-      const minute = Number(cfg.scheduleDailyMinute ?? 0);
-      if (cfg.scheduleDailyHour === -1) {
-        return t("autoConfig.dailyHourly", { minute: String(minute).padStart(2, "0") });
-      }
-      const hour = Number(cfg.scheduleDailyHour ?? 0);
-      return t("autoConfig.dailyAt", {
-        hour: String(hour).padStart(2, "0"),
-        minute: String(minute).padStart(2, "0"),
-      });
-    }
-    default:
-      return t("autoConfig.unset");
-  }
-};
 
 const goCreate = () => {
   autoConfigDialog.openCreate();
@@ -334,15 +505,16 @@ const handleScheduleEnabled = async (cfg: RunConfig, enabled: boolean) => {
   if (cfg.scheduleEnabled === enabled || scheduleTogglingId.value === cfg.id) return;
   scheduleTogglingId.value = cfg.id;
   try {
-    if (enabled && !cfg.scheduleMode) {
+    if (enabled && !cfg.scheduleSpec?.mode) {
       const d = new Date();
       await crawlerStore.updateRunConfig({
         ...cfg,
         scheduleEnabled: true,
-        scheduleMode: "daily",
-        scheduleDailyHour: d.getHours(),
-        scheduleDailyMinute: d.getMinutes(),
-        scheduleIntervalSecs: undefined,
+        scheduleSpec: {
+          mode: "daily",
+          hour: d.getHours(),
+          minute: d.getMinutes(),
+        },
       });
     } else {
       await crawlerStore.updateRunConfig({ ...cfg, scheduleEnabled: enabled });
@@ -356,7 +528,11 @@ const handleScheduleEnabled = async (cfg: RunConfig, enabled: boolean) => {
 
 const handleHeaderAction = (payload: { id: string }) => {
   if (payload.id === HeaderFeatureId.Help) {
-    helpDrawer.open("gallery");
+    if (listTab.value === "recommended") {
+      recommendedHelpVisible.value = true;
+    } else {
+      scheduleHelpVisible.value = true;
+    }
   }
 };
 </script>
@@ -365,45 +541,219 @@ const handleHeaderAction = (payload: { id: string }) => {
 .auto-configs-container {
   height: 100%;
   padding: 20px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
-.auto-configs-toolbar {
-  margin-top: 16px;
-  margin-bottom: 20px;
+.auto-configs-list-tabs {
+  margin-bottom: 0;
+  flex: 1;
+  min-height: 0;
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  overflow: hidden;
+
+  :deep(.el-tabs__header) {
+    flex-shrink: 0;
+    margin-bottom: 12px;
+  }
+
+  :deep(.el-tabs__content) {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  :deep(.el-tab-pane) {
+    height: 100%;
+    overflow: hidden;
+  }
+}
+
+.auto-configs-mine-pane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.auto-configs-vlist-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.auto-configs-vlist-scroll {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.auto-configs-vrow {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.auto-configs-vrow-card {
+  height: calc(100% - 16px);
+  margin-bottom: 16px;
+  box-sizing: border-box;
+}
+
+.acd-schedule-help-p {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--anime-text-secondary);
+}
+
+.acd-schedule-help-p:last-child {
+  margin-bottom: 0;
+}
+
+.auto-configs-recommended {
+  margin-top: 12px;
+  padding: 4px 2px 8px;
+}
+
+.recommended-plugin-title {
+  display: inline-flex;
+  flex: 1;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
-  padding: 12px 16px;
-  border-radius: 12px;
-  background: var(--anime-bg-card);
-  border: 1px solid var(--anime-border);
-  box-shadow: 0 1px 8px rgba(255, 107, 157, 0.08);
+  min-width: 0;
+  padding-right: 8px;
 }
 
-.toolbar-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+.recommended-plugin-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--anime-text-secondary);
 }
 
-.toolbar-count {
+.recommended-plugin-count {
   font-size: 13px;
   color: var(--anime-text-muted);
-  white-space: nowrap;
 }
 
-.toolbar-left {
+.recommended-plugin-icon-frame {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.recommended-plugin-collapse {
+  border: none;
+  background: transparent;
+
+  :deep(.el-collapse-item) {
+    margin-bottom: 14px;
+    border: 1px solid var(--anime-border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--el-bg-color);
+  }
+
+  :deep(.el-collapse-item:last-child) {
+    margin-bottom: 0;
+  }
+
+  :deep(.el-collapse-item__header) {
+    height: auto;
+    min-height: 52px;
+    padding: 14px 16px;
+    line-height: 1.4;
+    border-bottom: 1px solid transparent;
+  }
+
+  :deep(.el-collapse-item.is-active > .el-collapse-item__header) {
+    border-bottom-color: var(--anime-border);
+  }
+
+  :deep(.el-collapse-item__wrap) {
+    border-bottom: none;
+    background: transparent;
+  }
+
+  :deep(.el-collapse-item__content) {
+    padding: 14px 16px 18px;
+    background: var(--el-fill-color-extra-light, var(--el-fill-color-light));
+  }
+
+  :deep(.el-collapse-item__arrow) {
+    margin: 0 0 0 12px;
+  }
+}
+
+.recommended-presets {
   display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.recommended-preset-card.el-card {
+  border-radius: 12px;
+  border: 1px solid var(--anime-border);
+
+  :deep(.el-card__body) {
+    padding: 18px 20px;
+  }
+}
+
+.recommended-preset-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px 16px;
+}
+
+.recommended-preset-name {
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.45;
+  padding-top: 2px;
+}
+
+.recommended-preset-desc {
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--anime-text-muted);
+  line-height: 1.55;
+}
+
+.recommended-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.auto-configs-browse-toolbar {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  margin-top: 0;
+  margin-bottom: 8px;
 }
 
-.toolbar-label {
-  font-size: 13px;
-  color: var(--anime-text-secondary);
+.auto-configs-browse-btn {
+  .auto-configs-browse-icon {
+    margin-right: 6px;
+    font-size: 14px;
+  }
+}
+
+:deep(.plugin-count) {
+  margin-left: 4px;
+  opacity: 0.75;
+  font-size: 12px;
 }
 
 .auto-configs-empty {
@@ -421,219 +771,31 @@ const handleHeaderAction = (payload: { id: string }) => {
   }
 }
 
-.auto-configs-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+.auto-configs-recommended-pane {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
 }
 
-/* 覆盖全局 .el-card:hover 的 translateY，仅保留阴影反馈 */
-.config-card.el-card {
-  cursor: pointer;
-  border: 1px solid var(--anime-border);
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: inset 3px 0 0 0 var(--anime-primary), 0 2px 10px rgba(255, 107, 157, 0.06);
-  transform: none;
-  transition:
-    box-shadow 0.2s ease,
-    border-color 0.2s ease;
-
-  &:hover {
-    border-color: rgba(255, 107, 157, 0.45);
-    box-shadow: inset 3px 0 0 0 var(--anime-primary-dark), var(--anime-shadow-hover);
-    transform: none;
-  }
-
-  :deep(.el-card__body) {
-    padding: 16px 18px 16px 16px;
-  }
-}
-
-/* 默认窄屏：关联任务在配置信息下方占满宽 */
-.config-card-grid {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-areas:
-    "icon main"
-    "tasks tasks"
-    "actions actions";
-  gap: 12px 16px;
-  align-items: start;
-}
-
-.cg-icon {
-  grid-area: icon;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-
-.schedule-enable-switch {
+.recommended-plugin-title .plugin-icon-frame {
   flex-shrink: 0;
-}
-
-.plugin-icon-frame {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  overflow: hidden;
-  background: var(--el-fill-color-light);
-  border: 1px solid var(--anime-border);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.12);
-
-  &--placeholder {
-    background: linear-gradient(145deg, rgba(255, 107, 157, 0.12), rgba(167, 139, 250, 0.15));
-  }
+  overflow: hidden;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--anime-border);
 }
 
-.plugin-icon-fallback {
-  color: var(--anime-text-secondary);
-}
-
-.plugin-icon-img {
+.recommended-plugin-title .plugin-icon-img {
   width: 100%;
   height: 100%;
   object-fit: contain;
   display: block;
 }
 
-.cg-main {
-  grid-area: main;
-  min-width: 0;
-}
-
-.cg-tasks {
-  grid-area: tasks;
-  min-width: 0;
-  width: 100%;
-  margin-top: 4px;
-  padding: 12px 12px 10px;
-  border-radius: 10px;
-  background: linear-gradient(
-    160deg,
-    rgba(255, 107, 157, 0.06) 0%,
-    rgba(167, 139, 250, 0.08) 100%
-  );
-  border: 1px solid rgba(255, 107, 157, 0.15);
-}
-
-.config-tasks-head {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.recommended-plugin-title .plugin-icon-fallback {
   color: var(--anime-text-secondary);
-  margin-bottom: 8px;
-  opacity: 0.9;
-}
-
-.cg-actions {
-  grid-area: actions;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
-  padding-top: 8px;
-  margin-top: 4px;
-}
-
-.cg-actions-caret {
-  margin-left: 4px;
-  vertical-align: middle;
-}
-
-.config-title-line {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.config-name {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--anime-text-primary);
-  letter-spacing: 0.01em;
-}
-
-.config-mode-tag {
-  flex-shrink: 0;
-}
-
-.config-meta-line {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--anime-text-muted);
-  line-height: 1.4;
-}
-
-.config-meta-sep {
-  margin: 0 4px;
-  opacity: 0.7;
-}
-
-.config-plugin {
-  color: var(--anime-text-secondary);
-}
-
-.config-last-run {
-  color: var(--anime-text-muted);
-}
-
-.config-summary {
-  margin: 10px 0 0;
-  display: inline-flex;
-  align-items: center;
-  max-width: 100%;
-  padding: 8px 12px;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--anime-primary-dark, var(--anime-primary));
-  line-height: 1.45;
-  border-radius: 10px;
-  background: linear-gradient(
-    125deg,
-    rgba(255, 107, 157, 0.16) 0%,
-    rgba(167, 139, 250, 0.14) 100%
-  );
-  border: 1px solid rgba(255, 107, 157, 0.28);
-  box-shadow: 0 1px 6px rgba(124, 58, 237, 0.1);
-}
-
-.config-summary--muted {
-  font-weight: 500;
-  font-size: 14px;
-  letter-spacing: normal;
-  color: var(--anime-text-muted);
-  background: var(--el-fill-color-light);
-  border-color: var(--anime-border);
-  box-shadow: none;
-}
-
-/* 宽屏：插件图标 + 主信息 + 关联任务三列，任务在右侧 */
-@media (min-width: 1024px) {
-  .config-card-grid {
-    grid-template-columns: auto minmax(0, 1fr) minmax(300px, 440px);
-    grid-template-areas:
-      "icon main tasks"
-      "actions actions actions";
-  }
-
-  .cg-tasks {
-    margin-top: 0;
-  }
-
-  .cg-actions {
-    padding-top: 6px;
-    margin-top: 2px;
-  }
 }
 </style>

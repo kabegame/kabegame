@@ -638,6 +638,42 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf, backend: PluginBackend) -> Resul
         entries.push(("config.json".to_string(), config));
     }
 
+    // configs/：插件推荐运行配置（*.json）
+    let configs_dir = plugin_dir.join("configs");
+    if configs_dir.is_dir() {
+        let mut stack = vec![configs_dir.clone()];
+        while let Some(dir) = stack.pop() {
+            let rd = std::fs::read_dir(&dir).map_err(|e| format!("读取 configs 失败: {}", e))?;
+            for ent in rd {
+                let ent = ent.map_err(|e| format!("读取 configs 失败: {}", e))?;
+                let p = ent.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                if !p.is_file() {
+                    continue;
+                }
+                let rel = p
+                    .strip_prefix(plugin_dir)
+                    .map_err(|_| "configs 路径异常".to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if !rel.starts_with("configs/") {
+                    continue;
+                }
+                let ext = p
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if ext == "json" {
+                    entries.push((rel, p));
+                }
+            }
+        }
+    }
+
     // doc_root（doc.md、doc.<lang>.md + 常见图片，图片可递归子目录）
     let doc_root = plugin_dir.join("doc_root");
     if doc_root.is_dir() {

@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, unref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { i18n, resolveConfigText } from "@kabegame/i18n";
 import { IS_ANDROID } from "../env";
 
 /** 创建爬虫任务前的异步守卫；返回 `false` 时不创建任务（如最低应用版本不满足） */
@@ -36,6 +37,13 @@ export interface CrawlTask {
   error?: string;
 }
 
+/** 与后端 `ScheduleSpec` JSON（`schedule_spec` 列）一致 */
+export type ScheduleSpec =
+  | { mode: "interval"; intervalSecs: number }
+  | { mode: "daily"; hour: number; minute: number }
+  /** weekday: 0=周一 … 6=周日 */
+  | { mode: "weekly"; weekday: number; hour: number; minute: number };
+
 export interface RunConfig {
   id: string;
   name: string;
@@ -47,11 +55,7 @@ export interface RunConfig {
   httpHeaders?: Record<string, string>;
   createdAt: number;
   scheduleEnabled: boolean;
-  scheduleMode?: "interval" | "daily";
-  scheduleIntervalSecs?: number;
-  scheduleDailyHour?: number;
-  scheduleDailyMinute?: number;
-  scheduleDelaySecs?: number;
+  scheduleSpec?: ScheduleSpec;
   schedulePlannedAt?: number;
   scheduleLastRunAt?: number;
 }
@@ -59,7 +63,7 @@ export interface RunConfig {
 export interface MissedRunItem {
   configId: string;
   configName: string;
-  scheduleMode: "interval" | "daily";
+  scheduleMode: "interval" | "daily" | "weekly";
   missedCount: number;
   lastDueAt: number;
 }
@@ -76,6 +80,149 @@ function numOpt(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** 解析 `schedule_spec` JSON 对象或字符串 */
+export function parseScheduleSpecRaw(v: unknown): ScheduleSpec | undefined {
+  if (v == null) return undefined;
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (!t) return undefined;
+    try {
+      return parseScheduleSpecRaw(JSON.parse(t));
+    } catch {
+      return undefined;
+    }
+  }
+  if (typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const mode = o.mode;
+  if (mode === "interval") {
+    const intervalSecs = numOpt(o.intervalSecs ?? o.interval_secs);
+    if (intervalSecs == null || intervalSecs <= 0) return undefined;
+    return { mode: "interval", intervalSecs };
+  }
+  if (mode === "daily") {
+    const hour = numOpt(o.hour);
+    const minute = numOpt(o.minute);
+    if (hour == null || minute == null) return undefined;
+    return { mode: "daily", hour, minute };
+  }
+  if (mode === "weekly") {
+    const weekday = numOpt(o.weekday);
+    const hour = numOpt(o.hour);
+    const minute = numOpt(o.minute);
+    if (weekday == null || hour == null || minute == null) return undefined;
+    return { mode: "weekly", weekday, hour, minute };
+  }
+  return undefined;
+}
+
+/** 与后端 `compute_next_planned_at` / AutoConfigCardScheduleEditor 对齐：下一次绝对触发时刻（Unix 秒） */
+export function computeNextPlannedAtForSpec(spec: ScheduleSpec): number {
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (spec.mode === "interval") {
+    const iv = Math.max(60, Number(spec.intervalSecs) || 3600);
+    return nowSec + iv;
+  }
+  if (spec.mode === "weekly") {
+    const minute = Math.min(59, Math.max(0, Number(spec.minute)));
+    const hour = Math.min(23, Math.max(0, Number(spec.hour)));
+    const wd = Math.min(6, Math.max(0, Number(spec.weekday)));
+    const d = new Date(nowSec * 1000);
+    const cur = d.getDay() === 0 ? 6 : d.getDay() - 1;
+    const days = (wd - cur + 7) % 7;
+    let cand = new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, hour, minute, 0, 0);
+    if (Math.floor(cand.getTime() / 1000) <= nowSec) {
+      cand = new Date(cand.getFullYear(), cand.getMonth(), cand.getDate() + 7, hour, minute, 0, 0);
+    }
+    return Math.floor(cand.getTime() / 1000);
+  }
+  const minute = Math.min(59, Math.max(0, Number(spec.minute)));
+  const d = new Date(nowSec * 1000);
+  if (spec.hour === -1) {
+    const slot = new Date(d.getTime());
+    slot.setSeconds(0, 0);
+    slot.setMinutes(minute);
+    if (Math.floor(slot.getTime() / 1000) <= nowSec) {
+      slot.setHours(slot.getHours() + 1);
+      slot.setMinutes(minute);
+      slot.setSeconds(0, 0);
+    }
+    return Math.floor(slot.getTime() / 1000);
+  }
+  const hour = Math.min(23, Math.max(0, Number(spec.hour)));
+  const slot = new Date(d.getTime());
+  slot.setHours(hour, minute, 0, 0);
+  if (Math.floor(slot.getTime() / 1000) <= nowSec) {
+    slot.setDate(slot.getDate() + 1);
+    slot.setHours(hour, minute, 0, 0);
+  }
+  return Math.floor(slot.getTime() / 1000);
+}
+
+/** 插件包内 `configs/*.json` 推荐运行配置（已合并 pluginId、filename、baseUrl） */
+export interface PluginRecommendedPreset {
+  pluginId: string;
+  filename: string;
+  baseUrl: string;
+  name: unknown;
+  description?: unknown;
+  userConfig?: Record<string, any>;
+  scheduleSpec?: ScheduleSpec;
+  httpHeaders?: Record<string, string>;
+}
+
+function parseFlatI18nText(
+  obj: Record<string, unknown>,
+  baseKey: string,
+): Record<string, string> | string | undefined {
+  const rawBase = obj[baseKey];
+  const out: Record<string, string> = {};
+  if (rawBase && typeof rawBase === "object" && !Array.isArray(rawBase)) {
+    for (const [k, v] of Object.entries(rawBase as Record<string, unknown>)) {
+      if (typeof v === "string" && v.trim()) out[k] = v;
+    }
+  }
+  if (typeof rawBase === "string" && rawBase.trim()) {
+    out.default = rawBase;
+  }
+  const prefix = `${baseKey}.`;
+  for (const [k, v] of Object.entries(obj)) {
+    if (!k.startsWith(prefix) || typeof v !== "string" || !v.trim()) continue;
+    const lang = k.slice(prefix.length).trim();
+    if (!lang) continue;
+    out[lang] = v;
+  }
+  if (Object.keys(out).length > 0) {
+    if (!out.default) out.default = out.en ?? Object.values(out)[0] ?? "";
+    return out;
+  }
+  if (typeof rawBase === "string") return rawBase;
+  return undefined;
+}
+
+export function parsePluginRecommendedPreset(
+  raw: unknown,
+  baseUrlByPluginId: Map<string, string>,
+): PluginRecommendedPreset | null {
+  if (raw == null || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const pluginId = String(o.pluginId ?? o.plugin_id ?? "").trim();
+  const filename = String(o.filename ?? "").trim();
+  if (!pluginId || !filename) return null;
+  const nameText = parseFlatI18nText(o, "name");
+  const descText = parseFlatI18nText(o, "description");
+  return {
+    pluginId,
+    filename,
+    baseUrl: baseUrlByPluginId.get(pluginId) ?? "",
+    name: nameText ?? filename,
+    description: descText,
+    userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
+    scheduleSpec: parseScheduleSpecRaw(o.scheduleSpec ?? o.schedule_spec),
+    httpHeaders: (o.httpHeaders ?? o.http_headers) as Record<string, string> | undefined,
+  };
+}
+
 /** 将 `get_run_config` / `get_run_configs` 单条 JSON 规范为 `RunConfig` */
 export function parseRunConfigRaw(raw: unknown): RunConfig | null {
   if (raw == null || typeof raw !== "object") return null;
@@ -83,12 +230,6 @@ export function parseRunConfigRaw(raw: unknown): RunConfig | null {
   const id = String(o.id ?? "").trim();
   const pluginId = String(o.pluginId ?? o.plugin_id ?? "").trim();
   if (!id || !pluginId) return null;
-  const scheduleModeRaw = o.scheduleMode ?? o.schedule_mode;
-  const scheduleMode =
-    typeof scheduleModeRaw === "string" &&
-    (scheduleModeRaw === "interval" || scheduleModeRaw === "daily")
-      ? scheduleModeRaw
-      : undefined;
   return {
     id,
     name: String(o.name ?? ""),
@@ -107,15 +248,7 @@ export function parseRunConfigRaw(raw: unknown): RunConfig | null {
       | undefined,
     createdAt: Number(o.createdAt ?? o.created_at ?? 0),
     scheduleEnabled: Boolean(o.scheduleEnabled ?? o.schedule_enabled),
-    scheduleMode,
-    scheduleIntervalSecs: numOpt(
-      o.scheduleIntervalSecs ?? o.schedule_interval_secs,
-    ),
-    scheduleDailyHour: numOpt(o.scheduleDailyHour ?? o.schedule_daily_hour),
-    scheduleDailyMinute: numOpt(
-      o.scheduleDailyMinute ?? o.schedule_daily_minute,
-    ),
-    scheduleDelaySecs: numOpt(o.scheduleDelaySecs ?? o.schedule_delay_secs),
+    scheduleSpec: parseScheduleSpecRaw(o.scheduleSpec ?? o.schedule_spec),
     schedulePlannedAt: numOpt(o.schedulePlannedAt ?? o.schedule_planned_at),
     scheduleLastRunAt: numOpt(o.scheduleLastRunAt ?? o.schedule_last_run_at),
   };
@@ -127,6 +260,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
   const tasksTotal = ref(0);
   const isCrawling = ref(false);
   const runConfigs = ref<RunConfig[]>([]);
+  /** 已安装插件包内 `configs/*.json` 推荐配置（启动与插件列表刷新时拉取） */
+  const pluginRecommendedConfigs = ref<PluginRecommendedPreset[]>([]);
 
   const lastProgressUpdateAt = new Map<string, number>();
   const loadingTaskPromises = new Map<string, Promise<void>>();
@@ -327,7 +462,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
             ...tasks.value[taskIndex],
             status: isCanceled ? "canceled" : "failed",
             error: errorMessage,
-            progress: 0,
             endTime: Date.now(),
           };
 
@@ -465,7 +599,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
           ...tasks.value[taskIndex],
           status: "failed",
           error: error instanceof Error ? error.message : "未知错误",
-          progress: 0,
           endTime: Date.now(),
         };
 
@@ -546,12 +679,92 @@ export const useCrawlerStore = defineStore("crawler", () => {
 
   async function loadRunConfigs() {
     try {
-      const configs = await invoke<RunConfig[]>("get_run_configs");
-      runConfigs.value = configs;
+      const raw = await invoke<unknown[]>("get_run_configs");
+      const list = Array.isArray(raw) ? raw : [];
+      runConfigs.value = list
+        .map((x) => parseRunConfigRaw(x))
+        .filter((c): c is RunConfig => c != null);
     } catch (error) {
       console.error("加载运行配置失败:", error);
       runConfigs.value = [];
     }
+  }
+
+  async function loadPluginRecommendedConfigs() {
+    try {
+      const plugins = await invoke<Array<{ id?: string; baseUrl?: string }>>("get_plugins");
+      const list = Array.isArray(plugins) ? plugins : [];
+      const baseUrlById = new Map<string, string>();
+      const ids: string[] = [];
+      for (const p of list) {
+        if (!p || typeof p !== "object") continue;
+        const id = String(p.id ?? "").trim();
+        if (!id) continue;
+        ids.push(id);
+        baseUrlById.set(id, String(p.baseUrl ?? ""));
+      }
+      const collected: PluginRecommendedPreset[] = [];
+      await Promise.all(
+        ids.map(async (pluginId) => {
+          try {
+            const raw = await invoke<unknown[]>("get_plugin_recommended_configs", {
+              pluginId,
+            });
+            const arr = Array.isArray(raw) ? raw : [];
+            for (const item of arr) {
+              const parsed = parsePluginRecommendedPreset(item, baseUrlById);
+              if (parsed) collected.push(parsed);
+            }
+          } catch {
+            // 单插件无 configs 或读包失败时忽略
+          }
+        }),
+      );
+      collected.sort((a, b) =>
+        a.pluginId.localeCompare(b.pluginId) || a.filename.localeCompare(b.filename),
+      );
+      pluginRecommendedConfigs.value = collected;
+    } catch (error) {
+      console.error("加载插件推荐配置失败:", error);
+      pluginRecommendedConfigs.value = [];
+    }
+  }
+
+  /** 导入推荐配置为本地运行配置；`scheduleEnabled` 受设置项与预设是否有 `scheduleSpec` 影响 */
+  async function importRecommendedPreset(preset: PluginRecommendedPreset) {
+    let importScheduleDefault = true;
+    try {
+      importScheduleDefault = await invoke<boolean>("get_import_recommended_schedule_enabled");
+    } catch {
+      importScheduleDefault = true;
+    }
+    const locale = String(unref(i18n.global.locale) ?? "zh");
+    const nameStr =
+      resolveConfigText(preset.name as any, locale).trim() || preset.filename;
+    const descRaw = preset.description;
+    const description =
+      descRaw != null && descRaw !== ""
+        ? resolveConfigText(descRaw as any, locale).trim() || undefined
+        : undefined;
+    const spec = preset.scheduleSpec;
+    const scheduleEnabled = Boolean(importScheduleDefault && spec);
+    let schedulePlannedAt: number | undefined;
+    if (scheduleEnabled && spec) {
+      schedulePlannedAt = computeNextPlannedAtForSpec(spec);
+    }
+    return await addRunConfig({
+      name: nameStr,
+      description,
+      pluginId: preset.pluginId,
+      url: preset.baseUrl || "",
+      userConfig: preset.userConfig ?? {},
+      httpHeaders: preset.httpHeaders ?? {},
+      scheduleEnabled,
+      scheduleSpec: spec,
+      schedulePlannedAt,
+      scheduleLastRunAt: undefined,
+      outputDir: undefined,
+    });
   }
 
   async function addRunConfig(
@@ -571,11 +784,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       userConfig: config.userConfig ?? {},
       httpHeaders: config.httpHeaders ?? {},
       scheduleEnabled: config.scheduleEnabled ?? false,
-      scheduleMode: config.scheduleMode,
-      scheduleIntervalSecs: config.scheduleIntervalSecs,
-      scheduleDailyHour: config.scheduleDailyHour,
-      scheduleDailyMinute: config.scheduleDailyMinute,
-      scheduleDelaySecs: config.scheduleDelaySecs,
+      scheduleSpec: config.scheduleSpec,
       schedulePlannedAt: config.schedulePlannedAt,
       scheduleLastRunAt: config.scheduleLastRunAt,
     };
@@ -603,7 +812,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
   }
 
   async function copyRunConfig(configId: string) {
-    const copied = await invoke<RunConfig>("copy_run_config", { configId });
+    const raw = await invoke<unknown>("copy_run_config", { configId });
+    const copied = parseRunConfigRaw(raw);
+    if (!copied) {
+      await loadRunConfigs();
+      throw new Error("copy_run_config: invalid payload");
+    }
     runConfigs.value = [
       copied,
       ...runConfigs.value.filter((c) => c.id !== copied.id),
@@ -805,7 +1019,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
     tasksTotal.value = tasks.value.length;
   }
 
-  const runConfigsReady = loadRunConfigs();
+  const runConfigsReady = loadRunConfigs().then(() => loadPluginRecommendedConfigs());
   const tasksReady = loadTasks();
 
   return {
@@ -817,7 +1031,10 @@ export const useCrawlerStore = defineStore("crawler", () => {
     stopTask,
     retryTask,
     runConfigs,
+    pluginRecommendedConfigs,
     loadRunConfigs,
+    loadPluginRecommendedConfigs,
+    importRecommendedPreset,
     addRunConfig,
     updateRunConfig,
     deleteRunConfig,
@@ -834,3 +1051,4 @@ export const useCrawlerStore = defineStore("crawler", () => {
     applyKeepOnlyPendingAndRunningTasks,
   };
 });
+

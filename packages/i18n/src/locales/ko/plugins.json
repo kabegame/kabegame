@@ -69,6 +69,7 @@
   "startCollect": "수집 시작",
   "pluginVarSelectAll": "모두 선택",
   "runConfig": "실행 설정",
+  "importRecommendedConfigs": "추천 구성 가져오기",
   "selectConfigOptional": "설정 선택 (선택)",
   "addConfig": "설정 추가",
   "updateToConfig": "현재 설정으로 업데이트",

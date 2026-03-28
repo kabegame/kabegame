@@ -26,6 +26,22 @@ pub async fn get_auto_open_crawler_webview() -> Result<bool, String> {
 }
 
 #[tauri::command]
+pub async fn get_import_recommended_schedule_enabled() -> Result<bool, String> {
+    Settings::global()
+        .get_import_recommended_schedule_enabled()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_import_recommended_schedule_enabled(enabled: bool) -> Result<(), String> {
+    Settings::global()
+        .set_import_recommended_schedule_enabled(enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_max_concurrent_downloads() -> Result<u32, String> {
     Settings::global()
         .get_max_concurrent_downloads()

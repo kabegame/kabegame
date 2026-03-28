@@ -1,36 +1,95 @@
 <template>
-  <div class="cg-schedule" @click.stop>
+  <div class="cg-schedule" :class="{ 'cg-schedule--readonly': scheduleReadonly }" @click.stop>
     <div class="schedule-editor-head">
       <span class="schedule-editor-label">{{ $t("autoConfig.schedule") }}</span>
       <span v-if="saving" class="schedule-editor-saving">{{ $t("common.loading") }}</span>
     </div>
     <div class="schedule-editor-rows">
-      <el-radio-group v-model="mode" size="small" class="schedule-mode-group" :disabled="saving"
-        @change="onModeChanged">
+      <el-radio-group
+        v-model="mode"
+        size="small"
+        class="schedule-mode-group"
+        :disabled="fieldsDisabled"
+        @change="onModeChanged"
+      >
         <el-radio-button value="interval">{{ $t("autoConfig.modeInterval") }}</el-radio-button>
         <el-radio-button value="daily">{{ $t("autoConfig.modeDaily") }}</el-radio-button>
+        <el-radio-button value="weekly">{{ $t("autoConfig.modeWeekly") }}</el-radio-button>
       </el-radio-group>
 
       <div v-if="mode === 'interval'" class="schedule-editor-row">
-        <el-input-number v-model="intervalValue" :min="1" size="small" :disabled="saving" controls-position="right"
-          @change="onIntervalFieldsChange" />
-        <el-select v-model="intervalUnit" size="small" class="schedule-unit-select" :disabled="saving"
-          @change="onIntervalFieldsChange">
+        <el-input-number
+          v-model="intervalValue"
+          :min="1"
+          size="small"
+          :disabled="fieldsDisabled"
+          controls-position="right"
+          @change="onIntervalFieldsChange"
+        />
+        <el-select
+          v-model="intervalUnit"
+          size="small"
+          class="schedule-unit-select"
+          :disabled="fieldsDisabled"
+          @change="onIntervalFieldsChange"
+        >
           <el-option value="minutes" :label="$t('autoConfig.unitMinutes')" />
           <el-option value="hours" :label="$t('autoConfig.unitHours')" />
           <el-option value="days" :label="$t('autoConfig.unitDays')" />
         </el-select>
       </div>
 
-      <div v-else class="schedule-editor-row">
-        <el-select v-model="dailyHour" size="small" class="schedule-daily-select" :disabled="saving" @change="persist">
+      <div v-else-if="mode === 'daily'" class="schedule-editor-row">
+        <el-select
+          v-model="dailyHour"
+          size="small"
+          class="schedule-daily-select"
+          :disabled="fieldsDisabled"
+          @change="persist"
+        >
           <el-option :value="-1" :label="$t('autoConfig.everyHour')" />
           <el-option v-for="h in 24" :key="`h-${h - 1}`" :value="h - 1"
             :label="`${String(h - 1).padStart(2, '0')}:xx`" />
         </el-select>
-        <el-select v-model="dailyMinute" size="small" class="schedule-daily-select" :disabled="saving"
-          @change="persist">
+        <el-select
+          v-model="dailyMinute"
+          size="small"
+          class="schedule-daily-select"
+          :disabled="fieldsDisabled"
+          @change="persist"
+        >
           <el-option v-for="m in 60" :key="`m-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
+        </el-select>
+      </div>
+
+      <div v-else class="schedule-editor-row schedule-editor-row--weekly">
+        <el-select
+          v-model="weeklyWeekday"
+          size="small"
+          class="schedule-daily-select"
+          :disabled="fieldsDisabled"
+          @change="persist"
+        >
+          <el-option v-for="wd in 7" :key="`wd-${wd - 1}`" :value="wd - 1" :label="$t(`autoConfig.weekday${wd - 1}`)" />
+        </el-select>
+        <el-select
+          v-model="dailyHour"
+          size="small"
+          class="schedule-daily-select"
+          :disabled="fieldsDisabled"
+          @change="persist"
+        >
+          <el-option v-for="h in 24" :key="`wh-${h - 1}`" :value="h - 1"
+            :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+        </el-select>
+        <el-select
+          v-model="dailyMinute"
+          size="small"
+          class="schedule-daily-select"
+          :disabled="fieldsDisabled"
+          @change="persist"
+        >
+          <el-option v-for="m in 60" :key="`wm-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
         </el-select>
       </div>
     </div>
@@ -38,11 +97,11 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { useI18n } from "@kabegame/i18n";
 import { useCrawlerStore } from "@/stores/crawler";
-import type { RunConfig } from "@kabegame/core/stores/crawler";
+import type { RunConfig, ScheduleSpec } from "@kabegame/core/stores/crawler";
 
 const props = defineProps<{ config: RunConfig }>();
 
@@ -51,11 +110,16 @@ const crawlerStore = useCrawlerStore();
 
 const saving = ref(false);
 const syncing = ref(false);
-const mode = ref<"interval" | "daily">("daily");
+
+const scheduleReadonly = computed(() => !props.config.scheduleEnabled);
+const fieldsDisabled = computed(() => saving.value || scheduleReadonly.value);
+const mode = ref<"interval" | "daily" | "weekly">("daily");
 const intervalValue = ref(1);
 const intervalUnit = ref<"minutes" | "hours" | "days">("hours");
 const dailyHour = ref(0);
 const dailyMinute = ref(0);
+/** 0=周一 … 6=周日，与后端一致 */
+const weeklyWeekday = ref(0);
 
 const secondsByUnit = (unit: "minutes" | "hours" | "days") => {
   if (unit === "days") return 86400;
@@ -63,17 +127,36 @@ const secondsByUnit = (unit: "minutes" | "hours" | "days") => {
   return 60;
 };
 
+function monday0FromDate(d: Date): number {
+  const w = d.getDay();
+  return w === 0 ? 6 : w - 1;
+}
+
 /** 与后端 `compute_next_planned_at` 对齐：下一次绝对触发时刻（Unix 秒） */
 function computeNextPlannedAtUnix(params: {
-  mode: "interval" | "daily";
+  mode: "interval" | "daily" | "weekly";
   intervalSecs: number;
   dailyHour: number;
   dailyMinute: number;
+  weeklyWeekday?: number;
 }): number {
   const nowSec = Math.floor(Date.now() / 1000);
   if (params.mode === "interval") {
     const iv = Math.max(60, Number(params.intervalSecs) || 3600);
     return nowSec + iv;
+  }
+  if (params.mode === "weekly") {
+    const minute = Math.min(59, Math.max(0, params.dailyMinute));
+    const hour = Math.min(23, Math.max(0, params.dailyHour));
+    const wd = Math.min(6, Math.max(0, params.weeklyWeekday ?? 0));
+    const d = new Date(nowSec * 1000);
+    const cur = d.getDay() === 0 ? 6 : d.getDay() - 1;
+    let days = (wd - cur + 7) % 7;
+    let cand = new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, hour, minute, 0, 0);
+    if (Math.floor(cand.getTime() / 1000) <= nowSec) {
+      cand = new Date(cand.getFullYear(), cand.getMonth(), cand.getDate() + 7, hour, minute, 0, 0);
+    }
+    return Math.floor(cand.getTime() / 1000);
   }
   const minute = Math.min(59, Math.max(0, params.dailyMinute));
   const d = new Date(nowSec * 1000);
@@ -104,6 +187,13 @@ function applyNowDaily() {
   dailyMinute.value = d.getMinutes();
 }
 
+function applyNowWeekly() {
+  const d = new Date();
+  weeklyWeekday.value = monday0FromDate(d);
+  dailyHour.value = d.getHours();
+  dailyMinute.value = d.getMinutes();
+}
+
 /** 清空「间隔」模式专用本地字段（切换为 daily 或同步 daily 配置时用） */
 function clearIntervalRefs() {
   intervalValue.value = 1;
@@ -116,11 +206,16 @@ function clearDailyRefs() {
   dailyMinute.value = 0;
 }
 
+function clearWeeklyRefs() {
+  weeklyWeekday.value = 0;
+}
+
 function syncFromConfig(cfg: RunConfig) {
   syncing.value = true;
-  if (cfg.scheduleMode === "interval") {
+  const spec = cfg.scheduleSpec;
+  if (spec?.mode === "interval") {
     mode.value = "interval";
-    const secs = Math.max(60, Number(cfg.scheduleIntervalSecs ?? 3600));
+    const secs = Math.max(60, Number(spec.intervalSecs ?? 3600));
     if (secs % 86400 === 0) {
       intervalUnit.value = "days";
       intervalValue.value = Math.max(1, Math.round(secs / 86400));
@@ -132,15 +227,24 @@ function syncFromConfig(cfg: RunConfig) {
       intervalValue.value = Math.max(1, Math.round(secs / 60));
     }
     clearDailyRefs();
-  } else if (cfg.scheduleMode === "daily") {
+    clearWeeklyRefs();
+  } else if (spec?.mode === "daily") {
     mode.value = "daily";
-    dailyHour.value = Number(cfg.scheduleDailyHour ?? -1);
-    dailyMinute.value = Number(cfg.scheduleDailyMinute ?? 0);
+    dailyHour.value = Number(spec.hour ?? -1);
+    dailyMinute.value = Number(spec.minute ?? 0);
+    clearIntervalRefs();
+    clearWeeklyRefs();
+  } else if (spec?.mode === "weekly") {
+    mode.value = "weekly";
+    weeklyWeekday.value = Math.min(6, Math.max(0, Number(spec.weekday ?? 0)));
+    dailyHour.value = Math.min(23, Math.max(0, Number(spec.hour ?? 0)));
+    dailyMinute.value = Math.min(59, Math.max(0, Number(spec.minute ?? 0)));
     clearIntervalRefs();
   } else {
     mode.value = "daily";
     applyNowDaily();
     clearIntervalRefs();
+    clearWeeklyRefs();
   }
   void nextTick(() => {
     syncing.value = false;
@@ -148,45 +252,42 @@ function syncFromConfig(cfg: RunConfig) {
 }
 
 watch(
-  () =>
-    [
-      props.config.id,
-      props.config.scheduleEnabled,
-      props.config.scheduleMode,
-      props.config.scheduleIntervalSecs,
-      props.config.scheduleDailyHour,
-      props.config.scheduleDailyMinute,
-    ] as const,
+  () => props.config,
   () => syncFromConfig(props.config),
-  { immediate: true },
+  { immediate: true, deep: true },
 );
 
 onMounted(() => {
-  if (props.config.scheduleEnabled && !props.config.scheduleMode) {
+  if (props.config.scheduleEnabled && !props.config.scheduleSpec) {
     void nextTick(() => persist());
   }
 });
 
 function onModeChanged() {
-  if (syncing.value) return;
+  if (syncing.value || !props.config.scheduleEnabled) return;
   if (mode.value === "interval") {
     intervalValue.value = 1;
     intervalUnit.value = "hours";
     clearDailyRefs();
-  } else {
+    clearWeeklyRefs();
+  } else if (mode.value === "daily") {
     applyNowDaily();
+    clearIntervalRefs();
+    clearWeeklyRefs();
+  } else {
+    applyNowWeekly();
     clearIntervalRefs();
   }
   void persist();
 }
 
 function onIntervalFieldsChange() {
-  if (syncing.value) return;
+  if (syncing.value || !props.config.scheduleEnabled) return;
   void persist();
 }
 
 async function persist() {
-  if (syncing.value) return;
+  if (syncing.value || !props.config.scheduleEnabled) return;
   const base =
     crawlerStore.runConfigs.find((c) => c.id === props.config.id) ?? props.config;
   if (saving.value) return;
@@ -202,14 +303,35 @@ async function persist() {
         dailyHour: 0,
         dailyMinute: 0,
       });
+      const scheduleSpec: ScheduleSpec = { mode: "interval", intervalSecs };
       next = {
         ...base,
         schedulePlannedAt,
         scheduleEnabled: true,
-        scheduleMode: "interval",
-        scheduleIntervalSecs: intervalSecs,
-        scheduleDailyHour: undefined,
-        scheduleDailyMinute: undefined,
+        scheduleSpec,
+      };
+    } else if (mode.value === "weekly") {
+      const wd = Math.min(6, Math.max(0, weeklyWeekday.value));
+      const h = Math.min(23, Math.max(0, dailyHour.value));
+      const m = Math.min(59, Math.max(0, dailyMinute.value));
+      const schedulePlannedAt = computeNextPlannedAtUnix({
+        mode: "weekly",
+        intervalSecs: 0,
+        dailyHour: h,
+        dailyMinute: m,
+        weeklyWeekday: wd,
+      });
+      const scheduleSpec: ScheduleSpec = {
+        mode: "weekly",
+        weekday: wd,
+        hour: h,
+        minute: m,
+      };
+      next = {
+        ...base,
+        schedulePlannedAt,
+        scheduleEnabled: true,
+        scheduleSpec,
       };
     } else {
       const schedulePlannedAt = computeNextPlannedAtUnix({
@@ -218,14 +340,16 @@ async function persist() {
         dailyHour: dailyHour.value,
         dailyMinute: dailyMinute.value,
       });
+      const scheduleSpec: ScheduleSpec = {
+        mode: "daily",
+        hour: dailyHour.value,
+        minute: dailyMinute.value,
+      };
       next = {
         ...base,
         schedulePlannedAt,
         scheduleEnabled: true,
-        scheduleMode: "daily",
-        scheduleIntervalSecs: undefined,
-        scheduleDailyHour: dailyHour.value,
-        scheduleDailyMinute: dailyMinute.value,
+        scheduleSpec,
       };
     }
     await crawlerStore.updateRunConfig(next);
@@ -245,6 +369,13 @@ async function persist() {
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.45);
   border: 1px solid rgba(255, 107, 157, 0.2);
+
+  &--readonly {
+    opacity: 0.72;
+    background: var(--el-fill-color-light, rgba(0, 0, 0, 0.04));
+    border-color: var(--anime-border);
+    pointer-events: none;
+  }
 }
 
 .schedule-editor-head {
@@ -292,6 +423,10 @@ async function persist() {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.schedule-editor-row--weekly {
   flex-wrap: wrap;
 }
 

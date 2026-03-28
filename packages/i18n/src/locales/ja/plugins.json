@@ -69,6 +69,7 @@
   "startCollect": "収集を開始",
   "pluginVarSelectAll": "すべて選択",
   "runConfig": "実行設定",
+  "importRecommendedConfigs": "おすすめ設定を取り込む",
   "selectConfigOptional": "設定を選択（任意）",
   "addConfig": "設定を追加",
   "updateToConfig": "現在の設定に更新",

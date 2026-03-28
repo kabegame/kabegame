@@ -66,6 +66,16 @@ impl AppPaths {
         self.data_dir.join("plugins-directory")
     }
 
+    /// 插件默认配置目录：`plugins-directory/default-configs`
+    pub fn default_configs_dir(&self) -> PathBuf {
+        self.plugins_dir().join("default-configs")
+    }
+
+    /// 单个插件的默认配置文件：`default-configs/<plugin_id>.json`
+    pub fn default_config_file(&self, plugin_id: &str) -> PathBuf {
+        self.default_configs_dir().join(format!("{}.json", plugin_id))
+    }
+
     /// .cleanup_marker 文件路径（仅桌面）
     #[cfg(not(target_os = "android"))]
     pub fn cleanup_marker(&self) -> PathBuf {

@@ -134,6 +134,8 @@ pub enum SettingKey {
     /// 画册盘挂载点
     #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     AlbumDriveMountPoint,
+    /// 导入插件推荐运行配置时，是否默认启用定时（可在设置中关闭）
+    ImportRecommendedScheduleEnabled,
     /// 界面语言（空/None 表示跟随系统）
     Language,
 }
@@ -329,6 +331,7 @@ impl Settings {
             SettingKey::AlbumDriveMountPoint => {
                 SettingValue::String(Self::default_album_drive_mount_point())
             }
+            SettingKey::ImportRecommendedScheduleEnabled => SettingValue::Bool(true),
             SettingKey::Language => SettingValue::OptionString(None),
         }
     }
@@ -542,6 +545,7 @@ Write-Output "$style,$tile"
             SettingKey::AlbumDriveEnabled,
             #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveMountPoint,
+            SettingKey::ImportRecommendedScheduleEnabled,
             SettingKey::Language,
         ];
 
@@ -629,6 +633,9 @@ Write-Output "$style,$tile"
             | SettingKey::AutoDeduplicate
             | SettingKey::WallpaperRotationEnabled => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
+            }
+            SettingKey::ImportRecommendedScheduleEnabled => {
+                Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
             }
             #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveEnabled => {
@@ -771,6 +778,9 @@ Write-Output "$style,$tile"
             SettingKey::AlbumDriveEnabled => "albumDriveEnabled".to_string(),
             #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
             SettingKey::AlbumDriveMountPoint => "albumDriveMountPoint".to_string(),
+            SettingKey::ImportRecommendedScheduleEnabled => {
+                "importRecommendedScheduleEnabled".to_string()
+            }
             SettingKey::Language => "language".to_string(),
         }
     }
@@ -912,6 +922,16 @@ Write-Output "$style,$tile"
             Ok(val.as_bool().unwrap_or(false))
         } else {
             Ok(false)
+        }
+    }
+
+    pub async fn get_import_recommended_schedule_enabled(&self) -> Result<bool, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::ImportRecommendedScheduleEnabled) {
+            let val = cell.lock().await;
+            Ok(val.as_bool().unwrap_or(true))
+        } else {
+            Ok(true)
         }
     }
 
@@ -1262,6 +1282,18 @@ Write-Output "$style,$tile"
             *val = new_value.clone();
         }
         Self::emit_setting_change(SettingKey::AutoOpenCrawlerWebview, &new_value).await;
+        Self::trigger_debounce_save().await?;
+        Ok(())
+    }
+
+    pub async fn set_import_recommended_schedule_enabled(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::ImportRecommendedScheduleEnabled) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::ImportRecommendedScheduleEnabled, &new_value).await;
         Self::trigger_debounce_save().await?;
         Ok(())
     }

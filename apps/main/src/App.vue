@@ -19,7 +19,7 @@
     <TaskDrawer v-model="taskDrawerVisible" :tasks="taskDrawerTasks" />
     <AutoConfigDialog />
     <!-- Android：全局导入抽屉 -->
-    <CrawlerDialog v-if="IS_ANDROID" v-model="crawlerDrawerVisible" :plugin-icons="pluginIcons"
+    <CrawlerDialog v-if="IS_ANDROID" v-model="crawlerDrawerVisible"
       :initial-config="crawlerDrawerInitialConfig" />
     <MissedRunsDialog
       v-model="missedRunsVisible"
@@ -109,7 +109,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import zhCn from "element-plus/dist/locale/zh-cn.mjs";
 import en from "element-plus/dist/locale/en.mjs";
 import zhTw from "element-plus/dist/locale/zh-tw.mjs";
@@ -190,37 +190,9 @@ const { visible: taskDrawerVisible, tasks: taskDrawerTasks } = storeToRefs(taskD
 const crawlerDrawerStore = useCrawlerDrawerStore();
 const { visible: crawlerDrawerVisible, initialConfig: crawlerDrawerInitialConfig } = storeToRefs(crawlerDrawerStore);
 
-// 插件图标（用于全局抽屉，Android 上 CrawlerDialog 使用）
 const pluginStore = usePluginStore();
 const failedImagesStore = useFailedImagesStore();
 const crawlerStore = useCrawlerStore();
-const pluginIcons = ref<Record<string, string>>({});
-
-const loadPluginIcons = async () => {
-  for (const plugin of pluginStore.plugins) {
-    if (pluginIcons.value[plugin.id]) continue;
-    try {
-      const iconData = await invoke<number[] | null>("get_plugin_icon", {
-        pluginId: plugin.id,
-      });
-      if (iconData && iconData.length > 0) {
-        const bytes = new Uint8Array(iconData);
-        const base64 = btoa(Array.from(bytes).map((b) => String.fromCharCode(b)).join(""));
-        pluginIcons.value = { ...pluginIcons.value, [plugin.id]: `data:image/png;base64,${base64}` };
-      }
-    } catch {
-      // 插件可能没有图标，忽略
-    }
-  }
-};
-
-watch(
-  () => pluginStore.plugins,
-  (plugins) => {
-    if (IS_ANDROID && plugins.length > 0) void loadPluginIcons();
-  },
-  { deep: true }
-);
 
 const router = useRouter();
 const modalStack = useModalStackStore();

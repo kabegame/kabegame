@@ -10,7 +10,7 @@
       <el-descriptions-item :label="t('tasks.taskRunParamsColSource')" :span="2">
         <div class="plugin-source-cell">
           <div class="plugin-icon-box" aria-hidden="true">
-            <el-image v-if="pluginIconUrl" :src="pluginIconUrl" fit="contain" class="plugin-icon-img" />
+            <el-image v-if="pluginIconDisplayUrl" :src="pluginIconDisplayUrl" fit="contain" class="plugin-icon-img" />
             <el-icon v-else class="plugin-icon-fallback"><Grid /></el-icon>
           </div>
           <span class="plugin-name-text">{{ getPluginName(task.pluginId) }}</span>
@@ -143,11 +143,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { ElMessage } from "element-plus";
 import { Clock, CopyDocument, Grid, WarningFilled } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
 import {
   LOCAL_IMPORT_PLUGIN_ID,
   buildVarMetaMapFromPluginConfig,
@@ -182,34 +181,14 @@ const props = defineProps<{
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 
-function toPngDataUrl(iconData: number[]): string {
-  const bytes = new Uint8Array(iconData);
-  const binaryString = Array.from(bytes)
-    .map((byte) => String.fromCharCode(byte))
-    .join("");
-  return `data:image/png;base64,${btoa(binaryString)}`;
-}
+const kbAppPublicIcon = `${(import.meta.env.BASE_URL || "/").replace(/\/$/, "")}/icon.png`;
 
-const pluginIconUrl = ref<string | null>(null);
-
-watch(
-  () => props.task.pluginId,
-  async (pluginId) => {
-    pluginIconUrl.value = null;
-    if (!pluginId) return;
-    try {
-      const { isTauri } = await import("@tauri-apps/api/core");
-      if (!isTauri()) return;
-      const iconData = await invoke<number[] | null>("get_plugin_icon", { pluginId });
-      if (iconData && iconData.length > 0) {
-        pluginIconUrl.value = toPngDataUrl(iconData);
-      }
-    } catch {
-      /* 无图标或非 Tauri 环境 */
-    }
-  },
-  { immediate: true },
-);
+const pluginIconDisplayUrl = computed(() => {
+  const id = props.task.pluginId;
+  if (!id) return null;
+  if (id === LOCAL_IMPORT_PLUGIN_ID) return kbAppPublicIcon;
+  return pluginStore.pluginIconUrl(id) ?? null;
+});
 
 const varMetaByPluginId = computed(() => {
   void locale.value;

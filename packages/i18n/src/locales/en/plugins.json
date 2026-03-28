@@ -69,6 +69,7 @@
   "startCollect": "Start collecting",
   "pluginVarSelectAll": "Select all",
   "runConfig": "Run config",
+  "importRecommendedConfigs": "Import preset configs",
   "selectConfigOptional": "Select config (optional)",
   "addConfig": "Add config",
   "updateToConfig": "Update to current config",
