@@ -26,6 +26,7 @@
       </div>
     </div>
     <div class="right">
+      <slot name="extra" />
       <!-- 自定义 slot 优先 -->
       <slot v-if="$slots.default" />
       <!-- 自动渲染 show features -->

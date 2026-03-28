@@ -125,13 +125,24 @@
                 </div>
                 <div class="task-drawer-grid-footer">
                   <div class="task-drawer-footer-progress-slot">
-                    <div v-if="item.data.status === 'running'" class="task-drawer-running-block">
-                      <div class="task-progress task-progress--compact">
+                    <div
+                      v-if="shouldShowTaskProgressBar(item.data)"
+                      class="task-drawer-running-block"
+                    >
+                      <div
+                        class="task-progress task-progress--compact"
+                        :class="{
+                          'task-progress--canceled-bar': isCanceledTaskStatus(item.data.status),
+                          'task-progress--failed-bar': item.data.status === 'failed',
+                        }"
+                      >
                         <el-progress
-                          :percentage="Math.round(item.data.progress ?? 0)"
+                          :percentage="taskProgressPercent(item.data)"
                           :stroke-width="4"
+                          :color="taskProgressBarColor(item.data.status)"
+                          :show-text="item.data.status === 'running'"
                         />
-                        <div class="progress-footer">
+                        <div v-if="item.data.status === 'running'" class="progress-footer">
                           <el-button
                             text
                             size="small"
@@ -323,56 +334,36 @@ const tasksPanelOpen = ref(true);
 
 const kbAppPublicIcon = `${(import.meta.env.BASE_URL || "/").replace(/\/$/, "")}/icon.png`;
 
-function toPngDataUrl(iconData: number[]): string {
-  const bytes = new Uint8Array(iconData);
-  const binaryString = Array.from(bytes)
-    .map((byte) => String.fromCharCode(byte))
-    .join("");
-  return `data:image/png;base64,${btoa(binaryString)}`;
+function isCanceledTaskStatus(status: string): boolean {
+  return status === "canceled" || status === "cancelled";
 }
 
-/** 抽屉任务行：按 pluginId 缓存图标 URL（本地导入用应用 public/icon.png） */
-const drawerPluginIcons = ref<Record<string, string>>({});
-const drawerPluginIconLoading = new Set<string>();
-
-async function ensureDrawerPluginIcon(pluginId: string) {
-  if (!pluginId || drawerPluginIcons.value[pluginId] || drawerPluginIconLoading.has(pluginId)) return;
-  if (pluginId === LOCAL_IMPORT_PLUGIN_ID) {
-    drawerPluginIcons.value = { ...drawerPluginIcons.value, [pluginId]: kbAppPublicIcon };
-    return;
-  }
-  drawerPluginIconLoading.add(pluginId);
-  try {
-    const { isTauri } = await import("@tauri-apps/api/core");
-    if (!isTauri()) return;
-    const iconData = await invoke<number[] | null>("get_plugin_icon", { pluginId });
-    if (iconData && iconData.length > 0) {
-      drawerPluginIcons.value = { ...drawerPluginIcons.value, [pluginId]: toPngDataUrl(iconData) };
-    }
-  } catch {
-    /* 无图标 */
-  } finally {
-    drawerPluginIconLoading.delete(pluginId);
-  }
+/** 与 CrawlTask 一致：running / failed / canceled 且 progress>0 时显示进度条（老任务 progress=0 不显示） */
+function shouldShowTaskProgressBar(task: ScriptTask): boolean {
+  const p = Number(task.progress ?? 0);
+  if (!Number.isFinite(p) || p <= 0) return false;
+  const s = task.status;
+  return s === "running" || s === "failed" || isCanceledTaskStatus(s);
 }
 
+function taskProgressPercent(task: ScriptTask): number {
+  const p = Number(task.progress ?? 0);
+  if (!Number.isFinite(p)) return 0;
+  return Math.round(Math.min(100, Math.max(0, p)));
+}
+
+/** failed：外层 .task-progress--failed-bar 强制红条；running：默认主色；canceled：.task-progress--canceled-bar 灰条 */
+function taskProgressBarColor(status: string): string | undefined {
+  if (status === "failed") return "var(--el-color-danger)";
+  return undefined;
+}
+
+/** 抽屉任务行图标：本地导入用应用 public/icon.png，其余读 pluginStore 缓存 */
 function drawerPluginIconSrc(pluginId: string): string | undefined {
-  return drawerPluginIcons.value[pluginId];
+  if (!pluginId) return undefined;
+  if (pluginId === LOCAL_IMPORT_PLUGIN_ID) return kbAppPublicIcon;
+  return pluginStore.pluginIconUrl(pluginId);
 }
-
-watch(
-  () => props.tasks.map((x) => x.pluginId).join("\0"),
-  () => {
-    const seen = new Set<string>();
-    for (const t of props.tasks) {
-      if (!seen.has(t.pluginId)) {
-        seen.add(t.pluginId);
-        void ensureDrawerPluginIcon(t.pluginId);
-      }
-    }
-  },
-  { immediate: true },
-);
 
 /** 与虚拟列表行高一致（须与 .task-drawer-virtual-item height 相同） */
 const TASK_DRAWER_ITEM_HEIGHT = 166;
@@ -1260,6 +1251,23 @@ onUnmounted(() => {
     flex-direction: column;
     gap: 0;
     justify-content: center;
+
+    &.task-progress--failed-bar {
+      :deep(.el-progress-bar__inner) {
+        background-color: var(--el-color-danger, #f56c6c) !important;
+        background-image: none !important;
+      }
+    }
+
+    &.task-progress--canceled-bar {
+      :deep(.el-progress-bar__outer) {
+        background-color: var(--el-fill-color-light, #e4e7ed) !important;
+      }
+      :deep(.el-progress-bar__inner) {
+        background-color: var(--el-color-info, #909399) !important;
+        background-image: none !important;
+      }
+    }
 
     .progress-footer {
       display: flex;

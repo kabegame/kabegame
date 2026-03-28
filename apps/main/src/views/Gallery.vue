@@ -47,7 +47,7 @@
     </div>
 
     <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
-    <CrawlerDialog v-if="!IS_ANDROID" v-model="showCrawlerDialog" :plugin-icons="pluginIcons"
+    <CrawlerDialog v-if="!IS_ANDROID" v-model="showCrawlerDialog"
       :initial-config="crawlerDialogInitialConfig" />
     <LocalImportDialog v-if="!IS_ANDROID" v-model="showLocalImportDialog" />
 
@@ -686,8 +686,6 @@ const handleAddedToAlbum = async () => {
   await albumStore.loadAlbums();
 };
 
-// 插件图标映射，存储每个插件的图标 URL
-const pluginIcons = ref<Record<string, string>>({});
 // getImageUrl 和 loadImageUrls 已移至 useGalleryImages composable
 
 const getPluginName = (pluginId: string) => {
@@ -758,32 +756,6 @@ const ensureValidGalleryPageAfterMassRemoval = async () => {
     await handleJumpToBigPage(targetBigPage);
   } finally {
     ensuringGalleryPage = false;
-  }
-};
-
-// 加载插件图标
-const loadPluginIcons = async () => {
-  for (const plugin of plugins.value) {
-    if (pluginIcons.value[plugin.id]) {
-      continue; // 已经加载过
-    }
-    try {
-      const iconData = await invoke<number[] | null>("get_plugin_icon", {
-        pluginId: plugin.id,
-      });
-      if (iconData && iconData.length > 0) {
-        // 将数组转换为 Uint8Array，然后转换为 base64 data URL
-        const bytes = new Uint8Array(iconData);
-        const binaryString = Array.from(bytes)
-          .map((byte) => String.fromCharCode(byte))
-          .join("");
-        const base64 = btoa(binaryString);
-        pluginIcons.value[plugin.id] = `data:image/png;base64,${base64}`;
-      }
-    } catch (error) {
-      // 图标加载失败，忽略（插件可能没有图标）
-      console.debug(`插件 ${plugin.id} 没有图标或加载失败`);
-    }
   }
 };
 
@@ -1010,11 +982,6 @@ watch(showCrawlerDialog, (isOpen) => {
 });
 
 
-
-// 监听插件列表变化，加载新插件的图标
-watch(plugins, () => {
-  loadPluginIcons();
-}, { deep: true });
 
 // 记录已经显示过弹窗的任务ID，避免重复弹窗
 const shownErrorTasks = new Set<string>();

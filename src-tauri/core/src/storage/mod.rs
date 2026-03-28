@@ -23,7 +23,7 @@ pub use gallery_time::{
     gallery_month_groups_from_days, GalleryTimeFilterPayload, GalleryTimeGroupIndex,
 };
 pub use images::ImageInfo;
-pub use run_configs::RunConfig;
+pub use run_configs::{RunConfig, ScheduleSpec};
 pub use surf_records::{RangedSurfRecords, SurfRecord};
 pub use tasks::TaskInfo;
 
@@ -155,11 +155,7 @@ PRAGMA mmap_size = 268435456;
                 http_headers TEXT,
                 created_at INTEGER NOT NULL,
                 schedule_enabled INTEGER NOT NULL DEFAULT 0,
-                schedule_mode TEXT,
-                schedule_interval_secs INTEGER,
-                schedule_daily_hour INTEGER,
-                schedule_daily_minute INTEGER,
-                schedule_delay_secs INTEGER,
+                schedule_spec TEXT,
                 schedule_planned_at INTEGER,
                 schedule_last_run_at INTEGER
             )",
@@ -171,23 +167,6 @@ PRAGMA mmap_size = 268435456;
             "ALTER TABLE run_configs ADD COLUMN schedule_enabled INTEGER NOT NULL DEFAULT 0",
             [],
         );
-        let _ = conn.execute("ALTER TABLE run_configs ADD COLUMN schedule_mode TEXT", []);
-        let _ = conn.execute(
-            "ALTER TABLE run_configs ADD COLUMN schedule_interval_secs INTEGER",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE run_configs ADD COLUMN schedule_daily_hour INTEGER",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE run_configs ADD COLUMN schedule_daily_minute INTEGER",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE run_configs ADD COLUMN schedule_delay_secs INTEGER",
-            [],
-        );
         let _ = conn.execute(
             "ALTER TABLE run_configs ADD COLUMN schedule_planned_at INTEGER",
             [],
@@ -196,11 +175,9 @@ PRAGMA mmap_size = 268435456;
             "ALTER TABLE run_configs ADD COLUMN schedule_last_run_at INTEGER",
             [],
         );
-        // 已移除「延迟运行一次」模式：关闭并清空遗留配置
-        let _ = conn.execute(
-            "UPDATE run_configs SET schedule_enabled = 0, schedule_mode = NULL, schedule_delay_secs = NULL, schedule_planned_at = NULL WHERE schedule_mode = 'delay_once'",
-            [],
-        );
+        if !table_has_column(&conn, "run_configs", "schedule_spec") {
+            let _ = conn.execute("ALTER TABLE run_configs ADD COLUMN schedule_spec TEXT", []);
+        }
 
         // 创建图片表（url 可选，本地导入时无 URL）
         conn.execute(

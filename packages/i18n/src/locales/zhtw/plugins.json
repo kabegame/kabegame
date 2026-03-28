@@ -69,6 +69,7 @@
   "startCollect": "開始收集",
   "pluginVarSelectAll": "全選",
   "runConfig": "執行配置",
+  "importRecommendedConfigs": "匯入推薦設定",
   "selectConfigOptional": "選擇配置（可選）",
   "addConfig": "新增配置",
   "updateToConfig": "更新至目前配置",

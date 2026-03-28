@@ -16,11 +16,14 @@ const tsToSecs = (ts?: number) => {
 };
 
 const getScheduleTotal = (config: RunConfig): number => {
-  switch (config.scheduleMode) {
+  const s = config.scheduleSpec;
+  switch (s?.mode) {
     case "interval":
-      return Math.max(0, Number(config.scheduleIntervalSecs ?? 0));
+      return Math.max(0, Number(s.intervalSecs ?? 0));
     case "daily":
-      return config.scheduleDailyHour === -1 ? 3600 : 86400;
+      return s.hour === -1 ? 3600 : 86400;
+    case "weekly":
+      return 604800;
     default:
       return 0;
   }
@@ -40,7 +43,9 @@ const getScheduleProgressParts = (config: RunConfig, nowSecs: number) => {
   return { percent, remaining, total };
 };
 
-export function useScheduleProgress(config: Ref<RunConfig>): Readonly<Ref<ScheduleProgress>> {
+export function useScheduleProgress(
+  config: Ref<RunConfig>,
+): Readonly<Ref<ScheduleProgress>> {
   const nowSecs = ref(nowInSecs());
   let timer: number | null = null;
 
@@ -64,10 +69,7 @@ export function useScheduleProgress(config: Ref<RunConfig>): Readonly<Ref<Schedu
 
   watch(
     () => [
-      config.value.scheduleMode,
-      config.value.scheduleIntervalSecs,
-      config.value.scheduleDailyHour,
-      config.value.scheduleDailyMinute,
+      JSON.stringify(config.value.scheduleSpec),
       config.value.schedulePlannedAt,
       config.value.scheduleLastRunAt,
       config.value.scheduleEnabled,
@@ -79,11 +81,14 @@ export function useScheduleProgress(config: Ref<RunConfig>): Readonly<Ref<Schedu
 
   return computed(() => {
     const cfg = config.value;
-    const active = !!cfg.scheduleEnabled && !!cfg.scheduleMode;
+    const active = !!cfg.scheduleEnabled && !!cfg.scheduleSpec?.mode;
     if (!active) {
       return { percent: 0, remaining: 0, total: 0, active };
     }
-    const { percent, remaining, total } = getScheduleProgressParts(cfg, nowSecs.value);
+    const { percent, remaining, total } = getScheduleProgressParts(
+      cfg,
+      nowSecs.value,
+    );
     if (total <= 0) {
       return { percent: 0, remaining: 0, total: 0, active: false };
     }

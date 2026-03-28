@@ -1,7 +1,15 @@
 <template>
   <span v-if="tasks.length === 0" class="config-no-tasks">{{ t("autoConfig.noRelatedTasks") }}</span>
   <template v-else>
-    <div v-bind="containerProps" class="config-tasks-scroll config-tasks-scroll--virtual">
+    <div
+      v-bind="containerProps"
+      class="config-tasks-scroll config-tasks-scroll--virtual"
+      :class="
+        props.variant === 'android'
+          ? 'config-tasks-scroll--virtual--android'
+          : 'config-tasks-scroll--virtual--desktop'
+      "
+    >
       <div v-bind="wrapperProps">
         <div
           v-for="item in virtualList"
@@ -37,9 +45,14 @@ import TaskSummaryRow from "@kabegame/core/components/task/TaskSummaryRow.vue";
 import TaskParamsDialog from "@kabegame/core/components/task/TaskParamsDialog.vue";
 import type { CrawlTask } from "@kabegame/core/stores/crawler";
 
-const props = defineProps<{
-  configId: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    configId: string;
+    /** 编译期布局：安卓纵向列表用较高任务区，桌面横向用较矮任务区（替代媒体查询） */
+    variant?: "android" | "desktop";
+  }>(),
+  { variant: "desktop" },
+);
 
 const emit = defineEmits<{
   (e: "open-task-images", taskId: string): void;
@@ -88,9 +101,17 @@ function openRunParams(task: CrawlTask) {
 
 .config-tasks-scroll--virtual {
   width: 100%;
+  overflow-x: auto;
+}
+
+.config-tasks-scroll--virtual--android {
   height: 200px;
   max-height: 200px;
-  overflow-x: auto;
+}
+
+.config-tasks-scroll--virtual--desktop {
+  height: 160px;
+  max-height: 160px;
 }
 
 .config-task-virtual-item {
@@ -98,12 +119,5 @@ function openRunParams(task: CrawlTask) {
   box-sizing: border-box;
   flex-shrink: 0;
   overflow: hidden;
-}
-
-@media (min-width: 1024px) {
-  .config-tasks-scroll--virtual {
-    height: 160px;
-    max-height: 160px;
-  }
 }
 </style>

@@ -54,6 +54,7 @@ useModalBack(visible);
 const modeText = (mode: MissedRunItem["scheduleMode"]) => {
   if (mode === "interval") return t("autoConfig.modeInterval");
   if (mode === "daily") return t("autoConfig.modeDaily");
+  if (mode === "weekly") return t("autoConfig.modeWeekly");
   return t("autoConfig.unset");
 };
 

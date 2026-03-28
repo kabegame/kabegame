@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, unref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { i18n, resolveConfigText, resolveManifestText } from "@kabegame/i18n";
+import { useCrawlerStore } from "./crawler";
 
 function toPngDataUrl(iconData: number[]): string {
   const bytes = new Uint8Array(iconData);
@@ -284,11 +285,71 @@ export const usePluginStore = defineStore("plugins", () => {
   const plugins = ref<Plugin[]>([]);
   const activePlugin = ref<Plugin | null>(null);
   const pluginDetailCache = ref<Record<string, BrowserPlugin>>({});
+  /** 已安装插件图标 data URL，与插件列表同生命周期（loadPlugins 时整表刷新） */
+  const pluginIcons = ref<Record<string, string>>({});
+  /** 已安装插件 doc 多语言 Markdown；`null` 表示已拉取但无文档 */
+  const pluginDocs = ref<Record<string, PluginManifestDoc | null>>({});
+
+  async function loadPluginIcons() {
+    await Promise.all(
+      plugins.value.map(async (p) => {
+        const pluginId = p.id;
+        if (!pluginId || pluginIcons.value[pluginId]) return;
+        try {
+          const iconData = await invoke<number[] | null>("get_plugin_icon", { pluginId });
+          if (iconData && iconData.length > 0) {
+            pluginIcons.value = { ...pluginIcons.value, [pluginId]: toPngDataUrl(iconData) };
+          }
+        } catch {
+          // 无图标或失败时保持空
+        }
+      }),
+    );
+  }
+
+  async function loadPluginDocs() {
+    await Promise.all(
+      plugins.value.map(async (p) => {
+        const pluginId = p.id;
+        if (!pluginId || Object.prototype.hasOwnProperty.call(pluginDocs.value, pluginId)) {
+          return;
+        }
+        try {
+          const doc = await invoke<PluginManifestDoc | null>("get_plugin_doc_by_id", {
+            pluginId,
+          });
+          pluginDocs.value = { ...pluginDocs.value, [pluginId]: doc ?? null };
+        } catch {
+          pluginDocs.value = { ...pluginDocs.value, [pluginId]: null };
+        }
+      }),
+    );
+  }
+
+  function pluginIconUrl(pluginId: string): string | undefined {
+    return pluginIcons.value[pluginId];
+  }
+
+  /** 已加载的 doc；`undefined` 表示尚未随 loadPlugins 拉取 */
+  function pluginDoc(pluginId: string): PluginManifestDoc | null | undefined {
+    if (!Object.prototype.hasOwnProperty.call(pluginDocs.value, pluginId)) {
+      return undefined;
+    }
+    return pluginDocs.value[pluginId] ?? null;
+  }
 
   function loadPlugins(): Promise<void> {
     return invoke<Plugin[]>("get_plugins")
       .then((result) => {
         plugins.value = result;
+        pluginIcons.value = {};
+        pluginDocs.value = {};
+        const crawler = useCrawlerStore();
+        void Promise.all([
+          crawler.loadPluginRecommendedConfigs(),
+          loadPluginIcons(),
+          loadPluginDocs(),
+        ]);
       })
       .catch((error) => {
         console.error("加载插件失败:", error);
@@ -300,6 +361,16 @@ export const usePluginStore = defineStore("plugins", () => {
     try {
       await invoke("delete_plugin", { pluginId });
       plugins.value = plugins.value.filter((p) => p.id !== pluginId);
+      if (pluginIcons.value[pluginId]) {
+        const next = { ...pluginIcons.value };
+        delete next[pluginId];
+        pluginIcons.value = next;
+      }
+      if (Object.prototype.hasOwnProperty.call(pluginDocs.value, pluginId)) {
+        const next = { ...pluginDocs.value };
+        delete next[pluginId];
+        pluginDocs.value = next;
+      }
       if (activePlugin.value?.id === pluginId) {
         activePlugin.value = null;
       }
@@ -343,7 +414,13 @@ export const usePluginStore = defineStore("plugins", () => {
     plugins,
     activePlugin,
     pluginDetailCache,
+    pluginIcons,
+    pluginDocs,
     loadPlugins,
+    loadPluginIcons,
+    loadPluginDocs,
+    pluginIconUrl,
+    pluginDoc,
     deletePlugin,
     setActivePlugin,
     getCachedPluginDetail,

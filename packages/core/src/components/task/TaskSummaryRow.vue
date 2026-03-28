@@ -1,104 +1,76 @@
 <template>
   <!-- 紧凑单行：自动配置卡片侧栏等 -->
   <div v-if="layout === 'inline'" class="task-summary-row task-summary-row--inline">
-    <div class="task-summary-inline-grow">
-      <el-tooltip v-if="tooltipContent" placement="top" :show-after="400">
-        <template #content>
-          <div class="task-summary-tooltip">{{ tooltipContent }}</div>
-        </template>
-        <div class="task-inline-inner">
+    <div class="task-inline-main-row">
+      <div class="task-summary-inline-grow">
+        <el-tooltip v-if="tooltipContent" placement="top" :show-after="400">
+          <template #content>
+            <div class="task-summary-tooltip">{{ tooltipContent }}</div>
+          </template>
+          <div class="task-inline-inner">
+            <span class="task-inline-name">{{ pluginDisplayName }}</span>
+            <div class="task-inline-stats" @click.stop>
+              <span class="task-inline-stat count-success" :class="{ 'is-zero': successN === 0 }"
+                :title="t('tasks.totalCount', { n: successN })">{{ successN }}</span>
+              <span class="task-inline-sep" aria-hidden="true">/</span>
+              <span class="task-inline-stat count-failed" :class="{ 'is-zero': failedN === 0 }"
+                :title="t('tasks.failedCount', { n: failedN })">{{ failedN }}</span>
+              <span class="task-inline-sep" aria-hidden="true">/</span>
+              <span class="task-inline-stat count-deleted" :class="{ 'is-zero': deletedN === 0 }"
+                :title="t('tasks.deletedCount', { n: deletedN })">{{ deletedN }}</span>
+              <span class="task-inline-sep" aria-hidden="true">/</span>
+              <span class="task-inline-stat count-dedup" :class="{ 'is-zero': dedupN === 0 }"
+                :title="t('tasks.dedupCount', { n: dedupN })">{{ dedupN }}</span>
+            </div>
+          </div>
+        </el-tooltip>
+        <div v-else class="task-inline-inner">
           <span class="task-inline-name">{{ pluginDisplayName }}</span>
-          <div class="task-inline-stats" @click.stop>
-            <span
-              class="task-inline-stat count-success"
-              :class="{ 'is-zero': successN === 0 }"
-              :title="t('tasks.totalCount', { n: successN })"
-            >{{ successN }}</span>
+          <div class="task-inline-stats">
+            <span class="task-inline-stat count-success" :class="{ 'is-zero': successN === 0 }"
+              :title="t('tasks.totalCount', { n: successN })">{{ successN }}</span>
             <span class="task-inline-sep" aria-hidden="true">/</span>
-            <span
-              class="task-inline-stat count-failed"
-              :class="{ 'is-zero': failedN === 0 }"
-              :title="t('tasks.failedCount', { n: failedN })"
-            >{{ failedN }}</span>
+            <span class="task-inline-stat count-failed" :class="{ 'is-zero': failedN === 0 }"
+              :title="t('tasks.failedCount', { n: failedN })">{{ failedN }}</span>
             <span class="task-inline-sep" aria-hidden="true">/</span>
-            <span
-              class="task-inline-stat count-deleted"
-              :class="{ 'is-zero': deletedN === 0 }"
-              :title="t('tasks.deletedCount', { n: deletedN })"
-            >{{ deletedN }}</span>
+            <span class="task-inline-stat count-deleted" :class="{ 'is-zero': deletedN === 0 }"
+              :title="t('tasks.deletedCount', { n: deletedN })">{{ deletedN }}</span>
             <span class="task-inline-sep" aria-hidden="true">/</span>
-            <span
-              class="task-inline-stat count-dedup"
-              :class="{ 'is-zero': dedupN === 0 }"
-              :title="t('tasks.dedupCount', { n: dedupN })"
-            >{{ dedupN }}</span>
+            <span class="task-inline-stat count-dedup" :class="{ 'is-zero': dedupN === 0 }"
+              :title="t('tasks.dedupCount', { n: dedupN })">{{ dedupN }}</span>
           </div>
         </div>
-      </el-tooltip>
-      <div v-else class="task-inline-inner">
-        <span class="task-inline-name">{{ pluginDisplayName }}</span>
-        <div class="task-inline-stats">
-          <span
-            class="task-inline-stat count-success"
-            :class="{ 'is-zero': successN === 0 }"
-            :title="t('tasks.totalCount', { n: successN })"
-          >{{ successN }}</span>
-          <span class="task-inline-sep" aria-hidden="true">/</span>
-          <span
-            class="task-inline-stat count-failed"
-            :class="{ 'is-zero': failedN === 0 }"
-            :title="t('tasks.failedCount', { n: failedN })"
-          >{{ failedN }}</span>
-          <span class="task-inline-sep" aria-hidden="true">/</span>
-          <span
-            class="task-inline-stat count-deleted"
-            :class="{ 'is-zero': deletedN === 0 }"
-            :title="t('tasks.deletedCount', { n: deletedN })"
-          >{{ deletedN }}</span>
-          <span class="task-inline-sep" aria-hidden="true">/</span>
-          <span
-            class="task-inline-stat count-dedup"
-            :class="{ 'is-zero': dedupN === 0 }"
-            :title="t('tasks.dedupCount', { n: dedupN })"
-          >{{ dedupN }}</span>
-        </div>
+      </div>
+      <div class="task-summary-actions">
+        <el-button v-if="showRunParamsButton" text circle size="small" class="task-action-icon"
+          :title="t('tasks.openRunParams')" @click.stop="emit('open-run-params')">
+          <el-icon>
+            <InfoFilled />
+          </el-icon>
+        </el-button>
+        <el-button text circle size="small" class="task-action-icon" :title="t('tasks.drawerViewImages')"
+          @click.stop="emit('open-task-images', task.id)">
+          <el-icon>
+            <Picture />
+          </el-icon>
+        </el-button>
+        <el-button text circle size="small" class="task-action-icon" :title="t('tasks.drawerViewLog')"
+          @click.stop="emit('open-task-log', task.id)">
+          <el-icon>
+            <Document />
+          </el-icon>
+        </el-button>
+        <el-tag v-if="showStatusTag" :type="statusTagType(task.status)" size="small">
+          {{ statusLabel(task.status) }}
+        </el-tag>
       </div>
     </div>
-    <div class="task-summary-actions">
-      <el-button
-        v-if="showRunParamsButton"
-        text
-        circle
-        size="small"
-        class="task-action-icon"
-        :title="t('tasks.openRunParams')"
-        @click.stop="emit('open-run-params')"
-      >
-        <el-icon><InfoFilled /></el-icon>
-      </el-button>
-      <el-button
-        text
-        circle
-        size="small"
-        class="task-action-icon"
-        :title="t('tasks.drawerViewImages')"
-        @click.stop="emit('open-task-images', task.id)"
-      >
-        <el-icon><Picture /></el-icon>
-      </el-button>
-      <el-button
-        text
-        circle
-        size="small"
-        class="task-action-icon"
-        :title="t('tasks.drawerViewLog')"
-        @click.stop="emit('open-task-log', task.id)"
-      >
-        <el-icon><Document /></el-icon>
-      </el-button>
-      <el-tag v-if="showStatusTag" :type="statusTagType(task.status)" size="small">
-        {{ statusLabel(task.status) }}
-      </el-tag>
+    <div v-if="shouldShowInlineProgressBar" class="task-inline-progress" :class="{
+      'task-progress--canceled-bar': isCanceledTaskStatus(task.status),
+      'task-progress--failed-bar': task.status === 'failed',
+    }">
+      <el-progress :percentage="inlineProgressPercent" :stroke-width="3" :show-text="false"
+        :color="inlineProgressColor" />
     </div>
   </div>
 
@@ -106,88 +78,64 @@
   <div v-else class="task-summary-row task-summary-row--stacked">
     <div class="task-summary-stacked-left">
       <div class="task-name-row">
-        <el-button
-          v-if="showScheduleButton"
-          text
-          circle
-          size="small"
-          class="task-schedule-btn"
-          :aria-label="scheduledTaskAriaLabel"
-          :title="scheduledTaskAriaLabel"
-          @click.stop="emit('open-schedule-config', task)"
-        >
-          <el-icon><AlarmClock /></el-icon>
+        <el-button v-if="showScheduleButton" text circle size="small" class="task-schedule-btn"
+          :aria-label="scheduledTaskAriaLabel" :title="scheduledTaskAriaLabel"
+          @click.stop="emit('open-schedule-config', task)">
+          <el-icon>
+            <AlarmClock />
+          </el-icon>
         </el-button>
         <div class="task-name">{{ pluginDisplayName }}</div>
       </div>
       <div class="task-counts">
-        <span
-          class="count-item count-success"
-          :class="{ 'is-zero': successN === 0 }"
-          :title="t('tasks.totalCount', { n: successN })"
-        >
-          <el-icon><CircleCheck /></el-icon>
+        <span class="count-item count-success" :class="{ 'is-zero': successN === 0 }"
+          :title="t('tasks.totalCount', { n: successN })">
+          <el-icon>
+            <CircleCheck />
+          </el-icon>
           <span>{{ successN }}</span>
         </span>
-        <span
-          class="count-item count-failed"
-          :class="{ 'is-zero': failedN === 0 }"
-          :title="t('tasks.failedCount', { n: failedN })"
-        >
-          <el-icon><WarningFilled /></el-icon>
+        <span class="count-item count-failed" :class="{ 'is-zero': failedN === 0 }"
+          :title="t('tasks.failedCount', { n: failedN })">
+          <el-icon>
+            <WarningFilled />
+          </el-icon>
           <span>{{ failedN }}</span>
         </span>
-        <span
-          class="count-item count-deleted"
-          :class="{ 'is-zero': deletedN === 0 }"
-          :title="t('tasks.deletedCount', { n: deletedN })"
-        >
-          <el-icon><Delete /></el-icon>
+        <span class="count-item count-deleted" :class="{ 'is-zero': deletedN === 0 }"
+          :title="t('tasks.deletedCount', { n: deletedN })">
+          <el-icon>
+            <Delete />
+          </el-icon>
           <span>{{ deletedN }}</span>
         </span>
-        <span
-          class="count-item count-dedup"
-          :class="{ 'is-zero': dedupN === 0 }"
-          :title="t('tasks.dedupCount', { n: dedupN })"
-        >
-          <el-icon><CopyDocument /></el-icon>
+        <span class="count-item count-dedup" :class="{ 'is-zero': dedupN === 0 }"
+          :title="t('tasks.dedupCount', { n: dedupN })">
+          <el-icon>
+            <CopyDocument />
+          </el-icon>
           <span>{{ dedupN }}</span>
         </span>
       </div>
     </div>
     <div class="task-summary-actions task-summary-actions--stacked">
-      <el-button
-        v-if="showRunParamsButton"
-        text
-        circle
-        size="small"
-        class="task-action-icon"
-        :title="t('tasks.openRunParams')"
-        @click.stop="emit('open-run-params')"
-      >
-        <el-icon><InfoFilled /></el-icon>
+      <el-button v-if="showRunParamsButton" text circle size="small" class="task-action-icon"
+        :title="t('tasks.openRunParams')" @click.stop="emit('open-run-params')">
+        <el-icon>
+          <InfoFilled />
+        </el-icon>
       </el-button>
-      <el-button
-        v-if="!stackedOmitImageLogActions"
-        text
-        circle
-        size="small"
-        class="task-action-icon"
-        :title="t('tasks.drawerViewImages')"
-        @click.stop="emit('open-task-images', task.id)"
-      >
-        <el-icon><Picture /></el-icon>
+      <el-button v-if="!stackedOmitImageLogActions" text circle size="small" class="task-action-icon"
+        :title="t('tasks.drawerViewImages')" @click.stop="emit('open-task-images', task.id)">
+        <el-icon>
+          <Picture />
+        </el-icon>
       </el-button>
-      <el-button
-        v-if="!stackedOmitImageLogActions"
-        text
-        circle
-        size="small"
-        class="task-action-icon"
-        :title="t('tasks.drawerViewLog')"
-        @click.stop="emit('open-task-log', task.id)"
-      >
-        <el-icon><Document /></el-icon>
+      <el-button v-if="!stackedOmitImageLogActions" text circle size="small" class="task-action-icon"
+        :title="t('tasks.drawerViewLog')" @click.stop="emit('open-task-log', task.id)">
+        <el-icon>
+          <Document />
+        </el-icon>
       </el-button>
       <div v-if="showStatusTag" class="task-status-wrap">
         <el-tag :type="statusTagType(task.status)" size="small">
@@ -272,13 +220,37 @@ const failedN = computed(() => Number(props.task.failedCount ?? 0));
 const deletedN = computed(() => Number(props.task.deletedCount ?? 0));
 const dedupN = computed(() => Number(props.task.dedupCount ?? 0));
 
-function statusTagType(s: string): "info" | "warning" | "success" | "danger" {
-  const map: Record<string, "info" | "warning" | "success" | "danger"> = {
+function isCanceledTaskStatus(s: string): boolean {
+  return s === "canceled" || s === "cancelled";
+}
+
+/** 与 TaskDrawerContent 一致：running / failed / canceled 且 progress>0 */
+const shouldShowInlineProgressBar = computed(() => {
+  const p = Number(props.task.progress ?? 0);
+  if (!Number.isFinite(p) || p <= 0) return false;
+  const s = props.task.status;
+  return s === "running" || s === "failed" || isCanceledTaskStatus(s);
+});
+
+const inlineProgressPercent = computed(() => {
+  const p = Number(props.task.progress ?? 0);
+  if (!Number.isFinite(p)) return 0;
+  return Math.round(Math.min(100, Math.max(0, p)));
+});
+
+const inlineProgressColor = computed((): string | undefined => {
+  const s = props.task.status;
+  if (s === "failed") return "var(--el-color-danger)";
+  return undefined;
+});
+
+function statusTagType(s: string): "info" | "warning" | "success" | "danger" | "primary" {
+  const map: Record<string, "info" | "warning" | "success" | "danger" | "primary"> = {
     pending: "info",
     running: "warning",
     completed: "success",
     failed: "danger",
-    canceled: "info",
+    canceled: "primary",
   };
   return map[s] || "info";
 }
@@ -303,14 +275,50 @@ function statusLabel(s: string): string {
 
 .task-summary-row--inline {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   min-width: min(100%, 360px);
   width: 100%;
   padding: 8px 10px;
   background: var(--anime-bg-card, var(--el-fill-color-blank));
   border: 1px solid var(--anime-border, var(--el-border-color));
   border-radius: 8px;
+}
+
+.task-inline-main-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.task-inline-progress {
+  width: 100%;
+  min-width: 0;
+
+  :deep(.el-progress-bar__outer) {
+    border-radius: 2px;
+  }
+
+  &.task-progress--failed-bar {
+    :deep(.el-progress-bar__inner) {
+      background-color: var(--el-color-danger, #f56c6c) !important;
+      background-image: none !important;
+    }
+  }
+
+  &.task-progress--canceled-bar {
+    :deep(.el-progress-bar__outer) {
+      background-color: var(--el-fill-color-light, #e4e7ed) !important;
+    }
+
+    :deep(.el-progress-bar__inner) {
+      background-color: var(--el-color-info, #909399) !important;
+      background-image: none !important;
+    }
+  }
 }
 
 .task-summary-inline-grow {

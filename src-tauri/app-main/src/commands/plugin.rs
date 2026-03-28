@@ -51,6 +51,45 @@ pub async fn get_plugin_vars(plugin_id: String) -> Result<serde_json::Value, Str
     Ok(serde_json::to_value(frontend).map_err(|e| e.to_string())?)
 }
 
+/// 读取已安装插件包内 `configs/*.json` 推荐运行配置（每项含 pluginId、filename 及预设字段）。
+#[tauri::command]
+pub async fn get_plugin_recommended_configs(plugin_id: String) -> Result<serde_json::Value, String> {
+    let list = PluginManager::global()
+        .read_plugin_recommended_configs(&plugin_id)
+        .await?;
+    serde_json::to_value(list).map_err(|e| e.to_string())
+}
+
+/// 仅读取磁盘上的插件默认配置；不存在返回 `null`，解析失败返回 `Err`
+#[tauri::command]
+pub async fn get_plugin_default_config(plugin_id: String) -> Result<Option<serde_json::Value>, String> {
+    PluginManager::global().read_plugin_default_config_file(&plugin_id)
+}
+
+/// 若默认配置文件不存在则生成并写入，否则读取已有内容
+#[tauri::command]
+pub async fn ensure_plugin_default_config(plugin_id: String) -> Result<serde_json::Value, String> {
+    PluginManager::global()
+        .ensure_plugin_default_config_loaded(&plugin_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn save_plugin_default_config(
+    plugin_id: String,
+    config: serde_json::Value,
+) -> Result<(), String> {
+    PluginManager::global().save_plugin_default_config(&plugin_id, &config)
+}
+
+/// 按插件当前变量定义重新生成默认配置并覆盖写入
+#[tauri::command]
+pub async fn reset_plugin_default_config(plugin_id: String) -> Result<serde_json::Value, String> {
+    PluginManager::global()
+        .reset_plugin_default_config(&plugin_id)
+        .await
+}
+
 #[tauri::command]
 pub async fn get_browser_plugins() -> Result<serde_json::Value, String> {
     let plugins = PluginManager::global().load_browser_plugins().await?;
@@ -289,6 +328,15 @@ pub async fn get_plugin_doc_from_zip(
 ) -> Result<Option<kabegame_core::plugin::PluginDoc>, String> {
     let path = std::path::PathBuf::from(&zip_path);
     PluginManager::global().read_plugin_doc_public(&path)
+}
+
+#[tauri::command]
+pub async fn get_plugin_doc_by_id(
+    plugin_id: String,
+) -> Result<Option<kabegame_core::plugin::PluginDoc>, String> {
+    PluginManager::global()
+        .get_plugin_doc_by_id(&plugin_id)
+        .await
 }
 
 #[tauri::command]

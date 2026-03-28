@@ -176,10 +176,20 @@ const loadPlugin = async () => {
             version: version.value ?? undefined,
         });
 
+        const preIcon =
+            !downloadUrl.value ? pluginStore.pluginIconUrl(pluginId) : undefined;
         const icon =
             detail.iconData && detail.iconData.length > 0
                 ? `data:image/png;base64,${bytesToBase64(new Uint8Array(detail.iconData))}`
-                : (iconUrl.value ?? undefined);
+                : preIcon ?? (iconUrl.value ?? undefined);
+
+        const preDoc = !downloadUrl.value ? pluginStore.pluginDoc(pluginId) : undefined;
+        const docMerged =
+            detail.doc != null && Object.keys(detail.doc).length > 0
+                ? detail.doc
+                : preDoc !== undefined
+                  ? preDoc ?? undefined
+                  : undefined;
 
         const found: BrowserPlugin = {
             id: detail.id,
@@ -188,7 +198,7 @@ const loadPlugin = async () => {
             version: detail.version ?? version.value ?? undefined,
             minAppVersion: detail.minAppVersion ?? undefined,
             icon,
-            doc: detail.doc ?? undefined,
+            doc: docMerged,
             baseUrl: detail.baseUrl ?? undefined,
         };
 

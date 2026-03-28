@@ -20,7 +20,11 @@
       >
         <span class="break-all">{{ config.description }}</span>
       </el-descriptions-item>
-      <el-descriptions-item :label="t('autoConfig.detailColCreatedAt')" :span="2">
+      <el-descriptions-item
+        v-if="showCreatedAtRow"
+        :label="t('autoConfig.detailColCreatedAt')"
+        :span="2"
+      >
         {{ formatTs(config.createdAt) }}
       </el-descriptions-item>
       <el-descriptions-item v-if="config.url" :label="t('autoConfig.detailColUrl')" :span="2">
@@ -38,7 +42,7 @@
       <el-descriptions-item :label="t('tasks.taskRunParamsColSource')" :span="2">
         <div class="plugin-source-cell">
           <div class="plugin-icon-box" aria-hidden="true">
-            <el-image v-if="pluginIconUrl" :src="pluginIconUrl" fit="contain" class="plugin-icon-img" />
+            <el-image v-if="pluginIconDisplayUrl" :src="pluginIconDisplayUrl" fit="contain" class="plugin-icon-img" />
             <el-icon v-else class="plugin-icon-fallback"><Grid /></el-icon>
           </div>
           <span class="plugin-name-text">{{ getPluginName(config.pluginId) }}</span>
@@ -59,7 +63,16 @@
       </el-descriptions-item>
     </el-descriptions>
 
-    <div ref="scheduleSectionRef">
+    <div
+      ref="scheduleSectionRef"
+      :class="{
+        'schedule-detail--schedule-off':
+          !config.scheduleEnabled &&
+          (config.scheduleSpec?.mode === 'interval' ||
+            config.scheduleSpec?.mode === 'daily' ||
+            config.scheduleSpec?.mode === 'weekly'),
+      }"
+    >
       <el-descriptions
         :title="t('autoConfig.schedule')"
         :column="1"
@@ -70,23 +83,37 @@
         <el-descriptions-item :label="t('autoConfig.scheduleEnabled')" :span="2">
           {{ config.scheduleEnabled ? t('autoConfig.enabled') : t('autoConfig.disabled') }}
         </el-descriptions-item>
-        <template v-if="config.scheduleEnabled">
+        <template
+          v-if="
+            config.scheduleEnabled ||
+            config.scheduleSpec?.mode === 'interval' ||
+            config.scheduleSpec?.mode === 'daily' ||
+            config.scheduleSpec?.mode === 'weekly'
+          "
+        >
           <el-descriptions-item :label="t('autoConfig.mode')" :span="2">
             {{ scheduleModeTitle }}
           </el-descriptions-item>
           <el-descriptions-item
-            v-if="config.scheduleMode === 'interval'"
+            v-if="config.scheduleSpec?.mode === 'interval'"
             :label="t('autoConfig.modeInterval')"
             :span="2"
           >
             {{ intervalSummary }}
           </el-descriptions-item>
           <el-descriptions-item
-            v-if="config.scheduleMode === 'daily'"
+            v-if="config.scheduleSpec?.mode === 'daily'"
             :label="t('autoConfig.modeDaily')"
             :span="2"
           >
             {{ dailySummary }}
+          </el-descriptions-item>
+          <el-descriptions-item
+            v-if="config.scheduleSpec?.mode === 'weekly'"
+            :label="t('autoConfig.modeWeekly')"
+            :span="2"
+          >
+            {{ weeklySummary }}
           </el-descriptions-item>
           <el-descriptions-item
             v-if="config.schedulePlannedAt != null"
@@ -96,17 +123,19 @@
             {{ formatTs(config.schedulePlannedAt) }}
           </el-descriptions-item>
           <el-descriptions-item
-            v-if="config.scheduleDelaySecs != null && config.scheduleDelaySecs > 0"
-            :label="t('autoConfig.detailColDelaySecs')"
+            v-if="showScheduleLastRun"
+            :label="t('autoConfig.lastRunAt')"
             :span="2"
           >
-            {{ config.scheduleDelaySecs }}s
-          </el-descriptions-item>
-          <el-descriptions-item :label="t('autoConfig.lastRunAt')" :span="2">
             {{ formatTs(config.scheduleLastRunAt) }}
           </el-descriptions-item>
         </template>
       </el-descriptions>
+      <ScheduleProgressBar
+        v-if="config.scheduleEnabled"
+        :config="config"
+        class="acd-detail-schedule-progress"
+      />
     </div>
 
     <el-descriptions
@@ -148,10 +177,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { Grid } from "@element-plus/icons-vue";
-import { invoke } from "@tauri-apps/api/core";
+import ScheduleProgressBar from "./ScheduleProgressBar.vue";
 import {
   LOCAL_IMPORT_PLUGIN_ID,
   buildVarMetaMapFromPluginConfig,
@@ -162,14 +191,22 @@ import type { PluginVarMeta } from "../../stores/plugins";
 import type { RunConfig } from "../../stores/crawler";
 import { matchesPluginVarWhen } from "../../utils/pluginVarWhen";
 
-const props = defineProps<{
-  config: RunConfig;
-}>();
+const props = withDefaults(
+  defineProps<{
+    config: RunConfig;
+    /** 推荐预设预览等尚未导入运行前不展示「上次运行」 */
+    showScheduleLastRun?: boolean;
+  }>(),
+  { showScheduleLastRun: true },
+);
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 
 const scheduleSectionRef = ref<HTMLElement | null>(null);
+
+/** 插件推荐预设预览（虚拟 RunConfig，`preset:pluginId:filename`）无创建时间 */
+const showCreatedAtRow = computed(() => !props.config.id.startsWith("preset:"));
 
 function scrollScheduleIntoView() {
   scheduleSectionRef.value?.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -177,34 +214,14 @@ function scrollScheduleIntoView() {
 
 defineExpose({ scrollScheduleIntoView });
 
-function toPngDataUrl(iconData: number[]): string {
-  const bytes = new Uint8Array(iconData);
-  const binaryString = Array.from(bytes)
-    .map((byte) => String.fromCharCode(byte))
-    .join("");
-  return `data:image/png;base64,${btoa(binaryString)}`;
-}
+const kbAppPublicIcon = `${(import.meta.env.BASE_URL || "/").replace(/\/$/, "")}/icon.png`;
 
-const pluginIconUrl = ref<string | null>(null);
-
-watch(
-  () => props.config.pluginId,
-  async (pluginId) => {
-    pluginIconUrl.value = null;
-    if (!pluginId) return;
-    try {
-      const { isTauri } = await import("@tauri-apps/api/core");
-      if (!isTauri()) return;
-      const iconData = await invoke<number[] | null>("get_plugin_icon", { pluginId });
-      if (iconData && iconData.length > 0) {
-        pluginIconUrl.value = toPngDataUrl(iconData);
-      }
-    } catch {
-      /* ignore */
-    }
-  },
-  { immediate: true },
-);
+const pluginIconDisplayUrl = computed(() => {
+  const id = props.config.pluginId;
+  if (!id) return null;
+  if (id === LOCAL_IMPORT_PLUGIN_ID) return kbAppPublicIcon;
+  return pluginStore.pluginIconUrl(id) ?? null;
+});
 
 const varMetaByPluginId = computed(() => {
   void locale.value;
@@ -221,10 +238,23 @@ function getVisibleUserConfigEntries(cfg: RunConfig): [string, any][] {
   const uc = cfg.userConfig;
   if (!uc || typeof uc !== "object") return [];
   const metaForPlugin = varMetaByPluginId.value[cfg.pluginId];
-  return Object.entries(uc).filter(([key]) => {
+  const entries = Object.entries(uc).filter(([key]) => {
     const meta = metaForPlugin?.[key];
     if (!meta) return true;
     return matchesPluginVarWhen(meta.when, uc);
+  });
+  if (!metaForPlugin) return entries;
+
+  // 按插件 config.vars 定义顺序展示，未知字段追加到末尾
+  const orderedKeys = Object.keys(metaForPlugin);
+  const orderMap = new Map<string, number>(orderedKeys.map((key, idx) => [key, idx]));
+  return entries.sort(([a], [b]) => {
+    const ai = orderMap.get(a);
+    const bi = orderMap.get(b);
+    if (ai != null && bi != null) return ai - bi;
+    if (ai != null) return -1;
+    if (bi != null) return 1;
+    return a.localeCompare(b);
   });
 }
 
@@ -264,28 +294,48 @@ const formatInterval = (secs?: number) => {
 };
 
 const scheduleModeTitle = computed(() => {
-  switch (props.config.scheduleMode) {
+  switch (props.config.scheduleSpec?.mode) {
     case "interval":
       return t("autoConfig.modeInterval");
     case "daily":
       return t("autoConfig.modeDaily");
+    case "weekly":
+      return t("autoConfig.modeWeekly");
     default:
       return t("autoConfig.scheduleTypeUnset");
   }
 });
 
-const intervalSummary = computed(() => formatInterval(props.config.scheduleIntervalSecs));
+const intervalSummary = computed(() => {
+  const s = props.config.scheduleSpec;
+  if (s?.mode !== "interval") return t("autoConfig.unset");
+  return formatInterval(s.intervalSecs);
+});
 
 const dailySummary = computed(() => {
-  if (props.config.scheduleMode !== "daily") return "—";
-  const minute = Number(props.config.scheduleDailyMinute ?? 0);
-  if (props.config.scheduleDailyHour === -1) {
+  const s = props.config.scheduleSpec;
+  if (s?.mode !== "daily") return "—";
+  const minute = Number(s.minute ?? 0);
+  if (s.hour === -1) {
     return t("autoConfig.dailyHourly", { minute: String(minute).padStart(2, "0") });
   }
-  const hour = Number(props.config.scheduleDailyHour ?? 0);
+  const hour = Number(s.hour ?? 0);
   return t("autoConfig.dailyAt", {
     hour: String(hour).padStart(2, "0"),
     minute: String(minute).padStart(2, "0"),
+  });
+});
+
+const weeklySummary = computed(() => {
+  const s = props.config.scheduleSpec;
+  if (s?.mode !== "weekly") return "—";
+  const wd = Math.min(6, Math.max(0, Number(s.weekday ?? 0)));
+  const hour = String(Number(s.hour ?? 0)).padStart(2, "0");
+  const minute = String(Number(s.minute ?? 0)).padStart(2, "0");
+  return t("autoConfig.weeklyAt", {
+    weekday: t(`autoConfig.weekday${wd}`),
+    hour,
+    minute,
   });
 });
 
@@ -323,9 +373,15 @@ const formatConfigValue = (pluginId: string, key: string, value: any): string =>
 
 <style scoped lang="scss">
 .auto-config-detail {
-  max-height: min(72vh, 620px);
-  overflow-y: auto;
   padding: 2px 0 4px;
+}
+
+.acd-detail-schedule-progress {
+  margin-top: 10px;
+}
+
+.schedule-detail--schedule-off {
+  opacity: 0.72;
 }
 
 .params-desc-block {

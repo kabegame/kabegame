@@ -601,6 +601,14 @@ impl PluginManager {
         Ok(icon)
     }
 
+    /// 从已安装缓存读取 doc（多语言 Markdown），不读取 icon bytes。
+    pub async fn get_plugin_doc_by_id(&self, plugin_id: &str) -> Result<Option<PluginDoc>, String> {
+        let plugins_dir = self.get_plugins_directory();
+        let path = self.find_plugin_file(&plugins_dir, plugin_id).await?;
+        let guard = self.installed_cache.lock().await;
+        Ok(guard.files.get(&path).and_then(|e| e.doc.clone()))
+    }
+
     /// 从 ZIP 格式的插件文件中读取 config.json
     fn read_plugin_config(&self, zip_path: &Path) -> Result<Option<PluginConfig>, String> {
         let file =
@@ -689,6 +697,7 @@ impl PluginManager {
         // 安装/覆盖后：局部刷新缓存，避免后续命令重复扫目录/读盘
         // 注意：必须 await 以避免死锁（refresh_installed_plugin_cache 内部需要获取 installed_cache 锁）
         let _ = self.refresh_installed_plugin_cache(&plugin_id).await;
+        let _ = self.ensure_default_config_file_if_missing(&plugin_id).await;
         Ok(plugin)
     }
 
@@ -720,6 +729,103 @@ impl PluginManager {
             return Ok(None);
         };
         Ok(file.config.clone().and_then(|c| c.var))
+    }
+
+    /// 读取 `.kgpg` 内 `configs/*.json` 插件推荐运行配置（用于展示与导入）。
+    pub async fn read_plugin_recommended_configs(
+        &self,
+        plugin_id: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let plugins_dir = self.get_plugins_directory();
+        let plugin_file = self.find_plugin_file(&plugins_dir, plugin_id).await?;
+        let zip_path = plugin_file;
+        let pid = plugin_id.to_string();
+        tokio::task::spawn_blocking(move || read_plugin_recommended_configs_from_kgpg_merge(&zip_path, &pid))
+            .await
+            .map_err(|e| format!("读取推荐配置任务失败: {}", e))?
+    }
+
+    /// 从插件变量定义生成默认配置 JSON（不写盘）
+    async fn build_default_config_json(&self, plugin_id: &str) -> Result<serde_json::Value, String> {
+        let vars = self.get_plugin_vars(plugin_id).await?;
+        let user_obj = match vars {
+            Some(v) if !v.is_empty() => {
+                let mut m = serde_json::Map::new();
+                for def in v {
+                    if let Some(d) = def.default {
+                        m.insert(def.key, d);
+                    } else {
+                        m.insert(def.key, serde_json::Value::Null);
+                    }
+                }
+                serde_json::Value::Object(m)
+            }
+            _ => serde_json::json!({}),
+        };
+        Ok(serde_json::json!({
+            "userConfig": user_obj,
+            "httpHeaders": {},
+            "outputDir": null
+        }))
+    }
+
+    fn write_default_config_file(&self, path: &Path, json: &serde_json::Value) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create default-configs directory: {}", e))?;
+        }
+        let s = serde_json::to_string_pretty(json).map_err(|e| e.to_string())?;
+        fs::write(path, s).map_err(|e| format!("Failed to write default config: {}", e))
+    }
+
+    /// 读取磁盘上的插件默认配置；文件不存在返回 `None`，解析失败返回 `Err`
+    pub fn read_plugin_default_config_file(&self, plugin_id: &str) -> Result<Option<serde_json::Value>, String> {
+        let path = crate::app_paths::AppPaths::global().default_config_file(plugin_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let s = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read default config: {}", e))?;
+        let v: serde_json::Value =
+            serde_json::from_str(&s).map_err(|e| format!("Failed to parse default config: {}", e))?;
+        Ok(Some(v))
+    }
+
+    /// 保存插件默认配置到 `plugins-directory/default-configs/<plugin_id>.json`
+    pub fn save_plugin_default_config(&self, plugin_id: &str, config: &serde_json::Value) -> Result<(), String> {
+        let path = crate::app_paths::AppPaths::global().default_config_file(plugin_id);
+        self.write_default_config_file(&path, config)
+    }
+
+    /// 若默认配置文件不存在，则根据插件 `config.json` 的 var 定义生成并写入
+    pub async fn ensure_default_config_file_if_missing(&self, plugin_id: &str) -> Result<(), String> {
+        let path = crate::app_paths::AppPaths::global().default_config_file(plugin_id);
+        if path.exists() {
+            return Ok(());
+        }
+        let json = self.build_default_config_json(plugin_id).await?;
+        self.write_default_config_file(&path, &json)
+    }
+
+    /// 若文件不存在则创建；否则读取已有内容。用于设置页「确保有文件」。
+    pub async fn ensure_plugin_default_config_loaded(&self, plugin_id: &str) -> Result<serde_json::Value, String> {
+        let path = crate::app_paths::AppPaths::global().default_config_file(plugin_id);
+        if !path.exists() {
+            let json = self.build_default_config_json(plugin_id).await?;
+            self.write_default_config_file(&path, &json)?;
+            return Ok(json);
+        }
+        let s = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read default config: {}", e))?;
+        serde_json::from_str(&s).map_err(|e| format!("Failed to parse default config: {}", e))
+    }
+
+    /// 按插件当前变量定义重新生成默认配置并覆盖写入，返回新内容
+    pub async fn reset_plugin_default_config(&self, plugin_id: &str) -> Result<serde_json::Value, String> {
+        let json = self.build_default_config_json(plugin_id).await?;
+        let path = crate::app_paths::AppPaths::global().default_config_file(plugin_id);
+        self.write_default_config_file(&path, &json)?;
+        Ok(json)
     }
 
     /// 查找插件文件（用户 data 目录下的 .kgpg，经已安装缓存索引）
@@ -2285,6 +2391,51 @@ fn parse_kgpg_for_cache_from_zip(zip_path: &Path) -> Result<ParsedKgpgForCacheFr
         icon_present,
         script_type,
     })
+}
+
+/// 从 `.kgpg` ZIP 读取 `configs/*.json`，合并为带 `pluginId`、`filename` 的 JSON 对象列表。
+fn read_plugin_recommended_configs_from_kgpg_merge(
+    zip_path: &Path,
+    plugin_id: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let file = fs::File::open(zip_path).map_err(|e| format!("打开插件包失败: {}", e))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("打开 ZIP 失败: {}", e))?;
+    let mut pairs: Vec<(String, serde_json::Value)> = Vec::new();
+    for i in 0..archive.len() {
+        let mut f = archive.by_index(i).map_err(|e| format!("读取 ZIP 条目失败: {}", e))?;
+        let name = f.name().to_string();
+        if !name.starts_with("configs/") || !name.ends_with(".json") {
+            continue;
+        }
+        let stem = Path::new(&name)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        if stem.is_empty() {
+            continue;
+        }
+        let mut s = String::new();
+        f.read_to_string(&mut s)
+            .map_err(|e| format!("读取 {} 失败: {}", name, e))?;
+        let v: serde_json::Value =
+            serde_json::from_str(&s).map_err(|e| format!("解析 {} 失败: {}", name, e))?;
+        pairs.push((stem, v));
+    }
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut result = Vec::with_capacity(pairs.len());
+    for (filename, v) in pairs {
+        let mut obj = serde_json::Map::new();
+        obj.insert("pluginId".to_string(), serde_json::json!(plugin_id));
+        obj.insert("filename".to_string(), serde_json::json!(filename));
+        if let serde_json::Value::Object(m) = v {
+            for (k, val) in m {
+                obj.insert(k, val);
+            }
+        }
+        result.push(serde_json::Value::Object(obj));
+    }
+    Ok(result)
 }
 
 /// 获取用户插件目录（不依赖 AppHandle / PluginManager 实例）。

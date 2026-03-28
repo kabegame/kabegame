@@ -68,24 +68,29 @@
         <HttpHeadersEditor v-model="headersModel" />
       </el-form-item>
 
-      <section ref="scheduleSectionRef">
+      <section ref="scheduleSectionRef" class="acd-schedule-section">
         <el-divider content-position="left">{{ t("autoConfig.schedule") }}</el-divider>
         <el-form-item :label="t('autoConfig.scheduleEnabled')">
           <el-switch v-model="scheduleEnabled" />
         </el-form-item>
 
-        <template v-if="scheduleEnabled">
+        <div
+          v-if="showScheduleDetailFields"
+          class="acd-schedule-fields"
+          :class="{ 'acd-schedule-fields--readonly': scheduleFieldsReadonly }"
+        >
           <el-form-item :label="t('autoConfig.mode')">
-            <el-radio-group v-model="scheduleMode">
+            <el-radio-group v-model="scheduleMode" :disabled="scheduleFieldsReadonly">
               <el-radio value="interval">{{ t("autoConfig.modeInterval") }}</el-radio>
               <el-radio value="daily">{{ t("autoConfig.modeDaily") }}</el-radio>
+              <el-radio value="weekly">{{ t("autoConfig.modeWeekly") }}</el-radio>
             </el-radio-group>
           </el-form-item>
 
           <el-form-item v-if="scheduleMode === 'interval'" :label="t('autoConfig.modeInterval')">
             <div class="mode-line">
-              <el-input-number v-model="intervalValue" :min="1" />
-              <el-select v-model="intervalUnit">
+              <el-input-number v-model="intervalValue" :min="1" :disabled="scheduleFieldsReadonly" />
+              <el-select v-model="intervalUnit" :disabled="scheduleFieldsReadonly">
                 <el-option value="minutes" :label="t('autoConfig.unitMinutes')" />
                 <el-option value="hours" :label="t('autoConfig.unitHours')" />
                 <el-option value="days" :label="t('autoConfig.unitDays')" />
@@ -95,7 +100,7 @@
 
           <el-form-item v-if="scheduleMode === 'daily'" :label="t('autoConfig.modeDaily')">
             <div class="mode-line">
-              <el-select v-model="dailyHour">
+              <el-select v-model="dailyHour" :disabled="scheduleFieldsReadonly">
                 <el-option :value="-1" :label="t('autoConfig.everyHour')" />
                 <el-option
                   v-for="h in 24"
@@ -104,7 +109,7 @@
                   :label="`${String(h - 1).padStart(2, '0')}:xx`"
                 />
               </el-select>
-              <el-select v-model="dailyMinute">
+              <el-select v-model="dailyMinute" :disabled="scheduleFieldsReadonly">
                 <el-option
                   v-for="m in 60"
                   :key="`m-${m - 1}`"
@@ -115,8 +120,42 @@
             </div>
           </el-form-item>
 
+          <el-form-item v-if="scheduleMode === 'weekly'" :label="t('autoConfig.modeWeekly')">
+            <div class="mode-line">
+              <el-select v-model="weeklyWeekday" :disabled="scheduleFieldsReadonly">
+                <el-option
+                  v-for="wd in 7"
+                  :key="`wd-${wd - 1}`"
+                  :value="wd - 1"
+                  :label="t(`autoConfig.weekday${wd - 1}`)"
+                />
+              </el-select>
+              <el-select v-model="dailyHour" :disabled="scheduleFieldsReadonly">
+                <el-option
+                  v-for="h in 24"
+                  :key="`wh-${h - 1}`"
+                  :value="h - 1"
+                  :label="`${String(h - 1).padStart(2, '0')}:xx`"
+                />
+              </el-select>
+              <el-select v-model="dailyMinute" :disabled="scheduleFieldsReadonly">
+                <el-option
+                  v-for="m in 60"
+                  :key="`wm-${m - 1}`"
+                  :value="m - 1"
+                  :label="String(m - 1).padStart(2, '0')"
+                />
+              </el-select>
+            </div>
+          </el-form-item>
+
           <el-alert type="info" :closable="false" :title="schedulePreview" />
-        </template>
+          <ScheduleProgressBar
+            v-if="editScheduleProgressConfig"
+            :config="editScheduleProgressConfig"
+            class="acd-schedule-progress"
+          />
+        </div>
       </section>
     </el-form>
 
@@ -144,6 +183,7 @@ import { ElMessage } from "element-plus";
 import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
 import { IS_ANDROID } from "@kabegame/core/env";
 import AutoConfigDetailContent from "@kabegame/core/components/scheduler/AutoConfigDetailContent.vue";
+import ScheduleProgressBar from "@kabegame/core/components/scheduler/ScheduleProgressBar.vue";
 import OutputDirSelect from "@kabegame/core/components/crawler/OutputDirSelect.vue";
 import PluginVarsForm from "@kabegame/core/components/crawler/PluginVarsForm.vue";
 import HttpHeadersEditor from "@kabegame/core/components/crawler/HttpHeadersEditor.vue";
@@ -153,7 +193,7 @@ import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
 import { matchesPluginVarWhen } from "@kabegame/core/utils/pluginVarWhen";
-import type { RunConfig } from "@kabegame/core/stores/crawler";
+import type { RunConfig, ScheduleSpec } from "@kabegame/core/stores/crawler";
 
 const { t } = useI18n();
 const { varDisplayName, varDescripts, optionDisplayName } = usePluginConfigI18n();
@@ -168,6 +208,7 @@ const {
   isRequired,
   getValidationRules,
   loadPluginVarDefs,
+  loadPluginVars,
   normalizeVarsForUI,
   expandVarsForBackend,
 } = usePluginConfig();
@@ -179,11 +220,13 @@ const scheduleSectionRef = ref<HTMLElement | null>(null);
 const name = ref("");
 const description = ref("");
 const scheduleEnabled = ref(false);
-const scheduleMode = ref<"interval" | "daily">("interval");
+const scheduleMode = ref<"interval" | "daily" | "weekly">("interval");
 const intervalValue = ref(1);
 const intervalUnit = ref<"minutes" | "hours" | "days">("hours");
 const dailyHour = ref(-1);
 const dailyMinute = ref(0);
+/** 0=周一 … 6=周日 */
+const weeklyWeekday = ref(0);
 const headersModel = ref<Record<string, string>>({});
 
 const dialogVisible = computed({
@@ -200,6 +243,23 @@ const viewConfig = computed(() => {
   if (!id) return null;
   return crawlerStore.runConfigById(id) ?? null;
 });
+
+/** 定时已关但后端仍有 mode 时仍展示表单项（只读灰色）；新建且未启用则不展示 */
+const showScheduleDetailFields = computed(() => {
+  if (scheduleEnabled.value) return true;
+  if (dialogStore.isCreate) return false;
+  const id = dialogStore.configId;
+  const c = id ? crawlerStore.runConfigById(id) : undefined;
+  return (
+    c?.scheduleSpec?.mode === "interval" ||
+    c?.scheduleSpec?.mode === "daily" ||
+    c?.scheduleSpec?.mode === "weekly"
+  );
+});
+
+const scheduleFieldsReadonly = computed(
+  () => !scheduleEnabled.value && showScheduleDetailFields.value,
+);
 
 const showMissing = computed(
   () =>
@@ -257,6 +317,14 @@ const schedulePreview = computed(() => {
       unit: t(unitKey),
     });
   }
+  if (scheduleMode.value === "weekly") {
+    const wd = Math.min(6, Math.max(0, weeklyWeekday.value));
+    return t("autoConfig.weeklyAt", {
+      weekday: t(`autoConfig.weekday${wd}`),
+      hour: String(dailyHour.value).padStart(2, "0"),
+      minute: String(dailyMinute.value).padStart(2, "0"),
+    });
+  }
   if (dailyHour.value === -1) {
     return t("autoConfig.dailyHourly", { minute: String(dailyMinute.value).padStart(2, "0") });
   }
@@ -276,10 +344,14 @@ const loadFromConfig = async (cfg: RunConfig) => {
   headersModel.value = { ...(cfg.httpHeaders ?? {}) };
 
   scheduleEnabled.value = !!cfg.scheduleEnabled;
+  const spec = cfg.scheduleSpec;
   scheduleMode.value =
-    cfg.scheduleMode === "interval" || cfg.scheduleMode === "daily" ? cfg.scheduleMode : "interval";
-  if (cfg.scheduleMode === "interval") {
-    const secs = Math.max(60, Number(cfg.scheduleIntervalSecs ?? 3600));
+    spec?.mode === "interval" || spec?.mode === "daily" || spec?.mode === "weekly"
+      ? spec.mode
+      : "interval";
+  weeklyWeekday.value = 0;
+  if (spec?.mode === "interval") {
+    const secs = Math.max(60, Number(spec.intervalSecs ?? 3600));
     if (secs % 86400 === 0) {
       intervalUnit.value = "days";
       intervalValue.value = Math.max(1, Math.round(secs / 86400));
@@ -291,9 +363,14 @@ const loadFromConfig = async (cfg: RunConfig) => {
       intervalValue.value = Math.max(1, Math.round(secs / 60));
     }
   }
-  if (cfg.scheduleMode === "daily") {
-    dailyHour.value = Number(cfg.scheduleDailyHour ?? -1);
-    dailyMinute.value = Number(cfg.scheduleDailyMinute ?? 0);
+  if (spec?.mode === "daily") {
+    dailyHour.value = Number(spec.hour ?? -1);
+    dailyMinute.value = Number(spec.minute ?? 0);
+  }
+  if (spec?.mode === "weekly") {
+    weeklyWeekday.value = Math.min(6, Math.max(0, Number(spec.weekday ?? 0)));
+    dailyHour.value = Math.min(23, Math.max(0, Number(spec.hour ?? 0)));
+    dailyMinute.value = Math.min(59, Math.max(0, Number(spec.minute ?? 0)));
   }
 };
 
@@ -306,6 +383,7 @@ const resetCreateForm = () => {
   intervalUnit.value = "hours";
   dailyHour.value = -1;
   dailyMinute.value = 0;
+  weeklyWeekday.value = 0;
   headersModel.value = {};
   form.value.pluginId = "";
   form.value.outputDir = "";
@@ -313,53 +391,147 @@ const resetCreateForm = () => {
   pluginVars.value = [];
 };
 
-const buildScheduleFields = () => {
+const buildScheduleFields = (): Pick<
+  RunConfig,
+  "scheduleEnabled" | "scheduleSpec" | "schedulePlannedAt" | "scheduleLastRunAt"
+> => {
   if (!scheduleEnabled.value) {
+    if (dialogStore.isCreate) {
+      return {
+        scheduleEnabled: false,
+        scheduleSpec: undefined,
+        schedulePlannedAt: undefined,
+        scheduleLastRunAt: undefined,
+      };
+    }
+    const id = dialogStore.configId;
+    const cur = id ? crawlerStore.runConfigById(id) : undefined;
+    const curSpec = cur?.scheduleSpec;
+    if (
+      !cur ||
+      !curSpec ||
+      (curSpec.mode !== "interval" &&
+        curSpec.mode !== "daily" &&
+        curSpec.mode !== "weekly")
+    ) {
+      return {
+        scheduleEnabled: false,
+        scheduleSpec: undefined,
+        schedulePlannedAt: undefined,
+        scheduleLastRunAt: undefined,
+      };
+    }
+    if (scheduleMode.value === "interval") {
+      const scheduleSpec: ScheduleSpec = {
+        mode: "interval",
+        intervalSecs: Math.max(1, intervalValue.value) * secondsByUnit(intervalUnit.value),
+      };
+      return {
+        scheduleEnabled: false,
+        scheduleSpec,
+        schedulePlannedAt: cur.schedulePlannedAt,
+        scheduleLastRunAt: cur.scheduleLastRunAt,
+      };
+    }
+    if (scheduleMode.value === "weekly") {
+      const scheduleSpec: ScheduleSpec = {
+        mode: "weekly",
+        weekday: Math.min(6, Math.max(0, weeklyWeekday.value)),
+        hour: Math.min(23, Math.max(0, dailyHour.value)),
+        minute: Math.min(59, Math.max(0, dailyMinute.value)),
+      };
+      return {
+        scheduleEnabled: false,
+        scheduleSpec,
+        schedulePlannedAt: cur.schedulePlannedAt,
+        scheduleLastRunAt: cur.scheduleLastRunAt,
+      };
+    }
+    const scheduleSpec: ScheduleSpec = {
+      mode: "daily",
+      hour: dailyHour.value,
+      minute: dailyMinute.value,
+    };
     return {
       scheduleEnabled: false,
-      scheduleMode: undefined,
-      scheduleIntervalSecs: undefined,
-      scheduleDailyHour: undefined,
-      scheduleDailyMinute: undefined,
-      scheduleDelaySecs: undefined,
-      schedulePlannedAt: undefined,
-      scheduleLastRunAt: undefined,
+      scheduleSpec,
+      schedulePlannedAt: cur.schedulePlannedAt,
+      scheduleLastRunAt: cur.scheduleLastRunAt,
     };
   }
   if (scheduleMode.value === "interval") {
+    const scheduleSpec: ScheduleSpec = {
+      mode: "interval",
+      intervalSecs: Math.max(1, intervalValue.value) * secondsByUnit(intervalUnit.value),
+    };
     return {
       scheduleEnabled: true,
-      scheduleMode: "interval" as const,
-      scheduleIntervalSecs: Math.max(1, intervalValue.value) * secondsByUnit(intervalUnit.value),
-      scheduleDailyHour: undefined,
-      scheduleDailyMinute: undefined,
-      scheduleDelaySecs: undefined,
+      scheduleSpec,
       schedulePlannedAt: undefined,
       scheduleLastRunAt: undefined,
     };
   }
+  if (scheduleMode.value === "weekly") {
+    const scheduleSpec: ScheduleSpec = {
+      mode: "weekly",
+      weekday: Math.min(6, Math.max(0, weeklyWeekday.value)),
+      hour: Math.min(23, Math.max(0, dailyHour.value)),
+      minute: Math.min(59, Math.max(0, dailyMinute.value)),
+    };
+    return {
+      scheduleEnabled: true,
+      scheduleSpec,
+      schedulePlannedAt: undefined,
+      scheduleLastRunAt: undefined,
+    };
+  }
+  const scheduleSpec: ScheduleSpec = {
+    mode: "daily",
+    hour: dailyHour.value,
+    minute: dailyMinute.value,
+  };
   return {
     scheduleEnabled: true,
-    scheduleMode: "daily" as const,
-    scheduleIntervalSecs: undefined,
-    scheduleDailyHour: dailyHour.value,
-    scheduleDailyMinute: dailyMinute.value,
-    scheduleDelaySecs: undefined,
+    scheduleSpec,
     schedulePlannedAt: undefined,
     scheduleLastRunAt: undefined,
   };
 };
+
+/** 编辑态：表单定时字段 + 后端 planned/lastRun，供倒计时条（周期变化时进度仍以服务端计划为准） */
+const editScheduleProgressConfig = computed((): RunConfig | null => {
+  if (panelMode.value !== "edit" || dialogStore.isCreate || !scheduleEnabled.value) return null;
+  const id = dialogStore.configId;
+  if (!id) return null;
+  const base = crawlerStore.runConfigById(id);
+  if (!base) return null;
+  const draft = buildScheduleFields();
+  return {
+    ...base,
+    scheduleEnabled: draft.scheduleEnabled,
+    scheduleSpec: draft.scheduleSpec,
+    schedulePlannedAt: base.schedulePlannedAt,
+    scheduleLastRunAt: base.scheduleLastRunAt,
+  };
+});
 
 const onPluginChange = async (pluginId: string) => {
   form.value.pluginId = pluginId;
   if (!pluginId) {
     pluginVars.value = [];
     form.value.vars = {};
+    headersModel.value = {};
     return;
   }
-  await loadPluginVarDefs(pluginId);
-  form.value.vars = normalizeVarsForUI({}, pluginVars.value as PluginVarDef[]);
+  const { httpHeaders, outputDir } = await loadPluginVars(pluginId);
+  form.value.outputDir = outputDir;
+  headersModel.value = { ...httpHeaders };
 };
+
+function monday0FromDate(d: Date): number {
+  const w = d.getDay();
+  return w === 0 ? 6 : w - 1;
+}
 
 watch(
   () => scheduleMode.value,
@@ -367,9 +539,20 @@ watch(
     if (mode === "interval") {
       dailyHour.value = -1;
       dailyMinute.value = 0;
+      weeklyWeekday.value = 0;
+    } else if (mode === "daily") {
+      intervalValue.value = 1;
+      intervalUnit.value = "hours";
+      weeklyWeekday.value = 0;
+      dailyHour.value = -1;
+      dailyMinute.value = 0;
     } else {
       intervalValue.value = 1;
       intervalUnit.value = "hours";
+      const d = new Date();
+      weeklyWeekday.value = monday0FromDate(d);
+      dailyHour.value = d.getHours();
+      dailyMinute.value = d.getMinutes();
     }
   },
 );
@@ -525,9 +708,17 @@ async function copyFullJson() {
 }
 
 .acd-edit-form {
-  max-height: min(72vh, 620px);
-  overflow-y: auto;
   padding: 2px 0 4px;
+}
+
+.acd-schedule-fields--readonly {
+  opacity: 0.72;
+  padding-bottom: 4px;
+  border-radius: 8px;
+}
+
+.acd-schedule-progress {
+  margin-top: 12px;
 }
 
 .mode-line {
@@ -538,5 +729,38 @@ async function copyFullJson() {
 
 .mode-line > * {
   flex: 1;
+}
+</style>
+
+<style lang="scss">
+/* 与 CrawlerDialog `.crawl-dialog` 一致：整窗限高、仅 body 滚动，避免蒙层与内容双重滚动 */
+.auto-config-dialog.el-dialog {
+  max-height: 90vh !important;
+  display: flex !important;
+  flex-direction: column !important;
+  margin-top: 5vh !important;
+  margin-bottom: 5vh !important;
+  overflow: hidden !important;
+
+  .el-dialog__header {
+    flex-shrink: 0 !important;
+    padding: 20px 20px 10px !important;
+    border-bottom: 1px solid var(--anime-border);
+  }
+
+  .el-dialog__body {
+    flex: 1 1 auto !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    padding: 20px !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+
+  .el-dialog__footer {
+    flex-shrink: 0 !important;
+    padding: 10px 20px 20px !important;
+    border-top: 1px solid var(--anime-border);
+  }
 }
 </style>

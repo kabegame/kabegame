@@ -24,6 +24,12 @@
             {{ $t("plugins.updateToConfig") }}
           </el-button>
         </div>
+        <div class="run-config-recommended-row">
+          <el-button type="primary" link class="run-config-rec-btn" @click="goImportRecommendedPresets">
+            {{ $t("plugins.importRecommendedConfigs") }}
+            <span v-if="recommendedPresetCount > 0" class="run-config-rec-count">({{ recommendedPresetCount }})</span>
+          </el-button>
+        </div>
       </el-form-item>
       <el-form-item :label="$t('plugins.selectSource')">
         <div class="plugin-source-field">
@@ -169,6 +175,7 @@
           <el-radio-group v-model="scheduleMode">
             <el-radio value="interval">{{ $t("autoConfig.modeInterval") }}</el-radio>
             <el-radio value="daily">{{ $t("autoConfig.modeDaily") }}</el-radio>
+            <el-radio value="weekly">{{ $t("autoConfig.modeWeekly") }}</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="scheduleMode === 'interval'" :label="$t('autoConfig.modeInterval')">
@@ -189,6 +196,24 @@
             </el-select>
             <el-select v-model="dailyMinute">
               <el-option v-for="m in 60" :key="`m-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
+            </el-select>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="scheduleMode === 'weekly'" :label="$t('autoConfig.modeWeekly')">
+          <div class="mode-line">
+            <el-select v-model="weeklyWeekday">
+              <el-option
+                v-for="wd in 7"
+                :key="`awd-${wd - 1}`"
+                :value="wd - 1"
+                :label="$t(`autoConfig.weekday${wd - 1}`)"
+              />
+            </el-select>
+            <el-select v-model="dailyHour">
+              <el-option v-for="h in 24" :key="`awh-${h - 1}`" :value="h - 1" :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+            </el-select>
+            <el-select v-model="dailyMinute">
+              <el-option v-for="m in 60" :key="`awm-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
             </el-select>
           </div>
         </el-form-item>
@@ -260,6 +285,12 @@
             {{ $t("plugins.updateToConfig") }}
           </el-button>
         </div>
+        <div class="run-config-recommended-row">
+          <el-button type="primary" link class="run-config-rec-btn" @click="goImportRecommendedPresets">
+            {{ $t("plugins.importRecommendedConfigs") }}
+            <span v-if="recommendedPresetCount > 0" class="run-config-rec-count">({{ recommendedPresetCount }})</span>
+          </el-button>
+        </div>
       </el-form-item>
       <el-form-item :label="$t('plugins.selectSource')">
         <div class="plugin-source-field">
@@ -272,7 +303,7 @@
           >
             <el-option v-for="plugin in plugins" :key="plugin.id" :label="pluginName(plugin)" :value="plugin.id">
               <div class="plugin-option">
-                <img v-if="pluginIcons[plugin.id]" :src="pluginIcons[plugin.id]" class="plugin-option-icon" />
+                <img v-if="pluginIconUrl(plugin.id)" :src="pluginIconUrl(plugin.id)" class="plugin-option-icon" />
                 <el-icon v-else class="plugin-option-icon-placeholder">
                   <Grid />
                 </el-icon>
@@ -392,6 +423,7 @@
           <el-radio-group v-model="scheduleMode">
             <el-radio value="interval">{{ $t("autoConfig.modeInterval") }}</el-radio>
             <el-radio value="daily">{{ $t("autoConfig.modeDaily") }}</el-radio>
+            <el-radio value="weekly">{{ $t("autoConfig.modeWeekly") }}</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item v-if="scheduleMode === 'interval'" :label="$t('autoConfig.modeInterval')">
@@ -412,6 +444,24 @@
             </el-select>
             <el-select v-model="dailyMinute">
               <el-option v-for="m in 60" :key="`m-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
+            </el-select>
+          </div>
+        </el-form-item>
+        <el-form-item v-if="scheduleMode === 'weekly'" :label="$t('autoConfig.modeWeekly')">
+          <div class="mode-line">
+            <el-select v-model="weeklyWeekday">
+              <el-option
+                v-for="wd in 7"
+                :key="`bwd-${wd - 1}`"
+                :value="wd - 1"
+                :label="$t(`autoConfig.weekday${wd - 1}`)"
+              />
+            </el-select>
+            <el-select v-model="dailyHour">
+              <el-option v-for="h in 24" :key="`bwh-${h - 1}`" :value="h - 1" :label="`${String(h - 1).padStart(2, '0')}:xx`" />
+            </el-select>
+            <el-select v-model="dailyMinute">
+              <el-option v-for="m in 60" :key="`bwm-${m - 1}`" :value="m - 1" :label="String(m - 1).padStart(2, '0')" />
             </el-select>
           </div>
         </el-form-item>
@@ -452,6 +502,7 @@
 
 <script setup lang="ts">
 import { computed, watch, ref, nextTick } from "vue";
+import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import { useI18n, usePluginManifestI18n, usePluginConfigI18n } from "@kabegame/i18n";
 import { FolderOpened, Grid, WarningFilled } from "@element-plus/icons-vue";
@@ -460,7 +511,7 @@ import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import AndroidPickerSelect from "@kabegame/core/components/AndroidPickerSelect.vue";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
 import { useConfigCompatibility } from "@/composables/useConfigCompatibility";
-import { useCrawlerStore, type RunConfig } from "@/stores/crawler";
+import { useCrawlerStore, type RunConfig, type ScheduleSpec } from "@/stores/crawler";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore } from "@/stores/albums";
@@ -474,7 +525,6 @@ import { useApp } from "@/stores/app";
 
 interface Props {
   modelValue: boolean;
-  pluginIcons: Record<string, string>;
   initialConfig?: {
     pluginId?: string;
     outputDir?: string;
@@ -491,9 +541,19 @@ const emit = defineEmits<{
   (e: "started"): void;
 }>();
 
+const router = useRouter();
 const crawlerStore = useCrawlerStore();
 const crawlerDrawerStore = useCrawlerDrawerStore();
+const recommendedPresetCount = computed(
+  () => crawlerStore.pluginRecommendedConfigs.length,
+);
+
+function goImportRecommendedPresets() {
+  visible.value = false;
+  void router.push({ name: "AutoConfigs", query: { tab: "recommended" } });
+}
 const pluginStore = usePluginStore();
+const pluginIconUrl = (pluginId: string) => pluginStore.pluginIconUrl(pluginId);
 const { version: crawlDialogAppVersion } = storeToRefs(useApp());
 const { pluginName } = usePluginManifestI18n();
 const { varDisplayName, varDescripts, optionDisplayName, resolveConfigText, locale } = usePluginConfigI18n();
@@ -546,11 +606,12 @@ function onAddConfigDialogClosed() {
 }
 
 const scheduleEnabled = ref(false);
-const scheduleMode = ref<"interval" | "daily">("interval");
+const scheduleMode = ref<"interval" | "daily" | "weekly">("interval");
 const intervalValue = ref(1);
 const intervalUnit = ref<"minutes" | "hours" | "days">("hours");
 const dailyHour = ref(-1);
 const dailyMinute = ref(0);
+const weeklyWeekday = ref(0);
 
 const secondsByUnit = (unit: "minutes" | "hours" | "days") => {
   if (unit === "days") return 86400;
@@ -558,15 +619,31 @@ const secondsByUnit = (unit: "minutes" | "hours" | "days") => {
   return 60;
 };
 
+function monday0FromDate(d: Date): number {
+  const w = d.getDay();
+  return w === 0 ? 6 : w - 1;
+}
+
 watch(
   () => scheduleMode.value,
   (mode) => {
     if (mode === "interval") {
       dailyHour.value = -1;
       dailyMinute.value = 0;
+      weeklyWeekday.value = 0;
+    } else if (mode === "daily") {
+      intervalValue.value = 1;
+      intervalUnit.value = "hours";
+      weeklyWeekday.value = 0;
+      dailyHour.value = -1;
+      dailyMinute.value = 0;
     } else {
       intervalValue.value = 1;
       intervalUnit.value = "hours";
+      const d = new Date();
+      weeklyWeekday.value = monday0FromDate(d);
+      dailyHour.value = d.getHours();
+      dailyMinute.value = d.getMinutes();
     }
   },
 );
@@ -583,6 +660,14 @@ const schedulePreview = computed(() => {
     return t("autoConfig.intervalSummary", {
       n: intervalValue.value,
       unit: t(`autoConfig.${unitKey}`),
+    });
+  }
+  if (scheduleMode.value === "weekly") {
+    const wd = Math.min(6, Math.max(0, weeklyWeekday.value));
+    return t("autoConfig.weeklyAt", {
+      weekday: t(`autoConfig.weekday${wd}`),
+      hour: String(dailyHour.value).padStart(2, "0"),
+      minute: String(dailyMinute.value).padStart(2, "0"),
     });
   }
   if (dailyHour.value === -1) {
@@ -602,13 +687,18 @@ function loadScheduleFromConfig(cfg: RunConfig | undefined) {
     intervalUnit.value = "hours";
     dailyHour.value = -1;
     dailyMinute.value = 0;
+    weeklyWeekday.value = 0;
     return;
   }
   scheduleEnabled.value = !!cfg.scheduleEnabled;
+  const spec = cfg.scheduleSpec;
   scheduleMode.value =
-    cfg.scheduleMode === "interval" || cfg.scheduleMode === "daily" ? cfg.scheduleMode : "interval";
-  if (cfg.scheduleMode === "interval") {
-    const secs = Math.max(60, Number(cfg.scheduleIntervalSecs ?? 3600));
+    spec?.mode === "interval" || spec?.mode === "daily" || spec?.mode === "weekly"
+      ? spec.mode
+      : "interval";
+  weeklyWeekday.value = 0;
+  if (spec?.mode === "interval") {
+    const secs = Math.max(60, Number(spec.intervalSecs ?? 3600));
     if (secs % 86400 === 0) {
       intervalUnit.value = "days";
       intervalValue.value = Math.max(1, Math.round(secs / 86400));
@@ -620,44 +710,63 @@ function loadScheduleFromConfig(cfg: RunConfig | undefined) {
       intervalValue.value = Math.max(1, Math.round(secs / 60));
     }
   }
-  if (cfg.scheduleMode === "daily") {
-    dailyHour.value = Number(cfg.scheduleDailyHour ?? -1);
-    dailyMinute.value = Number(cfg.scheduleDailyMinute ?? 0);
+  if (spec?.mode === "daily") {
+    dailyHour.value = Number(spec.hour ?? -1);
+    dailyMinute.value = Number(spec.minute ?? 0);
+  }
+  if (spec?.mode === "weekly") {
+    weeklyWeekday.value = Math.min(6, Math.max(0, Number(spec.weekday ?? 0)));
+    dailyHour.value = Math.min(23, Math.max(0, Number(spec.hour ?? 0)));
+    dailyMinute.value = Math.min(59, Math.max(0, Number(spec.minute ?? 0)));
   }
 }
 
-function buildScheduleFields() {
+function buildScheduleFields(): Pick<
+  RunConfig,
+  "scheduleEnabled" | "scheduleSpec" | "schedulePlannedAt" | "scheduleLastRunAt"
+> {
   if (!scheduleEnabled.value) {
     return {
       scheduleEnabled: false,
-      scheduleMode: undefined,
-      scheduleIntervalSecs: undefined,
-      scheduleDailyHour: undefined,
-      scheduleDailyMinute: undefined,
-      scheduleDelaySecs: undefined,
+      scheduleSpec: undefined,
       schedulePlannedAt: undefined,
       scheduleLastRunAt: undefined,
     };
   }
   if (scheduleMode.value === "interval") {
+    const scheduleSpec: ScheduleSpec = {
+      mode: "interval",
+      intervalSecs: Math.max(1, intervalValue.value) * secondsByUnit(intervalUnit.value),
+    };
     return {
       scheduleEnabled: true,
-      scheduleMode: "interval" as const,
-      scheduleIntervalSecs: Math.max(1, intervalValue.value) * secondsByUnit(intervalUnit.value),
-      scheduleDailyHour: undefined,
-      scheduleDailyMinute: undefined,
-      scheduleDelaySecs: undefined,
+      scheduleSpec,
       schedulePlannedAt: undefined,
       scheduleLastRunAt: undefined,
     };
   }
+  if (scheduleMode.value === "weekly") {
+    const scheduleSpec: ScheduleSpec = {
+      mode: "weekly",
+      weekday: Math.min(6, Math.max(0, weeklyWeekday.value)),
+      hour: Math.min(23, Math.max(0, dailyHour.value)),
+      minute: Math.min(59, Math.max(0, dailyMinute.value)),
+    };
+    return {
+      scheduleEnabled: true,
+      scheduleSpec,
+      schedulePlannedAt: undefined,
+      scheduleLastRunAt: undefined,
+    };
+  }
+  const scheduleSpec: ScheduleSpec = {
+    mode: "daily",
+    hour: dailyHour.value,
+    minute: dailyMinute.value,
+  };
   return {
     scheduleEnabled: true,
-    scheduleMode: "daily" as const,
-    scheduleIntervalSecs: undefined,
-    scheduleDailyHour: dailyHour.value,
-    scheduleDailyMinute: dailyMinute.value,
-    scheduleDelaySecs: undefined,
+    scheduleSpec,
     schedulePlannedAt: undefined,
     scheduleLastRunAt: undefined,
   };
@@ -759,7 +868,7 @@ const pluginPickerOptions = computed(() =>
     label: pluginName(p),
     value: p.id,
     warning: p.scriptType === "js",
-    iconSrc: props.pluginIcons[p.id],
+    iconSrc: pluginStore.pluginIconUrl(p.id),
   })),
 );
 
@@ -818,14 +927,16 @@ async function setRunConfigId(v: string | null) {
   }
 }
 
-function onPluginChange(v: string | null | undefined) {
+async function onPluginChange(v: string | null | undefined) {
   const id = v ?? "";
   form.value.pluginId = id;
   if (id) {
-    loadPluginVars(id);
+    const { httpHeaders } = await loadPluginVars(id);
+    httpHeaderRows.value = Object.entries(httpHeaders).map(([k, v]) => ({ key: k, value: v }));
   } else {
     pluginVars.value = [];
     form.value.vars = {};
+    httpHeaderRows.value = [];
   }
 }
 function setOutputAlbumId(v: string | null) {
@@ -1165,6 +1276,24 @@ watch(selectedOutputAlbumId, (newValue) => {
   align-items: center;
   gap: 10px;
   width: 100%;
+}
+
+.run-config-recommended-row {
+  margin-top: 8px;
+}
+
+.run-config-rec-btn {
+  padding-left: 0;
+  height: auto;
+  align-items: baseline;
+}
+
+.run-config-rec-count {
+  margin-left: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--anime-text-muted);
+  opacity: 0.9;
 }
 
 .run-config-row .run-config-select,

@@ -10,6 +10,48 @@ import {
   parsePluginDateStored,
   shiftPluginDateByDays,
 } from "@kabegame/core/utils/pluginDateVar";
+import { validateVarValue } from "@/utils/pluginVarValidation";
+
+/** 从插件默认配置加载到表单时，一并返回 httpHeaders / outputDir */
+export type PluginDefaultLoadResult = {
+  httpHeaders: Record<string, string>;
+  outputDir: string;
+};
+
+/** 将默认配置中的 userConfig 按字段与 var 定义对齐（不兼容字段回退到 default） */
+function matchUserConfigFromDefaults(
+  userConfig: Record<string, any>,
+  defs: PluginVarDef[]
+): Record<string, any> {
+  const matched: Record<string, any> = {};
+  const varDefMap = new Map(defs.map((d) => [d.key, d]));
+  const explicitNullKeys = new Set<string>();
+
+  for (const [key, value] of Object.entries(userConfig)) {
+    const varDef = varDefMap.get(key);
+    if (!varDef) continue;
+    if (value === null) {
+      explicitNullKeys.add(key);
+      continue;
+    }
+    if (value === undefined) continue;
+    const validation = validateVarValue(value, varDef);
+    if (validation.valid) {
+      matched[key] = value;
+    } else if (varDef.default !== undefined) {
+      matched[key] = varDef.default;
+    }
+  }
+
+  for (const varDef of defs) {
+    if (varDef.key in matched) continue;
+    if (explicitNullKeys.has(varDef.key)) continue;
+    if (varDef.default !== undefined) {
+      matched[varDef.key] = varDef.default;
+    }
+  }
+  return matched;
+}
 
 export type VarOption = string | { name: PluginConfigText | string; variable: string };
 
@@ -294,10 +336,71 @@ export function usePluginConfig() {
     );
   };
 
-  // 加载定义 + 重置表单为默认值（用户手动切换插件时使用）
-  const loadPluginVars = async (pluginId: string) => {
+  /** 解析磁盘默认配置 JSON 中的 httpHeaders */
+  function parseHttpHeadersFromDefault(raw: unknown): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      out[k] = v == null ? "" : String(v);
+    }
+    return out;
+  }
+
+  /**
+   * 加载插件变量定义并优先应用用户数据目录下的默认配置；
+   * 默认配置缺失时由后端生成；解析失败时回退到 config.json 中的 var 默认值。
+   */
+  const loadPluginVars = async (
+    pluginId: string
+  ): Promise<PluginDefaultLoadResult> => {
     await loadPluginVarDefs(pluginId);
-    resetFormVarsToDefaults();
+    const defs = pluginVars.value as PluginVarDef[];
+    const emptyResult = (): PluginDefaultLoadResult => ({
+      httpHeaders: {},
+      outputDir: "",
+    });
+
+    if (!defs.length) {
+      form.value.vars = {};
+      form.value.outputDir = "";
+      return emptyResult();
+    }
+
+    let disk: unknown = undefined;
+    try {
+      disk = await invoke<unknown | null>("get_plugin_default_config", {
+        pluginId,
+      });
+    } catch {
+      resetFormVarsToDefaults();
+      form.value.outputDir = "";
+      return emptyResult();
+    }
+
+    if (disk == null) {
+      try {
+        disk = await invoke<unknown>("ensure_plugin_default_config", { pluginId });
+      } catch {
+        resetFormVarsToDefaults();
+        form.value.outputDir = "";
+        return emptyResult();
+      }
+    }
+
+    const obj = disk as Record<string, unknown>;
+    const rawUser =
+      obj.userConfig && typeof obj.userConfig === "object" && !Array.isArray(obj.userConfig)
+        ? (obj.userConfig as Record<string, any>)
+        : {};
+    const matched = matchUserConfigFromDefaults(rawUser, defs);
+    form.value.vars = normalizeVarsForUI(matched, defs);
+
+    const od = obj.outputDir;
+    const outputDir = typeof od === "string" ? od : "";
+    form.value.outputDir = outputDir;
+
+    const httpHeaders = parseHttpHeadersFromDefault(obj.httpHeaders);
+    return { httpHeaders, outputDir };
   };
 
   // 选择输出目录
@@ -406,5 +509,7 @@ export function usePluginConfig() {
     selectFile,
     selectFileByExtensions,
     resetForm,
+    matchUserConfigFromDefaults,
+    parseHttpHeadersFromDefault,
   };
 }

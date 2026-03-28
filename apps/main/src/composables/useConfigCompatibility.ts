@@ -1,10 +1,10 @@
-import { ref, watch, computed, type Ref } from "vue";
-import { useI18n, resolveConfigText } from "@kabegame/i18n";
+import { ref, watch, computed, unref, type Ref } from "vue";
+import { useI18n, resolveConfigText, i18n } from "@kabegame/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useCrawlerStore, type RunConfig } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
-import { isNil } from "lodash-es";
+import { validateVarValue } from "@/utils/pluginVarValidation";
 import type { PluginVarDef } from "./usePluginConfig";
 
 export interface ConfigCompatibility {
@@ -22,7 +22,7 @@ export function useConfigCompatibility(
   pluginVars: Ref<PluginVarDef[]>,
   form: Ref<{ pluginId: string; outputDir: string; vars: Record<string, any> }>,
   selectedRunConfigId: Ref<string | null>,
-  loadPluginVars: (pluginId: string) => Promise<void>,
+  loadPluginVars: (pluginId: string) => Promise<unknown>,
   loadPluginVarDefs: (pluginId: string) => Promise<void>,
   normalizeVarsForUI: (
     rawVars: Record<string, any>,
@@ -46,92 +46,6 @@ export function useConfigCompatibility(
   const configCompatibilityCache = ref<Map<string, ConfigCompatibility>>(
     new Map()
   );
-
-  // 验证单个变量值
-  const validateVarValue = (
-    value: any,
-    varDef: PluginVarDef
-  ): { valid: boolean; error?: string } => {
-    switch (varDef.type) {
-      case "int":
-        if (typeof value !== "number" || !Number.isInteger(value)) {
-          return { valid: false, error: "值必须是整数" };
-        }
-        if (!isNil(varDef.min) && value < varDef.min) {
-          return { valid: false, error: `值不能小于 ${varDef.min}` };
-        }
-        if (!isNil(varDef.max) && value > varDef.max) {
-          return { valid: false, error: `值不能大于 ${varDef.max}` };
-        }
-        break;
-      case "float":
-        if (typeof value !== "number") {
-          return { valid: false, error: "值必须是数字" };
-        }
-        if (!isNil(varDef.min) && value < varDef.min) {
-          return { valid: false, error: `值不能小于 ${varDef.min}` };
-        }
-        if (!isNil(varDef.max) && value > varDef.max) {
-          return { valid: false, error: `值不能大于 ${varDef.max}` };
-        }
-        break;
-      case "boolean":
-        if (typeof value !== "boolean") {
-          return { valid: false, error: "值必须是布尔值" };
-        }
-        break;
-      case "options":
-        if (varDef.options && Array.isArray(varDef.options)) {
-          const validValues = varDef.options.map((opt) =>
-            typeof opt === "string"
-              ? opt
-              : (opt as any).variable || (opt as any).value
-          );
-          if (!validValues.includes(value)) {
-            return { valid: false, error: `值不在有效选项中` };
-          }
-        }
-        break;
-      case "checkbox":
-        // 保存的配置可能是对象 { a: true, b: false }（后端格式）或数组（旧格式）
-        if (Array.isArray(value)) {
-          if (varDef.options && Array.isArray(varDef.options)) {
-            const validValues = varDef.options.map((opt) =>
-              typeof opt === "string"
-                ? opt
-                : (opt as any).variable || (opt as any).value
-            );
-            const invalidValues = value.filter((v) => !validValues.includes(v));
-            if (invalidValues.length > 0) {
-              return { valid: false, error: `包含无效选项` };
-            }
-          }
-        } else if (value && typeof value === "object" && !Array.isArray(value)) {
-          // 后端存储格式，视为有效，由 normalizeVarsForUI 转为 UI 数组
-          break;
-        } else {
-          return { valid: false, error: "值必须是数组或对象" };
-        }
-        break;
-      case "list":
-        if (!Array.isArray(value)) {
-          return { valid: false, error: "值必须是数组" };
-        }
-        break;
-      case "date":
-        if (typeof value !== "string") {
-          return { valid: false, error: "值必须是字符串" };
-        }
-        if (
-          value !== "" &&
-          !/^\d{4}-\d{2}-\d{2}$/.test(value)
-        ) {
-          return { valid: false, error: "日期格式应为 YYYY-MM-DD" };
-        }
-        break;
-    }
-    return { valid: true };
-  };
 
   // 检查配置兼容性（两步验证）
   const checkConfigCompatibility = async (
@@ -455,4 +369,65 @@ export function useConfigCompatibility(
     loadConfigToForm,
     smartMatchConfigToForm,
   };
+}
+
+function isRequiredVar(varDef: { default?: any }) {
+  return varDef.default === undefined || varDef.default === null;
+}
+
+/** 校验插件推荐配置的 userConfig 是否与当前插件变量定义兼容（导入前调用） */
+export async function checkRecommendedPresetCompatibility(
+  pluginId: string,
+  userConfig: Record<string, any> | undefined,
+): Promise<ConfigCompatibility> {
+  const locale = String(unref(i18n.global.locale) ?? "zh");
+  const result: ConfigCompatibility = {
+    versionCompatible: true,
+    contentCompatible: true,
+    contentErrors: [],
+    warnings: [],
+  };
+  const pluginStore = usePluginStore();
+  if (!pluginStore.plugins.some((p) => p.id === pluginId)) {
+    result.versionCompatible = false;
+    result.versionReason = "插件不存在";
+    result.contentCompatible = false;
+    return result;
+  }
+  try {
+    const vars = await invoke<Array<PluginVarDef> | null>("get_plugin_vars", {
+      pluginId,
+    });
+    if (!vars || vars.length === 0) return result;
+    const varDefMap = new Map(vars.map((def) => [def.key, def]));
+    const uc = userConfig || {};
+    for (const [key, value] of Object.entries(uc)) {
+      const varDef = varDefMap.get(key);
+      if (!varDef) {
+        result.warnings.push(`字段 "${key}" 已在新版本中删除`);
+        continue;
+      }
+      const validation = validateVarValue(value, varDef);
+      if (!validation.valid) {
+        result.contentCompatible = false;
+        result.contentErrors.push(
+          `${resolveConfigText(varDef.name, locale)} (${key}): ${validation.error}`,
+        );
+      }
+    }
+    for (const varDef of vars) {
+      if (!(varDef.key in uc)) {
+        if (isRequiredVar(varDef)) {
+          result.contentCompatible = false;
+          result.contentErrors.push(
+            `缺少必填字段: ${resolveConfigText(varDef.name, locale)} (${varDef.key})`,
+          );
+        }
+      }
+    }
+  } catch {
+    result.contentCompatible = false;
+    result.contentErrors.push("验证过程出错");
+  }
+  return result;
 }

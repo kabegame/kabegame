@@ -62,8 +62,21 @@
           </div>
         </div>
 
-        <el-progress v-if="t.status === 'running' || t.status === 'pending'" :percentage="Math.floor(t.progress || 0)"
-          :stroke-width="10" />
+        <div
+          v-if="shouldShowTaskProgressBar(t)"
+          class="task-panel-progress-wrap"
+          :class="{
+            'task-progress--canceled-bar': isCanceledTaskStatus(t.status),
+            'task-progress--failed-bar': t.status === 'failed',
+          }"
+        >
+          <el-progress
+            :percentage="taskProgressPercent(t)"
+            :stroke-width="10"
+            :color="taskProgressBarColor(t.status)"
+            :show-text="t.status === 'running'"
+          />
+        </div>
         <div v-if="t.error" class="task-error">{{ t.error }}</div>
       </div>
     </div>
@@ -140,6 +153,31 @@ function statusTagType(s: TaskStatus): "info" | "warning" | "success" | "danger"
 
 function downloadKey(d: ActiveDownloadInfo) {
   return `${d.task_id}-${d.start_time}-${d.url}`;
+}
+
+function isCanceledTaskStatus(status: string): boolean {
+  return status === "canceled" || status === "cancelled";
+}
+
+function shouldShowTaskProgressBar(t: ScriptTask): boolean {
+  const p = Number(t.progress ?? 0);
+  if (!Number.isFinite(p) || p <= 0) return false;
+  return (
+    t.status === "running" ||
+    t.status === "failed" ||
+    isCanceledTaskStatus(t.status)
+  );
+}
+
+function taskProgressPercent(t: ScriptTask): number {
+  const p = Number(t.progress ?? 0);
+  if (!Number.isFinite(p)) return 0;
+  return Math.floor(Math.min(100, Math.max(0, p)));
+}
+
+function taskProgressBarColor(status: TaskStatus | string): string | undefined {
+  if (status === "failed") return "var(--el-color-danger)";
+  return undefined;
 }
 </script>
 
@@ -244,6 +282,27 @@ function downloadKey(d: ActiveDownloadInfo) {
   font-size: 12px;
   color: #f56c6c;
   word-break: break-word;
+}
+
+.task-panel-progress-wrap {
+  margin-top: 8px;
+}
+
+.task-panel-progress-wrap.task-progress--failed-bar {
+  :deep(.el-progress-bar__inner) {
+    background-color: var(--el-color-danger, #f56c6c) !important;
+    background-image: none !important;
+  }
+}
+
+.task-panel-progress-wrap.task-progress--canceled-bar {
+  :deep(.el-progress-bar__outer) {
+    background-color: var(--el-fill-color-light, #e4e7ed) !important;
+  }
+  :deep(.el-progress-bar__inner) {
+    background-color: var(--el-color-info, #909399) !important;
+    background-image: none !important;
+  }
 }
 </style>
 

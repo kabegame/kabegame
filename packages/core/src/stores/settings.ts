@@ -50,6 +50,8 @@ export interface AppSettings {
   albumDriveEnabled: boolean;
   albumDriveMountPoint: string;
   autoOpenCrawlerWebview: boolean;
+  /** 导入插件推荐运行配置时是否默认启用定时（默认 true） */
+  importRecommendedScheduleEnabled: boolean;
   /** 界面语言（持久化为 canonical 语种码；缺失或非法时由前端解析链写回） */
   language: string | null;
 }
@@ -71,6 +73,11 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
   const map: Partial<Record<AppSettingKey, SettingKeyMeta>> = {
     // --- 基础通用键（所有平台） ---
     language: { getter: "get_language", setter: "set_language", param: "language" },
+    importRecommendedScheduleEnabled: {
+      getter: "get_import_recommended_schedule_enabled",
+      setter: "set_import_recommended_schedule_enabled",
+      param: "enabled",
+    },
     maxConcurrentDownloads: { getter: "get_max_concurrent_downloads", setter: "set_max_concurrent_downloads", param: "count" },
     maxConcurrentTasks: { getter: "get_max_concurrent_tasks", setter: "set_max_concurrent_tasks", param: "count" },
     downloadIntervalMs: { getter: "get_download_interval_ms", setter: "set_download_interval_ms", param: "intervalMs" },

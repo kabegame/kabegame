@@ -185,6 +185,25 @@
           </el-card>
         </el-tab-pane>
 
+        <el-tab-pane :label="$t('settings.tabPlugins')" :name="SETTINGS_TAB_NAMES[3]">
+          <el-card class="settings-card">
+            <template #header>
+              <span>{{ $t("settings.pluginDefaultsSectionTitle") }}</span>
+            </template>
+            <div v-loading="showLoading" element-loading-text="" style="min-height: 120px;">
+              <div v-if="!loading" class="settings-list">
+                <SettingRow
+                  :label="$t('settings.importRecommendedScheduleEnabled')"
+                  :description="$t('settings.importRecommendedScheduleEnabledDesc')"
+                >
+                  <SettingSwitchControl setting-key="importRecommendedScheduleEnabled" />
+                </SettingRow>
+                <PluginDefaultConfigsPanel />
+              </div>
+            </div>
+          </el-card>
+        </el-tab-pane>
+
       </StyledTabs>
     </div>
   </div>
@@ -222,6 +241,7 @@ import ClearUserDataSetting from "@/components/settings/items/ClearUserDataSetti
 import DebugGenerateImagesSetting from "@/components/settings/items/DebugGenerateImagesSetting.vue";
 import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import LanguageSetting from "@/components/settings/items/LanguageSetting.vue";
+import PluginDefaultConfigsPanel from "@/components/settings/PluginDefaultConfigsPanel.vue";
 import { IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_DEV, IS_MACOS } from "@kabegame/core/env";
 
 const { t } = useI18n();
@@ -270,7 +290,7 @@ const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay(30
 const settingsStore = useSettingsStore();
 
 // 持久化用户最后访问的设置 tab
-const SETTINGS_TAB_NAMES = ["app", "wallpaper", "download"] as const;
+const SETTINGS_TAB_NAMES = ["app", "wallpaper", "download", "plugins"] as const;
 const storedSettingsTab = useLocalStorage("kabegame-settings-last-tab", "app");
 const activeTab = computed({
   get: () =>
