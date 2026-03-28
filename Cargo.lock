@@ -2860,7 +2860,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame"
-version = "3.3.1"
+version = "3.4.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -2914,7 +2914,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame-cli"
-version = "3.3.1"
+version = "3.4.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -2931,7 +2931,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame-core"
-version = "3.3.1"
+version = "3.4.0"
 dependencies = [
  "arc-swap",
  "async-trait",
