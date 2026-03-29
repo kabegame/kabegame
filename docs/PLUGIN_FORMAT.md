@@ -16,7 +16,15 @@ plugin-name.kgpg
     - crawl.rhai             # 爬取脚本（Rhai 脚本格式，必需）
     - doc_root/              # 文档目录（可选）
         └── doc.md           # 插件文档，给用户查看。使用标准 Markdown 渲染（GFM），文档中的根目录为 doc_root，路径解析只允许在 doc_root 之下
+    - configs/               # 推荐配置
+    - templates/             # 插件提供模板
 ```
+
+### templates/description.ejs（图片详情 HTML）
+
+- 由 `ImageDetailContent.vue` 用 EJS 将 `metadata` 渲染为 HTML 后写入 iframe `srcdoc`。
+- 框架在模板内容**之前**自动注入脚本，提供 **`window.__bridge.fetch(url, options)`**（如 `headers`、`json: true` 解析 JSON）：通过 `postMessage` 由主窗口调用 Tauri 命令 **`proxy_fetch`** 发起 HTTP GET，绕过浏览器 CORS；插件模板内可直接调用，无需手写 postMessage。
+- 约定：`metadata` 由爬取脚本在 `download_image` 时传入（如 PixAI 存完整 `listArtworks` 的 `node`）。
 
 ### manifest.json 格式
 ```json

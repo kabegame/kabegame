@@ -629,6 +629,10 @@ pub struct DownloadRequest {
     /// 仅 browser_download 时有效：fetch 是否带 credentials（默认 true）
     pub with_credentials: bool,
     pub failed_image_id: Option<i64>,
+    /// 脚本/爬虫指定的展示名；为空则沿用文件名或 URL 推断。
+    pub custom_display_name: Option<String>,
+    /// 插件写入的任意 JSON，入库 `images.metadata`（前端用 EJS 模板渲染）。
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -742,6 +746,8 @@ impl DownloadQueue {
         download_start_time: u64,
         output_album_id: Option<String>,
         http_headers: HashMap<String, String>,
+        custom_display_name: Option<String>,
+        metadata: Option<serde_json::Value>,
     ) -> Result<(), String> {
         self.download_with_mode(
             url,
@@ -755,6 +761,8 @@ impl DownloadQueue {
             false,
             true,
             None,
+            custom_display_name,
+            metadata,
         )
         .await
     }
@@ -782,6 +790,8 @@ impl DownloadQueue {
             false,
             true,
             Some(failed_image_id),
+            None,
+            None,
         )
         .await
     }
@@ -809,6 +819,8 @@ impl DownloadQueue {
             true,
             with_credentials,
             None,
+            None,
+            None,
         )
         .await
     }
@@ -826,6 +838,8 @@ impl DownloadQueue {
         browser_download: bool,
         with_credentials: bool,
         failed_image_id: Option<i64>,
+        custom_display_name: Option<String>,
+        metadata: Option<serde_json::Value>,
     ) -> Result<(), String> {
         self.download(
             url,
@@ -839,6 +853,8 @@ impl DownloadQueue {
             browser_download,
             with_credentials,
             failed_image_id,
+            custom_display_name,
+            metadata,
         )
         .await
     }
@@ -888,6 +904,8 @@ impl DownloadQueue {
             false,
             true,
             None,
+            None,
+            None,
         )
         .await
     }
@@ -905,6 +923,8 @@ impl DownloadQueue {
         browser_download: bool,
         with_credentials: bool,
         failed_image_id: Option<i64>,
+        custom_display_name: Option<String>,
+        metadata: Option<serde_json::Value>,
     ) -> Result<(), String> {
         // 检查任务是否取消
         if self.is_task_canceled(&task_id).await {
@@ -923,6 +943,8 @@ impl DownloadQueue {
             browser_download,
             with_credentials,
             failed_image_id,
+            custom_display_name,
+            metadata,
         };
 
         loop {
@@ -1366,6 +1388,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                     false,
                                                                     true,
                                                                     None,
+                                                                    None,
+                                                                    None,
                                                                 )
                                                                 .await;
                                                         }
@@ -1632,6 +1656,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                     job.output_album_id.as_deref(),
                                     job.failed_image_id,
                                     &job.http_headers,
+                                    job.custom_display_name.as_deref(),
+                                    job.metadata.clone(),
                                 )
                                 .await;
                                 ensure_minimum_duration(download_start_time, 500).await;
@@ -1674,9 +1700,16 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                             Ok(hash) => {
                                                 let _hash_ms =
                                                     post_start.elapsed().as_millis() as u64;
-                                                let display_name = derive_display_name_from_url(
-                                                    url_clone.as_str(),
-                                                );
+                                                let display_name = job
+                                                    .custom_display_name
+                                                    .as_deref()
+                                                    .filter(|s| !s.trim().is_empty())
+                                                    .map(|s| s.to_string())
+                                                    .unwrap_or_else(|| {
+                                                        derive_display_name_from_url(
+                                                            url_clone.as_str(),
+                                                        )
+                                                    });
                                                 let inferred_mime =
                                                     crate::image_type::mime_type_from_path(
                                                         &path_for_post,
@@ -1708,6 +1741,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                             job.output_album_id.as_deref(),
                                                             job.failed_image_id,
                                                             &job.http_headers,
+                                                            job.custom_display_name.as_deref(),
+                                                            job.metadata.clone(),
                                                         )
                                                         .await;
                                                     }
@@ -1846,9 +1881,16 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                     );
                                                     clear_failed_image_after_success(job.failed_image_id);
                                                 } else {
-                                                    let display_name = derive_display_name_from_url(
-                                                        url_clone.as_str(),
-                                                    );
+                                                    let display_name = job
+                                                        .custom_display_name
+                                                        .as_deref()
+                                                        .filter(|s| !s.trim().is_empty())
+                                                        .map(|s| s.to_string())
+                                                        .unwrap_or_else(|| {
+                                                            derive_display_name_from_url(
+                                                                url_clone.as_str(),
+                                                            )
+                                                        });
                                                     let inferred_mime =
                                                         crate::image_type::mime_type_from_path(
                                                             &path_for_post,
@@ -1883,6 +1925,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                 job.output_album_id.as_deref(),
                                                                 job.failed_image_id,
                                                                 &job.http_headers,
+                                                                job.custom_display_name.as_deref(),
+                                                                job.metadata.clone(),
                                                             )
                                                             .await;
                                                         }
@@ -1958,6 +2002,8 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                         job.output_album_id.as_deref(),
                                         &job.http_headers,
                                         false,
+                                        job.custom_display_name.as_deref(),
+                                        job.metadata.clone(),
                                     )
                                     .await;
                                 }
@@ -2048,6 +2094,8 @@ async fn process_downloaded_content_image_to_storage(
     output_album_id: Option<&str>,
     failed_image_id: Option<i64>,
     http_headers: &HashMap<String, String>,
+    custom_display_name: Option<&str>,
+    metadata: Option<serde_json::Value>,
 ) -> Result<(), String> {
     let (width, height) = get_content_io_provider()
         .get_image_dimensions(content_uri)
@@ -2055,10 +2103,15 @@ async fn process_downloaded_content_image_to_storage(
         .map(|(w, h)| (Some(w), Some(h)))
         .unwrap_or((None, None));
 
-    let display_name = get_content_io_provider()
+    let mut display_name = get_content_io_provider()
         .get_display_name(content_uri)
         .await
         .unwrap_or_else(|_| "image".to_string());
+    if let Some(n) = custom_display_name {
+        if !n.trim().is_empty() {
+            display_name = n.to_string();
+        }
+    }
     let mime_type = inferred_mime_type
         .or_else(|| Some(mime_type_from_filename(&display_name)));
     let media_type = if mime_type
@@ -2079,7 +2132,7 @@ async fn process_downloaded_content_image_to_storage(
         task_id: Some(task_id.to_string()),
         surf_record_id: None,
         crawled_at: download_start_time,
-        metadata: None,
+        metadata,
         thumbnail_path: thumbnail_path_str.to_string(),
         favorite: false,
         hash: hash.to_string(),
@@ -2175,6 +2228,8 @@ pub async fn postprocess_downloaded_image(
     output_album_id: Option<&str>,
     http_headers: &HashMap<String, String>,
     native: bool,
+    custom_display_name: Option<&str>,
+    metadata: Option<serde_json::Value>,
 ) -> Result<bool, String> {
     use crate::storage::organize::OrganizeService;
     use std::sync::atomic::Ordering;
@@ -2276,6 +2331,8 @@ pub async fn postprocess_downloaded_image(
             Some(hash_ms),
             http_headers,
             native,
+            custom_display_name,
+            metadata.clone(),
         )
         .await?;
         ensure_minimum_duration(download_start_time, 500).await;
@@ -2447,6 +2504,8 @@ pub async fn postprocess_downloaded_image(
         None,
         http_headers,
         native,
+        custom_display_name,
+        metadata,
     )
     .await?;
     clear_failed_image_after_success(failed_image_id);
@@ -2502,6 +2561,8 @@ pub async fn process_downloaded_image_to_storage(
     postprocess_timing_hash_ms: Option<u64>,
     http_headers: &HashMap<String, String>,
     native: bool,
+    custom_display_name: Option<&str>,
+    metadata: Option<serde_json::Value>,
 ) -> Result<bool, String> {
     let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
     #[cfg(target_os = "android")]
@@ -2580,12 +2641,16 @@ pub async fn process_downloaded_image_to_storage(
             .unwrap_or_else(|| local_path_str.clone());
         (thumbnail_path, thumbnail_path_str, thumb_ms)
     };
-    // 从最终磁盘路径提取文件名（已经过 build_safe_filename + unique_path 处理）
-    let display_name = path
+    // 从最终磁盘路径提取文件名（已经过 build_safe_filename + unique_path 处理）；脚本可覆盖展示名。
+    let default_name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("image")
         .to_string();
+    let display_name = custom_display_name
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or(default_name);
     let mime_type = crate::image_type::mime_type_from_path(path)
         .or_else(|| Some(mime_type_from_filename(&display_name)));
     let image_info = ImageInfo {
@@ -2601,7 +2666,7 @@ pub async fn process_downloaded_image_to_storage(
         task_id: task_id.map(|v| v.to_string()),
         surf_record_id: surf_record_id.map(|v| v.to_string()),
         crawled_at: download_start_time,
-        metadata: None,
+        metadata,
         thumbnail_path: thumbnail_path_str,
         favorite: false,
         hash: hash.to_string(),
@@ -2856,6 +2921,8 @@ pub(crate) async fn copy_extracted_images_and_enqueue(
                         None,
                         false,
                         true,
+                        None,
+                        None,
                         None,
                     )
                     .await;

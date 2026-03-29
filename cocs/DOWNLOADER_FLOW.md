@@ -22,7 +22,7 @@
 
 | 层级 | 文件路径 | 作用 |
 |------|----------|------|
-| 下载队列与 worker | `src-tauri/core/src/crawler/downloader/mod.rs` | DownloadQueue、DownloadPool、download_worker_loop、wait_after_download_if_needed |
+| 下载队列与 worker | `src-tauri/core/src/crawler/downloader/mod.rs` | DownloadQueue、DownloadPool、download_worker_loop、wait_after_download_if_needed；`DownloadRequest` 可携带 `custom_display_name` / `metadata`（`Option<serde_json::Value>`；来源可为 Rhai `download_image(url, #{ name, metadata })` 或 WebView `ctx.downloadImage` 的同名 opts 字段），入库时写入 `images.display_name` / `images.metadata`（JSON） |
 | 失败重试调度 | `src-tauri/core/src/crawler/scheduler.rs` | `retry_failed_image`、`download_handles`、批量重试/取消 |
 | 设置持久化 | `src-tauri/core/src/settings.rs` | SettingKey::DownloadIntervalMs、get/set_download_interval_ms |
 | 命令层 | `src-tauri/app-main/src/commands/settings.rs` | get_download_interval_ms、set_download_interval_ms |

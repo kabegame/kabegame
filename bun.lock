@@ -76,7 +76,7 @@
     },
     "packages/core": {
       "name": "@kabegame/core",
-      "version": "3.3.1",
+      "version": "3.4.1",
       "dependencies": {
         "@kabegame/i18n": "workspace:*",
         "@panzoom/panzoom": "^4.6.1",
@@ -84,9 +84,13 @@
         "@vueuse/core": "^14.2.1",
         "dayjs": "^1.11.20",
         "dompurify": "^3.3.2",
+        "ejs": "^3.1.10",
         "marked": "^17.0.4",
         "photoswipe-vue": "workspace:*",
         "tauri-plugin-picker-api": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/ejs": "^3.1.5",
       },
       "peerDependencies": {
         "vue": "^3.4.0",
@@ -106,7 +110,7 @@
     },
     "packages/photoswipe-vue": {
       "name": "photoswipe-vue",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "devDependencies": {
         "@vitejs/plugin-vue": "^5.2.1",
         "@vue/test-utils": "^2.4.6",
@@ -126,7 +130,7 @@
     },
     "src-crawler-plugins": {
       "name": "crawler-plugins",
-      "version": "3.2.3",
+      "version": "3.3.1",
       "devDependencies": {
         "@types/node": "^22.0.0",
         "archiver": "^7.0.1",
@@ -486,6 +490,8 @@
     "@types/chai": ["@types/chai@5.2.3", "", { "dependencies": { "@types/deep-eql": "*", "assertion-error": "^2.0.1" } }, "sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA=="],
 
     "@types/deep-eql": ["@types/deep-eql@4.0.2", "", {}, "sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw=="],
+
+    "@types/ejs": ["@types/ejs@3.1.5", "", {}, "sha512-nv+GSx77ZtXiJzwKdsASqi+YQ5Z7vwHsTP0JY2SiQgjGckkBRKZnk8nIM+7oUZ1VCtuTz0+By4qVR7fqzp/Dfg=="],
 
     "@types/estree": ["@types/estree@1.0.8", "", {}, "sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w=="],
 

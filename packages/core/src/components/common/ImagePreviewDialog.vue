@@ -39,41 +39,59 @@
   <template v-else>
     <el-dialog v-model="previewVisible" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
       class="image-preview-dialog" :show-close="true" :lock-scroll="true" @close="closePreview">
-      <div v-if="previewVisible" ref="previewContainerRef" class="preview-container"
-        @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
-        @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePreviewWheel">
-        <div v-if="props.images.length > 1" class="preview-nav-zone left"
-          :class="{ visible: previewHoverSide === 'left' }" @click.stop="goPrev">
-          <button class="preview-nav-btn" type="button" :class="{ disabled: isAtFirst }" aria-label="上一张">
-            <el-icon>
-              <ArrowLeftBold />
-            </el-icon>
+      <div v-if="previewVisible" class="preview-desktop-body">
+        <div ref="previewContainerRef" class="preview-container"
+          @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
+          @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePreviewWheel">
+          <button type="button" class="preview-detail-toggle"
+            :class="{ visible: previewHoverSide === 'right' || detailDrawerOpen }"
+            :title="t('gallery.toggleDetailPanel')" :aria-expanded="detailDrawerOpen" aria-label="toggle detail panel"
+            @click.stop="toggleDetailDrawer">
+            <svg class="preview-detail-drawer-icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true">
+              <path fill="currentColor"
+                d="M176 752a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h672a16 16 0 0 0 16-16v-64a16 16 0 0 0-16-16H176zm240-192a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432a16 16 0 0 0 16-16V576a16 16 0 0 0-16-16H416zM299.264 395.392a16 16 0 0 0-22.592.064L171.264 501.376a16 16 0 0 0 .064 22.592l105.408 104.896a16 16 0 0 0 27.264-11.328V406.784a16 16 0 0 0-4.736-11.392zM416 368a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432A16 16 0 0 0 864 448V384a16 16 0 0 0-16-16H416zm-240-192A16 16 0 0 0 160 192v64c0 8.832 7.168 16 16 16h672A16 16 0 0 0 864 256V192a16 16 0 0 0-16-16H176z" />
+            </svg>
           </button>
+          <div v-if="props.images.length > 1" class="preview-nav-zone left"
+            :class="{ visible: previewHoverSide === 'left' }" @click.stop="goPrev">
+            <button class="preview-nav-btn" type="button" :class="{ disabled: isAtFirst }" aria-label="上一张">
+              <el-icon>
+                <ArrowLeftBold />
+              </el-icon>
+            </button>
+          </div>
+          <div v-if="props.images.length > 1" class="preview-nav-zone right"
+            :class="{ visible: previewHoverSide === 'right' }" @click.stop="goNext">
+            <button class="preview-nav-btn" type="button" :class="{ disabled: isAtLast }" aria-label="下一张">
+              <el-icon>
+                <ArrowRightBold />
+              </el-icon>
+            </button>
+          </div>
+          <div v-if="previewImageUrl && !isPreviewVideo" ref="panzoomWrapperRef" class="panzoom-wrapper">
+            <img ref="previewImageRef" :src="previewImageUrl" class="preview-image" alt="预览图片"
+              @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
+          </div>
+          <div v-else-if="previewImageUrl && isPreviewVideo" class="preview-video-wrapper">
+            <video ref="previewVideoRef" :src="previewImageUrl" class="preview-video" :loop="!IS_LINUX" :autoplay="!IS_LINUX" poster="" preload="auto"
+              playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
+              @dragstart.prevent />
+            <VideoControls :video="previewVideoRef" :show-play-pause="IS_LINUX" />
+          </div>
+          <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
+            <ImageNotFound />
+          </div>
+          <div v-if="previewImageLoading" class="preview-loading">
+            <div class="preview-loading-inner">正在加载原图…</div>
+          </div>
         </div>
-        <div v-if="props.images.length > 1" class="preview-nav-zone right"
-          :class="{ visible: previewHoverSide === 'right' }" @click.stop="goNext">
-          <button class="preview-nav-btn" type="button" :class="{ disabled: isAtLast }" aria-label="下一张">
-            <el-icon>
-              <ArrowRightBold />
-            </el-icon>
-          </button>
-        </div>
-        <div v-if="previewImageUrl && !isPreviewVideo" ref="panzoomWrapperRef" class="panzoom-wrapper">
-          <img ref="previewImageRef" :src="previewImageUrl" class="preview-image" alt="预览图片"
-            @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
-        </div>
-        <div v-else-if="previewImageUrl && isPreviewVideo" class="preview-video-wrapper">
-          <video ref="previewVideoRef" :src="previewImageUrl" class="preview-video" :loop="!IS_LINUX" :autoplay="!IS_LINUX" poster="" preload="auto"
-            playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
-            @dragstart.prevent />
-          <VideoControls :video="previewVideoRef" :show-play-pause="IS_LINUX" />
-        </div>
-        <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
-          <ImageNotFound />
-        </div>
-        <div v-if="previewImageLoading" class="preview-loading">
-          <div class="preview-loading-inner">正在加载原图…</div>
-        </div>
+        <aside class="preview-detail-drawer" :class="{ 'is-open': detailDrawerOpen }" @click.stop
+          @wheel.stop>
+          <div class="preview-detail-drawer-scroll">
+            <ImageDetailContent :image="previewImage" :plugins="plugins" />
+          </div>
+        </aside>
       </div>
     </el-dialog>
     <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（z-index 高于 el-dialog 以免被遮） -->
@@ -89,8 +107,11 @@ import type { Ref } from "vue";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
+import { useLocalStorage } from "@vueuse/core";
+import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageNotFound from "./ImageNotFound.vue";
+import ImageDetailContent from "./ImageDetailContent.vue";
 import VideoControls from "./VideoControls.vue";
 import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX, IS_LINUX } from "../../env";
 import ActionRenderer from "../ActionRenderer.vue";
@@ -102,13 +123,21 @@ import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 import { useModalBack } from "../../composables/useModalBack";
 import { fileToUrl, thumbnailToUrl } from "../../httpServer";
 
+const { t } = useI18n();
+
 const props = withDefaults(defineProps<{
   images: ImageInfo[];
   /** Actions for context menu / action sheet. */
   actions?: ActionItem<ImageInfo>[];
+  /** 用于预览内详情抽屉解析插件名（与 ImageDetailDialog 一致） */
+  plugins?: Array<{ id: string; name?: string }>;
 }>(), {
   actions: () => [],
+  plugins: () => [],
 });
+
+/** 桌面端预览内详情抽屉开关（持久化） */
+const detailDrawerOpen = useLocalStorage("kabegame-preview-detail-open", false);
 
 const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
@@ -154,12 +183,6 @@ const swipeDeleteActive = ref(false);
 const swipeDeleteReady = ref(false);
 let isFromVerticalDrag = false;
 let verticalDragResetTimer: ReturnType<typeof setTimeout> | null = null;
-const previewScale = ref(1);
-const previewTranslateX = ref(0);
-const previewTranslateY = ref(0);
-const previewBaseSize = ref({ width: 0, height: 0 });
-const previewContainerSize = ref({ width: 0, height: 0 });
-const previewAvailableSize = ref({ width: 0, height: 0 });
 // 缓存 container 的 rect，避免 mousemove/wheel 高频触发时反复 getBoundingClientRect() 导致强制布局与掉帧
 const previewContainerRect = ref({ left: 0, top: 0, width: 0, height: 0 });
 // previewDragging、previewDragStart、previewDragStartTranslate 已删除，由 Panzoom 替代（仅桌面端）
@@ -175,8 +198,6 @@ let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Android: 使用 useModalBack 管理预览的返回键行为（不使用 close-on-back prop）
 useModalBack(previewVisible);
-
-const clamp = (val: number, min: number, max: number) => Math.min(max, Math.max(min, val));
 
 const normalizeDesktopPath = (path: string | undefined) =>
   (path || "").trimStart().replace(/^\\\\\?\\/, "").trim();
@@ -245,31 +266,18 @@ const markPreviewInteracting = () => {
   }
 ));
 
-const clampTranslate = (nextScale: number, nextX: number, nextY: number) => {
-  const available = previewAvailableSize.value;
-  const base = previewBaseSize.value;
-  if (available.width > 0 && available.height > 0 && base.width > 0 && base.height > 0) {
-    const scaledWidth = base.width * nextScale;
-    const scaledHeight = base.height * nextScale;
-    if (scaledWidth <= available.width && scaledHeight <= available.height) {
-      return { x: 0, y: 0 };
-    }
-    const maxOffsetX = Math.max(0, (scaledWidth - available.width) / 2);
-    const maxOffsetY = Math.max(0, (scaledHeight - available.height) / 2);
-    return {
-      x: clamp(nextX, -maxOffsetX, maxOffsetX),
-      y: clamp(nextY, -maxOffsetY, maxOffsetY),
-    };
-  }
-  return { x: nextX, y: nextY };
-};
-
-const setPreviewTransform = (nextScale: number, nextX: number, nextY: number) => {
-  const clampedScale = clamp(nextScale, 1, 10);
-  const { x, y } = clampTranslate(clampedScale, nextX, nextY);
-  previewScale.value = clampedScale;
-  previewTranslateX.value = x;
-  previewTranslateY.value = y;
+/** 切换详情抽屉并重置 Panzoom，使图片按新容器尺寸适配（含抽屉动画结束后再对齐一次） */
+const toggleDetailDrawer = () => {
+  detailDrawerOpen.value = !detailDrawerOpen.value;
+  panzoomReset();
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      panzoomReset();
+    });
+    window.setTimeout(() => {
+      panzoomReset();
+    }, 240);
+  });
 };
 
 const measureContainerSize = () => {
@@ -281,31 +289,14 @@ const measureContainerSize = () => {
       width: containerRect.width,
       height: containerRect.height,
     };
-    previewContainerSize.value = { width: containerRect.width, height: containerRect.height };
-    previewAvailableSize.value = {
-      width: containerRect.width,
-      height: containerRect.height,
-    };
   }
 };
 
-const measureBaseSize = () => {
-  const imageRect = previewImageRef.value?.getBoundingClientRect();
-  if (imageRect && previewScale.value === 1) {
-    previewBaseSize.value = { width: imageRect.width, height: imageRect.height };
-  }
-};
-
-const measureSizesAfterRender = async () => {
+const measureContainerAfterRender = async () => {
   await nextTick();
   await new Promise((resolve) => requestAnimationFrame(resolve));
   measureContainerSize();
-  measureBaseSize();
 };
-
-// resetPreviewTransform 已删除，由 panzoomReset()（usePanzoomPreview）替代（仅桌面端）
-
-// previewImageStyle 已删除，由 Panzoom 自动管理 transform（仅桌面端）
 
 const previewDialogTitle = computed(() => {
   const img = previewImage.value;
@@ -530,15 +521,7 @@ const handlePreviewWheel = (event: WheelEvent) => {
 
 
 const handlePreviewImageLoad = async () => {
-  await measureSizesAfterRender();
-  if (previewBaseSize.value.width > 0 && previewBaseSize.value.height > 0) {
-    const container = previewAvailableSize.value;
-    const base = previewBaseSize.value;
-    if (base.width <= container.width && base.height <= container.height) {
-      setPreviewTransform(1, 0, 0);
-    }
-    prevAvailableSize.value = { ...previewAvailableSize.value };
-  }
+  await measureContainerAfterRender();
   previewImageLoading.value = false;
 };
 
@@ -695,14 +678,9 @@ watch(
 watch(
   () => previewVisible.value,
   async (visible) => {
-    if (visible) {
-      if (!IS_ANDROID) {
-        await nextTick();
-        await measureSizesAfterRender();
-        prevAvailableSize.value = { ...previewAvailableSize.value };
-      }
-    } else {
-      prevAvailableSize.value = { width: 0, height: 0 };
+    if (visible && !IS_ANDROID) {
+      await nextTick();
+      await measureContainerAfterRender();
     }
   }
 );
@@ -712,14 +690,13 @@ watch(
   (url) => {
     if (url && !IS_ANDROID) {
       if (isPreviewVideo.value) return;
-      setPreviewTransform(1, 0, 0);
+      panzoomReset();
     }
   }
 );
 
-// 桌面端：当 urlCache 中原图 URL 就绪时自动更新 previewImageUrl
+// 桌面端：预览区尺寸变化（抽屉、窗口缩放）时更新缓存 rect 并重置 Panzoom，使图片与容器对齐
 let resizeObserver: ResizeObserver | null = null;
-const prevAvailableSize = ref({ width: 0, height: 0 });
 
 const setupResizeObserver = () => {
   if (resizeObserver) {
@@ -729,60 +706,8 @@ const setupResizeObserver = () => {
   if (!container) return;
   resizeObserver = new ResizeObserver(() => {
     if (!previewVisible.value) return;
-    const prevAvailable = { ...prevAvailableSize.value };
     measureContainerSize();
-    prevAvailableSize.value = { ...previewAvailableSize.value };
-    if (previewScale.value === 1) {
-      measureBaseSize();
-      if (previewBaseSize.value.width > 0 && previewBaseSize.value.height > 0) {
-        const containerSize = previewAvailableSize.value;
-        const base = previewBaseSize.value;
-        if (base.width <= containerSize.width && base.height <= containerSize.height) {
-          setPreviewTransform(1, 0, 0);
-        }
-      }
-    } else {
-      const currentScale = previewScale.value;
-      const currentX = previewTranslateX.value;
-      const currentY = previewTranslateY.value;
-      const available = previewAvailableSize.value;
-      const base = previewBaseSize.value;
-      if (available.width > 0 && available.height > 0 && base.width > 0 && base.height > 0) {
-        const scaledWidth = base.width * currentScale;
-        const scaledHeight = base.height * currentScale;
-        if (scaledWidth <= available.width && scaledHeight <= available.height) {
-          setPreviewTransform(1, 0, 0);
-          nextTick(() => {
-            measureBaseSize();
-          });
-        } else {
-          if (prevAvailable.width <= 0 || prevAvailable.height <= 0) {
-            setPreviewTransform(currentScale, currentX, currentY);
-          } else {
-            const prevMaxOffsetX = Math.max(0, (scaledWidth - prevAvailable.width) / 2);
-            const prevMaxOffsetY = Math.max(0, (scaledHeight - prevAvailable.height) / 2);
-            const newMaxOffsetX = Math.max(0, (scaledWidth - available.width) / 2);
-            const newMaxOffsetY = Math.max(0, (scaledHeight - available.height) / 2);
-            let relativeX = 0;
-            let relativeY = 0;
-            if (prevMaxOffsetX > 0) {
-              relativeX = currentX / prevMaxOffsetX;
-            }
-            if (prevMaxOffsetY > 0) {
-              relativeY = currentY / prevMaxOffsetY;
-            }
-            const newX = newMaxOffsetX > 0 ? relativeX * newMaxOffsetX : 0;
-            const newY = newMaxOffsetY > 0 ? relativeY * newMaxOffsetY : 0;
-            setPreviewTransform(currentScale, newX, newY);
-          }
-        }
-      } else {
-        setPreviewTransform(1, 0, 0);
-        nextTick(() => {
-          measureBaseSize();
-        });
-      }
-    }
+    panzoomReset();
   });
   resizeObserver.observe(container);
 };
@@ -993,14 +918,28 @@ defineExpose({
     flex: 1 1 auto !important;
     padding: 0 !important;
     display: flex !important;
-    justify-content: center !important;
-    align-items: center !important;
+    flex-direction: column !important;
+    justify-content: stretch !important;
+    align-items: stretch !important;
     overflow: hidden !important;
     min-height: 0 !important;
     height: calc(90vh - 50px) !important;
   }
 
+  .preview-desktop-body {
+    display: flex;
+    flex-direction: row;
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    height: 100%;
+    align-items: stretch;
+  }
+
   .preview-container {
+    flex: 1 1 auto;
+    min-width: 0;
     width: 100%;
     height: 100%;
     display: flex;
@@ -1009,6 +948,81 @@ defineExpose({
     overflow: hidden;
     box-sizing: border-box;
     position: relative;
+  }
+
+  .preview-detail-toggle {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 4;
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    border: none;
+    background: rgba(0, 0, 0, 0.38);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 0.12s ease,
+      background 0.15s ease,
+      transform 0.12s ease;
+
+    &.visible {
+      opacity: 0.5;
+      pointer-events: auto;
+    }
+
+    &.visible:hover {
+      opacity: 1;
+      background: rgba(0, 0, 0, 0.52);
+      transform: scale(1.04);
+    }
+
+    .preview-detail-drawer-icon {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      display: block;
+    }
+  }
+
+  .preview-detail-drawer {
+    flex: 0 0 0;
+    width: 0;
+    min-width: 0;
+    max-width: 320px;
+    overflow: hidden;
+    box-sizing: border-box;
+    border-left: 1px solid transparent;
+    background: var(--anime-bg-card, rgba(255, 255, 255, 0.96));
+    opacity: 0;
+    transition:
+      flex-basis 0.22s ease,
+      width 0.22s ease,
+      min-width 0.22s ease,
+      opacity 0.18s ease,
+      border-color 0.18s ease;
+
+    &.is-open {
+      flex: 0 0 320px;
+      min-width: 30%;
+      opacity: 1;
+      border-left-color: var(--anime-border, rgba(0, 0, 0, 0.12));
+    }
+  }
+
+  .preview-detail-drawer-scroll {
+    height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 12px 14px 16px;
+    box-sizing: border-box;
   }
 
   .preview-loading {
@@ -1062,8 +1076,8 @@ defineExpose({
   }
 
   .preview-image {
-    max-width: calc(90vw - 40px) !important;
-    max-height: calc(90vh - 70px) !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
     width: auto;
     height: auto;
     object-fit: contain;

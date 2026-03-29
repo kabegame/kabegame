@@ -416,9 +416,9 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: Some(surf_record_id.to_string()),
                         crawled_at: row.get(5)?,
-                        metadata: row
-                            .get::<_, Option<String>>(6)?
-                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        metadata: crate::storage::images::parse_image_metadata_json(
+                            row.get::<_, Option<String>>(6)?,
+                        ),
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
                         mime_type: row.get::<_, Option<String>>(9)?,
@@ -480,9 +480,9 @@ impl Storage {
                     task_id: row.get(4)?,
                     surf_record_id: Some(surf_record_id.to_string()),
                     crawled_at: row.get(5)?,
-                    metadata: row
-                        .get::<_, Option<String>>(6)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
+                    metadata: crate::storage::images::parse_image_metadata_json(
+                        row.get::<_, Option<String>>(6)?,
+                    ),
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
                     mime_type: row.get::<_, Option<String>>(9)?,

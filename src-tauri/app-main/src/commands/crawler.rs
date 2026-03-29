@@ -327,12 +327,15 @@ pub async fn crawl_add_progress(percentage: f64) -> Result<(), String> {
     Ok(())
 }
 
+/// WebView `ctx.downloadImage(url, opts)`：`opts.name` / `opts.metadata` 可单独或同时传入（与 Rhai `download_image(url, #{ ... })` 语义一致）。
 #[tauri::command]
 pub async fn crawl_download_image(
     app: AppHandle,
     url: String,
     cookie: Option<bool>,
     headers: Option<HashMap<String, String>>,
+    name: Option<String>,
+    metadata: Option<Value>,
 ) -> Result<(), String> {
     let state = crawler_window_state();
     let Some(ctx) = state.get_context().await else {
@@ -398,6 +401,8 @@ pub async fn crawl_download_image(
         download_start_time,
         ctx.output_album_id.clone(),
         merged_headers,
+        name,
+        metadata,
     )
     .await
 }

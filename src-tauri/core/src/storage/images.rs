@@ -1,6 +1,7 @@
 use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,7 +22,8 @@ pub struct ImageInfo {
     #[serde(default)]
     pub surf_record_id: Option<String>,
     pub crawled_at: u64,
-    pub metadata: Option<HashMap<String, String>>,
+    /// 插件写入的任意 JSON（爬虫 `download_image` 的 `metadata`），用于 EJS 模板渲染详情。
+    pub metadata: Option<Value>,
     #[serde(rename = "thumbnailPath")]
     #[serde(default)]
     pub thumbnail_path: String,
@@ -95,6 +97,18 @@ fn normalize_media_type(media_type: Option<String>) -> Option<String> {
     }
 }
 
+/// 从 DB `images.metadata` 文本列解析为 JSON；空串或无效则 `None`。
+pub(crate) fn parse_image_metadata_json(s: Option<String>) -> Option<Value> {
+    s.and_then(|s| {
+        let t = s.trim();
+        if t.is_empty() {
+            None
+        } else {
+            serde_json::from_str(t).ok()
+        }
+    })
+}
+
 pub(crate) fn row_optional_u64_ts(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<u64>> {
     let v: Option<i64> = row.get(idx)?;
     Ok(v.filter(|&t| t >= 0).map(|t| t as u64))
@@ -137,9 +151,7 @@ impl Storage {
                     task_id: row.get(4)?,
                     surf_record_id: row.get(5)?,
                     crawled_at: row.get(6)?,
-                    metadata: row
-                        .get::<_, Option<String>>(7)?
-                        .and_then(|s| serde_json::from_str(&s).ok()),
+                    metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
                     thumbnail_path: row.get(8)?,
                     hash: row.get(9)?,
                     mime_type: row.get::<_, Option<String>>(10)?,
@@ -215,9 +227,7 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: row
-                            .get::<_, Option<String>>(7)?
-                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         mime_type: row.get::<_, Option<String>>(10)?,
@@ -276,8 +286,7 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: row.get::<_, Option<String>>(7)?
-                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         mime_type: row.get::<_, Option<String>>(10)?,
@@ -340,8 +349,7 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: row.get::<_, Option<String>>(7)?
-                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         mime_type: row.get::<_, Option<String>>(10)?,
@@ -400,8 +408,7 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: row.get::<_, Option<String>>(7)?
-                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         mime_type: row.get::<_, Option<String>>(10)?,
@@ -463,8 +470,7 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: row.get::<_, Option<String>>(7)?
-                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         mime_type: row.get::<_, Option<String>>(10)?,
@@ -544,9 +550,7 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: row
-                            .get::<_, Option<String>>(7)?
-                            .and_then(|s| serde_json::from_str(&s).ok()),
+                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
                         mime_type: row.get::<_, Option<String>>(10)?,
@@ -576,8 +580,12 @@ impl Storage {
     pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let metadata_json = serde_json::to_string(&image.metadata)
-            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+        let metadata_json: Option<String> = match &image.metadata {
+            None => None,
+            Some(v) => Some(
+                serde_json::to_string(v).map_err(|e| format!("Failed to serialize metadata: {}", e))?,
+            ),
+        };
 
         let thumbnail_path = if image.thumbnail_path.trim().is_empty() {
             image.local_path.clone()

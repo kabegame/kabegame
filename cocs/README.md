@@ -39,6 +39,14 @@
   - 主题：i18n 迁移约束、命名空间规范与落地状态。
   - 适用场景：新增国际化 key、迁移旧文案、核对多语言覆盖。
 
+- `TAURI_ACL_PERMISSION_SYSTEM.md`
+  - 主题：Tauri v2 ACL（capability/permission）在 app-main 的运行机制与故障复盘。
+  - 适用场景：新增窗口 IPC 权限、调整 capability/permission、排查“命令不可用/全部被拒绝”问题。
+
+- `PLUGIN_DESCRIPTION_TEMPLATE_BRIDGE.md`
+  - 主题：插件详情 **EJS 全链路**（`metadata` 写入 → `get_plugin_template` 加载 → `ejs.render` → iframe `srcdoc` 注入 `__bridge` → `postMessage` + `proxy_fetch`）。
+  - 适用场景：编写/调试 `description.ejs`、理解模板从 ZIP 到展示的流程、排查详情区空白或跨域请求失败。
+
 ## 维护规则
 
 - 新增流程文档后，必须在本索引补充条目（主题 + 适用场景）。

@@ -311,6 +311,17 @@ pub async fn get_plugin_icon(plugin_id: String) -> Result<Option<Vec<u8>>, Strin
         .await
 }
 
+/// 读取已安装插件包内 `templates/{templateName}.ejs`（用于图片详情等视图）。
+#[tauri::command]
+pub async fn get_plugin_template(
+    plugin_id: String,
+    template_name: String,
+) -> Result<Option<String>, String> {
+    PluginManager::global()
+        .get_plugin_template_by_id(&plugin_id, &template_name)
+        .await
+}
+
 #[tauri::command]
 pub async fn get_remote_plugin_icon(
     download_url: String,

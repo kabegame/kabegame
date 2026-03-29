@@ -6,6 +6,7 @@ pub mod filesystem;
 pub mod image;
 pub mod misc;
 pub mod plugin;
+pub mod proxy;
 pub mod settings;
 #[cfg(not(target_os = "android"))]
 pub mod surf;
@@ -22,6 +23,7 @@ pub use filesystem::*;
 pub use image::*;
 pub use misc::*;
 pub use plugin::*;
+pub use proxy::*;
 pub use settings::*;
 #[cfg(not(target_os = "android"))]
 pub use surf::*;

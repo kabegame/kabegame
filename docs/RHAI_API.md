@@ -609,19 +609,39 @@ del_header("Authorization");
 
 ## 图片处理
 
-### `download_image(url)`
+### `download_image(url)` / `download_image(url, opts)`
 
-下载图片或文件并添加到下载队列（异步下载）。
+下载图片或文件并添加到下载队列（同步等待入队，后台 worker 异步落盘）。
 
 **参数：**
 - `url` (string): 资源 URL（图片或视频等）
+- `opts` (map, 可选): 选项对象，键均可独立出现：
+  - `name` (string): 图库中的**展示名称**。省略、不存在或空字符串时，使用保存后的**文件名**（与仅传 `url` 时一致）。
+  - `metadata` (map / 任意可序列化结构): 可选，会作为 JSON 写入 `images.metadata`。详情页由插件包内 `templates/description.ejs` 与 `ejs.render(template, { metadata })` 渲染（iframe `srcdoc`）。省略或空 map 表示无扩展元数据。
+
+在 Rhai 中 `opts` 使用 map 字面量，例如 `#{ name: "…", metadata: #{ source: "…", score: 12 } }`。
 
 **返回值：**
-- `bool`: 成功加入队列返回 `true`
-- `String`: 失败时返回错误信息
+- `()`: 成功入队
+- 失败时返回错误信息字符串（可用 `?` 传播）
 
 **示例：**
 ```rhai
+// 仅 URL（展示名为下载后的文件名）
+download_image("https://example.com/a.jpg");
+
+// 只指定展示名称（帖子标题等）
+download_image("https://example.com/a.jpg", #{ name: "角色名 - 场景标题" });
+
+// 只指定 metadata（无自定义展示名时仍用文件名）
+download_image("https://example.com/a.jpg", #{ metadata: #{ note: "剧情节选", from: "某帖子" } });
+
+// 名称 + metadata
+download_image("https://example.com/a.jpg", #{
+    name: "角色名 - 场景标题",
+    metadata: #{ note: "剧情节选" }
+});
+
 // 获取所有图片 URL
 let image_urls = get_attr("img", "src");
 
@@ -674,7 +694,7 @@ download_image("https://example.com/video.mp4");
 | 方法 | 说明 |
 |------|------|
 | `ctx.addProgress(percentage)` | 累加任务进度（0–99.9），并上报前端。 |
-| `ctx.downloadImage(url, opts?)` | 将 URL 加入下载队列。`opts` 可选：`{ cookie: true }` 表示使用浏览器 Cookie（经代理/门控由 Rust 处理）；`{ headers: { "Key": "Value" } }` 可附加请求头。支持图片与视频，行为与 Rhai 的 `download_image` 一致。 |
+| `ctx.downloadImage(url, opts?)` | 将 URL 加入下载队列。`opts` 为可选 plain object：`cookie`、`headers`；`name` / `metadata` 可单独或同时传入（与 Rhai `download_image(url, #{ … })` 一致）。支持图片与视频。 |
 
 ### 日志与生命周期
 
@@ -831,5 +851,5 @@ if type_of(result) == "string" {
 
 ---
 
-最后更新：2026年3月25日
+最后更新：2026年3月29日
 

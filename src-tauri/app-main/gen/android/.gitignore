@@ -18,4 +18,4 @@ keystore.properties
 
 /.tauri
 /tauri.settings.gradle
-/kabegame.jks
+/app/kabegame.jks

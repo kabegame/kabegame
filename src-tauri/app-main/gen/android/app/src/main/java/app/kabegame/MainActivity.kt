@@ -43,7 +43,6 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
       val root = ViewCompat.getRootWindowInsets(v)
       val i = insets ?: lastSystemInsets ?: root?.getInsets(WindowInsetsCompat.Type.systemBars())
       if (i == null) {
-          android.util.Log.w("Kabegame", "[SafeArea] injectSafeAreaInsets early return: insets=null, last=$lastSystemInsets, rootInsets=${root != null}")
           return
       }
       lastSystemInsets = i
@@ -52,7 +51,6 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
       val bottom = i.bottom / density
       val left = i.left / density
       val right = i.right / density
-      android.util.Log.i("Kabegame", "[SafeArea] inject dp: top=$top bottom=$bottom left=$left right=$right (px: top=${i.top} bottom=${i.bottom})")
       val js = """
           (function(){var d=document.documentElement;if(d){d.style.setProperty('--sat','${top}px');d.style.setProperty('--sab','${bottom}px');d.style.setProperty('--sal','${left}px');d.style.setProperty('--sar','${right}px');}})();
       """.trimIndent()
@@ -143,20 +141,15 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
       }
 
       // 注入系统安全区到 WebView CSS 变量，供 env(safe-area-inset-*) 在 Android 上使用
-      // #region agent log
       ViewCompat.setOnApplyWindowInsetsListener(webView) { v, windowInsets ->
           val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
-          android.util.Log.i("Kabegame", "[SafeArea] OnApplyWindowInsetsListener called: top=${insets.top} bottom=${insets.bottom} left=${insets.left} right=${insets.right}")
           injectSafeAreaInsets(webView, v, insets)
           windowInsets
       }
       ViewCompat.requestApplyInsets(webView)
-      android.util.Log.i("Kabegame", "[SafeArea] requestApplyInsets done, scheduling delayed inject 500ms")
       webView.postDelayed({
-          android.util.Log.i("Kabegame", "[SafeArea] delayed inject running, lastSystemInsets=$lastSystemInsets")
           injectSafeAreaInsets(webView, webView)
       }, 500)
-      // #endregion agent log
   }
 
   /**
@@ -174,11 +167,9 @@ class MainActivity : TauriActivity(), PickerLauncherHost {
               val wrappedClient = ContentUriStreamClient(applicationContext, originalClient) { v, _ ->
                   v?.let {
                       this@MainActivity.injectSafeAreaInsetsForPageFinished(it)
-                      android.util.Log.i("Kabegame", "[SafeArea] onPageFinished inject")
                   }
               }
               webView.webViewClient = wrappedClient
-              android.util.Log.d("Kabegame", "ContentUriStreamClient wrapper installed")
           } catch (e: Exception) {
               android.util.Log.e("Kabegame", "Failed to wrap WebViewClient for content:// streaming", e)
           }

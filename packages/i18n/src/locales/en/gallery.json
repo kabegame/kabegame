@@ -1,5 +1,8 @@
 {
   "imageDetailTitle": "Image Details",
+  "toggleDetailPanel": "Details panel",
+  "imageDetailDisplayName": "Name:",
+  "imageDetailDescription": "Description:",
   "imageDetailSource": "Source: ",
   "imageDetailUrl": "URL: ",
   "imageDetailLocalPath": "Local path: ",
