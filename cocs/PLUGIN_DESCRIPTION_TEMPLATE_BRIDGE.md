@@ -68,7 +68,8 @@ flowchart TD
 1. **显示条件**：`image.pluginId` 存在，且 `metadata` 经 `isRenderableMetadata` 判断非空；且能取到非空模板字符串。
 2. **渲染**：
    - `body = ejs.render(tpl, { metadata: img.metadata }, { rmWhitespace: false })`
-   - `descriptionSrcdoc = '<script>' + DESCRIPTION_BRIDGE_INJECT_SCRIPT + '</script>' + body`
+   - **CSP（生产 / WKWebView）**：Tauri 会为父文档注入 `script-src` 哈希，子文档 `about:srcdoc` 继承后内联脚本会被拒。应用层使用**固定 nonce**（常量 `kabegame-ejs-bridge`，与 `tauri.conf.json` 中 `script-src` 的 `'nonce-kabegame-ejs-bridge'` 一致），为 bridge 与 EJS 产出中所有 `<script>` 标签写入 `nonce="kabegame-ejs-bridge"`。
+   - `descriptionSrcdoc = theme + '<script nonce="…">' + DESCRIPTION_BRIDGE_INJECT_SCRIPT + '</script>' + body`（`body` 内 `<script>` 同样注入 nonce）
    - 注入脚本定义 **`window.__bridge.fetch`**、**`getLocale`**、**`openUrl`**，并全局监听 iframe 内 `<a>` 点击（见下节）。
 3. **展示**：`iframe :srcdoc="descriptionSrcdoc"`，`sandbox` 含 `allow-scripts`、`allow-same-origin` 等。
 4. **不经 DOMPurify**：信任已安装插件包内容；恶意模板风险见文末「安全说明」。

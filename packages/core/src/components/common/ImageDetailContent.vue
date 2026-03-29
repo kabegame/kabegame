@@ -226,15 +226,18 @@ function buildDescriptionIframeThemeStyles(): string {
   return `<style>:root{${rules}}html,body{margin:0;padding:8px;background:var(--anime-bg-card);color:var(--anime-text-primary);}body{box-sizing:border-box;}</style>`;
 }
 
+const EJS_BRIDGE_NONCE = "kabegame-ejs-bridge";
+
 const descriptionSrcdoc = computed(() => {
   const img = props.image;
   if (!img?.pluginId || !isRenderableMetadata(img.metadata)) return "";
   const tpl = pluginDescriptionTemplate(img.pluginId);
   if (!tpl?.trim()) return "";
   try {
-    const body = ejs.render(tpl, { metadata: img.metadata }, { rmWhitespace: false });
+    let body = ejs.render(tpl, { metadata: img.metadata }, { rmWhitespace: false });
+    body = body.replace(/<script(?![^>]*\bnonce[=\s])/gi, `<script nonce="${EJS_BRIDGE_NONCE}"`);
     const theme = buildDescriptionIframeThemeStyles();
-    return `${theme}<script>${DESCRIPTION_BRIDGE_INJECT_SCRIPT}<\/script>${body}`;
+    return `${theme}<script nonce="${EJS_BRIDGE_NONCE}">${DESCRIPTION_BRIDGE_INJECT_SCRIPT}<\/script>${body}`;
   } catch (e) {
     console.error("image detail EJS render failed", e);
     return "";
