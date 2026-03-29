@@ -155,5 +155,8 @@
   "taskLogPostprocessFailed": "Image post-processing failed: {detail}",
   "taskLogEnqueueFailed": "Enqueue failed {url}: {detail}",
   "taskLogLocalImportStreaming": "local-import: streaming over {count} path(s)...",
-  "taskLogLocalImportEnqueuedSummary": "local-import: enqueued {downloads} download(s), {archives} archive(s)"
+  "taskLogLocalImportEnqueuedSummary": "local-import: enqueued {downloads} download(s), {archives} archive(s)",
+  "taskLogDedupByUrl": "URL deduplication: skipped download. {currentUrl} matches stored image id={existingId}; stored URL: {existingUrl}; path: {existingPath}",
+  "taskLogDedupByHash": "Hash deduplication: {currentUrl} matches existing image id={existingId}; existing URL: {existingUrl}; local path: {existingPath}",
+  "taskLogDedupSurfDuplicate": "Surf: duplicate hash filtered vs image id={existingId}. Current: {currentUrl}; existing URL: {existingUrl}; local path: {existingPath}"
 }

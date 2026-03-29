@@ -1083,6 +1083,19 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
             if let Some(ref existing) = existing_opt {
                 let existing_path = PathBuf::from(&existing.local_path);
                 if existing_path.exists() {
+                    emit_task_log(
+                        &task_id_clone,
+                        "warn",
+                        task_log_i18n(
+                            "taskLogDedupByUrl",
+                            json!({
+                                "currentUrl": url_clone.as_str(),
+                                "existingId": &existing.id,
+                                "existingUrl": existing.url.as_deref().unwrap_or(""),
+                                "existingPath": &existing.local_path,
+                            }),
+                        ),
+                    );
                     {
                         let mut tasks = active_tasks.lock().await;
                         if let Some(t) = tasks.iter_mut().find(|t| {
@@ -1759,6 +1772,19 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                     .ok()
                                                     .flatten();
                                                 if let Some(ref existing) = existing_by_hash {
+                                                    emit_task_log(
+                                                        &task_id_clone,
+                                                        "warn",
+                                                        task_log_i18n(
+                                                            "taskLogDedupByHash",
+                                                            json!({
+                                                                "currentUrl": url_clone.as_str(),
+                                                                "existingId": &existing.id,
+                                                                "existingUrl": existing.url.as_deref().unwrap_or(""),
+                                                                "existingPath": &existing.local_path,
+                                                            }),
+                                                        ),
+                                                    );
                                                     let _ = tokio::fs::remove_file(&path_for_post)
                                                         .await;
                                                     if let Some(ref album_id) = job.output_album_id
@@ -2289,6 +2315,21 @@ pub async fn postprocess_downloaded_image(
 
     let existing_by_hash = Storage::global().find_image_by_hash(&hash).ok().flatten();
     if let Some(ref existing) = existing_by_hash {
+        if let Some(tid) = task_id {
+            emit_task_log(
+                tid,
+                "warn",
+                task_log_i18n(
+                    "taskLogDedupByHash",
+                    json!({
+                        "currentUrl": url,
+                        "existingId": &existing.id,
+                        "existingUrl": existing.url.as_deref().unwrap_or(""),
+                        "existingPath": &existing.local_path,
+                    }),
+                ),
+            );
+        }
         let local_path_str = path
             .canonicalize()
             .unwrap_or_else(|_| path.to_path_buf())
@@ -2335,6 +2376,19 @@ pub async fn postprocess_downloaded_image(
                 }),
             );
         } else if let Some(surf_record_id) = surf_record_id {
+            emit_task_log(
+                surf_record_id,
+                "warn",
+                task_log_i18n(
+                    "taskLogDedupSurfDuplicate",
+                    json!({
+                        "currentUrl": url,
+                        "existingId": &existing.id,
+                        "existingUrl": existing.url.as_deref().unwrap_or(""),
+                        "existingPath": &existing.local_path,
+                    }),
+                ),
+            );
             GlobalEmitter::global().emit(
                 "images-change",
                 serde_json::json!({
@@ -2354,6 +2408,17 @@ pub async fn postprocess_downloaded_image(
             );
             ensure_minimum_duration(download_start_time, 500).await;
             return Ok(false);
+        }
+        if let Some(task_id) = task_id {
+            if let Ok(new_count) = Storage::global().increment_task_dedup_count(task_id) {
+                GlobalEmitter::global().emit_task_image_counts(
+                    task_id,
+                    None,
+                    None,
+                    None,
+                    Some(new_count),
+                );
+            }
         }
         GlobalEmitter::global().emit_download_state_with_native(
             event_task_id,

@@ -155,5 +155,8 @@
   "taskLogPostprocessFailed": "画像後処理失敗: {detail}",
   "taskLogEnqueueFailed": "キュー投入失敗 {url}: {detail}",
   "taskLogLocalImportStreaming": "local-import: {count} 個のパスを走査中…",
-  "taskLogLocalImportEnqueuedSummary": "local-import: ダウンロード {downloads} 件、アーカイブ {archives} 件をキューに追加"
+  "taskLogLocalImportEnqueuedSummary": "local-import: ダウンロード {downloads} 件、アーカイブ {archives} 件をキューに追加",
+  "taskLogDedupByUrl": "URL 重複排除：ダウンロードをスキップ。{currentUrl} は id={existingId} の既存と一致；保存 URL：{existingUrl}；パス：{existingPath}",
+  "taskLogDedupByHash": "ハッシュ重複排除：{currentUrl} は id={existingId} の画像と同一内容；既存 URL：{existingUrl}；ローカルパス：{existingPath}",
+  "taskLogDedupSurfDuplicate": "サーフ：ハッシュ重複のため id={existingId} と照合して除外。現在 {currentUrl}；既存 URL：{existingUrl}；ローカルパス：{existingPath}"
 }

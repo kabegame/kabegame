@@ -193,6 +193,7 @@
   "quickDrawerTitleAlbums": "画册列表设置",
   "quickDrawerTitleFailedImages": "失效图片 · 下载设置",
   "quickDrawerTitlePluginBrowser": "源管理设置",
+  "quickDrawerTitleAutoConfigs": "运行配置 · 快捷设置",
   "quickDrawerTitleSettings": "设置",
   "quickDrawerTitleDefault": "设置",
   "quickEmpty": "此页面暂无可快捷调整的设置"

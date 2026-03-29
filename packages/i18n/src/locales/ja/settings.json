@@ -193,6 +193,7 @@
   "quickDrawerTitleAlbums": "アルバム一覧設定",
   "quickDrawerTitleFailedImages": "失敗画像 · ダウンロード設定",
   "quickDrawerTitlePluginBrowser": "ソース管理設定",
+  "quickDrawerTitleAutoConfigs": "実行設定 · クイック設定",
   "quickDrawerTitleSettings": "設定",
   "quickDrawerTitleDefault": "設定",
   "quickEmpty": "このページにはクイック設定がありません"

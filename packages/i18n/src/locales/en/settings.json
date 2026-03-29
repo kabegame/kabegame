@@ -193,6 +193,7 @@
   "quickDrawerTitleAlbums": "Album list settings",
   "quickDrawerTitleFailedImages": "Failed images · download settings",
   "quickDrawerTitlePluginBrowser": "Source management settings",
+  "quickDrawerTitleAutoConfigs": "Run configs · quick settings",
   "quickDrawerTitleSettings": "Settings",
   "quickDrawerTitleDefault": "Settings",
   "quickEmpty": "No quick settings on this page"

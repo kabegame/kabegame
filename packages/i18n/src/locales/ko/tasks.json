@@ -155,5 +155,8 @@
   "taskLogPostprocessFailed": "이미지 후처리 실패: {detail}",
   "taskLogEnqueueFailed": "큐 추가 실패 {url}: {detail}",
   "taskLogLocalImportStreaming": "local-import: 경로 {count}개 순회 중…",
-  "taskLogLocalImportEnqueuedSummary": "local-import: 다운로드 {downloads}건, 아카이브 {archives}건 큐에 추가"
+  "taskLogLocalImportEnqueuedSummary": "local-import: 다운로드 {downloads}건, 아카이브 {archives}건 큐에 추가",
+  "taskLogDedupByUrl": "URL 중복 제거: 다운로드 생략. {currentUrl}이(가) id={existingId} 기록과 일치; 저장 URL: {existingUrl}; 경로: {existingPath}",
+  "taskLogDedupByHash": "해시 중복 제거: {currentUrl}이(가) id={existingId} 이미지와 동일 내용; 기존 URL: {existingUrl}; 로컬 경로: {existingPath}",
+  "taskLogDedupSurfDuplicate": "서핑: 해시 중복으로 id={existingId}와 비교해 필터링. 현재 {currentUrl}; 기존 URL: {existingUrl}; 로컬 경로: {existingPath}"
 }
