@@ -233,6 +233,7 @@
     :title="$t('plugins.startCollect')"
     width="600px"
     class="crawl-dialog"
+    align-center
     :show-close="true"
   >
     <el-form ref="formRef" :model="form" label-position="top" class="crawl-form">
@@ -1451,11 +1452,11 @@ watch(selectedOutputAlbumId, (newValue) => {
 
 <style lang="scss">
 .crawl-dialog.el-dialog {
+  height: auto !important;
   max-height: 90vh !important;
   display: flex !important;
   flex-direction: column !important;
-  margin-top: 5vh !important;
-  margin-bottom: 5vh !important;
+  margin: 5vh auto !important;
   overflow: hidden !important;
 
   .el-dialog__header {

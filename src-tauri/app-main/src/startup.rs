@@ -579,6 +579,8 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
                             entry.output_album_id.as_deref(),
                             &empty_headers,
                             true,
+                            None,
+                            None,
                         )
                         .await;
                     });

@@ -10,7 +10,7 @@
       toast.className = "__kabegame_surf_toast__";
       toast.textContent = String(message || "");
       toast.style.position = "fixed";
-      toast.style.top = "20px";
+      toast.style.top = "52px";
       toast.style.left = "50%";
       toast.style.transform = "translateX(-50%)";
       toast.style.maxWidth = "80vw";

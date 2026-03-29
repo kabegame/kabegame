@@ -1,5 +1,8 @@
 {
   "imageDetailTitle": "画像詳細",
+  "toggleDetailPanel": "詳細パネル",
+  "imageDetailDisplayName": "名前: ",
+  "imageDetailDescription": "説明: ",
   "imageDetailSource": "ソース: ",
   "imageDetailUrl": "URL: ",
   "imageDetailLocalPath": "ローカルパス: ",

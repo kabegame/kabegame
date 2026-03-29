@@ -1,5 +1,8 @@
 {
   "imageDetailTitle": "이미지 상세",
+  "toggleDetailPanel": "상세 패널",
+  "imageDetailDisplayName": "이름: ",
+  "imageDetailDescription": "설명: ",
   "imageDetailSource": "출처: ",
   "imageDetailUrl": "URL: ",
   "imageDetailLocalPath": "로컬 경로: ",

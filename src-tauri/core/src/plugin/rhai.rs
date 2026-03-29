@@ -12,8 +12,49 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use url::Url;
+use serde_json::{Map as JsonMap, Number, Value as JsonValue};
 
 type Shared<T> = Arc<Mutex<T>>;
+
+fn rhai_dynamic_to_json_value(d: &Dynamic) -> Result<JsonValue, Box<rhai::EvalAltResult>> {
+    if d.is_unit() {
+        return Ok(JsonValue::Null);
+    }
+    if d.is_bool() {
+        return Ok(JsonValue::Bool(d.as_bool().unwrap()));
+    }
+    if d.is_int() {
+        return Ok(JsonValue::Number(Number::from(d.as_int().unwrap())));
+    }
+    if d.is_float() {
+        let f = d.as_float().unwrap();
+        return Ok(Number::from_f64(f)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null));
+    }
+    if d.is_string() {
+        return Ok(JsonValue::String(d.clone().into_string().unwrap()));
+    }
+    if d.is_array() {
+        let arr = d.clone().into_array().unwrap();
+        let mut out = Vec::with_capacity(arr.len());
+        for item in arr {
+            out.push(rhai_dynamic_to_json_value(&item)?);
+        }
+        return Ok(JsonValue::Array(out));
+    }
+    if d.is_map() {
+        let m: Map = d.clone().try_cast::<Map>().ok_or_else(|| {
+            Box::<rhai::EvalAltResult>::from("download_image opts: metadata map cast failed")
+        })?;
+        let mut obj = JsonMap::new();
+        for (k, v) in m {
+            obj.insert(k.to_string(), rhai_dynamic_to_json_value(&v)?);
+        }
+        return Ok(JsonValue::Object(obj));
+    }
+    Err("download_image opts: metadata contains unsupported Rhai type".into())
+}
 
 fn safe_filename_component(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -37,6 +78,92 @@ fn lock_or_inner<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 fn get_task_id(task_id_holder: &Shared<String>) -> String {
     lock_or_inner(task_id_holder).clone()
+}
+
+/// Rhai `download_image` 系列共用的同步入队逻辑（在 Rhai 引擎线程内 `block_on`）。
+fn run_rhai_download_image_sync(
+    dq_handle: &crate::crawler::DownloadQueue,
+    images_dir: PathBuf,
+    plugin_id: String,
+    task_id: String,
+    output_album_id: Option<String>,
+    http_headers: HashMap<String, String>,
+    url: &str,
+    custom_display_name: Option<String>,
+    metadata: Option<serde_json::Value>,
+) -> Result<(), Box<rhai::EvalAltResult>> {
+    if dq_handle.is_task_canceled_blocking(&task_id) {
+        return Err("Task canceled".into());
+    }
+
+    // 注意：不在 Rhai 层做「按本地路径已存在就跳过」的短路。
+    const MAX_TASK_IMAGES: usize = 10000;
+    let storage = Storage::global();
+    match storage.get_task_image_ids(&task_id) {
+        Ok(image_ids) => {
+            if image_ids.len() >= MAX_TASK_IMAGES {
+                return Err(format!(
+                    "任务图片数量已达到上限（{} 张），无法继续爬取",
+                    MAX_TASK_IMAGES
+                )
+                .into());
+            }
+        }
+        Err(e) => {
+            return Err(format!("检查任务图片数量失败: {}", e).into());
+        }
+    }
+
+    let download_start_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let parsed_url = Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+    let fut = dq_handle.download_image(
+        parsed_url,
+        images_dir,
+        plugin_id,
+        task_id,
+        download_start_time,
+        output_album_id,
+        http_headers,
+        custom_display_name,
+        metadata,
+    );
+    tokio::runtime::Handle::current()
+        .block_on(fut)
+        .map_err(|e| format!("Failed to download image: {}", e).into())
+}
+
+/// 从 Rhai `download_image(url, opts)` 的 `opts` map 解析 `name` / `metadata`。
+fn parse_download_image_opts_from_map(
+    opts: &Map,
+) -> Result<(Option<String>, Option<serde_json::Value>), Box<rhai::EvalAltResult>> {
+    let opt_str = |key: &str| -> Result<Option<String>, Box<rhai::EvalAltResult>> {
+        match opts.get(key) {
+            None => Ok(None),
+            Some(d) if d.is_unit() => Ok(None),
+            Some(d) if d.is_string() => {
+                let s = d.clone().into_string().unwrap();
+                Ok(if s.trim().is_empty() {
+                    None
+                } else {
+                    Some(s)
+                })
+            }
+            Some(_) => Err(format!(
+                "download_image opts: `{key}` must be a string if present"
+            )
+            .into()),
+        }
+    };
+    let metadata = match opts.get("metadata") {
+        None => None,
+        Some(d) if d.is_unit() => None,
+        Some(d) => Some(rhai_dynamic_to_json_value(d)?),
+    };
+    Ok((opt_str("name")?, metadata))
 }
 
 fn get_page_stack(
@@ -1304,103 +1431,66 @@ pub fn register_crawler_functions(
         },
     );
 
-    // download_image(url) - 同步下载图片并添加到 gallery（等待窗口有空位后直接执行）
+    // download_image(url) / download_image(url, opts) — opts 为 map，可选键 name、metadata
     let dq_handle = Arc::clone(&download_queue);
     let images_dir_holder = Arc::clone(&images_dir);
     let plugin_id_holder = Arc::clone(&plugin_id);
     let task_id_holder = Arc::clone(&task_id);
     let output_album_id_holder = Arc::clone(&output_album_id);
     let http_headers_holder = Arc::clone(&http_headers);
+    let dq1 = Arc::clone(&dq_handle);
+    let idh1 = Arc::clone(&images_dir_holder);
+    let pid1 = Arc::clone(&plugin_id_holder);
+    let tid1 = Arc::clone(&task_id_holder);
+    let oaid1 = Arc::clone(&output_album_id_holder);
+    let hdr1 = Arc::clone(&http_headers_holder);
     engine.register_fn(
         "download_image",
         move |url: &str| -> Result<(), Box<rhai::EvalAltResult>> {
-            let images_dir = {
-                let guard = match images_dir_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                guard.clone()
-            };
-            let plugin_id = {
-                let guard = match plugin_id_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                guard.clone()
-            };
-            let task_id_for_download = {
-                let guard = match task_id_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                guard.clone()
-            };
-            let output_album_id_for_download = {
-                let guard = match output_album_id_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                guard.clone()
-            };
-            let http_headers_for_download = {
-                let guard = match http_headers_holder.lock() {
-                    Ok(g) => g,
-                    Err(e) => e.into_inner(),
-                };
-                guard.clone()
-            };
-
-            // 如果任务已被取消，让脚本失败退出
-            if dq_handle.is_task_canceled_blocking(&task_id_for_download) {
-                return Err("Task canceled".into());
-            }
-
-            let images_dir = images_dir.clone();
-            let plugin_id = plugin_id.clone();
-            let task_id = task_id_for_download.clone();
-
-            // 注意：不在 Rhai 层做“按本地路径已存在就跳过”的短路。
-            // 最终落盘/是否复制/是否复用（URL 仅网络、哈希适用本地+网络、以及“来源在输出目录内不复制”）
-            // 统一由 downloader（crawler/mod.rs）按规则处理，避免出现“任务结束但 0 张”的隐式去重问题。
-
-            // 检查任务图片数量限制（最多10000张）
-            const MAX_TASK_IMAGES: usize = 10000;
-            let storage = Storage::global();
-            match storage.get_task_image_ids(&task_id) {
-                Ok(image_ids) => {
-                    if image_ids.len() >= MAX_TASK_IMAGES {
-                        return Err(format!(
-                            "任务图片数量已达到上限（{} 张），无法继续爬取",
-                            MAX_TASK_IMAGES
-                        )
-                        .into());
-                    }
-                }
-                Err(e) => {
-                    return Err(format!("检查任务图片数量失败: {}", e).into());
-                }
-            }
-
-            // 记录下载开始时间（使用毫秒以支持更精确的时间控制）
-            let download_start_time = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64;
-
-            // 同步下载图片（等待窗口有空位后直接执行）
-            let parsed_url = Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
-            let fut = dq_handle.download_image(
-                parsed_url,
+            let images_dir = lock_or_inner(&idh1).clone();
+            let plugin_id = lock_or_inner(&pid1).clone();
+            let task_id = lock_or_inner(&tid1).clone();
+            let output_album_id = lock_or_inner(&oaid1).clone();
+            let http_headers = lock_or_inner(&hdr1).clone();
+            run_rhai_download_image_sync(
+                &dq1,
                 images_dir,
                 plugin_id,
                 task_id,
-                download_start_time,
-                output_album_id_for_download.clone(),
-                http_headers_for_download,
-            );
-            tokio::runtime::Handle::current()
-                .block_on(fut)
-                .map_err(|e| format!("Failed to download image: {}", e).into())
+                output_album_id,
+                http_headers,
+                url,
+                None,
+                None,
+            )
+        },
+    );
+    let dq2 = Arc::clone(&dq_handle);
+    let idh2 = Arc::clone(&images_dir_holder);
+    let pid2 = Arc::clone(&plugin_id_holder);
+    let tid2 = Arc::clone(&task_id_holder);
+    let oaid2 = Arc::clone(&output_album_id_holder);
+    let hdr2 = Arc::clone(&http_headers_holder);
+    engine.register_fn(
+        "download_image",
+        move |url: &str, opts: Map| -> Result<(), Box<rhai::EvalAltResult>> {
+            let images_dir = lock_or_inner(&idh2).clone();
+            let plugin_id = lock_or_inner(&pid2).clone();
+            let task_id = lock_or_inner(&tid2).clone();
+            let output_album_id = lock_or_inner(&oaid2).clone();
+            let http_headers = lock_or_inner(&hdr2).clone();
+            let (custom_name, metadata) = parse_download_image_opts_from_map(&opts)?;
+            run_rhai_download_image_sync(
+                &dq2,
+                images_dir,
+                plugin_id,
+                task_id,
+                output_album_id,
+                http_headers,
+                url,
+                custom_name,
+                metadata,
+            )
         },
     );
 

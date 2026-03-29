@@ -80,12 +80,16 @@ defineEmits<{
 
 const attrs = useAttrs();
 // 传 core 时需将 actions 断言为 ActionItem<CoreImageInfo>[]，避免泛型不兼容
+const pluginStore = usePluginStore();
+const plugins = computed(() => pluginStore.plugins);
+
 const coreGridBind = computed(() => {
   const { actions, ...rest } = props;
   return {
     ...attrs,
     ...rest,
     actions: actions as ActionItem<CoreImageInfo>[] | undefined,
+    plugins: plugins.value,
   };
 });
 
@@ -94,9 +98,6 @@ const coreRef = ref<any>(null);
 // 旧 ImageGrid 的"内置详情弹窗"改为 wrapper 层实现
 const showImageDetail = ref(false);
 const detailImage = ref<CoreImageInfo | null>(null);
-
-const pluginStore = usePluginStore();
-const plugins = computed(() => pluginStore.plugins);
 
 async function handleContextCommand(payload: CoreContextCommandPayload): Promise<CoreContextCommand | null | undefined> {
   // 先调用 app-main 的 handler（可能处理扩展命令或 core 命令）

@@ -87,6 +87,8 @@ export const useInstalledPluginsStore = defineStore("installedPlugins", () => {
   const plugins = ref<BrowserPlugin[]>([]);
   /** 插件图标缓存（key: pluginId, value: data URL） */
   const icons = ref<Record<string, string>>({});
+  /** 插件包内 `templates/description.ejs`（无则为 null） */
+  const descriptionTemplates = ref<Record<string, string | null>>({});
   /** 是否正在加载插件列表 */
   const isLoading = ref(false);
 
@@ -100,8 +102,7 @@ export const useInstalledPluginsStore = defineStore("installedPlugins", () => {
     isLoading.value = true;
     try {
       plugins.value = await invoke<BrowserPlugin[]>(commandName);
-      // 加载图标
-      await loadIcons();
+      await Promise.all([loadIcons(), loadDescriptionTemplates()]);
     } catch (e) {
       plugins.value = [];
       console.error("加载插件列表失败:", e);
@@ -138,6 +139,31 @@ export const useInstalledPluginsStore = defineStore("installedPlugins", () => {
     }
   }
 
+  async function loadDescriptionTemplates() {
+    const next: Record<string, string | null> = {};
+    await Promise.all(
+      plugins.value.map(async (p) => {
+        const pluginId = p.id;
+        if (!pluginId) return;
+        try {
+          const tpl = await invoke<string | null>("get_plugin_template", {
+            pluginId,
+            templateName: "description",
+          });
+          next[pluginId] = tpl ?? null;
+        } catch {
+          next[pluginId] = null;
+        }
+      }),
+    );
+    descriptionTemplates.value = next;
+  }
+
+  function pluginDescriptionTemplate(pluginId: string): string | undefined {
+    const v = descriptionTemplates.value[pluginId];
+    return typeof v === "string" && v.length > 0 ? v : undefined;
+  }
+
   /**
    * 获取插件图标 URL
    * @param pluginId 插件 ID
@@ -153,6 +179,7 @@ export const useInstalledPluginsStore = defineStore("installedPlugins", () => {
   function clearCache() {
     plugins.value = [];
     icons.value = {};
+    descriptionTemplates.value = {};
   }
 
   function pluginLabel(pluginId: string): string {
@@ -162,10 +189,13 @@ export const useInstalledPluginsStore = defineStore("installedPlugins", () => {
   return {
     plugins,
     icons,
+    descriptionTemplates,
     isLoading,
     loadPlugins,
     loadIcons,
     loadIcon,
+    loadDescriptionTemplates,
+    pluginDescriptionTemplate,
     getIcon,
     clearCache,
     pluginLabel,
@@ -289,6 +319,8 @@ export const usePluginStore = defineStore("plugins", () => {
   const pluginIcons = ref<Record<string, string>>({});
   /** 已安装插件 doc 多语言 Markdown；`null` 表示已拉取但无文档 */
   const pluginDocs = ref<Record<string, PluginManifestDoc | null>>({});
+  /** 插件包内 `templates/description.ejs`（无则为 null） */
+  const pluginDescriptionTemplates = ref<Record<string, string | null>>({});
 
   async function loadPluginIcons() {
     await Promise.all(
@@ -326,6 +358,31 @@ export const usePluginStore = defineStore("plugins", () => {
     );
   }
 
+  async function loadPluginDescriptionTemplates() {
+    const next: Record<string, string | null> = {};
+    await Promise.all(
+      plugins.value.map(async (p) => {
+        const pluginId = p.id;
+        if (!pluginId) return;
+        try {
+          const tpl = await invoke<string | null>("get_plugin_template", {
+            pluginId,
+            templateName: "description",
+          });
+          next[pluginId] = tpl ?? null;
+        } catch {
+          next[pluginId] = null;
+        }
+      }),
+    );
+    pluginDescriptionTemplates.value = next;
+  }
+
+  function pluginDescriptionTemplate(pluginId: string): string | undefined {
+    const v = pluginDescriptionTemplates.value[pluginId];
+    return typeof v === "string" && v.length > 0 ? v : undefined;
+  }
+
   function pluginIconUrl(pluginId: string): string | undefined {
     return pluginIcons.value[pluginId];
   }
@@ -344,11 +401,13 @@ export const usePluginStore = defineStore("plugins", () => {
         plugins.value = result;
         pluginIcons.value = {};
         pluginDocs.value = {};
+        pluginDescriptionTemplates.value = {};
         const crawler = useCrawlerStore();
         void Promise.all([
           crawler.loadPluginRecommendedConfigs(),
           loadPluginIcons(),
           loadPluginDocs(),
+          loadPluginDescriptionTemplates(),
         ]);
       })
       .catch((error) => {
@@ -370,6 +429,11 @@ export const usePluginStore = defineStore("plugins", () => {
         const next = { ...pluginDocs.value };
         delete next[pluginId];
         pluginDocs.value = next;
+      }
+      if (Object.prototype.hasOwnProperty.call(pluginDescriptionTemplates.value, pluginId)) {
+        const next = { ...pluginDescriptionTemplates.value };
+        delete next[pluginId];
+        pluginDescriptionTemplates.value = next;
       }
       if (activePlugin.value?.id === pluginId) {
         activePlugin.value = null;
@@ -416,11 +480,14 @@ export const usePluginStore = defineStore("plugins", () => {
     pluginDetailCache,
     pluginIcons,
     pluginDocs,
+    pluginDescriptionTemplates,
     loadPlugins,
     loadPluginIcons,
     loadPluginDocs,
+    loadPluginDescriptionTemplates,
     pluginIconUrl,
     pluginDoc,
+    pluginDescriptionTemplate,
     deletePlugin,
     setActivePlugin,
     getCachedPluginDetail,

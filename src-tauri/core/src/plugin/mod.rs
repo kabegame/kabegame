@@ -495,6 +495,54 @@ impl PluginManager {
         Ok(Some(content))
     }
 
+    /// 从插件包读取 `templates/{template_name}.ejs`（`template_name` 不含 `.ejs`）。
+    pub async fn read_plugin_template(
+        &self,
+        zip_path: &Path,
+        template_name: &str,
+    ) -> Result<Option<String>, String> {
+        if !template_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err("invalid template name".to_string());
+        }
+        let entry_name = format!("templates/{}.ejs", template_name);
+        let mut file =
+            fs::File::open(zip_path).map_err(|e| format!("Failed to open plugin file: {}", e))?;
+        if crate::kgpg::read_kgpg2_meta(zip_path)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            let _ = file.seek(SeekFrom::Start(crate::kgpg::KGPG2_TOTAL_HEADER_SIZE as u64));
+        } else {
+            let _ = file.seek(SeekFrom::Start(0));
+        }
+        let mut archive =
+            ZipArchive::new(file).map_err(|e| format!("Failed to open ZIP archive: {}", e))?;
+        let mut f = match archive.by_name(&entry_name) {
+            Ok(f) => f,
+            Err(_) => return Ok(None),
+        };
+        let mut content = String::new();
+        f.read_to_string(&mut content)
+            .map_err(|e| format!("Failed to read {}: {}", entry_name, e))?;
+        Ok(Some(content))
+    }
+
+    /// 已安装插件：按 id 读取某 EJS 模板（不存在则 `None`）。
+    pub async fn get_plugin_template_by_id(
+        &self,
+        plugin_id: &str,
+        template_name: &str,
+    ) -> Result<Option<String>, String> {
+        let plugins_dir = self.get_plugins_directory();
+        let path = self.find_plugin_file(&plugins_dir, plugin_id).await?;
+        self.read_plugin_template(&path, template_name).await
+    }
+
     /// 从 .kgpg 文件检测脚本类型：存在 crawl.js 返回 "js"，否则 "rhai"（用于 build_runtime_plugin_from_kgpg_path 等）
     async fn detect_script_type_from_kgpg(&self, zip_path: &Path) -> Result<String, String> {
         let mut file =

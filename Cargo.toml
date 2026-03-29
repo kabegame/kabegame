@@ -16,7 +16,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "3.4.0"
+version = "3.4.1"
 
 [workspace.dependencies]
 async-trait = "0.1"
@@ -31,7 +31,7 @@ tauri-plugin-compress = { path = "./src-tauri-plugins/tauri-plugin-compress" }
 tauri-plugin-archiver = { path = "./src-tauri-plugins/tauri-plugin-archiver" }
 tauri-plugin-wallpaper = { path = "./src-tauri-plugins/tauri-plugin-wallpaper" }
 tauri-plugin-task-notification = { path = "./src-tauri-plugins/tauri-plugin-task-notification" }
-rhai = {version = "1.19", features = ["sync"]}
+rhai = {version = "1.24", features = ["sync"]}
 serde = {version = "1.0", features = ["derive"]}
 serde_bytes = "0.11"
 serde_cbor = "0.11"

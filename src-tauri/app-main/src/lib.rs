@@ -415,6 +415,8 @@ pub fn run() {
             surf_delete_record,
             #[cfg(not(target_os = "android"))]
             surf_get_cookies,
+            #[cfg(not(target_os = "android"))]
+            surf_open_devtools,
             // --- Run Configs ---
             get_run_configs,
             get_run_config,
@@ -445,6 +447,7 @@ pub fn run() {
             get_plugin_image,
             get_plugin_image_for_detail,
             get_plugin_icon,
+            get_plugin_template,
             get_remote_plugin_icon,
             get_plugin_doc_from_zip,
             get_plugin_doc_by_id,
@@ -555,6 +558,7 @@ pub fn run() {
             open_file_path,
             open_file_folder,
             // --- Misc ---
+            proxy_fetch,
             exit_app,
             #[cfg(not(target_os = "android"))]
             open_dev_webview,
@@ -592,6 +596,7 @@ pub fn run() {
             show_crawler_window,
             get_file_drop_supported_types,
             get_file_drop_kinds,
+            proxy_fetch,
             get_supported_image_types,
             set_supported_image_formats,
             get_linux_desktop_env,

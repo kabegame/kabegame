@@ -50,6 +50,7 @@
         ref="previewRef"
         :images="images"
         :actions="actions"
+        :plugins="plugins"
         @context-command="handlePreviewContextCommand" />
     </div>
 
@@ -132,6 +133,8 @@ interface Props {
   enableVirtualScroll?: boolean;
   virtualOverscan?: number;
   windowAspectRatio?: number; // 外部传入的窗口宽高比（可选，不传则使用实际窗口宽高比）
+  /** 插件列表（用于桌面预览内详情抽屉显示插件名称） */
+  plugins?: Array<{ id: string; name?: string }>;
 }
 
 const props = withDefaults(defineProps<Props>(), {

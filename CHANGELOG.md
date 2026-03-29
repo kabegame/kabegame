@@ -6,7 +6,8 @@
 
 ## [3.4.1]
 ### Added
-- **运行配置页:** 标题栏「开始收集」与「快捷设置」；快捷抽屉含导入推荐配置时默认启用定时及常见下载相关设置。
+- **RunConfig:** Title bar actions for "Start collection" and "Quick settings"; quick drawer: importing a recommended preset enables schedule by default and common download-related settings.
+- **Image:** downloaded image now can display a custom name and html description for detailed and comprehensive information. Even js are enabled for fetch comments of an image, just like on the website.
 
 ### Fixed
 - **Dedup**: silent dedup for hash dedup bug.

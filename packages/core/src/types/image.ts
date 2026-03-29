@@ -12,7 +12,8 @@ export interface ImageInfo {
   pluginId?: string;
   taskId?: string;
   crawledAt?: number;
-  metadata?: Record<string, any>;
+  /** 爬虫写入的任意 JSON，详情区由插件 `templates/description.ejs` 渲染 */
+  metadata?: Record<string, unknown>;
   hash?: string;
   order?: number;
   width?: number;

@@ -20,13 +20,16 @@
       addProgress(percentage) {
         return invoke("crawl_add_progress", { percentage });
       },
-      // 统一下载 API：走 Rust download_worker，可选附加 cookie/header。
+      // 统一下载 API：走 Rust download_worker。opts 为 plain object，可选键：
+      // cookie、headers、name（展示名）、metadata（任意 JSON，与 Rhai opts 一致）。
       downloadImage(url, opts) {
         const o = typeof opts === "object" && opts !== null ? opts : {};
         return invoke("crawl_download_image", {
           url,
           cookie: !!o.cookie,
           headers: o.headers ?? undefined,
+          name: o.name ?? undefined,
+          metadata: o.metadata ?? undefined,
         });
       },
       async to(payload, opts) {

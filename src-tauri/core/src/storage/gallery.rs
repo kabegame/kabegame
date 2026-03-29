@@ -818,9 +818,9 @@ impl Storage {
                 task_id: row.get(4)?,
                 surf_record_id: None,
                 crawled_at: row.get::<_, i64>(5)? as u64,
-                metadata: row
-                    .get::<_, Option<String>>(6)?
-                    .and_then(|s| serde_json::from_str(&s).ok()),
+                metadata: crate::storage::images::parse_image_metadata_json(
+                    row.get::<_, Option<String>>(6)?,
+                ),
                 thumbnail_path: row.get(7)?,
                 hash: row.get(8)?,
                 mime_type: row.get::<_, Option<String>>(9)?,

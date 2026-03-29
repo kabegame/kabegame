@@ -59,6 +59,17 @@ fn eval_surf_toast(app: &AppHandle, message: &str, kind: &str) {
     }
 }
 
+/// 由 surf 导航栏注入脚本通过 `invoke` 调用，打开当前畅游窗口的开发者工具。
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn surf_open_devtools(app: AppHandle) -> Result<(), String> {
+    let win = app
+        .get_webview_window("surf")
+        .ok_or_else(|| "畅游窗口未打开".to_string())?;
+    win.open_devtools();
+    Ok(())
+}
+
 fn save_surf_session_cookies(app: &AppHandle) {
     let record_id = SurfSessionState::global()
         .lock()
@@ -113,8 +124,10 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
         let builder = WebviewWindowBuilder::new(&app, "surf", WebviewUrl::External(parsed))
             .title(t!("surf.windowTitle", host = host.as_str()))
             .inner_size(1200.0, 800.0)
+            .devtools(true)
             .initialization_script(include_str!("../../resources/surf_toast.js"))
             .initialization_script(include_str!("../../resources/surf_context_menu.js"))
+            .initialization_script(include_str!("../../resources/surf_navbar.js"))
             .on_page_load({
                 let app = app.clone();
                 move |_surf_window, payload| {
@@ -201,6 +214,8 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                                     None,
                                     &empty_headers,
                                     true,
+                                    None,
+                                    None,
                                 )
                                 .await
                                 {

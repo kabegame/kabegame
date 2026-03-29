@@ -1,5 +1,8 @@
 {
   "imageDetailTitle": "图片详情",
+  "toggleDetailPanel": "详情面板",
+  "imageDetailDisplayName": "名称：",
+  "imageDetailDescription": "描述：",
   "imageDetailSource": "源：",
   "imageDetailUrl": "URL：",
   "imageDetailLocalPath": "本地路径：",
@@ -117,5 +120,6 @@
   "removeFromGalleryMessageMulti": "将从画廊移除这 {count} 张图片。",
   "deleteSourceFilesCheckboxLabel": "同时从电脑删除源文件（慎用）",
   "deleteSourceFilesDangerText": "警告：该操作将永久删除电脑文件，不可恢复！",
-  "deleteSourceFilesSafeText": "不勾选仅从列表移除记录，保留电脑文件。"
+  "deleteSourceFilesSafeText": "不勾选仅从列表移除记录，保留电脑文件。",
+  "konachanPostedTimeCrawlNote": "「发布时间」等相对表述（如几小时前）为入库抓取时站点上的文案，不会随当前查看时间更新。"
 }

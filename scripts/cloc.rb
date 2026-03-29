@@ -11,7 +11,7 @@ require 'tmpdir'
 # 默认配置
 DEFAULT_PATH = '.'
 DEFAULT_EXCLUDE = 'node_modules,dist,build,.git,target,.nx,public,data,release,photoswipe-vue/src/js,third'
-DEFAULT_INCLUDE_EXT = 'ts,tsx,js,mjs,vue,rs,py,java,kt,swift,cs,cpp,c,cmake,h,cc,hpp,rb,html,css,scss,rhai,kt,kts,handlebars,prisma'
+DEFAULT_INCLUDE_EXT = 'ts,tsx,js,mjs,vue,rs,py,java,kt,swift,cs,cpp,c,cmake,h,cc,hpp,rb,html,css,scss,rhai,kt,kts,handlebars,prisma,Dockerfile,sh,ejs'
 
 # Linguist 未支持的语言在此指定颜色（hex，如 #F67702）
 CUSTOM_LANG_COLORS = { 'Rhai' => '#F67702' }.freeze

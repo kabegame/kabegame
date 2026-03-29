@@ -234,6 +234,10 @@ PRAGMA mmap_size = 268435456;
             )
             .expect("Failed to add images.last_set_wallpaper_at column");
         }
+        if !table_has_column(&conn, "images", "description") {
+            conn.execute("ALTER TABLE images ADD COLUMN description TEXT", [])
+                .expect("Failed to add images.description column");
+        }
 
         // 创建索引（新库的 CREATE 已含 width/height，上述 ALTER 用于旧库升级）
         let _ = conn.execute(
@@ -836,6 +840,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
     let has_mime_type = table_has_column(conn, "images", "mime_type");
     let has_surf_record_id = table_has_column(conn, "images", "surf_record_id");
     let has_last_set_wallpaper_at = table_has_column(conn, "images", "last_set_wallpaper_at");
+    let has_description = table_has_column(conn, "images", "description");
     if needs_rebuild_images || needs_rebuild_relations {
         let tx = conn
             .transaction()
@@ -857,6 +862,11 @@ fn perform_complex_migrations(conn: &mut Connection) {
             "COALESCE(display_name, '') AS display_name,"
         } else {
             ""
+        };
+        let description_col = if has_description {
+            "description,"
+        } else {
+            "NULL AS description,"
         };
         let last_wall_col = if has_last_set_wallpaper_at {
             "last_set_wallpaper_at,"
@@ -889,7 +899,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
                    COALESCE(hash, '') AS hash,
                    width,
                    height,
-                   {type_col} {mime_col} {surf_col} {display_col} {last_wall_col} {new_id_expr}
+                   {type_col} {mime_col} {surf_col} {display_col} {description_col} {last_wall_col} {new_id_expr}
                  FROM images"
             ),
             [],
@@ -927,6 +937,7 @@ fn perform_complex_migrations(conn: &mut Connection) {
                     width INTEGER,
                     height INTEGER,
                     display_name TEXT NOT NULL DEFAULT '',
+                    description TEXT,
                     last_set_wallpaper_at INTEGER
                 )",
                 [],
@@ -949,11 +960,16 @@ fn perform_complex_migrations(conn: &mut Connection) {
             } else {
                 ("display_name", "''")
             };
+            let (description_ins, description_sel) = if has_description {
+                ("description", "description")
+            } else {
+                ("description", "NULL")
+            };
             let insert_cols = format!(
-                "id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, thumbnail_path, hash, {mime_s} type, width, height, {display_ins}, last_set_wallpaper_at"
+                "id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, thumbnail_path, hash, {mime_s} type, width, height, {display_ins}, {description_ins}, last_set_wallpaper_at"
             );
             let select_cols = format!(
-                "new_id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), {mime_s} {type_s}, width, height, {display_sel}, last_set_wallpaper_at"
+                "new_id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), {mime_s} {type_s}, width, height, {display_sel}, {description_sel}, last_set_wallpaper_at"
             );
             tx.execute(
                 &format!(

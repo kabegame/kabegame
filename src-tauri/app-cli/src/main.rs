@@ -726,6 +726,33 @@ fn build_plugin_zip_bytes(plugin_dir: &PathBuf, backend: PluginBackend) -> Resul
         }
     }
 
+    // templates/（EJS 模板，如 description.ejs）
+    let templates_dir = plugin_dir.join("templates");
+    if templates_dir.is_dir() {
+        let rd =
+            std::fs::read_dir(&templates_dir).map_err(|e| format!("读取 templates 失败: {}", e))?;
+        for ent in rd {
+            let ent = ent.map_err(|e| format!("读取 templates 失败: {}", e))?;
+            let p = ent.path();
+            if !p.is_file() {
+                continue;
+            }
+            let ext = p
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext == "ejs" {
+                let rel = p
+                    .strip_prefix(plugin_dir)
+                    .map_err(|_| "templates 路径异常".to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                entries.push((rel, p));
+            }
+        }
+    }
+
     // 写 ZIP 到内存
     let mut buf: Vec<u8> = Vec::new();
     {
