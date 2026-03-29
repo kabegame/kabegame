@@ -4,6 +4,13 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.4.1]
+### Added
+- **运行配置页:** 标题栏「开始收集」与「快捷设置」；快捷抽屉含导入推荐配置时默认启用定时及常见下载相关设置。
+
+### Fixed
+- **Dedup**: silent dedup for hash dedup bug.
+
 ## [3.4.0]
 ### Added
 - **RunConfig**: Auto run schedule feature. Plugin recommand config for on click import.

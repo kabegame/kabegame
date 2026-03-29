@@ -193,6 +193,7 @@
   "quickDrawerTitleAlbums": "앨범 목록 설정",
   "quickDrawerTitleFailedImages": "실패 이미지 · 다운로드 설정",
   "quickDrawerTitlePluginBrowser": "소스 관리 설정",
+  "quickDrawerTitleAutoConfigs": "실행 구성 · 빠른 설정",
   "quickDrawerTitleSettings": "설정",
   "quickDrawerTitleDefault": "설정",
   "quickEmpty": "이 페이지에는 빠른 설정이 없습니다"

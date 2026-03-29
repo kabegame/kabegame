@@ -155,5 +155,8 @@
   "taskLogPostprocessFailed": "图片后处理失败：{detail}",
   "taskLogEnqueueFailed": "入队失败 {url}：{detail}",
   "taskLogLocalImportStreaming": "local-import: 正在遍历 {count} 个路径…",
-  "taskLogLocalImportEnqueuedSummary": "local-import: 已入队 {downloads} 个下载、{archives} 个压缩包"
+  "taskLogLocalImportEnqueuedSummary": "local-import: 已入队 {downloads} 个下载、{archives} 个压缩包",
+  "taskLogDedupByUrl": "按 URL 去重：跳过下载。当前 {currentUrl} 与库中 id={existingId} 匹配；库中 URL：{existingUrl}；本地路径：{existingPath}",
+  "taskLogDedupByHash": "按内容哈希去重：当前 {currentUrl} 与已有图片 id={existingId} 内容相同；已有记录 URL：{existingUrl}；本地路径：{existingPath}",
+  "taskLogDedupSurfDuplicate": "冲浪模式：内容哈希与已有图片 id={existingId} 重复已过滤。当前 {currentUrl}；已有 URL：{existingUrl}；本地路径：{existingPath}"
 }

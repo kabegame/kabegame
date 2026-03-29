@@ -1,7 +1,7 @@
 <template>
   <div class="auto-configs-container">
     <TaskLogDialog ref="taskLogDialogRef" />
-    <PageHeader :title="$t('autoConfig.tabTitle')" :show="[HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help]" :fold="[]"
+    <PageHeader :title="$t('autoConfig.tabTitle')" :show="headerShowFeatures" :fold="[]"
       sticky @action="handleHeaderAction">
       <template #subtitle>
         <span>{{ headerSubtitle }}</span>
@@ -177,6 +177,13 @@
         <el-button type="primary" @click="recommendedHelpVisible = false">{{ $t("common.ok") }}</el-button>
       </template>
     </el-dialog>
+
+    <!-- 收集（与画廊页一致：桌面 CrawlerDialog / 本地导入；安卓 CollectSourcePicker / drawer / MediaPicker） -->
+    <CrawlerDialog v-if="!IS_ANDROID" v-model="showCrawlerDialog" :initial-config="crawlerDialogInitialConfig" />
+    <LocalImportDialog v-if="!IS_ANDROID" v-model="showLocalImportDialog" />
+
+    <CollectSourcePicker v-if="IS_ANDROID" v-model="showCollectSourcePicker" @select="handleCollectSourceSelect" />
+    <MediaPicker v-if="IS_ANDROID" v-model="showMediaPicker" @select="handleMediaPickerSelect" />
   </div>
 </template>
 
@@ -193,10 +200,19 @@ import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import { IS_ANDROID } from "@kabegame/core/env";
 import TaskLogDialog from "@kabegame/core/components/task/TaskLogDialog.vue";
 import AutoConfigListCard from "@/components/scheduler/AutoConfigListCard.vue";
+import CrawlerDialog from "@/components/CrawlerDialog.vue";
+import LocalImportDialog from "@/components/LocalImportDialog.vue";
+import CollectSourcePicker from "@/components/CollectSourcePicker.vue";
+import MediaPicker from "@/components/MediaPicker.vue";
 import { HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useCrawlerStore } from "@/stores/crawler";
+import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
+import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
+import { open } from "@tauri-apps/plugin-dialog";
+import { stat } from "@tauri-apps/plugin-fs";
+import { pickImages, pickVideos, type PickFolderResult } from "tauri-plugin-picker-api";
 import { checkRecommendedPresetCompatibility } from "@/composables/useConfigCompatibility";
 import type { PluginRecommendedPreset, RunConfig } from "@kabegame/core/stores/crawler";
 
@@ -204,8 +220,27 @@ const { t, locale } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const crawlerStore = useCrawlerStore();
+const crawlerDrawerStore = useCrawlerDrawerStore();
+const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const autoConfigDialog = useAutoConfigDialogStore();
 const pluginStore = usePluginStore();
+
+const headerShowFeatures = [
+  HeaderFeatureId.QuickSettings,
+  HeaderFeatureId.TaskDrawer,
+  HeaderFeatureId.Collect,
+  HeaderFeatureId.Help,
+];
+
+const showCrawlerDialog = ref(false);
+const showLocalImportDialog = ref(false);
+const showMediaPicker = ref(false);
+const showCollectSourcePicker = ref(false);
+const crawlerDialogInitialConfig = ref<{
+  pluginId?: string;
+  outputDir?: string;
+  vars?: Record<string, any>;
+} | undefined>(undefined);
 
 const onlyEnabled = ref(false);
 const filterPluginId = ref<string | null>(null);
@@ -459,6 +494,130 @@ const goCreate = () => {
   autoConfigDialog.openCreate();
 };
 
+const handleCollectSourceSelect = (source: "local" | "remote") => {
+  showCollectSourcePicker.value = false;
+  if (source === "local") {
+    showMediaPicker.value = true;
+  } else {
+    crawlerDrawerStore.open();
+  }
+};
+
+const handleMediaPickerSelect = async (
+  type: "image" | "folder" | "video" | "archive",
+  payload?: PickFolderResult,
+) => {
+  showMediaPicker.value = false;
+  await handleAndroidMediaSelection(type, payload);
+};
+
+/** 安卓本地导入：与画廊页逻辑一致 */
+const handleAndroidMediaSelection = async (
+  type: "image" | "folder" | "video" | "archive",
+  folderResult?: PickFolderResult,
+) => {
+  try {
+    if (type === "image") {
+      const uris = await pickImages();
+      if (!uris || uris.length === 0) {
+        return;
+      }
+      crawlerStore.addTask("local-import", undefined, {
+        paths: uris,
+        recursive: false,
+        include_archive: false,
+      });
+      ElMessage.success(t("gallery.localImportTaskAdded"));
+    } else if (type === "video") {
+      const uris = await pickVideos();
+      if (!uris || uris.length === 0) {
+        return;
+      }
+      crawlerStore.addTask("local-import", undefined, {
+        paths: uris,
+        recursive: false,
+        include_archive: false,
+      });
+      ElMessage.success(t("gallery.localImportTaskAdded"));
+    } else if (type === "archive") {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        filters: [
+          {
+            name: t("gallery.compressFile"),
+            extensions: ["zip"],
+          },
+        ],
+      });
+
+      if (!selected) {
+        return;
+      }
+
+      const paths = Array.isArray(selected) ? selected : [selected];
+      if (paths.length === 0) return;
+
+      const pathsToImport = paths.some((p) => p.startsWith("content://"))
+        ? paths
+        : (
+          await Promise.all(
+            paths.map(async (path) => {
+              try {
+                const metadata = await stat(path);
+                return metadata.isDirectory ? null : path;
+              } catch {
+                return null;
+              }
+            }),
+          )
+        ).filter((p): p is string => p != null);
+
+      if (pathsToImport.length === 0) {
+        ElMessage.warning(t("gallery.noArchiveFound"));
+        return;
+      }
+
+      crawlerStore.addTask("local-import", undefined, {
+        paths: pathsToImport,
+        recursive: false,
+        include_archive: true,
+      });
+      ElMessage.success(t("gallery.localImportTaskAdded"));
+    } else if (type === "folder" && folderResult) {
+      const folderPath = folderResult.uri ?? folderResult.path;
+      if (!folderPath) return;
+
+      if (!folderPath.startsWith("content://")) {
+        try {
+          const metadata = await stat(folderPath);
+          if (!metadata.isDirectory) {
+            ElMessage.warning(t("gallery.pleaseSelectFolder"));
+            return;
+          }
+        } catch (error) {
+          console.error("[AutoConfigs] 检查文件夹失败:", folderPath, error);
+          return;
+        }
+      }
+
+      crawlerStore.addTask("local-import", undefined, {
+        paths: [folderPath],
+        recursive: true,
+        include_archive: false,
+      });
+      ElMessage.success(t("gallery.localImportTaskAdded"));
+    }
+  } catch (error) {
+    console.error("[AutoConfigs] 安卓媒体选择失败:", error);
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(
+        t("gallery.selectFailed") + ": " + (error instanceof Error ? error.message : String(error)),
+      );
+    }
+  }
+};
+
 const handleDelete = async (id: string) => {
   try {
     await ElMessageBox.confirm(t("autoConfig.confirmDelete"), t("autoConfig.delete"), {
@@ -526,12 +685,29 @@ const handleScheduleEnabled = async (cfg: RunConfig, enabled: boolean) => {
   }
 };
 
-const handleHeaderAction = (payload: { id: string }) => {
+const handleHeaderAction = (payload: { id: string; data?: { type: string; value?: string } }) => {
   if (payload.id === HeaderFeatureId.Help) {
     if (listTab.value === "recommended") {
       recommendedHelpVisible.value = true;
     } else {
       scheduleHelpVisible.value = true;
+    }
+    return;
+  }
+  if (payload.id === HeaderFeatureId.QuickSettings) {
+    quickSettingsDrawer.open("autoconfigs");
+    return;
+  }
+  if (payload.id === HeaderFeatureId.Collect) {
+    const d = payload.data;
+    if (d?.type === "openMenu") {
+      showCollectSourcePicker.value = true;
+    } else if (d?.type === "select") {
+      if (d.value === "local") {
+        showLocalImportDialog.value = true;
+      } else if (d.value === "network") {
+        showCrawlerDialog.value = true;
+      }
     }
   }
 };

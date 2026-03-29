@@ -155,5 +155,8 @@
   "taskLogPostprocessFailed": "圖片後處理失敗：{detail}",
   "taskLogEnqueueFailed": "入列失敗 {url}：{detail}",
   "taskLogLocalImportStreaming": "local-import: 正在掃描 {count} 個路徑…",
-  "taskLogLocalImportEnqueuedSummary": "local-import: 已入列 {downloads} 筆下載、{archives} 個壓縮檔"
+  "taskLogLocalImportEnqueuedSummary": "local-import: 已入列 {downloads} 筆下載、{archives} 個壓縮檔",
+  "taskLogDedupByUrl": "依 URL 去重：略過下載。目前 {currentUrl} 與庫中 id={existingId} 相符；庫中 URL：{existingUrl}；本機路徑：{existingPath}",
+  "taskLogDedupByHash": "依內容雜湊去重：目前 {currentUrl} 與既有圖片 id={existingId} 內容相同；既有記錄 URL：{existingUrl}；本機路徑：{existingPath}",
+  "taskLogDedupSurfDuplicate": "衝浪模式：內容雜湊與既有圖片 id={existingId} 重複已過濾。目前 {currentUrl}；既有 URL：{existingUrl}；本機路徑：{existingPath}"
 }
