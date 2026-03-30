@@ -24,12 +24,6 @@
             {{ $t("plugins.updateToConfig") }}
           </el-button>
         </div>
-        <div class="run-config-recommended-row">
-          <el-button type="primary" link class="run-config-rec-btn" @click="goImportRecommendedPresets">
-            {{ $t("plugins.importRecommendedConfigs") }}
-            <span v-if="recommendedPresetCount > 0" class="run-config-rec-count">({{ recommendedPresetCount }})</span>
-          </el-button>
-        </div>
       </el-form-item>
       <el-form-item :label="$t('plugins.selectSource')">
         <div class="plugin-source-field">
@@ -520,7 +514,11 @@ import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVa
 import { ElMessage, ElMessageBox } from "element-plus";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
-import { matchesPluginVarWhen } from "@kabegame/core/utils/pluginVarWhen";
+import {
+  matchesPluginVarWhen,
+  filterVarOptionsByWhen,
+  coerceOptionsVarsToVisibleChoices,
+} from "@kabegame/core/utils/pluginVarWhen";
 import { isPluginMinAppNotSatisfied } from "@/composables/pluginMinAppVersionGate";
 import { useApp } from "@/stores/app";
 
@@ -567,7 +565,8 @@ function runConfigDescription(cfg: { description?: unknown }): string {
 }
 
 function optionsForVar(varDef: PluginVarDef): (string | { name: string; variable: string })[] {
-  return (varDef.options ?? []).map((opt) =>
+  const filtered = filterVarOptionsByWhen(varDef.options, form.value.vars);
+  return filtered.map((opt) =>
     typeof opt === "string" ? opt : { name: optionDisplayName(opt), variable: opt.variable },
   );
 }
@@ -951,10 +950,18 @@ const visiblePluginVars = computed(() => {
     name: varDisplayName(varDef),
     descripts: varDescripts(varDef),
     options: varDef.options?.map((opt) =>
-      typeof opt === "string" ? opt : { variable: opt.variable, name: optionDisplayName(opt) },
+      typeof opt === "string" ? opt : { ...opt, name: optionDisplayName(opt) },
     ),
   }));
 });
+
+watch(
+  () => form.value.vars,
+  () => {
+    coerceOptionsVarsToVisibleChoices(pluginVars.value as PluginVarDef[], form.value.vars);
+  },
+  { deep: true },
+);
 
 const getFileExtensions = (varDef: any): string[] | undefined => {
   const opts = varDef?.options;

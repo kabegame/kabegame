@@ -112,6 +112,7 @@
   "sourceDeleted": "商店源已删除",
   "deleteSourceFailed": "删除商店源失败",
   "storeListRefreshed": "商店列表已刷新",
+  "storeListAutoUpdated": "商店列表已自动更新",
   "storeListLoaded": "商店列表已加载",
   "loadStoreFailed": "加载商店失败（请检查商店源配置）",
   "selectFileFailed": "选择文件失败",

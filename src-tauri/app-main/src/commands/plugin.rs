@@ -16,23 +16,6 @@ pub async fn get_plugins() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn refresh_installed_plugins_cache() -> Result<(), String> {
-    let plugin_manager = PluginManager::global();
-    plugin_manager.refresh_installed_plugins_cache().await?;
-    plugin_manager.get_all().await?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn refresh_installed_plugin_cache(plugin_id: String) -> Result<(), String> {
-    let plugin_manager = PluginManager::global();
-    plugin_manager
-        .load_installed_plugin_detail(&plugin_id)
-        .await?;
-    Ok(())
-}
-
-#[tauri::command]
 pub fn get_build_mode() -> Result<String, String> {
     Ok(env!("KABEGAME_BUILD_MODE").to_string())
 }
@@ -122,9 +105,14 @@ pub async fn delete_plugin_source(id: String) -> Result<(), String> {
 pub async fn get_store_plugins(
     source_id: Option<String>,
     force_refresh: Option<bool>,
+    revalidate_if_stale_after_secs: Option<u64>,
 ) -> Result<serde_json::Value, String> {
     let plugins = PluginManager::global()
-        .fetch_store_plugins(source_id.as_deref(), force_refresh.unwrap_or(false))
+        .fetch_store_plugins(
+            source_id.as_deref(),
+            force_refresh.unwrap_or(false),
+            revalidate_if_stale_after_secs,
+        )
         .await?;
     Ok(serde_json::to_value(plugins).map_err(|e| e.to_string())?)
 }

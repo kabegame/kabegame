@@ -212,7 +212,6 @@ export function useImageOperations(
 
       const count = imagesToProcess.length;
       const imageIds = imagesToProcess.map((img) => img.id);
-      const idSet = new Set(imageIds);
       const includesCurrent =
         !!currentWallpaperImageId.value &&
         imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
@@ -228,10 +227,7 @@ export function useImageOperations(
         currentWallpaperImageId.value = null;
       }
 
-      // 从 displayedImages 中移除已处理的图片
-      displayedImages.value = displayedImages.value.filter(
-        (img) => !idSet.has(img.id),
-      );
+      // 列表由 `images-change` 事件驱动刷新，此处不做乐观移除
 
       ElMessage.success(
         deleteFiles

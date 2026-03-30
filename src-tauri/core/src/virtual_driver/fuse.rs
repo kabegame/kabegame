@@ -596,14 +596,11 @@ impl VdOpsContext for LinuxVdOpsContext {
         // Linux 不需要刷新文件系统
     }
 
-    fn album_images_removed(&self, album_name: &str) {
-        GlobalEmitter::global().emit(
-            "images-change",
-            serde_json::json!({
-                "albumName": album_name,
-                "reason": "album-remove"
-            }),
-        );
+    fn album_images_removed(&self, album_id: &str, album_name: &str) {
+        let _ = album_name;
+        let ids: Vec<String> = Vec::new();
+        let alb = vec![album_id.to_string()];
+        GlobalEmitter::global().emit_album_images_change("delete", &alb, &ids);
         // Linux 不需要刷新文件系统
     }
 

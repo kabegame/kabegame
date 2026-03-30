@@ -112,6 +112,7 @@
   "sourceDeleted": "ストアソースを削除しました",
   "deleteSourceFailed": "ストアソースの削除に失敗しました",
   "storeListRefreshed": "ストアリストを更新しました",
+  "storeListAutoUpdated": "ストアリストを自動更新しました",
   "storeListLoaded": "ストアリストを読み込みました",
   "loadStoreFailed": "ストアの読み込みに失敗しました（ストアソースの設定を確認してください）",
   "selectFileFailed": "ファイルの選択に失敗しました",

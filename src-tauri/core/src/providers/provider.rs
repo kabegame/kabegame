@@ -175,7 +175,7 @@ pub trait Provider: Send + Sync {
 pub trait VdOpsContext {
     fn albums_created(&self, album_name: &str);
     fn albums_deleted(&self, album_name: &str);
-    fn album_images_removed(&self, album_name: &str);
+    fn album_images_removed(&self, album_id: &str, album_name: &str);
     fn tasks_deleted(&self, task_id: &str);
 }
 

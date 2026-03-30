@@ -145,6 +145,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onUnmounted } from "vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
@@ -213,13 +214,6 @@ watch(
   { immediate: true }
 );
 
-useImagesChangeRefresh({
-  enabled: computed(() => !!albumId.value),
-  waitMs: 500,
-  filter: (p) => !p.albumId || p.albumId === albumId.value,
-  onRefresh: () => void loadMediaTypeCounts(albumId.value || ""),
-});
-
 const filterMode = computed<AlbumBrowseFilter>(() => {
   const f = parsed.value?.filter;
   if (
@@ -240,6 +234,26 @@ const currentSortKey = computed<AlbumBrowseSort>(() => {
 });
 
 const isWallpaperFilter = computed(() => filterMode.value === "wallpaper-order");
+
+useImagesChangeRefresh({
+  enabled: computed(() => !!albumId.value),
+  waitMs: 500,
+  filter: (p) => {
+    if (!albumId.value) return false;
+    const reason = String(p.reason ?? "");
+    if (reason === "delete") return true;
+    if (reason === "change") return isWallpaperFilter.value;
+    return false;
+  },
+  onRefresh: () => void loadMediaTypeCounts(albumId.value || ""),
+});
+
+useAlbumImagesChangeRefresh({
+  enabled: computed(() => !!albumId.value),
+  waitMs: 500,
+  filter: (p) => !!albumId.value && (p.albumIds ?? []).includes(albumId.value),
+  onRefresh: () => void loadMediaTypeCounts(albumId.value || ""),
+});
 
 const filterLabel = computed(() => {
   void locale.value;

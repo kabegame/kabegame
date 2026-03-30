@@ -101,7 +101,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { useI18n, usePluginConfigI18n } from "@kabegame/i18n";
 import { usePluginStore } from "@/stores/plugins";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
-import { matchesPluginVarWhen } from "@kabegame/core/utils/pluginVarWhen";
+import {
+  matchesPluginVarWhen,
+  filterVarOptionsByWhen,
+  coerceOptionsVarsToVisibleChoices,
+} from "@kabegame/core/utils/pluginVarWhen";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
 import HttpHeadersEditor from "@kabegame/core/components/crawler/HttpHeadersEditor.vue";
 import { IS_ANDROID } from "@kabegame/core/env";
@@ -135,7 +139,8 @@ const visiblePluginVars = computed(() =>
 );
 
 function optionsForVar(varDef: PluginVarDef) {
-  return (varDef.options ?? []).map((opt) =>
+  const filtered = filterVarOptionsByWhen(varDef.options, form.value.vars);
+  return filtered.map((opt) =>
     typeof opt === "string" ? opt : { name: optionDisplayName(opt), variable: opt.variable },
   );
 }
@@ -238,6 +243,14 @@ watch(selectedPluginId, (id) => {
     headersModel.value = {};
   }
 });
+
+watch(
+  () => form.value.vars,
+  () => {
+    coerceOptionsVarsToVisibleChoices(pluginVars.value as PluginVarDef[], form.value.vars);
+  },
+  { deep: true },
+);
 
 onMounted(async () => {
   try {

@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 // Storage 不再依赖 Tauri AppHandle
 
 pub mod albums;
+pub mod image_events;
 pub mod gallery;
 pub mod gallery_time;
 pub mod images;
@@ -1092,6 +1093,34 @@ fn perform_complex_migrations(conn: &mut Connection) {
                 if let Ok(s) = serde_json::to_string_pretty(&v) {
                     let _ = fs::write(&settings_path, s);
                 }
+            }
+        }
+    }
+
+    // pixiv：裁剪历史 metadata.body（仅保留 EJS 所需字段），只跑一次
+    let _ = conn.execute(
+        "CREATE TABLE IF NOT EXISTS _kabegame_migrations (id TEXT PRIMARY KEY)",
+        [],
+    );
+    let pixiv_trim_done = matches!(
+        conn.query_row(
+            "SELECT 1 FROM _kabegame_migrations WHERE id = 'pixiv_metadata_trim_v1' LIMIT 1",
+            [],
+            |_| Ok(1i32),
+        )
+        .optional(),
+        Ok(Some(_))
+    );
+    if !pixiv_trim_done {
+        match images::migrate_pixiv_metadata_trim(conn) {
+            Ok(()) => {
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO _kabegame_migrations (id) VALUES ('pixiv_metadata_trim_v1')",
+                    [],
+                );
+            }
+            Err(e) => {
+                eprintln!("migrate_pixiv_metadata_trim: {}", e);
             }
         }
     }

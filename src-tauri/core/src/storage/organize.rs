@@ -654,25 +654,7 @@ fn run_organize(
 
         // 执行删除
         if !remove_ids.is_empty() {
-            let task_ids_for_emit = storage
-                .collect_task_ids_for_images(&remove_ids)
-                .unwrap_or_default();
-            storage.batch_remove_images(&remove_ids)?;
-
-            // 发送 ImagesChange 事件，前端刷新视图
-            GlobalEmitter::global().emit_images_change("remove", &remove_ids);
-
-            for tid in task_ids_for_emit {
-                if let Ok(Some(t)) = storage.get_task(&tid) {
-                    GlobalEmitter::global().emit_task_image_counts(
-                        &tid,
-                        Some(t.success_count),
-                        Some(t.deleted_count),
-                        Some(t.failed_count),
-                        Some(t.dedup_count),
-                    );
-                }
-            }
+            crate::storage::image_events::delete_images_with_events(&remove_ids, false)?;
 
             // 检查壁纸是否被移除
             if let Some(cur) = current_wallpaper_id.as_deref() {

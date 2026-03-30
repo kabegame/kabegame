@@ -2,7 +2,7 @@ use crate::emitter::GlobalEmitter;
 use crate::{settings::Settings, storage::{FAVORITE_ALBUM_ID, ImageInfo, Storage}};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs};
+use std::{collections::{HashMap, HashSet}, fs};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,6 +64,29 @@ impl Storage {
             )
             .map_err(|e| format!("Failed to check image in album: {}", e))?;
         Ok(exists)
+    }
+
+    /// 批量图片在删除/移除前涉及的画册 id（去重），用于 `images-change` 事件。
+    pub fn collect_album_ids_for_images(&self, image_ids: &[String]) -> Result<Vec<String>, String> {
+        if image_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut set = HashSet::new();
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT album_id FROM album_images WHERE image_id = ?1")
+            .map_err(|e| format!("Failed to prepare album_ids query: {}", e))?;
+        for id in image_ids {
+            let rows = stmt
+                .query_map(params![id], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("Failed to query album IDs: {}", e))?;
+            for row in rows {
+                if let Ok(aid) = row {
+                    set.insert(aid);
+                }
+            }
+        }
+        Ok(set.into_iter().collect())
     }
 
     pub fn pick_existing_album_image_id(

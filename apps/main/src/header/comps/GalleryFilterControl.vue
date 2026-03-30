@@ -255,7 +255,6 @@ onMounted(() => void loadFilterCounts());
 useImagesChangeRefresh({
   enabled: isOnGalleryPage,
   waitMs: 500,
-  filter: (p) => !p.albumId,
   onRefresh: () => void loadFilterCounts(),
 });
 

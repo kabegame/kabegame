@@ -119,10 +119,12 @@ import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
 import { useGalleryPathState } from "@/composables/useGalleryPathState";
 import { buildGalleryPath, parseGalleryPath } from "@/utils/galleryPath";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID, IS_WINDOWS } from "@kabegame/core/env";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import type { Component } from "vue";
 import { useAlbumStore } from "@/stores/albums";
@@ -199,6 +201,10 @@ const {
 });
 
 const isWallpaperOrderEmpty = computed(
+  () => parseGalleryPath(currentPath.value).root === "wallpaper-order"
+);
+
+const isWallpaperOrderBrowse = computed(
   () => parseGalleryPath(currentPath.value).root === "wallpaper-order"
 );
 
@@ -526,6 +532,8 @@ const tasks = computed(() => crawlerStore.tasks);
 
 // 插件配置相关的变量和函数已移至 CrawlerDialog 组件
 
+const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
+
 // 使用画廊图片 composable
 const {
   displayedImages,
@@ -539,6 +547,7 @@ const {
   galleryContainerRef,
   isLoadingMore,
   pageSize,
+  clearImageMetadataCache,
 );
 
 watch(
@@ -680,6 +689,7 @@ const {
 );
 
 const albumStore = useAlbumStore();
+const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 
 const handleAddedToAlbum = async () => {
   // 画廊本身不依赖画册列表，但这里留个钩子以便其他页面/计数能及时刷新
@@ -1024,7 +1034,26 @@ watch(tasks, (newTasks, oldTasks) => {
 useImagesChangeRefresh({
   enabled: ref(true), // 始终启用，不管是否在前台（用于同步删除等操作）
   waitMs: 1000,
-  filter: (p) => !p.albumId, // 忽略特定画册的变动（如添加到画册、从画册移除）
+  filter: (p) => {
+    const reason = String(p.reason ?? "");
+    const ids = Array.isArray(p.imageIds) ? p.imageIds : [];
+    const intersects =
+      ids.length > 0 &&
+      ids.some((id) => displayedImages.value.some((img) => img.id === id));
+
+    if (reason === "delete") {
+      return ids.length === 0 || intersects;
+    }
+    if (reason === "add") {
+      if (displayedImages.value.length >= pageSize.value) return false;
+      return true;
+    }
+    if (reason === "change") {
+      if (isWallpaperOrderBrowse.value) return true;
+      return ids.length === 0 || intersects;
+    }
+    return true;
+  },
   onRefresh: async () => {
     const prevList = displayedImages.value.slice();
     // 当前壁纸被删/移除：前端清空当前选中（后端也会清空设置，这里是 UI 兜底）
@@ -1049,6 +1078,21 @@ useImagesChangeRefresh({
     if (displayedImages.value.length === 0 && totalImagesCount.value > 0) {
       await ensureValidGalleryPageAfterMassRemoval();
     }
+  },
+});
+
+/** 收藏画册成员变化：就地更新星标，避免全量重拉 */
+useAlbumImagesChangeRefresh({
+  enabled: ref(true),
+  waitMs: 1000,
+  filter: (p) => p.albumIds?.includes(FAVORITE_ALBUM_ID.value),
+  onRefresh: (p) => {
+    const idSet = new Set(p.imageIds ?? []);
+    if (idSet.size === 0) return;
+    const fav = p.reason === "add";
+    displayedImages.value = displayedImages.value.map((img) =>
+      idSet.has(img.id) ? { ...img, favorite: fav } : img
+    );
   },
 });
 

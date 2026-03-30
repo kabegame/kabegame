@@ -53,7 +53,9 @@ function matchUserConfigFromDefaults(
   return matched;
 }
 
-export type VarOption = string | { name: PluginConfigText | string; variable: string };
+export type VarOption =
+  | string
+  | { name: PluginConfigText | string; variable: string; when?: Record<string, string[]> };
 
 /** 插件变量定义：name/descripts/options[].name 为后端下发的 record（default/zh/en）或兼容 string */
 export type PluginVarDef = {

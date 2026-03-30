@@ -238,9 +238,10 @@ fn fs_entries_to_gallery_browse(
                 out.push(GalleryBrowseEntry::Dir { name });
             }
             FsEntry::File { image_id, .. } => {
-                let image = storage
+                let mut image = storage
                     .find_image_by_id(&image_id)?
                     .ok_or_else(|| format!("图片不存在: {}", image_id))?;
+                image.metadata = None;
                 out.push(GalleryBrowseEntry::Image { image });
             }
         }

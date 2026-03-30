@@ -5,7 +5,6 @@ use crate::wallpaper::WallpaperRotator;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
-use serde_json::json;
 use std::path::Path;
 use tauri::AppHandle;
 
@@ -66,13 +65,8 @@ pub async fn set_wallpaper(file_path: String) -> Result<(), String> {
             .unwrap_or_default()
             .as_secs();
         let _ = Storage::global().update_image_last_set_wallpaper_at(&img.id, now);
-        GlobalEmitter::global().emit(
-            "images-change",
-            json!({
-                "reason": "wallpaper-set",
-                "imageIds": [img.id.clone()]
-            }),
-        );
+        let ids = vec![img.id.clone()];
+        GlobalEmitter::global().emit_images_change("change", &ids, None, None);
     }
     Ok(())
 }
@@ -135,13 +129,8 @@ pub async fn set_wallpaper_by_image_id(image_id: String) -> Result<(), String> {
         .unwrap_or_default()
         .as_secs();
     let _ = Storage::global().update_image_last_set_wallpaper_at(&image_id, now);
-    GlobalEmitter::global().emit(
-        "images-change",
-        json!({
-            "reason": "wallpaper-set",
-            "imageIds": [image_id]
-        }),
-    );
+    let ids = vec![image_id];
+    GlobalEmitter::global().emit_images_change("change", &ids, None, None);
     Ok(())
 }
 

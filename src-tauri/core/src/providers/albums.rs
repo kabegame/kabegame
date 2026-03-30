@@ -150,7 +150,7 @@ impl Provider for AlbumProvider {
             crate::providers::vd_ops::album_delete_child_file(&self.album_id, child_name)?;
         if removed {
             if let Some(name) = Storage::global().get_album_name_by_id(&self.album_id)? {
-                ctx.album_images_removed(&name);
+                ctx.album_images_removed(&self.album_id, &name);
             }
         }
         Ok(removed)

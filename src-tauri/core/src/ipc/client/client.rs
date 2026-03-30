@@ -539,10 +539,12 @@ impl IpcClient {
         &self,
         source_id: Option<String>,
         force_refresh: bool,
+        revalidate_if_stale_after_secs: Option<u64>,
     ) -> Result<serde_json::Value, String> {
         self.request_data(CliIpcRequest::PluginGetStorePlugins {
             source_id,
             force_refresh,
+            revalidate_if_stale_after_secs,
         })
         .await
     }

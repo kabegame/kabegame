@@ -76,6 +76,7 @@ daemon_event_kinds! {
     OrganizeFinished,
     WallpaperUpdateImage,
     ImagesChange,
+    AlbumImagesChange,
     SettingChange,
     AlbumAdded,
     AlbumNameChanged,
@@ -109,6 +110,7 @@ impl DaemonEventKind {
             DaemonEventKind::OrganizeFinished => "organize-finished",
             DaemonEventKind::WallpaperUpdateImage => "wallpaper-update-image",
             DaemonEventKind::ImagesChange => "images-change",
+            DaemonEventKind::AlbumImagesChange => "album-images-change",
             DaemonEventKind::SettingChange => "setting-change",
             DaemonEventKind::AlbumAdded => "album-added",
             DaemonEventKind::AlbumNameChanged => "album-name-changed",
@@ -137,6 +139,7 @@ impl DaemonEventKind {
             "organize-finished" => Some(DaemonEventKind::OrganizeFinished),
             "wallpaper-update-image" => Some(DaemonEventKind::WallpaperUpdateImage),
             "images-change" => Some(DaemonEventKind::ImagesChange),
+            "album-images-change" => Some(DaemonEventKind::AlbumImagesChange),
             "setting-change" => Some(DaemonEventKind::SettingChange),
             "album-added" => Some(DaemonEventKind::AlbumAdded),
             "album-name-changed" => Some(DaemonEventKind::AlbumNameChanged),
@@ -235,8 +238,22 @@ pub enum DaemonEvent {
         canceled: bool,
     },
 
+    /// `images` 表增删改（reason: `add` | `delete` | `change`）
     ImagesChange {
         reason: String,
+        #[serde(rename = "imageIds")]
+        image_ids: Vec<String>,
+        #[serde(rename = "taskIds", skip_serializing_if = "Option::is_none")]
+        task_ids: Option<Vec<String>>,
+        #[serde(rename = "surfRecordIds", skip_serializing_if = "Option::is_none")]
+        surf_record_ids: Option<Vec<String>>,
+    },
+
+    /// `album_images` 表增删（reason: `add` | `delete`）
+    AlbumImagesChange {
+        reason: String,
+        #[serde(rename = "albumIds")]
+        album_ids: Vec<String>,
         #[serde(rename = "imageIds")]
         image_ids: Vec<String>,
     },
@@ -334,6 +351,7 @@ impl DaemonEvent {
             DaemonEvent::OrganizeProgress { .. } => DaemonEventKind::OrganizeProgress,
             DaemonEvent::OrganizeFinished { .. } => DaemonEventKind::OrganizeFinished,
             DaemonEvent::ImagesChange { .. } => DaemonEventKind::ImagesChange,
+            DaemonEvent::AlbumImagesChange { .. } => DaemonEventKind::AlbumImagesChange,
             DaemonEvent::WallpaperUpdateImage { .. } => DaemonEventKind::WallpaperUpdateImage,
             DaemonEvent::SettingChange { .. } => DaemonEventKind::SettingChange,
             DaemonEvent::AlbumAdded { .. } => DaemonEventKind::AlbumAdded,

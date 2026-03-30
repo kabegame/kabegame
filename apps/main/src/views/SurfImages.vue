@@ -86,6 +86,7 @@ import { useImageTypes } from "@/composables/useImageTypes";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { IS_ANDROID } from "@kabegame/core/env";
+import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useI18n } from "@kabegame/i18n";
 
 const { t } = useI18n();
@@ -107,6 +108,7 @@ const totalImagesCount = ref(0);
 const loading = ref(false);
 const record = ref<SurfRecord | null>(null);
 const recordId = ref("");
+const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 const surfViewRef = ref<InstanceType<typeof ImageGrid> | null>(null);
 const currentWallpaperImageId = ref<string | null>(null);
 
@@ -162,34 +164,7 @@ const toggleFavoriteForImages = async (imgs: ImageInfo[]) => {
     return;
   }
 
-  const idSet = new Set(succeededIds);
-  images.value = images.value.map((img) =>
-    idSet.has(img.id) ? ({ ...img, favorite: desiredFavorite } as ImageInfo) : img
-  );
-
-  const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
-  albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(
-    0,
-    currentCount + (desiredFavorite ? succeededIds.length : -succeededIds.length)
-  );
-
-  const favList = albumStore.albumImages[FAVORITE_ALBUM_ID.value];
-  if (Array.isArray(favList)) {
-    if (desiredFavorite) {
-      for (const id of succeededIds) {
-        const src = images.value.find((x) => x.id === id) || toChange.find((x) => x.id === id);
-        if (!src) continue;
-        const idx = favList.findIndex((x) => x.id === id);
-        if (idx === -1) favList.push({ ...src, favorite: true } as ImageInfo);
-        else favList[idx] = { ...(favList[idx] as any), favorite: true } as any;
-      }
-    } else {
-      const removeSet = new Set(succeededIds);
-      for (let i = favList.length - 1; i >= 0; i--) {
-        if (removeSet.has(favList[i]!.id)) favList.splice(i, 1);
-      }
-    }
-  }
+  // 列表与画册缓存由 album-images-change / images-change 事件驱动刷新
 
   ElMessage.success(desiredFavorite ? t("surf.favoritedCount", { count: succeededIds.length }) : t("surf.unfavoritedCount", { count: succeededIds.length }));
   clearSelection();
@@ -337,10 +312,8 @@ const confirmRemoveImages = async () => {
       await invoke("batch_remove_images", { imageIds });
     }
 
-    const ids = new Set(imageIds);
-    images.value = images.value.filter((img) => !ids.has(img.id));
     clearSelection();
-    await reloadAllImages();
+    // 列表由 images-change（带 surfRecordIds）节流刷新，见 startListening
 
     const actionKey = shouldDeleteFiles ? "common.delete" : "common.remove";
     const actionLabel = t(actionKey);
@@ -373,6 +346,7 @@ const lastVisitSubtitle = computed(() => {
 });
 
 const fetchPageImages = async (path: string) => {
+  clearImageMetadataCache();
   const res = await invoke<{
     total?: number;
     entries?: Array<{ kind: string; image?: ImageInfo }>;
@@ -489,15 +463,20 @@ const startListening = async () => {
     }
   );
 
-  // 下载完成（含视频）会发 images-change 且带 surfRecordId，与 surf-records-change 互补
-  unlistenImagesChange = await listen<{ reason?: string; surfRecordId?: string }>(
-    "images-change",
-    (event) => {
-      const payload = event.payload ?? {};
-      if (payload.surfRecordId !== recordId.value) return;
-      scheduleRefreshImages();
-    }
-  );
+  // 下载完成（含视频）会发 images-change 且带 surfRecordIds / surfRecordId，与 surf-records-change 互补
+  unlistenImagesChange = await listen<{
+    reason?: string;
+    surfRecordIds?: string[];
+    surfRecordId?: string;
+  }>("images-change", (event) => {
+    const payload = event.payload ?? {};
+    const rid = recordId.value;
+    if (!rid) return;
+    const match =
+      payload.surfRecordIds?.includes(rid) || payload.surfRecordId === rid;
+    if (!match) return;
+    scheduleRefreshImages();
+  });
 };
 
 const stopListening = () => {

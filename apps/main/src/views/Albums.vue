@@ -66,7 +66,7 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { IS_WINDOWS, IS_LIGHT_MODE, IS_ANDROID, CONTENT_URI_PROXY_PREFIX } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
-import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { thumbnailToUrl } from "@kabegame/core/httpServer";
@@ -185,30 +185,29 @@ const refreshFavoriteAlbumPreview = async () => {
 // 收藏状态以 store 为准：通过收藏画册计数变化触发预览刷新
 const stopFavoriteCountWatch = ref<null | (() => void)>(null);
 
-// 统一图片变更事件：收到 images-change 后，按 albumId 刷新对应画册预览（1000ms trailing 节流，不丢最后一次）
-useImagesChangeRefresh({
+// album_images 表变更：按 albumIds 刷新对应画册预览（1000ms trailing 节流，不丢最后一次）
+useAlbumImagesChangeRefresh({
   enabled: ref(true),
   waitMs: 1000,
   filter: (p) => {
-    // 只处理明确给出 albumId 的变更（例如：收藏/画册增删图片/爬虫写入时带 albumId）
-    return !!p.albumId;
+    const ids = p.albumIds ?? [];
+    return ids.some((aid) => albums.value.some((a) => a.id === aid));
   },
   onRefresh: async (p) => {
-    const targetAlbumId = p.albumId;
-    if (!targetAlbumId) return;
-    const targetAlbum = albums.value.find((a) => a.id === targetAlbumId);
-    if (!targetAlbum) return;
+    const affected = new Set(p.albumIds ?? []);
+    for (const album of albums.value) {
+      if (!affected.has(album.id)) continue;
 
-    // 检查该画册的预览图列表是否已满
-    const images = albumPreviewImages.value[targetAlbumId];
-    if (images && images.length >= albumPreviewLimit) {
-      const allLoaded = images.every((img) => hasPreviewUrl(img));
-      if (allLoaded) return;
+      const images = albumPreviewImages.value[album.id];
+      if (images && images.length >= albumPreviewLimit) {
+        const allLoaded = images.every((img) => hasPreviewUrl(img));
+        if (allLoaded) continue;
+      }
+
+      clearAlbumPreviewCache(album.id);
+      delete albumStore.albumPreviews[album.id];
+      await prefetchPreview(album);
     }
-
-    clearAlbumPreviewCache(targetAlbumId);
-    delete albumStore.albumPreviews[targetAlbumId];
-    await prefetchPreview(targetAlbum);
   },
 });
 
@@ -236,7 +235,7 @@ onMounted(async () => {
     }
   );
 
-  // 图片变更的预览刷新由 `images-change`（失效信号）驱动，统一节流处理。
+  // 画册成员变更的预览刷新由 `album-images-change` 驱动，统一节流处理。
 });
 
 // 组件激活时（keep-alive 缓存后重新显示）重新加载画册列表和轮播设置

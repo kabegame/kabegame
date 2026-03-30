@@ -975,10 +975,13 @@ impl PluginManager {
     /// - `source_id=None`：从所有启用的源获取
     /// - `source_id=Some(id)`：只从指定源获取（若源不存在/未启用，则返回空列表）
     /// - `force_refresh`：是否强制从远程刷新（忽略本地缓存）
+    /// - `revalidate_if_stale_after_secs`：在 `force_refresh == false` 时生效；若缓存行的
+    ///   `updated_at` 距现在已超过该秒数，则改为走网络拉取并更新缓存。`None` 表示不按时间失效。
     pub async fn fetch_store_plugins(
         &self,
         source_id: Option<&str>,
         force_refresh: bool,
+        revalidate_if_stale_after_secs: Option<u64>,
     ) -> Result<Vec<StorePluginResolved>, String> {
         let sources = self.load_plugin_sources()?;
         let enabled_sources: Vec<_> = sources
@@ -995,7 +998,7 @@ impl PluginManager {
 
         for source in enabled_sources {
             match self
-                .fetch_plugins_from_source_cached(&source, force_refresh)
+                .fetch_plugins_from_source_cached(&source, force_refresh, revalidate_if_stale_after_secs)
                 .await
             {
                 Ok(mut plugins) => all_plugins.append(&mut plugins),
@@ -1045,48 +1048,79 @@ impl PluginManager {
 
     /// 从单个源获取插件列表（带缓存支持）
     ///
-    /// - `force_refresh=false`：优先使用本地缓存
+    /// - `force_refresh=false`：优先使用本地缓存（可选按 `updated_at` 过期后重拉）
     /// - `force_refresh=true`：强制从远程获取并更新缓存
     async fn fetch_plugins_from_source_cached(
         &self,
         source: &PluginSource,
         force_refresh: bool,
+        revalidate_if_stale_after_secs: Option<u64>,
     ) -> Result<Vec<StorePluginResolved>, String> {
-        // 如果不强制刷新，先尝试从缓存加载
-        if !force_refresh {
-            if let Ok(Some(cached_json_str)) = crate::storage::Storage::global()
-                .plugin_sources()
-                .get_source_cache(&source.id)
-            {
-                if let Ok(cached_json) = serde_json::from_str::<serde_json::Value>(&cached_json_str)
-                {
-                    // 解析缓存的 JSON
-                    if let Some(plugins_array) =
-                        cached_json.get("plugins").and_then(|v| v.as_array())
-                    {
-                        let mut resolved_plugins = Vec::new();
-                        for plugin_json in plugins_array {
-                            if let Ok(plugin) =
-                                self.parse_store_plugin(plugin_json, &source.id, &source.name)
-                            {
-                                resolved_plugins.push(plugin);
-                            }
-                        }
-                        if !resolved_plugins.is_empty() {
-                            println!(
-                                "从缓存加载商店源 '{}' 的插件列表（{} 个插件）",
-                                source.name,
-                                resolved_plugins.len()
-                            );
-                            return Ok(resolved_plugins);
-                        }
-                    }
-                }
-            }
+        if force_refresh {
+            return self.fetch_plugins_from_source(source).await;
         }
 
-        // 从远程获取
-        self.fetch_plugins_from_source(source).await
+        let storage = crate::storage::Storage::global().plugin_sources();
+        let cache_row = match storage.get_source_cache_row(&source.id) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("读取商店源缓存元数据失败 ({}): {}", source.name, e);
+                None
+            }
+        };
+
+        let Some((cached_json_str, updated_at)) = cache_row else {
+            return self.fetch_plugins_from_source(source).await;
+        };
+
+        let Some(resolved_plugins) =
+            self.plugins_from_index_cache_json(&cached_json_str, source)
+        else {
+            return self.fetch_plugins_from_source(source).await;
+        };
+
+        let stale = match revalidate_if_stale_after_secs {
+            None => false,
+            Some(max_age) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                now.saturating_sub(updated_at) >= max_age as i64
+            }
+        };
+
+        if stale {
+            return self.fetch_plugins_from_source(source).await;
+        }
+
+        println!(
+            "从缓存加载商店源 '{}' 的插件列表（{} 个插件）",
+            source.name,
+            resolved_plugins.len()
+        );
+        Ok(resolved_plugins)
+    }
+
+    /// 从已缓存的 index JSON 字符串解析出插件列表；无效或为空则返回 `None`。
+    fn plugins_from_index_cache_json(
+        &self,
+        cached_json_str: &str,
+        source: &PluginSource,
+    ) -> Option<Vec<StorePluginResolved>> {
+        let cached_json = serde_json::from_str::<serde_json::Value>(cached_json_str).ok()?;
+        let plugins_array = cached_json.get("plugins")?.as_array()?;
+        let mut resolved_plugins = Vec::new();
+        for plugin_json in plugins_array {
+            if let Ok(plugin) = self.parse_store_plugin(plugin_json, &source.id, &source.name) {
+                resolved_plugins.push(plugin);
+            }
+        }
+        if resolved_plugins.is_empty() {
+            None
+        } else {
+            Some(resolved_plugins)
+        }
     }
 
     /// 从单个源获取插件列表（从远程获取并保存缓存）
@@ -2842,6 +2876,8 @@ pub enum VarOption {
     Item {
         name: ManifestI18nText,
         variable: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        when: Option<HashMap<String, Vec<String>>>,
     },
 }
 
@@ -2866,7 +2902,14 @@ impl<'de> Deserialize<'de> for VarOption {
         if name.is_empty() {
             return Err(serde::de::Error::custom("VarOption Item: missing name"));
         }
-        Ok(VarOption::Item { name, variable })
+        let when: Option<HashMap<String, Vec<String>>> = map
+            .get("when")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        Ok(VarOption::Item {
+            name,
+            variable,
+            when,
+        })
     }
 }
 
@@ -2941,7 +2984,14 @@ impl<'de> Deserialize<'de> for VarDefinition {
                     let variable = m.get("variable").and_then(|x| x.as_str())?.to_string();
                     let name = extract_manifest_text_from_flat(m, "name");
                     if !name.is_empty() {
-                        out.push(VarOption::Item { name, variable });
+                        let when: Option<HashMap<String, Vec<String>>> = m
+                            .get("when")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok());
+                        out.push(VarOption::Item {
+                            name,
+                            variable,
+                            when,
+                        });
                     }
                 }
             }
@@ -3014,7 +3064,11 @@ pub fn var_definition_to_frontend_value(v: &VarDefinition) -> serde_json::Value 
                     m.insert("name".to_string(), serde_json::Value::Object(name_m));
                     serde_json::Value::Object(m)
                 }
-                VarOption::Item { name, variable } => {
+                VarOption::Item {
+                    name,
+                    variable,
+                    when,
+                } => {
                     let mut m = serde_json::Map::new();
                     m.insert(
                         "variable".to_string(),
@@ -3024,6 +3078,11 @@ pub fn var_definition_to_frontend_value(v: &VarDefinition) -> serde_json::Value 
                         "name".to_string(),
                         manifest_i18n_to_frontend_value(name, "name"),
                     );
+                    if let Some(ref w) = when {
+                        if let Ok(wv) = serde_json::to_value(w) {
+                            m.insert("when".to_string(), wv);
+                        }
+                    }
                     serde_json::Value::Object(m)
                 }
             })

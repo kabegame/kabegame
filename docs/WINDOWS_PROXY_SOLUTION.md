@@ -43,7 +43,7 @@ Windows 系统代理（含 Clash、V2Ray 等开启「系统代理」时的配置
 |------|----------|------|
 | 图片下载 | `src-tauri/core/src/crawler/downloader/http.rs` | `create_client()`：构建 HTTP 客户端，当前仅读环境变量 |
 | 插件商店 | `src-tauri/core/src/plugin/mod.rs` | 插件列表请求、插件源验证、插件下载，各有一处 `Client::builder()` + 环境变量代理 |
-| 相关流程 | `cocs/DOWNLOADER_FLOW.md` | 下载器流程说明 |
+| 相关流程 | `cocs/downloader-tasks/DOWNLOADER_FLOW.md` | 下载器流程说明 |
 
 ---
 

@@ -756,6 +756,7 @@ impl Storage {
     /// 获取符合条件的图片信息（分页，给 app-main 画廊 Provider 浏览复用）
     ///
     /// 注意：这里不做本地文件 exists 检查（性能考虑），`local_exists` 统一置为 true。
+    /// 为减少翻页数据量，**不**查询 `images.metadata` 列；详情区通过 `get_image_metadata` 按需加载。
     pub fn get_images_info_range_by_query(
         &self,
         query: &ImageQuery,
@@ -785,7 +786,7 @@ impl Storage {
                 images.plugin_id,
                 images.task_id,
                 images.crawled_at,
-                images.metadata,
+                NULL as metadata,
                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                 images.hash,
                 images.mime_type,
@@ -818,9 +819,7 @@ impl Storage {
                 task_id: row.get(4)?,
                 surf_record_id: None,
                 crawled_at: row.get::<_, i64>(5)? as u64,
-                metadata: crate::storage::images::parse_image_metadata_json(
-                    row.get::<_, Option<String>>(6)?,
-                ),
+                metadata: None,
                 thumbnail_path: row.get(7)?,
                 hash: row.get(8)?,
                 mime_type: row.get::<_, Option<String>>(9)?,

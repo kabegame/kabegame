@@ -304,7 +304,6 @@ const handleInstall = async () => {
             }
 
             await invoke("import_plugin_from_zip", { zipPath: res.tmpPath });
-            await invoke("refresh_installed_plugin_cache", { pluginId: plugin.value.id });
             ElMessage.success(t("plugins.installSuccess"));
         } else {
             await invoke("install_browser_plugin", { pluginId: plugin.value.id });

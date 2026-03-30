@@ -1,8 +1,8 @@
-# Kabegame 图片管理器
+# Kabegame 二次元爬虫客户端
 
 > [English](README.md) | 中文 | [日本語](README.ja.md) | [한국어](README.ko.md)
 
-一个基于 Tauri 的二次元图片管理器！爬取、管理、设置/轮播壁纸，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元图片资源~爬取、管理、设置/轮播壁纸，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元图片资源~
+一个基于 Tauri 的二次元爬虫客户端！爬取、管理、设置/轮播壁纸，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元站点资源~
 
 <div align="center">
   <img src="docs/images/image2.png" alt="Kabegame 形象图 1" width="256"/>
@@ -86,11 +86,11 @@
 
 | 操作系统 | Standard 模式 | Light 模式 |
 |---------|--------------|-----------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-standard_3.4.1_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-light_3.4.1_x64-setup.exe) |
-| macOS | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-standard_3.4.1_aarch64.dmg) | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-light_3.4.1_aarch64.dmg) |
-| Linux | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-standard_3.4.1_amd64.deb) | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-light_3.4.1_amd64.deb) |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-standard_3.4.2_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-light_3.4.2_x64-setup.exe) |
+| macOS | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-standard_3.4.2_aarch64.dmg) | [dmg 映像](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-light_3.4.2_aarch64.dmg) |
+| Linux | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-standard_3.4.2_amd64.deb) | [deb 包](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-light_3.4.2_amd64.deb) |
 
-- **安卓预览版**：[apk](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame_3.4.1_android-preview.apk)（同一发布页）。
+- **安卓预览版**：[apk](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame_3.4.2_android-preview.apk)（同一发布页）。
 
 ## 安装方法
 

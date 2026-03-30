@@ -57,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import ejs from "ejs";
 import DESCRIPTION_BRIDGE_INJECT_SCRIPT from "./descriptionBridgeInject.body.js?raw";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
@@ -67,6 +67,10 @@ import { ElMessage } from "element-plus";
 import { IS_ANDROID } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { useInstalledPluginsStore, usePluginStore } from "../../stores/plugins";
+import {
+  imageMetadataResolverKey,
+  type ImageMetadataResolver,
+} from "../../composables/useImageMetadataCache";
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
@@ -78,6 +82,7 @@ const toLocaleTag = (loc: string) => {
 };
 
 export type ImageDetailLike = {
+  id?: string;
   url?: string;
   localPath?: string;
   pluginId?: string;
@@ -92,6 +97,63 @@ interface Props {
 }
 
 const props = defineProps<Props>();
+
+function isRenderableMetadata(v: unknown): boolean {
+  if (v == null) return false;
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === "object") return Object.keys(v as object).length > 0;
+  return true;
+}
+
+const injectedResolveMetadata = inject<ImageMetadataResolver | null>(
+  imageMetadataResolverKey,
+  null,
+);
+
+/** 列表未带 metadata 时由懒加载写入；undefined 表示尚未完成一次解析 */
+const resolvedMetadata = ref<unknown | null | undefined>(undefined);
+
+async function loadMetadataForImage(img: ImageDetailLike | null) {
+  // resolvedMetadata.value = undefined;
+  if (!img?.id) {
+    resolvedMetadata.value = null;
+    return;
+  }
+  if (isRenderableMetadata(img.metadata)) {
+    resolvedMetadata.value = null;
+    return;
+  }
+  if (!img.pluginId) {
+    resolvedMetadata.value = null;
+    return;
+  }
+  try {
+    const fn =
+      injectedResolveMetadata ??
+      (async (imageId: string) =>
+        invoke<unknown | null>("get_image_metadata", { imageId }));
+    const m = await fn(img.id);
+    resolvedMetadata.value = m ?? null;
+  } catch (e) {
+    console.error("image detail metadata load failed", e);
+    resolvedMetadata.value = null;
+  }
+}
+
+watch(
+  () => props.image?.id,
+  () => {
+    void loadMetadataForImage(props.image ?? null);
+  },
+  { immediate: true },
+);
+
+const effectiveMetadata = computed(() => {
+  const img = props.image;
+  if (!img) return undefined;
+  if (isRenderableMetadata(img.metadata)) return img.metadata;
+  return resolvedMetadata.value;
+});
 
 const descriptionIframeRef = ref<HTMLIFrameElement | null>(null);
 
@@ -172,13 +234,6 @@ onUnmounted(() => {
   window.removeEventListener("message", onIframeBridgeMessage);
 });
 
-function isRenderableMetadata(v: unknown): boolean {
-  if (v == null) return false;
-  if (Array.isArray(v)) return v.length > 0;
-  if (typeof v === "object") return Object.keys(v as object).length > 0;
-  return true;
-}
-
 function pluginDescriptionTemplate(pluginId: string): string | undefined {
   const a = pluginStore.pluginDescriptionTemplate(pluginId);
   if (a) return a;
@@ -230,11 +285,12 @@ const EJS_BRIDGE_NONCE = "kabegame-ejs-bridge";
 
 const descriptionSrcdoc = computed(() => {
   const img = props.image;
-  if (!img?.pluginId || !isRenderableMetadata(img.metadata)) return "";
+  const meta = effectiveMetadata.value;
+  if (!img?.pluginId || !isRenderableMetadata(meta)) return "";
   const tpl = pluginDescriptionTemplate(img.pluginId);
   if (!tpl?.trim()) return "";
   try {
-    let body = ejs.render(tpl, { metadata: img.metadata }, { rmWhitespace: false });
+    let body = ejs.render(tpl, { metadata: meta }, { rmWhitespace: false });
     body = body.replace(/<script(?![^>]*\bnonce[=\s])/gi, `<script nonce="${EJS_BRIDGE_NONCE}"`);
     const theme = buildDescriptionIframeThemeStyles();
     return `${theme}<script nonce="${EJS_BRIDGE_NONCE}">${DESCRIPTION_BRIDGE_INJECT_SCRIPT}<\/script>${body}`;
@@ -246,14 +302,15 @@ const descriptionSrcdoc = computed(() => {
 
 const showRawMetadata = computed(() => {
   const img = props.image;
-  if (!img?.pluginId || !isRenderableMetadata(img.metadata)) return false;
+  const meta = effectiveMetadata.value;
+  if (!img?.pluginId || !isRenderableMetadata(meta)) return false;
   const tpl = pluginDescriptionTemplate(img.pluginId);
   if (tpl?.trim()) return false;
   return true;
 });
 
 const rawMetadataEntries = computed(() => {
-  const m = props.image?.metadata;
+  const m = effectiveMetadata.value;
   if (m == null || typeof m !== "object" || Array.isArray(m)) return {};
   return m as Record<string, unknown>;
 });
