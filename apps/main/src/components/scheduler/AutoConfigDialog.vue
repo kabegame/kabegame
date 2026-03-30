@@ -192,7 +192,11 @@ import { useCrawlerStore } from "@/stores/crawler";
 import { usePluginStore } from "@/stores/plugins";
 import { useAutoConfigDialogStore } from "@/stores/autoConfigDialog";
 import { usePluginConfig, type PluginVarDef } from "@/composables/usePluginConfig";
-import { matchesPluginVarWhen } from "@kabegame/core/utils/pluginVarWhen";
+import {
+  matchesPluginVarWhen,
+  filterVarOptionsByWhen,
+  coerceOptionsVarsToVisibleChoices,
+} from "@kabegame/core/utils/pluginVarWhen";
 import type { RunConfig, ScheduleSpec } from "@kabegame/core/stores/crawler";
 
 const { t } = useI18n();
@@ -284,13 +288,23 @@ const secondsByUnit = (unit: "minutes" | "hours" | "days") => {
   return 60;
 };
 
-const optionsForVar = (varDef: PluginVarDef): (string | { name: string; variable: string })[] =>
-  (varDef.options ?? []).map((opt) =>
+const optionsForVar = (varDef: PluginVarDef): (string | { name: string; variable: string })[] => {
+  const filtered = filterVarOptionsByWhen(varDef.options, form.value.vars);
+  return filtered.map((opt) =>
     typeof opt === "string" ? opt : { name: optionDisplayName(opt), variable: opt.variable },
   );
+};
 
 const visiblePluginVars = computed(() =>
   pluginVars.value.filter((varDef) => matchesPluginVarWhen(varDef.when, form.value.vars)),
+);
+
+watch(
+  () => form.value.vars,
+  () => {
+    coerceOptionsVarsToVisibleChoices(pluginVars.value as PluginVarDef[], form.value.vars);
+  },
+  { deep: true },
 );
 
 const getFileExtensions = (varDef: PluginVarDef): string[] | undefined => {

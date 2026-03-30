@@ -4,7 +4,7 @@ use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::crawler::webview::crawler_window_state;
 use crate::settings::Settings;
-use crate::storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID};
+use crate::storage::{ImageInfo, Storage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1140,20 +1140,10 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                 let added = Storage::global()
                                     .add_images_to_album_silent(album_id, &[existing.id.clone()]);
                                 if added > 0 {
-                                    let reason = if album_id.as_str() == FAVORITE_ALBUM_ID {
-                                        "favorite-add"
-                                    } else {
-                                        "album-add"
-                                    };
-                                    GlobalEmitter::global().emit(
-                                        "images-change",
-                                        serde_json::json!({
-                                            "reason": reason,
-                                            "albumId": album_id,
-                                            "taskId": &task_id_clone,
-                                            "imageIds": [existing.id.clone()],
-                                        }),
-                                    );
+                                    let ids = vec![existing.id.clone()];
+                                    let alb = vec![album_id.clone()];
+                                    GlobalEmitter::global()
+                                        .emit_album_images_change("add", &alb, &ids);
                                 }
                             }
                         }
@@ -1831,32 +1821,24 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                     &[existing.id.clone()],
                                                                 );
                                                             if added > 0 {
-                                                                let reason = if album_id.as_str()
-                                                                    == FAVORITE_ALBUM_ID
-                                                                {
-                                                                    "favorite-add"
-                                                                } else {
-                                                                    "album-add"
-                                                                };
-                                                                GlobalEmitter::global().emit(
-                                                                    "images-change",
-                                                                    serde_json::json!({
-                                                                        "reason": reason,
-                                                                        "albumId": album_id,
-                                                                        "taskId": &task_id_clone,
-                                                                        "imageIds": [existing.id.clone()],
-                                                                    }),
-                                                                );
+                                                                let ids = vec![existing.id.clone()];
+                                                                let alb = vec![album_id.clone()];
+                                                                GlobalEmitter::global()
+                                                                    .emit_album_images_change(
+                                                                        "add",
+                                                                        &alb,
+                                                                        &ids,
+                                                                    );
                                                             }
                                                         }
                                                     }
-                                                    GlobalEmitter::global().emit(
-                                                        "images-change",
-                                                        serde_json::json!({
-                                                            "reason": "add",
-                                                            "taskId": &task_id_clone,
-                                                            "imageIds": [existing.id.clone()],
-                                                        }),
+                                                    let ids_dup = vec![existing.id.clone()];
+                                                    let tid_dup = vec![task_id_clone.clone()];
+                                                    GlobalEmitter::global().emit_images_change(
+                                                        "change",
+                                                        &ids_dup,
+                                                        Some(&tid_dup),
+                                                        None,
                                                     );
                                                     if let Ok(new_count) =
                                                         Storage::global().increment_task_dedup_count(
@@ -2147,33 +2129,16 @@ async fn process_downloaded_content_image_to_storage(
     match Storage::global().add_image(image_info) {
         Ok(inserted) => {
             let image_id = inserted.id.clone();
-            GlobalEmitter::global().emit(
-                "images-change",
-                serde_json::json!({
-                    "reason": "add",
-                    "taskId": task_id,
-                    "imageIds": [image_id.clone()],
-                }),
-            );
+            let ids = vec![image_id.clone()];
+            let tid_add = vec![task_id.to_string()];
+            GlobalEmitter::global().emit_images_change("add", &ids, Some(&tid_add), None);
             if let Some(album_id) = output_album_id {
                 if !album_id.trim().is_empty() {
                     let added =
                         Storage::global().add_images_to_album_silent(album_id, &[image_id.clone()]);
                     if added > 0 {
-                        let reason = if album_id == FAVORITE_ALBUM_ID {
-                            "favorite-add"
-                        } else {
-                            "album-add"
-                        };
-                        GlobalEmitter::global().emit(
-                            "images-change",
-                            serde_json::json!({
-                                "reason": reason,
-                                "albumId": album_id,
-                                "taskId": task_id,
-                                "imageIds": [image_id.clone()],
-                            }),
-                        );
+                        let alb = vec![album_id.to_string()];
+                        GlobalEmitter::global().emit_album_images_change("add", &alb, &ids);
                     }
                 }
             }
@@ -2406,32 +2371,16 @@ pub async fn postprocess_downloaded_image(
             if !album_id.trim().is_empty() {
                 let added = Storage::global().add_images_to_album_silent(album_id, &[existing.id.clone()]);
                 if added > 0 {
-                    let reason = if album_id == FAVORITE_ALBUM_ID {
-                        "favorite-add"
-                    } else {
-                        "album-add"
-                    };
-                    GlobalEmitter::global().emit(
-                        "images-change",
-                        serde_json::json!({
-                            "reason": reason,
-                            "albumId": album_id,
-                            "taskId": task_id,
-                            "imageIds": [existing.id.clone()],
-                        }),
-                    );
+                    let ids = vec![existing.id.clone()];
+                    let alb = vec![album_id.to_string()];
+                    GlobalEmitter::global().emit_album_images_change("add", &alb, &ids);
                 }
             }
         }
         if let Some(task_id) = task_id {
-            GlobalEmitter::global().emit(
-                "images-change",
-                serde_json::json!({
-                    "reason": "add",
-                    "taskId": task_id,
-                    "imageIds": [existing.id.clone()],
-                }),
-            );
+            let ids = vec![existing.id.clone()];
+            let tid = vec![task_id.to_string()];
+            GlobalEmitter::global().emit_images_change("change", &ids, Some(&tid), None);
         } else if let Some(surf_record_id) = surf_record_id {
             emit_task_log(
                 surf_record_id,
@@ -2446,14 +2395,9 @@ pub async fn postprocess_downloaded_image(
                     }),
                 ),
             );
-            GlobalEmitter::global().emit(
-                "images-change",
-                serde_json::json!({
-                    "reason": "add",
-                    "surfRecordId": surf_record_id,
-                    "imageIds": [existing.id.clone()],
-                }),
-            );
+            let ids = vec![existing.id.clone()];
+            let srid = vec![surf_record_id.to_string()];
+            GlobalEmitter::global().emit_images_change("change", &ids, None, Some(&srid));
             GlobalEmitter::global().emit_download_state_with_native(
                 event_task_id,
                 url,
@@ -2684,35 +2628,22 @@ pub async fn process_downloaded_image_to_storage(
             let add_ms = t_add.map(|t| t.elapsed().as_millis() as u64);
             let image_id = inserted.id.clone();
             let t_album = postprocess_timing_hash_ms.map(|_| Instant::now());
-            GlobalEmitter::global().emit(
-                "images-change",
-                serde_json::json!({
-                    "reason": "add",
-                    "taskId": task_id,
-                    "surfRecordId": surf_record_id,
-                    "imageIds": [image_id.clone()],
-                }),
+            let ids = vec![image_id.clone()];
+            let task_opt = task_id.map(|t| vec![t.to_string()]);
+            let surf_opt = surf_record_id.map(|s| vec![s.to_string()]);
+            GlobalEmitter::global().emit_images_change(
+                "add",
+                &ids,
+                task_opt.as_ref().map(|v| v.as_slice()),
+                surf_opt.as_ref().map(|v| v.as_slice()),
             );
             if let Some(album_id) = output_album_id {
                 if !album_id.trim().is_empty() {
                     let added =
                         Storage::global().add_images_to_album_silent(album_id, &[image_id.clone()]);
                     if added > 0 {
-                        let reason = if album_id == FAVORITE_ALBUM_ID {
-                            "favorite-add"
-                        } else {
-                            "album-add"
-                        };
-                        GlobalEmitter::global().emit(
-                            "images-change",
-                            serde_json::json!({
-                                "reason": reason,
-                                "albumId": album_id,
-                                "taskId": task_id,
-                                "surfRecordId": surf_record_id,
-                                "imageIds": [image_id.clone()],
-                            }),
-                        );
+                        let alb = vec![album_id.to_string()];
+                        GlobalEmitter::global().emit_album_images_change("add", &alb, &ids);
                     }
                 }
             }

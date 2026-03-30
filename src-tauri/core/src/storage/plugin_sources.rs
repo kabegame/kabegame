@@ -202,13 +202,23 @@ impl PluginSourcesStorage {
         Ok(())
     }
 
-    /// 获取插件源缓存
+    /// 获取插件源缓存（仅 JSON 正文）
     pub fn get_source_cache(&self, source_id: &str) -> SqliteResult<Option<String>> {
-        let conn = self.conn.lock().expect("plugin_sources db lock");
-        let mut stmt =
-            conn.prepare("SELECT json_content FROM plugin_source_cache WHERE source_id = ?")?;
+        Ok(self
+            .get_source_cache_row(source_id)?
+            .map(|(json, _)| json))
+    }
 
-        let mut rows = stmt.query_map(params![source_id], |row| row.get(0))?;
+    /// 获取插件源缓存行：`json_content` 与 `updated_at`（Unix 秒）
+    pub fn get_source_cache_row(&self, source_id: &str) -> SqliteResult<Option<(String, i64)>> {
+        let conn = self.conn.lock().expect("plugin_sources db lock");
+        let mut stmt = conn.prepare(
+            "SELECT json_content, updated_at FROM plugin_source_cache WHERE source_id = ?",
+        )?;
+
+        let mut rows = stmt.query_map(params![source_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
         match rows.next() {
             Some(result) => result.map(Some),
             None => Ok(None),

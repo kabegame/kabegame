@@ -357,6 +357,7 @@ pub fn run() {
             // --- Images ---
             get_images_range,
             get_image_by_id,
+            get_image_metadata,
             get_gallery_image,
             copy_image_to_clipboard,
             delete_image,
@@ -432,8 +433,6 @@ pub fn run() {
             delete_plugin,
             get_browser_plugins,
             install_browser_plugin,
-            refresh_installed_plugins_cache,
-            refresh_installed_plugin_cache,
             get_plugin_sources,
             add_plugin_source,
             update_plugin_source,

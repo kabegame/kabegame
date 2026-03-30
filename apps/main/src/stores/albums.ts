@@ -5,6 +5,7 @@ import type { ImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
+import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { ElMessageBox } from "element-plus";
 import { i18n } from "@kabegame/i18n";
 
@@ -35,6 +36,21 @@ export const useAlbumStore = defineStore("albums", () => {
     await loadAlbums();
   };
 
+  const scheduleReloadAlbumCounts = () => {
+    if (reloadCountsTimer !== null) {
+      clearTimeout(reloadCountsTimer);
+    }
+    reloadCountsTimer = window.setTimeout(async () => {
+      reloadCountsTimer = null;
+      try {
+        const counts = await invoke<Record<string, number>>("get_album_counts");
+        albumCounts.value = counts;
+      } catch (e) {
+        console.warn("reload album counts failed", e);
+      }
+    }, 250);
+  };
+
   const initEventListeners = async () => {
     if (eventListenersInitialized) return;
     eventListenersInitialized = true;
@@ -43,35 +59,28 @@ export const useAlbumStore = defineStore("albums", () => {
       unlistenAlbumAdded = await listen("album-added", onAlbumsListChanged);
       unlistenAlbumDeleted = await listen("album-deleted", onAlbumsListChanged);
       unlistenAlbumNameChanged = await listen("album-name-changed", onAlbumsListChanged);
-      // 统一图片变更事件：作为“数据可能变化”的失效信号，只做缓存失效 + 计数刷新
-      unlistenImagesChange = await listen<ImagesChangePayload>(
-        "images-change",
+      // `images` 表变更：无画册维度字段，保守失效全部画册图片缓存
+      unlistenImagesChange = await listen<ImagesChangePayload>("images-change", async () => {
+        albumImages.value = {};
+        albumPreviews.value = {};
+        scheduleReloadAlbumCounts();
+      });
+      // `album_images` 表变更：按 albumIds 精准失效
+      await listen<AlbumImagesChangePayload>(
+        "album-images-change",
         async (event) => {
-          const p = (event.payload ?? {}) as ImagesChangePayload;
-          const albumId = (p.albumId ?? "").trim();
-
-          // 1) 缓存失效：带 albumId 则精准失效，否则保守失效全部
-          if (albumId) {
-            delete albumImages.value[albumId];
-            delete albumPreviews.value[albumId];
-          } else {
+          const p = (event.payload ?? {}) as AlbumImagesChangePayload;
+          const ids = (p.albumIds ?? []).map((x) => String(x).trim()).filter(Boolean);
+          if (ids.length === 0) {
             albumImages.value = {};
             albumPreviews.value = {};
-          }
-
-          // 2) counts 可能变化：用轻量 debounce 合并 burst
-          if (reloadCountsTimer !== null) {
-            clearTimeout(reloadCountsTimer);
-          }
-          reloadCountsTimer = window.setTimeout(async () => {
-            reloadCountsTimer = null;
-            try {
-              const counts = await invoke<Record<string, number>>("get_album_counts");
-              albumCounts.value = counts;
-            } catch (e) {
-              console.warn("reload album counts failed", e);
+          } else {
+            for (const aid of ids) {
+              delete albumImages.value[aid];
+              delete albumPreviews.value[aid];
             }
-          }, 250);
+          }
+          scheduleReloadAlbumCounts();
         }
       );
     } catch (e) {

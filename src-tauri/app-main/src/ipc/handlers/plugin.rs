@@ -42,7 +42,13 @@ pub async fn handle_plugin_request(req: &CliIpcRequest) -> Option<CliIpcResponse
         CliIpcRequest::PluginGetStorePlugins {
             source_id,
             force_refresh,
-        } => Some(get_store_plugins(source_id.as_deref(), *force_refresh).await),
+            revalidate_if_stale_after_secs,
+        } => Some(get_store_plugins(
+            source_id.as_deref(),
+            *force_refresh,
+            *revalidate_if_stale_after_secs,
+        )
+        .await),
 
         CliIpcRequest::PluginGetDetailForUi {
             plugin_id,
@@ -231,10 +237,14 @@ async fn install_browser_plugin(plugin_id: &str) -> CliIpcResponse {
     }
 }
 
-async fn get_store_plugins(source_id: Option<&str>, force_refresh: bool) -> CliIpcResponse {
+async fn get_store_plugins(
+    source_id: Option<&str>,
+    force_refresh: bool,
+    revalidate_if_stale_after_secs: Option<u64>,
+) -> CliIpcResponse {
     let plugin_manager = PluginManager::global();
     match plugin_manager
-        .fetch_store_plugins(source_id, force_refresh)
+        .fetch_store_plugins(source_id, force_refresh, revalidate_if_stale_after_secs)
         .await
     {
         Ok(plugins) => {

@@ -381,6 +381,9 @@ pub enum CliIpcRequest {
         source_id: Option<String>,
         #[serde(default)]
         force_refresh: bool,
+        /// 非强制刷新时：若 index 缓存 `updated_at` 超过该秒数则重新拉取；`None` 表示不按时间失效
+        #[serde(default)]
+        revalidate_if_stale_after_secs: Option<u64>,
     },
 
     /// 统一插件详情入口（本地已安装 or 远程商店源）

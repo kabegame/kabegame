@@ -109,6 +109,87 @@ pub(crate) fn parse_image_metadata_json(s: Option<String>) -> Option<Value> {
     })
 }
 
+/// pixiv 插件：`metadata.body` 仅保留 `description.ejs` 所需字段（与 `crawl.rhai` 的 `pixiv_trim_illust_body` 白名单一致）。
+const PIXIV_METADATA_BODY_KEYS: &[&str] = &[
+    "illustId",
+    "id",
+    "title",
+    "illustTitle",
+    "description",
+    "illustComment",
+    "userId",
+    "userName",
+    "uploadDate",
+    "createDate",
+    "bookmarkCount",
+    "likeCount",
+    "viewCount",
+    "tags",
+];
+
+fn trim_pixiv_metadata_body(body: &Value) -> Value {
+    let Some(obj) = body.as_object() else {
+        return body.clone();
+    };
+    let mut out = serde_json::Map::new();
+    for k in PIXIV_METADATA_BODY_KEYS {
+        if let Some(v) = obj.get(*k) {
+            out.insert((*k).to_string(), v.clone());
+        }
+    }
+    Value::Object(out)
+}
+
+/// 若 `metadata` 含可裁剪的 `body`，返回裁剪后的 JSON；否则 `None`。
+pub(crate) fn trim_pixiv_plugin_metadata_if_needed(value: &Value) -> Option<Value> {
+    let obj = value.as_object()?;
+    let body = obj.get("body")?;
+    if !body.is_object() {
+        return None;
+    }
+    let trimmed = trim_pixiv_metadata_body(body);
+    if trimmed == *body {
+        return None;
+    }
+    let mut root = value.clone();
+    let obj = root.as_object_mut()?;
+    obj.insert("body".to_string(), trimmed);
+    Some(root)
+}
+
+/// 一次性迁移：裁剪已有 pixiv 图片的 `metadata.body`，减轻列表查询读库/IPC 体积。
+pub(crate) fn migrate_pixiv_metadata_trim(conn: &rusqlite::Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, metadata FROM images WHERE plugin_id = 'pixiv' AND metadata IS NOT NULL AND TRIM(metadata) != ''",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut update_stmt = conn
+        .prepare("UPDATE images SET metadata = ?1 WHERE id = ?2")
+        .map_err(|e| e.to_string())?;
+
+    for r in rows {
+        let (id, meta_str) = r.map_err(|e| e.to_string())?;
+        let Ok(v) = serde_json::from_str::<Value>(&meta_str) else {
+            continue;
+        };
+        let Some(trimmed) = trim_pixiv_plugin_metadata_if_needed(&v) else {
+            continue;
+        };
+        let new_str = serde_json::to_string(&trimmed).map_err(|e| e.to_string())?;
+        update_stmt
+            .execute(params![new_str, id])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 pub(crate) fn row_optional_u64_ts(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<u64>> {
     let v: Option<i64> = row.get(idx)?;
     Ok(v.filter(|&t| t >= 0).map(|t| t as u64))
@@ -256,6 +337,20 @@ impl Storage {
         }
 
         Ok(result)
+    }
+
+    /// 仅读取 `images.metadata` 列（详情区懒加载；列表分页不拉全量 JSON）。
+    pub fn get_image_metadata(&self, image_id: &str) -> Result<Option<Value>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let meta: Option<String> = conn
+            .query_row(
+                "SELECT metadata FROM images WHERE id = ?1",
+                params![image_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query metadata: {}", e))?;
+        Ok(parse_image_metadata_json(meta))
     }
 
     pub fn find_image_by_path(&self, local_path: &str) -> Result<Option<ImageInfo>, String> {
@@ -763,6 +858,35 @@ impl Storage {
         for id in image_ids {
             for tid in self.get_task_ids_for_image(id)? {
                 set.insert(tid);
+            }
+        }
+        Ok(set.into_iter().collect())
+    }
+
+    /// 批量图片在删除/移除前涉及的畅游记录 id（去重），用于 `images-change` 事件。
+    pub fn collect_surf_record_ids_for_images(
+        &self,
+        image_ids: &[String],
+    ) -> Result<Vec<String>, String> {
+        if image_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut set = HashSet::new();
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT surf_record_id FROM images WHERE id = ?1 \
+                 AND surf_record_id IS NOT NULL AND surf_record_id != ''",
+            )
+            .map_err(|e| format!("Failed to prepare surf_record_ids query: {}", e))?;
+        for id in image_ids {
+            let rows = stmt
+                .query_map(params![id], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("Failed to query surf record IDs: {}", e))?;
+            for row in rows {
+                if let Ok(srid) = row {
+                    set.insert(srid);
+                }
             }
         }
         Ok(set.into_iter().collect())

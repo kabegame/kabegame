@@ -1,8 +1,8 @@
-# Kabegame Image Manager
+# Kabegame — Anime Crawler Client
 
 > *Translated by AI. [中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)*
 
-A Tauri-based anime image manager! Crawl, organize, and set/rotate wallpapers—let your waifus (or husbandos) keep you company every day~ Plugin-extensible, so you can easily grab images from all kinds of anime wallpaper sites.
+A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers—let your waifus (or husbandos) keep you company every day~ Plugin-extensible, so you can easily grab images from all kinds of anime wallpaper sites.
 
 <div align="center">
   <img src="docs/images/image2.png" alt="Kabegame mascot 1" width="256"/>
@@ -82,11 +82,11 @@ A Tauri-based anime image manager! Crawl, organize, and set/rotate wallpapers—
 
 | OS | Standard | Light |
 |----|----------|-------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-standard_3.4.1_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-light_3.4.1_x64-setup.exe) |
-| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-standard_3.4.1_aarch64.dmg) | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-light_3.4.1_aarch64.dmg) |
-| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-standard_3.4.1_amd64.deb) | [deb](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame-light_3.4.1_amd64.deb) |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-standard_3.4.2_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-light_3.4.2_x64-setup.exe) |
+| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-standard_3.4.2_aarch64.dmg) | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-light_3.4.2_aarch64.dmg) |
+| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-standard_3.4.2_amd64.deb) | [deb](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-light_3.4.2_amd64.deb) |
 
-- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v3.4.1/Kabegame_3.4.1_android-preview.apk) on the same releases page.
+- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame_3.4.2_android-preview.apk) on the same releases page.
 
 ## Installation
 

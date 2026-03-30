@@ -5,7 +5,9 @@ use crate::storage::Storage;
 use crate::crawler::scheduler::PageStackEntry;
 use crate::crawler::TaskScheduler;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use rhai::packages::Package;
 use rhai::{Dynamic, Engine, Map, Position, Scope};
+use rhai_chrono::ChronoPackage;
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -520,6 +522,8 @@ impl RhaiCrawlerRuntime {
             Arc::clone(&http_headers),
         );
 
+        ChronoPackage::new().register_into_engine(&mut engine);
+
         Self {
             engine,
             download_queue,
@@ -662,6 +666,15 @@ pub fn register_crawler_functions(
         }
     });
 
+    // warn(msg) — 向任务日志输出 warn 级别（与 HTTP 重试等一致，供脚本提示数量不足等）
+    engine.register_fn("warn", {
+        let task_id_holder = Arc::clone(&task_id);
+        let dq_holder = Arc::clone(&download_queue);
+        move |msg: &str| {
+            let tid = get_task_id(&task_id_holder);
+            emit_http_warn(dq_holder.as_ref(), &tid, msg.to_string());
+        }
+    });
 
     // to(url) - 访问一个网页，将当前页面入栈
     engine.register_fn("to", {

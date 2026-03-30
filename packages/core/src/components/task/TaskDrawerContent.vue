@@ -929,6 +929,9 @@ onUnmounted(() => {
     .downloads-content {
       flex: 1;
       min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
 
       .downloads-list {
         display: flex;
@@ -988,6 +991,7 @@ onUnmounted(() => {
     }
 
     .downloads-substatus {
+      flex-shrink: 0;
       margin-top: 8px;
       font-size: 12px;
       line-height: 1.4;

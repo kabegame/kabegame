@@ -213,10 +213,42 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送图片变更事件（如整理删除、批量操作等导致图库变化）
-    pub fn emit_images_change(&self, reason: &str, image_ids: &[String]) {
+    /// 发送 `images` 表变更事件（reason: `add` | `delete` | `change`）
+    pub fn emit_images_change(
+        &self,
+        reason: &str,
+        image_ids: &[String],
+        task_ids: Option<&[String]>,
+        surf_record_ids: Option<&[String]>,
+    ) {
+        let opt_vec = |s: Option<&[String]>| {
+            s.and_then(|v| {
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v.to_vec())
+                }
+            })
+        };
         let event = std::sync::Arc::new(DaemonEvent::ImagesChange {
             reason: reason.to_string(),
+            image_ids: image_ids.to_vec(),
+            task_ids: opt_vec(task_ids),
+            surf_record_ids: opt_vec(surf_record_ids),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 发送 `album_images` 表变更事件（reason: `add` | `delete`）
+    pub fn emit_album_images_change(
+        &self,
+        reason: &str,
+        album_ids: &[String],
+        image_ids: &[String],
+    ) {
+        let event = std::sync::Arc::new(DaemonEvent::AlbumImagesChange {
+            reason: reason.to_string(),
+            album_ids: album_ids.to_vec(),
             image_ids: image_ids.to_vec(),
         });
         EventBroadcaster::global().broadcast(event);
@@ -447,7 +479,22 @@ impl GlobalEmitter {
 
     pub fn emit_setting_change(&self, _changes: serde_json::Value) {}
 
-    pub fn emit_images_change(&self, _reason: &str, _image_ids: &[String]) {}
+    pub fn emit_images_change(
+        &self,
+        _reason: &str,
+        _image_ids: &[String],
+        _task_ids: Option<&[String]>,
+        _surf_record_ids: Option<&[String]>,
+    ) {
+    }
+
+    pub fn emit_album_images_change(
+        &self,
+        _reason: &str,
+        _album_ids: &[String],
+        _image_ids: &[String],
+    ) {
+    }
 
     pub fn emit_surf_records_change(&self, _reason: &str, _surf_record_id: &str) {}
 

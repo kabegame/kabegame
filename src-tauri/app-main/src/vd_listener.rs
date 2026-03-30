@@ -12,9 +12,9 @@ use std::sync::Arc;
 ///
 /// 监听以下事件并触发对应操作：
 /// - `AlbumAdded` / `AlbumNameChanged` / `AlbumDeleted` → `vd_service.bump_albums()`
-/// - `ImagesChange` → 根据 payload 调用 `notify_album_dir_changed` 或 `notify_gallery_tree_changed`
+/// - `ImagesChange` → 按 `task_ids` 通知任务目录，并 `notify_gallery_tree_changed`
+/// - `AlbumImagesChange` → 按 `album_ids` 通知画册目录，并 `notify_gallery_tree_changed`
 /// - `Generic` 事件中的 `tasks-changed` → `bump_tasks()`
-/// - `Generic` 事件中的 `images-change` → 根据 payload 处理
 #[cfg(all(
     not(kabegame_mode = "light"),
     not(target_os = "android"),
@@ -29,6 +29,7 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
         DaemonEventKind::AlbumNameChanged,
         DaemonEventKind::AlbumDeleted,
         DaemonEventKind::ImagesChange,
+        DaemonEventKind::AlbumImagesChange,
         DaemonEventKind::Generic,
     ];
 
@@ -42,8 +43,22 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
                     DaemonEvent::AlbumAdded { .. } => {
                         vd_service.bump_albums();
                     }
-                    DaemonEvent::ImagesChange { .. } => {
-                        // ImagesChange 事件通常需要刷新整个 gallery 树
+                    DaemonEvent::ImagesChange { task_ids, .. } => {
+                        if let Some(ids) = task_ids {
+                            for tid in ids {
+                                if !tid.is_empty() {
+                                    vd_service.notify_task_dir_changed(&tid);
+                                }
+                            }
+                        }
+                        vd_service.notify_gallery_tree_changed();
+                    }
+                    DaemonEvent::AlbumImagesChange { album_ids, .. } => {
+                        for aid in album_ids {
+                            if !aid.is_empty() {
+                                vd_service.notify_album_dir_changed(&aid);
+                            }
+                        }
                         vd_service.notify_gallery_tree_changed();
                     }
                     DaemonEvent::AlbumNameChanged { .. } => {
@@ -57,34 +72,6 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
                         match event.as_str() {
                             "tasks-changed" => {
                                 vd_service.bump_tasks();
-                            }
-                            "images-change" => {
-                                // 解析 payload，提取 albumId 和 taskId
-                                let album_id = payload
-                                    .get("albumId")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
-                                let task_id = payload
-                                    .get("taskId")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
-
-                                // 如果有 taskId，通知任务目录变更
-                                if let Some(tid) = &task_id {
-                                    if !tid.is_empty() {
-                                        vd_service.notify_task_dir_changed(tid);
-                                    }
-                                }
-
-                                // 如果有 albumId，通知画册目录变更
-                                if let Some(aid) = &album_id {
-                                    if !aid.is_empty() {
-                                        vd_service.notify_album_dir_changed(aid);
-                                    }
-                                }
-
-                                // 总是刷新 gallery 树
-                                vd_service.notify_gallery_tree_changed();
                             }
                             _ => {
                                 // 忽略其他 Generic 事件

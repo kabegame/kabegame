@@ -44,7 +44,7 @@ flowchart TD
 - 后端写入 `images.metadata` 列（`serde_json::Value`），前端 `ImageInfo.metadata` 为 `Record<string, unknown>` 等。
 - 详情区 EJS **仅接收** `ejs.render(tpl, { metadata: img.metadata })` 中的 `metadata`，与 `pluginId` 配合使用。
 
-详见 [DOWNLOADER_FLOW.md](./DOWNLOADER_FLOW.md)、[docs/RHAI_API.md](../docs/RHAI_API.md) 中 `download_image` / `metadata` 说明。
+详见 [DOWNLOADER_FLOW.md](../downloader-tasks/DOWNLOADER_FLOW.md)、[docs/RHAI_API.md](../../docs/RHAI_API.md) 中 `download_image` / `metadata` 说明。
 
 ---
 
@@ -52,18 +52,18 @@ flowchart TD
 
 1. **包内路径**：`.kgpg`（ZIP）内 **`templates/description.ejs`**（模板逻辑名 `description`）。
 2. **后端**：`get_plugin_template(pluginId, templateName)` → `PluginManager::get_plugin_template_by_id` → **`read_plugin_template(zip_path, "description")`** 读 ZIP 条目。
-   - 实现：[src-tauri/app-main/src/commands/plugin.rs](../src-tauri/app-main/src/commands/plugin.rs)（命令入口）、[src-tauri/core/src/plugin/mod.rs](../src-tauri/core/src/plugin/mod.rs)（ZIP 读取）。
+   - 实现：[src-tauri/app-main/src/commands/plugin.rs](../../src-tauri/app-main/src/commands/plugin.rs)（命令入口）、[src-tauri/core/src/plugin/mod.rs](../../src-tauri/core/src/plugin/mod.rs)（ZIP 读取）。
 3. **前端缓存**：
    - **`usePluginStore`**（商店/预览等场景）、**`useInstalledPluginsStore`**（已安装插件）各自维护 `descriptionTemplates` / `pluginDescriptionTemplates`。
    - **`loadDescriptionTemplates()`**：对已列出的每个插件 `invoke("get_plugin_template", { pluginId, templateName: "description" })`，结果写入 `Record<pluginId, string | null>`。
-   - 与 **`loadIcons()`** 等一起在插件列表加载完成后并发执行（见 [packages/core/src/stores/plugins.ts](../packages/core/src/stores/plugins.ts)）。
+   - 与 **`loadIcons()`** 等一起在插件列表加载完成后并发执行（见 [packages/core/src/stores/plugins.ts](../../packages/core/src/stores/plugins.ts)）。
 4. **读取模板**：`ImageDetailContent.vue` 通过 **`pluginDescriptionTemplate(pluginId)`** 先从 `usePluginStore` 取，没有再取 `useInstalledPluginsStore`。
 
 ---
 
 ## 三、渲染：`ImageDetailContent.vue` 与 `srcdoc`
 
-**文件**：[packages/core/src/components/common/ImageDetailContent.vue](../packages/core/src/components/common/ImageDetailContent.vue)
+**文件**：[packages/core/src/components/common/ImageDetailContent.vue](../../packages/core/src/components/common/ImageDetailContent.vue)
 
 1. **显示条件**：`image.pluginId` 存在，且 `metadata` 经 `isRenderableMetadata` 判断非空；且能取到非空模板字符串。
 2. **渲染**：
@@ -75,7 +75,7 @@ flowchart TD
 4. **不经 DOMPurify**：信任已安装插件包内容；恶意模板风险见文末「安全说明」。
 5. **无模板时**：若 `metadata` 可展示但无 `description.ejs`，走 **`showRawMetadata`**，以键值形式展示原始 `metadata`（不经过 EJS）。
 
-**注入脚本**：正文 [descriptionBridgeInject.body.js](../packages/core/src/components/common/descriptionBridgeInject.body.js)（勿与 `descriptionBridgeInjectScript.ts` 同名 `.js`，避免 Bun 等把对 `.ts` 的解析指到无导出的 IIFE）；[descriptionBridgeInjectScript.ts](../packages/core/src/components/common/descriptionBridgeInjectScript.ts) 内 **`import … from '…/descriptionBridgeInject.body.js?raw'`** 导出 `DESCRIPTION_BRIDGE_INJECT_SCRIPT`，供 [ImageDetailContent.vue](../packages/core/src/components/common/ImageDetailContent.vue) 使用。
+**注入脚本**：正文 [descriptionBridgeInject.body.js](../../packages/core/src/components/common/descriptionBridgeInject.body.js)（勿与 `descriptionBridgeInjectScript.ts` 同名 `.js`，避免 Bun 等把对 `.ts` 的解析指到无导出的 IIFE）；[descriptionBridgeInjectScript.ts](../../packages/core/src/components/common/descriptionBridgeInjectScript.ts) 内 **`import … from '…/descriptionBridgeInject.body.js?raw'`** 导出 `DESCRIPTION_BRIDGE_INJECT_SCRIPT`，供 [ImageDetailContent.vue](../../packages/core/src/components/common/ImageDetailContent.vue) 使用。
 
 ---
 
@@ -93,7 +93,7 @@ flowchart TD
 4. 父窗口 **`invoke('proxy_fetch', { url, headers })`**（Rust `reqwest` GET，无浏览器 CORS；IPC 上响应体为 Base64 编码，见 `proxy.rs`）。
 5. 向 iframe **`postMessage({ type: 'ejs-fetch-response', id, data | error })`**，注入脚本中的 Promise 随之 resolve/reject。
 
-**Tauri 命令**：[src-tauri/app-main/src/commands/proxy.rs](../src-tauri/app-main/src/commands/proxy.rs) → `proxy_fetch`。单响应体积上限约 **3MB**（`PROXY_FETCH_BYTES_MAX`）。
+**Tauri 命令**：[src-tauri/app-main/src/commands/proxy.rs](../../src-tauri/app-main/src/commands/proxy.rs) → `proxy_fetch`。单响应体积上限约 **3MB**（`PROXY_FETCH_BYTES_MAX`）。
 
 ### 4.2 `__bridge.getLocale` / `__bridge.openUrl` / 全局 `<a>` 点击桥接
 
@@ -117,7 +117,7 @@ flowchart TD
 - 模板中的外链优先直接写 `<a data-url="https://...">` 或 `<a href="https://...">`，由注入脚本统一桥接打开；通常不再需要在模板里手动绑定 `click` 调 `__bridge.openUrl`。
 - 可选 `templates/description.ejs`；无则详情区仅展示原始 metadata（若存在）。
 
-示例见本文档历史版本或 [docs/PLUGIN_FORMAT.md](../docs/PLUGIN_FORMAT.md) 中「templates/description.ejs」小节。
+示例见本文档历史版本或 [docs/PLUGIN_FORMAT.md](../../docs/PLUGIN_FORMAT.md) 中「templates/description.ejs」小节。
 
 ---
 

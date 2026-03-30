@@ -477,6 +477,10 @@ const OFFICIAL_PLUGIN_SOURCE_ID = "official_github_release";
 /** 与 `kabegame_core::storage::plugin_sources` 插入官方源时的默认 `name` 一致（用于识别「未自定义」以走 i18n） */
 const OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME = "官方 GitHub Releases 源";
 
+/** 打开商店 tab 时后台重拉 index 的缓存最大年龄（与后端 `plugin_source_cache.updated_at` 比较，秒） */
+const STORE_INDEX_REVALIDATE_MAX_AGE_SECS = 24 * 60 * 60;
+const storeRevalidateInflight = new Set<string>();
+
 const pluginSourceDisplayName = (s: PluginSource) => {
   if (s.id === OFFICIAL_PLUGIN_SOURCE_ID && s.name === OFFICIAL_PLUGIN_SOURCE_DEFAULT_DB_NAME) {
     return t("plugins.officialGithubReleaseSourceName");
@@ -806,7 +810,7 @@ const goToOfficialGitHubStoreTab = async () => {
     return;
   }
   activeTab.value = storeTabName(OFFICIAL_PLUGIN_SOURCE_ID);
-  await loadStorePlugins(OFFICIAL_PLUGIN_SOURCE_ID, { showMessage: false, forceRefresh: false });
+  // 列表加载与后台重拉由 watch(activeTab) 统一处理
 };
 
 const loadSources = async (): Promise<{ success: boolean; error?: string }> => {
@@ -1078,6 +1082,46 @@ const loadStorePlugins = async (
   }
 };
 
+/** 用于比对商店列表是否变化（仅 id + version，排序后拼接） */
+const storePluginListSignature = (plugins: StorePluginResolved[]) =>
+  [...plugins]
+    .map((p) => `${p.id}\x1f${p.version}`)
+    .sort()
+    .join("\n");
+
+/**
+ * 静默后台：若 index 缓存超过 `STORE_INDEX_REVALIDATE_MAX_AGE_SECS` 则拉取；不碰 loading 状态。
+ * 若返回列表与当前展示不一致则更新 UI 并提示；失败完全静默。
+ */
+const revalidateStorePluginsInBackground = (sourceId: string) => {
+  if (storeRevalidateInflight.has(sourceId)) return;
+  storeRevalidateInflight.add(sourceId);
+  void (async () => {
+    try {
+      const prev = storePluginsBySource.value[sourceId];
+      const prevSig = storePluginListSignature(prev ?? []);
+      const plugins = await invoke<StorePluginResolved[]>("get_store_plugins", {
+        sourceId,
+        forceRefresh: false,
+        revalidateIfStaleAfterSecs: 1,
+      });
+      if (!plugins?.length) return;
+      const next = applyInstalledVersions(plugins);
+      const nextSig = storePluginListSignature(next);
+      if (prevSig === nextSig) return;
+      storePluginsBySource.value = { ...storePluginsBySource.value, [sourceId]: next };
+      if (prev && prev.length > 0) {
+        ElMessage.success(t("plugins.storeListAutoUpdated"));
+      }
+      void prefetchRemoteIconsForSource(sourceId);
+    } catch {
+      /* 静默 */
+    } finally {
+      storeRevalidateInflight.delete(sourceId);
+    }
+  })();
+};
+
 const selectPluginFile = async () => {
   try {
     const filePath = await open({
@@ -1216,9 +1260,6 @@ const handleStoreInstall = async (plugin: StorePluginResolved, forceReinstall = 
 
     await invoke("import_plugin_from_zip", { zipPath: res.tmpPath });
 
-    // 刷新后端该插件的缓存，确保后续 get_plugins 返回最新数据
-    await invoke("refresh_installed_plugin_cache", { pluginId: plugin.id });
-
     ElMessage.success(isReinstall ? t("plugins.reinstallSuccess") : willUpdate ? t("plugins.updateSuccess") : t("plugins.installSuccess"));
     await pluginStore.loadPlugins();
 
@@ -1306,7 +1347,6 @@ const handleRefresh = async () => {
       }, 300);
       try {
         // 触发后端全量刷新缓存（避免 get_plugins 只返回内存缓存导致“刷新无效”）
-        await invoke("refresh_installed_plugins_cache");
         await pluginStore.loadPlugins();
         await refreshPluginIcons();
         ElMessage.success(t("plugins.installedRefreshSuccess"));
@@ -1347,10 +1387,6 @@ const handleRefresh = async () => {
         activeTab.value = "installed";
         return;
       }
-
-      // 先刷新已安装插件列表，确保 installedVersion 状态正确
-      await invoke("refresh_installed_plugins_cache");
-      await pluginStore.loadPlugins();
 
       // 用户点击刷新按钮：强制从远程刷新（忽略本地缓存）
       await loadStorePlugins(sourceId, { showMessage: true, forceRefresh: true });
@@ -1443,13 +1479,12 @@ watch(activeTab, async (tab) => {
     return;
   }
 
-  // 每个源只在首次进入时加载一次；之后除非用户手动刷新/保存源，不自动重复拉取
-  if (storeLoadedBySource.value[sourceId]) {
-    return;
+  // 首次进入该源：优先本地缓存；之后每次切回该 tab 也会触发后台按时间静默重拉（见 revalidateStorePluginsInBackground）
+  if (!storeLoadedBySource.value[sourceId]) {
+    await loadStorePlugins(sourceId, { showMessage: false, forceRefresh: false });
+    await refreshPluginIcons();
   }
-  // 首次加载：优先使用本地缓存（类似 apt，只有用户手动刷新时才 update）
-  await loadStorePlugins(sourceId, { showMessage: false, forceRefresh: false });
-  await refreshPluginIcons();
+  revalidateStorePluginsInBackground(sourceId);
 });
 
 onUnmounted(() => {

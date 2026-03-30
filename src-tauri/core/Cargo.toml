@@ -19,6 +19,7 @@ infer = "0.19"
 lru = "0.12"
 regex = "1.11"
 rhai = { workspace = true }
+rhai-chrono = { version = "0.1.1", default-features = false, features = ["sync"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 scraper = "0.19"
 select = "0.6"

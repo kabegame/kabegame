@@ -112,6 +112,7 @@
   "sourceDeleted": "스토어 소스가 삭제되었습니다",
   "deleteSourceFailed": "스토어 소스 삭제 실패",
   "storeListRefreshed": "스토어 목록이 새로고침되었습니다",
+  "storeListAutoUpdated": "스토어 목록이 자동으로 업데이트되었습니다",
   "storeListLoaded": "스토어 목록이 로드되었습니다",
   "loadStoreFailed": "스토어 로드 실패(스토어 소스 설정을 확인하세요)",
   "selectFileFailed": "파일 선택 실패",

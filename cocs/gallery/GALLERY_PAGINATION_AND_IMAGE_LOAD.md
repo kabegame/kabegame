@@ -33,6 +33,18 @@
 - `offset = (page - 1) * page_size`，`get_images_info_range_by_query(query, offset, page_size)`。
 - 返回 `GalleryBrowseResult`：`total`、`base_offset`、`range_total`、`entries`（当前页图片列表）。
 
+### Metadata 懒加载（列表不带插件 JSON）
+
+为减少翻页时读取/传输/解析整页 `images.metadata`（插件写入的 JSON），**浏览列表**路径统一不返回 metadata：
+
+- **`get_images_info_range_by_query`**（[`storage/gallery.rs`](/src-tauri/core/src/storage/gallery.rs)）：SELECT 中对 `metadata` 使用 `NULL`，构造的 `ImageInfo.metadata` 恒为 `None`。
+- **`fs_entries_to_gallery_browse`**（[`gallery/browse.rs`](/src-tauri/core/src/gallery/browse.rs)）：`find_image_by_id` 后把 `image.metadata` 置为 `None`，与 SimplePage 行为一致。
+
+详情区（EJS / 原始键值）按需加载：
+
+- **命令**：`get_image_metadata`（[`app-main/src/commands/image.rs`](/src-tauri/app-main/src/commands/image.rs)），参数 **`imageId`**（与前端 camelCase 一致）。
+- **实现**：[`Storage::get_image_metadata`](/src-tauri/core/src/storage/images.rs) 仅 `SELECT metadata FROM images WHERE id = ?`。
+
 ### 与 VD / Greedy 的区别
 
 - **SimplePage**：一页行数 = 用户设置的 `galleryPageSize`（经上述 clamp）。
@@ -62,6 +74,13 @@
 - **Composable**：[`apps/main/src/composables/useGalleryImages.ts`](/apps/main/src/composables/useGalleryImages.ts)  
   - `invoke("browse_gallery_provider", { path, pageSize: unref(pageSize) })`  
   - `jumpToBigPage` 等内部与 `pageSize` 对齐。
+  - 可选第 4 个参数 `onBeforeFetch`：在每次 `browse_gallery_provider` 请求前调用；画廊页传入 **`useProvideImageMetadataCache` 的 `clearCache`**，换页时清空 per-page metadata 缓存。
+
+### Metadata 详情与前端缓存
+
+- **Composable**：[`packages/core/src/composables/useImageMetadataCache.ts`](/packages/core/src/composables/useImageMetadataCache.ts) — `useProvideImageMetadataCache()` 向子组件树 `provide` 懒加载解析器（内部 `Map` 缓存 + `invoke("get_image_metadata", { imageId })`）。
+- **详情 UI**：[`packages/core/src/components/common/ImageDetailContent.vue`](/packages/core/src/components/common/ImageDetailContent.vue) — `inject` 解析器；若列表项已有可渲染 `metadata` 则直接用，否则异步拉取并合并为 `effectiveMetadata`。
+- **接入视图**（在拉取当前 leaf 前 `clearCache`）：[`Gallery.vue`](/apps/main/src/views/Gallery.vue)（经 `useGalleryImages` 的 `onBeforeFetch`）、[`AlbumDetail.vue`](/apps/main/src/views/AlbumDetail.vue)、[`TaskDetail.vue`](/apps/main/src/views/TaskDetail.vue)、[`SurfImages.vue`](/apps/main/src/views/SurfImages.vue)。
 
 ### 使用 SimplePage 列表的视图（需统一）
 
@@ -86,6 +105,21 @@
 - `settings.galleryPageSize` / `settings.galleryPageSizeDesc`
 - `gallery.pageSize`（工具栏/选择器标题）
 - `header.galleryPageSize`（Android header fold 文案）
+
+## 图片与画册成员变更事件
+
+### `images-change`（`DaemonEvent::ImagesChange`，`images` 表）
+
+- 后端通过 `GlobalEmitter::emit_images_change` 广播，**`reason` 仅为** `add` / `delete` / `change`（如原 `wallpaper-set` 已并入 `change`）。
+- Payload：`imageIds`，以及可选的 **`taskIds` / `surfRecordIds`**（用于任务详情 / 畅游等视图过滤）；**不再包含画册维度**（已拆出见下）。
+- 前端：`apps/main/src/composables/useImagesChangeRefresh.ts`。
+
+### `album-images-change`（`DaemonEvent::AlbumImagesChange`，`album_images` 表）
+
+- 后端通过 `emit_album_images_change`，`reason` 为 `add` / `delete`（对应收藏/画册增删成员等）。
+- Payload：`albumIds`、`imageIds`。
+- 前端：`apps/main/src/composables/useAlbumImagesChangeRefresh.ts`；画册列表预览、收藏星标就地更新等依赖此事件。
+- Plasma 壁纸插件（`src-plasma-wallpaper-plugin/plugin/wallpaperbackend.cpp`）同时订阅上述两类事件：画册路径以 `album-images-change` 为主；`images-change` 在画册视图下主要响应 `delete`/`change`（删文件、壁纸顺序等）。
 
 ## 排查清单
 

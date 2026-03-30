@@ -220,7 +220,7 @@ impl Provider for CommonProvider {
         if removed {
             if let Some(album_id) = crate::providers::vd_ops::album_id_from_query(&self.query) {
                 if let Some(name) = Storage::global().get_album_name_by_id(album_id)? {
-                    ctx.album_images_removed(&name);
+                    ctx.album_images_removed(album_id, &name);
                 }
             }
         }
@@ -336,7 +336,7 @@ impl Provider for RangeProvider {
         if removed {
             if let Some(album_id) = crate::providers::vd_ops::album_id_from_query(&self.query) {
                 if let Some(name) = Storage::global().get_album_name_by_id(album_id)? {
-                    ctx.album_images_removed(&name);
+                    ctx.album_images_removed(album_id, &name);
                 }
             }
         }

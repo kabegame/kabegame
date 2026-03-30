@@ -1,11 +1,12 @@
 import { onBeforeUnmount, onMounted, watch, type Ref } from "vue";
 import { useTrailingThrottleFn } from "@/composables/useTrailingThrottle";
 
+/** 后端 `DaemonEvent::ImagesChange` / `images` 表（reason: add | delete | change） */
 export type ImagesChangePayload = {
-  reason?: string;
+  reason?: "add" | "delete" | "change" | string;
   imageIds?: string[];
-  taskId?: string;
-  albumId?: string;
+  taskIds?: string[];
+  surfRecordIds?: string[];
 };
 
 type UnlistenFn = () => void;
@@ -73,4 +74,3 @@ export function useImagesChangeRefresh(params: {
     stop();
   });
 }
-

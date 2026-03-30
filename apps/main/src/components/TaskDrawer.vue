@@ -315,4 +315,18 @@ const handleDeleteAllTasks = async () => {
   font-size: 18px;
   font-weight: 600;
 }
+
+/* 让抽屉主体参与 flex 高度传递，TaskDrawerContent 内「正在下载」列表才能 overflow 滚动 */
+.task-drawer.el-drawer {
+  display: flex;
+  flex-direction: column;
+}
+
+.task-drawer :deep(.el-drawer__body) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 </style>

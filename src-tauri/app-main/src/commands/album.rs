@@ -1,13 +1,14 @@
 // Album 相关命令
 
-use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::settings::Settings;
+use kabegame_core::storage::image_events::{
+    add_images_to_album_with_event, remove_images_from_album_with_event,
+};
 use kabegame_core::storage::Storage;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::VirtualDriveService;
-use serde_json::json;
 use tauri::AppHandle;
 
 #[tauri::command]
@@ -56,18 +57,9 @@ pub async fn add_images_to_album(
     album_id: String,
     image_ids: Vec<String>,
 ) -> Result<serde_json::Value, String> {
-    let r = Storage::global().add_images_to_album(&album_id, &image_ids)?;
+    let r = add_images_to_album_with_event(&album_id, &image_ids)?;
     #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
-
-    GlobalEmitter::global().emit(
-        "images-change",
-        json!({
-            "reason": "add",
-            "albumId": album_id,
-            "imageIds": image_ids
-        }),
-    );
 
     Ok(serde_json::to_value(r).map_err(|e| e.to_string())?)
 }
@@ -89,18 +81,9 @@ pub async fn add_task_images_to_album(
         }))
         .map_err(|e| e.to_string())?);
     }
-    let r = Storage::global().add_images_to_album(&album_id, &image_ids)?;
+    let r = add_images_to_album_with_event(&album_id, &image_ids)?;
     #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
-
-    GlobalEmitter::global().emit(
-        "images-change",
-        json!({
-            "reason": "add",
-            "albumId": album_id,
-            "imageIds": image_ids
-        }),
-    );
 
     Ok(serde_json::to_value(r).map_err(|e| e.to_string())?)
 }
@@ -111,18 +94,9 @@ pub async fn remove_images_from_album(
     album_id: String,
     image_ids: Vec<String>,
 ) -> Result<usize, String> {
-    let removed = Storage::global().remove_images_from_album(&album_id, &image_ids)?;
+    let removed = remove_images_from_album_with_event(&album_id, &image_ids)?;
     #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VirtualDriveService::global().notify_album_dir_changed(&album_id);
-
-    GlobalEmitter::global().emit(
-        "images-change",
-        json!({
-            "reason": "remove",
-            "albumId": album_id,
-            "imageIds": image_ids
-        }),
-    );
 
     Ok(removed)
 }

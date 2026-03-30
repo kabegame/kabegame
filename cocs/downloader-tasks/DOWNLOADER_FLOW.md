@@ -56,6 +56,10 @@
 - **持久化**：`tasks.success_count` / `tasks.failed_count` 与 `images` / `task_failed_images` 保持同步；`deleted_count`、`dedup_count` 仍为任务表列。
 - **发送时机示例**：下载成功 `add_image` 后；去重命中 `increment_task_dedup_count` 后；失败记录新增/删除后；前端/整理删除图片后（`commands/image.rs`、`organize.rs` 等）。
 
+### 与画廊监听相关的 `images-change` / `album-images-change`
+
+下载器在 `src-tauri/core/src/crawler/downloader/mod.rs` 入库时按表拆分广播：**仅影响 `images` 表**时发 `images-change`（`reason: add` 等）；**同时变更 `album_images`**（收藏画册、目标画册等）时另发 `album-images-change`。详见 [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](../gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)。
+
 ---
 
 ## 6. 失败图片列表（TaskDetail / FailedImages）

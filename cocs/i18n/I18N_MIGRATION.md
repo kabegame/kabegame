@@ -509,7 +509,7 @@
 
 | 插件 | 文件 | 类型 | 文案 |
 |------|------|------|------|
-| pixiv | `plugins/pixiv/crawl.rhai` | throw | 排行榜模式请填写起始日期（格式 YYYYMMDD） |
+| pixiv | `plugins/pixiv/crawl.rhai` | throw | 排行榜模式请选择起始日期（起止均空时由脚本按东京时间自动填充；异常仍为空时触发） |
 | pixiv | `plugins/pixiv/crawl.rhai` | throw | 收藏模式请填写用户 UID |
 | pixiv | `plugins/pixiv/crawl.rhai` | throw | 画师模式请填写画师 UID |
 | pixiv | `plugins/pixiv/crawl.rhai` | throw | 无法获取画师作品列表 |

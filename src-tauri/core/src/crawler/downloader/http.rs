@@ -6,6 +6,7 @@ use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex, Once};
 use std::time::Instant;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
@@ -124,6 +125,68 @@ pub fn create_client() -> Result<reqwest::Client, String> {
         .build()
         .map_err(|e| format!("Failed to create async HTTP client: {}", e))
 }
+
+/// 客户端池条目：按 host 复用 [reqwest::Client]，60 秒未使用则可被清理。
+const CLIENT_IDLE_SECS: u64 = 60;
+/// 后台扫描间隔（秒）
+const SWEEP_INTERVAL_SECS: u64 = 30;
+
+struct PoolEntry {
+    client: reqwest::Client,
+    last_used: Instant,
+}
+
+struct HttpClientPool {
+    entries: Mutex<HashMap<String, PoolEntry>>,
+}
+
+impl HttpClientPool {
+    fn new() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn start_sweeper() {
+        static SWEEPER_ONCE: Once = Once::new();
+        SWEEPER_ONCE.call_once(|| {
+            tokio::spawn(async {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(SWEEP_INTERVAL_SECS)).await;
+                    CLIENT_POOL.sweep_stale();
+                }
+            });
+        });
+    }
+
+    fn sweep_stale(&self) {
+        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        map.retain(|_, entry| entry.last_used.elapsed() < Duration::from_secs(CLIENT_IDLE_SECS));
+    }
+
+    fn get_or_create(&self, host: &str) -> Result<reqwest::Client, String> {
+        Self::start_sweeper();
+        let mut map = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        if let Some(entry) = map.get_mut(host) {
+            if entry.last_used.elapsed() < Duration::from_secs(CLIENT_IDLE_SECS) {
+                entry.last_used = now;
+                return Ok(entry.client.clone());
+            }
+        }
+        let client = create_client()?;
+        map.insert(
+            host.to_string(),
+            PoolEntry {
+                client: client.clone(),
+                last_used: now,
+            },
+        );
+        Ok(client)
+    }
+}
+
+static CLIENT_POOL: LazyLock<HttpClientPool> = LazyLock::new(HttpClientPool::new);
 
 pub fn build_reqwest_header_map(task_id: &str, headers: &HashMap<String, String>) -> HeaderMap {
     let mut map = HeaderMap::new();
@@ -253,7 +316,8 @@ async fn download_http(
     retry_count: u32,
     progress: &DownloadProgressContext<'_>,
 ) -> Result<String, String> {
-    let client = create_client()?;
+    let host = url.host_str().unwrap_or("unknown");
+    let client = CLIENT_POOL.get_or_create(host)?;
     let mut header_map = build_reqwest_header_map_for_emitter(task_id, headers);
     let max_attempts = retry_count.saturating_add(1).max(1);
     let mut buffer = Vec::new();

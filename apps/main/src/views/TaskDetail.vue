@@ -153,6 +153,7 @@ import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
+import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -223,6 +224,7 @@ const pullToRefreshOpts = computed(() =>
         ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
         : undefined
 );
+const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 const images = ref<ImageInfo[]>([]);
 const failedImages = computed(() => failedImagesStore.byTaskId(taskId.value));
 const failedLoading = computed(() => failedImagesStore.loading);
@@ -406,6 +408,7 @@ const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
     try {
         // 直接加载当前路径（新路径格式总是包含页码）
         const pathToLoad = currentPath.value || localProviderRootPath.value || `task/${taskId.value}/1`;
+        clearImageMetadataCache();
         const res = await invoke<{ total?: number; baseOffset?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
             "browse_gallery_provider",
             { path: pathToLoad, pageSize: pageSize.value }
@@ -645,38 +648,7 @@ const toggleFavoriteForImages = async (imgs: ImageInfo[]) => {
         return;
     }
 
-    // 1) 更新本页列表
-    const idSet = new Set(succeededIds);
-    images.value = images.value.map((img) =>
-        idSet.has(img.id) ? ({ ...img, favorite: desiredFavorite } as ImageInfo) : img
-    );
-
-    // 2) 更新收藏画册计数/缓存（用于 Albums/收藏画册详情页）
-    const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
-    albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(
-        0,
-        currentCount + (desiredFavorite ? succeededIds.length : -succeededIds.length)
-    );
-
-    const favList = albumStore.albumImages[FAVORITE_ALBUM_ID.value];
-    if (Array.isArray(favList)) {
-        if (desiredFavorite) {
-            // 追加或更新
-            for (const id of succeededIds) {
-                const src = images.value.find((x) => x.id === id) || toChange.find((x) => x.id === id);
-                if (!src) continue;
-                const idx = favList.findIndex((x) => x.id === id);
-                if (idx === -1) favList.push({ ...src, favorite: true } as ImageInfo);
-                else favList[idx] = { ...(favList[idx] as any), favorite: true } as any;
-            }
-        } else {
-            // 移除
-            const removeSet = new Set(succeededIds);
-            for (let i = favList.length - 1; i >= 0; i--) {
-                if (removeSet.has(favList[i]!.id)) favList.splice(i, 1);
-            }
-        }
-    }
+    // 列表与画册缓存由 album-images-change / images-change 事件驱动刷新
 
     ElMessage.success(desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`);
     clearSelection();
@@ -860,9 +832,6 @@ const handleImageMenuCommand = async (
                     // 不删除文件，只从任务中移除
                     await invoke("batch_remove_images", { imageIds });
 
-                    // 更新本地状态；task-image-counts 事件会更新 store 计数
-                    const ids = new Set(imageIds);
-                    images.value = images.value.filter((img) => !ids.has(img.id));
                     clearSelection();
                 } catch (error) {
                     console.error("删除图片失败:", error);
@@ -897,9 +866,6 @@ const confirmRemoveImages = async () => {
             await invoke("batch_remove_images", { imageIds });
         }
 
-        // 更新本地状态；task-image-counts 事件会更新 store 计数
-        const ids = new Set(imageIds);
-        images.value = images.value.filter((img) => !ids.has(img.id));
         clearSelection();
 
         if (shouldDeleteFiles) {
@@ -1040,17 +1006,28 @@ useImagesChangeRefresh({
     enabled: ref(true),
     waitMs: 1000,
     filter: (p) => {
-        // 明确 taskId 且不匹配：直接忽略
-        if (p.taskId && p.taskId !== taskId.value) return false;
-        // 新增图片：imageIds 在刷新前必然不在当前列表里，因此不能用“命中当前页”来过滤
-        const reason = String((p as any)?.reason ?? "");
-        if (p.taskId && p.taskId === taskId.value && reason === "add") return true;
-        // 若给了 imageIds：只有命中当前页才刷新（减少无关的全局删除/去重事件导致的刷新）
+        const tid = taskId.value;
+        if (
+            p.taskIds &&
+            p.taskIds.length > 0 &&
+            tid &&
+            !p.taskIds.includes(tid)
+        ) {
+            return false;
+        }
+
+        const taskScoped =
+            !!tid && !!p.taskIds && p.taskIds.length > 0 && p.taskIds.includes(tid);
+
+        if (taskScoped) {
+            return true;
+        }
+
+        // 无任务维度 hint：仅当 imageIds 命中当前页时刷新（减少无关全局事件）
         const ids = Array.isArray(p.imageIds) ? p.imageIds : [];
         if (ids.length > 0) {
             return ids.some((id) => images.value.some((img) => img.id === id));
         }
-        // 没有任何可用 hint：保守刷新
         return true;
     },
     onRefresh: async () => {

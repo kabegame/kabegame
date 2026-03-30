@@ -125,8 +125,15 @@ if wallpaper_type.mobile {
 
 - `when` 仅影响前端表单 UI；Rust 侧仍会注入所有变量（含隐藏字段的默认值），脚本可正常使用。
 
+### `options` 各项的 `when`
+
+在 `type` 为 `options`（或 `checkbox`）的 **`options` 数组**里，每个对象项可添加可选字段 `when`，语义与字段级 `when` 相同：当前表单变量与依赖字段匹配时，该项才出现在下拉/多选中。若当前已选值不在可见选项中，应用会回退到该字段的 `default`（若仍合法）或第一个可见项。
+
+**示例**：Pixiv 排行榜中 `ranking_mode` 的「月榜」仅在综合/插画/漫画等内容类型下出现，可在该项上写 `"when": { "content_mode": ["all", "illust", "manga"] }`；「动图」类型下仅显示日榜/周榜等，由各榜序项的 `when` 与 `content_mode` 组合表达。
+
 ## 目录
 
+- [日志](#日志)
 - [页面导航](#页面导航)
 - [页面信息](#页面信息)
 - [元素查询](#元素查询)
@@ -134,6 +141,33 @@ if wallpaper_type.mobile {
 - [HTTP 头](#http-头)
 - [图片处理](#图片处理)
 - [WebView 爬虫 API（crawl.js）](#webview-爬虫-apicrawljs)
+
+---
+
+## 日志
+
+Rhai 引擎将 **`print(...)`** 重定向为任务日志（级别 `print`），便于在任务面板查看脚本输出。  
+**`warn(msg)`** 由宿主注册，向任务日志写入 **warn** 级别消息（与 HTTP 重试、重定向等提示同级），适合「数量不足」等业务警告。
+
+### `warn(msg)`
+
+**参数：**
+
+- `msg` (string): 警告文案
+
+**返回值：** `()`
+
+**示例：**
+
+```rhai
+if done < num_artworks {
+    warn("排行榜实际获取数量少于请求上限");
+}
+```
+
+**说明：**
+
+- 与 Rhai 内置 `print` 不同，`warn` 由 Kabegame 在 `register_crawler_functions` 中注册，最终走 `emit_task_log(..., "warn", ...)`。
 
 ---
 
@@ -851,5 +885,5 @@ if type_of(result) == "string" {
 
 ---
 
-最后更新：2026年3月29日
+最后更新：2026年3月30日
 

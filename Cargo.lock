@@ -722,9 +722,20 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "pure-rust-locales",
  "serde",
  "wasm-bindgen",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "chrono-tz"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+dependencies = [
+ "chrono",
+ "phf 0.12.1",
 ]
 
 [[package]]
@@ -2860,7 +2871,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame"
-version = "3.4.1"
+version = "3.4.2"
 dependencies = [
  "arboard",
  "async-trait",
@@ -2914,7 +2925,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame-cli"
-version = "3.4.1"
+version = "3.4.2"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -2931,7 +2942,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame-core"
-version = "3.4.1"
+version = "3.4.2"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2952,6 +2963,7 @@ dependencies = [
  "regex",
  "reqwest 0.11.27",
  "rhai",
+ "rhai-chrono",
  "rusqlite",
  "scraper",
  "select",
@@ -3932,6 +3944,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "phf"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
+dependencies = [
+ "phf_shared 0.12.1",
+]
+
+[[package]]
 name = "phf_codegen"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4041,6 +4062,15 @@ name = "phf_shared"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
+dependencies = [
+ "siphasher 1.0.2",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
 dependencies = [
  "siphasher 1.0.2",
 ]
@@ -4229,6 +4259,12 @@ checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "pure-rust-locales"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "869675ad2d7541aea90c6d88c81f46a7f4ea9af8cd0395d38f11a95126998a0d"
 
 [[package]]
 name = "pxfm"
@@ -4649,6 +4685,17 @@ dependencies = [
  "smartstring",
  "thin-vec",
  "web-time",
+]
+
+[[package]]
+name = "rhai-chrono"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22099214084b30d0fc59b98404ddaf0e9a6e9d85a5410f93d6e19639f166e524"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "rhai",
 ]
 
 [[package]]

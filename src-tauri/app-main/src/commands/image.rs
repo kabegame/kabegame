@@ -1,27 +1,16 @@
 // Image 相关命令
 
-use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::providers::ProviderRuntime;
 use kabegame_core::settings::Settings;
+use kabegame_core::storage::image_events::{
+    delete_images_with_events, toggle_image_favorite_with_event,
+};
 use kabegame_core::storage::{Storage, FAVORITE_ALBUM_ID};
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use kabegame_core::virtual_driver::VirtualDriveService;
-use serde_json::json;
 use tauri::AppHandle;
-
-fn emit_task_image_counts_full(task_id: &str) {
-    if let Ok(Some(t)) = Storage::global().get_task(task_id) {
-        GlobalEmitter::global().emit_task_image_counts(
-            task_id,
-            Some(t.success_count),
-            Some(t.deleted_count),
-            Some(t.failed_count),
-            Some(t.dedup_count),
-        );
-    }
-}
 
 #[tauri::command]
 pub async fn get_images_range(offset: usize, limit: usize) -> Result<serde_json::Value, String> {
@@ -66,6 +55,11 @@ pub async fn get_image_by_id(image_id: String) -> Result<serde_json::Value, Stri
 }
 
 #[tauri::command]
+pub async fn get_image_metadata(image_id: String) -> Result<Option<serde_json::Value>, String> {
+    Storage::global().get_image_metadata(&image_id)
+}
+
+#[tauri::command]
 pub async fn get_images_count() -> Result<usize, String> {
     Storage::global().get_total_count()
 }
@@ -97,11 +91,7 @@ pub async fn get_gallery_time_filter_data() -> Result<serde_json::Value, String>
 
 #[tauri::command]
 pub async fn delete_image(image_id: String) -> Result<(), String> {
-    let task_ids = Storage::global().get_task_ids_for_image(&image_id)?;
-    Storage::global().delete_image(&image_id)?;
-    for tid in task_ids {
-        emit_task_image_counts_full(&tid);
-    }
+    delete_images_with_events(&[image_id.clone()], true)?;
 
     let current_id = Settings::global()
         .get_current_wallpaper_image_id()
@@ -113,25 +103,13 @@ pub async fn delete_image(image_id: String) -> Result<(), String> {
             .set_current_wallpaper_image_id(None)
             .await;
     }
-
-    GlobalEmitter::global().emit(
-        "images-change",
-        json!({
-            "reason": "delete",
-            "imageIds": [image_id]
-        }),
-    );
 
     Ok(())
 }
 
 #[tauri::command]
 pub async fn remove_image(image_id: String) -> Result<(), String> {
-    let task_ids = Storage::global().get_task_ids_for_image(&image_id)?;
-    Storage::global().remove_image(&image_id)?;
-    for tid in task_ids {
-        emit_task_image_counts_full(&tid);
-    }
+    delete_images_with_events(&[image_id.clone()], false)?;
 
     let current_id = Settings::global()
         .get_current_wallpaper_image_id()
@@ -144,24 +122,12 @@ pub async fn remove_image(image_id: String) -> Result<(), String> {
             .await;
     }
 
-    GlobalEmitter::global().emit(
-        "images-change",
-        json!({
-            "reason": "remove",
-            "imageIds": [image_id]
-        }),
-    );
-
     Ok(())
 }
 
 #[tauri::command]
 pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<(), String> {
-    let task_ids = Storage::global().collect_task_ids_for_images(&image_ids)?;
-    Storage::global().batch_delete_images(&image_ids)?;
-    for tid in task_ids {
-        emit_task_image_counts_full(&tid);
-    }
+    delete_images_with_events(&image_ids, true)?;
 
     let current_id = Settings::global()
         .get_current_wallpaper_image_id()
@@ -175,25 +141,13 @@ pub async fn batch_delete_images(image_ids: Vec<String>) -> Result<(), String> {
                 .await;
         }
     }
-
-    GlobalEmitter::global().emit(
-        "images-change",
-        json!({
-            "reason": "delete",
-            "imageIds": image_ids
-        }),
-    );
 
     Ok(())
 }
 
 #[tauri::command]
 pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
-    let task_ids = Storage::global().collect_task_ids_for_images(&image_ids)?;
-    Storage::global().batch_remove_images(&image_ids)?;
-    for tid in task_ids {
-        emit_task_image_counts_full(&tid);
-    }
+    delete_images_with_events(&image_ids, false)?;
 
     let current_id = Settings::global()
         .get_current_wallpaper_image_id()
@@ -207,14 +161,6 @@ pub async fn batch_remove_images(image_ids: Vec<String>) -> Result<(), String> {
                 .await;
         }
     }
-
-    GlobalEmitter::global().emit(
-        "images-change",
-        json!({
-            "reason": "remove",
-            "imageIds": image_ids
-        }),
-    );
 
     Ok(())
 }
@@ -225,15 +171,9 @@ pub async fn toggle_image_favorite(
     image_id: String,
     favorite: bool,
 ) -> Result<(), String> {
-    Storage::global().toggle_image_favorite(&image_id, favorite)?;
+    toggle_image_favorite_with_event(&image_id, favorite)?;
 
     #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VirtualDriveService::global().notify_album_dir_changed(FAVORITE_ALBUM_ID);
     Ok(())
 }
-
-// #[tauri::command]
-// pub async fn get_image_local_path_by_id(image_id: String) -> Result<Option<String>, String> {
-//     let img = Storage::global().find_image_by_id(&image_id)?;
-//     Ok(img.map(|i| i.local_path))
-// }

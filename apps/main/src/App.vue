@@ -170,9 +170,10 @@ const elementPlusLocale = computed(() => {
 
 // Android 底部 Tab 配置（均匀分布；爬虫仅桌面端有代理，故仅侧栏展示）
 // 依赖 locale 以便语言切换时标签立即更新
+// 安卓暂不展示「运行配置」入口（与桌面侧栏 /auto-configs 区分）
 const bottomTabs = computed(() => {
   void locale.value;
-  return [
+  const tabs = [
     { index: galleryMenuRoute.value, icon: Picture, label: i18n.global.t("route.gallery") },
     { index: "/albums", icon: Collection, label: i18n.global.t("route.albums") },
     { index: "/plugin-browser", icon: Grid, label: i18n.global.t("route.pluginBrowser") },
@@ -180,6 +181,10 @@ const bottomTabs = computed(() => {
     { index: "/settings", icon: Setting, label: i18n.global.t("route.settings") },
     { index: "/help", icon: QuestionFilled, label: i18n.global.t("route.help") },
   ];
+  if (IS_ANDROID) {
+    return tabs.filter((t) => t.index !== "/auto-configs");
+  }
+  return tabs;
 });
 
 // 任务抽屉 store

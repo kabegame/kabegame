@@ -16,11 +16,13 @@ type GalleryBrowseResult = {
 /**
  * 画廊图片列表管理（基于路径的查询）。
  * @param pageSize SimplePage 每页条数（与设置一致）
+ * @param onBeforeFetch 每次 `browse_gallery_provider` 拉取前调用（如清空 per-page metadata 缓存）
  */
 export function useGalleryImages(
   galleryContainerRef: Ref<HTMLElement | null>,
   isLoadingMore: Ref<boolean>,
   pageSize: Ref<number>,
+  onBeforeFetch?: () => void,
 ) {
   // 本地图片列表：由视图直接消费，避免引入额外全局同步开销
   const displayedImages = shallowRef<ImageInfo[]>([]);
@@ -53,6 +55,7 @@ export function useGalleryImages(
   ) => {
     const safePath = (path || "all/1").trim() || "all/1";
     try {
+      onBeforeFetch?.();
       const res = await invoke<GalleryBrowseResult>("browse_gallery_provider", {
         path: safePath,
         pageSize: unref(pageSize),

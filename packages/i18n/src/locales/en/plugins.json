@@ -112,6 +112,7 @@
   "sourceDeleted": "Store source deleted",
   "deleteSourceFailed": "Failed to delete store source",
   "storeListRefreshed": "Store list refreshed",
+  "storeListAutoUpdated": "Store list updated automatically",
   "storeListLoaded": "Store list loaded",
   "loadStoreFailed": "Failed to load store (check store source config)",
   "selectFileFailed": "Failed to select file",

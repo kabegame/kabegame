@@ -101,10 +101,12 @@ import {
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
+import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { useImageTypes } from "@/composables/useImageTypes";
 import { openLocalImage } from "@/utils/openLocalImage";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
+import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useI18n } from "@kabegame/i18n";
 
 const route = useRoute();
@@ -130,6 +132,8 @@ const pullToRefreshOpts = computed(() =>
     ? { onRefresh: handleRefresh, refreshing: isRefreshing.value }
     : undefined
 );
+
+const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 
 
 // 虚拟磁盘
@@ -371,10 +375,11 @@ const handleRefresh = async () => {
   }
 };
 
-const loadAlbum = async (opts?: { reset?: boolean }) => {
+const loadAlbum = async (opts?: { reset?: boolean; silent?: boolean }) => {
   if (!albumId.value) return;
   const reset = opts?.reset ?? false;
-  loading.value = true;
+  const silent = opts?.silent ?? false;
+  if (!silent) loading.value = true;
   try {
     if (reset) {
       clearSelection();
@@ -388,6 +393,7 @@ const loadAlbum = async (opts?: { reset?: boolean }) => {
     if (!pathToLoad.startsWith("album/") || pathToLoad.startsWith("album//")) {
       return;
     }
+    clearImageMetadataCache();
     const res = await invoke<{ total?: number; baseOffset?: number; entries?: Array<{ kind: string; image?: ImageInfo }> }>(
       "browse_gallery_provider",
       { path: pathToLoad, pageSize: pageSize.value }
@@ -399,7 +405,7 @@ const loadAlbum = async (opts?: { reset?: boolean }) => {
     leafAllImages = list;
     images.value = list;
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 };
 
@@ -448,7 +454,6 @@ const confirmRemoveImages = async () => {
 
   try {
     const idsArr = imagesToRemove.map((i) => i.id);
-    const isFavoriteAlbum = albumId.value === FAVORITE_ALBUM_ID.value;
 
     // 如果勾选了删除文件，则调用 deleteImage（会自动从所有画册移除并删除文件）
     // 否则只从当前画册移除，保留文件和其他画册中的记录
@@ -467,24 +472,7 @@ const confirmRemoveImages = async () => {
       currentWallpaperImageId.value = null;
     }
 
-    const ids = new Set(idsArr);
-    // 如果是从收藏画册移除，更新本地图片的 favorite 字段为 false
-    if (isFavoriteAlbum && !shouldDeleteFiles) {
-      images.value = images.value.map((img) => {
-        if (ids.has(img.id)) {
-          return { ...img, favorite: false } as ImageInfo;
-        }
-        return img;
-      });
-    }
-
-    // 如果删除了文件，需要从列表中移除；如果只是从画册移除，也需要从列表中移除
-    images.value = images.value.filter((img) => !ids.has(img.id));
-    leafAllImages = leafAllImages.filter((img) => !ids.has(img.id));
-    clearSelection();
-    if (totalImagesCount.value > 0) {
-      totalImagesCount.value = Math.max(0, totalImagesCount.value - idsArr.length);
-    }
+    // 列表由 images-change / album-images-change 事件驱动刷新，不做乐观更新
 
     // 根据操作类型显示不同的成功消息
     if (shouldDeleteFiles) {
@@ -572,48 +560,7 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
         break;
       }
 
-      const succeededSet = new Set(succeededIds);
-      const isFavoriteAlbum = albumId.value === FAVORITE_ALBUM_ID.value;
-
-      // 1) 更新当前页面列表
-      if (isFavoriteAlbum && !desiredFavorite) {
-        images.value = images.value.filter((img) => !succeededSet.has(img.id));
-        leafAllImages = leafAllImages.filter((img) => !succeededSet.has(img.id));
-        if (totalImagesCount.value > 0) {
-          totalImagesCount.value = Math.max(0, totalImagesCount.value - succeededIds.length);
-        }
-      } else {
-        images.value = images.value.map((img) =>
-          succeededSet.has(img.id) ? ({ ...img, favorite: desiredFavorite } as ImageInfo) : img
-        );
-        leafAllImages = leafAllImages.map((img) =>
-          succeededSet.has(img.id) ? ({ ...img, favorite: desiredFavorite } as ImageInfo) : img
-        );
-      }
-
-      // 2) 更新收藏画册计数（用于画册页预览/计数显示）
-      const currentCount = albumStore.albumCounts[FAVORITE_ALBUM_ID.value] || 0;
-      albumStore.albumCounts[FAVORITE_ALBUM_ID.value] = Math.max(
-        0,
-        currentCount + (desiredFavorite ? succeededIds.length : -succeededIds.length)
-      );
-
-      // 3) 若收藏画册图片缓存已加载：同步更新缓存数组
-      const favList = albumStore.albumImages[FAVORITE_ALBUM_ID.value];
-      if (Array.isArray(favList)) {
-        if (desiredFavorite) {
-          for (const img of toChange) {
-            if (!succeededSet.has(img.id)) continue;
-            const idx = favList.findIndex((x) => x.id === img.id);
-            if (idx === -1) favList.push({ ...(img as any), favorite: true } as any);
-            else favList[idx] = { ...(favList[idx] as any), favorite: true } as any;
-          }
-        } else {
-          for (let i = favList.length - 1; i >= 0; i--) {
-            if (succeededSet.has(favList[i]!.id)) favList.splice(i, 1);
-          }
-        }
-      }
+      // 列表与画册缓存由 album-images-change / images-change 事件驱动刷新
 
       clearSelection();
       ElMessage.success(desiredFavorite ? `已收藏 ${succeededIds.length} 张` : `已取消收藏 ${succeededIds.length} 张`);
@@ -775,31 +722,15 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
       void (async () => {
         try {
           const idsArr = imagesToProcess.map((i) => i.id);
-          const isFavoriteAlbum = albumId.value === FAVORITE_ALBUM_ID.value;
 
           // 只从当前画册移除，不删除文件
           await albumStore.removeImagesFromAlbum(albumId.value, idsArr);
 
-          const ids = new Set(idsArr);
           const includesCurrentWallpaper =
             !!currentWallpaperImageId.value &&
             imagesToProcess.some((img) => img.id === currentWallpaperImageId.value);
 
-          // 如果是从收藏画册移除，更新本地图片的 favorite 字段为 false
-          if (isFavoriteAlbum) {
-            images.value = images.value.map((img) => {
-              if (ids.has(img.id)) {
-                return { ...img, favorite: false } as ImageInfo;
-              }
-              return img;
-            });
-          }
-
-          // 从列表中移除
-          images.value = images.value.filter((img) => !ids.has(img.id));
-          leafAllImages = leafAllImages.filter((img) => !ids.has(img.id));
-
-          // 如果包含当前壁纸，清除壁纸 ID
+          // 如果包含当前壁纸，清除壁纸 ID（列表由事件刷新）
           if (includesCurrentWallpaper) {
             currentWallpaperImageId.value = null;
           }
@@ -880,9 +811,8 @@ onMounted(async () => {
 
   // 收藏状态以 store 为准：不再通过全局事件同步
 
-  // 说明：图片变更的同步由 `images-change`（失效信号）驱动，统一走“刷新当前页”。
+  // 说明：`images-change`（images 表）与 `album-images-change`（album_images 表）驱动刷新当前页。
 
-  // 画册图片变更：由 `images-change`（失效信号）统一驱动刷新（见下方 useImagesChangeRefresh）
 });
 
 // 组件从缓存激活时检查是否需要刷新
@@ -1058,36 +988,50 @@ const handleDeleteAlbum = async () => {
   }
 };
 
-// 统一图片变更事件：不做增量同步，收到 images-change 后刷新"当前页"（1000ms trailing 节流，不丢最后一次）
-// 始终启用，不管是否在前台（用于同步删除等操作）
+const refreshAlbumDetailPageFromEvents = async () => {
+  if (!albumId.value) return;
+  const prevList = images.value.slice();
+  delete albumStore.albumImages[albumId.value];
+  delete albumStore.albumPreviews[albumId.value];
+  clearSelection();
+  await loadAlbum({ silent: true });
+
+  const { removedIds } = diffById(prevList, images.value);
+  if (removedIds.length > 0) clearSelection();
+};
+
+// images 表变更：1000ms trailing 节流
 useImagesChangeRefresh({
   enabled: ref(true),
   waitMs: 1000,
   filter: (p) => {
     if (!albumId.value) return false;
-    // 如果指定了 albumId，必须匹配当前画册
-    if (p.albumId) {
-      return p.albumId === albumId.value;
-    }
-    // 全局事件（如删除图片）：检查是否涉及当前显示的图片
+    const reason = String(p.reason ?? "");
     const ids = Array.isArray(p.imageIds) ? p.imageIds : [];
-    if (ids.length > 0) {
-      return ids.some((id) => leafAllImages.some((img) => img.id === id));
+    const intersects = ids.some((id) => leafAllImages.some((img) => img.id === id));
+
+    if (reason === "delete") {
+      return ids.length === 0 || intersects;
+    }
+    if (reason === "add") {
+      if (images.value.length >= pageSize.value) return false;
+      return true;
+    }
+    if (reason === "change") {
+      if (isAlbumWallpaperFilterPath(currentPath.value)) return true;
+      return ids.length === 0 || intersects;
     }
     return true;
   },
-  onRefresh: async () => {
-    if (!albumId.value) return;
-    const prevList = images.value.slice();
-    // 清缓存强制重载详情（避免 store 缓存让 UI 看起来“没刷新”）
-    delete albumStore.albumImages[albumId.value];
-    delete albumStore.albumPreviews[albumId.value];
-    clearSelection();
-    await loadAlbum();
+  onRefresh: refreshAlbumDetailPageFromEvents,
+});
 
-    const { addedIds, removedIds } = diffById(prevList, images.value);
-    if (removedIds.length > 0) clearSelection();
-  },
+// album_images 表变更：与上同策略节流
+useAlbumImagesChangeRefresh({
+  enabled: ref(true),
+  waitMs: 1000,
+  filter: (p) => !!albumId.value && (p.albumIds ?? []).includes(albumId.value),
+  onRefresh: refreshAlbumDetailPageFromEvents,
 });
 
 onBeforeUnmount(() => {
