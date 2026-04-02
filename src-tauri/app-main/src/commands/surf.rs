@@ -132,7 +132,14 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                 let app = app.clone();
                 move |_surf_window, payload| {
                     if payload.event() == PageLoadEvent::Finished {
-                        save_surf_session_cookies(&app);
+                        // cookies_for_url 内部使用 wait_with_pump（重入 Win32 消息泵），
+                        // 不能在 WebView2 COM 事件回调（UI线程）中同步调用，否则可能与
+                        // NewWindowRequested 等其他 COM 事件交叉导致死锁。
+                        // 移到 blocking 线程执行。
+                        let app = app.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            save_surf_session_cookies(&app);
+                        });
                     }
                 }
             })
@@ -144,9 +151,11 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             .lock()
                             .ok()
                             .and_then(|g| g.current_record_id.clone());
+
                         let Some(surf_record_id) = surf_record_id else {
                             return false;
                         };
+
                         let images_dir = get_default_images_dir();
                         if std::fs::create_dir_all(&images_dir).is_err() {
                             return false;
@@ -156,10 +165,13 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                         } else {
                             url.as_str().to_string()
                         };
+
                         let native_dest =
                             match compute_native_download_destination(&effective_url, &images_dir) {
                                 Ok(p) => p,
-                                Err(_) => return false,
+                                Err(_) => {
+                                    return false;
+                                }
                             };
                         let download_start_time = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -173,12 +185,14 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             output_album_id: None,
                             download_start_time,
                         };
+
                         if NativeDownloadState::global()
                             .register(url.as_str(), entry)
                             .is_err()
                         {
                             return false;
                         }
+
                         GlobalEmitter::global().emit_download_state_with_native(
                             &surf_record_id,
                             url.as_str(),
@@ -188,6 +202,7 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             None,
                             true,
                         );
+
                         eval_surf_toast(&app, "开始下载", "start");
                         *destination = native_dest;
                         true
@@ -214,6 +229,7 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                                     None,
                                     &empty_headers,
                                     true,
+                                    None,
                                     None,
                                     None,
                                 )

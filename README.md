@@ -82,11 +82,11 @@ A Tauri-based anime crawler client! Crawl, organize, and set/rotate wallpapers�
 
 | OS | Standard | Light |
 |----|----------|-------|
-| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-standard_3.4.2_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-light_3.4.2_x64-setup.exe) |
-| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-standard_3.4.2_aarch64.dmg) | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-light_3.4.2_aarch64.dmg) |
-| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-standard_3.4.2_amd64.deb) | [deb](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame-light_3.4.2_amd64.deb) |
+| Windows | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.3/Kabegame-standard_3.4.3_x64-setup.exe) | [setup.exe](https://github.com/kabegame/kabegame/releases/download/v3.4.3/Kabegame-light_3.4.3_x64-setup.exe) |
+| macOS | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.4.3/Kabegame-standard_3.4.3_aarch64.dmg) | [dmg](https://github.com/kabegame/kabegame/releases/download/v3.4.3/Kabegame-light_3.4.3_aarch64.dmg) |
+| Linux | [deb](https://github.com/kabegame/kabegame/releases/download/v3.4.3/Kabegame-standard_3.4.3_amd64.deb) | [deb](https://github.com/kabegame/kabegame/releases/download/v3.4.3/Kabegame-light_3.4.3_amd64.deb) |
 
-- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v3.4.2/Kabegame_3.4.2_android-preview.apk) on the same releases page.
+- **Android preview** : [apk](https://github.com/kabegame/kabegame/releases/download/v3.4.3/Kabegame_3.4.3_android-preview.apk) on the same releases page.
 
 ## Installation
 
@@ -409,6 +409,7 @@ adb forward tcp:9222 localabstract:chrome_devtools_remote
 - [Plugin format](docs/PLUGIN_FORMAT.md)
 - [Rhai API](docs/RHAI_API.md)
 - [Crawler WebView design](docs/CRAWLER_WEBVIEW_DESIGN.md) (planned)
+- **Heybox (`xhh`) plugin** ([`src-crawler-plugins/plugins/xhh/`](src-crawler-plugins/plugins/xhh/)): Web API signing and list endpoints are documented in [`items-api.md`](src-crawler-plugins/plugins/xhh/items-api.md). The **`GET /bbs/app/link/tree`** endpoint returns the comment tree for a post; set query **`link_id`** to the post’s **`linkid`** from list APIs (e.g. `feeds` → `result.links[].linkid`, search → `result.items[].info.linkid`). Anonymous requests with a valid signature may still get **`status: "show_captcha"`** (empty `result`); behavior depends on Heybox server policy.
 
 ## License
 

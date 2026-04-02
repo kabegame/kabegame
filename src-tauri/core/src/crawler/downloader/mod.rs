@@ -1,8 +1,8 @@
 #[cfg(target_os = "android")]
 use crate::crawler::content_io::get_content_io_provider;
 use crate::crawler::task_log_i18n::task_log_i18n;
-use crate::emitter::GlobalEmitter;
 use crate::crawler::webview::crawler_window_state;
+use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
 use crate::storage::{ImageInfo, Storage};
 use async_trait::async_trait;
@@ -19,12 +19,12 @@ use tokio::time::{sleep, Duration};
 use url::Url;
 use walkdir::WalkDir;
 
+mod browser_download;
 mod content;
 mod file;
 mod http;
-mod browser_download;
-pub mod video_compress;
 pub mod native_download;
+pub mod video_compress;
 
 pub use crate::crawler::archiver::{ArchiveProcessor, ArchiveType};
 pub use browser_download::{BrowserDownloadResult, BrowserDownloadState};
@@ -589,6 +589,7 @@ fn upsert_failed_image_on_failure(
     order: i64,
     error: &str,
     http_headers: &HashMap<String, String>,
+    metadata_id: Option<i64>,
 ) {
     if let Some(fid) = failed_image_id {
         let _ = Storage::global().update_task_failed_image_attempt(fid, error);
@@ -605,6 +606,7 @@ fn upsert_failed_image_on_failure(
         order,
         Some(error),
         Some(http_headers),
+        metadata_id,
     ) {
         GlobalEmitter::global().emit_failed_image_added(task_id, &failed_image);
         emit_task_image_counts_snapshot(task_id);
@@ -633,6 +635,8 @@ pub struct DownloadRequest {
     pub custom_display_name: Option<String>,
     /// 插件写入的任意 JSON，入库 `images.metadata`（前端用 EJS 模板渲染）。
     pub metadata: Option<serde_json::Value>,
+    /// 已写入 `image_metadata` 的 id（与 `metadata` 二选一，优先于 `metadata`）。
+    pub metadata_id: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -748,6 +752,7 @@ impl DownloadQueue {
         http_headers: HashMap<String, String>,
         custom_display_name: Option<String>,
         metadata: Option<serde_json::Value>,
+        metadata_id: Option<i64>,
     ) -> Result<(), String> {
         self.download_with_mode(
             url,
@@ -763,6 +768,7 @@ impl DownloadQueue {
             None,
             custom_display_name,
             metadata,
+            metadata_id,
         )
         .await
     }
@@ -777,6 +783,7 @@ impl DownloadQueue {
         download_start_time: u64,
         output_album_id: Option<String>,
         http_headers: HashMap<String, String>,
+        metadata_id: Option<i64>,
     ) -> Result<(), String> {
         self.download_with_mode(
             url,
@@ -792,6 +799,7 @@ impl DownloadQueue {
             Some(failed_image_id),
             None,
             None,
+            metadata_id,
         )
         .await
     }
@@ -821,6 +829,7 @@ impl DownloadQueue {
             None,
             None,
             None,
+            None,
         )
         .await
     }
@@ -840,6 +849,7 @@ impl DownloadQueue {
         failed_image_id: Option<i64>,
         custom_display_name: Option<String>,
         metadata: Option<serde_json::Value>,
+        metadata_id: Option<i64>,
     ) -> Result<(), String> {
         self.download(
             url,
@@ -855,6 +865,7 @@ impl DownloadQueue {
             failed_image_id,
             custom_display_name,
             metadata,
+            metadata_id,
         )
         .await
     }
@@ -906,6 +917,7 @@ impl DownloadQueue {
             None,
             None,
             None,
+            None,
         )
         .await
     }
@@ -925,6 +937,7 @@ impl DownloadQueue {
         failed_image_id: Option<i64>,
         custom_display_name: Option<String>,
         metadata: Option<serde_json::Value>,
+        metadata_id: Option<i64>,
     ) -> Result<(), String> {
         // 检查任务是否取消
         if self.is_task_canceled(&task_id).await {
@@ -945,6 +958,7 @@ impl DownloadQueue {
             failed_image_id,
             custom_display_name,
             metadata,
+            metadata_id,
         };
 
         loop {
@@ -1243,56 +1257,56 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                         let _ = state.signal_failure(&download_id, e.clone());
                         Err(e)
                     } else {
-                    GlobalEmitter::global().emit(
-                        "crawl-browser-download",
-                        serde_json::json!({
-                            "url": url_clone.as_str(),
-                            "downloadId": download_id,
-                            "withCredentials": job.with_credentials,
-                        }),
-                    );
-                    // worker 发出下载事件后，立即告知前端进入 downloading 状态
-                    GlobalEmitter::global().emit_download_state(
-                        &task_id_clone,
-                        url_clone.as_str(),
-                        download_start_time,
-                        &plugin_id_clone,
-                        "downloading",
-                        None,
-                    );
+                        GlobalEmitter::global().emit(
+                            "crawl-browser-download",
+                            serde_json::json!({
+                                "url": url_clone.as_str(),
+                                "downloadId": download_id,
+                                "withCredentials": job.with_credentials,
+                            }),
+                        );
+                        // worker 发出下载事件后，立即告知前端进入 downloading 状态
+                        GlobalEmitter::global().emit_download_state(
+                            &task_id_clone,
+                            url_clone.as_str(),
+                            download_start_time,
+                            &plugin_id_clone,
+                            "downloading",
+                            None,
+                        );
 
-                    let wait_started = Instant::now();
-                    let mut completion_rx = completion_rx;
-                    let wait_result = loop {
-                        tokio::select! {
-                            res = &mut completion_rx => {
-                                break res.map_err(|_| "Browser download channel closed".to_string());
-                            }
-                            _ = sleep(Duration::from_millis(200)) => {
-                                if dq.is_task_canceled(&task_id_clone).await {
-                                    let _ = state.signal_failure(&download_id, "Task canceled".to_string());
-                                    break Err("Task canceled".to_string());
+                        let wait_started = Instant::now();
+                        let mut completion_rx = completion_rx;
+                        let wait_result = loop {
+                            tokio::select! {
+                                res = &mut completion_rx => {
+                                    break res.map_err(|_| "Browser download channel closed".to_string());
                                 }
-                                if wait_started.elapsed() > Duration::from_secs(300) {
-                                    let _ = state.signal_failure(&download_id, "Browser download timed out".to_string());
-                                    break Err("Browser download timed out".to_string());
+                                _ = sleep(Duration::from_millis(200)) => {
+                                    if dq.is_task_canceled(&task_id_clone).await {
+                                        let _ = state.signal_failure(&download_id, "Task canceled".to_string());
+                                        break Err("Task canceled".to_string());
+                                    }
+                                    if wait_started.elapsed() > Duration::from_secs(300) {
+                                        let _ = state.signal_failure(&download_id, "Browser download timed out".to_string());
+                                        break Err("Browser download timed out".to_string());
+                                    }
                                 }
                             }
-                        }
-                    };
-                    wait_result.and_then(|result| {
-                        if result.success {
-                            Ok(result
-                                .path
-                                .unwrap_or_else(|| download_path.clone())
-                                .to_string_lossy()
-                                .to_string())
-                        } else {
-                            Err(result
-                                .error
-                                .unwrap_or_else(|| "Browser download failed".to_string()))
-                        }
-                    })
+                        };
+                        wait_result.and_then(|result| {
+                            if result.success {
+                                Ok(result
+                                    .path
+                                    .unwrap_or_else(|| download_path.clone())
+                                    .to_string_lossy()
+                                    .to_string())
+                            } else {
+                                Err(result
+                                    .error
+                                    .unwrap_or_else(|| "Browser download failed".to_string()))
+                            }
+                        })
                     }
                 }
             } else {
@@ -1377,6 +1391,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                     None,
                                                                     false,
                                                                     true,
+                                                                    None,
                                                                     None,
                                                                     None,
                                                                     None,
@@ -1571,6 +1586,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                             download_start_time as i64,
                                             e.as_str(),
                                             &job.http_headers,
+                                            job.metadata_id,
                                         );
                                         GlobalEmitter::global().emit_download_state(
                                             &task_id_clone,
@@ -1603,8 +1619,11 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                         let temp_dir =
                                             crate::app_paths::AppPaths::global().temp_dir.clone();
                                         let _ = tokio::fs::create_dir_all(&temp_dir).await;
-                                        let temp_path =
-                                            temp_dir.join(format!("{}.{}", uuid::Uuid::new_v4(), ext));
+                                        let temp_path = temp_dir.join(format!(
+                                            "{}.{}",
+                                            uuid::Uuid::new_v4(),
+                                            ext
+                                        ));
                                         if let Err(e) = tokio::fs::write(&temp_path, &bytes).await {
                                             eprintln!(
                                                 "[Download Worker] Android content video temp write failed: {}",
@@ -1612,20 +1631,27 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                             );
                                             (None, String::new())
                                         } else {
-                                            match video_compress::compress_video_for_preview(&temp_path)
-                                                .await
+                                            match video_compress::compress_video_for_preview(
+                                                &temp_path,
+                                            )
+                                            .await
                                             {
                                                 Ok(r) => {
                                                     let p = r.preview_path;
-                                                    let _ = tokio::fs::remove_file(&temp_path).await;
-                                                    (Some(p.clone()), p.to_string_lossy().to_string())
+                                                    let _ =
+                                                        tokio::fs::remove_file(&temp_path).await;
+                                                    (
+                                                        Some(p.clone()),
+                                                        p.to_string_lossy().to_string(),
+                                                    )
                                                 }
                                                 Err(e) => {
                                                     eprintln!(
                                                         "[Download Worker] Android content video GIF failed: {}",
                                                         e
                                                     );
-                                                    let _ = tokio::fs::remove_file(&temp_path).await;
+                                                    let _ =
+                                                        tokio::fs::remove_file(&temp_path).await;
                                                     (None, String::new())
                                                 }
                                             }
@@ -1648,6 +1674,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                     &job.http_headers,
                                     job.custom_display_name.as_deref(),
                                     job.metadata.clone(),
+                                    job.metadata_id,
                                 )
                                 .await;
                                 ensure_minimum_duration(download_start_time, 500).await;
@@ -1671,10 +1698,17 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                     // 视频：走插件压缩生成预览，供列表/预览用
                                     let (video_thumb_path, video_thumb_str) =
                                         if crate::image_type::is_video_by_path(&path_for_post) {
-                                            match video_compress::compress_video_for_preview(&path_for_post).await {
+                                            match video_compress::compress_video_for_preview(
+                                                &path_for_post,
+                                            )
+                                            .await
+                                            {
                                                 Ok(r) => {
                                                     let p = r.preview_path;
-                                                    (Some(p.clone()), p.to_string_lossy().to_string())
+                                                    (
+                                                        Some(p.clone()),
+                                                        p.to_string_lossy().to_string(),
+                                                    )
                                                 }
                                                 Err(e) => {
                                                     eprintln!("[Download Worker] Android video compress failed: {}", e);
@@ -1704,9 +1738,10 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                     crate::image_type::mime_type_from_path(
                                                         &path_for_post,
                                                     );
-                                                let mime_type = inferred_mime.clone().unwrap_or_else(
-                                                    || mime_type_from_filename(&source_path),
-                                                );
+                                                let mime_type =
+                                                    inferred_mime.clone().unwrap_or_else(|| {
+                                                        mime_type_from_filename(&source_path)
+                                                    });
                                                 match get_content_io_provider()
                                                     .copy_image_to_pictures(
                                                         &source_path,
@@ -1733,6 +1768,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                             &job.http_headers,
                                                             job.custom_display_name.as_deref(),
                                                             job.metadata.clone(),
+                                                            job.metadata_id,
                                                         )
                                                         .await;
                                                     }
@@ -1748,6 +1784,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                             download_start_time as i64,
                                                             e.as_str(),
                                                             &job.http_headers,
+                                                            job.metadata_id,
                                                         );
                                                         GlobalEmitter::global()
                                                             .emit_download_state(
@@ -1776,6 +1813,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                     download_start_time as i64,
                                                     e.as_str(),
                                                     &job.http_headers,
+                                                    job.metadata_id,
                                                 );
                                                 GlobalEmitter::global().emit_download_state(
                                                     &task_id_clone,
@@ -1825,9 +1863,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                 let alb = vec![album_id.clone()];
                                                                 GlobalEmitter::global()
                                                                     .emit_album_images_change(
-                                                                        "add",
-                                                                        &alb,
-                                                                        &ids,
+                                                                        "add", &alb, &ids,
                                                                     );
                                                             }
                                                         }
@@ -1840,18 +1876,17 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                         Some(&tid_dup),
                                                         None,
                                                     );
-                                                    if let Ok(new_count) =
-                                                        Storage::global().increment_task_dedup_count(
-                                                            &task_id_clone,
-                                                        )
+                                                    if let Ok(new_count) = Storage::global()
+                                                        .increment_task_dedup_count(&task_id_clone)
                                                     {
-                                                        GlobalEmitter::global().emit_task_image_counts(
-                                                            &task_id_clone,
-                                                            None,
-                                                            None,
-                                                            None,
-                                                            Some(new_count),
-                                                        );
+                                                        GlobalEmitter::global()
+                                                            .emit_task_image_counts(
+                                                                &task_id_clone,
+                                                                None,
+                                                                None,
+                                                                None,
+                                                                Some(new_count),
+                                                            );
                                                     }
                                                     GlobalEmitter::global().emit_download_state(
                                                         &task_id_clone,
@@ -1861,7 +1896,9 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                         "completed",
                                                         None,
                                                     );
-                                                    clear_failed_image_after_success(job.failed_image_id);
+                                                    clear_failed_image_after_success(
+                                                        job.failed_image_id,
+                                                    );
                                                 } else {
                                                     let display_name = job
                                                         .custom_display_name
@@ -1877,11 +1914,15 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                         crate::image_type::mime_type_from_path(
                                                             &path_for_post,
                                                         );
-                                                    let mime_type = inferred_mime.clone().unwrap_or_else(
-                                                        || mime_type_from_filename(
-                                                            path_for_post.to_string_lossy().as_ref(),
-                                                        ),
-                                                    );
+                                                    let mime_type = inferred_mime
+                                                        .clone()
+                                                        .unwrap_or_else(|| {
+                                                            mime_type_from_filename(
+                                                                path_for_post
+                                                                    .to_string_lossy()
+                                                                    .as_ref(),
+                                                            )
+                                                        });
                                                     match get_content_io_provider()
                                                         .copy_image_to_pictures(
                                                             &source_path,
@@ -1909,6 +1950,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                 &job.http_headers,
                                                                 job.custom_display_name.as_deref(),
                                                                 job.metadata.clone(),
+                                                                job.metadata_id,
                                                             )
                                                             .await;
                                                         }
@@ -1925,6 +1967,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                                 download_start_time as i64,
                                                                 e.as_str(),
                                                                 &job.http_headers,
+                                                                job.metadata_id,
                                                             );
                                                             GlobalEmitter::global()
                                                                 .emit_download_state(
@@ -1954,6 +1997,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                                     download_start_time as i64,
                                                     e.as_str(),
                                                     &job.http_headers,
+                                                    job.metadata_id,
                                                 );
                                                 GlobalEmitter::global().emit_download_state(
                                                     &task_id_clone,
@@ -1986,6 +2030,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                                         false,
                                         job.custom_display_name.as_deref(),
                                         job.metadata.clone(),
+                                        job.metadata_id,
                                     )
                                     .await;
                                 }
@@ -2026,6 +2071,7 @@ async fn download_worker_loop(dq: Arc<DownloadQueue>) {
                             download_start_time as i64,
                             e.as_str(),
                             &job.http_headers,
+                            job.metadata_id,
                         );
                     }
                     GlobalEmitter::global().emit_download_state(
@@ -2078,6 +2124,7 @@ async fn process_downloaded_content_image_to_storage(
     http_headers: &HashMap<String, String>,
     custom_display_name: Option<&str>,
     metadata: Option<serde_json::Value>,
+    metadata_id: Option<i64>,
 ) -> Result<(), String> {
     let (width, height) = get_content_io_provider()
         .get_image_dimensions(content_uri)
@@ -2094,17 +2141,31 @@ async fn process_downloaded_content_image_to_storage(
             display_name = n.to_string();
         }
     }
-    let mime_type = inferred_mime_type
-        .or_else(|| Some(mime_type_from_filename(&display_name)));
-    let media_type = if mime_type
-        .as_deref()
-        .map(|m| m.starts_with("video/"))
-        .unwrap_or(false)
-    {
-        Some("video".to_string())
-    } else {
-        Some("image".to_string())
-    };
+    let mime_line = inferred_mime_type
+        .as_ref()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            let from_fn = mime_type_from_filename(&display_name);
+            let f = from_fn.to_lowercase();
+            if f != "application/octet-stream" && !f.is_empty() {
+                Some(f)
+            } else {
+                None
+            }
+        });
+    let media_type = Some(match mime_line {
+        Some(m) if m.starts_with("video/") || crate::image_type::is_video_mime(&Some(m.clone())) => {
+            m
+        }
+        Some(m) if m.starts_with("image/") || crate::image_type::is_image_mime(&Some(m.clone())) => {
+            m
+        }
+        Some(m) if m == "video" => crate::image_type::default_video_mime().to_string(),
+        Some(m) if m == "image" => crate::image_type::default_image_mime().to_string(),
+        Some(m) => m,
+        None => crate::image_type::default_image_mime().to_string(),
+    });
 
     let image_info = ImageInfo {
         id: "".to_string(),
@@ -2114,11 +2175,11 @@ async fn process_downloaded_content_image_to_storage(
         task_id: Some(task_id.to_string()),
         surf_record_id: None,
         crawled_at: download_start_time,
-        metadata,
+        metadata: if metadata_id.is_some() { None } else { metadata },
+        metadata_id,
         thumbnail_path: thumbnail_path_str.to_string(),
         favorite: false,
         hash: hash.to_string(),
-        mime_type,
         local_exists: true,
         width,
         height,
@@ -2166,6 +2227,7 @@ async fn process_downloaded_content_image_to_storage(
                 download_start_time as i64,
                 e.as_str(),
                 http_headers,
+                metadata_id,
             );
             GlobalEmitter::global().emit_download_state(
                 task_id,
@@ -2195,6 +2257,7 @@ pub async fn postprocess_downloaded_image(
     native: bool,
     custom_display_name: Option<&str>,
     metadata: Option<serde_json::Value>,
+    metadata_id: Option<i64>,
 ) -> Result<bool, String> {
     use crate::storage::organize::OrganizeService;
     use std::sync::atomic::Ordering;
@@ -2210,10 +2273,7 @@ pub async fn postprocess_downloaded_image(
     let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
     let is_surf_mode = surf_record_id.is_some();
     if inferred_mime.is_none() {
-        let err = format!(
-            "下载文件格式不受支持（infer）：{}",
-            path.to_string_lossy()
-        );
+        let err = format!("下载文件格式不受支持（infer）：{}", path.to_string_lossy());
         if let Some(task_id) = task_id {
             GlobalEmitter::global().emit_task_log(
                 task_id,
@@ -2228,6 +2288,7 @@ pub async fn postprocess_downloaded_image(
                 download_start_time as i64,
                 err.as_str(),
                 http_headers,
+                metadata_id,
             );
         }
         GlobalEmitter::global().emit_download_state_with_native(
@@ -2265,6 +2326,7 @@ pub async fn postprocess_downloaded_image(
                         download_start_time as i64,
                         e.as_str(),
                         http_headers,
+                        metadata_id,
                     );
                 }
                 GlobalEmitter::global().emit_download_state_with_native(
@@ -2298,6 +2360,7 @@ pub async fn postprocess_downloaded_image(
             native,
             custom_display_name,
             metadata.clone(),
+            metadata_id,
         )
         .await?;
         ensure_minimum_duration(download_start_time, 500).await;
@@ -2317,6 +2380,7 @@ pub async fn postprocess_downloaded_image(
                     download_start_time as i64,
                     e.as_str(),
                     http_headers,
+                    metadata_id,
                 );
             }
             GlobalEmitter::global().emit_download_state_with_native(
@@ -2369,7 +2433,8 @@ pub async fn postprocess_downloaded_image(
         }
         if let Some(album_id) = output_album_id {
             if !album_id.trim().is_empty() {
-                let added = Storage::global().add_images_to_album_silent(album_id, &[existing.id.clone()]);
+                let added =
+                    Storage::global().add_images_to_album_silent(album_id, &[existing.id.clone()]);
                 if added > 0 {
                     let ids = vec![existing.id.clone()];
                     let alb = vec![album_id.to_string()];
@@ -2450,6 +2515,7 @@ pub async fn postprocess_downloaded_image(
         native,
         custom_display_name,
         metadata,
+        metadata_id,
     )
     .await?;
     clear_failed_image_after_success(failed_image_id);
@@ -2471,10 +2537,7 @@ async fn ensure_media_extension_by_infer(path: &Path) -> PathBuf {
         Some(e) => e,
         None => return path.to_path_buf(),
     };
-    let current_ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let current_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     if crate::image_type::is_supported_media_ext(current_ext) && current_ext == want_ext {
         return path.to_path_buf();
     }
@@ -2507,6 +2570,7 @@ pub async fn process_downloaded_image_to_storage(
     native: bool,
     custom_display_name: Option<&str>,
     metadata: Option<serde_json::Value>,
+    metadata_id: Option<i64>,
 ) -> Result<bool, String> {
     let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
     #[cfg(target_os = "android")]
@@ -2555,6 +2619,7 @@ pub async fn process_downloaded_image_to_storage(
                         download_start_time as i64,
                         e.as_str(),
                         http_headers,
+                        metadata_id,
                     );
                 }
                 GlobalEmitter::global().emit_download_state_with_native(
@@ -2595,8 +2660,6 @@ pub async fn process_downloaded_image_to_storage(
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.to_string())
         .unwrap_or(default_name);
-    let mime_type = crate::image_type::mime_type_from_path(path)
-        .or_else(|| Some(mime_type_from_filename(&display_name)));
     let image_info = ImageInfo {
         // id 由数据库生成，这里占位
         id: "".to_string(),
@@ -2610,16 +2673,22 @@ pub async fn process_downloaded_image_to_storage(
         task_id: task_id.map(|v| v.to_string()),
         surf_record_id: surf_record_id.map(|v| v.to_string()),
         crawled_at: download_start_time,
-        metadata,
+        metadata: if metadata_id.is_some() { None } else { metadata },
+        metadata_id,
         thumbnail_path: thumbnail_path_str,
         favorite: false,
         hash: hash.to_string(),
-        mime_type,
         local_exists: true,
         width: None,
         height: None,
         display_name,
-        media_type: Some(if is_video { "video" } else { "image" }.to_string()),
+        media_type: Some(if is_video {
+            crate::image_type::mime_type_from_path(path)
+                .unwrap_or_else(|| crate::image_type::default_video_mime().to_string())
+        } else {
+            crate::image_type::mime_type_from_path(path)
+                .unwrap_or_else(|| crate::image_type::default_image_mime().to_string())
+        }),
         last_set_wallpaper_at: None,
     };
     let t_add = postprocess_timing_hash_ms.map(|_| Instant::now());
@@ -2695,6 +2764,7 @@ pub async fn process_downloaded_image_to_storage(
                     download_start_time as i64,
                     e.as_str(),
                     http_headers,
+                    metadata_id,
                 );
             }
             GlobalEmitter::global().emit_download_state_with_native(
@@ -2852,6 +2922,7 @@ pub(crate) async fn copy_extracted_images_and_enqueue(
                         None,
                         false,
                         true,
+                        None,
                         None,
                         None,
                         None,

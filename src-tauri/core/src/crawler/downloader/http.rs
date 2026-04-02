@@ -103,13 +103,8 @@ pub fn create_client() -> Result<reqwest::Client, String> {
         let no_proxy_list: Vec<&str> = no_proxy.split(',').map(|s| s.trim()).collect();
         for domain in no_proxy_list {
             if !domain.is_empty() {
-                match reqwest::Proxy::all(&format!("direct://{}", domain)) {
-                    Ok(proxy) => {
-                        client_builder = client_builder.proxy(proxy);
-                    }
-                    Err(e) => {
-                        eprintln!("跳过无效的 NO_PROXY 配置 {}: {}", domain, e);
-                    }
+                if let Ok(proxy) = reqwest::Proxy::all(&format!("direct://{}", domain)) {
+                    client_builder = client_builder.proxy(proxy);
                 }
             }
         }

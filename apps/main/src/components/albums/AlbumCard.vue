@@ -52,6 +52,7 @@ import ImageItem from "@kabegame/core/components/image/ImageItem.vue";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { thumbnailToUrl } from "@kabegame/core/httpServer";
+import { isVideoMediaType } from "@kabegame/core/utils/mediaMime";
 
 interface Props {
   album: Album;
@@ -100,7 +101,7 @@ const hasRenderablePreview = (img: ImageInfo) => !!toPreviewUrl(img);
 
 /** 视频在返回画册页后需换 key 重建，否则桌面 WebView 内 <video> 常不再 autoplay */
 const previewImageItemKey = (img: ImageInfo) =>
-  img.type === "video" ? `${img.id}-${props.videoPreviewRemountKey}` : img.id;
+  isVideoMediaType(img.type) ? `${img.id}-${props.videoPreviewRemountKey}` : img.id;
 
 // Intersection Observer：卡片进入视口时触发 visible 事件
 let observer: IntersectionObserver | null = null;

@@ -40,7 +40,7 @@ src-tauri/app-main/resources/bin/*
 # Nx
 .nx/cache
 .nx/workspace-data
-.cursor/
+# .cursor/
 
 # /test/
 

@@ -242,6 +242,39 @@ pub fn is_video_mime(mime: &Option<String>) -> bool {
     supported_video_mime_types().contains(&m)
 }
 
+/// 默认图片 MIME（无类型或历史存 `image` 时）
+pub fn default_image_mime() -> &'static str {
+    "image/jpeg"
+}
+
+/// 默认视频 MIME（历史存 `video` 且无更细信息时）
+pub fn default_video_mime() -> &'static str {
+    "video/mp4"
+}
+
+/// `images.type` 是否为视频类：`video` 或 `video/*`（大小写不敏感）
+pub fn is_stored_video_type(t: &str) -> bool {
+    let s = t.trim().to_lowercase();
+    s == "video" || s.starts_with("video/")
+}
+
+/// 将数据库/API 中的 `type` 规范为具体 MIME；兼容历史 `image` / `video` 及空值。
+pub fn normalize_stored_media_type(media_type: Option<String>) -> Option<String> {
+    let raw = media_type.unwrap_or_default();
+    let s = raw.trim();
+    if s.is_empty() {
+        return Some(default_image_mime().to_string());
+    }
+    let lower = s.to_lowercase();
+    if lower == "image" {
+        return Some(default_image_mime().to_string());
+    }
+    if lower == "video" {
+        return Some(default_video_mime().to_string());
+    }
+    Some(lower)
+}
+
 /// 判断扩展名是否为支持的视频类型。
 #[inline]
 pub fn is_supported_video_ext(ext: &str) -> bool {

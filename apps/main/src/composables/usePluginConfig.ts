@@ -209,6 +209,18 @@ export function usePluginConfig() {
         continue;
       }
 
+      if (def.type === "boolean") {
+        const raw = rawVars[def.key];
+        if (raw === true || raw === false) {
+          normalized[def.key] = raw;
+        } else if (def.default === true || def.default === false) {
+          normalized[def.key] = def.default;
+        } else {
+          normalized[def.key] = false;
+        }
+        continue;
+      }
+
       if (rawVars[def.key] !== undefined) {
         normalized[def.key] = rawVars[def.key];
       } else if (def.default !== undefined) {

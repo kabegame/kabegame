@@ -122,6 +122,7 @@ import "photoswipe-vue/photoswipe.css";
 import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 import { useModalBack } from "../../composables/useModalBack";
 import { fileToUrl, thumbnailToUrl } from "../../httpServer";
+import { isVideoMediaType } from "../../utils/mediaMime";
 
 const { t } = useI18n();
 
@@ -136,8 +137,10 @@ const props = withDefaults(defineProps<{
   plugins: () => [],
 });
 
-/** 桌面端预览内详情抽屉开关（持久化） */
-const detailDrawerOpen = useLocalStorage("kabegame-preview-detail-open", false);
+/** 桌面端预览内详情侧栏开关（localStorage，与 mergeDefaults 容错非法值） */
+const detailDrawerOpen = useLocalStorage("kabegame-preview-detail-open", false, {
+  mergeDefaults: true,
+});
 
 const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
@@ -150,7 +153,7 @@ const previewIndex = ref<number>(-1);
 const currentImageId = ref<string | null>(null);
 /** Android：仅图片的索引列表（用于过滤 PhotoSwipe 中的视频，视频改用系统播放器打开） */
 const androidFilteredIndices = computed(() =>
-  props.images.map((img, i) => (img.type !== "video" ? i : -1)).filter((i) => i >= 0)
+  props.images.map((img, i) => (!isVideoMediaType(img.type) ? i : -1)).filter((i) => i >= 0),
 );
 
 // previewImage 改为 computed，确保始终反映 props.images 的最新数据（如收藏状态变化）
@@ -165,7 +168,7 @@ const previewImage = computed<ImageInfo | null>(() => {
   if (idx >= props.images.length) return null;
   return props.images[idx] ?? null;
 });
-const isPreviewVideo = computed(() => previewImage.value?.type === "video");
+const isPreviewVideo = computed(() => isVideoMediaType(previewImage.value?.type));
 const previewHoverSide = ref<"left" | "right" | null>(null);
 const previewNotFound = ref(false);
 
@@ -320,7 +323,9 @@ const isTextInputLike = (target: EventTarget | null) => {
 const pswpDataSource = computed(() => {
   const fallbackW = 1920;
   const fallbackH = 1080;
-  const source = IS_ANDROID ? props.images.filter((img) => img.type !== "video") : props.images;
+  const source = IS_ANDROID
+    ? props.images.filter((img) => !isVideoMediaType(img.type))
+    : props.images;
   return source.map((img) => {
     const url = getOriginalPreviewUrl(img) || getThumbnailPreviewUrl(img) || "";
     return {
@@ -865,7 +870,7 @@ if (!IS_ANDROID) {
 const open = (index: number) => {
   if (IS_ANDROID) {
     const img = props.images[index];
-    if (img?.type === "video") return; // 视频由 ImageGrid 调用 openVideo，不应进入预览
+    if (isVideoMediaType(img?.type)) return; // 视频由 ImageGrid 调用 openVideo，不应进入预览
     const pswpIndex = androidFilteredIndices.value.indexOf(index);
     if (pswpIndex < 0) return;
     previewIndex.value = pswpIndex;

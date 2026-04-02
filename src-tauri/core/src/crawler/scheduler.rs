@@ -215,6 +215,7 @@ impl TaskScheduler {
         let plugin_id = item.plugin_id.clone();
         let task_id = item.task_id.clone();
         let output_album_id = task.output_album_id.clone();
+        let metadata_id = item.metadata_id;
 
         let mut handles = self.download_handles.lock().await;
         if handles.contains_key(&failed_id) {
@@ -234,6 +235,7 @@ impl TaskScheduler {
                     start_time,
                     output_album_id,
                     retry_headers,
+                    metadata_id,
                 )
                 .await;
             let mut g = dh.lock().await;

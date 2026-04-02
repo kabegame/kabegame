@@ -73,6 +73,7 @@ import { useModalStackStore } from "../../stores/modalStack";
 import { useUiStore } from "../../stores/ui";
 import { useDragScroll } from "../../composables/useDragScroll";
 import { IS_ANDROID } from "../../env";
+import { isVideoMediaType } from "../../utils/mediaMime";
 import { openVideo } from "tauri-plugin-picker-api";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
@@ -607,7 +608,7 @@ const handleItemClick = (image: ImageInfo, index: number, event?: MouseEvent) =>
   if (IS_ANDROID && !androidSelectionMode.value) {
     const action = settingsStore.values.imageClickAction || "none";
     if (action === "preview") {
-      if (image.type === "video" && image.localPath) {
+      if (isVideoMediaType(image.type) && image.localPath) {
         void openVideo(image.localPath);
         return;
       }
@@ -643,7 +644,7 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
   }
   const action = settingsStore.values.imageClickAction || "none";
   if (action === "preview") {
-    if (IS_ANDROID && image.type === "video" && image.localPath) {
+    if (IS_ANDROID && isVideoMediaType(image.type) && image.localPath) {
       void openVideo(image.localPath);
       return;
     }
@@ -658,7 +659,7 @@ const handleItemDblClick = (image: ImageInfo, index: number) => {
 const handleItemContextMenu = (image: ImageInfo, index: number, event: MouseEvent) => {
   if (!enableContextMenu.value) return;
   if (IS_ANDROID && androidSelectionMode.value) {
-    if (image.type === "video" && image.localPath) {
+    if (isVideoMediaType(image.type) && image.localPath) {
       void openVideo(image.localPath);
       return;
     }

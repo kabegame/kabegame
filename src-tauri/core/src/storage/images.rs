@@ -2,9 +2,10 @@ use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +25,10 @@ pub struct ImageInfo {
     pub crawled_at: u64,
     /// 插件写入的任意 JSON（爬虫 `download_image` 的 `metadata`），用于 EJS 模板渲染详情。
     pub metadata: Option<Value>,
+    /// 外键指向 `image_metadata.id`；与 `metadata` 二选一存储（入库后 `metadata` 常为 None）。
+    #[serde(rename = "metadataId")]
+    #[serde(default)]
+    pub metadata_id: Option<i64>,
     #[serde(rename = "thumbnailPath")]
     #[serde(default)]
     pub thumbnail_path: String,
@@ -33,9 +38,6 @@ pub struct ImageInfo {
     pub local_exists: bool,
     #[serde(default)]
     pub hash: String,
-    #[serde(rename = "mimeType")]
-    #[serde(default)]
-    pub mime_type: Option<String>,
     #[serde(default)]
     pub width: Option<u32>,
     #[serde(default)]
@@ -91,10 +93,7 @@ fn resolve_image_dimensions(local_path: &str) -> Option<(u32, u32)> {
 }
 
 fn normalize_media_type(media_type: Option<String>) -> Option<String> {
-    match media_type.as_deref() {
-        Some("video") => Some("video".to_string()),
-        _ => Some("image".to_string()),
-    }
+    crate::image_type::normalize_stored_media_type(media_type)
 }
 
 /// 从 DB `images.metadata` 文本列解析为 JSON；空串或无效则 `None`。
@@ -107,6 +106,38 @@ pub(crate) fn parse_image_metadata_json(s: Option<String>) -> Option<Value> {
             serde_json::from_str(t).ok()
         }
     })
+}
+
+pub(crate) fn metadata_content_hash_hex(bytes: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(bytes);
+    let digest = h.finalize();
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(64);
+    for &b in digest.as_slice() {
+        s.push(char::from(HEX[(b >> 4) as usize]));
+        s.push(char::from(HEX[(b & 0xf) as usize]));
+    }
+    s
+}
+
+/// 将 JSON 文本写入 `image_metadata`（按 content_hash 去重）并返回行 id。
+pub(crate) fn insert_or_get_image_metadata_id(
+    conn: &rusqlite::Connection,
+    data_json: &str,
+) -> Result<i64, String> {
+    let hash = metadata_content_hash_hex(data_json.as_bytes());
+    conn.execute(
+        "INSERT OR IGNORE INTO image_metadata (data, content_hash) VALUES (?1, ?2)",
+        params![data_json, hash],
+    )
+    .map_err(|e| format!("insert image_metadata: {}", e))?;
+    conn.query_row(
+        "SELECT id FROM image_metadata WHERE content_hash = ?1",
+        params![hash],
+        |r| r.get(0),
+    )
+    .map_err(|e| format!("select image_metadata id: {}", e))
 }
 
 /// pixiv 插件：`metadata.body` 仅保留 `description.ejs` 所需字段（与 `crawl.rhai` 的 `pixiv_trim_illust_body` 白名单一致）。
@@ -190,7 +221,10 @@ pub(crate) fn migrate_pixiv_metadata_trim(conn: &rusqlite::Connection) -> Result
     Ok(())
 }
 
-pub(crate) fn row_optional_u64_ts(row: &rusqlite::Row, idx: usize) -> rusqlite::Result<Option<u64>> {
+pub(crate) fn row_optional_u64_ts(
+    row: &rusqlite::Row,
+    idx: usize,
+) -> rusqlite::Result<Option<u64>> {
     let v: Option<i64> = row.get(idx)?;
     Ok(v.filter(|&t| t >= 0).map(|t| t as u64))
 }
@@ -201,10 +235,9 @@ impl Storage {
         let total = self.get_images_total_cached(&conn)?;
 
         let query = format!(
-            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
+            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
-             images.mime_type,
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
              images.width,
              images.height,
@@ -232,17 +265,17 @@ impl Storage {
                     task_id: row.get(4)?,
                     surf_record_id: row.get(5)?,
                     crawled_at: row.get(6)?,
-                    metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
+                    metadata: None,
+                    metadata_id: row.get::<_, Option<i64>>(7)?,
                     thumbnail_path: row.get(8)?,
                     hash: row.get(9)?,
-                    mime_type: row.get::<_, Option<String>>(10)?,
-                    favorite: row.get::<_, i64>(11)? != 0,
+                    favorite: row.get::<_, i64>(10)? != 0,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
-                    display_name: row.get(14)?,
-                    media_type: normalize_media_type(row.get::<_, Option<String>>(15)?),
-                    last_set_wallpaper_at: row_optional_u64_ts(row, 16)?,
+                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                    display_name: row.get(13)?,
+                    media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
+                    last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
@@ -285,10 +318,9 @@ impl Storage {
 
         let mut result = conn
             .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.mime_type,
                  images.width,
                  images.height,
                  images.display_name,
@@ -308,17 +340,17 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
+                        metadata: None,
+                        metadata_id: row.get::<_, Option<i64>>(7)?,
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
-                        mime_type: row.get::<_, Option<String>>(10)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        display_name: row.get(13)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                     })
                 },
             )
@@ -339,18 +371,54 @@ impl Storage {
         Ok(result)
     }
 
-    /// 仅读取 `images.metadata` 列（详情区懒加载；列表分页不拉全量 JSON）。
+    /// 读取 `image_metadata.data`，若无则回退 `images.metadata`（未迁移旧行）。
     pub fn get_image_metadata(&self, image_id: &str) -> Result<Option<Value>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let meta: Option<String> = conn
+        let row: Option<(Option<String>, Option<String>)> = conn
             .query_row(
-                "SELECT metadata FROM images WHERE id = ?1",
+                "SELECT m.data, i.metadata
+                 FROM images i
+                 LEFT JOIN image_metadata m ON i.metadata_id = m.id
+                 WHERE i.id = ?1",
                 params![image_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(|e| format!("Failed to query metadata: {}", e))?;
+        let Some((from_table, legacy)) = row else {
+            return Ok(None);
+        };
+        if let Some(ref s) = from_table {
+            if let Some(v) = parse_image_metadata_json(Some(s.clone())) {
+                return Ok(Some(v));
+            }
+        }
+        Ok(parse_image_metadata_json(legacy))
+    }
+
+    /// 按 `image_metadata.id` 直接取 JSON（前端按 metadataId 缓存时命中）。
+    pub fn get_image_metadata_by_metadata_id(
+        &self,
+        metadata_id: i64,
+    ) -> Result<Option<Value>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let meta: Option<String> = conn
+            .query_row(
+                "SELECT data FROM image_metadata WHERE id = ?1",
+                params![metadata_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query image_metadata: {}", e))?;
         Ok(parse_image_metadata_json(meta))
+    }
+
+    /// Rhai `create_image_metadata`：将 JSON 写入 `image_metadata` 并返回 id。
+    pub fn insert_or_get_image_metadata_row(&self, value: &Value) -> Result<i64, String> {
+        let s =
+            serde_json::to_string(value).map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        insert_or_get_image_metadata_id(&conn, &s)
     }
 
     pub fn find_image_by_path(&self, local_path: &str) -> Result<Option<ImageInfo>, String> {
@@ -358,10 +426,9 @@ impl Storage {
 
         let mut result = conn
             .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.mime_type,
                  images.width,
                  images.height,
                  images.display_name,
@@ -381,17 +448,17 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
+                        metadata: None,
+                        metadata_id: row.get::<_, Option<i64>>(7)?,
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
-                        mime_type: row.get::<_, Option<String>>(10)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        display_name: row.get(13)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                     })
                 },
             )
@@ -420,10 +487,9 @@ impl Storage {
 
         let mut result = conn
             .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.mime_type,
                  images.width,
                  images.height,
                  images.display_name,
@@ -444,17 +510,17 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
+                        metadata: None,
+                        metadata_id: row.get::<_, Option<i64>>(7)?,
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
-                        mime_type: row.get::<_, Option<String>>(10)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        display_name: row.get(13)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                     })
                 },
             )
@@ -480,10 +546,9 @@ impl Storage {
 
         let mut result = conn
             .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.mime_type,
                  images.width,
                  images.height,
                  images.display_name,
@@ -503,17 +568,17 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
+                        metadata: None,
+                        metadata_id: row.get::<_, Option<i64>>(7)?,
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
-                        mime_type: row.get::<_, Option<String>>(10)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        display_name: row.get(13)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                     })
                 },
             )
@@ -542,10 +607,9 @@ impl Storage {
 
         let mut result = conn
             .query_row(
-                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
+                "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
                  COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                  images.hash,
-                 images.mime_type,
                  images.width,
                  images.height,
                  images.display_name,
@@ -565,17 +629,17 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
+                        metadata: None,
+                        metadata_id: row.get::<_, Option<i64>>(7)?,
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
-                        mime_type: row.get::<_, Option<String>>(10)?,
                         favorite: false,
                         local_exists,
-                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        display_name: row.get(13)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
                     })
                 },
             )
@@ -612,10 +676,9 @@ impl Storage {
             .map_err(|e| format!("Failed to query surf record image total: {}", e))?;
 
         let query = format!(
-            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata,
+            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.surf_record_id, images.crawled_at, images.metadata_id,
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
-             images.mime_type,
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
              images.width,
              images.height,
@@ -645,17 +708,17 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: row.get(5)?,
                         crawled_at: row.get(6)?,
-                        metadata: parse_image_metadata_json(row.get::<_, Option<String>>(7)?),
+                        metadata: None,
+                        metadata_id: row.get::<_, Option<i64>>(7)?,
                         thumbnail_path: row.get(8)?,
                         hash: row.get(9)?,
-                        mime_type: row.get::<_, Option<String>>(10)?,
-                        favorite: row.get::<_, i64>(11)? != 0,
+                        favorite: row.get::<_, i64>(10)? != 0,
                         local_exists: PathBuf::from(&local_path).exists(),
-                        width: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
-                        display_name: row.get(14)?,
-                        media_type: normalize_media_type(row.get::<_, Option<String>>(15)?),
-                        last_set_wallpaper_at: row_optional_u64_ts(row, 16)?,
+                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
+                        display_name: row.get(13)?,
+                        media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
+                        last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
                     })
                 },
             )
@@ -675,12 +738,20 @@ impl Storage {
     pub fn add_image(&self, mut image: ImageInfo) -> Result<ImageInfo, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let metadata_json: Option<String> = match &image.metadata {
-            None => None,
-            Some(v) => Some(
-                serde_json::to_string(v).map_err(|e| format!("Failed to serialize metadata: {}", e))?,
-            ),
+        image.media_type = crate::image_type::normalize_stored_media_type(image.media_type.take());
+
+        let resolved_metadata_id = if image.metadata_id.is_some() {
+            image.metadata_id
+        } else if let Some(ref v) = image.metadata {
+            let s = serde_json::to_string(v)
+                .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+            Some(insert_or_get_image_metadata_id(&conn, &s)?)
+        } else {
+            None
         };
+
+        image.metadata = None;
+        image.metadata_id = resolved_metadata_id;
 
         let thumbnail_path = if image.thumbnail_path.trim().is_empty() {
             image.local_path.clone()
@@ -698,7 +769,7 @@ impl Storage {
 
         let crawled_at_i64 = image.crawled_at as i64;
         conn.execute(
-            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata, thumbnail_path, hash, mime_type, type, width, height, display_name)
+            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata, metadata_id, thumbnail_path, hash, type, width, height, display_name)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 &image.url,
@@ -707,10 +778,10 @@ impl Storage {
                 image.task_id,
                 image.surf_record_id,
                 crawled_at_i64,
-                metadata_json,
+                None::<String>,
+                image.metadata_id,
                 thumbnail_path,
                 image.hash,
-                image.mime_type,
                 image.media_type,
                 image.width.map(|v| v as i64),
                 image.height.map(|v| v as i64),
@@ -738,12 +809,20 @@ impl Storage {
     }
 
     /// 批量补齐缺失的图片宽高数据（启动时调用）。
+    /// 仅处理非视频类 `type`（`video` 或 `video/*` 跳过；空/`image`/`image/*` 等参与补全）。
     /// 先收集 (id, path) 后释放锁，再在无锁状态下解析尺寸并逐条更新，避免 resolve_image_dimensions 内 panic 毒化 db 锁。
     pub fn fill_missing_dimensions(&self) -> Result<(), String> {
         let to_fill: Vec<(i64, String)> = {
             let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
             let mut stmt = conn
-                .prepare("SELECT id, local_path FROM images WHERE width IS NULL OR height IS NULL")
+                .prepare(
+                    "SELECT id, local_path FROM images \
+                     WHERE (width IS NULL OR height IS NULL) \
+                       AND NOT ( \
+                         LOWER(COALESCE(type, '')) = 'video' \
+                         OR LOWER(COALESCE(type, '')) LIKE 'video/%' \
+                       )",
+                )
                 .map_err(|e| format!("Failed to prepare query: {}", e))?;
             let rows = stmt
                 .query_map([], |row| {
@@ -788,55 +867,10 @@ impl Storage {
         Ok(())
     }
 
-    /// 批量回填缺失的 MIME 类型（启动时调用）。
-    /// 仅针对本地文件路径；content:// 等非文件路径跳过。
-    pub fn backfill_missing_mime_types(&self) -> Result<(), String> {
-        let to_fill: Vec<(i64, String)> = {
-            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, local_path FROM images
-                     WHERE mime_type IS NULL
-                       AND local_path IS NOT NULL
-                       AND TRIM(local_path) != ''",
-                )
-                .map_err(|e| format!("Failed to prepare query: {}", e))?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(|e| format!("Failed to query images: {}", e))?;
-            rows.filter_map(Result::ok).collect()
-        };
-
-        let mut updated_count = 0usize;
-        for (id, local_path) in to_fill {
-            if local_path.starts_with("content://") {
-                continue;
-            }
-            let Some(mime) = crate::image_type::mime_type_from_path(Path::new(&local_path)) else {
-                continue;
-            };
-            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-            conn.execute(
-                "UPDATE images SET mime_type = ?1 WHERE id = ?2",
-                params![mime, id],
-            )
-            .map_err(|e| format!("Failed to update mime_type: {}", e))?;
-            updated_count += 1;
-        }
-
-        if updated_count > 0 {
-            println!("Backfilled mime_type for {} images", updated_count);
-        }
-        Ok(())
-    }
-
     /// 删除前查询图片所属任务 id（用于事件广播）
     pub fn get_task_ids_for_image(&self, image_id: &str) -> Result<Vec<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn
-            .prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
+        conn.prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
             .and_then(|mut stmt| {
                 stmt.query_map(params![image_id], |row| row.get::<_, String>(0))
                     .and_then(|rows| {
@@ -1166,7 +1200,11 @@ impl Storage {
         Ok(())
     }
 
-    pub fn update_image_last_set_wallpaper_at(&self, image_id: &str, ts: u64) -> Result<(), String> {
+    pub fn update_image_last_set_wallpaper_at(
+        &self,
+        image_id: &str,
+        ts: u64,
+    ) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         conn.execute(
             "UPDATE images SET last_set_wallpaper_at = ?1 WHERE id = ?2",

@@ -1,3 +1,4 @@
+use crate::crawler::xhh_sign;
 use crate::emitter::GlobalEmitter;
 use crate::plugin::Plugin;
 use crate::settings::Settings;
@@ -93,6 +94,7 @@ fn run_rhai_download_image_sync(
     url: &str,
     custom_display_name: Option<String>,
     metadata: Option<serde_json::Value>,
+    metadata_id: Option<i64>,
 ) -> Result<(), Box<rhai::EvalAltResult>> {
     if dq_handle.is_task_canceled_blocking(&task_id) {
         return Err("Task canceled".into());
@@ -132,16 +134,17 @@ fn run_rhai_download_image_sync(
         http_headers,
         custom_display_name,
         metadata,
+        metadata_id,
     );
     tokio::runtime::Handle::current()
         .block_on(fut)
         .map_err(|e| format!("Failed to download image: {}", e).into())
 }
 
-/// 从 Rhai `download_image(url, opts)` 的 `opts` map 解析 `name` / `metadata`。
+/// 从 Rhai `download_image(url, opts)` 的 `opts` map 解析 `name` / `metadata` / `metadata_id`。
 fn parse_download_image_opts_from_map(
     opts: &Map,
-) -> Result<(Option<String>, Option<serde_json::Value>), Box<rhai::EvalAltResult>> {
+) -> Result<(Option<String>, Option<serde_json::Value>, Option<i64>), Box<rhai::EvalAltResult>> {
     let opt_str = |key: &str| -> Result<Option<String>, Box<rhai::EvalAltResult>> {
         match opts.get(key) {
             None => Ok(None),
@@ -160,12 +163,25 @@ fn parse_download_image_opts_from_map(
             .into()),
         }
     };
+    let metadata_id = match opts.get("metadata_id") {
+        None => None,
+        Some(d) if d.is_unit() => None,
+        Some(d) if d.is_int() => Some(d.as_int().unwrap()),
+        Some(_) => {
+            return Err("download_image opts: `metadata_id` must be an integer if present".into());
+        }
+    };
     let metadata = match opts.get("metadata") {
         None => None,
         Some(d) if d.is_unit() => None,
         Some(d) => Some(rhai_dynamic_to_json_value(d)?),
     };
-    Ok((opt_str("name")?, metadata))
+    let metadata = if metadata_id.is_some() {
+        None
+    } else {
+        metadata
+    };
+    Ok((opt_str("name")?, metadata, metadata_id))
 }
 
 fn get_page_stack(
@@ -394,13 +410,8 @@ fn create_blocking_client() -> Result<reqwest::blocking::Client, String> {
         let no_proxy_list: Vec<&str> = no_proxy.split(',').map(|s| s.trim()).collect();
         for domain in no_proxy_list {
             if !domain.is_empty() {
-                match reqwest::Proxy::all(&format!("direct://{}", domain)) {
-                    Ok(proxy) => {
-                        client_builder = client_builder.proxy(proxy);
-                    }
-                    Err(e) => {
-                        eprintln!("跳过无效的 NO_PROXY 配置 {}: {}", domain, e);
-                    }
+                if let Ok(proxy) = reqwest::Proxy::all(&format!("direct://{}", domain)) {
+                    client_builder = client_builder.proxy(proxy);
                 }
             }
         }
@@ -604,6 +615,56 @@ pub fn register_crawler_functions(
     // url_encode(s) - 对字符串进行 URL 百分号编码（用于 query/path）
     engine.register_fn("url_encode", |s: &str| -> String {
         urlencoding::encode(s).into_owned()
+    });
+
+    // sleep(secs) - 阻塞当前线程指定秒数（支持小数；上限 300s）
+    engine.register_fn("sleep", |secs: f64| {
+        let clamped = secs.max(0.0).min(300.0);
+        std::thread::sleep(std::time::Duration::from_secs_f64(clamped));
+    });
+
+    // rand_f64(min, max) - 返回 [min, max) 范围内的伪随机浮点数
+    // 使用线程局部 XorShift64，首次调用以 SystemTime 纳秒为种子
+    engine.register_fn("rand_f64", |min: f64, max: f64| -> f64 {
+        use std::cell::Cell;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        thread_local! {
+            static STATE: Cell<u64> = Cell::new(0);
+        }
+        STATE.with(|s| {
+            let mut x = s.get();
+            if x == 0 {
+                x = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(12345678901234567);
+                if x == 0 { x = 1; }
+            }
+            // XorShift64
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            s.set(x);
+            let t = (x >> 11) as f64 / (1u64 << 53) as f64; // [0, 1)
+            min + t * (max - min)
+        })
+    });
+
+    // unix_time_ms() - 返回当前 Unix 时间戳（毫秒）
+    engine.register_fn("unix_time_ms", || -> i64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    });
+
+    // xhh_nonce(t) - 生成 XHH nonce（32位大写十六进制）
+    engine.register_fn("xhh_nonce", |t: i64| -> String { xhh_sign::xhh_nonce(t) });
+
+    // xhh_hkey(path, t, nonce) - 计算 XHH hkey 签名字符串（7字符）
+    engine.register_fn("xhh_hkey", |path: &str, t: i64, nonce: &str| -> String {
+        xhh_sign::xhh_hkey(path, t, nonce)
     });
 
     // re_is_match(pattern, text) - 正则匹配判断（pattern 使用 Rust regex 语法）
@@ -1475,6 +1536,7 @@ pub fn register_crawler_functions(
                 url,
                 None,
                 None,
+                None,
             )
         },
     );
@@ -1492,7 +1554,7 @@ pub fn register_crawler_functions(
             let task_id = lock_or_inner(&tid2).clone();
             let output_album_id = lock_or_inner(&oaid2).clone();
             let http_headers = lock_or_inner(&hdr2).clone();
-            let (custom_name, metadata) = parse_download_image_opts_from_map(&opts)?;
+            let (custom_name, metadata, metadata_id) = parse_download_image_opts_from_map(&opts)?;
             run_rhai_download_image_sync(
                 &dq2,
                 images_dir,
@@ -1503,7 +1565,22 @@ pub fn register_crawler_functions(
                 url,
                 custom_name,
                 metadata,
+                metadata_id,
             )
+        },
+    );
+
+    engine.register_fn(
+        "create_image_metadata",
+        |m: Map| -> Result<i64, Box<rhai::EvalAltResult>> {
+            let mut obj = JsonMap::new();
+            for (k, v) in m {
+                obj.insert(k.to_string(), rhai_dynamic_to_json_value(&v)?);
+            }
+            let val = JsonValue::Object(obj);
+            Storage::global()
+                .insert_or_get_image_metadata_row(&val)
+                .map_err(|e| e.to_string().into())
         },
     );
 

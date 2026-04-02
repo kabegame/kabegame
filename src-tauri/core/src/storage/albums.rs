@@ -1,8 +1,14 @@
 use crate::emitter::GlobalEmitter;
-use crate::{settings::Settings, storage::{FAVORITE_ALBUM_ID, ImageInfo, Storage}};
+use crate::{
+    settings::Settings,
+    storage::{ImageInfo, Storage, FAVORITE_ALBUM_ID},
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::{collections::{HashMap, HashSet}, fs};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +73,10 @@ impl Storage {
     }
 
     /// 批量图片在删除/移除前涉及的画册 id（去重），用于 `images-change` 事件。
-    pub fn collect_album_ids_for_images(&self, image_ids: &[String]) -> Result<Vec<String>, String> {
+    pub fn collect_album_ids_for_images(
+        &self,
+        image_ids: &[String],
+    ) -> Result<Vec<String>, String> {
         if image_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -392,10 +401,9 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
+                "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata_id,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
-                 i.mime_type,
                  ai.\"order\",
                  i.width,
                  i.height,
@@ -419,19 +427,19 @@ impl Storage {
                     task_id: row.get(4)?,
                     surf_record_id: None,
                     crawled_at: row.get(5)?,
-                    metadata: crate::storage::images::parse_image_metadata_json(
-                        row.get::<_, Option<String>>(6)?,
-                    ),
+                    metadata: None,
+                    metadata_id: row.get::<_, Option<i64>>(6)?,
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
-                    mime_type: row.get::<_, Option<String>>(9)?,
                     favorite: album_id == FAVORITE_ALBUM_ID,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                    display_name: row.get(13)?,
-                    media_type: row.get::<_, Option<String>>(14)?,
-                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
+                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    display_name: row.get(12)?,
+                    media_type: crate::image_type::normalize_stored_media_type(
+                        row.get::<_, Option<String>>(13)?,
+                    ),
+                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
                 })
             })
             .map_err(|e| format!("Failed to query album images: {}", e))?;
@@ -464,10 +472,9 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
+                "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata_id,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
-                 i.mime_type,
                  ai.\"order\",
                  i.width,
                  i.height,
@@ -492,19 +499,19 @@ impl Storage {
                     task_id: row.get(4)?,
                     surf_record_id: None,
                     crawled_at: row.get(5)?,
-                    metadata: crate::storage::images::parse_image_metadata_json(
-                        row.get::<_, Option<String>>(6)?,
-                    ),
+                    metadata: None,
+                    metadata_id: row.get::<_, Option<i64>>(6)?,
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
-                    mime_type: row.get::<_, Option<String>>(9)?,
                     favorite: album_id == FAVORITE_ALBUM_ID,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                    display_name: row.get(13)?,
-                    media_type: row.get::<_, Option<String>>(14)?,
-                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
+                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    display_name: row.get(12)?,
+                    media_type: crate::image_type::normalize_stored_media_type(
+                        row.get::<_, Option<String>>(13)?,
+                    ),
+                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
                 })
             })
             .map_err(|e| format!("Failed to query album preview: {}", e))?;

@@ -16,6 +16,10 @@ use axum::{
     routing::get,
     Router,
 };
+#[cfg(all(not(target_os = "android"), debug_assertions))]
+use axum::{body::Bytes, extract::DefaultBodyLimit, http::Method, routing::post};
+#[cfg(all(not(target_os = "android"), debug_assertions))]
+use tower_http::cors::{Any, CorsLayer};
 #[cfg(not(target_os = "android"))]
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 #[cfg(not(target_os = "android"))]
@@ -79,11 +83,7 @@ fn build_serve_dir_request(path: &str) -> Option<Request<Body>> {
 }
 
 #[cfg(not(target_os = "android"))]
-fn mime_from_image_or_path(img: &kabegame_core::storage::ImageInfo, path: &str) -> Option<String> {
-    let from_db = img.mime_type.as_deref().filter(|m| !m.trim().is_empty());
-    if from_db.is_some() {
-        return from_db.map(String::from);
-    }
+fn mime_from_path(path: &str) -> Option<String> {
     if let Some(m) = kabegame_core::image_type::mime_type_from_path(Path::new(path)) {
         return Some(m);
     }
@@ -120,16 +120,16 @@ async fn handle_file_query(Query(query): Query<FileQuery>, headers: axum::http::
     }
 
     // 表中无此 local_path 则 404
-    let img = match kabegame_core::storage::Storage::global().find_image_by_path(path) {
-        Ok(Some(img)) => img,
+    match kabegame_core::storage::Storage::global().find_image_by_path(path) {
+        Ok(Some(_)) => {}
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
-    };
+    }
 
     let range = headers
         .get(RANGE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    serve_file_with_mime(path, mime_from_image_or_path(&img, path), range).await
+    serve_file_with_mime(path, mime_from_path(path), range).await
 }
 
 #[cfg(not(target_os = "android"))]
@@ -146,14 +146,14 @@ async fn handle_thumbnail_query(Query(query): Query<FileQuery>, headers: axum::h
         return (StatusCode::NOT_FOUND, "file not found").into_response();
     }
 
-    let img = match kabegame_core::storage::Storage::global().find_image_by_thumbnail_path(path) {
-        Ok(Some(img)) => img,
+    match kabegame_core::storage::Storage::global().find_image_by_thumbnail_path(path) {
+        Ok(Some(_)) => {}
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
-    };
+    }
 
     // 缩略图 MIME 优先根据缩略图文件路径推断（缩略图可能是 jpg 而原始文件是 mp4）
     let thumb_mime = kabegame_core::image_type::mime_type_from_path(Path::new(path))
-        .or_else(|| mime_from_image_or_path(&img, path));
+        .or_else(|| mime_from_path(path));
 
     let range = headers
         .get(RANGE)
@@ -376,6 +376,58 @@ async fn handle_unmatched(uri: Uri) -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
+#[cfg(all(not(target_os = "android"), debug_assertions))]
+const DEBUG_INGEST_MAX_BODY: usize = 256 * 1024;
+
+/// 开发调试用：接受 NDJSON 单行或原文，追加到 `AppPaths::debug_ingest_log()`（与 Cursor/agent 埋点类似）。
+#[cfg(all(not(target_os = "android"), debug_assertions))]
+async fn handle_debug_ingest(body: Bytes) -> Response {
+    use tokio::io::AsyncWriteExt;
+
+    if body.is_empty() {
+        return (StatusCode::BAD_REQUEST, "empty body").into_response();
+    }
+    if body.len() > DEBUG_INGEST_MAX_BODY {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "body too large").into_response();
+    }
+
+    let path = kabegame_core::app_paths::AppPaths::global().debug_ingest_log();
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+
+    let mut chunk = body.to_vec();
+    if !chunk.ends_with(b"\n") {
+        chunk.push(b'\n');
+    }
+
+    match tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .await
+    {
+        Ok(mut f) => {
+            if let Err(e) = f.write_all(&chunk).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("write failed: {e}"),
+                )
+                    .into_response();
+            }
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("open failed: {e}"),
+            )
+                .into_response();
+        }
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
 #[cfg(not(target_os = "android"))]
 pub async fn start_http_server() -> Result<u16, String> {
     if let Some(port) = HTTP_SERVER_PORT.get() {
@@ -390,12 +442,33 @@ pub async fn start_http_server() -> Result<u16, String> {
         .map_err(|e| format!("read file server local addr failed: {e}"))?
         .port();
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/file", get(handle_file_query))
         .route("/thumbnail", get(handle_thumbnail_query))
         .route("/plugin-doc-image", get(handle_plugin_doc_image))
-        .route("/proxy", get(handle_proxy_query))
-        .fallback(handle_unmatched);
+        .route("/proxy", get(handle_proxy_query));
+
+    #[cfg(debug_assertions)]
+    {
+        let debug_routes = Router::new()
+            .route("/debug/ingest", post(handle_debug_ingest))
+            .layer(DefaultBodyLimit::max(DEBUG_INGEST_MAX_BODY))
+            .layer(
+                CorsLayer::new()
+                    .allow_origin(Any)
+                    .allow_methods([Method::POST, Method::OPTIONS])
+                    .allow_headers(Any),
+            );
+        app = app.merge(debug_routes);
+        eprintln!(
+            "[file-server] debug ingest POST http://127.0.0.1:{port}/debug/ingest → {}",
+            kabegame_core::app_paths::AppPaths::global()
+                .debug_ingest_log()
+                .display()
+        );
+    }
+
+    let app = app.fallback(handle_unmatched);
     tauri::async_runtime::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
             eprintln!("[file-server] stopped: {e}");
