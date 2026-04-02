@@ -261,6 +261,7 @@ async fn enqueue_image(
             HashMap::new(),
             None,
             None,
+            None,
         )
         .await
     {
@@ -329,6 +330,7 @@ async fn enqueue_archive(
                                 ctx.next_download_start_time(),
                                 ctx.output_album_id.clone(),
                                 HashMap::new(),
+                                None,
                                 None,
                                 None,
                             )

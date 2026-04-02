@@ -1,9 +1,10 @@
 import { provide, type InjectionKey } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 
-/** 按 imageId 解析插件 metadata（含 per-page Map 缓存；换页时 clearCache） */
+/** 按 imageId / metadataId 解析插件 metadata（含 per-page Map 缓存；换页时 clearCache） */
 export type ImageMetadataResolver = (
   imageId: string,
+  metadataId?: number,
 ) => Promise<unknown | null>;
 
 export const imageMetadataResolverKey: InjectionKey<ImageMetadataResolver> =
@@ -16,15 +17,25 @@ export const imageMetadataResolverKey: InjectionKey<ImageMetadataResolver> =
 export function useProvideImageMetadataCache() {
   const cache = new Map<string, unknown | null>();
 
-  async function resolveMetadata(imageId: string): Promise<unknown | null> {
-    if (cache.has(imageId)) {
-      return cache.get(imageId) ?? null;
+  async function resolveMetadata(
+    imageId: string,
+    metadataId?: number,
+  ): Promise<unknown | null> {
+    const key =
+      metadataId != null ? `m:${metadataId}` : `i:${imageId}`;
+    if (cache.has(key)) {
+      return cache.get(key) ?? null;
     }
-    const raw = await invoke<unknown | null>("get_image_metadata", {
-      imageId,
-    });
+    const raw =
+      metadataId != null
+        ? await invoke<unknown | null>("get_image_metadata_by_metadata_id", {
+            metadataId,
+          })
+        : await invoke<unknown | null>("get_image_metadata", {
+            imageId,
+          });
     const v = raw ?? null;
-    cache.set(imageId, v);
+    cache.set(key, v);
     return v;
   }
 

@@ -173,10 +173,7 @@ impl ImageQuery {
     }
 
     pub fn album_id(&self) -> Option<&str> {
-        let has_album_join = self
-            .joins
-            .iter()
-            .any(|j| j.sql.contains("album_images ai"));
+        let has_album_join = self.joins.iter().any(|j| j.sql.contains("album_images ai"));
         if !has_album_join {
             return None;
         }
@@ -237,25 +234,34 @@ impl ImageQuery {
         Self::new().with_where("images.surf_record_id = ?", vec![surf_record_id])
     }
 
-    /// 查询组件：按媒体类型过滤（`media_type` 为 `image` 或 `video`）
+    /// 查询组件：按媒体大类过滤（`media_type` 为 `image` 或 `video`，与 `images.type` 的 MIME 前缀一致）
     pub fn media_type_filter(media_type: &str) -> Self {
-        Self::new().with_where(
-            "COALESCE(images.type, 'image') = ?",
-            vec![media_type.to_string()],
-        )
+        if media_type == "video" {
+            Self::new().with_where(
+                "(LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%')",
+                vec![],
+            )
+        } else {
+            Self::new().with_where(
+                "NOT (LOWER(COALESCE(images.type, '')) = 'video' OR LOWER(COALESCE(images.type, '')) LIKE 'video/%')",
+                vec![],
+            )
+        }
     }
 
     /// 查询组件：以画册关联表作为数据源
     pub fn album_source(album_id: String) -> Self {
         Self::new()
-            .with_join("INNER JOIN album_images ai ON images.id = ai.image_id", vec![])
+            .with_join(
+                "INNER JOIN album_images ai ON images.id = ai.image_id",
+                vec![],
+            )
             .with_where("ai.album_id = ?", vec![album_id])
     }
 
     /// 查询组件：按任务过滤（单图单任务）
     pub fn task_source(task_id: String) -> Self {
-        Self::new()
-            .with_where("images.task_id = ?", vec![task_id])
+        Self::new().with_where("images.task_id = ?", vec![task_id])
     }
 
     /// 查询组件：按抓取时间排序
@@ -383,7 +389,7 @@ pub struct PluginGroup {
     pub count: usize,
 }
 
-/// 按媒体类型（图片 / 视频）的数量（`images.type` 为 `NULL` 或非 `video` 时计入图片）
+/// 按媒体类型（图片 / 视频）的数量（`video` 或 `video/*` 计入视频，其余含空值计入图片）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GalleryMediaTypeCounts {
@@ -496,40 +502,29 @@ impl Storage {
     /// 画廊全局：按 `images.type` 统计图片与视频条数
     pub fn get_gallery_media_type_counts(&self) -> Result<GalleryMediaTypeCounts, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT COALESCE(type, 'image') AS t, COUNT(*) AS cnt
-                 FROM images
-                 GROUP BY 1",
+        let (video_count, image_count): (i64, i64) = conn
+            .query_row(
+                "SELECT
+                    SUM(CASE WHEN LOWER(COALESCE(type, '')) = 'video'
+                              OR LOWER(COALESCE(type, '')) LIKE 'video/%' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN NOT (LOWER(COALESCE(type, '')) = 'video'
+                              OR LOWER(COALESCE(type, '')) LIKE 'video/%') THEN 1 ELSE 0 END)
+                 FROM images",
+                [],
+                |row| Ok((row.get::<_, Option<i64>>(0)?.unwrap_or(0), row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
             )
-            .map_err(|e| format!("Failed to prepare media type counts: {}", e))?;
-
-        let mut image_count = 0usize;
-        let mut video_count = 0usize;
-        let rows = stmt
-            .query_map([], |row| {
-                let t: String = row.get(0)?;
-                let cnt: i64 = row.get(1)?;
-                Ok((t, cnt as usize))
-            })
             .map_err(|e| format!("Failed to query media type counts: {}", e))?;
-
-        for r in rows {
-            let (t, c) = r.map_err(|e| format!("Failed to read row: {}", e))?;
-            if t == "video" {
-                video_count = c;
-            } else {
-                image_count += c;
-            }
-        }
         Ok(GalleryMediaTypeCounts {
-            image_count,
-            video_count,
+            image_count: image_count as usize,
+            video_count: video_count as usize,
         })
     }
 
     /// 指定画册内：按媒体类型统计条数
-    pub fn get_album_media_type_counts(&self, album_id: &str) -> Result<GalleryMediaTypeCounts, String> {
+    pub fn get_album_media_type_counts(
+        &self,
+        album_id: &str,
+    ) -> Result<GalleryMediaTypeCounts, String> {
         let id = album_id.trim();
         if id.is_empty() {
             return Ok(GalleryMediaTypeCounts {
@@ -538,37 +533,23 @@ impl Storage {
             });
         }
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT COALESCE(images.type, 'image') AS t, COUNT(*) AS cnt
+        let (video_count, image_count): (i64, i64) = conn
+            .query_row(
+                "SELECT
+                    SUM(CASE WHEN LOWER(COALESCE(images.type, '')) = 'video'
+                              OR LOWER(COALESCE(images.type, '')) LIKE 'video/%' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN NOT (LOWER(COALESCE(images.type, '')) = 'video'
+                              OR LOWER(COALESCE(images.type, '')) LIKE 'video/%') THEN 1 ELSE 0 END)
                  FROM images
                  INNER JOIN album_images ai ON images.id = ai.image_id
-                 WHERE ai.album_id = ?
-                 GROUP BY 1",
+                 WHERE ai.album_id = ?",
+                [id],
+                |row| Ok((row.get::<_, Option<i64>>(0)?.unwrap_or(0), row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
             )
-            .map_err(|e| format!("Failed to prepare album media type counts: {}", e))?;
-
-        let mut image_count = 0usize;
-        let mut video_count = 0usize;
-        let rows = stmt
-            .query_map([id], |row| {
-                let t: String = row.get(0)?;
-                let cnt: i64 = row.get(1)?;
-                Ok((t, cnt as usize))
-            })
             .map_err(|e| format!("Failed to query album media type counts: {}", e))?;
-
-        for r in rows {
-            let (t, c) = r.map_err(|e| format!("Failed to read row: {}", e))?;
-            if t == "video" {
-                video_count = c;
-            } else {
-                image_count += c;
-            }
-        }
         Ok(GalleryMediaTypeCounts {
-            image_count,
-            video_count,
+            image_count: image_count as usize,
+            video_count: video_count as usize,
         })
     }
 
@@ -786,10 +767,9 @@ impl Storage {
                 images.plugin_id,
                 images.task_id,
                 images.crawled_at,
-                NULL as metadata,
+                images.metadata_id,
                 COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
                 images.hash,
-                images.mime_type,
                 CASE WHEN fav_ai.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                 images.width,
                 images.height,
@@ -809,28 +789,30 @@ impl Storage {
 
         let rows = stmt
             .query_map(params_from_iter(params_ref.iter().copied()), |row| {
-            let last_ts: Option<i64> = row.get(15)?;
-            let last_set_wallpaper_at = last_ts.filter(|&t| t >= 0).map(|t| t as u64);
-            Ok(crate::storage::ImageInfo {
-                id: row.get(0)?,
-                url: row.get::<_, Option<String>>(1)?,
-                local_path: row.get(2)?,
-                plugin_id: row.get(3)?,
-                task_id: row.get(4)?,
-                surf_record_id: None,
-                crawled_at: row.get::<_, i64>(5)? as u64,
-                metadata: None,
-                thumbnail_path: row.get(7)?,
-                hash: row.get(8)?,
-                mime_type: row.get::<_, Option<String>>(9)?,
-                favorite: row.get::<_, i64>(10)? != 0,
-                local_exists: true,
-                width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                display_name: row.get(13)?,
-                media_type: row.get::<_, Option<String>>(14)?,
-                last_set_wallpaper_at,
-            })
+                let last_ts: Option<i64> = row.get(14)?;
+                let last_set_wallpaper_at = last_ts.filter(|&t| t >= 0).map(|t| t as u64);
+                Ok(crate::storage::ImageInfo {
+                    id: row.get(0)?,
+                    url: row.get::<_, Option<String>>(1)?,
+                    local_path: row.get(2)?,
+                    plugin_id: row.get(3)?,
+                    task_id: row.get(4)?,
+                    surf_record_id: None,
+                    crawled_at: row.get::<_, i64>(5)? as u64,
+                    metadata: None,
+                    metadata_id: row.get::<_, Option<i64>>(6)?,
+                    thumbnail_path: row.get(7)?,
+                    hash: row.get(8)?,
+                    favorite: row.get::<_, i64>(9)? != 0,
+                    local_exists: true,
+                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    display_name: row.get(12)?,
+                    media_type: crate::image_type::normalize_stored_media_type(
+                        row.get::<_, Option<String>>(13)?,
+                    ),
+                    last_set_wallpaper_at,
+                })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
 

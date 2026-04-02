@@ -37,7 +37,11 @@ fn now_secs() -> u64 {
 }
 
 impl Storage {
-    pub fn get_or_create_surf_record(&self, host: &str, root_url: &str) -> Result<SurfRecord, String> {
+    pub fn get_or_create_surf_record(
+        &self,
+        host: &str,
+        root_url: &str,
+    ) -> Result<SurfRecord, String> {
         let host = host.trim().to_lowercase();
         if host.is_empty() {
             return Err("host 不能为空".to_string());
@@ -96,7 +100,17 @@ impl Storage {
         drop(conn);
 
         match row {
-            Some((id, host, name, root_url, cookie, icon, last_visit_at, download_count, created_at)) => {
+            Some((
+                id,
+                host,
+                name,
+                root_url,
+                cookie,
+                icon,
+                last_visit_at,
+                download_count,
+                created_at,
+            )) => {
                 let last_image = self.find_latest_image_by_surf_record(&id)?;
                 Ok(Some(SurfRecord {
                     id,
@@ -143,7 +157,17 @@ impl Storage {
         drop(conn);
 
         match row {
-            Some((id, host, name, root_url, cookie, icon, last_visit_at, download_count, created_at)) => {
+            Some((
+                id,
+                host,
+                name,
+                root_url,
+                cookie,
+                icon,
+                last_visit_at,
+                download_count,
+                created_at,
+            )) => {
                 let last_image = self.find_latest_image_by_surf_record(&id)?;
                 Ok(Some(SurfRecord {
                     id,
@@ -162,7 +186,11 @@ impl Storage {
         }
     }
 
-    pub fn list_surf_records(&self, offset: usize, limit: usize) -> Result<RangedSurfRecords, String> {
+    pub fn list_surf_records(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<RangedSurfRecords, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let total: usize = conn
             .query_row("SELECT COUNT(*) FROM surf_records", [], |row| row.get(0))
@@ -199,7 +227,9 @@ impl Storage {
         drop(conn);
 
         let mut records = Vec::with_capacity(raw.len());
-        for (id, host, name, root_url, cookie, icon, last_visit_at, download_count, created_at) in raw {
+        for (id, host, name, root_url, cookie, icon, last_visit_at, download_count, created_at) in
+            raw
+        {
             records.push(SurfRecord {
                 last_image: self.find_latest_image_by_surf_record(&id)?,
                 id,
@@ -359,8 +389,11 @@ impl Storage {
     /// 删除遨游记录：将关联图片的 surf_record_id 置空后删除记录。
     pub fn delete_surf_record(&self, id: &str) -> Result<(), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        conn.execute("UPDATE images SET surf_record_id = NULL WHERE surf_record_id = ?1", params![id])
-            .map_err(|e| format!("Failed to clear images surf_record_id: {}", e))?;
+        conn.execute(
+            "UPDATE images SET surf_record_id = NULL WHERE surf_record_id = ?1",
+            params![id],
+        )
+        .map_err(|e| format!("Failed to clear images surf_record_id: {}", e))?;
         conn.execute("DELETE FROM surf_records WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete surf_record: {}", e))?;
         drop(conn);
@@ -383,10 +416,9 @@ impl Storage {
             )
             .map_err(|e| format!("Failed to query surf images total: {}", e))?;
         let query = format!(
-            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata_id,
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
-             images.mime_type,
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
              images.width,
              images.height,
@@ -416,19 +448,21 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: Some(surf_record_id.to_string()),
                         crawled_at: row.get(5)?,
-                        metadata: crate::storage::images::parse_image_metadata_json(
-                            row.get::<_, Option<String>>(6)?,
-                        ),
+                        metadata: None,
+                        metadata_id: row.get::<_, Option<i64>>(6)?,
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
-                        mime_type: row.get::<_, Option<String>>(9)?,
-                        favorite: row.get::<_, i64>(10)? != 0,
+                        favorite: row.get::<_, i64>(9)? != 0,
                         local_exists: PathBuf::from(&local_path).exists(),
-                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        display_name: row.get(13)?,
-                        media_type: row.get::<_, Option<String>>(14)?,
-                        last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
+                        media_type: crate::image_type::normalize_stored_media_type(
+                            row.get::<_, Option<String>>(13)?,
+                        ),
+                        last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(
+                            row, 14,
+                        )?,
                     })
                 },
             )
@@ -452,10 +486,9 @@ impl Storage {
     ) -> Result<Option<ImageInfo>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let query = format!(
-            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata,
+            "SELECT CAST(images.id AS TEXT) as id, images.url, images.local_path, images.plugin_id, images.task_id, images.crawled_at, images.metadata_id,
              COALESCE(NULLIF(images.thumbnail_path, ''), images.local_path) as thumbnail_path,
              images.hash,
-             images.mime_type,
              CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
              images.width,
              images.height,
@@ -480,19 +513,19 @@ impl Storage {
                     task_id: row.get(4)?,
                     surf_record_id: Some(surf_record_id.to_string()),
                     crawled_at: row.get(5)?,
-                    metadata: crate::storage::images::parse_image_metadata_json(
-                        row.get::<_, Option<String>>(6)?,
-                    ),
+                    metadata: None,
+                    metadata_id: row.get::<_, Option<i64>>(6)?,
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
-                    mime_type: row.get::<_, Option<String>>(9)?,
-                    favorite: row.get::<_, i64>(10)? != 0,
+                    favorite: row.get::<_, i64>(9)? != 0,
                     local_exists: PathBuf::from(&local_path).exists(),
-                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                    display_name: row.get(13)?,
-                    media_type: row.get::<_, Option<String>>(14)?,
-                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
+                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    display_name: row.get(12)?,
+                    media_type: crate::image_type::normalize_stored_media_type(
+                        row.get::<_, Option<String>>(13)?,
+                    ),
+                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
                 })
             })
             .optional()

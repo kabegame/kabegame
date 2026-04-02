@@ -1,45 +1,68 @@
 <template>
   <div v-if="image" class="image-detail-content">
-    <div v-if="image.displayName" class="detail-item">
-      <span class="detail-label">{{ t('gallery.imageDetailDisplayName') }}</span>
-      <span class="detail-value line-clamp-2" :title="image.displayName">{{ image.displayName }}</span>
+    <div class="detail-fields-collapsible-wrap">
+      <CollapsibleDrawerPanel
+        storage-key="kabegame-image-detail-fields-open"
+        :fill-when-expanded="false"
+        :toggle-aria-label="t('gallery.imageDetailFieldsToggle')"
+      >
+        <template #title>
+          {{ t('gallery.imageDetailBasicSection') }}
+        </template>
+        <div class="detail-fields-body">
+          <div v-if="image.displayName" class="detail-item">
+            <span class="detail-label">{{ t('gallery.imageDetailDisplayName') }}</span>
+            <span class="detail-value line-clamp-2" :title="image.displayName">{{ image.displayName }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">{{ t('gallery.imageDetailSource') }}</span>
+            <span class="detail-value">{{ getPluginName(image.pluginId) }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">{{ t('gallery.imageDetailType') }}</span>
+            <span class="detail-value">{{ imageTypeLabel }}</span>
+          </div>
+          <div v-if="image.url && !isFileUrl(image.url)" class="detail-item">
+            <span class="detail-label">{{ t('gallery.imageDetailUrl') }}</span>
+            <span
+              class="detail-value line-clamp-2 clickable-link"
+              :title="image.url"
+              @click="handleOpenUrl(image.url)"
+            >{{ image.url }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">{{ t('gallery.imageDetailLocalPath') }}</span>
+            <span
+              class="detail-value line-clamp-2 clickable-link"
+              :title="image.localPath"
+              @click="handleOpenPath(image.localPath)"
+            >{{ image.localPath }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">{{ t('gallery.imageDetailCrawledAt') }}</span>
+            <span class="detail-value">{{ formatDate(image.crawledAt) }}</span>
+          </div>
+        </div>
+      </CollapsibleDrawerPanel>
     </div>
-    <div class="detail-item">
-      <span class="detail-label">{{ t('gallery.imageDetailSource') }}</span>
-      <span class="detail-value">{{ getPluginName(image.pluginId) }}</span>
-    </div>
-    <div v-if="image.url && !isFileUrl(image.url)" class="detail-item">
-      <span class="detail-label">{{ t('gallery.imageDetailUrl') }}</span>
-      <span
-        class="detail-value line-clamp-2 clickable-link"
-        :title="image.url"
-        @click="handleOpenUrl(image.url)"
-      >{{ image.url }}</span>
-    </div>
-    <div class="detail-item">
-      <span class="detail-label">{{ t('gallery.imageDetailLocalPath') }}</span>
-      <span
-        class="detail-value line-clamp-2 clickable-link"
-        :title="image.localPath"
-        @click="handleOpenPath(image.localPath)"
-      >{{ image.localPath }}</span>
-    </div>
-    <div class="detail-item">
-      <span class="detail-label">{{ t('gallery.imageDetailCrawledAt') }}</span>
-      <span class="detail-value">{{ formatDate(image.crawledAt) }}</span>
-    </div>
-    <div
-      v-if="descriptionSrcdoc"
-      class="detail-item description-section"
-    >
-      <span class="detail-label">{{ t('gallery.imageDetailDescription') }}</span>
-      <iframe
-        ref="descriptionIframeRef"
-        class="description-iframe"
-        :srcdoc="descriptionSrcdoc"
-        sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-        referrerpolicy="no-referrer"
-      />
+    <div v-if="descriptionSrcdoc" class="description-collapsible-wrap">
+      <CollapsibleDrawerPanel
+        storage-key="kabegame-image-detail-description-open"
+        :toggle-aria-label="t('gallery.imageDetailPluginInfoToggle')"
+      >
+        <template #title>
+          {{ t('gallery.imageDetailMoreSection') }}
+        </template>
+        <div class="description-iframe-wrap">
+          <iframe
+            ref="descriptionIframeRef"
+            class="description-iframe"
+            :srcdoc="descriptionSrcdoc"
+            sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+            referrerpolicy="no-referrer"
+          />
+        </div>
+      </CollapsibleDrawerPanel>
     </div>
     <div
       v-else-if="showRawMetadata"
@@ -60,6 +83,7 @@
 import { computed, inject, onMounted, onUnmounted, ref, watch } from "vue";
 import ejs from "ejs";
 import DESCRIPTION_BRIDGE_INJECT_SCRIPT from "./descriptionBridgeInject.body.js?raw";
+import CollapsibleDrawerPanel from "./CollapsibleDrawerPanel.vue";
 import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -71,6 +95,7 @@ import {
   imageMetadataResolverKey,
   type ImageMetadataResolver,
 } from "../../composables/useImageMetadataCache";
+import { displayImageMimeType } from "../../utils/mediaMime";
 
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
@@ -88,7 +113,10 @@ export type ImageDetailLike = {
   pluginId?: string;
   crawledAt?: number;
   displayName?: string;
+  /** 与库表 `images.type` 一致：具体 MIME（API 已规范化） */
+  type?: string;
   metadata?: Record<string, unknown> | unknown;
+  metadataId?: number;
 };
 
 interface Props {
@@ -97,6 +125,11 @@ interface Props {
 }
 
 const props = defineProps<Props>();
+
+const imageTypeLabel = computed((): string => {
+  if (!props.image) return "";
+  return displayImageMimeType(props.image.type);
+});
 
 function isRenderableMetadata(v: unknown): boolean {
   if (v == null) return false;
@@ -130,9 +163,13 @@ async function loadMetadataForImage(img: ImageDetailLike | null) {
   try {
     const fn =
       injectedResolveMetadata ??
-      (async (imageId: string) =>
-        invoke<unknown | null>("get_image_metadata", { imageId }));
-    const m = await fn(img.id);
+      (async (imageId: string, metadataId?: number) =>
+        metadataId != null
+          ? invoke<unknown | null>("get_image_metadata_by_metadata_id", {
+              metadataId,
+            })
+          : invoke<unknown | null>("get_image_metadata", { imageId }));
+    const m = await fn(img.id, img.metadataId);
     resolvedMetadata.value = m ?? null;
   } catch (e) {
     console.error("image detail metadata load failed", e);
@@ -327,13 +364,20 @@ function formatMetadataValue(v: unknown): string {
   }
 }
 
+/** 与 TaskSummaryRow 一致：回退用 pluginStore.pluginLabel（含 local-import → tasks.drawerLocalImport） */
 const getPluginName = (pluginId?: string): string => {
   if (!pluginId) return "unknown";
   const plugin = (props.plugins || []).find((p) => p.id === pluginId);
-  if (!plugin) return pluginId;
+  if (!plugin) return pluginStore.pluginLabel(pluginId);
   const raw = plugin.name;
-  if (!raw || typeof raw !== "object") return (raw as string) || pluginId;
-  return resolveManifestText(raw, locale.value) || (raw["default"] ?? pluginId) || pluginId;
+  if (!raw || typeof raw !== "object") {
+    return (raw as string)?.trim() || pluginStore.pluginLabel(pluginId);
+  }
+  return (
+    resolveManifestText(raw, locale.value) ||
+    (raw["default"] ?? pluginStore.pluginLabel(pluginId)) ||
+    pluginStore.pluginLabel(pluginId)
+  );
 };
 
 const formatDate = (timestamp?: number) => {
@@ -400,6 +444,21 @@ const handleOpenPath = async (path?: string) => {
     flex-shrink: 0;
   }
 
+  .detail-fields-collapsible-wrap {
+    flex-shrink: 0;
+
+    :deep(.kb-collapsible-panel__body) {
+      padding-bottom: 12px;
+    }
+  }
+
+  .detail-fields-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 0 12px;
+  }
+
   .detail-value {
     color: var(--anime-text-primary);
     word-break: break-all;
@@ -446,20 +505,33 @@ const handleOpenPath = async (path?: string) => {
     flex: 1;
   }
 
-  .description-section {
+  .description-collapsible-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
     flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-    flex-grow: 1;
+
+    :deep(.kb-collapsible-panel) {
+      flex: 1;
+      min-height: 0;
+    }
+
+    :deep(.kb-collapsible-panel__body) {
+      padding: 0 12px 12px;
+    }
   }
 
-  .description-section .detail-label {
-    margin-bottom: 0;
+  .description-iframe-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
 
   .description-iframe {
     box-sizing: border-box;
     width: 100%;
+    min-height: 160px;
     border: 1px solid var(--anime-border);
     border-radius: 10px;
     background: var(--anime-bg-card);

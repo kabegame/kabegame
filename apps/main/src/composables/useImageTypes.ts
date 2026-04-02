@@ -49,19 +49,17 @@ export function useImageTypes() {
     await loadPromise;
   };
 
-  /** 按扩展名查 MIME，用作表字段 mimeType 缺失时的回退；默认 application/octet-stream */
+  /** 按扩展名查 MIME（分享/剪贴板）；默认 application/octet-stream */
   const getMimeType = (ext: string | undefined): string => {
     const key = ext?.trim().toLowerCase().replace(/^\./, "") ?? "";
     return mimeByExt.value[key] ?? "application/octet-stream";
   };
 
-  /** 分享/剪贴板用：优先使用记录的 mimeType，否则按扩展名推断，最后回退 application/octet-stream */
+  /** 分享/剪贴板用：按扩展名推断 MIME，最后回退 application/octet-stream */
   const getMimeTypeForImage = (
-    image: { mimeType?: string | null } | undefined,
+    _image: unknown,
     ext: string | undefined
   ): string => {
-    const fromRecord = image?.mimeType?.trim();
-    if (fromRecord) return fromRecord;
     return getMimeType(ext);
   };
 

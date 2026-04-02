@@ -14,6 +14,8 @@ export interface ImageInfo {
   crawledAt?: number;
   /** 爬虫写入的任意 JSON，详情区由插件 `templates/description.ejs` 渲染 */
   metadata?: Record<string, unknown>;
+  /** 外键 `image_metadata.id`；与 `metadata` 二选一，列表常带此字段以合并懒加载请求 */
+  metadataId?: number;
   hash?: string;
   order?: number;
   width?: number;
@@ -26,10 +28,8 @@ export interface ImageInfo {
   // 显示名称（从数据库 display_name 列读取）
   displayName?: string;
 
-  /** 图片 MIME 类型（来自表 mime_type，分享/剪贴板优先使用） */
-  mimeType?: string | null;
-  /** 媒体类型：默认 image，video 表示视频壁纸。 */
-  type?: "image" | "video";
+  /** 媒体 MIME（如 image/jpeg、video/mp4）；视频判定用 `video` 或 `video/*` 前缀。 */
+  type?: string;
 
   /** 最后一次被设为壁纸的 Unix 时间戳（秒） */
   lastSetWallpaperAt?: number;
@@ -46,4 +46,6 @@ export interface TaskFailedImage {
   lastError?: string | null;
   lastAttemptedAt?: number | null;
   headerSnapshot?: Record<string, string> | null;
+  /** 外键 `image_metadata.id`；重试成功时写入新图片 */
+  metadataId?: number | null;
 }

@@ -2871,7 +2871,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame"
-version = "3.4.2"
+version = "3.4.3"
 dependencies = [
  "arboard",
  "async-trait",
@@ -2925,7 +2925,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame-cli"
-version = "3.4.2"
+version = "3.4.3"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -2942,7 +2942,7 @@ dependencies = [
 
 [[package]]
 name = "kabegame-core"
-version = "3.4.2"
+version = "3.4.3"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2958,6 +2958,7 @@ dependencies = [
  "infer",
  "libc",
  "lru",
+ "md5",
  "memmap2",
  "openssl",
  "regex",
@@ -3225,6 +3226,12 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
+
+[[package]]
+name = "md5"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "memchr"

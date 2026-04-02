@@ -1,0 +1,17 @@
+---
+description: 应用概况与功能以项目根目录 README 为准
+alwaysApply: true
+---
+
+# 应用概况参考
+
+需要了解本应用（Kabegame）的**功能特性、技术栈、项目结构、开发/构建命令**等概况时，应查阅项目根目录的 **README.md**（`kabegame/README.md` 或 `README.md`）。
+
+README 中包含：
+- 功能特性（壁纸管理、插件系统、画册、轮播、虚拟磁盘、CLI 等）
+- 技术栈（Vue 3、Tauri、Rust、Rhai 等）
+- 项目结构（apps、packages、src-tauri、src-crawler-plugins 等）
+- 开发/构建命令（`bun dev`、`bun b`、`bun check` 等）
+- 桌面端三种模式（Normal / Local / Light）及 Android 说明
+
+作答或改代码前若涉及上述内容，优先以 README 为准，必要时先读取该文件。

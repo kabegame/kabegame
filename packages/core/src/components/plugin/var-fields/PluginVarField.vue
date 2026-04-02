@@ -20,7 +20,6 @@
   <VarBooleanField
     v-else-if="type === 'boolean'"
     :model-value="modelValue"
-    :allow-unset="allowUnset"
     @update:model-value="$emit('update:modelValue', $event)"
   />
 

@@ -135,6 +135,11 @@ impl AppPaths {
         self.cache_dir.join("store-cache")
     }
 
+    /// 开发调试 NDJSON 日志：`debug_assertions` 下本地 HTTP 服务 `POST /debug/ingest` 追加写入此文件
+    pub fn debug_ingest_log(&self) -> PathBuf {
+        self.cache_dir.join("debug-ingest.ndjson")
+    }
+
     /// 特定商店源的插件缓存目录
     pub fn store_plugin_cache_dir(&self, source_id: &str) -> PathBuf {
         self.store_cache_dir().join(source_id)

@@ -1,15 +1,14 @@
 <template>
   <div class="tasks-drawer-content">
     <div class="drawer-accordion">
-      <section class="drawer-panel" :class="{ 'is-collapsed': !downloadsPanelOpen }">
-        <button class="drawer-panel-header" type="button" @click="downloadsPanelOpen = !downloadsPanelOpen">
+      <CollapsibleDrawerPanel storage-key="kabegame-task-drawer-downloads-open">
+        <template #title>
           <span class="drawer-panel-title">{{ t("tasks.drawerDownloading") }}</span>
-          <div class="drawer-panel-header-right">
-            <el-tag type="warning" size="small">{{ activeDownloadsRunningCount }}</el-tag>
-            <span class="drawer-panel-caret" :class="{ 'is-open': downloadsPanelOpen }">▾</span>
-          </div>
-        </button>
-        <div v-show="downloadsPanelOpen" class="drawer-panel-body drawer-panel-body--downloads">
+        </template>
+        <template #trailing>
+          <el-tag type="warning" size="small">{{ activeDownloadsRunningCount }}</el-tag>
+        </template>
+        <div class="drawer-panel-body drawer-panel-body--downloads">
           <div class="downloads-section">
             <div v-if="activeDownloads.length === 0" class="downloads-empty">
               <el-empty :description="t('tasks.drawerNoDownloads')" :image-size="60" />
@@ -46,17 +45,19 @@
             </div>
           </div>
         </div>
-      </section>
+      </CollapsibleDrawerPanel>
 
-      <section class="drawer-panel drawer-panel--tasks" :class="{ 'is-collapsed': !tasksPanelOpen }">
-        <button class="drawer-panel-header" type="button" @click="tasksPanelOpen = !tasksPanelOpen">
+      <CollapsibleDrawerPanel
+        storage-key="kabegame-task-drawer-tasks-open"
+        class="drawer-panel--tasks"
+      >
+        <template #title>
           <span class="drawer-panel-title">{{ t("tasks.taskList") }}</span>
-          <div class="drawer-panel-header-right">
-            <el-tag type="info" size="small">{{ displayTaskCount }}</el-tag>
-            <span class="drawer-panel-caret" :class="{ 'is-open': tasksPanelOpen }">▾</span>
-          </div>
-        </button>
-        <div v-show="tasksPanelOpen" class="drawer-panel-body drawer-panel-body--tasks">
+        </template>
+        <template #trailing>
+          <el-tag type="info" size="small">{{ displayTaskCount }}</el-tag>
+        </template>
+        <div class="drawer-panel-body drawer-panel-body--tasks">
           <div class="tasks-summary">
             <span>{{ t('tasks.drawerTaskCount', { n: displayTaskCount }) }}</span>
             <el-button
@@ -209,7 +210,7 @@
             </div>
           </div>
         </div>
-      </section>
+      </CollapsibleDrawerPanel>
     </div>
 
     <TaskParamsDialog
@@ -227,6 +228,7 @@ import { useVirtualList } from "@vueuse/core";
 import { useI18n, resolveConfigText } from "@kabegame/i18n";
 import { Close, Grid, Loading } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
+import CollapsibleDrawerPanel from "../common/CollapsibleDrawerPanel.vue";
 import TaskLogDialog from "./TaskLogDialog.vue";
 import TaskParamsDialog from "./TaskParamsDialog.vue";
 import TaskSummaryRow, { type TaskSummaryRowTask } from "./TaskSummaryRow.vue";
@@ -329,8 +331,6 @@ const displayTaskCount = computed(() =>
 );
 
 const loadingMore = ref(false);
-const downloadsPanelOpen = ref(true);
-const tasksPanelOpen = ref(true);
 
 const kbAppPublicIcon = `${(import.meta.env.BASE_URL || "/").replace(/\/$/, "")}/icon.png`;
 
@@ -850,62 +850,9 @@ onUnmounted(() => {
     padding: 8px 10px 10px;
   }
 
-  .drawer-panel {
-    border: 1px solid var(--anime-border);
-    border-radius: 10px;
-    background: var(--anime-bg-secondary);
-    display: flex;
-    flex-direction: column;
-    min-height: 44px;
-    overflow: hidden;
-
-    &:not(.is-collapsed) {
-      flex: 1;
-      min-height: 0;
-    }
-
-    &.is-collapsed {
-      flex: 0 0 auto;
-    }
-  }
-
-  .drawer-panel-header {
-    border: 0;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 12px;
-    background: transparent;
-    color: var(--anime-text-primary);
-    cursor: pointer;
-  }
-
   .drawer-panel-title {
     font-size: 14px;
     font-weight: 600;
-  }
-
-  .drawer-panel-header-right {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .drawer-panel-caret {
-    font-size: 13px;
-    color: var(--anime-text-secondary);
-    transition: transform 0.2s ease;
-
-    &.is-open {
-      transform: rotate(180deg);
-    }
-  }
-
-  .drawer-panel-body {
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
   }
 
   .drawer-panel-body--downloads,

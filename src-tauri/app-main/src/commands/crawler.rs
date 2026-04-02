@@ -403,6 +403,7 @@ pub async fn crawl_download_image(
         merged_headers,
         name,
         metadata,
+        None,
     )
     .await
 }

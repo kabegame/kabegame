@@ -7,6 +7,7 @@ import {
   setImageStateCache,
   type CachedImageState,
 } from "./useImageStateCache";
+import { isVideoMediaType } from "../utils/mediaMime";
 
 type UrlKind = "thumbnail" | "original";
 
@@ -61,7 +62,7 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
   const urlPlan = computed(() => {
     const image = options.image.value;
     if (IS_ANDROID) {
-      const isVideo = image.type === "video";
+      const isVideo = isVideoMediaType(image.type);
       const thumbPath = image.thumbnailPath || image.localPath;
       const localFileUrl = toAndroidLocalFileUrl(thumbPath);
       const contentUrl = toAndroidProxyUrl(image.localPath);
@@ -255,7 +256,7 @@ export function useImageItemLoader(options: UseImageItemLoaderOptions) {
     const image = options.image.value;
     const { fallbackUrl, primaryKind } = urlPlan.value;
     // Linux 视频用 <img> 显示首帧 JPG；缩略图加载失败时不可回退到 fallbackUrl（mp4），否则会变成用 img 加载视频
-    if (IS_LINUX && image.type === "video" && currentStage.value === "primary") {
+    if (IS_LINUX && isVideoMediaType(image.type) && currentStage.value === "primary") {
       displayUrl.value = "";
       isImageLoading.value = false;
       isLost.value = true;

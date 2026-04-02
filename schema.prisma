@@ -62,6 +62,17 @@ model RunConfig {
     @@map("run_configs")
 }
 
+/// 插件详情 JSON 去重存储（同帖多图共享一行）
+model ImageMetadata {
+    id               Int               @id @default(autoincrement())
+    data             String // JSON string
+    contentHash      String            @unique @map("content_hash")
+    images           Image[]
+    taskFailedImages TaskFailedImage[]
+
+    @@map("image_metadata")
+}
+
 // 图片表（同时支持视频壁纸）
 model Image {
     id            Int     @id @default(autoincrement())
@@ -71,10 +82,10 @@ model Image {
     taskId        String? @map("task_id")
     surfRecordId  String? @map("surf_record_id")
     crawledAt     Int     @map("crawled_at")
-    metadata      String? // JSON string
+    metadata      String? // JSON string（旧数据或未迁移行；新数据多在 image_metadata）
+    metadataId    Int?    @map("metadata_id")
     thumbnailPath String  @default("") @map("thumbnail_path")
     hash          String  @default("")
-    mimeType      String? @map("mime_type")
     width         Int? // 图片宽度（像素）
     height        Int? // 图片高度（像素）
     displayName   String  @default("") @map("display_name")
@@ -82,6 +93,7 @@ model Image {
 
     task        Task?        @relation("TaskToImage", fields: [taskId], references: [id], onDelete: SetNull)
     surfRecord  SurfRecord?  @relation("SurfRecordToImage", fields: [surfRecordId], references: [id], onDelete: SetNull)
+    imageMetadata ImageMetadata? @relation(fields: [metadataId], references: [id], onDelete: SetNull)
     albumImages AlbumImage[]
 
     @@index([crawledAt(sort: Desc)], name: "idx_crawled_at")
@@ -145,8 +157,10 @@ model TaskFailedImage {
     lastError       String? @map("last_error")
     lastAttemptedAt Int?    @map("last_attempted_at")
     headerSnapshot  String? @map("header_snapshot") // JSON string: Record<string,string>
+    metadataId      Int?    @map("metadata_id")
 
-    task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+    task          Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+    imageMetadata ImageMetadata? @relation(fields: [metadataId], references: [id], onDelete: SetNull)
 
     @@index([taskId], name: "idx_task_failed_images_task")
     @@map("task_failed_images")

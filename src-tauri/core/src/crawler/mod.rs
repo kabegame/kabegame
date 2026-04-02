@@ -1,4 +1,5 @@
 pub mod archiver;
+pub mod xhh_sign;
 pub mod content_io;
 pub mod downloader;
 pub mod proxy;

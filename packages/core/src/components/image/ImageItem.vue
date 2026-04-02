@@ -88,6 +88,7 @@ import ImageNotFound from "../common/ImageNotFound.vue";
 import { useImageItemLoader } from "../../composables/useImageItemLoader";
 import { useSettingsStore } from "../../stores/settings";
 import { IS_ANDROID, IS_LINUX } from "../../env";
+import { isVideoMediaType } from "../../utils/mediaMime";
 
 interface Props {
   image: ImageInfo;
@@ -237,7 +238,7 @@ const aspectRatioStyle = computed(() => {
     ? { aspectRatio: `${r}` }
     : { aspectRatio: "16 / 9" };
 });
-const isVideo = computed(() => props.image.type === "video");
+const isVideo = computed(() => isVideoMediaType(props.image.type));
 
 const handleWrapperClick = (event?: MouseEvent) => {
   // Android 下，如果刚触发了长按，跳过本次 click

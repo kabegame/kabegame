@@ -1,0 +1,61 @@
+---
+description: 新样式优先用 UnoCSS，并提取复用类
+globs: "**/*.vue, **/*.css, **/*.scss, **/*.tsx"
+alwaysApply: false
+---
+
+# 样式：UnoCSS 迁移与复用
+
+本项目将逐步迁移到 UnoCSS，编写或修改样式时请遵守以下约定。
+
+## 新样式优先用 UnoCSS
+
+- **新加样式**尽量写成 UnoCSS 工具类（写在模板的 `class` 或 `:class` 上）。
+- 配置见根目录 `uno.config.pub.ts` 与各应用下的 `uno.config.ts`，当前使用 `presetWind3`，语法与 Tailwind 兼容。
+- 仅在 UnoCSS 难以表达（如复杂动画、第三方覆盖）时再写 `<style>` / CSS。
+
+**示例：**
+
+```html
+<!-- ✅ 优先：UnoCSS 工具类 -->
+<div class="flex items-center gap-2 p-4 rounded-lg bg-gray-100 dark:bg-gray-800">
+  <span class="text-sm text-gray-600 truncate">标题</span>
+</div>
+
+<!-- ❌ 避免：新样式仍写进 style -->
+<div class="my-card">
+  <span class="my-card__title">标题</span>
+</div>
+<style scoped>
+.my-card { display: flex; align-items: center; gap: 8px; padding: 16px; ... }
+.my-card__title { font-size: 14px; color: #666; overflow: hidden; text-overflow: ellipsis; }
+</style>
+```
+
+## 提取复用类
+
+- 同一套样式在多处使用时，应**提取为复用单位**：
+  - 优先在 `uno.config.*.ts` 的 `rules` 或 `shortcuts` 里加自定义规则/简写；
+  - 或在公共组件/布局里用组合好的 class 字符串/常量。
+- 避免在多个组件里重复写一长串相同的 UnoCSS 类；若已有 SCSS 变量/混入，可逐步用 UnoCSS 替代并保留一处定义。
+
+**示例：**
+
+```ts
+// uno.config.pub.ts 或应用内 uno.config.ts
+shortcuts: [
+  ['card-base', 'p-4 rounded-lg border border-gray-200 dark:border-gray-700'],
+  ['btn-icon', 'flex items-center justify-center w-9 h-9 rounded-md hover:bg-gray-100'],
+]
+```
+
+```html
+<!-- 使用 shortcut -->
+<div class="card-base">...</div>
+<button class="btn-icon">...</button>
+```
+
+## 与现有样式共存
+
+- 旧代码中的 `<style scoped>` / SCSS 可保留，**不必一次性重写**。
+- 修改旧组件时，若只动到少量样式，可顺势改为 UnoCSS 类；若改动范围大，可只改新增部分为 UnoCSS，其余逐步迁移。

@@ -582,6 +582,7 @@ pub fn create_crawler_window(app_handle: AppHandle) -> Result<(), String> {
                             true,
                             None,
                             None,
+                            None,
                         )
                         .await;
                     });

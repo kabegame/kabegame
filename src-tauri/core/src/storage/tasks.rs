@@ -58,6 +58,7 @@ pub struct TaskFailedImage {
     pub last_error: Option<String>,
     pub last_attempted_at: Option<i64>,
     pub header_snapshot: Option<HashMap<String, String>>,
+    pub metadata_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,11 +235,7 @@ impl Storage {
     }
 
     /// 分页获取任务列表，按 start_time DESC 排序
-    pub fn get_tasks_page(
-        &self,
-        limit: u32,
-        offset: u32,
-    ) -> Result<(Vec<TaskInfo>, u64), String> {
+    pub fn get_tasks_page(&self, limit: u32, offset: u32) -> Result<(Vec<TaskInfo>, u64), String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         let total: i64 = conn
@@ -254,15 +251,12 @@ impl Storage {
             )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
-        let task_rows = stmt.query_map(
-            params![limit as i64, offset as i64],
-            |row| {
+        let task_rows = stmt
+            .query_map(params![limit as i64, offset as i64], |row| {
                 let user_config_json: Option<String> = row.get(3)?;
-                let user_config = user_config_json
-                    .and_then(|s| serde_json::from_str(&s).ok());
+                let user_config = user_config_json.and_then(|s| serde_json::from_str(&s).ok());
                 let http_headers_json: Option<String> = row.get(4)?;
-                let http_headers = http_headers_json
-                    .and_then(|s| serde_json::from_str(&s).ok());
+                let http_headers = http_headers_json.and_then(|s| serde_json::from_str(&s).ok());
                 Ok(TaskInfo {
                     id: row.get(0)?,
                     plugin_id: row.get(1)?,
@@ -284,8 +278,8 @@ impl Storage {
                         .get::<_, Option<String>>(16)?
                         .unwrap_or_else(default_trigger_source),
                 })
-            },
-        ).map_err(|e| format!("Failed to query tasks: {}", e))?;
+            })
+            .map_err(|e| format!("Failed to query tasks: {}", e))?;
 
         let mut tasks = Vec::new();
         for row_result in task_rows {
@@ -531,6 +525,7 @@ impl Storage {
         order: i64,
         error: Option<&str>,
         header_snapshot: Option<&HashMap<String, String>>,
+        metadata_id: Option<i64>,
     ) -> Result<TaskFailedImage, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let now = std::time::SystemTime::now()
@@ -544,8 +539,8 @@ impl Storage {
             .transpose()
             .map_err(|e| format!("Failed to serialize failed image header snapshot: {}", e))?;
         conn.execute(
-            "INSERT INTO task_failed_images (task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO task_failed_images (task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 task_id,
                 plugin_id,
@@ -554,7 +549,8 @@ impl Storage {
                 now,
                 error_owned.as_deref(),
                 now,
-                header_snapshot_json
+                header_snapshot_json,
+                metadata_id
             ],
         )
         .map_err(|e| format!("Failed to add failed image: {}", e))?;
@@ -573,6 +569,7 @@ impl Storage {
             last_error: error_owned,
             last_attempted_at: Some(now),
             header_snapshot: header_snapshot_owned,
+            metadata_id,
         })
     }
 
@@ -681,14 +678,14 @@ impl Storage {
     pub fn get_task_failed_images(&self, task_id: &str) -> Result<Vec<TaskFailedImage>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot FROM task_failed_images WHERE task_id = ?1 ORDER BY id DESC")
+            .prepare("SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id FROM task_failed_images WHERE task_id = ?1 ORDER BY id DESC")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let rows = stmt
             .query_map(params![task_id], |row| {
                 let header_snapshot_json: Option<String> = row.get(8)?;
-                let header_snapshot = header_snapshot_json
-                    .and_then(|s| serde_json::from_str(&s).ok());
+                let header_snapshot =
+                    header_snapshot_json.and_then(|s| serde_json::from_str(&s).ok());
                 Ok(TaskFailedImage {
                     id: row.get(0)?,
                     task_id: row.get(1)?,
@@ -699,6 +696,7 @@ impl Storage {
                     last_error: row.get(6)?,
                     last_attempted_at: row.get(7)?,
                     header_snapshot,
+                    metadata_id: row.get(9)?,
                 })
             })
             .map_err(|e| format!("Failed to query failed images: {}", e))?;
@@ -714,7 +712,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot
+                "SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id
                  FROM task_failed_images
                  ORDER BY id DESC",
             )
@@ -723,7 +721,8 @@ impl Storage {
         let rows = stmt
             .query_map([], |row| {
                 let header_snapshot_json: Option<String> = row.get(8)?;
-                let header_snapshot = header_snapshot_json.and_then(|s| serde_json::from_str(&s).ok());
+                let header_snapshot =
+                    header_snapshot_json.and_then(|s| serde_json::from_str(&s).ok());
                 Ok(TaskFailedImage {
                     id: row.get(0)?,
                     task_id: row.get(1)?,
@@ -734,6 +733,7 @@ impl Storage {
                     last_error: row.get(6)?,
                     last_attempted_at: row.get(7)?,
                     header_snapshot,
+                    metadata_id: row.get(9)?,
                 })
             })
             .map_err(|e| format!("Failed to query failed images: {}", e))?;
@@ -749,7 +749,7 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let image = conn
             .query_row(
-                "SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot FROM task_failed_images WHERE id = ?1",
+                "SELECT id, task_id, plugin_id, url, \"order\", created_at, last_error, last_attempted_at, header_snapshot, metadata_id FROM task_failed_images WHERE id = ?1",
                 params![id],
                 |row| {
                     let header_snapshot_json: Option<String> = row.get(8)?;
@@ -765,6 +765,7 @@ impl Storage {
                         last_error: row.get(6)?,
                         last_attempted_at: row.get(7)?,
                         header_snapshot,
+                        metadata_id: row.get(9)?,
                     })
                 },
             )
@@ -776,7 +777,9 @@ impl Storage {
     pub fn get_task_image_ids(&self, task_id: &str) -> Result<Vec<String>, String> {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
-            .prepare("SELECT CAST(id AS TEXT) FROM images WHERE task_id = ?1 ORDER BY crawled_at ASC")
+            .prepare(
+                "SELECT CAST(id AS TEXT) FROM images WHERE task_id = ?1 ORDER BY crawled_at ASC",
+            )
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let rows = stmt
@@ -794,10 +797,9 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
+                "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata_id,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
-                 i.mime_type,
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                  i.width,
                  i.height,
@@ -821,19 +823,19 @@ impl Storage {
                     task_id: row.get(4)?,
                     surf_record_id: None,
                     crawled_at: row.get(5)?,
-                    metadata: crate::storage::images::parse_image_metadata_json(
-                        row.get::<_, Option<String>>(6)?,
-                    ),
+                    metadata: None,
+                    metadata_id: row.get::<_, Option<i64>>(6)?,
                     thumbnail_path: row.get(7)?,
                     hash: row.get(8)?,
-                    mime_type: row.get::<_, Option<String>>(9)?,
-                    favorite: row.get::<_, i64>(10)? != 0,
+                    favorite: row.get::<_, i64>(9)? != 0,
                     local_exists: true,
-                    width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                    height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                    display_name: row.get(13)?,
-                    media_type: row.get::<_, Option<String>>(14)?,
-                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
+                    width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                    display_name: row.get(12)?,
+                    media_type: crate::image_type::normalize_stored_media_type(
+                        row.get::<_, Option<String>>(13)?,
+                    ),
+                    last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
                 })
             })
             .map_err(|e| format!("Failed to query task images: {}", e))?;
@@ -854,10 +856,9 @@ impl Storage {
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let mut stmt = conn
             .prepare(
-                "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata,
+                "SELECT CAST(i.id AS TEXT), i.url, i.local_path, i.plugin_id, i.task_id, i.crawled_at, i.metadata_id,
                  COALESCE(NULLIF(i.thumbnail_path, ''), i.local_path) as thumbnail_path,
                  i.hash,
-                 i.mime_type,
                  CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
                  i.width,
                  i.height,
@@ -884,19 +885,21 @@ impl Storage {
                         task_id: row.get(4)?,
                         surf_record_id: None,
                         crawled_at: row.get(5)?,
-                        metadata: crate::storage::images::parse_image_metadata_json(
-                            row.get::<_, Option<String>>(6)?,
-                        ),
+                        metadata: None,
+                        metadata_id: row.get::<_, Option<i64>>(6)?,
                         thumbnail_path: row.get(7)?,
                         hash: row.get(8)?,
-                        mime_type: row.get::<_, Option<String>>(9)?,
-                        favorite: row.get::<_, i64>(10)? != 0,
+                        favorite: row.get::<_, i64>(9)? != 0,
                         local_exists: true,
-                        width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
-                        height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
-                        display_name: row.get(13)?,
-                        media_type: row.get::<_, Option<String>>(14)?,
-                        last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 15)?,
+                        width: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        height: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
+                        display_name: row.get(12)?,
+                        media_type: crate::image_type::normalize_stored_media_type(
+                            row.get::<_, Option<String>>(13)?,
+                        ),
+                        last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(
+                            row, 14,
+                        )?,
                     })
                 },
             )
@@ -908,5 +911,4 @@ impl Storage {
         }
         Ok(images)
     }
-
 }

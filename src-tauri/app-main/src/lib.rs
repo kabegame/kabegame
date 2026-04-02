@@ -220,13 +220,16 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
         // 爬虫窗口关闭时仅隐藏不销毁，便于设置中再次打开；遨游窗口关闭时清除会话状态并通知前端
         builder = builder.on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "crawler" {
-                    let _ = window.hide();
-                    api.prevent_close();
-                } else if window.label() == "surf" {
-                    commands::surf::notify_surf_session_closed(&window.app_handle());
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if window.label() == "crawler" {
+                        let _ = window.hide();
+                        api.prevent_close();
+                    } else if window.label() == "surf" {
+                        commands::surf::notify_surf_session_closed(&window.app_handle());
+                    }
                 }
+                _ => {}
             }
         });
     }
@@ -358,6 +361,7 @@ pub fn run() {
             get_images_range,
             get_image_by_id,
             get_image_metadata,
+            get_image_metadata_by_metadata_id,
             get_gallery_image,
             copy_image_to_clipboard,
             delete_image,

@@ -1,0 +1,27 @@
+---
+description: Tauri 项目禁止使用动态 import
+globs: **/*.{ts,tsx,js,jsx,vue}
+alwaysApply: false
+---
+
+# 禁止动态 import
+
+本项目为 Tauri 项目，**所有代码不得使用动态 `import()`**，应使用静态 `import` 导入。
+
+**原因**：Tauri 打包与部分运行环境下，动态 import 没有好处，反而导致复杂度。
+
+**正确**：静态 import
+
+```ts
+import { foo } from './module'
+import Component from './Component.vue'
+```
+
+**错误**：动态 import
+
+```ts
+const module = await import('./module')
+const Component = () => import('./Component.vue')
+```
+
+若需按需加载或懒加载，应在 Tauri/构建侧用路由或分包等方式实现，而不是在业务代码里使用 `import()`。

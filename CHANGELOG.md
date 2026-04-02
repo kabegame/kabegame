@@ -4,6 +4,14 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.4.3]
+## Added
+- **Plugin:** heybox plugin. can crawl by searching keyword and single post url.
+
+### Fixed
+- **Windows SURF:** Freeze on windows when downlaod a image.
+- some i18n issue
+
 ## [3.4.2]
 ### Added
 - **Rhai crawler:** `warn(message)` writes a warn-level line to the task log (same channel as HTTP retry notices).

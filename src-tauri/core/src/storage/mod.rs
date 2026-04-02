@@ -8,10 +8,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 // Storage 不再依赖 Tauri AppHandle
 
 pub mod albums;
-pub mod image_events;
 pub mod gallery;
 pub mod gallery_time;
+pub mod image_events;
 pub mod images;
+pub mod migrations;
 pub mod organize;
 pub mod plugin_sources;
 pub mod run_configs;
@@ -51,6 +52,15 @@ impl Storage {
         let mut conn = Connection::open(&db_path).expect("Failed to open database");
 
         // 启动性能优化
+        let is_new_db = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='images'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            == 0;
+
         let _ = conn.execute_batch(
             r#"
 PRAGMA journal_mode = WAL;
@@ -193,7 +203,6 @@ PRAGMA mmap_size = 268435456;
                 metadata TEXT,
                 thumbnail_path TEXT NOT NULL DEFAULT '',
                 hash TEXT NOT NULL DEFAULT '',
-                mime_type TEXT,
                 type TEXT DEFAULT 'image',
                 width INTEGER,
                 height INTEGER
@@ -216,10 +225,6 @@ PRAGMA mmap_size = 268435456;
                 [],
             )
             .expect("Failed to add images.display_name column");
-        }
-        if !table_has_column(&conn, "images", "mime_type") {
-            conn.execute("ALTER TABLE images ADD COLUMN mime_type TEXT", [])
-                .expect("Failed to add images.mime_type column");
         }
         if !table_has_column(&conn, "images", "type") {
             conn.execute(
@@ -278,6 +283,23 @@ PRAGMA mmap_size = 268435456;
             [],
         );
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS image_metadata (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                data TEXT NOT NULL,
+                content_hash TEXT NOT NULL UNIQUE
+            )",
+            [],
+        )
+        .expect("Failed to create image_metadata table");
+        if !table_has_column(&conn, "images", "metadata_id") {
+            conn.execute(
+                "ALTER TABLE images ADD COLUMN metadata_id INTEGER REFERENCES image_metadata(id)",
+                [],
+            )
+            .expect("Failed to add images.metadata_id column");
+        }
+
         // 创建画册表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS albums (
@@ -321,7 +343,8 @@ PRAGMA mmap_size = 268435456;
                 \"order\" INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 last_error TEXT,
-                last_attempted_at INTEGER
+                last_attempted_at INTEGER,
+                metadata_id INTEGER REFERENCES image_metadata(id)
             )",
             [],
         )
@@ -364,11 +387,6 @@ PRAGMA mmap_size = 268435456;
 
         // 执行复杂的结构性迁移
         perform_complex_migrations(&mut conn);
-        // 复杂迁移可能重建 images 表，迁移后再次确保 mime_type 列存在。
-        if !table_has_column(&conn, "images", "mime_type") {
-            conn.execute("ALTER TABLE images ADD COLUMN mime_type TEXT", [])
-                .expect("Failed to add images.mime_type column after migrations");
-        }
         if !table_has_column(&conn, "images", "type") {
             conn.execute(
                 "ALTER TABLE images ADD COLUMN type TEXT DEFAULT 'image'",
@@ -393,6 +411,22 @@ PRAGMA mmap_size = 268435456;
             "CREATE INDEX IF NOT EXISTS idx_images_last_set_wallpaper_at ON images(last_set_wallpaper_at DESC)",
             [],
         );
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS image_metadata (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                data TEXT NOT NULL,
+                content_hash TEXT NOT NULL UNIQUE
+            )",
+            [],
+        )
+        .expect("Failed to ensure image_metadata table after migrations");
+        if !table_has_column(&conn, "images", "metadata_id") {
+            conn.execute(
+                "ALTER TABLE images ADD COLUMN metadata_id INTEGER REFERENCES image_metadata(id)",
+                [],
+            )
+            .expect("Failed to add images.metadata_id after migrations");
+        }
 
         // 创建畅游记录表
         conn.execute(
@@ -480,6 +514,13 @@ PRAGMA mmap_size = 268435456;
             [],
         );
 
+        if is_new_db {
+            migrations::mark_as_latest(&conn)
+                .expect("Failed to mark new DB as latest version");
+        } else {
+            migrations::run_pending(&conn).expect("Failed to run pending DB migrations");
+        }
+
         Self {
             db: Arc::new(Mutex::new(conn)),
             cached_images_total: Arc::new(Mutex::new(None)),
@@ -498,8 +539,6 @@ PRAGMA mmap_size = 268435456;
         self.plugin_sources()
             .ensure_official_github_release()
             .map_err(|e| format!("Failed to ensure official plugin source: {}", e))?;
-        // 新增字段后回填旧数据 MIME（仅本地文件路径，content:// 跳过）
-        self.backfill_missing_mime_types()?;
 
         Ok(())
     }
@@ -838,10 +877,10 @@ fn perform_complex_migrations(conn: &mut Connection) {
     let mut mapped_current_wallpaper_id: Option<i64> = None;
     let has_display_name = table_has_column(conn, "images", "display_name");
     let has_type_col = table_has_column(conn, "images", "type");
-    let has_mime_type = table_has_column(conn, "images", "mime_type");
     let has_surf_record_id = table_has_column(conn, "images", "surf_record_id");
     let has_last_set_wallpaper_at = table_has_column(conn, "images", "last_set_wallpaper_at");
     let has_description = table_has_column(conn, "images", "description");
+    let has_metadata_id = table_has_column(conn, "images", "metadata_id");
     if needs_rebuild_images || needs_rebuild_relations {
         let tx = conn
             .transaction()
@@ -853,7 +892,6 @@ fn perform_complex_migrations(conn: &mut Connection) {
         } else {
             ""
         };
-        let mime_col = if has_mime_type { "mime_type," } else { "" };
         let surf_col = if has_surf_record_id {
             "surf_record_id,"
         } else {
@@ -873,6 +911,11 @@ fn perform_complex_migrations(conn: &mut Connection) {
             "last_set_wallpaper_at,"
         } else {
             "NULL AS last_set_wallpaper_at,"
+        };
+        let metadata_id_sel = if has_metadata_id {
+            "metadata_id,"
+        } else {
+            "NULL AS metadata_id,"
         };
 
         let id_expr = if images_id_is_text {
@@ -896,11 +939,12 @@ fn perform_complex_migrations(conn: &mut Connection) {
                    task_id,
                    crawled_at,
                    metadata,
+                   {metadata_id_sel}
                    COALESCE(NULLIF(thumbnail_path, ''), local_path) AS thumbnail_path,
                    COALESCE(hash, '') AS hash,
                    width,
                    height,
-                   {type_col} {mime_col} {surf_col} {display_col} {description_col} {last_wall_col} {new_id_expr}
+                   {type_col} {surf_col} {display_col} {description_col} {last_wall_col} {new_id_expr}
                  FROM images"
             ),
             [],
@@ -931,9 +975,9 @@ fn perform_complex_migrations(conn: &mut Connection) {
                     surf_record_id TEXT,
                     crawled_at INTEGER NOT NULL,
                     metadata TEXT,
+                    metadata_id INTEGER REFERENCES image_metadata(id),
                     thumbnail_path TEXT NOT NULL DEFAULT '',
                     hash TEXT NOT NULL DEFAULT '',
-                    mime_type TEXT,
                     type TEXT DEFAULT 'image',
                     width INTEGER,
                     height INTEGER,
@@ -950,7 +994,6 @@ fn perform_complex_migrations(conn: &mut Connection) {
             } else {
                 "'image'"
             };
-            let mime_s = if has_mime_type { "mime_type," } else { "" };
             let surf_s = if has_surf_record_id {
                 "surf_record_id,"
             } else {
@@ -967,10 +1010,10 @@ fn perform_complex_migrations(conn: &mut Connection) {
                 ("description", "NULL")
             };
             let insert_cols = format!(
-                "id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, thumbnail_path, hash, {mime_s} type, width, height, {display_ins}, {description_ins}, last_set_wallpaper_at"
+                "id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, metadata_id, thumbnail_path, hash, type, width, height, {display_ins}, {description_ins}, last_set_wallpaper_at"
             );
             let select_cols = format!(
-                "new_id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), {mime_s} {type_s}, width, height, {display_sel}, {description_sel}, last_set_wallpaper_at"
+                "new_id, url, local_path, plugin_id, task_id, {surf_s} crawled_at, metadata, metadata_id, COALESCE(NULLIF(thumbnail_path, ''), local_path), COALESCE(hash, ''), {type_s}, width, height, {display_sel}, {description_sel}, last_set_wallpaper_at"
             );
             tx.execute(
                 &format!(
