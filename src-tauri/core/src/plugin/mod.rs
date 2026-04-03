@@ -2877,7 +2877,7 @@ pub enum VarOption {
         name: ManifestI18nText,
         variable: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        when: Option<HashMap<String, Vec<String>>>,
+        when: Option<HashMap<String, Vec<serde_json::Value>>>,
     },
 }
 
@@ -2902,7 +2902,7 @@ impl<'de> Deserialize<'de> for VarOption {
         if name.is_empty() {
             return Err(serde::de::Error::custom("VarOption Item: missing name"));
         }
-        let when: Option<HashMap<String, Vec<String>>> = map
+        let when: Option<HashMap<String, Vec<serde_json::Value>>> = map
             .get("when")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
         Ok(VarOption::Item {
@@ -2932,7 +2932,7 @@ pub struct VarDefinition {
     #[serde(default)]
     pub max: Option<serde_json::Value>,
     #[serde(default)]
-    pub when: Option<HashMap<String, Vec<String>>>,
+    pub when: Option<HashMap<String, Vec<serde_json::Value>>>,
     /// date 类型：dayjs 格式，提交给脚本的日期字符串（如 YYYYMMDD）
     #[serde(default)]
     pub format: Option<String>,
@@ -2984,7 +2984,7 @@ impl<'de> Deserialize<'de> for VarDefinition {
                     let variable = m.get("variable").and_then(|x| x.as_str())?.to_string();
                     let name = extract_manifest_text_from_flat(m, "name");
                     if !name.is_empty() {
-                        let when: Option<HashMap<String, Vec<String>>> = m
+                        let when: Option<HashMap<String, Vec<serde_json::Value>>> = m
                             .get("when")
                             .and_then(|v| serde_json::from_value(v.clone()).ok());
                         out.push(VarOption::Item {
@@ -2999,7 +2999,7 @@ impl<'de> Deserialize<'de> for VarDefinition {
         });
         let min = map.get("min").cloned();
         let max = map.get("max").cloned();
-        let when: Option<HashMap<String, Vec<String>>> = map
+        let when: Option<HashMap<String, Vec<serde_json::Value>>> = map
             .get("when")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
         let format = map
