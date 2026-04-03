@@ -1,16 +1,53 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require 'rbconfig'
+
+# github-linguist → charlock_holmes.so 依赖 ICU 等 DLL。仅改 PATH 有时不够，需登记 DLL 搜索目录（Windows）。
+if /mswin|mingw|cygwin/i.match?(RbConfig::CONFIG['host_os'])
+  prepend_dll_dirs = lambda do |dirs|
+    dirs = dirs.select { |d| File.directory?(d) }
+    return if dirs.empty?
+
+    ENV['PATH'] = (dirs + [ENV['PATH']]).compact.join(File::PATH_SEPARATOR)
+  end
+
+  begin
+    require 'ruby_installer/runtime'
+    RubyInstaller::Runtime.enable_dll_search_paths
+    inst = RubyInstaller::Runtime.msys2_installation
+    prepend_dll_dirs.call([inst.mingw_bin_path, File.join(inst.msys_path, 'usr', 'bin')])
+  rescue LoadError
+    bindir = RbConfig::CONFIG['bindir']
+    ruby_root = File.expand_path('..', bindir)
+    candidates = []
+    candidates << File.join(ENV['MSYS2_PATH'].to_s, 'ucrt64', 'bin') if ENV['MSYS2_PATH'].to_s != ''
+    candidates << File.join(ruby_root, 'msys64', 'ucrt64', 'bin')
+    la = ENV['LOCALAPPDATA']
+    candidates << File.join(la, 'rubyinstaller', 'msys64', 'ucrt64', 'bin') if la && !la.empty?
+    prepend_dll_dirs.call(candidates)
+  rescue StandardError
+    # MSYS2 未找到或路径异常时，仍尝试 MSYS2_PATH / 常见目录
+    bindir = RbConfig::CONFIG['bindir']
+    ruby_root = File.expand_path('..', bindir)
+    candidates = []
+    candidates << File.join(ENV['MSYS2_PATH'].to_s, 'ucrt64', 'bin') if ENV['MSYS2_PATH'].to_s != ''
+    candidates << File.join(ruby_root, 'msys64', 'ucrt64', 'bin')
+    la = ENV['LOCALAPPDATA']
+    candidates << File.join(la, 'rubyinstaller', 'msys64', 'ucrt64', 'bin') if la && !la.empty?
+    prepend_dll_dirs.call(candidates)
+  end
+end
+
 require 'linguist'
 require 'optparse'
 require 'json'
 require 'open3'
-require 'rbconfig'
 require 'tmpdir'
 
 # 默认配置
 DEFAULT_PATH = '.'
-DEFAULT_EXCLUDE = 'node_modules,dist,build,.git,target,.nx,public,data,release,photoswipe-vue/src/js,third'
+DEFAULT_EXCLUDE = 'node_modules,dist,build,.git,target,.nx,public,data,release,photoswipe-vue/src/js,third,ignore'
 DEFAULT_INCLUDE_EXT = 'ts,tsx,js,mjs,vue,rs,py,java,kt,swift,cs,cpp,c,cmake,h,cc,hpp,rb,html,css,scss,rhai,kt,kts,handlebars,prisma,Dockerfile,sh,ejs'
 
 # Linguist 未支持的语言在此指定颜色（hex，如 #F67702）
@@ -40,6 +77,8 @@ def usage
 
     注意: 需要安装 github-linguist gem:
       gem install github-linguist
+    Windows: 若 charlock_holmes 报 LoadError 126，请确认已安装 MSYS2 UCRT64 与 ICU；可设置环境变量 MSYS2_PATH
+      指向 MSYS2 根目录（含 usr\\bin\\msys-2.0.dll），或把 …\\ucrt64\\bin 加入系统 PATH。
   USAGE
 end
 
@@ -240,23 +279,35 @@ def generate_html(stats, counters, path)
   summary = "总计: #{counters[:files]} 个文件, #{counters[:lines]} 行 (代码: #{counters[:code]}, 注释: #{counters[:comment]}, 空行: #{counters[:blank]})"
 
   html = load_html_template
+  expanded_scan_path = File.expand_path(path)
+  # 页面上展示：Windows 用反斜杠，与其它平台用 expand_path 默认形态一致
+  path_display = if /mswin|mingw|cygwin/i.match?(RbConfig::CONFIG['host_os'])
+    expanded_scan_path.tr('/', '\\')
+  else
+    expanded_scan_path
+  end
+
   html
-    .gsub('__PATH__', path)
+    .gsub('__PATH__', path_display)
     .gsub('__SUMMARY__', summary)
     .gsub('__CHART_DATA_JSON__', chart_data.to_json)
     .gsub('__COLORS_JSON__', colors.to_json)
 end
 
 def open_browser(file_path)
-  case RbConfig::CONFIG['host_os']
+  fp = File.expand_path(file_path)
+  host = RbConfig::CONFIG['host_os']
+  case host
   when /darwin/
-    system("open '#{file_path}'")
+    system('open', fp)
   when /linux/
-    system("xdg-open '#{file_path}'")
+    system('xdg-open', fp)
   when /mswin|mingw|cygwin/
-    system("start '#{file_path}'")
+    # cmd 的 start：第一个引号参数是「窗口标题」，必须用 start "" "路径"，不能 start "路径"
+    fp_win = fp.tr('/', '\\')
+    system('cmd', '/c', 'start', '', fp_win)
   else
-    puts "无法自动打开浏览器，请手动打开: #{file_path}"
+    puts "无法自动打开浏览器，请手动打开: #{fp}"
   end
 end
 

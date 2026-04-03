@@ -55,7 +55,7 @@ function matchUserConfigFromDefaults(
 
 export type VarOption =
   | string
-  | { name: PluginConfigText | string; variable: string; when?: Record<string, string[]> };
+  | { name: PluginConfigText | string; variable: string; when?: Record<string, (string | boolean)[]> };
 
 /** 插件变量定义：name/descripts/options[].name 为后端下发的 record（default/zh/en）或兼容 string */
 export type PluginVarDef = {
@@ -67,7 +67,7 @@ export type PluginVarDef = {
   options?: VarOption[];
   min?: number;
   max?: number;
-  when?: Record<string, string[]>;
+  when?: Record<string, (string | boolean)[]>;
   /** type 为 date 时可选：dayjs 格式，提交给后端的日期字符串（默认 YYYY-MM-DD） */
   format?: string;
   /** type 为 date 时可选：最早/最晚可选日，`YYYY-MM-DD` 或 `today` / `yesterday` */

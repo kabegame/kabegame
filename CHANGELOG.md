@@ -4,9 +4,15 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [3.4.4]
+## Added
+- **Plugin:** 米游社 Plugin. Also support for boolean when condition. 
+- **Rhai API:** when resolve for bool type.
+
 ## [3.4.3]
 ## Added
 - **Plugin:** heybox plugin. can crawl by searching keyword and single post url.
+- **Rhai API:** create_image_metadata function.
 
 ### Fixed
 - **Windows SURF:** Freeze on windows when downlaod a image.
