@@ -1,0 +1,21 @@
+{
+  "detail": "Details",
+  "favorite": "Favorite",
+  "unfavorite": "Unfavorite",
+  "copyImage": "Copy image",
+  "open": "View in detail",
+  "openFolder": "View more",
+  "wallpaper": "Set as wallpaper",
+  "addToAlbum": "Add to album",
+  "more": "More",
+  "exportToWE": "Export to Wallpaper Engine",
+  "stopTask": "Stop task",
+  "viewFiles": "View files",
+  "saveAsConfig": "Save as config",
+  "deleteTask": "Delete task",
+  "browse": "Browse",
+  "setWallpaperRotation": "Set as desktop rotation",
+  "setWallpaperRotationActive": "(Active)",
+  "rename": "Rename",
+  "share": "Share"
+}

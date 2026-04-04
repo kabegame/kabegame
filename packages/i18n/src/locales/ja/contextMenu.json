@@ -1,0 +1,21 @@
+{
+  "detail": "詳細",
+  "favorite": "お気に入りに追加",
+  "unfavorite": "お気に入りから解除",
+  "copyImage": "画像をコピー",
+  "open": "じっくり見よう",
+  "openFolder": "もっと見よう",
+  "wallpaper": "壁紙にしよう",
+  "addToAlbum": "アルバムに収めよう",
+  "more": "もっと見る",
+  "exportToWE": "Wallpaper Engine にエクスポート",
+  "stopTask": "タスクを停止",
+  "viewFiles": "ファイルを表示",
+  "saveAsConfig": "設定として保存",
+  "deleteTask": "タスクを削除",
+  "browse": "閲覧",
+  "setWallpaperRotation": "デスクトップローテーションに設定",
+  "setWallpaperRotationActive": "（有効）",
+  "rename": "名前を変更",
+  "share": "共有"
+}

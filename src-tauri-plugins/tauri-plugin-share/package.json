@@ -1,0 +1,17 @@
+{
+  "name": "tauri-plugin-share-api",
+  "version": "0.1.0",
+  "author": "Kabegame",
+  "description": "Android 分享与复制图片到剪贴板",
+  "type": "module",
+  "types": "./guest-js/index.ts",
+  "main": "./guest-js/index.ts",
+  "exports": {
+    "types": "./guest-js/index.ts",
+    "import": "./guest-js/index.ts",
+    "require": "./guest-js/index.ts"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0"
+  }
+}

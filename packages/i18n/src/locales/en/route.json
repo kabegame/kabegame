@@ -1,0 +1,15 @@
+{
+  "gallery": "Gallery",
+  "pluginBrowser": "Sources",
+  "albums": "Albums",
+  "albumDetail": "Album",
+  "taskDetail": "Task Detail",
+  "failedImages": "Failed Images",
+  "pluginDetail": "Source Detail",
+  "settings": "Settings",
+  "help": "Help",
+  "surf": "Surf",
+  "surfImages": "Surf Images",
+  "autoConfigs": "Run Configs",
+  "autoConfigEdit": "Edit Run Config"
+}

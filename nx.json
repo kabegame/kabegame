@@ -1,0 +1,35 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "maxCacheSize": "20MB",
+  "targetDefaults": {
+    "build-cli": {
+      "cache": true,
+      "inputs": ["frontendCli"],
+      "outputs": ["{workspaceRoot}/dist-cli/**/*"]
+    },
+    "build-main": {
+      "cache": true,
+      "inputs": ["frontendMain"],
+      "outputs": ["{workspaceRoot}/dist-main/**/*"]
+    }
+  },
+  "namedInputs": {
+    "default": ["{workspaceRoot}/*.pub.ts"],
+    "frontendEnv": [
+      { "env": "VITE_KABEGAME_MODE" },
+      { "env": "KABEGAME_MODE" },
+      { "env": "TAURI_ENV_PLATFORM" },
+      { "env": "TAURI_PLATFORM" },
+      { "env": "TAURI_DEBUG" }
+    ],
+    "frontendMain": [
+      "{workspaceRoot}/apps/main/**/*",
+      "{workspaceRoot}/packages/*/src/**/*",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "frontendEnv",
+      "default"
+    ],
+    "sharedGlobals": []
+  }
+}

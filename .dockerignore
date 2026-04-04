@@ -1,0 +1,5 @@
+# 减小 docker build 上下文（COPY 进镜像时排除生成物与大目录）
+**/target
+**/node_modules
+release
+.git/worktrees

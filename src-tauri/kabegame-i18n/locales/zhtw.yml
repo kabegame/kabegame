@@ -1,0 +1,46 @@
+common:
+  ok: 確定
+  cancel: 取消
+  confirm: 確認
+  close: 關閉
+  save: 儲存
+  refresh: 重新整理
+  exit: 結束
+  appName: Kabegame
+
+settings:
+  title: 設定
+  language: 語言
+
+tray:
+  show: 顯示
+  hide: 隱藏
+  exit: 結束
+  showWindow: 顯示視窗
+  hideWindow: 隱藏視窗
+  nextWallpaper: 下一張桌布
+  quit: 結束
+
+notifications:
+  refreshSuccess: 重新整理成功
+  refreshFailed: 重新整理失敗
+
+dialog:
+  exitConfirm: 確定要結束應用程式嗎？龜龜會想你滴~お疲れ様！
+  exitTitle: 結束提示
+  errorTitle: 出錯啦 😿
+  initFatalError: "初始化過程中出現了致命錯誤！: {detail}"
+
+window:
+  wallpaperTitle: Kabegame 桌布
+  crawlerTitle: Kabegame 爬蟲
+  devWebViewTitle: Kabegame 開發 WebView
+
+albums:
+  favorite: 收藏
+
+plugins:
+  officialGithubReleaseSourceName: 官方 GitHub Releases 源
+
+surf:
+  windowTitle: "暢遊 - {host}"

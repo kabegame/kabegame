@@ -1,0 +1,211 @@
+#[cfg(target_os = "linux")]
+pub mod plasma_plugin;
+#[cfg(target_os = "linux")]
+pub mod plasma_qdbus;
+pub mod native;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub mod window;
+
+// 导出管理器类型
+pub use native::NativeWallpaperManager;
+#[cfg(target_os = "linux")]
+pub use plasma_plugin::PlasmaPluginWallpaperManager;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub use window::WindowWallpaperManager;
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use std::sync::Mutex;
+use std::sync::{Arc, OnceLock};
+use tauri::AppHandle;
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use crate::wallpaper::window::WallpaperWindow;
+use kabegame_core::settings::Settings;
+
+/// 全局壁纸控制器（基础 manager）：负责根据当前 `wallpaper_mode` 选择后端（native/window/plasma-plugin），并保留 window 模式的运行状态。
+///
+/// 注意：此控制器不承诺"过渡效果可用"，过渡效果应由更上层的轮播 manager 控制（并受"是否启用轮播"约束）。
+pub struct WallpaperController {
+    app: AppHandle,
+    native: Arc<NativeWallpaperManager>,
+    #[cfg(target_os = "linux")]
+    plasma_plugin: Arc<PlasmaPluginWallpaperManager>,
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    window: Arc<WindowWallpaperManager>,
+}
+
+// 全局 WallpaperController 单例
+pub static WALLPAPER_CONTROLLER: OnceLock<WallpaperController> = OnceLock::new();
+
+impl WallpaperController {
+    /// 初始化全局 WallpaperController（必须在首次使用前调用）
+    pub fn init_global(app: AppHandle) -> Result<(), String> {
+        let controller = WallpaperController::new(app);
+        WALLPAPER_CONTROLLER
+            .set(controller)
+            .map_err(|_| "WallpaperController already initialized".to_string())?;
+        Ok(())
+    }
+
+    /// 获取全局 WallpaperController 引用
+    pub fn global() -> &'static WallpaperController {
+        WALLPAPER_CONTROLLER.get().expect(
+            "WallpaperController not initialized. Call WallpaperController::init_global() first.",
+        )
+    }
+
+    pub fn new(app: AppHandle) -> Self {
+        let native = Arc::new(NativeWallpaperManager::new(app.clone()));
+
+        #[cfg(target_os = "linux")]
+        let plasma_plugin = Arc::new(PlasmaPluginWallpaperManager::new(app.clone()));
+
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let wallpaper_window: Arc<Mutex<Option<WallpaperWindow>>> = Arc::new(Mutex::new(None));
+
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let window = Arc::new(WindowWallpaperManager::new(
+            app.clone(),
+            Arc::clone(&wallpaper_window),
+        ));
+
+        Self {
+            app,
+            native,
+            #[cfg(target_os = "linux")]
+            plasma_plugin,
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            window,
+        }
+    }
+
+    /// 根据当前设置选择活动后端（native/plasma-plugin/window等）。
+    pub async fn active_manager(&self) -> Result<Arc<dyn WallpaperManager + Send + Sync>, String> {
+        let mode = Settings::global()
+            .get_wallpaper_mode()
+            .await
+            .unwrap_or_else(|_| "native".to_string());
+        Ok(match mode.as_str() {
+            #[cfg(target_os = "linux")]
+            "plasma-plugin" => self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+        })
+    }
+
+    /// 按指定模式选择后端（不依赖 settings 中的 wallpaper_mode）。
+    pub fn manager_for_mode(&self, mode: &str) -> Arc<dyn WallpaperManager + Send + Sync> {
+        match mode {
+            #[cfg(target_os = "linux")]
+            "plasma-plugin" => self.plasma_plugin.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            "window" => self.window.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+            _ => self.native.clone() as Arc<dyn WallpaperManager + Send + Sync>,
+        }
+    }
+
+    /// 单张壁纸设置：只应用 `file_path + style`，不涉及 transition（用于适配"非轮播/单张"场景）。
+    pub async fn set_wallpaper(&self, file_path: &str, style: &str) -> Result<(), String> {
+        let manager = self.active_manager().await?;
+        manager.set_wallpaper(file_path, style, "none").await?;
+        Ok(())
+    }
+
+    /// 初始化活动管理器（如创建窗口等）
+    /// 异步执行，完成后返回结果
+    pub fn init(&self) -> Result<(), String> {
+        // 注意：这里不要只初始化 active_manager（它依赖 settings.wallpaper_mode）。
+        // 启动时经常是 native 模式，但用户可能随后切换到 window 模式；
+        // 若 window manager 未 init，会导致切换时报 "窗口未初始化，请先调用 init 方法"，前端卡在"切换中"。
+        //
+        // 我们在 Windows 上同时初始化两个后端：
+        // - native: no-op
+        // - window: 只确保 wallpaper 窗口存在且保持隐藏，不做挂载/显示
+        // Linux plasma-plugin: 不在此处切换系统壁纸插件，仅在用户切换到插件模式时由 set_wallpaper_mode 调用 init
+        self.native.init(self.app.clone())?;
+
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        {
+            self.window.init(self.app.clone())?;
+        }
+        Ok(())
+    }
+}
+
+use async_trait::async_trait;
+
+/// 壁纸管理器 trait，定义壁纸设置的通用接口
+#[async_trait]
+pub trait WallpaperManager: Send + Sync {
+    ///
+    /// # Returns
+    /// * `String` - 当前样式
+    ///
+    /// # Errors
+    /// * `String` - 错误信息
+    #[allow(dead_code)]
+    async fn get_style(&self) -> Result<String, String>;
+
+    ///
+    /// # Returns
+    /// * `String` - 当前过渡效果
+    ///
+    /// # Errors
+    /// * `String` - 错误信息
+    #[allow(dead_code)]
+    async fn get_transition(&self) -> Result<String, String>;
+
+    /// 更新壁纸样式，立即生效
+    ///
+    /// # Arguments
+    /// * `style` - 显示样式（fill/fit/stretch/center/tile）
+    async fn set_style(&self, style: &str) -> Result<(), String>;
+
+    /// 更新壁纸过渡效果，立即生效
+    ///
+    /// # Arguments
+    /// * `transition` - 过渡效果（none/fade/slide/zoom）
+    async fn set_transition(&self, transition: &str) -> Result<(), String>;
+
+    /// 设置壁纸路径，立即生效
+    ///
+    /// # Arguments
+    /// * `file_path` - 壁纸文件路径
+    async fn set_wallpaper_path(&self, file_path: &str) -> Result<(), String>;
+
+    /// 设置壁纸，按照style和transition设置壁纸
+    ///
+    /// # Arguments
+    /// * `file_path` - 壁纸文件路径
+    /// * `style` - 显示样式（fill/fit/stretch/center/tile）
+    /// * `transition` - 过渡效果（none/fade/slide/zoom）
+    async fn set_wallpaper(
+        &self,
+        file_path: &str,
+        style: &str,
+        transition: &str,
+    ) -> Result<(), String> {
+        self.set_style(style).await?;
+        self.set_transition(transition).await?;
+        self.set_wallpaper_path(file_path).await?;
+        Ok(())
+    }
+
+    /// 清理资源（如关闭窗口等）
+    #[allow(dead_code)]
+    fn cleanup(&self) -> Result<(), String>;
+
+    /// 手动刷新桌面以同步壁纸设置
+    ///
+    /// 当 set_wallpaper_path 未刷新桌面时，
+    /// 可以调用此方法来手动触发桌面刷新，使壁纸设置生效
+    #[allow(dead_code)]
+    fn refresh_desktop(&self) -> Result<(), String>;
+
+    /// 初始化管理器（如创建窗口等）
+    ///
+    /// # Arguments
+    /// * `app` - Tauri 应用句柄
+    fn init(&self, app: AppHandle) -> Result<(), String>;
+}

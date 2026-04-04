@@ -1,0 +1,118 @@
+[package]
+edition = {workspace = true}
+name = "kabegame"
+version = {workspace = true}
+
+[lib]
+name = "kabegame"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+async-trait = { workspace = true }
+base64 = {workspace = true}
+image = {workspace = true}
+lru = {version = "0.12", optional = true}
+memmap2 = {version = "0.9", optional = true}
+serde = {workspace = true}
+serde_json = {workspace = true}
+sha2 = {workspace = true}
+tauri = { version = "2.10", features = ["macos-private-api", "tray-icon", "devtools", "protocol-asset", "image-png"] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "=2.4.2"
+tauri-plugin-fs = "=2.4.4"
+tauri-plugin-global-shortcut = "2.3.1"
+tauri-plugin-pathes = { workspace = true }
+kabegame-i18n = { workspace = true }
+tauri-plugin-shell = "=2.3.3"
+tauri-plugin-opener = "2"
+dirs = "5.0"
+tokio = {workspace = true}
+url = "2"
+uuid = {workspace = true}
+
+# 桌面端启用 IPC 功能，移动端禁用
+[target.'cfg(not(target_os = "android"))'.dependencies]
+kabegame-core = {workspace = true, default-features = false, features = ["ipc-server", "ipc-client"] }
+governor = "0.7"
+axum = "0.8"
+reqwest = { version = "0.11", features = ["stream", "native-tls"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+kabegame-core = {workspace = true, default-features = false, features = ["ipc-server"] }
+reqwest = { version = "0.11", features = ["stream", "rustls-tls"] }
+tauri-plugin-picker = { workspace = true }
+tauri-plugin-archiver = { workspace = true }
+tauri-plugin-share = { workspace = true }
+tauri-plugin-compress = { workspace = true }
+tauri-plugin-wallpaper = { workspace = true }
+tauri-plugin-task-notification = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+include_dir = "0.7"
+dokan = {version = "0.3.1", optional = true}
+widestring = {version = "0.4.3", optional = true}
+winapi = {version = "0.3.9", features = ["ntstatus", "winnt", "winbase"], optional = true}
+windows = {version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_UI_Shell",
+] }
+windows-sys = {workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+] }
+winreg = "0.52"
+winver = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = "3.6"
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "0.3"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSColor",
+  "NSWindow",
+  "NSApplication",
+  "NSScreen",
+  "NSPasteboard",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSData",
+] }
+objc2 = { version = "0.6", default-features = false }
+
+[build-dependencies]
+tauri-build = {workspace = true}
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+default = ["custom-protocol"]
+
+[[bin]]
+name = "kabegame"
+path = "src/main.rs"
+
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+debug = false
+strip = true
+overflow-checks = false
+rpath = false

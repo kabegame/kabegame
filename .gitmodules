@@ -1,0 +1,12 @@
+[submodule "src-crawler-plugins"]
+	path = src-crawler-plugins
+	url = https://github.com/kabegame/crawler-plugins.git
+[submodule "packages/photoswipe-vue"]
+	path = packages/photoswipe-vue
+	url = git@github.com:cmtheit/PhotoSwipe-vue.git
+[submodule "third/FFmpeg"]
+	path = third/FFmpeg
+	url = https://github.com/FFmpeg/FFmpeg.git
+[submodule "src-plasma-wallpaper-plugin"]
+	path = src-plasma-wallpaper-plugin
+	url = git@github.com:kabegame/plasma-wallpaper-plugin2.git

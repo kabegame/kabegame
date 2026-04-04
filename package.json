@@ -1,0 +1,68 @@
+{
+  "name": "kabegame",
+  "description": "让你的桌面充满二次元气息的壁纸管理器！收集、管理、轮播，让老婆们（或老公们）每天陪伴你~ 支持插件扩展，轻松爬取各种二次元壁纸资源~",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "src-crawler-plugins",
+    "src-tauri-plugins/tauri-plugin-picker",
+    "src-tauri-plugins/tauri-plugin-share"
+  ],
+  "scripts": {
+    "dev": "bun scripts/run.ts dev",
+    "start": "bun scripts/run.ts start",
+    "b": "bun scripts/run.ts build",
+    "check": "bun scripts/run.ts check",
+    "cloc": "bun scripts/cloc.ts",
+    "dev:frontend-main": "bun --cwd apps/main dev",
+    "//": "以下命令为构建前端的命令，通过 bun b 调用不要直接调用因为没有设置相关环境变量",
+    "build-main": "bun -b --cwd apps/main build",
+    "set-version": "bun scripts/set-version.ts",
+    "build:ffmpeg": "bash scripts/build-ffmpeg.sh",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "@tauri-apps/api": "^2.10",
+    "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
+    "@tauri-apps/plugin-dialog": "^2.0",
+    "@tauri-apps/plugin-fs": "^2.0",
+    "@tauri-apps/plugin-shell": "^2.0",
+    "@tauri-apps/plugin-opener": "^2.0",
+    "@vueuse/core": "^14.1.0",
+    "axios": "^1.6.7",
+    "element-plus": "^2.5.14",
+    "lodash-es": "^4.17.22",
+    "monaco-editor": "^0.52.0",
+    "pinia": "^2.1.7",
+    "vant": "^4.9.22",
+    "vue": "^3.4.21",
+    "vue-router": "^4.3.0",
+    "winston": "^3.19.0"
+  },
+  "devDependencies": {
+    "@nx/devkit": "^20.0.0",
+    "@types/bun": "^1.3.6",
+    "@types/lodash-es": "^4.17.12",
+    "@vitejs/plugin-vue": "^5.0.4",
+    "@vue/tsconfig": "^0.5.1",
+    "archiver": "^7.0.1",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "glob": "^13.0.1",
+    "handlebars": "^4.7.8",
+    "husky": "^9.1.7",
+    "nx": "^20.0.0",
+    "sass": "^1.97.1",
+    "sharp": "^0.34.5",
+    "tapable": "^2.3.0",
+    "typescript": "^5.4.5",
+    "unocss": "^66.6.0",
+    "vite": "^5.1.4",
+    "vue-tsc": "^2.0.6"
+  },
+  "engines": {
+    "bun": ">= 1.3.0"
+  }
+}

@@ -1,0 +1,319 @@
+<template>
+  <el-dialog
+    v-model="visible"
+    :title="pageTitle"
+    :width="IS_ANDROID ? '100%' : '800px'"
+    :top="IS_ANDROID ? '0' : '5vh'"
+    :fullscreen="IS_ANDROID"
+    :close-on-click-modal="false"
+    append-to-body
+    class="plugin-import-dialog"
+    :class="{ 'mobile-fullscreen': IS_ANDROID }"
+    @close="handleClose"
+  >
+    <PluginDetailPage
+      v-if="preview"
+      :title="pageTitle"
+      :subtitle="props.kgpgPath || t('common.noFilePath')"
+      :show-back="IS_ANDROID"
+      :loading="false"
+      :show-skeleton="false"
+      :plugin="pluginVm"
+      :app-version="appVersion"
+      :installed="installed"
+      :installing="installing"
+      :show-uninstall="false"
+      :install-text="installText"
+      :installing-text="t('plugins.installing')"
+      :empty-description="t('common.pluginNotExist')"
+      :doc-empty-description="t('common.pluginNoDoc')"
+      :load-doc-image-bytes="loadDocImageBytes"
+      @install="doInstall"
+      @copy-id="copyText"
+      @back="handleBack"
+    >
+      <template #detail-extra-items>
+        <el-descriptions-item label="版本" v-if="preview">
+          v{{ preview.preview.version }}
+          <span v-if="preview.preview.alreadyExists" class="muted">
+            （已安装：v{{ preview.preview.existingVersion || "?" }}）
+          </span>
+        </el-descriptions-item>
+        <el-descriptions-item label="目标目录" v-if="preview">
+          {{ preview.pluginsDir }}
+        </el-descriptions-item>
+        <el-descriptions-item v-if="preview && preview.preview.installError" label="提示">
+          <el-alert type="warning" :closable="false" :show-icon="true" :title="preview.preview.installError" />
+        </el-descriptions-item>
+      </template>
+      <template #detail-actions>
+        <el-button 
+          :type="installed ? 'warning' : 'primary'" 
+          :loading="installing" 
+          :disabled="installing || !canInstall"
+          @click="doInstall">
+          {{ installText }}
+        </el-button>
+      </template>
+    </PluginDetailPage>
+    <el-alert v-else-if="errorMsg" type="error" :closable="false" show-icon :title="t('common.parseFailed')" :description="errorMsg" />
+    <div v-else v-loading="loading" class="loading-container">
+      {{ t('common.loading') }}
+    </div>
+  </el-dialog>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, watch } from 'vue';
+import { storeToRefs } from 'pinia';
+import { useI18n, usePluginManifestI18n } from '@kabegame/i18n';
+import { invoke } from '@tauri-apps/api/core';
+import { ElMessage } from 'element-plus';
+import PluginDetailPage from '@kabegame/core/components/plugin/PluginDetailPage.vue';
+import type { PluginManifestText } from '@kabegame/core/stores/plugins';
+import { usePluginStore } from '@/stores/plugins';
+import { useApp } from '@/stores/app';
+import { isUpdateAvailable } from '@kabegame/core/utils/version';
+import { IS_ANDROID } from '@kabegame/core/env';
+import { useModalBack } from '@kabegame/core/composables/useModalBack';
+
+type ImportPreview = {
+  id: string;
+  name: PluginManifestText;
+  version: string;
+  minAppVersion?: string | null;
+  sizeBytes: number;
+  alreadyExists: boolean;
+  existingVersion?: string | null;
+  changeLogDiff?: string | null;
+  canInstall?: boolean;
+  installError?: string | null;
+};
+
+type PluginManifest = {
+  name: PluginManifestText;
+  version: string;
+  description: PluginManifestText;
+  author?: string;
+};
+
+type ImportPreviewWithIcon = {
+  preview: ImportPreview;
+  manifest: PluginManifest;
+  iconBase64?: string | null;
+  baseUrl?: string | null;
+  pluginsDir: string;
+};
+
+const props = defineProps<{
+  kgpgPath: string | null;
+  visible: boolean;
+}>();
+
+const emit = defineEmits<{
+  (e: 'update:visible', val: boolean): void;
+  (e: 'success'): void;
+}>();
+
+const handleClose = () => {
+  emit('update:visible', false);
+};
+
+const handleBack = () => {
+  if (IS_ANDROID) {
+    handleClose();
+  }
+};
+
+const visible = computed({
+  get: () => props.visible,
+  set: (val) => emit('update:visible', val),
+});
+
+const loading = ref(false);
+const errorMsg = ref<string | null>(null);
+const { version: appVersion } = storeToRefs(useApp());
+const preview = ref<ImportPreviewWithIcon | null>(null);
+const installed = ref(false);
+const installing = ref(false);
+const detail = ref<any | null>(null);
+const pluginStore = usePluginStore();
+
+useModalBack(visible);
+
+watch(() => props.kgpgPath, async (newPath) => {
+  if (newPath && visible.value) {
+    await loadPreview(newPath);
+  }
+});
+
+watch(() => visible.value, async (val) => {
+  if (val && props.kgpgPath) {
+    await loadPreview(props.kgpgPath);
+  } else if (!val) {
+    // Reset state when closed
+    loading.value = false;
+    preview.value = null;
+    errorMsg.value = null;
+    installed.value = false;
+    detail.value = null;
+  }
+});
+
+const loadPreview = async (path: string) => {
+  loading.value = true;
+  errorMsg.value = null;
+  preview.value = null;
+  installed.value = false;
+  detail.value = null;
+  try {
+    const res = await invoke<ImportPreviewWithIcon>('preview_import_plugin_with_icon', { zipPath: path });
+    preview.value = res;
+    installed.value = !!res.preview.alreadyExists;
+    
+    // Load plugin detail (doc map, baseUrl, etc.)
+    try {
+      const doc = await invoke<Record<string, string> | null>('get_plugin_doc_from_zip', { zipPath: path });
+      detail.value = {
+        doc: doc ?? null,
+        baseUrl: res.baseUrl || null,
+      };
+    } catch (e) {
+      // If doc loading fails, continue with what we have
+      detail.value = {
+        doc: null,
+        baseUrl: res.baseUrl || null,
+      };
+    }
+  } catch (e: any) {
+    errorMsg.value = typeof e === 'string' ? e : String(e?.message || e);
+  } finally {
+    loading.value = false;
+  }
+};
+
+const iconDataUrl = computed(() => {
+  const b64 = preview.value?.iconBase64;
+  if (!b64) return null;
+  return `data:image/png;base64,${b64}`;
+});
+
+const pluginVm = computed(() => {
+  if (!preview.value) return null;
+  return {
+    id: preview.value.preview.id,
+    name: preview.value.preview.name,
+    desp: preview.value.manifest?.description ?? preview.value.preview.name,
+    version: preview.value.preview.version,
+    minAppVersion: preview.value.preview.minAppVersion ?? undefined,
+    icon: iconDataUrl.value ?? undefined,
+    doc: detail.value?.doc ?? undefined,
+    baseUrl: (detail.value?.baseUrl as string | undefined) ?? undefined,
+  };
+});
+
+const { t } = useI18n();
+const { pluginName } = usePluginManifestI18n();
+const pageTitle = computed(() => (pluginVm.value ? pluginName(pluginVm.value) : "") || t("common.importPlugin"));
+
+const canInstall = computed(() => {
+  const p = preview.value?.preview;
+  return p?.canInstall !== false; // 默认为 true，只有明确为 false 时才禁用
+});
+
+const installText = computed(() => {
+  const p = preview.value?.preview;
+  if (!p) return t('plugins.install');
+  if (!p.alreadyExists) return t('plugins.install');
+  const existing = p.existingVersion ?? null;
+  return isUpdateAvailable(existing, p.version) ? t('plugins.update') : t('plugins.reinstall');
+});
+
+const loadDocImageBytes = async (imagePath: string): Promise<number[]> => {
+  if (!props.kgpgPath) throw new Error("未提供插件文件路径");
+  return await invoke<number[]>('get_plugin_image_from_zip', { 
+    zipPath: props.kgpgPath, 
+    imagePath 
+  });
+};
+
+const doInstall = async () => {
+  if (!props.kgpgPath) return;
+  installing.value = true;
+  try {
+    await invoke('import_plugin_from_zip', { zipPath: props.kgpgPath });
+    ElMessage.success(t('common.importSuccess'));
+    await pluginStore.loadPlugins();
+    emit('success');
+    visible.value = false;
+  } catch (e: any) {
+    ElMessage.error(typeof e === 'string' ? e : String(e?.message || e));
+  } finally {
+    installing.value = false;
+  }
+};
+
+const copyText = async (text: string) => {
+  try {
+    const { isTauri } = await import("@tauri-apps/api/core");
+    if (isTauri()) {
+      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+      await writeText(text);
+    } else {
+      await navigator.clipboard.writeText(text);
+    }
+    ElMessage.success(t('common.copied'));
+  } catch {
+    ElMessage.error(t('common.copyFailed'));
+  }
+};
+</script>
+
+<style scoped>
+.loading-container {
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.muted {
+  opacity: 0.7;
+}
+</style>
+
+<style>
+.plugin-import-dialog {
+  display: flex;
+  flex-direction: column;
+}
+
+.plugin-import-dialog.mobile-fullscreen {
+  margin: 0 !important;
+}
+
+.plugin-import-dialog.mobile-fullscreen .el-dialog {
+  margin: 0 !important;
+  max-height: 100vh !important;
+  height: 100vh !important;
+  border-radius: 0 !important;
+}
+
+.plugin-import-dialog.mobile-fullscreen .el-dialog__body {
+  padding: 0 !important;
+  height: calc(100vh - 60px) !important;
+}
+
+.plugin-import-dialog .el-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  margin: 5vh auto;
+}
+
+.plugin-import-dialog .el-dialog__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+</style>

@@ -1,0 +1,14 @@
+# 用来声明打开app的方法
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name={{name}}
+Name[en]=Kabegame
+Comment=二次元壁纸管理器
+Comment[en]=Anime Wallpaper Manager
+Exec={{exec}}
+Icon={{icon}}
+Terminal=false
+Categories=Graphics;Viewer;Utility;
+StartupNotify=true
+Keywords=wallpaper;anime;image;gallery;

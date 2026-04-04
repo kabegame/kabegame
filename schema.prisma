@@ -1,0 +1,190 @@
+// ============================================
+// Database Schema Documentation
+// ============================================
+// This file is used ONLY to document the database schema structure.
+// It does NOT provide any functionality and should NOT be used to generate Prisma client.
+// The actual database operations are handled by SQLite in storage.rs
+//
+// Database: SQLite
+// Location: {app_data_dir}/images.db
+//
+// ============================================
+
+datasource db {
+    provider = "sqlite"
+}
+
+// 任务表
+model Task {
+    id            String  @id
+    pluginId      String  @map("plugin_id")
+    outputDir     String? @map("output_dir")
+    userConfig    String? @map("user_config") // JSON string
+    runConfigId   String? @map("run_config_id")
+    triggerSource String  @default("manual") @map("trigger_source") // manual | scheduled
+    status        String
+    progress      Float   @default(0)
+    deletedCount  Int     @default(0) @map("deleted_count")
+    dedupCount    Int     @default(0) @map("dedup_count")
+    successCount  Int     @default(0) @map("success_count")
+    failedCount   Int     @default(0) @map("failed_count")
+    startTime     Int?    @map("start_time")
+    endTime       Int?    @map("end_time")
+    error         String?
+
+    images           Image[]           @relation("TaskToImage")
+    taskFailedImages TaskFailedImage[]
+
+    @@index([startTime(sort: Desc)], name: "idx_tasks_start_time")
+    @@map("tasks")
+}
+
+// 运行配置表
+model RunConfig {
+    id                   String  @id
+    name                 String
+    description          String?
+    pluginId             String  @map("plugin_id")
+    url                  String
+    outputDir            String? @map("output_dir")
+    userConfig           String? @map("user_config") // JSON string
+    httpHeaders          String? @map("http_headers") // JSON string: Record<string,string>
+    createdAt            Int     @map("created_at")
+    scheduleEnabled      Int     @default(0) @map("schedule_enabled") // 0/1
+    scheduleMode         String? @map("schedule_mode") // interval | daily
+    scheduleIntervalSecs Int?    @map("schedule_interval_secs")
+    scheduleDailyHour    Int?    @map("schedule_daily_hour")
+    scheduleDailyMinute  Int?    @map("schedule_daily_minute")
+    scheduleDelaySecs    Int?    @map("schedule_delay_secs") // 已废弃
+    schedulePlannedAt    Int?    @map("schedule_planned_at")
+    scheduleLastRunAt    Int?    @map("schedule_last_run_at")
+
+    @@map("run_configs")
+}
+
+/// 插件详情 JSON 去重存储（同帖多图共享一行）
+model ImageMetadata {
+    id               Int               @id @default(autoincrement())
+    data             String // JSON string
+    contentHash      String            @unique @map("content_hash")
+    images           Image[]
+    taskFailedImages TaskFailedImage[]
+
+    @@map("image_metadata")
+}
+
+// 图片表（同时支持视频壁纸）
+model Image {
+    id            Int     @id @default(autoincrement())
+    url           String? // 本地导入的时候没有url
+    localPath     String  @map("local_path")
+    pluginId      String? @map("plugin_id")
+    taskId        String? @map("task_id")
+    surfRecordId  String? @map("surf_record_id")
+    crawledAt     Int     @map("crawled_at")
+    metadata      String? // JSON string（旧数据或未迁移行；新数据多在 image_metadata）
+    metadataId    Int?    @map("metadata_id")
+    thumbnailPath String  @default("") @map("thumbnail_path")
+    hash          String  @default("")
+    width         Int? // 图片宽度（像素）
+    height        Int? // 图片高度（像素）
+    displayName   String  @default("") @map("display_name")
+    type          String? @default("image")
+
+    task        Task?        @relation("TaskToImage", fields: [taskId], references: [id], onDelete: SetNull)
+    surfRecord  SurfRecord?  @relation("SurfRecordToImage", fields: [surfRecordId], references: [id], onDelete: SetNull)
+    imageMetadata ImageMetadata? @relation(fields: [metadataId], references: [id], onDelete: SetNull)
+    albumImages AlbumImage[]
+
+    @@index([crawledAt(sort: Desc)], name: "idx_crawled_at")
+    @@index([pluginId], name: "idx_plugin_id")
+    @@index([taskId], name: "idx_task_id")
+    @@index([surfRecordId], name: "idx_images_surf_record_id")
+    @@index([hash], name: "idx_images_hash")
+    @@map("images")
+}
+
+// 畅游记录表
+model SurfRecord {
+    id            String @id
+    host          String @unique
+    rootUrl       String @map("root_url")
+    icon          Bytes?
+    lastVisitAt   Int    @map("last_visit_at")
+    downloadCount Int    @default(0) @map("download_count")
+    createdAt     Int    @map("created_at")
+
+    images Image[] @relation("SurfRecordToImage")
+
+    @@index([host], name: "idx_surf_records_host")
+    @@index([lastVisitAt(sort: Desc)], name: "idx_surf_records_last_visit")
+    @@map("surf_records")
+}
+
+// 画册表
+model Album {
+    id        String @id
+    name      String
+    createdAt Int    @map("created_at")
+
+    albumImages AlbumImage[]
+
+    @@map("albums")
+}
+
+// 画册-图片关联表
+model AlbumImage {
+    albumId String @map("album_id")
+    imageId Int    @map("image_id")
+    order   Int?   @map("order")
+
+    album Album @relation(fields: [albumId], references: [id], onDelete: Cascade)
+    image Image @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+    @@id([albumId, imageId])
+    @@index([albumId], name: "idx_album_images_album")
+    @@map("album_images")
+}
+
+// 任务下载失败图片表
+model TaskFailedImage {
+    id              Int     @id @default(autoincrement())
+    taskId          String  @map("task_id")
+    pluginId        String  @map("plugin_id")
+    url             String
+    order           Int     @map("order")
+    createdAt       Int     @map("created_at")
+    lastError       String? @map("last_error")
+    lastAttemptedAt Int?    @map("last_attempted_at")
+    headerSnapshot  String? @map("header_snapshot") // JSON string: Record<string,string>
+    metadataId      Int?    @map("metadata_id")
+
+    task          Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+    imageMetadata ImageMetadata? @relation(fields: [metadataId], references: [id], onDelete: SetNull)
+
+    @@index([taskId], name: "idx_task_failed_images_task")
+    @@map("task_failed_images")
+}
+
+// 插件源表（商店源）
+model PluginSource {
+    id        String @id
+    name      String
+    indexUrl  String @map("index_url")
+    createdAt Int    @map("created_at")
+
+    cache PluginSourceCache?
+
+    @@map("plugin_sources")
+}
+
+// 插件源缓存表（存储前 index.json 原始内容）
+model PluginSourceCache {
+    sourceId    String @id @map("source_id")
+    jsonContent String @map("json_content")
+    updatedAt   Int    @map("updated_at")
+
+    source PluginSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+    @@map("plugin_source_cache")
+}

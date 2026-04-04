@@ -1,0 +1,4 @@
+[default]
+description = "Default permissions for the picker plugin (folder, images, videos, kgpg file)."
+permissions = ["allow-pickFolder", "allow-pickImages", "allow-pickVideos", "allow-pickKgpgFile", "allow-openImage", "allow-openVideo"]
+

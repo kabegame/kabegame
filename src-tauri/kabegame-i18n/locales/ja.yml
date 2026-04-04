@@ -1,0 +1,46 @@
+common:
+  ok: OK
+  cancel: キャンセル
+  confirm: 確認
+  close: 閉じる
+  save: 保存
+  refresh: 更新
+  exit: 終了
+  appName: Kabegame
+
+settings:
+  title: 設定
+  language: 言語
+
+tray:
+  show: 表示
+  hide: 非表示
+  exit: 終了
+  showWindow: ウィンドウを表示
+  hideWindow: ウィンドウを隠す
+  nextWallpaper: 次の壁紙
+  quit: 終了
+
+notifications:
+  refreshSuccess: 更新しました
+  refreshFailed: 更新に失敗しました
+
+dialog:
+  exitConfirm: 終了してもよろしいですか？寂しくなるよ！
+  exitTitle: 終了
+  errorTitle: おっと 😿
+  initFatalError: "初期化中に致命的なエラーが発生しました！: {detail}"
+
+window:
+  wallpaperTitle: Kabegame 壁紙
+  crawlerTitle: Kabegame クローラー
+  devWebViewTitle: Kabegame 開発用 WebView
+
+albums:
+  favorite: お気に入り
+
+plugins:
+  officialGithubReleaseSourceName: 公式 GitHub Releases ソース
+
+surf:
+  windowTitle: "サーフ - {host}"

@@ -1,0 +1,1384 @@
+<template>
+  <!-- Android 全屏预览：使用 photoswipe-vue 组件，关闭按钮用组件自带的 -->
+  <PhotoSwipe v-if="IS_ANDROID" ref="pswpRef" v-model:open="previewVisible" v-model:index="previewIndex"
+    :data-source="pswpDataSource" :loop="true" :zIndex="2000" :close-on-vertical-drag="true"
+    :on-vertical-drag="handlePswpVerticalDrag" :on-before-close="handlePswpBeforeClose" @change="handlePswpChange"
+    @close="handlePswpClose" @ui-visible-change="handlePswpUiVisibleChange">
+    <!-- 安卓：显示名称用 fixed 定位，与叉号同 top/高度，限制宽度并换行 -->
+    <div v-if="previewImage?.displayName"
+      class="fixed left-0 right-0 top-0 flex min-h-[60px] items-center z-[-1] justify-center px-4 pt-[var(--sat,env(safe-area-inset-top,0px))]">
+      <span class="max-w-[70vw] break-all text-center text-sm font-medium text-white/90"
+        style="text-shadow: 0 1px 2px rgba(0,0,0,0.3)">
+        {{ previewImage.displayName }}
+      </span>
+    </div>
+    <!-- ActionSheet 通过 default slot 放入 PswpUI 的 .pswp__hide-on-close 中 -->
+    <!-- visible 为true，与ui一起显隐，ui显隐由 photoswipe-vue 组件自动管理 -->
+    <ActionRenderer v-if="actions.length > 0" visible :position="previewContextMenuPosition" :actions="actions"
+      :context="previewActionContext" mode="actionsheet" :teleport="false" :no-transition="true"
+      @close="handlePswpActionClose" @command="handlePreviewActionCommand" :zIndex="2100" :modal-back="false" />
+    <!-- 上划删除区域通过 overlay slot 放入 .pswp 根级 -->
+    <template #overlay>
+      <Transition name="swipe-delete-zone">
+        <div v-show="swipeDeleteActive" class="swipe-delete-zone" :class="{ ready: swipeDeleteReady }">
+          <div class="swipe-delete-zone-content">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+              <line x1="10" y1="11" x2="10" y2="17" />
+              <line x1="14" y1="11" x2="14" y2="17" />
+            </svg>
+            <span>{{ swipeDeleteReady ? '释放删除' : '上划删除' }}</span>
+          </div>
+        </div>
+      </Transition>
+    </template>
+  </PhotoSwipe>
+
+  <!-- 桌面端 Dialog 预览 -->
+  <template v-else>
+    <el-dialog v-model="previewVisible" :title="previewDialogTitle" width="90%" :close-on-click-modal="true"
+      class="image-preview-dialog" :show-close="true" :lock-scroll="true" @close="closePreview">
+      <div v-if="previewVisible" class="preview-desktop-body">
+        <div ref="previewContainerRef" class="preview-container"
+          @contextmenu.prevent.stop="handlePreviewDialogContextMenu" @mousemove="handlePreviewMouseMove"
+          @mouseleave="handlePreviewMouseLeave" @wheel.prevent="handlePreviewWheel">
+          <button type="button" class="preview-detail-toggle"
+            :class="{ visible: previewHoverSide === 'right' || detailDrawerOpen }"
+            :title="t('gallery.toggleDetailPanel')" :aria-expanded="detailDrawerOpen" aria-label="toggle detail panel"
+            @click.stop="toggleDetailDrawer">
+            <svg class="preview-detail-drawer-icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true">
+              <path fill="currentColor"
+                d="M176 752a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h672a16 16 0 0 0 16-16v-64a16 16 0 0 0-16-16H176zm240-192a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432a16 16 0 0 0 16-16V576a16 16 0 0 0-16-16H416zM299.264 395.392a16 16 0 0 0-22.592.064L171.264 501.376a16 16 0 0 0 .064 22.592l105.408 104.896a16 16 0 0 0 27.264-11.328V406.784a16 16 0 0 0-4.736-11.392zM416 368a16 16 0 0 0-16 16v64c0 8.832 7.168 16 16 16h432A16 16 0 0 0 864 448V384a16 16 0 0 0-16-16H416zm-240-192A16 16 0 0 0 160 192v64c0 8.832 7.168 16 16 16h672A16 16 0 0 0 864 256V192a16 16 0 0 0-16-16H176z" />
+            </svg>
+          </button>
+          <div v-if="props.images.length > 1" class="preview-nav-zone left"
+            :class="{ visible: previewHoverSide === 'left' }" @click.stop="goPrev">
+            <button class="preview-nav-btn" type="button" :class="{ disabled: isAtFirst }" aria-label="上一张">
+              <el-icon>
+                <ArrowLeftBold />
+              </el-icon>
+            </button>
+          </div>
+          <div v-if="props.images.length > 1" class="preview-nav-zone right"
+            :class="{ visible: previewHoverSide === 'right' }" @click.stop="goNext">
+            <button class="preview-nav-btn" type="button" :class="{ disabled: isAtLast }" aria-label="下一张">
+              <el-icon>
+                <ArrowRightBold />
+              </el-icon>
+            </button>
+          </div>
+          <div v-if="previewImageUrl && !isPreviewVideo" ref="panzoomWrapperRef" class="panzoom-wrapper">
+            <img ref="previewImageRef" :src="previewImageUrl" class="preview-image" alt="预览图片"
+              @load="handlePreviewImageLoad" @error="handlePreviewImageError" @dragstart.prevent />
+          </div>
+          <div v-else-if="previewImageUrl && isPreviewVideo" class="preview-video-wrapper">
+            <video ref="previewVideoRef" :src="previewImageUrl" class="preview-video" :loop="!IS_LINUX" :autoplay="!IS_LINUX" poster="" preload="auto"
+              playsinline webkit-playsinline="true" disablepictureinpicture="true" disableremoteplayback=""
+              @dragstart.prevent />
+            <VideoControls :video="previewVideoRef" :show-play-pause="IS_LINUX" />
+          </div>
+          <div v-else-if="previewNotFound && !previewImageLoading" class="preview-not-found">
+            <ImageNotFound />
+          </div>
+          <div v-if="previewImageLoading" class="preview-loading">
+            <div class="preview-loading-inner">正在加载原图…</div>
+          </div>
+        </div>
+        <aside class="preview-detail-drawer" :class="{ 'is-open': detailDrawerOpen }" @click.stop
+          @wheel.stop>
+          <div class="preview-detail-drawer-scroll">
+            <ImageDetailContent
+              :image="previewImage"
+              :plugins="plugins"
+              @open-task="emit('open-task', $event)"
+            />
+          </div>
+        </aside>
+      </div>
+    </el-dialog>
+    <!-- 桌面端预览内右键：与单张图片相同的上下文菜单（z-index 高于 el-dialog 以免被遮） -->
+    <ActionRenderer v-if="actions.length > 0" :visible="previewContextMenuVisible"
+      :position="previewContextMenuPosition" :actions="actions" :context="previewActionContext" mode="contextmenu"
+      :z-index="5000" @close="closePreviewContextMenu" @command="handlePreviewActionCommand" />
+  </template>
+
+</template>
+
+<script setup lang="ts">
+import type { Ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { ElMessage } from "element-plus";
+import { ArrowLeftBold, ArrowRightBold } from "@element-plus/icons-vue";
+import { useLocalStorage } from "@vueuse/core";
+import { useI18n } from "@kabegame/i18n";
+import type { ImageInfo } from "../../types/image";
+import ImageNotFound from "./ImageNotFound.vue";
+import ImageDetailContent from "./ImageDetailContent.vue";
+import VideoControls from "./VideoControls.vue";
+import { IS_ANDROID, CONTENT_URI_PROXY_PREFIX, IS_LINUX } from "../../env";
+import ActionRenderer from "../ActionRenderer.vue";
+import type { ActionItem, ActionContext } from "../../actions/types";
+// @ts-expect-error - Vue SFC component import, types resolved via package.json exports
+import PhotoSwipe from "photoswipe-vue/vue";
+import "photoswipe-vue/photoswipe.css";
+import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
+import { useModalBack } from "../../composables/useModalBack";
+import { fileToUrl, thumbnailToUrl } from "../../httpServer";
+import { isVideoMediaType } from "../../utils/mediaMime";
+
+const { t } = useI18n();
+
+const props = withDefaults(defineProps<{
+  images: ImageInfo[];
+  /** Actions for context menu / action sheet. */
+  actions?: ActionItem<ImageInfo>[];
+  /** 用于预览内详情抽屉解析插件名（与 ImageDetailDialog 一致） */
+  plugins?: Array<{ id: string; name?: string }>;
+}>(), {
+  actions: () => [],
+  plugins: () => [],
+});
+
+/** 桌面端预览内详情侧栏开关（localStorage，与 mergeDefaults 容错非法值） */
+const detailDrawerOpen = useLocalStorage("kabegame-preview-detail-open", false, {
+  mergeDefaults: true,
+});
+
+const emit = defineEmits<{
+  (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
+  (e: "open-task", taskId: string): void;
+}>();
+
+const previewVisible = ref(false);
+const previewImageUrl = ref("");
+const previewImagePath = ref("");
+const previewIndex = ref<number>(-1);
+const currentImageId = ref<string | null>(null);
+/** Android：仅图片的索引列表（用于过滤 PhotoSwipe 中的视频，视频改用系统播放器打开） */
+const androidFilteredIndices = computed(() =>
+  props.images.map((img, i) => (!isVideoMediaType(img.type) ? i : -1)).filter((i) => i >= 0),
+);
+
+// previewImage 改为 computed，确保始终反映 props.images 的最新数据（如收藏状态变化）
+const previewImage = computed<ImageInfo | null>(() => {
+  const idx = previewIndex.value;
+  if (idx < 0) return null;
+  if (IS_ANDROID) {
+    const origIdx = androidFilteredIndices.value[idx];
+    if (origIdx == null || origIdx >= props.images.length) return null;
+    return props.images[origIdx] ?? null;
+  }
+  if (idx >= props.images.length) return null;
+  return props.images[idx] ?? null;
+});
+const isPreviewVideo = computed(() => isVideoMediaType(previewImage.value?.type));
+const previewHoverSide = ref<"left" | "right" | null>(null);
+const previewNotFound = ref(false);
+
+const previewContainerRef = ref<HTMLElement | null>(null);
+const previewImageRef = ref<HTMLImageElement | null>(null);
+const previewVideoRef = ref<HTMLVideoElement | null>(null);
+const pswpRef = ref<InstanceType<typeof PhotoSwipe> | null>(null);
+// Panzoom 由 usePanzoomPreview 提供，在 notifyPreviewInteracting / markPreviewInteracting 定义后初始化
+let panzoomWrapperRef!: Ref<HTMLElement | null>;
+let handlePanzoomWheel!: (event: WheelEvent) => void;
+let panzoomReset!: () => void;
+let panzoomDestroy!: () => void;
+// Android 上划删除相关状态
+const swipeDeleteActive = ref(false);
+const swipeDeleteReady = ref(false);
+let isFromVerticalDrag = false;
+let verticalDragResetTimer: ReturnType<typeof setTimeout> | null = null;
+// 缓存 container 的 rect，避免 mousemove/wheel 高频触发时反复 getBoundingClientRect() 导致强制布局与掉帧
+const previewContainerRect = ref({ left: 0, top: 0, width: 0, height: 0 });
+// previewDragging、previewDragStart、previewDragStartTranslate 已删除，由 Panzoom 替代（仅桌面端）
+const previewImageLoading = ref(false);
+const previewContextMenuVisible = ref(false);
+const previewContextMenuPosition = ref({ x: 0, y: 0 });
+
+// Android 触摸手势状态
+
+// Android PSWP UI 可见性（ActionSheet 随 PSWP UI 自动显隐，无需手动控制）
+const pswpUiVisible = ref(false);
+let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Android: 使用 useModalBack 管理预览的返回键行为（不使用 close-on-back prop）
+useModalBack(previewVisible);
+
+const normalizeDesktopPath = (path: string | undefined) =>
+  (path || "").trimStart().replace(/^\\\\\?\\/, "").trim();
+
+const toDesktopUrl = (path: string | undefined) => {
+  const normalized = normalizeDesktopPath(path);
+  if (!normalized) return "";
+  return fileToUrl(normalized);
+};
+
+const toAndroidProxyUrl = (path: string | undefined) => {
+  const raw = (path || "").trim();
+  if (!raw.startsWith("content://")) return "";
+  return raw.replace("content://", CONTENT_URI_PROXY_PREFIX);
+};
+
+const getOriginalPreviewUrl = (image: ImageInfo) =>
+  IS_ANDROID ? toAndroidProxyUrl(image.localPath) : toDesktopUrl(image.localPath);
+
+const getThumbnailPreviewUrl = (image: ImageInfo) => {
+  const thumbPath = image.thumbnailPath || image.localPath;
+  if (IS_ANDROID) return toAndroidProxyUrl(thumbPath);
+  const normalized = normalizeDesktopPath(thumbPath);
+  return normalized ? thumbnailToUrl(normalized) : "";
+};
+
+// 计算 cover scale（填满屏幕的缩放比例）
+
+// previewWheelZooming、wheelZoomTimer、wheelRaf、wheelSteps、wheelLastClientX/Y 已删除，由 Panzoom 替代（仅桌面端）
+
+// 预览交互标记：用于通知上层暂停后台加载，优先保证预览拖拽/缩放丝滑
+const previewInteracting = ref(false);
+let previewInteractTimer: ReturnType<typeof setTimeout> | null = null;
+const notifyPreviewInteracting = (active: boolean) => {
+  if (previewInteracting.value === active) return;
+  previewInteracting.value = active;
+  try {
+    window.dispatchEvent(
+      new CustomEvent("preview-interacting-change", { detail: { active } })
+    );
+  } catch {
+    // ignore
+  }
+};
+const markPreviewInteracting = () => {
+  notifyPreviewInteracting(true);
+  if (previewInteractTimer) clearTimeout(previewInteractTimer);
+  previewInteractTimer = setTimeout(() => {
+    previewInteractTimer = null;
+    notifyPreviewInteracting(false);
+  }, 260);
+};
+
+// 初始化 Panzoom（需在 markPreviewInteracting 之后，以便传入回调）
+({
+  wrapperRef: panzoomWrapperRef,
+  handleWheel: handlePanzoomWheel,
+  reset: panzoomReset,
+  destroy: panzoomDestroy,
+} = usePanzoomPreview(
+  previewVisible,
+  computed(() => !IS_ANDROID),
+  {
+    onPanzoomStart: () => notifyPreviewInteracting(true),
+    onPanzoomEnd: markPreviewInteracting,
+  }
+));
+
+/** 切换详情抽屉并重置 Panzoom，使图片按新容器尺寸适配（含抽屉动画结束后再对齐一次） */
+const toggleDetailDrawer = () => {
+  detailDrawerOpen.value = !detailDrawerOpen.value;
+  panzoomReset();
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      panzoomReset();
+    });
+    window.setTimeout(() => {
+      panzoomReset();
+    }, 240);
+  });
+};
+
+const measureContainerSize = () => {
+  const containerRect = previewContainerRef.value?.getBoundingClientRect();
+  if (containerRect) {
+    previewContainerRect.value = {
+      left: containerRect.left,
+      top: containerRect.top,
+      width: containerRect.width,
+      height: containerRect.height,
+    };
+  }
+};
+
+const measureContainerAfterRender = async () => {
+  await nextTick();
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  measureContainerSize();
+};
+
+const previewDialogTitle = computed(() => {
+  const img = previewImage.value;
+  if (img?.displayName) return img.displayName;
+  if (!img?.localPath) {
+    return "图片预览";
+  }
+  // 从路径中提取文件名（支持 Windows 和 Unix 路径分隔符）
+  const path = img.localPath;
+  const fileName = path.split(/[/\\]/).pop() || path;
+  return fileName || "图片预览";
+});
+
+const isTextInputLike = (target: EventTarget | null) => {
+  const el = target as HTMLElement | null;
+  const tag = el?.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!el?.isContentEditable;
+};
+
+/** Android PhotoSwipe：根据当前 images 构建 dataSource 数组（只读 URL）。Android 下过滤掉视频，视频改用系统播放器打开。 */
+const pswpDataSource = computed(() => {
+  const fallbackW = 1920;
+  const fallbackH = 1080;
+  const source = IS_ANDROID
+    ? props.images.filter((img) => !isVideoMediaType(img.type))
+    : props.images;
+  return source.map((img) => {
+    const url = getOriginalPreviewUrl(img) || getThumbnailPreviewUrl(img) || "";
+    return {
+      src: url,
+      width: img.width || fallbackW,
+      height: img.height || fallbackH,
+      id: img.id,
+    };
+  });
+});
+
+const setPreviewByIndex = (
+  index: number,
+  opts?: { resetPanzoom?: boolean }
+) => {
+  const img = props.images[index];
+  if (!img) return;
+
+  const resetPanzoom = opts?.resetPanzoom !== false;
+
+  previewIndex.value = index;
+  currentImageId.value = img.id;
+  previewImagePath.value = img.localPath;
+  // previewImage 现在是 computed，无需手动赋值
+  previewNotFound.value = false;
+
+  const thumb = getThumbnailPreviewUrl(img);
+  const originalUrl = getOriginalPreviewUrl(img);
+
+  previewNotFound.value = false;
+  previewImageLoading.value = false;
+  previewImageUrl.value = (originalUrl || thumb || "").trim();
+
+  // 尺寸/缩放状态重置：切换图片时重置；仅列表重排（如同 id 的索引变化）时可保留 Panzoom
+  if (!isPreviewVideo.value && resetPanzoom) {
+    panzoomReset();
+  }
+};
+
+// 仅用于 UI：首尾循环时，位于边界的方向箭头置灰（但仍可点击触发循环）
+const isAtFirst = computed(() => {
+  if (props.images.length <= 1) return false;
+  if (!previewVisible.value) return false;
+  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
+  return idx === 0;
+});
+
+const isAtLast = computed(() => {
+  if (props.images.length <= 1) return false;
+  if (!previewVisible.value) return false;
+  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
+  return idx === props.images.length - 1;
+});
+
+// 获取相邻图片的 URL（用于 pager）
+const getAdjacentImageUrl = (offset: number): string => {
+  const idx = previewIndex.value;
+  if (idx < 0) return "";
+  const targetIdx = idx + offset;
+  if (targetIdx < 0 || targetIdx >= props.images.length) return "";
+  const img = props.images[targetIdx];
+  if (!img) return "";
+
+  // 优先使用 original，否则使用 thumbnail
+  const originalUrl = getOriginalPreviewUrl(img);
+  if (originalUrl) return originalUrl;
+
+  return getThumbnailPreviewUrl(img);
+};
+
+
+// Pager offset（用于滑动切换动画）
+const pagerOffset = ref(0);
+const pagerSettling = ref(false);
+
+// 切换节流：100ms 内最多只执行一次切换，避免快速连击导致状态混乱
+let navThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+let isNavThrottled = false;
+const NAV_THROTTLE_MS = 100;
+
+const navigateWithPreloadGate = (targetIndex: number) => {
+  if (!previewVisible.value) return;
+  setPreviewByIndex(targetIndex);
+};
+
+const goPrev = () => {
+  if (!previewVisible.value) return;
+  if (isNavThrottled) return;
+  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
+  const targetIndex = idx > 0 ? idx - 1 : props.images.length - 1;
+  const didWrap = idx === 0;
+  if (didWrap) {
+    ElMessage.info("一下子跳到最后一张啦");
+  }
+
+  // 开启节流
+  isNavThrottled = true;
+  if (navThrottleTimer) clearTimeout(navThrottleTimer);
+  navThrottleTimer = setTimeout(() => {
+    navThrottleTimer = null;
+    isNavThrottled = false;
+  }, NAV_THROTTLE_MS);
+
+  navigateWithPreloadGate(targetIndex);
+};
+
+const goNext = () => {
+  if (!previewVisible.value) return;
+  if (isNavThrottled) return;
+  const lastIndex = props.images.length - 1;
+  const idx = previewIndex.value >= 0 ? previewIndex.value : 0;
+  const targetIndex = idx < lastIndex ? idx + 1 : 0;
+  const didWrap = idx === lastIndex;
+  if (didWrap) {
+    ElMessage.info("回到第一张啦");
+  }
+
+  // 开启节流
+  isNavThrottled = true;
+  if (navThrottleTimer) clearTimeout(navThrottleTimer);
+  navThrottleTimer = setTimeout(() => {
+    navThrottleTimer = null;
+    isNavThrottled = false;
+  }, NAV_THROTTLE_MS);
+
+  navigateWithPreloadGate(targetIndex);
+};
+
+const handlePreviewDialogContextMenu = (event: MouseEvent) => {
+  if (!previewImage.value) return;
+  if (!props.actions?.length) return;
+  previewContextMenuPosition.value = { x: event.clientX, y: event.clientY };
+  previewContextMenuVisible.value = true;
+};
+
+const closePreviewContextMenu = () => {
+  previewContextMenuVisible.value = false;
+};
+
+const previewActionContext = computed<ActionContext<ImageInfo>>(() => ({
+  target: previewImage.value,
+  selectedIds: previewImage.value ? new Set([previewImage.value.id]) : new Set<string>(),
+  selectedCount: previewImage.value ? 1 : 0,
+}));
+
+const handlePswpActionClose = () => {
+  if (IS_ANDROID) {
+    // 关闭 ActionSheet 时隐藏 PSWP UI（使用 setUiVisible 避免 toggle 语义歧义）
+    pswpRef.value?.setUiVisible(false);
+  } else {
+    closePreviewContextMenu();
+  }
+};
+
+const handlePreviewActionCommand = (command: string) => {
+  if (!previewImage.value) return;
+  const payload = {
+    command,
+    image: previewImage.value,
+  };
+  if (IS_ANDROID) {
+    // On Android, hide PSWP UI after command (except for remove which may close preview)
+    // ActionSheet 的 handleClick 会同时 emit command 和 close，所以这里不需要再调用 setUiVisible
+    // close 事件会通过 handlePswpActionClose 处理 UI 隐藏
+  } else {
+    closePreviewContextMenu();
+  }
+  emit("contextCommand", payload);
+};
+
+const handlePreviewMouseMove = (event: MouseEvent) => {
+  // 使用缓存 rect，避免每次 mousemove 强制布局
+  if (previewContainerRect.value.width <= 0) {
+    measureContainerSize();
+  }
+  const rect = previewContainerRect.value;
+  const x = event.clientX - rect.left;
+  const w = rect.width || 0;
+  if (w <= 0) return;
+  const edge = w * 0.2;
+  if (x <= edge) previewHoverSide.value = "left";
+  else if (x >= w - edge) previewHoverSide.value = "right";
+  else previewHoverSide.value = null;
+};
+
+const handlePreviewMouseLeave = () => {
+  previewHoverSide.value = null;
+};
+
+const handlePreviewWheel = (event: WheelEvent) => {
+  if (isPreviewVideo.value) return;
+  handlePanzoomWheel(event);
+};
+
+// stopPreviewDrag 已删除，由 Panzoom 自动处理（仅桌面端）
+
+// Android 触摸手势处理
+
+
+const handlePreviewImageLoad = async () => {
+  await measureContainerAfterRender();
+  previewImageLoading.value = false;
+};
+
+const handlePreviewImageError = () => {
+  // 预览图加载失败（常见：original 文件被删/路径失效/权限问题）：
+  // 回落到 thumbnail，避免预览一直空白/破图。
+  const img = previewImage.value;
+  if (!previewVisible.value || !img) {
+    previewImageLoading.value = false;
+    return;
+  }
+
+  const thumb = getThumbnailPreviewUrl(img);
+  const current = previewImageUrl.value || "";
+
+  // 避免死循环：如果已经在用 thumbnail 仍失败，则只结束 loading
+  if (!thumb || current === thumb) {
+    previewImageLoading.value = false;
+    previewImageUrl.value = "";
+    previewNotFound.value = true;
+    return;
+  }
+
+  previewImageUrl.value = thumb;
+  previewImageLoading.value = false;
+  previewNotFound.value = false;
+  // 图片加载完成后重置缩放（仅桌面端）
+  panzoomReset();
+};
+
+const handlePreviewKeyDown = (event: KeyboardEvent) => {
+  if (!previewVisible.value) return;
+  if (isTextInputLike(event.target)) return;
+  if ((event.ctrlKey || event.metaKey) && (event.key === "c" || event.key === "C")) {
+    if (!previewImage.value) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if ("stopImmediatePropagation" in event) {
+      (event as any).stopImmediatePropagation();
+    }
+    emit("contextCommand", { command: "copy", image: previewImage.value });
+    return;
+  }
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    void goPrev();
+    return;
+  }
+  if (event.key === "ArrowRight") {
+    event.preventDefault();
+    void goNext();
+    return;
+  }
+  // Delete / Backspace：快速删除当前预览图片
+  if ((event.key === "Delete" || event.key === "Backspace") && previewImage.value) {
+    event.preventDefault();
+    emit("contextCommand", { command: "remove", image: previewImage.value });
+    return;
+  }
+};
+
+/** Android 预览关闭后的清理（不调用 pswp.close），避免 destroy 时重复关闭且确保遮罩移除 */
+function doAndroidPreviewCleanup() {
+  if (!IS_ANDROID) return;
+  previewVisible.value = false;
+  pswpUiVisible.value = false;
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+  closePreviewContextMenu();
+}
+
+const closePreview = () => {
+  if (IS_ANDROID) {
+    previewVisible.value = false;
+    doAndroidPreviewCleanup();
+    previewIndex.value = -1;
+    // previewImage 现在是 computed，设置 previewIndex = -1 即可
+    return;
+  }
+  previewVisible.value = false;
+  previewImageUrl.value = "";
+  previewImagePath.value = "";
+  previewIndex.value = -1;
+  previewVideoRef.value = null;
+  // previewImage 现在是 computed，设置 previewIndex = -1 即可
+  previewHoverSide.value = null;
+  closePreviewContextMenu();
+  previewImageLoading.value = false;
+  panzoomDestroy();
+  if (previewInteractTimer) clearTimeout(previewInteractTimer);
+  previewInteractTimer = null;
+  notifyPreviewInteracting(false);
+  if (navThrottleTimer) clearTimeout(navThrottleTimer);
+  navThrottleTimer = null;
+  isNavThrottled = false;
+};
+
+const performSwipeDelete = () => {
+  if (!previewImage.value) return;
+  emit("contextCommand", { command: "swipe-remove", image: previewImage.value });
+};
+
+// handlePreviewImageDeleted 已被删除，逻辑合并到下方的 props.images watcher 中
+
+watch(
+  () => props.images,
+  () => {
+    if (!previewVisible.value) return;
+    if (!currentImageId.value) return;
+
+    const foundIndex = props.images.findIndex((img) => img.id === currentImageId.value);
+
+    if (foundIndex !== -1) {
+      if (IS_ANDROID) {
+        const pswpIdx = androidFilteredIndices.value.indexOf(foundIndex);
+        if (pswpIdx >= 0 && pswpIdx !== previewIndex.value) {
+          previewIndex.value = pswpIdx;
+        }
+      } else {
+        if (foundIndex !== previewIndex.value) {
+          // 前面插入项等导致索引右移：仍是同一张图，勿重置桌面端放缩/平移
+          setPreviewByIndex(foundIndex, { resetPanzoom: false });
+        }
+      }
+    } else {
+      if (props.images.length === 0) {
+        closePreview();
+      } else if (IS_ANDROID) {
+        const filteredLen = androidFilteredIndices.value.length;
+        if (filteredLen <= previewIndex.value) {
+          const newPswpIdx = Math.max(0, filteredLen - 1);
+          previewIndex.value = newPswpIdx;
+          const origIdx = androidFilteredIndices.value[newPswpIdx];
+          currentImageId.value = origIdx != null ? props.images[origIdx]?.id ?? null : null;
+        } else {
+          const origIdx = androidFilteredIndices.value[previewIndex.value];
+          currentImageId.value = origIdx != null ? props.images[origIdx]?.id ?? null : null;
+        }
+      } else {
+        if (props.images.length <= previewIndex.value) {
+          const newIndex = props.images.length - 1;
+          previewIndex.value = newIndex;
+          setPreviewByIndex(newIndex);
+        } else {
+          setPreviewByIndex(previewIndex.value);
+        }
+      }
+    }
+  }
+);
+
+watch(
+  () => previewVisible.value,
+  async (visible) => {
+    if (visible && !IS_ANDROID) {
+      await nextTick();
+      await measureContainerAfterRender();
+    }
+  }
+);
+
+watch(
+  () => previewImageUrl.value,
+  (url) => {
+    if (url && !IS_ANDROID) {
+      if (isPreviewVideo.value) return;
+      panzoomReset();
+    }
+  }
+);
+
+// 桌面端：预览区尺寸变化（抽屉、窗口缩放）时更新缓存 rect 并重置 Panzoom，使图片与容器对齐
+let resizeObserver: ResizeObserver | null = null;
+
+const setupResizeObserver = () => {
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+  }
+  const container = previewContainerRef.value;
+  if (!container) return;
+  resizeObserver = new ResizeObserver(() => {
+    if (!previewVisible.value) return;
+    measureContainerSize();
+    panzoomReset();
+  });
+  resizeObserver.observe(container);
+};
+
+// Android PhotoSwipe 事件处理
+// 跟踪初始 panY 值（slide 中心位置），用于判断方向
+let initialPanY: number | null = null;
+const handlePswpVerticalDrag = ({ panY, preventDefault }: { panY: number; preventDefault: () => void }) => {
+  if (initialPanY === null) {
+    initialPanY = panY;
+  }
+
+  const offset = panY - initialPanY;
+  const viewportHeight = window.innerHeight;
+  const ratio = offset / (viewportHeight / 3);
+
+  if (verticalDragResetTimer) {
+    clearTimeout(verticalDragResetTimer);
+    verticalDragResetTimer = null;
+  }
+
+  if (ratio > 0) {
+    // 下划：阻止默认行为（视觉效果和关闭）
+    preventDefault();
+    swipeDeleteActive.value = false;
+    swipeDeleteReady.value = false;
+    isFromVerticalDrag = false;
+  } else {
+    swipeDeleteActive.value = true;
+    const absRatio = Math.abs(ratio);
+    swipeDeleteReady.value = absRatio >= 0.4;
+    isFromVerticalDrag = true;
+
+    verticalDragResetTimer = setTimeout(() => {
+      isFromVerticalDrag = false;
+      swipeDeleteActive.value = false;
+      swipeDeleteReady.value = false;
+      verticalDragResetTimer = null;
+    }, 300);
+  }
+};
+
+// 重置初始 panY：关闭预览时见下方 watch；左右切换时见 handlePswpChange；上划删除成功后见 handlePswpBeforeClose
+watch(() => previewVisible.value, (visible) => {
+  if (!visible) {
+    initialPanY = null;
+  }
+});
+
+const handlePswpBeforeClose = (source?: string): boolean => {
+  if (source === 'verticalDrag') {
+    if (isFromVerticalDrag) {
+      const wasDeleteReady = swipeDeleteReady.value;
+      swipeDeleteActive.value = false;
+      swipeDeleteReady.value = false;
+      isFromVerticalDrag = false;
+      if (verticalDragResetTimer) {
+        clearTimeout(verticalDragResetTimer);
+        verticalDragResetTimer = null;
+      }
+
+      if (wasDeleteReady) {
+        performSwipeDelete();
+        pswpRef.value?.recoverFromVerticalDrag?.();
+        initialPanY = null;
+      }
+      return false;
+    }
+  }
+  return true;
+};
+
+const handlePswpChange = ({ index }: { index: number }) => {
+  if (index < 0) return;
+  if (IS_ANDROID) {
+    const origIdx = androidFilteredIndices.value[index];
+    if (origIdx == null || origIdx >= props.images.length) return;
+    initialPanY = null;
+    if (verticalDragResetTimer) {
+      clearTimeout(verticalDragResetTimer);
+      verticalDragResetTimer = null;
+    }
+    swipeDeleteActive.value = false;
+    swipeDeleteReady.value = false;
+    isFromVerticalDrag = false;
+    previewIndex.value = index;
+    const img = props.images[origIdx];
+    if (img) currentImageId.value = img.id;
+  } else {
+    if (index >= props.images.length) return;
+    previewIndex.value = index;
+    const img = props.images[index];
+    if (img) currentImageId.value = img.id;
+  }
+};
+
+/** 安卓上切换控件（点击显示顶部栏）时，更新 UI 可见性状态 */
+const handlePswpUiVisibleChange = ({ visible }: { visible: boolean }) => {
+  if (IS_ANDROID) {
+    pswpUiVisible.value = visible;
+  }
+};
+
+const handlePswpClose = () => {
+  doAndroidPreviewCleanup();
+  previewIndex.value = -1;
+  swipeDeleteActive.value = false;
+  swipeDeleteReady.value = false;
+  isFromVerticalDrag = false;
+  if (verticalDragResetTimer) {
+    clearTimeout(verticalDragResetTimer);
+    verticalDragResetTimer = null;
+  }
+};
+
+onMounted(() => {
+  window.addEventListener("keydown", handlePreviewKeyDown, true);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", handlePreviewKeyDown, true);
+  panzoomDestroy();
+  if (previewInteractTimer) {
+    clearTimeout(previewInteractTimer);
+    previewInteractTimer = null;
+  }
+  notifyPreviewInteracting(false);
+  if (navThrottleTimer) {
+    clearTimeout(navThrottleTimer);
+    navThrottleTimer = null;
+  }
+  isNavThrottled = false;
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+    resizeObserver = null;
+  }
+});
+
+if (!IS_ANDROID) {
+  watch(
+    () => previewContainerRef.value,
+    (container) => {
+      if (container) {
+        setupResizeObserver();
+      } else if (resizeObserver) {
+        resizeObserver.disconnect();
+        resizeObserver = null;
+      }
+    },
+    { immediate: true }
+  );
+}
+
+
+const open = (index: number) => {
+  if (IS_ANDROID) {
+    const img = props.images[index];
+    if (isVideoMediaType(img?.type)) return; // 视频由 ImageGrid 调用 openVideo，不应进入预览
+    const pswpIndex = androidFilteredIndices.value.indexOf(index);
+    if (pswpIndex < 0) return;
+    previewIndex.value = pswpIndex;
+    if (img) {
+      currentImageId.value = img.id;
+    }
+    previewVisible.value = true;
+    pswpUiVisible.value = false;
+    return;
+  }
+  // 桌面端：先打开 dialog，再触发 setPreviewByIndex
+  previewVisible.value = true;
+  setPreviewByIndex(index);
+};
+
+defineExpose({
+  open,
+  close: closePreview,
+  previewVisible,
+  previewIndex,
+});
+</script>
+
+<style lang="scss">
+.image-preview-dialog.el-dialog {
+  width: 90vw !important;
+  height: 90vh !important;
+  margin: 5vh auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+
+  .el-dialog__header {
+    flex-shrink: 0 !important;
+    padding: 15px 20px !important;
+    height: 50px !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+
+    .el-dialog__title {
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+      max-width: calc(90vw - 100px) !important;
+      display: block !important;
+    }
+  }
+
+  .el-dialog__body {
+    flex: 1 1 auto !important;
+    padding: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: stretch !important;
+    align-items: stretch !important;
+    overflow: hidden !important;
+    min-height: 0 !important;
+    height: calc(90vh - 50px) !important;
+  }
+
+  .preview-desktop-body {
+    display: flex;
+    flex-direction: row;
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    width: 100%;
+    height: 100%;
+    align-items: stretch;
+  }
+
+  .preview-container {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    box-sizing: border-box;
+    position: relative;
+  }
+
+  .preview-detail-toggle {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 4;
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    border: none;
+    background: rgba(0, 0, 0, 0.38);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 0.12s ease,
+      background 0.15s ease,
+      transform 0.12s ease;
+
+    &.visible {
+      opacity: 0.5;
+      pointer-events: auto;
+    }
+
+    &.visible:hover {
+      opacity: 1;
+      background: rgba(0, 0, 0, 0.52);
+      transform: scale(1.04);
+    }
+
+    .preview-detail-drawer-icon {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      display: block;
+    }
+  }
+
+  .preview-detail-drawer {
+    flex: 0 0 0;
+    width: 0;
+    min-width: 0;
+    max-width: 320px;
+    overflow: hidden;
+    box-sizing: border-box;
+    border-left: 1px solid transparent;
+    background: var(--anime-bg-card, rgba(255, 255, 255, 0.96));
+    opacity: 0;
+    transition:
+      flex-basis 0.22s ease,
+      width 0.22s ease,
+      min-width 0.22s ease,
+      opacity 0.18s ease,
+      border-color 0.18s ease;
+
+    &.is-open {
+      flex: 0 0 320px;
+      min-width: 30%;
+      opacity: 1;
+      border-left-color: var(--anime-border, rgba(0, 0, 0, 0.12));
+    }
+  }
+
+  .preview-detail-drawer-scroll {
+    height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 12px 14px 16px;
+    box-sizing: border-box;
+  }
+
+  .preview-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(3px);
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .preview-loading-inner {
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.45);
+    color: #ffffff;
+    font-size: 14px;
+    line-height: 1;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    user-select: none;
+  }
+
+  .panzoom-wrapper {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .preview-video-wrapper {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .preview-video {
+    width: 100%;
+    height: 100%;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    object-fit: contain;
+    display: block;
+  }
+
+  .preview-image {
+    max-width: 100% !important;
+    max-height: 100% !important;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+    cursor: pointer;
+  }
+
+  .preview-not-found {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px;
+    box-sizing: border-box;
+    color: rgba(255, 255, 255, 0.78);
+    text-align: center;
+    user-select: none;
+    z-index: 1;
+  }
+
+  .preview-nav-zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 20%;
+    display: flex;
+    align-items: center;
+    z-index: 2;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease;
+
+    &.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    &.left {
+      left: 0;
+      justify-content: flex-start;
+      padding-left: 18px;
+    }
+
+    &.right {
+      right: 0;
+      justify-content: flex-end;
+      padding-right: 18px;
+    }
+  }
+
+  .preview-nav-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    border: none;
+    background: #ff5fb8;
+    color: #ffffff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 10px 24px rgba(255, 95, 184, 0.28);
+    transition: transform 0.12s ease, background-color 0.12s ease, box-shadow 0.12s ease;
+    user-select: none;
+
+    &:hover {
+      transform: scale(1.04);
+      box-shadow: 0 12px 28px rgba(255, 95, 184, 0.34);
+    }
+
+    &.disabled {
+      background: #c9c9c9;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+    }
+
+    .el-icon {
+      font-size: 18px;
+    }
+  }
+}
+
+// Android 上划删除警告区域（z-index 需在 photoswipe-vue 的 .pswp (1500) 之上）
+.swipe-delete-zone {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2000;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.3) 50%, transparent 100%);
+  pointer-events: none;
+  transition: background 0.2s ease;
+
+  &.ready {
+    background: linear-gradient(to bottom, rgba(220, 38, 38, 0.7) 0%, rgba(220, 38, 38, 0.4) 50%, transparent 100%);
+  }
+
+  .swipe-delete-zone-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 500;
+
+    svg {
+      width: 24px;
+      height: 24px;
+      stroke-width: 2;
+    }
+
+    span {
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    }
+  }
+}
+
+// 删除警告区域过渡动画
+.swipe-delete-zone-enter-active,
+.swipe-delete-zone-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.swipe-delete-zone-enter-from {
+  opacity: 0;
+  transform: translateY(-20px);
+}
+
+.swipe-delete-zone-leave-to {
+  opacity: 0;
+  transform: translateY(-20px);
+}
+
+// Android 全屏预览样式（旧 pager 用，保留给桌面端或兼容）
+.image-preview-fullscreen:not(.image-preview-pswp-root) {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  touch-action: none;
+
+  .preview-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    box-sizing: border-box;
+    position: relative;
+    touch-action: none;
+  }
+
+  .preview-pager {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    will-change: transform;
+  }
+
+  .preview-pager-item {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .preview-pager-prev {
+    transform: translateX(-100%);
+  }
+
+  .preview-pager-next {
+    transform: translateX(100%);
+  }
+
+  .preview-image-android {
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  .preview-image-adjacent {
+    transform: none !important;
+    transition: none !important;
+  }
+
+  .preview-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(3px);
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .preview-loading-inner {
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.45);
+    color: #ffffff;
+    font-size: 14px;
+    line-height: 1;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    user-select: none;
+  }
+
+  .preview-not-found {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px;
+    box-sizing: border-box;
+    color: rgba(255, 255, 255, 0.78);
+    text-align: center;
+    user-select: none;
+    z-index: 1;
+  }
+
+  .preview-nav-zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 20%;
+    display: flex;
+    align-items: center;
+    z-index: 2;
+    transition: opacity 0.12s ease;
+
+    &.left {
+      left: 0;
+      justify-content: flex-start;
+      padding-left: 18px;
+    }
+
+    &.right {
+      right: 0;
+      justify-content: flex-end;
+      padding-right: 18px;
+    }
+  }
+
+  .preview-nav-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: 999px;
+    border: none;
+    background: rgba(255, 95, 184, 0.9);
+    color: #ffffff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 10px 24px rgba(255, 95, 184, 0.28);
+    transition: transform 0.12s ease, background-color 0.12s ease, box-shadow 0.12s ease;
+    user-select: none;
+    backdrop-filter: blur(8px);
+
+    &:active {
+      transform: scale(0.95);
+      box-shadow: 0 8px 20px rgba(255, 95, 184, 0.24);
+    }
+
+    &.disabled {
+      background: rgba(201, 201, 201, 0.9);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+    }
+
+    .el-icon {
+      font-size: 18px;
+    }
+  }
+
+}
+</style>

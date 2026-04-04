@@ -1,0 +1,31 @@
+# 用法：./docker/build-linux-release.sh（或 docker compose -f docker/docker-compose.linux-release.yml up --build）
+
+x-linux-release: &linux-release
+  image: ${KABEGAME_LINUX_BUILD_IMAGE:-kabegame-linux-release:latest}
+  build:
+    context: ..
+    dockerfile: docker/linux-release.Dockerfile
+  working_dir: /src
+  stdin_open: true
+  tty: false
+
+services:
+  pack-standard:
+    <<: *linux-release
+    command:
+      - bash
+      - -lc
+      - >-
+        bun install --frozen-lockfile
+        && bun b -c cli
+        && bun b -c main --mode standard --release --no-nx
+
+  pack-light:
+    <<: *linux-release
+    command:
+      - bash
+      - -lc
+      - >-
+        bun install --frozen-lockfile
+        && bun b -c cli
+        && bun b -c main --mode light --release --no-nx

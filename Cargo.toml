@@ -1,0 +1,60 @@
+[workspace]
+members = [
+  "src-tauri/core",
+  "src-tauri/kabegame-i18n",
+  "src-tauri/app-main",
+  "src-tauri/app-cli",
+  "src-tauri-plugins/tauri-plugin-picker",
+  "src-tauri-plugins/tauri-plugin-archiver",
+  "src-tauri-plugins/tauri-plugin-pathes",
+  "src-tauri-plugins/tauri-plugin-share",
+  "src-tauri-plugins/tauri-plugin-compress",
+  "src-tauri-plugins/tauri-plugin-wallpaper",
+  "src-tauri-plugins/tauri-plugin-task-notification",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "3.4.4"
+
+[workspace.dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+image = "0.24"
+kabegame-core = {path = "./src-tauri/core", default-features = false}
+kabegame-i18n = {path = "./src-tauri/kabegame-i18n"}
+rhai = {version = "1.24", features = ["sync"]}
+serde = {version = "1.0", features = ["derive"]}
+serde_bytes = "0.11"
+serde_cbor = "0.11"
+serde_json = "1.0"
+md5 = "0.7"
+sha2 = "0.10"
+tauri-build = {version = "2.5", features = []}
+tauri-plugin-archiver = {path = "./src-tauri-plugins/tauri-plugin-archiver"}
+tauri-plugin-compress = {path = "./src-tauri-plugins/tauri-plugin-compress"}
+tauri-plugin-pathes = {path = "./src-tauri-plugins/tauri-plugin-pathes"}
+tauri-plugin-picker = {path = "./src-tauri-plugins/tauri-plugin-picker"}
+tauri-plugin-share = {path = "./src-tauri-plugins/tauri-plugin-share"}
+tauri-plugin-task-notification = {path = "./src-tauri-plugins/tauri-plugin-task-notification"}
+tauri-plugin-wallpaper = {path = "./src-tauri-plugins/tauri-plugin-wallpaper"}
+tokio = {version = "1", features = ["full"]}
+url = "2.5"
+uuid = {version = "1.6", features = ["v4", "serde"]}
+windows-sys = {version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+]}
+zip = "0.6"
+
+# [profile.release]
+# on when release
+# codegen-units = 1
+# lto = "thin"

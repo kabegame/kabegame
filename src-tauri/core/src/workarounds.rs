@@ -1,0 +1,66 @@
+//! Best-effort platform workarounds for known upstream issues.
+//!
+//! NOTE:
+//! These helpers are not fixes and may stop working as environments change.
+use std::{fs, path::Path};
+
+/// WebKit2GTK on Wayland can be laggy (vsync/framerate issues). Forcing GTK to use X11
+/// typically improves responsiveness. Only applied when running under Wayland and when
+/// GDK_BACKEND is not already set (so users can override with GDK_BACKEND=wayland).
+/// Must be called before any GTK/WebKit initialization.
+#[cfg(target_os = "linux")]
+pub fn apply_wayland_webkit_workaround() {
+    unsafe {
+        std::env::set_var("GDK_BACKEND", "x11");
+    }
+}
+
+/// WebKit2GTK on Linux + NVIDIA uses a DMA-BUF renderer that can cause blank window
+/// or EGL_BAD_PARAMETER. Disable it when an NVIDIA GPU is detected.
+/// Upstream: https://bugs.webkit.org/show_bug.cgi?id=202362
+///           https://bugs.webkit.org/show_bug.cgi?id=259644
+#[cfg(target_os = "linux")]
+pub fn apply_nvidia_dmabuf_renderer_workaround() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
+        return;
+    }
+
+    if has_nvidia_gpu() {
+        unsafe {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn has_nvidia_gpu() -> bool {
+    if Path::new("/proc/driver/nvidia/version").exists()
+        || Path::new("/sys/module/nvidia").exists()
+        || Path::new("/sys/module/nvidia_drm").exists()
+    {
+        return true;
+    }
+
+    let Ok(entries) = fs::read_dir("/sys/class/drm") else {
+        return false;
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("card") || name.contains('-') {
+            continue;
+        }
+
+        let vendor_path = entry.path().join("device/vendor");
+        let Ok(vendor) = fs::read_to_string(vendor_path) else {
+            continue;
+        };
+        if vendor.trim().eq_ignore_ascii_case("0x10de") {
+            return true;
+        }
+    }
+
+    false
+}
+

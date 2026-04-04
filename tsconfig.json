@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "preserve",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": false,
+
+    /* Path aliases */
+    "paths": {
+      "@kabegame/core/*": ["./packages/core/src/*"],
+    }
+  },
+  "include": [
+    "apps/**/src/**/*.ts",
+    "apps/**/src/**/*.d.ts",
+    "apps/**/src/**/*.tsx",
+    "apps/**/src/**/*.vue",
+    "packages/**/src/**/*.ts",
+    "packages/**/src/**/*.d.ts",
+    "packages/**/src/**/*.tsx",
+    "packages/**/src/**/*.vue",
+    "scripts/**/*.ts",
+    "./*.ts"
+  ]
+}

@@ -1,0 +1,46 @@
+common:
+  ok: OK
+  cancel: Cancel
+  confirm: Confirm
+  close: Close
+  save: Save
+  refresh: Refresh
+  exit: Exit
+  appName: Kabegame
+
+settings:
+  title: Settings
+  language: Language
+
+tray:
+  show: Show
+  hide: Hide
+  exit: Exit
+  showWindow: Show Window
+  hideWindow: Hide Window
+  nextWallpaper: Next Wallpaper
+  quit: Quit
+
+notifications:
+  refreshSuccess: Refresh successful
+  refreshFailed: Refresh failed
+
+dialog:
+  exitConfirm: "Are you sure you want to exit? We'll miss you!"
+  exitTitle: Exit
+  errorTitle: Oops 😿
+  initFatalError: "A fatal error occurred during initialization!: {detail}"
+
+window:
+  wallpaperTitle: Kabegame Wallpaper
+  crawlerTitle: Kabegame Crawler
+  devWebViewTitle: Kabegame Dev WebView
+
+albums:
+  favorite: Favorites
+
+plugins:
+  officialGithubReleaseSourceName: Official GitHub Releases source
+
+surf:
+  windowTitle: "Surf - {host}"
