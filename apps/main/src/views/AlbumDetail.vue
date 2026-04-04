@@ -36,8 +36,12 @@
 
         <AlbumDetailBrowseToolbar
           ref="albumBrowseToolbarRef"
-          :current-provider-path="currentPath"
+          :album-id="albumDetailRouteStore.albumId"
+          :filter="albumDetailRouteStore.filter"
+          :sort="albumDetailRouteStore.sort"
           :page-size="pageSize"
+          @update:filter="(filter) => albumDetailRouteStore.navigate({ filter, page: 1 })"
+          @update:sort="(sort) => albumDetailRouteStore.navigate({ sort })"
         />
 
         <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage"
@@ -90,14 +94,10 @@ export interface SelectionAction {
 import { useImageOperations } from "@/composables/useImageOperations";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
-import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
 import {
-  buildAlbumBrowsePath,
-  parseAlbumBrowsePath,
   isAlbumWallpaperFilterPath,
-  type AlbumBrowseFilter,
-  type AlbumBrowseSort,
 } from "@/utils/albumPath";
+import { useAlbumDetailRouteStore } from "@/stores/albumDetailRoute";
 import AddToAlbumDialog from "@/components/AddToAlbumDialog.vue";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
@@ -121,6 +121,7 @@ const uiStore = useUiStore();
 const { load: loadImageTypes, getMimeTypeForImage } = useImageTypes();
 const { imageGridColumns } = storeToRefs(uiStore);
 const isAlbumDetailActive = ref(true);
+const albumDetailRouteStore = useAlbumDetailRouteStore();
 
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albumdetail");
@@ -175,11 +176,6 @@ const albumBrowseToolbarRef = ref<{
 } | null>(null);
 const albumContainerRef = ref<HTMLElement | null>(null);
 
-/** 画册详情 browse path 三元状态（不持久化），与 query.path 双向同步 */
-const albumBrowsePage = ref(1);
-const albumBrowseFilter = ref<AlbumBrowseFilter>("all");
-const albumBrowseSort = ref<AlbumBrowseSort>("time-asc");
-
 // 本地计算的 provider root path，用于初始化
 const localProviderRootPath = computed(() => {
   if (!albumId.value) return "";
@@ -192,46 +188,19 @@ const pageSize = computed(() => {
   return n === 100 || n === 500 || n === 1000 ? n : 100;
 });
 
-const albumDetailDefaultPath = computed(() => {
-  if (!albumId.value) return "album//1";
-  return buildAlbumBrowsePath(
-    albumId.value,
-    albumBrowseFilter.value,
-    albumBrowseSort.value,
-    albumBrowsePage.value
-  );
-});
-
-const {
-  currentPath,
-  currentPage,
-  setRootAndPage,
-  navigateToPage,
-} = useProviderPathRoute({
-  route,
-  router,
-  defaultPath: albumDetailDefaultPath,
-});
+const currentPath = computed(() => albumDetailRouteStore.currentPath);
+const currentPage = computed(() => albumDetailRouteStore.page);
 
 const isAlbumWallpaperFilterEmpty = computed(() =>
-  isAlbumWallpaperFilterPath(currentPath.value)
+  albumDetailRouteStore.filter === "wallpaper-order"
 );
 
 const handleAlbumWallpaperEmptyViewAll = async () => {
-  const next = buildAlbumBrowsePath(
-    albumId.value,
-    "all",
-    albumBrowseSort.value,
-    1
-  );
-  await router.replace({
-    path: route.path,
-    query: { ...route.query, path: next },
-  });
+  await albumDetailRouteStore.navigate({ filter: "all", page: 1 });
 };
 
 const handleJumpToPage = async (page: number) => {
-  await navigateToPage(page);
+  await albumDetailRouteStore.navigate({ page });
 };
 
 // 跟随路径变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
@@ -241,13 +210,19 @@ watch(
     if (!albumId.value) return;
     if (!albumName.value) return;
     if (!newPath) return;
-    const p = parseAlbumBrowsePath(newPath);
-    if (p && p.albumId === albumId.value) {
-      albumBrowsePage.value = p.page;
-      albumBrowseFilter.value = p.filter;
-      albumBrowseSort.value = p.sort;
-    }
     await loadAlbum({ reset: true });
+  },
+  { immediate: true }
+);
+
+watch(
+  () => route.query.path,
+  (rawPath) => {
+    const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
+    if (!qp.trim()) return;
+    if (qp !== currentPath.value) {
+      albumDetailRouteStore.syncFromUrl(qp);
+    }
   },
   { immediate: true }
 );
@@ -413,7 +388,7 @@ watch(
   pageSize,
   async (_v, prev) => {
     if (prev === undefined) return;
-    await navigateToPage(1);
+    await albumDetailRouteStore.navigate({ page: 1 });
     await loadAlbum();
   },
 );
@@ -761,9 +736,18 @@ const initAlbum = async (newAlbumId: string) => {
   clearSelection();
 
   albumId.value = newAlbumId;
-  albumBrowsePage.value = 1;
-  albumBrowseFilter.value = "all";
-  albumBrowseSort.value = "time-asc";
+  const rawPath = route.query.path;
+  const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
+  if (qp.startsWith(`album/${newAlbumId}/`)) {
+    albumDetailRouteStore.syncFromUrl(qp);
+  } else {
+    await albumDetailRouteStore.navigate({
+      albumId: newAlbumId,
+      filter: "all",
+      sort: "time-asc",
+      page: 1,
+    });
+  }
   await albumStore.loadAlbums();
   const found = albumStore.albums.find((a) => a.id === newAlbumId);
   albumName.value = found?.name || "画册";

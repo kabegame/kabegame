@@ -524,7 +524,8 @@ impl IpcClient {
     }
 
     pub async fn plugin_delete_source(&self, id: String) -> Result<(), String> {
-        self.request_ok(CliIpcRequest::PluginDeleteSource { id }).await
+        self.request_ok(CliIpcRequest::PluginDeleteSource { id })
+            .await
     }
 
     pub async fn plugin_install_browser_plugin(
@@ -605,7 +606,7 @@ impl IpcClient {
             source_id: None,
             plugin_id: None,
         })
-            .await
+        .await
     }
 
     pub async fn plugin_get_image_for_detail(
@@ -1032,19 +1033,27 @@ impl IpcClient {
         dedupe: bool,
         remove_missing: bool,
         regen_thumbnails: bool,
+        remove_unrecognized: bool,
+        range_start: Option<usize>,
+        range_end: Option<usize>,
+        delete_source_files: bool,
+        safe_delete: bool,
     ) -> Result<(), String> {
         self.request_ok(CliIpcRequest::OrganizeStart {
             dedupe,
             remove_missing,
             regen_thumbnails,
+            remove_unrecognized,
+            range_start,
+            range_end,
+            delete_source_files,
+            safe_delete,
         })
         .await
     }
 
     pub async fn organize_cancel(&self) -> Result<bool, String> {
-        let v = self
-            .request_data(CliIpcRequest::OrganizeCancel)
-            .await?;
+        let v = self.request_data(CliIpcRequest::OrganizeCancel).await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 

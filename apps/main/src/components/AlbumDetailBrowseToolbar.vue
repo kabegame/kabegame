@@ -147,7 +147,6 @@ import { computed, ref, watch, onUnmounted } from "vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
-import { useRoute, useRouter } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowDown, Filter, Sort } from "@element-plus/icons-vue";
 import GalleryPageSizeControl from "@/components/GalleryPageSizeControl.vue";
@@ -155,23 +154,24 @@ import { IS_ANDROID } from "@kabegame/core/env";
 import { useHeaderStore, HeaderFeatureId } from "@kabegame/core/stores/header";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
-  albumBrowsePathWithFilterOnly,
-  albumBrowsePathWithSortOnly,
-  parseAlbumBrowsePath,
   type AlbumBrowseFilter,
   type AlbumBrowseSort,
 } from "@/utils/albumPath";
 
 const props = defineProps<{
-  /** 当前完整 provider path，如 album/xxx/1 */
-  currentProviderPath: string;
+  albumId: string;
+  filter: AlbumBrowseFilter;
+  sort: AlbumBrowseSort;
   /** 每页条数（与设置同步） */
   pageSize: number;
 }>();
 
+const emit = defineEmits<{
+  "update:filter": [value: AlbumBrowseFilter];
+  "update:sort": [value: AlbumBrowseSort];
+}>();
+
 const { t, locale } = useI18n();
-const route = useRoute();
-const router = useRouter();
 const headerStore = useHeaderStore();
 
 interface GalleryMediaTypeCountsPayload {
@@ -179,9 +179,7 @@ interface GalleryMediaTypeCountsPayload {
   videoCount: number;
 }
 
-const parsed = computed(() => parseAlbumBrowsePath(props.currentProviderPath.trim()));
-
-const albumId = computed(() => (parsed.value?.albumId ?? "").trim());
+const albumId = computed(() => (props.albumId ?? "").trim());
 
 const mediaTypeCounts = ref<GalleryMediaTypeCountsPayload>({
   imageCount: 0,
@@ -215,7 +213,7 @@ watch(
 );
 
 const filterMode = computed<AlbumBrowseFilter>(() => {
-  const f = parsed.value?.filter;
+  const f = props.filter;
   if (
     f === "wallpaper-order" ||
     f === "image-only" ||
@@ -228,9 +226,7 @@ const filterMode = computed<AlbumBrowseFilter>(() => {
 });
 
 const currentSortKey = computed<AlbumBrowseSort>(() => {
-  const s = parsed.value?.sort;
-  if (s) return s;
-  return "time-asc";
+  return props.sort ?? "time-asc";
 });
 
 const isWallpaperFilter = computed(() => filterMode.value === "wallpaper-order");
@@ -296,15 +292,7 @@ const sortPickerTitle = computed(() =>
     : t("gallery.sort")
 );
 
-async function pushPath(nextPath: string) {
-  await router.replace({
-    path: route.path,
-    query: { ...route.query, path: nextPath },
-  });
-}
-
 function onFilterCommand(cmd: string) {
-  const path = props.currentProviderPath.trim();
   if (
     cmd !== "all" &&
     cmd !== "wallpaper-order" &&
@@ -313,7 +301,7 @@ function onFilterCommand(cmd: string) {
   ) {
     return;
   }
-  void pushPath(albumBrowsePathWithFilterOnly(path, cmd as AlbumBrowseFilter));
+  emit("update:filter", cmd as AlbumBrowseFilter);
 }
 
 const SORT_CMDS_ALL = new Set<AlbumBrowseSort>([
@@ -325,7 +313,6 @@ const SORT_CMDS_ALL = new Set<AlbumBrowseSort>([
 const SORT_CMDS_WALLPAPER = new Set<AlbumBrowseSort>(["set-asc", "set-desc"]);
 
 function onSortCommand(cmd: string) {
-  const path = props.currentProviderPath.trim();
   const sort = cmd as AlbumBrowseSort;
   if (
     filterMode.value === "all" ||
@@ -336,7 +323,7 @@ function onSortCommand(cmd: string) {
   } else if (!SORT_CMDS_WALLPAPER.has(sort)) {
     return;
   }
-  void pushPath(albumBrowsePathWithSortOnly(path, sort));
+  emit("update:sort", sort);
 }
 
 // Android pickers
@@ -372,9 +359,7 @@ function onFilterPickerConfirm() {
     v === "image-only" ||
     v === "video-only"
   ) {
-    void pushPath(
-      albumBrowsePathWithFilterOnly(props.currentProviderPath.trim(), v as AlbumBrowseFilter)
-    );
+    emit("update:filter", v as AlbumBrowseFilter);
   }
 }
 

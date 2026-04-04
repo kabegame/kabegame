@@ -1,5 +1,5 @@
 use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, params_from_iter, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -415,8 +415,8 @@ impl Storage {
 
     /// Rhai `create_image_metadata`：将 JSON 写入 `image_metadata` 并返回 id。
     pub fn insert_or_get_image_metadata_row(&self, value: &Value) -> Result<i64, String> {
-        let s =
-            serde_json::to_string(value).map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+        let s = serde_json::to_string(value)
+            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         insert_or_get_image_metadata_id(&conn, &s)
     }
@@ -1228,5 +1228,36 @@ impl Storage {
             .map_err(|e| format!("Failed to pick image: {}", e))?;
 
         Ok(id)
+    }
+
+    /// Returns the set of paths (from the input slice) that are still referenced
+    /// by at least one row in the images table.
+    pub fn paths_still_referenced(&self, paths: &[&str]) -> Result<HashSet<String>, String> {
+        if paths.is_empty() {
+            return Ok(HashSet::new());
+        }
+        const CHUNK: usize = 500;
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut out = HashSet::new();
+        for chunk in paths.chunks(CHUNK) {
+            let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!("SELECT local_path FROM images WHERE local_path IN ({placeholders})");
+            let mut stmt = conn
+                .prepare(&sql)
+                .map_err(|e| format!("Failed to prepare paths_still_referenced: {}", e))?;
+            let mut rows = stmt
+                .query(params_from_iter(chunk.iter().copied()))
+                .map_err(|e| format!("Failed to query paths_still_referenced: {}", e))?;
+            while let Some(row) = rows
+                .next()
+                .map_err(|e| format!("Failed to read paths_still_referenced row: {}", e))?
+            {
+                let p: String = row
+                    .get(0)
+                    .map_err(|e| format!("Failed to get local_path: {}", e))?;
+                out.insert(p);
+            }
+        }
+        Ok(out)
     }
 }

@@ -6,9 +6,7 @@ use std::path::Path;
 use std::sync::{LazyLock, OnceLock, RwLock};
 
 /// 后端内置支持的图片扩展名（小写，不含点号）。前端可通过 set_frontend_supported_image_formats 扩展。
-const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "gif", "webp", "bmp",
-];
+const BUILTIN_IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
 /// 后端内置支持的视频扩展名（小写，不含点号）。
 const BUILTIN_VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov"];
 
@@ -101,10 +99,7 @@ fn supported_media_mime_types() -> HashSet<String> {
 /// 根据本地路径判断是否为支持的图片：先看扩展名，再按文件内容用 infer 推断。
 /// infer 推断出的类型也必须在支持列表中才视为图片。
 pub fn is_image_by_path(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     if is_supported_image_ext(ext) {
         return true;
     }
@@ -345,10 +340,7 @@ pub fn requires_window_mode(path: &Path) -> bool {
 
 /// 根据本地路径判断是否为支持的视频：先看扩展名，再按文件内容 infer 推断。
 pub fn is_video_by_path(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     if is_supported_video_ext(ext) {
         return true;
     }

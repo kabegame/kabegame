@@ -219,18 +219,16 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
         // 爬虫窗口关闭时仅隐藏不销毁，便于设置中再次打开；遨游窗口关闭时清除会话状态并通知前端
-        builder = builder.on_window_event(|window, event| {
-            match event {
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    if window.label() == "crawler" {
-                        let _ = window.hide();
-                        api.prevent_close();
-                    } else if window.label() == "surf" {
-                        commands::surf::notify_surf_session_closed(&window.app_handle());
-                    }
+        builder = builder.on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                if window.label() == "crawler" {
+                    let _ = window.hide();
+                    api.prevent_close();
+                } else if window.label() == "surf" {
+                    commands::surf::notify_surf_session_closed(&window.app_handle());
                 }
-                _ => {}
             }
+            _ => {}
         });
     }
 
@@ -358,7 +356,6 @@ pub fn run() {
             update_album_images_order,
             get_favorite_album_id,
             // --- Images ---
-            get_images_range,
             get_image_by_id,
             get_image_metadata,
             get_image_metadata_by_metadata_id,
@@ -608,6 +605,8 @@ pub fn run() {
             get_http_server_base_url,
             #[cfg(not(target_os = "android"))]
             start_organize,
+            #[cfg(not(target_os = "android"))]
+            get_organize_total_count,
             #[cfg(not(target_os = "android"))]
             cancel_organize,
             // --- Share (Android) ---

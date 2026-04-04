@@ -80,9 +80,24 @@ pub async fn dispatch_request(req: CliIpcRequest, app_handle: AppHandle) -> CliI
         dedupe,
         remove_missing,
         regen_thumbnails,
+        remove_unrecognized,
+        range_start,
+        range_end,
+        delete_source_files,
+        safe_delete,
     } = req
     {
-        return handle_organize_start(dedupe, remove_missing, regen_thumbnails).await;
+        return handle_organize_start(
+            dedupe,
+            remove_missing,
+            regen_thumbnails,
+            remove_unrecognized,
+            range_start,
+            range_end,
+            delete_source_files,
+            safe_delete,
+        )
+        .await;
     }
     if matches!(req, CliIpcRequest::OrganizeCancel) {
         return handle_organize_cancel().await;
@@ -207,8 +222,17 @@ async fn handle_organize_start(
     dedupe: bool,
     remove_missing: bool,
     regen_thumbnails: bool,
+    remove_unrecognized: bool,
+    range_start: Option<usize>,
+    range_end: Option<usize>,
+    delete_source_files: bool,
+    safe_delete: bool,
 ) -> CliIpcResponse {
     use kabegame_core::storage::organize::OrganizeOptions;
+    let (offset, limit) = match (range_start, range_end) {
+        (Some(s), Some(e)) if e > s => (Some(s), Some(e - s)),
+        _ => (None, None),
+    };
     match OrganizeService::global()
         .clone()
         .start(
@@ -216,7 +240,12 @@ async fn handle_organize_start(
             OrganizeOptions {
                 dedupe,
                 remove_missing,
+                remove_unrecognized,
                 regen_thumbnails,
+                delete_source_files,
+                safe_delete,
+                offset,
+                limit,
             },
         )
         .await

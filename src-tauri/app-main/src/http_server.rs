@@ -18,16 +18,16 @@ use axum::{
 };
 #[cfg(all(not(target_os = "android"), debug_assertions))]
 use axum::{body::Bytes, extract::DefaultBodyLimit, http::Method, routing::post};
-#[cfg(all(not(target_os = "android"), debug_assertions))]
-use tower_http::cors::{Any, CorsLayer};
 #[cfg(not(target_os = "android"))]
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use serde::Deserialize;
 #[cfg(not(target_os = "android"))]
 use tokio::io::SeekFrom;
 #[cfg(not(target_os = "android"))]
-use serde::Deserialize;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
 use tower::ServiceExt;
+#[cfg(all(not(target_os = "android"), debug_assertions))]
+use tower_http::cors::{Any, CorsLayer};
 #[cfg(all(not(target_os = "android"), not(target_os = "windows")))]
 use tower_http::services::ServeDir;
 
@@ -105,7 +105,10 @@ fn set_content_type_if_present(resp: &mut Response, mime_type: Option<&str>) {
 }
 
 #[cfg(not(target_os = "android"))]
-async fn handle_file_query(Query(query): Query<FileQuery>, headers: axum::http::HeaderMap) -> Response {
+async fn handle_file_query(
+    Query(query): Query<FileQuery>,
+    headers: axum::http::HeaderMap,
+) -> Response {
     let path = query.path.trim();
     if path.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing path").into_response();
@@ -119,21 +122,25 @@ async fn handle_file_query(Query(query): Query<FileQuery>, headers: axum::http::
         return (StatusCode::NOT_FOUND, "file not found").into_response();
     }
 
-    // 表中无此 local_path 则 404
-    match kabegame_core::storage::Storage::global().find_image_by_path(path) {
-        Ok(Some(_)) => {}
+    let image_info = match kabegame_core::storage::Storage::global().find_image_by_path(path) {
+        Ok(Some(info)) => info,
         _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
-    }
+    };
+
+    let mime = image_info.media_type.or_else(|| mime_from_path(path));
 
     let range = headers
         .get(RANGE)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    serve_file_with_mime(path, mime_from_path(path), range).await
+    serve_file_with_mime(path, mime, range).await
 }
 
 #[cfg(not(target_os = "android"))]
-async fn handle_thumbnail_query(Query(query): Query<FileQuery>, headers: axum::http::HeaderMap) -> Response {
+async fn handle_thumbnail_query(
+    Query(query): Query<FileQuery>,
+    headers: axum::http::HeaderMap,
+) -> Response {
     let path = query.path.trim();
     if path.is_empty() {
         return (StatusCode::BAD_REQUEST, "missing path").into_response();
@@ -163,7 +170,11 @@ async fn handle_thumbnail_query(Query(query): Query<FileQuery>, headers: axum::h
 }
 
 #[cfg(not(target_os = "android"))]
-async fn serve_file_with_mime(path: &str, mime_type: Option<String>, range_header: Option<String>) -> Response {
+async fn serve_file_with_mime(
+    path: &str,
+    mime_type: Option<String>,
+    range_header: Option<String>,
+) -> Response {
     // 优先尝试 ServeDir（桌面统一走 HTTP 文件服务）
     #[cfg(not(target_os = "windows"))]
     {
@@ -209,7 +220,8 @@ async fn serve_file_with_mime(path: &str, mime_type: Option<String>, range_heade
                             let mut file = match tokio::fs::File::open(path).await {
                                 Ok(f) => f,
                                 Err(_) => {
-                                    return (StatusCode::NOT_FOUND, "file not found").into_response()
+                                    return (StatusCode::NOT_FOUND, "file not found")
+                                        .into_response()
                                 }
                             };
                             if file.seek(SeekFrom::Start(start)).await.is_err() {
@@ -277,15 +289,14 @@ async fn handle_proxy_query(Query(query): Query<ProxyQuery>) -> Response {
         return (StatusCode::BAD_REQUEST, "only http and https are allowed").into_response();
     }
 
-    let mut client_builder = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::default());
+    let mut client_builder =
+        reqwest::Client::builder().redirect(reqwest::redirect::Policy::default());
     if let Some(ref proxy_url) = kabegame_core::crawler::proxy::get_proxy_config().proxy_url {
         if let Ok(proxy) = reqwest::Proxy::all(proxy_url) {
             client_builder = client_builder.proxy(proxy);
         }
     }
-    let client = match client_builder.build()
-    {
+    let client = match client_builder.build() {
         Ok(c) => c,
         Err(e) => {
             return (
@@ -348,15 +359,7 @@ async fn handle_plugin_doc_image(Query(query): Query<PluginDocImageQuery>) -> Re
 
     let manager = kabegame_core::plugin::PluginManager::global();
     let bytes = match manager
-        .load_plugin_image_for_detail(
-            plugin_id,
-            None,
-            None,
-            None,
-            path,
-            None,
-            None,
-        )
+        .load_plugin_image_for_detail(plugin_id, None, None, None, path, None, None)
         .await
     {
         Ok(b) => b,

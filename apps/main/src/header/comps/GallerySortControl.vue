@@ -31,34 +31,16 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 import { ArrowDown, Sort } from "@element-plus/icons-vue";
-import { useGalleryPathState } from "@/composables/useGalleryPathState";
 import {
-  DEFAULT_GALLERY_PATH,
-  galleryPathWithSortOnly,
   parseGalleryPath,
 } from "@/utils/galleryPath";
+import { useGalleryRouteStore } from "@/stores/galleryRoute";
 
 const route = useRoute();
-const router = useRouter();
-
-const { providerPath: galleryProviderPath, sort: gallerySortPref } =
-  useGalleryPathState();
-
-/** 与 useProviderPathRoute 一致：无 query.path 时用 root/sort/page 算出的 providerPath */
-const effectiveGalleryPath = computed(() => {
-  const raw = route.query.path;
-  const qp = Array.isArray(raw) ? raw[0] : raw;
-  const qpStr = qp != null && qp !== "" ? String(qp) : "";
-  if (route.path !== "/gallery") {
-    return qpStr || DEFAULT_GALLERY_PATH;
-  }
-  if (qpStr) return qpStr;
-  return galleryProviderPath.value;
-});
-
-const currentPath = effectiveGalleryPath;
+const galleryRouteStore = useGalleryRouteStore();
+const currentPath = computed(() => galleryRouteStore.currentPath);
 
 const sortOrder = computed<"asc" | "desc">(() =>
   currentPath.value.includes("/desc/") ? "desc" : "asc"
@@ -100,9 +82,7 @@ const sortLabel = computed(() => {
 
 function handleCommand(command: string) {
   const sort = command === "desc" ? "desc" : "asc";
-  gallerySortPref.value = sort;
-  const next = galleryPathWithSortOnly(currentPath.value, sort);
-  void router.push({ path: "/gallery", query: { path: next } });
+  void galleryRouteStore.navigate({ sort }, { push: route.path !== "/gallery" });
 }
 </script>
 

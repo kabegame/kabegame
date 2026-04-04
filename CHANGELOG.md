@@ -3,14 +3,31 @@
 本项目的所有显著变更都会记录在此文件中。
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
+ 
+**Changelog entries:** Write release notes in **English** (new sections and bullets from [3.4.5] onward).
+
+## [3.4.5]
+### Added
+- **Organize gallery:** Option **Remove unrecognized media** — removes DB rows whose file still exists on disk but fails `is_media_by_path`.
+- **Organize gallery:** When total image count is greater than 4000, the dialog shows a range slider (step 1000, minimum span 1000) to limit processing to an `id` ASC slice in this run; added `get_organize_total_count` for the UI to fetch the total.
+
+### Fixed
+- **Gallery / `query.path`:** Paginating with a time filter (e.g. `date/2026/1`) no longer strips the year as if it were a page number; paths are built consistently via `parseGalleryPath` / `buildGalleryPath` and Pinia route state.
+- **HTTP file server (original files):** `handle_file_query` sets `Content-Type` from the database `images.type` field (`ImageInfo.media_type`) when present, otherwise falls back to path-based inference; thumbnail requests still infer MIME from the thumbnail path (may differ from the original format).
+
+### Changed
+- **Gallery / routing:** Introduced `createPathRouteStore` and stores `galleryRoute`, `albumDetailRoute`, `taskDetailRoute`, `surfImagesRoute` for `query.path` parsing, navigation, and (gallery) localStorage persistence; removed `useProviderPathRoute` and `useGalleryPathState`.
+- **UI:** `GalleryToolbar` takes `root` / `sort` and syncs with `update:root` / `update:sort`; `GalleryFilterControl`, `GallerySortControl`, and `AlbumDetailBrowseToolbar` align with those stores.
+- **Organize / IPC:** `start_organize` and the CLI daemon `OrganizeStart` add `remove_unrecognized`, `range_start`, and `range_end`; IPC uses serde defaults for backward compatibility with older clients.
+- **Organize (header):** While organizing, the gallery header control shows a spinning folder icon; hover shows a tooltip with progress; click opens a popover (manual trigger) with `el-progress`, this run’s options and range, a note that new downloads are not included during the run, and Cancel / Confirm to close the popover; `useModalBack` registers the popover on Android.
 
 ## [3.4.4]
-## Added
+### Added
 - **Plugin:** 米游社 Plugin. Also support for boolean when condition. 
 - **Rhai API:** when resolve for bool type.
 
 ## [3.4.3]
-## Added
+### Added
 - **Plugin:** heybox plugin. can crawl by searching keyword and single post url.
 - **Rhai API:** create_image_metadata function.
 

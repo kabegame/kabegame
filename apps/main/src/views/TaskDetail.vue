@@ -148,7 +148,7 @@ import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
 import GalleryBigPaginator from "@/components/GalleryBigPaginator.vue";
-import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
+import { useTaskDetailRouteStore } from "@/stores/taskDetailRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
 import { IS_ANDROID } from "@kabegame/core/env";
@@ -373,19 +373,12 @@ const pageSize = computed(() => {
     const n = Number(settingsStore.values.galleryPageSize);
     return n === 100 || n === 500 || n === 1000 ? n : 100;
 });
-const {
-    currentPath,
-    currentPage,
-    setRootAndPage,
-    navigateToPage,
-} = useProviderPathRoute({
-    route,
-    router,
-    defaultPath: computed(() => `task/${taskId.value}/1`),
-});
+const taskDetailRouteStore = useTaskDetailRouteStore();
+const currentPath = computed(() => taskDetailRouteStore.currentPath);
+const currentPage = computed(() => taskDetailRouteStore.page);
 
 const handleJumpToPage = async (page: number) => {
-    await navigateToPage(page);
+    await taskDetailRouteStore.navigate({ page });
 };
 
 // 跟随路径变化重载当前 leaf（支持分页器跳转/浏览器前进后退）
@@ -396,6 +389,18 @@ watch(
         if (!taskId.value) return;
         if (!newPath) return;
         await loadTaskImages({ showSkeleton: false });
+    },
+    { immediate: true }
+);
+
+watch(
+    () => route.query.path,
+    (rawPath) => {
+        const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
+        if (!qp.trim()) return;
+        if (qp !== currentPath.value) {
+            taskDetailRouteStore.syncFromUrl(qp);
+        }
     },
     { immediate: true }
 );
@@ -432,7 +437,7 @@ watch(
     pageSize,
     async (_v, prev) => {
         if (prev === undefined) return;
-        await navigateToPage(1);
+        await taskDetailRouteStore.navigate({ page: 1 });
         await loadTaskImages({ showSkeleton: false });
     },
 );
@@ -881,6 +886,13 @@ const confirmRemoveImages = async () => {
 
 const initTask = async (id: string) => {
     taskId.value = id;
+    const rawPath = route.query.path;
+    const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
+    if (qp.startsWith(`task/${id}/`)) {
+        taskDetailRouteStore.syncFromUrl(qp);
+    } else {
+        await taskDetailRouteStore.navigate({ taskId: id, page: 1 });
+    }
     await failedImagesStore.initListeners();
     await settingsStore.loadAll();
     await Promise.all([
