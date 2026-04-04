@@ -6,7 +6,11 @@
     class="image-detail-dialog"
     align-center
   >
-    <ImageDetailContent :image="image" :plugins="plugins" />
+    <ImageDetailContent
+      :image="image"
+      :plugins="plugins"
+      @open-task="emit('open-task', $event)"
+    />
   </el-dialog>
 </template>
 
@@ -26,6 +30,7 @@ interface Props {
 
 interface Emits {
   (e: "update:modelValue", value: boolean): void;
+  (e: "open-task", taskId: string): void;
 }
 
 const props = defineProps<Props>();

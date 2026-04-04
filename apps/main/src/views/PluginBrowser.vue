@@ -1103,7 +1103,7 @@ const revalidateStorePluginsInBackground = (sourceId: string) => {
       const plugins = await invoke<StorePluginResolved[]>("get_store_plugins", {
         sourceId,
         forceRefresh: false,
-        revalidateIfStaleAfterSecs: 1,
+        revalidateIfStaleAfterSecs: STORE_INDEX_REVALIDATE_MAX_AGE_SECS,
       });
       if (!plugins?.length) return;
       const next = applyInstalledVersions(plugins);

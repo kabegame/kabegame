@@ -441,6 +441,55 @@ class PickerPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @InvokeArg
+    class GetContentSizeArgs {
+        var uri: String = ""
+    }
+
+    @Command
+    fun getContentSize(invoke: Invoke) {
+        val args = invoke.parseArgs(GetContentSizeArgs::class.java)
+        val uriStr = args.uri
+        if (uriStr.isBlank()) {
+            invoke.reject("uri 不能为空")
+            return
+        }
+        try {
+            val uri = Uri.parse(uriStr)
+            if (uri.scheme != "content") {
+                invoke.reject("仅支持 content:// URI")
+                return
+            }
+            var size: Long = -1L
+            activity.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (idx >= 0 && !cursor.isNull(idx)) {
+                        size = cursor.getLong(idx)
+                    }
+                }
+            }
+            if (size < 0L) {
+                activity.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                    val len = afd.length
+                    if (len >= 0L) {
+                        size = len
+                    }
+                }
+            }
+            if (size < 0L) {
+                invoke.reject("无法获取文件大小")
+                return
+            }
+            val result = JSObject()
+            result.put("size", size)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            Log.e("PickerPlugin", "getContentSize failed", e)
+            invoke.reject("获取文件大小失败: ${e.message}", e)
+        }
+    }
+
+    @InvokeArg
     class ReadFileBytesArgs {
         var uri: String = ""
     }

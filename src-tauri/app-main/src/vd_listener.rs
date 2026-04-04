@@ -14,7 +14,7 @@ use std::sync::Arc;
 /// - `AlbumAdded` / `AlbumNameChanged` / `AlbumDeleted` → `vd_service.bump_albums()`
 /// - `ImagesChange` → 按 `task_ids` 通知任务目录，并 `notify_gallery_tree_changed`
 /// - `AlbumImagesChange` → 按 `album_ids` 通知画册目录，并 `notify_gallery_tree_changed`
-/// - `Generic` 事件中的 `tasks-changed` → `bump_tasks()`
+/// - `TaskAdded` / `TaskDeleted` → `bump_tasks()`
 #[cfg(all(
     not(kabegame_mode = "light"),
     not(target_os = "android"),
@@ -30,7 +30,7 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
         DaemonEventKind::AlbumDeleted,
         DaemonEventKind::ImagesChange,
         DaemonEventKind::AlbumImagesChange,
-        DaemonEventKind::Generic,
+        DaemonEventKind::TasksChange,
     ];
 
     let broadcaster = EventBroadcaster::global();
@@ -67,17 +67,10 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
                     DaemonEvent::AlbumDeleted { .. } => {
                         vd_service.bump_albums();
                     }
-                    // TODO: 逐步去掉 Generic 事件，改用更明确的事件类型
-                    DaemonEvent::Generic { event, payload } => {
-                        match event.as_str() {
-                            "tasks-changed" => {
-                                vd_service.bump_tasks();
-                            }
-                            _ => {
-                                // 忽略其他 Generic 事件
-                            }
-                        }
+                    DaemonEvent::TaskAdded { .. } | DaemonEvent::TaskDeleted { .. } => {
+                        vd_service.bump_tasks();
                     }
+                    DaemonEvent::TaskChanged { .. } => {}
                     _ => {
                         // 忽略其他事件类型
                     }

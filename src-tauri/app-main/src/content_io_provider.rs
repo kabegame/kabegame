@@ -36,6 +36,7 @@ enum Request {
     ReadFileBytes(String),
     TakePersistablePermission(String),
     GetImageDimensions(String),
+    GetContentSize(String),
     GetDisplayName(String),
     CopyImageToPictures {
         source_path: String,
@@ -53,6 +54,7 @@ enum Response {
     ReadFileBytes(Result<Vec<u8>, String>),
     TakePersistablePermission(Result<(), String>),
     GetImageDimensions(Result<(u32, u32), String>),
+    GetContentSize(Result<u64, String>),
     GetDisplayName(Result<String, String>),
     CopyImageToPictures(Result<String, String>),
     CopyExtractedImagesToPictures(Result<Vec<CopiedImageEntry>, String>),
@@ -161,6 +163,18 @@ fn run_worker_loop<R: Runtime + 'static>(
                         Ok((resp.width, resp.height))
                     }),
                 )
+            }
+            Request::GetContentSize(uri) => {
+                let p = &provider;
+                Response::GetContentSize(rt.block_on(async move {
+                    let resp = p
+                        .app_handle
+                        .picker()
+                        .get_content_size(uri)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(resp.size)
+                }))
             }
             Request::GetDisplayName(uri) => {
                 let p = &provider;
@@ -295,6 +309,17 @@ impl ContentIoProvider for ChannelContentIoProvider {
             .map_err(|e| e.to_string())?;
         match resp_rx.await.map_err(|e| e.to_string())? {
             Response::GetImageDimensions(r) => r,
+            _ => Err("unexpected response".to_string()),
+        }
+    }
+
+    async fn get_content_size(&self, uri: &str) -> Result<u64, String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send((Request::GetContentSize(uri.to_string()), resp_tx))
+            .map_err(|e| e.to_string())?;
+        match resp_rx.await.map_err(|e| e.to_string())? {
+            Response::GetContentSize(r) => r,
             _ => Err("unexpected response".to_string()),
         }
     }

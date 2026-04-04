@@ -112,6 +112,23 @@ import { useI18n } from "@kabegame/i18n";
 const route = useRoute();
 const { t } = useI18n();
 const router = useRouter();
+
+// #region agent log
+const dbgAlbum = (loc: string, msg: string, data: Record<string, unknown>, hypothesisId: string) => {
+  fetch("http://127.0.0.1:7889/ingest/4b2286bf-2c67-44a4-898a-a17239e6a878", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "8068d7" },
+    body: JSON.stringify({
+      sessionId: "8068d7",
+      location: loc,
+      message: msg,
+      data,
+      timestamp: Date.now(),
+      hypothesisId,
+    }),
+  }).catch(() => {});
+};
+// #endregion
 const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const settingsStore = useSettingsStore();
@@ -207,6 +224,14 @@ const handleJumpToPage = async (page: number) => {
 watch(
   () => currentPath.value,
   async (newPath) => {
+    // #region agent log
+    dbgAlbum("AlbumDetail.vue:watch(currentPath)", "currentPath watcher", {
+      newPath,
+      albumId: albumId.value,
+      routeName: String(route.name ?? ""),
+      routePath: route.path,
+    }, "H3");
+    // #endregion
     if (!albumId.value) return;
     if (!albumName.value) return;
     if (!newPath) return;
@@ -219,6 +244,14 @@ watch(
   () => route.query.path,
   (rawPath) => {
     const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
+    // #region agent log
+    dbgAlbum("AlbumDetail.vue:watch(query.path)", "query.path watcher", {
+      qp,
+      currentPathVal: currentPath.value,
+      routeName: String(route.name ?? ""),
+      routePath: route.path,
+    }, "H2");
+    // #endregion
     if (!qp.trim()) return;
     if (qp !== currentPath.value) {
       albumDetailRouteStore.syncFromUrl(qp);
@@ -365,6 +398,13 @@ const loadAlbum = async (opts?: { reset?: boolean; silent?: boolean }) => {
 
     // 直接加载当前路径（新路径格式总是包含页码）
     const pathToLoad = currentPath.value || localProviderRootPath.value || `album/${albumId.value}/1`;
+    // #region agent log
+    dbgAlbum("AlbumDetail.vue:loadAlbum", "browse path", {
+      pathToLoad,
+      routeName: String(route.name ?? ""),
+      routePath: route.path,
+    }, "H4");
+    // #endregion
     if (!pathToLoad.startsWith("album/") || pathToLoad.startsWith("album//")) {
       return;
     }
@@ -721,6 +761,14 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
 
 // 初始化/刷新画册数据
 const initAlbum = async (newAlbumId: string) => {
+  // #region agent log
+  dbgAlbum("AlbumDetail.vue:initAlbum", "initAlbum called", {
+    newAlbumId,
+    routeName: String(route.name ?? ""),
+    routePath: route.path,
+    prevAlbumId: albumId.value,
+  }, "H1");
+  // #endregion
   // 如果是同一个画册，检查是否需要重新加载
   // 如果 store 中没有缓存（可能被刷新清除了），即使画册ID相同也要重新加载
   const hasCache = !!albumStore.albumImages[newAlbumId];
@@ -761,6 +809,13 @@ const initAlbum = async (newAlbumId: string) => {
 watch(
   () => route.params.id,
   async (newId) => {
+    // #region agent log
+    dbgAlbum("AlbumDetail.vue:watch(params.id)", "params.id watcher", {
+      newId: newId && typeof newId === "string" ? newId : null,
+      routeName: String(route.name ?? ""),
+      routePath: route.path,
+    }, "H1");
+    // #endregion
     if (newId && typeof newId === "string") {
       await initAlbum(newId);
     }

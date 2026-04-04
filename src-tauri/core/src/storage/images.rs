@@ -52,6 +52,9 @@ pub struct ImageInfo {
     #[serde(rename = "lastSetWallpaperAt")]
     #[serde(default)]
     pub last_set_wallpaper_at: Option<u64>,
+    /// 图片磁盘大小（字节）；旧数据或无法获取时为 None。
+    #[serde(default)]
+    pub size: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -90,6 +93,41 @@ fn resolve_image_dimensions(local_path: &str) -> Option<(u32, u32)> {
             None
         }
     }
+}
+
+fn resolve_file_size(local_path: &str) -> Option<u64> {
+    #[cfg(target_os = "android")]
+    if local_path.starts_with("content://") {
+        return None;
+    }
+    fs::metadata(local_path).ok().map(|m| m.len())
+}
+
+/// 启动时回填 `size`：桌面用 `metadata`；Android 的 `content://` 走 [`crate::crawler::content_io::ContentIoProvider::get_content_size`]。
+#[cfg(target_os = "android")]
+async fn resolve_file_size_for_backfill(local_path: &str) -> Option<u64> {
+    if local_path.starts_with("content://") {
+        match crate::crawler::content_io::get_content_io_provider()
+            .get_content_size(local_path)
+            .await
+        {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!(
+                    "resolve_file_size_for_backfill content:// failed: {} ({})",
+                    e, local_path
+                );
+                None
+            }
+        }
+    } else {
+        fs::metadata(local_path).ok().map(|m| m.len())
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+async fn resolve_file_size_for_backfill(local_path: &str) -> Option<u64> {
+    resolve_file_size(local_path)
 }
 
 fn normalize_media_type(media_type: Option<String>) -> Option<String> {
@@ -243,7 +281,8 @@ impl Storage {
              images.height,
              images.display_name,
              COALESCE(images.type, 'image') as media_type,
-             images.last_set_wallpaper_at
+             images.last_set_wallpaper_at,
+             images.size
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
              ORDER BY images.crawled_at ASC
@@ -276,6 +315,7 @@ impl Storage {
                     display_name: row.get(13)?,
                     media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
                     last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
+                    size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;
@@ -325,7 +365,8 @@ impl Storage {
                  images.height,
                  images.display_name,
                  COALESCE(images.type, 'image') as media_type,
-                 images.last_set_wallpaper_at
+                 images.last_set_wallpaper_at,
+                 images.size
                  FROM images
                  WHERE images.id = ?1",
                 params![image_id],
@@ -351,6 +392,7 @@ impl Storage {
                         display_name: row.get(12)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
+                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                     })
                 },
             )
@@ -433,7 +475,8 @@ impl Storage {
                  images.height,
                  images.display_name,
                  COALESCE(images.type, 'image') as media_type,
-                 images.last_set_wallpaper_at
+                 images.last_set_wallpaper_at,
+                 images.size
                  FROM images
                  WHERE images.local_path = ?1",
                 params![local_path],
@@ -459,6 +502,7 @@ impl Storage {
                         display_name: row.get(12)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
+                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                     })
                 },
             )
@@ -494,7 +538,8 @@ impl Storage {
                  images.height,
                  images.display_name,
                  COALESCE(images.type, 'image') as media_type,
-                 images.last_set_wallpaper_at
+                 images.last_set_wallpaper_at,
+                 images.size
                  FROM images
                  WHERE REPLACE(TRIM(COALESCE(images.thumbnail_path, '')), '/', ?2) = ?1
                     OR (TRIM(COALESCE(images.thumbnail_path, '')) = '' AND REPLACE(TRIM(images.local_path), '/', ?2) = ?1)",
@@ -521,6 +566,7 @@ impl Storage {
                         display_name: row.get(12)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
+                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                     })
                 },
             )
@@ -553,7 +599,8 @@ impl Storage {
                  images.height,
                  images.display_name,
                  COALESCE(images.type, 'image') as media_type,
-                 images.last_set_wallpaper_at
+                 images.last_set_wallpaper_at,
+                 images.size
                  FROM images
                  WHERE images.url = ?1",
                 params![url],
@@ -579,6 +626,7 @@ impl Storage {
                         display_name: row.get(12)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
+                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                     })
                 },
             )
@@ -614,7 +662,8 @@ impl Storage {
                  images.height,
                  images.display_name,
                  COALESCE(images.type, 'image') as media_type,
-                 images.last_set_wallpaper_at
+                 images.last_set_wallpaper_at,
+                 images.size
                  FROM images
                  WHERE images.hash = ?1",
                 params![hash],
@@ -640,6 +689,7 @@ impl Storage {
                         display_name: row.get(12)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(13)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 14)?,
+                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                     })
                 },
             )
@@ -684,7 +734,8 @@ impl Storage {
              images.height,
              images.display_name,
              COALESCE(images.type, 'image') as media_type,
-             images.last_set_wallpaper_at
+             images.last_set_wallpaper_at,
+             images.size
              FROM images
              LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
              WHERE images.surf_record_id = ?1
@@ -719,6 +770,7 @@ impl Storage {
                         display_name: row.get(13)?,
                         media_type: normalize_media_type(row.get::<_, Option<String>>(14)?),
                         last_set_wallpaper_at: row_optional_u64_ts(row, 15)?,
+                        size: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
                     })
                 },
             )
@@ -767,10 +819,15 @@ impl Storage {
             }
         }
 
+        // 如果 size 为空，从文件系统获取
+        if image.size.is_none() {
+            image.size = resolve_file_size(&image.local_path);
+        }
+
         let crawled_at_i64 = image.crawled_at as i64;
         conn.execute(
-            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata, metadata_id, thumbnail_path, hash, type, width, height, display_name)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO images (url, local_path, plugin_id, task_id, surf_record_id, crawled_at, metadata, metadata_id, thumbnail_path, hash, type, width, height, display_name, size)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 &image.url,
                 image.local_path,
@@ -786,6 +843,7 @@ impl Storage {
                 image.width.map(|v| v as i64),
                 image.height.map(|v| v as i64),
                 image.display_name,
+                image.size.map(|v| v as i64),
             ],
         )
         .map_err(|e| format!("Failed to add image: {}", e))?;
@@ -860,6 +918,56 @@ impl Storage {
         if updated_count > 0 {
             println!(
                 "Filled dimensions for {} images ({} failed)",
+                updated_count, failed_count
+            );
+        }
+
+        Ok(())
+    }
+
+    /// 批量补齐缺失的 `images.size`（启动时调用）。先收集 `(id, local_path)` 再逐条解析，避免长时间持锁。
+    pub async fn fill_missing_sizes(&self) -> Result<(), String> {
+        let to_fill: Vec<(i64, String)> = {
+            let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+            let mut stmt = conn
+                .prepare("SELECT id, local_path FROM images WHERE size IS NULL")
+                .map_err(|e| format!("Failed to prepare query: {}", e))?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| format!("Failed to query images for size backfill: {}", e))?;
+            rows.filter_map(Result::ok).collect()
+        };
+
+        let mut updated_count = 0usize;
+        let mut failed_count = 0usize;
+
+        for (id, local_path) in to_fill {
+            if local_path.trim().is_empty() {
+                failed_count += 1;
+                continue;
+            }
+            if let Some(s) = resolve_file_size_for_backfill(&local_path).await {
+                let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+                match conn.execute(
+                    "UPDATE images SET size = ?1 WHERE id = ?2",
+                    params![s as i64, id],
+                ) {
+                    Ok(_) => updated_count += 1,
+                    Err(e) => {
+                        eprintln!("Failed to update size for image {}: {}", id, e);
+                        failed_count += 1;
+                    }
+                }
+            } else {
+                failed_count += 1;
+            }
+        }
+
+        if updated_count > 0 {
+            println!(
+                "Filled file size for {} images ({} unresolved/failed)",
                 updated_count, failed_count
             );
         }

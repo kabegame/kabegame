@@ -775,7 +775,8 @@ impl Storage {
                 images.height,
                 images.display_name,
                 COALESCE(images.type, 'image') as media_type,
-                images.last_set_wallpaper_at
+                images.last_set_wallpaper_at,
+                images.size
              FROM images
              LEFT JOIN album_images fav_ai
                ON images.id = fav_ai.image_id AND fav_ai.album_id = '{}'
@@ -812,6 +813,7 @@ impl Storage {
                         row.get::<_, Option<String>>(13)?,
                     ),
                     last_set_wallpaper_at,
+                    size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                 })
             })
             .map_err(|e| format!("Failed to query images: {}", e))?;

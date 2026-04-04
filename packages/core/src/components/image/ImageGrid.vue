@@ -51,7 +51,8 @@
         :images="images"
         :actions="actions"
         :plugins="plugins"
-        @context-command="handlePreviewContextCommand" />
+        @context-command="handlePreviewContextCommand"
+        @open-task="emit('open-task', $event)" />
     </div>
 
     <slot name="footer" />
@@ -153,6 +154,7 @@ const emit = defineEmits<{
   "scroll-stable": [];
   // 兼容旧 API（不再由 core 触发，但保留事件名避免上层 TS/模板报错）
   addedToAlbum: [];
+  "open-task": [taskId: string];
 }>();
 
 const settingsStore = useSettingsStore();

@@ -3,6 +3,8 @@
 mod v001_drop_mime_type;
 mod v002_image_metadata_table;
 mod v003_failed_image_metadata_id;
+mod v004_image_size;
+mod v005_images_task_id_fk;
 
 use rusqlite::Connection;
 
@@ -31,10 +33,20 @@ const MIGRATIONS: &[Migration] = &[
         name: "failed_image_metadata_id",
         up: v003_failed_image_metadata_id::up,
     },
+    Migration {
+        version: 4,
+        name: "image_size",
+        up: v004_image_size::up,
+    },
+    Migration {
+        version: 5,
+        name: "images_task_id_fk",
+        up: v005_images_task_id_fk::up,
+    },
 ];
 
 /// 最新 schema 版本号（须与 `MIGRATIONS` 最后一项的 `version` 一致）。
-pub const LATEST_VERSION: u32 = 3;
+pub const LATEST_VERSION: u32 = 5;
 
 fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

@@ -1,5 +1,7 @@
 // 任务相关命令
 
+use std::collections::HashSet;
+
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::scheduler::{MissedRunResolveAction, Scheduler};
 use kabegame_core::storage::{Storage, TaskInfo};
@@ -88,7 +90,28 @@ pub async fn get_active_downloads() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn clear_finished_tasks() -> Result<usize, String> {
-    Storage::global().clear_finished_tasks()
+    let storage = Storage::global();
+    let task_ids = storage.get_finished_task_ids()?;
+    let mut all_image_ids: Vec<String> = Vec::new();
+    for tid in &task_ids {
+        let ids = storage.get_task_image_ids(tid)?;
+        all_image_ids.extend(ids);
+    }
+    let count = storage.clear_finished_tasks()?;
+    for tid in &task_ids {
+        GlobalEmitter::global().emit_task_deleted(tid);
+    }
+    if !all_image_ids.is_empty() {
+        let mut seen = HashSet::new();
+        all_image_ids.retain(|id| seen.insert(id.clone()));
+        GlobalEmitter::global().emit_images_change(
+            "change",
+            &all_image_ids,
+            Some(&task_ids),
+            None,
+        );
+    }
+    Ok(count)
 }
 
 #[tauri::command]
@@ -229,10 +252,11 @@ pub async fn get_task(task_id: String) -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn add_task(task: serde_json::Value) -> Result<(), String> {
-    // 需要转换 serde_json::Value 到 TaskInfo?
-    // Storage::add_task 接受 TaskInfo
     let task_info: TaskInfo = serde_json::from_value(task).map_err(|e| e.to_string())?;
-    Storage::global().add_task(task_info)
+    Storage::global().add_task(task_info.clone())?;
+    let payload = serde_json::to_value(&task_info).map_err(|e| e.to_string())?;
+    GlobalEmitter::global().emit_task_added(&payload);
+    Ok(())
 }
 
 #[tauri::command]
@@ -243,7 +267,15 @@ pub async fn update_task(task: serde_json::Value) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn delete_task(task_id: String) -> Result<(), String> {
-    Storage::global().delete_task(&task_id)
+    let storage = Storage::global();
+    let image_ids = storage.get_task_image_ids(&task_id)?;
+    storage.delete_task(&task_id)?;
+    GlobalEmitter::global().emit_task_deleted(&task_id);
+    if !image_ids.is_empty() {
+        let tids = vec![task_id];
+        GlobalEmitter::global().emit_images_change("change", &image_ids, Some(&tids), None);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -285,7 +317,9 @@ pub async fn start_task(task: serde_json::Value) -> Result<(), String> {
                 end_time: None,
                 error: None,
             };
-            let _ = Storage::global().add_task(t);
+            let payload = serde_json::to_value(&t).map_err(|e| e.to_string())?;
+            Storage::global().add_task(t)?;
+            GlobalEmitter::global().emit_task_added(&payload);
         }
     }
 

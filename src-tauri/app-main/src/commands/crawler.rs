@@ -6,7 +6,7 @@ use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::schedule_sync::on_crawl_task_reached_terminal;
 use kabegame_core::storage::Storage;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
@@ -245,15 +245,14 @@ pub async fn crawl_exit_with_status(status: &str, only_for_task_id: Option<&str>
 
     let end = now_ms();
     update_task_status(&ctx.task_id, status, Some(end), None);
-    GlobalEmitter::global().emit_task_status(
-        &ctx.task_id,
-        status,
-        None,
-        None,
-        Some(end),
-        None,
-        None,
-    );
+    let mut diff = json!({
+        "status": status,
+        "endTime": end,
+    });
+    if status == "completed" {
+        diff["progress"] = json!(100);
+    }
+    GlobalEmitter::global().emit_task_changed(&ctx.task_id, diff);
     TaskScheduler::global().page_stacks().remove_stack(&ctx.task_id);
     let _ = state.release_task(&ctx.task_id).await;
 }
@@ -284,15 +283,13 @@ pub async fn crawl_error(message: String) -> Result<(), String> {
         "failed"
     };
     update_task_status(&ctx.task_id, status, Some(end), Some(err.clone()));
-    GlobalEmitter::global().emit_task_error(&ctx.task_id, &err);
-    GlobalEmitter::global().emit_task_status(
+    GlobalEmitter::global().emit_task_changed(
         &ctx.task_id,
-        status,
-        None,
-        None,
-        Some(end),
-        Some(err.as_str()),
-        None,
+        json!({
+            "status": status,
+            "endTime": end,
+            "error": err,
+        }),
     );
     TaskScheduler::global().page_stacks().remove_stack(&ctx.task_id);
     let _ = state.release_task(&ctx.task_id).await;

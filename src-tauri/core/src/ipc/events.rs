@@ -66,9 +66,6 @@ macro_rules! daemon_event_kinds {
 daemon_event_kinds! {
     TaskLog,
     DownloadState,
-    TaskStatus,
-    TaskProgress,
-    TaskError,
     DownloadProgress,
     Generic,
     ConnectionStatus,
@@ -83,7 +80,7 @@ daemon_event_kinds! {
     AlbumDeleted,
     SurfRecordsChange,
     FailedImagesChange,
-    TaskImageCounts,
+    TasksChange,
     DaemonShutdown,
     AutoConfigChange,
 }
@@ -100,9 +97,6 @@ impl DaemonEventKind {
         match self {
             DaemonEventKind::TaskLog => "task-log",
             DaemonEventKind::DownloadState => "download-state",
-            DaemonEventKind::TaskStatus => "task-status",
-            DaemonEventKind::TaskProgress => "task-progress",
-            DaemonEventKind::TaskError => "task-error",
             DaemonEventKind::DownloadProgress => "download-progress",
             DaemonEventKind::Generic => "generic",
             DaemonEventKind::ConnectionStatus => "connection-status",
@@ -117,7 +111,7 @@ impl DaemonEventKind {
             DaemonEventKind::AlbumDeleted => "album-deleted",
             DaemonEventKind::SurfRecordsChange => "surf-records-change",
             DaemonEventKind::FailedImagesChange => "failed-images-change",
-            DaemonEventKind::TaskImageCounts => "task-image-counts",
+            DaemonEventKind::TasksChange => "tasks-change",
             DaemonEventKind::DaemonShutdown => "daemon-shutdown",
             DaemonEventKind::AutoConfigChange => "auto-config-change",
         }
@@ -129,9 +123,6 @@ impl DaemonEventKind {
         match s {
             "task-log" => Some(DaemonEventKind::TaskLog),
             "download-state" => Some(DaemonEventKind::DownloadState),
-            "task-status" => Some(DaemonEventKind::TaskStatus),
-            "task-progress" => Some(DaemonEventKind::TaskProgress),
-            "task-error" => Some(DaemonEventKind::TaskError),
             "download-progress" => Some(DaemonEventKind::DownloadProgress),
             "generic" => Some(DaemonEventKind::Generic),
             "connection-status" => Some(DaemonEventKind::ConnectionStatus),
@@ -146,9 +137,10 @@ impl DaemonEventKind {
             "album-deleted" => Some(DaemonEventKind::AlbumDeleted),
             "surf-records-change" => Some(DaemonEventKind::SurfRecordsChange),
             "failed-images-change" => Some(DaemonEventKind::FailedImagesChange),
-            "task-image-counts" => Some(DaemonEventKind::TaskImageCounts),
+            "tasks-change" => Some(DaemonEventKind::TasksChange),
             "daemon-shutdown" => Some(DaemonEventKind::DaemonShutdown),
             "auto-config-change" => Some(DaemonEventKind::AutoConfigChange),
+            "TaskAdded" | "TaskDeleted" | "TaskChanged" => Some(DaemonEventKind::TasksChange),
             _ => None,
         }
     }
@@ -186,23 +178,6 @@ pub enum DaemonEvent {
         #[serde(default)]
         native: bool,
     },
-
-    /// 任务状态事件
-    TaskStatus {
-        task_id: String,
-        status: String,
-        progress: Option<f64>,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-        error: Option<String>,
-        current_wallpaper: Option<String>,
-    },
-
-    /// 任务进度事件（Rhai add_progress 驱动）
-    TaskProgress { task_id: String, progress: f64 },
-
-    /// 任务错误事件
-    TaskError { task_id: String, error: String },
 
     /// 下载进度事件（细粒度进度更新）
     DownloadProgress {
@@ -307,18 +282,23 @@ pub enum DaemonEvent {
         #[serde(rename = "failedImage")]
         failed_image: Option<TaskFailedImage>,
     },
-    /// 任务图片数量变更（成功/删除/失败/去重），字段按需出现
-    TaskImageCounts {
+    /// 任务新增（完整任务 JSON）
+    #[serde(rename = "TaskAdded")]
+    TaskAdded {
+        task: serde_json::Value,
+    },
+    /// 任务删除（仅 ID）
+    #[serde(rename = "TaskDeleted")]
+    TaskDeleted {
         #[serde(rename = "taskId")]
         task_id: String,
-        #[serde(rename = "successCount")]
-        success_count: Option<i64>,
-        #[serde(rename = "deletedCount")]
-        deleted_count: Option<i64>,
-        #[serde(rename = "failedCount")]
-        failed_count: Option<i64>,
-        #[serde(rename = "dedupCount")]
-        dedup_count: Option<i64>,
+    },
+    /// 任务字段增量更新（status、progress、计数等）
+    #[serde(rename = "TaskChanged")]
+    TaskChanged {
+        #[serde(rename = "taskId")]
+        task_id: String,
+        diff: serde_json::Value,
     },
     /// Daemon 关闭事件（进程退出前发出）
     DaemonShutdown { reason: String },
@@ -342,9 +322,6 @@ impl DaemonEvent {
         match self {
             DaemonEvent::TaskLog { .. } => DaemonEventKind::TaskLog,
             DaemonEvent::DownloadState { .. } => DaemonEventKind::DownloadState,
-            DaemonEvent::TaskStatus { .. } => DaemonEventKind::TaskStatus,
-            DaemonEvent::TaskProgress { .. } => DaemonEventKind::TaskProgress,
-            DaemonEvent::TaskError { .. } => DaemonEventKind::TaskError,
             DaemonEvent::DownloadProgress { .. } => DaemonEventKind::DownloadProgress,
             DaemonEvent::Generic { .. } => DaemonEventKind::Generic,
             DaemonEvent::ConnectionStatus { .. } => DaemonEventKind::ConnectionStatus,
@@ -359,7 +336,9 @@ impl DaemonEvent {
             DaemonEvent::AlbumDeleted { .. } => DaemonEventKind::AlbumDeleted,
             DaemonEvent::SurfRecordsChange { .. } => DaemonEventKind::SurfRecordsChange,
             DaemonEvent::FailedImagesChange { .. } => DaemonEventKind::FailedImagesChange,
-            DaemonEvent::TaskImageCounts { .. } => DaemonEventKind::TaskImageCounts,
+            DaemonEvent::TaskAdded { .. }
+            | DaemonEvent::TaskDeleted { .. }
+            | DaemonEvent::TaskChanged { .. } => DaemonEventKind::TasksChange,
             DaemonEvent::DaemonShutdown { .. } => DaemonEventKind::DaemonShutdown,
             DaemonEvent::AutoConfigChange { .. } => DaemonEventKind::AutoConfigChange,
         }

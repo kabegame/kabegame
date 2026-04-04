@@ -34,6 +34,9 @@ export interface ImageInfo {
   /** 最后一次被设为壁纸的 Unix 时间戳（秒） */
   lastSetWallpaperAt?: number;
 
+  /** 图片磁盘大小（字节） */
+  size?: number;
+
 }
 
 export interface TaskFailedImage {

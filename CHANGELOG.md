@@ -8,6 +8,13 @@
 
 ## [3.4.5]
 ### Added
+- **Database / images:** Migration **v004** — `images.size` (**INTEGER**, bytes on disk); new DBs get the column from schema init. **`ImageInfo.size`** (optional); **`add_image`** fills **`size`** from the filesystem when absent (Android **`content://`** omitted at insert, filled by startup backfill).
+- **Startup:** **`fill_missing_sizes`** (async) backfills rows with **`size IS NULL`**: desktop uses **`fs::metadata`**; Android **`content://`** uses **`ContentIoProvider::get_content_size`**, implemented by Picker **`getContentSize`** (Kotlin: **`OpenableColumns.SIZE`**, then **`AssetFileDescriptor`** length).
+- **Gallery / image detail:** Human-readable **file size** when **`size`** is set; i18n **`gallery.imageDetailSize`** (en, zh, zhtw, ja, ko).
+- **Tasks / IPC:** Unified **`tasks-change`** Tauri event replacing separate `task-status`, `task-progress`, `task-error`, and `task-image-counts` streams; payload discriminant `type`: `TaskAdded` (full task JSON), `TaskDeleted` (`taskId`), `TaskChanged` (`taskId` + `diff` with camelCase fields such as `status`, `progress`, `startTime`, `endTime`, `error`, counts).
+- **Database:** Migration **v005** — `images.task_id` references `tasks(id)` **ON DELETE SET NULL** (table rebuild); new databases get the FK in the initial `images` DDL.
+- **Task commands:** `add_task` / `start_task` (stub insert) emit `TaskAdded`; `delete_task` emits `TaskDeleted` plus `images-change` for rows whose `task_id` was cleared; `clear_finished_tasks` emits one `TaskDeleted` per removed task and a batched `images-change` when needed.
+- **Gallery / image detail:** When an image has `taskId`, a **small list icon** on the **same row as Source** opens the task detail route (`open-task` bubbled through `ImageDetailContent` → dialogs / `ImageGrid`); `title` / `aria-label` use `gallery.imageDetailOpenTask` (five locales).
 - **Organize gallery:** Option **Remove unrecognized media** — removes DB rows whose file still exists on disk but fails `is_media_by_path`.
 - **Organize gallery:** When total image count is greater than 4000, the dialog shows a range slider (step 1000, minimum span 1000) to limit processing to an `id` ASC slice in this run; added `get_organize_total_count` for the UI to fetch the total.
 
@@ -20,6 +27,16 @@
 - **UI:** `GalleryToolbar` takes `root` / `sort` and syncs with `update:root` / `update:sort`; `GalleryFilterControl`, `GallerySortControl`, and `AlbumDetailBrowseToolbar` align with those stores.
 - **Organize / IPC:** `start_organize` and the CLI daemon `OrganizeStart` add `remove_unrecognized`, `range_start`, and `range_end`; IPC uses serde defaults for backward compatibility with older clients.
 - **Organize (header):** While organizing, the gallery header control shows a spinning folder icon; hover shows a tooltip with progress; click opens a popover (manual trigger) with `el-progress`, this run’s options and range, a note that new downloads are not included during the run, and Cancel / Confirm to close the popover; `useModalBack` registers the popover on Android.
+- **Tasks / frontend:** Crawler Pinia store listens only to **`tasks-change`**; `delete_task` relies on `TaskDeleted` to update the list; `TaskChanged` merges diffs (with progress throttling for progress-only updates) and dispatches `task-error-display` on non-canceled **failed** status.
+- **Tasks / backend:** Crawler scheduler and WebView crawl exit/error paths emit **`TaskChanged`** diffs; `emit_task_progress` and `emit_task_image_counts` are implemented via **`TaskChanged`**; `emit_task_status_from_storage` unchanged in name but emits **`TaskChanged`**.
+- **Virtual drive (Windows):** Event listener subscribes to **`TasksChange`**; **`TaskAdded`** / **`TaskDeleted`** trigger `bump_tasks()`; **`emit_task_deleted`** replaces the old Generic **`tasks-changed`** payload from the FUSE/Windows virtual driver hooks.
+- **Plasma wallpaper plugin:** Subscribes to **`tasks-change`** (replaces **`task-status`**) to refresh tasks and gallery.
+- **Task detail page:** Replaces **`task-progress`** / **`task-status`** listeners with **`tasks-change`** (payload `type` **`TaskChanged`**) to stop the run-time clock on terminal status.
+
+### Removed
+- **IPC / events:** **`DaemonEventKind`** and **`DaemonEvent`** entries **`TaskStatus`**, **`TaskProgress`**, **`TaskError`**, **`TaskImageCounts`**; Tauri event names **`task-status`**, **`task-progress`**, **`task-error`**, **`task-image-counts`**. Downstream clients must use **`tasks-change`** only.
+- **`GlobalEmitter`:** **`emit_task_status`** and **`emit_task_error`** (superseded by **`emit_task_changed`** and related helpers).
+- **i18n:** **`gallery.imageDetailTaskLabel`** (source row uses **`imageDetailOpenTask`** for tooltip and accessibility only).
 
 ## [3.4.4]
 ### Added

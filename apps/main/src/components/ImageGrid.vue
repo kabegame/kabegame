@@ -1,6 +1,11 @@
 <template>
-  <CoreImageGrid ref="coreRef" v-bind="coreGridBind" :window-aspect-ratio="props.windowAspectRatio"
-    :on-context-command="handleContextCommand" @scroll-stable="$emit('scroll-stable')"
+  <CoreImageGrid
+    ref="coreRef"
+    v-bind="coreGridBind"
+    :window-aspect-ratio="props.windowAspectRatio"
+    :on-context-command="handleContextCommand"
+    @scroll-stable="$emit('scroll-stable')"
+    @open-task="handleOpenTask"
   >
     <template #before-grid>
       <slot name="before-grid" />
@@ -16,11 +21,17 @@
   </CoreImageGrid>
 
   <!-- 详情弹窗：保持 main 旧行为（view 层仍可 return 'detail'） -->
-  <ImageDetailDialog v-model="showImageDetail" :image="detailImage" :plugins="plugins" />
+  <ImageDetailDialog
+    v-model="showImageDetail"
+    :image="detailImage"
+    :plugins="plugins"
+    @open-task="handleOpenTask"
+  />
 </template>
 
 <script setup lang="ts">
 import { computed, ref, useAttrs } from "vue";
+import { useRouter } from "vue-router";
 import CoreImageGrid from "@kabegame/core/components/image/ImageGrid.vue";
 import type { ImageInfo as CoreImageInfo } from "@kabegame/core/types/image";
 import ImageDetailDialog from "@kabegame/core/components/common/ImageDetailDialog.vue";
@@ -77,6 +88,12 @@ defineEmits<{
   // 兼容旧 API：右键已移除加入画册，但保留事件名不破坏上层模板
   addedToAlbum: [];
 }>();
+
+const router = useRouter();
+
+function handleOpenTask(taskId: string) {
+  void router.push({ name: "TaskDetail", params: { id: taskId } });
+}
 
 const attrs = useAttrs();
 // 传 core 时需将 actions 断言为 ActionItem<CoreImageInfo>[]，避免泛型不兼容

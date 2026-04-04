@@ -17,7 +17,7 @@ memmap2 = {version = "0.9", optional = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
-tauri = { version = "2.10", features = [ "tray-icon", "devtools", "protocol-asset", "image-png"] }
+tauri = { version = "2.10", features = ["macos-private-api", "tray-icon", "devtools", "protocol-asset", "image-png"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "=2.4.2"
 tauri-plugin-fs = "=2.4.4"
@@ -42,6 +42,7 @@ tower-http = { version = "0.6", features = ["fs", "cors"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 kabegame-core = {workspace = true, default-features = false, features = ["ipc-server"] }
+reqwest = { version = "0.11", features = ["stream", "rustls-tls"] }
 tauri-plugin-picker = { workspace = true }
 tauri-plugin-archiver = { workspace = true }
 tauri-plugin-share = { workspace = true }
