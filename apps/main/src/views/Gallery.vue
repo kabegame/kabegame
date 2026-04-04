@@ -8,11 +8,13 @@
         <template #before-grid>
           <!-- 顶部工具栏 -->
           <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
-            :month-options="monthOptions" :month-loading="monthOptionsLoading" :provider-root-path="providerRootPath"
-            :current-provider-path="currentPath" :page-size="pageSize" v-model:selectedRange="selectedRange"
+            :month-options="monthOptions" :month-loading="monthOptionsLoading" :root="providerRootPath"
+            :sort="galleryRouteStore.sort" :page-size="pageSize" v-model:selectedRange="selectedRange"
             @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
             @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
-            @open-collect-menu="showCollectSourcePicker = true" />
+            @open-collect-menu="showCollectSourcePicker = true"
+            @update:root="(root) => galleryRouteStore.navigate({ root, page: 1 })"
+            @update:sort="(sort) => galleryRouteStore.navigate({ sort })" />
 
           <!-- 大页分页器 -->
           <GalleryBigPaginator :total-count="totalImagesCount" :current-page="currentPage" :big-page-size="pageSize"
@@ -47,8 +49,7 @@
     </div>
 
     <!-- 收集对话框（非 Android：本地渲染；Android：由 App.vue 全局承载） -->
-    <CrawlerDialog v-if="!IS_ANDROID" v-model="showCrawlerDialog"
-      :initial-config="crawlerDialogInitialConfig" />
+    <CrawlerDialog v-if="!IS_ANDROID" v-model="showCrawlerDialog" :initial-config="crawlerDialogInitialConfig" />
     <LocalImportDialog v-if="!IS_ANDROID" v-model="showLocalImportDialog" />
 
 
@@ -115,9 +116,7 @@ import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
-import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
-import { useGalleryPathState } from "@/composables/useGalleryPathState";
-import { buildGalleryPath, parseGalleryPath } from "@/utils/galleryPath";
+import { useGalleryRouteStore } from "@/stores/galleryRoute";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
@@ -179,40 +178,30 @@ const bigPageEnabled = computed(() => {
 
 const route = useRoute();
 const router = useRouter();
-
-// 持久化：root / sort / page 三个 ref（useGalleryPathState）；无 query.path 时默认 path 为 providerPath
-const { providerPath: galleryProviderDefaultPath, applyFromPath, sort: gallerySortPref } =
-  useGalleryPathState();
-
-// Query param 驱动：
-// - /gallery?path=<providerPath>
-// - providerPath 格式：all/1, all/desc/1, date/2024-01/1, plugin/konachan/1 等
-// - 无 query.path 时 currentPath 由 root/sort/page 经 buildGalleryPath 得到
-const {
-  currentPath,
-  providerRootPath,
-  currentPage,
-  setRootAndPage,
-  navigateToPage,
-} = useProviderPathRoute({
-  route,
-  router,
-  defaultPath: galleryProviderDefaultPath,
-});
+const galleryRouteStore = useGalleryRouteStore();
+const currentPath = computed(() => galleryRouteStore.currentPath);
+const providerRootPath = computed(() => galleryRouteStore.root);
+const currentPage = computed(() => galleryRouteStore.page);
 
 const isWallpaperOrderEmpty = computed(
-  () => parseGalleryPath(currentPath.value).root === "wallpaper-order"
+  () => providerRootPath.value === "wallpaper-order"
 );
 
 const isWallpaperOrderBrowse = computed(
-  () => parseGalleryPath(currentPath.value).root === "wallpaper-order"
+  () => providerRootPath.value === "wallpaper-order"
 );
 
 watch(
-  currentPath,
-  (path) => {
-    if (path && route.path === "/gallery") {
-      applyFromPath(path.trim());
+  () => route.query.path,
+  (rawPath) => {
+    if (route.path !== "/gallery") return;
+    const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
+    if (!qp.trim()) {
+      galleryRouteStore.syncFromUrl("");
+      return;
+    }
+    if (qp !== currentPath.value) {
+      galleryRouteStore.syncFromUrl(qp);
     }
   },
   { immediate: true }
@@ -269,7 +258,10 @@ watch(
 );
 
 const replaceRouteForProviderRootAndPage = async (root: string, page: number) => {
-  await setRootAndPage(root || "all", Math.max(1, Math.floor(page || 1)));
+  await galleryRouteStore.navigate({
+    root: root || "all",
+    page: Math.max(1, Math.floor(page || 1)),
+  });
 };
 
 const loadMonthOptions = async () => {
@@ -323,11 +315,7 @@ const handleEmptyStateCollect = () => {
 };
 
 const handleWallpaperEmptyViewAll = () => {
-  const s = gallerySortPref.value === "desc" ? "desc" : "asc";
-  void router.push({
-    path: "/gallery",
-    query: { path: buildGalleryPath("all", s, 1) },
-  });
+  void galleryRouteStore.navigate({ root: "all", page: 1 });
 };
 
 // 桌面：选择收集方式对话框 → 本地
@@ -585,7 +573,7 @@ const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => 
     await refreshImagesPreserveCache(currentPath.value, opts);
     // reset 时导航到根路径的第 1 页
     if (reset) {
-      await setRootAndPage(providerRootPath.value, 1);
+      await galleryRouteStore.navigate({ root: providerRootPath.value, page: 1 });
     }
   } finally {
     finishLoading();
@@ -597,7 +585,7 @@ watch(
   pageSize,
   async (_v, prev) => {
     if (prev === undefined) return;
-    await navigateToPage(1);
+    await galleryRouteStore.navigate({ page: 1 });
     await loadTotalImagesCount();
     await loadImages(false);
   },
@@ -617,7 +605,7 @@ watch(
     if (nextRoot === providerRootPath.value) return;
 
     // 切换 provider：回到第 1 页，并重载
-    await setRootAndPage(nextRoot, 1);
+    await galleryRouteStore.navigate({ root: nextRoot, page: 1 });
     await loadTotalImagesCount();
     await loadImages(false);
   }
@@ -638,7 +626,7 @@ const handleManualRefresh = async () => {
 const handleJumpToBigPage = async (bigPage: number) => {
   startLoading();
   try {
-    await navigateToPage(bigPage);
+    await galleryRouteStore.navigate({ page: bigPage });
   } finally {
     finishLoading();
   }
@@ -749,10 +737,7 @@ const ensureValidGalleryPageAfterMassRemoval = async () => {
 
     // 全部没图：回到根路径
     if (totalImagesCount.value <= 0) {
-      await router.replace({
-        path: "/gallery",
-        query: { path: providerRootPath.value },
-      });
+      await galleryRouteStore.navigate({ page: 1 });
       return;
     }
 

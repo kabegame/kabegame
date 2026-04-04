@@ -23,12 +23,49 @@
                     </div>
                 </div>
                 <div class="option-item">
+                    <el-checkbox v-model="options.removeUnrecognized" />
+                    <div class="option-content">
+                        <div class="option-title">{{ $t('gallery.removeUnrecognized') }}</div>
+                        <div class="option-desc">{{ $t('gallery.removeUnrecognizedDesc') }}</div>
+                        <div class="option-slow-hint">{{ $t('gallery.removeUnrecognizedSlowHint') }}</div>
+                    </div>
+                </div>
+                <div class="option-item">
                     <el-checkbox v-model="options.regenThumbnails" />
                     <div class="option-content">
                         <div class="option-title">{{ $t('gallery.regenThumbnails') }}</div>
                         <div class="option-desc">{{ $t('gallery.regenThumbnailsDesc') }}</div>
                     </div>
                 </div>
+                <div class="option-item">
+                    <el-checkbox v-model="options.deleteSourceFiles" />
+                    <div class="option-content">
+                        <div class="option-title">{{ $t('gallery.deleteSourceFiles') }}</div>
+                        <div class="option-desc">{{ $t('gallery.deleteSourceFilesDesc') }}</div>
+                    </div>
+                </div>
+                <div v-if="options.deleteSourceFiles" class="option-sub-block">
+                    <div class="option-item">
+                        <el-checkbox v-model="options.safeDelete" />
+                        <div class="option-content">
+                            <div class="option-title">{{ $t('gallery.safeDelete') }}</div>
+                            <div class="option-desc">{{ $t('gallery.safeDeleteDesc') }}</div>
+                            <div class="option-slow-hint">{{ $t('gallery.safeDeleteSlowHint') }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div v-if="showRangeSlider" class="organize-range">
+                <div class="option-title">{{ $t('gallery.organizeRange') }}</div>
+                <div class="option-desc organize-range-desc">{{ $t('gallery.organizeRangeDesc', { total: totalCount }) }}</div>
+                <el-slider
+                    v-model="rangeValue"
+                    range
+                    :min="0"
+                    :max="totalCount"
+                    :step="1000"
+                    @change="onRangeChange"
+                />
             </div>
             <div class="organize-dialog-footer">
                 <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
@@ -56,12 +93,49 @@
                     </div>
                 </div>
                 <div class="option-item">
+                    <el-checkbox v-model="options.removeUnrecognized" />
+                    <div class="option-content">
+                        <div class="option-title">{{ $t('gallery.removeUnrecognized') }}</div>
+                        <div class="option-desc">{{ $t('gallery.removeUnrecognizedDescDesktop') }}</div>
+                        <div class="option-slow-hint">{{ $t('gallery.removeUnrecognizedSlowHint') }}</div>
+                    </div>
+                </div>
+                <div class="option-item">
                     <el-checkbox v-model="options.regenThumbnails" />
                     <div class="option-content">
                         <div class="option-title">{{ $t('gallery.regenThumbnails') }}</div>
                         <div class="option-desc">{{ $t('gallery.regenThumbnailsDesc') }}</div>
                     </div>
                 </div>
+                <div class="option-item">
+                    <el-checkbox v-model="options.deleteSourceFiles" />
+                    <div class="option-content">
+                        <div class="option-title">{{ $t('gallery.deleteSourceFiles') }}</div>
+                        <div class="option-desc">{{ $t('gallery.deleteSourceFilesDescDesktop') }}</div>
+                    </div>
+                </div>
+                <div v-if="options.deleteSourceFiles" class="option-sub-block">
+                    <div class="option-item">
+                        <el-checkbox v-model="options.safeDelete" />
+                        <div class="option-content">
+                            <div class="option-title">{{ $t('gallery.safeDelete') }}</div>
+                            <div class="option-desc">{{ $t('gallery.safeDeleteDesc') }}</div>
+                            <div class="option-slow-hint">{{ $t('gallery.safeDeleteSlowHint') }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div v-if="showRangeSlider" class="organize-range">
+                <div class="option-title">{{ $t('gallery.organizeRange') }}</div>
+                <div class="option-desc organize-range-desc">{{ $t('gallery.organizeRangeDesc', { total: totalCount }) }}</div>
+                <el-slider
+                    v-model="rangeValue"
+                    range
+                    :min="0"
+                    :max="totalCount"
+                    :step="1000"
+                    @change="onRangeChange"
+                />
             </div>
         </div>
         <template #footer>
@@ -72,7 +146,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch } from "vue";
+import { ref, reactive, watch, computed } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import AndroidDrawer from "@kabegame/core/components/AndroidDrawer.vue";
 import { IS_ANDROID } from "@kabegame/core/env";
 
@@ -84,7 +159,12 @@ interface Props {
 interface OrganizeOptions {
     dedupe: boolean;
     removeMissing: boolean;
+    removeUnrecognized: boolean;
     regenThumbnails: boolean;
+    deleteSourceFiles: boolean;
+    safeDelete: boolean;
+    rangeStart: number | null;
+    rangeEnd: number | null;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -97,17 +177,61 @@ const emit = defineEmits<{
 }>();
 
 const visible = ref(false);
-const options = reactive<OrganizeOptions>({
+const totalCount = ref(0);
+const rangeValue = ref<[number, number]>([0, 0]);
+
+const options = reactive({
     dedupe: true, // 默认开启去重
     removeMissing: true, // 默认开启清除失效
+    removeUnrecognized: false,
     regenThumbnails: true, // 默认开启补充缩略图
+    deleteSourceFiles: false,
+    safeDelete: true,
 });
+
+const showRangeSlider = computed(() => totalCount.value > 4000);
+
+function clampRangePair(val: [number, number]): [number, number] {
+    const max = totalCount.value;
+    if (max <= 0) {
+        return [0, 0];
+    }
+    let [a, b] = val;
+    a = Math.max(0, Math.min(a, max));
+    b = Math.max(0, Math.min(b, max));
+    if (b < a) {
+        [a, b] = [b, a];
+    }
+    const minSpan = Math.min(1000, max);
+    if (b - a < minSpan) {
+        b = Math.min(a + minSpan, max);
+        if (b - a < minSpan) {
+            a = Math.max(0, b - minSpan);
+        }
+    }
+    return [a, b];
+}
+
+function onRangeChange(val: number | [number, number]) {
+    if (!Array.isArray(val)) return;
+    rangeValue.value = clampRangePair(val);
+}
 
 // 同步 visible 与 modelValue
 watch(
     () => props.modelValue,
-    (newVal) => {
+    async (newVal) => {
         visible.value = newVal;
+        if (newVal) {
+            try {
+                const n = await invoke<number>("get_organize_total_count");
+                totalCount.value = n;
+                rangeValue.value = clampRangePair([0, n]);
+            } catch {
+                totalCount.value = 0;
+                rangeValue.value = [0, 0];
+            }
+        }
     }
 );
 
@@ -116,7 +240,25 @@ watch(visible, (newVal) => {
 });
 
 const handleConfirm = () => {
-    emit("confirm", { ...options });
+    const payload: OrganizeOptions = {
+        dedupe: options.dedupe,
+        removeMissing: options.removeMissing,
+        removeUnrecognized: options.removeUnrecognized,
+        regenThumbnails: options.regenThumbnails,
+        deleteSourceFiles: options.deleteSourceFiles,
+        safeDelete: options.safeDelete,
+        rangeStart: null,
+        rangeEnd: null,
+    };
+    if (showRangeSlider.value) {
+        const [a, b] = clampRangePair(rangeValue.value);
+        const full = a === 0 && b === totalCount.value;
+        if (!full) {
+            payload.rangeStart = a;
+            payload.rangeEnd = b;
+        }
+    }
+    emit("confirm", payload);
 };
 </script>
 
@@ -139,7 +281,22 @@ const handleConfirm = () => {
 }
 
 .organize-form {
+    .organize-range {
+        padding: 12px 0 8px;
+        border-top: 1px solid var(--el-border-color-lighter);
+
+        .organize-range-desc {
+            margin-bottom: 12px;
+        }
+    }
+
     .organize-options {
+        .option-sub-block {
+            padding-left: 28px;
+            margin-top: -8px;
+            margin-bottom: 8px;
+        }
+
         .option-item {
             display: flex;
             align-items: flex-start;
@@ -164,6 +321,13 @@ const handleConfirm = () => {
                     font-size: 14px;
                     color: var(--el-text-color-regular);
                     line-height: 1.4;
+                }
+
+                .option-slow-hint {
+                    font-size: 13px;
+                    color: var(--el-text-color-secondary);
+                    line-height: 1.4;
+                    margin-top: 6px;
                 }
             }
         }

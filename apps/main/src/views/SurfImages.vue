@@ -80,7 +80,7 @@ import { useSurfStore, type SurfRecord } from "@/stores/surf";
 import { useAlbumStore } from "@/stores/albums";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
-import { useProviderPathRoute } from "@/composables/useProviderPathRoute";
+import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
 import { useImageOperations } from "@/composables/useImageOperations";
 import { useImageTypes } from "@/composables/useImageTypes";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
@@ -326,16 +326,10 @@ const confirmRemoveImages = async () => {
 };
 
 const isOnSurfImagesRoute = computed(() => String(route.name ?? "") === "SurfImages");
-const localProviderRootPath = computed(() => (recordId.value ? `surf/${recordId.value}` : ""));
-
-const { currentPath, currentPage, providerRootPath, setRootAndPage, navigateToPage } = useProviderPathRoute({
-  route,
-  router,
-  defaultPath: computed(() => {
-    if (!localProviderRootPath.value) return "surf/invalid/1";
-    return `${localProviderRootPath.value}/1`;
-  }),
-});
+const surfImagesRouteStore = useSurfImagesRouteStore();
+const currentPath = computed(() => surfImagesRouteStore.currentPath);
+const currentPage = computed(() => surfImagesRouteStore.page);
+const providerRootPath = computed(() => `surf/${surfImagesRouteStore.recordId}`);
 
 const recordTitle = computed(() => record.value?.host ?? t("surf.surfImagesTitle"));
 const lastVisitSubtitle = computed(() => {
@@ -377,14 +371,14 @@ const loadCurrentPage = async () => {
 };
 
 const handleJumpToPage = async (page: number) => {
-  await navigateToPage(page);
+  await surfImagesRouteStore.navigate({ page });
 };
 
 watch(
   pageSize,
   async (_v, prev) => {
     if (prev === undefined) return;
-    await navigateToPage(1);
+    await surfImagesRouteStore.navigate({ page: 1 });
     await loadCurrentPage();
   },
 );
@@ -401,7 +395,13 @@ const initRecord = async (id: string) => {
 
   const r = surfStore.records.find((rec) => rec.id === id) ?? (await surfStore.getRecord(id));
   record.value = r ?? null;
-  await setRootAndPage(`surf/${id}`, 1);
+  const rawPath = route.query.path;
+  const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
+  if (qp.startsWith(`surf/${id}/`)) {
+    surfImagesRouteStore.syncFromUrl(qp);
+  } else {
+    await surfImagesRouteStore.navigate({ recordId: id, page: 1 });
+  }
   await loadCurrentPage();
 };
 
@@ -428,11 +428,23 @@ watch(
     if (!newPath) return;
     const root = `surf/${recordId.value}`;
     if (!newPath.startsWith(`${root}/`)) {
-      await setRootAndPage(root, 1);
+      await surfImagesRouteStore.navigate({ recordId: recordId.value, page: 1 });
       return;
     }
     await loadCurrentPage();
   }
+);
+
+watch(
+  () => route.query.path,
+  (rawPath) => {
+    const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
+    if (!qp.trim()) return;
+    if (qp !== currentPath.value) {
+      surfImagesRouteStore.syncFromUrl(qp);
+    }
+  },
+  { immediate: true }
 );
 
 // 监听 surf-records-change 与 images-change，实时更新图片（含 webview 内下载视频后的响应式更新）

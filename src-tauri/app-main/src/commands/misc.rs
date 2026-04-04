@@ -210,25 +210,56 @@ pub async fn clear_user_data(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn default_safe_delete_organize() -> bool {
+    true
+}
+
+/// 与前端 `invoke` 对象字段一致（camelCase）；勿改用平铺 `bool` 参数，否则 serde 无法匹配 `removeUnrecognized` 等键，会得到默认值 false。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartOrganizeArgs {
+    pub dedupe: bool,
+    pub remove_missing: bool,
+    pub remove_unrecognized: bool,
+    pub regen_thumbnails: bool,
+    #[serde(default)]
+    pub delete_source_files: bool,
+    #[serde(default = "default_safe_delete_organize")]
+    pub safe_delete: bool,
+    pub range_start: Option<usize>,
+    pub range_end: Option<usize>,
+}
+
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub async fn start_organize(
-    dedupe: bool,
-    remove_missing: bool,
-    regen_thumbnails: bool,
-) -> Result<(), String> {
+pub async fn start_organize(args: StartOrganizeArgs) -> Result<(), String> {
     use kabegame_core::storage::organize::{OrganizeOptions, OrganizeService};
+    let (offset, limit) = match (args.range_start, args.range_end) {
+        (Some(s), Some(e)) if e > s => (Some(s), Some(e - s)),
+        _ => (None, None),
+    };
     OrganizeService::global()
         .clone()
         .start(
             std::sync::Arc::new(kabegame_core::storage::Storage::global().clone()),
             OrganizeOptions {
-                dedupe,
-                remove_missing,
-                regen_thumbnails,
+                dedupe: args.dedupe,
+                remove_missing: args.remove_missing,
+                remove_unrecognized: args.remove_unrecognized,
+                regen_thumbnails: args.regen_thumbnails,
+                delete_source_files: args.delete_source_files,
+                safe_delete: args.safe_delete,
+                offset,
+                limit,
             },
         )
         .await
+}
+
+#[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub async fn get_organize_total_count() -> Result<usize, String> {
+    kabegame_core::storage::Storage::global().get_images_total_count()
 }
 
 #[tauri::command]

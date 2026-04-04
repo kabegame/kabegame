@@ -87,210 +87,6 @@ pub struct OrganizeScanRow {
 }
 
 impl Storage {
-    pub fn get_dedupe_total_hash_images_count(&self) -> Result<usize, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let count: usize = conn
-            .query_row("SELECT COUNT(*) FROM images WHERE hash != ''", [], |row| {
-                row.get(0)
-            })
-            .map_err(|e| format!("Failed to query hash count: {}", e))?;
-        Ok(count)
-    }
-
-    pub fn get_dedupe_batch(
-        &self,
-        cursor: Option<&DedupeCursor>,
-        limit: usize,
-    ) -> Result<Vec<DedupeScanRow>, String> {
-        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-        let query = format!(
-            "SELECT CAST(images.id AS TEXT), images.hash,
-             CASE WHEN album_images.image_id IS NOT NULL THEN 1 ELSE 0 END as is_favorite,
-             images.crawled_at as sort_key,
-             images.crawled_at
-             FROM images
-             LEFT JOIN album_images ON images.id = album_images.image_id AND album_images.album_id = '{}'
-             WHERE images.hash != ''
-             {}
-             ORDER BY is_favorite DESC, sort_key ASC, images.crawled_at ASC, images.id ASC
-             LIMIT ?",
-            FAVORITE_ALBUM_ID,
-            if cursor.is_some() {
-                "AND (is_favorite < ? OR (is_favorite = ? AND (sort_key > ? OR (sort_key = ? AND (images.crawled_at > ? OR (images.crawled_at = ? AND images.id > ?))))))"
-            } else {
-                ""
-            }
-        );
-
-        let mut stmt = conn
-            .prepare(&query)
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-        let mapper = |row: &rusqlite::Row| {
-            Ok(DedupeScanRow {
-                id: row.get(0)?,
-                hash: row.get(1)?,
-                is_favorite: row.get(2)?,
-                sort_key: row.get(3)?,
-                crawled_at: row.get(4)?,
-            })
-        };
-
-        let rows = if let Some(c) = cursor {
-            stmt.query_map(
-                params![
-                    c.is_favorite,
-                    c.is_favorite,
-                    c.sort_key,
-                    c.sort_key,
-                    c.crawled_at,
-                    c.crawled_at,
-                    c.id,
-                    limit as i64
-                ],
-                mapper,
-            )
-        } else {
-            stmt.query_map(params![limit as i64], mapper)
-        }
-        .map_err(|e| format!("Failed to query dedupe batch: {}", e))?;
-
-        let mut results: Vec<DedupeScanRow> = Vec::new();
-        for r in rows {
-            results.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
-        }
-        Ok(results)
-    }
-
-    pub fn dedupe_gallery_by_hash(&self, delete_files: bool) -> Result<DedupeRemoveResult, String> {
-        let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-        let mut seen_hashes = std::collections::HashSet::new();
-        let mut to_remove_ids = Vec::new();
-        let mut to_remove_paths = Vec::new();
-
-        {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT hash, CAST(id AS TEXT), local_path,
-                     CASE WHEN EXISTS(SELECT 1 FROM album_images WHERE image_id = images.id AND album_id = ?1) THEN 1 ELSE 0 END as is_fav
-                     FROM images
-                     WHERE hash != ''
-                     ORDER BY is_fav DESC, crawled_at ASC, id ASC",
-                )
-                .map_err(|e| format!("Failed to prepare dedupe query: {}", e))?;
-
-            let rows = stmt
-                .query_map(params![FAVORITE_ALBUM_ID], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })
-                .map_err(|e| format!("Failed to query images for dedupe: {}", e))?;
-
-            for r in rows {
-                let (hash, id, path) = r.map_err(|e| format!("Failed to read row: {}", e))?;
-                if seen_hashes.contains(&hash) {
-                    to_remove_ids.push(id);
-                    to_remove_paths.push(path);
-                } else {
-                    seen_hashes.insert(hash);
-                }
-            }
-        }
-
-        if to_remove_ids.is_empty() {
-            return Ok(DedupeRemoveResult {
-                removed: 0,
-                removed_ids: Vec::new(),
-                removed_ids_truncated: false,
-            });
-        }
-
-        let tx = conn
-            .transaction()
-            .map_err(|e| format!("Failed to start transaction: {}", e))?;
-
-        // 在删除前，查询所有图片所属的任务，并统计每个任务需要增加的 deleted_count
-        let mut task_deleted_counts: std::collections::HashMap<String, i64> =
-            std::collections::HashMap::new();
-        for id in &to_remove_ids {
-            let task_ids: Vec<String> = tx
-                .prepare("SELECT task_id FROM images WHERE id = ?1 AND task_id IS NOT NULL")
-                .and_then(|mut stmt| {
-                    stmt.query_map(params![id], |row| row.get::<_, String>(0))
-                        .and_then(|rows| {
-                            let mut ids = Vec::new();
-                            for row_result in rows {
-                                if let Ok(task_id) = row_result {
-                                    ids.push(task_id);
-                                }
-                            }
-                            Ok(ids)
-                        })
-                })
-                .unwrap_or_default();
-
-            for task_id in task_ids {
-                *task_deleted_counts.entry(task_id).or_insert(0) += 1;
-            }
-        }
-
-        for id in &to_remove_ids {
-            tx.execute("DELETE FROM images WHERE id = ?1", params![id])
-                .map_err(|e| format!("Failed to delete image: {}", e))?;
-            let _ = tx.execute("DELETE FROM album_images WHERE image_id = ?1", params![id]);
-        }
-
-        let task_ids_emit: Vec<String> = task_deleted_counts.keys().cloned().collect();
-
-        // 更新所有相关任务的 deleted_count 与 success_count
-        for (task_id, count) in task_deleted_counts {
-            let _ = tx.execute(
-                "UPDATE tasks SET deleted_count = deleted_count + ?1, success_count = MAX(0, success_count - ?2) WHERE id = ?3",
-                params![count, count, task_id],
-            );
-        }
-
-        tx.commit()
-            .map_err(|e| format!("Failed to commit transaction: {}", e))?;
-
-        for task_id in task_ids_emit {
-            if let Ok(Some(t)) = self.get_task(&task_id) {
-                GlobalEmitter::global().emit_task_image_counts(
-                    &task_id,
-                    Some(t.success_count),
-                    Some(t.deleted_count),
-                    Some(t.failed_count),
-                    Some(t.dedup_count),
-                );
-            }
-        }
-
-        if delete_files {
-            for path in to_remove_paths {
-                let _ = std::fs::remove_file(path);
-            }
-        }
-
-        self.invalidate_images_total_cache();
-
-        let removed_ids_truncated = to_remove_ids.len() > 100;
-        let mut removed_ids = to_remove_ids;
-        if removed_ids_truncated {
-            removed_ids.truncate(100);
-        }
-
-        Ok(DedupeRemoveResult {
-            removed: removed_ids.len(),
-            removed_ids,
-            removed_ids_truncated,
-        })
-    }
-
     pub fn debug_clone_images(
         &self,
         count: usize,
@@ -457,7 +253,16 @@ impl Storage {
 pub struct OrganizeOptions {
     pub dedupe: bool,
     pub remove_missing: bool,
+    pub remove_unrecognized: bool,
     pub regen_thumbnails: bool,
+    /// 在 DB 记录删除后是否同时删除磁盘上的源文件
+    pub delete_source_files: bool,
+    /// 删除文件前查询是否仍有其它 DB 行引用同一 `local_path`
+    pub safe_delete: bool,
+    /// 从有序列表（按 id ASC）中跳过的前若干条
+    pub offset: Option<usize>,
+    /// 在 offset 之后最多处理的条数（与 offset 成对使用时表示区间）
+    pub limit: Option<usize>,
 }
 
 static GLOBAL_ORGANIZE: OnceLock<Arc<OrganizeService>> = OnceLock::new();
@@ -534,6 +339,7 @@ impl OrganizeService {
         let svc = Arc::clone(&self);
 
         tokio::task::spawn_blocking(move || {
+            eprintln!("[organize] 开始整理 {:?}", options);
             let res = run_organize(&handle, storage, options, cancel);
             if let Err(e) = res {
                 eprintln!("[organize] 任务失败: {}", e);
@@ -572,6 +378,23 @@ fn emit_organize_finished(removed: usize, regenerated: usize, canceled: bool) {
     GlobalEmitter::global().emit_organize_finished(removed, regenerated, canceled);
 }
 
+fn organize_range_upper_bound(offset: Option<usize>, limit: Option<usize>) -> Option<usize> {
+    match (offset, limit) {
+        (Some(o), Some(l)) => Some(o + l),
+        (None, Some(l)) => Some(l),
+        _ => None,
+    }
+}
+
+fn row_in_organize_range(idx: usize, offset: Option<usize>, limit: Option<usize>) -> bool {
+    match (offset, limit) {
+        (None, None) => true,
+        (Some(o), None) => idx >= o,
+        (None, Some(l)) => idx < l,
+        (Some(o), Some(l)) => idx >= o && idx < o + l,
+    }
+}
+
 fn run_organize(
     handle: &tokio::runtime::Handle,
     storage: Arc<Storage>,
@@ -581,7 +404,7 @@ fn run_organize(
     let total = storage.get_images_total_count()?; // 总图片数
 
     let mut seen_hashes: HashSet<String> = HashSet::new();
-    let mut processed: usize = 0;
+    let mut row_index: usize = 0;
     let mut removed_total: usize = 0;
     let mut regenerated_total: usize = 0;
     let mut cursor_id: i64 = 0;
@@ -609,46 +432,64 @@ fn run_organize(
 
         // 游标推进
         cursor_id = batch.last().unwrap().id;
-        processed += batch.len();
 
         let mut remove_ids: Vec<String> = Vec::new();
         let mut regen_list: Vec<(i64, String)> = Vec::new();
         let mut should_remove: HashSet<i64> = HashSet::new();
 
-        // 1. 去重判断
-        if options.dedupe {
-            for row in &batch {
-                if !row.hash.is_empty() {
-                    if seen_hashes.contains(&row.hash) {
-                        remove_ids.push(row.id.to_string());
-                        should_remove.insert(row.id);
-                    } else {
-                        seen_hashes.insert(row.hash.clone());
-                    }
+        let upper = organize_range_upper_bound(options.offset, options.limit);
+        let mut finish_organize = false;
+
+        for row in &batch {
+            if let Some(ub) = upper {
+                if row_index >= ub {
+                    finish_organize = true;
+                    break;
                 }
             }
-        }
 
-        // 2. 清除失效图片判断
-        if options.remove_missing {
-            for row in &batch {
-                if !should_remove.contains(&row.id) && !Path::new(&row.local_path).exists() {
+            let in_range = row_in_organize_range(row_index, options.offset, options.limit);
+            row_index += 1;
+            if !in_range {
+                continue;
+            }
+
+            // 1. 去重判断
+            if options.dedupe && !row.hash.is_empty() {
+                if seen_hashes.contains(&row.hash) {
                     remove_ids.push(row.id.to_string());
                     should_remove.insert(row.id);
+                } else {
+                    seen_hashes.insert(row.hash.clone());
                 }
             }
-        }
 
-        // 3. 补充缩略图判断
-        if options.regen_thumbnails {
-            for row in &batch {
-                if !should_remove.contains(&row.id) {
-                    let needs_regen = row.thumbnail_path.is_empty()
-                        || row.thumbnail_path == row.local_path
-                        || !Path::new(&row.thumbnail_path).exists();
-                    if needs_regen {
-                        regen_list.push((row.id, row.local_path.clone()));
-                    }
+            // 2. 清除失效图片判断
+            if options.remove_missing
+                && !should_remove.contains(&row.id)
+                && !Path::new(&row.local_path).exists()
+            {
+                remove_ids.push(row.id.to_string());
+                should_remove.insert(row.id);
+            }
+
+            // 3. 移除磁盘存在但 infer 无法在支持 MIME 列表中识别的媒体
+            if options.remove_unrecognized
+                && !should_remove.contains(&row.id)
+                && Path::new(&row.local_path).exists()
+                && crate::image_type::mime_type_from_path(Path::new(&row.local_path)).is_none()
+            {
+                remove_ids.push(row.id.to_string());
+                should_remove.insert(row.id);
+            }
+
+            // 4. 补充缩略图判断
+            if options.regen_thumbnails && !should_remove.contains(&row.id) {
+                let needs_regen = row.thumbnail_path.is_empty()
+                    || row.thumbnail_path == row.local_path
+                    || !Path::new(&row.thumbnail_path).exists();
+                if needs_regen {
+                    regen_list.push((row.id, row.local_path.clone()));
                 }
             }
         }
@@ -670,6 +511,33 @@ fn run_organize(
             }
 
             removed_total += remove_ids.len();
+
+            if options.delete_source_files {
+                let paths_to_delete: Vec<&str> = batch
+                    .iter()
+                    .filter(|r| should_remove.contains(&r.id))
+                    .map(|r| r.local_path.as_str())
+                    .collect();
+
+                if options.safe_delete {
+                    let still_referenced = storage.paths_still_referenced(&paths_to_delete)?;
+                    for path in paths_to_delete {
+                        if path.is_empty() {
+                            continue;
+                        }
+                        if !still_referenced.contains(path) {
+                            let _ = std::fs::remove_file(path);
+                        }
+                    }
+                } else {
+                    for path in paths_to_delete {
+                        if path.is_empty() {
+                            continue;
+                        }
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
         }
 
         // 执行缩略图补充
@@ -686,11 +554,15 @@ fn run_organize(
 
         // 发送每批进度事件
         GlobalEmitter::global().emit_organize_progress(
-            processed,
+            row_index,
             total,
             removed_total,
             regenerated_total,
         );
+
+        if finish_organize {
+            break;
+        }
     }
 
     emit_organize_finished(removed_total, regenerated_total, false);

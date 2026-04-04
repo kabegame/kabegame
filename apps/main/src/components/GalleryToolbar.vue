@@ -271,10 +271,9 @@ import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
   galleryDateTailFromRoot,
   galleryMediaKindFromRoot,
-  galleryPathWithRootOnly,
-  galleryPathWithSortOnly,
   galleryPluginIdFromRoot,
-  parseGalleryPath,
+  isGallerySimpleFilterRoot,
+  type GalleryTimeSort,
 } from "@/utils/galleryPath";
 import {
   buildGalleryTimeMenuTree,
@@ -299,10 +298,8 @@ interface Props {
   monthOptions?: string[];
   monthLoading?: boolean;
   selectedRange?: [string, string] | null; // YYYY-MM-DD
-  /** 当前画廊 provider 路径，如 全部、全部/倒序、按时间/2024-01 */
-  providerRootPath?: string;
-  /** 当前完整 query.path（如 all/desc/3），切换排序时保留页码 */
-  currentProviderPath?: string;
+  root?: string;
+  sort?: GalleryTimeSort;
   /** 每页条数（与设置同步，用于工具栏展示） */
   pageSize?: number;
 }
@@ -314,8 +311,8 @@ const props = withDefaults(defineProps<Props>(), {
   monthOptions: () => [],
   monthLoading: false,
   selectedRange: null,
-  providerRootPath: "",
-  currentProviderPath: "",
+  root: "all",
+  sort: "asc",
   pageSize: 100,
 });
 
@@ -326,20 +323,17 @@ const failedCountFoldLabel = computed(() => {
   const suffix = n >= 99 ? "99+" : String(n);
   return `${t("header.failedImages")} (${suffix})`;
 });
-const sortOrder = computed(() =>
-  props.providerRootPath.includes("/desc") ? "desc" : "asc"
+const sortOrder = computed<GalleryTimeSort>(() =>
+  props.sort === "desc" ? "desc" : "asc"
 );
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 
 const isWallpaperOrderBrowse = computed(() =>
-  props.providerRootPath.startsWith("wallpaper-order")
+  props.root.startsWith("wallpaper-order")
 );
 
-const filterPathRoot = computed(() => {
-  const path = props.currentProviderPath?.trim() || "all/1";
-  return parseGalleryPath(path).root;
-});
+const filterPathRoot = computed(() => props.root || "all");
 
 const currentPluginId = computed(() =>
   galleryPluginIdFromRoot(filterPathRoot.value)
@@ -359,16 +353,9 @@ const isAllFilterBrowse = computed(
   () => filterPathRoot.value === "all"
 );
 
-const showGalleryFilterFold = computed(() => {
-  const root = filterPathRoot.value;
-  return (
-    root === "all" ||
-    root === "wallpaper-order" ||
-    /^plugin\//i.test(root) ||
-    /^date\//i.test(root) ||
-    /^media-type\//i.test(root)
-  );
-});
+const showGalleryFilterFold = computed(() =>
+  isGallerySimpleFilterRoot(filterPathRoot.value)
+);
 
 interface PluginGroupRow {
   plugin_id: string;
@@ -456,10 +443,8 @@ const filterFoldLabel = computed(() => {
 });
 
 function onSortOrderChange(value: string) {
-  const path = props.currentProviderPath?.trim() || "all/1";
   const sort = value === "desc" ? "desc" : "asc";
-  const next = galleryPathWithSortOnly(path, sort);
-  void router.push({ path: "/gallery", query: { path: next } });
+  emit("update:sort", sort);
 }
 
 const sortToolbarButtonLabel = computed(() =>
@@ -468,32 +453,24 @@ const sortToolbarButtonLabel = computed(() =>
 
 function onDesktopFilterCommand(cmd: string) {
   if (cmd !== "all" && cmd !== "wallpaper-order") return;
-  const path = props.currentProviderPath?.trim() || "all/1";
-  const next = galleryPathWithRootOnly(path, cmd);
-  void router.push({ path: "/gallery", query: { path: next } });
+  emit("update:root", cmd);
 }
 
 function onDesktopPluginFilterCommand(pluginId: string) {
   const id = (pluginId || "").trim();
   if (!id) return;
-  const path = props.currentProviderPath?.trim() || "all/1";
-  const next = galleryPathWithRootOnly(path, `plugin/${id}`);
-  void router.push({ path: "/gallery", query: { path: next } });
+  emit("update:root", `plugin/${id}`);
 }
 
 function onDesktopTimeFilterCommand(seg: string) {
   const s = (seg || "").trim();
   if (!s) return;
-  const path = props.currentProviderPath?.trim() || "all/1";
-  const next = galleryPathWithRootOnly(path, `date/${s}`);
-  void router.push({ path: "/gallery", query: { path: next } });
+  emit("update:root", `date/${s}`);
 }
 
 function onDesktopMediaTypeFilterCommand(kind: string) {
   if (kind !== "image" && kind !== "video") return;
-  const path = props.currentProviderPath?.trim() || "all/1";
-  const next = galleryPathWithRootOnly(path, `media-type/${kind}`);
-  void router.push({ path: "/gallery", query: { path: next } });
+  emit("update:root", `media-type/${kind}`);
 }
 
 function onDesktopSortCommand(cmd: string) {
@@ -566,9 +543,7 @@ function onFilterPickerConfirm() {
     return;
   }
   if (v === "all" || v === "wallpaper-order") {
-    const path = props.currentProviderPath?.trim() || "all/1";
-    const next = galleryPathWithRootOnly(path, v);
-    void router.push({ path: "/gallery", query: { path: next } });
+    emit("update:root", v);
   }
 }
 
@@ -611,9 +586,7 @@ function onTimeFilterPickerConfirm(payload: {
     payload.selectedValues.map(String)
   );
   if (!tail) return;
-  const path = props.currentProviderPath?.trim() || "all/1";
-  const next = galleryPathWithRootOnly(path, `date/${tail}`);
-  void router.push({ path: "/gallery", query: { path: next } });
+  emit("update:root", `date/${tail}`);
 }
 
 const pluginFilterPickerColumns = computed(() => {
@@ -637,9 +610,7 @@ function onPluginFilterPickerConfirm() {
   showPluginFilterPicker.value = false;
   const id = pluginFilterPickerSelected.value[0];
   if (!id) return;
-  const path = props.currentProviderPath?.trim() || "all/1";
-  const next = galleryPathWithRootOnly(path, `plugin/${id}`);
-  void router.push({ path: "/gallery", query: { path: next } });
+  emit("update:root", `plugin/${id}`);
 }
 
 const mediaTypeFilterPickerColumns = computed(() => {
@@ -667,9 +638,7 @@ function onMediaTypeFilterPickerConfirm() {
   showMediaTypeFilterPicker.value = false;
   const kind = mediaTypeFilterPickerSelected.value[0];
   if (kind !== "image" && kind !== "video") return;
-  const path = props.currentProviderPath?.trim() || "all/1";
-  const next = galleryPathWithRootOnly(path, `media-type/${kind}`);
-  void router.push({ path: "/gallery", query: { path: next } });
+  emit("update:root", `media-type/${kind}`);
 }
 
 const sortPickerColumns = computed(() => [
@@ -715,6 +684,8 @@ const emit = defineEmits<{
   showCrawlerDialog: [];
   showLocalImport: [];
   openCollectMenu: [];
+  "update:root": [value: string];
+  "update:sort": [value: GalleryTimeSort];
   "update:selectedRange": [value: [string, string] | null];
 }>();
 

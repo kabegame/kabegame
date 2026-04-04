@@ -139,18 +139,14 @@
 import { computed, onMounted, ref } from "vue";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useI18n } from "@kabegame/i18n";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 import { ArrowDown, ArrowRight, Filter } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
-import { useGalleryPathState } from "@/composables/useGalleryPathState";
 import {
-  DEFAULT_GALLERY_PATH,
   galleryDateTailFromRoot,
   galleryMediaKindFromRoot,
-  galleryPathWithRootOnly,
   galleryPluginIdFromRoot,
   isGallerySimpleFilterRoot,
-  parseGalleryPath,
 } from "@/utils/galleryPath";
 import {
   buildGalleryTimeMenuTree,
@@ -162,6 +158,7 @@ import {
 } from "@/utils/galleryTimeFilterMenu";
 import GalleryTimeFilterSubmenu from "./GalleryTimeFilterSubmenu.vue";
 import { usePluginStore } from "@/stores/plugins";
+import { useGalleryRouteStore } from "@/stores/galleryRoute";
 
 interface PluginGroupRow {
   plugin_id: string;
@@ -174,24 +171,10 @@ interface GalleryMediaTypeCountsPayload {
 }
 
 const route = useRoute();
-const router = useRouter();
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
-
-const { providerPath: galleryProviderPath } = useGalleryPathState();
-
-const effectiveGalleryPath = computed(() => {
-  const raw = route.query.path;
-  const qp = Array.isArray(raw) ? raw[0] : raw;
-  const qpStr = qp != null && qp !== "" ? String(qp) : "";
-  if (route.path !== "/gallery") {
-    return qpStr || DEFAULT_GALLERY_PATH;
-  }
-  if (qpStr) return qpStr;
-  return galleryProviderPath.value;
-});
-
-const parsedRoot = computed(() => parseGalleryPath(effectiveGalleryPath.value).root);
+const galleryRouteStore = useGalleryRouteStore();
+const parsedRoot = computed(() => galleryRouteStore.root || "all");
 
 const showSimpleFilter = computed(() =>
   isGallerySimpleFilterRoot(parsedRoot.value)
@@ -283,37 +266,24 @@ const filterLabel = computed(() => {
 
 function handleCommand(command: string) {
   if (command !== "all" && command !== "wallpaper-order") return;
-  const next = galleryPathWithRootOnly(effectiveGalleryPath.value, command);
-  void router.push({ path: "/gallery", query: { path: next } });
+  void galleryRouteStore.navigate({ root: command, page: 1 }, { push: true });
 }
 
 function handlePluginCommand(pluginId: string) {
   const id = (pluginId || "").trim();
   if (!id) return;
-  const next = galleryPathWithRootOnly(
-    effectiveGalleryPath.value,
-    `plugin/${id}`
-  );
-  void router.push({ path: "/gallery", query: { path: next } });
+  void galleryRouteStore.navigate({ root: `plugin/${id}`, page: 1 }, { push: true });
 }
 
 function handleTimeCommand(name: string) {
   const seg = (name || "").trim();
   if (!seg) return;
-  const next = galleryPathWithRootOnly(
-    effectiveGalleryPath.value,
-    `date/${seg}`
-  );
-  void router.push({ path: "/gallery", query: { path: next } });
+  void galleryRouteStore.navigate({ root: `date/${seg}`, page: 1 }, { push: true });
 }
 
 function handleMediaTypeCommand(kind: string) {
   if (kind !== "image" && kind !== "video") return;
-  const next = galleryPathWithRootOnly(
-    effectiveGalleryPath.value,
-    `media-type/${kind}`
-  );
-  void router.push({ path: "/gallery", query: { path: next } });
+  void galleryRouteStore.navigate({ root: `media-type/${kind}`, page: 1 }, { push: true });
 }
 </script>
 

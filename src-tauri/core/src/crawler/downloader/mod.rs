@@ -2155,10 +2155,14 @@ async fn process_downloaded_content_image_to_storage(
             }
         });
     let media_type = Some(match mime_line {
-        Some(m) if m.starts_with("video/") || crate::image_type::is_video_mime(&Some(m.clone())) => {
+        Some(m)
+            if m.starts_with("video/") || crate::image_type::is_video_mime(&Some(m.clone())) =>
+        {
             m
         }
-        Some(m) if m.starts_with("image/") || crate::image_type::is_image_mime(&Some(m.clone())) => {
+        Some(m)
+            if m.starts_with("image/") || crate::image_type::is_image_mime(&Some(m.clone())) =>
+        {
             m
         }
         Some(m) if m == "video" => crate::image_type::default_video_mime().to_string(),
@@ -2175,7 +2179,11 @@ async fn process_downloaded_content_image_to_storage(
         task_id: Some(task_id.to_string()),
         surf_record_id: None,
         crawled_at: download_start_time,
-        metadata: if metadata_id.is_some() { None } else { metadata },
+        metadata: if metadata_id.is_some() {
+            None
+        } else {
+            metadata
+        },
         metadata_id,
         thumbnail_path: thumbnail_path_str.to_string(),
         favorite: false,
@@ -2259,16 +2267,6 @@ pub async fn postprocess_downloaded_image(
     metadata: Option<serde_json::Value>,
     metadata_id: Option<i64>,
 ) -> Result<bool, String> {
-    use crate::storage::organize::OrganizeService;
-    use std::sync::atomic::Ordering;
-
-    OrganizeService::init_organize_barrier();
-    let organize_running = OrganizeService::get_organize_running();
-    if organize_running.load(Ordering::Relaxed) {
-        let barrier = OrganizeService::get_organize_barrier();
-        barrier.notified().await;
-    }
-
     let inferred_mime = crate::image_type::mime_type_from_path(path);
     let event_task_id = task_id.or(surf_record_id).unwrap_or_default();
     let is_surf_mode = surf_record_id.is_some();
@@ -2673,7 +2671,11 @@ pub async fn process_downloaded_image_to_storage(
         task_id: task_id.map(|v| v.to_string()),
         surf_record_id: surf_record_id.map(|v| v.to_string()),
         crawled_at: download_start_time,
-        metadata: if metadata_id.is_some() { None } else { metadata },
+        metadata: if metadata_id.is_some() {
+            None
+        } else {
+            metadata
+        },
         metadata_id,
         thumbnail_path: thumbnail_path_str,
         favorite: false,
