@@ -605,13 +605,7 @@ impl VdOpsContext for LinuxVdOpsContext {
     }
 
     fn tasks_deleted(&self, task_id: &str) {
-        GlobalEmitter::global().emit(
-            "tasks-changed",
-            serde_json::json!({
-                "reason": "delete",
-                "taskId": task_id
-            }),
-        );
+        GlobalEmitter::global().emit_task_deleted(task_id);
         // Linux 不需要刷新文件系统
     }
 }

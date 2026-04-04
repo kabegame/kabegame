@@ -8,6 +8,8 @@
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::DaemonEvent;
 #[cfg(feature = "ipc-server")]
+use serde_json::json;
+#[cfg(feature = "ipc-server")]
 use crate::ipc::server::EventBroadcaster;
 use crate::storage::tasks::TaskFailedImage;
 #[cfg(feature = "ipc-server")]
@@ -101,29 +103,6 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送任务状态事件
-    pub fn emit_task_status(
-        &self,
-        task_id: &str,
-        status: &str,
-        progress: Option<f64>,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-        error: Option<&str>,
-        current_wallpaper: Option<&str>,
-    ) {
-        let event = std::sync::Arc::new(DaemonEvent::TaskStatus {
-            task_id: task_id.to_string(),
-            status: status.to_string(),
-            progress,
-            start_time,
-            end_time,
-            error: error.map(|e| e.to_string()),
-            current_wallpaper: current_wallpaper.map(|w| w.to_string()),
-        });
-        EventBroadcaster::global().broadcast(event);
-    }
-
     /// 发送通用事件（用于扩展）
     pub fn emit(&self, event: &str, payload: serde_json::Value) {
         let event = std::sync::Arc::new(DaemonEvent::Generic {
@@ -133,20 +112,32 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送任务进度事件
+    /// 发送任务进度事件（统一走 `tasks-change` / `TaskChanged`）
     pub fn emit_task_progress(&self, task_id: &str, progress: f64) {
-        let event = std::sync::Arc::new(DaemonEvent::TaskProgress {
-            task_id: task_id.to_string(),
-            progress,
+        self.emit_task_changed(task_id, json!({ "progress": progress }));
+    }
+
+    /// 任务新增（完整任务 JSON）
+    pub fn emit_task_added(&self, task: &serde_json::Value) {
+        let event = std::sync::Arc::new(DaemonEvent::TaskAdded {
+            task: task.clone(),
         });
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送任务错误事件
-    pub fn emit_task_error(&self, task_id: &str, error: &str) {
-        let event = std::sync::Arc::new(DaemonEvent::TaskError {
+    /// 任务删除
+    pub fn emit_task_deleted(&self, task_id: &str) {
+        let event = std::sync::Arc::new(DaemonEvent::TaskDeleted {
             task_id: task_id.to_string(),
-            error: error.to_string(),
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 任务字段增量更新
+    pub fn emit_task_changed(&self, task_id: &str, diff: serde_json::Value) {
+        let event = std::sync::Arc::new(DaemonEvent::TaskChanged {
+            task_id: task_id.to_string(),
+            diff,
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -304,7 +295,7 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送任务图片数量更新事件（success / deleted / failed / dedup 按需携带）
+    /// 发送任务图片数量更新事件（统一走 `tasks-change` / `TaskChanged`）
     pub fn emit_task_image_counts(
         &self,
         task_id: &str,
@@ -313,14 +304,23 @@ impl GlobalEmitter {
         failed_count: Option<i64>,
         dedup_count: Option<i64>,
     ) {
-        let event = std::sync::Arc::new(DaemonEvent::TaskImageCounts {
-            task_id: task_id.to_string(),
-            success_count,
-            deleted_count,
-            failed_count,
-            dedup_count,
-        });
-        EventBroadcaster::global().broadcast(event);
+        let mut diff = serde_json::Map::new();
+        if let Some(v) = success_count {
+            diff.insert("successCount".to_string(), json!(v));
+        }
+        if let Some(v) = deleted_count {
+            diff.insert("deletedCount".to_string(), json!(v));
+        }
+        if let Some(v) = failed_count {
+            diff.insert("failedCount".to_string(), json!(v));
+        }
+        if let Some(v) = dedup_count {
+            diff.insert("dedupCount".to_string(), json!(v));
+        }
+        if diff.is_empty() {
+            return;
+        }
+        self.emit_task_changed(task_id, serde_json::Value::Object(diff));
     }
 
     /// 发送 Daemon 关闭事件（退出前通知 IPC 客户端）
@@ -367,19 +367,23 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 从存储读取任务并发送 task-status，用于下载失败等场景下刷新任务列表（避免一直显示“处理中”）。
+    /// 从存储读取任务并发送 `TaskChanged`，用于下载失败等场景下刷新任务列表（避免一直显示“处理中”）。
     pub fn emit_task_status_from_storage(&self, task_id: &str) {
         let storage = crate::storage::Storage::global();
         if let Ok(Some(task)) = storage.get_task(task_id) {
-            self.emit_task_status(
-                task_id,
-                &task.status,
-                Some(task.progress),
-                task.start_time,
-                task.end_time,
-                task.error.as_deref(),
-                None,
-            );
+            let mut diff = serde_json::Map::new();
+            diff.insert("status".to_string(), json!(task.status));
+            diff.insert("progress".to_string(), json!(task.progress));
+            if let Some(t) = task.start_time {
+                diff.insert("startTime".to_string(), json!(t));
+            }
+            if let Some(t) = task.end_time {
+                diff.insert("endTime".to_string(), json!(t));
+            }
+            if let Some(ref e) = task.error {
+                diff.insert("error".to_string(), json!(e));
+            }
+            self.emit_task_changed(task_id, serde_json::Value::Object(diff));
         }
     }
 }
@@ -435,23 +439,15 @@ impl GlobalEmitter {
     ) {
     }
 
-    pub fn emit_task_status(
-        &self,
-        _task_id: &str,
-        _status: &str,
-        _progress: Option<f64>,
-        _start_time: Option<u64>,
-        _end_time: Option<u64>,
-        _error: Option<&str>,
-        _current_wallpaper: Option<&str>,
-    ) {
-    }
-
     pub fn emit(&self, _event: &str, _payload: serde_json::Value) {}
 
     pub fn emit_task_progress(&self, _task_id: &str, _progress: f64) {}
 
-    pub fn emit_task_error(&self, _task_id: &str, _error: &str) {}
+    pub fn emit_task_added(&self, _task: &serde_json::Value) {}
+
+    pub fn emit_task_deleted(&self, _task_id: &str) {}
+
+    pub fn emit_task_changed(&self, _task_id: &str, _diff: serde_json::Value) {}
 
     pub fn emit_download_progress(
         &self,

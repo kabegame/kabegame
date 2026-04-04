@@ -76,7 +76,7 @@
     },
     "packages/core": {
       "name": "@kabegame/core",
-      "version": "3.4.1",
+      "version": "3.4.4",
       "dependencies": {
         "@kabegame/i18n": "workspace:*",
         "@panzoom/panzoom": "^4.6.1",
@@ -110,7 +110,7 @@
     },
     "packages/photoswipe-vue": {
       "name": "photoswipe-vue",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "devDependencies": {
         "@vitejs/plugin-vue": "^5.2.1",
         "@vue/test-utils": "^2.4.6",
@@ -130,7 +130,7 @@
     },
     "src-crawler-plugins": {
       "name": "crawler-plugins",
-      "version": "3.4.0",
+      "version": "3.4.3",
       "devDependencies": {
         "@types/node": "^22.0.0",
         "archiver": "^7.0.1",

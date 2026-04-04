@@ -270,10 +270,9 @@ watch(
 // 用于实时更新运行时间的响应式时间戳
 const currentTime = ref<number>(Date.now());
 let timeUpdateInterval: number | null = null;
-let unlistenTaskProgress: (() => void) | null = null;
+let unlistenTasksChange: (() => void) | null = null;
 let unlistenDownloadState: (() => void) | null = null;
 let unlistenDownloadProgress: (() => void) | null = null;
-let unlistenTaskStatus: (() => void) | null = null;
 
 const taskSubtitle = computed(() => {
     const parts: string[] = [];
@@ -565,7 +564,7 @@ const handleStopTask = async () => {
             { type: "warning" }
         );
         await crawlerStore.stopTask(taskId.value);
-        // 不写入本地“stopped”伪状态：任务最终状态由后端 task-status / task-error 事件与 DB 同步驱动
+        // 不写入本地“stopped”伪状态：任务最终状态由后端 tasks-change（TaskChanged）与 DB 同步驱动
         ElMessage.info(t("tasks.taskStopRequested"));
     } catch (error) {
         if (error !== "cancel") {
@@ -914,23 +913,23 @@ const startTimersAndListeners = async () => {
         currentTime.value = Date.now();
     }, 1000);
 
-    // 监听任务进度更新事件：用事件中的 progress 更新 store；
-    // 仅在进度 100% 时拉取任务信息以同步 end_time 等
-    if (!unlistenTaskProgress) {
-        unlistenTaskProgress = await listen(
-            "task-progress",
-            async (event) => {
-                const payload: any = event.payload as any;
-                const tid = String(payload?.task_id ?? "").trim();
-                if (!tid || tid !== taskId.value) return;
-                const newProgress = Number(payload?.progress ?? NaN);
-                if (!Number.isFinite(newProgress)) return;
-                const taskIndex = crawlerStore.tasks.findIndex((t) => t.id === tid);
-                if (taskIndex !== -1) {
-                    crawlerStore.tasks[taskIndex].progress = newProgress;
-                }
+    // 监听 `tasks-change`：本页任务终态时停止运行时间计时（进度由 crawler store 统一更新）
+    if (!unlistenTasksChange) {
+        unlistenTasksChange = await listen("tasks-change", async (event) => {
+            const payload: any = event.payload;
+            if (String(payload?.type ?? "") !== "TaskChanged") return;
+            const tid = String(payload?.taskId ?? payload?.task_id ?? "").trim();
+            if (!tid || tid !== taskId.value) return;
+            const diff = payload?.diff ?? {};
+            const status = typeof diff.status === "string" ? diff.status : "";
+            if (
+                status === "completed" ||
+                status === "failed" ||
+                status === "canceled"
+            ) {
+                stopTimers();
             }
-        );
+        });
     }
 
     // 监听下载状态：更新 downloadStateMap + 刷新失败列表
@@ -966,17 +965,6 @@ const startTimersAndListeners = async () => {
         });
     }
 
-    // 监听任务状态：当任务结束（取消/完成/失败）时停止计时；store 已通过 task-status 更新
-    if (!unlistenTaskStatus) {
-        unlistenTaskStatus = await listen("task-status", async (event) => {
-            const payload: any = event.payload as any;
-            const tid = String(payload?.task_id ?? "").trim();
-            if (!tid || tid !== taskId.value) return;
-            const status = String(payload?.status ?? "").trim();
-            if (status === "running") return;
-            stopTimers();
-        });
-    }
 };
 
 // 清理定时器的函数（页面失活时调用，节省资源）
@@ -994,9 +982,9 @@ const stopTimersAndListeners = () => {
     stopTimers();
 
     // 移除事件监听器
-    if (unlistenTaskProgress) {
-        unlistenTaskProgress();
-        unlistenTaskProgress = null;
+    if (unlistenTasksChange) {
+        unlistenTasksChange();
+        unlistenTasksChange = null;
     }
     if (unlistenDownloadState) {
         unlistenDownloadState();
@@ -1005,10 +993,6 @@ const stopTimersAndListeners = () => {
     if (unlistenDownloadProgress) {
         unlistenDownloadProgress();
         unlistenDownloadProgress = null;
-    }
-    if (unlistenTaskStatus) {
-        unlistenTaskStatus();
-        unlistenTaskStatus = null;
     }
 };
 

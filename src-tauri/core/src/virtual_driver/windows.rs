@@ -171,13 +171,7 @@ impl VdOpsContext for WindowsVdOpsContext {
     }
 
     fn tasks_deleted(&self, task_id: &str) {
-        GlobalEmitter::global().emit(
-            "tasks-changed",
-            serde_json::json!({
-                "reason": "delete",
-                "taskId": task_id
-            }),
-        );
+        GlobalEmitter::global().emit_task_deleted(task_id);
         // 刷新"按任务"目录（以及根目录）
         let mount_point = get_mount_point();
         notify_explorer_dir_changed_path(&join_mount_subdir(&mount_point, DIR_BY_TASK));

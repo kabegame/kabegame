@@ -266,6 +266,77 @@ export const useCrawlerStore = defineStore("crawler", () => {
   const lastProgressUpdateAt = new Map<string, number>();
   const loadingTaskPromises = new Map<string, Promise<void>>();
 
+  function parseTaskFromRaw(raw: unknown): CrawlTask | null {
+    if (raw == null || typeof raw !== "object") return null;
+    const o = raw as Record<string, unknown>;
+    const id = String(o.id ?? o.taskId ?? o.task_id ?? "").trim();
+    const pluginId = String(o.pluginId ?? o.plugin_id ?? "").trim();
+    if (!id || !pluginId) return null;
+    return {
+      id,
+      pluginId,
+      outputDir: (o.outputDir ?? o.output_dir) as string | undefined,
+      userConfig: (o.userConfig ?? o.user_config) as Record<string, any> | undefined,
+      httpHeaders: (o.httpHeaders ?? o.http_headers) as
+        | Record<string, string>
+        | undefined,
+      outputAlbumId: (o.outputAlbumId ?? o.output_album_id) as string | undefined,
+      runConfigId: (o.runConfigId ?? o.run_config_id) as string | undefined,
+      triggerSource: (o.triggerSource ??
+        o.trigger_source ??
+        "manual") as CrawlTask["triggerSource"],
+      status: (o.status || "pending") as CrawlTask["status"],
+      progress: Number(o.progress ?? 0),
+      deletedCount: Number(o.deletedCount ?? o.deleted_count ?? 0),
+      dedupCount: Number(o.dedupCount ?? o.dedup_count ?? 0),
+      successCount: Number(o.successCount ?? o.success_count ?? 0),
+      failedCount: Number(o.failedCount ?? o.failed_count ?? 0),
+      startTime: (o.startTime ?? o.start_time) as number | undefined,
+      endTime: (o.endTime ?? o.end_time) as number | undefined,
+      error: o.error != null ? String(o.error) : undefined,
+    };
+  }
+
+  function normalizeDiffKeys(diff: Record<string, unknown>): Partial<CrawlTask> {
+    const out: Partial<CrawlTask> = {};
+    const status = diff.status;
+    if (status != null && typeof status === "string") {
+      out.status = status as CrawlTask["status"];
+    }
+    const progress = diff.progress;
+    if (progress != null && Number.isFinite(Number(progress))) {
+      out.progress = Number(progress);
+    }
+    const st = diff.startTime ?? diff.start_time;
+    if (st != null && Number.isFinite(Number(st))) {
+      out.startTime = Number(st);
+    }
+    const et = diff.endTime ?? diff.end_time;
+    if (et != null && Number.isFinite(Number(et))) {
+      out.endTime = Number(et);
+    }
+    if (diff.error != null) {
+      out.error = String(diff.error);
+    }
+    const sc = diff.successCount ?? diff.success_count;
+    if (sc != null && Number.isFinite(Number(sc))) {
+      out.successCount = Number(sc);
+    }
+    const delc = diff.deletedCount ?? diff.deleted_count;
+    if (delc != null && Number.isFinite(Number(delc))) {
+      out.deletedCount = Number(delc);
+    }
+    const fc = diff.failedCount ?? diff.failed_count;
+    if (fc != null && Number.isFinite(Number(fc))) {
+      out.failedCount = Number(fc);
+    }
+    const ddc = diff.dedupCount ?? diff.dedup_count;
+    if (ddc != null && Number.isFinite(Number(ddc))) {
+      out.dedupCount = Number(ddc);
+    }
+    return out;
+  }
+
   const ensureTaskLoaded = async (taskId: string) => {
     const id = String(taskId || "").trim();
     if (!id) return;
@@ -278,33 +349,9 @@ export const useCrawlerStore = defineStore("crawler", () => {
 
     const p = (async () => {
       try {
-        const t = await invoke<any>("get_task", { taskId: id });
-        const raw = t && typeof t === "object" ? t : null;
-        if (!raw) return;
-
-        const task: CrawlTask = {
-          id: String(raw.id ?? raw.taskId ?? raw.task_id ?? id),
-          pluginId: String(raw.pluginId ?? raw.plugin_id ?? ""),
-          outputDir: raw.outputDir ?? raw.output_dir ?? undefined,
-          userConfig: raw.userConfig ?? raw.user_config ?? undefined,
-          httpHeaders: raw.httpHeaders ?? raw.http_headers ?? undefined,
-          outputAlbumId: raw.outputAlbumId ?? raw.output_album_id ?? undefined,
-          runConfigId: raw.runConfigId ?? raw.run_config_id ?? undefined,
-          triggerSource: (raw.triggerSource ??
-            raw.trigger_source ??
-            "manual") as CrawlTask["triggerSource"],
-          status: (raw.status || "pending") as CrawlTask["status"],
-          progress: Number(raw.progress ?? 0),
-          deletedCount: Number(raw.deletedCount ?? raw.deleted_count ?? 0),
-          dedupCount: Number(raw.dedupCount ?? raw.dedup_count ?? 0),
-          successCount: Number(raw.successCount ?? raw.success_count ?? 0),
-          failedCount: Number(raw.failedCount ?? raw.failed_count ?? 0),
-          startTime: raw.startTime ?? raw.start_time ?? undefined,
-          endTime: raw.endTime ?? raw.end_time ?? undefined,
-          error: raw.error ?? undefined,
-        };
-
-        if (!task.id || !task.pluginId) return;
+        const t = await invoke<unknown>("get_task", { taskId: id });
+        const task = parseTaskFromRaw(t);
+        if (!task) return;
         if (!tasks.value.some((x) => x.id === task.id)) {
           tasks.value.unshift(task);
         }
@@ -384,131 +431,96 @@ export const useCrawlerStore = defineStore("crawler", () => {
     try {
       const { listen } = await import("@tauri-apps/api/event");
 
-      await listen("task-status", async (event) => {
-        const payload: any = event.payload as any;
-        const taskId = String(payload?.task_id ?? "").trim();
-        if (!taskId) return;
-
-        if (!tasks.value.some((t) => t.id === taskId)) {
-          await ensureTaskLoaded(taskId);
+      await listen("tasks-change", async (event) => {
+        const payload = event.payload as Record<string, unknown> | null;
+        const type = String(payload?.type ?? "");
+        if (type === "TaskAdded") {
+          const raw = payload?.task;
+          const task = parseTaskFromRaw(raw);
+          if (task && !tasks.value.some((t) => t.id === task.id)) {
+            tasks.value.unshift(task);
+            tasksTotal.value++;
+          }
+          return;
         }
-
-        const idx = tasks.value.findIndex((t) => t.id === taskId);
-        if (idx === -1) return;
-
-        const cur = tasks.value[idx];
-        const newStatus = String(
-          payload?.status ?? cur.status,
-        ) as CrawlTask["status"];
-        const startTime = payload?.start_time;
-        const endTime = payload?.end_time;
-        const error = payload?.error;
-
-        const next: CrawlTask = {
-          ...cur,
-          status: newStatus,
-          startTime: startTime ?? cur.startTime,
-          endTime: endTime ?? cur.endTime,
-          error: error ?? cur.error,
-          progress: newStatus === "completed" ? 100 : (cur.progress ?? 0),
-        };
-        tasks.value[idx] = next;
-      });
-
-      await listen("task-progress", async (event) => {
-        const payload: any = event.payload as any;
-        const taskId = String(payload?.task_id ?? "").trim();
-        if (!taskId) return;
-        const newProgress = Number(payload?.progress ?? NaN);
-        if (!Number.isFinite(newProgress)) return;
-
-        if (!tasks.value.some((t) => t.id === taskId)) {
-          await ensureTaskLoaded(taskId);
+        if (type === "TaskDeleted") {
+          const taskId = String(
+            payload?.taskId ?? payload?.task_id ?? "",
+          ).trim();
+          if (!taskId) return;
+          const idx = tasks.value.findIndex((t) => t.id === taskId);
+          if (idx !== -1) {
+            tasks.value.splice(idx, 1);
+            tasksTotal.value = Math.max(0, tasksTotal.value - 1);
+          }
+          return;
         }
+        if (type === "TaskChanged") {
+          const taskId = String(
+            payload?.taskId ?? payload?.task_id ?? "",
+          ).trim();
+          if (!taskId) return;
+          const diffRaw = payload?.diff;
+          const diff =
+            diffRaw != null && typeof diffRaw === "object" && !Array.isArray(diffRaw)
+              ? (diffRaw as Record<string, unknown>)
+              : {};
 
-        const idx = tasks.value.findIndex((t) => t.id === taskId);
-        if (idx === -1) return;
-        const cur = tasks.value[idx];
-        if (newProgress <= (cur.progress ?? 0)) return;
+          if (!tasks.value.some((t) => t.id === taskId)) {
+            await ensureTaskLoaded(taskId);
+          }
 
-        const now = Date.now();
-        const lastAt = lastProgressUpdateAt.get(taskId) ?? 0;
-        if (newProgress < 100 && now - lastAt < 100) return;
-        lastProgressUpdateAt.set(taskId, now);
+          const idx = tasks.value.findIndex((t) => t.id === taskId);
+          if (idx === -1) return;
+          const cur = tasks.value[idx];
+          const merged = normalizeDiffKeys(diff);
 
-        const next: CrawlTask = { ...cur, progress: newProgress };
-        tasks.value[idx] = next;
-      });
+          const mergedProgress = merged.progress;
+          if (mergedProgress != null) {
+            if (mergedProgress <= (cur.progress ?? 0)) {
+              return;
+            }
+            const diffKeys = Object.keys(diff).filter((k) => diff[k] != null);
+            const onlyProgress =
+              diffKeys.length > 0 &&
+              diffKeys.every((k) => k === "progress");
+            if (onlyProgress) {
+              const now = Date.now();
+              const lastAt = lastProgressUpdateAt.get(taskId) ?? 0;
+              if (mergedProgress < 100 && now - lastAt < 100) {
+                return;
+              }
+              lastProgressUpdateAt.set(taskId, now);
+            }
+          }
 
-      await listen("task-error", async (event) => {
-        const payload: any = event.payload as any;
-        const taskId = String(payload?.task_id ?? "").trim();
-        if (!taskId) return;
-
-        if (!tasks.value.some((t) => t.id === taskId)) {
-          await ensureTaskLoaded(taskId);
-        }
-
-        const taskIndex = tasks.value.findIndex((t) => t.id === taskId);
-        if (
-          taskIndex !== -1 &&
-          tasks.value[taskIndex].status !== "failed" &&
-          tasks.value[taskIndex].status !== "canceled"
-        ) {
-          const errorMessage = String(payload?.error ?? "");
-          const isCanceled = errorMessage.includes("Task canceled");
-
-          tasks.value[taskIndex] = {
-            ...tasks.value[taskIndex],
-            status: isCanceled ? "canceled" : "failed",
-            error: errorMessage,
-            endTime: Date.now(),
+          const nextStatus = (merged.status ?? cur.status) as CrawlTask["status"];
+          const next: CrawlTask = {
+            ...cur,
+            ...merged,
+            progress:
+              nextStatus === "completed"
+                ? 100
+                : merged.progress != null
+                  ? merged.progress
+                  : cur.progress,
           };
+          tasks.value[idx] = next;
 
-          if (!isCanceled) {
+          const errStr = next.error ?? "";
+          const isCanceled = errStr.includes("Task canceled");
+          if (next.status === "failed" && !isCanceled && errStr) {
             window.dispatchEvent(
               new CustomEvent("task-error-display", {
                 detail: {
                   taskId,
-                  pluginId: tasks.value[taskIndex].pluginId,
-                  error: errorMessage,
+                  pluginId: cur.pluginId,
+                  error: errStr,
                 },
               }),
             );
           }
         }
-      });
-
-      await listen("task-image-counts", async (event) => {
-        const payload: any = event.payload as any;
-        const taskId = String(payload?.task_id ?? payload?.taskId ?? "").trim();
-        if (!taskId) return;
-
-        if (!tasks.value.some((t) => t.id === taskId)) {
-          await ensureTaskLoaded(taskId);
-        }
-
-        const idx = tasks.value.findIndex((t) => t.id === taskId);
-        if (idx === -1) return;
-        const cur = tasks.value[idx];
-        const next: CrawlTask = { ...cur };
-        const sc = payload?.success_count ?? payload?.successCount;
-        if (sc != null && Number.isFinite(Number(sc))) {
-          next.successCount = Number(sc);
-        }
-        const delc = payload?.deleted_count ?? payload?.deletedCount;
-        if (delc != null && Number.isFinite(Number(delc))) {
-          next.deletedCount = Number(delc);
-        }
-        const fc = payload?.failed_count ?? payload?.failedCount;
-        if (fc != null && Number.isFinite(Number(fc))) {
-          next.failedCount = Number(fc);
-        }
-        const ddc = payload?.dedup_count ?? payload?.dedupCount;
-        if (ddc != null && Number.isFinite(Number(ddc))) {
-          next.dedupCount = Number(ddc);
-        }
-        tasks.value[idx] = next;
       });
 
       await listen("auto-config-change", async (event) => {
@@ -876,11 +888,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
       await invoke("delete_task", { taskId });
     } catch (error) {
       console.error("从数据库删除任务失败:", error);
-    }
-
-    const index = tasks.value.findIndex((t) => t.id === taskId);
-    if (index !== -1) {
-      tasks.value.splice(index, 1);
     }
   }
 

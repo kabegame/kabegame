@@ -18,6 +18,12 @@
             <span class="detail-label">{{ t('gallery.imageDetailSource') }}</span>
             <span class="detail-value">{{ getPluginName(image.pluginId) }}</span>
           </div>
+          <div v-if="image.taskId" class="detail-item">
+            <span class="detail-label">{{ t('gallery.imageDetailTaskLabel') }}</span>
+            <el-button size="small" link type="primary" @click="handleOpenTask">
+              {{ t('gallery.imageDetailOpenTask') }}
+            </el-button>
+          </div>
           <div class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailType') }}</span>
             <span class="detail-value">{{ imageTypeLabel }}</span>
@@ -41,6 +47,10 @@
           <div class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailCrawledAt') }}</span>
             <span class="detail-value">{{ formatDate(image.crawledAt) }}</span>
+          </div>
+          <div v-if="image.size != null" class="detail-item">
+            <span class="detail-label">{{ t('gallery.imageDetailSize') }}</span>
+            <span class="detail-value">{{ formatBytes(image.size) }}</span>
           </div>
         </div>
       </CollapsibleDrawerPanel>
@@ -117,6 +127,8 @@ export type ImageDetailLike = {
   type?: string;
   metadata?: Record<string, unknown> | unknown;
   metadataId?: number;
+  size?: number;
+  taskId?: string;
 };
 
 interface Props {
@@ -125,6 +137,15 @@ interface Props {
 }
 
 const props = defineProps<Props>();
+
+const emit = defineEmits<{
+  "open-task": [taskId: string];
+}>();
+
+function handleOpenTask() {
+  const tid = props.image?.taskId;
+  if (tid) emit("open-task", tid);
+}
 
 const imageTypeLabel = computed((): string => {
   if (!props.image) return "";
@@ -378,6 +399,19 @@ const getPluginName = (pluginId?: string): string => {
     (raw["default"] ?? pluginStore.pluginLabel(pluginId)) ||
     pluginStore.pluginLabel(pluginId)
   );
+};
+
+const formatBytes = (n: number): string => {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  const fixed = i === 0 ? 0 : v >= 100 ? 0 : v >= 10 ? 1 : 2;
+  return `${v.toFixed(fixed)} ${units[i]}`;
 };
 
 const formatDate = (timestamp?: number) => {

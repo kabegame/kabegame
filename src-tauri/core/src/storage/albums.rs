@@ -409,7 +409,8 @@ impl Storage {
                  i.height,
                  i.display_name,
                  COALESCE(i.type, 'image') as media_type,
-                 i.last_set_wallpaper_at
+                 i.last_set_wallpaper_at,
+                 i.size
                  FROM images i
                  INNER JOIN album_images ai ON i.id = ai.image_id
                  WHERE ai.album_id = ?1
@@ -440,6 +441,7 @@ impl Storage {
                         row.get::<_, Option<String>>(13)?,
                     ),
                     last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
+                    size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                 })
             })
             .map_err(|e| format!("Failed to query album images: {}", e))?;
@@ -480,7 +482,8 @@ impl Storage {
                  i.height,
                  i.display_name,
                  COALESCE(i.type, 'image') as media_type,
-                 i.last_set_wallpaper_at
+                 i.last_set_wallpaper_at,
+                 i.size
                  FROM images i
                  INNER JOIN album_images ai ON i.id = ai.image_id
                  WHERE ai.album_id = ?1
@@ -512,6 +515,7 @@ impl Storage {
                         row.get::<_, Option<String>>(13)?,
                     ),
                     last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
+                    size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                 })
             })
             .map_err(|e| format!("Failed to query album preview: {}", e))?;

@@ -144,14 +144,9 @@ impl TaskScheduler {
         let storage = Storage::global();
         // let emitter = GlobalEmitter::global();
         let _ = persist_task_status(storage, &req.task_id, "pending", None, None, None);
-        GlobalEmitter::global().emit_task_status(
+        GlobalEmitter::global().emit_task_changed(
             &req.task_id,
-            "pending",
-            None,
-            None,
-            None,
-            None,
-            None,
+            json!({ "status": "pending" }),
         );
 
         self.queue_tx
@@ -409,7 +404,6 @@ async fn worker_loop(
         if download_queue.is_task_canceled(&req.task_id).await {
             let end = now_ms();
             let e = "Task canceled".to_string();
-            GlobalEmitter::global().emit_task_error(&req.task_id, &e);
             let _ = persist_task_status(
                 &storage,
                 &req.task_id,
@@ -418,14 +412,13 @@ async fn worker_loop(
                 Some(end),
                 Some(e.clone()),
             );
-            GlobalEmitter::global().emit_task_status(
+            GlobalEmitter::global().emit_task_changed(
                 &req.task_id,
-                "canceled",
-                None,
-                None,
-                Some(end),
-                Some(e.as_str()),
-                None,
+                json!({
+                    "status": "canceled",
+                    "endTime": end,
+                    "error": e,
+                }),
             );
             continue;
         }
@@ -435,14 +428,12 @@ async fn worker_loop(
         // running
         let start = now_ms();
         let _ = persist_task_status(&storage, &req.task_id, "running", Some(start), None, None);
-        GlobalEmitter::global().emit_task_status(
+        GlobalEmitter::global().emit_task_changed(
             &req.task_id,
-            "running",
-            None,
-            Some(start),
-            None,
-            None,
-            None,
+            json!({
+                "status": "running",
+                "startTime": start,
+            }),
         );
 
         let page_stacks = scheduler.page_stacks();
@@ -455,8 +446,6 @@ async fn worker_loop(
                 let end = now_ms();
                 if download_queue.is_task_canceled(&req.task_id).await {
                     let e = "Task canceled".to_string();
-                    #[cfg(feature = "ipc-server")]
-                    GlobalEmitter::global().emit_task_error(&req.task_id, &e);
                     let _ = persist_task_status(
                         &storage,
                         &req.task_id,
@@ -465,14 +454,13 @@ async fn worker_loop(
                         Some(end),
                         Some(e.clone()),
                     );
-                    GlobalEmitter::global().emit_task_status(
+                    GlobalEmitter::global().emit_task_changed(
                         &req.task_id,
-                        "canceled",
-                        None,
-                        None,
-                        Some(end),
-                        Some(e.as_str()),
-                        None,
+                        json!({
+                            "status": "canceled",
+                            "endTime": end,
+                            "error": e,
+                        }),
                     );
                 } else {
                     let _ = persist_task_status(
@@ -483,14 +471,13 @@ async fn worker_loop(
                         Some(end),
                         None,
                     );
-                    GlobalEmitter::global().emit_task_status(
+                    GlobalEmitter::global().emit_task_changed(
                         &req.task_id,
-                        "completed",
-                        None,
-                        None,
-                        Some(end),
-                        None,
-                        None,
+                        json!({
+                            "status": "completed",
+                            "progress": 100,
+                            "endTime": end,
+                        }),
                     );
                 }
             }
@@ -507,8 +494,6 @@ async fn worker_loop(
                 let end = now_ms();
                 let status = if is_canceled { "canceled" } else { "failed" };
 
-                GlobalEmitter::global().emit_task_error(&req.task_id, &e);
-
                 let _ = persist_task_status(
                     &storage,
                     &req.task_id,
@@ -517,14 +502,13 @@ async fn worker_loop(
                     Some(end),
                     Some(e.clone()),
                 );
-                GlobalEmitter::global().emit_task_status(
+                GlobalEmitter::global().emit_task_changed(
                     &req.task_id,
-                    status,
-                    None,
-                    None,
-                    Some(end),
-                    Some(e.as_str()),
-                    None,
+                    json!({
+                        "status": status,
+                        "endTime": end,
+                        "error": e,
+                    }),
                 );
             }
         }

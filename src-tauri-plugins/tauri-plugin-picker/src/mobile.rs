@@ -46,6 +46,15 @@ impl<R: Runtime> Picker<R> {
     Ok(result)
   }
 
+  pub async fn get_content_size(&self, uri: String) -> crate::Result<GetContentSizeResponse> {
+    let result: GetContentSizeResponse = self
+      .0
+      .run_mobile_plugin_async("getContentSize", GetContentSizeArgs { uri })
+      .await
+      .map_err(crate::Error::from)?;
+    Ok(result)
+  }
+
   pub async fn list_content_children(&self, uri: String) -> crate::Result<ListContentChildrenResponse> {
     let result: ListContentChildrenResponse = self
       .0

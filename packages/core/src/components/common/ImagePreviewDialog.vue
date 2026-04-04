@@ -89,7 +89,11 @@
         <aside class="preview-detail-drawer" :class="{ 'is-open': detailDrawerOpen }" @click.stop
           @wheel.stop>
           <div class="preview-detail-drawer-scroll">
-            <ImageDetailContent :image="previewImage" :plugins="plugins" />
+            <ImageDetailContent
+              :image="previewImage"
+              :plugins="plugins"
+              @open-task="emit('open-task', $event)"
+            />
           </div>
         </aside>
       </div>
@@ -144,6 +148,7 @@ const detailDrawerOpen = useLocalStorage("kabegame-preview-detail-open", false, 
 
 const emit = defineEmits<{
   (e: "contextCommand", payload: { command: string; image: ImageInfo }): void;
+  (e: "open-task", taskId: string): void;
 }>();
 
 const previewVisible = ref(false);

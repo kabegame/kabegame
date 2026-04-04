@@ -282,6 +282,12 @@ pub fn run() {
                             {
                                 eprintln!("Failed to fill missing image dimensions: {}", e);
                             }
+                            if let Err(e) = kabegame_core::storage::Storage::global()
+                                .fill_missing_sizes()
+                                .await
+                            {
+                                eprintln!("Failed to fill missing image sizes: {}", e);
+                            }
                             let _ = tauri::async_runtime::spawn_blocking(move || {
                                 if let Err(e) = kabegame_core::storage::Storage::global()
                                     .backfill_display_names()
@@ -324,6 +330,14 @@ pub fn run() {
                         {
                             eprintln!("[VideoCompress] Failed to set android compress provider: {e}");
                         }
+                        tauri::async_runtime::spawn(async {
+                            if let Err(e) = kabegame_core::storage::Storage::global()
+                                .fill_missing_sizes()
+                                .await
+                            {
+                                eprintln!("Failed to fill missing image sizes: {}", e);
+                            }
+                        });
                     }
 
                     // 初始化插件缓存

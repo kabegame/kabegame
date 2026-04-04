@@ -405,6 +405,24 @@ impl Storage {
         Ok(out)
     }
 
+    /// 列出终态任务 id（与 `clear_finished_tasks` 将删除的集合一致）。
+    pub fn get_finished_task_ids(&self) -> Result<Vec<String>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM tasks WHERE status IN ('completed', 'failed', 'canceled', 'cancelled')",
+            )
+            .map_err(|e| format!("Failed to prepare finished tasks query: {}", e))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("Failed to query finished tasks: {}", e))?;
+        let mut ids = Vec::new();
+        for r in rows {
+            ids.push(r.map_err(|e| format!("Failed to read row: {}", e))?);
+        }
+        Ok(ids)
+    }
+
     pub fn clear_finished_tasks(&self) -> Result<usize, String> {
         let (count, removed_failed_by_task): (usize, Vec<(String, Vec<i64>)>) = {
             let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -805,7 +823,8 @@ impl Storage {
                  i.height,
                  i.display_name,
                  COALESCE(i.type, 'image') as media_type,
-                 i.last_set_wallpaper_at
+                 i.last_set_wallpaper_at,
+                 i.size
                  FROM images i
                  LEFT JOIN album_images ON i.id = album_images.image_id AND album_images.album_id = ?2
                  WHERE i.task_id = ?1
@@ -836,6 +855,7 @@ impl Storage {
                         row.get::<_, Option<String>>(13)?,
                     ),
                     last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(row, 14)?,
+                    size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                 })
             })
             .map_err(|e| format!("Failed to query task images: {}", e))?;
@@ -864,7 +884,8 @@ impl Storage {
                  i.height,
                  i.display_name,
                  COALESCE(i.type, 'image') as media_type,
-                 i.last_set_wallpaper_at
+                 i.last_set_wallpaper_at,
+                 i.size
                  FROM images i
                  LEFT JOIN album_images ON i.id = album_images.image_id AND album_images.album_id = ?2
                  WHERE i.task_id = ?1
@@ -900,6 +921,7 @@ impl Storage {
                         last_set_wallpaper_at: crate::storage::images::row_optional_u64_ts(
                             row, 14,
                         )?,
+                        size: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
                     })
                 },
             )

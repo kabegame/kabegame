@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_i18n::t;
-// 事件转发到前端（桌面与 Android 均需要，用于 task-status 等）
+// 事件转发到前端（桌面与 Android 均需要，用于 tasks-change 等）
 use crate::wallpaper::manager::WallpaperController;
 use crate::wallpaper::WallpaperRotator;
 use kabegame_core::ipc::events::DaemonEventKind;
@@ -327,7 +327,7 @@ pub fn start_local_event_loop(app: AppHandle) {
                         });
                     }
                 }
-                DaemonEvent::TaskStatus { status, .. } => {
+                DaemonEvent::TaskChanged { diff, .. } => {
                     let event_name = kind.as_event_name();
                     let payload =
                         serde_json::to_value(&event).unwrap_or_else(|_| serde_json::Value::Null);
@@ -335,16 +335,18 @@ pub fn start_local_event_loop(app: AppHandle) {
 
                     #[cfg(target_os = "android")]
                     {
-                        use tauri_plugin_task_notification::TaskNotificationExt;
-                        let running = TaskScheduler::global().running_worker_count() as u32;
-                        let tn = app.task_notification();
-                        if running > 0 {
-                            let _ = tn.update_task_notification(running).await;
-                        } else if status == "completed"
-                            || status == "failed"
-                            || status == "canceled"
-                        {
-                            let _ = tn.clear_task_notification().await;
+                        if let Some(s) = diff.get("status").and_then(|v| v.as_str()) {
+                            use tauri_plugin_task_notification::TaskNotificationExt;
+                            let running = TaskScheduler::global().running_worker_count() as u32;
+                            let tn = app.task_notification();
+                            if running > 0 {
+                                let _ = tn.update_task_notification(running).await;
+                            } else if s == "completed"
+                                || s == "failed"
+                                || s == "canceled"
+                            {
+                                let _ = tn.clear_task_notification().await;
+                            }
                         }
                     }
                 }
