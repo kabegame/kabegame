@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::storage::gallery::ImageQuery;
 
+/// 统一 Provider 树使用的分组类型。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum MainGroupKind {
+pub enum ProviderGroupKind {
     Plugin,
     Date,
     DateRange,
@@ -27,21 +28,16 @@ pub enum DateScopedTier {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ProviderDescriptor {
-    Root,
-
-    Albums,
-    Album {
-        album_id: String,
+    /// 统一根：`/gallery` + `/vd`
+    UnifiedRoot,
+    /// 画廊根（canonical 名称）
+    GalleryRoot,
+    /// VD 根（locale 列表）
+    VdRoot,
+    /// 统一 Group 变体（替代旧 main/vd 分裂）
+    Group {
+        kind: ProviderGroupKind,
     },
-
-    PluginGroup,
-    /// 按种类（图片 / 视频）分组根目录（虚拟盘）
-    MediaTypeGroup,
-    DateGroup,
-    /// “按时间/范围” 根目录（子目录为动态范围：YYYY-MM-DD~YYYY-MM-DD）
-    DateRangeRoot,
-    TaskGroup,
-    SurfGroup,
 
     /// 统一的“图片集合” provider：由 ImageQuery 定义
     All {
@@ -54,12 +50,6 @@ pub enum ProviderDescriptor {
         offset: usize,
         count: usize,
         depth: usize,
-    },
-
-    /// 新增：MainProvider 体系（简单分页）
-    MainRoot,
-    MainGroup {
-        kind: MainGroupKind,
     },
     /// Main `date/YYYY`、`date/YYYY-MM`：贪心分解 + 子时间目录 + `desc`（与 CommonProvider 贪心语义一致）
     DateScoped {

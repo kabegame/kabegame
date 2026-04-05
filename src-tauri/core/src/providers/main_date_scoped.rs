@@ -1,19 +1,14 @@
-//! Main 路径 `date/YYYY`、`date/YYYY-MM`：列表层为贪心 + 子时间目录；`desc` 子节点为 `CommonProvider` + `PaginationMode::SimplePage`（与 `all/desc` 一致，支持 `.../desc/<page>`）。
+//! Main 路径 `date/YYYY`、`date/YYYY-MM`：列表层为贪心 + 子时间目录；
+//! `desc` 子节点为 `CommonProvider` + `PaginationMode::SimplePage`。
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::providers::common::{
-    self, CommonProvider, PaginationMode, RangeProvider, SimplePageProvider,
-};
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
+use crate::providers::common::{self, CommonProvider, PaginationMode, RangeProvider, SimplePageProvider};
 use crate::providers::descriptor::{DateScopedTier, ProviderDescriptor};
-use crate::providers::provider::{FsEntry, Provider, ResolveChild};
+use crate::providers::provider::{ListEntry, Provider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
-/// MainProvider：`date/<年>` / `date/<月>` 下的「大目录」聚合视图
 #[derive(Clone)]
 pub struct MainDateScopedProvider {
     query: ImageQuery,
@@ -48,15 +43,21 @@ impl Provider for MainDateScopedProvider {
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
         let total = Storage::global().get_images_count_by_query(&self.query)?;
         if total == 0 {
             return Ok(Vec::new());
         }
 
-        let mut entries = Vec::new();
+        let mut entries: Vec<ListEntry> = Vec::new();
         if self.query.is_ascending() {
-            entries.push(FsEntry::dir("desc"));
+            entries.push(ListEntry::Child {
+                name: "desc".to_string(),
+                provider: Arc::new(CommonProvider::with_query_and_mode(
+                    self.query.to_desc(),
+                    PaginationMode::SimplePage,
+                )),
+            });
         }
 
         match &self.tier {
@@ -65,7 +66,10 @@ impl Provider for MainDateScopedProvider {
                 let prefix = format!("{year}-");
                 for g in groups {
                     if g.year_month.len() == 7 && g.year_month.starts_with(&prefix) {
-                        entries.push(FsEntry::dir(g.year_month));
+                        entries.push(ListEntry::Child {
+                            name: g.year_month.clone(),
+                            provider: Arc::new(MainDateScopedProvider::for_month(g.year_month)),
+                        });
                     }
                 }
             }
@@ -74,26 +78,67 @@ impl Provider for MainDateScopedProvider {
                 let days = Storage::global().get_gallery_day_groups()?;
                 for d in days {
                     if d.ymd.len() == 10 && d.ymd.starts_with(&prefix) {
-                        entries.push(FsEntry::dir(d.ymd));
+                        let q = ImageQuery::by_date_day(d.ymd.clone());
+                        if Storage::global().get_images_count_by_query(&q)? > 0 {
+                            entries.push(ListEntry::Child {
+                                name: d.ymd,
+                                provider: Arc::new(CommonProvider::with_query_and_mode(
+                                    q,
+                                    PaginationMode::SimplePage,
+                                )),
+                            });
+                        }
                     }
                 }
             }
         }
 
         if total <= common::LEAF_SIZE {
-            let files =
-                Storage::global().get_images_fs_entries_by_query(&self.query, 0, total)?;
-            entries.extend(
-                files
-                    .into_iter()
-                    .map(|e| FsEntry::file(e.file_name, e.image_id, PathBuf::from(e.resolved_path))),
-            );
+            let images = Storage::global().get_image_entries_by_query(&self.query, 0, total)?;
+            entries.extend(images.into_iter().map(ListEntry::Image));
         } else {
-            entries.extend(common::list_greedy_subdirs_with_remainder(
-                &self.query,
-                0,
-                total,
-            )?);
+            let ranges = {
+                let mut out = Vec::new();
+                let mut pos = 0usize;
+                let mut size = common::LEAF_SIZE;
+                let mut sizes = Vec::new();
+                while size <= total {
+                    sizes.push(size);
+                    size *= 10;
+                }
+                sizes.reverse();
+                for s in sizes {
+                    if s == total {
+                        continue;
+                    }
+                    while pos + s <= total {
+                        out.push((pos, s));
+                        pos += s;
+                    }
+                }
+                out
+            };
+            for (offset, count) in &ranges {
+                entries.push(ListEntry::Child {
+                    name: format!("{}-{}", offset + 1, offset + count),
+                    provider: Arc::new(RangeProvider::new(
+                        self.query.clone(),
+                        *offset,
+                        *count,
+                        common::calc_depth_for_size(*count),
+                    )),
+                });
+            }
+            let covered: usize = ranges.iter().map(|(_, c)| c).sum();
+            let remainder = total.saturating_sub(covered);
+            if remainder > 0 {
+                let images = Storage::global().get_image_entries_by_query(
+                    &self.query,
+                    covered,
+                    remainder,
+                )?;
+                entries.extend(images.into_iter().map(ListEntry::Image));
+            }
         }
 
         Ok(entries)
@@ -101,6 +146,11 @@ impl Provider for MainDateScopedProvider {
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         let name = name.trim();
+        if let Ok(page) = name.parse::<usize>() {
+            if page > 0 {
+                return Some(Arc::new(SimplePageProvider::new(self.query.clone(), page)));
+            }
+        }
 
         if name == "desc" && self.query.is_ascending() {
             return Some(Arc::new(CommonProvider::with_query_and_mode(
@@ -114,12 +164,8 @@ impl Provider for MainDateScopedProvider {
                 if name.len() == 7 && name.as_bytes().get(4) == Some(&b'-') {
                     let groups = Storage::global().get_gallery_date_groups().ok()?;
                     let prefix = format!("{year}-");
-                    if name.starts_with(&prefix)
-                        && groups.iter().any(|g| g.year_month == name)
-                    {
-                        return Some(Arc::new(MainDateScopedProvider::for_month(
-                            name.to_string(),
-                        )));
+                    if name.starts_with(&prefix) && groups.iter().any(|g| g.year_month == name) {
+                        return Some(Arc::new(MainDateScopedProvider::for_month(name.to_string())));
                     }
                 }
             }
@@ -160,59 +206,5 @@ impl Provider for MainDateScopedProvider {
             count,
             depth,
         )))
-    }
-
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        // 先解析页码，避免与 `get_child` 中贪心区间等逻辑歧义（与 SimplePage 一致）
-        if let Ok(page) = name.parse::<usize>() {
-            if page > 0 {
-                return ResolveChild::Dynamic(Arc::new(SimplePageProvider::new(
-                    self.query.clone(),
-                    page,
-                )) as Arc<dyn Provider>);
-            }
-        }
-        if let Some(p) = self.get_child(name) {
-            return ResolveChild::Dynamic(p);
-        }
-        ResolveChild::NotFound
-    }
-
-    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
-        let image_id = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
-        if image_id.trim().is_empty() {
-            return None;
-        }
-        let resolved = Storage::global().resolve_gallery_image_path(image_id).ok()??;
-        Some((image_id.to_string(), PathBuf::from(resolved)))
-    }
-
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    fn delete_child(
-        &self,
-        child_name: &str,
-        kind: DeleteChildKind,
-        mode: DeleteChildMode,
-        ctx: &dyn VdOpsContext,
-    ) -> Result<bool, String> {
-        if kind != DeleteChildKind::File {
-            return Err("不支持删除该类型".to_string());
-        }
-        if !crate::providers::vd_ops::query_can_delete_child_file(&self.query) {
-            return Err("当前目录不支持删除文件".to_string());
-        }
-        if mode == DeleteChildMode::Check {
-            return Ok(true);
-        }
-        let removed =
-            crate::providers::vd_ops::query_delete_child_file(&self.query, child_name)?;
-        if removed {
-            if let Some(album_id) = crate::providers::vd_ops::album_id_from_query(&self.query) {
-                if let Some(name) = Storage::global().get_album_name_by_id(album_id)? {
-                    ctx.album_images_removed(album_id, &name);
-                }
-            }
-        }
-        Ok(removed)
     }
 }

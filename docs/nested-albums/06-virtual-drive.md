@@ -1,20 +1,49 @@
-# 虚拟盘 Provider 与多级路径
+# 虚拟盘（VD）架构与路径语义
 
-## 现状
+## 当前架构（Phase 7）
 
-`src-tauri/core/src/providers/albums.rs` 中：
+虚拟盘已完成 Provider 重构，核心模型如下：
 
-- `AlbumsProvider::list` 列出所有画册名为**一层目录**。
-- `get_child` 按名称解析到 `AlbumProvider`（单册内为图片文件）。
+- 统一入口：`ProviderRuntime`（全局单例，path-only API）
+- 统一根：`UnifiedRootProvider`
+  - `gallery/...`：画廊路径（`SimplePage` 模式）
+  - `vd/{locale}/...`：虚拟盘路径（`Greedy` 模式，目录名随 locale 翻译）
+- 虚拟盘语义层：`VfsSemantics`
+  - 目录读取：`provider.list_entries()`
+  - 文件解析：从父目录 `ListEntry::Image` 匹配文件名并打开 `ImageEntry.local_path`
+  - 说明文件：`provider.get_note()` 注入为虚拟文本文件
+  - 写操作：仅使用新接口 `add_child` / `rename_child` / `delete_child_v2`
 
-即虚拟盘上为 `画册\<画册名>\` 的扁平结构。
+不再使用旧的 `RootProvider`、`VdOpsContext`、`delete_child(kind, mode, ctx)` 等 VD-only 兼容接口。
 
-## 嵌套后
+## 路径与 i18n
 
-- 与前端一致（见 [00-product-decisions.md](./00-product-decisions.md) §2）：进入某一画册目录时，列出 **子画册子文件夹** + **本层图片文件**，**不**把子孙画册内图片全部摊平到当前目录。
-- 目录结构需变为 **多级**，例如 `画册\父\子\`，与数据库中的父子关系一致。
-- **`mkdir` / 删除目录** 等 VD 语义（见 `can_create_child_dir`、`create_child_dir`、`delete_child`）是否映射为「创建子画册」「删除画册」，需与 Storage 创建/删除 API 对齐。
-- 名称解析：路径分段需映射到**唯一画册节点**（注意重名仅在不同父下允许时的查找逻辑）。
-- `VirtualDriveService::bump_albums` 等缓存失效时机：树变更时仍应触发刷新。
+虚拟盘路径固定为：
 
-桌面 **Light** 模式无虚拟盘；**Android** 当前不参与 VD，实现时按条件编译分支处理。
+- 根：`vd/{locale}`
+- 示例：`vd/zh/全部/...`、`vd/en/all/...`
+
+`locale` 由 `VdRootProvider` 选择，随后通过 `ProviderConfig.locale` 继承到整棵子树，实现：
+
+- 列表名翻译（`display_name`）
+- 路径反查（`canonical_name`）
+
+即同一 provider 在不同 locale 下可使用不同目录显示名，但内部仍映射到同一 canonical 语义。
+
+## 与 browse 的对应
+
+前端 browse 与 VD 都建立在同一 provider 树之上：
+
+- browse：`provider_rt.resolve("gallery/" + path)`
+- VD：`provider_rt.resolve("vd/{locale}/" + path)`
+
+两者差异仅在：
+
+- 分页语义（`SimplePage` vs `Greedy`）
+- 目录名称本地化（VD 有 locale，gallery 默认 canonical）
+
+## 平台范围
+
+- 支持：Windows / macOS / Linux / Android（应用整体）
+- 虚拟盘功能：桌面平台（Windows、macOS、Linux）
+- iOS：不支持

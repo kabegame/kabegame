@@ -8,9 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::providers::descriptor::ProviderDescriptor;
-use crate::providers::provider::FsEntry;
-use crate::providers::{ProviderRuntime, main_root::MainRootProvider};
-use crate::storage::gallery::ImageQuery;
+use crate::providers::provider::ListEntry;
+use crate::providers::ProviderRuntime;
 use crate::storage::{ImageInfo, Storage};
 
 /// 返回给前端的条目
@@ -74,18 +73,15 @@ pub fn browse_gallery_provider(
         return Err("path 不能为空".to_string());
     }
 
-    let root = std::sync::Arc::new(MainRootProvider::new())
-        as std::sync::Arc<dyn crate::providers::provider::Provider>;
-
     // 解析到 provider
     let provider = provider_rt
-        .resolve_provider_for_root(root, &raw_segs)?
+        .resolve(&format!("gallery/{}", raw_segs.join("/")))?
         .ok_or_else(|| format!("路径不存在: {}", path.trim()))?;
 
     let desc = provider.descriptor();
 
     match desc {
-        // 新增：SimplePage 直接返回图片（叶子节点）
+        // SimplePage 直接返回图片（叶子节点）
         ProviderDescriptor::SimplePage { query, page } => {
             let total = storage.get_images_count_by_query(&query)?;
             if total == 0 {
@@ -118,7 +114,7 @@ pub fn browse_gallery_provider(
                     .collect(),
             })
         }
-        // 新增：SimpleAll 返回 total + 目录列表（根节点）
+        // SimpleAll 直接按 page_size 返回第一页图片
         ProviderDescriptor::SimpleAll { query } => {
             let total = storage.get_images_count_by_query(&query)?;
             if total == 0 {
@@ -129,118 +125,57 @@ pub fn browse_gallery_provider(
                     entries: vec![],
                 });
             }
-            // 返回目录列表（desc 子目录 + 页码目录）
-            let mut entries = Vec::new();
-            if query.is_ascending() {
-                entries.push(GalleryBrowseEntry::Dir { name: "desc".to_string() });
-            }
-            // 页码目录通过 resolve_child 动态提供，这里只返回 total
+            let count = page_size.min(total);
+            let imgs = storage.get_images_info_range_by_query(&query, 0, count)?;
             Ok(GalleryBrowseResult {
                 total,
                 base_offset: 0,
-                range_total: total,
-                entries,
-            })
-        }
-
-        // 保留旧兼容性：DiskProvider 体系
-        ProviderDescriptor::All { query } => {
-            let total = storage.get_images_count_by_query(&query)?;
-            if total == 0 {
-                return Ok(GalleryBrowseResult {
-                    total: 0,
-                    base_offset: 0,
-                    range_total: 0,
-                    entries: vec![],
-                });
-            }
-            list_node(storage, &query, total, 0, total)
-        }
-        ProviderDescriptor::Album { album_id } => {
-            // 画册视图：构建 by_album 查询
-            let query = ImageQuery::by_album(album_id);
-            let total = storage.get_images_count_by_query(&query)?;
-            if total == 0 {
-                return Ok(GalleryBrowseResult {
-                    total: 0,
-                    base_offset: 0,
-                    range_total: 0,
-                    entries: vec![],
-                });
-            }
-            list_node(storage, &query, total, 0, total)
-        }
-        ProviderDescriptor::Range {
-            query,
-            offset,
-            count,
-            depth: _,
-        } => {
-            let total = storage.get_images_count_by_query(&query)?;
-            if total == 0 {
-                return Ok(GalleryBrowseResult {
-                    total: 0,
-                    base_offset: 0,
-                    range_total: 0,
-                    entries: vec![],
-                });
-            }
-            list_node(storage, &query, total, offset, count)
-        }
-        ProviderDescriptor::DateScoped { query, .. } => {
-            let total = storage.get_images_count_by_query(&query)?;
-            if total == 0 {
-                return Ok(GalleryBrowseResult {
-                    total: 0,
-                    base_offset: 0,
-                    range_total: 0,
-                    entries: vec![],
-                });
-            }
-            let raw = provider.list()?;
-            let entries = fs_entries_to_gallery_browse(storage, raw)?;
-            Ok(GalleryBrowseResult {
-                total,
-                base_offset: 0,
-                range_total: total,
-                entries,
+                range_total: count,
+                entries: imgs
+                    .into_iter()
+                    .map(|image| GalleryBrowseEntry::Image { image })
+                    .collect(),
             })
         }
         _ => {
-            // 非图片集合 provider：只返回目录列表
-            let entries = provider.list()?;
+            let (total, base_offset, range_total) = match &desc {
+                ProviderDescriptor::All { query }
+                | ProviderDescriptor::DateScoped { query, .. } => {
+                    let t = storage.get_images_count_by_query(query)?;
+                    (t, 0, t)
+                }
+                ProviderDescriptor::Range { query, offset, count, .. } => {
+                    let t = storage.get_images_count_by_query(query)?;
+                    (t, *offset, *count)
+                }
+                _ => (0, 0, 0),
+            };
+            let entries = provider.list_entries()?;
+            let entries = list_entries_to_gallery_browse(storage, entries)?;
             Ok(GalleryBrowseResult {
-                total: 0,
-                base_offset: 0,
-                range_total: 0,
-                entries: entries
-                    .into_iter()
-                    .filter_map(|e| match e {
-                        crate::providers::provider::FsEntry::Directory { name } => {
-                            Some(GalleryBrowseEntry::Dir { name })
-                        }
-                        _ => None,
-                    })
-                    .collect(),
+                total,
+                base_offset,
+                range_total,
+                entries,
             })
         }
     }
 }
 
-fn fs_entries_to_gallery_browse(
+fn list_entries_to_gallery_browse(
     storage: &Storage,
-    entries: Vec<FsEntry>,
+    entries: Vec<ListEntry>,
 ) -> Result<Vec<GalleryBrowseEntry>, String> {
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
         match e {
-            FsEntry::Directory { name } => {
+            ListEntry::Child { name, .. } => {
                 out.push(GalleryBrowseEntry::Dir { name });
             }
-            FsEntry::File { image_id, .. } => {
+            ListEntry::Image(image_entry) => {
                 let mut image = storage
-                    .find_image_by_id(&image_id)?
-                    .ok_or_else(|| format!("图片不存在: {}", image_id))?;
+                    .find_image_by_id(&image_entry.id)?
+                    .ok_or_else(|| format!("图片不存在: {}", image_entry.id))?;
                 image.metadata = None;
                 out.push(GalleryBrowseEntry::Image { image });
             }
@@ -249,91 +184,3 @@ fn fs_entries_to_gallery_browse(
     Ok(out)
 }
 
-// === 与 AllProvider 同步的贪心分解逻辑 ===
-
-/// 叶子目录最多包含的图片数量（安卓与桌面统一：每页 100 张）
-const LEAF_SIZE: usize = 100;
-/// 每个分组目录最多包含的子目录数量
-const GROUP_SIZE: usize = 10;
-
-fn get_range_sizes(total: usize) -> Vec<usize> {
-    let mut sizes = Vec::new();
-    let mut size = LEAF_SIZE;
-    while size <= total {
-        sizes.push(size);
-        size *= GROUP_SIZE;
-    }
-    sizes.reverse();
-    sizes
-}
-
-fn greedy_decompose(total: usize) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let sizes = get_range_sizes(total);
-    let mut pos = 0;
-
-    for size in sizes {
-        if size == total {
-            continue;
-        }
-        while pos + size <= total {
-            ranges.push((pos, size));
-            pos += size;
-        }
-    }
-
-    ranges
-}
-
-fn range_name(start_1based: usize, end_1based: usize) -> String {
-    format!("{}-{}", start_1based, end_1based)
-}
-
-fn list_node(
-    storage: &Storage,
-    query: &ImageQuery,
-    total: usize,
-    base_offset: usize,
-    range_total: usize,
-) -> Result<GalleryBrowseResult, String> {
-    if range_total <= LEAF_SIZE {
-        let imgs = storage.get_images_info_range_by_query(query, base_offset, range_total)?;
-        return Ok(GalleryBrowseResult {
-            total,
-            base_offset,
-            range_total,
-            entries: imgs
-                .into_iter()
-                .map(|image| GalleryBrowseEntry::Image { image })
-                .collect(),
-        });
-    }
-
-    let ranges = greedy_decompose(range_total);
-    let covered: usize = ranges.iter().map(|(_, c)| c).sum();
-    let remainder = range_total.saturating_sub(covered);
-
-    let mut entries: Vec<GalleryBrowseEntry> = Vec::new();
-
-    for (offset, count) in &ranges {
-        entries.push(GalleryBrowseEntry::Dir {
-            name: range_name(*offset + 1, *offset + *count),
-        });
-    }
-
-    if remainder > 0 {
-        let remainder_offset = base_offset + covered;
-        let imgs = storage.get_images_info_range_by_query(query, remainder_offset, remainder)?;
-        entries.extend(
-            imgs.into_iter()
-                .map(|image| GalleryBrowseEntry::Image { image }),
-        );
-    }
-
-    Ok(GalleryBrowseResult {
-        total,
-        base_offset,
-        range_total,
-        entries,
-    })
-}

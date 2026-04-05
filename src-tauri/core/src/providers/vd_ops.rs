@@ -12,8 +12,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-/// 从文件名中提取 image_id
-pub(crate) fn image_id_from_filename(name: &str) -> Option<&str> {
+fn image_id_from_filename(name: &str) -> Option<&str> {
     let image_id = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
     let trimmed = image_id.trim();
     if trimmed.is_empty() {
@@ -23,17 +22,11 @@ pub(crate) fn image_id_from_filename(name: &str) -> Option<&str> {
     }
 }
 
-/// 从 ImageQuery 中提取 album_id
-pub(crate) fn album_id_from_query(query: &ImageQuery) -> Option<&str> {
+fn album_id_from_query(query: &ImageQuery) -> Option<&str> {
     query.album_id()
 }
 
-pub(crate) fn query_can_delete_child_file(query: &ImageQuery) -> bool {
-    // 仅当该查询代表“画册视图”（by_album）时才允许 delete file = remove from album
-    album_id_from_query(query).is_some()
-}
-
-pub(crate) fn query_delete_child_file(
+pub(crate) fn delete_child_file_by_query(
     query: &ImageQuery,
     child_name: &str,
 ) -> Result<bool, String> {
@@ -48,12 +41,8 @@ pub(crate) fn query_delete_child_file(
 }
 
 /// 在虚拟盘中创建画册子目录
-pub(crate) fn albums_create_child_dir(child_name: &str) -> Result<(), String> {
-    Storage::global().add_album(child_name).map(|_| ())
-}
-
 /// 在虚拟盘中将一张图片移除画册
-pub(crate) fn album_delete_child_file(
+pub(crate) fn delete_child_file_by_album(
     album_id: &str,
     child_name: &str,
 ) -> Result<bool, String> {

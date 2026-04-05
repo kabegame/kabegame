@@ -32,9 +32,8 @@ use super::driver_service::{join_mount_subdir, notify_explorer_dir_changed_path}
 use super::fs::KabegameFs;
 use super::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
-use crate::emitter::GlobalEmitter;
-use crate::providers::provider::{DeleteChildMode, FsEntry, Provider, VdOpsContext};
-use crate::providers::root::{DIR_ALBUMS, DIR_BY_TASK};
+use crate::providers::provider::DeleteChildMode;
+use crate::providers::vd_names::{DIR_ALBUMS, DIR_BY_TASK};
 use crate::settings::Settings;
 use crate::storage::Storage;
 use dokan::{
@@ -101,28 +100,6 @@ fn get_mount_point() -> String {
         .unwrap_or_else(|_| DEFAULT_MOUNT_POINT.to_string())
 }
 
-/// 虚拟盘 RootProvider（VD 用）：包含按时间、按插件、按任务、画册、全部
-pub struct VirtualDriveRootProvider;
-
-impl Provider for VirtualDriveRootProvider {
-    fn descriptor(&self) -> crate::providers::descriptor::ProviderDescriptor {
-        // VD 的 root 只是内部使用；这里用 Root descriptor 复用即可
-        crate::providers::descriptor::ProviderDescriptor::Root
-    }
-
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        crate::providers::RootProvider::default().list()
-    }
-
-    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
-        crate::providers::RootProvider::default().get_child(name)
-    }
-
-    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
-        crate::providers::RootProvider::default().resolve_file(name)
-    }
-}
-
 /// 文件系统项（Dokan handler 内部使用）
 #[derive(Clone)]
 pub enum FsItem {
@@ -139,49 +116,9 @@ pub enum FsItem {
     },
 }
 
-pub struct WindowsVdOpsContext;
-
-impl WindowsVdOpsContext {
+impl KabegameFs {
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl VdOpsContext for WindowsVdOpsContext {
-    fn albums_created(&self, _album_name: &str) {
-        // 事件由 storage add_album 底层发出 AlbumAdded，此处仅刷新 Explorer
-        let mount_point = get_mount_point();
-        notify_explorer_dir_changed_path(&join_mount_subdir(&mount_point, DIR_ALBUMS));
-        notify_explorer_dir_changed_path(&mount_point);
-    }
-
-    fn albums_deleted(&self, _album_name: &str) {
-        // 事件由 storage delete_album 底层发出 AlbumDeleted，此处仅刷新 Explorer
-        let mount_point = get_mount_point();
-        notify_explorer_dir_changed_path(&mount_point);
-    }
-
-    fn album_images_removed(&self, album_id: &str, album_name: &str) {
-        let _ = album_name;
-        let ids: Vec<String> = Vec::new();
-        let alb = vec![album_id.to_string()];
-        GlobalEmitter::global().emit_album_images_change("delete", &alb, &ids);
-        let mount_point = get_mount_point();
-        notify_explorer_dir_changed_path(&mount_point);
-    }
-
-    fn tasks_deleted(&self, task_id: &str) {
-        GlobalEmitter::global().emit_task_deleted(task_id);
-        // 刷新"按任务"目录（以及根目录）
-        let mount_point = get_mount_point();
-        notify_explorer_dir_changed_path(&join_mount_subdir(&mount_point, DIR_BY_TASK));
-        notify_explorer_dir_changed_path(&mount_point);
-    }
-}
-
-impl KabegameFs {
-    pub fn new(root: Arc<dyn Provider>) -> Self {
-        Self { root }
     }
 
     fn deny_access() -> winapi::shared::ntdef::NTSTATUS {
@@ -223,11 +160,10 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 }
                 let parent_path = &path[..path.len().saturating_sub(1)];
                 let child_name = path.last().map(|s| s.as_str()).unwrap_or("");
-                let ctx = WindowsVdOpsContext::new();
                 let rt = crate::providers::ProviderRuntime::global();
-                let sem = VfsSemantics::new(&self.root, &*rt);
+                let sem = VfsSemantics::new(&*rt);
                 if sem
-                    .delete_dir(parent_path, child_name, DeleteChildMode::Commit, &ctx)
+                    .delete_dir(parent_path, child_name, DeleteChildMode::Commit)
                     .ok()
                     .unwrap_or(false)
                 {
@@ -240,11 +176,10 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 if path.len() >= 3 && path[0].eq_ignore_ascii_case(DIR_ALBUMS) {
                     let file_name = path.last().map(|s| s.as_str()).unwrap_or("");
                     let parent_path = &path[..path.len().saturating_sub(1)];
-                    let ctx = WindowsVdOpsContext::new();
                     let rt = crate::providers::ProviderRuntime::global();
-                    let sem = VfsSemantics::new(&self.root, &*rt);
+                    let sem = VfsSemantics::new(&*rt);
                     if sem
-                        .delete_file(parent_path, file_name, DeleteChildMode::Commit, &ctx)
+                        .delete_file(parent_path, file_name, DeleteChildMode::Commit)
                         .ok()
                         .unwrap_or(false)
                     {
@@ -275,7 +210,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         );
         let segs = parse_segments(file_name);
         let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(&self.root, &*rt);
+        let sem = VfsSemantics::new(&*rt);
 
         // 3 = OPEN_EXISTING；其他均视为“创建类操作”。
         // 默认只读：只有 provider 覆写允许的场景才放行（目前：画册根目录 mkdir）。
@@ -316,8 +251,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 return Err(STATUS_INVALID_PARAMETER);
             }
 
-            let ctx = WindowsVdOpsContext::new();
-            match sem.create_dir(parent_path, dir_name, &ctx) {
+            match sem.create_dir(parent_path, dir_name) {
                 Ok(()) => {
                     return Ok(CreateFileInfo {
                         context: FsItem::Directory { path: segs },
@@ -454,7 +388,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         match context {
             FsItem::Directory { path } => {
                 let rt = crate::providers::ProviderRuntime::global();
-                let sem = VfsSemantics::new(&self.root, &*rt);
+                let sem = VfsSemantics::new(&*rt);
                 let entries = sem.read_dir(path).map_err(Self::map_vfs_error)?;
                 for entry in entries {
                     let (attributes, file_size, created, accessed, modified, file_name) =
@@ -509,7 +443,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             return Err(STATUS_INVALID_PARAMETER);
         }
         let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(&self.root, &*rt);
+        let sem = VfsSemantics::new(&*rt);
         let n = sem
             .read_file(read_handle, offset as u64, buffer)
             .map_err(Self::map_vfs_error)?;
@@ -542,13 +476,12 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             let parent_path = &path[..path.len().saturating_sub(1)];
             let file_name = path.last().map(|s| s.as_str()).unwrap_or("");
             let rt = crate::providers::ProviderRuntime::global();
-            let sem = VfsSemantics::new(&self.root, &*rt);
+            let sem = VfsSemantics::new(&*rt);
             let ok = sem
                 .delete_file(
                     parent_path,
                     file_name,
                     DeleteChildMode::Check,
-                    &WindowsVdOpsContext::new(),
                 )
                 .is_ok();
             if ok {
@@ -574,12 +507,11 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         let parent_path = &path[..path.len().saturating_sub(1)];
         let child_name = path.last().map(|s| s.as_str()).unwrap_or("");
         let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(&self.root, &*rt);
+        let sem = VfsSemantics::new(&*rt);
         sem.delete_dir(
             parent_path,
             child_name,
             DeleteChildMode::Check,
-            &WindowsVdOpsContext::new(),
         )
         .map(|_| ())
         .map_err(|e| Self::map_vfs_error(e))
@@ -614,7 +546,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
 
         // 查找 Provider 并执行重命名
         let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(&self.root, &*rt);
+        let sem = VfsSemantics::new(&*rt);
         sem.rename_dir(path, new_name)
             .map_err(Self::map_vfs_error)?;
         // 事件由 storage rename_album 底层发出 AlbumNameChanged，此处仅刷新 Explorer

@@ -16,7 +16,8 @@ use sled::Db;
 
 use crate::providers::descriptor::ProviderDescriptor;
 use crate::providers::factory::ProviderFactory;
-use crate::providers::provider::{FsEntry, Provider, ResolveChild};
+use crate::providers::provider::{ListEntry, Provider};
+use crate::providers::UnifiedRootProvider;
 
 #[derive(Debug, Clone)]
 pub struct ProviderCacheConfig {
@@ -35,7 +36,7 @@ impl Default for ProviderCacheConfig {
         Self {
             warm_max_nodes: 20_000,
             db_dir: crate::app_paths::AppPaths::global().provider_cache_dir(),
-            key_prefix: "kabegame:provider:v5".to_string(),
+            key_prefix: "kabegame:provider:v7".to_string(),
             lru_capacity: 1024,
         }
     }
@@ -46,6 +47,7 @@ pub struct ProviderRuntime {
     cfg: ProviderCacheConfig,
     db: Db,
     lru: Mutex<LruCache<String, Arc<dyn Provider>>>,
+    root: Arc<dyn Provider>,
 }
 
 // 全局单例
@@ -56,10 +58,12 @@ impl ProviderRuntime {
         let db = sled::open(&cfg.db_dir).map_err(|e| format!("open sled failed: {}", e))?;
         let cap = std::num::NonZeroUsize::new(cfg.lru_capacity.max(1))
             .unwrap_or_else(|| std::num::NonZeroUsize::new(1024).unwrap());
+        let root = Arc::new(UnifiedRootProvider) as Arc<dyn Provider>;
         Ok(Self {
             cfg,
             db,
             lru: Mutex::new(LruCache::new(cap)),
+            root,
         })
     }
 
@@ -116,6 +120,13 @@ impl ProviderRuntime {
             s.push_str(&Self::normalize_seg(seg));
         }
         s
+    }
+
+    fn parse_path_segments<'a>(&self, path: &'a str) -> Vec<&'a str> {
+        path.split('/')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     fn db_get_descriptor_by_key(&self, key: &str) -> Result<Option<ProviderDescriptor>, String> {
@@ -190,46 +201,44 @@ impl ProviderRuntime {
         Ok(None)
     }
 
-    /// 从 list 结果缓存子目录
-    fn cache_children_from_list(
+    /// 从 `list_entries()` 结果缓存子 provider。
+    ///
+    /// 缓存策略：
+    /// - `ListEntry::Child`：视为静态节点，写入 sled + LRU
+    /// - 动态节点：由 resolve 流程 fallback `get_child(name)` 得到，仅写入 LRU
+    fn cache_children_from_list_entries(
         &self,
         parent_segments: &[&str],
         parent: Arc<dyn Provider>,
     ) -> Result<Vec<(String, Arc<dyn Provider>)>, String> {
-        let entries = parent.list()?;
+        let entries = parent.list_entries()?;
         let mut children: Vec<(String, Arc<dyn Provider>)> = Vec::new();
-        for e in &entries {
-            let FsEntry::Directory { name } = e else {
+        for entry in entries {
+            let ListEntry::Child { name, provider } = entry else {
                 continue;
             };
-            if let Some(child) = parent.get_child(name) {
-                let mut child_path: Vec<&str> = parent_segments.to_vec();
-                child_path.push(name);
-                let key = self.key_for_segments(&child_path);
-                let desc = child.descriptor();
-                let _ = self.db_put_descriptor_by_key(&key, &desc);
-                if let Ok(mut lru) = self.lru.lock() {
-                    lru.put(key, child.clone());
-                }
-                children.push((name.clone(), child));
+            let mut child_path: Vec<&str> = parent_segments.to_vec();
+            child_path.push(&name);
+            let key = self.key_for_segments(&child_path);
+            let desc = provider.descriptor();
+            let _ = self.db_put_descriptor_by_key(&key, &desc);
+            if let Ok(mut lru) = self.lru.lock() {
+                lru.put(key, provider.clone());
             }
+            children.push((name, provider));
         }
         Ok(children)
     }
 
-    /// 列目录并为所有 child 目录写入 key（并把 child provider 放入内存）。
-    ///
-    /// 返回 list 结果（原样）。
-    pub fn list_and_cache_children(
+    fn cache_dynamic_child_to_lru(
         &self,
-        parent_segments: &[&str],
-        parent: Arc<dyn Provider>,
-    ) -> Result<Vec<FsEntry>, String> {
-        // 先 cache 一次 children（符合“由 list 设置 key”的规则）
-        let _ = self.cache_children_from_list(parent_segments, parent.clone());
-        // 再返回 list 结果（避免为了返回 entries 重复 list：这里直接再 list 一次，成本可接受；
-        // 如需极致优化可把 entries 缓存下来一起返回）
-        parent.list()
+        child_segments: &[&str],
+        child: Arc<dyn Provider>,
+    ) {
+        let key = self.key_for_segments(child_segments);
+        if let Ok(mut lru) = self.lru.lock() {
+            lru.put(key, child);
+        }
     }
 
     fn ensure_root_descriptor(&self, root: Arc<dyn Provider>) -> Result<(), String> {
@@ -246,7 +255,7 @@ impl ProviderRuntime {
     }
 
     /// 解析路径到 Provider（目录）。
-    /// 若该路径未缓存，则从最长前缀开始不断 `list_and_cache_children` 刷新，直到解析到目标或无法推进。
+    /// 若该路径未缓存，则从最长前缀开始不断 `list_entries` 刷新，直到解析到目标或无法推进。
     pub fn resolve_provider_for_root(
         &self,
         root: Arc<dyn Provider>,
@@ -262,7 +271,7 @@ impl ProviderRuntime {
         let Some((mut prefix_len, mut provider)) = self.find_longest_prefix_provider(segments)?
         else {
             // 理论上不应发生：ensure_root_descriptor 已写入 root key，并把 root 放入 LRU。
-            let _ = self.list_and_cache_children(&[], root.clone());
+            let _ = self.cache_children_from_list_entries(&[], root.clone());
             return Ok(None);
         };
 
@@ -273,62 +282,53 @@ impl ProviderRuntime {
 
         // 线性推进：每次用当前 prefix provider 刷新下一层，然后尝试获取 prefix_len+1 的 provider
         while prefix_len < segments.len() {
-            let _ =
-                self.list_and_cache_children(&segments[..prefix_len], provider.clone());
+            let _ = self.cache_children_from_list_entries(&segments[..prefix_len], provider.clone());
             let next_name = segments[prefix_len];
             prefix_len += 1;
             let key = self.key_for_segments(&segments[..prefix_len]);
 
-            // 优先走“由 list 设置 key”的常规路径
+            // 优先走“由 list_entries 设置 key”的常规路径
             if let Some(p) = self.get_or_build_provider_by_key(&key)? {
                 provider = p;
                 continue;
             }
-            // 显式动态解析：只有 provider 明确返回 Dynamic/Listed 才允许继续
-            match provider.resolve_child(next_name) {
-                ResolveChild::NotFound => {
-                    // 列过目录仍拿不到下一层，且不支持动态解析：路径不存在
-                    return Ok(None);
-                }
-                ResolveChild::Listed(child) => {
-                    // Listed：补写 descriptor，后续可通过 key 直接重建
-                    let desc = child.descriptor();
-                    let _ = self.db_put_descriptor_by_key(&key, &desc);
-                    if let Ok(mut lru) = self.lru.lock() {
-                        lru.put(key, child.clone());
-                    }
-                    provider = child;
-                }
-                ResolveChild::Dynamic(child) => {
-                    // Dynamic：仅进内存 LRU（不落 sled，避免无限组合污染持久缓存）
-                    if let Ok(mut lru) = self.lru.lock() {
-                        lru.put(key, child.clone());
-                    }
-                    provider = child;
-                }
+
+            // fallback：动态解析，仅进 LRU（不落 sled）
+            if let Some(dynamic) = provider.get_child(next_name) {
+                self.cache_dynamic_child_to_lru(&segments[..prefix_len], dynamic.clone());
+                provider = dynamic;
+                continue;
             }
+            return Ok(None);
         }
 
         Ok(Some(provider))
     }
 
-    /// warm cache：递归扫描 provider 树，并把所有 provider 注册/落 Redis。
+    /// Path-only API：从统一根（`/gallery` + `/vd`）解析 provider。
+    pub fn resolve(&self, path: &str) -> Result<Option<Arc<dyn Provider>>, String> {
+        let segs = self.parse_path_segments(path);
+        self.resolve_provider_for_root(self.root.clone(), &segs)
+    }
+
+    /// warm cache：从指定路径前缀开始递归扫描 provider 树。
     ///
-    /// 返回 root 的 descriptor（便于调试）。
-    pub fn warm_cache(
-        &self,
-        root: Arc<dyn Provider>,
-    ) -> Result<ProviderDescriptor, String> {
-        // 写入 root key
-        let root_key = self.key_for_segments(&[]);
-        let root_desc = root.descriptor();
-        self.db_put_descriptor_by_key(&root_key, &root_desc)?;
+    /// 例如：`""`（整棵树）或 `"vd/zh"`（仅预热 VD 中文分支）
+    pub fn warm_cache(&self, path_prefix: &str) -> Result<ProviderDescriptor, String> {
+        let segs = self.parse_path_segments(path_prefix);
+        let provider = self
+            .resolve(path_prefix)?
+            .ok_or_else(|| format!("warm 路径不存在: {}", path_prefix))?;
+        let key = self.key_for_segments(&segs);
+        let desc = provider.descriptor();
+        self.db_put_descriptor_by_key(&key, &desc)?;
         if let Ok(mut lru) = self.lru.lock() {
-            lru.put(root_key, root.clone());
+            lru.put(key, provider.clone());
         }
         let mut visited = 0usize;
-        self.warm_recursive(Vec::new(), root, &mut visited)?;
-        Ok(root_desc)
+        let seg_owned: Vec<String> = segs.iter().map(|s| (*s).to_string()).collect();
+        self.warm_recursive(seg_owned, provider, &mut visited)?;
+        Ok(desc)
     }
 
     fn warm_recursive(
@@ -345,7 +345,7 @@ impl ProviderRuntime {
         }
 
         let parent_segs_ref: Vec<&str> = parent_segments.iter().map(|s| s.as_str()).collect();
-        let children = self.cache_children_from_list(&parent_segs_ref, parent.clone())?;
+        let children = self.cache_children_from_list_entries(&parent_segs_ref, parent.clone())?;
         for (name, child) in children {
             *visited += 1;
             let mut next = parent_segments.clone();
