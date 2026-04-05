@@ -2,19 +2,19 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
 use crate::providers::plugin_display_name_from_manifest;
-use crate::providers::root::{DIR_ALBUMS, DIR_ALL, DIR_BY_DATE, DIR_BY_PLUGIN, DIR_BY_TASK};
+use crate::providers::vd_names::{DIR_ALBUMS, DIR_ALL, DIR_BY_DATE, DIR_BY_PLUGIN, DIR_BY_TASK};
 use crate::storage::Storage;
 use arc_swap::ArcSwap;
 use widestring::U16CString;
 use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_UPDATEDIR, SHCNF_PATHW};
 
 use crate::virtual_driver::fs::KabegameFs;
-use crate::virtual_driver::windows::{dokan_init_once, VirtualDriveRootProvider};
+use crate::virtual_driver::windows::dokan_init_once;
 use dokan::{FileSystemMounter, MountFlags, MountOptions};
 
 use super::VirtualDriveServiceTrait;
@@ -98,8 +98,7 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
         tokio::spawn(async move {
             dokan_init_once();
 
-            let root = Arc::new(VirtualDriveRootProvider);
-            let handler = KabegameFs::new(root);
+            let handler = KabegameFs::new();
 
             let mount_point_u16 = match U16CString::from_str(mount_point_for_thread.as_ref()) {
                 Ok(v) => v,

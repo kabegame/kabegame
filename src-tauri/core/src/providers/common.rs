@@ -11,13 +11,10 @@
 //!
 //! 支持通过 ImageQuery 参数自定义查询条件，可用于画册、插件、日期等过滤。
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::providers::descriptor::ProviderDescriptor;
-#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-use crate::providers::provider::{DeleteChildKind, DeleteChildMode, VdOpsContext};
-use crate::providers::provider::{FsEntry, Provider};
+use crate::providers::provider::{ListEntry, Provider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
@@ -78,22 +75,69 @@ impl Default for CommonProvider {
 }
 
 impl Provider for CommonProvider {
-    fn resolve_child(&self, name: &str) -> crate::providers::provider::ResolveChild {
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
         match self.mode {
-            PaginationMode::SimplePage => {
-                if let Ok(page) = name.parse::<usize>() {
-                    if page > 0 {
-                        return crate::providers::provider::ResolveChild::Dynamic(
-                            Arc::new(SimplePageProvider::new(self.query.clone(), page))
-                                as Arc<dyn Provider>,
-                        );
-                    }
+            PaginationMode::Greedy => {
+                let total = Storage::global().get_images_count_by_query(&self.query)?;
+                if total == 0 {
+                    return Ok(Vec::new());
                 }
-                crate::providers::provider::ResolveChild::NotFound
+
+                let mut out: Vec<ListEntry> = Vec::new();
+                if self.query.is_ascending() {
+                    out.push(ListEntry::Child {
+                        name: "倒序".to_string(),
+                        provider: Arc::new(CommonProvider::with_query(self.query.to_desc())),
+                    });
+                }
+
+                if total <= LEAF_SIZE {
+                    let images = Storage::global().get_image_entries_by_query(&self.query, 0, total)?;
+                    out.extend(images.into_iter().map(ListEntry::Image));
+                    return Ok(out);
+                }
+
+                let ranges = greedy_decompose(total);
+                for (offset, count) in &ranges {
+                    out.push(ListEntry::Child {
+                        name: range_name(*offset + 1, *offset + *count),
+                        provider: Arc::new(RangeProvider::new(
+                            self.query.clone(),
+                            *offset,
+                            *count,
+                            calc_depth_for_size(*count),
+                        )) as Arc<dyn Provider>,
+                    });
+                }
+
+                let covered: usize = ranges.iter().map(|(_, c)| c).sum();
+                let remainder = total.saturating_sub(covered);
+                if remainder > 0 {
+                    let images = Storage::global().get_image_entries_by_query(
+                        &self.query,
+                        covered,
+                        remainder,
+                    )?;
+                    out.extend(images.into_iter().map(ListEntry::Image));
+                }
+                Ok(out)
             }
-            PaginationMode::Greedy => crate::providers::provider::ResolveChild::NotFound,
+            PaginationMode::SimplePage => {
+                if self.query.is_ascending() {
+                    Ok(vec![ListEntry::Child {
+                        name: "desc".to_string(),
+                        provider: Arc::new(CommonProvider::with_query_and_mode(
+                            self.query.to_desc(),
+                            PaginationMode::SimplePage,
+                        )),
+                    }])
+                } else {
+                    Ok(Vec::new())
+                }
+            }
         }
     }
+
     fn descriptor(&self) -> ProviderDescriptor {
         match self.mode {
             PaginationMode::Greedy => ProviderDescriptor::All {
@@ -102,45 +146,6 @@ impl Provider for CommonProvider {
             PaginationMode::SimplePage => ProviderDescriptor::SimpleAll {
                 query: self.query.clone(),
             },
-        }
-    }
-
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        match self.mode {
-            PaginationMode::Greedy => {
-                let total = Storage::global().get_images_count_by_query(&self.query)?;
-                if total == 0 {
-                    return Ok(Vec::new());
-                }
-
-                let mut entries: Vec<FsEntry> = if total <= LEAF_SIZE {
-                    // 直接显示图片
-                    let files = Storage::global().get_images_fs_entries_by_query(&self.query, 0, total)?;
-                    files
-                        .into_iter()
-                        .map(|e| FsEntry::file(e.file_name, e.image_id, PathBuf::from(e.resolved_path)))
-                        .collect()
-                } else {
-                    // 使用贪心分解策略列出子目录 + 剩余文件
-                    list_greedy_subdirs_with_remainder(&self.query, 0, total)?
-                };
-
-                // 仅升序查询展示「倒序」子目录入口
-                if self.query.is_ascending() {
-                    entries.insert(0, FsEntry::dir("倒序"));
-                }
-                Ok(entries)
-            }
-            PaginationMode::SimplePage => {
-                let mut entries = Vec::new();
-
-                // SimplePage 模式：只显示 "desc" 目录（如果适用），页码通过 resolve_child 动态处理
-                if self.query.is_ascending() {
-                    entries.push(FsEntry::dir("desc"));
-                }
-
-                Ok(entries)
-            }
         }
     }
 
@@ -176,56 +181,26 @@ impl Provider for CommonProvider {
                 )))
             }
             PaginationMode::SimplePage => {
-                // SimplePage 模式：只支持 "desc" 子目录
+                // SimplePage 模式：支持 "desc" 与动态页码
                 if name == "desc" && self.query.is_ascending() {
                     return Some(Arc::new(CommonProvider::with_query_and_mode(
                         self.query.to_desc(),
                         PaginationMode::SimplePage,
                     )));
                 }
+                if let Ok(page) = name.parse::<usize>() {
+                    if page > 0 {
+                        return Some(
+                            Arc::new(SimplePageProvider::new(self.query.clone(), page))
+                                as Arc<dyn Provider>,
+                        );
+                    }
+                }
                 None
             }
         }
     }
 
-    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
-        // 文件名格式通常为 "<id>.<ext>"，这里取最后一个 '.' 之前的部分作为 image_id
-        let image_id = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
-        if image_id.trim().is_empty() {
-            return None;
-        }
-        let resolved = Storage::global().resolve_gallery_image_path(image_id).ok()??;
-        Some((image_id.to_string(), PathBuf::from(resolved)))
-    }
-
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    fn delete_child(
-        &self,
-        child_name: &str,
-        kind: DeleteChildKind,
-        mode: DeleteChildMode,
-        ctx: &dyn VdOpsContext,
-    ) -> Result<bool, String> {
-        if kind != DeleteChildKind::File {
-            return Err("不支持删除该类型".to_string());
-        }
-        if !crate::providers::vd_ops::query_can_delete_child_file(&self.query) {
-            return Err("当前目录不支持删除文件".to_string());
-        }
-        if mode == DeleteChildMode::Check {
-            return Ok(true);
-        }
-        let removed =
-            crate::providers::vd_ops::query_delete_child_file(&self.query, child_name)?;
-        if removed {
-            if let Some(album_id) = crate::providers::vd_ops::album_id_from_query(&self.query) {
-                if let Some(name) = Storage::global().get_album_name_by_id(album_id)? {
-                    ctx.album_images_removed(album_id, &name);
-                }
-            }
-        }
-        Ok(removed)
-    }
 }
 
 /// 范围 Provider - 表示一个范围内的图片或子范围
@@ -252,6 +227,40 @@ impl RangeProvider {
 }
 
 impl Provider for RangeProvider {
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        if self.depth == 0 {
+            let images =
+                Storage::global().get_image_entries_by_query(&self.query, self.offset, self.count)?;
+            return Ok(images.into_iter().map(ListEntry::Image).collect());
+        }
+
+        let mut out = Vec::new();
+        let ranges = greedy_decompose(self.count);
+        for (local_offset, local_count) in &ranges {
+            out.push(ListEntry::Child {
+                name: range_name(*local_offset + 1, *local_offset + *local_count),
+                provider: Arc::new(RangeProvider::new(
+                    self.query.clone(),
+                    self.offset + *local_offset,
+                    *local_count,
+                    calc_depth_for_size(*local_count),
+                )),
+            });
+        }
+
+        let covered: usize = ranges.iter().map(|(_, c)| c).sum();
+        let remainder = self.count.saturating_sub(covered);
+        if remainder > 0 {
+            let images = Storage::global().get_image_entries_by_query(
+                &self.query,
+                self.offset + covered,
+                remainder,
+            )?;
+            out.extend(images.into_iter().map(ListEntry::Image));
+        }
+        Ok(out)
+    }
+
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor::Range {
             query: self.query.clone(),
@@ -259,21 +268,6 @@ impl Provider for RangeProvider {
             count: self.count,
             depth: self.depth,
         }
-    }
-
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        if self.depth == 0 {
-            // 叶子层：显示图片
-            let entries =
-                Storage::global().get_images_fs_entries_by_query(&self.query, self.offset, self.count)?;
-            return Ok(entries
-                .into_iter()
-                .map(|e| FsEntry::file(e.file_name, e.image_id, PathBuf::from(e.resolved_path)))
-                .collect());
-        }
-
-        // 非叶子层：使用贪心分解显示子目录 + 剩余文件
-        list_greedy_subdirs_with_remainder(&self.query, self.offset, self.count)
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
@@ -304,44 +298,6 @@ impl Provider for RangeProvider {
         )))
     }
 
-    fn resolve_file(&self, name: &str) -> Option<(String, PathBuf)> {
-        // 同 AllProvider：直接按文件名解析 image_id
-        let image_id = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
-        if image_id.trim().is_empty() {
-            return None;
-        }
-        let resolved = Storage::global().resolve_gallery_image_path(image_id).ok()??;
-        Some((image_id.to_string(), PathBuf::from(resolved)))
-    }
-
-    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
-    fn delete_child(
-        &self,
-        child_name: &str,
-        kind: DeleteChildKind,
-        mode: DeleteChildMode,
-        ctx: &dyn VdOpsContext,
-    ) -> Result<bool, String> {
-        if kind != DeleteChildKind::File {
-            return Err("不支持删除该类型".to_string());
-        }
-        if !crate::providers::vd_ops::query_can_delete_child_file(&self.query) {
-            return Err("当前目录不支持删除文件".to_string());
-        }
-        if mode == DeleteChildMode::Check {
-            return Ok(true);
-        }
-        let removed =
-            crate::providers::vd_ops::query_delete_child_file(&self.query, child_name)?;
-        if removed {
-            if let Some(album_id) = crate::providers::vd_ops::album_id_from_query(&self.query) {
-                if let Some(name) = Storage::global().get_album_name_by_id(album_id)? {
-                    ctx.album_images_removed(album_id, &name);
-                }
-            }
-        }
-        Ok(removed)
-    }
 }
 
 // === 辅助函数（与旧实现保持一致）===
@@ -426,41 +382,6 @@ pub(crate) fn validate_greedy_range(offset: usize, count: usize, total: usize) -
     ranges.contains(&(offset, count))
 }
 
-/// 使用贪心分解策略列出子目录 + 剩余文件
-pub(crate) fn list_greedy_subdirs_with_remainder(
-    query: &ImageQuery,
-    base_offset: usize,
-    total: usize,
-) -> Result<Vec<FsEntry>, String> {
-    let mut entries = Vec::new();
-    let ranges = greedy_decompose(total);
-
-    // 添加目录
-    for (offset, count) in &ranges {
-        entries.push(FsEntry::dir(range_name(*offset + 1, *offset + *count)));
-    }
-
-    // 计算剩余文件的起始位置
-    let covered: usize = ranges.iter().map(|(_, c)| c).sum();
-    let remainder = total - covered;
-
-    // 添加剩余文件（直接显示）
-    if remainder > 0 {
-        let remainder_offset = base_offset + covered;
-        let file_entries =
-            Storage::global().get_images_fs_entries_by_query(query, remainder_offset, remainder)?;
-        for e in file_entries {
-            entries.push(FsEntry::file(
-                e.file_name,
-                e.image_id,
-                PathBuf::from(e.resolved_path),
-            ));
-        }
-    }
-
-    Ok(entries)
-}
-
 /// SimplePageProvider - 简单页码模式的叶子 provider
 /// 直接返回 offset=(page-1)*100, count=100 的图片
 pub struct SimplePageProvider {
@@ -475,6 +396,12 @@ impl SimplePageProvider {
 }
 
 impl Provider for SimplePageProvider {
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        let offset = (self.page - 1) * LEAF_SIZE;
+        let images = Storage::global().get_image_entries_by_query(&self.query, offset, LEAF_SIZE)?;
+        Ok(images.into_iter().map(ListEntry::Image).collect())
+    }
+
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor::SimplePage {
             query: self.query.clone(),
@@ -482,18 +409,4 @@ impl Provider for SimplePageProvider {
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        // 计算 offset 和 count
-        let offset = (self.page - 1) * LEAF_SIZE;
-        let count = LEAF_SIZE;
-
-        // 获取图片文件条目
-        let files = Storage::global().get_images_fs_entries_by_query(&self.query, offset, count)?;
-        let entries = files
-            .into_iter()
-            .map(|e| FsEntry::file(e.file_name, e.image_id, PathBuf::from(e.resolved_path)))
-            .collect();
-
-        Ok(entries)
-    }
 }

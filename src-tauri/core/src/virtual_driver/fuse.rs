@@ -8,18 +8,17 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use fuser::{
-    FileAttr, FileType, Filesystem, KernelConfig, MountOption, ReplyAttr, ReplyDirectory,
-    ReplyEntry, ReplyOpen, Request, TimeOrNow,
+    FileAttr, FileType, Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEntry,
+    ReplyOpen, Request,
 };
 
 use crate::emitter::GlobalEmitter;
-use crate::providers::provider::{DeleteChildKind, DeleteChildMode, Provider, VdOpsContext};
-use crate::providers::root::{DIR_ALBUMS, DIR_BY_TASK};
+use crate::providers::provider::DeleteChildMode;
+use crate::providers::vd_names::DIR_ALBUMS;
 use crate::providers::ProviderRuntime;
-use crate::storage::Storage;
 use crate::virtual_driver::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
 use crate::virtual_driver::virtual_drive_io::{VdFileMeta, VdReadHandle};
 
@@ -31,7 +30,6 @@ const TTL: Duration = Duration::from_secs(1);
 
 /// Linux FUSE 虚拟文件系统实现
 pub struct KabegameFuseFs {
-    root: Arc<dyn Provider>,
     /// inode -> path segments
     inode_to_path: Arc<Mutex<HashMap<u64, Vec<String>>>>,
     /// path segments -> inode
@@ -53,7 +51,7 @@ struct OpenedFile {
 }
 
 impl KabegameFuseFs {
-    pub fn new(root: Arc<dyn Provider>) -> Self {
+    pub fn new() -> Self {
         let mut inode_to_path = HashMap::new();
         let mut path_to_inode = HashMap::new();
         // 初始化根目录
@@ -61,7 +59,6 @@ impl KabegameFuseFs {
         path_to_inode.insert(vec![], ROOT_INODE);
 
         Self {
-            root,
             inode_to_path: Arc::new(Mutex::new(inode_to_path)),
             path_to_inode: Arc::new(Mutex::new(path_to_inode)),
             next_inode: Arc::new(Mutex::new(ROOT_INODE + 1)),
@@ -71,7 +68,7 @@ impl KabegameFuseFs {
     }
 
     fn semantics(&self) -> VfsSemantics<'_> {
-        VfsSemantics::new(&self.root, ProviderRuntime::global())
+        VfsSemantics::new(ProviderRuntime::global())
     }
 
     /// 获取路径对应的 inode，如果不存在则分配新的
@@ -423,8 +420,7 @@ impl Filesystem for KabegameFuseFs {
         child_path.push(name_str.to_string());
 
         let sem = self.semantics();
-        let ctx = LinuxVdOpsContext;
-        match sem.create_dir(&parent_path, name_str, &ctx) {
+        match sem.create_dir(&parent_path, name_str) {
             Ok(()) => {
                 let ino = self.get_or_alloc_inode(&child_path);
                 let attr = self.opened_to_attr(
@@ -456,8 +452,7 @@ impl Filesystem for KabegameFuseFs {
         };
 
         let sem = self.semantics();
-        let ctx = LinuxVdOpsContext;
-        match sem.delete_dir(&parent_path, name_str, DeleteChildMode::Commit, &ctx) {
+        match sem.delete_dir(&parent_path, name_str, DeleteChildMode::Commit) {
             Ok(true) => {
                 // 清理 inode 映射
                 let mut child_path = parent_path.clone();
@@ -499,8 +494,7 @@ impl Filesystem for KabegameFuseFs {
         }
 
         let sem = self.semantics();
-        let ctx = LinuxVdOpsContext;
-        match sem.delete_file(&parent_path, name_str, DeleteChildMode::Commit, &ctx) {
+        match sem.delete_file(&parent_path, name_str, DeleteChildMode::Commit) {
             Ok(true) => reply.ok(),
             Ok(false) => reply.error(libc::ENOENT),
             Err(e) => reply.error(Self::map_vfs_error(e)),
@@ -582,30 +576,3 @@ impl Filesystem for KabegameFuseFs {
     }
 }
 
-/// Linux 虚拟盘操作上下文（不发送文件系统刷新通知）
-struct LinuxVdOpsContext;
-
-impl VdOpsContext for LinuxVdOpsContext {
-    fn albums_created(&self, _album_name: &str) {
-        // 事件由 storage add_album 底层发出 AlbumAdded
-        // Linux 不需要刷新文件系统
-    }
-
-    fn albums_deleted(&self, _album_name: &str) {
-        // 事件由 storage delete_album 底层发出 AlbumDeleted
-        // Linux 不需要刷新文件系统
-    }
-
-    fn album_images_removed(&self, album_id: &str, album_name: &str) {
-        let _ = album_name;
-        let ids: Vec<String> = Vec::new();
-        let alb = vec![album_id.to_string()];
-        GlobalEmitter::global().emit_album_images_change("delete", &alb, &ids);
-        // Linux 不需要刷新文件系统
-    }
-
-    fn tasks_deleted(&self, task_id: &str) {
-        GlobalEmitter::global().emit_task_deleted(task_id);
-        // Linux 不需要刷新文件系统
-    }
-}
