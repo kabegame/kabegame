@@ -110,6 +110,7 @@
   "localDesc": "로컬에서 가져오기: 이미지, 폴더 또는 압축 파일",
   "remoteDesc": "플러그인으로 네트워크에서 이미지 수집",
   "organizingProgress": "정리 중 {processed}/{total}",
+  "organizingProgressRange": "정리 중 {current}/{end}",
   "organizingEllipsis": "정리 중…",
   "organizingDetail": "(제거 {removed}, 재생성 {regenerated})",
   "organizeRunProgress": "이번 정리 진행률",

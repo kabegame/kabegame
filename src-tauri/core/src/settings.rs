@@ -106,6 +106,8 @@ pub enum SettingKey {
     WallpaperRotationEnabled,
     /// 壁纸轮播画册ID，为空则为画廊
     WallpaperRotationAlbumId,
+    /// 壁纸轮播是否包含子画册（递归合并后按图片 id 去重；默认包含）
+    WallpaperRotationIncludeSubalbums,
     /// 壁纸轮播间隔分钟
     WallpaperRotationIntervalMinutes,
     /// 壁纸轮播模式（随机、顺序）
@@ -308,6 +310,7 @@ impl Settings {
             SettingKey::WallpaperEngineDir => SettingValue::OptionString(None),
             SettingKey::WallpaperRotationEnabled => SettingValue::Bool(false),
             SettingKey::WallpaperRotationAlbumId => SettingValue::OptionString(None),
+            SettingKey::WallpaperRotationIncludeSubalbums => SettingValue::Bool(true),
             SettingKey::WallpaperRotationIntervalMinutes => SettingValue::U32(60),
             SettingKey::WallpaperRotationMode => SettingValue::String("random".to_string()),
             SettingKey::WallpaperStyle => {
@@ -530,6 +533,7 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperEngineDir,
             SettingKey::WallpaperRotationEnabled,
             SettingKey::WallpaperRotationAlbumId,
+            SettingKey::WallpaperRotationIncludeSubalbums,
             SettingKey::WallpaperRotationIntervalMinutes,
             SettingKey::WallpaperRotationMode,
             SettingKey::WallpaperStyle,
@@ -635,6 +639,9 @@ Write-Output "$style,$tile"
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
             SettingKey::ImportRecommendedScheduleEnabled => {
+                Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
+            }
+            SettingKey::WallpaperRotationIncludeSubalbums => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
             }
             #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
@@ -761,6 +768,9 @@ Write-Output "$style,$tile"
             SettingKey::WallpaperEngineDir => "wallpaperEngineDir".to_string(),
             SettingKey::WallpaperRotationEnabled => "wallpaperRotationEnabled".to_string(),
             SettingKey::WallpaperRotationAlbumId => "wallpaperRotationAlbumId".to_string(),
+            SettingKey::WallpaperRotationIncludeSubalbums => {
+                "wallpaperRotationIncludeSubalbums".to_string()
+            }
             SettingKey::WallpaperRotationIntervalMinutes => {
                 "wallpaperRotationIntervalMinutes".to_string()
             }
@@ -1074,6 +1084,16 @@ Write-Output "$style,$tile"
             Ok(val.as_option_string().unwrap_or(None))
         } else {
             Ok(None)
+        }
+    }
+
+    pub async fn get_wallpaper_rotation_include_subalbums(&self) -> Result<bool, String> {
+        let cells = Self::cells();
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationIncludeSubalbums) {
+            let val = cell.lock().await;
+            Ok(val.as_bool().unwrap_or(true))
+        } else {
+            Ok(true)
         }
     }
 
@@ -1564,6 +1584,21 @@ Write-Output "$style,$tile"
             *val = new_value.clone();
         }
         Self::emit_setting_change(SettingKey::WallpaperRotationAlbumId, &new_value).await;
+        Self::trigger_debounce_save().await?;
+        Ok(())
+    }
+
+    pub async fn set_wallpaper_rotation_include_subalbums(
+        &self,
+        include: bool,
+    ) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(include);
+        if let Some(cell) = cells.get(&SettingKey::WallpaperRotationIncludeSubalbums) {
+            let mut val = cell.lock().await;
+            *val = new_value.clone();
+        }
+        Self::emit_setting_change(SettingKey::WallpaperRotationIncludeSubalbums, &new_value).await;
         Self::trigger_debounce_save().await?;
         Ok(())
     }

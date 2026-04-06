@@ -4,11 +4,12 @@
       @change="handleToggle" />
 
     <el-input v-model="mountPoint" class="mount-point-input" size="default"
-      :disabled="enabled || showEnabledLoading || showMountPointLoading" placeholder="例如 K:\\ 或 K:"
+      :disabled="enabled || showEnabledLoading || showMountPointLoading"
+      :placeholder="$t('settings.albumDriveMountPointPlaceholder')"
       @blur="handleMountPointBlur" />
 
     <el-button v-if="enabled" :disabled="showEnabledLoading" @click="openExplorer">
-      打开
+      {{ $t('settings.albumDriveOpenButton') }}
     </el-button>
   </div>
 </template>
@@ -17,7 +18,10 @@
 import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessage } from "element-plus";
+import { useI18n } from "@kabegame/i18n";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
+
+const { t } = useI18n();
 
 const {
   settingValue: enabledValue,
@@ -88,16 +92,16 @@ const handleToggle = async (val: boolean) => {
   const mp = normalizedMountPoint.value;
   if (val && !mp) {
     enabled.value = false;
-    ElMessage.error("请先填写挂载点（例如 K:\\）");
+    ElMessage.error(t("settings.albumDriveMessageMountPointRequired"));
     return;
   }
 
   try {
     await setEnabled(val, async () => {
       if (val) {
-        ElMessage.success("画册盘已开启");
+        ElMessage.success(t("settings.albumDriveMessageEnabled"));
       } else {
-        ElMessage.success("画册盘已关闭");
+        ElMessage.success(t("settings.albumDriveMessageDisabled"));
       }
     });
   } catch (e) {

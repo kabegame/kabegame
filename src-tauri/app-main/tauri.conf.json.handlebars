@@ -43,7 +43,15 @@
       {{#if isWindows}}"nsis"{{else if isMacOS}}"dmg"{{else if isLinux}}"deb"{{/if}}
     ],
     {{/unless}}
-    "icon": ["../icons/32x32.png", "../icons/128x128.png", "../icons/128x128@2x.png", "../icons/icon.icns", "../icons/icon.ico"],
+    "icon": [
+      "./icons/32x32.png", 
+      "./icons/64x64.png", 
+      "./icons/128x128.png", 
+      "./icons/128x128@2x.png", 
+      "./icons/icon.icns", 
+      "./icons/icon.ico",
+      "./icons/icon.png"
+    ],
     {{!-- 只有非linux平台需要文件关联，linux用手动关联 desktop 文件 --}}
     {{#unless isLinux}}
     "fileAssociations": [

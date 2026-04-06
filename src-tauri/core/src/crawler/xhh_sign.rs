@@ -53,7 +53,7 @@ fn map_string_with_charset(s: &str, charset_len: usize) -> String {
 /// Galois field helpers（与 JS Vm/qm/$m/Ym/Gm 等价）
 #[inline]
 fn gf_vm(e: u32) -> u32 {
-    if e & 128 != 0 { (255 & ((e << 1) ^ 27)) } else { e << 1 }
+    if e & 128 != 0 { 255 & ((e << 1) ^ 27) } else { e << 1 }
 }
 #[inline]
 fn gf_qm(e: u32) -> u32 { gf_vm(e) ^ e }

@@ -7,13 +7,18 @@
       :width="340"
     >
       <template #reference>
-        <el-tooltip :content="progressTooltipText" :disabled="!loading" placement="bottom">
-          <el-button circle :title="loading ? progressTooltipText : t('header.organize')" @click="handleOrganizeButtonClick">
-            <el-icon :class="{ 'organizing-icon': loading }">
-              <FolderOpened />
-            </el-icon>
-          </el-button>
-        </el-tooltip>
+        <!-- 单层组件根非原生节点时，ElPopover 的运行时指令无法正确挂载，需包一层元素 -->
+        <span class="organize-popover-ref">
+          <el-tooltip :content="progressTooltipText" :disabled="!loading" placement="bottom">
+            <span class="organize-tooltip-trigger">
+              <el-button circle :title="loading ? progressTooltipText : t('header.organize')" @click="handleOrganizeButtonClick">
+                <el-icon :class="{ 'organizing-icon': loading }">
+                  <FolderOpened />
+                </el-icon>
+              </el-button>
+            </span>
+          </el-tooltip>
+        </span>
       </template>
 
       <div class="organize-progress-popover">
@@ -76,22 +81,59 @@ type OrganizeOptions = {
   rangeEnd: number | null;
 };
 
+/** 与后端 `OrganizeRunState` / `organize-progress` 字段一致 */
+type OrganizeProgressState = {
+  processedGlobal: number;
+  libraryTotal: number;
+  rangeStart: number | null;
+  rangeEnd: number | null;
+  removed: number;
+  regenerated: number;
+};
+
+type OrganizeRunStatePayload = OrganizeProgressState & {
+  running: boolean;
+  dedupe: boolean;
+  removeMissing: boolean;
+  removeUnrecognized: boolean;
+  regenThumbnails: boolean;
+  deleteSourceFiles: boolean;
+  safeDelete: boolean;
+};
+
 const { t } = useI18n();
 const loading = ref(false);
 const showDialog = ref(false);
 const showProgressPopover = ref(false);
-const progress = ref({ processed: 0, total: 0, removed: 0, regenerated: 0 });
+const progress = ref<OrganizeProgressState>({
+  processedGlobal: 0,
+  libraryTotal: 0,
+  rangeStart: null,
+  rangeEnd: null,
+  removed: 0,
+  regenerated: 0,
+});
 const lastRunOptions = ref<OrganizeOptions | null>(null);
 
 let unlistenProgress: (() => void) | undefined;
 let unlistenFinished: (() => void) | undefined;
 useModalBack(showProgressPopover);
 
-const progressSummaryText = computed(() =>
-  progress.value.total > 0
-    ? t("gallery.organizingProgress", { processed: progress.value.processed, total: progress.value.total })
-    : t("gallery.organizingEllipsis")
-);
+/** 区间模式：分母为所选终点 end（与对话框一致）；全量：分母为全库张数 */
+const progressSummaryText = computed(() => {
+  const p = progress.value;
+  const rs = p.rangeStart;
+  const re = p.rangeEnd;
+  const g = p.processedGlobal;
+  if (rs != null && re != null && re > rs) {
+    const cur = Math.min(Math.max(g, rs), re);
+    return t("gallery.organizingProgressRange", { current: cur, end: re });
+  }
+  if (p.libraryTotal > 0) {
+    return t("gallery.organizingProgress", { processed: g, total: p.libraryTotal });
+  }
+  return t("gallery.organizingEllipsis");
+});
 
 const progressTooltipText = computed(() => {
   if (!loading.value) return "";
@@ -103,8 +145,16 @@ const progressTooltipText = computed(() => {
 });
 
 const progressPercentage = computed(() => {
-  if (progress.value.total <= 0) return 0;
-  return Math.max(0, Math.min(100, Math.round((progress.value.processed / progress.value.total) * 100)));
+  const p = progress.value;
+  const rs = p.rangeStart;
+  const re = p.rangeEnd;
+  const g = p.processedGlobal;
+  if (rs != null && re != null && re > rs) {
+    const cur = Math.min(Math.max(g, rs), re);
+    return Math.max(0, Math.min(100, Math.round((cur / re) * 100)));
+  }
+  if (p.libraryTotal <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.round((g / p.libraryTotal) * 100)));
 });
 
 const optionRows = computed(() => {
@@ -134,21 +184,46 @@ const rangeText = computed(() => {
   return t("gallery.organizeRangeSegment", { start, end });
 });
 
+function applyProgressPayload(payload: Partial<OrganizeProgressState> & Record<string, unknown>) {
+  const pg = payload.processedGlobal ?? payload.processed;
+  const lt = payload.libraryTotal ?? payload.total;
+  progress.value = {
+    processedGlobal: typeof pg === "number" ? pg : progress.value.processedGlobal,
+    libraryTotal: typeof lt === "number" ? lt : progress.value.libraryTotal,
+    rangeStart: (payload.rangeStart as number | null | undefined) ?? null,
+    rangeEnd: (payload.rangeEnd as number | null | undefined) ?? null,
+    removed: typeof payload.removed === "number" ? payload.removed : progress.value.removed,
+    regenerated: typeof payload.regenerated === "number" ? payload.regenerated : progress.value.regenerated,
+  };
+}
+
+async function syncOrganizeRunStateFromBackend() {
+  try {
+    const s = await invoke<OrganizeRunStatePayload>("get_organize_run_state");
+    if (!s.running) return;
+    loading.value = true;
+    applyProgressPayload(s);
+    lastRunOptions.value = {
+      dedupe: s.dedupe,
+      removeMissing: s.removeMissing,
+      removeUnrecognized: s.removeUnrecognized,
+      regenThumbnails: s.regenThumbnails,
+      deleteSourceFiles: s.deleteSourceFiles,
+      safeDelete: s.safeDelete,
+      rangeStart: s.rangeStart ?? null,
+      rangeEnd: s.rangeEnd ?? null,
+    };
+    showProgressPopover.value = true;
+  } catch {
+    /* 无该命令或非桌面端 */
+  }
+}
+
 onMounted(async () => {
-  unlistenProgress = await listen<{
-    processed: number;
-    total: number;
-    removed: number;
-    regenerated: number;
-  }>("organize-progress", (event) => {
+  unlistenProgress = await listen<OrganizeProgressState>("organize-progress", (event) => {
     const p = event.payload;
     if (!p) return;
-    progress.value = {
-      processed: p.processed,
-      total: p.total,
-      removed: p.removed,
-      regenerated: p.regenerated,
-    };
+    applyProgressPayload(p);
   });
 
   unlistenFinished = await listen<{
@@ -159,12 +234,23 @@ onMounted(async () => {
     const p = event.payload;
     loading.value = false;
     showProgressPopover.value = false;
+    lastRunOptions.value = null;
+    progress.value = {
+      processedGlobal: 0,
+      libraryTotal: 0,
+      rangeStart: null,
+      rangeEnd: null,
+      removed: 0,
+      regenerated: 0,
+    };
     if (p?.canceled) {
       ElMessage.info(t("gallery.organizeCanceled"));
       return;
     }
     ElMessage.success(t("gallery.organizeDone", { removed: p?.removed ?? 0, regenerated: p?.regenerated ?? 0 }));
   });
+
+  await syncOrganizeRunStateFromBackend();
 });
 
 onUnmounted(() => {
@@ -187,7 +273,14 @@ async function handleConfirm(options: {
   try {
     loading.value = true;
     showProgressPopover.value = false;
-    progress.value = { processed: 0, total: 0, removed: 0, regenerated: 0 };
+    progress.value = {
+      processedGlobal: 0,
+      libraryTotal: 0,
+      rangeStart: null,
+      rangeEnd: null,
+      removed: 0,
+      regenerated: 0,
+    };
     lastRunOptions.value = { ...options };
     await invoke("start_organize", {
       args: {
@@ -232,6 +325,13 @@ async function handleCancel() {
 .organize-header-control {
   display: inline-flex;
   align-items: center;
+}
+
+.organize-popover-ref,
+.organize-tooltip-trigger {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
 }
 
 .organizing-icon {

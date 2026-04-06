@@ -42,5 +42,24 @@ albums:
 plugins:
   officialGithubReleaseSourceName: 官方 GitHub Releases 源
 
+vd:
+  all: 全部
+  plugin: 按外掛
+  date: 按時間
+  dateRange: 按時間範圍
+  album: 畫冊
+  task: 按任務
+  surf: 按暢遊
+  mediaType: 按種類
+  wallpaperOrder: 按壁紙順序
+  desc: 倒序
+  image: 圖片
+  video: 影片
+  subAlbums: 子畫冊
+  albumOrder: 按畫冊順序
+  wallpaperOrderSub: 按壁紙順序
+  imageOnly: 僅圖片
+  videoOnly: 僅影片
+
 surf:
   windowTitle: "暢遊 - {host}"

@@ -1,5 +1,6 @@
 {
   "emptyTip": "No albums yet; tap top-right to create",
+  "subAlbums": "Sub-albums",
   "newAlbum": "New album",
   "placeholderName": "Enter album name",
   "create": "Create",
@@ -65,5 +66,10 @@
   "doubleClickToRename": "Double-click to rename",
   "totalCountSubtitle": "{count} total",
   "deleteAlbumRotationConfirm": "The album you are deleting is used for wallpaper rotation. Deleting it will revert to gallery.",
-  "deleteAlbumRotationTitle": "Delete this album?"
+  "deleteAlbumRotationTitle": "Delete this album?",
+  "moveToTitle": "Move album",
+  "moveToRoot": "Move to root",
+  "moveSuccess": "Album moved",
+  "moveFailed": "Move failed",
+  "selectTargetAlbum": "Select target album"
 }

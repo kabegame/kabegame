@@ -4,11 +4,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// 定时策略（存 DB 的 `schedule_spec` JSON，与 `schedule_enabled` / `planned_at` 等运行态分列）
+///
+/// JSON 与前端 `ScheduleSpec` 一致：`mode` + camelCase 字段名（间隔为 `intervalSecs`）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "mode", rename_all = "camelCase")]
+#[serde(tag = "mode")]
 pub enum ScheduleSpec {
     #[serde(rename = "interval")]
-    Interval { interval_secs: i64 },
+    Interval {
+        #[serde(rename = "intervalSecs")]
+        interval_secs: i64,
+    },
     #[serde(rename = "daily")]
     Daily { hour: i32, minute: i32 },
     /// `weekday`: 0=周一 … 6=周日（与 `chrono::Weekday::num_days_from_monday()` 一致）

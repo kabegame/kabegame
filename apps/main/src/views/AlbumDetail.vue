@@ -32,7 +32,57 @@
           @confirm-rename="handleRenameConfirm" @cancel-rename="handleRenameCancel"
           @open-browse-filter="albumBrowseToolbarRef?.openFilterPicker()"
           @open-browse-sort="albumBrowseToolbarRef?.openSortPicker()"
-          @open-browse-page-size="albumBrowseToolbarRef?.openPageSizePicker()" />
+          @open-browse-page-size="albumBrowseToolbarRef?.openPageSizePicker()"
+          @create-sub-album="openCreateSubAlbumDialog" />
+
+        <nav v-if="albumId" class="album-breadcrumb-wrap" aria-label="breadcrumb">
+          <el-breadcrumb>
+            <el-breadcrumb-item>
+              <router-link :to="{ name: 'Albums' }" class="album-breadcrumb-link">
+                {{ t("route.albums") }}
+              </router-link>
+            </el-breadcrumb-item>
+            <el-breadcrumb-item v-for="crumb in albumAncestorCrumbs" :key="crumb.id">
+              <router-link
+                :to="{ name: 'AlbumDetail', params: { id: crumb.id } }"
+                class="album-breadcrumb-link"
+              >
+                {{ crumb.name }}
+              </router-link>
+            </el-breadcrumb-item>
+            <el-breadcrumb-item>
+              <span class="album-breadcrumb-current">{{ albumName || "…" }}</span>
+            </el-breadcrumb-item>
+          </el-breadcrumb>
+        </nav>
+
+        <div v-if="childAlbums.length > 0" class="child-albums-wrap">
+          <button type="button" class="child-albums-toggle" @click="childAlbumsExpanded = !childAlbumsExpanded">
+            <el-icon class="child-albums-toggle-icon">
+              <ArrowUp v-if="childAlbumsExpanded" />
+              <ArrowDown v-else />
+            </el-icon>
+            <span>{{ t("albums.subAlbums") }} ({{ childAlbums.length }})</span>
+          </button>
+          <div
+            v-show="childAlbumsExpanded"
+            class="child-albums-body"
+            :class="IS_ANDROID ? 'child-albums-body--android' : 'child-albums-body--desktop'"
+          >
+            <AlbumCard
+              v-for="child in childAlbums"
+              :key="child.id"
+              class="child-album-card"
+              :album="child"
+              :count="albumStore.albumCounts[child.id] || 0"
+              :preview-images="childPreviewImages[child.id] || []"
+              :video-preview-remount-key="0"
+              :is-loading="false"
+              @click="openChildAlbum(child)"
+              @visible="prefetchChildPreview(child)"
+            />
+          </div>
+        </div>
 
         <AlbumDetailBrowseToolbar
           ref="albumBrowseToolbarRef"
@@ -56,6 +106,14 @@
 
     <AddToAlbumDialog v-model="showAddToAlbumDialog" :image-ids="addToAlbumImageIds"
       :exclude-album-ids="albumId ? [albumId] : []" @added="handleAddedToAlbum" />
+
+    <el-dialog v-model="showCreateSubAlbumDialog" :title="t('albums.newAlbum')" width="360px">
+      <el-input v-model="newSubAlbumName" :placeholder="t('albums.placeholderName')" />
+      <template #footer>
+        <el-button @click="showCreateSubAlbumDialog = false">{{ t("common.cancel") }}</el-button>
+        <el-button type="primary" :disabled="!newSubAlbumName.trim()" @click="confirmCreateSubAlbum">{{ t("albums.create") }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -67,11 +125,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { setWallpaperByImageIdWithModeFallback } from "@/utils/wallpaperMode";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Delete, Star, StarFilled, FolderAdd, Picture } from "@element-plus/icons-vue";
+import { Delete, Star, StarFilled, FolderAdd, Picture, ArrowDown, ArrowUp } from "@element-plus/icons-vue";
 import { createImageActions } from "@/actions/imageActions";
 import ImageGrid from "@/components/ImageGrid.vue";
 import RemoveImagesConfirmDialog from "@kabegame/core/components/common/RemoveImagesConfirmDialog.vue";
 import { useAlbumStore } from "@/stores/albums";
+import type { Album } from "@/stores/albums";
+import AlbumCard from "@/components/albums/AlbumCard.vue";
 import type { ImageInfo } from "@kabegame/core/types/image";
 import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
@@ -108,27 +168,13 @@ import { openLocalImage } from "@/utils/openLocalImage";
 import { clearImageStateCache } from "@kabegame/core/composables/useImageStateCache";
 import { useProvideImageMetadataCache } from "@kabegame/core/composables/useImageMetadataCache";
 import { useI18n } from "@kabegame/i18n";
+import { useModalBack } from "@kabegame/core/composables/useModalBack";
 
 const route = useRoute();
 const { t } = useI18n();
 const router = useRouter();
+const isOnAlbumRoute = computed(() => String(route.name ?? "") === "AlbumDetail");
 
-// #region agent log
-const dbgAlbum = (loc: string, msg: string, data: Record<string, unknown>, hypothesisId: string) => {
-  fetch("http://127.0.0.1:7889/ingest/4b2286bf-2c67-44a4-898a-a17239e6a878", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "8068d7" },
-    body: JSON.stringify({
-      sessionId: "8068d7",
-      location: loc,
-      message: msg,
-      data,
-      timestamp: Date.now(),
-      hypothesisId,
-    }),
-  }).catch(() => {});
-};
-// #endregion
 const albumStore = useAlbumStore();
 const { FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const settingsStore = useSettingsStore();
@@ -157,27 +203,86 @@ const { clearCache: clearImageMetadataCache } = useProvideImageMetadataCache();
 // 虚拟磁盘
 const isLightMode = IS_LIGHT_MODE;
 const albumDriveEnabled = computed(() => !isLightMode && !!settingsStore.values.albumDriveEnabled);
-const albumDriveMountPoint = computed(() => settingsStore.values.albumDriveMountPoint || "K:\\");
+
+const albumId = ref<string>("");
 
 const openVirtualDriveAlbumFolder = async () => {
-  if (!albumName.value) {
-    ElMessage.warning("画册名称为空");
+  const id = albumId.value?.trim();
+  if (!id) {
+    ElMessage.warning("画册 ID 无效");
     return;
   }
   try {
-    // 构建画册对应的虚拟磁盘文件夹路径
-    console.log('albumName.value', albumName.value);
-    const albumPath = `${albumDriveMountPoint.value}画册\\${albumName.value}`;
-    console.log('albumPath', albumPath);
-    await invoke("open_explorer", { path: albumPath });
+    await invoke("open_album_virtual_drive_folder", { albumId: id });
   } catch (e) {
     console.error("打开虚拟磁盘文件夹失败:", e);
     ElMessage.error(String(e));
   }
 };
 
+const childAlbums = computed(() => {
+  if (!albumId.value) return [];
+  return albumStore.getChildren(albumId.value);
+});
 
-const albumId = ref<string>("");
+/** 从根到直接父级（不含当前画册），供面包屑中间段 */
+const albumAncestorCrumbs = computed((): { id: string; name: string }[] => {
+  const id = albumId.value?.trim();
+  if (!id) return [];
+  const map = new Map(albumStore.albums.map((a) => [a.id, a]));
+  const up: { id: string; name: string }[] = [];
+  let cur = map.get(id);
+  if (!cur) return [];
+  while (cur.parentId) {
+    const p = map.get(cur.parentId);
+    if (!p) break;
+    up.push({ id: p.id, name: p.name });
+    cur = p;
+  }
+  up.reverse();
+  return up;
+});
+const childAlbumsExpanded = ref(true);
+const childPreviewImages = ref<Record<string, ImageInfo[]>>({});
+const showCreateSubAlbumDialog = ref(false);
+const newSubAlbumName = ref("");
+useModalBack(showCreateSubAlbumDialog);
+
+watch(albumId, () => {
+  childPreviewImages.value = {};
+  childAlbumsExpanded.value = true;
+});
+
+const prefetchChildPreview = async (child: Album) => {
+  if (childPreviewImages.value[child.id]?.length) return;
+  const imgs = await albumStore.loadAlbumPreview(child.id, IS_ANDROID ? 1 : 3);
+  childPreviewImages.value = { ...childPreviewImages.value, [child.id]: imgs };
+};
+
+const openChildAlbum = (child: Album) => {
+  router.push({ name: "AlbumDetail", params: { id: child.id } });
+};
+
+const openCreateSubAlbumDialog = () => {
+  newSubAlbumName.value = "";
+  showCreateSubAlbumDialog.value = true;
+};
+
+const confirmCreateSubAlbum = async () => {
+  const name = newSubAlbumName.value.trim();
+  if (!name || !albumId.value) return;
+  try {
+    await albumStore.createAlbum(name, { parentId: albumId.value, reload: true });
+    showCreateSubAlbumDialog.value = false;
+    newSubAlbumName.value = "";
+    ElMessage.success(t("albums.albumCreated"));
+  } catch (error: any) {
+    const errorMessage =
+      typeof error === "string" ? error : error?.message || String(error) || t("albums.createAlbumFailed");
+    ElMessage.error(errorMessage);
+  }
+};
+
 const albumName = ref<string>("");
 const loading = ref(false);
 const isRefreshing = ref(false);
@@ -224,14 +329,7 @@ const handleJumpToPage = async (page: number) => {
 watch(
   () => currentPath.value,
   async (newPath) => {
-    // #region agent log
-    dbgAlbum("AlbumDetail.vue:watch(currentPath)", "currentPath watcher", {
-      newPath,
-      albumId: albumId.value,
-      routeName: String(route.name ?? ""),
-      routePath: route.path,
-    }, "H3");
-    // #endregion
+    if (!isOnAlbumRoute.value) return;
     if (!albumId.value) return;
     if (!albumName.value) return;
     if (!newPath) return;
@@ -244,14 +342,7 @@ watch(
   () => route.query.path,
   (rawPath) => {
     const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
-    // #region agent log
-    dbgAlbum("AlbumDetail.vue:watch(query.path)", "query.path watcher", {
-      qp,
-      currentPathVal: currentPath.value,
-      routeName: String(route.name ?? ""),
-      routePath: route.path,
-    }, "H2");
-    // #endregion
+    if (!isOnAlbumRoute.value) return;
     if (!qp.trim()) return;
     if (qp !== currentPath.value) {
       albumDetailRouteStore.syncFromUrl(qp);
@@ -398,13 +489,6 @@ const loadAlbum = async (opts?: { reset?: boolean; silent?: boolean }) => {
 
     // 直接加载当前路径（新路径格式总是包含页码）
     const pathToLoad = currentPath.value || localProviderRootPath.value || `album/${albumId.value}/1`;
-    // #region agent log
-    dbgAlbum("AlbumDetail.vue:loadAlbum", "browse path", {
-      pathToLoad,
-      routeName: String(route.name ?? ""),
-      routePath: route.path,
-    }, "H4");
-    // #endregion
     if (!pathToLoad.startsWith("album/") || pathToLoad.startsWith("album//")) {
       return;
     }
@@ -761,14 +845,6 @@ const handleImageMenuCommand = async (payload: ContextCommandPayload): Promise<i
 
 // 初始化/刷新画册数据
 const initAlbum = async (newAlbumId: string) => {
-  // #region agent log
-  dbgAlbum("AlbumDetail.vue:initAlbum", "initAlbum called", {
-    newAlbumId,
-    routeName: String(route.name ?? ""),
-    routePath: route.path,
-    prevAlbumId: albumId.value,
-  }, "H1");
-  // #endregion
   // 如果是同一个画册，检查是否需要重新加载
   // 如果 store 中没有缓存（可能被刷新清除了），即使画册ID相同也要重新加载
   const hasCache = !!albumStore.albumImages[newAlbumId];
@@ -809,13 +885,7 @@ const initAlbum = async (newAlbumId: string) => {
 watch(
   () => route.params.id,
   async (newId) => {
-    // #region agent log
-    dbgAlbum("AlbumDetail.vue:watch(params.id)", "params.id watcher", {
-      newId: newId && typeof newId === "string" ? newId : null,
-      routeName: String(route.name ?? ""),
-      routePath: route.path,
-    }, "H1");
-    // #endregion
+    if (!isOnAlbumRoute.value) return;
     if (newId && typeof newId === "string") {
       await initAlbum(newId);
     }
@@ -1052,10 +1122,6 @@ useImagesChangeRefresh({
     if (reason === "delete") {
       return ids.length === 0 || intersects;
     }
-    if (reason === "add") {
-      if (images.value.length >= pageSize.value) return false;
-      return true;
-    }
     if (reason === "change") {
       if (isAlbumWallpaperFilterPath(currentPath.value)) return true;
       return ids.length === 0 || intersects;
@@ -1080,6 +1146,92 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss">
+.album-breadcrumb-wrap {
+  margin-bottom: 12px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+
+  :deep(.el-breadcrumb) {
+    font-size: 13px;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+
+  :deep(.el-breadcrumb__separator) {
+    color: var(--anime-text-muted);
+    margin: 0 6px;
+  }
+
+  .album-breadcrumb-link {
+    color: var(--anime-text-muted);
+    text-decoration: none;
+    transition: color 0.15s ease;
+
+    &:hover {
+      color: var(--el-color-primary);
+    }
+  }
+
+  .album-breadcrumb-current {
+    color: var(--anime-text-primary);
+    font-weight: 500;
+  }
+}
+
+.child-albums-wrap {
+  margin-bottom: 12px;
+}
+
+.child-albums-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--anime-border);
+  border-radius: 8px;
+  background: var(--anime-bg-secondary);
+  color: var(--anime-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.child-albums-toggle-icon {
+  flex-shrink: 0;
+}
+
+/* 桌面：与画册列表页一致的响应式网格 */
+.child-albums-body--desktop {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.child-albums-body--desktop .child-album-card {
+  min-width: 0;
+}
+
+/* 安卓：与画册列表页一致的双列方格 */
+.child-albums-body--android {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.child-albums-body--android :deep(.album-card) {
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.child-albums-body--android .child-album-card {
+  min-width: 0;
+}
+
 .album-detail {
   height: 100%;
   display: flex;

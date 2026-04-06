@@ -2,12 +2,14 @@
   <el-dialog v-model="visible" :title="$t('albums.addToAlbumTitle')" width="420px">
     <el-form label-width="80px">
       <el-form-item :label="$t('albums.selectAlbum')">
-        <el-select v-model="selectedAlbumId" :placeholder="$t('albums.chooseAlbumPlaceholder')" style="width: 100%">
-          <el-option v-for="album in filteredAlbums" :key="album.id" :label="album.name" :value="album.id" />
-          <el-option value="__create_new__" :label="$t('albums.createNewAlbum')">
-            <span style="color: var(--el-color-primary); font-weight: 500;">{{ $t('albums.createNewAlbum') }}</span>
-          </el-option>
-        </el-select>
+        <AlbumPickerField
+          v-model="selectedAlbumId"
+          :album-tree="albumTreeForPicker"
+          :album-counts="albumCounts"
+          allow-create
+          :placeholder="$t('albums.chooseAlbumPlaceholder')"
+          :picker-title="$t('albums.selectAlbum')"
+        />
       </el-form-item>
       <el-form-item v-if="isCreatingNewAlbum" :label="$t('albums.placeholderName')" required>
         <el-input v-model="newAlbumName" :placeholder="$t('albums.placeholderName')" maxlength="50" show-word-limit
@@ -30,6 +32,7 @@ import { ElMessage } from "element-plus";
 import { storeToRefs } from "pinia";
 import { useAlbumStore } from "@/stores/albums";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
+import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 
 interface Props {
   modelValue: boolean;
@@ -53,14 +56,13 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
-const { albums } = storeToRefs(albumStore);
+const { albumCounts } = storeToRefs(albumStore);
 
-const filteredAlbums = computed(() => {
-  const exclude = new Set(props.excludeAlbumIds || []);
-  return (albums.value || []).filter((a) => !exclude.has(a.id));
-});
+const albumTreeForPicker = computed(() =>
+  albumStore.getAlbumTreeExcluding(props.excludeAlbumIds ?? []),
+);
 
-const selectedAlbumId = ref<string>("");
+const selectedAlbumId = ref<string | null>(null);
 const newAlbumName = ref<string>("");
 const newAlbumNameInputRef = ref<any>(null);
 
@@ -81,7 +83,7 @@ watch(
       // 确保画册列表可用
       await albumStore.loadAlbums();
     } else {
-      selectedAlbumId.value = "";
+      selectedAlbumId.value = null;
       newAlbumName.value = "";
     }
   }
@@ -94,7 +96,7 @@ watch(
     if (!selectedAlbumId.value) return;
     const exclude = new Set(next || []);
     if (exclude.has(selectedAlbumId.value)) {
-      selectedAlbumId.value = "";
+      selectedAlbumId.value = null;
     }
   },
   { deep: true }

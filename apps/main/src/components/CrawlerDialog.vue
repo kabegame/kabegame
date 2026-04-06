@@ -79,13 +79,14 @@
       </el-form-item>
 
       <el-form-item :label="$t('albums.outputAlbum')">
-        <AndroidPickerSelect
-          :model-value="selectedOutputAlbumId"
-          :options="outputAlbumPickerOptions"
-          :title="$t('albums.outputAlbum')"
+        <AlbumPickerField
+          v-model="selectedOutputAlbumId"
+          :album-tree="albumTree"
+          :album-counts="albumCounts"
+          allow-create
           :placeholder="$t('plugins.defaultGalleryOnly')"
+          :picker-title="$t('albums.outputAlbum')"
           clearable
-          @update:model-value="setOutputAlbumId"
         />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
@@ -325,17 +326,15 @@
       </el-form-item>
 
       <el-form-item :label="$t('albums.outputAlbum')">
-        <el-select
+        <AlbumPickerField
           v-model="selectedOutputAlbumId"
+          :album-tree="albumTree"
+          :album-counts="albumCounts"
+          allow-create
           :placeholder="$t('plugins.defaultGalleryOnly')"
+          :picker-title="$t('albums.outputAlbum')"
           clearable
-          style="width: 100%"
-        >
-          <el-option v-for="album in albums" :key="album.id" :label="album.name" :value="album.id" />
-          <el-option value="__create_new__" :label="$t('albums.createNewAlbum')">
-            <span style="color: var(--el-color-primary); font-weight: 500">{{ $t("albums.createNewAlbum") }}</span>
-          </el-option>
-        </el-select>
+        />
       </el-form-item>
       <el-form-item v-if="isCreatingNewOutputAlbum" :label="$t('albums.placeholderName')" required>
         <el-input
@@ -511,6 +510,7 @@ import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { usePluginStore } from "@/stores/plugins";
 import { useAlbumStore } from "@/stores/albums";
 import PluginVarField from "@kabegame/core/components/plugin/var-fields/PluginVarField.vue";
+import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
@@ -851,7 +851,7 @@ useModalBack(visible);
 
 const plugins = computed(() => pluginStore.plugins);
 const runConfigs = computed(() => crawlerStore.runConfigs);
-const albums = computed(() => albumStore.albums);
+const { albumTree, albumCounts } = storeToRefs(albumStore);
 
 const runConfigPickerOptions = computed(() =>
   runConfigs.value.map((cfg) => {
@@ -888,11 +888,6 @@ const crawlDialogMinAppErrorText = computed(() => {
   const cur = (crawlDialogAppVersion.value ?? "").trim();
   return t("plugins.crawlDialogMinAppError", { required: minV, current: cur });
 });
-const outputAlbumPickerOptions = computed(() => [
-  ...albums.value.map((a) => ({ label: a.name, value: a.id })),
-  { label: t("albums.createNewAlbum"), value: "__create_new__" },
-]);
-
 const selectedOutputAlbumId = ref<string | null>(null);
 const newOutputAlbumName = ref<string>("");
 const newOutputAlbumNameInputRef = ref<any>(null);
@@ -938,9 +933,6 @@ async function onPluginChange(v: string | null | undefined) {
     form.value.vars = {};
     httpHeaderRows.value = [];
   }
-}
-function setOutputAlbumId(v: string | null) {
-  selectedOutputAlbumId.value = v ?? null;
 }
 
 const visiblePluginVars = computed(() => {

@@ -8,6 +8,8 @@ mod fs;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 mod semantics;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+pub(crate) mod vd_locale_sync;
+#[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 mod virtual_drive_io;
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android"), target_os = "windows"))]
 mod virtual_drive_io_windows;
@@ -18,3 +20,4 @@ mod fuse;
 // 从 drive_service 模块导出 VirtualDriveService（根据平台自动选择实现）
 
 pub use driver_service::VirtualDriveService;
+pub use vd_locale_sync::album_folder_abs_path_for_explorer;

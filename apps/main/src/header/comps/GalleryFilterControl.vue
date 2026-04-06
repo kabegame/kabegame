@@ -13,13 +13,13 @@
       <el-dropdown-menu>
         <el-dropdown-item
           command="all"
-          :class="{ 'is-active': parsedRoot === 'all' }"
+          :class="{ 'is-active': galleryRouteStore.filter.type === 'all' }"
         >
           {{ t("gallery.filterAll") }}
         </el-dropdown-item>
         <el-dropdown-item
           command="wallpaper-order"
-          :class="{ 'is-active': parsedRoot === 'wallpaper-order' }"
+          :class="{ 'is-active': galleryRouteStore.filter.type === 'wallpaper-order' }"
         >
           {{ t("gallery.filterWallpaperSet") }}
         </el-dropdown-item>
@@ -111,7 +111,7 @@
                 <el-dropdown-item
                   command="image"
                   :class="{
-                    'is-active': galleryMediaKindFromRoot(parsedRoot) === 'image',
+                    'is-active': filterMediaKind(galleryRouteStore.filter) === 'image',
                   }"
                 >
                   {{ t("gallery.filterImageOnly") }}
@@ -120,7 +120,7 @@
                 <el-dropdown-item
                   command="video"
                   :class="{
-                    'is-active': galleryMediaKindFromRoot(parsedRoot) === 'video',
+                    'is-active': filterMediaKind(galleryRouteStore.filter) === 'video',
                   }"
                 >
                   {{ t("gallery.filterVideoOnly") }}
@@ -143,10 +143,10 @@ import { useRoute } from "vue-router";
 import { ArrowDown, ArrowRight, Filter } from "@element-plus/icons-vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  galleryDateTailFromRoot,
-  galleryMediaKindFromRoot,
-  galleryPluginIdFromRoot,
-  isGallerySimpleFilterRoot,
+  filterDateSegment,
+  filterMediaKind,
+  filterPluginId,
+  isSimpleFilter,
 } from "@/utils/galleryPath";
 import {
   buildGalleryTimeMenuTree,
@@ -174,22 +174,21 @@ const route = useRoute();
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 const galleryRouteStore = useGalleryRouteStore();
-const parsedRoot = computed(() => galleryRouteStore.root || "all");
 
 const showSimpleFilter = computed(() =>
-  isGallerySimpleFilterRoot(parsedRoot.value)
+  isSimpleFilter(galleryRouteStore.filter)
 );
 
-const currentPluginId = computed(() => galleryPluginIdFromRoot(parsedRoot.value));
+const currentPluginId = computed(() => filterPluginId(galleryRouteStore.filter));
 
-const dateTail = computed(() => galleryDateTailFromRoot(parsedRoot.value));
+const dateTail = computed(() => filterDateSegment(galleryRouteStore.filter));
 
 const isPluginFilterActive = computed(() => currentPluginId.value != null);
 
 const isTimeFilterActive = computed(() => dateTail.value != null);
 
 const isMediaTypeFilterActive = computed(
-  () => galleryMediaKindFromRoot(parsedRoot.value) != null
+  () => filterMediaKind(galleryRouteStore.filter) != null
 );
 
 const pluginGroups = ref<PluginGroupRow[]>([]);
@@ -243,8 +242,12 @@ useImagesChangeRefresh({
 
 const filterLabel = computed(() => {
   void locale.value;
-  if (parsedRoot.value === "wallpaper-order") {
+  if (galleryRouteStore.filter.type === "wallpaper-order") {
     return t("gallery.filterWallpaperSet");
+  }
+  if (galleryRouteStore.filter.type === "date-range") {
+    const f = galleryRouteStore.filter;
+    return `${f.start} ~ ${f.end}`;
   }
   const dt = dateTail.value;
   if (dt) {
@@ -254,7 +257,7 @@ const filterLabel = computed(() => {
   if (pid) {
     return t("gallery.filterByPluginWithName", { name: pluginStore.pluginLabel(pid) });
   }
-  const mk = galleryMediaKindFromRoot(parsedRoot.value);
+  const mk = filterMediaKind(galleryRouteStore.filter);
   if (mk === "image") {
     return `${t("gallery.filterImageOnlyLabel")} (${mediaTypeCounts.value.imageCount})`;
   }
@@ -266,24 +269,42 @@ const filterLabel = computed(() => {
 
 function handleCommand(command: string) {
   if (command !== "all" && command !== "wallpaper-order") return;
-  void galleryRouteStore.navigate({ root: command, page: 1 }, { push: true });
+  void galleryRouteStore.navigate(
+    {
+      filter:
+        command === "all"
+          ? { type: "all" }
+          : { type: "wallpaper-order" },
+      page: 1,
+    },
+    { push: true }
+  );
 }
 
 function handlePluginCommand(pluginId: string) {
   const id = (pluginId || "").trim();
   if (!id) return;
-  void galleryRouteStore.navigate({ root: `plugin/${id}`, page: 1 }, { push: true });
+  void galleryRouteStore.navigate(
+    { filter: { type: "plugin", pluginId: id }, page: 1 },
+    { push: true }
+  );
 }
 
 function handleTimeCommand(name: string) {
   const seg = (name || "").trim();
   if (!seg) return;
-  void galleryRouteStore.navigate({ root: `date/${seg}`, page: 1 }, { push: true });
+  void galleryRouteStore.navigate(
+    { filter: { type: "date", segment: seg }, page: 1 },
+    { push: true }
+  );
 }
 
 function handleMediaTypeCommand(kind: string) {
   if (kind !== "image" && kind !== "video") return;
-  void galleryRouteStore.navigate({ root: `media-type/${kind}`, page: 1 }, { push: true });
+  void galleryRouteStore.navigate(
+    { filter: { type: "media-type", kind }, page: 1 },
+    { push: true }
+  );
 }
 </script>
 

@@ -309,13 +309,15 @@ PRAGMA mmap_size = 268435456;
             "CREATE TABLE IF NOT EXISTS albums (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                parent_id TEXT REFERENCES albums(id) ON DELETE CASCADE
             )",
             [],
         )
         .expect("Failed to create albums table");
         let _ = conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_name_ci ON albums(LOWER(name))",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_name_scoped
+                ON albums(COALESCE(parent_id, ''), LOWER(name))",
             [],
         );
         // 旧版本曾有 albums.\"order\"：由 perform_complex_migrations 负责重建迁移并移除该列。
@@ -1103,7 +1105,8 @@ fn perform_complex_migrations(conn: &mut Connection) {
             "CREATE TABLE albums_new (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                parent_id TEXT REFERENCES albums(id) ON DELETE CASCADE
             )",
             [],
         )
@@ -1112,15 +1115,17 @@ fn perform_complex_migrations(conn: &mut Connection) {
         // created_at = base_time + order
         // 注：如果 order 为 NULL，则按 0 处理（与旧行为保持兼容）。
         tx.execute(
-            "INSERT INTO albums_new (id, name, created_at)
-             SELECT id, name, (?1 + COALESCE(\"order\", 0)) as created_at
+            "INSERT INTO albums_new (id, name, created_at, parent_id)
+             SELECT id, name, (?1 + COALESCE(\"order\", 0)) as created_at, NULL
              FROM albums",
             params![base_time],
         )
         .expect("Failed to migrate albums to albums_new");
 
-        // 重新创建大小写不敏感唯一索引
+        // 重新创建同层级大小写不敏感唯一索引
         tx.execute("DROP INDEX IF EXISTS idx_albums_name_ci", [])
+            .ok();
+        tx.execute("DROP INDEX IF EXISTS idx_albums_name_scoped", [])
             .ok();
 
         tx.execute("DROP TABLE albums", [])
@@ -1129,7 +1134,8 @@ fn perform_complex_migrations(conn: &mut Connection) {
             .expect("Failed to rename albums_new");
 
         tx.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_name_ci ON albums(LOWER(name))",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_name_scoped
+                ON albums(COALESCE(parent_id, ''), LOWER(name))",
             [],
         )
         .ok();

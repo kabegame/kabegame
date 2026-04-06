@@ -410,17 +410,19 @@ const handleRunMissedNow = async () => {
     missedRunsVisible.value = false;
     return;
   }
-  await Promise.allSettled(ids.map((id) => crawlerStore.runFromConfig(id)));
+  await crawlerStore.runMissedConfigs(ids);
   missedRunsVisible.value = false;
   missedRunItems.value = [];
   ElMessage.success(t("autoConfig.missedRuns.runNowSuccess"));
 };
 
 const handleDismissMissed = async () => {
-  if (!missedRunItems.value.length) {
+  const ids = missedRunItems.value.map((item) => item.configId);
+  if (!ids.length) {
     missedRunsVisible.value = false;
     return;
   }
+  await crawlerStore.dismissMissedConfigs(ids);
   missedRunsVisible.value = false;
   missedRunItems.value = [];
   ElMessage.info(t("autoConfig.missedRuns.dismissed"));

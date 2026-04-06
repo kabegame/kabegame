@@ -1,5 +1,6 @@
 {
   "emptyTip": "まだアルバムがありません。右上のボタンで作成",
+  "subAlbums": "サブアルバム",
   "newAlbum": "新規アルバム",
   "placeholderName": "アルバム名を入力",
   "create": "作成",
@@ -65,5 +66,10 @@
   "doubleClickToRename": "ダブルクリックで名前を変更",
   "totalCountSubtitle": "合計 {count}",
   "deleteAlbumRotationConfirm": "削除するアルバムは壁紙ローテーションで使用されています。削除するとギャラリーに戻ります。",
-  "deleteAlbumRotationTitle": "このアルバムを削除しますか？"
+  "deleteAlbumRotationTitle": "このアルバムを削除しますか？",
+  "moveToTitle": "アルバムを移動",
+  "moveToRoot": "ルートに移動",
+  "moveSuccess": "アルバムを移動しました",
+  "moveFailed": "移動に失敗しました",
+  "selectTargetAlbum": "移動先のアルバムを選択"
 }

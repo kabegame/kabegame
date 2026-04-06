@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::providers::plugin_display_name_from_manifest;
-use crate::providers::vd_names::{DIR_ALBUMS, DIR_ALL, DIR_BY_DATE, DIR_BY_PLUGIN, DIR_BY_TASK};
 use crate::storage::Storage;
+use crate::virtual_driver::vd_locale_sync::{album_folder_abs_path_for_explorer, vd_display_name_for_settings_sync};
 use arc_swap::ArcSwap;
 use widestring::U16CString;
 use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_UPDATEDIR, SHCNF_PATHW};
@@ -58,14 +58,10 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
         let Some(mp) = mounted_arc.as_ref().as_ref() else {
             return;
         };
-        let storage = Storage::global();
-        let Ok(Some(name)) = storage.get_album_name_by_id(album_id) else {
-            // 画册不存在，刷新画册列表
-            self.notify_albums_root_dir_changed();
-            return;
-        };
-        let album_path = join_mount_subdir(mp.as_ref(), &format!("{}\\{}", DIR_ALBUMS, name));
-        notify_explorer_dir_changed_path(&album_path);
+        match album_folder_abs_path_for_explorer(mp.as_ref(), album_id) {
+            Ok(album_path) => notify_explorer_dir_changed_path(&album_path),
+            Err(_) => self.notify_albums_root_dir_changed(),
+        }
     }
 
     fn bump_tasks(&self) {
@@ -187,7 +183,8 @@ impl VirtualDriveService {
         let Some(mp) = mounted_arc.as_ref().as_ref() else {
             return;
         };
-        notify_explorer_dir_changed_path(&join_mount_subdir(mp.as_ref(), DIR_BY_TASK));
+        let task_root = vd_display_name_for_settings_sync("task");
+        notify_explorer_dir_changed_path(&join_mount_subdir(mp.as_ref(), &task_root));
     }
 
     /// 通知画册根目录变更（私有辅助方法）
@@ -196,7 +193,8 @@ impl VirtualDriveService {
         let Some(mp) = mounted_arc.as_ref().as_ref() else {
             return;
         };
-        notify_explorer_dir_changed_path(&join_mount_subdir(mp.as_ref(), DIR_ALBUMS));
+        let album_root = vd_display_name_for_settings_sync("album");
+        notify_explorer_dir_changed_path(&join_mount_subdir(mp.as_ref(), &album_root));
     }
 
     /// 通知某个任务目录内容变更（用于任务运行中不断新增图片时，Explorer 正在浏览该目录也能刷新）。
@@ -247,8 +245,9 @@ impl VirtualDriveService {
             format!("{} - {}", plugin_name, task_id)
         };
 
+        let task_root = vd_display_name_for_settings_sync("task");
         let task_path =
-            join_mount_subdir(mp.as_ref(), &format!("{}\\{}", DIR_BY_TASK, task_dir_name));
+            join_mount_subdir(mp.as_ref(), &format!("{}\\{}", task_root, task_dir_name));
         notify_explorer_dir_changed_path(&task_path);
     }
 
@@ -275,9 +274,18 @@ impl VirtualDriveService {
             guard.insert(key.to_string(), now);
         }
 
-        notify_explorer_dir_changed_path(&join_mount_subdir(mp.as_ref(), DIR_ALL));
-        notify_explorer_dir_changed_path(&join_mount_subdir(mp.as_ref(), DIR_BY_PLUGIN));
-        notify_explorer_dir_changed_path(&join_mount_subdir(mp.as_ref(), DIR_BY_DATE));
+        notify_explorer_dir_changed_path(&join_mount_subdir(
+            mp.as_ref(),
+            &vd_display_name_for_settings_sync("all"),
+        ));
+        notify_explorer_dir_changed_path(&join_mount_subdir(
+            mp.as_ref(),
+            &vd_display_name_for_settings_sync("plugin"),
+        ));
+        notify_explorer_dir_changed_path(&join_mount_subdir(
+            mp.as_ref(),
+            &vd_display_name_for_settings_sync("date"),
+        ));
     }
 }
 

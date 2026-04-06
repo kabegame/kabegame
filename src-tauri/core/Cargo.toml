@@ -6,6 +6,7 @@ name = "kabegame-core"
 version = { workspace = true }
 
 [dependencies]
+kabegame-i18n = { workspace = true }
 arc-swap = "1.7"
 async-trait = { workspace = true }
 auto-launch = "0.5"

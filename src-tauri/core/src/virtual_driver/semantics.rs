@@ -14,10 +14,23 @@ use std::{
 };
 
 use crate::{
-    providers::provider::{DeleteChildMode, Provider, ResolveResult},
-    providers::{vd_names::DIR_ALBUMS, vd_names::DIR_BY_TASK, ProviderRuntime},
+    providers::descriptor::{ProviderDescriptor, ProviderGroupKind},
+    providers::provider::Provider,
+    providers::ProviderRuntime,
     storage::Storage,
 };
+
+use super::vd_locale_sync::vd_locale_segment_for_settings_sync;
+
+/// VD 路径解析结果（virtual_driver 专用，不属于 Provider trait）。
+pub enum ResolveResult {
+    Directory(Arc<dyn Provider>),
+    File {
+        image_id: String,
+        resolved_path: PathBuf,
+    },
+    NotFound,
+}
 
 #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
@@ -132,8 +145,23 @@ impl<'a> VfsSemantics<'a> {
     pub fn new(provider_rt: &'a ProviderRuntime) -> Self {
         Self {
             provider_rt,
-            vd_locale: "zh",
+            vd_locale: vd_locale_segment_for_settings_sync(),
         }
+    }
+
+    /// 第一段路径是否解析为指定 `Group`（用于替代硬编码的 VD 目录名）。
+    pub fn resolved_segment_is_group(&self, segment: &str, kind: ProviderGroupKind) -> bool {
+        match self.resolve_provider(&[segment]) {
+            Ok(Some(p)) => matches!(p.descriptor(), ProviderDescriptor::Group { kind: k, .. } if k == kind),
+            _ => false,
+        }
+    }
+
+    /// `path` 首段是否为某 Group（例如画册根下的「画册」文件夹名）。
+    pub fn path_starts_with_group(&self, path: &[String], kind: ProviderGroupKind) -> bool {
+        path.first()
+            .map(|s| self.resolved_segment_is_group(s.as_str(), kind))
+            .unwrap_or(false)
     }
 
     pub fn path_to_segments(path: &[String]) -> Vec<&str> {
@@ -359,7 +387,9 @@ impl<'a> VfsSemantics<'a> {
                 crate::providers::provider::ListEntry::Child { name, .. } => {
                     // 任务目录：modified = task end_time（无 end_time 则回退 start_time/now）
                     let (created, accessed, modified) =
-                        if segments.len() == 1 && segments[0].eq_ignore_ascii_case(DIR_BY_TASK) {
+                        if segments.len() == 1
+                            && self.resolved_segment_is_group(segments[0], ProviderGroupKind::Task)
+                        {
                             let task_id = name
                                 .rsplit_once(" - ")
                                 .map(|(_, id)| id)
@@ -412,8 +442,9 @@ impl<'a> VfsSemantics<'a> {
                 }
                 crate::providers::provider::ListEntry::Image(image) => {
                     let resolved_path = PathBuf::from(&image.local_path);
-                    let meta = std::fs::metadata(&resolved_path)
-                        .map_err(|_| VfsError::NotFound("文件不存在".to_string()))?;
+                    let Ok(meta) = std::fs::metadata(&resolved_path) else {
+                        continue;
+                    };
                     let (created, accessed, modified) = if let Some(ts) = ts_map.get(&image.id) {
                         let t = system_time_from_gallery_ts(*ts);
                         (t, t, t)
@@ -472,43 +503,27 @@ impl<'a> VfsSemantics<'a> {
         ))
     }
 
-    pub fn delete_dir(
-        &self,
-        parent_path: &[String],
-        dir_name: &str,
-        mode: DeleteChildMode,
-    ) -> Result<bool, VfsError> {
+    /// Dokan「删除目录」预检：是否允许删除（不修改数据）。
+    pub fn can_delete_child_at(&self, parent_path: &[String], name: &str) -> Result<bool, VfsError> {
         let parent_segs = Self::path_to_segments(parent_path);
         let parent = self
             .resolve_provider(&parent_segs)?
             .ok_or_else(|| VfsError::NotFound("父目录不存在".to_string()))?;
-        if mode == DeleteChildMode::Check {
-            if parent.can_delete_child_v2(dir_name) {
-                return Ok(true);
-            }
-        } else if parent.can_delete_child_v2(dir_name) {
-            parent.delete_child_v2(dir_name).map_err(VfsError::Other)?;
-            return Ok(true);
-        }
-        Ok(false)
+        Ok(parent.can_delete_child(name))
     }
 
-    pub fn delete_file(
+    /// 执行删除子目录或子「文件」条目（画册下图片等），与 [`Self::can_delete_child_at`] 配对使用。
+    pub fn commit_delete_child_at(
         &self,
         parent_path: &[String],
-        file_name: &str,
-        mode: DeleteChildMode,
+        name: &str,
     ) -> Result<bool, VfsError> {
         let parent_segs = Self::path_to_segments(parent_path);
         let parent = self
             .resolve_provider(&parent_segs)?
             .ok_or_else(|| VfsError::NotFound("父目录不存在".to_string()))?;
-        if mode == DeleteChildMode::Check {
-            if parent.can_delete_child_v2(file_name) {
-                return Ok(true);
-            }
-        } else if parent.can_delete_child_v2(file_name) {
-            parent.delete_child_v2(file_name).map_err(VfsError::Other)?;
+        if parent.can_delete_child(name) {
+            parent.delete_child(name).map_err(VfsError::Other)?;
             return Ok(true);
         }
         Ok(false)
@@ -538,10 +553,4 @@ impl<'a> VfsSemantics<'a> {
         ))
     }
 
-    /// 便捷：判断某个目录是否位于“画册”根下（用于默认只读策略）
-    pub fn is_under_albums_root(path: &[String]) -> bool {
-        path.first()
-            .map(|s| s.eq_ignore_ascii_case(DIR_ALBUMS))
-            .unwrap_or(false)
-    }
 }

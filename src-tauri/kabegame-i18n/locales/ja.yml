@@ -42,5 +42,24 @@ albums:
 plugins:
   officialGithubReleaseSourceName: 公式 GitHub Releases ソース
 
+vd:
+  all: すべて
+  plugin: プラグイン別
+  date: 日付別
+  dateRange: 期間別
+  album: アルバム
+  task: タスク別
+  surf: サーフ別
+  mediaType: 種類別
+  wallpaperOrder: 壁紙設定順
+  desc: 降順
+  image: 画像
+  video: 動画
+  subAlbums: サブアルバム
+  albumOrder: アルバム順
+  wallpaperOrderSub: 壁紙順
+  imageOnly: 画像のみ
+  videoOnly: 動画のみ
+
 surf:
   windowTitle: "サーフ - {host}"

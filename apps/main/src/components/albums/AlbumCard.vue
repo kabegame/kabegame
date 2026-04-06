@@ -1,5 +1,6 @@
 <template>
-  <div ref="cardRef" class="album-card" :data-album-id="album.id" @click="handleCardClick">
+  <div ref="cardRef" class="album-card" :data-album-id="album.id" @click="handleCardClick"
+    @contextmenu.prevent="(e) => emit('contextmenu', e)">
     <div class="hero">
       <div v-for="(slot, idx) in heroSlots" :key="slot.key" class="hero-img" :class="heroClass(idx, slot.hasContent)">
         <ImageItem
@@ -12,6 +13,7 @@
           :grid-index="idx"
           class="album-hero-image-item"
           @click="handleHeroImageClick"
+          @contextmenu="(e) => emit('contextmenu', e)"
         />
       </div>
       <div v-if="actualImageCount === 0 && !isLoading" class="hero-empty">
@@ -83,6 +85,7 @@ const hasBeenVisible = ref(false);
 const emit = defineEmits<{
   click: [];
   visible: [];
+  contextmenu: [event: MouseEvent];
 }>();
 
 /** 与 Albums.vue 中 toPreviewUrl 一致，用于判断是否有可展示的预览 */

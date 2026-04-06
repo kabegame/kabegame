@@ -30,6 +30,9 @@ pub async fn handle_settings_request(req: &CliIpcRequest) -> Option<CliIpcRespon
         CliIpcRequest::SettingsGetWallpaperRotationAlbumId => {
             Some(get_wallpaper_rotation_album_id().await)
         }
+        CliIpcRequest::SettingsGetWallpaperRotationIncludeSubalbums => {
+            Some(get_wallpaper_rotation_include_subalbums().await)
+        }
         CliIpcRequest::SettingsGetWallpaperRotationIntervalMinutes => {
             Some(get_wallpaper_rotation_interval_minutes().await)
         }
@@ -73,6 +76,9 @@ pub async fn handle_settings_request(req: &CliIpcRequest) -> Option<CliIpcRespon
         }
         CliIpcRequest::SettingsSetWallpaperRotationAlbumId { album_id } => {
             Some(set_wallpaper_rotation_album_id(album_id.clone()).await)
+        }
+        CliIpcRequest::SettingsSetWallpaperRotationIncludeSubalbums { include_subalbums } => {
+            Some(set_wallpaper_rotation_include_subalbums(*include_subalbums).await)
         }
         CliIpcRequest::SettingsSetWallpaperRotationTransition { transition } => {
             Some(set_wallpaper_rotation_transition(transition.clone()).await)
@@ -162,6 +168,17 @@ async fn set_wallpaper_rotation_enabled(enabled: bool) -> CliIpcResponse {
 async fn set_wallpaper_rotation_album_id(album_id: Option<String>) -> CliIpcResponse {
     let settings = Settings::global();
     match settings.set_wallpaper_rotation_album_id(album_id).await {
+        Ok(()) => CliIpcResponse::ok("updated"),
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
+async fn set_wallpaper_rotation_include_subalbums(include_subalbums: bool) -> CliIpcResponse {
+    let settings = Settings::global();
+    match settings
+        .set_wallpaper_rotation_include_subalbums(include_subalbums)
+        .await
+    {
         Ok(()) => CliIpcResponse::ok("updated"),
         Err(e) => CliIpcResponse::err(e),
     }
@@ -496,6 +513,14 @@ async fn get_wallpaper_rotation_album_id() -> CliIpcResponse {
             "ok",
             serde_json::to_value(v).unwrap_or(serde_json::Value::Null),
         ),
+        Err(e) => CliIpcResponse::err(e),
+    }
+}
+
+async fn get_wallpaper_rotation_include_subalbums() -> CliIpcResponse {
+    let settings = Settings::global();
+    match settings.get_wallpaper_rotation_include_subalbums().await {
+        Ok(v) => CliIpcResponse::ok_with_data("ok", serde_json::json!(v)),
         Err(e) => CliIpcResponse::err(e),
     }
 }

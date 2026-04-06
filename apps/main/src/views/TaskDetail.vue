@@ -347,6 +347,7 @@ const goBack = () => {
 };
 
 const handleRefresh = async () => {
+    if (!isOnTaskRoute.value) return;
     if (!taskId.value) return;
     isRefreshing.value = true;
     try {
@@ -395,6 +396,8 @@ watch(
 watch(
     () => route.query.path,
     (rawPath) => {
+        // 与 AlbumDetail 一致：仅在当前路由为任务详情时同步，避免画册等页的 ?path= 污染 taskDetailRouteStore
+        if (!isOnTaskRoute.value) return;
         const qp = Array.isArray(rawPath) ? String(rawPath[0] ?? "") : String(rawPath ?? "");
         if (!qp.trim()) return;
         if (qp !== currentPath.value) {
@@ -405,6 +408,7 @@ watch(
 );
 
 const loadTaskImages = async (options?: { showSkeleton?: boolean }) => {
+    if (!isOnTaskRoute.value) return;
     if (!taskId.value) return;
     if (imageFilter.value !== "success") return;
     const showSkeleton = options?.showSkeleton ?? true;
@@ -436,6 +440,7 @@ watch(
     pageSize,
     async (_v, prev) => {
         if (prev === undefined) return;
+        if (!isOnTaskRoute.value) return;
         await taskDetailRouteStore.navigate({ page: 1 });
         await loadTaskImages({ showSkeleton: false });
     },
@@ -447,6 +452,7 @@ watch(
         if (next === "failed") {
             return;
         }
+        if (!isOnTaskRoute.value) return;
         await loadTaskImages({ showSkeleton: false });
     }
 );
@@ -1027,6 +1033,7 @@ useImagesChangeRefresh({
         return true;
     },
     onRefresh: async () => {
+        if (!isOnTaskRoute.value) return;
         if (!taskId.value) return;
         const prevList = images.value.slice();
         await Promise.all([

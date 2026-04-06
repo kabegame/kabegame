@@ -13,13 +13,13 @@
       <el-dropdown-menu>
         <el-dropdown-item
           command="asc"
-          :class="{ 'is-active': sortOrder === 'asc' }"
+          :class="{ 'is-active': galleryRouteStore.sort === 'asc' }"
         >
           {{ sortAscLabel }}
         </el-dropdown-item>
         <el-dropdown-item
           command="desc"
-          :class="{ 'is-active': sortOrder === 'desc' }"
+          :class="{ 'is-active': galleryRouteStore.sort === 'desc' }"
         >
           {{ sortDescLabel }}
         </el-dropdown-item>
@@ -33,23 +33,13 @@ import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { useRoute } from "vue-router";
 import { ArrowDown, Sort } from "@element-plus/icons-vue";
-import {
-  parseGalleryPath,
-} from "@/utils/galleryPath";
 import { useGalleryRouteStore } from "@/stores/galleryRoute";
 
 const route = useRoute();
 const galleryRouteStore = useGalleryRouteStore();
-const currentPath = computed(() => galleryRouteStore.currentPath);
-
-const sortOrder = computed<"asc" | "desc">(() =>
-  currentPath.value.includes("/desc/") ? "desc" : "asc"
-);
-
-const parsedRoot = computed(() => parseGalleryPath(currentPath.value).root);
 
 const isWallpaperOrderRoot = computed(
-  () => parsedRoot.value === "wallpaper-order"
+  () => galleryRouteStore.filter.type === "wallpaper-order"
 );
 
 const { t } = useI18n();
@@ -67,15 +57,12 @@ const sortDescLabel = computed(() =>
 );
 
 const sortLabel = computed(() => {
-  if (gallerySortPref.value === "" && parsedRoot.value === "all") {
-    return t("common.selectPlaceholder");
-  }
   if (isWallpaperOrderRoot.value) {
-    return sortOrder.value === "desc"
+    return galleryRouteStore.sort === "desc"
       ? t("gallery.bySetTimeDesc")
       : t("gallery.bySetTimeAsc");
   }
-  return sortOrder.value === "desc"
+  return galleryRouteStore.sort === "desc"
     ? t("gallery.byTimeDesc")
     : t("gallery.byTimeAsc");
 });

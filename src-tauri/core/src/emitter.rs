@@ -166,14 +166,18 @@ impl GlobalEmitter {
     /// 发送整理进度事件
     pub fn emit_organize_progress(
         &self,
-        processed: usize,
-        total: usize,
+        processed_global: usize,
+        library_total: usize,
+        range_start: Option<usize>,
+        range_end: Option<usize>,
         removed: usize,
         regenerated: usize,
     ) {
         let event = std::sync::Arc::new(DaemonEvent::OrganizeProgress {
-            processed,
-            total,
+            processed_global,
+            library_total,
+            range_start,
+            range_end,
             removed,
             regenerated,
         });
@@ -331,21 +335,28 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送画册名称变更事件（底层 DB 重命名后由 storage 调用，前端与 VD 据此更新）
-    pub fn emit_album_name_changed(&self, album_id: &str, new_name: &str) {
-        let event = std::sync::Arc::new(DaemonEvent::AlbumNameChanged {
+    /// 发送画册属性变更事件（重命名、移动等；`changes` 为增量 JSON）
+    pub fn emit_album_changed(&self, album_id: &str, changes: serde_json::Value) {
+        let event = std::sync::Arc::new(DaemonEvent::AlbumChanged {
             album_id: album_id.to_string(),
-            new_name: new_name.to_string(),
+            changes,
         });
         EventBroadcaster::global().broadcast(event);
     }
 
     /// 发送画册添加事件（底层 DB 插入后由 storage 调用）
-    pub fn emit_album_added(&self, id: &str, name: &str, created_at: u64) {
+    pub fn emit_album_added(
+        &self,
+        id: &str,
+        name: &str,
+        created_at: u64,
+        parent_id: Option<&str>,
+    ) {
         let event = std::sync::Arc::new(DaemonEvent::AlbumAdded {
             id: id.to_string(),
             name: name.to_string(),
             created_at,
+            parent_id: parent_id.map(|s| s.to_string()),
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -462,8 +473,10 @@ impl GlobalEmitter {
 
     pub fn emit_organize_progress(
         &self,
-        _processed: usize,
-        _total: usize,
+        _processed_global: usize,
+        _library_total: usize,
+        _range_start: Option<usize>,
+        _range_end: Option<usize>,
         _removed: usize,
         _regenerated: usize,
     ) {
@@ -514,9 +527,16 @@ impl GlobalEmitter {
 
     pub fn emit_daemon_shutdown(&self, _reason: &str) {}
 
-    pub fn emit_album_name_changed(&self, _album_id: &str, _new_name: &str) {}
+    pub fn emit_album_changed(&self, _album_id: &str, _changes: serde_json::Value) {}
 
-    pub fn emit_album_added(&self, _id: &str, _name: &str, _created_at: u64) {}
+    pub fn emit_album_added(
+        &self,
+        _id: &str,
+        _name: &str,
+        _created_at: u64,
+        _parent_id: Option<&str>,
+    ) {
+    }
 
     pub fn emit_album_deleted(&self, _album_id: &str) {}
 

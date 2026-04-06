@@ -262,6 +262,14 @@ pub async fn get_organize_total_count() -> Result<usize, String> {
     kabegame_core::storage::Storage::global().get_images_total_count()
 }
 
+/// 页面刷新后同步：是否正在整理及当前进度快照（与 `organize-progress` 一致）
+#[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub async fn get_organize_run_state(
+) -> Result<kabegame_core::storage::organize::OrganizeRunState, String> {
+    Ok(kabegame_core::storage::organize::OrganizeService::global().get_run_state())
+}
+
 #[tauri::command]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn cancel_organize() -> Result<bool, String> {

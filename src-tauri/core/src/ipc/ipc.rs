@@ -478,6 +478,7 @@ pub enum CliIpcRequest {
     SettingsGetWallpaperEngineDir,
     SettingsGetWallpaperRotationEnabled,
     SettingsGetWallpaperRotationAlbumId,
+    SettingsGetWallpaperRotationIncludeSubalbums,
     SettingsGetWallpaperRotationIntervalMinutes,
     SettingsGetWallpaperRotationMode,
     SettingsGetWallpaperStyle,
@@ -508,6 +509,9 @@ pub enum CliIpcRequest {
     },
     SettingsSetWallpaperRotationAlbumId {
         album_id: Option<String>,
+    },
+    SettingsSetWallpaperRotationIncludeSubalbums {
+        include_subalbums: bool,
     },
     SettingsSetWallpaperRotationTransition {
         transition: String,

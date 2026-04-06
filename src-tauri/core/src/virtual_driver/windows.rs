@@ -32,8 +32,7 @@ use super::driver_service::{join_mount_subdir, notify_explorer_dir_changed_path}
 use super::fs::KabegameFs;
 use super::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
 use super::virtual_drive_io::{VdFileMeta, VdReadHandle};
-use crate::providers::provider::DeleteChildMode;
-use crate::providers::vd_names::{DIR_ALBUMS, DIR_BY_TASK};
+use crate::providers::descriptor::ProviderGroupKind;
 use crate::settings::Settings;
 use crate::storage::Storage;
 use dokan::{
@@ -163,7 +162,7 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 let rt = crate::providers::ProviderRuntime::global();
                 let sem = VfsSemantics::new(&*rt);
                 if sem
-                    .delete_dir(parent_path, child_name, DeleteChildMode::Commit)
+                    .commit_delete_child_at(parent_path, child_name)
                     .ok()
                     .unwrap_or(false)
                 {
@@ -172,20 +171,24 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
                 }
             }
             FsItem::File { path, .. } => {
-                // 文件删除：默认只读；只有“画册”目录下允许删除=从画册移除图片
-                if path.len() >= 3 && path[0].eq_ignore_ascii_case(DIR_ALBUMS) {
-                    let file_name = path.last().map(|s| s.as_str()).unwrap_or("");
-                    let parent_path = &path[..path.len().saturating_sub(1)];
-                    let rt = crate::providers::ProviderRuntime::global();
-                    let sem = VfsSemantics::new(&*rt);
-                    if sem
-                        .delete_file(parent_path, file_name, DeleteChildMode::Commit)
-                        .ok()
-                        .unwrap_or(false)
-                    {
-                        let mount_point = get_mount_point();
-                        notify_explorer_dir_changed_path(&mount_point);
-                    }
+                // 文件删除：默认只读；仅在画册分组下允许删除=从画册移除图片
+                if path.len() < 3 {
+                    return;
+                }
+                let rt = crate::providers::ProviderRuntime::global();
+                let sem = VfsSemantics::new(&*rt);
+                if !sem.path_starts_with_group(path, ProviderGroupKind::Album) {
+                    return;
+                }
+                let file_name = path.last().map(|s| s.as_str()).unwrap_or("");
+                let parent_path = &path[..path.len().saturating_sub(1)];
+                if sem
+                    .commit_delete_child_at(parent_path, file_name)
+                    .ok()
+                    .unwrap_or(false)
+                {
+                    let mount_point = get_mount_point();
+                    notify_explorer_dir_changed_path(&mount_point);
                 }
             }
         }
@@ -307,9 +310,13 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         match context {
             FsItem::Directory { path } => {
                 let segments = VfsSemantics::path_to_segments(path);
+                let rt = crate::providers::ProviderRuntime::global();
+                let sem = VfsSemantics::new(&*rt);
 
                 // 任务目录：修改时间 = end_time
-                if segments.len() == 2 && segments[0].eq_ignore_ascii_case(DIR_BY_TASK) {
+                if segments.len() == 2
+                    && sem.resolved_segment_is_group(segments[0], ProviderGroupKind::Task)
+                {
                     let name = segments[1];
                     let task_id = name
                         .rsplit_once(" - ")
@@ -471,21 +478,16 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             return Err(STATUS_ACCESS_DENIED);
         };
 
-        // 默认只读；仅允许在画册目录下“删除文件”=从画册移除图片（实际删除在 cleanup(delete_on_close) 中执行）。
-        if path.len() >= 3 && path[0].eq_ignore_ascii_case(DIR_ALBUMS) {
-            let parent_path = &path[..path.len().saturating_sub(1)];
-            let file_name = path.last().map(|s| s.as_str()).unwrap_or("");
+        // 默认只读；仅允许在画册分组下“删除文件”=从画册移除图片（实际删除在 cleanup(delete_on_close) 中执行）。
+        if path.len() >= 3 {
             let rt = crate::providers::ProviderRuntime::global();
             let sem = VfsSemantics::new(&*rt);
-            let ok = sem
-                .delete_file(
-                    parent_path,
-                    file_name,
-                    DeleteChildMode::Check,
-                )
-                .is_ok();
-            if ok {
-                return Ok(());
+            if sem.path_starts_with_group(path, ProviderGroupKind::Album) {
+                let parent_path = &path[..path.len().saturating_sub(1)];
+                let file_name = path.last().map(|s| s.as_str()).unwrap_or("");
+                if let Ok(true) = sem.can_delete_child_at(parent_path, file_name) {
+                    return Ok(());
+                }
             }
         }
         Err(STATUS_ACCESS_DENIED)
@@ -508,13 +510,9 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         let child_name = path.last().map(|s| s.as_str()).unwrap_or("");
         let rt = crate::providers::ProviderRuntime::global();
         let sem = VfsSemantics::new(&*rt);
-        sem.delete_dir(
-            parent_path,
-            child_name,
-            DeleteChildMode::Check,
-        )
-        .map(|_| ())
-        .map_err(|e| Self::map_vfs_error(e))
+        sem.can_delete_child_at(parent_path, child_name)
+            .map(|_| ())
+            .map_err(|e| Self::map_vfs_error(e))
     }
 
     fn move_file(
@@ -530,7 +528,9 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
             return Err(STATUS_ACCESS_DENIED);
         };
 
-        if path.len() != 2 || !path[0].eq_ignore_ascii_case(DIR_ALBUMS) {
+        let rt = crate::providers::ProviderRuntime::global();
+        let sem = VfsSemantics::new(&*rt);
+        if path.len() != 2 || !sem.resolved_segment_is_group(&path[0], ProviderGroupKind::Album) {
             return Err(STATUS_ACCESS_DENIED);
         }
 
@@ -545,11 +545,9 @@ impl<'c, 'h: 'c> FileSystemHandler<'c, 'h> for KabegameFs {
         }
 
         // 查找 Provider 并执行重命名
-        let rt = crate::providers::ProviderRuntime::global();
-        let sem = VfsSemantics::new(&*rt);
         sem.rename_dir(path, new_name)
             .map_err(Self::map_vfs_error)?;
-        // 事件由 storage rename_album 底层发出 AlbumNameChanged，此处仅刷新 Explorer
+        // 事件由 storage rename_album 底层发出 AlbumChanged，此处仅刷新 Explorer
         let mount_point = get_mount_point();
         notify_explorer_dir_changed_path(&mount_point);
         Ok(())

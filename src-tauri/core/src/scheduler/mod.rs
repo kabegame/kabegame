@@ -63,16 +63,38 @@ async fn scheduler_loop(notify: Arc<Notify>) {
             .get_enabled_run_configs()
             .unwrap_or_default();
 
-        for config in enabled_configs {
-            let Some(next_ts) = config.schedule_planned_at else {
-                continue;
-            };
-            nearest_fire_at = Some(match nearest_fire_at {
-                Some(cur) => cur.min(next_ts),
-                None => next_ts,
-            });
-            if next_ts <= now_ts + DUE_WINDOW_SECS {
-                due_configs.push(config);
+        for mut config in enabled_configs {
+            match config.schedule_planned_at {
+                Some(next_ts)
+                    if next_ts >= now_ts - DUE_WINDOW_SECS
+                        && next_ts <= now_ts + DUE_WINDOW_SECS =>
+                {
+                    due_configs.push(config);
+                }
+                Some(next_ts) if next_ts > now_ts + DUE_WINDOW_SECS => {
+                    nearest_fire_at = Some(match nearest_fire_at {
+                        Some(cur) => cur.min(next_ts),
+                        None => next_ts,
+                    });
+                }
+                Some(_) => {
+                    // Stale (far in the past) -- ignore, let missed-runs dialog handle
+                }
+                None => {
+                    if let Some(next) = compute_next_planned_at(&config, now_ts) {
+                        let _ = Storage::global()
+                            .set_run_config_schedule_planned_at(&config.id, Some(next));
+                        if next >= now_ts - DUE_WINDOW_SECS && next <= now_ts + DUE_WINDOW_SECS {
+                            config.schedule_planned_at = Some(next);
+                            due_configs.push(config);
+                        } else {
+                            nearest_fire_at = Some(match nearest_fire_at {
+                                Some(cur) => cur.min(next),
+                                None => next,
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -82,7 +104,6 @@ async fn scheduler_loop(notify: Arc<Notify>) {
 
         let sleep_duration = match nearest_fire_at {
             None => Duration::from_secs(IDLE_SLEEP_SECS),
-            Some(next) if next <= now_ts => Duration::from_secs(1),
             Some(next) => {
                 let wait = (next - now_ts).clamp(1, MAX_SLEEP_SECS) as u64;
                 Duration::from_secs(wait)
@@ -247,23 +268,7 @@ pub struct MissedRunItem {
     pub last_due_at: i64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MissedRunResolveAction {
-    RunNow,
-    Dismiss,
-}
-
-impl MissedRunResolveAction {
-    pub fn from_str(value: &str) -> Result<Self, String> {
-        match value {
-            "run_now" => Ok(Self::RunNow),
-            "dismiss" => Ok(Self::Dismiss),
-            _ => Err(format!("Unsupported missed run action: {}", value)),
-        }
-    }
-}
-
-/// 启动或调用漏跑检测时：将各配置的 `planned_at` 推进到未来，并返回漏跑列表。
+/// 启动或调用漏跑检测时：只读计算漏跑列表（不修改 DB 中的 `planned_at`）。
 pub fn recalc_all_planned_at(now_ts: i64) -> Result<Vec<MissedRunItem>, String> {
     let configs = Storage::global().get_enabled_run_configs()?;
     let active_scheduled_config_ids: HashSet<String> = Storage::global()
@@ -307,11 +312,6 @@ pub fn recalc_all_planned_at(now_ts: i64) -> Result<Vec<MissedRunItem>, String> 
             }
         }
 
-        if cfg.schedule_planned_at != Some(next) {
-            let _ = Storage::global().set_run_config_schedule_planned_at(&cfg.id, Some(next));
-            GlobalEmitter::global().emit_auto_config_change("configchange", &cfg.id);
-        }
-
         if missed_count > 0 {
             out.push(MissedRunItem {
                 config_id: cfg.id.clone(),
@@ -334,12 +334,21 @@ pub fn collect_missed_runs(now_ts: i64) -> Result<Vec<MissedRunItem>, String> {
     recalc_all_planned_at(now_ts)
 }
 
-pub fn resolve_missed_runs_now(
-    config_ids: &[String],
-    _action: MissedRunResolveAction,
-) -> Result<(), String> {
+/// User chose "run now" for missed configs.
+/// Sets planned_at = now so the scheduler picks them up in the next loop.
+pub fn run_missed_configs(config_ids: &[String]) {
+    let now = now_secs();
     for config_id in config_ids {
+        let _ = Storage::global().set_run_config_schedule_planned_at(config_id, Some(now));
         GlobalEmitter::global().emit_auto_config_change("configchange", config_id);
     }
-    Ok(())
+}
+
+/// User dismissed missed configs.
+/// Sets planned_at = null so the scheduler recalculates the next run time.
+pub fn dismiss_missed_configs(config_ids: &[String]) {
+    for config_id in config_ids {
+        let _ = Storage::global().set_run_config_schedule_planned_at(config_id, None);
+        GlobalEmitter::global().emit_auto_config_change("configchange", config_id);
+    }
 }

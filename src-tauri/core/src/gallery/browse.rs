@@ -12,12 +12,23 @@ use crate::providers::provider::ListEntry;
 use crate::providers::ProviderRuntime;
 use crate::storage::{ImageInfo, Storage};
 
+/// 子画册浏览卡片（`album/<id>/tree`）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumBrowseInfo {
+    pub id: String,
+    pub name: String,
+    pub image_count: usize,
+    pub preview_images: Vec<ImageInfo>,
+}
+
 /// 返回给前端的条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum GalleryBrowseEntry {
     Dir { name: String },
     Image { image: ImageInfo },
+    Album { album: AlbumBrowseInfo },
 }
 
 /// 浏览结果
@@ -135,6 +146,29 @@ pub fn browse_gallery_provider(
                     .into_iter()
                     .map(|image| GalleryBrowseEntry::Image { image })
                     .collect(),
+            })
+        }
+        ProviderDescriptor::AlbumTree { album_id } => {
+            let children = storage.get_albums(Some(album_id.as_str()))?;
+            let mut entries = Vec::new();
+            for child in &children {
+                let count = storage.get_album_image_count(&child.id)?;
+                let preview = storage.get_album_preview(&child.id, 3)?;
+                entries.push(GalleryBrowseEntry::Album {
+                    album: AlbumBrowseInfo {
+                        id: child.id.clone(),
+                        name: child.name.clone(),
+                        image_count: count,
+                        preview_images: preview,
+                    },
+                });
+            }
+            let n = children.len();
+            Ok(GalleryBrowseResult {
+                total: n,
+                base_offset: 0,
+                range_total: n,
+                entries,
             })
         }
         _ => {

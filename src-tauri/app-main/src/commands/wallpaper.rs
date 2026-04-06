@@ -184,12 +184,14 @@ pub async fn set_wallpaper_rotation_enabled(enabled: bool) -> Result<(), String>
 #[tauri::command]
 pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), String> {
     if album_id != "" {
-        if Storage::global()
-            .get_album_image_ids(&album_id)
-            .unwrap()
-            .len()
-            == 0
-        {
+        let include = Settings::global()
+            .get_wallpaper_rotation_include_subalbums()
+            .await
+            .unwrap_or(true);
+        let images = Storage::global()
+            .get_album_images_for_wallpaper_rotation(&album_id, include)
+            .map_err(|e| e.to_string())?;
+        if images.is_empty() {
             return Err(String::from("该画册没有画哟，先去画廊添加进去吧！"));
         }
     }
@@ -227,6 +229,21 @@ pub async fn set_wallpaper_rotation_album_id(album_id: String) -> Result<(), Str
             .ensure_running(start_from_current)
             .await
             .map_err(|e| format!("启动轮播失败: {}", e))?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_wallpaper_rotation_include_subalbums(include_subalbums: bool) -> Result<(), String> {
+    Settings::global()
+        .set_wallpaper_rotation_include_subalbums(include_subalbums)
+        .await
+        .map_err(|e| format!("Settings error: {}", e))?;
+
+    let rotator = WallpaperRotator::global();
+    if rotator.is_running() {
+        rotator.reset();
     }
 
     Ok(())

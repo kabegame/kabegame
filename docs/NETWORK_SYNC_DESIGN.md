@@ -200,15 +200,15 @@ pub struct NetworkProvider {
 }
 
 impl Provider for NetworkProvider {
-    fn list(&self, _storage: &Storage) -> Result<Vec<FsEntry>, String> {
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
         // 通过 HTTP 获取远程 Provider 列表
         let url = format!("{}/api/provider/{}", 
             self.device.base_url, self.path.join("/"));
         // ... HTTP 请求 ...
-        // 转换为 FsEntry 返回
+        // 转换为 ListEntry 返回
     }
     
-    fn get_child(&self, _storage: &Storage, name: &str) -> Option<Arc<dyn Provider>> {
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         // 创建子路径的 NetworkProvider
         let mut child_path = self.path.clone();
         child_path.push(name.to_string());
@@ -223,16 +223,16 @@ impl Provider for NetworkProvider {
 
 ```rust
 impl Provider for RootProvider {
-    fn list(&self, storage: &Storage) -> Result<Vec<FsEntry>, String> {
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
         let mut entries = vec![
-            FsEntry::dir("全部"),
-            FsEntry::dir("画册"),
+            ListEntry::Child { name: "全部".to_string(), provider: ... },
+            ListEntry::Child { name: "画册".to_string(), provider: ... },
             // ...
         ];
         
         // 添加网络设备组
         if device_manager.has_devices() {
-            entries.push(FsEntry::dir("网络设备"));
+            entries.push(ListEntry::Child { name: "网络设备".to_string(), provider: ... });
         }
         
         Ok(entries)
@@ -279,7 +279,7 @@ pub struct NestedNetworkProvider {
 }
 
 impl Provider for NestedNetworkProvider {
-    fn list(&self, _storage: &Storage) -> Result<Vec<FsEntry>, String> {
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
         // 通过中间设备转发请求
         let url = format!("{}/api/forward/{}/provider/{}",
             self.intermediate_device.base_url,

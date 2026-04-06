@@ -16,13 +16,24 @@
           </div>
           <div class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailSource') }}</span>
-            <span class="detail-value">{{ getPluginName(image.pluginId) }}</span>
-          </div>
-          <div v-if="image.taskId" class="detail-item">
-            <span class="detail-label">{{ t('gallery.imageDetailTaskLabel') }}</span>
-            <el-button size="small" link type="primary" @click="handleOpenTask">
-              {{ t('gallery.imageDetailOpenTask') }}
-            </el-button>
+            <div class="detail-value-row">
+              <span class="detail-value">{{ getPluginName(image.pluginId) }}</span>
+              <el-button
+                v-if="image.taskId"
+                text
+                circle
+                size="small"
+                type="primary"
+                class="detail-open-task-btn"
+                :title="t('gallery.imageDetailOpenTask')"
+                :aria-label="t('gallery.imageDetailOpenTask')"
+                @click="handleOpenTask"
+              >
+                <el-icon>
+                  <List />
+                </el-icon>
+              </el-button>
+            </div>
           </div>
           <div class="detail-item">
             <span class="detail-label">{{ t('gallery.imageDetailType') }}</span>
@@ -98,6 +109,7 @@ import { useI18n, resolveManifestText } from "@kabegame/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ElMessage } from "element-plus";
+import { List } from "@element-plus/icons-vue";
 import { IS_ANDROID } from "../../env";
 import { openImage } from "tauri-plugin-picker-api";
 import { useInstalledPluginsStore, usePluginStore } from "../../stores/plugins";
@@ -491,6 +503,18 @@ const handleOpenPath = async (path?: string) => {
     flex-direction: column;
     gap: 16px;
     padding: 0 12px;
+  }
+
+  .detail-value-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .detail-open-task-btn {
+    flex-shrink: 0;
   }
 
   .detail-value {

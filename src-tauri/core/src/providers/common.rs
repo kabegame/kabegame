@@ -38,6 +38,8 @@ pub struct CommonProvider {
     query: ImageQuery,
     /// 分页语义：见 [`PaginationMode`]；构造时须明确，决定 `list` / `resolve_child` / `descriptor` 行为。
     mode: PaginationMode,
+    /// VD 场景下的 locale（用于翻译 "desc" → "倒序" 等目录名）。
+    locale: Option<&'static str>,
 }
 
 impl CommonProvider {
@@ -45,6 +47,7 @@ impl CommonProvider {
         Self {
             query: ImageQuery::all_recent(),
             mode: PaginationMode::Greedy,
+            locale: None,
         }
     }
 
@@ -53,18 +56,36 @@ impl CommonProvider {
         Self {
             query,
             mode: PaginationMode::Greedy,
+            locale: None,
         }
     }
 
     /// 使用自定义查询条件和分页模式创建 Provider
     pub fn with_query_and_mode(query: ImageQuery, mode: PaginationMode) -> Self {
-        Self { query, mode }
+        Self { query, mode, locale: None }
+    }
+
+    /// 使用自定义查询条件和完整配置创建 Provider
+    pub fn with_query_and_config(query: ImageQuery, config: crate::providers::config::ProviderConfig) -> Self {
+        Self {
+            query,
+            mode: config.pagination_mode,
+            locale: config.locale,
+        }
     }
 
     /// 当前分页模式（Main 的 `.../desc/<page>` 须为 [`PaginationMode::SimplePage`]）
     #[inline]
     pub fn pagination_mode(&self) -> PaginationMode {
         self.mode
+    }
+
+    /// "desc"/"倒序" 目录名：有 locale 时翻译，否则返回 canonical。
+    fn desc_display_name(&self) -> String {
+        match self.locale {
+            Some(loc) => kabegame_i18n::translate_vd_canonical(loc, "desc"),
+            None => "desc".to_string(),
+        }
     }
 }
 
@@ -85,9 +106,11 @@ impl Provider for CommonProvider {
 
                 let mut out: Vec<ListEntry> = Vec::new();
                 if self.query.is_ascending() {
+                    let mut desc_provider = CommonProvider::with_query(self.query.to_desc());
+                    desc_provider.locale = self.locale;
                     out.push(ListEntry::Child {
-                        name: "倒序".to_string(),
-                        provider: Arc::new(CommonProvider::with_query(self.query.to_desc())),
+                        name: self.desc_display_name(),
+                        provider: Arc::new(desc_provider),
                     });
                 }
 
@@ -125,11 +148,15 @@ impl Provider for CommonProvider {
             PaginationMode::SimplePage => {
                 if self.query.is_ascending() {
                     Ok(vec![ListEntry::Child {
-                        name: "desc".to_string(),
-                        provider: Arc::new(CommonProvider::with_query_and_mode(
-                            self.query.to_desc(),
-                            PaginationMode::SimplePage,
-                        )),
+                        name: self.desc_display_name(),
+                        provider: Arc::new({
+                            let mut p = CommonProvider::with_query_and_mode(
+                                self.query.to_desc(),
+                                PaginationMode::SimplePage,
+                            );
+                            p.locale = self.locale;
+                            p
+                        }),
                     }])
                 } else {
                     Ok(Vec::new())
@@ -152,9 +179,11 @@ impl Provider for CommonProvider {
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         match self.mode {
             PaginationMode::Greedy => {
-                // 升序下提供「倒序」子节点
-                if name == "倒序" && self.query.is_ascending() {
-                    return Some(Arc::new(CommonProvider::with_query(self.query.to_desc())));
+                // 升序下提供「倒序」子节���（匹配翻译后的目录名）
+                if name == self.desc_display_name() && self.query.is_ascending() {
+                    let mut desc_provider = CommonProvider::with_query(self.query.to_desc());
+                    desc_provider.locale = self.locale;
+                    return Some(Arc::new(desc_provider));
                 }
 
                 let total = Storage::global().get_images_count_by_query(&self.query).ok()?;
@@ -181,12 +210,14 @@ impl Provider for CommonProvider {
                 )))
             }
             PaginationMode::SimplePage => {
-                // SimplePage 模式：支持 "desc" 与动态页码
-                if name == "desc" && self.query.is_ascending() {
-                    return Some(Arc::new(CommonProvider::with_query_and_mode(
+                // SimplePage 模式：支持翻译后的「倒序」目录名与动态页码
+                if name == self.desc_display_name() && self.query.is_ascending() {
+                    let mut p = CommonProvider::with_query_and_mode(
                         self.query.to_desc(),
                         PaginationMode::SimplePage,
-                    )));
+                    );
+                    p.locale = self.locale;
+                    return Some(Arc::new(p));
                 }
                 if let Ok(page) = name.parse::<usize>() {
                     if page > 0 {

@@ -96,7 +96,7 @@ export function parseScheduleSpecRaw(v: unknown): ScheduleSpec | undefined {
   const o = v as Record<string, unknown>;
   const mode = o.mode;
   if (mode === "interval") {
-    const intervalSecs = numOpt(o.intervalSecs ?? o.interval_secs);
+    const intervalSecs = numOpt(o.intervalSecs);
     if (intervalSecs == null || intervalSecs <= 0) return undefined;
     return { mode: "interval", intervalSecs };
   }
@@ -114,49 +114,6 @@ export function parseScheduleSpecRaw(v: unknown): ScheduleSpec | undefined {
     return { mode: "weekly", weekday, hour, minute };
   }
   return undefined;
-}
-
-/** 与后端 `compute_next_planned_at` / AutoConfigCardScheduleEditor 对齐：下一次绝对触发时刻（Unix 秒） */
-export function computeNextPlannedAtForSpec(spec: ScheduleSpec): number {
-  const nowSec = Math.floor(Date.now() / 1000);
-  if (spec.mode === "interval") {
-    const iv = Math.max(60, Number(spec.intervalSecs) || 3600);
-    return nowSec + iv;
-  }
-  if (spec.mode === "weekly") {
-    const minute = Math.min(59, Math.max(0, Number(spec.minute)));
-    const hour = Math.min(23, Math.max(0, Number(spec.hour)));
-    const wd = Math.min(6, Math.max(0, Number(spec.weekday)));
-    const d = new Date(nowSec * 1000);
-    const cur = d.getDay() === 0 ? 6 : d.getDay() - 1;
-    const days = (wd - cur + 7) % 7;
-    let cand = new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, hour, minute, 0, 0);
-    if (Math.floor(cand.getTime() / 1000) <= nowSec) {
-      cand = new Date(cand.getFullYear(), cand.getMonth(), cand.getDate() + 7, hour, minute, 0, 0);
-    }
-    return Math.floor(cand.getTime() / 1000);
-  }
-  const minute = Math.min(59, Math.max(0, Number(spec.minute)));
-  const d = new Date(nowSec * 1000);
-  if (spec.hour === -1) {
-    const slot = new Date(d.getTime());
-    slot.setSeconds(0, 0);
-    slot.setMinutes(minute);
-    if (Math.floor(slot.getTime() / 1000) <= nowSec) {
-      slot.setHours(slot.getHours() + 1);
-      slot.setMinutes(minute);
-      slot.setSeconds(0, 0);
-    }
-    return Math.floor(slot.getTime() / 1000);
-  }
-  const hour = Math.min(23, Math.max(0, Number(spec.hour)));
-  const slot = new Date(d.getTime());
-  slot.setHours(hour, minute, 0, 0);
-  if (Math.floor(slot.getTime() / 1000) <= nowSec) {
-    slot.setDate(slot.getDate() + 1);
-    slot.setHours(hour, minute, 0, 0);
-  }
-  return Math.floor(slot.getTime() / 1000);
 }
 
 /** 插件包内 `configs/*.json` 推荐运行配置（已合并 pluginId、filename、baseUrl） */
@@ -760,10 +717,6 @@ export const useCrawlerStore = defineStore("crawler", () => {
         : undefined;
     const spec = preset.scheduleSpec;
     const scheduleEnabled = Boolean(importScheduleDefault && spec);
-    let schedulePlannedAt: number | undefined;
-    if (scheduleEnabled && spec) {
-      schedulePlannedAt = computeNextPlannedAtForSpec(spec);
-    }
     return await addRunConfig({
       name: nameStr,
       description,
@@ -773,7 +726,7 @@ export const useCrawlerStore = defineStore("crawler", () => {
       httpHeaders: preset.httpHeaders ?? {},
       scheduleEnabled,
       scheduleSpec: spec,
-      schedulePlannedAt,
+      schedulePlannedAt: undefined,
       scheduleLastRunAt: undefined,
       outputDir: undefined,
     });
@@ -871,11 +824,12 @@ export const useCrawlerStore = defineStore("crawler", () => {
     }
   }
 
-  async function resolveMissedRuns(
-    configIds: string[],
-    action: "run_now" | "dismiss",
-  ): Promise<void> {
-    await invoke("resolve_missed_runs", { configIds, action });
+  async function runMissedConfigs(configIds: string[]): Promise<void> {
+    await invoke("run_missed_configs", { configIds });
+  }
+
+  async function dismissMissedConfigs(configIds: string[]): Promise<void> {
+    await invoke("dismiss_missed_configs", { configIds });
   }
 
   // 兼容旧调用名
@@ -1050,7 +1004,8 @@ export const useCrawlerStore = defineStore("crawler", () => {
     runFromConfig,
     runConfig,
     getMissedRuns,
-    resolveMissedRuns,
+    runMissedConfigs,
+    dismissMissedConfigs,
     loadTasks,
     loadTasksPage,
     runConfigsReady,

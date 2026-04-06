@@ -13,15 +13,15 @@
       <div v-loading="showLoading" style="min-height: 200px;">
         <transition-group v-if="!loading" :key="albumsListKey" name="fade-in-list" tag="div"
           class="albums-grid" :class="{ 'albums-grid-android': IS_ANDROID }">
-          <AlbumCard v-for="album in albums" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
+          <AlbumCard v-for="album in albumRoots" :key="album.id" :ref="(el) => albumCardRefs[album.id] = el" :album="album"
             :count="albumCounts[album.id] || 0" :preview-images="albumPreviewImages[album.id] || []"
             :video-preview-remount-key="albumVideoPreviewRemountKey"
             :is-loading="albumIsLoadingMap[album.id] || false"
             @click="openAlbum(album)" @visible="prefetchPreview(album)"
-            @contextmenu.prevent="openAlbumContextMenu($event, album)" />
+            @contextmenu="openAlbumContextMenu($event, album)" />
         </transition-group>
 
-        <div v-if="!loading && albums.length === 0" class="empty-tip">{{ $t('albums.emptyTip') }}</div>
+        <div v-if="!loading && albumRoots.length === 0" class="empty-tip">{{ $t('albums.emptyTip') }}</div>
       </div>
     </div>
 
@@ -32,13 +32,31 @@
       :context="albumMenuContext"
       :z-index="3500"
       @close="albumMenu.hide"
-      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename')" />
+      @command="(cmd) => handleAlbumMenuCommand(cmd as 'browse' | 'delete' | 'setWallpaperRotation' | 'rename' | 'moveTo')" />
 
     <el-dialog v-model="showCreateDialog" :title="$t('albums.newAlbum')" width="360px">
       <el-input v-model="newAlbumName" :placeholder="$t('albums.placeholderName')" />
       <template #footer>
         <el-button @click="showCreateDialog = false">{{ $t('common.cancel') }}</el-button>
         <el-button type="primary" :disabled="!newAlbumName.trim()" @click="handleCreateAlbum">{{ $t('albums.create') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="showMoveAlbumDialog" :title="$t('albums.moveToTitle')" width="420px" @closed="onMoveAlbumDialogClosed">
+      <div class="mb-3">
+        <el-checkbox v-model="moveToRoot">{{ $t('albums.moveToRoot') }}</el-checkbox>
+      </div>
+      <AlbumPickerField
+        v-show="!moveToRoot"
+        v-model="moveTargetParentId"
+        :album-tree="moveAlbumTree"
+        :album-counts="albumCounts"
+        :clearable="false"
+        :placeholder="$t('albums.selectTargetAlbum')"
+      />
+      <template #footer>
+        <el-button @click="showMoveAlbumDialog = false">{{ $t('common.cancel') }}</el-button>
+        <el-button type="primary" @click="confirmMoveAlbum">{{ $t('common.ok') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -54,6 +72,7 @@ import { useActionMenu } from "@kabegame/core/composables/useActionMenu";
 import ActionRenderer from "@kabegame/core/components/ActionRenderer.vue";
 import { useAlbumStore } from "@/stores/albums";
 import AlbumCard from "@/components/albums/AlbumCard.vue";
+import AlbumPickerField from "@kabegame/core/components/album/AlbumPickerField.vue";
 import PageHeader from "@kabegame/core/components/common/PageHeader.vue";
 import type { Album } from "@/stores/albums";
 import { useQuickSettingsDrawerStore } from "@/stores/quickSettingsDrawer";
@@ -73,7 +92,7 @@ import { thumbnailToUrl } from "@kabegame/core/httpServer";
 
 const { t } = useI18n();
 const albumStore = useAlbumStore();
-const { albums, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
+const { albums, albumRoots, albumCounts, FAVORITE_ALBUM_ID } = storeToRefs(albumStore);
 const router = useRouter();
 const quickSettingsDrawer = useQuickSettingsDrawerStore();
 const openQuickSettings = () => quickSettingsDrawer.open("albums");
@@ -114,6 +133,52 @@ const wallpaperRotationEnabled = computed(() => !!settingsStore.values.wallpaper
 
 const showCreateDialog = ref(false);
 useModalBack(showCreateDialog);
+
+const moveDlgAlbum = ref<Album | null>(null);
+const showMoveAlbumDialog = ref(false);
+useModalBack(showMoveAlbumDialog);
+const moveToRoot = ref(false);
+const moveTargetParentId = ref<string | null>(null);
+
+const moveAlbumTree = computed(() => {
+  const a = moveDlgAlbum.value;
+  if (!a) return [];
+  const exclude = [a.id, ...albumStore.getDescendantIds(a.id)];
+  return albumStore.getAlbumTreeExcluding(exclude);
+});
+
+watch(showMoveAlbumDialog, (open) => {
+  if (open) {
+    moveToRoot.value = false;
+    moveTargetParentId.value = null;
+  }
+});
+
+const onMoveAlbumDialogClosed = () => {
+  moveDlgAlbum.value = null;
+};
+
+const confirmMoveAlbum = async () => {
+  const album = moveDlgAlbum.value;
+  if (!album) return;
+  const pid = moveToRoot.value ? null : (moveTargetParentId.value?.trim() || null);
+  if (!moveToRoot.value && !pid) {
+    ElMessage.warning(t("albums.selectTargetAlbum"));
+    return;
+  }
+  try {
+    await albumStore.moveAlbum(album.id, pid);
+    showMoveAlbumDialog.value = false;
+    moveDlgAlbum.value = null;
+    ElMessage.success(t("albums.moveSuccess"));
+  } catch (e: unknown) {
+    const msg =
+      typeof e === "object" && e !== null && "message" in e
+        ? String((e as { message: unknown }).message)
+        : String(e);
+    ElMessage.error(msg || t("albums.moveFailed"));
+  }
+};
 const newAlbumName = ref("");
 const isRefreshing = ref(false);
 const albumCardRefs = ref<Record<string, any>>({});
@@ -221,7 +286,7 @@ onMounted(async () => {
   // 注意：任务列表加载已移到 TaskDrawer 组件的 onMounted 中（单例，仅启动时加载一次）
 
   // 初始化时加载前几个画册的预览图（前3张优先）
-  const albumsToPreload = albums.value.slice(0, 3);
+  const albumsToPreload = albumRoots.value.slice(0, 3);
   for (const album of albumsToPreload) {
     prefetchPreview(album);
   }
@@ -265,7 +330,7 @@ onActivated(async () => {
   }
 
   // 检查是否有新画册需要加载预览（还没有预览数据的画册）
-  for (const album of albums.value.slice(0, 6)) {
+  for (const album of albumRoots.value.slice(0, 6)) {
     // 跳过收藏画册，因为上面已经处理过了
     if (album.id === FAVORITE_ALBUM_ID.value) continue;
 
@@ -290,7 +355,7 @@ const handleRefresh = async () => {
     await albumStore.loadAlbums();
     await settingsStore.loadMany(["wallpaperRotationEnabled", "wallpaperRotationAlbumId"]);
     // 手动刷新：强制重载预览缓存（否则本地缓存会让 UI 看起来"没刷新"）
-    const albumsToPreload = albums.value.slice(0, 6);
+    const albumsToPreload = albumRoots.value.slice(0, 6);
     for (const album of albumsToPreload) {
       clearAlbumPreviewCache(album.id);
     }
@@ -433,7 +498,7 @@ const openAlbumContextMenu = (event: MouseEvent, album: { id: string; name: stri
 };
 
 const handleAlbumMenuCommand = async (
-  command: "browse" | "delete" | "setWallpaperRotation" | "rename"
+  command: "browse" | "delete" | "setWallpaperRotation" | "rename" | "moveTo",
 ) => {
   const context = albumMenuContext.value;
   const album = context.target;
@@ -467,6 +532,12 @@ const handleAlbumMenuCommand = async (
     if (cardRef && cardRef.startRename) {
       cardRef.startRename();
     }
+    return;
+  }
+
+  if (command === "moveTo") {
+    moveDlgAlbum.value = album;
+    showMoveAlbumDialog.value = true;
     return;
   }
 

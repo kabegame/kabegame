@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use crate::providers::common::{self, CommonProvider, PaginationMode, RangeProvider, SimplePageProvider};
+use crate::providers::config::ProviderConfig;
 use crate::providers::descriptor::{DateScopedTier, ProviderDescriptor};
 use crate::providers::provider::{ListEntry, Provider};
 use crate::storage::gallery::ImageQuery;
@@ -13,25 +14,35 @@ use crate::storage::Storage;
 pub struct MainDateScopedProvider {
     query: ImageQuery,
     tier: DateScopedTier,
+    config: ProviderConfig,
 }
 
 impl MainDateScopedProvider {
-    pub fn from_query_and_tier(query: ImageQuery, tier: DateScopedTier) -> Self {
-        Self { query, tier }
+    pub fn from_query_and_tier(query: ImageQuery, tier: DateScopedTier, config: ProviderConfig) -> Self {
+        Self { query, tier, config }
     }
 
-    pub fn for_year(year: String) -> Self {
+    pub fn for_year(year: String, config: ProviderConfig) -> Self {
         Self::from_query_and_tier(
             ImageQuery::by_year(year.clone()),
             DateScopedTier::Year { year },
+            config,
         )
     }
 
-    pub fn for_month(year_month: String) -> Self {
+    pub fn for_month(year_month: String, config: ProviderConfig) -> Self {
         Self::from_query_and_tier(
             ImageQuery::by_date(year_month.clone()),
             DateScopedTier::YearMonth { year_month },
+            config,
         )
+    }
+
+    fn simple_page_config(&self) -> ProviderConfig {
+        ProviderConfig {
+            pagination_mode: PaginationMode::SimplePage,
+            ..self.config
+        }
     }
 }
 
@@ -52,10 +63,10 @@ impl Provider for MainDateScopedProvider {
         let mut entries: Vec<ListEntry> = Vec::new();
         if self.query.is_ascending() {
             entries.push(ListEntry::Child {
-                name: "desc".to_string(),
-                provider: Arc::new(CommonProvider::with_query_and_mode(
+                name: self.config.display_name("desc"),
+                provider: Arc::new(CommonProvider::with_query_and_config(
                     self.query.to_desc(),
-                    PaginationMode::SimplePage,
+                    self.simple_page_config(),
                 )),
             });
         }
@@ -68,7 +79,10 @@ impl Provider for MainDateScopedProvider {
                     if g.year_month.len() == 7 && g.year_month.starts_with(&prefix) {
                         entries.push(ListEntry::Child {
                             name: g.year_month.clone(),
-                            provider: Arc::new(MainDateScopedProvider::for_month(g.year_month)),
+                            provider: Arc::new(MainDateScopedProvider::for_month(
+                                g.year_month,
+                                self.config,
+                            )),
                         });
                     }
                 }
@@ -82,9 +96,9 @@ impl Provider for MainDateScopedProvider {
                         if Storage::global().get_images_count_by_query(&q)? > 0 {
                             entries.push(ListEntry::Child {
                                 name: d.ymd,
-                                provider: Arc::new(CommonProvider::with_query_and_mode(
+                                provider: Arc::new(CommonProvider::with_query_and_config(
                                     q,
-                                    PaginationMode::SimplePage,
+                                    self.simple_page_config(),
                                 )),
                             });
                         }
@@ -152,10 +166,10 @@ impl Provider for MainDateScopedProvider {
             }
         }
 
-        if name == "desc" && self.query.is_ascending() {
-            return Some(Arc::new(CommonProvider::with_query_and_mode(
+        if self.config.canonical_name(name) == "desc" && self.query.is_ascending() {
+            return Some(Arc::new(CommonProvider::with_query_and_config(
                 self.query.to_desc(),
-                PaginationMode::SimplePage,
+                self.simple_page_config(),
             )));
         }
 
@@ -165,7 +179,10 @@ impl Provider for MainDateScopedProvider {
                     let groups = Storage::global().get_gallery_date_groups().ok()?;
                     let prefix = format!("{year}-");
                     if name.starts_with(&prefix) && groups.iter().any(|g| g.year_month == name) {
-                        return Some(Arc::new(MainDateScopedProvider::for_month(name.to_string())));
+                        return Some(Arc::new(MainDateScopedProvider::for_month(
+                            name.to_string(),
+                            self.config,
+                        )));
                     }
                 }
             }
@@ -180,9 +197,9 @@ impl Provider for MainDateScopedProvider {
                         if days.iter().any(|d| d.ymd == name) {
                             let q = ImageQuery::by_date_day(name.to_string());
                             if Storage::global().get_images_count_by_query(&q).ok()? > 0 {
-                                return Some(Arc::new(CommonProvider::with_query_and_mode(
+                                return Some(Arc::new(CommonProvider::with_query_and_config(
                                     q,
-                                    PaginationMode::SimplePage,
+                                    self.simple_page_config(),
                                 )));
                             }
                         }

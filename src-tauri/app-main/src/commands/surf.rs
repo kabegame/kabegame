@@ -7,9 +7,10 @@ use kabegame_core::crawler::favicon::fetch_favicon;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::storage::{RangedSurfRecords, Storage, SurfRecord};
 use std::sync::{Mutex, OnceLock};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use std::collections::HashMap;
+use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri::Emitter;
-use tauri::webview::{DownloadEvent, PageLoadEvent};
+use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,12 +42,55 @@ fn parse_external_url(raw: &str) -> Result<url::Url, String> {
     Ok(parsed)
 }
 
+/// 新建畅游记录时写入的「根 URL」：与用户输入一致（保留 path、query），仅去掉 fragment。
 fn resolve_root_url(parsed: &url::Url) -> String {
     let mut root = parsed.clone();
-    root.set_path("/");
-    root.set_query(None);
     root.set_fragment(None);
     root.to_string()
+}
+
+/// RFC6265 风格的域匹配：`.example.com` 与 `www.example.com` 等子域。
+fn cookie_domain_matches_site_host(cookie_domain: &str, site_host: &str) -> bool {
+    let cd = cookie_domain.trim_start_matches('.').to_lowercase();
+    let rh = site_host.to_lowercase();
+    cd == rh || rh.ends_with(&format!(".{}", cd))
+}
+
+/// 合并 `cookies_for_url(root)` 与全量 `cookies()` 中域属于本站点的项。
+/// 仅 `cookies_for_url(www)` 时，部分 WebView 实现会漏掉与登录相关的 Cookie（开发者工具仍可见）。
+fn collect_surf_cookie_string<R: Runtime>(
+    surf_window: &WebviewWindow<R>,
+    site_host: &str,
+    root_url: &str,
+) -> Result<String, String> {
+    let mut merged: HashMap<String, String> = HashMap::new();
+
+    if let Ok(parsed) = url::Url::parse(root_url) {
+        if let Ok(for_url) = surf_window.cookies_for_url(parsed) {
+            for c in for_url {
+                merged.insert(c.name().to_string(), c.value().to_string());
+            }
+        }
+    }
+
+    let all = surf_window
+        .cookies()
+        .map_err(|e| format!("获取 Cookie 失败: {}", e))?;
+    for c in all {
+        let Some(d) = c.domain().filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if cookie_domain_matches_site_host(d, site_host) {
+            merged.insert(c.name().to_string(), c.value().to_string());
+        }
+    }
+
+    let mut pairs: Vec<String> = merged
+        .into_iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect();
+    pairs.sort();
+    Ok(pairs.join("; "))
 }
 
 fn eval_surf_toast(app: &AppHandle, message: &str, kind: &str) {
@@ -84,17 +128,11 @@ fn save_surf_session_cookies(app: &AppHandle) {
     let Ok(Some(record)) = Storage::global().get_surf_record(&record_id) else {
         return;
     };
-    let Ok(parsed) = url::Url::parse(&record.root_url) else {
+    let site_host = record.host.as_str();
+    let root_url = record.root_url.as_str();
+    let Ok(cookie_string) = collect_surf_cookie_string(&surf_window, site_host, root_url) else {
         return;
     };
-    let Ok(cookies) = surf_window.cookies_for_url(parsed) else {
-        return;
-    };
-    let mut pairs: Vec<String> = Vec::new();
-    for c in cookies {
-        pairs.push(format!("{}={}", c.name(), c.value()));
-    }
-    let cookie_string = pairs.join("; ");
     let _ = Storage::global().update_surf_record_cookie(&record_id, &cookie_string);
 }
 
@@ -125,6 +163,7 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
             .title(t!("surf.windowTitle", host = host.as_str()))
             .inner_size(1200.0, 800.0)
             .devtools(true)
+            .initialization_script(include_str!("../../resources/surf_bootstrap.js"))
             .initialization_script(include_str!("../../resources/surf_toast.js"))
             .initialization_script(include_str!("../../resources/surf_context_menu.js"))
             .initialization_script(include_str!("../../resources/surf_navbar.js"))
@@ -141,6 +180,18 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
                             save_surf_session_cookies(&app);
                         });
                     }
+                }
+            })
+            .on_new_window({
+                let app = app.clone();
+                move |url, _features| {
+                    let scheme = url.scheme();
+                    if matches!(scheme, "http" | "https") {
+                        if let Some(win) = app.get_webview_window("surf") {
+                            let _ = win.navigate(url);
+                        }
+                    }
+                    NewWindowResponse::Deny
                 }
             })
             .on_download({
@@ -408,9 +459,6 @@ pub struct SurfCookiesResult {
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn surf_get_cookies(app: AppHandle) -> Result<SurfCookiesResult, String> {
-    let surf_window = app
-        .get_webview_window("surf")
-        .ok_or_else(|| "畅游窗口未打开".to_string())?;
     let (record_id, host) = {
         let guard = SurfSessionState::global()
             .lock()
@@ -426,16 +474,19 @@ pub async fn surf_get_cookies(app: AppHandle) -> Result<SurfCookiesResult, Strin
     let record = Storage::global()
         .get_surf_record(&record_id)?
         .ok_or_else(|| "畅游记录不存在".to_string())?;
-    let parsed = url::Url::parse(&record.root_url).map_err(|e| format!("无效 root_url: {}", e))?;
+    let site_host = record.host.clone();
+    let root_url = record.root_url.clone();
 
-    let cookies = surf_window
-        .cookies_for_url(parsed)
-        .map_err(|e| format!("获取 Cookie 失败: {}", e))?;
-    let mut pairs: Vec<String> = Vec::new();
-    for c in cookies {
-        pairs.push(format!("{}={}", c.name(), c.value()));
-    }
-    let cookie_string = pairs.join("; ");
+    let app2 = app.clone();
+    let cookie_string = tauri::async_runtime::spawn_blocking(move || {
+        let win = app2
+            .get_webview_window("surf")
+            .ok_or_else(|| "畅游窗口未打开".to_string())?;
+        collect_surf_cookie_string(&win, &site_host, &root_url)
+    })
+    .await
+    .map_err(|e| format!("Cookie 读取任务失败: {}", e))??;
+
     Ok(SurfCookiesResult {
         cookie_string,
         host,

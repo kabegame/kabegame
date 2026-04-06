@@ -163,6 +163,14 @@ pub async fn get_wallpaper_rotation_album_id() -> Result<Option<String>, String>
 }
 
 #[tauri::command]
+pub async fn get_wallpaper_rotation_include_subalbums() -> Result<bool, String> {
+    Settings::global()
+        .get_wallpaper_rotation_include_subalbums()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_wallpaper_rotation_interval_minutes() -> Result<u32, String> {
     Settings::global()
         .get_wallpaper_rotation_interval_minutes()

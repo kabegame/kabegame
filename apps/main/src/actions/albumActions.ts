@@ -1,4 +1,4 @@
-import { FolderOpened, Picture, Edit, Delete } from "@element-plus/icons-vue";
+import { FolderOpened, Picture, Edit, Rank, Delete } from "@element-plus/icons-vue";
 import type { ActionItem, ActionContext } from "@kabegame/core/actions/types";
 import type { Album } from "@/stores/albums";
 import { i18n } from "@kabegame/i18n";
@@ -50,6 +50,16 @@ export function createAlbumActions(): ActionItem<Album>[] {
       command: "rename",
       visible: () => true,
       dividerBefore: (ctx) => (ctx as AlbumActionContext).albumImageCount > 0,
+    },
+    {
+      key: "moveTo",
+      label: t("contextMenu.moveTo"),
+      icon: Rank,
+      command: "moveTo",
+      visible: (ctx) => {
+        const ext = ctx as AlbumActionContext;
+        return ext.target?.id !== ext.favoriteAlbumId;
+      },
     },
     {
       key: "delete",

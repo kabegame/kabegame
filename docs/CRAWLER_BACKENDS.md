@@ -156,11 +156,13 @@ await crawl.to(nextUrl, "detail");
 | Rhai 函数 / 行为 | 签名/说明 |
 |------------------|-----------|
 | **导航与页面栈** | |
-| `to(url)` | 访问 URL（支持相对路径），将 (url, html) 入栈；使用当前任务 HTTP 头，带重试。 |
+| `to(url)` | 访问 URL（支持相对路径），将 (url, html, 响应头) 入栈；使用当前任务 HTTP 头，带重试。 |
 | `fetch_json(url)` | 请求 URL 得到 JSON，返回 Rhai Map（对象）或 `{ data: array }`（数组）；不入页面栈。 |
 | `back()` | 栈顶出栈，相当于返回上一页。 |
 | `current_url()` | 返回当前栈顶 URL。 |
 | `current_html()` | 返回当前栈顶 HTML 字符串。 |
+| `current_headers()` | 返回当前栈顶页面对应的最后一次 HTTP 响应头（`Map`，键为小写）。 |
+| `md5(text)` | 返回 UTF-8 字符串的 MD5（小写 hex）。 |
 | **DOM / 选择器** | |
 | `query(selector)` | 在当前页用 CSS 或 XPath（以 `/`、`//` 开头）查询，返回**文本**数组。 |
 | `query_by_text(text)` | 查找包含指定文本的元素，返回 `{ text, tag, attrs, id?, class? }` 数组。 |

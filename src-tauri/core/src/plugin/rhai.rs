@@ -242,13 +242,29 @@ fn emit_http_error(_dq: &crate::crawler::DownloadQueue, task_id: &str, message: 
     GlobalEmitter::global().emit_task_log(task_id, "error", &message.into());
 }
 
+/// 将最后一次成功响应的 HeaderMap 转为小写键名；同名多值用 `, ` 拼接。
+fn response_headers_to_map(resp: &reqwest::blocking::Response) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    for (name, value) in resp.headers().iter() {
+        let key = name.as_str().to_lowercase();
+        let val = value.to_str().unwrap_or("").to_string();
+        out.entry(key)
+            .and_modify(|e| {
+                e.push_str(", ");
+                e.push_str(&val);
+            })
+            .or_insert(val);
+    }
+    out
+}
+
 fn http_get_text_with_retry(
     dq: &crate::crawler::DownloadQueue,
     task_id: &str,
     url: &str,
     label: &str,
     headers: &HashMap<String, String>,
-) -> Result<(String, String), String> {
+) -> Result<(String, String, HashMap<String, String>), String> {
     let client = create_blocking_client()?;
     let header_map = build_reqwest_header_map(dq, task_id, headers);
     let retry_count = get_network_retry_count(dq);
@@ -360,8 +376,9 @@ fn http_get_text_with_retry(
         }
 
         let final_url = current_url;
+        let resp_headers = response_headers_to_map(&response);
         match response.text() {
-            Ok(text) => return Ok((final_url, text)),
+            Ok(text) => return Ok((final_url, text, resp_headers)),
             Err(e) => {
                 if attempt < max_attempts {
                     let backoff_ms = backoff_ms_for_attempt(attempt);
@@ -788,7 +805,7 @@ pub fn register_crawler_functions(
                 &headers_for_http,
             );
             let _ = tx.send(result);
-            let (final_url, html) = rx
+            let (final_url, html, resp_headers) = rx
                 .recv()
                 .map_err(|e| format!("Thread communication error: {}", e))?
                 .map_err(|e| e)?;
@@ -798,6 +815,7 @@ pub fn register_crawler_functions(
             stack_guard.push(PageStackEntry {
                 url: final_url,
                 html,
+                headers: resp_headers,
                 page_label: String::new(),
                 page_state: serde_json::Value::Null,
             });
@@ -854,7 +872,7 @@ pub fn register_crawler_functions(
                 &task_id_for_http,
                 format!("[fetch_json] 请求 JSON：{resolved_url}"),
             );
-            let (final_url, text) = http_get_text_with_retry(
+            let (final_url, text, _) = http_get_text_with_retry(
                 &dq_for_http,
                 &task_id_for_http,
                 &resolved_url,
@@ -1025,6 +1043,28 @@ pub fn register_crawler_functions(
                 .map(|entry| entry.html.clone())
                 .ok_or_else(|| "Page stack is empty".into())
         }
+    });
+
+    // current_headers() - 获取当前栈顶页面最后一次 HTTP 响应头（与 current_html 同源）
+    engine.register_fn("current_headers", {
+        let task_id_holder = Arc::clone(&task_id);
+        move || -> Result<Map, Box<rhai::EvalAltResult>> {
+            let stack = get_page_stack(&task_id_holder)?;
+            let stack_guard = stack.lock().map_err(|e| format!("Lock error: {}", e))?;
+            let entry = stack_guard
+                .last()
+                .ok_or_else(|| "Page stack is empty".to_string())?;
+            let mut m = Map::new();
+            for (k, v) in &entry.headers {
+                m.insert(k.clone().into(), Dynamic::from(v.clone()));
+            }
+            Ok(m)
+        }
+    });
+
+    // md5(text) - 小写 hex MD5，用于 WBI 等签名拼接
+    engine.register_fn("md5", |text: &str| -> String {
+        format!("{:x}", md5::compute(text.as_bytes()))
     });
 
     // query(selector) - 在当前栈顶页面查询元素文本

@@ -22,9 +22,7 @@ export type FavoriteStatusChangedDetail = {
 export function useImageOperations(
   displayedImages: Ref<ImageInfo[]>,
   currentWallpaperImageId: Ref<string | null>,
-  galleryViewRef: Ref<any>,
-  _removeFromUiCacheByIds: (imageIds: string[]) => void,
-  _loadImages: (reset?: boolean, opts?: any) => Promise<void>,
+  galleryViewRef: Ref<any>
 ) {
   const albumStore = useAlbumStore();
   const settingsStore = useSettingsStore();

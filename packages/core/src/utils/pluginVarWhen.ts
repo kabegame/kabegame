@@ -6,7 +6,6 @@ export function matchesPluginVarWhen(
   when: Record<string, (string | boolean)[]> | undefined | null,
   vars: Record<string, any>,
 ): boolean {
-  console.log("when", when, vars);
   if (!when) return true;
   return Object.entries(when).every(([depKey, acceptedValues]) =>
     acceptedValues.map(String).includes(String(vars[depKey] ?? "")),

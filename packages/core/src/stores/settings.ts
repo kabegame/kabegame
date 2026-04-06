@@ -25,6 +25,8 @@ export interface AppSettings {
   wallpaperEngineDir: string | null;
   wallpaperRotationEnabled: boolean;
   wallpaperRotationAlbumId: string | null;
+  /** 轮播指定画册时是否包含子画册（默认 true，与 07-wallpaper 设计一致） */
+  wallpaperRotationIncludeSubalbums: boolean;
   wallpaperRotationIntervalMinutes: number;
   wallpaperRotationMode: "random" | "sequential" | string;
   wallpaperStyle: "fill" | "fit" | "stretch" | "center" | "tile" | string;
@@ -86,6 +88,11 @@ function buildSettingKeyMap(): Partial<Record<AppSettingKey, SettingKeyMeta>> {
     galleryPageSize: { getter: "get_gallery_page_size", setter: "set_gallery_page_size", param: "size" },
     wallpaperRotationEnabled: { getter: "get_wallpaper_rotation_enabled", setter: "set_wallpaper_rotation_enabled", param: "enabled" },
     wallpaperRotationAlbumId: { getter: "get_wallpaper_rotation_album_id", setter: "set_wallpaper_rotation_album_id", param: "albumId" },
+    wallpaperRotationIncludeSubalbums: {
+      getter: "get_wallpaper_rotation_include_subalbums",
+      setter: "set_wallpaper_rotation_include_subalbums",
+      param: "includeSubalbums",
+    },
     wallpaperRotationIntervalMinutes: { getter: "get_wallpaper_rotation_interval_minutes", setter: "set_wallpaper_rotation_interval_minutes", param: "minutes" },
     wallpaperRotationMode: { getter: "get_wallpaper_rotation_mode", setter: "set_wallpaper_rotation_mode", param: "mode" },
     wallpaperStyle: { getter: "get_wallpaper_rotation_style", setter: "set_wallpaper_style", param: "style" },
