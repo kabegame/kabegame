@@ -13,6 +13,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.util.ArrayDeque
 
 class WallpaperRotationWorker(
     private val appContext: android.content.Context,
@@ -63,6 +64,7 @@ class WallpaperRotationWorker(
         val albumId = settingsJson.optString("wallpaperRotationAlbumId", "")
             .trim()
             .ifEmpty { null }
+        val includeSubalbums = settingsJson.optBoolean("wallpaperRotationIncludeSubalbums", true)
         val rotationMode = settingsJson.optString("wallpaperRotationMode", "random")
         val currentImageId = settingsJson.optString("currentWallpaperImageId", "")
             .trim()
@@ -72,7 +74,7 @@ class WallpaperRotationWorker(
             style = "fill"
         }
 
-        val images = queryImages(albumId)
+        val images = queryImages(albumId, includeSubalbums)
         if (images.isEmpty()) {
             return null
         }
@@ -106,39 +108,21 @@ class WallpaperRotationWorker(
         )
     }
 
-    private fun queryImages(albumId: String?): List<ImageRow> {
+    private fun queryImages(albumId: String?, includeSubalbums: Boolean): List<ImageRow> {
         val dbFile = File(appContext.filesDir, "databases/images.db")
         if (!dbFile.exists()) {
             return emptyList()
         }
 
-        val result = mutableListOf<ImageRow>()
-        val db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-        db.use {
+        return SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
             if (albumId != null) {
-                val cursor = db.rawQuery(
-                    """
-                    SELECT CAST(i.id AS TEXT) as id, i.local_path
-                    FROM images i
-                    INNER JOIN album_images ai ON i.id = ai.image_id
-                    WHERE ai.album_id = ?
-                    ORDER BY COALESCE(ai."order", ai.rowid) ASC
-                    """.trimIndent(),
-                    arrayOf(albumId)
-                )
-                cursor.use {
-                    val idIdx = cursor.getColumnIndexOrThrow("id")
-                    val pathIdx = cursor.getColumnIndexOrThrow("local_path")
-                    while (cursor.moveToNext()) {
-                        result.add(
-                            ImageRow(
-                                id = cursor.getString(idIdx),
-                                localPath = cursor.getString(pathIdx)
-                            )
-                        )
-                    }
+                if (!includeSubalbums) {
+                    queryAlbumImagesDirect(db, albumId)
+                } else {
+                    queryAlbumImagesWithDescendants(db, albumId)
                 }
             } else {
+                val result = mutableListOf<ImageRow>()
                 val cursor = db.rawQuery(
                     "SELECT CAST(id AS TEXT) as id, local_path FROM images ORDER BY crawled_at ASC",
                     null
@@ -155,9 +139,76 @@ class WallpaperRotationWorker(
                         )
                     }
                 }
+                result
+            }
+        }
+    }
+
+    private fun queryAlbumImagesDirect(db: SQLiteDatabase, albumId: String): List<ImageRow> {
+        val result = mutableListOf<ImageRow>()
+        val cursor = db.rawQuery(
+            """
+            SELECT CAST(i.id AS TEXT) as id, i.local_path
+            FROM images i
+            INNER JOIN album_images ai ON i.id = ai.image_id
+            WHERE ai.album_id = ?
+            ORDER BY COALESCE(ai."order", ai.rowid) ASC
+            """.trimIndent(),
+            arrayOf(albumId)
+        )
+        cursor.use {
+            val idIdx = cursor.getColumnIndexOrThrow("id")
+            val pathIdx = cursor.getColumnIndexOrThrow("local_path")
+            while (cursor.moveToNext()) {
+                result.add(
+                    ImageRow(
+                        id = cursor.getString(idIdx),
+                        localPath = cursor.getString(pathIdx)
+                    )
+                )
             }
         }
         return result
+    }
+
+    private fun collectSubtreeAlbumIdsBfs(db: SQLiteDatabase, rootId: String): List<String> {
+        val out = mutableListOf<String>()
+        val queue = ArrayDeque<String>()
+        queue.add(rootId)
+        while (queue.isNotEmpty()) {
+            val id = queue.removeFirst()
+            out.add(id)
+            val c = db.rawQuery(
+                "SELECT id FROM albums WHERE parent_id = ? ORDER BY created_at ASC",
+                arrayOf(id)
+            )
+            c.use {
+                val idx = it.getColumnIndexOrThrow("id")
+                while (it.moveToNext()) {
+                    queue.add(it.getString(idx))
+                }
+            }
+        }
+        return out
+    }
+
+    private fun queryAlbumImagesWithDescendants(db: SQLiteDatabase, rootAlbumId: String): List<ImageRow> {
+        val check = db.rawQuery("SELECT 1 FROM albums WHERE id = ? LIMIT 1", arrayOf(rootAlbumId))
+        check.use {
+            if (!it.moveToFirst()) {
+                return emptyList()
+            }
+        }
+        val merged = mutableListOf<ImageRow>()
+        val seen = HashSet<String>()
+        for (aid in collectSubtreeAlbumIdsBfs(db, rootAlbumId)) {
+            for (row in queryAlbumImagesDirect(db, aid)) {
+                if (seen.add(row.id)) {
+                    merged.add(row)
+                }
+            }
+        }
+        return merged
     }
 
     private fun pickRandomIndex(images: List<ImageRow>, currentId: String?): Int? {

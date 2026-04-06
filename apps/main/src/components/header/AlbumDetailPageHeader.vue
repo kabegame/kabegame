@@ -69,6 +69,7 @@ const emit = defineEmits<{
   'open-browse-filter': [];
   'open-browse-sort': [];
   'open-browse-page-size': [];
+  'create-sub-album': [];
 }>();
 
 const { t } = useI18n();
@@ -86,7 +87,7 @@ const showIds = computed(() => {
   if (IS_ANDROID) {
     return [HeaderFeatureId.TaskDrawer];
   } else {
-    return withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]);
+    return withVd([HeaderFeatureId.OpenVirtualDrive, HeaderFeatureId.Refresh, HeaderFeatureId.CreateAlbum, HeaderFeatureId.SetAsWallpaperCarousel, HeaderFeatureId.DeleteAlbum, HeaderFeatureId.TaskDrawer, HeaderFeatureId.Help, HeaderFeatureId.QuickSettings]);
   }
 });
 
@@ -95,6 +96,7 @@ const foldIds = computed(() => {
     const base = withVd([
       HeaderFeatureId.OpenVirtualDrive,
       HeaderFeatureId.Refresh,
+      HeaderFeatureId.CreateAlbum,
       HeaderFeatureId.SetAsWallpaperCarousel,
       HeaderFeatureId.DeleteAlbum,
       HeaderFeatureId.Help,
@@ -121,6 +123,9 @@ const handleAction = (payload: { id: string; data: { type: string } }) => {
       break;
     case HeaderFeatureId.Refresh:
       emit("refresh");
+      break;
+    case HeaderFeatureId.CreateAlbum:
+      emit("create-sub-album");
       break;
     case HeaderFeatureId.SetAsWallpaperCarousel:
       emit("set-wallpaper-rotate");

@@ -116,11 +116,14 @@ impl WallpaperRotator {
         !kabegame_core::image_type::is_video_by_path(Path::new(path))
     }
 
-    async fn load_images_for_source(source: &RotationSource) -> Result<Vec<ImageLite>, String> {
+    async fn load_images_for_source(
+        source: &RotationSource,
+        include_subalbums: bool,
+    ) -> Result<Vec<ImageLite>, String> {
         match source {
             RotationSource::Album(id) => {
                 let v = Storage::global()
-                    .get_album_images(id)
+                    .get_album_images_for_wallpaper_rotation(id, include_subalbums)
                     .map_err(|e| format!("Storage error: {}", e))?;
                 Ok(Self::images_from_info(v))
             }
@@ -247,7 +250,11 @@ impl WallpaperRotator {
                 }
 
                 // 选择轮播来源：画册 / 画廊
-                let album_id_result = settings.get_wallpaper_rotation_album_id().await;
+                let (album_id_result, include_sub_result) = tokio::join!(
+                    settings.get_wallpaper_rotation_album_id(),
+                    settings.get_wallpaper_rotation_include_subalbums(),
+                );
+                let include_subalbums = include_sub_result.unwrap_or(true);
                 let source = match album_id_result {
                     Ok(Some(id)) if !id.trim().is_empty() => RotationSource::Album(id),
                     Ok(Some(_)) | Ok(None) => RotationSource::Gallery,
@@ -260,7 +267,8 @@ impl WallpaperRotator {
 
                 // 获取图片列表
                 let mut source = source;
-                let mut images = match Self::load_images_for_source(&source).await {
+                let mut images = match Self::load_images_for_source(&source, include_subalbums).await
+                {
                     Ok(imgs) => imgs,
                     Err(e) => {
                         // 画册不存在：回退到画廊
@@ -271,7 +279,7 @@ impl WallpaperRotator {
                                 .is_ok()
                             {
                                 source = RotationSource::Gallery;
-                                Self::load_images_for_source(&source)
+                                Self::load_images_for_source(&source, false)
                                     .await
                                     .unwrap_or_default()
                             } else {
@@ -296,7 +304,7 @@ impl WallpaperRotator {
                                 .is_ok()
                             {
                                 source = RotationSource::Gallery;
-                                images = Self::load_images_for_source(&source)
+                                images = Self::load_images_for_source(&source, false)
                                     .await
                                     .unwrap_or_default();
                             }
@@ -499,7 +507,8 @@ impl WallpaperRotator {
                     .unwrap_or(false);
                 let is_seq = mode_result.unwrap_or_else(|_| "random".to_string()) == "sequential";
                 if is_gallery && is_seq {
-                    if let Ok(images) = Self::load_images_for_source(&RotationSource::Gallery).await
+                    if let Ok(images) =
+                        Self::load_images_for_source(&RotationSource::Gallery, false).await
                     {
                         if let Some(cur) = Self::get_current_wallpaper_path(&self.app).await {
                             self.align_sequential_index_from_current(&images, &cur);
@@ -537,16 +546,18 @@ impl WallpaperRotator {
                 return Err("壁纸轮播未启用".to_string());
             }
 
-            let album_id = settings
-                .get_wallpaper_rotation_album_id()
-                .await
-                .map_err(|e| format!("Settings error: {}", e))?;
+            let (album_id, include_sub) = tokio::join!(
+                settings.get_wallpaper_rotation_album_id(),
+                settings.get_wallpaper_rotation_include_subalbums(),
+            );
+            let album_id = album_id.map_err(|e| format!("Settings error: {}", e))?;
+            let include_subalbums = include_sub.unwrap_or(true);
             let source = match album_id {
                 Some(id) if !id.trim().is_empty() => RotationSource::Album(id),
                 _ => RotationSource::Gallery,
             };
 
-            let images = Self::load_images_for_source(&source).await?;
+            let images = Self::load_images_for_source(&source, include_subalbums).await?;
             if images.is_empty() {
                 return Err(match source {
                     RotationSource::Album(_) => "画册内没有图片".to_string(),
@@ -636,17 +647,19 @@ impl WallpaperRotator {
 
         // 获取设置
         let settings = Settings::global();
-        let album_id = settings
-            .get_wallpaper_rotation_album_id()
-            .await
-            .map_err(|e| format!("Settings error: {}", e))?;
+        let (album_id, include_sub) = tokio::join!(
+            settings.get_wallpaper_rotation_album_id(),
+            settings.get_wallpaper_rotation_include_subalbums(),
+        );
+        let album_id = album_id.map_err(|e| format!("Settings error: {}", e))?;
+        let include_subalbums = include_sub.unwrap_or(true);
         let source = match album_id {
             Some(id) if !id.trim().is_empty() => RotationSource::Album(id),
             _ => RotationSource::Gallery,
         };
 
         let mut source = source;
-        let mut images = Self::load_images_for_source(&source)
+        let mut images = Self::load_images_for_source(&source, include_subalbums)
             .await
             .unwrap_or_default();
 
@@ -658,7 +671,7 @@ impl WallpaperRotator {
                     .set_wallpaper_rotation_album_id(Some("".to_string()))
                     .await;
                 source = RotationSource::Gallery;
-                images = Self::load_images_for_source(&source)
+                images = Self::load_images_for_source(&source, false)
                     .await
                     .unwrap_or_default();
             }

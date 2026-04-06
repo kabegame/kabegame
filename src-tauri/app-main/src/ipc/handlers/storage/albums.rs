@@ -4,7 +4,7 @@ use kabegame_core::storage::Storage;
 
 pub async fn get_albums() -> CliIpcResponse {
     let storage = Storage::global();
-    match storage.get_albums() {
+    match storage.list_all_albums() {
         Ok(albums) => {
             CliIpcResponse::ok_with_data("ok", serde_json::to_value(albums).unwrap_or_default())
         }
@@ -14,7 +14,7 @@ pub async fn get_albums() -> CliIpcResponse {
 
 pub async fn add_album(name: &str) -> CliIpcResponse {
     let storage = Storage::global();
-    match storage.add_album(name) {
+    match storage.add_album(name, None) {
         Ok(album) => CliIpcResponse::ok_with_data(
             "created",
             serde_json::to_value(album).unwrap_or_default(),

@@ -108,6 +108,7 @@
   "localDesc": "Import from local: images, folders or archives",
   "remoteDesc": "Use plugins to collect images from network",
   "organizingProgress": "Organizing {processed}/{total}",
+  "organizingProgressRange": "Organizing {current}/{end}",
   "organizingEllipsis": "Organizing…",
   "organizingDetail": "(removed {removed}, regenerated {regenerated})",
   "organizeRunProgress": "Current organize progress",

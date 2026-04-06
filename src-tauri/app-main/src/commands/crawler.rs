@@ -543,6 +543,7 @@ pub async fn crawl_to(app: AppHandle, payload: CrawlToPayload) -> Result<(), Str
             guard.push(PageStackEntry {
                 url: ctx.current_url.clone().unwrap_or_else(|| ctx.base_url.clone()),
                 html: String::new(),
+                headers: HashMap::new(),
                 page_label: ctx.page_label.clone(),
                 page_state: current_page_state,
             });
@@ -553,6 +554,7 @@ pub async fn crawl_to(app: AppHandle, payload: CrawlToPayload) -> Result<(), Str
         guard.push(PageStackEntry {
             url: target_url.clone(),
             html: String::new(),
+            headers: HashMap::new(),
             page_label: new_page_label.clone(),
             page_state: new_page_state.clone(),
         });

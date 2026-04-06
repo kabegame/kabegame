@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use kabegame_core::emitter::GlobalEmitter;
-use kabegame_core::scheduler::{MissedRunResolveAction, Scheduler};
+use kabegame_core::scheduler::Scheduler;
 use kabegame_core::storage::{Storage, TaskInfo};
 
 #[tauri::command]
@@ -62,14 +62,21 @@ pub async fn copy_run_config(config_id: String) -> Result<serde_json::Value, Str
 #[tauri::command]
 pub async fn get_missed_runs() -> Result<serde_json::Value, String> {
     let items = kabegame_core::scheduler::collect_missed_runs_now()?;
-    let _ = Scheduler::global().reload_config("").await;
     serde_json::to_value(items).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn resolve_missed_runs(config_ids: Vec<String>, action: String) -> Result<(), String> {
-    let action = MissedRunResolveAction::from_str(action.as_str())?;
-    kabegame_core::scheduler::resolve_missed_runs_now(&config_ids, action)
+pub async fn run_missed_configs(config_ids: Vec<String>) -> Result<(), String> {
+    kabegame_core::scheduler::run_missed_configs(&config_ids);
+    let _ = Scheduler::global().reload_config("").await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn dismiss_missed_configs(config_ids: Vec<String>) -> Result<(), String> {
+    kabegame_core::scheduler::dismiss_missed_configs(&config_ids);
+    let _ = Scheduler::global().reload_config("").await;
+    Ok(())
 }
 
 #[tauri::command]

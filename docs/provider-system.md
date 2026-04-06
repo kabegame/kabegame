@@ -1,85 +1,41 @@
-# Provider System 设计说明
+# Provider 系统设计
 
-## 目标
+## 原则
 
-Provider 负责“路径解析与内容枚举”，不负责平台挂载细节。  
-虚拟盘（VD）与画廊（Gallery）共享同一棵 Provider 树，仅在分页模式和目录本地化上有差异。
+- **Provider 是纯路径解析服务**：`path → Provider | Image`，不感知「画廊」或「虚拟盘」等上层产品概念。
+- **`list_entries()`**：返回带已构建子 `Provider` 的 `Child`，或 `ImageEntry`；`get_child()` 仅用于无法由列表覆盖的动态子节点（LRU 缓存）。
+- **写操作在父节点语义上**：`add_child` / `rename_child` / `can_delete_child` / `delete_child`。
+- **`ProviderConfig`**：`locale` + `pagination_mode` 从父向子继承；VD 下 `locale` 控制目录显示名（与 `kabegame-i18n` 的 `vd.*` 一致）。
+- **动态子节点**：`list_entries()` 无法穷举的（如日期范围、分页页码）走 `get_child()` + LRU；其余应尽量由 `list_entries()` 列出并写入 sled 缓存。
 
-## 核心原则
-
-- Provider 是纯逻辑层，不依赖 Dokan/FUSE。
-- 路径入口统一走 `ProviderRuntime::resolve(path)`。
-- 列表返回 `ListEntry`：
-  - `Child { name, provider }`：子节点与其 provider
-  - `Image(ImageEntry)`：图片条目（含 `local_path`）
-- `get_child(name)` 仅用于动态子节点（如页码、日期范围等无法穷举项）。
-- 写操作在父节点上执行：
-  - `add_child`
-  - `rename_child`
-  - `delete_child_v2`
-
-## 架构总览
+## 树形结构（概念）
 
 ```text
-ProviderRuntime (global singleton)
-  └─ UnifiedRootProvider
-     ├─ gallery -> MainRootProvider(config: locale=None, mode=SimplePage)
-     └─ vd
-        └─ {locale} -> MainRootProvider(config: locale=Some(locale), mode=Greedy)
+UnifiedRoot
+├── gallery → MainRootProvider (gallery_default / SimplePage)
+└── vd → VdRootProvider
+         └── {locale} → MainRootProvider (vd_with_locale / Greedy)
+                → Group / All / Range / DateScoped / …
 ```
 
-## ProviderConfig
+## 扩展方式
 
-`ProviderConfig` 在 provider 树中向下传递：
+1. 实现 `Provider` trait（`descriptor` / `list_entries` / 按需 `get_child` / 写操作）。
+2. 在 `ProviderDescriptor` 中增加变体（若需持久化缓存）。
+3. 在 `ProviderFactory::build()` 中注册 descriptor → 构造。
+4. 在某一父节点的 `list_entries()` 中返回 `ListEntry::Child { name, provider }` 挂载到树上。
 
-- `locale: Option<&'static str>`
-  - `None`：canonical 名称（用于 Gallery）
-  - `Some(locale)`：本地化名称（用于 VD）
-- `pagination_mode: PaginationMode`
-  - `SimplePage`：简单分页
-  - `Greedy`：贪心区间目录
+## 缓存
 
-通过 `display_name()` 与 `canonical_name()` 实现目录名翻译与反查。
+- **静态（sled）**：`list_entries()` 得到的子节点描述符可持久化；`Child` 直接带 `provider` 时写入子 key。
+- **动态（LRU）**：仅 `get_child()` 解析的节点进入 LRU，避免污染持久缓存。
 
-## Descriptor 与缓存
+## i18n
 
-`ProviderDescriptor` 用于缓存重建 provider。当前核心变体：
+- VD 目录显示名由 `ProviderConfig::display_name(canonical)` 提供，数据来自 **`kabegame-i18n`** 的 `vd.*` 键（与 YAML 中 `vd.all`、`vd.album` 等对应）。
+- Explorer 通知路径（Windows `SHChangeNotify`）须使用当前 UI 语言对应的显示名，与 `VfsSemantics` 使用的 `vd/{locale}` 段一致。
 
-- `UnifiedRoot`
-- `GalleryRoot`
-- `VdRoot`
-- `Group { kind }`
-- `All { query }`
-- `Range { query, offset, count, depth }`
-- `DateScoped { query, tier }`
-- `SimpleAll { query }`
-- `SimplePage { query, page }`
+## 虚拟盘相关类型归属
 
-`ProviderRuntime` 缓存策略：
-
-- `list_entries()` 产出的 `Child`：持久缓存（sled）+ 运行时 LRU
-- `get_child()` 动态命中：仅 LRU
-
-## Consumer 侧约定
-
-- Gallery browse：
-  - 调 `resolve("gallery/...")`
-  - 依据 descriptor + storage 查询返回 browse 结果
-- VD 语义层：
-  - 调 `resolve("vd/{locale}/...")`
-  - `read_dir` 基于 `list_entries()`
-  - 文件打开基于 `ListEntry::Image.local_path`
-  - `get_note()` 注入说明文件
-
-## 扩展 Provider 的标准流程
-
-1. 实现 `Provider` trait（至少 `descriptor/list/get_child`）。
-2. 若有写能力，实现 `add_child/rename_child/delete_child_v2`。
-3. 在 `ProviderDescriptor` 增加必要变体（若已有可复用则不新增）。
-4. 在 `ProviderFactory::build` 注册重建逻辑。
-5. 挂到 `UnifiedRoot -> MainRoot` 的合适分支。
-
-## 平台说明
-
-- 支持平台：Android、Windows、macOS、Linux
-- iOS：不支持
+- **`ResolveResult`**（目录 / 文件 / 未找到）：仅用于 `virtual_driver::semantics`，不属于 `Provider` 核心 trait。
+- **删除两阶段（Check / Commit）**：由 Dokan/FUSE 处理流程与 `delete_on_close` 维护；语义层提供 `can_delete_child_at` 与 `commit_delete_child_at`，不再使用已删除的 `DeleteChildMode` 类型。

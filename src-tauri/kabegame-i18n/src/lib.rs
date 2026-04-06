@@ -36,7 +36,7 @@ fn resolve_supported_language(language: &str) -> Option<&'static str> {
 }
 
 #[inline]
-fn current_language(language: Option<&str>) -> &str {
+fn current_language(language: Option<&str>) -> &'static str {
     language
         .as_ref()
         .filter(|lang| !lang.is_empty())
@@ -67,6 +67,51 @@ pub fn set_locale(language: &str) {
 #[inline]
 pub fn translate(key: &str) -> String {
     rust_i18n::t!(key).to_string()
+}
+
+/// 与 `UnifiedRootProvider` / `VfsSemantics` 的 `vd/{locale}` 段一致（zh/en/ja/ko/zhtw）。
+#[inline]
+pub fn vd_locale_segment_for_ui_language(lang: Option<&str>) -> &'static str {
+    current_language(lang)
+}
+
+/// 从 `rust_i18n` 全局 locale（由 `sync_locale` 设定）读取当前 VD 路径段。
+/// 不依赖 tokio runtime，可在 FUSE/Dokan 回调线程安全调用。
+#[inline]
+pub fn current_vd_locale() -> &'static str {
+    let current = rust_i18n::locale();
+    resolve_supported_language(&current).unwrap_or(DEFAULT_LANGUAGE)
+}
+
+fn vd_flat_key_for_canonical(canonical: &str) -> Option<&'static str> {
+    match canonical {
+        "all" => Some("vd.all"),
+        "plugin" => Some("vd.plugin"),
+        "date" => Some("vd.date"),
+        "date-range" => Some("vd.dateRange"),
+        "album" => Some("vd.album"),
+        "task" => Some("vd.task"),
+        "surf" => Some("vd.surf"),
+        "media-type" => Some("vd.mediaType"),
+        "wallpaper-order" => Some("vd.wallpaperOrder"),
+        "desc" => Some("vd.desc"),
+        "image" => Some("vd.image"),
+        "video" => Some("vd.video"),
+        "album-order" => Some("vd.albumOrder"),
+        "image-only" => Some("vd.imageOnly"),
+        "video-only" => Some("vd.videoOnly"),
+        "tree" => Some("vd.subAlbums"),
+        _ => None,
+    }
+}
+
+/// 按 locale 段（如 `zh`）与 canonical key（如 `album`）返回 VD 目录显示名。
+pub fn translate_vd_canonical(locale: &str, canonical: &str) -> String {
+    let Some(key) = vd_flat_key_for_canonical(canonical) else {
+        return canonical.to_string();
+    };
+    let lang = resolve_supported_language(locale).unwrap_or(DEFAULT_LANGUAGE);
+    rust_i18n::t!(key, locale = lang).to_string()
 }
 
 #[macro_export]

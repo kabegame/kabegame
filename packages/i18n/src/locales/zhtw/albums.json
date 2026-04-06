@@ -1,5 +1,6 @@
 {
   "emptyTip": "暫無畫冊，點擊右上角建立",
+  "subAlbums": "子畫冊",
   "newAlbum": "新增畫冊",
   "placeholderName": "輸入畫冊名稱",
   "create": "建立",
@@ -65,5 +66,10 @@
   "doubleClickToRename": "雙擊改名",
   "totalCountSubtitle": "共 {count} 張",
   "deleteAlbumRotationConfirm": "你刪除的畫冊正在用於輪播，如果刪除將回退到畫廊",
-  "deleteAlbumRotationTitle": "確定刪除該畫冊嗎"
+  "deleteAlbumRotationTitle": "確定刪除該畫冊嗎",
+  "moveToTitle": "移動畫冊",
+  "moveToRoot": "移動到根級",
+  "moveSuccess": "畫冊已移動",
+  "moveFailed": "移動失敗",
+  "selectTargetAlbum": "選擇目標畫冊"
 }

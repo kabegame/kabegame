@@ -8,12 +8,12 @@
         <template #before-grid>
           <!-- 顶部工具栏 -->
           <GalleryToolbar :total-count="totalImagesCount" :big-page-enabled="bigPageEnabled"
-            :month-options="monthOptions" :month-loading="monthOptionsLoading" :root="providerRootPath"
+            :month-options="monthOptions" :month-loading="monthOptionsLoading" :filter="galleryRouteStore.filter"
             :sort="galleryRouteStore.sort" :page-size="pageSize" v-model:selectedRange="selectedRange"
             @refresh="handleManualRefresh" @show-help="openHelpDrawer" @show-quick-settings="openQuickSettingsDrawer"
             @show-crawler-dialog="handleShowCrawlerDialog" @show-local-import="showLocalImportDialog = true"
             @open-collect-menu="showCollectSourcePicker = true"
-            @update:root="(root) => galleryRouteStore.navigate({ root, page: 1 })"
+            @update:filter="(f) => galleryRouteStore.navigate({ filter: f, page: 1 })"
             @update:sort="(sort) => galleryRouteStore.navigate({ sort })" />
 
           <!-- 大页分页器 -->
@@ -116,7 +116,8 @@ import { useLoadingDelay } from "@kabegame/core/composables/useLoadingDelay";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { storeToRefs } from "pinia";
 import { useImageGridAutoLoad } from "@/composables/useImageGridAutoLoad";
-import { useGalleryRouteStore } from "@/stores/galleryRoute";
+import { resetGalleryRouteToDefault, useGalleryRouteStore } from "@/stores/galleryRoute";
+import { serializeFilter } from "@/utils/galleryPath";
 import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useAlbumImagesChangeRefresh } from "@/composables/useAlbumImagesChangeRefresh";
 import { diffById } from "@/utils/listDiff";
@@ -180,15 +181,15 @@ const route = useRoute();
 const router = useRouter();
 const galleryRouteStore = useGalleryRouteStore();
 const currentPath = computed(() => galleryRouteStore.currentPath);
-const providerRootPath = computed(() => galleryRouteStore.root);
+const providerRootPath = computed(() => serializeFilter(galleryRouteStore.filter));
 const currentPage = computed(() => galleryRouteStore.page);
 
 const isWallpaperOrderEmpty = computed(
-  () => providerRootPath.value === "wallpaper-order"
+  () => galleryRouteStore.filter.type === "wallpaper-order"
 );
 
 const isWallpaperOrderBrowse = computed(
-  () => providerRootPath.value === "wallpaper-order"
+  () => galleryRouteStore.filter.type === "wallpaper-order"
 );
 
 watch(
@@ -207,9 +208,17 @@ watch(
   { immediate: true }
 );
 
+type AlbumBrowseInfo = {
+  id: string;
+  name: string;
+  imageCount: number;
+  previewImages: ImageInfo[];
+};
+
 type GalleryBrowseEntry =
   | { kind: "dir"; name: string }
-  | { kind: "image"; image: ImageInfo };
+  | { kind: "image"; image: ImageInfo }
+  | { kind: "album"; album: AlbumBrowseInfo };
 
 type GalleryBrowseResult = {
   total: number;
@@ -237,8 +246,20 @@ const extractRangeFromProviderRoot = (
 };
 
 watch(
-  () => providerRootPath.value,
-  (root) => {
+  () => [galleryRouteStore.filter, providerRootPath.value] as const,
+  ([filter, root]) => {
+    if (filter.type === "date-range") {
+      const range: [string, string] = [filter.start, filter.end];
+      if (
+        !selectedRange.value ||
+        selectedRange.value[0] !== range[0] ||
+        selectedRange.value[1] !== range[1]
+      ) {
+        selectedRange.value = range;
+      }
+      return;
+    }
+
     const range = extractRangeFromProviderRoot(root);
     if (range) {
       if (
@@ -256,13 +277,6 @@ watch(
   },
   { immediate: true }
 );
-
-const replaceRouteForProviderRootAndPage = async (root: string, page: number) => {
-  await galleryRouteStore.navigate({
-    root: root || "all",
-    page: Math.max(1, Math.floor(page || 1)),
-  });
-};
 
 const loadMonthOptions = async () => {
   monthOptionsLoading.value = true;
@@ -315,7 +329,7 @@ const handleEmptyStateCollect = () => {
 };
 
 const handleWallpaperEmptyViewAll = () => {
-  void galleryRouteStore.navigate({ root: "all", page: 1 });
+  void galleryRouteStore.navigate({ filter: { type: "all" }, page: 1 });
 };
 
 // 桌面：选择收集方式对话框 → 本地
@@ -494,7 +508,6 @@ const onScrollOverspeed = () => {
 // 整个页面的loading状态
 const { loading, showLoading, startLoading, finishLoading } = useLoadingDelay();
 
-const isLoadingMore = ref(false);
 const showAddToAlbumDialog = ref(false);
 const addToAlbumImageIds = ref<string[]>([]);
 // TODO:
@@ -511,10 +524,6 @@ const imageActions = computed(() => createImageActions({ removeText: t("gallery.
 const isInteracting = ref(false);
 // 始终启用 images-change 监听，不管是否在前台（用于同步删除等操作）
 const isGalleryActive = ref(true);
-// const pendingAlbumImages = ref<ImageInfo[]>([]);
-// const pendingAlbumImageIds = computed(() => pendingAlbumImages.value.map(img => img.id));
-// const selectedImage = ref<ImageInfo | null>(null);
-// effectiveAspectRatio 已移除，ImageGrid 现在始终使用窗口宽高比
 const plugins = computed(() => pluginStore.plugins);
 const tasks = computed(() => crawlerStore.tasks);
 
@@ -527,13 +536,9 @@ const {
   displayedImages,
   fetchByPath,
   refreshImagesPreserveCache,
-  loadMoreImages: loadMoreImagesFromComposable,
-  jumpToBigPage,
-  removeFromUiCacheByIds,
   loadedKey,
 } = useGalleryImages(
   galleryContainerRef,
-  isLoadingMore,
   pageSize,
   clearImageMetadataCache,
 );
@@ -561,19 +566,18 @@ watch(
   { immediate: true }
 );
 
-// 兼容旧调用：保留原函数名
-const loadImages = async (reset?: boolean, opts?: { forceReload?: boolean }) => {
+const loadImages = async (reset?: boolean) => {
   // 如果强制刷新，递增刷新计数器以触发空占位符重新挂载
-  if (opts?.forceReload) {
+  if (reset) {
     refreshKey.value++;
     startLoading();
     isRefreshing.value = true; // 标记为刷新中，阻止 EmptyState 闪烁
   }
   try {
-    await refreshImagesPreserveCache(currentPath.value, opts);
+    await refreshImagesPreserveCache(currentPath.value);
     // reset 时导航到根路径的第 1 页
     if (reset) {
-      await galleryRouteStore.navigate({ root: providerRootPath.value, page: 1 });
+      await galleryRouteStore.navigate({ filter: galleryRouteStore.filter, page: 1 });
     }
   } finally {
     finishLoading();
@@ -601,11 +605,17 @@ watch(
     const end = (r[1] || "").trim();
     if (!start || !end) return;
 
-    const nextRoot = `date-range/${start}~${end}`;
-    if (nextRoot === providerRootPath.value) return;
+    const nextFilter = { type: "date-range" as const, start, end };
+    if (
+      galleryRouteStore.filter.type === "date-range" &&
+      galleryRouteStore.filter.start === start &&
+      galleryRouteStore.filter.end === end
+    ) {
+      return;
+    }
 
     // 切换 provider：回到第 1 页，并重载
-    await galleryRouteStore.navigate({ root: nextRoot, page: 1 });
+    await galleryRouteStore.navigate({ filter: nextFilter, page: 1 });
     await loadTotalImagesCount();
     await loadImages(false);
   }
@@ -615,7 +625,7 @@ const handleManualRefresh = async () => {
   // 手动刷新：刷新画廊数据 + 同步刷新月份下拉框选项
   clearImageStateCache();
   await Promise.allSettled([
-    loadImages(false, { forceReload: true }),
+    loadImages(true),
     loadMonthOptions(),
   ]);
   await loadTotalImagesCount();
@@ -652,6 +662,13 @@ watch(
       totalImagesCount.value = result.total ?? 0;
     } catch (error) {
       console.error("加载路径失败:", newPath, error);
+      if (
+        galleryRouteStore.filter.type === "all" &&
+        galleryRouteStore.page === 1
+      ) {
+        return;
+      }
+      await resetGalleryRouteToDefault();
     } finally {
       finishLoading();
     }
@@ -671,9 +688,7 @@ const {
 } = useImageOperations(
   displayedImages,
   currentWallpaperImageId,
-  galleryViewRef,
-  removeFromUiCacheByIds,
-  loadImages
+  galleryViewRef
 );
 
 const albumStore = useAlbumStore();
@@ -702,6 +717,13 @@ const loadTotalImagesCount = async () => {
     totalImagesCount.value = res?.total ?? 0;
   } catch (error) {
     console.error("获取总图片数失败:", error);
+    if (
+      galleryRouteStore.filter.type === "all" &&
+      galleryRouteStore.page === 1
+    ) {
+      return;
+    }
+    await resetGalleryRouteToDefault();
   }
 };
 
@@ -1028,10 +1050,6 @@ useImagesChangeRefresh({
 
     if (reason === "delete") {
       return ids.length === 0 || intersects;
-    }
-    if (reason === "add") {
-      if (displayedImages.value.length >= pageSize.value) return false;
-      return true;
     }
     if (reason === "change") {
       if (isWallpaperOrderBrowse.value) return true;

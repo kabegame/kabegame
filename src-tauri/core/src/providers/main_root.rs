@@ -9,10 +9,70 @@ use crate::providers::common::{CommonProvider, PaginationMode, SimplePageProvide
 use crate::providers::config::ProviderConfig;
 use crate::providers::main_date_browse::{list_main_date_browse_root_entries, main_date_child_provider};
 use crate::providers::descriptor::{ProviderDescriptor, ProviderGroupKind};
-use crate::providers::provider::{FsEntry, Provider, ResolveChild};
+use crate::providers::provider::{ListEntry, Provider};
 use crate::providers::vd_names::parse_date_range_name;
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
+
+/// VD 下「按插件」目录名：`{manifest 展示名} - {plugin_id}`；画廊 API 仍为纯 `plugin_id`。
+fn vd_plugin_dir_name(config: ProviderConfig, plugin_id: &str) -> String {
+    if config.locale.is_none() {
+        return plugin_id.to_string();
+    }
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    {
+        if let Some(plugin_name) = crate::providers::plugin_display_name_from_manifest(plugin_id) {
+            let n = plugin_name.trim();
+            if !n.is_empty() {
+                return format!("{} - {}", n, plugin_id);
+            }
+        }
+    }
+    plugin_id.to_string()
+}
+
+fn vd_resolve_plugin_id_from_dir_name(config: ProviderConfig, name: &str) -> &str {
+    if config.locale.is_none() {
+        return name.trim();
+    }
+    name.rsplit_once(" - ")
+        .map(|(_, id)| id)
+        .unwrap_or(name)
+        .trim()
+}
+
+/// VD 下「按任务」目录名：`{插件展示名} - {task_id}`。
+fn vd_task_dir_name(config: ProviderConfig, task_id: &str, plugin_id: &str) -> String {
+    if config.locale.is_none() {
+        return task_id.to_string();
+    }
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    {
+        let plugin_name = crate::providers::plugin_display_name_from_manifest(plugin_id)
+            .unwrap_or_else(|| plugin_id.to_string());
+        let n = plugin_name.trim();
+        if n.is_empty() {
+            task_id.to_string()
+        } else {
+            format!("{} - {}", n, task_id)
+        }
+    }
+    #[cfg(any(kabegame_mode = "light", target_os = "android"))]
+    {
+        let _ = plugin_id;
+        task_id.to_string()
+    }
+}
+
+fn vd_resolve_task_id_from_dir_name(config: ProviderConfig, name: &str) -> &str {
+    if config.locale.is_none() {
+        return name.trim();
+    }
+    name.rsplit_once(" - ")
+        .map(|(_, id)| id)
+        .unwrap_or(name)
+        .trim()
+}
 
 /// MainProvider 根目录
 #[derive(Clone)]
@@ -44,20 +104,62 @@ impl Default for MainRootProvider {
 
 impl Provider for MainRootProvider {
     fn descriptor(&self) -> ProviderDescriptor {
-        ProviderDescriptor::GalleryRoot
+        ProviderDescriptor::GalleryRoot {
+            locale: self.config.locale.map(|s| s.to_string()),
+        }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
+    fn get_note(&self) -> Option<(String, String)> {
+        self.config.locale?;
+        let s = "在这里你可以自由查看图片.txt".to_string();
+        Some((s.clone(), s))
+    }
+
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
         Ok(vec![
-            FsEntry::dir(self.config.display_name("all")),
-            FsEntry::dir(self.config.display_name("wallpaper-order")),
-            FsEntry::dir(self.config.display_name("plugin")),
-            FsEntry::dir(self.config.display_name("date")),
-            FsEntry::dir(self.config.display_name("date-range")),
-            FsEntry::dir(self.config.display_name("album")),
-            FsEntry::dir(self.config.display_name("task")),
-            FsEntry::dir(self.config.display_name("surf")),
-            FsEntry::dir(self.config.display_name("media-type")),
+            ListEntry::Child {
+                name: self.config.display_name("all"),
+                provider: Arc::new(MainAllProvider::new_with_config(self.config)) as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("wallpaper-order"),
+                provider: Arc::new(MainWallpaperOrderProvider::new_with_config(self.config))
+                    as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("plugin"),
+                provider: Arc::new(MainPluginGroupProvider::new_with_config(self.config))
+                    as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("date"),
+                provider: Arc::new(MainDateGroupProvider::new_with_config(self.config))
+                    as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("date-range"),
+                provider: Arc::new(MainDateRangeRootProvider::new_with_config(self.config))
+                    as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("album"),
+                provider: Arc::new(MainAlbumsProvider::new_with_config(self.config)) as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("task"),
+                provider: Arc::new(MainTaskGroupProvider::new_with_config(self.config))
+                    as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("surf"),
+                provider: Arc::new(MainSurfGroupProvider::new_with_config(self.config))
+                    as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("media-type"),
+                provider: Arc::new(MainMediaTypeGroupProvider::new_with_config(self.config))
+                    as Arc<dyn Provider>,
+            },
         ])
     }
 
@@ -99,9 +201,9 @@ impl MainAllProvider {
 
     pub fn new_with_config(config: ProviderConfig) -> Self {
         Self {
-            inner: CommonProvider::with_query_and_mode(
+            inner: CommonProvider::with_query_and_config(
                 ImageQuery::all_recent(),
-                config.pagination_mode,
+                config,
             ),
         }
     }
@@ -112,23 +214,19 @@ impl Provider for MainAllProvider {
         self.inner.descriptor()
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        self.inner.list()
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        self.inner.list_entries()
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         self.inner.get_child(name)
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        self.inner.resolve_child(name)
-    }
 }
 
-/// MainWallpaperOrderProvider：按「最后一次设为壁纸」时间排序（正序根节点，子目录 desc 为倒序）
+/// MainWallpaperOrderProvider：按「最后一次设为壁纸」时间排序（正序根节点含图片；子目录为倒序，与旧 VD CommonProvider 一致）
 pub struct MainWallpaperOrderProvider {
     inner: CommonProvider,
-    config: ProviderConfig,
 }
 
 impl MainWallpaperOrderProvider {
@@ -138,39 +236,25 @@ impl MainWallpaperOrderProvider {
 
     pub fn new_with_config(config: ProviderConfig) -> Self {
         Self {
-            inner: CommonProvider::with_query_and_mode(
+            inner: CommonProvider::with_query_and_config(
                 ImageQuery::all_by_wallpaper_set(),
-                config.pagination_mode,
+                config,
             ),
-            config,
         }
     }
 }
 
 impl Provider for MainWallpaperOrderProvider {
     fn descriptor(&self) -> ProviderDescriptor {
-        ProviderDescriptor::SimpleAll {
-            query: ImageQuery::all_by_wallpaper_set(),
-        }
+        self.inner.descriptor()
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        Ok(vec![FsEntry::dir(self.config.display_name("desc"))])
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        self.inner.list_entries()
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
-        if self.config.canonical_name(name) != "desc" {
-            return None;
-        }
-        let query = ImageQuery::all_by_wallpaper_set().to_desc();
-        Some(Arc::new(CommonProvider::with_query_and_mode(
-            query,
-            self.config.pagination_mode,
-        )) as Arc<dyn Provider>)
-    }
-
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        self.inner.resolve_child(name)
+        self.inner.get_child(name)
     }
 }
 
@@ -199,52 +283,46 @@ impl Provider for MainPluginGroupProvider {
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor::Group {
             kind: ProviderGroupKind::Plugin,
+            locale: self.config.locale.map(|s| s.to_string()),
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
+    fn get_note(&self) -> Option<(String, String)> {
+        self.config.locale?;
+        let s = "这里记录了不同插件安装的所有图片.txt".to_string();
+        Some((s.clone(), s))
+    }
+
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
         let groups = Storage::global().get_gallery_plugin_groups()?;
-        Ok(groups.into_iter().map(|g| FsEntry::dir(g.plugin_id)).collect())
+        Ok(groups
+            .into_iter()
+            .filter_map(|g| {
+                let name = vd_plugin_dir_name(self.config, &g.plugin_id);
+                self.get_child(&name)
+                    .map(|provider| ListEntry::Child { name, provider })
+            })
+            .collect())
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         if name.trim().is_empty() {
             return None;
         }
+        let plugin_id = vd_resolve_plugin_id_from_dir_name(self.config, name);
         let groups = Storage::global().get_gallery_plugin_groups().ok()?;
-        let exists = groups.iter().any(|g| g.plugin_id.eq_ignore_ascii_case(name));
+        let exists = groups
+            .iter()
+            .any(|g| g.plugin_id.eq_ignore_ascii_case(plugin_id));
         if !exists {
             return None;
         }
-        Some(Arc::new(CommonProvider::with_query_and_mode(
-            ImageQuery::by_plugin(name.to_string()),
-            self.config.pagination_mode,
+        Some(Arc::new(CommonProvider::with_query_and_config(
+            ImageQuery::by_plugin(plugin_id.to_string()),
+            self.config,
         )) as Arc<dyn Provider>)
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        // name 就是 plugin_id
-        if name.trim().is_empty() {
-            return ResolveChild::NotFound;
-        }
-        // 验证插件是否存在
-        let groups = match Storage::global().get_gallery_plugin_groups() {
-            Ok(groups) => groups,
-            Err(_) => return ResolveChild::NotFound,
-        };
-        let exists = groups
-            .iter()
-            .any(|g| g.plugin_id.eq_ignore_ascii_case(name));
-        if !exists {
-            return ResolveChild::NotFound;
-        }
-
-        let provider = CommonProvider::with_query_and_mode(
-            ImageQuery::by_plugin(name.to_string()),
-            self.config.pagination_mode,
-        );
-        ResolveChild::Dynamic(Arc::new(provider) as Arc<dyn Provider>)
-    }
 }
 
 /// MainMediaTypeGroupProvider：`media-type/` 下按 `image` / `video` 分子目录
@@ -272,13 +350,26 @@ impl Provider for MainMediaTypeGroupProvider {
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor::Group {
             kind: ProviderGroupKind::MediaType,
+            locale: self.config.locale.map(|s| s.to_string()),
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
         Ok(vec![
-            FsEntry::dir(self.config.display_name("image")),
-            FsEntry::dir(self.config.display_name("video")),
+            ListEntry::Child {
+                name: self.config.display_name("image"),
+                provider: Arc::new(CommonProvider::with_query_and_config(
+                    ImageQuery::by_media_type("image"),
+                    self.config,
+                )) as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("video"),
+                provider: Arc::new(CommonProvider::with_query_and_config(
+                    ImageQuery::by_media_type("video"),
+                    self.config,
+                )) as Arc<dyn Provider>,
+            },
         ])
     }
 
@@ -287,23 +378,12 @@ impl Provider for MainMediaTypeGroupProvider {
         if canonical != "image" && canonical != "video" {
             return None;
         }
-        Some(Arc::new(CommonProvider::with_query_and_mode(
+        Some(Arc::new(CommonProvider::with_query_and_config(
             ImageQuery::by_media_type(canonical),
-            self.config.pagination_mode,
+            self.config,
         )) as Arc<dyn Provider>)
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        let canonical = self.config.canonical_name(name);
-        if canonical != "image" && canonical != "video" {
-            return ResolveChild::NotFound;
-        }
-        let provider = CommonProvider::with_query_and_mode(
-            ImageQuery::by_media_type(canonical),
-            self.config.pagination_mode,
-        );
-        ResolveChild::Dynamic(Arc::new(provider) as Arc<dyn Provider>)
-    }
 }
 
 /// MainDateGroupProvider：`date/` 根为**年份**目录，子级为 `MainDateScopedProvider`（与画廊 `date/*` 一致）。
@@ -331,23 +411,24 @@ impl Provider for MainDateGroupProvider {
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor::Group {
             kind: ProviderGroupKind::Date,
+            locale: self.config.locale.map(|s| s.to_string()),
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        list_main_date_browse_root_entries()
+    fn get_note(&self) -> Option<(String, String)> {
+        self.config.locale?;
+        let s = "这里按抓取时间归档图片（年→月→日，与画廊一致）.txt".to_string();
+        Some((s.clone(), s))
+    }
+
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        list_main_date_browse_root_entries(self.config)
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
-        main_date_child_provider(self.config.canonical_name(name))
+        main_date_child_provider(self.config.canonical_name(name), self.config)
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        match main_date_child_provider(self.config.canonical_name(name)) {
-            Some(p) => ResolveChild::Dynamic(p),
-            None => ResolveChild::NotFound,
-        }
-    }
 }
 
 /// MainDateRangeRootProvider：按日期范围分组
@@ -375,24 +456,20 @@ impl Provider for MainDateRangeRootProvider {
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor::Group {
             kind: ProviderGroupKind::DateRange,
+            locale: self.config.locale.map(|s| s.to_string()),
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        Ok(Vec::new()) // 日期范围通过 resolve_child 动态提供
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        Ok(Vec::new()) // 日期范围通过 get_child 动态提供
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        // name: "YYYY-MM-DD~YYYY-MM-DD"
-        let Some((start, end)) = parse_date_range_name(name) else {
-            return ResolveChild::NotFound;
-        };
-
-        let provider = CommonProvider::with_query_and_mode(
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        let (start, end) = parse_date_range_name(name)?;
+        Some(Arc::new(CommonProvider::with_query_and_config(
             ImageQuery::by_date_range(start, end),
-            self.config.pagination_mode,
-        );
-        ResolveChild::Dynamic(Arc::new(provider) as Arc<dyn Provider>)
+            self.config,
+        )) as Arc<dyn Provider>)
     }
 }
 
@@ -421,42 +498,107 @@ impl Provider for MainAlbumsProvider {
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor::Group {
             kind: ProviderGroupKind::Album,
+            locale: self.config.locale.map(|s| s.to_string()),
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        let albums = Storage::global().get_albums()?;
-        Ok(albums.into_iter().map(|a| FsEntry::dir(a.id)).collect())
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        let albums = Storage::global().get_albums(None)?;
+        Ok(albums
+            .into_iter()
+            .filter_map(|a| {
+                let name = if self.config.locale.is_some() {
+                    a.name.clone()
+                } else {
+                    a.id.clone()
+                };
+                self.get_child(&name)
+                    .map(|provider| ListEntry::Child { name, provider })
+            })
+            .collect())
     }
 
-    fn get_child(&self, id: &str) -> Option<Arc<dyn Provider>> {
-        if id.trim().is_empty() {
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        if name.trim().is_empty() {
             return None;
         }
-        if !Storage::global().album_exists(id).ok()? {
+        let id = if self.config.locale.is_some() {
+            Storage::global()
+                .find_child_album_by_name_ci(None, name)
+                .ok()??
+        } else {
+            name.to_string()
+        };
+        if !Storage::global().album_exists(&id).ok()? {
             return None;
         }
         Some(Arc::new(MainAlbumEntryProvider::new_with_config(
-            id.to_string(),
+            id,
             self.config,
         )) as Arc<dyn Provider>)
     }
 
-    fn resolve_child(&self, id: &str) -> ResolveChild {
-        // 只接受画册 id（画廊/前端传的是 id）
-        if id.trim().is_empty() {
-            return ResolveChild::NotFound;
-        }
-        if !Storage::global().album_exists(id).unwrap_or(false) {
-            return ResolveChild::NotFound;
-        }
+}
 
-        ResolveChild::Dynamic(
-            Arc::new(MainAlbumEntryProvider::new_with_config(
-                id.to_string(),
-                self.config,
-            )) as Arc<dyn Provider>,
-        )
+/// Main 画册子树节点：`album/<id>/<子画册名>`（VD 下为翻译后的「子画册」目录名）。
+/// - Gallery：不枚举子目录（前端动态导航）；`get_child` 按子画册 **ID** 解析。
+/// - VD：列出直接子画册（按 **名称**）；`get_child` 按 **名称** 解析。
+pub struct MainAlbumTreeProvider {
+    album_id: String,
+    config: ProviderConfig,
+}
+
+impl MainAlbumTreeProvider {
+    pub fn new(album_id: String) -> Self {
+        Self::new_with_config(album_id, ProviderConfig::gallery_default())
+    }
+
+    pub fn new_with_config(album_id: String, config: ProviderConfig) -> Self {
+        Self { album_id, config }
+    }
+}
+
+impl Provider for MainAlbumTreeProvider {
+    fn descriptor(&self) -> ProviderDescriptor {
+        ProviderDescriptor::AlbumTree {
+            album_id: self.album_id.clone(),
+        }
+    }
+
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        if self.config.locale.is_none() {
+            return Ok(Vec::new());
+        }
+        let children = Storage::global().get_albums(Some(&self.album_id))?;
+        Ok(children
+            .into_iter()
+            .filter_map(|a| {
+                let name = a.name.clone();
+                self.get_child(&name)
+                    .map(|provider| ListEntry::Child { name, provider })
+            })
+            .collect())
+    }
+
+    fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        if name.trim().is_empty() {
+            return None;
+        }
+        let child_id = if self.config.locale.is_some() {
+            Storage::global()
+                .find_child_album_by_name_ci(Some(&self.album_id), name)
+                .ok()??
+        } else {
+            let album = Storage::global().get_album_by_id(name).ok()??;
+            if album.parent_id.as_deref() != Some(&self.album_id) {
+                return None;
+            }
+            name.to_string()
+        };
+        Some(Arc::new(MainAlbumEntryProvider::new_with_config(
+            child_id,
+            self.config,
+        )) as Arc<dyn Provider>)
     }
 }
 
@@ -496,83 +638,139 @@ impl Provider for MainAlbumEntryProvider {
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        Ok(vec![
-            FsEntry::dir(self.config.display_name("desc")),
-            FsEntry::dir("album-order"),
-            FsEntry::dir(self.config.display_name("wallpaper-order")),
-            FsEntry::dir("image-only"),
-            FsEntry::dir("video-only"),
-        ])
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        let mut entries = vec![
+            ListEntry::Child {
+                name: self.config.display_name("tree"),
+                provider: Arc::new(MainAlbumTreeProvider::new_with_config(
+                    self.album_id.clone(),
+                    self.config,
+                )) as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("desc"),
+                provider: Arc::new(CommonProvider::with_query_and_config(
+                    ImageQuery::album_source(self.album_id.clone())
+                        .merge(&ImageQuery::sort_by_crawled_at(false)),
+                    self.config,
+                )) as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("album-order"),
+                provider: Arc::new(MainAlbumJoinOrderProvider::new(
+                    self.album_id.clone(),
+                    self.config,
+                ))
+                    as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("wallpaper-order"),
+                provider: Arc::new(MainAlbumWallpaperOrderProvider::new(
+                    self.album_id.clone(),
+                    self.config,
+                ))
+                    as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("image-only"),
+                provider: Arc::new(MainAlbumMediaEntryProvider::new(
+                    self.album_id.clone(),
+                    "image",
+                    self.config,
+                ))
+                    as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("video-only"),
+                provider: Arc::new(MainAlbumMediaEntryProvider::new(
+                    self.album_id.clone(),
+                    "video",
+                    self.config,
+                ))
+                    as Arc<dyn Provider>,
+            },
+        ];
+
+        // VD (Greedy) 模式：追加图片/范围条目（与旧 AlbumProvider 一致）
+        if self.config.pagination_mode == PaginationMode::Greedy {
+            let inner = CommonProvider::with_query_and_config(self.time_asc_query(), self.config);
+            let desc_name = self.config.display_name("desc");
+            for entry in inner.list_entries()? {
+                if let ListEntry::Child { ref name, .. } = entry {
+                    if *name == desc_name {
+                        continue;
+                    }
+                }
+                entries.push(entry);
+            }
+        }
+
+        Ok(entries)
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         match self.config.canonical_name(name) {
-            "desc" => {
-                let q = ImageQuery::album_source(self.album_id.clone())
-                    .merge(&ImageQuery::sort_by_crawled_at(false));
-                Some(Arc::new(CommonProvider::with_query_and_mode(
-                    q,
-                    self.config.pagination_mode,
-                )) as Arc<dyn Provider>)
-            }
+            "tree" => Some(Arc::new(MainAlbumTreeProvider::new_with_config(
+                self.album_id.clone(),
+                self.config,
+            )) as Arc<dyn Provider>),
+            "desc" => Some(Arc::new(CommonProvider::with_query_and_config(
+                ImageQuery::album_source(self.album_id.clone())
+                    .merge(&ImageQuery::sort_by_crawled_at(false)),
+                self.config,
+            )) as Arc<dyn Provider>),
             "album-order" => Some(
-                Arc::new(MainAlbumJoinOrderProvider::new(self.album_id.clone()))
+                Arc::new(MainAlbumJoinOrderProvider::new(self.album_id.clone(), self.config))
                     as Arc<dyn Provider>,
             ),
             "wallpaper-order" => Some(
-                Arc::new(MainAlbumWallpaperOrderProvider::new(self.album_id.clone()))
+                Arc::new(MainAlbumWallpaperOrderProvider::new(self.album_id.clone(), self.config))
                     as Arc<dyn Provider>,
             ),
             "image-only" => Some(
-                Arc::new(MainAlbumMediaEntryProvider::new(self.album_id.clone(), "image"))
+                Arc::new(MainAlbumMediaEntryProvider::new(
+                    self.album_id.clone(),
+                    "image",
+                    self.config,
+                ))
                     as Arc<dyn Provider>,
             ),
             "video-only" => Some(
-                Arc::new(MainAlbumMediaEntryProvider::new(self.album_id.clone(), "video"))
-                    as Arc<dyn Provider>,
-            ),
-            _ => None,
-        }
-    }
-
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        match self.config.canonical_name(name) {
-            "desc" => {
-                let q = ImageQuery::album_source(self.album_id.clone())
-                    .merge(&ImageQuery::sort_by_crawled_at(false));
-                ResolveChild::Dynamic(Arc::new(CommonProvider::with_query_and_mode(
-                    q,
-                    self.config.pagination_mode,
-                )) as Arc<dyn Provider>)
-            }
-            "album-order" => ResolveChild::Dynamic(
-                Arc::new(MainAlbumJoinOrderProvider::new(self.album_id.clone()))
-                    as Arc<dyn Provider>,
-            ),
-            "wallpaper-order" => ResolveChild::Dynamic(
-                Arc::new(MainAlbumWallpaperOrderProvider::new(self.album_id.clone()))
-                    as Arc<dyn Provider>,
-            ),
-            "image-only" => ResolveChild::Dynamic(
-                Arc::new(MainAlbumMediaEntryProvider::new(self.album_id.clone(), "image"))
-                    as Arc<dyn Provider>,
-            ),
-            "video-only" => ResolveChild::Dynamic(
-                Arc::new(MainAlbumMediaEntryProvider::new(self.album_id.clone(), "video"))
+                Arc::new(MainAlbumMediaEntryProvider::new(
+                    self.album_id.clone(),
+                    "video",
+                    self.config,
+                ))
                     as Arc<dyn Provider>,
             ),
             _ => {
+                // VD (Greedy): delegate range/image names to CommonProvider
+                if self.config.pagination_mode == PaginationMode::Greedy {
+                    let inner = CommonProvider::with_query_and_config(self.time_asc_query(), self.config);
+                    return inner.get_child(name);
+                }
+                // Gallery (SimplePage): parse page number
                 if let Ok(page) = name.parse::<usize>() {
                     if page > 0 {
                         let q = self.time_asc_query();
-                        return ResolveChild::Dynamic(
-                            Arc::new(SimplePageProvider::new(q, page)) as Arc<dyn Provider>,
-                        );
+                        return Some(Arc::new(SimplePageProvider::new(q, page)) as Arc<dyn Provider>);
                     }
                 }
-                ResolveChild::NotFound
+                None
             }
+        }
+    }
+
+    fn can_delete_child(&self, _child_name: &str) -> bool {
+        self.config.pagination_mode == PaginationMode::Greedy
+    }
+
+    fn delete_child(&self, child_name: &str) -> Result<(), String> {
+        let removed = crate::providers::vd_ops::delete_child_file_by_album(&self.album_id, child_name)?;
+        if removed {
+            Ok(())
+        } else {
+            Err("图片不存在或不在该画册中".to_string())
         }
     }
 }
@@ -581,13 +779,15 @@ impl Provider for MainAlbumEntryProvider {
 pub struct MainAlbumMediaEntryProvider {
     album_id: String,
     media_type: &'static str,
+    config: ProviderConfig,
 }
 
 impl MainAlbumMediaEntryProvider {
-    pub fn new(album_id: String, media_type: &'static str) -> Self {
+    pub fn new(album_id: String, media_type: &'static str, config: ProviderConfig) -> Self {
         Self {
             album_id,
             media_type,
+            config,
         }
     }
 
@@ -605,74 +805,84 @@ impl Provider for MainAlbumMediaEntryProvider {
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        Ok(vec![
-            FsEntry::dir("desc"),
-            FsEntry::dir("album-order"),
-            FsEntry::dir("wallpaper-order"),
-        ])
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        let mut entries = vec![
+            ListEntry::Child {
+                name: self.config.display_name("desc"),
+                provider: Arc::new(CommonProvider::with_query_and_config(
+                    ImageQuery::album_source(self.album_id.clone())
+                        .merge(&ImageQuery::media_type_filter(self.media_type))
+                        .merge(&ImageQuery::sort_by_crawled_at(false)),
+                    self.config,
+                )) as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("album-order"),
+                provider: Arc::new(MainAlbumMediaJoinOrderProvider::new(
+                    self.album_id.clone(),
+                    self.media_type,
+                    self.config,
+                )) as Arc<dyn Provider>,
+            },
+            ListEntry::Child {
+                name: self.config.display_name("wallpaper-order"),
+                provider: Arc::new(MainAlbumMediaWallpaperOrderProvider::new(
+                    self.album_id.clone(),
+                    self.media_type,
+                    self.config,
+                )) as Arc<dyn Provider>,
+            },
+        ];
+        if self.config.pagination_mode == PaginationMode::Greedy {
+            let inner = CommonProvider::with_query_and_config(self.time_asc_query(), self.config);
+            let desc_name = self.config.display_name("desc");
+            for entry in inner.list_entries()? {
+                if let ListEntry::Child { ref name, .. } = entry {
+                    if *name == desc_name {
+                        continue;
+                    }
+                }
+                entries.push(entry);
+            }
+        }
+        Ok(entries)
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
-        match name {
-            "desc" => {
-                let q = ImageQuery::album_source(self.album_id.clone())
+        match self.config.canonical_name(name) {
+            "desc" => Some(Arc::new(CommonProvider::with_query_and_config(
+                ImageQuery::album_source(self.album_id.clone())
                     .merge(&ImageQuery::media_type_filter(self.media_type))
-                    .merge(&ImageQuery::sort_by_crawled_at(false));
-                Some(Arc::new(CommonProvider::with_query_and_mode(
-                    q,
-                    PaginationMode::SimplePage,
-                )) as Arc<dyn Provider>)
-            }
+                    .merge(&ImageQuery::sort_by_crawled_at(false)),
+                self.config,
+            )) as Arc<dyn Provider>),
             "album-order" => Some(
                 Arc::new(MainAlbumMediaJoinOrderProvider::new(
                     self.album_id.clone(),
                     self.media_type,
+                    self.config,
                 )) as Arc<dyn Provider>,
             ),
             "wallpaper-order" => Some(
                 Arc::new(MainAlbumMediaWallpaperOrderProvider::new(
                     self.album_id.clone(),
                     self.media_type,
-                )) as Arc<dyn Provider>,
-            ),
-            _ => None,
-        }
-    }
-
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        match name {
-            "desc" => {
-                let q = ImageQuery::album_source(self.album_id.clone())
-                    .merge(&ImageQuery::media_type_filter(self.media_type))
-                    .merge(&ImageQuery::sort_by_crawled_at(false));
-                ResolveChild::Dynamic(Arc::new(CommonProvider::with_query_and_mode(
-                    q,
-                    PaginationMode::SimplePage,
-                )) as Arc<dyn Provider>)
-            }
-            "album-order" => ResolveChild::Dynamic(
-                Arc::new(MainAlbumMediaJoinOrderProvider::new(
-                    self.album_id.clone(),
-                    self.media_type,
-                )) as Arc<dyn Provider>,
-            ),
-            "wallpaper-order" => ResolveChild::Dynamic(
-                Arc::new(MainAlbumMediaWallpaperOrderProvider::new(
-                    self.album_id.clone(),
-                    self.media_type,
+                    self.config,
                 )) as Arc<dyn Provider>,
             ),
             _ => {
+                if self.config.pagination_mode == PaginationMode::Greedy {
+                    let inner =
+                        CommonProvider::with_query_and_config(self.time_asc_query(), self.config);
+                    return inner.get_child(name);
+                }
                 if let Ok(page) = name.parse::<usize>() {
                     if page > 0 {
                         let q = self.time_asc_query();
-                        return ResolveChild::Dynamic(
-                            Arc::new(SimplePageProvider::new(q, page)) as Arc<dyn Provider>,
-                        );
+                        return Some(Arc::new(SimplePageProvider::new(q, page)) as Arc<dyn Provider>);
                     }
                 }
-                ResolveChild::NotFound
+                None
             }
         }
     }
@@ -682,18 +892,15 @@ impl Provider for MainAlbumMediaEntryProvider {
 pub struct MainAlbumMediaJoinOrderProvider {
     album_id: String,
     media_type: &'static str,
-    inner: CommonProvider,
+    config: ProviderConfig,
 }
 
 impl MainAlbumMediaJoinOrderProvider {
-    pub fn new(album_id: String, media_type: &'static str) -> Self {
-        let q = ImageQuery::album_source(album_id.clone())
-            .merge(&ImageQuery::media_type_filter(media_type))
-            .merge(&ImageQuery::sort_by_album_order(true));
+    pub fn new(album_id: String, media_type: &'static str, config: ProviderConfig) -> Self {
         Self {
             album_id,
             media_type,
-            inner: CommonProvider::with_query_and_mode(q, PaginationMode::SimplePage),
+            config,
         }
     }
 
@@ -711,45 +918,63 @@ impl Provider for MainAlbumMediaJoinOrderProvider {
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        Ok(vec![FsEntry::dir("desc")])
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        let mut entries = vec![ListEntry::Child {
+            name: self.config.display_name("desc"),
+            provider: Arc::new(CommonProvider::with_query_and_config(
+                ImageQuery::album_source(self.album_id.clone())
+                    .merge(&ImageQuery::media_type_filter(self.media_type))
+                    .merge(&ImageQuery::sort_by_album_order(false)),
+                self.config,
+            )) as Arc<dyn Provider>,
+        }];
+        if self.config.pagination_mode == PaginationMode::Greedy {
+            let inner = CommonProvider::with_query_and_config(self.order_asc_query(), self.config);
+            let desc_name = self.config.display_name("desc");
+            for entry in inner.list_entries()? {
+                if let ListEntry::Child { ref name, .. } = entry {
+                    if *name == desc_name {
+                        continue;
+                    }
+                }
+                entries.push(entry);
+            }
+        }
+        Ok(entries)
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
-        if name != "desc" {
-            return None;
+        if self.config.canonical_name(name) == "desc" {
+            let q = ImageQuery::album_source(self.album_id.clone())
+                .merge(&ImageQuery::media_type_filter(self.media_type))
+                .merge(&ImageQuery::sort_by_album_order(false));
+            return Some(Arc::new(CommonProvider::with_query_and_config(
+                q,
+                self.config,
+            )) as Arc<dyn Provider>);
         }
-        let q = ImageQuery::album_source(self.album_id.clone())
-            .merge(&ImageQuery::media_type_filter(self.media_type))
-            .merge(&ImageQuery::sort_by_album_order(false));
-        Some(Arc::new(CommonProvider::with_query_and_mode(
-            q,
-            PaginationMode::SimplePage,
-        )) as Arc<dyn Provider>)
+        if self.config.pagination_mode == PaginationMode::Greedy {
+            let inner = CommonProvider::with_query_and_config(self.order_asc_query(), self.config);
+            return inner.get_child(name);
+        }
+        None
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        self.inner.resolve_child(name)
-    }
 }
 
 /// 画册内「仅某媒体类型」+ 仅设过壁纸
 pub struct MainAlbumMediaWallpaperOrderProvider {
     album_id: String,
     media_type: &'static str,
-    inner: CommonProvider,
+    config: ProviderConfig,
 }
 
 impl MainAlbumMediaWallpaperOrderProvider {
-    pub fn new(album_id: String, media_type: &'static str) -> Self {
-        let q = ImageQuery::album_source(album_id.clone())
-            .merge(&ImageQuery::media_type_filter(media_type))
-            .merge(&ImageQuery::wallpaper_set_filter())
-            .merge(&ImageQuery::sort_by_wallpaper_set_at(true));
+    pub fn new(album_id: String, media_type: &'static str, config: ProviderConfig) -> Self {
         Self {
             album_id,
             media_type,
-            inner: CommonProvider::with_query_and_mode(q, PaginationMode::SimplePage),
+            config,
         }
     }
 
@@ -768,43 +993,62 @@ impl Provider for MainAlbumMediaWallpaperOrderProvider {
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        Ok(vec![FsEntry::dir("desc")])
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        let mut entries = vec![ListEntry::Child {
+            name: self.config.display_name("desc"),
+            provider: Arc::new(CommonProvider::with_query_and_config(
+                ImageQuery::album_source(self.album_id.clone())
+                    .merge(&ImageQuery::media_type_filter(self.media_type))
+                    .merge(&ImageQuery::wallpaper_set_filter())
+                    .merge(&ImageQuery::sort_by_wallpaper_set_at(false)),
+                self.config,
+            )) as Arc<dyn Provider>,
+        }];
+        if self.config.pagination_mode == PaginationMode::Greedy {
+            let inner = CommonProvider::with_query_and_config(self.wallpaper_asc_query(), self.config);
+            let desc_name = self.config.display_name("desc");
+            for entry in inner.list_entries()? {
+                if let ListEntry::Child { ref name, .. } = entry {
+                    if *name == desc_name {
+                        continue;
+                    }
+                }
+                entries.push(entry);
+            }
+        }
+        Ok(entries)
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
-        if name != "desc" {
-            return None;
+        if self.config.canonical_name(name) == "desc" {
+            let q = ImageQuery::album_source(self.album_id.clone())
+                .merge(&ImageQuery::media_type_filter(self.media_type))
+                .merge(&ImageQuery::wallpaper_set_filter())
+                .merge(&ImageQuery::sort_by_wallpaper_set_at(false));
+            return Some(Arc::new(CommonProvider::with_query_and_config(
+                q,
+                self.config,
+            )) as Arc<dyn Provider>);
         }
-        let q = ImageQuery::album_source(self.album_id.clone())
-            .merge(&ImageQuery::media_type_filter(self.media_type))
-            .merge(&ImageQuery::wallpaper_set_filter())
-            .merge(&ImageQuery::sort_by_wallpaper_set_at(false));
-        Some(Arc::new(CommonProvider::with_query_and_mode(
-            q,
-            PaginationMode::SimplePage,
-        )) as Arc<dyn Provider>)
+        if self.config.pagination_mode == PaginationMode::Greedy {
+            let inner =
+                CommonProvider::with_query_and_config(self.wallpaper_asc_query(), self.config);
+            return inner.get_child(name);
+        }
+        None
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        self.inner.resolve_child(name)
-    }
 }
 
 /// 画册内按 `album_images.order`（加入顺序）排序
 pub struct MainAlbumJoinOrderProvider {
     album_id: String,
-    inner: CommonProvider,
+    config: ProviderConfig,
 }
 
 impl MainAlbumJoinOrderProvider {
-    pub fn new(album_id: String) -> Self {
-        let q = ImageQuery::album_source(album_id.clone())
-            .merge(&ImageQuery::sort_by_album_order(true));
-        Self {
-            album_id,
-            inner: CommonProvider::with_query_and_mode(q, PaginationMode::SimplePage),
-        }
+    pub fn new(album_id: String, config: ProviderConfig) -> Self {
+        Self { album_id, config }
     }
 
     fn order_asc_query(&self) -> ImageQuery {
@@ -820,42 +1064,57 @@ impl Provider for MainAlbumJoinOrderProvider {
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        Ok(vec![FsEntry::dir("desc")])
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        let mut entries = vec![ListEntry::Child {
+            name: self.config.display_name("desc"),
+            provider: Arc::new(CommonProvider::with_query_and_config(
+                ImageQuery::album_source(self.album_id.clone())
+                    .merge(&ImageQuery::sort_by_album_order(false)),
+                self.config,
+            )) as Arc<dyn Provider>,
+        }];
+        if self.config.pagination_mode == PaginationMode::Greedy {
+            let inner = CommonProvider::with_query_and_config(self.order_asc_query(), self.config);
+            let desc_name = self.config.display_name("desc");
+            for entry in inner.list_entries()? {
+                if let ListEntry::Child { ref name, .. } = entry {
+                    if *name == desc_name {
+                        continue;
+                    }
+                }
+                entries.push(entry);
+            }
+        }
+        Ok(entries)
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
-        if name != "desc" {
-            return None;
+        if self.config.canonical_name(name) == "desc" {
+            let q = ImageQuery::album_source(self.album_id.clone())
+                .merge(&ImageQuery::sort_by_album_order(false));
+            return Some(Arc::new(CommonProvider::with_query_and_config(
+                q,
+                self.config,
+            )) as Arc<dyn Provider>);
         }
-        let q = ImageQuery::album_source(self.album_id.clone())
-            .merge(&ImageQuery::sort_by_album_order(false));
-        Some(Arc::new(CommonProvider::with_query_and_mode(
-            q,
-            PaginationMode::SimplePage,
-        )) as Arc<dyn Provider>)
+        if self.config.pagination_mode == PaginationMode::Greedy {
+            let inner = CommonProvider::with_query_and_config(self.order_asc_query(), self.config);
+            return inner.get_child(name);
+        }
+        None
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        self.inner.resolve_child(name)
-    }
 }
 
 /// 画册内「仅设置过壁纸」分支（与 MainWallpaperOrderProvider 结构相同，查询限定在当前画册）
 pub struct MainAlbumWallpaperOrderProvider {
     album_id: String,
-    inner: CommonProvider,
+    config: ProviderConfig,
 }
 
 impl MainAlbumWallpaperOrderProvider {
-    pub fn new(album_id: String) -> Self {
-        let q = ImageQuery::album_source(album_id.clone())
-            .merge(&ImageQuery::wallpaper_set_filter())
-            .merge(&ImageQuery::sort_by_wallpaper_set_at(true));
-        Self {
-            album_id,
-            inner: CommonProvider::with_query_and_mode(q, PaginationMode::SimplePage),
-        }
+    pub fn new(album_id: String, config: ProviderConfig) -> Self {
+        Self { album_id, config }
     }
 
     fn wallpaper_asc_query(&self) -> ImageQuery {
@@ -872,26 +1131,49 @@ impl Provider for MainAlbumWallpaperOrderProvider {
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        Ok(vec![FsEntry::dir("desc")])
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        let mut entries = vec![ListEntry::Child {
+            name: self.config.display_name("desc"),
+            provider: Arc::new(CommonProvider::with_query_and_config(
+                ImageQuery::album_source(self.album_id.clone())
+                    .merge(&ImageQuery::wallpaper_set_filter())
+                    .merge(&ImageQuery::sort_by_wallpaper_set_at(false)),
+                self.config,
+            )) as Arc<dyn Provider>,
+        }];
+        if self.config.pagination_mode == PaginationMode::Greedy {
+            let inner = CommonProvider::with_query_and_config(self.wallpaper_asc_query(), self.config);
+            let desc_name = self.config.display_name("desc");
+            for entry in inner.list_entries()? {
+                if let ListEntry::Child { ref name, .. } = entry {
+                    if *name == desc_name {
+                        continue;
+                    }
+                }
+                entries.push(entry);
+            }
+        }
+        Ok(entries)
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
-        if name != "desc" {
-            return None;
+        if self.config.canonical_name(name) == "desc" {
+            let q = ImageQuery::album_source(self.album_id.clone())
+                .merge(&ImageQuery::wallpaper_set_filter())
+                .merge(&ImageQuery::sort_by_wallpaper_set_at(false));
+            return Some(Arc::new(CommonProvider::with_query_and_config(
+                q,
+                self.config,
+            )) as Arc<dyn Provider>);
         }
-        let q = ImageQuery::album_source(self.album_id.clone())
-            .merge(&ImageQuery::wallpaper_set_filter())
-            .merge(&ImageQuery::sort_by_wallpaper_set_at(false));
-        Some(Arc::new(CommonProvider::with_query_and_mode(
-            q,
-            PaginationMode::SimplePage,
-        )) as Arc<dyn Provider>)
+        if self.config.pagination_mode == PaginationMode::Greedy {
+            let inner =
+                CommonProvider::with_query_and_config(self.wallpaper_asc_query(), self.config);
+            return inner.get_child(name);
+        }
+        None
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        self.inner.resolve_child(name)
-    }
 }
 
 /// MainTaskGroupProvider：按任务分组
@@ -919,48 +1201,43 @@ impl Provider for MainTaskGroupProvider {
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor::Group {
             kind: ProviderGroupKind::Task,
+            locale: self.config.locale.map(|s| s.to_string()),
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
+    fn get_note(&self) -> Option<(String, String)> {
+        self.config.locale?;
+        let s = "这里按任务归档图片（目录名含插件名与任务ID，可删除任务目录）.txt".to_string();
+        Some((s.clone(), s))
+    }
+
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
         let tasks = Storage::global().get_tasks_with_images()?;
-        Ok(tasks.into_iter().map(|(id, _)| FsEntry::dir(id)).collect())
+        Ok(tasks
+            .into_iter()
+            .filter_map(|(id, plugin_id)| {
+                let name = vd_task_dir_name(self.config, &id, &plugin_id);
+                self.get_child(&name)
+                    .map(|provider| ListEntry::Child { name, provider })
+            })
+            .collect())
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
         if name.trim().is_empty() {
             return None;
         }
-        let task_exists = matches!(Storage::global().get_task(name), Ok(Some(_)));
+        let task_id = vd_resolve_task_id_from_dir_name(self.config, name);
+        let task_exists = matches!(Storage::global().get_task(task_id), Ok(Some(_)));
         if !task_exists {
             return None;
         }
-        Some(Arc::new(CommonProvider::with_query_and_mode(
-            ImageQuery::by_task(name.to_string()),
-            self.config.pagination_mode,
+        Some(Arc::new(CommonProvider::with_query_and_config(
+            ImageQuery::by_task(task_id.to_string()),
+            self.config,
         )) as Arc<dyn Provider>)
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        // name 就是 task_id
-        if name.trim().is_empty() {
-            return ResolveChild::NotFound;
-        }
-        // 验证任务是否存在
-        let task_exists = match Storage::global().get_task(name) {
-            Ok(Some(_)) => true,
-            _ => false,
-        };
-        if !task_exists {
-            return ResolveChild::NotFound;
-        }
-
-        let provider = CommonProvider::with_query_and_mode(
-            ImageQuery::by_task(name.to_string()),
-            self.config.pagination_mode,
-        );
-        ResolveChild::Dynamic(Arc::new(provider) as Arc<dyn Provider>)
-    }
 }
 
 /// MainSurfGroupProvider：按畅游记录分组
@@ -988,12 +1265,19 @@ impl Provider for MainSurfGroupProvider {
     fn descriptor(&self) -> ProviderDescriptor {
         ProviderDescriptor::Group {
             kind: ProviderGroupKind::Surf,
+            locale: self.config.locale.map(|s| s.to_string()),
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
         let records = Storage::global().get_surf_records_with_images()?;
-        Ok(records.into_iter().map(|(id, _)| FsEntry::dir(id)).collect())
+        Ok(records
+            .into_iter()
+            .filter_map(|(id, _)| {
+                self.get_child(&id)
+                    .map(|provider| ListEntry::Child { name: id, provider })
+            })
+            .collect())
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
@@ -1010,25 +1294,11 @@ impl Provider for MainSurfGroupProvider {
         )
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        let id = name.trim();
-        if id.is_empty() {
-            return ResolveChild::NotFound;
-        }
-        if !Storage::global().surf_record_exists(id).unwrap_or(false) {
-            return ResolveChild::NotFound;
-        }
-        ResolveChild::Dynamic(
-            Arc::new(MainSurfRecordProvider::new_with_config(id.to_string(), self.config))
-                as Arc<dyn Provider>,
-        )
-    }
 }
 
 /// MainSurfRecordProvider：单个畅游记录，支持 desc 子目录与 page 动态子路径
 pub struct MainSurfRecordProvider {
     query: ImageQuery,
-    inner: CommonProvider,
     config: ProviderConfig,
 }
 
@@ -1040,7 +1310,6 @@ impl MainSurfRecordProvider {
     pub fn new_with_config(surf_record_id: String, config: ProviderConfig) -> Self {
         let query = ImageQuery::by_surf_record(surf_record_id);
         Self {
-            inner: CommonProvider::with_query_and_mode(query.clone(), config.pagination_mode),
             query,
             config,
         }
@@ -1054,8 +1323,14 @@ impl Provider for MainSurfRecordProvider {
         }
     }
 
-    fn list(&self) -> Result<Vec<FsEntry>, String> {
-        Ok(vec![FsEntry::dir(self.config.display_name("desc"))])
+    fn list_entries(&self) -> Result<Vec<ListEntry>, String> {
+        Ok(vec![ListEntry::Child {
+            name: self.config.display_name("desc"),
+            provider: Arc::new(CommonProvider::with_query_and_config(
+                self.query.to_desc(),
+                self.config,
+            )) as Arc<dyn Provider>,
+        }])
     }
 
     fn get_child(&self, name: &str) -> Option<Arc<dyn Provider>> {
@@ -1063,15 +1338,12 @@ impl Provider for MainSurfRecordProvider {
             return None;
         }
         Some(
-            Arc::new(CommonProvider::with_query_and_mode(
+            Arc::new(CommonProvider::with_query_and_config(
                 self.query.to_desc(),
-                self.config.pagination_mode,
+                self.config,
             )) as Arc<dyn Provider>,
         )
     }
 
-    fn resolve_child(&self, name: &str) -> ResolveChild {
-        self.inner.resolve_child(name)
-    }
 }
 

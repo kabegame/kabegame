@@ -11,7 +11,7 @@ use std::sync::Arc;
 /// 启动虚拟磁盘事件监听器
 ///
 /// 监听以下事件并触发对应操作：
-/// - `AlbumAdded` / `AlbumNameChanged` / `AlbumDeleted` → `vd_service.bump_albums()`
+/// - `AlbumAdded` / `AlbumChanged` / `AlbumDeleted` → `vd_service.bump_albums()`
 /// - `ImagesChange` → 按 `task_ids` 通知任务目录，并 `notify_gallery_tree_changed`
 /// - `AlbumImagesChange` → 按 `album_ids` 通知画册目录，并 `notify_gallery_tree_changed`
 /// - `TaskAdded` / `TaskDeleted` → `bump_tasks()`
@@ -26,7 +26,7 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
     // 订阅我们关心的事件类型
     let event_kinds = vec![
         DaemonEventKind::AlbumAdded,
-        DaemonEventKind::AlbumNameChanged,
+        DaemonEventKind::AlbumChanged,
         DaemonEventKind::AlbumDeleted,
         DaemonEventKind::ImagesChange,
         DaemonEventKind::AlbumImagesChange,
@@ -61,7 +61,7 @@ pub async fn start_vd_event_listener(vd_service: Arc<VirtualDriveService>) {
                         }
                         vd_service.notify_gallery_tree_changed();
                     }
-                    DaemonEvent::AlbumNameChanged { .. } => {
+                    DaemonEvent::AlbumChanged { .. } => {
                         vd_service.bump_albums();
                     }
                     DaemonEvent::AlbumDeleted { .. } => {

@@ -76,7 +76,7 @@ daemon_event_kinds! {
     AlbumImagesChange,
     SettingChange,
     AlbumAdded,
-    AlbumNameChanged,
+    AlbumChanged,
     AlbumDeleted,
     SurfRecordsChange,
     FailedImagesChange,
@@ -107,7 +107,7 @@ impl DaemonEventKind {
             DaemonEventKind::AlbumImagesChange => "album-images-change",
             DaemonEventKind::SettingChange => "setting-change",
             DaemonEventKind::AlbumAdded => "album-added",
-            DaemonEventKind::AlbumNameChanged => "album-name-changed",
+            DaemonEventKind::AlbumChanged => "album-changed",
             DaemonEventKind::AlbumDeleted => "album-deleted",
             DaemonEventKind::SurfRecordsChange => "surf-records-change",
             DaemonEventKind::FailedImagesChange => "failed-images-change",
@@ -133,7 +133,7 @@ impl DaemonEventKind {
             "album-images-change" => Some(DaemonEventKind::AlbumImagesChange),
             "setting-change" => Some(DaemonEventKind::SettingChange),
             "album-added" => Some(DaemonEventKind::AlbumAdded),
-            "album-name-changed" => Some(DaemonEventKind::AlbumNameChanged),
+            "album-changed" => Some(DaemonEventKind::AlbumChanged),
             "album-deleted" => Some(DaemonEventKind::AlbumDeleted),
             "surf-records-change" => Some(DaemonEventKind::SurfRecordsChange),
             "failed-images-change" => Some(DaemonEventKind::FailedImagesChange),
@@ -200,8 +200,18 @@ pub enum DaemonEvent {
 
     /// 整理进度事件
     OrganizeProgress {
-        processed: usize,
-        total: usize,
+        /// 全局顺序下已扫描到的行序号（与内部 `row_index` 一致）
+        #[serde(rename = "processedGlobal")]
+        processed_global: usize,
+        /// 图库图片总数
+        #[serde(rename = "libraryTotal")]
+        library_total: usize,
+        /// 所选区间起点（含），全量时为 `None`
+        #[serde(rename = "rangeStart")]
+        range_start: Option<usize>,
+        /// 所选区间终点（不含），与对话框 `rangeEnd` 一致；全量时为 `None`
+        #[serde(rename = "rangeEnd")]
+        range_end: Option<usize>,
         removed: usize,
         regenerated: usize,
     },
@@ -251,13 +261,14 @@ pub enum DaemonEvent {
         name: String,
         #[serde(rename = "createdAt")]
         created_at: u64,
+        #[serde(rename = "parentId", skip_serializing_if = "Option::is_none")]
+        parent_id: Option<String>,
     },
-    /// 画册名称变更（底层 DB 重命名后发出）
-    AlbumNameChanged {
+    /// 画册属性变更（重命名、移动父级等；`changes` 为增量，如 `{ "name": "..." }`、`{ "parentId": "..." | null }`）
+    AlbumChanged {
         #[serde(rename = "albumId")]
         album_id: String,
-        #[serde(rename = "newName")]
-        new_name: String,
+        changes: serde_json::Value,
     },
     /// 画册删除（底层 DB 删除后发出）
     AlbumDeleted {
@@ -332,7 +343,7 @@ impl DaemonEvent {
             DaemonEvent::WallpaperUpdateImage { .. } => DaemonEventKind::WallpaperUpdateImage,
             DaemonEvent::SettingChange { .. } => DaemonEventKind::SettingChange,
             DaemonEvent::AlbumAdded { .. } => DaemonEventKind::AlbumAdded,
-            DaemonEvent::AlbumNameChanged { .. } => DaemonEventKind::AlbumNameChanged,
+            DaemonEvent::AlbumChanged { .. } => DaemonEventKind::AlbumChanged,
             DaemonEvent::AlbumDeleted { .. } => DaemonEventKind::AlbumDeleted,
             DaemonEvent::SurfRecordsChange { .. } => DaemonEventKind::SurfRecordsChange,
             DaemonEvent::FailedImagesChange { .. } => DaemonEventKind::FailedImagesChange,

@@ -4,8 +4,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::providers::common::{CommonProvider, PaginationMode};
+use crate::providers::config::ProviderConfig;
 use crate::providers::main_date_scoped::MainDateScopedProvider;
-use crate::providers::provider::{FsEntry, Provider};
+use crate::providers::provider::{ListEntry, Provider};
 use crate::storage::gallery::ImageQuery;
 use crate::storage::Storage;
 
@@ -26,13 +27,31 @@ pub(crate) fn gallery_distinct_years() -> Result<Vec<String>, String> {
 }
 
 /// `date/` 与 VD「按时间」根目录：仅年份文件夹。
-pub(crate) fn list_main_date_browse_root_entries() -> Result<Vec<FsEntry>, String> {
+pub(crate) fn list_main_date_browse_root_entries(
+    config: ProviderConfig,
+) -> Result<Vec<ListEntry>, String> {
     let years = gallery_distinct_years()?;
-    Ok(years.into_iter().map(FsEntry::dir).collect())
+    Ok(years
+        .into_iter()
+        .map(|year| ListEntry::Child {
+            name: year.clone(),
+            provider: Arc::new(MainDateScopedProvider::for_year(year, config)),
+        })
+        .collect())
+}
+
+fn simple_page_config(config: ProviderConfig) -> ProviderConfig {
+    ProviderConfig {
+        pagination_mode: PaginationMode::SimplePage,
+        ..config
+    }
 }
 
 /// `date/<name>` / `按时间/<name>`：`YYYY` / `YYYY-MM` / `YYYY-MM-DD` → 年 / 月 / 日粒度（与画廊路径一致）。
-pub(crate) fn main_date_child_provider(name: &str) -> Option<Arc<dyn Provider>> {
+pub(crate) fn main_date_child_provider(
+    name: &str,
+    config: ProviderConfig,
+) -> Option<Arc<dyn Provider>> {
     let name = name.trim();
     if name.is_empty() {
         return None;
@@ -46,9 +65,9 @@ pub(crate) fn main_date_child_provider(name: &str) -> Option<Arc<dyn Provider>> 
         if Storage::global().get_images_count_by_query(&q).ok()? == 0 {
             return None;
         }
-        return Some(Arc::new(CommonProvider::with_query_and_mode(
+        return Some(Arc::new(CommonProvider::with_query_and_config(
             q,
-            PaginationMode::SimplePage,
+            simple_page_config(config),
         )) as Arc<dyn Provider>);
     }
 
@@ -61,6 +80,7 @@ pub(crate) fn main_date_child_provider(name: &str) -> Option<Arc<dyn Provider>> 
         }
         return Some(Arc::new(MainDateScopedProvider::for_month(
             name.to_string(),
+            config,
         )) as Arc<dyn Provider>);
     }
 
@@ -72,6 +92,7 @@ pub(crate) fn main_date_child_provider(name: &str) -> Option<Arc<dyn Provider>> 
         }
         return Some(Arc::new(MainDateScopedProvider::for_year(
             name.to_string(),
+            config,
         )) as Arc<dyn Provider>);
     }
 

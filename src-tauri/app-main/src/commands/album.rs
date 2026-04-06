@@ -13,13 +13,17 @@ use tauri::AppHandle;
 
 #[tauri::command]
 pub async fn get_albums() -> Result<serde_json::Value, String> {
-    let albums = Storage::global().get_albums()?;
+    let albums = Storage::global().list_all_albums()?;
     Ok(serde_json::to_value(albums).map_err(|e| e.to_string())?)
 }
 
 #[tauri::command]
-pub async fn add_album(_app: AppHandle, name: String) -> Result<serde_json::Value, String> {
-    let album = Storage::global().add_album(&name)?;
+pub async fn add_album(
+    _app: AppHandle,
+    name: String,
+    parent_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let album = Storage::global().add_album(&name, parent_id.as_deref())?;
     Ok(serde_json::to_value(album).map_err(|e| e.to_string())?)
 }
 
@@ -46,6 +50,18 @@ pub async fn rename_album(
     new_name: String,
 ) -> Result<(), String> {
     Storage::global().rename_album(&album_id, &new_name)?;
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
+    VirtualDriveService::global().bump_albums();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn move_album(
+    _app: AppHandle,
+    album_id: String,
+    new_parent_id: Option<String>,
+) -> Result<(), String> {
+    Storage::global().move_album(&album_id, new_parent_id.as_deref())?;
     #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     VirtualDriveService::global().bump_albums();
     Ok(())

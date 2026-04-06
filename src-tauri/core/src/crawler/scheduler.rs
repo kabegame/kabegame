@@ -71,6 +71,8 @@ pub struct TaskScheduler {
 pub struct PageStackEntry {
     pub url: String,
     pub html: String,
+    /// 最后一次成功 HTTP 响应头（小写名；同名多值用 `, ` 拼接），Rhai `current_headers()` 读取。
+    pub headers: HashMap<String, String>,
     pub page_label: String,
     pub page_state: serde_json::Value,
 }

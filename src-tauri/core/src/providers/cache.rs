@@ -36,7 +36,7 @@ impl Default for ProviderCacheConfig {
         Self {
             warm_max_nodes: 20_000,
             db_dir: crate::app_paths::AppPaths::global().provider_cache_dir(),
-            key_prefix: "kabegame:provider:v7".to_string(),
+            key_prefix: "kabegame:provider:v8".to_string(),
             lru_capacity: 1024,
         }
     }

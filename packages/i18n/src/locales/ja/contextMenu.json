@@ -17,5 +17,6 @@
   "setWallpaperRotation": "デスクトップローテーションに設定",
   "setWallpaperRotationActive": "（有効）",
   "rename": "名前を変更",
+  "moveTo": "移動先",
   "share": "共有"
 }

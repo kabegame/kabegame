@@ -114,7 +114,7 @@
                   <el-dropdown-item
                     command="image"
                     :class="{
-                      'is-active': galleryMediaKindFromRoot(filterPathRoot) === 'image',
+                      'is-active': filterMediaKind(props.filter) === 'image',
                     }"
                   >
                     {{ t("gallery.filterImageOnly") }}
@@ -123,7 +123,7 @@
                   <el-dropdown-item
                     command="video"
                     :class="{
-                      'is-active': galleryMediaKindFromRoot(filterPathRoot) === 'video',
+                      'is-active': filterMediaKind(props.filter) === 'video',
                     }"
                   >
                     {{ t("gallery.filterVideoOnly") }}
@@ -269,10 +269,11 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { IS_ANDROID } from "@kabegame/core/env";
 import { useModalBack } from "@kabegame/core/composables/useModalBack";
 import {
-  galleryDateTailFromRoot,
-  galleryMediaKindFromRoot,
-  galleryPluginIdFromRoot,
-  isGallerySimpleFilterRoot,
+  filterDateSegment,
+  filterMediaKind,
+  filterPluginId,
+  isSimpleFilter,
+  type GalleryFilter,
   type GalleryTimeSort,
 } from "@/utils/galleryPath";
 import {
@@ -298,7 +299,7 @@ interface Props {
   monthOptions?: string[];
   monthLoading?: boolean;
   selectedRange?: [string, string] | null; // YYYY-MM-DD
-  root?: string;
+  filter?: GalleryFilter;
   sort?: GalleryTimeSort;
   /** 每页条数（与设置同步，用于工具栏展示） */
   pageSize?: number;
@@ -311,7 +312,7 @@ const props = withDefaults(defineProps<Props>(), {
   monthOptions: () => [],
   monthLoading: false,
   selectedRange: null,
-  root: "all",
+  filter: () => ({ type: "all" } as GalleryFilter),
   sort: "asc",
   pageSize: 100,
 });
@@ -329,33 +330,25 @@ const sortOrder = computed<GalleryTimeSort>(() =>
 const { t, locale } = useI18n();
 const pluginStore = usePluginStore();
 
-const isWallpaperOrderBrowse = computed(() =>
-  props.root.startsWith("wallpaper-order")
+const isWallpaperOrderBrowse = computed(
+  () => props.filter.type === "wallpaper-order"
 );
 
-const filterPathRoot = computed(() => props.root || "all");
+const currentPluginId = computed(() => filterPluginId(props.filter));
 
-const currentPluginId = computed(() =>
-  galleryPluginIdFromRoot(filterPathRoot.value)
-);
-
-const dateTail = computed(() => galleryDateTailFromRoot(filterPathRoot.value));
+const dateTail = computed(() => filterDateSegment(props.filter));
 
 const isPluginFilterBrowse = computed(() => currentPluginId.value != null);
 
 const isTimeFilterBrowse = computed(() => dateTail.value != null);
 
 const isMediaTypeFilterBrowse = computed(
-  () => galleryMediaKindFromRoot(filterPathRoot.value) != null
+  () => filterMediaKind(props.filter) != null
 );
 
-const isAllFilterBrowse = computed(
-  () => filterPathRoot.value === "all"
-);
+const isAllFilterBrowse = computed(() => props.filter.type === "all");
 
-const showGalleryFilterFold = computed(() =>
-  isGallerySimpleFilterRoot(filterPathRoot.value)
-);
+const showGalleryFilterFold = computed(() => isSimpleFilter(props.filter));
 
 interface PluginGroupRow {
   plugin_id: string;
@@ -428,11 +421,14 @@ const sortOptionLabelDesc = computed(() =>
 const filterFoldLabel = computed(() => {
   void locale.value;
   if (isWallpaperOrderBrowse.value) return t("gallery.filterWallpaperSet");
+  if (props.filter.type === "date-range") {
+    return `${props.filter.start} ~ ${props.filter.end}`;
+  }
   const dt = dateTail.value;
   if (dt) return t("gallery.filterByTimeWithDetail", { detail: dt });
   const pid = currentPluginId.value;
   if (pid) return t("gallery.filterByPluginWithName", { name: pluginStore.pluginLabel(pid) });
-  const mk = galleryMediaKindFromRoot(filterPathRoot.value);
+  const mk = filterMediaKind(props.filter);
   if (mk === "image") {
     return `${t("gallery.filterImageOnlyLabel")} (${mediaTypeCounts.value.imageCount})`;
   }
@@ -453,24 +449,27 @@ const sortToolbarButtonLabel = computed(() =>
 
 function onDesktopFilterCommand(cmd: string) {
   if (cmd !== "all" && cmd !== "wallpaper-order") return;
-  emit("update:root", cmd);
+  emit(
+    "update:filter",
+    cmd === "all" ? { type: "all" } : { type: "wallpaper-order" }
+  );
 }
 
 function onDesktopPluginFilterCommand(pluginId: string) {
   const id = (pluginId || "").trim();
   if (!id) return;
-  emit("update:root", `plugin/${id}`);
+  emit("update:filter", { type: "plugin", pluginId: id });
 }
 
 function onDesktopTimeFilterCommand(seg: string) {
   const s = (seg || "").trim();
   if (!s) return;
-  emit("update:root", `date/${s}`);
+  emit("update:filter", { type: "date", segment: s });
 }
 
 function onDesktopMediaTypeFilterCommand(kind: string) {
   if (kind !== "image" && kind !== "video") return;
-  emit("update:root", `media-type/${kind}`);
+  emit("update:filter", { type: "media-type", kind });
 }
 
 function onDesktopSortCommand(cmd: string) {
@@ -543,7 +542,10 @@ function onFilterPickerConfirm() {
     return;
   }
   if (v === "all" || v === "wallpaper-order") {
-    emit("update:root", v);
+    emit(
+      "update:filter",
+      v === "all" ? { type: "all" } : { type: "wallpaper-order" }
+    );
   }
 }
 
@@ -586,7 +588,7 @@ function onTimeFilterPickerConfirm(payload: {
     payload.selectedValues.map(String)
   );
   if (!tail) return;
-  emit("update:root", `date/${tail}`);
+  emit("update:filter", { type: "date", segment: tail });
 }
 
 const pluginFilterPickerColumns = computed(() => {
@@ -610,7 +612,7 @@ function onPluginFilterPickerConfirm() {
   showPluginFilterPicker.value = false;
   const id = pluginFilterPickerSelected.value[0];
   if (!id) return;
-  emit("update:root", `plugin/${id}`);
+  emit("update:filter", { type: "plugin", pluginId: id });
 }
 
 const mediaTypeFilterPickerColumns = computed(() => {
@@ -630,7 +632,7 @@ const mediaTypeFilterPickerColumns = computed(() => {
 const mediaTypeFilterPickerSelected = ref<string[]>(["image"]);
 watch(showMediaTypeFilterPicker, (open) => {
   if (open) {
-    const k = galleryMediaKindFromRoot(filterPathRoot.value);
+    const k = filterMediaKind(props.filter);
     mediaTypeFilterPickerSelected.value = [k === "video" ? "video" : "image"];
   }
 });
@@ -638,7 +640,7 @@ function onMediaTypeFilterPickerConfirm() {
   showMediaTypeFilterPicker.value = false;
   const kind = mediaTypeFilterPickerSelected.value[0];
   if (kind !== "image" && kind !== "video") return;
-  emit("update:root", `media-type/${kind}`);
+  emit("update:filter", { type: "media-type", kind });
 }
 
 const sortPickerColumns = computed(() => [
@@ -684,7 +686,7 @@ const emit = defineEmits<{
   showCrawlerDialog: [];
   showLocalImport: [];
   openCollectMenu: [];
-  "update:root": [value: string];
+  "update:filter": [value: GalleryFilter];
   "update:sort": [value: GalleryTimeSort];
   "update:selectedRange": [value: [string, string] | null];
 }>();

@@ -16,8 +16,7 @@ use fuser::{
 };
 
 use crate::emitter::GlobalEmitter;
-use crate::providers::provider::DeleteChildMode;
-use crate::providers::vd_names::DIR_ALBUMS;
+use crate::providers::descriptor::ProviderGroupKind;
 use crate::providers::ProviderRuntime;
 use crate::virtual_driver::semantics::{VfsEntry, VfsError, VfsOpenedItem, VfsSemantics};
 use crate::virtual_driver::virtual_drive_io::{VdFileMeta, VdReadHandle};
@@ -410,16 +409,18 @@ impl Filesystem for KabegameFuseFs {
             return;
         }
 
-        // 只允许在画册根目录下创建目录
-        if parent_path.len() != 1 || !parent_path[0].eq_ignore_ascii_case(DIR_ALBUMS) {
+        let sem = self.semantics();
+
+        // 只允许在画册分组根下创建目录
+        if parent_path.len() != 1
+            || !sem.resolved_segment_is_group(&parent_path[0], ProviderGroupKind::Album)
+        {
             reply.error(libc::EACCES);
             return;
         }
 
         let mut child_path = parent_path.clone();
         child_path.push(name_str.to_string());
-
-        let sem = self.semantics();
         match sem.create_dir(&parent_path, name_str) {
             Ok(()) => {
                 let ino = self.get_or_alloc_inode(&child_path);
@@ -452,7 +453,7 @@ impl Filesystem for KabegameFuseFs {
         };
 
         let sem = self.semantics();
-        match sem.delete_dir(&parent_path, name_str, DeleteChildMode::Commit) {
+        match sem.commit_delete_child_at(&parent_path, name_str) {
             Ok(true) => {
                 // 清理 inode 映射
                 let mut child_path = parent_path.clone();
@@ -487,14 +488,16 @@ impl Filesystem for KabegameFuseFs {
             }
         };
 
-        // 只允许在画册目录下删除文件（语义=从画册移除图片）
-        if parent_path.len() < 2 || !parent_path[0].eq_ignore_ascii_case(DIR_ALBUMS) {
+        let sem = self.semantics();
+
+        // 只允许在画册分组下删除文件（语义=从画册移除图片）
+        if parent_path.len() < 2 || !sem.path_starts_with_group(&parent_path, ProviderGroupKind::Album)
+        {
             reply.error(libc::EACCES);
             return;
         }
 
-        let sem = self.semantics();
-        match sem.delete_file(&parent_path, name_str, DeleteChildMode::Commit) {
+        match sem.commit_delete_child_at(&parent_path, name_str) {
             Ok(true) => reply.ok(),
             Ok(false) => reply.error(libc::ENOENT),
             Err(e) => reply.error(Self::map_vfs_error(e)),
@@ -544,17 +547,17 @@ impl Filesystem for KabegameFuseFs {
             return;
         }
 
-        // 只允许重命名画册（必须在画册根目录下）
+        let sem = self.semantics();
+
+        // 只允许重命名画册（必须在画册分组根下）
         if parent_path.len() != 2
-            || !parent_path[0].eq_ignore_ascii_case(DIR_ALBUMS)
+            || !sem.resolved_segment_is_group(&parent_path[0], ProviderGroupKind::Album)
             || newparent_path.len() != 1
-            || !newparent_path[0].eq_ignore_ascii_case(DIR_ALBUMS)
+            || !sem.resolved_segment_is_group(&newparent_path[0], ProviderGroupKind::Album)
         {
             reply.error(libc::EACCES);
             return;
         }
-
-        let sem = self.semantics();
         match sem.rename_dir(&parent_path, newname_str) {
             Ok(()) => {
                 // 更新 inode 映射

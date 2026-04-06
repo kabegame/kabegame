@@ -1,5 +1,6 @@
 {
   "emptyTip": "아직 앨범 없음; 오른쪽 상단에서 생성",
+  "subAlbums": "하위 앨범",
   "newAlbum": "새 앨범",
   "placeholderName": "앨범 이름 입력",
   "create": "생성",
@@ -65,5 +66,10 @@
   "doubleClickToRename": "더블클릭하여 이름 변경",
   "totalCountSubtitle": "총 {count}개",
   "deleteAlbumRotationConfirm": "삭제하려는 앨범이 배경화면 순환에 사용 중입니다. 삭제하면 갤러리로 되돌아갑니다.",
-  "deleteAlbumRotationTitle": "이 앨범을 삭제할까요?"
+  "deleteAlbumRotationTitle": "이 앨범을 삭제할까요?",
+  "moveToTitle": "앨범 이동",
+  "moveToRoot": "루트로 이동",
+  "moveSuccess": "앨범이 이동되었습니다",
+  "moveFailed": "이동 실패",
+  "selectTargetAlbum": "대상 앨범 선택"
 }

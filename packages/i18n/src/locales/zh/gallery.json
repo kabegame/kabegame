@@ -110,6 +110,7 @@
   "localDesc": "从本机选择图片、文件夹或压缩文件导入",
   "remoteDesc": "使用插件从网络收集图片",
   "organizingProgress": "整理中 {processed}/{total}",
+  "organizingProgressRange": "整理中 {current}/{end}",
   "organizingEllipsis": "整理中…",
   "organizingDetail": "（已移除 {removed}，已补充 {regenerated}）",
   "organizeRunProgress": "本次整理进度",

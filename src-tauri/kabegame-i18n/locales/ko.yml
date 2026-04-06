@@ -42,5 +42,24 @@ albums:
 plugins:
   officialGithubReleaseSourceName: 공식 GitHub Releases 소스
 
+vd:
+  all: 전체
+  plugin: 플러그인별
+  date: 날짜별
+  dateRange: 기간별
+  album: 앨범
+  task: 작업별
+  surf: 서프별
+  mediaType: 종류별
+  wallpaperOrder: 배경화면 순서
+  desc: 내림차순
+  image: 이미지
+  video: 비디오
+  subAlbums: 하위 앨범
+  albumOrder: 앨범 순서
+  wallpaperOrderSub: 배경화면 순서
+  imageOnly: 이미지 전용
+  videoOnly: 비디오 전용
+
 surf:
   windowTitle: "서핑 - {host}"

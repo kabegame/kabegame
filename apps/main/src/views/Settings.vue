@@ -88,6 +88,13 @@
                   :description="$t('settings.wallpaperSelectAlbumDesc')">
                   <WallpaperRotationTargetSetting />
                 </SettingRow>
+                <SettingRow
+                  v-if="wallpaperRotationTargetsAlbum"
+                  :label="$t('settings.wallpaperRotationIncludeSubalbums')"
+                  :description="$t('settings.wallpaperRotationIncludeSubalbumsDesc')"
+                >
+                  <SettingSwitchControl setting-key="wallpaperRotationIncludeSubalbums" />
+                </SettingRow>
                 <div v-if="currentWallpaperPath" class="settings-list-current-wallpaper setting-row-desc">
                   <div class="setting-row-desc__spacer"></div>
                   <div class="setting-row-desc__content setting-description">
@@ -302,7 +309,11 @@ const activeTab = computed({
   },
 });
 const isRefreshing = ref(false);
-const rotationEnabled = computed(() => !!settingsStore.values.wallpaperRotationEnabled);
+const wallpaperRotationTargetsAlbum = computed(() => {
+  const raw = settingsStore.values.wallpaperRotationAlbumId as string | null | undefined;
+  if (raw == null) return false;
+  return String(raw).trim().length > 0;
+});
 const rotationIntervalMin = computed(() => (IS_ANDROID ? 15 : 1));
 const currentWallpaperPath = ref<string | null>(null);
 async function refreshCurrentWallpaperPath() {

@@ -73,7 +73,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 // Desktop: compute paths using dirs crate
                 use dirs;
 
-                let data_dir = if !is_dev() {
+                let data_dir = if is_dev() {
                     if let Some(repo_root) = repo_root_dir() {
                         repo_root.join("data")
                     } else {
@@ -89,7 +89,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                         .join("Kabegame")
                 };
 
-                let cache_dir = if !is_dev() {
+                let cache_dir = if is_dev() {
                     if let Some(repo_root) = repo_root_dir() {
                         repo_root.join("cache")
                     } else {

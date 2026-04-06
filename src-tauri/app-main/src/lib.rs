@@ -361,6 +361,7 @@ pub fn run() {
             add_album,
             delete_album,
             rename_album,
+            move_album,
             get_album_preview,
             get_album_images,
             get_album_image_ids,
@@ -441,7 +442,8 @@ pub fn run() {
             delete_run_config,
             copy_run_config,
             get_missed_runs,
-            resolve_missed_runs,
+            run_missed_configs,
+            dismiss_missed_configs,
             // --- Plugins ---
             get_plugins,
             get_plugin_detail,
@@ -519,6 +521,8 @@ pub fn run() {
             get_wallpaper_rotation_enabled,
             set_wallpaper_rotation_album_id,
             get_wallpaper_rotation_album_id,
+            set_wallpaper_rotation_include_subalbums,
+            get_wallpaper_rotation_include_subalbums,
             start_wallpaper_rotation,
             set_wallpaper_rotation_interval_minutes,
             get_wallpaper_rotation_interval_minutes,
@@ -571,6 +575,7 @@ pub fn run() {
             open_explorer,
             open_file_path,
             open_file_folder,
+            open_album_virtual_drive_folder,
             // --- Misc ---
             proxy_fetch,
             exit_app,
@@ -621,6 +626,8 @@ pub fn run() {
             start_organize,
             #[cfg(not(target_os = "android"))]
             get_organize_total_count,
+            #[cfg(not(target_os = "android"))]
+            get_organize_run_state,
             #[cfg(not(target_os = "android"))]
             cancel_organize,
             // --- Share (Android) ---

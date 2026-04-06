@@ -1,7 +1,7 @@
 use crate::crawler::downloader::generate_thumbnail;
 use crate::emitter::GlobalEmitter;
 use crate::settings::Settings;
-use crate::storage::{Storage, FAVORITE_ALBUM_ID};
+use crate::storage::Storage;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -265,6 +265,25 @@ pub struct OrganizeOptions {
     pub limit: Option<usize>,
 }
 
+/// 供前端刷新后同步：整理是否进行中及最近一次进度快照（与 `organize-progress` 事件字段一致）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizeRunState {
+    pub running: bool,
+    pub library_total: usize,
+    pub processed_global: usize,
+    pub removed: usize,
+    pub regenerated: usize,
+    pub range_start: Option<usize>,
+    pub range_end: Option<usize>,
+    pub dedupe: bool,
+    pub remove_missing: bool,
+    pub remove_unrecognized: bool,
+    pub regen_thumbnails: bool,
+    pub delete_source_files: bool,
+    pub safe_delete: bool,
+}
+
 static GLOBAL_ORGANIZE: OnceLock<Arc<OrganizeService>> = OnceLock::new();
 
 // 整理期间阻塞下载的全局状态
@@ -274,6 +293,7 @@ static ORGANIZE_RUNNING: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 #[derive(Default)]
 pub struct OrganizeService {
     cancel_flag: Mutex<Option<Arc<AtomicBool>>>,
+    run_state: Mutex<OrganizeRunState>,
 }
 
 impl OrganizeService {
@@ -312,6 +332,70 @@ impl OrganizeService {
             .clone()
     }
 
+    fn init_run_state_from_start(
+        &self,
+        options: &OrganizeOptions,
+        library_total: usize,
+    ) -> Result<(), String> {
+        let (range_start, range_end) = range_bounds_for_ui(options);
+        let state = OrganizeRunState {
+            running: true,
+            library_total,
+            processed_global: 0,
+            removed: 0,
+            regenerated: 0,
+            range_start,
+            range_end,
+            dedupe: options.dedupe,
+            remove_missing: options.remove_missing,
+            remove_unrecognized: options.remove_unrecognized,
+            regen_thumbnails: options.regen_thumbnails,
+            delete_source_files: options.delete_source_files,
+            safe_delete: options.safe_delete,
+        };
+        let mut g = self
+            .run_state
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        *g = state;
+        Ok(())
+    }
+
+    fn update_run_state_progress(
+        &self,
+        processed_global: usize,
+        removed: usize,
+        regenerated: usize,
+    ) {
+        if let Ok(mut g) = self.run_state.lock() {
+            g.processed_global = processed_global;
+            g.removed = removed;
+            g.regenerated = regenerated;
+        }
+    }
+
+    fn reset_run_state(&self) {
+        if let Ok(mut g) = self.run_state.lock() {
+            *g = OrganizeRunState::default();
+        }
+    }
+
+    /// 与 `get_organize_running()` 一致：`running == false` 时返回默认空状态
+    pub fn get_run_state(&self) -> OrganizeRunState {
+        let running = Self::get_organize_running().load(Ordering::Relaxed);
+        if !running {
+            return OrganizeRunState::default();
+        }
+        let mut s = self
+            .run_state
+            .lock()
+            .ok()
+            .map(|m| (*m).clone())
+            .unwrap_or_default();
+        s.running = true;
+        s
+    }
+
     pub async fn start(
         self: Arc<Self>,
         storage: Arc<Storage>,
@@ -335,6 +419,9 @@ impl OrganizeService {
         // 设置整理阻塞状态
         Self::get_organize_running().store(true, Ordering::Relaxed);
 
+        let library_total = storage.get_images_total_count()?;
+        self.init_run_state_from_start(&options, library_total)?;
+
         let handle = tokio::runtime::Handle::current();
         let svc = Arc::clone(&self);
 
@@ -347,6 +434,7 @@ impl OrganizeService {
 
             // 清理运行状态和唤醒等待的下载任务
             svc.clear_running();
+            svc.reset_run_state();
             Self::get_organize_running().store(false, Ordering::Relaxed);
             Self::get_organize_barrier().notify_waiters();
         });
@@ -372,6 +460,36 @@ impl OrganizeService {
             *g = None;
         }
     }
+}
+
+fn range_bounds_for_ui(options: &OrganizeOptions) -> (Option<usize>, Option<usize>) {
+    match (options.offset, options.limit) {
+        (Some(o), Some(l)) => (Some(o), Some(o + l)),
+        _ => (None, None),
+    }
+}
+
+fn push_organize_progress(
+    library_total: usize,
+    options: &OrganizeOptions,
+    processed_global: usize,
+    removed_total: usize,
+    regenerated_total: usize,
+) {
+    let (range_start, range_end) = range_bounds_for_ui(options);
+    GlobalEmitter::global().emit_organize_progress(
+        processed_global,
+        library_total,
+        range_start,
+        range_end,
+        removed_total,
+        regenerated_total,
+    );
+    OrganizeService::global().update_run_state_progress(
+        processed_global,
+        removed_total,
+        regenerated_total,
+    );
 }
 
 fn emit_organize_finished(removed: usize, regenerated: usize, canceled: bool) {
@@ -540,8 +658,12 @@ fn run_organize(
             }
         }
 
-        // 执行缩略图补充
+        // 执行缩略图补充（进度仅在整批——含缩略图——结束后发送，避免扫描已 100% 仍在补图）
         for (id, path) in regen_list {
+            if cancel.load(Ordering::Relaxed) {
+                emit_organize_finished(removed_total, regenerated_total, true);
+                return Ok(());
+            }
             let thumbnail_result =
                 handle.block_on(async { generate_thumbnail(Path::new(&path)).await });
 
@@ -552,10 +674,11 @@ fn run_organize(
             }
         }
 
-        // 发送每批进度事件
-        GlobalEmitter::global().emit_organize_progress(
-            row_index,
+        // 本批（扫描 + 删除 + 缩略图）完成后发送进度
+        push_organize_progress(
             total,
+            &options,
+            row_index,
             removed_total,
             regenerated_total,
         );

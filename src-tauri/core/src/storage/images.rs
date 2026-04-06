@@ -1,5 +1,5 @@
 use crate::storage::{default_true, Storage, FAVORITE_ALBUM_ID};
-use rusqlite::{params, params_from_iter, OptionalExtension};
+use rusqlite::{params, params_from_iter, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -351,6 +351,74 @@ impl Storage {
     pub fn get_all_images(&self) -> Result<Vec<ImageInfo>, String> {
         let result = self.get_images_paginated(0, 10000)?;
         Ok(result.images)
+    }
+
+    /// 按 ImageQuery 获取 Provider 新 API 所需的精简图片字段（Phase 1）。
+    pub fn get_image_entries_by_query(
+        &self,
+        query: &crate::storage::gallery::ImageQuery,
+        offset: usize,
+        count: usize,
+    ) -> Result<Vec<crate::providers::provider::ImageEntry>, String> {
+        let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let (decorator, built_params) = query.build_sql();
+
+        // 参数顺序：decorator params -> count -> offset
+        let mut params: Vec<Box<dyn ToSql>> = built_params
+            .iter()
+            .map(|p| Box::new(p.clone()) as Box<dyn ToSql>)
+            .collect();
+        params.push(Box::new(count as i64));
+        params.push(Box::new(offset as i64));
+        let params_ref: Vec<&dyn ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+        let sql = format!(
+            "SELECT
+                CAST(images.id AS TEXT) as id,
+                images.url,
+                images.local_path,
+                images.plugin_id,
+                images.crawled_at,
+                images.hash,
+                images.width,
+                images.height,
+                images.display_name,
+                COALESCE(images.type, 'image') as media_type
+             FROM images{} LIMIT ? OFFSET ?",
+            decorator
+        );
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| format!("Failed to prepare query: {} (SQL: {})", e, sql))?;
+
+        let rows = stmt
+            .query_map(params_from_iter(params_ref.iter().copied()), |row| {
+                let crawled_at_raw: i64 = row.get(4)?;
+                Ok(crate::providers::provider::ImageEntry {
+                    id: row.get(0)?,
+                    url: row.get::<_, Option<String>>(1)?,
+                    local_path: row.get(2)?,
+                    plugin_id: row.get(3)?,
+                    crawled_at: if crawled_at_raw >= 0 {
+                        crawled_at_raw as u64
+                    } else {
+                        0
+                    },
+                    hash: row.get(5)?,
+                    width: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                    height: row.get::<_, Option<i64>>(7)?.map(|v| v as u32),
+                    display_name: row.get(8)?,
+                    media_type: normalize_media_type(row.get::<_, Option<String>>(9)?),
+                })
+            })
+            .map_err(|e| format!("Failed to query image entries: {}", e))?;
+
+        let mut out = Vec::new();
+        for row_result in rows {
+            out.push(row_result.map_err(|e| format!("Failed to read row: {}", e))?);
+        }
+        Ok(out)
     }
 
     pub fn find_image_by_id(&self, image_id: &str) -> Result<Option<ImageInfo>, String> {

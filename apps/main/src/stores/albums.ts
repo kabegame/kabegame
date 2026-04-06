@@ -8,11 +8,35 @@ import type { ImagesChangePayload } from "@/composables/useImagesChangeRefresh";
 import type { AlbumImagesChangePayload } from "@/composables/useAlbumImagesChangeRefresh";
 import { ElMessageBox } from "element-plus";
 import { i18n } from "@kabegame/i18n";
+import type { AlbumTreeNode } from "@kabegame/core/types/album";
+import { buildAlbumTreeFromFlat } from "@kabegame/core/utils/albumTree";
+
+export type { AlbumTreeNode };
 
 export interface Album {
   id: string;
   name: string;
+  parentId: string | null;
   createdAt: number;
+}
+
+function parseParentId(raw: unknown): string | null {
+  if (raw === undefined || raw === null) return null;
+  const s = String(raw).trim();
+  return s ? s : null;
+}
+
+function normalizeAlbumRow(a: Record<string, unknown>): Album {
+  const createdAt =
+    (a.created_at as number | undefined) ??
+    (a.createdAt as number | undefined) ??
+    0;
+  return {
+    id: String(a.id ?? ""),
+    name: String(a.name ?? ""),
+    parentId: parseParentId(a.parent_id ?? a.parentId),
+    createdAt: typeof createdAt === "number" ? createdAt : Number(createdAt) || 0,
+  };
 }
 
 export const useAlbumStore = defineStore("albums", () => {
@@ -28,13 +52,9 @@ export const useAlbumStore = defineStore("albums", () => {
   let eventListenersInitialized = false;
   let unlistenAlbumAdded: UnlistenFn | null = null;
   let unlistenAlbumDeleted: UnlistenFn | null = null;
-  let unlistenAlbumNameChanged: UnlistenFn | null = null;
+  let unlistenAlbumChanged: UnlistenFn | null = null;
   let unlistenImagesChange: UnlistenFn | null = null;
   let reloadCountsTimer: number | null = null;
-
-  const onAlbumsListChanged = async () => {
-    await loadAlbums();
-  };
 
   const scheduleReloadAlbumCounts = () => {
     if (reloadCountsTimer !== null) {
@@ -51,14 +71,105 @@ export const useAlbumStore = defineStore("albums", () => {
     }, 250);
   };
 
+  const getChildren = (albumId: string): Album[] =>
+    albums.value.filter((a) => a.parentId === albumId);
+
+  const getDescendantIds = (albumId: string): string[] => {
+    const out: string[] = [];
+    const walk = (id: string) => {
+      for (const a of albums.value) {
+        if (a.parentId === id) {
+          out.push(a.id);
+          walk(a.id);
+        }
+      }
+    };
+    walk(albumId);
+    return out;
+  };
+
+  const albumTree = computed((): AlbumTreeNode[] => buildAlbumTreeFromFlat(albums.value));
+
+  /** 排除若干画册（及不需要单独处理：仅从扁平列表过滤后再建树） */
+  const getAlbumTreeExcluding = (excludeIds: string[]): AlbumTreeNode[] => {
+    const exclude = new Set(excludeIds);
+    return buildAlbumTreeFromFlat(albums.value.filter((a) => !exclude.has(a.id)));
+  };
+
+  /** 画册列表页仅展示根画册（无 parent） */
+  const albumRoots = computed(() =>
+    albums.value.filter((a) => a.parentId == null),
+  );
+
+  const applyAlbumAddedPayload = (p: Record<string, unknown>) => {
+    const row = normalizeAlbumRow(p);
+    if (!row.id) return;
+    if (albums.value.some((a) => a.id === row.id)) return;
+    albums.value.unshift(row);
+    if (albumCounts.value[row.id] == null) {
+      albumCounts.value[row.id] = 0;
+    }
+  };
+
+  const applyAlbumDeletedPayload = (albumId: string) => {
+    const desc = getDescendantIds(albumId);
+    const removeIds = new Set<string>([albumId, ...desc]);
+    albums.value = albums.value.filter((a) => !removeIds.has(a.id));
+    for (const id of removeIds) {
+      delete albumImages.value[id];
+      delete albumPreviews.value[id];
+      delete albumCounts.value[id];
+    }
+    scheduleReloadAlbumCounts();
+  };
+
+  const applyAlbumChangedPayload = (
+    albumId: string,
+    changes: Record<string, unknown>,
+  ) => {
+    const album = albums.value.find((a) => a.id === albumId);
+    if (!album) return;
+    if (typeof changes.name === "string") {
+      album.name = changes.name;
+    }
+    if (Object.prototype.hasOwnProperty.call(changes, "parentId")) {
+      const raw = changes.parentId;
+      if (raw === null || raw === undefined) {
+        album.parentId = null;
+      } else {
+        const s = String(raw).trim();
+        album.parentId = s ? s : null;
+      }
+    }
+  };
+
   const initEventListeners = async () => {
     if (eventListenersInitialized) return;
     eventListenersInitialized = true;
     try {
       const { listen } = await import("@tauri-apps/api/event");
-      unlistenAlbumAdded = await listen("album-added", onAlbumsListChanged);
-      unlistenAlbumDeleted = await listen("album-deleted", onAlbumsListChanged);
-      unlistenAlbumNameChanged = await listen("album-name-changed", onAlbumsListChanged);
+      unlistenAlbumAdded = await listen<Record<string, unknown>>("album-added", (event) => {
+        const p = (event.payload ?? {}) as Record<string, unknown>;
+        applyAlbumAddedPayload(p);
+      });
+      unlistenAlbumDeleted = await listen<{ albumId?: string }>("album-deleted", (event) => {
+        const id = String((event.payload as { albumId?: string })?.albumId ?? "").trim();
+        if (!id) return;
+        applyAlbumDeletedPayload(id);
+      });
+      unlistenAlbumChanged = await listen<{
+        albumId?: string;
+        changes?: Record<string, unknown>;
+      }>("album-changed", (event) => {
+        const p = (event.payload ?? {}) as {
+          albumId?: string;
+          changes?: Record<string, unknown>;
+        };
+        const id = String(p.albumId ?? "").trim();
+        const ch = p.changes;
+        if (!id || !ch || typeof ch !== "object") return;
+        applyAlbumChangedPayload(id, ch as Record<string, unknown>);
+      });
       // `images` 表变更：无画册维度字段，保守失效全部画册图片缓存
       unlistenImagesChange = await listen<ImagesChangePayload>("images-change", async () => {
         albumImages.value = {};
@@ -93,14 +204,10 @@ export const useAlbumStore = defineStore("albums", () => {
     loading.value = true;
     try {
       const res = await invoke<Album[]>("get_albums");
-      // 后端字段为 camelCase，按创建时间倒序（新→旧）
-      albums.value = res
-        .map((a) => ({
-          ...a,
-          createdAt: (a as any).created_at ?? (a as any).createdAt ?? a.createdAt,
-        }))
-        .sort((a, b) => b.createdAt - a.createdAt);
-      // 同步加载数量（非阻塞）
+      const rows = (Array.isArray(res) ? res : []).map((a) =>
+        normalizeAlbumRow(a as unknown as Record<string, unknown>),
+      );
+      albums.value = rows.sort((a, b) => b.createdAt - a.createdAt);
       try {
         const counts = await invoke<Record<string, number>>("get_album_counts");
         albumCounts.value = counts;
@@ -112,36 +219,34 @@ export const useAlbumStore = defineStore("albums", () => {
     }
   };
 
-  const createAlbum = async (name: string, opts: { reload?: boolean } = {}) => {
+  const createAlbum = async (
+    name: string,
+    opts: { reload?: boolean; parentId?: string | null } = {},
+  ) => {
     await initEventListeners();
     try {
-      const created = await invoke<Album>("add_album", { name });
+      const parentId = opts.parentId ?? undefined;
+      const created = await invoke<Album>("add_album", {
+        name,
+        parentId: parentId ?? null,
+      });
 
       const reload = opts.reload ?? true;
       if (reload) {
-        // 创建成功后重新从后端加载画册列表，保持前后端数据一致
         await loadAlbums();
       } else {
-        // 轻量模式：避免在批量导入时反复全量 reload 造成 UI 卡顿
-        const createdAt =
-          (created as any).created_at ??
-          (created as any).createdAt ??
-          created.createdAt;
-        // 避免重复插入
-        if (!albums.value.some((a) => a.id === created.id)) {
-          albums.value.unshift({ ...created, createdAt });
+        const row = normalizeAlbumRow(created as unknown as Record<string, unknown>);
+        if (!albums.value.some((a) => a.id === row.id)) {
+          albums.value.unshift(row);
         }
-        // counts 先按 0 兜底；后续可由 loadAlbums/get_album_counts 纠正
-        if (albumCounts.value[created.id] == null) {
-          albumCounts.value[created.id] = 0;
+        if (albumCounts.value[row.id] == null) {
+          albumCounts.value[row.id] = 0;
         }
       }
       return created;
     } catch (error: any) {
-      // 确保错误信息被正确传递
-      const errorMessage = typeof error === "string" 
-        ? error 
-        : error?.message || String(error);
+      const errorMessage =
+        typeof error === "string" ? error : error?.message || String(error);
       throw new Error(errorMessage);
     }
   };
@@ -161,10 +266,7 @@ export const useAlbumStore = defineStore("albums", () => {
       );
     }
     await invoke("delete_album", { albumId });
-    albums.value = albums.value.filter((a) => a.id !== albumId);
-    delete albumImages.value[albumId];
-    delete albumPreviews.value[albumId];
-    delete albumCounts.value[albumId];
+    applyAlbumDeletedPayload(albumId);
   };
 
   const renameAlbum = async (albumId: string, newName: string) => {
@@ -176,10 +278,23 @@ export const useAlbumStore = defineStore("albums", () => {
         album.name = newName;
       }
     } catch (error: any) {
-      // 确保错误信息被正确传递
-      const errorMessage = typeof error === "string" 
-        ? error 
-        : error?.message || String(error);
+      const errorMessage =
+        typeof error === "string" ? error : error?.message || String(error);
+      throw new Error(errorMessage);
+    }
+  };
+
+  const moveAlbum = async (albumId: string, newParentId: string | null) => {
+    await initEventListeners();
+    try {
+      await invoke("move_album", { albumId, newParentId });
+      const album = albums.value.find((a) => a.id === albumId);
+      if (album) {
+        album.parentId = newParentId;
+      }
+    } catch (error: any) {
+      const errorMessage =
+        typeof error === "string" ? error : error?.message || String(error);
       throw new Error(errorMessage);
     }
   };
@@ -199,7 +314,6 @@ export const useAlbumStore = defineStore("albums", () => {
       delete albumPreviews.value[albumId];
       // 更新计数（使用后端返回的实际数量）
       albumCounts.value[albumId] = result.currentCount;
-
     } catch (error: any) {
       throw error;
     }
@@ -262,15 +376,21 @@ export const useAlbumStore = defineStore("albums", () => {
 
   return {
     albums,
+    albumRoots,
+    albumTree,
     albumImages,
     albumPreviews,
     albumCounts,
     loading,
     FAVORITE_ALBUM_ID,
     loadAlbums,
+    getChildren,
+    getDescendantIds,
+    getAlbumTreeExcluding,
     createAlbum,
     deleteAlbum,
     renameAlbum,
+    moveAlbum,
     addImagesToAlbum,
     addTaskImagesToAlbum,
     removeImagesFromAlbum,

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::storage::gallery::ImageQuery;
 
 /// 统一 Provider 树使用的分组类型。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderGroupKind {
     Plugin,
@@ -30,13 +30,20 @@ pub enum DateScopedTier {
 pub enum ProviderDescriptor {
     /// 统一根：`/gallery` + `/vd`
     UnifiedRoot,
-    /// 画廊根（canonical 名称）
-    GalleryRoot,
+    /// 画廊根 / VD locale 根（共用 `MainRootProvider`）
+    GalleryRoot {
+        /// VD 场景下为 locale 段（如 `"zh"`）；画廊场景为 `None`。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        locale: Option<String>,
+    },
     /// VD 根（locale 列表）
     VdRoot,
     /// 统一 Group 变体（替代旧 main/vd 分裂）
     Group {
         kind: ProviderGroupKind,
+        /// 继承自父级的 locale（VD 场景下为 `Some`）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        locale: Option<String>,
     },
 
     /// 统一的“图片集合” provider：由 ImageQuery 定义
@@ -65,5 +72,14 @@ pub enum ProviderDescriptor {
     SimplePage {
         query: ImageQuery,
         page: usize,
+    },
+
+    /// Main 画册子树：按 album_id 下列子画册（前端 `album/<id>/tree`）
+    AlbumTree {
+        album_id: String,
+    },
+    /// 虚拟盘「子画册」目录节点
+    VdAlbumTree {
+        album_id: String,
     },
 }

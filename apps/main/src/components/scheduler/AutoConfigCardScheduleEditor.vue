@@ -132,55 +132,6 @@ function monday0FromDate(d: Date): number {
   return w === 0 ? 6 : w - 1;
 }
 
-/** 与后端 `compute_next_planned_at` 对齐：下一次绝对触发时刻（Unix 秒） */
-function computeNextPlannedAtUnix(params: {
-  mode: "interval" | "daily" | "weekly";
-  intervalSecs: number;
-  dailyHour: number;
-  dailyMinute: number;
-  weeklyWeekday?: number;
-}): number {
-  const nowSec = Math.floor(Date.now() / 1000);
-  if (params.mode === "interval") {
-    const iv = Math.max(60, Number(params.intervalSecs) || 3600);
-    return nowSec + iv;
-  }
-  if (params.mode === "weekly") {
-    const minute = Math.min(59, Math.max(0, params.dailyMinute));
-    const hour = Math.min(23, Math.max(0, params.dailyHour));
-    const wd = Math.min(6, Math.max(0, params.weeklyWeekday ?? 0));
-    const d = new Date(nowSec * 1000);
-    const cur = d.getDay() === 0 ? 6 : d.getDay() - 1;
-    let days = (wd - cur + 7) % 7;
-    let cand = new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, hour, minute, 0, 0);
-    if (Math.floor(cand.getTime() / 1000) <= nowSec) {
-      cand = new Date(cand.getFullYear(), cand.getMonth(), cand.getDate() + 7, hour, minute, 0, 0);
-    }
-    return Math.floor(cand.getTime() / 1000);
-  }
-  const minute = Math.min(59, Math.max(0, params.dailyMinute));
-  const d = new Date(nowSec * 1000);
-  if (params.dailyHour === -1) {
-    const slot = new Date(d.getTime());
-    slot.setSeconds(0, 0);
-    slot.setMinutes(minute);
-    if (Math.floor(slot.getTime() / 1000) <= nowSec) {
-      slot.setHours(slot.getHours() + 1);
-      slot.setMinutes(minute);
-      slot.setSeconds(0, 0);
-    }
-    return Math.floor(slot.getTime() / 1000);
-  }
-  const hour = Math.min(23, Math.max(0, params.dailyHour));
-  const slot = new Date(d.getTime());
-  slot.setHours(hour, minute, 0, 0);
-  if (Math.floor(slot.getTime() / 1000) <= nowSec) {
-    slot.setDate(slot.getDate() + 1);
-    slot.setHours(hour, minute, 0, 0);
-  }
-  return Math.floor(slot.getTime() / 1000);
-}
-
 function applyNowDaily() {
   const d = new Date();
   dailyHour.value = d.getHours();
@@ -297,16 +248,10 @@ async function persist() {
     if (mode.value === "interval") {
       const iv = Math.max(1, Number(intervalValue.value) || 1);
       const intervalSecs = iv * secondsByUnit(intervalUnit.value);
-      const schedulePlannedAt = computeNextPlannedAtUnix({
-        mode: "interval",
-        intervalSecs,
-        dailyHour: 0,
-        dailyMinute: 0,
-      });
       const scheduleSpec: ScheduleSpec = { mode: "interval", intervalSecs };
       next = {
         ...base,
-        schedulePlannedAt,
+        schedulePlannedAt: undefined,
         scheduleEnabled: true,
         scheduleSpec,
       };
@@ -314,13 +259,6 @@ async function persist() {
       const wd = Math.min(6, Math.max(0, weeklyWeekday.value));
       const h = Math.min(23, Math.max(0, dailyHour.value));
       const m = Math.min(59, Math.max(0, dailyMinute.value));
-      const schedulePlannedAt = computeNextPlannedAtUnix({
-        mode: "weekly",
-        intervalSecs: 0,
-        dailyHour: h,
-        dailyMinute: m,
-        weeklyWeekday: wd,
-      });
       const scheduleSpec: ScheduleSpec = {
         mode: "weekly",
         weekday: wd,
@@ -329,17 +267,11 @@ async function persist() {
       };
       next = {
         ...base,
-        schedulePlannedAt,
+        schedulePlannedAt: undefined,
         scheduleEnabled: true,
         scheduleSpec,
       };
     } else {
-      const schedulePlannedAt = computeNextPlannedAtUnix({
-        mode: "daily",
-        intervalSecs: 0,
-        dailyHour: dailyHour.value,
-        dailyMinute: dailyMinute.value,
-      });
       const scheduleSpec: ScheduleSpec = {
         mode: "daily",
         hour: dailyHour.value,
@@ -347,14 +279,15 @@ async function persist() {
       };
       next = {
         ...base,
-        schedulePlannedAt,
+        schedulePlannedAt: undefined,
         scheduleEnabled: true,
         scheduleSpec,
       };
     }
     await crawlerStore.updateRunConfig(next);
-  } catch {
+  } catch(e) {
     ElMessage.error(t("common.operationFailed"));
+    console.error(e);
     syncFromConfig(base);
   } finally {
     saving.value = false;

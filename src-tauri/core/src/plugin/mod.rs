@@ -292,6 +292,7 @@ impl PluginManager {
                 .await?;
             return Ok((plugin, Some(path)));
         }
+        self.ensure_installed_cache_initialized().await?;
         let plugin = self.get(plugin_id).await.ok_or("找不到插件")?;
         Ok((plugin, None))
     }

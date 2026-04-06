@@ -562,7 +562,12 @@ pub async fn export_album_to_we_project(
 ) -> Result<WeExportResult, String> {
     let options = resolve_options_from_settings(options).await?;
 
-    let images: Vec<ImageInfo> = storage.get_album_images(&album_id)?;
+    let include_sub = Settings::global()
+        .get_wallpaper_rotation_include_subalbums()
+        .await
+        .unwrap_or(true);
+    let images: Vec<ImageInfo> =
+        storage.get_album_images_for_wallpaper_rotation(&album_id, include_sub)?;
     let image_paths: Vec<String> = images.into_iter().map(|i| i.local_path).collect();
     let title = if album_name.trim().is_empty() {
         format!("Kabegame_Album_{}", album_id)

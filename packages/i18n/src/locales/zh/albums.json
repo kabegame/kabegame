@@ -1,5 +1,6 @@
 {
   "emptyTip": "暂无画册，点击右上角创建",
+  "subAlbums": "子画册",
   "newAlbum": "新建画册",
   "placeholderName": "输入画册名称",
   "create": "创建",
@@ -65,5 +66,10 @@
   "doubleClickToRename": "双击改名",
   "totalCountSubtitle": "共 {count} 张",
   "deleteAlbumRotationConfirm": "你删除的画册正在用于轮播，如果删除将回退到画廊",
-  "deleteAlbumRotationTitle": "确定删除该画册吗"
+  "deleteAlbumRotationTitle": "确定删除该画册吗",
+  "moveToTitle": "移动画册",
+  "moveToRoot": "移动到根级",
+  "moveSuccess": "画册已移动",
+  "moveFailed": "移动失败",
+  "selectTargetAlbum": "选择目标画册"
 }

@@ -337,6 +337,45 @@ let html = current_html();
 
 ---
 
+### `current_headers()`
+
+获取当前栈顶页面 **最后一次成功 HTTP 响应** 的响应头（与 `to()` 拉取该页时一致；`fetch_json` 不入栈，故不更新此值）。
+
+**参数：**
+- 无
+
+**返回值：**
+- `Map`：键为**小写**的 header 名（如 `set-cookie`、`content-type`），值为字符串；同名多值在引擎侧已用 `, ` 拼接。
+- `String`：错误信息（页面栈为空）
+
+**说明：** 可与 `set_header` 配合：从 `set-cookie` 解析或拼接后写入 `Cookie`，供后续 `fetch_json` / `download_image` 使用。
+
+**示例：**
+```rhai
+to("https://example.com");
+let h = current_headers();
+print(h["content-type"]);
+```
+
+---
+
+### `md5(text)`
+
+计算 UTF-8 字符串的 **MD5**，返回 **小写十六进制** 字符串（与 B 站 WBI `w_rid` 等常见用法一致）。
+
+**参数：**
+- `text` (string): 待哈希的字符串（通常为 query 拼接 mixin key 前的片段）
+
+**返回值：**
+- `String`：32 位小写 hex
+
+**示例：**
+```rhai
+let digest = md5("foo");
+```
+
+---
+
 ## 元素查询
 
 ### `query(selector)`

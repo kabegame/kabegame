@@ -42,5 +42,24 @@ albums:
 plugins:
   officialGithubReleaseSourceName: Official GitHub Releases source
 
+vd:
+  all: All
+  plugin: By Plugin
+  date: By Date
+  dateRange: By Date Range
+  album: Albums
+  task: By Task
+  surf: By Surf
+  mediaType: By Type
+  wallpaperOrder: By Wallpaper Order
+  desc: Descending
+  image: Image
+  video: Video
+  subAlbums: Sub Albums
+  albumOrder: By Album Order
+  wallpaperOrderSub: By Wallpaper Order
+  imageOnly: Images Only
+  videoOnly: Videos Only
+
 surf:
   windowTitle: "Surf - {host}"
