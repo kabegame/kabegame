@@ -8,6 +8,8 @@
   "viewCookie": "サイトのCookieを表示",
   "linuxHint": "LinuxではWebKitの制限により、サーフは画像/動画のダウンロードができません。閲覧のみ。",
   "downloadCount": "ダウンロード",
+  "imageCount": "画像",
+  "deletedCount": "削除済み",
   "lastVisit": "最終訪問:",
   "viewRecentImages": "最近の画像を表示",
   "loadMore": "さらに読み込む",

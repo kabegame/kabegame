@@ -443,6 +443,7 @@ PRAGMA mmap_size = 268435456;
                 icon BLOB,
                 last_visit_at INTEGER NOT NULL,
                 download_count INTEGER NOT NULL DEFAULT 0,
+                deleted_count INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL
             )",
             [],

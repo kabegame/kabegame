@@ -342,19 +342,11 @@ pub async fn surf_start_session(app: AppHandle, url: String) -> Result<serde_jso
         serde_json::json!({ "active": true, "surfRecordId": record.id.clone() }),
     );
 
-    let app_for_icon = app.clone();
     let record_id_for_icon = record.id.clone();
     tauri::async_runtime::spawn(async move {
         if let Some(icon) = fetch_favicon(&host).await {
-            if Storage::global()
-                .update_surf_record_icon(&record_id_for_icon, &icon)
-                .is_ok()
-            {
-                let _ = app_for_icon.emit(
-                    "surf-records-change",
-                    serde_json::json!({ "reason": "icon-updated", "surfRecordId": record_id_for_icon }),
-                );
-            }
+            let _ = Storage::global().update_surf_record_icon(&record_id_for_icon, &icon);
+            // `update_surf_record_icon` 内已通过 GlobalEmitter 发出 `SurfRecordChanged`（iconChanged）
         }
     });
 

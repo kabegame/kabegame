@@ -8,6 +8,8 @@
   "viewCookie": "View site Cookie",
   "linuxHint": "On Linux, due to WebKit limits, Surf cannot download images/videos; browsing only.",
   "downloadCount": "Download",
+  "imageCount": "Images",
+  "deletedCount": "Removed",
   "lastVisit": "Last visit:",
   "viewRecentImages": "View recent images",
   "loadMore": "Load more",

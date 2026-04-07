@@ -21,7 +21,8 @@ pub fn delete_images_with_events(image_ids: &[String], delete_files: bool) -> Re
     let storage = Storage::global();
     let album_ids = storage.collect_album_ids_for_images(image_ids)?;
     let task_ids = storage.collect_task_ids_for_images(image_ids)?;
-    let surf_record_ids = storage.collect_surf_record_ids_for_images(image_ids)?;
+    let surf_counts = storage.collect_surf_record_counts_for_images(image_ids)?;
+    let surf_record_ids: Vec<String> = surf_counts.keys().cloned().collect();
     if delete_files {
         storage.batch_delete_images(image_ids)?;
     } else {
@@ -29,6 +30,19 @@ pub fn delete_images_with_events(image_ids: &[String], delete_files: bool) -> Re
     }
     for tid in &task_ids {
         emit_task_image_counts_full(tid);
+    }
+    for (srid, delta) in surf_counts {
+        let _ = storage.increment_surf_record_deleted_count(&srid, delta as i64);
+        if let Ok((image_count, deleted_count, download_count)) =
+            storage.surf_record_counts_snapshot(&srid)
+        {
+            GlobalEmitter::global().emit_surf_record_counts(
+                &srid,
+                image_count,
+                deleted_count,
+                download_count,
+            );
+        }
     }
     GlobalEmitter::global().emit_images_change(
         "delete",

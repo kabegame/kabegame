@@ -8,6 +8,8 @@
   "viewCookie": "사이트 쿠키 보기",
   "linuxHint": "Linux에서는 WebKit 제한으로 서핑이 이미지/동영상을 다운로드할 수 없습니다. 탐색만 가능합니다.",
   "downloadCount": "다운로드",
+  "imageCount": "이미지",
+  "deletedCount": "삭제됨",
   "lastVisit": "마지막 방문:",
   "viewRecentImages": "최근 이미지 보기",
   "loadMore": "더 보기",

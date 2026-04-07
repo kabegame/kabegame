@@ -82,6 +82,7 @@ import { useSettingsStore } from "@kabegame/core/stores/settings";
 import { useSettingKeyState } from "@kabegame/core/composables/useSettingKeyState";
 import { useSurfImagesRouteStore } from "@/stores/surfImagesRoute";
 import { useImageOperations } from "@/composables/useImageOperations";
+import { useImagesChangeRefresh } from "@/composables/useImagesChangeRefresh";
 import { useImageTypes } from "@/composables/useImageTypes";
 import type { ContextCommandPayload } from "@/components/ImageGrid.vue";
 import { openLocalImage } from "@/utils/openLocalImage";
@@ -387,6 +388,18 @@ const reloadAllImages = async () => {
   await loadCurrentPage();
 };
 
+useImagesChangeRefresh({
+  enabled: isOnSurfImagesRoute,
+  waitMs: 500,
+  filter: (p) => {
+    const rid = recordId.value;
+    return !!rid && (p.surfRecordIds?.includes(rid) ?? false);
+  },
+  onRefresh: async () => {
+    await reloadAllImages();
+  },
+});
+
 const initRecord = async (id: string) => {
   recordId.value = id;
   images.value = [];
@@ -447,62 +460,24 @@ watch(
   { immediate: true }
 );
 
-// 监听 surf-records-change 与 images-change，实时更新图片（含 webview 内下载视频后的响应式更新）
+// images-change：见 useImagesChangeRefresh（与画册等页面统一）
+// surf-records-change：畅游记录被删时返回列表
 let unlistenRecordsChange: (() => void) | null = null;
-let unlistenImagesChange: (() => void) | null = null;
-let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-
-const scheduleRefreshImages = () => {
-  if (refreshTimer) clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(() => {
-    refreshTimer = null;
-    void reloadAllImages();
-  }, 500);
-};
 
 const startListening = async () => {
   if (unlistenRecordsChange) return;
-  unlistenRecordsChange = await listen<{ reason?: string; surfRecordId?: string }>(
-    "surf-records-change",
-    (event) => {
-      const payload = event.payload ?? {};
-      if (payload.surfRecordId !== recordId.value) return;
-      if (payload.reason === "downloaded") {
-        scheduleRefreshImages();
-      } else if (payload.reason === "deleted") {
-        goBack();
-      }
-    }
-  );
-
-  // 下载完成（含视频）会发 images-change 且带 surfRecordIds / surfRecordId，与 surf-records-change 互补
-  unlistenImagesChange = await listen<{
-    reason?: string;
-    surfRecordIds?: string[];
-    surfRecordId?: string;
-  }>("images-change", (event) => {
-    const payload = event.payload ?? {};
-    const rid = recordId.value;
-    if (!rid) return;
-    const match =
-      payload.surfRecordIds?.includes(rid) || payload.surfRecordId === rid;
-    if (!match) return;
-    scheduleRefreshImages();
+  unlistenRecordsChange = await listen<Record<string, unknown>>("surf-records-change", (event) => {
+    const p = (event.payload ?? {}) as Record<string, unknown>;
+    if (String(p.type) !== "SurfRecordDeleted") return;
+    if (String(p.surfRecordId ?? "") !== recordId.value) return;
+    goBack();
   });
 };
 
 const stopListening = () => {
-  if (refreshTimer) {
-    clearTimeout(refreshTimer);
-    refreshTimer = null;
-  }
   if (unlistenRecordsChange) {
     unlistenRecordsChange();
     unlistenRecordsChange = null;
-  }
-  if (unlistenImagesChange) {
-    unlistenImagesChange();
-    unlistenImagesChange = null;
   }
 };
 
