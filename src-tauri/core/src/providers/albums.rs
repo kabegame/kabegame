@@ -134,10 +134,12 @@ impl Provider for AlbumProvider {
         self.inner.get_child(name)
     }
 
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn can_delete_child(&self, _child_name: &str) -> bool {
         true
     }
 
+    #[cfg(all(not(kabegame_mode = "light"), not(target_os = "android")))]
     fn delete_child(&self, child_name: &str) -> Result<(), String> {
         let removed = crate::providers::vd_ops::delete_child_file_by_album(&self.album_id, child_name)?;
         if removed {
