@@ -275,11 +275,23 @@ pub enum DaemonEvent {
         #[serde(rename = "albumId")]
         album_id: String,
     },
-    /// 畅游记录列表变化
-    SurfRecordsChange {
-        reason: String,
+    /// 畅游记录新增（完整 JSON，与前端 `SurfRecord` 对齐）
+    #[serde(rename = "SurfRecordAdded")]
+    SurfRecordAdded {
+        record: serde_json::Value,
+    },
+    /// 畅游记录删除
+    #[serde(rename = "SurfRecordDeleted")]
+    SurfRecordDeleted {
         #[serde(rename = "surfRecordId")]
         surf_record_id: String,
+    },
+    /// 畅游记录字段增量更新（计数、访问时间等）
+    #[serde(rename = "SurfRecordChanged")]
+    SurfRecordChanged {
+        #[serde(rename = "surfRecordId")]
+        surf_record_id: String,
+        diff: serde_json::Value,
     },
     /// 任务失败图片列表变化
     FailedImagesChange {
@@ -345,7 +357,9 @@ impl DaemonEvent {
             DaemonEvent::AlbumAdded { .. } => DaemonEventKind::AlbumAdded,
             DaemonEvent::AlbumChanged { .. } => DaemonEventKind::AlbumChanged,
             DaemonEvent::AlbumDeleted { .. } => DaemonEventKind::AlbumDeleted,
-            DaemonEvent::SurfRecordsChange { .. } => DaemonEventKind::SurfRecordsChange,
+            DaemonEvent::SurfRecordAdded { .. }
+            | DaemonEvent::SurfRecordDeleted { .. }
+            | DaemonEvent::SurfRecordChanged { .. } => DaemonEventKind::SurfRecordsChange,
             DaemonEvent::FailedImagesChange { .. } => DaemonEventKind::FailedImagesChange,
             DaemonEvent::TaskAdded { .. }
             | DaemonEvent::TaskDeleted { .. }

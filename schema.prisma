@@ -112,6 +112,7 @@ model SurfRecord {
     icon          Bytes?
     lastVisitAt   Int    @map("last_visit_at")
     downloadCount Int    @default(0) @map("download_count")
+    deletedCount  Int    @default(0) @map("deleted_count")
     createdAt     Int    @map("created_at")
 
     images Image[] @relation("SurfRecordToImage")

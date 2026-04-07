@@ -1073,19 +1073,19 @@ impl Storage {
         Ok(set.into_iter().collect())
     }
 
-    /// 批量图片在删除/移除前涉及的畅游记录 id（去重），用于 `images-change` 事件。
-    pub fn collect_surf_record_ids_for_images(
+    /// 批量图片在删除前按畅游记录 id 统计张数（用于 `deleted_count` 与 `images-change`）。
+    pub fn collect_surf_record_counts_for_images(
         &self,
         image_ids: &[String],
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<HashMap<String, usize>, String> {
         if image_ids.is_empty() {
-            return Ok(Vec::new());
+            return Ok(HashMap::new());
         }
         let conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let mut set = HashSet::new();
+        let mut map = HashMap::new();
         let mut stmt = conn
             .prepare(
-                "SELECT DISTINCT surf_record_id FROM images WHERE id = ?1 \
+                "SELECT surf_record_id FROM images WHERE id = ?1 \
                  AND surf_record_id IS NOT NULL AND surf_record_id != ''",
             )
             .map_err(|e| format!("Failed to prepare surf_record_ids query: {}", e))?;
@@ -1095,11 +1095,20 @@ impl Storage {
                 .map_err(|e| format!("Failed to query surf record IDs: {}", e))?;
             for row in rows {
                 if let Ok(srid) = row {
-                    set.insert(srid);
+                    *map.entry(srid).or_insert(0) += 1;
                 }
             }
         }
-        Ok(set.into_iter().collect())
+        Ok(map)
+    }
+
+    /// 批量图片在删除/移除前涉及的畅游记录 id（去重），用于 `images-change` 事件。
+    pub fn collect_surf_record_ids_for_images(
+        &self,
+        image_ids: &[String],
+    ) -> Result<Vec<String>, String> {
+        let m = self.collect_surf_record_counts_for_images(image_ids)?;
+        Ok(m.into_keys().collect())
     }
 
     pub fn delete_image(&self, image_id: &str) -> Result<(), String> {

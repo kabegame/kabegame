@@ -75,7 +75,10 @@
                   <div class="host">{{ record.name || record.host }}</div>
                   <div class="root-url">{{ record.rootUrl }}</div>
                 </div>
-                <el-tag size="small" type="info">{{ $t('surf.downloadCount') }} {{ record.downloadCount }}</el-tag>
+                <div class="surf-card-tags">
+                  <el-tag size="small" type="info">{{ $t('surf.imageCount') }} {{ record.imageCount }}</el-tag>
+                  <el-tag size="small" type="warning">{{ $t('surf.deletedCount') }} {{ record.deletedCount }}</el-tag>
+                </div>
               </div>
               <div class="card-foot">
                 <span>{{ $t('surf.lastVisit') }}{{ formatTime(record.lastVisitAt) }}</span>
@@ -144,6 +147,14 @@
             />
             <div class="detail-url-preview">{{ detailFullUrlPreview }}</div>
           </div>
+        </div>
+        <div class="detail-item detail-stats">
+          <span class="detail-label">{{ $t("surf.imageCount") }}</span>
+          <span class="detail-stat-value">{{ detailRecord.imageCount }}</span>
+        </div>
+        <div class="detail-item detail-stats">
+          <span class="detail-label">{{ $t("surf.deletedCount") }}</span>
+          <span class="detail-stat-value">{{ detailRecord.deletedCount }}</span>
         </div>
         <div class="detail-item">
           <span class="detail-label">{{ $t("surf.cookieLabel") }}</span>
@@ -685,6 +696,14 @@ onMounted(async () => {
   word-break: break-all;
 }
 
+.surf-card-tags {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .card-foot {
   margin-top: 8px;
   display: flex;
@@ -796,6 +815,16 @@ onMounted(async () => {
     min-width: 0;
     font-family: ui-monospace, monospace;
     font-size: 12px;
+  }
+
+  .detail-stats {
+    align-items: center;
+  }
+
+  .detail-stat-value {
+    flex: 1;
+    min-width: 0;
+    font-variant-numeric: tabular-nums;
   }
 }
 

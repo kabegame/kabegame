@@ -249,13 +249,42 @@ impl GlobalEmitter {
         EventBroadcaster::global().broadcast(event);
     }
 
-    /// 发送畅游记录变更事件（用于前端刷新畅游列表）
-    pub fn emit_surf_records_change(&self, reason: &str, surf_record_id: &str) {
-        let event = std::sync::Arc::new(DaemonEvent::SurfRecordsChange {
-            reason: reason.to_string(),
+    /// 畅游记录新增（完整 record JSON）
+    pub fn emit_surf_record_added(&self, record: serde_json::Value) {
+        let event = std::sync::Arc::new(DaemonEvent::SurfRecordAdded { record });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 畅游记录删除
+    pub fn emit_surf_record_deleted(&self, surf_record_id: &str) {
+        let event = std::sync::Arc::new(DaemonEvent::SurfRecordDeleted {
             surf_record_id: surf_record_id.to_string(),
         });
         EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 畅游记录字段增量更新（与 `TaskChanged` 类似，diff 为绝对值快照）
+    pub fn emit_surf_record_changed(&self, surf_record_id: &str, diff: serde_json::Value) {
+        let event = std::sync::Arc::new(DaemonEvent::SurfRecordChanged {
+            surf_record_id: surf_record_id.to_string(),
+            diff,
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 畅游记录计数快照（image / deleted / download）
+    pub fn emit_surf_record_counts(
+        &self,
+        surf_record_id: &str,
+        image_count: i64,
+        deleted_count: i64,
+        download_count: i64,
+    ) {
+        let mut diff = serde_json::Map::new();
+        diff.insert("imageCount".to_string(), json!(image_count));
+        diff.insert("deletedCount".to_string(), json!(deleted_count));
+        diff.insert("downloadCount".to_string(), json!(download_count));
+        self.emit_surf_record_changed(surf_record_id, serde_json::Value::Object(diff));
     }
 
     /// 发送失败图片新增事件
@@ -505,7 +534,20 @@ impl GlobalEmitter {
     ) {
     }
 
-    pub fn emit_surf_records_change(&self, _reason: &str, _surf_record_id: &str) {}
+    pub fn emit_surf_record_added(&self, _record: serde_json::Value) {}
+
+    pub fn emit_surf_record_deleted(&self, _surf_record_id: &str) {}
+
+    pub fn emit_surf_record_changed(&self, _surf_record_id: &str, _diff: serde_json::Value) {}
+
+    pub fn emit_surf_record_counts(
+        &self,
+        _surf_record_id: &str,
+        _image_count: i64,
+        _deleted_count: i64,
+        _download_count: i64,
+    ) {
+    }
 
     pub fn emit_failed_image_added(&self, _task_id: &str, _failed_image: &TaskFailedImage) {}
 

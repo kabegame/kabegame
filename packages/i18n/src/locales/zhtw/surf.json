@@ -8,6 +8,8 @@
   "viewCookie": "檢視網站 Cookie",
   "linuxHint": "Linux 下因 WebKit 限制，暢遊無法下載圖片/影片，僅可瀏覽頁面。",
   "downloadCount": "下載",
+  "imageCount": "圖片",
+  "deletedCount": "已刪除",
   "lastVisit": "最近造訪：",
   "viewRecentImages": "檢視最近圖片",
   "loadMore": "載入更多",
